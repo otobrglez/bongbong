@@ -10,7 +10,7 @@ use sola_raylib::prelude::*;
 
 use super::*;
 use super::camera::{scene_plan, window_mapping};
-use super::chrome::{small_text, BarTools, CategoryButton, MENU_BOX_INSET, SMALL_BOX_INSET};
+use super::chrome::{small_text, BarTools, CategoryButton, MENU_BOX_INSET, SMALL_BOX_INSET, STAMP_NAME_W, STAMP_PICTURE};
 use crate::text::{keys, text};
 use crate::canvas::Sheet;
 use crate::frog::FrogAnim;
@@ -318,6 +318,9 @@ impl MapEditor {
             self.draw_status_line(&mut d, frame, chrome, cursor);
             self.draw_navigator(&mut d, frame, textures, camera);
             self.draw_bar(&mut d, &chrome.bar, textures);
+            if let Some(strip) = &chrome.strip {
+                self.draw_strip(&mut d, strip, frame.ui.touch);
+            }
             self.draw_popup(&mut d, chrome, textures, frame.ui.hints);
             if let Some((loupe, picture)) = magnified {
                 draw_loupe(&mut d, loupe, picture);
@@ -393,6 +396,10 @@ impl MapEditor {
             let under = self.map.cell(col, row).map(cell_label).unwrap_or_default();
             line.push_str(&format!("   {col},{row} {under}"));
         }
+        // The selection's size, or the paste ghost's while one stands.
+        if let Some(rect) = self.ghost().map(|g| g.rect()).or(self.selection()) {
+            line.push_str(&format!("   {}x{}", rect.cols, rect.rows));
+        }
         if let Some(status) = &self.status {
             line.push_str(&format!("   {status}"));
         }
@@ -439,102 +446,22 @@ impl MapEditor {
             }
 
             for (col, row, obj) in self.map.iter_cells() {
+                // Road and water are painted into `self.ground`, portals in
+                // the pre-pass above.
+                if matches!(obj, CellObject::Road | CellObject::Water | CellObject::Portal) {
+                    continue;
+                }
                 let pos = map::cell_to_world(col, row);
                 // A tower's reach ring spreads far past its cell.
                 let reach = obj.tower().map_or(0.0, |(kind, _)| kind.range());
                 if culled(pos, reach) {
                     continue;
                 }
-                let size = OBSTACLE_GRID_SIZE;
-                let dest = Rectangle::new(pos.x, pos.y, size, size);
-                let origin = Vector2::new(size / 2.0, size / 2.0);
-                match *obj {
-                    CellObject::Barrel { drum: Some(drum) } => {
-                        let src = obstacle::drum_source_rec(drum);
-                        d.draw_texture_pro(textures.props, src, dest, origin, 0.0, Color::WHITE);
-                    }
-                    CellObject::Wall { .. } | CellObject::Sandbag | CellObject::Barrel { .. } | CellObject::Fence => {
-                        let material = obj.material().expect("solid cells have a material");
-                        let (sheet, src) = obstacle::icon_source_rec(material);
-                        d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, origin, 0.0, Color::WHITE);
-                    }
-                    CellObject::Oil => {
-                        let src = obstacle::oil_source_rec(pos);
-                        d.draw_texture_pro(textures.props, src, dest, origin, 0.0, Color::WHITE);
-                    }
-                    CellObject::Tree | CellObject::Pine => {
-                        // Drawn at the sprite's own 48px, not the 32px cell,
-                        // so the canopy overhang matches a round.
-                        let material = obj.material().expect("tree cells have a material");
-                        let (sheet, src) = obstacle::icon_source_rec(material);
-                        let big = crate::TREE_TEXTURE_SIZE;
-                        let dest = Rectangle::new(pos.x, pos.y, big, big);
-                        let origin = Vector2::new(big / 2.0, big / 2.0);
-                        d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, origin, 0.0, Color::WHITE);
-                    }
-                    CellObject::Tesla { .. } | CellObject::GunTower { .. } | CellObject::BioSlush { .. } => {
-                        // At the sprite's own 48px like a tree, base then
-                        // top pointing up, with its reach ringed faintly so
-                        // a map maker sees what it covers.
-                        let (kind, side) = obj.tower().expect("tower cells name a tower");
-                        let big = crate::TREE_TEXTURE_SIZE;
-                        let dest = Rectangle::new(pos.x, pos.y, big, big);
-                        let origin = Vector2::new(big / 2.0, big / 2.0);
-                        let reach = if side == crate::frog::Side::Enemy { Color::new(230, 60, 60, 70) } else { Color::new(77, 155, 230, 70) };
-                        d.draw_circle_lines(pos.x as i32, pos.y as i32, kind.range(), reach);
-                        for src in [crate::tower::icon_source_rec(kind, side), crate::tower::icon_top_rec(kind, side)] {
-                            d.draw_texture_pro(textures.towers, src, dest, origin, 0.0, Color::WHITE);
-                        }
-                    }
-                    CellObject::Road | CellObject::Water => {} // already painted into `self.ground`
-                    CellObject::TallGrass => {
-                        // The round scatters several hashed tufts per cell;
-                        // one centred tuft is enough to show the cell is
-                        // grassed.
-                        let cell = crate::GRASS_TEXTURE_SIZE;
-                        let src = Rectangle::new(0.0, 0.0, cell, cell);
-                        let scale = cell * crate::tuning::tuning().grass_scale;
-                        let at = Rectangle::new(pos.x, pos.y + size / 2.0, scale, scale);
-                        d.draw_texture_pro(textures.grass, src, at, Vector2::new(scale / 2.0, scale), 0.0, Color::WHITE);
-                    }
-                    CellObject::Frog => {
-                        let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
-                        d.draw_texture_pro(textures.frog_idle, src, dest, origin, 0.0, Color::WHITE);
-                    }
-                    CellObject::Start => {
-                        draw_player_ring(d, pos, size / 2.0, 0);
-                        for src in crate::tank::icon_source_recs(0) {
-                            d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, Color::WHITE);
-                        }
-                    }
-                    CellObject::Start2 => {
-                        draw_player_ring(d, pos, size / 2.0, 1);
-                        for src in crate::tank::icon_source_recs(1) {
-                            d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, Color::WHITE);
-                        }
-                    }
-                    CellObject::EnemyFrog => {
-                        draw_enemy_ring(d, pos, size / 2.0);
-                        let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
-                        d.draw_texture_pro(textures.frog_idle, src, dest, origin, 0.0, Color::WHITE);
-                    }
-                    CellObject::Gate => match gate_inward(pos, width, height) {
-                        Some(inward) => draw_gate_chevron(d, pos, size, inward),
-                        None => d.draw_rectangle_lines_ex(
-                            Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size),
-                            2.0,
-                            GATE_COLOR,
-                        ),
-                    },
-                    CellObject::Pickup { pickup } => {
-                        let texture = pickup_texture(textures, pickup);
-                        let src = Rectangle::new(0.0, 0.0, crate::PICKUP_TEXTURE_SIZE, crate::PICKUP_TEXTURE_SIZE);
-                        d.draw_texture_pro(texture, src, dest, origin, 0.0, Color::WHITE);
-                    }
-                    // Drawn in the pre-pass above.
-                    CellObject::Portal => {}
-                }
+                draw_cell(d, textures, (width, height), pos, obj, 255, time);
             }
+
+            // The select tool's marks over the map.
+            self.draw_selection(d, textures, time, &culled);
 
             // The finding the CHECK panel picked, over the map.
             self.draw_lint_marks(d, &culled);
@@ -582,6 +509,9 @@ impl MapEditor {
                 }
             }
             BarTools::Folded(r) => self.draw_tools_button(d, *r, textures, bar.touch),
+        }
+        if let Some(r) = bar.brush {
+            self.draw_brush_button(d, r, bar.touch);
         }
 
         let erase = icon_rect(bar.erase, bar.touch, 4.0);
@@ -632,22 +562,116 @@ impl MapEditor {
         }
     }
 
-    /// The TOOLS button the categories fold into: the brush's icon - or,
-    /// while the eraser is the brush, the tool it came from - and a caret,
-    /// outlined in the accent while a category's tool is the brush.
+    /// The TOOLS button the categories and BRUSH fold into: the brush's
+    /// icon - the select tool's while it is the brush, or while the eraser
+    /// is the brush the tool it came from - and a caret, outlined in the
+    /// accent while a tool from the palette is the brush.
     fn draw_tools_button(&self, d: &mut impl RaylibDraw, rect: Rectangle, textures: &EditorTextures, touch: bool) {
         let zone = Rectangle::new(rect.x, rect.y, rect.height.min(rect.width - BUTTON_GAP - CARET_W as f32), rect.height);
         let icon = icon_rect(zone, touch, 0.0);
-        let tool = self.tools_button_tool();
-        draw_tool_icon(d, textures, self.map.theme, tool, icon);
-        if self.singleton_placed(tool) {
-            draw_badge(d, icon.x + icon.width, icon.y);
+        let selecting = self.active_tool == Tool::Select;
+        if selecting {
+            draw_brush_icon(d, BrushRow::Select, icon, TEXT);
+        } else {
+            let tool = self.tools_button_tool();
+            draw_tool_icon(d, textures, self.map.theme, tool, icon);
+            if self.singleton_placed(tool) {
+                draw_badge(d, icon.x + icon.width, icon.y);
+            }
         }
         let open = matches!(self.popup, Some(Popup::Palette));
         let caret_x = (rect.x + rect.width - BUTTON_GAP) as i32 - CARET_W;
         draw_caret(d, caret_x, (rect.y + (rect.height - CARET_W as f32) / 2.0) as i32, if open { BUILD_ACCENT } else { DIM });
-        if self.active_category().is_some() {
+        if self.active_category().is_some() || selecting {
             active_outline(d, rect.x as i32, rect.y as i32, (rect.width - BUTTON_GAP) as i32, rect.height as i32, BUILD_ACCENT);
+        }
+    }
+
+    /// BRUSH: the picture of what a press on the canvas does - the brush's
+    /// shape, or the select tool - and a caret, outlined in the accent while
+    /// the select tool is the brush.
+    fn draw_brush_button(&self, d: &mut impl RaylibDraw, rect: Rectangle, touch: bool) {
+        let zone = Rectangle::new(rect.x, rect.y, rect.height.min(rect.width - BUTTON_GAP - CARET_W as f32), rect.height);
+        draw_brush_icon(d, self.brush_shown(), icon_rect(zone, touch, 0.0), TEXT);
+        let open = matches!(self.popup, Some(Popup::Brush | Popup::Stamps { .. }));
+        let caret_x = (rect.x + rect.width - BUTTON_GAP) as i32 - CARET_W;
+        draw_caret(d, caret_x, (rect.y + (rect.height - CARET_W as f32) / 2.0) as i32, if open { BUILD_ACCENT } else { DIM });
+        if self.tool() == Tool::Select {
+            active_outline(d, rect.x as i32, rect.y as i32, (rect.width - BUTTON_GAP) as i32, rect.height as i32, BUILD_ACCENT);
+        }
+    }
+
+    /// Whether a row of BRUSH's list is the one in force: the brush's
+    /// shape while it paints, the select tool while it is the brush.
+    fn brush_row_current(&self, row: BrushRow) -> bool {
+        match row {
+            BrushRow::Shape(shape) => self.tool() != Tool::Select && self.shape() == shape,
+            BrushRow::Select => self.tool() == Tool::Select,
+            BrushRow::Stamps => false,
+        }
+    }
+
+    /// BRUSH's list below its button: a row per `BrushRow`, its picture and
+    /// its name, the one in force lit and a shape the brush cannot take
+    /// dim.
+    fn draw_brush_list(&self, d: &mut impl RaylibDraw, rows: &chrome::Rows) {
+        draw_panel(d, rows.panel);
+        for (i, row) in BrushRow::ALL.into_iter().enumerate() {
+            let r = rows.row(i);
+            if self.brush_row_current(row) {
+                let inset = Rectangle::new(r.x + 4.0, r.y + 2.0, r.width - 8.0, r.height - 4.0);
+                d.draw_rectangle_rounded(inset, 0.2, EDITOR_PANEL_SEGMENTS, Color::new(255, 255, 255, 40));
+            }
+            let color = if self.brush_row_live(row) { TEXT } else { DIM };
+            draw_brush_icon(d, row, Rectangle::new(r.x + 4.0, r.y + 4.0, ICON_PX + 8.0, ICON_PX + 8.0), color);
+            let text_y = r.y as i32 + (EDITOR_DROPDOWN_ROW_H as i32 - HUD_TEXT_SIZE) / 2;
+            d.draw_text(&brush_label(row), r.x as i32 + DROPDOWN_TEXT_X, text_y, HUD_TEXT_SIZE, color);
+        }
+    }
+
+    /// The STAMPS list: a row per stamp - its picture, its name and its
+    /// size in cells - and the pager when there are more than fit.
+    fn draw_stamps_list(&self, d: &mut impl RaylibDraw, list: &chrome::LoadLayout, scroll: usize, hints: Hints) {
+        let panel = list.rows.panel;
+        draw_panel(d, panel);
+        let rows = list.per_page;
+        let last = self.stamps().len().saturating_sub(rows);
+        let scroll = scroll.min(last);
+        for (i, stamp) in self.stamps().iter().skip(scroll).take(rows).enumerate() {
+            let row = list.rows.row(i);
+            let picture = Rectangle::new(row.x + 8.0, row.y + 4.0, STAMP_PICTURE.0, STAMP_PICTURE.1);
+            draw_clip_picture(d, &stamp.clip, picture, self.map().theme);
+            let text_y = (row.y + (row.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
+            let text_x = picture.x + picture.width + 12.0;
+            d.draw_text(&fit_text(&stamp.label(), STAMP_NAME_W, HUD_TEXT_SIZE), text_x as i32, text_y, HUD_TEXT_SIZE, TEXT);
+            let size = format!("{}x{}", stamp.clip.cols, stamp.clip.rows);
+            let size_x = row.x + row.width - 12.0 - text_width(&size, UI_SMALL_TEXT);
+            d.draw_text(&size, size_x as i32, (row.y + (row.height - UI_SMALL_TEXT as f32) / 2.0) as i32, UI_SMALL_TEXT, DIM);
+        }
+        if let Some(pager) = list.pager {
+            let n = self.stamps().len();
+            let hint = text().fmt(page_key(hints), &[("from", (scroll + 1).into()), ("to", (scroll + rows).min(n).into()), ("n", n.into())]);
+            draw_pager(d, pager.row, &hint, scroll > 0, scroll < last);
+        }
+    }
+
+    /// The select tool's strip under the bar: its plate and its buttons -
+    /// a word's in the bar's small buttons' style, a flip's a picture - a
+    /// dim one where it cannot act, PLACE in the accent.
+    fn draw_strip(&self, d: &mut impl RaylibDraw, strip: &Strip, touch: bool) {
+        crate::render::hud::draw_plate(d, strip.panel, crate::render::hud::PLATE_EDGE, 1.0);
+        let small = small_text(touch);
+        for slot in &strip.slots {
+            let color = match (slot.enabled, slot.button) {
+                (false, _) => DIM,
+                (true, StripButton::Place) => BUILD_ACCENT,
+                (true, _) => TEXT,
+            };
+            match slot.button {
+                StripButton::FlipH => draw_flip_button(d, slot.rect, Axis::Horizontal, color),
+                StripButton::FlipV => draw_flip_button(d, slot.rect, Axis::Vertical, color),
+                button => draw_small_button(d, slot.rect, &strip_label(button), color, small),
+            }
         }
     }
 
@@ -655,6 +679,8 @@ impl MapEditor {
     fn draw_popup(&self, d: &mut impl RaylibDraw, chrome: &Chrome, textures: &EditorTextures, hints: Hints) {
         match (&self.popup, &chrome.popup) {
             (Some(Popup::Dropdown(category)), Some(PopupLayout::Dropdown(_, rows))) => self.draw_dropdown(d, rows, textures, *category),
+            (Some(Popup::Brush), Some(PopupLayout::Brush(rows))) => self.draw_brush_list(d, rows),
+            (Some(Popup::Stamps { scroll }), Some(PopupLayout::Stamps(list))) => self.draw_stamps_list(d, list, *scroll, hints),
             (Some(Popup::Palette), Some(PopupLayout::Palette(palette))) => self.draw_palette(d, palette, textures),
             (Some(Popup::Settings { page }), Some(PopupLayout::Settings(settings))) => self.draw_settings(d, settings, *page, textures, hints),
             (Some(Popup::Lint { page }), Some(PopupLayout::Lint(lint))) => self.draw_lint_panel(d, lint, *page, hints),
@@ -733,9 +759,26 @@ impl MapEditor {
 
     /// The palette the folded TOOLS button opens: a row per category, its
     /// name in the accent while the brush is one of its tools, then a cell
-    /// per tool - the category's current tool lit, the brush outlined.
+    /// per tool - the category's current tool lit, the brush outlined - and
+    /// the brush's row under them as BRUSH's list draws it.
     fn draw_palette(&self, d: &mut impl RaylibDraw, palette: &chrome::Palette, textures: &EditorTextures) {
         draw_panel(d, palette.panel);
+        let label = palette.brush_label();
+        let color = if self.tool() == Tool::Select { BUILD_ACCENT } else { DIM };
+        let y = (label.y + (label.height - UI_SMALL_TEXT as f32) / 2.0) as i32;
+        d.draw_text(&text().get(keys::EDITOR_BRUSH), label.x as i32 + 8, y, UI_SMALL_TEXT, color);
+        for (i, row) in BrushRow::ALL.into_iter().enumerate() {
+            let cell = palette.brush_cell(i);
+            if self.brush_row_current(row) {
+                let inset = Rectangle::new(cell.x + 2.0, cell.y + 2.0, cell.width - 4.0, cell.height - 4.0);
+                d.draw_rectangle_rounded(inset, 0.2, EDITOR_PANEL_SEGMENTS, Color::new(255, 255, 255, 40));
+            }
+            let color = if self.brush_row_live(row) { TEXT } else { DIM };
+            draw_brush_icon(d, row, Rectangle::new(cell.x + 4.0, cell.y + 4.0, ICON_PX + 8.0, ICON_PX + 8.0), color);
+            if row == BrushRow::Select && self.tool() == Tool::Select {
+                d.draw_rectangle_lines_ex(Rectangle::new(cell.x + 2.0, cell.y + 2.0, cell.width - 4.0, cell.height - 4.0), 2.0, BUILD_ACCENT);
+            }
+        }
         for category in Category::ALL {
             let label = palette.label(category);
             let color = if self.active_category() == Some(category) { BUILD_ACCENT } else { DIM };
@@ -901,6 +944,40 @@ impl MapEditor {
         }
         d.draw_text(&fit_text(&t.get(hint), LINT_CLEAR_W, UI_SMALL_TEXT), words_x, (row.y + 29.0) as i32, UI_SMALL_TEXT, DIM);
         d.draw_rectangle((row.x + 8.0) as i32, (row.y + row.height - 2.0) as i32, (row.width - 16.0) as i32, 2, Color::new(255, 255, 255, 30));
+    }
+
+    /// The select tool's marks on the canvas, in world pixels over the map:
+    /// the cells a drag carries, drawn where they would land; the paste
+    /// ghost drawn faintly on a tinted rectangle in the accent's outline;
+    /// the rectangle a drag is drawing and the selection, each in a
+    /// marching outline.
+    fn draw_selection<D: RaylibDraw>(&self, d: &mut D, textures: &EditorTextures, time: f32, culled: impl Fn(Position, f32) -> bool) {
+        let field = self.map.field_size();
+        let cells = |d: &mut D, clip: &Clip, at: (i32, i32), alpha: u8| {
+            for (col, row, obj) in clip.placed_at(at) {
+                let pos = map::cell_to_world(col, row);
+                if !culled(pos, 0.0) {
+                    draw_cell(d, textures, field, pos, &obj, alpha, time);
+                }
+            }
+        };
+        if let Some((rect, clip)) = self.lifted() {
+            cells(d, clip, (rect.col, rect.row), LIFTED_ALPHA);
+            draw_marching(d, rect.world(), time);
+        }
+        if let Some(ghost) = self.ghost() {
+            let r = ghost.rect().world();
+            d.draw_rectangle_rec(r, Color::new(BUILD_ACCENT.r, BUILD_ACCENT.g, BUILD_ACCENT.b, 36));
+            cells(d, &ghost.clip, ghost.at, GHOST_ALPHA);
+            d.draw_rectangle_lines_ex(r, 2.0, BUILD_ACCENT);
+        }
+        if let Some(rect) = self.selecting() {
+            d.draw_rectangle_rec(rect.world(), Color::new(255, 255, 255, 30));
+            draw_marching(d, rect.world(), time);
+        }
+        if let (Some(rect), None) = (self.selection(), self.lifted()) {
+            draw_marching(d, rect.world(), time);
+        }
     }
 
     /// The finding the CHECK panel picked, on the canvas in world pixels:
@@ -1196,27 +1273,27 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
         }
         Tool::Start => {
             let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
-            draw_player_ring(d, center, dest.width / 2.0, 0);
+            draw_player_ring(d, center, dest.width / 2.0, 0, 255);
             for src in crate::tank::icon_source_recs(0) {
                 d.draw_texture_pro(textures.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
             }
         }
         Tool::Start2 => {
             let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
-            draw_player_ring(d, center, dest.width / 2.0, 1);
+            draw_player_ring(d, center, dest.width / 2.0, 1, 255);
             for src in crate::tank::icon_source_recs(1) {
                 d.draw_texture_pro(textures.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
             }
         }
         Tool::EnemyFrog => {
             let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
-            draw_enemy_ring(d, center, dest.width / 2.0);
+            draw_enemy_ring(d, center, dest.width / 2.0, 255);
             let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
             d.draw_texture_pro(textures.frog_idle, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Gate => {
             let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
-            draw_gate_chevron(d, center, dest.width, Position::new(1.0, 0.0));
+            draw_gate_chevron(d, center, dest.width, Position::new(1.0, 0.0), GATE_COLOR);
         }
         Tool::Portal => {
             d.draw_texture_pro(textures.portal, portal_icon_source_rec(), dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
@@ -1252,6 +1329,237 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
                 Color::WHITE,
             );
         }
+        Tool::Select => draw_brush_icon(d, BrushRow::Select, rect, TEXT),
+    }
+}
+
+/// A row of BRUSH's list as a picture inside `rect` (4 pt inset, like a
+/// tool's icon) in `color`, laid out on a grid of sixteen units a side: the
+/// pen a stair of cells, the select tool a dashed square, the stamps a
+/// rubber stamp over its print.
+pub fn draw_brush_icon(d: &mut impl RaylibDraw, row: BrushRow, rect: Rectangle, color: Color) {
+    let dest = Rectangle::new(rect.x + 4.0, rect.y + 4.0, rect.width - 8.0, rect.height - 8.0);
+    let u = dest.width.min(dest.height) / 16.0;
+    let mut unit = |x: f32, y: f32, w: f32, h: f32| {
+        let r = Rectangle::new((dest.x + x * u).round(), (dest.y + y * u).round(), (w * u).round().max(1.0), (h * u).round().max(1.0));
+        d.draw_rectangle_rec(r, color);
+    };
+    match row {
+        BrushRow::Shape(Shape::Pen) => {
+            for i in 0..4 {
+                let f = 3.0 * i as f32;
+                unit(2.0 + f, 11.0 - f, 3.0, 3.0);
+            }
+        }
+        BrushRow::Select => {
+            // A square of dashes: two units on, one off.
+            for i in 0..4 {
+                let f = 3.0 * i as f32;
+                unit(2.0 + f, 2.0, 2.0, 1.0);
+                unit(2.0 + f, 13.0, 2.0, 1.0);
+                unit(2.0, 2.0 + f, 1.0, 2.0);
+                unit(13.0, 2.0 + f, 1.0, 2.0);
+            }
+        }
+        BrushRow::Stamps => {
+            unit(6.0, 1.0, 4.0, 2.0);
+            unit(7.0, 3.0, 2.0, 5.0);
+            unit(2.0, 8.0, 12.0, 3.0);
+            unit(2.0, 13.0, 12.0, 1.0);
+        }
+    }
+}
+
+/// How opaque the cells a drag of the select tool carries are drawn.
+const LIFTED_ALPHA: u8 = 230;
+/// How opaque the paste ghost's cells are drawn.
+const GHOST_ALPHA: u8 = 150;
+
+/// One map cell's object at world `pos` on the canvas, `alpha` opaque
+/// (255 for the map itself, less for what the select tool carries), on a
+/// map of `field` world pixels (a gate's chevron points in from its edge).
+/// Road and water, which the map's own cells paint into the ground, are
+/// drawn as a tile of their own here - what a lifted or pasted one shows.
+fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f32), pos: Position, obj: &CellObject, alpha: u8, time: f32) {
+    let size = OBSTACLE_GRID_SIZE;
+    let dest = Rectangle::new(pos.x, pos.y, size, size);
+    let origin = Vector2::new(size / 2.0, size / 2.0);
+    let tint = Color::new(255, 255, 255, alpha);
+    let faded = |c: Color| Color::new(c.r, c.g, c.b, ((c.a as u32 * alpha as u32) / 255) as u8);
+    match *obj {
+        CellObject::Barrel { drum: Some(drum) } => {
+            let src = obstacle::drum_source_rec(drum);
+            d.draw_texture_pro(textures.props, src, dest, origin, 0.0, tint);
+        }
+        CellObject::Wall { .. } | CellObject::Sandbag | CellObject::Barrel { .. } | CellObject::Fence => {
+            let material = obj.material().expect("solid cells have a material");
+            let (sheet, src) = obstacle::icon_source_rec(material);
+            d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, origin, 0.0, tint);
+        }
+        CellObject::Oil => {
+            let src = obstacle::oil_source_rec(pos);
+            d.draw_texture_pro(textures.props, src, dest, origin, 0.0, tint);
+        }
+        CellObject::Tree | CellObject::Pine => {
+            // Drawn at the sprite's own 48px, not the 32px cell, so the
+            // canopy overhang matches a round.
+            let material = obj.material().expect("tree cells have a material");
+            let (sheet, src) = obstacle::icon_source_rec(material);
+            let big = crate::TREE_TEXTURE_SIZE;
+            let dest = Rectangle::new(pos.x, pos.y, big, big);
+            let origin = Vector2::new(big / 2.0, big / 2.0);
+            d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, origin, 0.0, tint);
+        }
+        CellObject::Tesla { .. } | CellObject::GunTower { .. } | CellObject::BioSlush { .. } => {
+            // At the sprite's own 48px like a tree, base then top pointing
+            // up, with its reach ringed faintly so a map maker sees what it
+            // covers.
+            let (kind, side) = obj.tower().expect("tower cells name a tower");
+            let big = crate::TREE_TEXTURE_SIZE;
+            let dest = Rectangle::new(pos.x, pos.y, big, big);
+            let origin = Vector2::new(big / 2.0, big / 2.0);
+            let reach = if side == crate::frog::Side::Enemy { Color::new(230, 60, 60, 70) } else { Color::new(77, 155, 230, 70) };
+            d.draw_circle_lines(pos.x as i32, pos.y as i32, kind.range(), faded(reach));
+            for src in [crate::tower::icon_source_rec(kind, side), crate::tower::icon_top_rec(kind, side)] {
+                d.draw_texture_pro(textures.towers, src, dest, origin, 0.0, tint);
+            }
+        }
+        CellObject::Road => {
+            d.draw_rectangle_rec(Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size), faded(ROAD_TILE));
+        }
+        CellObject::Water => {
+            d.draw_texture_pro(textures.ground, ground::water_icon_source_rec(), dest, origin, 0.0, tint);
+        }
+        CellObject::Portal => draw_portal(&mut GpuCanvas::new(&mut *d, textures), pos, time, tint),
+        CellObject::TallGrass => {
+            // The round scatters several hashed tufts per cell; one centred
+            // tuft is enough to show the cell is grassed.
+            let cell = crate::GRASS_TEXTURE_SIZE;
+            let src = Rectangle::new(0.0, 0.0, cell, cell);
+            let scale = cell * crate::tuning::tuning().grass_scale;
+            let at = Rectangle::new(pos.x, pos.y + size / 2.0, scale, scale);
+            d.draw_texture_pro(textures.grass, src, at, Vector2::new(scale / 2.0, scale), 0.0, tint);
+        }
+        CellObject::Frog => {
+            let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
+            d.draw_texture_pro(textures.frog_idle, src, dest, origin, 0.0, tint);
+        }
+        CellObject::Start | CellObject::Start2 => {
+            let player = u8::from(*obj == CellObject::Start2);
+            draw_player_ring(d, pos, size / 2.0, player as usize, alpha);
+            for src in crate::tank::icon_source_recs(player) {
+                d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, tint);
+            }
+        }
+        CellObject::EnemyFrog => {
+            draw_enemy_ring(d, pos, size / 2.0, alpha);
+            let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
+            d.draw_texture_pro(textures.frog_idle, src, dest, origin, 0.0, tint);
+        }
+        CellObject::Gate => match gate_inward(pos, field.0, field.1) {
+            Some(inward) => draw_gate_chevron(d, pos, size, inward, faded(GATE_COLOR)),
+            None => d.draw_rectangle_lines_ex(Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size), 2.0, faded(GATE_COLOR)),
+        },
+        CellObject::Pickup { pickup } => {
+            let texture = pickup_texture(textures, pickup);
+            let src = Rectangle::new(0.0, 0.0, crate::PICKUP_TEXTURE_SIZE, crate::PICKUP_TEXTURE_SIZE);
+            d.draw_texture_pro(texture, src, dest, origin, 0.0, tint);
+        }
+    }
+}
+
+/// The road tool's own tile colour, the dirt under a lifted or pasted
+/// road cell.
+const ROAD_TILE: Color = Color::new(150, 111, 74, 255);
+
+/// A selection's outline in world pixels: 2 px dashes of four blocks, light
+/// and dark by turns, marching round `r` at a block every
+/// `MARCH_SECONDS` - it reads over any ground and any wall.
+fn draw_marching(d: &mut impl RaylibDraw, r: Rectangle, time: f32) {
+    const DASH: f32 = 8.0;
+    const LINE: f32 = 2.0;
+    let (x0, y0, x1, y1) = (r.x, r.y, r.x + r.width, r.y + r.height);
+    // The piece `from`..`to` of each side, clockwise from the top-left
+    // corner: along the top, down the right, back along the bottom, up the
+    // left - 2 px inside the rectangle.
+    let piece = |side: usize, from: f32, to: f32| match side {
+        0 => Rectangle::new(x0 + from, y0, to - from, LINE),
+        1 => Rectangle::new(x1 - LINE, y0 + from, LINE, to - from),
+        2 => Rectangle::new(x1 - to, y1 - LINE, to - from, LINE),
+        _ => Rectangle::new(x0, y1 - to, LINE, to - from),
+    };
+    // The run round the perimeter starts a block further on each step of
+    // the clock, so the dashes march.
+    let mut run = -(((time / MARCH_SECONDS).floor() as i64).rem_euclid((2.0 * DASH / LINE) as i64) as f32) * LINE;
+    for (side, len) in [r.width, r.height, r.width, r.height].into_iter().enumerate() {
+        let mut along = 0.0;
+        while along < len {
+            let dash = (run / DASH).floor();
+            let step = ((dash + 1.0) * DASH - run).min(len - along);
+            let light = (dash as i64).rem_euclid(2) == 0;
+            let color = if light { Color::new(255, 255, 255, 230) } else { Color::new(16, 16, 20, 230) };
+            d.draw_rectangle_rec(piece(side, along, along + step), color);
+            along += step;
+            run += step;
+        }
+    }
+}
+
+/// How long the selection's outline takes to march one 2 px block.
+const MARCH_SECONDS: f32 = 0.08;
+
+/// A row of BRUSH's list's name in the language on screen.
+fn brush_label(row: BrushRow) -> String {
+    let t = text();
+    match row {
+        BrushRow::Shape(shape) => t.get(shape.label_key()),
+        BrushRow::Select => label(Tool::Select),
+        BrushRow::Stamps => t.get(keys::BRUSH_STAMPS),
+    }
+}
+
+/// A strip button's word in the language on screen.
+fn strip_label(button: StripButton) -> String {
+    button.label_key().map(|key| text().get(key)).unwrap_or_default()
+}
+
+/// A flip's strip button: the small buttons' outline round a picture of
+/// whole 2 pt blocks - two arrowheads pointing away from a bar between
+/// them, left and right for `Axis::Horizontal`, up and down for
+/// `Axis::Vertical`.
+fn draw_flip_button(d: &mut impl RaylibDraw, rect: Rectangle, axis: Axis, color: Color) {
+    let inset = Rectangle::new(rect.x, rect.y + 4.0, rect.width - SMALL_BOX_INSET, rect.height - 8.0);
+    d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
+    let (cx, cy) = ((inset.x + inset.width / 2.0).round(), (inset.y + inset.height / 2.0).round());
+    let mut block = |along: f32, across: f32, w: f32, h: f32| {
+        let r = match axis {
+            Axis::Horizontal => Rectangle::new(cx + along, cy + across, w, h),
+            Axis::Vertical => Rectangle::new(cx + across, cy + along, h, w),
+        };
+        d.draw_rectangle_rec(r, color);
+    };
+    // The bar, then each arrowhead's three columns, widest at the bar.
+    block(-1.0, -8.0, 2.0, 16.0);
+    for (i, half) in [6.0_f32, 4.0, 2.0].into_iter().enumerate() {
+        let step = 2.0 * i as f32;
+        block(-5.0 - step, -half, 2.0, 2.0 * half);
+        block(3.0 + step, -half, 2.0, 2.0 * half);
+    }
+}
+
+/// A clip's picture in `rect`: the cells it holds in the minimap's colours
+/// (`minimap::Class`) on the theme's ground, each a square of whole points
+/// as large as the box allows, centred.
+fn draw_clip_picture(d: &mut impl RaylibDraw, clip: &Clip, rect: Rectangle, theme: Theme) {
+    use crate::minimap::Class;
+    let (cols, rows) = (clip.cols.max(1) as f32, clip.rows.max(1) as f32);
+    let k = (rect.width / cols).min(rect.height / rows).floor().max(1.0);
+    let (w, h) = (cols * k, rows * k);
+    let (x0, y0) = ((rect.x + (rect.width - w) / 2.0).round(), (rect.y + (rect.height - h) / 2.0).round());
+    d.draw_rectangle_rec(Rectangle::new(x0, y0, w, h), Class::Ground.color(theme));
+    for &(c, r, obj) in &clip.cells {
+        let class = Class::solid_of(&obj).unwrap_or(Class::floor(Some(&obj), ground::Depth::Shallow));
+        d.draw_rectangle_rec(Rectangle::new(x0 + c as f32 * k, y0 + r as f32 * k, k, k), class.color(theme));
     }
 }
 
@@ -1272,34 +1580,41 @@ const ENEMY_RING_COLOR: Color = Color::new(230, 60, 60, 220);
 
 const GATE_COLOR: Color = Color::ORANGE;
 
-/// A flat red ring of radius `radius` centred on `center`.
-fn draw_enemy_ring(d: &mut impl RaylibDraw, center: Position, radius: f32) {
-    d.draw_ring(center, radius * 0.75, radius, 0.0, 360.0, 24, ENEMY_RING_COLOR);
-    d.draw_circle_v(center, radius * 0.75, Color::new(230, 60, 60, 50));
+/// `alpha` of an opaque marker's own alpha: what a lifted or pasted
+/// cell's marker is drawn at.
+fn scaled(c: Color, alpha: u8) -> Color {
+    Color::new(c.r, c.g, c.b, ((c.a as u32 * alpha as u32) / 255) as u8)
+}
+
+/// A flat red ring of radius `radius` centred on `center`, `alpha` of
+/// its own strength.
+fn draw_enemy_ring(d: &mut impl RaylibDraw, center: Position, radius: f32, alpha: u8) {
+    d.draw_ring(center, radius * 0.75, radius, 0.0, 360.0, 24, scaled(ENEMY_RING_COLOR, alpha));
+    d.draw_circle_v(center, radius * 0.75, scaled(Color::new(230, 60, 60, 50), alpha));
 }
 
 /// A player's team-coloured ring, the same shape as the enemy frog's red
 /// one, under the start markers: a `start` cell reads as "a tank, the blue
 /// one" and `start2` as the pink one, the colours the tanks will be.
-fn draw_player_ring(d: &mut impl RaylibDraw, center: Position, radius: f32, player: usize) {
+fn draw_player_ring(d: &mut impl RaylibDraw, center: Position, radius: f32, player: usize, alpha: u8) {
     let c = crate::tank::team_color(player as u8);
-    d.draw_ring(center, radius * 0.75, radius, 0.0, 360.0, 24, Color::new(c.r, c.g, c.b, 220));
-    d.draw_circle_v(center, radius * 0.75, Color::new(c.r, c.g, c.b, 50));
+    d.draw_ring(center, radius * 0.75, radius, 0.0, 360.0, 24, scaled(Color::new(c.r, c.g, c.b, 220), alpha));
+    d.draw_circle_v(center, radius * 0.75, scaled(Color::new(c.r, c.g, c.b, 50), alpha));
 }
 
-/// An orange chevron of overall size `size` at `center`, its point aimed
-/// along `inward` (a unit axis vector) - the direction a tank rolling in
-/// through the gate travels.
-fn draw_gate_chevron(d: &mut impl RaylibDraw, center: Position, size: f32, inward: Position) {
+/// A chevron of overall size `size` at `center` in `color`, its point
+/// aimed along `inward` (a unit axis vector) - the direction a tank
+/// rolling in through the gate travels.
+fn draw_gate_chevron(d: &mut impl RaylibDraw, center: Position, size: f32, inward: Position, color: Color) {
     let half = size / 2.0 - 3.0;
     let side = Position::new(-inward.y, inward.x);
     let tip = center + inward * half;
     let tail = center - inward * (half * 0.4);
     let wing_a = tail + side * half;
     let wing_b = tail - side * half;
-    d.draw_line_ex(wing_a, tip, 3.0, GATE_COLOR);
-    d.draw_line_ex(wing_b, tip, 3.0, GATE_COLOR);
-    d.draw_line_ex(center - inward * half, tip, 3.0, GATE_COLOR);
+    d.draw_line_ex(wing_a, tip, 3.0, color);
+    d.draw_line_ex(wing_b, tip, 3.0, color);
+    d.draw_line_ex(center - inward * half, tip, 3.0, color);
 }
 
 impl FileRow {

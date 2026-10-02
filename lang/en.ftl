@@ -362,6 +362,40 @@ editor-loaded = loaded { $name }
 editor-saving-unavailable = saving is not available in this build: edits stay in memory for the session
 editor-no-name = the map has no name yet: use SAVE AS
 editor-bad-name = map name "{ $name }" may only use letters, digits, - and _
+editor-copied = copied { $n } cells
+editor-cut = cut { $n } cells
+editor-stamp-kept = kept as { $name } in STAMPS
+editor-stamp-empty = nothing to keep: the selection is empty
+
+# BRUSH: how a press on the canvas paints, the select tool and the stamps.
+# The palette's row of them is named at 12 pt in 60, like a category; the
+# list's rows at 18 px in a 200 px row after a 32 px icon (about 12
+# letters), like the tools.
+editor-brush = BRUSH
+brush-pen = pen
+brush-stamps = stamps...
+
+# The select tool's strip under the bar: a word on each button, 11 pt in
+# 60 with a mouse and 12 in 72 on a touch screen (about 8 letters). COPY,
+# CUT, PASTE and DELETE act on the selection; + STAMP keeps it as a stamp
+# for the session; STAMPS opens their list; PLACE puts a paste down where
+# it stands and CANCEL takes it away.
+select-copy = COPY
+select-cut = CUT
+select-paste = PASTE
+select-delete = DELETE
+select-save-stamp = + STAMP
+select-stamps = STAMPS
+select-place = PLACE
+select-cancel = CANCEL
+
+# The stamps in the STAMPS list, 18 px between a stamp's picture and its
+# size (about 12 letters): the shipped ones by their file's name under
+# maps/stamps/, and the ones kept this session numbered.
+stamp-fort = fort
+stamp-bunker = bunker
+stamp-river-bend = river bend
+stamp-saved = my stamp { $n }
 
 # The tools, as the dropdown rows spell them, 18 px in a 200 px row
 # after a 32 px icon (about 12 letters). The key is `tool-` and the
@@ -405,6 +439,7 @@ tool-gun_tower_enemy = enemy gun
 tool-bio_slush = bio slush
 tool-bio_slush_enemy = enemy slush
 tool-eraser = eraser
+tool-select = select
 
 # The short spelling for the bar's 10 px line and the cursor readout,
 # where a tool's full name has no room (about 6 letters). A tool without

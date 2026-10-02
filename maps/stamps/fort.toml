@@ -1,0 +1,44 @@
+# A builder stamp (src/editor/select.rs, docs/large-maps-patterns.md
+# "Selection, copy and stamps"): offered in the builder's STAMPS list,
+# where choosing it makes it the paste ghost. Not a map to play - `size`
+# is the stamp's own extent in cells, from its top-left - and it holds no
+# start, frog or gate, so putting it down never moves one. Embedded in the
+# binary (`editor::select::SHIPPED_STAMPS`), so every build offers it.
+#
+# fort: a walled square to hold, 10 x 8 cells. Brick walls on iron corner
+# posts (the posts outlast every blast), a two-cell gap in the middle of
+# each side - a tank needs two cells to drive through, one does not route -
+# and four sandbags inside as cover against shots through the gaps. Put a
+# start or the frog in its middle to make it the base.
+
+version = 1
+size = [10, 8]
+
+cells."0,0" = { kind = "wall", material = "iron" }
+cells."1,0" = { kind = "wall", material = "brick" }
+cells."2,0" = { kind = "wall", material = "brick" }
+cells."3,0" = { kind = "wall", material = "brick" }
+cells."6,0" = { kind = "wall", material = "brick" }
+cells."7,0" = { kind = "wall", material = "brick" }
+cells."8,0" = { kind = "wall", material = "brick" }
+cells."9,0" = { kind = "wall", material = "iron" }
+cells."0,1" = { kind = "wall", material = "brick" }
+cells."9,1" = { kind = "wall", material = "brick" }
+cells."0,2" = { kind = "wall", material = "brick" }
+cells."2,2" = { kind = "sandbag" }
+cells."7,2" = { kind = "sandbag" }
+cells."9,2" = { kind = "wall", material = "brick" }
+cells."0,5" = { kind = "wall", material = "brick" }
+cells."2,5" = { kind = "sandbag" }
+cells."7,5" = { kind = "sandbag" }
+cells."9,5" = { kind = "wall", material = "brick" }
+cells."0,6" = { kind = "wall", material = "brick" }
+cells."9,6" = { kind = "wall", material = "brick" }
+cells."0,7" = { kind = "wall", material = "iron" }
+cells."1,7" = { kind = "wall", material = "brick" }
+cells."2,7" = { kind = "wall", material = "brick" }
+cells."3,7" = { kind = "wall", material = "brick" }
+cells."6,7" = { kind = "wall", material = "brick" }
+cells."7,7" = { kind = "wall", material = "brick" }
+cells."8,7" = { kind = "wall", material = "brick" }
+cells."9,7" = { kind = "wall", material = "iron" }

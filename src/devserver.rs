@@ -32,7 +32,9 @@ use crate::math::Vec2;
 use sola_raylib::prelude::{RaylibHandle, RaylibTexture2D, RaylibThread, RenderTexture2D};
 
 use crate::ai::Intent;
-use crate::editor::{BuilderFrame, BuilderInput, Category, CellChange, MapEditor, Tool, parse_mission, parse_spawn, parse_tank, parse_tier};
+use crate::editor::{
+    Axis, BuilderFrame, BuilderInput, Category, CellChange, CellRect, MapEditor, Tool, parse_mission, parse_spawn, parse_tank, parse_tier,
+};
 use crate::hud::{leave_dialog_rects, players_dialog_rects, CornerButton, CornerShape, Corners, UiFrame};
 use crate::map::MapFile;
 use crate::maplint::LintSeverity;
@@ -106,7 +108,7 @@ pub const GAME_ONLY_TOOLS: &[&str] = &[
 pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
     "step", "input", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "players", "play",
     "build", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings",
-    "builder_map", "builder_save", "builder_touch",
+    "builder_map", "builder_save", "builder_touch", "builder_select", "builder_stamp",
 ];
 
 /// Tiles one `terrain` reply lists at most (the standard 34 x 17 field
@@ -114,7 +116,8 @@ pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
 const TERRAIN_MAX_TILES: usize = 800;
 
 /// The `key` tool's key names.
-const KEY_NAMES: &[&str] = &["tab", "escape", "enter", "undo", "redo", "backspace", "1", "2", "left", "right", "up", "down", "zoom_in", "zoom_out"];
+const KEY_NAMES: &[&str] =
+    &["tab", "escape", "enter", "undo", "redo", "copy", "cut", "paste", "delete", "backspace", "1", "2", "left", "right", "up", "down", "zoom_in", "zoom_out"];
 
 /// One tool: its wire/MCP name, the description the model reads, and its
 /// input JSON schema (an `object` schema, as a string so this table can be
@@ -155,7 +158,7 @@ const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"inte
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|split|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `split` of a couch pair apart (null for one view: the divider's `line` - a point and the unit normal into the second half in the followed bitmap's pixels - and `window_line`, how far `apart` the halves' views stand and each half's `seat`, `rect`, `offset`, `cut` and `in_view`), the `establishing` shot's `phase` (whole|zoom|follow) and `progress` (view `establishing` while it plays), the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`; and `motion`, the one motion switch - whether motion is `reduced` (no shake, no whole-screen ripple, the establishing shot cut rather than zoomed), the `reduce_motion` row's `setting` (platform|off|on) and what the `platform` said at startup, null where it says nothing), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, the input its `hints` name - `keys` or `touch`, the last one used: a touch landing turns them to taps and a key press back -, in play and online the corners' `buttons` and `clusters` and the `minimap` picture under the right cluster (`null` where none is drawn - an arena shown whole, a phone; a press there does nothing), and the `screen_buttons` of whatever stands over the round - the level select's open tiles (`level_N`) and `back`, a dialog's `one`/`two` or `leave`/`stay`, a level's end screen's `levels`/`again`/`next`, the lobby's live buttons (`host`, `join`, `key_a`, `confirm`, `ready`, `start`, `kick_1`, ...) - all in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state (the builder's chrome is laid out on the window in UI points like play's corners - the bar along the top of the safe area, the popups under it -, and its rects come in window coordinates, what `click` and `builder_touch` take, each with its `ui` points; `builder.navigator`: the navigator's picture, `null` at FIT on an arena; `builder.buttons`: the builder's buttons by name - the bar's `play`, `play_here`, `check`, `clear`, `fit`, `map`, `file`, `erase`, `undo`, `redo` and each category's `category_<name>` (its icon half) and `list_<name>` (its list half), or the one `tools` button a bar too narrow for the five folds them into; while a popup is open its own - a list's or the palette's `tool_<name>`, the FILE menu's `load`, `save`, `save_as` and `clear_map`, the Load list's `map_<name>`, the MAP panel's `<row>_dec`/`<row>_inc` and `reset`, the CHECK panel's `finding_N` rows and `fix_N` buttons - and a paged popup's `page_back`/`page_next`; `builder.check`: the CHECK panel's last report; `builder.clear`: the clear check - the canvas's `revision`, whether it is `cleared` (won from plain PLAY with no edit since) and its `par` in seconds, and the revision PLAY started the local round on (`attempt`); `builder.loupe`: the loupe over a painting finger - where it stands, the `world` it shows, its `device_scale` and the `cell` the stroke paints -, `null` without one), and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|split|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `split` of a couch pair apart (null for one view: the divider's `line` - a point and the unit normal into the second half in the followed bitmap's pixels - and `window_line`, how far `apart` the halves' views stand and each half's `seat`, `rect`, `offset`, `cut` and `in_view`), the `establishing` shot's `phase` (whole|zoom|follow) and `progress` (view `establishing` while it plays), the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`; and `motion`, the one motion switch - whether motion is `reduced` (no shake, no whole-screen ripple, the establishing shot cut rather than zoomed), the `reduce_motion` row's `setting` (platform|off|on) and what the `platform` said at startup, null where it says nothing), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, the input its `hints` name - `keys` or `touch`, the last one used: a touch landing turns them to taps and a key press back -, in play and online the corners' `buttons` and `clusters` and the `minimap` picture under the right cluster (`null` where none is drawn - an arena shown whole, a phone; a press there does nothing), and the `screen_buttons` of whatever stands over the round - the level select's open tiles (`level_N`) and `back`, a dialog's `one`/`two` or `leave`/`stay`, a level's end screen's `levels`/`again`/`next`, the lobby's live buttons (`host`, `join`, `key_a`, `confirm`, `ready`, `start`, `kick_1`, ...) - all in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state (the builder's chrome is laid out on the window in UI points like play's corners - the bar along the top of the safe area, the popups under it -, and its rects come in window coordinates, what `click` and `builder_touch` take, each with its `ui` points; `builder.navigator`: the navigator's picture, `null` at FIT on an arena; `builder.buttons`: the builder's buttons by name - the bar's `play`, `play_here`, `check`, `clear`, `fit`, `map`, `file`, `erase`, `undo`, `redo`, each category's `category_<name>` (its icon half) and `list_<name>` (its list half) and `brush` (BRUSH: the brush's shape, the select tool, the stamps), or the one `tools` button a bar too narrow for the five and BRUSH folds them into; with the select tool the strip under the bar's live buttons - `sel_copy`, `sel_cut`, `sel_paste`, `sel_flip_h`, `sel_flip_v`, `sel_delete`, `sel_stamp` (keep the selection as a stamp), `sel_stamps` (the STAMPS list), or with a paste ghost `sel_place`, `sel_flip_h`, `sel_flip_v`, `sel_cancel`; while a popup is open its own - a list's or the palette's `tool_<name>`, BRUSH's list's and the palette's brush row's `shape_<name>`, `tool_select` and `brush_stamps`, the FILE menu's `load`, `save`, `save_as` and `clear_map`, the Load list's `map_<name>`, the STAMPS list's `stamp_<key>`, the MAP panel's `<row>_dec`/`<row>_inc` and `reset`, the CHECK panel's `finding_N` rows and `fix_N` buttons - and a paged popup's `page_back`/`page_next`; `builder.shape`: how the brush paints (pen); `builder.selection` and `builder.ghost`: the select tool's rectangle and the paste ghost as {col, row, cols, rows} (the ghost with its `cells`), `null` for none; `builder.clipboard`: what COPY and CUT took ({cols, rows, cells}); `builder.stamps`: how many stamps the STAMPS list offers; `builder.check`: the CHECK panel's last report; `builder.clear`: the clear check - the canvas's `revision`, whether it is `cleared` (won from plain PLAY with no edit since) and its `par` in seconds, and the revision PLAY started the local round on (`attempt`); `builder.loupe`: the loupe over a painting finger - where it stands, the `world` it shows, its `device_scale` and the `cell` the stroke paints -, `null` without one), and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -373,7 +376,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "builder_tool",
-        description: "Select the builder's brush by name - brick, iron, wood, glass (WALL); sandbag, barrel, oil_drum, fuel_drum, fence, tesla, tesla_enemy, gun_tower, gun_tower_enemy, bio_slush, bio_slush_enemy (PROP); road, water, tall_grass, tree, pine, oil_trail, gate, portal (GROUND); start, start2 (player 2's start), frog, enemy_frog (ACTOR); health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack (PICKUP); or eraser - through the category's own selection path, so the bar's category button updates as well. Without `tool`, only reports the active tool and every category's current tool and full list (the authoritative spelling of every brush).",
+        description: "Select the builder's brush by name - brick, iron, wood, glass (WALL); sandbag, barrel, oil_drum, fuel_drum, fence, tesla, tesla_enemy, gun_tower, gun_tower_enemy, bio_slush, bio_slush_enemy (PROP); road, water, tall_grass, tree, pine, oil_trail, gate, portal (GROUND); start, start2 (player 2's start), frog, enemy_frog (ACTOR); health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack (PICKUP); eraser; or select, the rectangle select tool (BRUSH's list; `builder_select` drives it) - through the category's own selection path, so the bar's category button updates as well. Any tool but select lets the selection go and takes a paste ghost away. Without `tool`, only reports the active tool, the brush's `shape` and every category's current tool and full list (the authoritative spelling of every brush).",
         schema: r#"{"type":"object","properties":{"tool":{"type":"string","description":"A tool name (see the description) or eraser"}}}"#,
         read_only: false,
         destructive: false,
@@ -435,6 +438,20 @@ pub const TOOLS: &[ToolSpec] = &[
         destructive: false,
     },
     ToolSpec {
+        name: "builder_select",
+        description: "The builder's select tool (docs/large-maps-patterns.md, \"Selection, copy and stamps\") as a drag and the strip under the bar drive it: `rect` [col0, row0, col1, row1] selects those cells (two opposite corners, inclusive; the part on the field) and takes the select tool, as a drag across them does; `clear` lets the selection go and takes a paste ghost away; `move_by` [dx, dy] carries the selection's cells that many cells, kept on the field, as a drag from inside it does; `action` acts as the strip's buttons and the keys do - copy, cut (a copy and a delete), delete, flip_h, flip_v (mirror the selection in place - or the paste ghost while one stands), stamp (keep the selection, trimmed to its cells, as a stamp for this session: `builder_stamp`), paste (the clipboard as the paste ghost with its middle on `at` [col, row], else in the middle of the view), place (put the ghost down where it stands, or with its top-left on `at`), cancel (take the ghost away). Every move, flip, cut, delete and place is one undo step. A clip is transparent: its empty cells leave the map as it was. A start, player 2's start or a frog moves with its cells; a paste puts one down only where the map holds none of it by then - never two. Replies with the `selection` and the `ghost` ({col, row, cols, rows}, null for none), the `clipboard` ({cols, rows, cells}, null), what the call `changes`d (as `builder_paint`) and `undo_depth`.",
+        schema: r#"{"type":"object","properties":{"rect":{"type":"array","items":{"type":"integer"},"minItems":4,"maxItems":4,"description":"[col0, row0, col1, row1]: opposite corners, inclusive"},"clear":{"type":"boolean","default":false},"move_by":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2,"description":"[dx, dy] in cells"},"action":{"type":"string","enum":["copy","cut","delete","flip_h","flip_v","stamp","paste","place","cancel"]},"at":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2,"description":"[col, row]: the ghost's middle for paste, its top-left for place"}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "builder_stamp",
+        description: "The builder's STAMPS list: without `name`, every stamp it offers - the shipped ones (maps/stamps/: fort, bunker, river-bend) then the ones kept this session (`saved_N`, `builder_select {action: stamp}`) - each with its `key`, its `name` in the language on screen, its size in cells and how many cells it holds. With `name` (a key): that stamp becomes the paste ghost in the middle of the view, with the select tool, as a press on its row does; `at` [col, row] stands the ghost's top-left there instead, and `place: true` puts it down at once (one undo step). Replies with the `stamps`, the `ghost` and, with `place`, the `changes`.",
+        schema: r#"{"type":"object","properties":{"name":{"type":"string","description":"A stamp's key"},"at":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2,"description":"[col, row]: the ghost's top-left"},"place":{"type":"boolean","default":false,"description":"Put the ghost down at once"}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
         name: "builder_save",
         description: "FILE > SAVE / SAVE AS: write the builder's map to maps/<name>.toml (native only; `name` defaults to the map's own name and becomes it) and make the saved state the baseline, so `dirty` clears. Letters, digits, - and _ only. Replies like `builder_map`.",
         schema: r#"{"type":"object","properties":{"name":{"type":"string"}}}"#,
@@ -450,8 +467,8 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "key",
-        description: "Press one key for one frame: tab (BUILD/PLAY - in play mode it opens the leave dialog, or closes an open one; in build mode it starts the round like `play`), escape (keep playing / close a dialog or popup; in play mode with no dialog, open or close the level select), enter (leave the round; in the players dialog, switch to the other count; on a level's end screen, the way on or PLAY AGAIN; in the level select, start the level under the focus; confirm a popup), left / right / up / down (move the level select's focus over the open levels; in the builder, pan the canvas for one frame the way the arrow points), 1 / 2 (answer the players dialog), undo, redo (Ctrl+Z / Ctrl+Y in the builder), zoom_in / zoom_out (`+` / `-` in the builder: one zoom step about the canvas's middle), backspace; `text` types characters into an open builder prompt. A key press turns the hints back to the keys (`status.ui.hints`). Replies like `mode` (`levels_open`, `levels_focus`).",
-        schema: r#"{"type":"object","properties":{"key":{"type":"string","enum":["tab","escape","enter","undo","redo","backspace","1","2","left","right","up","down","zoom_in","zoom_out"]},"text":{"type":"string","description":"Characters to type this frame (build mode)"}}}"#,
+        description: "Press one key for one frame: tab (BUILD/PLAY - in play mode it opens the leave dialog, or closes an open one; in build mode it starts the round like `play`), escape (keep playing / close a dialog or popup; in play mode with no dialog, open or close the level select), enter (leave the round; in the players dialog, switch to the other count; on a level's end screen, the way on or PLAY AGAIN; in the level select, start the level under the focus; confirm a popup), left / right / up / down (move the level select's focus over the open levels; in the builder, pan the canvas for one frame the way the arrow points), 1 / 2 (answer the players dialog), undo, redo (Ctrl+Z / Ctrl+Y in the builder), copy, cut, paste (Ctrl+C / Ctrl+X / Ctrl+V in the builder: the selection copied or cut, the clipboard pasted as a ghost in the middle of the view - `builder_select {action: paste, at}` stands it elsewhere), delete (the selection's cells cleared; so does backspace outside the Save prompt; in the builder escape also takes a paste ghost away, then the selection), zoom_in / zoom_out (`+` / `-` in the builder: one zoom step about the canvas's middle), backspace; `text` types characters into an open builder prompt. A key press turns the hints back to the keys (`status.ui.hints`). Replies like `mode` (`levels_open`, `levels_focus`).",
+        schema: r#"{"type":"object","properties":{"key":{"type":"string","enum":["tab","escape","enter","undo","redo","copy","cut","paste","delete","backspace","1","2","left","right","up","down","zoom_in","zoom_out"]},"text":{"type":"string","description":"Characters to type this frame (build mode)"}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -1446,9 +1463,15 @@ impl DevServer {
 
     /// `status.builder`: the builder's state - see the `status` tool.
     fn builder_json(&self, session: &Session, width: f32, height: f32) -> Value {
+        let b = &session.builder;
         json!({
-            "dirty": session.builder.dirty(),
-            "tool": session.builder.tool().name(),
+            "dirty": b.dirty(),
+            "tool": b.tool().name(),
+            "shape": b.shape().name(),
+            "selection": cell_rect_json(b.selection()),
+            "ghost": ghost_json(b),
+            "clipboard": clipboard_json(b),
+            "stamps": b.stamps().len(),
             "camera": builder_camera_json(&session.builder),
             "navigator": self.navigator_json(session, width, height),
             "buttons": self.builder_buttons_json(session, width, height),
@@ -2009,6 +2032,8 @@ impl DevServer {
                     })
                 }
             }
+            "builder_select" => builder_select(&mut session.builder, params),
+            "builder_stamp" => builder_stamp(&mut session.builder, params),
             "builder_files" => Ok(json!({
                 "maps": crate::map::available_maps(),
                 "can_save": crate::map::saving_available(),
@@ -2300,6 +2325,10 @@ impl DevServer {
                         backspace: key == Some("backspace"),
                         undo: key == Some("undo"),
                         redo: key == Some("redo"),
+                        copy: key == Some("copy"),
+                        cut: key == Some("cut"),
+                        paste: key == Some("paste"),
+                        delete: key == Some("delete"),
                         zoom_in: key == Some("zoom_in"),
                         zoom_out: key == Some("zoom_out"),
                         pan_keys: Vec2::new(arrow("left", "right"), arrow("up", "down")),
@@ -2611,7 +2640,162 @@ fn tool_json(b: &MapEditor) -> Value {
             })
         })
         .collect();
-    json!({ "tool": b.tool().name(), "category": b.active_category().map(category_name), "categories": categories })
+    json!({ "tool": b.tool().name(), "shape": b.shape().name(), "category": b.active_category().map(category_name), "categories": categories })
+}
+
+/// A rectangle of cells as `status.builder` and `builder_select` spell it:
+/// its top-left cell and its size, `null` for none.
+fn cell_rect_json(rect: Option<CellRect>) -> Value {
+    rect.map_or(Value::Null, |r| json!({ "col": r.col, "row": r.row, "cols": r.cols, "rows": r.rows }))
+}
+
+/// The paste ghost: where it stands and how many cells it carries.
+fn ghost_json(b: &MapEditor) -> Value {
+    match b.ghost() {
+        Some(ghost) => {
+            let mut v = cell_rect_json(Some(ghost.rect()));
+            v["cells"] = json!(ghost.clip.cells.len());
+            v
+        }
+        None => Value::Null,
+    }
+}
+
+/// The clipboard: its size and how many cells it holds.
+fn clipboard_json(b: &MapEditor) -> Value {
+    b.clipboard().map_or(Value::Null, |c| json!({ "cols": c.cols, "rows": c.rows, "cells": c.cells.len() }))
+}
+
+/// `builder_select`'s reply.
+fn select_json(b: &MapEditor, changes: &[CellChange]) -> Value {
+    json!({
+        "tool": b.tool().name(),
+        "selection": cell_rect_json(b.selection()),
+        "ghost": ghost_json(b),
+        "clipboard": clipboard_json(b),
+        "changes": changes_json(changes),
+        "undo_depth": b.history().undo_depth(),
+    })
+}
+
+/// `n` integers under `key`, `None` when absent.
+fn ints_param(params: &Value, key: &str, n: usize) -> Result<Option<Vec<i32>>, String> {
+    match params.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(items)) if items.len() == n => items
+            .iter()
+            .map(|v| v.as_i64().map(|i| i as i32).ok_or_else(|| format!("{key} must be {n} integers, got {v}")))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some),
+        Some(v) => Err(format!("{key} must be an array of {n} integers, got {v}")),
+    }
+}
+
+/// `builder_select`: the select tool, as the `builder_select` tool's
+/// description has it - a rectangle, a clear, a move, then an action, in
+/// that order.
+fn builder_select(b: &mut MapEditor, params: &Value) -> Result<Value, String> {
+    let rect = ints_param(params, "rect", 4)?;
+    let move_by = ints_param(params, "move_by", 2)?;
+    let at = ints_param(params, "at", 2)?.map(|v| (v[0], v[1]));
+    let action = match params.get("action") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(other) => return Err(format!("action must be a string, got {other}")),
+    };
+    let mut changes = Vec::new();
+    if params.get("clear").and_then(Value::as_bool).unwrap_or(false) {
+        b.cancel_ghost();
+        b.clear_selection();
+    }
+    if let Some(r) = rect
+        && !b.select_cells(CellRect::spanning((r[0], r[1]), (r[2], r[3])))
+    {
+        return Err(format!("rect {r:?} is off the map, whose cells are {:?}", b.field_cells()));
+    }
+    let selected = |b: &MapEditor, what: &str| if b.selection().is_some() { Ok(()) } else { Err(format!("{what} needs a selection: give `rect` first")) };
+    if let Some(by) = move_by {
+        selected(b, "move_by")?;
+        changes.extend(b.move_selection((by[0], by[1])));
+    }
+    match action.as_deref() {
+        None => {}
+        Some("copy") => {
+            selected(b, "copy")?;
+            b.copy_selection();
+        }
+        Some("cut") => {
+            selected(b, "cut")?;
+            changes.extend(b.cut_selection());
+        }
+        Some("delete") => {
+            selected(b, "delete")?;
+            changes.extend(b.delete_selection());
+        }
+        Some(flip @ ("flip_h" | "flip_v")) => {
+            if b.selection().is_none() && b.ghost().is_none() {
+                return Err(format!("{flip} needs a selection or a paste ghost"));
+            }
+            changes.extend(b.flip(if flip == "flip_h" { Axis::Horizontal } else { Axis::Vertical }));
+        }
+        Some("stamp") => {
+            selected(b, "stamp")?;
+            if b.save_stamp().is_none() {
+                return Err("the selection holds nothing to keep as a stamp".to_string());
+            }
+        }
+        Some("paste") => {
+            if !b.paste(at) {
+                return Err("the clipboard is empty: copy or cut first".to_string());
+            }
+        }
+        Some("place") => {
+            if b.ghost().is_none() {
+                return Err("no paste ghost to place: paste or builder_stamp first".to_string());
+            }
+            if let Some(at) = at {
+                b.move_ghost(at);
+            }
+            changes.extend(b.place_ghost());
+        }
+        Some("cancel") => b.cancel_ghost(),
+        Some(other) => return Err(format!("unknown action {other:?}; one of copy, cut, delete, flip_h, flip_v, stamp, paste, place, cancel")),
+    }
+    Ok(select_json(b, &changes))
+}
+
+/// `builder_stamp`: the STAMPS list, or one of them as the paste ghost.
+fn builder_stamp(b: &mut MapEditor, params: &Value) -> Result<Value, String> {
+    let at = ints_param(params, "at", 2)?.map(|v| (v[0], v[1]));
+    let mut changes = Vec::new();
+    match params.get("name") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(name)) => {
+            let Some(index) = b.stamps().iter().position(|s| s.key() == *name) else {
+                let keys: Vec<String> = b.stamps().iter().map(|s| s.key()).collect();
+                return Err(format!("no stamp {name:?}; one of {}", keys.join(", ")));
+            };
+            b.use_stamp(index);
+            if let Some(at) = at {
+                b.move_ghost(at);
+            }
+            if params.get("place").and_then(Value::as_bool).unwrap_or(false) {
+                changes = b.place_ghost();
+            }
+        }
+        Some(other) => return Err(format!("name must be a stamp's key, got {other}")),
+    }
+    let stamps: Vec<Value> = b
+        .stamps()
+        .iter()
+        .map(|s| json!({ "key": s.key(), "name": s.label(), "cols": s.clip.cols, "rows": s.clip.rows, "cells": s.clip.cells.len() }))
+        .collect();
+    Ok(json!({
+        "stamps": stamps,
+        "ghost": ghost_json(b),
+        "changes": changes_json(&changes),
+        "undo_depth": b.history().undo_depth(),
+    }))
 }
 
 /// `builder_touch`'s frames - each a list of `{id, x, y}` touch points in
@@ -4549,6 +4733,80 @@ cells."1,1" = { kind = "wall" }"#;
         let m = ask(&mut server, &tx, &mut s, "mode", json!({})).unwrap();
         assert_eq!(m["dirty"], true);
         assert_eq!(m["tool"], "road");
+    }
+
+    /// `builder_select` and `builder_stamp` drive the select tool the way a
+    /// drag and the strip do - a rectangle, a move, a copy pasted and
+    /// placed where `at` says, a stamp kept and one put down, each edit one
+    /// undo step - and `status.builder` reports it; the strip's live
+    /// buttons come by name for a `click`, and the keys copy, paste and
+    /// let go.
+    #[test]
+    fn builder_select_and_stamp_drive_the_select_tool() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(34);
+        ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 2 })).unwrap();
+        enter_build(&mut server, &tx, &mut s);
+        let iron = crate::map::CellObject::Wall { material: crate::obstacle::Material::Iron };
+        let base = s.builder.history().undo_depth() as u64;
+        // A rectangle round the iron wall at (20, 8).
+        let r = ask(&mut server, &tx, &mut s, "builder_select", json!({ "rect": [21, 9, 19, 7] })).unwrap();
+        assert_eq!(r["tool"], "select", "{r}");
+        assert_eq!(r["selection"], json!({ "col": 19, "row": 7, "cols": 3, "rows": 3 }));
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let b = &st["builder"];
+        assert_eq!((&b["tool"], &b["shape"], &b["selection"]["cols"]), (&json!("select"), &json!("pen"), &json!(3)), "{b}");
+        assert!(b["buttons"]["sel_copy"].is_object() && b["buttons"]["sel_paste"].is_null(), "PASTE is dim with nothing copied: {}", b["buttons"]);
+        // Two cells right: one step, the wall with it.
+        let r = ask(&mut server, &tx, &mut s, "builder_select", json!({ "move_by": [2, 0] })).unwrap();
+        assert_eq!(r["changes"].as_array().unwrap().len(), 2, "{r}");
+        assert_eq!(r["undo_depth"], base + 1);
+        assert_eq!(s.builder.map().cell(22, 8), Some(&iron));
+        assert_eq!(r["selection"]["col"], 21);
+        // Copied, pasted as a ghost, put down with its top-left at (5, 12).
+        ask(&mut server, &tx, &mut s, "builder_select", json!({ "action": "copy" })).unwrap();
+        let r = ask(&mut server, &tx, &mut s, "builder_select", json!({ "action": "paste", "at": [8, 12] })).unwrap();
+        assert_eq!(r["ghost"]["cells"], 1, "{r}");
+        assert_eq!(r["clipboard"], json!({ "cols": 3, "rows": 3, "cells": 1 }));
+        let r = ask(&mut server, &tx, &mut s, "builder_select", json!({ "action": "place", "at": [5, 12] })).unwrap();
+        assert!(r["ghost"].is_null(), "{r}");
+        assert_eq!(s.builder.map().cell(6, 13), Some(&iron));
+        assert_eq!(r["undo_depth"], base + 2);
+        assert!(ask(&mut server, &tx, &mut s, "builder_select", json!({ "action": "spin" })).is_err());
+        assert!(ask(&mut server, &tx, &mut s, "builder_select", json!({ "rect": [1, 2] })).is_err());
+        assert!(ask(&mut server, &tx, &mut s, "builder_select", json!({ "action": "place" })).is_err(), "no ghost to place");
+        // The stamps: listed, one kept, the bunker put down.
+        let r = ask(&mut server, &tx, &mut s, "builder_stamp", json!({})).unwrap();
+        let keys: Vec<&str> = r["stamps"].as_array().unwrap().iter().map(|s| s["key"].as_str().unwrap()).collect();
+        assert_eq!(keys, ["fort", "bunker", "river-bend"]);
+        ask(&mut server, &tx, &mut s, "builder_select", json!({ "action": "stamp" })).unwrap();
+        let r = ask(&mut server, &tx, &mut s, "builder_stamp", json!({ "name": "bunker", "at": [2, 2], "place": true })).unwrap();
+        assert_eq!(r["stamps"].as_array().unwrap().len(), 4, "{r}");
+        assert_eq!(r["stamps"][3]["key"], "saved_1");
+        assert!(!r["changes"].as_array().unwrap().is_empty());
+        assert_eq!(s.builder.map().cell(3, 2), Some(&iron));
+        assert_eq!(s.builder.map().start_cell(), Some((5, 5)), "the bunker's empty middle left the start where it was");
+        assert!(ask(&mut server, &tx, &mut s, "builder_stamp", json!({ "name": "castle" })).is_err());
+        // The strip's DELETE by a click on it.
+        ask(&mut server, &tx, &mut s, "builder_select", json!({ "rect": [21, 7, 23, 9] })).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let del = &st["builder"]["buttons"]["sel_delete"];
+        let (x, y) = (del["x"].as_f64().unwrap() + del["w"].as_f64().unwrap() / 2.0, del["y"].as_f64().unwrap() + del["h"].as_f64().unwrap() / 2.0);
+        ask(&mut server, &tx, &mut s, "click", json!({ "x": x, "y": y })).unwrap();
+        assert_eq!(s.builder.map().cell(22, 8), None);
+        // The keys: undo, copy, paste, and Escape twice - the ghost, then
+        // the selection.
+        ask(&mut server, &tx, &mut s, "key", json!({ "key": "undo" })).unwrap();
+        assert_eq!(s.builder.map().cell(22, 8), Some(&iron));
+        ask(&mut server, &tx, &mut s, "key", json!({ "key": "copy" })).unwrap();
+        ask(&mut server, &tx, &mut s, "key", json!({ "key": "paste" })).unwrap();
+        assert!(s.builder.ghost().is_some());
+        ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
+        assert!(s.builder.ghost().is_none() && s.builder.selection().is_some());
+        ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
+        assert!(s.builder.selection().is_none());
+        let m = ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "road" })).unwrap();
+        assert_eq!((&m["tool"], &m["shape"]), (&json!("road"), &json!("pen")));
     }
 
     /// `builder_map {clear}` is FILE > CLEAR MAP: the cells go, the

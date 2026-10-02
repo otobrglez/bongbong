@@ -518,6 +518,23 @@ shape with the bar at the standard arena's size (`editor::camera`).
   the GPU copy of the shade takes only the blocks that changed. On the
   96 x 54 study map a cell of a wall stroke went from 53 ms and a 5.3 MB
   upload to 0.3 ms and 16 kB in a debug build.
+- **Select, move, copy and stamps** (`editor/select.rs`). A rectangle
+  select tool - BRUSH's list in the bar, the palette's brush row on a
+  folded bar: a drag draws the selection, a drag from inside it lifts its
+  cells and carries them, and a strip under the bar acts on it - COPY,
+  CUT, PASTE, a flip each way, DELETE, + STAMP and the STAMPS list
+  (Ctrl+C, Ctrl+X, Ctrl+V and Delete with a keyboard). A paste or a stamp
+  is a ghost that follows the mouse, or that a finger drags or taps into
+  place, until a press puts it down. Every move, paste, flip, cut and
+  delete is one undo step. A clip is transparent - its empty cells leave
+  the map as it was - a start or a frog moves with a moved selection, and
+  a paste puts one down only where the map holds none, so it never leaves
+  two. Three stamps ship under `maps/stamps/` (a fort, a bunker, a river
+  bend); the ones kept in a session live in memory, on every build. The
+  strip stands under the bar rather than beside the selection: it never
+  moves while a finger drags or pinches, never stands over the cells being
+  worked on, and eight finger-size buttons beside a selection would cover
+  a good part of a phone's canvas.
 - **Thumbnails in the Load list** from `mapshot`, since a large map's name
   says less about it than its picture.
 - **Play from here.** PLAY starts from the map's start; PLAY HERE, beside

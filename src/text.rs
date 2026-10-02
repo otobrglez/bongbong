@@ -248,6 +248,22 @@ keys! {
     EDITOR_SAVING_UNAVAILABLE = "editor-saving-unavailable";
     EDITOR_NO_NAME = "editor-no-name";
     EDITOR_BAD_NAME = "editor-bad-name";
+    EDITOR_BRUSH = "editor-brush";
+    BRUSH_PEN = "brush-pen";
+    BRUSH_STAMPS = "brush-stamps";
+    SELECT_COPY = "select-copy";
+    SELECT_CUT = "select-cut";
+    SELECT_PASTE = "select-paste";
+    SELECT_DELETE = "select-delete";
+    SELECT_SAVE_STAMP = "select-save-stamp";
+    SELECT_STAMPS = "select-stamps";
+    SELECT_PLACE = "select-place";
+    SELECT_CANCEL = "select-cancel";
+    STAMP_SAVED = "stamp-saved";
+    EDITOR_COPIED = "editor-copied";
+    EDITOR_CUT = "editor-cut";
+    EDITOR_STAMP_KEPT = "editor-stamp-kept";
+    EDITOR_STAMP_EMPTY = "editor-stamp-empty";
 }
 
 /// The one-word title of a mission (the bar, the lobby's stepper).
@@ -683,6 +699,9 @@ mod text_tests {
         for kind in crate::maplint::LintKind::ALL {
             ids.push(format!("lint-{}", kind.tag()));
         }
+        for (name, _) in crate::editor::select::SHIPPED_STAMPS {
+            ids.push(format!("stamp-{name}"));
+        }
         ids.push("status-label-room".to_string());
         ids
     }
@@ -967,6 +986,32 @@ mod text_tests {
         for category in crate::editor::Category::ALL {
             out.push((category.label_key(), UI_SMALL_TEXT, crate::editor::chrome::PALETTE_LABEL_W as i32 - 12, vec![]));
         }
+        // The brush's row of the palette, named beside its cells like a
+        // category's; BRUSH's list's rows, 18 pt after the icon like a
+        // tool's (`tool-select` is measured with the tools).
+        out.push((keys::EDITOR_BRUSH, UI_SMALL_TEXT, crate::editor::chrome::PALETTE_LABEL_W as i32 - 12, vec![]));
+        for row in crate::editor::BrushRow::ALL {
+            let key = match row {
+                crate::editor::BrushRow::Shape(shape) => shape.label_key(),
+                crate::editor::BrushRow::Stamps => keys::BRUSH_STAMPS,
+                crate::editor::BrushRow::Select => continue,
+            };
+            out.push((key, HUD_TEXT_SIZE, 200 - 48 - 8, vec![]));
+        }
+        // The select tool's strip: each word inside its button's drawn box,
+        // at the bar's small size, with a mouse and on a touch screen.
+        for touch in [false, true] {
+            let w = if touch { crate::editor::chrome::STRIP_WORD_W.1 } else { crate::editor::chrome::STRIP_WORD_W.0 };
+            let room = (w - crate::editor::chrome::SMALL_BOX_INSET) as i32;
+            let size = crate::editor::chrome::small_text(touch);
+            for button in crate::editor::StripButton::SELECTION.into_iter().chain(crate::editor::StripButton::GHOST) {
+                if let Some(key) = button.label_key() {
+                    out.push((key, size, room, vec![]));
+                }
+            }
+        }
+        // A saved stamp's name in its STAMPS row, two digits.
+        out.push((keys::STAMP_SAVED, HUD_TEXT_SIZE, crate::editor::chrome::STAMP_NAME_W as i32, vec![("n", 99.into())]));
         out
     }
 
@@ -1033,6 +1078,13 @@ mod text_tests {
                 let short = catalogue.message(&format!("tool-short-{}", tool.name()), &[]).unwrap_or(long);
                 if width(&short, HUD_LABEL_SIZE) > 48 {
                     over.push(format!("{tag}: short tool name {short:?} is longer than a word or two"));
+                }
+            }
+            // The shipped stamps' names in their STAMPS rows.
+            for (name, _) in crate::editor::select::SHIPPED_STAMPS {
+                let words = catalogue.named("stamp", name);
+                if width(&words, HUD_TEXT_SIZE) > crate::editor::chrome::STAMP_NAME_W as i32 {
+                    over.push(format!("{tag}: stamp {name} = {words:?} runs into its size"));
                 }
             }
             // The CHECK panel's findings, 16 px from beside a row's mark to

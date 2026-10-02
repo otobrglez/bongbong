@@ -86,9 +86,10 @@ round as usual and then opens the builder on it.
   unreachable frog plays through `Game::init`'s existing fallbacks, as it
   does today from `-m`. The linter stays a dev tool.
 - Multi-select, copy/paste, rectangle fill, map size changes, a second
-  field size, panning or zooming. *Status: map size changes, field sizes
-  and the builder's own camera (pan, zoom, FIT) have since landed -
-  sections 9 and 10, docs/large-maps-follow-camera.md section 9.*
+  field size, panning or zooming. *Status: map size changes, field sizes,
+  the builder's own camera (pan, zoom, FIT) and a rectangle select tool
+  with move, copy, paste, flips and stamps have since landed - sections 9
+  and 10, docs/large-maps-follow-camera.md section 9.*
 - Editing the live, shot-up battlefield. Build mode edits the map as
   authored; a wall the round destroyed is back in the builder.
 
@@ -198,6 +199,14 @@ from plain PLAY, dim while it has not; a press opens the CHECK panel too.
 `PLAY HERE` (`SLOT_HERE`), just before PLAY, starts the round from the
 middle of the view instead of the map's start. All three are
 docs/large-maps-follow-camera.md section 9.
+
+`BRUSH`, after the five category buttons, pictures how a press on the
+canvas works and opens a list of the ways: the brush's shapes, the select
+tool and the STAMPS list; a bar too narrow for the categories folds it into
+TOOLS with them, as the palette's last row. With the select tool a strip of
+its actions - COPY, CUT, PASTE, the flips, DELETE, + STAMP, STAMPS, or
+PLACE, the flips and CANCEL while a paste ghost stands - hangs under the
+bar (`editor::chrome::Strip`; docs/large-maps-follow-camera.md section 9).
 
 ### Dropdowns
 
@@ -368,17 +377,19 @@ mode transitions can be unit-tested headlessly through
 | `mode` | none | Reports `mode` (`play`/`build`), whether the leave dialog is open, the builder's `dirty` flag, map name, active tool and category, which popup is open. Cheap; `status` carries the same `mode` field. |
 | `build` | `answer?: "leave" \| "stay"` | Presses BUILD: opens the leave dialog when a round is in progress, switches at once on the end screen. With `answer`, answers an open dialog instead. Replies like `mode`. |
 | `play` | `intro?: bool` | Presses PLAY from Build: the edited map becomes the round's map and a fresh round starts, frozen in lockstep like `restart` (so `step` counts play frames; `resume` for real time). Replies with `status`. Fails in Play mode. |
-| `builder_tool` | `tool?: name` | Selects a brush by name - every `editor::TOOLS` name (`brick`, `iron`, `wood`, `glass`, `sandbag`, `barrel`, `oil_drum`, `fuel_drum`, `fence`, `tesla`, `tesla_enemy`, `gun_tower`, `gun_tower_enemy`, `bio_slush`, `bio_slush_enemy`, `road`, `water`, `tall_grass`, `tree`, `pine`, `oil_trail`, `gate`, `portal`, `start`, `start2`, `frog`, `enemy_frog`, `health`, `ammo`, `laser`, `minigun`, `plasma`, `missiles`, `speedup`, `shield`, `flamethrower`, `frog_health`, `tower_pack`) or `eraser` - through the category's own selection path, so the category button updates. Without `tool`, lists the categories with their current tool and the active one. |
+| `builder_tool` | `tool?: name` | Selects a brush by name - every `editor::TOOLS` name (`brick`, `iron`, `wood`, `glass`, `sandbag`, `barrel`, `oil_drum`, `fuel_drum`, `fence`, `tesla`, `tesla_enemy`, `gun_tower`, `gun_tower_enemy`, `bio_slush`, `bio_slush_enemy`, `road`, `water`, `tall_grass`, `tree`, `pine`, `oil_trail`, `gate`, `portal`, `start`, `start2`, `frog`, `enemy_frog`, `health`, `ammo`, `laser`, `minigun`, `plasma`, `missiles`, `speedup`, `shield`, `flamethrower`, `frog_health`, `tower_pack`), `eraser` or `select` (the select tool) - through the category's own selection path, so the category button updates. Without `tool`, lists the categories with their current tool and the active one. |
 | `builder_paint` | `cells: [[col,row], ...]`, `tool?: name`, `button?: "left" \| "right"` | One **stroke**: presses on the first cell and drags through the rest, so the toggle-erase rule, singleton moves and the one-undo-step-per-stroke rule all apply exactly as for a mouse. `button: right` erases. Replies with each cell's object before and after and the undo depth. |
 | `builder_undo` / `builder_redo` | `steps?: n` (default 1) | Undo or redo that many steps. Replies with the depth left on each side and the cells the last step changed. |
 | `builder_settings` | `tanks?`, `tank?`, `tank2?`, `mission?`, `spawn?`, `waves?`, `wave_size?`, `wave_growth?`, `tier_start?`, `tier_end?`, `theme?`, `weather?` (each `null` = auto), `anchor?`, `size?: [cols, rows]`, `reset?: bool` | Sets the MAP ▾ values (each changed field is one undo step, in field order) or, with `reset`, reverts cells and settings to the baseline. `size` resizes the map about the `anchor` (section 9). Without parameters, reports the current values, `size` and `anchor`, and which ones a CLI flag is overriding. |
 | `builder_camera` | `x?`, `y?` (a world point for the canvas's middle), `zoom?` (times FIT), `fit?: bool` | Frames the builder's own camera for a screenshot, or reports it: replies like `status.builder.camera` (`fit`, the world `rect` shown, `scale`, `zoom`, `fit_scale`, `device_scale`, `cell_mm`, the canvas `area`). |
 | `builder_touch` | `frames: [[{id, x, y}, ...], ...]` in bitmap pixels, `dt?` | Raw touch frames through the same `BuilderInput` a touch screen fills, all fingers lifted after the last: strokes past the slop, pinch and pan, two- and three-finger taps, the paint threshold (section 10). |
+| `builder_select` | `rect?: [c0, r0, c1, r1]`, `clear?: bool`, `move_by?: [dx, dy]`, `action?: "copy" \| "cut" \| "delete" \| "flip_h" \| "flip_v" \| "stamp" \| "paste" \| "place" \| "cancel"`, `at?: [col, row]` | The select tool as a drag and its strip drive it: a rectangle selected (the select tool taken), let go, its cells carried, then an action - `paste` stands the clipboard as a ghost with its middle on `at`, `place` puts the ghost down with its top-left on `at`. Each edit one undo step. Replies with the `selection`, the `ghost`, the `clipboard`, the `changes` and the undo depth. |
+| `builder_stamp` | `name?: key`, `at?: [col, row]`, `place?: bool` | The STAMPS list: every stamp's `key`, name and size; with `name`, that stamp as the paste ghost (its top-left on `at`), put down at once with `place`. |
 | `builder_map` | `name?: string`, `map_toml?: string`, `map?: path` | Without parameters: the **builder's** map as TOML, its name, `dirty`, and a diff against the baseline (cells added, removed, changed; settings changed). With one: loads that map (by Load-list name, as inline text, or from a path) into the canvas as a single undo step and makes it the new baseline - the "load a map to test" path, and the way an agent hands back a map it edited as text. `map_get` keeps returning the map the *current round* was built from, which differs from this once the builder is dirty. |
 | `builder_files` | none | What `FILE > LOAD` offers: every loadable map with `on_disk`, and `can_save`. |
 | `builder_save` | `name?: string` | `FILE > SAVE` / `SAVE AS`: writes `maps/<name>.toml` (native), makes it the baseline. Replies like `builder_map`. |
 | `click` | `x`, `y` (window pixels, bar included), `button?: "left" \| "right"`, `drag_to?: [x, y]` | A raw press at a window position, in either mode: the bar's buttons, a dropdown row, a dialog button, a stepper, a field cell. With `drag_to`, a press, a straight drag to the second point and a release, crossing every cell on the way. In Play mode a left `click` on the field is a `tap`; in Build mode the reply names the world point and the cell under the press, through the builder's camera. This is how the *UI* is tested, as opposed to the model the tools above address directly. |
-| `key` | `key: "tab" \| "escape" \| "enter" \| "undo" \| "redo" \| "zoom_in" \| "zoom_out" \| "left" \| "right" \| "up" \| "down" \| ...`, `text?: string` | Presses one key (or types `text` into an open prompt) for one frame through the same `BuilderInput`. `undo`/`redo` are Ctrl+Z / Ctrl+Y, `zoom_in`/`zoom_out` are `+`/`-` (one step about the canvas's middle) and the arrows pan the canvas for a frame. |
+| `key` | `key: "tab" \| "escape" \| "enter" \| "undo" \| "redo" \| "copy" \| "cut" \| "paste" \| "delete" \| "zoom_in" \| "zoom_out" \| "left" \| "right" \| "up" \| "down" \| ...`, `text?: string` | Presses one key (or types `text` into an open prompt) for one frame through the same `BuilderInput`. `undo`/`redo` are Ctrl+Z / Ctrl+Y, `copy`/`cut`/`paste` Ctrl+C / Ctrl+X / Ctrl+V and `delete` Delete on the selection, `zoom_in`/`zoom_out` are `+`/`-` (one step about the canvas's middle) and the arrows pan the canvas for a frame. |
 
 Existing tools in Build mode: `screenshot` and `overlays` work (the
 presented frame is the builder); `status` and `mode` always answer;

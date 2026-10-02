@@ -35,6 +35,24 @@
 //! tap undoes and a three-finger tap redoes. Where a cell is under
 //! `builder_paint_min_cell_mm` on the glass - a finger cannot hit one - a
 //! tap zooms in instead of painting and a drag pans (the paint threshold).
+//!
+//! **The select tool** (docs/large-maps-patterns.md, "Selection, copy and
+//! stamps"; the data is `select.rs`): a drag draws a rectangle of cells,
+//! outlined until Escape, a press outside it or another tool clears it. A
+//! drag from inside it lifts its cells and carries them, landing on the
+//! release; COPY, CUT, PASTE, the flips, DELETE and keeping it as a stamp
+//! are the strip's buttons under the bar (`chrome::Strip`) and Ctrl+C,
+//! Ctrl+X, Ctrl+V and Delete; a paste or a stamp is a ghost that follows
+//! the mouse - or stands where a finger drags or taps it - until a press
+//! puts it down. Every move, paste, flip, cut and delete is one `EditStep`.
+//! What a selection carries is what the brushes would do with it: a start,
+//! player 2's start or either frog moves with a moved selection, and a
+//! paste places one only where the map holds none of it - so a paste never
+//! leaves two, never reaches a cell outside its own rectangle, and a CUT
+//! then PASTE carries the start like a move. Gates and portals are copied
+//! and moved like any cell: a gate that lands off the map's edge is drawn
+//! outlined and named by CHECK, whose FIX puts it back on the edge, and a
+//! pasted portal joins the network.
 
 pub mod camera;
 pub mod chrome;
@@ -42,11 +60,13 @@ pub mod gesture;
 pub mod history;
 #[cfg(feature = "render")]
 pub mod render;
+pub mod select;
 #[cfg(feature = "render")]
 pub use render::EditorTextures;
 
 pub use camera::{BuilderCamera, CanvasRules, CanvasScreen, Viewport};
-pub use chrome::{Bar, BarButton, BarTools, BuilderFrame, Chrome, PopupLayout};
+pub use chrome::{Bar, BarButton, BarTools, BuilderFrame, Chrome, PopupLayout, Strip, StripButton};
+pub use select::{Axis, CellRect, Clip, Ghost, Stamp, StampSource};
 
 use rand::RngExt;
 use std::collections::BTreeMap;
@@ -148,6 +168,14 @@ pub struct BuilderInput {
     /// Ctrl+Z / Ctrl+Y (Cmd on macOS).
     pub undo: bool,
     pub redo: bool,
+    /// Ctrl+C / Ctrl+X / Ctrl+V: the selection copied or cut, the clipboard
+    /// pasted as a ghost.
+    pub copy: bool,
+    pub cut: bool,
+    pub paste: bool,
+    /// Delete: the selection's cells cleared (Backspace too, outside the
+    /// Save prompt).
+    pub delete: bool,
     /// Characters typed this frame, for the dev Save prompt.
     pub typed: String,
     /// Every touch point down this frame, in the window's coordinates - the
@@ -210,13 +238,17 @@ pub enum Tool {
     /// readout names a cell by the tool that paints exactly its object.
     Tower(TowerKind, Side),
     Eraser,
+    /// The rectangle select tool (the module docs): a press selects,
+    /// carries or pastes rather than paints. BRUSH's list and the palette's
+    /// brush row pick it; any other tool clears the selection.
+    Select,
 }
 
-/// Every brush, in bar order: the categories one after another, the
-/// eraser last. The trees sit with the ground's vegetation, which leaves
-/// PROP room for the six tower tools inside the eleven rows a dropdown
-/// fits.
-pub const TOOLS: [Tool; 39] = [
+/// Every tool, in bar order: the categories one after another, then the
+/// eraser and the select tool, which no category holds. The trees sit with
+/// the ground's vegetation, which leaves PROP room for the six tower tools
+/// inside the eleven rows a dropdown fits.
+pub const TOOLS: [Tool; 40] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -256,6 +288,7 @@ pub const TOOLS: [Tool; 39] = [
     Tool::Pickup(PickupKind::FrogHealth),
     Tool::Pickup(PickupKind::TowerPack),
     Tool::Eraser,
+    Tool::Select,
 ];
 
 impl Tool {
@@ -303,6 +336,7 @@ impl Tool {
             Tool::Tower(TowerKind::Bio, Side::Player) => "bio_slush",
             Tool::Tower(TowerKind::Bio, Side::Enemy) => "bio_slush_enemy",
             Tool::Eraser => "eraser",
+            Tool::Select => "select",
         }
     }
 
@@ -310,7 +344,8 @@ impl Tool {
         TOOLS.iter().copied().find(|t| t.name() == name)
     }
 
-    /// The category this tool sits in (`None` for the eraser).
+    /// The category this tool sits in (`None` for the eraser and the
+    /// select tool).
     pub fn category(self) -> Option<Category> {
         match self {
             Tool::Wall(_) => Some(Category::Wall),
@@ -319,11 +354,12 @@ impl Tool {
             Tool::Road | Tool::Water | Tool::TallGrass | Tool::OilTrail | Tool::Gate | Tool::Portal => Some(Category::Ground),
             Tool::Start | Tool::Start2 | Tool::Frog | Tool::EnemyFrog => Some(Category::Actor),
             Tool::Pickup(_) => Some(Category::Pickup),
-            Tool::Eraser => None,
+            Tool::Eraser | Tool::Select => None,
         }
     }
 
-    /// The cell object this brush paints; `None` for the eraser.
+    /// The cell object this brush paints; `None` for the eraser and the
+    /// select tool.
     pub fn object(self) -> Option<CellObject> {
         match self {
             Tool::Wall(material) => Some(CellObject::Wall { material }),
@@ -341,7 +377,7 @@ impl Tool {
             Tool::Pickup(pickup) => Some(CellObject::Pickup { pickup }),
             Tool::TallGrass => Some(CellObject::TallGrass),
             Tool::Tower(kind, side) => Some(CellObject::for_tower(kind, side)),
-            Tool::Eraser => None,
+            Tool::Eraser | Tool::Select => None,
         }
     }
 
@@ -404,14 +440,77 @@ impl Category {
     }
 }
 
+/// How the brush lays its object down - BRUSH's list and the palette's
+/// brush row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Shape {
+    /// A stroke: every cell the press and its drag cross, under the
+    /// toggle-erase rule.
+    #[default]
+    Pen,
+}
+
+impl Shape {
+    /// As the dev server spells it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Shape::Pen => "pen",
+        }
+    }
+
+    /// The message that names it in BRUSH's list.
+    pub fn label_key(self) -> crate::text::Key {
+        match self {
+            Shape::Pen => crate::text::keys::BRUSH_PEN,
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Shape> {
+        BrushRow::ALL.iter().find_map(|row| match row {
+            BrushRow::Shape(shape) if shape.name() == s => Some(*shape),
+            _ => None,
+        })
+    }
+}
+
+/// A row of BRUSH's list and a cell of the palette's brush row: a shape
+/// to paint with, the select tool, or the STAMPS list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrushRow {
+    Shape(Shape),
+    Select,
+    Stamps,
+}
+
+impl BrushRow {
+    /// In list order.
+    pub const ALL: [BrushRow; 3] = [BrushRow::Shape(Shape::Pen), BrushRow::Select, BrushRow::Stamps];
+
+    /// As `status.builder.buttons` names it: `shape_<name>`, the select
+    /// tool's `tool_select`, `brush_stamps`.
+    pub fn name(self) -> String {
+        match self {
+            BrushRow::Shape(shape) => format!("shape_{}", shape.name()),
+            BrushRow::Select => format!("tool_{}", Tool::Select.name()),
+            BrushRow::Stamps => "brush_stamps".to_string(),
+        }
+    }
+}
+
 /// The one popup the builder can have open at a time: opening any of
 /// them closes the others (docs/game-editor-fusion.md section 7).
 enum Popup {
     /// A category's tool list, below its bar button.
     Dropdown(Category),
-    /// The palette of every category's tools, below the TOOLS button a
-    /// narrow bar folds the five category buttons into.
+    /// BRUSH's list, below its button.
+    Brush,
+    /// The palette of every category's tools and the brush's row, below
+    /// the TOOLS button a narrow bar folds the five category buttons and
+    /// BRUSH into.
     Palette,
+    /// The STAMPS list under the bar: the shipped stamps then the ones
+    /// saved this session, `scroll` rows in.
+    Stamps { scroll: usize },
     /// The MAP settings panel, below the MAP button, `page` pages in where
     /// the room under the bar pages it.
     Settings { page: usize },
@@ -460,7 +559,8 @@ pub struct Loupe {
     /// `LOUPE_ZOOM`, on the nearest whole-block scale, so every block is
     /// whole device pixels.
     pub device_scale: f32,
-    /// The cell the stroke paints, outlined in it.
+    /// The cell under the finger's drag - the one a stroke paints, the
+    /// corner a selection stretches to - outlined in it.
     pub cell: (i32, i32),
     /// Whether the stroke erases (the outline's colour).
     pub erase: bool,
@@ -575,6 +675,24 @@ struct Stroke {
     changes: Vec<CellChange>,
 }
 
+/// A press-drag-release of the select tool in progress on the field.
+#[derive(Clone, Debug, PartialEq)]
+enum Drag {
+    /// A rectangle being drawn from the press's cell to the pointer's;
+    /// `moved` once the pointer has left the first cell (a mouse) or the
+    /// finger has passed the slop - a press and release in one cell is a
+    /// click, which selects nothing.
+    Select { from: (i32, i32), to: (i32, i32), moved: bool },
+    /// The selection's cells lifted off the map and carried: `grab` the
+    /// cell the press landed on, `by` how far they have come, `from` where
+    /// they were, `lifted` what they are and `changes` the lift - the
+    /// first half of the one undo step the release makes.
+    Move { grab: (i32, i32), by: (i32, i32), from: CellRect, lifted: Clip, changes: Vec<CellChange> },
+    /// A finger carrying the paste ghost: the cell it landed on and where
+    /// the ghost stood then.
+    Ghost { grab: (i32, i32), start: (i32, i32) },
+}
+
 /// Which of the map's keys a CLI flag overrides at PLAY, so the settings
 /// panel can say why a value is not honoured. Set by `main.rs` from its
 /// `Args`; the dev server reads the same from `Game`.
@@ -672,6 +790,29 @@ pub struct MapEditor {
     /// it here; the canvas itself never carries a stamp, and SAVE writes
     /// the current revision's (`map_to_save`).
     clears: BTreeMap<u64, f64>,
+    /// How the brush lays its object down (`Shape`); a singleton's brush
+    /// is always a pen.
+    shape: Shape,
+    /// The tool before the select tool: what picking a shape goes back to.
+    paint_tool: Tool,
+    /// The select tool's rectangle, outlined until Escape, a press outside
+    /// it or another tool clears it.
+    selection: Option<CellRect>,
+    /// What COPY and CUT took last, for PASTE.
+    clipboard: Option<Clip>,
+    /// The paste ghost standing on the canvas.
+    ghost: Option<Ghost>,
+    /// The select tool's drag under way.
+    drag: Option<Drag>,
+    /// The shipped stamps, then the ones saved this session (in memory on
+    /// every build: nothing here needs a file system).
+    stamps: Vec<Stamp>,
+    /// Stamps saved this session, for the next one's number.
+    saved_stamps: u32,
+    /// The window pointer on the last frame no button was held: a pointer
+    /// that moves with nothing down is a mouse hovering - a touch screen
+    /// moves it only under a finger - and the paste ghost follows it.
+    hover: Option<Vec2>,
     /// The canvas's revision with the edit count it was worked out at
     /// (`edits`): worked out again only after an edit.
     revision: std::cell::Cell<Option<(u64, u64)>>,
@@ -726,6 +867,15 @@ impl MapEditor {
             lint_marked: None,
             lint_setup: LintSetup { seed: 0xB0B5, ..LintSetup::default() },
             clears: BTreeMap::new(),
+            shape: Shape::default(),
+            paint_tool: current[0],
+            selection: None,
+            clipboard: None,
+            ghost: None,
+            drag: None,
+            stamps: select::shipped_stamps(),
+            saved_stamps: 0,
+            hover: None,
             revision: std::cell::Cell::new(None),
             cli_overrides: CliOverrides::default(),
         };
@@ -863,7 +1013,7 @@ impl MapEditor {
         };
         let pointer = frame.to_ui(window);
         if input.pressed && Corners::plate(rect).contains(pointer) {
-            self.finish_stroke();
+            self.settle();
             self.nav_drag = true;
         }
         if !self.nav_drag {
@@ -928,22 +1078,67 @@ impl MapEditor {
         self.current[category.index()]
     }
 
-    /// Make `tool` the active brush and its category's current tool.
+    /// Make `tool` the active brush and its category's current tool. The
+    /// select tool remembers the tool it came from (`paint_tool`); any other
+    /// tool lands a drag under way and clears the selection and the paste
+    /// ghost.
     pub fn select_tool(&mut self, tool: Tool) {
         if let Some(category) = tool.category() {
             self.current[category.index()] = tool;
             self.last_category = category;
         }
+        if tool == Tool::Select {
+            if self.active_tool != Tool::Select {
+                self.finish_stroke();
+                self.paint_tool = self.active_tool;
+            }
+        } else {
+            self.finish_drag();
+            self.selection = None;
+            self.ghost = None;
+        }
         self.active_tool = tool;
     }
 
     /// The tool the folded TOOLS button shows: the brush, or while the
-    /// eraser is the brush the category tool it came from.
+    /// eraser or the select tool is the brush the category tool it came
+    /// from.
     pub fn tools_button_tool(&self) -> Tool {
         match self.active_tool.category() {
             Some(_) => self.active_tool,
             None => self.current_tool(self.last_category),
         }
+    }
+
+    /// How the brush lays its object down: its shape, or a pen for a
+    /// singleton's brush, which moves one object rather than painting many.
+    pub fn shape(&self) -> Shape {
+        let tool = if self.active_tool == Tool::Select { self.paint_tool } else { self.active_tool };
+        if tool.is_singleton() { Shape::Pen } else { self.shape }
+    }
+
+    /// Paint with `shape`: the select tool gives way to the tool it came
+    /// from. A singleton's brush takes the pen only (`shape_allowed`).
+    pub fn set_shape(&mut self, shape: Shape) {
+        if self.active_tool == Tool::Select {
+            self.select_tool(self.paint_tool);
+        }
+        if self.shape_allowed(shape) {
+            self.shape = shape;
+        }
+    }
+
+    /// Whether the brush can take `shape`: anything but a singleton's
+    /// brush takes every shape, a singleton's the pen alone.
+    pub fn shape_allowed(&self, shape: Shape) -> bool {
+        let tool = if self.active_tool == Tool::Select { self.paint_tool } else { self.active_tool };
+        shape == Shape::Pen || !tool.is_singleton()
+    }
+
+    /// What BRUSH shows: the select tool while it is the brush, else the
+    /// brush's shape.
+    pub fn brush_shown(&self) -> BrushRow {
+        if self.active_tool == Tool::Select { BrushRow::Select } else { BrushRow::Shape(self.shape()) }
     }
 
     /// Step a category's current tool forwards or backwards through its
@@ -961,6 +1156,7 @@ impl MapEditor {
 
     pub fn undo(&mut self) -> Option<EditStep> {
         self.finish_stroke();
+        self.finish_drag();
         self.resize_session = None;
         let field = self.map.field_size();
         let step = self.history.undo(&mut self.map)?;
@@ -972,6 +1168,7 @@ impl MapEditor {
 
     pub fn redo(&mut self) -> Option<EditStep> {
         self.finish_stroke();
+        self.finish_drag();
         self.resize_session = None;
         let field = self.map.field_size();
         let step = self.history.redo(&mut self.map)?;
@@ -1031,6 +1228,7 @@ impl MapEditor {
     /// this panel's last size press.
     fn resize_map(&mut self, cols: f32, rows: f32, anchor: Anchor, fold: bool) -> bool {
         self.finish_stroke();
+        self.finish_drag();
         if !(cols.is_finite() && rows.is_finite()) {
             return false;
         }
@@ -1039,6 +1237,8 @@ impl MapEditor {
         if new == old {
             return false;
         }
+        // The selection names cells the anchor moves: let it go.
+        self.selection = None;
         let shift = anchor.shift(old, new);
         let before = self.map.clone();
         let cell = crate::OBSTACLE_GRID_SIZE;
@@ -1090,7 +1290,7 @@ impl MapEditor {
         if after == before {
             return;
         }
-        self.finish_stroke();
+        self.settle();
         after.write_to(&mut self.map);
         self.history.push(EditStep::Settings { before, after });
         self.map_changed();
@@ -1100,9 +1300,13 @@ impl MapEditor {
     }
 
     /// Replace the canvas with `map` and make it the new baseline, as one
-    /// undo step - the dev server's `builder_map {map_toml}`.
+    /// undo step - the dev server's `builder_map {map_toml}`. The selection
+    /// goes with the old map; the clipboard and a paste ghost stay, so a
+    /// piece of one map pastes into another.
     pub fn load(&mut self, mut map: MapFile) {
         self.finish_stroke();
+        self.finish_drag();
+        self.selection = None;
         if let Some((revision, par)) = Self::take_stamp(&mut map) {
             self.note_clear(revision, par);
         }
@@ -1122,6 +1326,8 @@ impl MapEditor {
     /// of into the level before. The camera starts at FIT.
     pub fn open(&mut self, mut map: MapFile) {
         self.finish_stroke();
+        self.finish_drag();
+        self.selection = None;
         self.popup = None;
         self.status = None;
         if let Some((revision, par)) = Self::take_stamp(&mut map) {
@@ -1138,7 +1344,7 @@ impl MapEditor {
 
     /// Revert cells and settings to the baseline, as one undo step.
     pub fn reset(&mut self) {
-        self.finish_stroke();
+        self.settle();
         if !self.dirty() {
             return;
         }
@@ -1160,7 +1366,7 @@ impl MapEditor {
     /// baseline, so the map reads as edited until saved; an already empty
     /// canvas records nothing.
     pub fn clear(&mut self) {
-        self.finish_stroke();
+        self.settle();
         if self.map.cells.is_empty() {
             return;
         }
@@ -1220,6 +1426,14 @@ impl MapEditor {
 
     fn finish_stroke(&mut self) {
         self.finish_stroke_changes();
+    }
+
+    /// End whatever the pointer has under way - a stroke or a drag of the
+    /// select tool - as its release would: before an edit of the whole map,
+    /// a press on the chrome, a pan.
+    fn settle(&mut self) {
+        self.finish_stroke();
+        self.finish_drag();
     }
 
     /// Take the open stroke back, cell by cell, as if it had never been:
@@ -1293,7 +1507,7 @@ impl MapEditor {
     /// no longer matches - its object gone, its target taken - changes
     /// nothing. Whether it was made.
     pub fn apply_fix(&mut self, fix: LintFix) -> bool {
-        self.finish_stroke();
+        self.settle();
         let cell = |map: &MapFile, (col, row): (i32, i32)| map.cell(col, row).copied();
         let changes: Vec<CellChange> = match fix {
             LintFix::Move { from, to } => match (cell(&self.map, from), cell(&self.map, to)) {
@@ -1322,6 +1536,484 @@ impl MapEditor {
         self.map_changed();
         self.repaint_ground(changes.iter().map(|c| (c.col, c.row)));
         true
+    }
+
+    // ----- the select tool (docs/large-maps-patterns.md, "Selection, copy
+    // and stamps"; the module docs) -----
+
+    /// The cells on the map's field (`select::field_cells`): where a
+    /// selection, a move and a paste may put a cell.
+    pub fn field_cells(&self) -> CellRect {
+        select::field_cells(self.map.field_size())
+    }
+
+    /// The selection, if there is one.
+    pub fn selection(&self) -> Option<CellRect> {
+        self.selection
+    }
+
+    /// What COPY and CUT took last.
+    pub fn clipboard(&self) -> Option<&Clip> {
+        self.clipboard.as_ref()
+    }
+
+    /// The paste ghost standing on the canvas.
+    pub fn ghost(&self) -> Option<&Ghost> {
+        self.ghost.as_ref()
+    }
+
+    /// The stamps the STAMPS list offers: the shipped ones, then the ones
+    /// saved this session.
+    pub fn stamps(&self) -> &[Stamp] {
+        &self.stamps
+    }
+
+    /// Where the selection's cells are being carried while a drag from
+    /// inside it is under way: the rectangle and the cells, for the canvas
+    /// to draw them lifted.
+    pub fn lifted(&self) -> Option<(CellRect, &Clip)> {
+        match &self.drag {
+            Some(Drag::Move { by, from, lifted, .. }) => Some((from.shifted(*by), lifted)),
+            _ => None,
+        }
+    }
+
+    /// The rectangle a select drag is drawing, while one is.
+    pub fn selecting(&self) -> Option<CellRect> {
+        match self.drag {
+            Some(Drag::Select { from, to, .. }) => CellRect::spanning(from, to).within(self.field_cells()),
+            _ => None,
+        }
+    }
+
+    /// Select `rect` - its part on the field - with the select tool, as a
+    /// drag across it does; a paste ghost goes. Whether any of it is on the
+    /// field.
+    pub fn select_cells(&mut self, rect: CellRect) -> bool {
+        self.select_tool(Tool::Select);
+        self.finish_drag();
+        self.ghost = None;
+        self.selection = rect.within(self.field_cells());
+        self.selection.is_some()
+    }
+
+    /// Let the selection go: Escape, a press outside it.
+    pub fn clear_selection(&mut self) {
+        self.finish_drag();
+        self.selection = None;
+    }
+
+    /// COPY: the selection's cells into the clipboard. Whether there was a
+    /// selection.
+    pub fn copy_selection(&mut self) -> bool {
+        self.finish_drag();
+        let Some(rect) = self.selection else { return false };
+        let clip = Clip::of(&self.map, rect);
+        self.status = Some(crate::text::text().fmt(crate::text::keys::EDITOR_COPIED, &[("n", clip.cells.len().into())]));
+        self.clipboard = Some(clip);
+        true
+    }
+
+    /// CUT: COPY, then DELETE - one undo step, the delete's.
+    pub fn cut_selection(&mut self) -> Vec<CellChange> {
+        if !self.copy_selection() {
+            return Vec::new();
+        }
+        let changes = self.delete_selection();
+        self.status = Some(crate::text::text().fmt(crate::text::keys::EDITOR_CUT, &[("n", changes.len().into())]));
+        changes
+    }
+
+    /// DELETE: every cell of the selection cleared, as one undo step. The
+    /// selection stays, empty, for a paste into it.
+    pub fn delete_selection(&mut self) -> Vec<CellChange> {
+        self.finish_drag();
+        let Some(rect) = self.selection else { return Vec::new() };
+        let cells: Vec<(i32, i32)> = Clip::of(&self.map, rect).placed_at((rect.col, rect.row)).map(|(c, r, _)| (c, r)).collect();
+        let mut changes = Vec::new();
+        for (col, row) in cells {
+            self.change_cell(col, row, None, &mut changes);
+        }
+        self.commit(changes)
+    }
+
+    /// FLIP: the paste ghost mirrored where it stands, or else the
+    /// selection's cells mirrored in place along `axis`, as one undo step.
+    pub fn flip(&mut self, axis: Axis) -> Vec<CellChange> {
+        self.finish_drag();
+        if let Some(ghost) = &mut self.ghost {
+            ghost.clip = ghost.clip.flipped(axis);
+            return Vec::new();
+        }
+        let Some(rect) = self.selection else { return Vec::new() };
+        let at = (rect.col, rect.row);
+        let clip = Clip::of(&self.map, rect);
+        // Every cell the old cells or the mirrored ones touch, each to what
+        // the mirror leaves there: one change a cell, whatever it held.
+        let mut after: BTreeMap<(i32, i32), Option<CellObject>> = clip.placed_at(at).map(|(c, r, _)| ((c, r), None)).collect();
+        after.extend(clip.flipped(axis).placed_at(at).map(|(c, r, obj)| ((c, r), Some(obj))));
+        let mut changes = Vec::new();
+        for ((col, row), obj) in after {
+            self.change_cell(col, row, obj, &mut changes);
+        }
+        self.commit(changes)
+    }
+
+    /// Move the selection's cells `by` whole cells as one undo step - what
+    /// a drag from inside it does, kept on the field - and select where
+    /// they went.
+    pub fn move_selection(&mut self, by: (i32, i32)) -> Vec<CellChange> {
+        self.settle();
+        let Some(from) = self.selection else { return Vec::new() };
+        let grab = (from.col, from.row);
+        self.lift(grab);
+        self.drag_over((grab.0 + by.0, grab.1 + by.1));
+        self.finish_drag()
+    }
+
+    /// PASTE: the clipboard as the paste ghost, its middle on `near` (a
+    /// cell) or else on the middle of the view, with the select tool.
+    /// Whether there was anything to paste.
+    pub fn paste(&mut self, near: Option<(i32, i32)>) -> bool {
+        let Some(clip) = self.clipboard.clone() else { return false };
+        self.start_ghost(clip, near);
+        true
+    }
+
+    /// Make stamp `index` the paste ghost in the middle of the view - the
+    /// STAMPS list's row. Whether there is such a stamp.
+    pub fn use_stamp(&mut self, index: usize) -> bool {
+        let Some(clip) = self.stamps.get(index).map(|s| s.clip.clone()) else { return false };
+        self.start_ghost(clip, None);
+        true
+    }
+
+    /// Keep the selection's cells as a stamp for this session, trimmed to
+    /// the cells it holds, at the end of the STAMPS list - in memory, on
+    /// every build. The new stamp's index; `None` with nothing selected or
+    /// nothing in the selection.
+    pub fn save_stamp(&mut self) -> Option<usize> {
+        self.finish_drag();
+        let rect = self.selection?;
+        let clip = Clip::of(&self.map, rect).trimmed();
+        let t = crate::text::text();
+        if clip.is_empty() {
+            self.status = Some(t.get(crate::text::keys::EDITOR_STAMP_EMPTY));
+            return None;
+        }
+        self.saved_stamps += 1;
+        let stamp = Stamp { source: StampSource::Saved(self.saved_stamps), clip };
+        self.status = Some(t.fmt(crate::text::keys::EDITOR_STAMP_KEPT, &[("name", stamp.label().into())]));
+        self.stamps.push(stamp);
+        Some(self.stamps.len() - 1)
+    }
+
+    /// Put the paste ghost down where it stands, as one undo step: every
+    /// cell of it on the field written over what was there - a start,
+    /// player 2's start or a frog only where the map holds none of it by
+    /// then (the module docs) - and the rectangle it covered selected.
+    pub fn place_ghost(&mut self) -> Vec<CellChange> {
+        self.finish_drag();
+        let Some(ghost) = self.ghost.take() else { return Vec::new() };
+        let mut changes = Vec::new();
+        self.put_down(&ghost.clip, ghost.at, &mut changes);
+        self.selection = ghost.rect().within(self.field_cells());
+        self.commit(changes)
+    }
+
+    /// Stand the paste ghost with its top-left at `at`, kept on the field.
+    /// Whether there is a ghost.
+    pub fn move_ghost(&mut self, at: (i32, i32)) -> bool {
+        let bounds = self.field_cells();
+        let Some(ghost) = &mut self.ghost else { return false };
+        ghost.move_to(at, bounds);
+        true
+    }
+
+    /// Take the paste ghost away: Escape, CANCEL.
+    pub fn cancel_ghost(&mut self) {
+        self.finish_drag();
+        self.ghost = None;
+    }
+
+    /// `clip` as the paste ghost, its middle on `near` or the view's.
+    fn start_ghost(&mut self, clip: Clip, near: Option<(i32, i32)>) {
+        self.select_tool(Tool::Select);
+        self.settle();
+        let cell = near.unwrap_or_else(|| map::world_to_cell(self.camera.center(&self.viewport())));
+        self.ghost = Some(Ghost::new(clip, cell, self.field_cells()));
+    }
+
+    /// Escape on the canvas: a drag taken back, else the paste ghost taken
+    /// away, else the selection let go.
+    fn escape(&mut self) {
+        if self.drag.is_some() {
+            self.cancel_drag();
+        } else if self.ghost.is_some() {
+            self.ghost = None;
+        } else {
+            self.selection = None;
+        }
+    }
+
+    /// Write `clip` with its top-left at `at`, noting each change: every
+    /// cell of it on the field, the singletons last and each only where the
+    /// map holds none of its kind by then - so a paste never leaves two
+    /// starts and never touches a cell outside its own rectangle, while a
+    /// moved or cut-and-pasted start lands where it was carried.
+    fn put_down(&mut self, clip: &Clip, at: (i32, i32), changes: &mut Vec<CellChange>) {
+        let bounds = self.field_cells();
+        let (singles, rest): (Vec<_>, Vec<_>) =
+            clip.placed_at(at).filter(|&(c, r, _)| bounds.contains((c, r))).partition(|(_, _, obj)| select::is_singleton(obj));
+        for (col, row, obj) in rest {
+            self.change_cell(col, row, Some(obj), changes);
+        }
+        for (col, row, obj) in singles {
+            if !self.map.cells.values().any(|o| *o == obj) {
+                self.change_cell(col, row, Some(obj), changes);
+            }
+        }
+    }
+
+    /// Make cell (`col`, `row`) hold `after`, noting the change in
+    /// `changes` when it is one.
+    fn change_cell(&mut self, col: i32, row: i32, after: Option<CellObject>, changes: &mut Vec<CellChange>) {
+        let before = self.map.cell(col, row).copied();
+        if before == after {
+            return;
+        }
+        match after {
+            Some(obj) => self.map.set_cell(col, row, obj),
+            None => self.map.clear_cell(col, row),
+        }
+        changes.push(CellChange { col, row, before, after });
+    }
+
+    /// `changes`, already made, as one undo step, with the ground and the
+    /// navigator's picture repainted round them like a stroke's. What
+    /// changed.
+    fn commit(&mut self, changes: Vec<CellChange>) -> Vec<CellChange> {
+        if changes.is_empty() {
+            return changes;
+        }
+        self.history.push(EditStep::Cells(changes.clone()));
+        self.map_changed();
+        self.repaint_ground(changes.iter().map(|c| (c.col, c.row)));
+        changes
+    }
+
+    /// Take `changes` back, newest first, as if they had never been made:
+    /// no undo step.
+    fn unmake(&mut self, changes: &[CellChange]) {
+        for c in changes.iter().rev() {
+            match c.before {
+                Some(obj) => self.map.set_cell(c.col, c.row, obj),
+                None => self.map.clear_cell(c.col, c.row),
+            }
+        }
+        if !changes.is_empty() {
+            self.map_changed();
+            self.repaint_ground(changes.iter().map(|c| (c.col, c.row)));
+        }
+    }
+
+    /// Whether a stroke or a drag of the select tool is under way.
+    fn dragging(&self) -> bool {
+        self.stroke.is_some() || self.drag.is_some()
+    }
+
+    /// The select tool's press on `cell` with the mouse: the paste ghost
+    /// put down with its middle there, or a drag begun.
+    fn select_press(&mut self, cell: (i32, i32)) {
+        let bounds = self.field_cells();
+        if let Some(ghost) = &mut self.ghost {
+            ghost.centre_on(cell, bounds);
+            self.place_ghost();
+        } else {
+            self.begin_select_drag(cell, false);
+        }
+    }
+
+    /// The select tool's drag from `cell`: a finger carries the paste
+    /// ghost; a press inside the selection lifts its cells; anywhere else
+    /// starts a new rectangle there. `touch`: a finger that has passed the
+    /// slop, already a drag even on its first cell.
+    fn begin_select_drag(&mut self, cell: (i32, i32), touch: bool) {
+        self.settle();
+        if let Some(ghost) = &self.ghost {
+            if touch {
+                self.drag = Some(Drag::Ghost { grab: cell, start: ghost.at });
+            }
+            return;
+        }
+        if self.selection.is_some_and(|s| s.contains(cell)) {
+            self.lift(cell);
+            return;
+        }
+        self.selection = None;
+        self.drag = Some(Drag::Select { from: cell, to: cell, moved: touch });
+    }
+
+    /// A finger's tap on `cell` with the select tool: on the paste ghost it
+    /// puts it down, off it the ghost moves there; with no ghost, a tap
+    /// outside the selection lets it go.
+    fn tap_select(&mut self, cell: (i32, i32)) {
+        self.settle();
+        let bounds = self.field_cells();
+        if let Some(ghost) = &mut self.ghost {
+            if ghost.rect().contains(cell) {
+                self.place_ghost();
+            } else {
+                ghost.centre_on(cell, bounds);
+            }
+        } else if !self.selection.is_some_and(|s| s.contains(cell)) {
+            self.selection = None;
+        }
+    }
+
+    /// Lift the selection's cells off the map to carry them, the press
+    /// landing on `grab`.
+    fn lift(&mut self, grab: (i32, i32)) {
+        let Some(from) = self.selection else { return };
+        let lifted = Clip::of(&self.map, from);
+        let cells: Vec<(i32, i32)> = lifted.placed_at((from.col, from.row)).map(|(c, r, _)| (c, r)).collect();
+        let mut changes = Vec::new();
+        for (col, row) in cells {
+            self.change_cell(col, row, None, &mut changes);
+        }
+        if !changes.is_empty() {
+            self.map_changed();
+            self.repaint_ground(changes.iter().map(|c| (c.col, c.row)));
+        }
+        self.drag = Some(Drag::Move { grab, by: (0, 0), from, lifted, changes });
+    }
+
+    /// The pointer of a drag under way reached `cell`: a stroke paints the
+    /// cells on the way, a rectangle stretches to it, lifted cells and a
+    /// carried ghost follow it by whole cells, kept on the field.
+    fn drag_over(&mut self, cell: (i32, i32)) {
+        if self.stroke.is_some() {
+            self.drag_to(cell);
+            return;
+        }
+        let bounds = self.field_cells();
+        match &mut self.drag {
+            Some(Drag::Select { from, to, moved }) => {
+                *moved |= cell != *from;
+                *to = cell;
+            }
+            Some(Drag::Move { grab, by, from, .. }) => {
+                let to = from.shifted((cell.0 - grab.0, cell.1 - grab.1)).kept_inside(bounds);
+                *by = (to.col - from.col, to.row - from.row);
+            }
+            Some(Drag::Ghost { grab, start }) => {
+                if let Some(ghost) = &mut self.ghost {
+                    ghost.move_to((start.0 + cell.0 - grab.0, start.1 + cell.1 - grab.1), bounds);
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// The release of a drag of the select tool: a rectangle drawn becomes
+    /// the selection (a click selects nothing); lifted cells land where
+    /// they were carried, the lift and the landing one undo step, and are
+    /// selected there - or, carried nowhere, go back as they were with no
+    /// step; a carried ghost stays where it was left. What a landing
+    /// changed.
+    fn finish_drag(&mut self) -> Vec<CellChange> {
+        match self.drag.take() {
+            Some(Drag::Select { from, to, moved }) => {
+                self.selection = if moved { CellRect::spanning(from, to).within(self.field_cells()) } else { None };
+                Vec::new()
+            }
+            Some(Drag::Move { by, from, lifted, mut changes, .. }) => {
+                if by == (0, 0) {
+                    self.unmake(&changes);
+                    return Vec::new();
+                }
+                let to = from.shifted(by);
+                self.put_down(&lifted, (to.col, to.row), &mut changes);
+                self.selection = to.within(self.field_cells());
+                self.commit(changes)
+            }
+            Some(Drag::Ghost { .. }) | None => Vec::new(),
+        }
+    }
+
+    /// A drag of the select tool taken back - Escape, a second finger:
+    /// lifted cells put back where they were with no step, a carried ghost
+    /// back where it stood.
+    fn cancel_drag(&mut self) {
+        match self.drag.take() {
+            Some(Drag::Move { changes, .. }) => self.unmake(&changes),
+            Some(Drag::Ghost { start, .. }) => {
+                if let Some(ghost) = &mut self.ghost {
+                    ghost.at = start;
+                }
+            }
+            Some(Drag::Select { .. }) | None => {}
+        }
+    }
+
+    /// The buttons the select tool's strip shows now, each with whether it
+    /// can act: with a paste ghost on the canvas PLACE, the flips and
+    /// CANCEL; else the selection's actions, alive while there is one, and
+    /// PASTE while the clipboard holds a clip. `None` unless the select
+    /// tool is the brush and no popup is open.
+    fn strip_buttons(&self) -> Option<Vec<(StripButton, bool)>> {
+        if self.active_tool != Tool::Select || self.popup.is_some() {
+            return None;
+        }
+        if self.ghost.is_some() {
+            return Some(StripButton::GHOST.iter().map(|&b| (b, true)).collect());
+        }
+        let selected = self.selection.is_some();
+        Some(
+            StripButton::SELECTION
+                .iter()
+                .map(|&b| {
+                    let live = match b {
+                        StripButton::Paste => self.clipboard.is_some(),
+                        StripButton::Stamps => true,
+                        _ => selected,
+                    };
+                    (b, live)
+                })
+                .collect(),
+        )
+    }
+
+    /// What a press on the strip does.
+    fn press_strip(&mut self, button: StripButton) {
+        match button {
+            StripButton::Copy => {
+                self.copy_selection();
+            }
+            StripButton::Cut => {
+                self.cut_selection();
+            }
+            StripButton::Paste => {
+                self.paste(None);
+            }
+            StripButton::FlipH => {
+                self.flip(Axis::Horizontal);
+            }
+            StripButton::FlipV => {
+                self.flip(Axis::Vertical);
+            }
+            StripButton::Delete => {
+                self.delete_selection();
+            }
+            StripButton::SaveStamp => {
+                self.save_stamp();
+            }
+            StripButton::Stamps => self.popup = Some(Popup::Stamps { scroll: 0 }),
+            StripButton::Place => {
+                self.place_ghost();
+            }
+            StripButton::Cancel => self.cancel_ghost(),
+        }
     }
 
     /// Make the decorative ground layer again from the map's wall, road
@@ -1400,7 +2092,7 @@ impl MapEditor {
         if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
             return Err(t.fmt(crate::text::keys::EDITOR_BAD_NAME, &[("name", name.as_str().into())]));
         }
-        self.finish_stroke();
+        self.settle();
         let path = map::maps_dir().join(format!("{name}.toml"));
         self.map_to_save().save(&path)?;
         self.map.name = Some(name.clone());
@@ -1427,13 +2119,13 @@ impl MapEditor {
 
     /// The canvas's par, in seconds, when its revision is cleared - won
     /// from plain PLAY with no edit since (`note_clear`); `None` while it
-    /// is not, and while a stroke is being painted, which is an edit under
-    /// way: the revision is worked out once the stroke ends rather than on
-    /// every cell it paints (about 11 ms a time on the 96 x 54 study map
-    /// in a debug build). With nothing cleared this session, nothing is
-    /// worked out at all.
+    /// is not, and while a stroke is being painted or a selection's cells
+    /// are lifted, which is an edit under way: the revision is worked out
+    /// once it ends rather than on every cell it paints (about 11 ms a time
+    /// on the 96 x 54 study map in a debug build). With nothing cleared
+    /// this session, nothing is worked out at all.
     pub fn par(&self) -> Option<f64> {
-        if self.clears.is_empty() || self.stroke.is_some() {
+        if self.clears.is_empty() || self.stroke.is_some() || self.lifted().is_some() {
             return None;
         }
         self.clears.get(&self.revision()).copied()
@@ -1481,20 +2173,24 @@ impl MapEditor {
     }
 
     /// Close whatever popup is open (a dropdown, the settings panel or
-    /// the Save prompt) without acting on it - leaving the mode does this,
-    /// so the canvas never comes back with a stale menu over it.
+    /// the Save prompt) without acting on it, and land a drag under way -
+    /// leaving the mode does this, so the canvas never comes back with a
+    /// stale menu over it or cells still lifted.
     pub fn close_popup(&mut self) {
         self.popup = None;
+        self.settle();
     }
 
     /// Which popup is open, as the dev server's `mode` tool spells it: a
-    /// category's dropdown by the category's name, `tools` for the folded
-    /// bar's palette, `map` for the settings panel, `save` for the dev Save
-    /// prompt.
+    /// category's dropdown by the category's name, `brush` for BRUSH's
+    /// list, `tools` for the folded bar's palette, `stamps` for the STAMPS
+    /// list, `map` for the settings panel, `save` for the dev Save prompt.
     pub fn open_menu(&self) -> Option<&'static str> {
         match &self.popup {
             None => None,
             Some(Popup::Dropdown(category)) => Some(category.name()),
+            Some(Popup::Brush) => Some("brush"),
+            Some(Popup::Stamps { .. }) => Some("stamps"),
             Some(Popup::Palette) => Some("tools"),
             Some(Popup::Settings { .. }) => Some("map"),
             Some(Popup::File) => Some("file"),
@@ -1535,7 +2231,7 @@ impl MapEditor {
     /// Open the CHECK panel on a fresh run of the linter - the CHECK
     /// button.
     pub fn open_lint(&mut self) {
-        self.finish_stroke();
+        self.settle();
         self.run_lint();
         self.popup = Some(Popup::Lint { page: 0 });
     }
@@ -1632,28 +2328,41 @@ impl MapEditor {
         let room = frame.under_bar();
         let popup = self.popup.as_ref().map(|popup| match popup {
             Popup::Dropdown(category) => PopupLayout::Dropdown(*category, chrome::menu_list(bar.tools_anchor(*category), room, category.tools().count())),
+            Popup::Brush => PopupLayout::Brush(chrome::menu_list(bar.brush.unwrap_or_else(|| bar.tools_anchor(Category::Wall)), room, BrushRow::ALL.len())),
             Popup::Palette => PopupLayout::Palette(Palette::of(bar.tools_anchor(Category::Wall), room)),
             Popup::Settings { .. } => PopupLayout::Settings(SettingsLayout::of(bar.map, room, SETTINGS_ROWS.len())),
             Popup::File => PopupLayout::File(chrome::menu_list(bar.file, room, FileRow::all().len())),
             Popup::Load { entries, .. } => PopupLayout::Load(LoadLayout::of(room, entries.len())),
+            Popup::Stamps { .. } => {
+                PopupLayout::Stamps(LoadLayout::sized(room, self.stamps.len(), chrome::STAMPS_PANEL_W, chrome::STAMPS_VISIBLE_ROWS))
+            }
             Popup::Save { .. } => PopupLayout::Save(chrome::save_prompt(room)),
             Popup::Lint { .. } => PopupLayout::Lint(LintLayout::of(bar.check, room, self.lint_len())),
         });
-        Chrome { bar, room, popup }
+        let strip = self.strip_buttons().map(|buttons| Strip::of(room, frame.ui.touch, &buttons));
+        Chrome { bar, room, popup, strip }
     }
 
     /// The builder's buttons a tool presses by name, in UI points - the
     /// rects the hit tests read (the dev server's `status.builder.buttons`
-    /// puts them on the window): the bar's (`Bar::named`) and, while a
-    /// popup is open, its own - a list's or the palette's `tool_<name>`,
-    /// the FILE menu's `load`, `save`, `save_as` and `clear_map`, the Load
-    /// list's `map_<name>`, the MAP panel's `<row>_dec`/`<row>_inc` and
-    /// `reset`, the CHECK panel's rows (`finding_N`, from 0 over the whole
-    /// report) and their FIX buttons (`fix_N`) - and a pager's halves
-    /// (`page_back`, `page_next`).
+    /// puts them on the window): the bar's (`Bar::named`), the select
+    /// tool's strip's (`sel_copy`, `sel_place`, ... - only those that can
+    /// act now) and, while a popup is open, its own - a list's or the
+    /// palette's `tool_<name>`, BRUSH's list's and the palette's brush
+    /// row's `shape_<name>`, `tool_select` and `brush_stamps`, the FILE
+    /// menu's `load`, `save`, `save_as` and `clear_map`, the Load list's
+    /// `map_<name>`, the STAMPS list's `stamp_<key>`, the MAP panel's
+    /// `<row>_dec`/`<row>_inc` and `reset`, the CHECK panel's rows
+    /// (`finding_N`, from 0 over the whole report) and their FIX buttons
+    /// (`fix_N`) - and a pager's halves (`page_back`, `page_next`). A shape
+    /// the brush cannot take (a singleton's brush takes the pen alone) is
+    /// drawn dim and named nowhere.
     pub fn named_buttons(&self, frame: &BuilderFrame) -> Vec<(String, Rectangle)> {
         let chrome = self.chrome(frame);
         let mut out = chrome.bar.named();
+        if let Some(strip) = &chrome.strip {
+            out.extend(strip.named());
+        }
         let pager = |out: &mut Vec<(String, Rectangle)>, pager: Option<chrome::Pager>| {
             if let Some(p) = pager {
                 out.push(("page_back".to_string(), p.back()));
@@ -1666,12 +2375,31 @@ impl MapEditor {
                     out.push((format!("tool_{}", tool.name()), rows.row(i)));
                 }
             }
+            (Some(Popup::Brush), Some(PopupLayout::Brush(rows))) => {
+                for (i, row) in BrushRow::ALL.into_iter().enumerate() {
+                    if self.brush_row_live(row) {
+                        out.push((row.name(), rows.row(i)));
+                    }
+                }
+            }
             (Some(Popup::Palette), Some(PopupLayout::Palette(palette))) => {
                 for category in Category::ALL {
                     for (i, tool) in category.tools().enumerate() {
                         out.push((format!("tool_{}", tool.name()), palette.cell(category, i)));
                     }
                 }
+                for (i, row) in BrushRow::ALL.into_iter().enumerate() {
+                    if self.brush_row_live(row) {
+                        out.push((row.name(), palette.brush_cell(i)));
+                    }
+                }
+            }
+            (Some(Popup::Stamps { scroll }), Some(PopupLayout::Stamps(list))) => {
+                let scroll = (*scroll).min(self.stamps.len().saturating_sub(list.per_page));
+                for (i, stamp) in self.stamps.iter().skip(scroll).take(list.per_page).enumerate() {
+                    out.push((format!("stamp_{}", stamp.key()), list.rows.row(i)));
+                }
+                pager(&mut out, list.pager);
             }
             (Some(Popup::File), Some(PopupLayout::File(rows))) => {
                 for (i, row) in FileRow::all().iter().enumerate() {
@@ -1732,13 +2460,38 @@ impl MapEditor {
     }
 
     /// Whether a point in UI points lands on the builder's own chrome (the
-    /// bar, the open popup, the navigator on its plate) - a press there
-    /// never paints the cell behind it and the hover highlight hides.
+    /// bar, the open popup, the select tool's strip, the navigator on its
+    /// plate) - a press there never paints the cell behind it and the hover
+    /// highlight hides.
     fn point_on_ui(&self, point: Vec2, frame: &BuilderFrame) -> bool {
         let chrome = self.chrome(frame);
         chrome.bar.strip.contains(point)
             || chrome.popup.is_some_and(|popup| popup.panel().contains(point))
+            || chrome.strip.as_ref().is_some_and(|strip| strip.panel.contains(point))
             || self.navigator_rect(frame).is_some_and(|r| Corners::plate(r).contains(point))
+    }
+
+    /// Whether a row of BRUSH's list can be picked now: a shape the brush
+    /// cannot take is not (`shape_allowed`).
+    pub fn brush_row_live(&self, row: BrushRow) -> bool {
+        match row {
+            BrushRow::Shape(shape) => self.shape_allowed(shape),
+            BrushRow::Select | BrushRow::Stamps => true,
+        }
+    }
+
+    /// What a pick of a row of BRUSH's list or the palette's brush row
+    /// does: paint with a shape, take the select tool, or open the STAMPS
+    /// list.
+    fn pick_brush_row(&mut self, row: BrushRow) {
+        if !self.brush_row_live(row) {
+            return;
+        }
+        match row {
+            BrushRow::Shape(shape) => self.set_shape(shape),
+            BrushRow::Select => self.select_tool(Tool::Select),
+            BrushRow::Stamps => self.popup = Some(Popup::Stamps { scroll: 0 }),
+        }
     }
 
     // --- input ---
@@ -1789,6 +2542,7 @@ impl MapEditor {
             self.update_popup(input, frame);
             return EditorAction::None;
         }
+        self.selection_keys(input, frame);
         if self.navigate(input, frame, &rules) {
             return EditorAction::None;
         }
@@ -1801,12 +2555,14 @@ impl MapEditor {
         if !touch && self.pan_drag(input, frame, &rules) {
             return EditorAction::None;
         }
+        self.hover_ghost(input, frame, touch);
 
         let primary = input.held || input.right_held;
         if !primary {
-            // A release ends the stroke - one undo step per press.
+            // A release ends the stroke or the drag - one undo step per
+            // press.
             if !touch {
-                self.finish_stroke();
+                self.settle();
             }
             return EditorAction::None;
         }
@@ -1819,8 +2575,15 @@ impl MapEditor {
         if input.pressed
             && let Some(button) = frame.bar().hit(frame.to_ui(window))
         {
-            self.finish_stroke();
+            self.settle();
             return self.press_bar_button(button);
+        }
+        if input.pressed
+            && let Some(button) = self.chrome(frame).strip.and_then(|strip| strip.hit(frame.to_ui(window)))
+        {
+            self.settle();
+            self.press_strip(button);
+            return EditorAction::None;
         }
         if touch {
             return EditorAction::None;
@@ -1829,9 +2592,13 @@ impl MapEditor {
         // The canvas: a press begins a stroke, a held button continues it
         // into every new cell it crosses - the cell under the pointer
         // through the camera. A press on the chrome, or past the map's
-        // edge, is not a paint.
+        // edge, is not a paint. The select tool selects, carries and
+        // pastes instead.
         let pointer = frame.to_canvas(window);
-        if let Some(cell) = self.canvas_cell(pointer, frame) {
+        let cell = self.canvas_cell(pointer, frame);
+        if self.active_tool == Tool::Select {
+            self.select_pointer(input, cell, pointer, frame);
+        } else if let Some(cell) = cell {
             if input.pressed || input.right_pressed {
                 self.finish_stroke();
                 self.begin_stroke(cell, input.right_held && !input.held);
@@ -1843,15 +2610,82 @@ impl MapEditor {
         EditorAction::None
     }
 
+    /// The select tool under a mouse, `cell` the map cell under it: a press
+    /// puts the paste ghost down there or begins a drag (a press on the
+    /// canvas off the map lets the selection go), the right button takes
+    /// the ghost away or lets the selection go, and a held button carries
+    /// the drag along.
+    fn select_pointer(&mut self, input: &BuilderInput, cell: Option<(i32, i32)>, pointer: Vec2, frame: &BuilderFrame) {
+        if input.pressed {
+            match cell {
+                Some(cell) => self.select_press(cell),
+                None if self.ghost.is_none() && self.on_canvas(pointer, frame) => self.clear_selection(),
+                None => {}
+            }
+        } else if input.right_pressed {
+            if self.ghost.is_some() {
+                self.cancel_ghost();
+            } else {
+                self.clear_selection();
+            }
+        } else if let Some(cell) = cell
+            && self.drag.is_some()
+        {
+            self.drag_over(cell);
+        }
+    }
+
+    /// The selection's keys, outside every popup: Escape takes a drag back,
+    /// the paste ghost away or the selection off; Ctrl+C, Ctrl+X and Delete
+    /// (or Backspace) act on the selection; Ctrl+V pastes the clipboard as
+    /// a ghost under the pointer.
+    fn selection_keys(&mut self, input: &BuilderInput, frame: &BuilderFrame) {
+        if input.escape {
+            self.escape();
+        }
+        if input.copy {
+            self.copy_selection();
+        }
+        if input.cut {
+            self.cut_selection();
+        }
+        if input.paste {
+            let near = input.pointer.and_then(|p| self.cell_at(p, frame));
+            self.paste(near);
+        }
+        if (input.delete || input.backspace) && self.active_tool == Tool::Select {
+            self.delete_selection();
+        }
+    }
+
+    /// The paste ghost following a hovering mouse: its middle on the cell
+    /// under a pointer that moved with nothing held. A touch screen moves
+    /// its pointer only under a finger, so a finger's ghost stays where it
+    /// was carried or tapped to.
+    fn hover_ghost(&mut self, input: &BuilderInput, frame: &BuilderFrame, touch: bool) {
+        let moved = input.pointer != self.hover;
+        self.hover = input.pointer;
+        if touch || input.held || input.right_held || !moved || self.ghost.is_none() {
+            return;
+        }
+        let Some(cell) = input.pointer.and_then(|p| self.cell_at(p, frame)) else { return };
+        let bounds = self.field_cells();
+        if let Some(ghost) = &mut self.ghost {
+            ghost.centre_on(cell, bounds);
+        }
+    }
+
     /// Edge scroll: while a stroke is held with its pointer (on the
     /// canvas's bitmap) within `builder_edge_scroll_pt` of the canvas
     /// area's edge - or past it, over the bar or off the window - the view
     /// moves toward that edge, faster the deeper in, up to
     /// `builder_edge_scroll_pt_per_s`, and the stroke carries on into the
     /// cells that come under the pointer, or, held past the edge, under the
-    /// nearest point of the canvas. A long wall needs no pan in the middle.
+    /// nearest point of the canvas. A long wall needs no pan in the middle;
+    /// a select tool's rectangle, its lifted cells and a carried ghost
+    /// follow the same way.
     fn edge_scroll(&mut self, pointer: Vec2, dt: f32, frame: &BuilderFrame, rules: &CanvasRules) {
-        if self.stroke.is_none() || !(dt > 0.0) {
+        if !self.dragging() || !(dt > 0.0) {
             return;
         }
         let layout = &frame.layout;
@@ -1876,7 +2710,7 @@ impl MapEditor {
         self.camera.pan(Vec2::new(-into.x * step, -into.y * step), &vp, rules);
         let on_canvas = Vec2::new(pointer.x.clamp(f.x, f.x + f.w - 1.0), pointer.y.clamp(f.y, f.y + f.h - 1.0));
         if let Some(cell) = self.canvas_cell(on_canvas, frame) {
-            self.drag_to(cell);
+            self.drag_over(cell);
         }
     }
 
@@ -1970,9 +2804,10 @@ impl MapEditor {
     }
 
     /// The loupe over `frame`'s canvas this frame: while one finger
-    /// paints a stroke (`gesture::Gestures::painting` - a mouse never
-    /// does) where a cell is drawn under `builder_loupe_cell_mm` on the
-    /// glass. It shows the cell the stroke paints and what is round it,
+    /// paints a stroke, or draws or carries a selection
+    /// (`gesture::Gestures::painting` - a mouse never does), where a cell
+    /// is drawn under `builder_loupe_cell_mm` on the glass. It shows the
+    /// cell under the finger's drag (`finger_cell`) and what is round it,
     /// `LOUPE_ZOOM` times larger on the nearest whole-block scale, in a
     /// square of about `LOUPE_PT` UI points a side standing clear of the
     /// finger (`loupe_rect`), on the canvas and inside the safe area - of
@@ -1981,7 +2816,7 @@ impl MapEditor {
     /// side is whole 2 px blocks of the world and its corner a whole device
     /// pixel, so no block in it is cut or uneven.
     pub fn loupe(&self, frame: &BuilderFrame) -> Option<Loupe> {
-        let stroke = self.stroke.as_ref().filter(|_| self.gestures.painting())?;
+        let (cell, erase) = self.finger_cell().filter(|_| self.gestures.painting())?;
         let finger = self.stroke_pointer?;
         let layout = &frame.layout;
         let vp = self.viewport_in(layout);
@@ -2017,18 +2852,27 @@ impl MapEditor {
             side,
         );
         // The world round the stroke's cell, its corner on the block grid.
-        let middle = map::cell_to_world(stroke.last_cell.0, stroke.last_cell.1);
+        let middle = map::cell_to_world(cell.0, cell.1);
         let corner = Vec2::new(
             ((middle.x - world_side / 2.0) / block).round() * block,
             ((middle.y - world_side / 2.0) / block).round() * block,
         );
-        Some(Loupe {
-            rect,
-            world: Rectangle::new(corner.x, corner.y, world_side, world_side),
-            device_scale,
-            cell: stroke.last_cell,
-            erase: stroke.erase,
-        })
+        Some(Loupe { rect, world: Rectangle::new(corner.x, corner.y, world_side, world_side), device_scale, cell, erase })
+    }
+
+    /// The cell under a finger's drag and whether it erases: the cell a
+    /// stroke paints last, the corner a select tool's rectangle stretches
+    /// to, the cell the press of a carry has reached. What the loupe
+    /// outlines.
+    fn finger_cell(&self) -> Option<((i32, i32), bool)> {
+        if let Some(stroke) = &self.stroke {
+            return Some((stroke.last_cell, stroke.erase));
+        }
+        match self.drag {
+            Some(Drag::Select { to, .. }) => Some((to, false)),
+            Some(Drag::Move { grab, by, .. }) => Some(((grab.0 + by.0, grab.1 + by.1), false)),
+            Some(Drag::Ghost { .. }) | None => None,
+        }
     }
 
     /// Do what a gesture means - its points on the canvas's bitmap: a tap
@@ -2044,40 +2888,50 @@ impl MapEditor {
             GestureEvent::Tap(at) => {
                 self.pointer = Some(at);
                 if self.touch_paints(&vp, rules) {
-                    if let Some(cell) = self.canvas_cell(at, frame) {
-                        self.finish_stroke();
-                        self.begin_stroke(cell, false);
-                        self.finish_stroke();
+                    match self.canvas_cell(at, frame) {
+                        Some(cell) if self.active_tool == Tool::Select => self.tap_select(cell),
+                        Some(cell) => {
+                            self.finish_stroke();
+                            self.begin_stroke(cell, false);
+                            self.finish_stroke();
+                        }
+                        // A tap on the canvas off the map is outside every
+                        // selection.
+                        None if self.active_tool == Tool::Select && self.ghost.is_none() && self.on_canvas(at, frame) => {
+                            self.clear_selection()
+                        }
+                        None => {}
                     }
                 } else if self.on_canvas(at, frame) {
                     self.camera.zoom_for_tap(layout.to_field(at), &vp, rules);
                 }
             }
             GestureEvent::StrokeBegin(from) => {
-                self.finish_stroke();
+                self.settle();
                 self.stroke_pointer = Some(from);
                 if let Some(cell) = self.canvas_cell(from, frame) {
-                    self.begin_stroke(cell, false);
+                    self.finger_down(cell);
                 }
             }
             GestureEvent::StrokeTo(to) => {
                 self.pointer = Some(to);
                 self.stroke_pointer = Some(to);
                 if let Some(cell) = self.canvas_cell(to, frame) {
-                    if self.stroke.is_some() {
-                        self.drag_to(cell);
+                    if self.dragging() {
+                        self.drag_over(cell);
                     } else {
-                        self.begin_stroke(cell, false);
+                        self.finger_down(cell);
                     }
                 }
             }
             GestureEvent::StrokeEnd => {
                 self.stroke_pointer = None;
-                self.finish_stroke();
+                self.settle();
             }
             GestureEvent::StrokeCancel => {
                 self.stroke_pointer = None;
                 self.cancel_stroke();
+                self.cancel_drag();
             }
             GestureEvent::Move { from, to, factor } => self.camera.move_point(layout.to_field(from), layout.to_field(to), factor, &vp, rules),
             GestureEvent::Settle(at) => self.camera.settle(layout.to_field(at), &vp, rules),
@@ -2087,6 +2941,16 @@ impl MapEditor {
             GestureEvent::Redo => {
                 self.redo();
             }
+        }
+    }
+
+    /// A finger's drag reaching the field at `cell`: the select tool's drag
+    /// there, or a stroke from it.
+    fn finger_down(&mut self, cell: (i32, i32)) {
+        if self.active_tool == Tool::Select {
+            self.begin_select_drag(cell, true);
+        } else {
+            self.begin_stroke(cell, false);
         }
     }
 
@@ -2103,7 +2967,7 @@ impl MapEditor {
         let from = match self.pan_from {
             Some(from) => from,
             None if self.on_canvas(pointer, frame) => {
-                self.finish_stroke();
+                self.settle();
                 pointer
             }
             None => return false,
@@ -2123,6 +2987,7 @@ impl MapEditor {
             BarButton::CategoryIcon(category) => self.select_tool(self.current_tool(category)),
             BarButton::CategoryMenu(category) => self.popup = Some(Popup::Dropdown(category)),
             BarButton::Tools => self.popup = Some(Popup::Palette),
+            BarButton::Brush => self.popup = Some(Popup::Brush),
             BarButton::Erase => self.select_tool(Tool::Eraser),
             BarButton::Undo => {
                 self.undo();
@@ -2300,7 +3165,8 @@ impl MapEditor {
                     self.popup = Some(Popup::Palette);
                     return;
                 };
-                // A pick or a press elsewhere: the palette closes either way.
+                // A pick or a press elsewhere: the palette closes either way
+                // (the brush row's STAMPS opens its list in its place).
                 if input.pressed {
                     let picked = Category::ALL
                         .into_iter()
@@ -2310,7 +3176,53 @@ impl MapEditor {
                     if let Some(tool) = picked {
                         self.select_tool(tool);
                     }
+                    let row = BrushRow::ALL.into_iter().enumerate().find(|&(i, _)| palette.brush_cell(i).contains(pointer));
+                    if let Some((_, row)) = row {
+                        self.pick_brush_row(row);
+                    }
                 }
+            }
+            (Popup::Brush, Some(PopupLayout::Brush(rows))) => {
+                let Some(pointer) = pointer.filter(|_| pressed) else {
+                    self.popup = Some(Popup::Brush);
+                    return;
+                };
+                // A pick or a press elsewhere: the list closes either way
+                // (STAMPS opens its list in its place).
+                if input.pressed {
+                    let row = BrushRow::ALL.into_iter().enumerate().find(|&(i, _)| rows.row(i).contains(pointer));
+                    if let Some((_, row)) = row {
+                        self.pick_brush_row(row);
+                    }
+                }
+            }
+            (Popup::Stamps { mut scroll }, Some(PopupLayout::Stamps(list))) => {
+                let rows = list.per_page;
+                let max = self.stamps.len().saturating_sub(rows);
+                scroll = scroll.min(max);
+                if input.wheel != 0.0 {
+                    scroll = if input.wheel < 0.0 { (scroll + 1).min(max) } else { scroll.saturating_sub(1) };
+                }
+                let Some(pointer) = pointer.filter(|_| pressed) else {
+                    self.popup = Some(Popup::Stamps { scroll });
+                    return;
+                };
+                if !list.rows.panel.contains(pointer) {
+                    return;
+                }
+                if input.pressed {
+                    if let Some(pager) = list.pager.filter(|p| p.row.contains(pointer)) {
+                        scroll = if pager.back().contains(pointer) { scroll.saturating_sub(rows) } else { (scroll + rows).min(max) };
+                        self.popup = Some(Popup::Stamps { scroll });
+                        return;
+                    }
+                    let picked = (scroll..self.stamps.len()).take(rows).enumerate().find(|&(i, _)| list.rows.row(i).contains(pointer));
+                    if let Some((_, index)) = picked {
+                        self.use_stamp(index);
+                        return;
+                    }
+                }
+                self.popup = Some(Popup::Stamps { scroll });
             }
             (Popup::Settings { page }, Some(PopupLayout::Settings(settings))) => {
                 let last = settings.pages - 1;
@@ -2732,7 +3644,8 @@ mod editor_tests {
             assert_eq!(Tool::parse(tool.name()), Some(tool));
         }
         let per_category: usize = Category::ALL.iter().map(|c| c.tools().count()).sum();
-        assert_eq!(per_category + 1, TOOLS.len(), "every tool but the eraser is in a category");
+        assert_eq!(per_category + 2, TOOLS.len(), "every tool but the eraser and the select tool is in a category");
+        assert!(Tool::Select.category().is_none() && Tool::Select.object().is_none() && !Tool::Select.is_singleton());
     }
 
     /// The two start brushes are singletons independently of each other:
@@ -4438,6 +5351,490 @@ mod editor_tests {
         assert_eq!(ed.open_menu(), Some("actor"));
         ed.popup = Some(Popup::Save { name: String::new() });
         assert_eq!(ed.open_menu(), Some("save"));
+    }
+
+    // ----- the select tool -----
+
+    /// A map with a little of everything for the select tool: two bricks, a
+    /// road, water, player 1's start and the frog in one corner of it, a
+    /// gate on the left edge and a pair of portals.
+    fn select_map() -> MapFile {
+        let mut map = MapFile::new();
+        map.set_cell(4, 4, brick());
+        map.set_cell(5, 4, brick());
+        map.set_cell(4, 5, CellObject::Road);
+        map.set_cell(6, 6, CellObject::Water);
+        map.set_cell(5, 6, CellObject::Start);
+        map.set_cell(20, 10, CellObject::Frog);
+        map.set_cell(0, 8, CellObject::Gate);
+        map.set_cell(8, 4, CellObject::Portal);
+        map.set_cell(25, 12, CellObject::Portal);
+        map
+    }
+
+    /// The newest step undoes to exactly `before` and redoes to exactly
+    /// the map as it stands.
+    fn undo_redo_exact(ed: &mut MapEditor, before: &MapFile) {
+        let after = ed.map().clone();
+        ed.undo();
+        assert_eq!(ed.map().cells, before.cells, "the undo is exact");
+        ed.redo();
+        assert_eq!(ed.map().cells, after.cells, "the redo is exact");
+    }
+
+    /// A mouse press at `from`, a held drag to `to` and a release there.
+    fn drag(ed: &mut MapEditor, frame: &BuilderFrame, from: Vec2, to: Vec2) {
+        ed.update(&BuilderInput { pointer: Some(from), pressed: true, held: true, ..Default::default() }, frame);
+        for i in 1..=4 {
+            let t = i as f32 / 4.0;
+            let p = Vec2::new(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t);
+            ed.update(&BuilderInput { pointer: Some(p), held: true, ..Default::default() }, frame);
+        }
+        ed.update(&BuilderInput { pointer: Some(to), ..Default::default() }, frame);
+    }
+
+    /// How many cells of the map hold `obj`.
+    fn count(ed: &MapEditor, obj: CellObject) -> usize {
+        ed.map().cells.values().filter(|o| **o == obj).count()
+    }
+
+    /// The ground the editor holds is the one its map would build afresh
+    /// with the same seed.
+    fn ground_is_rebuilt(ed: &MapEditor) {
+        let mut fresh = MapEditor::new(ed.map().clone());
+        fresh.ground_seed = ed.ground_seed;
+        fresh.rebuild_ground();
+        assert!(ed.ground().draws_like(fresh.ground()), "the ground repaints as a rebuild would make it");
+    }
+
+    #[test]
+    fn a_mouse_drag_selects_a_rectangle_and_escape_a_press_outside_or_another_tool_lets_it_go() {
+        let frame = arena();
+        let mut ed = MapEditor::new(select_map());
+        ed.select_tool(Tool::Select);
+        assert_eq!(ed.tool(), Tool::Select);
+        assert_eq!(ed.current_tool(Category::Wall), Tool::Wall(Material::Brick), "the categories keep their tools");
+        let (a, b) = (on_cell(&ed, &frame, 6, 6), on_cell(&ed, &frame, 3, 3));
+        drag(&mut ed, &frame, a, b);
+        assert_eq!(ed.selection(), Some(CellRect::spanning((3, 3), (6, 6))));
+        // A click outside it lets it go and selects nothing.
+        let outside = on_cell(&ed, &frame, 15, 10);
+        click(&mut ed, &frame, outside);
+        assert_eq!(ed.selection(), None);
+        drag(&mut ed, &frame, a, b);
+        ed.update(&BuilderInput { escape: true, ..Default::default() }, &frame);
+        assert_eq!(ed.selection(), None, "Escape lets it go");
+        drag(&mut ed, &frame, a, b);
+        ed.update(&BuilderInput { pointer: Some(outside), right_pressed: true, right_held: true, ..Default::default() }, &frame);
+        ed.update(&BuilderInput { pointer: Some(outside), ..Default::default() }, &frame);
+        assert_eq!(ed.selection(), None, "the right button lets it go");
+        drag(&mut ed, &frame, a, b);
+        ed.select_tool(Tool::Road);
+        assert_eq!(ed.selection(), None, "another tool lets it go");
+        assert_eq!(ed.map().cells, select_map().cells, "selecting changes nothing");
+        assert_eq!(ed.history().undo_depth(), 0);
+    }
+
+    #[test]
+    fn a_drag_from_inside_the_selection_lifts_and_carries_its_cells_as_one_undo_step() {
+        let frame = arena();
+        let before = select_map();
+        let mut ed = MapEditor::new(before.clone());
+        assert!(ed.select_cells(CellRect::spanning((3, 3), (6, 6))));
+        let grab = on_cell(&ed, &frame, 4, 4);
+        ed.update(&BuilderInput { pointer: Some(grab), pressed: true, held: true, ..Default::default() }, &frame);
+        let to = on_cell(&ed, &frame, 14, 7);
+        ed.update(&BuilderInput { pointer: Some(to), held: true, ..Default::default() }, &frame);
+        // Held: the cells are off the map and carried.
+        assert_eq!(ed.map().cell(4, 4), None, "lifted");
+        let (rect, lifted) = ed.lifted().expect("cells carried");
+        assert_eq!((rect.col, rect.row), (13, 6));
+        assert_eq!(lifted.cells.len(), 5);
+        assert_eq!(ed.par(), None);
+        ed.update(&BuilderInput { pointer: Some(to), ..Default::default() }, &frame);
+        assert_eq!(ed.lifted(), None);
+        for (cell, obj) in [((14, 7), brick()), ((15, 7), brick()), ((14, 8), CellObject::Road), ((16, 9), CellObject::Water), ((15, 9), CellObject::Start)] {
+            assert_eq!(ed.map().cell(cell.0, cell.1), Some(&obj), "{cell:?}");
+        }
+        for cell in [(4, 4), (5, 4), (4, 5), (6, 6), (5, 6)] {
+            assert_eq!(ed.map().cell(cell.0, cell.1), None, "{cell:?} vacated");
+        }
+        assert_eq!(count(&ed, CellObject::Start), 1, "the start moved with it");
+        assert_eq!(ed.selection(), Some(CellRect { col: 13, row: 6, cols: 4, rows: 4 }), "the selection went with its cells");
+        assert_eq!(ed.history().undo_depth(), 1, "one undo step");
+        ground_is_rebuilt(&ed);
+        undo_redo_exact(&mut ed, &before);
+        ground_is_rebuilt(&ed);
+        // A drag that comes back to where it began changes nothing and
+        // records nothing.
+        let depth = ed.history().undo_depth();
+        let at = on_cell(&ed, &frame, 14, 7);
+        drag(&mut ed, &frame, at, at);
+        assert_eq!(ed.history().undo_depth(), depth);
+        // Carried past the map's edge, the cells stop at it.
+        let changes = ed.move_selection((100, 0));
+        assert!(!changes.is_empty());
+        let rect = ed.selection().expect("still selected");
+        assert_eq!(rect.col + rect.cols, ed.field_cells().cols, "kept on the field");
+        assert_eq!(ed.map().cells.len(), before.cells.len(), "nothing dropped off the edge");
+    }
+
+    #[test]
+    fn copy_then_paste_puts_a_copy_down_where_the_ghost_stands_as_one_step() {
+        let frame = arena();
+        let before = select_map();
+        let mut ed = MapEditor::new(before.clone());
+        ed.select_cells(CellRect::spanning((3, 3), (6, 6)));
+        assert!(ed.copy_selection());
+        assert_eq!(ed.clipboard().map(|c| (c.cols, c.rows, c.cells.len())), Some((4, 4, 5)));
+        // Ctrl+V with the mouse on (20, 4): the ghost stands centred there
+        // and follows the mouse.
+        ed.update(&BuilderInput { paste: true, pointer: Some(on_cell(&ed, &frame, 20, 4)), ..Default::default() }, &frame);
+        assert_eq!(ed.ghost().map(|g| g.at), Some((19, 3)));
+        ed.update(&BuilderInput { pointer: Some(on_cell(&ed, &frame, 22, 6)), ..Default::default() }, &frame);
+        assert_eq!(ed.ghost().map(|g| g.at), Some((21, 5)), "the ghost follows a hovering mouse");
+        assert_eq!(ed.map().cells, before.cells, "a ghost is not on the map");
+        // A press puts it down where it is pressed.
+        let place = on_cell(&ed, &frame, 22, 6);
+        click(&mut ed, &frame, place);
+        assert_eq!(ed.ghost(), None);
+        assert_eq!(ed.map().cell(22, 6), Some(&brick()));
+        assert_eq!(ed.map().cell(23, 6), Some(&brick()));
+        assert_eq!(ed.map().cell(22, 7), Some(&CellObject::Road));
+        assert_eq!(ed.map().cell(24, 8), Some(&CellObject::Water));
+        assert_eq!(ed.map().cell(23, 8), None, "the map holds a start already");
+        assert_eq!(ed.map().cell(4, 4), Some(&brick()), "the original stays");
+        assert_eq!(count(&ed, CellObject::Start), 1, "a paste never leaves two starts");
+        assert_eq!(ed.selection(), Some(CellRect { col: 21, row: 5, cols: 4, rows: 4 }), "the paste is selected");
+        assert_eq!(ed.history().undo_depth(), 1);
+        ground_is_rebuilt(&ed);
+        undo_redo_exact(&mut ed, &before);
+    }
+
+    /// The singletons in a selection (docs above): a paste places a start
+    /// or a frog only where the map holds none of it once the rest of the
+    /// paste is down - never two, and never a cell outside the paste's own
+    /// rectangle - so a cut and a paste carry the start like a move, and a
+    /// paste over the map's own start puts the pasted one in its place.
+    #[test]
+    fn a_paste_never_leaves_two_starts_and_a_cut_and_paste_carries_them() {
+        let mut ed = MapEditor::new(select_map());
+        ed.select_cells(CellRect::spanning((3, 3), (6, 6)));
+        ed.copy_selection();
+        ed.paste(Some((15, 15)));
+        ed.place_ghost();
+        assert_eq!(ed.map().start_cell(), Some((5, 6)), "a copy's start stays where it was");
+        assert_eq!(count(&ed, CellObject::Start), 1);
+        // Cut and paste: the start goes where the paste goes.
+        ed.select_cells(CellRect::spanning((3, 3), (6, 6)));
+        ed.cut_selection();
+        assert_eq!(ed.map().start_cell(), None);
+        ed.paste(Some((26, 5)));
+        ed.place_ghost();
+        assert_eq!(ed.map().start_cell(), Some((27, 7)));
+        // Again: the map holds one, so the second leaves it out.
+        ed.paste(Some((10, 12)));
+        let changes = ed.place_ghost();
+        assert!(!changes.is_empty());
+        assert_eq!(count(&ed, CellObject::Start), 1, "never two");
+        // A paste whose brick lands on the map's start: the start is gone
+        // under it, so the pasted one takes its place.
+        let mut ed = MapEditor::new(select_map());
+        ed.select_cells(CellRect::spanning((4, 4), (5, 6)));
+        ed.copy_selection();
+        ed.paste(None);
+        assert!(ed.move_ghost((4, 6)));
+        ed.place_ghost();
+        assert_eq!(ed.map().cell(5, 6), Some(&brick()), "the brick over the old start");
+        assert_eq!(ed.map().start_cell(), Some((5, 8)), "the pasted start in its place");
+        assert_eq!(count(&ed, CellObject::Start), 1);
+        // The frog alike, by a move: it goes with the cells.
+        let mut ed = MapEditor::new(select_map());
+        ed.select_cells(CellRect::spanning((19, 9), (21, 11)));
+        ed.move_selection((3, 2));
+        assert_eq!(ed.map().frog_cell(), Some((23, 12)));
+        assert_eq!(count(&ed, CellObject::Frog), 1);
+    }
+
+    #[test]
+    fn flips_mirror_the_selection_in_place_and_the_ghost_where_it_stands() {
+        let before = select_map();
+        let mut ed = MapEditor::new(before.clone());
+        ed.select_cells(CellRect::spanning((3, 3), (6, 6)));
+        let changes = ed.flip(Axis::Horizontal);
+        assert!(!changes.is_empty());
+        // (col 3..6): a cell at col c lands on 9 - c.
+        assert_eq!(ed.map().cell(5, 5), Some(&CellObject::Road));
+        assert_eq!(ed.map().cell(3, 6), Some(&CellObject::Water));
+        assert_eq!(ed.map().cell(4, 6), Some(&CellObject::Start));
+        assert_eq!(ed.map().cell(4, 4), Some(&brick()));
+        assert_eq!(ed.map().cell(5, 4), Some(&brick()));
+        assert_eq!(ed.map().cell(6, 6), None);
+        assert_eq!(ed.history().undo_depth(), 1, "one step");
+        assert_eq!(ed.selection(), Some(CellRect::spanning((3, 3), (6, 6))), "the selection stays");
+        ground_is_rebuilt(&ed);
+        undo_redo_exact(&mut ed, &before);
+        ed.undo();
+        ed.flip(Axis::Vertical);
+        // (row 3..6): a cell at row r lands on 9 - r.
+        assert_eq!(ed.map().cell(4, 4), Some(&CellObject::Road));
+        assert_eq!(ed.map().cell(4, 5), Some(&brick()));
+        assert_eq!(ed.map().cell(5, 3), Some(&CellObject::Start));
+        ed.flip(Axis::Vertical);
+        assert_eq!(ed.map().cells, before.cells, "a flip twice is none");
+        ed.flip(Axis::Horizontal);
+        ed.flip(Axis::Horizontal);
+        assert_eq!(ed.map().cells, before.cells, "a flip twice is none");
+        // A ghost flips where it stands, and the map does not.
+        let depth = ed.history().undo_depth();
+        ed.copy_selection();
+        ed.paste(Some((20, 5)));
+        ed.flip(Axis::Horizontal);
+        assert_eq!(ed.history().undo_depth(), depth);
+        assert_eq!(ed.map().cells, before.cells);
+        let ghost = ed.ghost().expect("a ghost");
+        assert!(ghost.clip.cells.contains(&(0, 3, CellObject::Water)), "{:?}", ghost.clip.cells);
+    }
+
+    #[test]
+    fn delete_and_cut_clear_the_selection_as_one_step_and_keep_it_selected() {
+        let before = select_map();
+        let mut ed = MapEditor::new(before.clone());
+        ed.select_cells(CellRect::spanning((3, 3), (6, 6)));
+        let changes = ed.delete_selection();
+        assert_eq!(changes.len(), 5);
+        assert_eq!(ed.map().cells.len(), before.cells.len() - 5);
+        assert_eq!(ed.selection(), Some(CellRect::spanning((3, 3), (6, 6))));
+        assert_eq!(ed.history().undo_depth(), 1);
+        ground_is_rebuilt(&ed);
+        undo_redo_exact(&mut ed, &before);
+        ed.undo();
+        let changes = ed.cut_selection();
+        assert_eq!(changes.len(), 5);
+        assert_eq!(ed.clipboard().map(|c| c.cells.len()), Some(5));
+        undo_redo_exact(&mut ed, &before);
+        // Nothing selected: nothing to delete, cut or copy.
+        ed.clear_selection();
+        assert!(ed.delete_selection().is_empty() && ed.cut_selection().is_empty() && !ed.copy_selection());
+    }
+
+    /// Gates and portals are carried like any cell: a gate moved off the
+    /// edge is the map's and CHECK's to name, a pasted portal joins the
+    /// network.
+    #[test]
+    fn gates_and_portals_are_carried_like_any_cell() {
+        let mut ed = MapEditor::new(select_map());
+        ed.select_cells(CellRect::spanning((0, 7), (1, 9)));
+        ed.move_selection((5, 0));
+        assert_eq!(ed.map().gate_cells(), vec![(5, 8)]);
+        assert_eq!(gate_inward(map::cell_to_world(5, 8), W, H), None, "off the edge now: drawn outlined, named by CHECK");
+        ed.select_cells(CellRect::spanning((8, 4), (8, 4)));
+        ed.copy_selection();
+        ed.paste(Some((12, 12)));
+        ed.place_ghost();
+        assert_eq!(ed.map().portal_cells(), vec![(8, 4), (12, 12), (25, 12)], "a third portal in the network");
+    }
+
+    #[test]
+    fn stamps_are_the_shipped_ones_then_the_ones_kept_this_session() {
+        let mut ed = MapEditor::new(select_map());
+        let keys: Vec<String> = ed.stamps().iter().map(Stamp::key).collect();
+        assert_eq!(keys, ["fort", "bunker", "river-bend"]);
+        // Kept from a loose selection: trimmed to its cells.
+        ed.select_cells(CellRect::spanning((2, 2), (7, 7)));
+        let index = ed.save_stamp().expect("a stamp kept");
+        assert_eq!(index, 3);
+        let stamp = &ed.stamps()[index];
+        assert_eq!(stamp.key(), "saved_1");
+        assert_eq!((stamp.clip.cols, stamp.clip.rows), (3, 3));
+        assert_eq!(ed.history().undo_depth(), 0, "keeping a stamp edits nothing");
+        // An empty selection keeps nothing.
+        ed.select_cells(CellRect::spanning((10, 10), (12, 12)));
+        assert_eq!(ed.save_stamp(), None);
+        assert_eq!(ed.stamps().len(), 4);
+        // A stamp is the paste ghost, in the middle of the view.
+        ed.select_tool(Tool::Road);
+        assert!(ed.use_stamp(0));
+        assert_eq!(ed.tool(), Tool::Select);
+        let ghost = ed.ghost().expect("the fort as a ghost").clone();
+        assert_eq!((ghost.clip.cols, ghost.clip.rows), (10, 8));
+        let middle = map::world_to_cell(ed.camera().center(&ed.viewport()));
+        assert!(ghost.rect().contains(middle), "{:?} round {middle:?}", ghost.rect());
+        let before = ed.map().clone();
+        let changes = ed.place_ghost();
+        assert_eq!(changes.len(), ghost.clip.cells.len());
+        assert_eq!(ed.history().undo_depth(), 1);
+        undo_redo_exact(&mut ed, &before);
+        assert!(!ed.use_stamp(99));
+    }
+
+    /// The strip under the bar by name, as a mouse presses it: BRUSH's list
+    /// takes the select tool; COPY, CUT, DELETE, the flips and + STAMP
+    /// stand dim until something is selected and PASTE until the
+    /// clipboard holds something; PASTE makes a ghost, PLACE puts it down,
+    /// CANCEL takes it away; STAMPS opens the list, whose row makes its
+    /// stamp the ghost.
+    #[test]
+    fn the_strip_acts_on_the_selection_by_name() {
+        let frame = arena();
+        let before = select_map();
+        let mut ed = MapEditor::new(before.clone());
+        press_named(&mut ed, &frame, "brush");
+        assert_eq!(ed.open_menu(), Some("brush"));
+        press_named(&mut ed, &frame, "tool_select");
+        assert_eq!(ed.tool(), Tool::Select);
+        assert_eq!(ed.open_menu(), None);
+        for name in ["sel_copy", "sel_cut", "sel_paste", "sel_flip_h", "sel_flip_v", "sel_delete", "sel_stamp"] {
+            assert!(!has_named(&ed, &frame, name), "{name} is dim with nothing selected");
+        }
+        assert!(has_named(&ed, &frame, "sel_stamps"));
+        let (a, b) = (on_cell(&ed, &frame, 3, 3), on_cell(&ed, &frame, 6, 6));
+        drag(&mut ed, &frame, a, b);
+        assert!(has_named(&ed, &frame, "sel_copy") && !has_named(&ed, &frame, "sel_paste"));
+        press_named(&mut ed, &frame, "sel_copy");
+        assert!(has_named(&ed, &frame, "sel_paste"));
+        press_named(&mut ed, &frame, "sel_flip_h");
+        assert_eq!(ed.map().cell(5, 5), Some(&CellObject::Road));
+        press_named(&mut ed, &frame, "sel_flip_h");
+        assert_eq!(ed.map().cells, before.cells);
+        press_named(&mut ed, &frame, "sel_paste");
+        assert!(ed.ghost().is_some());
+        assert!(has_named(&ed, &frame, "sel_place") && has_named(&ed, &frame, "sel_cancel") && !has_named(&ed, &frame, "sel_copy"));
+        press_named(&mut ed, &frame, "sel_place");
+        assert_eq!(ed.ghost(), None);
+        assert_eq!(count(&ed, brick()), 4, "a copy put down");
+        press_named(&mut ed, &frame, "sel_delete");
+        assert_eq!(count(&ed, brick()), 2);
+        press_named(&mut ed, &frame, "sel_paste");
+        press_named(&mut ed, &frame, "sel_cancel");
+        assert_eq!(ed.ghost(), None);
+        assert_eq!(count(&ed, brick()), 2, "CANCEL put nothing down");
+        drag(&mut ed, &frame, a, b);
+        press_named(&mut ed, &frame, "sel_stamp");
+        assert_eq!(ed.stamps().len(), 4);
+        press_named(&mut ed, &frame, "sel_stamps");
+        assert_eq!(ed.open_menu(), Some("stamps"));
+        assert!(has_named(&ed, &frame, "stamp_saved_1"));
+        press_named(&mut ed, &frame, "stamp_bunker");
+        assert_eq!(ed.open_menu(), None);
+        assert_eq!(ed.ghost().map(|g| (g.clip.cols, g.clip.rows)), Some((6, 5)));
+        // The keys: Escape takes the ghost away, then the selection.
+        ed.update(&BuilderInput { escape: true, ..Default::default() }, &frame);
+        assert_eq!(ed.ghost(), None);
+        // A press on the strip never selects the cells under it.
+        assert!(!ed.on_canvas(frame.to_canvas(center(named(&ed, &frame, "sel_stamps"))), &frame));
+    }
+
+    /// On a phone the bar folds BRUSH into TOOLS: the palette's brush row
+    /// takes the select tool and opens the STAMPS list.
+    #[test]
+    fn a_folded_bar_keeps_the_brush_in_its_palette() {
+        let insets = Insets { left: 59.0 * 3.0, top: 0.0, right: 59.0 * 3.0, bottom: 21.0 * 3.0 };
+        let ui = UiFrame::new((852.0 * 3.0, 393.0 * 3.0), 3.0, 1.0, insets, true);
+        let frame = BuilderFrame::new(ui, (W, H), MapClass::Arena, None);
+        let mut ed = MapEditor::new(select_map());
+        assert!(!has_named(&ed, &frame, "brush"));
+        press_named(&mut ed, &frame, "tools");
+        for name in ["shape_pen", "tool_select", "brush_stamps"] {
+            assert!(has_named(&ed, &frame, name), "{name} in the palette");
+        }
+        press_named(&mut ed, &frame, "tool_select");
+        assert_eq!(ed.tool(), Tool::Select);
+        press_named(&mut ed, &frame, "tools");
+        press_named(&mut ed, &frame, "brush_stamps");
+        assert_eq!(ed.open_menu(), Some("stamps"));
+        press_named(&mut ed, &frame, "stamp_fort");
+        assert!(ed.ghost().is_some());
+        press_named(&mut ed, &frame, "tools");
+        press_named(&mut ed, &frame, "shape_pen");
+        assert_eq!(ed.tool(), Tool::Wall(Material::Brick), "the pen goes back to the tool before the select tool");
+        assert_eq!(ed.ghost(), None);
+    }
+
+    /// With a finger: a drag past the slop draws the rectangle, a tap
+    /// outside lets it go, a drag from inside carries its cells as one
+    /// step, a second finger landing on that drag takes it back; a pasted
+    /// ghost follows a drag from anywhere by the cells it moves, a tap off
+    /// it moves it there and a tap on it puts it down.
+    #[test]
+    fn a_finger_selects_carries_and_pastes() {
+        let (mut ed, frame) = touch_arena();
+        ed.load(select_map());
+        let before_select = ed.map().clone();
+        ed.select_tool(Tool::Select);
+        let p = |ed: &MapEditor, c: i32, r: i32| on_cell(ed, &frame, c, r);
+        let path = |from: Vec2, to: Vec2| -> Vec<Vec<(i32, f32, f32)>> {
+            (0..=10).map(|i| vec![(1, from.x + (to.x - from.x) * i as f32 / 10.0, from.y + (to.y - from.y) * i as f32 / 10.0)]).collect()
+        };
+        let (a, b) = (p(&ed, 3, 3), p(&ed, 6, 6));
+        fingers(&mut ed, &frame, &path(a, b));
+        assert_eq!(ed.selection(), Some(CellRect::spanning((3, 3), (6, 6))));
+        let outside = p(&ed, 15, 10);
+        fingers(&mut ed, &frame, &[vec![(2, outside.x, outside.y)]]);
+        assert_eq!(ed.selection(), None, "a tap outside lets it go");
+        fingers(&mut ed, &frame, &path(a, b));
+        let depth = ed.history().undo_depth();
+        let (grab, to) = (p(&ed, 4, 4), p(&ed, 12, 4));
+        fingers(&mut ed, &frame, &path(grab, to));
+        assert_eq!(ed.map().cell(12, 4), Some(&brick()));
+        assert_eq!(ed.history().undo_depth(), depth + 1, "one step");
+        ed.undo();
+        assert_eq!(ed.map().cells, before_select.cells);
+        // A second finger on a carry takes it back.
+        fingers(&mut ed, &frame, &path(a, b));
+        let mut frames = path(grab, to);
+        frames.push(vec![(1, to.x, to.y), (2, to.x + 60.0, to.y)]);
+        fingers(&mut ed, &frame, &frames);
+        assert_eq!(ed.map().cells, before_select.cells, "taken back");
+        assert_eq!(ed.history().undo_depth(), depth);
+        // PASTE by its button: the ghost in the middle of the view.
+        ed.copy_selection();
+        let paste = center(named(&ed, &frame, "sel_paste"));
+        fingers(&mut ed, &frame, &[vec![(3, paste.x, paste.y)]]);
+        let at = ed.ghost().expect("a ghost").at;
+        // A drag from anywhere carries it by the cells the finger moves.
+        let (from, to) = (p(&ed, 20, 12), p(&ed, 23, 13));
+        fingers(&mut ed, &frame, &path(from, to));
+        assert_eq!(ed.ghost().map(|g| g.at), Some((at.0 + 3, at.1 + 1)));
+        // A tap off it moves it there; a tap on it puts it down.
+        let off = p(&ed, 10, 13);
+        fingers(&mut ed, &frame, &[vec![(4, off.x, off.y)]]);
+        assert_eq!(ed.ghost().map(|g| g.at), Some((9, 12)));
+        assert_eq!(ed.map().cells, before_select.cells, "a tap off it puts nothing down");
+        fingers(&mut ed, &frame, &[vec![(5, off.x, off.y)]]);
+        assert_eq!(ed.ghost(), None);
+        assert_eq!(ed.map().cell(10, 13), Some(&brick()));
+    }
+
+    #[test]
+    fn the_keys_copy_cut_paste_and_delete() {
+        let frame = arena();
+        let before = select_map();
+        let mut ed = MapEditor::new(before.clone());
+        ed.select_cells(CellRect::spanning((3, 3), (6, 6)));
+        ed.update(&BuilderInput { copy: true, ..Default::default() }, &frame);
+        assert!(ed.clipboard().is_some());
+        ed.update(&BuilderInput { delete: true, ..Default::default() }, &frame);
+        assert_eq!(ed.map().cell(4, 4), None);
+        ed.undo();
+        ed.update(&BuilderInput { backspace: true, ..Default::default() }, &frame);
+        assert_eq!(ed.map().cell(4, 4), None, "Backspace deletes too");
+        ed.undo();
+        ed.update(&BuilderInput { cut: true, ..Default::default() }, &frame);
+        assert_eq!(ed.map().cell(4, 4), None);
+        let at = on_cell(&ed, &frame, 4, 4);
+        ed.update(&BuilderInput { paste: true, pointer: Some(at), ..Default::default() }, &frame);
+        click(&mut ed, &frame, at);
+        assert_eq!(ed.map().cells, before.cells, "cut and pasted back where it was");
+        // Ctrl+V with a brush pastes too, taking the select tool.
+        ed.select_tool(Tool::Road);
+        ed.update(&BuilderInput { paste: true, pointer: Some(on_cell(&ed, &frame, 20, 6)), ..Default::default() }, &frame);
+        assert_eq!(ed.tool(), Tool::Select);
+        assert!(ed.ghost().is_some());
+        // The Save prompt keeps its keys.
+        ed.popup = Some(Popup::Save { name: String::new() });
+        ed.update(&BuilderInput { escape: true, ..Default::default() }, &frame);
+        assert!(ed.ghost().is_some(), "Escape closed the prompt, not the ghost");
     }
 }
 

@@ -16,22 +16,34 @@
 //! `bb_ui_json` read.
 //!
 //! **The bar is laid out from the safe area's width** in points. With the
-//! room - a desktop window, a tablet - it is the row it always was: BUILD,
-//! the map's name, the five category buttons, the eraser, UNDO, REDO, FILE,
+//! room - a desktop window, a tablet - it is one row: BUILD, the map's
+//! name, the five category buttons and the BRUSH button (the brush's
+//! shape, the select tool and the stamps), the eraser, UNDO, REDO, FILE,
 //! MAP, FIT, CHECK and the clear flag from the left, PLAY HERE and PLAY at
 //! the right end. Where it has less, the BUILD label goes first, then the
 //! name (the status line names the map instead), and then the five
-//! category buttons fold into one TOOLS button that opens a palette of
-//! every category, so every button stays reachable at its full size - 44
-//! points on both sides on a touch screen (`hud::UI_TOUCH_PT`) - rather
-//! than shrinking. A UI frame is never narrower than `hud::UI_MIN_W` points
-//! (`UiFrame::new` shrinks the point instead), and the folded bar fits
-//! that on a touch screen.
+//! category buttons and BRUSH fold into one TOOLS button that opens a
+//! palette of every category with the brush's row under them, so every
+//! button stays reachable at its full size - 44 points on both sides on a
+//! touch screen (`hud::UI_TOUCH_PT`) - rather than shrinking. A UI frame is
+//! never narrower than `hud::UI_MIN_W` points (`UiFrame::new` shrinks the
+//! point instead), and the folded bar fits that on a touch screen.
 //!
 //! **The popups take the room under the bar**: a list too long for it runs
-//! on in a second column, and the MAP panel, the CHECK panel and the Load
-//! list turn pages by a pager row - the touch screen's way, since it has no
-//! wheel - where their rows do not fit.
+//! on in a second column, and the MAP panel, the CHECK panel, the Load list
+//! and the STAMPS list turn pages by a pager row - the touch screen's way,
+//! since it has no wheel - where their rows do not fit.
+//!
+//! **The select tool's actions stand in a strip under the bar** (`Strip`):
+//! COPY, CUT, PASTE, the two flips, DELETE, keeping the selection as a
+//! stamp and the STAMPS list - or, while a paste ghost stands on the
+//! canvas, PLACE, the flips and CANCEL - a finger's size on a touch screen,
+//! on a plate from the room's top-left corner. Under the bar rather than
+//! beside the selection: it never moves while a finger drags the selection
+//! or pans and pinches the view, it never stands over the cells being
+//! worked on (only a selection at the very top of the view meets it), and
+//! eight finger-size buttons beside a selection would cover a good part of
+//! a phone's canvas wherever the selection was.
 
 use crate::framing::MapClass;
 use crate::hud::{button_height, UiFrame, PLATE_PAD, UI_EDGE_PT, UI_SMALL_TEXT};
@@ -39,7 +51,7 @@ use crate::math::{Rectangle, Vec2};
 use crate::view::{ScaleCap, View};
 use crate::{Layout, EDITOR_BAR_HIT_SLACK, EDITOR_DROPDOWN_ROW_H, EDITOR_DROPDOWN_W, EDITOR_SETTINGS_W, HUD_BAR_HEIGHT};
 
-use super::Category;
+use super::{BrushRow, Category};
 
 /// The text size of the bar's small labels - UNDO, REDO, FIT, CHECK, PLAY
 /// HERE and the clear flag's par - with a mouse: the 11 points Apple's
@@ -75,11 +87,27 @@ pub const LOAD_VISIBLE_ROWS: usize = 8;
 /// The Load list's width.
 pub const LOAD_PANEL_W: f32 = 360.0;
 
+/// The STAMPS list's width: a stamp's picture, its name and its size.
+pub const STAMPS_PANEL_W: f32 = 320.0;
+
+/// The most rows the STAMPS list shows at once, as the Load list.
+pub const STAMPS_VISIBLE_ROWS: usize = LOAD_VISIBLE_ROWS;
+
+/// The box a stamp's picture stands in at its STAMPS row's left, 8 points
+/// in.
+pub const STAMP_PICTURE: (f32, f32) = (56.0, 40.0);
+
+/// The room a stamp's name has in its row: from 12 points past its picture
+/// to the size in cells at the row's right end (`text_tests` holds every
+/// language's names to it).
+pub const STAMP_NAME_W: f32 = STAMPS_PANEL_W - 8.0 - STAMP_PICTURE.0 - 12.0 - 52.0;
+
 /// The Save prompt's size.
 pub const SAVE_PROMPT: (f32, f32) = (300.0, 80.0);
 
-/// The palette the folded TOOLS button opens: a row per category, its
-/// name in a column of this width, then a square cell per tool.
+/// The palette the folded TOOLS button opens: a row per category and the
+/// brush's row, its name in a column of this width, then a square cell per
+/// tool.
 pub const PALETTE_LABEL_W: f32 = 72.0;
 
 /// A palette cell: a dropdown row's height, square.
@@ -123,7 +151,10 @@ struct Metrics {
     category_list: f32,
     /// After the five category buttons.
     categories_gap: f32,
-    /// The TOOLS button the five fold into.
+    /// BRUSH, after the five: the brush's shape, the select tool and the
+    /// stamps (`BrushRow`).
+    brush: Slot,
+    /// The TOOLS button the five and BRUSH fold into.
     folded: Slot,
     erase: Slot,
     undo: Slot,
@@ -145,6 +176,7 @@ const MOUSE: Metrics = Metrics {
     category_icon: 32.0,
     category_list: 20.0,
     categories_gap: 8.0,
+    brush: slot(52.0, 8.0),
     folded: slot(52.0, 8.0),
     erase: slot(40.0, 8.0),
     undo: slot(40.0, 8.0),
@@ -165,6 +197,7 @@ const TOUCH: Metrics = Metrics {
     category_icon: 44.0,
     category_list: 44.0,
     categories_gap: 8.0,
+    brush: slot(64.0, 8.0),
     folded: slot(64.0, 8.0),
     erase: slot(44.0, 8.0),
     undo: slot(44.0, 8.0),
@@ -203,10 +236,11 @@ pub struct CategoryButton {
 /// The tool categories in the bar: a button each, or folded into one.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BarTools {
-    /// The five category buttons, in `Category::ALL` order.
+    /// The five category buttons, in `Category::ALL` order; BRUSH follows
+    /// them (`Bar::brush`).
     Categories([CategoryButton; 5]),
-    /// One TOOLS button opening the palette of every category: what a bar
-    /// too narrow for the five shows.
+    /// One TOOLS button opening the palette of every category and the
+    /// brush's row: what a bar too narrow for the five and BRUSH shows.
     Folded(Rectangle),
 }
 
@@ -223,6 +257,9 @@ pub struct Bar {
     /// The map's name, where the bar has the room.
     pub name: Option<Rectangle>,
     pub tools: BarTools,
+    /// BRUSH, after the five category buttons; `None` on a folded bar,
+    /// whose palette carries the brush's row instead.
+    pub brush: Option<Rectangle>,
     pub erase: Rectangle,
     pub undo: Rectangle,
     pub redo: Rectangle,
@@ -246,6 +283,8 @@ pub enum BarButton {
     CategoryMenu(Category),
     /// The folded TOOLS button: open the palette.
     Tools,
+    /// BRUSH: open its list (`BrushRow`).
+    Brush,
     Erase,
     Undo,
     Redo,
@@ -271,9 +310,9 @@ impl Bar {
 
     /// The bar laid out in `ui` (see the module docs): PLAY at the safe
     /// area's right end with PLAY HERE before it; from the left the buttons
-    /// in a row, the five category buttons folded into TOOLS where the row
-    /// would not reach PLAY HERE with them, then the map's name and the
-    /// BUILD label in what room is left, each only whole.
+    /// in a row, the five category buttons and BRUSH folded into TOOLS
+    /// where the row would not reach PLAY HERE with them, then the map's
+    /// name and the BUILD label in what room is left, each only whole.
     pub fn of(ui: &UiFrame) -> Bar {
         let m = metrics(ui.touch);
         let strip = Self::strip_of(ui);
@@ -287,7 +326,7 @@ impl Bar {
         // The row from the eraser to the clear flag, whatever comes first.
         let after: f32 = [m.erase, m.undo, m.redo, m.file, m.map, m.fit, m.check, m.clear].iter().map(|s| s.w + s.gap).sum();
         let room = here.x - m.right_gap - left;
-        let categories = Category::ALL.len() as f32 * (m.category_icon + m.category_list) + m.categories_gap;
+        let categories = Category::ALL.len() as f32 * (m.category_icon + m.category_list) + m.categories_gap + m.brush.w + m.brush.gap;
         let folded = categories + after > room;
         let tools_w = if folded { m.folded.w + m.folded.gap } else { categories };
         let spare = room - tools_w - after;
@@ -311,18 +350,19 @@ impl Bar {
             x += w + m.name.gap;
             r
         });
-        let tools = if folded {
+        let (tools, brush) = if folded {
             let r = at(x, m.folded.w);
             x += m.folded.w + m.folded.gap;
-            BarTools::Folded(r)
+            (BarTools::Folded(r), None)
         } else {
             let w = m.category_icon + m.category_list;
             let buttons = std::array::from_fn(|i| {
                 let bx = x + i as f32 * w;
                 CategoryButton { rect: at(bx, w), icon: at(bx, m.category_icon), list: at(bx + m.category_icon, m.category_list) }
             });
+            let brush = at(x + Category::ALL.len() as f32 * w + m.categories_gap, m.brush.w);
             x += categories;
-            BarTools::Categories(buttons)
+            (BarTools::Categories(buttons), Some(brush))
         };
         let mut next = |s: Slot| {
             let r = at(x, s.w);
@@ -331,7 +371,7 @@ impl Bar {
         };
         let (erase, undo, redo, file, map, fit, check, clear) =
             (next(m.erase), next(m.undo), next(m.redo), next(m.file), next(m.map), next(m.fit), next(m.check), next(m.clear));
-        Bar { strip, label, name, tools, erase, undo, redo, file, map, fit, check, clear, here, play, touch: ui.touch }
+        Bar { strip, label, name, tools, brush, erase, undo, redo, file, map, fit, check, clear, here, play, touch: ui.touch }
     }
 
     /// The category button of `category`, while the five are in the bar.
@@ -363,6 +403,7 @@ impl Bar {
             }
             BarTools::Folded(r) => out.push((BarButton::Tools, *r)),
         }
+        out.extend(self.brush.map(|r| (BarButton::Brush, r)));
         out.extend([
             (BarButton::Erase, self.erase),
             (BarButton::Undo, self.undo),
@@ -413,6 +454,7 @@ impl Bar {
             }
             BarTools::Folded(r) => out.push(("tools".into(), *r)),
         }
+        out.extend(self.brush.map(|r| ("brush".to_string(), r)));
         out
     }
 }
@@ -535,13 +577,15 @@ pub fn canvas_frame(region: (f32, f32), cap: Option<ScaleCap>) -> (Layout, View)
 }
 
 /// The builder's chrome on one frame, in UI points (`MapEditor::chrome`):
-/// the bar, the room under it, and the open popup's layout.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// the bar, the room under it, the open popup's layout and, with the select
+/// tool and no popup open, the action strip.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Chrome {
     pub bar: Bar,
     /// The room under the bar inside the safe area (`BuilderFrame::under_bar`).
     pub room: Rectangle,
     pub popup: Option<PopupLayout>,
+    pub strip: Option<Strip>,
 }
 
 /// Where the open popup's panel and rows stand.
@@ -549,11 +593,15 @@ pub struct Chrome {
 pub enum PopupLayout {
     /// A category's tool list, a row per tool.
     Dropdown(Category, Rows),
-    /// The folded bar's palette of every category.
+    /// BRUSH's list, a row per `BrushRow`.
+    Brush(Rows),
+    /// The folded bar's palette of every category and the brush's row.
     Palette(Palette),
     /// The FILE menu, a row per `FileRow`.
     File(Rows),
     Load(LoadLayout),
+    /// The STAMPS list, the Load list's shape at `STAMPS_PANEL_W`.
+    Stamps(LoadLayout),
     /// The Save prompt's panel.
     Save(Rectangle),
     Settings(SettingsLayout),
@@ -564,9 +612,9 @@ impl PopupLayout {
     /// The popup's panel: a press inside it is the popup's.
     pub fn panel(&self) -> Rectangle {
         match self {
-            PopupLayout::Dropdown(_, rows) | PopupLayout::File(rows) => rows.panel,
+            PopupLayout::Dropdown(_, rows) | PopupLayout::Brush(rows) | PopupLayout::File(rows) => rows.panel,
             PopupLayout::Palette(palette) => palette.panel,
-            PopupLayout::Load(load) => load.rows.panel,
+            PopupLayout::Load(list) | PopupLayout::Stamps(list) => list.rows.panel,
             PopupLayout::Save(panel) => *panel,
             PopupLayout::Settings(settings) => settings.rows.panel,
             PopupLayout::Lint(lint) => lint.panel,
@@ -636,25 +684,32 @@ pub fn hanging_list(anchor: Rectangle, room: Rectangle, n: usize, w: f32) -> Row
 }
 
 /// The palette the folded TOOLS button opens: a row per category - its
-/// name, then a cell per tool - hanging from the button.
+/// name, then a cell per tool - and under them the brush's row, a cell per
+/// `BrushRow`, hanging from the button. Six rows, which the room under the
+/// bar holds on the smallest screen.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
     pub panel: Rectangle,
 }
 
 impl Palette {
-    /// The palette hanging from `anchor` in `room`, as wide as the longest
-    /// category needs.
+    /// The palette hanging from `anchor` in `room`, as wide as its longest
+    /// row needs.
     pub fn of(anchor: Rectangle, room: Rectangle) -> Palette {
-        let most = Category::ALL.iter().map(|c| c.tools().count()).max().unwrap_or(1);
+        let most = Category::ALL.iter().map(|c| c.tools().count()).max().unwrap_or(1).max(BrushRow::ALL.len());
         let w = PALETTE_LABEL_W + most as f32 * PALETTE_CELL;
-        let h = Category::ALL.len() as f32 * PALETTE_CELL;
+        let h = (Category::ALL.len() + 1) as f32 * PALETTE_CELL;
         Palette { panel: Rectangle::new(slide(anchor.x, w, room), room.y, w, h) }
+    }
+
+    /// Row `index`: the categories', then the brush's.
+    fn row_at(&self, index: usize) -> Rectangle {
+        Rectangle::new(self.panel.x, self.panel.y + index as f32 * PALETTE_CELL, self.panel.width, PALETTE_CELL)
     }
 
     /// The category's row.
     pub fn row(&self, category: Category) -> Rectangle {
-        Rectangle::new(self.panel.x, self.panel.y + category.index() as f32 * PALETTE_CELL, self.panel.width, PALETTE_CELL)
+        self.row_at(category.index())
     }
 
     /// The category's name, at its row's left.
@@ -666,6 +721,23 @@ impl Palette {
     /// The category's `i`th tool's cell.
     pub fn cell(&self, category: Category, i: usize) -> Rectangle {
         let row = self.row(category);
+        Rectangle::new(row.x + PALETTE_LABEL_W + i as f32 * PALETTE_CELL, row.y, PALETTE_CELL, PALETTE_CELL)
+    }
+
+    /// The brush's row, under the categories'.
+    pub fn brush_row(&self) -> Rectangle {
+        self.row_at(Category::ALL.len())
+    }
+
+    /// The brush row's name, at its left.
+    pub fn brush_label(&self) -> Rectangle {
+        let row = self.brush_row();
+        Rectangle::new(row.x, row.y, PALETTE_LABEL_W, row.height)
+    }
+
+    /// The brush row's `i`th cell (`BrushRow::ALL`).
+    pub fn brush_cell(&self, i: usize) -> Rectangle {
+        let row = self.brush_row();
         Rectangle::new(row.x + PALETTE_LABEL_W + i as f32 * PALETTE_CELL, row.y, PALETTE_CELL, PALETTE_CELL)
     }
 }
@@ -765,16 +837,169 @@ pub struct LoadLayout {
 
 impl LoadLayout {
     pub fn of(room: Rectangle, entries: usize) -> LoadLayout {
+        Self::sized(room, entries, LOAD_PANEL_W, LOAD_VISIBLE_ROWS)
+    }
+
+    /// A list of `entries` rows `width` wide, at most `most` at once, in
+    /// the Load list's shape: the STAMPS list's.
+    pub fn sized(room: Rectangle, entries: usize, width: f32, most: usize) -> LoadLayout {
         let h = EDITOR_DROPDOWN_ROW_H;
-        let max = rows_in(room, h).clamp(2, LOAD_VISIBLE_ROWS);
+        let max = rows_in(room, h).clamp(2, most.max(2));
         let shown = entries.clamp(1, max);
         let paged = entries > max;
         let per_page = if paged { max - 1 } else { max };
         let height = shown as f32 * h;
-        let panel = crate::hud::centred_in(crate::Rect::new(room.x, room.y, room.width, room.height), LOAD_PANEL_W, height);
-        let rows = Rows { panel, per_column: shown, row_w: LOAD_PANEL_W, row_h: h };
+        let panel = crate::hud::centred_in(crate::Rect::new(room.x, room.y, room.width, room.height), width, height);
+        let rows = Rows { panel, per_column: shown, row_w: width, row_h: h };
         let pager = paged.then(|| Pager { row: rows.row(per_page) });
         LoadLayout { rows, per_page, pager }
+    }
+}
+
+/// What a press on the select tool's strip lands on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StripButton {
+    Copy,
+    Cut,
+    Paste,
+    /// Mirror the selection (or the paste ghost) left to right.
+    FlipH,
+    /// Mirror it top to bottom.
+    FlipV,
+    Delete,
+    /// Keep the selection as a stamp for this session.
+    SaveStamp,
+    /// Open the STAMPS list.
+    Stamps,
+    /// Put the paste ghost down where it stands.
+    Place,
+    /// Take the paste ghost away.
+    Cancel,
+}
+
+impl StripButton {
+    /// The strip's buttons while a selection is being worked on, in order.
+    pub const SELECTION: [StripButton; 8] = [
+        StripButton::Copy,
+        StripButton::Cut,
+        StripButton::Paste,
+        StripButton::FlipH,
+        StripButton::FlipV,
+        StripButton::Delete,
+        StripButton::SaveStamp,
+        StripButton::Stamps,
+    ];
+
+    /// The strip's buttons while a paste ghost stands on the canvas.
+    pub const GHOST: [StripButton; 4] = [StripButton::Place, StripButton::FlipH, StripButton::FlipV, StripButton::Cancel];
+
+    /// As `status.builder.buttons` names it.
+    pub fn name(self) -> &'static str {
+        match self {
+            StripButton::Copy => "sel_copy",
+            StripButton::Cut => "sel_cut",
+            StripButton::Paste => "sel_paste",
+            StripButton::FlipH => "sel_flip_h",
+            StripButton::FlipV => "sel_flip_v",
+            StripButton::Delete => "sel_delete",
+            StripButton::SaveStamp => "sel_stamp",
+            StripButton::Stamps => "sel_stamps",
+            StripButton::Place => "sel_place",
+            StripButton::Cancel => "sel_cancel",
+        }
+    }
+
+    /// Whether it is a picture rather than a word: the two flips.
+    pub fn is_icon(self) -> bool {
+        matches!(self, StripButton::FlipH | StripButton::FlipV)
+    }
+
+    /// The message on a button with a word; `None` for a picture's.
+    pub fn label_key(self) -> Option<crate::text::Key> {
+        use crate::text::keys;
+        Some(match self {
+            StripButton::Copy => keys::SELECT_COPY,
+            StripButton::Cut => keys::SELECT_CUT,
+            StripButton::Paste => keys::SELECT_PASTE,
+            StripButton::Delete => keys::SELECT_DELETE,
+            StripButton::SaveStamp => keys::SELECT_SAVE_STAMP,
+            StripButton::Stamps => keys::SELECT_STAMPS,
+            StripButton::Place => keys::SELECT_PLACE,
+            StripButton::Cancel => keys::SELECT_CANCEL,
+            StripButton::FlipH | StripButton::FlipV => return None,
+        })
+    }
+
+    /// Its width in points: a word's button, or a picture's - a finger's
+    /// size on a touch screen, the bar's small buttons' with a mouse.
+    pub fn width(self, touch: bool) -> f32 {
+        match (self.is_icon(), touch) {
+            (true, true) => STRIP_ICON_W.1,
+            (true, false) => STRIP_ICON_W.0,
+            (false, true) => STRIP_WORD_W.1,
+            (false, false) => STRIP_WORD_W.0,
+        }
+    }
+}
+
+/// A strip button with a word, with a mouse and on a touch screen: its
+/// label in the chrome's small text inside its box (`SMALL_BOX_INSET`
+/// short of it), the room `text_tests` holds every language to.
+pub const STRIP_WORD_W: (f32, f32) = (64.0, 76.0);
+
+/// A strip button with a picture: the bar's small buttons' 32 with a
+/// mouse, 44 on a touch screen.
+pub const STRIP_ICON_W: (f32, f32) = (32.0, 44.0);
+
+/// Between two of the strip's buttons.
+const STRIP_GAP: f32 = 4.0;
+
+/// One of the strip's buttons: where it stands and whether it can act now
+/// - a dim one (COPY with nothing selected) is drawn and never pressed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StripSlot {
+    pub button: StripButton,
+    pub rect: Rectangle,
+    pub enabled: bool,
+}
+
+/// The select tool's action strip (the module docs): its buttons in a row
+/// on a plate hanging under the bar from the room's top-left corner.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Strip {
+    /// The plate: a press inside it is the strip's, never the canvas's.
+    pub panel: Rectangle,
+    pub slots: Vec<StripSlot>,
+}
+
+impl Strip {
+    /// The strip of `buttons` (each with whether it can act now) in `room`,
+    /// laid out for a touch screen or a mouse.
+    pub fn of(room: Rectangle, touch: bool, buttons: &[(StripButton, bool)]) -> Strip {
+        let h = button_height(touch);
+        let y = room.y + PLATE_PAD;
+        let mut x = room.x + PLATE_PAD;
+        let slots: Vec<StripSlot> = buttons
+            .iter()
+            .map(|&(button, enabled)| {
+                let w = button.width(touch);
+                let rect = Rectangle::new(x, y, w, h);
+                x += w + STRIP_GAP;
+                StripSlot { button, rect, enabled }
+            })
+            .collect();
+        let right = if slots.is_empty() { room.x + 2.0 * PLATE_PAD } else { x - STRIP_GAP + PLATE_PAD };
+        Strip { panel: Rectangle::new(room.x, room.y, right - room.x, h + 2.0 * PLATE_PAD), slots }
+    }
+
+    /// The button that can act under `p` (UI points).
+    pub fn hit(&self, p: Vec2) -> Option<StripButton> {
+        self.slots.iter().find(|s| s.enabled && s.rect.contains(p)).map(|s| s.button)
+    }
+
+    /// The buttons that can act, by name (`status.builder.buttons`).
+    pub fn named(&self) -> Vec<(String, Rectangle)> {
+        self.slots.iter().filter(|s| s.enabled).map(|s| (s.button.name().to_string(), s.rect)).collect()
     }
 }
 
@@ -874,11 +1099,16 @@ mod chrome_tests {
     /// The bar on every window: inside the safe area under its top edge,
     /// every button inside the chrome's area, no two overlapping, PLAY at
     /// the right end, 44 points both ways on a touch screen and the 32 a
-    /// desktop's bar has with a mouse.
+    /// desktop's bar has with a mouse; BRUSH beside the five categories
+    /// exactly while they are in the bar.
     #[test]
     fn the_bar_holds_every_button_inside_the_safe_area_on_every_window() {
         for ui in frames() {
             let bar = Bar::of(&ui);
+            assert_eq!(bar.brush.is_some(), matches!(bar.tools, BarTools::Categories(_)), "{ui:?}");
+            if let (Some(brush), Some(pickup)) = (bar.brush, bar.category(Category::Pickup)) {
+                assert!(brush.x >= pickup.rect.x + pickup.rect.width && brush.x + brush.width <= bar.erase.x, "{ui:?}: BRUSH between the five and the eraser");
+            }
             assert!(inside(Rectangle::new(0.0, bar.strip.y, bar.strip.width, bar.strip.height), Rectangle::new(0.0, 0.0, ui.screen.w, ui.screen.h)));
             assert!(bar.strip.y >= safe(&ui).y - 1e-3, "{ui:?}: the bar under the safe area's top");
             let buttons = bar.buttons();
@@ -905,31 +1135,33 @@ mod chrome_tests {
         }
     }
 
-    /// A desktop's window keeps the bar it had when the bar was part of the
-    /// builder's bitmap: at a point a pixel and wide enough, every slot
-    /// where it stood, at its size; a narrow one folds the categories
-    /// rather than shrink a button.
+    /// A desktop's window keeps the slots the bar had when it was part of
+    /// the builder's bitmap, a point a pixel, with BRUSH after the five
+    /// categories; short of room the BUILD label goes first, then the name
+    /// narrows, then the categories and BRUSH fold rather than shrink a
+    /// button.
     #[test]
     fn a_desktops_bar_keeps_its_slots_and_a_narrow_one_folds() {
-        let ui = UiFrame::plain((1088.0, 576.0));
+        let ui = UiFrame::plain((1280.0, 720.0));
         let bar = Bar::of(&ui);
-        assert_eq!(bar.strip, Rectangle::new(0.0, 0.0, 1088.0, 32.0));
+        assert_eq!(bar.strip, Rectangle::new(0.0, 0.0, 1280.0, 32.0));
         assert_eq!(bar.label.map(|r| r.x), Some(8.0));
         assert_eq!(bar.name, Some(Rectangle::new(72.0, 0.0, 152.0, 32.0)));
         let wall = bar.category(Category::Wall).expect("five category buttons");
         assert_eq!(wall.rect, Rectangle::new(232.0, 0.0, 52.0, 32.0));
         assert_eq!(wall.icon.width, 32.0);
         let slots = [
-            (bar.erase, 500.0, 40.0),
-            (bar.undo, 548.0, 40.0),
-            (bar.redo, 596.0, 40.0),
-            (bar.file, 644.0, 64.0),
-            (bar.map, 716.0, 64.0),
-            (bar.fit, 788.0, 40.0),
-            (bar.check, 832.0, 56.0),
-            (bar.clear, 890.0, 44.0),
-            (bar.here, 936.0, 68.0),
-            (bar.play, 1008.0, 72.0),
+            (bar.brush.expect("BRUSH beside the five"), 500.0, 52.0),
+            (bar.erase, 560.0, 40.0),
+            (bar.undo, 608.0, 40.0),
+            (bar.redo, 656.0, 40.0),
+            (bar.file, 704.0, 64.0),
+            (bar.map, 776.0, 64.0),
+            (bar.fit, 848.0, 40.0),
+            (bar.check, 892.0, 56.0),
+            (bar.clear, 950.0, 44.0),
+            (bar.here, 1128.0, 68.0),
+            (bar.play, 1200.0, 72.0),
         ];
         for (r, x, w) in slots {
             assert_eq!((r.x, r.width, r.y, r.height), (x, w, 0.0, 32.0), "{r:?}");
@@ -937,10 +1169,18 @@ mod chrome_tests {
         // Wider: the same slots from the left, PLAY HERE and PLAY at the
         // right end.
         let wide = Bar::of(&UiFrame::plain((1600.0, 900.0)));
-        assert_eq!((wide.erase.x, wide.clear.x, wide.play.x), (500.0, 890.0, 1600.0 - 8.0 - 72.0));
-        // Narrow: the label goes, then the name, then the categories fold.
+        assert_eq!((wide.erase.x, wide.clear.x, wide.play.x), (560.0, 950.0, 1600.0 - 8.0 - 72.0));
+        // The arena's own window: the label gone, the name and every button
+        // whole.
+        let arena = Bar::of(&UiFrame::plain((1088.0, 576.0)));
+        assert!(arena.label.is_none() && matches!(arena.tools, BarTools::Categories(_)), "{arena:?}");
+        assert_eq!(arena.name, Some(Rectangle::new(8.0, 0.0, 152.0, 32.0)));
+        assert_eq!((arena.erase.x, arena.clear.x, arena.here.x), (496.0, 886.0, 936.0));
+        // Narrower: the categories and BRUSH fold into TOOLS, and the room
+        // it frees gives the label back; narrower still, the name goes.
         let narrow = Bar::of(&UiFrame::plain((900.0, 500.0)));
-        assert!(narrow.label.is_none() && matches!(narrow.tools, BarTools::Categories(_)), "{narrow:?}");
+        assert!(narrow.brush.is_none() && matches!(narrow.tools, BarTools::Folded(_)), "{narrow:?}");
+        assert_eq!(narrow.name.map(|r| r.width), Some(152.0));
         let narrower = Bar::of(&UiFrame::plain((720.0, 400.0)));
         assert!(narrower.name.is_none() && matches!(narrower.tools, BarTools::Folded(_)), "{narrower:?}");
         assert_eq!(narrower.erase.width, 40.0, "folded, not shrunk");
@@ -1026,6 +1266,22 @@ mod chrome_tests {
                     assert!(cell.width >= UI_TOUCH_PT && cell.height >= UI_TOUCH_PT);
                 }
             }
+            for i in 0..BrushRow::ALL.len() {
+                let cell = palette.brush_cell(i);
+                check("a palette brush cell", cell);
+                assert!(cell.width >= UI_TOUCH_PT && cell.height >= UI_TOUCH_PT);
+            }
+            let brush = menu_list(bar.brush.unwrap_or_else(|| bar.tools_anchor(Category::Wall)), room, BrushRow::ALL.len());
+            check("BRUSH's list", brush.panel);
+            for i in 0..BrushRow::ALL.len() {
+                check("a BRUSH row", brush.row(i));
+                assert!(brush.row(i).height >= UI_TOUCH_PT);
+            }
+            for entries in [1, 3, 9, 40] {
+                let stamps = LoadLayout::sized(room, entries, STAMPS_PANEL_W, STAMPS_VISIBLE_ROWS);
+                check("the STAMPS list", stamps.rows.panel);
+                assert!(entries <= stamps.per_page || stamps.pager.is_some(), "{entries} stamps and no pager");
+            }
             let file = menu_list(bar.file, room, 4);
             check("the FILE menu", file.panel);
             let settings = SettingsLayout::of(bar.map, room, 16);
@@ -1057,6 +1313,43 @@ mod chrome_tests {
             check("the Save prompt", save_prompt(room));
             let nav = navigator(room, (180.0, 100.0)).expect("a navigator");
             check("the navigator", crate::hud::Corners::plate(nav));
+        }
+    }
+
+    /// The select tool's strip on every window, both its faces: on a plate
+    /// hanging from the room's top-left corner, inside the room, its
+    /// buttons in a row inside the plate with none overlapping another, a
+    /// finger's size both ways on a touch screen and the bar's height with
+    /// a mouse; a press on a live button comes back through the UI frame
+    /// onto it, and one on a dim button presses nothing.
+    #[test]
+    fn the_strip_hangs_under_the_bar_inside_the_room_on_every_window() {
+        for ui in frames() {
+            let frame = BuilderFrame::new(ui, (1088.0, 544.0), MapClass::Arena, None);
+            let (bar, room) = (frame.bar(), frame.under_bar());
+            for face in [&StripButton::SELECTION[..], &StripButton::GHOST[..]] {
+                let buttons: Vec<(StripButton, bool)> = face.iter().enumerate().map(|(i, &b)| (b, i % 3 != 1)).collect();
+                let strip = Strip::of(room, ui.touch, &buttons);
+                assert!(inside(strip.panel, room), "{ui:?}: the strip {:?} leaves {room:?}", strip.panel);
+                assert!(strip.panel.y >= bar.strip.y + bar.strip.height - 1e-3, "{ui:?}: the strip over the bar");
+                assert_eq!(strip.slots.len(), face.len());
+                for (i, slot) in strip.slots.iter().enumerate() {
+                    assert!(inside(slot.rect, strip.panel), "{ui:?}: {:?} leaves its plate", slot.button);
+                    if ui.touch {
+                        assert!(slot.rect.width >= UI_TOUCH_PT - 1e-3 && slot.rect.height >= UI_TOUCH_PT - 1e-3, "{ui:?}: {:?} {:?}", slot.button, slot.rect);
+                    } else {
+                        assert_eq!(slot.rect.height, HUD_BAR_HEIGHT as f32);
+                    }
+                    for other in &strip.slots[i + 1..] {
+                        assert!(!overlap(slot.rect, other.rect), "{ui:?}: {:?} overlaps {:?}", slot.button, other.button);
+                    }
+                    let at = Vec2::new(slot.rect.x + slot.rect.width / 2.0, slot.rect.y + slot.rect.height / 2.0);
+                    let back = ui.to_ui(ui.to_window(at));
+                    assert_eq!(strip.hit(back), slot.enabled.then_some(slot.button), "{ui:?}: {:?}", slot.button);
+                }
+                let named: Vec<String> = strip.named().into_iter().map(|(n, _)| n).collect();
+                assert_eq!(named.len(), buttons.iter().filter(|(_, live)| *live).count(), "only the live buttons are named");
+            }
         }
     }
 

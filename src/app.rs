@@ -1978,6 +1978,10 @@ pub fn run(args: Args) {
                     backspace: rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE),
                     undo: ctrl && rl.is_key_pressed(KeyboardKey::KEY_Z),
                     redo: ctrl && rl.is_key_pressed(KeyboardKey::KEY_Y),
+                    copy: ctrl && rl.is_key_pressed(KeyboardKey::KEY_C),
+                    cut: ctrl && rl.is_key_pressed(KeyboardKey::KEY_X),
+                    paste: ctrl && rl.is_key_pressed(KeyboardKey::KEY_V),
+                    delete: rl.is_key_pressed(KeyboardKey::KEY_DELETE),
                     typed,
                     // The fingers themselves, ids and all - the builder's
                     // gestures read every one (`editor::gesture`), and

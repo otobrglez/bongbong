@@ -260,6 +260,38 @@ editor-loaded = naloženo: { $name }
 editor-saving-unavailable = shranjevanje v tej izdaji ni na voljo: spremembe ostanejo v pomnilniku do konca seje
 editor-no-name = zemljevid še nima imena: uporabi SHRANI KOT
 editor-bad-name = ime "{ $name }" sme imeti le črke, števke, - in _
+editor-copied = { $n ->
+    [one] kopirana { $n } celica
+    [two] kopirani { $n } celici
+    [few] kopirane { $n } celice
+   *[other] kopiranih { $n } celic
+}
+editor-cut = { $n ->
+    [one] izrezana { $n } celica
+    [two] izrezani { $n } celici
+    [few] izrezane { $n } celice
+   *[other] izrezanih { $n } celic
+}
+editor-stamp-kept = shranjeno kot { $name } med VZORCI
+editor-stamp-empty = ničesar za shraniti: izbor je prazen
+
+editor-brush = ČOPIČ
+brush-pen = svinčnik
+brush-stamps = vzorci...
+
+select-copy = KOPIRAJ
+select-cut = IZREŽI
+select-paste = PRILEPI
+select-delete = IZBRIŠI
+select-save-stamp = + VZOREC
+select-stamps = VZORCI
+select-place = POLOŽI
+select-cancel = PREKLIČI
+
+stamp-fort = trdnjava
+stamp-bunker = bunker
+stamp-river-bend = rečni zavoj
+stamp-saved = moj vzorec { $n }
 
 tool-brick = opeka
 tool-iron = železo
@@ -300,6 +332,7 @@ tool-gun_tower_enemy = s. strojnica
 tool-bio_slush = bio brozga
 tool-bio_slush_enemy = s. brozga
 tool-eraser = radirka
+tool-select = izbor
 
 tool-short-tall_grass = trava
 tool-short-oil_drum = olje
