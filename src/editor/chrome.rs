@@ -496,31 +496,36 @@ pub struct BuilderFrame {
 impl BuilderFrame {
     /// The builder on the window `ui` describes, for a map of `field` world
     /// pixels and class `class`: the bar along the top (`Bar::strip_of`),
-    /// and under it the canvas. An arena's bitmap is its field, fitted into
-    /// the window under the bar at the scale a round's would be (`cap`) and
-    /// letterboxed - at FIT the very picture a round draws of it. A field
-    /// map's bitmap is made to the shape of the window under the bar
-    /// (`canvas_frame`) and the builder's camera chooses what of the map it
-    /// shows.
+    /// and under it the canvas, between the safe area's sides - so a notch
+    /// or a rounded corner never stands over the map's edge columns - down
+    /// to the window's bottom. An arena's bitmap is its field, fitted into
+    /// that region at the scale a round's would be (`cap`) and letterboxed
+    /// - at FIT the very picture a round draws of it. A field map's bitmap
+    /// is made to the region's shape (`canvas_frame`) and the builder's
+    /// camera chooses what of the map it shows.
     pub fn new(ui: UiFrame, field: (f32, f32), class: MapClass, cap: Option<ScaleCap>) -> BuilderFrame {
         let window = (ui.screen.w * ui.scale, ui.screen.h * ui.scale);
         let strip = Bar::strip_of(&ui);
         let top = (strip.y + strip.height) * ui.scale;
-        let region = (window.0.max(1.0), (window.1 - top).max(1.0));
+        let left = (ui.area.x - UI_EDGE_PT) * ui.scale;
+        let right = (ui.area.x + ui.area.w + UI_EDGE_PT) * ui.scale;
+        let region = ((right - left).max(1.0), (window.1 - top).max(1.0));
         let (layout, view) = if class.follows() {
             canvas_frame(region, cap)
         } else {
             (Layout::bare(field.0, field.1), View::fit_capped(field, region, cap))
         };
-        let view = View { window, offset: Vec2::new(view.offset.x, view.offset.y + top), ..view };
+        let view = View { window, offset: Vec2::new(view.offset.x + left, view.offset.y + top), ..view };
         BuilderFrame { layout, view, ui }
     }
 
-    /// The builder in a window the size the builder's bitmap had before
-    /// its bar moved onto the window - the map's field under a 32 px bar -
-    /// a unit a point, nothing inset, no touch: what a dev server with no
-    /// window lays the builder out in, and the tests. An arena's canvas
-    /// stands where it always stood in it, at (0, 32) at its own size.
+    /// The builder in a window of the map's field and a 32 px bar under
+    /// it, a unit a point, nothing inset, no touch: what a dev server with
+    /// no window lays the builder out in, and the tests. A field of at
+    /// least `hud::UI_MIN_W` x `UI_MIN_H` less the bar (720 x 320) - the
+    /// standard arena's, say - stands at (0, 32) at its own size; a smaller
+    /// one shrinks the UI point (`UiFrame::new`), so its bar is shorter and
+    /// the field is centred in the room left under it.
     pub fn headless(field: (f32, f32), class: MapClass) -> BuilderFrame {
         let window = (field.0.max(1.0), field.1.max(1.0) + HUD_BAR_HEIGHT as f32);
         BuilderFrame::new(UiFrame::plain(window), field, class, None)
@@ -834,9 +839,17 @@ impl LintLayout {
         Self::row_in(self.panel, index)
     }
 
-    /// A finding row's FIX button, at its right end.
+    /// A finding row's FIX button, at its right end: what a press hits, the
+    /// row's whole height - a finger's size on a touch screen.
     pub fn fix(row: Rectangle) -> Rectangle {
-        Rectangle::new(row.x + row.width - super::SETTINGS_INSET - super::LINT_FIX_W, row.y + 4.0, super::LINT_FIX_W, row.height - 8.0)
+        Rectangle::new(row.x + row.width - super::SETTINGS_INSET - super::LINT_FIX_W, row.y, super::LINT_FIX_W, row.height)
+    }
+
+    /// The FIX button's outline, drawn inside its hit rect (`fix`) a little
+    /// short of the row's top and bottom, so the rows' outlines stand apart.
+    pub fn fix_box(row: Rectangle) -> Rectangle {
+        let hit = Self::fix(row);
+        Rectangle::new(hit.x, hit.y + 4.0, hit.width, hit.height - 8.0)
     }
 }
 
@@ -1344,6 +1357,16 @@ mod chrome_tests {
                 if let Some(pager) = lint.pager {
                     check("the CHECK pager", pager.row);
                 }
+                // Each finding's FIX: inside its row, its outline inside
+                // what a press hits, a finger's size on a touch screen.
+                for slot in 0..lint.per_page.min(findings) {
+                    let row = lint.row(LINT_HEAD_ROWS + slot);
+                    let (fix, outline) = (LintLayout::fix(row), LintLayout::fix_box(row));
+                    assert!(inside(fix, row) && inside(outline, fix), "{ui:?}: FIX {fix:?} in {row:?}");
+                    if ui.touch {
+                        assert!(fix.width >= UI_TOUCH_PT && fix.height >= UI_TOUCH_PT, "{ui:?}: FIX is {fix:?}");
+                    }
+                }
             }
             for entries in [0, 3, 8, 9, 40] {
                 let load = LoadLayout::of(room, entries);
@@ -1479,7 +1502,11 @@ mod chrome_tests {
                 let (ww, wh) = (ui.screen.w * ui.scale, ui.screen.h * ui.scale);
                 assert!(far.x <= ww + 0.5 && far.y <= wh + 0.5, "{ui:?} {class:?}: off the window at {far:?}");
                 if class == MapClass::Field {
-                    assert!((far.y - wh).abs() <= frame.view.scale + 0.5 && corner.x.abs() <= frame.view.scale + 0.5, "{ui:?}: a field map fills the window under the bar");
+                    let (left, right) = ((ui.area.x - UI_EDGE_PT) * ui.scale, (ui.area.x + ui.area.w + UI_EDGE_PT) * ui.scale);
+                    assert!(
+                        (far.y - wh).abs() <= frame.view.scale + 0.5 && (corner.x - left).abs() <= frame.view.scale + 0.5 && (far.x - right).abs() <= frame.view.scale + 0.5,
+                        "{ui:?}: a field map fills the safe area's sides under the bar"
+                    );
                 } else {
                     assert!(((far.x - corner.x) / (far.y - corner.y) - 2.0).abs() < 0.01, "the arena keeps its shape");
                 }
@@ -1491,6 +1518,35 @@ mod chrome_tests {
         // A desktop's arena stands where it stood in the builder's bitmap.
         let frame = BuilderFrame::headless((1088.0, 544.0), MapClass::Arena);
         assert_eq!((frame.view.scale, frame.view.offset), (1.0, Vec2::new(0.0, 32.0)));
+    }
+
+    /// The canvas keeps to the safe area's sides on every window - on a
+    /// phone in landscape the notch's side and the rounded corners' - an
+    /// arena letterboxed between them and a field map filling them to a
+    /// bitmap pixel, with a mouse and on a touch screen.
+    #[test]
+    fn the_canvas_keeps_to_the_safe_areas_sides() {
+        // An iPhone in landscape: 852 x 393 points at three device pixels
+        // a point, the notch's 59 points on either side, the home
+        // indicator's 21 under the glass.
+        let insets = Insets { left: 59.0 * 3.0, top: 0.0, right: 59.0 * 3.0, bottom: 21.0 * 3.0 };
+        let phone = [false, true].map(|touch| UiFrame::new((852.0 * 3.0, 393.0 * 3.0), 3.0, 1.0, insets, touch));
+        for ui in frames().into_iter().chain(phone) {
+            let s = safe(&ui);
+            for (field, class) in [((1088.0, 544.0), MapClass::Arena), ((96.0 * 32.0, 54.0 * 32.0), MapClass::Field)] {
+                let frame = BuilderFrame::new(ui, field, class, None);
+                let c = frame.canvas_ui();
+                assert!(c.x >= s.x - 1e-3 && c.x + c.width <= s.x + s.width + 1e-3, "{ui:?} {class:?}: the canvas {c:?} leaves the safe area's sides {s:?}");
+                if class == MapClass::Field {
+                    let px = frame.view.scale / ui.scale;
+                    assert!(c.x - s.x <= px + 1e-3 && s.x + s.width - (c.x + c.width) <= px + 1e-3, "{ui:?}: a field map fills them, {c:?} in {s:?}");
+                }
+            }
+        }
+        // The phone's: 59 points in on either side.
+        let frame = BuilderFrame::new(phone[1], (96.0 * 32.0, 54.0 * 32.0), MapClass::Field, None);
+        let c = frame.canvas_ui();
+        assert!(c.x >= 59.0 - 1e-3 && c.x + c.width <= 852.0 - 59.0 + 1e-3, "{c:?}");
     }
 
     /// A field map's canvas is the shape of the room it is given - no

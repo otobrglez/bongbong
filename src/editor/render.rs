@@ -970,7 +970,7 @@ impl MapEditor {
             d.draw_text(&words, text_x, (row.y + 8.0) as i32, LINT_TITLE_SIZE, TEXT);
             d.draw_text(&place_text(&finding.cells), text_x, (row.y + 29.0) as i32, UI_SMALL_TEXT, DIM);
             if finding.fix.is_some() {
-                let fix = chrome::LintLayout::fix(row);
+                let fix = chrome::LintLayout::fix_box(row);
                 d.draw_rectangle_rounded_lines_ex(fix, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
                 let label = t.get(keys::CHECK_FIX);
                 let w = text_width(&label, LINT_TITLE_SIZE);
