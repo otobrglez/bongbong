@@ -2247,6 +2247,29 @@ tunables! {
         /// Seconds a wave gate flashes after a tank starts rolling in
         /// through it, and again after one comes through.
         indicator_gate_flash_seconds: f32 = 3.0 in 0.0 ..= 20.0;
+        /// How fast the ring round a lined-up enemy's arrow pulses, per
+        /// second; it brightens and the arrow swells as the enemy's aim
+        /// settles (`indicators::picture`).
+        indicator_pulse_hz: f32 = 5.0 in 0.5 ..= 20.0;
+        /// How much bigger a lined-up enemy's arrow is at the top of its
+        /// pulse once the aim has settled: 0.2 is a fifth.
+        indicator_pulse_swell: f32 = 0.2 in 0.0 ..= 1.0;
+        /// How fast a flashing gate's marks blink, on and off per second,
+        /// as does a teammate's arrow while it drives back in.
+        indicator_gate_blink_hz: f32 = 3.0 in 0.5 ..= 20.0;
+        /// The hit arc's inner radius round the seat's tank, in world
+        /// pixels: just outside the ground ring.
+        indicator_hit_arc_px: f32 = 32.0 in 8.0 ..= 128.0;
+        /// How far round the tank the hit arc reaches, in degrees, centred
+        /// on the way the hit came.
+        indicator_hit_arc_degrees: f32 = 70.0 in 10.0 ..= 360.0;
+        /// Where a touch screen's thumbs rest, which no arrow sits under:
+        /// a pad this many millimetres wide ...
+        indicator_thumb_pad_mm: f32 = 12.0 in 0.0 ..= 60.0;
+        /// ... centred this far in from each side of the screen ...
+        indicator_thumb_in_mm: f32 = 22.0 in 0.0 ..= 80.0;
+        /// ... and this far up from its bottom edge.
+        indicator_thumb_up_mm: f32 = 18.0 in 0.0 ..= 80.0;
     }
 
     group fx {
