@@ -1147,6 +1147,16 @@ tunables! {
         /// by this margin (px). Together these stop frame-to-frame jitter
         /// near 45-degree diagonals.
         ai_dir_switch_margin_px: f32 = 20.0 in 0.0 ..= 200.0;
+        /// Field maps only: a hull reads its route as lanes, turning where
+        /// its slide through the turn ends on the centre line of the cell
+        /// the route turns in, wherever it rides across its lane - a flow
+        /// field's route always, a searched one where the margin above
+        /// never could turn it - and judges a wall ahead from where that
+        /// slide leaves it (`ai::Ai::lane_turn`, `Ai::walks_into_wall`;
+        /// docs/large-maps-follow-camera.md section 12). The margin decides
+        /// the rest, and everything on an arena. Off, every switch is the
+        /// margin's.
+        ai_lane_turns: bool = true in 0 ..= 1;
         /// A committed heading about to walk into a known-blocked grid cell
         /// can be overridden, but only after this much dwell time - much
         /// shorter than `ai_dir_hold_seconds`, yet without some floor a

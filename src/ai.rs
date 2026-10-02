@@ -6,7 +6,7 @@ use crate::math::Vec2;
 
 use crate::bt::{Node, Status, action, condition, selector, sequence};
 use crate::obstacle::Material;
-use crate::pathfind::Grid;
+use crate::pathfind::{Grid, RouteAhead};
 use crate::pickup::PickupKind;
 use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::{
@@ -199,6 +199,11 @@ pub struct Ai {
     /// Where this tank stood at the previous tick - the baseline the next
     /// tick's displacement is measured from. `None` before the first tick.
     last_position: Option<Position>,
+    /// The hull's displacement per second since the previous think - how
+    /// it is really moving, whatever it was told, which is what its slide
+    /// through a turn is reckoned from (`lane_turn`, `walks_into_wall`).
+    /// Zero before there is a displacement to judge.
+    motion: Vec2,
     /// Displacement per second along the commanded heading, smoothed over
     /// `stuck_progress_window_seconds` (an exponential average). `None`
     /// while the tank is deliberately holding position or has no
@@ -372,6 +377,7 @@ impl Default for Ai {
             retreating: false,
             last_move_dir: None,
             last_position: None,
+            motion: Vec2::new(0.0, 0.0),
             progress_avg: None,
             stuck_timer: 0.0,
             hit_alert_timer: 0.0,
@@ -510,6 +516,7 @@ impl Ai {
         // `steer_toward`'s escape.
         let moved = self.last_position.map(|p| Position::new(me.position.x - p.x, me.position.y - p.y));
         self.last_position = Some(me.position);
+        self.motion = moved.map_or(Vec2::new(0.0, 0.0), |m| Vec2::new(m.x / dt.max(f32::EPSILON), m.y / dt.max(f32::EPSILON)));
         match (self.last_move_dir, moved) {
             (Some(dir), Some(moved)) => {
                 let progress = (moved.x * dir.vec().x + moved.y * dir.vec().y) / dt.max(f32::EPSILON);
@@ -728,6 +735,7 @@ impl Ai {
         self.yield_timer = 0.0;
         self.last_move_dir = None;
         self.last_position = None;
+        self.motion = Vec2::new(0.0, 0.0);
         self.progress_avg = None;
         self.stuck_timer = 0.0;
         self.wander_pocketed = false;
@@ -792,11 +800,12 @@ impl Ai {
         grid: &Grid,
         rng: &mut SmallRng,
     ) -> Dir {
-        let path = if ctx.on_portal_cooldown { grid.next_step_walking(from, target) } else { grid.next_step(from, target) };
-        if path.is_none() && !grid.same_cell(from, target) {
+        let heading = self.route_heading();
+        let route = if ctx.on_portal_cooldown { grid.route_ahead_walking(from, target) } else { grid.route_ahead(from, target, heading) };
+        if route.is_none() && !grid.same_cell(from, target) {
             return self.wander(from, bounds, half, margin, None, ctx, grid, rng);
         }
-        self.steer_toward(from, path, target, bounds, half, ctx, grid)
+        self.steer_toward(from, route, target, bounds, half, ctx, grid)
     }
 
     /// Wander toward a roaming local waypoint - `act_patrol`'s own
@@ -933,31 +942,54 @@ impl Ai {
             });
             self.retarget_timer = tuning().enemy_retarget_seconds;
         }
-        let path =
-            if ctx.on_portal_cooldown { grid.next_step_walking(from, self.waypoint) } else { grid.next_step(from, self.waypoint) };
-        self.steer_toward(from, path, self.waypoint, bounds, half, ctx, grid)
+        let heading = self.route_heading();
+        let route =
+            if ctx.on_portal_cooldown { grid.route_ahead_walking(from, self.waypoint) } else { grid.route_ahead(from, self.waypoint, heading) };
+        self.steer_toward(from, route, self.waypoint, bounds, half, ctx, grid)
+    }
+
+    /// Whether this tank reads its route as lanes (`lane_turn`): on a field
+    /// map - the one place a tank keeps a home (`FieldMind::home`, set the
+    /// first tick it stands there) - while `ai_lane_turns` is on. An arena
+    /// steers by the switch margin alone, as it always has.
+    fn lanes(&self) -> bool {
+        self.field.home.is_some() && tuning().ai_lane_turns
+    }
+
+    /// The heading a route is straightened along (`Grid::route_ahead`):
+    /// the one held, while the route is read as lanes.
+    fn route_heading(&self) -> Option<Position> {
+        self.committed_dir.filter(|_| self.lanes()).map(Dir::vec)
     }
 
     /// Shared point-convergence core for both `steer` (chasing/fleeing/etc.
     /// a real target) and `wander` (patrolling a fallback waypoint) once
-    /// the target is known-reachable (or "same cell", i.e. arrived):
-    /// commitment/hold-margin hysteresis, the obstacle-ahead override, the
-    /// stuck-escape safety net, and predictive collision dodging. `path` is
-    /// `grid.next_step(from, target)`, already computed by the caller (it
+    /// the target is known-reachable (or "same cell", i.e. arrived): the
+    /// route read as lanes (`lane_turn`), commitment/hold-margin hysteresis
+    /// for everything else, the obstacle-ahead override, the stuck-escape
+    /// safety net, and predictive collision dodging. `route` is
+    /// `grid.route_ahead(from, target)`, already computed by the caller (it
     /// needed the result anyway, to decide whether to route here or to
     /// `wander` in `target`'s place).
+    #[allow(clippy::too_many_arguments)] // perception is passed by value, not bundled
     fn steer_toward(
         &mut self,
         from: Position,
-        path: Option<Position>,
+        route: Option<RouteAhead>,
         target: Position,
         bounds: (f32, f32),
         half: f32,
         ctx: AvoidCtx,
         grid: &Grid,
     ) -> Dir {
-        let routed = path.unwrap_or(target);
+        let routed = route.map_or(target, |r| r.first());
         let fresh = Dir::toward(from, routed);
+        // The route as lanes, against the heading held: `Some` while it
+        // walks whole cells from the hull's own (see `lane_turn`).
+        let lane = match (self.committed_dir, route) {
+            (Some(heading), Some(route)) if self.lanes() => self.lane_turn(from, heading, &route, ctx, grid),
+            _ => None,
+        };
         // Continuing on the committed heading would walk into a cell the
         // grid already knows is blocked. That's a hard geometric fact, not
         // the wobbling-live-target case the hold/margin gate below exists
@@ -970,10 +1002,16 @@ impl Ai {
         // very jitter commitment exists to prevent, just obstacle-triggered
         // instead of diagonal-target-triggered (see that constant's own
         // comment - found via the probe harness's `--rounds` sweep).
-        let obstacle_ahead = self.dir_hold >= tuning().ai_obstacle_override_hold_seconds
-            && self
-                .committed_dir
-                .is_some_and(|committed| grid.blocked_ahead(from, committed.vec()));
+        let obstacle_ahead =
+            self.dir_hold >= tuning().ai_obstacle_override_hold_seconds && self.walks_into_wall(from, ctx, grid);
+
+        // A due turn waits out the same hold as any other switch, so a
+        // route that may step either way holds each leg that long rather
+        // than turning on every cell.
+        let turn = match lane {
+            Some(Lane::Turn(turn)) if self.dir_hold >= tuning().ai_dir_hold_seconds => Some(turn),
+            _ => None,
+        };
 
         let dir = if self.stuck_timer >= tuning().stuck_escape_seconds {
             // Asked to move for STUCK_ESCAPE_SECONDS running and made no
@@ -1002,17 +1040,20 @@ impl Ai {
                 .find(|&d| !blocked(d))
                 .unwrap_or_else(|| perpendicular(failing, left))
         } else {
-            match self.committed_dir {
-                None => {
+            match (self.committed_dir, turn) {
+                (None, _) => {
                     self.commit(fresh);
                     fresh
                 }
-                Some(_) if obstacle_ahead => fresh,
-                Some(committed) if self.dir_hold < tuning().ai_dir_hold_seconds => {
+                (Some(_), _) if obstacle_ahead => fresh,
+                (Some(_), Some(turn)) => turn,
+                // On its lane, short of its turn or with none in sight: on.
+                (Some(committed), None) if lane.is_some() => committed,
+                (Some(committed), None) if self.dir_hold < tuning().ai_dir_hold_seconds => {
                     // Not held long enough yet: stick with the current heading.
                     committed
                 }
-                Some(committed) => {
+                (Some(committed), None) => {
                     // How far off each axis is the (routed) aim point? Only switch
                     // if the fresh heading is meaningfully better (reduces the
                     // perpendicular error). Uses `routed`, not `target`, so this
@@ -1049,6 +1090,119 @@ impl Ai {
         let dir = self.avoid_collisions(dir, from, bounds, half, ctx, grid);
         self.commit(dir);
         dir
+    }
+
+    /// Whether driving on along the heading held walks into a cell the
+    /// grid knows is blocked (`steer_toward`'s obstacle-ahead override).
+    /// On a field map it is judged from where the slide across that
+    /// heading will leave the hull rather than from its centre: a lane
+    /// turn comes the slide's length before its turning (`lane_turn`), so
+    /// for a moment after it the centre still stands in the lane the hull
+    /// is leaving, whose cell ahead can be the very wall the turn was
+    /// timed to clear; judged from the centre, a hull entering a one-lane
+    /// passage would be thrown back and forth across its mouth.
+    fn walks_into_wall(&self, from: Position, ctx: AvoidCtx, grid: &Grid) -> bool {
+        self.committed_dir.is_some_and(|heading| {
+            let at = if self.lanes() {
+                // The motion across the heading, and the signed slide it
+                // carries the hull on for.
+                let ahead = heading.vec();
+                let across = Vec2::new(self.motion.x * ahead.y.abs(), self.motion.y * ahead.x.abs());
+                let slide = |v: f32| v * v.abs() / (2.0 * ctx.grip.max(1.0));
+                Position::new(from.x + slide(across.x), from.y + slide(across.y))
+            } else {
+                from
+            };
+            grid.blocked_ahead(at, heading.vec())
+        })
+    }
+
+    /// The route read as lanes - the rows and columns of nav cells a hull
+    /// drives along - against `heading`, the heading the hull holds.
+    ///
+    /// A hull does not turn on the spot: whatever it is told, its tracks
+    /// only scrub off the speed along its old heading at their grip
+    /// (`tank_turn_grip_force` over its mass), so it slides on for
+    /// `v^2 / 2a` after it turns - four fifths of a cell for an assault at
+    /// an enemy's pace, more than two for the heaviest hull at its fastest.
+    /// Judged by the switch margin alone, a turn waits until the hull is
+    /// well into the turning, and the slide then carries it past the new
+    /// lane's centre line to its far edge, closer to the next row's centre
+    /// than `ai_dir_switch_margin_px`: no step into that row can ever beat
+    /// the margin again, and a hull whose route turns that way drives past
+    /// every turning, to and fro, for the rest of the round
+    /// (docs/large-maps-follow-camera.md section 12). Here the turn comes
+    /// where the slide ends on the centre line of the cell the route turns
+    /// in - the hull's rest point, its position plus the slide, reaching
+    /// that line on the think nearest the crossing - so a hull drives its
+    /// lanes on their centre lines and the hull's place across its lane
+    /// plays no part in when it turns.
+    ///
+    /// `Lane::Turn` when the route turns across `heading` and that moment has
+    /// come; `Lane::Hold` while the route runs on along `heading` as far as
+    /// it reads, turns further on, or turns where the hull comes too late for
+    /// its slide to end within half a cell of the line (the route from
+    /// further on decides then - never so strictly that the cell it turns in
+    /// offers the hull no think at all); `None` when the route is no walk
+    /// along lanes from here and the margin decides - its first step is
+    /// straight back (blind to a reversal, as ever) or out through a portal,
+    /// or it was searched rather than read from a flow field
+    /// (`RouteAhead::shared`) and the margin can still turn the hull onto it:
+    /// a search's path is one of many as cheap toward a target of the tank's
+    /// own that moves, an engagement slot most of all, and read as lanes it
+    /// crowds the 40-wide levels' corridors (docs/large-maps-follow-camera.md
+    /// section 12). Where the margin never can (`margin_never_turns`: the
+    /// hull rides the edge of its lane on the side the route turns to), a
+    /// searched route's turn is a lane turn too - that is the hull this is
+    /// for, wherever its route comes from. A turn taken before the hull is in
+    /// the cell it turns in sweeps the cells beside the ones it still
+    /// crosses, so it waits for that cell while any of them is blocked: the
+    /// nav grid keeps a hull's centre clear of the walls there.
+    fn lane_turn(&self, from: Position, heading: Dir, route: &RouteAhead, ctx: AvoidCtx, grid: &Grid) -> Option<Lane> {
+        if !route.shared() && !margin_never_turns(from, heading, route) {
+            return None;
+        }
+        let mut at = route.start();
+        for (i, &next) in route.cells().iter().enumerate() {
+            let step = cell_step(at, next)?;
+            if step == heading {
+                at = next;
+                continue;
+            }
+            if step == opposite(heading) {
+                return if i == 0 { None } else { Some(Lane::Hold) };
+            }
+            let along = |p: Vec2| p.x * heading.vec().x + p.y * heading.vec().y;
+            let v = along(self.motion);
+            let slide = v * v.abs() / (2.0 * ctx.grip.max(1.0));
+            let (rest, line) = (along(from) + slide, along(route.centre(at)));
+            // The think nearest the crossing: half of what the hull covers
+            // until the next one either side of the line.
+            let stride = v.abs() * ctx.dt;
+            if rest + 0.5 * stride < line {
+                return Some(Lane::Hold);
+            }
+            // Too late to land in the turn's lane - the slide would end
+            // more than half a cell past its line - and the turn is the
+            // route's from further on. Never so tight that the cell it
+            // turns in offers no think at all: a slide longer than a cell
+            // reaches past the line from the moment the hull comes in.
+            let half = route.cell_size() * 0.5;
+            if rest > line + half.max(slide - half + stride) {
+                return Some(Lane::Hold);
+            }
+            let side = |c: (usize, usize)| {
+                let (dc, dr) = (step.vec().x as isize, step.vec().y as isize);
+                let (col, row) = (c.0 as isize + dc, c.1 as isize + dr);
+                col < 0 || row < 0 || grid.is_blocked(col as usize, row as usize)
+            };
+            let mut crossing = std::iter::once(route.start()).chain(route.cells()[..i].iter().copied()).take_while(|&c| c != at);
+            if crossing.any(side) {
+                return Some(Lane::Hold);
+            }
+            return Some(Lane::Turn(step));
+        }
+        Some(Lane::Hold)
     }
 
     /// Predictively sidestep a likely collision. Given the `desired` heading, look
@@ -1271,6 +1425,47 @@ pub(crate) fn opposite(dir: Dir) -> Dir {
     }
 }
 
+/// What the route read as lanes tells a hull (`Ai::lane_turn`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Lane {
+    /// Keep to the heading: the route runs on along it, or turns further on.
+    Hold,
+    /// Turn this way now: the hull's slide through the turn ends on the
+    /// centre line of the cell the route turns in.
+    Turn(Dir),
+}
+
+/// Whether `steer_toward`'s switch margin can never turn a hull at `from`,
+/// heading `heading`, onto the first step of `route`: a step across the
+/// heading into a lane whose centre line the hull is already nearer than
+/// `ai_dir_switch_margin_px`, because it rides the edge of its own lane on
+/// that side. The margin turns a hull once its error across the heading to
+/// the step's cell beats its error along it by that much, and driving on
+/// never changes the error across, so that turn never comes
+/// (`Ai::lane_turn`).
+fn margin_never_turns(from: Position, heading: Dir, route: &RouteAhead) -> bool {
+    let Some(&next) = route.cells().first() else { return false };
+    match cell_step(route.start(), next) {
+        Some(step) if step != heading && step != opposite(heading) => {
+            let across = |p: Vec2| p.x * step.vec().x + p.y * step.vec().y;
+            across(route.centre(next)) - across(from) <= tuning().ai_dir_switch_margin_px
+        }
+        _ => false,
+    }
+}
+
+/// The heading of one route step between two side-by-side cells, `None`
+/// for any other pair (a portal's exit).
+fn cell_step(from: (usize, usize), to: (usize, usize)) -> Option<Dir> {
+    match (to.0 as isize - from.0 as isize, to.1 as isize - from.1 as isize) {
+        (1, 0) => Some(Dir::Right),
+        (-1, 0) => Some(Dir::Left),
+        (0, 1) => Some(Dir::Down),
+        (0, -1) => Some(Dir::Up),
+        _ => None,
+    }
+}
+
 /// True if heading `dir` from `from` would drive further into a battlefield edge
 /// the tank is already pressed against (within a 1px skin over the clamp margin).
 fn heads_into_wall(dir: Dir, from: Position, bounds: (f32, f32), half: f32) -> bool {
@@ -1295,6 +1490,12 @@ struct AvoidCtx<'a> {
     radius: f32,
     /// This tank's movement speed (px/s).
     speed: f32,
+    /// How hard its tracks scrub off sideways speed (px/s^2):
+    /// `tank_turn_grip_force` over its mass - what sets its slide through
+    /// a turn (`Ai::lane_turn`).
+    grip: f32,
+    /// The seconds this think covers, about the time to the next one.
+    dt: f32,
     /// This tank's portal cooldown is running (`Tank::portal_cooldown`),
     /// so it routes on foot only (`Grid::next_step_walking`): a route
     /// through the hub would walk it back onto the portal it just came out
@@ -1357,6 +1558,25 @@ struct Brain<'a> {
     walls_ahead: [Option<WallAhead>; 4],
     /// How far this tank sees - see `think`'s `sight` parameter.
     sight: f32,
+}
+
+impl<'a> Brain<'a> {
+    /// This tank as `Ai::steer` and `Ai::wander` see it: the motion
+    /// snapshot, its collision radius (`Tank::avoidance_radius` - a safe
+    /// over-approximation of the tank's real, per-row physics collider),
+    /// its top speed and its tracks' grip, this think's span and its
+    /// portal cooldown.
+    fn avoid_ctx(&self) -> AvoidCtx<'a> {
+        AvoidCtx {
+            movers: self.movers,
+            my_index: self.my_index,
+            radius: self.me.avoidance_radius(),
+            speed: self.me.effective_speed(),
+            grip: tuning().tank_turn_grip_force / self.me.mass(),
+            dt: self.dt,
+            on_portal_cooldown: self.me.portal_cooldown > 0.0,
+        }
+    }
 }
 
 impl Brain<'_> {
@@ -1538,14 +1758,8 @@ impl Brain<'_> {
     /// within), the motion snapshot for avoidance, and this frame's
     /// obstacle grid.
     fn steer(&mut self, target: Position) -> Dir {
-        let radius = self.me.avoidance_radius();
-        let ctx = AvoidCtx {
-            movers: self.movers,
-            my_index: self.my_index,
-            radius,
-            speed: self.me.effective_speed(),
-            on_portal_cooldown: self.me.portal_cooldown > 0.0,
-        };
+        let ctx = self.avoid_ctx();
+        let radius = ctx.radius;
         self.ai.steer(
             self.me.position,
             target,
@@ -1562,14 +1776,8 @@ impl Brain<'_> {
     /// mind - `act_patrol`'s own top-level behavior. Thin wrapper around
     /// `Ai::wander`, same shape as `steer` above.
     fn wander(&mut self) -> Dir {
-        let radius = self.me.avoidance_radius();
-        let ctx = AvoidCtx {
-            movers: self.movers,
-            my_index: self.my_index,
-            radius,
-            speed: self.me.effective_speed(),
-            on_portal_cooldown: self.me.portal_cooldown > 0.0,
-        };
+        let ctx = self.avoid_ctx();
+        let radius = ctx.radius;
         self.ai.wander(
             self.me.position,
             (self.width, self.height),
@@ -1584,14 +1792,8 @@ impl Brain<'_> {
 
     /// `wander` confined to `leash` - a guard's beat.
     fn wander_within(&mut self, leash: Leash) -> Dir {
-        let radius = self.me.avoidance_radius();
-        let ctx = AvoidCtx {
-            movers: self.movers,
-            my_index: self.my_index,
-            radius,
-            speed: self.me.effective_speed(),
-            on_portal_cooldown: self.me.portal_cooldown > 0.0,
-        };
+        let ctx = self.avoid_ctx();
+        let radius = ctx.radius;
         self.ai.wander(
             self.me.position,
             (self.width, self.height),
@@ -2440,6 +2642,138 @@ mod role_tests {
         let player = Position::new(frog.x - leash * 0.5, frog.y);
         tick(&mut ai, Position::new(400.0, 300.0), player, player, Some(frog));
         assert_eq!(ai.snapshot().last_action, Some("chase"));
+    }
+}
+
+#[cfg(test)]
+mod lane_tests {
+    use super::*;
+    use crate::PATHFIND_CELL_SIZE as CELL;
+
+    /// An assault's grip (px/s^2) and an enemy's pace (px/s): a slide of
+    /// 160^2 / 1000 = 25.6 px through a turn.
+    const GRIP: f32 = 500.0;
+    const PACE: f32 = 160.0;
+
+    fn at(col: usize, row: usize) -> Position {
+        Position::new((col as f32 + 0.5) * CELL, (row as f32 + 0.5) * CELL)
+    }
+
+    /// A 40 x 30 grid, `walls` blocked, with a field toward cell (10, 20):
+    /// a hull heading east along row 5 west of column 10 reads its route
+    /// on east to column 10 and then south.
+    fn grid(walls: &[(usize, usize)]) -> Grid {
+        let obstacles: Vec<(Position, f32)> = walls.iter().map(|&(c, r)| (at(c, r), CELL / 2.0)).collect();
+        let mut grid = Grid::build(40.0 * CELL, 30.0 * CELL, CELL, 0.0, obstacles.into_iter());
+        grid.add_field(at(10, 20));
+        grid
+    }
+
+    /// What the lanes tell a hull at `from` heading east at `pace`, routed
+    /// to cell (10, 20).
+    fn read(grid: &Grid, from: Position, pace: f32) -> Option<Lane> {
+        read_to(grid, from, pace, at(10, 20))
+    }
+
+    /// `read`, routed to `to`.
+    fn read_to(grid: &Grid, from: Position, pace: f32, to: Position) -> Option<Lane> {
+        let ai = Ai { committed_dir: Some(Dir::Right), motion: Vec2::new(pace, 0.0), ..Ai::default() };
+        let ctx = AvoidCtx { movers: &[], my_index: 0, radius: 20.0, speed: PACE, grip: GRIP, dt: 1.0 / 60.0, on_portal_cooldown: false };
+        let route = grid.route_ahead(from, to, Some(Dir::Right.vec())).expect("routes");
+        ai.lane_turn(from, Dir::Right, &route, ctx, grid)
+    }
+
+    /// The turn comes where the slide ends on the turn's centre line: a
+    /// slide short of column 10's centre holds on, one that reaches it
+    /// turns, a cell before the turning - and where the hull rides across
+    /// its lane makes no difference at all.
+    #[test]
+    fn a_turn_comes_where_the_slide_ends_on_the_turns_centre_line() {
+        let grid = grid(&[]);
+        let line = at(10, 5).x;
+        let slide = PACE * PACE / (2.0 * GRIP);
+        for across in [0.0, 15.5, -15.5] {
+            let y = at(10, 5).y + across;
+            assert_eq!(read(&grid, Position::new(line - slide - 4.0, y), PACE), Some(Lane::Hold), "{across} px across");
+            assert_eq!(read(&grid, Position::new(line - slide, y), PACE), Some(Lane::Turn(Dir::Down)), "{across} px across");
+        }
+        // Standing still it turns on the line itself.
+        assert_eq!(read(&grid, Position::new(line - 2.0, at(10, 5).y), 0.0), Some(Lane::Hold));
+        assert_eq!(read(&grid, Position::new(line, at(10, 5).y), 0.0), Some(Lane::Turn(Dir::Down)));
+        // Far from the turning: on along the lane.
+        assert_eq!(read(&grid, at(3, 5), PACE), Some(Lane::Hold));
+    }
+
+    /// A turn not taken early - the corner it would have cut was shut, or
+    /// the turn came into view too late - is taken in the cell it turns in
+    /// while the slide still ends within half a cell of the line, and left
+    /// to the route from further on past that; a slide longer than a cell
+    /// still gets the first think inside.
+    #[test]
+    fn a_turn_too_late_to_land_in_its_lane_is_left_to_the_route_on() {
+        // Column 9 shut below row 5: the corner a turn from it would cut.
+        let shut = grid(&[(9, 6)]);
+        let (line, y) = (at(10, 5).x, at(10, 5).y);
+        let slide = PACE * PACE / (2.0 * GRIP);
+        assert_eq!(read(&shut, Position::new(line - slide, y), PACE), Some(Lane::Hold), "no cutting the shut corner");
+        assert_eq!(read(&shut, Position::new(line - 15.0, y), PACE), Some(Lane::Turn(Dir::Down)), "in its cell, slide ending 10.6 px past the line");
+        assert_eq!(read(&shut, Position::new(line - 9.0, y), PACE), Some(Lane::Hold), "slide ending 16.6 px past the line");
+        // Half as fast again, a 57.6 px slide: past the line from the moment
+        // it comes in, and it turns there all the same.
+        let fast = 1.5 * PACE;
+        assert_eq!(read(&shut, Position::new(line - 15.0, y), fast), Some(Lane::Turn(Dir::Down)));
+        assert_eq!(read(&shut, Position::new(line - 10.0, y), fast), Some(Lane::Hold));
+    }
+
+    /// A searched route - toward a target of the tank's own, with no field
+    /// to read - is the margin's, as every arena's route is, while the
+    /// margin can turn the hull onto it. Riding the edge of its lane on the
+    /// side the route turns to, nearer the next lane's centre line than
+    /// `ai_dir_switch_margin_px`, the margin never could, and the turn is
+    /// a lane turn: taken where the slide still ends within half a cell of
+    /// the turning's centre line, held past that.
+    #[test]
+    fn a_searched_route_is_left_to_the_margin_but_on_the_edge_of_its_lane() {
+        let plain = Grid::build(40.0 * CELL, 30.0 * CELL, CELL, 0.0, std::iter::empty());
+        let slide = PACE * PACE / (2.0 * GRIP);
+        assert_eq!(read(&plain, Position::new(at(10, 5).x - slide, at(10, 5).y), PACE), None);
+        // Down column 6 is the search's one way from it to (6, 20), and the
+        // turn shows only once the hull is in column 6.
+        let (line, to) = (at(6, 5).x, at(6, 20));
+        let x = line + 12.0 - slide;
+        assert_eq!(read_to(&plain, Position::new(x, at(6, 5).y), PACE, to), None, "on its lane's centre line");
+        let edge = at(6, 5).y + 15.5;
+        assert!(at(6, 6).y - edge <= tuning().ai_dir_switch_margin_px, "the case this is about");
+        assert_eq!(read_to(&plain, Position::new(x, edge), PACE, to), Some(Lane::Turn(Dir::Down)), "slide ending 12 px past the line");
+        assert_eq!(read_to(&plain, Position::new(line + 18.0 - slide, edge), PACE, to), Some(Lane::Hold), "18 px past it");
+    }
+
+    /// Just after an early turn north into a one-lane gap at column 18, the
+    /// hull's centre still stands in column 19, below a wall, while its
+    /// slide west carries it under the gap: on a field map the wall ahead
+    /// is judged where the slide ends, so the turn is not thrown back
+    /// across the gap's mouth; an arena still judges the centre.
+    #[test]
+    fn a_wall_ahead_is_judged_where_the_slide_across_ends() {
+        let grid = grid(&[(19, 4), (17, 4)]);
+        let from = Position::new(611.6, 188.1);
+        let sliding = Ai { committed_dir: Some(Dir::Up), motion: Vec2::new(-129.0, -101.0), ..Ai::default() };
+        let ctx = AvoidCtx { movers: &[], my_index: 0, radius: 20.0, speed: PACE, grip: GRIP, dt: 1.0 / 60.0, on_portal_cooldown: false };
+        let field = Ai { field: FieldMind { home: Some(at(0, 0)), ..FieldMind::default() }, ..sliding };
+        assert!(!field.walks_into_wall(from, ctx, &grid), "a 16.6 px slide ends in column 18, under the gap");
+        assert!(sliding.walks_into_wall(from, ctx, &grid), "an arena judges the centre, under the wall");
+        // Sliding no further than the centre's own column, the wall counts.
+        let slow = Ai { motion: Vec2::new(-60.0, -101.0), ..field };
+        assert!(slow.walks_into_wall(from, ctx, &grid), "a 3.6 px slide stays in column 19");
+    }
+
+    /// A route whose first step is straight back is no walk along the
+    /// lanes from here: the margin decides, blind to a reversal as ever.
+    #[test]
+    fn a_route_straight_back_is_left_to_the_margin() {
+        // Row 6 shut east of column 10: past the turning, the only way is back.
+        let walls: Vec<(usize, usize)> = (11..=20).map(|c| (c, 6)).collect();
+        assert_eq!(read(&grid(&walls), at(14, 5), PACE), None);
     }
 }
 

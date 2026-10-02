@@ -25,6 +25,11 @@
 //!   the field whose goal cell the target falls in and falls back to A\*
 //!   otherwise, so callers never know which served them.
 //!
+//! `route_ahead` is `next_step` read a few cells further, what a hull
+//! needs to see its next turn coming before it gets there
+//! (`ai::Ai::lane_turn`); a field's read can be straightened along the
+//! hull's heading where that costs nothing.
+//!
 //! Step costs (`cost`) are what make the field tactical: `weigh` prices a
 //! ford, `surcharge` adds to the cells a player's barrel points down and
 //! to the cells other enemies stand in, and the same cheapest-neighbour
@@ -147,6 +152,72 @@ struct Field {
 
 /// `Field::to_goal` for a cell no route reaches.
 const UNREACHABLE: u32 = u32::MAX;
+
+/// How many cells of a route `Grid::route_ahead` reads past the cell it
+/// starts in: enough for a hull to see its route's next turn before its
+/// slide through that turn would carry it past the turning
+/// (`ai::Ai::lane_turn`) - the heaviest chassis at full pace slides more
+/// than two cells.
+pub const ROUTE_AHEAD_CELLS: usize = 4;
+
+/// The first cells of a route, from `Grid::route_ahead`: the cell the
+/// route starts in, the point `next_step` would hand out, and the cells
+/// the route walks next in order - at most `ROUTE_AHEAD_CELLS`, ending at
+/// the goal, or at the first portal cell of a route that may teleport,
+/// past which the route is the far side's.
+#[derive(Clone, Copy, Debug)]
+pub struct RouteAhead {
+    start: (usize, usize),
+    first: Position,
+    cells: [(usize, usize); ROUTE_AHEAD_CELLS],
+    len: usize,
+    cell_size: f32,
+    shared: bool,
+}
+
+impl RouteAhead {
+    /// What `next_step` hands out for the same query: the first cell's
+    /// centre, or the centre of the portal it belongs to.
+    pub fn first(&self) -> Position {
+        self.first
+    }
+
+    /// The cell the route starts in - the one its `from` falls in.
+    pub fn start(&self) -> (usize, usize) {
+        self.start
+    }
+
+    /// The route's first cells, in the order it walks them (never empty).
+    pub fn cells(&self) -> &[(usize, usize)] {
+        &self.cells[..self.len]
+    }
+
+    /// Whether the route was read from a flow field (`Grid::add_field`):
+    /// the route every tank going to that seat or frog shares, read cell
+    /// by cell, rather than the head of one search's path - one of many as
+    /// cheap, toward a target of the tank's own that moves (an engagement
+    /// slot follows its seat).
+    pub fn shared(&self) -> bool {
+        self.shared
+    }
+
+    /// The pitch of the grid the route was read from (px).
+    pub fn cell_size(&self) -> f32 {
+        self.cell_size
+    }
+
+    /// The centre of `cell` on the grid the route was read from.
+    pub fn centre(&self, cell: (usize, usize)) -> Position {
+        Position::new((cell.0 as f32 + 0.5) * self.cell_size, (cell.1 as f32 + 0.5) * self.cell_size)
+    }
+
+    fn push(&mut self, cell: (usize, usize)) {
+        if self.len < ROUTE_AHEAD_CELLS {
+            self.cells[self.len] = cell;
+            self.len += 1;
+        }
+    }
+}
 
 impl Grid {
     /// Build a grid covering `0..width, 0..height` in `cell_size`-px cells.
@@ -533,7 +604,7 @@ impl Grid {
         if (col, row) == goal || col >= self.cols || row >= self.rows {
             return None;
         }
-        self.field_for(goal).and_then(|f| self.descend(f, (col, row))).map(|hit| hit.first_step)
+        self.field_for(goal).and_then(|f| self.descend(f, (col, row), None)).map(|hit| hit.first_step)
     }
 
     /// The field's stored cost from cell (`col`, `row`) to `goal`'s cell -
@@ -557,11 +628,21 @@ impl Grid {
     /// `field`'s goal, with the whole route's cost through it: the
     /// field's equivalent of `search`, including its rules that the start
     /// cell is open whatever `blocked` says and the goal cell is enterable.
-    /// Ties break on the lowest cell index, so the answer is a pure
-    /// function of the grid. `None` when no neighbour reaches the goal.
-    fn descend(&self, field: &Field, start: (usize, usize)) -> Option<SearchHit> {
+    /// Ties break on `prefer` when there is one (`route_ahead`: that step,
+    /// then a turn off it before a step straight back), then on the lowest
+    /// cell index, so the answer is a pure function of the grid and the
+    /// preference. `None` when no neighbour reaches the goal.
+    fn descend(&self, field: &Field, start: (usize, usize), prefer: Option<Step>) -> Option<SearchHit> {
         let idx = |c: (usize, usize)| c.1 * self.cols + c.0;
-        let mut best: Option<(u32, usize, (usize, usize))> = None;
+        // The tie-break: the preferred step first, then a turn off it
+        // before a step straight back, then the lowest index.
+        let rank = |next: (usize, usize)| match (prefer, step_of(start, next)) {
+            (Some(p), Some(s)) if s == p => 0u8,
+            (Some(p), Some(s)) if s == (-p.0, -p.1) => 2,
+            (Some(_), _) => 1,
+            (None, _) => 0,
+        };
+        let mut best: Option<(u32, u8, usize, (usize, usize))> = None;
         for next in self.neighbors(start) {
             let ni = idx(next);
             if next != field.goal && self.blocked[ni] {
@@ -572,8 +653,9 @@ impl Grid {
                 continue;
             }
             let total = there + self.cost[ni] as u32;
-            if best.is_none_or(|(c, i, _)| (total, ni) < (c, i)) {
-                best = Some((total, ni, next));
+            let key = (total, rank(next), ni);
+            if best.is_none_or(|(c, r, i, _)| key < (c, r, i)) {
+                best = Some((total, key.1, ni, next));
             }
         }
         // From a portal cell the hub is a step too: out at any other
@@ -589,12 +671,13 @@ impl Grid {
                     continue;
                 }
                 let total = field.to_goal[ei] + hop;
-                if best.is_none_or(|(c, i, _)| (total, ei) < (c, i)) {
-                    best = Some((total, ei, exit));
+                let rank = u8::from(prefer.is_some());
+                if best.is_none_or(|(c, r, i, _)| (total, rank, ei) < (c, r, i)) {
+                    best = Some((total, rank, ei, exit));
                 }
             }
         }
-        best.map(|(cost, _, first_step)| SearchHit { first_step, cost })
+        best.map(|(cost, _, _, first_step)| SearchHit { first_step, cost })
     }
 
     fn cell_of(&self, p: Position) -> (usize, usize) {
@@ -943,9 +1026,83 @@ impl Grid {
     /// disagree about which served a target.
     fn route(&self, start: (usize, usize), goal: (usize, usize)) -> Option<SearchHit> {
         match self.field_for(goal) {
-            Some(field) => self.descend(field, start),
+            Some(field) => self.descend(field, start, None),
             None => self.search(start, goal, true),
         }
+    }
+
+    /// `next_step` and the route's first cells after it (`RouteAhead`):
+    /// the same route, read a few cells further - what a hull needs to
+    /// see its next turn coming before it gets there. `None` exactly
+    /// where `next_step` is.
+    ///
+    /// `heading` (a unit step, like `blocked_ahead`'s) straightens the
+    /// route where that costs nothing: among steps that are equally cheap
+    /// the one along `heading` is taken first, and each cell after it
+    /// prefers to go on the way the route came in, so a route that may
+    /// turn now or later turns once, where it has to, rather than in a
+    /// staircase along the first wall it meets (the lowest-index rule
+    /// alone hugs it). `None` reads the route `next_step` walks. A field
+    /// is walked by reading it from each cell in turn; a search hands
+    /// back the head of the path it found.
+    pub fn route_ahead(&self, from: Position, to: Position, heading: Option<Position>) -> Option<RouteAhead> {
+        let start = self.cell_of(from);
+        let goal = self.cell_of(to);
+        if start == goal {
+            return None;
+        }
+        let prefer = heading.map(unit_step);
+        let mut ahead = match self.field_for(goal) {
+            Some(field) => {
+                let hit = self.descend(field, start, prefer)?;
+                let mut ahead = self.ahead_of(start, hit.first_step);
+                let (mut from, mut at) = (start, hit.first_step);
+                while ahead.len < ROUTE_AHEAD_CELLS && at != goal && !self.is_portal_cell(at) {
+                    let on = prefer.and(step_of(from, at));
+                    let Some(next) = self.descend(field, at, on) else { break };
+                    ahead.push(next.first_step);
+                    (from, at) = (at, next.first_step);
+                }
+                ahead.shared = true;
+                ahead
+            }
+            // A search's path is one of many as cheap, its shape
+            // whatever order the search met the cells in - a staircase as
+            // often as not - so only its first step is read.
+            None => self.ahead_of(start, self.search(start, goal, true)?.first_step),
+        };
+        // Past a portal cell the route may be the far side's.
+        if let Some(i) = ahead.cells().iter().position(|&c| self.is_portal_cell(c)) {
+            ahead.len = i + 1;
+        }
+        ahead.first = self.portal_centre_of(ahead.cells[0]).unwrap_or_else(|| self.center_of(ahead.cells[0]));
+        Some(ahead)
+    }
+
+    /// `route_ahead` on foot, the route `next_step_walking` walks: the
+    /// portal hub left out, so a portal cell is ground like any other.
+    pub fn route_ahead_walking(&self, from: Position, to: Position) -> Option<RouteAhead> {
+        let start = self.cell_of(from);
+        let goal = self.cell_of(to);
+        if start == goal {
+            return None;
+        }
+        self.search(start, goal, false).map(|hit| self.ahead_of(start, hit.first_step))
+    }
+
+    /// A `RouteAhead` from `start` holding `first` alone, its first point
+    /// that cell's centre.
+    fn ahead_of(&self, start: (usize, usize), first: (usize, usize)) -> RouteAhead {
+        let mut ahead = RouteAhead {
+            start,
+            first: self.center_of(first),
+            cells: [first; ROUTE_AHEAD_CELLS],
+            len: 0,
+            cell_size: self.cell_size,
+            shared: false,
+        };
+        ahead.push(first);
+        ahead
     }
 
     /// `next_step` on foot: the same route with the portal hub left out,
@@ -1108,12 +1265,29 @@ impl Grid {
     }
 }
 
-/// What one successful `Grid::search` run hands back to its two public
-/// wrappers: the first cell to step into (for `next_step`) and the full
-/// path's cost in cells (for `path_cost`).
+/// What one successful `Grid::search` or `Grid::descend` hands back to
+/// the public routers: the first cell to step into (for `next_step`) and
+/// the full path's cost in cells (for `path_cost`).
 struct SearchHit {
     first_step: (usize, usize),
     cost: u32,
+}
+
+/// One cardinal step on the grid, as (column, row) deltas.
+type Step = (i8, i8);
+
+/// The step from cell `a` to cell `b` when they are side by side.
+fn step_of(a: (usize, usize), b: (usize, usize)) -> Option<Step> {
+    match (b.0 as isize - a.0 as isize, b.1 as isize - a.1 as isize) {
+        (dc @ -1..=1, 0) if dc != 0 => Some((dc as i8, 0)),
+        (0, dr @ -1..=1) if dr != 0 => Some((0, dr as i8)),
+        _ => None,
+    }
+}
+
+/// A unit direction (`Dir::vec`) as a grid step.
+fn unit_step(dir: Position) -> Step {
+    (dir.x.round() as i8, dir.y.round() as i8)
 }
 
 /// Manhattan distance in cells - admissible since movement is 4-directional
@@ -1356,6 +1530,22 @@ mod tests {
     fn two_portal_grid(hop: f32) -> Grid {
         Grid::build(SIDE, SIDE, CELL, 0.0, wall(5, &[]).into_iter())
             .with_portals(&[corner(1, 1), corner(7, 7)], RADIUS, hop)
+    }
+
+    /// Past a portal cell a route may teleport, so the read stops at the
+    /// first one, and a first step onto a footprint reads as the portal's
+    /// centre, as `next_step` hands it out.
+    #[test]
+    fn a_route_read_ahead_stops_at_a_portal_cell() {
+        let mut grid = two_portal_grid(3.0);
+        let goal = at(8, 2);
+        grid.add_field(goal);
+        let ahead = grid.route_ahead(at(1, 5), goal, None).expect("routes through the portals");
+        assert_eq!(ahead.cells(), &[(1, 4), (1, 3), (1, 2)], "up to the footprint and no further");
+        let onto = grid.route_ahead(at(1, 3), goal, None).expect("routes");
+        assert_eq!(onto.cells(), &[(1, 2)]);
+        assert_eq!(onto.first(), corner(1, 1));
+        assert_eq!(Some(onto.first()), grid.next_step(at(1, 3), goal));
     }
 
     #[test]
@@ -1804,5 +1994,89 @@ mod dims_tests {
         assert_eq!(grid.path_cost(at(1, 1), at(7, 1)), Some(9), "5 dry steps plus one ford at 4");
         assert!(grid.usable(at(4, 1)), "a weighed cell is still open");
         assert!(!grid.blocked_ahead(at(3, 1), Position::new(1.0, 0.0)));
+    }
+}
+
+#[cfg(test)]
+mod route_ahead_tests {
+    use super::*;
+
+    const CELL: f32 = 32.0;
+    const DOWN: Position = Position::new(0.0, 1.0);
+    const RIGHT: Position = Position::new(1.0, 0.0);
+
+    /// The centre of cell (`col`, `row`).
+    fn at(col: usize, row: usize) -> Position {
+        Position::new((col as f32 + 0.5) * CELL, (row as f32 + 0.5) * CELL)
+    }
+
+    /// A `cols` x `rows` grid of 32 px cells, margin 0, `walls` blocked.
+    fn grid(cols: usize, rows: usize, walls: &[(usize, usize)]) -> Grid {
+        let obstacles: Vec<(Position, f32)> = walls.iter().map(|&(c, r)| (at(c, r), CELL / 2.0)).collect();
+        Grid::build(cols as f32 * CELL, rows as f32 * CELL, CELL, 0.0, obstacles.into_iter())
+    }
+
+    /// Without a heading the read is the route `next_step` walks: each cell
+    /// is what `next_step` answers from the one before, and the first point
+    /// is `next_step`'s own.
+    #[test]
+    fn without_a_heading_it_reads_the_route_next_step_walks() {
+        let mut grid = grid(20, 12, &[]);
+        let goal = at(15, 9);
+        grid.add_field(goal);
+        let from = at(2, 2);
+        let ahead = grid.route_ahead(from, goal, None).expect("routes");
+        assert_eq!(ahead.start(), (2, 2));
+        assert_eq!(Some(ahead.first()), grid.next_step(from, goal));
+        assert_eq!(ahead.cells().len(), ROUTE_AHEAD_CELLS);
+        let mut pos = from;
+        for &cell in ahead.cells() {
+            pos = grid.next_step(pos, goal).expect("routes");
+            assert_eq!(grid.cell_of(pos), cell);
+        }
+        assert!(grid.route_ahead(from, at(2, 2), None).is_none(), "the same cell is no route, as for next_step");
+    }
+
+    /// The lowest-index tie-break takes a goal below and to the right
+    /// across first; a hull heading down reads the same field down first,
+    /// as far as that costs nothing, and turns once.
+    #[test]
+    fn a_heading_straightens_a_field_route() {
+        let mut grid = grid(20, 12, &[]);
+        let goal = at(9, 9);
+        grid.add_field(goal);
+        let from = at(2, 2);
+        assert_eq!(grid.route_ahead(from, goal, None).unwrap().cells(), &[(3, 2), (4, 2), (5, 2), (6, 2)]);
+        assert_eq!(grid.route_ahead(from, goal, Some(DOWN)).unwrap().cells(), &[(2, 3), (2, 4), (2, 5), (2, 6)]);
+        // Close to the goal's row the read turns where it has to, once.
+        assert_eq!(grid.route_ahead(at(2, 7), goal, Some(DOWN)).unwrap().cells(), &[(2, 8), (2, 9), (3, 9), (4, 9)]);
+    }
+
+    /// With the heading's own step dearer, a turn off it comes before a
+    /// step straight back: heading east into the east wall of a two-lane
+    /// corridor that runs south, the read goes on south rather than back
+    /// across the corridor, which the lowest index alone would choose.
+    #[test]
+    fn a_turn_comes_before_a_step_straight_back() {
+        let walls: Vec<(usize, usize)> = (0..12).flat_map(|r| [(3, r), (6, r)]).collect();
+        let mut grid = grid(10, 12, &walls);
+        let goal = at(4, 11);
+        grid.add_field(goal);
+        assert_eq!(grid.route_ahead(at(5, 3), goal, None).unwrap().cells()[0], (4, 3), "the lowest index steps back west");
+        assert_eq!(grid.route_ahead(at(5, 3), goal, Some(RIGHT)).unwrap().cells()[0], (5, 4));
+    }
+
+    /// A search's path is one of many as cheap, its shape whatever order
+    /// the search met the cells in, so only its first step is read.
+    #[test]
+    fn a_searched_route_reads_its_first_step_only() {
+        let grid = grid(20, 12, &[]);
+        let (from, goal) = (at(2, 2), at(9, 9));
+        let ahead = grid.route_ahead(from, goal, Some(DOWN)).unwrap();
+        assert_eq!(ahead.cells().len(), 1);
+        assert_eq!(Some(ahead.first()), grid.next_step(from, goal));
+        let walking = grid.route_ahead_walking(from, goal).unwrap();
+        assert_eq!(walking.cells().len(), 1);
+        assert_eq!(Some(walking.first()), grid.next_step_walking(from, goal));
     }
 }

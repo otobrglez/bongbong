@@ -8318,6 +8318,108 @@ cells."30,20" = { kind = "frog" }
         let at = started.expect("seat 1 never started back in");
         assert!(at.x > w, "seat 1 comes back through the east gate, beside its team-mate: {at:?}");
     }
+
+    // --- Steering: lanes and turns (docs/large-maps-follow-camera.md
+    // section 12) ---
+
+    /// A 40 x 20 field map split by an iron wall along row 10, open only
+    /// at a four-tile gap (columns 18 to 21, whose two middle columns are
+    /// the nav lanes a hull fits through), the player south of the wall
+    /// and nobody else placed: every route from the north half turns
+    /// south into the gap, one cell short of it or on it.
+    fn gap_map() -> String {
+        let mut map = String::from("version = 1\nsize = [40, 20]\ntanks = 0\ncells.\"28,15\" = { kind = \"start\" }\n");
+        for c in (0..40).filter(|c| !(18..=21).contains(c)) {
+            map.push_str(&format!("cells.\"{c},10\" = {{ kind = \"wall\", material = \"iron\" }}\n"));
+        }
+        map
+    }
+
+    /// An assault (row 1) on row 8 of `gap_map`, `edge` px above row 9:
+    /// the steering case of a hull riding the far edge of its lane, or
+    /// its centre line. Returns the round and the enemy's slot.
+    fn hull_on_row_8(edge: f32) -> (Game, usize) {
+        let mut game = field_round(&gap_map());
+        let lane_floor = 9.0 * PATHFIND_CELL_SIZE;
+        let slot = game.debug_spawn_enemy(Position::new(208.0, lane_floor - edge), Some(1), None).expect("an enemy spawns");
+        (game, slot)
+    }
+
+    /// Step until the enemy in `slot` is through the wall (its centre past
+    /// the wall's south face), at most `limit` frames: the frame it got
+    /// there and where it was the frame it first crossed the wall's north
+    /// face, or `None` if it never got through.
+    fn through_the_gap(game: &mut Game, slot: usize, limit: u32) -> Option<(u32, Position)> {
+        let (north, south) = (10.0 * PATHFIND_CELL_SIZE, 11.0 * PATHFIND_CELL_SIZE);
+        let mut entered = None;
+        for frame in 1..=limit {
+            field_step(game, Input::default());
+            let at = position_of(game, slot);
+            if entered.is_none() && at.y >= north {
+                entered = Some(at);
+            }
+            if at.y >= south {
+                return entered.map(|e| (frame, e));
+            }
+        }
+        None
+    }
+
+    /// A hull riding the far edge of its lane - its centre 2.5 px above
+    /// the next row, nearer that row's centre than
+    /// `ai_dir_switch_margin_px` - still takes its route's turn south into
+    /// the gap. Held to the margin alone, such a hull can never turn into
+    /// the next row: it drives past the gap, back and forth between the two
+    /// ends of the wall, for as long as the round lasts.
+    #[test]
+    fn a_hull_on_the_far_edge_of_its_lane_takes_its_turn() {
+        let (mut game, slot) = hull_on_row_8(2.5);
+        let start = position_of(&game, slot);
+        let next_row_centre = 9.5 * PATHFIND_CELL_SIZE;
+        assert!(next_row_centre - start.y < tuning().ai_dir_switch_margin_px, "the case this is about: {start:?}");
+        // About 450 px to the turning at an enemy's pace, then through.
+        let (frame, _) = through_the_gap(&mut game, slot, 6 * 60).expect("the hull never turned into the gap");
+        assert!(frame < 5 * 60, "took {frame} frames to get through");
+    }
+
+    /// The turn is taken where the hull's slide through it ends on the
+    /// centre line of the lane it turns into: a hull at speed carries on
+    /// along its old heading for `v^2 / 2a` (the tracks' grip,
+    /// `tank_turn_grip_force` over its mass) after it turns, so it turns
+    /// that much early, and comes down the gap on the centre of the gap's
+    /// lane rather than past it at the far edge - where the next turn its
+    /// way would be the one the margin could never let it take.
+    #[test]
+    fn a_hull_turns_early_enough_to_slide_onto_its_new_lanes_centre_line() {
+        let (mut game, slot) = hull_on_row_8(16.0);
+        let (_, entered) = through_the_gap(&mut game, slot, 6 * 60).expect("the hull never turned into the gap");
+        // The route turns south on column 20, whose centre is x = 656.
+        let lane_centre = 20.5 * PATHFIND_CELL_SIZE;
+        assert!((entered.x - lane_centre).abs() <= 6.0, "came down the gap at x = {:.1}, the lane's centre is {lane_centre}", entered.x);
+    }
+
+    /// The same hull on the far edge of its lane, sent through the gap by a
+    /// route of its own rather than the field every tank shares: the player
+    /// waits in the far corner, out of its sight under fog, and it fetches
+    /// the laser south of the wall, inside its leash (`Brain::seek`), along
+    /// a searched route. The margin could never turn it south into the next
+    /// row, so that turn is a lane turn as well (`ai::margin_never_turns`);
+    /// held to the margin alone, it drives on past the gap along the row's
+    /// edge until it sees the player.
+    #[test]
+    fn a_hull_on_the_far_edge_of_its_lane_takes_its_own_routes_turn() {
+        let map = gap_map().replace("\"28,15\"", "\"38,18\"")
+            + "weather = \"fog\"\ncells.\"23,14\" = { kind = \"pickup\", pickup = \"laser\" }\n";
+        let mut game = field_round(&map);
+        let lane_floor = 9.0 * PATHFIND_CELL_SIZE;
+        let slot = game.debug_spawn_enemy(Position::new(208.0, lane_floor - 2.5), Some(1), None).expect("an enemy spawns");
+        field_step(&mut game, Input::default());
+        let snapshot = game.debug_snapshot(game.map.field_size().0, game.map.field_size().1, debug::Detail::Full);
+        let ai = snapshot.tanks.iter().find(|t| t.slot == slot).and_then(|t| t.ai).expect("the enemy thinks");
+        assert_eq!(ai.last_action, Some("seek_laser"), "the case this is about: a searched route");
+        let (frame, _) = through_the_gap(&mut game, slot, 6 * 60).expect("the hull never turned into the gap");
+        assert!(frame < 5 * 60, "took {frame} frames to get through");
+    }
 }
 
 
