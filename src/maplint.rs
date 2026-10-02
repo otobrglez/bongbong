@@ -1189,6 +1189,7 @@ mod map_lint_tests {
         "maps/default.toml",
         "maps/default-desert.toml",
         "maps/towers.toml",
+        "maps/longwater.toml",
         "maps/lotus-lagoon.toml",
         "maps/hedge-maze.toml",
         "maps/oasis-bazaar.toml",

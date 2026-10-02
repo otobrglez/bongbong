@@ -943,6 +943,21 @@ mod lobby_tests {
         assert_eq!(action, LobbyAction::Host { map: SHIPPED_MAPS[SHIPPED_MAPS.len() - 1].0.into(), mission: Mission::Hunt });
     }
 
+    /// The map stepper draws a map as its slug, uppercased, 24 px in from
+    /// the `<` button (`render::lobby::draw_start`), so every shipped map's
+    /// has to end before the `>` button: 204 px of room at
+    /// `HUD_TEXT_SIZE`.
+    #[test]
+    fn every_shipped_slug_fits_the_map_stepper() {
+        let (prev, next) = (button_rect(FIELD, Button::MapPrev), button_rect(FIELD, Button::MapNext));
+        let room = next.x - (prev.x + prev.width + 24.0);
+        assert_eq!(room, 204.0);
+        for (name, _) in SHIPPED_MAPS {
+            let width = crate::text::width(&name.to_ascii_uppercase(), crate::hud::HUD_TEXT_SIZE) as f32;
+            assert!(width <= room, "{name} is {width} px wide in the stepper, {room} px fit");
+        }
+    }
+
     /// The screen offers exactly what the client would take: no `START`
     /// or `KICK` for a guest, no `START` before the room can start, and no
     /// kicking oneself.

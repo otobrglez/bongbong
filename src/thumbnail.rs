@@ -166,13 +166,14 @@ mod tests {
     /// shows - re-baseline consciously after a deliberate art, map or
     /// tuning change, never to go green.
     #[cfg(feature = "render")]
-    const PINNED: [(&str, u64); 20] = [
+    const PINNED: [(&str, u64); 21] = [
         ("default", 0xc969_2550_063a_66c9),
         ("default-desert", 0x65a9_f4c1_bbef_1f24),
         ("hunt-basic", 0xc757_87c0_f4ff_6b22),
         ("waves-basic", 0x39cd_f934_718a_6bac),
         ("portals", 0x7d63_bb51_758c_88b3),
         ("towers", 0x94f2_f4ec_a7b0_f996),
+        ("longwater", 0xfc94_da71_7ee0_051b),
         ("lotus-lagoon", 0xf446_471a_7853_10ef),
         ("hedge-maze", 0x4429_c4e1_b898_1a2b),
         ("oasis-bazaar", 0xad6d_9b7d_be99_0ba1),

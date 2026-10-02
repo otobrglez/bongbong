@@ -624,6 +624,39 @@ straggler through a nearer gate, and flow fields bounded to the bubble -
 the frame's routing grid, about 0.33 ms of the 0.59, is now most of a
 tick.
 
+**The first field map** is `longwater` (`maps/longwater.toml`, free play,
+80 x 45; its header says how it plays): a fort on the south shore of a
+lake that crosses the whole map, a ford at each end and a causeway either
+side of the fort, six wave gates north of the water 10 to 14 s down the
+roads from the fort, and two on the south road, 8 s out, which only a
+fallen seat comes back through (`field::nearest_gates`). Laying it out
+found two rules for a field map. A tank turns off its road for any pickup
+it wants inside its leash (`Brain::seek`), so whatever a fresh enemy
+fetches - laser, plasma, minigun, missiles, speed and shield, and the
+health packs a bonus shield turns up beside - belongs beyond every gate's
+`enemy_leash_px`: a laser on the street the east waves came down drew them
+up it. And a tank stops being called once it has a seat in sight, so a
+crossing far from the fight strands it: sent round the lake by a far ford,
+it is out of sight longer than `enemy_alert_hold_seconds`, loses its alert
+and drives home - the causeways keep the usual way across within sight.
+
+Still open, and the most visible fault on a map that size: a hull riding
+the far edge of a nav row, nearer the next row's centre than
+`ai_dir_switch_margin_px`, can never beat the margin in `Ai::steer_toward`
+for a step into that row, so it drives past every turning its route
+takes, to and fro between two walls, for the rest of the round. On
+longwater with a perfect defence - every enemy destroyed the moment it
+comes within 400 px of the seat or the frog - four rounds in six still had
+a tank out after seven minutes: three driving up and down the east gates'
+road, the fourth back home on its leash, its alert run out. Letting a
+field map's hull take such a step on any gain at all cleared every
+stranded walk from 30-round sweeps of longwater and the study map, but
+about doubled `probe-fields`' jitter on the 40-wide levels, past their
+ceilings; taking it only where the margin cannot be beaten still raised
+hedge-maze, archipelago and harbor-lights past them, and so did that
+gated to hulls out of every seat's sight, which also left the tanks
+stranded within sight of the fight.
+
 ## 13. Patterns from shipped games
 
 docs/large-maps-patterns.md catalogues 72 patterns from shipped games,
@@ -767,8 +800,10 @@ what the wire carries, the laser's reach, the mark caps and the bounded
 AI (`simulation/field.rs`: chained alerts with leashes, far enemies
 thinking less, spawns and gates by walk outside every sight box,
 re-entry through the gate nearest the living seats, `just
-probe-fields`) - the pacing director, stragglers re-rolled through a
-nearer gate and flow fields bounded to the seats are still to come.
+probe-fields`) and a first field map, free play rather than a level
+(`longwater`, section 12) - the pacing director, stragglers re-rolled
+through a nearer gate, flow fields bounded to the seats and a turn a hull
+on the edge of its row can take are still to come.
 
 ## 15. Decisions
 

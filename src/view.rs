@@ -434,9 +434,17 @@ mod view_tests {
     }
 
     /// Every field size the shipped maps use, from the crossplay studies'
-    /// 24 x 12 to grand-campaign's 48 x 24.
-    const SHIPPED_FIELDS: [(f32, f32); 7] =
-        [(768.0, 384.0), (1088.0, 544.0), (1152.0, 576.0), (1280.0, 640.0), (1280.0, 720.0), (1408.0, 704.0), (1536.0, 768.0)];
+    /// 24 x 12 to longwater's 80 x 45.
+    const SHIPPED_FIELDS: [(f32, f32); 8] = [
+        (768.0, 384.0),
+        (1088.0, 544.0),
+        (1152.0, 576.0),
+        (1280.0, 640.0),
+        (1280.0, 720.0),
+        (1408.0, 704.0),
+        (1536.0, 768.0),
+        (2560.0, 1440.0),
+    ];
 
     #[test]
     fn the_whole_field_is_the_identity() {

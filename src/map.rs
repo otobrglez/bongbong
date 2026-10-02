@@ -750,11 +750,13 @@ pub fn maps_dir() -> PathBuf {
 }
 
 /// The maps compiled into the binary, by name: the default battlefields,
-/// the two mission fixtures, the portal map, then the hand-authored levels
-/// (each file's header says how it plays). They are what the web build can
-/// offer its Load list, since nothing outside `static/` ships in the wasm,
-/// what the online lobby's map stepper walks, in this order, and what the
-/// room server can open; they stand in on native for a checkout without a
+/// the two mission fixtures, the portal and tower maps, the big field
+/// (`longwater`, free play several screens across, the one the follow
+/// camera was built for), then the hand-authored levels (each file's
+/// header says how it plays). They are what the web build can offer its
+/// Load list, since nothing outside `static/` ships in the wasm, what the
+/// online lobby's map stepper walks, in this order, and what the room
+/// server can open; they stand in on native for a checkout without a
 /// `maps/` directory.
 pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("default", include_str!("../maps/default.toml")),
@@ -763,6 +765,7 @@ pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("waves-basic", include_str!("../maps/missions/waves-basic.toml")),
     ("portals", include_str!("../maps/portals.toml")),
     ("towers", include_str!("../maps/towers.toml")),
+    ("longwater", include_str!("../maps/longwater.toml")),
     ("lotus-lagoon", include_str!("../maps/lotus-lagoon.toml")),
     ("hedge-maze", include_str!("../maps/hedge-maze.toml")),
     ("oasis-bazaar", include_str!("../maps/oasis-bazaar.toml")),
@@ -963,8 +966,9 @@ mod toml_tests {
 
     #[test]
     fn the_shipped_field_maps_are_the_ones_bigger_than_an_arena() {
-        // The seven levels past 36 x 18 and the two 40 x 22.5 mission maps
-        // are field maps; the seven other levels and the rest are arenas.
+        // The seven levels past 36 x 18, the two 40 x 22.5 mission maps and
+        // the 80 x 45 big field are field maps; the seven other levels and
+        // the rest are arenas.
         let field: Vec<&str> = SHIPPED_MAPS
             .iter()
             .filter(|(_, text)| MapFile::from_toml_str(text).unwrap().class() == MapClass::Field)
@@ -972,8 +976,21 @@ mod toml_tests {
             .collect();
         assert_eq!(
             field,
-            ["hunt-basic", "waves-basic", "hedge-maze", "castle-moat", "archipelago", "black-gold", "harbor-lights", "serpent-river", "grand-campaign"]
+            [
+                "hunt-basic",
+                "waves-basic",
+                "longwater",
+                "hedge-maze",
+                "castle-moat",
+                "archipelago",
+                "black-gold",
+                "harbor-lights",
+                "serpent-river",
+                "grand-campaign"
+            ]
         );
+        let big = open_map("longwater").unwrap();
+        assert_eq!((big.size, big.class()), (Some((80.0, 45.0)), MapClass::Field));
         let study = MapFile::load(Path::new("maps/study/frontier.toml")).unwrap();
         assert_eq!((study.size, study.class()), (Some((96.0, 54.0)), MapClass::Field));
     }

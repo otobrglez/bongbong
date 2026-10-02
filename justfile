@@ -76,10 +76,11 @@ probe-fixtures:
 # few ticks or asleep, band spawns and wave gates out of every seat's
 # sight box and about a 15 s walk out where the map has one, a wave called
 # to the fight, a fallen seat back through the gate nearest its team. The
-# 96 x 54 study map and the five 40-wide levels, AFK, at a pinned seed;
-# the maps/test/ fixtures stay arenas (`view = "whole"`), so this is where
-# a change to the field-map AI shows. Ceilings are each kind's maximum over
-# the six maps, recorded 2026-10-02 - re-baseline consciously, never to go
+# 96 x 54 study map, longwater (the shipped 80 x 45 free-play field) and
+# the five 40-wide levels, AFK, at a pinned seed; the maps/test/ fixtures
+# stay arenas (`view = "whole"`), so this is where a change to the
+# field-map AI shows. Ceilings are each kind's maximum over the six maps
+# first swept, recorded 2026-10-02 - re-baseline consciously, never to go
 # green: border-stuck=3 is hedge-maze (enemies spawned in the maze's lanes
 # along its top and bottom edge, which they drive for their first
 # seconds); jitter=23 is harbor-lights (enemies weaving along the road
@@ -90,11 +91,16 @@ probe-fixtures:
 # 16, 10 and 8). The study map reads border-stuck=1 jitter=7 churn=17 and
 # meets the fight about 13 s in, where the arena's rules read jitter=16
 # churn=22 clustering=3 pile-up=3 and walked a wave tank to the fight for
-# up to 47 s. Prints first contact and ms per tick beside the anomalies.
-# Not in CI: well over two minutes in a debug build, the study map alone
-# more than one.
+# up to 47 s. Longwater, added after them, reads jitter=2 churn=11 and
+# nothing else - inside every ceiling, none raised for it - and meets the
+# fight about 11 s in; in one of its ten rounds (0x3f1) two of the first
+# wave are still out at 60 s, riding the edge of a nav row past their
+# turning (docs/large-maps-follow-camera.md section 12, still open), which
+# no kind counts within a minute. Prints first contact and ms per tick
+# beside the anomalies. Not in CI: well over two minutes in a debug build,
+# the study map alone more than one.
 probe-fields:
-    for m in maps/study/frontier.toml maps/hedge-maze.toml maps/archipelago.toml maps/black-gold.toml maps/harbor-lights.toml maps/castle-moat.toml; do cargo run --bin probe -- --map $m --frames 3600 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=3 --budget jitter=23 --budget spin=5 --budget churn=20 --budget clustering=6 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=6 --budget offbox-fire=0 || exit 1; done
+    for m in maps/study/frontier.toml maps/longwater.toml maps/hedge-maze.toml maps/archipelago.toml maps/black-gold.toml maps/harbor-lights.toml maps/castle-moat.toml; do cargo run --bin probe -- --map $m --frames 3600 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=3 --budget jitter=23 --budget spin=5 --budget churn=20 --budget clustering=6 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=6 --budget offbox-fire=0 || exit 1; done
 
 run:
     cargo run
