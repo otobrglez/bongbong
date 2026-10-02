@@ -26,6 +26,10 @@ declare global {
      *  on the game's motion switch (src/motion.rs), read once at startup.
      *  See `motion.ts`. */
     bbMotion: string;
+    /** Where the page's own controls stand over the canvas, `top x y
+     *  width height` in CSS pixels, read once a frame by `app/web.rs`.
+     *  See `overlay.ts`. */
+    bbOverlay: string;
   }
 
   // Old WebKit's prefixed Fullscreen API (see fullscreen.ts).

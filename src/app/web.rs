@@ -15,6 +15,13 @@
 //! the canvas's CSS width, and raylib a touch by the screen's width over
 //! the same, so a box of any shape maps exactly once the buffer fills it.
 //!
+//! The page's own controls stand over the canvas too, and the page says
+//! where (`overlay`, `hud::PageOverlay`): on a touch screen they take a
+//! band along its top, which the chrome keeps out of as it keeps out of a
+//! safe area - the corner clusters, the panels and the builder's bar all
+//! stand below it - and wherever they are, the off-screen arrows keep off
+//! them.
+//!
 //! Every reading is a synchronous call into emscripten's runtime - the box
 //! through `emscripten_get_element_css_size`, the ratio through
 //! `emscripten_get_device_pixel_ratio` - and the resize is raylib's own
@@ -29,6 +36,8 @@ use std::os::raw::{c_char, c_double, c_int};
 
 use sola_raylib::prelude::RaylibHandle;
 
+use crate::hud::PageOverlay;
+
 unsafe extern "C" {
     fn emscripten_get_element_css_size(target: *const c_char, width: *mut c_double, height: *mut c_double) -> c_int;
     fn emscripten_get_device_pixel_ratio() -> c_double;
@@ -42,7 +51,15 @@ thread_local! {
     /// Window units per CSS pixel as `follow_canvas` last sized the
     /// window; zero before it has.
     static UNITS: Cell<f32> = const { Cell::new(0.0) };
+    /// What the page's own controls take of the canvas, as `follow_canvas`
+    /// last read it.
+    static OVERLAY: Cell<PageOverlay> = const { Cell::new(PageOverlay { top: 0.0, rect: None }) };
 }
+
+/// The page's controls over the canvas, as the page published them
+/// (`window.bbOverlay`, site/src/scripts/overlay.ts): `top x y width
+/// height` in CSS pixels, or nothing.
+const PAGE_OVERLAY: &CStr = c"(function(){try{return String(window.bbOverlay||'')}catch(e){return ''}})()";
 
 /// The drawing buffer the canvas's box needs now, and how many of its
 /// pixels make a CSS pixel (`view::canvas_buffer`). `None` while the
@@ -67,6 +84,7 @@ pub fn canvas_buffer() -> Option<((i32, i32), f32)> {
 /// pixels and the first one after it with the size from before, and in
 /// both cases a second request lands where the first was meant to.
 pub fn follow_canvas(rl: &mut RaylibHandle) {
+    OVERLAY.with(|o| o.set(PageOverlay::parse(&super::page_string(PAGE_OVERLAY))));
     let Some(((width, height), units)) = canvas_buffer() else { return };
     UNITS.with(|u| u.set(units));
     for _ in 0..2 {
@@ -75,6 +93,13 @@ pub fn follow_canvas(rl: &mut RaylibHandle) {
         }
         rl.set_window_size(width, height);
     }
+}
+
+/// What the page's own controls take of the canvas this frame
+/// (`hud::PageOverlay`): the band along its top the chrome keeps out of
+/// and the controls' rectangle, in CSS pixels.
+pub fn overlay() -> PageOverlay {
+    OVERLAY.with(Cell::get)
 }
 
 /// Window units per point on the web: the drawing buffer's pixels per CSS

@@ -126,17 +126,38 @@ fn window_units_per_point(_rl: &RaylibHandle) -> f32 {
 /// size, the window units a point is (`window_units_per_point`), the
 /// `ui_scale` knob and the safe area - read from SDL on iOS, whose window
 /// covers the whole screen, the Dynamic Island and the rounded corners
-/// included; none elsewhere, since Android's NativeActivity keeps a
-/// landscape window out of the cutout and the web page pads the canvas
-/// with `env(safe-area-inset-*)`. `touch` is whether thumbs are on the
-/// glass, which makes every button a finger's size.
+/// included; on the web the band along the canvas's top that the page's
+/// own controls take on a touch screen (`web::overlay`), since the page
+/// pads the canvas with `env(safe-area-inset-*)` itself; none elsewhere,
+/// since Android's NativeActivity keeps a landscape window out of the
+/// cutout. `touch` is whether thumbs are on the glass, which makes every
+/// button a finger's size.
 fn ui_frame(rl: &mut RaylibHandle, touch: bool) -> UiFrame {
     let window = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
     #[cfg(target_os = "ios")]
     let insets = ios::safe_area_insets(rl).unwrap_or_default();
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(target_os = "emscripten")]
+    let insets = web::overlay().insets(window_units_per_point(rl));
+    #[cfg(not(any(target_os = "ios", target_os = "emscripten")))]
     let insets = crate::hud::Insets::default();
     UiFrame::new(window, window_units_per_point(rl), tuning().ui_scale, insets, touch)
+}
+
+/// How far down from the window's top the page's own controls reach on a
+/// touch screen (`web::overlay`), in the window's units; zero off the web.
+/// The builder's bar is fitted below it, as the HUD is laid out below it.
+fn page_band(_rl: &RaylibHandle) -> f32 {
+    #[cfg(target_os = "emscripten")]
+    let band = web::overlay().top * window_units_per_point(_rl);
+    #[cfg(not(target_os = "emscripten"))]
+    let band = 0.0;
+    band
+}
+
+/// `view`, fitted into the window less `band` along its top, moved down
+/// by the band onto the whole `window` - which the letterbox still covers.
+fn under_band(view: View, window: (f32, f32), band: f32) -> View {
+    View { window, offset: crate::math::Vec2::new(view.offset.x, view.offset.y + band), ..view }
 }
 
 /// A rectangle of the chrome's, in UI points, in the bitmap's pixels: what
@@ -219,6 +240,7 @@ fn publish_window(rl: &RaylibHandle, session: &Session, ui: &UiFrame, layout: &L
         units_per_point: window_units_per_point(rl),
         frame,
         press,
+        page_overlay: web::overlay(),
     }));
 }
 
@@ -288,9 +310,15 @@ impl Presentation {
             let units = window_units_per_point(rl);
             (t.view_max_scale > 0.0).then(|| ScaleCap { max_scale: t.view_max_scale * units, snap_half: t.view_scale_snap != 0 })
         };
+        // The builder's bar stands below the band the page's controls take
+        // along the top on a touch screen (`page_band`); the world of a
+        // round is drawn under it, past the controls.
+        let band = if mode == Driver::Build { page_band(rl) } else { 0.0 };
+        let below = (window.0, (window.1 - band).max(1.0));
         if mode == Driver::Build && session.builder.map().class().follows() {
-            let (layout, view) = crate::editor::camera::canvas_frame(window, cap);
+            let (layout, view) = crate::editor::camera::canvas_frame(below, cap);
             let bitmap = layout.window_size();
+            let view = under_band(view, window, band);
             return Presentation { field, mode, followed: None, establishing: false, pinned: None, layout, view, scene: bitmap, composite: bitmap };
         }
         let (w, h) = layout.window_size();
@@ -301,7 +329,7 @@ impl Presentation {
             establishing: false,
             pinned,
             layout,
-            view: View::fit_capped((w as f32, h as f32), window, cap),
+            view: under_band(View::fit_capped((w as f32, h as f32), below, cap), window, band),
             scene: pinned.unwrap_or(Camera::whole(field)).target_size(),
             composite: layout.window_size(),
         }
@@ -2318,8 +2346,14 @@ pub fn run(args: Args) {
                 let physical = window_units_per_point(rl) / view.scale;
                 frame.keep_out.extend(crate::indicators::thumb_rests(screen, physical, &t));
             }
-            // No arrow lands under a corner cluster or the minimap.
+            // No arrow lands under a corner cluster or the minimap, nor
+            // under the page's own controls.
             frame.keep_out.extend(corners.iter().flat_map(Corners::keep_out).map(|r| ui_rect_on_bitmap(&ui, &view, r)));
+            #[cfg(target_os = "emscripten")]
+            if let Some(r) = web::overlay().rect_in(window_units_per_point(rl)) {
+                let ui_rect = crate::math::Rectangle::new(r.x / ui.scale, r.y / ui.scale, r.width / ui.scale, r.height / ui.scale);
+                frame.keep_out.push(ui_rect_on_bitmap(&ui, &view, ui_rect));
+            }
             match &split_view {
                 // A couch's split screen: each half its own seat's arrows,
                 // the other half off screen for it; the marks that lie in

@@ -370,6 +370,44 @@ pub struct Insets {
     pub bottom: f32,
 }
 
+/// What the web page's own controls - Full screen, Subscribe - take of the
+/// canvas (site/src/scripts/overlay.ts publishes it as `window.bbOverlay`):
+/// the band along the canvas's top the game's chrome keeps out of, the way
+/// it keeps out of a safe area, and the controls' own rectangle, which the
+/// off-screen arrows keep off. In CSS pixels from the canvas's corner.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PageOverlay {
+    /// How far down from the canvas's top the chrome stays clear.
+    pub top: f32,
+    /// Where the controls stand, `None` where there are none.
+    pub rect: Option<Rectangle>,
+}
+
+impl PageOverlay {
+    /// The page's words: `top x y width height`, numbers in CSS pixels.
+    /// Anything else - nothing published, a page without the controls, a
+    /// value that is not a number - takes nothing, and a rectangle with no
+    /// area is no rectangle.
+    pub fn parse(text: &str) -> PageOverlay {
+        let numbers: Vec<f32> = text.split_whitespace().map_while(|word| word.parse::<f32>().ok().filter(|v| v.is_finite())).collect();
+        let [top, x, y, w, h] = numbers[..] else { return PageOverlay::default() };
+        let rect = (w > 0.0 && h > 0.0).then(|| Rectangle::new(x, y, w, h));
+        PageOverlay { top: top.max(0.0), rect }
+    }
+
+    /// The band as the window's safe-area insets, in its units -
+    /// `units_per_point` of them to the CSS pixel.
+    pub fn insets(&self, units_per_point: f32) -> Insets {
+        Insets { top: self.top * units_per_point, ..Insets::default() }
+    }
+
+    /// The controls' rectangle in the window's units.
+    pub fn rect_in(&self, units_per_point: f32) -> Option<Rectangle> {
+        let u = units_per_point;
+        self.rect.map(|r| Rectangle::new(r.x * u, r.y * u, r.width * u, r.height * u))
+    }
+}
+
 /// The window as the chrome lays itself out in it
 /// (docs/large-maps-follow-camera.md §8): how many of the window's units a
 /// UI point is - the UI scale every piece of chrome is drawn at, never the
@@ -1804,5 +1842,69 @@ mod hud_tests {
         assert_eq!(clock_text(154.2), "2:34");
         assert_eq!(clock_text(3725.0), "62:05");
         assert_eq!(clock_text(-3.0), "0:00");
+    }
+
+    /// What the page publishes of its controls is read back to the number,
+    /// and anything else takes nothing.
+    #[test]
+    fn the_page_overlay_reads_what_the_page_published() {
+        let o = PageOverlay::parse("30 291.5 3 269 24");
+        assert_eq!(o, PageOverlay { top: 30.0, rect: Some(Rectangle::new(291.5, 3.0, 269.0, 24.0)) });
+        assert_eq!(o.insets(3.0), Insets { top: 90.0, ..Insets::default() });
+        assert_eq!(o.rect_in(2.0), Some(Rectangle::new(583.0, 6.0, 538.0, 48.0)));
+        assert_eq!(PageOverlay::parse("0 10 361 254 22"), PageOverlay { top: 0.0, rect: Some(Rectangle::new(10.0, 361.0, 254.0, 22.0)) }, "a desktop's controls take no band");
+        assert_eq!(PageOverlay::parse(""), PageOverlay::default(), "nothing published");
+        assert_eq!(PageOverlay::parse("30 1 2 3"), PageOverlay::default(), "too few");
+        assert_eq!(PageOverlay::parse("30 1 2 3 4 5"), PageOverlay::default(), "too many");
+        assert_eq!(PageOverlay::parse("x 1 2 3 4"), PageOverlay::default(), "not a number");
+        assert_eq!(PageOverlay::parse("NaN 1 2 3 4"), PageOverlay::default(), "not a number either");
+        assert_eq!(PageOverlay::parse("12 5 5 0 0"), PageOverlay { top: 12.0, rect: None }, "no area, no rectangle");
+        assert_eq!(PageOverlay::parse("-4 5 5 1 1").top, 0.0, "a band is never negative");
+    }
+
+    /// On a touch screen the page lays its controls along the canvas's top,
+    /// centred, and publishes that band; kept as a safe area, it puts
+    /// every piece of chrome below the controls - the clusters and the
+    /// minimap, the lobby's and the level select's panels, both dialogs,
+    /// the end screen's buttons and the mission banner - on an iPhone SE's
+    /// window too, where the gap between the clusters (74 points) is
+    /// narrower than the controls.
+    #[test]
+    fn the_page_controls_band_keeps_the_chrome_below_them() {
+        for (w, h, units) in [(852.0, 393.0, 3.0), (667.0, 375.0, 2.0), (1180.0, 820.0, 2.0), (800.0, 360.0, 2.625), (568.0, 320.0, 2.0)] {
+            let controls = Rectangle::new(w / 2.0 - 135.0, 3.0, 270.0, 24.0);
+            let overlay = PageOverlay { top: 30.0, rect: Some(controls) };
+            let ui = UiFrame::new((w * units, h * units), units, 1.0, overlay.insets(units), true);
+            // UI points to CSS pixels: what the page's controls are laid out in.
+            let css = |r: Rectangle| {
+                let k = ui.scale / units;
+                Rectangle::new(r.x * k, r.y * k, r.width * k, r.height * k)
+            };
+            let clear = |what: &str, r: Rectangle| assert!(apart(css(r), controls), "{w}x{h}: {what} {:?} under the controls", css(r));
+            assert!(css(Rectangle::new(ui.area.x, ui.area.y, ui.area.w, ui.area.h)).y >= 30.0, "{w}x{h}: the area starts below the band");
+            for (name, shape) in shapes() {
+                let c = corners(&ui, &shape);
+                clear(&format!("{name}'s left cluster"), c.left());
+                clear(&format!("{name}'s right cluster"), c.right);
+                if let Some(plate) = c.minimap_plate() {
+                    clear(&format!("{name}'s minimap"), plate);
+                }
+            }
+            clear("the lobby", crate::lobby::panel_rect(ui.area));
+            clear("the level select", crate::level_select::panel_rect(ui.area));
+            clear("the leave dialog", leave_dialog_rects(ui.area).panel);
+            clear("the players dialog", players_dialog_rects(ui.area).panel);
+            // The end screen at its tallest: a won level of a co-op round,
+            // from its title down to its row of buttons.
+            let won = ResultView { stats: RoundStats::default(), seats: 2, buttons: Some(ResultButtons { next: Some(NextLevel::FirstAgain { levels: 14 }), countdown: None }) };
+            let rows = result_layout(ui.area, &won);
+            let buttons = rows.buttons.expect("a level's buttons");
+            let bottom = buttons.again.y + buttons.again.height;
+            clear("the end screen", Rectangle::new(ui.area.x, rows.title_y, ui.area.w, bottom - rows.title_y));
+            // The mission banner, its level number over it at the top.
+            let cy = ui.area.y + ui.area.h / 2.0;
+            let top = cy - BANNER_SIZE as f32 / 2.0 - 14.0 - LEVEL_NUMBER_SIZE as f32;
+            clear("the level banner", Rectangle::new(ui.area.x, top, ui.area.w, cy - top));
+        }
     }
 }

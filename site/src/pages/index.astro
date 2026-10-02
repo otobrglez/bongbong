@@ -78,10 +78,12 @@
             height: calc(100dvh - var(--hints) - env(safe-area-inset-top) - env(safe-area-inset-bottom));
           }
 
-          /* The two overlay controls sit together in the canvas's
-             *bottom-left* corner, away from the HUD's corner clusters along
-             its top (src/hud.rs `corners`): Full screen first, the
-             subscribe link beside it, one row. */
+          /* The two overlay controls sit together in one row, Full screen
+             first, the subscribe link beside it. With a mouse they keep to
+             the canvas's *bottom-left* corner, away from the HUD's corner
+             clusters along its top (src/hud.rs `corners`). Wherever they
+             are, overlay.ts tells the game, which keeps its off-screen
+             arrows off them. */
           .overlay-controls {
             position: absolute;
             left: 10px;
@@ -90,6 +92,29 @@
             align-items: center;
             gap: 8px;
             z-index: 2;
+            white-space: nowrap;
+          }
+
+          /* On a touch screen the bottom corners are the thumbs': the left
+             half of the canvas steers wherever a thumb lands and the right
+             half fires (src/touch.rs), and the thumbs rest about 22 mm in
+             and 18 mm up from those corners (`indicators::thumb_rests`).
+             The top corners are the HUD's clusters, and between them there
+             is too little room for two labels on a narrow phone - 74
+             points, 69 CSS pixels on an iPhone SE. So the controls take a
+             band of their own along the top, centred, and the game lays
+             its chrome out below it as it does below a safe area: the
+             clusters, the panels and the builder's bar all stand clear of
+             it, and the world shows on either side. Above the turn card,
+             so the way out of immersive mode is always there. */
+          @media (hover: none) and (pointer: coarse) {
+            .overlay-controls {
+              top: 3px;
+              bottom: auto;
+              left: 50%;
+              transform: translateX(-50%);
+              z-index: 4;
+            }
           }
 
           .subscribe-link {

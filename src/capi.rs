@@ -284,6 +284,9 @@ pub struct WindowReport<'a> {
     /// from the one it read before.
     pub frame: u64,
     pub press: Option<Press>,
+    /// What the page said its own controls take of the canvas, as the
+    /// frame read it (`hud::PageOverlay`, CSS pixels).
+    pub page_overlay: crate::hud::PageOverlay,
 }
 
 /// One frame's `bb_ui_json`: the `frame` it was drawn on, the `window` and
@@ -291,8 +294,9 @@ pub struct WindowReport<'a> {
 /// over the round, the chrome
 /// (`ui_status`), where the bitmap lands (`view`: its scale, offset and
 /// size, and its field area as `field`), in build mode the bar's `play`,
-/// `map`, `file` and `fit` buttons with the `tool` and the open `menu`, and
-/// the last `press` - on the window, in UI points and on the bitmap. Every
+/// `map`, `file` and `fit` buttons with the `tool` and the open `menu`, the
+/// last `press` - on the window, in UI points and on the bitmap - and the
+/// `page_overlay` the frame read (in CSS pixels, as the page wrote it). Every
 /// rectangle and point is the window's unless named otherwise: a page
 /// turns one into CSS pixels by dividing by `units_per_point` and adding
 /// the canvas's own corner.
@@ -323,6 +327,10 @@ pub fn window_json(r: &WindowReport) -> String {
         "view": { "scale": r.view.scale, "offset": [r.view.offset.x, r.view.offset.y], "bitmap": [r.view.bitmap.0, r.view.bitmap.1] },
         "field": on_window(Rectangle::new(field.x, field.y, field.w, field.h)),
         "press": press,
+        "page_overlay": {
+            "top": r.page_overlay.top,
+            "rect": r.page_overlay.rect.map(rect),
+        },
     });
     if session.mode() == Driver::Build {
         use crate::editor::MapEditor;
@@ -417,7 +425,8 @@ mod tests {
     /// buffer three device pixels to the point puts the corners' BUILD
     /// button where the chrome laid it out times three, keeps the press
     /// where it landed and says where that is in points and on the bitmap;
-    /// in build mode the bar's buttons come through the view.
+    /// in build mode the bar's buttons come through the view. The page's
+    /// controls come back as the page wrote them, in CSS pixels.
     #[test]
     fn the_window_readout_is_in_window_units() {
         let mut s = session();
@@ -427,8 +436,9 @@ mod tests {
         let layout = Layout::bare(field.0, field.1);
         let view = View::fit(field, (window.0 as f32, window.1 as f32));
         let press = Press { count: 4, at: Vec2::new(300.0, 150.0), touch: true };
+        let page_overlay = crate::hud::PageOverlay { top: 28.0, rect: Some(Rectangle::new(299.25, 3.0, 253.5, 22.0)) };
         let report = |s: &Session, layout: &Layout, view: &View| {
-            window_json(&WindowReport { session: s, ui: &ui, layout, view, window, units_per_point: 3.0, frame: 9, press: Some(press) })
+            window_json(&WindowReport { session: s, ui: &ui, layout, view, window, units_per_point: 3.0, frame: 9, press: Some(press), page_overlay })
         };
         let v: Value = serde_json::from_str(&report(&s, &layout, &view)).expect("JSON");
         assert_eq!(v["mode"], "play");
@@ -446,6 +456,7 @@ mod tests {
         let bitmap = view.to_bitmap(press.at);
         assert!((point(&v["press"]["bitmap"]) - bitmap).length() < 1e-3, "{} vs {bitmap:?}", v["press"]["bitmap"]);
         assert!(v.get("builder").is_none(), "no bar in play mode");
+        assert_eq!(v["page_overlay"], json!({ "top": 28.0, "rect": { "x": 299.25, "y": 3.0, "w": 253.5, "h": 22.0 } }), "the page's own numbers");
 
         s.driver = Driver::Build;
         let layout = Layout::for_field(field.0, field.1);
