@@ -49,7 +49,7 @@ mod weather_tests;
 mod weapons;
 
 pub use waves::{RollIn, WaveStatus};
-pub use weapons::FlameJet;
+pub use weapons::{laser_reach, FlameJet};
 
 /// Which projectile a client's provisional shot is drawn as
 /// (`net::predict`): the three the wire also carries.
@@ -171,7 +171,7 @@ use crate::{
 use combat::{frog_hop_target, ram, HitEffects};
 use engage::{EngageCtx, EngageReport, EngageRing, EngageStatus, EngageTank};
 use hits::{HitBoxFrame, HitBoxHistory, REWIND_MAX_TICKS, ShellTarget, Terrain};
-use weapons::{dispatch_fire, dispatch_fire_from, laser_damage_range, tick_queued_shots, PendingLaserShot, Projectile, Rewind, laser_beam_half_width};
+use weapons::{dispatch_fire, dispatch_fire_from, laser_damage_range, laser_end, tick_queued_shots, PendingLaserShot, Projectile, Rewind, laser_beam_half_width};
 
 /// One step's player input, gathered by the caller (`app.rs` reading a
 /// live `RaylibHandle`, the dev server, a scripted probe) - the entire
@@ -3111,21 +3111,23 @@ impl Game {
     fn resolve_lasers(&mut self, f: &mut Frame) {
         let players = self.seats_on_field();
         let shots = std::mem::take(&mut f.pending_lasers);
+        let reach = laser_reach(self.map.field_size());
         for shot in shots {
             let past = self.rewound_boxes(self.seat_rewind(shot.owner));
+            let end = laser_end(&shot, reach);
             let hit = f.terrain.sweep_rewound(
                 &self.world,
                 players,
                 shot.owner,
                 shot.start,
-                shot.end,
+                end,
                 laser_beam_half_width(),
                 &[],
                 past,
             );
             let (hit_pos, target) = match hit {
-                Some((target, t)) => (shot.start + (shot.end - shot.start) * t, Some(target)),
-                None => (shot.end, None),
+                Some((target, t)) => (shot.start + (end - shot.start) * t, Some(target)),
+                None => (end, None),
             };
             f.muzzle_flashes.push(Shockwave::new(shot.lens));
             self.laser_beams.push(LaserBeam::new(shot.lens, hit_pos, shot.variant));

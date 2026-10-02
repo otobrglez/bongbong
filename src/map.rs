@@ -476,6 +476,13 @@ pub struct MapFile {
     pub name: Option<String>,
 }
 
+/// The most cells a map spans on either side: what an online round can
+/// carry. Positions travel as quarter pixels in an `i16`, which saturates
+/// at 8191 px (`net::wire::POSITION_MAX_PX`) - 250 cells and the tank
+/// length a wave tank starts beyond the edge - and a cell index as a
+/// `u16`, which holds 250 x 250 cells.
+pub const MAX_SIDE_CELLS: f32 = 250.0;
+
 fn cell_key(col: i32, row: i32) -> String {
     format!("{col},{row}")
 }
@@ -570,6 +577,11 @@ impl MapFile {
                 "map is version {}, newer than this build supports ({CURRENT_VERSION})",
                 map.version
             ));
+        }
+        if let Some((cols, rows)) = map.size
+            && !(cols.is_finite() && rows.is_finite() && cols <= MAX_SIDE_CELLS && rows <= MAX_SIDE_CELLS)
+        {
+            return Err(format!("size = [{cols}, {rows}] is past the largest map, {MAX_SIDE_CELLS} cells a side"));
         }
         Ok(map)
     }
@@ -1039,6 +1051,23 @@ cells."10,5" = { kind = "portal" }
         assert!(!bare.to_toml_string().unwrap().contains("size"));
         let ints = MapFile::from_toml_str("version = 1\nsize = [30, 15]\n").unwrap();
         assert_eq!(ints.field_size(), (960.0, 480.0));
+    }
+
+    /// The largest map is one an online round can carry: its far corner,
+    /// and a wave tank waiting a tank length past it, are positions the
+    /// wire holds, and its last cell an index the wire holds.
+    #[test]
+    fn a_map_is_no_larger_than_the_wire_carries() {
+        let largest = MapFile::from_toml_str("version = 1\nsize = [250, 250]\n").unwrap();
+        let (w, h) = largest.field_size();
+        let past = w.max(h) + 2.0 * OBSTACLE_GRID_SIZE;
+        assert!(past <= crate::net::wire::POSITION_MAX_PX, "{past} px does not fit the wire");
+        let last = (MAX_SIDE_CELLS as u32) * (MAX_SIDE_CELLS as u32);
+        assert!(last <= u16::MAX as u32, "{last} cells do not fit a u16 index");
+        for size in ["[251, 20]", "[40, 250.5]", "[nan, 20]", "[40, inf]"] {
+            let err = MapFile::from_toml_str(&format!("version = 1\nsize = {size}\n")).unwrap_err();
+            assert!(err.contains("largest map"), "{size}: {err}");
+        }
     }
 
     #[test]

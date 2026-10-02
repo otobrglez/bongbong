@@ -27,10 +27,30 @@ use super::Event;
 use super::hits::{obstacle_reflect_axis, TerrainBox};
 use super::Frame;
 
-/// How far a laser beam's hit segment reaches past its muzzle - longer
-/// than any battlefield diagonal, so it always meets a wall before running
-/// out of room.
+/// How far a laser beam's hit segment reaches past its muzzle on every
+/// field whose diagonal it outruns - every arena and most fields - so it
+/// always meets a wall before running out of room. A larger field's beam
+/// reaches across it (`laser_reach`).
 const LASER_MAX_RANGE: f32 = 4000.0;
+
+/// How far a laser beam is traced on a field `field` px across: past the
+/// field's diagonal by two cells, never shorter than `LASER_MAX_RANGE`.
+/// The room's beam (`resolve_lasers`) and a client's drawn one
+/// (`net::round`) read it alike.
+pub fn laser_reach(field: (f32, f32)) -> f32 {
+    LASER_MAX_RANGE.max(field.0.hypot(field.1) + 2.0 * crate::OBSTACLE_GRID_SIZE)
+}
+
+/// `shot`'s segment reaching `reach` px past its muzzle: the shot as built
+/// when that is no further than `LASER_MAX_RANGE`, so every field the
+/// fixed range already spans traces the very same segment.
+pub(super) fn laser_end(shot: &PendingLaserShot, reach: f32) -> Position {
+    if reach <= LASER_MAX_RANGE {
+        return shot.end;
+    }
+    let k = reach / LASER_MAX_RANGE;
+    Position::new(shot.start.x + (shot.end.x - shot.start.x) * k, shot.start.y + (shot.end.y - shot.start.y) * k)
+}
 
 /// Half-width of a laser beam's hit segment - a shell's, so a beam lands on
 /// the same boxes a shell would.
@@ -682,5 +702,42 @@ mod deflect_tests {
         let prev = Position::new(10.0, 0.0);
         let v = deflected_velocity(prev, Vec2::new(200.0, 0.0), Position::new(0.0, 0.0));
         assert!(v.x > 0.0 && v.y.abs() < 1e-3, "{v:?}");
+    }
+}
+
+#[cfg(test)]
+mod laser_reach_tests {
+    use super::*;
+
+    fn shot(start: Position, dir: Vec2) -> PendingLaserShot {
+        PendingLaserShot {
+            start,
+            end: Position::new(start.x + dir.x * LASER_MAX_RANGE, start.y + dir.y * LASER_MAX_RANGE),
+            lens: start,
+            shooter_row: 0,
+            owner: Owner::Player(0),
+            variant: LaserVariant::Red,
+        }
+    }
+
+    #[test]
+    fn every_field_the_fixed_range_spans_traces_the_same_segment() {
+        // The largest shipped field and the 96 x 54 study map are well
+        // inside it: their beams are the very segment they always were.
+        for field in [(1088.0, 544.0), (1536.0, 864.0), (3072.0, 1728.0)] {
+            assert_eq!(laser_reach(field), LASER_MAX_RANGE, "{field:?}");
+        }
+        let s = shot(Position::new(123.4, 567.8), Vec2::new(0.6, -0.8));
+        assert_eq!(laser_end(&s, LASER_MAX_RANGE), s.end);
+    }
+
+    #[test]
+    fn a_larger_field_is_crossed_corner_to_corner() {
+        let field = (250.0 * crate::OBSTACLE_GRID_SIZE, 250.0 * crate::OBSTACLE_GRID_SIZE);
+        let reach = laser_reach(field);
+        assert!(reach > field.0.hypot(field.1), "{reach}");
+        let s = shot(Position::new(0.0, 0.0), Vec2::new(field.0, field.1) * (1.0 / field.0.hypot(field.1)));
+        let end = laser_end(&s, reach);
+        assert!(end.x > field.0 && end.y > field.1, "{end:?} stops short of the far corner");
     }
 }
