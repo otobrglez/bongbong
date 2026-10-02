@@ -2875,6 +2875,10 @@ fn follow_json(f: &FollowReport, camera: &Camera) -> Value {
             "room": [room.0, room.1],
             "in_view": shot.boxes_in(camera.rect(), camera.field, f.sight, 1.0),
         },
+        "establishing": {
+            "phase": f.establishing.name(),
+            "progress": (f.establishing.progress() * 100.0).round() / 100.0,
+        },
     })
 }
 
@@ -3259,7 +3263,7 @@ mod tests {
             camera,
             layout,
             view,
-            follow: Some(FollowReport { framing, seating: Seating::Local, sight, shot }),
+            follow: Some(FollowReport { framing, seating: Seating::Local, sight, shot, establishing: crate::establish::Phase::Follow }),
         });
         server.publish_ui(UiFrame::plain((1920.0, 1080.0)));
         let status = at(&mut server, &mut s, "status", json!({})).unwrap();

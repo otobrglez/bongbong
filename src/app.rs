@@ -233,7 +233,10 @@ fn publish_window(rl: &RaylibHandle, session: &Session, ui: &UiFrame, layout: &L
 /// tuning table's. Play draws no bar: its HUD stands in the window's
 /// corners (`hud::corners`). A field map's builder canvas is made to the
 /// window's shape with an arena's bar (`editor::camera::canvas_frame`), the
-/// builder's own camera choosing what of the map it shows.
+/// builder's own camera choosing what of the map it shows. While a field
+/// map's establishing shot plays (`establish.rs`) its frame keeps the
+/// follow camera going underneath, but the targets hold the whole field, a
+/// texel a world pixel, as an arena's do.
 struct Presentation {
     /// The field it was made for, and the mode: a change of either makes it
     /// stale (`stale`).
@@ -241,6 +244,8 @@ struct Presentation {
     mode: Driver,
     /// A field map's frame; `None` for the whole-field bitmap.
     followed: Option<FollowFrame>,
+    /// Whether the targets are made for the establishing shot.
+    establishing: bool,
     /// The view the dev server pinned, if one is.
     pinned: Option<Camera>,
     layout: Layout,
@@ -252,7 +257,7 @@ struct Presentation {
 }
 
 impl Presentation {
-    fn of(rl: &RaylibHandle, session: &Session, pinned: Option<Camera>) -> Presentation {
+    fn of(rl: &RaylibHandle, session: &Session, pinned: Option<Camera>, establishing: bool) -> Presentation {
         let field = session.field_size();
         let mode = session.mode();
         let window = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
@@ -261,8 +266,12 @@ impl Presentation {
             let (half_w, half_h) = tuning().sight_box_half_px();
             let seating = if mode == Driver::Online { Seating::Room } else { Seating::Local };
             let frame = FollowFrame::new(screen(rl), window, seating, SightBox::new(half_w, half_h), &ViewRules::current());
-            let target = frame.target_size();
-            return Presentation { field, mode, followed: Some(frame), pinned, layout: frame.layout, view: frame.view, scene: target, composite: target };
+            let (scene, composite) = if establishing {
+                (Camera::whole(field).target_size(), Layout::bare(field.0, field.1).window_size())
+            } else {
+                (frame.target_size(), frame.target_size())
+            };
+            return Presentation { field, mode, followed: Some(frame), establishing, pinned, layout: frame.layout, view: frame.view, scene, composite };
         }
         // The builder keeps its bar; play draws the field alone, its HUD
         // standing in the window's corners (`hud::corners`).
@@ -282,13 +291,14 @@ impl Presentation {
         if mode == Driver::Build && session.builder.map().class().follows() {
             let (layout, view) = crate::editor::camera::canvas_frame(window, cap);
             let bitmap = layout.window_size();
-            return Presentation { field, mode, followed: None, pinned: None, layout, view, scene: bitmap, composite: bitmap };
+            return Presentation { field, mode, followed: None, establishing: false, pinned: None, layout, view, scene: bitmap, composite: bitmap };
         }
         let (w, h) = layout.window_size();
         Presentation {
             field,
             mode,
             followed: None,
+            establishing: false,
             pinned,
             layout,
             view: View::fit_capped((w as f32, h as f32), window, cap),
@@ -1393,6 +1403,9 @@ pub fn run(args: Args) {
     // cuts.
     let mut follow = crate::follow::Follow::default();
     let mut followed_in: Option<(bool, Option<String>, (f32, f32))> = None;
+    // A field map's establishing shot (establish.rs): the round it opens
+    // and how far it has come.
+    let mut establish = crate::establish::Establish::default();
     let mut touch = crate::touch::TouchScheme::default();
     // How far each corner cluster has faded under the fight (`hud::Fade`).
     let mut fade = Fade::default();
@@ -1627,7 +1640,7 @@ pub fn run(args: Args) {
         let pinned = dev.as_ref().and_then(|dev| dev.pinned_camera((width, height)));
         #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
         let pinned: Option<Camera> = None;
-        let mut plan = Presentation::of(rl, &session, pinned);
+        let mut plan = Presentation::of(rl, &session, pinned, establish.showing());
         plan.fit_targets(rl, thread, &mut scene_target, &mut scene_size, &mut composite, &mut composite_size);
         let (mut layout, mut view) = (plan.layout, plan.view);
         if !crate::EMBEDDED && rl.is_key_pressed(KeyboardKey::KEY_F11) {
@@ -1908,7 +1921,7 @@ pub fn run(args: Args) {
             let pinned = dev.as_ref().and_then(|dev| dev.pinned_camera(session.field_size()));
             #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
             let pinned: Option<Camera> = None;
-            plan = Presentation::of(rl, &session, pinned);
+            plan = Presentation::of(rl, &session, pinned, establish.showing());
             plan.fit_targets(rl, thread, &mut scene_target, &mut scene_size, &mut composite, &mut composite_size);
             (layout, view) = (plan.layout, plan.view);
             session.minimap_on = plan.minimap_on(&this_screen);
@@ -2116,7 +2129,7 @@ pub fn run(args: Args) {
             let pinned = dev.as_ref().and_then(|dev| dev.pinned_camera(session.field_size()));
             #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
             let pinned: Option<Camera> = None;
-            plan = Presentation::of(rl, &session, pinned);
+            plan = Presentation::of(rl, &session, pinned, establish.showing());
             plan.fit_targets(rl, thread, &mut scene_target, &mut scene_size, &mut composite, &mut composite_size);
             (layout, view) = (plan.layout, plan.view);
             session.minimap_on = plan.minimap_on(&this_screen);
@@ -2130,7 +2143,9 @@ pub fn run(args: Args) {
         // round on screen advanced - a local round's steps, a replica's
         // frame of real time, nothing while a dialog or the lobby holds
         // the round still.
-        let camera = match &plan.followed {
+        let mut establishing = false;
+        let mut shown_rect: Option<crate::math::Rectangle> = None;
+        let camera = match plan.followed {
             Some(frame) => {
                 // The round on screen: a room's replica or the local round
                 // (which the lobby and the dialogs stand over, still), on
@@ -2151,15 +2166,53 @@ pub fn run(args: Args) {
                 let local: Vec<usize> = local_seats(&session).into_iter().map(usize::from).collect();
                 let stage = crate::follow::Stage { visible: frame.framing.visible, field, sight: frame.sight };
                 let shot = follow.update(&crate::follow::Seats::of(game, &local), advanced, &stage, &crate::follow::FollowRules::current());
-                let camera = Camera::following(field, shot.corner, frame.framing.visible, 1.0, frame.device_scale(framebuffer_ratio(rl)));
+                let follow_camera = Camera::following(field, shot.corner, frame.framing.visible, 1.0, frame.device_scale(framebuffer_ratio(rl)));
+                // The establishing shot (establish.rs): a local round's
+                // opening on a field map its view shows part of shows the
+                // whole map, then zooms down to the follow view - drawn
+                // through whole-field targets, as an arena is, and put on
+                // the window by the zoom's mapping - while the follow camera
+                // keeps going underneath, so the zoom lands where it stands.
+                let rules = crate::establish::EstablishRules::current();
+                let wanted = crate::establish::wanted(session.mode() == Driver::Play, plan.shows_part(), field, &rules);
+                let phase = establish.update(game.round_seed(), game.frame(), game.intro_timer, wanted, &rules, crate::motion::reduced());
+                establishing = phase.showing();
+                if establishing != plan.establishing {
+                    plan = Presentation::of(rl, &session, plan.pinned, establishing);
+                    plan.fit_targets(rl, thread, &mut scene_target, &mut scene_size, &mut composite, &mut composite_size);
+                    (layout, view) = (plan.layout, plan.view);
+                }
+                let camera = if establishing {
+                    let window = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+                    let whole = Camera::whole(field);
+                    let from = crate::establish::Mapping::of(&whole, crate::math::Vec2::zero(), &View::fit(field, window));
+                    let to = crate::establish::Mapping::of(&follow_camera, frame.layout.field_origin(), &frame.view);
+                    let mapping = match phase {
+                        crate::establish::Phase::Zoom(q) => crate::establish::between(from, to, q),
+                        _ => from,
+                    };
+                    layout = Layout::bare(field.0, field.1);
+                    view = mapping.view(field, window);
+                    shown_rect = Some(mapping.shows(window));
+                    whole
+                } else {
+                    follow_camera
+                };
                 #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
                 if let Some(dev) = &mut dev {
+                    let mode = if establishing { crate::follow::CameraMode::Establishing } else { crate::follow::CameraMode::Follow };
                     dev.publish_camera(crate::follow::CameraReport {
-                        mode: crate::follow::CameraMode::Follow,
+                        mode,
                         camera,
                         layout,
                         view,
-                        follow: Some(crate::follow::FollowReport { framing: frame.framing, seating: frame.seating, sight: frame.sight, shot }),
+                        follow: Some(crate::follow::FollowReport {
+                            framing: frame.framing,
+                            seating: frame.seating,
+                            sight: frame.sight,
+                            shot,
+                            establishing: phase,
+                        }),
                     });
                 }
                 camera
@@ -2230,7 +2283,7 @@ pub fn run(args: Args) {
         // arrows could point at.
         let minimap_marks = corners.as_ref().and_then(|c| c.minimap).map(|_| {
             let shown: &[crate::indicators::Indicators] = if indicators.is_some() { awareness.shown() } else { &[] };
-            crate::minimap::Marks::gather(game, &seats, shown, camera.rect())
+            crate::minimap::Marks::gather(game, &seats, shown, shown_rect.unwrap_or(camera.rect()))
         });
         let minimap_image = minimap_marks.is_some().then(|| round_minimap.sync(game));
         let minimap_texture = minimap_image.and_then(|m| round_minimap_texture.sync(rl, thread, m.image()));
@@ -2259,7 +2312,9 @@ pub fn run(args: Args) {
                 touch: (session.mode() != Driver::Lobby).then_some((&touch, steer_right)),
                 indicators: indicators.as_ref(),
                 minimap,
-                margins: Some(&mut margin_fx),
+                // An establishing shot is drawn whole as an arena is, but
+                // zooms: no margins, which stand still round an arena.
+                margins: (!establishing).then_some(&mut margin_fx),
             },
             &Textures {
                 tanks: &tanks_texture,

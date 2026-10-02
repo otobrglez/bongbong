@@ -1895,6 +1895,17 @@ tunables! {
         /// rather than running into it and stopping dead. 0 is a hard
         /// stop.
         camera_edge_ease_px: f32 = 48.0 in 0.0 ..= 512.0;
+        /// The establishing shot (`establish.rs`, docs/large-maps-follow-camera.md
+        /// section 6): a field map's round opens on the whole map - the
+        /// frog, the gates - for this many seconds, while its mission
+        /// banner holds the round still. 0 plays no shot.
+        camera_establish_hold_seconds: f32 = 1.0 in 0.0 ..= 5.0;
+        /// ... then zooms down to the tank's follow view over this many
+        /// seconds, or cuts to it under reduced motion. The shot always
+        /// ends with the banner at the latest - a shorter banner shortens
+        /// the hold first - and any steer or shot ends both at once, so it
+        /// never costs a moment of play.
+        camera_establish_zoom_seconds: f32 = 0.45 in 0.0 ..= 3.0;
     }
 
     group builder {

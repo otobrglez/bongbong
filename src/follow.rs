@@ -690,6 +690,9 @@ pub enum CameraMode {
     Whole,
     /// A field map, followed.
     Follow,
+    /// A field map's establishing shot (`establish.rs`): the whole field,
+    /// or the zoom from it down to the follow view.
+    Establishing,
     /// A view the dev server's `camera` tool pinned.
     Pinned,
     /// The builder's own camera over its canvas (`editor::camera`).
@@ -702,6 +705,7 @@ impl CameraMode {
         match self {
             CameraMode::Whole => "whole",
             CameraMode::Follow => "follow",
+            CameraMode::Establishing => "establishing",
             CameraMode::Pinned => "pinned",
             CameraMode::Build => "build",
         }
@@ -730,6 +734,9 @@ pub struct FollowReport {
     pub seating: Seating,
     pub sight: SightBox,
     pub shot: Shot,
+    /// Where the establishing shot stands (`establish::Phase::Follow` once
+    /// it is over, or where none plays).
+    pub establishing: crate::establish::Phase,
 }
 
 #[cfg(test)]

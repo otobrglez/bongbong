@@ -927,6 +927,7 @@ pub mod decal;
 #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
 pub mod devserver;
 pub mod editor;
+pub mod establish;
 pub mod frog;
 pub mod fireball;
 pub mod follow;
