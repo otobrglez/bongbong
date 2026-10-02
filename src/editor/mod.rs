@@ -511,6 +511,13 @@ pub struct MapEditor {
     gestures: gesture::Gestures,
     /// Where a painting finger is, for edge scroll.
     stroke_pointer: Option<Vec2>,
+    /// The MAP panel's ANCHOR: where the old map sits when its size
+    /// changes. The panel's choice, not the map's.
+    resize_anchor: Anchor,
+    /// The undo depth just after a size stepper's last press, while the
+    /// panel stays open: the next press folds into that step, so a run of
+    /// presses is one undo step.
+    resize_session: Option<usize>,
     pub cli_overrides: CliOverrides,
     /// `render` draws a flat white field instead of the ground tileset -
     /// the builder-side twin of `Game::plain_canvas`.
@@ -551,6 +558,8 @@ impl MapEditor {
             pending_look: None,
             gestures: gesture::Gestures::default(),
             stroke_pointer: None,
+            resize_anchor: Anchor::default(),
+            resize_session: None,
             cli_overrides: CliOverrides::default(),
         };
         editor.rebuild_ground();
@@ -718,20 +727,106 @@ impl MapEditor {
 
     pub fn undo(&mut self) -> Option<EditStep> {
         self.finish_stroke();
+        self.resize_session = None;
         let field = self.map.field_size();
         let step = self.history.undo(&mut self.map)?;
         self.rebuild_ground();
-        self.refit_if_resized(field);
+        self.follow_whole_map_step(&step, field, -1);
         Some(step)
     }
 
     pub fn redo(&mut self) -> Option<EditStep> {
         self.finish_stroke();
+        self.resize_session = None;
         let field = self.map.field_size();
         let step = self.history.redo(&mut self.map)?;
         self.rebuild_ground();
-        self.refit_if_resized(field);
+        self.follow_whole_map_step(&step, field, 1);
         Some(step)
+    }
+
+    /// The camera after a step was undone (`way` -1) or redone (1): a
+    /// resize moves a zoomed view with the map, and any other step that
+    /// left a field of another size starts it at FIT.
+    fn follow_whole_map_step(&mut self, step: &EditStep, field_before: (f32, f32), way: i32) {
+        match step {
+            EditStep::Resize { shift, .. } => {
+                let cell = crate::OBSTACLE_GRID_SIZE;
+                self.camera.shift(Vec2::new((way * shift.0) as f32 * cell, (way * shift.1) as f32 * cell));
+            }
+            _ => self.refit_if_resized(field_before),
+        }
+    }
+
+    /// The map's size in cells: its `size`, or the standard 34 x 17.
+    pub fn size_cells(&self) -> (f32, f32) {
+        let (w, h) = self.map.field_size();
+        (w / crate::OBSTACLE_GRID_SIZE, h / crate::OBSTACLE_GRID_SIZE)
+    }
+
+    /// The MAP panel's ANCHOR.
+    pub fn resize_anchor(&self) -> Anchor {
+        self.resize_anchor
+    }
+
+    pub fn set_resize_anchor(&mut self, anchor: Anchor) {
+        self.resize_anchor = anchor;
+    }
+
+    /// Make the map `cols` x `rows` cells - each kept between
+    /// `MIN_MAP_CELLS` and `map::MAX_SIDE_CELLS` - with the old map placed
+    /// by `anchor`, as one undo step. Cells that land past the new field's
+    /// edge are dropped, and undo brings them back. The canvas's ground is
+    /// made again on the new field and a zoomed view moves with the map.
+    /// Whether the size changed.
+    pub fn resize(&mut self, cols: f32, rows: f32, anchor: Anchor) -> bool {
+        self.resize_map(cols, rows, anchor, false)
+    }
+
+    /// `resize`, folded into the last step when `fold` and that step was
+    /// this panel's last size press.
+    fn resize_map(&mut self, cols: f32, rows: f32, anchor: Anchor, fold: bool) -> bool {
+        self.finish_stroke();
+        if !(cols.is_finite() && rows.is_finite()) {
+            return false;
+        }
+        let old = self.size_cells();
+        let new = (cols.clamp(MIN_MAP_CELLS.0, map::MAX_SIDE_CELLS), rows.clamp(MIN_MAP_CELLS.1, map::MAX_SIDE_CELLS));
+        if new == old {
+            return false;
+        }
+        let shift = anchor.shift(old, new);
+        let before = self.map.clone();
+        let cell = crate::OBSTACLE_GRID_SIZE;
+        let (width, height) = (new.0 * cell, new.1 * cell);
+        self.map.size = Some(new);
+        self.map.cells.clear();
+        for (col, row, obj) in before.iter_cells() {
+            let (col, row) = (col + shift.0, row + shift.1);
+            // A cell is on the field while its middle is: the cells a
+            // pointer on the field can paint.
+            let at = map::cell_to_world(col, row);
+            if at.x >= 0.0 && at.y >= 0.0 && at.x <= width && at.y <= height {
+                self.map.set_cell(col, row, *obj);
+            }
+        }
+        let folded = fold
+            && self.resize_session == Some(self.history.undo_depth())
+            && match self.history.last_mut() {
+                Some(EditStep::Resize { after, shift: total, .. }) => {
+                    **after = self.map.clone();
+                    *total = (total.0 + shift.0, total.1 + shift.1);
+                    true
+                }
+                _ => false,
+            };
+        if !folded {
+            self.history.push(EditStep::Resize { before: Box::new(before), after: Box::new(self.map.clone()), shift });
+        }
+        self.resize_session = fold.then(|| self.history.undo_depth());
+        self.camera.shift(Vec2::new(shift.0 as f32 * cell, shift.1 as f32 * cell));
+        self.rebuild_ground();
+        true
     }
 
     pub fn settings(&self) -> MapSettings {
@@ -1236,6 +1331,11 @@ impl MapEditor {
         if let Some(rect) = self.pending_look.take() {
             self.apply_look(rect);
         }
+        // A run of size presses is one undo step only while the panel
+        // stays open.
+        if !matches!(self.popup, Some(Popup::Settings)) {
+            self.resize_session = None;
+        }
         let rules = CanvasRules::current();
         // The keyboard shortcuts work under a menu too, but not while the
         // Save prompt is taking text - a `-` there is a character.
@@ -1691,6 +1791,17 @@ impl MapEditor {
             SettingsRow::TierEnd => s.tier_end = step_option_choice(s.tier_end, &Tier::ALL, forward),
             SettingsRow::Theme => s.theme = step_choice(s.theme, &Theme::ALL, forward),
             SettingsRow::Weather => s.weather = step_choice(s.weather, &Weather::ALL, forward),
+            SettingsRow::Width | SettingsRow::Height => {
+                let (cols, rows) = self.size_cells();
+                let (cols, rows) =
+                    if row == SettingsRow::Width { (step_size(cols, forward), rows) } else { (cols, step_size(rows, forward)) };
+                self.resize_map(cols, rows, self.resize_anchor, true);
+                return;
+            }
+            SettingsRow::Anchor => {
+                self.resize_anchor = step_choice(self.resize_anchor, &Anchor::ALL, forward);
+                return;
+            }
             SettingsRow::Reset => return,
         }
         self.apply_settings(s);
@@ -1748,10 +1859,17 @@ enum SettingsRow {
     /// The sky (`MapFile::weather`, docs/weather.md). The canvas stays
     /// clear to edit on; the round draws the sky.
     Weather,
+    /// The map's size in cells (`MapFile::size`): columns and rows, each
+    /// press one cell, the old map placed by the ANCHOR row
+    /// (`MapEditor::resize`).
+    Width,
+    Height,
+    /// Where the old map sits when the size changes: one of nine.
+    Anchor,
     Reset,
 }
 
-const SETTINGS_ROWS: [SettingsRow; 13] = [
+const SETTINGS_ROWS: [SettingsRow; 16] = [
     SettingsRow::Tanks,
     SettingsRow::Tank,
     SettingsRow::Tank2,
@@ -1764,10 +1882,96 @@ const SETTINGS_ROWS: [SettingsRow; 13] = [
     SettingsRow::TierEnd,
     SettingsRow::Theme,
     SettingsRow::Weather,
+    SettingsRow::Width,
+    SettingsRow::Height,
+    SettingsRow::Anchor,
     SettingsRow::Reset,
 ];
 
 const MISSIONS: [Mission; 3] = [Mission::Protect, Mission::Hunt, Mission::Destroy];
+
+/// The smallest map the size steppers make, in cells: a phone's view of
+/// a field map is about 35 x 16, and nothing smaller than this is worth a
+/// round.
+pub const MIN_MAP_CELLS: (f32, f32) = (16.0, 9.0);
+
+/// Where the old map sits in a resized one (`MapEditor::resize`): the
+/// MAP panel's nine-way ANCHOR. An anchor on a side keeps that edge where
+/// it was; the middle shares the change between the two sides.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Anchor {
+    TopLeft,
+    Top,
+    TopRight,
+    Left,
+    #[default]
+    Center,
+    Right,
+    BottomLeft,
+    Bottom,
+    BottomRight,
+}
+
+impl Anchor {
+    /// Row by row, as the panel's 3 x 3 glyph shows them.
+    pub const ALL: [Anchor; 9] = [
+        Anchor::TopLeft,
+        Anchor::Top,
+        Anchor::TopRight,
+        Anchor::Left,
+        Anchor::Center,
+        Anchor::Right,
+        Anchor::BottomLeft,
+        Anchor::Bottom,
+        Anchor::BottomRight,
+    ];
+
+    /// The anchor's name, as the dev server spells it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Anchor::TopLeft => "top_left",
+            Anchor::Top => "top",
+            Anchor::TopRight => "top_right",
+            Anchor::Left => "left",
+            Anchor::Center => "center",
+            Anchor::Right => "right",
+            Anchor::BottomLeft => "bottom_left",
+            Anchor::Bottom => "bottom",
+            Anchor::BottomRight => "bottom_right",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Anchor> {
+        Anchor::ALL.into_iter().find(|a| a.name() == s)
+    }
+
+    /// The anchor's column and row in its 3 x 3 grid, 0 to 2.
+    pub fn grid(self) -> (i32, i32) {
+        let i = Anchor::ALL.iter().position(|&a| a == self).expect("every anchor is in ALL") as i32;
+        (i % 3, i / 3)
+    }
+
+    /// How many whole cells the old map's cells move when the map goes
+    /// from `old` to `new` cells (columns, rows): none at a near anchor,
+    /// the whole change at a far one, half of it in the middle - counted
+    /// from the halves of both sizes, so a run of one-cell steps moves the
+    /// map a cell every other step and comes out centred.
+    pub fn shift(self, old: (f32, f32), new: (f32, f32)) -> (i32, i32) {
+        let (gx, gy) = self.grid();
+        let axis = |g: i32, o: f32, n: f32| match g {
+            0 => 0,
+            1 => (n / 2.0).floor() as i32 - (o / 2.0).floor() as i32,
+            _ => n.floor() as i32 - o.floor() as i32,
+        };
+        (axis(gx, old.0, new.0), axis(gy, old.1, new.1))
+    }
+}
+
+/// One press of a size stepper: to the next whole number of cells either
+/// way (a fractional size steps onto the whole ones).
+fn step_size(cells: f32, forward: bool) -> f32 {
+    if forward { cells.floor() + 1.0 } else { cells.ceil() - 1.0 }
+}
 
 /// Walk an optional number along `auto, min, min+1, .., max`: forwards
 /// from `auto` lands on `min`, backwards from `min` on `auto`, and the
@@ -2797,6 +3001,134 @@ mod editor_tests {
             ed.update(&BuilderInput { pointer: Some(mid), held: true, dt: 1.0 / 60.0, ..Default::default() }, &layout);
         }
         assert_eq!(ed.camera().center(&vp), center);
+    }
+
+    /// Each anchor keeps its edge or shares the change, in whole cells, and
+    /// a run of one-cell steps about the middle comes out centred.
+    #[test]
+    fn an_anchor_keeps_its_edge_and_the_middle_shares_the_change() {
+        let grow = |a: Anchor| a.shift((34.0, 17.0), (40.0, 21.0));
+        assert_eq!(grow(Anchor::TopLeft), (0, 0));
+        assert_eq!(grow(Anchor::Top), (3, 0));
+        assert_eq!(grow(Anchor::TopRight), (6, 0));
+        assert_eq!(grow(Anchor::Left), (0, 2));
+        assert_eq!(grow(Anchor::Center), (3, 2));
+        assert_eq!(grow(Anchor::Right), (6, 2));
+        assert_eq!(grow(Anchor::BottomLeft), (0, 4));
+        assert_eq!(grow(Anchor::Bottom), (3, 4));
+        assert_eq!(grow(Anchor::BottomRight), (6, 4));
+        assert_eq!(Anchor::BottomRight.shift((40.0, 22.5), (34.0, 17.0)), (-6, -5), "a half row steps onto the whole ones");
+        let mut total = 0;
+        for cols in 34..44 {
+            total += Anchor::Center.shift((cols as f32, 17.0), (cols as f32 + 1.0, 17.0)).0;
+        }
+        assert_eq!(total, 5, "ten one-cell steps about the middle move the map five cells");
+        for a in Anchor::ALL {
+            assert_eq!(Anchor::parse(a.name()), Some(a));
+        }
+    }
+
+    /// A resize with every anchor places the old map at it, drops the
+    /// cells that land past the new edge, makes the ground on the new
+    /// field, and one undo brings the map back whole; redo repeats it.
+    #[test]
+    fn a_resize_with_every_anchor_places_the_map_and_undo_brings_it_back() {
+        let mut base = MapFile::new();
+        let corners = [(0, 0), (33, 0), (0, 16), (33, 16), (17, 8)];
+        for (i, &(c, r)) in corners.iter().enumerate() {
+            base.set_cell(c, r, if i == 4 { CellObject::Frog } else { brick() });
+        }
+        base.set_cell(34, 17, CellObject::Road);
+        for anchor in Anchor::ALL {
+            for (cols, rows) in [(24.0, 12.0), (40.0, 21.0)] {
+                let mut ed = MapEditor::new(base.clone());
+                ed.set_resize_anchor(anchor);
+                assert!(ed.resize(cols, rows, anchor));
+                assert_eq!(ed.size_cells(), (cols, rows));
+                let (dx, dy) = anchor.shift((34.0, 17.0), (cols, rows));
+                for (c, r, obj) in base.iter_cells() {
+                    let (nc, nr) = (c + dx, r + dy);
+                    let inside = nc >= 0 && nr >= 0 && nc as f32 <= cols && nr as f32 <= rows;
+                    assert_eq!(ed.map().cell(nc, nr), inside.then_some(obj), "{anchor:?} to {cols} x {rows}: {c},{r} -> {nc},{nr}");
+                }
+                let kept = base.iter_cells().filter(|&(c, r, _)| {
+                    let (nc, nr) = (c + dx, r + dy);
+                    nc >= 0 && nr >= 0 && nc as f32 <= cols && nr as f32 <= rows
+                });
+                assert_eq!(ed.map().cells.len(), kept.count());
+                assert_eq!(ed.ground().cols, cols as usize + 1, "the ground is the new field's");
+                assert!(ed.dirty() && ed.diff().settings.contains(&"size"), "{:?}", ed.diff());
+                assert_eq!(ed.history().undo_depth(), 1);
+                let after = ed.map().clone();
+                ed.undo();
+                assert_eq!(ed.map(), &base, "{anchor:?}: undo brings every cell back");
+                assert!(!ed.dirty());
+                ed.redo();
+                assert_eq!(ed.map(), &after);
+            }
+        }
+    }
+
+    /// The panel's WIDTH and HEIGHT steppers resize a cell a press about
+    /// the ANCHOR, a run of presses one undo step while the panel stays
+    /// open, held between 16 x 9 and the largest map; a zoomed view moves
+    /// with the map.
+    #[test]
+    fn the_size_steppers_resize_a_cell_a_press_as_one_step() {
+        let layout = Layout::for_field(W, H);
+        let mut ed = MapEditor::new(MapFile::new());
+        ed.stroke(&[(10, 5)], false);
+        click(&mut ed, &layout, center(MapEditor::map_rect(&layout)));
+        assert_eq!(ed.open_menu(), Some("map"));
+        let row = |r: SettingsRow| MapEditor::settings_row_rect(&layout, SETTINGS_ROWS.iter().position(|&x| x == r).unwrap());
+        let inc = |r: SettingsRow| center(MapEditor::settings_inc_rect(row(r)));
+        let dec = |r: SettingsRow| center(MapEditor::settings_dec_rect(row(r)));
+        // The anchor walks the nine, from the middle.
+        assert_eq!(ed.resize_anchor(), Anchor::Center);
+        click(&mut ed, &layout, inc(SettingsRow::Anchor));
+        assert_eq!(ed.resize_anchor(), Anchor::Right);
+        click(&mut ed, &layout, dec(SettingsRow::Anchor));
+        click(&mut ed, &layout, dec(SettingsRow::Anchor));
+        assert_eq!(ed.resize_anchor(), Anchor::Left);
+        let depth = ed.history().undo_depth();
+        for _ in 0..4 {
+            click(&mut ed, &layout, inc(SettingsRow::Width));
+        }
+        click(&mut ed, &layout, dec(SettingsRow::Height));
+        assert_eq!(ed.size_cells(), (38.0, 16.0));
+        assert_eq!(ed.map().cell(10, 5), Some(&brick()), "left anchor: the map stays at the left, 17 to 16 rows round the same middle row");
+        click(&mut ed, &layout, dec(SettingsRow::Height));
+        assert_eq!(ed.map().cell(10, 4), Some(&brick()), "and the next row off moves it up one");
+        click(&mut ed, &layout, inc(SettingsRow::Height));
+        assert_eq!(ed.history().undo_depth(), depth + 1, "five presses, one step");
+        // Closing the panel ends the run.
+        ed.update(&BuilderInput { escape: true, ..Default::default() }, &layout);
+        ed.update(&BuilderInput::default(), &layout);
+        click(&mut ed, &layout, center(MapEditor::map_rect(&layout)));
+        click(&mut ed, &layout, inc(SettingsRow::Height));
+        assert_eq!(ed.history().undo_depth(), depth + 2);
+        ed.undo();
+        ed.undo();
+        assert_eq!(ed.size_cells(), (34.0, 17.0));
+        assert_eq!(ed.map().cell(10, 5), Some(&brick()));
+        // The limits hold.
+        assert!(!ed.resize(5.0, 3.0, Anchor::Center) || ed.size_cells() == MIN_MAP_CELLS);
+        ed.resize(5.0, 3.0, Anchor::Center);
+        assert_eq!(ed.size_cells(), MIN_MAP_CELLS);
+        ed.resize(1000.0, 1000.0, Anchor::TopLeft);
+        assert_eq!(ed.size_cells(), (map::MAX_SIDE_CELLS, map::MAX_SIDE_CELLS));
+        // A zoomed view moves with the map.
+        let (mut ed, layout, _) = big_editor((1180.0, 820.0), 2.0, false);
+        let vp = ed.viewport();
+        ed.camera.zoom_at(vp.fit_scale() * 4.0, Vec2::new(500.0, 300.0), &vp, &CanvasRules::of(&crate::tuning::Tuning::DEFAULT));
+        let before = ed.camera().center(&ed.viewport());
+        ed.resize(100.0, 54.0, Anchor::Right);
+        let after = ed.camera().center(&ed.viewport());
+        assert!((after.x - before.x - 4.0 * 32.0).abs() < 1e-3 && (after.y - before.y).abs() < 1e-3, "{before:?} -> {after:?}");
+        ed.update(&BuilderInput::default(), &layout);
+        ed.undo();
+        let back = ed.camera().center(&ed.viewport());
+        assert!((back.x - before.x).abs() < 1e-3, "undo moves it back: {before:?} -> {back:?}");
     }
 
     /// What a drag across the 96 x 54 study map costs, a cell a frame: the

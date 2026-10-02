@@ -273,6 +273,10 @@ settings-tier-start = TIER START
 settings-tier-end = TIER END
 settings-theme = THEME
 settings-weather = WEATHER
+# The map's size in cells, and where the old map sits when it changes.
+settings-width = WIDTH
+settings-height = HEIGHT
+settings-anchor = ANCHOR
 settings-reset = RESET MAP
 # A settings value the map leaves to the game.
 settings-auto = auto

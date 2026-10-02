@@ -401,8 +401,8 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "builder_settings",
-        description: "The builder's MAP settings - the map file's own level keys: tanks (enemy count 0-31), tank (player 1's chassis name), tank2 (player 2's, two-player rounds), mission (protect|hunt|destroy), spawn (band|waves), waves (1-20), wave_size (1-31), wave_growth (0-10), tier_start/tier_end (light|medium|heavy|super), theme (grass|desert - the look: ground tileset and tall-grass sheet; the canvas redraws in it at once), weather (clear|night|dusk|rain|storm|fog|sandstorm|snow|heat_haze - the sky the round is drawn under, docs/weather.md; the canvas itself stays clear to edit on). A field left out is untouched; a field set to null goes back to auto (unset: the game's own roll or the `waves` tuning group; mission/spawn back to protect/band). Each changed field is one undo step, in the order listed. `reset: true` then reverts cells and settings to the baseline (one undoable step). Replies with the current values (null = auto) and `cli_overrides`: which of them a command-line flag (-e, --tank, --mission, ...) or an earlier `restart` parameter overrides at PLAY, so the map's value is not what the round will use.",
-        schema: r#"{"type":"object","properties":{"tanks":{"type":["integer","null"],"minimum":0,"maximum":31},"tank":{"type":["string","null"],"description":"A chassis name, e.g. titan"},"tank2":{"type":["string","null"],"description":"Player 2's chassis name"},"mission":{"type":["string","null"],"enum":["protect","hunt","destroy",null]},"spawn":{"type":["string","null"],"enum":["band","waves",null]},"waves":{"type":["integer","null"],"minimum":1,"maximum":20},"wave_size":{"type":["integer","null"],"minimum":1,"maximum":31},"wave_growth":{"type":["integer","null"],"minimum":0,"maximum":10},"tier_start":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"tier_end":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"theme":{"type":["string","null"],"enum":["grass","desert",null],"description":"null = grass, the default"},"weather":{"type":["string","null"],"enum":["clear","night","dusk","rain","storm","fog","sandstorm","snow","heat_haze","random",null],"description":"null = clear, the default; random = a sky picked by each round's seed"},"reset":{"type":"boolean","default":false,"description":"Revert cells and settings to the baseline"}}}"#,
+        description: "The builder's MAP settings - the map file's own level keys: tanks (enemy count 0-31), tank (player 1's chassis name), tank2 (player 2's, two-player rounds), mission (protect|hunt|destroy), spawn (band|waves), waves (1-20), wave_size (1-31), wave_growth (0-10), tier_start/tier_end (light|medium|heavy|super), theme (grass|desert - the look: ground tileset and tall-grass sheet; the canvas redraws in it at once), weather (clear|night|dusk|rain|storm|fog|sandstorm|snow|heat_haze - the sky the round is drawn under, docs/weather.md; the canvas itself stays clear to edit on), anchor (where the old map sits when the size changes: top_left|top|top_right|left|center|right|bottom_left|bottom|bottom_right - the panel's ANCHOR, kept for the session), size ([cols, rows] cells, 16 x 9 up to 250 a side: the map resized with the old one placed by the anchor, cells that land past the new edge dropped - one undo step, which brings them back - and the canvas made again on the new field). A field left out is untouched; a field set to null goes back to auto (unset: the game's own roll or the `waves` tuning group; mission/spawn back to protect/band). Each changed field is one undo step, in the order listed. `reset: true` then reverts cells and settings to the baseline (one undoable step). Replies with the current values (null = auto, `size` in cells) and `cli_overrides`: which of them a command-line flag (-e, --tank, --mission, ...) or an earlier `restart` parameter overrides at PLAY, so the map's value is not what the round will use.",
+        schema: r#"{"type":"object","properties":{"tanks":{"type":["integer","null"],"minimum":0,"maximum":31},"tank":{"type":["string","null"],"description":"A chassis name, e.g. titan"},"tank2":{"type":["string","null"],"description":"Player 2's chassis name"},"mission":{"type":["string","null"],"enum":["protect","hunt","destroy",null]},"spawn":{"type":["string","null"],"enum":["band","waves",null]},"waves":{"type":["integer","null"],"minimum":1,"maximum":20},"wave_size":{"type":["integer","null"],"minimum":1,"maximum":31},"wave_growth":{"type":["integer","null"],"minimum":0,"maximum":10},"tier_start":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"tier_end":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"theme":{"type":["string","null"],"enum":["grass","desert",null],"description":"null = grass, the default"},"weather":{"type":["string","null"],"enum":["clear","night","dusk","rain","storm","fog","sandstorm","snow","heat_haze","random",null],"description":"null = clear, the default; random = a sky picked by each round's seed"},"anchor":{"type":"string","enum":["top_left","top","top_right","left","center","right","bottom_left","bottom","bottom_right"],"description":"Where the old map sits when the size changes"},"size":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"[cols, rows] in cells, 16 x 9 to 250 x 250"},"reset":{"type":"boolean","default":false,"description":"Revert cells and settings to the baseline"}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -2672,6 +2672,28 @@ fn builder_settings(session: &mut Session, params: &Value) -> Result<Value, Stri
             .unwrap_or_default();
         b.apply_settings(s);
     }
+    // The anchor first, so a size in the same call is placed by it.
+    match params.get("anchor") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(name)) => {
+            let names: Vec<&str> = crate::editor::Anchor::ALL.iter().map(|a| a.name()).collect();
+            b.set_resize_anchor(parse_or("anchor", name, crate::editor::Anchor::parse, &names)?);
+        }
+        Some(v) => return Err(format!("anchor must be a string, got {v}")),
+    }
+    match params.get("size") {
+        None | Some(Value::Null) => {}
+        Some(v) => match v.as_array().map(Vec::as_slice) {
+            Some([cols, rows]) => match (cols.as_f64(), rows.as_f64()) {
+                (Some(cols), Some(rows)) if cols.is_finite() && rows.is_finite() => {
+                    let anchor = b.resize_anchor();
+                    b.resize(cols as f32, rows as f32, anchor);
+                }
+                _ => return Err(format!("size must be [cols, rows] numbers, got {v}")),
+            },
+            _ => return Err(format!("size must be [cols, rows], got {v}")),
+        },
+    }
     if params.get("reset").and_then(Value::as_bool).unwrap_or(false) {
         b.reset();
     }
@@ -2684,6 +2706,10 @@ fn builder_settings(session: &mut Session, params: &Value) -> Result<Value, Stri
 fn settings_json(session: &Session) -> Value {
     let s = session.builder.settings();
     let g = &session.game;
+    let size = {
+        let (cols, rows) = session.builder.size_cells();
+        [cols, rows]
+    };
     json!({
         "tanks": s.tanks,
         "tank": s.tank.map(TankKind::name),
@@ -2697,6 +2723,8 @@ fn settings_json(session: &Session) -> Value {
         "tier_end": s.tier_end.map(Tier::name),
         "theme": s.theme.name(),
         "weather": s.weather.name(),
+        "size": size,
+        "anchor": session.builder.resize_anchor().name(),
         "cli_overrides": {
             "tanks": g.enemy_count_override.is_some(),
             "tank": g.player_row_override.is_some(),
@@ -4594,6 +4622,32 @@ cells."1,1" = { kind = "wall" }"#;
         assert!(zoomed["camera"]["zoom"].as_f64().unwrap() > 2.0, "{zoomed}");
         assert!(ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [[{ "id": 1 }]] })).unwrap_err().contains("{id, x, y}"));
         assert!(ask(&mut server, &tx, &mut s, "builder_touch", json!({})).unwrap_err().contains("frames"));
+    }
+
+    /// `builder_settings {size, anchor}` resizes the canvas about the
+    /// anchor as one undo step and reports the size and the anchor;
+    /// `builder_undo` brings the dropped cells back.
+    #[test]
+    fn builder_settings_resizes_the_map_about_its_anchor() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(44);
+        ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
+        enter_build(&mut server, &tx, &mut s);
+        let before = s.builder.map().clone();
+        let depth = s.builder.history().undo_depth() as u64;
+        let r = ask(&mut server, &tx, &mut s, "builder_settings", json!({ "anchor": "bottom_right", "size": [24, 12] })).unwrap();
+        assert_eq!((r["size"].clone(), r["anchor"].clone()), (json!([24.0, 12.0]), json!("bottom_right")), "{r}");
+        // Bottom-right: the map moves 10 left and 5 up; the start at 5,5
+        // falls off, the frog at 30,15 lands at 20,10.
+        assert_eq!(s.builder.map().cell(20, 10), Some(&crate::map::CellObject::Frog));
+        assert_eq!(s.builder.map().start_cell(), None);
+        assert_eq!(s.builder.history().undo_depth() as u64, depth + 1);
+        let m = ask(&mut server, &tx, &mut s, "builder_map", json!({})).unwrap();
+        assert!(m["diff"]["settings"].as_array().unwrap().contains(&json!("size")), "{m}");
+        ask(&mut server, &tx, &mut s, "builder_undo", json!({})).unwrap();
+        assert_eq!(s.builder.map(), &before);
+        assert!(ask(&mut server, &tx, &mut s, "builder_settings", json!({ "anchor": "nowhere" })).unwrap_err().contains("top_left"));
+        assert!(ask(&mut server, &tx, &mut s, "builder_settings", json!({ "size": [24] })).unwrap_err().contains("[cols, rows]"));
     }
 
     #[test]

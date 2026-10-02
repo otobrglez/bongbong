@@ -216,6 +216,9 @@ keys! {
     SETTINGS_TIER_END = "settings-tier-end";
     SETTINGS_THEME = "settings-theme";
     SETTINGS_WEATHER = "settings-weather";
+    SETTINGS_WIDTH = "settings-width";
+    SETTINGS_HEIGHT = "settings-height";
+    SETTINGS_ANCHOR = "settings-anchor";
     SETTINGS_RESET = "settings-reset";
     SETTINGS_AUTO = "settings-auto";
     SETTINGS_CLI = "settings-cli";
@@ -852,6 +855,9 @@ mod text_tests {
             (keys::SETTINGS_TIER_END, 16, 116, vec![]),
             (keys::SETTINGS_THEME, 16, 116, vec![]),
             (keys::SETTINGS_WEATHER, 16, 116, vec![]),
+            (keys::SETTINGS_WIDTH, 16, 116, vec![]),
+            (keys::SETTINGS_HEIGHT, 16, 116, vec![]),
+            (keys::SETTINGS_ANCHOR, 16, 116, vec![]),
             (keys::SETTINGS_RESET, 16, 116, vec![]),
             // The level's lines and the end screen: across the smallest
             // area the chrome is laid out in less a margin, the end

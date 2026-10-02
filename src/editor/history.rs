@@ -131,6 +131,11 @@ pub enum EditStep {
     Settings { before: MapSettings, after: MapSettings },
     /// The whole map replaced: a load or a reset.
     Map { before: Box<MapFile>, after: Box<MapFile> },
+    /// The map resized (`MapEditor::resize`): the map before - every cell
+    /// the new size dropped included - and after, and the whole cells the
+    /// old map moved by to sit at its anchor, which a zoomed view moves by
+    /// too.
+    Resize { before: Box<MapFile>, after: Box<MapFile>, shift: (i32, i32) },
 }
 
 impl EditStep {
@@ -156,7 +161,7 @@ impl EditStep {
             EditStep::Settings { before, after } => {
                 if forward { after } else { before }.write_to(map);
             }
-            EditStep::Map { before, after } => {
+            EditStep::Map { before, after } | EditStep::Resize { before, after, .. } => {
                 let source = if forward { after } else { before };
                 let name = map.name.take();
                 *map = (**source).clone();
@@ -213,6 +218,12 @@ impl UndoStack {
         Some(step)
     }
 
+    /// The newest step on the undo side, to fold a run of presses of one
+    /// stepper into it (`MapEditor`'s size steppers).
+    pub fn last_mut(&mut self) -> Option<&mut EditStep> {
+        self.undo.last_mut()
+    }
+
     pub fn undo_depth(&self) -> usize {
         self.undo.len()
     }
@@ -252,6 +263,9 @@ impl MapDiff {
             }
         }
         diff.settings = MapSettings::of(baseline).changed_fields(&MapSettings::of(current));
+        if baseline.field_size() != current.field_size() {
+            diff.settings.push("size");
+        }
         diff
     }
 

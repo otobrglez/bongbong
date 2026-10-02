@@ -650,8 +650,11 @@ impl MapEditor {
                 let w = text_width(glyph, HUD_TEXT_SIZE);
                 d.draw_text(glyph, (button.x + (button.width - w) / 2.0) as i32, text_y, HUD_TEXT_SIZE, value_color);
             }
-            let value = row.value(&settings);
+            let value = row.value(&settings, self.size_cells());
             let value_x = rect.x as i32 + SETTINGS_VALUE_X;
+            if *row == SettingsRow::Anchor {
+                draw_anchor(d, Rectangle::new(value_x as f32, rect.y, 28.0, rect.height), self.resize_anchor, value_color);
+            }
             d.draw_text(&value, value_x, text_y, HUD_TEXT_SIZE, value_color);
             if row.cli_override(self.cli_overrides) {
                 let x = value_x + text_width(&value, HUD_TEXT_SIZE) as i32 + 4;
@@ -946,6 +949,9 @@ impl SettingsRow {
             SettingsRow::TierEnd => keys::SETTINGS_TIER_END,
             SettingsRow::Theme => keys::SETTINGS_THEME,
             SettingsRow::Weather => keys::SETTINGS_WEATHER,
+            SettingsRow::Width => keys::SETTINGS_WIDTH,
+            SettingsRow::Height => keys::SETTINGS_HEIGHT,
+            SettingsRow::Anchor => keys::SETTINGS_ANCHOR,
             SettingsRow::Reset => keys::SETTINGS_RESET,
         })
     }
@@ -970,8 +976,10 @@ impl SettingsRow {
 
     /// The row's value as the panel shows it, in the language on screen:
     /// a data name looked up by its family (`tank-scout`, `theme-desert`),
-    /// or the word for `auto` where the map leaves it to the game.
-    fn value(self, s: &MapSettings) -> String {
+    /// the word for `auto` where the map leaves it to the game, or the
+    /// map's size in cells (`size`, columns and rows). The ANCHOR row is a
+    /// picture (`draw_anchor`), no words.
+    fn value(self, s: &MapSettings, size: (f32, f32)) -> String {
         let t = text();
         let auto_or = |v: Option<String>| v.unwrap_or_else(|| t.get(keys::SETTINGS_AUTO));
         match self {
@@ -987,7 +995,9 @@ impl SettingsRow {
             SettingsRow::TierEnd => auto_or(s.tier_end.map(|tier| t.named("tier", tier.name()))),
             SettingsRow::Theme => t.named("theme", s.theme.name()),
             SettingsRow::Weather => t.named("weather", s.weather.name()),
-            SettingsRow::Reset => String::new(),
+            SettingsRow::Width => cells_text(size.0),
+            SettingsRow::Height => cells_text(size.1),
+            SettingsRow::Anchor | SettingsRow::Reset => String::new(),
         }
     }
 
@@ -1009,7 +1019,35 @@ impl SettingsRow {
             // `--weather` (and the web page's `?weather=`) is the
             // `weather_override` knob, which outranks every map's sky.
             SettingsRow::Weather => crate::tuning::tuning().weather_override >= 0,
-            SettingsRow::Reset => false,
+            // The size is the map's alone, and the anchor the panel's.
+            SettingsRow::Width | SettingsRow::Height | SettingsRow::Anchor | SettingsRow::Reset => false,
+        }
+    }
+}
+
+/// A size in cells as the panel shows it: whole, or with its half.
+fn cells_text(cells: f32) -> String {
+    if cells.fract() == 0.0 { format!("{}", cells as i32) } else { format!("{cells}") }
+}
+
+/// The ANCHOR row's picture in `rect`: a 3 x 3 grid of squares, the one
+/// the old map sits at filled in the accent. Lines and gaps are whole
+/// 2 px blocks, so the grid survives the bitmap drawn at under its size
+/// on a phone.
+fn draw_anchor(d: &mut impl RaylibDraw, rect: Rectangle, anchor: Anchor, color: Color) {
+    const SIDE: f32 = 8.0;
+    const GAP: f32 = 2.0;
+    let span = 3.0 * SIDE + 2.0 * GAP;
+    let (x0, y0) = (rect.x, rect.y + (rect.height - span) / 2.0);
+    let (ax, ay) = anchor.grid();
+    for gy in 0..3 {
+        for gx in 0..3 {
+            let square = Rectangle::new(x0 + gx as f32 * (SIDE + GAP), y0 + gy as f32 * (SIDE + GAP), SIDE, SIDE);
+            if (gx, gy) == (ax, ay) {
+                d.draw_rectangle_rec(square, BUILD_ACCENT);
+            } else {
+                d.draw_rectangle_lines_ex(square, 2.0, color);
+            }
         }
     }
 }
