@@ -500,17 +500,21 @@ mod view_tests {
         assert!(v.to_bitmap(Vec2::new(500.0, 10.0)).y < 0.0);
     }
 
-    /// Every field size the shipped maps use, from the crossplay studies'
-    /// 24 x 12 to longwater's 80 x 45.
-    const SHIPPED_FIELDS: [(f32, f32); 8] = [
+    /// Every field size the shipped maps use, from 48 x 24 to longwater's
+    /// 112 x 63, and the smaller ones of a map of one's own: the crossplay
+    /// studies' 24 x 12, a map with no size's 34 x 17 and the fixtures'
+    /// 40 x 22.5.
+    const SHIPPED_FIELDS: [(f32, f32); 10] = [
         (768.0, 384.0),
         (1088.0, 544.0),
-        (1152.0, 576.0),
-        (1280.0, 640.0),
         (1280.0, 720.0),
-        (1408.0, 704.0),
         (1536.0, 768.0),
-        (2560.0, 1440.0),
+        (1600.0, 800.0),
+        (1792.0, 896.0),
+        (1792.0, 1008.0),
+        (1984.0, 992.0),
+        (2144.0, 1088.0),
+        (3584.0, 2016.0),
     ];
 
     #[test]

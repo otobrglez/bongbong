@@ -1309,8 +1309,9 @@ tunables! {
         /// arena's shared alert, a pure distance test with no line of
         /// sight. As far as an enemy sees in daylight
         /// (`enemy_view_range`): a tank alerts the ones it could see, so
-        /// a 40-wide level still hears a sighting from one end to the
-        /// other, while a map several screens across does not.
+        /// a sighting runs through a group of neighbours, and across a map
+        /// several screens wide only as far as its enemies stand that
+        /// close to one another.
         enemy_alert_chain_px: f32 = 800.0 in 0.0 ..= 4000.0;
         /// Field maps only: how far from home (where it spawned, or came
         /// through its gate) an enemy with nothing to fight may roam. Past
@@ -1335,8 +1336,8 @@ tunables! {
         /// outside every seat's sight box a wave takes the ones whose walk
         /// is within `field_walk_slack_seconds` of this, where the map has
         /// any, and a band spawn's draws lean toward such cells; a map with
-        /// no walk that long (every 40-wide level) only keeps its spawns
-        /// out of sight.
+        /// no walk that long (one about 40 cells across) only keeps its
+        /// spawns out of sight.
         field_walk_seconds: f32 = 15.0 in 1.0 ..= 120.0;
         /// The window either side of `field_walk_seconds`: wide enough
         /// that a wave still spreads over several lanes and a band over a

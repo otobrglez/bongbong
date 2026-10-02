@@ -5,11 +5,11 @@
 # swallow every `cells.` line after it.
 #
 # hunt-basic: Hunt mission on the band plan, four tanks. The player starts
-# on the right (col 27) with its frog (col 36) behind a brick screen at
-# col 30; the enemy frog sits far left (col 4) behind its own brick screen
-# at col 8.
-# Two iron wall segments at col 20 (rows 4-7 and 15-18) leave a seven-cell
-# central gap (rows 8-14) and two-nav-cell lanes along the top and bottom
+# on the right (col 38) with its frog (col 50) behind a brick screen at
+# col 42; the enemy frog sits far left (col 6) behind its own brick screen
+# at col 11.
+# Two iron wall segments at col 28 (rows 6-10 and 21-26) leave a ten-cell
+# central gap (rows 11-20) and four-nav-cell lanes along the top and bottom
 # edges, so both sides round something on the way to the other's frog
 # without any single-cell corridor. A contested health pack sits in the
 # gap, ammo in each open quarter, and a frog health pack in each of the
@@ -17,44 +17,52 @@
 # whoever picks it up (docs/frog-health-pack-prd.md).
 
 version = 1
-size = [40, 22.5]
+size = [56, 31.5]
 tanks = 4
 mission.kind = "hunt"
 spawn.kind = "band"
 
-cells."27,11" = { kind = "start" }
-cells."36,11" = { kind = "frog" }
-cells."4,11" = { kind = "enemy_frog" }
+cells."38,15" = { kind = "start" }
+cells."50,15" = { kind = "frog" }
+cells."6,15" = { kind = "enemy_frog" }
 
-cells."8,8" = { kind = "wall", material = "brick" }
-cells."8,9" = { kind = "wall", material = "brick" }
-cells."8,10" = { kind = "wall", material = "brick" }
-cells."8,11" = { kind = "wall", material = "brick" }
-cells."8,12" = { kind = "wall", material = "brick" }
-cells."8,13" = { kind = "wall", material = "brick" }
-cells."8,14" = { kind = "wall", material = "brick" }
+cells."11,11" = { kind = "wall", material = "brick" }
+cells."42,11" = { kind = "wall", material = "brick" }
+cells."11,12" = { kind = "wall", material = "brick" }
+cells."42,12" = { kind = "wall", material = "brick" }
+cells."11,13" = { kind = "wall", material = "brick" }
+cells."42,13" = { kind = "wall", material = "brick" }
+cells."11,14" = { kind = "wall", material = "brick" }
+cells."42,14" = { kind = "wall", material = "brick" }
+cells."11,15" = { kind = "wall", material = "brick" }
+cells."42,15" = { kind = "wall", material = "brick" }
+cells."11,16" = { kind = "wall", material = "brick" }
+cells."42,16" = { kind = "wall", material = "brick" }
+cells."11,17" = { kind = "wall", material = "brick" }
+cells."42,17" = { kind = "wall", material = "brick" }
+cells."11,18" = { kind = "wall", material = "brick" }
+cells."42,18" = { kind = "wall", material = "brick" }
+cells."11,19" = { kind = "wall", material = "brick" }
+cells."42,19" = { kind = "wall", material = "brick" }
+cells."11,20" = { kind = "wall", material = "brick" }
+cells."42,20" = { kind = "wall", material = "brick" }
 
-cells."20,4" = { kind = "wall", material = "iron" }
-cells."20,5" = { kind = "wall", material = "iron" }
-cells."20,6" = { kind = "wall", material = "iron" }
-cells."20,7" = { kind = "wall", material = "iron" }
-cells."20,15" = { kind = "wall", material = "iron" }
-cells."20,16" = { kind = "wall", material = "iron" }
-cells."20,17" = { kind = "wall", material = "iron" }
-cells."20,18" = { kind = "wall", material = "iron" }
+cells."28,6" = { kind = "wall", material = "iron" }
+cells."28,7" = { kind = "wall", material = "iron" }
+cells."28,8" = { kind = "wall", material = "iron" }
+cells."28,9" = { kind = "wall", material = "iron" }
+cells."28,10" = { kind = "wall", material = "iron" }
+cells."28,21" = { kind = "wall", material = "iron" }
+cells."28,22" = { kind = "wall", material = "iron" }
+cells."28,23" = { kind = "wall", material = "iron" }
+cells."28,24" = { kind = "wall", material = "iron" }
+cells."28,25" = { kind = "wall", material = "iron" }
+cells."28,26" = { kind = "wall", material = "iron" }
 
-cells."30,8" = { kind = "wall", material = "brick" }
-cells."30,9" = { kind = "wall", material = "brick" }
-cells."30,10" = { kind = "wall", material = "brick" }
-cells."30,11" = { kind = "wall", material = "brick" }
-cells."30,12" = { kind = "wall", material = "brick" }
-cells."30,13" = { kind = "wall", material = "brick" }
-cells."30,14" = { kind = "wall", material = "brick" }
-
-cells."20,11" = { kind = "pickup", pickup = "health" }
-cells."14,4" = { kind = "pickup", pickup = "ammo" }
-cells."14,18" = { kind = "pickup", pickup = "ammo" }
-cells."26,4" = { kind = "pickup", pickup = "ammo" }
-cells."26,18" = { kind = "pickup", pickup = "ammo" }
-cells."20,2" = { kind = "pickup", pickup = "frog_health" }
-cells."20,20" = { kind = "pickup", pickup = "frog_health" }
+cells."28,15" = { kind = "pickup", pickup = "health" }
+cells."20,6" = { kind = "pickup", pickup = "ammo" }
+cells."36,6" = { kind = "pickup", pickup = "ammo" }
+cells."20,25" = { kind = "pickup", pickup = "ammo" }
+cells."36,25" = { kind = "pickup", pickup = "ammo" }
+cells."28,3" = { kind = "pickup", pickup = "frog_health" }
+cells."28,28" = { kind = "pickup", pickup = "frog_health" }

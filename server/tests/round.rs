@@ -325,7 +325,10 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
         );
         assert!(w.enemy_count.is_none(), "the room pins no enemy count; the replica rolls the server's");
         assert!(w.dead_cells.is_empty(), "a fresh field has no holes");
-        assert!(w.roster.iter().all(|s| s.chassis > 0 || s.seat == 0), "the roster carries the rolled chassis: {:?}", w.roster);
+        for s in &w.roster {
+            let tank = w.snapshot.tanks.iter().find(|t| t.id == s.seat as u16).expect("a tank for every seat");
+            assert_eq!(s.chassis, tank.row, "the roster carries the rolled chassis: {:?}", w.roster);
+        }
         if seat == 0 {
             host_replica = Some(apply::welcome(&w).expect("a replica from the welcome"));
             host_baseline = Some(w.snapshot);

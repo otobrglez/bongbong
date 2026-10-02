@@ -998,7 +998,8 @@ mod minimap_tests {
     fn the_size_keeps_the_maps_shape_inside_the_box() {
         let r = rules();
         let cells = |c: f32, rows: f32| (c * CELL, rows * CELL);
-        assert_eq!(r.size_pt(cells(80.0, 45.0)), (160.0, 90.0), "longwater at two points a cell");
+        assert_eq!(r.size_pt(cells(80.0, 45.0)), (160.0, 90.0), "an 80 x 45 field at two points a cell");
+        assert_eq!(r.size_pt(cells(112.0, 63.0)), (160.0, 90.0), "longwater, its fit kept unsnapped");
         assert_eq!(r.size_pt(cells(96.0, 54.0)), (144.0, 81.0), "the study map at one and a half");
         assert_eq!(r.size_pt(cells(40.0, 22.5)), (160.0, 90.0));
         assert_eq!(r.size_pt(cells(48.0, 24.0)), (144.0, 72.0));

@@ -254,8 +254,9 @@ impl SpawnPool {
 /// sight boxes, then of those the ones whose walk to the nearest seat is
 /// about `field_walk_seconds` (`about_the_walk`). Either step that would
 /// leave no gate leaves the list as it was: a map whose every gate sits
-/// by a seat still uses them, and one with no gate that far out (every
-/// 40-wide level) only keeps its waves out of sight. Order is kept.
+/// by a seat still uses them, and one with no gate that far out (a map
+/// about 40 cells across) only keeps its waves out of sight. Order is
+/// kept.
 pub(super) fn prefer_gates(gates: Vec<Gate>, grid: &Grid, seats: &[Position]) -> Vec<Gate> {
     if seats.is_empty() {
         return gates;

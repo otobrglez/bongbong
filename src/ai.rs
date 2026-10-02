@@ -1160,7 +1160,7 @@ impl Ai {
     /// (`RouteAhead::shared`) and the margin can still turn the hull onto it:
     /// a search's path is one of many as cheap toward a target of the tank's
     /// own that moves, an engagement slot most of all, and read as lanes it
-    /// crowds the 40-wide levels' corridors (docs/large-maps-follow-camera.md
+    /// crowds a level's corridors (docs/large-maps-follow-camera.md
     /// section 12). Where the margin never can (`margin_never_turns`: the
     /// hull rides the edge of its lane on the side the route turns to, or so
     /// near it that the margin's window is narrower than the ground the hull

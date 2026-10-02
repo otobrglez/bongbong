@@ -5878,7 +5878,7 @@ mod editor_tests {
         empty.size = Some((250.0, 250.0));
         let maps = [
             ("study 96 x 54", MapFile::load(std::path::Path::new("maps/study/frontier.toml")).expect("the study map")),
-            ("longwater 80 x 45", map::open_map("longwater").expect("longwater")),
+            ("longwater 112 x 63", map::open_map("longwater").expect("longwater")),
             ("empty 250 x 250", empty),
         ];
         for (name, map) in maps {

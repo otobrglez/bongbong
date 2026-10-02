@@ -1107,32 +1107,15 @@ mod toml_tests {
     }
 
     #[test]
-    fn the_shipped_field_maps_are_the_ones_bigger_than_an_arena() {
-        // The seven levels past 36 x 18, the two 40 x 22.5 mission maps and
-        // the 80 x 45 big field are field maps; the seven other levels and
-        // the rest are arenas.
-        let field: Vec<&str> = SHIPPED_MAPS
-            .iter()
-            .filter(|(_, text)| MapFile::from_toml_str(text).unwrap().class() == MapClass::Field)
-            .map(|(name, _)| *name)
-            .collect();
-        assert_eq!(
-            field,
-            [
-                "hunt-basic",
-                "waves-basic",
-                "longwater",
-                "hedge-maze",
-                "castle-moat",
-                "archipelago",
-                "black-gold",
-                "harbor-lights",
-                "serpent-river",
-                "grand-campaign"
-            ]
-        );
+    fn every_shipped_map_is_a_field_map() {
+        // Every level and free-play map is past 36 x 18 - the smallest are
+        // 48 x 24 - so the follow camera frames each of them; an arena is a
+        // map of your own, or a fixture under maps/test/.
+        for (name, text) in SHIPPED_MAPS {
+            assert_eq!(MapFile::from_toml_str(text).unwrap().class(), MapClass::Field, "{name}");
+        }
         let big = open_map("longwater").unwrap();
-        assert_eq!((big.size, big.class()), (Some((80.0, 45.0)), MapClass::Field));
+        assert_eq!((big.size, big.class()), (Some((112.0, 63.0)), MapClass::Field));
         let study = MapFile::load(Path::new("maps/study/frontier.toml")).unwrap();
         assert_eq!((study.size, study.class()), (Some((96.0, 54.0)), MapClass::Field));
     }

@@ -64,8 +64,10 @@ impl EstablishRules {
 /// The most texels of whole field a phone or a tablet (`crate::EMBEDDED`)
 /// draws the shot through: its targets - two, five under a sky, each with
 /// a depth buffer, about 8 bytes a texel - stay under about 170 MB, which
-/// longwater (80 x 45 cells, 3.7 million texels) fits and a larger field
-/// would multiply on a device with a phone's memory.
+/// every level fits (the largest, grand-campaign's 67 x 34 cells, is 2.3
+/// million texels) and longwater's 112 x 63 (7.2 million) would nearly
+/// double on a device with a phone's memory: there it opens on the follow
+/// view, as the study map does.
 pub const EMBEDDED_MAX_AREA: f32 = 2048.0 * 2048.0;
 
 /// Whether a field of `field` world pixels fits the shot's whole-field
@@ -361,16 +363,17 @@ mod establish_tests {
         let frames = play(2.0, 60, None, false, false);
         assert!(frames.iter().all(|p| *p == Phase::Follow), "{frames:?}");
         let r = rules();
-        assert!(wanted(true, true, (2560.0, 1440.0), &r), "longwater");
+        assert!(wanted(true, true, (3584.0, 2016.0), &r), "longwater");
         assert!(wanted(true, true, (3072.0, 1728.0), &r), "the 96 x 54 study map");
         assert!(!wanted(false, true, (2560.0, 1440.0), &r), "a room's round");
         assert!(!wanted(true, false, (1088.0, 544.0), &r), "a view that shows the whole field");
         assert!(!wanted(true, true, (8000.0, 2000.0), &r), "past the whole-field target");
         assert!(!wanted(true, true, (2560.0, 1440.0), &EstablishRules { hold_seconds: 0.0, ..r }), "turned off");
-        // A phone or a tablet keeps its targets to a phone's memory:
-        // longwater plays the shot there, the study map opens on the
-        // follow view.
-        assert!(fits((2560.0, 1440.0), true), "longwater on a phone");
+        // A phone or a tablet keeps its targets to a phone's memory: every
+        // level plays the shot there, longwater and the study map open on
+        // the follow view.
+        assert!(fits((2144.0, 1088.0), true), "grand-campaign on a phone");
+        assert!(!fits((3584.0, 2016.0), true), "longwater on a phone");
         assert!(!fits((3072.0, 1728.0), true), "the study map on a phone");
         assert!(fits((3072.0, 1728.0), false), "the study map on a desktop");
         assert!(!fits((4100.0, 100.0), false), "past a side");
@@ -471,7 +474,7 @@ mod establish_tests {
 
     #[test]
     fn the_zoom_runs_from_the_whole_map_to_the_follow_view_about_one_point() {
-        // The whole of longwater fitted to 1600 x 900, then the follow view
+        // A whole 80 x 45 field fitted to 1600 x 900, then the follow view
         // at 1.5 window units per world pixel round a tank at (1216, 1071).
         let field = (2560.0, 1440.0);
         let window = (1600.0, 900.0);

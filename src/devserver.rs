@@ -3489,6 +3489,15 @@ mod tests {
         Session::new(game)
     }
 
+    /// A fresh round on a map shown whole: the inline 34 x 17 map, an
+    /// arena, which no shipped map is.
+    fn arena(seed: u64) -> Session {
+        let mut s = game(seed);
+        s.replace_map(MapFile::from_toml_str(INLINE_MAP).expect("inline map parses"));
+        s.game.init(W, H);
+        s
+    }
+
     /// Queue `method` on a headless server and return its reply receiver.
     fn call(tx: &mpsc::Sender<Request>, method: &str, params: Value) -> mpsc::Receiver<Result<Value, String>> {
         let (reply, rx) = mpsc::channel();
@@ -3576,7 +3585,7 @@ mod tests {
     #[test]
     fn the_camera_tool_pins_a_view_and_lets_it_go() {
         let (mut server, tx) = DevServer::headless();
-        let mut s = game(7);
+        let mut s = arena(7);
         let field = (W, H);
         let before = s.game.frame();
         let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();

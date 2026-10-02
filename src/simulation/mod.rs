@@ -5284,7 +5284,8 @@ mod determinism_tests {
             game.enemy_count_override = Some(4);
             game.players = PlayerCount::from_count(seats).expect("one or two");
             game.map = MapFile::from_toml_str(include_str!("../../maps/default.toml")).expect("embedded default map parses");
-            game.init(1280.0, 720.0);
+            let (w, h) = game.map.field_size();
+            game.init(w, h);
             // FNV-1a over the same bit-exact key the replay tests compare.
             let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
             let mut eat = |bytes: &[u8]| {
@@ -5295,7 +5296,7 @@ mod determinism_tests {
             };
             for frame in 0..=600u32 {
                 if frame > 0 {
-                    game.update(Input::default(), 1.0 / 60.0, 1280.0, 720.0);
+                    game.update(Input::default(), 1.0 / 60.0, w, h);
                 }
                 if frame % 60 != 0 {
                     continue;
@@ -5312,18 +5313,15 @@ mod determinism_tests {
             }
             hash
         };
-        // **Re-baselined for the weapon modules, deliberately.** A minigun's
-        // bullets leave the module beside the main gun, boresighted onto
-        // the gun line (`Bullet::spawn`), and a missile volley leaves the
-        // launcher's tubes (`tank_art::MISSILE_TUBES`), so an enemy's burst
-        // or volley lands a few pixels from where it did and its damage
-        // rolls fall on other frames - which moves everything after them.
-        // Nothing about the walk order this gate exists to protect changed:
-        // the per-seat block still runs once per seat after player 1, so a
-        // second seat does not disturb the first's stream. Never bump these
-        // to go green - work out which change moved them first.
+        // The round is the shipped default map's, on its own 48 x 24 field,
+        // so an edit of that map moves these as surely as a change to the
+        // draws does: re-baseline with the map only once nothing but the
+        // map moved them. The per-seat block runs once per seat after
+        // player 1, so a second seat does not disturb the first's stream.
+        // Never bump these to go green - work out which change moved them
+        // first.
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (14_017_236_720_797_471_165, 9_822_452_777_306_098_975), "(one seat, two seats)");
+        assert_eq!((one, two), (6_990_181_534_668_061_109, 9_249_013_669_643_947_675), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round

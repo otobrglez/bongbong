@@ -1001,6 +1001,18 @@ mod session_tests {
         Session::new(game)
     }
 
+    /// `session` on a map shown whole: a 34 x 17 arena with a start and a
+    /// frog, which no shipped map is.
+    fn arena_session() -> Session {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(7);
+        game.map = MapFile::from_toml_str("version = 1\ncells.\"5,5\" = { kind = \"start\" }\ncells.\"30,15\" = { kind = \"frog\" }\n")
+            .expect("arena map parses");
+        game.init(W, H);
+        Session::new(game)
+    }
+
     #[test]
     fn build_asks_mid_round_and_switches_at_once_on_the_end_screen() {
         let mut s = session();
@@ -1037,7 +1049,8 @@ mod session_tests {
         assert!(r.x <= 101.0 && r.y <= 97.0 && r.x + r.width >= 499.0 && r.y + r.height >= 295.0, "the view holds what play showed: {r:?}");
         // The whole field again: FIT.
         s.play();
-        s.play_view = Some(crate::math::Rectangle::new(0.0, 0.0, W, H));
+        let (w, h) = s.game.map.field_size();
+        s.play_view = Some(crate::math::Rectangle::new(0.0, 0.0, w, h));
         s.press_build();
         s.answer_dialog(true);
         assert!(s.builder.camera().is_fit());
@@ -1119,7 +1132,9 @@ mod session_tests {
         use crate::math::Vec2;
         use crate::touch::TouchPoint;
         for same_id in [true, false] {
-            let mut s = session();
+            // An arena, so its cells are drawn large enough for a finger to
+            // paint at FIT (`builder_paint_min_cell_mm`).
+            let mut s = arena_session();
             s.press_build();
             s.answer_dialog(true);
             let ui = crate::hud::UiFrame::new((1600.0, 900.0), 1.0, 1.0, crate::hud::Insets::default(), true);

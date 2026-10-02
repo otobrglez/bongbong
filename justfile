@@ -76,8 +76,8 @@ probe-fixtures:
 # few ticks or asleep, band spawns and wave gates out of every seat's
 # sight box and about a 15 s walk out where the map has one, a wave called
 # to the fight, a fallen seat back through the gate nearest its team. The
-# 96 x 54 study map, longwater (the shipped 80 x 45 free-play field) and
-# the five 40-wide levels, AFK, at a pinned seed; the maps/test/ fixtures
+# 96 x 54 study map, longwater (the shipped 112 x 63 free-play field) and
+# five levels 56 wide, AFK, at a pinned seed; the maps/test/ fixtures
 # stay arenas (`view = "whole"`), so this is where a change to the
 # field-map AI shows. Ceilings are each kind's maximum over the seven maps,
 # recorded 2026-10-02 and re-baselined the same day for lanes (a hull turns
@@ -124,11 +124,23 @@ probe-fixtures:
 # 6 -> 6). The study map reads border-stuck=1 jitter=13 churn=6 pile-up=2
 # (churn 8 -> 6, pile-up 0 -> 2) and still meets the fight about 12 s in;
 # longwater reads as before, black-gold and castle-moat but for a point of
-# churn. Prints first contact and ms per tick beside the anomalies. Not in
-# CI: well over two minutes in a debug build, the study map alone more
-# than one.
+# churn. Re-baselined again when the shipped maps grew by 40 % a side
+# (34 x 17 to 48 x 24, 40 x 20 to 56 x 28, longwater 80 x 45 to 112 x 63;
+# the study map is as it was): border-stuck=8 is castle-moat (0 -> 8: the
+# south gate's tanks drive the strip between the moat and the field's edge,
+# behind a line of fences, to the bridge - the strip they always took, a
+# third again as long); spin=9 and churn=39 are hedge-maze (2 -> 9 and
+# 12 -> 39: its walks run longer, and a tank with nobody in sight wanders
+# more of them); wall-grind=1 is harbor-lights (0 -> 1: in round 0x3ef a
+# tank pressed toward the frog against the pier beside it on the beach).
+# Every other ceiling stands: jitter 24 on hedge-maze (from 30) and 20 on
+# harbor-lights (from 28), clustering=10 on both, pile-up 5 on hedge-maze
+# (from 6). The fight comes later on the larger fields: longwater about
+# 13.5 s in (10.4), black-gold 14.9 s (5.6), hedge-maze 9.7 s (2.6). Prints
+# first contact and ms per tick beside the anomalies. Not in CI: well over
+# two minutes in a debug build, the study map alone more than one.
 probe-fields:
-    for m in maps/study/frontier.toml maps/longwater.toml maps/hedge-maze.toml maps/archipelago.toml maps/black-gold.toml maps/harbor-lights.toml maps/castle-moat.toml; do cargo run --bin probe -- --map $m --frames 3600 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=1 --budget border-stuck=3 --budget jitter=30 --budget spin=8 --budget churn=20 --budget clustering=10 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=1 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=6 --budget offbox-fire=0 || exit 1; done
+    for m in maps/study/frontier.toml maps/longwater.toml maps/hedge-maze.toml maps/archipelago.toml maps/black-gold.toml maps/harbor-lights.toml maps/castle-moat.toml; do cargo run --bin probe -- --map $m --frames 3600 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=1 --budget border-stuck=8 --budget jitter=30 --budget spin=9 --budget churn=39 --budget clustering=10 --budget wall-grind=1 --budget bump-rate=0 --budget low-progress=1 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=6 --budget offbox-fire=0 || exit 1; done
 
 # The perfect defence (docs/large-maps-follow-camera.md section 12): the
 # probe's `defend` scenario - every enemy destroyed the moment it comes
@@ -136,12 +148,15 @@ probe-fields:
 # attacked - on the two maps that need the follow camera, ten seven-minute
 # rounds each at a pinned seed. A round lasts exactly as long as its last
 # straggler keeps it waiting, and never-arrived counts one still out. Every
-# round is won; a tank's walk to the defence has a median of 11 s on
-# longwater and 10 s on the study map, the longest 24 s and 54 s, and the
-# rounds last 117 to 133 s on longwater and 118 to 199 s on the study map,
+# round is won; a tank's walk to the defence has a median of 15 s on
+# longwater and 10 s on the study map, the longest 37 s and 54 s, and the
+# rounds last 149 to 169 s on longwater and 118 to 199 s on the study map,
 # whose rounds 0x3ec and 0x3ee each roll two stragglers in again through a
 # nearer gate (`probe: rerolls:`) - 0x3ec's last a wave tank the portals
-# and the pickups beyond them led off across the map. Before the margin's
+# and the pickups beyond them led off across the map. On the 80 x 45
+# longwater, before the shipped maps grew by 40 % a side, the walk's
+# median was 11 s, its longest 24 s and the rounds 117 to 133 s; the
+# figures before that are the 80 x 45 field's too. Before the margin's
 # window (docs/large-maps-follow-camera.md section 12) re-timed them, the
 # longest walks were 40 and 48 s and the rounds lasted 122 to 138 and 118
 # to 167 s; before the pacing director shortened the calm breathers and

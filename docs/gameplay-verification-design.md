@@ -769,8 +769,9 @@ design) counts as a deliberate hold, and an enemy `asleep` or `leashed`
 `never-arrived`. Every `maps/test/` fixture is 40 x 22.5, which by size is
 a field map, so each says `view = "whole"`: they stay arenas and their
 budgets were measured, and still read, under the arena's rules. The field
-maps get their own recipe, `just probe-fields` - the 96 x 54 study map and
-the five 40-wide levels, budgeted the way `probe-fixtures` is.
+maps get their own recipe, `just probe-fields` - the 96 x 54 study map,
+longwater and five of the levels (56 wide since the shipped maps grew by
+40 % a side), budgeted the way `probe-fixtures` is.
 
 ---
 

@@ -16,6 +16,7 @@
 # waves off the border lanes.
 
 version = 1
+size = [48, 24]
 mission.kind = "protect"
 spawn.kind = "waves"
 spawn.waves = 4
@@ -24,37 +25,39 @@ spawn.growth = 1
 spawn.tier_start = "light"
 spawn.tier_end = "heavy"
 
-cells."11,8" = { kind = "start" }
-cells."6,8" = { kind = "frog" }
-cells."33,4" = { kind = "gate" }
-cells."33,12" = { kind = "gate" }
+cells."16,11" = { kind = "start" }
+cells."8,11" = { kind = "frog" }
+cells."47,6" = { kind = "gate" }
+cells."47,17" = { kind = "gate" }
 
-cells."5,6" = { kind = "sandbag" }
-cells."6,6" = { kind = "sandbag" }
-cells."7,6" = { kind = "sandbag" }
-cells."5,10" = { kind = "sandbag" }
-cells."6,10" = { kind = "sandbag" }
-cells."7,10" = { kind = "sandbag" }
+cells."7,8" = { kind = "sandbag" }
+cells."8,8" = { kind = "sandbag" }
+cells."9,8" = { kind = "sandbag" }
+cells."10,8" = { kind = "sandbag" }
+cells."7,14" = { kind = "sandbag" }
+cells."8,14" = { kind = "sandbag" }
+cells."9,14" = { kind = "sandbag" }
+cells."10,14" = { kind = "sandbag" }
 
-cells."8,8" = { kind = "tesla" }
-cells."9,4" = { kind = "gun_tower" }
-cells."9,12" = { kind = "bio_slush" }
+cells."11,11" = { kind = "tesla" }
+cells."13,6" = { kind = "gun_tower" }
+cells."13,17" = { kind = "bio_slush" }
 
-cells."27,6" = { kind = "gun_tower", side = "enemy" }
-cells."29,8" = { kind = "tesla", side = "enemy" }
-cells."27,10" = { kind = "bio_slush", side = "enemy" }
+cells."38,8" = { kind = "gun_tower", side = "enemy" }
+cells."41,11" = { kind = "tesla", side = "enemy" }
+cells."38,14" = { kind = "bio_slush", side = "enemy" }
 
-cells."22,6" = { kind = "wall", material = "brick" }
-cells."22,10" = { kind = "wall", material = "brick" }
-cells."17,7" = { kind = "wall", material = "iron" }
-cells."17,9" = { kind = "wall", material = "iron" }
+cells."31,8" = { kind = "wall", material = "brick" }
+cells."31,14" = { kind = "wall", material = "brick" }
+cells."24,10" = { kind = "wall", material = "iron" }
+cells."24,13" = { kind = "wall", material = "iron" }
 
-cells."20,1" = { kind = "water" }
-cells."20,2" = { kind = "water" }
-cells."20,14" = { kind = "water" }
-cells."20,15" = { kind = "water" }
+cells."28,2" = { kind = "water" }
+cells."28,3" = { kind = "water" }
+cells."28,20" = { kind = "water" }
+cells."28,21" = { kind = "water" }
 
-cells."13,8" = { kind = "pickup", pickup = "tower_pack" }
-cells."16,2" = { kind = "pickup", pickup = "health" }
-cells."16,14" = { kind = "pickup", pickup = "ammo" }
-cells."20,8" = { kind = "pickup", pickup = "shield" }
+cells."18,11" = { kind = "pickup", pickup = "tower_pack" }
+cells."23,3" = { kind = "pickup", pickup = "health" }
+cells."23,20" = { kind = "pickup", pickup = "ammo" }
+cells."28,11" = { kind = "pickup", pickup = "shield" }

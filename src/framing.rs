@@ -54,11 +54,11 @@
 use crate::tuning::{Tuning, tuning};
 use crate::{OBSTACLE_GRID_SIZE, TANK_FRAME_SIZE};
 
-/// The largest map still shown whole, in cells (columns, rows). The
-/// standard 34 x 17 field and the 36 x 18 levels are arenas; the 40-wide
-/// levels and anything bigger are field maps, which shown whole would draw
-/// a phone's tank at 5.8 to 6.5 mm, under the 44 pt touch floor
-/// (docs/large-maps-follow-camera.md §15). A rule about the map rather
+/// The largest map still shown whole, in cells (columns, rows). A map
+/// with no size (34 x 17) and a 36 x 18 one are arenas; a 40-wide map and
+/// anything bigger - every shipped map - are field maps, which shown whole
+/// would draw a phone's tank at 6.5 mm or less, under the 44 pt touch
+/// floor (docs/large-maps-follow-camera.md §15). A rule about the map rather
 /// than a knob: every seat in a room has to agree on it, and nothing about
 /// a screen moves it.
 pub const ARENA_MAX_CELLS: (f32, f32) = (36.0, 18.0);

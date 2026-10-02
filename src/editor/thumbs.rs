@@ -6,16 +6,16 @@
 //! **The picture is the map's minimap** (`minimap.rs`): a texel a cell in
 //! the minimap's palette, the water as deep as a round on the map has it -
 //! not `thumbnail.rs`'s painted field. On the largest shipped map,
-//! longwater, a release build makes the minimap in 0.6 ms, where staging
-//! the round and painting its 2560 x 1440 pixels on the CPU canvas takes
-//! 263 ms, after 102 ms decoding the sheets that canvas needs
+//! longwater, a release build makes the minimap in 1.0 ms, where staging
+//! the round and painting its 3584 x 2016 pixels on the CPU canvas takes
+//! 492 ms, after 88 ms decoding the sheets that canvas needs
 //! (`thumbnail::tests::a_load_list_thumbnail_timing`): a page of pictures
 //! painted would stall a phone for seconds.
 //!
 //! **Made lazily, kept by name and revision.** The list makes the pictures
 //! of the maps its page shows, at most `MADE_PER_FRAME` a frame, so a page
 //! of large maps fills in over a few frames rather than stalling one - the
-//! parse is most of a picture's cost (3 ms for longwater in a release
+//! parse is most of a picture's cost (8 ms for longwater in a release
 //! build). Each picture is kept with the revision of the text it was made
 //! from, the FNV-1a hash of what `map::map_source` reads, which any edit
 //! changes: each time the list opens a picture is checked against its
@@ -32,8 +32,8 @@ use crate::minimap::Minimap;
 use crate::Position;
 
 /// The most pictures the Load list makes in one frame: one - longwater's
-/// parse and minimap take about 4 ms in a release build on a desktop, and
-/// a phone a few times that, a frame's worth.
+/// parse and minimap take about 9 ms in a release build on a desktop, and
+/// a phone a few times that, a frame's worth or two.
 pub const MADE_PER_FRAME: usize = 1;
 
 /// `map`'s minimap (`minimap.rs`): a texel a cell, the floor under its

@@ -38,15 +38,19 @@ Contents
 ## 1. Summary of the recommendation
 
 - **Two map classes, decided by the map, not the screen.** A map no
-  bigger than an arena (about 36 x 18 cells: the standard 34 x 17 maps
-  and the 36 x 18 ones, seven of the fourteen levels) is shown whole on
-  every device, exactly as today. Anything bigger is a *field map* and
-  gets a follow camera. That includes the other seven levels (40 x 20 up
-  to grand-campaign's 48 x 24), which an iPhone 16 draws today at 5.2 to
-  6.2 mm, under the 44 pt floor, so the camera fixes them on phones. The
-  class is room-wide, so every seat in a round sees the same kind of
-  round. A map key (`view = "whole" | "follow"`) overrides the size
-  default for any map.
+  bigger than an arena (about 36 x 18 cells; a map with no size is
+  34 x 17) is shown whole on every device. Anything bigger is a *field
+  map* and gets a follow camera. Since the shipped maps grew by 40 % a
+  side (2026-10-02) that is every level and every free-play map, 48 x 24
+  up to grand-campaign's 67 x 34 and longwater's 112 x 63. Before they
+  grew, seven of the fourteen levels were arenas and the other seven
+  (40 x 20 up to 48 x 24), which an iPhone 16 drew at 5.2 to 6.2 mm,
+  under the 44 pt floor, were the field maps the camera was first built
+  for; the measurements in this document that name the 34 x 17 and the
+  40-wide levels or the 80 x 45 longwater are of the maps as they were
+  then. The class is room-wide, so every seat in a round sees the same
+  kind of round. A map key (`view = "whole" | "follow"`) overrides the
+  size default for any map.
 - **The same world area on every screen in a room.** A field map shows
   about 578 cells (the standard 34 x 17 field's area) on every device in
   a room; the screen's shape decides only the outline, clamped to aspects
@@ -566,17 +570,18 @@ shape with the bar at the standard arena's size (`editor::camera`).
   a round has it - beside its name, and under the name its size in cells.
   The minimap rather than `mapshot`'s painted field, by measurement
   (`thumbnail::tests::a_load_list_thumbnail_timing`, a release build on
-  this machine): on longwater the minimap takes 0.6 ms where staging the
-  round takes 2.9 ms and painting its 2560 x 1440 pixels on the CPU
-  canvas 260 ms, after 102 ms decoding the sheets that canvas needs, and
-  a 34 x 17 arena still paints in 85 ms - a page of seven painted would
-  stall a phone for seconds; a debug build is about ten times slower
-  either way. The parse is most of a picture's cost (3.3 ms for
-  longwater), so the list makes only its page's pictures, one a frame,
-  and keeps each by the map's name and the revision of the text it was
-  made from (an FNV-1a hash of what `map::map_source` reads): opened
-  again, the list checks a page against its text in a frame - a read and
-  a hash, no parse - and makes again only what changed. Each picture is
+  this machine): on longwater (112 x 63) the minimap takes 1.0 ms where
+  staging the round takes 5.1 ms and painting its 3584 x 2016 pixels on
+  the CPU canvas 487 ms, after 88 ms decoding the sheets that canvas
+  needs, and the smallest level (48 x 24) still paints in 97 ms - a page
+  of seven painted would stall a phone for seconds; a debug build is
+  about ten times slower either way. The parse is most of a picture's
+  cost (8 ms for longwater), so the list makes only its page's pictures,
+  one a frame, and keeps each by the map's name and the revision of the
+  text it was made from (an FNV-1a hash of what `map::map_source`
+  reads): opened again, the list checks a page against its text in a
+  frame - a read and a hash, no parse - and makes again only what
+  changed. Each picture is
   uploaded once (`editor::render::ThumbnailTextures`, the `BlockTexture`
   pattern), and the textures are freed the frame the list closes.
 - **Play from here.** PLAY starts from the map's start; PLAY HERE, beside
@@ -709,17 +714,19 @@ of sight); a fallen seat comes back through the free gate nearest the
 living seats. On the study map, 30 AFK rounds, a wave tank's walk to the
 fight went from a median 14.8 s, p90 34.5 s and worst 47.5 s to 11.6 s,
 20.8 s and 30.2 s, and with every round run to two minutes a tick costs
-0.59 ms against 0.92. `just probe-fields` sweeps the study map and the
-five 40-wide levels. The waves are paced by a director, stragglers are
+0.59 ms against 0.92. `just probe-fields` sweeps the study map,
+longwater and five levels (40 wide when this was measured, 56 since the
+shipped maps grew). The waves are paced by a director, stragglers are
 rolled in again through a nearer gate, and the flow fields are worked out
 only as far as they are read (all three below).
 
 **The first field map** is `longwater` (`maps/longwater.toml`, free play,
-80 x 45; its header says how it plays): a fort on the south shore of a
-lake that crosses the whole map, a ford at each end and a causeway either
-side of the fort, six wave gates north of the water 10 to 14 s down the
-roads from the fort, and two on the south road, 8 s out, which only a
-fallen seat comes back through (`field::nearest_gates`). Laying it out
+laid out at 80 x 45 and 112 x 63 since the shipped maps grew by 40 % a
+side; its header says how it plays): a fort on the south shore of a lake
+that crosses the whole map, a ford at each end and a causeway either side
+of the fort, six wave gates north of the water 14 to 19 s down the roads
+from the fort, and two on the south road, 11 s out, which only a fallen
+seat comes back through (`field::nearest_gates`). Laying it out
 found two rules for a field map. A tank turns off its road for any pickup
 it wants inside its leash (`Brain::seek`), so whatever a fresh enemy
 fetches - laser, plasma, minigun, missiles, speed and shield, and the
@@ -1176,14 +1183,16 @@ The questions this research left open, as decided:
 - **Local play on a big screen** zooms out on its own (section 3):
   40 x 22.5 cells on a 24" or 27" monitor. There is no setting, and
   online rooms always use the shared area.
-- **Arena threshold.** Maps up to 36 x 18 are shown whole; the five
-  40-wide levels (Hedge Maze, Archipelago, Black Gold, Harbor Lights,
-  Castle Moat) get the follow camera on phones, tablets, laptops and in
-  rooms. A phone keeps an 8 mm tank and still shows about nine tenths of
-  their width and four fifths of their height; shown whole they would
-  draw it at 5.8 to 6.5 mm. A monitor playing locally shows them whole
-  anyway (section 3), and a map's `view` key can still choose for
-  itself.
+- **Arena threshold.** Maps up to 36 x 18 are shown whole; anything
+  bigger gets the follow camera on phones, tablets, laptops and in rooms
+  - since the shipped maps grew by 40 % a side, every level and
+  free-play map. When this was decided the threshold split the levels:
+  the five then 40 wide (Hedge Maze, Archipelago, Black Gold, Harbor
+  Lights, Castle Moat) would have drawn the tank at 5.8 to 6.5 mm shown
+  whole, and a phone following them kept an 8 mm tank and still showed
+  about nine tenths of their width and four fifths of their height. A
+  monitor playing locally shows 40 x 22.5 cells (section 3), and a map's
+  `view` key can still choose for itself.
 - **Vertical engagement.** The sight box stays +-11.5 x +-7.5 cells
   (section 5): an enemy straight above or below closes to 240 px before
   it fires, so nobody is shot from beyond the edge of their screen, and
