@@ -138,6 +138,34 @@ pub enum Button {
     Kick(u8),
 }
 
+impl Button {
+    /// The button as the dev server's `status.ui.screen_buttons` and the
+    /// web build's `bb_ui_json` name it: its action, a key by its letter, a
+    /// kick by its row.
+    pub fn name(self) -> String {
+        let name = match self {
+            Button::Host => "host",
+            Button::Join => "join",
+            Button::Back => "back",
+            Button::MapPrev => "map_prev",
+            Button::MapNext => "map_next",
+            Button::MissionPrev => "mission_prev",
+            Button::MissionNext => "mission_next",
+            Button::Del => "delete",
+            Button::Confirm => "confirm",
+            Button::Ready => "ready",
+            Button::Start => "start",
+            Button::Leave => "leave",
+            Button::Key(i) => {
+                let c = crate::net::rooms::CODE_ALPHABET[i as usize % crate::net::rooms::CODE_ALPHABET.len()] as char;
+                return format!("key_{}", c.to_ascii_lowercase());
+            }
+            Button::Kick(row) => return format!("kick_{row}"),
+        };
+        name.to_string()
+    }
+}
+
 /// What the screen asks its caller to do. Everything that needs a socket
 /// or the session's own state leaves through here rather than being done
 /// in the screen.

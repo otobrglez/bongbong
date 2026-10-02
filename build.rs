@@ -40,6 +40,7 @@ fn main() {
             "_bb_game_restart",
             "_bb_net_stats",
             "_bb_input",
+            "_bb_ui_json",
         ];
         println!(
             "cargo:rustc-link-arg-bin=bongbong=-sEXPORTED_FUNCTIONS={}",

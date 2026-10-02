@@ -969,66 +969,13 @@ impl DevServer {
         Ok(self.camera_json(session, field))
     }
 
-    /// `status.ui`: the UI frame the chrome is laid out in - the UI scale
-    /// (window units per point), the window and the safe area the chrome
-    /// keeps to, both in points, and whether it is laid out for touch -
-    /// and, in play and online, the corners: every `button` and both
-    /// `clusters`; and the `screen_buttons` of whatever stands over the
-    /// round (`screen_buttons`) - all in window coordinates, which is what
-    /// `click` takes. With no window, the frame `click` lays the chrome out
-    /// in (`click_frame`).
+    /// `status.ui`: the chrome as the window last laid it out
+    /// (`capi::ui_status`) - in window coordinates, which is what `click`
+    /// takes. With no window, the frame `click` lays the chrome out in
+    /// (`click_frame`).
     fn ui_json(&self, session: &Session, width: f32, height: f32) -> Value {
         let (_, _, ui) = self.click_frame(session, width, height);
-        let rect = |r: crate::Rect| json!({ "x": r.x, "y": r.y, "w": r.w, "h": r.h });
-        let on_window = |r: crate::math::Rectangle| {
-            let r = ui.rect_to_window(r);
-            json!({ "x": r.x, "y": r.y, "w": r.width, "h": r.height })
-        };
-        let mut v = json!({ "scale": ui.scale, "screen": rect(ui.screen), "area": rect(ui.area), "touch": ui.touch });
-        if let Some(corners) = Self::corners(session, &ui) {
-            let buttons: Map<String, Value> = corners.buttons().into_iter().map(|(b, r)| (b.name().to_string(), on_window(r))).collect();
-            v["buttons"] = Value::Object(buttons);
-            v["clusters"] = json!({ "left": on_window(corners.left()), "right": on_window(corners.right) });
-            // The minimap's picture under the right cluster, where the
-            // window draws one: not a button - a click there does nothing.
-            v["minimap"] = corners.minimap.map_or(Value::Null, on_window);
-        }
-        let screen = Self::screen_buttons(session, &ui);
-        if !screen.is_empty() {
-            v["screen_buttons"] = Value::Object(screen.into_iter().map(|(name, r)| (name, on_window(r))).collect());
-        }
-        v
-    }
-
-    /// The live buttons of whatever stands over the round and takes a press
-    /// before the corners do - the level select's open tiles and BACK, a
-    /// dialog's two, a level's end screen's, the lobby's - by name, in UI
-    /// points, from the same geometry the painter and `click` read.
-    fn screen_buttons(session: &Session, ui: &UiFrame) -> Vec<(String, crate::math::Rectangle)> {
-        use crate::level_select::{back_rect, tile_rect, TileState};
-        let chrome = session.play_chrome();
-        let mut out = Vec::new();
-        if let Some(levels) = &chrome.levels {
-            for (i, tile) in levels.tiles.iter().enumerate().filter(|(_, t)| t.state != TileState::Locked) {
-                out.push((format!("level_{}", tile.number), tile_rect(ui.area, i)));
-            }
-            out.push(("back".to_string(), back_rect(ui.area)));
-        } else if chrome.players_dialog {
-            let r = players_dialog_rects(ui.area);
-            out.extend([("one".to_string(), r.one), ("two".to_string(), r.two)]);
-        } else if chrome.leave_dialog {
-            let r = leave_dialog_rects(ui.area);
-            out.extend([("leave".to_string(), r.leave), ("stay".to_string(), r.stay)]);
-        } else if let Some(r) = chrome.result.as_ref().and_then(|view| crate::hud::result_layout(ui.area, view).buttons) {
-            out.extend([("levels".to_string(), r.levels), ("again".to_string(), r.again)]);
-            out.extend(r.next.map(|next| ("next".to_string(), next)));
-        }
-        if let Some(lobby) = &chrome.lobby {
-            for b in lobby.buttons.iter().filter(|b| b.enabled) {
-                out.push((lobby_button_name(b.button), crate::lobby::button_rect(ui.area, b.button)));
-            }
-        }
-        out
+        crate::capi::ui_status(session, &ui)
     }
 
     /// `status.camera` and the `camera` tool's reply: the view in force -
@@ -2245,32 +2192,6 @@ impl DevServer {
         }
         Ok(mode_json(session))
     }
-}
-
-/// A lobby button's name in `status.ui.screen_buttons`: its action, a key
-/// by its letter, a kick by its row.
-fn lobby_button_name(button: crate::lobby::Button) -> String {
-    use crate::lobby::Button as B;
-    let name = match button {
-        B::Host => "host",
-        B::Join => "join",
-        B::Back => "back",
-        B::MapPrev => "map_prev",
-        B::MapNext => "map_next",
-        B::MissionPrev => "mission_prev",
-        B::MissionNext => "mission_next",
-        B::Del => "delete",
-        B::Confirm => "confirm",
-        B::Ready => "ready",
-        B::Start => "start",
-        B::Leave => "leave",
-        B::Key(i) => {
-            let c = crate::net::rooms::CODE_ALPHABET[i as usize % crate::net::rooms::CODE_ALPHABET.len()] as char;
-            return format!("key_{}", c.to_ascii_lowercase());
-        }
-        B::Kick(row) => return format!("kick_{row}"),
-    };
-    name.to_string()
 }
 
 /// `lint`: the map linter over the builder's canvas or the round's map,

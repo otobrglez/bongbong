@@ -205,6 +205,23 @@ fn framebuffer_ratio(rl: &RaylibHandle) -> f32 {
     if screen > 0 && render > 0 { render as f32 / screen as f32 } else { 1.0 }
 }
 
+/// Hand the page's scripts the window as this frame laid it out
+/// (`capi::bb_ui_json`): the chrome in `ui`, the bitmap through `view`, and
+/// the last press. Every frame that presents publishes, the builder's too.
+#[cfg(all(feature = "dev-tools", target_os = "emscripten"))]
+fn publish_window(rl: &RaylibHandle, session: &Session, ui: &UiFrame, layout: &Layout, view: &View, frame: u64, press: Option<crate::capi::Press>) {
+    crate::capi::publish_window(crate::capi::window_json(&crate::capi::WindowReport {
+        session,
+        ui,
+        layout,
+        view,
+        window: (rl.get_screen_width(), rl.get_screen_height()),
+        units_per_point: window_units_per_point(rl),
+        frame,
+        press,
+    }));
+}
+
 /// How a frame lands on the window (docs/large-maps-follow-camera.md): the
 /// bitmap's layout and the view that puts it on the window, and the render
 /// targets that takes. An arena - and a view the dev server pinned - is the
@@ -1535,11 +1552,19 @@ pub fn run(args: Args) {
     // What `bb_net_stats` hands the page: the online round's readings.
     #[cfg(feature = "dev-tools")]
     let mut net_stats = crate::capi::NetStatsFeed::default();
+    // The frames drawn and the last press the window saw, which
+    // `bb_ui_json` reports.
+    #[cfg(all(feature = "dev-tools", target_os = "emscripten"))]
+    let (mut frames_drawn, mut last_press): (u64, Option<crate::capi::Press>) = (0, None);
     game_loop::run(rl, thread, target_fps, move |rl, thread| {
         // The web's window is the canvas's box: it follows a resize, a
         // rotation or full screen before anything reads its size.
         #[cfg(target_os = "emscripten")]
         web::follow_canvas(rl);
+        #[cfg(all(feature = "dev-tools", target_os = "emscripten"))]
+        {
+            frames_drawn += 1;
+        }
         // Frame boundary, first: dev-server requests (state reads and
         // writes, tuning patches, an armed step or screenshot), so anything
         // they stage lands in this same frame.
@@ -1652,6 +1677,11 @@ pub fn run(args: Args) {
         let steer_right = crate::TOUCH_STEER_RIGHT;
         let pressed = mouse_pressed || touch_pressed;
         let held = mouse_held || touching;
+        #[cfg(all(feature = "dev-tools", target_os = "emscripten"))]
+        if pressed {
+            let count = last_press.map_or(1, |p| p.count + 1);
+            last_press = Some(crate::capi::Press { count, at: window_pointer, touch: touch_pressed });
+        }
         let tab = rl.is_key_pressed(KeyboardKey::KEY_TAB);
         let ctrl = rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL)
             || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL)
@@ -1907,6 +1937,8 @@ pub fn run(args: Args) {
             if let Some(dev) = &mut dev {
                 dev.after_render(rl, thread, &scene_target, &session.game);
             }
+            #[cfg(all(feature = "dev-tools", target_os = "emscripten"))]
+            publish_window(rl, &session, &ui, &layout, &view, frames_drawn, last_press);
             return;
         }
 
@@ -2234,6 +2266,8 @@ pub fn run(args: Args) {
         if let Some(dev) = &mut dev {
             dev.after_render(rl, thread, &scene_target, session.shown());
         }
+        #[cfg(all(feature = "dev-tools", target_os = "emscripten"))]
+        publish_window(rl, &session, &ui, &layout, &view, frames_drawn, last_press);
         // What the local round showed, for BUILD to open the builder on.
         if session.mode() == Driver::Play {
             session.play_view = Some(camera.rect());

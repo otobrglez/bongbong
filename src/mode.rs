@@ -808,6 +808,40 @@ impl Session {
     fn minimap_slot(&self) -> Option<(f32, f32)> {
         self.minimap_on.then(|| crate::minimap::MinimapRules::current().size_pt(self.shown().map.field_size()))
     }
+
+    /// The live buttons of whatever stands over the round and takes a press
+    /// before the corners do - the level select's open tiles and BACK, a
+    /// dialog's two, a level's end screen's, the lobby's - by name, in the
+    /// UI points of `ui`, from the same geometry the painter and the hit
+    /// tests read. What the dev server's `status.ui.screen_buttons` and the
+    /// web build's `bb_ui_json` report.
+    pub fn screen_buttons(&self, ui: &crate::hud::UiFrame) -> Vec<(String, crate::math::Rectangle)> {
+        use crate::hud::{leave_dialog_rects, players_dialog_rects};
+        use crate::level_select::{back_rect, tile_rect, TileState};
+        let chrome = self.play_chrome();
+        let mut out = Vec::new();
+        if let Some(levels) = &chrome.levels {
+            for (i, tile) in levels.tiles.iter().enumerate().filter(|(_, t)| t.state != TileState::Locked) {
+                out.push((format!("level_{}", tile.number), tile_rect(ui.area, i)));
+            }
+            out.push(("back".to_string(), back_rect(ui.area)));
+        } else if chrome.players_dialog {
+            let r = players_dialog_rects(ui.area);
+            out.extend([("one".to_string(), r.one), ("two".to_string(), r.two)]);
+        } else if chrome.leave_dialog {
+            let r = leave_dialog_rects(ui.area);
+            out.extend([("leave".to_string(), r.leave), ("stay".to_string(), r.stay)]);
+        } else if let Some(r) = chrome.result.as_ref().and_then(|view| result_layout(ui.area, view).buttons) {
+            out.extend([("levels".to_string(), r.levels), ("again".to_string(), r.again)]);
+            out.extend(r.next.map(|next| ("next".to_string(), next)));
+        }
+        if let Some(lobby) = &chrome.lobby {
+            for b in lobby.buttons.iter().filter(|b| b.enabled) {
+                out.push((b.button.name(), crate::lobby::button_rect(ui.area, b.button)));
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
