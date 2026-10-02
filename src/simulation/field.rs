@@ -40,7 +40,7 @@ use hecs::Entity;
 use rand::RngExt;
 use rand::rngs::SmallRng;
 
-use crate::ai::{Ai, Intent, in_sight_box};
+use crate::ai::{Ai, Intent, in_sight_box_of};
 use crate::battlefield::{self, Gate};
 use crate::pathfind::{Grid, WalkCosts};
 use crate::tank::Tank;
@@ -124,14 +124,13 @@ pub(super) fn call_target(live_seats: &[Position], position: Position) -> Option
 
 /// A path's walk in seconds at the baseline `enemy_speed`, from its cost
 /// in nav steps.
-fn walk_seconds(cost: u32) -> f32 {
-    cost as f32 * PATHFIND_CELL_SIZE / tuning().enemy_speed.max(1.0)
+fn walk_seconds(cost: u32, t: &Tuning) -> f32 {
+    cost as f32 * PATHFIND_CELL_SIZE / t.enemy_speed.max(1.0)
 }
 
 /// Whether a walk of `walk` seconds is about `field_walk_seconds`: within
 /// `field_walk_slack_seconds` of it either way.
-fn about_the_walk(walk: f32) -> bool {
-    let t = tuning();
+fn about_the_walk(walk: f32, t: &Tuning) -> bool {
     (walk - t.field_walk_seconds).abs() <= t.field_walk_slack_seconds
 }
 
@@ -179,16 +178,18 @@ pub(super) fn spawn_cells(grid: &Grid, seats: &[Position], walls: &[Position]) -
             })
         })
     };
+    let t = tuning();
+    let half = t.sight_box_half_px();
     let mut cells = Vec::new();
     for row in 0..rows {
         for col in 0..cols {
             let p = Position::new((col as f32 + 0.5) * cell, (row as f32 + 0.5) * cell);
-            if !grid.usable(p) || seats.iter().any(|&s| in_sight_box(s, p)) {
+            if !grid.usable(p) || seats.iter().any(|&s| in_sight_box_of(half, s, p)) {
                 continue;
             }
             let Some(cost) = walk.at(p) else { continue };
             if clear_of_walls(p) {
-                cells.push(SpawnCell { at: p, about_the_walk: about_the_walk(walk_seconds(cost)) });
+                cells.push(SpawnCell { at: p, about_the_walk: about_the_walk(walk_seconds(cost, &t), &t) });
             }
         }
     }
@@ -231,11 +232,13 @@ pub(super) fn prefer_gates(gates: Vec<Gate>, grid: &Grid, seats: &[Position]) ->
     if seats.is_empty() {
         return gates;
     }
-    let outside: Vec<Gate> = gates.iter().copied().filter(|g| seats.iter().all(|&s| !in_sight_box(s, g.inside))).collect();
+    let t = tuning();
+    let half = t.sight_box_half_px();
+    let outside: Vec<Gate> = gates.iter().copied().filter(|g| seats.iter().all(|&s| !in_sight_box_of(half, s, g.inside))).collect();
     let gates = if outside.is_empty() { gates } else { outside };
     let walk = grid.walk_costs(seats);
     let paced: Vec<Gate> =
-        gates.iter().copied().filter(|g| walk.at(g.inside).is_some_and(|cost| about_the_walk(walk_seconds(cost)))).collect();
+        gates.iter().copied().filter(|g| walk.at(g.inside).is_some_and(|cost| about_the_walk(walk_seconds(cost, &t), &t))).collect();
     if paced.is_empty() { gates } else { paced }
 }
 
@@ -253,7 +256,7 @@ pub(super) fn nearest_gates(mut gates: Vec<Gate>, walk: &WalkCosts) -> Vec<Gate>
 /// `field_walk_slack_seconds`.
 pub(super) fn far_by_walk(cost: Option<u32>) -> bool {
     let t = tuning();
-    cost.is_none_or(|cost| walk_seconds(cost) > t.field_walk_seconds - t.field_walk_slack_seconds)
+    cost.is_none_or(|cost| walk_seconds(cost, &t) > t.field_walk_seconds - t.field_walk_slack_seconds)
 }
 
 /// Whether no screen following the seat at `seat` can show `at`, for a
@@ -285,13 +288,15 @@ pub(super) fn beyond_every_screen(seat: Position, at: Position, t: &Tuning) -> b
 /// about `field_walk_seconds` where there are any. Order is kept; empty
 /// when no lane is nearer.
 pub(super) fn reroll_gates(gates: Vec<Gate>, walk: &WalkCosts, seats: &[Position], from: Option<u32>) -> Vec<Gate> {
+    let t = tuning();
+    let half = t.sight_box_half_px();
     let nearer: Vec<Gate> = gates
         .into_iter()
-        .filter(|g| seats.iter().all(|&s| !in_sight_box(s, g.inside)))
+        .filter(|g| seats.iter().all(|&s| !in_sight_box_of(half, s, g.inside)))
         .filter(|g| walk.at(g.inside).is_some_and(|cost| from.is_none_or(|from| cost < from)))
         .collect();
     let paced: Vec<Gate> =
-        nearer.iter().copied().filter(|g| walk.at(g.inside).is_some_and(|cost| about_the_walk(walk_seconds(cost)))).collect();
+        nearer.iter().copied().filter(|g| walk.at(g.inside).is_some_and(|cost| about_the_walk(walk_seconds(cost, &t), &t))).collect();
     if paced.is_empty() { nearer } else { paced }
 }
 

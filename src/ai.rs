@@ -2008,7 +2008,12 @@ pub(crate) fn axis_offsets(from: Position, to: Position, dir: Dir) -> (f32, f32)
 /// (`simulation::towers`) - and the one the probe's `offbox-fire` check
 /// holds them to (docs/large-maps-follow-camera.md section 5).
 pub fn in_sight_box(seat: Position, at: Position) -> bool {
-    let (half_w, half_h) = tuning().sight_box_half_px();
+    in_sight_box_of(tuning().sight_box_half_px(), seat, at)
+}
+
+/// `in_sight_box` with the box's half extents read once by the caller
+/// (`Tuning::sight_box_half_px`), for a loop over many points.
+pub fn in_sight_box_of((half_w, half_h): (f32, f32), seat: Position, at: Position) -> bool {
     (at.x - seat.x).abs() <= half_w && (at.y - seat.y).abs() <= half_h
 }
 

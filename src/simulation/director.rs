@@ -30,7 +30,7 @@
 //! `RoundState::next_wave` already carries, so its `WAVE N` banner stays up
 //! for as long as the room's, holds included.
 
-use crate::ai::{Ai, in_sight_box};
+use crate::ai::{Ai, in_sight_box_of};
 use crate::frog::Frog;
 use crate::tank::Tank;
 use crate::tuning::{Tuning, tuning};
@@ -159,6 +159,7 @@ impl Game {
     pub(super) fn observe_pressure(&mut self, dt: f32) -> f32 {
         let enemies: Vec<Position> =
             self.world.query::<&Tank>().with::<&Ai>().iter().filter(|t| !t.is_wreck()).map(|t| t.position).collect();
+        let half = tuning().sight_box_half_px();
         let mut seats = [None; MAX_SEATS];
         for (reading, seat) in seats.iter_mut().zip(self.seats_on_field()) {
             *reading = seat.and_then(|e| {
@@ -166,7 +167,7 @@ impl Game {
                     (!t.is_wreck()).then(|| SeatReading {
                         damage: t.damage,
                         shield: t.shield_hp,
-                        crowd: enemies.iter().filter(|&&p| in_sight_box(t.position, p)).count(),
+                        crowd: enemies.iter().filter(|&&p| in_sight_box_of(half, t.position, p)).count(),
                     })
                 })
             });
