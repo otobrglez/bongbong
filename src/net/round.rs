@@ -578,16 +578,16 @@ impl<T: Transport> OnlineRound<T> {
         &self.interp
     }
 
-    /// One line of chrome over the field while the round runs: the room,
-    /// this seat, and how deep the snapshot buffer is. Everything before
-    /// the round - the code, the QR, the seats, the buttons - is the
-    /// lobby screen's (`lobby.rs`), which this line never repeats.
     /// Say how much of the field this window's screen shows, from the
     /// next packet on (`screen`).
     pub fn set_screen(&mut self, screen: Option<(f32, f32)>) {
         self.screen = screen;
     }
 
+    /// One line of chrome over the field while the round runs: the room,
+    /// this seat, and how deep the snapshot buffer is. Everything before
+    /// the round - the code, the QR, the seats, the buttons - is the
+    /// lobby screen's (`lobby.rs`), which this line never repeats.
     pub fn status(&self) -> String {
         use crate::text::{keys, text};
         let t = text();
