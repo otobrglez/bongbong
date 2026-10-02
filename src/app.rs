@@ -1936,21 +1936,10 @@ pub fn run(args: Args) {
                     Driver::Online => dt,
                     _ => session.game.frame().checked_sub(frame_before).unwrap_or(0) as f32 * PHYSICS_FIXED_DT,
                 };
-                // The seats this screen plays: a room's own seat once its
-                // replica is on screen - until the `Welcome` the window
-                // draws the local round, where that seat is nobody's, and
-                // the view holds - or the couch's one or two (a local
-                // round's seats past two stand idle).
-                let local: Vec<usize> = match session.mode() {
-                    Driver::Online => session
-                        .online
-                        .as_ref()
-                        .filter(|round| round.game().is_some())
-                        .and_then(|round| round.seat())
-                        .map(|s| vec![usize::from(s)])
-                        .unwrap_or_default(),
-                    _ => (0..game.players.count().min(2)).collect(),
-                };
+                // The seats this screen plays (`local_seats`): until a
+                // room's `Welcome` the window draws the local round, where
+                // the room's seat is nobody's, and the view holds.
+                let local: Vec<usize> = local_seats(&session).into_iter().map(usize::from).collect();
                 let stage = crate::follow::Stage { visible: frame.framing.visible, field, sight: frame.sight };
                 let shot = follow.update(&crate::follow::Seats::of(game, &local), advanced, &stage, &crate::follow::FollowRules::current());
                 let camera = Camera::following(field, shot.corner, frame.framing.visible, frame.scale, frame.device_scale(framebuffer_ratio(rl)));

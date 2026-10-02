@@ -595,12 +595,13 @@ impl Game {
         };
         let touch = effects.touch;
         let fx_live = effects.fx.live();
+        let indicators = effects.indicators;
 
         if !camera.follows() {
             rl.draw_texture_mode(thread, composite, |mut d| {
                 d.clear_background(Color::BLACK);
                 self.draw_world_layer(&mut d, &world, effects);
-                self.draw_chrome(&mut d, &text, &hud, chrome, layout, textures, touch, fx_live, None);
+                self.draw_chrome(&mut d, &text, &hud, chrome, layout, camera, indicators, textures, touch, fx_live, None);
             });
             crate::render::view::present(rl, thread, composite, view, backdrop);
             return;
@@ -612,7 +613,7 @@ impl Game {
         let mut d = rl.begin_drawing(thread);
         crate::render::view::present_world(&mut d, composite, camera, view, layout, backdrop);
         let base = Camera2D { offset: view.offset.into(), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: view.scale };
-        self.draw_chrome(&mut d, &text, &hud, chrome, layout, textures, touch, fx_live, Some(base));
+        self.draw_chrome(&mut d, &text, &hud, chrome, layout, camera, indicators, textures, touch, fx_live, Some(base));
     }
 }
 
@@ -844,6 +845,8 @@ impl Game {
         hud: &HudModel,
         chrome: &PlayChrome,
         layout: &Layout,
+        camera: &Camera,
+        indicators: Option<&crate::indicators::Picture>,
         textures: &Textures,
         touch: Option<(&crate::touch::TouchScheme, bool)>,
         fx_live: usize,
@@ -864,6 +867,24 @@ impl Game {
                 zoom: b.zoom,
             },
         };
+
+        // What the screen cannot see (indicators.rs): its marks in the
+        // world, where the frame shows the world, and its arrows and labels
+        // in the bitmap's pixels - over the world layer, so no sky darkens
+        // them, and under the banners and dialogs, whose dims cover them.
+        if let Some(picture) = indicators {
+            let on_field = camera.on_field(origin);
+            let world = match base {
+                None => on_field,
+                Some(b) => Camera2D {
+                    offset: Vector2::new(b.offset.x + on_field.offset.x * b.zoom, b.offset.y + on_field.offset.y * b.zoom),
+                    target: on_field.target,
+                    rotation: 0.0,
+                    zoom: on_field.zoom * b.zoom,
+                },
+            };
+            crate::render::indicators::draw_indicators(d, picture, world, base);
+        }
 
         // Everything from here to the bar stands over the field: the
         // labels, the banners and the dims all centre on and cover the
