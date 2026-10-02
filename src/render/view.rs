@@ -16,12 +16,14 @@ impl Camera {
         Camera2D { offset: Vector2::new(0.0, 0.0), target: self.origin.into(), rotation: 0.0, zoom: 1.0 }
     }
 
-    /// The camera pass 2 draws what lies in the world - the ripples' quads,
-    /// the debug overlays - through, onto the field area of the bitmap at
-    /// `field_origin`: the view's corner at the field's, `scale` bitmap
-    /// pixels to the world pixel. The field camera for the whole field.
+    /// The camera that puts what lies in the world onto the field area of
+    /// the bitmap at `field_origin`, where the frame shows it: the view's
+    /// corner (`rect` - the block-grid origin plus a followed view's
+    /// sub-block offset) at the field's, `scale` bitmap pixels to the world
+    /// pixel - `to_view`'s mapping. The field camera for the whole field.
     pub fn on_field(&self, field_origin: Vec2) -> Camera2D {
-        Camera2D { offset: field_origin.into(), target: self.origin.into(), rotation: 0.0, zoom: self.scale }
+        let corner = self.rect();
+        Camera2D { offset: field_origin.into(), target: Vector2::new(corner.x, corner.y), rotation: 0.0, zoom: self.scale }
     }
 }
 
@@ -74,3 +76,34 @@ pub fn present_world(d: &mut impl RaylibDraw, world: &RenderTexture2D, camera: &
 
 /// The frame around the bitmap when it does not fill the window.
 const FRAME: Color = Color::new(62, 62, 66, 255);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Where raylib's `Camera2D` puts a world point: `(world - target) *
+    /// zoom + offset`.
+    fn through(c: Camera2D, world: Vec2) -> Vec2 {
+        Vec2::new((world.x - c.target.x) * c.zoom + c.offset.x, (world.y - c.target.y) * c.zoom + c.offset.y)
+    }
+
+    #[test]
+    fn on_field_puts_a_world_point_where_the_frame_shows_it() {
+        let field_origin = Vec2::new(0.0, 32.0);
+        let cameras = [
+            Camera::whole((1088.0, 544.0)),
+            Camera::zoomed((1536.0, 768.0), Vec2::new(700.0, 300.0), 2.0),
+            // A followed view between blocks: its offset counts.
+            Camera::following((1536.0, 768.0), Vec2::new(301.3, 120.9), (1280.0, 688.0), 1.0, 1.5),
+            Camera::following((1536.0, 768.0), Vec2::new(101.0, 49.0), (800.0, 520.0), 1.36, 2.0),
+        ];
+        for camera in cameras {
+            for world in [Vec2::new(900.0, 400.0), Vec2::new(camera.rect().x, camera.rect().y)] {
+                let drawn = through(camera.on_field(field_origin), world);
+                let view = camera.to_view(world);
+                let want = Vec2::new(field_origin.x + view.x, field_origin.y + view.y);
+                assert!((drawn.x - want.x).abs() < 1e-3 && (drawn.y - want.y).abs() < 1e-3, "{camera:?}: {drawn:?} vs {want:?}");
+            }
+        }
+    }
+}
