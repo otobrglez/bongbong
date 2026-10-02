@@ -1360,24 +1360,14 @@ impl Grid {
     /// skipped outright and the search is the plain grid A*, tie order
     /// included.
     fn search(&self, start: (usize, usize), goal: (usize, usize), hub: bool) -> Option<SearchHit> {
+        SEARCH_TABLES.with_borrow_mut(|tables| self.search_in(tables, start, goal, hub))
+    }
+
+    /// `search` on the thread's kept tables (`SearchTables`), begun here.
+    fn search_in(&self, t: &mut SearchTables, start: (usize, usize), goal: (usize, usize), hub: bool) -> Option<SearchHit> {
         let hub = hub && !self.portal_cells.is_empty();
-        let mut open = BinaryHeap::new();
         // One slot per cell plus the hub's sentinel slot at the end.
-        let slots = self.cols * self.rows + 1;
-        let mut came_from: Vec<Option<NavNode>> = vec![None; slots];
-        let mut g_score = vec![f32::INFINITY; slots];
-        // Nodes already expanded (popped and relaxed) once. Without this, a
-        // cell whose g_score improves after it's already been expanded gets
-        // pushed to `open` again and, once repopped, has its neighbors
-        // relaxed all over again - on an open grid with many reachable
-        // cells this reprocessing cascades combinatorially instead of the
-        // O(cells) A* is supposed to guarantee, which is cheap enough not to
-        // matter on native but was enough to stall a frame for minutes on
-        // wasm's slower per-op cost (observed as a frozen, unresponsive tab
-        // during web playtesting). Marking a cell closed the first time it's
-        // popped bounds every cell to at most one expansion, same as
-        // textbook Dijkstra/A*.
-        let mut closed = vec![false; slots];
+        t.begin(self.cols * self.rows + 1);
         let idx = |n: NavNode| n.idx(self.cols, self.rows);
 
         let exit_h = self
@@ -1402,32 +1392,50 @@ impl Grid {
                 }
             }
         };
+        // Reach `next` from `node` at `tentative` when that beats the best
+        // known, and queue it.
+        let relax = |t: &mut SearchTables, node: NavNode, next: NavNode, tentative: f32| {
+            let slot = idx(next);
+            if tentative < t.g(slot) {
+                t.reach(slot, tentative, Some(node));
+                t.open.push(OpenEntry {
+                    node: next,
+                    priority: tentative + h(next),
+                });
+            }
+        };
 
         let start_node = NavNode::Cell(start);
-        g_score[idx(start_node)] = 0.0;
-        open.push(OpenEntry {
+        t.reach(idx(start_node), 0.0, None);
+        t.open.push(OpenEntry {
             node: start_node,
             priority: h(start_node),
         });
 
-        while let Some(OpenEntry { node, .. }) = open.pop() {
-            if closed[idx(node)] {
+        while let Some(OpenEntry { node, .. }) = t.open.pop() {
+            // A node is expanded (popped and relaxed) once at most. Without
+            // the closed mark, a cell whose cost improves after its
+            // expansion is pushed again and, once repopped, relaxes its
+            // neighbours all over again - on an open grid that cascades
+            // combinatorially instead of the O(cells) A* guarantees, enough
+            // to stall a frame for minutes at wasm's per-op cost.
+            if t.is_closed(idx(node)) {
                 // Stale heap entry from before this node's last improvement.
                 continue;
             }
-            closed[idx(node)] = true;
+            t.close(idx(node));
 
             if node == NavNode::Cell(goal) {
                 // Unit steps summed in f32 stay exact integers (well under
                 // f32's 2^24 exact-integer range on any sane grid); only a
                 // fractional hop cost makes the rounding do anything.
-                let cost = g_score[idx(node)].round() as u32;
+                let cost = t.g(idx(node)).round() as u32;
                 // Walk back to the step right after `start`, skipping the
                 // hub: the first step is always a cell, the exit when the
                 // route teleports straight out of `start`.
                 let mut at = node;
                 let mut first_step = goal;
-                while let Some(prev) = came_from[idx(at)] {
+                while let Some(prev) = t.parent(idx(at)) {
                     if prev == start_node {
                         break;
                     }
@@ -1439,21 +1447,11 @@ impl Grid {
                 return Some(SearchHit { first_step, cost });
             }
 
-            let g = g_score[idx(node)];
-            let mut relax = |next: NavNode, tentative: f32| {
-                if tentative < g_score[idx(next)] {
-                    came_from[idx(next)] = Some(node);
-                    g_score[idx(next)] = tentative;
-                    open.push(OpenEntry {
-                        node: next,
-                        priority: tentative + h(next),
-                    });
-                }
-            };
+            let g = t.g(idx(node));
             match node {
                 NavNode::Cell(cell) => {
                     for next in self.neighbors(cell) {
-                        if closed[idx(NavNode::Cell(next))] {
+                        if t.is_closed(idx(NavNode::Cell(next))) {
                             continue;
                         }
                         if next != goal && self.blocked_at(next) {
@@ -1461,24 +1459,97 @@ impl Grid {
                         }
                         // A step costs what the cell charges (`weigh`), 1 on
                         // open ground.
-                        relax(NavNode::Cell(next), g + self.cost[idx(NavNode::Cell(next))] as f32);
+                        relax(t, node, NavNode::Cell(next), g + self.cost[idx(NavNode::Cell(next))] as f32);
                     }
-                    if hub && !closed[idx(NavNode::Hub)] && self.is_portal_cell(cell) {
-                        relax(NavNode::Hub, g + self.hop_cost);
+                    if hub && !t.is_closed(idx(NavNode::Hub)) && self.is_portal_cell(cell) {
+                        relax(t, node, NavNode::Hub, g + self.hop_cost);
                     }
                 }
                 NavNode::Hub => {
                     for &exit in &self.portal_cells {
-                        if closed[idx(NavNode::Cell(exit))] {
+                        if t.is_closed(idx(NavNode::Cell(exit))) {
                             continue;
                         }
-                        relax(NavNode::Cell(exit), g);
+                        relax(t, node, NavNode::Cell(exit), g);
                     }
                 }
             }
         }
         None
     }
+}
+
+/// `Grid::search`'s per-node tables, kept on the thread from one search to
+/// the next so a query costs the cells it reaches rather than an
+/// allocation and a fill of the whole grid. A slot's cost and parent count
+/// only while it is stamped with the running search (`begin`), and every
+/// other slot reads as unreached and open - the tables a fresh search
+/// starts with, so the search runs exactly as on new ones.
+#[derive(Default)]
+struct SearchTables {
+    /// The running search's stamp; never 0 once one has begun.
+    search: u32,
+    /// Per slot, the search that last gave it a cost and a parent.
+    reached: Vec<u32>,
+    /// Per slot, the search that expanded it.
+    closed: Vec<u32>,
+    g_score: Vec<f32>,
+    came_from: Vec<Option<NavNode>>,
+    open: BinaryHeap<OpenEntry>,
+}
+
+impl SearchTables {
+    /// Start a search over `slots` slots: none reached, none closed, the
+    /// open set empty. The tables only ever grow - a slot past the grid's
+    /// is never read - and a stamp that comes round to 0 forgets every
+    /// slot rather than take an old one for the new search's.
+    fn begin(&mut self, slots: usize) {
+        if self.reached.len() < slots {
+            self.reached.resize(slots, 0);
+            self.closed.resize(slots, 0);
+            self.g_score.resize(slots, f32::INFINITY);
+            self.came_from.resize(slots, None);
+        }
+        self.search = self.search.wrapping_add(1);
+        if self.search == 0 {
+            self.reached.fill(0);
+            self.closed.fill(0);
+            self.search = 1;
+        }
+        self.open.clear();
+    }
+
+    /// The best known cost to `slot` this search, infinite when unreached.
+    fn g(&self, slot: usize) -> f32 {
+        if self.reached[slot] == self.search { self.g_score[slot] } else { f32::INFINITY }
+    }
+
+    /// The node `slot` was reached from this search, if any.
+    fn parent(&self, slot: usize) -> Option<NavNode> {
+        if self.reached[slot] == self.search { self.came_from[slot] } else { None }
+    }
+
+    /// `slot` reached at `g` from `from`.
+    fn reach(&mut self, slot: usize, g: f32, from: Option<NavNode>) {
+        self.reached[slot] = self.search;
+        self.g_score[slot] = g;
+        self.came_from[slot] = from;
+    }
+
+    /// Whether `slot` has been expanded this search.
+    fn is_closed(&self, slot: usize) -> bool {
+        self.closed[slot] == self.search
+    }
+
+    /// `slot` expanded.
+    fn close(&mut self, slot: usize) {
+        self.closed[slot] = self.search;
+    }
+}
+
+thread_local! {
+    /// The thread's `SearchTables`.
+    static SEARCH_TABLES: RefCell<SearchTables> = RefCell::new(SearchTables::default());
 }
 
 /// What one successful `Grid::search` or `Grid::descend` hands back to
@@ -1746,6 +1817,38 @@ mod tests {
     fn two_portal_grid(hop: f32) -> Grid {
         Grid::build(SIDE, SIDE, CELL, 0.0, wall(5, &[]).into_iter())
             .with_portals(&[corner(1, 1), corner(7, 7)], RADIUS, hop)
+    }
+
+    /// A search on the tables the thread keeps answers as one on fresh
+    /// tables, from every cell of a grid with a wall, a gap and a portal
+    /// pair, with and without the hub - with a bigger grid searched before
+    /// each, so the kept tables are larger than this grid and stamped by
+    /// other searches, and again across the stamp coming round to 0.
+    #[test]
+    fn a_search_on_the_kept_tables_answers_as_one_on_fresh_tables() {
+        let grid = Grid::build(SIDE, SIDE, CELL, 0.0, wall(5, &[8]).into_iter()).with_portals(&[corner(1, 1), corner(7, 7)], RADIUS, 3.0);
+        let big = Grid::build(SIDE * 3.0, SIDE * 2.0, CELL, 0.0, std::iter::empty());
+        let hit = |h: Option<SearchHit>| h.map(|h| (h.first_step, h.cost));
+        let cells: Vec<(usize, usize)> = (0..10).flat_map(|row| (0..10).map(move |col| (col, row))).collect();
+        let check = |label: &str| {
+            for &from in &cells {
+                for &to in cells.iter().step_by(7) {
+                    if from == to {
+                        continue;
+                    }
+                    assert!(big.search((0, 0), (29, 19), true).is_some());
+                    for hub in [true, false] {
+                        let kept = hit(grid.search(from, to, hub));
+                        let fresh = hit(grid.search_in(&mut SearchTables::default(), from, to, hub));
+                        assert_eq!(kept, fresh, "{label}: {from:?} to {to:?}, hub {hub}");
+                    }
+                }
+            }
+        };
+        check("kept tables");
+        SEARCH_TABLES.with_borrow_mut(|t| t.search = u32::MAX - 3);
+        check("across the stamp's wrap");
+        assert!(SEARCH_TABLES.with_borrow(|t| t.search) < 10_000, "the stamp came round");
     }
 
     /// Past a portal cell a route may teleport, so the read stops at the
