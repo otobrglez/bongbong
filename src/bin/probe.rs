@@ -851,6 +851,13 @@ struct TankTrack {
     // that engaged once and then retreated (or was wrecked afterwards)
     // still counts as having arrived. `None` = never engaged.
     time_to_engage: Option<f32>,
+    // A straggler the round took off to roll in again through a nearer
+    // gate (`Event::Rerolled`) is back in a gate lane: no check reads it
+    // until it is through, and then its motion windows start again
+    // (`rejoin`) - the jump to the gate is no driving of its own.
+    away: bool,
+    // How many times the round rolled this tank in again.
+    rerolls: u32,
 }
 
 impl TankTrack {
@@ -950,7 +957,35 @@ impl TankTrack {
             path_cells,
             ideal_seconds,
             time_to_engage: None,
+            away: false,
+            rerolls: 0,
         }
+    }
+
+    /// The tank is through its gate again after a re-roll (`away`): every
+    /// window that reads its motion starts over where it stands, so the
+    /// jump from where it was taken off is never read as driving. What
+    /// it has done - its arrival at the fight, its totals, its walk's
+    /// budget from the first arrival - stands.
+    fn rejoin(&mut self, snapshot: &TankSnapshot, frame: u32) {
+        self.away = false;
+        self.stall_frames = 0;
+        self.border_frames = 0;
+        self.cluster_frames = 0;
+        self.heading_history.clear();
+        self.heading_history.push_back(snapshot.rotation);
+        self.recent_flips.clear();
+        self.last_heading = snapshot.rotation;
+        self.spin_sum = 0.0;
+        self.spin_start_frame = frame;
+        self.spin_start_pos = snapshot.position;
+        self.trail.clear();
+        self.trail_path_len = 0.0;
+        self.grind_frames = 0;
+        self.was_touching = false;
+        self.progress_frames = 0;
+        self.tank_grind_frames = 0;
+        self.pileup_frames = 0;
     }
 }
 
@@ -1053,11 +1088,17 @@ fn check_anomalies(
     };
 
     // Every enemy on the field gets a track the first frame it is seen
-    // there - band tanks at frame 0, wave tanks the frame they arrive.
-    for tank in &snapshots {
-        if !tank.is_player && !tank.entering && !tracks.contains_key(&tank.slot) {
-            let player_pos = nearest_player(tank.position).position;
-            tracks.insert(tank.slot, TankTrack::new(game, tank, player_pos, frame));
+    // there - band tanks at frame 0, wave tanks the frame they arrive - and
+    // a straggler rolled in again picks its own up where it left it.
+    for tank in snapshots.iter().filter(|t| !t.is_player) {
+        match tracks.get_mut(&tank.slot) {
+            None if !tank.entering => {
+                let player_pos = nearest_player(tank.position).position;
+                tracks.insert(tank.slot, TankTrack::new(game, tank, player_pos, frame));
+            }
+            Some(track) if tank.entering => track.away = true,
+            Some(track) if track.away => track.rejoin(tank, frame),
+            _ => {}
         }
     }
 
@@ -1742,6 +1783,8 @@ struct RoundResult {
     contact: Contact,
     /// The round's lulls between engagements, in seconds (`Lulls`).
     lulls: Vec<f32>,
+    /// Stragglers the round rolled in again (`Event::Rerolled`).
+    rerolls: u32,
     /// Wall-clock seconds spent inside `Game::update` this round, over
     /// `frames_run` ticks - the simulation's own cost, the probe's checks
     /// left out.
@@ -1882,6 +1925,7 @@ fn run_round(
     let mut frames_run = args.frames;
     let mut contact = Contact::default();
     let mut lulls = Lulls::default();
+    let mut rerolls = 0u32;
     let reach = if matches!(args.scenario, Scenario::Defend) { args.defend_reach } else { tuning().enemy_attack_range };
     let mut update_seconds = 0.0f64;
     for frame in 1..=args.frames {
@@ -1900,6 +1944,28 @@ fn run_round(
                     rams.into_player += 1;
                 }
                 rams.rolled_damage += damage;
+            }
+            // A straggler taken off to roll in again through a nearer gate
+            // (`Game::reroll_stragglers`): counted, and named in a trace.
+            if let Event::Rerolled { slot, x, y } = event {
+                rerolls += 1;
+                if let Some(track) = tracks.get_mut(slot) {
+                    track.rerolls += 1;
+                }
+                if trace {
+                    println!(
+                        "probe: t={:.1}s {} rolled in again, taken off at ({x:.0},{y:.0})",
+                        frame as f32 * DT,
+                        enemy_label(*slot, first_enemy),
+                    );
+                }
+            }
+            if let Event::TankEntered { slot } = event
+                && trace
+                && tracks.get(slot).is_some_and(|t| t.rerolls > 0)
+            {
+                let at = game.tank_snapshots().iter().find(|t| t.slot == *slot).map(|t| t.position).unwrap_or_default();
+                println!("probe: t={:.1}s {} back through its gate at ({:.0},{:.0})", frame as f32 * DT, enemy_label(*slot, first_enemy), at.x, at.y);
             }
         }
         check_fire(&game, &mut stood, round, frame, &mut fire, &mut offbox_flagged, &mut totals, heat);
@@ -2043,6 +2109,7 @@ fn run_round(
         spawn: game.spawn_plan.kind(),
         contact,
         lulls: lulls.lulls,
+        rerolls,
         update_seconds,
     }
 }
@@ -2162,7 +2229,7 @@ fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult, tun
     let ms_per_tick = result.update_seconds * 1000.0 / result.frames_run.max(1) as f64;
     let lulls = result.lulls.iter().map(|l| format!("{l:.2}")).collect::<Vec<_>>().join(",");
     format!(
-        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"players\":{},\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"ms_per_tick\":{ms_per_tick:.4},\"first_contact\":{{{contact}}},\"lulls\":[{lulls}],\"anomalies\":{{{anomalies}}},\"rams\":{{\"pair\":{},\"into_player\":{},\"rolled_damage\":{:.1}}},\"fire\":{{{fire}}},\"tanks\":[{tanks}]}}",
+        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"players\":{},\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"ms_per_tick\":{ms_per_tick:.4},\"first_contact\":{{{contact}}},\"lulls\":[{lulls}],\"rerolls\":{},\"anomalies\":{{{anomalies}}},\"rams\":{{\"pair\":{},\"into_player\":{},\"rolled_damage\":{:.1}}},\"fire\":{{{fire}}},\"tanks\":[{tanks}]}}",
         json_escape(map_display(args)),
         result.mission.name(),
         result.spawn.name(),
@@ -2171,6 +2238,7 @@ fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult, tun
         result.tanks.len(),
         result.frames_run,
         outcome_str(result.outcome),
+        result.rerolls,
         result.rams.pair,
         result.rams.into_player,
         result.rams.rolled_damage,
@@ -2330,6 +2398,7 @@ fn main() -> ExitCode {
     let (mut won_seconds, mut lost_seconds): (Vec<f32>, Vec<f32>) = (Vec::new(), Vec::new());
     let (mut engage, mut shot, mut hit): (Vec<f32>, Vec<f32>, Vec<f32>) = (Vec::new(), Vec::new(), Vec::new());
     let mut lulls: Vec<f32> = Vec::new();
+    let (mut rerolls, mut rerolled_rounds) = (0u32, 0u32);
     let (mut update_seconds, mut ticks) = (0.0f64, 0u64);
 
     for round in 0..args.rounds {
@@ -2359,6 +2428,8 @@ fn main() -> ExitCode {
         shot.extend(result.contact.shot);
         hit.extend(result.contact.hit);
         lulls.extend(&result.lulls);
+        rerolls += result.rerolls;
+        rerolled_rounds += u32::from(result.rerolls > 0);
         update_seconds += result.update_seconds;
         ticks += result.frames_run as u64;
         if sweep && totals.total() > 0 {
@@ -2430,6 +2501,9 @@ fn main() -> ExitCode {
         // between one fight and the next - what the pacing director
         // stretches after a peak and shortens while nothing happens.
         println!("probe: lulls: {}", spread_line(&lulls, "s"));
+        // Stragglers rolled in again through a nearer gate (field maps'
+        // wave rounds, `Game::reroll_stragglers`).
+        println!("probe: rerolls: {rerolls} in {rerolled_rounds} of {} rounds", args.rounds);
     }
     // What the simulation cost, wall clock inside `Game::update` alone:
     // a release build's number is the one to quote.

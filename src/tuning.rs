@@ -1343,6 +1343,20 @@ tunables! {
         /// stands farthest from the enemies already down, so a band
         /// spreads over its region rather than starting in a heap.
         field_spawn_spread_candidates: u32 = 6 in 1 ..= 32;
+        /// Field maps' wave rounds only: stragglers are rolled in again
+        /// (`Game::reroll_stragglers`) - a wave tank that has gone
+        /// `field_reroll_after_seconds` without a live seat or the players'
+        /// frog in its sight, and stands farther from them by walk than
+        /// any wave's gate is paced for (`field_walk_seconds` less
+        /// `field_walk_slack_seconds`), is taken off where no screen can
+        /// see it go and rolls in again through a gate nearer the fight,
+        /// outside every sight box. Off, a straggler walks on as it is.
+        field_reroll: bool = true in 0 ..= 1;
+        /// How long a wave tank goes without a seat or the frog in its
+        /// sight before it counts as a straggler: long past a wave's walk
+        /// to the fight, so only one that lost its way - through a portal
+        /// for a pickup, its call over, home on its leash - is taken.
+        field_reroll_after_seconds: f32 = 30.0 in 1.0 ..= 600.0;
     }
 
     group director {

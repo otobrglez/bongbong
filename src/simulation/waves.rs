@@ -17,7 +17,7 @@ use rand::RngExt;
 use serde::Serialize;
 use crate::math::Vec2;
 
-use crate::ai::Ai;
+use crate::ai::{Ai, Role};
 use crate::battlefield::{self, Gate};
 use crate::level::{SpawnPlan, Tier};
 
@@ -29,6 +29,7 @@ pub struct WaveBanner {
     pub is_final: bool,
 }
 use crate::obstacle::Obstacle;
+use crate::pathfind::Grid;
 use crate::tank::Tank;
 use crate::tuning::tuning;
 use crate::Position;
@@ -59,6 +60,19 @@ enum GatePick {
 pub struct RollIn {
     pub to: Position,
 }
+
+/// A straggler taken off the field and rolling in again through a nearer
+/// gate (`Game::reroll_stragglers`), beside its `RollIn`: the role it
+/// keeps once it is back, so its arrival rolls none.
+pub(crate) struct Rejoin {
+    role: Role,
+}
+
+/// How often the round looks for stragglers, in ticks: once a second. A
+/// straggler has been lost for half a minute by then, so a second either
+/// way changes nothing, and the walk it is measured by is a Dijkstra over
+/// the whole map that a tick has no business paying for.
+const STRAGGLER_CHECK_TICKS: u64 = 60;
 
 /// The wave scheduler's memory for one round.
 #[derive(Default)]
@@ -207,11 +221,18 @@ impl Game {
             with_tank_mut(&self.world, entity, |t| t.body = Some(body));
             self.world.remove_one::<RollIn>(entity).expect("entity from this frame's roll-in query still exists");
             if !self.is_player(entity) {
-                // Roles roll on arrival, the moment the tank joins the fight.
-                let mut ai = Ai::with_role(roll_role(self.mission, &mut f.rng));
+                // Roles roll on arrival, the moment the tank joins the
+                // fight - but for a straggler coming back, which keeps the
+                // role it had.
+                let role = match self.world.remove_one::<Rejoin>(entity) {
+                    Ok(rejoin) => rejoin.role,
+                    Err(_) => roll_role(self.mission, &mut f.rng),
+                };
+                let mut ai = Ai::with_role(role);
                 // On a field map the wave is called to the fight: the walk
                 // its gate was picked for (`field`).
                 ai.field.called = self.field_map;
+                ai.field.wave = self.field_map;
                 self.world.insert_one(entity, ai).expect("entity from this frame's roll-in query still exists");
             }
             f.events.push(Event::TankEntered { slot });
@@ -273,6 +294,108 @@ impl Game {
                 }
             }
         }
+
+        // A field map rolls its stragglers in again through a nearer gate.
+        if self.field_map && tuning().field_reroll && self.frame.is_multiple_of(STRAGGLER_CHECK_TICKS) {
+            self.reroll_stragglers(f);
+        }
+    }
+
+    /// Stragglers (docs/large-maps-follow-camera.md section 12): a wave
+    /// tank that has gone `field_reroll_after_seconds` without a live seat
+    /// or the players' frog within its sight (`FieldMind::lost`), and
+    /// stands farther from them by walk than any wave's gate is paced for
+    /// (`field::far_by_walk`) - typically one that went through a portal
+    /// for a pickup, lost its call and kept to its gate's leash - is taken
+    /// off the field and rolled in again through a gate nearer the fight.
+    /// Only where no screen could see it go (`field::beyond_every_screen`
+    /// of every seat, a wreck or a seat in a gate lane included), never a
+    /// guard keeping its frog, never a burning hull, and only through a
+    /// lane `pick_gate` would give a wave, outside every seat's sight box
+    /// and shorter by walk than where the tank stands
+    /// (`field::reroll_gates`); with none free it waits for the next look.
+    ///
+    /// In owner-slot order, each re-roll's lane drawn from the round's RNG
+    /// like a wave's; a round with no straggler draws nothing.
+    fn reroll_stragglers(&mut self, f: &mut Frame) {
+        let t = tuning();
+        // Every seat's camera, wherever its tank is.
+        let screens: Vec<Position> =
+            self.players().into_iter().flatten().map(|e| with_tank(&self.world, e, |tank| tank.position)).collect();
+        let guarding = self.enemy_frog.is_some_and(|e| with_frog(&self.world, e, |fr| !fr.is_dead()));
+        let mut lost: Vec<(usize, Entity, Position)> = self
+            .world
+            .query::<(Entity, &Tank, &Ai)>()
+            .iter()
+            .filter(|(_, tank, ai)| {
+                ai.field.wave
+                    && ai.field.lost >= t.field_reroll_after_seconds
+                    && !tank.is_wreck()
+                    && tank.burn_timer <= 0.0
+                    && !(ai.role == Role::Guard && guarding)
+                    && screens.iter().all(|&s| field::beyond_every_screen(s, tank.position, &t))
+            })
+            .map(|(entity, tank, _)| (tank.owner_slot(), entity, tank.position))
+            .collect();
+        if lost.is_empty() {
+            return;
+        }
+        lost.sort_by_key(|&(slot, ..)| slot);
+        let seats = self.live_seat_positions();
+        let mut fight = seats.clone();
+        fight.extend(self.frog_position());
+        if fight.is_empty() {
+            return;
+        }
+        let grid = self.nav_grid(f.width, f.height);
+        let walk = grid.walk_costs(&fight);
+        for (slot, entity, at) in lost {
+            let from = walk.at(at);
+            if !field::far_by_walk(from) {
+                continue;
+            }
+            let gates = field::reroll_gates(self.wave_lanes(&grid, f), &walk, &seats, from);
+            if let GatePick::Free(gate) = self.draw_lane(gates, f) {
+                self.reroll(entity, slot, at, gate, f);
+            }
+        }
+    }
+
+    /// Take the straggler `entity` (owner slot `slot`, standing at `from`)
+    /// off the field and start it rolling in again through `gate`: its
+    /// body and its `Ai` go, as a wave tank still outside has neither, and
+    /// it keeps everything else - its slot, its chassis, its damage, its
+    /// ammunition and weapons - and its role, which a `Rejoin` carries to
+    /// its arrival. It arrives called to the fight like any wave tank, with
+    /// a fresh memory and its new gate for home.
+    fn reroll(&mut self, entity: Entity, slot: usize, from: Position, gate: Gate, f: &mut Frame) {
+        let role = self.world.remove_one::<Ai>(entity).expect("a straggler is an enemy on the field").role;
+        if let Some(body) = with_tank(&self.world, entity, |t| t.body) {
+            self.physics.remove_body(body);
+        }
+        let rotation = gate.heading().rotation();
+        with_tank_mut(&self.world, entity, |t| {
+            t.body = None;
+            t.position = gate.outside;
+            t.velocity = Vec2::new(0.0, 0.0);
+            t.rotation = rotation;
+            t.visual_rotation = rotation;
+            t.turret_visual_rotation = rotation;
+            t.ring_position = gate.outside;
+            t.ring_velocity = Vec2::new(0.0, 0.0);
+            t.track_from = None;
+            t.flame_held = false;
+            t.pending_plasma_shot = None;
+            t.minigun_burst = None;
+            t.missile_volley = None;
+        });
+        self.world.insert(entity, (RollIn { to: gate.inside }, Rejoin { role })).expect("a straggler is never despawned");
+        // The slots it held were round the fight it never reached.
+        for ring in &mut self.engage {
+            ring.release(entity);
+        }
+        self.engage_frog.release(entity);
+        f.events.push(Event::Rerolled { slot, x: from.x, y: from.y });
     }
 
     /// Queue wave `called`'s tanks: `wave_size` chassis drawn from the
@@ -374,19 +497,36 @@ impl Game {
         true
     }
 
-    /// The lane the next tank rolls in through: the map's own `gate` cells
-    /// when it has any, else the lanes the live nav grid offers
-    /// (`battlefield::gate_candidates`, recomputed here so walls shot away
-    /// since open new lanes), preferring a gate this wave has not used. A
-    /// lane with a tank still rolling along it, or anyone standing on its
-    /// inside point, is busy; with every lane busy `Busy` comes back so
-    /// the caller retries next frame, and a map with no gate at all
-    /// answers `None`.
+    /// The lane the next tank rolls in through: one of the lanes a wave
+    /// may take (`wave_lanes`) - on a field map those outside every seat's
+    /// sight box and about its walk where it has any
+    /// (`field::prefer_gates`) - drawn by `draw_lane`. A map with no gate
+    /// at all answers `None`, one whose every lane is busy `Busy`, so the
+    /// caller retries next frame.
     ///
     /// The draw is the round RNG's, and the chosen lane is marked used, so
     /// this is called once per roll-in attempt and its answer handed to
     /// whoever takes it.
     fn pick_gate(&mut self, f: &mut Frame) -> GatePick {
+        let grid = self.nav_grid(f.width, f.height);
+        let mut gates = self.wave_lanes(&grid, f);
+        // A field map keeps a wave out of sight and within reach: lanes
+        // outside every seat's sight box, those whose walk to the nearest
+        // seat is about `field_walk_seconds` where there are any
+        // (`field::prefer_gates`).
+        if self.field_map {
+            gates = field::prefer_gates(gates, &grid, &self.live_seat_positions());
+        }
+        self.draw_lane(gates, f)
+    }
+
+    /// Every lane a wave may roll in through on `grid`, the live nav grid:
+    /// the map's own `gate` cells when it has any, else the lanes the grid
+    /// offers (`battlefield::gate_candidates`, so walls shot away since
+    /// open new lanes), either way none within `wave_gate_min_player_dist`
+    /// of a seat or the players' frog where any lane is farther, and of
+    /// those the ones that lead to the fight where any does.
+    fn wave_lanes(&self, grid: &Grid, f: &Frame) -> Vec<Gate> {
         let (inward, min_dist) = {
             let t = tuning();
             (t.wave_gate_inward_cells, t.wave_gate_min_player_dist)
@@ -402,40 +542,39 @@ impl Game {
         if let Some(frog) = self.frog {
             avoid.push(with_frog(&self.world, frog, |fr| fr.position));
         }
-        let grid = self.nav_grid(f.width, f.height);
         let explicit = self.map.gate_cells();
         let mut gates = if explicit.is_empty() {
             Vec::new()
         } else {
-            let all = battlefield::gates_from_cells(&grid, f.width, f.height, &explicit, inward);
+            let all = battlefield::gates_from_cells(grid, f.width, f.height, &explicit, inward);
             let far: Vec<Gate> =
                 all.iter().copied().filter(|g| avoid.iter().all(|p| p.distance_to(g.inside) >= min_dist)).collect();
             // A map whose every gate sits by the player still uses them.
             if far.is_empty() { all } else { far }
         };
         if gates.is_empty() {
-            gates = battlefield::gate_candidates(&grid, f.width, f.height, &avoid, min_dist, inward);
+            gates = battlefield::gate_candidates(grid, f.width, f.height, &avoid, min_dist, inward);
         }
         // Prefer lanes that lead to the fight: a lane open on its own can
         // still end in a pocket walled off from the player (the default
         // map's gated strips). Only when no lane connects is any lane used.
         let components = grid.components();
         let connected: Vec<Gate> =
-            gates.iter().copied().filter(|g| components.connected(&grid, g.inside, avoid[0])).collect();
+            gates.iter().copied().filter(|g| components.connected(grid, g.inside, avoid[0])).collect();
         if !connected.is_empty() {
             gates = connected;
         }
-        // A field map keeps a wave out of sight and within reach: lanes
-        // outside every seat's sight box, those whose walk to the nearest
-        // seat is about `field_walk_seconds` where there are any
-        // (`field::prefer_gates`).
-        if self.field_map {
-            gates = field::prefer_gates(gates, &grid, &self.live_seat_positions());
-        }
+        gates
+    }
+
+    /// One of `gates` for a tank to start down now: of the free ones
+    /// (`free_lanes`) a lane this wave has not used where there is one,
+    /// drawn from the round's RNG and marked used. `None` with no lane at
+    /// all, `Busy` with every one taken.
+    fn draw_lane(&mut self, gates: Vec<Gate>, f: &mut Frame) -> GatePick {
         if gates.is_empty() {
             return GatePick::None;
         }
-
         let free = self.free_lanes(gates);
         if free.is_empty() {
             return GatePick::Busy;
@@ -585,6 +724,7 @@ impl Game {
         let mut ai = Ai::with_role(roll_role(self.mission, &mut f.rng));
         // A wave tank all the same: called to the fight on a field map.
         ai.field.called = self.field_map;
+        ai.field.wave = self.field_map;
         self.world.spawn((tank, ai));
         f.events.push(Event::TankEntered { slot });
     }

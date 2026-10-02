@@ -305,6 +305,16 @@ pub(crate) struct FieldMind {
     /// A wave tank sent to the fight: it routes at the seat it fights
     /// until it first comes within sight range of a seat or takes a hit.
     pub(crate) called: bool,
+    /// It came onto the field with a wave - through a gate, or into the
+    /// band a map with no gate falls back to - so it may be a straggler
+    /// the round rolls in again through a nearer gate
+    /// (`Game::reroll_stragglers`).
+    pub(crate) wave: bool,
+    /// Seconds a wave tank has gone without a live seat, or the players'
+    /// frog, within its sight: counted from its arrival and back to zero
+    /// whenever one is (`field::mind`). How long it has been lost to the
+    /// fight.
+    pub(crate) lost: f32,
     /// Something has reached it - an alert, a hit, a call, a seat within
     /// `enemy_far_px`, a frog to hunt. A far tank that was never woken
     /// does not think at all; once woken it stays so.

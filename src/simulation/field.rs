@@ -44,7 +44,7 @@ use crate::ai::{Ai, Intent, in_sight_box};
 use crate::battlefield::{self, Gate};
 use crate::pathfind::{Grid, WalkCosts};
 use crate::tank::Tank;
-use crate::tuning::tuning;
+use crate::tuning::{Tuning, tuning};
 use crate::{OBSTACLE_GRID_SIZE, PATHFIND_CELL_SIZE, Position};
 
 use super::{Event, Frame, Game, with_tank};
@@ -72,14 +72,29 @@ pub(super) enum Mind {
 /// Also where the tank's home is set, the first tick it stands on the
 /// field, and where it wakes: an alert, a hit, a call to the fight, a
 /// frog to hunt or a seat within `enemy_far_px` - and once awake it stays
-/// so.
-pub(super) fn mind(ai: &mut Ai, position: Position, slot: usize, anchors: &[Position], hunting: bool, frame: u64, dt: f32) -> Mind {
+/// so. And where a wave tank counts how long it has been lost to the
+/// fight (`FieldMind::lost`): no anchor within `sight`, what it sees.
+#[allow(clippy::too_many_arguments)] // one tank's perception, passed by value
+pub(super) fn mind(
+    ai: &mut Ai,
+    position: Position,
+    slot: usize,
+    anchors: &[Position],
+    sight: f32,
+    hunting: bool,
+    frame: u64,
+    dt: f32,
+) -> Mind {
     let t = tuning();
     let near = anchors.iter().any(|a| a.distance_to(position) <= t.enemy_far_px);
     let hit = ai.is_hit_alerted();
     let mind = &mut ai.field;
     if mind.home.is_none() {
         mind.home = Some(position);
+    }
+    if mind.wave {
+        let in_sight = anchors.iter().any(|a| a.distance_to(position) <= sight);
+        mind.lost = if in_sight { 0.0 } else { mind.lost + dt };
     }
     if near || hunting || hit || mind.called || mind.alert.is_some() {
         mind.awake = true;
@@ -232,6 +247,54 @@ pub(super) fn nearest_gates(mut gates: Vec<Gate>, walk: &WalkCosts) -> Vec<Gate>
     gates
 }
 
+/// Whether a walk of `cost` nav steps (`None`: no walk at all) is far: a
+/// straggler's (`Game::reroll_stragglers`) - longer than the nearest a
+/// wave's gate is paced for, `field_walk_seconds` less
+/// `field_walk_slack_seconds`.
+pub(super) fn far_by_walk(cost: Option<u32>) -> bool {
+    let t = tuning();
+    cost.is_none_or(|cost| walk_seconds(cost) > t.field_walk_seconds - t.field_walk_slack_seconds)
+}
+
+/// Whether no screen following the seat at `seat` can show `at`, for a
+/// tank that may only leave the field unseen (`Game::reroll_stragglers`).
+/// A screen shows the seat's whole sight box (`Tuning::sight_box_half_px`)
+/// in a view of at most `view_local_max_cells` cells - more than a room's
+/// `view_area_cells` - whose shape lies between `view_aspect_min` and
+/// `view_aspect_max` (`framing`). So `at` is on some screen exactly when a
+/// view that size and shape can hold both it and the box: with `x` and
+/// `y` its offsets from the seat plus the box's half extents, when
+/// `x * y` is within the area and neither side outgrows the widest and
+/// tallest outline. A small low-density desktop window that snaps
+/// outward to a whole-block zoom can show a little more than the area;
+/// the straggler's own terms - long out of its sight, a long walk away -
+/// keep the tanks this takes off well past that in practice.
+pub(super) fn beyond_every_screen(seat: Position, at: Position, t: &Tuning) -> bool {
+    let cell = OBSTACLE_GRID_SIZE;
+    let area = t.view_local_max_cells.max(t.view_area_cells) * cell * cell;
+    let (box_w, box_h) = t.sight_box_half_px();
+    let x = (at.x - seat.x).abs() + box_w;
+    let y = (at.y - seat.y).abs() + box_h;
+    x * y > area || x > (area * t.view_aspect_max).sqrt() || y > (area / t.view_aspect_min.max(f32::EPSILON)).sqrt()
+}
+
+/// The lanes a straggler may come back through, from the ones a wave may
+/// take (`gates`, in order): those whose inside point stands outside
+/// every one of `seats`' sight boxes and whose walk to the fight (`walk`)
+/// is shorter than the straggler's own (`from`), then of those the ones
+/// about `field_walk_seconds` where there are any. Order is kept; empty
+/// when no lane is nearer.
+pub(super) fn reroll_gates(gates: Vec<Gate>, walk: &WalkCosts, seats: &[Position], from: Option<u32>) -> Vec<Gate> {
+    let nearer: Vec<Gate> = gates
+        .into_iter()
+        .filter(|g| seats.iter().all(|&s| !in_sight_box(s, g.inside)))
+        .filter(|g| walk.at(g.inside).is_some_and(|cost| from.is_none_or(|from| cost < from)))
+        .collect();
+    let paced: Vec<Gate> =
+        nearer.iter().copied().filter(|g| walk.at(g.inside).is_some_and(|cost| about_the_walk(walk_seconds(cost)))).collect();
+    if paced.is_empty() { nearer } else { paced }
+}
+
 impl Game {
     /// Whether this round is fought on a field map - see the module doc.
     pub fn field_map(&self) -> bool {
@@ -361,5 +424,48 @@ impl Game {
                 f.events.push(Event::Alert { on: after.is_some(), x: p.x, y: p.y });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// No screen shows past the widest outline a view of the local round's
+    /// area takes, nor past its tallest, nor into a corner no outline of
+    /// that area reaches; everything nearer is on some screen.
+    #[test]
+    fn a_point_is_beyond_every_screen_only_past_every_outline_the_view_can_take() {
+        let t = Tuning::DEFAULT;
+        let seat = Position::new(4000.0, 4000.0);
+        let at = |dx: f32, dy: f32| Position::new(seat.x + dx, seat.y + dy);
+        let cell = OBSTACLE_GRID_SIZE;
+        let area = t.view_local_max_cells * cell * cell;
+        let (box_w, box_h) = t.sight_box_half_px();
+        let widest = (area * t.view_aspect_max).sqrt() - box_w;
+        let tallest = (area / t.view_aspect_min).sqrt() - box_h;
+        // The sight box itself, and a monitor's 40 x 22.5 cells round it.
+        assert!(!beyond_every_screen(seat, at(box_w, box_h), &t));
+        assert!(!beyond_every_screen(seat, at(-20.0 * cell, 0.0), &t));
+        // Straight out to either side, up and down: the widest and the
+        // tallest outline are the edge.
+        assert!(!beyond_every_screen(seat, at(widest - 1.0, 0.0), &t));
+        assert!(beyond_every_screen(seat, at(widest + 1.0, 0.0), &t));
+        assert!(!beyond_every_screen(seat, at(0.0, -(tallest - 1.0)), &t));
+        assert!(beyond_every_screen(seat, at(0.0, -(tallest + 1.0)), &t));
+        // A corner inside both, but past what any one outline of the area
+        // holds at once.
+        let corner = at(widest * 0.9, tallest * 0.9);
+        assert!(beyond_every_screen(seat, corner, &t), "{corner:?}");
+    }
+
+    #[test]
+    fn a_walk_is_far_past_the_nearest_a_wave_is_paced_for() {
+        let t = Tuning::DEFAULT;
+        let steps = |seconds: f32| (seconds * t.enemy_speed / PATHFIND_CELL_SIZE).round() as u32;
+        let near = t.field_walk_seconds - t.field_walk_slack_seconds;
+        assert!(!far_by_walk(Some(steps(near - 1.0))));
+        assert!(far_by_walk(Some(steps(near + 1.0))));
+        assert!(far_by_walk(None), "no walk at all is the farthest");
     }
 }

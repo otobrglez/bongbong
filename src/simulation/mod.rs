@@ -388,6 +388,12 @@ pub enum Event {
     /// A wave tank in `slot` finished rolling in: it now has a body and an
     /// `Ai`, and counts as an enemy on the field.
     TankEntered { slot: usize },
+    /// A field map took the straggler in `slot` off the field at (`x`,
+    /// `y`), out of every seat's sight, to roll it in again through a gate
+    /// nearer the fight (`Game::reroll_stragglers`); its `TankEntered`
+    /// follows when it is through. Not sent: a replica sees the hull
+    /// leave and come back through the gate by itself.
+    Rerolled { slot: usize, x: f32, y: f32 },
     /// A wave round removed the wreck in `slot` after
     /// `wave_wreck_despawn_seconds`.
     WreckRemoved { slot: usize },
@@ -2966,7 +2972,7 @@ impl Game {
             // holds still. A think then covers every tick since the last.
             let think_dt = if field {
                 let hunting = ai.role == Role::Hunter && quarry.is_some();
-                match field::mind(ai, tank.position, tank.owner_slot(), &anchors, hunting, frame, f.dt) {
+                match field::mind(ai, tank.position, tank.owner_slot(), &anchors, view_range, hunting, frame, f.dt) {
                     field::Mind::Think(dt) => dt,
                     idle => {
                         let intent = match idle {
@@ -8427,6 +8433,93 @@ cells."30,20" = { kind = "frog" }
         let seconds = frames_until_wave(&mut game, 2, 60 * 60) as f32 / 60.0;
         let owed = (1.0 - t.director_peak) * t.director_fall_seconds + t.director_relax_seconds;
         assert!((seconds - owed).abs() <= 1.0, "released after {seconds:.2}s, the rest owed was {owed:.2}s");
+    }
+
+    // --- Stragglers (`Game::reroll_stragglers`) ---
+
+    /// A 110 x 20 field map under a three-wave plan of one tank a wave: the
+    /// player at the west end, a gate at the east end and one on the north
+    /// edge half way along.
+    const STRAGGLER_MAP: &str = "version = 1\nsize = [110, 20]\ncells.\"10,10\" = { kind = \"start\" }\ncells.\"60,0\" = { kind = \"gate\" }\ncells.\"109,10\" = { kind = \"gate\" }\n";
+
+    /// Write the field-map memory of the enemy in owner slot `slot`.
+    fn set_field_mind(game: &mut Game, slot: usize, set: impl FnOnce(&mut crate::ai::FieldMind)) {
+        let entity = game.tank_entity_by_slot(slot).expect("a tank in that slot");
+        set(&mut game.world.get::<&mut Ai>(entity).expect("an enemy on the field").field);
+    }
+
+    /// A wave tank that lost its way - out of every seat's sight, a long
+    /// walk from the fight and on no screen - is taken off and rolled in
+    /// again through a gate nearer the fight, keeping its role, and comes
+    /// back called to it; one lost within sight of the screens is left
+    /// where it is.
+    #[test]
+    fn a_straggler_is_rolled_in_again_through_a_nearer_gate_and_a_tank_near_the_fight_is_not() {
+        let mut game = Game::default();
+        game.seed_override = Some(7);
+        game.player_row_override = Some(0);
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.level_overrides.spawn = Some(SpawnKind::Waves);
+        game.level_overrides.waves = Some(3);
+        game.level_overrides.wave_size = Some(1);
+        game.level_overrides.wave_growth = Some(0);
+        game.map = MapFile::from_toml_str(STRAGGLER_MAP).expect("test map parses");
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        assert!(game.field_map());
+        for seat in game.players().into_iter().flatten() {
+            with_tank_mut(&game.world, seat, |t| t.shield_hp = 1.0e9);
+        }
+        let t = tuning();
+        let player = player_pos(&game);
+        let (straggler, _) = field_step_until_entered(&mut game, 900);
+        // Lost at the far east end, its leash there and its call over, a
+        // breath short of a straggler's time.
+        let far = Position::new(w - 6.0 * PATHFIND_CELL_SIZE, player.y);
+        game.debug_teleport(straggler, far, None).expect("teleports");
+        set_field_mind(&mut game, straggler, |m| {
+            m.home = Some(far);
+            m.called = false;
+            m.alert = None;
+            m.lost = t.field_reroll_after_seconds - 1.0;
+        });
+        let role = game.world.get::<&Ai>(game.tank_entity_by_slot(straggler).unwrap()).unwrap().role;
+        // A wave tank lost as long, out of the seat's sight but on its
+        // screen and a short walk away.
+        let near = Position::new(player.x + game.enemy_sight() + 100.0, player.y);
+        assert!(!field::beyond_every_screen(player, near, &t), "the case this is about");
+        let control = game.debug_spawn_enemy(near, Some(1), None).expect("an enemy spawns");
+        set_field_mind(&mut game, control, |m| {
+            m.home = Some(near);
+            m.wave = true;
+            m.lost = t.field_reroll_after_seconds - 1.0;
+        });
+        let mut taken = None;
+        for frame in 1..=180 {
+            field_step(&mut game, Input::default());
+            for e in game.events() {
+                if let Event::Rerolled { slot, x, .. } = *e {
+                    assert_eq!(slot, straggler, "only the straggler is rolled in again");
+                    assert!(x > w * 0.75, "taken off where it was lost: x {x}");
+                    taken = Some(frame);
+                }
+            }
+            if taken.is_some() {
+                break;
+            }
+        }
+        let frame = taken.expect("the straggler was never rolled in again");
+        assert!(frame >= 60, "taken off after {frame} frames, before it was a straggler");
+        let entity = game.tank_entity_by_slot(straggler).expect("the same tank, the same slot");
+        assert!(game.is_entering(entity), "it rolls in again");
+        // Through the north gate, nearer the fight than the east one it
+        // would otherwise walk from.
+        let (_, gate) = field_step_until_entered(&mut game, 900);
+        assert!(gate.y < 5.0 * PATHFIND_CELL_SIZE && (gate.x - 60.5 * PATHFIND_CELL_SIZE).abs() < 2.0 * PATHFIND_CELL_SIZE, "came back at {gate:?}");
+        let mind = field_mind_of(&game, straggler);
+        assert!(mind.called && mind.wave && mind.lost < 0.1, "back called to the fight, lost no more: {mind:?}");
+        assert_eq!(game.world.get::<&Ai>(entity).unwrap().role, role, "it keeps its role");
+        assert!(!game.is_entering(game.tank_entity_by_slot(control).unwrap()), "the tank near the fight stays");
     }
 
     // --- Steering: lanes and turns (docs/large-maps-follow-camera.md

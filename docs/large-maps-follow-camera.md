@@ -651,10 +651,10 @@ living seats. On the study map, 30 AFK rounds, a wave tank's walk to the
 fight went from a median 14.8 s, p90 34.5 s and worst 47.5 s to 11.6 s,
 20.8 s and 30.2 s, and with every round run to two minutes a tick costs
 0.59 ms against 0.92. `just probe-fields` sweeps the study map and the
-five 40-wide levels. The waves are paced by a director (below). Not
-built: re-rolling a straggler through a nearer gate, and flow fields
-bounded to the bubble - the frame's routing grid, about 0.33 ms of the
-0.59, is now most of a tick.
+five 40-wide levels. The waves are paced by a director and stragglers
+rolled in again through a nearer gate (both below). Not built: flow
+fields bounded to the bubble - the frame's routing grid, about 0.33 ms of
+the 0.59, is now most of a tick.
 
 **The first field map** is `longwater` (`maps/longwater.toml`, free play,
 80 x 45; its header says how it plays): a fort on the south shore of a
@@ -743,10 +743,11 @@ detour - which the probe counts because only a seat ends a walk. The arenas'
 recipes read as before, line for line, and `probe-fields` was re-baselined
 (the justfile says how). A tick costs no more: 0.61 ms against 0.64 on
 longwater and 0.55 against 0.57 on the study map (AFK, ten rounds, the two
-builds alternated). A stranding of the other kind remains possible: a wave
-tank that portals to a pickup far from the fight can lose its alert there
-and drive home on its leash, as one did on the study map before the
-obstacle check re-timed that round - the pacing above, not the steering.
+builds alternated). A stranding of the other kind remained: a wave tank
+that portals to a pickup far from the fight can lose its alert there and
+drive home on its leash, as one did on the study map before the obstacle
+check re-timed that round - the pacing above, not the steering. Such a
+straggler is now rolled in again through a nearer gate (below).
 
 **The pacing director** (`simulation::director`, the `director` tuning
 group) is Left 4 Dead's cycle of build-up, peak and relax, adapted to the
@@ -792,6 +793,31 @@ lost its call and kept to its gate's leash in the north-east (seed
 0x3fe); the other a called tank riding column 74 north and south for five
 minutes, 800 px east of the seat and just out of its sight (0x3fd), the
 steering kind lanes did not reach.
+
+**Stragglers** are rolled in again (`Game::reroll_stragglers`): a wave
+tank that has gone `field_reroll_after_seconds` (30 s) without a live
+seat or the players' frog within its sight, and stands farther from them
+by walk than any gate is paced for (`field_walk_seconds` less its slack,
+10 s), is taken off the field and rolls in again through a gate nearer
+the fight. It is taken only where no screen can see it go - past every
+outline a view of `view_local_max_cells` can take round any seat's sight
+box (`field::beyond_every_screen`), which no point of a 40-wide level is -
+and comes back only through a free lane a wave could take, outside every
+sight box and shorter by walk than where it stood, about the paced walk
+where one is. It keeps its slot, its role, its damage and its weapons,
+and arrives called to the fight with its new gate for home; a guard
+keeping its frog and a burning hull are left where they are, and the
+round looks once a second. Over the thirty defended rounds of the study
+map five stragglers were rolled in again, one in each of five rounds, the
+longest walk to the fight fell from 86 s to 54 s and its p90 from 18.5 to
+18.0 s; in round 0x3ec the first wave's straggler, taken off in the town
+33 s in, was back through the north gate 1.7 s later, and the round was
+won after 148 s against 246. The stranding above (0x3fe) is won after 165
+s. Longwater's thirty rounds had none, the arenas' recipes and
+`probe-fields` read line for line as before - no round of theirs has a
+straggler - and `probe-defend` keeps never-arrived at 0. The tank riding
+column 74 (0x3fd) is still out at seven minutes: in sight of every
+screen, it is no re-roll's to take.
 
 ## 13. Patterns from shipped games
 
@@ -951,9 +977,9 @@ thinking less, spawns and gates by walk outside every sight box,
 re-entry through the gate nearest the living seats, `just
 probe-fields`) and a first field map, free play rather than a level
 (`longwater`, section 12) and lanes, a turn a hull on the edge of its row
-can take (section 12) and the pacing director (section 12) - stragglers
-re-rolled through a nearer gate and flow fields bounded to the seats are
-still to come.
+can take, the pacing director and stragglers re-rolled through a nearer
+gate (all section 12) - flow fields bounded to the seats are still to
+come.
 
 ## 15. Decisions
 
