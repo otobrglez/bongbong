@@ -52,7 +52,7 @@ use crate::{
 /// Whose objective a frog is. Tells the two frogs of a Hunt round apart
 /// (round-end rule, ground-ring colour, hunter targeting); the frog itself
 /// behaves identically on either side.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Side {
     Player,

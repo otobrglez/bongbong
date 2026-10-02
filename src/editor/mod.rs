@@ -770,6 +770,28 @@ pub struct CliOverrides {
     pub tier_end: bool,
 }
 
+/// One revision the clear check has seen won (`MapEditor::clears`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Clear {
+    /// The best win's round clock, in seconds to a tenth.
+    par: f64,
+    /// The canvas's key when it was that revision (`note_clear`); `None`
+    /// where the canvas was not, so every key may be it.
+    key: Option<ClearKey>,
+}
+
+/// What `MapEditor::par` compares before it works a revision out: the
+/// map's size, its cell count and its cells' digest (`CellIndex::digest`),
+/// all kept per edit. Two maps of one revision have one key, so a key no
+/// cleared revision has is a canvas that is not cleared; only a match - an
+/// undo back, a settings edit - costs the revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ClearKey {
+    size: Option<(u32, u32)>,
+    cells: usize,
+    digest: u64,
+}
+
 pub struct MapEditor {
     map: MapFile,
     /// The map as it was when the builder was seeded or last loaded -
@@ -853,7 +875,7 @@ pub struct MapEditor {
     /// again. A map that comes in with a stamp for its own revision adds
     /// it here; the canvas itself never carries a stamp, and SAVE writes
     /// the current revision's (`map_to_save`).
-    clears: BTreeMap<u64, f64>,
+    clears: BTreeMap<u64, Clear>,
     /// How the brush lays its object down (`Shape`); a singleton's brush
     /// is always a pen.
     shape: Shape,
@@ -965,9 +987,7 @@ impl MapEditor {
             dirty: std::cell::Cell::new(None),
             cli_overrides: CliOverrides::default(),
         };
-        if let Some((revision, par)) = stamp {
-            editor.note_clear(revision, par);
-        }
+        editor.note_stamp(stamp);
         editor.rebuild_ground();
         editor
     }
@@ -1459,14 +1479,13 @@ impl MapEditor {
         self.finish_stroke();
         self.finish_drag();
         self.selection = None;
-        if let Some((revision, par)) = Self::take_stamp(&mut map) {
-            self.note_clear(revision, par);
-        }
+        let stamp = Self::take_stamp(&mut map);
         let before = self.map.clone();
         self.map = map;
         self.set_baseline();
         self.history.push(EditStep::Map { before: Box::new(before), after: Box::new(self.map.clone()) });
         self.map_changed();
+        self.note_stamp(stamp);
         self.rebuild_ground();
         self.camera.fit();
         self.pending_look = None;
@@ -1482,13 +1501,12 @@ impl MapEditor {
         self.selection = None;
         self.popup = None;
         self.status = None;
-        if let Some((revision, par)) = Self::take_stamp(&mut map) {
-            self.note_clear(revision, par);
-        }
+        let stamp = Self::take_stamp(&mut map);
         self.map = map;
         self.set_baseline();
         self.history.clear();
         self.map_changed();
+        self.note_stamp(stamp);
         self.rebuild_ground();
         self.camera.fit();
         self.pending_look = None;
@@ -2422,22 +2440,56 @@ impl MapEditor {
     /// from plain PLAY with no edit since (`note_clear`); `None` while it
     /// is not, and while a stroke is being painted or a selection's cells
     /// are lifted, which is an edit under way: the revision is worked out
-    /// once it ends rather than on every cell it paints (about 11 ms a time
-    /// on the 96 x 54 study map in a debug build). With nothing cleared
-    /// this session, nothing is worked out at all.
+    /// once it ends rather than on every cell it paints. With nothing
+    /// cleared this session nothing is worked out at all, and the revision
+    /// - a pass over the whole map, about 0.3 s on a 250 x 250 map painted
+    /// edge to edge in a release build - only where the canvas's
+    /// `ClearKey` is a cleared revision's, which every edit away from one
+    /// makes it not.
     pub fn par(&self) -> Option<f64> {
         if self.clears.is_empty() || self.stroke.is_some() || self.lifted().is_some() {
             return None;
         }
-        self.clears.get(&self.revision()).copied()
+        let key = self.clear_key();
+        if !self.clears.values().any(|clear| clear.key.is_none_or(|k| k == key)) {
+            return None;
+        }
+        self.clears.get(&self.revision()).map(|clear| clear.par)
+    }
+
+    /// The canvas's `ClearKey`, off its kept index.
+    fn clear_key(&self) -> ClearKey {
+        let index = self.cell_index();
+        ClearKey {
+            size: self.map.size.map(|(cols, rows)| (cols.to_bits(), rows.to_bits())),
+            cells: index.cells().len(),
+            digest: index.digest(),
+        }
     }
 
     /// `revision` was won from plain PLAY in `seconds` (`mode::Session`
     /// says so): it is cleared, and its par is its best win, to a tenth.
+    /// The canvas's key goes with it where the canvas is that revision -
+    /// as it is on a win, the canvas not touched since PLAY - and none
+    /// where it is not, which `par` reads as "work the revision out".
     pub fn note_clear(&mut self, revision: u64, seconds: f64) {
         let par = (seconds * 10.0).round() / 10.0;
-        let best = self.clears.entry(revision).or_insert(par);
-        *best = best.min(par);
+        let key = (self.revision() == revision).then(|| self.clear_key());
+        let clear = self.clears.entry(revision).or_insert(Clear { par, key });
+        clear.par = clear.par.min(par);
+        if clear.key.is_none() {
+            clear.key = key;
+        }
+    }
+
+    /// A map that came in with the stamp `take_stamp` found on it, now the
+    /// canvas: cleared, its revision - which `take_stamp` has just worked
+    /// out - kept as the canvas's so it is not worked out twice.
+    fn note_stamp(&mut self, stamp: Option<(u64, f64)>) {
+        if let Some((revision, par)) = stamp {
+            self.revision.set(Some((self.edits, revision)));
+            self.note_clear(revision, par);
+        }
     }
 
     /// The canvas as SAVE writes it: carrying its revision's stamp when
@@ -5078,6 +5130,47 @@ mod editor_tests {
         hold_fingers(ed, frame, &frames);
     }
 
+    /// The clear flag works no revision out for a canvas an edit has taken
+    /// away from every cleared revision - its key (size, cell count and
+    /// cells' digest) is none of theirs - and still answers exactly where a
+    /// key matches: the same cell painted and taken off again by hand, or
+    /// a settings edit, which the key does not see and the revision does.
+    /// A map loaded with its stamp is keyed as it comes in.
+    #[test]
+    fn the_clear_flag_works_out_no_revision_away_from_every_cleared_one() {
+        let mut map = MapFile::new();
+        map.set_cell(3, 8, CellObject::Start);
+        let mut ed = MapEditor::new(map);
+        let first = ed.revision();
+        ed.note_clear(first, 50.0);
+        let worked_at = |ed: &MapEditor| ed.revision.get().map(|(edits, _)| edits);
+        ed.select_tool(Tool::Wall(Material::Brick));
+        ed.stroke(&[(10, 5)], false);
+        assert_eq!(ed.par(), None);
+        assert_ne!(worked_at(&ed), Some(ed.edits), "a revision no cleared one could be was worked out");
+        // The brick taken off again by hand: the cleared revision's cells.
+        ed.stroke(&[(10, 5)], false);
+        assert_eq!(ed.map().cell(10, 5), None, "the toggle-erase rule took it off");
+        assert_eq!(ed.par(), Some(50.0));
+        // A settings edit leaves the key as it was; the revision says no.
+        let mut settings = ed.settings();
+        settings.tanks = Some(settings.tanks.unwrap_or(3) + 1);
+        ed.apply_settings(settings);
+        assert_eq!(ed.par(), None);
+        assert_eq!(worked_at(&ed), Some(ed.edits), "a key that matches works the revision out");
+        ed.undo();
+        assert_eq!(ed.par(), Some(50.0));
+        // A map that comes in with its stamp is keyed as it comes in.
+        let saved = ed.map_to_save();
+        let mut other = MapEditor::new(MapFile::new());
+        other.load(saved);
+        assert_eq!(other.par(), Some(50.0));
+        other.select_tool(Tool::Wall(Material::Brick));
+        other.stroke(&[(12, 6)], false);
+        assert_eq!(other.par(), None);
+        assert_ne!(worked_at(&other), Some(other.edits), "nor for a map that came in cleared");
+    }
+
     /// The clear check is kept per revision of the canvas: a win noted on
     /// it clears it, its par the best of its wins to a tenth; an edit is a
     /// new revision nobody has won, and an undo back finds the cleared one
@@ -5862,6 +5955,25 @@ mod editor_tests {
         let t = std::time::Instant::now();
         std::hint::black_box(ed.map().revision());
         eprintln!("  its revision: {:.1} ms", ms(t, 1));
+        // The clear flag after an edit with that revision cleared: the key
+        // rules out a canvas no cleared revision can be, and only a key
+        // that matches - the cell put back - works the revision out.
+        let revision = ed.revision();
+        ed.note_clear(revision, 60.0);
+        let was = ed.map().cell(10, 10).copied();
+        let other = if was == Some(CellObject::Fence) { CellObject::Sandbag } else { CellObject::Fence };
+        let mut changes = Vec::new();
+        ed.change_cell(10, 10, Some(other), &mut changes);
+        ed.cells_changed(&changes);
+        let t = std::time::Instant::now();
+        assert_eq!(ed.par(), None);
+        let away = ms(t, 1);
+        let mut changes = Vec::new();
+        ed.change_cell(10, 10, was, &mut changes);
+        ed.cells_changed(&changes);
+        let t = std::time::Instant::now();
+        assert_eq!(ed.par(), Some(60.0));
+        eprintln!("  the clear flag after an edit away: {away:.3} ms; after the cell is put back: {:.1} ms", ms(t, 1));
         let shown = |cull: Option<Rectangle>, col: i32, row: i32| {
             let pos = map::cell_to_world(col, row);
             cull.is_none_or(|r| pos.x >= r.x && pos.y >= r.y && pos.x <= r.x + r.width && pos.y <= r.y + r.height)

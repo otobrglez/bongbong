@@ -19,6 +19,67 @@ use crate::OBSTACLE_GRID_SIZE;
 /// insertions into a long list.
 const PATCH_MOST: usize = 64;
 
+/// A cell's share of `CellIndex::digest`: a hash of its place and of what
+/// stands on it, the same for the same cell wherever and whenever it is
+/// worked out.
+fn cell_digest(col: i32, row: i32, obj: &CellObject) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = CellHasher(0);
+    (col, row, obj).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The hasher `cell_digest` runs: a multiply and a rotation per word fed
+/// (FxHash's step), a few nanoseconds a cell where a whole map's index is
+/// worked out at once, finished by SplitMix64's mix so that the sum of
+/// many digests spreads over all 64 bits.
+struct CellHasher(u64);
+
+impl CellHasher {
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+}
+
+impl std::hash::Hasher for CellHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.add(byte as u64);
+        }
+    }
+
+    fn write_u8(&mut self, n: u8) {
+        self.add(n as u64);
+    }
+
+    fn write_u32(&mut self, n: u32) {
+        self.add(n as u64);
+    }
+
+    fn write_i32(&mut self, n: i32) {
+        self.add(n as u32 as u64);
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        self.add(n);
+    }
+
+    fn write_usize(&mut self, n: usize) {
+        self.add(n as u64);
+    }
+
+    fn write_isize(&mut self, n: isize) {
+        self.add(n as u64);
+    }
+
+    fn finish(&self) -> u64 {
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+}
+
 /// Whether the index keeps a list of `obj`'s kind beside the cells: a
 /// portal, a singleton or a tower.
 fn kept(obj: &CellObject) -> bool {
@@ -28,10 +89,13 @@ fn kept(obj: &CellObject) -> bool {
 /// Every placed cell of a map in `MapFile::iter_cells`'s order - row by
 /// row, left to right - and what the builder reads of them every frame:
 /// the portals, the singletons' cells and the kinds of tower whose reach
-/// rings spread past their cells.
+/// rings spread past their cells, and a digest of them all.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CellIndex {
     cells: Vec<(i32, i32, CellObject)>,
+    /// The cells' `cell_digest`s summed: the same for the same cells in
+    /// any order, kept up through every change `update` takes in.
+    digest: u64,
     portals: Vec<(i32, i32)>,
     frog: Option<(i32, i32)>,
     start: Option<(i32, i32)>,
@@ -44,6 +108,7 @@ impl CellIndex {
     /// The index of `map` as it stands.
     pub fn of(map: &MapFile) -> CellIndex {
         let mut index = CellIndex { cells: map.iter_cells().map(|(col, row, obj)| (col, row, *obj)).collect(), ..CellIndex::default() };
+        index.digest = index.cells.iter().fold(0, |sum: u64, &(col, row, obj)| sum.wrapping_add(cell_digest(col, row, &obj)));
         index.derive();
         index
     }
@@ -68,7 +133,10 @@ impl CellIndex {
                 *self = CellIndex::of(map);
                 return;
             }
-            match (at, map.cell(c.col, c.row).copied()) {
+            let was = at.ok().map(|i| cell_digest(c.col, c.row, &self.cells[i].2)).unwrap_or(0);
+            let now = map.cell(c.col, c.row).copied();
+            self.digest = self.digest.wrapping_sub(was).wrapping_add(now.map_or(0, |obj| cell_digest(c.col, c.row, &obj)));
+            match (at, now) {
                 (Ok(i), Some(obj)) => {
                     derive |= kept(&self.cells[i].2) || kept(&obj);
                     self.cells[i].2 = obj;
@@ -129,6 +197,13 @@ impl CellIndex {
     /// Every placed cell, row by row and left to right.
     pub fn cells(&self) -> &[(i32, i32, CellObject)] {
         &self.cells
+    }
+
+    /// The cells' digest: maps whose cells are the same have the same one,
+    /// whatever order they were placed in, and any change of a cell moves
+    /// it but for a collision of 64-bit hashes.
+    pub fn digest(&self) -> u64 {
+        self.digest
     }
 
     /// The cells whose drawing can reach into `rect`, in world pixels: those
@@ -222,6 +297,32 @@ mod tests {
             (index.start(), index.start2(), index.frog(), index.enemy_frog()),
             (map.start_cell(), map.start2_cell(), map.frog_cell(), map.enemy_frog_cell())
         );
+    }
+
+    /// The digest is the cells' and nothing else's: the same cells placed
+    /// in another order give the same one, and a cell changed, added or
+    /// taken off moves it.
+    #[test]
+    fn the_digest_is_the_cells_whatever_their_order() {
+        let map = map();
+        let digest = |map: &MapFile| CellIndex::of(map).digest();
+        let mut backwards = MapFile::new();
+        backwards.size = map.size;
+        let mut cells: Vec<(i32, i32, CellObject)> = map.iter_cells().map(|(c, r, o)| (c, r, *o)).collect();
+        cells.reverse();
+        for (col, row, obj) in cells {
+            backwards.set_cell(col, row, obj);
+        }
+        assert_eq!(digest(&backwards), digest(&map));
+        let mut changed = map.clone();
+        changed.set_cell(0, 0, CellObject::Wall { material: Material::Iron });
+        let mut added = map.clone();
+        added.set_cell(1, 1, CellObject::Road);
+        let mut taken = map.clone();
+        taken.clear_cell(9, 1);
+        for (what, other) in [("changed", changed), ("added", added), ("taken off", taken)] {
+            assert_ne!(digest(&other), digest(&map), "a cell {what}");
+        }
     }
 
     /// An index that takes edits in (`update`) is the index worked out
