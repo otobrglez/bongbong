@@ -15,15 +15,25 @@
 //! texels; `render::game` crops `scene_target` to that rectangle.
 
 use crate::math::Vec2;
-use crate::simulation::{with_tank, Game};
+use crate::simulation::{with_frog, with_tank, Game};
 use crate::tuning::{tuning, Tuning};
-use crate::{Rect, OBSTACLE_GRID_SIZE};
+use crate::{Rect, OBSTACLE_GRID_SIZE, TANK_SPRITE_SIZE};
+
+/// How much of its half-width a view that cannot hold the sight box (a
+/// zoomed phone) may lead the tank by.
+const LEAD_SHARE_ZOOMED: f32 = 0.3;
 
 /// The narrowest and widest a field map's view gets. Between them every
 /// screen fills edge to edge; past them (a 32:9 monitor) the view keeps
 /// the widest shape and the window letterboxes the rest.
 pub const ASPECT_MIN: f32 = 4.0 / 3.0;
 pub const ASPECT_MAX: f32 = 2.4;
+
+/// The smallest view the screens drawn over the field are laid out for -
+/// the dialogs, the lobby, the level select and the end screen
+/// (`hud::result_layout`, `lobby.rs`): the smallest shipped field. The
+/// phone zoom never shows less.
+pub const UI_MIN_VIEW: (f32, f32) = (768.0, 384.0);
 
 /// How much world a screen shows and how big: `size` in field pixels,
 /// whole, and `scale` in window (logical) pixels per field pixel.
@@ -46,7 +56,14 @@ pub fn viewport_with(window: (f32, f32), dpr: f32, t: &Tuning) -> Viewport {
     let aspect = (ww / wh).clamp(ASPECT_MIN, ASPECT_MAX);
     let area = t.camera_view_area_cells * OBSTACLE_GRID_SIZE * OBSTACLE_GRID_SIZE;
     let (box_w, box_h) = ((area * aspect).sqrt(), (area / aspect).sqrt());
-    let exact = (ww / box_w).min(wh / box_h);
+    // A small screen zooms in until a tank is `camera_min_tank_points`
+    // across, so a phone shows less than the same area rather than tanks
+    // a few millimetres long - never less than `UI_MIN_VIEW`.
+    let same_area = (ww / box_w).min(wh / box_h);
+    let ui_cap = (ww / UI_MIN_VIEW.0).min(wh / UI_MIN_VIEW.1);
+    let floor = (t.camera_min_tank_points / TANK_SPRITE_SIZE).min(ui_cap);
+    let floored = floor > same_area;
+    let exact = same_area.max(floor);
     let sight = (t.camera_sight_x_cells * OBSTACLE_GRID_SIZE, t.camera_sight_y_cells * OBSTACLE_GRID_SIZE);
     let shown = |scale: f32| -> (f32, f32) {
         let (w, h) = (ww / scale, wh / scale);
@@ -55,13 +72,16 @@ pub fn viewport_with(window: (f32, f32), dpr: f32, t: &Tuning) -> Viewport {
     let scale = if dpr < t.camera_snap_below_dpr {
         // Each 2 px art block a whole number of device pixels: the device
         // scale a multiple of a half. The nearer step, unless stepping in
-        // would hide part of the sight box - then the step out.
+        // would hide part of the sight box - then the step out. A zoomed
+        // phone takes the step in, short of the UI's smallest view.
         let p = exact * dpr;
         let lo = ((p * 2.0).floor() / 2.0).max(0.5);
         let hi = ((p * 2.0).ceil() / 2.0).max(0.5);
         let mut pick = if (p / lo).ln().abs() <= (hi / p).ln().abs() { lo } else { hi };
         let (w, h) = shown(pick / dpr);
-        if w / 2.0 < sight.0 || h / 2.0 < sight.1 {
+        if floored {
+            pick = if hi / dpr <= ui_cap { hi } else { lo };
+        } else if w / 2.0 < sight.0 || h / 2.0 < sight.1 {
             pick = lo;
         }
         pick / dpr
@@ -167,8 +187,13 @@ impl FollowCamera {
             self.base.y = self.base.y.clamp(s.pos.y - dz, s.pos.y + dz);
             // The lead spends only the room outside the sight box, so the
             // box stays on screen behind the tank as well as ahead of it.
-            let spare_x = (view.0 / 2.0 - t.camera_sight_x_cells * cell - cell / 4.0).max(0.0);
-            let spare_y = (view.1 / 2.0 - t.camera_sight_y_cells * cell - cell / 4.0).max(0.0);
+            // A view zoomed in past the sight box (a phone) still leads,
+            // by a share of itself.
+            let spare = |half: f32, sight: f32| {
+                if half >= sight + cell / 4.0 { half - sight - cell / 4.0 } else { half * LEAD_SHARE_ZOOMED }
+            };
+            let spare_x = spare(view.0 / 2.0, t.camera_sight_x_cells * cell);
+            let spare_y = spare(view.1 / 2.0, t.camera_sight_y_cells * cell);
             let reach = t.camera_look_ahead_cells * cell * if s.moving { 1.0 } else { 0.35 };
             let want = match s.facing {
                 Some(f) => Vec2::new(f.x * reach.min(spare_x), f.y * reach.min(spare_y)),
@@ -187,6 +212,90 @@ impl FollowCamera {
         let c = clamp_center(self.center, field, view);
         Rect::new((c.x - view.0 / 2.0).round(), (c.y - view.1 / 2.0).round(), view.0, view.1)
     }
+}
+
+/// Which objective an edge marker points at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Objective {
+    /// The players' frog, the one a Protect round is lost with.
+    Frog,
+    /// The other side's frog, the one a Hunt round is won with.
+    EnemyFrog,
+}
+
+/// An objective somewhere on the field: where it is, which it is, and
+/// whether it is being hurt right now (the marker blinks).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Target {
+    pub pos: Vec2,
+    pub kind: Objective,
+    pub hurt: bool,
+}
+
+/// The round's live frogs, for the edge markers: the players' and, in a
+/// round that has one, the other side's.
+pub fn objectives(game: &Game) -> Vec<Target> {
+    let frog = |entity, kind| {
+        with_frog(&game.world, entity, |f| (!f.is_dead()).then_some(Target { pos: f.position, kind, hurt: f.hurt_timer > 0.0 }))
+    };
+    let mut out = Vec::new();
+    out.extend(game.frog.and_then(|e| frog(e, Objective::Frog)));
+    out.extend(game.enemy_frog.and_then(|e| frog(e, Objective::EnemyFrog)));
+    out
+}
+
+/// How far in from each edge of the view a marker stands, in field pixels:
+/// clear of the corner HUD at the top and of the thumbs at the bottom.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Insets {
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub left: f32,
+}
+
+/// A marker at the edge of the view for something off it: where it
+/// stands in the view (view pixels from its top-left), the unit direction
+/// toward the target, and how far away the target is in cells.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EdgeMarker {
+    pub at: Vec2,
+    pub dir: Vec2,
+    pub cells: f32,
+}
+
+/// The marker for `target` when it is off `camera` (the view's rectangle
+/// of the field), `None` while it is on screen: the point where the line
+/// from the middle of the view's inset rectangle toward the target leaves
+/// that rectangle, so the marker sits on the edge nearest the way to go.
+pub fn edge_marker(camera: Rect, target: Vec2, insets: Insets) -> Option<EdgeMarker> {
+    const ON_SCREEN_MARGIN: f32 = 8.0;
+    let inside = target.x >= camera.x - ON_SCREEN_MARGIN
+        && target.x <= camera.x + camera.w + ON_SCREEN_MARGIN
+        && target.y >= camera.y - ON_SCREEN_MARGIN
+        && target.y <= camera.y + camera.h + ON_SCREEN_MARGIN;
+    if inside {
+        return None;
+    }
+    let (x0, x1) = (camera.x + insets.left, camera.x + camera.w - insets.right);
+    let (y0, y1) = (camera.y + insets.top, camera.y + camera.h - insets.bottom);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let centre = Vec2::new((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let d = target - centre;
+    let len = d.length();
+    if len <= 0.0 {
+        return None;
+    }
+    let tx = if d.x.abs() > 1e-6 { ((x1 - x0) / 2.0) / d.x.abs() } else { f32::INFINITY };
+    let ty = if d.y.abs() > 1e-6 { ((y1 - y0) / 2.0) / d.y.abs() } else { f32::INFINITY };
+    let edge = centre + d * tx.min(ty).min(1.0);
+    Some(EdgeMarker {
+        at: Vec2::new(edge.x - camera.x, edge.y - camera.y),
+        dir: d * (1.0 / len),
+        cells: len / OBSTACLE_GRID_SIZE,
+    })
 }
 
 /// The nearest centre that keeps the view inside the field on each axis,
@@ -221,19 +330,40 @@ mod camera_tests {
         Tuning::DEFAULT
     }
 
-    /// The same world area on a phone, a tablet and a monitor, within the
+    /// The same world area on a tablet and a monitor, within the
     /// whole-block snap's step, and the sight box on every one of them.
     #[test]
-    fn every_screen_shows_about_the_same_area_and_the_sight_box() {
+    fn every_large_screen_shows_about_the_same_area_and_the_sight_box() {
         let t = t();
         let target = t.camera_view_area_cells * 32.0 * 32.0;
-        for (window, dpr) in [((852.0, 393.0), 3.0), ((1180.0, 820.0), 2.0), ((1920.0, 1080.0), 1.0), ((3440.0, 1440.0), 1.0), ((667.0, 375.0), 2.0)] {
+        for (window, dpr) in [((1180.0, 820.0), 2.0), ((1024.0, 768.0), 2.0), ((1920.0, 1080.0), 1.0), ((3440.0, 1440.0), 1.0), ((1440.0, 900.0), 2.0)] {
             let v = viewport_with(window, dpr, &t);
             let area = v.size.0 * v.size.1;
             assert!((area / target - 1.0).abs() < 0.3, "{window:?}: {:?} is {area} of {target}", v.size);
             assert!(v.size.0 / 2.0 >= t.camera_sight_x_cells * 32.0 - 1.0, "{window:?}: {:?}", v.size);
             assert!(v.size.1 / 2.0 >= t.camera_sight_y_cells * 32.0 - 1.0, "{window:?}: {:?}", v.size);
             assert!(v.size.0 * v.scale >= window.0 - 1.0 || v.size.0 / v.size.1 >= ASPECT_MAX - 0.05, "fills the width");
+        }
+    }
+
+    /// A phone zooms in until a tank is `camera_min_tank_points` across,
+    /// and never shows less than the UI's smallest view; a large screen
+    /// never zooms for it.
+    #[test]
+    fn a_phone_zooms_in_to_a_readable_tank() {
+        let t = t();
+        let floor = t.camera_min_tank_points / TANK_SPRITE_SIZE;
+        // An iPhone 16 in landscape, in points.
+        let phone = viewport_with((852.0, 393.0), 3.0, &t);
+        assert!(phone.scale >= floor - 1e-4, "{phone:?}");
+        assert!(phone.size.0 >= UI_MIN_VIEW.0 && phone.size.1 >= UI_MIN_VIEW.1, "{phone:?}");
+        assert!(phone.size.0 * phone.size.1 < t.camera_view_area_cells * 1024.0, "less than the same area");
+        // An iPhone SE: the UI's smallest view wins over the tank floor.
+        let se = viewport_with((667.0, 375.0), 2.0, &t);
+        assert!(se.size.0 >= UI_MIN_VIEW.0 - 1.0 && se.size.1 >= UI_MIN_VIEW.1 - 1.0, "{se:?}");
+        let off = Tuning { camera_min_tank_points: 0.0, ..Tuning::DEFAULT };
+        for (window, dpr) in [((1180.0, 820.0), 2.0), ((1920.0, 1080.0), 1.0)] {
+            assert_eq!(viewport_with(window, dpr, &t), viewport_with(window, dpr, &off), "{window:?}");
         }
     }
 
@@ -278,6 +408,24 @@ mod camera_tests {
         assert!(lead > 10.0 && lead <= t.camera_look_ahead_cells * 32.0 * 0.35 + 1.0, "a still tank leads a little: {lead}");
         let r = cam.frame_with(Some(still(Vec2::new(300.0, 300.0))), 1.0 / 60.0, field, view, &t);
         assert_eq!((r.x, r.y), (0.0, 40.0), "cut, clamped to the field's corner: {r:?}");
+    }
+
+    /// An objective on screen has no marker; one off it has a marker on
+    /// the inset edge toward it, pointing at it.
+    #[test]
+    fn an_off_screen_objective_is_marked_on_the_edge_toward_it() {
+        let cam = Rect::new(1000.0, 500.0, 800.0, 400.0);
+        let insets = Insets { top: 70.0, right: 24.0, bottom: 40.0, left: 24.0 };
+        assert!(edge_marker(cam, Vec2::new(1400.0, 700.0), insets).is_none());
+        let east = edge_marker(cam, Vec2::new(3000.0, 735.0), insets).expect("off to the right");
+        assert_eq!(east.at.x, 800.0 - 24.0);
+        assert!(east.dir.x > 0.99, "{east:?}");
+        let north = edge_marker(cam, Vec2::new(1415.0, 0.0), insets).expect("above");
+        assert_eq!(north.at.y, 70.0);
+        assert!(north.dir.y < -0.99);
+        let corner = edge_marker(cam, Vec2::new(0.0, 2000.0), insets).expect("down-left");
+        assert!(corner.at.x >= 24.0 - 1e-3 && corner.at.y <= 400.0 - 40.0 + 1e-3, "{corner:?}");
+        assert!((east.cells - (3000.0 - 1400.0) / 32.0).abs() < 1.0);
     }
 
     /// The view never shows past the field, and an axis the view is wider

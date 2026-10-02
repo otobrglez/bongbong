@@ -491,6 +491,37 @@ fn draw_corner_vitals(
     }
 }
 
+/// A marker at the edge of a field map's view for a frog off screen
+/// (`camera::edge_marker`): a dark plate in the frog's colour - the
+/// players' frog green like its gauge, the other side's red - with an
+/// arrow pointing the way and the distance in cells beside it, blinking
+/// white while the frog is being hurt. `m.at` is in the field's view
+/// space; the caller draws inside the field camera.
+pub fn draw_edge_marker(d: &mut impl RaylibDraw, m: crate::camera::EdgeMarker, target: crate::camera::Target, time: f32) {
+    use crate::camera::Objective;
+    let base = match target.kind {
+        Objective::Frog => FROG_COLOR,
+        Objective::EnemyFrog => HEART,
+    };
+    let color = if target.hurt && (time * 6.0) as i32 % 2 == 0 { TEXT } else { base };
+    let at = Vector2::new(m.at.x.round(), m.at.y.round());
+    let (dx, dy) = (m.dir.x, m.dir.y);
+    let (px, py) = (-dy, dx);
+    let point = |along: f32, across: f32| Vector2::new(at.x + dx * along + px * across, at.y + dy * along + py * across);
+    let (tip, left, right) = (point(21.0, 0.0), point(11.0, 8.0), point(11.0, -8.0));
+    // raylib keeps one winding of a triangle; drawing both keeps either.
+    d.draw_triangle(tip, left, right, color);
+    d.draw_triangle(tip, right, left, color);
+    d.draw_circle_v(at, 12.0, CORNER_FILL);
+    d.draw_circle_lines(at.x as i32, at.y as i32, 12.0, color);
+    d.draw_circle_v(at, 6.0, color);
+    let label = format!("{}", m.cells.round() as i32);
+    let w = width(&label, HUD_SMALL_TEXT_SIZE);
+    // The distance on the side away from the edge the marker stands on.
+    let ly = if dy > 0.5 { at.y as i32 - 28 } else { at.y as i32 + 16 };
+    d.draw_text(&label, at.x as i32 - w / 2, ly, HUD_SMALL_TEXT_SIZE, TEXT);
+}
+
 /// One outlined bar `w` x `h` px at (`x`, `y`), filled to `frac` in whole
 /// 2 px blocks so it drains in steps like every other gauge in the game.
 fn draw_gauge(d: &mut impl RaylibDraw, x: i32, y: i32, w: i32, h: i32, frac: f32, color: Color, outline: Color) {
@@ -805,11 +836,12 @@ mod bar_tests {
     }
 
     /// The corner clusters never meet on the narrowest view a field map
-    /// gets (a 4:3 screen): the left one ends before the buttons of a
-    /// local round, and before a full room's seat chips and LEAVE.
+    /// gets (`camera::UI_MIN_VIEW`, a zoomed phone): the left one ends
+    /// before the buttons of a local round, and before a full room's seat
+    /// chips and LEAVE.
     #[test]
     fn the_corner_clusters_fit_the_narrowest_view() {
-        let narrow = crate::camera::viewport_with((1024.0, 768.0), 1.0, &crate::tuning::Tuning::DEFAULT);
+        let narrow = crate::camera::Viewport { size: crate::camera::UI_MIN_VIEW, scale: 1.0 };
         let layout = crate::Layout::overlay(narrow.size.0, narrow.size.1);
         let left_end = CORNER_ROW1_END.max(CORNER_ROW2_END) + CORNER_PAD;
         let local = crate::hud::PlayChrome {

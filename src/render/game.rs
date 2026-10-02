@@ -35,7 +35,7 @@ use crate::render::canvas::{GpuCanvas, Sheets};
 use crate::render::decal::draw_decal_shadow;
 use crate::render::frog::FrogVariantTextures;
 use crate::render::hud::{
-    draw_bar, draw_corners, draw_leave_button, draw_leave_dialog, draw_mode_button, draw_players_button,
+    draw_bar, draw_corners, draw_edge_marker, draw_leave_button, draw_leave_dialog, draw_mode_button, draw_players_button,
     draw_players_dialog, draw_restart_button, draw_result, CORNER_HUD_CLEAR,
 };
 use crate::render::laser::{draw_laser_beam, draw_laser_bloom, draw_laser_flares};
@@ -642,6 +642,22 @@ impl Game {
                         let peak = tuning().blast_screen_flash_alpha * tuning().screen_fx_intensity;
                         let a = (255.0 * peak.clamp(0.0, 1.0) * (1.0 - age / seconds)) as u8;
                         d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(255, 240, 200, a));
+                    }
+                }
+
+                // A frog off screen on a field map: a marker on the edge
+                // of the view toward it, under every dim and dialog.
+                if layout.corners {
+                    let insets = crate::camera::Insets {
+                        top: (CORNER_HUD_CLEAR + 18) as f32,
+                        right: 28.0,
+                        bottom: 30.0,
+                        left: 28.0,
+                    };
+                    for target in crate::camera::objectives(self) {
+                        if let Some(m) = crate::camera::edge_marker(camera, target.pos, insets) {
+                            draw_edge_marker(&mut d, m, target, self.time);
+                        }
                     }
                 }
 

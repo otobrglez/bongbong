@@ -1763,6 +1763,13 @@ tunables! {
         /// Denser panels - the 3x phones - keep the exact zoom: a block of
         /// four or five of their pixels cannot be told apart. Live.
         camera_snap_below_dpr: f32 = 2.5 in 0.0 ..= 8.0;
+        /// The smallest a tank is drawn on a field map, in the window's
+        /// logical pixels (points on a phone): a small screen zooms in
+        /// past the same area until a tank is this wide, never past the
+        /// smallest view the dialogs are laid out for. About 7 mm on a
+        /// phone; tablets and desktops already draw tanks larger. 0 keeps
+        /// the same area everywhere. Live.
+        camera_min_tank_points: f32 = 40.0 in 0.0 ..= 120.0;
     }
 
     group online {
