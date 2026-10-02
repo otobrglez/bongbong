@@ -17,12 +17,23 @@
 //! file, built into every build; the bar, the dropdowns and the settings
 //! panel are the chrome on top, drawn by `render.rs` behind the `render`
 //! feature.
+//!
+//! **The canvas has its own camera** (`camera.rs`,
+//! docs/large-maps-follow-camera.md §9): FIT shows the whole map - an
+//! arena exactly as it always was - and the wheel at the cursor, a middle
+//! or Space drag, `+`/`-`, the arrows and the bar's FIT button zoom and
+//! pan it. Every pointer goes through that camera before a cell is
+//! hit-tested (`cell_at`), and the canvas is drawn through the same one,
+//! so a press paints the cell drawn under it at every zoom.
 
+pub mod camera;
 pub mod history;
 #[cfg(feature = "render")]
 pub mod render;
 #[cfg(feature = "render")]
 pub use render::EditorTextures;
+
+pub use camera::{BuilderCamera, CanvasRules, CanvasScreen, Viewport};
 
 use rand::RngExt;
 use crate::math::{Color, Rectangle, Vec2};
@@ -63,6 +74,9 @@ const SLOT_FILE: f32 = 644.0;
 const SLOT_MAP: f32 = 716.0;
 /// FILE and MAP share a width.
 const MAP_BUTTON_W: f32 = 64.0;
+/// FIT, after MAP: the camera back to the whole canvas. A small button
+/// like UNDO's.
+const SLOT_FIT: f32 = 788.0;
 /// How many rows the Load list shows at once (eight fit the 480 px
 /// standard field). When there are more maps than that, the last row is a
 /// pager a tap turns (a touch screen has no wheel) and the wheel scrolls
@@ -91,8 +105,20 @@ pub struct BuilderInput {
     /// The secondary button (right mouse) went down / is down.
     pub right_pressed: bool,
     pub right_held: bool,
-    /// Mouse wheel movement, positive away from the user.
+    /// The middle mouse button is down: a drag with it pans the canvas.
+    pub middle_held: bool,
+    /// Space is held: a drag with the primary button pans the canvas
+    /// instead of painting.
+    pub space_held: bool,
+    /// Mouse wheel movement, positive away from the user: over a category
+    /// button it steps the tool, over the canvas it zooms at the cursor.
     pub wheel: f32,
+    /// `+` / `-` went down this frame: zoom about the canvas's middle.
+    pub zoom_in: bool,
+    pub zoom_out: bool,
+    /// The arrow keys held this frame, -1, 0 or 1 on each axis (right and
+    /// down positive): the view moves that way.
+    pub pan_keys: Vec2,
     pub escape: bool,
     pub enter: bool,
     pub backspace: bool,
@@ -101,6 +127,11 @@ pub struct BuilderInput {
     pub redo: bool,
     /// Characters typed this frame, for the dev Save prompt.
     pub typed: String,
+    /// Seconds since the last frame: what a held key pans by.
+    pub dt: f32,
+    /// The screen the canvas is drawn on, when the window knows it
+    /// (`app.rs`); `None` keeps the one the builder saw last.
+    pub screen: Option<CanvasScreen>,
 }
 
 /// One brush - what a press on the field does. Grouped into `Category`s
@@ -449,6 +480,19 @@ pub struct MapEditor {
     /// hover highlight and the cursor readout draw from it, so a touch
     /// screen keeps showing the last tapped cell.
     pointer: Option<Vec2>,
+    /// The canvas's camera: FIT, or a zoom and where it looks.
+    camera: BuilderCamera,
+    /// The screen and the canvas area `update` was last given - what a
+    /// tool that moves the camera between frames measures against.
+    screen: CanvasScreen,
+    area: (f32, f32),
+    /// Where the pointer was on the last frame of a pan drag (the middle
+    /// button, or Space with the primary): the drag moves the canvas by
+    /// the difference.
+    pan_from: Option<Vec2>,
+    /// Wheel movement not yet spent on a whole step, for a coarse
+    /// screen's zoom (a trackpad sends fractions of a notch).
+    wheel_accum: f32,
     pub cli_overrides: CliOverrides,
     /// `render` draws a flat white field instead of the ground tileset -
     /// the builder-side twin of `Game::plain_canvas`.
@@ -467,6 +511,7 @@ impl MapEditor {
             Tool::Start,
             Tool::Pickup(PickupKind::Health),
         ];
+        let area = map.field_size();
         let mut editor = MapEditor {
             baseline: map.clone(),
             map,
@@ -480,10 +525,87 @@ impl MapEditor {
             stroke: None,
             history: UndoStack::default(),
             pointer: None,
+            camera: BuilderCamera::default(),
+            screen: CanvasScreen::default(),
+            area,
+            pan_from: None,
+            wheel_accum: 0.0,
             cli_overrides: CliOverrides::default(),
         };
         editor.rebuild_ground();
         editor
+    }
+
+    // ----- the camera -----
+
+    /// The canvas as the camera measures it: the map's field, the canvas
+    /// area `update` was last given and the screen under it.
+    pub fn viewport(&self) -> Viewport {
+        Viewport { field: self.map.field_size(), area: self.area, screen: self.screen }
+    }
+
+    /// The same over `layout`'s field area - the bitmap a frame is drawn
+    /// and hit-tested on.
+    fn viewport_in(&self, layout: &Layout) -> Viewport {
+        Viewport::of(self.map.field_size(), layout, self.screen)
+    }
+
+    /// The view the canvas is drawn and hit-tested through, over
+    /// `layout`'s field area: `Camera::whole` at FIT on an arena.
+    pub fn view_camera(&self, layout: &Layout) -> crate::view::Camera {
+        self.camera.view(&self.viewport_in(layout))
+    }
+
+    /// The canvas's camera, FIT or zoomed.
+    pub fn camera(&self) -> &BuilderCamera {
+        &self.camera
+    }
+
+    /// Back to the whole canvas - the bar's FIT button.
+    pub fn fit_camera(&mut self) {
+        self.camera.fit();
+    }
+
+    /// Put the world point `center` in the middle of the canvas at `zoom`
+    /// times FIT (1 is FIT), kept inside the field and the zoom's limits -
+    /// the dev server's `builder_camera`.
+    pub fn frame_camera(&mut self, center: Vec2, zoom: f32) {
+        let vp = self.viewport();
+        let scale = vp.fit_scale() * if zoom.is_finite() { zoom.max(1.0) } else { 1.0 };
+        self.camera.set(center, scale, &vp, &CanvasRules::current());
+    }
+
+    /// The map cell under a bitmap point, through the camera: `None` off
+    /// the canvas, on the builder's chrome or past the field's edge. The
+    /// one place a pointer becomes a cell, so a press paints the cell the
+    /// canvas draws under it at every zoom.
+    pub fn cell_at(&self, pointer: Vec2, layout: &Layout) -> Option<(i32, i32)> {
+        let world = self.world_at(pointer, layout)?;
+        let (w, h) = self.map.field_size();
+        (world.x >= 0.0 && world.x < w && world.y >= 0.0 && world.y < h).then(|| map::world_to_cell(world))
+    }
+
+    /// The world point under a bitmap point on the canvas, through the
+    /// camera; `None` off the canvas area or on the chrome over it.
+    pub fn world_at(&self, pointer: Vec2, layout: &Layout) -> Option<Vec2> {
+        if !self.on_canvas(pointer, layout) {
+            return None;
+        }
+        Some(self.view_camera(layout).to_world(layout.to_field(pointer)))
+    }
+
+    /// Whether a bitmap point is on the canvas area and not on the
+    /// builder's chrome (the bar, an open popup).
+    fn on_canvas(&self, pointer: Vec2, layout: &Layout) -> bool {
+        layout.field.contains(pointer) && !self.point_on_ui(pointer, layout)
+    }
+
+    /// After the map was swapped whole (a load, a reset, a whole-map undo):
+    /// a field of another size starts at FIT.
+    fn refit_if_resized(&mut self, field_before: (f32, f32)) {
+        if self.map.field_size() != field_before {
+            self.camera.fit();
+        }
     }
 
     // ----- the edit model: shared by the bar, the finger and the tools -----
@@ -554,15 +676,19 @@ impl MapEditor {
 
     pub fn undo(&mut self) -> Option<EditStep> {
         self.finish_stroke();
+        let field = self.map.field_size();
         let step = self.history.undo(&mut self.map)?;
         self.rebuild_ground();
+        self.refit_if_resized(field);
         Some(step)
     }
 
     pub fn redo(&mut self) -> Option<EditStep> {
         self.finish_stroke();
+        let field = self.map.field_size();
         let step = self.history.redo(&mut self.map)?;
         self.rebuild_ground();
+        self.refit_if_resized(field);
         Some(step)
     }
 
@@ -599,12 +725,13 @@ impl MapEditor {
         self.baseline = self.map.clone();
         self.history.push(EditStep::Map { before: Box::new(before), after: Box::new(self.map.clone()) });
         self.rebuild_ground();
+        self.camera.fit();
     }
 
     /// Open `map` as a new document: the canvas, the baseline and an
     /// empty undo history - the level a round has moved on to
     /// (`mode::Session::start_level`), which undo must not walk back out
-    /// of into the level before.
+    /// of into the level before. The camera starts at FIT.
     pub fn open(&mut self, map: MapFile) {
         self.finish_stroke();
         self.popup = None;
@@ -613,6 +740,7 @@ impl MapEditor {
         self.baseline = self.map.clone();
         self.history.clear();
         self.rebuild_ground();
+        self.camera.fit();
     }
 
     /// Revert cells and settings to the baseline, as one undo step.
@@ -621,12 +749,14 @@ impl MapEditor {
         if !self.dirty() {
             return;
         }
+        let field = self.map.field_size();
         let before = self.map.clone();
         let name = self.map.name.take();
         self.map = self.baseline.clone();
         self.map.name = name;
         self.history.push(EditStep::Map { before: Box::new(before), after: Box::new(self.map.clone()) });
         self.rebuild_ground();
+        self.refit_if_resized(field);
     }
 
     /// Empty the canvas of every placed object - walls, props, trees,
@@ -865,6 +995,11 @@ impl MapEditor {
         Self::bar_button(layout.panel, SLOT_FILE, MAP_BUTTON_W)
     }
 
+    /// The FIT button: the camera back to the whole canvas.
+    pub(crate) fn fit_rect(layout: &Layout) -> Rectangle {
+        Self::bar_button(layout.panel, SLOT_FIT, SMALL_BUTTON_W)
+    }
+
     /// The bar button under a window position, if any. Every button's
     /// hit rect reaches `EDITOR_BAR_HIT_SLACK` above and below its drawn
     /// box, so a slightly low tap on a phone still lands.
@@ -898,6 +1033,9 @@ impl MapEditor {
         }
         if on(Self::map_rect(layout)) {
             return Some(BarButton::Map);
+        }
+        if on(Self::fit_rect(layout)) {
+            return Some(BarButton::Fit);
         }
         None
     }
@@ -1028,36 +1166,38 @@ impl MapEditor {
     /// bar, or a stroke on the field. Returns `EditorAction::Play` the
     /// frame PLAY is pressed.
     pub fn update(&mut self, input: &BuilderInput, layout: &Layout) -> EditorAction {
-        let (width, height) = (layout.field.w, layout.field.h);
         if let Some(p) = input.pointer {
             self.pointer = Some(p);
         }
+        if let Some(screen) = input.screen {
+            self.screen = screen;
+        }
+        self.area = (layout.field.w, layout.field.h);
+        let rules = CanvasRules::current();
         // The keyboard shortcuts work under a menu too, but not while the
-        // Save prompt is taking text.
-        if !matches!(self.popup, Some(Popup::Save { .. })) {
+        // Save prompt is taking text - a `-` there is a character.
+        if !self.text_entry_open() {
             if input.undo {
                 self.undo();
             }
             if input.redo {
                 self.redo();
             }
+            self.camera_keys(input, &rules);
         }
         if self.popup.is_some() {
+            self.pan_from = None;
             self.update_popup(input, layout);
             return EditorAction::None;
         }
 
-        // The wheel over a category button steps its tool; rolling the
-        // wheel towards you walks down the list.
-        if input.wheel != 0.0 {
-            if let Some(pointer) = input.pointer {
-                let over = Category::ALL
-                    .into_iter()
-                    .find(|&c| hit_rect(Self::category_rect(layout, c)).contains(pointer));
-                if let Some(category) = over {
-                    self.cycle_tool(category, input.wheel < 0.0);
-                }
-            }
+        if input.wheel != 0.0
+            && let Some(pointer) = input.pointer
+        {
+            self.wheel(pointer, input.wheel, layout, &rules);
+        }
+        if self.pan_drag(input, layout, &rules) {
+            return EditorAction::None;
         }
 
         let primary = input.held || input.right_held;
@@ -1079,17 +1219,11 @@ impl MapEditor {
             }
         }
 
-        // The field: a press begins a stroke, a held button continues it
-        // into every new cell it crosses. A press on the bar's empty parts
-        // is not a paint either.
-        let field_pointer = layout.to_field(pointer);
-        let on_field = !self.point_on_ui(pointer, layout)
-            && field_pointer.x >= 0.0
-            && field_pointer.x < width
-            && field_pointer.y >= 0.0
-            && field_pointer.y < height;
-        if on_field {
-            let cell = map::world_to_cell(field_pointer);
+        // The canvas: a press begins a stroke, a held button continues it
+        // into every new cell it crosses - the cell under the pointer
+        // through the camera. A press on the bar's empty parts, or past
+        // the map's edge, is not a paint.
+        if let Some(cell) = self.cell_at(pointer, layout) {
             if input.pressed || input.right_pressed {
                 self.finish_stroke();
                 self.begin_stroke(cell, input.right_held && !input.held);
@@ -1098,6 +1232,84 @@ impl MapEditor {
             }
         }
         EditorAction::None
+    }
+
+    /// `+`/`-` zoom about the canvas's middle and the arrows pan it, the
+    /// view moving the way an arrow points.
+    fn camera_keys(&mut self, input: &BuilderInput, rules: &CanvasRules) {
+        let vp = self.viewport();
+        let middle = Vec2::new(vp.area.0 / 2.0, vp.area.1 / 2.0);
+        if input.zoom_in {
+            self.camera.step(true, middle, &vp, rules);
+        }
+        if input.zoom_out {
+            self.camera.step(false, middle, &vp, rules);
+        }
+        let keys = input.pan_keys;
+        if keys.x != 0.0 || keys.y != 0.0 {
+            let speed = vp.px(rules.key_pan_pt_per_s) * input.dt.max(0.0);
+            self.camera.pan(Vec2::new(-keys.x * speed, -keys.y * speed), &vp, rules);
+        }
+    }
+
+    /// The wheel: over a category button it steps that category's tool
+    /// (towards you walks down the list), over the canvas it zooms at the
+    /// cursor - a whole-block step a notch on a coarse screen, smoothly on
+    /// a fine one.
+    fn wheel(&mut self, pointer: Vec2, wheel: f32, layout: &Layout, rules: &CanvasRules) {
+        let over = Category::ALL.into_iter().find(|&c| hit_rect(Self::category_rect(layout, c)).contains(pointer));
+        if let Some(category) = over {
+            self.cycle_tool(category, wheel < 0.0);
+            return;
+        }
+        if !self.on_canvas(pointer, layout) {
+            return;
+        }
+        let vp = self.viewport_in(layout);
+        let at = layout.to_field(pointer);
+        if vp.screen.coarse {
+            // A trackpad sends fractions of a notch: whole steps only, and
+            // a turn the other way starts afresh.
+            if self.wheel_accum * wheel < 0.0 {
+                self.wheel_accum = 0.0;
+            }
+            self.wheel_accum += wheel;
+            while self.wheel_accum >= 1.0 {
+                self.camera.step(true, at, &vp, rules);
+                self.wheel_accum -= 1.0;
+            }
+            while self.wheel_accum <= -1.0 {
+                self.camera.step(false, at, &vp, rules);
+                self.wheel_accum += 1.0;
+            }
+        } else {
+            let scale = self.camera.scale(&vp) * rules.zoom_step.max(1.01).powf(wheel);
+            self.camera.zoom_at(scale, at, &vp, rules);
+        }
+    }
+
+    /// A pan drag - the middle button, or Space with the primary - moves
+    /// the canvas with the pointer. It starts only on the canvas (a press
+    /// on the bar with Space held is still a press on the bar) and ends any
+    /// stroke under way. Whether this frame was one.
+    fn pan_drag(&mut self, input: &BuilderInput, layout: &Layout, rules: &CanvasRules) -> bool {
+        let dragging = input.middle_held || (input.space_held && input.held);
+        let Some(pointer) = input.pointer.filter(|_| dragging) else {
+            self.pan_from = None;
+            return false;
+        };
+        let from = match self.pan_from {
+            Some(from) => from,
+            None if self.on_canvas(pointer, layout) => {
+                self.finish_stroke();
+                pointer
+            }
+            None => return false,
+        };
+        let vp = self.viewport_in(layout);
+        self.camera.pan(Vec2::new(pointer.x - from.x, pointer.y - from.y), &vp, rules);
+        self.pan_from = Some(pointer);
+        true
     }
 
     /// What a press on a bar button does.
@@ -1115,6 +1327,7 @@ impl MapEditor {
                 self.redo();
             }
             BarButton::Map => self.popup = Some(Popup::Settings),
+            BarButton::Fit => self.camera.fit(),
         }
         EditorAction::None
     }
@@ -1313,6 +1526,8 @@ enum BarButton {
     Redo,
     Map,
     File,
+    /// The camera back to the whole canvas.
+    Fit,
     Play,
 }
 
@@ -1999,6 +2214,208 @@ mod editor_tests {
         let field = Vec2::new(400.0, 400.0);
         ed.update(&BuilderInput { pointer: Some(field), wheel: -1.0, ..Default::default() }, &layout);
         assert_eq!(ed.tool(), Tool::Wall(Material::Glass));
+    }
+
+    /// A 96 x 54 map in the builder's field-map bitmap for a window, on a
+    /// screen `device` device pixels to the bitmap pixel.
+    fn big_editor(window: (f32, f32), device: f32, coarse: bool) -> (MapEditor, Layout, crate::view::View) {
+        let mut map = MapFile::new();
+        map.size = Some((96.0, 54.0));
+        let (layout, view) = camera::canvas_frame(window, None);
+        let mut ed = MapEditor::new(map);
+        let screen = CanvasScreen { device_per_px: view.scale * device, points_per_px: view.scale, coarse };
+        ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &layout);
+        (ed, layout, view)
+    }
+
+    /// A bitmap point in the middle of the canvas area.
+    fn canvas_middle(layout: &Layout) -> Vec2 {
+        Vec2::new(layout.field.x + layout.field.w / 2.0, layout.field.y + layout.field.h / 2.0)
+    }
+
+    /// The wheel zooms at the cursor - the world under it stays - and the
+    /// bar's FIT button brings the whole canvas back.
+    #[test]
+    fn the_wheel_zooms_at_the_cursor_and_fit_brings_the_whole_canvas_back() {
+        let (mut ed, layout, _) = big_editor((1920.0, 1080.0), 1.0, true);
+        assert!(ed.camera().is_fit());
+        let at = Vec2::new(layout.field.x + 300.0, layout.field.y + 200.0);
+        let before = ed.world_at(at, &layout).expect("on the canvas");
+        ed.update(&BuilderInput { pointer: Some(at), wheel: 1.0, ..Default::default() }, &layout);
+        assert!(!ed.camera().is_fit(), "a notch away from you zooms in");
+        let after = ed.world_at(at, &layout).expect("on the canvas");
+        assert!((before.x - after.x).abs() <= 2.0 && (before.y - after.y).abs() <= 2.0, "{before:?} -> {after:?}");
+        // On a coarse screen the step lands on whole blocks.
+        let vp = ed.viewport();
+        let device = vp.device_scale(ed.camera().scale(&vp));
+        assert!(((device * 2.0) - (device * 2.0).round()).abs() < 1e-3, "{device}");
+        // A trackpad's half notches add up to one step.
+        let scale = ed.camera().scale(&vp);
+        ed.update(&BuilderInput { pointer: Some(at), wheel: 0.5, ..Default::default() }, &layout);
+        assert_eq!(ed.camera().scale(&vp), scale, "half a notch is no step yet");
+        ed.update(&BuilderInput { pointer: Some(at), wheel: 0.5, ..Default::default() }, &layout);
+        assert!(ed.camera().scale(&vp) > scale, "the second half is");
+        // FIT, dim no more, takes it back; nothing was painted.
+        click(&mut ed, &layout, center(MapEditor::fit_rect(&layout)));
+        assert!(ed.camera().is_fit());
+        assert!(ed.map().cells.is_empty());
+        // The wheel over the bar's empty parts zooms nothing.
+        ed.update(&BuilderInput { pointer: Some(Vec2::new(1000.0, 10.0)), wheel: 1.0, ..Default::default() }, &layout);
+        assert!(ed.camera().is_fit());
+    }
+
+    /// A drag with the middle button, or with Space held, pans the canvas
+    /// with the pointer and paints nothing; the primary alone paints.
+    #[test]
+    fn a_middle_or_space_drag_pans_and_never_paints() {
+        let (mut ed, layout, _) = big_editor((1920.0, 1080.0), 1.0, false);
+        let mid = canvas_middle(&layout);
+        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &layout);
+        assert!(!ed.camera().is_fit());
+        let vp = ed.viewport();
+        for drag in [
+            BuilderInput { middle_held: true, ..Default::default() },
+            BuilderInput { space_held: true, held: true, pressed: true, ..Default::default() },
+        ] {
+            let start = ed.camera().center(&vp);
+            let under = ed.world_at(mid, &layout).unwrap();
+            ed.update(&BuilderInput { pointer: Some(mid), ..drag.clone() }, &layout);
+            let to = Vec2::new(mid.x - 60.0, mid.y + 25.0);
+            ed.update(&BuilderInput { pointer: Some(to), pressed: false, ..drag.clone() }, &layout);
+            ed.update(&BuilderInput { pointer: Some(to), ..Default::default() }, &layout);
+            let moved = ed.camera().center(&vp);
+            assert!((moved.x - start.x).abs() > 1.0 && (moved.y - start.y).abs() > 1.0, "{start:?} -> {moved:?}");
+            let now = ed.world_at(to, &layout).unwrap();
+            assert!((now.x - under.x).abs() <= 2.0 && (now.y - under.y).abs() <= 2.0, "the world followed the pointer: {under:?} vs {now:?}");
+            assert!(ed.map().cells.is_empty(), "a pan paints nothing");
+        }
+        // The primary alone paints where it presses.
+        let press = BuilderInput { pointer: Some(mid), pressed: true, held: true, ..Default::default() };
+        ed.update(&press, &layout);
+        ed.update(&BuilderInput { pointer: Some(mid), ..Default::default() }, &layout);
+        let cell = ed.cell_at(mid, &layout).unwrap();
+        assert_eq!(ed.map().cell(cell.0, cell.1), Some(&brick()));
+    }
+
+    /// `+`/`-` step the zoom about the canvas's middle and a held arrow
+    /// moves the view the way it points; neither reaches a Save prompt.
+    #[test]
+    fn keys_zoom_and_pan_but_not_into_a_text_prompt() {
+        let (mut ed, layout, _) = big_editor((1180.0, 820.0), 2.0, true);
+        let vp = ed.viewport();
+        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &layout);
+        let at = ed.camera().center(&vp);
+        ed.update(&BuilderInput { pan_keys: Vec2::new(1.0, 0.0), dt: 0.1, ..Default::default() }, &layout);
+        let moved = ed.camera().center(&vp);
+        assert!(moved.x > at.x + 1.0 && (moved.y - at.y).abs() < 1e-3, "right moves the view right: {at:?} -> {moved:?}");
+        ed.update(&BuilderInput { zoom_out: true, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { zoom_out: true, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { zoom_out: true, ..Default::default() }, &layout);
+        assert!(ed.camera().is_fit(), "back out to FIT and no further");
+        ed.popup = Some(Popup::Save { name: String::new() });
+        ed.update(&BuilderInput { zoom_in: true, typed: "-".into(), ..Default::default() }, &layout);
+        assert!(ed.camera().is_fit(), "a key in the Save prompt is a character");
+    }
+
+    /// A pointer anywhere on the canvas paints the cell the canvas draws
+    /// under it - through `window_mapping`, the drawing's own placement -
+    /// at every zoom and pan, on an arena and on a field map, on a coarse
+    /// and on a fine screen.
+    #[test]
+    fn a_pointer_maps_to_the_cell_drawn_under_it_at_every_zoom() {
+        let cases = [((1920.0, 1080.0), 1.0, true), ((852.0, 393.0), 3.0, false), ((1180.0, 820.0), 2.0, true)];
+        for (window, device, coarse) in cases {
+            for arena in [true, false] {
+                let (mut ed, layout, view) = if arena {
+                    let layout = Layout::for_field(W, H);
+                    let (bw, bh) = layout.window_size();
+                    let view = crate::view::View::fit((bw as f32, bh as f32), window);
+                    let mut ed = MapEditor::new(MapFile::new());
+                    let screen = CanvasScreen { device_per_px: view.scale * device, points_per_px: view.scale, coarse };
+                    ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &layout);
+                    (ed, layout, view)
+                } else {
+                    big_editor(window, device, coarse)
+                };
+                for zoom_steps in 0..6 {
+                    for pan in [Vec2::new(0.0, 0.0), Vec2::new(-137.3, 61.7), Vec2::new(4000.0, -4000.0)] {
+                        ed.camera.fit();
+                        let vp = ed.viewport();
+                        let mid = Vec2::new(vp.area.0 * 0.37, vp.area.1 * 0.61);
+                        for _ in 0..zoom_steps {
+                            ed.camera.step(true, mid, &vp, &CanvasRules::of(&crate::tuning::Tuning::DEFAULT));
+                        }
+                        ed.camera.pan(pan, &vp, &CanvasRules::of(&crate::tuning::Tuning::DEFAULT));
+                        let mapping = camera::window_mapping(&ed.view_camera(&layout), &view, &layout);
+                        // Every cell the canvas shows, at its middle and
+                        // just inside its corners.
+                        let (cols, rows) = (ed.map().field_size().0 as i32 / 32, ed.map().field_size().1 as i32 / 32);
+                        for row in (0..rows).step_by(3) {
+                            for col in (0..cols).step_by(3) {
+                                let world = map::cell_to_world(col, row);
+                                for (dx, dy) in [(0.0, 0.0), (-15.0, -15.0), (15.0, 15.0), (15.0, -15.0)] {
+                                    let at = mapping.to_window(Vec2::new(world.x + dx, world.y + dy));
+                                    let a = mapping.area;
+                                    if at.x < a.x || at.y < a.y || at.x >= a.x + a.width || at.y >= a.y + a.height {
+                                        continue;
+                                    }
+                                    let bitmap = view.to_bitmap(at);
+                                    let w = Vec2::new(world.x + dx, world.y + dy);
+                                    let inside = w.x >= 0.0 && w.y >= 0.0 && w.x < ed.map().field_size().0 && w.y < ed.map().field_size().1;
+                                    let got = ed.cell_at(bitmap, &layout);
+                                    if inside {
+                                        assert_eq!(got, Some((col, row)), "{window:?} arena={arena} steps={zoom_steps} pan={pan:?} at {at:?}");
+                                    } else {
+                                        assert_eq!(got, None, "past the field's edge paints nothing");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// What a drag across the 96 x 54 study map costs, a cell a frame: the
+    /// cell painted, then the floor shade the next frame draws. Prints;
+    /// run with `--ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn a_stroke_across_the_study_map_timing() {
+        let map = MapFile::load(std::path::Path::new("maps/study/frontier.toml")).expect("the study map");
+        let mut ed = MapEditor::new(map);
+        let _ = ed.ground().shade();
+        ed.select_tool(Tool::Wall(Material::Brick));
+        let row = 27;
+        let start = std::time::Instant::now();
+        let mut paint = std::time::Duration::ZERO;
+        let mut shade = std::time::Duration::ZERO;
+        let t = std::time::Instant::now();
+        ed.begin_stroke((0, row), false);
+        paint += t.elapsed();
+        let t = std::time::Instant::now();
+        let _ = ed.ground().shade();
+        shade += t.elapsed();
+        for col in 1..96 {
+            let t = std::time::Instant::now();
+            ed.drag_to((col, row));
+            paint += t.elapsed();
+            let t = std::time::Instant::now();
+            let _ = ed.ground().shade();
+            shade += t.elapsed();
+        }
+        ed.finish_stroke();
+        let total = start.elapsed();
+        eprintln!(
+            "stroke of 96 cells on 96 x 54: total {:.1} ms, {:.2} ms a cell (paint {:.2} ms, shade {:.2} ms)",
+            total.as_secs_f64() * 1e3,
+            total.as_secs_f64() * 1e3 / 96.0,
+            paint.as_secs_f64() * 1e3 / 96.0,
+            shade.as_secs_f64() * 1e3 / 96.0
+        );
     }
 
     #[test]

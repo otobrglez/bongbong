@@ -1877,6 +1877,46 @@ tunables! {
         camera_edge_ease_px: f32 = 48.0 in 0.0 ..= 512.0;
     }
 
+    group builder {
+        /// The builder's own camera (`editor/camera.rs`,
+        /// docs/large-maps-follow-camera.md section 9): how much one wheel
+        /// notch or one `+`/`-` press zooms the canvas, as a ratio. On a
+        /// coarse screen (under `view_fine_ppi`) the step lands on the
+        /// nearest whole-block scale past it, so the 2 px blocks stay
+        /// whole on the glass.
+        builder_zoom_step: f32 = 1.25 in 1.05 ..= 2.0;
+        /// The largest a cell is drawn when zoomed in, in points on the
+        /// glass (128 is about 20 mm on a phone).
+        builder_zoom_max_cell_pt: f32 = 128.0 in 32.0 ..= 512.0;
+        /// How far a finger moves on the glass, in points, before a touch
+        /// is a drag: a finger resting on the canvas paints nothing, and a
+        /// two- or three-finger tap stays a tap.
+        builder_touch_slop_pt: f32 = 10.0 in 0.0 ..= 48.0;
+        /// How long a tap may last, in seconds: one finger paints a cell
+        /// (or zooms in, `builder_paint_min_cell_mm`), two undo, three
+        /// redo. A finger held longer without moving does nothing.
+        builder_tap_seconds: f32 = 0.35 in 0.05 ..= 1.5;
+        /// The paint threshold: where a cell is drawn smaller than this on
+        /// the glass, in millimetres, a finger cannot hit one cell, so a
+        /// one-finger tap zooms in (`builder_tap_zoom_cell_mm`) and a
+        /// drag pans instead of painting. Touch only - a mouse paints at
+        /// any size. 0 always paints.
+        builder_paint_min_cell_mm: f32 = 6.0 in 0.0 ..= 20.0;
+        /// The cell a zooming tap brings the canvas to, in millimetres on
+        /// the glass, about the tapped point.
+        builder_tap_zoom_cell_mm: f32 = 9.0 in 3.0 ..= 30.0;
+        /// Edge scroll: a stroke whose pointer comes within this many
+        /// points of the canvas's edge scrolls the view toward that edge
+        /// while it is held, so a long wall needs no pan in the middle.
+        /// 0 turns it off.
+        builder_edge_scroll_pt: f32 = 40.0 in 0.0 ..= 160.0;
+        /// How fast edge scroll moves the view at the very edge, in points
+        /// per second; it ramps up from nothing across the margin.
+        builder_edge_scroll_pt_per_s: f32 = 600.0 in 0.0 ..= 4000.0;
+        /// How fast a held arrow key pans the canvas, in points per second.
+        builder_key_pan_pt_per_s: f32 = 800.0 in 0.0 ..= 4000.0;
+    }
+
     group online {
         /// How far behind the server an online round is drawn, in
         /// milliseconds, at least (docs/online-coop-prd.md §4.5, §4.16,

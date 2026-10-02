@@ -236,12 +236,14 @@ refusal-room-closed = the room closed
 ## The builder (src/editor/mod.rs, src/editor/render.rs)
 
 # The build bar, 18 px: BUILD in 64 px, FILE and MAP in 42 px beside a
-# caret (about 4 letters), UNDO/REDO in 10 px inside 40 px buttons.
+# caret (about 4 letters), UNDO/REDO/FIT in 10 px inside 40 px buttons.
 editor-build = BUILD
 editor-undo = UNDO
 editor-redo = REDO
 editor-file = FILE
 editor-map = MAP
+# The camera back to the whole canvas.
+editor-fit = FIT
 # The status line's fallback before a category is active.
 editor-tool = TOOL
 

@@ -8,7 +8,7 @@
 
 use crate::tuning::tuning;
 use crate::ai::Intent;
-use crate::editor::{BuilderInput, CliOverrides, EditorTextures};
+use crate::editor::{BuilderInput, CanvasScreen, CliOverrides, EditorTextures};
 use crate::render::game::{Effects, Textures};
 use crate::hud::{self, leave_dialog_rects, players_dialog_rects, CornerButton, CornerShape, Corners, Fade, UiFrame, BAR_FILL};
 use crate::level_select::SelectInput;
@@ -208,7 +208,9 @@ fn framebuffer_ratio(rl: &RaylibHandle) -> f32 {
 /// the whole window, a bitmap pixel per world pixel (`FollowFrame`) -
 /// `Seating::Room` in a room's round, `Local` otherwise, the sight box the
 /// tuning table's. Play draws no bar: its HUD stands in the window's
-/// corners (`hud::corners`).
+/// corners (`hud::corners`). A field map's builder canvas is made to the
+/// window's shape with an arena's bar (`editor::camera::canvas_frame`), the
+/// builder's own camera choosing what of the map it shows.
 struct Presentation {
     /// The field it was made for, and the mode: a change of either makes it
     /// stale (`stale`).
@@ -250,6 +252,11 @@ impl Presentation {
             let t = tuning();
             (t.view_max_scale > 0.0).then(|| ScaleCap { max_scale: t.view_max_scale, snap_half: t.view_scale_snap != 0 })
         };
+        if mode == Driver::Build && session.builder.map().class().follows() {
+            let (layout, view) = crate::editor::camera::canvas_frame(window, cap);
+            let bitmap = layout.window_size();
+            return Presentation { field, mode, followed: None, pinned: None, layout, view, scene: bitmap, composite: bitmap };
+        }
         let (w, h) = layout.window_size();
         Presentation {
             field,
@@ -1255,6 +1262,9 @@ pub fn run(args: Args) {
     // a builder edit, and drawn in one call.
     let mut round_shade = crate::render::canvas::BlockTexture::default();
     let mut builder_shade = crate::render::canvas::BlockTexture::default();
+    // The builder's own scene target, for a canvas zoomed or a field map
+    // (`editor::render::BuilderScene`): made when first needed.
+    let mut builder_scene = crate::editor::render::BuilderScene::default();
     // iOS dev-tools builds report frame time to the console every few
     // seconds: the phone has no keyboard for the overlay cycle and its dev
     // server is not reachable from the Mac, so the console is the one
@@ -1726,19 +1736,38 @@ pub fn run(args: Args) {
                 while let Some(c) = rl.get_char_pressed() {
                     typed.push(c);
                 }
+                // The arrows pan the canvas while held, each the way it
+                // points.
+                let axis = |less: KeyboardKey, more: KeyboardKey| (rl.is_key_down(more) as i32 - rl.is_key_down(less) as i32) as f32;
                 let input = BuilderInput {
                     pointer: Some(pointer),
                     pressed,
                     held,
                     right_pressed: rl.is_mouse_button_pressed(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_RIGHT),
                     right_held: rl.is_mouse_button_down(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_RIGHT),
+                    middle_held: rl.is_mouse_button_down(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_MIDDLE),
+                    space_held: rl.is_key_down(KeyboardKey::KEY_SPACE),
                     wheel: rl.get_mouse_wheel_move(),
+                    zoom_in: rl.is_key_pressed(KeyboardKey::KEY_EQUAL) || rl.is_key_pressed(KeyboardKey::KEY_KP_ADD),
+                    zoom_out: rl.is_key_pressed(KeyboardKey::KEY_MINUS) || rl.is_key_pressed(KeyboardKey::KEY_KP_SUBTRACT),
+                    pan_keys: crate::math::Vec2::new(
+                        axis(KeyboardKey::KEY_LEFT, KeyboardKey::KEY_RIGHT),
+                        axis(KeyboardKey::KEY_UP, KeyboardKey::KEY_DOWN),
+                    ),
                     escape: rl.is_key_pressed(KeyboardKey::KEY_ESCAPE),
                     enter: rl.is_key_pressed(KeyboardKey::KEY_ENTER),
                     backspace: rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE),
                     undo: ctrl && rl.is_key_pressed(KeyboardKey::KEY_Z),
                     redo: ctrl && rl.is_key_pressed(KeyboardKey::KEY_Y),
                     typed,
+                    dt,
+                    // The screen the canvas is measured on: its zoom steps
+                    // in device pixels, its touch sizes in points.
+                    screen: Some(CanvasScreen {
+                        device_per_px: view.scale * framebuffer_ratio(rl),
+                        points_per_px: view.scale / window_units_per_point(rl),
+                        coarse: screen(rl).ppi < tuning().view_fine_ppi,
+                    }),
                 };
                 if tab {
                     session.toggle();
@@ -1770,17 +1799,18 @@ pub fn run(args: Args) {
             touch.update(&touch_points, &layout, steer_right, dt);
             clock.reset();
             carried = Input::default();
-            // The builder shows its whole canvas, whatever the map's class.
+            // The builder shows its canvas through its own camera.
             #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
             if let Some(dev) = &mut dev {
-                let camera = Camera::whole(plan.field);
-                dev.publish_camera(crate::follow::CameraReport { mode: crate::follow::CameraMode::Whole, camera, layout, view, follow: None });
+                let camera = session.builder.view_camera(&layout);
+                dev.publish_camera(crate::follow::CameraReport { mode: crate::follow::CameraMode::Build, camera, layout, view, follow: None });
             }
             let shade = builder_shade.sync(rl, thread, session.builder.ground().shade());
             session.builder.render(
                 rl,
                 thread,
                 &mut composite,
+                &mut builder_scene,
                 &view,
                 BAR_FILL,
                 &layout,

@@ -8,6 +8,7 @@
 use sola_raylib::prelude::*;
 
 use super::*;
+use super::camera::{scene_plan, window_mapping};
 use crate::text::{keys, text};
 use crate::canvas::Sheet;
 use crate::frog::FrogAnim;
@@ -36,6 +37,11 @@ const CARET_W: i32 = 10;
 const DROPDOWN_TEXT_X: i32 = 48;
 const SETTINGS_VALUE_X: i32 = 180;
 const SETTINGS_LABEL_SIZE: i32 = 16;
+
+/// What the canvas area shows where the map is not: past its edges when
+/// the whole of a field map is shown, and under the field before the
+/// ground is drawn.
+const CANVAS_FILL: Color = Color::new(30, 30, 34, 255);
 
 /// Where a TANK row shows the chassis it has picked: a tank frame's 32 px
 /// (`TANK_FRAME_SIZE`, one sheet pixel each), centred on the row and
@@ -118,6 +124,30 @@ pub struct EditorTextures<'a> {
     pub shade: Option<(u64, &'a Texture2D)>,
 }
 
+/// The builder's own scene target: the canvas drawn at a texel per world
+/// pixel (`camera::scene_plan`) whenever the view is not the whole field
+/// at its own size. `app.rs` holds one for the session; it is made the
+/// first time it is needed, grown when a bigger view needs more, and made
+/// again smaller when it holds four times what the view needs.
+#[derive(Default)]
+pub struct BuilderScene {
+    held: Option<(RenderTexture2D, (i32, i32))>,
+}
+
+impl BuilderScene {
+    /// The target, holding at least `need` texels.
+    fn target(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, need: (i32, i32)) -> Option<&mut RenderTexture2D> {
+        let need = (need.0.max(1), need.1.max(1));
+        let fits = |size: (i32, i32)| size.0 >= need.0 && size.1 >= need.1 && size.0 * size.1 <= 4 * need.0 * need.1;
+        if !self.held.as_ref().is_some_and(|(_, size)| fits(*size)) {
+            self.held = None;
+            let texture = rl.load_render_texture(thread, need.0 as u32, need.1 as u32).ok()?;
+            self.held = Some((texture, need));
+        }
+        self.held.as_mut().map(|(texture, _)| texture)
+    }
+}
+
 /// The builder's `Sheet` lookup, for the `ground::draw` it shares with the
 /// game. It holds the sheets a map can show at rest; a sheet only a live
 /// round draws from (damage, tracks, blasts, the frog's other clips) is a
@@ -164,26 +194,81 @@ impl Sheets for EditorTextures<'_> {
 }
 impl MapEditor {
     /// The field cell under the last pointer position, when that is on
-    /// the field and not on chrome - what the hover highlight and the
-    /// cursor readout show.
+    /// the canvas and not on chrome - what the hover highlight and the
+    /// cursor readout show, through the camera like every press.
     fn cursor_cell(&self, layout: &Layout) -> Option<(i32, i32)> {
-        let pointer = self.pointer?;
-        let (width, height) = (layout.field.w, layout.field.h);
-        let m = layout.to_field(pointer);
-        if self.point_on_ui(pointer, layout) || m.x < 0.0 || m.x >= width || m.y < 0.0 || m.y >= height {
-            return None;
-        }
-        Some(map::world_to_cell(m))
+        self.cell_at(self.pointer?, layout)
     }
 
-    /// Draw the whole builder: ground, placed objects, hover highlight
-    /// through a `Camera2D` at the field origin (so every cell position
-    /// stays the world position the map format uses), then the bar and
-    /// any open popup in window space on top.
-    /// Draw the builder into `composite` (the bitmap: the bar over the
-    /// field, `layout.window_size()` in size) and put that on the window
-    /// through `view`, exactly as `Game::render` does for a round.
+    /// Draw the builder and put it on the window through `view`. At FIT on
+    /// an arena - the camera `Camera::whole` over the field's own bitmap -
+    /// the canvas, the bar and any open popup are drawn into `composite`
+    /// (the bitmap: the bar over the field, `layout.window_size()` in size)
+    /// and that is presented, exactly as `Game::render` does for an arena's
+    /// round. Any other view draws the canvas into `scene` at a texel per
+    /// world pixel (`scene_plan`), the way a round draws its world, and
+    /// puts the view's texels straight onto the window's canvas area
+    /// (`window_mapping`), so a whole-block zoom keeps its blocks whole on
+    /// the glass; the bar and the popups go over it.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
+        &self,
+        rl: &mut RaylibHandle,
+        thread: &RaylibThread,
+        composite: &mut RenderTexture2D,
+        scene: &mut BuilderScene,
+        view: &crate::view::View,
+        backdrop: Color,
+        layout: &Layout,
+        textures: &EditorTextures,
+    ) {
+        let cursor = self.cursor_cell(layout);
+        // A clock read, not an input: the builder has no round clock, and
+        // the wall clock animates the water and turns a placed portal so
+        // the author sees what a round will show.
+        let time = rl.get_time() as f32;
+        let camera = self.view_camera(layout);
+        let field = self.map.field_size();
+        if camera == crate::view::Camera::whole(field) && (layout.field.w, layout.field.h) == field {
+            self.render_whole(rl, thread, composite, view, backdrop, layout, textures, cursor, time);
+            return;
+        }
+        let plan = scene_plan(&camera);
+        // Room for the view at FIT too, which is the most a zoom of this
+        // map in this window ever needs: a pinch never reallocates.
+        let mut fit = self.camera;
+        fit.fit();
+        let most = scene_plan(&fit.view(&self.viewport_in(layout))).size;
+        let Some(target) = scene.target(rl, thread, (plan.size.0.max(most.0), plan.size.1.max(most.1))) else {
+            return;
+        };
+        let cull = camera.cull();
+        let in_target = Camera2D { offset: Vector2::new(0.0, 0.0), target: plan.origin.into(), rotation: 0.0, zoom: plan.zoom };
+        rl.draw_texture_mode(thread, target, |mut d| {
+            d.clear_background(CANVAS_FILL);
+            d.draw_mode2D(in_target, |mut d, _| self.draw_canvas(&mut d, textures, time, cursor, cull));
+        });
+        // A render texture reads back bottom-up.
+        let height = target.texture.height as f32;
+        let s = plan.source;
+        let source = Rectangle::new(s.x, height - s.y - s.height, s.width, -s.height);
+        let area = window_mapping(&camera, view, layout).area;
+        let base = Camera2D { offset: view.offset.into(), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: view.scale };
+        rl.draw(thread, |mut d| {
+            d.clear_background(Color::BLACK);
+            crate::render::view::letterbox(&mut d, view, backdrop);
+            d.draw_texture_pro(&*target, source, area, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            d.draw_mode2D(base, |mut d, _| {
+                self.draw_status_line(&mut d, cursor, EDITOR_TOOLBAR_MARGIN, layout.field.y + layout.field.h - 22.0);
+                self.draw_chrome(&mut d, layout, textures, cursor);
+            });
+        });
+    }
+
+    /// The builder at FIT on an arena: the canvas, the bar and the popups
+    /// into the bitmap, then the bitmap onto the window.
+    #[allow(clippy::too_many_arguments)]
+    fn render_whole(
         &self,
         rl: &mut RaylibHandle,
         thread: &RaylibThread,
@@ -192,13 +277,10 @@ impl MapEditor {
         backdrop: Color,
         layout: &Layout,
         textures: &EditorTextures,
+        cursor: Option<(i32, i32)>,
+        time: f32,
     ) {
-        let (width, height) = (layout.field.w, layout.field.h);
-        let cursor = self.cursor_cell(layout);
-        // A clock read, not an input: the builder has no round clock, and
-        // the wall clock animates the water and turns a placed portal so
-        // the author sees what a round will show.
-        let time = rl.get_time() as f32;
+        let height = layout.field.h;
         let camera = Camera2D {
             offset: layout.field_origin().into(),
             target: Vector2::new(0.0, 0.0),
@@ -206,14 +288,71 @@ impl MapEditor {
             zoom: 1.0,
         };
         rl.draw_texture_mode(thread, composite, |mut d| {
-        d.clear_background(Color::new(30, 30, 34, 255));
+            d.clear_background(CANVAS_FILL);
+            d.draw_mode2D(camera, |mut d, _| {
+                self.draw_canvas(&mut d, textures, time, cursor, None);
+                self.draw_status_line(&mut d, cursor, EDITOR_TOOLBAR_MARGIN, height - 22.0);
+            });
+            self.draw_chrome(&mut d, layout, textures, cursor);
+        });
+        crate::render::view::present(rl, thread, composite, view, backdrop);
+    }
 
-        d.draw_mode2D(camera, |mut d, _| {
+    /// The bar and the open popup, in bitmap pixels.
+    fn draw_chrome(&self, d: &mut impl RaylibDraw, layout: &Layout, textures: &EditorTextures, cursor: Option<(i32, i32)>) {
+        self.draw_bar(d, layout, textures, cursor);
+        match &self.popup {
+            None => {}
+            Some(Popup::Dropdown(category)) => self.draw_dropdown(d, layout, textures, *category),
+            Some(Popup::Settings) => self.draw_settings(d, layout, textures),
+            Some(Popup::File) => Self::draw_file_menu(d, layout),
+            Some(Popup::Load { entries, scroll }) => Self::draw_load_list(d, layout, entries, *scroll),
+            Some(Popup::Save { name }) => {
+                let panel = Self::save_prompt_rect(layout);
+                draw_panel(d, panel);
+                d.draw_text(&text().get(keys::EDITOR_SAVE_AS), (panel.x + 12.0) as i32, (panel.y + 10.0) as i32, 16, TEXT);
+                d.draw_text(&format!("{name}_"), (panel.x + 12.0) as i32, (panel.y + 34.0) as i32, 18, TEXT);
+                d.draw_text(
+                    &text().get(keys::EDITOR_SAVE_HINT),
+                    (panel.x + 12.0) as i32,
+                    (panel.y + 58.0) as i32,
+                    12,
+                    Color::GRAY,
+                );
+            }
+        }
+    }
+
+    /// The status line, bottom-left of the canvas at (`x`, `y`): the
+    /// active tool, the cell under the pointer (or the last tapped one),
+    /// and any message.
+    fn draw_status_line(&self, d: &mut impl RaylibDraw, cursor: Option<(i32, i32)>, x: f32, y: f32) {
+        let mut line = format!("{}: {}", self.active_category().map_or_else(|| text().get(keys::EDITOR_TOOL), |c| c.label()), short_label(self.active_tool));
+        if let Some((col, row)) = cursor {
+            let under = self.map.cell(col, row).map(cell_label).unwrap_or_default();
+            line.push_str(&format!("   {col},{row} {under}"));
+        }
+        if let Some(status) = &self.status {
+            line.push_str(&format!("   {status}"));
+        }
+        d.draw_text(&line, x as i32, y as i32, 14, Color::LIGHTGRAY);
+    }
+
+    /// The canvas in world pixels - ground, placed objects and the hover
+    /// highlight - for a `Camera2D` that puts the world where the frame
+    /// shows it. `cull` is the world rectangle worth drawing
+    /// (`Camera::cull`); `None` draws everything.
+    fn draw_canvas<D: RaylibDraw>(&self, d: &mut D, textures: &EditorTextures, time: f32, cursor: Option<(i32, i32)>, cull: Option<Rectangle>) {
+        let (width, height) = self.map.field_size();
+        let culled = |pos: Position, reach: f32| {
+            cull.is_some_and(|r| pos.x < r.x - reach || pos.y < r.y - reach || pos.x > r.x + r.width + reach || pos.y > r.y + r.height + reach)
+        };
+        {
             if self.plain_canvas {
                 d.draw_rectangle(0, 0, width as i32, height as i32, Color::WHITE);
             } else {
-                ground::draw(&mut GpuCanvas::new(&mut d, textures), &self.ground, self.map.theme, time);
-                ground::draw_shade(&mut GpuCanvas::new(&mut d, textures), &self.ground);
+                ground::draw(&mut GpuCanvas::culled(&mut *d, textures, cull), &self.ground, self.map.theme, time);
+                ground::draw_shade(&mut GpuCanvas::new(&mut *d, textures), &self.ground);
             }
 
             // Portals first, under every other cell: three cells of art on
@@ -227,7 +366,10 @@ impl MapEditor {
             let tint = if active { Color::WHITE } else { Color::new(255, 255, 255, 110) };
             for &(col, row) in &portals {
                 let pos = map::cell_to_world(col, row);
-                draw_portal(&mut GpuCanvas::new(&mut d, textures), pos, time, tint);
+                if culled(pos, 0.0) {
+                    continue;
+                }
+                draw_portal(&mut GpuCanvas::new(&mut *d, textures), pos, time, tint);
                 if !active {
                     let size = OBSTACLE_GRID_SIZE;
                     d.draw_rectangle_lines_ex(Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size), 2.0, GATE_COLOR);
@@ -236,6 +378,11 @@ impl MapEditor {
 
             for (col, row, obj) in self.map.iter_cells() {
                 let pos = map::cell_to_world(col, row);
+                // A tower's reach ring spreads far past its cell.
+                let reach = obj.tower().map_or(0.0, |(kind, _)| kind.range());
+                if culled(pos, reach) {
+                    continue;
+                }
                 let size = OBSTACLE_GRID_SIZE;
                 let dest = Rectangle::new(pos.x, pos.y, size, size);
                 let origin = Vector2::new(size / 2.0, size / 2.0);
@@ -293,24 +440,24 @@ impl MapEditor {
                         d.draw_texture_pro(textures.frog_idle, src, dest, origin, 0.0, Color::WHITE);
                     }
                     CellObject::Start => {
-                        draw_player_ring(&mut d, pos, size / 2.0, 0);
+                        draw_player_ring(d, pos, size / 2.0, 0);
                         for src in crate::tank::icon_source_recs(0) {
                             d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, Color::WHITE);
                         }
                     }
                     CellObject::Start2 => {
-                        draw_player_ring(&mut d, pos, size / 2.0, 1);
+                        draw_player_ring(d, pos, size / 2.0, 1);
                         for src in crate::tank::icon_source_recs(1) {
                             d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, Color::WHITE);
                         }
                     }
                     CellObject::EnemyFrog => {
-                        draw_enemy_ring(&mut d, pos, size / 2.0);
+                        draw_enemy_ring(d, pos, size / 2.0);
                         let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
                         d.draw_texture_pro(textures.frog_idle, src, dest, origin, 0.0, Color::WHITE);
                     }
                     CellObject::Gate => match gate_inward(pos, width, height) {
-                        Some(inward) => draw_gate_chevron(&mut d, pos, size, inward),
+                        Some(inward) => draw_gate_chevron(d, pos, size, inward),
                         None => d.draw_rectangle_lines_ex(
                             Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size),
                             2.0,
@@ -339,45 +486,9 @@ impl MapEditor {
                     Color::new(255, 255, 255, 160),
                 );
             }
-
-            // The status line, bottom-left of the field: the active tool,
-            // the cell under the pointer (or the last tapped one), and any
-            // message.
-            let mut line = format!("{}: {}", self.active_category().map_or_else(|| text().get(keys::EDITOR_TOOL), |c| c.label()), short_label(self.active_tool));
-            if let Some((col, row)) = cursor {
-                let under = self.map.cell(col, row).map(cell_label).unwrap_or_default();
-                line.push_str(&format!("   {col},{row} {under}"));
-            }
-            if let Some(status) = &self.status {
-                line.push_str(&format!("   {status}"));
-            }
-            d.draw_text(&line, EDITOR_TOOLBAR_MARGIN as i32, (height - 22.0) as i32, 14, Color::LIGHTGRAY);
-        });
-
-        self.draw_bar(&mut d, layout, textures, cursor);
-        match &self.popup {
-            None => {}
-            Some(Popup::Dropdown(category)) => self.draw_dropdown(&mut d, layout, textures, *category),
-            Some(Popup::Settings) => self.draw_settings(&mut d, layout, textures),
-            Some(Popup::File) => Self::draw_file_menu(&mut d, layout),
-            Some(Popup::Load { entries, scroll }) => Self::draw_load_list(&mut d, layout, entries, *scroll),
-            Some(Popup::Save { name }) => {
-                let panel = Self::save_prompt_rect(layout);
-                draw_panel(&mut d, panel);
-                d.draw_text(&text().get(keys::EDITOR_SAVE_AS), (panel.x + 12.0) as i32, (panel.y + 10.0) as i32, 16, TEXT);
-                d.draw_text(&format!("{name}_"), (panel.x + 12.0) as i32, (panel.y + 34.0) as i32, 18, TEXT);
-                d.draw_text(
-                    &text().get(keys::EDITOR_SAVE_HINT),
-                    (panel.x + 12.0) as i32,
-                    (panel.y + 58.0) as i32,
-                    12,
-                    Color::GRAY,
-                );
-            }
         }
-        });
-        crate::render::view::present(rl, thread, composite, view, backdrop);
     }
+
     /// The HUD bar in build mode (docs/game-editor-fusion.md section 7):
     /// `BUILD`, the map's name with a `*` while edited, the five category
     /// buttons, ERASE, UNDO, REDO, MAP, the cursor readout, the dev SAVE
@@ -410,6 +521,9 @@ impl MapEditor {
         let file_open = matches!(self.popup, Some(Popup::File | Popup::Load { .. } | Popup::Save { .. }));
         draw_menu_button(d, Self::file_rect(layout), &text().get(keys::EDITOR_FILE), file_open);
         draw_menu_button(d, Self::map_rect(layout), &text().get(keys::EDITOR_MAP), matches!(self.popup, Some(Popup::Settings)));
+        // FIT, dim while the whole canvas is what is shown.
+        let fit_color = if self.camera.is_fit() { DIM } else { TEXT };
+        draw_small_button(d, Self::fit_rect(layout), &text().get(keys::EDITOR_FIT), fit_color);
 
         let _ = cursor; // the readout is the field's status line, see `render`
         crate::render::hud::draw_mode_button(d, panel, &text().get(keys::BUTTON_PLAY), BUILD_ACCENT);
@@ -920,9 +1034,10 @@ mod bar_tests {
         assert!(SLOT_UNDO + SMALL_BUTTON_W <= SLOT_REDO);
         assert!(SLOT_REDO + SMALL_BUTTON_W <= SLOT_FILE);
         assert!(SLOT_FILE + MAP_BUTTON_W <= SLOT_MAP);
+        assert!(SLOT_MAP + MAP_BUTTON_W <= SLOT_FIT);
         let layout = Layout::for_field(W, H);
         let play = mode_button_rect(layout.panel);
-        assert!(SLOT_MAP + MAP_BUTTON_W <= play.x, "MAP runs into PLAY");
+        assert!(SLOT_FIT + SMALL_BUTTON_W <= play.x, "FIT runs into PLAY");
         // The caret sits clear of the icon and inside the button's box.
         assert!(CATEGORY_CARET_X as f32 >= ICON_PX, "the caret overlaps the icon");
         assert!(CATEGORY_CARET_X + CARET_W <= (CATEGORY_W - BUTTON_GAP) as i32, "caret leaves the button");

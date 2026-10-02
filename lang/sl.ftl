@@ -176,6 +176,7 @@ refusal-room-closed = soba se je zaprla
 editor-build = GRADI
 editor-file = MENI
 editor-map = IGRA
+editor-fit = VSE
 editor-tool = ORODJE
 
 category-wall = ZID

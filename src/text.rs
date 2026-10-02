@@ -193,6 +193,7 @@ keys! {
     EDITOR_REDO = "editor-redo";
     EDITOR_FILE = "editor-file";
     EDITOR_MAP = "editor-map";
+    EDITOR_FIT = "editor-fit";
     EDITOR_TOOL = "editor-tool";
     CATEGORY_WALL = "category-wall";
     CATEGORY_PROP = "category-prop";
@@ -823,12 +824,14 @@ mod text_tests {
             lobby_button(keys::LOBBY_LEAVE),
             (keys::LOBBY_KICK, HUD_TEXT_SIZE, LOBBY_KICK_W as i32 - 8, vec![]),
             // The build bar: BUILD before the name slot, FILE and MAP
-            // beside their carets, UNDO and REDO in their small buttons.
+            // beside their carets, UNDO, REDO and FIT in their small
+            // buttons.
             (keys::EDITOR_BUILD, HUD_TEXT_SIZE, 64, vec![]),
             (keys::EDITOR_FILE, HUD_TEXT_SIZE, 42, vec![]),
             (keys::EDITOR_MAP, HUD_TEXT_SIZE, 42, vec![]),
             (keys::EDITOR_UNDO, HUD_LABEL_SIZE, 36, vec![]),
             (keys::EDITOR_REDO, HUD_LABEL_SIZE, 36, vec![]),
+            (keys::EDITOR_FIT, HUD_LABEL_SIZE, 36, vec![]),
             (keys::FILE_LOAD, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE_AS, HUD_TEXT_SIZE, 168, vec![]),

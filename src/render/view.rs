@@ -45,11 +45,20 @@ pub fn present_into(d: &mut impl RaylibDraw, composite: &RenderTexture2D, view: 
     let source = Rectangle::new(0.0, 0.0, view.bitmap.0, -view.bitmap.1);
     let dest = view.dest();
     d.clear_background(Color::BLACK);
-    if !view.is_identity() {
-        d.draw_rectangle(0, 0, view.window.0 as i32, view.window.1 as i32, backdrop);
-        d.draw_rectangle_lines_ex(Rectangle::new(dest.x - 1.0, dest.y - 1.0, dest.width + 2.0, dest.height + 2.0), 1.0, FRAME);
-    }
+    letterbox(d, view, backdrop);
     d.draw_texture_pro(composite, source, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+}
+
+/// The window round a bitmap that does not fill it: the margins in
+/// `backdrop` and a one-pixel frame round where the bitmap goes. Nothing
+/// for a window the bitmap's own size.
+pub fn letterbox(d: &mut impl RaylibDraw, view: &View, backdrop: Color) {
+    if view.is_identity() {
+        return;
+    }
+    let dest = view.dest();
+    d.draw_rectangle(0, 0, view.window.0 as i32, view.window.1 as i32, backdrop);
+    d.draw_rectangle_lines_ex(Rectangle::new(dest.x - 1.0, dest.y - 1.0, dest.width + 2.0, dest.height + 2.0), 1.0, FRAME);
 }
 
 /// Put a followed view's world on the window (docs/large-maps-follow-camera.md

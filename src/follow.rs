@@ -692,6 +692,8 @@ pub enum CameraMode {
     Follow,
     /// A view the dev server's `camera` tool pinned.
     Pinned,
+    /// The builder's own camera over its canvas (`editor::camera`).
+    Build,
 }
 
 impl CameraMode {
@@ -701,6 +703,7 @@ impl CameraMode {
             CameraMode::Whole => "whole",
             CameraMode::Follow => "follow",
             CameraMode::Pinned => "pinned",
+            CameraMode::Build => "build",
         }
     }
 }
