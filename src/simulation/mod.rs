@@ -23,6 +23,7 @@ mod combat;
 mod command;
 mod comms;
 pub mod debug;
+mod director;
 mod engage;
 mod field;
 mod flame;
@@ -49,6 +50,7 @@ mod waves;
 mod weather_tests;
 mod weapons;
 
+pub use director::Pacing;
 pub use waves::{RollIn, WaveStatus};
 pub use weapons::{laser_reach, FlameJet};
 
@@ -662,6 +664,10 @@ pub struct Game {
     /// The wave scheduler (`waves.rs`): idle under the band plan apart
     /// from handing out owner slots.
     wave: WaveState,
+    /// The pacing director (`director`): how hard each seat is pressed,
+    /// and from that the breather before a field map's next wave. Read
+    /// and written by `wave_phase` on a field map's wave round only.
+    director: director::Director,
     /// Seconds the round stays frozen behind the opening mission banner.
     /// `update` ticks nothing else while it is positive; a move or fire
     /// input ends it early.
@@ -1265,6 +1271,7 @@ impl Game {
         };
         self.band_enemy_count = enemy_count;
         self.wave = WaveState::new(self.first_enemy_slot() + enemy_count);
+        self.director = director::Director::default();
 
         // Terrain legality is the nav grid's `usable` test (see
         // `battlefield::enemy_spawn_legal`); the frog is not down yet, so
@@ -8345,6 +8352,81 @@ cells."30,20" = { kind = "frog" }
         }
         let at = started.expect("seat 1 never started back in");
         assert!(at.x > w, "seat 1 comes back through the east gate, beside its team-mate: {at:?}");
+    }
+
+    // --- The pacing director (`simulation::director`) ---
+
+    /// `field_waves(1)` with wave 1 called, rolled in and destroyed where
+    /// it came through, far from the seat: the frame the breather before
+    /// wave 2 starts.
+    fn field_breather() -> Game {
+        let mut game = field_waves(1);
+        let (slot, _) = field_step_until_entered(&mut game, 600);
+        game.debug_kill(slot).expect("wave 1's tank");
+        for _ in 0..120 {
+            field_step(&mut game, Input::default());
+            if game.wave_banner().is_some() {
+                return game;
+            }
+        }
+        panic!("clearing wave 1 started no breather");
+    }
+
+    /// Frames until wave `wave` is called, at most `limit`, with the
+    /// banner up on every one of them before it.
+    fn frames_until_wave(game: &mut Game, wave: u32, limit: u32) -> u32 {
+        for frame in 1..=limit {
+            field_step(game, Input::default());
+            if wave_started(game) == Some(wave) {
+                return frame;
+            }
+            assert!(game.wave_banner().is_some(), "frame {frame}: the banner went before wave {wave} came");
+        }
+        panic!("wave {wave} never came within {limit} frames");
+    }
+
+    #[test]
+    fn a_calm_field_maps_breather_runs_short() {
+        let t = tuning();
+        let mut game = field_breather();
+        assert!(game.pacing().team <= t.director_calm, "nothing has touched the seat: {:?}", game.pacing());
+        // Nothing is happening, so the breather runs at the calm rate.
+        let frames = frames_until_wave(&mut game, 2, 600) as f32 / 60.0;
+        let calm = (t.wave_gap_seconds / t.director_calm_rate).max(t.director_breather_min_seconds);
+        assert!(calm < t.wave_gap_seconds, "the case this is about");
+        assert!((frames - calm).abs() <= 0.1, "a calm breather of {calm:.2}s took {frames:.2}s");
+    }
+
+    #[test]
+    fn the_director_holds_a_wave_while_the_team_is_at_its_peak_and_rests_it_after() {
+        let t = tuning();
+        let mut game = field_breather();
+        // Three enemies inside the seat's sight box: the team at its peak.
+        let player = player_pos(&game);
+        let crowd: Vec<usize> = (0..3)
+            .map(|i| {
+                let at = Position::new(player.x - 300.0, player.y - 96.0 + 96.0 * i as f32);
+                assert!(crate::ai::in_sight_box(player, at));
+                game.debug_spawn_enemy(at, Some(1), None).expect("an enemy spawns")
+            })
+            .collect();
+        // Ten seconds of fight - far past the plain breather - and wave 2
+        // is held the whole time, the breather owing the rest a peak does.
+        for frame in 0..600 {
+            field_step(&mut game, Input::default());
+            assert_eq!(wave_started(&game), None, "frame {frame}: wave 2 came in the middle of the fight");
+            let pacing = game.pacing();
+            assert!(pacing.team >= t.director_peak, "frame {frame}: {pacing:?}");
+            assert_eq!(game.wave_status().and_then(|w| w.next_in), Some(t.director_relax_seconds), "frame {frame}");
+        }
+        // The fight ends: the intensity falls under the peak, and from
+        // there the team rests `director_relax_seconds` before wave 2.
+        for slot in crowd {
+            game.debug_kill(slot).expect("a live enemy");
+        }
+        let seconds = frames_until_wave(&mut game, 2, 60 * 60) as f32 / 60.0;
+        let owed = (1.0 - t.director_peak) * t.director_fall_seconds + t.director_relax_seconds;
+        assert!((seconds - owed).abs() <= 1.0, "released after {seconds:.2}s, the rest owed was {owed:.2}s");
     }
 
     // --- Steering: lanes and turns (docs/large-maps-follow-camera.md

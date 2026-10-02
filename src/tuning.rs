@@ -1345,6 +1345,47 @@ tunables! {
         field_spawn_spread_candidates: u32 = 6 in 1 ..= 32;
     }
 
+    group director {
+        /// Field maps' wave rounds only: the pacing director
+        /// (`simulation::director`, docs/large-maps-follow-camera.md
+        /// section 12) paces the breather before each wave by how hard
+        /// the team is pressed - held while it is at its peak, stretched
+        /// to a rest after one, shortened while nothing happens. Off, a
+        /// field map's breather is `wave_gap_seconds`, as an arena's
+        /// always is.
+        director_enabled: bool = true in 0 ..= 1;
+        /// A seat's intensity (0 to 1) at or above this is the team at its
+        /// peak: the next wave waits, and a rest is owed once it passes.
+        director_peak: f32 = 0.8 in 0.05 ..= 1.0;
+        /// At or under this the team is calm - nothing is happening - and
+        /// with no rest owed the breather runs `director_calm_rate` times
+        /// as fast.
+        director_calm: f32 = 0.2 in 0.0 ..= 1.0;
+        /// The share of a pool lost at once that takes a seat from calm to
+        /// the top: its tank's health and shield (100 points), or the
+        /// players' frog's health (`frog_max_health`), which jolts every
+        /// seat. 0.35 is three or four enemy shells on the tank, one or two
+        /// on the frog's 40.
+        director_hurt_full: f32 = 0.35 in 0.01 ..= 4.0;
+        /// Live enemies inside a seat's sight box that hold its intensity
+        /// at the top; fewer hold it at their share.
+        director_crowd_full: f32 = 3.0 in 0.5 ..= 31.0;
+        /// Seconds a seat's intensity takes to fall from the top to
+        /// nothing once nothing jolts it and its box is empty.
+        director_fall_seconds: f32 = 10.0 in 0.1 ..= 120.0;
+        /// The rest a peak owes the team once it passes, in seconds: no
+        /// breather ends sooner after one.
+        director_relax_seconds: f32 = 12.0 in 0.0 ..= 120.0;
+        /// How many times as fast a breather runs down while the team is
+        /// calm and no rest is owed.
+        director_calm_rate: f32 = 2.0 in 1.0 ..= 10.0;
+        /// The shortest a breather may be, calm or not ...
+        director_breather_min_seconds: f32 = 2.0 in 0.0 ..= 60.0;
+        /// ... and the longest, holds included: past it the next wave
+        /// comes whatever the team is doing, so a round always goes on.
+        director_breather_max_seconds: f32 = 30.0 in 0.0 ..= 300.0;
+    }
+
     group portal {
         /// A tank whose centre comes this close (px) to a portal's anchor
         /// centre teleports (docs/teleporting.md). Also the portal's nav

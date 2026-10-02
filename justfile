@@ -117,7 +117,11 @@ probe-fields:
 # rounds each at a pinned seed. A round lasts exactly as long as its last
 # straggler keeps it waiting, and never-arrived counts one still out. Every
 # round is won; a tank's walk to the defence has a median of 11 s on both
-# maps, the longest 51 s on longwater and 86 s on the study map. Before
+# maps, the longest 40 s on longwater and 86 s on the study map (51 and 86
+# before the pacing director shortened the calm breathers, which re-timed
+# every wave after the first; the rounds now last 122 to 138 s on
+# longwater against 123 to 152, and 118 to 246 s on the study map against
+# 123 to 259). Before
 # lanes, 8 of longwater's ten rounds and 7 of the study map's still had a
 # tank out at seven minutes, the longest walks 147 and 149 s, and tanks
 # still walking after 339 and 378. Release: in a debug build the twenty

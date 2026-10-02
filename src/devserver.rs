@@ -1402,6 +1402,7 @@ impl DevServer {
             "mission": game.mission.name(),
             "spawn": game.spawn_plan,
             "wave": game.wave_status(),
+            "pacing": game.pacing(),
             "intro_seconds_left": game.intro_timer,
             "paused": snap.paused,
             "lockstep": self.lockstep,

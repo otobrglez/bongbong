@@ -651,10 +651,10 @@ living seats. On the study map, 30 AFK rounds, a wave tank's walk to the
 fight went from a median 14.8 s, p90 34.5 s and worst 47.5 s to 11.6 s,
 20.8 s and 30.2 s, and with every round run to two minutes a tick costs
 0.59 ms against 0.92. `just probe-fields` sweeps the study map and the
-five 40-wide levels. Not built: the pacing director, re-rolling a
-straggler through a nearer gate, and flow fields bounded to the bubble -
-the frame's routing grid, about 0.33 ms of the 0.59, is now most of a
-tick.
+five 40-wide levels. The waves are paced by a director (below). Not
+built: re-rolling a straggler through a nearer gate, and flow fields
+bounded to the bubble - the frame's routing grid, about 0.33 ms of the
+0.59, is now most of a tick.
 
 **The first field map** is `longwater` (`maps/longwater.toml`, free play,
 80 x 45; its header says how it plays): a fort on the south shore of a
@@ -747,6 +747,51 @@ builds alternated). A stranding of the other kind remains possible: a wave
 tank that portals to a pickup far from the fight can lose its alert there
 and drive home on its leash, as one did on the study map before the
 obstacle check re-timed that round - the pacing above, not the steering.
+
+**The pacing director** (`simulation::director`, the `director` tuning
+group) is Left 4 Dead's cycle of build-up, peak and relax, adapted to the
+waves of a field map. Each seat carries an intensity from 0 to 1, read
+from the round alone: what its tank loses jolts it up
+(`director_hurt_full` of its health and shield is the whole way, and the
+players' frog's losses, by the frog's own pool, jolt every seat), the
+live enemies inside its sight box hold it up (`director_crowd_full` of
+them hold it at the top), and with neither it falls back over
+`director_fall_seconds`. The team stands at its most pressed seat, and
+that paces the breather before the next wave. At its peak
+(`director_peak`) the breather stands still, so the next wave is held
+while the team fights the last - a wave that times out mid-fight waits
+for the fight; a peak owes the team `director_relax_seconds` of rest once
+it passes, and no breather ends before that is paid, so the breather
+after a hard fight stretches; with nothing owed and nothing happening
+(`director_calm`) it runs `director_calm_rate` times as fast; and it lasts
+`director_breather_min_seconds` to `director_breather_max_seconds`, holds
+included, so a round always goes on. No RNG, and an arena keeps its plain
+`wave_gap_seconds`. The breather's time left is what `RoundState` already
+carries, so a replica's `WAVE N` banner stays up through a hold, exactly
+as long as the room's (`net::rig`'s test of it).
+
+Measured over 30 rounds at seed 1000 on longwater and the study map, AFK
+and advancing, one seat, two and two at a room's `wave_size_scale` of
+1.5, it changes next to nothing: a round with seats that never fire back
+is lost in its first wave, 18 to 28 s in, before any breather comes, so
+first contact (9 to 12 s) and the outcomes read as before, but for the
+few rounds that outlived a wave's timeout (two seats on longwater: lost
+after 23.1 s against 23.6 AFK and 27.3 against 28.0 advancing). Where it
+shows is the probe's perfect defence (`--scenario defend`; the probe's
+`lulls:` line is the time between engagements): every wave is cleared
+and nothing ever presses the team, so nearly every breather is calm and
+runs at twice the pace. A round of longwater is won after 127.9 s
+against 135.6 (the median 126.1 against 133.7), its lulls a median 6.5 s
+against 8.6 and a p90 of 13.8 s against 15.4; the study map's after 151.6
+s against 158.3, its lulls a mean 8.9 s against 9.8 and a p90 of 13.6 s
+against 15.0 - and two of its thirty rounds did not finish in seven
+minutes where every round had: the waves that came sooner left
+stragglers the old timing did not. One is the stranding
+above, a tank that went through the town's portal to a pickup and back,
+lost its call and kept to its gate's leash in the north-east (seed
+0x3fe); the other a called tank riding column 74 north and south for five
+minutes, 800 px east of the seat and just out of its sight (0x3fd), the
+steering kind lanes did not reach.
 
 ## 13. Patterns from shipped games
 
@@ -906,8 +951,9 @@ thinking less, spawns and gates by walk outside every sight box,
 re-entry through the gate nearest the living seats, `just
 probe-fields`) and a first field map, free play rather than a level
 (`longwater`, section 12) and lanes, a turn a hull on the edge of its row
-can take (section 12) - the pacing director, stragglers re-rolled through
-a nearer gate and flow fields bounded to the seats are still to come.
+can take (section 12) and the pacing director (section 12) - stragglers
+re-rolled through a nearer gate and flow fields bounded to the seats are
+still to come.
 
 ## 15. Decisions
 

@@ -221,20 +221,27 @@ impl Game {
     /// The wave scheduler: the first wave on the first playing frame, the
     /// next when live enemies drop to `wave_next_when_alive` with the
     /// queue empty or `wave_timeout_seconds` after the current one, each
-    /// after a `wave_gap_seconds` breather. Queued tanks start their
-    /// roll-in `wave_stagger_seconds` apart while live enemies stay under
-    /// `wave_max_alive`, and a seat the wave is bringing back takes the
-    /// first of those windows.
+    /// after a `wave_gap_seconds` breather - which on a field map the
+    /// pacing director paces instead (`director`: held while the team is
+    /// at its peak, stretched to a rest after one, shortened while nothing
+    /// happens). Queued tanks start their roll-in `wave_stagger_seconds`
+    /// apart while live enemies stay under `wave_max_alive`, and a seat
+    /// the wave is bringing back takes the first of those windows.
     pub(super) fn wave_phase(&mut self, f: &mut Frame) {
         let SpawnPlan::Waves { waves, .. } = self.spawn_plan else { return };
         let (gap_seconds, timeout, next_when_alive, stagger_seconds, max_alive) = {
             let t = tuning();
             (t.wave_gap_seconds, t.wave_timeout_seconds, t.wave_next_when_alive, t.wave_stagger_seconds, t.wave_max_alive)
         };
+        // The team's intensity, on a field map with the director on.
+        let team = (self.field_map && tuning().director_enabled).then(|| self.observe_pressure(f.dt));
         if self.wave.called == 0 {
             self.call_wave(f);
         } else if self.wave.gap.is_some() {
-            self.tick_wave_banner(f.dt);
+            match (team, self.wave.gap) {
+                (Some(team), Some(left)) => self.wave.gap = Some(self.director.pace_breather(left, team, f.dt, &tuning())),
+                _ => self.tick_wave_banner(f.dt),
+            }
             if self.wave.gap == Some(0.0) {
                 self.wave.gap = None;
                 self.call_wave(f);
@@ -243,7 +250,8 @@ impl Game {
             self.wave.elapsed += f.dt;
             let cleared = self.live_enemy_count() <= next_when_alive && self.wave.pending.is_empty();
             if cleared || self.wave.elapsed >= timeout {
-                self.wave.gap = Some(gap_seconds);
+                let breather = if team.is_some() { self.director.breather_length(&tuning()) } else { gap_seconds };
+                self.wave.gap = Some(breather);
             }
         }
 

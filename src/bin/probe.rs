@@ -270,11 +270,20 @@ const PILEUP_FRAMES: u32 = 60; // 1s
 // ends quickly (post-grid-fix an AFK player can be dead inside ~6s) can
 // never false-flag: elapsed stays under NAV_GRACE_SECONDS alone.
 const NAV_GRACE_SECONDS: f32 = 10.0;
-// The `defend` scenario's reach: an enemy this close to a live seat or the
-// players' frog is destroyed. Past `enemy_attack_range` (340 px), so no
-// enemy ever gets near enough to attack what the defence guards.
+// The `defend` scenario's reach by default (`--defend-reach`): an enemy this
+// close to a live seat or the players' frog is destroyed. Past
+// `enemy_attack_range` (340 px), so no enemy ever gets near enough to
+// attack what the defence guards.
 const DEFEND_REACH_PX: f32 = 400.0;
 const NAV_STRETCH_MAX: f32 = 4.0;
+// --- Pacing: the time between engagements (`Lulls`) ---
+// A frame is in contact while a live enemy on the field stands within
+// `enemy_attack_range` of a live seat or the players' frog - within
+// the defence's reach under the `defend` scenario, which destroys it
+// there - and a lull is a stretch of frames with none between two such
+// frames. Shorter stretches are an enemy stepping in and out of range
+// mid-fight, not a pause in it.
+const LULL_MIN_SECONDS: f32 = 3.0;
 // --- Frame-invariant sanity bounds (kind=invariant) ---
 // Physics sanity rather than behavior: any violation is a hard bug (solver
 // explosion, tunneling through the boundary walls, NaN poisoning) with the
@@ -315,7 +324,7 @@ enum Scenario {
     /// `--frames 60 --log-every 1` to see the curve frame-by-frame.
     Brake,
     /// A perfect defence: the seats never move or fire, and every enemy
-    /// that comes within `DEFEND_REACH_PX` of a live seat or the players'
+    /// that comes within `--defend-reach` of a live seat or the players'
     /// frog is destroyed on the spot, through the normal kill path
     /// (`Game::debug_kill`). No enemy gets near enough to attack, so a round
     /// lasts until every enemy it calls has come to the fight - on a waves
@@ -395,6 +404,14 @@ struct Args {
     /// nearest live player, which is what the AI targets.
     #[arg(long = "players", default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=bongbong::MAX_SEATS as i64))]
     players: u8,
+
+    /// The `defend` scenario's reach (px): an enemy this close to a live
+    /// seat or the players' frog is destroyed. The default, 400, is past
+    /// `enemy_attack_range`, so nobody is ever attacked; inside it the
+    /// defence lets the enemies land a few shots first, which is what a
+    /// team under pressure looks like to the pacing director.
+    #[arg(long = "defend-reach", default_value_t = DEFEND_REACH_PX)]
+    defend_reach: f32,
 
     /// Two-player rounds: pin player 2's chassis (over the map's `tank2`
     /// key, else a random roll), like `--tank` for player 1.
@@ -529,16 +546,16 @@ fn intent_for_frame(scenario: Scenario, frame: u32) -> Intent {
 }
 
 /// The `defend` scenario's perfect defence: every enemy on the field within
-/// `DEFEND_REACH_PX` of a live seat or the players' frog is queued to die at
-/// the top of the next frame (`Game::debug_kill`), and the frame it got
-/// there is its arrival at the fight (`TankTrack::time_to_engage`).
-fn defend(game: &mut Game, tracks: &mut BTreeMap<usize, TankTrack>, frame: u32) {
+/// `reach` of a live seat or the players' frog is queued to die at the top
+/// of the next frame (`Game::debug_kill`), and the frame it got there is
+/// its arrival at the fight (`TankTrack::time_to_engage`).
+fn defend(game: &mut Game, tracks: &mut BTreeMap<usize, TankTrack>, frame: u32, reach: f32) {
     let snapshots = game.tank_snapshots();
     let mut guarded: Vec<Position> =
         snapshots.iter().filter(|t| t.is_player && !t.is_wreck && !t.entering).map(|t| t.position).collect();
     guarded.extend(game.frog_position());
     for tank in snapshots.iter().filter(|t| !t.is_player && !t.is_wreck && !t.entering) {
-        if guarded.iter().any(|g| g.distance_to(tank.position) <= DEFEND_REACH_PX) && game.debug_kill(tank.slot).is_ok() {
+        if guarded.iter().any(|g| g.distance_to(tank.position) <= reach) && game.debug_kill(tank.slot).is_ok() {
             if let Some(track) = tracks.get_mut(&tank.slot) {
                 track.time_to_engage.get_or_insert(frame as f32 * DT);
             }
@@ -1723,6 +1740,8 @@ struct RoundResult {
     spawn: bongbong::level::SpawnKind,
     /// When the fight first reached a seat, in round seconds (`Contact`).
     contact: Contact,
+    /// The round's lulls between engagements, in seconds (`Lulls`).
+    lulls: Vec<f32>,
     /// Wall-clock seconds spent inside `Game::update` this round, over
     /// `frames_run` ticks - the simulation's own cost, the probe's checks
     /// left out.
@@ -1744,6 +1763,46 @@ struct Contact {
     /// The first shot, beam or flame to land on a seat
     /// (`FireTally::hits_on_seats`).
     hit: Option<f32>,
+}
+
+/// The time between engagements (docs/large-maps-follow-camera.md section
+/// 12, the pacing director): every stretch of at least `LULL_MIN_SECONDS`
+/// with no enemy in reach of the team (`in_contact`) between two frames
+/// with one. The stretch before the first contact is the walk to the
+/// fight (`Contact`), and the one after the last ends with the round, so
+/// neither is a lull.
+#[derive(Default)]
+struct Lulls {
+    last_contact: Option<u32>,
+    lulls: Vec<f32>,
+}
+
+impl Lulls {
+    fn observe(&mut self, frame: u32, contact: bool) {
+        if !contact {
+            return;
+        }
+        if let Some(last) = self.last_contact {
+            let lull = frame.saturating_sub(last + 1) as f32 * DT;
+            if lull >= LULL_MIN_SECONDS {
+                self.lulls.push(lull);
+            }
+        }
+        self.last_contact = Some(frame);
+    }
+}
+
+/// Whether the fight is on this frame: a live enemy on the field within
+/// `reach` of a live seat on the field or of the players' frog.
+fn in_contact(game: &Game, reach: f32) -> bool {
+    let snapshots = game.tank_snapshots();
+    let mut team: Vec<Position> =
+        snapshots.iter().filter(|t| t.is_player && !t.is_wreck && !t.entering).map(|t| t.position).collect();
+    team.extend(game.frog_position());
+    snapshots
+        .iter()
+        .filter(|t| !t.is_player && !t.is_wreck && !t.entering)
+        .any(|t| team.iter().any(|&p| p.distance_to(t.position) <= reach))
 }
 
 /// Runs one round to completion (or the frame limit). `trace` controls
@@ -1822,6 +1881,8 @@ fn run_round(
 
     let mut frames_run = args.frames;
     let mut contact = Contact::default();
+    let mut lulls = Lulls::default();
+    let reach = if matches!(args.scenario, Scenario::Defend) { args.defend_reach } else { tuning().enemy_attack_range };
     let mut update_seconds = 0.0f64;
     for frame in 1..=args.frames {
         let input = input_for_frame(args, frame);
@@ -1843,8 +1904,11 @@ fn run_round(
         }
         check_fire(&game, &mut stood, round, frame, &mut fire, &mut offbox_flagged, &mut totals, heat);
         check_anomalies(&mut tracks, &mut invariant_flagged, &game, round, frame, &mut totals, heat);
+        if game.outcome() == Outcome::Playing {
+            lulls.observe(frame, in_contact(&game, reach));
+        }
         if matches!(args.scenario, Scenario::Defend) {
-            defend(&mut game, &mut tracks, frame);
+            defend(&mut game, &mut tracks, frame, args.defend_reach);
         }
         let now = frame as f32 * DT;
         if contact.shot.is_none() && fire.shots_at_seats > 0 {
@@ -1962,6 +2026,10 @@ fn run_round(
             seconds_or_never(contact.shot),
             seconds_or_never(contact.hit),
         );
+        println!(
+            "probe: lulls: [{}]",
+            lulls.lulls.iter().map(|l| format!("{l:.1}s")).collect::<Vec<_>>().join(" ")
+        );
     }
 
     RoundResult {
@@ -1974,6 +2042,7 @@ fn run_round(
         mission: game.mission,
         spawn: game.spawn_plan.kind(),
         contact,
+        lulls: lulls.lulls,
         update_seconds,
     }
 }
@@ -2001,6 +2070,17 @@ fn mean_median_line(values: &[f32], unit: &str) -> String {
         Some((mean, median)) => format!("mean={mean:.1}{unit} median={median:.1}{unit} (n={})", values.len()),
         None => "n=0".to_string(),
     }
+}
+
+/// `mean_median_line` plus the 90th percentile and the largest:
+/// `mean=12.3s median=11.0s p90=20.1s max=31.0s (n=27)`.
+fn spread_line(values: &[f32], unit: &str) -> String {
+    let Some((mean, median)) = mean_median(values) else { return "n=0".to_string() };
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f32::total_cmp);
+    let p90 = sorted[((sorted.len() as f32 * 0.9).ceil() as usize).clamp(1, sorted.len()) - 1];
+    let max = sorted[sorted.len() - 1];
+    format!("mean={mean:.1}{unit} median={median:.1}{unit} p90={p90:.1}{unit} max={max:.1}{unit} (n={})", values.len())
 }
 
 /// The header/JSONL name for the scenario - one place, so the two can't
@@ -2080,8 +2160,9 @@ fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult, tun
         opt_f32(result.contact.hit),
     );
     let ms_per_tick = result.update_seconds * 1000.0 / result.frames_run.max(1) as f64;
+    let lulls = result.lulls.iter().map(|l| format!("{l:.2}")).collect::<Vec<_>>().join(",");
     format!(
-        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"players\":{},\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"ms_per_tick\":{ms_per_tick:.4},\"first_contact\":{{{contact}}},\"anomalies\":{{{anomalies}}},\"rams\":{{\"pair\":{},\"into_player\":{},\"rolled_damage\":{:.1}}},\"fire\":{{{fire}}},\"tanks\":[{tanks}]}}",
+        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"players\":{},\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"ms_per_tick\":{ms_per_tick:.4},\"first_contact\":{{{contact}}},\"lulls\":[{lulls}],\"anomalies\":{{{anomalies}}},\"rams\":{{\"pair\":{},\"into_player\":{},\"rolled_damage\":{:.1}}},\"fire\":{{{fire}}},\"tanks\":[{tanks}]}}",
         json_escape(map_display(args)),
         result.mission.name(),
         result.spawn.name(),
@@ -2246,8 +2327,9 @@ fn main() -> ExitCode {
     // first reached a seat, and what `Game::update` cost - the pacing and
     // the budget side of a sweep, beside its anomalies.
     let (mut won, mut lost, mut unfinished) = (0u32, 0u32, 0u32);
-    let mut lost_seconds: Vec<f32> = Vec::new();
+    let (mut won_seconds, mut lost_seconds): (Vec<f32>, Vec<f32>) = (Vec::new(), Vec::new());
     let (mut engage, mut shot, mut hit): (Vec<f32>, Vec<f32>, Vec<f32>) = (Vec::new(), Vec::new(), Vec::new());
+    let mut lulls: Vec<f32> = Vec::new();
     let (mut update_seconds, mut ticks) = (0.0f64, 0u64);
 
     for round in 0..args.rounds {
@@ -2263,7 +2345,10 @@ fn main() -> ExitCode {
         grand_rams.rolled_damage += result.rams.rolled_damage;
         grand_fire.add(&result.fire);
         match result.outcome {
-            Outcome::Won => won += 1,
+            Outcome::Won => {
+                won += 1;
+                won_seconds.push(result.frames_run as f32 * DT);
+            }
             Outcome::Lost => {
                 lost += 1;
                 lost_seconds.push(result.frames_run as f32 * DT);
@@ -2273,6 +2358,7 @@ fn main() -> ExitCode {
         engage.extend(result.contact.engage);
         shot.extend(result.contact.shot);
         hit.extend(result.contact.hit);
+        lulls.extend(&result.lulls);
         update_seconds += result.update_seconds;
         ticks += result.frames_run as u64;
         if sweep && totals.total() > 0 {
@@ -2330,7 +2416,8 @@ fn main() -> ExitCode {
     // above.
     if sweep {
         println!(
-            "probe: outcomes: won={won} lost={lost} unfinished={unfinished} lost-after {}",
+            "probe: outcomes: won={won} lost={lost} unfinished={unfinished} won-after {} | lost-after {}",
+            mean_median_line(&won_seconds, "s"),
             mean_median_line(&lost_seconds, "s"),
         );
         println!(
@@ -2339,6 +2426,10 @@ fn main() -> ExitCode {
             mean_median_line(&shot, "s"),
             mean_median_line(&hit, "s"),
         );
+        // The time between engagements (`Lulls`): how long the team waits
+        // between one fight and the next - what the pacing director
+        // stretches after a peak and shortens while nothing happens.
+        println!("probe: lulls: {}", spread_line(&lulls, "s"));
     }
     // What the simulation cost, wall clock inside `Game::update` alone:
     // a release build's number is the one to quote.

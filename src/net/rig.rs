@@ -235,6 +235,14 @@ impl Lockstep {
         self.room.game.as_ref()
     }
 
+    /// The round the room is simulating, for a test to stage a situation
+    /// in between steps - a kill, an enemy spawned - the way the dev
+    /// server's tools stage one in a local round.
+    #[cfg(test)]
+    pub(crate) fn authority_mut(&mut self) -> Option<&mut Game> {
+        self.room.game.as_mut()
+    }
+
     /// The replica the seat draws, once the welcome has built one.
     pub fn replica(&self) -> Option<&Game> {
         self.replica.as_ref()
@@ -901,6 +909,91 @@ mod tests {
         assert_eq!(rig.replica().expect("a replica").frame(), 0);
         rig.step(30);
         assert_eq!(rig.tick(), 30, "the rematch ticks like any round");
+    }
+
+    /// The pacing director's breather reaches a replica as `RoundState`
+    /// already carries it (`next_wave`, the breather's time left): on a
+    /// field map the room holds the next wave while its seat is at its
+    /// peak, and the replica's `WAVE N` banner is up exactly while the
+    /// room's is, hold included - but for the last twentieth of a second,
+    /// which the wire's tenths round to no breather at all.
+    #[test]
+    fn a_held_breather_keeps_the_replicas_banner_up_with_the_rooms() {
+        use crate::level::{Mission, SpawnKind};
+        use crate::simulation::debug::TankPatch;
+        // A field map by size, gates at both ends, the seat at the east one.
+        const FIELD: &str = "version = 1\nsize = [60, 20]\ncells.\"50,10\" = { kind = \"start\" }\ncells.\"0,10\" = { kind = \"gate\" }\ncells.\"59,10\" = { kind = \"gate\" }\n";
+        let overrides = LevelOverrides {
+            mission: Some(Mission::Destroy),
+            spawn: Some(SpawnKind::Waves),
+            waves: Some(3),
+            wave_size: Some(1),
+            wave_growth: Some(0),
+            ..LevelOverrides::default()
+        };
+        let map = MapFile::from_toml_str(FIELD).expect("the field map parses");
+        let mut rig = Lockstep::start(RigOptions { map, seed: Some(7), tank_row: Some(0), overrides, quality: LinkQuality::PERFECT, ..RigOptions::default() });
+        let game = rig.authority_mut().expect("a round");
+        assert!(game.field_map(), "a field map paces its waves");
+        game.debug_set_tank(0, &TankPatch { shield_hp: Some(1.0e9), ..TankPatch::default() }).expect("the seat");
+        // One tick at a time, the replica's banner held to the room's.
+        let tick = |rig: &mut Lockstep| {
+            rig.step(1);
+            let room = rig.authority().expect("a round");
+            let left = room.wave_status().and_then(|w| w.next_in);
+            let drawn = rig.replica().expect("a replica").wave_banner();
+            if left.is_none_or(|left| left >= 0.05) {
+                assert_eq!(drawn, room.wave_banner(), "tick {}: the replica's banner is not the room's ({left:?} left)", room.frame());
+            }
+            room.events().iter().find_map(|e| match e {
+                crate::simulation::Event::TankEntered { slot } => Some(*slot),
+                _ => None,
+            })
+        };
+        let mut wave_one = None;
+        for _ in 0..900 {
+            if let Some(slot) = tick(&mut rig) {
+                wave_one = Some(slot);
+                break;
+            }
+        }
+        let wave_one = wave_one.expect("wave 1 never rolled in");
+        rig.authority_mut().expect("a round").debug_kill(wave_one).expect("wave 1's tank");
+        while rig.authority().expect("a round").wave_banner().is_none() {
+            tick(&mut rig);
+        }
+        // The seat at its peak: three enemies inside its sight box.
+        let game = rig.authority_mut().expect("a round");
+        let seat = game.tank_snapshots().iter().find(|t| t.slot == 0).expect("the seat").position;
+        let crowd: Vec<usize> = (0..3)
+            .map(|i| {
+                let at = crate::Position::new(seat.x - 300.0, seat.y - 96.0 + 96.0 * i as f32);
+                game.debug_spawn_enemy(at, Some(1), None).expect("an enemy spawns")
+            })
+            .collect();
+        for _ in 0..600 {
+            tick(&mut rig);
+            let room = rig.authority().expect("a round");
+            assert!(room.wave_banner().is_some(), "tick {}: the room called the wave mid-fight", room.frame());
+        }
+        let held = rig.replica().expect("a replica").wave_status().and_then(|w| w.next_in);
+        assert_eq!(held, Some(tuning().director_relax_seconds), "the replica reads the rest the peak owes");
+        // The fight ends; the wave comes after the rest, and the banner
+        // goes on both ends together.
+        let game = rig.authority_mut().expect("a round");
+        for slot in crowd {
+            game.debug_kill(slot).expect("a live enemy");
+        }
+        let mut called = false;
+        for _ in 0..60 * 60 {
+            tick(&mut rig);
+            if rig.authority().expect("a round").wave_banner().is_none() {
+                called = true;
+                break;
+            }
+        }
+        assert!(called, "the room never called wave 2");
+        assert_eq!(rig.replica().expect("a replica").wave_banner(), None, "the replica's banner outlived the room's");
     }
 
     /// The seat's command travels: a stepped rig that is driven ends
