@@ -560,8 +560,25 @@ shape with the bar at the standard arena's size (`editor::camera`).
   (opening it, 66 ms). Walls a repaint adds or takes away are
   matched against the map's in one pass, so a fill of thousands of walls
   costs what one pass does.
-- **Thumbnails in the Load list** from `mapshot`, since a large map's name
-  says less about it than its picture.
+- **Thumbnails in the Load list** (`editor/thumbs.rs`), since a large
+  map's name says less about it than its picture: each row has the map's
+  minimap - a texel a cell in the minimap's palette, its water as deep as
+  a round has it - beside its name, and under the name its size in cells.
+  The minimap rather than `mapshot`'s painted field, by measurement
+  (`thumbnail::tests::a_load_list_thumbnail_timing`, a release build on
+  this machine): on longwater the minimap takes 0.6 ms where staging the
+  round takes 2.9 ms and painting its 2560 x 1440 pixels on the CPU
+  canvas 260 ms, after 102 ms decoding the sheets that canvas needs, and
+  a 34 x 17 arena still paints in 85 ms - a page of seven painted would
+  stall a phone for seconds; a debug build is about ten times slower
+  either way. The parse is most of a picture's cost (3.3 ms for
+  longwater), so the list makes only its page's pictures, one a frame,
+  and keeps each by the map's name and the revision of the text it was
+  made from (an FNV-1a hash of what `map::map_source` reads): opened
+  again, the list checks a page against its text in a frame - a read and
+  a hash, no parse - and makes again only what changed. Each picture is
+  uploaded once (`editor::render::ThumbnailTextures`, the `BlockTexture`
+  pattern), and the textures are freed the frame the list closes.
 - **Play from here.** PLAY starts from the map's start; PLAY HERE, beside
   it in the bar, puts seat 1 on the drivable cell nearest the middle of
   the view - with `battlefield::enemy_spawn_legal`'s clearance, out of
@@ -1136,8 +1153,9 @@ CHECK panel), the loupe (`MapEditor::loupe`), the clear check
 (`MapFile::revision`, `MapEditor::par`) and the bar and its popups on the
 window in UI points like play's corners (`editor::chrome`: 44 pt on a
 touch screen, the categories folded into a palette on a narrow one, the
-long popups paged) - select and stamps, fills and
-scatter and thumbnails are still to come; from step 7 the Android `appCategory`, maps capped at
+long popups paged), select and stamps (`editor::select`), fills and
+scatter (`editor::brush`) and the Load list's thumbnails
+(`editor::thumbs`); from step 7 the Android `appCategory`, maps capped at
 what the wire carries, the laser's reach, the mark caps and the bounded
 AI (`simulation/field.rs`: chained alerts with leashes, far enemies
 thinking less, spawns and gates by walk outside every sight box,

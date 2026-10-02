@@ -72,6 +72,11 @@ impl BlockTexture {
         }
         self.held.as_ref().map(|(stamp, _, _, texture)| (*stamp, texture))
     }
+
+    /// The texture held and the stamp of the image it shows, if any.
+    pub fn held(&self) -> Option<(u64, &Texture2D)> {
+        self.held.as_ref().map(|(stamp, _, _, texture)| (*stamp, texture))
+    }
 }
 
 /// A [`Canvas`] over a raylib draw handle: every call forwards to the

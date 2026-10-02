@@ -50,6 +50,10 @@
 //! lays auto-tile through the ground's repaint, which makes the whole
 //! ground again for an edit past `REBUILD_SHARE` of the map.
 //!
+//! **The Load list shows each map's picture** (`thumbs.rs`): its minimap,
+//! made a page at a time as the list shows it, a picture a frame, and kept
+//! by map name and the revision of its text.
+//!
 //! **The select tool** (docs/large-maps-patterns.md, "Selection, copy and
 //! stamps"; the data is `select.rs`): a drag draws a rectangle of cells,
 //! outlined until Escape, a press outside it or another tool clears it. A
@@ -76,8 +80,9 @@ pub mod history;
 #[cfg(feature = "render")]
 pub mod render;
 pub mod select;
+pub mod thumbs;
 #[cfg(feature = "render")]
-pub use render::EditorTextures;
+pub use render::{EditorTextures, ThumbnailTextures};
 
 pub use brush::BrushRules;
 pub use camera::{BuilderCamera, CanvasRules, CanvasScreen, Viewport};
@@ -877,6 +882,9 @@ pub struct MapEditor {
     /// its own count (`brush::scattered`), so a second stroke over the same
     /// ground picks other cells.
     scatters: u32,
+    /// The Load list's thumbnails (`thumbs.rs`), kept by map name and the
+    /// revision of the text each was made from.
+    thumbs: thumbs::Thumbs,
     /// The window pointer on the last frame no button was held: a pointer
     /// that moves with nothing down is a mouse hovering - a touch screen
     /// moves it only under a finger - and the paste ghost follows it.
@@ -944,6 +952,7 @@ impl MapEditor {
             stamps: select::shipped_stamps(),
             saved_stamps: 0,
             scatters: 0,
+            thumbs: thumbs::Thumbs::default(),
             hover: None,
             revision: std::cell::Cell::new(None),
             cli_overrides: CliOverrides::default(),
@@ -2252,6 +2261,28 @@ impl MapEditor {
         });
     }
 
+    /// FILE > LOAD: the Load list on every map there is to load, its
+    /// thumbnails checked again before they are shown (`thumbs.rs`).
+    fn open_load_list(&mut self) {
+        let entries = map::available_maps();
+        self.thumbs.open(&entries);
+        self.popup = Some(Popup::Load { entries, scroll: 0 });
+    }
+
+    /// `name`'s thumbnail in the Load list, once its page has made or
+    /// checked it - nothing while the list is closed.
+    pub fn thumbnail(&self, name: &str) -> Option<&thumbs::Thumb> {
+        self.thumbs.get(name).filter(|_| matches!(self.popup, Some(Popup::Load { .. })))
+    }
+
+    /// Every thumbnail the open Load list has made or checked, by name:
+    /// what `render.rs` holds a texture for. Nothing while the list is
+    /// closed, which is what lets those textures go.
+    pub fn thumbnails(&self) -> impl Iterator<Item = (&str, &thumbs::Thumb)> {
+        let open = matches!(self.popup, Some(Popup::Load { .. }));
+        self.thumbs.shown().filter(move |_| open)
+    }
+
     /// The navigator's picture of the canvas (`minimap.rs`): what `app.rs`
     /// uploads before the builder draws.
     pub fn minimap(&self) -> &Minimap {
@@ -3243,7 +3274,7 @@ impl MapEditor {
                 if input.pressed {
                     let picked = FileRow::all().iter().enumerate().find(|&(i, _)| rows.row(i).contains(pointer)).map(|(_, row)| *row);
                     match picked {
-                        Some(FileRow::Load) => self.popup = Some(Popup::Load { entries: map::available_maps(), scroll: 0 }),
+                        Some(FileRow::Load) => self.open_load_list(),
                         Some(FileRow::Save) if self.map.name.is_some() => {
                             if let Err(e) = self.save(None) {
                                 self.status = Some(e);
@@ -3264,6 +3295,9 @@ impl MapEditor {
                 if input.wheel != 0.0 {
                     scroll = if input.wheel < 0.0 { (scroll + 1).min(max) } else { scroll.saturating_sub(1) };
                 }
+                // The page's thumbnails, a picture a frame
+                // (`thumbs::MADE_PER_FRAME`).
+                self.thumbs.update(entries.iter().skip(scroll).take(rows).map(|e| e.name.as_str()), map::map_source);
                 let Some(pointer) = pointer.filter(|_| pressed) else {
                     self.popup = Some(Popup::Load { entries, scroll });
                     return;
@@ -6512,6 +6546,63 @@ mod file_tests {
         press(&mut ed, &frame, center(frame.ui.rect_to_window(load.rows.row(target - scroll))));
         assert_eq!(ed.open_menu(), None);
         assert_eq!(ed.name(), "waves-basic");
+    }
+
+    /// The Load list's thumbnails: the open list makes its page's
+    /// pictures one a frame - each its map's minimap, a texel a cell - and
+    /// none off the page; closed, it shows none; opened again, it checks
+    /// the page's against their text and makes none of them again. The
+    /// pages are the open list's own: other tests write maps into `maps/`
+    /// while this one runs, so a second listing could differ.
+    #[test]
+    fn the_load_lists_thumbnails_come_a_picture_a_frame_and_go_with_the_list() {
+        let frame = arena();
+        let mut ed = MapEditor::new(MapFile::new());
+        press_named(&mut ed, &frame, "file");
+        press_named(&mut ed, &frame, "load");
+        let rows = load_layout(&ed, &frame).per_page;
+        let listed = |ed: &MapEditor| -> Vec<String> {
+            match &ed.popup {
+                Some(Popup::Load { entries, .. }) => entries.iter().map(|e| e.name.clone()).collect(),
+                _ => panic!("no Load list"),
+            }
+        };
+        let entries = listed(&ed);
+        let page: Vec<&str> = entries.iter().take(rows).map(String::as_str).collect();
+        let made = |ed: &MapEditor, page: &[&str]| page.iter().filter(|n| ed.thumbnail(n).is_some()).count();
+        let idle = BuilderInput::default();
+        let start = made(&ed, &page);
+        assert!(start <= thumbs::MADE_PER_FRAME, "the frame that opened it made at most one: {start}");
+        ed.update(&idle, &frame);
+        assert_eq!(made(&ed, &page), start + thumbs::MADE_PER_FRAME, "one more a frame");
+        for _ in 0..rows {
+            ed.update(&idle, &frame);
+        }
+        assert_eq!(made(&ed, &page), page.len(), "the whole page");
+        assert!(entries.iter().skip(rows).all(|name| ed.thumbnail(name).is_none()), "nothing off the page");
+        for name in &page {
+            let thumb = ed.thumbnail(name).expect("made");
+            if let (Some(image), Ok(map)) = (&thumb.image, map::open_map(name)) {
+                assert_eq!((image.width, image.height), crate::minimap::cells_of(map.field_size()), "{name}: a texel a cell");
+            }
+        }
+        let stamp = |ed: &MapEditor, name: &str| ed.thumbnail(name).and_then(|t| t.image.as_ref()).map(|i| i.stamp);
+        let stamps: Vec<Option<u64>> = page.iter().map(|n| stamp(&ed, n)).collect();
+        ed.update(&BuilderInput { escape: true, ..Default::default() }, &frame);
+        assert_eq!(ed.open_menu(), None);
+        assert_eq!(ed.thumbnails().count(), 0, "none once it closes");
+        press_named(&mut ed, &frame, "file");
+        press_named(&mut ed, &frame, "load");
+        // A map another test has just written is made on the next frame.
+        ed.update(&idle, &frame);
+        let entries = listed(&ed);
+        let again: Vec<&str> = entries.iter().take(rows).map(String::as_str).collect();
+        assert_eq!(made(&ed, &again), again.len(), "the page checked again");
+        for (name, before) in page.iter().zip(&stamps) {
+            if again.contains(name) {
+                assert_eq!(stamp(&ed, name), *before, "{name}: kept, not made again");
+            }
+        }
     }
 
     /// FILE opens its menu; LOAD... opens the list; picking a row loads

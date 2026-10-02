@@ -260,4 +260,46 @@ mod tests {
         assert!(!far.within_tolerance());
     }
 
+    /// What a picture of a map for the builder's Load list costs on the
+    /// largest shipped maps, by the two renderers there are: this module's
+    /// staged round painted on the CPU canvas (`stage_round` and
+    /// `render_cpu`, the sheets decoded once beforehand) against the
+    /// minimap's texel a cell (`editor::thumbs::minimap_of`), beside the
+    /// map's parse and revision every picture needs first. Prints; run with
+    /// `--ignored --nocapture`, and `--release` for a phone's order.
+    #[cfg(feature = "render")]
+    #[test]
+    #[ignore]
+    fn a_load_list_thumbnail_timing() {
+        use std::time::Instant;
+        quiet_raylib();
+        let ms = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
+        let t = Instant::now();
+        let sheets = load_cpu_sheets().expect("sheets under static/");
+        eprintln!("decoding the sheets for the CPU canvas: {:.1} ms", ms(t));
+        for name in ["longwater", "grand-campaign", "castle-moat", "default"] {
+            let t = Instant::now();
+            let map = shipped(name);
+            let parse = ms(t);
+            let t = Instant::now();
+            let _ = map.revision();
+            let revision = ms(t);
+            let t = Instant::now();
+            let game = stage_round(map.clone(), &ThumbnailOptions::default());
+            let stage = ms(t);
+            let t = Instant::now();
+            let canvas = render_cpu(&game, &sheets);
+            let paint = ms(t);
+            let t = Instant::now();
+            let minimap = crate::editor::thumbs::minimap_of(&map);
+            let mini = ms(t);
+            let (cols, rows) = minimap.cells();
+            eprintln!(
+                "{name}: parse {parse:.2} ms, revision {revision:.2} ms; CPU: stage {stage:.1} ms + paint {paint:.1} ms for {} x {} px; minimap {mini:.3} ms for {cols} x {rows} texels",
+                canvas.width(),
+                canvas.height()
+            );
+        }
+    }
+
 }

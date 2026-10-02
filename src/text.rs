@@ -1016,6 +1016,10 @@ mod text_tests {
         }
         // A saved stamp's name in its STAMPS row, two digits.
         out.push((keys::STAMP_SAVED, HUD_TEXT_SIZE, crate::editor::chrome::STAMP_NAME_W as i32, vec![("n", 99.into())]));
+        // A Load row's second line: the largest map's size, then the word
+        // for a map that ships with the game.
+        let size = width("250 x 250   ", UI_SMALL_TEXT);
+        out.push((keys::EDITOR_SHIPPED, UI_SMALL_TEXT, crate::editor::chrome::LOAD_TEXT_W as i32 - size, vec![]));
         out
     }
 

@@ -85,7 +85,22 @@ pub const LINT_HEAD_ROWS: usize = 2;
 pub const LOAD_VISIBLE_ROWS: usize = 8;
 
 /// The Load list's width.
-pub const LOAD_PANEL_W: f32 = 360.0;
+pub const LOAD_PANEL_W: f32 = 400.0;
+
+/// The box a map's thumbnail stands in at its Load row's left, 8 points
+/// in and centred top to bottom (`load_picture`): a 16:9 map fills its
+/// height, a 2:1 one its width.
+pub const LOAD_PICTURE: (f32, f32) = (72.0, 40.0);
+
+/// The room a Load row's text has (`load_text`): from 12 points past the
+/// picture to 12 short of the row's right end. The name runs along its
+/// top line, the map's size in cells and whether it ships with the game
+/// along its second (`text_tests` holds the second line's words to it).
+pub const LOAD_TEXT_W: f32 = LOAD_PANEL_W - 8.0 - LOAD_PICTURE.0 - 12.0 - 12.0;
+
+/// How far down a Load row its name's line and its second line stand.
+pub const LOAD_NAME_Y: f32 = 7.0;
+pub const LOAD_DETAIL_Y: f32 = 29.0;
 
 /// The STAMPS list's width: a stamp's picture, its name and its size.
 pub const STAMPS_PANEL_W: f32 = 320.0;
@@ -856,6 +871,31 @@ impl LoadLayout {
     }
 }
 
+/// A map's thumbnail box in its Load-list `row`: at the row's left, 8
+/// points in, centred top to bottom.
+pub fn load_picture(row: Rectangle) -> Rectangle {
+    Rectangle::new(row.x + 8.0, row.y + ((row.height - LOAD_PICTURE.1) / 2.0).round(), LOAD_PICTURE.0, LOAD_PICTURE.1)
+}
+
+/// Where a Load row's text stands: past the picture, `LOAD_TEXT_W` wide,
+/// the row's height.
+pub fn load_text(row: Rectangle) -> Rectangle {
+    Rectangle::new(row.x + 8.0 + LOAD_PICTURE.0 + 12.0, row.y, LOAD_TEXT_W, row.height)
+}
+
+/// A field `field` world pixels in size drawn as large as fits in `rect`,
+/// its shape kept, centred, its edges on whole points - a thumbnail in its
+/// box. Nothing where the field has no size.
+pub fn fit_picture(rect: Rectangle, field: (f32, f32)) -> Option<Rectangle> {
+    let (w, h) = field;
+    if !(w > 0.0 && h > 0.0) {
+        return None;
+    }
+    let k = (rect.width / w).min(rect.height / h);
+    let (pw, ph) = ((w * k).round().max(1.0), (h * k).round().max(1.0));
+    Some(Rectangle::new((rect.x + (rect.width - pw) / 2.0).round(), (rect.y + (rect.height - ph) / 2.0).round(), pw, ph))
+}
+
 /// What a press on the select tool's strip lands on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StripButton {
@@ -1309,11 +1349,43 @@ mod chrome_tests {
                 let load = LoadLayout::of(room, entries);
                 check("the Load list", load.rows.panel);
                 assert!(entries <= load.per_page || load.pager.is_some(), "{entries} maps and no pager");
+                // Each row's picture and text inside the row, apart.
+                for i in 0..load.per_page.min(entries) {
+                    let row = load.rows.row(i);
+                    let (picture, text) = (load_picture(row), load_text(row));
+                    assert!(inside(picture, row) && inside(text, row), "{ui:?}: a Load row's parts in the row");
+                    assert!(!overlap(picture, text));
+                    assert!(LOAD_DETAIL_Y + UI_SMALL_TEXT as f32 <= row.height, "two lines in a row");
+                }
             }
             check("the Save prompt", save_prompt(room));
             let nav = navigator(room, (180.0, 100.0)).expect("a navigator");
             check("the navigator", crate::hud::Corners::plate(nav));
         }
+    }
+
+    /// A thumbnail fills its box as far as its shape lets it, centred, on
+    /// whole points: a 16:9 map its height, a 2:1 map its width, a tall one
+    /// its height; a field with no size has none.
+    #[test]
+    fn a_thumbnail_keeps_its_shape_inside_its_box() {
+        let row = Rectangle::new(100.0, 200.0, LOAD_PANEL_W, crate::EDITOR_DROPDOWN_ROW_H);
+        let b = load_picture(row);
+        assert_eq!(b, Rectangle::new(108.0, 204.0, 72.0, 40.0));
+        for (field, want) in [
+            ((2560.0, 1440.0), (71.0, 40.0)),
+            ((1088.0, 544.0), (72.0, 36.0)),
+            ((1536.0, 768.0), (72.0, 36.0)),
+            ((32.0 * 250.0, 32.0 * 250.0), (40.0, 40.0)),
+            ((544.0, 1088.0), (20.0, 40.0)),
+        ] {
+            let p = fit_picture(b, field).expect("a picture");
+            assert_eq!((p.width, p.height), want, "{field:?}");
+            assert!(inside(p, b), "{field:?}: {p:?} in {b:?}");
+            assert!((p.x - (b.x + (b.width - p.width) / 2.0)).abs() <= 0.5, "centred");
+            assert_eq!((p.x.fract(), p.y.fract()), (0.0, 0.0), "whole points");
+        }
+        assert_eq!(fit_picture(b, (0.0, 544.0)), None);
     }
 
     /// The select tool's strip on every window, both its faces: on a plate

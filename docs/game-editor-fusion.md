@@ -236,7 +236,10 @@ bar (`editor::chrome::Strip`; docs/large-maps-follow-camera.md section 9).
   binary (`default`, `default-desert`, `hunt-basic`, `waves-basic`, `portals`, marked `shipped`), which
   is all the web build can list since nothing outside `static/` ships in
   the wasm. Picking a row loads the map as one undo step and the new
-  baseline; no confirmation, undo covers a mistake.
+  baseline; no confirmation, undo covers a mistake. Each row shows the
+  map's thumbnail - its minimap, made as the list's page shows it - and
+  its size in cells (`editor::thumbs`, docs/large-maps-follow-camera.md
+  section 9).
 - `SAVE` writes the map back to `maps/<name>.toml` when it has a name,
   otherwise it behaves as `SAVE AS...`, which prompts for one (letters,
   digits, `-`, `_`). Saved is the new baseline, so the ` *` clears. Both

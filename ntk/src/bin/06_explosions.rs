@@ -269,6 +269,7 @@ fn main() {
                             tanks: &tanks,
                             shade: None,
                             minimap: None,
+                            thumbnails: None,
                         },
                     );
                     return;

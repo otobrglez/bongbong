@@ -18,7 +18,7 @@ use crate::hud::{Hints, BAR_FILL, DIM, HUD_TEXT_SIZE, TEXT, UI_SMALL_TEXT};
 use crate::math::{Color, Rectangle};
 use crate::obstacle;
 use crate::portal::{draw_portal, portal_icon_source_rec};
-use crate::render::canvas::{GpuCanvas, Sheets};
+use crate::render::canvas::{BlockTexture, GpuCanvas, Sheets};
 use crate::EDITOR_DROPDOWN_ROW_H;
 
 /// The icons in the bar, the dropdown rows and the palette, the sheets'
@@ -122,6 +122,44 @@ pub struct EditorTextures<'a> {
     /// The navigator's picture (`MapEditor::minimap`) as `app.rs` uploaded
     /// it before the frame, with the stamp it was baked under.
     pub minimap: Option<(u64, &'a Texture2D)>,
+    /// The Load list's thumbnails as `app.rs` uploaded them before the
+    /// frame (`ThumbnailTextures::sync`).
+    pub thumbnails: Option<&'a ThumbnailTextures>,
+}
+
+/// The Load list's thumbnails on the GPU (`MapEditor::thumbnails`): a
+/// `BlockTexture` each, uploaded once per picture and dropped - its
+/// texture freed - once its picture is no longer shown, the list's close
+/// among them. `app.rs` keeps one and syncs it before the builder draws.
+#[derive(Default)]
+pub struct ThumbnailTextures {
+    held: std::collections::BTreeMap<String, BlockTexture>,
+}
+
+impl ThumbnailTextures {
+    /// Hold a texture for every thumbnail `editor` shows, uploading a
+    /// picture only when it is new, and let the others go.
+    pub fn sync(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, editor: &MapEditor) {
+        let shown: Vec<(&str, &crate::canvas::BlockImage)> = editor.thumbnails().filter_map(|(name, thumb)| Some((name, thumb.image.as_ref()?))).collect();
+        self.held.retain(|name, _| shown.iter().any(|(n, _)| *n == name.as_str()));
+        for (name, image) in shown {
+            self.held.entry(name.to_string()).or_default().sync(rl, thread, image);
+        }
+    }
+
+    /// `name`'s thumbnail texture, with the stamp of the picture it shows.
+    pub fn get(&self, name: &str) -> Option<(u64, &Texture2D)> {
+        self.held.get(name)?.held()
+    }
+
+    /// How many textures are held.
+    pub fn len(&self) -> usize {
+        self.held.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.held.is_empty()
+    }
 }
 
 /// The builder's own scene target: the canvas drawn at a texel per world
@@ -688,7 +726,7 @@ impl MapEditor {
             (Some(Popup::Settings { page }), Some(PopupLayout::Settings(settings))) => self.draw_settings(d, settings, *page, textures, hints),
             (Some(Popup::Lint { page }), Some(PopupLayout::Lint(lint))) => self.draw_lint_panel(d, lint, *page, hints),
             (Some(Popup::File), Some(PopupLayout::File(rows))) => Self::draw_file_menu(d, rows),
-            (Some(Popup::Load { entries, scroll }), Some(PopupLayout::Load(load))) => Self::draw_load_list(d, load, entries, *scroll, hints),
+            (Some(Popup::Load { entries, scroll }), Some(PopupLayout::Load(load))) => self.draw_load_list(d, load, entries, *scroll, hints, textures),
             (Some(Popup::Save { name }), Some(PopupLayout::Save(panel))) => {
                 let panel = *panel;
                 draw_panel(d, panel);
@@ -710,9 +748,19 @@ impl MapEditor {
         }
     }
 
-    /// The Load list: one row per map, shipped ones marked, and the pager
-    /// when there are more than fit.
-    fn draw_load_list(d: &mut impl RaylibDraw, load: &chrome::LoadLayout, entries: &[MapEntry], scroll: usize, hints: Hints) {
+    /// The Load list: a row per map - its thumbnail (a dark box until its
+    /// page has made it), its name, and under the name its size in cells
+    /// and whether it ships with the game - and the pager when there are
+    /// more than fit.
+    fn draw_load_list(
+        &self,
+        d: &mut impl RaylibDraw,
+        load: &chrome::LoadLayout,
+        entries: &[MapEntry],
+        scroll: usize,
+        hints: Hints,
+        textures: &EditorTextures,
+    ) {
         let panel = load.rows.panel;
         draw_panel(d, panel);
         if entries.is_empty() {
@@ -724,11 +772,19 @@ impl MapEditor {
         let scroll = scroll.min(last);
         for (i, entry) in entries.iter().skip(scroll).take(rows).enumerate() {
             let row = load.rows.row(i);
-            let text_y = (row.y + (row.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
-            d.draw_text(&fit_text(&entry.name, chrome::LOAD_PANEL_W - 120.0, HUD_TEXT_SIZE), row.x as i32 + 16, text_y, HUD_TEXT_SIZE, TEXT);
+            let thumb = self.thumbnail(&entry.name);
+            let texture = textures.thumbnails.and_then(|t| t.get(&entry.name));
+            draw_thumbnail(d, chrome::load_picture(row), thumb, texture);
+            let at = chrome::load_text(row);
+            d.draw_text(&fit_text(&entry.name, at.width, HUD_TEXT_SIZE), at.x as i32, (row.y + chrome::LOAD_NAME_Y) as i32, HUD_TEXT_SIZE, TEXT);
+            let mut detail = thumb.filter(|t| t.image.is_some()).map(|t| format!("{} x {}", t.cells.0, t.cells.1)).unwrap_or_default();
             if !entry.on_disk {
-                d.draw_text(&text().get(keys::EDITOR_SHIPPED), (row.x + row.width - 80.0) as i32, text_y, HUD_TEXT_SIZE, DIM);
+                if !detail.is_empty() {
+                    detail.push_str("   ");
+                }
+                detail.push_str(&text().get(keys::EDITOR_SHIPPED));
             }
+            d.draw_text(&fit_text(&detail, at.width, UI_SMALL_TEXT), at.x as i32, (row.y + chrome::LOAD_DETAIL_Y) as i32, UI_SMALL_TEXT, DIM);
         }
         if let Some(pager) = load.pager {
             let hint = text().fmt(
@@ -1635,6 +1691,19 @@ fn draw_clip_picture(d: &mut impl RaylibDraw, clip: &Clip, rect: Rectangle, them
     for &(c, r, obj) in &clip.cells {
         let class = Class::solid_of(&obj).unwrap_or(Class::floor(Some(&obj), ground::Depth::Shallow));
         d.draw_rectangle_rec(Rectangle::new(x0 + c as f32 * k, y0 + r as f32 * k, k, k), class.color(theme));
+    }
+}
+
+/// A map's thumbnail in its Load row's box: a dark box, and over it the
+/// map's minimap (`thumbs.rs`) at its own shape (`chrome::fit_picture`),
+/// the field's texels as the navigator draws them (`minimap::source`) -
+/// once the texture `app.rs` uploaded holds this very picture.
+fn draw_thumbnail(d: &mut impl RaylibDraw, rect: Rectangle, thumb: Option<&thumbs::Thumb>, texture: Option<(u64, &Texture2D)>) {
+    d.draw_rectangle_rec(rect, Color::new(0, 0, 0, 110));
+    let (Some(thumb), Some((stamp, texture))) = (thumb, texture) else { return };
+    let (Some(image), Some(at)) = (thumb.image.as_ref(), chrome::fit_picture(rect, thumb.field)) else { return };
+    if image.stamp == stamp {
+        d.draw_texture_pro(texture, crate::minimap::source(thumb.field), at, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
     }
 }
 

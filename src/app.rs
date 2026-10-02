@@ -1434,6 +1434,8 @@ pub fn run(args: Args) {
     let mut round_minimap = crate::minimap::RoundMinimap::default();
     let mut round_minimap_texture = crate::render::canvas::BlockTexture::default();
     let mut builder_minimap_texture = crate::render::canvas::BlockTexture::default();
+    // The Load list's thumbnails, held only while the list shows them.
+    let mut builder_thumbnails = crate::editor::ThumbnailTextures::default();
     // The builder's own scene target, for a canvas zoomed or a field map
     // (`editor::render::BuilderScene`): made when first needed.
     let mut builder_scene = crate::editor::render::BuilderScene::default();
@@ -2027,6 +2029,10 @@ pub fn run(args: Args) {
             session.minimap_on = plan.minimap_on(&this_screen);
         }
 
+        // The Load list's thumbnails, every frame, so the frame the list
+        // closes - or the builder is left - lets their textures go.
+        builder_thumbnails.sync(rl, thread, &session.builder);
+
         if session.mode() == Driver::Build {
             // Nothing is steering while the builder is up - every touch is
             // its own, so the scheme's area is empty -, but the scheme
@@ -2078,6 +2084,7 @@ pub fn run(args: Args) {
                     tanks: &tanks_texture,
                     shade,
                     minimap,
+                    thumbnails: Some(&builder_thumbnails),
                 },
             );
             // The presented frame is the builder; a pending `screenshot`

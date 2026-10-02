@@ -568,12 +568,7 @@ impl MapFile {
                 toml::to_string(&sorted_keys(value)).ok()
             })
             .unwrap_or_default();
-        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-        for b in text.bytes() {
-            hash ^= b as u64;
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        hash
+        fnv1a(text.as_bytes())
     }
 
     /// The par this map's stamp holds for it, in seconds: `None` without a
@@ -622,6 +617,18 @@ fn sorted_keys(value: toml::Value) -> toml::Value {
         toml::Value::Array(items) => toml::Value::Array(items.into_iter().map(sorted_keys).collect()),
         other => other,
     }
+}
+
+/// The 64-bit FNV-1a hash of `bytes`: a map's revision is this of its
+/// canonical TOML, and the builder's thumbnails are kept by this of the
+/// text a map is read from.
+pub fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 /// A revision as a stamp spells it: 16 lowercase hex digits.
@@ -933,17 +940,24 @@ pub fn available_maps() -> Vec<MapEntry> {
 /// there is one (native), else the shipped map of that name. The result
 /// carries `name` for display.
 pub fn open_map(name: &str) -> Result<MapFile, String> {
-    let path = maps_dir().join(format!("{name}.toml"));
-    if saving_available() && path.is_file() {
-        return MapFile::load(&path);
-    }
-    let (_, text) = SHIPPED_MAPS
-        .iter()
-        .find(|(n, _)| *n == name)
-        .ok_or_else(|| format!("no map named {name:?}"))?;
-    let mut map = MapFile::from_toml_str(text).map_err(|e| format!("parsing shipped map {name}: {e}"))?;
+    let text = map_source(name)?;
+    let mut map = MapFile::from_toml_str(&text).map_err(|e| format!("parsing map {name}: {e}"))?;
     map.name = Some(name.to_string());
     Ok(map)
+}
+
+/// The text `open_map` reads a map by its Load-list name from: the file
+/// under `maps_dir()` when there is one (native), else the shipped map's.
+pub fn map_source(name: &str) -> Result<std::borrow::Cow<'static, str>, String> {
+    let path = maps_dir().join(format!("{name}.toml"));
+    if saving_available() && path.is_file() {
+        return std::fs::read_to_string(&path).map(std::borrow::Cow::Owned).map_err(|e| format!("reading map {}: {e}", path.display()));
+    }
+    SHIPPED_MAPS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, text)| std::borrow::Cow::Borrowed(*text))
+        .ok_or_else(|| format!("no map named {name:?}"))
 }
 
 /// Every `.toml` file under `maps_dir()`, by file stem, sorted - the
