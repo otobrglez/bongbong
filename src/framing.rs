@@ -45,6 +45,10 @@
 //!   is 40 x 22.5 on a 16:9 monitor). Phones, tablets and laptops draw a
 //!   tank under 25 mm already and keep the shared view; a room never
 //!   steps, so a monitor that joins one shows what every other seat shows.
+//! - **The HUD bar is above the world** (`frame_under_bar`): it is drawn
+//!   at the world's own scale, so the world is framed into the screen less
+//!   the bar at the scale the framing picks, and the two fill the screen
+//!   together.
 
 use crate::tuning::{Tuning, tuning};
 use crate::{OBSTACLE_GRID_SIZE, TANK_FRAME_SIZE};
@@ -302,25 +306,14 @@ impl Framing {
 /// finite.
 pub fn frame(screen: Screen, seating: Seating, sight: SightBox, rules: &ViewRules) -> Framing {
     let cell = f64::from(OBSTACLE_GRID_SIZE);
-    let (width, height) = (positive(screen.size.0, 1.0), positive(screen.size.1, 1.0));
-    let dpr = positive(screen.dpr, 1.0);
-    let area = positive(rules.area_cells, 1.0) * cell * cell;
-
-    // 1. Same area. The clamp is written as max-then-min so knobs set
-    // the wrong way round cannot panic it.
-    let (aspect_min, aspect_max) = (positive(rules.aspect_min, 1.0), positive(rules.aspect_max, 1.0));
-    let aspect = width / height;
-    let shape = aspect.max(aspect_min).min(aspect_max);
-    let (outline_w, outline_h) = ((area * shape).sqrt(), (area / shape).sqrt());
-    let fit = (width / outline_w).min(height / outline_h);
-    let box_w = if aspect > aspect_max { outline_w * fit } else { width };
-    let box_h = if aspect < aspect_min { outline_h * fit } else { height };
+    let o = Outline::of(screen, rules);
+    let (box_w, box_h, dpr) = (o.box_w, o.box_h, o.dpr);
     let (half_w, half_h) = (f64::from(sight.half.0), f64::from(sight.half.1));
     let shows = |scale: f64| box_w * dpr / scale / 2.0 >= half_w && box_h * dpr / scale / 2.0 >= half_h;
 
     // 2. Whole blocks. `scale * scale <= lo * hi` is the scale at or below
     // the two steps' geometric mean: nearer `lo` by ratio, or as near.
-    let mut scale = fit * dpr;
+    let mut scale = o.fit * dpr;
     let snapped = f64::from(screen.ppi) < f64::from(rules.fine_ppi);
     if snapped {
         let lo = ((scale * 2.0).floor() / 2.0).max(MIN_SCALE);
@@ -351,17 +344,125 @@ pub fn frame(screen: Screen, seating: Seating, sight: SightBox, rules: &ViewRule
         }
     }
 
-    let point_scale = scale / dpr;
-    let tank_points = f64::from(TANK_PX) * point_scale;
-    Framing {
-        visible: ((box_w / point_scale) as f32, (box_h / point_scale) as f32),
-        scale: scale as f32,
-        point_scale: point_scale as f32,
-        snapped,
-        world_box: (box_w as f32, box_h as f32),
-        bars: (((width - box_w) / 2.0) as f32, ((height - box_h) / 2.0) as f32),
-        tank_points: tank_points as f32,
-        tank_mm: screen.mm_per_point.map(|mm| (tank_points * f64::from(mm)) as f32),
+    o.framing(screen, scale, snapped)
+}
+
+/// A bar across the top of the screen over a followed field map - the HUD
+/// bar: `height` pixels of a bitmap as wide as the world it heads but
+/// never narrower than `min_width`, so the bar's slots always have the
+/// width they are laid out for. Where the view is at least that wide a
+/// bitmap pixel is a world pixel; where it is narrower the bar's pixels
+/// are smaller than the world's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bar {
+    pub height: f32,
+    pub min_width: f32,
+}
+
+impl Bar {
+    /// Points per pixel of the bitmap the bar heads over `f`: the world
+    /// box's width over the bitmap's, the wider of the view and
+    /// `min_width`. The framing's own `point_scale` where the view is the
+    /// wider.
+    pub fn point_scale(&self, f: &Framing) -> f32 {
+        f.world_box.0 / f.visible.0.max(self.min_width).max(1.0)
+    }
+
+    /// The bar's height on screen over `f`, in points.
+    pub fn points(&self, f: &Framing) -> f32 {
+        self.height.max(0.0) * self.point_scale(f)
+    }
+}
+
+/// `frame` for a screen that also carries `bar` across its top: the world
+/// is framed into the screen less the bar, so the bar and the world fill
+/// the screen together. The bar's height on screen depends on the
+/// framing - it is drawn at the world's own scale where the view is at
+/// least the bar's width - so the framing is repeated on the screen less
+/// the bar the last one would carry until the bar stands still. A snapped
+/// scale can alternate between two neighbouring steps instead - the
+/// taller bar of the inward one tipping the framing outward and back -
+/// and then the outward one is kept under its own bar: it shows more
+/// world, so the sight box is on screen there too. `frame_under_bar` with
+/// no bar is `frame`.
+pub fn frame_under_bar(screen: Screen, bar: Bar, seating: Seating, sight: SightBox, rules: &ViewRules) -> Framing {
+    let height = positive(screen.size.1, 1.0);
+    let below = |points: f32| Screen { size: (screen.size.0, (height - f64::from(points)).max(1.0) as f32), ..screen };
+    let mut f = frame(screen, seating, sight, rules);
+    if bar.height <= 0.0 {
+        return f;
+    }
+    let mut at = bar.points(&f);
+    let mut before: Option<f32> = None;
+    for _ in 0..BAR_ITERATIONS {
+        let next = frame(below(at), seating, sight, rules);
+        let next_at = bar.points(&next);
+        if (next_at - at).abs() <= at.max(1e-3) * 1e-6 {
+            return next;
+        }
+        if before == Some(next_at) {
+            let outward = if next.point_scale < f.point_scale { next } else { f };
+            let under = below(bar.points(&outward));
+            return Outline::of(under, rules).framing(under, f64::from(outward.scale), outward.snapped);
+        }
+        before = Some(at);
+        at = next_at;
+        f = next;
+    }
+    f
+}
+
+/// How many times `frame_under_bar` re-frames before it settles for the
+/// last answer. An exact scale converges in two or three - the bar is a
+/// few percent of the height, so each round moves the scale by a few
+/// percent of the last move - and a snapped one in one or two.
+const BAR_ITERATIONS: usize = 8;
+
+/// Step 1 of `frame`: the same-area outline on a screen and the box the
+/// world fills there, before any snapping.
+struct Outline {
+    width: f64,
+    height: f64,
+    dpr: f64,
+    /// The exact same-area zoom, points per world pixel.
+    fit: f64,
+    box_w: f64,
+    box_h: f64,
+}
+
+impl Outline {
+    /// The clamp is written as max-then-min so knobs set the wrong way
+    /// round cannot panic it.
+    fn of(screen: Screen, rules: &ViewRules) -> Outline {
+        let cell = f64::from(OBSTACLE_GRID_SIZE);
+        let (width, height) = (positive(screen.size.0, 1.0), positive(screen.size.1, 1.0));
+        let dpr = positive(screen.dpr, 1.0);
+        let area = positive(rules.area_cells, 1.0) * cell * cell;
+        let (aspect_min, aspect_max) = (positive(rules.aspect_min, 1.0), positive(rules.aspect_max, 1.0));
+        let aspect = width / height;
+        let shape = aspect.max(aspect_min).min(aspect_max);
+        let (outline_w, outline_h) = ((area * shape).sqrt(), (area / shape).sqrt());
+        let fit = (width / outline_w).min(height / outline_h);
+        let box_w = if aspect > aspect_max { outline_w * fit } else { width };
+        let box_h = if aspect < aspect_min { outline_h * fit } else { height };
+        Outline { width, height, dpr, fit, box_w, box_h }
+    }
+
+    /// The world this outline's box shows at `scale` device pixels per
+    /// world pixel.
+    fn framing(&self, screen: Screen, scale: f64, snapped: bool) -> Framing {
+        let point_scale = scale / self.dpr;
+        let tank_points = f64::from(TANK_PX) * point_scale;
+        Framing {
+            visible: ((self.box_w / point_scale) as f32, (self.box_h / point_scale) as f32),
+            scale: scale as f32,
+            point_scale: point_scale as f32,
+            snapped,
+            world_box: (self.box_w as f32, self.box_h as f32),
+            bars: (((self.width - self.box_w) / 2.0) as f32, ((self.height - self.box_h) / 2.0) as f32),
+            tank_points: tank_points as f32,
+            tank_mm: screen.mm_per_point.map(|mm| (tank_points * f64::from(mm)) as f32),
+        }
     }
 }
 
@@ -623,6 +724,112 @@ mod framing_tests {
         }
         // The standard area is the standard field's.
         assert_eq!(r.area_cells * 32.0 * 32.0, (crate::DEFAULT_SCREEN_WIDTH * crate::DEFAULT_SCREEN_HEIGHT) as f32);
+    }
+
+    /// The HUD bar as a followed field map carries it: 32 pixels tall, laid
+    /// out across the standard field's width at the least.
+    fn hud_bar() -> Bar {
+        Bar { height: 32.0, min_width: crate::DEFAULT_SCREEN_WIDTH as f32 }
+    }
+
+    /// A 32 px bar with no width of its own: always at the world's scale.
+    fn world_bar() -> Bar {
+        Bar { height: 32.0, min_width: 0.0 }
+    }
+
+    #[test]
+    fn no_bar_is_the_plain_framing() {
+        for d in &DEVICES {
+            for seating in [Seating::Room, Seating::Local] {
+                let none = Bar { height: 0.0, min_width: 1088.0 };
+                assert_eq!(frame_under_bar(d.screen(), none, seating, standard_box(), &rules()), d.frame(seating), "{}", d.name);
+            }
+        }
+    }
+
+    #[test]
+    fn the_world_and_the_bar_fill_every_screen_together() {
+        // With the bar on top, the world's height and the bar's make the
+        // screen's, the world's width the screen's (inside the clamp),
+        // and the sight box is still on screen - for a bar at the world's
+        // scale and for the HUD's, which is smaller than the world's where
+        // the view is narrower than it.
+        let sight = standard_box();
+        let check = |name: &str, screen: Screen, seating: Seating| {
+            for bar in [world_bar(), hud_bar()] {
+                let f = frame_under_bar(screen, bar, seating, sight, &rules());
+                let (w, h) = screen.size;
+                let p = f.point_scale;
+                assert!(f.shows(sight), "{name} ({seating:?}, {bar:?}): {:?} hides the box", f.visible_cells());
+                let filled = f.visible.1 * p + bar.points(&f) + 2.0 * f.bars.1;
+                assert!((filled - h).abs() < 0.01, "{name} ({seating:?}, {bar:?}): {} under a {} pt bar vs {h}", f.visible.1 * p, bar.points(&f));
+                assert!((f.visible.0 * p + 2.0 * f.bars.0 - w).abs() < 0.01, "{name} ({seating:?}): {} at {p} vs {w}", f.visible.0);
+                assert!(bar.point_scale(&f) <= p + 1e-6, "{name}: the bar is never drawn larger than the world");
+                if f.snapped {
+                    assert_eq!(f.scale * 2.0, (f.scale * 2.0).round(), "{name}: a snapped scale stays on whole blocks");
+                }
+            }
+        };
+        for d in &DEVICES {
+            for seating in [Seating::Room, Seating::Local] {
+                check(d.name, d.screen(), seating);
+            }
+        }
+        // Every shape and density a window can take, from a phone's short
+        // side up, with and without its physical size.
+        for height in [375.0, 393.0, 600.0, 768.0, 900.0, 1080.0, 1440.0] {
+            for step in 0..=40 {
+                let width = (height * (1.0 + step as f32 * 0.05)).round();
+                for dpr in [1.0, 1.5, 2.0, 3.0] {
+                    for ppi in [96.0, 220.0, 460.0] {
+                        let screen = Screen::new(width, height, dpr, ppi).with_panel_width(width * dpr);
+                        for seating in [Seating::Room, Seating::Local] {
+                            check(&format!("{width} x {height} @{dpr} {ppi} ppi"), screen, seating);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_bar_that_tips_the_snap_back_and_forth_keeps_the_outward_step() {
+        // 590 x 393 points at 2x: under the bar of the outward step (0.5
+        // points a world pixel) the snap goes in to 0.75, whose taller bar
+        // tips it out to 0.5 again. The outward step stands, filling the
+        // screen with the world and its bar.
+        let screen = Screen::new(590.0, 393.0, 2.0, 220.0).with_panel_width(1180.0);
+        let rules = rules();
+        let at = |p: f32| frame(Screen { size: (590.0, 393.0 - 32.0 * p), ..screen }, Seating::Room, standard_box(), &rules).point_scale;
+        assert_eq!((at(0.5), at(0.75)), (0.75, 0.5), "the two steps send the framing to each other");
+        let f = frame_under_bar(screen, world_bar(), Seating::Room, standard_box(), &rules);
+        assert_eq!(f.point_scale, 0.5);
+        assert!(((f.visible.1 + 32.0) * f.point_scale - 393.0).abs() < 1e-3, "{:?}", f.visible);
+        assert!(f.shows(standard_box()));
+    }
+
+    #[test]
+    fn a_1080p_monitor_under_the_bar_zooms_out_to_40_cells() {
+        // The local zoom-out under the bar: 40 cells across, one fewer row
+        // than the bar-less 22.5 - the bar takes it. The view is wider than
+        // the HUD's bar, which is then at the world's scale.
+        let d = DEVICES.iter().find(|d| d.name == "24\" 1080p").unwrap();
+        let f = frame_under_bar(d.screen(), hud_bar(), Seating::Local, standard_box(), &rules());
+        assert_eq!(f.visible_cells(), (40.0, 21.5));
+        assert_eq!(f.scale, 1.5);
+        assert_eq!(hud_bar().points(&f), 48.0);
+        // A room never zooms out: the shared area, 30 cells across - under
+        // a bar at the world's scale, 64 points; under the HUD's, laid out
+        // across 1088 bitmap pixels, 56.5, which leaves the world a few
+        // more rows.
+        let room = frame_under_bar(d.screen(), world_bar(), Seating::Room, standard_box(), &rules());
+        assert_eq!((room.scale, room.visible), (2.0, (960.0, 508.0)));
+        let room = frame_under_bar(d.screen(), hud_bar(), Seating::Room, standard_box(), &rules());
+        assert_eq!(room.scale, 2.0);
+        assert_eq!(room.visible.0, 960.0);
+        let bar = hud_bar().points(&room);
+        assert!((bar - 32.0 * 1920.0 / 1088.0).abs() < 1e-3, "{bar}");
+        assert!((room.visible.1 * 2.0 + bar - 1080.0).abs() < 1e-3, "{:?}", room.visible);
     }
 
     #[test]

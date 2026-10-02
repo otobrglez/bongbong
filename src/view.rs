@@ -18,11 +18,19 @@
 //! which part of the world the field area of the bitmap shows, and how
 //! large. The renderer draws the world through it - pass 1 into a scene
 //! target one texel per world pixel of the view, pass 2 onto the bitmap -
-//! and a round shows the whole field at its own size (`Camera::whole`),
-//! which draws exactly what a renderer with no camera would. Presentation
-//! only as well; `render::view` builds raylib's cameras from it.
+//! and an arena shows the whole field at its own size (`Camera::whole`),
+//! which draws exactly what a renderer with no camera would. A field map
+//! is followed instead (`MapClass::Field`): its bitmap is the world this
+//! window shows plus the bar, a bitmap pixel per world pixel, made to the
+//! window's shape so it fills it (`FollowFrame`); its view is wherever
+//! `follow::Follow` puts it, on the block grid with the rest of its
+//! position applied when the frame is presented (`Camera::following`).
+//! Presentation only as well; `render::view` builds raylib's cameras from
+//! it and presents a followed view.
 
+use crate::framing::{frame_under_bar, Bar, Framing, Screen, Seating, SightBox, ViewRules};
 use crate::math::{Rectangle, Vec2};
+use crate::Layout;
 
 /// The bitmap-to-screen mapping for one frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -68,6 +76,21 @@ impl View {
         } else {
             Self::at_scale(fit.bitmap, fit.window, max)
         }
+    }
+
+    /// `fit` for a bitmap made to the window's shape - a followed field
+    /// map's, the world framed into the window less the bar
+    /// (`FollowFrame`): the same scale, with the centring offset rounded
+    /// to the nearest whole point rather than floored, so the rounding
+    /// error of a bitmap that fills the window exactly never shifts it a
+    /// whole point off the window's edge. Where the shape was clamped, the
+    /// bars left over are centred like `fit`'s.
+    pub fn fill(bitmap: (f32, f32), window: (f32, f32)) -> Self {
+        let fit = Self::fit(bitmap, window);
+        let (bw, bh) = fit.bitmap;
+        let (ww, wh) = fit.window;
+        let centre = |room: f32| (room / 2.0).round().max(0.0);
+        View { offset: Vec2::new(centre(ww - bw * fit.scale), centre(wh - bh * fit.scale)), ..fit }
     }
 
     /// The bitmap centred in the window at `scale`.
@@ -123,26 +146,70 @@ pub struct ScaleCap {
 pub const CULL_MARGIN_PX: f32 = 160.0;
 
 /// What part of the world a frame shows, and how large: the field area of
-/// the bitmap (`Layout::field`) shows `size` world pixels from `origin`,
-/// at `scale` bitmap pixels to the world pixel.
+/// the bitmap (`Layout::field`) shows `size` world pixels from
+/// `origin + offset`, at `scale` bitmap pixels to the world pixel.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Camera {
     /// The world the camera looks at: the field's size, px.
     pub field: (f32, f32),
-    /// The world point at the view's top-left corner, on the 2 px block
-    /// grid (`pyro::BLOCK`): a texel of the scene target is then a world
-    /// pixel and a block of the art never straddles two.
+    /// The world point at the scene target's top-left corner, on the 2 px
+    /// block grid (`pyro::BLOCK`): a texel of the scene target is then a
+    /// world pixel and a block of the art never straddles two.
     pub origin: Vec2,
+    /// How far past `origin` the view's own corner is, under a block on
+    /// each axis: the part of a followed view's position the block grid
+    /// cannot hold, applied when the frame is presented (`following`).
+    /// Zero for every view that keeps to the grid.
+    pub offset: Vec2,
     /// How much of the world the view shows, px.
     pub size: (f32, f32),
     /// Bitmap pixels per world pixel.
     pub scale: f32,
+    /// World pixels the scene target holds past the view's far edges, so
+    /// the picture can be shifted by `offset` and still cover the view:
+    /// one block for a followed view, none otherwise.
+    pub margin: f32,
 }
 
 impl Camera {
-    /// The whole field at its own size: what every round shows.
+    /// The whole field at its own size: what an arena shows.
     pub fn whole(field: (f32, f32)) -> Self {
-        Camera { field, origin: Vec2::new(0.0, 0.0), size: field, scale: 1.0 }
+        Camera { field, origin: Vec2::new(0.0, 0.0), offset: Vec2::new(0.0, 0.0), size: field, scale: 1.0, margin: 0.0 }
+    }
+
+    /// A followed view (docs/large-maps-follow-camera.md §6): `size` world
+    /// pixels from the world point `corner`, filling the followed bitmap's
+    /// field area at `scale` bitmap pixels per world pixel (`FollowFrame`)
+    /// and presented at `device_scale` device pixels per world pixel. The
+    /// scene target starts at `corner` floored to the block grid and holds
+    /// a block more than the view, so the blocks stay whole in it; what the
+    /// floor dropped is the `offset` the presented picture is shifted by,
+    /// rounded so the shift is whole device pixels (a rounding that
+    /// reaches a whole block moves to the next block instead). A corner
+    /// that is not a number is the field's own.
+    pub fn following(field: (f32, f32), corner: Vec2, size: (f32, f32), scale: f32, device_scale: f32) -> Self {
+        let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+        let block = crate::pyro::BLOCK;
+        let device = if device_scale.is_finite() && device_scale > 0.0 { device_scale } else { 1.0 };
+        let axis = |at: f32| {
+            let at = if at.is_finite() { at } else { 0.0 };
+            let mut grid = (at / block).floor() * block;
+            let mut rest = ((at - grid) * device).round() / device;
+            if rest >= block {
+                grid += block;
+                rest -= block;
+            }
+            (grid, rest.max(0.0))
+        };
+        let (x, dx) = axis(corner.x);
+        let (y, dy) = axis(corner.y);
+        Camera { field, origin: Vec2::new(x, y), offset: Vec2::new(dx, dy), size, scale, margin: block }
+    }
+
+    /// Whether this is a followed view (`following`), presented with its
+    /// sub-block offset rather than through the bitmap.
+    pub fn follows(&self) -> bool {
+        self.margin > 0.0
     }
 
     /// The field magnified `zoom` times around `center`: the view shows
@@ -159,28 +226,29 @@ impl Camera {
             (at / crate::pyro::BLOCK).floor() * crate::pyro::BLOCK
         };
         let origin = Vec2::new(corner(center.x, size.0, field.0), corner(center.y, size.1, field.1));
-        Camera { field, origin, size, scale: zoom }
+        Camera { field, origin, offset: Vec2::new(0.0, 0.0), size, scale: zoom, margin: 0.0 }
     }
 
-    /// Whether the view takes in the whole field, which leaves nothing to
-    /// cull.
+    /// Whether the scene target takes in the whole field, which leaves
+    /// nothing to cull.
     pub fn shows_whole_field(&self) -> bool {
-        self.origin.x <= 0.0 && self.origin.y <= 0.0 && self.size.0 >= self.field.0 && self.size.1 >= self.field.1
+        let (w, h) = self.target_size();
+        self.origin.x <= 0.0 && self.origin.y <= 0.0 && self.origin.x + w as f32 >= self.field.0 && self.origin.y + h as f32 >= self.field.1
     }
 
-    /// The scene target's size: the view in whole texels, one per world
-    /// pixel - the field's own size for the whole field.
+    /// The scene target's size: the view and its margin in whole texels,
+    /// one per world pixel - the field's own size for the whole field.
     pub fn target_size(&self) -> (i32, i32) {
-        ((self.size.0.ceil() as i32).max(1), (self.size.1.ceil() as i32).max(1))
+        (((self.size.0 + self.margin).ceil() as i32).max(1), ((self.size.1 + self.margin).ceil() as i32).max(1))
     }
 
     /// The world rectangle the view shows.
     pub fn rect(&self) -> Rectangle {
-        Rectangle::new(self.origin.x, self.origin.y, self.size.0, self.size.1)
+        Rectangle::new(self.origin.x + self.offset.x, self.origin.y + self.offset.y, self.size.0, self.size.1)
     }
 
-    /// The world rectangle the scene target holds: the view, rounded out
-    /// to whole texels.
+    /// The world rectangle the scene target holds: the view and its
+    /// margin, rounded out to whole texels.
     pub fn target_rect(&self) -> Rectangle {
         let (w, h) = self.target_size();
         Rectangle::new(self.origin.x, self.origin.y, w as f32, h as f32)
@@ -203,21 +271,24 @@ impl Camera {
     /// A point in the field area of the bitmap (`Layout::to_field`'s
     /// answer) as a world point: what a pointer over the field touches.
     pub fn to_world(&self, view: Vec2) -> Vec2 {
-        Vec2::new(self.origin.x + view.x / self.scale, self.origin.y + view.y / self.scale)
+        let corner = self.rect();
+        Vec2::new(corner.x + view.x / self.scale, corner.y + view.y / self.scale)
     }
 
     /// A world point as a point in the field area of the bitmap.
     pub fn to_view(&self, world: Vec2) -> Vec2 {
-        Vec2::new((world.x - self.origin.x) * self.scale, (world.y - self.origin.y) * self.scale)
+        let corner = self.rect();
+        Vec2::new((world.x - corner.x) * self.scale, (world.y - corner.y) * self.scale)
     }
 
     /// Where the scene target lands in the field area of the bitmap, before
-    /// the shake: its every texel `scale` bitmap pixels wide. A view whose
-    /// size is not whole texels reaches a little past the field area,
-    /// where the bitmap's edge clips it.
+    /// the shake: its every texel `scale` bitmap pixels wide, shifted back
+    /// by `offset`. A view whose size is not whole texels, or a target that
+    /// holds a margin, reaches a little past the field area, where the
+    /// bitmap's edge clips it.
     pub fn dest(&self) -> Rectangle {
         let (w, h) = self.target_size();
-        Rectangle::new(0.0, 0.0, w as f32 * self.scale, h as f32 * self.scale)
+        Rectangle::new(-self.offset.x * self.scale, -self.offset.y * self.scale, w as f32 * self.scale, h as f32 * self.scale)
     }
 
     /// The scene target's texture coordinates in the ripple shaders' frame
@@ -237,6 +308,67 @@ impl Camera {
 /// rectangle worth drawing (`Camera::cull`) and `at` lies outside it.
 pub fn culled(cull: Option<Rectangle>, at: Vec2) -> bool {
     cull.is_some_and(|r| !r.contains(at))
+}
+
+/// How a followed field map's frame lands on the window
+/// (docs/large-maps-follow-camera.md §3, §6): the world the framing rules
+/// give this screen under the HUD bar (`framing::frame_under_bar`), a
+/// bitmap of exactly that world plus the bar, and the view that fills the
+/// window with it - no letterbox for any shape between `view_aspect_min`
+/// and `view_aspect_max`, bars across the long axis past them. A bitmap
+/// pixel is a world pixel, except where the view is narrower than the
+/// bar's slot tables are laid out for (`DEFAULT_SCREEN_WIDTH`): there the
+/// bitmap is that wide and the world is magnified into its field area
+/// (`scale`), so the bar and everything over the field keep their room
+/// and are drawn a little smaller than the world.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FollowFrame {
+    /// What this screen shows of a field map.
+    pub framing: Framing,
+    /// Who the round is framed for, and the sight box every view of it
+    /// keeps on screen.
+    pub seating: Seating,
+    pub sight: SightBox,
+    /// The bitmap: the bar on top, the field area the view fills.
+    pub layout: Layout,
+    /// Bitmap pixels per world pixel in the field area: 1, or more where
+    /// the bitmap is wider than the view.
+    pub scale: f32,
+    /// The bitmap onto the window.
+    pub view: View,
+}
+
+impl FollowFrame {
+    /// The HUD bar over a followed field map: its height, laid out across
+    /// the standard field's width at the least.
+    pub const BAR: Bar = Bar { height: crate::HUD_BAR_HEIGHT as f32, min_width: crate::DEFAULT_SCREEN_WIDTH as f32 };
+
+    /// Frame a field map on `screen` (in points) for a window of `window`
+    /// (in the window's own units, which `View` maps to).
+    pub fn new(screen: Screen, window: (f32, f32), seating: Seating, sight: SightBox, rules: &ViewRules) -> FollowFrame {
+        let framing = frame_under_bar(screen, Self::BAR, seating, sight, rules);
+        let (w, h) = framing.visible;
+        let width = w.max(Self::BAR.min_width);
+        let scale = if w > 0.0 { width / w } else { 1.0 };
+        let layout = Layout::for_field(width, h * scale);
+        let bitmap = (layout.field.w.max(layout.panel.w), layout.field.h + layout.panel.h);
+        FollowFrame { framing, seating, sight, layout, scale, view: View::fill(bitmap, window) }
+    }
+
+    /// The scene target a view of this frame needs: the view and the
+    /// block of margin `Camera::following` gives it, whole texels. It does
+    /// not move with the view, so the target lives as long as the window
+    /// keeps its size.
+    pub fn target_size(&self) -> (i32, i32) {
+        Camera::following((1.0, 1.0), Vec2::new(0.0, 0.0), self.framing.visible, self.scale, 1.0).target_size()
+    }
+
+    /// Device pixels per world pixel on a window of `framebuffer` device
+    /// pixels per point: what the picture is presented at, and so what a
+    /// followed view's sub-block shift is rounded to.
+    pub fn device_scale(&self, framebuffer: f32) -> f32 {
+        self.view.scale * self.scale * framebuffer
+    }
 }
 
 #[cfg(test)]
@@ -389,6 +521,101 @@ mod view_tests {
         assert!(culled(cull, Vec2::new(272.0 - CULL_MARGIN_PX - 1.0, 136.0)), "past it");
         assert!(culled(cull, Vec2::new(816.0 + CULL_MARGIN_PX + 1.0, 408.0)), "past the far corner's margin");
         assert!(!culled(None, Vec2::new(-5000.0, 9000.0)), "no rectangle draws everything");
+    }
+
+    #[test]
+    fn a_followed_view_snaps_to_whole_blocks_and_presents_the_rest() {
+        let field = (1536.0, 768.0);
+        // 1.5 device pixels per world pixel: a block is three.
+        let c = Camera::following(field, Vec2::new(301.3, 120.9), (1280.0, 688.0), 1.0, 1.5);
+        assert_eq!(c.origin, Vec2::new(300.0, 120.0), "the corner floored to the block grid");
+        assert!(c.offset.x >= 0.0 && c.offset.x < 2.0 && c.offset.y >= 0.0 && c.offset.y < 2.0, "{c:?}");
+        for (offset, exact) in [(c.offset.x, 1.3), (c.offset.y, 0.9)] {
+            let device = offset * 1.5;
+            assert!((device - device.round()).abs() < 1e-4, "a shift of whole device pixels: {device}");
+            assert!((offset - exact).abs() <= 0.5 / 1.5 + 1e-4, "the nearest device pixel to {exact}: {offset}");
+        }
+        assert!(c.follows() && c.scale == 1.0);
+        assert_eq!(c.target_size(), (1282, 690), "the view and a block of margin");
+        assert_eq!(c.rect(), Rectangle::new(300.0 + c.offset.x, 120.0 + c.offset.y, 1280.0, 688.0));
+        // The target covers the view whatever the shift.
+        let t = c.target_rect();
+        let r = c.rect();
+        assert!(t.x <= r.x && t.y <= r.y && t.x + t.width >= r.x + r.width && t.y + t.height >= r.y + r.height);
+        // The pointer mapping goes through the shift.
+        let w = Vec2::new(900.0, 400.0);
+        let back = c.to_world(c.to_view(w));
+        assert!((back.x - w.x).abs() < 1e-3 && (back.y - w.y).abs() < 1e-3);
+        assert_eq!(c.to_world(Vec2::new(0.0, 0.0)), Vec2::new(r.x, r.y));
+        // A remainder that rounds up to a whole block moves to the next.
+        let c = Camera::following(field, Vec2::new(3.9, 0.0), (1280.0, 688.0), 1.0, 1.5);
+        assert_eq!((c.origin.x, c.offset.x), (4.0, 0.0));
+        // On the grid there is nothing to shift; negative corners (a map
+        // shorter than the view) floor the same way.
+        let c = Camera::following(field, Vec2::new(64.0, -24.0), (1280.0, 816.0), 1.0, 2.0);
+        assert_eq!((c.origin, c.offset), (Vec2::new(64.0, -24.0), Vec2::new(0.0, 0.0)));
+        let c = Camera::following(field, Vec2::new(-23.5, 0.0), (1280.0, 688.0), 1.0, 1.0);
+        assert_eq!((c.origin.x, c.offset.x), (-24.0, 1.0), "half a pixel rounds to one at one pixel a world pixel");
+        // A view magnified into a bitmap wider than it: a pointer's world
+        // point goes through the scale too.
+        let c = Camera::following(field, Vec2::new(100.0, 50.0), (800.0, 520.0), 1.36, 2.0);
+        let w = Vec2::new(400.0, 300.0);
+        let back = c.to_world(c.to_view(w));
+        assert!((back.x - w.x).abs() < 1e-3 && (back.y - w.y).abs() < 1e-3);
+        let p = c.to_view(Vec2::new(c.rect().x + 10.0, c.rect().y));
+        assert!((p.x - 13.6).abs() < 1e-4 && p.y == 0.0, "{p:?}");
+        assert_eq!(c.target_size(), (802, 522), "the target is world pixels, whatever the bitmap's");
+        // Nonsense in, the field's corner out.
+        let c = Camera::following(field, Vec2::new(f32::NAN, f32::INFINITY), (1280.0, 688.0), 1.0, f32::NAN);
+        assert_eq!((c.origin, c.offset), (Vec2::new(0.0, 0.0), Vec2::new(0.0, 0.0)));
+        // A followed view inside the field culls; one past it on both axes
+        // holds the whole field and culls nothing.
+        assert!(Camera::following(field, Vec2::new(100.0, 40.0), (1280.0, 688.0), 1.0, 1.5).cull().is_some());
+        assert_eq!(Camera::following((1280.0, 640.0), Vec2::new(-10.0, -24.0), (1300.0, 688.0), 1.0, 1.0).cull(), None);
+    }
+
+    #[test]
+    fn a_followed_frame_fills_the_window_with_the_world_and_the_bar() {
+        use crate::framing::{Seating, SightBox, ViewRules};
+        let rules = ViewRules::of(&crate::tuning::Tuning::DEFAULT);
+        let sight = SightBox::from_cells(11.5, 7.5);
+        let windows = [(852.0, 393.0, 3.0, 460.0), (1180.0, 820.0, 2.0, 264.0), (1920.0, 1080.0, 1.0, 92.0), (1600.0, 900.0, 1.0, 96.0), (1088.0, 576.0, 2.0, 192.0)];
+        for (w, h, dpr, ppi) in windows {
+            for seating in [Seating::Local, Seating::Room] {
+                let screen = Screen::new(w, h, dpr, ppi).with_panel_width(w * dpr);
+                let f = FollowFrame::new(screen, (w, h), seating, sight, &rules);
+                let (vw, vh) = f.framing.visible;
+                // The field area is the view - magnified to the bar's
+                // width where the view is narrower.
+                assert_eq!(f.layout.field.w, vw.max(1088.0), "{w} x {h} ({seating:?})");
+                assert!((f.scale - f.layout.field.w / vw).abs() < 1e-5 && f.scale >= 1.0);
+                assert!((f.layout.field.h - vh * f.scale).abs() < 1e-3);
+                assert_eq!(f.layout.panel.h, crate::HUD_BAR_HEIGHT as f32);
+                assert_eq!(f.view.offset, Vec2::new(0.0, 0.0), "{w} x {h}: no letterbox");
+                assert!(
+                    (f.view.scale * f.scale - f.framing.point_scale).abs() < 1e-4,
+                    "{w} x {h}: the world is drawn at the framing's scale"
+                );
+                assert!((f.device_scale(dpr) - f.framing.point_scale * dpr).abs() < 1e-3);
+                let d = f.view.dest();
+                assert!((d.width - w).abs() < 0.01 && (d.height - h).abs() < 0.01, "{w} x {h}: {d:?}");
+                let (tw, th) = f.target_size();
+                assert!(tw as f32 >= vw + 2.0 && th as f32 >= vh + 2.0);
+            }
+        }
+        // Past the aspect clamp a 32:9 screen gets side bars, centred.
+        let screen = Screen::new(5120.0, 1440.0, 1.0, 109.0).with_panel_width(5120.0);
+        let f = FollowFrame::new(screen, (5120.0, 1440.0), Seating::Room, sight, &rules);
+        assert!(f.view.offset.x > 0.0 && f.view.offset.y == 0.0, "{:?}", f.view);
+        assert!((f.view.offset.x - f.framing.bars.0).abs() <= 0.5, "{:?} vs {:?}", f.view.offset, f.framing.bars);
+    }
+
+    #[test]
+    fn fill_rounds_a_rounding_error_away_instead_of_flooring_it_to_a_point() {
+        // A bitmap that is the window's own shape to the last bit but one.
+        let v = View::fill((1167.8, 563.6), (852.0, 411.2));
+        assert_eq!(v.offset, Vec2::new(0.0, 0.0));
+        assert_eq!(View::fill((960.0, 512.0), (1920.0, 1080.0)).offset, Vec2::new(0.0, 28.0));
     }
 
     #[test]
