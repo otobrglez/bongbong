@@ -692,8 +692,12 @@ mod view_tests {
             let bottom_right = crate::shockwave::ripple_uv(corner, Vec2::new(c.origin.x + c.size.0, c.origin.y + c.size.1));
             assert!(near(at(Vec2::new(0.0, 1.0)), top_left), "{:?} vs {top_left:?}", at(Vec2::new(0.0, 1.0)));
             assert!(near(at(Vec2::new(1.0, 0.0)), bottom_right), "{:?} vs {bottom_right:?}", at(Vec2::new(1.0, 0.0)));
-            // The numbers stay the view's, however large the field.
-            assert!(s.x <= 1.0 && s.y <= 1.0, "{field:?}: {s:?}");
+            // The numbers are the view's, wherever it stands in the field:
+            // its corner is the origin, and its extent the target's own.
+            assert!(near(at(Vec2::new(0.0, 0.0)), Vec2::new(0.0, 0.0)), "{field:?}");
+            let (w, h) = c.target_size();
+            let (rw, rh) = crate::shockwave::RIPPLE_FRAME;
+            assert!(near(s, Vec2::new(w as f32 / rw, h as f32 / rh)), "{field:?}: {s:?}");
         }
     }
 
