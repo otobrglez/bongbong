@@ -16,8 +16,11 @@
 # certificate (cloud-managed, so no private key needs to be on this Mac) and
 # the App Store profile for the bundle id, re-signs the app, and uploads it.
 #
-# CI runs the same script (.github/workflows/testflight.yml, on version tags),
-# with the key written from repo secrets. Needs, in .envrc or the environment:
+# CI runs the same script (.github/workflows/testflight.yml, on version tags
+# and for a PR labelled `ios`), with the key written from repo secrets.
+# BONGBONG_IOS_PR=<N> uploads as pull request N: a version of its own,
+# MAJOR.MINOR.<10000 + N>, so TestFlight keeps it apart from the releases
+# (tools/ios/version.sh). Needs, in .envrc or the environment:
 #   BONGBONG_IOS_TEAM    the paid team's ID (developer.apple.com > Membership)
 #   ASC_KEY_ID           an App Store Connect Team API key (Users and Access >
 #   ASC_ISSUER_ID        Integrations), Admin role - cloud-managed signing

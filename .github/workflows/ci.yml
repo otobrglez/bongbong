@@ -17,6 +17,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The version and build number an iOS upload carries
+      # (tools/ios/version.sh) - plain bash, so a PR that breaks the scheme
+      # fails here rather than on a macOS runner after the build.
+      - name: iOS version scheme
+        run: ./tools/ios/version_test.sh
+
       # raylib-sys builds raylib from source - same system dev packages as
       # the release builds (keep in sync with dist-workspace.toml's
       # [dist.dependencies.apt]; that list came from sola-raylib's own

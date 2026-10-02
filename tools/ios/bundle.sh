@@ -11,9 +11,11 @@
 # would otherwise write: the DT* keys naming the SDK and Xcode it was built
 # with (an unknown or too-old toolchain is refused), CFBundleIconName and
 # the Assets.car actool makes from the one 1024 px icon.
-# CFBundleShortVersionString is Cargo.toml's version; CFBundleVersion, the
-# build number every upload must raise, is BONGBONG_IOS_BUILD or the UTC
-# time (YYYYMMDD.HHMM).
+# CFBundleShortVersionString and CFBundleVersion come from
+# tools/ios/version.sh: Cargo.toml's version and the UTC time
+# (YYYYMMDD.HHMM), or under BONGBONG_IOS_PR a pull request's own version
+# (MAJOR.MINOR.<10000 + PR>, YYYYMMDD.HHMM.<PR>); BONGBONG_IOS_BUILD pins
+# the build number.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 PROFILE="${1:-debug}"
@@ -26,8 +28,8 @@ esac
 BIN="target/$TARGET/$PROFILE/bongbong"
 APP="$OUT/BongBong.app"
 [[ -x "$BIN" ]] || { echo "[bundle-ios] $BIN missing: run 'just build-ios-sim' (or build-ios-device) first" >&2; exit 1; }
-VER="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
-BUILD="${BONGBONG_IOS_BUILD:-$(date -u +%Y%m%d.%H%M)}"
+VERSIONS="$(./tools/ios/version.sh)"
+read -r VER BUILD <<<"$VERSIONS"
 rm -rf "$APP" && mkdir -p "$APP"
 cp "$BIN" "$APP/bongbong"
 sed -e 's/__EXECUTABLE__/bongbong/' -e 's/__BUNDLE_ID__/com.otobrglez.bongbong/' -e 's/__NAME__/BongBong/' \
