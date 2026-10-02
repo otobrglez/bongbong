@@ -509,6 +509,8 @@ pub struct MapEditor {
     pending_look: Option<Rectangle>,
     /// The fingers on the canvas.
     gestures: gesture::Gestures,
+    /// Where a painting finger is, for edge scroll.
+    stroke_pointer: Option<Vec2>,
     pub cli_overrides: CliOverrides,
     /// `render` draws a flat white field instead of the ground tileset -
     /// the builder-side twin of `Game::plain_canvas`.
@@ -548,6 +550,7 @@ impl MapEditor {
             wheel_accum: 0.0,
             pending_look: None,
             gestures: gesture::Gestures::default(),
+            stroke_pointer: None,
             cli_overrides: CliOverrides::default(),
         };
         editor.rebuild_ground();
@@ -1303,7 +1306,42 @@ impl MapEditor {
                 self.drag_to(cell);
             }
         }
+        self.edge_scroll(pointer, input.dt, layout, &rules);
         EditorAction::None
+    }
+
+    /// Edge scroll: while a stroke is held with its pointer within
+    /// `builder_edge_scroll_pt` of the canvas area's edge - or past it, over
+    /// the bar or off the window - the view moves toward that edge, faster
+    /// the deeper in, up to `builder_edge_scroll_pt_per_s`, and the stroke
+    /// carries on into the cells that come under the pointer. A long wall
+    /// needs no pan in the middle.
+    fn edge_scroll(&mut self, pointer: Vec2, dt: f32, layout: &Layout, rules: &CanvasRules) {
+        if self.stroke.is_none() || !(dt > 0.0) {
+            return;
+        }
+        let vp = self.viewport_in(layout);
+        let margin = vp.px(rules.edge_scroll_pt);
+        if !(margin > 0.0) {
+            return;
+        }
+        // How far into the margin by each edge, 0 to 1: toward the near
+        // edge negative, toward the far one positive.
+        let depth = |near: f32, len: f32, p: f32| {
+            let into_near = ((near + margin - p) / margin).clamp(0.0, 1.0);
+            let into_far = ((p - (near + len - margin)) / margin).clamp(0.0, 1.0);
+            into_far - into_near
+        };
+        let f = layout.field;
+        let into = Vec2::new(depth(f.x, f.w, pointer.x), depth(f.y, f.h, pointer.y));
+        if into.x == 0.0 && into.y == 0.0 {
+            return;
+        }
+        let step = vp.px(rules.edge_scroll_pt_per_s) * dt;
+        self.camera.pan(Vec2::new(-into.x * step, -into.y * step), &vp, rules);
+        if let Some(cell) = self.cell_at(pointer, layout) {
+            self.drag_to(cell);
+        }
     }
 
     /// `+`/`-` zoom about the canvas's middle and the arrows pan it, the
@@ -1376,6 +1414,12 @@ impl MapEditor {
         for event in events {
             self.apply_gesture(event, layout, rules);
         }
+        // A painting finger held at the canvas's edge scrolls it.
+        if self.gestures.painting()
+            && let Some(at) = self.stroke_pointer
+        {
+            self.edge_scroll(at, input.dt, layout, rules);
+        }
     }
 
     /// The paint threshold: whether a finger can hit one cell at this
@@ -1407,12 +1451,14 @@ impl MapEditor {
             }
             GestureEvent::StrokeBegin(from) => {
                 self.finish_stroke();
+                self.stroke_pointer = Some(from);
                 if let Some(cell) = self.cell_at(from, layout) {
                     self.begin_stroke(cell, false);
                 }
             }
             GestureEvent::StrokeTo(to) => {
                 self.pointer = Some(to);
+                self.stroke_pointer = Some(to);
                 if let Some(cell) = self.cell_at(to, layout) {
                     if self.stroke.is_some() {
                         self.drag_to(cell);
@@ -1421,8 +1467,14 @@ impl MapEditor {
                     }
                 }
             }
-            GestureEvent::StrokeEnd => self.finish_stroke(),
-            GestureEvent::StrokeCancel => self.cancel_stroke(),
+            GestureEvent::StrokeEnd => {
+                self.stroke_pointer = None;
+                self.finish_stroke();
+            }
+            GestureEvent::StrokeCancel => {
+                self.stroke_pointer = None;
+                self.cancel_stroke();
+            }
             GestureEvent::Move { from, to, factor } => self.camera.move_point(layout.to_field(from), layout.to_field(to), factor, &vp, rules),
             GestureEvent::Settle(at) => self.camera.settle(layout.to_field(at), &vp, rules),
             GestureEvent::Undo => {
@@ -2695,6 +2747,56 @@ mod editor_tests {
         fingers(&mut ed, &layout, &[vec![(2, x, y)], vec![(2, x + 60.0, y)]]);
         assert_eq!(ed.open_menu(), None);
         assert!(ed.map().cells.is_empty(), "the dismissing finger painted");
+    }
+
+    /// A stroke held at the canvas's edge scrolls the view toward it and
+    /// keeps painting into the cells that come under the pointer - with a
+    /// mouse and with a finger - and stops at the field's edge; away from
+    /// the edge nothing scrolls.
+    #[test]
+    fn a_stroke_held_at_the_canvas_edge_scrolls_and_keeps_painting() {
+        for finger in [false, true] {
+            let (mut ed, layout, _) = big_editor((1180.0, 820.0), 2.0, false);
+            let vp = ed.viewport();
+            let rules = CanvasRules::of(&crate::tuning::Tuning::DEFAULT);
+            ed.camera.zoom_at(vp.scale_for_cell_mm(12.0), Vec2::new(200.0, 300.0), &vp, &rules);
+            let row_y = layout.field.y + 300.0;
+            let start = Vec2::new(layout.field.x + 200.0, row_y);
+            let edge = Vec2::new(layout.field.x + layout.field.w - 4.0, row_y);
+            let (first, row) = ed.cell_at(start, &layout).unwrap();
+            let center = ed.camera().center(&vp);
+            let shown_right = ed.cell_at(edge, &layout).unwrap().0;
+            let frames = 90;
+            if finger {
+                let mut f: Vec<Vec<(i32, f32, f32)>> = (0..=8).map(|i| vec![(1, start.x + (edge.x - start.x) * i as f32 / 8.0, row_y)]).collect();
+                f.extend((0..frames).map(|_| vec![(1, edge.x, row_y)]));
+                fingers(&mut ed, &layout, &f);
+            } else {
+                ed.update(&BuilderInput { pointer: Some(start), pressed: true, held: true, dt: 1.0 / 60.0, ..Default::default() }, &layout);
+                for _ in 0..frames {
+                    ed.update(&BuilderInput { pointer: Some(edge), held: true, dt: 1.0 / 60.0, ..Default::default() }, &layout);
+                }
+                ed.update(&BuilderInput { pointer: Some(edge), dt: 1.0 / 60.0, ..Default::default() }, &layout);
+            }
+            let moved = ed.camera().center(&vp);
+            assert!(moved.x > center.x + 64.0 && (moved.y - center.y).abs() < 1e-3, "finger={finger}: {center:?} -> {moved:?}");
+            let painted_right = (0..96).rev().find(|&c| ed.map().cell(c, row).is_some()).unwrap();
+            assert!(painted_right > shown_right + 1, "finger={finger}: the stroke went on past the first view's edge ({painted_right} vs {shown_right})");
+            assert!((first..=painted_right).all(|c| ed.map().cell(c, row).is_some()), "finger={finger}: one unbroken row from {first}");
+            assert_eq!(ed.map().cells.len() as i32, painted_right - first + 1, "finger={finger}: on that row alone");
+            assert_eq!(ed.history().undo_depth(), 1, "finger={finger}: one stroke, one step");
+        }
+        // Held in the middle of the canvas nothing scrolls.
+        let (mut ed, layout, _) = big_editor((1180.0, 820.0), 2.0, false);
+        let vp = ed.viewport();
+        ed.camera.zoom_at(vp.fit_scale() * 4.0, Vec2::new(500.0, 300.0), &vp, &CanvasRules::of(&crate::tuning::Tuning::DEFAULT));
+        let center = ed.camera().center(&vp);
+        let mid = canvas_middle(&layout);
+        ed.update(&BuilderInput { pointer: Some(mid), pressed: true, held: true, dt: 1.0 / 60.0, ..Default::default() }, &layout);
+        for _ in 0..30 {
+            ed.update(&BuilderInput { pointer: Some(mid), held: true, dt: 1.0 / 60.0, ..Default::default() }, &layout);
+        }
+        assert_eq!(ed.camera().center(&vp), center);
     }
 
     /// What a drag across the 96 x 54 study map costs, a cell a frame: the
