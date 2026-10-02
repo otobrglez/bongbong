@@ -36,8 +36,12 @@ button-online = ONLINE
 
 # The players dialog: a 28 px title and a 16 px line across a 440 px
 # panel, then two 176 px buttons in 18 px text (about 14 letters each).
+# The line names the controls in the hands that last pressed something:
+# the keys after a key press, and after a touch the stick and the tap of
+# player 1 - player 2 is always the keyboard's.
 players-title = How many players?
 players-keys = P1 arrows + Space    P2 WASD + L.Shift
+players-touch = P1 drag + tap    P2 WASD + L.Shift
 players-one = 1 PLAYER
 players-two = 2 PLAYERS
 
@@ -122,7 +126,8 @@ bar-level = LEVEL
 # seat's number. Keep it short - it sits over a 48 px hull.
 seat-label = P{ $n }
 
-# The touch hints over each half of the field, 20 px text, drawn once.
+# The touch hints over each half of the field, 20 px text, drawn once,
+# the first time a touch lands - and not while the keys are in use.
 touch-steer = DRAG TO STEER
 touch-fire = TAP TO FIRE
 
@@ -337,13 +342,18 @@ settings-auto = auto
 # Beside a value a command-line flag outranks, 12 pt.
 settings-cli = (cli)
 
-# The popups. A long list's pager shows the span on screen, 12 pt
-# between its arrows in a 340 pt row.
+# The popups. The Save prompt's line, 12 pt in 276 pt, names the keys,
+# or after a touch the tap outside the prompt that cancels it.
 editor-save-as = Save as:
 editor-save-hint = Enter to save, Esc to cancel
+editor-save-hint-touch = Enter to save, tap outside to cancel
 editor-no-maps = no maps to load
 editor-shipped = shipped
+# A long list's pager: the span on screen, 12 pt between its < and > in
+# a 340 pt row, and how to turn it - the mouse's wheel, or after a touch a
+# tap on either arrow.
 editor-page = { $from }-{ $to } of { $n }  (wheel)
+editor-page-touch = { $from }-{ $to } of { $n }  (tap < or >)
 editor-untitled = untitled
 
 # The status line's answers.

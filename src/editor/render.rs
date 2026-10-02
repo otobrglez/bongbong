@@ -14,7 +14,7 @@ use super::chrome::{small_text, BarTools, CategoryButton, MENU_BOX_INSET, SMALL_
 use crate::text::{keys, text};
 use crate::canvas::Sheet;
 use crate::frog::FrogAnim;
-use crate::hud::{BAR_FILL, DIM, HUD_TEXT_SIZE, TEXT, UI_SMALL_TEXT};
+use crate::hud::{Hints, BAR_FILL, DIM, HUD_TEXT_SIZE, TEXT, UI_SMALL_TEXT};
 use crate::math::{Color, Rectangle};
 use crate::obstacle;
 use crate::portal::{draw_portal, portal_icon_source_rec};
@@ -310,7 +310,7 @@ impl MapEditor {
             self.draw_status_line(&mut d, frame, chrome, cursor);
             self.draw_navigator(&mut d, frame, textures, camera);
             self.draw_bar(&mut d, &chrome.bar, textures);
-            self.draw_popup(&mut d, chrome, textures);
+            self.draw_popup(&mut d, chrome, textures, frame.ui.hints);
             if let Some((loupe, picture)) = magnified {
                 draw_loupe(&mut d, loupe, picture);
             }
@@ -643,21 +643,22 @@ impl MapEditor {
         }
     }
 
-    /// The open popup, in UI points.
-    fn draw_popup(&self, d: &mut impl RaylibDraw, chrome: &Chrome, textures: &EditorTextures) {
+    /// The open popup, in UI points, its hints naming `hints`' input.
+    fn draw_popup(&self, d: &mut impl RaylibDraw, chrome: &Chrome, textures: &EditorTextures, hints: Hints) {
         match (&self.popup, &chrome.popup) {
             (Some(Popup::Dropdown(category)), Some(PopupLayout::Dropdown(_, rows))) => self.draw_dropdown(d, rows, textures, *category),
             (Some(Popup::Palette), Some(PopupLayout::Palette(palette))) => self.draw_palette(d, palette, textures),
-            (Some(Popup::Settings { page }), Some(PopupLayout::Settings(settings))) => self.draw_settings(d, settings, *page, textures),
-            (Some(Popup::Lint { page }), Some(PopupLayout::Lint(lint))) => self.draw_lint_panel(d, lint, *page),
+            (Some(Popup::Settings { page }), Some(PopupLayout::Settings(settings))) => self.draw_settings(d, settings, *page, textures, hints),
+            (Some(Popup::Lint { page }), Some(PopupLayout::Lint(lint))) => self.draw_lint_panel(d, lint, *page, hints),
             (Some(Popup::File), Some(PopupLayout::File(rows))) => Self::draw_file_menu(d, rows),
-            (Some(Popup::Load { entries, scroll }), Some(PopupLayout::Load(load))) => Self::draw_load_list(d, load, entries, *scroll),
+            (Some(Popup::Load { entries, scroll }), Some(PopupLayout::Load(load))) => Self::draw_load_list(d, load, entries, *scroll, hints),
             (Some(Popup::Save { name }), Some(PopupLayout::Save(panel))) => {
                 let panel = *panel;
                 draw_panel(d, panel);
                 d.draw_text(&text().get(keys::EDITOR_SAVE_AS), (panel.x + 12.0) as i32, (panel.y + 10.0) as i32, 16, TEXT);
                 d.draw_text(&format!("{name}_"), (panel.x + 12.0) as i32, (panel.y + 34.0) as i32, 18, TEXT);
-                d.draw_text(&text().get(keys::EDITOR_SAVE_HINT), (panel.x + 12.0) as i32, (panel.y + 58.0) as i32, UI_SMALL_TEXT, Color::GRAY);
+                let hint = text().get(hints.pick(keys::EDITOR_SAVE_HINT, keys::EDITOR_SAVE_HINT_TOUCH));
+                d.draw_text(&hint, (panel.x + 12.0) as i32, (panel.y + 58.0) as i32, UI_SMALL_TEXT, Color::GRAY);
             }
             _ => {}
         }
@@ -674,7 +675,7 @@ impl MapEditor {
 
     /// The Load list: one row per map, shipped ones marked, and the pager
     /// when there are more than fit.
-    fn draw_load_list(d: &mut impl RaylibDraw, load: &chrome::LoadLayout, entries: &[MapEntry], scroll: usize) {
+    fn draw_load_list(d: &mut impl RaylibDraw, load: &chrome::LoadLayout, entries: &[MapEntry], scroll: usize, hints: Hints) {
         let panel = load.rows.panel;
         draw_panel(d, panel);
         if entries.is_empty() {
@@ -694,7 +695,7 @@ impl MapEditor {
         }
         if let Some(pager) = load.pager {
             let hint = text().fmt(
-                keys::EDITOR_PAGE,
+                page_key(hints),
                 &[("from", (scroll + 1).into()), ("to", (scroll + rows).min(entries.len()).into()), ("n", entries.len().into())],
             );
             draw_pager(d, pager.row, &hint, scroll > 0, scroll < last);
@@ -753,7 +754,7 @@ impl MapEditor {
     /// The MAP settings panel (docs/game-editor-fusion.md section 9): a
     /// stepper per map key and the RESET MAP button, `page`'s rows where
     /// the room under the bar pages it, and then its pager.
-    fn draw_settings(&self, d: &mut impl RaylibDraw, layout: &chrome::SettingsLayout, page: usize, textures: &EditorTextures) {
+    fn draw_settings(&self, d: &mut impl RaylibDraw, layout: &chrome::SettingsLayout, page: usize, textures: &EditorTextures, hints: Hints) {
         draw_hanging_panel(d, layout.rows.panel);
         let page = page.min(layout.pages - 1);
         let settings = self.settings();
@@ -801,7 +802,7 @@ impl MapEditor {
         if let Some(pager) = layout.pager {
             let from = page * layout.per_page + 1;
             let to = (from + layout.per_page - 1).min(SETTINGS_ROWS.len());
-            let hint = text().fmt(keys::EDITOR_PAGE, &[("from", from.into()), ("to", to.into()), ("n", SETTINGS_ROWS.len().into())]);
+            let hint = text().fmt(page_key(hints), &[("from", from.into()), ("to", to.into()), ("n", SETTINGS_ROWS.len().into())]);
             draw_pager(d, pager.row, &hint, page > 0, page + 1 < layout.pages);
         }
     }
@@ -811,7 +812,7 @@ impl MapEditor {
     /// it works and each severity's count beside its mark; then a page of
     /// findings, each its mark, its words (`lint-<kind>`), where it is
     /// and, where it has one, its FIX button; the pager past a page.
-    fn draw_lint_panel(&self, d: &mut impl RaylibDraw, layout: &chrome::LintLayout, page: usize) {
+    fn draw_lint_panel(&self, d: &mut impl RaylibDraw, layout: &chrome::LintLayout, page: usize, hints: Hints) {
         let t = text();
         let len = self.lint_len();
         draw_hanging_panel(d, layout.panel);
@@ -866,7 +867,7 @@ impl MapEditor {
         if let Some(pager) = layout.pager {
             let from = page * per_page + 1;
             let to = (from + per_page - 1).min(len);
-            let hint = t.fmt(keys::EDITOR_PAGE, &[("from", from.into()), ("to", to.into()), ("n", len.into())]);
+            let hint = t.fmt(page_key(hints), &[("from", from.into()), ("to", to.into()), ("n", len.into())]);
             draw_pager(d, pager.row, &hint, page > 0, page + 1 < layout.pages);
         }
     }
@@ -996,6 +997,12 @@ fn draw_clear_readout(d: &mut impl RaylibDraw, rect: Rectangle, par: Option<f64>
         let text_y = (rect.y + (rect.height - size as f32) / 2.0) as i32;
         d.draw_text(&label, (rect.x + 16.0) as i32, text_y, size, TEXT);
     }
+}
+
+/// A pager's hint for `hints`' input: the span on screen and the wheel
+/// that turns it, or a tap on its arrows.
+fn page_key(hints: Hints) -> crate::text::Key {
+    hints.pick(keys::EDITOR_PAGE, keys::EDITOR_PAGE_TOUCH)
 }
 
 /// A pager row (`chrome::Pager`): `<` at its left end and `>` at its right,

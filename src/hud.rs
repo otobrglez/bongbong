@@ -359,6 +359,63 @@ pub const UI_SMALL_TEXT: i32 = 12;
 /// buttons already are).
 pub const UI_TOUCH_PT: f32 = 44.0;
 
+/// Which input the game's hints name (docs/large-maps-follow-camera.md §8,
+/// "hints that follow the input last used"): the keys - Space, R, Esc,
+/// Enter, the arrows, the mouse's wheel - while a keyboard is in use, a tap
+/// while a touch screen is. The last input decides (`follow`): a touch
+/// that lands turns the hints to taps and a key press turns them back, so
+/// a phone playing the web build - a keyboard build - and a laptop with a
+/// touch screen each read the input in their hands, never only the build's.
+/// Apart from `UiFrame::touch`, which keeps the buttons a finger's size
+/// once a touch is seen: a key press changes the words, never a button's
+/// size under a thumb.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Hints {
+    #[default]
+    Keys,
+    Touch,
+}
+
+impl Hints {
+    /// The hints a window opens with: taps where there is no keyboard to
+    /// press or the mouse stands in for a finger (`touch_only`), keys
+    /// elsewhere.
+    pub fn at_start(touch_only: bool) -> Hints {
+        if touch_only { Hints::Touch } else { Hints::Keys }
+    }
+
+    /// The hints after a frame of input: a key pressed turns them to the
+    /// keys, a touch landing to taps, and a frame with neither leaves them
+    /// as they were. A key and a touch in one frame read as the key, the
+    /// press a player makes on purpose.
+    pub fn follow(self, touch_landed: bool, key_pressed: bool) -> Hints {
+        if key_pressed {
+            Hints::Keys
+        } else if touch_landed {
+            Hints::Touch
+        } else {
+            self
+        }
+    }
+
+    /// The message these hints read: `keys` naming the keys, `touch` a
+    /// tap.
+    pub fn pick(self, keys: crate::text::Key, touch: crate::text::Key) -> crate::text::Key {
+        match self {
+            Hints::Keys => keys,
+            Hints::Touch => touch,
+        }
+    }
+
+    /// The hints as `status.ui.hints` spells them.
+    pub fn name(self) -> &'static str {
+        match self {
+            Hints::Keys => "keys",
+            Hints::Touch => "touch",
+        }
+    }
+}
+
 /// A window's safe area as its insets from each edge, in the window's own
 /// units: the strips a notch, a Dynamic Island, rounded corners and a home
 /// indicator take, which no chrome may sit under. Zero where the platform
@@ -427,6 +484,10 @@ pub struct UiFrame {
     /// A touch screen is in use (no keyboard, `--touch-from-mouse`, or a
     /// touch seen): every button is at least `UI_TOUCH_PT` on both sides.
     pub touch: bool,
+    /// The input the hints name (`Hints`): the last one used, which
+    /// `app.rs` sets every frame (`with_hints`); a frame laid out for touch
+    /// opens on taps, any other on the keys.
+    pub hints: Hints,
 }
 
 impl UiFrame {
@@ -453,7 +514,12 @@ impl UiFrame {
             (safe_w / scale - 2.0 * UI_EDGE_PT).max(0.0),
             (safe_h / scale - 2.0 * UI_EDGE_PT).max(0.0),
         );
-        UiFrame { scale, screen: Rect::new(0.0, 0.0, w / scale, h / scale), area, touch }
+        UiFrame { scale, screen: Rect::new(0.0, 0.0, w / scale, h / scale), area, touch, hints: Hints::at_start(touch) }
+    }
+
+    /// The same frame, its hints naming `hints`.
+    pub fn with_hints(self, hints: Hints) -> UiFrame {
+        UiFrame { hints, ..self }
     }
 
     /// A window of `size` units, a unit a point, nothing inset and no
@@ -1251,6 +1317,42 @@ mod hud_tests {
         game.world.get::<&mut Tank>(entity).expect("a tank").damage = MAX_DAMAGE;
     }
 
+    /// The hints follow the input last used, whatever the build: a touch
+    /// landing turns them to taps, a key press back to the keys, a frame
+    /// with neither leaves them, and a key beats a touch in the same frame.
+    /// A window with no keyboard - or the mouse standing in for a finger -
+    /// opens on taps, any other on the keys; a frame laid out for touch
+    /// opens on taps until it is told otherwise, and its buttons stay a
+    /// finger's size whatever the hints say.
+    #[test]
+    fn the_hints_follow_the_input_last_used() {
+        use crate::text::keys;
+        assert_eq!(Hints::at_start(true), Hints::Touch);
+        assert_eq!(Hints::at_start(false), Hints::Keys);
+        let mut hints = Hints::at_start(false);
+        let frames = [
+            ((false, false), Hints::Keys),
+            ((true, false), Hints::Touch),
+            ((false, false), Hints::Touch),
+            ((false, true), Hints::Keys),
+            ((false, false), Hints::Keys),
+            ((true, true), Hints::Keys),
+            ((true, false), Hints::Touch),
+        ];
+        for ((touch, key), want) in frames {
+            hints = hints.follow(touch, key);
+            assert_eq!(hints, want, "touch={touch} key={key}");
+        }
+        assert_eq!(Hints::Keys.pick(keys::EDITOR_PAGE, keys::EDITOR_PAGE_TOUCH), keys::EDITOR_PAGE);
+        assert_eq!(Hints::Touch.pick(keys::EDITOR_PAGE, keys::EDITOR_PAGE_TOUCH), keys::EDITOR_PAGE_TOUCH);
+        let touch = UiFrame::new((852.0, 393.0), 1.0, 1.0, Insets::default(), true);
+        assert_eq!(touch.hints, Hints::Touch);
+        assert_eq!(UiFrame::plain((1088.0, 576.0)).hints, Hints::Keys);
+        let keyed = touch.with_hints(Hints::Keys);
+        assert!(keyed.touch && keyed.hints == Hints::Keys, "a key press changes the words, not the buttons");
+        assert_eq!((keyed.scale, keyed.screen, keyed.area), (touch.scale, touch.screen, touch.area));
+    }
+
     /// One seat and two on a couch keep the tables they have always had;
     /// everything else - a third couch seat, and every room of two or
     /// more - is the compact one.
@@ -1517,7 +1619,7 @@ mod hud_tests {
         // An area too short for it leaves it out, and one a little short
         // shrinks it. (`UiFrame::new` never lays the chrome out in an area
         // under `UI_MIN_H` less its edges, which holds it whole.)
-        let short = |h: f32| UiFrame { scale: 1.0, screen: Rect::new(0.0, 0.0, 1600.0, h), area: Rect::new(8.0, 8.0, 1584.0, h - 16.0), touch: false };
+        let short = |h: f32| UiFrame { scale: 1.0, screen: Rect::new(0.0, 0.0, 1600.0, h), area: Rect::new(8.0, 8.0, 1584.0, h - 16.0), touch: false, hints: Hints::Keys };
         let wide = shapes().into_iter().find(|(n, _)| *n == "one with a wide map").expect("the shape").1;
         assert_eq!(corners(&short(90.0), &wide).minimap, None);
         let shrunk = corners(&short(140.0), &wide).minimap.expect("room for a smaller one");

@@ -15,6 +15,7 @@ button-online = SPLET
 
 players-title = Koliko igralcev?
 players-keys = P1 puščice + preslednica    P2 WASD + levi Shift
+players-touch = P1 vleci + tapni    P2 WASD + levi Shift
 players-one = 1 IGRALEC
 players-two = 2 IGRALCA
 
@@ -247,9 +248,11 @@ settings-cli = (cli)
 
 editor-save-as = Shrani kot:
 editor-save-hint = Enter shrani, Esc prekliče
+editor-save-hint-touch = Enter shrani, tapni zunaj za preklic
 editor-no-maps = ni zemljevidov
 editor-shipped = vgrajen
 editor-page = { $from }-{ $to } od { $n }  (kolešček)
+editor-page-touch = { $from }-{ $to } od { $n }  (tapni < ali >)
 editor-untitled = neimenovan
 
 editor-saved = shranjeno v { $name }.toml

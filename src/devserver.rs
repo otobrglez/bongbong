@@ -155,7 +155,7 @@ const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"inte
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|split|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `split` of a couch pair apart (null for one view: the divider's `line` - a point and the unit normal into the second half in the followed bitmap's pixels - and `window_line`, how far `apart` the halves' views stand and each half's `seat`, `rect`, `offset`, `cut` and `in_view`), the `establishing` shot's `phase` (whole|zoom|follow) and `progress` (view `establishing` while it plays), the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`; and `motion`, the one motion switch - whether motion is `reduced` (no shake, no whole-screen ripple, the establishing shot cut rather than zoomed), the `reduce_motion` row's `setting` (platform|off|on) and what the `platform` said at startup, null where it says nothing), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, in play and online the corners' `buttons` and `clusters` and the `minimap` picture under the right cluster (`null` where none is drawn - an arena shown whole, a phone; a press there does nothing), and the `screen_buttons` of whatever stands over the round - the level select's open tiles (`level_N`) and `back`, a dialog's `one`/`two` or `leave`/`stay`, a level's end screen's `levels`/`again`/`next`, the lobby's live buttons (`host`, `join`, `key_a`, `confirm`, `ready`, `start`, `kick_1`, ...) - all in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state (the builder's chrome is laid out on the window in UI points like play's corners - the bar along the top of the safe area, the popups under it -, and its rects come in window coordinates, what `click` and `builder_touch` take, each with its `ui` points; `builder.navigator`: the navigator's picture, `null` at FIT on an arena; `builder.buttons`: the builder's buttons by name - the bar's `play`, `play_here`, `check`, `clear`, `fit`, `map`, `file`, `erase`, `undo`, `redo` and each category's `category_<name>` (its icon half) and `list_<name>` (its list half), or the one `tools` button a bar too narrow for the five folds them into; while a popup is open its own - a list's or the palette's `tool_<name>`, the FILE menu's `load`, `save`, `save_as` and `clear_map`, the Load list's `map_<name>`, the MAP panel's `<row>_dec`/`<row>_inc` and `reset`, the CHECK panel's `finding_N` rows and `fix_N` buttons - and a paged popup's `page_back`/`page_next`; `builder.check`: the CHECK panel's last report; `builder.clear`: the clear check - the canvas's `revision`, whether it is `cleared` (won from plain PLAY with no edit since) and its `par` in seconds, and the revision PLAY started the local round on (`attempt`); `builder.loupe`: the loupe over a painting finger - where it stands, the `world` it shows, its `device_scale` and the `cell` the stroke paints -, `null` without one), and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|split|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `split` of a couch pair apart (null for one view: the divider's `line` - a point and the unit normal into the second half in the followed bitmap's pixels - and `window_line`, how far `apart` the halves' views stand and each half's `seat`, `rect`, `offset`, `cut` and `in_view`), the `establishing` shot's `phase` (whole|zoom|follow) and `progress` (view `establishing` while it plays), the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`; and `motion`, the one motion switch - whether motion is `reduced` (no shake, no whole-screen ripple, the establishing shot cut rather than zoomed), the `reduce_motion` row's `setting` (platform|off|on) and what the `platform` said at startup, null where it says nothing), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, the input its `hints` name - `keys` or `touch`, the last one used: a touch landing turns them to taps and a key press back -, in play and online the corners' `buttons` and `clusters` and the `minimap` picture under the right cluster (`null` where none is drawn - an arena shown whole, a phone; a press there does nothing), and the `screen_buttons` of whatever stands over the round - the level select's open tiles (`level_N`) and `back`, a dialog's `one`/`two` or `leave`/`stay`, a level's end screen's `levels`/`again`/`next`, the lobby's live buttons (`host`, `join`, `key_a`, `confirm`, `ready`, `start`, `kick_1`, ...) - all in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state (the builder's chrome is laid out on the window in UI points like play's corners - the bar along the top of the safe area, the popups under it -, and its rects come in window coordinates, what `click` and `builder_touch` take, each with its `ui` points; `builder.navigator`: the navigator's picture, `null` at FIT on an arena; `builder.buttons`: the builder's buttons by name - the bar's `play`, `play_here`, `check`, `clear`, `fit`, `map`, `file`, `erase`, `undo`, `redo` and each category's `category_<name>` (its icon half) and `list_<name>` (its list half), or the one `tools` button a bar too narrow for the five folds them into; while a popup is open its own - a list's or the palette's `tool_<name>`, the FILE menu's `load`, `save`, `save_as` and `clear_map`, the Load list's `map_<name>`, the MAP panel's `<row>_dec`/`<row>_inc` and `reset`, the CHECK panel's `finding_N` rows and `fix_N` buttons - and a paged popup's `page_back`/`page_next`; `builder.check`: the CHECK panel's last report; `builder.clear`: the clear check - the canvas's `revision`, whether it is `cleared` (won from plain PLAY with no edit since) and its `par` in seconds, and the revision PLAY started the local round on (`attempt`); `builder.loupe`: the loupe over a painting finger - where it stands, the `world` it shows, its `device_scale` and the `cell` the stroke paints -, `null` without one), and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -429,7 +429,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "builder_touch",
-        description: "Drive the builder with raw touch frames, the way a touch screen does - the multi-finger input `--touch-from-mouse` cannot make (src/editor/gesture.rs, docs/large-maps-follow-camera.md section 9): one finger paints once it moves past the touch slop (`builder_touch_slop_pt`; a resting finger paints nothing) and a quick one-finger tap paints a cell; two fingers pan and pinch-zoom about their middle, a second finger landing on a stroke takes it back, and a coarse screen's zoom settles on whole blocks when they part; a two-finger tap undoes and a three-finger tap redoes (`builder_tap_seconds`). Where a cell is under `builder_paint_min_cell_mm` on the glass (`status.builder.camera.cell_mm`) a one-finger tap zooms in to `builder_tap_zoom_cell_mm` instead and a drag pans. `frames` is a list of frames, each the touch points down that frame as {id, x, y} in window coordinates, as for `click` (`status.builder.buttons` and `status.camera.window_field` give them); a frame with no points lifts every finger, and the tool lifts every finger at its end - unless `hold` is true, which leaves the last frame's fingers down: the window's frames keep them there (a stroke goes on painting under a still finger, the loupe stands over it - `status.builder.loupe`) until the next `builder_touch` carries on from them or lifts them. Each frame is `dt` seconds (default 1/60). Build mode only. Replies like `mode`, with `camera` (as `status.builder.camera`) and `held` (how many fingers are left down).",
+        description: "Drive the builder with raw touch frames, the way a touch screen does - the multi-finger input `--touch-from-mouse` cannot make (src/editor/gesture.rs, docs/large-maps-follow-camera.md section 9): one finger paints once it moves past the touch slop (`builder_touch_slop_pt`; a resting finger paints nothing) and a quick one-finger tap paints a cell; two fingers pan and pinch-zoom about their middle, a second finger landing on a stroke takes it back, and a coarse screen's zoom settles on whole blocks when they part; a two-finger tap undoes and a three-finger tap redoes (`builder_tap_seconds`). Where a cell is under `builder_paint_min_cell_mm` on the glass (`status.builder.camera.cell_mm`) a one-finger tap zooms in to `builder_tap_zoom_cell_mm` instead and a drag pans. `frames` is a list of frames, each the touch points down that frame as {id, x, y} in window coordinates, as for `click` (`status.builder.buttons` and `status.camera.window_field` give them); a frame with no points lifts every finger, and the tool lifts every finger at its end - unless `hold` is true, which leaves the last frame's fingers down: the window's frames keep them there (a stroke goes on painting under a still finger, the loupe stands over it - `status.builder.loupe`) until the next `builder_touch` carries on from them or lifts them. Each frame is `dt` seconds (default 1/60). Build mode only. Fingers on the glass turn the hints to taps (`status.ui.hints`). Replies like `mode`, with `camera` (as `status.builder.camera`) and `held` (how many fingers are left down).",
         schema: r#"{"type":"object","properties":{"frames":{"type":"array","items":{"type":"array","items":{"type":"object","properties":{"id":{"type":"integer"},"x":{"type":"number"},"y":{"type":"number"}},"required":["id","x","y"]}},"description":"Frames of touch points, first to last"},"dt":{"type":"number","minimum":0,"description":"Seconds per frame (default 1/60)"},"hold":{"type":"boolean","description":"Leave the last frame's fingers down at the end, for a screenshot mid-gesture (default false)"}},"required":["frames"]}"#,
         read_only: false,
         destructive: false,
@@ -443,14 +443,14 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "click",
-        description: "A raw press at a window position - the window's own coordinates, which `status.ui.buttons` and `status.camera.window_field` give (with no window, the live mode's bitmap at its own size: the builder's under its 32 px bar, play's field alone) - in either mode, on the same hit-tests a mouse or a finger uses: in play mode the corners' buttons (BUILD, the players button, ONLINE, RESTART on a keyboard-less build, and the level button on a level - `status.ui.buttons`), either dialog's buttons (a press outside a dialog closes it), a level's end-screen buttons (LEVELS, PLAY AGAIN, the way on) and the level select's tiles and BACK (a press outside it closes it) - `status.ui.screen_buttons` - and a press on the field itself does nothing in play mode; the lobby's buttons (`status.ui.screen_buttons`); online the corners' LEAVE; in build mode the bar's buttons (PLAY starts the round like `play`), an open popup's rows, steppers and pager - `status.builder.buttons` - or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`, with `world` - the world point the press landed on, through the camera - for a press on the field outside the builder. This tests the UI; `build`/`play`/`builder_*` address the model directly.",
-        schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right"],"default":"left"},"drag_to":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"[x, y] to drag to before releasing"}},"required":["x","y"]}"#,
+        description: "A raw press at a window position - the window's own coordinates, which `status.ui.buttons` and `status.camera.window_field` give (with no window, the live mode's bitmap at its own size: the builder's under its 32 px bar, play's field alone) - in either mode, on the same hit-tests a mouse or a finger uses: in play mode the corners' buttons (BUILD, the players button, ONLINE, RESTART on a keyboard-less build, and the level button on a level - `status.ui.buttons`), either dialog's buttons (a press outside a dialog closes it), a level's end-screen buttons (LEVELS, PLAY AGAIN, the way on) and the level select's tiles and BACK (a press outside it closes it) - `status.ui.screen_buttons` - and a press on the field itself does nothing in play mode; the lobby's buttons (`status.ui.screen_buttons`); online the corners' LEAVE; in build mode the bar's buttons (PLAY starts the round like `play`), an open popup's rows, steppers and pager - `status.builder.buttons` - or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`, with `world` - the world point the press landed on, through the camera - for a press on the field outside the builder. With `touch`, the press is a tap: the hints turn to taps, as a finger landing turns them (`status.ui.hints`). This tests the UI; `build`/`play`/`builder_*` address the model directly.",
+        schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right"],"default":"left"},"drag_to":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"[x, y] to drag to before releasing"},"touch":{"type":"boolean","default":false,"description":"A tap rather than a mouse press: the hints turn to taps (`status.ui.hints`)"}},"required":["x","y"]}"#,
         read_only: false,
         destructive: false,
     },
     ToolSpec {
         name: "key",
-        description: "Press one key for one frame: tab (BUILD/PLAY - in play mode it opens the leave dialog, or closes an open one; in build mode it starts the round like `play`), escape (keep playing / close a dialog or popup; in play mode with no dialog, open or close the level select), enter (leave the round; in the players dialog, switch to the other count; on a level's end screen, the way on or PLAY AGAIN; in the level select, start the level under the focus; confirm a popup), left / right / up / down (move the level select's focus over the open levels; in the builder, pan the canvas for one frame the way the arrow points), 1 / 2 (answer the players dialog), undo, redo (Ctrl+Z / Ctrl+Y in the builder), zoom_in / zoom_out (`+` / `-` in the builder: one zoom step about the canvas's middle), backspace; `text` types characters into an open builder prompt. Replies like `mode` (`levels_open`, `levels_focus`).",
+        description: "Press one key for one frame: tab (BUILD/PLAY - in play mode it opens the leave dialog, or closes an open one; in build mode it starts the round like `play`), escape (keep playing / close a dialog or popup; in play mode with no dialog, open or close the level select), enter (leave the round; in the players dialog, switch to the other count; on a level's end screen, the way on or PLAY AGAIN; in the level select, start the level under the focus; confirm a popup), left / right / up / down (move the level select's focus over the open levels; in the builder, pan the canvas for one frame the way the arrow points), 1 / 2 (answer the players dialog), undo, redo (Ctrl+Z / Ctrl+Y in the builder), zoom_in / zoom_out (`+` / `-` in the builder: one zoom step about the canvas's middle), backspace; `text` types characters into an open builder prompt. A key press turns the hints back to the keys (`status.ui.hints`). Replies like `mode` (`levels_open`, `levels_focus`).",
         schema: r#"{"type":"object","properties":{"key":{"type":"string","enum":["tab","escape","enter","undo","redo","backspace","1","2","left","right","up","down","zoom_in","zoom_out"]},"text":{"type":"string","description":"Characters to type this frame (build mode)"}}}"#,
         read_only: false,
         destructive: false,
@@ -805,6 +805,11 @@ pub struct DevServer {
     /// empty touch screen (`held_touches`) until the next `builder_touch`
     /// lifts them, so a screenshot catches a gesture mid-way.
     held_touches: Vec<crate::touch::TouchPoint>,
+    /// The input a tool last stood in for - `key` the keys, a
+    /// `builder_touch` or a `click {touch}` a tap -, which the window's
+    /// hints turn to (`take_hints`, `hud::Hints`); a server with no window
+    /// lays its chrome out with it.
+    hints: Option<crate::hud::Hints>,
 }
 
 /// A view the `camera` tool pinned: the world point at its centre and how
@@ -863,7 +868,15 @@ impl DevServer {
             drawn: None,
             drawn_ui: None,
             held_touches: Vec::new(),
+            hints: None,
         }
+    }
+
+    /// The input a tool stood in for since the window last asked - the
+    /// keys or a tap -, for the window's hints to follow as they follow
+    /// the input it reads itself (`hud::Hints`).
+    pub fn take_hints(&mut self) -> Option<crate::hud::Hints> {
+        self.hints.take()
     }
 
     /// The fingers a `builder_touch {hold: true}` keeps down, which the
@@ -913,13 +926,13 @@ impl DevServer {
             _ if build => {
                 let map = session.builder.map();
                 let frame = BuilderFrame::headless(map.field_size(), map.class());
-                (frame.layout, frame.view, frame.ui)
+                (frame.layout, frame.view, frame.ui.with_hints(self.hints.unwrap_or_default()))
             }
             _ => {
                 let layout = Layout::bare(width, height);
                 let (w, h) = layout.window_size();
                 let window = (w as f32, h as f32);
-                (layout, View::fit(window, window), UiFrame::plain(window))
+                (layout, View::fit(window, window), UiFrame::plain(window).with_hints(self.hints.unwrap_or_default()))
             }
         }
     }
@@ -1965,6 +1978,8 @@ impl DevServer {
                 if session.mode() != Driver::Build {
                     Err("builder_touch needs build mode - call `build` first".to_string())
                 } else {
+                    // Fingers on the glass: the hints turn to taps.
+                    self.hints = Some(crate::hud::Hints::Touch);
                     let frame = self.builder_frame(session, width, height);
                     let hold = params.get("hold").and_then(Value::as_bool).unwrap_or(false);
                     touch_frames(params).map(|(frames, dt)| {
@@ -2029,6 +2044,10 @@ impl DevServer {
                 _ => return Err(format!("drag_to must be [x, y], got {v}")),
             },
         };
+        // A tap rather than a mouse press: the hints turn to taps.
+        if params.get("touch").and_then(Value::as_bool).unwrap_or(false) {
+            self.hints = Some(crate::hud::Hints::Touch);
+        }
         let (layout, view, ui) = self.click_frame(session, width, height);
         let window_point = Vec2::new(x, y);
         // In the bitmap's pixels for the builder, in UI points for
@@ -2179,6 +2198,8 @@ impl DevServer {
         if key.is_none() && text.is_empty() {
             return Err(format!("key needs `key` ({}) or `text`", KEY_NAMES.join("|")));
         }
+        // A key pressed: the hints turn back to the keys.
+        self.hints = Some(crate::hud::Hints::Keys);
         match session.mode() {
             // The level select's keys, as `app.rs` reads them: the arrows
             // walk the open tiles, Enter starts one, Esc and Tab close it.
@@ -4918,6 +4939,33 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(server.held_touches().len(), 1);
         ask(&mut server, &tx, &mut s, "play", json!({})).unwrap();
         assert!(server.held_touches().is_empty(), "play lets them go");
+    }
+
+    /// The hints follow the input a tool stands in for: a `click {touch}`
+    /// and a `builder_touch` are taps, a `key` a key press, a plain
+    /// `click` neither. A server with no window lays its chrome out with
+    /// the last (`status.ui.hints`); a window takes each once
+    /// (`take_hints`) and lays its own out with it.
+    #[test]
+    fn the_input_tools_turn_the_hints() {
+        use crate::hud::Hints;
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(46);
+        let hints = |server: &mut DevServer, s: &mut Session| ask(server, &tx, s, "status", json!({})).unwrap()["ui"]["hints"].clone();
+        assert_eq!(hints(&mut server, &mut s), "keys", "a window with a keyboard opens on the keys");
+        ask(&mut server, &tx, &mut s, "click", json!({ "x": 600.0, "y": 300.0, "touch": true })).unwrap();
+        assert_eq!(hints(&mut server, &mut s), "touch");
+        ask(&mut server, &tx, &mut s, "click", json!({ "x": 600.0, "y": 300.0 })).unwrap();
+        assert_eq!(hints(&mut server, &mut s), "touch", "a mouse press is no key");
+        ask(&mut server, &tx, &mut s, "key", json!({ "key": "tab" })).unwrap();
+        assert_eq!(hints(&mut server, &mut s), "keys");
+        assert_eq!(server.take_hints(), Some(Hints::Keys));
+        assert_eq!(server.take_hints(), None, "taken once");
+        ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
+        enter_build(&mut server, &tx, &mut s);
+        ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [[]] })).unwrap();
+        assert_eq!(hints(&mut server, &mut s), "touch");
+        assert_eq!(server.take_hints(), Some(Hints::Touch));
     }
 
     /// The builder's navigator is one hit test that `click` and

@@ -234,7 +234,8 @@ pub extern "C" fn bb_ui_json() -> *const c_char {
 
 /// The chrome as `ui` lays it out for the session's mode: the UI scale
 /// (window units per point), the window and the safe area the chrome keeps
-/// to in points, whether it is laid out for touch, in play and online the
+/// to in points, whether it is laid out for touch, the input its `hints`
+/// name (`keys` or `touch`, `hud::Hints`), in play and online the
 /// corners' `buttons`, both `clusters` and the `minimap` picture under the
 /// right one (`null` where none is drawn - a press there does nothing),
 /// and the `screen_buttons` of whatever stands over the round
@@ -246,7 +247,7 @@ pub fn ui_status(session: &Session, ui: &UiFrame) -> Value {
         let r = ui.rect_to_window(r);
         json!({ "x": r.x, "y": r.y, "w": r.width, "h": r.height })
     };
-    let mut v = json!({ "scale": ui.scale, "screen": rect(ui.screen), "area": rect(ui.area), "touch": ui.touch });
+    let mut v = json!({ "scale": ui.scale, "screen": rect(ui.screen), "area": rect(ui.area), "touch": ui.touch, "hints": ui.hints.name() });
     let corners = CornerShape::of(&session.play_chrome(), session.shown().players.count()).map(|shape| crate::hud::corners(ui, &shape));
     if let Some(corners) = corners {
         let buttons: Map<String, Value> = corners.buttons().into_iter().map(|(b, r)| (b.name().to_string(), on_window(r))).collect();

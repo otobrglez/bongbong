@@ -80,6 +80,7 @@ keys! {
     BUTTON_ONLINE = "button-online";
     PLAYERS_TITLE = "players-title";
     PLAYERS_KEYS = "players-keys";
+    PLAYERS_TOUCH = "players-touch";
     PLAYERS_ONE = "players-one";
     PLAYERS_TWO = "players-two";
     LEAVE_TITLE = "leave-title";
@@ -236,9 +237,11 @@ keys! {
     SETTINGS_CLI = "settings-cli";
     EDITOR_SAVE_AS = "editor-save-as";
     EDITOR_SAVE_HINT = "editor-save-hint";
+    EDITOR_SAVE_HINT_TOUCH = "editor-save-hint-touch";
     EDITOR_NO_MAPS = "editor-no-maps";
     EDITOR_SHIPPED = "editor-shipped";
     EDITOR_PAGE = "editor-page";
+    EDITOR_PAGE_TOUCH = "editor-page-touch";
     EDITOR_UNTITLED = "editor-untitled";
     EDITOR_SAVED = "editor-saved";
     EDITOR_LOADED = "editor-loaded";
@@ -784,6 +787,10 @@ mod text_tests {
         let dialog_button = |k: Key| (k, HUD_TEXT_SIZE, DIALOG_BUTTON_W as i32 - 16, vec![]);
         let lobby_button = |k: Key| (k, HUD_TEXT_SIZE, LOBBY_BUTTON_W as i32 - 12, vec![]);
         let wide = |k: Key| (k, HUD_TEXT_SIZE, LOBBY_WIDE_W as i32 - 12, vec![]);
+        let pager = |k: Key| {
+            let room = crate::EDITOR_SETTINGS_W as i32 - 2 * (16 + width(">", HUD_TEXT_SIZE) + 8);
+            (k, UI_SMALL_TEXT, room, vec![("from", 99.into()), ("to", 99.into()), ("n", 99.into())])
+        };
         let content = (LOBBY_W - 2.0 * LOBBY_MARGIN) as i32;
         let area = crate::hud::UiFrame::plain((crate::hud::UI_MIN_W, crate::hud::UI_MIN_H)).area;
         let seat_state_px = (crate::lobby::seats_rect(area).width - LOBBY_KICK_W - LOBBY_SEAT_STATE_X) as i32 - 4;
@@ -798,6 +805,7 @@ mod text_tests {
             button(keys::BUTTON_ONLINE, ONLINE_BUTTON_W),
             (keys::PLAYERS_TITLE, 28, DIALOG_W as i32 - 32, vec![]),
             (keys::PLAYERS_KEYS, 16, DIALOG_W as i32 - 32, vec![]),
+            (keys::PLAYERS_TOUCH, 16, DIALOG_W as i32 - 32, vec![]),
             (keys::LEAVE_TITLE, 28, DIALOG_W as i32 - 32, vec![]),
             (keys::LEAVE_SUB, 16, DIALOG_W as i32 - 32, vec![]),
             dialog_button(keys::PLAYERS_ONE),
@@ -870,15 +878,13 @@ mod text_tests {
             (keys::CHECK_CLEARED_HINT, UI_SMALL_TEXT, crate::editor::LINT_CLEAR_W as i32, vec![]),
             (keys::CHECK_NOT_CLEARED_HINT, UI_SMALL_TEXT, crate::editor::LINT_CLEAR_W as i32, vec![]),
             // A pager's span, in the small size between its `<` and `>`
-            // in the narrowest paged panel, a column of the MAP panel.
-            (
-                keys::EDITOR_PAGE,
-                UI_SMALL_TEXT,
-                crate::EDITOR_SETTINGS_W as i32 - 2 * (16 + width(">", HUD_TEXT_SIZE) + 8),
-                vec![("from", 99.into()), ("to", 99.into()), ("n", 99.into())],
-            ),
-            // The Save prompt's line under the name.
+            // in the narrowest paged panel, a column of the MAP panel -
+            // with the keys' hint and with a tap's.
+            pager(keys::EDITOR_PAGE),
+            pager(keys::EDITOR_PAGE_TOUCH),
+            // The Save prompt's line under the name, either hint.
             (keys::EDITOR_SAVE_HINT, UI_SMALL_TEXT, crate::editor::chrome::SAVE_PROMPT.0 as i32 - 24, vec![]),
+            (keys::EDITOR_SAVE_HINT_TOUCH, UI_SMALL_TEXT, crate::editor::chrome::SAVE_PROMPT.0 as i32 - 24, vec![]),
             (keys::FILE_LOAD, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE_AS, HUD_TEXT_SIZE, 168, vec![]),

@@ -1080,7 +1080,7 @@ impl Game {
             if chrome.leave_dialog {
                 draw_leave_dialog(&mut d, area);
             } else if chrome.players_dialog {
-                draw_players_dialog(&mut d, area, self.players);
+                draw_players_dialog(&mut d, area, self.players, ui.hints);
             }
             // The lobby (lobby.rs), with its own dim: the round behind it
             // is the local one, frozen because nothing calls `update` in
@@ -1099,7 +1099,7 @@ impl Game {
         // where the thumbs are, in UI points like the HUD - the same size
         // on the glass whatever scale the world is drawn at.
         if let Some((touch, steer_right)) = touch {
-            d.draw_mode2D(ui_camera, |mut d, _| touch.draw(&mut d, steer_right));
+            d.draw_mode2D(ui_camera, |mut d, _| touch.draw(&mut d, steer_right, ui.hints));
         }
     }
 }

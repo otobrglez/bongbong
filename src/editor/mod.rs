@@ -2150,7 +2150,14 @@ impl MapEditor {
         let pressed = input.pressed || input.right_pressed;
         let pointer = input.pointer.map(|p| frame.to_ui(p));
         match (popup, layout) {
-            (Popup::Save { mut name }, _) => {
+            (Popup::Save { mut name }, layout) => {
+                // A press outside the prompt cancels it, as one outside any
+                // popup closes it: a touch screen's Esc.
+                if let (Some(p), Some(PopupLayout::Save(panel))) = (pointer.filter(|_| pressed), layout)
+                    && !panel.contains(p)
+                {
+                    return;
+                }
                 for c in input.typed.chars() {
                     if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
                         name.push(c);
@@ -4391,6 +4398,29 @@ mod editor_tests {
                 image.changed_since(held).map_or(image.width * image.height, |p| p.width * p.height)
             }
         }
+    }
+
+    /// The Save prompt takes text and Enter; Esc cancels it, and so does a
+    /// press outside it - a touch screen's Esc, which the prompt's hint
+    /// names after a touch -, painting nothing; a press inside it is the
+    /// prompt's.
+    #[test]
+    fn a_press_outside_the_save_prompt_cancels_it() {
+        let frame = arena();
+        let mut ed = MapEditor::new(MapFile::new());
+        ed.popup = Some(Popup::Save { name: String::new() });
+        ed.update(&BuilderInput { typed: "abc".into(), ..Default::default() }, &frame);
+        let Some(PopupLayout::Save(panel)) = ed.chrome(&frame).popup else { panic!("the Save prompt") };
+        click(&mut ed, &frame, frame.ui.to_window(center(panel)));
+        assert!(matches!(&ed.popup, Some(Popup::Save { name }) if name == "abc"), "a press inside is the prompt's");
+        let outside = on_cell(&ed, &frame, 2, 2);
+        assert!(!panel.contains(frame.to_ui(outside)));
+        click(&mut ed, &frame, outside);
+        assert_eq!(ed.open_menu(), None, "a press outside cancels it");
+        assert!(ed.map().cells.is_empty(), "and paints nothing");
+        ed.popup = Some(Popup::Save { name: String::new() });
+        ed.update(&BuilderInput { escape: true, ..Default::default() }, &frame);
+        assert_eq!(ed.open_menu(), None, "Esc cancels it");
     }
 
     #[test]

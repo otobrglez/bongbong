@@ -94,6 +94,19 @@ fn left_shift_down(rl: &RaylibHandle) -> bool {
     rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT)
 }
 
+/// Whether a key was pressed this frame, what turns the hints back to the
+/// keys (`hud::Hints`): any key but the buttons an Android phone sends from
+/// outside the game - Back, Menu and the volume keys, raylib's 4, 5, 24
+/// and 25. Drains raylib's queue of pressed keys, which nothing else reads
+/// (every key the game acts on it asks for by name, `is_key_pressed`).
+fn key_pressed(rl: &mut RaylibHandle) -> bool {
+    let mut any = false;
+    while let Some(key) = rl.get_key_pressed_number() {
+        any |= !matches!(key, 4 | 5 | 24 | 25);
+    }
+    any
+}
+
 /// The seats this window plays, the first the one its arrows are cast for
 /// (`indicators::picture`): the room's one in an online round, once there
 /// is a replica to read, else player 1 and, on a couch, player 2. A seat
@@ -1588,6 +1601,10 @@ pub fn run(args: Args) {
     // the press edge has to be found here - one tap must produce exactly one
     // builder stroke or button press.
     let mut touch_held_last_frame = false;
+    // Which input the hints name (`hud::Hints`): the last one used - a
+    // touch landing, a key pressed - opening on taps where there is no
+    // keyboard or the mouse stands in for a finger.
+    let mut hints = crate::hud::Hints::at_start(!crate::KEYBOARD_AVAILABLE || touch_from_mouse);
 
     // game_loop::run drives a plain `while !window_should_close()` loop on
     // native, and hands this closure to emscripten's main loop on web - same
@@ -1674,13 +1691,30 @@ pub fn run(args: Args) {
         let pinned = dev.as_ref().and_then(|dev| dev.pinned_camera((width, height)));
         #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
         let pinned: Option<Camera> = None;
+        // Raw pointer state, shared by every mode. Touch is edge-detected
+        // by hand because raylib reports a held finger as a point count,
+        // not a press.
+        let touching = rl.get_touch_point_count() > 0;
+        let touch_pressed = touching && !touch_held_last_frame;
+        touch_held_last_frame = touching;
+        let mouse_pressed = rl.is_mouse_button_pressed(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
+        let mouse_held = rl.is_mouse_button_down(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
+        // The hints follow the input last used: a touch landing - or the
+        // mouse's press standing in for one - turns them to taps, a key
+        // turns them back; the dev server's `key`, `builder_touch` and
+        // `click {touch}` stand in for the same.
+        hints = hints.follow(touch_pressed || (touch_from_mouse && mouse_pressed), key_pressed(rl));
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        if let Some(used) = dev.as_mut().and_then(|dev| dev.take_hints()) {
+            hints = used;
+        }
         // The window the chrome lays itself out in (`hud::UiFrame`): its
         // size in points, its safe area, and whether thumbs are on the
         // glass - a build with no keyboard, `--touch-from-mouse`, or a
-        // touch seen this session. The builder's canvas stands under its
-        // bar, so the frame is laid out first.
+        // touch seen this session -, and the hints. The builder's canvas
+        // stands under its bar, so the frame is laid out first.
         let touch_screen = !crate::KEYBOARD_AVAILABLE || touch_from_mouse || touch.seen();
-        let ui = ui_frame(rl, touch_screen);
+        let ui = ui_frame(rl, touch_screen).with_hints(hints);
         #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
         if let Some(dev) = &mut dev {
             dev.publish_ui(ui);
@@ -1725,14 +1759,6 @@ pub fn run(args: Args) {
                 duration: t.impact_flash_duration,
             });
         }
-        // Raw pointer state, shared by both modes. Touch is edge-detected
-        // by hand because raylib reports a held finger as a point count,
-        // not a press.
-        let touching = rl.get_touch_point_count() > 0;
-        let touch_pressed = touching && !touch_held_last_frame;
-        touch_held_last_frame = touching;
-        let mouse_pressed = rl.is_mouse_button_pressed(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
-        let mouse_held = rl.is_mouse_button_down(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
         // A pointer is read on the window, where the builder takes it (its
         // frame puts it on the canvas or on its chrome), and in UI points,
         // where the corners' buttons, the dialogs, the end screen, the

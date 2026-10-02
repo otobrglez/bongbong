@@ -7,7 +7,7 @@
 use sola_raylib::prelude::*;
 
 use crate::hud::{
-    banner_size, clock_text, leave_dialog_rects, players_dialog_rects, result_layout, weapon_color, Corners, Fade,
+    banner_size, clock_text, leave_dialog_rects, players_dialog_rects, result_layout, weapon_color, Corners, Fade, Hints,
     HudModel, NextLevel, PlayChrome, PlayerHud, ResultButtons, ResultView, SeatHud, BUILD_COLOR, DIALOG_W, DIM,
     HUD_TEXT_SIZE, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP, LINE_H, ONLINE_COLOR, RESULT_LINE_SIZE,
     RESULT_SEATS_SIZE, RESULT_STATS_GAP, ROW_H, TEXT, UI_SMALL_TEXT, WEAPON_SLOTS,
@@ -420,12 +420,13 @@ fn draw_dialog_button(d: &mut impl RaylibDraw, rect: Rectangle, label: &str, col
 }
 
 /// Draw the players dialog over the (already dimmed) window: the live
-/// count's button highlighted, the other in the action colour. In UI
+/// count's button highlighted, the other in the action colour, and its
+/// line naming the controls of the input `hints` says is in use. In UI
 /// points, centred in the chrome's `area`, like `draw_leave_dialog`.
-pub fn draw_players_dialog(d: &mut impl RaylibDraw, area: Rect, players: PlayerCount) {
+pub fn draw_players_dialog(d: &mut impl RaylibDraw, area: Rect, players: PlayerCount, hints: Hints) {
     let t = text();
     let r = players_dialog_rects(area);
-    draw_dialog_panel(d, r.panel, &t.get(keys::PLAYERS_TITLE), &t.get(keys::PLAYERS_KEYS));
+    draw_dialog_panel(d, r.panel, &t.get(keys::PLAYERS_TITLE), &t.get(hints.pick(keys::PLAYERS_KEYS, keys::PLAYERS_TOUCH)));
     let live_fill = Some(Color::new(255, 255, 255, 40));
     let one_live = players == PlayerCount::ONE;
     draw_dialog_button(d, r.one, &t.get(keys::PLAYERS_ONE), if one_live { TEXT } else { BUILD_COLOR }, one_live.then_some(live_fill).flatten());

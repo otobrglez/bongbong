@@ -1073,8 +1073,10 @@ bar gone, ammo pips on the tank, a cluster fading while play is under
 it, banners, dialogs, the end screen, the lobby and the level select in
 window space, the touch stick and its hint in points, and arenas drawing
 their margins as the world past the boundary - the round's ground carried
-on under a deepening shade and the round's sky, `margin.rs`) -
-input-aware hints are still to come; from step 4 the awareness model
+on under a deepening shade and the round's sky, `margin.rs`) and hints
+that name the input last used (`hud::Hints`: the keys after a key press,
+a tap after a touch lands - the players dialog's line, the builder's
+pagers and Save prompt, the touch hint); from step 4 the awareness model
 and its drawing (`indicators.rs`: edge arrows by priority, the lane
 warning, the hit arc, last-seen marks, gate flashes, thumb rests) and
 the minimap on tablets and desktops (`minimap.rs`: a texel per cell,

@@ -341,9 +341,10 @@ impl TouchScheme {
     /// The scheme's feedback over everything else, in UI points - call
     /// inside a camera at the UI scale (`hud::UiFrame::scale`), never the
     /// world's: the stick while held (`stick_drawing`), fire ripples, the
-    /// hint across the area's two halves.
+    /// hint across the area's two halves - while a tap is what the hints
+    /// name (`hud::Hints`): a key pressed meanwhile takes it away.
     #[cfg(feature = "render")]
-    pub fn draw(&self, d: &mut impl RaylibDraw, steer_right: bool) {
+    pub fn draw(&self, d: &mut impl RaylibDraw, steer_right: bool, hints: crate::hud::Hints) {
         if let Some(s) = self.stick_drawing() {
             d.draw_circle_v(s.base, s.base_radius, Color::new(255, 255, 255, 40));
             d.draw_circle_lines_v(s.base, s.base_radius, Color::new(255, 255, 255, 140));
@@ -356,7 +357,7 @@ impl TouchScheme {
             let alpha = (200.0 * (1.0 - t)) as u8;
             d.draw_circle_lines_v(r.at, radius, Color::new(255, 170, 120, alpha));
         }
-        if let (Some(t), Some(area)) = (self.hint, self.area) {
+        if let (Some(t), Some(area), crate::hud::Hints::Touch) = (self.hint, self.area, hints) {
             let alpha = ((t / HINT_SECONDS).min(1.0) * 220.0) as u8;
             let y = (area.y + area.h * 0.5) as i32;
             let (steer_x, fire_x) = if steer_right {
