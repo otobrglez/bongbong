@@ -1787,6 +1787,47 @@ tunables! {
         view_local_max_cells: f32 = 900.0 in 64.0 ..= 4096.0;
     }
 
+    group camera {
+        /// The follow camera on a field map (`follow.rs`,
+        /// docs/large-maps-follow-camera.md section 6): how far the seat
+        /// moves inside the view on an axis, in pixels either way, before
+        /// it drags the view along - about 0.4 cell, so four-way
+        /// corrections and slides along a wall do not wobble the view.
+        camera_dead_zone_px: f32 = 12.8 in 0.0 ..= 128.0;
+        /// The look-ahead: the view leads the seat the way its hull faces,
+        /// spending the room the sight box leaves on that axis
+        /// (`Framing::room_outside`) less the dead zone - this fraction of
+        /// it at rest, because a tank fires where it faces, and all of it
+        /// at the tank's top speed. The sight box never leaves the screen
+        /// whatever this says.
+        camera_lead_at_rest: f32 = 0.35 in 0.0 ..= 1.0;
+        /// Seconds the look-ahead takes to swing from one side of its room
+        /// to the other: it moves at that steady pace, so a reversal takes
+        /// about this long, a turn or a change of speed less, and a turn
+        /// does not whip the view across. 0 swings it at once.
+        camera_lead_ease_seconds: f32 = 0.5 in 0.0 ..= 5.0;
+        /// Seconds a reversal holds before the look-ahead flips to the
+        /// other side, so a quick back-and-forth does not swing the view
+        /// each time; a turn to either side swings it at once.
+        camera_lead_reverse_hold_seconds: f32 = 0.25 in 0.0 ..= 3.0;
+        /// The spring the view chases its goal on: a critically damped
+        /// spring of this smoothing time (Unity's `SmoothDamp`), the seat's
+        /// velocity fed forward so a steady drive does not trail. 0 sticks
+        /// the view to its goal.
+        camera_spring_seconds: f32 = 0.16 in 0.0 ..= 2.0;
+        /// Seconds a screen stays on its seat's wreck before it follows the
+        /// nearest live teammate - in a wave round the seat comes back
+        /// through a gate with the next wave, and the view cuts back to it
+        /// then. Alone, the view stays on the wreck.
+        camera_spectate_delay_seconds: f32 = 1.0 in 0.0 ..= 10.0;
+        /// How far from the field's edge, in pixels, the view starts to
+        /// ease into it: the goal it chases slows over this last stretch
+        /// and never passes the edge, so the view comes to rest there
+        /// rather than running into it and stopping dead. 0 is a hard
+        /// stop.
+        camera_edge_ease_px: f32 = 48.0 in 0.0 ..= 512.0;
+    }
+
     group online {
         /// How far behind the server an online round is drawn, in
         /// milliseconds, at least (docs/online-coop-prd.md §4.5, §4.16,
