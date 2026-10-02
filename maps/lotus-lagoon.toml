@@ -1,3 +1,20 @@
+# lotus-lagoon - a frog pavilion on an island in a turquoise lagoon
+# Saved from the builder; re-saving drops these comments, so put them back.
+#
+# Protect on the band plan, five tanks, the sky random each round
+# (docs/weather.md). The lagoon fills the north of the field; the frog sits
+# on an island in its middle, reed-ringed, between two tesla towers. The
+# island's only way in is from the south: a fence and sandbag line closes
+# that front with one gate three cells wide (16..18 on row 12) - the route
+# every tank takes to the frog, since the linter's routes and the AI's never
+# break a line of props. The outflow leaves the lagoon's east arm down
+# column 24 with open ground beside it, so the stream mouth is never a
+# pocket a shoved tank is trapped in.
+#
+# Huts of wood and glass on both flanks, a pine wood in the south-west,
+# tall grass to hide in, a road along the south edge, pickups on both flanks
+# and the frog health inside the pavilion's gate.
+
 version = 1
 tanks = 5
 tank = "glacier"
@@ -340,9 +357,6 @@ kind = "water"
 [cells."21,4"]
 kind = "water"
 
-[cells."25,10"]
-kind = "pine"
-
 [cells."13,1"]
 kind = "tall_grass"
 
@@ -506,9 +520,6 @@ kind = "tall_grass"
 [cells."27,3"]
 kind = "water"
 
-[cells."16,12"]
-kind = "sandbag"
-
 [cells."13,4"]
 kind = "water"
 
@@ -624,9 +635,6 @@ kind = "water"
 [cells."27,11"]
 kind = "pickup"
 pickup = "ammo"
-
-[cells."17,12"]
-kind = "fence"
 
 [cells."21,9"]
 kind = "water"
@@ -772,9 +780,6 @@ kind = "water"
 
 [cells."12,4"]
 kind = "water"
-
-[cells."18,12"]
-kind = "sandbag"
 
 [cells."9,4"]
 kind = "water"

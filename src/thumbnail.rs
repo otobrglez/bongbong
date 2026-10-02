@@ -173,7 +173,7 @@ mod tests {
         ("waves-basic", 0x39cd_f934_718a_6bac),
         ("portals", 0x7d63_bb51_758c_88b3),
         ("towers", 0x94f2_f4ec_a7b0_f996),
-        ("lotus-lagoon", 0xf446_471a_7853_10ef),
+        ("lotus-lagoon", 0x3b70_77d8_6fc7_db54),
         ("hedge-maze", 0x4429_c4e1_b898_1a2b),
         ("oasis-bazaar", 0xad6d_9b7d_be99_0ba1),
         ("castle-moat", 0x2c25_88f8_6b27_d036),
