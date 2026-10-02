@@ -598,7 +598,7 @@ shape with the bar at the standard arena's size (`editor::camera`).
 | Effect caps | Built for the marks: `SCORCH_MAX` and `DECAL_MAX` are world state and capped the whole map, so a field map wore away marks still on screen; `Game::mark_caps` keeps them on an arena and scales them by area on a field map (the study map keeps nine times as many). Particles and shocks are client-side and can prefer what is on screen. |
 | Weather fallback | Built: a device whose weather shaders fail drew every sky clear, so its player saw through night and fog. It now draws the sky without them (`weather::plain`, docs/weather.md "Without shaders"): the light map, which needs no shader, multiplied onto the field by a blend mode - the night as dark, with every headlight and shadow - and the snow on the ground and the fog, sand, rain and snow in the air as plain blocks from the shaders' own noise; `status.weather.without_shaders` reports it and the `weather_without_shaders` knob shows it anywhere. The halved `fx_density` on phones thins only cosmetic smoke: no rule hides a tank behind smoke (concealment is the tall grass's cell test). |
 | UI | Banners, dialogs, lobby, level select, end screen and the stick move to screen space at a UI scale in points; `touch_*` knobs move from bitmap pixels to points. |
-| Simulation | `Terrain::build` borrows the water layout instead of cloning it; flow fields limited to a radius around each seat or updated every few ticks on field maps; A* scratch arrays reused. |
+| Simulation | Built: flow fields worked out only as far as the frame reads them (section 12) - exact, where a radius round each seat or a refresh every few ticks would have moved routes. Still to do: `Terrain::build` borrows the water layout instead of cloning it; A* scratch arrays reused; the nav grid kept across ticks. |
 | Wire | Built: a map is at most `map::MAX_SIDE_CELLS` (250) cells a side, refused by name past it, so its far corner, a wave tank a tank length beyond it and its last cell index all fit the wire (positions in quarter pixels as `i16`, cell indices as `u16`); a laser is traced past the field's diagonal (`simulation::laser_reach`, the fixed 4000 px wherever that already spans the field, so those beams are bit for bit the same) by the room and by a client's drawn beam alike. The `Welcome`'s map TOML grows with the map: the 96 x 54 study map's is 42 KB, far inside the sockets' limits. |
 | Dev server | `status` reports the camera (rect, scale, block, follow target); `screenshot` keeps capturing what the window shows; a `camera` tool to pin a view for screenshots. |
 | Memory | Five field-sized RGBA8 targets for a 96 x 54 map are about 106 MB; window-sized, about 12 MB. Chrome on Android caps WebGL textures at 8192 (4096 below Android 14); iOS Safari allows 16384 on A9 and later. A low-end Mali-G52 has about 14 GB/s of bandwidth, and writing a 64 MiB target sixty times a second is a quarter of it. |
@@ -651,10 +651,9 @@ living seats. On the study map, 30 AFK rounds, a wave tank's walk to the
 fight went from a median 14.8 s, p90 34.5 s and worst 47.5 s to 11.6 s,
 20.8 s and 30.2 s, and with every round run to two minutes a tick costs
 0.59 ms against 0.92. `just probe-fields` sweeps the study map and the
-five 40-wide levels. The waves are paced by a director and stragglers
-rolled in again through a nearer gate (both below). Not built: flow
-fields bounded to the bubble - the frame's routing grid, about 0.33 ms of
-the 0.59, is now most of a tick.
+five 40-wide levels. The waves are paced by a director, stragglers are
+rolled in again through a nearer gate, and the flow fields are worked out
+only as far as they are read (all three below).
 
 **The first field map** is `longwater` (`maps/longwater.toml`, free play,
 80 x 45; its header says how it plays): a fort on the south shore of a
@@ -819,6 +818,45 @@ straggler - and `probe-defend` keeps never-arrived at 0. The tank riding
 column 74 (0x3fd) is still out at seven minutes: in sight of every
 screen, it is no re-roll's to take.
 
+**Flow fields as far as they are read** (`pathfind::Grid`): the frame's
+routing grid carried each seat's and the frog's flow field as a Dijkstra
+over the whole map, every tick - on the study map 3,752 cells settled a
+tick, most of them where no enemy stood, and the routing grid was about
+two thirds of a tick. A field is now worked out as it is read
+(`Grid::descend`): the search is kept open, and a read runs it on only
+until no cell still ahead of it could change the answer - until the
+frontier's lowest cost reaches the cheapest step known from the cell
+asked about, every step costing at least 1 - so a frame pays for the
+cells between each goal and the enemies that read it, and a field
+nobody reads costs nothing. A far tank's read runs the search out to it
+once, for every read after it that frame. Every answer is the whole
+table's, which is why this was chosen over a field bounded to a radius
+round the seats or refreshed every few ticks: either changes the route of
+a tank at the bubble's edge or between refreshes, where this changes no
+route on any map. The arenas' recipes, `probe-fields`, `probe-defend` and
+every timing run below read line for line as before, nothing was
+re-baselined, and a test plays longwater with every field settled whole
+and without, tank for tank. The cells settled a tick on the study map
+fell to 1,250, and a tick costs (release probe, ten rounds at seed 1000,
+the two builds alternated, two passes each; AFK as `probe-fields` runs
+it, the defence as `probe-defend`):
+
+| Map | AFK before | AFK after | Defence before | Defence after |
+|---|---|---|---|---|
+| study map (96 x 54) | 0.55 ms | 0.44 ms | 0.59 ms | 0.50 ms |
+| longwater (80 x 45) | 0.63 | 0.48 | 0.74 | 0.60 |
+| hedge-maze | 0.17 | 0.16 | | |
+| archipelago | 0.16 | 0.13 | | |
+| black-gold | 0.11 | 0.10 | | |
+| harbor-lights | 0.20 | 0.19 | | |
+| castle-moat | 0.13 | 0.11 | | |
+
+A 40-wide level's whole field is under a thousand cells, so it gains less.
+Not built: the grid itself is still built and labelled every tick (about
+0.09 and 0.07 ms on the study map), now the larger part of the routing;
+kept across ticks and patched where a tile dies or a fire starts or burns
+out, it would cost next to nothing.
+
 ## 13. Patterns from shipped games
 
 docs/large-maps-patterns.md catalogues 72 patterns from shipped games,
@@ -977,9 +1015,9 @@ thinking less, spawns and gates by walk outside every sight box,
 re-entry through the gate nearest the living seats, `just
 probe-fields`) and a first field map, free play rather than a level
 (`longwater`, section 12) and lanes, a turn a hull on the edge of its row
-can take, the pacing director and stragglers re-rolled through a nearer
-gate (all section 12) - flow fields bounded to the seats are still to
-come.
+can take, the pacing director, stragglers re-rolled through a nearer
+gate and flow fields worked out only as far as they are read (all
+section 12).
 
 ## 15. Decisions
 

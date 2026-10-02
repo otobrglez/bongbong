@@ -23,7 +23,12 @@
 //!   frame, so however many enemies are alive the frame's routing work is
 //!   bounded by the number of targets, not searchers. `next_step` picks
 //!   the field whose goal cell the target falls in and falls back to A\*
-//!   otherwise, so callers never know which served them.
+//!   otherwise, so callers never know which served them. A field is worked
+//!   out only **as far as it is read** (`Dijkstra`): a query runs the
+//!   search on until no cell still ahead of it could change the answer, so
+//!   a frame whose enemies all stand near the fight pays for the cells
+//!   between them and it, and a field nobody reads costs nothing - and
+//!   every answer is the one the whole table gives.
 //!
 //! `route_ahead` is `next_step` read a few cells further, what a hull
 //! needs to see its next turn coming before it gets there
@@ -52,7 +57,8 @@
 //! target served by a field is reached through a portal exactly when
 //! A* would go through one.
 
-use std::cmp::Ordering;
+use std::cell::RefCell;
+use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, VecDeque};
 
 use crate::Position;
@@ -140,14 +146,28 @@ pub struct Grid {
 /// Every cell's cost to reach one goal cell along cardinal steps - a
 /// Dijkstra run outward from the goal over the grid's `cost`s, stored
 /// so that routing from any cell is a read of its neighbours. Built by
-/// `Grid::add_field`, consulted by `Grid::next_step` and `path_cost`.
+/// `Grid::add_field`, consulted by `Grid::next_step` and `path_cost`, and
+/// run only as far as those reads need (`Grid::descend`): the search is
+/// kept open behind a `RefCell`, so a read through `&Grid` can take it on.
 struct Field {
     goal: (usize, usize),
-    /// Per cell: the summed step cost from that cell to `goal`
-    /// (`UNREACHABLE` where no route exists, `0` at the goal). Stepping
-    /// *into* a cell costs that cell's `Grid::cost`, so a cell's value
-    /// is its cheapest neighbour's value plus that neighbour's cost.
+    search: RefCell<Dijkstra>,
+}
+
+/// A Dijkstra outward from one or more goal cells, kept open so it can be
+/// run out a little at a time (`Grid::settle_next`) and read wherever it
+/// is already exact: per cell, the summed step cost to the nearest goal,
+/// stepping *into* a cell costing that cell's `Grid::cost`, so a cell's
+/// value is its cheapest neighbour's plus that neighbour's cost.
+struct Dijkstra {
+    /// Per cell: the cost found so far - `0` at a goal, `UNREACHABLE`
+    /// where nothing has reached yet. Exact for every cell at or under
+    /// the frontier's lowest cost (`Grid::frontier`), and for every cell
+    /// once the frontier is empty; at least the true cost everywhere.
     to_goal: Vec<u32>,
+    /// The frontier, lowest cost first: (cost, cell index). An entry whose
+    /// cost is above its cell's `to_goal` is stale, left for the pop.
+    open: BinaryHeap<Reverse<(u32, usize)>>,
 }
 
 /// `Field::to_goal` for a cell no route reaches.
@@ -345,6 +365,7 @@ impl Grid {
     /// open to `usable`, `blocked_ahead` and the flood fills - so this
     /// changes which route is chosen, never whether one exists.
     pub fn weigh(&mut self, cells: impl Iterator<Item = Position>, cost: u32) {
+        debug_assert!(self.fields.is_empty(), "a field reads the prices as it runs: weigh the grid before adding one");
         let cost = cost.clamp(1, u8::MAX as u32) as u8;
         for pos in cells {
             if pos.x < 0.0 || pos.y < 0.0 || pos.x > self.cols as f32 * self.cell_size || pos.y > self.rows as f32 * self.cell_size {
@@ -377,6 +398,7 @@ impl Grid {
     /// changes no cost, and the first step it can change is from a cell
     /// the tank teleports off before it moves anyway.
     pub fn with_portals(mut self, centres: &[Position], radius: f32, hop_cost: f32) -> Self {
+        debug_assert!(self.fields.is_empty(), "a field walks the hub as it runs: add the portals before a field");
         let mut portals: Vec<Vec<(usize, usize)>> = Vec::with_capacity(centres.len());
         let mut kept: Vec<Position> = Vec::with_capacity(centres.len());
         for &centre in centres {
@@ -463,9 +485,10 @@ impl Grid {
     /// layer on top of `weigh`'s absolute prices (a firing lane, a cell
     /// another tank stands in). Like `weigh`, occupancy is untouched: a
     /// surcharged cell is still open, it is only dearer, so a route that
-    /// has no other way through still takes it. Call before `add_field`,
-    /// which bakes the costs in.
+    /// has no other way through still takes it. Call before `add_field`:
+    /// a field reads the costs as it is worked out.
     pub fn surcharge(&mut self, cells: impl Iterator<Item = Position>, extra: u32) {
+        debug_assert!(self.fields.is_empty(), "a field reads the prices as it runs: surcharge the grid before adding one");
         if extra == 0 {
             return;
         }
@@ -504,15 +527,16 @@ impl Grid {
     /// `next_step` and `path_cost` toward any point in `goal`'s cell read
     /// the field instead of searching. The goal cell counts as open
     /// whatever `blocked` says, exactly as A* treats it. Adding a goal
-    /// whose cell already has a field is a no-op. Costs are read at build
-    /// time, so `weigh`/`surcharge` first.
+    /// whose cell already has a field is a no-op. The field is worked out
+    /// as it is read (`descend`) and reads the costs as it goes, so
+    /// `weigh`/`surcharge` first.
     pub fn add_field(&mut self, goal: Position) {
         let goal = self.cell_of(goal);
         if self.field_for(goal).is_some() {
             return;
         }
-        let to_goal = self.costs_to(&[goal]);
-        self.fields.push(Field { goal, to_goal });
+        let search = RefCell::new(self.dijkstra(&[goal]));
+        self.fields.push(Field { goal, search });
     }
 
     /// Every cell's cost to reach the nearest of `goals` - one Dijkstra
@@ -528,56 +552,128 @@ impl Grid {
         WalkCosts { cols: self.cols, rows: self.rows, cell_size: self.cell_size, to_goal: self.costs_to(&cells) }
     }
 
-    /// The Dijkstra behind `add_field` and `walk_costs`: per cell, the
+    /// The Dijkstra behind `walk_costs`, run to the end: per cell, the
     /// summed step cost to the nearest of `goals` (`UNREACHABLE` where no
-    /// route exists, 0 at a goal), stepping *into* a cell costing that
-    /// cell's price and the portal hub walked backwards.
+    /// route exists, 0 at a goal).
     fn costs_to(&self, goals: &[(usize, usize)]) -> Vec<u32> {
-        let n = self.cols * self.rows;
+        let mut search = self.dijkstra(goals);
+        while self.frontier(&mut search).is_some() {
+            self.settle_next(&mut search);
+        }
+        search.to_goal
+    }
+
+    /// A Dijkstra outward from `goals` that has settled nothing yet: each
+    /// goal at 0 on the frontier.
+    fn dijkstra(&self, goals: &[(usize, usize)]) -> Dijkstra {
         let idx = |c: (usize, usize)| c.1 * self.cols + c.0;
-        let mut to_goal = vec![UNREACHABLE; n];
+        let mut to_goal = vec![UNREACHABLE; self.cols * self.rows];
         // (cost, cell index): a min-heap through `Reverse`. Ties pop by
-        // index, though the final costs are the same whatever the order.
+        // index, though the costs come out the same whatever the order.
         let mut open = BinaryHeap::new();
         for &goal in goals {
             to_goal[idx(goal)] = 0;
-            open.push(std::cmp::Reverse((0u32, idx(goal))));
+            open.push(Reverse((0u32, idx(goal))));
         }
-        while let Some(std::cmp::Reverse((cost, at))) = open.pop() {
-            if cost > to_goal[at] {
+        Dijkstra { to_goal, open }
+    }
+
+    /// The lowest cost on `search`'s frontier, its stale entries dropped:
+    /// every cell not yet settled costs at least this, and every cell
+    /// whose `to_goal` is at or under it is exact. `None` once the search
+    /// has reached everything it can.
+    fn frontier(&self, search: &mut Dijkstra) -> Option<u32> {
+        while let Some(&Reverse((cost, at))) = search.open.peek() {
+            if cost > search.to_goal[at] {
+                search.open.pop();
                 continue;
             }
-            let cell = (at % self.cols, at / self.cols);
-            // Reaching the goal from a neighbour means stepping *into*
-            // this cell, which costs this cell's own price.
-            let via = cost + self.cost[at] as u32;
-            for next in self.neighbors(cell) {
-                let ni = idx(next);
-                if self.blocked[ni] || via >= to_goal[ni] {
+            return Some(cost);
+        }
+        None
+    }
+
+    /// Settle the cell at the top of `search`'s frontier - the search's
+    /// one step, called once `frontier` has dropped the stale entries -
+    /// stepping into a cell costing that cell's price and the portal hub
+    /// walked backwards.
+    fn settle_next(&self, search: &mut Dijkstra) {
+        let Some(Reverse((cost, at))) = search.open.pop() else { return };
+        let idx = |c: (usize, usize)| c.1 * self.cols + c.0;
+        let cell = (at % self.cols, at / self.cols);
+        // Reaching the goal from a neighbour means stepping *into* this
+        // cell, which costs this cell's own price.
+        let via = cost + self.cost[at] as u32;
+        for next in self.neighbors(cell) {
+            let ni = idx(next);
+            if self.blocked[ni] || via >= search.to_goal[ni] {
+                continue;
+            }
+            search.to_goal[ni] = via;
+            search.open.push(Reverse((via, ni)));
+        }
+        // The hub, walked backwards: this cell is the free exit of a hop
+        // whose entrance is any other portal cell, so each of them reaches
+        // the goal for this cost plus the hop - the exit's own price is
+        // not charged, exactly as `search` relaxes an exit at the hub's
+        // cost. The hop is rounded once, as `search` rounds its whole
+        // total.
+        if self.is_portal_cell(cell) {
+            let hop = cost + self.hop_cost.round() as u32;
+            for &entrance in &self.portal_cells {
+                let ei = idx(entrance);
+                if entrance == cell || hop >= search.to_goal[ei] {
                     continue;
                 }
-                to_goal[ni] = via;
-                open.push(std::cmp::Reverse((via, ni)));
+                search.to_goal[ei] = hop;
+                search.open.push(Reverse((hop, ei)));
             }
-            // The hub, walked backwards: this cell is the free exit of a
-            // hop whose entrance is any other portal cell, so each of
-            // them reaches the goal for this cost plus the hop - the
-            // exit's own price is not charged, exactly as `search` relaxes
-            // an exit at the hub's cost. The hop is rounded once, as
-            // `search` rounds its whole total.
-            if self.is_portal_cell(cell) {
-                let hop = cost + self.hop_cost.round() as u32;
-                for &entrance in &self.portal_cells {
-                    let ei = idx(entrance);
-                    if entrance == cell || hop >= to_goal[ei] {
-                        continue;
-                    }
-                    to_goal[ei] = hop;
-                    open.push(std::cmp::Reverse((hop, ei)));
+        }
+    }
+
+    /// The cheapest step from `start` toward `goal` that `search` knows
+    /// so far: over every neighbour `descend` may step into (and every
+    /// other portal cell from a portal cell), its cost to the goal plus
+    /// the step's price. `UNREACHABLE` with none known.
+    fn best_step(&self, search: &Dijkstra, goal: (usize, usize), start: (usize, usize)) -> u32 {
+        let idx = |c: (usize, usize)| c.1 * self.cols + c.0;
+        let mut best = UNREACHABLE;
+        for next in self.neighbors(start) {
+            let ni = idx(next);
+            let there = search.to_goal[ni];
+            if (next != goal && self.blocked[ni]) || there == UNREACHABLE {
+                continue;
+            }
+            best = best.min(there + self.cost[ni] as u32);
+        }
+        if self.is_portal_cell(start) {
+            let hop = self.hop_cost.round() as u32;
+            for &exit in &self.portal_cells {
+                let there = search.to_goal[idx(exit)];
+                if exit != start && there != UNREACHABLE {
+                    best = best.min(there + hop);
                 }
             }
         }
-        to_goal
+        best
+    }
+
+    /// Run `search` on until the step `descend` takes from `start` is the
+    /// one the whole table gives: until the frontier's lowest cost is at
+    /// least the cheapest step known. Every cell still ahead costs at
+    /// least that, and every step into one at least one more (a cell's
+    /// price is at least 1, and so is the hub's hop), so no step left
+    /// unknown could beat the cheapest or tie it, and every step that does
+    /// tie it reads a settled, exact cost. Most queries near the goal
+    /// stop after a few cells; one from the far side of the map runs the
+    /// search that far, once, for every later read this frame.
+    fn settle_for_step(&self, search: &mut Dijkstra, goal: (usize, usize), start: (usize, usize)) {
+        while let Some(low) = self.frontier(search) {
+            if low >= self.best_step(search, goal, start) {
+                return;
+            }
+            self.settle_next(search);
+        }
     }
 
     /// A cell's step cost - 1 for plain ground, more where `weigh` or
@@ -593,6 +689,18 @@ impl Grid {
     /// were added (player 1 first in the round's grid).
     pub fn goals(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
         self.fields.iter().map(|f| f.goal)
+    }
+
+    /// Work every field out whole now, as if every cell had been read:
+    /// what a field worked out only as far as it is read must agree with.
+    #[cfg(test)]
+    pub(crate) fn settle_fields(&self) {
+        for field in &self.fields {
+            let mut search = field.search.borrow_mut();
+            while self.frontier(&mut search).is_some() {
+                self.settle_next(&mut search);
+            }
+        }
     }
 
     /// From cell (`col`, `row`), the neighbour cell the field toward
@@ -616,7 +724,14 @@ impl Grid {
             return None;
         }
         let field = self.field_for(goal)?;
-        let cost = field.to_goal[row * self.cols + col];
+        let mut search = field.search.borrow_mut();
+        // Run on until this cell's cost is exact: settled, or at or under
+        // the frontier, or the frontier gone.
+        let at = row * self.cols + col;
+        while self.frontier(&mut search).is_some_and(|low| search.to_goal[at] > low) {
+            self.settle_next(&mut search);
+        }
+        let cost = search.to_goal[at];
         (cost != UNREACHABLE).then_some(cost)
     }
 
@@ -633,6 +748,9 @@ impl Grid {
     /// cell index, so the answer is a pure function of the grid and the
     /// preference. `None` when no neighbour reaches the goal.
     fn descend(&self, field: &Field, start: (usize, usize), prefer: Option<Step>) -> Option<SearchHit> {
+        let mut search = field.search.borrow_mut();
+        self.settle_for_step(&mut search, field.goal, start);
+        let to_goal = &search.to_goal;
         let idx = |c: (usize, usize)| c.1 * self.cols + c.0;
         // The tie-break: the preferred step first, then a turn off it
         // before a step straight back, then the lowest index.
@@ -648,7 +766,7 @@ impl Grid {
             if next != field.goal && self.blocked[ni] {
                 continue;
             }
-            let there = field.to_goal[ni];
+            let there = to_goal[ni];
             if there == UNREACHABLE {
                 continue;
             }
@@ -667,10 +785,10 @@ impl Grid {
             let hop = self.hop_cost.round() as u32;
             for &exit in &self.portal_cells {
                 let ei = idx(exit);
-                if exit == start || field.to_goal[ei] == UNREACHABLE {
+                if exit == start || to_goal[ei] == UNREACHABLE {
                     continue;
                 }
-                let total = field.to_goal[ei] + hop;
+                let total = to_goal[ei] + hop;
                 let rank = u8::from(prefer.is_some());
                 if best.is_none_or(|(c, r, i, _)| (total, rank, ei) < (c, r, i)) {
                     best = Some((total, rank, ei, exit));
@@ -1948,6 +2066,81 @@ mod field_tests {
         assert_eq!(grid.fields.len(), 2);
         assert_eq!(grid.cell_of(grid.next_step(at(0, 2), at(0, 0)).unwrap()), (0, 1));
         assert_eq!(grid.cell_of(grid.next_step(at(0, 2), at(7, 2)).unwrap()), (1, 2));
+    }
+
+    /// A field worked out only as far as it is read gives every answer the
+    /// whole table gives, whatever the order the reads come in: on mazes of
+    /// walls, dear cells and portals, every query read from every cell the
+    /// goal reaches - the cells beside the goal first, the search barely
+    /// begun, then the rest shuffled - each query on a field of its own and
+    /// then all of them on one, against the same field settled whole. The
+    /// cells the goal does not reach come last: a read from one has to run
+    /// the search to its end to know, after which every read is the
+    /// table's whatever the rule.
+    #[test]
+    fn a_field_read_as_far_as_it_is_needed_answers_as_the_whole_table_does() {
+        use rand::rngs::SmallRng;
+        use rand::{RngExt, SeedableRng};
+        let cell = 32.0;
+        let (cols, rows) = (30usize, 20usize);
+        let at = |c: usize, r: usize| Position::new((c as f32 + 0.5) * cell, (r as f32 + 0.5) * cell);
+        let headings = [None, Some(Position::new(0.0, -1.0)), Some(Position::new(0.0, 1.0)), Some(Position::new(-1.0, 0.0)), Some(Position::new(1.0, 0.0))];
+        let read = |route: Option<RouteAhead>| route.map(|route| (route.first(), route.cells().to_vec()));
+        for seed in 0..12u64 {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let walls: Vec<(Position, f32)> = (0..cols * rows)
+                .filter(|_| rng.random_range(0.0..1.0) < 0.22)
+                .map(|i| (at(i % cols, i / cols), cell / 2.0))
+                .collect();
+            let dear: Vec<Position> = (0..40).map(|_| at(rng.random_range(0..cols), rng.random_range(0..rows))).collect();
+            let portals: &[Position] =
+                if seed % 2 == 0 { &[Position::new(4.0 * cell, 4.0 * cell), Position::new(26.0 * cell, 16.0 * cell)] } else { &[] };
+            let goal = at(rng.random_range(0..cols), rng.random_range(0..rows));
+            let fresh = || {
+                let mut grid = Grid::build(cols as f32 * cell, rows as f32 * cell, cell, 0.0, walls.iter().copied())
+                    .with_portals(portals, cell, 2.0);
+                grid.surcharge(dear.iter().copied(), 3);
+                grid.add_field(goal);
+                grid
+            };
+            let whole = fresh();
+            whole.settle_fields();
+            assert!(whole.frontier(&mut whole.fields[0].search.borrow_mut()).is_none(), "seed {seed}: the whole table is settled");
+            let (gc, gr) = whole.cell_of(goal);
+            let (mut reached, unreached): (Vec<(usize, usize)>, Vec<(usize, usize)>) =
+                (0..rows).flat_map(|r| (0..cols).map(move |c| (c, r))).partition(|&(c, r)| whole.to_goal(goal, c, r).is_some());
+            assert!(reached.len() > cols * rows / 2, "seed {seed}: the goal reaches most of the maze");
+            reached.sort_by_key(|&(c, r)| c.abs_diff(gc) + r.abs_diff(gr));
+            for i in (8..reached.len()).rev() {
+                let j = rng.random_range(8..=i);
+                reached.swap(i, j);
+            }
+            for query in 0..6 {
+                let lazy = fresh();
+                let asks = |q: usize| query == q || query == 5;
+                for &(c, r) in reached.iter().chain(&unreached) {
+                    let from = at(c, r);
+                    if asks(0) {
+                        assert_eq!(lazy.next_step(from, goal), whole.next_step(from, goal), "seed {seed}: next_step from ({c}, {r})");
+                    }
+                    if asks(1) {
+                        assert_eq!(lazy.path_cost(from, goal), whole.path_cost(from, goal), "seed {seed}: path_cost from ({c}, {r})");
+                    }
+                    if asks(2) {
+                        for heading in headings {
+                            let (a, b) = (lazy.route_ahead(from, goal, heading), whole.route_ahead(from, goal, heading));
+                            assert_eq!(read(a), read(b), "seed {seed}: route_ahead from ({c}, {r}) heading {heading:?}");
+                        }
+                    }
+                    if asks(3) {
+                        assert_eq!(lazy.flow(goal, c, r), whole.flow(goal, c, r), "seed {seed}: flow at ({c}, {r})");
+                    }
+                    if asks(4) {
+                        assert_eq!(lazy.to_goal(goal, c, r), whole.to_goal(goal, c, r), "seed {seed}: to_goal at ({c}, {r})");
+                    }
+                }
+            }
+        }
     }
 }
 

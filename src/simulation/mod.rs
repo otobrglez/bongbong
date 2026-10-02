@@ -916,6 +916,11 @@ pub struct Game {
     /// Tooling-only: the dev server turns it on; the simulation never
     /// reads it, and off by default so a quiet frame has no events.
     pub trace_ai: bool,
+    /// Tests only: work every flow field out whole as the frame's routing
+    /// grid is built (`Grid::settle_fields`), the yardstick a field worked
+    /// out only as far as it is read is held to.
+    #[cfg(test)]
+    pub(crate) whole_fields: bool,
 }
 
 /// Per-frame scratch state threaded through `Game::update`'s phases: the
@@ -4034,17 +4039,20 @@ impl Game {
     /// priced with the tactical surcharges, and carrying one flow field
     /// per target the pack shares - every live player and, while it
     /// lives, the player's frog (a hunter's quarry). Enemies then route
-    /// toward those by reading the field; only a target of their own (an
-    /// engagement slot, a wander waypoint, a pickup) still costs a search.
+    /// toward those by reading the field, which is worked out only as far
+    /// as the frame reads it (`pathfind`), every answer the whole field's;
+    /// only a target of their own (an engagement slot, a wander waypoint,
+    /// a pickup) still costs a search.
     ///
     /// The lane surcharge walks the cells in front of each live player's
     /// barrel (`Tank::rotation` is the axis a shot flies along) out to
     /// `route_lane_cells`, stopping at the first blocked cell - a shell
     /// flies further, but no tank can stand there anyway. The crowd
-    /// surcharge is the cell each live enemy stands in. Both are read at
-    /// field-build time, so this is the one place they are applied. No
-    /// RNG: a surcharge is a pure function of positions, and the field's
-    /// ties break on cell index.
+    /// surcharge is the cell each live enemy stands in. A field reads the
+    /// prices as it is worked out, so every one of them is applied here,
+    /// before the first field is added, and nowhere else. No RNG: a
+    /// surcharge is a pure function of positions, and the field's ties
+    /// break on cell index.
     pub(crate) fn route_grid(&self, width: f32, height: f32) -> Grid {
         let mut grid = self.nav_grid(width, height);
         let t = tuning();
@@ -4091,6 +4099,10 @@ impl Game {
         }
         if let Some(frog) = self.frog.and_then(|e| with_frog(&self.world, e, |fr| (!fr.is_dead()).then_some(fr.position))) {
             grid.add_field(frog);
+        }
+        #[cfg(test)]
+        if self.whole_fields {
+            grid.settle_fields();
         }
         grid
     }
@@ -8520,6 +8532,46 @@ cells."30,20" = { kind = "frog" }
         assert!(mind.called && mind.wave && mind.lost < 0.1, "back called to the fight, lost no more: {mind:?}");
         assert_eq!(game.world.get::<&Ai>(entity).unwrap().role, role, "it keeps its role");
         assert!(!game.is_entering(game.tank_entity_by_slot(control).unwrap()), "the tank near the fight stays");
+    }
+
+    // --- Flow fields worked out as far as they are read (`pathfind`) ---
+
+    /// A flow field worked out only as far as the round reads it routes
+    /// every enemy as the whole field does: the same seeded round on
+    /// longwater - two seats, so two fields and the frog's, its first wave
+    /// rolling in a long walk out and called across the map to the fort -
+    /// with every field settled whole as each frame's grid is built and
+    /// without, tank for tank and bit for bit.
+    #[test]
+    fn a_field_read_as_far_as_it_is_needed_routes_every_enemy_as_the_whole_field_does() {
+        let run = |whole: bool| {
+            let mut game = Game::default();
+            game.seed_override = Some(0xB0B5);
+            game.players = PlayerCount::from_count(2).expect("two seats");
+            game.map = MapFile::from_toml_str(include_str!("../../maps/longwater.toml")).expect("longwater parses");
+            game.whole_fields = whole;
+            let (w, h) = game.map.field_size();
+            game.init(w, h);
+            assert!(game.field_map());
+            let mut samples = Vec::new();
+            for frame in 1..=900u32 {
+                game.update(Input::default(), 1.0 / 60.0, w, h);
+                if frame % 30 == 0 {
+                    let tanks: Vec<(usize, u32, u32, u32, u32)> = game
+                        .tank_snapshots()
+                        .iter()
+                        .map(|t| (t.slot, t.position.x.to_bits(), t.position.y.to_bits(), t.rotation.to_bits(), t.damage.to_bits()))
+                        .collect();
+                    samples.push(tanks);
+                }
+            }
+            samples
+        };
+        let (read, whole) = (run(false), run(true));
+        assert!(read.last().is_some_and(|tanks| tanks.len() > 4), "the first wave came onto the field");
+        for (i, (a, b)) in read.iter().zip(&whole).enumerate() {
+            assert_eq!(a, b, "sample {i}: an enemy went another way on the field read as far as it was needed");
+        }
     }
 
     // --- Steering: lanes and turns (docs/large-maps-follow-camera.md
