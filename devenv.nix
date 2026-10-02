@@ -14,22 +14,7 @@ in {
     pkgs.SDL2
     pkgs.python3
     pkgs.just
-    # CLI tool for managing CoWork Skills (https://crates.io/crates/cowork).
-    # Built from crates.io rather than cargo-install'd, so it's reproducible
-    # like the rest of `packages`. Uses `unstable`'s rustPlatform (not the
-    # devenv-provided languages.rust toolchain) because cowork's Cargo.toml
-    # requires edition2024, unsupported by nixpkgs-rolling's older cargo.
-    (unstable.rustPlatform.buildRustPackage {
-      pname = "cowork";
-      version = "0.1.5";
-      src = unstable.fetchCrate {
-        pname = "cowork";
-        version = "0.1.5";
-        hash = "sha256-AhiOmhWxMkOcEPGboJAbrMm0EvbAP6rmXIIZNM7CsGU=";
-      };
-      cargoHash = "sha256-Wt5Gel+xa2eDNswirB1JNLZ1w6NrfGRT1Ji3QScBSYw=";
-    })
-  ];
+ ];
 
   languages.rust = {
     enable = true;
@@ -46,7 +31,12 @@ in {
     # to Xcode's, see the PRD.
     # aarch64-linux-android: the Android port (docs/android-port-prd.md);
     # the NDK, SDK and emulator come from tools/setup_android.sh.
-    targets = [ "wasm32-unknown-emscripten" "aarch64-apple-ios" "aarch64-apple-ios-sim" "aarch64-linux-android" ];
+    targets = [
+      "wasm32-unknown-emscripten"
+      "aarch64-apple-ios"
+      "aarch64-apple-ios-sim"
+      "aarch64-linux-android"
+    ];
   };
 
   languages.javascript = {
