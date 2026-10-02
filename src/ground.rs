@@ -441,8 +441,9 @@ impl GroundGrid {
     /// uploads only them). The grid is the one `build` makes of the edited
     /// lists with the same seed (`a_repaint_is_the_build_of_the_edited_lists`).
     /// A cell past the grid moves only the walls the shade gathers round,
-    /// as in `build`.
-    pub fn repaint(&mut self, cells: &[(i32, i32, CellFloor)]) {
+    /// as in `build`. Answers the grid cells whose tile can have changed,
+    /// in row order - every cell whose water `depth` can have, among them.
+    pub fn repaint(&mut self, cells: &[(i32, i32, CellFloor)]) -> Vec<(i32, i32)> {
         let mut paint = Vec::new();
         let mut walls_moved = Vec::new();
         for &(col, row, floor) in cells {
@@ -458,13 +459,25 @@ impl GroundGrid {
             }
             walls_moved.push((col, row));
         }
-        for (x, y) in self.layout.repaint(&paint) {
+        let touched = self.layout.repaint(&paint);
+        for &(x, y) in &touched {
             let i = y as usize * self.cols + x as usize;
             (self.tiles[i], self.current[i]) = resolve(&self.layout, self.seed, self.drifts, x, y);
         }
         if let (false, Some(shade)) = (walls_moved.is_empty(), self.shade.get_mut()) {
             shade.rebake(&self.walls, &walls_moved);
         }
+        let mut touched: Vec<(i32, i32)> = touched.into_iter().collect();
+        touched.sort_by_key(|&(x, y)| (y, x));
+        touched
+    }
+
+    /// How deep the water in map cell `(col, row)` is, by the reading the
+    /// tiles were resolved from - the one `WaterLayout` gives a round of
+    /// the same cells: open lake water deep, any other water a ford, dry
+    /// elsewhere and past the map.
+    pub fn depth(&self, col: i32, row: i32) -> Depth {
+        self.layout.depth(col, row)
     }
 
     fn idx(&self, x: i32, y: i32) -> Option<usize> {
@@ -720,6 +733,21 @@ impl Layout {
         self.is_water(x, y) && !self.lake_at(x, y)
     }
 
+    /// How deep the water in map cell `(x, y)` is: open lake water - a lake
+    /// cell wet at all four corners - is deep, any other water cell a ford,
+    /// and a cell past the map, whose water is picture only, dry. The one
+    /// reading `WaterLayout` and the builder's minimap (`GroundGrid::depth`)
+    /// both take.
+    fn depth(&self, x: i32, y: i32) -> Depth {
+        if x < 0 || y < 0 || x as usize >= self.map_cols || y as usize >= self.map_rows || !self.is_water(x, y) {
+            Depth::Dry
+        } else if self.lake_at(x, y) && self.corners(x, y) == 0b1111 {
+            Depth::Deep
+        } else {
+            Depth::Shallow
+        }
+    }
+
     fn around(vx: i32, vy: i32) -> [(i32, i32); 4] {
         [(vx - 1, vy - 1), (vx, vy - 1), (vx - 1, vy), (vx, vy)]
     }
@@ -868,20 +896,15 @@ impl WaterLayout {
             for x in 0..cols as i32 {
                 let i = y as usize * cols + x as usize;
                 // The water past the map is picture only: nothing drives
-                // there.
-                if !layout.is_water(x, y) || x as usize >= layout.map_cols || y as usize >= layout.map_rows {
-                    continue;
-                }
-                if layout.lake_at(x, y) {
-                    let corners = layout.corners(x, y);
-                    depth[i] = if corners == 0b1111 { Depth::Deep } else { Depth::Shallow };
+                // there (`Layout::depth`).
+                depth[i] = layout.depth(x, y);
+                current[i] = match depth[i] {
+                    Depth::Dry | Depth::Deep | Depth::Ice => false,
                     // A mouth carries its stream's current, as it does in
                     // the picture.
-                    current[i] = corners != 0b1111 && layout.stream_sides(x, y) & 0b1010 != 0;
-                } else {
-                    depth[i] = Depth::Shallow;
-                    current[i] = layout.channel_mask(x, y) & 0b1010 != 0;
-                }
+                    Depth::Shallow if layout.lake_at(x, y) => layout.stream_sides(x, y) & 0b1010 != 0,
+                    Depth::Shallow => layout.channel_mask(x, y) & 0b1010 != 0,
+                };
             }
         }
         WaterLayout { cols, rows, depth, current }
