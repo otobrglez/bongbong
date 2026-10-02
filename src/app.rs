@@ -10,10 +10,7 @@ use crate::tuning::tuning;
 use crate::ai::Intent;
 use crate::editor::{BuilderInput, CliOverrides, EditorTextures};
 use crate::render::game::{Effects, Textures};
-use crate::hud::{
-    leave_button_rect, leave_dialog_rects, level_button_rect, mode_button_rect, online_button_rect, players_button_rect,
-    players_dialog_rects, restart_button_rect, BAR_FILL,
-};
+use crate::hud::{self, leave_dialog_rects, players_dialog_rects, CornerButton, CornerShape, Corners, Fade, UiFrame, BAR_FILL};
 use crate::level_select::SelectInput;
 use crate::levels::{Campaign, Levels};
 use crate::lobby::LobbyInput;
@@ -129,13 +126,22 @@ fn window_units_per_point(_rl: &RaylibHandle) -> f32 {
 /// landscape window out of the cutout and the web page pads the canvas
 /// with `env(safe-area-inset-*)`. `touch` is whether thumbs are on the
 /// glass, which makes every button a finger's size.
-fn ui_frame(rl: &mut RaylibHandle, touch: bool) -> crate::hud::UiFrame {
+fn ui_frame(rl: &mut RaylibHandle, touch: bool) -> UiFrame {
     let window = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
     #[cfg(target_os = "ios")]
     let insets = ios::safe_area_insets(rl).unwrap_or_default();
     #[cfg(not(target_os = "ios"))]
     let insets = crate::hud::Insets::default();
-    crate::hud::UiFrame::new(window, window_units_per_point(rl), tuning().ui_scale, insets, touch)
+    UiFrame::new(window, window_units_per_point(rl), tuning().ui_scale, insets, touch)
+}
+
+/// A rectangle of the chrome's, in UI points, in the bitmap's pixels: what
+/// the touch scheme and the off-screen arrows, both laid out on the bitmap,
+/// keep out of.
+fn ui_rect_on_bitmap(ui: &UiFrame, view: &View, r: crate::math::Rectangle) -> crate::math::Rectangle {
+    let a = view.to_bitmap(ui.to_window(crate::math::Vec2::new(r.x, r.y)));
+    let b = view.to_bitmap(ui.to_window(crate::math::Vec2::new(r.x + r.width, r.y + r.height)));
+    crate::math::Rectangle::new(a.x, a.y, b.x - a.x, b.y - a.y)
 }
 
 /// This window as the framing rules see it (`framing::Screen`,
@@ -195,13 +201,14 @@ fn framebuffer_ratio(rl: &RaylibHandle) -> f32 {
 
 /// How a frame lands on the window (docs/large-maps-follow-camera.md): the
 /// bitmap's layout and the view that puts it on the window, and the render
-/// targets that takes. An arena - and the builder's canvas, and a view the
-/// dev server pinned - is the bitmap of the whole field plus the bar,
-/// fitted into whatever the window is (`View::fit_capped`). A field map is
-/// followed: its bitmap is the world this window shows plus the bar,
-/// framed into the window less the bar, a bitmap pixel per world pixel
-/// (`FollowFrame`) - `Seating::Room` in a room's round, `Local` otherwise,
-/// the sight box the tuning table's.
+/// targets that takes. An arena - and a view the dev server pinned - is the
+/// bitmap of the whole field, and the builder's canvas the same under its
+/// bar, fitted into whatever the window is (`View::fit_capped`). A field
+/// map is followed: its bitmap is the world this window shows, framed into
+/// the whole window, a bitmap pixel per world pixel (`FollowFrame`) -
+/// `Seating::Room` in a room's round, `Local` otherwise, the sight box the
+/// tuning table's. Play draws no bar: its HUD stands in the window's
+/// corners (`hud::corners`).
 struct Presentation {
     /// The field it was made for, and the mode: a change of either makes it
     /// stale (`stale`).
@@ -214,8 +221,7 @@ struct Presentation {
     layout: Layout,
     view: View,
     /// The scene target's size and `composite`'s: a followed view's
-    /// composite holds the world alone, the scene target's size, the bar
-    /// being drawn on the window (`Game::render`).
+    /// composite holds the scene target's every texel (`Game::render`).
     scene: (i32, i32),
     composite: (i32, i32),
 }
@@ -233,7 +239,9 @@ impl Presentation {
             let target = frame.target_size();
             return Presentation { field, mode, followed: Some(frame), pinned, layout: frame.layout, view: frame.view, scene: target, composite: target };
         }
-        let layout = Layout::for_field(field.0, field.1);
+        // The builder keeps its bar; play draws the field alone, its HUD
+        // standing in the window's corners (`hud::corners`).
+        let layout = if mode == Driver::Build { Layout::for_field(field.0, field.1) } else { Layout::bare(field.0, field.1) };
         // The cap is a desktop matter: an embedded build (web, iOS) draws
         // the bitmap into a canvas or screen that is never larger than it.
         let cap = if crate::EMBEDDED {
@@ -1273,6 +1281,8 @@ pub fn run(args: Args) {
     let mut follow = crate::follow::Follow::default();
     let mut followed_in: Option<(bool, Option<String>, (f32, f32))> = None;
     let mut touch = crate::touch::TouchScheme::default();
+    // How far each corner cluster has faded under the fight (`hud::Fade`).
+    let mut fade = Fade::default();
     let touch_from_mouse = args.touch_from_mouse;
 
     // `--zoom` is the `view_max_scale` knob, staged like a `--tuning`
@@ -1545,9 +1555,20 @@ pub fn run(args: Args) {
         touch_held_last_frame = touching;
         let mouse_pressed = rl.is_mouse_button_pressed(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
         let mouse_held = rl.is_mouse_button_down(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
-        // Every pointer is read in bitmap pixels: the bar, the dialogs and
-        // the builder hit-test there and never learn what the window is.
-        let pointer = view.to_bitmap(if touching { rl.get_touch_position(0).into() } else { rl.get_mouse_position().into() });
+        // A pointer is read twice: in bitmap pixels, where the dialogs and
+        // the builder hit-test and never learn what the window is, and in
+        // UI points, where the corners' buttons stand.
+        let window_pointer: crate::math::Vec2 = if touching { rl.get_touch_position(0).into() } else { rl.get_mouse_position().into() };
+        let pointer = view.to_bitmap(window_pointer);
+        let ui_pointer = ui.to_ui(window_pointer);
+        // The corners as this frame finds them (`hud::corners`), the one
+        // geometry the painter draws and these hit tests read. A touch that
+        // lands on either cluster is the HUD's, never a stick or a shot.
+        let corners = CornerShape::of(&session.play_chrome(), session.shown().players.count()).map(|shape| hud::corners(&ui, &shape));
+        let corner_hit = corners.as_ref().and_then(|c| c.hit(ui_pointer));
+        let keep_out: Vec<crate::math::Rectangle> =
+            corners.iter().flat_map(Corners::keep_out).map(|r| ui_rect_on_bitmap(&ui, &view, r)).collect();
+        touch.set_keep_out(&keep_out);
         // This frame's touch points for the touch scheme, ids included so
         // a stick follows its own finger. `--touch-from-mouse` stands a
         // held left button in for one.
@@ -1648,24 +1669,18 @@ pub fn run(args: Args) {
                 } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) && session.press_levels() {
                     // Esc opens the level select over the round, wherever
                     // it stands (docs/levels.md).
-                } else if pressed && session.level_button().is_some() && level_button_rect(layout.panel).contains(pointer) {
-                    // The bar's level button, in the mission word's place.
+                } else if pressed && session.level_button().is_some() && corner_hit == Some(CornerButton::Level) {
+                    // The level button, in the mission word's place.
                     session.press_levels();
-                } else if tab || (pressed && mode_button_rect(layout.panel).contains(pointer)) {
+                } else if tab || (pressed && corner_hit == Some(CornerButton::Build)) {
                     session.press_build();
-                } else if crate::TWO_PLAYERS_AVAILABLE
-                    && pressed
-                    && players_button_rect(layout.panel).contains(pointer)
-                {
+                } else if crate::TWO_PLAYERS_AVAILABLE && pressed && corner_hit == Some(CornerButton::Players) {
                     session.press_players();
-                } else if crate::ONLINE_AVAILABLE && pressed && online_button_rect(layout.panel).contains(pointer) {
+                } else if crate::ONLINE_AVAILABLE && pressed && corner_hit == Some(CornerButton::Online) {
                     // The ONLINE button opens the lobby over the local
                     // round, which is left exactly where it stands.
                     session.press_online();
-                } else if !crate::KEYBOARD_AVAILABLE
-                    && pressed
-                    && restart_button_rect(layout.panel).contains(pointer)
-                {
+                } else if !crate::KEYBOARD_AVAILABLE && pressed && corner_hit == Some(CornerButton::Restart) {
                     // The RESTART button stands in for the R key: staged the
                     // way the dev panel's button is, it becomes this frame's
                     // `Input::restart_pressed`.
@@ -1690,12 +1705,12 @@ pub fn run(args: Args) {
                 session.update_lobby(&input, layout.field, dt);
             }
             Driver::Online => {
-                // A round belongs to its room: the bar carries one
+                // A round belongs to its room: the corners carry one
                 // button, `LEAVE`, and Esc does the same thing - the
                 // seat goes back and the window comes out at the local
-                // round exactly where it stood. A press on the bar is
+                // round exactly where it stood. A press on the corners is
                 // never a play input, so the hit test is safe here.
-                let left = pressed && leave_button_rect(layout.panel).contains(pointer);
+                let left = pressed && corner_hit == Some(CornerButton::Leave);
                 if left || rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
                     session.leave_online();
                 }
@@ -1969,7 +1984,7 @@ pub fn run(args: Args) {
                 let local: Vec<usize> = local_seats(&session).into_iter().map(usize::from).collect();
                 let stage = crate::follow::Stage { visible: frame.framing.visible, field, sight: frame.sight };
                 let shot = follow.update(&crate::follow::Seats::of(game, &local), advanced, &stage, &crate::follow::FollowRules::current());
-                let camera = Camera::following(field, shot.corner, frame.framing.visible, frame.scale, frame.device_scale(framebuffer_ratio(rl)));
+                let camera = Camera::following(field, shot.corner, frame.framing.visible, 1.0, frame.device_scale(framebuffer_ratio(rl)));
                 #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
                 if let Some(dev) = &mut dev {
                     dev.publish_camera(crate::follow::CameraReport {
@@ -2008,6 +2023,18 @@ pub fn run(args: Args) {
         if session.mode() == Driver::Online {
             awareness.observe_events(game, &seats);
         }
+        // The chrome the frame draws, and its corners laid out on the
+        // window as this frame left it - a press may have opened a dialog
+        // or started another round since the hit tests ran.
+        let chrome = session.play_chrome();
+        let corners = CornerShape::of(&chrome, game.players.count()).map(|shape| hud::corners(&ui, &shape));
+        // A cluster fades while a tank, a shot or a blast is under it, on
+        // the frame's own time - a lockstep `step`'s, as the particles'.
+        if let Some(corners) = &corners {
+            let on_screen = hud::WorldOnScreen { camera, field_origin: layout.field_origin(), view, ui_scale: ui.scale };
+            let t = tuning();
+            fade.step(hud::covered(corners, &hud::action_marks(game), &on_screen), fx_dt, t.ui_fade_opacity, t.ui_fade_seconds);
+        }
         let indicators = (matches!(session.mode(), Driver::Play | Driver::Online) && !camera.shows_whole_field()).then(|| {
             // The bitmap's pixels to a UI point, so an arrow is its rows'
             // size on the glass however the bitmap is scaled, at the scale
@@ -2026,6 +2053,8 @@ pub fn run(args: Args) {
                 let physical = window_units_per_point(rl) / view.scale;
                 frame.keep_out.extend(crate::indicators::thumb_rests(screen, physical, &t));
             }
+            // No arrow lands under a corner cluster.
+            frame.keep_out.extend(corners.iter().flat_map(Corners::keep_out).map(|r| ui_rect_on_bitmap(&ui, &view, r)));
             awareness.picture(game, &seats, &frame, points)
         });
         let shade = round_shade.sync(rl, thread, game.ground.shade());
@@ -2082,7 +2111,9 @@ pub fn run(args: Args) {
                 shade,
             },
             &layout,
-            &session.play_chrome(),
+            &chrome,
+            &ui,
+            fade,
         );
         // A pending screenshot reads the frame just presented.
         #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]

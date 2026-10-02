@@ -33,7 +33,7 @@ use sola_raylib::prelude::{RaylibHandle, RaylibTexture2D, RaylibThread, RenderTe
 
 use crate::ai::Intent;
 use crate::editor::{BuilderInput, Category, CellChange, MapEditor, Tool, parse_mission, parse_spawn, parse_tank, parse_tier};
-use crate::hud::{leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects, restart_button_rect, UiFrame};
+use crate::hud::{leave_dialog_rects, players_dialog_rects, CornerButton, CornerShape, Corners, UiFrame};
 use crate::map::MapFile;
 use crate::maplint::LintSeverity;
 use crate::mode::{Driver, Session};
@@ -48,7 +48,7 @@ use crate::level::{Mission, SpawnKind, Tier};
 use crate::level_select::SelectInput;
 use crate::follow::{CameraMode, CameraReport, FollowReport};
 use crate::framing::Seating;
-use crate::view::Camera;
+use crate::view::{Camera, View};
 use crate::{Layout, PHYSICS_FIXED_DT, Position, parse_seed};
 
 /// Port the game listens on unless `--dev-port`/`BONGBONG_DEV_PORT` says
@@ -155,7 +155,7 @@ const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"inte
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|apart|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`), `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|apart|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, and in play and online the corners' `buttons` and `clusters` in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -429,7 +429,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "click",
-        description: "A raw press at a bitmap position (pixels, the 32 px HUD bar included: the field starts at y = 32 - on a followed field map the bitmap is the one the window last drew, `status.camera`'s field area under the bar), in either mode, on the same hit-tests a mouse or a finger uses: in play mode the BUILD button (right end of the bar), the players button beside it, the level button at the bar's left end on a level, either dialog's buttons (a press outside a dialog closes it), a level's end-screen buttons (LEVELS, PLAY AGAIN, the way on) and the level select's tiles and BACK (a press outside it closes it) - a press on the field itself does nothing in play mode; in build mode the bar's buttons (PLAY starts the round like `play`), a dropdown row, a settings stepper or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`, with `world` - the world point the press landed on, through the camera - for a press on the field outside the builder. This tests the UI; `build`/`play`/`builder_*` address the model directly.",
+        description: "A raw press at a window position - the window's own coordinates, which `status.ui.buttons` and `status.camera.window_field` give (with no window, the live mode's bitmap at its own size: the builder's under its 32 px bar, play's field alone) - in either mode, on the same hit-tests a mouse or a finger uses: in play mode the corners' buttons (BUILD, the players button, ONLINE, RESTART on a keyboard-less build, and the level button on a level - `status.ui.buttons`), either dialog's buttons (a press outside a dialog closes it), a level's end-screen buttons (LEVELS, PLAY AGAIN, the way on) and the level select's tiles and BACK (a press outside it closes it) - a press on the field itself does nothing in play mode; online the corners' LEAVE; in build mode the bar's buttons (PLAY starts the round like `play`), a dropdown row, a settings stepper or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`, with `world` - the world point the press landed on, through the camera - for a press on the field outside the builder. This tests the UI; `build`/`play`/`builder_*` address the model directly.",
         schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right"],"default":"left"},"drag_to":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"[x, y] to drag to before releasing"}},"required":["x","y"]}"#,
         read_only: false,
         destructive: false,
@@ -871,14 +871,29 @@ impl DevServer {
         self.drawn_ui = Some(ui);
     }
 
-    /// The bitmap a `click` lands on: the one the window drew last, while
-    /// the round shows on it - the builder's is always its whole canvas,
-    /// as is everything in a server with no window.
-    fn click_layout(&self, session: &Session, width: f32, height: f32) -> Layout {
-        match &self.drawn {
-            Some(drawn) if session.mode() != Driver::Build => drawn.layout,
-            _ => Layout::for_field(width, height),
+    /// What a `click` lands on, in the window's own coordinates: the bitmap
+    /// the window drew last and the view that put it there, and the UI
+    /// frame its chrome is laid out in - while that bitmap is this mode's
+    /// (the builder's has a bar, play's none). With no window drawn yet, or
+    /// a mode switched since, the live mode's own bitmap in a window of
+    /// exactly its size, which is all a server with no window ever has.
+    fn click_frame(&self, session: &Session, width: f32, height: f32) -> (Layout, View, UiFrame) {
+        let build = session.mode() == Driver::Build;
+        match (&self.drawn, self.drawn_ui) {
+            (Some(drawn), Some(ui)) if (drawn.layout.panel.h > 0.0) == build => (drawn.layout, drawn.view, ui),
+            _ => {
+                let layout = if build { Layout::for_field(width, height) } else { Layout::bare(width, height) };
+                let (w, h) = layout.window_size();
+                let window = (w as f32, h as f32);
+                (layout, View::fit(window, window), UiFrame::plain(window))
+            }
         }
+    }
+
+    /// The corners the window lays out for the live mode in `ui`
+    /// (`hud::corners`), `None` where it draws none.
+    fn corners(session: &Session, ui: &UiFrame) -> Option<Corners> {
+        CornerShape::of(&session.play_chrome(), session.shown().players.count()).map(|shape| crate::hud::corners(ui, &shape))
     }
 
     /// `camera`: pin a view, let it go, or say where it is. A pin's field
@@ -910,14 +925,28 @@ impl DevServer {
         Ok(self.camera_json(session, field))
     }
 
-    /// `status.ui`: the UI frame the window last drew its chrome in - the
-    /// UI scale (window units per point), the window and the safe area the
-    /// chrome keeps to, both in points, and whether it is laid out for
-    /// touch. `null` with no window drawn yet.
-    fn ui_json(&self) -> Value {
-        let Some(ui) = self.drawn_ui else { return Value::Null };
+    /// `status.ui`: the UI frame the chrome is laid out in - the UI scale
+    /// (window units per point), the window and the safe area the chrome
+    /// keeps to, both in points, and whether it is laid out for touch -
+    /// and, in play and online, the corners: every `button` and both
+    /// `clusters` in window coordinates, which is what `click` takes. With
+    /// no window, the frame `click` lays the chrome out in
+    /// (`click_frame`).
+    fn ui_json(&self, session: &Session, width: f32, height: f32) -> Value {
+        let (_, _, ui) = self.click_frame(session, width, height);
         let rect = |r: crate::Rect| json!({ "x": r.x, "y": r.y, "w": r.w, "h": r.h });
-        json!({ "scale": ui.scale, "screen": rect(ui.screen), "area": rect(ui.area), "touch": ui.touch })
+        let on_window = |r: crate::math::Rectangle| {
+            let r = ui.rect_to_window(r);
+            json!({ "x": r.x, "y": r.y, "w": r.width, "h": r.height })
+        };
+        let mut v = json!({ "scale": ui.scale, "screen": rect(ui.screen), "area": rect(ui.area), "touch": ui.touch });
+        if let Some(corners) = Self::corners(session, &ui) {
+            let buttons: Map<String, Value> = corners.buttons().into_iter().map(|(b, r)| (b.name().to_string(), on_window(r))).collect();
+            let [left, right] = corners.keep_out();
+            v["buttons"] = Value::Object(buttons);
+            v["clusters"] = json!({ "left": on_window(left), "right": on_window(right) });
+        }
+        v
     }
 
     /// `status.camera` and the `camera` tool's reply: the view in force -
@@ -1285,7 +1314,7 @@ impl DevServer {
             "map": map_json(&game.map),
             "weather": weather_json(game),
             "camera": self.camera_json(session, (width, height)),
-            "ui": self.ui_json(),
+            "ui": self.ui_json(session, width, height),
             "mode": session.mode().name(),
             "language": crate::text::language(),
             "dialog_open": session.dialog,
@@ -1659,7 +1688,6 @@ impl DevServer {
         width: f32,
         height: f32,
     ) -> Option<Result<Value, String>> {
-        let layout = self.click_layout(session, width, height);
         let result = match method {
             "status" => Ok(self.status(session, width, height)),
             "pause" => {
@@ -1812,18 +1840,21 @@ impl DevServer {
                 let name = params.get("name").and_then(Value::as_str);
                 session.builder.save(name).and_then(|_| builder_map_json(&session.builder))
             }
-            "click" => self.click(session, params, &layout),
-            "key" => self.key(session, params, &layout),
+            "click" => self.click(session, params, width, height),
+            "key" => self.key(session, params, width, height),
             _ => return None,
         };
         Some(result)
     }
 
     /// `click`: one press (and optionally a drag) at a window position,
-    /// through the same hit-tests `main.rs` runs on the mouse.
-    fn click(&mut self, session: &mut Session, params: &Value, layout: &Layout) -> Result<Value, String> {
+    /// through the same hit-tests `app.rs` runs on the mouse: the corners'
+    /// buttons in UI points, the dialogs and the builder in the bitmap's
+    /// pixels, each through the frame the window last drew
+    /// (`click_frame`).
+    fn click(&mut self, session: &mut Session, params: &Value, width: f32, height: f32) -> Result<Value, String> {
         let (Some(x), Some(y)) = (f32_param(params, "x"), f32_param(params, "y")) else {
-            return Err("click needs numeric x and y (window pixels, the bar included)".to_string());
+            return Err("click needs numeric x and y (window coordinates, as `status.ui` and `status.camera` give them)".to_string());
         };
         let right = button_param(params)?;
         let drag_to = match params.get("drag_to") {
@@ -1836,12 +1867,15 @@ impl DevServer {
                 _ => return Err(format!("drag_to must be [x, y], got {v}")),
             },
         };
-        let point = Vec2::new(x, y);
+        let (layout, view, ui) = self.click_frame(session, width, height);
+        let window_point = Vec2::new(x, y);
+        let point = view.to_bitmap(window_point);
+        let corner = Self::corners(session, &ui).and_then(|corners| corners.hit(ui.to_ui(window_point)));
         match session.mode() {
             Driver::Play => {
-                // The same order as `main.rs`: the level select or an
+                // The same order as `app.rs`: the level select or an
                 // open dialog eats every press while it is up, then the
-                // end screen, then the bar's buttons.
+                // end screen, then the corners' buttons.
                 if session.level_select.is_some() {
                     let input = SelectInput { pointer: Some(layout.to_field(point)), pressed: !right, ..SelectInput::default() };
                     if session.update_level_select(&input, layout.field) {
@@ -1875,15 +1909,15 @@ impl DevServer {
                     if session.level_select.is_none() {
                         self.round_started(session);
                     }
-                } else if !right && session.level_button().is_some() && crate::hud::level_button_rect(layout.panel).contains(point) {
+                } else if !right && session.level_button().is_some() && corner == Some(CornerButton::Level) {
                     session.press_levels();
-                } else if mode_button_rect(layout.panel).contains(point) {
+                } else if corner == Some(CornerButton::Build) {
                     session.press_build();
-                } else if crate::TWO_PLAYERS_AVAILABLE && players_button_rect(layout.panel).contains(point) {
+                } else if crate::TWO_PLAYERS_AVAILABLE && corner == Some(CornerButton::Players) {
                     session.press_players();
-                } else if crate::ONLINE_AVAILABLE && crate::hud::online_button_rect(layout.panel).contains(point) {
+                } else if crate::ONLINE_AVAILABLE && corner == Some(CornerButton::Online) {
                     session.press_online();
-                } else if !crate::KEYBOARD_AVAILABLE && restart_button_rect(layout.panel).contains(point) {
+                } else if !crate::KEYBOARD_AVAILABLE && corner == Some(CornerButton::Restart) {
                     crate::tuning::request_restart();
                 }
             }
@@ -1897,11 +1931,11 @@ impl DevServer {
                 };
                 session.update_lobby(&input, layout.field, crate::PHYSICS_FIXED_DT);
             }
-            // An online round is the room's: the bar carries the one
-            // button that is this window's to press, and the round
-            // itself is left to the keyboard and the touch scheme.
+            // An online round is the room's: the corners carry the one
+            // button that is this window's to press, and the round itself
+            // is left to the keyboard and the touch scheme.
             Driver::Online => {
-                if !right && crate::hud::leave_button_rect(layout.panel).contains(point) {
+                if !right && corner == Some(CornerButton::Leave) {
                     session.leave_online();
                 }
             }
@@ -1914,18 +1948,18 @@ impl DevServer {
                     right_held: right,
                     ..BuilderInput::default()
                 };
-                session.update_builder(&press, layout);
+                session.update_builder(&press, &layout);
                 let mut last = point;
-                if let Some(to) = drag_to {
+                if let Some(to) = drag_to.map(|to| view.to_bitmap(to)) {
                     let steps = (point.distance_to(to) / CLICK_DRAG_STEP_PX).ceil().max(1.0) as usize;
                     for i in 1..=steps {
                         let t = i as f32 / steps as f32;
                         last = Vec2::new(point.x + (to.x - point.x) * t, point.y + (to.y - point.y) * t);
                         let held = BuilderInput { pointer: Some(last), held: !right, right_held: right, ..BuilderInput::default() };
-                        session.update_builder(&held, layout);
+                        session.update_builder(&held, &layout);
                     }
                 }
-                session.update_builder(&BuilderInput { pointer: Some(last), ..BuilderInput::default() }, layout);
+                session.update_builder(&BuilderInput { pointer: Some(last), ..BuilderInput::default() }, &layout);
                 // The press may have been PLAY.
                 if session.mode() == Driver::Play {
                     self.round_started(session);
@@ -1947,8 +1981,10 @@ impl DevServer {
     }
 
     /// `key`: one key for one frame, or typed text, through the same
-    /// paths `main.rs` takes for the keyboard.
-    fn key(&mut self, session: &mut Session, params: &Value, layout: &Layout) -> Result<Value, String> {
+    /// paths `app.rs` takes for the keyboard.
+    fn key(&mut self, session: &mut Session, params: &Value, width: f32, height: f32) -> Result<Value, String> {
+        let (layout, _, _) = self.click_frame(session, width, height);
+        let layout = &layout;
         let key = match params.get("key") {
             None | Some(Value::Null) => None,
             Some(Value::String(s)) => Some(s.as_str()),
@@ -2999,7 +3035,7 @@ mod tests {
     #[test]
     fn status_reports_a_followed_view_as_the_window_drew_it() {
         use crate::follow::{CameraMode, CameraReport, FollowReport, Shot, ShotKind};
-        use crate::framing::{frame_under_bar, Screen, SightBox, ViewRules};
+        use crate::framing::{Screen, SightBox, ViewRules};
         let (mut server, tx) = DevServer::headless();
         let mut s = game(7);
         s.game.map = MapFile::from_toml_str("version = 1\nsize = [48, 24]\n").unwrap();
@@ -3014,17 +3050,18 @@ mod tests {
         assert_eq!(status["camera"]["view"], "follow", "{status}");
         assert_eq!(status["camera"]["rect"], Value::Null, "no frame drawn yet");
 
-        // The window's frame: the 1080p monitor's local view, the seat
-        // followed near the middle.
+        // The window's frame: the 1080p monitor's local view, the whole
+        // window the world's, the seat followed near the middle.
         let sight = SightBox::from_cells(11.5, 7.5);
         let screen = Screen::new(1920.0, 1080.0, 1.0, 92.0).with_panel_width(1920.0);
-        let framing = frame_under_bar(screen, crate::view::FollowFrame::BAR, Seating::Local, sight, &ViewRules::of(&crate::tuning::Tuning::DEFAULT));
+        let frame = crate::view::FollowFrame::new(screen, (1920.0, 1080.0), Seating::Local, sight, &ViewRules::of(&crate::tuning::Tuning::DEFAULT));
+        let framing = frame.framing;
         let seat = Vec2::new(760.0, 380.0);
-        let camera = Camera::following(field, Vec2::new(seat.x - 640.0, seat.y - 344.0), framing.visible, 1.0, 1.5);
-        let layout = Layout::for_field(framing.visible.0, framing.visible.1);
-        let view = crate::view::View::fill((layout.field.w, layout.field.h + layout.panel.h), (1920.0, 1080.0));
+        let corner = Vec2::new(seat.x - 640.0, seat.y - 360.0);
+        let camera = Camera::following(field, corner, framing.visible, 1.0, 1.5);
+        let (layout, view) = (frame.layout, frame.view);
         let shot = Shot {
-            corner: Vec2::new(seat.x - 640.0, seat.y - 344.0),
+            corner,
             center: seat,
             kind: ShotKind::Seat,
             seat: Some(0),
@@ -3039,27 +3076,31 @@ mod tests {
             view,
             follow: Some(FollowReport { framing, seating: Seating::Local, sight, shot }),
         });
-        let c = at(&mut server, &mut s, "status", json!({})).unwrap()["camera"].clone();
+        server.publish_ui(UiFrame::plain((1920.0, 1080.0)));
+        let status = at(&mut server, &mut s, "status", json!({})).unwrap();
+        let c = status["camera"].clone();
         assert_eq!(c["view"], "follow", "{c}");
         assert_eq!(c["seat"], 0);
         assert_eq!(c["focus"], "seat");
-        assert_eq!(c["rect"], json!({ "x": 120.0, "y": 36.0, "w": 1280.0, "h": 688.0 }));
-        assert_eq!(c["framing"]["visible_cells"], json!([40.0, 21.5]));
+        assert_eq!(c["rect"], json!({ "x": 120.0, "y": 20.0, "w": 1280.0, "h": 720.0 }));
+        assert_eq!(c["framing"]["visible_cells"], json!([40.0, 22.5]), "no bar: the whole window is the world's");
         assert_eq!(c["framing"]["device_scale"], 1.5);
         assert_eq!(c["framing"]["snapped"], true);
         assert_eq!(c["framing"]["tank_points"], 96.0);
         assert!(c["framing"]["tank_mm"].as_f64().is_some_and(|mm| (mm - 26.5).abs() < 0.1), "{c}");
         assert_eq!(c["sight_box"]["in_view"], true);
-        assert_eq!(c["target"], json!([1282, 690]));
-        // The bar's buttons are hit on that bitmap: BUILD at the right end
-        // of a 1280-wide bar, not of the field's 1536.
-        let build = mode_button_rect(layout.panel);
-        let m = at(&mut server, &mut s, "click", json!({ "x": build.x + build.width / 2.0, "y": build.y + build.height / 2.0 })).unwrap();
+        assert_eq!(c["target"], json!([1282, 722]));
+        // The corners' buttons are hit on the window, where `status.ui`
+        // says they are: BUILD at the window's top-right.
+        let b = &status["ui"]["buttons"]["build"];
+        let (bx, by) = (b["x"].as_f64().unwrap() + 36.0, b["y"].as_f64().unwrap() + 16.0);
+        assert!(bx > 1800.0 && by < 60.0, "{b}");
+        let m = at(&mut server, &mut s, "click", json!({ "x": bx, "y": by })).unwrap();
         assert_eq!(m["dialog_open"], true, "{m}");
         at(&mut server, &mut s, "key", json!({ "key": "escape" })).unwrap();
         // A press on the field lands in the world through that camera: the
-        // field area's middle is the followed seat.
-        let m = at(&mut server, &mut s, "click", json!({ "x": 640.0, "y": 32.0 + 344.0 })).unwrap();
+        // window's middle is the followed seat.
+        let m = at(&mut server, &mut s, "click", json!({ "x": 960.0, "y": 540.0 })).unwrap();
         assert_eq!(m["world"], json!({ "x": seat.x, "y": seat.y }), "{m}");
         assert_eq!(m["dialog_open"], false);
         // A pin outranks the follow; `reset` gives the view back.
@@ -3077,15 +3118,14 @@ mod tests {
     fn players_tool_switches_mode_and_the_button_opens_the_dialog() {
         let (mut server, tx) = DevServer::headless();
         let mut s = game(41);
-        let layout = Layout::for_field(W, H);
         // The button opens it and the round freezes; a press outside closes it.
         let m = ask(&mut server, &tx, &mut s, "players", json!({})).unwrap();
         assert_eq!(m["players_dialog_open"], true, "{m}");
         assert!(!s.playing());
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": 10.0, "y": 100.0 })).unwrap();
         assert_eq!(m["players_dialog_open"], false, "{m}");
-        let b = players_button_rect(layout.panel);
-        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": b.x + b.width / 2.0, "y": b.y + b.height / 2.0 })).unwrap();
+        let b = corner_button(&mut server, &tx, &mut s, "players");
+        let m = ask(&mut server, &tx, &mut s, "click", b).unwrap();
         assert_eq!(m["players_dialog_open"], true, "{m}");
         let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
         assert_eq!(m["players_dialog_open"], false);
@@ -3710,6 +3750,15 @@ cells."1,1" = { kind = "wall" }"#;
         rx.recv().unwrap()
     }
 
+    /// Where `click` presses the corners' button `name`: the middle of
+    /// its rect as `status.ui.buttons` reports it, in window coordinates.
+    fn corner_button(server: &mut DevServer, tx: &mpsc::Sender<Request>, session: &mut Session, name: &str) -> Value {
+        let status = ask(server, tx, session, "status", json!({})).unwrap();
+        let b = &status["ui"]["buttons"][name];
+        let at = |k: &str| b[k].as_f64().unwrap_or_else(|| panic!("no {name} button in {status}"));
+        json!({ "x": at("x") + at("w") / 2.0, "y": at("y") + at("h") / 2.0 })
+    }
+
     /// BUILD, then confirm the dialog: the builder is live afterwards.
     fn enter_build(server: &mut DevServer, tx: &mpsc::Sender<Request>, session: &mut Session) {
         ask(server, tx, session, "build", json!({})).unwrap();
@@ -3977,13 +4026,11 @@ cells."1,1" = { kind = "wall" }"#;
     fn a_click_on_leave_gives_the_seat_up() {
         let (mut s, _room) = online(53);
         let (mut server, tx) = DevServer::headless();
-        let layout = Layout::for_field(W, H);
-        let r = crate::hud::leave_button_rect(layout.panel);
+        let leave = corner_button(&mut server, &tx, &mut s, "leave");
         // A press anywhere else on the replica does nothing.
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": 10.0, "y": 200.0 })).unwrap();
         assert_eq!(m["mode"], "online", "{m}");
-        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": r.x + r.width / 2.0, "y": r.y + r.height / 2.0 }))
-            .unwrap();
+        let m = ask(&mut server, &tx, &mut s, "click", leave).unwrap();
         assert_eq!(m["mode"], "play", "{m}");
         let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
         assert_eq!(st["round"]["kind"], "local", "{st}");
@@ -4216,7 +4263,7 @@ cells."1,1" = { kind = "wall" }"#;
         let view = s.play_chrome().result.expect("the end screen");
         let rects = crate::hud::result_layout(crate::Rect::new(0.0, 0.0, w, h), &view).buttons.expect("a level's buttons");
         let next = rects.next.expect("the way on");
-        let at = json!({ "x": next.x + next.width / 2.0, "y": next.y + next.height / 2.0 + Layout::for_field(w, h).field.y });
+        let at = json!({ "x": next.x + next.width / 2.0, "y": next.y + next.height / 2.0 + Layout::bare(w, h).field.y });
         let m = ask(&mut server, &tx, &mut s, "click", at).unwrap();
         assert_eq!(m["level"]["number"], 2, "{m}");
         assert_eq!(m["mode"], "play");
@@ -4248,9 +4295,9 @@ cells."1,1" = { kind = "wall" }"#;
         game.init(w, h);
         let mut s = Session::new(game);
         s.set_campaign(campaign);
-        let layout = Layout::for_field(w, h);
-        let button = crate::hud::level_button_rect(layout.panel);
-        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": button.x + 10.0, "y": button.y + 16.0 })).unwrap();
+        let layout = Layout::bare(w, h);
+        let button = corner_button(&mut server, &tx, &mut s, "level");
+        let m = ask(&mut server, &tx, &mut s, "click", button).unwrap();
         assert_eq!((m["levels_open"].as_bool(), m["levels_focus"].as_u64()), (Some(true), Some(2)), "{m}");
         let err = ask(&mut server, &tx, &mut s, "step", json!({ "frames": 1 })).unwrap_err();
         assert!(err.contains("level select"), "{err}");
@@ -4277,12 +4324,14 @@ cells."1,1" = { kind = "wall" }"#;
         let (mut server, tx) = DevServer::headless();
         let mut s = game(36);
         ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
-        let layout = Layout::for_field(W, H);
-        let button = mode_button_rect(layout.panel);
+        // Play's bitmap is the field alone, the builder's the field under
+        // its bar.
+        let layout = Layout::bare(W, H);
+        let build_layout = Layout::for_field(W, H);
         let centre = |r: crate::math::Rectangle| (r.x + r.width / 2.0, r.y + r.height / 2.0);
         // A click on BUILD opens the dialog like `build`.
-        let (bx, by) = centre(button);
-        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": bx, "y": by })).unwrap();
+        let build = corner_button(&mut server, &tx, &mut s, "build");
+        let m = ask(&mut server, &tx, &mut s, "click", build).unwrap();
         assert_eq!(m["dialog_open"], true, "{m}");
         assert_eq!(m["mode"], "play");
         // A press outside the dialog keeps playing.
@@ -4316,7 +4365,7 @@ cells."1,1" = { kind = "wall" }"#;
         // a drag crosses every cell, undo is a key.
         ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "iron" })).unwrap();
         // A cell's world position is its centre (`map::cell_to_world`).
-        let cell_centre = |c: i32, r: i32| (c as f32 * 32.0, layout.field.y + r as f32 * 32.0);
+        let cell_centre = |c: i32, r: i32| (c as f32 * 32.0, build_layout.field.y + r as f32 * 32.0);
         let base = s.builder.history().undo_depth() as u64;
         let (cx, cy) = cell_centre(10, 5);
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": cx, "y": cy })).unwrap();
@@ -4341,7 +4390,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert!(ask(&mut server, &tx, &mut s, "click", json!({ "x": 1.0, "y": 1.0, "drag_to": [1.0] })).is_err());
         // PLAY from the bar starts the round frozen, like `play`.
         server.lockstep = false;
-        let (px, py) = centre(button);
+        let (px, py) = centre(crate::hud::mode_button_rect(build_layout.panel));
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": px, "y": py })).unwrap();
         assert_eq!(m["mode"], "play", "{m}");
         assert!(server.lockstep());

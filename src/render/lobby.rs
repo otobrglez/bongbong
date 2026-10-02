@@ -206,19 +206,3 @@ fn draw_button<D: RaylibDraw>(d: &mut D, r: Rectangle, view: &ButtonView) {
         color,
     );
 }
-
-/// The bar's `ONLINE` button: the mode button's frame in the room blue,
-/// so the three slots at the bar's right end read as one row.
-pub fn draw_online_button<D: RaylibDraw>(d: &mut D, panel: Rect) {
-    let r = crate::hud::online_button_rect(panel);
-    d.draw_rectangle_lines_ex(Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0), 2.0, ONLINE_COLOR);
-    let label = text().get(keys::BUTTON_ONLINE);
-    let w = width(&label, HUD_TEXT_SIZE);
-    d.draw_text(
-        &label,
-        (r.x + (r.width - w as f32) / 2.0) as i32,
-        (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32,
-        HUD_TEXT_SIZE,
-        ONLINE_COLOR,
-    );
-}

@@ -20,12 +20,14 @@
 //! `StickRule`, read from the tuning table once per frame. Any touch on
 //! the other half fires while it is down - a tap is a one-frame press,
 //! which is the edge a shell needs, and a hold is what the laser, minigun
-//! and flamethrower read. The bar above the field is never scheme input;
-//! its buttons are handled by `app.rs` before the scheme sees a frame.
+//! and flamethrower read. The builder's bar is never scheme input, nor is
+//! a corner cluster of the HUD (`keep_out`): a touch that lands on one is
+//! the HUD's until it lifts, and the clusters' buttons are handled by
+//! `app.rs` before the scheme sees a frame.
 //!
 //! The scheme turns raw touch points into the same `Intent` the keyboard
 //! produces, so the simulation never learns a touch screen exists. Only a
-//! real touch point drives it; the mouse keeps its own role (the bar's
+//! real touch point drives it; the mouse keeps its own role (the HUD's
 //! buttons, the dialogs, the builder) unless `--touch-from-mouse` asks for
 //! a desktop stand-in, which is a development aid rather than a control
 //! scheme. Presentation-only feedback (`draw`, the one item here that
@@ -34,7 +36,7 @@
 //! point somewhere the tank is not going -, a ripple where a fire tap
 //! landed, and a one-time hint the first time a touch is seen.
 
-use crate::math::Vec2;
+use crate::math::{Rectangle, Vec2};
 #[cfg(feature = "render")]
 use crate::math::Color;
 #[cfg(feature = "render")]
@@ -133,13 +135,26 @@ pub struct TouchScheme {
     hint: Option<f32>,
     /// Whether any touch has been seen this session - the hint fires once.
     seen: bool,
+    /// Where a touch landing is nobody's steering or firing, in bitmap
+    /// pixels: the HUD's corner clusters (`set_keep_out`).
+    keep_out: Vec<Rectangle>,
 }
 
 impl TouchScheme {
+    /// The rectangles, in bitmap pixels, where a touch that lands neither
+    /// steers nor fires until it lifts: the HUD's clusters, which `app.rs`
+    /// hands over every frame. A stick dragged across one keeps steering -
+    /// only where a touch lands decides whose it is.
+    pub fn set_keep_out(&mut self, rects: &[Rectangle]) {
+        self.keep_out.clear();
+        self.keep_out.extend_from_slice(rects);
+    }
+
     /// Feed this frame's touch points and get the intent they mean, under
     /// the rule the tuning table holds. `steer_right` puts the stick on
     /// the right half of the field (the fire half is the other one).
-    /// Points on the bar are ignored.
+    /// Points off the field - on the builder's bar, on a letterbox - and
+    /// on the HUD's clusters (`set_keep_out`) are ignored.
     pub fn update(&mut self, points: &[TouchPoint], layout: &Layout, steer_right: bool, dt: f32) -> Intent {
         self.update_with(points, layout, steer_right, dt, &StickRule::current())
     }
@@ -200,6 +215,11 @@ impl TouchScheme {
                 || self.fire_ids.contains(&p.id)
                 || self.claimed.contains(&p.id);
             if claimed || !on_field(p.pos) {
+                continue;
+            }
+            if self.keep_out.iter().any(|r| r.contains(p.pos)) {
+                // Landed on the HUD: nobody's shot or stick, held or not.
+                self.claimed.push(p.id);
                 continue;
             }
             if on_steer(p.pos) {
@@ -502,6 +522,31 @@ mod touch_tests {
         let i = t.update(&[pt(1, 700.0, 340.0), pt(9, 800.0, 100.0)], &l, true, DT);
         assert_eq!(i.move_dir, Some(Dir::Down));
         assert!(!i.fire);
+    }
+
+    /// A touch that lands on a corner cluster of the HUD neither steers
+    /// nor fires for as long as it is down, on either half; a stick that
+    /// started on the field and is dragged across a cluster keeps
+    /// steering, since only where a touch lands decides whose it is.
+    #[test]
+    fn a_touch_on_a_hud_cluster_neither_steers_nor_fires() {
+        let l = layout();
+        let left = Rectangle::new(0.0, 32.0, 300.0, 80.0);
+        let right = Rectangle::new(660.0, 32.0, 300.0, 100.0);
+        let mut t = TouchScheme::default();
+        t.set_keep_out(&[left, right]);
+        let i = t.update(&[pt(1, 100.0, 60.0), pt(2, 800.0, 60.0)], &l, false, DT);
+        assert!(!i.fire && !t.steering(), "a tap on either cluster is the HUD's");
+        let i = t.update(&[pt(1, 100.0, 300.0), pt(2, 800.0, 300.0)], &l, false, DT);
+        assert!(!i.fire && i.move_dir.is_none(), "still the HUD's when dragged off it");
+        // Lifted, the field is the scheme's again; a stick that started
+        // there keeps steering onto a cluster.
+        t.update(&[], &l, false, DT);
+        t.update(&[pt(3, 200.0, 300.0)], &l, false, DT);
+        let i = t.update(&[pt(3, 200.0, 60.0)], &l, false, DT);
+        assert_eq!(i.move_dir, Some(Dir::Up));
+        assert!(t.steering());
+        assert!(t.update(&[pt(3, 200.0, 60.0), pt(4, 700.0, 300.0)], &l, false, DT).fire, "a tap off the clusters fires");
     }
 
     /// A touch that pressed a button neither fires nor steers while it is

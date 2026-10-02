@@ -172,10 +172,9 @@ impl ViewFrame {
     /// What `camera` draws onto `field`, the field area of the bitmap: the
     /// world rectangle it shows at its scale, the field area's corner where
     /// the view's lands (`Camera::on_field`), and the arrows on the part of
-    /// the field area the view covers. Laid out in the bitmap's pixels
-    /// until the HUD moves to screen space - `t` holds the sizes in them
-    /// (`in_points`) - and the bar above the field keeps every arrow clear
-    /// of itself.
+    /// the field area the view covers. Laid out in the bitmap's pixels -
+    /// `t` holds the sizes in them (`in_points`); the caller adds the HUD's
+    /// corner clusters and the thumbs' rests as keep-outs.
     pub fn of_camera(camera: &Camera, field: Rectangle, t: &Tuning) -> ViewFrame {
         let dest = camera.dest();
         let (x0, y0) = (field.x.max(field.x + dest.x), field.y.max(field.y + dest.y));
@@ -1125,8 +1124,8 @@ impl ScreenAwareness {
 
 /// `t` with the indicators' sizes in points - the inset, the arrow, the
 /// cluster - turned into a view laid out `points` units to the point: the
-/// bitmap's pixels, until the HUD moves to screen space, at however many
-/// of them the window shows a point of.
+/// bitmap's pixels, at however many of them make a point at the UI scale
+/// the rest of the chrome is drawn at (`hud::UiFrame`).
 pub fn in_points(t: &Tuning, points: f32) -> Tuning {
     let points = if points.is_finite() && points > 0.0 { points } else { 1.0 };
     Tuning {
@@ -1303,7 +1302,7 @@ fn shot_velocity_at(game: &Game, at: Position) -> Option<Vec2> {
 /// night field alike. The two identities are off the palette on purpose,
 /// as their rings are, since an identity has to be loud against the
 /// terrain: a teammate's arrow is its seat's ring colour
-/// (`tank::team_color`) and the frog's the green of the bar's FROG gauge,
+/// (`tank::team_color`) and the frog's the green of the HUD's FROG gauge,
 /// which the grass's own greens would swallow. White is a flash.
 const HOSTILE: Color = Color::new(0xFF, 0x42, 0x1A, 255);
 const HOSTILE_DEEP: Color = Color::new(0x9C, 0x35, 0x27, 255);
@@ -2889,7 +2888,7 @@ mod picture_tests {
         assert_eq!(view.inset, Rectangle::new(10.0, 42.0, 1068.0, 524.0));
         assert_eq!(view.to_screen(Vec2::new(272.0, 136.0)), Vec2::new(0.0, 32.0));
         assert_eq!(view.to_screen(Vec2::new(544.0, 272.0)), Vec2::new(544.0, 304.0), "the view's middle the field area's");
-        assert!(view.keep_out.is_empty(), "nothing over the field while the bar is above it");
+        assert!(view.keep_out.is_empty(), "the caller adds the HUD's clusters and the thumbs");
         // A view whose texels overrun the field area keeps its arrows on it.
         let third = Camera::zoomed((1088.0, 544.0), Vec2::new(544.0, 272.0), 3.0);
         assert_eq!(ViewFrame::of_camera(&third, field, &t).inset, view.inset);

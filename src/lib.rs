@@ -390,12 +390,12 @@ pub const ONLINE_AVAILABLE: bool = cfg!(feature = "online");
 /// number - a net layer sizes its roster from here.
 pub const MAX_SEATS: usize = 8;
 
-// The HUD bar above the battlefield (docs/hud-and-builder-layout-design.md,
-// variant A): one obstacle cell tall, so the pickup icons sit in it
-// full-bleed and the window stays 1280 wide. The battlefield keeps its own
-// size - every seeded baseline, lint count and map assumes 1280x720 - and
-// the window grows by this much instead. Layout, not a knob: the dev panel
-// has no business resizing the window.
+// The builder's bar above the battlefield (docs/hud-and-builder-layout-
+// design.md, variant A): one obstacle cell tall, so the tool icons sit in
+// it full-bleed. The battlefield keeps its own size and the builder's
+// bitmap grows by this much instead; play mode draws no bar, its HUD
+// standing in the window's corners (`hud::corners`). Layout, not a knob:
+// the dev panel has no business resizing the bitmap.
 pub const HUD_BAR_HEIGHT: i32 = 32;
 
 /// An axis-aligned window rectangle in pixels, the one shape `Layout`
@@ -441,6 +441,13 @@ impl Layout {
             field: Rect::new(0.0, bar, width, height),
             panel: Rect::new(0.0, 0.0, width, bar),
         }
+    }
+
+    /// A bitmap of the field alone: what play mode and an online round
+    /// draw, the HUD standing in the window's corners instead of a bar
+    /// (`hud::corners`). The panel is empty, along the field's top edge.
+    pub fn bare(width: f32, height: f32) -> Self {
+        Layout { field: Rect::new(0.0, 0.0, width, height), panel: Rect::new(0.0, 0.0, width, 0.0) }
     }
 
     /// The inverse: the layout a window of this size holds, so a frame
@@ -713,10 +720,6 @@ pub const GROUND_TEXTURE_SIZE: f32 = 16.0; // native tile size in the source she
 pub const GROUND_SCALE: f32 = 2.0;
 pub const GROUND_WORLD_TILE: f32 = GROUND_TEXTURE_SIZE * GROUND_SCALE; // = OBSTACLE_GRID_SIZE
 
-// Inset of the dev-only overlay label from the field's top-left corner
-// (`game.rs`); the version line has its own insets in `hud.rs`. The
-// player's readouts themselves live in the HUD bar above the field.
-pub const HUD_MARGIN: i32 = 20;
 
 // ToxicFrog (src/frog.rs): the player's protect-objective - a static NPC
 // that ends the round in a loss the instant its health reaches zero, same

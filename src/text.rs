@@ -602,9 +602,9 @@ pub fn fit(text: &str, max_px: i32, size: i32) -> Cow<'_, str> {
 mod text_tests {
     use super::*;
     use crate::hud::{
-        DIALOG_BUTTON_W, DIALOG_W, HUD_GAUGE_LABEL_MAX_PX, HUD_LABEL_SIZE, HUD_TEXT_SIZE, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP,
-        LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE, MODE_BUTTON_W, ONLINE_BUTTON_W, RESULT_BUTTON_W, RESULT_LEVELS_W, RESULT_LINE_SIZE,
-        RESULT_STATS_GAP, RESULT_TEXT_PX,
+        DIALOG_BUTTON_W, DIALOG_W, HUD_GAUGE_LABEL_MAX_PX, HUD_LABEL_SIZE, HUD_TEXT_SIZE, INFO_TITLE_W, LEVEL_BUTTON_W,
+        LEVEL_BUTTON_WORD_GAP, LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE, MODE_BUTTON_W, ONLINE_BUTTON_W, RESULT_BUTTON_W,
+        RESULT_LEVELS_W, RESULT_LINE_SIZE, RESULT_STATS_GAP, RESULT_TEXT_PX, UI_SMALL_TEXT,
     };
     use crate::level_select::{SELECT_BACK_W, SELECT_MARGIN, SELECT_W, TILE_TITLE_SIZE};
     use crate::lobby::{LOBBY_BUTTON_W, LOBBY_KICK_W, LOBBY_WIDE_W, LOBBY_W, LOBBY_MARGIN};
@@ -758,9 +758,10 @@ mod text_tests {
         let field = crate::Rect::new(0.0, 32.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32);
         let seat_state_px = (crate::lobby::seats_rect(field).width - LOBBY_KICK_W) as i32 - 280 - 4;
         vec![
-            (keys::HUD_SPEED, HUD_LABEL_SIZE, HUD_GAUGE_LABEL_MAX_PX, vec![]),
-            (keys::HUD_SHIELD, HUD_LABEL_SIZE, HUD_GAUGE_LABEL_MAX_PX, vec![]),
-            (keys::HUD_FROG, HUD_LABEL_SIZE, HUD_GAUGE_LABEL_MAX_PX, vec![]),
+            // A gauge's label over its bar, in the corners' small size.
+            (keys::HUD_SPEED, UI_SMALL_TEXT, HUD_GAUGE_LABEL_MAX_PX, vec![]),
+            (keys::HUD_SHIELD, UI_SMALL_TEXT, HUD_GAUGE_LABEL_MAX_PX, vec![]),
+            (keys::HUD_FROG, UI_SMALL_TEXT, HUD_GAUGE_LABEL_MAX_PX, vec![]),
             button(keys::BUTTON_BUILD, MODE_BUTTON_W),
             button(keys::BUTTON_PLAY, MODE_BUTTON_W),
             button(keys::BUTTON_LEAVE, MODE_BUTTON_W),
@@ -773,10 +774,11 @@ mod text_tests {
             dialog_button(keys::PLAYERS_TWO),
             dialog_button(keys::LEAVE_CONFIRM),
             dialog_button(keys::LEAVE_STAY),
-            // The bar's title shares its slot with " 12/12" in a wave round.
-            (keys::MISSION_PROTECT, HUD_TEXT_SIZE, 158 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
-            (keys::MISSION_HUNT, HUD_TEXT_SIZE, 158 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
-            (keys::MISSION_DESTROY, HUD_TEXT_SIZE, 158 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
+            // The right cluster's title shares its slot with " 12/12" in
+            // a wave round.
+            (keys::MISSION_PROTECT, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
+            (keys::MISSION_HUNT, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
+            (keys::MISSION_DESTROY, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
             (keys::LOBBY_TITLE_START, 22, content, vec![]),
             (keys::LOBBY_TITLE_CODE, 22, content, vec![]),
             (keys::LOBBY_TITLE_WAITING, 22, content, vec![]),
@@ -853,14 +855,14 @@ mod text_tests {
             (keys::RESULT_NEXT_IN, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![("seconds", 30.into())]),
             (keys::RESULT_AGAIN_IN, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![("seconds", 30.into())]),
             // The level select: the lobby's title and line sizes across
-            // its content, BACK in its button; the bar's level button
-            // holds its word and a two-digit number.
+            // its content, BACK in its button; the corners' level button
+            // holds its word, in the small size, and a two-digit number.
             (keys::LEVELS_TITLE, 22, (SELECT_W - 2.0 * SELECT_MARGIN) as i32, vec![]),
             (keys::LEVELS_SUB, HUD_LABEL_SIZE + 2, (SELECT_W - 2.0 * SELECT_MARGIN) as i32, vec![]),
             (keys::LEVELS_BACK, HUD_TEXT_SIZE, SELECT_BACK_W as i32 - 12, vec![]),
             (
                 keys::BAR_LEVEL,
-                HUD_LABEL_SIZE,
+                UI_SMALL_TEXT,
                 LEVEL_BUTTON_W as i32 - 12 - LEVEL_BUTTON_WORD_GAP - width("88", HUD_TEXT_SIZE),
                 vec![],
             ),

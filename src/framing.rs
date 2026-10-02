@@ -45,10 +45,11 @@
 //!   is 40 x 22.5 on a 16:9 monitor). Phones, tablets and laptops draw a
 //!   tank under 25 mm already and keep the shared view; a room never
 //!   steps, so a monitor that joins one shows what every other seat shows.
-//! - **The HUD bar is above the world** (`frame_under_bar`): it is drawn
-//!   at the world's own scale, so the world is framed into the screen less
-//!   the bar at the scale the framing picks, and the two fill the screen
-//!   together.
+//! - **Play has no bar over the world**: its HUD stands in the window's
+//!   corners (`hud::corners`), so a followed round is framed into the
+//!   whole screen (`frame`). A view that does carry a bar above it is
+//!   framed into the screen less the bar at the scale the framing picks
+//!   (`frame_under_bar`), so the two fill the screen together.
 
 use crate::tuning::{Tuning, tuning};
 use crate::{OBSTACLE_GRID_SIZE, TANK_FRAME_SIZE};

@@ -1,32 +1,31 @@
-//! The HUD bar: the player's readouts, drawn in the panel above the
-//! battlefield rather than over it (docs/hud-and-builder-layout-design.md,
-//! variant A). Presentation only, same category as `game.rs`: `HudModel`
-//! is a handful of plain numbers gathered from `Game` between the update
-//! and the draw, and `render::hud::draw_bar` lays them out as a row of
-//! fixed slots so a number never shifts its neighbours when it changes
-//! width. This half is headless - the model, the shared colours and sizes,
-//! and every button and dialog rect the hit tests read; the slot tables
-//! and the drawing are the `render` half.
+//! The HUD: the player's readouts and the buttons around a round, in two
+//! clusters in the window's top corners (docs/large-maps-follow-camera.md
+//! §8) - the world fills the window, so play and an online round draw no
+//! bar; the builder keeps its bar as its toolbar. Presentation only, same
+//! category as `game.rs`: `HudModel` is a handful of plain numbers gathered
+//! from `Game` between the update and the draw, and `render::hud` lays them
+//! out from fixed slots so a number never shifts its neighbours when it
+//! changes width. This half is headless - the model, the shared colours and
+//! sizes, the window the chrome is laid out in (`UiFrame`, a UI scale in
+//! points, never the world's) and every button and dialog rect the hit
+//! tests read (`corners`); the slot tables and the drawing are the `render`
+//! half.
 //!
-//! The bar is one obstacle cell tall (`HUD_BAR_HEIGHT`), so the 32 px
-//! pickup icons and the shell sprite sit in it full-bleed and read as a
-//! tab strip.
+//! The left cluster is the seat's vitals: health as a number and a gauge,
+//! shells, the speed and shield gauges, and the weapon queue with the live
+//! weapon outlined. A two-player couch round (docs/two-players.md) gives
+//! player 2 a block of its own beside player 1's, or under it on a narrow
+//! window, each edged in its player's team colour.
 //!
-//! A two-player round (docs/two-players.md) uses a second slot table: HP,
-//! shells and the weapon counts become pairs (`60|70`, player 1 on the
-//! left), the SPEED and SHIELD bars stack into two thin ones, and the
-//! whole-slot outline marking the live weapon becomes an underline under
-//! whichever side fires it. The single-player table is untouched.
-//!
-//! Past two seats there is no couch table to pair up, so the bar goes
-//! *compact* (docs/online-coop-prd.md §4.11): one seat - the one this
-//! window is playing - keeps a whole block of readouts, and every other
-//! seat becomes a chip in a strip at the bar's right end, its number and
-//! its health gauge in the ring colour that seat's tank wears on the
-//! field. An online round is compact from two seats up, since the seat
-//! this window steers is rarely seat 1 and the local block has to be
-//! *this* player's; a couch round keeps the one- and two-player tables
-//! and only goes compact from three.
+//! Past two seats there is no couch pair, so the HUD goes *compact*
+//! (docs/online-coop-prd.md §4.11): one seat - the one this window is
+//! playing - keeps a whole block of readouts, and every other seat becomes
+//! a chip in a strip under the right cluster's buttons, its number and its
+//! health gauge in the ring colour that seat's tank wears on the field. An
+//! online round is compact from two seats up, since the seat this window
+//! steers is rarely seat 1 and the local block has to be *this* player's; a
+//! couch round keeps the one- and two-block layouts and only goes compact
+//! from three.
 
 use crate::math::{Color, Rectangle, Vec2};
 
@@ -35,38 +34,28 @@ use crate::tank::{ActiveWeapon, Tank};
 use crate::tuning::tuning;
 use crate::{Rect, MAX_DAMAGE};
 
-/// The bar's number/text size.
+/// The number/text size of the readouts, here and in the builder's bar.
 pub const HUD_TEXT_SIZE: i32 = 18;
-/// The small labels over the timed-buff bars (`SPEED`/`SHIELD`/`FROG`).
+/// The builder's bar's small labels.
 pub const HUD_LABEL_SIZE: i32 = 10;
-/// The room a gauge's label (`SPEED`/`SHIELD`/`FROG`) has, in pixels at
-/// `HUD_LABEL_SIZE`: the 40 px gauge slot less a gap to the next label.
-/// `render::hud`'s slot width is pinned to it, and `text_tests` measures
-/// every language's labels against it.
-pub const HUD_GAUGE_LABEL_MAX_PX: i32 = 38;
-/// The version line near the field's bottom-right corner, in the size of
-/// the bar's small labels (`SPEED`/`SHIELD`/`FROG`).
-pub const HUD_VERSION_TEXT_SIZE: i32 = HUD_LABEL_SIZE;
-/// How far the version line's right end sits in from the field's right
-/// edge - the same as its bottom inset, so it sits square in the corner.
-/// The web page's overlay controls live in the opposite, bottom-left
-/// corner (site/src/pages/index.astro `.overlay-controls`).
-pub const HUD_VERSION_RIGHT_INSET: i32 = 11;
-/// How far the version line's bottom sits up from the field's bottom
-/// edge.
-pub const HUD_VERSION_BOTTOM_INSET: i32 = 11;
+/// The room a gauge's label (`SPEED`/`SHIELD`/`FROG`) has over its bar, in
+/// points at `UI_SMALL_TEXT`: the gauge's 60 pt slot (`render::hud`) less
+/// a gap. `text_tests` measures every language's labels against it.
+pub const HUD_GAUGE_LABEL_MAX_PX: i32 = 56;
+/// The build stamp under the left cluster, in the chrome's small size.
+pub const HUD_VERSION_TEXT_SIZE: i32 = UI_SMALL_TEXT;
 /// The version line's colour: white at 70%, a step below the HUD's
 /// readouts so it never competes with the round.
 pub const HUD_VERSION_COLOR: Color = Color::new(255, 255, 255, 179);
 
-/// The build stamp drawn in the field's bottom-right corner, e.g.
+/// The build stamp drawn under the left cluster, e.g.
 /// `v0.0.19 @otobrglez`.
 pub fn version_line() -> String {
     format!("v{} @otobrglez", env!("CARGO_PKG_VERSION"))
 }
 
-/// Accent colours for the three special weapons: their count in the bar
-/// always, their slot's outline while that weapon is the live one.
+/// Accent colours for the special weapons: their count in the weapon
+/// queue always, their slot's outline while that weapon is the live one.
 pub const HUD_LASER_COLOR: Color = Color::new(255, 60, 160, 255);
 pub const HUD_PLASMA_COLOR: Color = Color::new(60, 220, 200, 255);
 pub const HUD_MINIGUN_COLOR: Color = Color::new(190, 205, 215, 255);
@@ -76,13 +65,13 @@ pub const HUD_MISSILES_COLOR: Color = Color::new(190, 240, 70, 255);
 /// The flamethrower's accent: fuel-orange, the fire ramp's middle.
 pub const HUD_FLAME_COLOR: Color = Color::new(255, 140, 40, 255);
 
-/// The bar's fill - the same `#151515` the web page is set in, so the bar
-/// and the page read as one surface around the field. The editor's bar
-/// shares these.
+/// The builder bar's fill - the same `#151515` the web page is set in, so
+/// the bar and the page read as one surface around the field - and the
+/// margins round a letterboxed field. The corners' plates are its dark too.
 pub const BAR_FILL: Color = Color::new(21, 21, 21, 255);
 pub const TEXT: Color = Color::WHITE;
 pub const DIM: Color = Color::new(110, 110, 118, 255);
-/// Weapon slots, in bar order. Five of them: laser, plasma, minigun,
+/// Weapon slots, in queue order. Five of them: laser, plasma, minigun,
 /// missiles, flamethrower.
 pub const WEAPON_SLOTS: usize = 5;
 
@@ -199,13 +188,13 @@ impl SeatHud {
     }
 }
 
-/// Which slot table the bar is laid out from. One table per shape of
-/// round, picked by `HudModel::gather` and read by `Slots::for_layout`.
+/// Which seats the left cluster holds. One layout per shape of round,
+/// picked by `HudModel::gather` and read by `corners`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HudLayout {
-    /// One seat: the plain row of readouts.
+    /// One seat: one block of vitals.
     One,
-    /// Two on one couch: HP, shells and the weapon counts as pairs.
+    /// Two on one couch: a block each, player 2's beside player 1's.
     Two,
     /// The local seat's readouts, then a chip per other seat
     /// (docs/online-coop-prd.md §4.11).
@@ -213,11 +202,11 @@ pub enum HudLayout {
 }
 
 impl HudLayout {
-    /// The table a round of `seats` seats is drawn from. `local_seat` is
+    /// The layout a round of `seats` seats is drawn in. `local_seat` is
     /// the seat this window plays in an online round and `None` on a
-    /// couch, which is the whole difference: a couch of two has a table
-    /// that shows both, a room of two has to put the local seat - seat 1
-    /// as often as seat 0 - in the block and the other in the strip.
+    /// couch, which is the whole difference: a couch of two shows both
+    /// blocks, a room of two has to put the local seat - seat 1 as often
+    /// as seat 0 - in the block and the other in the strip.
     pub fn choose(seats: usize, local_seat: Option<u8>) -> HudLayout {
         match (seats, local_seat) {
             (0 | 1, _) => HudLayout::One,
@@ -235,26 +224,26 @@ pub fn other_seats(seats: usize, local: usize) -> Vec<usize> {
     (0..seats).filter(|&i| i != local).collect()
 }
 
-/// Everything the bar shows, as plain values. Built once per frame by
+/// Everything the corners show, as plain values. Built once per frame by
 /// `HudModel::gather`, so the draw pass never queries the world.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HudModel {
     /// `PROTECT`, or `PROTECT 2/5` in a wave round.
     pub title: String,
     /// The wave called and how many the round has, in a wave round: what
-    /// the bar keeps beside the level button when that takes the mission
-    /// word's place.
+    /// stands beside the level button when that takes the mission word's
+    /// place.
     pub wave: Option<(u32, u32)>,
     /// Live enemies, and the ones still to roll in (shown as a dim `+N`).
     pub enemies_alive: usize,
     pub enemies_pending: usize,
-    /// Which slot table the bar is laid out from.
+    /// Which seats the left cluster holds.
     pub layout: HudLayout,
     /// The seat whose readouts fill the block: player 1 on a couch, the
     /// seat this window is playing in a room.
     pub local: PlayerHud,
-    /// Seat 1's readouts in a two-player couch round, paired with the
-    /// block's; `None` in every other layout. A wreck shows zeros.
+    /// Seat 1's readouts in a two-player couch round, its own block;
+    /// `None` in every other layout. A wreck shows zeros.
     pub second: Option<PlayerHud>,
     /// The other seats, in seat order, in the compact layout; empty in
     /// the couch ones.
@@ -264,7 +253,7 @@ pub struct HudModel {
 }
 
 impl HudModel {
-    /// The bar's numbers for the round on screen. `local_seat` is the
+    /// The HUD's numbers for the round on screen. `local_seat` is the
     /// seat this window holds in a room and `None` in a couch round; a
     /// seat the round has not spawned yet - the frame before a replica's
     /// `Welcome` builds one - falls back to seat 0, which is the local
@@ -449,89 +438,315 @@ impl UiFrame {
     }
 }
 
-/// The players button, left of the mode button: one tank glyph in single
-/// player, two in a two-player round, each in its player's team colour. Full
-/// bar height like the mode button. Opens the players dialog
-/// (`Session::press_players`).
+/// The players button: one tank glyph in single player, two in a
+/// two-player round, each in its player's team colour. Opens the players
+/// dialog (`Session::press_players`).
 pub const PLAYERS_BUTTON_W: f32 = 48.0;
+/// Between two buttons of a row, here and in the builder's bar.
 pub const PLAYERS_BUTTON_GAP: f32 = 8.0;
 
-/// Where the players button sits in `panel` (window space): derived from
-/// the mode button's slot, so it follows `--resolution` the same way and
-/// every hit-test agrees on it.
-pub fn players_button_rect(panel: Rect) -> Rectangle {
-    let m = mode_button_rect(panel);
-    Rectangle::new(m.x - PLAYERS_BUTTON_GAP - PLAYERS_BUTTON_W, m.y, PLAYERS_BUTTON_W, m.height)
-}
-
-/// The mode button's slot at the bar's right end: `BUILD` in play mode,
-/// `PLAY` in build mode (docs/game-editor-fusion.md, sections 6 and 7).
-/// Full bar height, so a finger has the most to aim at.
+/// The mode button: `BUILD` in play mode, `PLAY` in the builder's bar
+/// (docs/game-editor-fusion.md, sections 6 and 7); an online round's
+/// `LEAVE` takes its place.
 pub const MODE_BUTTON_W: f32 = 72.0;
 
-/// The `ONLINE` button, left of the players button: the way into the
-/// lobby (`lobby.rs`, docs/online-coop-prd.md §4.10). Wide enough for
-/// its six characters, and the bar's last free slot before the gauges.
+/// The `ONLINE` button: the way into the lobby (`lobby.rs`,
+/// docs/online-coop-prd.md §4.10). Wide enough for its six characters.
 /// Not drawn where a build cannot reach a room (`ONLINE_AVAILABLE`).
 pub const ONLINE_BUTTON_W: f32 = 80.0;
-
-/// Where the `ONLINE` button sits in `panel` (window space): left of the
-/// players button, so all three follow `--resolution` together and every
-/// hit test agrees on them.
-pub fn online_button_rect(panel: Rect) -> Rectangle {
-    let p = players_button_rect(panel);
-    Rectangle::new(p.x - PLAYERS_BUTTON_GAP - ONLINE_BUTTON_W, p.y, ONLINE_BUTTON_W, p.height)
-}
 
 /// The colour of anything to do with a room: the `ONLINE` button, the
 /// lobby's accents, the round's status line and its `LEAVE` button.
 /// Deliberately not the builder's amber - a room is not an edit.
 pub const ONLINE_COLOR: Color = Color::new(120, 220, 255, 255);
 
-/// Where the `LEAVE` button of an online round sits: the mode button's
-/// slot, which is free exactly while the round is the room's (a replica
-/// has no builder to switch to, so no `BUILD` button is drawn). It is the
-/// way out on a build with no keyboard for the Esc key, and the only one
-/// anywhere that says so; the press is `Session::leave_online`.
-pub fn leave_button_rect(panel: Rect) -> Rectangle {
-    mode_button_rect(panel)
-}
-
-/// The level button at the bar's left end (docs/levels.md): on a level it
-/// takes the mission word's place - `LEVEL 3`, the word small and the
-/// number in the bar's size - and opens the level select
-/// (`Session::press_levels`). The wave count of a wave round stays beside
-/// it; the mission word is the opening banner's. Outlined like the slots
-/// at the other end, and as tall.
-pub const LEVEL_BUTTON_X: f32 = 6.0;
-pub const LEVEL_BUTTON_W: f32 = 88.0;
+/// The level button (docs/levels.md): on a level it takes the mission
+/// word's place - `LEVEL 3`, the word small and the number in the
+/// readouts' size - and opens the level select (`Session::press_levels`).
+/// The wave count of a wave round stays beside it; the mission word is the
+/// opening banner's. Wide enough for the longest word a shipped language
+/// spells it with and a two-digit number (`text_tests`).
+pub const LEVEL_BUTTON_W: f32 = 96.0;
 /// The gap between the level button's word and its number.
 pub const LEVEL_BUTTON_WORD_GAP: i32 = 5;
 
-/// Where the level button sits in `panel` (window space).
-pub fn level_button_rect(panel: Rect) -> Rectangle {
-    Rectangle::new(panel.x + LEVEL_BUTTON_X, panel.y, LEVEL_BUTTON_W, panel.h)
-}
-
-/// Where the RESTART button sits: the players button's slot, which is free
-/// exactly where this button is drawn (no keyboard means no R key and no
-/// second player - `KEYBOARD_AVAILABLE`), so nothing else in the bar moves.
-pub fn restart_button_rect(panel: Rect) -> Rectangle {
-    players_button_rect(panel)
-}
-
 pub const MODE_BUTTON_RIGHT_INSET: f32 = 8.0;
 
-/// Where the mode button sits in `panel` (window space). Shared by the
-/// play bar, the build bar and every hit-test, so a tool's `click` and a
-/// finger agree on it.
+/// Where the builder's `PLAY` button sits in its bar's `panel` (window
+/// space): the bar's right end. Shared by the build bar and its hit test,
+/// so a tool's `click` and a finger agree on it.
 pub fn mode_button_rect(panel: Rect) -> Rectangle {
     Rectangle::new(panel.x + panel.w - MODE_BUTTON_RIGHT_INSET - MODE_BUTTON_W, panel.y, MODE_BUTTON_W, panel.h)
 }
 
-/// The builder's amber, the colour the play bar's `BUILD` button and the
-/// build bar's `PLAY` button share.
+/// The builder's amber, the colour the `BUILD` button and the build bar's
+/// `PLAY` button share.
 pub const BUILD_COLOR: Color = Color::new(255, 200, 80, 255);
+
+// ---- the corner clusters ---------------------------------------------------
+//
+// Play and an online round draw no bar: the world fills the window, and the
+// readouts and buttons stand in two clusters in its top corners, inside the
+// safe area (docs/large-maps-follow-camera.md §8) - the seat's vitals
+// top-left, the round's numbers and the buttons top-right - so both bottom
+// corners stay the thumbs' and the stick's. Laid out in UI points
+// (`UiFrame`), each cluster's rows from fixed slot tables (`render::hud`),
+// so a number changing width never nudges its neighbour; `corners` is the
+// one geometry the painter (`render::hud::draw_corners`) and every hit test
+// read.
+
+/// A cluster's plate: its padding round the rows it holds.
+pub const PLATE_PAD: f32 = 4.0;
+/// Between two blocks of the left cluster, and between the right
+/// cluster's first row and its buttons when they share a row.
+pub const CLUSTER_GAP: f32 = 8.0;
+/// Between a cluster's rows.
+pub const ROW_GAP: f32 = 4.0;
+/// The least room between the left cluster and the right one.
+pub const SIDE_GAP: f32 = 16.0;
+/// A row of readouts: the 32 pt the pickup icons and the shell sprite sit
+/// in full-bleed.
+pub const ROW_H: f32 = 32.0;
+
+/// A button's height: a readouts' row under a mouse, a finger's on a touch
+/// screen.
+pub fn button_height(touch: bool) -> f32 {
+    if touch { UI_TOUCH_PT } else { ROW_H }
+}
+
+/// One seat's vitals: health, shells and the speed and shield gauges on
+/// the first row, the weapon queue on the second (`render::hud`'s slot
+/// table fills it).
+pub const VITALS_W: f32 = 310.0;
+pub const VITALS_H: f32 = 2.0 * ROW_H;
+/// The right cluster's first row: the mission word or the level button,
+/// the wave, the enemy count and the frog's gauge.
+pub const INFO_W: f32 = 304.0;
+/// The mission word's slot at the head of that row, its wave count
+/// included: the budget `text_tests` measures every language's mission
+/// word against.
+pub const INFO_TITLE_W: f32 = 160.0;
+/// The buttons' row: `ONLINE`, the players (or RESTART) and the mode
+/// button, right to left from its right end.
+pub const BUTTONS_W: f32 = ONLINE_BUTTON_W + PLAYERS_BUTTON_GAP + PLAYERS_BUTTON_W + PLAYERS_BUTTON_GAP + MODE_BUTTON_W;
+/// One chip of the other seats' strip: its number over its health gauge.
+pub const CHIP_W: f32 = 20.0;
+pub const CHIP_H: f32 = 26.0;
+pub const CHIP_GAP: f32 = 4.0;
+/// One line of text under the left cluster - an online round's status,
+/// the build stamp - each on its own dark plate.
+pub const LINE_H: f32 = 20.0;
+
+/// What the corners hold, which is all their geometry depends on - so the
+/// hit tests at the top of a frame and the painter at its end, both
+/// reading `PlayChrome`, lay them out alike.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CornerShape {
+    /// Which seats the left cluster holds: one block, a couch pair's two,
+    /// or one block and a chip per other seat.
+    pub layout: HudLayout,
+    /// The other seats' chips, in the compact layout.
+    pub chips: usize,
+    /// The level button in the title slot: a local round on a level.
+    pub level_button: bool,
+    pub online: bool,
+    pub players: bool,
+    pub restart: bool,
+    pub build: bool,
+    pub leave: bool,
+    /// Lines of text under the left cluster.
+    pub lines: usize,
+}
+
+impl CornerShape {
+    /// The corners a frame draws around a round of `seats` seats, or
+    /// `None` when it draws none (`PlayChrome::hud`).
+    pub fn of(chrome: &PlayChrome, seats: usize) -> Option<CornerShape> {
+        chrome.hud.then(|| {
+            let layout = HudLayout::choose(seats, chrome.seat);
+            CornerShape {
+                layout,
+                chips: if layout == HudLayout::Compact { seats.saturating_sub(1) } else { 0 },
+                level_button: chrome.level_button.is_some(),
+                online: chrome.online_button,
+                players: chrome.players_button,
+                restart: chrome.restart_button,
+                build: chrome.build_button,
+                leave: chrome.leave_button,
+                // The build stamp always; an online round's status over it.
+                lines: 1 + usize::from(chrome.status.is_some()),
+            }
+        })
+    }
+}
+
+/// The buttons in the corners.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CornerButton {
+    Level,
+    Online,
+    Players,
+    Restart,
+    Build,
+    Leave,
+}
+
+impl CornerButton {
+    /// The name the dev server's `status.ui` gives it.
+    pub fn name(self) -> &'static str {
+        match self {
+            CornerButton::Level => "level",
+            CornerButton::Online => "online",
+            CornerButton::Players => "players",
+            CornerButton::Restart => "restart",
+            CornerButton::Build => "build",
+            CornerButton::Leave => "leave",
+        }
+    }
+}
+
+/// Where everything in the two corners is, in UI points (`corners`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Corners {
+    /// The vitals blocks' rows: the local seat's first, a couch's player
+    /// 2's after it - beside it where the area has the width, else under
+    /// it.
+    pub blocks: Vec<Rectangle>,
+    /// The box the lines under the left cluster are kept to.
+    pub lines: Rectangle,
+    /// The right cluster's plate.
+    pub right: Rectangle,
+    /// Its first row (`INFO_W` wide).
+    pub info: Rectangle,
+    pub level_button: Option<Rectangle>,
+    pub online: Option<Rectangle>,
+    pub players: Option<Rectangle>,
+    pub restart: Option<Rectangle>,
+    pub build: Option<Rectangle>,
+    pub leave: Option<Rectangle>,
+    /// The other seats' strip, right-aligned under the buttons.
+    pub chips: Option<Rectangle>,
+}
+
+impl Corners {
+    /// A block's plate: its rows and `PLATE_PAD` round them.
+    pub fn plate(block: Rectangle) -> Rectangle {
+        Rectangle::new(block.x - PLATE_PAD, block.y - PLATE_PAD, block.width + 2.0 * PLATE_PAD, block.height + 2.0 * PLATE_PAD)
+    }
+
+    /// The left cluster: every block's plate and the lines under them -
+    /// what fades as one.
+    pub fn left(&self) -> Rectangle {
+        self.blocks.iter().fold(self.lines, |r, block| union(r, Corners::plate(*block)))
+    }
+
+    /// What no off-screen arrow may sit on and no touch may steer or fire
+    /// from: the two clusters.
+    pub fn keep_out(&self) -> [Rectangle; 2] {
+        [self.left(), self.right]
+    }
+
+    /// The `i`th chip of the strip: fixed per position, so a seat dying
+    /// never moves the chip beside it.
+    pub fn chip(&self, i: usize) -> Option<Rectangle> {
+        self.chips.map(|strip| Rectangle::new(strip.x + i as f32 * (CHIP_W + CHIP_GAP), strip.y, CHIP_W, CHIP_H))
+    }
+
+    /// Every button there is, with what it is.
+    pub fn buttons(&self) -> Vec<(CornerButton, Rectangle)> {
+        [
+            (CornerButton::Level, self.level_button),
+            (CornerButton::Online, self.online),
+            (CornerButton::Players, self.players),
+            (CornerButton::Restart, self.restart),
+            (CornerButton::Build, self.build),
+            (CornerButton::Leave, self.leave),
+        ]
+        .into_iter()
+        .filter_map(|(button, rect)| rect.map(|rect| (button, rect)))
+        .collect()
+    }
+
+    /// The button under `p` (UI points), if any.
+    pub fn hit(&self, p: Vec2) -> Option<CornerButton> {
+        self.buttons().into_iter().find(|(_, rect)| rect.contains(p)).map(|(button, _)| button)
+    }
+}
+
+/// The smallest rectangle holding both.
+fn union(a: Rectangle, b: Rectangle) -> Rectangle {
+    let (x0, y0) = (a.x.min(b.x), a.y.min(b.y));
+    let (x1, y1) = ((a.x + a.width).max(b.x + b.width), (a.y + a.height).max(b.y + b.height));
+    Rectangle::new(x0, y0, x1 - x0, y1 - y0)
+}
+
+/// Lay the two clusters out in `ui`'s area (docs/large-maps-follow-camera.md
+/// §8): the vitals top-left, a couch's second block beside the first where
+/// the area holds both and the right cluster, else under it; the right
+/// cluster in the top-right corner, its first row and its buttons side by
+/// side where the area has the width, else the buttons under the row, and
+/// a room's chips under them. Every button is `button_height` tall - 44 pt
+/// on a touch screen - and the corners never meet: the area is at least
+/// `UI_MIN_W` less its edges, which holds the widest pair.
+pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
+    let area = ui.area;
+    let button_h = button_height(ui.touch);
+    let block_plate = VITALS_W + 2.0 * PLATE_PAD;
+    let chips_w = if shape.chips > 0 { shape.chips as f32 * (CHIP_W + CHIP_GAP) - CHIP_GAP } else { 0.0 };
+    let right_two_rows = INFO_W.max(BUTTONS_W).max(chips_w) + 2.0 * PLATE_PAD;
+    let right_one_row = (INFO_W + CLUSTER_GAP + BUTTONS_W).max(chips_w) + 2.0 * PLATE_PAD;
+
+    let couch_pair = shape.layout == HudLayout::Two;
+    let beside = couch_pair && 2.0 * block_plate + CLUSTER_GAP + SIDE_GAP + right_two_rows <= area.w;
+    let left_w = if beside { 2.0 * block_plate + CLUSTER_GAP } else { block_plate };
+    let one_row = left_w + SIDE_GAP + right_one_row <= area.w;
+
+    let first = Rectangle::new(area.x + PLATE_PAD, area.y + PLATE_PAD, VITALS_W, VITALS_H);
+    let mut blocks = vec![first];
+    if couch_pair {
+        blocks.push(if beside {
+            Rectangle::new(first.x + block_plate + CLUSTER_GAP, first.y, VITALS_W, VITALS_H)
+        } else {
+            Rectangle::new(first.x, first.y + VITALS_H + 2.0 * PLATE_PAD + CLUSTER_GAP, VITALS_W, VITALS_H)
+        });
+    }
+    let bottom = blocks.iter().map(|b| b.y + b.height + PLATE_PAD).fold(area.y, f32::max);
+    let lines = Rectangle::new(area.x, bottom + ROW_GAP, block_plate, shape.lines as f32 * LINE_H);
+
+    let row_y = area.y + PLATE_PAD;
+    let right_edge = area.x + area.w - PLATE_PAD;
+    let (info, buttons_row) = if one_row {
+        let buttons = Rectangle::new(right_edge - BUTTONS_W, row_y, BUTTONS_W, button_h);
+        (Rectangle::new(buttons.x - CLUSTER_GAP - INFO_W, row_y, INFO_W, button_h), buttons)
+    } else {
+        let info = Rectangle::new(right_edge - INFO_W, row_y, INFO_W, button_h);
+        (info, Rectangle::new(right_edge - BUTTONS_W, info.y + button_h + ROW_GAP, BUTTONS_W, button_h))
+    };
+    let chips = (shape.chips > 0).then(|| Rectangle::new(right_edge - chips_w, buttons_row.y + button_h + ROW_GAP, chips_w, CHIP_H));
+    let content_bottom = chips.map_or(buttons_row.y + button_h, |c| c.y + c.height);
+    let right_w = if one_row { right_one_row } else { right_two_rows };
+    let right = Rectangle::new(area.x + area.w - right_w, area.y, right_w, content_bottom + PLATE_PAD - area.y);
+
+    // The buttons from the row's right end - the mode slot, the players
+    // slot, the online slot - each always in its own place, whichever of
+    // them a round draws.
+    let mode = Rectangle::new(buttons_row.x + buttons_row.width - MODE_BUTTON_W, buttons_row.y, MODE_BUTTON_W, button_h);
+    let players = Rectangle::new(mode.x - PLAYERS_BUTTON_GAP - PLAYERS_BUTTON_W, mode.y, PLAYERS_BUTTON_W, button_h);
+    let online = Rectangle::new(players.x - PLAYERS_BUTTON_GAP - ONLINE_BUTTON_W, mode.y, ONLINE_BUTTON_W, button_h);
+    Corners {
+        blocks,
+        lines,
+        right,
+        info,
+        level_button: shape.level_button.then(|| Rectangle::new(info.x, info.y, LEVEL_BUTTON_W, button_h)),
+        online: shape.online.then_some(online),
+        players: shape.players.then_some(players),
+        restart: shape.restart.then_some(players),
+        build: shape.build.then_some(mode),
+        leave: shape.leave.then_some(mode),
+        chips,
+    }
+}
 
 /// The leave-round dialog's geometry, in field space: the panel and its
 /// two buttons (`LEAVE ROUND`, `KEEP PLAYING`), each at least 48 px tall
@@ -730,11 +945,14 @@ pub fn clock_text(seconds: f32) -> String {
     format!("{}:{:02}", whole / 60, whole % 60)
 }
 
-/// What play-mode chrome `Game::render` draws besides the readouts: the
-/// `BUILD` and players buttons in the bar and, while the player is being
-/// asked, the leave-round or players dialog over a dimmed field.
+/// What chrome `Game::render` draws around the world: the corner clusters
+/// and the buttons in them, and, while the player is being asked, a dialog,
+/// the end screen, the lobby or the level select over a dim.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PlayChrome {
+    /// The corner clusters (`corners`): play mode and an online round.
+    /// Nothing else - the lobby, a demo - draws them.
+    pub hud: bool,
     pub build_button: bool,
     pub players_button: bool,
     /// The `ONLINE` button, which opens the lobby.
@@ -745,14 +963,14 @@ pub struct PlayChrome {
     /// The `LEAVE` button in the mode button's slot: an online round's
     /// way back to the local one without a keyboard.
     pub leave_button: bool,
-    /// The seat this window is playing in a room, which is the one the
-    /// bar shows in full. `None` in a couch round, where the bar is
-    /// player 1's and the couch tables apply.
+    /// The seat this window is playing in a room, whose block the left
+    /// cluster shows. `None` in a couch round, where the first block is
+    /// player 1's and the couch layouts apply.
     pub seat: Option<u8>,
     pub leave_dialog: bool,
     pub players_dialog: bool,
-    /// One line along the field's top edge while an online round runs:
-    /// the room code, this seat and the snapshot buffer
+    /// One line under the left cluster while an online round runs: the
+    /// room code, this seat and the snapshot buffer
     /// (`net::round::OnlineRound::status`). `None` in a local round -
     /// and everything before the round is the lobby's, not this line's.
     pub status: Option<String>,
@@ -776,15 +994,112 @@ pub struct PlayChrome {
     pub levels: Option<crate::level_select::LevelSelectView>,
 }
 
-/// The online status line's text size and how far in from the field's
-/// top-left corner it sits: the corner the debug overlay label uses, and
-/// free in a release build.
+/// The online status line's text size: the first line under the left
+/// cluster (`Corners::lines`).
 pub const HUD_STATUS_TEXT_SIZE: i32 = 14;
-pub const HUD_STATUS_INSET: i32 = 11;
 
 /// The status line's colour: the room blue, so a round somebody else is
 /// simulating never reads as one of the HUD's own numbers.
 pub const HUD_STATUS_COLOR: Color = ONLINE_COLOR;
+
+/// How far each corner cluster has faded (`ui_fade_opacity` up to 1): a
+/// cluster drops while the fight is under it, so the HUD never hides a
+/// tank, a shot or a blast, and comes back once it has passed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fade {
+    pub left: f32,
+    pub right: f32,
+}
+
+impl Default for Fade {
+    fn default() -> Self {
+        Fade { left: 1.0, right: 1.0 }
+    }
+}
+
+impl Fade {
+    /// One frame of `dt` seconds: each cluster moves toward `opacity`
+    /// while `covered` says something is under it, else back toward 1, at
+    /// the pace that goes the whole way in `seconds` (0 snaps).
+    pub fn step(&mut self, covered: [bool; 2], dt: f32, opacity: f32, seconds: f32) {
+        let opacity = opacity.clamp(0.0, 1.0);
+        let pace = if seconds > 0.0 { (1.0 - opacity).max(1e-3) * dt.max(0.0) / seconds } else { f32::INFINITY };
+        for (alpha, under) in [&mut self.left, &mut self.right].into_iter().zip(covered) {
+            let to = if under { opacity } else { 1.0 };
+            *alpha = if *alpha < to { (*alpha + pace).min(to) } else { (*alpha - pace).max(to) };
+        }
+    }
+}
+
+/// What a corner fades for: every tank standing, every shot in flight and
+/// every blast still burning, as the world point it is at and the world
+/// pixels round it that it covers.
+pub fn action_marks(game: &Game) -> Vec<(crate::Position, f32)> {
+    let mut marks = Vec::new();
+    for tank in game.world.query::<&Tank>().iter().filter(|t| !t.is_wreck()) {
+        marks.push((tank.position, tank.size() * 0.5));
+    }
+    for shell in game.world.query::<&crate::shell::Shell>().iter() {
+        marks.push((shell.position, 6.0));
+    }
+    for bullet in game.world.query::<&crate::bullet::Bullet>().iter() {
+        marks.push((bullet.position, 4.0));
+    }
+    for plasma in game.world.query::<&crate::plasma::Plasma>().iter() {
+        marks.push((plasma.position, 10.0));
+    }
+    for missile in game.world.query::<&crate::missile::Missile>().iter() {
+        marks.push((missile.position, 10.0));
+    }
+    let fireball = tuning().blast_fireball_px;
+    for blast in game.blast_fx.iter().filter(|b| !crate::fireball::done(b)) {
+        marks.push((blast.center, fireball * blast.scale));
+    }
+    marks
+}
+
+/// Where the world is drawn on the window, as the chrome measures it: a
+/// world point through the camera onto the bitmap's field area, the view
+/// onto the window and the UI scale into UI points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldOnScreen {
+    pub camera: crate::view::Camera,
+    /// Where the field area's corner is in the bitmap (`Layout::field`).
+    pub field_origin: Vec2,
+    pub view: crate::view::View,
+    pub ui_scale: f32,
+}
+
+impl WorldOnScreen {
+    /// A world point in UI points.
+    pub fn to_ui(&self, world: crate::Position) -> Vec2 {
+        let p = self.camera.to_view(world);
+        let window = self.view.to_window(Vec2::new(self.field_origin.x + p.x, self.field_origin.y + p.y));
+        Vec2::new(window.x / self.ui_scale, window.y / self.ui_scale)
+    }
+
+    /// A world length in UI points.
+    pub fn len_to_ui(&self, world: f32) -> f32 {
+        world * self.camera.scale * self.view.scale / self.ui_scale
+    }
+}
+
+/// Which of the two clusters (left, right) has something of `marks` under
+/// it: a mark is a world point and the world pixels round it it covers,
+/// drawn where `screen` puts it.
+pub fn covered(corners: &Corners, marks: &[(crate::Position, f32)], screen: &WorldOnScreen) -> [bool; 2] {
+    let under = |r: Rectangle| {
+        marks.iter().any(|&(at, radius)| {
+            let p = screen.to_ui(at);
+            let reach = screen.len_to_ui(radius);
+            let nx = p.x.clamp(r.x, r.x + r.width);
+            let ny = p.y.clamp(r.y, r.y + r.height);
+            (p.x - nx).powi(2) + (p.y - ny).powi(2) <= reach * reach
+        })
+    };
+    let [left, right] = corners.keep_out();
+    [under(left), under(right)]
+}
 
 #[cfg(test)]
 mod hud_tests {
@@ -904,38 +1219,214 @@ mod hud_tests {
         assert_eq!(model.local, HudModel::gather(&game, None).local);
     }
 
-    /// The `LEAVE` button of an online round takes the mode button's
-    /// slot, which is free because a replica draws no `BUILD`.
-    #[test]
-    fn the_leave_button_takes_the_mode_buttons_slot() {
-        let panel = Rect::new(0.0, 0.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::HUD_BAR_HEIGHT as f32);
-        let leave = leave_button_rect(panel);
-        assert_eq!(leave, mode_button_rect(panel));
-        let label = crate::text::Catalogue::new("en").get(crate::text::keys::BUTTON_LEAVE);
-        assert!(leave.width >= crate::text::width(&label, HUD_TEXT_SIZE) as f32, "the label fits its slot");
-        assert!(leave.height >= 32.0, "a finger has the whole bar to aim at");
-        assert!(leave.x + leave.width <= panel.w);
+    /// The screens the corners are laid out on: phones (an iPhone 15 with
+    /// its Dynamic Island and home indicator inset, an iPhone SE, a Pixel
+    /// in pixels at 2.625), an iPad, desktop windows from the smallest the
+    /// chrome is laid out for up to 1080p, and the arena's own bitmap.
+    fn screens() -> Vec<(&'static str, UiFrame)> {
+        let island = Insets { left: 59.0, top: 0.0, right: 59.0, bottom: 21.0 };
+        vec![
+            ("iphone 15", UiFrame::new((852.0, 393.0), 1.0, 1.0, island, true)),
+            ("iphone se", UiFrame::new((667.0, 375.0), 1.0, 1.0, Insets::default(), true)),
+            ("pixel", UiFrame::new((2400.0, 1080.0), 2.625, 1.0, Insets::default(), true)),
+            ("ipad", UiFrame::new((1180.0, 820.0), 1.0, 1.0, Insets::default(), true)),
+            ("smallest", UiFrame::new((UI_MIN_W, UI_MIN_H), 1.0, 1.0, Insets::default(), false)),
+            ("bitmap", UiFrame::plain((W, H + 32.0))),
+            ("1600", UiFrame::plain((1600.0, 900.0))),
+            ("1080p", UiFrame::plain((1920.0, 1080.0))),
+            ("1080p touch", UiFrame::new((1920.0, 1080.0), 1.0, 1.0, Insets::default(), true)),
+        ]
     }
 
-    /// The three bar buttons sit in a row at the bar's right end, in
-    /// their fixed order, all of them full bar height and none of them
-    /// on top of another.
+    /// Every shape of round the corners hold: one seat on a level with
+    /// every button, free play, a keyboard-less build's RESTART, a couch
+    /// pair, a couch of four, and a full room seen from seat 3.
+    fn shapes() -> Vec<(&'static str, CornerShape)> {
+        let play = CornerShape {
+            layout: HudLayout::One,
+            chips: 0,
+            level_button: true,
+            online: true,
+            players: true,
+            restart: false,
+            build: true,
+            leave: false,
+            lines: 1,
+        };
+        vec![
+            ("one", play),
+            ("free play", CornerShape { level_button: false, ..play }),
+            ("phone", CornerShape { players: false, restart: true, ..play }),
+            ("couch pair", CornerShape { layout: HudLayout::Two, ..play }),
+            ("couch of four", CornerShape { layout: HudLayout::Compact, chips: 3, ..play }),
+            (
+                "full room",
+                CornerShape {
+                    layout: HudLayout::Compact,
+                    chips: MAX_SEATS - 1,
+                    level_button: false,
+                    online: false,
+                    players: false,
+                    build: false,
+                    leave: true,
+                    lines: 2,
+                    ..play
+                },
+            ),
+        ]
+    }
+
+    fn inside(r: Rectangle, outer: Rect) -> bool {
+        r.x >= outer.x - 1e-3 && r.y >= outer.y - 1e-3 && r.x + r.width <= outer.x + outer.w + 1e-3 && r.y + r.height <= outer.y + outer.h + 1e-3
+    }
+
+    fn within(r: Rectangle, outer: Rectangle) -> bool {
+        inside(r, Rect::new(outer.x, outer.y, outer.width, outer.height))
+    }
+
+    fn apart(a: Rectangle, b: Rectangle) -> bool {
+        a.x + a.width <= b.x + 1e-3 || b.x + b.width <= a.x + 1e-3 || a.y + a.height <= b.y + 1e-3 || b.y + b.height <= a.y + 1e-3
+    }
+
+    /// On every screen and in every shape the two clusters stay inside the
+    /// safe area and apart, every button inside the right one, none on
+    /// another or on the first row's readouts, every chip inside it too,
+    /// and on a touch screen every button is a finger's 44 pt both ways.
     #[test]
-    fn the_online_button_sits_left_of_the_players_button() {
-        let panel = Rect::new(0.0, 0.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::HUD_BAR_HEIGHT as f32);
-        let online = online_button_rect(panel);
-        let players = players_button_rect(panel);
-        let mode = mode_button_rect(panel);
-        assert_eq!(online.height, panel.h);
-        let label = crate::text::Catalogue::new("en").get(crate::text::keys::BUTTON_ONLINE);
-        assert!(online.width >= crate::text::width(&label, HUD_TEXT_SIZE) as f32, "the label fits its slot");
-        assert!(online.x + online.width + PLAYERS_BUTTON_GAP <= players.x);
-        assert!(players.x + players.width + PLAYERS_BUTTON_GAP <= mode.x);
-        assert!(mode.x + mode.width <= panel.w);
-        assert!(online.x >= 0.0);
-        // The RESTART button of a keyboard-less build shares the players
-        // slot, so the row is the same three rects either way.
-        assert_eq!(restart_button_rect(panel), players);
+    fn the_corners_fit_every_screen_inside_its_safe_area() {
+        for (screen, ui) in screens() {
+            for (shape_name, shape) in shapes() {
+                let what = format!("{shape_name} on {screen}");
+                let c = corners(&ui, &shape);
+                let [left, right] = c.keep_out();
+                assert!(inside(left, ui.area) && inside(right, ui.area), "{what}: a cluster leaves the safe area: {left:?} {right:?} in {:?}", ui.area);
+                assert!(apart(left, right), "{what}: the clusters meet: {left:?} {right:?}");
+                assert!(right.x - (left.x + left.width) >= SIDE_GAP - 1e-3 || left.y + left.height <= right.y, "{what}: too close");
+                for (i, a) in c.blocks.iter().enumerate() {
+                    assert!(within(Corners::plate(*a), left), "{what}");
+                    for b in &c.blocks[i + 1..] {
+                        assert!(apart(Corners::plate(*a), Corners::plate(*b)), "{what}: two blocks overlap");
+                    }
+                }
+                assert!(within(c.info, right), "{what}: the first row leaves its plate");
+                let buttons = c.buttons();
+                for (i, (button, r)) in buttons.iter().enumerate() {
+                    assert!(within(*r, right), "{what}: {button:?} leaves the plate");
+                    if *button != CornerButton::Level {
+                        assert!(apart(*r, c.info), "{what}: {button:?} sits on the first row");
+                    }
+                    if ui.touch {
+                        assert!(r.width >= UI_TOUCH_PT && r.height >= UI_TOUCH_PT, "{what}: {button:?} is {r:?}, under a finger");
+                    }
+                    for (other, o) in &buttons[i + 1..] {
+                        assert!(apart(*r, *o), "{what}: {button:?} overlaps {other:?}");
+                    }
+                }
+                for i in 0..shape.chips {
+                    let chip = c.chip(i).expect("a strip");
+                    assert!(within(chip, right), "{what}: chip {i} leaves the plate");
+                    assert!(buttons.iter().all(|(_, r)| apart(*r, chip)), "{what}: chip {i} sits on a button");
+                }
+                assert_eq!(c.chips.is_some(), shape.chips > 0);
+            }
+        }
+    }
+
+    /// What `PlayChrome` says is drawn is what the corners hold: play's
+    /// buttons and the level button on a level, an online round's LEAVE
+    /// alone and its seat chips, and nothing at all where no HUD is drawn.
+    #[test]
+    fn the_corners_hold_the_buttons_the_chrome_draws() {
+        let ui = UiFrame::plain((1600.0, 900.0));
+        let play = PlayChrome { hud: true, build_button: true, players_button: true, online_button: true, level_button: Some(3), ..PlayChrome::default() };
+        let c = corners(&ui, &CornerShape::of(&play, 1).expect("play draws the corners"));
+        let names: Vec<CornerButton> = c.buttons().into_iter().map(|(b, _)| b).collect();
+        assert_eq!(names, vec![CornerButton::Level, CornerButton::Online, CornerButton::Players, CornerButton::Build]);
+        // The mode slot is at the right end, the players' and ONLINE's
+        // left of it, each in its own place.
+        let (online, players, build) = (c.online.unwrap(), c.players.unwrap(), c.build.unwrap());
+        assert!(online.x + online.width + PLAYERS_BUTTON_GAP <= players.x && players.x + players.width + PLAYERS_BUTTON_GAP <= build.x);
+        assert!((build.x + build.width - (ui.area.x + ui.area.w - PLATE_PAD)).abs() < 1e-3, "BUILD at the right end");
+        // Free play: the mission word, no level button.
+        let free = PlayChrome { level_button: None, ..play.clone() };
+        assert_eq!(corners(&ui, &CornerShape::of(&free, 1).unwrap()).level_button, None);
+        // An online round of three at seat 1: LEAVE in the mode slot, two
+        // chips, the status line over the build stamp.
+        let online_round = PlayChrome { hud: true, leave_button: true, seat: Some(1), status: Some("ROOM".into()), ..PlayChrome::default() };
+        let shape = CornerShape::of(&online_round, 3).unwrap();
+        assert_eq!((shape.layout, shape.chips, shape.lines), (HudLayout::Compact, 2, 2));
+        let c = corners(&ui, &shape);
+        assert_eq!(c.buttons().into_iter().map(|(b, _)| b).collect::<Vec<_>>(), vec![CornerButton::Leave]);
+        assert_eq!(c.leave, Some(build), "LEAVE takes the mode button's slot");
+        // The lobby and the demos draw none.
+        assert_eq!(CornerShape::of(&PlayChrome::default(), 1), None);
+        // A press lands on the button under it and nowhere else.
+        let centre = |r: Rectangle| Vec2::new(r.x + r.width / 2.0, r.y + r.height / 2.0);
+        assert_eq!(c.hit(centre(build)), Some(CornerButton::Leave));
+        assert_eq!(c.hit(Vec2::new(ui.screen.w / 2.0, ui.screen.h / 2.0)), None);
+    }
+
+    /// A couch pair's two blocks sit side by side where the window has the
+    /// room for both and the right cluster, and player 2's under player
+    /// 1's where it has not; the right cluster's first row and its buttons
+    /// share one row on a wide window and stack on a phone's.
+    #[test]
+    fn the_corners_arrange_themselves_by_the_windows_width() {
+        let pair = shapes().into_iter().find(|(n, _)| *n == "couch pair").unwrap().1;
+        let wide = corners(&UiFrame::plain((1600.0, 900.0)), &pair);
+        assert_eq!(wide.blocks[0].y, wide.blocks[1].y, "beside on 1600");
+        assert!(wide.blocks[1].x > wide.blocks[0].x + VITALS_W);
+        let narrow = corners(&UiFrame::plain((900.0, 600.0)), &pair);
+        assert_eq!(narrow.blocks[0].x, narrow.blocks[1].x, "under on 900");
+        assert!(narrow.blocks[1].y >= narrow.blocks[0].y + VITALS_H + 2.0 * PLATE_PAD);
+        let one = shapes()[0].1;
+        let desk = corners(&UiFrame::plain((1600.0, 900.0)), &one);
+        assert_eq!(desk.info.y, desk.build.unwrap().y, "one row on a monitor");
+        let phone = corners(&UiFrame::new((852.0, 393.0), 1.0, 1.0, Insets { left: 59.0, top: 0.0, right: 59.0, bottom: 21.0 }, true), &one);
+        assert!(phone.build.unwrap().y >= phone.info.y + phone.info.height, "the buttons under the first row on a phone");
+        assert!(phone.info.height >= UI_TOUCH_PT, "the level button is a finger's");
+    }
+
+    /// A cluster fades to `ui_fade_opacity` while something is under it,
+    /// at the pace that goes the whole way in `ui_fade_seconds`, and comes
+    /// back as fast; 0 seconds snaps.
+    #[test]
+    fn a_cluster_fades_under_the_fight_and_comes_back() {
+        let mut f = Fade::default();
+        f.step([true, false], 0.125, 0.35, 0.25);
+        assert!((f.left - 0.675).abs() < 1e-4 && f.right == 1.0, "{f:?}");
+        f.step([true, false], 0.25, 0.35, 0.25);
+        assert_eq!(f.left, 0.35, "held at the floor");
+        f.step([false, true], 0.1, 0.35, 0.25);
+        assert!((f.left - 0.61).abs() < 1e-4 && (f.right - 0.74).abs() < 1e-4, "{f:?}");
+        f.step([false, false], 1.0, 0.35, 0.25);
+        assert_eq!(f, Fade::default());
+        f.step([true, true], 0.0, 0.35, 0.0);
+        assert_eq!((f.left, f.right), (0.35, 0.35), "0 seconds snaps");
+    }
+
+    /// What a cluster fades for is found where the frame draws it: a
+    /// tank's world point through the camera, the view and the UI scale,
+    /// with its own footprint round it.
+    #[test]
+    fn a_tank_under_a_cluster_is_found_where_it_is_drawn() {
+        let ui = UiFrame::plain((1600.0, 900.0));
+        let c = corners(&ui, &shapes()[0].1);
+        // An arena's field fitted into 1600 x 900: 1088 x 544 at 1.47,
+        // letterboxed top and bottom.
+        let view = crate::view::View::fit((W, H), (1600.0, 900.0));
+        let screen = WorldOnScreen { camera: crate::view::Camera::whole((W, H)), field_origin: Vec2::new(0.0, 0.0), view, ui_scale: ui.scale };
+        let at = screen.to_ui(crate::Position::new(10.0, 10.0));
+        assert!((at.x - view.to_window(Vec2::new(10.0, 10.0)).x).abs() < 1e-3);
+        assert!((screen.len_to_ui(32.0) - 32.0 * view.scale).abs() < 1e-3);
+        // A tank in the field's top-left corner is under the left cluster,
+        // one in its middle under neither, one at the top-right under the
+        // right one.
+        let tank = |x: f32, y: f32| vec![(crate::Position::new(x, y), 32.0)];
+        assert_eq!(covered(&c, &tank(40.0, 30.0), &screen), [true, false]);
+        assert_eq!(covered(&c, &tank(W / 2.0, H / 2.0), &screen), [false, false]);
+        assert_eq!(covered(&c, &tank(W - 40.0, 30.0), &screen), [false, true]);
+        assert_eq!(covered(&c, &[], &screen), [false, false]);
     }
 
     #[test]

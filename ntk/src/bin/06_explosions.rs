@@ -24,7 +24,7 @@
 use bongbong::editor::{BuilderInput, EditorTextures, Tool};
 use bongbong::fx::Fx;
 use bongbong::render::game::{Effects, Textures};
-use bongbong::hud::PlayChrome;
+use bongbong::hud::{Fade, PlayChrome, UiFrame};
 use bongbong::level::{LevelOverrides, Mission};
 use bongbong::map::{CellObject, MapFile};
 use bongbong::mode::{Driver, Session};
@@ -34,7 +34,7 @@ use bongbong::simulation::debug::TankPatch;
 use bongbong::simulation::{Game, Input};
 use bongbong::tuning::tuning;
 use bongbong::view::{Camera, View};
-use bongbong::{Layout, Position, Rect, HUD_BAR_HEIGHT};
+use bongbong::{Layout, Position, HUD_BAR_HEIGHT};
 use raylib::core::game_loop;
 use raylib::prelude::*;
 
@@ -109,13 +109,13 @@ fn main() {
     let mut fx = Fx::default();
 
     // Pass 1 target (the field) and two composites: the builder's has the
-    // bar on top; play mode's is the bare field, so the HUD bar, laid out
-    // below it, is clipped away.
+    // bar on top; play mode's is the bare field, and the demo's chrome
+    // draws no HUD over it.
     let mut scene = rl.load_render_texture(&thread, w as u32, h as u32).expect("scene target");
     let mut composite_build = rl.load_render_texture(&thread, w as u32, (h + HUD_BAR_HEIGHT) as u32).expect("composite");
     let mut composite_play = rl.load_render_texture(&thread, w as u32, h as u32).expect("composite");
     let layout_build = Layout::for_field(width, height);
-    let layout_play = Layout { field: Rect::new(0.0, 0.0, width, height), panel: Rect::new(0.0, height, width, HUD_BAR_HEIGHT as f32) };
+    let layout_play = Layout::bare(width, height);
 
     let mut game = Game::default();
     game.map = map;
@@ -299,6 +299,8 @@ fn main() {
             &textures,
             &layout_play,
             &PlayChrome::default(),
+            &UiFrame::plain(window),
+            Fade::default(),
         );
     });
 }

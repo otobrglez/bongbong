@@ -34,22 +34,22 @@ impl Camera {
 /// an integer and sharp elsewhere. A window the bitmap's own size gets no
 /// margins and no frame.
 pub fn present(rl: &mut RaylibHandle, thread: &RaylibThread, composite: &RenderTexture2D, view: &View, backdrop: Color) {
+    rl.draw(thread, |mut d| present_into(&mut d, composite, view, backdrop));
+}
+
+/// `present` into the frame `d` is drawing, so what stands on the window -
+/// the HUD's corners, its dialogs - can follow it onto the same frame.
+pub fn present_into(d: &mut impl RaylibDraw, composite: &RenderTexture2D, view: &View, backdrop: Color) {
     // A render texture reads back bottom-up; a negative source height
     // flips it on the way out.
     let source = Rectangle::new(0.0, 0.0, view.bitmap.0, -view.bitmap.1);
     let dest = view.dest();
-    rl.draw(thread, |mut d| {
-        d.clear_background(Color::BLACK);
-        if !view.is_identity() {
-            d.draw_rectangle(0, 0, view.window.0 as i32, view.window.1 as i32, backdrop);
-            d.draw_rectangle_lines_ex(
-                Rectangle::new(dest.x - 1.0, dest.y - 1.0, dest.width + 2.0, dest.height + 2.0),
-                1.0,
-                FRAME,
-            );
-        }
-        d.draw_texture_pro(composite, source, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-    });
+    d.clear_background(Color::BLACK);
+    if !view.is_identity() {
+        d.draw_rectangle(0, 0, view.window.0 as i32, view.window.1 as i32, backdrop);
+        d.draw_rectangle_lines_ex(Rectangle::new(dest.x - 1.0, dest.y - 1.0, dest.width + 2.0, dest.height + 2.0), 1.0, FRAME);
+    }
+    d.draw_texture_pro(composite, source, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
 }
 
 /// Put a followed view's world on the window (docs/large-maps-follow-camera.md

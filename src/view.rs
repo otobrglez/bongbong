@@ -1,13 +1,14 @@
 //! How the game's bitmap lands on the screen.
 //!
-//! The game renders one fixed-size bitmap per frame - the battlefield
-//! under its HUD bar, `Layout::window_size` - whatever the window or the
-//! canvas is. `View` is the uniform scale and the centring offset that put
-//! that bitmap on the real screen with its shape kept: the whole
-//! battlefield is always visible, letterboxed when the shapes differ. Every
-//! pointer read goes back through the same numbers (`to_bitmap`), so the
-//! HUD's buttons, the dialogs and the builder hit-test in bitmap pixels and
-//! never learn what the window is.
+//! The game renders one bitmap per frame - the battlefield, under the
+//! builder's bar in build mode (`Layout::window_size`) - whatever the
+//! window or the canvas is. `View` is the uniform scale and the centring
+//! offset that put that bitmap on the real screen with its shape kept: the
+//! whole battlefield is always visible, letterboxed when the shapes differ.
+//! Every pointer on the world or the builder goes back through the same
+//! numbers (`to_bitmap`), so the builder hit-tests in bitmap pixels and
+//! never learns what the window is; the chrome over play is laid out on the
+//! window itself, in points (`hud::UiFrame`).
 //!
 //! The field size is the map's (`MapFile::field_size`) and every player in
 //! a match shares it; the view is the one per-device thing, and it is
@@ -21,14 +22,14 @@
 //! and an arena shows the whole field at its own size (`Camera::whole`),
 //! which draws exactly what a renderer with no camera would. A field map
 //! is followed instead (`MapClass::Field`): its bitmap is the world this
-//! window shows plus the bar, a bitmap pixel per world pixel, made to the
-//! window's shape so it fills it (`FollowFrame`); its view is wherever
-//! `follow::Follow` puts it, on the block grid with the rest of its
-//! position applied when the frame is presented (`Camera::following`).
-//! Presentation only as well; `render::view` builds raylib's cameras from
-//! it and presents a followed view.
+//! window shows, a bitmap pixel per world pixel, made to the window's shape
+//! so it fills it (`FollowFrame`); its view is wherever `follow::Follow`
+//! puts it, on the block grid with the rest of its position applied when
+//! the frame is presented (`Camera::following`). Presentation only as
+//! well; `render::view` builds raylib's cameras from it and presents a
+//! followed view.
 
-use crate::framing::{frame_under_bar, Bar, Framing, Screen, Seating, SightBox, ViewRules};
+use crate::framing::{frame, Framing, Screen, Seating, SightBox, ViewRules};
 use crate::math::{Rectangle, Vec2};
 use crate::Layout;
 
@@ -312,15 +313,12 @@ pub fn culled(cull: Option<Rectangle>, at: Vec2) -> bool {
 
 /// How a followed field map's frame lands on the window
 /// (docs/large-maps-follow-camera.md §3, §6): the world the framing rules
-/// give this screen under the HUD bar (`framing::frame_under_bar`), a
-/// bitmap of exactly that world plus the bar, and the view that fills the
-/// window with it - no letterbox for any shape between `view_aspect_min`
-/// and `view_aspect_max`, bars across the long axis past them. A bitmap
-/// pixel is a world pixel, except where the view is narrower than the
-/// bar's slot tables are laid out for (`DEFAULT_SCREEN_WIDTH`): there the
-/// bitmap is that wide and the world is magnified into its field area
-/// (`scale`), so the bar and everything over the field keep their room
-/// and are drawn a little smaller than the world.
+/// give this screen (`framing::frame`), a bitmap of exactly that world, a
+/// bitmap pixel per world pixel, and the view that fills the window with it
+/// - no letterbox for any shape between `view_aspect_min` and
+/// `view_aspect_max`, bars across the long axis past them. Play mode draws
+/// no bar over it: the HUD stands in the window's corners
+/// (`hud::corners`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FollowFrame {
     /// What this screen shows of a field map.
@@ -329,30 +327,19 @@ pub struct FollowFrame {
     /// keeps on screen.
     pub seating: Seating,
     pub sight: SightBox,
-    /// The bitmap: the bar on top, the field area the view fills.
+    /// The bitmap: the field area the view fills, and no bar.
     pub layout: Layout,
-    /// Bitmap pixels per world pixel in the field area: 1, or more where
-    /// the bitmap is wider than the view.
-    pub scale: f32,
     /// The bitmap onto the window.
     pub view: View,
 }
 
 impl FollowFrame {
-    /// The HUD bar over a followed field map: its height, laid out across
-    /// the standard field's width at the least.
-    pub const BAR: Bar = Bar { height: crate::HUD_BAR_HEIGHT as f32, min_width: crate::DEFAULT_SCREEN_WIDTH as f32 };
-
     /// Frame a field map on `screen` (in points) for a window of `window`
     /// (in the window's own units, which `View` maps to).
     pub fn new(screen: Screen, window: (f32, f32), seating: Seating, sight: SightBox, rules: &ViewRules) -> FollowFrame {
-        let framing = frame_under_bar(screen, Self::BAR, seating, sight, rules);
+        let framing = frame(screen, seating, sight, rules);
         let (w, h) = framing.visible;
-        let width = w.max(Self::BAR.min_width);
-        let scale = if w > 0.0 { width / w } else { 1.0 };
-        let layout = Layout::for_field(width, h * scale);
-        let bitmap = (layout.field.w.max(layout.panel.w), layout.field.h + layout.panel.h);
-        FollowFrame { framing, seating, sight, layout, scale, view: View::fill(bitmap, window) }
+        FollowFrame { framing, seating, sight, layout: Layout::bare(w, h), view: View::fill((w, h), window) }
     }
 
     /// The scene target a view of this frame needs: the view and the
@@ -360,14 +347,14 @@ impl FollowFrame {
     /// not move with the view, so the target lives as long as the window
     /// keeps its size.
     pub fn target_size(&self) -> (i32, i32) {
-        Camera::following((1.0, 1.0), Vec2::new(0.0, 0.0), self.framing.visible, self.scale, 1.0).target_size()
+        Camera::following((1.0, 1.0), Vec2::new(0.0, 0.0), self.framing.visible, 1.0, 1.0).target_size()
     }
 
     /// Device pixels per world pixel on a window of `framebuffer` device
     /// pixels per point: what the picture is presented at, and so what a
     /// followed view's sub-block shift is rounded to.
     pub fn device_scale(&self, framebuffer: f32) -> f32 {
-        self.view.scale * self.scale * framebuffer
+        self.view.scale * framebuffer
     }
 }
 
@@ -575,7 +562,7 @@ mod view_tests {
     }
 
     #[test]
-    fn a_followed_frame_fills_the_window_with_the_world_and_the_bar() {
+    fn a_followed_frame_fills_the_window_with_the_world_alone() {
         use crate::framing::{Seating, SightBox, ViewRules};
         let rules = ViewRules::of(&crate::tuning::Tuning::DEFAULT);
         let sight = SightBox::from_cells(11.5, 7.5);
@@ -585,17 +572,13 @@ mod view_tests {
                 let screen = Screen::new(w, h, dpr, ppi).with_panel_width(w * dpr);
                 let f = FollowFrame::new(screen, (w, h), seating, sight, &rules);
                 let (vw, vh) = f.framing.visible;
-                // The field area is the view - magnified to the bar's
-                // width where the view is narrower.
-                assert_eq!(f.layout.field.w, vw.max(1088.0), "{w} x {h} ({seating:?})");
-                assert!((f.scale - f.layout.field.w / vw).abs() < 1e-5 && f.scale >= 1.0);
-                assert!((f.layout.field.h - vh * f.scale).abs() < 1e-3);
-                assert_eq!(f.layout.panel.h, crate::HUD_BAR_HEIGHT as f32);
+                // The bitmap is the view, a pixel a world pixel, with no
+                // bar over it: the world is the whole window.
+                assert_eq!((f.layout.field.w, f.layout.field.h), (vw, vh), "{w} x {h} ({seating:?})");
+                assert_eq!((f.layout.field.x, f.layout.field.y), (0.0, 0.0));
+                assert_eq!(f.layout.panel.h, 0.0, "no bar in play");
                 assert_eq!(f.view.offset, Vec2::new(0.0, 0.0), "{w} x {h}: no letterbox");
-                assert!(
-                    (f.view.scale * f.scale - f.framing.point_scale).abs() < 1e-4,
-                    "{w} x {h}: the world is drawn at the framing's scale"
-                );
+                assert!((f.view.scale - f.framing.point_scale).abs() < 1e-4, "{w} x {h}: the world is drawn at the framing's scale");
                 assert!((f.device_scale(dpr) - f.framing.point_scale * dpr).abs() < 1e-3);
                 let d = f.view.dest();
                 assert!((d.width - w).abs() < 0.01 && (d.height - h).abs() < 0.01, "{w} x {h}: {d:?}");

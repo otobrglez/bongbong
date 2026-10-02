@@ -723,13 +723,15 @@ impl Session {
         }
     }
 
-    /// What `Game::render` should draw around the field this frame. An
-    /// online round shows none of the local buttons - the round is the
-    /// room's to restart and the builder is not part of it - and carries
-    /// a status line instead, until the lobby screen replaces it.
+    /// What `Game::render` should draw around the world this frame: the
+    /// corner clusters in play mode and in an online round. An online
+    /// round shows none of the local buttons - the round is the room's to
+    /// restart and the builder is not part of it - and carries a status
+    /// line instead, until the lobby screen replaces it.
     pub fn play_chrome(&self) -> PlayChrome {
         match self.driver {
             Driver::Online => PlayChrome {
+                hud: true,
                 status: self.online.as_ref().map(AnyRound::status),
                 // The one button a room's round carries: the way back to
                 // the local one on a build with no Esc key.
@@ -750,6 +752,8 @@ impl Session {
                 }
             }
             _ => PlayChrome {
+                // The builder draws its own bar and none of this.
+                hud: self.driver == Driver::Play,
                 build_button: true,
                 players_button: crate::TWO_PLAYERS_AVAILABLE,
                 online_button: crate::ONLINE_AVAILABLE,
