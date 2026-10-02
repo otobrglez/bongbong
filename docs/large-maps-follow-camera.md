@@ -893,10 +893,51 @@ it, the defence as `probe-defend`):
 | castle-moat | 0.13 | 0.11 | | |
 
 A 40-wide level's whole field is under a thousand cells, so it gains less.
-Not built: the grid itself is still built and labelled every tick (about
-0.09 and 0.07 ms on the study map), now the larger part of the routing;
-kept across ticks and patched where a tile dies or a fire starts or burns
-out, it would cost next to nothing.
+
+**The nav grid kept across frames** (`simulation::nav`): the grid itself
+was still built and labelled from scratch every tick - on the study map
+0.08 ms building the occupancy from every tile, deep cell, frog and fire
+(the seam-closed extents and the rasterising) and 0.06 ms labelling its
+components, of a routing grid of 0.15 ms in a tick of 0.44. Neither
+changes unless the terrain does, so the round keeps both
+(`NavCache`, brought up to date by `Game::refresh_nav` at the top of a
+frame) in two layers: the field's boundary, the tiles and the deep water,
+rebuilt whole only when the world's tiles are no longer the ones it was
+built from - read every frame in the world's order, position and
+material, about a microsecond - or the field's size or a knob the grid
+reads has changed; and, on a copy of it, the frogs and the burning cells,
+the portals' footprints, the fords' prices and the labels, rebuilt only
+when that occupancy comes out different from the one they were worked
+out on. A frame copies that grid and adds its own surcharges and fields.
+Blocking a cell only ever adds and everything after it is a function of
+the occupancy, so the kept grid is the scratch one cell for cell. A test
+holds every frame of three rounds to the grid built from scratch that
+frame: the props playground with its seat shooting the drums down (twelve
+tiles dead and fires lit and burnt out in 900 frames, the layer rebuilt
+ten times and what lies on it thirteen), the portals fixture, and
+longwater with its lake (the frog's hops rebuilt what lies on the layer
+six times). Another plays two
+rounds both ways, tank for tank, and every recipe (the arenas',
+`probe-waves`, `probe-fields`, `probe-defend`) and every one of the 1,760
+rounds of the sweeps above reads line for line as before. A tick
+costs (release probe, ten rounds at seed 1000, the two builds alternated,
+two passes each; AFK as `probe-fields` runs it, the defence as
+`probe-defend`):
+
+| Map | AFK before | AFK after | Defence before | Defence after |
+|---|---|---|---|---|
+| study map (96 x 54) | 0.44 ms | 0.29 ms | 0.48 ms | 0.33 ms |
+| longwater (80 x 45) | 0.46 | 0.29 | 0.57 | 0.37 |
+| hedge-maze | 0.15 | 0.13 | | |
+| archipelago | 0.15 | 0.12 | | |
+| black-gold | 0.11 | 0.08 | | |
+| harbor-lights | 0.18 | 0.14 | | |
+| castle-moat | 0.11 | 0.08 | | |
+
+The other readers of the grid - a wave's gate, a straggler's walk, the
+linter, the dev server's `field` tool - still build theirs from scratch,
+as they ask about the world in the middle of a frame: on one frame in
+fifty to a hundred on the study map.
 
 ## 13. Patterns from shipped games
 

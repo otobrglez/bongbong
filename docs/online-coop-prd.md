@@ -1561,13 +1561,17 @@ ship a complete co-op game; 4 and 5 are stage 2.
 - **Co-op difficulty scales with seats.** Scale the wave plan by seat count
   with a tuning diff; play-test the curve with the probe's sweeps.
 - **The tick's fixed cost bounds rooms per core.** About 95 µs of every tick
-  is work that does not scale with tanks (section 3), and half of it is
+  is work that does not scale with tanks (section 3), and half of it was
   `route_grid`: the nav grid rebuilt from every obstacle, labelled, priced,
   and one Dijkstra per shared target - a field per seat plus one for the
-  frog, so eight seats are nine fields a tick. Watch tick p50 per room; if
-  it matters, build the route grid every other tick or only when a target
-  changed cell, both server-side changes no client sees, with the probe
-  fixtures as the oracle that the AI did not change.
+  frog, so eight seats are nine fields a tick. The fields are now worked
+  out only as far as they are read and the occupancy and its labels kept
+  across ticks, rebuilt only where the terrain changed
+  (docs/large-maps-follow-camera.md section 12), so what is left a tick is
+  the prices and the reads. Watch tick p50 per room; if it matters, build
+  the route grid every other tick or only when a target changed cell, both
+  server-side changes no client sees, with the probe fixtures as the oracle
+  that the AI did not change.
 - **Abuse of open rooms.** Rate limits, Turnstile, nickname filter.
 - **Trusting the client's hull (stage 3).** A modified client could report
   poses it never drove to; the validator bounds every step to the

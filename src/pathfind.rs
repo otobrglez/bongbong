@@ -6,10 +6,12 @@
 //!
 //! Kept game-agnostic in spirit (like `bt.rs`): this module only knows about
 //! a rectangular grid of blocked/open cells, not about tanks, obstacles, or
-//! any other game type. `Game::update` builds a fresh `Grid` each frame from
-//! the current obstacle layout and hands it down through `Ai::think`, in
-//! keeping with `docs/physics-engine-design.md`'s "AI decoupling" principle:
-//! the AI reasons over lightweight snapshots, never the physics world or ECS
+//! any other game type. `Game::update` hands a `Grid` of the current
+//! obstacle layout down through `Ai::think` each frame - the occupancy and
+//! its labels kept across frames and rebuilt only when the layout changes
+//! (`simulation::nav`), the prices and fields the frame's own - in keeping
+//! with `docs/physics-engine-design.md`'s "AI decoupling" principle: the AI
+//! reasons over lightweight snapshots, never the physics world or ECS
 //! directly.
 //!
 //! Two ways to route on one grid, behind the one `next_step` call:
@@ -65,6 +67,7 @@ use crate::Position;
 
 /// Connected-component labels over a `Grid`'s open cells - see
 /// `Grid::components`.
+#[derive(Clone)]
 pub struct Components {
     /// Per cell: 0 for blocked, otherwise a component id starting at 1.
     label: Vec<u32>,
@@ -113,6 +116,9 @@ pub struct Grid {
     cell_size: f32,
     cols: usize,
     rows: usize,
+    /// The clearance every obstacle is grown by, and the boundary with it
+    /// (`build`), kept so `block` can add an obstacle to a built grid.
+    margin: f32,
     blocked: Vec<bool>,
 
     /// Per portal, its nav footprint: the open cells whose centre lies
@@ -280,6 +286,17 @@ impl Grid {
         margin: f32,
         obstacles: impl Iterator<Item = (Position, f32)>,
     ) -> Self {
+        let mut grid = Self::open(width, height, cell_size, margin);
+        for (center, half_extent) in obstacles {
+            grid.block(center, half_extent);
+        }
+        grid
+    }
+
+    /// `build` with no obstacle: only the area's own boundary blocked, by
+    /// the same `margin` - the grid `block` adds obstacles to one at a time
+    /// (`simulation::nav` keeps one that way across frames).
+    pub fn open(width: f32, height: f32, cell_size: f32, margin: f32) -> Self {
         let cols = ((width / cell_size).ceil() as usize).max(1);
         let rows = ((height / cell_size).ceil() as usize).max(1);
         let mut blocked = vec![false; cols * rows];
@@ -311,42 +328,12 @@ impl Grid {
             }
         }
 
-        for (center, half_extent) in obstacles {
-            let reach = half_extent + margin;
-            // Lowest/highest cell index whose center (at `(i + 0.5) *
-            // cell_size`) falls inside `[center-reach, center+reach]`:
-            // solving `(i + 0.5) * cell_size >= center - reach` for the
-            // lower bound and the mirror for the upper. A center landing
-            // exactly on the boundary counts as blocked (it would leave
-            // exactly zero hull clearance).
-            let min_col_raw = ((center.x - reach) / cell_size - 0.5).ceil() as isize;
-            let max_col_raw = ((center.x + reach) / cell_size - 0.5).floor() as isize;
-            let min_row_raw = ((center.y - reach) / cell_size - 0.5).ceil() as isize;
-            let max_row_raw = ((center.y + reach) / cell_size - 0.5).floor() as isize;
-            // Entirely outside the grid on at least one axis - no cell to mark.
-            if max_col_raw < 0
-                || min_col_raw >= cols as isize
-                || max_row_raw < 0
-                || min_row_raw >= rows as isize
-            {
-                continue;
-            }
-            let min_col = min_col_raw.clamp(0, cols as isize - 1) as usize;
-            let max_col = max_col_raw.clamp(0, cols as isize - 1) as usize;
-            let min_row = min_row_raw.clamp(0, rows as isize - 1) as usize;
-            let max_row = max_row_raw.clamp(0, rows as isize - 1) as usize;
-            for row in min_row..=max_row {
-                for col in min_col..=max_col {
-                    blocked[row * cols + col] = true;
-                }
-            }
-        }
-
         let cost = vec![1; cols * rows];
         Self {
             cell_size,
             cols,
             rows,
+            margin,
             blocked,
             portals: Vec::new(),
             portal_centres: Vec::new(),
@@ -356,6 +343,88 @@ impl Grid {
             fields: Vec::new(),
             comps: None,
         }
+    }
+
+    /// Block the cells one obstacle covers, as `build` does for each of
+    /// its own: every cell whose centre lies within `half_extent + margin`
+    /// of `center` on both axes. Blocking only ever adds, so the order the
+    /// obstacles come in makes no difference to the grid. Occupancy is
+    /// what the portals' footprints, the labels and the fields are worked
+    /// out from, so every obstacle comes before any of them.
+    pub fn block(&mut self, center: Position, half_extent: f32) {
+        debug_assert!(
+            self.portal_cells.is_empty() && self.comps.is_none() && self.fields.is_empty(),
+            "the portals, the labels and the fields read the occupancy: block every obstacle first"
+        );
+        let (cell_size, cols, rows) = (self.cell_size, self.cols, self.rows);
+        let reach = half_extent + self.margin;
+        // Lowest/highest cell index whose center (at `(i + 0.5) *
+        // cell_size`) falls inside `[center-reach, center+reach]`:
+        // solving `(i + 0.5) * cell_size >= center - reach` for the
+        // lower bound and the mirror for the upper. A center landing
+        // exactly on the boundary counts as blocked (it would leave
+        // exactly zero hull clearance).
+        let min_col_raw = ((center.x - reach) / cell_size - 0.5).ceil() as isize;
+        let max_col_raw = ((center.x + reach) / cell_size - 0.5).floor() as isize;
+        let min_row_raw = ((center.y - reach) / cell_size - 0.5).ceil() as isize;
+        let max_row_raw = ((center.y + reach) / cell_size - 0.5).floor() as isize;
+        // Entirely outside the grid on at least one axis - no cell to mark.
+        if max_col_raw < 0 || min_col_raw >= cols as isize || max_row_raw < 0 || min_row_raw >= rows as isize {
+            return;
+        }
+        let min_col = min_col_raw.clamp(0, cols as isize - 1) as usize;
+        let max_col = max_col_raw.clamp(0, cols as isize - 1) as usize;
+        let min_row = min_row_raw.clamp(0, rows as isize - 1) as usize;
+        let max_row = max_row_raw.clamp(0, rows as isize - 1) as usize;
+        for row in min_row..=max_row {
+            for col in min_col..=max_col {
+                self.blocked[row * cols + col] = true;
+            }
+        }
+    }
+
+    /// This grid without its flow fields: the same occupancy, portals,
+    /// prices and labels, ready for fields of its own (`add_field`) - how a
+    /// frame's routing grid starts from the one the round keeps across
+    /// frames (`simulation::nav`).
+    pub fn without_fields(&self) -> Grid {
+        Grid {
+            cell_size: self.cell_size,
+            cols: self.cols,
+            rows: self.rows,
+            margin: self.margin,
+            blocked: self.blocked.clone(),
+            portals: self.portals.clone(),
+            portal_cells: self.portal_cells.clone(),
+            portal_centres: self.portal_centres.clone(),
+            hop_cost: self.hop_cost,
+            cost: self.cost.clone(),
+            fields: Vec::new(),
+            comps: self.comps.clone(),
+        }
+    }
+
+    /// Whether `other` covers the same cells and blocks exactly the ones
+    /// this grid does: what `with_portals` and `label` work out is a
+    /// function of that, the portals' anchors and their knobs.
+    pub fn same_occupancy(&self, other: &Grid) -> bool {
+        self.cols == other.cols && self.rows == other.rows && self.cell_size == other.cell_size && self.blocked == other.blocked
+    }
+
+    /// Whether `other` is this grid cell for cell: its occupancy, margin,
+    /// prices, portals and labels and the goals of its fields - so every
+    /// query one answers, the other answers the same.
+    #[cfg(test)]
+    pub(crate) fn same_as(&self, other: &Grid) -> bool {
+        self.same_occupancy(other)
+            && self.margin == other.margin
+            && self.cost == other.cost
+            && self.portals == other.portals
+            && self.portal_cells == other.portal_cells
+            && self.portal_centres == other.portal_centres
+            && self.hop_cost == other.hop_cost
+            && self.comps.as_ref().map(|c| &c.label) == other.comps.as_ref().map(|c| &c.label)
+            && self.goals().eq(other.goals())
     }
 
     /// Make every cell whose centre a position in `cells` falls in cost
@@ -504,8 +573,8 @@ impl Grid {
 
     /// Run the connected-component flood fill (`components`) once and
     /// keep the labels, so `connected` answers from them for the rest of
-    /// this grid's life. Occupancy never changes after `build`, so the
-    /// labels cannot go stale.
+    /// this grid's life. Occupancy never changes once they are worked out
+    /// (`block` refuses to), so the labels cannot go stale.
     pub fn label(&mut self) {
         self.comps = Some(self.components());
     }
@@ -1819,6 +1888,44 @@ mod tests {
         let walled = Grid::build(SIDE, SIDE, CELL, 0.0, wall(5, &[]).into_iter());
         let far_side = |p: Position| p.x > 6.0 * CELL;
         assert_eq!(walled.nearest_open_reachable(at(0, 0), 100, far_side), None);
+    }
+
+    /// A grid built an obstacle at a time (`open`, then `block`) is the
+    /// grid `build` makes of the same obstacles, whatever order they come
+    /// in, and so is everything worked out on it - the portals, the
+    /// prices, the labels; `without_fields` keeps all of that and leaves
+    /// the fields behind.
+    #[test]
+    fn a_grid_built_an_obstacle_at_a_time_is_the_built_grid_in_any_order() {
+        let mut obstacles = wall(5, &[2, 7]);
+        // Overlapping shapes, one of them off the cell grid.
+        obstacles.extend([block(7, 7), block(8, 7), (Position::new(13.0, 61.0), 6.0), (Position::new(30.0, 330.0), 25.0)]);
+        let finish = |grid: Grid| {
+            let mut grid = grid.with_portals(&[corner(1, 1), corner(7, 2)], RADIUS, 3.0);
+            grid.weigh([at(3, 3), at(3, 4)].into_iter(), 4);
+            grid.label();
+            grid
+        };
+        let built = finish(Grid::build(SIDE, SIDE, CELL, 3.0, obstacles.clone().into_iter()));
+        assert!(!built.portal_cells().is_empty(), "the case this is about: a grid with portals");
+        let mut reversed = Grid::open(SIDE, SIDE, CELL, 3.0);
+        for &(center, half_extent) in obstacles.iter().rev() {
+            reversed.block(center, half_extent);
+        }
+        let reversed = finish(reversed);
+        assert!(built.same_as(&reversed), "an obstacle at a time, in reverse, is the built grid");
+        for a in 0..100 {
+            for b in 0..100 {
+                let (from, to) = (at(a % 10, a / 10), at(b % 10, b / 10));
+                assert_eq!(built.next_step(from, to), reversed.next_step(from, to), "{from:?} -> {to:?}");
+                assert_eq!(built.connected(from, to), reversed.connected(from, to), "{from:?} -> {to:?}");
+            }
+        }
+        let mut fielded = built.without_fields();
+        assert!(fielded.same_as(&built), "a copy is the grid");
+        fielded.add_field(at(9, 9));
+        assert!(!fielded.same_as(&built), "a field is part of what is compared");
+        assert!(fielded.without_fields().same_as(&built), "and it is left behind");
     }
 
     #[test]

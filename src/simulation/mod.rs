@@ -12,7 +12,8 @@
 //! the small helpers those phases share; `weapons` fires shots and ticks
 //! queued ones; `hits` is the swept projectile hit test over a per-frame
 //! terrain snapshot; `combat` applies damage, knockback, rams and
-//! explosions; `engage` hands attacking enemies distinct engagement slots.
+//! explosions; `engage` hands attacking enemies distinct engagement slots;
+//! `nav` builds the nav grid the AI routes by and keeps it across frames.
 //!
 //! Determinism: all round randomness flows from the one seeded `SmallRng`
 //! in `Game::rng` (never `rand::rng()` on the simulation path, never
@@ -29,6 +30,7 @@ mod field;
 mod flame;
 mod hits;
 mod missiles;
+mod nav;
 pub mod present;
 mod props;
 mod towers;
@@ -921,6 +923,14 @@ pub struct Game {
     /// out only as far as it is read is held to.
     #[cfg(test)]
     pub(crate) whole_fields: bool,
+    /// The nav grid kept across frames (`nav`): its occupancy and labels,
+    /// rebuilt only where the terrain changed. Emptied by `init`.
+    pub(crate) nav: nav::NavCache,
+    /// Tests only: build every frame's routing grid from scratch
+    /// (`route_grid`) rather than on the kept one, the yardstick the kept
+    /// grid is held to.
+    #[cfg(test)]
+    pub(crate) scratch_nav: bool,
 }
 
 /// Per-frame scratch state threaded through `Game::update`'s phases: the
@@ -1142,6 +1152,9 @@ impl Game {
         self.tower_ruins.clear();
         self.frame = 0;
         self.hit_history.clear();
+        // The water and the portals are the round's: what was kept of the
+        // last round's nav grid goes with them.
+        self.nav.clear();
         self.seat_view = [None; MAX_SEATS];
         // `frame` starts over, so an update number held from the last
         // round would name one of this round's.
@@ -1606,11 +1619,15 @@ impl Game {
         self.tick_timers(dt, &mut rng);
         let terrain = Terrain::build(&self.world, width, height, &self.grass_cells, &self.water);
         // One nav grid for the whole frame - labelled, priced and with a
-        // flow field per shared target (`route_grid`) - passed to the
-        // phases that need it rather than parked on `Frame`: a borrow
-        // living there would alias every `&mut Frame` the other phases
-        // take.
-        let grid = self.route_grid(width, height);
+        // flow field per shared target (`route_grid_on`), on the occupancy
+        // and labels the round keeps across frames (`refresh_nav`) -
+        // passed to the phases that need it rather than parked on `Frame`:
+        // a borrow living there would alias every `&mut Frame` the other
+        // phases take.
+        self.refresh_nav(width, height);
+        let grid = self.route_grid_on(self.nav.base().without_fields(), width, height);
+        #[cfg(test)]
+        let grid = if self.scratch_nav { self.route_grid(width, height) } else { grid };
         let mut f = Frame::new(dt, width, height, rng, terrain);
         for (owned, &frame) in f.shoves.owned.iter_mut().zip(&self.seat_owned) {
             *owned = frame != 0 && frame == self.frame;
@@ -3928,77 +3945,6 @@ impl Game {
         (movers, enemy_indices)
     }
 
-    /// The obstacle-occupancy grid the AI routes by this frame (see
-    /// `pathfind::Grid`), rebuilt each frame from the current terrain and
-    /// built exactly the same way by the map linter, so the two can't
-    /// drift. The margin is the worst-case tank in the roster, so no route
-    /// is too narrow for a titan. The frog is included: it is a solid
-    /// static body that blocks movement exactly like a tile and can move.
-    /// The battlefield's own boundary needs no entry here - `Grid::build`
-    /// insets its outer edge by the same margin.
-    ///
-    /// Tiles are taken at the *seam-closed* extent
-    /// (`battlefield::tile_half_extent`, the same one `hits::Terrain` and
-    /// the physics colliders use), reduced to the larger axis because
-    /// `Grid::build` carries one scalar per obstacle. The plain
-    /// `hull_size() * 0.5` this used to pass is 12px against a run's real
-    /// 16px, i.e. the planner modelling walls as *smaller* than the solver
-    /// does - the exact direction of error `maplint::check_planner_physics`
-    /// exists to catch, which only stayed silent because the old 48px cell
-    /// pitch happened to skip the band where it would have fired.
-    pub(crate) fn nav_grid(&self, width: f32, height: f32) -> Grid {
-        // Trees are left out of the seam-close set for the same reason
-        // `hits::Terrain::build` leaves them out: they never close a seam,
-        // here or in physics, so they must not close anybody else's.
-        let seam_cells: HashSet<(i32, i32)> = self
-            .world
-            .query::<&Obstacle>()
-            .iter()
-            .filter(|o| !o.material.is_tree())
-            .map(|o| battlefield::pos_to_cell(o.position))
-            .collect();
-        // An active portal network joins the grid as one hub the planner
-        // may route through (`Grid::with_portals`); with fewer than two
-        // portals the grid is exactly the plain one.
-        let t = tuning();
-        let mut grid = Grid::build(
-            width,
-            height,
-            PATHFIND_CELL_SIZE,
-            battlefield::max_tank_clearance_half_extent(),
-            self.world
-                .query::<&Obstacle>()
-                .iter()
-                .map(|o| {
-                    let (gx, gy) = battlefield::pos_to_cell(o.position);
-                    let half = battlefield::tile_half_extent(
-                        o.material,
-                        &seam_cells,
-                        gx,
-                        gy,
-                        o.hull_size() * 0.5,
-                    );
-                    (o.position, half.x.max(half.y))
-                })
-                .chain(self.world.query::<&Frog>().iter().map(|fr| {
-                    (fr.position, FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1))
-                }))
-                // A burning cell is a wall for as long as it burns: the AI
-                // routes around a pool rather than through it. A tiny
-                // half-extent, so only the margin decides how wide the
-                // detour is.
-                .chain(self.fires.iter().map(|fire| (fire.position(), 1.0)))
-                // Deep water is a wall (docs/water.md): the same cells the
-                // static colliders stand on, at a cell's half-extent.
-                .chain(self.water.deep_cells().map(|p| (p, OBSTACLE_GRID_SIZE * 0.5))),
-        )
-        .with_portals(self.active_portals(), t.portal_trigger_radius, t.portal_hop_cost);
-        // A ford is open but dear: the router wades only when the dry way
-        // round costs more.
-        grid.weigh(self.water.shallow_cells(), tuning().water_ford_path_cost.max(1) as u32);
-        grid
-    }
-
     /// The map cell nearest `near` a tank can be put down on in this
     /// round's terrain (`battlefield::drop_cell` over `grid`, this round's
     /// `nav_grid`): a worst-case tank's box clear of every tile and deep
@@ -4033,78 +3979,6 @@ impl Game {
     /// server share one rule.
     fn active_portals(&self) -> &[Position] {
         if self.portals_active() { &self.portals } else { &[] }
-    }
-
-    /// The frame's routing grid: `nav_grid` labelled for O(1) reachability,
-    /// priced with the tactical surcharges, and carrying one flow field
-    /// per target the pack shares - every live player and, while it
-    /// lives, the player's frog (a hunter's quarry). Enemies then route
-    /// toward those by reading the field, which is worked out only as far
-    /// as the frame reads it (`pathfind`), every answer the whole field's;
-    /// only a target of their own (an engagement slot, a wander waypoint,
-    /// a pickup) still costs a search.
-    ///
-    /// The lane surcharge walks the cells in front of each live player's
-    /// barrel (`Tank::rotation` is the axis a shot flies along) out to
-    /// `route_lane_cells`, stopping at the first blocked cell - a shell
-    /// flies further, but no tank can stand there anyway. The crowd
-    /// surcharge is the cell each live enemy stands in. A field reads the
-    /// prices as it is worked out, so every one of them is applied here,
-    /// before the first field is added, and nowhere else. No RNG: a
-    /// surcharge is a pure function of positions, and the field's ties
-    /// break on cell index.
-    pub(crate) fn route_grid(&self, width: f32, height: f32) -> Grid {
-        let mut grid = self.nav_grid(width, height);
-        let t = tuning();
-        let players: Vec<(Position, f32)> = self
-            .seats_on_field()
-            .into_iter()
-            .flatten()
-            .filter_map(|e| with_tank(&self.world, e, |tank| (!tank.is_wreck()).then_some((tank.position, tank.rotation))))
-            .collect();
-        if t.route_lane_cost > 0 {
-            let mut lane = Vec::new();
-            for &(pos, rotation) in &players {
-                let Some(dir) = Dir::from_rotation(rotation) else {
-                    continue;
-                };
-                let step = dir.vec();
-                let mut at = pos;
-                for _ in 0..t.route_lane_cells {
-                    if grid.blocked_ahead(at, step) {
-                        break;
-                    }
-                    at = Position::new(at.x + step.x * PATHFIND_CELL_SIZE, at.y + step.y * PATHFIND_CELL_SIZE);
-                    lane.push(at);
-                }
-            }
-            grid.surcharge(lane.into_iter(), t.route_lane_cost as u32);
-        }
-        if t.route_crowd_cost > 0 {
-            let standing: Vec<Position> =
-                self.world.query::<(&Tank, &Ai)>().iter().filter(|(tank, _)| !tank.is_wreck()).map(|(tank, _)| tank.position).collect();
-            grid.surcharge(standing.into_iter(), t.route_crowd_cost as u32);
-        }
-        // The player's towers and the ooze on the ground (docs/defence-
-        // towers-prd.md section 9): cells an enemy would rather go round.
-        if !self.towers.is_empty() {
-            grid.surcharge(self.player_tower_reach(width, height).into_iter(), t.route_tower_cost as u32);
-        }
-        if !self.ooze.is_empty() {
-            grid.surcharge(self.ooze_route_cells().into_iter(), t.bio_puddle_path_cost as u32);
-        }
-        grid.label();
-        for &(pos, _) in &players {
-            grid.add_field(pos);
-        }
-        if let Some(frog) = self.frog.and_then(|e| with_frog(&self.world, e, |fr| (!fr.is_dead()).then_some(fr.position))) {
-            grid.add_field(frog);
-        }
-        #[cfg(test)]
-        if self.whole_fields {
-            grid.settle_fields();
-        }
-        grid
     }
 
     /// The routing cell a world position falls in (`PATHFIND_CELL_SIZE`
