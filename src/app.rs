@@ -170,6 +170,28 @@ fn explicit_weather(args: &Args) -> Option<crate::map::Weather> {
     args.weather
 }
 
+/// The map asked for outright, played free of the levels: `-m` on a
+/// desktop; on the web the page's `?map=NAME` (a shipped map or a study
+/// map, `map::named_map`), honoured in a dev-tools build only - the local
+/// web build and the PR previews - so production always opens on a level.
+fn explicit_map(args: &Args) -> Option<crate::map::MapFile> {
+    #[cfg(all(target_os = "emscripten", feature = "dev-tools"))]
+    {
+        let _ = args;
+        let name = crate::map::map_from_url(&page_string(PAGE_INVITE))?;
+        return crate::map::named_map(&name)
+            .map_err(|e| eprintln!("[map] ?map={name}: {e}; opening on a level"))
+            .ok();
+    }
+    #[cfg(all(target_os = "emscripten", not(feature = "dev-tools")))]
+    {
+        let _ = args;
+        return None;
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    args.map.clone()
+}
+
 /// The languages this platform prefers, most preferred first, as the
 /// platform spells them: the page's `navigator.languages` on the web,
 /// SDL's list on iOS, the system properties on Android, `sys-locale`'s
@@ -625,8 +647,15 @@ fn parse_weather(s: &str) -> Result<crate::map::Weather, String> {
     })
 }
 
+/// `-m`'s value: a map file, or failing that a map compiled into this
+/// build by name (`map::named_map` - `-m grand-campaign`, `-m frontier` in
+/// a dev-tools build).
 fn parse_map(s: &str) -> Result<crate::map::MapFile, String> {
-    crate::map::MapFile::load(std::path::Path::new(s))
+    let path = std::path::Path::new(s);
+    if path.exists() {
+        return crate::map::MapFile::load(path);
+    }
+    crate::map::named_map(s).map_err(|e| format!("{s}: not a map file, and {e}"))
 }
 
 /// The battlefield a normal (non-`--editor`) round loads when `-m`/`--map`
@@ -795,8 +824,8 @@ pub fn run(args: Args) {
     // this player has reached, or on `--level`; `-m` is free play on the
     // map it names.
     let campaign = Campaign::new(Levels::shipped(), load_progress().as_deref());
-    let map = match &args.map {
-        Some(map) => map.clone(),
+    let map = match explicit_map(&args) {
+        Some(map) => map,
         None => {
             let start = match args.level.as_deref() {
                 Some(spec) => campaign.levels.find(spec).unwrap_or_else(|| {

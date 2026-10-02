@@ -743,6 +743,50 @@ pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("grand-campaign", include_str!("../maps/grand-campaign.toml")),
 ];
 
+/// The study maps (docs/large-maps-follow-camera.md, `maps/study/`,
+/// `maps/crossplay/`), embedded in a dev-tools build only - the local web
+/// build and the PR previews - so a tester can open them by name
+/// (`?map=frontier`, `named_map`) on a build with no `maps/` directory.
+/// Not offered by the Load list or the lobby, and never in production.
+#[cfg(feature = "dev-tools")]
+pub const DEV_MAPS: &[(&str, &str)] = &[
+    ("frontier", include_str!("../maps/study/frontier.toml")),
+    ("arena", include_str!("../maps/crossplay/arena.toml")),
+    ("bunker", include_str!("../maps/crossplay/bunker.toml")),
+    ("crossroads", include_str!("../maps/crossplay/crossroads.toml")),
+    ("strip", include_str!("../maps/crossplay/strip.toml")),
+];
+
+/// A map by name, from the maps compiled into this build: the shipped
+/// ones, then, in a dev-tools build, the study maps (`DEV_MAPS`).
+pub fn named_map(name: &str) -> Result<MapFile, String> {
+    #[cfg(feature = "dev-tools")]
+    let dev = DEV_MAPS;
+    #[cfg(not(feature = "dev-tools"))]
+    let dev: &[(&str, &str)] = &[];
+    let (_, text) = SHIPPED_MAPS
+        .iter()
+        .chain(dev)
+        .find(|(n, _)| *n == name)
+        .ok_or_else(|| format!("no map named {name:?}"))?;
+    let mut map = MapFile::from_toml_str(text).map_err(|e| format!("parsing map {name}: {e}"))?;
+    map.name = Some(name.to_string());
+    Ok(map)
+}
+
+/// The `map` query parameter of a page URL, as written - the web build's
+/// `-m`, which `app.rs` honours in a dev-tools build only. `None` when the
+/// URL carries none.
+pub fn map_from_url(url: &str) -> Option<String> {
+    let query = url.split('#').next()?.split_once('?')?.1;
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(name, _)| *name == "map")
+        .map(|(_, value)| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 /// Whether this build can write a map to disk: native yes; web and iOS no
 /// (their edits live in memory for the session - docs/game-editor-fusion.md;
 /// an app bundle is read-only).
@@ -812,6 +856,22 @@ pub fn list_maps() -> Vec<String> {
 #[cfg(test)]
 mod view_class_tests {
     use super::*;
+
+    /// `?map=` is read off any page URL, and a name finds a shipped map
+    /// and, in a dev-tools build, every study map.
+    #[test]
+    fn a_page_url_names_a_map() {
+        assert_eq!(map_from_url("http://localhost:4321/?map=frontier"), Some("frontier".into()));
+        assert_eq!(map_from_url("https://x.workers.dev/?rooms=wss://r/pr-67&map=grand-campaign#top"), Some("grand-campaign".into()));
+        assert_eq!(map_from_url("https://bongbong.io/?map="), None);
+        assert_eq!(map_from_url("https://bongbong.io/j/AK7QX"), None);
+        assert_eq!(named_map("grand-campaign").expect("shipped").name.as_deref(), Some("grand-campaign"));
+        assert!(named_map("nowhere").is_err());
+        #[cfg(feature = "dev-tools")]
+        for (name, _) in DEV_MAPS {
+            assert!(named_map(name).is_ok(), "{name} parses");
+        }
+    }
 
     /// The class is the map's size unless its `view` key says otherwise:
     /// the standard field is shown whole, the study map follows, and the
