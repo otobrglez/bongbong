@@ -190,6 +190,15 @@ camera back on the whole canvas; it is dim while the canvas is already at
 FIT. The camera itself - zoom, pan, the gestures, edge scroll - is
 docs/large-maps-follow-camera.md section 9 and section 10 below.
 
+`CHECK` (`SLOT_CHECK`), after FIT, opens the CHECK panel: the clear check's
+row, then the map linter's findings, a jump to each and its quick fix.
+After it a chequered flag (`SLOT_CLEAR`) is the clear check at a glance:
+green with the par beside it once this revision of the map has been won
+from plain PLAY, dim while it has not; a press opens the CHECK panel too.
+`PLAY HERE` (`SLOT_HERE`), just before PLAY, starts the round from the
+middle of the view instead of the map's start. All three are
+docs/large-maps-follow-camera.md section 9.
+
 ### Dropdowns
 
 - Open below the button, over the field, one panel in the editor's existing

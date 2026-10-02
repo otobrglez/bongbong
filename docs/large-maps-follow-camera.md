@@ -520,6 +520,35 @@ shape with the bar at the standard arena's size (`editor::camera`).
   upload to 0.3 ms and 16 kB in a debug build.
 - **Thumbnails in the Load list** from `mapshot`, since a large map's name
   says less about it than its picture.
+- **Play from here.** PLAY starts from the map's start; PLAY HERE, beside
+  it in the bar, puts seat 1 on the drivable cell nearest the middle of
+  the view - with `battlefield::enemy_spawn_legal`'s clearance, out of
+  deep water and off a portal, in the part of the map the map's own start
+  drives in (`mode::play_here_cell`) - without touching the map or its
+  history, and the round's camera opens there. Seat 2 on a couch starts
+  beside seat 1. A round from here is a test: it wins no level and clears
+  nothing.
+- **The CHECK panel.** The linter the dev server's `lint` runs
+  (`maplint::lint_map`), its findings carrying the cells they are about,
+  listed errors first in a paged panel hanging from the bar. A finding's
+  row pans and zooms the builder's camera onto its cells and marks them;
+  where the fix is unambiguous - a penned or missing start, a cut-off or
+  crowded player 2, a lone portal, a gate off the edge - FIX makes it as
+  one undo step. It runs when the panel opens and again after each edit
+  while it is open: about 29 ms on the 96 x 54 study map in a debug build.
+- **A loupe on touch.** While one finger paints where a cell is drawn
+  under 12 mm (`builder_loupe_cell_mm`), a magnified view of the cells
+  under it stands above the finger (left of it by the right edge, beside
+  it where there is no room above): the cell the stroke paints outlined,
+  1.5 times the canvas on the nearest whole-block scale, drawn into its
+  own small target so nothing over the canvas shows in it. A mouse gets
+  none.
+- **The clear check.** A revision of the map - a hash of its TOML - counts
+  as cleared once its author wins it from plain PLAY, alone, with no edits
+  since, and the clear time is its par. The builder shows it beside CHECK
+  and in the CHECK panel; SAVE writes the stamp into the map file, and
+  `--host -m` hosts a map of one's own only when its stamp names its own
+  revision (a shipped map as it ships needs none).
 
 ## 10. Cross-play and platform notes
 
@@ -867,8 +896,10 @@ play showed), its gestures from raw touch points with a slop
 (`editor::gesture`), the paint threshold, edge scroll, the map size
 setting with its anchor, incremental ground (`GroundGrid::repaint`) and
 the minimap navigator (`MapEditor::navigator_rect`, repainted per
-stroke) - the loupe, play from here, the lint panel, the clear check,
-select and stamps, fills and scatter and thumbnails are still to come; from step 7 the Android `appCategory`, maps capped at
+stroke), play from here (`mode::Session::play_here`), the lint panel (the
+CHECK panel), the loupe (`MapEditor::loupe`) and the clear check
+(`MapFile::revision`, `MapEditor::par`) - select and stamps, fills and
+scatter and thumbnails are still to come; from step 7 the Android `appCategory`, maps capped at
 what the wire carries, the laser's reach, the mark caps and the bounded
 AI (`simulation/field.rs`: chained alerts with leashes, far enemies
 thinking less, spawns and gates by walk outside every sight box,
