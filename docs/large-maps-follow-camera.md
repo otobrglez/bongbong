@@ -640,22 +640,81 @@ crossing far from the fight strands it: sent round the lake by a far ford,
 it is out of sight longer than `enemy_alert_hold_seconds`, loses its alert
 and drives home - the causeways keep the usual way across within sight.
 
-Still open, and the most visible fault on a map that size: a hull riding
-the far edge of a nav row, nearer the next row's centre than
-`ai_dir_switch_margin_px`, can never beat the margin in `Ai::steer_toward`
-for a step into that row, so it drives past every turning its route
-takes, to and fro between two walls, for the rest of the round. On
-longwater with a perfect defence - every enemy destroyed the moment it
-comes within 400 px of the seat or the frog - four rounds in six still had
-a tank out after seven minutes: three driving up and down the east gates'
-road, the fourth back home on its leash, its alert run out. Letting a
-field map's hull take such a step on any gain at all cleared every
-stranded walk from 30-round sweeps of longwater and the study map, but
-about doubled `probe-fields`' jitter on the 40-wide levels, past their
-ceilings; taking it only where the margin cannot be beaten still raised
-hedge-maze, archipelago and harbor-lights past them, and so did that
-gated to hulls out of every seat's sight, which also left the tanks
-stranded within sight of the fight.
+**Lanes.** The most visible fault on a map that size was a hull that could
+not take its route's turn. A hull does not turn on the spot: its tracks
+scrub off the speed along its old heading at their grip
+(`tank_turn_grip_force` over its mass), so it slides on for v²/2a after it
+turns - 26 px for an assault at an enemy's pace, up to 75 for the heaviest
+hull at its fastest. Judged by the switch margin alone
+(`ai_dir_switch_margin_px`, beaten against the next cell's centre), a turn
+came once the hull was in the turning, and the slide carried it past the
+centre line of the row or column it turned into, to its far edge - nearer
+the next one's centre than the margin, so no step into that one could beat
+the margin again, and a hull whose route turned that way drove past every
+turning, to and fro between two walls, for the rest of the round. With a
+perfect defence - every enemy destroyed the moment it comes within 400 px
+of a seat or the frog (the probe's `--scenario defend`, `just
+probe-defend`) - 16 rounds in 20 on longwater and 12 in 20 on the study
+map still had a tank out after seven minutes. Letting such a hull step on
+any gain at all cleared those walks but about doubled `probe-fields`'
+jitter on the 40-wide levels: turned at once, a hull still turns in the
+wrong place.
+
+On a field map a hull now reads its route as lanes - the rows and columns
+of nav cells it drives along (`ai::Ai::lane_turn`). It turns where its
+slide ends on the centre line of the cell the route turns in: its rest
+point, position plus slide, reaches that line on the think nearest the
+crossing, the turn seen up to four cells ahead (`Grid::route_ahead`). So
+it drives its lanes on their centre lines, and where it rides across one
+plays no part in when it turns. A turn it reaches too late to land within
+half a cell of the line is left to the route from further on, though never
+so strictly that the cell it turns in offers no think at all; one started
+before that cell waits while a cell beside those it still crosses is
+blocked; and every turn waits out the same hold as any other switch. A
+flow field's route is read this way throughout, straightened along the
+hull's heading where that costs nothing - the straight step first, then a
+turn, then a step back - so a route that may turn now or later turns once,
+where it has to, rather than in a staircase along the first wall it meets.
+A searched route (an engagement slot, a waypoint, a pickup, home) keeps
+the margin: a search's path is one of many as cheap toward a target that
+moves, and read as lanes it put more tanks into the 40-wide levels'
+corridors at once - clustering up 18 % and pile-ups 11 % over their
+sweeps. Only where the margin can never turn the hull - on the edge of its
+lane on the side the route turns to, where a margin turn's own slide
+leaves it (`ai::margin_never_turns`) - is a searched route's turn a lane
+turn too: on the study map that edge had kept a wave tank chasing its
+engagement slot driving from wall to wall for the rest of the round. And
+since a lane turn comes the slide's length early, for a moment the hull's
+centre still stands in the lane it is leaving, whose cell ahead can be the
+very wall the turn was timed to clear: the obstacle-ahead override judges
+that cell from where the slide across will leave the hull
+(`Ai::walks_into_wall`), or a hull entering a one-lane gap was thrown back
+and forth across its mouth. Arenas keep the margin alone and replay as
+before; `ai_lane_turns` off is the old steering on every map.
+
+With the defence every round now ends, on both maps and both seed sets (20
+of 20 each); a tank's walk to it has a p90 of 17.1 s on longwater against
+34.1 s, and 18.4 s on the study map against 29.6 s, the longest 51 s
+against 208 s and 86 s against 302 s. Over 30-round sweeps at seed 1000 -
+AFK and advancing, one seat and two - never-arrived went from 5 to 0 on
+longwater and from 3 to 0 on the study map, the walk to the fight's p90
+from 15.8-17.7 s to 12.0-14.0 s and from 18.0-21.3 s to 14.4-16.4 s, and
+the longest walk from 51-86 s to 17-34 s and from 22-86 s to 20-32 s. On
+the five 40-wide levels, eight 30-round sweeps each (seeds 1000 and 2000),
+churn fell by a fifth, pile-ups by a sixth, border-stuck by an eighth,
+jitter by 4 % and clustering held, but hedge-maze's jitter rose 9 %, in
+its one-lane gaps, and harbor-lights' clustering and pile-ups by a
+quarter, at its seat's north firing slot, which the fight now reaches
+sooner. Their never-arrived count went from 21 to 25, all of them frogs'
+guards and hunters - at a frog, fleeing on their last hit points, on a
+detour - which the probe counts because only a seat ends a walk. The arenas'
+recipes read as before, line for line, and `probe-fields` was re-baselined
+(the justfile says how). A tick costs no more: 0.61 ms against 0.64 on
+longwater and 0.55 against 0.57 on the study map (AFK, ten rounds, the two
+builds alternated). A stranding of the other kind remains possible: a wave
+tank that portals to a pickup far from the fight can lose its alert there
+and drive home on its leash, as one did on the study map before the
+obstacle check re-timed that round - the pacing above, not the steering.
 
 ## 13. Patterns from shipped games
 
@@ -805,9 +864,9 @@ AI (`simulation/field.rs`: chained alerts with leashes, far enemies
 thinking less, spawns and gates by walk outside every sight box,
 re-entry through the gate nearest the living seats, `just
 probe-fields`) and a first field map, free play rather than a level
-(`longwater`, section 12) - the pacing director, stragglers re-rolled
-through a nearer gate, flow fields bounded to the seats and a turn a hull
-on the edge of its row can take are still to come.
+(`longwater`, section 12) and lanes, a turn a hull on the edge of its row
+can take (section 12) - the pacing director, stragglers re-rolled through
+a nearer gate and flow fields bounded to the seats are still to come.
 
 ## 15. Decisions
 

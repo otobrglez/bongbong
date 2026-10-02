@@ -79,28 +79,51 @@ probe-fixtures:
 # 96 x 54 study map, longwater (the shipped 80 x 45 free-play field) and
 # the five 40-wide levels, AFK, at a pinned seed; the maps/test/ fixtures
 # stay arenas (`view = "whole"`), so this is where a change to the
-# field-map AI shows. Ceilings are each kind's maximum over the six maps
-# first swept, recorded 2026-10-02 - re-baseline consciously, never to go
-# green: border-stuck=3 is hedge-maze (enemies spawned in the maze's lanes
-# along its top and bottom edge, which they drive for their first
-# seconds); jitter=23 is harbor-lights (enemies weaving along the road
-# between its building blocks to the player's side of the river - the
-# arena's rules read 12 there, with the band spawning beside the player);
-# spin=5, churn=20, clustering=6 and pile-up=6 are archipelago (a Hunt whose
-# hunters and guards crowd the frogs' islands; the arena's rules read 5,
-# 16, 10 and 8). The study map reads border-stuck=1 jitter=7 churn=17 and
-# meets the fight about 13 s in, where the arena's rules read jitter=16
-# churn=22 clustering=3 pile-up=3 and walked a wave tank to the fight for
-# up to 47 s. Longwater, added after them, reads jitter=2 churn=11 and
-# nothing else - inside every ceiling, none raised for it - and meets the
-# fight about 11 s in; in one of its ten rounds (0x3f1) two of the first
-# wave are still out at 60 s, riding the edge of a nav row past their
-# turning (docs/large-maps-follow-camera.md section 12, still open), which
-# no kind counts within a minute. Prints first contact and ms per tick
-# beside the anomalies. Not in CI: well over two minutes in a debug build,
-# the study map alone more than one.
+# field-map AI shows. Ceilings are each kind's maximum over the seven maps,
+# recorded 2026-10-02 and re-baselined the same day for lanes (a hull turns
+# where its slide ends on the centre line of the lane it turns into,
+# docs/large-maps-follow-camera.md section 12) - re-baseline consciously,
+# never to go green. Lanes re-time every round, and over eight 30-round
+# sweeps of each 40-wide level (seeds 1000 and 2000, AFK and advancing, one
+# seat and two) every kind's total held or fell - jitter -4 %, spin -3 %,
+# stall -14 %, low-progress -45 %, clustering level - but for hedge-maze's
+# jitter (+9 %, in its one-lane gaps) and harbor-lights' clustering and
+# pile-ups (+23 %, +26 %, at its seat's north firing slot, which the fight
+# reaches sooner); these ten rounds read, before -> after: jitter=28 is
+# harbor-lights (23 -> 28; 18 -> 27 on hedge-maze); spin=8 is archipelago
+# (5 -> 8, tanks circling its islands' shores); clustering=10 is hedge-maze
+# (5 -> 10; the old ceiling, 6, was archipelago's, now 3); stall=1 is
+# archipelago (round 7, 0x3ef: a hunter standing to fire at the players'
+# frog, a hold the probe mutes only for a seat); low-progress=1 is
+# archipelago (round 7 again: a tank pressed for three seconds against
+# another's hull, on a route of its own the margin still steers, before its
+# stuck escape). border-stuck=3 (hedge-maze, 3 -> 3: enemies spawned in the
+# maze's lanes along its top and bottom edge, which they drive for their
+# first seconds), churn=20 and pile-up=6 stand. The study map reads
+# border-stuck=1 jitter=13 churn=8 and meets the fight about 12 s in, in
+# all ten rounds (it was 13 s, in nine); longwater reads jitter=4 spin=1
+# churn=3 and meets it about 11 s in, in all ten (in round 0x3f1 two of the
+# first wave were still out at 60 s, riding the edge of a nav row past
+# their turning). Prints first contact and ms per tick beside the
+# anomalies. Not in CI: well over two minutes in a debug build, the study
+# map alone more than one.
 probe-fields:
-    for m in maps/study/frontier.toml maps/longwater.toml maps/hedge-maze.toml maps/archipelago.toml maps/black-gold.toml maps/harbor-lights.toml maps/castle-moat.toml; do cargo run --bin probe -- --map $m --frames 3600 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=3 --budget jitter=23 --budget spin=5 --budget churn=20 --budget clustering=6 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=6 --budget offbox-fire=0 || exit 1; done
+    for m in maps/study/frontier.toml maps/longwater.toml maps/hedge-maze.toml maps/archipelago.toml maps/black-gold.toml maps/harbor-lights.toml maps/castle-moat.toml; do cargo run --bin probe -- --map $m --frames 3600 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=1 --budget border-stuck=3 --budget jitter=28 --budget spin=8 --budget churn=20 --budget clustering=10 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=1 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=6 --budget offbox-fire=0 || exit 1; done
+
+# The perfect defence (docs/large-maps-follow-camera.md section 12): the
+# probe's `defend` scenario - every enemy destroyed the moment it comes
+# within 400 px of a live seat or the players' frog, so nobody is ever
+# attacked - on the two maps that need the follow camera, ten seven-minute
+# rounds each at a pinned seed. A round lasts exactly as long as its last
+# straggler keeps it waiting, and never-arrived counts one still out. Every
+# round is won; a tank's walk to the defence has a median of 11 s on both
+# maps, the longest 51 s on longwater and 86 s on the study map. Before
+# lanes, 8 of longwater's ten rounds and 7 of the study map's still had a
+# tank out at seven minutes, the longest walks 147 and 149 s, and tanks
+# still walking after 339 and 378. Release: in a debug build the twenty
+# rounds take the better part of an hour.
+probe-defend:
+    for m in maps/longwater.toml maps/study/frontier.toml; do cargo run --release --bin probe -- --map $m --scenario defend --frames 25200 --rounds 10 --seed 1000 --budget never-arrived=0 || exit 1; done
 
 run:
     cargo run
