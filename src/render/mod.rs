@@ -23,6 +23,7 @@ pub mod frog;
 pub mod fx;
 pub mod game;
 pub mod hud;
+pub mod indicators;
 pub mod laser;
 pub mod level_select;
 pub mod lobby;

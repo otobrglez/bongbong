@@ -96,6 +96,30 @@ fn left_shift_down(rl: &RaylibHandle) -> bool {
     rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT)
 }
 
+/// The seats this window plays, the first the one its arrows are cast for
+/// (`indicators::picture`): the room's one in an online round, once there
+/// is a replica to read, else player 1 and, on a couch, player 2. A seat
+/// past the keyboard's two stands idle in a local round, a teammate on
+/// this screen rather than a seat of it.
+fn local_seats(session: &Session) -> Vec<u8> {
+    match session.mode() {
+        Driver::Online => session.online.as_ref().filter(|round| round.game().is_some()).and_then(|round| round.seat()).into_iter().collect(),
+        _ => (0..session.game.players.count().min(2) as u8).collect(),
+    }
+}
+
+/// How many of the window's units make a point - what the indicators'
+/// sizes are given in (`indicators::in_points`): one where the window is
+/// laid out in points or CSS pixels, and on Android, where raylib's window
+/// is in device pixels, the display's density over 160 of them to the dp.
+fn window_units_per_point(_rl: &RaylibHandle) -> f32 {
+    #[cfg(target_os = "android")]
+    let units = _rl.get_window_scale_dpi().x.max(1.0);
+    #[cfg(not(target_os = "android"))]
+    let units = 1.0;
+    units
+}
+
 /// The URL the page was opened on, as the page published it
 /// (`site/src/scripts/room.ts`). The web build's command line, in full:
 /// a browser has no argv, so the room a link names, the rooms server a
@@ -1038,6 +1062,11 @@ pub fn run(args: Args) {
     // a lower density - wasm is the tighter budget and a dense wave is
     // where that shows.
     let mut fx = crate::fx::Fx::default();
+    // What the screen cannot see (indicators.rs, docs/large-maps-follow-
+    // camera.md section 7): a memory per local seat on this screen, fed
+    // every step's events like the particle layer - presentation only, and
+    // a new round, seat or replica starts it over by itself.
+    let mut awareness = crate::indicators::ScreenAwareness::default();
     // The GPU copies of the floor shade the round and the builder bake
     // (`ground::GroundGrid::shade`): uploaded once per bake, a new round or
     // a builder edit, and drawn in one call.
@@ -1671,11 +1700,15 @@ pub fn run(args: Args) {
             } else {
                 clock.advance(dt)
             };
+            let seats = local_seats(&session);
             #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
             let advanced = match &mut dev {
                 Some(dev) => {
                     let before = session.game.frame();
-                    dev.advance(&mut session.game, input, steps, width, height, &mut |game| fx.observe_events(game));
+                    dev.advance(&mut session.game, input, steps, width, height, &mut |game| {
+                        fx.observe_events(game);
+                        awareness.observe_events(game, &seats);
+                    });
                     if frozen {
                         fx_dt = session.game.frame().saturating_sub(before) as f32 * PHYSICS_FIXED_DT;
                     }
@@ -1689,9 +1722,10 @@ pub fn run(args: Args) {
                 for i in 0..steps {
                     let step_input = if i == 0 { input } else { input.held_only() };
                     session.game.update(step_input, PHYSICS_FIXED_DT, width, height);
-                    // The particle layer reads each step's events before
-                    // the next step clears them.
+                    // The particle layer and the indicators read each
+                    // step's events before the next step clears them.
                     fx.observe_events(&session.game);
+                    awareness.observe_events(&session.game, &seats);
                 }
             }
             carried = if steps == 0 && !frozen { input } else { Input::default() };
@@ -1717,6 +1751,30 @@ pub fn run(args: Args) {
         // `Game` - see fx.rs.
         fx.observe(game, fx_dt);
         fx.tick(fx_dt);
+        // What the screen cannot see: a replica's events read once a frame
+        // (a local round's were read after every step), and the arrows
+        // drawn only while the camera shows less than the whole field, so
+        // an arena's picture is what it always was. A touch screen keeps
+        // them out from under the thumbs.
+        let seats = local_seats(&session);
+        if session.mode() == Driver::Online {
+            awareness.observe_events(game, &seats);
+        }
+        let indicators = (matches!(session.mode(), Driver::Play | Driver::Online) && !camera.shows_whole_field()).then(|| {
+            // The bitmap's pixels to a point of the window, so an arrow is
+            // its rows' size on the glass however the bitmap is scaled.
+            let points = window_units_per_point(rl) / view.scale;
+            let t = crate::indicators::in_points(&tuning(), points);
+            let field = crate::math::Rectangle::new(layout.field.x, layout.field.y, layout.field.w, layout.field.h);
+            let mut frame = crate::indicators::ViewFrame::of_camera(&camera, field, &t);
+            if !crate::KEYBOARD_AVAILABLE || touch_from_mouse || touch.seen() {
+                let corner = view.to_bitmap(crate::math::Vec2::zero());
+                let far = view.to_bitmap(crate::math::Vec2::new(view.window.0, view.window.1));
+                let screen = crate::math::Rectangle::new(corner.x, corner.y, far.x - corner.x, far.y - corner.y);
+                frame.keep_out.extend(crate::indicators::thumb_rests(screen, points, &t));
+            }
+            awareness.picture(game, &seats, &frame, points)
+        });
         let shade = round_shade.sync(rl, thread, game.ground.shade());
         game.render(
             rl,
@@ -1736,6 +1794,7 @@ pub fn run(args: Args) {
                 // No stick over the lobby: the field behind it is frozen
                 // and every press there belongs to the screen.
                 touch: (session.mode() != Driver::Lobby).then_some((&touch, steer_right)),
+                indicators: indicators.as_ref(),
             },
             &Textures {
                 tanks: &tanks_texture,

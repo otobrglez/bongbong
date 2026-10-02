@@ -184,6 +184,10 @@ pub struct Effects<'a> {
     /// bitmap space when a keyboard-less device is playing; `None` draws
     /// nothing. The `bool` is whether the stick lives on the right half.
     pub touch: Option<(&'a crate::touch::TouchScheme, bool)>,
+    /// What the screen cannot see (`indicators.rs`): the arrows at the
+    /// field's edge and the marks in the world, composed by `app.rs` while
+    /// the camera shows less than the whole field; `None` draws nothing.
+    pub indicators: Option<&'a crate::indicators::Picture>,
 }
 
 impl Game {
@@ -691,6 +695,14 @@ impl Game {
                 }
                 self.draw_debug_overlays(&mut d, screen_width as f32, screen_height as f32);
             });
+
+            // What the screen cannot see (indicators.rs): its marks in the
+            // world through `on_field`, its arrows over the field's edge -
+            // over the scene, so no sky darkens them, and under the
+            // banners and dialogs, whose dims cover them.
+            if let Some(picture) = effects.indicators {
+                crate::render::indicators::draw_indicators(&mut d, picture, on_field);
+            }
 
             // Everything from here to the bar stands over the field: the
             // labels, the banners and the dims all centre on and cover the

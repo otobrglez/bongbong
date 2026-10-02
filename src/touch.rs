@@ -241,6 +241,12 @@ impl TouchScheme {
         self.stick.is_some()
     }
 
+    /// Whether a touch has been seen this session: thumbs are on the
+    /// screen, whatever the build - a phone's browser has a keyboard build.
+    pub fn seen(&self) -> bool {
+        self.seen
+    }
+
     /// The held stick's origin, the thumb's position and the base radius
     /// - what `draw` paints, and what a test reads to check the origin
     /// trails the thumb.
