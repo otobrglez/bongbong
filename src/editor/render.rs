@@ -1,39 +1,36 @@
-//! The builder's chrome with raylib: `MapEditor::render` (the field
-//! through a `Camera2D`, then the bar and the open popup in window space),
-//! the bar and popup painters, the tool icons and the field markers, and
-//! `EditorTextures`, the sheets the builder draws from. A child of
-//! `editor` because it draws the builder's private state; the edit model
-//! and every hit rect stay in `mod.rs` and run headless.
+//! The builder with raylib: `MapEditor::render` (the canvas through its
+//! camera, then the chrome on the window in UI points - the bar, the open
+//! popup, the status line, the navigator and the loupe), the bar and popup
+//! painters, the tool icons and the field markers, and `EditorTextures`,
+//! the sheets the builder draws from. A child of `editor` because it draws
+//! the builder's private state; the edit model, every hit test and the
+//! chrome's geometry (`chrome.rs`) stay headless.
 
 use sola_raylib::prelude::*;
 
 use super::*;
 use super::camera::{scene_plan, window_mapping};
+use super::chrome::{small_text, BarTools, CategoryButton, MENU_BOX_INSET, SMALL_BOX_INSET};
 use crate::text::{keys, text};
 use crate::canvas::Sheet;
 use crate::frog::FrogAnim;
-use crate::hud::{BAR_FILL, DIM, HUD_LABEL_SIZE, HUD_TEXT_SIZE, TEXT};
+use crate::hud::{BAR_FILL, DIM, HUD_TEXT_SIZE, TEXT, UI_SMALL_TEXT};
 use crate::math::{Color, Rectangle};
 use crate::obstacle;
 use crate::portal::{draw_portal, portal_icon_source_rec};
 use crate::render::canvas::{GpuCanvas, Sheets};
+use crate::EDITOR_DROPDOWN_ROW_H;
 
-// The bar's fixed x offsets only the drawing reads (the hit rects' own
-// slots stay in mod.rs); `bar_tests` pins that nothing overlaps.
-const SLOT_BUILD: f32 = 8.0;
-const SLOT_NAME: f32 = 72.0;
-const NAME_W: f32 = 152.0;
+/// The icons in the bar, the dropdown rows and the palette, the sheets'
+/// own 32 px drawn a point a pixel.
+const ICON_PX: f32 = 32.0;
 /// The gap a button's drawn box keeps from the slot after it, so two
 /// adjacent outlines never touch.
 const BUTTON_GAP: f32 = 8.0;
-/// The category button's text column, right of its full-bleed icon.
-/// The category caret's left edge: flush with the button's drawn box,
-/// two blocks in from the active outline, so the 10 px name (`GROUND`
-/// is the widest) ends clear of it.
-const CATEGORY_CARET_X: i32 = (CATEGORY_W - BUTTON_GAP) as i32 - CARET_W;
-/// A caret is 10 px wide (`draw_caret`).
+/// A caret is 10 pt wide (`draw_caret`): a category button's sits at the
+/// right end of its drawn box.
 const CARET_W: i32 = 10;
-/// A dropdown row's name column, right of its 32 px icon at 8 px inset.
+/// A dropdown row's name column, right of its 32 pt icon at 8 pt inset.
 const DROPDOWN_TEXT_X: i32 = 48;
 const SETTINGS_VALUE_X: i32 = 180;
 const SETTINGS_LABEL_SIZE: i32 = 16;
@@ -69,9 +66,9 @@ fn label(tool: Tool) -> String {
     text().named("tool", tool.name())
 }
 
-/// A tool's name at the width the bar's 10 px line and the cursor
-/// readout have room for: the catalogue's `tool-short-<name>` where the
-/// language has one, else its full name.
+/// A tool's name as the status line and the cursor readout spell it: the
+/// catalogue's `tool-short-<name>` where the language has one, else its
+/// full name.
 fn short_label(tool: Tool) -> String {
     let t = text();
     t.message(&format!("tool-short-{}", tool.name()), &[]).unwrap_or_else(|| t.named("tool", tool.name()))
@@ -84,7 +81,7 @@ fn cell_label(obj: &CellObject) -> String {
 
 use crate::{
     EDITOR_PANEL_BORDER_OPACITY, EDITOR_PANEL_BORDER_THICKNESS, EDITOR_PANEL_FILL, EDITOR_PANEL_FILL_OPACITY, EDITOR_PANEL_ROUNDNESS,
-    EDITOR_PANEL_SEGMENTS, EDITOR_PANEL_SHADOW_OFFSET, EDITOR_PANEL_SHADOW_OPACITY, EDITOR_TOOLBAR_MARGIN, OBSTACLE_GRID_SIZE,
+    EDITOR_PANEL_SEGMENTS, EDITOR_PANEL_SHADOW_OFFSET, EDITOR_PANEL_SHADOW_OPACITY, OBSTACLE_GRID_SIZE,
 };
 
 /// The sprite atlases the builder needs to draw placed objects and their
@@ -206,20 +203,22 @@ impl MapEditor {
     /// The field cell under the last pointer position, when that is on
     /// the canvas and not on chrome - what the hover highlight and the
     /// cursor readout show, through the camera like every press.
-    fn cursor_cell(&self, layout: &Layout) -> Option<(i32, i32)> {
-        self.cell_at(self.pointer?, layout)
+    fn cursor_cell(&self, frame: &BuilderFrame) -> Option<(i32, i32)> {
+        self.canvas_cell(self.pointer?, frame)
     }
 
-    /// Draw the builder and put it on the window through `view`. At FIT on
-    /// an arena - the camera `Camera::whole` over the field's own bitmap -
-    /// the canvas, the bar and any open popup are drawn into `composite`
-    /// (the bitmap: the bar over the field, `layout.window_size()` in size)
-    /// and that is presented, exactly as `Game::render` does for an arena's
-    /// round. Any other view draws the canvas into `scene` at a texel per
-    /// world pixel (`scene_plan`), the way a round draws its world, and
-    /// puts the view's texels straight onto the window's canvas area
-    /// (`window_mapping`), so a whole-block zoom keeps its blocks whole on
-    /// the glass; the bar and the popups go over it.
+    /// Draw the builder and put it on the window: the canvas through its
+    /// camera, then the chrome over it on the window in UI points. At FIT
+    /// on an arena - the camera `Camera::whole` over the field's own bitmap
+    /// - the canvas is drawn into `composite` (the field, `layout`'s size)
+    /// and that is presented through `frame.view` under the bar, exactly as
+    /// `Game::render` does for an arena's round. Any other view draws the
+    /// canvas into `scene` at a texel per world pixel (`scene_plan`), the
+    /// way a round draws its world, and puts the view's texels straight
+    /// onto the window's canvas area (`window_mapping`), so a whole-block
+    /// zoom keeps its blocks whole on the glass. Either way the window
+    /// round the canvas is `backdrop`, and the chrome
+    /// (`draw_window_chrome`) goes over everything.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
@@ -227,20 +226,30 @@ impl MapEditor {
         thread: &RaylibThread,
         composite: &mut RenderTexture2D,
         scene: &mut BuilderScene,
-        view: &crate::view::View,
+        frame: &BuilderFrame,
         backdrop: Color,
-        layout: &Layout,
         textures: &EditorTextures,
     ) {
-        let cursor = self.cursor_cell(layout);
+        let (layout, view) = (&frame.layout, &frame.view);
+        let cursor = self.cursor_cell(frame);
         // A clock read, not an input: the builder has no round clock, and
         // the wall clock animates the water and turns a placed portal so
         // the author sees what a round will show.
         let time = rl.get_time() as f32;
         let camera = self.view_camera(layout);
         let field = self.map.field_size();
+        let chrome = self.chrome(frame);
         if camera == crate::view::Camera::whole(field) && (layout.field.w, layout.field.h) == field {
-            self.render_whole(rl, thread, composite, scene, view, backdrop, layout, textures, cursor, time);
+            // The canvas into the bitmap, the bitmap onto the window.
+            rl.draw_texture_mode(thread, composite, |mut d| {
+                d.clear_background(CANVAS_FILL);
+                self.draw_canvas(&mut d, textures, time, cursor, None);
+            });
+            let magnified = self.loupe(frame).and_then(|loupe| Some((loupe, self.draw_loupe_world(rl, thread, &mut scene.loupe, &loupe, textures, time)?)));
+            rl.draw(thread, |mut d| {
+                crate::render::view::present_into(&mut d, composite, view, backdrop, None);
+                self.draw_window_chrome(&mut d, frame, &chrome, textures, cursor, &camera, magnified.as_ref().map(|(l, p)| (l, *p)));
+            });
             return;
         }
         let plan = scene_plan(&camera);
@@ -272,23 +281,39 @@ impl MapEditor {
         let s = plan.source;
         let source = Rectangle::new(s.x, height - s.y - s.height, s.width, -s.height);
         let area = window_mapping(&camera, view, layout).area;
-        let base = Camera2D { offset: view.offset.into(), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: view.scale };
-        let magnified = self
-            .loupe(layout)
-            .and_then(|loupe| Some((loupe, self.draw_loupe_world(rl, thread, &mut scene.loupe, &loupe, textures, time)?)));
+        let magnified = self.loupe(frame).and_then(|loupe| Some((loupe, self.draw_loupe_world(rl, thread, &mut scene.loupe, &loupe, textures, time)?)));
         let Some((target, _)) = scene.held.as_ref() else { return };
         rl.draw(thread, |mut d| {
             d.clear_background(Color::BLACK);
             crate::render::view::letterbox(&mut d, view, backdrop);
             d.draw_texture_pro(target, source, area, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-            d.draw_mode2D(base, |mut d, _| {
-                self.draw_status_line(&mut d, cursor, EDITOR_TOOLBAR_MARGIN, layout.field.y + layout.field.h - 22.0);
-                self.draw_navigator(&mut d, layout, textures, &camera);
-                self.draw_chrome(&mut d, layout, textures, cursor);
-                if let Some((loupe, picture)) = &magnified {
-                    draw_loupe(&mut d, loupe, picture);
-                }
-            });
+            self.draw_window_chrome(&mut d, frame, &chrome, textures, cursor, &camera, magnified.as_ref().map(|(l, p)| (l, *p)));
+        });
+    }
+
+    /// The chrome over the canvas on the window, in UI points through
+    /// `frame.ui`'s scale: the status line and the navigator, the bar, the
+    /// open popup and, over a painting finger, the loupe.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_window_chrome(
+        &self,
+        d: &mut impl RaylibDraw,
+        frame: &BuilderFrame,
+        chrome: &Chrome,
+        textures: &EditorTextures,
+        cursor: Option<(i32, i32)>,
+        camera: &crate::view::Camera,
+        magnified: Option<(&Loupe, &RenderTexture2D)>,
+    ) {
+        let ui = Camera2D { offset: Vector2::new(0.0, 0.0), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: frame.ui.scale };
+        d.draw_mode2D(ui, |mut d, _| {
+            self.draw_status_line(&mut d, frame, chrome, cursor);
+            self.draw_navigator(&mut d, frame, textures, camera);
+            self.draw_bar(&mut d, &chrome.bar, textures);
+            self.draw_popup(&mut d, chrome, textures);
+            if let Some((loupe, picture)) = magnified {
+                draw_loupe(&mut d, loupe, picture);
+            }
         });
     }
 
@@ -324,98 +349,38 @@ impl MapEditor {
         Some(&*target)
     }
 
-    /// The navigator (`navigator_rect`), under the bar and the popups: the
-    /// canvas's picture as its upload holds it, and the outline of what
-    /// `camera` shows over it.
-    fn draw_navigator(&self, d: &mut impl RaylibDraw, layout: &Layout, textures: &EditorTextures, camera: &crate::view::Camera) {
-        let (Some(rect), Some((stamp, texture))) = (self.navigator_rect(layout), textures.minimap) else { return };
+    /// The navigator (`navigator_rect`), in UI points under the bar and
+    /// the popups: the canvas's picture as its upload holds it, and the
+    /// outline of what `camera` shows over it.
+    fn draw_navigator(&self, d: &mut impl RaylibDraw, frame: &BuilderFrame, textures: &EditorTextures, camera: &crate::view::Camera) {
+        let (Some(rect), Some((stamp, texture))) = (self.navigator_rect(frame), textures.minimap) else { return };
         if stamp != self.minimap.image().stamp {
             return;
         }
         let field = self.map.field_size();
         let marks = crate::minimap::Marks { view: Some(camera.rect()), ..crate::minimap::Marks::default() };
-        let font = crate::indicators::label_font(self.viewport_in(layout).px(1.0));
-        let picture = crate::minimap::picture(&marks, rect, field, font, &crate::tuning::tuning());
+        let picture = crate::minimap::picture(&marks, rect, field, crate::indicators::label_font(1.0), &crate::tuning::tuning());
         crate::render::minimap::draw_minimap(d, rect, texture, field, &picture, 1.0);
     }
 
-    /// The builder at FIT on an arena: the canvas, the bar and the popups
-    /// into the bitmap, then the bitmap onto the window.
-    #[allow(clippy::too_many_arguments)]
-    fn render_whole(
-        &self,
-        rl: &mut RaylibHandle,
-        thread: &RaylibThread,
-        composite: &mut RenderTexture2D,
-        scene: &mut BuilderScene,
-        view: &crate::view::View,
-        backdrop: Color,
-        layout: &Layout,
-        textures: &EditorTextures,
-        cursor: Option<(i32, i32)>,
-        time: f32,
-    ) {
-        let height = layout.field.h;
-        let camera = Camera2D {
-            offset: layout.field_origin().into(),
-            target: Vector2::new(0.0, 0.0),
-            rotation: 0.0,
-            zoom: 1.0,
-        };
-        rl.draw_texture_mode(thread, composite, |mut d| {
-            d.clear_background(CANVAS_FILL);
-            d.draw_mode2D(camera, |mut d, _| {
-                self.draw_canvas(&mut d, textures, time, cursor, None);
-                self.draw_status_line(&mut d, cursor, EDITOR_TOOLBAR_MARGIN, height - 22.0);
-            });
-            self.draw_chrome(&mut d, layout, textures, cursor);
-        });
-        let magnified = self
-            .loupe(layout)
-            .and_then(|loupe| Some((loupe, self.draw_loupe_world(rl, thread, &mut scene.loupe, &loupe, textures, time)?)));
-        let Some((loupe, picture)) = magnified else {
-            crate::render::view::present(rl, thread, composite, view, backdrop);
-            return;
-        };
-        // The loupe over the presented bitmap, in bitmap pixels.
-        let base = Camera2D { offset: view.offset.into(), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: view.scale };
-        rl.draw(thread, |mut d| {
-            crate::render::view::present_into(&mut d, composite, view, backdrop, None);
-            d.draw_mode2D(base, |mut d, _| draw_loupe(&mut d, &loupe, picture));
-        });
-    }
-
-    /// The bar and the open popup, in bitmap pixels.
-    fn draw_chrome(&self, d: &mut impl RaylibDraw, layout: &Layout, textures: &EditorTextures, cursor: Option<(i32, i32)>) {
-        self.draw_bar(d, layout, textures, cursor);
-        match &self.popup {
-            None => {}
-            Some(Popup::Dropdown(category)) => self.draw_dropdown(d, layout, textures, *category),
-            Some(Popup::Settings) => self.draw_settings(d, layout, textures),
-            Some(Popup::Lint { page }) => self.draw_lint_panel(d, layout, *page),
-            Some(Popup::File) => Self::draw_file_menu(d, layout),
-            Some(Popup::Load { entries, scroll }) => Self::draw_load_list(d, layout, entries, *scroll),
-            Some(Popup::Save { name }) => {
-                let panel = Self::save_prompt_rect(layout);
-                draw_panel(d, panel);
-                d.draw_text(&text().get(keys::EDITOR_SAVE_AS), (panel.x + 12.0) as i32, (panel.y + 10.0) as i32, 16, TEXT);
-                d.draw_text(&format!("{name}_"), (panel.x + 12.0) as i32, (panel.y + 34.0) as i32, 18, TEXT);
-                d.draw_text(
-                    &text().get(keys::EDITOR_SAVE_HINT),
-                    (panel.x + 12.0) as i32,
-                    (panel.y + 58.0) as i32,
-                    12,
-                    Color::GRAY,
-                );
-            }
+    /// The status line, in UI points along the bottom-left of the room
+    /// under the bar (`chrome::status_line`), short of the navigator: the
+    /// map's name where the bar has no room for it whole, the active tool,
+    /// the cell under the pointer (or the last tapped one), and any
+    /// message - cut to the room it has.
+    fn draw_status_line(&self, d: &mut impl RaylibDraw, frame: &BuilderFrame, chrome: &Chrome, cursor: Option<(i32, i32)>) {
+        let until = self.navigator_rect(frame).map(|r| Corners::plate(r).x);
+        let at = chrome::status_line(chrome.room, until);
+        let mut line = String::new();
+        let name = self.bar_name();
+        if chrome.bar.name.is_none_or(|r| text_width(&name, HUD_TEXT_SIZE) > r.width) {
+            line.push_str(&format!("{name}   "));
         }
-    }
-
-    /// The status line, bottom-left of the canvas at (`x`, `y`): the
-    /// active tool, the cell under the pointer (or the last tapped one),
-    /// and any message.
-    fn draw_status_line(&self, d: &mut impl RaylibDraw, cursor: Option<(i32, i32)>, x: f32, y: f32) {
-        let mut line = format!("{}: {}", self.active_category().map_or_else(|| text().get(keys::EDITOR_TOOL), |c| c.label()), short_label(self.active_tool));
+        line.push_str(&format!(
+            "{}: {}",
+            self.active_category().map_or_else(|| text().get(keys::EDITOR_TOOL), |c| c.label()),
+            short_label(self.active_tool)
+        ));
         if let Some((col, row)) = cursor {
             let under = self.map.cell(col, row).map(cell_label).unwrap_or_default();
             line.push_str(&format!("   {col},{row} {under}"));
@@ -423,7 +388,8 @@ impl MapEditor {
         if let Some(status) = &self.status {
             line.push_str(&format!("   {status}"));
         }
-        d.draw_text(&line, x as i32, y as i32, 14, Color::LIGHTGRAY);
+        let size = chrome::STATUS_TEXT;
+        d.draw_text(&fit_text(&line, at.width, size), at.x as i32, at.y as i32, size, Color::LIGHTGRAY);
     }
 
     /// The canvas in world pixels - ground, placed objects and the hover
@@ -580,128 +546,172 @@ impl MapEditor {
         }
     }
 
-    /// The HUD bar in build mode (docs/game-editor-fusion.md section 7):
-    /// `BUILD`, the map's name with a `*` while edited, the five category
-    /// buttons, ERASE, UNDO, REDO, MAP, the cursor readout, the dev SAVE
-    /// button and PLAY at the right end.
-    fn draw_bar(&self, d: &mut impl RaylibDraw, layout: &Layout, textures: &EditorTextures, cursor: Option<(i32, i32)>) {
-        let panel = layout.panel;
-        let (px, py, pw, ph) = (panel.x as i32, panel.y as i32, panel.w as i32, panel.h as i32);
-        d.draw_rectangle(px, py, pw, ph, BAR_FILL);
-        let text_y = py + (ph - HUD_TEXT_SIZE) / 2;
+    /// The map's name as the bar shows it, a `*` after it while edited.
+    fn bar_name(&self) -> String {
+        format!("{}{}", self.name(), if self.dirty() { " *" } else { "" })
+    }
 
-        d.draw_text(&text().get(keys::EDITOR_BUILD), px + SLOT_BUILD as i32, text_y, HUD_TEXT_SIZE, BUILD_ACCENT);
-        let name = format!("{}{}", self.name(), if self.dirty() { " *" } else { "" });
-        d.draw_text(&fit_text(&name, NAME_W, HUD_TEXT_SIZE), px + SLOT_NAME as i32, text_y, HUD_TEXT_SIZE, TEXT);
-
-        for category in Category::ALL {
-            self.draw_category_button(d, layout, textures, category);
+    /// The bar (docs/game-editor-fusion.md section 7), in UI points as
+    /// `Bar::of` laid it out: the strip across the window, `BUILD` and the
+    /// map's name with a `*` while edited where the bar has the room, the
+    /// five category buttons or the TOOLS button they fold into, the
+    /// eraser, UNDO, REDO, FILE, MAP, FIT, CHECK, the clear flag, PLAY HERE
+    /// and PLAY.
+    fn draw_bar(&self, d: &mut impl RaylibDraw, bar: &Bar, textures: &EditorTextures) {
+        d.draw_rectangle_rec(bar.strip, BAR_FILL);
+        let small = small_text(bar.touch);
+        let text_y = |r: Rectangle| (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
+        if let Some(r) = bar.label {
+            d.draw_text(&text().get(keys::EDITOR_BUILD), r.x as i32, text_y(r), HUD_TEXT_SIZE, BUILD_ACCENT);
+        }
+        if let Some(r) = bar.name {
+            d.draw_text(&fit_text(&self.bar_name(), r.width, HUD_TEXT_SIZE), r.x as i32, text_y(r), HUD_TEXT_SIZE, TEXT);
+        }
+        match &bar.tools {
+            BarTools::Categories(buttons) => {
+                for (category, button) in Category::ALL.into_iter().zip(buttons) {
+                    self.draw_category_button(d, button, textures, category, bar.touch);
+                }
+            }
+            BarTools::Folded(r) => self.draw_tools_button(d, *r, textures, bar.touch),
         }
 
-        let erase = Self::erase_rect(layout);
-        draw_tool_icon(d, textures, self.map.theme, Tool::Eraser, Rectangle::new(erase.x + 4.0, erase.y, ICON_PX, ICON_PX));
+        let erase = icon_rect(bar.erase, bar.touch, 4.0);
+        draw_tool_icon(d, textures, self.map.theme, Tool::Eraser, erase);
         if self.active_tool == Tool::Eraser {
-            active_outline(d, erase.x as i32, py, (SMALL_BUTTON_W - 4.0) as i32, ph, BUILD_ACCENT);
+            active_outline(d, bar.erase.x as i32, bar.erase.y as i32, (bar.erase.width - SMALL_BOX_INSET) as i32, bar.erase.height as i32, BUILD_ACCENT);
         }
 
         let undo_color = if self.history.undo_depth() > 0 { TEXT } else { DIM };
-        draw_small_button(d, Self::undo_rect(layout), &text().get(keys::EDITOR_UNDO), undo_color);
+        draw_small_button(d, bar.undo, &text().get(keys::EDITOR_UNDO), undo_color, small);
         let redo_color = if self.history.redo_depth() > 0 { TEXT } else { DIM };
-        draw_small_button(d, Self::redo_rect(layout), &text().get(keys::EDITOR_REDO), redo_color);
+        draw_small_button(d, bar.redo, &text().get(keys::EDITOR_REDO), redo_color, small);
 
         let file_open = matches!(self.popup, Some(Popup::File | Popup::Load { .. } | Popup::Save { .. }));
-        draw_menu_button(d, Self::file_rect(layout), &text().get(keys::EDITOR_FILE), file_open);
-        draw_menu_button(d, Self::map_rect(layout), &text().get(keys::EDITOR_MAP), matches!(self.popup, Some(Popup::Settings)));
+        draw_menu_button(d, bar.file, &text().get(keys::EDITOR_FILE), file_open);
+        draw_menu_button(d, bar.map, &text().get(keys::EDITOR_MAP), matches!(self.popup, Some(Popup::Settings { .. })));
         // FIT, dim while the whole canvas is what is shown.
         let fit_color = if self.camera.is_fit() { DIM } else { TEXT };
-        draw_small_button(d, Self::fit_rect(layout), &text().get(keys::EDITOR_FIT), fit_color);
+        draw_small_button(d, bar.fit, &text().get(keys::EDITOR_FIT), fit_color, small);
         // CHECK, in the accent while its panel is open.
         let check_color = if matches!(self.popup, Some(Popup::Lint { .. })) { BUILD_ACCENT } else { TEXT };
-        draw_small_button(d, Self::check_rect(layout), &text().get(keys::EDITOR_CHECK), check_color);
-        draw_clear_readout(d, Self::clear_rect(layout), self.par());
+        draw_small_button(d, bar.check, &text().get(keys::EDITOR_CHECK), check_color, small);
+        draw_clear_readout(d, bar.clear, self.par(), small);
 
-        let _ = cursor; // the readout is the field's status line, see `render`
         // PLAY HERE beside PLAY, in PLAY's amber.
-        draw_small_button(d, Self::here_rect(layout), &text().get(keys::EDITOR_PLAY_HERE), BUILD_ACCENT);
-        crate::render::hud::draw_mode_button(d, panel, &text().get(keys::BUTTON_PLAY), BUILD_ACCENT);
+        draw_small_button(d, bar.here, &text().get(keys::EDITOR_PLAY_HERE), BUILD_ACCENT, small);
+        crate::render::hud::draw_slot_button(d, bar.play, &text().get(keys::BUTTON_PLAY), BUILD_ACCENT);
+    }
+
+    /// One category button: the current tool's icon in its icon half and
+    /// a caret at the right end of its drawn box, outlined in the accent
+    /// while the active brush is one of its tools. The tool's name is in
+    /// the status line.
+    fn draw_category_button(&self, d: &mut impl RaylibDraw, button: &CategoryButton, textures: &EditorTextures, category: Category, touch: bool) {
+        let rect = button.rect;
+        let tool = self.current_tool(category);
+        let icon = icon_rect(button.icon, touch, 0.0);
+        draw_tool_icon(d, textures, self.map.theme, tool, icon);
+        if self.singleton_placed(tool) {
+            draw_badge(d, icon.x + icon.width, icon.y);
+        }
+        let open = matches!(self.popup, Some(Popup::Dropdown(c)) if c == category);
+        let caret_color = if open { BUILD_ACCENT } else { DIM };
+        let caret_x = (rect.x + rect.width - BUTTON_GAP) as i32 - CARET_W;
+        draw_caret(d, caret_x, (rect.y + (rect.height - CARET_W as f32) / 2.0) as i32, caret_color);
+        if self.active_category() == Some(category) {
+            active_outline(d, rect.x as i32, rect.y as i32, (rect.width - BUTTON_GAP) as i32, rect.height as i32, BUILD_ACCENT);
+        }
+    }
+
+    /// The TOOLS button the categories fold into: the brush's icon - or,
+    /// while the eraser is the brush, the tool it came from - and a caret,
+    /// outlined in the accent while a category's tool is the brush.
+    fn draw_tools_button(&self, d: &mut impl RaylibDraw, rect: Rectangle, textures: &EditorTextures, touch: bool) {
+        let zone = Rectangle::new(rect.x, rect.y, rect.height.min(rect.width - BUTTON_GAP - CARET_W as f32), rect.height);
+        let icon = icon_rect(zone, touch, 0.0);
+        let tool = self.tools_button_tool();
+        draw_tool_icon(d, textures, self.map.theme, tool, icon);
+        if self.singleton_placed(tool) {
+            draw_badge(d, icon.x + icon.width, icon.y);
+        }
+        let open = matches!(self.popup, Some(Popup::Palette));
+        let caret_x = (rect.x + rect.width - BUTTON_GAP) as i32 - CARET_W;
+        draw_caret(d, caret_x, (rect.y + (rect.height - CARET_W as f32) / 2.0) as i32, if open { BUILD_ACCENT } else { DIM });
+        if self.active_category().is_some() {
+            active_outline(d, rect.x as i32, rect.y as i32, (rect.width - BUTTON_GAP) as i32, rect.height as i32, BUILD_ACCENT);
+        }
+    }
+
+    /// The open popup, in UI points.
+    fn draw_popup(&self, d: &mut impl RaylibDraw, chrome: &Chrome, textures: &EditorTextures) {
+        match (&self.popup, &chrome.popup) {
+            (Some(Popup::Dropdown(category)), Some(PopupLayout::Dropdown(_, rows))) => self.draw_dropdown(d, rows, textures, *category),
+            (Some(Popup::Palette), Some(PopupLayout::Palette(palette))) => self.draw_palette(d, palette, textures),
+            (Some(Popup::Settings { page }), Some(PopupLayout::Settings(settings))) => self.draw_settings(d, settings, *page, textures),
+            (Some(Popup::Lint { page }), Some(PopupLayout::Lint(lint))) => self.draw_lint_panel(d, lint, *page),
+            (Some(Popup::File), Some(PopupLayout::File(rows))) => Self::draw_file_menu(d, rows),
+            (Some(Popup::Load { entries, scroll }), Some(PopupLayout::Load(load))) => Self::draw_load_list(d, load, entries, *scroll),
+            (Some(Popup::Save { name }), Some(PopupLayout::Save(panel))) => {
+                let panel = *panel;
+                draw_panel(d, panel);
+                d.draw_text(&text().get(keys::EDITOR_SAVE_AS), (panel.x + 12.0) as i32, (panel.y + 10.0) as i32, 16, TEXT);
+                d.draw_text(&format!("{name}_"), (panel.x + 12.0) as i32, (panel.y + 34.0) as i32, 18, TEXT);
+                d.draw_text(&text().get(keys::EDITOR_SAVE_HINT), (panel.x + 12.0) as i32, (panel.y + 58.0) as i32, UI_SMALL_TEXT, Color::GRAY);
+            }
+            _ => {}
+        }
     }
 
     /// The FILE menu below its button.
-    fn draw_file_menu(d: &mut impl RaylibDraw, layout: &Layout) {
-        draw_panel(d, Self::file_menu_rect(layout));
+    fn draw_file_menu(d: &mut impl RaylibDraw, rows: &chrome::Rows) {
+        draw_panel(d, rows.panel);
         for (i, row) in FileRow::all().iter().enumerate() {
-            let rect = Self::file_row_rect(layout, i);
+            let rect = rows.row(i);
             d.draw_text(&row.label(), rect.x as i32 + 16, (rect.y + (rect.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, TEXT);
         }
     }
 
-    /// The Load list: one row per map, shipped ones marked, a scroll hint
+    /// The Load list: one row per map, shipped ones marked, and the pager
     /// when there are more than fit.
-    fn draw_load_list(d: &mut impl RaylibDraw, layout: &Layout, entries: &[MapEntry], scroll: usize) {
-        let panel = Self::load_panel_rect(layout, entries.len());
+    fn draw_load_list(d: &mut impl RaylibDraw, load: &chrome::LoadLayout, entries: &[MapEntry], scroll: usize) {
+        let panel = load.rows.panel;
         draw_panel(d, panel);
         if entries.is_empty() {
             d.draw_text(&text().get(keys::EDITOR_NO_MAPS), panel.x as i32 + 16, panel.y as i32 + 15, HUD_TEXT_SIZE, DIM);
             return;
         }
-        let rows = Self::load_page_rows(entries.len());
+        let rows = load.per_page;
+        let last = entries.len().saturating_sub(rows);
+        let scroll = scroll.min(last);
         for (i, entry) in entries.iter().skip(scroll).take(rows).enumerate() {
-            let row = Self::load_row_rect(panel, i);
+            let row = load.rows.row(i);
             let text_y = (row.y + (row.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
-            d.draw_text(&fit_text(&entry.name, LOAD_PANEL_W - 120.0, HUD_TEXT_SIZE), row.x as i32 + 16, text_y, HUD_TEXT_SIZE, TEXT);
+            d.draw_text(&fit_text(&entry.name, chrome::LOAD_PANEL_W - 120.0, HUD_TEXT_SIZE), row.x as i32 + 16, text_y, HUD_TEXT_SIZE, TEXT);
             if !entry.on_disk {
                 d.draw_text(&text().get(keys::EDITOR_SHIPPED), (row.x + row.width - 80.0) as i32, text_y, HUD_TEXT_SIZE, DIM);
             }
         }
-        if entries.len() > rows {
-            // The pager: `<` at the left end, `>` at the right, each dim at
-            // its own end of the list, and the span on screen between them.
-            let pager = Self::load_row_rect(panel, rows);
-            let last = entries.len() - rows;
-            let arrow_y = (pager.y + (pager.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
-            d.draw_text("<", pager.x as i32 + 16, arrow_y, HUD_TEXT_SIZE, if scroll > 0 { TEXT } else { DIM });
-            let right = pager.x + pager.width - 16.0 - text_width(">", HUD_TEXT_SIZE);
-            d.draw_text(">", right as i32, arrow_y, HUD_TEXT_SIZE, if scroll < last { TEXT } else { DIM });
+        if let Some(pager) = load.pager {
             let hint = text().fmt(
                 keys::EDITOR_PAGE,
                 &[("from", (scroll + 1).into()), ("to", (scroll + rows).min(entries.len()).into()), ("n", entries.len().into())],
             );
-            let hint_x = pager.x + (pager.width - text_width(&hint, HUD_LABEL_SIZE)) / 2.0;
-            d.draw_text(&hint, hint_x as i32, (pager.y + (pager.height - HUD_LABEL_SIZE as f32) / 2.0) as i32, HUD_LABEL_SIZE, DIM);
-        }
-    }
-
-    /// One category button: the current tool's icon full-bleed at the
-    /// left and a caret beside it, outlined in the accent while the
-    /// active brush is one of its tools. The tool's name is in the
-    /// field's status line.
-    fn draw_category_button(&self, d: &mut impl RaylibDraw, layout: &Layout, textures: &EditorTextures, category: Category) {
-        let rect = Self::category_rect(layout, category);
-        let tool = self.current_tool(category);
-        let (x, y, h) = (rect.x as i32, rect.y as i32, rect.height as i32);
-        draw_tool_icon(d, textures, self.map.theme, tool, Rectangle::new(rect.x, rect.y, ICON_PX, ICON_PX));
-        if self.singleton_placed(tool) {
-            draw_badge(d, rect.x + ICON_PX, rect.y);
-        }
-        let open = matches!(self.popup, Some(Popup::Dropdown(c)) if c == category);
-        let label_color = if open { BUILD_ACCENT } else { DIM };
-        draw_caret(d, x + CATEGORY_CARET_X, y + (h - CARET_W) / 2, label_color);
-        if self.active_category() == Some(category) {
-            active_outline(d, x, y, (CATEGORY_W - BUTTON_GAP) as i32, h, BUILD_ACCENT);
+            draw_pager(d, pager.row, &hint, scroll > 0, scroll < last);
         }
     }
 
     /// A category's tool list below its button: one row per tool, the
     /// current one highlighted.
-    fn draw_dropdown(&self, d: &mut impl RaylibDraw, layout: &Layout, textures: &EditorTextures, category: Category) {
-        draw_panel(d, Self::dropdown_rect(layout, category));
+    fn draw_dropdown(&self, d: &mut impl RaylibDraw, rows: &chrome::Rows, textures: &EditorTextures, category: Category) {
+        draw_panel(d, rows.panel);
         for (i, tool) in category.tools().enumerate() {
-            let row = Self::dropdown_row_rect(layout, category, i);
+            let row = rows.row(i);
             if tool == self.current_tool(category) {
                 let inset = Rectangle::new(row.x + 4.0, row.y + 2.0, row.width - 8.0, row.height - 4.0);
                 d.draw_rectangle_rounded(inset, 0.2, EDITOR_PANEL_SEGMENTS, Color::new(255, 255, 255, 40));
             }
-            // A 40 px rect: the icon's own 4 px inset makes it 32 px at 8.
+            // A 40 pt rect: the icon's own 4 pt inset makes it 32 at 8.
             let icon = Rectangle::new(row.x + 4.0, row.y + 4.0, ICON_PX + 8.0, ICON_PX + 8.0);
             draw_tool_icon(d, textures, self.map.theme, tool, icon);
             if self.singleton_placed(tool) {
@@ -712,14 +722,44 @@ impl MapEditor {
         }
     }
 
+    /// The palette the folded TOOLS button opens: a row per category, its
+    /// name in the accent while the brush is one of its tools, then a cell
+    /// per tool - the category's current tool lit, the brush outlined.
+    fn draw_palette(&self, d: &mut impl RaylibDraw, palette: &chrome::Palette, textures: &EditorTextures) {
+        draw_panel(d, palette.panel);
+        for category in Category::ALL {
+            let label = palette.label(category);
+            let color = if self.active_category() == Some(category) { BUILD_ACCENT } else { DIM };
+            let y = (label.y + (label.height - UI_SMALL_TEXT as f32) / 2.0) as i32;
+            d.draw_text(&category.label(), label.x as i32 + 8, y, UI_SMALL_TEXT, color);
+            for (i, tool) in category.tools().enumerate() {
+                let cell = palette.cell(category, i);
+                if tool == self.current_tool(category) {
+                    let inset = Rectangle::new(cell.x + 2.0, cell.y + 2.0, cell.width - 4.0, cell.height - 4.0);
+                    d.draw_rectangle_rounded(inset, 0.2, EDITOR_PANEL_SEGMENTS, Color::new(255, 255, 255, 40));
+                }
+                let icon = Rectangle::new(cell.x + 4.0, cell.y + 4.0, ICON_PX + 8.0, ICON_PX + 8.0);
+                draw_tool_icon(d, textures, self.map.theme, tool, icon);
+                if self.singleton_placed(tool) {
+                    draw_badge(d, icon.x + icon.width - 4.0, icon.y + 4.0);
+                }
+                if tool == self.active_tool {
+                    d.draw_rectangle_lines_ex(Rectangle::new(cell.x + 2.0, cell.y + 2.0, cell.width - 4.0, cell.height - 4.0), 2.0, BUILD_ACCENT);
+                }
+            }
+        }
+    }
+
     /// The MAP settings panel (docs/game-editor-fusion.md section 9): a
-    /// stepper per map key and the RESET MAP button.
-    fn draw_settings(&self, d: &mut impl RaylibDraw, layout: &Layout, textures: &EditorTextures) {
-        draw_hanging_panel(d, Self::settings_rect(layout));
+    /// stepper per map key and the RESET MAP button, `page`'s rows where
+    /// the room under the bar pages it, and then its pager.
+    fn draw_settings(&self, d: &mut impl RaylibDraw, layout: &chrome::SettingsLayout, page: usize, textures: &EditorTextures) {
+        draw_hanging_panel(d, layout.rows.panel);
+        let page = page.min(layout.pages - 1);
         let settings = self.settings();
         let waves_off = settings.spawn == SpawnKind::Band;
         for (i, row) in SETTINGS_ROWS.iter().enumerate() {
-            let rect = Self::settings_row_rect(layout, i);
+            let Some(rect) = layout.row(i, page) else { continue };
             let text_y = rect.y as i32 + (EDITOR_DROPDOWN_ROW_H as i32 - HUD_TEXT_SIZE) / 2;
             if *row == SettingsRow::Reset {
                 let button = Self::settings_reset_rect(rect);
@@ -755,8 +795,14 @@ impl MapEditor {
             d.draw_text(&value, value_x, text_y, HUD_TEXT_SIZE, value_color);
             if row.cli_override(self.cli_overrides) {
                 let x = value_x + text_width(&value, HUD_TEXT_SIZE) as i32 + 4;
-                d.draw_text(&text().get(keys::SETTINGS_CLI), x, text_y + 5, HUD_LABEL_SIZE, DIM);
+                d.draw_text(&text().get(keys::SETTINGS_CLI), x, text_y + 4, UI_SMALL_TEXT, DIM);
             }
+        }
+        if let Some(pager) = layout.pager {
+            let from = page * layout.per_page + 1;
+            let to = (from + layout.per_page - 1).min(SETTINGS_ROWS.len());
+            let hint = text().fmt(keys::EDITOR_PAGE, &[("from", from.into()), ("to", to.into()), ("n", SETTINGS_ROWS.len().into())]);
+            draw_pager(d, pager.row, &hint, page > 0, page + 1 < layout.pages);
         }
     }
 
@@ -765,16 +811,15 @@ impl MapEditor {
     /// it works and each severity's count beside its mark; then a page of
     /// findings, each its mark, its words (`lint-<kind>`), where it is
     /// and, where it has one, its FIX button; the pager past a page.
-    fn draw_lint_panel(&self, d: &mut impl RaylibDraw, layout: &Layout, page: usize) {
+    fn draw_lint_panel(&self, d: &mut impl RaylibDraw, layout: &chrome::LintLayout, page: usize) {
         let t = text();
         let len = self.lint_len();
-        let panel = Self::lint_panel_rect(layout, len);
-        draw_hanging_panel(d, panel);
-        let header = Self::lint_row_rect(panel, 0);
+        draw_hanging_panel(d, layout.panel);
+        let header = layout.row(0);
         let left = (header.x + LINT_TEXT_INSET) as i32;
         d.draw_text(&t.get(keys::CHECK_TITLE), left, (header.y + 8.0) as i32, LINT_TITLE_SIZE, TEXT);
-        d.draw_text(&t.get(keys::CHECK_HINT), left, (header.y + 30.0) as i32, HUD_LABEL_SIZE, DIM);
-        self.draw_clear_row(d, Self::lint_row_rect(panel, 1));
+        d.draw_text(&fit_text(&t.get(keys::CHECK_HINT), LINT_HINT_W, UI_SMALL_TEXT), left, (header.y + 29.0) as i32, UI_SMALL_TEXT, DIM);
+        self.draw_clear_row(d, layout.row(1));
         let Some(report) = &self.lint else { return };
         // The counts at the header's right end, errors first.
         let mut x = header.x + header.width - LINT_TEXT_INSET;
@@ -791,14 +836,15 @@ impl MapEditor {
             x -= LINT_COUNT_GAP;
         }
         if report.findings.is_empty() {
-            let row = Self::lint_row_rect(panel, LINT_HEAD_ROWS);
+            let row = layout.row(LINT_HEAD_ROWS);
             let y = (row.y + (row.height - LINT_TITLE_SIZE as f32) / 2.0) as i32;
             d.draw_text(&t.get(keys::CHECK_NONE), left, y, LINT_TITLE_SIZE, LINT_CLEAN);
             return;
         }
-        let page = page.min(Self::lint_pages(len) - 1);
-        for (slot, (index, finding)) in report.findings.iter().enumerate().skip(page * LINT_PAGE_ROWS).take(LINT_PAGE_ROWS).enumerate() {
-            let row = Self::lint_row_rect(panel, LINT_HEAD_ROWS + slot);
+        let page = page.min(layout.pages - 1);
+        let per_page = layout.per_page;
+        for (slot, (index, finding)) in report.findings.iter().enumerate().skip(page * per_page).take(per_page).enumerate() {
+            let row = layout.row(LINT_HEAD_ROWS + slot);
             if self.lint_marked == Some(index) {
                 let inset = Rectangle::new(row.x + 4.0, row.y + 2.0, row.width - 8.0, row.height - 4.0);
                 d.draw_rectangle_rounded(inset, 0.2, EDITOR_PANEL_SEGMENTS, Color::new(255, 255, 255, 40));
@@ -807,9 +853,9 @@ impl MapEditor {
             let words = fit_text(&t.named("lint", finding.kind.tag()), LINT_FINDING_W, LINT_TITLE_SIZE);
             let text_x = (row.x + LINT_TEXT_INSET + LINT_MARK + 8.0) as i32;
             d.draw_text(&words, text_x, (row.y + 8.0) as i32, LINT_TITLE_SIZE, TEXT);
-            d.draw_text(&place_text(&finding.cells), text_x, (row.y + 30.0) as i32, HUD_LABEL_SIZE, DIM);
+            d.draw_text(&place_text(&finding.cells), text_x, (row.y + 29.0) as i32, UI_SMALL_TEXT, DIM);
             if finding.fix.is_some() {
-                let fix = Self::lint_fix_rect(row);
+                let fix = chrome::LintLayout::fix(row);
                 d.draw_rectangle_rounded_lines_ex(fix, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
                 let label = t.get(keys::CHECK_FIX);
                 let w = text_width(&label, LINT_TITLE_SIZE);
@@ -817,19 +863,11 @@ impl MapEditor {
                 d.draw_text(&label, (fix.x + (fix.width - w) / 2.0) as i32, y, LINT_TITLE_SIZE, BUILD_ACCENT);
             }
         }
-        if len > LINT_PAGE_ROWS {
-            // The pager, as the Load list draws its own.
-            let pager = Self::lint_row_rect(panel, LINT_HEAD_ROWS + LINT_PAGE_ROWS);
-            let last = Self::lint_pages(len) - 1;
-            let arrow_y = (pager.y + (pager.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
-            d.draw_text("<", pager.x as i32 + 16, arrow_y, HUD_TEXT_SIZE, if page > 0 { TEXT } else { DIM });
-            let right = pager.x + pager.width - 16.0 - text_width(">", HUD_TEXT_SIZE);
-            d.draw_text(">", right as i32, arrow_y, HUD_TEXT_SIZE, if page < last { TEXT } else { DIM });
-            let from = page * LINT_PAGE_ROWS + 1;
-            let to = (from + LINT_PAGE_ROWS - 1).min(len);
+        if let Some(pager) = layout.pager {
+            let from = page * per_page + 1;
+            let to = (from + per_page - 1).min(len);
             let hint = t.fmt(keys::EDITOR_PAGE, &[("from", from.into()), ("to", to.into()), ("n", len.into())]);
-            let hint_x = pager.x + (pager.width - text_width(&hint, HUD_LABEL_SIZE)) / 2.0;
-            d.draw_text(&hint, hint_x as i32, (pager.y + (pager.height - HUD_LABEL_SIZE as f32) / 2.0) as i32, HUD_LABEL_SIZE, DIM);
+            draw_pager(d, pager.row, &hint, page > 0, page + 1 < layout.pages);
         }
     }
 
@@ -852,7 +890,7 @@ impl MapEditor {
             let x = row.x + row.width - LINT_TEXT_INSET - text_width(&line, LINT_TITLE_SIZE);
             d.draw_text(&line, x as i32, (row.y + 8.0) as i32, LINT_TITLE_SIZE, TEXT);
         }
-        d.draw_text(&t.get(hint), words_x, (row.y + 30.0) as i32, HUD_LABEL_SIZE, DIM);
+        d.draw_text(&fit_text(&t.get(hint), LINT_CLEAR_W, UI_SMALL_TEXT), words_x, (row.y + 29.0) as i32, UI_SMALL_TEXT, DIM);
         d.draw_rectangle((row.x + 8.0) as i32, (row.y + row.height - 2.0) as i32, (row.width - 16.0) as i32, 2, Color::new(255, 255, 255, 30));
     }
 
@@ -878,7 +916,7 @@ impl MapEditor {
 /// at its edge.
 const LOUPE_FRAME: Color = Color::new(12, 12, 16, 255);
 
-/// The loupe (`MapEditor::loupe`) in bitmap pixels: `picture` holds its
+/// The loupe (`MapEditor::loupe`) in UI points: `picture` holds its
 /// world from its corner at a texel a world pixel (`draw_loupe_world`),
 /// put on its square at the loupe's own whole-block scale, sampled
 /// nearest (a render texture's filter), on a plate of its own; the cell
@@ -947,17 +985,39 @@ fn draw_flag(d: &mut impl RaylibDraw, x: f32, y: f32, cleared: bool) {
     }
 }
 
-/// The clear check's readout in the bar (`MapEditor::clear_rect`): the
-/// flag and, once the canvas's revision is cleared, its par beside it -
-/// numbers only, so no language has to fit there.
-fn draw_clear_readout(d: &mut impl RaylibDraw, rect: Rectangle, par: Option<f64>) {
+/// The clear check's readout in the bar (`Bar::clear`): the flag and, once
+/// the canvas's revision is cleared, its par beside it in `size` - numbers
+/// only, so no language has to fit there.
+fn draw_clear_readout(d: &mut impl RaylibDraw, rect: Rectangle, par: Option<f64>, size: i32) {
     let y = rect.y + ((rect.height - 14.0) / 2.0).floor();
     draw_flag(d, rect.x + 2.0, y, par.is_some());
     if let Some(par) = par {
         let label = crate::hud::clock_text(par as f32);
-        let text_y = (rect.y + (rect.height - HUD_LABEL_SIZE as f32) / 2.0) as i32;
-        d.draw_text(&label, (rect.x + 16.0) as i32, text_y, HUD_LABEL_SIZE, TEXT);
+        let text_y = (rect.y + (rect.height - size as f32) / 2.0) as i32;
+        d.draw_text(&label, (rect.x + 16.0) as i32, text_y, size, TEXT);
     }
+}
+
+/// A pager row (`chrome::Pager`): `<` at its left end and `>` at its right,
+/// each dim where there is no page that way, and `hint` - the span on
+/// screen - between them.
+fn draw_pager(d: &mut impl RaylibDraw, row: Rectangle, hint: &str, back: bool, next: bool) {
+    let arrow_y = (row.y + (row.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
+    d.draw_text("<", row.x as i32 + 16, arrow_y, HUD_TEXT_SIZE, if back { TEXT } else { DIM });
+    let right = row.x + row.width - 16.0 - text_width(">", HUD_TEXT_SIZE);
+    d.draw_text(">", right as i32, arrow_y, HUD_TEXT_SIZE, if next { TEXT } else { DIM });
+    let hint_x = row.x + (row.width - text_width(hint, UI_SMALL_TEXT)) / 2.0;
+    d.draw_text(hint, hint_x as i32, (row.y + (row.height - UI_SMALL_TEXT as f32) / 2.0) as i32, UI_SMALL_TEXT, DIM);
+}
+
+/// Where a bar icon is drawn in `zone`, a button or a category button's
+/// icon half: with a mouse the 32 pt icon box the bar has always had, `x`
+/// in from the zone's left; on a touch screen a 40 pt one centred in it,
+/// so the sprite is drawn its own 32 pt (`draw_tool_icon` insets by 4).
+fn icon_rect(zone: Rectangle, touch: bool, x: f32) -> Rectangle {
+    let side = if touch { ICON_PX + 8.0 } else { ICON_PX };
+    let left = if touch { zone.x + (zone.width - side) / 2.0 } else { zone.x + x };
+    Rectangle::new(left, zone.y + ((zone.height - side) / 2.0).floor(), side, side)
 }
 
 /// Where a finding is, as its row says it: the map cell under its first
@@ -997,13 +1057,12 @@ fn draw_badge(d: &mut impl RaylibDraw, right: f32, top: f32) {
     d.draw_circle((right - 5.0) as i32, (top + 5.0) as i32, 4.0, Color::LIME);
 }
 
-/// An outlined bar button with a 10 px label centred in it (UNDO/REDO).
 /// FILE / MAP: an outlined button with its label and a caret, the label
 /// in the accent while its menu is open.
 fn draw_menu_button(d: &mut impl RaylibDraw, rect: Rectangle, label: &str, open: bool) {
     let color = if open { BUILD_ACCENT } else { TEXT };
     d.draw_rectangle_rounded_lines_ex(
-        Rectangle::new(rect.x, rect.y + 4.0, rect.width - BUTTON_GAP, rect.height - 8.0),
+        Rectangle::new(rect.x, rect.y + 4.0, rect.width - MENU_BOX_INSET, rect.height - 8.0),
         0.2,
         EDITOR_PANEL_SEGMENTS,
         1.0,
@@ -1014,17 +1073,13 @@ fn draw_menu_button(d: &mut impl RaylibDraw, rect: Rectangle, label: &str, open:
     draw_caret(d, rect.x as i32 + 48, (rect.y + (rect.height - 6.0) / 2.0) as i32, color);
 }
 
-fn draw_small_button(d: &mut impl RaylibDraw, rect: Rectangle, text: &str, color: Color) {
-    let inset = Rectangle::new(rect.x, rect.y + 4.0, rect.width - 4.0, rect.height - 8.0);
+/// An outlined bar button with its label centred in it in `size`: UNDO,
+/// REDO, FIT, CHECK, PLAY HERE (`chrome::small_text`).
+fn draw_small_button(d: &mut impl RaylibDraw, rect: Rectangle, text: &str, color: Color, size: i32) {
+    let inset = Rectangle::new(rect.x, rect.y + 4.0, rect.width - SMALL_BOX_INSET, rect.height - 8.0);
     d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
-    let w = text_width(text, HUD_LABEL_SIZE);
-    d.draw_text(
-        text,
-        (inset.x + (inset.width - w) / 2.0) as i32,
-        (rect.y + (rect.height - HUD_LABEL_SIZE as f32) / 2.0) as i32,
-        HUD_LABEL_SIZE,
-        color,
-    );
+    let w = text_width(text, size);
+    d.draw_text(text, (inset.x + (inset.width - w) / 2.0) as i32, (rect.y + (rect.height - size as f32) / 2.0) as i32, size, color);
 }
 
 /// The pickup icon for a kind.
@@ -1384,35 +1439,29 @@ fn draw_anchor(d: &mut impl RaylibDraw, rect: Rectangle, anchor: Anchor, color: 
 #[cfg(test)]
 mod bar_tests {
     use super::*;
-    use crate::{DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH};
+    use crate::EDITOR_SETTINGS_W;
 
-    const W: f32 = DEFAULT_SCREEN_WIDTH as f32;
-    const H: f32 = DEFAULT_SCREEN_HEIGHT as f32;
-
-    /// The bar's slots must never overlap and must all end before the
-    /// SAVE and PLAY buttons at the default width, with the widest thing
-    /// each can hold written down here.
+    /// A category button's icon and caret, with a mouse and on a touch
+    /// screen: the icon inside the icon half, the caret clear of it and
+    /// inside the button's drawn box, at the 34 pt a desktop's bar has
+    /// always drawn it at with a mouse.
     #[test]
-    fn bar_slots_fit_the_default_bar_without_overlapping() {
-        assert!(SLOT_BUILD + crate::text::width("BUILD", HUD_TEXT_SIZE) as f32 <= SLOT_NAME);
-        assert!(SLOT_NAME + NAME_W <= SLOT_CATEGORIES);
-        assert!(SLOT_CATEGORIES + Category::ALL.len() as f32 * CATEGORY_W <= SLOT_ERASE);
-        assert!(SLOT_ERASE + SMALL_BUTTON_W <= SLOT_UNDO);
-        assert!(SLOT_UNDO + SMALL_BUTTON_W <= SLOT_REDO);
-        assert!(SLOT_REDO + SMALL_BUTTON_W <= SLOT_FILE);
-        assert!(SLOT_FILE + MAP_BUTTON_W <= SLOT_MAP);
-        assert!(SLOT_MAP + MAP_BUTTON_W <= SLOT_FIT);
-        assert!(SLOT_FIT + SMALL_BUTTON_W <= SLOT_CHECK, "FIT runs into CHECK");
-        assert!(SLOT_CHECK + CHECK_W <= SLOT_CLEAR, "CHECK runs into the clear check's readout");
-        // The flag and the longest par the readout writes, 59:59.
-        assert!(16.0 + crate::text::width("59:59", HUD_LABEL_SIZE) as f32 <= CLEAR_W, "the par overflows its readout");
-        assert!(SLOT_CLEAR + CLEAR_W <= SLOT_HERE, "the clear check's readout runs into PLAY HERE");
-        let layout = Layout::for_field(W, H);
-        let play = mode_button_rect(layout.panel);
-        assert!(SLOT_HERE + HERE_W <= play.x, "PLAY HERE runs into PLAY");
-        // The caret sits clear of the icon and inside the button's box.
-        assert!(CATEGORY_CARET_X as f32 >= ICON_PX, "the caret overlaps the icon");
-        assert!(CATEGORY_CARET_X + CARET_W <= (CATEGORY_W - BUTTON_GAP) as i32, "caret leaves the button");
+    fn a_category_buttons_icon_and_caret_stay_in_their_halves() {
+        for touch in [false, true] {
+            let ui = crate::hud::UiFrame::new((1600.0, 900.0), 1.0, 1.0, crate::hud::Insets::default(), touch);
+            let bar = Bar::of(&ui);
+            let button = bar.category(Category::Wall).expect("a wide bar has the five");
+            let icon = icon_rect(button.icon, touch, 0.0);
+            let caret_x = button.rect.x + button.rect.width - BUTTON_GAP - CARET_W as f32;
+            assert!(icon.x >= button.icon.x && icon.x + icon.width <= button.icon.x + button.icon.width, "touch={touch}: {icon:?}");
+            assert!(icon.y >= button.rect.y && icon.y + icon.height <= button.rect.y + button.rect.height, "touch={touch}: {icon:?}");
+            assert!(caret_x >= icon.x + icon.width, "touch={touch}: the caret overlaps the icon");
+            assert!(caret_x + CARET_W as f32 <= button.rect.x + button.rect.width - BUTTON_GAP, "touch={touch}: the caret leaves the button");
+            if !touch {
+                assert_eq!(caret_x - button.rect.x, 34.0);
+                assert_eq!(icon, Rectangle::new(button.rect.x, button.rect.y, ICON_PX, ICON_PX));
+            }
+        }
     }
 
     /// A TANK row's chassis icon sits inside its row, between the TANK

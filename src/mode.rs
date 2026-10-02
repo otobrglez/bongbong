@@ -29,7 +29,7 @@
 //! do, and is the way back to a level already won.
 
 use crate::ai::Intent;
-use crate::editor::{BuilderInput, EditorAction, MapEditor};
+use crate::editor::{BuilderFrame, BuilderInput, EditorAction, MapEditor};
 use crate::hud::{result_layout, LevelBanner, NextLevel, PlayChrome, ResultButtons, ResultView};
 use crate::level_select::{LevelSelect, SelectAction, SelectInput};
 use crate::levels::Campaign;
@@ -39,7 +39,7 @@ use crate::net::client::{RoomSetup, Target};
 use crate::net::round::AnyRound;
 use crate::net::rooms::{RoomCode, RoomsHost, SiteBase};
 use crate::simulation::{Game, Outcome, PlayerCount};
-use crate::{Layout, Rect};
+use crate::Rect;
 
 /// Which mode the window is in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -831,15 +831,16 @@ impl Session {
         self.sync_level();
     }
 
-    /// One frame of the builder, in build mode: `PLAY` starts the round,
-    /// `PLAY HERE` starts it from the middle of the builder's view.
-    pub fn update_builder(&mut self, input: &BuilderInput, layout: &Layout) {
+    /// One frame of the builder, in build mode, on the window `frame`
+    /// describes: `PLAY` starts the round, `PLAY HERE` starts it from the
+    /// middle of the builder's view.
+    pub fn update_builder(&mut self, input: &BuilderInput, frame: &BuilderFrame) {
         if self.driver != Driver::Build {
             return;
         }
         // The CHECK panel lints the canvas the way PLAY would set it up.
         self.builder.lint_setup = crate::maplint::LintSetup::of(&self.game);
-        match self.builder.update(input, layout) {
+        match self.builder.update(input, frame) {
             EditorAction::None => {}
             EditorAction::Play => {
                 self.play();
@@ -1048,18 +1049,18 @@ mod session_tests {
     /// while the dev Save prompt is taking text is a character, not PLAY.
     #[test]
     fn play_closes_the_builders_menu_and_tab_yields_to_the_save_prompt() {
-        use crate::editor::BuilderInput;
+        use crate::editor::{BuilderFrame, BuilderInput};
         let mut s = session();
         s.press_build();
         s.answer_dialog(true);
-        let layout = Layout::for_field(W, H);
-        // The MAP button, from the bar's fixed slots.
-        let map_button = {
-            let r = crate::editor::MapEditor::map_rect(&layout);
-            crate::math::Vec2::new(r.x + r.width / 2.0, r.y + r.height / 2.0)
+        let frame = BuilderFrame::headless(s.builder.map().field_size(), s.builder.map().class());
+        // A named button's middle, on the window (`named_buttons`).
+        let at = |s: &Session, name: &str| {
+            let r = s.builder.named_buttons(&frame).into_iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("no {name}")).1;
+            frame.ui.to_window(crate::math::Vec2::new(r.x + r.width / 2.0, r.y + r.height / 2.0))
         };
-        let press = BuilderInput { pointer: Some(map_button), pressed: true, held: true, ..Default::default() };
-        s.update_builder(&press, &layout);
+        let press = BuilderInput { pointer: Some(at(&s, "map")), pressed: true, held: true, ..Default::default() };
+        s.update_builder(&press, &frame);
         assert_eq!(s.builder.open_menu(), Some("map"));
         assert_eq!(s.toggle(), Driver::Play);
         s.press_build();
@@ -1068,19 +1069,15 @@ mod session_tests {
 
         // The Save-as prompt (FILE > SAVE AS...) takes text: Tab is a
         // character there, not PLAY.
-        let file_rect = crate::editor::MapEditor::file_rect(&layout);
-        let file_button = crate::math::Vec2::new(file_rect.x + file_rect.width / 2.0, file_rect.y + file_rect.height / 2.0);
-        let press = BuilderInput { pointer: Some(file_button), pressed: true, held: true, ..Default::default() };
-        s.update_builder(&press, &layout);
+        let press = BuilderInput { pointer: Some(at(&s, "file")), pressed: true, held: true, ..Default::default() };
+        s.update_builder(&press, &frame);
         assert_eq!(s.builder.open_menu(), Some("file"));
         if crate::map::saving_available() {
-            // The third row of the menu is SAVE AS.
-            let save_as = crate::math::Vec2::new(file_rect.x + 8.0, layout.panel.y + 32.0 + 2.5 * 48.0);
-            let press = BuilderInput { pointer: Some(save_as), pressed: true, held: true, ..Default::default() };
-            s.update_builder(&press, &layout);
+            let press = BuilderInput { pointer: Some(at(&s, "save_as")), pressed: true, held: true, ..Default::default() };
+            s.update_builder(&press, &frame);
             assert_eq!(s.builder.open_menu(), Some("save"));
             assert_eq!(s.toggle(), Driver::Build, "Tab in the Save prompt started a round");
-            s.update_builder(&BuilderInput { escape: true, ..Default::default() }, &layout);
+            s.update_builder(&BuilderInput { escape: true, ..Default::default() }, &frame);
             assert_eq!(s.builder.open_menu(), None);
             assert_eq!(s.toggle(), Driver::Play);
         }

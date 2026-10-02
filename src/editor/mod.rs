@@ -13,18 +13,22 @@
 //! or a finger produces, and the tests below run headlessly.
 //!
 //! The edit model (strokes with the toggle-erase rule, the MAP settings,
-//! load/reset, the undo stack in `history.rs`) and every hit rect are this
-//! file, built into every build; the bar, the dropdowns and the settings
-//! panel are the chrome on top, drawn by `render.rs` behind the `render`
-//! feature.
+//! load/reset, the undo stack in `history.rs`) and every hit test are this
+//! file, built into every build; the bar, the popups, the status line, the
+//! navigator and the loupe are the chrome on top, laid out on the window in
+//! UI points by `chrome.rs` - the one geometry table the hit tests here,
+//! the painter (`render.rs`, behind the `render` feature) and the dev
+//! server read - and drawn by `render.rs`. The canvas is the bitmap under
+//! the bar (`chrome::BuilderFrame`).
 //!
 //! **The canvas has its own camera** (`camera.rs`,
 //! docs/large-maps-follow-camera.md §9): FIT shows the whole map - an
-//! arena exactly as it always was - and the wheel at the cursor, a middle
-//! or Space drag, `+`/`-`, the arrows and the bar's FIT button zoom and
-//! pan it. Every pointer goes through that camera before a cell is
-//! hit-tested (`cell_at`), and the canvas is drawn through the same one,
-//! so a press paints the cell drawn under it at every zoom.
+//! arena at the scale its round is drawn at, letterboxed under the bar -
+//! and the wheel at the cursor, a middle or Space drag, `+`/`-`, the
+//! arrows and the bar's FIT button zoom and pan it. Every pointer goes
+//! through that camera before a cell is hit-tested (`cell_at`), and the
+//! canvas is drawn through the same one, so a press paints the cell drawn
+//! under it at every zoom.
 //!
 //! **A touch screen is read finger by finger** (`gesture.rs`): one finger
 //! paints once past the touch slop, two pan and pinch-zoom, a two-finger
@@ -33,6 +37,7 @@
 //! tap zooms in instead of painting and a drag pans (the paint threshold).
 
 pub mod camera;
+pub mod chrome;
 pub mod gesture;
 pub mod history;
 #[cfg(feature = "render")]
@@ -41,13 +46,14 @@ pub mod render;
 pub use render::EditorTextures;
 
 pub use camera::{BuilderCamera, CanvasRules, CanvasScreen, Viewport};
+pub use chrome::{Bar, BarButton, BarTools, BuilderFrame, Chrome, PopupLayout};
 
 use rand::RngExt;
 use std::collections::BTreeMap;
 use crate::math::{Color, Rectangle, Vec2};
 
 use crate::ground::{self, GroundGrid};
-use crate::hud::{mode_button_rect, Corners};
+use crate::hud::Corners;
 use crate::maplint::{LintCell, LintFinding, LintFix, LintSetup, LintSeverity};
 use crate::minimap::{Class, Minimap, MinimapRules};
 use crate::level::{Mission, SpawnKind, Tier};
@@ -57,107 +63,59 @@ use crate::pickup::PickupKind;
 use crate::frog::Side;
 use crate::tower::TowerKind;
 use crate::tank::TankKind;
-use crate::{EDITOR_BAR_HIT_SLACK, EDITOR_DROPDOWN_ROW_H, EDITOR_DROPDOWN_W, EDITOR_SETTINGS_W, EDITOR_STEPPER_SIZE, Layout, PATHFIND_CELL_SIZE, Position, Rect};
+use crate::{EDITOR_STEPPER_SIZE, Layout, PATHFIND_CELL_SIZE, Position};
+use chrome::{LintLayout, LoadLayout, Palette, SettingsLayout, LINT_HEAD_ROWS};
 pub use history::{CellChange, EditStep, MapDiff, MapSettings, UndoStack};
 
 /// The builder's accent: the amber the `BUILD` label, the active
 /// category's outline and the mode button share (`hud::BUILD_COLOR`).
 pub const BUILD_ACCENT: Color = crate::hud::BUILD_COLOR;
 
-// Bar slots along the build bar (docs/game-editor-fusion.md section 7):
-// x offsets from the panel's left, fixed so a name or a readout changing
-// width never nudges the buttons after it. These are the ones the hit
-// rects read; the drawing's own (`BUILD`, the name, the caret) sit with
-// it in render.rs, and `bar_slots_fit_the_default_bar_without_overlapping`
-// there pins that nothing overlaps.
-const SLOT_CATEGORIES: f32 = 232.0;
-/// A category button is its current tool's icon and a caret, no text:
-/// the standard 960 px bar has no room for five labelled buttons, so the
-/// names live in the dropdown and the active tool's in the field's
-/// status line.
-const CATEGORY_W: f32 = 52.0;
-const SLOT_ERASE: f32 = 500.0;
-const SLOT_UNDO: f32 = 548.0;
-const SLOT_REDO: f32 = 596.0;
-const SMALL_BUTTON_W: f32 = 40.0;
-const SLOT_FILE: f32 = 644.0;
-const SLOT_MAP: f32 = 716.0;
-/// FILE and MAP share a width.
-const MAP_BUTTON_W: f32 = 64.0;
-/// FIT, after MAP: the camera back to the whole canvas. A small button
-/// like UNDO's.
-const SLOT_FIT: f32 = 788.0;
-/// CHECK, after FIT: the map's check (`Popup::Lint`), the linter's
-/// findings with a jump to each and its quick fix. A small button.
-const SLOT_CHECK: f32 = 832.0;
-const CHECK_W: f32 = 56.0;
-/// The clear check's readout, after CHECK (`MapEditor::par`): a flag, and
-/// the par beside it once the canvas's revision is cleared. A press opens
-/// the CHECK panel, which says the rest.
-const SLOT_CLEAR: f32 = 890.0;
-const CLEAR_W: f32 = 44.0;
-/// PLAY HERE, just before PLAY at the bar's right end: a round from the
-/// middle of the view rather than the map's start. A small button, wide
-/// enough for its two words.
-const SLOT_HERE: f32 = 936.0;
-const HERE_W: f32 = 68.0;
-/// The CHECK panel: as wide as a finding's title, its place and its FIX
-/// button need, and this many findings a page - the header and the clear
-/// check's row above them and, when there are more, a pager row below,
-/// which keeps the panel inside the standard field's 544 px on any screen.
-const LINT_PANEL_W: f32 = 440.0;
-const LINT_PAGE_ROWS: usize = 7;
-/// The CHECK panel's rows above its findings: the header and the clear
-/// check.
-const LINT_HEAD_ROWS: usize = 2;
 /// A finding row's FIX button, at the row's right end.
 const LINT_FIX_W: f32 = 80.0;
-/// A finding row's mark (a 12 px square) and words, inset from the row's
-/// left; the words run from 8 px past the mark to 8 px short of the FIX
-/// button - what `text_tests` holds every language's to, in 16 px.
+/// A finding row's mark (a 12 pt square) and words, inset from the row's
+/// left; the words run from 8 pt past the mark to 8 pt short of the FIX
+/// button - what `text_tests` holds every language's to, in 16 pt.
 #[cfg_attr(not(feature = "render"), allow(dead_code))]
 const LINT_TEXT_INSET: f32 = 12.0;
 #[cfg_attr(not(feature = "render"), allow(dead_code))]
 const LINT_MARK: f32 = 12.0;
 #[cfg_attr(not(feature = "render"), allow(dead_code))]
-pub(crate) const LINT_FINDING_W: f32 = LINT_PANEL_W - LINT_TEXT_INSET - LINT_MARK - 8.0 - SETTINGS_INSET - LINT_FIX_W - 8.0;
+pub(crate) const LINT_FINDING_W: f32 = chrome::LINT_PANEL_W - LINT_TEXT_INSET - LINT_MARK - 8.0 - SETTINGS_INSET - LINT_FIX_W - 8.0;
+/// The width the CHECK panel's hint line has, and the clear check's words:
+/// the panel less its insets, and from beside the flag to the right inset
+/// - what `text_tests` holds every language's to.
+#[cfg_attr(not(feature = "render"), allow(dead_code))]
+pub(crate) const LINT_HINT_W: f32 = chrome::LINT_PANEL_W - 2.0 * LINT_TEXT_INSET;
+#[cfg_attr(not(feature = "render"), allow(dead_code))]
+pub(crate) const LINT_CLEAR_W: f32 = chrome::LINT_PANEL_W - 2.0 * LINT_TEXT_INSET - LINT_MARK - 8.0;
 /// What a jump to a finding shows round its cells at least, in cells
 /// across and down, so a one-cell finding is seen in its surroundings
 /// rather than filling the canvas.
 const LINT_JUMP_CONTEXT_CELLS: (f32, f32) = (14.0, 9.0);
 /// The gap a jump keeps between what it frames and the open CHECK panel.
 const LINT_FREE_GAP: f32 = 16.0;
-/// The loupe's side, in points on the glass - about 23 mm on a phone,
-/// twice and more what a fingertip covers - before it is cut down to
-/// whole blocks of the world at the loupe's scale.
+/// The loupe's side, in UI points - about 23 mm on a phone, twice and more
+/// what a fingertip covers - before it is cut down to whole blocks of the
+/// world at the loupe's scale.
 const LOUPE_PT: f32 = 144.0;
-/// How far the loupe stands off the point under the finger, in points:
+/// How far the loupe stands off the point under the finger, in UI points:
 /// clear of the fingertip.
 const LOUPE_LIFT_PT: f32 = 44.0;
 /// The loupe's magnification over the canvas, before it is put on the
 /// nearest whole-block scale: the cell the stroke paints and part of each
 /// of its neighbours, larger than the finger leaves them.
 const LOUPE_ZOOM: f32 = 1.5;
-/// How many rows the Load list shows at once (eight fit the 480 px
-/// standard field). When there are more maps than that, the last row is a
-/// pager a tap turns (a touch screen has no wheel) and the wheel scrolls
-/// row by row.
-const LOAD_VISIBLE_ROWS: usize = 8;
-const LOAD_PANEL_W: f32 = 360.0;
-/// The icons in the bar and the dropdown rows, the sheets' own 32 px.
-const ICON_PX: f32 = 32.0;
 /// The settings panel's row layout: label at the left inset, the `<`
 /// button, the value, the `>` button at the right inset.
 const SETTINGS_INSET: f32 = 4.0;
 const SETTINGS_DEC_X: f32 = 124.0;
-/// How far the navigator's picture stands in from the canvas area's right
-/// and bottom edges, in points: the chrome's edge (`hud::UI_EDGE_PT`) and
-/// its plate's pad.
-const NAVIGATOR_MARGIN_PT: f32 = crate::hud::UI_EDGE_PT + crate::hud::PLATE_PAD;
-/// One frame of raw builder input, in **window** pixels (the bar
-/// included). `main.rs` fills it from the mouse, the touch screen and the
-/// keyboard; the dev server fills it from `click`/`key` requests. Nothing
-/// in this module reads raylib input directly.
+/// One frame of raw builder input, in the **window's** own coordinates -
+/// what the mouse and the touch screen report. `app.rs` fills it from the
+/// mouse, the touch screen and the keyboard; the dev server fills it from
+/// `click`/`key`/`builder_touch` requests. `update` takes each point to the
+/// canvas's bitmap or to the chrome's UI points through the frame
+/// (`BuilderFrame`). Nothing in this module reads raylib input directly.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BuilderInput {
     /// Where the pointer is this frame: the mouse, or the finger while it
@@ -192,8 +150,9 @@ pub struct BuilderInput {
     pub redo: bool,
     /// Characters typed this frame, for the dev Save prompt.
     pub typed: String,
-    /// Every touch point down this frame, in bitmap pixels - the raw
-    /// fingers (`gesture.rs`), not raylib's gestures. Empty with a mouse.
+    /// Every touch point down this frame, in the window's coordinates - the
+    /// raw fingers (`gesture.rs`), not raylib's gestures. Empty with a
+    /// mouse.
     pub touches: Vec<crate::touch::TouchPoint>,
     /// Seconds since the last frame: what a held key pans by and a tap is
     /// timed with.
@@ -408,13 +367,31 @@ impl Category {
 
     /// The group's name in the language on screen.
     pub fn label(self) -> String {
-        crate::text::text().get(match self {
+        crate::text::text().get(self.label_key())
+    }
+
+    /// The message that names the group.
+    pub fn label_key(self) -> crate::text::Key {
+        match self {
             Category::Wall => crate::text::keys::CATEGORY_WALL,
             Category::Prop => crate::text::keys::CATEGORY_PROP,
             Category::Ground => crate::text::keys::CATEGORY_GROUND,
             Category::Actor => crate::text::keys::CATEGORY_ACTOR,
             Category::Pickup => crate::text::keys::CATEGORY_PICKUP,
-        })
+        }
+    }
+
+    /// The group as the dev server spells it: its open list's name
+    /// (`MapEditor::open_menu`) and its bar buttons' (`category_wall`,
+    /// `list_wall`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Category::Wall => "wall",
+            Category::Prop => "prop",
+            Category::Ground => "ground",
+            Category::Actor => "actor",
+            Category::Pickup => "pickup",
+        }
     }
 
     pub fn index(self) -> usize {
@@ -432,11 +409,15 @@ impl Category {
 enum Popup {
     /// A category's tool list, below its bar button.
     Dropdown(Category),
-    /// The MAP settings panel, below the MAP button.
-    Settings,
+    /// The palette of every category's tools, below the TOOLS button a
+    /// narrow bar folds the five category buttons into.
+    Palette,
+    /// The MAP settings panel, below the MAP button, `page` pages in where
+    /// the room under the bar pages it.
+    Settings { page: usize },
     /// The FILE menu, below the FILE button.
     File,
-    /// The Load list over the field: every map `map::available_maps`
+    /// The Load list under the bar: every map `map::available_maps`
     /// offers, `scroll` rows in.
     Load { entries: Vec<MapEntry>, scroll: usize },
     /// The Save-as prompt (native only).
@@ -469,8 +450,8 @@ impl LintReport {
 /// standing clear of it, which the finger itself hides on the canvas.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Loupe {
-    /// Where it stands, in bitmap pixels: a square above the finger
-    /// (`loupe_rect`), its corner on a whole device pixel.
+    /// Where it stands, in UI points like the rest of the chrome: a square
+    /// above the finger (`loupe_rect`), its corner on a whole device pixel.
     pub rect: Rectangle,
     /// The world it shows: whole 2 px blocks a side, centred on the cell
     /// the stroke paints, its corner on the block grid.
@@ -486,10 +467,11 @@ pub struct Loupe {
 }
 
 /// Where a loupe of `side` stands for a finger at `finger` in `area`, all
-/// in bitmap pixels: above the finger, `lift` clear of it; wholly left of
-/// it where the finger is too near the area's right edge for it to stand
-/// centred above (the hand is below and to the right); beside it, level
-/// with it, where there is no room above; and kept inside the area.
+/// in one unit (the chrome's UI points): above the finger, `lift` clear of
+/// it; wholly left of it where the finger is too near the area's right
+/// edge for it to stand centred above (the hand is below and to the
+/// right); beside it, level with it, where there is no room above; and
+/// kept inside the area.
 pub fn loupe_rect(finger: Vec2, side: f32, lift: f32, area: Rectangle) -> Rectangle {
     let right = area.x + area.width;
     let left_of = finger.x - lift - side;
@@ -522,6 +504,16 @@ impl FileRow {
             &[FileRow::Load, FileRow::Save, FileRow::SaveAs, FileRow::Clear]
         } else {
             &[FileRow::Load, FileRow::Clear]
+        }
+    }
+
+    /// The row as `status.builder.buttons` names it.
+    fn name(self) -> &'static str {
+        match self {
+            FileRow::Load => "load",
+            FileRow::Save => "save",
+            FileRow::SaveAs => "save_as",
+            FileRow::Clear => "clear_map",
         }
     }
 }
@@ -608,6 +600,9 @@ pub struct MapEditor {
     /// Each category's current tool, in `Category::ALL` order.
     current: [Tool; 5],
     active_tool: Tool,
+    /// The category the brush came from last: the folded TOOLS button
+    /// shows its current tool while the eraser is the brush.
+    last_category: Category,
     ground: GroundGrid,
     /// Fixed for this builder session (rolled once in `new`) and reused by
     /// every `rebuild_ground` call - see `ground::build`'s `seed` param -
@@ -618,8 +613,8 @@ pub struct MapEditor {
     status: Option<String>,
     stroke: Option<Stroke>,
     history: UndoStack,
-    /// The last pointer position `update` saw, in window pixels - the
-    /// hover highlight and the cursor readout draw from it, so a touch
+    /// The last pointer position `update` saw, on the canvas's bitmap -
+    /// the hover highlight and the cursor readout draw from it, so a touch
     /// screen keeps showing the last tapped cell.
     pointer: Option<Vec2>,
     /// The canvas's camera: FIT, or a zoom and where it looks.
@@ -705,6 +700,7 @@ impl MapEditor {
             map,
             current,
             active_tool: current[0],
+            last_category: Category::Wall,
             ground: GroundGrid::default(),
             ground_seed: rand::rng().random(),
             plain_canvas: false,
@@ -800,55 +796,56 @@ impl MapEditor {
         self.camera.set(center, scale, &vp, &CanvasRules::current());
     }
 
-    /// The map cell under a bitmap point, through the camera: `None` off
-    /// the canvas, on the builder's chrome or past the field's edge. The
-    /// one place a pointer becomes a cell, so a press paints the cell the
-    /// canvas draws under it at every zoom.
-    pub fn cell_at(&self, pointer: Vec2, layout: &Layout) -> Option<(i32, i32)> {
-        let world = self.world_at(pointer, layout)?;
+    /// The map cell under a window point, through the frame and the camera:
+    /// `None` off the canvas, on the builder's chrome or past the field's
+    /// edge. The one place a pointer becomes a cell, so a press paints the
+    /// cell the canvas draws under it at every zoom.
+    pub fn cell_at(&self, window: Vec2, frame: &BuilderFrame) -> Option<(i32, i32)> {
+        self.canvas_cell(frame.to_canvas(window), frame)
+    }
+
+    /// The world point under a window point on the canvas, through the
+    /// frame and the camera; `None` off the canvas area or on the chrome
+    /// over it.
+    pub fn world_at(&self, window: Vec2, frame: &BuilderFrame) -> Option<Vec2> {
+        self.canvas_world(frame.to_canvas(window), frame)
+    }
+
+    /// `cell_at` for a point of the canvas's bitmap.
+    fn canvas_cell(&self, bitmap: Vec2, frame: &BuilderFrame) -> Option<(i32, i32)> {
+        let world = self.canvas_world(bitmap, frame)?;
         let (w, h) = self.map.field_size();
         (world.x >= 0.0 && world.x < w && world.y >= 0.0 && world.y < h).then(|| map::world_to_cell(world))
     }
 
-    /// The world point under a bitmap point on the canvas, through the
-    /// camera; `None` off the canvas area or on the chrome over it.
-    pub fn world_at(&self, pointer: Vec2, layout: &Layout) -> Option<Vec2> {
-        if !self.on_canvas(pointer, layout) {
+    /// `world_at` for a point of the canvas's bitmap.
+    fn canvas_world(&self, bitmap: Vec2, frame: &BuilderFrame) -> Option<Vec2> {
+        if !self.on_canvas(bitmap, frame) {
             return None;
         }
-        Some(self.view_camera(layout).to_world(layout.to_field(pointer)))
+        let layout = &frame.layout;
+        Some(self.view_camera(layout).to_world(layout.to_field(bitmap)))
     }
 
-    /// Whether a bitmap point is on the canvas area and not on the
-    /// builder's chrome (the bar, an open popup, the navigator).
-    fn on_canvas(&self, pointer: Vec2, layout: &Layout) -> bool {
-        layout.field.contains(pointer) && !self.point_on_ui(pointer, layout)
+    /// Whether a point of the canvas's bitmap is on the canvas area and not
+    /// under the builder's chrome (the bar, an open popup, the navigator).
+    fn on_canvas(&self, bitmap: Vec2, frame: &BuilderFrame) -> bool {
+        frame.layout.field.contains(bitmap) && !self.point_on_ui(frame.canvas_to_ui(bitmap), frame)
     }
 
     /// Where the navigator's picture stands (docs/large-maps-follow-camera.md
-    /// §9), in bitmap pixels: a minimap of the canvas in the canvas area's
-    /// bottom-right corner, `NAVIGATOR_MARGIN_PT` in from its edges - the
-    /// status line runs along the bottom-left, the bar's buttons and their
-    /// popups hang from the top -, sized like play's minimap
-    /// (`MinimapRules::size_pt`) in the screen's points and never more than
-    /// half the area either way; its plate is `Corners::plate` round it.
-    /// `None` at FIT on an arena, where it would show what the canvas shows
-    /// and the canvas draws as it always has.
-    pub fn navigator_rect(&self, layout: &Layout) -> Option<Rectangle> {
+    /// §9), in UI points: a minimap of the canvas in the bottom-right corner
+    /// of the room under the bar (`chrome::navigator`) - the status line
+    /// runs along the bottom-left, the bar's buttons and their popups hang
+    /// from the top -, sized like play's minimap (`MinimapRules::size_pt`)
+    /// and never more than half that room either way; its plate is
+    /// `Corners::plate` round it. `None` at FIT on an arena, where it would
+    /// show what the canvas shows and the canvas draws as it always has.
+    pub fn navigator_rect(&self, frame: &BuilderFrame) -> Option<Rectangle> {
         if self.camera.is_fit() && self.map.class() == crate::framing::MapClass::Arena {
             return None;
         }
-        let vp = self.viewport_in(layout);
-        let (w, h) = MinimapRules::current().size_pt(self.map.field_size());
-        let (w, h) = (vp.px(w), vp.px(h));
-        let area = layout.field;
-        let fit = (area.w * 0.5 / w).min(area.h * 0.5 / h).min(1.0);
-        if !(fit > 0.0) {
-            return None;
-        }
-        let (w, h) = (w * fit, h * fit);
-        let margin = vp.px(NAVIGATOR_MARGIN_PT);
-        Some(Rectangle::new(area.x + area.w - margin - w, area.y + area.h - margin - h, w, h))
+        chrome::navigator(frame.under_bar(), MinimapRules::current().size_pt(self.map.field_size()))
     }
 
     /// The navigator: a press on it puts the middle of the view on the
@@ -858,12 +855,13 @@ impl MapEditor {
     /// `builder_touch` alike, through the pointer and the press. A finger
     /// that lands there is no canvas finger (`on_canvas`), so no gesture
     /// takes it. Whether this frame was the navigator's.
-    fn navigate(&mut self, input: &BuilderInput, layout: &Layout, rules: &CanvasRules) -> bool {
-        let rect = self.navigator_rect(layout);
-        let (Some(pointer), Some(rect), true) = (input.pointer, rect, input.held) else {
+    fn navigate(&mut self, input: &BuilderInput, frame: &BuilderFrame, rules: &CanvasRules) -> bool {
+        let rect = self.navigator_rect(frame);
+        let (Some(window), Some(rect), true) = (input.pointer, rect, input.held) else {
             self.nav_drag = false;
             return false;
         };
+        let pointer = frame.to_ui(window);
         if input.pressed && Corners::plate(rect).contains(pointer) {
             self.finish_stroke();
             self.nav_drag = true;
@@ -872,7 +870,7 @@ impl MapEditor {
             return false;
         }
         let world = crate::minimap::to_world(rect, self.map.field_size(), pointer);
-        let vp = self.viewport_in(layout);
+        let vp = self.viewport_in(&frame.layout);
         self.camera.navigate(world, &vp, rules);
         true
     }
@@ -934,8 +932,18 @@ impl MapEditor {
     pub fn select_tool(&mut self, tool: Tool) {
         if let Some(category) = tool.category() {
             self.current[category.index()] = tool;
+            self.last_category = category;
         }
         self.active_tool = tool;
+    }
+
+    /// The tool the folded TOOLS button shows: the brush, or while the
+    /// eraser is the brush the category tool it came from.
+    pub fn tools_button_tool(&self) -> Tool {
+        match self.active_tool.category() {
+            Some(_) => self.active_tool,
+            None => self.current_tool(self.last_category),
+        }
     }
 
     /// Step a category's current tool forwards or backwards through its
@@ -1480,19 +1488,15 @@ impl MapEditor {
     }
 
     /// Which popup is open, as the dev server's `mode` tool spells it: a
-    /// category's dropdown by the category's name, `map` for the settings
-    /// panel, `save` for the dev Save prompt.
+    /// category's dropdown by the category's name, `tools` for the folded
+    /// bar's palette, `map` for the settings panel, `save` for the dev Save
+    /// prompt.
     pub fn open_menu(&self) -> Option<&'static str> {
         match &self.popup {
             None => None,
-            Some(Popup::Dropdown(category)) => Some(match category {
-                Category::Wall => "wall",
-                Category::Prop => "prop",
-                Category::Ground => "ground",
-                Category::Actor => "actor",
-                Category::Pickup => "pickup",
-            }),
-            Some(Popup::Settings) => Some("map"),
+            Some(Popup::Dropdown(category)) => Some(category.name()),
+            Some(Popup::Palette) => Some("tools"),
+            Some(Popup::Settings { .. }) => Some("map"),
             Some(Popup::File) => Some("file"),
             Some(Popup::Load { .. }) => Some("load"),
             Some(Popup::Save { .. }) => Some("save"),
@@ -1539,19 +1543,19 @@ impl MapEditor {
     /// Pick finding `index` of the panel's report: the canvas marks its
     /// cells and the camera frames them (`frame_cells`), beside the
     /// panel. Whether there was such a finding.
-    pub fn pick_finding(&mut self, index: usize, layout: &Layout) -> bool {
+    pub fn pick_finding(&mut self, index: usize, frame: &BuilderFrame) -> bool {
         let Some(cells) = self.lint.as_ref().and_then(|r| r.findings.get(index)).map(|f| f.cells.clone()) else {
             return false;
         };
         self.lint_marked = Some(index);
-        self.frame_cells(&cells, layout);
+        self.frame_cells(&cells, frame);
         true
     }
 
     /// Make finding `index`'s quick fix, as one undo step, then lint the
     /// map it leaves and frame where the fix put the map right. Whether a
     /// fix was made.
-    pub fn fix_finding(&mut self, index: usize, layout: &Layout) -> bool {
+    pub fn fix_finding(&mut self, index: usize, frame: &BuilderFrame) -> bool {
         let Some(fix) = self.lint.as_ref().and_then(|r| r.findings.get(index)).and_then(|f| f.fix) else {
             return false;
         };
@@ -1560,7 +1564,7 @@ impl MapEditor {
         }
         self.run_lint();
         let (col, row) = fix.target();
-        self.frame_cells(&[LintCell::Map(col, row)], layout);
+        self.frame_cells(&[LintCell::Map(col, row)], frame);
         true
     }
 
@@ -1571,13 +1575,14 @@ impl MapEditor {
     /// canvas's middle when no panel is open. Never past the largest zoom,
     /// and FIT where the whole field already shows them that big. A finding
     /// with no cells moves nothing.
-    pub fn frame_cells(&mut self, cells: &[LintCell], layout: &Layout) {
+    pub fn frame_cells(&mut self, cells: &[LintCell], frame: &BuilderFrame) {
         let Some(bounds) = crate::maplint::cells_bounds(cells) else { return };
         let cell = crate::OBSTACLE_GRID_SIZE;
         let (min_w, min_h) = (LINT_JUMP_CONTEXT_CELLS.0 * cell, LINT_JUMP_CONTEXT_CELLS.1 * cell);
         let middle = Vec2::new(bounds.x + bounds.width / 2.0, bounds.y + bounds.height / 2.0);
         let (w, h) = ((bounds.width + 2.0 * cell).max(min_w), (bounds.height + 2.0 * cell).max(min_h));
-        let free = self.free_canvas(layout);
+        let free = self.free_canvas(frame);
+        let layout = &frame.layout;
         let vp = self.viewport_in(layout);
         let scale = (free.width / w).min(free.height / h);
         let area = layout.field;
@@ -1591,13 +1596,21 @@ impl MapEditor {
     }
 
     /// The part of the canvas area the CHECK panel leaves free, in bitmap
-    /// pixels: left of it where it hangs (a margin's gap short of it), the
-    /// whole area when it is shut.
-    pub fn free_canvas(&self, layout: &Layout) -> Rectangle {
-        let area = Rectangle::new(layout.field.x, layout.field.y, layout.field.w, layout.field.h);
-        match (&self.popup, self.popup_rect(layout)) {
-            (Some(Popup::Lint { .. }), Some(panel)) if panel.x > area.x => {
-                Rectangle::new(area.x, area.y, (panel.x - LINT_FREE_GAP - area.x).max(1.0), area.height)
+    /// pixels: left of it where it hangs over the canvas (a margin's gap
+    /// short of it), the whole area when it is shut or stands past the
+    /// canvas's right edge.
+    pub fn free_canvas(&self, frame: &BuilderFrame) -> Rectangle {
+        let f = frame.layout.field;
+        let area = Rectangle::new(f.x, f.y, f.w, f.h);
+        match (&self.popup, self.chrome(frame).popup) {
+            (Some(Popup::Lint { .. }), Some(PopupLayout::Lint(lint))) => {
+                let left = frame.ui_to_canvas(Vec2::new(lint.panel.x, lint.panel.y)).x;
+                let gap = frame.ui_to_canvas(Vec2::new(lint.panel.x - LINT_FREE_GAP, lint.panel.y)).x;
+                if left > area.x && left < area.x + area.width {
+                    Rectangle::new(area.x, area.y, (gap - area.x).max(1.0), area.height)
+                } else {
+                    area
+                }
             }
             _ => area,
         }
@@ -1609,216 +1622,98 @@ impl MapEditor {
         self.lint.as_ref().map_or(0, |r| r.findings.len())
     }
 
-    /// The CHECK panel's pages: one per `LINT_PAGE_ROWS` findings, and one
-    /// for none.
-    fn lint_pages(findings: usize) -> usize {
-        findings.div_ceil(LINT_PAGE_ROWS).max(1)
+    // --- the chrome: one geometry table (`chrome.rs`) ---
+
+    /// The builder's chrome this frame in `frame`'s UI points: the bar and
+    /// the open popup laid out for what the builder holds. What the
+    /// painter draws, every hit test reads and the dev server reports.
+    pub fn chrome(&self, frame: &BuilderFrame) -> Chrome {
+        let bar = frame.bar();
+        let room = frame.under_bar();
+        let popup = self.popup.as_ref().map(|popup| match popup {
+            Popup::Dropdown(category) => PopupLayout::Dropdown(*category, chrome::menu_list(bar.tools_anchor(*category), room, category.tools().count())),
+            Popup::Palette => PopupLayout::Palette(Palette::of(bar.tools_anchor(Category::Wall), room)),
+            Popup::Settings { .. } => PopupLayout::Settings(SettingsLayout::of(bar.map, room, SETTINGS_ROWS.len())),
+            Popup::File => PopupLayout::File(chrome::menu_list(bar.file, room, FileRow::all().len())),
+            Popup::Load { entries, .. } => PopupLayout::Load(LoadLayout::of(room, entries.len())),
+            Popup::Save { .. } => PopupLayout::Save(chrome::save_prompt(room)),
+            Popup::Lint { .. } => PopupLayout::Lint(LintLayout::of(bar.check, room, self.lint_len())),
+        });
+        Chrome { bar, room, popup }
     }
 
-    // --- bar geometry, window space ---
-
-    /// A full-height bar button `w` wide at `x` from the panel's left.
-    fn bar_button(panel: Rect, x: f32, w: f32) -> Rectangle {
-        Rectangle::new(panel.x + x, panel.y, w, panel.h)
-    }
-
-    fn category_rect(layout: &Layout, category: Category) -> Rectangle {
-        Self::bar_button(layout.panel, SLOT_CATEGORIES + category.index() as f32 * CATEGORY_W, CATEGORY_W)
-    }
-
-    fn erase_rect(layout: &Layout) -> Rectangle {
-        Self::bar_button(layout.panel, SLOT_ERASE, SMALL_BUTTON_W)
-    }
-
-    fn undo_rect(layout: &Layout) -> Rectangle {
-        Self::bar_button(layout.panel, SLOT_UNDO, SMALL_BUTTON_W)
-    }
-
-    fn redo_rect(layout: &Layout) -> Rectangle {
-        Self::bar_button(layout.panel, SLOT_REDO, SMALL_BUTTON_W)
-    }
-
-    pub(crate) fn map_rect(layout: &Layout) -> Rectangle {
-        Self::bar_button(layout.panel, SLOT_MAP, MAP_BUTTON_W)
-    }
-
-    pub(crate) fn file_rect(layout: &Layout) -> Rectangle {
-        Self::bar_button(layout.panel, SLOT_FILE, MAP_BUTTON_W)
-    }
-
-    /// The FIT button: the camera back to the whole canvas.
-    pub(crate) fn fit_rect(layout: &Layout) -> Rectangle {
-        Self::bar_button(layout.panel, SLOT_FIT, SMALL_BUTTON_W)
-    }
-
-    /// The PLAY HERE button, at its slot from the panel's left like every
-    /// button but PLAY, which keeps the right end.
-    pub(crate) fn here_rect(layout: &Layout) -> Rectangle {
-        Self::bar_button(layout.panel, SLOT_HERE, HERE_W)
-    }
-
-    /// The CHECK button: the CHECK panel.
-    pub(crate) fn check_rect(layout: &Layout) -> Rectangle {
-        Self::bar_button(layout.panel, SLOT_CHECK, CHECK_W)
-    }
-
-    /// The clear check's readout, which opens the CHECK panel too.
-    pub(crate) fn clear_rect(layout: &Layout) -> Rectangle {
-        Self::bar_button(layout.panel, SLOT_CLEAR, CLEAR_W)
-    }
-
-    /// The CHECK panel, hanging from the bar below its button and slid
-    /// left to stay on the field like the MAP panel: a header row, the
-    /// clear check's row, a page of finding rows (one row saying there are
-    /// none, when there are none) and, past a page, the pager row.
-    fn lint_panel_rect(layout: &Layout, findings: usize) -> Rectangle {
-        let button = Self::check_rect(layout);
-        let paged = findings > LINT_PAGE_ROWS;
-        let rows = LINT_HEAD_ROWS + findings.clamp(1, LINT_PAGE_ROWS) + paged as usize;
-        let right = layout.field.x + layout.field.w;
-        Rectangle::new(
-            button.x.min(right - LINT_PANEL_W).max(layout.field.x),
-            layout.panel.y + layout.panel.h,
-            LINT_PANEL_W,
-            rows as f32 * EDITOR_DROPDOWN_ROW_H,
-        )
-    }
-
-    /// The CHECK panel's `index`-th row: 0 is the header, 1 the clear
-    /// check, the next `LINT_PAGE_ROWS` the page's findings, the one after
-    /// them the pager.
-    fn lint_row_rect(panel: Rectangle, index: usize) -> Rectangle {
-        Rectangle::new(panel.x, panel.y + index as f32 * EDITOR_DROPDOWN_ROW_H, panel.width, EDITOR_DROPDOWN_ROW_H)
-    }
-
-    /// A finding row's FIX button, at its right end.
-    fn lint_fix_rect(row: Rectangle) -> Rectangle {
-        Rectangle::new(row.x + row.width - SETTINGS_INSET - LINT_FIX_W, row.y + 4.0, LINT_FIX_W, row.height - 8.0)
-    }
-
-    /// The bar's buttons a tool presses by name, in bitmap pixels - the
-    /// rects the hit tests read (the dev server's `status.builder.buttons`)
-    /// - and, while the CHECK panel is open, its rows (`finding_N`, from
-    /// 0 over the whole report), their FIX buttons (`fix_N`) and its
-    /// pager's halves (`page_back`, `page_next`).
-    pub fn named_buttons(&self, layout: &Layout) -> Vec<(String, Rectangle)> {
-        let mut out = vec![
-            ("play".to_string(), mode_button_rect(layout.panel)),
-            ("play_here".to_string(), Self::here_rect(layout)),
-            ("check".to_string(), Self::check_rect(layout)),
-            ("clear".to_string(), Self::clear_rect(layout)),
-            ("fit".to_string(), Self::fit_rect(layout)),
-            ("map".to_string(), Self::map_rect(layout)),
-            ("file".to_string(), Self::file_rect(layout)),
-        ];
-        if let (Some(Popup::Lint { page }), Some(report)) = (&self.popup, &self.lint) {
-            let panel = Self::lint_panel_rect(layout, report.findings.len());
-            for (i, finding) in report.findings.iter().enumerate().skip(page * LINT_PAGE_ROWS).take(LINT_PAGE_ROWS) {
-                let row = Self::lint_row_rect(panel, LINT_HEAD_ROWS + i - page * LINT_PAGE_ROWS);
-                out.push((format!("finding_{i}"), row));
-                if finding.fix.is_some() {
-                    out.push((format!("fix_{i}"), Self::lint_fix_rect(row)));
+    /// The builder's buttons a tool presses by name, in UI points - the
+    /// rects the hit tests read (the dev server's `status.builder.buttons`
+    /// puts them on the window): the bar's (`Bar::named`) and, while a
+    /// popup is open, its own - a list's or the palette's `tool_<name>`,
+    /// the FILE menu's `load`, `save`, `save_as` and `clear_map`, the Load
+    /// list's `map_<name>`, the MAP panel's `<row>_dec`/`<row>_inc` and
+    /// `reset`, the CHECK panel's rows (`finding_N`, from 0 over the whole
+    /// report) and their FIX buttons (`fix_N`) - and a pager's halves
+    /// (`page_back`, `page_next`).
+    pub fn named_buttons(&self, frame: &BuilderFrame) -> Vec<(String, Rectangle)> {
+        let chrome = self.chrome(frame);
+        let mut out = chrome.bar.named();
+        let pager = |out: &mut Vec<(String, Rectangle)>, pager: Option<chrome::Pager>| {
+            if let Some(p) = pager {
+                out.push(("page_back".to_string(), p.back()));
+                out.push(("page_next".to_string(), p.next()));
+            }
+        };
+        match (&self.popup, &chrome.popup) {
+            (Some(Popup::Dropdown(category)), Some(PopupLayout::Dropdown(_, rows))) => {
+                for (i, tool) in category.tools().enumerate() {
+                    out.push((format!("tool_{}", tool.name()), rows.row(i)));
                 }
             }
-            if report.findings.len() > LINT_PAGE_ROWS {
-                let pager = Self::lint_row_rect(panel, LINT_HEAD_ROWS + LINT_PAGE_ROWS);
-                let half = pager.width / 2.0;
-                out.push(("page_back".to_string(), Rectangle::new(pager.x, pager.y, half, pager.height)));
-                out.push(("page_next".to_string(), Rectangle::new(pager.x + half, pager.y, half, pager.height)));
+            (Some(Popup::Palette), Some(PopupLayout::Palette(palette))) => {
+                for category in Category::ALL {
+                    for (i, tool) in category.tools().enumerate() {
+                        out.push((format!("tool_{}", tool.name()), palette.cell(category, i)));
+                    }
+                }
             }
+            (Some(Popup::File), Some(PopupLayout::File(rows))) => {
+                for (i, row) in FileRow::all().iter().enumerate() {
+                    out.push((row.name().to_string(), rows.row(i)));
+                }
+            }
+            (Some(Popup::Load { entries, scroll }), Some(PopupLayout::Load(load))) => {
+                let scroll = (*scroll).min(entries.len().saturating_sub(load.per_page));
+                for (i, entry) in entries.iter().skip(scroll).take(load.per_page).enumerate() {
+                    out.push((format!("map_{}", entry.name), load.rows.row(i)));
+                }
+                pager(&mut out, load.pager);
+            }
+            (Some(Popup::Settings { page }), Some(PopupLayout::Settings(settings))) => {
+                let page = (*page).min(settings.pages - 1);
+                for (i, row) in SETTINGS_ROWS.iter().enumerate() {
+                    let Some(rect) = settings.row(i, page) else { continue };
+                    if *row == SettingsRow::Reset {
+                        out.push(("reset".to_string(), Self::settings_reset_rect(rect)));
+                    } else {
+                        out.push((format!("{}_dec", row.name()), Self::settings_dec_rect(rect)));
+                        out.push((format!("{}_inc", row.name()), Self::settings_inc_rect(rect)));
+                    }
+                }
+                pager(&mut out, settings.pager);
+            }
+            (Some(Popup::Lint { page }), Some(PopupLayout::Lint(lint))) => {
+                if let Some(report) = &self.lint {
+                    let page = (*page).min(lint.pages - 1);
+                    for (i, finding) in report.findings.iter().enumerate().skip(page * lint.per_page).take(lint.per_page) {
+                        let row = lint.row(LINT_HEAD_ROWS + i - page * lint.per_page);
+                        out.push((format!("finding_{i}"), row));
+                        if finding.fix.is_some() {
+                            out.push((format!("fix_{i}"), LintLayout::fix(row)));
+                        }
+                    }
+                }
+                pager(&mut out, lint.pager);
+            }
+            _ => {}
         }
         out
-    }
-
-    /// The bar button under a window position, if any. Every button's
-    /// hit rect reaches `EDITOR_BAR_HIT_SLACK` above and below its drawn
-    /// box, so a slightly low tap on a phone still lands.
-    fn bar_button_at(point: Vec2, layout: &Layout) -> Option<BarButton> {
-        let on = |rect: Rectangle| hit_rect(rect).contains(point);
-        if on(mode_button_rect(layout.panel)) {
-            return Some(BarButton::Play);
-        }
-        if on(Self::file_rect(layout)) {
-            return Some(BarButton::File);
-        }
-        for category in Category::ALL {
-            let rect = Self::category_rect(layout, category);
-            if on(rect) {
-                // The icon selects, the caret beside it opens the list.
-                return Some(if point.x < rect.x + ICON_PX {
-                    BarButton::CategoryIcon(category)
-                } else {
-                    BarButton::CategoryMenu(category)
-                });
-            }
-        }
-        if on(Self::erase_rect(layout)) {
-            return Some(BarButton::Erase);
-        }
-        if on(Self::undo_rect(layout)) {
-            return Some(BarButton::Undo);
-        }
-        if on(Self::redo_rect(layout)) {
-            return Some(BarButton::Redo);
-        }
-        if on(Self::map_rect(layout)) {
-            return Some(BarButton::Map);
-        }
-        if on(Self::fit_rect(layout)) {
-            return Some(BarButton::Fit);
-        }
-        if on(Self::check_rect(layout)) || on(Self::clear_rect(layout)) {
-            return Some(BarButton::Check);
-        }
-        if on(Self::here_rect(layout)) {
-            return Some(BarButton::PlayHere);
-        }
-        None
-    }
-
-    // --- popup geometry, window space ---
-
-    /// A category's dropdown: below its button, over the field.
-    fn dropdown_rect(layout: &Layout, category: Category) -> Rectangle {
-        let button = Self::category_rect(layout, category);
-        let rows = category.tools().count() as f32;
-        Rectangle::new(button.x, layout.panel.y + layout.panel.h, EDITOR_DROPDOWN_W, rows * EDITOR_DROPDOWN_ROW_H)
-    }
-
-    fn dropdown_row_rect(layout: &Layout, category: Category, index: usize) -> Rectangle {
-        let list = Self::dropdown_rect(layout, category);
-        Rectangle::new(list.x, list.y + index as f32 * EDITOR_DROPDOWN_ROW_H, list.width, EDITOR_DROPDOWN_ROW_H)
-    }
-
-    /// Rows per column of the settings panel: two columns, because a
-    /// dozen 48 px rows are taller than the 544 px standard field.
-    const SETTINGS_ROWS_PER_COLUMN: usize = SETTINGS_ROWS.len().div_ceil(2);
-
-    /// The MAP settings panel: below the MAP button, over the field, two
-    /// columns of rows.
-    fn settings_rect(layout: &Layout) -> Rectangle {
-        let button = Self::map_rect(layout);
-        let width = 2.0 * EDITOR_SETTINGS_W;
-        // Anchored to its button but never past the field's right edge:
-        // MAP sits close to the end of the bar, so the panel slides left.
-        let right = layout.field.x + layout.field.w;
-        Rectangle::new(
-            button.x.min(right - width).max(layout.field.x),
-            layout.panel.y + layout.panel.h,
-            width,
-            Self::SETTINGS_ROWS_PER_COLUMN as f32 * EDITOR_DROPDOWN_ROW_H,
-        )
-    }
-
-    fn settings_row_rect(layout: &Layout, index: usize) -> Rectangle {
-        let panel = Self::settings_rect(layout);
-        let (column, row) = (index / Self::SETTINGS_ROWS_PER_COLUMN, index % Self::SETTINGS_ROWS_PER_COLUMN);
-        Rectangle::new(
-            panel.x + column as f32 * EDITOR_SETTINGS_W,
-            panel.y + row as f32 * EDITOR_DROPDOWN_ROW_H,
-            EDITOR_SETTINGS_W,
-            EDITOR_DROPDOWN_ROW_H,
-        )
     }
 
     /// A settings row's `<` button.
@@ -1836,78 +1731,26 @@ impl MapEditor {
         Rectangle::new(row.x + SETTINGS_INSET, row.y, row.width - 2.0 * SETTINGS_INSET, row.height)
     }
 
-    /// The FILE menu: below the FILE button, over the field.
-    fn file_menu_rect(layout: &Layout) -> Rectangle {
-        let button = Self::file_rect(layout);
-        let rows = FileRow::all().len() as f32;
-        Rectangle::new(button.x, layout.panel.y + layout.panel.h, EDITOR_DROPDOWN_W, rows * EDITOR_DROPDOWN_ROW_H)
-    }
-
-    fn file_row_rect(layout: &Layout, index: usize) -> Rectangle {
-        let menu = Self::file_menu_rect(layout);
-        Rectangle::new(menu.x, menu.y + index as f32 * EDITOR_DROPDOWN_ROW_H, menu.width, EDITOR_DROPDOWN_ROW_H)
-    }
-
-    /// The Load list: centred over the field, one row per visible map.
-    fn load_panel_rect(layout: &Layout, entries: usize) -> Rectangle {
-        let rows = entries.clamp(1, LOAD_VISIBLE_ROWS) as f32;
-        let h = rows * EDITOR_DROPDOWN_ROW_H;
-        let origin = layout.field_origin();
-        Rectangle::new(
-            origin.x + (layout.field.w - LOAD_PANEL_W) / 2.0,
-            origin.y + ((layout.field.h - h) / 2.0).max(0.0),
-            LOAD_PANEL_W,
-            h,
-        )
-    }
-
-    /// How many maps one page of the Load list shows: every row, or all
-    /// but the last when that row is the pager.
-    fn load_page_rows(entries: usize) -> usize {
-        if entries > LOAD_VISIBLE_ROWS { LOAD_VISIBLE_ROWS - 1 } else { LOAD_VISIBLE_ROWS }
-    }
-
-    /// The `index`-th visible row of the Load list.
-    fn load_row_rect(panel: Rectangle, index: usize) -> Rectangle {
-        Rectangle::new(panel.x, panel.y + index as f32 * EDITOR_DROPDOWN_ROW_H, panel.width, EDITOR_DROPDOWN_ROW_H)
-    }
-
-    /// The open popup's panel, if one is open.
-    fn popup_rect(&self, layout: &Layout) -> Option<Rectangle> {
-        match &self.popup {
-            None => None,
-            Some(Popup::Dropdown(category)) => Some(Self::dropdown_rect(layout, *category)),
-            Some(Popup::Settings) => Some(Self::settings_rect(layout)),
-            Some(Popup::File) => Some(Self::file_menu_rect(layout)),
-            Some(Popup::Load { entries, .. }) => Some(Self::load_panel_rect(layout, entries.len())),
-            Some(Popup::Save { .. }) => Some(Self::save_prompt_rect(layout)),
-            Some(Popup::Lint { .. }) => Some(Self::lint_panel_rect(layout, self.lint_len())),
-        }
-    }
-
-    fn save_prompt_rect(layout: &Layout) -> Rectangle {
-        let origin = layout.field_origin();
-        Rectangle::new(origin.x + layout.field.w / 2.0 - 150.0, origin.y + layout.field.h / 2.0 - 40.0, 300.0, 80.0)
-    }
-
-    /// Whether a window position lands on the builder's own chrome (the
-    /// bar, the open popup over the field, the navigator on its plate) - a
-    /// press there never paints the cell behind it and the hover highlight
-    /// hides.
-    fn point_on_ui(&self, point: Vec2, layout: &Layout) -> bool {
-        layout.panel.contains(point)
-            || self.popup_rect(layout).is_some_and(|r| r.contains(point))
-            || self.navigator_rect(layout).is_some_and(|r| Corners::plate(r).contains(point))
+    /// Whether a point in UI points lands on the builder's own chrome (the
+    /// bar, the open popup, the navigator on its plate) - a press there
+    /// never paints the cell behind it and the hover highlight hides.
+    fn point_on_ui(&self, point: Vec2, frame: &BuilderFrame) -> bool {
+        let chrome = self.chrome(frame);
+        chrome.bar.strip.contains(point)
+            || chrome.popup.is_some_and(|popup| popup.panel().contains(point))
+            || self.navigator_rect(frame).is_some_and(|r| Corners::plate(r).contains(point))
     }
 
     // --- input ---
 
-    /// Advance one frame on `input`: the open popup, or a press on the
-    /// bar, or a stroke on the field. Returns `EditorAction::Play` the
-    /// frame PLAY is pressed.
-    pub fn update(&mut self, input: &BuilderInput, layout: &Layout) -> EditorAction {
+    /// Advance one frame on `input`, whose points are the window's: the
+    /// open popup, or a press on the bar, or a stroke on the canvas - each
+    /// through `frame`, the chrome's in UI points and the canvas's on its
+    /// bitmap. Returns `EditorAction::Play` the frame PLAY is pressed.
+    pub fn update(&mut self, input: &BuilderInput, frame: &BuilderFrame) -> EditorAction {
+        let layout = &frame.layout;
         if let Some(p) = input.pointer {
-            self.pointer = Some(p);
+            self.pointer = Some(frame.to_canvas(p));
         }
         if let Some(screen) = input.screen {
             self.screen = screen;
@@ -1918,7 +1761,7 @@ impl MapEditor {
         }
         // A run of size presses is one undo step only while the panel
         // stays open.
-        if !matches!(self.popup, Some(Popup::Settings)) {
+        if !matches!(self.popup, Some(Popup::Settings { .. })) {
             self.resize_session = None;
         }
         let rules = CanvasRules::current();
@@ -1938,24 +1781,24 @@ impl MapEditor {
         // canvas's, and with fingers down the canvas is theirs.
         let touch = !input.touches.is_empty() || self.gestures.active();
         if touch {
-            self.touch_gestures(input, layout, &rules);
+            self.touch_gestures(input, frame, &rules);
         }
         if self.popup.is_some() {
             self.pan_from = None;
             self.nav_drag = false;
-            self.update_popup(input, layout);
+            self.update_popup(input, frame);
             return EditorAction::None;
         }
-        if self.navigate(input, layout, &rules) {
+        if self.navigate(input, frame, &rules) {
             return EditorAction::None;
         }
 
         if input.wheel != 0.0
             && let Some(pointer) = input.pointer
         {
-            self.wheel(pointer, input.wheel, layout, &rules);
+            self.wheel(pointer, input.wheel, frame, &rules);
         }
-        if !touch && self.pan_drag(input, layout, &rules) {
+        if !touch && self.pan_drag(input, frame, &rules) {
             return EditorAction::None;
         }
 
@@ -1967,17 +1810,17 @@ impl MapEditor {
             }
             return EditorAction::None;
         }
-        let Some(pointer) = input.pointer else {
+        let Some(window) = input.pointer else {
             return EditorAction::None;
         };
 
         // Chrome only reacts to the press edge, never every frame a drag
         // happens to stay over it.
-        if input.pressed {
-            if let Some(button) = Self::bar_button_at(pointer, layout) {
-                self.finish_stroke();
-                return self.press_bar_button(button);
-            }
+        if input.pressed
+            && let Some(button) = frame.bar().hit(frame.to_ui(window))
+        {
+            self.finish_stroke();
+            return self.press_bar_button(button);
         }
         if touch {
             return EditorAction::None;
@@ -1985,9 +1828,10 @@ impl MapEditor {
 
         // The canvas: a press begins a stroke, a held button continues it
         // into every new cell it crosses - the cell under the pointer
-        // through the camera. A press on the bar's empty parts, or past
-        // the map's edge, is not a paint.
-        if let Some(cell) = self.cell_at(pointer, layout) {
+        // through the camera. A press on the chrome, or past the map's
+        // edge, is not a paint.
+        let pointer = frame.to_canvas(window);
+        if let Some(cell) = self.canvas_cell(pointer, frame) {
             if input.pressed || input.right_pressed {
                 self.finish_stroke();
                 self.begin_stroke(cell, input.right_held && !input.held);
@@ -1995,21 +1839,22 @@ impl MapEditor {
                 self.drag_to(cell);
             }
         }
-        self.edge_scroll(pointer, input.dt, layout, &rules);
+        self.edge_scroll(pointer, input.dt, frame, &rules);
         EditorAction::None
     }
 
-    /// Edge scroll: while a stroke is held with its pointer within
-    /// `builder_edge_scroll_pt` of the canvas area's edge - or past it, over
-    /// the bar or off the window - the view moves toward that edge, faster
-    /// the deeper in, up to `builder_edge_scroll_pt_per_s`, and the stroke
-    /// carries on into the cells that come under the pointer, or, held past
-    /// the edge, under the nearest point of the canvas. A long wall needs
-    /// no pan in the middle.
-    fn edge_scroll(&mut self, pointer: Vec2, dt: f32, layout: &Layout, rules: &CanvasRules) {
+    /// Edge scroll: while a stroke is held with its pointer (on the
+    /// canvas's bitmap) within `builder_edge_scroll_pt` of the canvas
+    /// area's edge - or past it, over the bar or off the window - the view
+    /// moves toward that edge, faster the deeper in, up to
+    /// `builder_edge_scroll_pt_per_s`, and the stroke carries on into the
+    /// cells that come under the pointer, or, held past the edge, under the
+    /// nearest point of the canvas. A long wall needs no pan in the middle.
+    fn edge_scroll(&mut self, pointer: Vec2, dt: f32, frame: &BuilderFrame, rules: &CanvasRules) {
         if self.stroke.is_none() || !(dt > 0.0) {
             return;
         }
+        let layout = &frame.layout;
         let vp = self.viewport_in(layout);
         let margin = vp.px(rules.edge_scroll_pt);
         if !(margin > 0.0) {
@@ -2030,7 +1875,7 @@ impl MapEditor {
         let step = vp.px(rules.edge_scroll_pt_per_s) * dt;
         self.camera.pan(Vec2::new(-into.x * step, -into.y * step), &vp, rules);
         let on_canvas = Vec2::new(pointer.x.clamp(f.x, f.x + f.w - 1.0), pointer.y.clamp(f.y, f.y + f.h - 1.0));
-        if let Some(cell) = self.cell_at(on_canvas, layout) {
+        if let Some(cell) = self.canvas_cell(on_canvas, frame) {
             self.drag_to(cell);
         }
     }
@@ -2053,19 +1898,20 @@ impl MapEditor {
         }
     }
 
-    /// The wheel: over a category button it steps that category's tool
-    /// (towards you walks down the list), over the canvas it zooms at the
-    /// cursor - a whole-block step a notch on a coarse screen, smoothly on
-    /// a fine one.
-    fn wheel(&mut self, pointer: Vec2, wheel: f32, layout: &Layout, rules: &CanvasRules) {
-        let over = Category::ALL.into_iter().find(|&c| hit_rect(Self::category_rect(layout, c)).contains(pointer));
-        if let Some(category) = over {
+    /// The wheel at a window point: over a category button it steps that
+    /// category's tool (towards you walks down the list), over the canvas
+    /// it zooms at the cursor - a whole-block step a notch on a coarse
+    /// screen, smoothly on a fine one.
+    fn wheel(&mut self, window: Vec2, wheel: f32, frame: &BuilderFrame, rules: &CanvasRules) {
+        if let Some(category) = frame.bar().category_at(frame.to_ui(window)) {
             self.cycle_tool(category, wheel < 0.0);
             return;
         }
-        if !self.on_canvas(pointer, layout) {
+        let pointer = frame.to_canvas(window);
+        if !self.on_canvas(pointer, frame) {
             return;
         }
+        let layout = &frame.layout;
         let vp = self.viewport_in(layout);
         let at = layout.to_field(pointer);
         if vp.screen.coarse {
@@ -2090,26 +1936,29 @@ impl MapEditor {
     }
 
     /// One frame of fingers: the canvas's go through the gestures
-    /// (`gesture.rs`) and what they mean is done. Only a finger that lands
-    /// on the canvas while no popup is open is the canvas's.
-    fn touch_gestures(&mut self, input: &BuilderInput, layout: &Layout, rules: &CanvasRules) {
-        let vp = self.viewport_in(layout);
+    /// (`gesture.rs`), on the canvas's bitmap, and what they mean is done.
+    /// Only a finger that lands on the canvas while no popup is open is the
+    /// canvas's.
+    fn touch_gestures(&mut self, input: &BuilderInput, frame: &BuilderFrame, rules: &CanvasRules) {
+        let vp = self.viewport_in(&frame.layout);
+        let touches: Vec<crate::touch::TouchPoint> =
+            input.touches.iter().map(|t| crate::touch::TouchPoint { id: t.id, pos: frame.to_canvas(t.pos) }).collect();
         let canvas: Vec<i32> = if self.popup.is_some() {
             Vec::new()
         } else {
-            input.touches.iter().filter(|t| self.on_canvas(t.pos, layout)).map(|t| t.id).collect()
+            touches.iter().filter(|t| self.on_canvas(t.pos, frame)).map(|t| t.id).collect()
         };
         let paints = self.touch_paints(&vp, rules);
         let g = gesture::GestureRules { slop: vp.px(rules.slop_pt), tap_seconds: rules.tap_seconds };
-        let events = self.gestures.update(&input.touches, |t| canvas.contains(&t.id), paints, input.dt, &g);
+        let events = self.gestures.update(&touches, |t| canvas.contains(&t.id), paints, input.dt, &g);
         for event in events {
-            self.apply_gesture(event, layout, rules);
+            self.apply_gesture(event, frame, rules);
         }
         // A painting finger held at the canvas's edge scrolls it.
         if self.gestures.painting()
             && let Some(at) = self.stroke_pointer
         {
-            self.edge_scroll(at, input.dt, layout, rules);
+            self.edge_scroll(at, input.dt, frame, rules);
         }
     }
 
@@ -2120,38 +1969,46 @@ impl MapEditor {
         vp.cell_mm(self.camera.scale(vp)) >= rules.paint_min_cell_mm
     }
 
-    /// The loupe over `layout`'s canvas this frame: while one finger
+    /// The loupe over `frame`'s canvas this frame: while one finger
     /// paints a stroke (`gesture::Gestures::painting` - a mouse never
     /// does) where a cell is drawn under `builder_loupe_cell_mm` on the
     /// glass. It shows the cell the stroke paints and what is round it,
     /// `LOUPE_ZOOM` times larger on the nearest whole-block scale, in a
-    /// square of about `LOUPE_PT` a side standing clear of the finger
-    /// (`loupe_rect`) - of the canvas point the stroke paints under, which
-    /// held past the canvas's edge is the nearest point of it, as edge
-    /// scroll paints. Its side is whole 2 px blocks of the world and its
-    /// corner a whole device pixel, so no block in it is cut or uneven.
-    pub fn loupe(&self, layout: &Layout) -> Option<Loupe> {
+    /// square of about `LOUPE_PT` UI points a side standing clear of the
+    /// finger (`loupe_rect`), on the canvas and inside the safe area - of
+    /// the canvas point the stroke paints under, which held past the
+    /// canvas's edge is the nearest point of it, as edge scroll paints. Its
+    /// side is whole 2 px blocks of the world and its corner a whole device
+    /// pixel, so no block in it is cut or uneven.
+    pub fn loupe(&self, frame: &BuilderFrame) -> Option<Loupe> {
         let stroke = self.stroke.as_ref().filter(|_| self.gestures.painting())?;
         let finger = self.stroke_pointer?;
+        let layout = &frame.layout;
         let vp = self.viewport_in(layout);
         let scale = self.camera.scale(&vp);
         if !(vp.cell_mm(scale) < CanvasRules::current().loupe_cell_mm) {
             return None;
         }
         let f = layout.field;
-        let area = Rectangle::new(f.x, f.y, f.w, f.h);
         let on_canvas = Vec2::new(finger.x.clamp(f.x, f.x + f.w - 1.0), finger.y.clamp(f.y, f.y + f.h - 1.0));
-        let device_per_px = vp.screen.device_per_px.max(1e-3);
+        let finger = frame.canvas_to_ui(on_canvas);
+        let area = intersect(frame.canvas_ui(), {
+            let a = frame.ui.area;
+            Rectangle::new(a.x, a.y, a.w, a.h)
+        });
+        // Device pixels per UI point: the loupe's corner and side are whole
+        // ones.
+        let device = frame.device_per_point(vp.screen.device_per_px);
         let device_scale = camera::nearest_whole_block((vp.device_scale(scale) * LOUPE_ZOOM).max(camera::MIN_WHOLE_BLOCK_SCALE));
         let block = crate::pyro::BLOCK;
-        let blocks = (vp.px(LOUPE_PT) * device_per_px / (device_scale * block)).floor().max(1.0);
+        let blocks = (LOUPE_PT * device / (device_scale * block)).floor().max(1.0);
         let world_side = blocks * block;
-        let side = world_side * device_scale / device_per_px;
-        let rect = loupe_rect(on_canvas, side, vp.px(LOUPE_LIFT_PT), area);
+        let side = world_side * device_scale / device;
+        let rect = loupe_rect(finger, side, LOUPE_LIFT_PT, area);
         let snap = |v: f32, lo: f32, hi: f32| {
-            let lo = (lo * device_per_px).ceil();
-            let hi = ((hi * device_per_px).floor()).max(lo);
-            (v * device_per_px).round().clamp(lo, hi) / device_per_px
+            let lo = (lo * device).ceil();
+            let hi = ((hi * device).floor()).max(lo);
+            (v * device).round().clamp(lo, hi) / device
         };
         let rect = Rectangle::new(
             snap(rect.x, area.x, area.x + area.width - side),
@@ -2174,37 +2031,39 @@ impl MapEditor {
         })
     }
 
-    /// Do what a gesture means: a tap paints its cell (or zooms in on it
-    /// under the paint threshold), a stroke paints the cells it crosses
-    /// - begun at the first cell on the field it reaches - and a move,
-    /// a settle, an undo or a redo is the camera's or the history's.
-    fn apply_gesture(&mut self, event: gesture::GestureEvent, layout: &Layout, rules: &CanvasRules) {
+    /// Do what a gesture means - its points on the canvas's bitmap: a tap
+    /// paints its cell (or zooms in on it under the paint threshold), a
+    /// stroke paints the cells it crosses - begun at the first cell on the
+    /// field it reaches - and a move, a settle, an undo or a redo is the
+    /// camera's or the history's.
+    fn apply_gesture(&mut self, event: gesture::GestureEvent, frame: &BuilderFrame, rules: &CanvasRules) {
         use gesture::GestureEvent;
+        let layout = &frame.layout;
         let vp = self.viewport_in(layout);
         match event {
             GestureEvent::Tap(at) => {
                 self.pointer = Some(at);
                 if self.touch_paints(&vp, rules) {
-                    if let Some(cell) = self.cell_at(at, layout) {
+                    if let Some(cell) = self.canvas_cell(at, frame) {
                         self.finish_stroke();
                         self.begin_stroke(cell, false);
                         self.finish_stroke();
                     }
-                } else if self.on_canvas(at, layout) {
+                } else if self.on_canvas(at, frame) {
                     self.camera.zoom_for_tap(layout.to_field(at), &vp, rules);
                 }
             }
             GestureEvent::StrokeBegin(from) => {
                 self.finish_stroke();
                 self.stroke_pointer = Some(from);
-                if let Some(cell) = self.cell_at(from, layout) {
+                if let Some(cell) = self.canvas_cell(from, frame) {
                     self.begin_stroke(cell, false);
                 }
             }
             GestureEvent::StrokeTo(to) => {
                 self.pointer = Some(to);
                 self.stroke_pointer = Some(to);
-                if let Some(cell) = self.cell_at(to, layout) {
+                if let Some(cell) = self.canvas_cell(to, frame) {
                     if self.stroke.is_some() {
                         self.drag_to(cell);
                     } else {
@@ -2235,21 +2094,21 @@ impl MapEditor {
     /// the canvas with the pointer. It starts only on the canvas (a press
     /// on the bar with Space held is still a press on the bar) and ends any
     /// stroke under way. Whether this frame was one.
-    fn pan_drag(&mut self, input: &BuilderInput, layout: &Layout, rules: &CanvasRules) -> bool {
+    fn pan_drag(&mut self, input: &BuilderInput, frame: &BuilderFrame, rules: &CanvasRules) -> bool {
         let dragging = input.middle_held || (input.space_held && input.held);
-        let Some(pointer) = input.pointer.filter(|_| dragging) else {
+        let Some(pointer) = input.pointer.filter(|_| dragging).map(|p| frame.to_canvas(p)) else {
             self.pan_from = None;
             return false;
         };
         let from = match self.pan_from {
             Some(from) => from,
-            None if self.on_canvas(pointer, layout) => {
+            None if self.on_canvas(pointer, frame) => {
                 self.finish_stroke();
                 pointer
             }
             None => return false,
         };
-        let vp = self.viewport_in(layout);
+        let vp = self.viewport_in(&frame.layout);
         self.camera.pan(Vec2::new(pointer.x - from.x, pointer.y - from.y), &vp, rules);
         self.pan_from = Some(pointer);
         true
@@ -2263,6 +2122,7 @@ impl MapEditor {
             BarButton::File => self.popup = Some(Popup::File),
             BarButton::CategoryIcon(category) => self.select_tool(self.current_tool(category)),
             BarButton::CategoryMenu(category) => self.popup = Some(Popup::Dropdown(category)),
+            BarButton::Tools => self.popup = Some(Popup::Palette),
             BarButton::Erase => self.select_tool(Tool::Eraser),
             BarButton::Undo => {
                 self.undo();
@@ -2270,7 +2130,7 @@ impl MapEditor {
             BarButton::Redo => {
                 self.redo();
             }
-            BarButton::Map => self.popup = Some(Popup::Settings),
+            BarButton::Map => self.popup = Some(Popup::Settings { page: 0 }),
             BarButton::Fit => self.camera.fit(),
             BarButton::Check => self.open_lint(),
         }
@@ -2279,15 +2139,18 @@ impl MapEditor {
 
     /// Handle input while a popup is open, consuming it entirely: a
     /// press inside the popup works it, a press anywhere else closes it
-    /// and does nothing more, `Esc` closes it.
-    fn update_popup(&mut self, input: &BuilderInput, layout: &Layout) {
+    /// and does nothing more, `Esc` closes it. The popup's rows are the
+    /// chrome's (`chrome`), hit in UI points.
+    fn update_popup(&mut self, input: &BuilderInput, frame: &BuilderFrame) {
+        let layout = self.chrome(frame).popup;
         let Some(popup) = self.popup.take() else { return };
         if input.escape {
             return;
         }
         let pressed = input.pressed || input.right_pressed;
-        match popup {
-            Popup::Save { mut name } => {
+        let pointer = input.pointer.map(|p| frame.to_ui(p));
+        match (popup, layout) {
+            (Popup::Save { mut name }, _) => {
                 for c in input.typed.chars() {
                     if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
                         name.push(c);
@@ -2304,22 +2167,16 @@ impl MapEditor {
                     self.popup = Some(Popup::Save { name });
                 }
             }
-            Popup::File => {
-                let Some(pointer) = input.pointer.filter(|_| pressed) else {
+            (Popup::File, Some(PopupLayout::File(rows))) => {
+                let Some(pointer) = pointer.filter(|_| pressed) else {
                     self.popup = Some(Popup::File);
                     return;
                 };
                 // A pick or a press elsewhere: the menu closes either way.
                 if input.pressed {
-                    let picked = FileRow::all()
-                        .iter()
-                        .enumerate()
-                        .find(|&(i, _)| Self::file_row_rect(layout, i).contains(pointer))
-                        .map(|(_, row)| *row);
+                    let picked = FileRow::all().iter().enumerate().find(|&(i, _)| rows.row(i).contains(pointer)).map(|(_, row)| *row);
                     match picked {
-                        Some(FileRow::Load) => {
-                            self.popup = Some(Popup::Load { entries: map::available_maps(), scroll: 0 })
-                        }
+                        Some(FileRow::Load) => self.popup = Some(Popup::Load { entries: map::available_maps(), scroll: 0 }),
                         Some(FileRow::Save) if self.map.name.is_some() => {
                             if let Err(e) = self.save(None) {
                                 self.status = Some(e);
@@ -2333,25 +2190,24 @@ impl MapEditor {
                     }
                 }
             }
-            Popup::Load { entries, mut scroll } => {
-                let rows = Self::load_page_rows(entries.len());
+            (Popup::Load { entries, mut scroll }, Some(PopupLayout::Load(load))) => {
+                let rows = load.per_page;
                 let max = entries.len().saturating_sub(rows);
+                scroll = scroll.min(max);
                 if input.wheel != 0.0 {
                     scroll = if input.wheel < 0.0 { (scroll + 1).min(max) } else { scroll.saturating_sub(1) };
                 }
-                let Some(pointer) = input.pointer.filter(|_| pressed) else {
+                let Some(pointer) = pointer.filter(|_| pressed) else {
                     self.popup = Some(Popup::Load { entries, scroll });
                     return;
                 };
-                let panel = Self::load_panel_rect(layout, entries.len());
-                if !panel.contains(pointer) {
+                if !load.rows.panel.contains(pointer) {
                     return;
                 }
                 if input.pressed {
                     // The pager: its left half pages back, its right half on.
-                    let pager = Self::load_row_rect(panel, rows);
-                    if rows < entries.len() && pager.contains(pointer) {
-                        scroll = if pointer.x < pager.x + pager.width / 2.0 { scroll.saturating_sub(rows) } else { (scroll + rows).min(max) };
+                    if let Some(pager) = load.pager.filter(|p| p.row.contains(pointer)) {
+                        scroll = if pager.back().contains(pointer) { scroll.saturating_sub(rows) } else { (scroll + rows).min(max) };
                         self.popup = Some(Popup::Load { entries, scroll });
                         return;
                     }
@@ -2360,7 +2216,7 @@ impl MapEditor {
                         .skip(scroll)
                         .take(rows)
                         .enumerate()
-                        .find(|&(i, _)| Self::load_row_rect(panel, i).contains(pointer))
+                        .find(|&(i, _)| load.rows.row(i).contains(pointer))
                         .map(|(_, e)| e.name.clone());
                     if let Some(name) = picked {
                         if let Err(e) = self.load_named(&name) {
@@ -2371,22 +2227,25 @@ impl MapEditor {
                 }
                 self.popup = Some(Popup::Load { entries, scroll });
             }
-            Popup::Lint { page } => {
+            (Popup::Lint { page }, Some(PopupLayout::Lint(lint))) => {
                 // An edit since the last run - an undo key, a fix, a tool's
-                // stroke - is linted again before the panel reads it.
-                if self.lint_report().is_none_or(|(_, stale)| stale) {
+                // stroke - is linted again before the panel reads it, and
+                // the panel laid out for what that run found.
+                let lint = if self.lint_report().is_none_or(|(_, stale)| stale) {
                     self.run_lint();
-                }
+                    LintLayout::of(frame.bar().check, frame.under_bar(), self.lint_len())
+                } else {
+                    lint
+                };
                 let len = self.lint_len();
-                let last = Self::lint_pages(len) - 1;
+                let last = lint.pages - 1;
                 let mut page = page.min(last);
                 if input.wheel != 0.0 {
                     page = if input.wheel < 0.0 { (page + 1).min(last) } else { page.saturating_sub(1) };
                 }
                 self.popup = Some(Popup::Lint { page });
-                let Some(pointer) = input.pointer.filter(|_| pressed) else { return };
-                let panel = Self::lint_panel_rect(layout, len);
-                if !panel.contains(pointer) {
+                let Some(pointer) = pointer.filter(|_| pressed) else { return };
+                if !lint.panel.contains(pointer) {
                     // A press anywhere else closes the panel; the marks it
                     // made stay until the next edit.
                     self.popup = None;
@@ -2395,72 +2254,92 @@ impl MapEditor {
                 if !input.pressed {
                     return;
                 }
-                let pager = Self::lint_row_rect(panel, LINT_HEAD_ROWS + LINT_PAGE_ROWS);
-                if len > LINT_PAGE_ROWS && pager.contains(pointer) {
-                    page = if pointer.x < pager.x + pager.width / 2.0 { page.saturating_sub(1) } else { (page + 1).min(last) };
+                if let Some(pager) = lint.pager.filter(|p| p.row.contains(pointer)) {
+                    page = if pager.back().contains(pointer) { page.saturating_sub(1) } else { (page + 1).min(last) };
                     self.popup = Some(Popup::Lint { page });
                     return;
                 }
-                let on_page = (page * LINT_PAGE_ROWS..len).take(LINT_PAGE_ROWS);
+                let on_page = (page * lint.per_page..len).take(lint.per_page);
                 for (slot, index) in on_page.enumerate() {
-                    let row = Self::lint_row_rect(panel, LINT_HEAD_ROWS + slot);
+                    let row = lint.row(LINT_HEAD_ROWS + slot);
                     if !row.contains(pointer) {
                         continue;
                     }
                     let has_fix = self.lint.as_ref().is_some_and(|r| r.findings[index].fix.is_some());
-                    if has_fix && Self::lint_fix_rect(row).contains(pointer) {
-                        self.fix_finding(index, layout);
+                    if has_fix && LintLayout::fix(row).contains(pointer) {
+                        self.fix_finding(index, frame);
                     } else {
-                        self.pick_finding(index, layout);
+                        self.pick_finding(index, frame);
                     }
                     break;
                 }
             }
-            Popup::Dropdown(category) => {
-                let Some(pointer) = input.pointer.filter(|_| pressed) else {
+            (Popup::Dropdown(category), Some(PopupLayout::Dropdown(_, rows))) => {
+                let Some(pointer) = pointer.filter(|_| pressed) else {
                     self.popup = Some(Popup::Dropdown(category));
                     return;
                 };
                 // A pick or a press elsewhere: either way the list closes
                 // and the press goes no further.
                 if input.pressed {
-                    let picked = category
-                        .tools()
-                        .enumerate()
-                        .find(|&(i, _)| Self::dropdown_row_rect(layout, category, i).contains(pointer))
-                        .map(|(_, tool)| tool);
+                    let picked = category.tools().enumerate().find(|&(i, _)| rows.row(i).contains(pointer)).map(|(_, tool)| tool);
                     if let Some(tool) = picked {
                         self.select_tool(tool);
                     }
                 }
             }
-            Popup::Settings => {
-                let Some(pointer) = input.pointer.filter(|_| pressed) else {
-                    self.popup = Some(Popup::Settings);
+            (Popup::Palette, Some(PopupLayout::Palette(palette))) => {
+                let Some(pointer) = pointer.filter(|_| pressed) else {
+                    self.popup = Some(Popup::Palette);
                     return;
                 };
-                if !Self::settings_rect(layout).contains(pointer) {
+                // A pick or a press elsewhere: the palette closes either way.
+                if input.pressed {
+                    let picked = Category::ALL
+                        .into_iter()
+                        .flat_map(|category| category.tools().enumerate().map(move |(i, tool)| (category, i, tool)))
+                        .find(|&(category, i, _)| palette.cell(category, i).contains(pointer))
+                        .map(|(_, _, tool)| tool);
+                    if let Some(tool) = picked {
+                        self.select_tool(tool);
+                    }
+                }
+            }
+            (Popup::Settings { page }, Some(PopupLayout::Settings(settings))) => {
+                let last = settings.pages - 1;
+                let mut page = page.min(last);
+                if input.wheel != 0.0 {
+                    page = if input.wheel < 0.0 { (page + 1).min(last) } else { page.saturating_sub(1) };
+                }
+                let Some(pointer) = pointer.filter(|_| pressed) else {
+                    self.popup = Some(Popup::Settings { page });
+                    return;
+                };
+                if !settings.rows.panel.contains(pointer) {
                     return;
                 }
                 if input.pressed {
-                    for (i, row) in SETTINGS_ROWS.iter().enumerate() {
-                        let rect = Self::settings_row_rect(layout, i);
-                        if !rect.contains(pointer) {
-                            continue;
-                        }
-                        if *row == SettingsRow::Reset {
-                            if Self::settings_reset_rect(rect).contains(pointer) {
-                                self.reset();
+                    if let Some(pager) = settings.pager.filter(|p| p.row.contains(pointer)) {
+                        page = if pager.back().contains(pointer) { page.saturating_sub(1) } else { (page + 1).min(last) };
+                    } else {
+                        for (i, row) in SETTINGS_ROWS.iter().enumerate() {
+                            let Some(rect) = settings.row(i, page).filter(|r| r.contains(pointer)) else { continue };
+                            if *row == SettingsRow::Reset {
+                                if Self::settings_reset_rect(rect).contains(pointer) {
+                                    self.reset();
+                                }
+                            } else if Self::settings_dec_rect(rect).contains(pointer) {
+                                self.step_setting(*row, false);
+                            } else if Self::settings_inc_rect(rect).contains(pointer) {
+                                self.step_setting(*row, true);
                             }
-                        } else if Self::settings_dec_rect(rect).contains(pointer) {
-                            self.step_setting(*row, false);
-                        } else if Self::settings_inc_rect(rect).contains(pointer) {
-                            self.step_setting(*row, true);
                         }
                     }
                 }
-                self.popup = Some(Popup::Settings);
+                self.popup = Some(Popup::Settings { page });
             }
+            // A layout always comes with its popup; a mismatch closes it.
+            _ => {}
         }
     }
 
@@ -2515,27 +2394,6 @@ impl MapEditor {
 
 }
 
-/// One of the bar's buttons, as `bar_button_at` reports a press.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BarButton {
-    /// The icon half of a category button: select its current tool.
-    CategoryIcon(Category),
-    /// The name/caret half: open its list.
-    CategoryMenu(Category),
-    Erase,
-    Undo,
-    Redo,
-    Map,
-    File,
-    /// The camera back to the whole canvas.
-    Fit,
-    /// The CHECK panel, from its button or the clear check's readout.
-    Check,
-    Play,
-    /// PLAY from the middle of the view.
-    PlayHere,
-}
-
 /// The MAP panel's rows, top to bottom.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingsRow {
@@ -2563,6 +2421,31 @@ enum SettingsRow {
     /// Where the old map sits when the size changes: one of nine.
     Anchor,
     Reset,
+}
+
+impl SettingsRow {
+    /// The row as `status.builder.buttons` names its steppers
+    /// (`tanks_dec`, `tanks_inc`).
+    fn name(self) -> &'static str {
+        match self {
+            SettingsRow::Tanks => "tanks",
+            SettingsRow::Tank => "tank",
+            SettingsRow::Tank2 => "tank2",
+            SettingsRow::Mission => "mission",
+            SettingsRow::Spawn => "spawn",
+            SettingsRow::Waves => "waves",
+            SettingsRow::Size => "size",
+            SettingsRow::Growth => "growth",
+            SettingsRow::TierStart => "tier_start",
+            SettingsRow::TierEnd => "tier_end",
+            SettingsRow::Theme => "theme",
+            SettingsRow::Weather => "weather",
+            SettingsRow::Width => "width",
+            SettingsRow::Height => "height",
+            SettingsRow::Anchor => "anchor",
+            SettingsRow::Reset => "reset",
+        }
+    }
 }
 
 const SETTINGS_ROWS: [SettingsRow; 16] = [
@@ -2700,10 +2583,12 @@ fn step_choice<T: Copy + PartialEq>(value: T, list: &[T], forward: bool) -> T {
     list[if forward { (at + 1) % len } else { (at + len - 1) % len }]
 }
 
-/// A bar button's hit rect: its drawn box plus `EDITOR_BAR_HIT_SLACK`
-/// above and below (docs/game-editor-fusion.md section 10).
-fn hit_rect(rect: Rectangle) -> Rectangle {
-    Rectangle::new(rect.x, rect.y - EDITOR_BAR_HIT_SLACK, rect.width, rect.height + 2.0 * EDITOR_BAR_HIT_SLACK)
+/// The overlap of two rectangles; where they do not overlap, an empty
+/// rectangle at the nearest corner of `a`.
+fn intersect(a: Rectangle, b: Rectangle) -> Rectangle {
+    let (x0, y0) = (a.x.max(b.x), a.y.max(b.y));
+    let (x1, y1) = ((a.x + a.width).min(b.x + b.width), (a.y + a.height).min(b.y + b.height));
+    Rectangle::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
 }
 
 /// The inward direction of a gate placed at world position `pos`, or
@@ -2764,6 +2649,8 @@ pub fn parse_tank(s: &str) -> Option<TankKind> {
 #[cfg(test)]
 mod editor_tests {
     use super::*;
+    use crate::framing::MapClass;
+    use crate::hud::{Insets, UiFrame};
     use crate::{DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH};
 
     const W: f32 = DEFAULT_SCREEN_WIDTH as f32;
@@ -3070,31 +2957,94 @@ mod editor_tests {
         assert_eq!(MapFile::from_toml_str(&text).unwrap().cell(3, 3), Some(&CellObject::Water));
     }
 
+    /// The builder on the standard arena in the window its bitmap always
+    /// had - the field under a 32 pt bar, a unit a point, no touch: the
+    /// canvas at (0, 32) at its own size, the bar along the top.
+    fn arena() -> BuilderFrame {
+        BuilderFrame::headless((W, H), MapClass::Arena)
+    }
+
+    /// The builder on a field map in a window of `window` units, a unit a
+    /// point: the canvas the shape of the window under the bar.
+    fn field_frame(window: (f32, f32)) -> BuilderFrame {
+        BuilderFrame::new(UiFrame::plain(window), (96.0 * 32.0, 54.0 * 32.0), MapClass::Field, None)
+    }
+
+    /// The window point a world point is drawn at, through the camera and
+    /// the frame's view.
+    fn window_at(ed: &MapEditor, frame: &BuilderFrame, world: Vec2) -> Vec2 {
+        let v = ed.view_camera(&frame.layout).to_view(world);
+        frame.view.to_window(Vec2::new(v.x + frame.layout.field.x, v.y + frame.layout.field.y))
+    }
+
+    /// The window point at the middle of a cell.
+    fn on_cell(ed: &MapEditor, frame: &BuilderFrame, col: i32, row: i32) -> Vec2 {
+        window_at(ed, frame, map::cell_to_world(col, row))
+    }
+
+    /// The window point `dx`, `dy` bitmap pixels into the canvas area.
+    fn canvas_at(frame: &BuilderFrame, dx: f32, dy: f32) -> Vec2 {
+        let f = frame.layout.field;
+        frame.view.to_window(Vec2::new(f.x + dx, f.y + dy))
+    }
+
+    /// The window point in the middle of the canvas area.
+    fn canvas_middle(frame: &BuilderFrame) -> Vec2 {
+        canvas_at(frame, frame.layout.field.w / 2.0, frame.layout.field.h / 2.0)
+    }
+
+    /// Whether a button of that name is pressable now (`named_buttons`).
+    fn has_named(ed: &MapEditor, frame: &BuilderFrame, name: &str) -> bool {
+        ed.named_buttons(frame).iter().any(|(n, _)| n == name)
+    }
+
+    /// The window rect a named button stands at (`named_buttons`, which
+    /// are UI points, through the UI frame).
+    fn named(ed: &MapEditor, frame: &BuilderFrame, name: &str) -> Rectangle {
+        let r = ed.named_buttons(frame).into_iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("no {name} button")).1;
+        frame.ui.rect_to_window(r)
+    }
+
+    /// A click on the middle of a named button.
+    fn press_named(ed: &mut MapEditor, frame: &BuilderFrame, name: &str) -> EditorAction {
+        let at = center(named(ed, frame, name));
+        click(ed, frame, at)
+    }
+
+    /// A press-and-release at a window position, the way a click or a
+    /// tap arrives over two frames.
+    fn click(ed: &mut MapEditor, frame: &BuilderFrame, at: Vec2) -> EditorAction {
+        let press = BuilderInput { pointer: Some(at), pressed: true, held: true, ..Default::default() };
+        let action = ed.update(&press, frame);
+        ed.update(&BuilderInput { pointer: Some(at), ..Default::default() }, frame);
+        action
+    }
+
+    fn center(r: Rectangle) -> Vec2 {
+        Vec2::new(r.x + r.width / 2.0, r.y + r.height / 2.0)
+    }
+
     #[test]
     fn update_from_input_strokes_on_press_and_hold_and_ends_on_release() {
-        let layout = Layout::for_field(W, H);
+        let frame = arena();
         let mut ed = MapEditor::new(MapFile::new());
-        let at = |col: i32, row: i32| {
-            let p = map::cell_to_world(col, row);
-            Vec2::new(p.x + layout.field.x, p.y + layout.field.y)
-        };
-        let press = BuilderInput { pointer: Some(at(4, 4)), pressed: true, held: true, ..Default::default() };
-        assert_eq!(ed.update(&press, &layout), EditorAction::None);
-        let drag = BuilderInput { pointer: Some(at(5, 4)), held: true, ..Default::default() };
-        ed.update(&drag, &layout);
-        ed.update(&drag, &layout);
+        let press = BuilderInput { pointer: Some(on_cell(&ed, &frame, 4, 4)), pressed: true, held: true, ..Default::default() };
+        assert_eq!(ed.update(&press, &frame), EditorAction::None);
+        let drag = BuilderInput { pointer: Some(on_cell(&ed, &frame, 5, 4)), held: true, ..Default::default() };
+        ed.update(&drag, &frame);
+        ed.update(&drag, &frame);
         assert_eq!(ed.history().undo_depth(), 0, "the stroke is open until release");
-        ed.update(&BuilderInput::default(), &layout);
+        ed.update(&BuilderInput::default(), &frame);
         assert_eq!(ed.history().undo_depth(), 1);
         assert_eq!(ed.map().cells.len(), 2);
         // Ctrl+Z through the same struct.
-        ed.update(&BuilderInput { undo: true, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { undo: true, ..Default::default() }, &frame);
         assert_eq!(ed.map().cells.len(), 0);
-        // A press on the PLAY slot is the mode switch, not a paint.
-        let play = mode_button_rect(layout.panel);
+        // A press on PLAY is the mode switch, not a paint.
+        let play = named(&ed, &frame, "play");
         let on_play = Vec2::new(play.x + 2.0, play.y + 2.0);
         let press = BuilderInput { pointer: Some(on_play), pressed: true, held: true, ..Default::default() };
-        assert_eq!(ed.update(&press, &layout), EditorAction::Play);
+        assert_eq!(ed.update(&press, &frame), EditorAction::Play);
         assert_eq!(ed.map().cells.len(), 0);
     }
 
@@ -3102,14 +3052,14 @@ mod editor_tests {
     /// action, never a paint, with a finger as with the mouse.
     #[test]
     fn play_here_is_a_bar_button_before_play() {
-        let layout = Layout::for_field(W, H);
+        let frame = arena();
         let mut ed = MapEditor::new(MapFile::new());
-        let here = MapEditor::here_rect(&layout);
-        assert!(here.x + here.width <= mode_button_rect(layout.panel).x);
-        let at = Vec2::new(here.x + here.width / 2.0, here.y + here.height / 2.0);
+        let here = named(&ed, &frame, "play_here");
+        assert!(here.x + here.width <= named(&ed, &frame, "play").x);
+        let at = center(here);
         let press = BuilderInput { pointer: Some(at), pressed: true, held: true, ..Default::default() };
-        assert_eq!(ed.update(&press, &layout), EditorAction::PlayHere);
-        ed.update(&BuilderInput { pointer: Some(at), ..Default::default() }, &layout);
+        assert_eq!(ed.update(&press, &frame), EditorAction::PlayHere);
+        ed.update(&BuilderInput { pointer: Some(at), ..Default::default() }, &frame);
         let finger = BuilderInput {
             pointer: Some(at),
             pressed: true,
@@ -3118,15 +3068,15 @@ mod editor_tests {
             dt: 1.0 / 60.0,
             ..Default::default()
         };
-        assert_eq!(ed.update(&finger, &layout), EditorAction::PlayHere);
-        ed.update(&BuilderInput { dt: 1.0 / 60.0, ..Default::default() }, &layout);
+        assert_eq!(ed.update(&finger, &frame), EditorAction::PlayHere);
+        ed.update(&BuilderInput { dt: 1.0 / 60.0, ..Default::default() }, &frame);
         assert!(ed.map().cells.is_empty());
         assert_eq!(ed.history().undo_depth(), 0);
     }
 
     /// A 96 x 54 map holding a start penned in by iron, a lone portal and
     /// `gates` gates off the edge, in the builder on a 1080p desktop.
-    fn check_editor(gates: i32) -> (MapEditor, Layout) {
+    fn check_editor(gates: i32) -> (MapEditor, BuilderFrame) {
         let mut map = MapFile::new();
         map.size = Some((96.0, 54.0));
         for c in 38..=42 {
@@ -3142,22 +3092,11 @@ mod editor_tests {
         for i in 0..gates {
             map.set_cell(20 + 2 * i, 40, CellObject::Gate);
         }
-        let (layout, view) = camera::canvas_frame((1920.0, 1080.0), None);
+        let frame = field_frame((1920.0, 1080.0));
         let mut ed = MapEditor::new(map);
-        let screen = CanvasScreen { device_per_px: view.scale, points_per_px: view.scale, coarse: true };
-        ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &layout);
-        (ed, layout)
-    }
-
-    /// The rect a named button stands at (`named_buttons`).
-    fn named(ed: &MapEditor, layout: &Layout, name: &str) -> Rectangle {
-        ed.named_buttons(layout).into_iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("no {name} button")).1
-    }
-
-    /// A click on the middle of a named button.
-    fn press_named(ed: &mut MapEditor, layout: &Layout, name: &str) {
-        let at = center(named(ed, layout, name));
-        click(ed, layout, at);
+        let screen = CanvasScreen { device_per_px: frame.view.scale, points_per_px: frame.view.scale, coarse: true };
+        ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
+        (ed, frame)
     }
 
     /// The index of the first finding of `kind` in the panel's report.
@@ -3173,9 +3112,10 @@ mod editor_tests {
     #[test]
     fn the_check_panel_lists_findings_errors_first_and_jumps_to_them() {
         use crate::maplint::LintKind;
-        let (mut ed, layout) = check_editor(0);
-        assert_eq!(ed.free_canvas(&layout), Rectangle::new(layout.field.x, layout.field.y, layout.field.w, layout.field.h));
-        click(&mut ed, &layout, center(MapEditor::check_rect(&layout)));
+        let (mut ed, frame) = check_editor(0);
+        let layout = frame.layout;
+        assert_eq!(ed.free_canvas(&frame), Rectangle::new(layout.field.x, layout.field.y, layout.field.w, layout.field.h));
+        press_named(&mut ed, &frame, "check");
         assert_eq!(ed.open_menu(), Some("check"));
         let (report, stale) = ed.lint_report().expect("CHECK lints the canvas");
         assert!(!stale);
@@ -3186,8 +3126,8 @@ mod editor_tests {
         assert!(report.count(LintSeverity::Error) >= 1 && report.count(LintSeverity::Warning) >= 1, "{:?}", report.findings);
         // A press on the penned start's row - away from its FIX button.
         let i = finding_index(&ed, LintKind::StartPenned);
-        let row = named(&ed, &layout, &format!("finding_{i}"));
-        click(&mut ed, &layout, Vec2::new(row.x + 40.0, row.y + row.height / 2.0));
+        let row = named(&ed, &frame, &format!("finding_{i}"));
+        click(&mut ed, &frame, Vec2::new(row.x + 40.0, row.y + row.height / 2.0));
         assert_eq!(ed.open_menu(), Some("check"), "the panel stays open");
         assert_eq!(ed.lint_marked().map(|f| f.kind), Some(LintKind::StartPenned));
         assert!(!ed.camera().is_fit(), "the jump zooms in");
@@ -3195,21 +3135,25 @@ mod editor_tests {
         let bounds = crate::maplint::cells_bounds(&cells).unwrap();
         let middle = Vec2::new(bounds.x + bounds.width / 2.0, bounds.y + bounds.height / 2.0);
         let on = ed.view_camera(&layout).to_view(middle);
-        let free = ed.free_canvas(&layout);
+        let free = ed.free_canvas(&frame);
         assert!(free.width < layout.field.w, "the open panel takes the canvas's right: {free:?}");
         let (x, y) = (on.x + layout.field.x, on.y + layout.field.y);
         assert!((x - (free.x + free.width / 2.0)).abs() < 2.0 && (y - (free.y + free.height / 2.0)).abs() < 2.0, "centred: {x},{y} in {free:?}");
+        // The panel stands right of what it leaves free.
+        let Some(PopupLayout::Lint(lint)) = ed.chrome(&frame).popup else { panic!("the CHECK panel") };
+        assert!(frame.canvas_to_ui(Vec2::new(free.x + free.width, free.y)).x <= lint.panel.x, "{free:?} vs {:?}", lint.panel);
         // The pen and what is round it all show, left of the panel.
         let vp = ed.viewport();
         let scale = ed.camera().scale(&vp);
         assert!(LINT_JUMP_CONTEXT_CELLS.0 * 32.0 * scale <= free.width + 1.0, "{scale}");
         // Closing the panel keeps the mark; an edit lets it go.
-        click(&mut ed, &layout, Vec2::new(layout.field.x + 40.0, layout.field.y + 300.0));
+        let canvas = canvas_at(&frame, 40.0, 300.0);
+        click(&mut ed, &frame, canvas);
         assert_eq!(ed.open_menu(), None);
         assert!(ed.lint_marked().is_some(), "the mark outlives the panel");
         assert!(ed.map().cells.len() > 3, "the closing press painted nothing");
         let painted = ed.map().cells.len();
-        click(&mut ed, &layout, Vec2::new(layout.field.x + 40.0, layout.field.y + 300.0));
+        click(&mut ed, &frame, canvas);
         assert_eq!(ed.map().cells.len(), painted + 1);
         assert!(ed.lint_marked().is_none(), "an edit takes the mark away");
         assert!(ed.lint_report().unwrap().1, "and the report is older than the map");
@@ -3221,11 +3165,11 @@ mod editor_tests {
     #[test]
     fn each_quick_fix_is_one_undo_step() {
         use crate::maplint::LintKind;
-        let (mut ed, layout) = check_editor(0);
-        click(&mut ed, &layout, center(MapEditor::check_rect(&layout)));
+        let (mut ed, frame) = check_editor(0);
+        press_named(&mut ed, &frame, "check");
         let depth = ed.history().undo_depth();
         let i = finding_index(&ed, LintKind::StartPenned);
-        press_named(&mut ed, &layout, &format!("fix_{i}"));
+        press_named(&mut ed, &frame, &format!("fix_{i}"));
         assert_eq!(ed.history().undo_depth(), depth + 1, "one step");
         let start = ed.map().start_cell().expect("the start is still on the map");
         assert_ne!(start, (40, 27), "moved out of the pen");
@@ -3233,11 +3177,11 @@ mod editor_tests {
         assert!(ed.lint_report().unwrap().0.findings.iter().all(|f| f.kind != LintKind::StartPenned), "linted again");
         assert_eq!(ed.open_menu(), Some("check"));
         let i = finding_index(&ed, LintKind::PortalAlone);
-        press_named(&mut ed, &layout, &format!("fix_{i}"));
+        press_named(&mut ed, &frame, &format!("fix_{i}"));
         assert_eq!(ed.history().undo_depth(), depth + 2);
         assert!(ed.map().portal_cells().is_empty());
         // Undo, under the panel: the portal is back, and so is its finding.
-        ed.update(&BuilderInput { undo: true, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { undo: true, ..Default::default() }, &frame);
         assert_eq!(ed.map().portal_cells(), vec![(60, 20)]);
         assert!(ed.lint_report().unwrap().0.findings.iter().any(|f| f.kind == LintKind::PortalAlone));
         ed.undo();
@@ -3253,212 +3197,224 @@ mod editor_tests {
     #[test]
     fn the_check_panel_pages() {
         use crate::maplint::LintKind;
-        let (mut ed, layout) = check_editor(9);
-        click(&mut ed, &layout, center(MapEditor::check_rect(&layout)));
+        let (mut ed, frame) = check_editor(9);
+        press_named(&mut ed, &frame, "check");
         let len = ed.lint_report().unwrap().0.findings.len();
-        assert!(len > LINT_PAGE_ROWS, "{len} findings");
-        let panel = MapEditor::lint_panel_rect(&layout, len);
-        assert!(panel.y + panel.height <= layout.field.y + layout.field.h, "the panel fits the field");
-        assert!(named(&ed, &layout, "finding_0").y > panel.y, "under the header");
-        assert!(!ed.named_buttons(&layout).iter().any(|(n, _)| n == &format!("finding_{LINT_PAGE_ROWS}")), "one page at a time");
-        press_named(&mut ed, &layout, "page_next");
-        assert!(ed.named_buttons(&layout).iter().any(|(n, _)| n == &format!("finding_{LINT_PAGE_ROWS}")));
-        press_named(&mut ed, &layout, "page_back");
-        assert!(ed.named_buttons(&layout).iter().any(|(n, _)| n == "finding_0"));
-        ed.update(&BuilderInput { pointer: Some(center(panel)), wheel: -1.0, ..Default::default() }, &layout);
-        assert!(ed.named_buttons(&layout).iter().any(|(n, _)| n == &format!("finding_{LINT_PAGE_ROWS}")), "the wheel turns it too");
+        let Some(PopupLayout::Lint(lint)) = ed.chrome(&frame).popup else { panic!("the CHECK panel") };
+        let per = lint.per_page;
+        assert!(len > per, "{len} findings");
+        let room = frame.under_bar();
+        assert!(lint.panel.y + lint.panel.height <= room.y + room.height, "the panel fits under the bar");
+        let panel = frame.ui.rect_to_window(lint.panel);
+        assert!(named(&ed, &frame, "finding_0").y > panel.y, "under the header");
+        assert!(!has_named(&ed, &frame, &format!("finding_{per}")), "one page at a time");
+        press_named(&mut ed, &frame, "page_next");
+        assert!(has_named(&ed, &frame, &format!("finding_{per}")));
+        press_named(&mut ed, &frame, "page_back");
+        assert!(has_named(&ed, &frame, "finding_0"));
+        ed.update(&BuilderInput { pointer: Some(center(panel)), wheel: -1.0, ..Default::default() }, &frame);
+        assert!(has_named(&ed, &frame, &format!("finding_{per}")), "the wheel turns it too");
         // Every interior gate is an error with its fix; one of them, on
         // the second page, taken away.
         let gates = ed.map().gate_cells().len();
-        let i = (LINT_PAGE_ROWS..len).find(|&i| ed.lint_report().unwrap().0.findings[i].kind == LintKind::GateNotOnEdge).expect("a gate on page two");
-        press_named(&mut ed, &layout, &format!("fix_{i}"));
+        let i = (per..len).find(|&i| ed.lint_report().unwrap().0.findings[i].kind == LintKind::GateNotOnEdge).expect("a gate on page two");
+        press_named(&mut ed, &frame, &format!("fix_{i}"));
         assert_eq!(ed.map().gate_cells().len(), gates - 1);
         // Esc closes it.
-        ed.update(&BuilderInput { escape: true, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { escape: true, ..Default::default() }, &frame);
         assert_eq!(ed.open_menu(), None);
     }
 
-    /// A press-and-release at a window position, the way a click or a
-    /// tap arrives over two frames.
-    fn click(ed: &mut MapEditor, layout: &Layout, at: Vec2) -> EditorAction {
-        let press = BuilderInput { pointer: Some(at), pressed: true, held: true, ..Default::default() };
-        let action = ed.update(&press, layout);
-        ed.update(&BuilderInput { pointer: Some(at), ..Default::default() }, layout);
-        action
-    }
-
-    fn center(r: Rectangle) -> Vec2 {
-        Vec2::new(r.x + r.width / 2.0, r.y + r.height / 2.0)
-    }
-
-    /// The FILE menu and the Load list fit the field.
     #[test]
-    fn the_file_menu_and_the_load_list_fit_the_field() {
-        let layout = Layout::for_field(W, H);
-        let menu = MapEditor::file_menu_rect(&layout);
-        assert!(menu.y + menu.height <= layout.field.y + layout.field.h);
-        let list = MapEditor::load_panel_rect(&layout, 40);
-        assert!(list.y >= layout.field.y && list.y + list.height <= layout.field.y + layout.field.h);
+    fn every_bar_button_hit_rect_reaches_under_the_bar() {
+        use crate::EDITOR_BAR_HIT_SLACK;
+        let frame = arena();
+        let bar = frame.bar();
+        // Under the list end of a category button, under the middle of any other.
+        let below = |r: Rectangle| frame.ui.to_window(Vec2::new(r.x + r.width - 8.0, r.y + r.height + EDITOR_BAR_HIT_SLACK - 1.0));
+        let wall = bar.category(Category::Wall).expect("a desktop's bar has the five");
+        assert_eq!(bar.hit(frame.to_ui(below(wall.rect))), Some(BarButton::CategoryMenu(Category::Wall)));
+        assert_eq!(bar.hit(frame.to_ui(below(bar.map))), Some(BarButton::Map));
+        let far = Vec2::new(bar.map.x + 2.0, bar.strip.y + bar.strip.height + EDITOR_BAR_HIT_SLACK + 1.0);
+        assert_eq!(bar.hit(far), None);
+        // A press in the slack under MAP opens it and paints nothing.
+        let mut ed = MapEditor::new(MapFile::new());
+        click(&mut ed, &frame, below(bar.map));
+        assert_eq!(ed.open_menu(), Some("map"));
+        assert!(ed.map().cells.is_empty());
     }
 
+    /// Every category's rows and the MAP panel's steppers are a finger's
+    /// size and stand in the room under the bar on a phone and a desktop,
+    /// with and without touch, a stepper's `<` left of its `>`.
     #[test]
-    fn every_bar_button_hit_rect_reaches_into_the_field_gutter() {
-        let layout = Layout::for_field(W, H);
-        // Under the caret end of a category button, under the middle of any other.
-        let below = |r: Rectangle| Vec2::new(r.x + r.width - 8.0, r.y + r.height + EDITOR_BAR_HIT_SLACK - 1.0);
-        assert_eq!(
-            MapEditor::bar_button_at(below(MapEditor::category_rect(&layout, Category::Wall)), &layout),
-            Some(BarButton::CategoryMenu(Category::Wall))
-        );
-        assert_eq!(MapEditor::bar_button_at(below(MapEditor::map_rect(&layout)), &layout), Some(BarButton::Map));
-        let far = Vec2::new(SLOT_MAP + 2.0, layout.panel.h + EDITOR_BAR_HIT_SLACK + 1.0);
-        assert_eq!(MapEditor::bar_button_at(far, &layout), None);
-    }
-
-    #[test]
-    fn every_dropdown_and_the_settings_panel_fit_inside_the_field() {
-        let layout = Layout::for_field(W, H);
-        let inside = |r: Rectangle| {
-            r.x >= layout.field.x
-                && r.x + r.width <= layout.field.x + layout.field.w
-                && r.y >= layout.field.y
-                && r.y + r.height <= layout.field.y + layout.field.h
-        };
-        for category in Category::ALL {
-            let list = MapEditor::dropdown_rect(&layout, category);
-            assert!(inside(list), "{} dropdown leaves the field: {list:?}", category.label());
-            for i in 0..category.tools().count() {
-                let row = MapEditor::dropdown_row_rect(&layout, category, i);
-                assert!(row.height >= 48.0 && inside(row));
+    fn every_list_row_and_map_stepper_is_a_fingers_size_under_the_bar() {
+        for window in [(568.0, 320.0), (852.0, 393.0), (1088.0, 576.0), (1920.0, 1080.0)] {
+            for touch in [false, true] {
+                let ui = UiFrame::new(window, 1.0, 1.0, Insets::default(), touch);
+                let frame = BuilderFrame::new(ui, (W, H), MapClass::Arena, None);
+                let (bar, room) = (frame.bar(), frame.under_bar());
+                let inside = |r: Rectangle| {
+                    r.x >= room.x - 1e-3 && r.y >= room.y - 1e-3 && r.x + r.width <= room.x + room.width + 1e-3 && r.y + r.height <= room.y + room.height + 1e-3
+                };
+                for category in Category::ALL {
+                    let n = category.tools().count();
+                    let list = chrome::menu_list(bar.tools_anchor(category), room, n);
+                    for i in 0..n {
+                        let row = list.row(i);
+                        assert!(row.height >= 48.0 && inside(row), "{window:?} touch={touch} {}: {row:?}", category.name());
+                    }
+                }
+                let settings = SettingsLayout::of(bar.map, room, SETTINGS_ROWS.len());
+                for page in 0..settings.pages {
+                    for i in 0..SETTINGS_ROWS.len() {
+                        let Some(row) = settings.row(i, page) else { continue };
+                        let (dec, inc) = (MapEditor::settings_dec_rect(row), MapEditor::settings_inc_rect(row));
+                        assert!(dec.width >= 48.0 && dec.height >= 48.0 && inc.width >= 48.0 && inc.height >= 48.0);
+                        assert!(dec.x + dec.width <= inc.x && inside(dec) && inside(inc), "{window:?} touch={touch}: {dec:?} {inc:?}");
+                        let reset = MapEditor::settings_reset_rect(row);
+                        assert!(reset.height >= 48.0 && inside(reset));
+                    }
+                }
             }
-        }
-        let settings = MapEditor::settings_rect(&layout);
-        assert!(inside(settings), "settings panel leaves the field: {settings:?}");
-        for i in 0..SETTINGS_ROWS.len() {
-            let row = MapEditor::settings_row_rect(&layout, i);
-            let (dec, inc) = (MapEditor::settings_dec_rect(row), MapEditor::settings_inc_rect(row));
-            assert!(dec.width >= 48.0 && dec.height >= 48.0 && inc.width >= 48.0 && inc.height >= 48.0);
-            assert!(dec.x + dec.width <= inc.x && inside(dec) && inside(inc));
-            let reset = MapEditor::settings_reset_rect(row);
-            assert!(reset.height >= 48.0 && inside(reset));
         }
     }
 
     #[test]
     fn a_category_button_selects_on_its_icon_half_and_opens_its_list_on_its_caret_half() {
-        let layout = Layout::for_field(W, H);
+        let frame = arena();
         let mut ed = MapEditor::new(MapFile::new());
-        let prop = MapEditor::category_rect(&layout, Category::Prop);
         // The caret half opens the dropdown and selects nothing yet.
-        click(&mut ed, &layout, Vec2::new(prop.x + prop.width - 10.0, prop.y + 16.0));
+        press_named(&mut ed, &frame, "list_prop");
         assert_eq!(ed.open_menu(), Some("prop"));
         assert_eq!(ed.tool(), Tool::Wall(Material::Brick));
         // Picking a row selects that tool, makes it the category's current
         // one, closes the list and paints nothing.
-        let row = MapEditor::dropdown_row_rect(&layout, Category::Prop, 1);
-        click(&mut ed, &layout, center(row));
+        press_named(&mut ed, &frame, "tool_barrel");
         assert_eq!(ed.tool(), Tool::Prop(Material::Barrel));
         assert_eq!(ed.current_tool(Category::Prop), Tool::Prop(Material::Barrel));
         assert_eq!(ed.open_menu(), None);
         assert!(ed.map().cells.is_empty());
         // The icon half of WALL makes its current tool the brush again.
-        let wall = MapEditor::category_rect(&layout, Category::Wall);
-        click(&mut ed, &layout, Vec2::new(wall.x + 10.0, wall.y + 16.0));
+        press_named(&mut ed, &frame, "category_wall");
         assert_eq!(ed.tool(), Tool::Wall(Material::Brick));
         assert_eq!(ed.open_menu(), None);
         // ERASE is a plain button; UNDO with nothing to undo is harmless.
-        click(&mut ed, &layout, center(MapEditor::erase_rect(&layout)));
+        press_named(&mut ed, &frame, "erase");
         assert_eq!(ed.tool(), Tool::Eraser);
-        click(&mut ed, &layout, center(MapEditor::undo_rect(&layout)));
+        press_named(&mut ed, &frame, "undo");
         assert!(ed.map().cells.is_empty());
+    }
+
+    /// On a phone the five category buttons fold into TOOLS: it opens the
+    /// palette of every category, a cell picks its tool and closes it, and
+    /// a press outside closes it and paints nothing.
+    #[test]
+    fn a_folded_bar_picks_tools_from_its_palette() {
+        let insets = Insets { left: 59.0 * 3.0, top: 0.0, right: 59.0 * 3.0, bottom: 21.0 * 3.0 };
+        let ui = UiFrame::new((852.0 * 3.0, 393.0 * 3.0), 3.0, 1.0, insets, true);
+        let frame = BuilderFrame::new(ui, (W, H), MapClass::Arena, None);
+        assert!(matches!(frame.bar().tools, BarTools::Folded(_)), "{:?}", frame.bar());
+        let mut ed = MapEditor::new(MapFile::new());
+        assert!(!has_named(&ed, &frame, "list_prop"));
+        press_named(&mut ed, &frame, "tools");
+        assert_eq!(ed.open_menu(), Some("tools"));
+        for tool in TOOLS.iter().filter(|t| t.category().is_some()) {
+            assert!(has_named(&ed, &frame, &format!("tool_{}", tool.name())), "{} in the palette", tool.name());
+        }
+        press_named(&mut ed, &frame, "tool_tesla");
+        assert_eq!(ed.tool(), Tool::Tower(TowerKind::Tesla, Side::Player));
+        assert_eq!(ed.current_tool(Category::Prop), Tool::Tower(TowerKind::Tesla, Side::Player));
+        assert_eq!(ed.open_menu(), None);
+        press_named(&mut ed, &frame, "tools");
+        let p = on_cell(&ed, &frame, 30, 15);
+        click(&mut ed, &frame, p);
+        assert_eq!(ed.open_menu(), None);
+        assert!(ed.map().cells.is_empty(), "the dismissing press painted through the palette");
+        click(&mut ed, &frame, p);
+        assert_eq!(ed.map().cell(30, 15), Some(&CellObject::for_tower(TowerKind::Tesla, Side::Player)));
     }
 
     #[test]
     fn a_press_outside_an_open_dropdown_closes_it_and_does_not_paint() {
-        let layout = Layout::for_field(W, H);
+        let frame = arena();
         let mut ed = MapEditor::new(MapFile::new());
-        let wall = MapEditor::category_rect(&layout, Category::Wall);
-        let caret = Vec2::new(wall.x + wall.width - 10.0, wall.y + 16.0);
-        click(&mut ed, &layout, caret);
+        let caret = center(named(&ed, &frame, "list_wall"));
+        click(&mut ed, &frame, caret);
         assert_eq!(ed.open_menu(), Some("wall"));
-        let p = map::cell_to_world(20, 10);
-        let on_cell = Vec2::new(p.x + layout.field.x, p.y + layout.field.y);
-        click(&mut ed, &layout, on_cell);
+        let on_cell = on_cell(&ed, &frame, 20, 10);
+        click(&mut ed, &frame, on_cell);
         assert_eq!(ed.open_menu(), None);
         assert!(ed.map().cells.is_empty(), "the dismissing press painted through the menu");
         // Esc closes too, and the next press on the same cell paints.
-        click(&mut ed, &layout, caret);
-        ed.update(&BuilderInput { escape: true, ..Default::default() }, &layout);
+        click(&mut ed, &frame, caret);
+        ed.update(&BuilderInput { escape: true, ..Default::default() }, &frame);
         assert_eq!(ed.open_menu(), None);
-        click(&mut ed, &layout, on_cell);
+        click(&mut ed, &frame, on_cell);
         assert_eq!(ed.map().cell(20, 10), Some(&brick()));
     }
 
     #[test]
     fn the_map_panel_steps_values_and_never_paints_through() {
-        let layout = Layout::for_field(W, H);
+        let frame = arena();
         let mut ed = MapEditor::new(MapFile::new());
-        click(&mut ed, &layout, center(MapEditor::map_rect(&layout)));
+        press_named(&mut ed, &frame, "map");
         assert_eq!(ed.open_menu(), Some("map"));
-        let row = |r: SettingsRow| {
-            let i = SETTINGS_ROWS.iter().position(|&x| x == r).unwrap();
-            MapEditor::settings_row_rect(&layout, i)
-        };
-        let inc = |r: SettingsRow| center(MapEditor::settings_inc_rect(row(r)));
-        let dec = |r: SettingsRow| center(MapEditor::settings_dec_rect(row(r)));
+        let inc = |r: SettingsRow| format!("{}_inc", r.name());
+        let dec = |r: SettingsRow| format!("{}_dec", r.name());
         // TANKS walks auto, 0, 1, .. and back to auto below 0.
         assert_eq!(ed.settings().tanks, None);
-        click(&mut ed, &layout, inc(SettingsRow::Tanks));
+        press_named(&mut ed, &frame, &inc(SettingsRow::Tanks));
         assert_eq!(ed.settings().tanks, Some(0));
-        click(&mut ed, &layout, inc(SettingsRow::Tanks));
+        press_named(&mut ed, &frame, &inc(SettingsRow::Tanks));
         assert_eq!(ed.settings().tanks, Some(1));
-        click(&mut ed, &layout, dec(SettingsRow::Tanks));
-        click(&mut ed, &layout, dec(SettingsRow::Tanks));
+        press_named(&mut ed, &frame, &dec(SettingsRow::Tanks));
+        press_named(&mut ed, &frame, &dec(SettingsRow::Tanks));
         assert_eq!(ed.settings().tanks, None);
-        click(&mut ed, &layout, dec(SettingsRow::Tanks));
+        press_named(&mut ed, &frame, &dec(SettingsRow::Tanks));
         assert_eq!(ed.settings().tanks, None, "auto is the floor");
         assert_eq!(ed.history().undo_depth(), 4, "one undo step per press that changed something");
         // TANK cycles auto and the chassis list; TIER START the tiers.
-        click(&mut ed, &layout, inc(SettingsRow::Tank));
+        press_named(&mut ed, &frame, &inc(SettingsRow::Tank));
         assert_eq!(ed.settings().tank, Some(TankKind::ALL[0]));
-        click(&mut ed, &layout, dec(SettingsRow::Tank));
+        press_named(&mut ed, &frame, &dec(SettingsRow::Tank));
         assert_eq!(ed.settings().tank, None);
-        click(&mut ed, &layout, dec(SettingsRow::Tank));
+        press_named(&mut ed, &frame, &dec(SettingsRow::Tank));
         assert_eq!(ed.settings().tank, Some(TankKind::ALL[TankKind::ALL.len() - 1]), "wraps");
-        click(&mut ed, &layout, inc(SettingsRow::Tank2));
+        press_named(&mut ed, &frame, &inc(SettingsRow::Tank2));
         assert_eq!(ed.settings().tank2, Some(TankKind::ALL[0]));
-        click(&mut ed, &layout, dec(SettingsRow::Tank2));
+        press_named(&mut ed, &frame, &dec(SettingsRow::Tank2));
         assert_eq!(ed.settings().tank2, None);
-        click(&mut ed, &layout, inc(SettingsRow::TierStart));
+        press_named(&mut ed, &frame, &inc(SettingsRow::TierStart));
         assert_eq!(ed.settings().tier_start, Some(Tier::Light));
         // THEME cycles the list; the ground is rebuilt in the new theme.
-        click(&mut ed, &layout, inc(SettingsRow::Theme));
+        press_named(&mut ed, &frame, &inc(SettingsRow::Theme));
         assert_eq!(ed.settings().theme, Theme::Desert);
         assert_eq!(ed.map().theme, Theme::Desert);
-        click(&mut ed, &layout, inc(SettingsRow::Theme));
+        press_named(&mut ed, &frame, &inc(SettingsRow::Theme));
         assert_eq!(ed.settings().theme, Theme::Grass, "wraps");
         // WEATHER cycles every sky, backwards from clear to the last.
-        click(&mut ed, &layout, inc(SettingsRow::Weather));
+        press_named(&mut ed, &frame, &inc(SettingsRow::Weather));
         assert_eq!(ed.map().weather, Weather::Night);
-        click(&mut ed, &layout, dec(SettingsRow::Weather));
-        click(&mut ed, &layout, dec(SettingsRow::Weather));
+        press_named(&mut ed, &frame, &dec(SettingsRow::Weather));
+        press_named(&mut ed, &frame, &dec(SettingsRow::Weather));
         assert_eq!(ed.settings().weather, Weather::ALL[Weather::ALL.len() - 1], "wraps");
         let _ = ed.undo();
         assert_eq!(ed.settings().weather, Weather::Clear, "a weather press is one undo step");
         let _ = ed.redo();
-        click(&mut ed, &layout, inc(SettingsRow::Weather));
+        press_named(&mut ed, &frame, &inc(SettingsRow::Weather));
         assert_eq!(ed.settings().weather, Weather::Clear);
-        click(&mut ed, &layout, inc(SettingsRow::Mission));
+        press_named(&mut ed, &frame, &inc(SettingsRow::Mission));
         assert_eq!(ed.settings().mission, Mission::Hunt);
-        click(&mut ed, &layout, inc(SettingsRow::Spawn));
+        press_named(&mut ed, &frame, &inc(SettingsRow::Spawn));
         assert_eq!(ed.settings().spawn, SpawnKind::Waves);
         // WAVES: auto, then 1..=20 with a hard ceiling.
-        click(&mut ed, &layout, inc(SettingsRow::Waves));
+        press_named(&mut ed, &frame, &inc(SettingsRow::Waves));
         assert_eq!(ed.settings().waves, Some(1));
         let mut s = ed.settings();
         s.waves = Some(20);
         ed.apply_settings(s);
-        click(&mut ed, &layout, inc(SettingsRow::Waves));
+        press_named(&mut ed, &frame, &inc(SettingsRow::Waves));
         assert_eq!(ed.settings().waves, Some(20));
         // Every press so far landed in the panel: it is still open and
         // nothing was painted under it.
@@ -3466,62 +3422,92 @@ mod editor_tests {
         assert!(ed.map().cells.is_empty());
         assert!(ed.dirty());
         // RESET MAP reverts to the baseline as one undoable step.
-        let reset = MapEditor::settings_reset_rect(row(SettingsRow::Reset));
-        click(&mut ed, &layout, center(reset));
+        press_named(&mut ed, &frame, "reset");
         assert!(!ed.dirty());
         assert_eq!(ed.open_menu(), Some("map"));
         // A press outside closes the panel and paints nothing.
-        let p = map::cell_to_world(5, 15);
-        click(&mut ed, &layout, Vec2::new(p.x + layout.field.x, p.y + layout.field.y));
+        let p = on_cell(&ed, &frame, 5, 15);
+        click(&mut ed, &frame, p);
         assert_eq!(ed.open_menu(), None);
         assert!(ed.map().cells.is_empty());
     }
 
+    /// Where the room under the bar is short the MAP panel pages: every row
+    /// on one of its pages, the pager's halves and the wheel turning them,
+    /// and a press on the pager steps nothing.
+    #[test]
+    fn a_short_map_panel_pages_by_its_pager_and_the_wheel() {
+        let ui = UiFrame::new((667.0 * 2.0, 375.0 * 2.0), 2.0, 1.0, Insets::default(), true);
+        let frame = BuilderFrame::new(ui, (W, H), MapClass::Arena, None);
+        let mut ed = MapEditor::new(MapFile::new());
+        press_named(&mut ed, &frame, "map");
+        let Some(PopupLayout::Settings(settings)) = ed.chrome(&frame).popup else { panic!("the MAP panel") };
+        assert!(settings.pages > 1 && settings.pager.is_some(), "{settings:?}");
+        let mut seen = std::collections::BTreeSet::new();
+        for page in 0..settings.pages {
+            for (name, _) in ed.named_buttons(&frame) {
+                seen.insert(name);
+            }
+            if page + 1 < settings.pages {
+                press_named(&mut ed, &frame, "page_next");
+            }
+        }
+        for row in SETTINGS_ROWS {
+            let name = if row == SettingsRow::Reset { "reset".to_string() } else { format!("{}_inc", row.name()) };
+            assert!(seen.contains(&name), "{name} on no page");
+        }
+        assert_eq!(ed.history().undo_depth(), 0, "the pager steps nothing");
+        assert_eq!(ed.open_menu(), Some("map"));
+        // The wheel walks the pages back, and no further than the first.
+        let panel = center(frame.ui.rect_to_window(settings.rows.panel));
+        for _ in 0..settings.pages + 1 {
+            ed.update(&BuilderInput { pointer: Some(panel), wheel: 1.0, ..Default::default() }, &frame);
+        }
+        assert!(has_named(&ed, &frame, "tanks_inc"), "back on the first page");
+        ed.update(&BuilderInput { pointer: Some(panel), wheel: -1.0, ..Default::default() }, &frame);
+        assert!(!has_named(&ed, &frame, "tanks_inc"), "the wheel turned it on");
+    }
+
     #[test]
     fn the_wheel_over_a_category_button_cycles_its_tool() {
-        let layout = Layout::for_field(W, H);
+        let frame = arena();
         let mut ed = MapEditor::new(MapFile::new());
-        let wall = center(MapEditor::category_rect(&layout, Category::Wall));
-        ed.update(&BuilderInput { pointer: Some(wall), wheel: -1.0, ..Default::default() }, &layout);
+        let wall = center(named(&ed, &frame, "category_wall"));
+        ed.update(&BuilderInput { pointer: Some(wall), wheel: -1.0, ..Default::default() }, &frame);
         assert_eq!(ed.tool(), Tool::Wall(Material::Iron));
-        ed.update(&BuilderInput { pointer: Some(wall), wheel: 1.0, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { pointer: Some(wall), wheel: 1.0, ..Default::default() }, &frame);
         assert_eq!(ed.tool(), Tool::Wall(Material::Brick));
-        ed.update(&BuilderInput { pointer: Some(wall), wheel: 1.0, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { pointer: Some(wall), wheel: 1.0, ..Default::default() }, &frame);
         assert_eq!(ed.tool(), Tool::Wall(Material::Glass), "wraps");
-        // Off the buttons the wheel does nothing.
+        // Off the buttons the wheel does nothing to the tool.
         let field = Vec2::new(400.0, 400.0);
-        ed.update(&BuilderInput { pointer: Some(field), wheel: -1.0, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { pointer: Some(field), wheel: -1.0, ..Default::default() }, &frame);
         assert_eq!(ed.tool(), Tool::Wall(Material::Glass));
     }
 
-    /// A 96 x 54 map in the builder's field-map bitmap for a window, on a
-    /// screen `device` device pixels to the bitmap pixel.
-    fn big_editor(window: (f32, f32), device: f32, coarse: bool) -> (MapEditor, Layout, crate::view::View) {
+    /// A 96 x 54 map in the builder on a window of `window` units, a unit a
+    /// point, on a screen `device` device pixels to the window unit.
+    fn big_editor(window: (f32, f32), device: f32, coarse: bool) -> (MapEditor, BuilderFrame) {
         let mut map = MapFile::new();
         map.size = Some((96.0, 54.0));
-        let (layout, view) = camera::canvas_frame(window, None);
+        let frame = field_frame(window);
         let mut ed = MapEditor::new(map);
-        let screen = CanvasScreen { device_per_px: view.scale * device, points_per_px: view.scale, coarse };
-        ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &layout);
-        (ed, layout, view)
-    }
-
-    /// A bitmap point in the middle of the canvas area.
-    fn canvas_middle(layout: &Layout) -> Vec2 {
-        Vec2::new(layout.field.x + layout.field.w / 2.0, layout.field.y + layout.field.h / 2.0)
+        let screen = CanvasScreen { device_per_px: frame.view.scale * device, points_per_px: frame.view.scale, coarse };
+        ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
+        (ed, frame)
     }
 
     /// The wheel zooms at the cursor - the world under it stays - and the
     /// bar's FIT button brings the whole canvas back.
     #[test]
     fn the_wheel_zooms_at_the_cursor_and_fit_brings_the_whole_canvas_back() {
-        let (mut ed, layout, _) = big_editor((1920.0, 1080.0), 1.0, true);
+        let (mut ed, frame) = big_editor((1920.0, 1080.0), 1.0, true);
         assert!(ed.camera().is_fit());
-        let at = Vec2::new(layout.field.x + 300.0, layout.field.y + 200.0);
-        let before = ed.world_at(at, &layout).expect("on the canvas");
-        ed.update(&BuilderInput { pointer: Some(at), wheel: 1.0, ..Default::default() }, &layout);
+        let at = canvas_at(&frame, 300.0, 200.0);
+        let before = ed.world_at(at, &frame).expect("on the canvas");
+        ed.update(&BuilderInput { pointer: Some(at), wheel: 1.0, ..Default::default() }, &frame);
         assert!(!ed.camera().is_fit(), "a notch away from you zooms in");
-        let after = ed.world_at(at, &layout).expect("on the canvas");
+        let after = ed.world_at(at, &frame).expect("on the canvas");
         assert!((before.x - after.x).abs() <= 2.0 && (before.y - after.y).abs() <= 2.0, "{before:?} -> {after:?}");
         // On a coarse screen the step lands on whole blocks.
         let vp = ed.viewport();
@@ -3529,16 +3515,16 @@ mod editor_tests {
         assert!(((device * 2.0) - (device * 2.0).round()).abs() < 1e-3, "{device}");
         // A trackpad's half notches add up to one step.
         let scale = ed.camera().scale(&vp);
-        ed.update(&BuilderInput { pointer: Some(at), wheel: 0.5, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { pointer: Some(at), wheel: 0.5, ..Default::default() }, &frame);
         assert_eq!(ed.camera().scale(&vp), scale, "half a notch is no step yet");
-        ed.update(&BuilderInput { pointer: Some(at), wheel: 0.5, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { pointer: Some(at), wheel: 0.5, ..Default::default() }, &frame);
         assert!(ed.camera().scale(&vp) > scale, "the second half is");
-        // FIT, dim no more, takes it back; nothing was painted.
-        click(&mut ed, &layout, center(MapEditor::fit_rect(&layout)));
+        // FIT takes it back; nothing was painted.
+        press_named(&mut ed, &frame, "fit");
         assert!(ed.camera().is_fit());
         assert!(ed.map().cells.is_empty());
         // The wheel over the bar's empty parts zooms nothing.
-        ed.update(&BuilderInput { pointer: Some(Vec2::new(1000.0, 10.0)), wheel: 1.0, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { pointer: Some(Vec2::new(1000.0, 10.0)), wheel: 1.0, ..Default::default() }, &frame);
         assert!(ed.camera().is_fit());
     }
 
@@ -3546,10 +3532,10 @@ mod editor_tests {
     /// with the pointer and paints nothing; the primary alone paints.
     #[test]
     fn a_middle_or_space_drag_pans_and_never_paints() {
-        let (mut ed, layout, _) = big_editor((1920.0, 1080.0), 1.0, false);
-        let mid = canvas_middle(&layout);
-        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &layout);
-        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &layout);
+        let (mut ed, frame) = big_editor((1920.0, 1080.0), 1.0, false);
+        let mid = canvas_middle(&frame);
+        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &frame);
+        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &frame);
         assert!(!ed.camera().is_fit());
         let vp = ed.viewport();
         for drag in [
@@ -3557,22 +3543,22 @@ mod editor_tests {
             BuilderInput { space_held: true, held: true, pressed: true, ..Default::default() },
         ] {
             let start = ed.camera().center(&vp);
-            let under = ed.world_at(mid, &layout).unwrap();
-            ed.update(&BuilderInput { pointer: Some(mid), ..drag.clone() }, &layout);
+            let under = ed.world_at(mid, &frame).unwrap();
+            ed.update(&BuilderInput { pointer: Some(mid), ..drag.clone() }, &frame);
             let to = Vec2::new(mid.x - 60.0, mid.y + 25.0);
-            ed.update(&BuilderInput { pointer: Some(to), pressed: false, ..drag.clone() }, &layout);
-            ed.update(&BuilderInput { pointer: Some(to), ..Default::default() }, &layout);
+            ed.update(&BuilderInput { pointer: Some(to), pressed: false, ..drag.clone() }, &frame);
+            ed.update(&BuilderInput { pointer: Some(to), ..Default::default() }, &frame);
             let moved = ed.camera().center(&vp);
             assert!((moved.x - start.x).abs() > 1.0 && (moved.y - start.y).abs() > 1.0, "{start:?} -> {moved:?}");
-            let now = ed.world_at(to, &layout).unwrap();
+            let now = ed.world_at(to, &frame).unwrap();
             assert!((now.x - under.x).abs() <= 2.0 && (now.y - under.y).abs() <= 2.0, "the world followed the pointer: {under:?} vs {now:?}");
             assert!(ed.map().cells.is_empty(), "a pan paints nothing");
         }
         // The primary alone paints where it presses.
         let press = BuilderInput { pointer: Some(mid), pressed: true, held: true, ..Default::default() };
-        ed.update(&press, &layout);
-        ed.update(&BuilderInput { pointer: Some(mid), ..Default::default() }, &layout);
-        let cell = ed.cell_at(mid, &layout).unwrap();
+        ed.update(&press, &frame);
+        ed.update(&BuilderInput { pointer: Some(mid), ..Default::default() }, &frame);
+        let cell = ed.cell_at(mid, &frame).unwrap();
         assert_eq!(ed.map().cell(cell.0, cell.1), Some(&brick()));
     }
 
@@ -3580,20 +3566,20 @@ mod editor_tests {
     /// moves the view the way it points; neither reaches a Save prompt.
     #[test]
     fn keys_zoom_and_pan_but_not_into_a_text_prompt() {
-        let (mut ed, layout, _) = big_editor((1180.0, 820.0), 2.0, true);
+        let (mut ed, frame) = big_editor((1180.0, 820.0), 2.0, true);
         let vp = ed.viewport();
-        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &layout);
-        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &frame);
+        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &frame);
         let at = ed.camera().center(&vp);
-        ed.update(&BuilderInput { pan_keys: Vec2::new(1.0, 0.0), dt: 0.1, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { pan_keys: Vec2::new(1.0, 0.0), dt: 0.1, ..Default::default() }, &frame);
         let moved = ed.camera().center(&vp);
         assert!(moved.x > at.x + 1.0 && (moved.y - at.y).abs() < 1e-3, "right moves the view right: {at:?} -> {moved:?}");
-        ed.update(&BuilderInput { zoom_out: true, ..Default::default() }, &layout);
-        ed.update(&BuilderInput { zoom_out: true, ..Default::default() }, &layout);
-        ed.update(&BuilderInput { zoom_out: true, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { zoom_out: true, ..Default::default() }, &frame);
+        ed.update(&BuilderInput { zoom_out: true, ..Default::default() }, &frame);
+        ed.update(&BuilderInput { zoom_out: true, ..Default::default() }, &frame);
         assert!(ed.camera().is_fit(), "back out to FIT and no further");
         ed.popup = Some(Popup::Save { name: String::new() });
-        ed.update(&BuilderInput { zoom_in: true, typed: "-".into(), ..Default::default() }, &layout);
+        ed.update(&BuilderInput { zoom_in: true, typed: "-".into(), ..Default::default() }, &frame);
         assert!(ed.camera().is_fit(), "a key in the Save prompt is a character");
     }
 
@@ -3606,14 +3592,12 @@ mod editor_tests {
         let cases = [((1920.0, 1080.0), 1.0, true), ((852.0, 393.0), 3.0, false), ((1180.0, 820.0), 2.0, true)];
         for (window, device, coarse) in cases {
             for arena in [true, false] {
-                let (mut ed, layout, view) = if arena {
-                    let layout = Layout::for_field(W, H);
-                    let (bw, bh) = layout.window_size();
-                    let view = crate::view::View::fit((bw as f32, bh as f32), window);
+                let (mut ed, frame) = if arena {
+                    let frame = BuilderFrame::new(UiFrame::plain(window), (W, H), MapClass::Arena, None);
                     let mut ed = MapEditor::new(MapFile::new());
-                    let screen = CanvasScreen { device_per_px: view.scale * device, points_per_px: view.scale, coarse };
-                    ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &layout);
-                    (ed, layout, view)
+                    let screen = CanvasScreen { device_per_px: frame.view.scale * device, points_per_px: frame.view.scale, coarse };
+                    ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
+                    (ed, frame)
                 } else {
                     big_editor(window, device, coarse)
                 };
@@ -3626,7 +3610,7 @@ mod editor_tests {
                             ed.camera.step(true, mid, &vp, &CanvasRules::of(&crate::tuning::Tuning::DEFAULT));
                         }
                         ed.camera.pan(pan, &vp, &CanvasRules::of(&crate::tuning::Tuning::DEFAULT));
-                        let mapping = camera::window_mapping(&ed.view_camera(&layout), &view, &layout);
+                        let mapping = camera::window_mapping(&ed.view_camera(&frame.layout), &frame.view, &frame.layout);
                         // Every cell the canvas shows, at its middle and
                         // just inside its corners.
                         let (cols, rows) = (ed.map().field_size().0 as i32 / 32, ed.map().field_size().1 as i32 / 32);
@@ -3639,11 +3623,10 @@ mod editor_tests {
                                     if at.x < a.x || at.y < a.y || at.x >= a.x + a.width || at.y >= a.y + a.height {
                                         continue;
                                     }
-                                    let bitmap = view.to_bitmap(at);
                                     let w = Vec2::new(world.x + dx, world.y + dy);
                                     let inside = w.x >= 0.0 && w.y >= 0.0 && w.x < ed.map().field_size().0 && w.y < ed.map().field_size().1;
-                                    let got = ed.cell_at(bitmap, &layout);
-                                    if ed.navigator_rect(&layout).is_some_and(|r| Corners::plate(r).contains(bitmap)) {
+                                    let got = ed.cell_at(at, &frame);
+                                    if ed.navigator_rect(&frame).is_some_and(|r| Corners::plate(r).contains(frame.to_ui(at))) {
                                         assert_eq!(got, None, "the navigator stands over the canvas there");
                                     } else if inside {
                                         assert_eq!(got, Some((col, row)), "{window:?} arena={arena} steps={zoom_steps} pan={pan:?} at {at:?}");
@@ -3659,10 +3642,11 @@ mod editor_tests {
         }
     }
 
-    /// The point at fractions `fx`, `fy` across and down the navigator.
-    fn on_navigator(ed: &MapEditor, layout: &Layout, fx: f32, fy: f32) -> Vec2 {
-        let r = ed.navigator_rect(layout).expect("a navigator");
-        Vec2::new(r.x + r.width * fx, r.y + r.height * fy)
+    /// The window point at fractions `fx`, `fy` across and down the
+    /// navigator.
+    fn on_navigator(ed: &MapEditor, frame: &BuilderFrame, fx: f32, fy: f32) -> Vec2 {
+        let r = ed.navigator_rect(frame).expect("a navigator");
+        frame.ui.to_window(Vec2::new(r.x + r.width * fx, r.y + r.height * fy))
     }
 
     /// Where a view centred on `world` at the camera's zoom can stand: the
@@ -3679,57 +3663,63 @@ mod editor_tests {
     /// world point under it at the view's zoom, a drag carries the view
     /// along until it lifts, a move after the lift does nothing, and none
     /// of it paints; from FIT a press zooms in to a tap's zoom there. Its
-    /// picture stands in the canvas's bottom-right corner, inside it.
+    /// picture stands in the bottom-right corner of the room under the bar,
+    /// over the canvas.
     #[test]
     fn the_navigators_click_and_drag_move_the_builder_camera() {
-        let (mut ed, layout, _) = big_editor((1920.0, 1080.0), 1.0, true);
-        let nav = ed.navigator_rect(&layout).expect("a field map has one at FIT");
-        let area = layout.field;
-        assert!(nav.x > area.x + area.w / 2.0 && nav.y > area.y + area.h / 2.0, "in the bottom-right: {nav:?} of {area:?}");
-        assert!(Corners::plate(nav).x + Corners::plate(nav).width <= area.x + area.w && Corners::plate(nav).y + Corners::plate(nav).height <= area.y + area.h);
+        let (mut ed, frame) = big_editor((1920.0, 1080.0), 1.0, true);
+        let layout = frame.layout;
+        let nav = ed.navigator_rect(&frame).expect("a field map has one at FIT");
+        let room = frame.under_bar();
+        assert!(nav.x > room.x + room.width / 2.0 && nav.y > room.y + room.height / 2.0, "in the bottom-right: {nav:?} of {room:?}");
+        let plate = Corners::plate(nav);
+        assert!(plate.x + plate.width <= room.x + room.width && plate.y + plate.height <= room.y + room.height);
+        let canvas = frame.canvas_ui();
+        assert!(plate.x >= canvas.x && plate.y + plate.height <= canvas.y + canvas.height, "over the canvas: {plate:?} {canvas:?}");
         let (w, h) = ed.map().field_size();
         // From FIT: a press zooms in there.
-        let p = on_navigator(&ed, &layout, 0.5, 0.5);
-        ed.update(&BuilderInput { pointer: Some(p), pressed: true, held: true, ..Default::default() }, &layout);
-        ed.update(&BuilderInput { pointer: Some(p), ..Default::default() }, &layout);
+        let p = on_navigator(&ed, &frame, 0.5, 0.5);
+        ed.update(&BuilderInput { pointer: Some(p), pressed: true, held: true, ..Default::default() }, &frame);
+        ed.update(&BuilderInput { pointer: Some(p), ..Default::default() }, &frame);
         assert!(!ed.camera().is_fit(), "a press from FIT zooms in");
         let vp = ed.viewport();
         let c = ed.camera().center(&vp);
         assert!((c.x - w / 2.0).abs() < 1.0 && (c.y - h / 2.0).abs() < 1.0, "centred where it was pressed: {c:?}");
         let zoom = ed.camera().scale(&vp);
         // A press keeps the zoom and jumps; a drag carries the view along.
-        let a = on_navigator(&ed, &layout, 0.2, 0.3);
-        ed.update(&BuilderInput { pointer: Some(a), pressed: true, held: true, ..Default::default() }, &layout);
+        let a = on_navigator(&ed, &frame, 0.2, 0.3);
+        ed.update(&BuilderInput { pointer: Some(a), pressed: true, held: true, ..Default::default() }, &frame);
         let want = centre_for(&ed, Vec2::new(0.2 * w, 0.3 * h));
         let c = ed.camera().center(&vp);
         assert!((c.x - want.x).abs() < 1.0 && (c.y - want.y).abs() < 1.0, "jumped: {c:?} vs {want:?}");
         assert_eq!(ed.camera().scale(&vp), zoom, "at the zoom it had");
-        let b = on_navigator(&ed, &layout, 0.7, 0.6);
-        ed.update(&BuilderInput { pointer: Some(b), held: true, ..Default::default() }, &layout);
+        let b = on_navigator(&ed, &frame, 0.7, 0.6);
+        ed.update(&BuilderInput { pointer: Some(b), held: true, ..Default::default() }, &frame);
         let want = centre_for(&ed, Vec2::new(0.7 * w, 0.6 * h));
         let c = ed.camera().center(&vp);
         assert!((c.x - want.x).abs() < 1.0 && (c.y - want.y).abs() < 1.0, "dragged: {c:?} vs {want:?}");
         // Dragged past the picture, the view stops at the field's edge.
-        let far = Vec2::new(nav.x - 400.0, nav.y - 400.0);
-        ed.update(&BuilderInput { pointer: Some(far), held: true, ..Default::default() }, &layout);
+        let far = frame.ui.to_window(Vec2::new(nav.x - 400.0, nav.y - 400.0));
+        ed.update(&BuilderInput { pointer: Some(far), held: true, ..Default::default() }, &frame);
         let want = centre_for(&ed, Vec2::new(0.0, 0.0));
         let c = ed.camera().center(&vp);
         assert!((c.x - want.x).abs() < 1.0 && (c.y - want.y).abs() < 1.0, "held to the picture: {c:?} vs {want:?}");
         // Lifted: a move after it is nobody's.
-        ed.update(&BuilderInput { pointer: Some(b), ..Default::default() }, &layout);
-        ed.update(&BuilderInput { pointer: Some(a), ..Default::default() }, &layout);
+        ed.update(&BuilderInput { pointer: Some(b), ..Default::default() }, &frame);
+        ed.update(&BuilderInput { pointer: Some(a), ..Default::default() }, &frame);
         let still = ed.camera().center(&vp);
         assert!((still.x - c.x).abs() < 1e-3 && (still.y - c.y).abs() < 1e-3);
         assert!(ed.map().cells.is_empty(), "the navigator paints nothing");
         assert_eq!(ed.history().undo_depth(), 0);
         // A press on the canvas still paints, and a stroke dragged over the
         // navigator paints nothing under it.
-        let cell_point = canvas_middle(&layout);
-        ed.update(&BuilderInput { pointer: Some(cell_point), pressed: true, held: true, ..Default::default() }, &layout);
-        ed.update(&BuilderInput { pointer: Some(on_navigator(&ed, &layout, 0.5, 0.5)), held: true, ..Default::default() }, &layout);
-        ed.update(&BuilderInput { pointer: Some(cell_point), ..Default::default() }, &layout);
+        let cell_point = canvas_middle(&frame);
+        ed.update(&BuilderInput { pointer: Some(cell_point), pressed: true, held: true, ..Default::default() }, &frame);
+        ed.update(&BuilderInput { pointer: Some(on_navigator(&ed, &frame, 0.5, 0.5)), held: true, ..Default::default() }, &frame);
+        ed.update(&BuilderInput { pointer: Some(cell_point), ..Default::default() }, &frame);
         assert!(!ed.map().cells.is_empty(), "the canvas painted");
-        let under = ed.view_camera(&layout).to_world(layout.to_field(on_navigator(&ed, &layout, 0.5, 0.5)));
+        let nav_middle = frame.to_canvas(on_navigator(&ed, &frame, 0.5, 0.5));
+        let under = ed.view_camera(&layout).to_world(layout.to_field(nav_middle));
         assert_eq!(ed.map().cell(map::world_to_cell(under).0, map::world_to_cell(under).1), None, "nothing under the navigator");
     }
 
@@ -3738,26 +3728,28 @@ mod editor_tests {
     /// zoomed by a tap.
     #[test]
     fn a_finger_on_the_navigator_moves_the_view() {
-        let (mut ed, layout, _) = big_editor((1180.0, 820.0), 2.0, false);
-        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &layout);
-        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &layout);
+        let (mut ed, frame) = big_editor((1180.0, 820.0), 2.0, false);
+        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &frame);
+        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &frame);
         let vp = ed.viewport();
         let zoom = ed.camera().scale(&vp);
         let (w, h) = ed.map().field_size();
-        let a = on_navigator(&ed, &layout, 0.8, 0.8);
-        let b = on_navigator(&ed, &layout, 0.3, 0.4);
-        let frames: Vec<Vec<(i32, f32, f32)>> = (0..=10).map(|i| {
-            let t = i as f32 / 10.0;
-            vec![(4, a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)]
-        }).collect();
-        fingers(&mut ed, &layout, &frames);
+        let a = on_navigator(&ed, &frame, 0.8, 0.8);
+        let b = on_navigator(&ed, &frame, 0.3, 0.4);
+        let frames: Vec<Vec<(i32, f32, f32)>> = (0..=10)
+            .map(|i| {
+                let t = i as f32 / 10.0;
+                vec![(4, a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)]
+            })
+            .collect();
+        fingers(&mut ed, &frame, &frames);
         let want = centre_for(&ed, Vec2::new(0.3 * w, 0.4 * h));
         let c = ed.camera().center(&vp);
         assert!((c.x - want.x).abs() < 1.0 && (c.y - want.y).abs() < 1.0, "followed the finger: {c:?} vs {want:?}");
         assert_eq!(ed.camera().scale(&vp), zoom, "a drag on the navigator never zooms");
         // A quick tap on it jumps there and is no paint and no zoom.
-        let p = on_navigator(&ed, &layout, 0.5, 0.5);
-        fingers(&mut ed, &layout, &[vec![(5, p.x, p.y)]]);
+        let p = on_navigator(&ed, &frame, 0.5, 0.5);
+        fingers(&mut ed, &frame, &[vec![(5, p.x, p.y)]]);
         let c = ed.camera().center(&vp);
         let want = centre_for(&ed, Vec2::new(0.5 * w, 0.5 * h));
         assert!((c.x - want.x).abs() < 1.0 && (c.y - want.y).abs() < 1.0, "{c:?} vs {want:?}");
@@ -3770,54 +3762,54 @@ mod editor_tests {
     /// did; zoomed in, the corner is the navigator's.
     #[test]
     fn the_navigator_is_hidden_at_fit_on_an_arena() {
-        let layout = Layout::for_field(W, H);
+        let frame = arena();
         let mut ed = MapEditor::new(MapFile::new());
         let screen = CanvasScreen { device_per_px: 1.0, points_per_px: 1.0, coarse: true };
-        ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &layout);
-        assert_eq!(ed.navigator_rect(&layout), None);
-        let corner = Vec2::new(layout.field.x + layout.field.w - 40.0, layout.field.y + layout.field.h - 30.0);
-        assert!(ed.cell_at(corner, &layout).is_some(), "the canvas, all of it");
-        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &layout);
-        let nav = ed.navigator_rect(&layout).expect("zoomed in, a navigator");
-        assert!(Corners::plate(nav).contains(corner), "in the corner: {nav:?}");
-        assert_eq!(ed.cell_at(corner, &layout), None, "the navigator's, not a cell's");
-        ed.update(&BuilderInput { zoom_out: true, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
+        assert_eq!(ed.navigator_rect(&frame), None);
+        let corner = canvas_at(&frame, frame.layout.field.w - 40.0, frame.layout.field.h - 30.0);
+        assert!(ed.cell_at(corner, &frame).is_some(), "the canvas, all of it");
+        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &frame);
+        let nav = ed.navigator_rect(&frame).expect("zoomed in, a navigator");
+        assert!(Corners::plate(nav).contains(frame.to_ui(corner)), "in the corner: {nav:?}");
+        assert_eq!(ed.cell_at(corner, &frame), None, "the navigator's, not a cell's");
+        ed.update(&BuilderInput { zoom_out: true, ..Default::default() }, &frame);
         assert!(ed.camera().is_fit());
-        assert_eq!(ed.navigator_rect(&layout), None);
+        assert_eq!(ed.navigator_rect(&frame), None);
     }
 
-    /// Run frames of fingers - `(id, x, y)` in bitmap pixels - through the
-    /// builder the way `app.rs` and the dev server's `builder_touch` feed
-    /// them, ending with every finger lifted.
-    fn fingers(ed: &mut MapEditor, layout: &Layout, frames: &[Vec<(i32, f32, f32)>]) {
+    /// Run frames of fingers - `(id, x, y)` in window coordinates - through
+    /// the builder the way `app.rs` and the dev server's `builder_touch`
+    /// feed them, ending with every finger lifted.
+    fn fingers(ed: &mut MapEditor, frame: &BuilderFrame, frames: &[Vec<(i32, f32, f32)>]) {
         let mut down = false;
         for f in frames.iter().cloned().chain(std::iter::once(Vec::new())) {
             let touches: Vec<crate::touch::TouchPoint> = f.iter().map(|&(id, x, y)| crate::touch::TouchPoint { id, pos: Vec2::new(x, y) }).collect();
             let now = !touches.is_empty();
             let input = BuilderInput { pointer: touches.first().map(|t| t.pos), pressed: now && !down, held: now, touches, dt: 1.0 / 60.0, ..Default::default() };
-            ed.update(&input, layout);
+            ed.update(&input, frame);
             down = now;
         }
     }
 
     /// Frames of fingers as `fingers` runs them, the last frame's fingers
     /// left down.
-    fn hold_fingers(ed: &mut MapEditor, layout: &Layout, frames: &[Vec<(i32, f32, f32)>]) {
+    fn hold_fingers(ed: &mut MapEditor, frame: &BuilderFrame, frames: &[Vec<(i32, f32, f32)>]) {
         let mut down = false;
         for f in frames {
             let touches: Vec<crate::touch::TouchPoint> = f.iter().map(|&(id, x, y)| crate::touch::TouchPoint { id, pos: Vec2::new(x, y) }).collect();
             let now = !touches.is_empty();
             let input = BuilderInput { pointer: touches.first().map(|t| t.pos), pressed: now && !down, held: now, touches, dt: 1.0 / 60.0, ..Default::default() };
-            ed.update(&input, layout);
+            ed.update(&input, frame);
             down = now;
         }
     }
 
     /// A one-finger stroke from `from` across to `to`, held there.
-    fn hold_stroke(ed: &mut MapEditor, layout: &Layout, from: Vec2, to: Vec2) {
+    fn hold_stroke(ed: &mut MapEditor, frame: &BuilderFrame, from: Vec2, to: Vec2) {
         let frames: Vec<Vec<(i32, f32, f32)>> =
             (0..=10).map(|i| vec![(1, from.x + (to.x - from.x) * i as f32 / 10.0, from.y + (to.y - from.y) * i as f32 / 10.0)]).collect();
-        hold_fingers(ed, layout, &frames);
+        hold_fingers(ed, frame, &frames);
     }
 
     /// The clear check is kept per revision of the canvas: a win noted on
@@ -3886,91 +3878,105 @@ mod editor_tests {
     }
 
     /// The loupe over a painting finger where cells are small on the glass:
-    /// above the finger, on the canvas, showing the cell the stroke paints
-    /// magnified on whole blocks; none for a mouse, none where a cell is
-    /// a finger's size and more, none once the finger lifts.
+    /// in UI points like the rest of the chrome, above the finger, on the
+    /// canvas and inside the safe area, showing the cell the stroke paints
+    /// magnified on whole blocks, every block whole device pixels; none for
+    /// a mouse, none where a cell is a finger's size and more, none once
+    /// the finger lifts. On a phone whose UI point is several of its
+    /// window's units as on a desktop.
     #[test]
     fn the_loupe_shows_the_cell_a_finger_paints_where_cells_are_small() {
         let rules = CanvasRules::of(&crate::tuning::Tuning::DEFAULT);
-        let (mut ed, layout, _) = big_editor((852.0, 393.0), 3.0, false);
-        let vp = ed.viewport();
-        let mid = canvas_middle(&layout);
-        ed.camera.zoom_at(vp.scale_for_cell_mm(8.0), layout.to_field(mid), &vp, &rules);
-        assert!(rules.paint_min_cell_mm < 8.0 && 8.0 < rules.loupe_cell_mm, "a finger paints and the loupe shows");
-        let to = Vec2::new(mid.x + 120.0, mid.y + 40.0);
-        hold_stroke(&mut ed, &layout, mid, to);
-        let loupe = ed.loupe(&layout).expect("a loupe over a painting finger");
-        let r = loupe.rect;
-        let lift = vp.px(LOUPE_LIFT_PT);
-        let device = vp.screen.device_per_px;
-        assert!(r.y + r.height <= to.y - lift + 1.0 / device + 1e-3, "above the finger: {r:?}");
-        assert!((r.x + r.width / 2.0 - to.x).abs() <= 0.5 / device + 1e-3, "centred over it: {r:?}");
-        let f = layout.field;
-        assert!(r.x >= f.x && r.y >= f.y && r.x + r.width <= f.x + f.w && r.y + r.height <= f.y + f.h, "on the canvas");
-        let whole = |v: f32| (v * device - (v * device).round()).abs() < 1e-3;
-        assert!(whole(r.x) && whole(r.y), "its corner on a whole device pixel: {r:?}");
-        assert_eq!(Some(loupe.cell), ed.cell_at(to, &layout), "the cell under the finger");
-        let c = map::cell_to_world(loupe.cell.0, loupe.cell.1);
-        let w = loupe.world;
-        assert!(c.x - 16.0 >= w.x && c.y - 16.0 >= w.y && c.x + 16.0 <= w.x + w.width && c.y + 16.0 <= w.y + w.height, "the whole cell in it: {w:?}");
-        assert_eq!((w.x % 2.0, w.y % 2.0, w.width % 2.0, w.height % 2.0), (0.0, 0.0, 0.0, 0.0), "whole blocks on the block grid");
-        assert!(((loupe.device_scale * 2.0).fract()).abs() < 1e-4, "whole blocks: {}", loupe.device_scale);
-        assert!((r.width * device - w.width * loupe.device_scale).abs() < 1e-2, "every block whole device pixels: {r:?} {w:?}");
-        assert!(loupe.device_scale > vp.device_scale(ed.camera().scale(&vp)), "magnified");
-        assert!(!loupe.erase);
-        // Lifted: gone.
-        hold_fingers(&mut ed, &layout, &[Vec::new()]);
-        assert_eq!(ed.loupe(&layout), None);
-        // A mouse stroke: none.
-        ed.update(&BuilderInput { pointer: Some(mid), pressed: true, held: true, ..Default::default() }, &layout);
-        ed.update(&BuilderInput { pointer: Some(to), held: true, ..Default::default() }, &layout);
-        assert_eq!(ed.loupe(&layout), None, "the mouse shows the cell it paints itself");
-        ed.update(&BuilderInput { pointer: Some(to), ..Default::default() }, &layout);
-        // A cell bigger than a fingertip and some: none.
-        ed.camera.zoom_at(vp.scale_for_cell_mm(rules.loupe_cell_mm + 2.0), layout.to_field(mid), &vp, &rules);
-        hold_stroke(&mut ed, &layout, mid, to);
-        assert_eq!(ed.loupe(&layout), None);
-        hold_fingers(&mut ed, &layout, &[Vec::new()]);
-        // By the canvas's right edge the loupe stands left of the finger.
-        ed.camera.zoom_at(vp.scale_for_cell_mm(8.0), layout.to_field(mid), &vp, &rules);
-        let edge = Vec2::new(f.x + f.w - 20.0, mid.y + 40.0);
-        hold_stroke(&mut ed, &layout, Vec2::new(edge.x - 100.0, edge.y), edge);
-        let r = ed.loupe(&layout).expect("a loupe at the edge").rect;
-        assert!(r.x + r.width <= edge.x - lift + 1.0 / device + 1e-3, "left of the finger: {r:?} for {edge:?}");
+        let phone = |units: f32| {
+            let insets = Insets { left: 59.0 * units, top: 0.0, right: 59.0 * units, bottom: 21.0 * units };
+            UiFrame::new((852.0 * units, 393.0 * units), units, 1.0, insets, true)
+        };
+        for ui in [UiFrame::plain((852.0, 393.0)), phone(1.0), phone(3.0)] {
+            let mut map = MapFile::new();
+            map.size = Some((96.0, 54.0));
+            let frame = BuilderFrame::new(ui, (96.0 * 32.0, 54.0 * 32.0), MapClass::Field, None);
+            let mut ed = MapEditor::new(map);
+            // Three device pixels to the point.
+            let screen = CanvasScreen { device_per_px: frame.view.scale * 3.0 / ui.scale, points_per_px: frame.view.scale / ui.scale, coarse: false };
+            ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
+            let layout = frame.layout;
+            let vp = ed.viewport();
+            let mid = canvas_middle(&frame);
+            ed.camera.zoom_at(vp.scale_for_cell_mm(8.0), layout.to_field(frame.to_canvas(mid)), &vp, &rules);
+            assert!(rules.paint_min_cell_mm < 8.0 && 8.0 < rules.loupe_cell_mm, "a finger paints and the loupe shows");
+            let to = frame.ui.to_window(Vec2::new(frame.to_ui(mid).x + 120.0, frame.to_ui(mid).y + 40.0));
+            hold_stroke(&mut ed, &frame, mid, to);
+            let loupe = ed.loupe(&frame).expect("a loupe over a painting finger");
+            let r = loupe.rect;
+            let finger = frame.to_ui(to);
+            let device = frame.device_per_point(vp.screen.device_per_px);
+            assert!((device - 3.0).abs() < 1e-3, "{ui:?}: {device}");
+            assert!(r.y + r.height <= finger.y - LOUPE_LIFT_PT + 1.0 / device + 1e-3, "{ui:?}: above the finger: {r:?} {finger:?}");
+            assert!((r.x + r.width / 2.0 - finger.x).abs() <= 0.5 / device + 1e-3, "{ui:?}: centred over it: {r:?}");
+            let c = frame.canvas_ui();
+            let a = ui.area;
+            assert!(r.x >= c.x && r.y >= c.y && r.x + r.width <= c.x + c.width && r.y + r.height <= c.y + c.height, "{ui:?}: on the canvas");
+            assert!(r.x >= a.x && r.y >= a.y && r.x + r.width <= a.x + a.w && r.y + r.height <= a.y + a.h, "{ui:?}: inside the safe area");
+            let whole = |v: f32| (v * device - (v * device).round()).abs() < 1e-3;
+            assert!(whole(r.x) && whole(r.y), "{ui:?}: its corner on a whole device pixel: {r:?}");
+            assert_eq!(Some(loupe.cell), ed.cell_at(to, &frame), "the cell under the finger");
+            let cell = map::cell_to_world(loupe.cell.0, loupe.cell.1);
+            let w = loupe.world;
+            assert!(cell.x - 16.0 >= w.x && cell.y - 16.0 >= w.y && cell.x + 16.0 <= w.x + w.width && cell.y + 16.0 <= w.y + w.height, "the whole cell in it: {w:?}");
+            assert_eq!((w.x % 2.0, w.y % 2.0, w.width % 2.0, w.height % 2.0), (0.0, 0.0, 0.0, 0.0), "whole blocks on the block grid");
+            assert!(((loupe.device_scale * 2.0).fract()).abs() < 1e-4, "whole blocks: {}", loupe.device_scale);
+            assert!((r.width * device - w.width * loupe.device_scale).abs() < 1e-2, "every block whole device pixels: {r:?} {w:?}");
+            assert!(loupe.device_scale > vp.device_scale(ed.camera().scale(&vp)), "magnified");
+            assert!(!loupe.erase);
+            // Lifted: gone.
+            hold_fingers(&mut ed, &frame, &[Vec::new()]);
+            assert_eq!(ed.loupe(&frame), None);
+            // A mouse stroke: none.
+            ed.update(&BuilderInput { pointer: Some(mid), pressed: true, held: true, ..Default::default() }, &frame);
+            ed.update(&BuilderInput { pointer: Some(to), held: true, ..Default::default() }, &frame);
+            assert_eq!(ed.loupe(&frame), None, "the mouse shows the cell it paints itself");
+            ed.update(&BuilderInput { pointer: Some(to), ..Default::default() }, &frame);
+            // A cell bigger than a fingertip and some: none.
+            ed.camera.zoom_at(vp.scale_for_cell_mm(rules.loupe_cell_mm + 2.0), layout.to_field(frame.to_canvas(mid)), &vp, &rules);
+            hold_stroke(&mut ed, &frame, mid, to);
+            assert_eq!(ed.loupe(&frame), None);
+            hold_fingers(&mut ed, &frame, &[Vec::new()]);
+            // By the canvas's right edge the loupe stands left of the finger.
+            ed.camera.zoom_at(vp.scale_for_cell_mm(8.0), layout.to_field(frame.to_canvas(mid)), &vp, &rules);
+            let edge = Vec2::new(c.x + c.width - 20.0, finger.y);
+            let from = frame.ui.to_window(Vec2::new(edge.x - 100.0, edge.y));
+            hold_stroke(&mut ed, &frame, from, frame.ui.to_window(edge));
+            let r = ed.loupe(&frame).expect("a loupe at the edge").rect;
+            assert!(r.x + r.width <= edge.x - LOUPE_LIFT_PT + 1.0 / device + 1e-3, "{ui:?}: left of the finger: {r:?} for {edge:?}");
+            hold_fingers(&mut ed, &frame, &[Vec::new()]);
+        }
     }
 
     /// The standard arena on a screen where its cells are 7.6 mm on the
     /// glass: one finger paints there.
-    fn touch_arena() -> (MapEditor, Layout) {
-        let layout = Layout::for_field(W, H);
+    fn touch_arena() -> (MapEditor, BuilderFrame) {
+        let frame = arena();
         let mut ed = MapEditor::new(MapFile::new());
         let screen = CanvasScreen { device_per_px: 3.0, points_per_px: 1.5, coarse: false };
-        ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &layout);
-        (ed, layout)
-    }
-
-    /// The bitmap point at the middle of a cell.
-    fn on_cell(ed: &MapEditor, layout: &Layout, col: i32, row: i32) -> (f32, f32) {
-        let w = map::cell_to_world(col, row);
-        let v = ed.view_camera(layout).to_view(w);
-        (v.x + layout.field.x, v.y + layout.field.y)
+        ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
+        (ed, frame)
     }
 
     /// A finger resting on the canvas, even wobbling inside the slop,
     /// paints nothing; a quick tap paints its cell, one undo step.
     #[test]
     fn a_resting_finger_paints_nothing_and_a_tap_paints_its_cell() {
-        let (mut ed, layout) = touch_arena();
-        let (x, y) = on_cell(&ed, &layout, 10, 5);
+        let (mut ed, frame) = touch_arena();
+        let Vec2 { x, y } = on_cell(&ed, &frame, 10, 5);
         let rest: Vec<Vec<(i32, f32, f32)>> = (0..60).map(|i| vec![(7, x + (i % 4) as f32, y)]).collect();
-        fingers(&mut ed, &layout, &rest);
+        fingers(&mut ed, &frame, &rest);
         assert!(ed.map().cells.is_empty(), "a resting finger painted");
         assert_eq!(ed.history().undo_depth(), 0);
-        fingers(&mut ed, &layout, &[vec![(8, x, y)], vec![(8, x + 2.0, y + 1.0)]]);
+        fingers(&mut ed, &frame, &[vec![(8, x, y)], vec![(8, x + 2.0, y + 1.0)]]);
         assert_eq!(ed.map().cell(10, 5), Some(&brick()));
         assert_eq!(ed.history().undo_depth(), 1);
         // The toggle-erase rule holds for a tap too.
-        fingers(&mut ed, &layout, &[vec![(9, x, y)]]);
+        fingers(&mut ed, &frame, &[vec![(9, x, y)]]);
         assert_eq!(ed.map().cell(10, 5), None);
     }
 
@@ -3978,11 +3984,11 @@ mod editor_tests {
     /// it crosses, as one undo step.
     #[test]
     fn one_finger_past_the_slop_strokes_from_where_it_landed() {
-        let (mut ed, layout) = touch_arena();
-        let (x0, y) = on_cell(&ed, &layout, 4, 8);
-        let (x1, _) = on_cell(&ed, &layout, 9, 8);
+        let (mut ed, frame) = touch_arena();
+        let Vec2 { x: x0, y } = on_cell(&ed, &frame, 4, 8);
+        let x1 = on_cell(&ed, &frame, 9, 8).x;
         let frames: Vec<Vec<(i32, f32, f32)>> = (0..=10).map(|i| vec![(1, x0 + (x1 - x0) * i as f32 / 10.0, y)]).collect();
-        fingers(&mut ed, &layout, &frames);
+        fingers(&mut ed, &frame, &frames);
         for col in 4..=9 {
             assert_eq!(ed.map().cell(col, 8), Some(&brick()), "col {col}");
         }
@@ -3995,23 +4001,23 @@ mod editor_tests {
     /// zoom settles on whole blocks when they lift.
     #[test]
     fn two_fingers_pinch_at_their_middle_and_pan() {
-        let (mut ed, layout, _) = big_editor((1180.0, 820.0), 2.0, true);
-        let mid = canvas_middle(&layout);
-        let under = ed.world_at(mid, &layout).unwrap();
+        let (mut ed, frame) = big_editor((1180.0, 820.0), 2.0, true);
+        let mid = canvas_middle(&frame);
+        let under = ed.world_at(mid, &frame).unwrap();
         let spread = |d: f32| vec![(1, mid.x - d, mid.y), (2, mid.x + d, mid.y)];
         let frames: Vec<Vec<(i32, f32, f32)>> = (0..=20).map(|i| spread(40.0 + 8.0 * i as f32)).collect();
-        fingers(&mut ed, &layout, &frames);
+        fingers(&mut ed, &frame, &frames);
         assert!(!ed.camera().is_fit(), "spread fingers zoom in");
         let vp = ed.viewport();
         let device = vp.device_scale(ed.camera().scale(&vp));
         assert!(((device * 2.0) - (device * 2.0).round()).abs() < 1e-3, "settled on whole blocks: {device}");
-        let now = ed.world_at(mid, &layout).unwrap();
+        let now = ed.world_at(mid, &frame).unwrap();
         assert!((now.x - under.x).abs() < 4.0 && (now.y - under.y).abs() < 4.0, "the middle stayed put: {under:?} -> {now:?}");
         // Together, sideways: a pan.
         let before = ed.camera().center(&vp);
         let frames: Vec<Vec<(i32, f32, f32)>> =
             (0..=10).map(|i| vec![(3, mid.x - 50.0 + 6.0 * i as f32, mid.y), (4, mid.x + 50.0 + 6.0 * i as f32, mid.y)]).collect();
-        fingers(&mut ed, &layout, &frames);
+        fingers(&mut ed, &frame, &frames);
         let after = ed.camera().center(&vp);
         assert!(after.x < before.x - 1.0, "dragging right shows what is to the left: {before:?} -> {after:?}");
         assert!(ed.map().cells.is_empty());
@@ -4021,15 +4027,15 @@ mod editor_tests {
     /// lifting in any order.
     #[test]
     fn a_two_finger_tap_undoes_and_a_three_finger_tap_redoes() {
-        let (mut ed, layout) = touch_arena();
+        let (mut ed, frame) = touch_arena();
         ed.stroke(&[(3, 3), (4, 3)], false);
         ed.stroke(&[(6, 6)], false);
         assert_eq!(ed.history().undo_depth(), 2);
-        let (x, y) = on_cell(&ed, &layout, 15, 10);
-        fingers(&mut ed, &layout, &[vec![(1, x, y)], vec![(1, x, y), (2, x + 80.0, y)], vec![(2, x + 80.0, y)]]);
+        let Vec2 { x, y } = on_cell(&ed, &frame, 15, 10);
+        fingers(&mut ed, &frame, &[vec![(1, x, y)], vec![(1, x, y), (2, x + 80.0, y)], vec![(2, x + 80.0, y)]]);
         assert_eq!(ed.history().undo_depth(), 1, "two fingers undid");
         assert_eq!(ed.map().cell(6, 6), None);
-        fingers(&mut ed, &layout, &[vec![(1, x, y), (2, x + 80.0, y)], vec![(1, x, y), (2, x + 80.0, y), (3, x + 40.0, y + 60.0)], vec![(3, x + 40.0, y + 60.0)]]);
+        fingers(&mut ed, &frame, &[vec![(1, x, y), (2, x + 80.0, y)], vec![(1, x, y), (2, x + 80.0, y), (3, x + 40.0, y + 60.0)], vec![(3, x + 40.0, y + 60.0)]]);
         assert_eq!(ed.history().undo_depth(), 2, "three fingers redid");
         assert_eq!(ed.map().cell(6, 6), Some(&brick()));
         assert_eq!(ed.map().cells.len(), 3, "the taps painted nothing");
@@ -4039,12 +4045,12 @@ mod editor_tests {
     /// cell, no undo step - and the finger left behind paints nothing.
     #[test]
     fn a_second_finger_on_a_stroke_takes_it_back() {
-        let (mut ed, layout) = touch_arena();
-        let (x0, y) = on_cell(&ed, &layout, 4, 8);
-        let (x1, _) = on_cell(&ed, &layout, 8, 8);
+        let (mut ed, frame) = touch_arena();
+        let Vec2 { x: x0, y } = on_cell(&ed, &frame, 4, 8);
+        let x1 = on_cell(&ed, &frame, 8, 8).x;
         fingers(
             &mut ed,
-            &layout,
+            &frame,
             &[vec![(1, x0, y)], vec![(1, x1, y)], vec![(1, x1, y), (2, x1 + 100.0, y)], vec![(1, x1 - 30.0, y), (2, x1 + 70.0, y)], vec![(2, x1 + 70.0, y)], vec![(2, x1 + 150.0, y + 64.0)]],
         );
         assert!(ed.map().cells.is_empty(), "{:?}", ed.map().cells);
@@ -4057,27 +4063,27 @@ mod editor_tests {
     #[test]
     fn under_the_paint_threshold_a_tap_zooms_in_and_a_drag_pans() {
         let rules = CanvasRules::of(&crate::tuning::Tuning::DEFAULT);
-        let (mut ed, layout, _) = big_editor((852.0, 393.0), 3.0, false);
+        let (mut ed, frame) = big_editor((852.0, 393.0), 3.0, false);
         let vp = ed.viewport();
         assert!(vp.cell_mm(ed.camera().scale(&vp)) < rules.paint_min_cell_mm, "the study map at FIT on a phone is too small to paint");
-        let at = Vec2::new(layout.field.x + 400.0, layout.field.y + 200.0);
-        let under = ed.world_at(at, &layout).unwrap();
-        fingers(&mut ed, &layout, &[vec![(1, at.x, at.y)]]);
+        let at = canvas_at(&frame, 400.0, 200.0);
+        let under = ed.world_at(at, &frame).unwrap();
+        fingers(&mut ed, &frame, &[vec![(1, at.x, at.y)]]);
         assert!(ed.map().cells.is_empty());
         let mm = vp.cell_mm(ed.camera().scale(&vp));
         assert!((mm - rules.tap_zoom_cell_mm).abs() < 0.01, "a fine screen goes to the tap zoom exactly: {mm}");
-        let now = ed.world_at(at, &layout).unwrap();
+        let now = ed.world_at(at, &frame).unwrap();
         assert!((now.x - under.x).abs() < 2.0 && (now.y - under.y).abs() < 2.0, "about the tapped point");
-        // At 9 mm a finger paints; back under the threshold a drag pans.
-        ed.camera.zoom_at(vp.scale_for_cell_mm(4.0), layout.to_field(at), &vp, &rules);
+        // At 4 mm a finger cannot paint: a drag pans.
+        ed.camera.zoom_at(vp.scale_for_cell_mm(4.0), frame.layout.to_field(frame.to_canvas(at)), &vp, &rules);
         let before = ed.camera().center(&vp);
         let frames: Vec<Vec<(i32, f32, f32)>> = (0..=10).map(|i| vec![(2, at.x - 8.0 * i as f32, at.y)]).collect();
-        fingers(&mut ed, &layout, &frames);
+        fingers(&mut ed, &frame, &frames);
         assert!(ed.camera().center(&vp).x > before.x + 1.0, "dragging left shows more to the right");
         assert!(ed.map().cells.is_empty());
         // The mouse is not held to it.
-        ed.update(&BuilderInput { pointer: Some(at), pressed: true, held: true, ..Default::default() }, &layout);
-        ed.update(&BuilderInput { pointer: Some(at), ..Default::default() }, &layout);
+        ed.update(&BuilderInput { pointer: Some(at), pressed: true, held: true, ..Default::default() }, &frame);
+        ed.update(&BuilderInput { pointer: Some(at), ..Default::default() }, &frame);
         assert_eq!(ed.map().cells.len(), 1);
     }
 
@@ -4085,14 +4091,14 @@ mod editor_tests {
     /// of a gesture: dragged onto the canvas it paints nothing.
     #[test]
     fn a_finger_on_the_bar_presses_it_and_never_paints() {
-        let (mut ed, layout) = touch_arena();
-        let map = center(MapEditor::map_rect(&layout));
-        let (x, y) = on_cell(&ed, &layout, 10, 8);
-        fingers(&mut ed, &layout, &[vec![(1, map.x, map.y)], vec![(1, x, y)], vec![(1, x + 60.0, y)]]);
+        let (mut ed, frame) = touch_arena();
+        let map = center(named(&ed, &frame, "map"));
+        let Vec2 { x, y } = on_cell(&ed, &frame, 10, 8);
+        fingers(&mut ed, &frame, &[vec![(1, map.x, map.y)], vec![(1, x, y)], vec![(1, x + 60.0, y)]]);
         assert_eq!(ed.open_menu(), Some("map"));
         assert!(ed.map().cells.is_empty());
         // With the popup open a finger on the canvas only closes it.
-        fingers(&mut ed, &layout, &[vec![(2, x, y)], vec![(2, x + 60.0, y)]]);
+        fingers(&mut ed, &frame, &[vec![(2, x, y)], vec![(2, x + 60.0, y)]]);
         assert_eq!(ed.open_menu(), None);
         assert!(ed.map().cells.is_empty(), "the dismissing finger painted");
     }
@@ -4105,28 +4111,29 @@ mod editor_tests {
     #[test]
     fn a_stroke_held_at_the_canvas_edge_scrolls_and_keeps_painting() {
         for (finger, past) in [(false, false), (true, false), (false, true)] {
-            let (mut ed, layout, _) = big_editor((1180.0, 820.0), 2.0, false);
+            let (mut ed, frame) = big_editor((1180.0, 820.0), 2.0, false);
             let vp = ed.viewport();
             let rules = CanvasRules::of(&crate::tuning::Tuning::DEFAULT);
             ed.camera.zoom_at(vp.scale_for_cell_mm(12.0), Vec2::new(200.0, 300.0), &vp, &rules);
-            let row_y = layout.field.y + 300.0;
-            let start = Vec2::new(layout.field.x + 200.0, row_y);
-            let edge = Vec2::new(layout.field.x + layout.field.w + if past { 40.0 } else { -4.0 }, row_y);
-            let shown_edge = Vec2::new(layout.field.x + layout.field.w - 4.0, row_y);
-            let (first, row) = ed.cell_at(start, &layout).unwrap();
+            let f = frame.layout.field;
+            let start = canvas_at(&frame, 200.0, 300.0);
+            let row_y = start.y;
+            let edge = canvas_at(&frame, f.w + if past { 40.0 } else { -4.0 }, 300.0);
+            let shown_edge = canvas_at(&frame, f.w - 4.0, 300.0);
+            let (first, row) = ed.cell_at(start, &frame).unwrap();
             let center = ed.camera().center(&vp);
-            let shown_right = ed.cell_at(shown_edge, &layout).unwrap().0;
+            let shown_right = ed.cell_at(shown_edge, &frame).unwrap().0;
             let frames = 90;
             if finger {
                 let mut f: Vec<Vec<(i32, f32, f32)>> = (0..=8).map(|i| vec![(1, start.x + (edge.x - start.x) * i as f32 / 8.0, row_y)]).collect();
                 f.extend((0..frames).map(|_| vec![(1, edge.x, row_y)]));
-                fingers(&mut ed, &layout, &f);
+                fingers(&mut ed, &frame, &f);
             } else {
-                ed.update(&BuilderInput { pointer: Some(start), pressed: true, held: true, dt: 1.0 / 60.0, ..Default::default() }, &layout);
+                ed.update(&BuilderInput { pointer: Some(start), pressed: true, held: true, dt: 1.0 / 60.0, ..Default::default() }, &frame);
                 for _ in 0..frames {
-                    ed.update(&BuilderInput { pointer: Some(edge), held: true, dt: 1.0 / 60.0, ..Default::default() }, &layout);
+                    ed.update(&BuilderInput { pointer: Some(edge), held: true, dt: 1.0 / 60.0, ..Default::default() }, &frame);
                 }
-                ed.update(&BuilderInput { pointer: Some(edge), dt: 1.0 / 60.0, ..Default::default() }, &layout);
+                ed.update(&BuilderInput { pointer: Some(edge), dt: 1.0 / 60.0, ..Default::default() }, &frame);
             }
             let moved = ed.camera().center(&vp);
             assert!(moved.x > center.x + 64.0 && (moved.y - center.y).abs() < 1e-3, "finger={finger} past={past}: {center:?} -> {moved:?}");
@@ -4137,14 +4144,14 @@ mod editor_tests {
             assert_eq!(ed.history().undo_depth(), 1, "finger={finger} past={past}: one stroke, one step");
         }
         // Held in the middle of the canvas nothing scrolls.
-        let (mut ed, layout, _) = big_editor((1180.0, 820.0), 2.0, false);
+        let (mut ed, frame) = big_editor((1180.0, 820.0), 2.0, false);
         let vp = ed.viewport();
         ed.camera.zoom_at(vp.fit_scale() * 4.0, Vec2::new(500.0, 300.0), &vp, &CanvasRules::of(&crate::tuning::Tuning::DEFAULT));
         let center = ed.camera().center(&vp);
-        let mid = canvas_middle(&layout);
-        ed.update(&BuilderInput { pointer: Some(mid), pressed: true, held: true, dt: 1.0 / 60.0, ..Default::default() }, &layout);
+        let mid = canvas_middle(&frame);
+        ed.update(&BuilderInput { pointer: Some(mid), pressed: true, held: true, dt: 1.0 / 60.0, ..Default::default() }, &frame);
         for _ in 0..30 {
-            ed.update(&BuilderInput { pointer: Some(mid), held: true, dt: 1.0 / 60.0, ..Default::default() }, &layout);
+            ed.update(&BuilderInput { pointer: Some(mid), held: true, dt: 1.0 / 60.0, ..Default::default() }, &frame);
         }
         assert_eq!(ed.camera().center(&vp), center);
     }
@@ -4221,37 +4228,36 @@ mod editor_tests {
     /// with the map.
     #[test]
     fn the_size_steppers_resize_a_cell_a_press_as_one_step() {
-        let layout = Layout::for_field(W, H);
+        let frame = arena();
         let mut ed = MapEditor::new(MapFile::new());
         ed.stroke(&[(10, 5)], false);
-        click(&mut ed, &layout, center(MapEditor::map_rect(&layout)));
+        press_named(&mut ed, &frame, "map");
         assert_eq!(ed.open_menu(), Some("map"));
-        let row = |r: SettingsRow| MapEditor::settings_row_rect(&layout, SETTINGS_ROWS.iter().position(|&x| x == r).unwrap());
-        let inc = |r: SettingsRow| center(MapEditor::settings_inc_rect(row(r)));
-        let dec = |r: SettingsRow| center(MapEditor::settings_dec_rect(row(r)));
+        let inc = |r: SettingsRow| format!("{}_inc", r.name());
+        let dec = |r: SettingsRow| format!("{}_dec", r.name());
         // The anchor walks the nine, from the middle.
         assert_eq!(ed.resize_anchor(), Anchor::Center);
-        click(&mut ed, &layout, inc(SettingsRow::Anchor));
+        press_named(&mut ed, &frame, &inc(SettingsRow::Anchor));
         assert_eq!(ed.resize_anchor(), Anchor::Right);
-        click(&mut ed, &layout, dec(SettingsRow::Anchor));
-        click(&mut ed, &layout, dec(SettingsRow::Anchor));
+        press_named(&mut ed, &frame, &dec(SettingsRow::Anchor));
+        press_named(&mut ed, &frame, &dec(SettingsRow::Anchor));
         assert_eq!(ed.resize_anchor(), Anchor::Left);
         let depth = ed.history().undo_depth();
         for _ in 0..4 {
-            click(&mut ed, &layout, inc(SettingsRow::Width));
+            press_named(&mut ed, &frame, &inc(SettingsRow::Width));
         }
-        click(&mut ed, &layout, dec(SettingsRow::Height));
+        press_named(&mut ed, &frame, &dec(SettingsRow::Height));
         assert_eq!(ed.size_cells(), (38.0, 16.0));
         assert_eq!(ed.map().cell(10, 5), Some(&brick()), "left anchor: the map stays at the left, 17 to 16 rows round the same middle row");
-        click(&mut ed, &layout, dec(SettingsRow::Height));
+        press_named(&mut ed, &frame, &dec(SettingsRow::Height));
         assert_eq!(ed.map().cell(10, 4), Some(&brick()), "and the next row off moves it up one");
-        click(&mut ed, &layout, inc(SettingsRow::Height));
+        press_named(&mut ed, &frame, &inc(SettingsRow::Height));
         assert_eq!(ed.history().undo_depth(), depth + 1, "five presses, one step");
         // Closing the panel ends the run.
-        ed.update(&BuilderInput { escape: true, ..Default::default() }, &layout);
-        ed.update(&BuilderInput::default(), &layout);
-        click(&mut ed, &layout, center(MapEditor::map_rect(&layout)));
-        click(&mut ed, &layout, inc(SettingsRow::Height));
+        ed.update(&BuilderInput { escape: true, ..Default::default() }, &frame);
+        ed.update(&BuilderInput::default(), &frame);
+        press_named(&mut ed, &frame, "map");
+        press_named(&mut ed, &frame, &inc(SettingsRow::Height));
         assert_eq!(ed.history().undo_depth(), depth + 2);
         ed.undo();
         ed.undo();
@@ -4264,14 +4270,14 @@ mod editor_tests {
         ed.resize(1000.0, 1000.0, Anchor::TopLeft);
         assert_eq!(ed.size_cells(), (map::MAX_SIDE_CELLS, map::MAX_SIDE_CELLS));
         // A zoomed view moves with the map.
-        let (mut ed, layout, _) = big_editor((1180.0, 820.0), 2.0, false);
+        let (mut ed, frame) = big_editor((1180.0, 820.0), 2.0, false);
         let vp = ed.viewport();
         ed.camera.zoom_at(vp.fit_scale() * 4.0, Vec2::new(500.0, 300.0), &vp, &CanvasRules::of(&crate::tuning::Tuning::DEFAULT));
         let before = ed.camera().center(&ed.viewport());
         ed.resize(100.0, 54.0, Anchor::Right);
         let after = ed.camera().center(&ed.viewport());
         assert!((after.x - before.x - 4.0 * 32.0).abs() < 1e-3 && (after.y - before.y).abs() < 1e-3, "{before:?} -> {after:?}");
-        ed.update(&BuilderInput::default(), &layout);
+        ed.update(&BuilderInput::default(), &frame);
         ed.undo();
         let back = ed.camera().center(&ed.viewport());
         assert!((back.x - before.x).abs() < 1e-3, "undo moves it back: {before:?} -> {back:?}");
@@ -4389,17 +4395,16 @@ mod editor_tests {
 
     #[test]
     fn opening_one_popup_closes_the_other_and_save_reports_itself() {
-        let layout = Layout::for_field(W, H);
+        let frame = arena();
         let mut ed = MapEditor::new(MapFile::new());
-        click(&mut ed, &layout, center(MapEditor::map_rect(&layout)));
+        press_named(&mut ed, &frame, "map");
         assert_eq!(ed.open_menu(), Some("map"));
         // A press on the ACTOR caret while the panel is open only closes
         // the panel; the next one opens the list.
-        let actor = MapEditor::category_rect(&layout, Category::Actor);
-        let caret = Vec2::new(actor.x + actor.width - 10.0, actor.y + 16.0);
-        click(&mut ed, &layout, caret);
+        let caret = center(named(&ed, &frame, "list_actor"));
+        click(&mut ed, &frame, caret);
         assert_eq!(ed.open_menu(), None);
-        click(&mut ed, &layout, caret);
+        click(&mut ed, &frame, caret);
         assert_eq!(ed.open_menu(), Some("actor"));
         ed.popup = Some(Popup::Save { name: String::new() });
         assert_eq!(ed.open_menu(), Some("save"));
@@ -4409,32 +4414,54 @@ mod editor_tests {
 #[cfg(test)]
 mod file_tests {
     use super::*;
+    use crate::framing::MapClass;
     use crate::{DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH};
 
     const W: f32 = DEFAULT_SCREEN_WIDTH as f32;
     const H: f32 = DEFAULT_SCREEN_HEIGHT as f32;
 
-    fn press(ed: &mut MapEditor, layout: &Layout, at: Vec2) {
-        ed.update(&BuilderInput { pointer: Some(at), pressed: true, held: true, ..Default::default() }, layout);
-        ed.update(&BuilderInput { pointer: Some(at), ..Default::default() }, layout);
+    /// The builder on the standard arena in the window its bitmap always
+    /// had, a unit a point.
+    fn arena() -> BuilderFrame {
+        BuilderFrame::headless((W, H), MapClass::Arena)
+    }
+
+    fn press(ed: &mut MapEditor, frame: &BuilderFrame, at: Vec2) {
+        ed.update(&BuilderInput { pointer: Some(at), pressed: true, held: true, ..Default::default() }, frame);
+        ed.update(&BuilderInput { pointer: Some(at), ..Default::default() }, frame);
     }
 
     fn center(r: Rectangle) -> Vec2 {
         Vec2::new(r.x + r.width / 2.0, r.y + r.height / 2.0)
     }
 
+    /// A press on the middle of a named button (`named_buttons`, through
+    /// the UI frame onto the window).
+    fn press_named(ed: &mut MapEditor, frame: &BuilderFrame, name: &str) {
+        let r = ed.named_buttons(frame).into_iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("no {name} button")).1;
+        press(ed, frame, center(frame.ui.rect_to_window(r)));
+    }
+
+    /// The open Load list's layout.
+    fn load_layout(ed: &MapEditor, frame: &BuilderFrame) -> LoadLayout {
+        match ed.chrome(frame).popup {
+            Some(PopupLayout::Load(load)) => load,
+            other => panic!("no Load list: {other:?}"),
+        }
+    }
+
     /// FILE > CLEAR MAP is the menu's last row on every build.
     #[test]
     fn file_menu_clear_map_row_clears_the_canvas_and_closes_the_menu() {
-        let layout = Layout::for_field(W, H);
+        let frame = arena();
         let mut base = MapFile::new();
         base.set_cell(1, 1, CellObject::Gate);
         let mut ed = MapEditor::new(base);
-        press(&mut ed, &layout, center(MapEditor::file_rect(&layout)));
+        press_named(&mut ed, &frame, "file");
         assert_eq!(ed.open_menu(), Some("file"));
         let rows = FileRow::all();
         assert_eq!(rows.last(), Some(&FileRow::Clear));
-        press(&mut ed, &layout, center(MapEditor::file_row_rect(&layout, rows.len() - 1)));
+        press_named(&mut ed, &frame, "clear_map");
         assert_eq!(ed.open_menu(), None);
         assert!(ed.map().cells.is_empty());
         assert!(ed.dirty());
@@ -4455,41 +4482,42 @@ mod file_tests {
     /// picked on a later page loads that page's map.
     #[test]
     fn the_load_list_pages_by_touch() {
-        let layout = Layout::for_field(W, H);
+        let frame = arena();
         let mut ed = MapEditor::new(MapFile::new());
-        press(&mut ed, &layout, center(MapEditor::file_rect(&layout)));
-        press(&mut ed, &layout, center(MapEditor::file_row_rect(&layout, 0)));
+        press_named(&mut ed, &frame, "file");
+        press_named(&mut ed, &frame, "load");
         assert_eq!(ed.open_menu(), Some("load"));
         let entries = map::available_maps();
-        let rows = MapEditor::load_page_rows(entries.len());
-        assert!(map::SHIPPED_MAPS.len() > LOAD_VISIBLE_ROWS && entries.len() > rows, "the shipped maps alone overflow one page");
-        let panel = MapEditor::load_panel_rect(&layout, entries.len());
-        let pager = MapEditor::load_row_rect(panel, rows);
+        let load = load_layout(&ed, &frame);
+        let rows = load.per_page;
+        assert!(map::SHIPPED_MAPS.len() > chrome::LOAD_VISIBLE_ROWS && entries.len() > rows, "the shipped maps alone overflow one page");
+        let pager = load.pager.expect("a pager").row;
+        let panel = load.rows.panel;
         assert!(pager.y + pager.height <= panel.y + panel.height + 0.5, "the pager is the panel's last row");
-        let back = Vec2::new(pager.x + 20.0, pager.y + pager.height / 2.0);
-        let next = Vec2::new(pager.x + pager.width - 20.0, pager.y + pager.height / 2.0);
-        press(&mut ed, &layout, back);
+        let back = frame.ui.to_window(Vec2::new(pager.x + 20.0, pager.y + pager.height / 2.0));
+        let next = frame.ui.to_window(Vec2::new(pager.x + pager.width - 20.0, pager.y + pager.height / 2.0));
+        press(&mut ed, &frame, back);
         assert_eq!(load_scroll(&ed), Some(0), "the first page does not page back");
-        press(&mut ed, &layout, next);
+        press(&mut ed, &frame, next);
         assert_eq!(load_scroll(&ed), Some(rows));
         let last = entries.len() - rows;
         for _ in 0..entries.len() {
-            press(&mut ed, &layout, next);
+            press(&mut ed, &frame, next);
         }
         assert_eq!(load_scroll(&ed), Some(last), "the last page stops at the end");
-        press(&mut ed, &layout, back);
+        press(&mut ed, &frame, back);
         assert_eq!(load_scroll(&ed), Some(last.saturating_sub(rows)));
         // Page back to the start, then on until a shipped map late in the
         // alphabet is on screen, and pick it.
         for _ in 0..entries.len() {
-            press(&mut ed, &layout, back);
+            press(&mut ed, &frame, back);
         }
         let target = entries.iter().position(|e| e.name == "waves-basic").expect("waves-basic is always listed");
         while load_scroll(&ed).is_some_and(|s| target >= s + rows) {
-            press(&mut ed, &layout, next);
+            press(&mut ed, &frame, next);
         }
         let scroll = load_scroll(&ed).expect("the list is still open");
-        press(&mut ed, &layout, center(MapEditor::load_row_rect(panel, target - scroll)));
+        press(&mut ed, &frame, center(frame.ui.rect_to_window(load.rows.row(target - scroll))));
         assert_eq!(ed.open_menu(), None);
         assert_eq!(ed.name(), "waves-basic");
     }
@@ -4499,38 +4527,36 @@ mod file_tests {
     /// without painting.
     #[test]
     fn file_menu_load_list_loads_a_shipped_map_by_name() {
-        let layout = Layout::for_field(W, H);
+        let frame = arena();
         let mut ed = MapEditor::new(MapFile::new());
-        press(&mut ed, &layout, center(MapEditor::file_rect(&layout)));
+        press_named(&mut ed, &frame, "file");
         assert_eq!(ed.open_menu(), Some("file"));
-        press(&mut ed, &layout, center(MapEditor::file_row_rect(&layout, 0)));
+        press_named(&mut ed, &frame, "load");
         assert_eq!(ed.open_menu(), Some("load"));
         let entries = map::available_maps();
         let row = entries.iter().position(|e| e.name == "default").expect("default is always listed");
-        let panel = MapEditor::load_panel_rect(&layout, entries.len());
-        let rows = MapEditor::load_page_rows(entries.len());
-        if row < rows {
-            press(&mut ed, &layout, center(MapEditor::load_row_rect(panel, row)));
-            assert_eq!(ed.open_menu(), None);
-            assert_eq!(ed.name(), "default");
-            assert!(!ed.dirty(), "a load is the new baseline");
-            assert!(!ed.map().cells.is_empty());
-            assert_eq!(ed.history().undo_depth(), 1);
-        } else {
-            // Scroll down until the row is visible, then pick it.
-            let wheel = BuilderInput { pointer: Some(center(panel)), wheel: -1.0, ..Default::default() };
+        let load = load_layout(&ed, &frame);
+        let rows = load.per_page;
+        if row >= rows {
+            // Scroll down until the row is visible.
+            let wheel = BuilderInput { pointer: Some(center(frame.ui.rect_to_window(load.rows.panel))), wheel: -1.0, ..Default::default() };
             for _ in 0..(row + 1 - rows) {
-                ed.update(&wheel, &layout);
+                ed.update(&wheel, &frame);
             }
-            press(&mut ed, &layout, center(MapEditor::load_row_rect(panel, rows - 1)));
-            assert_eq!(ed.name(), "default");
         }
+        press_named(&mut ed, &frame, "map_default");
+        assert_eq!(ed.open_menu(), None);
+        assert_eq!(ed.name(), "default");
+        assert!(!ed.dirty(), "a load is the new baseline");
+        assert!(!ed.map().cells.is_empty());
+        assert_eq!(ed.history().undo_depth(), 1);
         // A press outside an open list closes it and paints nothing.
-        press(&mut ed, &layout, center(MapEditor::file_rect(&layout)));
-        press(&mut ed, &layout, center(MapEditor::file_row_rect(&layout, 0)));
+        press_named(&mut ed, &frame, "file");
+        press_named(&mut ed, &frame, "load");
         let before = ed.map().cells.len();
-        let field_corner = Vec2::new(layout.field.x + 16.0, layout.field.y + layout.field.h - 16.0);
-        press(&mut ed, &layout, field_corner);
+        let f = frame.layout.field;
+        let field_corner = frame.view.to_window(Vec2::new(f.x + 16.0, f.y + f.h - 16.0));
+        press(&mut ed, &frame, field_corner);
         assert_eq!(ed.open_menu(), None);
         assert_eq!(ed.map().cells.len(), before);
     }

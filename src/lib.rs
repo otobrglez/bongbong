@@ -390,12 +390,14 @@ pub const ONLINE_AVAILABLE: bool = cfg!(feature = "online");
 /// number - a net layer sizes its roster from here.
 pub const MAX_SEATS: usize = 8;
 
-// The builder's bar above the battlefield (docs/hud-and-builder-layout-
-// design.md, variant A): one obstacle cell tall, so the tool icons sit in
-// it full-bleed. The battlefield keeps its own size and the builder's
-// bitmap grows by this much instead; play mode draws no bar, its HUD
-// standing in the window's corners (`hud::corners`). Layout, not a knob:
-// the dev panel has no business resizing the bitmap.
+// The builder's bar's height with a mouse, in UI points (docs/hud-and-
+// builder-layout-design.md, variant A; `editor::chrome::Bar`): one
+// obstacle cell tall, so the tool icons sit in it full-bleed - and a touch
+// screen's bar is a finger's 44 (`hud::UI_TOUCH_PT`). The bar stands on
+// the window above the builder's canvas, never in its bitmap; play mode
+// draws no bar, its HUD standing in the window's corners
+// (`hud::corners`). Layout, not a knob: the dev panel has no business
+// resizing it.
 pub const HUD_BAR_HEIGHT: i32 = 32;
 
 /// An axis-aligned window rectangle in pixels, the one shape `Layout`
@@ -419,13 +421,13 @@ impl Rect {
     }
 }
 
-/// Where the battlefield and the HUD panel sit inside the window. The
+/// Where the battlefield sits inside a bitmap, and a panel beside it. The
 /// simulation, the physics, the maps and the probe only ever see the
-/// *field* size with its origin at (0, 0); `main.rs` opens a window of
-/// `window_size` and `game.rs`/`editor.rs` shift their drawing and their
-/// mouse reads by `field.x`/`field.y`. Nothing else cares where the panel
-/// went, which is what makes switching to a sidebar later a re-layout of
-/// `hud.rs` rather than a re-plumb.
+/// *field* size with its origin at (0, 0); play's bitmap and the builder's
+/// canvas are the field alone (`bare`), the chrome round them standing on
+/// the window in UI points (`hud::UiFrame`). `for_field` is the field
+/// under a bar of `HUD_BAR_HEIGHT`: the size a desktop window opens at for
+/// the builder (`app.rs`), its bar over its canvas.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Layout {
     pub field: Rect,
@@ -433,8 +435,8 @@ pub struct Layout {
 }
 
 impl Layout {
-    /// The layout for a battlefield of `width` x `height`: the bar on top,
-    /// the field below it, origin `(0, HUD_BAR_HEIGHT)`.
+    /// The layout for a battlefield of `width` x `height` under a bar: the
+    /// bar on top, the field below it, origin `(0, HUD_BAR_HEIGHT)`.
     pub fn for_field(width: f32, height: f32) -> Self {
         let bar = HUD_BAR_HEIGHT as f32;
         Layout {
@@ -444,8 +446,10 @@ impl Layout {
     }
 
     /// A bitmap of the field alone: what play mode and an online round
-    /// draw, the HUD standing in the window's corners instead of a bar
-    /// (`hud::corners`). The panel is empty, along the field's top edge.
+    /// draw, the HUD standing in the window's corners (`hud::corners`), and
+    /// the builder's canvas, its bar standing on the window above it
+    /// (`editor::BuilderFrame`). The panel is empty, along the field's top
+    /// edge.
     pub fn bare(width: f32, height: f32) -> Self {
         Layout { field: Rect::new(0.0, 0.0, width, height), panel: Rect::new(0.0, 0.0, width, 0.0) }
     }
@@ -872,20 +876,19 @@ pub const EDITOR_PANEL_BORDER_OPACITY: f32 = 0.6;
 /// them) and its opacity.
 pub const EDITOR_PANEL_FILL: (u8, u8, u8) = (20, 20, 24);
 pub const EDITOR_PANEL_FILL_OPACITY: f32 = 0.85;
-/// The build bar's popups (docs/game-editor-fusion.md sections 7 and 9):
-/// a dropdown row and a settings row are one finger-sized 48 px tall, a
-/// category's list is 200 px wide, the MAP settings panel 340 px.
+/// The build bar's popups (docs/game-editor-fusion.md sections 7 and 9),
+/// in UI points (`editor::chrome`): a dropdown row and a settings row are
+/// one finger-sized 48 pt tall, a category's list is 200 pt wide, a
+/// column of the MAP settings panel 340 pt.
 pub const EDITOR_DROPDOWN_ROW_H: f32 = 48.0;
 pub const EDITOR_DROPDOWN_W: f32 = 200.0;
 pub const EDITOR_SETTINGS_W: f32 = 340.0;
 /// The settings panel's `<`/`>` buttons, square and finger-sized.
 pub const EDITOR_STEPPER_SIZE: f32 = 48.0;
 /// How far a bar button's hit rect reaches above and below its drawn
-/// box (docs/game-editor-fusion.md section 10): the bar is 32 px tall
-/// and about 21 CSS px on a phone, so a slightly low tap still lands.
+/// box, in UI points (docs/game-editor-fusion.md section 10), so a
+/// slightly low tap still lands.
 pub const EDITOR_BAR_HIT_SLACK: f32 = 8.0;
-/// Margin from the field's edges for the editor's status line.
-pub const EDITOR_TOOLBAR_MARGIN: f32 = 16.0;
 
 /// Parse a round-seed CLI value: plain decimal, or hex with a `0x`/`0X`
 /// prefix - shared by both binaries' `--seed` flags (main.rs and

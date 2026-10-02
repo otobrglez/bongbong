@@ -143,23 +143,6 @@ fn ui_frame(rl: &mut RaylibHandle, touch: bool) -> UiFrame {
     UiFrame::new(window, window_units_per_point(rl), tuning().ui_scale, insets, touch)
 }
 
-/// How far down from the window's top the page's own controls reach on a
-/// touch screen (`web::overlay`), in the window's units; zero off the web.
-/// The builder's bar is fitted below it, as the HUD is laid out below it.
-fn page_band(_rl: &RaylibHandle) -> f32 {
-    #[cfg(target_os = "emscripten")]
-    let band = web::overlay().top * window_units_per_point(_rl);
-    #[cfg(not(target_os = "emscripten"))]
-    let band = 0.0;
-    band
-}
-
-/// `view`, fitted into the window less `band` along its top, moved down
-/// by the band onto the whole `window` - which the letterbox still covers.
-fn under_band(view: View, window: (f32, f32), band: f32) -> View {
-    View { window, offset: crate::math::Vec2::new(view.offset.x, view.offset.y + band), ..view }
-}
-
 /// A rectangle of the chrome's, in UI points, in the bitmap's pixels: what
 /// the off-screen arrows, laid out on the bitmap, keep out of.
 fn ui_rect_on_bitmap(ui: &UiFrame, view: &View, r: crate::math::Rectangle) -> crate::math::Rectangle {
@@ -247,18 +230,19 @@ fn publish_window(rl: &RaylibHandle, session: &Session, ui: &UiFrame, layout: &L
 /// How a frame lands on the window (docs/large-maps-follow-camera.md): the
 /// bitmap's layout and the view that puts it on the window, and the render
 /// targets that takes. An arena - and a view the dev server pinned - is the
-/// bitmap of the whole field, and the builder's canvas the same under its
-/// bar, fitted into whatever the window is (`View::fit_capped`). A field
-/// map is followed: its bitmap is the world this window shows, framed into
-/// the whole window, a bitmap pixel per world pixel (`FollowFrame`) -
-/// `Seating::Room` in a room's round, `Local` otherwise, the sight box the
-/// tuning table's. Play draws no bar: its HUD stands in the window's
-/// corners (`hud::corners`). A field map's builder canvas is made to the
-/// window's shape with an arena's bar (`editor::camera::canvas_frame`), the
-/// builder's own camera choosing what of the map it shows. While a field
-/// map's establishing shot plays (`establish.rs`) its frame keeps the
-/// follow camera going underneath, but the targets hold the whole field, a
-/// texel a world pixel, as an arena's do.
+/// bitmap of the whole field, fitted into whatever the window is
+/// (`View::fit_capped`). A field map is followed: its bitmap is the world
+/// this window shows, framed into the whole window, a bitmap pixel per
+/// world pixel (`FollowFrame`) - `Seating::Room` in a room's round, `Local`
+/// otherwise, the sight box the tuning table's. Play draws no bar: its HUD
+/// stands in the window's corners (`hud::corners`). The builder's bar
+/// stands on the window in UI points and its canvas under it
+/// (`editor::BuilderFrame`): an arena's field fitted there, a field map's
+/// canvas made to the shape of the window under the bar, the builder's own
+/// camera choosing what of the map it shows. While a field map's
+/// establishing shot plays (`establish.rs`) its frame keeps the follow
+/// camera going underneath, but the targets hold the whole field, a texel a
+/// world pixel, as an arena's do.
 struct Presentation {
     /// The field it was made for, and the mode: a change of either makes it
     /// stale (`stale`).
@@ -279,7 +263,7 @@ struct Presentation {
 }
 
 impl Presentation {
-    fn of(rl: &RaylibHandle, session: &Session, pinned: Option<Camera>, establishing: bool) -> Presentation {
+    fn of(rl: &RaylibHandle, session: &Session, pinned: Option<Camera>, establishing: bool, ui: &UiFrame) -> Presentation {
         let field = session.field_size();
         let mode = session.mode();
         let window = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
@@ -295,9 +279,6 @@ impl Presentation {
             };
             return Presentation { field, mode, followed: Some(frame), establishing, pinned, layout: frame.layout, view: frame.view, scene, composite };
         }
-        // The builder keeps its bar; play draws the field alone, its HUD
-        // standing in the window's corners (`hud::corners`).
-        let layout = if mode == Driver::Build { Layout::for_field(field.0, field.1) } else { Layout::bare(field.0, field.1) };
         // The cap is for a window that can be any size - a desktop's, or
         // the web page's canvas, which fills its box on a monitor too. The
         // knob is in points, and the web's window in device pixels. A
@@ -310,17 +291,19 @@ impl Presentation {
             let units = window_units_per_point(rl);
             (t.view_max_scale > 0.0).then(|| ScaleCap { max_scale: t.view_max_scale * units, snap_half: t.view_scale_snap != 0 })
         };
-        // The builder's bar stands below the band the page's controls take
-        // along the top on a touch screen (`page_band`); the world of a
-        // round is drawn under it, past the controls.
-        let band = if mode == Driver::Build { page_band(rl) } else { 0.0 };
-        let below = (window.0, (window.1 - band).max(1.0));
-        if mode == Driver::Build && session.builder.map().class().follows() {
-            let (layout, view) = crate::editor::camera::canvas_frame(below, cap);
-            let bitmap = layout.window_size();
-            let view = under_band(view, window, band);
-            return Presentation { field, mode, followed: None, establishing: false, pinned: None, layout, view, scene: bitmap, composite: bitmap };
+        if mode == Driver::Build {
+            // The bar on the window under the safe area's top - and the
+            // band the web page's controls take along it on a touch screen,
+            // which the UI frame counts as one -, the canvas under it.
+            let class = session.builder.map().class();
+            let frame = crate::editor::BuilderFrame::new(*ui, field, class, cap);
+            let bitmap = frame.layout.window_size();
+            let (pinned, scene) = if class.follows() { (None, bitmap) } else { (pinned, pinned.unwrap_or(Camera::whole(field)).target_size()) };
+            return Presentation { field, mode, followed: None, establishing: false, pinned, layout: frame.layout, view: frame.view, scene, composite: bitmap };
         }
+        // Play draws the field alone, its HUD standing in the window's
+        // corners (`hud::corners`).
+        let layout = Layout::bare(field.0, field.1);
         let (w, h) = layout.window_size();
         Presentation {
             field,
@@ -329,10 +312,16 @@ impl Presentation {
             establishing: false,
             pinned,
             layout,
-            view: under_band(View::fit_capped((w as f32, h as f32), below, cap), window, band),
+            view: View::fit_capped((w as f32, h as f32), window, cap),
             scene: pinned.unwrap_or(Camera::whole(field)).target_size(),
             composite: layout.window_size(),
         }
+    }
+
+    /// The builder's frame on the window: this presentation's canvas bitmap
+    /// and view, and the UI frame its chrome is laid out in.
+    fn builder_frame(&self, ui: &UiFrame) -> crate::editor::BuilderFrame {
+        crate::editor::BuilderFrame { layout: self.layout, view: self.view, ui: *ui }
     }
 
     /// Whether the session has moved on to another mode or field since.
@@ -1158,8 +1147,8 @@ pub fn run(args: Args) {
         let (w, h) = map.field_size();
         (w.round() as i32, h.round() as i32)
     };
-    // The bitmap of the first frame: the field alone in Play, under the
-    // builder's bar with `--editor`.
+    // The window of the first frame: the field alone in Play, under the
+    // builder's 32 pt bar with `--editor`.
     let bitmap = Layout::for_field(screen_width as f32, screen_height as f32).window_size();
     #[cfg(not(any(target_os = "ios", target_os = "android", target_os = "emscripten")))]
     let opening = if args.editor { bitmap } else { Layout::bare(screen_width as f32, screen_height as f32).window_size() };
@@ -1685,7 +1674,18 @@ pub fn run(args: Args) {
         let pinned = dev.as_ref().and_then(|dev| dev.pinned_camera((width, height)));
         #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
         let pinned: Option<Camera> = None;
-        let mut plan = Presentation::of(rl, &session, pinned, establish.showing());
+        // The window the chrome lays itself out in (`hud::UiFrame`): its
+        // size in points, its safe area, and whether thumbs are on the
+        // glass - a build with no keyboard, `--touch-from-mouse`, or a
+        // touch seen this session. The builder's canvas stands under its
+        // bar, so the frame is laid out first.
+        let touch_screen = !crate::KEYBOARD_AVAILABLE || touch_from_mouse || touch.seen();
+        let ui = ui_frame(rl, touch_screen);
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        if let Some(dev) = &mut dev {
+            dev.publish_ui(ui);
+        }
+        let mut plan = Presentation::of(rl, &session, pinned, establish.showing(), &ui);
         plan.fit_targets(rl, thread, &mut scene_target, &mut scene_size, &mut composite, &mut composite_size);
         let (mut layout, mut view) = (plan.layout, plan.view);
         if !crate::EMBEDDED && rl.is_key_pressed(KeyboardKey::KEY_F11) {
@@ -1696,16 +1696,6 @@ pub fn run(args: Args) {
         // view.
         let this_screen = screen(rl);
         session.minimap_on = plan.minimap_on(&this_screen);
-        // The window the chrome lays itself out in (`hud::UiFrame`): its
-        // size in points, its safe area, and whether thumbs are on the
-        // glass - a build with no keyboard, `--touch-from-mouse`, or a
-        // touch seen this session.
-        let touch_screen = !crate::KEYBOARD_AVAILABLE || touch_from_mouse || touch.seen();
-        let ui = ui_frame(rl, touch_screen);
-        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
-        if let Some(dev) = &mut dev {
-            dev.publish_ui(ui);
-        }
         // Then land any tuning edits staged since last frame (dev panel
         // via capi.rs, the `--tuning` file watch, or the dev server)
         // before the simulation reads the table, so a frame never sees two
@@ -1743,12 +1733,11 @@ pub fn run(args: Args) {
         touch_held_last_frame = touching;
         let mouse_pressed = rl.is_mouse_button_pressed(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
         let mouse_held = rl.is_mouse_button_down(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
-        // A pointer is read twice: in bitmap pixels, where the builder
-        // hit-tests and never learns what the window is, and in UI points,
+        // A pointer is read on the window, where the builder takes it (its
+        // frame puts it on the canvas or on its chrome), and in UI points,
         // where the corners' buttons, the dialogs, the end screen, the
         // level select and the lobby stand.
         let window_pointer: crate::math::Vec2 = if touching { rl.get_touch_position(0).into() } else { rl.get_mouse_position().into() };
-        let pointer = view.to_bitmap(window_pointer);
         let ui_pointer = ui.to_ui(window_pointer);
         // The corners as this frame finds them (`hud::corners`), the one
         // geometry the painter draws and these hit tests read. A touch that
@@ -1759,15 +1748,15 @@ pub fn run(args: Args) {
         touch.set_keep_out(&keep_out);
         // This frame's touch points, ids included so a stick follows its
         // own finger: on the window in UI points for the touch scheme,
-        // which lives there like the HUD, and in the bitmap's pixels for
-        // the builder's gestures. `--touch-from-mouse` stands a held left
+        // which lives there like the HUD, and on the window itself for the
+        // builder's gestures. `--touch-from-mouse` stands a held left
         // button in for one.
         let mut window_touches: Vec<(i32, crate::math::Vec2)> =
             (0..rl.get_touch_point_count()).map(|i| (rl.get_touch_point_id(i), rl.get_touch_position(i).into())).collect();
         if touch_from_mouse && mouse_held && window_touches.is_empty() {
             window_touches.push((-1, rl.get_mouse_position().into()));
         }
-        let touch_points: Vec<TouchPoint> = window_touches.iter().map(|&(id, at)| TouchPoint { id, pos: view.to_bitmap(at) }).collect();
+        let touch_points: Vec<TouchPoint> = window_touches.iter().map(|&(id, at)| TouchPoint { id, pos: at }).collect();
         let ui_touch_points: Vec<TouchPoint> = window_touches.iter().map(|&(id, at)| TouchPoint { id, pos: ui.to_ui(at) }).collect();
         let steer_right = crate::TOUCH_STEER_RIGHT;
         let pressed = mouse_pressed || touch_pressed;
@@ -1915,7 +1904,7 @@ pub fn run(args: Args) {
                 // points.
                 let axis = |less: KeyboardKey, more: KeyboardKey| (rl.is_key_down(more) as i32 - rl.is_key_down(less) as i32) as f32;
                 let input = BuilderInput {
-                    pointer: Some(pointer),
+                    pointer: Some(window_pointer),
                     pressed,
                     held,
                     right_pressed: rl.is_mouse_button_pressed(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_RIGHT),
@@ -1959,7 +1948,7 @@ pub fn run(args: Args) {
                 if tab {
                     session.toggle();
                 } else {
-                    session.update_builder(&input, &layout);
+                    session.update_builder(&input, &plan.builder_frame(&ui));
                 }
             }
         }
@@ -1973,7 +1962,7 @@ pub fn run(args: Args) {
             let pinned = dev.as_ref().and_then(|dev| dev.pinned_camera(session.field_size()));
             #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
             let pinned: Option<Camera> = None;
-            plan = Presentation::of(rl, &session, pinned, establish.showing());
+            plan = Presentation::of(rl, &session, pinned, establish.showing(), &ui);
             plan.fit_targets(rl, thread, &mut scene_target, &mut scene_size, &mut composite, &mut composite_size);
             (layout, view) = (plan.layout, plan.view);
             session.minimap_on = plan.minimap_on(&this_screen);
@@ -2001,9 +1990,8 @@ pub fn run(args: Args) {
                 thread,
                 &mut composite,
                 &mut builder_scene,
-                &view,
+                &plan.builder_frame(&ui),
                 BAR_FILL,
-                &layout,
                 &EditorTextures {
                     obstacles: &obstacles_texture,
                     props: &props_texture,
@@ -2181,7 +2169,7 @@ pub fn run(args: Args) {
             let pinned = dev.as_ref().and_then(|dev| dev.pinned_camera(session.field_size()));
             #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
             let pinned: Option<Camera> = None;
-            plan = Presentation::of(rl, &session, pinned, establish.showing());
+            plan = Presentation::of(rl, &session, pinned, establish.showing(), &ui);
             plan.fit_targets(rl, thread, &mut scene_target, &mut scene_size, &mut composite, &mut composite_size);
             (layout, view) = (plan.layout, plan.view);
             session.minimap_on = plan.minimap_on(&this_screen);
@@ -2241,7 +2229,7 @@ pub fn run(args: Args) {
                 let phase = establish.update(game.round_seed(), game.frame(), game.intro_timer, wanted, &rules, crate::motion::reduced());
                 establishing = phase.showing();
                 if establishing != plan.establishing {
-                    plan = Presentation::of(rl, &session, plan.pinned, establishing);
+                    plan = Presentation::of(rl, &session, plan.pinned, establishing, &ui);
                     plan.fit_targets(rl, thread, &mut scene_target, &mut scene_size, &mut composite, &mut composite_size);
                     (layout, view) = (plan.layout, plan.view);
                 }

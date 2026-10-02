@@ -291,15 +291,15 @@ pub struct WindowReport<'a> {
 
 /// One frame's `bb_ui_json`: the `frame` it was drawn on, the `window` and
 /// its `units_per_point`, the mode, the map, the level and what stands
-/// over the round, the chrome
-/// (`ui_status`), where the bitmap lands (`view`: its scale, offset and
-/// size, and its field area as `field`), in build mode the bar's `play`,
-/// `map`, `file` and `fit` buttons with the `tool` and the open `menu`, the
-/// last `press` - on the window, in UI points and on the bitmap - and the
-/// `page_overlay` the frame read (in CSS pixels, as the page wrote it). Every
-/// rectangle and point is the window's unless named otherwise: a page
-/// turns one into CSS pixels by dividing by `units_per_point` and adding
-/// the canvas's own corner.
+/// over the round, the chrome (`ui_status`), where the bitmap lands
+/// (`view`: its scale, offset and size, and its field area as `field`), in
+/// build mode the builder's buttons by name (`MapEditor::named_buttons`:
+/// the bar's - `play`, `map`, `file`, `fit`, ... - and the open popup's)
+/// with the `tool` and the open `menu`, the last `press` - on the window,
+/// in UI points and on the bitmap - and the `page_overlay` the frame read
+/// (in CSS pixels, as the page wrote it). Every rectangle and point is the
+/// window's unless named otherwise: a page turns one into CSS pixels by
+/// dividing by `units_per_point` and adding the canvas's own corner.
 pub fn window_json(r: &WindowReport) -> String {
     let rect = |x: Rectangle| json!({ "x": x.x, "y": x.y, "w": x.width, "h": x.height });
     let on_window = |x: Rectangle| {
@@ -333,17 +333,16 @@ pub fn window_json(r: &WindowReport) -> String {
         },
     });
     if session.mode() == Driver::Build {
-        use crate::editor::MapEditor;
+        // The builder's chrome stands on the window in UI points, its
+        // canvas under it through the view (`editor::BuilderFrame`).
+        let frame = crate::editor::BuilderFrame { layout: *r.layout, view: *r.view, ui: *r.ui };
         let builder = &session.builder;
+        let buttons: Map<String, Value> =
+            builder.named_buttons(&frame).into_iter().map(|(name, b)| (name, rect(r.ui.rect_to_window(b)))).collect();
         v["builder"] = json!({
             "tool": builder.tool().name(),
             "menu": builder.open_menu(),
-            "buttons": {
-                "play": on_window(crate::hud::mode_button_rect(r.layout.panel)),
-                "map": on_window(MapEditor::map_rect(r.layout)),
-                "file": on_window(MapEditor::file_rect(r.layout)),
-                "fit": on_window(MapEditor::fit_rect(r.layout)),
-            },
+            "buttons": buttons,
         });
     }
     v.to_string()
@@ -458,17 +457,18 @@ mod tests {
         assert!(v.get("builder").is_none(), "no bar in play mode");
         assert_eq!(v["page_overlay"], json!({ "top": 28.0, "rect": { "x": 299.25, "y": 3.0, "w": 253.5, "h": 22.0 } }), "the page's own numbers");
 
+        // In build mode the bar's buttons stand on the window in the UI's
+        // points, over the canvas the view puts under them.
         s.driver = Driver::Build;
-        let layout = Layout::for_field(field.0, field.1);
-        let (w, h) = layout.window_size();
-        let view = View::fit((w as f32, h as f32), (window.0 as f32, window.1 as f32));
-        let v: Value = serde_json::from_str(&report(&s, &layout, &view)).expect("JSON");
+        let frame = crate::editor::BuilderFrame::new(ui, field, s.builder.map().class(), None);
+        let v: Value = serde_json::from_str(&report(&s, &frame.layout, &frame.view)).expect("JSON");
         assert_eq!(v["mode"], "build");
         let play = &v["builder"]["buttons"]["play"];
-        let on_bitmap = crate::hud::mode_button_rect(layout.panel);
-        let corner = view.to_window(Vec2::new(on_bitmap.x, on_bitmap.y));
-        assert_eq!((play["x"].as_f64().unwrap() as f32, play["y"].as_f64().unwrap() as f32), (corner.x, corner.y));
-        assert_eq!(play["w"].as_f64().unwrap() as f32, on_bitmap.width * view.scale);
+        let drawn = ui.rect_to_window(frame.bar().play);
+        let at = |k: &str| play[k].as_f64().unwrap() as f32;
+        assert!((at("x") - drawn.x).abs() < 1e-3 && (at("y") - drawn.y).abs() < 1e-3, "{play} vs {drawn:?}");
+        assert!((at("w") - drawn.width).abs() < 1e-3 && (at("h") - drawn.height).abs() < 1e-3);
+        assert!(at("h") >= crate::hud::UI_TOUCH_PT * ui.scale - 1e-3, "a finger's height on a touch screen");
     }
 
     /// `bb_net_stats` carries a round's readings while one is played and

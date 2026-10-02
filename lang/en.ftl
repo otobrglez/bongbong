@@ -237,8 +237,9 @@ refusal-room-closed = the room closed
 
 ## The builder (src/editor/mod.rs, src/editor/render.rs)
 
-# The build bar, 18 px: BUILD in 64 px, FILE and MAP in 42 px beside a
-# caret (about 4 letters), UNDO/REDO/FIT in 10 px inside 40 px buttons.
+# The build bar, in points: BUILD at 18 in 64, FILE and MAP at 18 in 42
+# beside a caret (about 4 letters); UNDO/REDO/FIT at 11 inside 36 with a
+# mouse and at 12 inside 40 on a touch screen.
 editor-build = BUILD
 editor-undo = UNDO
 editor-redo = REDO
@@ -246,24 +247,25 @@ editor-file = FILE
 editor-map = MAP
 # The camera back to the whole canvas.
 editor-fit = FIT
-# A round from the middle of the view rather than the map's start, 10 px
-# in a 68 px button just before PLAY (about 9 letters).
+# A round from the middle of the view rather than the map's start, just
+# before PLAY: 11 pt in 64 with a mouse, 12 in 72 on a touch screen
+# (about 9 letters).
 editor-play-here = PLAY HERE
-# The map's check (its findings and quick fixes), 10 px in a 56 px button
-# after FIT (about 6 letters).
+# The map's check (its findings and quick fixes), after FIT: 11 pt in 52
+# with a mouse, 12 in 60 on a touch screen (about 6 letters).
 editor-check = CHECK
 
-# The CHECK panel, 440 px wide under its button: the title (16 px, about
-# 20 letters, left of the counts), the line under it (10 px, about 70
-# letters), the line a map with no findings shows (16 px) and the button
-# that makes a finding's one fix (16 px in 80 px, about 6 letters).
+# The CHECK panel, 500 pt wide under its button: the title (16 pt, about
+# 20 letters, left of the counts), the line under it (12 pt, about 70
+# letters), the line a map with no findings shows (16 pt) and the button
+# that makes a finding's one fix (16 pt in 80, about 6 letters).
 check-title = MAP CHECK
 check-hint = Pick a problem to see it on the map. FIX makes the change it asks for.
 check-none = NO PROBLEMS FOUND
 check-fix = FIX
 # The clear check's row in the panel: whether this revision of the map has
 # been won from PLAY, its par (the clear time, m:ss) and what clearing
-# means, 10 px under them.
+# means, 12 pt under them.
 check-cleared = CLEARED
 check-not-cleared = NOT CLEARED
 check-par = PAR { $time }
@@ -298,7 +300,8 @@ lint-too-many-towers = MANY TOWERS ON ONE SIDE
 # The status line's fallback before a category is active.
 editor-tool = TOOL
 
-# The five tool groups, in the field's status line.
+# The five tool groups, in the status line and, at 12 pt in 60, beside
+# their row of the palette a narrow bar folds them into.
 category-wall = WALL
 category-prop = PROP
 category-ground = GROUND
@@ -331,10 +334,11 @@ settings-anchor = ANCHOR
 settings-reset = RESET MAP
 # A settings value the map leaves to the game.
 settings-auto = auto
-# Beside a value a command-line flag outranks.
+# Beside a value a command-line flag outranks, 12 pt.
 settings-cli = (cli)
 
-# The popups.
+# The popups. A long list's pager shows the span on screen, 12 pt
+# between its arrows in a 340 pt row.
 editor-save-as = Save as:
 editor-save-hint = Enter to save, Esc to cancel
 editor-no-maps = no maps to load

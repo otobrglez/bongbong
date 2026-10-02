@@ -1,13 +1,13 @@
 //! Drawing the HUD - the two corner clusters and their buttons, the
 //! builder bar's mode button, the banners, the dialogs and the end screen,
-//! all in UI points but the builder's button - and the slot tables the
-//! clusters' rows are laid out from (`hud.rs` owns the model, the shared
-//! colours and sizes, and every rect the hit tests read).
+//! all in UI points - and the slot tables the clusters' rows are laid out
+//! from (`hud.rs` owns the model, the shared colours and sizes, and every
+//! rect the hit tests read).
 
 use sola_raylib::prelude::*;
 
 use crate::hud::{
-    banner_size, clock_text, leave_dialog_rects, mode_button_rect, players_dialog_rects, result_layout, weapon_color, Corners, Fade,
+    banner_size, clock_text, leave_dialog_rects, players_dialog_rects, result_layout, weapon_color, Corners, Fade,
     HudModel, NextLevel, PlayChrome, PlayerHud, ResultButtons, ResultView, SeatHud, BUILD_COLOR, DIALOG_W, DIM,
     HUD_TEXT_SIZE, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP, LINE_H, ONLINE_COLOR, RESULT_LINE_SIZE,
     RESULT_SEATS_SIZE, RESULT_STATS_GAP, ROW_H, TEXT, UI_SMALL_TEXT, WEAPON_SLOTS,
@@ -389,17 +389,11 @@ fn draw_level_button(d: &mut impl RaylibDraw, r: Rectangle, number: usize, open:
 }
 
 /// An outlined bar slot with its label centred, in `color`: the builder
-/// bar's mode button.
-fn draw_slot_button(d: &mut impl RaylibDraw, r: Rectangle, label: &str, color: Color) {
+/// bar's mode button, `PLAY` (`editor::Bar::play`).
+pub fn draw_slot_button(d: &mut impl RaylibDraw, r: Rectangle, label: &str, color: Color) {
     d.draw_rectangle_lines_ex(Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0), 2.0, color);
     let text_w = width(label, HUD_TEXT_SIZE);
     d.draw_text(label, (r.x + (r.width - text_w as f32) / 2.0) as i32, (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, color);
-}
-
-/// The builder bar's mode button (`PLAY`): an outlined slot with its label
-/// centred, in `color`.
-pub fn draw_mode_button(d: &mut impl RaylibDraw, panel: Rect, label: &str, color: Color) {
-    draw_slot_button(d, mode_button_rect(panel), label, color);
 }
 
 /// The dialog panel both questions share: shadow, rounded fill, outline,

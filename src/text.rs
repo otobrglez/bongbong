@@ -787,7 +787,7 @@ mod text_tests {
         let content = (LOBBY_W - 2.0 * LOBBY_MARGIN) as i32;
         let area = crate::hud::UiFrame::plain((crate::hud::UI_MIN_W, crate::hud::UI_MIN_H)).area;
         let seat_state_px = (crate::lobby::seats_rect(area).width - LOBBY_KICK_W - LOBBY_SEAT_STATE_X) as i32 - 4;
-        vec![
+        let mut out = vec![
             // A gauge's label over its bar, in the corners' small size.
             (keys::HUD_SPEED, UI_SMALL_TEXT, HUD_GAUGE_LABEL_MAX_PX, vec![]),
             (keys::HUD_SHIELD, UI_SMALL_TEXT, HUD_GAUGE_LABEL_MAX_PX, vec![]),
@@ -847,34 +847,38 @@ mod text_tests {
             lobby_button(keys::LOBBY_REMATCH),
             lobby_button(keys::LOBBY_LEAVE),
             (keys::LOBBY_KICK, HUD_TEXT_SIZE, LOBBY_KICK_W as i32 - 8, vec![]),
-            // The build bar: BUILD before the name slot, FILE and MAP
-            // beside their carets, UNDO, REDO and FIT in their small
-            // buttons.
+            // The build bar (`editor::Bar`): BUILD in its slot, FILE and
+            // MAP beside their carets; the small buttons' labels are
+            // measured below, in a mouse's bar and a touch screen's.
             (keys::EDITOR_BUILD, HUD_TEXT_SIZE, 64, vec![]),
             (keys::EDITOR_FILE, HUD_TEXT_SIZE, 42, vec![]),
             (keys::EDITOR_MAP, HUD_TEXT_SIZE, 42, vec![]),
-            (keys::EDITOR_UNDO, HUD_LABEL_SIZE, 36, vec![]),
-            (keys::EDITOR_REDO, HUD_LABEL_SIZE, 36, vec![]),
-            (keys::EDITOR_FIT, HUD_LABEL_SIZE, 36, vec![]),
-            // PLAY HERE in its wider small button, 10 px in 64.
-            (keys::EDITOR_PLAY_HERE, HUD_LABEL_SIZE, 60, vec![]),
-            // CHECK in its small button, 10 px in 52; its panel's title,
-            // 16 px, left of the three counts; the line under it, 10 px
-            // across the 440 px panel; a clean map's line, 16 px; FIX in
-            // its 80 px button.
-            (keys::EDITOR_CHECK, HUD_LABEL_SIZE, 48, vec![]),
+            // The CHECK panel (`editor::chrome::LINT_PANEL_W`): its title,
+            // 16 pt, left of the three counts; the line under it in the
+            // small size across the panel; a clean map's line, 16 pt; FIX
+            // in its 80 pt button.
             (keys::CHECK_TITLE, 16, 240, vec![]),
-            (keys::CHECK_HINT, HUD_LABEL_SIZE, 412, vec![]),
-            (keys::CHECK_NONE, 16, 412, vec![]),
+            (keys::CHECK_HINT, UI_SMALL_TEXT, crate::editor::LINT_HINT_W as i32, vec![]),
+            (keys::CHECK_NONE, 16, crate::editor::LINT_HINT_W as i32, vec![]),
             (keys::CHECK_FIX, 16, 72, vec![]),
             // The clear check's row: its title from beside the flag, the
             // par at the row's right end, the line under them, all inside
-            // the 396 px from the flag's words to the right inset.
+            // the room from the flag's words to the right inset.
             (keys::CHECK_CLEARED, 16, 200, vec![]),
-            (keys::CHECK_NOT_CLEARED, 16, 396, vec![]),
+            (keys::CHECK_NOT_CLEARED, 16, crate::editor::LINT_CLEAR_W as i32, vec![]),
             (keys::CHECK_PAR, 16, 160, vec![("time", "59:59".into())]),
-            (keys::CHECK_CLEARED_HINT, HUD_LABEL_SIZE, 396, vec![]),
-            (keys::CHECK_NOT_CLEARED_HINT, HUD_LABEL_SIZE, 396, vec![]),
+            (keys::CHECK_CLEARED_HINT, UI_SMALL_TEXT, crate::editor::LINT_CLEAR_W as i32, vec![]),
+            (keys::CHECK_NOT_CLEARED_HINT, UI_SMALL_TEXT, crate::editor::LINT_CLEAR_W as i32, vec![]),
+            // A pager's span, in the small size between its `<` and `>`
+            // in the narrowest paged panel, a column of the MAP panel.
+            (
+                keys::EDITOR_PAGE,
+                UI_SMALL_TEXT,
+                crate::EDITOR_SETTINGS_W as i32 - 2 * (16 + width(">", HUD_TEXT_SIZE) + 8),
+                vec![("from", 99.into()), ("to", 99.into()), ("n", 99.into())],
+            ),
+            // The Save prompt's line under the name.
+            (keys::EDITOR_SAVE_HINT, UI_SMALL_TEXT, crate::editor::chrome::SAVE_PROMPT.0 as i32 - 24, vec![]),
             (keys::FILE_LOAD, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE_AS, HUD_TEXT_SIZE, 168, vec![]),
@@ -931,7 +935,33 @@ mod text_tests {
                 LEVEL_BUTTON_W as i32 - 12 - LEVEL_BUTTON_WORD_GAP - width("88", HUD_TEXT_SIZE),
                 vec![],
             ),
-        ]
+        ];
+        // The build bar's small buttons - UNDO, REDO, FIT, CHECK, PLAY
+        // HERE - inside their drawn boxes (an outline is drawn outside
+        // its box), at the size each bar draws them
+        // (`editor::chrome::small_text`): a mouse's at 11 pt in the boxes
+        // a desktop's bar has always had, a touch screen's at 12 in its
+        // wider ones; and the five categories' names beside their row of
+        // the palette a narrow bar folds them into.
+        for touch in [false, true] {
+            let ui = crate::hud::UiFrame::new((1600.0, 900.0), 1.0, 1.0, crate::hud::Insets::default(), touch);
+            let bar = crate::editor::Bar::of(&ui);
+            let size = crate::editor::chrome::small_text(touch);
+            let room = |r: crate::math::Rectangle| (r.width - crate::editor::chrome::SMALL_BOX_INSET) as i32;
+            for (key, r) in [
+                (keys::EDITOR_UNDO, bar.undo),
+                (keys::EDITOR_REDO, bar.redo),
+                (keys::EDITOR_FIT, bar.fit),
+                (keys::EDITOR_CHECK, bar.check),
+                (keys::EDITOR_PLAY_HERE, bar.here),
+            ] {
+                out.push((key, size, room(r), vec![]));
+            }
+        }
+        for category in crate::editor::Category::ALL {
+            out.push((category.label_key(), UI_SMALL_TEXT, crate::editor::chrome::PALETTE_LABEL_W as i32 - 12, vec![]));
+        }
+        out
     }
 
     /// Every language fits every budget. A language file that does not
@@ -992,9 +1022,11 @@ mod text_tests {
                 if width(&long, HUD_TEXT_SIZE) > 200 - 48 - 8 {
                     over.push(format!("{tag}: tool {} = {long:?} overflows its row", tool.name()));
                 }
+                // The short name is the status line's and the cursor
+                // readout's, kept to a word or two.
                 let short = catalogue.message(&format!("tool-short-{}", tool.name()), &[]).unwrap_or(long);
                 if width(&short, HUD_LABEL_SIZE) > 48 {
-                    over.push(format!("{tag}: short tool name {short:?} overflows the bar's line"));
+                    over.push(format!("{tag}: short tool name {short:?} is longer than a word or two"));
                 }
             }
             // The CHECK panel's findings, 16 px from beside a row's mark to
@@ -1005,14 +1037,14 @@ mod text_tests {
                     over.push(format!("{tag}: finding {} = {words:?} runs into its FIX button", kind.tag()));
                 }
             }
-            // A settings row's value runs from 180 px into the row to its
+            // A settings row's value runs from 180 pt into the row to its
             // `>` button at 288 (`editor/render.rs`'s `SETTINGS_VALUE_X`,
-            // `settings_inc_rect`), with the `(cli)` mark after it when a
-            // flag outranks the map - the weather's can.
+            // `settings_inc_rect`), with the `(cli)` mark after it in the
+            // small size when a flag outranks the map - the weather's can.
             for weather in crate::map::Weather::ALL {
                 let name = catalogue.named("weather", weather.name());
                 let mark = catalogue.get(keys::SETTINGS_CLI);
-                if width(&name, HUD_TEXT_SIZE) + 4 + width(&mark, HUD_LABEL_SIZE) > 288 - 180 - 4 {
+                if width(&name, HUD_TEXT_SIZE) + 4 + width(&mark, UI_SMALL_TEXT) > 288 - 180 - 4 {
                     over.push(format!("{tag}: weather {} = {name:?} overflows its settings row", weather.name()));
                 }
             }

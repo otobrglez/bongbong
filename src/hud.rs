@@ -38,7 +38,8 @@ use crate::{Rect, MAX_DAMAGE};
 
 /// The number/text size of the readouts, here and in the builder's bar.
 pub const HUD_TEXT_SIZE: i32 = 18;
-/// The builder's bar's small labels.
+/// The default font's own size, which the indicators' labels are drawn at
+/// whole multiples of (`indicators::label_font`).
 pub const HUD_LABEL_SIZE: i32 = 10;
 /// The room a gauge's label (`SPEED`/`SHIELD`/`FROG`) has over its bar, in
 /// points at `UI_SMALL_TEXT`: the gauge's 60 pt slot (`render::hud`) less
@@ -486,8 +487,8 @@ pub const PLAYERS_BUTTON_W: f32 = 48.0;
 pub const PLAYERS_BUTTON_GAP: f32 = 8.0;
 
 /// The mode button: `BUILD` in play mode, `PLAY` in the builder's bar
-/// (docs/game-editor-fusion.md, sections 6 and 7); an online round's
-/// `LEAVE` takes its place.
+/// (docs/game-editor-fusion.md, sections 6 and 7; `editor::Bar::play`); an
+/// online round's `LEAVE` takes its place.
 pub const MODE_BUTTON_W: f32 = 72.0;
 
 /// The `ONLINE` button: the way into the lobby (`lobby.rs`,
@@ -509,15 +510,6 @@ pub const ONLINE_COLOR: Color = Color::new(120, 220, 255, 255);
 pub const LEVEL_BUTTON_W: f32 = 96.0;
 /// The gap between the level button's word and its number.
 pub const LEVEL_BUTTON_WORD_GAP: i32 = 5;
-
-pub const MODE_BUTTON_RIGHT_INSET: f32 = 8.0;
-
-/// Where the builder's `PLAY` button sits in its bar's `panel` (window
-/// space): the bar's right end. Shared by the build bar and its hit test,
-/// so a tool's `click` and a finger agree on it.
-pub fn mode_button_rect(panel: Rect) -> Rectangle {
-    Rectangle::new(panel.x + panel.w - MODE_BUTTON_RIGHT_INSET - MODE_BUTTON_W, panel.y, MODE_BUTTON_W, panel.h)
-}
 
 /// The builder's amber, the colour the `BUILD` button and the build bar's
 /// `PLAY` button share.

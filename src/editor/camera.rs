@@ -2,13 +2,12 @@
 //! of the canvas the field area of the bitmap shows, and how large -
 //! independent of play's, headless and pure.
 //!
-//! - **FIT** shows the whole map. On an arena the bitmap is the field and
-//!   the bar (`Layout::for_field`, as the round draws it), so FIT is the
+//! - **FIT** shows the whole map. On an arena the canvas's bitmap is the
+//!   field (`chrome::BuilderFrame`, as the round draws it), so FIT is the
 //!   field at its own size - `Camera::whole`, the very picture the builder
-//!   drew before it had a camera. A field map's bitmap is made to the
-//!   window's shape instead (`canvas_frame`), its bar at the size an
-//!   arena's has in the same window, and FIT shrinks the map into the
-//!   area under it, centred.
+//!   drew before it had a camera. A field map's bitmap is made to the shape
+//!   of the window under the bar instead (`chrome::canvas_frame`), and FIT
+//!   shrinks the map into it, centred.
 //! - **Zoom and pan** go from FIT to a cell of `builder_zoom_max_cell_pt`
 //!   points. The view never leaves the field on an axis the map fills,
 //!   and centres it on an axis it does not. Where the screen is coarse
@@ -25,8 +24,8 @@
 
 use crate::math::{Rectangle, Vec2};
 use crate::tuning::{tuning, Tuning};
-use crate::view::{Camera, ScaleCap, View};
-use crate::{DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH, Layout, OBSTACLE_GRID_SIZE};
+use crate::view::{Camera, View};
+use crate::{Layout, OBSTACLE_GRID_SIZE};
 
 /// The screen the canvas is drawn on, as the builder measures it: the
 /// zoom steps are counted in its device pixels and the touch sizes in its
@@ -112,24 +111,6 @@ const BLOCK_STEP: f32 = 0.5;
 
 /// A comparison's allowance for rounding between scales.
 const EPS: f32 = 1e-4;
-
-/// How the builder's bitmap lands on a window of `window` for a field map:
-/// the bar at the size it has over the standard field's bitmap in the same
-/// window (`View::fit_capped` under the same `cap`), so switching from an
-/// arena to a field map never changes the chrome, and the canvas area
-/// filling the rest of the window - no letterbox, the bitmap made to the
-/// window's shape. Never smaller than the standard field's bitmap, which
-/// the bar's slot tables are laid out for.
-pub fn canvas_frame(window: (f32, f32), cap: Option<ScaleCap>) -> (Layout, View) {
-    let standard = Layout::for_field(DEFAULT_SCREEN_WIDTH as f32, DEFAULT_SCREEN_HEIGHT as f32);
-    let (sw, sh) = standard.window_size();
-    let (sw, sh) = (sw as f32, sh as f32);
-    let scale = View::fit_capped((sw, sh), window, cap).scale;
-    let width = (window.0.max(1.0) / scale).floor().max(sw);
-    let height = (window.1.max(1.0) / scale).floor().max(sh);
-    let layout = Layout::for_field(width, height - crate::HUD_BAR_HEIGHT as f32);
-    (layout, View::fill((width, height), window))
-}
 
 /// Everything a camera move needs to know: the map's field, the canvas
 /// area it is drawn into and the screen under that.
@@ -622,22 +603,6 @@ mod camera_tests {
         fine.zoom_at(1.13 / 2.0, at, &fv, &rules());
         fine.settle(at, &fv, &rules());
         assert!(near(fv.device_scale(fine.scale(&fv)), 1.13), "a fine screen keeps the pinch");
-    }
-
-    /// The field map's bitmap is the window's shape with the standard
-    /// field's bar: no letterbox, and the bar no smaller than an arena's.
-    #[test]
-    fn a_field_maps_bitmap_fills_the_window_with_an_arenas_bar() {
-        let cap = Some(ScaleCap { max_scale: 1.5, snap_half: false });
-        for (window, cap) in [((852.0, 393.0), None), ((1180.0, 820.0), None), ((1920.0, 1080.0), cap), ((1088.0, 576.0), cap)] {
-            let (layout, view) = canvas_frame(window, cap);
-            let arena = View::fit_capped((1088.0, 576.0), window, cap);
-            assert!((view.scale - arena.scale).abs() / arena.scale < 0.01, "{window:?}: {view:?} vs {arena:?}");
-            assert!(layout.panel.w >= 1088.0 && layout.field.w >= 1088.0, "{window:?}: {layout:?}");
-            let d = view.dest();
-            assert!((d.width - window.0).abs() <= view.scale + 0.01 && (d.height - window.1).abs() <= view.scale + 0.01, "{window:?}: {d:?}");
-            assert_eq!(layout.panel.h, crate::HUD_BAR_HEIGHT as f32);
-        }
     }
 
     /// The scene a view is drawn into holds the view at a texel per world

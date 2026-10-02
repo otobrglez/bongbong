@@ -32,7 +32,7 @@ use crate::math::Vec2;
 use sola_raylib::prelude::{RaylibHandle, RaylibTexture2D, RaylibThread, RenderTexture2D};
 
 use crate::ai::Intent;
-use crate::editor::{BuilderInput, Category, CellChange, MapEditor, Tool, parse_mission, parse_spawn, parse_tank, parse_tier};
+use crate::editor::{BuilderFrame, BuilderInput, Category, CellChange, MapEditor, Tool, parse_mission, parse_spawn, parse_tank, parse_tier};
 use crate::hud::{leave_dialog_rects, players_dialog_rects, CornerButton, CornerShape, Corners, UiFrame};
 use crate::map::MapFile;
 use crate::maplint::LintSeverity;
@@ -155,7 +155,7 @@ const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"inte
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|split|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `split` of a couch pair apart (null for one view: the divider's `line` - a point and the unit normal into the second half in the followed bitmap's pixels - and `window_line`, how far `apart` the halves' views stand and each half's `seat`, `rect`, `offset`, `cut` and `in_view`), the `establishing` shot's `phase` (whole|zoom|follow) and `progress` (view `establishing` while it plays), the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`; and `motion`, the one motion switch - whether motion is `reduced` (no shake, no whole-screen ripple, the establishing shot cut rather than zoomed), the `reduce_motion` row's `setting` (platform|off|on) and what the `platform` said at startup, null where it says nothing), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, in play and online the corners' `buttons` and `clusters` and the `minimap` picture under the right cluster (`null` where none is drawn - an arena shown whole, a phone; a press there does nothing), and the `screen_buttons` of whatever stands over the round - the level select's open tiles (`level_N`) and `back`, a dialog's `one`/`two` or `leave`/`stay`, a level's end screen's `levels`/`again`/`next`, the lobby's live buttons (`host`, `join`, `key_a`, `confirm`, `ready`, `start`, `kick_1`, ...) - all in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state (`builder.navigator`: the navigator's picture in window coordinates for `click`, with its `bitmap` rect for `builder_touch`; `null` at FIT on an arena; `builder.buttons`: the bar's buttons by name - `play`, `play_here`, `check`, `clear`, `fit`, `map`, `file`, and while the CHECK panel is open its `finding_N` rows, `fix_N` buttons and `page_back`/`page_next` - in window coordinates for `click`, each with its `bitmap` rect; `builder.check`: the CHECK panel's last report; `builder.clear`: the clear check - the canvas's `revision`, whether it is `cleared` (won from plain PLAY with no edit since) and its `par` in seconds, and the revision PLAY started the local round on (`attempt`); `builder.loupe`: the loupe over a painting finger, `null` without one), and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|split|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `split` of a couch pair apart (null for one view: the divider's `line` - a point and the unit normal into the second half in the followed bitmap's pixels - and `window_line`, how far `apart` the halves' views stand and each half's `seat`, `rect`, `offset`, `cut` and `in_view`), the `establishing` shot's `phase` (whole|zoom|follow) and `progress` (view `establishing` while it plays), the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`; and `motion`, the one motion switch - whether motion is `reduced` (no shake, no whole-screen ripple, the establishing shot cut rather than zoomed), the `reduce_motion` row's `setting` (platform|off|on) and what the `platform` said at startup, null where it says nothing), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, in play and online the corners' `buttons` and `clusters` and the `minimap` picture under the right cluster (`null` where none is drawn - an arena shown whole, a phone; a press there does nothing), and the `screen_buttons` of whatever stands over the round - the level select's open tiles (`level_N`) and `back`, a dialog's `one`/`two` or `leave`/`stay`, a level's end screen's `levels`/`again`/`next`, the lobby's live buttons (`host`, `join`, `key_a`, `confirm`, `ready`, `start`, `kick_1`, ...) - all in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state (the builder's chrome is laid out on the window in UI points like play's corners - the bar along the top of the safe area, the popups under it -, and its rects come in window coordinates, what `click` and `builder_touch` take, each with its `ui` points; `builder.navigator`: the navigator's picture, `null` at FIT on an arena; `builder.buttons`: the builder's buttons by name - the bar's `play`, `play_here`, `check`, `clear`, `fit`, `map`, `file`, `erase`, `undo`, `redo` and each category's `category_<name>` (its icon half) and `list_<name>` (its list half), or the one `tools` button a bar too narrow for the five folds them into; while a popup is open its own - a list's or the palette's `tool_<name>`, the FILE menu's `load`, `save`, `save_as` and `clear_map`, the Load list's `map_<name>`, the MAP panel's `<row>_dec`/`<row>_inc` and `reset`, the CHECK panel's `finding_N` rows and `fix_N` buttons - and a paged popup's `page_back`/`page_next`; `builder.check`: the CHECK panel's last report; `builder.clear`: the clear check - the canvas's `revision`, whether it is `cleared` (won from plain PLAY with no edit since) and its `par` in seconds, and the revision PLAY started the local round on (`attempt`); `builder.loupe`: the loupe over a painting finger - where it stands, the `world` it shows, its `device_scale` and the `cell` the stroke paints -, `null` without one), and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -429,7 +429,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "builder_touch",
-        description: "Drive the builder with raw touch frames, the way a touch screen does - the multi-finger input `--touch-from-mouse` cannot make (src/editor/gesture.rs, docs/large-maps-follow-camera.md section 9): one finger paints once it moves past the touch slop (`builder_touch_slop_pt`; a resting finger paints nothing) and a quick one-finger tap paints a cell; two fingers pan and pinch-zoom about their middle, a second finger landing on a stroke takes it back, and a coarse screen's zoom settles on whole blocks when they part; a two-finger tap undoes and a three-finger tap redoes (`builder_tap_seconds`). Where a cell is under `builder_paint_min_cell_mm` on the glass (`status.builder.camera.cell_mm`) a one-finger tap zooms in to `builder_tap_zoom_cell_mm` instead and a drag pans. `frames` is a list of frames, each the touch points down that frame as {id, x, y} in bitmap pixels (the 32 px bar included, as for `click`); a frame with no points lifts every finger, and the tool lifts every finger at its end - unless `hold` is true, which leaves the last frame's fingers down: the window's frames keep them there (a stroke goes on painting under a still finger, the loupe stands over it - `status.builder.loupe`) until the next `builder_touch` carries on from them or lifts them. Each frame is `dt` seconds (default 1/60). Build mode only. Replies like `mode`, with `camera` (as `status.builder.camera`) and `held` (how many fingers are left down).",
+        description: "Drive the builder with raw touch frames, the way a touch screen does - the multi-finger input `--touch-from-mouse` cannot make (src/editor/gesture.rs, docs/large-maps-follow-camera.md section 9): one finger paints once it moves past the touch slop (`builder_touch_slop_pt`; a resting finger paints nothing) and a quick one-finger tap paints a cell; two fingers pan and pinch-zoom about their middle, a second finger landing on a stroke takes it back, and a coarse screen's zoom settles on whole blocks when they part; a two-finger tap undoes and a three-finger tap redoes (`builder_tap_seconds`). Where a cell is under `builder_paint_min_cell_mm` on the glass (`status.builder.camera.cell_mm`) a one-finger tap zooms in to `builder_tap_zoom_cell_mm` instead and a drag pans. `frames` is a list of frames, each the touch points down that frame as {id, x, y} in window coordinates, as for `click` (`status.builder.buttons` and `status.camera.window_field` give them); a frame with no points lifts every finger, and the tool lifts every finger at its end - unless `hold` is true, which leaves the last frame's fingers down: the window's frames keep them there (a stroke goes on painting under a still finger, the loupe stands over it - `status.builder.loupe`) until the next `builder_touch` carries on from them or lifts them. Each frame is `dt` seconds (default 1/60). Build mode only. Replies like `mode`, with `camera` (as `status.builder.camera`) and `held` (how many fingers are left down).",
         schema: r#"{"type":"object","properties":{"frames":{"type":"array","items":{"type":"array","items":{"type":"object","properties":{"id":{"type":"integer"},"x":{"type":"number"},"y":{"type":"number"}},"required":["id","x","y"]}},"description":"Frames of touch points, first to last"},"dt":{"type":"number","minimum":0,"description":"Seconds per frame (default 1/60)"},"hold":{"type":"boolean","description":"Leave the last frame's fingers down at the end, for a screenshot mid-gesture (default false)"}},"required":["frames"]}"#,
         read_only: false,
         destructive: false,
@@ -443,7 +443,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "click",
-        description: "A raw press at a window position - the window's own coordinates, which `status.ui.buttons` and `status.camera.window_field` give (with no window, the live mode's bitmap at its own size: the builder's under its 32 px bar, play's field alone) - in either mode, on the same hit-tests a mouse or a finger uses: in play mode the corners' buttons (BUILD, the players button, ONLINE, RESTART on a keyboard-less build, and the level button on a level - `status.ui.buttons`), either dialog's buttons (a press outside a dialog closes it), a level's end-screen buttons (LEVELS, PLAY AGAIN, the way on) and the level select's tiles and BACK (a press outside it closes it) - `status.ui.screen_buttons` - and a press on the field itself does nothing in play mode; the lobby's buttons (`status.ui.screen_buttons`); online the corners' LEAVE; in build mode the bar's buttons (PLAY starts the round like `play`), a dropdown row, a settings stepper or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`, with `world` - the world point the press landed on, through the camera - for a press on the field outside the builder. This tests the UI; `build`/`play`/`builder_*` address the model directly.",
+        description: "A raw press at a window position - the window's own coordinates, which `status.ui.buttons` and `status.camera.window_field` give (with no window, the live mode's bitmap at its own size: the builder's under its 32 px bar, play's field alone) - in either mode, on the same hit-tests a mouse or a finger uses: in play mode the corners' buttons (BUILD, the players button, ONLINE, RESTART on a keyboard-less build, and the level button on a level - `status.ui.buttons`), either dialog's buttons (a press outside a dialog closes it), a level's end-screen buttons (LEVELS, PLAY AGAIN, the way on) and the level select's tiles and BACK (a press outside it closes it) - `status.ui.screen_buttons` - and a press on the field itself does nothing in play mode; the lobby's buttons (`status.ui.screen_buttons`); online the corners' LEAVE; in build mode the bar's buttons (PLAY starts the round like `play`), an open popup's rows, steppers and pager - `status.builder.buttons` - or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`, with `world` - the world point the press landed on, through the camera - for a press on the field outside the builder. This tests the UI; `build`/`play`/`builder_*` address the model directly.",
         schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right"],"default":"left"},"drag_to":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"[x, y] to drag to before releasing"}},"required":["x","y"]}"#,
         read_only: false,
         destructive: false,
@@ -800,8 +800,8 @@ pub struct DevServer {
     /// chrome is measured in. `None` in a server with no window, which
     /// lays the chrome out in the bitmap's own size (`UiFrame::plain`).
     drawn_ui: Option<UiFrame>,
-    /// The fingers a `builder_touch {hold: true}` left down, in bitmap
-    /// pixels: the window's builder frames take them in place of its own
+    /// The fingers a `builder_touch {hold: true}` left down, in window
+    /// coordinates: the window's builder frames take them in place of its own
     /// empty touch screen (`held_touches`) until the next `builder_touch`
     /// lifts them, so a screenshot catches a gesture mid-way.
     held_touches: Vec<crate::touch::TouchPoint>,
@@ -903,19 +903,20 @@ impl DevServer {
     /// frame its chrome is laid out in - while that bitmap is this mode's
     /// (the builder's canvas, or the round). With no window drawn yet, or a
     /// mode switched since, the live mode's own bitmap in a window of
-    /// exactly its size - the builder's map under its bar, or play's field
-    /// alone - which is all a server with no window ever has.
+    /// exactly its size - the builder's canvas under its bar
+    /// (`BuilderFrame::headless`), or play's field alone - which is all a
+    /// server with no window ever has.
     fn click_frame(&self, session: &Session, width: f32, height: f32) -> (Layout, View, UiFrame) {
         let build = session.mode() == Driver::Build;
         match (&self.drawn, self.drawn_ui) {
             (Some(drawn), Some(ui)) if build == (drawn.mode == CameraMode::Build) => (drawn.layout, drawn.view, ui),
+            _ if build => {
+                let map = session.builder.map();
+                let frame = BuilderFrame::headless(map.field_size(), map.class());
+                (frame.layout, frame.view, frame.ui)
+            }
             _ => {
-                let layout = if build {
-                    let (w, h) = session.builder.map().field_size();
-                    Layout::for_field(w, h)
-                } else {
-                    Layout::bare(width, height)
-                };
+                let layout = Layout::bare(width, height);
                 let (w, h) = layout.window_size();
                 let window = (w as f32, h as f32);
                 (layout, View::fit(window, window), UiFrame::plain(window))
@@ -923,75 +924,69 @@ impl DevServer {
         }
     }
 
+    /// The builder's frame a `click` or a `builder_touch` lands in
+    /// (`click_frame`): its canvas through the view, its chrome in the UI.
+    fn builder_frame(&self, session: &Session, width: f32, height: f32) -> BuilderFrame {
+        let (layout, view, ui) = self.click_frame(session, width, height);
+        BuilderFrame { layout, view, ui }
+    }
+
+    /// A rect of the builder's chrome, in UI points, as `status.builder`
+    /// reports it: in window coordinates - what `click` and `builder_touch`
+    /// take - with the points themselves as `ui`.
+    fn ui_rect_json(ui: &UiFrame, r: crate::math::Rectangle) -> Value {
+        let w = ui.rect_to_window(r);
+        json!({ "x": w.x, "y": w.y, "w": w.width, "h": w.height, "ui": { "x": r.x, "y": r.y, "w": r.width, "h": r.height } })
+    }
+
     /// `status.builder.navigator`: where the builder's navigator stands
     /// (`MapEditor::navigator_rect`) through the frame the window last drew
-    /// the builder in - in window coordinates, what `click` takes, and as
-    /// `bitmap` the same rect in the builder's bitmap pixels, what
-    /// `builder_touch` takes; `null` where there is none (FIT on an arena)
-    /// or the window is not in build mode.
+    /// the builder in - in window coordinates, what `click` and
+    /// `builder_touch` take, with its `ui` points; `null` where there is
+    /// none (FIT on an arena) or the window is not in build mode.
     fn navigator_json(&self, session: &Session, width: f32, height: f32) -> Value {
         if session.mode() != Driver::Build {
             return Value::Null;
         }
-        let (layout, view, _) = self.click_frame(session, width, height);
-        match session.builder.navigator_rect(&layout) {
-            Some(r) => {
-                let a = view.to_window(Vec2::new(r.x, r.y));
-                let b = view.to_window(Vec2::new(r.x + r.width, r.y + r.height));
-                json!({
-                    "x": a.x, "y": a.y, "w": b.x - a.x, "h": b.y - a.y,
-                    "bitmap": { "x": r.x, "y": r.y, "w": r.width, "h": r.height },
-                })
-            }
-            None => Value::Null,
-        }
+        let frame = self.builder_frame(session, width, height);
+        session.builder.navigator_rect(&frame).map_or(Value::Null, |r| Self::ui_rect_json(&frame.ui, r))
     }
 
     /// `status.builder.buttons`: the builder's own buttons a tool clicks
     /// by name (`MapEditor::named_buttons`) through the frame the window
-    /// last drew the builder in: window coordinates, what `click` takes,
-    /// and as `bitmap` the builder's bitmap pixels, what `builder_touch`
-    /// takes. Empty outside build mode.
+    /// last drew the builder in: window coordinates, what `click` and
+    /// `builder_touch` take, each with its `ui` points. Empty outside build
+    /// mode.
     fn builder_buttons_json(&self, session: &Session, width: f32, height: f32) -> Value {
         if session.mode() != Driver::Build {
             return json!({});
         }
-        let (layout, view, _) = self.click_frame(session, width, height);
-        let rect = |r: crate::math::Rectangle| {
-            let a = view.to_window(Vec2::new(r.x, r.y));
-            let b = view.to_window(Vec2::new(r.x + r.width, r.y + r.height));
-            json!({ "x": a.x, "y": a.y, "w": b.x - a.x, "h": b.y - a.y, "bitmap": { "x": r.x, "y": r.y, "w": r.width, "h": r.height } })
-        };
-        let buttons: Map<String, Value> = session.builder.named_buttons(&layout).into_iter().map(|(name, r)| (name, rect(r))).collect();
+        let frame = self.builder_frame(session, width, height);
+        let buttons: Map<String, Value> =
+            session.builder.named_buttons(&frame).into_iter().map(|(name, r)| (name, Self::ui_rect_json(&frame.ui, r))).collect();
         Value::Object(buttons)
     }
 
     /// `status.builder.loupe`: the loupe over a painting finger
-    /// (`MapEditor::loupe`) - where it stands in window coordinates and,
-    /// as `bitmap`, in the builder's bitmap pixels; the world it shows; its
-    /// device pixels per world pixel; the cell the stroke paints. `null`
-    /// while there is none - no finger painting, a mouse, a cell over
-    /// `builder_loupe_cell_mm` - and outside build mode. A `builder_touch`
-    /// lifts its fingers at its end unless it `hold`s them, which is how a
-    /// shell reads it mid-stroke.
+    /// (`MapEditor::loupe`) - where it stands in window coordinates, with
+    /// its `ui` points; the world it shows; its device pixels per world
+    /// pixel; the cell the stroke paints. `null` while there is none - no
+    /// finger painting, a mouse, a cell over `builder_loupe_cell_mm` - and
+    /// outside build mode. A `builder_touch` lifts its fingers at its end
+    /// unless it `hold`s them, which is how a shell reads it mid-stroke.
     fn loupe_json(&self, session: &Session, width: f32, height: f32) -> Value {
         if session.mode() != Driver::Build {
             return Value::Null;
         }
-        let (layout, view, _) = self.click_frame(session, width, height);
-        let Some(loupe) = session.builder.loupe(&layout) else { return Value::Null };
-        let r = loupe.rect;
-        let a = view.to_window(Vec2::new(r.x, r.y));
-        let b = view.to_window(Vec2::new(r.x + r.width, r.y + r.height));
+        let frame = self.builder_frame(session, width, height);
+        let Some(loupe) = session.builder.loupe(&frame) else { return Value::Null };
+        let mut v = Self::ui_rect_json(&frame.ui, loupe.rect);
         let w = loupe.world;
-        json!({
-            "x": a.x, "y": a.y, "w": b.x - a.x, "h": b.y - a.y,
-            "bitmap": { "x": r.x, "y": r.y, "w": r.width, "h": r.height },
-            "world": { "x": w.x, "y": w.y, "w": w.width, "h": w.height },
-            "device_scale": loupe.device_scale,
-            "cell": [loupe.cell.0, loupe.cell.1],
-            "erase": loupe.erase,
-        })
+        v["world"] = json!({ "x": w.x, "y": w.y, "w": w.width, "h": w.height });
+        v["device_scale"] = json!(loupe.device_scale);
+        v["cell"] = json!([loupe.cell.0, loupe.cell.1]);
+        v["erase"] = json!(loupe.erase);
+        v
     }
 
     /// The corners the window lays out for the live mode in `ui`
@@ -1970,7 +1965,7 @@ impl DevServer {
                 if session.mode() != Driver::Build {
                     Err("builder_touch needs build mode - call `build` first".to_string())
                 } else {
-                    let (layout, _, _) = self.click_frame(session, width, height);
+                    let frame = self.builder_frame(session, width, height);
                     let hold = params.get("hold").and_then(Value::as_bool).unwrap_or(false);
                     touch_frames(params).map(|(frames, dt)| {
                         // Fingers a held call left down are still down.
@@ -1987,7 +1982,7 @@ impl DevServer {
                                 dt,
                                 ..BuilderInput::default()
                             };
-                            session.update_builder(&input, &layout);
+                            session.update_builder(&input, &frame);
                             down = now;
                             last = touches;
                         }
@@ -2104,26 +2099,31 @@ impl DevServer {
                 }
             }
             Driver::Build => {
+                // The builder takes the window's own coordinates, its frame
+                // putting each point on the canvas or on its chrome.
+                let frame = BuilderFrame { layout, view, ui };
                 let press = BuilderInput {
-                    pointer: Some(point),
+                    pointer: Some(window_point),
                     pressed: !right,
                     held: !right,
                     right_pressed: right,
                     right_held: right,
                     ..BuilderInput::default()
                 };
-                session.update_builder(&press, &layout);
-                let mut last = point;
-                if let Some(to) = drag_to.map(|to| view.to_bitmap(to)) {
-                    let steps = (point.distance_to(to) / CLICK_DRAG_STEP_PX).ceil().max(1.0) as usize;
+                session.update_builder(&press, &frame);
+                let mut last = window_point;
+                if let Some(to) = drag_to {
+                    // Steps of about `CLICK_DRAG_STEP_PX` on the canvas.
+                    let span = view.to_bitmap(window_point).distance_to(view.to_bitmap(to));
+                    let steps = (span / CLICK_DRAG_STEP_PX).ceil().max(1.0) as usize;
                     for i in 1..=steps {
                         let t = i as f32 / steps as f32;
-                        last = Vec2::new(point.x + (to.x - point.x) * t, point.y + (to.y - point.y) * t);
+                        last = Vec2::new(window_point.x + (to.x - window_point.x) * t, window_point.y + (to.y - window_point.y) * t);
                         let held = BuilderInput { pointer: Some(last), held: !right, right_held: right, ..BuilderInput::default() };
-                        session.update_builder(&held, &layout);
+                        session.update_builder(&held, &frame);
                     }
                 }
-                session.update_builder(&BuilderInput { pointer: Some(last), ..BuilderInput::default() }, &layout);
+                session.update_builder(&BuilderInput { pointer: Some(last), ..BuilderInput::default() }, &frame);
                 // The press may have been PLAY.
                 if session.mode() == Driver::Play {
                     self.round_started(session);
@@ -2150,11 +2150,12 @@ impl DevServer {
         }
         // In the builder, the world point and the cell under the press
         // through the builder's own camera.
+        let frame = BuilderFrame { layout, view, ui };
         if session.mode() == Driver::Build
-            && let Some(world) = session.builder.world_at(point, &layout)
+            && let Some(world) = session.builder.world_at(window_point, &frame)
         {
             reply["world"] = json!({ "x": world.x, "y": world.y });
-            reply["cell"] = json!(session.builder.cell_at(point, &layout).map(|(c, r)| [c, r]));
+            reply["cell"] = json!(session.builder.cell_at(window_point, &frame).map(|(c, r)| [c, r]));
         }
         Ok(reply)
     }
@@ -2162,8 +2163,8 @@ impl DevServer {
     /// `key`: one key for one frame, or typed text, through the same
     /// paths `app.rs` takes for the keyboard.
     fn key(&mut self, session: &mut Session, params: &Value, width: f32, height: f32) -> Result<Value, String> {
-        let (layout, _, ui) = self.click_frame(session, width, height);
-        let layout = &layout;
+        let (layout, view, ui) = self.click_frame(session, width, height);
+        let frame = BuilderFrame { layout, view, ui };
         let key = match params.get("key") {
             None | Some(Value::Null) => None,
             Some(Value::String(s)) => Some(s.as_str()),
@@ -2285,7 +2286,7 @@ impl DevServer {
                         typed: text,
                         ..BuilderInput::default()
                     };
-                    session.update_builder(&input, layout);
+                    session.update_builder(&input, &frame);
                 }
             }
         }
@@ -4813,8 +4814,8 @@ cells."1,1" = { kind = "wall" }"#;
         // A screen where a cell is a finger's size (the window hands the
         // builder its screen every frame; a test hands it once).
         let screen = crate::editor::CanvasScreen { device_per_px: 3.0, points_per_px: 1.5, coarse: false };
-        let layout = Layout::for_field(1088.0, 544.0);
-        s.update_builder(&BuilderInput { screen: Some(screen), ..BuilderInput::default() }, &layout);
+        let frame = crate::editor::BuilderFrame::headless((1088.0, 544.0), crate::framing::MapClass::Arena);
+        s.update_builder(&BuilderInput { screen: Some(screen), ..BuilderInput::default() }, &frame);
         ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "iron" })).unwrap();
         let base = s.builder.history().undo_depth() as u64;
         let (x, y) = (12.0 * 32.0, 32.0 + 7.0 * 32.0);
@@ -4891,8 +4892,8 @@ cells."1,1" = { kind = "wall" }"#;
         enter_build(&mut server, &tx, &mut s);
         // Cells of 7.6 mm on the glass: a finger paints, and the loupe shows.
         let screen = crate::editor::CanvasScreen { device_per_px: 3.0, points_per_px: 1.5, coarse: false };
-        let layout = Layout::for_field(1088.0, 544.0);
-        s.update_builder(&BuilderInput { screen: Some(screen), ..BuilderInput::default() }, &layout);
+        let frame = crate::editor::BuilderFrame::headless((1088.0, 544.0), crate::framing::MapClass::Arena);
+        s.update_builder(&BuilderInput { screen: Some(screen), ..BuilderInput::default() }, &frame);
         ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "brick" })).unwrap();
         let base = s.builder.history().undo_depth() as u64;
         let none = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
@@ -4905,7 +4906,7 @@ cells."1,1" = { kind = "wall" }"#;
         let loupe = &status["builder"]["loupe"];
         let under = crate::map::world_to_cell(crate::math::Vec2::new(400.0, 300.0 - 32.0));
         assert_eq!(loupe["cell"], json!([under.0, under.1]), "over the cell under the finger: {loupe}");
-        assert!(loupe["bitmap"]["y"].as_f64().unwrap() + loupe["bitmap"]["h"].as_f64().unwrap() < 300.0, "above the finger: {loupe}");
+        assert!(loupe["y"].as_f64().unwrap() + loupe["h"].as_f64().unwrap() < 300.0, "above the finger: {loupe}");
         let lifted = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [[]] })).unwrap();
         assert_eq!(lifted["held"], 0, "{lifted}");
         assert_eq!(lifted["undo_depth"], base + 1, "the stroke is one step: {lifted}");
@@ -4943,7 +4944,7 @@ cells."40,30" = { kind = "frog" }
         enter_build(&mut server, &tx, &mut s);
         let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
         let nav = status["builder"]["navigator"].clone();
-        assert!(nav.is_object() && nav["bitmap"].is_object(), "a field map's navigator stands at FIT too: {status}");
+        assert!(nav.is_object() && nav["ui"].is_object(), "a field map's navigator stands at FIT too: {status}");
         let n = |v: &Value, k: &str| v[k].as_f64().unwrap() as f32;
         let at = |r: &Value, fx: f32, fy: f32| (n(r, "x") + n(r, "w") * fx, n(r, "y") + n(r, "h") * fy);
         let centre = |s: &Session| s.builder.camera().center(&s.builder.viewport());
@@ -4962,9 +4963,9 @@ cells."40,30" = { kind = "frog" }
         let after_drag = centre(&s);
         assert!(after_drag.x < after_click.x && after_drag.y < after_click.y, "the drag carried it up and left: {after_drag:?}");
 
-        let bitmap = &nav["bitmap"];
-        let (tx0, ty0) = at(bitmap, 0.5, 0.5);
-        let (tx1, ty1) = at(bitmap, 0.8, 0.8);
+        // A finger, in the same window coordinates.
+        let (tx0, ty0) = at(&nav, 0.5, 0.5);
+        let (tx1, ty1) = at(&nav, 0.8, 0.8);
         let frames = json!([[{ "id": 1, "x": tx0, "y": ty0 }], [{ "id": 1, "x": tx1, "y": ty1 }]]);
         let touched = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": frames })).unwrap();
         let after_touch = centre(&s);
@@ -5004,10 +5005,8 @@ cells."40,30" = { kind = "frog" }
         let (mut server, tx) = DevServer::headless();
         let mut s = game(36);
         ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
-        // Play's bitmap is the field alone, the builder's the field under
-        // its bar.
+        // Play's bitmap is the field alone.
         let layout = Layout::bare(W, H);
-        let build_layout = Layout::for_field(W, H);
         let centre = |r: crate::math::Rectangle| (r.x + r.width / 2.0, r.y + r.height / 2.0);
         // A click on BUILD opens the dialog like `build`.
         let build = corner_button(&mut server, &tx, &mut s, "build");
@@ -5048,8 +5047,11 @@ cells."40,30" = { kind = "frog" }
         // Build mode: a click on a field cell paints with the active brush,
         // a drag crosses every cell, undo is a key.
         ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "iron" })).unwrap();
-        // A cell's world position is its centre (`map::cell_to_world`).
-        let cell_centre = |c: i32, r: i32| (c as f32 * 32.0, build_layout.field.y + r as f32 * 32.0);
+        // The builder's canvas stands under its bar, in a window of just
+        // its size while none is drawn. A cell's world position is its
+        // centre (`map::cell_to_world`).
+        let builder = crate::editor::BuilderFrame::headless(s.builder.map().field_size(), s.builder.map().class());
+        let cell_centre = |c: i32, r: i32| (c as f32 * 32.0, builder.view.offset.y + r as f32 * 32.0);
         let base = s.builder.history().undo_depth() as u64;
         let (cx, cy) = cell_centre(10, 5);
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": cx, "y": cy })).unwrap();
@@ -5075,8 +5077,7 @@ cells."40,30" = { kind = "frog" }
         // PLAY from the bar starts the round frozen, like `play` - on the
         // builder's own bitmap, its whole canvas under the bar.
         server.lockstep = false;
-        let (fw, fh) = s.builder.map().field_size();
-        let (px, py) = centre(crate::hud::mode_button_rect(Layout::for_field(fw, fh).panel));
+        let (px, py) = centre(builder.ui.rect_to_window(builder.bar().play));
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": px, "y": py })).unwrap();
         assert_eq!(m["mode"], "play", "{m}");
         assert!(server.lockstep());

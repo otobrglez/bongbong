@@ -21,7 +21,7 @@
 //! - Effects are layered: sprite animation, particles (owned by the app,
 //!   not the simulation), a full-screen shader pass, camera shake.
 
-use bongbong::editor::{BuilderInput, EditorTextures, Tool};
+use bongbong::editor::{BuilderFrame, BuilderInput, EditorTextures, Tool};
 use bongbong::fx::Fx;
 use bongbong::render::game::{Effects, Textures};
 use bongbong::hud::{Fade, PlayChrome, UiFrame};
@@ -108,15 +108,14 @@ fn main() {
     };
     let mut fx = Fx::default();
 
-    // Pass 1 target (the field) and two composites: the builder's has the
-    // bar on top; play mode's is the bare field, and the demo's chrome
-    // draws no HUD over it.
+    // Pass 1 target (the field) and two composites, each the bare field:
+    // the builder's canvas, whose bar is drawn on the window over its own
+    // strip, and play mode's, which the demo's chrome draws no HUD over.
     let mut scene = rl.load_render_texture(&thread, w as u32, h as u32).expect("scene target");
-    let mut composite_build = rl.load_render_texture(&thread, w as u32, (h + HUD_BAR_HEIGHT) as u32).expect("composite");
+    let mut composite_build = rl.load_render_texture(&thread, w as u32, h as u32).expect("composite");
     // Where the builder draws a zoomed canvas: made when first needed.
     let mut builder_scene = bongbong::editor::render::BuilderScene::default();
     let mut composite_play = rl.load_render_texture(&thread, w as u32, h as u32).expect("composite");
-    let layout_build = Layout::for_field(width, height);
     let layout_play = Layout::bare(width, height);
 
     let mut game = Game::default();
@@ -139,14 +138,7 @@ fn main() {
             rl.request_quit();
         }
         let window = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
-        // The demo never opens a room, so the two online drivers cannot
-        // come up here; they take the round's own layout all the same.
-        let (layout, bitmap) = match session.mode() {
-            Driver::Build => (&layout_build, layout_build.window_size()),
-            Driver::Play | Driver::Lobby | Driver::Online => (&layout_play, (w, h)),
-        };
-        let view = View::fit((bitmap.0 as f32, bitmap.1 as f32), window);
-        let pointer = view.to_bitmap(rl.get_mouse_position().into());
+        let mouse: bongbong::math::Vec2 = rl.get_mouse_position().into();
         let pressed = rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT);
         let dt = rl.get_frame_time();
 
@@ -165,6 +157,18 @@ fn main() {
                 }
             }
         }
+
+        // The builder on the window, its bar along the top and the canvas
+        // under it; play's bare field fitted to the window. The demo never
+        // opens a room, so the two online drivers cannot come up here; they
+        // take the round's own view all the same.
+        let map = session.builder.map();
+        let build_frame = BuilderFrame::new(UiFrame::plain(window), map.field_size(), map.class(), None);
+        let view = match session.mode() {
+            Driver::Build => build_frame.view,
+            Driver::Play | Driver::Lobby | Driver::Online => View::fit((w as f32, h as f32), window),
+        };
+        let pointer = view.to_bitmap(mouse);
 
         let textures = Textures {
             tanks: &tanks,
@@ -217,7 +221,7 @@ fn main() {
                 }
                 let ctrl = rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL) || rl.is_key_down(KeyboardKey::KEY_LEFT_SUPER);
                 let input = BuilderInput {
-                    pointer: Some(pointer),
+                    pointer: Some(mouse),
                     pressed,
                     held: pressed || rl.is_mouse_button_down(MouseButton::MOUSE_BUTTON_LEFT),
                     right_pressed: rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_RIGHT),
@@ -232,16 +236,15 @@ fn main() {
                     typed: String::new(),
                     ..BuilderInput::default()
                 };
-                session.update_builder(&input, layout);
+                session.update_builder(&input, &build_frame);
                 if session.mode() == Driver::Build {
                     session.builder.render(
                         rl,
                         thread,
                         &mut composite_build,
                         &mut builder_scene,
-                        &view,
+                        &build_frame,
                         bongbong::math::Color::WHITE,
-                        layout,
                         &EditorTextures {
                             obstacles: &obstacles,
                             props: &props,
@@ -274,7 +277,7 @@ fn main() {
             // PLAY: a click on a barrel sets it off; R restarts the round.
             Driver::Play | Driver::Lobby | Driver::Online => {
                 if pressed {
-                    let field_pos: Position = layout.to_field(pointer);
+                    let field_pos: Position = layout_play.to_field(pointer);
                     let _ = session.game.debug_detonate(field_pos);
                 }
                 // The parked player: no input, pinned in its corner, never

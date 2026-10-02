@@ -1088,8 +1088,11 @@ play showed), its gestures from raw touch points with a slop
 setting with its anchor, incremental ground (`GroundGrid::repaint`) and
 the minimap navigator (`MapEditor::navigator_rect`, repainted per
 stroke), play from here (`mode::Session::play_here`), the lint panel (the
-CHECK panel), the loupe (`MapEditor::loupe`) and the clear check
-(`MapFile::revision`, `MapEditor::par`) - select and stamps, fills and
+CHECK panel), the loupe (`MapEditor::loupe`), the clear check
+(`MapFile::revision`, `MapEditor::par`) and the bar and its popups on the
+window in UI points like play's corners (`editor::chrome`: 44 pt on a
+touch screen, the categories folded into a palette on a narrow one, the
+long popups paged) - select and stamps, fills and
 scatter and thumbnails are still to come; from step 7 the Android `appCategory`, maps capped at
 what the wire carries, the laser's reach, the mark caps and the bounded
 AI (`simulation/field.rs`: chained alerts with leashes, far enemies
