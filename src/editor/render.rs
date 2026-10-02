@@ -239,6 +239,8 @@ impl MapEditor {
         let camera = self.view_camera(layout);
         let field = self.map.field_size();
         let chrome = self.chrome(frame);
+        // The chrome's camera goes straight onto the window.
+        let units = crate::render::view::window_camera_units(rl);
         if camera == crate::view::Camera::whole(field) && (layout.field.w, layout.field.h) == field {
             // The canvas into the bitmap, the bitmap onto the window.
             rl.draw_texture_mode(thread, composite, |mut d| {
@@ -248,7 +250,7 @@ impl MapEditor {
             let magnified = self.loupe(frame).and_then(|loupe| Some((loupe, self.draw_loupe_world(rl, thread, &mut scene.loupe, &loupe, textures, time)?)));
             rl.draw(thread, |mut d| {
                 crate::render::view::present_into(&mut d, composite, view, backdrop, None);
-                self.draw_window_chrome(&mut d, frame, &chrome, textures, cursor, &camera, magnified.as_ref().map(|(l, p)| (l, *p)));
+                self.draw_window_chrome(&mut d, frame, &chrome, textures, cursor, &camera, magnified.as_ref().map(|(l, p)| (l, *p)), units);
             });
             return;
         }
@@ -287,13 +289,15 @@ impl MapEditor {
             d.clear_background(Color::BLACK);
             crate::render::view::letterbox(&mut d, view, backdrop);
             d.draw_texture_pro(target, source, area, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-            self.draw_window_chrome(&mut d, frame, &chrome, textures, cursor, &camera, magnified.as_ref().map(|(l, p)| (l, *p)));
+            self.draw_window_chrome(&mut d, frame, &chrome, textures, cursor, &camera, magnified.as_ref().map(|(l, p)| (l, *p)), units);
         });
     }
 
     /// The chrome over the canvas on the window, in UI points through
-    /// `frame.ui`'s scale: the status line and the navigator, the bar, the
-    /// open popup and, over a painting finger, the loupe.
+    /// `frame.ui`'s scale - carried in framebuffer pixels, `units` to the
+    /// window unit (`render::view::window_camera_units`): the status line
+    /// and the navigator, the bar, the open popup and, over a painting
+    /// finger, the loupe.
     #[allow(clippy::too_many_arguments)]
     fn draw_window_chrome(
         &self,
@@ -304,8 +308,12 @@ impl MapEditor {
         cursor: Option<(i32, i32)>,
         camera: &crate::view::Camera,
         magnified: Option<(&Loupe, &RenderTexture2D)>,
+        units: f32,
     ) {
-        let ui = Camera2D { offset: Vector2::new(0.0, 0.0), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: frame.ui.scale };
+        let ui = crate::render::view::onto_window(
+            Camera2D { offset: Vector2::new(0.0, 0.0), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: frame.ui.scale },
+            units,
+        );
         d.draw_mode2D(ui, |mut d, _| {
             self.draw_status_line(&mut d, frame, chrome, cursor);
             self.draw_navigator(&mut d, frame, textures, camera);

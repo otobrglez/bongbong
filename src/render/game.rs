@@ -432,7 +432,7 @@ impl Game {
         let indicators = effects.indicators;
         let minimap = effects.minimap.take();
         let corners = CornerShape::of(chrome, self.players.count()).map(|shape| corners(ui, &shape));
-        let frame = ChromeFrame { ui, fade, corners: corners.as_ref() };
+        let frame = ChromeFrame { ui, fade, corners: corners.as_ref(), units: crate::render::view::window_camera_units(rl) };
 
         // An arena's window margins show the world past its field
         // (`margin.rs`) where the window's shape is not the field's.
@@ -475,7 +475,10 @@ impl Game {
             }
             _ => {}
         }
-        let base = Camera2D { offset: view.offset.into(), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: view.scale };
+        let base = crate::render::view::onto_window(
+            Camera2D { offset: view.offset.into(), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: view.scale },
+            frame.units,
+        );
         self.draw_chrome(&mut d, &text, &hud, chrome, &frame, layout, camera, indicators, minimap.as_ref(), textures, touch, fx_live, base);
     }
 }
@@ -750,12 +753,14 @@ struct ChromeText<'a> {
 }
 
 /// The window the chrome stands on: its UI frame, the corner clusters laid
-/// out in it (`None` where the frame draws none) and how far each has
-/// faded.
+/// out in it (`None` where the frame draws none), how far each has faded,
+/// and the framebuffer pixels a window unit is under a camera drawn onto
+/// the window (`render::view::window_camera_units`).
 struct ChromeFrame<'a> {
     ui: &'a UiFrame,
     fade: Fade,
     corners: Option<&'a Corners>,
+    units: f32,
 }
 
 impl Game {
@@ -1009,7 +1014,10 @@ impl Game {
         // the UI scale, never the world's. The dims cover the whole window
         // and every banner centres on the chrome's area.
         let ui = frame.ui;
-        let ui_camera = Camera2D { offset: Vector2::new(0.0, 0.0), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: ui.scale };
+        let ui_camera = crate::render::view::onto_window(
+            Camera2D { offset: Vector2::new(0.0, 0.0), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: ui.scale },
+            frame.units,
+        );
         let area = ui.area;
         let (screen_w, screen_h) = (ui.screen.w.ceil() as i32, ui.screen.h.ceil() as i32);
         let cy = (area.y + area.h / 2.0).round() as i32;

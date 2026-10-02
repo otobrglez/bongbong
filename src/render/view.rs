@@ -27,6 +27,38 @@ impl Camera {
     }
 }
 
+/// How many framebuffer pixels a window unit is under a 2D camera drawn
+/// straight onto the window. raylib's plain drawing on the window carries
+/// the HighDPI screen scale (`BeginDrawing` loads it), but `BeginMode2D`
+/// loads the camera's matrix alone and `EndMode2D` puts the scale back
+/// (rcore.c), so a camera onto a desktop HighDPI window - a Retina Mac,
+/// Windows or Linux at 200 % - lands in framebuffer pixels unless it
+/// carries the scale itself: there this is the framebuffer's pixels per
+/// window unit. Everywhere raylib's screen scale is the identity it is 1:
+/// iOS, whose patched SDL backend projects the viewport in points, and the
+/// web and Android, whose windows are in device pixels. A camera into a
+/// render texture never needs it.
+pub fn window_camera_units(rl: &RaylibHandle) -> f32 {
+    if cfg!(any(target_os = "ios", target_os = "android", target_os = "emscripten")) {
+        return 1.0;
+    }
+    let (screen, render) = (rl.get_screen_width(), rl.get_render_width());
+    if screen > 0 && render > 0 { render as f32 / screen as f32 } else { 1.0 }
+}
+
+/// `camera` as it has to be given to `BeginMode2D` to draw straight onto
+/// the window: its offset and zoom in framebuffer pixels, `units` of them
+/// to the window unit (`window_camera_units`); what it looks at is
+/// unchanged.
+pub fn onto_window(camera: Camera2D, units: f32) -> Camera2D {
+    Camera2D {
+        offset: Vector2::new(camera.offset.x * units, camera.offset.y * units),
+        target: camera.target,
+        rotation: camera.rotation,
+        zoom: camera.zoom * units,
+    }
+}
+
 /// Put the composited frame on screen: the margins in `backdrop` (the
 /// HUD bar's own colour, so the bar and the margins read as one panel), a
 /// one-pixel frame around the bitmap, then the bitmap into `view.dest()`.
