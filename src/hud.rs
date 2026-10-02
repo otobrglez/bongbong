@@ -1515,22 +1515,23 @@ mod hud_tests {
         let shape = shapes().into_iter().find(|(n, _)| *n == "phone with a wide map").expect("the shape").1;
         let c = corners(&ui, &shape);
         let map = c.minimap.expect("a minimap");
-        let layout = crate::Layout::bare(1180.0, 820.0);
-        let rule = StickRule { dead_zone_px: 8.0, follow_radius_px: 48.0, axis_switch_deg: 30.0 };
+        // The touch scheme takes the whole window in UI points, as play's does.
+        let area = ui.screen;
+        let rule = StickRule { dead_zone_pt: 8.0, follow_radius_pt: 48.0, axis_switch_deg: 30.0 };
         let mut t = TouchScheme::default();
         t.set_keep_out(&c.keep_out());
         let on = TouchPoint { id: 7, pos: Vec2::new(map.x + map.width / 2.0, map.y + map.height / 2.0) };
         for _ in 0..3 {
-            let intent = t.update_with(&[on], &layout, false, 1.0 / 60.0, &rule);
+            let intent = t.update_with(&[on], area, false, 1.0 / 60.0, &rule);
             assert_eq!((intent.move_dir, intent.fire), (None, false), "a touch on the minimap does nothing");
         }
         // Dragged off it, still nobody's until it lifts.
         let dragged = TouchPoint { id: 7, pos: Vec2::new(300.0, 600.0) };
-        assert!(!t.update_with(&[dragged], &layout, false, 1.0 / 60.0, &rule).fire);
+        assert!(!t.update_with(&[dragged], area, false, 1.0 / 60.0, &rule).fire);
         // The same place with no minimap fires.
         let mut bare = TouchScheme::default();
         bare.set_keep_out(&corners(&ui, &CornerShape { minimap: None, ..shape }).keep_out());
-        assert!(bare.update_with(&[on], &layout, false, 1.0 / 60.0, &rule).fire, "the fire half, uncovered");
+        assert!(bare.update_with(&[on], area, false, 1.0 / 60.0, &rule).fire, "the fire half, uncovered");
     }
 
     /// What `PlayChrome` says is drawn is what the corners hold: play's

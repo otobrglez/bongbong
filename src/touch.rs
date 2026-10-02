@@ -721,6 +721,8 @@ mod touch_tests {
             build: true,
             leave: false,
             lines: 1,
+            // A phone draws no minimap (`minimap::MinimapRules::is_phone`).
+            minimap: None,
         };
         let c = corners(&ui, &shape);
         let mut t = TouchScheme::default();
