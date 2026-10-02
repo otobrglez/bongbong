@@ -8408,6 +8408,85 @@ cells."30,20" = { kind = "frog" }
         assert!(!game.is_entering(game.tank_entity_by_slot(control).unwrap()), "the tank near the fight stays");
     }
 
+    /// The straggler's exemptions: a guard while the frog it keeps lives,
+    /// and a hull still burning, are never taken off - though each is lost,
+    /// a long walk from the fight and on no screen, as a straggler is.
+    #[test]
+    fn a_guard_keeping_its_frog_and_a_burning_hull_are_never_rolled_in_again() {
+        for exempt in ["guard", "burning"] {
+            let mut game = Game::default();
+            game.seed_override = Some(7);
+            game.player_row_override = Some(0);
+            game.level_overrides.mission = Some(if exempt == "guard" { Mission::Hunt } else { Mission::Destroy });
+            game.level_overrides.spawn = Some(SpawnKind::Waves);
+            game.level_overrides.waves = Some(3);
+            game.level_overrides.wave_size = Some(1);
+            game.level_overrides.wave_growth = Some(0);
+            game.map = MapFile::from_toml_str(STRAGGLER_MAP).expect("test map parses");
+            let (w, h) = game.map.field_size();
+            game.init(w, h);
+            assert!(game.field_map());
+            for seat in game.players().into_iter().flatten() {
+                with_tank_mut(&game.world, seat, |t| t.shield_hp = 1.0e9);
+            }
+            let t = tuning();
+            let player = player_pos(&game);
+            let (straggler, _) = field_step_until_entered(&mut game, 900);
+            let far = Position::new(w - 6.0 * PATHFIND_CELL_SIZE, player.y);
+            game.debug_teleport(straggler, far, None).expect("teleports");
+            set_field_mind(&mut game, straggler, |m| {
+                m.home = Some(far);
+                m.called = false;
+                m.alert = None;
+                m.lost = t.field_reroll_after_seconds - 1.0;
+            });
+            let entity = game.tank_entity_by_slot(straggler).expect("the straggler");
+            if exempt == "guard" {
+                let frog = game.enemy_frog.expect("a Hunt round keeps an enemy frog");
+                assert!(with_frog(&game.world, frog, |fr| !fr.is_dead()), "its frog lives");
+                game.world.get::<&mut Ai>(entity).expect("an enemy").role = Role::Guard;
+            } else {
+                with_tank_mut(&game.world, entity, |tank| {
+                    tank.burn_timer = 10.0;
+                    tank.shield_hp = 1.0e9;
+                });
+            }
+            for frame in 1..=180 {
+                field_step(&mut game, Input::default());
+                assert!(!game.events().iter().any(|e| matches!(e, Event::Rerolled { .. })), "{exempt}: taken off at frame {frame}");
+            }
+            // It was a straggler in every other way the whole time.
+            let mind = field_mind_of(&game, straggler);
+            let at = position_of(&game, straggler);
+            assert!(mind.lost >= t.field_reroll_after_seconds, "{exempt}: lost long enough: {mind:?}");
+            assert!(field::beyond_every_screen(player_pos(&game), at, &t), "{exempt}: on no screen at {at:?}");
+            assert!(!game.is_entering(entity), "{exempt}: still on the field");
+        }
+    }
+
+    /// A wave called to the fight drives at the nearest seat until a seat
+    /// is in its sight or it is hit: a hit ends the call there and then,
+    /// with every seat still out of its sight.
+    #[test]
+    fn a_called_wave_tank_is_called_no_more_once_it_is_hit() {
+        let mut game = field_round(FIELD_STRIP);
+        let player = player_pos(&game);
+        let at = Position::new(player.x + game.enemy_sight() + 300.0, player.y);
+        let slot = game.debug_spawn_enemy(at, Some(1), None).expect("an enemy spawns");
+        set_field_mind(&mut game, slot, |m| {
+            m.called = true;
+            m.wave = true;
+        });
+        field_step(&mut game, Input::default());
+        assert!(field_mind_of(&game, slot).called, "out of sight and unhurt, it stays called");
+        let entity = game.tank_entity_by_slot(slot).expect("the enemy");
+        game.world.get::<&mut Ai>(entity).expect("an enemy").notify_hit();
+        field_step(&mut game, Input::default());
+        let mind = field_mind_of(&game, slot);
+        assert!(position_of(&game, slot).distance_to(player) > game.enemy_sight(), "still out of sight");
+        assert!(!mind.called, "a hit ends the call: {mind:?}");
+    }
+
     // --- Flow fields worked out as far as they are read (`pathfind`) ---
 
     /// A flow field worked out only as far as the round reads it routes

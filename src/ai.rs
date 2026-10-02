@@ -2555,6 +2555,63 @@ mod role_tests {
         )
     }
 
+    /// A tank with nothing to fight detours for a pickup it wants only
+    /// inside its home leash on a field map (`Brain::seek`): a laser 400 px
+    /// from home is sought, one 900 px away is left alone for the patrol,
+    /// and on an arena - no home kept - the far one is sought too.
+    #[test]
+    fn a_leashed_tank_seeks_only_the_pickups_inside_its_leash() {
+        let (width, height) = (3200.0, 1280.0);
+        let home = Position::new(1600.0, 640.0);
+        let player_at = Position::new(200.0, 640.0);
+        assert!(home.distance_to(player_at) > tuning().enemy_view_range, "nothing to fight in sight");
+        let leash = tuning().enemy_leash_px;
+        let (near, far) = (Position::new(home.x + 400.0, home.y), Position::new(home.x + 900.0, home.y));
+        assert!(near.distance_to(home) < leash - 32.0 && far.distance_to(home) > leash, "the case this is about");
+        let act = |home_kept: bool, pickup: Position| {
+            let mut ai = Ai::with_role(Role::Player);
+            if home_kept {
+                ai.field.home = Some(home);
+            }
+            let mut me = Tank::default();
+            me.position = home;
+            let mut player = Tank::default();
+            player.position = player_at;
+            assert!(me.wants_pickup(PickupKind::Laser));
+            let grid = Grid::build(width, height, 48.0, 0.0, std::iter::empty());
+            let movers = [
+                Mover { position: player_at, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
+                Mover { position: home, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
+            ];
+            let mut rng = SmallRng::seed_from_u64(7);
+            ai.think(
+                &me,
+                &player,
+                player_at,
+                None,
+                width,
+                height,
+                1.0 / 60.0,
+                &movers,
+                1,
+                &grid,
+                &mut rng,
+                None,
+                None,
+                &[(PickupKind::Laser, pickup)],
+                true,
+                true,
+                false,
+                [None; 4],
+                tuning().enemy_view_range,
+            );
+            ai.snapshot().last_action
+        };
+        assert_eq!(act(true, near), Some("seek_laser"), "inside the leash");
+        assert_ne!(act(true, far), Some("seek_laser"), "past the leash");
+        assert_eq!(act(false, far), Some("seek_laser"), "an arena keeps no home");
+    }
+
     #[test]
     fn a_hunter_closes_on_its_frog_and_reverts_to_the_player_without_one() {
         let mut ai = Ai::with_role(Role::Hunter);
