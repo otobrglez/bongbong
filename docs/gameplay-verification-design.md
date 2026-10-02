@@ -754,6 +754,24 @@ JSONL had them all along. At `--seed 1000` maze reads `pile-up=2` with or
 without the rule, which is where `probe-fixtures`' `pile-up` ceiling comes
 from.
 
+**Landed 2026-10-02 - pacing, cost and field maps.** A sweep now prints how
+its rounds ended (won, lost, unfinished, and how long a lost one lasted),
+the first contact (the first enemy within `enemy_attack_range` of a seat,
+its first shot at one, the first hit on one, each as mean and median over
+the rounds) and the wall-clock ms per tick spent inside `Game::update`
+alone; a single round prints its own first contact and map class, and
+`--json-out` carries `ms_per_tick` and `first_contact`. Readings, never
+budgeted. They exist for the field-map AI (docs/large-maps-follow-camera.md
+section 12, `simulation::field`), which only maps a camera follows play by:
+`TankSnapshot::asleep` (a far enemy nothing has woken, holding still by
+design) counts as a deliberate hold, and an enemy `asleep` or `leashed`
+(nothing has called it to the fight) when the round ends is no
+`never-arrived`. Every `maps/test/` fixture is 40 x 22.5, which by size is
+a field map, so each says `view = "whole"`: they stay arenas and their
+budgets were measured, and still read, under the arena's rules. The field
+maps get their own recipe, `just probe-fields` - the 96 x 54 study map and
+the five 40-wide levels, budgeted the way `probe-fixtures` is.
+
 ---
 
 ## Phase 5 — Navigation e2e (path-stretch)

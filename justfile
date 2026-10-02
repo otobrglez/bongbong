@@ -91,7 +91,8 @@ probe-fixtures:
 # meets the fight about 13 s in, where the arena's rules read jitter=16
 # churn=22 clustering=3 pile-up=3 and walked a wave tank to the fight for
 # up to 47 s. Prints first contact and ms per tick beside the anomalies.
-# Not in CI: about three minutes in a debug build.
+# Not in CI: well over two minutes in a debug build, the study map alone
+# more than one.
 probe-fields:
     for m in maps/study/frontier.toml maps/hedge-maze.toml maps/archipelago.toml maps/black-gold.toml maps/harbor-lights.toml maps/castle-moat.toml; do cargo run --bin probe -- --map $m --frames 3600 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=3 --budget jitter=23 --budget spin=5 --budget churn=20 --budget clustering=6 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=6 --budget offbox-fire=0 || exit 1; done
 

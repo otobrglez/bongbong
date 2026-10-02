@@ -587,6 +587,31 @@ starts the round as today.
   minimap and the objective arrows are for; a Protect field map should
   keep the frog within a couple of screens of the start.
 
+**Built for field maps** (`simulation::field`, `Game::field_map`; an arena
+takes none of it and replays as before): an enemy that sees a seat alerts
+the enemies within `enemy_alert_chain_px` of itself and they pass it on,
+with no line of sight, instead of the map-wide alert; an enemy with no
+alert, call or hit keeps within `enemy_leash_px` of where it first stood
+and turns back past it; a wave tank is called to the nearest live seat
+until it first has a seat in sight range or is hit - without the call a
+wave leashed to its gate a walk from the fight would never reach it;
+farther than `enemy_far_px` from every live seat and the players' frog an
+enemy thinks every `enemy_far_think_ticks` ticks, staggered by owner slot,
+and one nothing has woken does not think or route at all; band spawns and
+wave gates stay outside every seat's sight box, a wave taking the gates
+whose walk from the nearest seat is within `field_walk_slack_seconds` of
+`field_walk_seconds` (15 s) where the map has any and a band leaning that
+way (a 40-wide level has no walk that long, and only keeps its spawns out
+of sight); a fallen seat comes back through the free gate nearest the
+living seats. On the study map, 30 AFK rounds, a wave tank's walk to the
+fight went from a median 14.8 s, p90 34.5 s and worst 47.5 s to 11.6 s,
+20.8 s and 30.2 s, and with every round run to two minutes a tick costs
+0.59 ms against 0.92. `just probe-fields` sweeps the study map and the
+five 40-wide levels. Not built: the pacing director, re-rolling a
+straggler through a nearer gate, and flow fields bounded to the bubble -
+the frame's routing grid, about 0.33 ms of the 0.59, is now most of a
+tick.
+
 ## 13. Patterns from shipped games
 
 docs/large-maps-patterns.md catalogues 72 patterns from shipped games,
