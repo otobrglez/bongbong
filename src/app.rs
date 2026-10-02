@@ -1175,8 +1175,19 @@ pub fn run(args: Args) {
     // The window of the first frame: the field alone in Play, under the
     // builder's 32 pt bar with `--editor`.
     let bitmap = Layout::for_field(screen_width as f32, screen_height as f32).window_size();
+    // The field a desktop window opens for: the map's when it is shown
+    // whole, the standard field's when the camera follows it - a followed
+    // map is framed into any window, so its window need not hold the
+    // field, and one that tried would outgrow the monitor.
     #[cfg(not(any(target_os = "ios", target_os = "android", target_os = "emscripten")))]
-    let opening = if args.editor { bitmap } else { Layout::bare(screen_width as f32, screen_height as f32).window_size() };
+    let opening = {
+        let (w, h) = if map.class().follows() {
+            (crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32)
+        } else {
+            (screen_width as f32, screen_height as f32)
+        };
+        if args.editor { Layout::for_field(w, h).window_size() } else { Layout::bare(w, h).window_size() }
+    };
     // iOS: the window is the screen, and raylib's SDL backend sizes its
     // render target from the size InitWindow is asked for (it never reads
     // the window back), so the screen's point size has to go in here.
@@ -1197,22 +1208,23 @@ pub fn run(args: Args) {
     // the time the runtime starts.
     #[cfg(target_os = "emscripten")]
     let (window_width, window_height) = web::canvas_buffer().map_or(bitmap, |(size, _)| size);
-    // A desktop window opens at the size it will play at: the first
-    // frame's bitmap at the scale cap (1.5x the standard field), clamped
-    // to the monitor.
+    // A desktop window opens at the size it will play at: the opening
+    // field's bitmap at the scale cap (1.5x), shrunk where the monitor has
+    // less room - never past half the bitmap, the smallest window that
+    // still reads.
     #[cfg(not(any(target_os = "ios", target_os = "android", target_os = "emscripten")))]
     let (window_width, window_height) = args.resolution.unwrap_or_else(|| {
         let zoom = args.zoom.unwrap_or(tuning().view_max_scale);
         let open_at = if zoom > 0.0 { zoom.min(1.5).max(1.0) } else { 1.5 };
         let monitor = sola_raylib::core::window::get_current_monitor();
         let (mw, mh) = (sola_raylib::core::window::get_monitor_width(monitor), sola_raylib::core::window::get_monitor_height(monitor));
-        let w = ((opening.0 as f32) * open_at).round() as i32;
-        let h = ((opening.1 as f32) * open_at).round() as i32;
-        if mw > 0 && mh > 0 && (w > mw - 80 || h > mh - 120) {
-            opening
+        let room = if mw > 0 && mh > 0 {
+            ((mw - 80) as f32 / opening.0 as f32).min((mh - 120) as f32 / opening.1 as f32)
         } else {
-            (w, h)
-        }
+            open_at
+        };
+        let scale = open_at.min(room).max(0.5);
+        (((opening.0 as f32) * scale).round() as i32, ((opening.1 as f32) * scale).round() as i32)
     });
 
     let mut builder = sola_raylib::init();
@@ -1244,8 +1256,10 @@ pub fn run(args: Args) {
         rl.get_render_height()
     );
     if !crate::EMBEDDED {
-        // Half the bitmap is the smallest window that still reads.
-        rl.set_window_min_size(bitmap.0 / 2, bitmap.1 / 2);
+        // Half the standard field's bitmap is the smallest window that
+        // still reads; a larger map is fitted or followed into it.
+        let standard = Layout::for_field(crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32).window_size();
+        rl.set_window_min_size(standard.0 / 2, standard.1 / 2);
         if args.fullscreen {
             rl.toggle_borderless_windowed();
         }
