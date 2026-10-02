@@ -328,15 +328,16 @@ tunables! {
         /// `--tank` on the command line outranks this knob; nothing else
         /// does, so dragging this is how a browser round picks a chassis.
         player_tank: i32 = (-1) in -1 ..= 11 @ Restart;
-        /// A drag shorter than this (bitmap px) on both axes from the
-        /// stick's origin is a resting thumb, not a direction.
-        touch_dead_zone_px: f32 = 14.0 in 4.0 ..= 40.0;
+        /// A drag shorter than this (UI points, `hud::UiFrame`) on both
+        /// axes from the stick's origin is a resting thumb, not a
+        /// direction.
+        touch_dead_zone_pt: f32 = 14.0 in 4.0 ..= 40.0;
         /// The stick's origin trails the thumb so the drag never exceeds
-        /// this many px: a change of direction costs the same short slide
-        /// however far the thumb has pushed, and the drawn base sits where
-        /// the rule measures from. 0 pins the origin where the thumb
+        /// this many UI points: a change of direction costs the same short
+        /// slide however far the thumb has pushed, and the drawn base sits
+        /// where the rule measures from. 0 pins the origin where the thumb
         /// landed, and a long push then needs a long slide back.
-        touch_follow_radius_px: f32 = 40.0 in 0.0 ..= 120.0;
+        touch_follow_radius_pt: f32 = 40.0 in 0.0 ..= 120.0;
         /// Degrees off the held axis a drag has to reach before the other
         /// axis takes over - the hysteresis that keeps a drag near a
         /// diagonal from flickering. 45 is no band at all; past 60 a thumb

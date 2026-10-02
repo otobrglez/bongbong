@@ -136,8 +136,7 @@ fn ui_frame(rl: &mut RaylibHandle, touch: bool) -> UiFrame {
 }
 
 /// A rectangle of the chrome's, in UI points, in the bitmap's pixels: what
-/// the touch scheme and the off-screen arrows, both laid out on the bitmap,
-/// keep out of.
+/// the off-screen arrows, laid out on the bitmap, keep out of.
 fn ui_rect_on_bitmap(ui: &UiFrame, view: &View, r: crate::math::Rectangle) -> crate::math::Rectangle {
     let a = view.to_bitmap(ui.to_window(crate::math::Vec2::new(r.x, r.y)));
     let b = view.to_bitmap(ui.to_window(crate::math::Vec2::new(r.x + r.width, r.y + r.height)));
@@ -1620,18 +1619,20 @@ pub fn run(args: Args) {
         // lands on either cluster is the HUD's, never a stick or a shot.
         let corners = CornerShape::of(&session.play_chrome(), session.shown().players.count()).map(|shape| hud::corners(&ui, &shape));
         let corner_hit = corners.as_ref().and_then(|c| c.hit(ui_pointer));
-        let keep_out: Vec<crate::math::Rectangle> =
-            corners.iter().flat_map(Corners::keep_out).map(|r| ui_rect_on_bitmap(&ui, &view, r)).collect();
+        let keep_out: Vec<crate::math::Rectangle> = corners.iter().flat_map(Corners::keep_out).collect();
         touch.set_keep_out(&keep_out);
-        // This frame's touch points for the touch scheme, ids included so
-        // a stick follows its own finger. `--touch-from-mouse` stands a
-        // held left button in for one.
-        let mut touch_points: Vec<TouchPoint> = (0..rl.get_touch_point_count())
-            .map(|i| TouchPoint { id: rl.get_touch_point_id(i), pos: view.to_bitmap(rl.get_touch_position(i).into()) })
-            .collect();
-        if touch_from_mouse && mouse_held && touch_points.is_empty() {
-            touch_points.push(TouchPoint { id: -1, pos: view.to_bitmap(rl.get_mouse_position().into()) });
+        // This frame's touch points, ids included so a stick follows its
+        // own finger: on the window in UI points for the touch scheme,
+        // which lives there like the HUD, and in the bitmap's pixels for
+        // the builder's gestures. `--touch-from-mouse` stands a held left
+        // button in for one.
+        let mut window_touches: Vec<(i32, crate::math::Vec2)> =
+            (0..rl.get_touch_point_count()).map(|i| (rl.get_touch_point_id(i), rl.get_touch_position(i).into())).collect();
+        if touch_from_mouse && mouse_held && window_touches.is_empty() {
+            window_touches.push((-1, rl.get_mouse_position().into()));
         }
+        let touch_points: Vec<TouchPoint> = window_touches.iter().map(|&(id, at)| TouchPoint { id, pos: view.to_bitmap(at) }).collect();
+        let ui_touch_points: Vec<TouchPoint> = window_touches.iter().map(|&(id, at)| TouchPoint { id, pos: ui.to_ui(at) }).collect();
         let steer_right = crate::TOUCH_STEER_RIGHT;
         let pressed = mouse_pressed || touch_pressed;
         let held = mouse_held || touching;
@@ -1655,7 +1656,7 @@ pub fn run(args: Args) {
                     // is up, and a press on it is nobody's shot - neither
                     // the round's it closes back onto nor the next level's.
                     if pressed {
-                        touch.claim(&touch_points);
+                        touch.claim(&ui_touch_points);
                     }
                     let input = SelectInput {
                         pointer: Some(ui_pointer),
@@ -1696,7 +1697,7 @@ pub fn run(args: Args) {
                     let rects = leave_dialog_rects(ui.area);
                     if pressed {
                         // The dialog's own press is nobody's shot.
-                        touch.claim(&touch_points);
+                        touch.claim(&ui_touch_points);
                         if rects.leave.contains(ui_pointer) {
                             session.answer_dialog(true);
                         } else if rects.stay.contains(ui_pointer) || !rects.panel.contains(ui_pointer) {
@@ -1712,7 +1713,7 @@ pub fn run(args: Args) {
                     // A level's end screen (docs/levels.md): PLAY AGAIN or
                     // the way on. The tap that pressed it must not also be
                     // the fire press that skips the next banner.
-                    touch.claim(&touch_points);
+                    touch.claim(&ui_touch_points);
                 } else if rl.is_key_pressed(KeyboardKey::KEY_ENTER) && session.enter_result() {
                     // Enter takes the way on after a win, PLAY AGAIN after
                     // a loss; R is the simulation's own restart.
@@ -1831,11 +1832,12 @@ pub fn run(args: Args) {
         }
 
         if session.mode() == Driver::Build {
-            // Nothing is steering while the builder is up, but the scheme
+            // Nothing is steering while the builder is up - every touch is
+            // its own, so the scheme's area is empty -, but the scheme
             // still sees the frame so a finger lifted here is not a stick
             // still held when play resumes - on a fresh clock, owing no
             // step and no press.
-            touch.update(&touch_points, &layout, steer_right, dt);
+            touch.update(&ui_touch_points, crate::Rect::new(0.0, 0.0, 0.0, 0.0), steer_right, dt);
             clock.reset();
             carried = Input::default();
             // The builder shows its canvas through its own camera.
@@ -1900,8 +1902,10 @@ pub fn run(args: Args) {
         // A touch screen drives player 1 through the same intent the
         // keyboard does; a held key still wins the direction, a tap or a
         // key both fire. Fed every frame, dialog or not, so a lifted
-        // finger is never a stick still held.
-        let touch_intent = touch.update(&touch_points, &layout, steer_right, dt);
+        // finger is never a stick still held. The scheme takes touches
+        // from the whole window, in UI points: an arena's margins are
+        // where a tablet's thumbs rest.
+        let touch_intent = touch.update(&ui_touch_points, ui.screen, steer_right, dt);
         player1.move_dir = player1.move_dir.or(touch_intent.move_dir);
         player1.fire = player1.fire || touch_intent.fire;
         let mut input = Input::two(player1, player2);

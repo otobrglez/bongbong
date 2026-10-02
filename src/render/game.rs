@@ -181,9 +181,10 @@ pub struct Effects<'a> {
     /// (see `fx.rs`), and read-only here - `render` never mutates it, the
     /// same contract it has with `Game`.
     pub fx: &'a crate::fx::Fx,
-    /// The touch scheme's feedback (`touch.rs`), drawn over the field in
-    /// bitmap space when a keyboard-less device is playing; `None` draws
-    /// nothing. The `bool` is whether the stick lives on the right half.
+    /// The touch scheme's feedback (`touch.rs`), drawn over everything in
+    /// UI points (`hud::UiFrame`) - nothing until a touch is seen; `None`
+    /// draws nothing at all. The `bool` is whether the stick lives on the
+    /// right half.
     pub touch: Option<(&'a crate::touch::TouchScheme, bool)>,
     /// What the screen cannot see (`indicators.rs`): the arrows at the
     /// field's edge and the marks in the world, composed by `app.rs` while
@@ -822,7 +823,7 @@ impl Game {
     /// left one: an online round's status, the build stamp, the dev label)
     /// at the frame's fade, and the dialogs, the lobby and the level select
     /// over them, since nothing behind a question can be pressed; and the
-    /// touch stick over everything, through `base` again.
+    /// touch stick over everything, in UI points too.
     #[allow(clippy::too_many_arguments)]
     fn draw_chrome<D: RaylibDraw>(
         &self,
@@ -972,9 +973,10 @@ impl Game {
         });
 
         // The touch scheme's stick, ripples and hint over everything,
-        // where the thumbs are, in the bitmap's own pixels.
+        // where the thumbs are, in UI points like the HUD - the same size
+        // on the glass whatever scale the world is drawn at.
         if let Some((touch, steer_right)) = touch {
-            d.draw_mode2D(base, |mut d, _| touch.draw(&mut d, layout, steer_right));
+            d.draw_mode2D(ui_camera, |mut d, _| touch.draw(&mut d, steer_right));
         }
     }
 }

@@ -807,6 +807,10 @@ mod text_tests {
             (keys::LOBBY_SUB_GUEST, UI_SMALL_TEXT, content, vec![]),
             (keys::LOBBY_MAP, HUD_TEXT_SIZE, 152, vec![]),
             (keys::LOBBY_MISSION, HUD_TEXT_SIZE, 152, vec![]),
+            // The touch hint, centred on each half of the smallest window
+            // the chrome is laid out in.
+            (keys::TOUCH_STEER, crate::touch::HINT_TEXT_PT, (crate::hud::UI_MIN_W / 2.0) as i32 - 16, vec![]),
+            (keys::TOUCH_FIRE, crate::touch::HINT_TEXT_PT, (crate::hud::UI_MIN_W / 2.0) as i32 - 16, vec![]),
             // A seat's state runs from its column to the kick button at
             // the row's right end.
             (keys::SEAT_AWAY, UI_SMALL_TEXT, seat_state_px, vec![]),
