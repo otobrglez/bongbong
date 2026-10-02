@@ -2156,6 +2156,14 @@ tunables! {
         /// The share of the edge shade's darkest step only the corners
         /// reach, 0-1: the middle of an edge stops short of it.
         ground_edge_shade_corner: f32 = 0.25 in 0.0 ..= 1.0 @ Restart;
+        /// The ground past an arena's field, in the window's margins
+        /// (`margin.rs`): the opacity the edge shade deepens to out there,
+        /// 0-1, toward the same dark - the shade the world off the
+        /// playfield stands in. Taken in whole steps of the edge shade's.
+        ground_margin_shade: f32 = 0.6 in 0.0 ..= 1.0 @ Restart;
+        /// How far past the field's edge, in world px, the edge shade
+        /// deepens to `ground_margin_shade`.
+        ground_margin_ramp_px: f32 = 48.0 in 0.0 ..= 600.0 @ Restart;
         /// How much of the open floor the soft sand patches cover, 0-1:
         /// the pack's sand tiles (hardpan under the desert retint) laid
         /// where a hashed value noise at the cell corners crosses this

@@ -782,8 +782,10 @@ and the motion switch are still to come; step 3's HUD in the corners
 (`hud::corners` inside the safe area at a UI scale in points, the play
 bar gone, ammo pips on the tank, a cluster fading while play is under
 it, banners, dialogs, the end screen, the lobby and the level select in
-window space) - arenas drawing their margins and input-aware hints are
-still to come; from step 4 the awareness model
+window space, the touch stick and its hint in points, and arenas drawing
+their margins as the world past the boundary - the round's ground carried
+on under a deepening shade and the round's sky, `margin.rs`) -
+input-aware hints are still to come; from step 4 the awareness model
 and its drawing (`indicators.rs`: edge arrows by priority, the lane
 warning, the hit arc, last-seen marks, gate flashes, thumb rests) and
 the minimap on tablets and desktops (`minimap.rs`: a texel per cell,

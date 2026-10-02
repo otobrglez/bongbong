@@ -34,19 +34,45 @@ impl Camera {
 /// an integer and sharp elsewhere. A window the bitmap's own size gets no
 /// margins and no frame.
 pub fn present(rl: &mut RaylibHandle, thread: &RaylibThread, composite: &RenderTexture2D, view: &View, backdrop: Color) {
-    rl.draw(thread, |mut d| present_into(&mut d, composite, view, backdrop));
+    rl.draw(thread, |mut d| present_into(&mut d, composite, view, backdrop, None));
 }
 
 /// `present` into the frame `d` is drawing, so what stands on the window -
 /// the HUD's corners, its dialogs - can follow it onto the same frame.
-pub fn present_into(d: &mut impl RaylibDraw, composite: &RenderTexture2D, view: &View, backdrop: Color) {
+/// With `margins`, the window round the bitmap shows the world past an
+/// arena's field (`render::margin`) rather than the bars, on the bitmap's
+/// own pixel grid so the two meet block for block. Either way the bitmap
+/// lands on the backdrop's colour, which is what shows through where a
+/// translucent draw left its alpha under one - so the field looks the same
+/// with margins or bars round it, and the margins, put on the same way,
+/// match it at the edge.
+pub fn present_into(d: &mut impl RaylibDraw, composite: &RenderTexture2D, view: &View, backdrop: Color, margins: Option<&Margins>) {
     // A render texture reads back bottom-up; a negative source height
     // flips it on the way out.
     let source = Rectangle::new(0.0, 0.0, view.bitmap.0, -view.bitmap.1);
     let dest = view.dest();
     d.clear_background(Color::BLACK);
-    letterbox(d, view, backdrop);
+    match margins {
+        Some(m) => {
+            d.draw_rectangle(0, 0, view.window.0 as i32, view.window.1 as i32, backdrop);
+            let (w, h) = (m.rect.width, m.rect.height);
+            let at = view.to_window(Vec2::new(m.rect.x, m.rect.y));
+            let to = Rectangle::new(at.x, at.y, w * view.scale, h * view.scale);
+            d.draw_texture_pro(m.target, Rectangle::new(0.0, 0.0, w, -h), to, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            d.draw_rectangle_rec(dest, backdrop);
+        }
+        None => letterbox(d, view, backdrop),
+    }
     d.draw_texture_pro(composite, source, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+}
+
+/// What an arena shows round its field (`render::margin`): the target
+/// holding the world past it, drawn through the same steps as the field's
+/// bitmap, and the rectangle of the bitmap it covers - its world rectangle
+/// moved to the field's place in the bitmap.
+pub struct Margins<'a> {
+    pub target: &'a RenderTexture2D,
+    pub rect: Rectangle,
 }
 
 /// The window round a bitmap that does not fill it: the margins in

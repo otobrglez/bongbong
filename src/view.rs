@@ -179,6 +179,13 @@ impl Camera {
         Camera { field, origin: Vec2::new(0.0, 0.0), offset: Vec2::new(0.0, 0.0), size: field, scale: 1.0, margin: 0.0 }
     }
 
+    /// Whether this is the whole field at its own size (`whole`): an
+    /// arena's view, the one whose window margins show the world past the
+    /// field (`margin.rs`).
+    pub fn is_whole(&self) -> bool {
+        *self == Camera::whole(self.field)
+    }
+
     /// A followed view (docs/large-maps-follow-camera.md §6): `size` world
     /// pixels from the world point `corner`, filling the followed bitmap's
     /// field area at `scale` bitmap pixels per world pixel (`FollowFrame`)

@@ -943,6 +943,7 @@ pub mod level_select;
 pub mod levels;
 pub mod lobby;
 pub mod map;
+pub mod margin;
 pub mod mushroom;
 pub mod mode;
 pub mod net;

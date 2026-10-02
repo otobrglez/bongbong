@@ -21,7 +21,10 @@
 //! The floor shade (`bake_shade`, drawn by `draw_shade`) is the one layer
 //! here that is not tiles: the walls' contact shade and a round's edge
 //! shade, stepped and dithered on the 2 px block grid into one image baked
-//! the first time the floor is drawn - see docs/GROUND_SPEC.md §4.
+//! the first time the floor is drawn - see docs/GROUND_SPEC.md §4. An
+//! arena's window margins (`margin.rs`) carry the round's floor on past
+//! its edge (`GroundGrid::beyond`) under the edge shade carried on with it
+//! and deepened off the playfield (`bake_margin_shade`).
 //!
 //! Purely decorative: no physics body, no gameplay effect. `build` runs
 //! once per round (from `simulation::Game::init`, after every obstacle for
@@ -488,6 +491,60 @@ impl GroundGrid {
         }
     }
 
+    /// This floor carried `cells` cells further on every side: the world
+    /// past an arena's field, which `margin.rs` lays in the window's
+    /// margins. A cell the two grids share draws the same tile - the paint
+    /// is this grid's and the hashes are keyed by world cell - so the
+    /// field's picture runs on across its edge: the sand drifting on, water
+    /// painted to the map's edge running out of it, a road ending at the
+    /// boundary. It bakes no floor shade of its own.
+    pub fn beyond(&self, cells: usize) -> GroundGrid {
+        let layout = self.layout.beyond(cells);
+        let (cols, rows) = (layout.cols, layout.rows);
+        let mut tiles = vec![[0i32; WATER_FRAME_COUNT]; cols * rows];
+        let mut current = vec![Current::Still; cols * rows];
+        for y in 0..rows as i32 {
+            for x in 0..cols as i32 {
+                let i = y as usize * cols + x as usize;
+                (tiles[i], current[i]) = resolve(&layout, self.seed, self.drifts, x, y);
+            }
+        }
+        GroundGrid {
+            cols,
+            rows,
+            tiles,
+            current,
+            width: self.width,
+            height: self.height,
+            walls: Vec::new(),
+            look: Look { theme: self.look.theme, edge_shade: false },
+            shade: OnceLock::new(),
+            stamp: NEXT_SHADE_STAMP.fetch_add(1, Ordering::Relaxed),
+            layout,
+            seed: self.seed,
+            drifts: self.drifts,
+        }
+    }
+
+    /// The world cell this grid's first cell is centred on: (0, 0) for a
+    /// map's own, `cells` up and left of it for one carried `beyond` it.
+    pub fn origin(&self) -> (i32, i32) {
+        self.layout.origin
+    }
+
+    /// Whether the floor is water at world cell `(col, row)`: past the
+    /// grid, the answer of its nearest cell, as water runs off the map.
+    pub fn water_at(&self, col: i32, row: i32) -> bool {
+        let (ox, oy) = self.layout.origin;
+        self.layout.is_water(col - ox, row - oy)
+    }
+
+    /// This build's name: a new round's floor has another, so what is made
+    /// from one (`margin::Margin`) can tell it is out of date.
+    pub fn stamp(&self) -> u64 {
+        self.stamp
+    }
+
     /// Whether `other` draws the same floor: the same tiles, currents and
     /// floor shade, whatever either's stamp.
     #[cfg(test)]
@@ -560,21 +617,27 @@ fn drift_noise(seed: u64, vx: i32, vy: i32, period: f32) -> f32 {
 ///
 /// **Water runs off the map**: a water question about a cell past the
 /// grid is answered by the nearest cell on it, and the grid's own cells
-/// past the map (the extra column and row the centred phase needs) copy
-/// the water of the map cell beside them, so a sea or river painted to the
-/// edge carries on out of the picture instead of ending on a shore along
-/// it.
+/// past the map (the extra column and row the centred phase needs, and
+/// every cell of a layout carried `beyond` it) copy the water of the map
+/// cell nearest them, so a sea or river painted to the edge carries on out
+/// of the picture instead of ending on a shore along it.
 #[derive(Default)]
 struct Layout {
     cols: usize,
     rows: usize,
-    /// The map's own cells: `cols - 1` by `rows - 1`.
+    /// The map's own cells, `map_cols` by `map_rows` from world cell (0,
+    /// 0): `cols - 1` by `rows - 1` on a map's own layout.
     map_cols: usize,
     map_rows: usize,
+    /// The world cell layout cell (0, 0) is centred on: (0, 0) on a map's
+    /// own layout, up and left of it on one carried `beyond` the map. What
+    /// a cell's cosmetic hashes are keyed by, so the two draw a cell they
+    /// share alike.
+    origin: (i32, i32),
     /// Per cell, what the map paints there: water, then road over it.
     painted: Vec<Material>,
     /// Per cell, what is drawn there: the paint, past the map the water of
-    /// the map cell beside it (`settled`).
+    /// the map cell nearest it (`settled`).
     material: Vec<Material>,
     /// Per cell: a water cell inside some 2x2 block of water.
     lake: Vec<bool>,
@@ -605,19 +668,45 @@ impl Layout {
                 }
             }
         }
-        let mut layout = Layout { cols, rows, map_cols, map_rows, painted, material: Vec::new(), lake: Vec::new(), wet: Vec::new() };
-        layout.material = (0..rows).flat_map(|y| (0..cols).map(move |x| (x, y))).map(|(x, y)| layout.settled(x, y)).collect();
-        layout.lake = (0..rows as i32).flat_map(|y| (0..cols as i32).map(move |x| (x, y))).map(|(x, y)| layout.lake_of(x, y)).collect();
-        layout.wet = layout.wet_vertices();
-        layout
+        let layout = Layout { cols, rows, map_cols, map_rows, origin: (0, 0), painted, material: Vec::new(), lake: Vec::new(), wet: Vec::new() };
+        layout.settle()
+    }
+
+    /// This layout carried `m` cells further on every side: the same paint
+    /// moved in by `m`, the cells round it grass but for the water of the
+    /// map cell nearest them, settled and smoothed the way `new` settles a
+    /// map's. A cell the two share comes out the same: past its own grid
+    /// this layout already answered water by the nearest cell, which is
+    /// what the new cells hold, and they run straight out from the map's
+    /// edge, so the smoothing finds no diagonal among them.
+    fn beyond(&self, m: usize) -> Layout {
+        let (cols, rows) = (self.cols + 2 * m, self.rows + 2 * m);
+        let mut painted = vec![Material::Grass; cols * rows];
+        for y in 0..self.rows {
+            painted[(y + m) * cols + m..][..self.cols].copy_from_slice(&self.painted[y * self.cols..][..self.cols]);
+        }
+        let origin = (self.origin.0 - m as i32, self.origin.1 - m as i32);
+        let layout = Layout { cols, rows, map_cols: self.map_cols, map_rows: self.map_rows, origin, painted, material: Vec::new(), lake: Vec::new(), wet: Vec::new() };
+        layout.settle()
+    }
+
+    /// Work out what the paint settles into: the materials, the lakes and
+    /// the wet vertices.
+    fn settle(mut self) -> Layout {
+        self.material = (0..self.rows).flat_map(|y| (0..self.cols).map(move |x| (x, y))).map(|(x, y)| self.settled(x, y)).collect();
+        self.lake = (0..self.rows as i32).flat_map(|y| (0..self.cols as i32).map(move |x| (x, y))).map(|(x, y)| self.lake_of(x, y)).collect();
+        self.wet = self.wet_vertices();
+        self
     }
 
     /// What is drawn at cell `(x, y)`: its paint, except that a cell past
-    /// the map carries the water of the map cell beside it (the corner one
-    /// the corner's).
+    /// the map carries the water of the map cell nearest it (the corner
+    /// one the corner's).
     fn settled(&self, x: usize, y: usize) -> Material {
-        if x >= self.map_cols || y >= self.map_rows {
-            let inside = y.min(self.map_rows - 1) * self.cols + x.min(self.map_cols - 1);
+        let (wx, wy) = (x as i32 + self.origin.0, y as i32 + self.origin.1);
+        let (mx, my) = (wx.clamp(0, self.map_cols as i32 - 1), wy.clamp(0, self.map_rows as i32 - 1));
+        if (mx, my) != (wx, wy) {
+            let inside = (my - self.origin.1) as usize * self.cols + (mx - self.origin.0) as usize;
             if self.painted[inside] == Material::Water {
                 return Material::Water;
             }
@@ -645,6 +734,7 @@ impl Layout {
     /// a cell's tile reads the materials and lakes within one cell of it
     /// and its four corners' wetness.
     fn repaint(&mut self, cells: &[((usize, usize), Material)]) -> BTreeSet<(i32, i32)> {
+        debug_assert_eq!(self.origin, (0, 0), "only a map's own layout is painted");
         let mut changed = BTreeSet::new();
         let mut water_moved = false;
         for &((x, y), what) in cells {
@@ -1084,8 +1174,10 @@ struct Drifts {
 }
 
 /// Pick the source tile - every animation frame of it - and the current
-/// for cell `(x, y)` of `layout`: `build`'s resolve, one cell.
+/// for cell `(x, y)` of `layout`: `build`'s resolve, one cell. The
+/// cosmetic hashes are keyed by the world cell (`Layout::origin`).
 fn resolve(layout: &Layout, seed: u64, drifts: Drifts, x: i32, y: i32) -> ([i32; WATER_FRAME_COUNT], Current) {
+    let (ox, oy) = layout.origin;
     // Drifts: sand at the grid vertices, resolved per cell through the
     // corner autotile. A vertex touching a road or water cell never
     // drifts: those tiles carry the plain fill's dithered edge baked in,
@@ -1099,7 +1191,7 @@ fn resolve(layout: &Layout, seed: u64, drifts: Drifts, x: i32, y: i32) -> ([i32;
         let beside_painted = [(vx - 1, vy - 1), (vx, vy - 1), (vx - 1, vy), (vx, vy)]
             .iter()
             .any(|&(cx, cy)| layout.at(cx, cy) != Material::Grass);
-        !beside_painted && drift_noise(seed, vx, vy, drifts.period) > 1.0 - drifts.cover
+        !beside_painted && drift_noise(seed, vx + ox, vy + oy, drifts.period) > 1.0 - drifts.cover
     };
     // A grass cell under a wet corner - where a diagonal was smoothed over
     // - takes its lake tile like a water cell: the water there is the
@@ -1110,7 +1202,7 @@ fn resolve(layout: &Layout, seed: u64, drifts: Drifts, x: i32, y: i32) -> ([i32;
         Material::Grass => {
             let corner = |vx: i32, vy: i32| drift_vertex(vx, vy) as usize;
             let mask = (corner(x, y) << 3) | (corner(x + 1, y) << 2) | (corner(x + 1, y + 1) << 1) | corner(x, y + 1);
-            (if mask == 0 { grass_variant(seed, x, y) } else { SAND_CORNER[mask] }, Current::Still, false)
+            (if mask == 0 { grass_variant(seed, x + ox, y + oy) } else { SAND_CORNER[mask] }, Current::Still, false)
         }
         Material::Road => (ROAD_EDGE[layout.road_mask(x, y)], Current::Still, false),
         Material::Water if layout.lake_at(x, y) => {
@@ -1306,16 +1398,7 @@ impl ShadeRecipe {
         }
 
         // --- the edge: outside a rounded rectangle inset from the frame ---
-        let edge_reach = t.ground_edge_shade_px;
-        let edge = (look.edge_shade && t.ground_edge_shade > 0.0 && edge_reach > 0.0).then(|| {
-            let (hx, hy) = ((width / 2.0 - edge_reach).max(0.0), (height / 2.0 - edge_reach).max(0.0));
-            let round = (edge_reach * t.ground_edge_shade_round.max(0.0)).min(hx).min(hy);
-            let corner_share = t.ground_edge_shade_corner.clamp(0.0, 1.0);
-            let mut edge = EdgeShade { width, height, hx, hy, round, reach: edge_reach, corner_at: 2.0, corner_share };
-            // How far out the field's corner is, in reaches: where the shade peaks.
-            edge.corner_at = (edge.outside(0.0, 0.0) / edge_reach).max(1.0 + 1e-3);
-            edge
-        });
+        let edge = if look.edge_shade { EdgeShade::of(width, height, t) } else { None };
 
         // --- one colour per pair of steps ---
         let clear = Color::new(0, 0, 0, 0);
@@ -1408,6 +1491,21 @@ struct EdgeShade {
 }
 
 impl EdgeShade {
+    /// The edge shade of a field `width` x `height` px under the table's
+    /// `ground_edge_shade*` rows; `None` where they draw none.
+    fn of(width: f32, height: f32, t: &Tuning) -> Option<EdgeShade> {
+        let edge_reach = t.ground_edge_shade_px;
+        (t.ground_edge_shade > 0.0 && edge_reach > 0.0).then(|| {
+            let (hx, hy) = ((width / 2.0 - edge_reach).max(0.0), (height / 2.0 - edge_reach).max(0.0));
+            let round = (edge_reach * t.ground_edge_shade_round.max(0.0)).min(hx).min(hy);
+            let corner_share = t.ground_edge_shade_corner.clamp(0.0, 1.0);
+            let mut edge = EdgeShade { width, height, hx, hy, round, reach: edge_reach, corner_at: 2.0, corner_share };
+            // How far out the field's corner is, in reaches: where the shade peaks.
+            edge.corner_at = (edge.outside(0.0, 0.0) / edge_reach).max(1.0 + 1e-3);
+            edge
+        })
+    }
+
     /// Signed distance outside the rounded rectangle (negative inside it).
     fn outside(&self, px: f32, py: f32) -> f32 {
         let qx = (px - self.width / 2.0).abs() - (self.hx - self.round);
@@ -1416,17 +1514,94 @@ impl EdgeShade {
         (mx * mx + my * my).sqrt() + qx.max(qy).min(0.0) - self.round
     }
 
-    /// The edge layer's step at block `(bx, by)`, measured at its centre.
-    fn level(&self, bx: i64, by: i64) -> u8 {
-        let centre = |b: i64| (b as f32 + 0.5) * SHADE_BLOCK as f32;
-        let s = self.outside(centre(bx), centre(by)) / self.reach;
-        let v = if s <= 0.0 {
+    /// The edge layer at field pixel `(px, py)` before it is stepped, 0 to
+    /// 1: clear inside the rounded frame, deepening past it and into the
+    /// corners - and on past the field's edge, where it is 1 once as far
+    /// out as the corners (`corner_at` reaches).
+    fn value(&self, px: f32, py: f32) -> f32 {
+        let s = self.outside(px, py) / self.reach;
+        if s <= 0.0 {
             0.0
         } else {
             smoothstep(s) * (1.0 - self.corner_share) + self.corner_share * ((s - 1.0) / (self.corner_at - 1.0)).clamp(0.0, 1.0)
-        };
-        shade_step(v, EDGE_SHADE_STEPS, dither(bx, by))
+        }
     }
+
+    /// The edge layer's step at block `(bx, by)`, measured at its centre.
+    fn level(&self, bx: i64, by: i64) -> u8 {
+        let centre = |b: i64| (b as f32 + 0.5) * SHADE_BLOCK as f32;
+        shade_step(self.value(centre(bx), centre(by)), EDGE_SHADE_STEPS, dither(bx, by))
+    }
+}
+
+/// The shade over the world past a round's field, the ground an arena
+/// shows in the window's margins (`margin.rs`, docs/large-maps-follow-camera.md
+/// §13): `image` holds the blocks near the field, `plateau` lies on every
+/// block past them.
+pub struct MarginShade {
+    /// The blocks `reach` px round the field, clear over the field itself.
+    /// Its texel (0, 0) is world block `origin`, not the field's corner.
+    pub image: BlockImage,
+    /// The world block (`SHADE_BLOCK` px a side) `image` starts at.
+    pub origin: (i64, i64),
+    /// The shade at its deepest, one colour: what every block past the
+    /// image carries.
+    pub plateau: Color,
+}
+
+/// Bake the shade over the world past a field `width` x `height` px (docs/
+/// GROUND_SPEC.md §4, docs/large-maps-follow-camera.md §13 item 7): the
+/// field's edge shade carried on out past its edge - the same rounded
+/// frame, the same steps and the same dither on the world's block grid, so
+/// the bands run on across the edge unbroken - and deepened over
+/// `ground_margin_ramp_px` to `ground_margin_shade`, the dark the ground
+/// off the playfield stands in, toward the theme's own dark
+/// (`edge_shade_color`) in whole steps of the edge shade's size. The
+/// deepest step is a whole one, so past the ramp every block is the same
+/// and the image need only reach that far (`MarginShade::plateau` beyond
+/// it). Takes the table rather than reading the global, like `bake_shade`,
+/// and names the image with a stamp of its own (`NEXT_SHADE_STAMP`).
+pub fn bake_margin_shade(width: f32, height: f32, theme: Theme, t: &Tuning) -> MarginShade {
+    let block = SHADE_BLOCK as f32;
+    let edge = EdgeShade::of(width, height, t);
+    let edge_max = t.ground_edge_shade.clamp(0.0, 1.0);
+    let deep = t.ground_margin_shade.clamp(0.0, 1.0);
+    // A step is the edge shade's own, or the margin's quarter on a field
+    // with no edge shade; the steps the edge shade climbs, then the steps
+    // to the deepest, whole.
+    let (unit, edge_steps) = if edge.is_some() { (edge_max, EDGE_SHADE_STEPS as f32) } else { (deep, 0.0) };
+    let deep_steps = if unit > 0.0 { (deep / unit * EDGE_SHADE_STEPS as f32).round() } else { 0.0 };
+    let top = deep_steps.max(edge_steps).min(u8::MAX as f32) as u8;
+    let alpha = |level: u8| (unit * level as f32 / EDGE_SHADE_STEPS as f32 * 255.0).round().clamp(0.0, 255.0) as u8;
+    let dark = edge_shade_color(theme);
+    let texel = |level: u8| if level == 0 { Color::new(0, 0, 0, 0) } else { Color::new(dark.r, dark.g, dark.b, alpha(level)) };
+    // How far past the field the shade still changes: the ramp, or the
+    // edge shade's own climb into its corner value, and a block more.
+    let ramp = t.ground_margin_ramp_px.max(0.0);
+    let climb = edge.map_or(0.0, |e| (e.corner_at - 1.0) * e.reach);
+    let reach = ((ramp.max(climb) + block) / block).ceil() as i64;
+    let (bw, bh) = ((width / block).ceil() as i64, (height / block).ceil() as i64);
+    let (x0, y0, x1, y1) = (-reach, -reach, bw + reach, bh + reach);
+    let mut texels = Vec::with_capacity(((x1 - x0) * (y1 - y0)) as usize);
+    for by in y0..y1 {
+        for bx in x0..x1 {
+            let (px, py) = ((bx as f32 + 0.5) * block, (by as f32 + 0.5) * block);
+            let (dx, dy) = ((-px).max(px - width).max(0.0), (-py).max(py - height).max(0.0));
+            if dx <= 0.0 && dy <= 0.0 {
+                texels.push(texel(0));
+                continue;
+            }
+            let out = (dx * dx + dy * dy).sqrt();
+            let deepen = if ramp > 0.0 { smoothstep(out / ramp) } else { 1.0 };
+            let carried = edge.map_or(0.0, |e| e.value(px, py) * edge_steps);
+            let steps = carried + (deep_steps - carried).max(0.0) * deepen;
+            let level = ((steps + dither(bx, by)).floor().max(0.0) as u8).min(top);
+            texels.push(texel(level));
+        }
+    }
+    let stamp = NEXT_SHADE_STAMP.fetch_add(1, Ordering::Relaxed);
+    let image = BlockImage { width: (x1 - x0) as usize, height: (y1 - y0) as usize, block: SHADE_BLOCK, texels, stamp, patches: Vec::new() };
+    MarginShade { image, origin: (x0, y0), plateau: texel(top) }
 }
 
 /// Lay the floor shade over the ground: drawn straight after it (and the
@@ -1461,6 +1636,7 @@ pub fn draw(c: &mut impl Canvas, grid: &GroundGrid, theme: Theme, time: f32) {
     let origin = Vec2::new(size / 2.0, size / 2.0);
     let t = tuning();
     let frame = ((time / t.water_frame_seconds.max(0.01)).floor() as i64).rem_euclid(WATER_FRAME_COUNT as i64) as usize;
+    let (ox, oy) = grid.layout.origin;
     let (cols, rows) = cell_span(grid, c.cull());
     for y in rows {
         for x in cols.clone() {
@@ -1468,7 +1644,7 @@ pub fn draw(c: &mut impl Canvas, grid: &GroundGrid, theme: Theme, time: f32) {
                 continue;
             };
             let src = source_rec(grid.tiles[i][frame]);
-            let dest = Rectangle::new(x as f32 * GROUND_WORLD_TILE, y as f32 * GROUND_WORLD_TILE, size, size);
+            let dest = Rectangle::new((x as i32 + ox) as f32 * GROUND_WORLD_TILE, (y as i32 + oy) as f32 * GROUND_WORLD_TILE, size, size);
             c.blit(Sheet::Ground(theme), src, dest, origin, 0.0, Color::WHITE);
         }
     }
@@ -1477,19 +1653,21 @@ pub fn draw(c: &mut impl Canvas, grid: &GroundGrid, theme: Theme, time: f32) {
 
 /// The columns and rows of `grid`'s cells a culling rectangle
 /// (`Canvas::cull`) can see, every cell for none. A cell is centred on
-/// `(x, y) * GROUND_WORLD_TILE` and spans half a tile either side; the
-/// span rounds outward, so it may keep a cell it strictly need not.
+/// its world cell times `GROUND_WORLD_TILE` and spans half a tile either
+/// side; the span rounds outward, so it may keep a cell it strictly need
+/// not.
 fn cell_span(grid: &GroundGrid, cull: Option<Rectangle>) -> (std::ops::Range<usize>, std::ops::Range<usize>) {
     let Some(r) = cull else {
         return (0..grid.cols, 0..grid.rows);
     };
     let tile = GROUND_WORLD_TILE;
-    let span = |from: f32, len: f32, n: usize| {
-        let first = ((from - tile) / tile).floor().max(0.0) as usize;
-        let past = ((from + len + tile) / tile).ceil().max(0.0) as usize;
+    let (ox, oy) = grid.layout.origin;
+    let span = |from: f32, len: f32, origin: i32, n: usize| {
+        let first = ((from - tile) / tile - origin as f32).floor().max(0.0) as usize;
+        let past = ((from + len + tile) / tile - origin as f32).ceil().max(0.0) as usize;
         first.min(n)..past.min(n)
     };
-    (span(r.x, r.width, grid.cols), span(r.y, r.height, grid.rows))
+    (span(r.x, r.width, ox, grid.cols), span(r.y, r.height, oy, grid.rows))
 }
 
 /// A deterministic per-lane hash: the marks are cosmetic, so they are
@@ -1524,6 +1702,7 @@ fn draw_current(c: &mut impl Canvas, grid: &GroundGrid, time: f32, speed: f32, l
     let period = tile * WATER_FLOW_PERIOD_CELLS as f32;
     let (band_lo, band_hi) = WATER_CHANNEL_BAND;
     let lane_slots = ((band_hi - band_lo) / 2.0) as u64 - 1;
+    let (ox, oy) = grid.layout.origin;
     let (cols, rows) = cell_span(grid, c.cull());
     for y in rows.map(|y| y as i32) {
         for x in cols.clone().map(|x| x as i32) {
@@ -1533,6 +1712,8 @@ fn draw_current(c: &mut impl Canvas, grid: &GroundGrid, time: f32, speed: f32, l
             if grid.current[i] == Current::Still {
                 continue;
             }
+            // The world cell: a lane is keyed by its world column.
+            let (x, y) = (x + ox, y + oy);
             let left = x as f32 * tile - tile / 2.0;
             let top = y as f32 * tile - tile / 2.0;
             for lane in 0..lanes {
@@ -1865,6 +2046,113 @@ mod tests {
         let diagonal = mean_alpha(&img, 60.0, 60.0, 2);
         let band = mean_alpha(&img, 544.0, 60.0, 2);
         assert!(diagonal > band, "the corner's shade reaches further in than an edge's");
+    }
+
+    /// The world past a field (`bake_margin_shade`): clear over the field,
+    /// the field's own edge steps carried on just past its edge, deepening
+    /// outward to the plateau in the theme's dark and nothing else.
+    #[test]
+    fn the_margin_shade_carries_the_edge_shade_on_and_deepens_to_its_plateau() {
+        let t = Tuning::DEFAULT;
+        let (w, h) = (1088.0, 544.0);
+        let m = bake_margin_shade(w, h, Theme::Grass, &t);
+        let field = shade(w, h, &[], true, &t);
+        let img = &m.image;
+        let at = |bx: i64, by: i64| img.texels[((by - m.origin.1) * img.width as i64 + (bx - m.origin.0)) as usize];
+        for (bx, by) in [(0, 0), (271, 135), (543, 271), (0, 271)] {
+            assert_eq!(at(bx, by).a, 0, "clear over the field at ({bx}, {by})");
+        }
+        let dark = edge_shade_color(Theme::Grass);
+        assert!(img.texels.iter().all(|c| c.a == 0 || (c.r, c.g, c.b) == (dark.r, dark.g, dark.b)), "the theme's dark alone");
+        // Each edge's last block inside and first block out are a step
+        // apart at most: the bands run on across the edge.
+        let step = (t.ground_edge_shade / EDGE_SHADE_STEPS as f32 * 255.0).round() as i32;
+        let field_at = |bx: i64, by: i64| field.texels[by as usize * field.width + bx as usize].a as i32;
+        for (inside, outside) in [((200, 0), (200, -1)), ((200, 271), (200, 272)), ((0, 100), (-1, 100)), ((543, 100), (544, 100))] {
+            for k in 0..8 {
+                let (i, o) = if inside.0 == outside.0 { ((inside.0 + k, inside.1), (outside.0 + k, outside.1)) } else { ((inside.0, inside.1 + k), (outside.0, outside.1 + k)) };
+                let (a_in, a_out) = (field_at(i.0, i.1), at(o.0, o.1).a as i32);
+                assert!((a_out - a_in).abs() <= step + 1, "{i:?} {a_in} -> {o:?} {a_out}");
+            }
+        }
+        // The plateau: `ground_margin_shade` in whole steps, on the image's
+        // outermost blocks and past them.
+        assert_eq!(m.plateau.a, (t.ground_margin_shade * 255.0).round() as u8);
+        assert_eq!((m.plateau.r, m.plateau.g, m.plateau.b), (dark.r, dark.g, dark.b));
+        let (x0, y0) = m.origin;
+        let (x1, y1) = (x0 + img.width as i64 - 1, y0 + img.height as i64 - 1);
+        for (bx, by) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1), (272, y0), (x0, 136), (x1, 136), (272, y1)] {
+            assert_eq!(at(bx, by), m.plateau, "the image's rim at ({bx}, {by})");
+        }
+        // Deeper going out: from each edge's middle, the mean over a
+        // dither tile of blocks never lightens.
+        let tile_mean = |cx: i64, cy: i64| (0..4).flat_map(|j| (0..4).map(move |i| (i, j))).map(|(i, j)| at(cx + i, cy + j).a as f32).sum::<f32>() / 16.0;
+        for (start, dir) in [((270, -4), (0, -4)), ((270, 272), (0, 4)), ((-4, 134), (-4, 0)), ((544, 134), (4, 0))] {
+            let mut last = 0.0;
+            let mut p = start;
+            while p.0 >= x0 && p.1 >= y0 && p.0 + 3 <= x1 && p.1 + 3 <= y1 {
+                let mean = tile_mean(p.0, p.1);
+                assert!(mean >= last, "{start:?} lightens at {p:?}: {mean} after {last}");
+                last = mean;
+                p = (p.0 + dir.0, p.1 + dir.1);
+            }
+            assert_eq!(last, m.plateau.a as f32, "{start:?} ends on the plateau");
+        }
+        // A field without an edge shade deepens from nothing, in quarters
+        // of the plateau.
+        let bare = Tuning { ground_edge_shade: 0.0, ..Tuning::DEFAULT };
+        let m = bake_margin_shade(w, h, Theme::Desert, &bare);
+        assert_eq!(m.plateau.a, (t.ground_margin_shade * 255.0).round() as u8);
+        assert_eq!(m.image.texels[0], m.plateau);
+    }
+
+    /// A floor carried past its map draws every cell the two share with
+    /// the same tile and current - the paint is the map's and the hashes
+    /// are the world cell's - drifts and water included.
+    #[test]
+    fn a_floor_carried_beyond_its_map_draws_the_cells_they_share_alike() {
+        let look = Look { theme: Theme::Desert, edge_shade: true };
+        for seed in 0..120 {
+            let (water, road) = random_field(seed);
+            let grid = build(FIELD_W, FIELD_H, seed, &road, &water, &[], look);
+            for m in [1i32, 4] {
+                let beyond = grid.beyond(m as usize);
+                assert_eq!(beyond.origin(), (-m, -m));
+                assert_eq!((beyond.cols, beyond.rows), (grid.cols + 2 * m as usize, grid.rows + 2 * m as usize));
+                for y in 0..grid.rows as i32 {
+                    for x in 0..grid.cols as i32 {
+                        let (i, j) = (grid.idx(x, y).expect("in grid"), beyond.idx(x + m, y + m).expect("in grid"));
+                        assert_eq!(beyond.tiles[j], grid.tiles[i], "seed {seed} by {m}: cell {x},{y}");
+                        assert_eq!(beyond.current[j], grid.current[i], "seed {seed} by {m}: cell {x},{y}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Water painted to the map's edge runs on out of it: a brook down
+    /// from the north edge carries on north as a stream, a lake against
+    /// the west edge widens on west as open water, and the rest past the
+    /// map is dry ground.
+    #[test]
+    fn water_painted_to_the_edge_runs_on_past_it() {
+        let brook = (0..4).map(|y| (5, y));
+        let lake = (0..3).flat_map(|x| (5..9).map(move |y| (x, y)));
+        let cells: Vec<(i32, i32)> = brook.chain(lake).collect();
+        let grid = with_water(&cells).beyond(3);
+        let tile_at = |c: i32, r: i32| grid.tiles[grid.idx(c + 3, r + 3).expect("in grid")][0];
+        let current_at = |c: i32, r: i32| grid.current[grid.idx(c + 3, r + 3).expect("in grid")];
+        for r in -3..0 {
+            assert_eq!(tile_at(5, r), WATER_CHANNEL[0b1010], "the brook north of the map at row {r}");
+            assert_eq!(current_at(5, r), Current::Channel);
+        }
+        for c in -3..0 {
+            for r in [6, 7] {
+                assert_eq!(tile_at(c, r), WATER_SHORE[0b1111], "the lake west of the map at {c},{r}");
+            }
+        }
+        assert!(grid.water_at(-3, 6) && grid.water_at(5, -3));
+        assert!(!grid.water_at(-2, 1) && !grid.water_at(12, -2) && !grid.water_at(4, -2));
     }
 
     #[test]

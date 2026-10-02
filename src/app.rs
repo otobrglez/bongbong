@@ -1267,6 +1267,9 @@ pub fn run(args: Args) {
     // them draws every sky without them (`weather::plain`), so the night
     // stays dark there too; the round plays the same either way.
     let mut weather_fx = crate::render::weather::WeatherFx::load(&mut rl, &thread);
+    // The world an arena shows past its field in the window's margins
+    // (`margin.rs`): made for each round's floor and kept.
+    let mut margin_fx = crate::render::margin::MarginFx::default();
     // The short-lived particle layer lives here rather than on `Game`:
     // it is presentation only, so nothing in the simulation can see it and
     // it is free to use `rand::rng()` (see fx.rs). The web build starts at
@@ -2174,6 +2177,7 @@ pub fn run(args: Args) {
                 touch: (session.mode() != Driver::Lobby).then_some((&touch, steer_right)),
                 indicators: indicators.as_ref(),
                 minimap,
+                margins: Some(&mut margin_fx),
             },
             &Textures {
                 tanks: &tanks_texture,

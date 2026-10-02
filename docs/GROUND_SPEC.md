@@ -191,6 +191,26 @@ bake costs a few tenths of a millisecond on a native build, where measuring
 every block from every wall costs up to 4 ms on the busiest shipped map. A
 round's bake is 1.4-2.6 ms, most of it the edge shade, once per round.
 
+**Past the field: an arena's margins** (`margin.rs`,
+docs/large-maps-follow-camera.md §13 item 7). Where the window's shape is
+not an arena's, the rest of the window shows the world past the field's
+boundary instead of flat bars. Its tiles are the round's own floor carried
+on (`GroundGrid::beyond`): the same paint in a layout grown by a few cells
+on every side, whose cosmetic hashes are keyed by world cell, so every cell
+the two grids share draws the same tile - the grass and the drifts run on,
+water painted to the edge runs straight out of it (a cell past the map
+holds the water of the map cell nearest it, as the field grid's own extra
+column and row always did), and a road ends at the boundary on its own
+cap. Its shade (`bake_margin_shade`) is the edge shade carried on past the
+edge - the same rounded rectangle, the same steps, the same dither on the
+world's block grid, so the bands do not break at the edge - deepened over
+`ground_margin_ramp_px` to `ground_margin_shade`, in whole steps of the edge
+shade's size and toward the same theme dark, so past the ramp every block
+is one plateau colour and the baked image only reaches that far. The
+margins are drawn into their own target under the round's sky and put on
+the window through the same alpha steps as the field's bitmap, so the two
+meet colour for colour.
+
 Everything in the bake is IEEE arithmetic and square roots, so a CPU
 thumbnail of it comes out the same on every platform (`thumbnail::PINNED`).
 

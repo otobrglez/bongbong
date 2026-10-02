@@ -194,6 +194,10 @@ pub struct Effects<'a> {
     /// where the corners hold its slot (`PlayChrome::minimap`); `None`
     /// draws none.
     pub minimap: Option<crate::render::minimap::MinimapLayer<'a>>,
+    /// The world an arena shows past its field in the window's margins
+    /// (`render::margin`, `margin.rs`); `None` draws the margins as flat
+    /// bars in the backdrop's colour.
+    pub margins: Option<&'a mut crate::render::margin::MarginFx>,
 }
 
 impl Game {
@@ -270,9 +274,11 @@ impl Game {
     /// pixel), then that into `composite` - the bitmap, the field alone
     /// (`layout.field`) - and the bitmap onto the window through `view`
     /// (`view::present_into`), scaled and centred so the whole field is on
-    /// screen whatever the window is. The world is drawn in world pixels
-    /// through raylib cameras built from `camera` (`render::view`), so the
-    /// simulation's positions are used as they are.
+    /// screen whatever the window is - the window round it showing the
+    /// world past the field (`Effects::margins`, `render::margin`) where the
+    /// shapes differ. The world is drawn in world pixels through raylib
+    /// cameras built from `camera` (`render::view`), so the simulation's
+    /// positions are used as they are.
     ///
     /// A followed field map (`Camera::follows`) is presented shifted, so
     /// its view can move by less than a block: `composite` holds the scene
@@ -373,7 +379,7 @@ impl Game {
             Some(fx) => fx.begin(rl, thread, self, effects.fx, textures, camera),
             None => None,
         };
-        match weather {
+        match weather.as_ref() {
             None => {
                 rl.draw_texture_mode(thread, scene_target, |mut d| {
                     d.clear_background(Color::WHITE);
@@ -589,11 +595,31 @@ impl Game {
             d.clear_background(Color::BLACK);
             self.draw_world_layer(&mut d, &world, effects);
         });
+        // An arena's window margins show the world past its field
+        // (`margin.rs`) where the window's shape is not the field's.
+        let margin_frame = match effects.margins {
+            Some(_) if camera.is_whole() => crate::margin::MarginFrame::of(view, layout),
+            _ => None,
+        };
+        let margins = match (margin_frame, effects.margins.as_deref_mut()) {
+            (Some(frame), Some(fx)) => {
+                let sky = match (effects.weather.as_deref_mut(), weather.as_ref()) {
+                    (Some(fx), Some(frame)) => Some((fx, frame)),
+                    _ => None,
+                };
+                let at = layout.field_origin();
+                fx.draw(rl, thread, self, &frame, textures, backdrop, sky).map(|target| crate::render::view::Margins {
+                    target,
+                    rect: Rectangle::new(frame.rect.x + at.x, frame.rect.y + at.y, frame.rect.width, frame.rect.height),
+                })
+            }
+            _ => None,
+        };
         let mut d = rl.begin_drawing(thread);
         if camera.follows() {
             crate::render::view::present_world(&mut d, composite, camera, view, layout, backdrop);
         } else {
-            crate::render::view::present_into(&mut d, composite, view, backdrop);
+            crate::render::view::present_into(&mut d, composite, view, backdrop, margins.as_ref());
         }
         let base = Camera2D { offset: view.offset.into(), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: view.scale };
         self.draw_chrome(&mut d, &text, &hud, chrome, &frame, layout, camera, indicators, minimap.as_ref(), textures, touch, fx_live, base);

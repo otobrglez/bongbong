@@ -83,6 +83,7 @@ struct GroundLocs {
     view_origin: i32,
     view_size: i32,
     cells: i32,
+    cell_origin: i32,
     time: i32,
     rain: i32,
     splash_rate: i32,
@@ -210,16 +211,126 @@ impl WeatherFrame {
     /// The snow lying on the ground over the view, as plain blocks
     /// (`weather::plain::snow_cover`); none under a sky without snow.
     pub fn plain_snow_cover(&self, out: &mut Vec<Block>) {
-        plain::snow_cover(&self.look, self.view(), &self.tuning, out);
+        self.plain_snow_cover_over(self.view(), out);
     }
 
     /// The air over the view, as plain blocks (`weather::plain::air`).
     pub fn plain_air(&self, out: &mut Vec<Block>) {
+        self.plain_air_over(self.view(), out);
+    }
+
+    /// `plain_snow_cover` over the world rectangle `view` rather than the
+    /// camera's: a target of another view (`render::margin`).
+    pub fn plain_snow_cover_over(&self, view: Rectangle, out: &mut Vec<Block>) {
+        plain::snow_cover(&self.look, view, &self.tuning, out);
+    }
+
+    /// `plain_air` over the world rectangle `view`.
+    pub fn plain_air_over(&self, view: Rectangle, out: &mut Vec<Block>) {
         let seats: Vec<Vec2> = self.seats[..self.seat_count].iter().map(|v| Vec2::new(v.x, v.y)).collect();
         let gust = self.gust.map(|(since, dir)| (since, Vec2::new(dir.x, dir.y)));
         let air = Air { look: &self.look, time: self.time, ambient: self.ambient, seats: &seats, gust };
-        plain::air(&air, self.view(), &self.tuning, out);
+        plain::air(&air, view, &self.tuning, out);
     }
+
+    /// The light map's texel where no lamp reaches - the ambient, lightning
+    /// lifting it, as the map stores it: what a target past the round's
+    /// lamps is lit by (`render::margin`).
+    pub fn ambient_texel(&self) -> Color {
+        stored(self.ambient, 255)
+    }
+}
+
+/// `multiply_light` for a target `size` texels that no lamp reaches - the
+/// world an arena shows past its field (`render::margin`): the field times
+/// the ambient alone.
+pub fn multiply_ambient<D: RaylibDraw>(d: &mut D, frame: &WeatherFrame, size: (i32, i32)) {
+    use sola_raylib::ffi::{RL_DST_COLOR, RL_FUNC_ADD, RL_SRC_COLOR};
+    d.set_blend_factors(RL_DST_COLOR as i32, RL_SRC_COLOR as i32, RL_FUNC_ADD as i32);
+    d.draw_blend_mode(BlendMode::BLEND_CUSTOM, |mut bd| {
+        bd.draw_rectangle(0, 0, size.0, size.1, frame.ambient_texel());
+    });
+}
+
+/// The cell mask (`mask_bytes`) of the world `grid` covers - an arena's
+/// floor carried past its field (`ground::GroundGrid::beyond`) - from its
+/// first cell, `grid.origin()`. A cell of the field's own ground grid reads
+/// as the field's mask does, so the ground pass marks the two alike where
+/// they meet; past it a cell is dry ground but where the water runs out of
+/// the map, which keeps the depth of the map cell it runs from, and no road
+/// leaves the field.
+pub fn margin_mask_bytes(game: &Game, grid: &crate::ground::GroundGrid) -> (i32, i32, Vec<u8>) {
+    let (field_cols, field_rows, field) = mask_bytes(game);
+    let (w, h) = game.map.field_size();
+    let (map_cols, map_rows) = ((w / OBSTACLE_GRID_SIZE).ceil() as i32, (h / OBSTACLE_GRID_SIZE).ceil() as i32);
+    let (ox, oy) = grid.origin();
+    let (cols, rows) = (grid.cols as i32, grid.rows as i32);
+    let mut bytes = vec![0u8; (cols * rows * 4).max(0) as usize];
+    for r in 0..rows {
+        for c in 0..cols {
+            let (wc, wr) = (c + ox, r + oy);
+            let i = ((r * cols + c) * 4) as usize;
+            if (0..field_cols).contains(&wc) && (0..field_rows).contains(&wr) {
+                let j = ((wr * field_cols + wc) * 4) as usize;
+                bytes[i..i + 4].copy_from_slice(&field[j..j + 4]);
+                continue;
+            }
+            if grid.water_at(wc, wr) {
+                let at = cell_to_world(wc.clamp(0, map_cols - 1), wr.clamp(0, map_rows - 1));
+                bytes[i] = match game.water.depth_at(at) {
+                    Depth::Dry => 0,
+                    Depth::Shallow => 128,
+                    Depth::Deep | Depth::Ice => 255,
+                };
+            }
+            bytes[i + 3] = 255;
+        }
+    }
+    (cols, rows, bytes)
+}
+
+/// A cell mask on the GPU, uploaded again only when its bytes change.
+pub struct MaskTexture {
+    mask: Option<Mask>,
+}
+
+impl MaskTexture {
+    pub fn new() -> Self {
+        MaskTexture { mask: None }
+    }
+
+    /// Hold `bytes`, a mask `cols` x `rows` cells, and hand back the
+    /// texture.
+    pub fn sync(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, cols: i32, rows: i32, bytes: Vec<u8>) -> Result<&Texture2D, String> {
+        upload_mask(&mut self.mask, rl, thread, cols, rows, bytes)?;
+        Ok(&self.mask.as_ref().expect("uploaded").texture)
+    }
+}
+
+impl Default for MaskTexture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Upload `bytes` into `slot`'s texture, made again only when the mask's
+/// size changed and updated only when its bytes did.
+fn upload_mask(slot: &mut Option<Mask>, rl: &mut RaylibHandle, thread: &RaylibThread, cols: i32, rows: i32, bytes: Vec<u8>) -> Result<(), String> {
+    match slot {
+        Some(mask) if mask.cols == cols && mask.rows == rows => {
+            if mask.bytes != bytes {
+                mask.texture.update_texture(&bytes).map_err(|e| format!("cell mask: {e}"))?;
+                mask.bytes = bytes;
+            }
+        }
+        _ => {
+            let image = Image::gen_image_color(cols, rows, Color::BLACK);
+            let mut texture = rl.load_texture_from_image(thread, &image).map_err(|e| format!("cell mask: {e}"))?;
+            texture.update_texture(&bytes).map_err(|e| format!("cell mask: {e}"))?;
+            *slot = Some(Mask { cols, rows, bytes, texture });
+        }
+    }
+    Ok(())
 }
 
 fn compile(rl: &mut RaylibHandle, thread: &RaylibThread, name: &str, source: &str) -> Result<Shader, String> {
@@ -234,9 +345,33 @@ fn stored(rgb: Rgb, alpha: u8) -> Color {
 
 /// Where a pass's target lies in the world: the world point at its
 /// top-left corner and its size, a texel per world pixel.
-fn set_view(s: &mut Shader, origin_loc: i32, size_loc: i32, frame: &WeatherFrame) {
-    s.set_shader_value(origin_loc, Vector2::new(frame.camera.origin.x, frame.camera.origin.y));
-    s.set_shader_value(size_loc, Vector2::new(frame.size.0 as f32, frame.size.1 as f32));
+fn set_view(s: &mut Shader, origin_loc: i32, size_loc: i32, at: &PassView) {
+    s.set_shader_value(origin_loc, Vector2::new(at.origin.x, at.origin.y));
+    s.set_shader_value(size_loc, Vector2::new(at.size.0 as f32, at.size.1 as f32));
+}
+
+/// Where a pass draws, and the light it reads: its target's world
+/// rectangle - the world point at the target's top-left corner and the
+/// target's size, a texel per world pixel - and the light map over it.
+/// The scene target's for the field (`WeatherFrame::pass_view`), the
+/// margin's for the world an arena shows past its field
+/// (`render::margin`), where no lamp reaches and the map is the ambient
+/// alone.
+#[derive(Clone, Copy)]
+pub struct PassView {
+    pub origin: Vec2,
+    pub size: (i32, i32),
+    pub light: sola_raylib::ffi::Texture2D,
+}
+
+/// What the ground pass reads of the map besides the bare ground: the cell
+/// mask (`mask_bytes`), its size in cells and the world cell its first
+/// texel is - (0, 0) for the field's own.
+#[derive(Clone, Copy)]
+pub struct CellMask {
+    pub texture: sola_raylib::ffi::Texture2D,
+    pub cells: (i32, i32),
+    pub origin: (i32, i32),
 }
 
 /// A render texture read the right way up: the whole of it, flipped (raylib
@@ -295,6 +430,7 @@ impl PassShaders {
             view_origin: ground.get_shader_location("viewOrigin"),
             view_size: ground.get_shader_location("viewSize"),
             cells: ground.get_shader_location("cells"),
+            cell_origin: ground.get_shader_location("cellOrigin"),
             time: ground.get_shader_location("time"),
             rain: ground.get_shader_location("rain"),
             splash_rate: ground.get_shader_location("splashRate"),
@@ -445,20 +581,7 @@ impl WeatherFx {
     /// mask's size in cells.
     fn ensure_mask(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, game: &Game) -> Result<(i32, i32), String> {
         let (cols, rows, bytes) = mask_bytes(game);
-        match &mut self.mask {
-            Some(mask) if mask.cols == cols && mask.rows == rows => {
-                if mask.bytes != bytes {
-                    mask.texture.update_texture(&bytes).map_err(|e| format!("cell mask: {e}"))?;
-                    mask.bytes = bytes;
-                }
-            }
-            _ => {
-                let image = Image::gen_image_color(cols, rows, Color::BLACK);
-                let mut texture = rl.load_texture_from_image(thread, &image).map_err(|e| format!("cell mask: {e}"))?;
-                texture.update_texture(&bytes).map_err(|e| format!("cell mask: {e}"))?;
-                self.mask = Some(Mask { cols, rows, bytes, texture });
-            }
-        }
+        upload_mask(&mut self.mask, rl, thread, cols, rows, bytes)?;
         Ok((cols, rows))
     }
 }
@@ -602,6 +725,12 @@ pub fn draw_blocks<D: RaylibDraw>(d: &mut D, blocks: &[Block]) {
 /// the sky pass's, for a frame drawn without the shaders. Nothing between
 /// strikes.
 pub fn draw_flash<D: RaylibDraw>(d: &mut D, frame: &WeatherFrame) {
+    draw_flash_over(d, frame, frame.size);
+}
+
+/// `draw_flash` over a target `size` texels of another view
+/// (`render::margin`).
+pub fn draw_flash_over<D: RaylibDraw>(d: &mut D, frame: &WeatherFrame, size: (i32, i32)) {
     let k = frame.flash * 0.85 * 0.12;
     if k <= 0.0 {
         return;
@@ -609,7 +738,7 @@ pub fn draw_flash<D: RaylibDraw>(d: &mut D, frame: &WeatherFrame) {
     let c = |v: f32| (v * k * 255.0).round().clamp(0.0, 255.0) as u8;
     let white = Color::new(c(0.75), c(0.82), c(1.0), 255);
     d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
-        bd.draw_rectangle(0, 0, frame.size.0, frame.size.1, white);
+        bd.draw_rectangle(0, 0, size.0, size.1, white);
     });
 }
 
@@ -623,6 +752,12 @@ pub struct Passes<'a> {
 }
 
 impl Passes<'_> {
+    /// Where the scene target's passes draw: the camera's view, under the
+    /// round's light map.
+    fn view(&self, frame: &WeatherFrame) -> PassView {
+        PassView { origin: frame.camera.origin, size: frame.size, light: *self.light.as_ref() }
+    }
+
     /// The bare ground with the sky's mark on it (`weather_ground.fs`),
     /// over the whole target: what pass 1 draws in place of the ground
     /// tileset. Drawn in the target's own pixels, outside the world's
@@ -631,62 +766,118 @@ impl Passes<'_> {
         let Some(mask) = self.mask else {
             return;
         };
-        let t = &frame.tuning;
-        let l = &self.shaders.ground_locs;
-        let s = &mut self.shaders.ground;
-        set_view(s, l.view_origin, l.view_size, frame);
-        s.set_shader_value(l.cells, Vector2::new(frame.cells.0 as f32, frame.cells.1 as f32));
-        s.set_shader_value(l.time, frame.time);
-        s.set_shader_value(l.rain, frame.look.rain);
-        s.set_shader_value(l.splash_rate, t.rain_splash_rate);
-        s.set_shader_value(l.snow, (frame.look.snow * t.snow_cover).clamp(0.0, 1.0));
-        s.set_shader_value(l.frozen, if frame.frozen { 1.0f32 } else { 0.0 });
-        let (raw, mask_loc, mask_tex) = (*s.as_ref(), l.cell_mask, *mask.as_ref());
-        let source = self.ground;
-        d.draw_shader_mode(s, |mut sd| {
-            // SAFETY: a copy of the bound shader's handle and a live
-            // texture; raylib binds the sampler for this batch (it has to
-            // be set inside the shader mode, which resets the extra units).
-            unsafe { sola_raylib::ffi::SetShaderValueTexture(raw, mask_loc, mask_tex) };
-            sd.draw_texture_rec(source, whole(frame.size), Vector2::new(0.0, 0.0), Color::WHITE);
-        });
+        let at = self.view(frame);
+        let mask = CellMask { texture: *mask.as_ref(), cells: frame.cells, origin: (0, 0) };
+        self.shaders.ground(d, self.ground, frame, &at, &mask);
     }
 
     /// `source` - the field as it stands under daylight - multiplied by
     /// the light map (`weather_light.fs`), over the whole target, in the
     /// target's own pixels.
     pub fn draw_lit<D: RaylibDraw>(&mut self, d: &mut D, source: &RenderTexture2D, frame: &WeatherFrame) {
-        let t = &frame.tuning;
-        let l = &self.shaders.light_locs;
-        let s = &mut self.shaders.light;
-        let darkness = {
-            let lum = 0.299 * frame.ambient[0] + 0.587 * frame.ambient[1] + 0.114 * frame.ambient[2];
-            (1.0 - lum).clamp(0.0, 1.0)
-        };
-        s.set_shader_value(l.field_size, Vector2::new(frame.camera.field.0, frame.camera.field.1));
-        set_view(s, l.view_origin, l.view_size, frame);
-        s.set_shader_value(l.ambient, frame.ambient);
-        s.set_shader_value(l.bands, t.light_bands.max(0) as f32);
-        s.set_shader_value(l.dither, if t.light_dither { 1.0f32 } else { 0.0 });
-        s.set_shader_value(l.darkness, darkness);
-        s.set_shader_value(l.vignette, frame.look.vignette.clamp(0.0, 1.0));
-        s.set_shader_value(l.sun, [0.3 * frame.look.sun, 0.15 * frame.look.sun, 0.03 * frame.look.sun]);
-        let (raw, light_loc, light_tex) = (*s.as_ref(), l.light_map, *self.light.as_ref());
-        d.draw_shader_mode(s, |mut sd| {
-            // SAFETY: as in `draw_ground`.
-            unsafe { sola_raylib::ffi::SetShaderValueTexture(raw, light_loc, light_tex) };
-            sd.draw_texture_rec(source, whole(frame.size), Vector2::new(0.0, 0.0), Color::WHITE);
-        });
+        let at = self.view(frame);
+        self.shaders.lit(d, source, frame, &at);
     }
 
     /// `source` - the finished field - with the air over it
     /// (`weather_sky.fs`), over the whole target, in the target's own
     /// pixels.
     pub fn draw_sky<D: RaylibDraw>(&mut self, d: &mut D, source: &RenderTexture2D, frame: &WeatherFrame) {
+        let at = self.view(frame);
+        self.shaders.sky(d, source, frame, &at);
+    }
+}
+
+/// The three passes without the scene's targets, for a target of another
+/// view that brings its own light map and cell mask - the world an arena
+/// shows past its field (`render::margin`). Borrowed out of `WeatherFx`
+/// by `shader_passes`.
+pub struct ShaderPasses<'a> {
+    shaders: &'a mut PassShaders,
+}
+
+impl ShaderPasses<'_> {
+    /// `source`, bare ground, with the sky's mark on it (`draw_ground`),
+    /// over the target `at` names.
+    pub fn ground<D: RaylibDraw>(&mut self, d: &mut D, source: &RenderTexture2D, frame: &WeatherFrame, at: &PassView, mask: &CellMask) {
+        self.shaders.ground(d, source, frame, at, mask);
+    }
+
+    /// `source` multiplied by `at`'s light map (`draw_lit`).
+    pub fn lit<D: RaylibDraw>(&mut self, d: &mut D, source: &RenderTexture2D, frame: &WeatherFrame, at: &PassView) {
+        self.shaders.lit(d, source, frame, at);
+    }
+
+    /// `source` with the air over it (`draw_sky`).
+    pub fn sky<D: RaylibDraw>(&mut self, d: &mut D, source: &RenderTexture2D, frame: &WeatherFrame, at: &PassView) {
+        self.shaders.sky(d, source, frame, at);
+    }
+}
+
+impl WeatherFx {
+    /// The passes alone, for a target of another view (`ShaderPasses`);
+    /// `None` without the shaders.
+    pub fn shader_passes(&mut self) -> Option<ShaderPasses<'_>> {
+        self.shaders.as_mut().map(|shaders| ShaderPasses { shaders })
+    }
+}
+
+impl PassShaders {
+    /// The ground pass over the target `at` names, in the target's own
+    /// pixels, reading the map from `mask`.
+    fn ground<D: RaylibDraw>(&mut self, d: &mut D, source: &RenderTexture2D, frame: &WeatherFrame, at: &PassView, mask: &CellMask) {
         let t = &frame.tuning;
-        let l = &self.shaders.sky_locs;
-        let s = &mut self.shaders.sky;
-        set_view(s, l.view_origin, l.view_size, frame);
+        let l = &self.ground_locs;
+        let s = &mut self.ground;
+        set_view(s, l.view_origin, l.view_size, at);
+        s.set_shader_value(l.cells, Vector2::new(mask.cells.0 as f32, mask.cells.1 as f32));
+        s.set_shader_value(l.cell_origin, Vector2::new(mask.origin.0 as f32, mask.origin.1 as f32));
+        s.set_shader_value(l.time, frame.time);
+        s.set_shader_value(l.rain, frame.look.rain);
+        s.set_shader_value(l.splash_rate, t.rain_splash_rate);
+        s.set_shader_value(l.snow, (frame.look.snow * t.snow_cover).clamp(0.0, 1.0));
+        s.set_shader_value(l.frozen, if frame.frozen { 1.0f32 } else { 0.0 });
+        let (raw, mask_loc, mask_tex) = (*s.as_ref(), l.cell_mask, mask.texture);
+        d.draw_shader_mode(s, |mut sd| {
+            // SAFETY: a copy of the bound shader's handle and a live
+            // texture; raylib binds the sampler for this batch (it has to
+            // be set inside the shader mode, which resets the extra units).
+            unsafe { sola_raylib::ffi::SetShaderValueTexture(raw, mask_loc, mask_tex) };
+            sd.draw_texture_rec(source, whole(at.size), Vector2::new(0.0, 0.0), Color::WHITE);
+        });
+    }
+
+    /// The light pass over the target `at` names, in its own pixels.
+    fn lit<D: RaylibDraw>(&mut self, d: &mut D, source: &RenderTexture2D, frame: &WeatherFrame, at: &PassView) {
+        let t = &frame.tuning;
+        let l = &self.light_locs;
+        let s = &mut self.light;
+        let darkness = {
+            let lum = 0.299 * frame.ambient[0] + 0.587 * frame.ambient[1] + 0.114 * frame.ambient[2];
+            (1.0 - lum).clamp(0.0, 1.0)
+        };
+        s.set_shader_value(l.field_size, Vector2::new(frame.camera.field.0, frame.camera.field.1));
+        set_view(s, l.view_origin, l.view_size, at);
+        s.set_shader_value(l.ambient, frame.ambient);
+        s.set_shader_value(l.bands, t.light_bands.max(0) as f32);
+        s.set_shader_value(l.dither, if t.light_dither { 1.0f32 } else { 0.0 });
+        s.set_shader_value(l.darkness, darkness);
+        s.set_shader_value(l.vignette, frame.look.vignette.clamp(0.0, 1.0));
+        s.set_shader_value(l.sun, [0.3 * frame.look.sun, 0.15 * frame.look.sun, 0.03 * frame.look.sun]);
+        let (raw, light_loc, light_tex) = (*s.as_ref(), l.light_map, at.light);
+        d.draw_shader_mode(s, |mut sd| {
+            // SAFETY: as in `ground`.
+            unsafe { sola_raylib::ffi::SetShaderValueTexture(raw, light_loc, light_tex) };
+            sd.draw_texture_rec(source, whole(at.size), Vector2::new(0.0, 0.0), Color::WHITE);
+        });
+    }
+
+    /// The sky pass over the target `at` names, in its own pixels.
+    fn sky<D: RaylibDraw>(&mut self, d: &mut D, source: &RenderTexture2D, frame: &WeatherFrame, at: &PassView) {
+        let t = &frame.tuning;
+        let l = &self.sky_locs;
+        let s = &mut self.sky;
+        set_view(s, l.view_origin, l.view_size, at);
         s.set_shader_value(l.time, frame.time);
         s.set_shader_value(l.lit, if frame.plan.lit { 1.0f32 } else { 0.0 });
         s.set_shader_value(l.ambient, frame.ambient);
@@ -711,11 +902,11 @@ impl Passes<'_> {
         s.set_shader_value(l.gust_dir, dir);
         s.set_shader_value(l.gust_front, t.sand_gust_front_speed.max(1.0));
         s.set_shader_value(l.gust_len, t.sand_gust_seconds.max(0.05));
-        let (raw, light_loc, light_tex) = (*s.as_ref(), l.light_map, *self.light.as_ref());
+        let (raw, light_loc, light_tex) = (*s.as_ref(), l.light_map, at.light);
         d.draw_shader_mode(s, |mut sd| {
-            // SAFETY: as in `draw_ground`.
+            // SAFETY: as in `ground`.
             unsafe { sola_raylib::ffi::SetShaderValueTexture(raw, light_loc, light_tex) };
-            sd.draw_texture_rec(source, whole(frame.size), Vector2::new(0.0, 0.0), Color::WHITE);
+            sd.draw_texture_rec(source, whole(at.size), Vector2::new(0.0, 0.0), Color::WHITE);
         });
     }
 }
