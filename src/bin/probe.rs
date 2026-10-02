@@ -817,6 +817,11 @@ impl TankTrack {
     /// ENEMY_RETREAT_RANGE with shells still below ENEMY_AMMO_RESUME
     /// (`act_retreat`'s wait-out-the-recharge hold).
     fn deliberate_hold(&self, frame: u32, tank: &TankSnapshot, player: &TankSnapshot) -> bool {
+        // A field map's enemy nothing has woken yet holds still by design
+        // (`simulation::field`): far from every seat, it does not think.
+        if tank.asleep {
+            return true;
+        }
         if self
             .last_fire_frame
             .is_some_and(|f| frame - f <= FIRED_RECENTLY_FRAMES)
@@ -1757,6 +1762,11 @@ fn run_round(
         if let Some(kind) = game.player2_chassis() {
             println!("player 2 chassis={}", kind.name());
         }
+        // Which rules the enemies play by: a field map's are bounded
+        // (chained alerts, leashes, far enemies thinking less, spawns by
+        // their walk to the fight - docs/large-maps-follow-camera.md
+        // section 12), an arena's are the shared alert and the edge band.
+        println!("map class={}", if game.field_map() { "field" } else { "arena" });
     }
 
     // Both keyed by owner slot and filled as tanks come onto the field
@@ -1883,6 +1893,13 @@ fn run_round(
         let Some(tank) = snapshot.filter(|t| !t.is_wreck) else {
             continue;
         };
+        // On a field map an enemy that nothing has called to the fight -
+        // asleep, or keeping to its home leash with no alert - is not
+        // headed for the player at all, so not arriving is no routing
+        // failure (docs/large-maps-follow-camera.md section 12).
+        if tank.asleep || tank.leashed {
+            continue;
+        }
         let budget = NAV_GRACE_SECONDS + NAV_STRETCH_MAX * track.ideal_seconds;
         if elapsed > budget {
             report(

@@ -33,7 +33,7 @@ use crate::tank::Tank;
 use crate::tuning::tuning;
 use crate::Position;
 
-use super::{lay_tracks, roll_enemy_tank, roll_role, with_frog, with_tank, with_tank_mut, Event, Frame, Game, TANK_SPRITE_ORDER};
+use super::{field, lay_tracks, roll_enemy_tank, roll_role, with_frog, with_tank, with_tank_mut, Event, Frame, Game, TANK_SPRITE_ORDER};
 
 /// What lane `Game::pick_gate` found for the next roll-in.
 #[derive(Clone, Copy, Debug)]
@@ -208,7 +208,10 @@ impl Game {
             self.world.remove_one::<RollIn>(entity).expect("entity from this frame's roll-in query still exists");
             if !self.is_player(entity) {
                 // Roles roll on arrival, the moment the tank joins the fight.
-                let ai = Ai::with_role(roll_role(self.mission, &mut f.rng));
+                let mut ai = Ai::with_role(roll_role(self.mission, &mut f.rng));
+                // On a field map the wave is called to the fight: the walk
+                // its gate was picked for (`field`).
+                ai.field.called = self.field_map;
                 self.world.insert_one(entity, ai).expect("entity from this frame's roll-in query still exists");
             }
             f.events.push(Event::TankEntered { slot });
@@ -251,8 +254,11 @@ impl Game {
                 // One lane per stagger window, the seat coming back first:
                 // a player who lost their tank drives in at the head of
                 // the wave rather than behind all of it. A wave with every
-                // lane busy tries again next frame.
-                let gate = self.pick_gate(f);
+                // lane busy tries again next frame. On a field map the seat
+                // takes the lane nearest the living seats rather than a
+                // wave's (`pick_return_gate`).
+                let returning = self.field_map && self.wave.returning.front().is_some_and(|&seat| self.seat(seat).is_some());
+                let gate = if returning { self.pick_return_gate(f) } else { self.pick_gate(f) };
                 let took = self.seat_returns(gate) || (queued && self.spawn_wave_tank(f, gate));
                 if took {
                     self.wave.stagger = stagger_seconds;
@@ -411,21 +417,18 @@ impl Game {
         if !connected.is_empty() {
             gates = connected;
         }
+        // A field map keeps a wave out of sight and within reach: lanes
+        // outside every seat's sight box, those whose walk to the nearest
+        // seat is about `field_walk_seconds` where there are any
+        // (`field::prefer_gates`).
+        if self.field_map {
+            gates = field::prefer_gates(gates, &grid, &self.live_seat_positions());
+        }
         if gates.is_empty() {
             return GatePick::None;
         }
 
-        let clearance = Tank::default().size() * 1.5;
-        let entering: Vec<Position> = self.world.query::<(&Tank, &RollIn)>().iter().map(|(t, _)| t.position).collect();
-        let standing: Vec<Position> =
-            self.world.query::<&Tank>().iter().filter(|t| t.body.is_some()).map(|t| t.position).collect();
-        let free: Vec<Gate> = gates
-            .into_iter()
-            .filter(|g| {
-                entering.iter().all(|&p| segment_distance(p, g.outside, g.inside) >= clearance)
-                    && standing.iter().all(|&p| p.distance_to(g.inside) >= clearance)
-            })
-            .collect();
+        let free = self.free_lanes(gates);
         if free.is_empty() {
             return GatePick::Busy;
         }
@@ -433,6 +436,51 @@ impl Game {
             free.iter().copied().filter(|g| !self.wave.used_gates.contains(&(g.edge.index(), g.cell))).collect();
         let pool = if unused.is_empty() { &free } else { &unused };
         let gate = pool[f.rng.random_range(0..pool.len())];
+        self.wave.used_gates.push((gate.edge.index(), gate.cell));
+        GatePick::Free(gate)
+    }
+
+    /// The lanes of `gates` a tank may start down now, in the order given:
+    /// none with a tank still rolling along it or anyone standing on its
+    /// inside point.
+    fn free_lanes(&self, gates: Vec<Gate>) -> Vec<Gate> {
+        let clearance = Tank::default().size() * 1.5;
+        let entering: Vec<Position> = self.world.query::<(&Tank, &RollIn)>().iter().map(|(t, _)| t.position).collect();
+        let standing: Vec<Position> =
+            self.world.query::<&Tank>().iter().filter(|t| t.body.is_some()).map(|t| t.position).collect();
+        gates
+            .into_iter()
+            .filter(|g| {
+                entering.iter().all(|&p| segment_distance(p, g.outside, g.inside) >= clearance)
+                    && standing.iter().all(|&p| p.distance_to(g.inside) >= clearance)
+            })
+            .collect()
+    }
+
+    /// The lane a wrecked seat comes back through on a field map: of every
+    /// gate the map offers, the free one nearest the living seats by path
+    /// (`field::nearest_gates`), so a team-mate rejoins the fight rather
+    /// than a wave's walk away from it (docs/large-maps-follow-camera.md
+    /// section 13, item 5). No draw: ties go to the gates' own order. The
+    /// `pick_gate` contract holds - `Busy` while every lane is taken,
+    /// `None` on a map with no gate - and the lane is marked used.
+    fn pick_return_gate(&mut self, f: &mut Frame) -> GatePick {
+        let inward = tuning().wave_gate_inward_cells;
+        let grid = self.nav_grid(f.width, f.height);
+        // The map's own gates, else the lanes the live grid offers - the
+        // same lanes `pick_gate` draws from, with nobody kept away from.
+        let explicit = self.map.gate_cells();
+        let mut gates = battlefield::gates_from_cells(&grid, f.width, f.height, &explicit, inward);
+        if gates.is_empty() {
+            gates = battlefield::gate_candidates(&grid, f.width, f.height, &[], 0.0, inward);
+        }
+        if gates.is_empty() {
+            return GatePick::None;
+        }
+        let walk = grid.walk_costs(&self.live_seat_positions());
+        let Some(gate) = self.free_lanes(field::nearest_gates(gates, &walk)).into_iter().next() else {
+            return GatePick::Busy;
+        };
         self.wave.used_gates.push((gate.edge.index(), gate.cell));
         GatePick::Free(gate)
     }
@@ -493,17 +541,32 @@ impl Game {
         let walls: Vec<Position> =
             self.world.query::<&Obstacle>().iter().filter(|o| !o.destroyed).map(|o| o.position).collect();
         let others: Vec<Position> = self.world.query::<&Tank>().iter().map(|t| t.position).collect();
-        let pos = battlefield::sample_clear_position(&mut f.rng, f.width, f.height, margin_min, |pos| {
-            battlefield::enemy_spawn_legal(pos, f.width, f.height, margin_min, margin_max, player_pos, clear, &grid, &walls)
-                && seats.iter().all(|&p| pos.distance_to(p) >= clear)
-                && others.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
-        })
-        .unwrap_or_else(|| {
-            let sample = Position::new(
-                f.rng.random_range(margin_min..(f.width - margin_min)),
-                f.rng.random_range(margin_min..(f.height - margin_min)),
-            );
-            grid.nearest_open(sample, &others, enemy_clear)
+        // A field map places it the way its band places one at `init`:
+        // out of sight, by its walk to the fight (`field::spawn_cells`).
+        let field_pick = if self.field_map {
+            let live = self.live_seat_positions();
+            let cells = field::spawn_cells(&grid, &live, &walls);
+            field::pick_spawn(&cells, &mut f.rng, &others, |pos| {
+                pos.distance_to(player_pos) >= clear
+                    && seats.iter().all(|&p| pos.distance_to(p) >= clear)
+                    && others.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
+            })
+        } else {
+            None
+        };
+        let pos = field_pick.unwrap_or_else(|| {
+            battlefield::sample_clear_position(&mut f.rng, f.width, f.height, margin_min, |pos| {
+                battlefield::enemy_spawn_legal(pos, f.width, f.height, margin_min, margin_max, player_pos, clear, &grid, &walls)
+                    && seats.iter().all(|&p| pos.distance_to(p) >= clear)
+                    && others.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
+            })
+            .unwrap_or_else(|| {
+                let sample = Position::new(
+                    f.rng.random_range(margin_min..(f.width - margin_min)),
+                    f.rng.random_range(margin_min..(f.height - margin_min)),
+                );
+                grid.nearest_open(sample, &others, enemy_clear)
+            })
         });
         let slot = self.take_slot();
         let mut tank = roll_enemy_tank(&mut f.rng, row, pos, slot);
@@ -511,7 +574,9 @@ impl Game {
         tank.turret_visual_rotation = tank.rotation;
         tank.ring_position = pos;
         tank.body = Some(self.physics.spawn_tank(pos, tank.move_half_extents(false), tank.mass()));
-        let ai = Ai::with_role(roll_role(self.mission, &mut f.rng));
+        let mut ai = Ai::with_role(roll_role(self.mission, &mut f.rng));
+        // A wave tank all the same: called to the fight on a field map.
+        ai.field.called = self.field_map;
         self.world.spawn((tank, ai));
         f.events.push(Event::TankEntered { slot });
     }

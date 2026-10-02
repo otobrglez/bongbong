@@ -1285,6 +1285,55 @@ tunables! {
         enemy_retreat_range_factor: f32 = 1.3 in 1.0 ..= 5.0;
     }
 
+    group field {
+        /// Field maps only (a map the camera follows - bigger than an
+        /// arena or `view = "follow"`; docs/large-maps-follow-camera.md
+        /// section 12, `simulation::field`): an enemy that sees a seat
+        /// alerts every enemy within this many px of itself, and they
+        /// pass it on the same way, so an alert travels down a chain of
+        /// neighbours instead of reaching the whole map. Like the
+        /// arena's shared alert, a pure distance test with no line of
+        /// sight. As far as an enemy sees in daylight
+        /// (`enemy_view_range`): a tank alerts the ones it could see, so
+        /// a 40-wide level still hears a sighting from one end to the
+        /// other, while a map several screens across does not.
+        enemy_alert_chain_px: f32 = 800.0 in 0.0 ..= 4000.0;
+        /// Field maps only: how far from home (where it spawned, or came
+        /// through its gate) an enemy with nothing to fight may roam. Past
+        /// it, an enemy with no alert, no call to the fight and no target
+        /// in sight turns back home, and it wanders and seeks pickups only
+        /// inside it.
+        enemy_leash_px: f32 = 640.0 in 32.0 ..= 4000.0;
+        /// Field maps only: an enemy farther than this from every live
+        /// seat and the players' frog is far. A far enemy thinks only every
+        /// `enemy_far_think_ticks` ticks, and one nothing has woken yet -
+        /// no alert, no hit, no call, no seat this close - does not think
+        /// or route at all. Past `enemy_view_range`, so a far enemy cannot
+        /// see anyone to fight.
+        enemy_far_px: f32 = 1200.0 in 100.0 ..= 8000.0;
+        /// Field maps only: a far enemy thinks once every this many ticks,
+        /// staggered by owner slot, and keeps driving its last intent
+        /// (never its trigger) on the ticks between. 1 thinks every tick.
+        enemy_far_think_ticks: usize = 4 in 1 ..= 60;
+        /// Field maps only: the walk to the fight a spawn or a wave gate
+        /// aims for, in seconds of path from the nearest seat at
+        /// `enemy_speed` - out of sight, within reach. Of the gates
+        /// outside every seat's sight box a wave takes the ones whose walk
+        /// is within `field_walk_slack_seconds` of this, where the map has
+        /// any, and a band spawn's draws lean toward such cells; a map with
+        /// no walk that long (every 40-wide level) only keeps its spawns
+        /// out of sight.
+        field_walk_seconds: f32 = 15.0 in 1.0 ..= 120.0;
+        /// The window either side of `field_walk_seconds`: wide enough
+        /// that a wave still spreads over several lanes and a band over a
+        /// region rather than one ring of cells.
+        field_walk_slack_seconds: f32 = 5.0 in 0.0 ..= 60.0;
+        /// How many of those cells a band spawn draws, keeping whichever
+        /// stands farthest from the enemies already down, so a band
+        /// spreads over its region rather than starting in a heap.
+        field_spawn_spread_candidates: u32 = 6 in 1 ..= 32;
+    }
+
     group portal {
         /// A tank whose centre comes this close (px) to a portal's anchor
         /// centre teleports (docs/teleporting.md). Also the portal's nav

@@ -73,6 +73,28 @@ impl Components {
     }
 }
 
+/// Every cell's step cost to the nearest of several goals, from
+/// `Grid::walk_costs`: the field a router would read, kept for lookups
+/// instead (how far a spawn cell or a gate is from the nearest seat).
+pub struct WalkCosts {
+    cols: usize,
+    rows: usize,
+    cell_size: f32,
+    to_goal: Vec<u32>,
+}
+
+impl WalkCosts {
+    /// The cost from the cell `p` falls in to the nearest goal, in the
+    /// grid's step costs (one per plain cell), `None` where no route
+    /// reaches one. A point off the grid reads its nearest edge cell.
+    pub fn at(&self, p: Position) -> Option<u32> {
+        let col = ((p.x / self.cell_size) as isize).clamp(0, self.cols as isize - 1) as usize;
+        let row = ((p.y / self.cell_size) as isize).clamp(0, self.rows as isize - 1) as usize;
+        let cost = self.to_goal[row * self.cols + col];
+        (cost != UNREACHABLE).then_some(cost)
+    }
+}
+
 /// A coarse occupancy grid over a rectangular area, marking which cells are
 /// blocked (a static obstacle occupies them, plus a clearance margin - see
 /// `build`) versus open.
@@ -418,14 +440,38 @@ impl Grid {
         if self.field_for(goal).is_some() {
             return;
         }
+        let to_goal = self.costs_to(&[goal]);
+        self.fields.push(Field { goal, to_goal });
+    }
+
+    /// Every cell's cost to reach the nearest of `goals` - one Dijkstra
+    /// outward from all of them at once, the multi-goal reading of a flow
+    /// field, kept rather than added to the router (`add_field`). What a
+    /// field map measures the walk from a spawn cell or a gate to the
+    /// nearest seat with (`simulation::field`). Each goal's cell counts as
+    /// open whatever `blocked` says, as a field's goal does.
+    pub fn walk_costs(&self, goals: &[Position]) -> WalkCosts {
+        let mut cells: Vec<(usize, usize)> = goals.iter().map(|&g| self.cell_of(g)).collect();
+        cells.sort_unstable();
+        cells.dedup();
+        WalkCosts { cols: self.cols, rows: self.rows, cell_size: self.cell_size, to_goal: self.costs_to(&cells) }
+    }
+
+    /// The Dijkstra behind `add_field` and `walk_costs`: per cell, the
+    /// summed step cost to the nearest of `goals` (`UNREACHABLE` where no
+    /// route exists, 0 at a goal), stepping *into* a cell costing that
+    /// cell's price and the portal hub walked backwards.
+    fn costs_to(&self, goals: &[(usize, usize)]) -> Vec<u32> {
         let n = self.cols * self.rows;
         let idx = |c: (usize, usize)| c.1 * self.cols + c.0;
         let mut to_goal = vec![UNREACHABLE; n];
         // (cost, cell index): a min-heap through `Reverse`. Ties pop by
         // index, though the final costs are the same whatever the order.
         let mut open = BinaryHeap::new();
-        to_goal[idx(goal)] = 0;
-        open.push(std::cmp::Reverse((0u32, idx(goal))));
+        for &goal in goals {
+            to_goal[idx(goal)] = 0;
+            open.push(std::cmp::Reverse((0u32, idx(goal))));
+        }
         while let Some(std::cmp::Reverse((cost, at))) = open.pop() {
             if cost > to_goal[at] {
                 continue;
@@ -460,7 +506,7 @@ impl Grid {
                 }
             }
         }
-        self.fields.push(Field { goal, to_goal });
+        to_goal
     }
 
     /// A cell's step cost - 1 for plain ground, more where `weigh` or
@@ -1674,6 +1720,30 @@ mod field_tests {
         let step = grid.flow(at(7, 2), 0, 2).expect("flows");
         assert_eq!(grid.center_of(step), grid.next_step(at(0, 2), at(7, 2)).unwrap());
         assert_eq!(grid.flow(at(7, 2), 7, 2), None, "the goal has no arrow");
+    }
+
+    /// `walk_costs` toward several goals reads, from every cell, the cost
+    /// to the nearest of them: the smaller of the two goals' own fields,
+    /// unreachable where both are.
+    #[test]
+    fn walk_costs_read_the_nearest_goals_field() {
+        let mut grid = nine_by_five();
+        grid.surcharge(std::iter::once(at(3, 2)), 3);
+        let (a, b) = (at(1, 1), at(7, 3));
+        let walk = grid.walk_costs(&[a, b]);
+        grid.add_field(a);
+        grid.add_field(b);
+        for row in 0..5 {
+            for col in 0..9 {
+                let nearest = match (grid.to_goal(a, col, row), grid.to_goal(b, col, row)) {
+                    (Some(x), Some(y)) => Some(x.min(y)),
+                    (x, y) => x.or(y),
+                };
+                assert_eq!(walk.at(at(col, row)), nearest, "cell ({col}, {row})");
+            }
+        }
+        assert_eq!(walk.at(at(4, 0)), None, "a wall cell reaches nobody");
+        assert_eq!(grid.walk_costs(&[]).at(a), None, "no goal, no walk");
     }
 
     /// Adding the same goal twice keeps one field, and a second goal gets

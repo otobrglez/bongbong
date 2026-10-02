@@ -274,6 +274,39 @@ pub struct Ai {
     /// round; with more seats `enemy_phase` retargets it to the nearest
     /// live, visible one past `enemy_target_switch_margin_px`.
     target_player: u8,
+    /// What bounds this tank on a field map - its own alert, its home,
+    /// its call to the fight, whether anything has woken it. Kept by
+    /// `simulation::field` and never touched on an arena, where it stays
+    /// at its default and every reader below sees exactly the arena's
+    /// tank.
+    pub(crate) field: FieldMind,
+}
+
+/// The memory a tank carries only on a field map
+/// (docs/large-maps-follow-camera.md section 12, `simulation::field`):
+/// what replaces the arena's one shared alert, and what decides how often
+/// the tank thinks. Plain values the simulation writes between thinks; the
+/// tree reads `home` (`Brain::home_leash`) and the alert it is handed.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct FieldMind {
+    /// This tank's own alert: where a seat was last seen, by itself or by
+    /// a neighbour down the chain (`enemy_alert_chain_px`), and the
+    /// seconds it still holds (`enemy_alert_hold_seconds` when fresh).
+    pub(crate) alert: Option<Position>,
+    pub(crate) alert_timer: f32,
+    /// Where the tank first stood on the field - its spawn cell, or its
+    /// gate's inside point - the anchor of its leash (`enemy_leash_px`).
+    pub(crate) home: Option<Position>,
+    /// A wave tank sent to the fight: it routes at the seat it fights
+    /// until it first comes within sight range of a seat or takes a hit.
+    pub(crate) called: bool,
+    /// Something has reached it - an alert, a hit, a call, a seat within
+    /// `enemy_far_px`, a frog to hunt. A far tank that was never woken
+    /// does not think at all; once woken it stays so.
+    pub(crate) awake: bool,
+    /// Seconds since its last think while far thinking skips ticks: the
+    /// `dt` its next think covers.
+    pub(crate) think_debt: f32,
 }
 
 /// Read-only view of an `Ai`'s memory for tooling (`Ai::snapshot`).
@@ -314,6 +347,12 @@ pub struct AiSnapshot {
     pub target_player: u8,
     /// The seat the last tick's trigger pull was aimed at (`Ai::shot_at_seat`).
     pub shot_at_seat: Option<u8>,
+    /// Field maps (`FieldMind`): the tank's own alert point, its home, its
+    /// call to the fight and whether it is awake. `None`/false on an arena.
+    pub field_alert: Option<(f32, f32)>,
+    pub home: Option<(f32, f32)>,
+    pub called: bool,
+    pub awake: bool,
 }
 
 impl Default for Ai {
@@ -345,6 +384,7 @@ impl Default for Ai {
             grudge: None,
             escapes: 0,
             target_player: 0,
+            field: FieldMind::default(),
         }
     }
 }
@@ -370,7 +410,10 @@ impl Ai {
     /// the field currently has the player within sight (`Game::enemy_sight`),
     /// or did within the last `ENEMY_ALERT_HOLD_SECONDS`, so an enemy that can't
     /// personally see the player can still converge on where the group last
-    /// saw them instead of wandering randomly - see `act_patrol`.
+    /// saw them instead of wandering randomly - see `act_patrol`. On a field
+    /// map it is this tank's own alert instead, or its call to the fight
+    /// (`simulation::field`): an alert there reaches only the enemies
+    /// chained to the one that saw.
     /// `engage_target` is this tank's assigned point on the shared
     /// engagement ring around the player (see `simulation.rs::Game::update`'s
     /// `engage_targets`, and `ENGAGE_RING_RADIUS`'s doc comment) - `Some`
@@ -608,7 +651,17 @@ impl Ai {
             escapes: self.escapes,
             target_player: self.target_player,
             shot_at_seat: self.shot_at_seat,
+            field_alert: self.field.alert.map(|p| (p.x, p.y)),
+            home: self.field.home.map(|p| (p.x, p.y)),
+            called: self.field.called,
+            awake: self.field.awake,
         }
+    }
+
+    /// The intent the last `think` produced - what a far tank keeps
+    /// driving between thinks (`simulation::field`).
+    pub(crate) fn last_intent(&self) -> Intent {
+        self.last_intent
     }
 
     /// Which human player this tank is fighting - see the field.
@@ -1363,6 +1416,33 @@ impl Brain<'_> {
         Some(Leash { anchor, radius, keep_off })
     }
 
+    /// The leash around this tank's home on a field map
+    /// (`FieldMind::home`, `enemy_leash_px` less a hull, so a waypoint on
+    /// the rim never carries the hull over the line), `None` on an arena,
+    /// where no home is ever kept. It binds a tank with nothing to fight:
+    /// `act_patrol` without an alert, and the pickups it detours for.
+    fn home_leash(&self) -> Option<Leash> {
+        let anchor = self.ai.field.home?;
+        let radius = (tuning().enemy_leash_px - self.me.size()).max(self.me.size());
+        Some(Leash { anchor, radius, keep_off: 0.0 })
+    }
+
+    /// The nearest live pickup of `kind` worth a detour: any on an arena,
+    /// only those inside the home leash on a field map
+    /// (`home_leash`), so a tank with nothing to fight never crosses the
+    /// map for one.
+    fn seek(&self, kind: PickupKind) -> Option<Position> {
+        match self.home_leash() {
+            None => self.nearest_pickup(kind),
+            Some(leash) => self
+                .pickups
+                .iter()
+                .filter(|&&(k, at)| k == kind && at.distance_to(leash.anchor) <= leash.radius)
+                .map(|&(_, at)| at)
+                .min_by(|&a, &b| self.me.position.distance_to(a).total_cmp(&self.me.position.distance_to(b))),
+        }
+    }
+
     /// Whether a guard should hold its beat rather than fight: the player
     /// is dead or outside `guard_leash_px` of its frog.
     fn guard_holds(&self) -> bool {
@@ -1839,10 +1919,12 @@ fn build<'a>() -> Node<Brain<'a>> {
         // the two below are each gated only on "not already stocked with
         // that kind"; which detour is worth taking *first* is expressed by
         // their tier order (laser, then plasma, then missiles, then minigun
-        // - strongest first). See `act_seek_laser`.
+        // - strongest first). See `act_seek_laser`. On a field map only a
+        // pickup inside the tank's home leash is worth the detour
+        // (`Brain::seek`).
         sequence(vec![
             condition(|b: &mut Brain| {
-                b.me.wants_pickup(PickupKind::Laser) && b.pickups.iter().any(|(k, _)| *k == PickupKind::Laser)
+                b.me.wants_pickup(PickupKind::Laser) && b.seek(PickupKind::Laser).is_some()
             }),
             action("seek_laser", act_seek_laser),
         ]),
@@ -1852,7 +1934,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.me.wants_pickup(PickupKind::Plasma)
-                    && b.pickups.iter().any(|(k, _)| *k == PickupKind::Plasma)
+                    && b.seek(PickupKind::Plasma).is_some()
             }),
             action("seek_plasma", act_seek_plasma),
         ]),
@@ -1861,7 +1943,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.me.wants_pickup(PickupKind::Missiles)
-                    && b.pickups.iter().any(|(k, _)| *k == PickupKind::Missiles)
+                    && b.seek(PickupKind::Missiles).is_some()
             }),
             action("seek_missiles", act_seek_missiles),
         ]),
@@ -1870,7 +1952,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.me.wants_pickup(PickupKind::Minigun)
-                    && b.pickups.iter().any(|(k, _)| *k == PickupKind::Minigun)
+                    && b.seek(PickupKind::Minigun).is_some()
             }),
             action("seek_minigun", act_seek_minigun),
         ]),
@@ -1881,7 +1963,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.me.wants_pickup(PickupKind::SpeedUp)
-                    && b.pickups.iter().any(|(k, _)| *k == PickupKind::SpeedUp)
+                    && b.seek(PickupKind::SpeedUp).is_some()
             }),
             action("seek_speedup", act_seek_speedup),
         ]),
@@ -1890,7 +1972,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         // detour at any health.
         sequence(vec![
             condition(|b: &mut Brain| {
-                b.me.wants_pickup(PickupKind::Shield) && b.pickups.iter().any(|(k, _)| *k == PickupKind::Shield)
+                b.me.wants_pickup(PickupKind::Shield) && b.seek(PickupKind::Shield).is_some()
             }),
             action("seek_shield", act_seek_shield),
         ]),
@@ -1960,7 +2042,7 @@ fn act_retreat(b: &mut Brain) -> Status {
 /// wandering toward a spot that's no longer there.
 fn act_seek_laser(b: &mut Brain) -> Status {
     b.reset_aim();
-    let Some(target) = b.nearest_pickup(PickupKind::Laser) else {
+    let Some(target) = b.seek(PickupKind::Laser) else {
         return Status::Failure;
     };
     b.intent.move_dir = Some(b.steer(target));
@@ -1971,7 +2053,7 @@ fn act_seek_laser(b: &mut Brain) -> Status {
 /// 5.6 (`build`) for when this is actually reached.
 fn act_seek_plasma(b: &mut Brain) -> Status {
     b.reset_aim();
-    let Some(target) = b.nearest_pickup(PickupKind::Plasma) else {
+    let Some(target) = b.seek(PickupKind::Plasma) else {
         return Status::Failure;
     };
     b.intent.move_dir = Some(b.steer(target));
@@ -1982,7 +2064,7 @@ fn act_seek_plasma(b: &mut Brain) -> Status {
 /// 5.65 (`build`) for when this is actually reached.
 fn act_seek_missiles(b: &mut Brain) -> Status {
     b.reset_aim();
-    let Some(target) = b.nearest_pickup(PickupKind::Missiles) else {
+    let Some(target) = b.seek(PickupKind::Missiles) else {
         return Status::Failure;
     };
     b.intent.move_dir = Some(b.steer(target));
@@ -1993,7 +2075,7 @@ fn act_seek_missiles(b: &mut Brain) -> Status {
 /// 5.7 (`build`) for when this is actually reached.
 fn act_seek_minigun(b: &mut Brain) -> Status {
     b.reset_aim();
-    let Some(target) = b.nearest_pickup(PickupKind::Minigun) else {
+    let Some(target) = b.seek(PickupKind::Minigun) else {
         return Status::Failure;
     };
     b.intent.move_dir = Some(b.steer(target));
@@ -2004,7 +2086,7 @@ fn act_seek_minigun(b: &mut Brain) -> Status {
 /// 5.8 (`build`) for when this is actually reached.
 fn act_seek_speedup(b: &mut Brain) -> Status {
     b.reset_aim();
-    let Some(target) = b.nearest_pickup(PickupKind::SpeedUp) else {
+    let Some(target) = b.seek(PickupKind::SpeedUp) else {
         return Status::Failure;
     };
     b.intent.move_dir = Some(b.steer(target));
@@ -2015,7 +2097,7 @@ fn act_seek_speedup(b: &mut Brain) -> Status {
 /// 5.9 (`build`) for when this is actually reached.
 fn act_seek_shield(b: &mut Brain) -> Status {
     b.reset_aim();
-    let Some(target) = b.nearest_pickup(PickupKind::Shield) else {
+    let Some(target) = b.seek(PickupKind::Shield) else {
         return Status::Failure;
     };
     b.intent.move_dir = Some(b.steer(target));
@@ -2142,9 +2224,31 @@ fn act_chase(b: &mut Brain) -> Status {
 /// assignment to every alerted tank, not just hit ones, made clustering
 /// worse instead of better (a still-distant pack funnels toward its
 /// eventual axis slots through the same bottleneck for its whole transit).
+///
+/// On a field map the alert is the tank's own (`simulation::field`: it
+/// reached the tank down a chain of neighbours, or it is the call that
+/// sends a wave tank to the fight), and a tank without one is leashed to
+/// its home (`Brain::home_leash`): past the leash it turns back, inside it
+/// it wanders within it.
 fn act_patrol(b: &mut Brain) -> Status {
     if let Some(target) = b.alert {
         b.intent.move_dir = Some(b.steer(b.engage_target.unwrap_or(target)));
+    } else if let Some(leash) = b.home_leash() {
+        let me = b.me.position;
+        if me.distance_to(leash.anchor) > leash.radius {
+            // Home is where the tank stood, an open cell, so it is routed
+            // to directly. A committed heading still pointing away is
+            // dropped so the turn happens now: the hold/margin gate is
+            // blind to a straight reversal by design (`act_guard` does the
+            // same on its beat).
+            let away = Vec2::new(me.x - leash.anchor.x, me.y - leash.anchor.y);
+            if b.ai.committed_dir.is_some_and(|d| d.vec().x * away.x + d.vec().y * away.y > 0.0) {
+                b.ai.committed_dir = None;
+            }
+            b.intent.move_dir = Some(b.steer(leash.anchor));
+        } else {
+            b.intent.move_dir = Some(b.wander_within(leash));
+        }
     } else {
         b.intent.move_dir = Some(b.wander());
     }
