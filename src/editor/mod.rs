@@ -493,6 +493,9 @@ pub struct MapEditor {
     /// Wheel movement not yet spent on a whole step, for a coarse
     /// screen's zoom (a trackpad sends fractions of a notch).
     wheel_accum: f32,
+    /// A world rectangle to show, worked out against the next canvas
+    /// area `update` is given (`look_at`).
+    pending_look: Option<Rectangle>,
     pub cli_overrides: CliOverrides,
     /// `render` draws a flat white field instead of the ground tileset -
     /// the builder-side twin of `Game::plain_canvas`.
@@ -530,6 +533,7 @@ impl MapEditor {
             area,
             pan_from: None,
             wheel_accum: 0.0,
+            pending_look: None,
             cli_overrides: CliOverrides::default(),
         };
         editor.rebuild_ground();
@@ -572,6 +576,27 @@ impl MapEditor {
     pub fn frame_camera(&mut self, center: Vec2, zoom: f32) {
         let vp = self.viewport();
         let scale = vp.fit_scale() * if zoom.is_finite() { zoom.max(1.0) } else { 1.0 };
+        self.camera.set(center, scale, &vp, &CanvasRules::current());
+    }
+
+    /// Show the world rectangle `rect` - BUILD opening on what the round
+    /// showed: FIT where it holds the whole field, else its middle at the
+    /// zoom that fits it in the canvas area. Worked out again on the next
+    /// `update`, which knows the canvas area this frame draws in.
+    pub fn look_at(&mut self, rect: Rectangle) {
+        self.pending_look = Some(rect);
+        self.apply_look(rect);
+    }
+
+    fn apply_look(&mut self, rect: Rectangle) {
+        let vp = self.viewport();
+        let (w, h) = vp.field;
+        if !(rect.width > 0.0 && rect.height > 0.0) || (rect.width >= w - 0.5 && rect.height >= h - 0.5) {
+            self.camera.fit();
+            return;
+        }
+        let scale = (vp.area.0 / rect.width).min(vp.area.1 / rect.height);
+        let center = Vec2::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
         self.camera.set(center, scale, &vp, &CanvasRules::current());
     }
 
@@ -726,6 +751,7 @@ impl MapEditor {
         self.history.push(EditStep::Map { before: Box::new(before), after: Box::new(self.map.clone()) });
         self.rebuild_ground();
         self.camera.fit();
+        self.pending_look = None;
     }
 
     /// Open `map` as a new document: the canvas, the baseline and an
@@ -741,6 +767,7 @@ impl MapEditor {
         self.history.clear();
         self.rebuild_ground();
         self.camera.fit();
+        self.pending_look = None;
     }
 
     /// Revert cells and settings to the baseline, as one undo step.
@@ -1173,6 +1200,9 @@ impl MapEditor {
             self.screen = screen;
         }
         self.area = (layout.field.w, layout.field.h);
+        if let Some(rect) = self.pending_look.take() {
+            self.apply_look(rect);
+        }
         let rules = CanvasRules::current();
         // The keyboard shortcuts work under a menu too, but not while the
         // Save prompt is taking text - a `-` there is a character.

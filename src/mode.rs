@@ -114,6 +114,11 @@ pub struct Session {
     /// level starts or it is closed: play mode only, never together with
     /// a dialog, and the round behind it frozen the dialogs' way.
     pub level_select: Option<LevelSelect>,
+    /// The world rectangle the local round was last drawn showing - the
+    /// whole field for an arena, the followed view on a field map - which
+    /// `app.rs` notes every frame of play. BUILD opens the builder's
+    /// camera on it (docs/large-maps-follow-camera.md §9).
+    pub play_view: Option<crate::math::Rectangle>,
 }
 
 /// A session reads as its round: the dev server, its tests and `main.rs`
@@ -151,6 +156,7 @@ impl Session {
             token: "bongbong-player".into(),
             campaign: None,
             level_select: None,
+            play_view: None,
         }
     }
 
@@ -415,10 +421,19 @@ impl Session {
         self.driver
     }
 
+    /// Into the builder, its camera opening on what the round showed: the
+    /// whole canvas after an arena, the followed view's world after a
+    /// field map - while the canvas is the round's map's size, so the view
+    /// still names the same ground.
     fn enter_build(&mut self) {
         self.dialog = false;
         self.players_dialog = false;
         self.driver = Driver::Build;
+        if let Some(view) = self.play_view
+            && self.builder.map().field_size() == self.game.map.field_size()
+        {
+            self.builder.look_at(view);
+        }
     }
 
     /// The players button in the HUD: open the players dialog, or close it
@@ -814,6 +829,29 @@ mod session_tests {
         assert_ne!(s.game.outcome(), Outcome::Playing);
         assert_eq!(s.press_build(), Driver::Build);
         assert!(!s.dialog);
+    }
+
+    /// BUILD opens the builder's camera on what the round last showed: a
+    /// followed view's world, or FIT for the whole field.
+    #[test]
+    fn build_opens_the_builders_camera_on_what_play_showed() {
+        let mut s = session();
+        s.play_view = Some(crate::math::Rectangle::new(100.0, 96.0, 400.0, 200.0));
+        s.press_build();
+        s.answer_dialog(true);
+        assert_eq!(s.mode(), Driver::Build);
+        let vp = s.builder.viewport();
+        assert!(!s.builder.camera().is_fit());
+        let c = s.builder.camera().center(&vp);
+        assert!((c.x - 300.0).abs() < 1.0 && (c.y - 196.0).abs() < 1.0, "{c:?}");
+        let r = s.builder.camera().view(&vp).rect();
+        assert!(r.x <= 101.0 && r.y <= 97.0 && r.x + r.width >= 499.0 && r.y + r.height >= 295.0, "the view holds what play showed: {r:?}");
+        // The whole field again: FIT.
+        s.play();
+        s.play_view = Some(crate::math::Rectangle::new(0.0, 0.0, W, H));
+        s.press_build();
+        s.answer_dialog(true);
+        assert!(s.builder.camera().is_fit());
     }
 
     #[test]

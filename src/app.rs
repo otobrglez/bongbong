@@ -2156,6 +2156,10 @@ pub fn run(args: Args) {
         if let Some(dev) = &mut dev {
             dev.after_render(rl, thread, &scene_target, session.shown());
         }
+        // What the local round showed, for BUILD to open the builder on.
+        if session.mode() == Driver::Play {
+            session.play_view = Some(camera.rect());
+        }
     });
 }
 
