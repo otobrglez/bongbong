@@ -1814,6 +1814,9 @@ pub fn run(args: Args) {
                 } else if session.players_dialog {
                     let rects = players_dialog_rects(ui.area);
                     if pressed {
+                        // The dialog's own press is nobody's shot: ONE or
+                        // TWO starts a round under the finger.
+                        touch.claim(&ui_touch_points);
                         if rects.one.contains(ui_pointer) {
                             session.answer_players(PlayerCount::ONE);
                         } else if rects.two.contains(ui_pointer) {
@@ -1882,6 +1885,10 @@ pub fn run(args: Args) {
             }
             Driver::Lobby => {
                 // The lobby's own screen, in UI points like its rects.
+                // Its touches are its own, and a finger still down when
+                // START, REMATCH or LEAVE hands the window to a round is
+                // nobody's stick or shot there.
+                touch.claim(&ui_touch_points);
                 let mut typed = String::new();
                 while let Some(c) = rl.get_char_pressed() {
                     typed.push(c);
@@ -1908,6 +1915,10 @@ pub fn run(args: Args) {
                 }
             }
             Driver::Build => {
+                // Every touch is the builder's, and one still down when
+                // PLAY or PLAY HERE starts a round under it is nobody's
+                // stick or shot there - it would skip the round's banner.
+                touch.claim(&ui_touch_points);
                 let mut typed = String::new();
                 while let Some(c) = rl.get_char_pressed() {
                     typed.push(c);
