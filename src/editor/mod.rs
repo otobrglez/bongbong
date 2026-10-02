@@ -1443,8 +1443,9 @@ impl MapEditor {
     /// `builder_edge_scroll_pt` of the canvas area's edge - or past it, over
     /// the bar or off the window - the view moves toward that edge, faster
     /// the deeper in, up to `builder_edge_scroll_pt_per_s`, and the stroke
-    /// carries on into the cells that come under the pointer. A long wall
-    /// needs no pan in the middle.
+    /// carries on into the cells that come under the pointer, or, held past
+    /// the edge, under the nearest point of the canvas. A long wall needs
+    /// no pan in the middle.
     fn edge_scroll(&mut self, pointer: Vec2, dt: f32, layout: &Layout, rules: &CanvasRules) {
         if self.stroke.is_none() || !(dt > 0.0) {
             return;
@@ -1468,7 +1469,8 @@ impl MapEditor {
         }
         let step = vp.px(rules.edge_scroll_pt_per_s) * dt;
         self.camera.pan(Vec2::new(-into.x * step, -into.y * step), &vp, rules);
-        if let Some(cell) = self.cell_at(pointer, layout) {
+        let on_canvas = Vec2::new(pointer.x.clamp(f.x, f.x + f.w - 1.0), pointer.y.clamp(f.y, f.y + f.h - 1.0));
+        if let Some(cell) = self.cell_at(on_canvas, layout) {
             self.drag_to(cell);
         }
     }
@@ -2984,21 +2986,23 @@ mod editor_tests {
 
     /// A stroke held at the canvas's edge scrolls the view toward it and
     /// keeps painting into the cells that come under the pointer - with a
-    /// mouse and with a finger - and stops at the field's edge; away from
-    /// the edge nothing scrolls.
+    /// mouse and with a finger, and with a mouse held past the edge, where
+    /// it paints under the nearest point of the canvas - and stops at the
+    /// field's edge; away from the edge nothing scrolls.
     #[test]
     fn a_stroke_held_at_the_canvas_edge_scrolls_and_keeps_painting() {
-        for finger in [false, true] {
+        for (finger, past) in [(false, false), (true, false), (false, true)] {
             let (mut ed, layout, _) = big_editor((1180.0, 820.0), 2.0, false);
             let vp = ed.viewport();
             let rules = CanvasRules::of(&crate::tuning::Tuning::DEFAULT);
             ed.camera.zoom_at(vp.scale_for_cell_mm(12.0), Vec2::new(200.0, 300.0), &vp, &rules);
             let row_y = layout.field.y + 300.0;
             let start = Vec2::new(layout.field.x + 200.0, row_y);
-            let edge = Vec2::new(layout.field.x + layout.field.w - 4.0, row_y);
+            let edge = Vec2::new(layout.field.x + layout.field.w + if past { 40.0 } else { -4.0 }, row_y);
+            let shown_edge = Vec2::new(layout.field.x + layout.field.w - 4.0, row_y);
             let (first, row) = ed.cell_at(start, &layout).unwrap();
             let center = ed.camera().center(&vp);
-            let shown_right = ed.cell_at(edge, &layout).unwrap().0;
+            let shown_right = ed.cell_at(shown_edge, &layout).unwrap().0;
             let frames = 90;
             if finger {
                 let mut f: Vec<Vec<(i32, f32, f32)>> = (0..=8).map(|i| vec![(1, start.x + (edge.x - start.x) * i as f32 / 8.0, row_y)]).collect();
@@ -3012,12 +3016,12 @@ mod editor_tests {
                 ed.update(&BuilderInput { pointer: Some(edge), dt: 1.0 / 60.0, ..Default::default() }, &layout);
             }
             let moved = ed.camera().center(&vp);
-            assert!(moved.x > center.x + 64.0 && (moved.y - center.y).abs() < 1e-3, "finger={finger}: {center:?} -> {moved:?}");
+            assert!(moved.x > center.x + 64.0 && (moved.y - center.y).abs() < 1e-3, "finger={finger} past={past}: {center:?} -> {moved:?}");
             let painted_right = (0..96).rev().find(|&c| ed.map().cell(c, row).is_some()).unwrap();
-            assert!(painted_right > shown_right + 1, "finger={finger}: the stroke went on past the first view's edge ({painted_right} vs {shown_right})");
-            assert!((first..=painted_right).all(|c| ed.map().cell(c, row).is_some()), "finger={finger}: one unbroken row from {first}");
-            assert_eq!(ed.map().cells.len() as i32, painted_right - first + 1, "finger={finger}: on that row alone");
-            assert_eq!(ed.history().undo_depth(), 1, "finger={finger}: one stroke, one step");
+            assert!(painted_right > shown_right + 1, "finger={finger} past={past}: the stroke went on past the first view's edge ({painted_right} vs {shown_right})");
+            assert!((first..=painted_right).all(|c| ed.map().cell(c, row).is_some()), "finger={finger} past={past}: one unbroken row from {first}");
+            assert_eq!(ed.map().cells.len() as i32, painted_right - first + 1, "finger={finger} past={past}: on that row alone");
+            assert_eq!(ed.history().undo_depth(), 1, "finger={finger} past={past}: one stroke, one step");
         }
         // Held in the middle of the canvas nothing scrolls.
         let (mut ed, layout, _) = big_editor((1180.0, 820.0), 2.0, false);
