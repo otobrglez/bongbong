@@ -565,7 +565,7 @@ impl MapFile {
                 if let Some(table) = value.as_table_mut() {
                     table.remove("cleared");
                 }
-                toml::to_string(&value).ok()
+                toml::to_string(&sorted_keys(value)).ok()
             })
             .unwrap_or_default();
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -605,6 +605,22 @@ impl Cleared {
     /// The stamp for `revision` won in `par` seconds.
     pub fn new(revision: u64, par: f64) -> Cleared {
         Cleared { revision: revision_text(revision), par }
+    }
+}
+
+/// `value` with every table's keys in sorted order: the canonical form a
+/// revision hashes, whichever map the toml crate keeps tables in - sorted
+/// by default, in insertion order under its `preserve_order` feature, which
+/// would hand the cells over in a `HashMap`'s order, another each run.
+fn sorted_keys(value: toml::Value) -> toml::Value {
+    match value {
+        toml::Value::Table(table) => {
+            let mut entries: Vec<(String, toml::Value)> = table.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            toml::Value::Table(entries.into_iter().map(|(key, value)| (key, sorted_keys(value))).collect())
+        }
+        toml::Value::Array(items) => toml::Value::Array(items.into_iter().map(sorted_keys).collect()),
+        other => other,
     }
 }
 
