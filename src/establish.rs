@@ -61,12 +61,28 @@ impl EstablishRules {
     }
 }
 
+/// The most texels of whole field a phone or a tablet (`crate::EMBEDDED`)
+/// draws the shot through: its targets - two, five under a sky, each with
+/// a depth buffer, about 8 bytes a texel - stay under about 170 MB, which
+/// longwater (80 x 45 cells, 3.7 million texels) fits and a larger field
+/// would multiply on a device with a phone's memory.
+pub const EMBEDDED_MAX_AREA: f32 = 2048.0 * 2048.0;
+
+/// Whether a field of `field` world pixels fits the shot's whole-field
+/// target on a build that is (`embedded`) or is not a phone's or a
+/// tablet's: `MAX_TEXELS` a side, and on a phone or a tablet
+/// `EMBEDDED_MAX_AREA` in all.
+pub fn fits(field: (f32, f32), embedded: bool) -> bool {
+    let (w, h) = (field.0.ceil(), field.1.ceil());
+    w <= MAX_TEXELS && h <= MAX_TEXELS && (!embedded || w * h <= EMBEDDED_MAX_AREA)
+}
+
 /// Whether a screen plays the shot for a round on a field of `field` world
 /// pixels: a local round's (`local`), on a followed field map whose view
 /// shows part of it (`shows_part`), small enough for the whole-field
-/// target (`MAX_TEXELS`), with the rows asking for a shot.
+/// target on this build (`fits`), with the rows asking for a shot.
 pub fn wanted(local: bool, shows_part: bool, field: (f32, f32), rules: &EstablishRules) -> bool {
-    local && shows_part && field.0.ceil() <= MAX_TEXELS && field.1.ceil() <= MAX_TEXELS && rules.plays()
+    local && shows_part && fits(field, crate::EMBEDDED) && rules.plays()
 }
 
 /// What the screen shows this frame.
@@ -351,6 +367,13 @@ mod establish_tests {
         assert!(!wanted(true, false, (1088.0, 544.0), &r), "a view that shows the whole field");
         assert!(!wanted(true, true, (8000.0, 2000.0), &r), "past the whole-field target");
         assert!(!wanted(true, true, (2560.0, 1440.0), &EstablishRules { hold_seconds: 0.0, ..r }), "turned off");
+        // A phone or a tablet keeps its targets to a phone's memory:
+        // longwater plays the shot there, the study map opens on the
+        // follow view.
+        assert!(fits((2560.0, 1440.0), true), "longwater on a phone");
+        assert!(!fits((3072.0, 1728.0), true), "the study map on a phone");
+        assert!(fits((3072.0, 1728.0), false), "the study map on a desktop");
+        assert!(!fits((4100.0, 100.0), false), "past a side");
     }
 
     #[test]
