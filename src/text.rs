@@ -905,9 +905,11 @@ mod text_tests {
             // with the keys' hint and with a tap's.
             pager(keys::EDITOR_PAGE),
             pager(keys::EDITOR_PAGE_TOUCH),
-            // The Save prompt's line under the name, either hint.
+            // The Save prompt's line under the name, either hint, and its
+            // SAVE button's label inside the button's drawn box.
             (keys::EDITOR_SAVE_HINT, UI_SMALL_TEXT, crate::editor::chrome::SAVE_PROMPT.0 as i32 - 24, vec![]),
             (keys::EDITOR_SAVE_HINT_TOUCH, UI_SMALL_TEXT, crate::editor::chrome::SAVE_PROMPT.0 as i32 - 24, vec![]),
+            (keys::FILE_SAVE, UI_SMALL_TEXT, (crate::editor::chrome::SAVE_BUTTON_W - crate::editor::chrome::SMALL_BOX_INSET) as i32 - 8, vec![]),
             (keys::FILE_LOAD, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE_AS, HUD_TEXT_SIZE, 168, vec![]),

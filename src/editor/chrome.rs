@@ -120,6 +120,13 @@ pub const STAMP_NAME_W: f32 = STAMPS_PANEL_W - 8.0 - STAMP_PICTURE.0 - 12.0 - 52
 /// The Save prompt's size.
 pub const SAVE_PROMPT: (f32, f32) = (300.0, 80.0);
 
+/// The Save prompt's SAVE button's width (`save_button`).
+pub const SAVE_BUTTON_W: f32 = 72.0;
+
+/// How wide the Save prompt's name may run from its left inset: up to a
+/// gap short of the SAVE button.
+pub const SAVE_NAME_W: f32 = SAVE_PROMPT.0 - 12.0 - SAVE_BUTTON_W - 12.0 - 8.0;
+
 /// The palette the folded TOOLS button opens: a row per category and the
 /// brush's row, its name in a column of this width, then a square cell per
 /// tool.
@@ -1061,6 +1068,13 @@ pub fn save_prompt(room: Rectangle) -> Rectangle {
     crate::hud::centred_in(crate::Rect::new(room.x, room.y, room.width, room.height), SAVE_PROMPT.0, SAVE_PROMPT.1)
 }
 
+/// The Save prompt's SAVE button, at its right end beside the title and
+/// the name, a bar button's height (`hud::button_height`): what a finger
+/// saves with, as Enter does from the keys.
+pub fn save_button(panel: Rectangle, touch: bool) -> Rectangle {
+    Rectangle::new(panel.x + panel.width - 12.0 - SAVE_BUTTON_W, panel.y + 8.0, SAVE_BUTTON_W, button_height(touch))
+}
+
 /// A dropdown or FILE menu row of `EDITOR_DROPDOWN_W`.
 pub fn menu_list(anchor: Rectangle, room: Rectangle, n: usize) -> Rows {
     hanging_list(anchor, room, n, EDITOR_DROPDOWN_W)
@@ -1382,6 +1396,11 @@ mod chrome_tests {
                 }
             }
             check("the Save prompt", save_prompt(room));
+            let save = save_button(save_prompt(room), ui.touch);
+            assert!(inside(save, save_prompt(room)), "{ui:?}: SAVE {save:?} leaves its prompt");
+            if ui.touch {
+                assert!(save.width >= UI_TOUCH_PT && save.height >= UI_TOUCH_PT, "{ui:?}: SAVE is {save:?}");
+            }
             let nav = navigator(room, (180.0, 100.0)).expect("a navigator");
             check("the navigator", crate::hud::Corners::plate(nav));
         }

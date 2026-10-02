@@ -313,7 +313,8 @@ category-ground = GROUND
 category-actor = ACTOR
 category-pickup = PICKUP
 
-# The FILE menu's rows, 18 px in a 200 px menu.
+# The FILE menu's rows, 18 px in a 200 px menu; file-save is the Save
+# prompt's button too, 12 pt in 60 pt.
 file-load = LOAD...
 file-save = SAVE
 file-save-as = SAVE AS...
@@ -343,10 +344,11 @@ settings-auto = auto
 settings-cli = (cli)
 
 # The popups. The Save prompt's line, 12 pt in 276 pt, names the keys,
-# or after a touch the tap outside the prompt that cancels it.
+# or after a touch its SAVE button (file-save) and the tap outside the
+# prompt that cancels it.
 editor-save-as = Save as:
 editor-save-hint = Enter to save, Esc to cancel
-editor-save-hint-touch = Enter to save, tap outside to cancel
+editor-save-hint-touch = Tap SAVE to save, outside to cancel
 editor-no-maps = no maps to load
 editor-shipped = shipped
 # A long list's pager: the span on screen, 12 pt between its < and > in

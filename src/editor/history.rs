@@ -202,20 +202,33 @@ impl UndoStack {
         }
     }
 
-    /// Revert the newest step; `Some` with that step when there was one.
-    pub fn undo(&mut self, map: &mut MapFile) -> Option<EditStep> {
+    /// Revert the newest step; `Some` with that step, moved to the redo
+    /// side, when there was one.
+    pub fn undo(&mut self, map: &mut MapFile) -> Option<&EditStep> {
         let step = self.undo.pop()?;
         step.apply(map, false);
-        self.redo.push(step.clone());
-        Some(step)
+        self.redo.push(step);
+        self.redo.last()
     }
 
-    /// Re-apply the newest undone step; `Some` with it when there was one.
-    pub fn redo(&mut self, map: &mut MapFile) -> Option<EditStep> {
+    /// Re-apply the newest undone step; `Some` with it, back on the undo
+    /// side, when there was one.
+    pub fn redo(&mut self, map: &mut MapFile) -> Option<&EditStep> {
         let step = self.redo.pop()?;
         step.apply(map, true);
-        self.undo.push(step.clone());
-        Some(step)
+        self.undo.push(step);
+        self.undo.last()
+    }
+
+    /// The step the last `undo` took back: the newest on the redo side.
+    pub fn last_undone(&self) -> Option<&EditStep> {
+        self.redo.last()
+    }
+
+    /// The step the last `redo` made again, or the last edit: the newest
+    /// on the undo side.
+    pub fn last_done(&self) -> Option<&EditStep> {
+        self.undo.last()
     }
 
     /// The newest step on the undo side, to fold a run of presses of one

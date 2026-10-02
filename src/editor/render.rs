@@ -60,6 +60,20 @@ fn fit_text(text: &str, width: f32, size: i32) -> String {
     crate::text::fit(text, width as i32, size).into_owned()
 }
 
+/// `text` cut from its start until it fits `width` at `size`: the end of
+/// a name being typed, where the cursor is, stays in view.
+fn tail_fit(text: &str, width: f32, size: i32) -> String {
+    let mut tail = text;
+    while text_width(tail, size) > width {
+        let mut chars = tail.chars();
+        if chars.next().is_none() {
+            break;
+        }
+        tail = chars.as_str();
+    }
+    tail.to_string()
+}
+
 /// A tool's name as the dropdown rows spell it, in the language on
 /// screen: the catalogue's `tool-<name>` message.
 fn label(tool: Tool) -> String {
@@ -733,9 +747,14 @@ impl MapEditor {
             (Some(Popup::Load { entries, scroll }), Some(PopupLayout::Load(load))) => self.draw_load_list(d, load, entries, *scroll, hints, textures),
             (Some(Popup::Save { name }), Some(PopupLayout::Save(panel))) => {
                 let panel = *panel;
+                let touch = chrome.bar.touch;
                 draw_panel(d, panel);
                 d.draw_text(&text().get(keys::EDITOR_SAVE_AS), (panel.x + 12.0) as i32, (panel.y + 10.0) as i32, 16, TEXT);
-                d.draw_text(&format!("{name}_"), (panel.x + 12.0) as i32, (panel.y + 34.0) as i32, 18, TEXT);
+                // The name's end, where it is being typed, stays in view.
+                let typed = tail_fit(&format!("{name}_"), chrome::SAVE_NAME_W, 18);
+                d.draw_text(&typed, (panel.x + 12.0) as i32, (panel.y + 34.0) as i32, 18, TEXT);
+                let color = if name.is_empty() { DIM } else { BUILD_ACCENT };
+                draw_small_button(d, chrome::save_button(panel, touch), &text().get(keys::FILE_SAVE), color, small_text(touch));
                 let hint = text().get(hints.pick(keys::EDITOR_SAVE_HINT, keys::EDITOR_SAVE_HINT_TOUCH));
                 d.draw_text(&hint, (panel.x + 12.0) as i32, (panel.y + 58.0) as i32, UI_SMALL_TEXT, Color::GRAY);
             }

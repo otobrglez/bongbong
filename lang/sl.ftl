@@ -248,7 +248,7 @@ settings-cli = (cli)
 
 editor-save-as = Shrani kot:
 editor-save-hint = Enter shrani, Esc prekliče
-editor-save-hint-touch = Enter shrani, tapni zunaj za preklic
+editor-save-hint-touch = Tapni SHRANI, zunaj za preklic
 editor-no-maps = ni zemljevidov
 editor-shipped = vgrajen
 editor-page = { $from }-{ $to } od { $n }  (kolešček)

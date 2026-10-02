@@ -64,6 +64,24 @@ impl Driver {
     }
 }
 
+/// Whether `game`'s round is its map played as the map is authored, under
+/// the knobs `t`: one seat, the map's own start and its own sky, and no
+/// enemy count, mission, spawn plan or chassis from the command line, a
+/// tool or the `player_tank` knob (read as it stands at the win; the round
+/// was set up under it unless it was moved since).
+fn played_as_authored(game: &Game, t: &crate::tuning::Tuning) -> bool {
+    // The map's sky, or a `random` one's pick for this seed: what the round
+    // is fought under when no `--weather` puts another in.
+    let own_sky = crate::weather::in_force(game.map.weather, game.round_seed(), true, &crate::tuning::Tuning::DEFAULT);
+    game.players == PlayerCount::ONE
+        && game.start_override.is_none()
+        && game.enemy_count_override.is_none()
+        && game.level_overrides == crate::level::LevelOverrides::default()
+        && game.player_row_override.is_none()
+        && t.player_tank == crate::tuning::Tuning::DEFAULT.player_tank
+        && game.weather() == own_sky
+}
+
 /// Where PLAY HERE puts seat 1 in `game`, a round just set up on the
 /// builder's map from the map's own start: the cell nearest `near` - the
 /// middle of the builder's view - that a tank can be put down on
@@ -295,25 +313,14 @@ impl Session {
     }
 
     /// The clear check on a win: the revision `PLAY` started the round on
-    /// (`clear_attempt`) is cleared when the round is that revision played
-    /// as the map is authored - one seat, the map's own start and its own
-    /// sky, no enemy count, mission, spawn plan or chassis from the command
-    /// line or a tool - and its par is the round clock at the win. The
+    /// (`clear_attempt`) is cleared when the round is that revision
+    /// `played_as_authored`, and its par is the round clock at the win. The
     /// builder keeps it (`MapEditor::note_clear`), the best par of its
     /// wins.
     fn note_clear(&mut self) {
         let Some(revision) = self.clear_attempt else { return };
         let game = &self.game;
-        // The map's sky, or a `random` one's pick for this seed: what the
-        // round is fought under when no `--weather` puts another in.
-        let own_sky = crate::weather::in_force(game.map.weather, game.round_seed(), true, &crate::tuning::Tuning::DEFAULT);
-        let authored = game.players == PlayerCount::ONE
-            && game.start_override.is_none()
-            && game.enemy_count_override.is_none()
-            && game.level_overrides == crate::level::LevelOverrides::default()
-            && game.player_row_override.is_none()
-            && game.weather() == own_sky;
-        if authored && game.map.revision() == revision {
+        if played_as_authored(game, &crate::tuning::tuning()) && game.map.revision() == revision {
             let seconds = game.round_stats().seconds as f64;
             self.builder.note_clear(revision, seconds);
         }
@@ -1723,6 +1730,13 @@ mod session_tests {
         s.game.weather = crate::map::Weather::Night;
         finish(&mut s, true);
         assert_eq!(s.builder.par(), None, "another sky");
+
+        // A chassis the `player_tank` knob picked, as the dev panel's would.
+        let mut s = clear_session();
+        s.play();
+        assert!(played_as_authored(&s.game, &crate::tuning::Tuning::DEFAULT));
+        let picked = crate::tuning::Tuning { player_tank: 3, ..crate::tuning::Tuning::DEFAULT };
+        assert!(!played_as_authored(&s.game, &picked), "a chassis from the knob");
 
         let mut s = clear_session();
         s.driver = Driver::Play;

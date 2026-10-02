@@ -1278,28 +1278,41 @@ impl MapEditor {
         &self.history
     }
 
-    pub fn undo(&mut self) -> Option<EditStep> {
-        self.finish_stroke();
-        self.finish_drag();
-        self.resize_session = None;
-        let field = self.map.field_size();
-        let step = self.history.undo(&mut self.map)?;
-        self.map_changed();
-        self.ground_after(&step);
-        self.follow_whole_map_step(&step, field, -1);
-        Some(step)
+    /// Take the newest step back (`UndoStack::undo`). Whether there was
+    /// one; it is `history().last_undone()`.
+    pub fn undo(&mut self) -> bool {
+        self.step_history(-1)
     }
 
-    pub fn redo(&mut self) -> Option<EditStep> {
+    /// Make the newest step taken back again (`UndoStack::redo`). Whether
+    /// there was one; it is `history().last_done()`.
+    pub fn redo(&mut self) -> bool {
+        self.step_history(1)
+    }
+
+    /// Undo (`way` -1) or redo (1) a step, the canvas following it: the
+    /// history is taken out while it does, so the step it moved is read
+    /// where it lies - its cells taken into the kept index, the ground and
+    /// the camera following it - rather than cloned, which for a load, a
+    /// clear or a resize is two whole maps.
+    fn step_history(&mut self, way: i32) -> bool {
         self.finish_stroke();
         self.finish_drag();
         self.resize_session = None;
         let field = self.map.field_size();
-        let step = self.history.redo(&mut self.map)?;
-        self.map_changed();
-        self.ground_after(&step);
-        self.follow_whole_map_step(&step, field, 1);
-        Some(step)
+        let mut history = std::mem::take(&mut self.history);
+        let step = if way < 0 { history.undo(&mut self.map) } else { history.redo(&mut self.map) };
+        let done = step.is_some();
+        if let Some(step) = step {
+            match step {
+                EditStep::Cells(changes) => self.cells_changed(changes),
+                _ => self.map_changed(),
+            }
+            self.ground_after(step);
+            self.follow_whole_map_step(step, field, way);
+        }
+        self.history = history;
+        done
     }
 
     /// Every change to the map comes through here: the CHECK panel's
@@ -2669,8 +2682,9 @@ impl MapEditor {
     /// act now) and, while a popup is open, its own - a list's or the
     /// palette's `tool_<name>`, BRUSH's list's and the palette's brush
     /// row's `shape_<name>`, `tool_select` and `brush_stamps`, the FILE
-    /// menu's `load`, `save`, `save_as` and `clear_map`, the Load list's
-    /// `map_<name>`, the STAMPS list's `stamp_<key>`, the MAP panel's
+    /// menu's `load`, `save`, `save_as` and `clear_map`, the Save prompt's
+    /// `save_confirm` (once it holds a name), the Load list's `map_<name>`,
+    /// the STAMPS list's `stamp_<key>`, the MAP panel's
     /// `<row>_dec`/`<row>_inc` and `reset`, the CHECK panel's rows
     /// (`finding_N`, from 0 over the whole report) and their FIX buttons
     /// (`fix_N`) - and a pager's halves (`page_back`, `page_next`). A shape
@@ -2723,6 +2737,11 @@ impl MapEditor {
             (Some(Popup::File), Some(PopupLayout::File(rows))) => {
                 for (i, row) in FileRow::all().iter().enumerate() {
                     out.push((row.name().to_string(), rows.row(i)));
+                }
+            }
+            (Some(Popup::Save { name }), Some(PopupLayout::Save(panel))) => {
+                if !name.is_empty() {
+                    out.push(("save_confirm".to_string(), chrome::save_button(*panel, frame.ui.touch)));
                 }
             }
             (Some(Popup::Load { entries, scroll }), Some(PopupLayout::Load(load))) => {
@@ -3339,9 +3358,14 @@ impl MapEditor {
         let pointer = input.pointer.map(|p| frame.to_ui(p));
         match (popup, layout) {
             (Popup::Save { mut name }, layout) => {
+                let press = pointer.filter(|_| pressed);
+                let panel = match layout {
+                    Some(PopupLayout::Save(panel)) => Some(panel),
+                    _ => None,
+                };
                 // A press outside the prompt cancels it, as one outside any
                 // popup closes it: a touch screen's Esc.
-                if let (Some(p), Some(PopupLayout::Save(panel))) = (pointer.filter(|_| pressed), layout)
+                if let (Some(p), Some(panel)) = (press, panel)
                     && !panel.contains(p)
                 {
                     return;
@@ -3354,7 +3378,9 @@ impl MapEditor {
                 if input.backspace {
                     name.pop();
                 }
-                if input.enter && !name.is_empty() {
+                // Enter, or a press on SAVE: a touch screen's Enter.
+                let tapped = input.pressed && press.zip(panel).is_some_and(|(p, panel)| chrome::save_button(panel, frame.ui.touch).contains(p));
+                if (input.enter || tapped) && !name.is_empty() {
                     if let Err(e) = self.save(Some(&name)) {
                         self.status = Some(e);
                     }
@@ -5971,10 +5997,10 @@ mod editor_tests {
                     drop(ed.stroke(&[(30, 2)], false));
                 }),
             ),
-            ("an undo", Box::new(|ed| drop(ed.undo()))),
-            ("a redo", Box::new(|ed| drop(ed.redo()))),
+            ("an undo", Box::new(|ed| assert!(ed.undo()))),
+            ("a redo", Box::new(|ed| assert!(ed.redo()))),
             ("a clear", Box::new(|ed| ed.clear())),
-            ("the clear undone", Box::new(|ed| drop(ed.undo()))),
+            ("the clear undone", Box::new(|ed| assert!(ed.undo()))),
             ("a load", Box::new(|ed| ed.load(select_map()))),
         ];
         for (what, edit) in &steps {
@@ -6060,6 +6086,35 @@ mod editor_tests {
         ed.popup = Some(Popup::Save { name: String::new() });
         ed.update(&BuilderInput { escape: true, ..Default::default() }, &frame);
         assert_eq!(ed.open_menu(), None, "Esc cancels it");
+    }
+
+    /// The Save prompt's SAVE button saves as Enter does - a touch
+    /// screen's way, with no Enter to press: no button while the name is
+    /// empty, and a press on it once one is typed saves and closes the
+    /// prompt.
+    #[test]
+    fn the_save_prompts_button_saves_as_enter_does() {
+        let ui = UiFrame::new((852.0, 393.0), 1.0, 1.0, Insets::default(), true);
+        let frame = BuilderFrame::new(ui, (W, H), MapClass::Arena, None);
+        let mut ed = MapEditor::new(MapFile::new());
+        ed.popup = Some(Popup::Save { name: String::new() });
+        assert!(!has_named(&ed, &frame, "save_confirm"), "no name, no button");
+        let Some(PopupLayout::Save(panel)) = ed.chrome(&frame).popup else { panic!("the Save prompt") };
+        click(&mut ed, &frame, frame.ui.to_window(center(chrome::save_button(panel, true))));
+        assert_eq!(ed.open_menu(), Some("save"), "an empty name saves nothing");
+        if !map::saving_available() {
+            return;
+        }
+        let name = format!("zz-save-button-{}", std::process::id());
+        ed.update(&BuilderInput { typed: name.clone(), ..Default::default() }, &frame);
+        let at = center(named(&ed, &frame, "save_confirm"));
+        click(&mut ed, &frame, at);
+        let path = map::maps_dir().join(format!("{name}.toml"));
+        let saved = path.exists();
+        let _ = std::fs::remove_file(&path);
+        assert!(saved, "SAVE wrote the map");
+        assert_eq!(ed.open_menu(), None);
+        assert_eq!(ed.name(), name);
     }
 
     #[test]

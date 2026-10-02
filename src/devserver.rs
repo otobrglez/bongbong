@@ -1933,18 +1933,18 @@ impl DevServer {
             "builder_undo" | "builder_redo" => steps_param(params).map(|steps| {
                 let undo = method == "builder_undo";
                 let mut done = 0;
-                let mut last = None;
                 for _ in 0..steps {
-                    let step = if undo { session.builder.undo() } else { session.builder.redo() };
-                    match step {
-                        Some(step) => {
-                            done += 1;
-                            last = Some(step);
-                        }
-                        None => break,
+                    if !(if undo { session.builder.undo() } else { session.builder.redo() }) {
+                        break;
                     }
+                    done += 1;
                 }
                 let history = session.builder.history();
+                let last = match (done, undo) {
+                    (0, _) => None,
+                    (_, true) => history.last_undone(),
+                    (_, false) => history.last_done(),
+                };
                 let mut v = json!({
                     "undo_depth": history.undo_depth(),
                     "redo_depth": history.redo_depth(),
