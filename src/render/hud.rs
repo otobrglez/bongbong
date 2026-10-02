@@ -26,8 +26,8 @@ const FROG_COLOR: Color = Color::new(120, 220, 90, 255);
 /// What a slot draws in when there is nothing in it: the FROG gauge of a
 /// round without a frog, and a wrecked seat's chip.
 const SPENT: Color = Color::new(60, 60, 66, 255);
-/// A cluster's plate: the bar's dark, mostly opaque, so the readouts read
-/// over any ground under any sky.
+/// A cluster's plate: the builder bar's dark, mostly opaque, so the
+/// readouts read over any ground under any sky.
 const PLATE_FILL: Color = Color::new(21, 21, 24, 208);
 const PLATE_EDGE: Color = Color::new(0, 0, 0, 150);
 /// The dark plate behind each line of text under the left cluster.

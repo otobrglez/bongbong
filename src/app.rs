@@ -570,7 +570,7 @@ pub struct Args {
     tank2: Option<TankKind>,
 
     /// How many seats the round holds, 1 to `MAX_SEATS` - the players
-    /// button in the HUD bar switches between one and two later
+    /// button in the HUD's corner switches between one and two later
     /// (docs/two-players.md). Player 1 is always the arrows + Space; two
     /// players adds player 2 on WASD + Left Shift, and the seats past
     /// those two have no keys of their own: they are a room's, and stand
@@ -579,7 +579,8 @@ pub struct Args {
     players: u8,
 
     /// The window's initial size, e.g. `--resolution 1920x1080` (default:
-    /// the map's own bitmap, the field plus the HUD bar). The battlefield
+    /// the map's own bitmap - the field, under the builder's bar with
+    /// `--editor` - at 1.5x where the monitor has the room). The battlefield
     /// itself is the map's `size` and every player in a match shares it;
     /// the window only decides how large it is drawn, letterboxed so the
     /// whole field is always on screen (view.rs). Resizable afterwards;
@@ -984,8 +985,8 @@ pub fn run(args: Args) {
     eprintln!("[text] language {language}");
 
     // The battlefield is the map's (`MapFile::field_size`); the bitmap the
-    // game draws is that field plus the HUD bar above it
-    // (docs/hud-and-builder-layout-design.md), and the window is whatever
+    // game draws is that field - under the builder's bar in Build
+    // (docs/hud-and-builder-layout-design.md) - and the window is whatever
     // the player makes it - the bitmap is fitted into it by `view::View`.
     // The simulation, the physics, the maps and the probe only ever see
     // the field.
@@ -1013,7 +1014,14 @@ pub fn run(args: Args) {
         let (w, h) = map.field_size();
         (w.round() as i32, h.round() as i32)
     };
+    // The bitmap of the first frame: the field alone in Play, under the
+    // builder's bar with `--editor`. The web's canvas keeps the builder's
+    // shape whatever the mode - it is the box the page lays out
+    // (index.astro's `--bitmap-w`/`--bitmap-h`) and raylib maps a touch
+    // against it - and play is letterboxed inside it.
     let bitmap = Layout::for_field(screen_width as f32, screen_height as f32).window_size();
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    let opening = if args.editor || crate::EMBEDDED { bitmap } else { Layout::bare(screen_width as f32, screen_height as f32).window_size() };
     // iOS: the window is the screen, and raylib's SDL backend sizes its
     // render target from the size InitWindow is asked for (it never reads
     // the window back), so the screen's point size has to go in here.
@@ -1029,8 +1037,9 @@ pub fn run(args: Args) {
     // upscaled by the compositor instead, on top of `view::View`.
     #[cfg(target_os = "android")]
     let (window_width, window_height) = (0, 0);
-    // A desktop window opens at the size it will play at: the bitmap at
-    // the scale cap (1.5x the standard field), clamped to the monitor.
+    // A desktop window opens at the size it will play at: the first
+    // frame's bitmap at the scale cap (1.5x the standard field), clamped
+    // to the monitor.
     #[cfg(not(any(target_os = "ios", target_os = "android")))]
     let (window_width, window_height) = args.resolution.unwrap_or_else(|| {
         if crate::EMBEDDED {
@@ -1040,10 +1049,10 @@ pub fn run(args: Args) {
         let open_at = if zoom > 0.0 { zoom.min(1.5).max(1.0) } else { 1.5 };
         let monitor = sola_raylib::core::window::get_current_monitor();
         let (mw, mh) = (sola_raylib::core::window::get_monitor_width(monitor), sola_raylib::core::window::get_monitor_height(monitor));
-        let w = ((bitmap.0 as f32) * open_at).round() as i32;
-        let h = ((bitmap.1 as f32) * open_at).round() as i32;
+        let w = ((opening.0 as f32) * open_at).round() as i32;
+        let h = ((opening.1 as f32) * open_at).round() as i32;
         if mw > 0 && mh > 0 && (w > mw - 80 || h > mh - 120) {
-            bitmap
+            opening
         } else {
             (w, h)
         }
@@ -1267,9 +1276,10 @@ pub fn run(args: Args) {
     let mut scene_target = rl
         .load_render_texture(&thread, scene_size.0 as u32, scene_size.1 as u32)
         .expect("failed creating scene render texture");
-    // The composited bitmap - the field plus the bar - that `view::present`
-    // fits into the window, or a followed view's world alone, the scene
-    // target's size (`Game::render`); re-created when that size changes.
+    // The composited bitmap - the field, under the builder's bar in Build -
+    // that `view::present` fits into the window, or a followed view's world
+    // alone, the scene target's size (`Game::render`); re-created when that
+    // size changes.
     let mut composite_size = bitmap;
     let mut composite = rl
         .load_render_texture(&thread, bitmap.0 as u32, bitmap.1 as u32)

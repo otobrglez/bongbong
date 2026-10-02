@@ -1187,7 +1187,7 @@ mod hud_tests {
             assert_eq!(HudLayout::choose(seats, None), HudLayout::Compact, "{seats} on a couch");
         }
         // A room: the seat this window plays is rarely seat 0, so even a
-        // pair goes compact rather than pairing the bar up.
+        // pair goes compact rather than pairing the blocks up.
         assert_eq!(HudLayout::choose(1, Some(0)), HudLayout::One, "the rig's one seat");
         for seats in 2..=MAX_SEATS {
             for seat in 0..seats as u8 {

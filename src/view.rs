@@ -36,7 +36,8 @@ use crate::Layout;
 /// The bitmap-to-screen mapping for one frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct View {
-    /// The bitmap's size in its own pixels (field plus bar).
+    /// The bitmap's size in its own pixels (the field, under the builder's
+    /// bar in Build).
     pub bitmap: (f32, f32),
     /// The window's size in logical pixels.
     pub window: (f32, f32),
@@ -80,11 +81,11 @@ impl View {
     }
 
     /// `fit` for a bitmap made to the window's shape - a followed field
-    /// map's, the world framed into the window less the bar
-    /// (`FollowFrame`): the same scale, with the centring offset rounded
-    /// to the nearest whole point rather than floored, so the rounding
-    /// error of a bitmap that fills the window exactly never shifts it a
-    /// whole point off the window's edge. Where the shape was clamped, the
+    /// map's, the world framed into the whole window (`FollowFrame`): the
+    /// same scale, with the centring offset rounded to the nearest whole
+    /// point rather than floored, so the rounding error of a bitmap that
+    /// fills the window exactly never shifts it a whole point off the
+    /// window's edge. Where the shape was clamped, the
     /// bars left over are centred like `fit`'s.
     pub fn fill(bitmap: (f32, f32), window: (f32, f32)) -> Self {
         let fit = Self::fit(bitmap, window);

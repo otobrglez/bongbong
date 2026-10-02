@@ -489,12 +489,11 @@ impl Session {
         }
     }
 
-    /// The bar's `ONLINE` button: open the lobby over the local round,
+    /// The HUD's `ONLINE` button: open the lobby over the local round,
     /// which is left exactly where it stands (nothing here calls
     /// `Game::update`, and `playing()` is false from this frame on).
     /// A no-op where a build cannot reach a room, and while the builder
-    /// is up - the lobby is the play bar's button. Returns the mode
-    /// afterwards.
+    /// is up - the lobby is play's button. Returns the mode afterwards.
     pub fn press_online(&mut self) -> Driver {
         if !crate::ONLINE_AVAILABLE || self.driver != Driver::Play {
             return self.driver;
@@ -738,8 +737,8 @@ impl Session {
                 // The one button a room's round carries: the way back to
                 // the local one on a build with no Esc key.
                 leave_button: true,
-                // The bar is this seat's, whichever seat the room gave
-                // it; the others are the compact strip's.
+                // The vitals are this seat's, whichever seat the room
+                // gave it; the others are the compact strip's.
                 seat: self.online.as_ref().and_then(AnyRound::seat),
                 // A room's round does not restart where it stands: the
                 // end screen counts down to the lobby it came from.
@@ -991,7 +990,7 @@ mod session_tests {
         assert_eq!(s.builder.map(), &canvas, "the builder kept its edit");
         assert!(s.builder.dirty());
 
-        // The bar's own chrome is gone while the round belongs to a room.
+        // Play's own buttons are gone while the round belongs to a room.
         let chrome = s.play_chrome();
         assert!(!chrome.build_button && !chrome.players_button && !chrome.restart_button);
         assert!(chrome.status.is_some_and(|line| line.contains("ROOM")), "the status line names the mode");
@@ -1031,7 +1030,7 @@ mod session_tests {
         assert!(!s.playing(), "the local round only ever runs in play mode");
         assert!(s.online.is_none(), "no room until a button asks for one");
         assert!(std::ptr::eq(s.shown(), &s.game), "the lobby stands over the local round");
-        // The bar's own buttons are gone; the lobby is what is drawn.
+        // Play's own buttons are gone; the lobby is what is drawn.
         let chrome = s.play_chrome();
         assert!(!chrome.build_button && !chrome.players_button && !chrome.online_button);
         let view = chrome.lobby.expect("the lobby is on screen");
@@ -1456,7 +1455,7 @@ mod session_tests {
         assert_eq!(s.level(), None);
         assert!(!s.game.hold_end_screen);
         assert!(s.play_chrome().level.is_none());
-        assert_eq!(s.level_button(), None, "the bar keeps its mission word");
+        assert_eq!(s.level_button(), None, "the HUD keeps its mission word");
         assert!(s.press_levels(), "and the level select is the way back to the levels");
         assert!(!s.press_levels());
         // The default map is a wave round, so its enemies are still out

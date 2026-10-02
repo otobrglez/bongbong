@@ -504,7 +504,8 @@ impl Game {
         // module's own doc comment), not the place to reach for an rng.
         // Muzzle/impact flash quads and the HUD deliberately aren't shifted:
         // they're either their own small on-screen quad or meant to stay put.
-        // The field origin is added on top: the scene lands below the bar.
+        // The field origin is added on top: the scene lands on the field's
+        // place in the bitmap.
         let mut blit_offset = Vector2::new(0.0, 0.0);
         // `screen_fx_intensity` scales every whole-screen effect together;
         // folding it into the magnitude here keeps the stack cap below

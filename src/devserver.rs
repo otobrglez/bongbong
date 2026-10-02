@@ -4088,7 +4088,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(rx.recv().unwrap().unwrap()["frame"], 1);
     }
 
-    /// The bar's own way out of a room: a `click` on `LEAVE` lands on
+    /// The corners' own way out of a room: a `click` on `LEAVE` lands on
     /// the hit test a finger lands on, and comes back to the local round
     /// the way Esc does.
     #[test]
