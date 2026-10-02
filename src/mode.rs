@@ -212,10 +212,18 @@ impl Session {
     }
 
     /// A level's end screen counts down into a hold, for
-    /// `follow_countdown` to take its way; free play's restarts on its
-    /// own. Called wherever the round's map changes.
+    /// `follow_countdown` to take its way; free play's - and a test
+    /// round's from the builder's spot (`play_here`) - restarts on its
+    /// own. Called wherever the round's map or start changes.
     fn sync_level(&mut self) {
-        self.game.hold_end_screen = self.level().is_some();
+        self.game.hold_end_screen = self.level_round().is_some();
+    }
+
+    /// The level the local round plays for: its map's (`level`), unless
+    /// the round is a test from the builder's spot (`play_here`), which
+    /// wins no level and leads to no other.
+    fn level_round(&self) -> Option<usize> {
+        self.level().filter(|_| self.game.start_override.is_none())
     }
 
     /// Start level `i` - its map as last edited this session - on the
@@ -250,7 +258,7 @@ impl Session {
     /// `NEXT LEVEL`: after a won level, the one after it - the first again
     /// after the last. A no-op anywhere else; answers whether it moved.
     pub fn next_level(&mut self) -> bool {
-        let Some(i) = self.level() else { return false };
+        let Some(i) = self.level_round() else { return false };
         if self.driver != Driver::Play || self.game.outcome() != Outcome::Won {
             return false;
         }
@@ -275,7 +283,7 @@ impl Session {
             Outcome::Lost => {}
             Outcome::Won if self.game.start_override.is_some() => {}
             Outcome::Won => {
-                if let (Some(i), Some(campaign)) = (self.level(), self.campaign.as_mut()) {
+                if let (Some(i), Some(campaign)) = (self.level_round(), self.campaign.as_mut()) {
                     campaign.won(i);
                 }
                 if !std::mem::replace(&mut self.clear_noted, true) {
@@ -317,12 +325,13 @@ impl Session {
     }
 
     /// The end screen's content: set once a local round is decided, with
-    /// a level's buttons and its countdown on a level.
+    /// a level's buttons and its countdown on a level (never on a test
+    /// round from the builder's spot, whose end screen is free play's).
     fn result_view(&self) -> Option<ResultView> {
         if self.game.outcome() == Outcome::Playing {
             return None;
         }
-        let buttons = self.level().zip(self.campaign.as_ref()).map(|(i, campaign)| {
+        let buttons = self.level_round().zip(self.campaign.as_ref()).map(|(i, campaign)| {
             let next = (self.game.outcome() == Outcome::Won).then(|| {
                 if campaign.is_last(i) { NextLevel::FirstAgain { levels: campaign.levels.len() } } else { NextLevel::Next }
             });
@@ -558,8 +567,8 @@ impl Session {
             if let Some(campaign) = &mut self.campaign {
                 campaign.remember_edit(&self.game.map);
             }
-            self.sync_level();
             self.game.start_override = None;
+            self.sync_level();
             // The canvas carries no stamp, so the round's map is the
             // builder's revision.
             self.clear_attempt = Some(self.builder.revision());
@@ -588,13 +597,15 @@ impl Session {
         let vp = self.builder.viewport();
         let near = self.builder.camera().center(&vp);
         self.play();
-        self.clear_attempt = None;
         if let Some(cell) = play_here_cell(&self.game, near) {
             // The same round as the one just set up, its start moved: the
-            // seed it drew is pinned for the one `init` and given back.
+            // seed it drew is pinned for the one `init` and given back. A
+            // test: it clears nothing, and its end screen restarts it.
+            self.clear_attempt = None;
             let pinned = self.game.seed_override;
             self.game.seed_override = Some(self.game.round_seed());
             self.game.start_override = Some(cell);
+            self.sync_level();
             let (width, height) = self.game.map.field_size();
             self.game.init(width, height);
             self.game.seed_override = pinned;
@@ -1534,9 +1545,27 @@ mod session_tests {
         let mut s = level_session(two_levels(), 0);
         s.driver = Driver::Build;
         s.play_here();
-        assert!(s.game.start_override.is_some());
+        let spot = s.game.start_override.expect("a spot");
+        assert!(!s.game.hold_end_screen, "a test's end screen restarts on its own");
         finish(&mut s, true);
         assert_eq!(s.take_progress(), None, "a test from a spot wins no level");
+        let view = s.play_chrome().result.expect("the end screen");
+        assert_eq!(view.buttons, None, "free play's end screen: no way on to the next level");
+        assert!(!s.next_level(), "and nothing leads there");
+        assert!(!s.enter_result());
+        for _ in 0..countdown_frames() + 60 {
+            step(&mut s);
+        }
+        assert_eq!((s.level(), s.game.outcome(), s.game.start_override), (Some(0), Outcome::Playing, Some(spot)), "the same level again, from the spot");
+        assert_eq!(s.builder.map().name.as_deref(), Some("lotus-lagoon"), "the builder still holds the level");
+
+        // PLAY from the builder is the level again, its end screen a
+        // level's.
+        s.press_build();
+        s.answer_dialog(true);
+        s.play();
+        assert_eq!(s.game.start_override, None);
+        assert!(s.game.hold_end_screen);
     }
 
     /// A builder session on the open field with one enemy by the map's
