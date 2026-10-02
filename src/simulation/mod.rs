@@ -4264,6 +4264,12 @@ impl Game {
             .collect()
     }
 
+    /// Where the players' frog stands while it lives - for tooling (the
+    /// probe's `defend` scenario guards it like a seat).
+    pub fn frog_position(&self) -> Option<Position> {
+        self.frog.and_then(|e| with_frog(&self.world, e, |fr| (!fr.is_dead()).then_some(fr.position)))
+    }
+
     pub fn tank_snapshots(&self) -> Vec<TankSnapshot> {
         // A hunter with the players' frog to hunt is on its way to a fight
         // whatever its alert says (`TankSnapshot::leashed`).

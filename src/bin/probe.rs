@@ -270,6 +270,10 @@ const PILEUP_FRAMES: u32 = 60; // 1s
 // ends quickly (post-grid-fix an AFK player can be dead inside ~6s) can
 // never false-flag: elapsed stays under NAV_GRACE_SECONDS alone.
 const NAV_GRACE_SECONDS: f32 = 10.0;
+// The `defend` scenario's reach: an enemy this close to a live seat or the
+// players' frog is destroyed. Past `enemy_attack_range` (340 px), so no
+// enemy ever gets near enough to attack what the defence guards.
+const DEFEND_REACH_PX: f32 = 400.0;
 const NAV_STRETCH_MAX: f32 = 4.0;
 // --- Frame-invariant sanity bounds (kind=invariant) ---
 // Physics sanity rather than behavior: any violation is a hard bug (solver
@@ -310,6 +314,16 @@ enum Scenario {
     /// reach the player in this short a window anyway). Run with
     /// `--frames 60 --log-every 1` to see the curve frame-by-frame.
     Brake,
+    /// A perfect defence: the seats never move or fire, and every enemy
+    /// that comes within `DEFEND_REACH_PX` of a live seat or the players'
+    /// frog is destroyed on the spot, through the normal kill path
+    /// (`Game::debug_kill`). No enemy gets near enough to attack, so a round
+    /// lasts until every enemy it calls has come to the fight - on a waves
+    /// map, exactly as long as its stragglers keep it waiting. Each tank's arrival at the
+    /// defence is its `time_to_engage`, so the walk to the fight and
+    /// `never-arrived` read the same as in the other scenarios
+    /// (docs/large-maps-follow-camera.md section 12).
+    Defend,
     /// Player drives a continuous square loop (1s per leg: Up, Right, Down,
     /// Left) without firing - a perpetually moving target whose bearing from
     /// every enemy keeps sweeping across the 45-degree diagonals and whose
@@ -492,7 +506,7 @@ fn input_for_frame(args: &Args, frame: u32) -> Input {
 fn intent_for_frame(scenario: Scenario, frame: u32) -> Intent {
     let mut player_intent = Intent::default();
     match scenario {
-        Scenario::Afk => {}
+        Scenario::Afk | Scenario::Defend => {}
         Scenario::Advance => {
             player_intent.move_dir = Some(Dir::Up);
             player_intent.fire = frame % 30 == 0;
@@ -512,6 +526,24 @@ fn intent_for_frame(scenario: Scenario, frame: u32) -> Intent {
         }
     }
     player_intent
+}
+
+/// The `defend` scenario's perfect defence: every enemy on the field within
+/// `DEFEND_REACH_PX` of a live seat or the players' frog is queued to die at
+/// the top of the next frame (`Game::debug_kill`), and the frame it got
+/// there is its arrival at the fight (`TankTrack::time_to_engage`).
+fn defend(game: &mut Game, tracks: &mut BTreeMap<usize, TankTrack>, frame: u32) {
+    let snapshots = game.tank_snapshots();
+    let mut guarded: Vec<Position> =
+        snapshots.iter().filter(|t| t.is_player && !t.is_wreck && !t.entering).map(|t| t.position).collect();
+    guarded.extend(game.frog_position());
+    for tank in snapshots.iter().filter(|t| !t.is_player && !t.is_wreck && !t.entering) {
+        if guarded.iter().any(|g| g.distance_to(tank.position) <= DEFEND_REACH_PX) && game.debug_kill(tank.slot).is_ok() {
+            if let Some(track) = tracks.get_mut(&tank.slot) {
+                track.time_to_engage.get_or_insert(frame as f32 * DT);
+            }
+        }
+    }
 }
 
 fn outcome_str(outcome: Outcome) -> &'static str {
@@ -1811,6 +1843,9 @@ fn run_round(
         }
         check_fire(&game, &mut stood, round, frame, &mut fire, &mut offbox_flagged, &mut totals, heat);
         check_anomalies(&mut tracks, &mut invariant_flagged, &game, round, frame, &mut totals, heat);
+        if matches!(args.scenario, Scenario::Defend) {
+            defend(&mut game, &mut tracks, frame);
+        }
         let now = frame as f32 * DT;
         if contact.shot.is_none() && fire.shots_at_seats > 0 {
             contact.shot = Some(now);
@@ -1973,6 +2008,7 @@ fn mean_median_line(values: &[f32], unit: &str) -> String {
 fn scenario_str(scenario: Scenario) -> &'static str {
     match scenario {
         Scenario::Afk => "afk",
+        Scenario::Defend => "defend",
         Scenario::Advance => "advance",
         Scenario::Brake => "brake",
         Scenario::Circle => "circle",
