@@ -155,7 +155,7 @@ const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"inte
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|apart|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, in play and online the corners' `buttons` and `clusters`, and the `screen_buttons` of whatever stands over the round - the level select's open tiles (`level_N`) and `back`, a dialog's `one`/`two` or `leave`/`stay`, a level's end screen's `levels`/`again`/`next`, the lobby's live buttons (`host`, `join`, `key_a`, `confirm`, `ready`, `start`, `kick_1`, ...) - all in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|apart|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, in play and online the corners' `buttons` and `clusters` and the `minimap` picture under the right cluster (`null` where none is drawn - an arena shown whole, a phone; a press there does nothing), and the `screen_buttons` of whatever stands over the round - the level select's open tiles (`level_N`) and `back`, a dialog's `one`/`two` or `leave`/`stay`, a level's end screen's `levels`/`again`/`next`, the lobby's live buttons (`host`, `join`, `key_a`, `confirm`, `ready`, `start`, `kick_1`, ...) - all in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state (`builder.navigator`: the navigator's picture in window coordinates for `click`, with its `bitmap` rect for `builder_touch`; `null` at FIT on an arena), and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -910,6 +910,30 @@ impl DevServer {
         }
     }
 
+    /// `status.builder.navigator`: where the builder's navigator stands
+    /// (`MapEditor::navigator_rect`) through the frame the window last drew
+    /// the builder in - in window coordinates, what `click` takes, and as
+    /// `bitmap` the same rect in the builder's bitmap pixels, what
+    /// `builder_touch` takes; `null` where there is none (FIT on an arena)
+    /// or the window is not in build mode.
+    fn navigator_json(&self, session: &Session, width: f32, height: f32) -> Value {
+        if session.mode() != Driver::Build {
+            return Value::Null;
+        }
+        let (layout, view, _) = self.click_frame(session, width, height);
+        match session.builder.navigator_rect(&layout) {
+            Some(r) => {
+                let a = view.to_window(Vec2::new(r.x, r.y));
+                let b = view.to_window(Vec2::new(r.x + r.width, r.y + r.height));
+                json!({
+                    "x": a.x, "y": a.y, "w": b.x - a.x, "h": b.y - a.y,
+                    "bitmap": { "x": r.x, "y": r.y, "w": r.width, "h": r.height },
+                })
+            }
+            None => Value::Null,
+        }
+    }
+
     /// The corners the window lays out for the live mode in `ui`
     /// (`hud::corners`), `None` where it draws none.
     fn corners(session: &Session, ui: &UiFrame) -> Option<Corners> {
@@ -963,9 +987,11 @@ impl DevServer {
         let mut v = json!({ "scale": ui.scale, "screen": rect(ui.screen), "area": rect(ui.area), "touch": ui.touch });
         if let Some(corners) = Self::corners(session, &ui) {
             let buttons: Map<String, Value> = corners.buttons().into_iter().map(|(b, r)| (b.name().to_string(), on_window(r))).collect();
-            let [left, right] = corners.keep_out();
             v["buttons"] = Value::Object(buttons);
-            v["clusters"] = json!({ "left": on_window(left), "right": on_window(right) });
+            v["clusters"] = json!({ "left": on_window(corners.left()), "right": on_window(corners.right) });
+            // The minimap's picture under the right cluster, where the
+            // window draws one: not a button - a click there does nothing.
+            v["minimap"] = corners.minimap.map_or(Value::Null, on_window);
         }
         let screen = Self::screen_buttons(session, &ui);
         if !screen.is_empty() {
@@ -1383,6 +1409,7 @@ impl DevServer {
                 "dirty": session.builder.dirty(),
                 "tool": session.builder.tool().name(),
                 "camera": builder_camera_json(&session.builder),
+                "navigator": self.navigator_json(session, width, height),
             },
             "events_kept": self.events.len(),
             "next_event_seq": self.next_seq,
@@ -4623,6 +4650,60 @@ cells."1,1" = { kind = "wall" }"#;
         assert!(zoomed["camera"]["zoom"].as_f64().unwrap() > 2.0, "{zoomed}");
         assert!(ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [[{ "id": 1 }]] })).unwrap_err().contains("{id, x, y}"));
         assert!(ask(&mut server, &tx, &mut s, "builder_touch", json!({})).unwrap_err().contains("frames"));
+    }
+
+    /// The builder's navigator is one hit test that `click` and
+    /// `builder_touch` both reach: `status.builder.navigator` says where it
+    /// stands (nowhere at FIT on an arena), a click on it puts the view's
+    /// middle on the point under it, a drag carries the view along, a
+    /// finger does what the mouse does, and none of it paints.
+    #[test]
+    fn the_navigator_is_reached_by_click_and_by_a_finger() {
+        const FIELD_MAP: &str = r#"
+version = 1
+size = [80, 45]
+cells."5,5" = { kind = "start" }
+cells."40,30" = { kind = "frog" }
+"#;
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(44);
+        ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
+        enter_build(&mut server, &tx, &mut s);
+        let arena = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(arena["builder"]["navigator"], Value::Null, "none at FIT on an arena");
+
+        ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": FIELD_MAP, "seed": 1 })).unwrap();
+        enter_build(&mut server, &tx, &mut s);
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let nav = status["builder"]["navigator"].clone();
+        assert!(nav.is_object() && nav["bitmap"].is_object(), "a field map's navigator stands at FIT too: {status}");
+        let n = |v: &Value, k: &str| v[k].as_f64().unwrap() as f32;
+        let at = |r: &Value, fx: f32, fy: f32| (n(r, "x") + n(r, "w") * fx, n(r, "y") + n(r, "h") * fy);
+        let centre = |s: &Session| s.builder.camera().center(&s.builder.viewport());
+        let undo = s.builder.history().undo_depth();
+        let middle = Vec2::new(40.0 * 32.0, 22.5 * 32.0);
+
+        let (x, y) = at(&nav, 0.6, 0.6);
+        let clicked = ask(&mut server, &tx, &mut s, "click", json!({ "x": x, "y": y })).unwrap();
+        assert!(clicked.get("cell").is_none(), "a press on the navigator is not on the canvas: {clicked}");
+        assert!(!s.builder.camera().is_fit(), "a press from FIT zooms in on the point");
+        let after_click = centre(&s);
+        assert!(after_click.x > middle.x && after_click.y > middle.y, "the view went right and down: {after_click:?}");
+
+        let (x2, y2) = at(&nav, 0.2, 0.3);
+        ask(&mut server, &tx, &mut s, "click", json!({ "x": x, "y": y, "drag_to": [x2, y2] })).unwrap();
+        let after_drag = centre(&s);
+        assert!(after_drag.x < after_click.x && after_drag.y < after_click.y, "the drag carried it up and left: {after_drag:?}");
+
+        let bitmap = &nav["bitmap"];
+        let (tx0, ty0) = at(bitmap, 0.5, 0.5);
+        let (tx1, ty1) = at(bitmap, 0.8, 0.8);
+        let frames = json!([[{ "id": 1, "x": tx0, "y": ty0 }], [{ "id": 1, "x": tx1, "y": ty1 }]]);
+        let touched = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": frames })).unwrap();
+        let after_touch = centre(&s);
+        assert!(after_touch.x > after_drag.x && after_touch.y > after_drag.y, "the finger moved it: {after_touch:?}");
+        assert_eq!(touched["dirty"], false, "{touched}");
+        assert_eq!(s.builder.history().undo_depth(), undo, "the navigator never paints");
     }
 
     /// `builder_settings {size, anchor}` resizes the canvas about the

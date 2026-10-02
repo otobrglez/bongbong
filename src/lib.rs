@@ -948,6 +948,7 @@ pub mod mode;
 pub mod net;
 pub mod maplint;
 pub mod math;
+pub mod minimap;
 pub mod missile;
 pub mod obstacle;
 pub mod pathfind;

@@ -2419,6 +2419,31 @@ tunables! {
         ui_fade_seconds: f32 = 0.25 in 0.0 ..= 2.0;
     }
 
+    group minimap {
+        /// When the play minimap is drawn under the top-right cluster
+        /// (`minimap.rs`, docs/large-maps-follow-camera.md sections 7 and
+        /// 15), and only ever while the camera shows less than the whole
+        /// field: 0 never, 1 on tablets and desktops but not on a phone
+        /// (`minimap_phone_short_pt`), whose edge arrows carry the field,
+        /// 2 on every screen. The builder's navigator is on every device
+        /// whatever this says.
+        minimap_show: i32 = 1 in 0 ..= 2;
+        /// A screen whose short side is under this many points is a
+        /// phone's: a landscape phone is 360 to 440 points tall, the
+        /// smallest tablet 744 ...
+        minimap_phone_short_pt: f32 = 500.0 in 0.0 ..= 2000.0;
+        /// ... and so is one under this many millimetres, where the
+        /// platform reports the screen's size: a small panel that reports a
+        /// desktop's points.
+        minimap_phone_short_mm: f32 = 90.0 in 0.0 ..= 1000.0;
+        /// The box the minimap is fitted into, in points, the map's shape
+        /// kept: a long map as wide as this and shorter ...
+        minimap_width_pt: f32 = 160.0 in 48.0 ..= 480.0;
+        /// ... a tall one as tall as this and narrower. The builder's
+        /// navigator is fitted into the same box.
+        minimap_height_pt: f32 = 120.0 in 32.0 ..= 480.0;
+    }
+
     group fx {
         /// One multiplier on every effect that touches the whole screen -
         /// the kill flash, the shockwave ripple's bend, the camera shake

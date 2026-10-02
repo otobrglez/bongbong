@@ -119,6 +119,14 @@ pub struct Session {
     /// `app.rs` notes every frame of play. BUILD opens the builder's
     /// camera on it (docs/large-maps-follow-camera.md §9).
     pub play_view: Option<crate::math::Rectangle>,
+    /// Whether this window draws the play minimap (`minimap.rs`,
+    /// docs/large-maps-follow-camera.md §7, §15): its screen shows one -
+    /// not a phone's, as `minimap_show` says - and its view shows less than
+    /// the whole field. `app.rs` sets it every frame, before the hit tests;
+    /// `play_chrome` lays the minimap's slot out from it, so the painter,
+    /// the hit tests and the dev server read one geometry. False where no
+    /// window does (a test, a headless tool).
+    pub minimap_on: bool,
 }
 
 /// A session reads as its round: the dev server, its tests and `main.rs`
@@ -157,6 +165,7 @@ impl Session {
             campaign: None,
             level_select: None,
             play_view: None,
+            minimap_on: false,
         }
     }
 
@@ -758,6 +767,7 @@ impl Session {
                 // A room's round does not restart where it stands: the
                 // end screen counts down to the lobby it came from.
                 countdown_label: Some(crate::text::keys::ROUND_BACK_TO_LOBBY),
+                minimap: self.minimap_slot(),
                 ..PlayChrome::default()
             },
             Driver::Lobby => {
@@ -788,8 +798,15 @@ impl Session {
                 result: self.result_view(),
                 level_button: self.level_button(),
                 levels: self.level_select.as_ref().zip(self.campaign.as_ref()).map(|(select, campaign)| select.view(campaign, self.level())),
+                minimap: (self.driver == Driver::Play).then(|| self.minimap_slot()).flatten(),
             },
         }
+    }
+
+    /// The minimap's size in points (`minimap::MinimapRules::size_pt`) for
+    /// the round on screen, where this window draws one (`minimap_on`).
+    fn minimap_slot(&self) -> Option<(f32, f32)> {
+        self.minimap_on.then(|| crate::minimap::MinimapRules::current().size_pt(self.shown().map.field_size()))
     }
 }
 

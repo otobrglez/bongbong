@@ -265,6 +265,7 @@ fn main() {
                             eraser: &eraser,
                             tanks: &tanks,
                             shade: None,
+                            minimap: None,
                         },
                     );
                     return;
@@ -299,7 +300,7 @@ fn main() {
             &view,
             &Camera::whole((width, height)),
             bongbong::math::Color::WHITE,
-            &mut Effects { shock: &mut shock, muzzle: &mut muzzle, impact: &mut impact, shots: None, weather: None, fx: &fx, touch: None, indicators: None },
+            &mut Effects { shock: &mut shock, muzzle: &mut muzzle, impact: &mut impact, shots: None, weather: None, fx: &fx, touch: None, indicators: None, minimap: None },
             &textures,
             &layout_play,
             &PlayChrome::default(),

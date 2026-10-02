@@ -46,7 +46,8 @@ use rand::RngExt;
 use crate::math::{Color, Rectangle, Vec2};
 
 use crate::ground::{self, GroundGrid};
-use crate::hud::mode_button_rect;
+use crate::hud::{mode_button_rect, Corners};
+use crate::minimap::{Class, Minimap, MinimapRules};
 use crate::level::{Mission, SpawnKind, Tier};
 use crate::map::{self, CellObject, MapEntry, MapFile, Theme, Weather};
 use crate::obstacle::{Drum, Material};
@@ -96,6 +97,10 @@ const ICON_PX: f32 = 32.0;
 /// button, the value, the `>` button at the right inset.
 const SETTINGS_INSET: f32 = 4.0;
 const SETTINGS_DEC_X: f32 = 124.0;
+/// How far the navigator's picture stands in from the canvas area's right
+/// and bottom edges, in points: the chrome's edge (`hud::UI_EDGE_PT`) and
+/// its plate's pad.
+const NAVIGATOR_MARGIN_PT: f32 = crate::hud::UI_EDGE_PT + crate::hud::PLATE_PAD;
 /// One frame of raw builder input, in **window** pixels (the bar
 /// included). `main.rs` fills it from the mouse, the touch screen and the
 /// keyboard; the dev server fills it from `click`/`key` requests. Nothing
@@ -520,6 +525,12 @@ pub struct MapEditor {
     gestures: gesture::Gestures,
     /// Where a painting finger is, for edge scroll.
     stroke_pointer: Option<Vec2>,
+    /// The navigator's picture of the canvas (`minimap.rs`): made again
+    /// with the ground and repainted with it, cell for cell.
+    minimap: Minimap,
+    /// A press on the navigator is being dragged: the view follows it
+    /// until it lifts.
+    nav_drag: bool,
     /// The MAP panel's ANCHOR: where the old map sits when its size
     /// changes. The panel's choice, not the map's.
     resize_anchor: Anchor,
@@ -567,6 +578,8 @@ impl MapEditor {
             pending_look: None,
             gestures: gesture::Gestures::default(),
             stroke_pointer: None,
+            minimap: Minimap::default(),
+            nav_drag: false,
             resize_anchor: Anchor::default(),
             resize_session: None,
             cli_overrides: CliOverrides::default(),
@@ -655,9 +668,61 @@ impl MapEditor {
     }
 
     /// Whether a bitmap point is on the canvas area and not on the
-    /// builder's chrome (the bar, an open popup).
+    /// builder's chrome (the bar, an open popup, the navigator).
     fn on_canvas(&self, pointer: Vec2, layout: &Layout) -> bool {
         layout.field.contains(pointer) && !self.point_on_ui(pointer, layout)
+    }
+
+    /// Where the navigator's picture stands (docs/large-maps-follow-camera.md
+    /// §9), in bitmap pixels: a minimap of the canvas in the canvas area's
+    /// bottom-right corner, `NAVIGATOR_MARGIN_PT` in from its edges - the
+    /// status line runs along the bottom-left, the bar's buttons and their
+    /// popups hang from the top -, sized like play's minimap
+    /// (`MinimapRules::size_pt`) in the screen's points and never more than
+    /// half the area either way; its plate is `Corners::plate` round it.
+    /// `None` at FIT on an arena, where it would show what the canvas shows
+    /// and the canvas draws as it always has.
+    pub fn navigator_rect(&self, layout: &Layout) -> Option<Rectangle> {
+        if self.camera.is_fit() && self.map.class() == crate::framing::MapClass::Arena {
+            return None;
+        }
+        let vp = self.viewport_in(layout);
+        let (w, h) = MinimapRules::current().size_pt(self.map.field_size());
+        let (w, h) = (vp.px(w), vp.px(h));
+        let area = layout.field;
+        let fit = (area.w * 0.5 / w).min(area.h * 0.5 / h).min(1.0);
+        if !(fit > 0.0) {
+            return None;
+        }
+        let (w, h) = (w * fit, h * fit);
+        let margin = vp.px(NAVIGATOR_MARGIN_PT);
+        Some(Rectangle::new(area.x + area.w - margin - w, area.y + area.h - margin - h, w, h))
+    }
+
+    /// The navigator: a press on it puts the middle of the view on the
+    /// world point under it (`BuilderCamera::navigate`), and a drag carries
+    /// the view along under the pointer, held inside the picture, until it
+    /// lifts - the mouse, a finger and the dev server's `click` and
+    /// `builder_touch` alike, through the pointer and the press. A finger
+    /// that lands there is no canvas finger (`on_canvas`), so no gesture
+    /// takes it. Whether this frame was the navigator's.
+    fn navigate(&mut self, input: &BuilderInput, layout: &Layout, rules: &CanvasRules) -> bool {
+        let rect = self.navigator_rect(layout);
+        let (Some(pointer), Some(rect), true) = (input.pointer, rect, input.held) else {
+            self.nav_drag = false;
+            return false;
+        };
+        if input.pressed && Corners::plate(rect).contains(pointer) {
+            self.finish_stroke();
+            self.nav_drag = true;
+        }
+        if !self.nav_drag {
+            return false;
+        }
+        let world = crate::minimap::to_world(rect, self.map.field_size(), pointer);
+        let vp = self.viewport_in(layout);
+        self.camera.navigate(world, &vp, rules);
+        true
     }
 
     /// After the map was swapped whole (a load, a reset, a whole-map undo):
@@ -1056,15 +1121,31 @@ impl MapEditor {
         // the author works right up to the frame.
         let look = ground::Look { theme: self.map.theme, edge_shade: false };
         self.ground = ground::build(width, height, self.ground_seed, &road_cells, &water_cells, &wall_cells, look);
+        // The navigator's picture, the water as deep as the ground has it.
+        self.minimap = Minimap::of_map(&self.map, |col, row| self.ground.depth(col, row));
     }
 
     /// Make the ground agree with the map at `cells`, the only ones an
     /// edit touched: `GroundGrid::repaint` resolves the tiles and bakes the
     /// floor shade again only around them, so a stroke across a large map
-    /// costs what it does on a small one.
+    /// costs what it does on a small one. The navigator's picture follows:
+    /// those cells and every one whose water the repaint can have moved
+    /// (`Minimap::repaint`), as a patch of only the texels that changed.
     fn repaint_ground(&mut self, cells: impl IntoIterator<Item = (i32, i32)>) {
         let floors: Vec<_> = cells.into_iter().map(|(col, row)| (col, row, floor_of(self.map.cell(col, row)))).collect();
-        self.ground.repaint(&floors);
+        let touched = self.ground.repaint(&floors);
+        let (map, ground) = (&self.map, &self.ground);
+        let edited = floors.iter().map(|&(col, row, _)| (col, row));
+        self.minimap.repaint(touched.into_iter().chain(edited), |col, row| {
+            let obj = map.cell(col, row);
+            (Class::floor(obj, ground.depth(col, row)), obj.and_then(Class::solid_of))
+        });
+    }
+
+    /// The navigator's picture of the canvas (`minimap.rs`): what `app.rs`
+    /// uploads before the builder draws.
+    pub fn minimap(&self) -> &Minimap {
+        &self.minimap
     }
 
     /// The ground after `step` was undone or redone: a stroke's cells
@@ -1338,10 +1419,13 @@ impl MapEditor {
     }
 
     /// Whether a window position lands on the builder's own chrome (the
-    /// bar, or the open popup over the field) - a press there never
-    /// paints the cell behind it and the hover highlight hides.
+    /// bar, the open popup over the field, the navigator on its plate) - a
+    /// press there never paints the cell behind it and the hover highlight
+    /// hides.
     fn point_on_ui(&self, point: Vec2, layout: &Layout) -> bool {
-        layout.panel.contains(point) || self.popup_rect(layout).is_some_and(|r| r.contains(point))
+        layout.panel.contains(point)
+            || self.popup_rect(layout).is_some_and(|r| r.contains(point))
+            || self.navigator_rect(layout).is_some_and(|r| Corners::plate(r).contains(point))
     }
 
     // --- input ---
@@ -1386,7 +1470,11 @@ impl MapEditor {
         }
         if self.popup.is_some() {
             self.pan_from = None;
+            self.nav_drag = false;
             self.update_popup(input, layout);
+            return EditorAction::None;
+        }
+        if self.navigate(input, layout, &rules) {
             return EditorAction::None;
         }
 
@@ -2798,7 +2886,9 @@ mod editor_tests {
                                     let w = Vec2::new(world.x + dx, world.y + dy);
                                     let inside = w.x >= 0.0 && w.y >= 0.0 && w.x < ed.map().field_size().0 && w.y < ed.map().field_size().1;
                                     let got = ed.cell_at(bitmap, &layout);
-                                    if inside {
+                                    if ed.navigator_rect(&layout).is_some_and(|r| Corners::plate(r).contains(bitmap)) {
+                                        assert_eq!(got, None, "the navigator stands over the canvas there");
+                                    } else if inside {
                                         assert_eq!(got, Some((col, row)), "{window:?} arena={arena} steps={zoom_steps} pan={pan:?} at {at:?}");
                                     } else {
                                         assert_eq!(got, None, "past the field's edge paints nothing");
@@ -2810,6 +2900,133 @@ mod editor_tests {
                 }
             }
         }
+    }
+
+    /// The point at fractions `fx`, `fy` across and down the navigator.
+    fn on_navigator(ed: &MapEditor, layout: &Layout, fx: f32, fy: f32) -> Vec2 {
+        let r = ed.navigator_rect(layout).expect("a navigator");
+        Vec2::new(r.x + r.width * fx, r.y + r.height * fy)
+    }
+
+    /// Where a view centred on `world` at the camera's zoom can stand: the
+    /// point kept as far inside the field as the view's half reaches.
+    fn centre_for(ed: &MapEditor, world: Vec2) -> Vec2 {
+        let vp = ed.viewport();
+        let scale = ed.camera().scale(&vp);
+        let (hw, hh) = (vp.area.0 / scale / 2.0, vp.area.1 / scale / 2.0);
+        let (w, h) = ed.map().field_size();
+        Vec2::new(world.x.clamp(hw, w - hw), world.y.clamp(hh, h - hh))
+    }
+
+    /// The navigator: a press on it puts the middle of the view on the
+    /// world point under it at the view's zoom, a drag carries the view
+    /// along until it lifts, a move after the lift does nothing, and none
+    /// of it paints; from FIT a press zooms in to a tap's zoom there. Its
+    /// picture stands in the canvas's bottom-right corner, inside it.
+    #[test]
+    fn the_navigators_click_and_drag_move_the_builder_camera() {
+        let (mut ed, layout, _) = big_editor((1920.0, 1080.0), 1.0, true);
+        let nav = ed.navigator_rect(&layout).expect("a field map has one at FIT");
+        let area = layout.field;
+        assert!(nav.x > area.x + area.w / 2.0 && nav.y > area.y + area.h / 2.0, "in the bottom-right: {nav:?} of {area:?}");
+        assert!(Corners::plate(nav).x + Corners::plate(nav).width <= area.x + area.w && Corners::plate(nav).y + Corners::plate(nav).height <= area.y + area.h);
+        let (w, h) = ed.map().field_size();
+        // From FIT: a press zooms in there.
+        let p = on_navigator(&ed, &layout, 0.5, 0.5);
+        ed.update(&BuilderInput { pointer: Some(p), pressed: true, held: true, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { pointer: Some(p), ..Default::default() }, &layout);
+        assert!(!ed.camera().is_fit(), "a press from FIT zooms in");
+        let vp = ed.viewport();
+        let c = ed.camera().center(&vp);
+        assert!((c.x - w / 2.0).abs() < 1.0 && (c.y - h / 2.0).abs() < 1.0, "centred where it was pressed: {c:?}");
+        let zoom = ed.camera().scale(&vp);
+        // A press keeps the zoom and jumps; a drag carries the view along.
+        let a = on_navigator(&ed, &layout, 0.2, 0.3);
+        ed.update(&BuilderInput { pointer: Some(a), pressed: true, held: true, ..Default::default() }, &layout);
+        let want = centre_for(&ed, Vec2::new(0.2 * w, 0.3 * h));
+        let c = ed.camera().center(&vp);
+        assert!((c.x - want.x).abs() < 1.0 && (c.y - want.y).abs() < 1.0, "jumped: {c:?} vs {want:?}");
+        assert_eq!(ed.camera().scale(&vp), zoom, "at the zoom it had");
+        let b = on_navigator(&ed, &layout, 0.7, 0.6);
+        ed.update(&BuilderInput { pointer: Some(b), held: true, ..Default::default() }, &layout);
+        let want = centre_for(&ed, Vec2::new(0.7 * w, 0.6 * h));
+        let c = ed.camera().center(&vp);
+        assert!((c.x - want.x).abs() < 1.0 && (c.y - want.y).abs() < 1.0, "dragged: {c:?} vs {want:?}");
+        // Dragged past the picture, the view stops at the field's edge.
+        let far = Vec2::new(nav.x - 400.0, nav.y - 400.0);
+        ed.update(&BuilderInput { pointer: Some(far), held: true, ..Default::default() }, &layout);
+        let want = centre_for(&ed, Vec2::new(0.0, 0.0));
+        let c = ed.camera().center(&vp);
+        assert!((c.x - want.x).abs() < 1.0 && (c.y - want.y).abs() < 1.0, "held to the picture: {c:?} vs {want:?}");
+        // Lifted: a move after it is nobody's.
+        ed.update(&BuilderInput { pointer: Some(b), ..Default::default() }, &layout);
+        ed.update(&BuilderInput { pointer: Some(a), ..Default::default() }, &layout);
+        let still = ed.camera().center(&vp);
+        assert!((still.x - c.x).abs() < 1e-3 && (still.y - c.y).abs() < 1e-3);
+        assert!(ed.map().cells.is_empty(), "the navigator paints nothing");
+        assert_eq!(ed.history().undo_depth(), 0);
+        // A press on the canvas still paints, and a stroke dragged over the
+        // navigator paints nothing under it.
+        let cell_point = canvas_middle(&layout);
+        ed.update(&BuilderInput { pointer: Some(cell_point), pressed: true, held: true, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { pointer: Some(on_navigator(&ed, &layout, 0.5, 0.5)), held: true, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { pointer: Some(cell_point), ..Default::default() }, &layout);
+        assert!(!ed.map().cells.is_empty(), "the canvas painted");
+        let under = ed.view_camera(&layout).to_world(layout.to_field(on_navigator(&ed, &layout, 0.5, 0.5)));
+        assert_eq!(ed.map().cell(map::world_to_cell(under).0, map::world_to_cell(under).1), None, "nothing under the navigator");
+    }
+
+    /// A finger on the navigator is its press and drag, not a canvas
+    /// gesture: the view jumps and follows it, and nothing is painted or
+    /// zoomed by a tap.
+    #[test]
+    fn a_finger_on_the_navigator_moves_the_view() {
+        let (mut ed, layout, _) = big_editor((1180.0, 820.0), 2.0, false);
+        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &layout);
+        let vp = ed.viewport();
+        let zoom = ed.camera().scale(&vp);
+        let (w, h) = ed.map().field_size();
+        let a = on_navigator(&ed, &layout, 0.8, 0.8);
+        let b = on_navigator(&ed, &layout, 0.3, 0.4);
+        let frames: Vec<Vec<(i32, f32, f32)>> = (0..=10).map(|i| {
+            let t = i as f32 / 10.0;
+            vec![(4, a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)]
+        }).collect();
+        fingers(&mut ed, &layout, &frames);
+        let want = centre_for(&ed, Vec2::new(0.3 * w, 0.4 * h));
+        let c = ed.camera().center(&vp);
+        assert!((c.x - want.x).abs() < 1.0 && (c.y - want.y).abs() < 1.0, "followed the finger: {c:?} vs {want:?}");
+        assert_eq!(ed.camera().scale(&vp), zoom, "a drag on the navigator never zooms");
+        // A quick tap on it jumps there and is no paint and no zoom.
+        let p = on_navigator(&ed, &layout, 0.5, 0.5);
+        fingers(&mut ed, &layout, &[vec![(5, p.x, p.y)]]);
+        let c = ed.camera().center(&vp);
+        let want = centre_for(&ed, Vec2::new(0.5 * w, 0.5 * h));
+        assert!((c.x - want.x).abs() < 1.0 && (c.y - want.y).abs() < 1.0, "{c:?} vs {want:?}");
+        assert_eq!(ed.camera().scale(&vp), zoom);
+        assert!(ed.map().cells.is_empty());
+    }
+
+    /// On an arena at FIT the canvas is the whole map, so there is no
+    /// navigator and a press in the corner paints its cell as it always
+    /// did; zoomed in, the corner is the navigator's.
+    #[test]
+    fn the_navigator_is_hidden_at_fit_on_an_arena() {
+        let layout = Layout::for_field(W, H);
+        let mut ed = MapEditor::new(MapFile::new());
+        let screen = CanvasScreen { device_per_px: 1.0, points_per_px: 1.0, coarse: true };
+        ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &layout);
+        assert_eq!(ed.navigator_rect(&layout), None);
+        let corner = Vec2::new(layout.field.x + layout.field.w - 40.0, layout.field.y + layout.field.h - 30.0);
+        assert!(ed.cell_at(corner, &layout).is_some(), "the canvas, all of it");
+        ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &layout);
+        let nav = ed.navigator_rect(&layout).expect("zoomed in, a navigator");
+        assert!(Corners::plate(nav).contains(corner), "in the corner: {nav:?}");
+        assert_eq!(ed.cell_at(corner, &layout), None, "the navigator's, not a cell's");
+        ed.update(&BuilderInput { zoom_out: true, ..Default::default() }, &layout);
+        assert!(ed.camera().is_fit());
+        assert_eq!(ed.navigator_rect(&layout), None);
     }
 
     /// Run frames of fingers - `(id, x, y)` in bitmap pixels - through the

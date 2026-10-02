@@ -313,11 +313,17 @@ impl BuilderCamera {
     /// A zooming tap at `at`: a cell of `tap_zoom_cell_mm` on the glass, on
     /// the nearest whole-block scale on a coarse screen.
     pub fn zoom_for_tap(&mut self, at: Vec2, vp: &Viewport, rules: &CanvasRules) {
-        let mut scale = vp.scale_for_cell_mm(rules.tap_zoom_cell_mm);
-        if vp.screen.coarse {
-            scale = nearest_whole_block(vp.device_scale(scale)) / positive(vp.screen.device_per_px, 1.0);
-        }
-        self.zoom_at(scale, at, vp, rules);
+        self.zoom_at(tap_scale(vp, rules), at, vp, rules);
+    }
+
+    /// Put the world point `at` in the middle of the canvas - the
+    /// navigator's press and drag (docs/large-maps-follow-camera.md §9):
+    /// at the zoom the view has, or, from FIT, at the zoom a zooming tap
+    /// goes to (`zoom_for_tap`). A map too small for that zoom stays at
+    /// FIT.
+    pub fn navigate(&mut self, at: Vec2, vp: &Viewport, rules: &CanvasRules) {
+        let scale = if self.is_fit() { tap_scale(vp, rules) } else { self.scale(vp) };
+        self.set(at, scale, vp, rules);
     }
 
     /// Move the middle of a zoomed view by `delta` world pixels - the map
@@ -406,6 +412,13 @@ pub fn window_mapping(camera: &Camera, view: &View, layout: &Layout) -> WindowMa
         zoom: camera.scale * view.scale,
         area: Rectangle::new(offset.x, offset.y, layout.field.w * view.scale, layout.field.h * view.scale),
     }
+}
+
+/// The scale a zooming tap goes to: a cell of `tap_zoom_cell_mm` on the
+/// glass, on the nearest whole-block scale on a coarse screen.
+fn tap_scale(vp: &Viewport, rules: &CanvasRules) -> f32 {
+    let scale = vp.scale_for_cell_mm(rules.tap_zoom_cell_mm);
+    if vp.screen.coarse { nearest_whole_block(vp.device_scale(scale)) / positive(vp.screen.device_per_px, 1.0) } else { scale }
 }
 
 /// Keep a view of `area / scale` round `c` inside the field on an axis the

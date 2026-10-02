@@ -275,6 +275,28 @@ impl Presentation {
         session.mode() != self.mode || session.field_size() != self.field
     }
 
+    /// Whether the view shows less than the whole field: a followed field
+    /// map wider or taller than its view by more than half a world pixel,
+    /// or a pinned zoom - where the minimap is drawn
+    /// (docs/large-maps-follow-camera.md §7). An arena drawn whole, and a
+    /// field map no larger than a monitor's wide view, show none.
+    fn shows_part(&self) -> bool {
+        let short = |visible: f32, field: f32| visible + 0.5 < field;
+        match (&self.followed, &self.pinned) {
+            (Some(frame), _) => short(frame.framing.visible.0, self.field.0) || short(frame.framing.visible.1, self.field.1),
+            (None, Some(pin)) => !pin.shows_whole_field(),
+            (None, None) => false,
+        }
+    }
+
+    /// Whether this window draws the play minimap this frame
+    /// (`Session::minimap_on`): a round, in play or a room's, on a screen
+    /// that shows one (`minimap::MinimapRules::shown_on` - not a phone's,
+    /// as `minimap_show` says), whose view shows part of the field.
+    fn minimap_on(&self, screen: &Screen) -> bool {
+        matches!(self.mode, Driver::Play | Driver::Online) && self.shows_part() && crate::minimap::MinimapRules::current().shown_on(screen)
+    }
+
     /// Re-create the render targets this presentation needs where their
     /// sizes differ.
     fn fit_targets(
@@ -1262,6 +1284,12 @@ pub fn run(args: Args) {
     // a builder edit, and drawn in one call.
     let mut round_shade = crate::render::canvas::BlockTexture::default();
     let mut builder_shade = crate::render::canvas::BlockTexture::default();
+    // The minimaps (minimap.rs): the round's, baked once per round and
+    // patched where a tile dies, and the builder's navigator's, repainted
+    // with every stroke - each uploaded only where it changed.
+    let mut round_minimap = crate::minimap::RoundMinimap::default();
+    let mut round_minimap_texture = crate::render::canvas::BlockTexture::default();
+    let mut builder_minimap_texture = crate::render::canvas::BlockTexture::default();
     // The builder's own scene target, for a canvas zoomed or a field map
     // (`editor::render::BuilderScene`): made when first needed.
     let mut builder_scene = crate::editor::render::BuilderScene::default();
@@ -1528,6 +1556,11 @@ pub fn run(args: Args) {
         if !crate::EMBEDDED && rl.is_key_pressed(KeyboardKey::KEY_F11) {
             rl.toggle_borderless_windowed();
         }
+        // The minimap's slot in the right cluster, which the hit tests and
+        // the painter read alike (`PlayChrome::minimap`): this screen, this
+        // view.
+        let this_screen = screen(rl);
+        session.minimap_on = plan.minimap_on(&this_screen);
         // The window the chrome lays itself out in (`hud::UiFrame`): its
         // size in points, its safe area, and whether thumbs are on the
         // glass - a build with no keyboard, `--touch-from-mouse`, or a
@@ -1794,6 +1827,7 @@ pub fn run(args: Args) {
             plan = Presentation::of(rl, &session, pinned);
             plan.fit_targets(rl, thread, &mut scene_target, &mut scene_size, &mut composite, &mut composite_size);
             (layout, view) = (plan.layout, plan.view);
+            session.minimap_on = plan.minimap_on(&this_screen);
         }
 
         if session.mode() == Driver::Build {
@@ -1811,6 +1845,7 @@ pub fn run(args: Args) {
                 dev.publish_camera(crate::follow::CameraReport { mode: crate::follow::CameraMode::Build, camera, layout, view, follow: None });
             }
             let shade = builder_shade.sync(rl, thread, session.builder.ground().shade());
+            let minimap = builder_minimap_texture.sync(rl, thread, session.builder.minimap().image());
             session.builder.render(
                 rl,
                 thread,
@@ -1845,6 +1880,7 @@ pub fn run(args: Args) {
                     portal: &portal_texture,
                     tanks: &tanks_texture,
                     shade,
+                    minimap,
                 },
             );
             // The presented frame is the builder; a pending `screenshot`
@@ -1994,6 +2030,7 @@ pub fn run(args: Args) {
             plan = Presentation::of(rl, &session, pinned);
             plan.fit_targets(rl, thread, &mut scene_target, &mut scene_size, &mut composite, &mut composite_size);
             (layout, view) = (plan.layout, plan.view);
+            session.minimap_on = plan.minimap_on(&this_screen);
         }
         let field = plan.field;
         // The round on screen: the room's replica in an online round,
@@ -2094,10 +2131,24 @@ pub fn run(args: Args) {
                 let physical = window_units_per_point(rl) / view.scale;
                 frame.keep_out.extend(crate::indicators::thumb_rests(screen, physical, &t));
             }
-            // No arrow lands under a corner cluster.
+            // No arrow lands under a corner cluster or the minimap.
             frame.keep_out.extend(corners.iter().flat_map(Corners::keep_out).map(|r| ui_rect_on_bitmap(&ui, &view, r)));
             awareness.picture(game, &seats, &frame, points)
         });
+        // The minimap, where the corners hold its slot: the round's
+        // picture, synced to the round on screen and uploaded where it
+        // changed, and this frame's marks - its enemies the ones the
+        // arrows could point at.
+        let minimap_marks = corners.as_ref().and_then(|c| c.minimap).map(|_| {
+            let shown: &[crate::indicators::Indicators] = if indicators.is_some() { awareness.shown() } else { &[] };
+            crate::minimap::Marks::gather(game, &seats, shown, camera.rect())
+        });
+        let minimap_image = minimap_marks.is_some().then(|| round_minimap.sync(game));
+        let minimap_texture = minimap_image.and_then(|m| round_minimap_texture.sync(rl, thread, m.image()));
+        let minimap = match (minimap_texture, minimap_marks.as_ref(), minimap_image) {
+            (Some((_, texture)), Some(marks), Some(image)) => Some(crate::render::minimap::MinimapLayer { texture, field: image.field(), marks }),
+            _ => None,
+        };
         let shade = round_shade.sync(rl, thread, game.ground.shade());
         game.render(
             rl,
@@ -2118,6 +2169,7 @@ pub fn run(args: Args) {
                 // and every press there belongs to the screen.
                 touch: (session.mode() != Driver::Lobby).then_some((&touch, steer_right)),
                 indicators: indicators.as_ref(),
+                minimap,
             },
             &Textures {
                 tanks: &tanks_texture,

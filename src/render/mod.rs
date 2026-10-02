@@ -27,6 +27,7 @@ pub mod indicators;
 pub mod laser;
 pub mod level_select;
 pub mod lobby;
+pub mod minimap;
 pub mod plasma;
 pub mod portal;
 pub mod pyro;

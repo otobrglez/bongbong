@@ -122,6 +122,9 @@ pub struct EditorTextures<'a> {
     /// The canvas's floor shade as `app.rs` uploaded it before the frame,
     /// with the stamp it was baked under.
     pub shade: Option<(u64, &'a Texture2D)>,
+    /// The navigator's picture (`MapEditor::minimap`) as `app.rs` uploaded
+    /// it before the frame, with the stamp it was baked under.
+    pub minimap: Option<(u64, &'a Texture2D)>,
 }
 
 /// The builder's own scene target: the canvas drawn at a texel per world
@@ -269,9 +272,25 @@ impl MapEditor {
             d.draw_texture_pro(&*target, source, area, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
             d.draw_mode2D(base, |mut d, _| {
                 self.draw_status_line(&mut d, cursor, EDITOR_TOOLBAR_MARGIN, layout.field.y + layout.field.h - 22.0);
+                self.draw_navigator(&mut d, layout, textures, &camera);
                 self.draw_chrome(&mut d, layout, textures, cursor);
             });
         });
+    }
+
+    /// The navigator (`navigator_rect`), under the bar and the popups: the
+    /// canvas's picture as its upload holds it, and the outline of what
+    /// `camera` shows over it.
+    fn draw_navigator(&self, d: &mut impl RaylibDraw, layout: &Layout, textures: &EditorTextures, camera: &crate::view::Camera) {
+        let (Some(rect), Some((stamp, texture))) = (self.navigator_rect(layout), textures.minimap) else { return };
+        if stamp != self.minimap.image().stamp {
+            return;
+        }
+        let field = self.map.field_size();
+        let marks = crate::minimap::Marks { view: Some(camera.rect()), ..crate::minimap::Marks::default() };
+        let font = crate::indicators::label_font(self.viewport_in(layout).px(1.0));
+        let picture = crate::minimap::picture(&marks, rect, field, font, &crate::tuning::tuning());
+        crate::render::minimap::draw_minimap(d, rect, texture, field, &picture, 1.0);
     }
 
     /// The builder at FIT on an arena: the canvas, the bar and the popups

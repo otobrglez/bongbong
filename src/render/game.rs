@@ -189,6 +189,10 @@ pub struct Effects<'a> {
     /// field's edge and the marks in the world, composed by `app.rs` while
     /// the camera shows less than the whole field; `None` draws nothing.
     pub indicators: Option<&'a crate::indicators::Picture>,
+    /// The minimap under the right corner cluster (`minimap.rs`), drawn
+    /// where the corners hold its slot (`PlayChrome::minimap`); `None`
+    /// draws none.
+    pub minimap: Option<crate::render::minimap::MinimapLayer<'a>>,
 }
 
 impl Game {
@@ -576,6 +580,7 @@ impl Game {
         let touch = effects.touch;
         let fx_live = effects.fx.live();
         let indicators = effects.indicators;
+        let minimap = effects.minimap.take();
         let corners = CornerShape::of(chrome, self.players.count()).map(|shape| corners(ui, &shape));
         let frame = ChromeFrame { ui, fade, corners: corners.as_ref() };
 
@@ -590,7 +595,7 @@ impl Game {
             crate::render::view::present_into(&mut d, composite, view, backdrop);
         }
         let base = Camera2D { offset: view.offset.into(), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: view.scale };
-        self.draw_chrome(&mut d, &text, &hud, chrome, &frame, layout, camera, indicators, textures, touch, fx_live, base);
+        self.draw_chrome(&mut d, &text, &hud, chrome, &frame, layout, camera, indicators, minimap.as_ref(), textures, touch, fx_live, base);
     }
 }
 
@@ -829,6 +834,7 @@ impl Game {
         layout: &Layout,
         camera: &Camera,
         indicators: Option<&crate::indicators::Picture>,
+        minimap: Option<&crate::render::minimap::MinimapLayer>,
         textures: &Textures,
         touch: Option<(&crate::touch::TouchScheme, bool)>,
         fx_live: usize,
@@ -936,7 +942,7 @@ impl Game {
             // The corner clusters, over the banners and their dims, which
             // leave them pressable, and at the frame's fade.
             if let Some(corners) = frame.corners {
-                draw_corners(&mut d, corners, hud, chrome, self.players, textures, frame.fade, &lines);
+                draw_corners(&mut d, corners, hud, chrome, self.players, textures, frame.fade, &lines, minimap);
             }
 
             // The leave-round question (docs/game-editor-fusion.md

@@ -27,9 +27,9 @@ const FROG_COLOR: Color = Color::new(120, 220, 90, 255);
 /// round without a frog, and a wrecked seat's chip.
 const SPENT: Color = Color::new(60, 60, 66, 255);
 /// A cluster's plate: the builder bar's dark, mostly opaque, so the
-/// readouts read over any ground under any sky.
+/// readouts read over any ground under any sky. The minimap's plate too.
 const PLATE_FILL: Color = Color::new(21, 21, 24, 208);
-const PLATE_EDGE: Color = Color::new(0, 0, 0, 150);
+pub(crate) const PLATE_EDGE: Color = Color::new(0, 0, 0, 150);
 /// The dark plate behind each line of text under the left cluster.
 const LINE_FILL: Color = Color::new(0, 0, 0, 150);
 
@@ -90,7 +90,8 @@ pub struct Line {
 /// Draw both corner clusters (`hud::corners`) in UI points - inside the
 /// camera that puts a UI point where `UiFrame` puts it - each at its fade:
 /// the vitals blocks top-left with `lines` under them, the round's numbers,
-/// the buttons and a room's chips top-right.
+/// the buttons and a room's chips top-right, and the minimap under them
+/// from `minimap` where the corners hold one.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_corners(
     d: &mut impl RaylibDraw,
@@ -101,6 +102,7 @@ pub fn draw_corners(
     textures: &Textures,
     fade: Fade,
     lines: &[Line],
+    minimap: Option<&crate::render::minimap::MinimapLayer>,
 ) {
     // The left cluster: the local seat's block, and a couch's player 2's.
     let a = fade.left;
@@ -145,10 +147,15 @@ pub fn draw_corners(
             draw_seat_chip(d, r, seat, a);
         }
     }
+    // The minimap, part of the right cluster: it fades with it.
+    if let (Some(rect), Some(layer)) = (corners.minimap, minimap) {
+        let picture = crate::minimap::picture(layer.marks, rect, layer.field, crate::indicators::label_font(1.0), &crate::tuning::tuning());
+        crate::render::minimap::draw_minimap(d, rect, layer.texture, layer.field, &picture, a);
+    }
 }
 
 /// A cluster's plate: the dark fill and an edge in `edge`.
-fn draw_plate(d: &mut impl RaylibDraw, r: Rectangle, edge: Color, a: f32) {
+pub(crate) fn draw_plate(d: &mut impl RaylibDraw, r: Rectangle, edge: Color, a: f32) {
     d.draw_rectangle_rounded(r, 0.12, 6, faded(PLATE_FILL, a));
     d.draw_rectangle_rounded_lines_ex(r, 0.12, 6, 1.5, faded(edge, a));
 }

@@ -538,11 +538,14 @@ pub const CHIP_GAP: f32 = 4.0;
 /// One line of text under the left cluster - an online round's status,
 /// the build stamp - each on its own dark plate.
 pub const LINE_H: f32 = 20.0;
+/// The least height the minimap is shrunk to where the window is too short
+/// for its size (`corners`): any smaller and it is left out.
+pub const MINIMAP_MIN_PT: f32 = 32.0;
 
 /// What the corners hold, which is all their geometry depends on - so the
 /// hit tests at the top of a frame and the painter at its end, both
 /// reading `PlayChrome`, lay them out alike.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CornerShape {
     /// Which seats the left cluster holds: one block, a couch pair's two,
     /// or one block and a chip per other seat.
@@ -558,6 +561,9 @@ pub struct CornerShape {
     pub leave: bool,
     /// Lines of text under the left cluster.
     pub lines: usize,
+    /// The minimap's size in points (`minimap::MinimapRules::size_pt`),
+    /// where the frame draws one (`PlayChrome::minimap`).
+    pub minimap: Option<(f32, f32)>,
 }
 
 impl CornerShape {
@@ -577,6 +583,7 @@ impl CornerShape {
                 leave: chrome.leave_button,
                 // The build stamp always; an online round's status over it.
                 lines: 1 + usize::from(chrome.status.is_some()),
+                minimap: chrome.minimap,
             }
         })
     }
@@ -628,6 +635,10 @@ pub struct Corners {
     pub leave: Option<Rectangle>,
     /// The other seats' strip, right-aligned under the buttons.
     pub chips: Option<Rectangle>,
+    /// The minimap's image (`minimap.rs`), right-aligned under the right
+    /// cluster on a plate of its own: part of that cluster, which fades as
+    /// one. Not a control - a press on it is the HUD's and does nothing.
+    pub minimap: Option<Rectangle>,
 }
 
 impl Corners {
@@ -642,10 +653,15 @@ impl Corners {
         self.blocks.iter().fold(self.lines, |r, block| union(r, Corners::plate(*block)))
     }
 
+    /// The minimap's plate, where there is one.
+    pub fn minimap_plate(&self) -> Option<Rectangle> {
+        self.minimap.map(Corners::plate)
+    }
+
     /// What no off-screen arrow may sit on and no touch may steer or fire
-    /// from: the two clusters.
-    pub fn keep_out(&self) -> [Rectangle; 2] {
-        [self.left(), self.right]
+    /// from: the two clusters, and the minimap's plate under the right one.
+    pub fn keep_out(&self) -> Vec<Rectangle> {
+        [Some(self.left()), Some(self.right), self.minimap_plate()].into_iter().flatten().collect()
     }
 
     /// The `i`th chip of the strip: fixed per position, so a seat dying
@@ -687,9 +703,13 @@ fn union(a: Rectangle, b: Rectangle) -> Rectangle {
 /// the area holds both and the right cluster, else under it; the right
 /// cluster in the top-right corner, its first row and its buttons side by
 /// side where the area has the width, else the buttons under the row, and
-/// a room's chips under them. Every button is `button_height` tall - 44 pt
-/// on a touch screen - and the corners never meet: the area is at least
-/// `UI_MIN_W` less its edges, which holds the widest pair.
+/// a room's chips under them; the minimap, where the frame draws one, on a
+/// plate of its own under the right cluster, flush with its right edge,
+/// shrunk to the room left above the area's bottom and left out where that
+/// is under `MINIMAP_MIN_PT` or would reach the left cluster. Every button
+/// is `button_height` tall - 44 pt on a touch screen - and the corners
+/// never meet: the area is at least `UI_MIN_W` less its edges, which holds
+/// the widest pair.
 pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     let area = ui.area;
     let button_h = button_height(ui.touch);
@@ -735,6 +755,25 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     let mode = Rectangle::new(buttons_row.x + buttons_row.width - MODE_BUTTON_W, buttons_row.y, MODE_BUTTON_W, button_h);
     let players = Rectangle::new(mode.x - PLAYERS_BUTTON_GAP - PLAYERS_BUTTON_W, mode.y, PLAYERS_BUTTON_W, button_h);
     let online = Rectangle::new(players.x - PLAYERS_BUTTON_GAP - ONLINE_BUTTON_W, mode.y, ONLINE_BUTTON_W, button_h);
+
+    // The minimap: under the right cluster's plate, its own plate flush
+    // with the cluster's right edge.
+    let left = blocks.iter().fold(lines, |r, block| union(r, Corners::plate(*block)));
+    let minimap = shape.minimap.and_then(|(w, h)| {
+        if !(w > 0.0 && h > 0.0) {
+            return None;
+        }
+        let top = right.y + right.height + ROW_GAP + PLATE_PAD;
+        let room = area.y + area.h - PLATE_PAD - top;
+        let fit = (room / h).min(1.0);
+        if fit < 1.0 && h * fit < MINIMAP_MIN_PT {
+            return None;
+        }
+        let (w, h) = (w * fit, h * fit);
+        let rect = Rectangle::new(right_edge - w, top, w, h);
+        let clear = rect.x - PLATE_PAD >= left.x + left.width + SIDE_GAP || rect.y - PLATE_PAD >= left.y + left.height + ROW_GAP;
+        clear.then_some(rect)
+    });
     Corners {
         blocks,
         lines,
@@ -747,6 +786,7 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
         build: shape.build.then_some(mode),
         leave: shape.leave.then_some(mode),
         chips,
+        minimap,
     }
 }
 
@@ -1032,6 +1072,11 @@ pub struct PlayChrome {
     pub level_button: Option<usize>,
     /// The level select over a dimmed field (`level_select.rs`).
     pub levels: Option<crate::level_select::LevelSelectView>,
+    /// The minimap under the right cluster, its size in points
+    /// (`minimap::MinimapRules::size_pt`): a round on a screen that shows
+    /// one (not a phone's, `minimap_show`) whose view shows less than the
+    /// whole field (`Session::minimap_on`).
+    pub minimap: Option<(f32, f32)>,
 }
 
 /// The online status line's text size: the first line under the left
@@ -1125,11 +1170,12 @@ impl WorldOnScreen {
 }
 
 /// Which of the two clusters (left, right) has something of `marks` under
-/// it: a mark is a world point and the world pixels round it it covers,
-/// drawn where `screen` puts it. Only what is drawn counts - a mark at
-/// least partly on the field and in the camera's view - so a tank rolling
-/// in through a gate, outside the field, fades nothing from the letterbox
-/// it would project onto.
+/// it - the right one's minimap under it counting as the cluster: a mark
+/// is a world point and the world pixels round it it covers, drawn where
+/// `screen` puts it. Only what is drawn counts - a mark at least partly on
+/// the field and in the camera's view - so a tank rolling in through a
+/// gate, outside the field, fades nothing from the letterbox it would
+/// project onto.
 pub fn covered(corners: &Corners, marks: &[(crate::Position, f32)], screen: &WorldOnScreen) -> [bool; 2] {
     let shown = screen.camera.rect();
     let (field_w, field_h) = screen.camera.field;
@@ -1145,8 +1191,7 @@ pub fn covered(corners: &Corners, marks: &[(crate::Position, f32)], screen: &Wor
             (p.x - nx).powi(2) + (p.y - ny).powi(2) <= reach * reach
         })
     };
-    let [left, right] = corners.keep_out();
-    [under(left), under(right)]
+    [under(corners.left()), under(corners.right) || corners.minimap_plate().is_some_and(under)]
 }
 
 #[cfg(test)]
@@ -1288,8 +1333,23 @@ mod hud_tests {
 
     /// Every shape of round the corners hold: one seat on a level with
     /// every button, free play, a keyboard-less build's RESTART, a couch
-    /// pair, a couch of four, and a full room seen from seat 3.
+    /// pair, a couch of four, and a full room seen from seat 3 - each also
+    /// with a minimap of a wide field (160 x 90 pt), the box's height for
+    /// a tall one (60 x 120) and a long thin one's (160 x 12).
     fn shapes() -> Vec<(&'static str, CornerShape)> {
+        let plain = plain_shapes();
+        let mut all = plain.clone();
+        for (map, size) in [("wide map", (160.0, 90.0)), ("tall map", (60.0, 120.0)), ("long map", (160.0, 12.0))] {
+            for (name, shape) in &plain {
+                let name: &'static str = Box::leak(format!("{name} with a {map}").into_boxed_str());
+                all.push((name, CornerShape { minimap: Some(size), ..*shape }));
+            }
+        }
+        all
+    }
+
+    /// The shapes with no minimap.
+    fn plain_shapes() -> Vec<(&'static str, CornerShape)> {
         let play = CornerShape {
             layout: HudLayout::One,
             chips: 0,
@@ -1300,6 +1360,7 @@ mod hud_tests {
             build: true,
             leave: false,
             lines: 1,
+            minimap: None,
         };
         vec![
             ("one", play),
@@ -1346,7 +1407,7 @@ mod hud_tests {
             for (shape_name, shape) in shapes() {
                 let what = format!("{shape_name} on {screen}");
                 let c = corners(&ui, &shape);
-                let [left, right] = c.keep_out();
+                let (left, right) = (c.left(), c.right);
                 assert!(inside(left, ui.area) && inside(right, ui.area), "{what}: a cluster leaves the safe area: {left:?} {right:?} in {:?}", ui.area);
                 assert!(apart(left, right), "{what}: the clusters meet: {left:?} {right:?}");
                 assert!(right.x - (left.x + left.width) >= SIDE_GAP - 1e-3 || left.y + left.height <= right.y, "{what}: too close");
@@ -1376,8 +1437,100 @@ mod hud_tests {
                     assert!(buttons.iter().all(|(_, r)| apart(*r, chip)), "{what}: chip {i} sits on a button");
                 }
                 assert_eq!(c.chips.is_some(), shape.chips > 0);
+                // The minimap: on its own plate inside the safe area, under
+                // the right cluster and flush with its right edge, clear of
+                // the left cluster, the size it was asked for, and one of
+                // the places a touch or an arrow keeps out of.
+                assert_eq!(c.minimap.is_some(), shape.minimap.is_some(), "{what}: every screen here has the room");
+                if let (Some(map), Some((w, h))) = (c.minimap, shape.minimap) {
+                    let plate = c.minimap_plate().expect("a plate");
+                    assert!(inside(plate, ui.area), "{what}: the minimap leaves the safe area: {plate:?} in {:?}", ui.area);
+                    assert!(apart(plate, left) && apart(plate, right), "{what}: the minimap meets a cluster: {plate:?}");
+                    assert!(plate.y >= right.y + right.height + ROW_GAP - 1e-3, "{what}: under the right cluster");
+                    assert!((plate.x + plate.width - (right.x + right.width)).abs() < 1e-3, "{what}: flush with its right edge");
+                    assert!((map.width - w).abs() < 1e-3 && (map.height - h).abs() < 1e-3, "{what}: {map:?}");
+                    assert!(c.buttons().iter().all(|(_, r)| apart(*r, plate)), "{what}: on a button");
+                    assert!(c.keep_out().contains(&plate), "{what}: a keep-out");
+                    assert_eq!(c.hit(Vec2::new(map.x + map.width / 2.0, map.y + map.height / 2.0)), None, "{what}: not a button");
+                }
             }
         }
+    }
+
+    /// The minimap stays inside the safe area at every window size, on
+    /// every screen a touch or a mouse lays the chrome out for, in every
+    /// shape: shrunk to the room under the right cluster on a short window
+    /// and left out where that would take it under `MINIMAP_MIN_PT`, never
+    /// on the left cluster, and fading with the right cluster - a tank
+    /// under it fades that cluster.
+    #[test]
+    fn the_minimap_slot_fits_every_window_size() {
+        let island = Insets { left: 59.0, top: 0.0, right: 59.0, bottom: 21.0 };
+        for w in (640..=2560).step_by(48) {
+            for h in (300..=1440).step_by(36) {
+                for (insets, touch) in [(Insets::default(), false), (island, true)] {
+                    let ui = UiFrame::new((w as f32, h as f32), 1.0, 1.0, insets, touch);
+                    for (shape_name, shape) in shapes().into_iter().filter(|(_, s)| s.minimap.is_some()) {
+                        let what = format!("{shape_name} in {w}x{h} (touch {touch})");
+                        let c = corners(&ui, &shape);
+                        let Some(map) = c.minimap else { continue };
+                        let plate = c.minimap_plate().expect("a plate");
+                        assert!(inside(plate, ui.area), "{what}: {plate:?} leaves {:?}", ui.area);
+                        assert!(apart(plate, c.left()) && apart(plate, c.right), "{what}: {plate:?}");
+                        let (_, want_h) = shape.minimap.expect("asked");
+                        assert!(map.height >= MINIMAP_MIN_PT.min(want_h) - 1e-3, "{what}: shrunk too far: {map:?}");
+                        assert!(map.height <= want_h + 1e-3);
+                    }
+                }
+            }
+        }
+        // An area too short for it leaves it out, and one a little short
+        // shrinks it. (`UiFrame::new` never lays the chrome out in an area
+        // under `UI_MIN_H` less its edges, which holds it whole.)
+        let short = |h: f32| UiFrame { scale: 1.0, screen: Rect::new(0.0, 0.0, 1600.0, h), area: Rect::new(8.0, 8.0, 1584.0, h - 16.0), touch: false };
+        let wide = shapes().into_iter().find(|(n, _)| *n == "one with a wide map").expect("the shape").1;
+        assert_eq!(corners(&short(90.0), &wide).minimap, None);
+        let shrunk = corners(&short(140.0), &wide).minimap.expect("room for a smaller one");
+        assert!(shrunk.height < 90.0 && shrunk.height >= MINIMAP_MIN_PT, "{shrunk:?}");
+        assert!((shrunk.width / shrunk.height - 160.0 / 90.0).abs() < 1e-3, "the map's shape kept");
+        // A tank under the minimap fades the right cluster.
+        let ui = UiFrame::plain((1600.0, 900.0));
+        let c = corners(&ui, &wide);
+        let map = c.minimap.expect("room for it");
+        let view = crate::view::View::fit((1600.0, 900.0), (1600.0, 900.0));
+        let screen = WorldOnScreen { camera: crate::view::Camera::whole((1600.0, 900.0)), field_origin: Vec2::new(0.0, 0.0), view, ui_scale: ui.scale };
+        let under = crate::Position::new(map.x + map.width / 2.0, map.y + map.height / 2.0);
+        assert_eq!(covered(&c, &[(under, 8.0)], &screen), [false, true]);
+        let bare = corners(&ui, &CornerShape { minimap: None, ..wide });
+        assert_eq!(covered(&bare, &[(under, 8.0)], &screen), [false, false], "nothing there without one");
+    }
+
+    /// A touch that lands on the minimap is the HUD's: it neither steers
+    /// nor fires, held or not, as the clusters' own keep-outs do
+    /// (`TouchScheme::set_keep_out`).
+    #[test]
+    fn the_minimap_claims_presses() {
+        use crate::touch::{StickRule, TouchPoint, TouchScheme};
+        let ui = UiFrame::new((1180.0, 820.0), 1.0, 1.0, Insets::default(), true);
+        let shape = shapes().into_iter().find(|(n, _)| *n == "phone with a wide map").expect("the shape").1;
+        let c = corners(&ui, &shape);
+        let map = c.minimap.expect("a minimap");
+        let layout = crate::Layout::bare(1180.0, 820.0);
+        let rule = StickRule { dead_zone_px: 8.0, follow_radius_px: 48.0, axis_switch_deg: 30.0 };
+        let mut t = TouchScheme::default();
+        t.set_keep_out(&c.keep_out());
+        let on = TouchPoint { id: 7, pos: Vec2::new(map.x + map.width / 2.0, map.y + map.height / 2.0) };
+        for _ in 0..3 {
+            let intent = t.update_with(&[on], &layout, false, 1.0 / 60.0, &rule);
+            assert_eq!((intent.move_dir, intent.fire), (None, false), "a touch on the minimap does nothing");
+        }
+        // Dragged off it, still nobody's until it lifts.
+        let dragged = TouchPoint { id: 7, pos: Vec2::new(300.0, 600.0) };
+        assert!(!t.update_with(&[dragged], &layout, false, 1.0 / 60.0, &rule).fire);
+        // The same place with no minimap fires.
+        let mut bare = TouchScheme::default();
+        bare.set_keep_out(&corners(&ui, &CornerShape { minimap: None, ..shape }).keep_out());
+        assert!(bare.update_with(&[on], &layout, false, 1.0 / 60.0, &rule).fire, "the fire half, uncovered");
     }
 
     /// What `PlayChrome` says is drawn is what the corners hold: play's
@@ -1479,7 +1632,7 @@ mod hud_tests {
         // the letterbox the right cluster stands in, but nothing is drawn
         // there: it fades nothing until it is on the field.
         let lane = crate::Position::new(W - 40.0, -20.0);
-        let [_, right] = c.keep_out();
+        let right = c.right;
         let p = screen.to_ui(lane);
         assert!(p.y >= right.y && p.y <= right.y + right.height, "the lane projects under the cluster: {p:?} {right:?}");
         assert_eq!(covered(&c, &[(lane, 16.0)], &screen), [false, false]);

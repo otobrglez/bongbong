@@ -1093,6 +1093,9 @@ impl Awareness {
 #[derive(Clone, Debug, Default)]
 pub struct ScreenAwareness {
     seats: Vec<Awareness>,
+    /// The indicators `picture` composed last, one per seat: which enemies
+    /// are in sight and which gates flash, for the minimap (`shown`).
+    shown: Vec<Indicators>,
 }
 
 impl ScreenAwareness {
@@ -1113,12 +1116,19 @@ impl ScreenAwareness {
     pub fn picture(&mut self, game: &Game, seats: &[u8], view: &ViewFrame, points: f32) -> Picture {
         self.seats.resize_with(seats.len(), Awareness::new);
         let t = in_points(&tuning(), points);
-        let mut shown = Vec::with_capacity(seats.len());
+        self.shown.clear();
         for (memory, &seat) in self.seats.iter_mut().zip(seats) {
             memory.observe_events(game, seat);
-            shown.push(memory.frame(&Scene::of(game, seat), view, &t));
+            self.shown.push(memory.frame(&Scene::of(game, seat), view, &t));
         }
-        picture(&shown, view, game.time, &t, label_font(points))
+        picture(&self.shown, view, game.time, &t, label_font(points))
+    }
+
+    /// The indicators the last `picture` composed, one per seat on the
+    /// screen: what the minimap reads its enemies and flashing gates from
+    /// (`minimap::Marks`), under the same concealment as the arrows.
+    pub fn shown(&self) -> &[Indicators] {
+        &self.shown
     }
 }
 
@@ -1303,13 +1313,14 @@ fn shot_velocity_at(game: &Game, at: Position) -> Option<Vec2> {
 /// as their rings are, since an identity has to be loud against the
 /// terrain: a teammate's arrow is its seat's ring colour
 /// (`tank::team_color`) and the frog's the green of the HUD's FROG gauge,
-/// which the grass's own greens would swallow. White is a flash.
-const HOSTILE: Color = Color::new(0xFF, 0x42, 0x1A, 255);
+/// which the grass's own greens would swallow. White is a flash. The
+/// minimap's marks (`minimap::picture`) wear the same colours.
+pub(crate) const HOSTILE: Color = Color::new(0xFF, 0x42, 0x1A, 255);
 const HOSTILE_DEEP: Color = Color::new(0x9C, 0x35, 0x27, 255);
-const FROG_GREEN: Color = Color::new(120, 220, 90, 255);
-const GATE_AMBER: Color = Color::new(0xEE, 0xA3, 0x43, 255);
-const RIM: Color = Color::new(0x25, 0x25, 0x25, 255);
-const WHITE: Color = Color::new(0xFF, 0xFF, 0xFF, 255);
+pub(crate) const FROG_GREEN: Color = Color::new(120, 220, 90, 255);
+pub(crate) const GATE_AMBER: Color = Color::new(0xEE, 0xA3, 0x43, 255);
+pub(crate) const RIM: Color = Color::new(0x25, 0x25, 0x25, 255);
+pub(crate) const WHITE: Color = Color::new(0xFF, 0xFF, 0xFF, 255);
 
 /// A block: the 2 px every mark is built from, on the screen as in the
 /// world (`pyro::BLOCK`), so an arrow is as chunky as the sprites under it.
