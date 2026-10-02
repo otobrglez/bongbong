@@ -649,10 +649,12 @@ pub struct Picture {
 pub fn picture(marks: &Marks, rect: Rectangle, field: (f32, f32), font: i32, t: &Tuning) -> Picture {
     use crate::indicators::{FROG_GREEN, GATE_AMBER, HOSTILE, RIM, WHITE};
     let mut out = Picture::default();
+    // Inside the rectangle's last whole point, or on its corner where it
+    // is under a point across.
     let at = |world: Position| {
         let p = to_point(rect, field, world);
-        let x = p.x.clamp(rect.x, rect.x + rect.width - 1.0);
-        let y = p.y.clamp(rect.y, rect.y + rect.height - 1.0);
+        let x = p.x.clamp(rect.x, (rect.x + rect.width - 1.0).max(rect.x));
+        let y = p.y.clamp(rect.y, (rect.y + rect.height - 1.0).max(rect.y));
         (x.floor() as i32, y.floor() as i32)
     };
     let inside = Rectangle::new(rect.x.ceil(), rect.y.ceil(), rect.width.floor(), rect.height.floor());

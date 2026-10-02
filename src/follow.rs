@@ -148,13 +148,19 @@ pub struct Seats {
 
 impl Seats {
     /// Read `game`'s seats, `local` the ones this screen plays (a seat the
-    /// round does not hold is left out).
+    /// round does not hold is left out, and so is one whose body reads no
+    /// finite position - rapier's quarantine of a body gone NaN,
+    /// `Event::PhysicsQuarantine` - which no camera can stand on).
     pub fn of(game: &Game, local: &[usize]) -> Seats {
         let on_field = game.seats_on_field();
         let tanks = (0..game.players.count())
             .filter_map(|seat| {
                 let entity = game.seat(seat)?;
                 let (position, rotation, velocity) = game.seat_motion(seat)?;
+                if !(position.x.is_finite() && position.y.is_finite()) {
+                    return None;
+                }
+                let velocity = if velocity.x.is_finite() && velocity.y.is_finite() { velocity } else { Vec2::new(0.0, 0.0) };
                 let (wreck, top_speed) = crate::simulation::with_tank(&game.world, entity, |t| (t.is_wreck(), t.base_speed()));
                 Some(SeatTank {
                     seat,
