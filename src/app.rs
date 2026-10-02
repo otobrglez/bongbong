@@ -1730,10 +1730,12 @@ pub fn run(args: Args) {
         }
         // The window the chrome lays itself out in (`hud::UiFrame`): its
         // size in points, its safe area, and whether thumbs are on the
-        // glass - a build with no keyboard, `--touch-from-mouse`, or a
-        // touch seen this session -, and the hints. The builder's canvas
-        // stands under its bar, so the frame is laid out first.
-        let touch_screen = !crate::KEYBOARD_AVAILABLE || touch_from_mouse || touch.seen();
+        // glass - a build with no keyboard, `--touch-from-mouse`, a touch
+        // seen this session or one landing now (`TouchScheme::touch_chrome`:
+        // the frame a finger lands on is already the one it lifts from) -,
+        // and the hints. The builder's canvas stands under its bar, so the
+        // frame is laid out first.
+        let touch_screen = touch.touch_chrome(crate::KEYBOARD_AVAILABLE, touch_from_mouse, touching);
         let ui = ui_frame(rl, touch_screen).with_hints(hints);
         #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
         if let Some(dev) = &mut dev {

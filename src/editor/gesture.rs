@@ -91,6 +91,12 @@ pub struct Gestures {
 }
 
 impl Gestures {
+    /// No gesture, and the fingers `down` ignored until they lift: they
+    /// landed on something else - the canvas came up under them.
+    pub fn ignoring(down: impl IntoIterator<Item = i32>) -> Gestures {
+        Gestures { ignored: down.into_iter().collect(), ..Gestures::default() }
+    }
+
     /// Whether a gesture is under way or a canvas finger is down - the
     /// canvas belongs to the fingers until it is over.
     pub fn active(&self) -> bool {

@@ -315,6 +315,16 @@ impl TouchScheme {
         self.seen
     }
 
+    /// Whether this frame's chrome is laid out for thumbs (`UiFrame::touch`):
+    /// on a build with no `keyboard`, under `--touch-from-mouse`
+    /// (`from_mouse`), once a touch has been seen - and on the frame a
+    /// finger is first `touching`, before `update` has seen it, so the
+    /// frame a finger lands on is the frame it lifts from and nothing laid
+    /// out by the chrome moves under it.
+    pub fn touch_chrome(&self, keyboard: bool, from_mouse: bool, touching: bool) -> bool {
+        !keyboard || from_mouse || touching || self.seen
+    }
+
     /// The held stick's origin, the thumb's position and the leash, in UI
     /// points - what a test reads to check the origin trails the thumb.
     pub fn stick_geometry(&self) -> Option<(Vec2, Vec2, f32)> {

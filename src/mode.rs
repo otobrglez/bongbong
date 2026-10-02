@@ -231,6 +231,7 @@ impl Session {
     /// round on it (a `--seed` stays pinned, the banner shows).
     pub fn start_level(&mut self, i: usize) -> Result<(), String> {
         let map = self.campaign.as_ref().ok_or("this session has no levels")?.map(i)?;
+        self.builder.leave();
         self.builder.open(map.clone());
         self.game.map = map;
         self.game.start_override = None;
@@ -560,8 +561,9 @@ impl Session {
     /// mode.
     pub fn play(&mut self) -> Driver {
         if self.driver == Driver::Build {
-            // A menu left open would still be there on the next BUILD.
-            self.builder.close_popup();
+            // Nothing under way in the builder - a menu, a rectangle half
+            // drawn, a finger - is there on the next BUILD.
+            self.builder.leave();
             self.game.map = self.builder.map().clone();
             // A level's canvas is that level for the rest of the session.
             if let Some(campaign) = &mut self.campaign {
@@ -1095,6 +1097,61 @@ mod session_tests {
             s.update_builder(&BuilderInput { escape: true, ..Default::default() }, &frame);
             assert_eq!(s.builder.open_menu(), None);
             assert_eq!(s.toggle(), Driver::Play);
+        }
+    }
+
+    /// Nothing a finger had under way outlives the builder: a rectangle a
+    /// finger is still drawing when the round starts (Tab, a second finger
+    /// on PLAY, the dev server's `play`) is taken back, not filled; and the
+    /// finger - still down when BUILD brings the builder back, or down
+    /// again under the same id, as Android hands ids out again - is nobody's
+    /// on the canvas: it taps, strokes and zooms nothing when it lifts.
+    #[test]
+    fn play_then_build_with_a_finger_leaves_nothing_pending() {
+        use crate::editor::{BuilderFrame, BuilderInput, CanvasScreen, Shape};
+        use crate::math::Vec2;
+        use crate::touch::TouchPoint;
+        for same_id in [true, false] {
+            let mut s = session();
+            s.press_build();
+            s.answer_dialog(true);
+            let ui = crate::hud::UiFrame::new((1600.0, 900.0), 1.0, 1.0, crate::hud::Insets::default(), true);
+            let frame = BuilderFrame::new(ui, s.builder.map().field_size(), s.builder.map().class(), None);
+            let screen = CanvasScreen { device_per_px: frame.view.scale * 2.0, points_per_px: frame.view.scale, coarse: false };
+            s.update_builder(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
+            s.builder.select_tool(Tool::Wall(Material::Brick));
+            s.builder.set_shape(Shape::Rect);
+            let before = s.builder.map().clone();
+            let finger = |id: i32, at: Vec2, pressed: bool| BuilderInput {
+                pointer: Some(at),
+                pressed,
+                held: true,
+                touches: vec![TouchPoint { id, pos: at }],
+                dt: 1.0 / 60.0,
+                ..Default::default()
+            };
+            let f = frame.layout.field;
+            let middle = frame.view.to_window(Vec2::new(f.x + f.w / 2.0, f.y + f.h / 2.0));
+            s.update_builder(&finger(0, middle, true), &frame);
+            for i in 1..=10 {
+                s.update_builder(&finger(0, Vec2::new(middle.x + 12.0 * i as f32, middle.y + 6.0 * i as f32), false), &frame);
+            }
+            assert!(s.builder.rect_stroke().is_some(), "a rectangle is being drawn");
+            assert_eq!(s.toggle(), Driver::Play);
+            assert!(s.builder.rect_stroke().is_none(), "the rectangle outlived the builder");
+            assert_eq!(s.builder.map().cells, before.cells, "leaving filled the rectangle");
+            s.press_build();
+            assert_eq!(s.answer_dialog(true), Driver::Build);
+            let camera = *s.builder.camera();
+            let id = if same_id { 0 } else { 1 };
+            let at = Vec2::new(middle.x - 200.0, middle.y - 100.0);
+            for _ in 0..3 {
+                s.update_builder(&finger(id, at, false), &frame);
+            }
+            s.update_builder(&BuilderInput { dt: 1.0 / 60.0, ..Default::default() }, &frame);
+            assert_eq!(s.builder.map().cells, before.cells, "same id {same_id}: the finger painted");
+            assert_eq!(s.builder.history().undo_depth(), 0);
+            assert_eq!(*s.builder.camera(), camera, "same id {same_id}: the finger moved the view");
         }
     }
 

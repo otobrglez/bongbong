@@ -822,6 +822,10 @@ pub struct MapEditor {
     pending_look: Option<Rectangle>,
     /// The fingers on the canvas.
     gestures: gesture::Gestures,
+    /// The builder is coming up (`new`, `leave`): its next `update` takes
+    /// no finger already down for the canvas's - that finger landed on
+    /// what the window showed before, a round's BUILD button.
+    entering: bool,
     /// Where a painting finger is, for edge scroll.
     stroke_pointer: Option<Vec2>,
     /// The navigator's picture of the canvas (`minimap.rs`): made again
@@ -933,6 +937,7 @@ impl MapEditor {
             wheel_accum: 0.0,
             pending_look: None,
             gestures: gesture::Gestures::default(),
+            entering: true,
             stroke_pointer: None,
             minimap: Minimap::default(),
             nav_drag: false,
@@ -1059,6 +1064,16 @@ impl MapEditor {
     /// under the builder's chrome (the bar, an open popup, the navigator).
     fn on_canvas(&self, bitmap: Vec2, frame: &BuilderFrame) -> bool {
         frame.layout.field.contains(bitmap) && !self.point_on_ui(frame.canvas_to_ui(bitmap), frame)
+    }
+
+    /// Whether a finger landing at a window point is the canvas's: on the
+    /// canvas, and no press of the chrome's takes it there. A bar button's
+    /// hit rect reaches `EDITOR_BAR_HIT_SLACK` under the bar, over the
+    /// canvas's top edge, and a finger there pressed the button; the
+    /// strip's buttons and the navigator press only inside the plates
+    /// `on_canvas` leaves out.
+    fn lands_on_canvas(&self, window: Vec2, frame: &BuilderFrame) -> bool {
+        frame.bar().hit(frame.to_ui(window)).is_none() && self.on_canvas(frame.to_canvas(window), frame)
     }
 
     /// Where the navigator's picture stands (docs/large-maps-follow-camera.md
@@ -2399,12 +2414,32 @@ impl MapEditor {
     }
 
     /// Close whatever popup is open (a dropdown, the settings panel or
-    /// the Save prompt) without acting on it, and land a drag under way -
-    /// leaving the mode does this, so the canvas never comes back with a
-    /// stale menu over it or cells still lifted.
+    /// the Save prompt) without acting on it, and land a drag under way.
     pub fn close_popup(&mut self) {
         self.popup = None;
         self.settle();
+    }
+
+    /// Leave the builder - PLAY, PLAY HERE, Tab, a level opening - with
+    /// nothing under way to come back to: the open popup closed; a RECT
+    /// still being drawn and a drag of the select tool taken back, as
+    /// Escape takes them (lifted cells go back where they were); a
+    /// freehand stroke's cells, on the map already, kept as its one undo
+    /// step; and every finger, pan and navigator drag let go. A finger
+    /// down when the builder comes up again is not the canvas's
+    /// (`entering`).
+    pub fn leave(&mut self) {
+        self.popup = None;
+        if self.stroke.as_ref().is_some_and(|s| s.shape == Shape::Rect) {
+            self.cancel_stroke();
+        }
+        self.cancel_drag();
+        self.settle();
+        self.gestures = gesture::Gestures::default();
+        self.entering = true;
+        self.stroke_pointer = None;
+        self.pan_from = None;
+        self.nav_drag = false;
     }
 
     /// Which popup is open, as the dev server's `mode` tool spells it: a
@@ -2728,6 +2763,9 @@ impl MapEditor {
     /// bitmap. Returns `EditorAction::Play` the frame PLAY is pressed.
     pub fn update(&mut self, input: &BuilderInput, frame: &BuilderFrame) -> EditorAction {
         let layout = &frame.layout;
+        if std::mem::take(&mut self.entering) {
+            self.gestures = gesture::Gestures::ignoring(input.touches.iter().map(|t| t.id));
+        }
         if let Some(p) = input.pointer {
             self.pointer = Some(frame.to_canvas(p));
         }
@@ -2997,7 +3035,8 @@ impl MapEditor {
 
     /// One frame of fingers: the canvas's go through the gestures
     /// (`gesture.rs`), on the canvas's bitmap, and what they mean is done.
-    /// Only a finger that lands on the canvas while no popup is open is the
+    /// Only a finger that lands on the canvas while no popup is open, and
+    /// that no press of the chrome takes (`lands_on_canvas`), is the
     /// canvas's.
     fn touch_gestures(&mut self, input: &BuilderInput, frame: &BuilderFrame, rules: &CanvasRules) {
         let vp = self.viewport_in(&frame.layout);
@@ -3006,7 +3045,7 @@ impl MapEditor {
         let canvas: Vec<i32> = if self.popup.is_some() {
             Vec::new()
         } else {
-            touches.iter().filter(|t| self.on_canvas(t.pos, frame)).map(|t| t.id).collect()
+            input.touches.iter().filter(|t| self.lands_on_canvas(t.pos, frame)).map(|t| t.id).collect()
         };
         let paints = self.touch_paints(&vp, rules);
         let g = gesture::GestureRules { slop: vp.px(rules.slop_pt), tap_seconds: rules.tap_seconds };
@@ -5250,6 +5289,93 @@ mod editor_tests {
         fingers(&mut ed, &frame, &[vec![(2, x, y)], vec![(2, x + 60.0, y)]]);
         assert_eq!(ed.open_menu(), None);
         assert!(ed.map().cells.is_empty(), "the dismissing finger painted");
+    }
+
+    /// A bar button's hit rect reaches past the bar, over the canvas's top
+    /// edge: a finger there presses the button and is no canvas finger. On
+    /// a tablet zoomed in where a finger paints, a tap a few points under
+    /// UNDO undoes once, lays nothing down, zooms nothing and leaves the
+    /// redo branch whole; a tap on the select tool's strip acts and keeps
+    /// the selection.
+    #[test]
+    fn a_tap_under_a_bar_or_strip_button_presses_it_and_never_paints() {
+        use crate::EDITOR_BAR_HIT_SLACK;
+        let ui = UiFrame::new((1180.0, 820.0), 1.0, 1.0, Insets::default(), true);
+        let mut map = MapFile::new();
+        map.size = Some((96.0, 54.0));
+        let frame = BuilderFrame::new(ui, map.field_size(), MapClass::Field, None);
+        let mut ed = MapEditor::new(map);
+        let screen = CanvasScreen { device_per_px: frame.view.scale * 2.0, points_per_px: frame.view.scale, coarse: false };
+        ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
+        let rules = CanvasRules::of(&crate::tuning::Tuning::DEFAULT);
+        let vp = ed.viewport();
+        ed.camera.zoom_at(vp.scale_for_cell_mm(rules.paint_min_cell_mm * 1.5), Vec2::new(vp.area.0 / 2.0, vp.area.1 / 2.0), &vp, &rules);
+        let (c, r) = ed.cell_at(canvas_middle(&frame), &frame).expect("the view's middle is on the map");
+        ed.stroke(&[(c, r), (c + 1, r)], false);
+        ed.stroke(&[(c + 2, r + 2)], false);
+        ed.undo();
+        let (before, camera) = (ed.map().clone(), *ed.camera());
+        let undo = named(&ed, &frame, "undo");
+        let at = Vec2::new(undo.x + undo.width / 2.0, undo.y + undo.height + EDITOR_BAR_HIT_SLACK - 2.0);
+        assert!(ed.world_at(at, &frame).is_some(), "the slack under UNDO stands over the canvas");
+        fingers(&mut ed, &frame, &[vec![(1, at.x, at.y)]]);
+        assert_eq!((ed.history().undo_depth(), ed.history().redo_depth()), (0, 2), "undone once, the redo branch whole");
+        assert!(ed.map().cells.is_empty(), "the tap laid a cell down: {:?}", ed.map().cells);
+        assert_eq!(*ed.camera(), camera, "the tap moved the view");
+        ed.redo();
+        assert_eq!(ed.map().cells, before.cells);
+
+        // The strip: a finger on COPY's lowest points copies.
+        ed.select_tool(Tool::Select);
+        let (a, b) = (on_cell(&ed, &frame, c - 1, r - 1), on_cell(&ed, &frame, c + 2, r + 1));
+        drag(&mut ed, &frame, a, b);
+        let selection = ed.selection();
+        assert!(selection.is_some());
+        let copy = named(&ed, &frame, "sel_copy");
+        fingers(&mut ed, &frame, &[vec![(2, copy.x + copy.width / 2.0, copy.y + copy.height - 1.0)]]);
+        assert!(ed.clipboard().is_some(), "COPY took nothing");
+        assert_eq!(ed.selection(), selection, "the tap let the selection go");
+        assert_eq!(ed.history().undo_depth(), 1);
+        assert_eq!(ed.map().cells, before.cells);
+    }
+
+    /// On a build with a keyboard the chrome turns to thumbs on the frame
+    /// the session's first finger lands (`TouchScheme::touch_chrome`, as
+    /// `app.rs` decides it before the builder's update), not a frame later:
+    /// the bar has the height it keeps until the finger lifts, the canvas
+    /// stands still under it, and the first tap is a tap - under the paint
+    /// threshold it zooms in rather than reading as a drag.
+    #[test]
+    fn the_first_finger_on_a_keyboard_build_lands_on_a_touch_frame_and_taps() {
+        let rules = CanvasRules::of(&crate::tuning::Tuning::DEFAULT);
+        let mut map = MapFile::new();
+        map.size = Some((96.0, 54.0));
+        let field = map.field_size();
+        let frame_for = |touch: bool| BuilderFrame::new(UiFrame::new((852.0, 393.0), 1.0, 1.0, Insets::default(), touch), field, MapClass::Field, None);
+        let mut ed = MapEditor::new(map);
+        let mut scheme = crate::touch::TouchScheme::default();
+        assert!(!scheme.touch_chrome(true, false, false), "no finger yet: the mouse's chrome");
+        let mouse = frame_for(false);
+        let screen = CanvasScreen { device_per_px: mouse.view.scale * 3.0, points_per_px: mouse.view.scale, coarse: false };
+        ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &mouse);
+        let vp = ed.viewport();
+        assert!(vp.cell_mm(ed.camera().scale(&vp)) < rules.paint_min_cell_mm, "a tap here zooms in");
+        let at = canvas_at(&mouse, 400.0, 200.0);
+        let mut down = false;
+        for touching in [true, true, true, false] {
+            let touch = scheme.touch_chrome(true, false, touching);
+            assert!(touch, "touching {touching}: the frame is laid out for the finger from its first");
+            let frame = frame_for(touch);
+            let touches = if touching { vec![crate::touch::TouchPoint { id: 4, pos: at }] } else { Vec::new() };
+            let input = BuilderInput { pointer: Some(at), pressed: touching && !down, held: touching, touches: touches.clone(), dt: 1.0 / 60.0, ..Default::default() };
+            ed.update(&input, &frame);
+            scheme.update(&touches, crate::Rect::new(0.0, 0.0, 852.0, 393.0), false, 1.0 / 60.0);
+            down = touching;
+        }
+        let vp = ed.viewport();
+        let mm = vp.cell_mm(ed.camera().scale(&vp));
+        assert!((mm - rules.tap_zoom_cell_mm).abs() < 0.01, "the first tap zoomed in like any other: {mm}");
+        assert!(ed.map().cells.is_empty());
     }
 
     /// A stroke held at the canvas's edge scrolls the view toward it and
