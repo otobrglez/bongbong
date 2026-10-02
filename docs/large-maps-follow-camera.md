@@ -712,9 +712,11 @@ moves, and read as lanes it put more tanks into the 40-wide levels'
 corridors at once - clustering up 18 % and pile-ups 11 % over their
 sweeps. Only where the margin can never turn the hull - on the edge of its
 lane on the side the route turns to, where a margin turn's own slide
-leaves it (`ai::margin_never_turns`) - is a searched route's turn a lane
-turn too: on the study map that edge had kept a wave tank chasing its
-engagement slot driving from wall to wall for the rest of the round. And
+leaves it, or so near that edge that no think need fall inside the
+margin's window (below) (`ai::margin_never_turns`) - is a searched route's
+turn a lane turn too: on the study map that edge had kept a wave tank
+chasing its engagement slot driving from wall to wall for the rest of the
+round. And
 since a lane turn comes the slide's length early, for a moment the hull's
 centre still stands in the lane it is leaving, whose cell ahead can be the
 very wall the turn was timed to clear: the obstacle-ahead override judges
@@ -815,10 +817,47 @@ won after 148 s against 246. The stranding above (0x3fe) is won after 165
 s. Longwater's thirty rounds had none, the arenas' recipes and
 `probe-fields` read line for line as before - no round of theirs has a
 straggler - and `probe-defend` keeps never-arrived at 0. The tank riding
-column 74 (0x3fd) is still out at seven minutes: a hunter after the frog,
-it drives the column 12 px west of its centre line between rows 21 and
-43, turning back at either end rather than west toward the frog, and a
-screen round the seat could see it go, so it is no re-roll's to take.
+column 74 (0x3fd), which a screen round the seat could see go and so no
+re-roll's to take, was the steering's (below).
+
+**The margin's window.** That tank was a hunter routing to its slot on the
+frog's ring, a searched route, and it rode column 74 11.8 px west of the
+column's centre line: 20.2 px across from the centre line of the column
+its route turned into, 0.2 px past the switch margin, so not a hull
+`margin_never_turns` took for the lanes. The margin turns a hull on a think
+where its error across the heading beats its error along it by
+`ai_dir_switch_margin_px`, which for this hull was a think within 0.2 px of
+a turning row's centre, and at its 145 px/s it covered 2.4 px between two
+thinks. Driving the column to and fro at one pace between rows 21 and
+43, it crossed the rows where its route turned west (32, 34, 35 and 37 to
+42) at much the same places pass after pass - its thinks drifting a few
+hundredths of a pixel a pass - and in five minutes never had one inside
+the window; the margin, blind to a reversal, kept it going to each end.
+So "the margin can never turn the hull" counts the ground a think
+covers: a hull whose window - twice what its error across beats the
+margin by - is no wider than its stride along its heading (`Ai::motion`
+over the think's seconds) can cross it between two thinks, pass after
+pass, and its searched route's turn is a lane turn too. Round 0x3fd is
+won after 126 s.
+
+The sliver is narrow - 1.3 px for a hull at an enemy's pace thinking every
+tick - but a hull that turned by the margin rides near its edge often
+enough that about a third of the sweeps' rounds play differently. With
+the defence the study map's thirty rounds are all won (29 and that
+straggler before), its walk to the fight's
+p90 is 16.6 s against 18.0 and its longest 54 s against 54 (`probe:
+rerolls:` 5 and 5); longwater's thirty are all won before and after, the
+longest walk 34 s against 40. Over eight 30-round sweeps of each field
+map at seeds 1000 and 2000, AFK and advancing, one seat and two,
+never-arrived went from 26 to 23 and stall from 6 to 3; on the five
+40-wide levels, with the same eight sweeps at seeds 3000 and 4000 to read
+through the re-timing, clustering held (694 against 685) and so did
+pile-ups (491 against 497), churn fell 4 % and jitter rose 2 % - 5 % on
+hedge-maze, where a search's staircase of a route, which the margin's
+window had let a hull on that sliver drive past, is now driven step by
+step. `probe-fields` was re-baselined for hedge-maze's jitter (the justfile
+says how); the arenas' recipes and `probe-waves` read line for line as
+before.
 
 **Flow fields as far as they are read** (`pathfind::Grid`): the frame's
 routing grid carried each seat's and the frog's flow field as a Dijkstra

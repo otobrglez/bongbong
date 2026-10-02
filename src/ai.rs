@@ -1162,14 +1162,20 @@ impl Ai {
     /// own that moves, an engagement slot most of all, and read as lanes it
     /// crowds the 40-wide levels' corridors (docs/large-maps-follow-camera.md
     /// section 12). Where the margin never can (`margin_never_turns`: the
-    /// hull rides the edge of its lane on the side the route turns to), a
-    /// searched route's turn is a lane turn too - that is the hull this is
-    /// for, wherever its route comes from. A turn taken before the hull is in
-    /// the cell it turns in sweeps the cells beside the ones it still
-    /// crosses, so it waits for that cell while any of them is blocked: the
-    /// nav grid keeps a hull's centre clear of the walls there.
+    /// hull rides the edge of its lane on the side the route turns to, or so
+    /// near it that the margin's window is narrower than the ground the hull
+    /// covers between two thinks), a searched route's turn is a lane turn
+    /// too - that is the hull this is for, wherever its route comes from. A
+    /// turn taken before the hull is in the cell it turns in sweeps the cells
+    /// beside the ones it still crosses, so it waits for that cell while any
+    /// of them is blocked: the nav grid keeps a hull's centre clear of the
+    /// walls there.
     fn lane_turn(&self, from: Position, heading: Dir, route: &RouteAhead, ctx: AvoidCtx, grid: &Grid) -> Option<Lane> {
-        if !route.shared() && !margin_never_turns(from, heading, route) {
+        let along = |p: Vec2| p.x * heading.vec().x + p.y * heading.vec().y;
+        let v = along(self.motion);
+        // What the hull covers along its heading until the next think.
+        let stride = v.abs() * ctx.dt;
+        if !route.shared() && !margin_never_turns(from, heading, route, stride) {
             return None;
         }
         let mut at = route.start();
@@ -1182,13 +1188,10 @@ impl Ai {
             if step == opposite(heading) {
                 return if i == 0 { None } else { Some(Lane::Hold) };
             }
-            let along = |p: Vec2| p.x * heading.vec().x + p.y * heading.vec().y;
-            let v = along(self.motion);
             let slide = v * v.abs() / (2.0 * ctx.grip.max(1.0));
             let (rest, line) = (along(from) + slide, along(route.centre(at)));
             // The think nearest the crossing: half of what the hull covers
             // until the next one either side of the line.
-            let stride = v.abs() * ctx.dt;
             if rest + 0.5 * stride < line {
                 return Some(Lane::Hold);
             }
@@ -1446,19 +1449,23 @@ enum Lane {
 }
 
 /// Whether `steer_toward`'s switch margin can never turn a hull at `from`,
-/// heading `heading`, onto the first step of `route`: a step across the
-/// heading into a lane whose centre line the hull is already nearer than
-/// `ai_dir_switch_margin_px`, because it rides the edge of its own lane on
-/// that side. The margin turns a hull once its error across the heading to
-/// the step's cell beats its error along it by that much, and driving on
-/// never changes the error across, so that turn never comes
-/// (`Ai::lane_turn`).
-fn margin_never_turns(from: Position, heading: Dir, route: &RouteAhead) -> bool {
+/// heading `heading` and covering `stride` px along it between two thinks,
+/// onto the first step of `route`, a step across the heading. The margin
+/// turns a hull on a think where its error across the heading, to the
+/// step's cell, beats its error along it by `ai_dir_switch_margin_px`, and
+/// driving on never changes the error across. A hull nearer the step's
+/// centre line than the margin - riding the edge of its own lane on that
+/// side - never turns; one a little farther turns only on a think whose
+/// error along is under what its error across beats the margin by, a
+/// window twice that wide about the turning's centre, and a window
+/// narrower than `stride` can fall between two thinks - on a lane a hull
+/// drives to and fro at one pace, pass after pass (`Ai::lane_turn`).
+fn margin_never_turns(from: Position, heading: Dir, route: &RouteAhead, stride: f32) -> bool {
     let Some(&next) = route.cells().first() else { return false };
     match cell_step(route.start(), next) {
         Some(step) if step != heading && step != opposite(heading) => {
             let across = |p: Vec2| p.x * step.vec().x + p.y * step.vec().y;
-            across(route.centre(next)) - across(from) <= tuning().ai_dir_switch_margin_px
+            across(route.centre(next)) - across(from) - tuning().ai_dir_switch_margin_px <= 0.5 * stride
         }
         _ => false,
     }

@@ -8675,6 +8675,32 @@ cells."30,20" = { kind = "frog" }
         let (frame, _) = through_the_gap(&mut game, slot, 6 * 60).expect("the hull never turned into the gap");
         assert!(frame < 5 * 60, "took {frame} frames to get through");
     }
+
+    /// The same errand from just past the margin's reach: the hull's
+    /// centre 20.2 px across from the centre line of the row its route
+    /// turns into, 0.2 px more than `ai_dir_switch_margin_px`. The margin
+    /// turns a hull only on a think whose error along its heading, to the
+    /// turning's centre, is under what its error across beats the margin
+    /// by - here a window 0.4 px wide - and a hull covering 3 px between
+    /// two thinks drives across it without a think inside and on past the
+    /// gap. On the study map such a hull rode a column to and fro past its
+    /// turnings for the rest of the round (docs/large-maps-follow-camera.md
+    /// section 12).
+    #[test]
+    fn a_hull_just_past_the_margins_reach_takes_its_own_routes_turn() {
+        let map = gap_map().replace("\"28,15\"", "\"38,18\"")
+            + "weather = \"fog\"\ncells.\"23,14\" = { kind = \"pickup\", pickup = \"laser\" }\n";
+        let mut game = field_round(&map);
+        let next_row_centre = 9.5 * PATHFIND_CELL_SIZE;
+        let across = tuning().ai_dir_switch_margin_px + 0.2;
+        let slot = game.debug_spawn_enemy(Position::new(208.0, next_row_centre - across), Some(1), None).expect("an enemy spawns");
+        field_step(&mut game, Input::default());
+        let snapshot = game.debug_snapshot(game.map.field_size().0, game.map.field_size().1, debug::Detail::Full);
+        let ai = snapshot.tanks.iter().find(|t| t.slot == slot).and_then(|t| t.ai).expect("the enemy thinks");
+        assert_eq!(ai.last_action, Some("seek_laser"), "the case this is about: a searched route");
+        let (frame, _) = through_the_gap(&mut game, slot, 6 * 60).expect("the hull never turned into the gap");
+        assert!(frame < 5 * 60, "took {frame} frames to get through");
+    }
 }
 
 
