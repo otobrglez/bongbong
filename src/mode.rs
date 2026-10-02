@@ -287,18 +287,23 @@ impl Session {
 
     /// The clear check on a win: the revision `PLAY` started the round on
     /// (`clear_attempt`) is cleared when the round is that revision played
-    /// as the map is authored - one seat, the map's own start, no enemy
-    /// count, mission, spawn plan or chassis from the command line or a
-    /// tool - and its par is the round clock at the win. The builder keeps
-    /// it (`MapEditor::note_clear`), the best par of its wins.
+    /// as the map is authored - one seat, the map's own start and its own
+    /// sky, no enemy count, mission, spawn plan or chassis from the command
+    /// line or a tool - and its par is the round clock at the win. The
+    /// builder keeps it (`MapEditor::note_clear`), the best par of its
+    /// wins.
     fn note_clear(&mut self) {
         let Some(revision) = self.clear_attempt else { return };
         let game = &self.game;
+        // The map's sky, or a `random` one's pick for this seed: what the
+        // round is fought under when no `--weather` puts another in.
+        let own_sky = crate::weather::in_force(game.map.weather, game.round_seed(), true, &crate::tuning::Tuning::DEFAULT);
         let authored = game.players == PlayerCount::ONE
             && game.start_override.is_none()
             && game.enemy_count_override.is_none()
             && game.level_overrides == crate::level::LevelOverrides::default()
-            && game.player_row_override.is_none();
+            && game.player_row_override.is_none()
+            && game.weather() == own_sky;
         if authored && game.map.revision() == revision {
             let seconds = game.round_stats().seconds as f64;
             self.builder.note_clear(revision, seconds);
@@ -1624,6 +1629,13 @@ mod session_tests {
         s.play();
         finish(&mut s, true);
         assert_eq!(s.builder.par(), None, "an enemy count from the command line");
+
+        // Another sky than the map's, as `--weather` would put in.
+        let mut s = clear_session();
+        s.play();
+        s.game.weather = crate::map::Weather::Night;
+        finish(&mut s, true);
+        assert_eq!(s.builder.par(), None, "another sky");
 
         let mut s = clear_session();
         s.driver = Driver::Play;
