@@ -704,10 +704,17 @@ probe.
    the study map in the probe sweeps, and the Android `appCategory` fix.
 
 Landed so far: step 1 whole (`view::Camera`); from step 2 the view rules
-(`framing.rs`) and the map's `view` key; from step 4 the awareness model
-(`indicators.rs`); from step 5 the sight box, the AI's fire gate, the
-probe's `offbox-fire` check and the weather fallback (`weather::plain`);
-from step 7 the Android `appCategory`.
+(`framing.rs`), the map's `view` key and the follow camera itself
+(`follow.rs`: the dead zone, the look-ahead inside the sight box, the
+spring, the sub-block present, cuts, spectating a teammate, the couch's
+shared view, `status.camera`) - the split screen, the establishing shot
+and the motion switch are still to come; from step 4 the awareness model
+and its drawing (`indicators.rs`: edge arrows by priority, the lane
+warning, the hit arc, last-seen marks, gate flashes, thumb rests) - the
+minimap is still to come; from step 5 the sight box, the AI's fire gate,
+the probe's `offbox-fire` check and the weather fallback
+(`weather::plain`); from step 7 the Android `appCategory`, maps capped at
+what the wire carries, the laser's reach and the mark caps.
 
 ## 15. Decisions
 
