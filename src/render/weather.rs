@@ -44,6 +44,7 @@ use std::sync::Arc;
 use crate::fx::Fx;
 use crate::ground::Depth;
 use crate::map::{cell_to_world, CellObject};
+use crate::minimap::RoundKey;
 use crate::math::{Color, Rectangle, Vec2};
 use crate::render::canvas::GpuCanvas;
 use crate::render::game::Textures;
@@ -159,6 +160,8 @@ pub struct WeatherFx {
     shaders: Option<PassShaders>,
     targets: Option<Targets>,
     mask: Option<Mask>,
+    /// What `mask` was made for and the frame it was last checked on.
+    mask_for: Option<(MaskFor, u64)>,
     /// Set by the first target or mask that could not be made: said once
     /// on stderr, not once a frame.
     warned: bool,
@@ -289,21 +292,48 @@ pub fn margin_mask_bytes(game: &Game, grid: &crate::ground::GroundGrid) -> (i32,
     (cols, rows, bytes)
 }
 
-/// A cell mask on the GPU, uploaded again only when its bytes change.
+/// What a cell mask was made from: the round (`minimap::RoundKey`) and
+/// the grid's first cell, which a margin's grid moves with the window. A
+/// round's water and roads never change, so a mask made for the same
+/// round on the same grid - in a frame no earlier than the last check,
+/// since a frame counter going back is a restart - is the same mask.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MaskFor {
+    pub round: RoundKey,
+    pub origin: (i32, i32),
+}
+
+/// A cell mask on the GPU, made again only for another round or grid and
+/// uploaded again only when its bytes change.
 pub struct MaskTexture {
     mask: Option<Mask>,
+    made_for: Option<(MaskFor, u64)>,
 }
 
 impl MaskTexture {
     pub fn new() -> Self {
-        MaskTexture { mask: None }
+        MaskTexture { mask: None, made_for: None }
     }
 
-    /// Hold `bytes`, a mask `cols` x `rows` cells, and hand back the
-    /// texture.
-    pub fn sync(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, cols: i32, rows: i32, bytes: Vec<u8>) -> Result<&Texture2D, String> {
-        upload_mask(&mut self.mask, rl, thread, cols, rows, bytes)?;
-        Ok(&self.mask.as_ref().expect("uploaded").texture)
+    /// The mask for `made` as of `frame`: `bytes` - a mask `cols` x `rows`
+    /// cells - is asked for only when the mask was last made for anything
+    /// else or the frame went back. The texture and its size in cells.
+    pub fn sync_for(
+        &mut self,
+        rl: &mut RaylibHandle,
+        thread: &RaylibThread,
+        made: MaskFor,
+        frame: u64,
+        bytes: impl FnOnce() -> (i32, i32, Vec<u8>),
+    ) -> Result<(&Texture2D, (i32, i32)), String> {
+        let fresh = self.mask.is_some() && self.made_for.as_ref().is_some_and(|(was, last)| *was == made && frame >= *last);
+        if !fresh {
+            let (cols, rows, bytes) = bytes();
+            upload_mask(&mut self.mask, rl, thread, cols, rows, bytes)?;
+        }
+        self.made_for = Some((made, frame));
+        let mask = self.mask.as_ref().expect("uploaded");
+        Ok((&mask.texture, (mask.cols, mask.rows)))
     }
 }
 
@@ -411,7 +441,7 @@ impl WeatherFx {
                 None
             }
         };
-        WeatherFx { shaders, targets: None, mask: None, warned: false }
+        WeatherFx { shaders, targets: None, mask: None, mask_for: None, warned: false }
     }
 }
 
@@ -593,11 +623,22 @@ impl WeatherFx {
         Ok(())
     }
 
-    /// The cell mask for `game`'s map, uploaded when it changed; the
-    /// mask's size in cells.
+    /// The cell mask for `game`'s map, made again only for another round
+    /// (`MaskFor`) - a round's water and roads never change - and uploaded
+    /// when it changed; the mask's size in cells.
     fn ensure_mask(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, game: &Game) -> Result<(i32, i32), String> {
+        let made = MaskFor { round: RoundKey::of(game), origin: (0, 0) };
+        let frame = game.frame();
+        if let Some(mask) = &self.mask
+            && self.mask_for.as_ref().is_some_and(|(was, last)| *was == made && frame >= *last)
+        {
+            let cells = (mask.cols, mask.rows);
+            self.mask_for = Some((made, frame));
+            return Ok(cells);
+        }
         let (cols, rows, bytes) = mask_bytes(game);
         upload_mask(&mut self.mask, rl, thread, cols, rows, bytes)?;
+        self.mask_for = Some((made, frame));
         Ok((cols, rows))
     }
 }

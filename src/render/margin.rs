@@ -164,8 +164,10 @@ impl MarginFx {
                         rl.draw_texture_mode(thread, light, |mut d| d.clear_background(sky.ambient_texel()));
                         let at = PassView { origin: crate::math::Vec2::new(rect.x, rect.y), size, light: *light.as_ref(), parts: &local };
                         if plan.ground {
-                            let (cols, rows, bytes) = weather::margin_mask_bytes(game, &margin.ground);
-                            let Ok(texture) = mask.sync(rl, thread, cols, rows, bytes) else {
+                            let made = weather::MaskFor { round: crate::minimap::RoundKey::of(game), origin: margin.ground.origin() };
+                            let Ok((texture, (cols, rows))) =
+                                mask.sync_for(rl, thread, made, game.frame(), || weather::margin_mask_bytes(game, &margin.ground))
+                            else {
                                 return None;
                             };
                             let cells = CellMask { texture: *texture.as_ref(), cells: (cols, rows), origin: margin.ground.origin() };

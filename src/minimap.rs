@@ -425,10 +425,12 @@ fn solids_of_world(game: &Game, cells: (usize, usize)) -> Vec<Option<Class>> {
     solid
 }
 
-/// What a round's minimap was baked for: another seed, field, theme, map,
-/// sky or name is another round's.
+/// What a round's still picture was made for - its minimap, the weather's
+/// cell mask (`render::weather`): another seed, field, theme, map, sky or
+/// name is another round's. A frame counter that went back is too (a
+/// restart on a pinned seed), which a holder checks beside it.
 #[derive(Clone, Debug, PartialEq)]
-struct RoundKey {
+pub struct RoundKey {
     seed: u64,
     field: (u32, u32),
     theme: Theme,
@@ -438,7 +440,8 @@ struct RoundKey {
 }
 
 impl RoundKey {
-    fn of(game: &Game) -> RoundKey {
+    /// The round `game` holds.
+    pub fn of(game: &Game) -> RoundKey {
         let (w, h) = game.map.field_size();
         RoundKey {
             seed: game.round_seed(),
