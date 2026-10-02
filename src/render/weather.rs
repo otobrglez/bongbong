@@ -345,23 +345,39 @@ fn stored(rgb: Rgb, alpha: u8) -> Color {
 
 /// Where a pass's target lies in the world: the world point at its
 /// top-left corner and its size, a texel per world pixel.
-fn set_view(s: &mut Shader, origin_loc: i32, size_loc: i32, at: &PassView) {
+fn set_view(s: &mut Shader, origin_loc: i32, size_loc: i32, at: &PassView<'_>) {
     s.set_shader_value(origin_loc, Vector2::new(at.origin.x, at.origin.y));
     s.set_shader_value(size_loc, Vector2::new(at.size.0 as f32, at.size.1 as f32));
 }
 
 /// Where a pass draws, and the light it reads: its target's world
 /// rectangle - the world point at the target's top-left corner and the
-/// target's size, a texel per world pixel - and the light map over it.
-/// The scene target's for the field (`WeatherFrame::pass_view`), the
-/// margin's for the world an arena shows past its field
-/// (`render::margin`), where no lamp reaches and the map is the ambient
-/// alone.
+/// target's size, a texel per world pixel - the light map over it, and
+/// the parts of the target it draws. The scene target's whole for the
+/// field (`Passes::view`); for the world an arena shows past its field
+/// (`render::margin`) the margins alone, under a map of the ambient, since
+/// no lamp reaches there.
 #[derive(Clone, Copy)]
-pub struct PassView {
+pub struct PassView<'a> {
     pub origin: Vec2,
     pub size: (i32, i32),
     pub light: sola_raylib::ffi::Texture2D,
+    /// The parts of the target drawn, in its own pixels, none of them
+    /// overlapping; empty draws the whole of it.
+    pub parts: &'a [Rectangle],
+}
+
+/// Draw `source`, a render texture the target's size, over the target
+/// `at` names, a texel to the texel: the whole of it, or only its parts.
+fn copy_over<D: RaylibDraw>(d: &mut D, source: &RenderTexture2D, at: &PassView) {
+    if at.parts.is_empty() {
+        d.draw_texture_rec(source, whole(at.size), Vector2::new(0.0, 0.0), Color::WHITE);
+    }
+    for part in at.parts {
+        // Read the right way up: a render texture is stored bottom-up.
+        let rows = Rectangle::new(part.x, at.size.1 as f32 - part.y - part.height, part.width, -part.height);
+        d.draw_texture_rec(source, rows, Vector2::new(part.x, part.y), Color::WHITE);
+    }
 }
 
 /// What the ground pass reads of the map besides the bare ground: the cell
@@ -754,8 +770,8 @@ pub struct Passes<'a> {
 impl Passes<'_> {
     /// Where the scene target's passes draw: the camera's view, under the
     /// round's light map.
-    fn view(&self, frame: &WeatherFrame) -> PassView {
-        PassView { origin: frame.camera.origin, size: frame.size, light: *self.light.as_ref() }
+    fn view(&self, frame: &WeatherFrame) -> PassView<'static> {
+        PassView { origin: frame.camera.origin, size: frame.size, light: *self.light.as_ref(), parts: &[] }
     }
 
     /// The bare ground with the sky's mark on it (`weather_ground.fs`),
@@ -843,7 +859,7 @@ impl PassShaders {
             // texture; raylib binds the sampler for this batch (it has to
             // be set inside the shader mode, which resets the extra units).
             unsafe { sola_raylib::ffi::SetShaderValueTexture(raw, mask_loc, mask_tex) };
-            sd.draw_texture_rec(source, whole(at.size), Vector2::new(0.0, 0.0), Color::WHITE);
+            copy_over(&mut sd, source, at);
         });
     }
 
@@ -868,7 +884,7 @@ impl PassShaders {
         d.draw_shader_mode(s, |mut sd| {
             // SAFETY: as in `ground`.
             unsafe { sola_raylib::ffi::SetShaderValueTexture(raw, light_loc, light_tex) };
-            sd.draw_texture_rec(source, whole(at.size), Vector2::new(0.0, 0.0), Color::WHITE);
+            copy_over(&mut sd, source, at);
         });
     }
 
@@ -906,7 +922,7 @@ impl PassShaders {
         d.draw_shader_mode(s, |mut sd| {
             // SAFETY: as in `ground`.
             unsafe { sola_raylib::ffi::SetShaderValueTexture(raw, light_loc, light_tex) };
-            sd.draw_texture_rec(source, whole(at.size), Vector2::new(0.0, 0.0), Color::WHITE);
+            copy_over(&mut sd, source, at);
         });
     }
 }

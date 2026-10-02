@@ -50,6 +50,8 @@ pub struct MarginFrame {
     /// reach to cover `rect`, rounded up to `CELLS_STEP`, at most
     /// `MAX_CELLS`.
     pub cells: usize,
+    /// The field, in the same world pixels: (0, 0) to its size.
+    pub field: Rectangle,
 }
 
 impl MarginFrame {
@@ -81,8 +83,42 @@ impl MarginFrame {
         let (right, bottom) = ((w / tile).ceil() * tile + half, (h / tile).ceil() * tile + half);
         let past = (-half - x0).max(-half - y0).max(x1 - right).max(y1 - bottom).max(0.0);
         let cells = ((past / tile).ceil() as usize).max(1).div_ceil(CELLS_STEP) * CELLS_STEP;
-        Some(MarginFrame { rect: Rectangle::new(x0, y0, x1 - x0, y1 - y0), cells: cells.min(MAX_CELLS) })
+        let field = Rectangle::new(0.0, 0.0, w, h);
+        Some(MarginFrame { rect: Rectangle::new(x0, y0, x1 - x0, y1 - y0), cells: cells.min(MAX_CELLS), field })
     }
+
+    /// The window past the field, in world px: the bands over and under
+    /// the field the whole width of `rect` and the two beside it, reaching
+    /// `into` px into the field (a pass that reads a few pixels off its own
+    /// needs ground drawn there) - at most four, none empty and no two
+    /// overlapping, so what is drawn part by part lands once. The rest of
+    /// `rect` is under the field's bitmap, which nothing there would show.
+    pub fn parts(&self, into: f32) -> Vec<Rectangle> {
+        let f = self.field;
+        let inner = Rectangle::new(f.x + into, f.y + into, (f.width - 2.0 * into).max(0.0), (f.height - 2.0 * into).max(0.0));
+        around(self.rect, inner).into_iter().filter(|r| r.width > 0.0 && r.height > 0.0).collect()
+    }
+}
+
+/// The parts of `outer` that `inner` does not cover: the bands over and
+/// under it the whole width, and the two beside it - some of them empty.
+pub fn around(outer: Rectangle, inner: Rectangle) -> [Rectangle; 4] {
+    let (right, bottom) = (outer.x + outer.width, outer.y + outer.height);
+    let (x0, y0) = (inner.x.clamp(outer.x, right), inner.y.clamp(outer.y, bottom));
+    let (x1, y1) = ((inner.x + inner.width).clamp(x0, right), (inner.y + inner.height).clamp(y0, bottom));
+    [
+        Rectangle::new(outer.x, outer.y, outer.width, y0 - outer.y),
+        Rectangle::new(outer.x, y1, outer.width, bottom - y1),
+        Rectangle::new(outer.x, y0, x0 - outer.x, y1 - y0),
+        Rectangle::new(x1, y0, right - x1, y1 - y0),
+    ]
+}
+
+/// The overlap of two rectangles, if they have one.
+pub fn overlap(a: Rectangle, b: Rectangle) -> Option<Rectangle> {
+    let (x0, y0) = (a.x.max(b.x), a.y.max(b.y));
+    let (x1, y1) = ((a.x + a.width).min(b.x + b.width), (a.y + a.height).min(b.y + b.height));
+    (x1 > x0 && y1 > y0).then(|| Rectangle::new(x0, y0, x1 - x0, y1 - y0))
 }
 
 /// The ground and the shade an arena's margins are drawn from, made for
@@ -158,6 +194,58 @@ mod tests {
         // An iPad's 115 points of margin over and under a 1088 x 544 arena
         // are 106 world pixels: four cells reach them.
         assert_eq!(frame((1180.0, 820.0)).map(|f| f.cells), Some(4));
+    }
+
+    /// The bands round a rectangle cover what it does not, once.
+    #[test]
+    fn the_bands_round_a_rectangle_cover_the_rest_once() {
+        let outer = Rectangle::new(-100.0, -40.0, 400.0, 200.0);
+        for inner in [Rectangle::new(0.0, 0.0, 100.0, 50.0), Rectangle::new(-150.0, 10.0, 600.0, 20.0), Rectangle::new(-200.0, -200.0, 900.0, 900.0)] {
+            let bands = around(outer, inner);
+            for y in (-40..160).step_by(7) {
+                for x in (-100..300).step_by(7) {
+                    let p = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+                    let covered = bands.iter().filter(|b| b.width > 0.0 && b.height > 0.0 && b.contains(p)).count();
+                    assert_eq!(covered, usize::from(!inner.contains(p)), "{inner:?} at {p:?}");
+                }
+            }
+        }
+        assert_eq!(overlap(Rectangle::new(0.0, 0.0, 10.0, 10.0), Rectangle::new(5.0, 8.0, 10.0, 10.0)), Some(Rectangle::new(5.0, 8.0, 5.0, 2.0)));
+        assert_eq!(overlap(Rectangle::new(0.0, 0.0, 10.0, 10.0), Rectangle::new(10.0, 0.0, 10.0, 10.0)), None);
+    }
+
+    /// What is drawn of the margins is the window past the field and a
+    /// strip of the field under its bitmap, in parts that never overlap -
+    /// on a phone's side bars and a tablet's bars over and under.
+    #[test]
+    fn the_parts_are_the_margins_and_a_strip_under_the_field() {
+        for window in [(852.0, 393.0), (1180.0, 820.0), (1920.0, 1080.0)] {
+            let f = frame(window).expect("margins");
+            let parts = f.parts(16.0);
+            assert!(!parts.is_empty() && parts.len() <= 4);
+            for (i, a) in parts.iter().enumerate() {
+                for b in &parts[i + 1..] {
+                    assert_eq!(overlap(*a, *b), None, "{window:?}: {a:?} and {b:?}");
+                }
+            }
+            let r = f.rect;
+            for y in (r.y as i32..(r.y + r.height) as i32).step_by(5) {
+                for x in (r.x as i32..(r.x + r.width) as i32).step_by(5) {
+                    let p = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+                    let deep_inside = p.x > 16.0 && p.y > 16.0 && p.x < FIELD.0 - 16.0 && p.y < FIELD.1 - 16.0;
+                    assert_eq!(parts.iter().any(|q| q.contains(p)), !deep_inside, "{window:?} at {p:?}");
+                }
+            }
+            // Reaching nowhere into the field, the parts are the margins.
+            for q in f.parts(0.0) {
+                assert!(overlap(q, f.field).is_none(), "{window:?}: {q:?}");
+            }
+        }
+        // A phone's arena has bars beside it, not over it: the parts drawn
+        // are a small share of the window.
+        let f = frame((852.0, 393.0)).expect("margins");
+        let area: f32 = f.parts(16.0).iter().map(|p| p.width * p.height).sum();
+        assert!(area < 0.2 * f.rect.width * f.rect.height, "{area} of {:?}", f.rect);
     }
 
     /// A window far past its arena - a tall desktop window - asks for no

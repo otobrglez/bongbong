@@ -9,17 +9,30 @@
 //! ambient alone - no lamp of the round reaches past its boundary - or,
 //! where the passes would not compile, the plain sky's blocks and a
 //! multiply, as the field draws it then.
+//!
+//! The target covers the whole window's world, but only its margins are
+//! drawn and passed through the sky - the parts past the field and a strip
+//! under its edge (`MarginFrame::parts`) - since the field's bitmap covers
+//! the rest: on a phone's arena the bars beside it are a tenth of the
+//! window, and the passes are full-screen shaders on a GPU that is short of
+//! fill.
 
 use sola_raylib::prelude::*;
 
 use crate::ground::{self, MarginShade, SHADE_BLOCK};
-use crate::margin::{Margin, MarginFrame};
+use crate::margin::{around, overlap, Margin, MarginFrame};
 use crate::math::{Color, Rectangle};
 use crate::render::canvas::{BlockTexture, GpuCanvas};
 use crate::render::game::Textures;
 use crate::render::weather::{self, CellMask, MaskTexture, PassView, WeatherFrame, WeatherFx};
 use crate::simulation::Game;
 use crate::tuning::tuning;
+
+/// How far into the field, in world px, the margins are drawn under the
+/// field's bitmap: the heat haze shifts what the sky pass reads by up to
+/// 8 px (`haze_amplitude_px` at its top), so a margin's inner edge reads
+/// ground drawn for it.
+const UNDER_FIELD_PX: f32 = 16.0;
 
 /// The targets the margins are drawn through, the frame's size.
 struct Targets {
@@ -55,8 +68,9 @@ impl MarginFx {
     /// Draw the world `frame` shows round `game`'s field into the target
     /// this keeps and hand the target back: the ground, its shade, and the
     /// sky `sky` is - the frame's weather and its passes - when the round
-    /// has one. `backdrop` is what lies past the ground's reach. `None`
-    /// where a target could not be made, which leaves the bars.
+    /// has one, over the margins (`MarginFrame::parts`). `backdrop` is what
+    /// lies past the ground's reach. `None` where a target could not be
+    /// made, which leaves the bars.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
@@ -85,7 +99,12 @@ impl MarginFx {
         let Targets { a, b, ground: bare, out, .. } = targets.as_mut().expect("made above");
         let rect = frame.rect;
         let world = Camera2D { offset: Vector2::new(0.0, 0.0), target: Vector2::new(rect.x, rect.y), rotation: 0.0, zoom: 1.0 };
-        let floor = Floor { margin, shade: shade_texture, textures, rect, time: game.time };
+        // What is drawn: the margins and a strip under the field's edge, in
+        // world pixels and in the targets' own.
+        let parts = frame.parts(UNDER_FIELD_PX);
+        let local: Vec<Rectangle> = parts.iter().map(|p| Rectangle::new(p.x - rect.x, p.y - rect.y, p.width, p.height)).collect();
+        let reach = parts.iter().copied().reduce(bounds).unwrap_or(rect);
+        let floor = Floor { margin, shade: shade_texture, textures, parts: &parts, reach, time: game.time };
         let ground_and_shade = |rl: &mut RaylibHandle, a: &mut RenderTexture2D| {
             rl.draw_texture_mode(thread, a, |mut d| {
                 d.clear_background(backdrop);
@@ -113,7 +132,7 @@ impl MarginFx {
                     d.clear_background(backdrop);
                     d.draw_mode2D(world, |mut d, _| {
                         floor.ground(&mut d);
-                        sky.plain_snow_cover_over(rect, &mut blocks);
+                        sky.plain_snow_cover_over(reach, &mut blocks);
                         weather::draw_blocks(&mut d, &blocks);
                         floor.shade(&mut d);
                     });
@@ -122,7 +141,7 @@ impl MarginFx {
                     }
                     if plan.sky {
                         blocks.clear();
-                        sky.plain_air_over(rect, &mut blocks);
+                        sky.plain_air_over(reach, &mut blocks);
                         d.draw_mode2D(world, |mut d, _| weather::draw_blocks(&mut d, &blocks));
                         weather::draw_flash_over(&mut d, sky, size);
                     }
@@ -143,7 +162,7 @@ impl MarginFx {
                     Some(mut passes) => {
                         let light = light.as_mut().expect("made with the targets");
                         rl.draw_texture_mode(thread, light, |mut d| d.clear_background(sky.ambient_texel()));
-                        let at = PassView { origin: crate::math::Vec2::new(rect.x, rect.y), size, light: *light.as_ref() };
+                        let at = PassView { origin: crate::math::Vec2::new(rect.x, rect.y), size, light: *light.as_ref(), parts: &local };
                         if plan.ground {
                             let (cols, rows, bytes) = weather::margin_mask_bytes(game, &margin.ground);
                             let Ok(texture) = mask.sync(rl, thread, cols, rows, bytes) else {
@@ -187,7 +206,12 @@ impl MarginFx {
         let picture: &RenderTexture2D = if in_a { a } else { b };
         rl.draw_texture_mode(thread, out, |mut d| {
             d.clear_background(Color::BLACK);
-            d.draw_texture_rec(picture, Rectangle::new(0.0, 0.0, size.0 as f32, -(size.1 as f32)), Vector2::new(0.0, 0.0), Color::WHITE);
+            for part in &local {
+                // Read the right way up: a render texture is stored
+                // bottom-up.
+                let rows = Rectangle::new(part.x, size.1 as f32 - part.y - part.height, part.width, -part.height);
+                d.draw_texture_rec(picture, rows, Vector2::new(part.x, part.y), Color::WHITE);
+            }
         });
         Some(&*out)
     }
@@ -209,68 +233,47 @@ impl MarginFx {
     }
 }
 
+/// The smallest rectangle holding both.
+fn bounds(a: Rectangle, b: Rectangle) -> Rectangle {
+    let (x0, y0) = (a.x.min(b.x), a.y.min(b.y));
+    let (x1, y1) = ((a.x + a.width).max(b.x + b.width), (a.y + a.height).max(b.y + b.height));
+    Rectangle::new(x0, y0, x1 - x0, y1 - y0)
+}
+
 /// What the margins' floor is painted from, in world pixels.
 struct Floor<'a, 't> {
     margin: &'a Margin,
     /// The shade's image on the GPU; `None` paints the plateau alone.
     shade: Option<&'a Texture2D>,
     textures: &'a Textures<'t>,
-    /// The world the target holds.
-    rect: Rectangle,
+    /// The parts drawn (`MarginFrame::parts`), none overlapping, and the
+    /// world they reach across.
+    parts: &'a [Rectangle],
+    reach: Rectangle,
     time: f32,
 }
 
 impl Floor<'_, '_> {
-    /// The round's ground carried past its field, culled to the target.
+    /// The round's ground carried past its field, the cells the parts
+    /// reach across: opaque tiles, drawn once each.
     fn ground(&self, d: &mut impl RaylibDraw) {
-        ground::draw(&mut GpuCanvas::culled(d, self.textures, Some(self.rect)), &self.margin.ground, self.margin.theme, self.time);
+        ground::draw(&mut GpuCanvas::culled(d, self.textures, Some(self.reach)), &self.margin.ground, self.margin.theme, self.time);
     }
 
-    /// The shade: its image round the field, each texel a block, and the
-    /// plateau on every block of the target past it.
+    /// The shade, part by part so no block of it is laid twice: its image
+    /// round the field, each texel a block, and the plateau past it.
     fn shade(&self, d: &mut impl RaylibDraw) {
         let MarginShade { image, origin, plateau } = &self.margin.shade;
         let block = SHADE_BLOCK as f32;
-        let (w, h) = (image.width as f32, image.height as f32);
-        let at = Rectangle::new(origin.0 as f32 * block, origin.1 as f32 * block, w * block, h * block);
-        if let Some(texture) = self.shade {
-            d.draw_texture_pro(texture, Rectangle::new(0.0, 0.0, w, h), at, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-        }
-        for band in around(self.rect, at).into_iter().filter(|r| r.width > 0.0 && r.height > 0.0) {
-            d.draw_rectangle_rec(band, *plateau);
-        }
-    }
-}
-
-/// The parts of `outer` that `inner` does not cover: the bands over and
-/// under it the whole width, and the two beside it.
-fn around(outer: Rectangle, inner: Rectangle) -> [Rectangle; 4] {
-    let (right, bottom) = (outer.x + outer.width, outer.y + outer.height);
-    let (x0, y0) = (inner.x.clamp(outer.x, right), inner.y.clamp(outer.y, bottom));
-    let (x1, y1) = ((inner.x + inner.width).clamp(x0, right), (inner.y + inner.height).clamp(y0, bottom));
-    [
-        Rectangle::new(outer.x, outer.y, outer.width, y0 - outer.y),
-        Rectangle::new(outer.x, y1, outer.width, bottom - y1),
-        Rectangle::new(outer.x, y0, x0 - outer.x, y1 - y0),
-        Rectangle::new(x1, y0, right - x1, y1 - y0),
-    ]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The bands round a rectangle cover what it does not, once.
-    #[test]
-    fn the_bands_round_the_image_cover_the_rest_of_the_target() {
-        let outer = Rectangle::new(-100.0, -40.0, 400.0, 200.0);
-        for inner in [Rectangle::new(0.0, 0.0, 100.0, 50.0), Rectangle::new(-150.0, 10.0, 600.0, 20.0), Rectangle::new(-200.0, -200.0, 900.0, 900.0)] {
-            let bands = around(outer, inner);
-            for y in (-40..160).step_by(7) {
-                for x in (-100..300).step_by(7) {
-                    let p = crate::math::Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
-                    let covered = bands.iter().filter(|b| b.width > 0.0 && b.height > 0.0 && b.contains(p)).count();
-                    assert_eq!(covered, usize::from(!inner.contains(p)), "{inner:?} at {p:?}");
+        let at = Rectangle::new(origin.0 as f32 * block, origin.1 as f32 * block, image.width as f32 * block, image.height as f32 * block);
+        for part in self.parts {
+            if let (Some(texture), Some(on)) = (self.shade, overlap(*part, at)) {
+                let texels = Rectangle::new((on.x - at.x) / block, (on.y - at.y) / block, on.width / block, on.height / block);
+                d.draw_texture_pro(texture, texels, on, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            }
+            for band in around(*part, at) {
+                if let Some(band) = overlap(band, *part) {
+                    d.draw_rectangle_rec(band, *plateau);
                 }
             }
         }

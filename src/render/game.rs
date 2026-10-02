@@ -608,9 +608,11 @@ impl Game {
                     _ => None,
                 };
                 let at = layout.field_origin();
+                let in_bitmap = |r: Rectangle| Rectangle::new(r.x + at.x, r.y + at.y, r.width, r.height);
                 fx.draw(rl, thread, self, &frame, textures, backdrop, sky).map(|target| crate::render::view::Margins {
                     target,
-                    rect: Rectangle::new(frame.rect.x + at.x, frame.rect.y + at.y, frame.rect.width, frame.rect.height),
+                    rect: in_bitmap(frame.rect),
+                    parts: frame.parts(0.0).into_iter().map(in_bitmap).collect(),
                 })
             }
             _ => None,

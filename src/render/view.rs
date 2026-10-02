@@ -55,11 +55,14 @@ pub fn present_into(d: &mut impl RaylibDraw, composite: &RenderTexture2D, view: 
     match margins {
         Some(m) => {
             d.draw_rectangle(0, 0, view.window.0 as i32, view.window.1 as i32, backdrop);
-            let (w, h) = (m.rect.width, m.rect.height);
-            let at = view.to_window(Vec2::new(m.rect.x, m.rect.y));
-            let to = Rectangle::new(at.x, at.y, w * view.scale, h * view.scale);
-            d.draw_texture_pro(m.target, Rectangle::new(0.0, 0.0, w, -h), to, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-            d.draw_rectangle_rec(dest, backdrop);
+            for part in &m.parts {
+                // Read the right way up: a render texture is stored
+                // bottom-up.
+                let rows = Rectangle::new(part.x - m.rect.x, m.rect.y + m.rect.height - part.y - part.height, part.width, -part.height);
+                let at = view.to_window(Vec2::new(part.x, part.y));
+                let to = Rectangle::new(at.x, at.y, part.width * view.scale, part.height * view.scale);
+                d.draw_texture_pro(m.target, rows, to, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            }
         }
         None => letterbox(d, view, backdrop),
     }
@@ -68,11 +71,13 @@ pub fn present_into(d: &mut impl RaylibDraw, composite: &RenderTexture2D, view: 
 
 /// What an arena shows round its field (`render::margin`): the target
 /// holding the world past it, drawn through the same steps as the field's
-/// bitmap, and the rectangle of the bitmap it covers - its world rectangle
-/// moved to the field's place in the bitmap.
+/// bitmap, the rectangle of the bitmap it covers - its world rectangle
+/// moved to the field's place in the bitmap - and the parts of that past
+/// the field, in the bitmap's pixels, which are all of it that shows.
 pub struct Margins<'a> {
     pub target: &'a RenderTexture2D,
     pub rect: Rectangle,
+    pub parts: Vec<Rectangle>,
 }
 
 /// The window round a bitmap that does not fill it: the margins in
