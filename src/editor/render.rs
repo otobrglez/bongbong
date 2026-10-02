@@ -244,9 +244,18 @@ impl MapEditor {
         };
         let cull = camera.cull();
         let in_target = Camera2D { offset: Vector2::new(0.0, 0.0), target: plan.origin.into(), rotation: 0.0, zoom: plan.zoom };
+        let held = Rectangle::new(
+            plan.origin.x,
+            plan.origin.y,
+            target.texture.width as f32 / plan.zoom,
+            target.texture.height as f32 / plan.zoom,
+        );
         rl.draw_texture_mode(thread, target, |mut d| {
             d.clear_background(CANVAS_FILL);
-            d.draw_mode2D(in_target, |mut d, _| self.draw_canvas(&mut d, textures, time, cursor, cull));
+            d.draw_mode2D(in_target, |mut d, _| {
+                self.draw_canvas(&mut d, textures, time, cursor, cull);
+                cover_past_field(&mut d, field, held);
+            });
         });
         // A render texture reads back bottom-up.
         let height = target.texture.height as f32;
@@ -1028,6 +1037,26 @@ impl SettingsRow {
 /// A size in cells as the panel shows it: whole, or with its half.
 fn cells_text(cells: f32) -> String {
     if cells.fract() == 0.0 { format!("{}", cells as i32) } else { format!("{cells}") }
+}
+
+/// Paint the world `held` shows past the field's edge in the canvas fill.
+/// The ground reaches half a tile past every edge and a tree, a tower's
+/// reach ring or a gate's chevron in an edge cell leans out of it; a
+/// round's field area clips all of that, and so does this, so a view that
+/// shows past the edge draws the map its own size.
+fn cover_past_field(d: &mut impl RaylibDraw, field: (f32, f32), held: Rectangle) {
+    let (w, h) = field;
+    let (left, top, right, bottom) = (held.x, held.y, held.x + held.width, held.y + held.height);
+    for strip in [
+        Rectangle::new(left, top, right - left, -top),
+        Rectangle::new(left, h, right - left, bottom - h),
+        Rectangle::new(left, 0.0, -left, h),
+        Rectangle::new(w, 0.0, right - w, h),
+    ] {
+        if strip.width > 0.0 && strip.height > 0.0 {
+            d.draw_rectangle_rec(strip, CANVAS_FILL);
+        }
+    }
 }
 
 /// The ANCHOR row's picture in `rect`: a 3 x 3 grid of squares, the one
