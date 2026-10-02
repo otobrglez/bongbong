@@ -102,10 +102,39 @@ impl WalkCosts {
     /// grid's step costs (one per plain cell), `None` where no route
     /// reaches one. A point off the grid reads its nearest edge cell.
     pub fn at(&self, p: Position) -> Option<u32> {
-        let col = ((p.x / self.cell_size) as isize).clamp(0, self.cols as isize - 1) as usize;
-        let row = ((p.y / self.cell_size) as isize).clamp(0, self.rows as isize - 1) as usize;
+        let (col, row) = self.cell(p);
         let cost = self.to_goal[row * self.cols + col];
         (cost != UNREACHABLE).then_some(cost)
+    }
+
+    /// The walk ahead of a hull standing at `p`: `at`, or, where its cell
+    /// is blocked - a hull pressed against a wall stands in the margin the
+    /// grid keeps round it -, one step more than the cheapest of its open
+    /// cardinal neighbours, which is where its route starts, as a search
+    /// takes its start open (`Grid::search`). `None` where no neighbour
+    /// reaches a goal either.
+    pub fn from_hull(&self, p: Position) -> Option<u32> {
+        if let Some(cost) = self.at(p) {
+            return Some(cost);
+        }
+        let (col, row) = self.cell(p);
+        [(0i32, -1i32), (0, 1), (-1, 0), (1, 0)]
+            .into_iter()
+            .filter_map(|(dc, dr)| {
+                let (c, r) = (col as i32 + dc, row as i32 + dr);
+                (c >= 0 && r >= 0 && (c as usize) < self.cols && (r as usize) < self.rows).then(|| self.to_goal[r as usize * self.cols + c as usize])
+            })
+            .filter(|&cost| cost != UNREACHABLE)
+            .min()
+            .map(|cost| cost + 1)
+    }
+
+    /// The cell `p` falls in; a point off the grid reads its nearest edge
+    /// cell.
+    fn cell(&self, p: Position) -> (usize, usize) {
+        let col = ((p.x / self.cell_size) as isize).clamp(0, self.cols as isize - 1) as usize;
+        let row = ((p.y / self.cell_size) as isize).clamp(0, self.rows as isize - 1) as usize;
+        (col, row)
     }
 }
 
@@ -2159,6 +2188,39 @@ mod field_tests {
         }
         assert_eq!(walk.at(at(4, 0)), None, "a wall cell reaches nobody");
         assert_eq!(grid.walk_costs(&[]).at(a), None, "no goal, no walk");
+    }
+
+    /// A hull in a blocked cell - pressed against a wall, in the margin the
+    /// grid keeps round it - walks from its open neighbours: one step more
+    /// than the cheapest of them, where `at` reads no walk at all; an open
+    /// cell reads as `at` does.
+    #[test]
+    fn a_hull_against_a_wall_walks_from_its_open_neighbours() {
+        let grid = nine_by_five();
+        let goal = at(1, 1);
+        let walk = grid.walk_costs(&[goal]);
+        for row in 0..5usize {
+            for col in 0..9usize {
+                let p = at(col, row);
+                match walk.at(p) {
+                    Some(cost) => assert_eq!(walk.from_hull(p), Some(cost), "open cell ({col}, {row})"),
+                    None => {
+                        let near = [(0i32, -1i32), (0, 1), (-1, 0), (1, 0)]
+                            .into_iter()
+                            .filter_map(|(dc, dr)| {
+                                let (c, r) = (col as i32 + dc, row as i32 + dr);
+                                ((0..9).contains(&c) && (0..5).contains(&r)).then(|| walk.at(at(c as usize, r as usize))).flatten()
+                            })
+                            .min();
+                        assert_eq!(walk.from_hull(p), near.map(|c| c + 1), "blocked cell ({col}, {row})");
+                    }
+                }
+            }
+        }
+        // The wall's foot borders the open ground: no walk read from its
+        // cell, one from the hull standing there.
+        assert_eq!(walk.at(at(4, 0)), None);
+        assert!(walk.from_hull(at(4, 0)).is_some(), "the hull at the wall walks on");
     }
 
     /// Adding the same goal twice keeps one field, and a second goal gets

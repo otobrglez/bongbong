@@ -350,7 +350,7 @@ impl Game {
         let grid = self.nav_grid(f.width, f.height);
         let walk = grid.walk_costs(&fight);
         for (slot, entity, at) in lost {
-            let from = walk.at(at);
+            let from = walk.from_hull(at);
             if !field::far_by_walk(from) {
                 continue;
             }
