@@ -739,7 +739,12 @@ warning, the hit arc, last-seen marks, gate flashes, thumb rests) - the
 minimap is still to come; from step 5 the sight box, the AI's fire gate,
 the probe's `offbox-fire` check and the weather fallback
 (`weather::plain`); from step 7 the Android `appCategory`, maps capped at
-what the wire carries, the laser's reach and the mark caps.
+what the wire carries, the laser's reach, the mark caps and the bounded
+AI (`simulation/field.rs`: chained alerts with leashes, far enemies
+thinking less, spawns and gates by walk outside every sight box,
+re-entry through the gate nearest the living seats, `just
+probe-fields`) - the pacing director, stragglers re-rolled through a
+nearer gate and flow fields bounded to the seats are still to come.
 
 ## 15. Decisions
 
