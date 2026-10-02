@@ -4506,6 +4506,16 @@ mod file_tests {
         }
     }
 
+    /// The open Load list's maps, as it listed them when it opened - not a
+    /// second listing of `maps/`, which another test saving a map there
+    /// at the same moment would change.
+    fn load_entries(ed: &MapEditor) -> Vec<map::MapEntry> {
+        match &ed.popup {
+            Some(Popup::Load { entries, .. }) => entries.clone(),
+            _ => panic!("no Load list open"),
+        }
+    }
+
     /// A touch screen has no wheel: an overflowing Load list turns its last
     /// row into a pager - a tap on the right half shows the next page, on
     /// the left half the one before, never past either end - and a row
@@ -4517,7 +4527,7 @@ mod file_tests {
         press_named(&mut ed, &frame, "file");
         press_named(&mut ed, &frame, "load");
         assert_eq!(ed.open_menu(), Some("load"));
-        let entries = map::available_maps();
+        let entries = load_entries(&ed);
         let load = load_layout(&ed, &frame);
         let rows = load.per_page;
         assert!(map::SHIPPED_MAPS.len() > chrome::LOAD_VISIBLE_ROWS && entries.len() > rows, "the shipped maps alone overflow one page");
@@ -4563,7 +4573,7 @@ mod file_tests {
         assert_eq!(ed.open_menu(), Some("file"));
         press_named(&mut ed, &frame, "load");
         assert_eq!(ed.open_menu(), Some("load"));
-        let entries = map::available_maps();
+        let entries = load_entries(&ed);
         let row = entries.iter().position(|e| e.name == "default").expect("default is always listed");
         let load = load_layout(&ed, &frame);
         let rows = load.per_page;
