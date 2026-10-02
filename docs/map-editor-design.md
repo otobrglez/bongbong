@@ -121,6 +121,11 @@ saves).
 - Maps larger than the default battlefield. The editor canvas is exactly
   the game's normal battlefield size (1280x720 at `OBSTACLE_GRID_SIZE`
   cells) — no scroll/pan/camera.
+  *Status: superseded. A map's `size` sets its field, the MAP panel's
+  WIDTH, HEIGHT and ANCHOR rows change it, and the builder has its own
+  camera on any size - zoom, pan, FIT, touch gestures, edge scroll
+  (docs/game-editor-fusion.md sections 9 and 10,
+  docs/large-maps-follow-camera.md section 9).*
 
 ## Grid & coordinate model
 

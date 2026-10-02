@@ -483,29 +483,41 @@ starts the round as today.
 
 | Action | Mouse and keys | Touch |
 |---|---|---|
-| Paint (toggle-erase rule unchanged) | click or drag | one finger |
-| Pan | right or middle drag, or Space + drag (Tiled) | two-finger drag, or the pan tool for one hand |
-| Zoom | wheel at the cursor | pinch at the fingers |
+| Paint (toggle-erase rule unchanged) | click or drag | one finger, once it has moved past the slop |
+| Pan | middle drag, or Space + drag (Tiled); the arrows. The right button still erases | two-finger drag, or the pan tool for one hand |
+| Zoom | wheel at the cursor; `+` / `-` | pinch at the fingers |
 | Undo / redo | Ctrl+Z / Ctrl+Y | two-finger tap / three-finger tap (Procreate, Pixaki) |
 | Overview | FIT button | FIT, or a quick pinch out (Procreate) |
 | Navigate | click or drag the minimap (Tiled's mini-map dock) | tap or drag the minimap |
+
+The zoom steps on whole 2 px blocks (half a device pixel per world pixel)
+on a coarse screen and is smooth on a fine one, as play's framing is
+(section 3); a pinch eases onto the nearest whole-block scale when it
+lifts. The canvas is drawn at a texel per world pixel into its own
+target and that is scaled to the window, so a fractional zoom never
+samples across a tile's edge; at FIT on an arena it is drawn exactly as
+before the camera existed. A field map's builder bitmap is the window's
+shape with the bar at the standard arena's size (`editor::camera`).
 
 - **A paint threshold on touch.** Below a cell of about 6 mm a finger
   cannot hit one cell; there a tap zooms in to a 9 mm cell at that point
   instead of painting, and a drag pans. Geometry Dash's editor solves the
   same problem with an explicit paint/pan switch; Super Mario Maker 2 has
   a zoomed-out view mode for the overview.
-- **Edge scroll while painting.** A stroke that reaches the screen edge
-  scrolls the camera, so a long wall does not need a pan in the middle.
+- **Edge scroll while painting.** A stroke held near the canvas's edge, or
+  past it, scrolls the camera and keeps painting, so a long wall does not
+  need a pan in the middle.
 - **Map size becomes a setting.** A cols x rows stepper in the MAP panel,
   with an anchor for where the old map sits, capped by the wire limits
   (section 2) and by `LASER_MAX_RANGE` until that becomes a range.
 - **Raw touches, not raylib's gestures.** raylib's gesture module reads
   only two touch points and has 0.3 s thresholds; the builder needs the
-  pointers themselves.
+  pointers themselves (`editor::gesture`).
 - **Incremental ground.** A painted cell re-bakes the ground and the floor
-  shade around that cell, not the whole field; on a 96 x 54 map the full
-  rebuild per painted cell costs nine times what it does today.
+  shade around that cell, not the whole field (`GroundGrid::repaint`), and
+  the GPU copy of the shade takes only the blocks that changed. On the
+  96 x 54 study map a cell of a wall stroke went from 53 ms and a 5.3 MB
+  upload to 0.3 ms and 16 kB in a debug build.
 - **Thumbnails in the Load list** from `mapshot`, since a large map's name
   says less about it than its picture.
 
@@ -743,7 +755,14 @@ and its drawing (`indicators.rs`: edge arrows by priority, the lane
 warning, the hit arc, last-seen marks, gate flashes, thumb rests) - the
 minimap is still to come; from step 5 the sight box, the AI's fire gate,
 the probe's `offbox-fire` check and the weather fallback
-(`weather::plain`); from step 7 the Android `appCategory`, maps capped at
+(`weather::plain`); from step 6 the builder's own camera
+(`editor::camera`: zoom at the cursor, pan, FIT, BUILD opening on what
+play showed), its gestures from raw touch points with a slop
+(`editor::gesture`), the paint threshold, edge scroll, the map size
+setting with its anchor and incremental ground (`GroundGrid::repaint`) -
+the loupe, the minimap navigator, play from here, the lint panel, the
+clear check, select and stamps, fills and scatter and thumbnails are
+still to come; from step 7 the Android `appCategory`, maps capped at
 what the wire carries, the laser's reach, the mark caps and the bounded
 AI (`simulation/field.rs`: chained alerts with leashes, far enemies
 thinking less, spawns and gates by walk outside every sight box,
