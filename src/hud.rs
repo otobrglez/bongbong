@@ -1126,10 +1126,18 @@ impl WorldOnScreen {
 
 /// Which of the two clusters (left, right) has something of `marks` under
 /// it: a mark is a world point and the world pixels round it it covers,
-/// drawn where `screen` puts it.
+/// drawn where `screen` puts it. Only what is drawn counts - a mark at
+/// least partly on the field and in the camera's view - so a tank rolling
+/// in through a gate, outside the field, fades nothing from the letterbox
+/// it would project onto.
 pub fn covered(corners: &Corners, marks: &[(crate::Position, f32)], screen: &WorldOnScreen) -> [bool; 2] {
+    let shown = screen.camera.rect();
+    let (field_w, field_h) = screen.camera.field;
+    let (x0, y0) = (shown.x.max(0.0), shown.y.max(0.0));
+    let (x1, y1) = ((shown.x + shown.width).min(field_w), (shown.y + shown.height).min(field_h));
+    let drawn = |at: crate::Position, radius: f32| at.x + radius > x0 && at.x - radius < x1 && at.y + radius > y0 && at.y - radius < y1;
     let under = |r: Rectangle| {
-        marks.iter().any(|&(at, radius)| {
+        marks.iter().filter(|&&(at, radius)| drawn(at, radius)).any(|&(at, radius)| {
             let p = screen.to_ui(at);
             let reach = screen.len_to_ui(radius);
             let nx = p.x.clamp(r.x, r.x + r.width);
@@ -1467,6 +1475,14 @@ mod hud_tests {
         assert_eq!(covered(&c, &tank(W / 2.0, H / 2.0), &screen), [false, false]);
         assert_eq!(covered(&c, &tank(W - 40.0, 30.0), &screen), [false, true]);
         assert_eq!(covered(&c, &[], &screen), [false, false]);
+        // A tank rolling in through a gate above the field projects onto
+        // the letterbox the right cluster stands in, but nothing is drawn
+        // there: it fades nothing until it is on the field.
+        let lane = crate::Position::new(W - 40.0, -20.0);
+        let [_, right] = c.keep_out();
+        let p = screen.to_ui(lane);
+        assert!(p.y >= right.y && p.y <= right.y + right.height, "the lane projects under the cluster: {p:?} {right:?}");
+        assert_eq!(covered(&c, &[(lane, 16.0)], &screen), [false, false]);
     }
 
     /// The chrome's areas the screens over the round are held to: the
