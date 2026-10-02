@@ -106,8 +106,11 @@ const LINT_FIX_W: f32 = 80.0;
 /// A finding row's mark (a 12 px square) and words, inset from the row's
 /// left; the words run from 8 px past the mark to 8 px short of the FIX
 /// button - what `text_tests` holds every language's to, in 16 px.
+#[cfg_attr(not(feature = "render"), allow(dead_code))]
 const LINT_TEXT_INSET: f32 = 12.0;
+#[cfg_attr(not(feature = "render"), allow(dead_code))]
 const LINT_MARK: f32 = 12.0;
+#[cfg_attr(not(feature = "render"), allow(dead_code))]
 pub(crate) const LINT_FINDING_W: f32 = LINT_PANEL_W - LINT_TEXT_INSET - LINT_MARK - 8.0 - SETTINGS_INSET - LINT_FIX_W - 8.0;
 /// What a jump to a finding shows round its cells at least, in cells
 /// across and down, so a one-cell finding is seen in its surroundings
