@@ -381,8 +381,11 @@ pub struct ScenePlan {
 /// The scene a view `camera` shows is drawn through (`ScenePlan`).
 pub fn scene_plan(camera: &Camera) -> ScenePlan {
     let rect = camera.rect();
+    // The texels a side needs are the view's, the part of a block the
+    // origin's snap adds in front (under two texels) and one more behind.
+    let needs = |side: f32, zoom: f32| (side * zoom).ceil() + 3.0;
     let mut zoom = 1.0f32;
-    while zoom > 1.0 / 64.0 && ((rect.width * zoom).ceil() + 2.0 > SCENE_MAX_TEXELS || (rect.height * zoom).ceil() + 2.0 > SCENE_MAX_TEXELS) {
+    while zoom > 1.0 / 64.0 && (needs(rect.width, zoom) > SCENE_MAX_TEXELS || needs(rect.height, zoom) > SCENE_MAX_TEXELS) {
         zoom *= 0.5;
     }
     let grid = crate::pyro::BLOCK / zoom;
@@ -648,6 +651,16 @@ mod camera_tests {
         assert_eq!(plan.zoom, 0.25, "{plan:?}");
         assert!(plan.size.0 as f32 <= SCENE_MAX_TEXELS && plan.size.1 as f32 <= SCENE_MAX_TEXELS, "{plan:?}");
         assert_eq!((plan.origin.x % 8.0, plan.origin.y % 8.0), (0.0, 0.0), "{plan:?}");
+        // Never a texel past the limit, whatever the view's size and
+        // however its corner falls on the block grid (a quarter-pixel
+        // device leaves the corner up to 1.75 world px into its block).
+        for side in 4085..4100 {
+            for corner in [0.0, 0.3, 1.0, 1.7, 1.99] {
+                let view = Camera::following((9000.0, 9000.0), Vec2::new(corner, corner), (side as f32, side as f32), 1.0, 4.0);
+                let plan = scene_plan(&view);
+                assert!(plan.size.0 as f32 <= SCENE_MAX_TEXELS && plan.size.1 as f32 <= SCENE_MAX_TEXELS, "{side} from {corner}: {plan:?}");
+            }
+        }
     }
 
     /// The paint threshold's sizes are millimetres on a touch screen's
