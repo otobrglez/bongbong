@@ -6,6 +6,7 @@ use sola_raylib::prelude::*;
 
 use crate::math::{Color, Rectangle, Vec2};
 use crate::view::{Camera, View};
+use crate::Layout;
 
 impl Camera {
     /// The camera pass 1 draws the world through, into a scene target of
@@ -47,6 +48,28 @@ pub fn present(rl: &mut RaylibHandle, thread: &RaylibThread, composite: &RenderT
         }
         d.draw_texture_pro(composite, source, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
     });
+}
+
+/// Put a followed view's world on the window (docs/large-maps-follow-camera.md
+/// §6): `world` holds the scene target's every texel, from the camera's
+/// block-grid `origin`, and the view's own corner is `camera.offset`
+/// further on, so the texels from there fill the field area of the bitmap
+/// as `view` puts it on the window - the sub-block motion the grid cannot
+/// hold, applied here as a shift of whole device pixels
+/// (`Camera::following` rounded it so), which keeps every block whole.
+/// The window is cleared to `backdrop` first, for the bars of a screen
+/// past the aspect clamp. Drawn into the frame `d` is drawing; the bar and
+/// what stands over the field come after it, onto the same frame.
+pub fn present_world(d: &mut impl RaylibDraw, world: &RenderTexture2D, camera: &Camera, view: &View, layout: &Layout, backdrop: Color) {
+    d.clear_background(backdrop);
+    let (_, target_h) = camera.target_size();
+    let (w, h) = camera.size;
+    // A render texture reads back bottom-up: the texel row the view's top
+    // edge starts on is counted from the texture's bottom.
+    let source = Rectangle::new(camera.offset.x, target_h as f32 - camera.offset.y - h, w, -h);
+    let corner = view.to_window(layout.field_origin());
+    let dest = Rectangle::new(corner.x, corner.y, layout.field.w * view.scale, layout.field.h * view.scale);
+    d.draw_texture_pro(world, source, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
 }
 
 /// The frame around the bitmap when it does not fill the window.

@@ -183,7 +183,7 @@ const TANK_GLYPH_H: i32 = 14;
 pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures: &Textures, level: Option<(usize, bool)>) {
     let px = panel.x.round() as i32;
     let py = panel.y.round() as i32;
-    let pw = panel.w.round() as i32;
+    let pw = panel.w.ceil() as i32;
     let ph = panel.h.round() as i32;
     d.draw_rectangle(px, py, pw, ph, BAR_FILL);
     let s = Slots::for_layout(model.layout);

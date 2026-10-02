@@ -46,6 +46,8 @@ use crate::tank::{Dir, TankKind};
 use crate::tuning;
 use crate::level::{Mission, SpawnKind, Tier};
 use crate::level_select::SelectInput;
+use crate::follow::{CameraMode, CameraReport, FollowReport};
+use crate::framing::Seating;
 use crate::view::Camera;
 use crate::{Layout, PHYSICS_FIXED_DT, Position, parse_seed};
 
@@ -153,7 +155,7 @@ const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"inte
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window draws: `whole`, or the one the `camera` tool pinned, with its world `rect` and `scale`), `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|apart|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`), `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -251,7 +253,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "camera",
-        description: "Pin the part of the world the window draws, for screenshots (docs/large-maps-follow-camera.md): `x`/`y` a world point in field pixels at the view's centre and `zoom` 1 or more - the view shows the field's size divided by the zoom, kept inside the field and snapped to whole 2 px blocks, and fills the field area under the HUD bar, which is drawn as ever. A field left out keeps the pin's own (the field's centre, zoom 1, for a first pin). `reset: true` shows the whole field again; no parameters only report. The pin holds across restarts and map changes, clamped to each field, and changes only the picture - the round, the AI and the builder's canvas never see it. Replies like `status.camera`: `view` (whole|pinned), the visible world `rect`, `scale` (bitmap px per world px), the scene `target` size in texels and a pin's `center` and `zoom`.",
+        description: "Pin the part of the world the window draws, for screenshots (docs/large-maps-follow-camera.md): `x`/`y` a world point in field pixels at the view's centre and `zoom` 1 or more - the view shows the field's size divided by the zoom, kept inside the field and snapped to whole 2 px blocks, and fills the field area under the HUD bar, which is drawn as ever. A field left out keeps the pin's own (the field's centre, zoom 1, for a first pin). A pin outranks a field map's follow camera. `reset: true` lets the pin go: the view is the map's again - the whole field for an arena, the follow camera for a field map; no parameters only report. The pin holds across restarts and map changes, clamped to each field, and changes only the picture - the round, the AI and the builder's canvas never see it. Replies like `status.camera`: `view` (whole|follow|pinned), the visible world `rect`, `scale` (bitmap px per world px), the scene `target` size in texels and a pin's `center` and `zoom` (a followed view's position is the one the window last drew, unknown until it has drawn one).",
         schema: r#"{"type":"object","properties":{"x":{"type":"number","description":"World x at the view's centre"},"y":{"type":"number","description":"World y at the view's centre"},"zoom":{"type":"number","minimum":1,"description":"How many times the field is magnified"},"reset":{"type":"boolean","default":false,"description":"Show the whole field again"}}}"#,
         read_only: false,
         destructive: false,
@@ -427,7 +429,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "click",
-        description: "A raw press at a window position (pixels, the 32 px HUD bar included: the field starts at y = 32), in either mode, on the same hit-tests a mouse or a finger uses: in play mode the BUILD button (right end of the bar), the players button beside it, the level button at the bar's left end on a level, either dialog's buttons (a press outside a dialog closes it), a level's end-screen buttons (LEVELS, PLAY AGAIN, the way on) and the level select's tiles and BACK (a press outside it closes it) - a press on the field itself does nothing in play mode; in build mode the bar's buttons (PLAY starts the round like `play`), a dropdown row, a settings stepper or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`. This tests the UI; `build`/`play`/`builder_*` address the model directly.",
+        description: "A raw press at a bitmap position (pixels, the 32 px HUD bar included: the field starts at y = 32 - on a followed field map the bitmap is the one the window last drew, `status.camera`'s field area under the bar), in either mode, on the same hit-tests a mouse or a finger uses: in play mode the BUILD button (right end of the bar), the players button beside it, the level button at the bar's left end on a level, either dialog's buttons (a press outside a dialog closes it), a level's end-screen buttons (LEVELS, PLAY AGAIN, the way on) and the level select's tiles and BACK (a press outside it closes it) - a press on the field itself does nothing in play mode; in build mode the bar's buttons (PLAY starts the round like `play`), a dropdown row, a settings stepper or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`, with `world` - the world point the press landed on, through the camera - for a press on the field outside the builder. This tests the UI; `build`/`play`/`builder_*` address the model directly.",
         schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right"],"default":"left"},"drag_to":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"[x, y] to drag to before releasing"}},"required":["x","y"]}"#,
         read_only: false,
         destructive: false,
@@ -772,8 +774,13 @@ pub struct DevServer {
     /// The replica tick whose events and track rows are already banked,
     /// in an online round; `None` in every other mode.
     shown_frame: Option<u64>,
-    /// The view the `camera` tool pinned; `None` shows the whole field.
+    /// The view the `camera` tool pinned; `None` leaves the view to the
+    /// map: the whole field for an arena, a followed view for a field map.
     camera: Option<CameraPin>,
+    /// The camera the window drew its last frame with, as it handed it
+    /// over (`publish_camera`): what `status.camera` reports, and the
+    /// bitmap a `click` lands on. `None` in a server with no window.
+    drawn: Option<CameraReport>,
 }
 
 /// A view the `camera` tool pinned: the world point at its centre and how
@@ -829,25 +836,46 @@ impl DevServer {
             turns: BTreeMap::new(),
             shown_frame: None,
             camera: None,
+            drawn: None,
         }
     }
 
-    /// The part of the world the window draws this frame over a field of
-    /// `field`: the view the `camera` tool pinned, else the whole field.
+    /// The view the `camera` tool pinned, over a field of `field`; `None`
+    /// leaves the view to the map.
+    pub fn pinned_camera(&self, field: (f32, f32)) -> Option<Camera> {
+        self.camera.map(|pin| Camera::zoomed(field, pin.center, pin.zoom))
+    }
+
+    /// The pinned view over a field of `field`, else the whole field: what
+    /// an arena draws.
     pub fn camera(&self, field: (f32, f32)) -> Camera {
-        match self.camera {
-            Some(pin) => Camera::zoomed(field, pin.center, pin.zoom),
-            None => Camera::whole(field),
+        self.pinned_camera(field).unwrap_or(Camera::whole(field))
+    }
+
+    /// The window's camera for the frame it is drawing, handed over once a
+    /// frame: `status.camera` reports the last one, and `click` hit-tests
+    /// on its bitmap.
+    pub fn publish_camera(&mut self, report: CameraReport) {
+        self.drawn = Some(report);
+    }
+
+    /// The bitmap a `click` lands on: the one the window drew last, while
+    /// the round shows on it - the builder's is always its whole canvas,
+    /// as is everything in a server with no window.
+    fn click_layout(&self, session: &Session, width: f32, height: f32) -> Layout {
+        match &self.drawn {
+            Some(drawn) if session.mode() != Driver::Build => drawn.layout,
+            _ => Layout::for_field(width, height),
         }
     }
 
     /// `camera`: pin a view, let it go, or say where it is. A pin's field
     /// left out keeps the one it had (the field's centre at zoom 1 for a
     /// first pin).
-    fn pin_camera(&mut self, params: &Value, field: (f32, f32)) -> Result<Value, String> {
+    fn pin_camera(&mut self, params: &Value, session: &Session, field: (f32, f32)) -> Result<Value, String> {
         if params.get("reset").and_then(Value::as_bool).unwrap_or(false) {
             self.camera = None;
-            return Ok(self.camera_json(field));
+            return Ok(self.camera_json(session, field));
         }
         let number = |key: &str| -> Result<Option<f32>, String> {
             match params.get(key) {
@@ -867,24 +895,51 @@ impl DevServer {
             }
             self.camera = Some(CameraPin { center: Vec2::new(x.unwrap_or(pin.center.x), y.unwrap_or(pin.center.y)), zoom });
         }
-        Ok(self.camera_json(field))
+        Ok(self.camera_json(session, field))
     }
 
-    /// `status.camera` and the `camera` tool's reply: whether a view is
-    /// pinned, the world rectangle on screen, its scale and the scene
-    /// target's size.
-    fn camera_json(&self, field: (f32, f32)) -> Value {
-        let camera = self.camera(field);
-        let rect = camera.rect();
-        let (w, h) = camera.target_size();
-        json!({
-            "view": if self.camera.is_some() { "pinned" } else { "whole" },
-            "rect": { "x": rect.x, "y": rect.y, "w": rect.width, "h": rect.height },
-            "scale": camera.scale,
-            "target": [w, h],
-            "center": self.camera.map(|pin| json!({ "x": pin.center.x, "y": pin.center.y })),
-            "zoom": self.camera.map(|pin| pin.zoom),
-        })
+    /// `status.camera` and the `camera` tool's reply: the view in force -
+    /// `pinned`, `whole` or `follow` - the world rectangle on screen, its
+    /// scale and the scene target's size; a pin's centre and zoom; and a
+    /// followed view's seat, focus and framing as the window last drew it.
+    /// With no frame drawn since the pin went (or no window at all), the
+    /// view the map's class gives, its position unknown.
+    fn camera_json(&self, session: &Session, field: (f32, f32)) -> Value {
+        let plain = |view: &str, camera: Camera| {
+            let rect = camera.rect();
+            let (w, h) = camera.target_size();
+            json!({
+                "view": view,
+                "rect": { "x": rect.x, "y": rect.y, "w": rect.width, "h": rect.height },
+                "scale": camera.scale,
+                "target": [w, h],
+                "center": self.camera.map(|pin| json!({ "x": pin.center.x, "y": pin.center.y })),
+                "zoom": self.camera.map(|pin| pin.zoom),
+            })
+        };
+        if let Some(camera) = self.pinned_camera(field) {
+            return plain("pinned", camera);
+        }
+        match &self.drawn {
+            Some(drawn) if drawn.mode != CameraMode::Pinned => {
+                let mut v = plain(drawn.mode.name(), drawn.camera);
+                // Where the field area landed on the window, in its points.
+                let (view, field) = (drawn.view, drawn.layout.field);
+                let corner = view.to_window(Vec2::new(field.x, field.y));
+                v["window_field"] = json!({ "x": corner.x, "y": corner.y, "w": field.w * view.scale, "h": field.h * view.scale });
+                if let Some(follow) = &drawn.follow {
+                    v.as_object_mut().expect("an object").extend(follow_json(follow, &drawn.camera).as_object().expect("an object").clone());
+                }
+                v
+            }
+            _ if session.mode() != Driver::Build && session.shown().map.class().follows() => json!({
+                "view": "follow",
+                "rect": Value::Null,
+                "center": Value::Null,
+                "zoom": Value::Null,
+            }),
+            _ => plain("whole", Camera::whole(field)),
+        }
     }
 
     /// The port actually bound (differs from the request only for 0).
@@ -1207,7 +1262,7 @@ impl DevServer {
             "players": game.players.count(),
             "map": map_json(&game.map),
             "weather": weather_json(game),
-            "camera": self.camera_json((width, height)),
+            "camera": self.camera_json(session, (width, height)),
             "mode": session.mode().name(),
             "language": crate::text::language(),
             "dialog_open": session.dialog,
@@ -1581,7 +1636,7 @@ impl DevServer {
         width: f32,
         height: f32,
     ) -> Option<Result<Value, String>> {
-        let layout = Layout::for_field(width, height);
+        let layout = self.click_layout(session, width, height);
         let result = match method {
             "status" => Ok(self.status(session, width, height)),
             "pause" => {
@@ -1595,7 +1650,7 @@ impl DevServer {
             }
             "restart" => self.restart(session, params),
             "weather" => self.weather(session, params),
-            "camera" => self.pin_camera(params, (width, height)),
+            "camera" => self.pin_camera(params, session, (width, height)),
             "lint" => lint_json(session, params.get("source").and_then(Value::as_str)),
             "mode" => Ok(mode_json(session)),
             "lang" => {
@@ -1854,7 +1909,18 @@ impl DevServer {
                 }
             }
         }
-        Ok(mode_json(session))
+        let mut reply = mode_json(session);
+        // Where the press landed in the world, through the camera the
+        // window last drew with (`Camera::to_world`): on a followed field
+        // map that is wherever the view stood.
+        if let Some(drawn) = &self.drawn
+            && session.mode() != Driver::Build
+            && drawn.layout.field.contains(point)
+        {
+            let world = drawn.camera.to_world(drawn.layout.to_field(point));
+            reply["world"] = json!({ "x": world.x, "y": world.y });
+        }
+        Ok(reply)
     }
 
     /// `key`: one key for one frame, or typed text, through the same
@@ -2531,6 +2597,45 @@ fn to_value<T: Serialize>(v: T) -> Value {
     serde_json::to_value(v).unwrap_or(Value::Null)
 }
 
+/// A followed view's half of `status.camera` (docs/large-maps-follow-camera.md
+/// §5, §6): the seat it follows and how (`focus`: `seat`, `shared`,
+/// `apart` - a couch pair too far apart for one view, the split screen
+/// being later work - `spectating` or `nobody`), whether this frame cut,
+/// the look-ahead and the sub-block offset the picture was shifted by;
+/// the framing behind its size - the world in cells, device pixels per
+/// world pixel and per block, whether the zoom snapped to whole blocks,
+/// the tank in points and millimetres, the bars past the aspect clamp;
+/// and the sight box the view keeps, with whether all of it is on screen.
+fn follow_json(f: &FollowReport, camera: &Camera) -> Value {
+    let fr = &f.framing;
+    let (cols, rows) = fr.visible_cells();
+    let shot = &f.shot;
+    let room = fr.room_outside(f.sight);
+    json!({
+        "seat": shot.seat,
+        "focus": shot.kind.name(),
+        "cut": shot.cut,
+        "lead": { "x": r1(shot.lead.x), "y": r1(shot.lead.y) },
+        "offset": { "x": camera.offset.x, "y": camera.offset.y },
+        "seating": match f.seating { Seating::Room => "room", Seating::Local => "local" },
+        "framing": {
+            "visible_cells": [cols, rows],
+            "device_scale": fr.scale,
+            "point_scale": fr.point_scale,
+            "block_px": fr.block(),
+            "snapped": fr.snapped,
+            "tank_points": fr.tank_points,
+            "tank_mm": fr.tank_mm,
+            "bars": [fr.bars.0, fr.bars.1],
+        },
+        "sight_box": {
+            "half": [f.sight.half.0, f.sight.half.1],
+            "room": [room.0, room.1],
+            "in_view": shot.boxes_in(camera.rect(), camera.field, f.sight, 1.0),
+        },
+    })
+}
+
 /// The loaded map's identity for `status`/`map_get`.
 fn map_json(map: &MapFile) -> Value {
     json!({
@@ -2860,6 +2965,85 @@ mod tests {
         assert_eq!(whole["zoom"], Value::Null);
         assert_eq!(server.camera(field), Camera::whole(field));
         assert_eq!(s.game.frame(), before, "the round never moved");
+    }
+
+    /// A field map with no window behind the server is still reported as
+    /// followed; with the window's frame handed over, `status.camera`
+    /// carries the followed seat, the framing (scale, snap, the tank's
+    /// size) and whether the sight box is on screen, and a `click` lands
+    /// on the bitmap that frame drew. A pin outranks it, and `reset` hands
+    /// the view back to the map.
+    #[test]
+    fn status_reports_a_followed_view_as_the_window_drew_it() {
+        use crate::follow::{CameraMode, CameraReport, FollowReport, Shot, ShotKind};
+        use crate::framing::{frame_under_bar, Screen, SightBox, ViewRules};
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(7);
+        s.game.map = MapFile::from_toml_str("version = 1\nsize = [48, 24]\n").unwrap();
+        let field = s.game.map.field_size();
+        s.game.init(field.0, field.1);
+        let at = |server: &mut DevServer, s: &mut Session, method: &str, params: Value| {
+            let rx = call(&tx, method, params);
+            server.before_frame(s, field.0, field.1);
+            rx.recv().unwrap()
+        };
+        let status = at(&mut server, &mut s, "status", json!({})).unwrap();
+        assert_eq!(status["camera"]["view"], "follow", "{status}");
+        assert_eq!(status["camera"]["rect"], Value::Null, "no frame drawn yet");
+
+        // The window's frame: the 1080p monitor's local view, the seat
+        // followed near the middle.
+        let sight = SightBox::from_cells(11.5, 7.5);
+        let screen = Screen::new(1920.0, 1080.0, 1.0, 92.0).with_panel_width(1920.0);
+        let framing = frame_under_bar(screen, crate::view::FollowFrame::BAR, Seating::Local, sight, &ViewRules::of(&crate::tuning::Tuning::DEFAULT));
+        let seat = Vec2::new(760.0, 380.0);
+        let camera = Camera::following(field, Vec2::new(seat.x - 640.0, seat.y - 344.0), framing.visible, 1.0, 1.5);
+        let layout = Layout::for_field(framing.visible.0, framing.visible.1);
+        let view = crate::view::View::fill((layout.field.w, layout.field.h + layout.panel.h), (1920.0, 1080.0));
+        let shot = Shot {
+            corner: Vec2::new(seat.x - 640.0, seat.y - 344.0),
+            center: seat,
+            kind: ShotKind::Seat,
+            seat: Some(0),
+            keeps: [Some(seat), None],
+            lead: Vec2::new(0.0, 0.0),
+            cut: false,
+        };
+        server.publish_camera(CameraReport {
+            mode: CameraMode::Follow,
+            camera,
+            layout,
+            view,
+            follow: Some(FollowReport { framing, seating: Seating::Local, sight, shot }),
+        });
+        let c = at(&mut server, &mut s, "status", json!({})).unwrap()["camera"].clone();
+        assert_eq!(c["view"], "follow", "{c}");
+        assert_eq!(c["seat"], 0);
+        assert_eq!(c["focus"], "seat");
+        assert_eq!(c["rect"], json!({ "x": 120.0, "y": 36.0, "w": 1280.0, "h": 688.0 }));
+        assert_eq!(c["framing"]["visible_cells"], json!([40.0, 21.5]));
+        assert_eq!(c["framing"]["device_scale"], 1.5);
+        assert_eq!(c["framing"]["snapped"], true);
+        assert_eq!(c["framing"]["tank_points"], 96.0);
+        assert!(c["framing"]["tank_mm"].as_f64().is_some_and(|mm| (mm - 26.5).abs() < 0.1), "{c}");
+        assert_eq!(c["sight_box"]["in_view"], true);
+        assert_eq!(c["target"], json!([1282, 690]));
+        // The bar's buttons are hit on that bitmap: BUILD at the right end
+        // of a 1280-wide bar, not of the field's 1536.
+        let build = mode_button_rect(layout.panel);
+        let m = at(&mut server, &mut s, "click", json!({ "x": build.x + build.width / 2.0, "y": build.y + build.height / 2.0 })).unwrap();
+        assert_eq!(m["dialog_open"], true, "{m}");
+        at(&mut server, &mut s, "key", json!({ "key": "escape" })).unwrap();
+        // A press on the field lands in the world through that camera: the
+        // field area's middle is the followed seat.
+        let m = at(&mut server, &mut s, "click", json!({ "x": 640.0, "y": 32.0 + 344.0 })).unwrap();
+        assert_eq!(m["world"], json!({ "x": seat.x, "y": seat.y }), "{m}");
+        assert_eq!(m["dialog_open"], false);
+        // A pin outranks the follow; `reset` gives the view back.
+        let pinned = at(&mut server, &mut s, "camera", json!({ "zoom": 2.0 })).unwrap();
+        assert_eq!(pinned["view"], "pinned");
+        let back = at(&mut server, &mut s, "camera", json!({ "reset": true })).unwrap();
+        assert_eq!(back["view"], "follow", "{back}");
     }
 
     /// The players tool and the button/keys behind it: the dialog freezes

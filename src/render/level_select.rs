@@ -39,7 +39,7 @@ const TITLE_LEADING: f32 = 3.0;
 /// Draw the whole screen over the field. Field space: call inside the
 /// field camera, as the dialogs and the lobby are called.
 pub fn draw_level_select<D: RaylibDraw>(d: &mut D, field: Rect, view: &LevelSelectView) {
-    d.draw_rectangle(0, 0, field.w.round() as i32, field.h.round() as i32, FIELD_DIM);
+    d.draw_rectangle(0, 0, field.w.ceil() as i32, field.h.ceil() as i32, FIELD_DIM);
     let panel = panel_rect(field);
     d.draw_rectangle_rounded(Rectangle::new(panel.x + 4.0, panel.y + 4.0, panel.width, panel.height), 0.05, 8, PANEL_SHADOW);
     d.draw_rectangle_rounded(panel, 0.05, 8, PANEL_FILL);

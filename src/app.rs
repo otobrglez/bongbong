@@ -32,7 +32,8 @@ use crate::simulation::{Game, Input, PlayerCount};
 use crate::tuning;
 use crate::tank::{Dir, TankKind};
 use crate::touch::TouchPoint;
-use crate::view::{Camera, ScaleCap, View};
+use crate::framing::{Screen, Seating, SightBox, ViewRules};
+use crate::view::{Camera, FollowFrame, ScaleCap, View};
 use crate::{
     Layout,
     PHYSICS_FIXED_DT,
@@ -118,6 +119,154 @@ fn window_units_per_point(_rl: &RaylibHandle) -> f32 {
     #[cfg(not(target_os = "android"))]
     let units = 1.0;
     units
+}
+
+/// This window as the framing rules see it (`framing::Screen`,
+/// docs/large-maps-follow-camera.md §3): its size in points, the device
+/// pixels a point is (raylib's window scale DPI), how dense they are and,
+/// where the platform says, how big a point is.
+///
+/// - A desktop reads the monitor the window is on: its physical width
+///   when it reports one - the density and the millimetres both follow -
+///   and otherwise a desktop's 96 points to the inch, its size unknown.
+///   GLFW gives a monitor's mode in points on macOS and in pixels
+///   elsewhere.
+/// - The web has no physical size to read: the CSS reference pixel, 96
+///   points to the inch.
+/// - A phone or a tablet is fine (above `view_fine_ppi`), so the zoom stays
+///   exact, its size unknown. Android's window is in device pixels, which
+///   the scale DPI turns back into points.
+fn screen(rl: &RaylibHandle) -> Screen {
+    let (width, height) = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+    let dpr = Some(rl.get_window_scale_dpi().x).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(1.0);
+    #[cfg(target_os = "emscripten")]
+    {
+        Screen::new(width, height, dpr, 96.0 * dpr).with_mm_per_point(25.4 / 96.0)
+    }
+    #[cfg(target_os = "android")]
+    {
+        Screen::new(width / dpr, height / dpr, dpr, f32::INFINITY)
+    }
+    #[cfg(target_os = "ios")]
+    {
+        Screen::new(width, height, dpr, f32::INFINITY)
+    }
+    #[cfg(not(any(target_os = "emscripten", target_os = "android", target_os = "ios")))]
+    {
+        use sola_raylib::core::window::{get_current_monitor, get_monitor_physical_width, get_monitor_width};
+        let screen = Screen::new(width, height, dpr, 96.0 * dpr);
+        let monitor = get_current_monitor();
+        let mm = get_monitor_physical_width(monitor) as f32;
+        let mode = get_monitor_width(monitor) as f32;
+        let points = if cfg!(target_os = "macos") { mode } else { mode / dpr };
+        if mm > 0.0 && points > 0.0 {
+            Screen { ppi: points * dpr / (mm / 25.4), ..screen }.with_mm_per_point(mm / points)
+        } else {
+            screen
+        }
+    }
+}
+
+/// Device pixels per unit of the window's coordinates: what the
+/// framebuffer holds across one point - 2 on a Retina desktop, 1 on the
+/// web canvas and on Android, whose window is in pixels already. A
+/// followed view's sub-block shift is rounded to these.
+fn framebuffer_ratio(rl: &RaylibHandle) -> f32 {
+    let (screen, render) = (rl.get_screen_width(), rl.get_render_width());
+    if screen > 0 && render > 0 { render as f32 / screen as f32 } else { 1.0 }
+}
+
+/// How a frame lands on the window (docs/large-maps-follow-camera.md): the
+/// bitmap's layout and the view that puts it on the window, and the render
+/// targets that takes. An arena - and the builder's canvas, and a view the
+/// dev server pinned - is the bitmap of the whole field plus the bar,
+/// fitted into whatever the window is (`View::fit_capped`). A field map is
+/// followed: its bitmap is the world this window shows plus the bar,
+/// framed into the window less the bar, a bitmap pixel per world pixel
+/// (`FollowFrame`) - `Seating::Room` in a room's round, `Local` otherwise,
+/// the sight box the tuning table's.
+struct Presentation {
+    /// The field it was made for, and the mode: a change of either makes it
+    /// stale (`stale`).
+    field: (f32, f32),
+    mode: Driver,
+    /// A field map's frame; `None` for the whole-field bitmap.
+    followed: Option<FollowFrame>,
+    /// The view the dev server pinned, if one is.
+    pinned: Option<Camera>,
+    layout: Layout,
+    view: View,
+    /// The scene target's size and `composite`'s: a followed view's
+    /// composite holds the world alone, the scene target's size, the bar
+    /// being drawn on the window (`Game::render`).
+    scene: (i32, i32),
+    composite: (i32, i32),
+}
+
+impl Presentation {
+    fn of(rl: &RaylibHandle, session: &Session, pinned: Option<Camera>) -> Presentation {
+        let field = session.field_size();
+        let mode = session.mode();
+        let window = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+        let follows = pinned.is_none() && mode != Driver::Build && session.shown().map.class().follows();
+        if follows {
+            let (half_w, half_h) = tuning().sight_box_half_px();
+            let seating = if mode == Driver::Online { Seating::Room } else { Seating::Local };
+            let frame = FollowFrame::new(screen(rl), window, seating, SightBox::new(half_w, half_h), &ViewRules::current());
+            let target = frame.target_size();
+            return Presentation { field, mode, followed: Some(frame), pinned, layout: frame.layout, view: frame.view, scene: target, composite: target };
+        }
+        let layout = Layout::for_field(field.0, field.1);
+        // The cap is a desktop matter: an embedded build (web, iOS) draws
+        // the bitmap into a canvas or screen that is never larger than it.
+        let cap = if crate::EMBEDDED {
+            None
+        } else {
+            let t = tuning();
+            (t.view_max_scale > 0.0).then(|| ScaleCap { max_scale: t.view_max_scale, snap_half: t.view_scale_snap != 0 })
+        };
+        let (w, h) = layout.window_size();
+        Presentation {
+            field,
+            mode,
+            followed: None,
+            pinned,
+            layout,
+            view: View::fit_capped((w as f32, h as f32), window, cap),
+            scene: pinned.unwrap_or(Camera::whole(field)).target_size(),
+            composite: layout.window_size(),
+        }
+    }
+
+    /// Whether the session has moved on to another mode or field since.
+    fn stale(&self, session: &Session) -> bool {
+        session.mode() != self.mode || session.field_size() != self.field
+    }
+
+    /// Re-create the render targets this presentation needs where their
+    /// sizes differ.
+    fn fit_targets(
+        &self,
+        rl: &mut RaylibHandle,
+        thread: &sola_raylib::prelude::RaylibThread,
+        scene_target: &mut sola_raylib::prelude::RenderTexture2D,
+        scene_size: &mut (i32, i32),
+        composite: &mut sola_raylib::prelude::RenderTexture2D,
+        composite_size: &mut (i32, i32),
+    ) {
+        if self.scene != *scene_size {
+            *scene_size = self.scene;
+            *scene_target = rl
+                .load_render_texture(thread, scene_size.0 as u32, scene_size.1 as u32)
+                .expect("failed re-creating scene render texture");
+        }
+        if self.composite != *composite_size {
+            *composite_size = self.composite;
+            *composite = rl
+                .load_render_texture(thread, composite_size.0 as u32, composite_size.1 as u32)
+                .expect("failed re-creating composite render texture");
+        }
+    }
 }
 
 /// The URL the page was opened on, as the page published it
@@ -1085,19 +1234,27 @@ pub fn run(args: Args) {
     }
 
     // Pass 1's target: the part of the world the frame shows (`Camera`), a
-    // texel per world pixel - the whole field for every round. Re-created
-    // when that changes size (a dev-server `restart` on a map of another
-    // size, the builder loading one, a `camera` pin).
+    // texel per world pixel - the whole field for an arena, the view and a
+    // block of margin for a followed field map. Re-created when that
+    // changes size (a dev-server `restart` on a map of another size, the
+    // builder loading one, a `camera` pin, a resized window).
     let mut scene_size = Camera::whole((screen_width as f32, screen_height as f32)).target_size();
     let mut scene_target = rl
         .load_render_texture(&thread, scene_size.0 as u32, scene_size.1 as u32)
         .expect("failed creating scene render texture");
     // The composited bitmap - the field plus the bar - that `view::present`
-    // fits into the window, re-created when the field changes size.
+    // fits into the window, or a followed view's world alone, the scene
+    // target's size (`Game::render`); re-created when that size changes.
+    let mut composite_size = bitmap;
     let mut composite = rl
         .load_render_texture(&thread, bitmap.0 as u32, bitmap.1 as u32)
         .expect("failed creating composite render texture");
     let mut target_field = (screen_width as f32, screen_height as f32);
+    // The follow camera's state (follow.rs), and what it last followed in -
+    // a room's round or the local one, and the map - so a change of either
+    // cuts.
+    let mut follow = crate::follow::Follow::default();
+    let mut followed_in: Option<(bool, Option<String>, (f32, f32))> = None;
     let mut touch = crate::touch::TouchScheme::default();
     let touch_from_mouse = args.touch_from_mouse;
 
@@ -1302,49 +1459,25 @@ pub fn run(args: Args) {
             dev.before_frame(&mut session, width, height);
         }
         // The field is the live mode's map's (a `restart` above may have
-        // just swapped it); the bitmap is the field plus the bar, and the
-        // view fits that bitmap into whatever the window is right now.
+        // just swapped it).
         let (width, height) = session.field_size();
-        let layout = Layout::for_field(width, height);
         if (width, height) != target_field {
-            let bitmap = layout.window_size();
-            composite = rl
-                .load_render_texture(thread, bitmap.0 as u32, bitmap.1 as u32)
-                .expect("failed re-creating composite render texture");
             let (s, m, i) = load_ripples(rl, thread, width as i32, height as i32);
             shock_fx = s;
             muzzle_fx = m;
             impact_fx = i;
             target_field = (width, height);
         }
-        // The part of the world this frame shows: the whole field, or the
-        // view a dev-server `camera` pins for its screenshots.
+        // How the frame lands on the window (`Presentation`), and the
+        // render targets that takes. A view the dev server's `camera` tool
+        // pinned outranks the map.
         #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
-        let camera = dev.as_ref().map_or(Camera::whole((width, height)), |dev| dev.camera((width, height)));
+        let pinned = dev.as_ref().and_then(|dev| dev.pinned_camera((width, height)));
         #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
-        let camera = Camera::whole((width, height));
-        if camera.target_size() != scene_size {
-            scene_size = camera.target_size();
-            scene_target = rl
-                .load_render_texture(thread, scene_size.0 as u32, scene_size.1 as u32)
-                .expect("failed re-creating scene render texture");
-        }
-        // The cap is a desktop matter: an embedded build (web, iOS) draws
-        // the bitmap into a canvas or screen that is never larger than it.
-        let cap = if crate::EMBEDDED {
-            None
-        } else {
-            let t = tuning();
-            (t.view_max_scale > 0.0).then(|| ScaleCap { max_scale: t.view_max_scale, snap_half: t.view_scale_snap != 0 })
-        };
-        let view = View::fit_capped(
-            {
-                let (w, h) = layout.window_size();
-                (w as f32, h as f32)
-            },
-            (rl.get_screen_width() as f32, rl.get_screen_height() as f32),
-            cap,
-        );
+        let pinned: Option<Camera> = None;
+        let mut plan = Presentation::of(rl, &session, pinned);
+        plan.fit_targets(rl, thread, &mut scene_target, &mut scene_size, &mut composite, &mut composite_size);
+        let (mut layout, mut view) = (plan.layout, plan.view);
         if !crate::EMBEDDED && rl.is_key_pressed(KeyboardKey::KEY_F11) {
             rl.toggle_borderless_windowed();
         }
@@ -1567,6 +1700,20 @@ pub fn run(args: Args) {
             }
         }
 
+        // A press this frame may have changed what the window shows -
+        // BUILD, PLAY, a level started on another map: the frame presents
+        // that rather than what it began with (its presses were hit-tested
+        // on what was on screen).
+        if plan.stale(&session) {
+            #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+            let pinned = dev.as_ref().and_then(|dev| dev.pinned_camera(session.field_size()));
+            #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
+            let pinned: Option<Camera> = None;
+            plan = Presentation::of(rl, &session, pinned);
+            plan.fit_targets(rl, thread, &mut scene_target, &mut scene_size, &mut composite, &mut composite_size);
+            (layout, view) = (plan.layout, plan.view);
+        }
+
         if session.mode() == Driver::Build {
             // Nothing is steering while the builder is up, but the scheme
             // still sees the frame so a finger lifted here is not a stick
@@ -1575,6 +1722,12 @@ pub fn run(args: Args) {
             touch.update(&touch_points, &layout, steer_right, dt);
             clock.reset();
             carried = Input::default();
+            // The builder shows its whole canvas, whatever the map's class.
+            #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+            if let Some(dev) = &mut dev {
+                let camera = Camera::whole(plan.field);
+                dev.publish_camera(crate::follow::CameraReport { mode: crate::follow::CameraMode::Whole, camera, layout, view, follow: None });
+            }
             let shade = builder_shade.sync(rl, thread, session.builder.ground().shade());
             session.builder.render(
                 rl,
@@ -1689,6 +1842,9 @@ pub fn run(args: Args) {
         // them at their real pace.
         #[cfg_attr(not(all(feature = "dev-tools", not(target_os = "emscripten"))), allow(unused_mut))]
         let mut fx_dt = dt;
+        // How far the local round got this frame, which is how far a
+        // followed view moves: with the round, step for step.
+        let frame_before = session.game.frame();
         if session.playing() {
             #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
             let frozen = dev.as_ref().is_some_and(|dev| dev.lockstep());
@@ -1707,6 +1863,7 @@ pub fn run(args: Args) {
                     let before = session.game.frame();
                     dev.advance(&mut session.game, input, steps, width, height, &mut |game| {
                         fx.observe_events(game);
+                        follow.observe_events(game);
                         awareness.observe_events(game, &seats);
                     });
                     if frozen {
@@ -1722,9 +1879,11 @@ pub fn run(args: Args) {
                 for i in 0..steps {
                     let step_input = if i == 0 { input } else { input.held_only() };
                     session.game.update(step_input, PHYSICS_FIXED_DT, width, height);
-                    // The particle layer and the indicators read each
-                    // step's events before the next step clears them.
+                    // The particle layer, the follow camera and the
+                    // indicators read each step's events before the next
+                    // step clears them.
                     fx.observe_events(&session.game);
+                    follow.observe_events(&session.game);
                     awareness.observe_events(&session.game, &seats);
                 }
             }
@@ -1742,9 +1901,74 @@ pub fn run(args: Args) {
         // A level's end screen that has counted down takes its way: the
         // next level after a win, the same one again after a loss.
         session.follow_countdown();
+        // A level's end screen that counted down may have opened another
+        // map: present that one.
+        if plan.stale(&session) {
+            #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+            let pinned = dev.as_ref().and_then(|dev| dev.pinned_camera(session.field_size()));
+            #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
+            let pinned: Option<Camera> = None;
+            plan = Presentation::of(rl, &session, pinned);
+            plan.fit_targets(rl, thread, &mut scene_target, &mut scene_size, &mut composite, &mut composite_size);
+            (layout, view) = (plan.layout, plan.view);
+        }
+        let field = plan.field;
         // The round on screen: the room's replica in an online round,
         // the session's own otherwise.
         let game = session.shown();
+        // The part of the world this frame shows: a pinned view, the whole
+        // field, or a field map's followed view, moved on by the time the
+        // round on screen advanced - a local round's steps, a replica's
+        // frame of real time, nothing while a dialog or the lobby holds
+        // the round still.
+        let camera = match &plan.followed {
+            Some(frame) => {
+                // The round on screen: a room's replica or the local round
+                // (which the lobby and the dialogs stand over, still), on
+                // which map.
+                let scene = (session.mode() == Driver::Online, game.map.name.clone(), field);
+                if followed_in.as_ref() != Some(&scene) {
+                    follow.cut();
+                    followed_in = Some(scene);
+                }
+                follow.observe_events(game);
+                let advanced = match session.mode() {
+                    Driver::Online => dt,
+                    _ => session.game.frame().checked_sub(frame_before).unwrap_or(0) as f32 * PHYSICS_FIXED_DT,
+                };
+                // The seats this screen plays: a room's own seat, or the
+                // couch's one or two (a local round's seats past two stand
+                // idle).
+                let local: Vec<usize> = match session.mode() {
+                    Driver::Online => session.online.as_ref().and_then(|round| round.seat()).map(|s| vec![s as usize]).unwrap_or_default(),
+                    _ => (0..game.players.count().min(2)).collect(),
+                };
+                let stage = crate::follow::Stage { visible: frame.framing.visible, field, sight: frame.sight };
+                let shot = follow.update(&crate::follow::Seats::of(game, &local), advanced, &stage, &crate::follow::FollowRules::current());
+                let camera = Camera::following(field, shot.corner, frame.framing.visible, frame.scale, frame.device_scale(framebuffer_ratio(rl)));
+                #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+                if let Some(dev) = &mut dev {
+                    dev.publish_camera(crate::follow::CameraReport {
+                        mode: crate::follow::CameraMode::Follow,
+                        camera,
+                        layout,
+                        view,
+                        follow: Some(crate::follow::FollowReport { framing: frame.framing, seating: frame.seating, sight: frame.sight, shot }),
+                    });
+                }
+                camera
+            }
+            None => {
+                followed_in = None;
+                let camera = plan.pinned.unwrap_or(Camera::whole(field));
+                #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+                if let Some(dev) = &mut dev {
+                    let mode = if plan.pinned.is_some() { crate::follow::CameraMode::Pinned } else { crate::follow::CameraMode::Whole };
+                    dev.publish_camera(crate::follow::CameraReport { mode, camera, layout, view, follow: None });
+                }
+                camera
+            }
+        };
         // Between the steps and the draw: the particle layer samples the
         // world the round is at (its events it read after each step),
         // then ages what is already in flight. Deliberately not inside
