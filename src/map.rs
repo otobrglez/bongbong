@@ -491,6 +491,21 @@ pub struct MapFile {
 /// `u16`, which holds 250 x 250 cells.
 pub const MAX_SIDE_CELLS: f32 = 250.0;
 
+/// The fewest cells a map spans on either side: room for a tank to stand
+/// and wander a cell clear of the border on each side. Narrower, the
+/// enemies' patrol had no ground to pick a point in and the round
+/// panicked. The builder keeps a larger floor of its own
+/// (`editor::MIN_MAP_CELLS`); this is what a hand-written or sent map is
+/// held to.
+pub const MIN_SIDE_CELLS: f32 = 8.0;
+
+/// The most cells a map drawn whole (`view = "whole"`) may span on either
+/// side: its round draws the field into a target a texel per world pixel,
+/// and 4096 texels a side is what every GPU the game runs on holds - the
+/// establishing shot's bound too (`establish::MAX_TEXELS`). A larger map
+/// asking to be seen whole is followed instead.
+pub const WHOLE_MAX_CELLS: f32 = 128.0;
+
 fn cell_key(col: i32, row: i32) -> String {
     format!("{col},{row}")
 }
@@ -617,15 +632,16 @@ impl MapFile {
 
     /// Whether the map is shown whole or followed by a camera
     /// (docs/large-maps-follow-camera.md §1, §15): its `view` key when it
-    /// has one, else its size - an arena up to 36 x 18 cells, a field map
+    /// has one - `whole` only while the map fits `WHOLE_MAX_CELLS` both
+    /// ways - else its size, an arena up to 36 x 18 cells and a field map
     /// past that (`framing::MapClass::by_size`).
     pub fn class(&self) -> MapClass {
+        let (width, height) = self.field_size();
+        let (cols, rows) = (width / OBSTACLE_GRID_SIZE, height / OBSTACLE_GRID_SIZE);
         match self.view {
+            Some(MapView::Whole) if cols > WHOLE_MAX_CELLS || rows > WHOLE_MAX_CELLS => MapClass::Field,
             Some(view) => view.class(),
-            None => {
-                let (width, height) = self.field_size();
-                MapClass::by_size(width / OBSTACLE_GRID_SIZE, height / OBSTACLE_GRID_SIZE)
-            }
+            None => MapClass::by_size(cols, rows),
         }
     }
 
@@ -657,10 +673,13 @@ impl MapFile {
                 map.version
             ));
         }
-        if let Some((cols, rows)) = map.size
-            && !(cols.is_finite() && rows.is_finite() && cols <= MAX_SIDE_CELLS && rows <= MAX_SIDE_CELLS)
-        {
-            return Err(format!("size = [{cols}, {rows}] is past the largest map, {MAX_SIDE_CELLS} cells a side"));
+        if let Some((cols, rows)) = map.size {
+            if !(cols.is_finite() && rows.is_finite() && cols <= MAX_SIDE_CELLS && rows <= MAX_SIDE_CELLS) {
+                return Err(format!("size = [{cols}, {rows}] is past the largest map, {MAX_SIDE_CELLS} cells a side"));
+            }
+            if cols < MIN_SIDE_CELLS || rows < MIN_SIDE_CELLS {
+                return Err(format!("size = [{cols}, {rows}] is under the smallest map, {MIN_SIDE_CELLS} cells a side"));
+            }
         }
         Ok(map)
     }
@@ -1041,6 +1060,10 @@ mod toml_tests {
         assert_eq!(map.class(), MapClass::Field);
         map.view = Some(MapView::Whole);
         assert_eq!(map.class(), MapClass::Arena);
+        // Past what a target drawn whole holds, `whole` is followed.
+        assert_eq!(class("size = [128, 128]\nview = \"whole\"\n"), MapClass::Arena);
+        assert_eq!(class("size = [129, 40]\nview = \"whole\"\n"), MapClass::Field);
+        assert_eq!(class("size = [250, 250]\nview = \"whole\"\n"), MapClass::Field);
     }
 
     #[test]
@@ -1163,6 +1186,22 @@ cells."10,5" = { kind = "portal" }
         for size in ["[251, 20]", "[40, 250.5]", "[nan, 20]", "[40, inf]"] {
             let err = MapFile::from_toml_str(&format!("version = 1\nsize = {size}\n")).unwrap_err();
             assert!(err.contains("largest map"), "{size}: {err}");
+        }
+    }
+
+    /// A map has room for a tank to stand and wander on either axis: a
+    /// sliver of a map is refused by name rather than played, and every
+    /// map shipped or under `maps/` is at least that large.
+    #[test]
+    fn a_map_is_no_smaller_than_a_round_can_play_on() {
+        for size in ["[1.5, 20]", "[40, 7.5]", "[0, 0]", "[-3, 20]"] {
+            let err = MapFile::from_toml_str(&format!("version = 1\nsize = {size}\n")).unwrap_err();
+            assert!(err.contains("smallest map"), "{size}: {err}");
+        }
+        assert!(MapFile::from_toml_str("version = 1\nsize = [8, 8]\n").is_ok());
+        for (name, text) in SHIPPED_MAPS {
+            let (w, h) = MapFile::from_toml_str(text).unwrap().field_size();
+            assert!(w / OBSTACLE_GRID_SIZE >= MIN_SIDE_CELLS && h / OBSTACLE_GRID_SIZE >= MIN_SIDE_CELLS, "{name}");
         }
     }
 
