@@ -1353,9 +1353,9 @@ mod hud_tests {
         assert_eq!((keyed.scale, keyed.screen, keyed.area), (touch.scale, touch.screen, touch.area));
     }
 
-    /// One seat and two on a couch keep the tables they have always had;
-    /// everything else - a third couch seat, and every room of two or
-    /// more - is the compact one.
+    /// One seat and two on a couch have a table each; everything else - a
+    /// third couch seat, and every room of two or more - is the compact
+    /// one.
     #[test]
     fn the_couch_keeps_its_tables_and_a_room_is_compact_from_two() {
         assert_eq!(HudLayout::choose(1, None), HudLayout::One);

@@ -4,8 +4,8 @@
 //! navigator and the loupe - laid out on the window from its size in points
 //! the way play's corners are (`hud::UiFrame`), never at the canvas's
 //! scale, so a phone's bar is a finger's height and its text no smaller
-//! than a phone can read, while a desktop at UI scale 1 keeps the bar it
-//! always had, a point a pixel.
+//! than a phone can read, while a desktop at UI scale 1 draws its bar a
+//! point a pixel.
 //!
 //! `BuilderFrame` is where the builder stands on the window this frame:
 //! the canvas's bitmap - the canvas alone, no bar - and the view that puts
@@ -55,9 +55,8 @@ use super::{BrushRow, Category};
 
 /// The text size of the bar's small labels - UNDO, REDO, FIT, CHECK, PLAY
 /// HERE and the clear flag's par - with a mouse: the 11 points Apple's
-/// guidance holds text to, at which every language's label still fits
-/// inside the buttons a desktop's bar has always had (a button's outline
-/// is drawn outside its box).
+/// guidance holds text to, at which every language's label fits inside a
+/// desktop bar's buttons (a button's outline is drawn outside its box).
 pub const BAR_MOUSE_TEXT: i32 = 11;
 
 /// The bar's small labels' text size: `UI_SMALL_TEXT` on a touch screen -
@@ -158,10 +157,10 @@ const fn slot(w: f32, gap: f32) -> Slot {
     Slot { w, gap }
 }
 
-/// Every element's slot, for a mouse or a touch screen. The mouse's are the
-/// slots the desktop's bar has always had, a point a pixel; a touch
-/// screen's are at least `hud::UI_TOUCH_PT` across for every press, a
-/// category button's two halves included.
+/// Every element's slot, for a mouse or a touch screen. The mouse's are a
+/// desktop bar's, a point a pixel; a touch screen's are at least
+/// `hud::UI_TOUCH_PT` across for every press, a category button's two
+/// halves included.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Metrics {
     /// `BUILD`, the mode, in the builder's amber.
@@ -324,7 +323,7 @@ pub enum BarButton {
 impl Bar {
     /// The strip alone: across the window, from the safe area's top edge,
     /// a button's height - `hud::button_height`, 44 points on a touch
-    /// screen and the 32 a desktop's bar has always had.
+    /// screen and 32 with a mouse.
     pub fn strip_of(ui: &UiFrame) -> Rectangle {
         let height = if ui.touch { button_height(true) } else { HUD_BAR_HEIGHT as f32 };
         Rectangle::new(0.0, ui.area.y - UI_EDGE_PT, ui.screen.w, height)
@@ -1202,11 +1201,10 @@ mod chrome_tests {
         }
     }
 
-    /// A desktop's window keeps the slots the bar had when it was part of
-    /// the builder's bitmap, a point a pixel, with BRUSH after the five
-    /// categories; short of room the BUILD label goes first, then the name
-    /// narrows, then the categories and BRUSH fold rather than shrink a
-    /// button.
+    /// A desktop's window lays the bar's slots out a point a pixel, BRUSH
+    /// after the five categories; short of room the BUILD label goes
+    /// first, then the name narrows, then the categories and BRUSH fold
+    /// rather than shrink a button.
     #[test]
     fn a_desktops_bar_keeps_its_slots_and_a_narrow_one_folds() {
         let ui = UiFrame::plain((1280.0, 720.0));
@@ -1534,7 +1532,8 @@ mod chrome_tests {
                 assert!((round.x - p.x).abs() < 1e-2 && (round.y - p.y).abs() < 1e-2);
             }
         }
-        // A desktop's arena stands where it stood in the builder's bitmap.
+        // A desktop's arena stands right under the 32 pt bar at its own
+        // size.
         let frame = BuilderFrame::headless((1088.0, 544.0), MapClass::Arena);
         assert_eq!((frame.view.scale, frame.view.offset), (1.0, Vec2::new(0.0, 32.0)));
     }

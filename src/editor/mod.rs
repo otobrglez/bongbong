@@ -132,23 +132,12 @@ pub(crate) const LINT_FINDING_W: f32 = chrome::LINT_PANEL_W - LINT_TEXT_INSET - 
 pub(crate) const LINT_HINT_W: f32 = chrome::LINT_PANEL_W - 2.0 * LINT_TEXT_INSET;
 #[cfg_attr(not(feature = "render"), allow(dead_code))]
 pub(crate) const LINT_CLEAR_W: f32 = chrome::LINT_PANEL_W - 2.0 * LINT_TEXT_INSET - LINT_MARK - 8.0;
-/// What a jump to a finding shows round its cells at least, in cells
-/// across and down, so a one-cell finding is seen in its surroundings
-/// rather than filling the canvas.
-const LINT_JUMP_CONTEXT_CELLS: (f32, f32) = (14.0, 9.0);
 /// The gap a jump keeps between what it frames and the open CHECK panel.
 const LINT_FREE_GAP: f32 = 16.0;
 /// The loupe's side, in UI points - about 23 mm on a phone, twice and more
 /// what a fingertip covers - before it is cut down to whole blocks of the
 /// world at the loupe's scale.
 const LOUPE_PT: f32 = 144.0;
-/// How far the loupe stands off the point under the finger, in UI points:
-/// clear of the fingertip.
-const LOUPE_LIFT_PT: f32 = 44.0;
-/// The loupe's magnification over the canvas, before it is put on the
-/// nearest whole-block scale: the cell the stroke paints and part of each
-/// of its neighbours, larger than the finger leaves them.
-const LOUPE_ZOOM: f32 = 1.5;
 /// The settings panel's row layout: label at the left inset, the `<`
 /// button, the value, the `>` button at the right inset.
 const SETTINGS_INSET: f32 = 4.0;
@@ -612,8 +601,8 @@ pub struct Loupe {
     /// the stroke paints, its corner on the block grid.
     pub world: Rectangle,
     /// Device pixels per world pixel inside it: the canvas's times
-    /// `LOUPE_ZOOM`, on the nearest whole-block scale, so every block is
-    /// whole device pixels.
+    /// `builder_loupe_zoom`, on the nearest whole-block scale, so every
+    /// block is whole device pixels.
     pub device_scale: f32,
     /// The cell under the finger's drag - the one a stroke paints, the
     /// corner a selection stretches to - outlined in it.
@@ -1097,7 +1086,7 @@ impl MapEditor {
     /// from the top -, sized like play's minimap (`MinimapRules::size_pt`)
     /// and never more than half that room either way; its plate is
     /// `Corners::plate` round it. `None` at FIT on an arena, where it would
-    /// show what the canvas shows and the canvas draws as it always has.
+    /// show just what the canvas shows.
     pub fn navigator_rect(&self, frame: &BuilderFrame) -> Option<Rectangle> {
         if self.camera.is_fit() && self.map.class() == crate::framing::MapClass::Arena {
             return None;
@@ -2597,16 +2586,17 @@ impl MapEditor {
     }
 
     /// Pan and zoom the canvas onto `cells` (docs/large-maps-patterns.md):
-    /// their bounds, grown to at least `LINT_JUMP_CONTEXT_CELLS` about
-    /// their middle and by a cell all round, fitted into the part of the
-    /// canvas the CHECK panel leaves free and centred there - on the
-    /// canvas's middle when no panel is open. Never past the largest zoom,
-    /// and FIT where the whole field already shows them that big. A finding
-    /// with no cells moves nothing.
+    /// their bounds, grown to at least `builder_lint_jump_cols` x
+    /// `builder_lint_jump_rows` cells about their middle and by a cell all
+    /// round, fitted into the part of the canvas the CHECK panel leaves
+    /// free and centred there - on the canvas's middle when no panel is
+    /// open. Never past the largest zoom, and FIT where the whole field
+    /// already shows them that big. A finding with no cells moves nothing.
     pub fn frame_cells(&mut self, cells: &[LintCell], frame: &BuilderFrame) {
         let Some(bounds) = crate::maplint::cells_bounds(cells) else { return };
+        let rules = CanvasRules::current();
         let cell = crate::OBSTACLE_GRID_SIZE;
-        let (min_w, min_h) = (LINT_JUMP_CONTEXT_CELLS.0 * cell, LINT_JUMP_CONTEXT_CELLS.1 * cell);
+        let (min_w, min_h) = (rules.jump_context_cells.0 * cell, rules.jump_context_cells.1 * cell);
         let middle = Vec2::new(bounds.x + bounds.width / 2.0, bounds.y + bounds.height / 2.0);
         let (w, h) = ((bounds.width + 2.0 * cell).max(min_w), (bounds.height + 2.0 * cell).max(min_h));
         let free = self.free_canvas(frame);
@@ -2620,7 +2610,7 @@ impl MapEditor {
             (area.x + area.w / 2.0 - (free.x + free.width / 2.0)) / scale,
             (area.y + area.h / 2.0 - (free.y + free.height / 2.0)) / scale,
         );
-        self.camera.set(Vec2::new(middle.x + shift.x, middle.y + shift.y), scale, &vp, &CanvasRules::current());
+        self.camera.set(Vec2::new(middle.x + shift.x, middle.y + shift.y), scale, &vp, &rules);
     }
 
     /// The part of the canvas area the CHECK panel leaves free, in bitmap
@@ -3150,20 +3140,22 @@ impl MapEditor {
     /// (`gesture::Gestures::painting` - a mouse never does), where a cell
     /// is drawn under `builder_loupe_cell_mm` on the glass. It shows the
     /// cell under the finger's drag (`finger_cell`) and what is round it,
-    /// `LOUPE_ZOOM` times larger on the nearest whole-block scale, in a
-    /// square of about `LOUPE_PT` UI points a side standing clear of the
-    /// finger (`loupe_rect`), on the canvas and inside the safe area - of
-    /// the canvas point the stroke paints under, which held past the
-    /// canvas's edge is the nearest point of it, as edge scroll paints. Its
-    /// side is whole 2 px blocks of the world and its corner a whole device
-    /// pixel, so no block in it is cut or uneven.
+    /// `builder_loupe_zoom` times larger on the nearest whole-block scale,
+    /// in a square of about `LOUPE_PT` UI points a side standing
+    /// `builder_loupe_lift_pt` clear of the finger (`loupe_rect`), on the
+    /// canvas and inside the safe area - of the canvas point the stroke
+    /// paints under, which held past the canvas's edge is the nearest point
+    /// of it, as edge scroll paints. Its side is whole 2 px blocks of the
+    /// world and its corner a whole device pixel, so no block in it is cut
+    /// or uneven.
     pub fn loupe(&self, frame: &BuilderFrame) -> Option<Loupe> {
         let (cell, erase) = self.finger_cell().filter(|_| self.gestures.painting())?;
         let finger = self.stroke_pointer?;
         let layout = &frame.layout;
         let vp = self.viewport_in(layout);
         let scale = self.camera.scale(&vp);
-        if !(vp.cell_mm(scale) < CanvasRules::current().loupe_cell_mm) {
+        let rules = CanvasRules::current();
+        if !(vp.cell_mm(scale) < rules.loupe_cell_mm) {
             return None;
         }
         let f = layout.field;
@@ -3176,12 +3168,12 @@ impl MapEditor {
         // Device pixels per UI point: the loupe's corner and side are whole
         // ones.
         let device = frame.device_per_point(vp.screen.device_per_px);
-        let device_scale = camera::nearest_whole_block((vp.device_scale(scale) * LOUPE_ZOOM).max(camera::MIN_WHOLE_BLOCK_SCALE));
+        let device_scale = camera::nearest_whole_block((vp.device_scale(scale) * rules.loupe_zoom).max(camera::MIN_WHOLE_BLOCK_SCALE));
         let block = crate::pyro::BLOCK;
         let blocks = (LOUPE_PT * device / (device_scale * block)).floor().max(1.0);
         let world_side = blocks * block;
         let side = world_side * device_scale / device;
-        let rect = loupe_rect(finger, side, LOUPE_LIFT_PT, area);
+        let rect = loupe_rect(finger, side, rules.loupe_lift_pt, area);
         let snap = |v: f32, lo: f32, hi: f32| {
             let lo = (lo * device).ceil();
             let hi = ((hi * device).floor()).max(lo);
@@ -4230,8 +4222,8 @@ mod editor_tests {
         assert_eq!(MapFile::from_toml_str(&text).unwrap().cell(3, 3), Some(&CellObject::Water));
     }
 
-    /// The builder on the standard arena in the window its bitmap always
-    /// had - the field under a 32 pt bar, a unit a point, no touch: the
+    /// The builder on the standard arena in a window just its size under a
+    /// 32 pt bar (`BuilderFrame::headless`), a unit a point, no touch: the
     /// canvas at (0, 32) at its own size, the bar along the top.
     fn arena() -> BuilderFrame {
         BuilderFrame::headless((W, H), MapClass::Arena)
@@ -4418,7 +4410,8 @@ mod editor_tests {
         // The pen and what is round it all show, left of the panel.
         let vp = ed.viewport();
         let scale = ed.camera().scale(&vp);
-        assert!(LINT_JUMP_CONTEXT_CELLS.0 * 32.0 * scale <= free.width + 1.0, "{scale}");
+        let context = CanvasRules::of(&crate::tuning::Tuning::DEFAULT).jump_context_cells;
+        assert!(context.0 * 32.0 * scale <= free.width + 1.0, "{scale}");
         // Closing the panel keeps the mark; an edit lets it go.
         let canvas = canvas_at(&frame, 40.0, 300.0);
         click(&mut ed, &frame, canvas);
@@ -5031,8 +5024,8 @@ mod editor_tests {
     }
 
     /// On an arena at FIT the canvas is the whole map, so there is no
-    /// navigator and a press in the corner paints its cell as it always
-    /// did; zoomed in, the corner is the navigator's.
+    /// navigator and a press in the corner paints its cell; zoomed in, the
+    /// corner is the navigator's.
     #[test]
     fn the_navigator_is_hidden_at_fit_on_an_arena() {
         let frame = arena();
@@ -5184,7 +5177,7 @@ mod editor_tests {
             let finger = frame.to_ui(to);
             let device = frame.device_per_point(vp.screen.device_per_px);
             assert!((device - 3.0).abs() < 1e-3, "{ui:?}: {device}");
-            assert!(r.y + r.height <= finger.y - LOUPE_LIFT_PT + 1.0 / device + 1e-3, "{ui:?}: above the finger: {r:?} {finger:?}");
+            assert!(r.y + r.height <= finger.y - rules.loupe_lift_pt + 1.0 / device + 1e-3, "{ui:?}: above the finger: {r:?} {finger:?}");
             assert!((r.x + r.width / 2.0 - finger.x).abs() <= 0.5 / device + 1e-3, "{ui:?}: centred over it: {r:?}");
             let c = frame.canvas_ui();
             let a = ui.area;
@@ -5220,7 +5213,7 @@ mod editor_tests {
             let from = frame.ui.to_window(Vec2::new(edge.x - 100.0, edge.y));
             hold_stroke(&mut ed, &frame, from, frame.ui.to_window(edge));
             let r = ed.loupe(&frame).expect("a loupe at the edge").rect;
-            assert!(r.x + r.width <= edge.x - LOUPE_LIFT_PT + 1.0 / device + 1e-3, "{ui:?}: left of the finger: {r:?} for {edge:?}");
+            assert!(r.x + r.width <= edge.x - rules.loupe_lift_pt + 1.0 / device + 1e-3, "{ui:?}: left of the finger: {r:?} for {edge:?}");
             hold_fingers(&mut ed, &frame, &[Vec::new()]);
         }
     }
@@ -6926,8 +6919,8 @@ mod file_tests {
     const W: f32 = DEFAULT_SCREEN_WIDTH as f32;
     const H: f32 = DEFAULT_SCREEN_HEIGHT as f32;
 
-    /// The builder on the standard arena in the window its bitmap always
-    /// had, a unit a point.
+    /// The builder on the standard arena in a window just its size under a
+    /// 32 pt bar (`BuilderFrame::headless`), a unit a point.
     fn arena() -> BuilderFrame {
         BuilderFrame::headless((W, H), MapClass::Arena)
     }

@@ -2006,6 +2006,15 @@ tunables! {
         /// little onto whole blocks), so a stroke after a zooming tap
         /// still has it. Touch only; 0 never shows it.
         builder_loupe_cell_mm: f32 = 12.0 in 0.0 ..= 30.0;
+        /// The loupe's magnification over the canvas, before it is put on
+        /// the nearest whole-block scale (`MapEditor::loupe`): the cell a
+        /// finger paints and part of each of its neighbours, larger than
+        /// the finger leaves them.
+        builder_loupe_zoom: f32 = 1.5 in 1.0 ..= 4.0;
+        /// How far the loupe stands off the point under a painting finger,
+        /// in points: above it, clear of the fingertip - or beside it near
+        /// the canvas's right edge and where there is no room above.
+        builder_loupe_lift_pt: f32 = 44.0 in 0.0 ..= 160.0;
         /// Edge scroll: a stroke whose pointer comes within this many
         /// points of the canvas's edge scrolls the view toward that edge
         /// while it is held, so a long wall needs no pan in the middle.
@@ -2016,6 +2025,14 @@ tunables! {
         builder_edge_scroll_pt_per_s: f32 = 600.0 in 0.0 ..= 4000.0;
         /// How fast a held arrow key pans the canvas, in points per second.
         builder_key_pan_pt_per_s: f32 = 800.0 in 0.0 ..= 4000.0;
+        /// What the CHECK panel's jump to a finding shows round its cells
+        /// at least, in cells across (`MapEditor::frame_cells`): a one-cell
+        /// finding is seen in its surroundings rather than filling the
+        /// canvas.
+        builder_lint_jump_cols: f32 = 14.0 in 2.0 ..= 64.0;
+        /// What the CHECK panel's jump to a finding shows round its cells
+        /// at least, in cells down (`builder_lint_jump_cols` across).
+        builder_lint_jump_rows: f32 = 9.0 in 2.0 ..= 64.0;
         /// The most cells one FILL changes (`editor::brush::flood`): a
         /// fill that would take more is refused, the status line saying
         /// so, rather than flooding a 250 x 250 map in one frame when it

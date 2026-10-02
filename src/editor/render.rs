@@ -1231,9 +1231,9 @@ fn draw_pager(d: &mut impl RaylibDraw, row: Rectangle, hint: &str, back: bool, n
 }
 
 /// Where a bar icon is drawn in `zone`, a button or a category button's
-/// icon half: with a mouse the 32 pt icon box the bar has always had, `x`
-/// in from the zone's left; on a touch screen a 40 pt one centred in it,
-/// so the sprite is drawn its own 32 pt (`draw_tool_icon` insets by 4).
+/// icon half: with a mouse a 32 pt icon box, `x` in from the zone's left;
+/// on a touch screen a 40 pt one centred in it, so the sprite is drawn its
+/// own 32 pt (`draw_tool_icon` insets by 4).
 fn icon_rect(zone: Rectangle, touch: bool, x: f32) -> Rectangle {
     let side = if touch { ICON_PX + 8.0 } else { ICON_PX };
     let left = if touch { zone.x + (zone.width - side) / 2.0 } else { zone.x + x };
@@ -1940,8 +1940,8 @@ mod bar_tests {
 
     /// A category button's icon and caret, with a mouse and on a touch
     /// screen: the icon inside the icon half, the caret clear of it and
-    /// inside the button's drawn box, at the 34 pt a desktop's bar has
-    /// always drawn it at with a mouse.
+    /// inside the button's drawn box, at the 34 pt a desktop's bar draws
+    /// it at with a mouse.
     #[test]
     fn a_category_buttons_icon_and_caret_stay_in_their_halves() {
         for touch in [false, true] {

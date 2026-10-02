@@ -4,10 +4,10 @@
 //!
 //! - **FIT** shows the whole map. On an arena the canvas's bitmap is the
 //!   field (`chrome::BuilderFrame`, as the round draws it), so FIT is the
-//!   field at its own size - `Camera::whole`, the very picture the builder
-//!   drew before it had a camera. A field map's bitmap is made to the shape
-//!   of the window under the bar instead (`chrome::canvas_frame`), and FIT
-//!   shrinks the map into it, centred.
+//!   field at its own size - `Camera::whole`, the very picture a round
+//!   draws of it. A field map's bitmap is made to the shape of the window
+//!   under the bar instead (`chrome::canvas_frame`), and FIT shrinks the
+//!   map into it, centred.
 //! - **Zoom and pan** go from FIT to a cell of `builder_zoom_max_cell_pt`
 //!   points. The view never leaves the field on an axis the map fills,
 //!   and centres it on an axis it does not. Where the screen is coarse
@@ -70,12 +70,19 @@ pub struct CanvasRules {
     pub tap_zoom_cell_mm: f32,
     /// `builder_loupe_cell_mm`: under this a painting finger gets a loupe.
     pub loupe_cell_mm: f32,
+    /// `builder_loupe_zoom`: the loupe's magnification over the canvas.
+    pub loupe_zoom: f32,
+    /// `builder_loupe_lift_pt`: how far the loupe stands off the finger.
+    pub loupe_lift_pt: f32,
     /// `builder_edge_scroll_pt`: the margin a stroke scrolls the view in.
     pub edge_scroll_pt: f32,
     /// `builder_edge_scroll_pt_per_s`: how fast, at the very edge.
     pub edge_scroll_pt_per_s: f32,
     /// `builder_key_pan_pt_per_s`: how fast a held arrow key pans.
     pub key_pan_pt_per_s: f32,
+    /// `builder_lint_jump_cols`/`_rows`: what a jump to a finding shows
+    /// round it at least, in cells across and down.
+    pub jump_context_cells: (f32, f32),
 }
 
 impl CanvasRules {
@@ -94,9 +101,12 @@ impl CanvasRules {
             paint_min_cell_mm: t.builder_paint_min_cell_mm,
             tap_zoom_cell_mm: t.builder_tap_zoom_cell_mm,
             loupe_cell_mm: t.builder_loupe_cell_mm,
+            loupe_zoom: t.builder_loupe_zoom,
+            loupe_lift_pt: t.builder_loupe_lift_pt,
             edge_scroll_pt: t.builder_edge_scroll_pt,
             edge_scroll_pt_per_s: t.builder_edge_scroll_pt_per_s,
             key_pan_pt_per_s: t.builder_key_pan_pt_per_s,
+            jump_context_cells: (t.builder_lint_jump_cols, t.builder_lint_jump_rows),
         }
     }
 }
@@ -209,11 +219,10 @@ impl BuilderCamera {
     }
 
     /// The view to draw and hit-test through. FIT on an arena's bitmap -
-    /// the area the field itself - is `Camera::whole`, the picture a
-    /// builder with no camera drew; everything else is a view of
-    /// `area / scale` world pixels round the centre, its corner on the
-    /// block grid and the rest a shift of whole device pixels
-    /// (`Camera::following`).
+    /// the area the field itself - is `Camera::whole`, the picture a round
+    /// draws of the field; everything else is a view of `area / scale`
+    /// world pixels round the centre, its corner on the block grid and the
+    /// rest a shift of whole device pixels (`Camera::following`).
     pub fn view(&self, vp: &Viewport) -> Camera {
         let scale = self.scale(vp);
         if self.is_fit() && (scale - 1.0).abs() < EPS && vp.area == vp.field {
@@ -480,9 +489,9 @@ mod camera_tests {
         (a - b).abs() < 1e-3
     }
 
-    /// FIT on an arena's own bitmap is the camera a builder with no camera
-    /// drew through; on a field map's area it is the whole map, centred on
-    /// the axis it does not fill.
+    /// FIT on an arena's own bitmap is `Camera::whole`, the camera a round
+    /// draws the field through; on a field map's area it is the whole map,
+    /// centred on the axis it does not fill.
     #[test]
     fn fit_is_the_whole_field_and_the_arenas_own_picture() {
         let arena = vp(STANDARD, STANDARD, 1.5, true);
