@@ -204,6 +204,29 @@ pub fn log_screen_geometry(rl: &mut sola_raylib::RaylibHandle) {
     }
 }
 
+/// The window's safe area as insets from each edge, in points - the
+/// strips the Dynamic Island or the notch, the rounded corners and the
+/// home indicator take (`hud::UiFrame`). Read every frame: turning the
+/// phone over swaps the island's side. `None` when SDL has no answer.
+pub fn safe_area_insets(rl: &mut sola_raylib::RaylibHandle) -> Option<crate::hud::Insets> {
+    // SAFETY: main thread, after InitWindow; the rect is ours.
+    let safe = unsafe {
+        let window = rl.get_window_handle();
+        let mut safe = SdlRect { x: 0, y: 0, w: 0, h: 0 };
+        if window.is_null() || !SDL_GetWindowSafeArea(window, &mut safe) || safe.w <= 0 || safe.h <= 0 {
+            return None;
+        }
+        safe
+    };
+    let (w, h) = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+    Some(crate::hud::Insets {
+        left: safe.x as f32,
+        top: safe.y as f32,
+        right: (w - (safe.x + safe.w) as f32).max(0.0),
+        bottom: (h - (safe.y + safe.h) as f32).max(0.0),
+    })
+}
+
 /// The screen in points, landscape, read from SDL before raylib's
 /// InitWindow: the SDL backend never re-reads the window size, so the
 /// size InitWindow is asked for is the one it renders at. `SDL_Init` is

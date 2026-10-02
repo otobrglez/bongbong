@@ -33,7 +33,7 @@ use sola_raylib::prelude::{RaylibHandle, RaylibTexture2D, RaylibThread, RenderTe
 
 use crate::ai::Intent;
 use crate::editor::{BuilderInput, Category, CellChange, MapEditor, Tool, parse_mission, parse_spawn, parse_tank, parse_tier};
-use crate::hud::{leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects, restart_button_rect};
+use crate::hud::{leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects, restart_button_rect, UiFrame};
 use crate::map::MapFile;
 use crate::maplint::LintSeverity;
 use crate::mode::{Driver, Session};
@@ -781,6 +781,11 @@ pub struct DevServer {
     /// over (`publish_camera`): what `status.camera` reports, and the
     /// bitmap a `click` lands on. `None` in a server with no window.
     drawn: Option<CameraReport>,
+    /// The window's UI frame for the frame it drew last
+    /// (`publish_ui`): what `status.ui` reports and what a `click` on the
+    /// chrome is measured in. `None` in a server with no window, which
+    /// lays the chrome out in the bitmap's own size (`UiFrame::plain`).
+    drawn_ui: Option<UiFrame>,
 }
 
 /// A view the `camera` tool pinned: the world point at its centre and how
@@ -837,6 +842,7 @@ impl DevServer {
             shown_frame: None,
             camera: None,
             drawn: None,
+            drawn_ui: None,
         }
     }
 
@@ -857,6 +863,12 @@ impl DevServer {
     /// on its bitmap.
     pub fn publish_camera(&mut self, report: CameraReport) {
         self.drawn = Some(report);
+    }
+
+    /// The window's UI frame for the frame it is drawing, handed over once
+    /// a frame like the camera: `status.ui` reports it.
+    pub fn publish_ui(&mut self, ui: UiFrame) {
+        self.drawn_ui = Some(ui);
     }
 
     /// The bitmap a `click` lands on: the one the window drew last, while
@@ -896,6 +908,16 @@ impl DevServer {
             self.camera = Some(CameraPin { center: Vec2::new(x.unwrap_or(pin.center.x), y.unwrap_or(pin.center.y)), zoom });
         }
         Ok(self.camera_json(session, field))
+    }
+
+    /// `status.ui`: the UI frame the window last drew its chrome in - the
+    /// UI scale (window units per point), the window and the safe area the
+    /// chrome keeps to, both in points, and whether it is laid out for
+    /// touch. `null` with no window drawn yet.
+    fn ui_json(&self) -> Value {
+        let Some(ui) = self.drawn_ui else { return Value::Null };
+        let rect = |r: crate::Rect| json!({ "x": r.x, "y": r.y, "w": r.w, "h": r.h });
+        json!({ "scale": ui.scale, "screen": rect(ui.screen), "area": rect(ui.area), "touch": ui.touch })
     }
 
     /// `status.camera` and the `camera` tool's reply: the view in force -
@@ -1263,6 +1285,7 @@ impl DevServer {
             "map": map_json(&game.map),
             "weather": weather_json(game),
             "camera": self.camera_json(session, (width, height)),
+            "ui": self.ui_json(),
             "mode": session.mode().name(),
             "language": crate::text::language(),
             "dialog_open": session.dialog,

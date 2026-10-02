@@ -2362,6 +2362,23 @@ tunables! {
         indicator_thumb_up_mm: f32 = 18.0 in 0.0 ..= 80.0;
     }
 
+    group ui {
+        /// How large the chrome is drawn - the corner clusters, the
+        /// banners, the dialogs, the end screen, the lobby and the level
+        /// select - in points: at 1 a 12 pt label is 12 points tall on a
+        /// phone, a tablet and a monitor alike, whatever scale the world is
+        /// drawn at (`hud::UiFrame`, docs/large-maps-follow-camera.md
+        /// section 8). A window too small for the chrome at this size draws
+        /// it smaller, to fit.
+        ui_scale: f32 = 1.0 in 0.5 ..= 3.0;
+        /// A corner cluster drops to this opacity while a tank, a shot or
+        /// a blast is under it, so the HUD never hides the fight ...
+        ui_fade_opacity: f32 = 0.35 in 0.0 ..= 1.0;
+        /// ... moving there, and back once the fight has passed, over this
+        /// many seconds. 0 snaps.
+        ui_fade_seconds: f32 = 0.25 in 0.0 ..= 2.0;
+    }
+
     group fx {
         /// One multiplier on every effect that touches the whole screen -
         /// the kill flash, the shockwave ripple's bend, the camera shake

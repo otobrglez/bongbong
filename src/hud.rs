@@ -28,7 +28,7 @@
 //! *this* player's; a couch round keeps the one- and two-player tables
 //! and only goes compact from three.
 
-use crate::math::{Color, Rectangle};
+use crate::math::{Color, Rectangle, Vec2};
 
 use crate::simulation::{with_frog, with_tank, Game, RollIn, RoundStats};
 use crate::tank::{ActiveWeapon, Tank};
@@ -339,6 +339,113 @@ pub fn weapon_color(weapon: ActiveWeapon) -> Color {
         ActiveWeapon::Missiles => HUD_MISSILES_COLOR,
         ActiveWeapon::Flamethrower => HUD_FLAME_COLOR,
         ActiveWeapon::Shell => TEXT,
+    }
+}
+
+// ---- the window the chrome is laid out in ----------------------------------
+
+/// The least room the chrome keeps inside the window's safe area, on every
+/// side, in points: nothing sits flush against the glass's edge, a rounded
+/// corner or the strip a notch leaves.
+pub const UI_EDGE_PT: f32 = 8.0;
+
+/// The smallest area, in points, the chrome is laid out for: the lobby's
+/// and the level select's 704 x 336 panel with `UI_EDGE_PT` round it. A
+/// safe area smaller than this - an iPhone SE is 667 points across - draws
+/// every piece of chrome smaller by one factor (`UiFrame::new`) rather than
+/// off its edge, which keeps a 48 pt button over 44 pt down to a safe area
+/// 660 points across.
+pub const UI_MIN_W: f32 = crate::lobby::LOBBY_W + 2.0 * UI_EDGE_PT;
+pub const UI_MIN_H: f32 = crate::lobby::LOBBY_H + 2.0 * UI_EDGE_PT;
+
+/// The smallest text the chrome sets, in points: over the 11 pt Apple's
+/// guidance holds text on a phone to.
+pub const UI_SMALL_TEXT: i32 = 12;
+
+/// The least side of a touch target on a touch screen, in points (Apple's
+/// 44 pt; Android's 48 dp is what the dialogs' and the panels' 48 pt
+/// buttons already are).
+pub const UI_TOUCH_PT: f32 = 44.0;
+
+/// A window's safe area as its insets from each edge, in the window's own
+/// units: the strips a notch, a Dynamic Island, rounded corners and a home
+/// indicator take, which no chrome may sit under. Zero where the platform
+/// keeps the window clear of them itself.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Insets {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+/// The window as the chrome lays itself out in it
+/// (docs/large-maps-follow-camera.md §8): how many of the window's units a
+/// UI point is - the UI scale every piece of chrome is drawn at, never the
+/// world's -, the window in those points and the area inside its safe area
+/// the chrome keeps to. Every rect a chrome painter draws and a hit test
+/// reads is in these points; `to_ui` takes a pointer there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UiFrame {
+    /// Window units per UI point.
+    pub scale: f32,
+    /// The whole window in UI points, from (0, 0): what a dim covers.
+    pub screen: Rect,
+    /// Where the chrome lays itself out: the safe area, `UI_EDGE_PT` in
+    /// from each of its edges.
+    pub area: Rect,
+    /// A touch screen is in use (no keyboard, `--touch-from-mouse`, or a
+    /// touch seen): every button is at least `UI_TOUCH_PT` on both sides.
+    pub touch: bool,
+}
+
+impl UiFrame {
+    /// The frame for a window of `window` units, `units_per_point` of them
+    /// to the point (one where the window is laid out in points or CSS
+    /// pixels, the screen's density over 160 on Android), its safe area
+    /// `insets` in from the edges, drawn `knob` (`ui_scale`) times a point
+    /// - and smaller, where `UI_MIN_W` x `UI_MIN_H` of those would not fit
+    /// the safe area. A window, a scale or an inset that is not a number is
+    /// read as one unit, one, or none.
+    pub fn new(window: (f32, f32), units_per_point: f32, knob: f32, insets: Insets, touch: bool) -> UiFrame {
+        let positive = |v: f32| if v.is_finite() && v > 0.0 { v } else { 1.0 };
+        let inset = |v: f32| if v.is_finite() { v.max(0.0) } else { 0.0 };
+        let (w, h) = (positive(window.0), positive(window.1));
+        let (left, top) = (inset(insets.left), inset(insets.top));
+        let safe_w = (w - left - inset(insets.right)).max(1.0);
+        let safe_h = (h - top - inset(insets.bottom)).max(1.0);
+        let unit = positive(units_per_point) * positive(knob);
+        let fit = (safe_w / (unit * UI_MIN_W)).min(safe_h / (unit * UI_MIN_H)).min(1.0);
+        let scale = unit * fit;
+        let area = Rect::new(
+            left / scale + UI_EDGE_PT,
+            top / scale + UI_EDGE_PT,
+            (safe_w / scale - 2.0 * UI_EDGE_PT).max(0.0),
+            (safe_h / scale - 2.0 * UI_EDGE_PT).max(0.0),
+        );
+        UiFrame { scale, screen: Rect::new(0.0, 0.0, w / scale, h / scale), area, touch }
+    }
+
+    /// A window of `size` units, a unit a point, nothing inset and no
+    /// touch: what the chrome is laid out in where there is no window - a
+    /// dev server running headless, a test.
+    pub fn plain(size: (f32, f32)) -> UiFrame {
+        UiFrame::new(size, 1.0, 1.0, Insets::default(), false)
+    }
+
+    /// A window position (a pointer) in UI points.
+    pub fn to_ui(&self, window: Vec2) -> Vec2 {
+        Vec2::new(window.x / self.scale, window.y / self.scale)
+    }
+
+    /// A UI point's window position.
+    pub fn to_window(&self, ui: Vec2) -> Vec2 {
+        Vec2::new(ui.x * self.scale, ui.y * self.scale)
+    }
+
+    /// A rectangle in UI points as the window's.
+    pub fn rect_to_window(&self, r: Rectangle) -> Rectangle {
+        Rectangle::new(r.x * self.scale, r.y * self.scale, r.width * self.scale, r.height * self.scale)
     }
 }
 
@@ -903,6 +1010,55 @@ mod hud_tests {
                 }
             }
         }
+    }
+
+    /// The UI scale is the window's points times the knob: a monitor and a
+    /// browser draw a point a unit, Android a dp its density in pixels, and
+    /// the chrome keeps `UI_EDGE_PT` inside the safe area on every side.
+    #[test]
+    fn the_ui_frame_is_the_window_in_points_inside_its_safe_area() {
+        let desktop = UiFrame::new((1920.0, 1080.0), 1.0, 1.0, Insets::default(), false);
+        assert_eq!(desktop.scale, 1.0);
+        assert_eq!(desktop.screen, Rect::new(0.0, 0.0, 1920.0, 1080.0));
+        assert_eq!(desktop.area, Rect::new(UI_EDGE_PT, UI_EDGE_PT, 1920.0 - 2.0 * UI_EDGE_PT, 1080.0 - 2.0 * UI_EDGE_PT));
+        // An iPhone 15 in landscape: the Dynamic Island's strip on one
+        // side, the rounded corners' on the other, the home indicator's at
+        // the bottom - the chrome stays inside all three.
+        let phone = UiFrame::new((852.0, 393.0), 1.0, 1.0, Insets { left: 59.0, top: 0.0, right: 59.0, bottom: 21.0 }, true);
+        assert_eq!(phone.scale, 1.0, "a 734 x 372 point safe area holds the chrome at full size");
+        assert_eq!(phone.area, Rect::new(59.0 + UI_EDGE_PT, UI_EDGE_PT, 734.0 - 2.0 * UI_EDGE_PT, 372.0 - 2.0 * UI_EDGE_PT));
+        // A Pixel at 2.625: its window is in pixels and a point is a dp.
+        let android = UiFrame::new((2400.0, 1080.0), 2.625, 1.0, Insets::default(), true);
+        assert!((android.scale - 2.625).abs() < 1e-6);
+        assert!((android.screen.w - 2400.0 / 2.625).abs() < 1e-3 && (android.screen.h - 1080.0 / 2.625).abs() < 1e-3);
+        // The knob multiplies, where the window has the room.
+        let big = UiFrame::new((1920.0, 1080.0), 1.0, 1.5, Insets::default(), false);
+        assert_eq!(big.scale, 1.5);
+        assert_eq!(big.screen, Rect::new(0.0, 0.0, 1280.0, 720.0));
+        // A pointer round-trips.
+        let p = Vec2::new(300.0, 170.0);
+        let back = big.to_window(big.to_ui(p));
+        assert!((back.x - p.x).abs() < 1e-4 && (back.y - p.y).abs() < 1e-4);
+        assert_eq!(big.rect_to_window(Rectangle::new(10.0, 20.0, 30.0, 40.0)), Rectangle::new(15.0, 30.0, 45.0, 60.0));
+    }
+
+    /// A safe area too small for the chrome draws it smaller to fit rather
+    /// than off the glass: an iPhone SE's 667 points take it to 0.93, which
+    /// leaves the panels' 48 pt buttons over Apple's 44 pt; a knob past
+    /// what a phone holds is held back by the same fit.
+    #[test]
+    fn a_window_too_small_for_the_chrome_draws_it_smaller_to_fit() {
+        let se = UiFrame::new((667.0, 375.0), 1.0, 1.0, Insets::default(), true);
+        assert!((se.scale - 667.0 / UI_MIN_W).abs() < 1e-6, "{se:?}");
+        assert!(se.area.w >= crate::lobby::LOBBY_W - 1e-3 && se.area.h >= crate::lobby::LOBBY_H - 1e-3, "the panels fit: {se:?}");
+        assert!(48.0 * se.scale >= UI_TOUCH_PT, "a 48 pt button is {} points", 48.0 * se.scale);
+        let zoomed = UiFrame::new((852.0, 393.0), 1.0, 2.0, Insets { left: 59.0, top: 0.0, right: 59.0, bottom: 21.0 }, true);
+        assert!(zoomed.area.w >= crate::lobby::LOBBY_W - 1e-3 && zoomed.area.h >= crate::lobby::LOBBY_H - 1e-3, "{zoomed:?}");
+        // Nonsense in, a finite frame out.
+        let odd = UiFrame::new((f32::NAN, 0.0), f32::INFINITY, -1.0, Insets { left: f32::NAN, top: -5.0, right: 0.0, bottom: 0.0 }, false);
+        assert!(odd.scale.is_finite() && odd.scale > 0.0, "{odd:?}");
+        assert!(odd.area.w.is_finite() && odd.area.h.is_finite() && odd.area.x.is_finite());
+        assert_eq!(UiFrame::plain((1088.0, 544.0)), UiFrame::new((1088.0, 544.0), 1.0, 1.0, Insets::default(), false));
     }
 
     #[test]

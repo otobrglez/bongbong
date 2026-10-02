@@ -121,6 +121,23 @@ fn window_units_per_point(_rl: &RaylibHandle) -> f32 {
     units
 }
 
+/// The window as the chrome lays itself out in it (`hud::UiFrame`): its
+/// size, the window units a point is (`window_units_per_point`), the
+/// `ui_scale` knob and the safe area - read from SDL on iOS, whose window
+/// covers the whole screen, the Dynamic Island and the rounded corners
+/// included; none elsewhere, since Android's NativeActivity keeps a
+/// landscape window out of the cutout and the web page pads the canvas
+/// with `env(safe-area-inset-*)`. `touch` is whether thumbs are on the
+/// glass, which makes every button a finger's size.
+fn ui_frame(rl: &mut RaylibHandle, touch: bool) -> crate::hud::UiFrame {
+    let window = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+    #[cfg(target_os = "ios")]
+    let insets = ios::safe_area_insets(rl).unwrap_or_default();
+    #[cfg(not(target_os = "ios"))]
+    let insets = crate::hud::Insets::default();
+    crate::hud::UiFrame::new(window, window_units_per_point(rl), tuning().ui_scale, insets, touch)
+}
+
 /// This window as the framing rules see it (`framing::Screen`,
 /// docs/large-maps-follow-camera.md §3): its size in points, the device
 /// pixels a point is (raylib's window scale DPI), how dense they are and,
@@ -1481,6 +1498,16 @@ pub fn run(args: Args) {
         if !crate::EMBEDDED && rl.is_key_pressed(KeyboardKey::KEY_F11) {
             rl.toggle_borderless_windowed();
         }
+        // The window the chrome lays itself out in (`hud::UiFrame`): its
+        // size in points, its safe area, and whether thumbs are on the
+        // glass - a build with no keyboard, `--touch-from-mouse`, or a
+        // touch seen this session.
+        let touch_screen = !crate::KEYBOARD_AVAILABLE || touch_from_mouse || touch.seen();
+        let ui = ui_frame(rl, touch_screen);
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        if let Some(dev) = &mut dev {
+            dev.publish_ui(ui);
+        }
         // Then land any tuning edits staged since last frame (dev panel
         // via capi.rs, the `--tuning` file watch, or the dev server)
         // before the simulation reads the table, so a frame never sees two
@@ -1982,17 +2009,22 @@ pub fn run(args: Args) {
             awareness.observe_events(game, &seats);
         }
         let indicators = (matches!(session.mode(), Driver::Play | Driver::Online) && !camera.shows_whole_field()).then(|| {
-            // The bitmap's pixels to a point of the window, so an arrow is
-            // its rows' size on the glass however the bitmap is scaled.
-            let points = window_units_per_point(rl) / view.scale;
+            // The bitmap's pixels to a UI point, so an arrow is its rows'
+            // size on the glass however the bitmap is scaled, at the scale
+            // the rest of the chrome is drawn at.
+            let points = ui.scale / view.scale;
             let t = crate::indicators::in_points(&tuning(), points);
             let field = crate::math::Rectangle::new(layout.field.x, layout.field.y, layout.field.w, layout.field.h);
             let mut frame = crate::indicators::ViewFrame::of_camera(&camera, field, &t);
-            if !crate::KEYBOARD_AVAILABLE || touch_from_mouse || touch.seen() {
+            if touch_screen {
+                // The thumbs are where they are on the glass, whatever the
+                // UI scale: their pads are measured in the window's own
+                // points.
                 let corner = view.to_bitmap(crate::math::Vec2::zero());
                 let far = view.to_bitmap(crate::math::Vec2::new(view.window.0, view.window.1));
                 let screen = crate::math::Rectangle::new(corner.x, corner.y, far.x - corner.x, far.y - corner.y);
-                frame.keep_out.extend(crate::indicators::thumb_rests(screen, points, &t));
+                let physical = window_units_per_point(rl) / view.scale;
+                frame.keep_out.extend(crate::indicators::thumb_rests(screen, physical, &t));
             }
             awareness.picture(game, &seats, &frame, points)
         });
