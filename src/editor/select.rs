@@ -260,10 +260,16 @@ pub fn shipped_stamps() -> Vec<Stamp> {
     SHIPPED_STAMPS.iter().filter_map(|&(name, text)| stamp_of(name, text).ok()).collect()
 }
 
-/// One stamp file read: its map's cells inside its `size`.
+/// One stamp file read: its map's cells inside its `size`, which may be
+/// smaller than a map to play (`MapFile::from_toml_str_any_size`) but no
+/// larger, and at least a cell each way.
 fn stamp_of(name: &'static str, text: &str) -> Result<Stamp, String> {
-    let map = MapFile::from_toml_str(text)?;
+    let map = MapFile::from_toml_str_any_size(text)?;
     let (cols, rows) = map.size.ok_or_else(|| format!("stamp {name} has no size"))?;
+    let fits = |side: f32| side.is_finite() && (1.0..=map::MAX_SIDE_CELLS).contains(&side);
+    if !(fits(cols) && fits(rows)) {
+        return Err(format!("stamp {name}'s size = [{cols}, {rows}] is no extent"));
+    }
     let rect = CellRect { col: 0, row: 0, cols: cols.ceil() as i32, rows: rows.ceil() as i32 };
     Ok(Stamp { source: StampSource::Shipped(name), clip: Clip::of(&map, rect) })
 }

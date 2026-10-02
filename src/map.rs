@@ -689,13 +689,7 @@ impl MapFile {
     /// `maps/*.toml` from disk via `load` - only the game's built-in
     /// fallback needed to stop depending on that.
     pub fn from_toml_str(text: &str) -> Result<Self, String> {
-        let map: MapFile = toml::from_str(text).map_err(|e| format!("{e}"))?;
-        if map.version > CURRENT_VERSION {
-            return Err(format!(
-                "map is version {}, newer than this build supports ({CURRENT_VERSION})",
-                map.version
-            ));
-        }
+        let map = Self::from_toml_str_any_size(text)?;
         if let Some((cols, rows)) = map.size {
             if !(cols.is_finite() && rows.is_finite() && cols <= MAX_SIDE_CELLS && rows <= MAX_SIDE_CELLS) {
                 return Err(format!("size = [{cols}, {rows}] is past the largest map, {MAX_SIDE_CELLS} cells a side"));
@@ -703,6 +697,22 @@ impl MapFile {
             if cols < MIN_SIDE_CELLS || rows < MIN_SIDE_CELLS {
                 return Err(format!("size = [{cols}, {rows}] is under the smallest map, {MIN_SIDE_CELLS} cells a side"));
             }
+        }
+        Ok(map)
+    }
+
+    /// The map in `text`, its version checked and its `size` taken as
+    /// written: what a builder stamp is read with (`editor::select`), whose
+    /// `size` is its own extent rather than a field's, so a playable map's
+    /// bounds do not hold it. Everything that plays a map reads it through
+    /// `from_toml_str`.
+    pub fn from_toml_str_any_size(text: &str) -> Result<Self, String> {
+        let map: MapFile = toml::from_str(text).map_err(|e| format!("{e}"))?;
+        if map.version > CURRENT_VERSION {
+            return Err(format!(
+                "map is version {}, newer than this build supports ({CURRENT_VERSION})",
+                map.version
+            ));
         }
         Ok(map)
     }
@@ -1229,6 +1239,8 @@ cells."10,5" = { kind = "portal" }
             assert!(err.contains("smallest map"), "{size}: {err}");
         }
         assert!(MapFile::from_toml_str("version = 1\nsize = [8, 8]\n").is_ok());
+        // A builder stamp's size is its own extent, read without the bound.
+        assert_eq!(MapFile::from_toml_str_any_size("version = 1\nsize = [6, 5]\n").unwrap().size, Some((6.0, 5.0)));
         for (name, text) in SHIPPED_MAPS {
             let (w, h) = MapFile::from_toml_str(text).unwrap().field_size();
             assert!(w / OBSTACLE_GRID_SIZE >= MIN_SIDE_CELLS && h / OBSTACLE_GRID_SIZE >= MIN_SIDE_CELLS, "{name}");
