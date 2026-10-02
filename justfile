@@ -70,6 +70,31 @@ probe-waves:
 probe-fixtures:
     for m in maps/test/*.toml; do cargo run --bin probe -- --map $m --frames 1800 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=6 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=2 --budget offbox-fire=0 || exit 1; done
 
+# Field maps (docs/large-maps-follow-camera.md section 12): the rules only
+# a map the camera follows plays by (`simulation::field`) - alerts chained
+# from neighbour to neighbour with leashes home, far enemies thinking every
+# few ticks or asleep, band spawns and wave gates out of every seat's
+# sight box and about a 15 s walk out where the map has one, a wave called
+# to the fight, a fallen seat back through the gate nearest its team. The
+# 96 x 54 study map and the five 40-wide levels, AFK, at a pinned seed;
+# the maps/test/ fixtures stay arenas (`view = "whole"`), so this is where
+# a change to the field-map AI shows. Ceilings are each kind's maximum over
+# the six maps, recorded 2026-10-02 - re-baseline consciously, never to go
+# green: border-stuck=3 is hedge-maze (enemies spawned in the maze's lanes
+# along its top and bottom edge, which they drive for their first
+# seconds); jitter=23 is harbor-lights (enemies weaving along the road
+# between its building blocks to the player's side of the river - the
+# arena's rules read 12 there, with the band spawning beside the player);
+# spin=5, churn=20, clustering=6 and pile-up=6 are archipelago (a Hunt whose
+# hunters and guards crowd the frogs' islands; the arena's rules read 5,
+# 16, 10 and 8). The study map reads border-stuck=1 jitter=7 churn=17 and
+# meets the fight about 13 s in, where the arena's rules read jitter=16
+# churn=22 clustering=3 pile-up=3 and walked a wave tank to the fight for
+# up to 47 s. Prints first contact and ms per tick beside the anomalies.
+# Not in CI: about three minutes in a debug build.
+probe-fields:
+    for m in maps/study/frontier.toml maps/hedge-maze.toml maps/archipelago.toml maps/black-gold.toml maps/harbor-lights.toml maps/castle-moat.toml; do cargo run --bin probe -- --map $m --frames 3600 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=3 --budget jitter=23 --budget spin=5 --budget churn=20 --budget clustering=6 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=6 --budget offbox-fire=0 || exit 1; done
+
 run:
     cargo run
 
