@@ -468,6 +468,14 @@ pub struct MapFile {
     /// `DEFAULT_SCREEN_HEIGHT`, so older files parse unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<(f32, f32)>,
+    /// The clear check's stamp (TOML: a `[cleared]` table the builder's
+    /// SAVE writes): the revision of this map its author won from the
+    /// builder's plain PLAY, and the par. It counts only while it names the
+    /// map's own revision (`cleared_par`) - a map edited since, by hand or
+    /// in the builder, is a new revision nobody has won. Absent, and not
+    /// written back, until a revision is cleared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleared: Option<Cleared>,
     /// Where this map came from, for display only: the file stem when
     /// `load` read it, `"default"` for the embedded map, `None` for text
     /// handed over directly (the dev server's inline `map_toml`). Never
@@ -523,9 +531,80 @@ impl MapFile {
             mission: MissionConfig::default(),
             spawn: SpawnConfig::default(),
             size: None,
+            cleared: None,
             name: None,
         }
     }
+
+    /// The map's revision (docs/large-maps-patterns.md, "Clear check
+    /// before sharing"): a 64-bit FNV-1a hash of its TOML in one canonical
+    /// form - every table's keys sorted, the clear stamp left out, since
+    /// it names a revision and cannot be part of one, and the display name
+    /// with it, which is never written. The same map is the same revision
+    /// in every build and on every platform, and any edit to a cell or a
+    /// setting is another one.
+    pub fn revision(&self) -> u64 {
+        let text = toml::Value::try_from(self)
+            .ok()
+            .and_then(|mut value| {
+                if let Some(table) = value.as_table_mut() {
+                    table.remove("cleared");
+                }
+                toml::to_string(&value).ok()
+            })
+            .unwrap_or_default();
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in text.bytes() {
+            hash ^= b as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash
+    }
+
+    /// The par this map's stamp holds for it, in seconds: `None` without a
+    /// stamp or with one for another revision.
+    pub fn cleared_par(&self) -> Option<f64> {
+        let stamp = self.cleared.as_ref()?;
+        (stamp.revision == revision_text(self.revision())).then_some(stamp.par)
+    }
+
+    /// Whether a room may be given this map, by the clear check: one of
+    /// `SHIPPED_MAPS` as it ships - what the lobby's own HOST sends by
+    /// name - or a map whose stamp says it was won as it stands
+    /// (`cleared_par`).
+    pub fn hostable(&self) -> bool {
+        self.cleared_par().is_some() || shipped_revisions().contains(&self.revision())
+    }
+}
+
+/// The clear check's stamp in a map file (`MapFile::cleared`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Cleared {
+    /// The revision that was won (`MapFile::revision`), as 16 hex digits.
+    pub revision: String,
+    /// The par: the round clock when it was won, in seconds to a tenth.
+    pub par: f64,
+}
+
+impl Cleared {
+    /// The stamp for `revision` won in `par` seconds.
+    pub fn new(revision: u64, par: f64) -> Cleared {
+        Cleared { revision: revision_text(revision), par }
+    }
+}
+
+/// A revision as a stamp spells it: 16 lowercase hex digits.
+pub fn revision_text(revision: u64) -> String {
+    format!("{revision:016x}")
+}
+
+/// The revisions of `SHIPPED_MAPS` as they ship, worked out once.
+fn shipped_revisions() -> &'static [u64] {
+    static REVISIONS: std::sync::OnceLock<Vec<u64>> = std::sync::OnceLock::new();
+    REVISIONS.get_or_init(|| SHIPPED_MAPS.iter().filter_map(|(_, text)| MapFile::from_toml_str(text).ok()).map(|map| map.revision()).collect())
+}
+
+impl MapFile {
 
     /// The battlefield size in world pixels this map asks for: `size`
     /// times the cell, or the default field when the map names none.
@@ -1122,5 +1201,89 @@ cells."8,4" = { kind = "water" }
         let map = MapFile::load(Path::new("maps/test/choke.toml")).unwrap();
         assert_eq!(map.name.as_deref(), Some("choke"));
         assert_eq!(map.tanks, Some(4));
+    }
+
+    /// A revision is the map and nothing else: the order its cells went in,
+    /// its display name and its stamp are no part of it, the TOML it
+    /// writes reads back as the same revision, and any edit to a cell or a
+    /// setting is another.
+    #[test]
+    fn a_revision_is_the_map_and_nothing_else() {
+        let mut a = MapFile::new();
+        a.set_cell(3, 4, CellObject::Start);
+        a.set_cell(10, 2, CellObject::Wall { material: Material::Brick });
+        a.set_cell(2, 10, CellObject::Frog);
+        let mut b = MapFile::new();
+        b.set_cell(2, 10, CellObject::Frog);
+        b.set_cell(10, 2, CellObject::Wall { material: Material::Brick });
+        b.set_cell(3, 4, CellObject::Start);
+        assert_eq!(a.revision(), b.revision(), "the order the cells went in");
+        b.name = Some("mine".into());
+        b.cleared = Some(Cleared::new(7, 12.5));
+        assert_eq!(a.revision(), b.revision(), "the name and the stamp");
+        let back = MapFile::from_toml_str(&a.to_toml_string().unwrap()).unwrap();
+        assert_eq!(back.revision(), a.revision(), "read back from its TOML");
+        let mut edited = a.clone();
+        edited.set_cell(5, 5, CellObject::Gate);
+        assert_ne!(edited.revision(), a.revision(), "a cell placed");
+        let mut edited = a.clone();
+        edited.set_cell(10, 2, CellObject::Wall { material: Material::Iron });
+        assert_ne!(edited.revision(), a.revision(), "a cell changed");
+        let mut edited = a.clone();
+        edited.tanks = Some(3);
+        assert_ne!(edited.revision(), a.revision(), "a setting");
+        let mut edited = a.clone();
+        edited.size = Some((40.0, 22.5));
+        assert_ne!(edited.revision(), a.revision(), "the size");
+        assert_eq!(revision_text(a.revision()).len(), 16);
+    }
+
+    /// The clear check's stamp counts for the revision it names and no
+    /// other, rides the TOML both ways, and is what lets a map of one's own
+    /// be hosted; a shipped map as it ships needs none, and an edited one
+    /// is a map of one's own.
+    #[test]
+    fn a_stamp_counts_for_its_own_revision_only() {
+        let mut map = MapFile::new();
+        map.set_cell(3, 8, CellObject::Start);
+        assert_eq!(map.cleared_par(), None);
+        assert!(!map.hostable(), "nobody has won it");
+        map.cleared = Some(Cleared::new(map.revision(), 83.4));
+        assert_eq!(map.cleared_par(), Some(83.4));
+        assert!(map.hostable());
+        let text = map.to_toml_string().unwrap();
+        assert!(text.contains("[cleared]") && text.contains("par = 83.4"), "{text}");
+        let back = MapFile::from_toml_str(&text).unwrap();
+        assert_eq!(back.cleared_par(), Some(83.4), "read back");
+        let mut edited = back.clone();
+        edited.set_cell(6, 6, CellObject::Gate);
+        assert_eq!(edited.cleared_par(), None, "an edit since: a revision nobody has won");
+        assert!(!edited.hostable());
+        let plain = MapFile::new();
+        assert!(!plain.to_toml_string().unwrap().contains("cleared"), "no stamp is written until there is one");
+        for (name, text) in SHIPPED_MAPS {
+            let shipped = MapFile::from_toml_str(text).unwrap();
+            assert!(shipped.hostable(), "{name} as it ships");
+            let mut changed = shipped.clone();
+            changed.set_cell(1, 1, CellObject::Gate);
+            assert!(!changed.hostable(), "{name} edited");
+        }
+    }
+
+    /// What a revision costs on the 96 x 54 study map - the builder works
+    /// one out after each edit it shows the clear check of:
+    /// `cargo test --lib a_revision_of_the_study_map_timing -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn a_revision_of_the_study_map_timing() {
+        let map = MapFile::load(Path::new("maps/study/frontier.toml")).unwrap();
+        let runs = 20;
+        let start = std::time::Instant::now();
+        let mut last = 0;
+        for _ in 0..runs {
+            last = std::hint::black_box(&map).revision();
+        }
+        let ms = start.elapsed().as_secs_f64() * 1000.0 / runs as f64;
+        println!("frontier: {} cells, revision {} in {ms:.2} ms", map.cells.len(), revision_text(last));
     }
 }

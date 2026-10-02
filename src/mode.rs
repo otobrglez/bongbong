@@ -143,6 +143,17 @@ pub struct Session {
     /// the hit tests and the dev server read one geometry. False where no
     /// window does (a test, a headless tool).
     pub minimap_on: bool,
+    /// The clear check (docs/large-maps-patterns.md, "Clear check before
+    /// sharing"): the revision of the builder's canvas (`MapFile::revision`)
+    /// its plain `PLAY` started the local round on. A win on that revision,
+    /// played as the map is authored (`note_outcome`), clears it in the
+    /// builder. `PLAY HERE`, a level started, another map or seat count
+    /// put in the round's place take it away: those rounds clear nothing.
+    pub clear_attempt: Option<u64>,
+    /// Whether the local round's win has been put to the clear check: once,
+    /// on the first frame of the win; a round seen playing again lets the
+    /// next win be put.
+    clear_noted: bool,
 }
 
 /// A session reads as its round: the dev server, its tests and `main.rs`
@@ -182,6 +193,8 @@ impl Session {
             level_select: None,
             play_view: None,
             minimap_on: false,
+            clear_attempt: None,
+            clear_noted: false,
         }
     }
 
@@ -213,6 +226,7 @@ impl Session {
         self.builder.open(map.clone());
         self.game.map = map;
         self.game.start_override = None;
+        self.clear_attempt = None;
         self.sync_level();
         self.dialog = false;
         self.players_dialog = false;
@@ -250,16 +264,44 @@ impl Session {
         }
     }
 
-    /// Count a won level as progress. Called after every frame's steps:
-    /// only the first call after a win moves anything, and
-    /// `take_progress` hands the move to the store. A round started from
-    /// the builder's spot (`play_here`) is a test and wins nothing.
+    /// Count a won level as progress and put a win to the clear check.
+    /// Called after every frame's steps: only the first call after a win
+    /// moves anything, and `take_progress` hands the move to the store. A
+    /// round started from the builder's spot (`play_here`) is a test and
+    /// wins nothing.
     pub fn note_outcome(&mut self) {
-        if self.game.outcome() != Outcome::Won || self.game.start_override.is_some() {
-            return;
+        match self.game.outcome() {
+            Outcome::Playing => self.clear_noted = false,
+            Outcome::Lost => {}
+            Outcome::Won if self.game.start_override.is_some() => {}
+            Outcome::Won => {
+                if let (Some(i), Some(campaign)) = (self.level(), self.campaign.as_mut()) {
+                    campaign.won(i);
+                }
+                if !std::mem::replace(&mut self.clear_noted, true) {
+                    self.note_clear();
+                }
+            }
         }
-        if let (Some(i), Some(campaign)) = (self.level(), self.campaign.as_mut()) {
-            campaign.won(i);
+    }
+
+    /// The clear check on a win: the revision `PLAY` started the round on
+    /// (`clear_attempt`) is cleared when the round is that revision played
+    /// as the map is authored - one seat, the map's own start, no enemy
+    /// count, mission, spawn plan or chassis from the command line or a
+    /// tool - and its par is the round clock at the win. The builder keeps
+    /// it (`MapEditor::note_clear`), the best par of its wins.
+    fn note_clear(&mut self) {
+        let Some(revision) = self.clear_attempt else { return };
+        let game = &self.game;
+        let authored = game.players == PlayerCount::ONE
+            && game.start_override.is_none()
+            && game.enemy_count_override.is_none()
+            && game.level_overrides == crate::level::LevelOverrides::default()
+            && game.player_row_override.is_none();
+        if authored && game.map.revision() == revision {
+            let seconds = game.round_stats().seconds as f64;
+            self.builder.note_clear(revision, seconds);
         }
     }
 
@@ -489,6 +531,7 @@ impl Session {
             self.players_dialog = false;
             if count != self.game.players {
                 self.game.players = count;
+                self.clear_attempt = None;
                 let (width, height) = self.game.map.field_size();
                 self.game.init(width, height);
             }
@@ -498,8 +541,9 @@ impl Session {
 
     /// `PLAY` from the builder: the edited map becomes the round's map and
     /// a fresh round starts from the map's own start (a `--seed` stays
-    /// pinned, the mission banner shows as on any restart). A no-op in
-    /// play mode.
+    /// pinned, the mission banner shows as on any restart); a win in it
+    /// clears the canvas's revision (`clear_attempt`). A no-op in play
+    /// mode.
     pub fn play(&mut self) -> Driver {
         if self.driver == Driver::Build {
             // A menu left open would still be there on the next BUILD.
@@ -511,6 +555,9 @@ impl Session {
             }
             self.sync_level();
             self.game.start_override = None;
+            // The canvas carries no stamp, so the round's map is the
+            // builder's revision.
+            self.clear_attempt = Some(self.builder.revision());
             let (width, height) = self.game.map.field_size();
             self.game.init(width, height);
             self.driver = Driver::Play;
@@ -536,6 +583,7 @@ impl Session {
         let vp = self.builder.viewport();
         let near = self.builder.camera().center(&vp);
         self.play();
+        self.clear_attempt = None;
         if let Some(cell) = play_here_cell(&self.game, near) {
             // The same round as the one just set up, its start moved: the
             // seed it drew is pinned for the one `init` and given back.
@@ -773,6 +821,7 @@ impl Session {
     pub fn replace_map(&mut self, map: MapFile) {
         self.game.map = map.clone();
         self.game.start_override = None;
+        self.clear_attempt = None;
         self.builder.load(map);
         self.sync_level();
     }
@@ -1486,6 +1535,122 @@ mod session_tests {
         assert!(s.game.start_override.is_some());
         finish(&mut s, true);
         assert_eq!(s.take_progress(), None, "a test from a spot wins no level");
+    }
+
+    /// A builder session on the open field with one enemy by the map's
+    /// own `tanks` - no override - and the round clock running from the
+    /// first frame, so a win from PLAY is a clear.
+    fn clear_session() -> Session {
+        let mut map = open_field();
+        map.tanks = Some(1);
+        let mut game = Game::default();
+        game.seed_override = Some(7);
+        game.show_intro = false;
+        game.map = map;
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        let mut s = Session::new(game);
+        s.driver = Driver::Build;
+        s
+    }
+
+    fn tenth(seconds: f32) -> f64 {
+        (seconds as f64 * 10.0).round() / 10.0
+    }
+
+    /// The clear check: a win in the round PLAY started, played as the map
+    /// is authored, clears the canvas's revision with the round clock as
+    /// its par; the round started again is still that attempt, a quicker
+    /// win lowers the par and a slower one leaves it.
+    #[test]
+    fn a_win_from_plain_play_clears_the_revision_with_its_par() {
+        let mut s = clear_session();
+        let revision = s.builder.revision();
+        assert_eq!(s.builder.par(), None);
+        s.play();
+        assert_eq!(s.clear_attempt, Some(revision));
+        for _ in 0..90 {
+            step(&mut s);
+        }
+        finish(&mut s, true);
+        let first = s.game.round_stats().seconds;
+        assert!(first > 1.0, "{first}");
+        assert_eq!(s.builder.par(), Some(tenth(first)), "cleared, the clock its par");
+        for _ in 0..30 {
+            step(&mut s);
+        }
+        assert_eq!(s.builder.par(), Some(tenth(first)), "the end screen notes it once");
+        s.play_again();
+        for _ in 0..30 {
+            step(&mut s);
+        }
+        finish(&mut s, true);
+        let quicker = s.game.round_stats().seconds;
+        assert!(quicker < first);
+        assert_eq!(s.builder.par(), Some(tenth(quicker)), "the best win is the par");
+        s.play_again();
+        for _ in 0..150 {
+            step(&mut s);
+        }
+        finish(&mut s, true);
+        assert_eq!(s.builder.par(), Some(tenth(quicker)), "a slower win leaves it");
+        // BUILD shows it, and the map SAVE would write carries it.
+        s.press_build();
+        assert_eq!(s.driver, Driver::Build);
+        assert_eq!(s.builder.map_to_save().cleared_par(), Some(tenth(quicker)));
+    }
+
+    /// What clears nothing: a win from PLAY HERE, with a second seat, with
+    /// an enemy count from the command line, in a round PLAY did not start
+    /// or after a loss; and an edit since PLAY - a win on the round's
+    /// revision clears the revision that was won, never the edited canvas,
+    /// which an undo back finds cleared.
+    #[test]
+    fn only_a_revision_won_as_authored_is_cleared() {
+        let mut s = clear_session();
+        s.play_here();
+        assert_eq!(s.clear_attempt, None);
+        finish(&mut s, true);
+        assert_eq!(s.builder.par(), None, "a test from a spot");
+
+        let mut s = clear_session();
+        s.game.players = PlayerCount::TWO;
+        s.play();
+        finish(&mut s, true);
+        assert_eq!(s.builder.par(), None, "two seats");
+
+        let mut s = clear_session();
+        s.game.enemy_count_override = Some(1);
+        s.play();
+        finish(&mut s, true);
+        assert_eq!(s.builder.par(), None, "an enemy count from the command line");
+
+        let mut s = clear_session();
+        s.driver = Driver::Play;
+        finish(&mut s, true);
+        assert_eq!(s.builder.par(), None, "a round PLAY did not start");
+
+        let mut s = clear_session();
+        s.play();
+        finish(&mut s, false);
+        assert_eq!(s.builder.par(), None, "a loss");
+
+        let mut s = clear_session();
+        let won = s.builder.revision();
+        s.play();
+        s.press_build();
+        s.answer_dialog(true);
+        s.builder.stroke(&[(20, 5)], false);
+        assert_ne!(s.builder.revision(), won);
+        // A tool's restart: the round PLAY started, on its own map.
+        s.driver = Driver::Play;
+        let (w, h) = s.game.map.field_size();
+        s.game.init(w, h);
+        finish(&mut s, true);
+        assert_eq!(s.builder.par(), None, "the edited canvas is not what was won");
+        s.builder.undo();
+        assert_eq!(s.builder.revision(), won);
+        assert!(s.builder.par().is_some(), "the revision that was won is cleared");
     }
 
     #[test]

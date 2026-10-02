@@ -143,6 +143,7 @@ status-waiting = { $room } { $code } - SEDEŽ { $seat }{ $rtt } - ČAKANJE NA SO
 status-offline = { $room } - BREZ POVEZAVE: { $reason }
 note-tuning-refused = nastavitve sobe niso bile sprejete: { $detail }
 note-welcome-refused = igre v sobi ni bilo mogoče zgraditi: { $detail }
+note-not-cleared = ta zemljevid še ni preigran: zmagaj ga z IGRAJ v graditelju, nato ga shrani
 
 ## Zavrnitve strežnika
 
@@ -184,6 +185,11 @@ check-title = PREGLED ZEMLJEVIDA
 check-hint = Izberi težavo, da jo vidiš na zemljevidu. POPRAVI naredi spremembo, ki jo terja.
 check-none = NI TEŽAV
 check-fix = POPRAVI
+check-cleared = PREIGRANO
+check-not-cleared = ŠE NI PREIGRANO
+check-par = ČAS AVTORJA { $time }
+check-cleared-hint = Zmagan z IGRAJ, tak kot je. Vsaka sprememba je nova različica.
+check-not-cleared-hint = Zmagaj ga z IGRAJ, sam in brez sprememb, da ga lahko gostiš v sobi.
 
 lint-unreachable-frog = ŽABA JE NEDOSEGLJIVA
 lint-unreachable-pickup = BONUS JE NEDOSEGLJIV

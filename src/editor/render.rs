@@ -618,6 +618,7 @@ impl MapEditor {
         // CHECK, in the accent while its panel is open.
         let check_color = if matches!(self.popup, Some(Popup::Lint { .. })) { BUILD_ACCENT } else { TEXT };
         draw_small_button(d, Self::check_rect(layout), &text().get(keys::EDITOR_CHECK), check_color);
+        draw_clear_readout(d, Self::clear_rect(layout), self.par());
 
         let _ = cursor; // the readout is the field's status line, see `render`
         // PLAY HERE beside PLAY, in PLAY's amber.
@@ -773,6 +774,7 @@ impl MapEditor {
         let left = (header.x + LINT_TEXT_INSET) as i32;
         d.draw_text(&t.get(keys::CHECK_TITLE), left, (header.y + 8.0) as i32, LINT_TITLE_SIZE, TEXT);
         d.draw_text(&t.get(keys::CHECK_HINT), left, (header.y + 30.0) as i32, HUD_LABEL_SIZE, DIM);
+        self.draw_clear_row(d, Self::lint_row_rect(panel, 1));
         let Some(report) = &self.lint else { return };
         // The counts at the header's right end, errors first.
         let mut x = header.x + header.width - LINT_TEXT_INSET;
@@ -789,14 +791,14 @@ impl MapEditor {
             x -= LINT_COUNT_GAP;
         }
         if report.findings.is_empty() {
-            let row = Self::lint_row_rect(panel, 1);
+            let row = Self::lint_row_rect(panel, LINT_HEAD_ROWS);
             let y = (row.y + (row.height - LINT_TITLE_SIZE as f32) / 2.0) as i32;
             d.draw_text(&t.get(keys::CHECK_NONE), left, y, LINT_TITLE_SIZE, LINT_CLEAN);
             return;
         }
         let page = page.min(Self::lint_pages(len) - 1);
         for (slot, (index, finding)) in report.findings.iter().enumerate().skip(page * LINT_PAGE_ROWS).take(LINT_PAGE_ROWS).enumerate() {
-            let row = Self::lint_row_rect(panel, 1 + slot);
+            let row = Self::lint_row_rect(panel, LINT_HEAD_ROWS + slot);
             if self.lint_marked == Some(index) {
                 let inset = Rectangle::new(row.x + 4.0, row.y + 2.0, row.width - 8.0, row.height - 4.0);
                 d.draw_rectangle_rounded(inset, 0.2, EDITOR_PANEL_SEGMENTS, Color::new(255, 255, 255, 40));
@@ -817,7 +819,7 @@ impl MapEditor {
         }
         if len > LINT_PAGE_ROWS {
             // The pager, as the Load list draws its own.
-            let pager = Self::lint_row_rect(panel, 1 + LINT_PAGE_ROWS);
+            let pager = Self::lint_row_rect(panel, LINT_HEAD_ROWS + LINT_PAGE_ROWS);
             let last = Self::lint_pages(len) - 1;
             let arrow_y = (pager.y + (pager.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
             d.draw_text("<", pager.x as i32 + 16, arrow_y, HUD_TEXT_SIZE, if page > 0 { TEXT } else { DIM });
@@ -829,6 +831,29 @@ impl MapEditor {
             let hint_x = pager.x + (pager.width - text_width(&hint, HUD_LABEL_SIZE)) / 2.0;
             d.draw_text(&hint, hint_x as i32, (pager.y + (pager.height - HUD_LABEL_SIZE as f32) / 2.0) as i32, HUD_LABEL_SIZE, DIM);
         }
+    }
+
+    /// The CHECK panel's clear check row: the flag, whether this revision
+    /// of the canvas is cleared and, when it is, its par at the row's
+    /// right end; under them what clearing means; a faint rule under the
+    /// row, above the findings.
+    fn draw_clear_row(&self, d: &mut impl RaylibDraw, row: Rectangle) {
+        let t = text();
+        let par = self.par();
+        draw_flag(d, row.x + LINT_TEXT_INSET, row.y + 9.0, par.is_some());
+        let words_x = (row.x + LINT_TEXT_INSET + LINT_MARK + 8.0) as i32;
+        let (title, color, hint) = match par {
+            Some(_) => (keys::CHECK_CLEARED, LINT_CLEAN, keys::CHECK_CLEARED_HINT),
+            None => (keys::CHECK_NOT_CLEARED, LINT_WARNING, keys::CHECK_NOT_CLEARED_HINT),
+        };
+        d.draw_text(&t.get(title), words_x, (row.y + 8.0) as i32, LINT_TITLE_SIZE, color);
+        if let Some(par) = par {
+            let line = t.fmt(keys::CHECK_PAR, &[("time", crate::hud::clock_text(par as f32).into())]);
+            let x = row.x + row.width - LINT_TEXT_INSET - text_width(&line, LINT_TITLE_SIZE);
+            d.draw_text(&line, x as i32, (row.y + 8.0) as i32, LINT_TITLE_SIZE, TEXT);
+        }
+        d.draw_text(&t.get(hint), words_x, (row.y + 30.0) as i32, HUD_LABEL_SIZE, DIM);
+        d.draw_rectangle((row.x + 8.0) as i32, (row.y + row.height - 2.0) as i32, (row.width - 16.0) as i32, 2, Color::new(255, 255, 255, 30));
     }
 
     /// The finding the CHECK panel picked, on the canvas in world pixels:
@@ -904,6 +929,35 @@ fn severity_color(severity: LintSeverity) -> Color {
 fn draw_severity_mark(d: &mut impl RaylibDraw, x: f32, y: f32, severity: LintSeverity) {
     d.draw_rectangle(x as i32, y as i32, LINT_MARK as i32, LINT_MARK as i32, severity_color(severity));
     d.draw_rectangle(x as i32 + 4, y as i32 + 4, 4, 4, Color::new(0, 0, 0, 120));
+}
+
+/// The clear check's flag: a pole and a chequered finish flag of whole
+/// 2 px blocks, 10 x 14 from (`x`, `y`) - green once the canvas's
+/// revision is cleared, dim while it is not.
+fn draw_flag(d: &mut impl RaylibDraw, x: f32, y: f32, cleared: bool) {
+    let color = if cleared { LINT_CLEAN } else { DIM };
+    let shade = Color::new(color.r, color.g, color.b, 80);
+    let (x, y) = (x as i32, y as i32);
+    d.draw_rectangle(x, y, 2, 14, color);
+    for row in 0..3 {
+        for col in 0..4 {
+            let block = if (row + col) % 2 == 0 { color } else { shade };
+            d.draw_rectangle(x + 2 + col * 2, y + row * 2, 2, 2, block);
+        }
+    }
+}
+
+/// The clear check's readout in the bar (`MapEditor::clear_rect`): the
+/// flag and, once the canvas's revision is cleared, its par beside it -
+/// numbers only, so no language has to fit there.
+fn draw_clear_readout(d: &mut impl RaylibDraw, rect: Rectangle, par: Option<f64>) {
+    let y = rect.y + ((rect.height - 14.0) / 2.0).floor();
+    draw_flag(d, rect.x + 2.0, y, par.is_some());
+    if let Some(par) = par {
+        let label = crate::hud::clock_text(par as f32);
+        let text_y = (rect.y + (rect.height - HUD_LABEL_SIZE as f32) / 2.0) as i32;
+        d.draw_text(&label, (rect.x + 16.0) as i32, text_y, HUD_LABEL_SIZE, TEXT);
+    }
 }
 
 /// Where a finding is, as its row says it: the map cell under its first
@@ -1349,7 +1403,10 @@ mod bar_tests {
         assert!(SLOT_FILE + MAP_BUTTON_W <= SLOT_MAP);
         assert!(SLOT_MAP + MAP_BUTTON_W <= SLOT_FIT);
         assert!(SLOT_FIT + SMALL_BUTTON_W <= SLOT_CHECK, "FIT runs into CHECK");
-        assert!(SLOT_CHECK + CHECK_W <= SLOT_HERE, "CHECK runs into PLAY HERE");
+        assert!(SLOT_CHECK + CHECK_W <= SLOT_CLEAR, "CHECK runs into the clear check's readout");
+        // The flag and the longest par the readout writes, 59:59.
+        assert!(16.0 + crate::text::width("59:59", HUD_LABEL_SIZE) as f32 <= CLEAR_W, "the par overflows its readout");
+        assert!(SLOT_CLEAR + CLEAR_W <= SLOT_HERE, "the clear check's readout runs into PLAY HERE");
         let layout = Layout::for_field(W, H);
         let play = mode_button_rect(layout.panel);
         assert!(SLOT_HERE + HERE_W <= play.x, "PLAY HERE runs into PLAY");

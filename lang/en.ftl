@@ -204,6 +204,8 @@ status-waiting = { $room } { $code } - SEAT { $seat }{ $rtt } - WAITING FOR THE 
 status-offline = { $room } - OFFLINE: { $reason }
 note-tuning-refused = the room's tuning was refused: { $detail }
 note-welcome-refused = the room's round could not be built: { $detail }
+# `--host -m` on a map nobody has won as it stands.
+note-not-cleared = this map is not cleared: win it from PLAY in the builder, then save it
 
 ## What the room server refused, and why (net::wire::Refusal). Shown
 ## under the lobby's title or on the status line. `{ $detail }` is the
@@ -259,6 +261,14 @@ check-title = MAP CHECK
 check-hint = Pick a problem to see it on the map. FIX makes the change it asks for.
 check-none = NO PROBLEMS FOUND
 check-fix = FIX
+# The clear check's row in the panel: whether this revision of the map has
+# been won from PLAY, its par (the clear time, m:ss) and what clearing
+# means, 10 px under them.
+check-cleared = CLEARED
+check-not-cleared = NOT CLEARED
+check-par = PAR { $time }
+check-cleared-hint = Won from PLAY as it stands. An edit is a new revision to clear.
+check-not-cleared-hint = Win it from PLAY, alone, with no edits since, to host it in a room.
 
 # What the map linter found, one line per finding in the CHECK panel, 16 px
 # beside its mark and before its FIX button (about 28 letters). The key is

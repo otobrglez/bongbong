@@ -155,7 +155,7 @@ const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"inte
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|split|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `split` of a couch pair apart (null for one view: the divider's `line` - a point and the unit normal into the second half in the followed bitmap's pixels - and `window_line`, how far `apart` the halves' views stand and each half's `seat`, `rect`, `offset`, `cut` and `in_view`), the `establishing` shot's `phase` (whole|zoom|follow) and `progress` (view `establishing` while it plays), the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`; and `motion`, the one motion switch - whether motion is `reduced` (no shake, no whole-screen ripple, the establishing shot cut rather than zoomed), the `reduce_motion` row's `setting` (platform|off|on) and what the `platform` said at startup, null where it says nothing), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, in play and online the corners' `buttons` and `clusters` and the `minimap` picture under the right cluster (`null` where none is drawn - an arena shown whole, a phone; a press there does nothing), and the `screen_buttons` of whatever stands over the round - the level select's open tiles (`level_N`) and `back`, a dialog's `one`/`two` or `leave`/`stay`, a level's end screen's `levels`/`again`/`next`, the lobby's live buttons (`host`, `join`, `key_a`, `confirm`, `ready`, `start`, `kick_1`, ...) - all in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state (`builder.navigator`: the navigator's picture in window coordinates for `click`, with its `bitmap` rect for `builder_touch`; `null` at FIT on an arena), and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|split|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `split` of a couch pair apart (null for one view: the divider's `line` - a point and the unit normal into the second half in the followed bitmap's pixels - and `window_line`, how far `apart` the halves' views stand and each half's `seat`, `rect`, `offset`, `cut` and `in_view`), the `establishing` shot's `phase` (whole|zoom|follow) and `progress` (view `establishing` while it plays), the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`; and `motion`, the one motion switch - whether motion is `reduced` (no shake, no whole-screen ripple, the establishing shot cut rather than zoomed), the `reduce_motion` row's `setting` (platform|off|on) and what the `platform` said at startup, null where it says nothing), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, in play and online the corners' `buttons` and `clusters` and the `minimap` picture under the right cluster (`null` where none is drawn - an arena shown whole, a phone; a press there does nothing), and the `screen_buttons` of whatever stands over the round - the level select's open tiles (`level_N`) and `back`, a dialog's `one`/`two` or `leave`/`stay`, a level's end screen's `levels`/`again`/`next`, the lobby's live buttons (`host`, `join`, `key_a`, `confirm`, `ready`, `start`, `kick_1`, ...) - all in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state (`builder.navigator`: the navigator's picture in window coordinates for `click`, with its `bitmap` rect for `builder_touch`; `null` at FIT on an arena; `builder.buttons`: the bar's buttons by name - `play`, `play_here`, `check`, `clear`, `fit`, `map`, `file`, and while the CHECK panel is open its `finding_N` rows, `fix_N` buttons and `page_back`/`page_next` - in window coordinates for `click`, each with its `bitmap` rect; `builder.check`: the CHECK panel's last report; `builder.clear`: the clear check - the canvas's `revision`, whether it is `cleared` (won from plain PLAY with no edit since) and its `par` in seconds, and the revision PLAY started the local round on (`attempt`); `builder.loupe`: the loupe over a painting finger, `null` without one), and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -1427,19 +1427,25 @@ impl DevServer {
             // `null` for a round from the map's own start.
             "play_here": session.game.start_override.map(|(c, r)| [c, r]),
             "stats": game.round_stats(),
-            "builder": {
-                "dirty": session.builder.dirty(),
-                "tool": session.builder.tool().name(),
-                "camera": builder_camera_json(&session.builder),
-                "navigator": self.navigator_json(session, width, height),
-                "buttons": self.builder_buttons_json(session, width, height),
-                "check": builder_check_json(&session.builder),
-                "loupe": self.loupe_json(session, width, height),
-            },
+            "builder": self.builder_json(session, width, height),
             "events_kept": self.events.len(),
             "next_event_seq": self.next_seq,
             "history_frames": self.history.len(),
             "turns": self.turns_summary(),
+        })
+    }
+
+    /// `status.builder`: the builder's state - see the `status` tool.
+    fn builder_json(&self, session: &Session, width: f32, height: f32) -> Value {
+        json!({
+            "dirty": session.builder.dirty(),
+            "tool": session.builder.tool().name(),
+            "camera": builder_camera_json(&session.builder),
+            "navigator": self.navigator_json(session, width, height),
+            "buttons": self.builder_buttons_json(session, width, height),
+            "check": builder_check_json(&session.builder),
+            "clear": builder_clear_json(session),
+            "loupe": self.loupe_json(session, width, height),
         })
     }
 
@@ -2329,6 +2335,23 @@ fn builder_check_json(b: &MapEditor) -> Value {
         "infos": report.count(LintSeverity::Info),
         "findings": report.findings.iter().map(lint_finding_json).collect::<Vec<_>>(),
         "marked": b.lint_marked().map(lint_finding_json),
+    })
+}
+
+/// `status.builder.clear`: the clear check (docs/large-maps-patterns.md,
+/// "Clear check before sharing") - the canvas's `revision` as a map file's
+/// stamp spells it, whether that revision is `cleared` (won from plain
+/// PLAY with no edit since) and its `par` in seconds (`null` until it is),
+/// and `attempt`, the revision the local round's PLAY started on (`null`
+/// for a round PLAY did not start - a level, PLAY HERE, a restart on
+/// another map).
+fn builder_clear_json(session: &Session) -> Value {
+    let b = &session.builder;
+    json!({
+        "revision": crate::map::revision_text(b.revision()),
+        "cleared": b.par().is_some(),
+        "par": b.par(),
+        "attempt": session.clear_attempt.map(crate::map::revision_text),
     })
 }
 
@@ -4810,6 +4833,48 @@ cells."1,1" = { kind = "wall" }"#;
         assert!(zoomed["camera"]["zoom"].as_f64().unwrap() > 2.0, "{zoomed}");
         assert!(ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [[{ "id": 1 }]] })).unwrap_err().contains("{id, x, y}"));
         assert!(ask(&mut server, &tx, &mut s, "builder_touch", json!({})).unwrap_err().contains("frames"));
+    }
+
+    /// `status.builder.clear` is the clear check as the builder keeps it:
+    /// the canvas's revision, not cleared until a win in the round its
+    /// PLAY started (`attempt`), then cleared with the round clock as its
+    /// par; and the bar's flag is a button `click` reaches, which opens
+    /// the CHECK panel.
+    #[test]
+    fn status_reports_the_clear_check_and_click_reaches_its_flag() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = Game::default();
+        game.seed_override = Some(3);
+        game.show_intro = false;
+        game.map = MapFile::from_toml_str("version = 1\ntanks = 1\ncells.\"3,8\" = { kind = \"start\" }\n").unwrap();
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        let mut s = Session::new(game);
+        enter_build(&mut server, &tx, &mut s);
+        let before = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap()["builder"]["clear"].clone();
+        assert_eq!(before["cleared"], false, "{before}");
+        assert_eq!(before["par"], Value::Null);
+        assert_eq!(before["revision"].as_str().map(str::len), Some(16), "{before}");
+        // The flag opens the CHECK panel.
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let flag = &status["builder"]["buttons"]["clear"];
+        let (x, y) = (flag["x"].as_f64().unwrap() + flag["w"].as_f64().unwrap() / 2.0, flag["y"].as_f64().unwrap() + flag["h"].as_f64().unwrap() / 2.0);
+        ask(&mut server, &tx, &mut s, "click", json!({ "x": x, "y": y })).unwrap();
+        assert_eq!(s.builder.open_menu(), Some("check"));
+        ask(&mut server, &tx, &mut s, "play", json!({})).unwrap();
+        let playing = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap()["builder"]["clear"].clone();
+        assert_eq!(playing["attempt"], before["revision"], "{playing}");
+        let enemy = s.game.world.query::<&crate::tank::Tank>().with::<&crate::ai::Ai>().iter().map(|t| t.owner_slot()).min().expect("an enemy");
+        ask(&mut server, &tx, &mut s, "kill", json!({ "slot": enemy })).unwrap();
+        for _ in 0..2 {
+            s.game.update(Input::default(), crate::PHYSICS_FIXED_DT, w, h);
+        }
+        // What `app.rs` does after every frame's steps.
+        s.note_outcome();
+        let after = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap()["builder"]["clear"].clone();
+        assert_eq!(after["cleared"], true, "{after}");
+        assert_eq!(after["revision"], before["revision"]);
+        assert!(after["par"].as_f64().is_some_and(|par| par >= 0.0), "{after}");
     }
 
     /// `builder_touch {hold: true}` leaves a painting finger down, so the

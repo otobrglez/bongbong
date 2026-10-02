@@ -43,6 +43,7 @@ pub use render::EditorTextures;
 pub use camera::{BuilderCamera, CanvasRules, CanvasScreen, Viewport};
 
 use rand::RngExt;
+use std::collections::BTreeMap;
 use crate::math::{Color, Rectangle, Vec2};
 
 use crate::ground::{self, GroundGrid};
@@ -90,17 +91,25 @@ const SLOT_FIT: f32 = 788.0;
 /// findings with a jump to each and its quick fix. A small button.
 const SLOT_CHECK: f32 = 832.0;
 const CHECK_W: f32 = 56.0;
+/// The clear check's readout, after CHECK (`MapEditor::par`): a flag, and
+/// the par beside it once the canvas's revision is cleared. A press opens
+/// the CHECK panel, which says the rest.
+const SLOT_CLEAR: f32 = 890.0;
+const CLEAR_W: f32 = 44.0;
 /// PLAY HERE, just before PLAY at the bar's right end: a round from the
 /// middle of the view rather than the map's start. A small button, wide
 /// enough for its two words.
 const SLOT_HERE: f32 = 936.0;
 const HERE_W: f32 = 68.0;
 /// The CHECK panel: as wide as a finding's title, its place and its FIX
-/// button need, and this many findings a page - a header row above them
-/// and, when there are more, a pager row below, which keeps the panel
-/// inside the standard field's 544 px on any screen.
+/// button need, and this many findings a page - the header and the clear
+/// check's row above them and, when there are more, a pager row below,
+/// which keeps the panel inside the standard field's 544 px on any screen.
 const LINT_PANEL_W: f32 = 440.0;
 const LINT_PAGE_ROWS: usize = 7;
+/// The CHECK panel's rows above its findings: the header and the clear
+/// check.
+const LINT_HEAD_ROWS: usize = 2;
 /// A finding row's FIX button, at the row's right end.
 const LINT_FIX_W: f32 = 80.0;
 /// A finding row's mark (a 12 px square) and words, inset from the row's
@@ -660,6 +669,17 @@ pub struct MapEditor {
     /// session's seed, seats and overrides (`mode::Session` refreshes it
     /// every frame).
     pub lint_setup: LintSetup,
+    /// The clear check (docs/large-maps-patterns.md, "Clear check before
+    /// sharing"): every revision of the canvas (`MapFile::revision`) this
+    /// session has seen won from plain PLAY, with its par in seconds - the
+    /// best win's - so an undo back to a cleared revision finds it cleared
+    /// again. A map that comes in with a stamp for its own revision adds
+    /// it here; the canvas itself never carries a stamp, and SAVE writes
+    /// the current revision's (`map_to_save`).
+    clears: BTreeMap<u64, f64>,
+    /// The canvas's revision with the edit count it was worked out at
+    /// (`edits`): worked out again only after an edit.
+    revision: std::cell::Cell<Option<(u64, u64)>>,
     pub cli_overrides: CliOverrides,
     /// `render` draws a flat white field instead of the ground tileset -
     /// the builder-side twin of `Game::plain_canvas`.
@@ -670,7 +690,8 @@ impl MapEditor {
     /// Seed the canvas from `map` - the map the current round was built
     /// from, which becomes the baseline. The canvas is the map's own field
     /// (`MapFile::field_size`), never the window.
-    pub fn new(map: MapFile) -> Self {
+    pub fn new(mut map: MapFile) -> Self {
+        let stamp = Self::take_stamp(&mut map);
         let current = [
             Tool::Wall(Material::Brick),
             Tool::Prop(Material::Sandbag),
@@ -708,8 +729,13 @@ impl MapEditor {
             lint: None,
             lint_marked: None,
             lint_setup: LintSetup { seed: 0xB0B5, ..LintSetup::default() },
+            clears: BTreeMap::new(),
+            revision: std::cell::Cell::new(None),
             cli_overrides: CliOverrides::default(),
         };
+        if let Some((revision, par)) = stamp {
+            editor.note_clear(revision, par);
+        }
         editor.rebuild_ground();
         editor
     }
@@ -1067,8 +1093,11 @@ impl MapEditor {
 
     /// Replace the canvas with `map` and make it the new baseline, as one
     /// undo step - the dev server's `builder_map {map_toml}`.
-    pub fn load(&mut self, map: MapFile) {
+    pub fn load(&mut self, mut map: MapFile) {
         self.finish_stroke();
+        if let Some((revision, par)) = Self::take_stamp(&mut map) {
+            self.note_clear(revision, par);
+        }
         let before = self.map.clone();
         self.map = map;
         self.baseline = self.map.clone();
@@ -1083,10 +1112,13 @@ impl MapEditor {
     /// empty undo history - the level a round has moved on to
     /// (`mode::Session::start_level`), which undo must not walk back out
     /// of into the level before. The camera starts at FIT.
-    pub fn open(&mut self, map: MapFile) {
+    pub fn open(&mut self, mut map: MapFile) {
         self.finish_stroke();
         self.popup = None;
         self.status = None;
+        if let Some((revision, par)) = Self::take_stamp(&mut map) {
+            self.note_clear(revision, par);
+        }
         self.map = map;
         self.baseline = self.map.clone();
         self.history.clear();
@@ -1362,12 +1394,67 @@ impl MapEditor {
         }
         self.finish_stroke();
         let path = map::maps_dir().join(format!("{name}.toml"));
-        self.map.save(&path)?;
+        self.map_to_save().save(&path)?;
         self.map.name = Some(name.clone());
         self.baseline = self.map.clone();
         let line = t.fmt(crate::text::keys::EDITOR_SAVED, &[("name", name.as_str().into())]);
         self.status = Some(line.clone());
         Ok(line)
+    }
+
+    // ----- the clear check -----
+
+    /// The canvas's revision (`MapFile::revision`), worked out again only
+    /// after an edit.
+    pub fn revision(&self) -> u64 {
+        match self.revision.get() {
+            Some((edits, revision)) if edits == self.edits => revision,
+            _ => {
+                let revision = self.map.revision();
+                self.revision.set(Some((self.edits, revision)));
+                revision
+            }
+        }
+    }
+
+    /// The canvas's par, in seconds, when its revision is cleared - won
+    /// from plain PLAY with no edit since (`note_clear`); `None` while it
+    /// is not, and while a stroke is being painted, which is an edit under
+    /// way: the revision is worked out once the stroke ends rather than on
+    /// every cell it paints (about 11 ms a time on the 96 x 54 study map
+    /// in a debug build). With nothing cleared this session, nothing is
+    /// worked out at all.
+    pub fn par(&self) -> Option<f64> {
+        if self.clears.is_empty() || self.stroke.is_some() {
+            return None;
+        }
+        self.clears.get(&self.revision()).copied()
+    }
+
+    /// `revision` was won from plain PLAY in `seconds` (`mode::Session`
+    /// says so): it is cleared, and its par is its best win, to a tenth.
+    pub fn note_clear(&mut self, revision: u64, seconds: f64) {
+        let par = (seconds * 10.0).round() / 10.0;
+        let best = self.clears.entry(revision).or_insert(par);
+        *best = best.min(par);
+    }
+
+    /// The canvas as SAVE writes it: carrying its revision's stamp when
+    /// that revision is cleared, so the file is proof of the win wherever
+    /// it goes - a room hosts a map the command line hands it only so
+    /// (`MapFile::hostable`).
+    pub fn map_to_save(&self) -> MapFile {
+        let mut map = self.map.clone();
+        map.cleared = self.par().map(|par| map::Cleared::new(self.revision(), par));
+        map
+    }
+
+    /// Take `map`'s stamp off it, answering the revision and par it holds
+    /// when it is the map's own revision's.
+    fn take_stamp(map: &mut MapFile) -> Option<(u64, f64)> {
+        let stamp = map.cleared.take()?;
+        let revision = map.revision();
+        (stamp.revision == map::revision_text(revision)).then_some((revision, stamp.par))
     }
 
     /// Load a map from the Load list (`map::open_map`) into the canvas as
@@ -1575,14 +1662,19 @@ impl MapEditor {
         Self::bar_button(layout.panel, SLOT_CHECK, CHECK_W)
     }
 
+    /// The clear check's readout, which opens the CHECK panel too.
+    pub(crate) fn clear_rect(layout: &Layout) -> Rectangle {
+        Self::bar_button(layout.panel, SLOT_CLEAR, CLEAR_W)
+    }
+
     /// The CHECK panel, hanging from the bar below its button and slid
-    /// left to stay on the field like the MAP panel: a header row, a page
-    /// of finding rows (one row saying there are none, when there are
-    /// none) and, past a page, the pager row.
+    /// left to stay on the field like the MAP panel: a header row, the
+    /// clear check's row, a page of finding rows (one row saying there are
+    /// none, when there are none) and, past a page, the pager row.
     fn lint_panel_rect(layout: &Layout, findings: usize) -> Rectangle {
         let button = Self::check_rect(layout);
         let paged = findings > LINT_PAGE_ROWS;
-        let rows = 1 + findings.clamp(1, LINT_PAGE_ROWS) + paged as usize;
+        let rows = LINT_HEAD_ROWS + findings.clamp(1, LINT_PAGE_ROWS) + paged as usize;
         let right = layout.field.x + layout.field.w;
         Rectangle::new(
             button.x.min(right - LINT_PANEL_W).max(layout.field.x),
@@ -1592,8 +1684,9 @@ impl MapEditor {
         )
     }
 
-    /// The CHECK panel's `index`-th row: 0 is the header, 1 to
-    /// `LINT_PAGE_ROWS` the page's findings, the one after them the pager.
+    /// The CHECK panel's `index`-th row: 0 is the header, 1 the clear
+    /// check, the next `LINT_PAGE_ROWS` the page's findings, the one after
+    /// them the pager.
     fn lint_row_rect(panel: Rectangle, index: usize) -> Rectangle {
         Rectangle::new(panel.x, panel.y + index as f32 * EDITOR_DROPDOWN_ROW_H, panel.width, EDITOR_DROPDOWN_ROW_H)
     }
@@ -1613,6 +1706,7 @@ impl MapEditor {
             ("play".to_string(), mode_button_rect(layout.panel)),
             ("play_here".to_string(), Self::here_rect(layout)),
             ("check".to_string(), Self::check_rect(layout)),
+            ("clear".to_string(), Self::clear_rect(layout)),
             ("fit".to_string(), Self::fit_rect(layout)),
             ("map".to_string(), Self::map_rect(layout)),
             ("file".to_string(), Self::file_rect(layout)),
@@ -1620,14 +1714,14 @@ impl MapEditor {
         if let (Some(Popup::Lint { page }), Some(report)) = (&self.popup, &self.lint) {
             let panel = Self::lint_panel_rect(layout, report.findings.len());
             for (i, finding) in report.findings.iter().enumerate().skip(page * LINT_PAGE_ROWS).take(LINT_PAGE_ROWS) {
-                let row = Self::lint_row_rect(panel, 1 + i - page * LINT_PAGE_ROWS);
+                let row = Self::lint_row_rect(panel, LINT_HEAD_ROWS + i - page * LINT_PAGE_ROWS);
                 out.push((format!("finding_{i}"), row));
                 if finding.fix.is_some() {
                     out.push((format!("fix_{i}"), Self::lint_fix_rect(row)));
                 }
             }
             if report.findings.len() > LINT_PAGE_ROWS {
-                let pager = Self::lint_row_rect(panel, 1 + LINT_PAGE_ROWS);
+                let pager = Self::lint_row_rect(panel, LINT_HEAD_ROWS + LINT_PAGE_ROWS);
                 let half = pager.width / 2.0;
                 out.push(("page_back".to_string(), Rectangle::new(pager.x, pager.y, half, pager.height)));
                 out.push(("page_next".to_string(), Rectangle::new(pager.x + half, pager.y, half, pager.height)));
@@ -1673,7 +1767,7 @@ impl MapEditor {
         if on(Self::fit_rect(layout)) {
             return Some(BarButton::Fit);
         }
-        if on(Self::check_rect(layout)) {
+        if on(Self::check_rect(layout)) || on(Self::clear_rect(layout)) {
             return Some(BarButton::Check);
         }
         if on(Self::here_rect(layout)) {
@@ -2301,7 +2395,7 @@ impl MapEditor {
                 if !input.pressed {
                     return;
                 }
-                let pager = Self::lint_row_rect(panel, 1 + LINT_PAGE_ROWS);
+                let pager = Self::lint_row_rect(panel, LINT_HEAD_ROWS + LINT_PAGE_ROWS);
                 if len > LINT_PAGE_ROWS && pager.contains(pointer) {
                     page = if pointer.x < pager.x + pager.width / 2.0 { page.saturating_sub(1) } else { (page + 1).min(last) };
                     self.popup = Some(Popup::Lint { page });
@@ -2309,7 +2403,7 @@ impl MapEditor {
                 }
                 let on_page = (page * LINT_PAGE_ROWS..len).take(LINT_PAGE_ROWS);
                 for (slot, index) in on_page.enumerate() {
-                    let row = Self::lint_row_rect(panel, 1 + slot);
+                    let row = Self::lint_row_rect(panel, LINT_HEAD_ROWS + slot);
                     if !row.contains(pointer) {
                         continue;
                     }
@@ -2435,7 +2529,7 @@ enum BarButton {
     File,
     /// The camera back to the whole canvas.
     Fit,
-    /// The CHECK panel.
+    /// The CHECK panel, from its button or the clear check's readout.
     Check,
     Play,
     /// PLAY from the middle of the view.
@@ -3724,6 +3818,50 @@ mod editor_tests {
         let frames: Vec<Vec<(i32, f32, f32)>> =
             (0..=10).map(|i| vec![(1, from.x + (to.x - from.x) * i as f32 / 10.0, from.y + (to.y - from.y) * i as f32 / 10.0)]).collect();
         hold_fingers(ed, layout, &frames);
+    }
+
+    /// The clear check is kept per revision of the canvas: a win noted on
+    /// it clears it, its par the best of its wins to a tenth; an edit is a
+    /// new revision nobody has won, and an undo back finds the cleared one
+    /// again; SAVE's map carries the stamp of a cleared revision only; a
+    /// map that comes in with a stamp for itself comes in cleared, a stale
+    /// stamp proves nothing, and the canvas never keeps a stamp of its own.
+    #[test]
+    fn the_clear_check_is_kept_per_revision() {
+        let mut map = MapFile::new();
+        map.set_cell(3, 8, CellObject::Start);
+        let mut ed = MapEditor::new(map.clone());
+        assert_eq!(ed.par(), None);
+        let first = ed.revision();
+        assert_eq!(first, map.revision());
+        ed.note_clear(first, 83.44);
+        assert_eq!(ed.par(), Some(83.4), "to a tenth");
+        ed.note_clear(first, 90.0);
+        assert_eq!(ed.par(), Some(83.4), "the best of its wins");
+        ed.note_clear(first, 61.26);
+        assert_eq!(ed.par(), Some(61.3));
+        let saved = ed.map_to_save();
+        assert_eq!(saved.cleared_par(), Some(61.3), "SAVE writes the stamp");
+        assert_eq!(ed.map().cleared, None, "the canvas carries none");
+        // An edit: another revision, which nobody has won.
+        ed.stroke(&[(10, 5)], false);
+        assert_ne!(ed.revision(), first);
+        assert_eq!(ed.par(), None);
+        assert_eq!(ed.map_to_save().cleared, None, "SAVE writes no stamp for it");
+        ed.undo();
+        assert_eq!(ed.revision(), first);
+        assert_eq!(ed.par(), Some(61.3), "undone back to the cleared revision");
+        // A map that comes in with its stamp, by LOAD or as the builder's
+        // first map, comes in cleared.
+        let mut other = MapEditor::new(MapFile::new());
+        other.load(saved.clone());
+        assert_eq!(other.par(), Some(61.3));
+        assert_eq!(other.map().cleared, None);
+        assert_eq!(MapEditor::new(saved.clone()).par(), Some(61.3));
+        // A stamp for another revision - the file edited by hand since.
+        let mut stale = saved;
+        stale.set_cell(20, 5, CellObject::Gate);
+        assert_eq!(MapEditor::new(stale).par(), None);
     }
 
     /// The loupe's place: above the finger, clear of it; wholly left of it

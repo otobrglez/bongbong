@@ -901,6 +901,7 @@ fn open_online(args: &Args, map: &crate::map::MapFile) -> Option<(AnyRound, Opti
             return None;
         }
         let host = RoomsHost::resolve(args.rooms.as_deref());
+        let identity = Identity::new(args.nick.clone(), device_token(&args.nick));
         let target = match args.join.as_deref().map(RoomCode::parse) {
             Some(Ok(code)) => Target::Join(code),
             Some(Err(e)) => {
@@ -909,14 +910,26 @@ fn open_online(args: &Args, map: &crate::map::MapFile) -> Option<(AnyRound, Opti
             }
             // `-m` carries the whole map to the room; the lobby's own
             // `HOST` sends a shipped map's name instead.
-            None => Target::Host(RoomSetup {
-                map: map.name.clone().unwrap_or_else(|| "default".into()),
-                map_toml: args.map.as_ref().and_then(|m| m.to_toml_string().ok()),
-                mission: args.mission.unwrap_or(crate::level::Mission::Protect),
-                seed: args.seed,
-            }),
+            None => {
+                let setup = RoomSetup {
+                    map: map.name.clone().unwrap_or_else(|| "default".into()),
+                    map_toml: args.map.as_ref().and_then(|m| m.to_toml_string().ok()),
+                    mission: args.mission.unwrap_or(crate::level::Mission::Protect),
+                    seed: args.seed,
+                };
+                // The clear check: a map of one's own goes to a room only
+                // once won as it stands (`MapFile::hostable`). Refused, the
+                // room is never dialled and the lobby opens on its closed
+                // face saying why, the way a socket that never opened does.
+                if args.map.as_ref().is_some_and(|m| !m.hostable()) {
+                    let why = crate::text::text().get(crate::text::keys::NOTE_NOT_CLEARED);
+                    eprintln!("[online] {why}");
+                    let refused = Box::new(crate::net::transport::Failed::new(why)) as Box<dyn Transport>;
+                    return Some((OnlineRound::new(RoomClient::host(refused, identity, setup), "ROOM"), None));
+                }
+                Target::Host(setup)
+            }
         };
-        let identity = Identity::new(args.nick.clone(), device_token(&args.nick));
         return Some((OnlineRound::new(crate::net::client::connect(&host, identity, target), "ROOM"), None));
     }
     #[cfg(not(feature = "online"))]
@@ -2559,6 +2572,26 @@ mod tests {
         assert_eq!((0..120).map(|_| clock.advance(1.0 / 120.0)).sum::<u32>(), 60);
         let mut clock = StepClock::default();
         assert!((0..30).all(|_| clock.advance(1.0 / 30.0) == 2), "two steps per 30 Hz frame");
+    }
+
+    /// `--host -m` with a map nobody has won as it stands never dials: the
+    /// round opens closed, its note the clear check's refusal, which is
+    /// what the lobby's closed face shows.
+    #[cfg(feature = "online")]
+    #[test]
+    fn hosting_a_map_nobody_has_cleared_is_refused_before_dialling() {
+        let dir = std::env::temp_dir().join(format!("bongbong-host-{}", std::process::id()));
+        let path = dir.join("mine.toml");
+        let mut map = crate::map::MapFile::new();
+        map.set_cell(3, 8, crate::map::CellObject::Start);
+        map.save(&path).expect("the map is written");
+        let args = Args::parse_from(["bongbong", "--host", "-m", path.to_str().expect("a path")]);
+        let (mut round, rig) = open_online(&args, args.map.as_ref().expect("the map")).expect("a round");
+        assert!(rig.is_none());
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        let why = crate::text::text().get(crate::text::keys::NOTE_NOT_CLEARED);
+        assert_eq!(round.note(), Some(why.as_str()));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A stall runs the cap and forgets the rest: the next frame owes

@@ -164,6 +164,7 @@ keys! {
     STATUS_OFFLINE = "status-offline";
     NOTE_TUNING_REFUSED = "note-tuning-refused";
     NOTE_WELCOME_REFUSED = "note-welcome-refused";
+    NOTE_NOT_CLEARED = "note-not-cleared";
     REFUSAL_ALREADY_IN_ROOM = "refusal-already-in-room";
     REFUSAL_NOT_IN_ROOM = "refusal-not-in-room";
     REFUSAL_NOT_YOURS = "refusal-not-yours";
@@ -200,6 +201,11 @@ keys! {
     CHECK_HINT = "check-hint";
     CHECK_NONE = "check-none";
     CHECK_FIX = "check-fix";
+    CHECK_CLEARED = "check-cleared";
+    CHECK_NOT_CLEARED = "check-not-cleared";
+    CHECK_PAR = "check-par";
+    CHECK_CLEARED_HINT = "check-cleared-hint";
+    CHECK_NOT_CLEARED_HINT = "check-not-cleared-hint";
     EDITOR_TOOL = "editor-tool";
     CATEGORY_WALL = "category-wall";
     CATEGORY_PROP = "category-prop";
@@ -814,6 +820,8 @@ mod text_tests {
             (keys::LOBBY_SUB_CLOSED, UI_SMALL_TEXT, content, vec![]),
             (keys::LOBBY_SUB_HOST, UI_SMALL_TEXT, content, vec![]),
             (keys::LOBBY_SUB_GUEST, UI_SMALL_TEXT, content, vec![]),
+            // A room refused before it was dialled: the closed face's line.
+            (keys::NOTE_NOT_CLEARED, UI_SMALL_TEXT, content, vec![]),
             (keys::LOBBY_MAP, HUD_TEXT_SIZE, 152, vec![]),
             (keys::LOBBY_MISSION, HUD_TEXT_SIZE, 152, vec![]),
             // The touch hint, centred on each half of the smallest window
@@ -859,6 +867,14 @@ mod text_tests {
             (keys::CHECK_HINT, HUD_LABEL_SIZE, 412, vec![]),
             (keys::CHECK_NONE, 16, 412, vec![]),
             (keys::CHECK_FIX, 16, 72, vec![]),
+            // The clear check's row: its title from beside the flag, the
+            // par at the row's right end, the line under them, all inside
+            // the 396 px from the flag's words to the right inset.
+            (keys::CHECK_CLEARED, 16, 200, vec![]),
+            (keys::CHECK_NOT_CLEARED, 16, 396, vec![]),
+            (keys::CHECK_PAR, 16, 160, vec![("time", "59:59".into())]),
+            (keys::CHECK_CLEARED_HINT, HUD_LABEL_SIZE, 396, vec![]),
+            (keys::CHECK_NOT_CLEARED_HINT, HUD_LABEL_SIZE, 396, vec![]),
             (keys::FILE_LOAD, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE_AS, HUD_TEXT_SIZE, 168, vec![]),
