@@ -553,7 +553,10 @@ shape with the bar at the standard arena's size (`editor::camera`).
   `env(safe-area-inset-*)` is already in the page. The camera removes the
   need for the canvas box to keep the bitmap's shape, because the view
   fills whatever box it gets; raylib's touch mapping then only needs the
-  canvas to fill its box exactly.
+  canvas to fill its box exactly. Built: the page's stage takes the box it is
+  given at any shape and the game's window - the canvas's buffer, in
+  device pixels - follows it every frame (`app::web`); a phone held
+  upright is asked to turn.
 
 ## 11. Engine work
 
