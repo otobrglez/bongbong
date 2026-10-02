@@ -733,7 +733,12 @@ Landed so far: step 1 whole (`view::Camera`); from step 2 the view rules
 (`follow.rs`: the dead zone, the look-ahead inside the sight box, the
 spring, the sub-block present, cuts, spectating a teammate, the couch's
 shared view, `status.camera`) - the split screen, the establishing shot
-and the motion switch are still to come; from step 4 the awareness model
+and the motion switch are still to come; step 3's HUD in the corners
+(`hud::corners` inside the safe area at a UI scale in points, the play
+bar gone, ammo pips on the tank, a cluster fading while play is under
+it, banners, dialogs, the end screen, the lobby and the level select in
+window space) - arenas drawing their margins and input-aware hints are
+still to come; from step 4 the awareness model
 and its drawing (`indicators.rs`: edge arrows by priority, the lane
 warning, the hit arc, last-seen marks, gate flashes, thumb rests) - the
 minimap is still to come; from step 5 the sight box, the AI's fire gate,
