@@ -785,17 +785,19 @@ it, banners, dialogs, the end screen, the lobby and the level select in
 window space) - arenas drawing their margins and input-aware hints are
 still to come; from step 4 the awareness model
 and its drawing (`indicators.rs`: edge arrows by priority, the lane
-warning, the hit arc, last-seen marks, gate flashes, thumb rests) - the
-minimap is still to come; from step 5 the sight box, the AI's fire gate,
+warning, the hit arc, last-seen marks, gate flashes, thumb rests) and
+the minimap on tablets and desktops (`minimap.rs`: a texel per cell,
+patched where a tile dies, under the right cluster as a slot of
+`hud::corners`); from step 5 the sight box, the AI's fire gate,
 the probe's `offbox-fire` check and the weather fallback
 (`weather::plain`); from step 6 the builder's own camera
 (`editor::camera`: zoom at the cursor, pan, FIT, BUILD opening on what
 play showed), its gestures from raw touch points with a slop
 (`editor::gesture`), the paint threshold, edge scroll, the map size
-setting with its anchor and incremental ground (`GroundGrid::repaint`) -
-the loupe, the minimap navigator, play from here, the lint panel, the
-clear check, select and stamps, fills and scatter and thumbnails are
-still to come; from step 7 the Android `appCategory`, maps capped at
+setting with its anchor, incremental ground (`GroundGrid::repaint`) and
+the minimap navigator (`MapEditor::navigator_rect`, repainted per
+stroke) - the loupe, play from here, the lint panel, the clear check,
+select and stamps, fills and scatter and thumbnails are still to come; from step 7 the Android `appCategory`, maps capped at
 what the wire carries, the laser's reach, the mark caps and the bounded
 AI (`simulation/field.rs`: chained alerts with leashes, far enemies
 thinking less, spawns and gates by walk outside every sight box,
