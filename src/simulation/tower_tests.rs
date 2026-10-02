@@ -173,8 +173,10 @@ fn a_strike_chains_to_a_second_tank_for_half_the_damage() {
     assert!(!hits[0].0 && hits[1].0, "the second is the chained jump");
     let t = tuning();
     let (first, second) = (snapshot(&game, 0).damage, snapshot(&game, 1).damage);
-    assert!(first >= t.tesla_damage_min - 1e-3 && first <= t.tesla_damage_max + 1e-3, "{first}");
-    let f = t.tesla_chain_factor;
+    // Both are seats, so their armour takes its share of each.
+    let a = t.player_armor_factor;
+    assert!(first >= t.tesla_damage_min * a - 1e-3 && first <= t.tesla_damage_max * a + 1e-3, "{first}");
+    let f = t.tesla_chain_factor * a;
     assert!(second >= t.tesla_damage_min * f - 1e-3 && second <= t.tesla_damage_max * f + 1e-3, "{second}");
 }
 
@@ -239,6 +241,27 @@ fn a_gun_tower_turns_at_its_rate_and_fires_inside_its_cone() {
         }
     }
     assert!(fired_at.is_some(), "fires once it is on the aim");
+}
+
+// A gun tower fires from above the battlefield: its bullets fly over the
+// sandbags and fences its aim sees past, and still stop at a wall.
+#[test]
+fn a_gun_tower_shoots_over_sandbags_and_fences() {
+    let map = map_with(
+        "cells.\"20,8\" = { kind = \"gun_tower\", side = \"enemy\" }\n\
+         cells.\"22,8\" = { kind = \"sandbag\" }\n\
+         cells.\"24,8\" = { kind = \"fence\" }\n",
+    );
+    let mut game = game_on(&map, PlayerCount::ONE, 4);
+    place(&mut game, 0, (26, 8));
+    let (bag, fence) = (tile_health(&game, (22, 8)), tile_health(&game, (24, 8)));
+    assert!(bag.is_some() && fence.is_some(), "the cover stands");
+    let before = with_tank(&game.world, player_tank(&game, 0), |t| t.health_fraction());
+    let events = idle(&mut game, 240);
+    assert!(tower_fired(&events, TowerKind::Gun) > 0, "the tower opened fire");
+    let after = with_tank(&game.world, player_tank(&game, 0), |t| t.health_fraction());
+    assert!(after < before, "the bullets reached the tank: {before} -> {after}");
+    assert_eq!((tile_health(&game, (22, 8)), tile_health(&game, (24, 8))), (bag, fence), "the cover is untouched");
 }
 
 // An enemy tower fights a seat only from inside the seat's sight box
@@ -398,7 +421,8 @@ fn a_coat_corrodes_slows_and_resets_rather_than_stacks() {
     assert!((pace - t.bio_slime_speed_factor).abs() < 1e-6, "a coated tank drives at the slime's pace");
     idle(&mut game, 30);
     let corroded = snapshot(&game, 0).damage;
-    assert!((corroded - t.bio_slime_dps * 0.5).abs() < 0.05, "half a second of corrosion: {corroded}");
+    let half_second = t.bio_slime_dps * 0.5 * t.player_armor_factor;
+    assert!((corroded - half_second).abs() < 0.05, "half a second of corrosion: {corroded}");
     idle(&mut game, 60);
     assert_eq!(slime(&game, 0), 0.0, "the coat wears off");
     let after = snapshot(&game, 0).damage;

@@ -866,6 +866,9 @@ pub struct Game {
     /// map's sky and every client has to draw and drive under that one.
     /// Kept across restarts.
     pub weather_from_map: bool,
+    /// The static bodies `init` put on the deep water cells, which a
+    /// snowfall mid-round (`change_weather`) takes off as the water ices.
+    deep_water_bodies: Vec<rapier2d::prelude::RigidBodyHandle>,
     /// The round's single RNG stream - see the module doc. `None` only
     /// before the first `init`. `update` takes it into the frame context
     /// and puts it back at its end.
@@ -1091,6 +1094,27 @@ pub(crate) const SHOCK_SHIELD_BREAK: f32 = 0.45;
 pub(crate) const SHOCK_TELEPORT: f32 = 0.3;
 
 impl Game {
+    /// Put `sky` on the round's map and fight the rest of the round under
+    /// it, no restart: the look, sight, grip and gusts change at once (the
+    /// override knob still outranks the map's key, as in `init`). Snow
+    /// ices the water over where it was open - its deep cells lose their
+    /// bodies and the nav grid is built again - but ice does not thaw
+    /// back mid-round, since a hull may stand on what would be deep
+    /// water; the next round settles the water from its own sky. Draws no
+    /// RNG.
+    pub fn change_weather(&mut self, sky: crate::map::Weather) {
+        self.map.weather = sky;
+        let t = tuning();
+        self.weather = crate::weather::in_force(sky, self.round_seed(), self.weather_from_map, &t);
+        if crate::weather::freezes(self.weather, &t) && !self.water.is_frozen() {
+            self.water.freeze();
+            for body in std::mem::take(&mut self.deep_water_bodies) {
+                self.physics.remove_body(body);
+            }
+            self.nav.clear();
+        }
+    }
+
     /// Set up a fresh round: player, map terrain, enemies, frog, pickups,
     /// ground. Also the restart path. `width`/`height` are the battlefield
     /// size in pixels.
@@ -1202,9 +1226,11 @@ impl Game {
             self.water.freeze();
         }
         let deep_cells: HashSet<(i32, i32)> = self.water.deep_grid_cells().collect();
+        self.deep_water_bodies.clear();
         for (gx, gy) in self.water.deep_grid_cells() {
             let half = battlefield::tile_hull_half_extent(&deep_cells, gx, gy, OBSTACLE_GRID_SIZE * 0.5);
-            self.physics.spawn_static(map::cell_to_world(gx, gy), half);
+            let body = self.physics.spawn_static(map::cell_to_world(gx, gy), half);
+            self.deep_water_bodies.push(body);
         }
 
         // --- Player ---
@@ -1228,7 +1254,7 @@ impl Game {
             ..Tank::default()
         };
         if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
-            tank.shield_hp = tuning().shield_capacity;
+            tank.raise_shield();
         }
         roll_track_distortion(&mut tank, &mut rng);
         // Spawn facing up (rotation 0): the Y-axis collider orientation.
@@ -1367,7 +1393,7 @@ impl Game {
                 ..Tank::default()
             };
             if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
-                tank.shield_hp = tuning().shield_capacity;
+                tank.raise_shield();
             }
             roll_track_distortion(&mut tank, &mut rng);
             tank.body = Some(self.physics.spawn_tank(tank.position, tank.move_half_extents(false), tank.mass()));
@@ -2463,7 +2489,7 @@ impl Game {
                     // plus a refreshed, never stacked, invulnerability window.
                     PickupKind::Shield => {
                         tank.damage = 0.0;
-                        tank.shield_hp = tuning().shield_capacity;
+                        tank.raise_shield();
                     }
                     // Nothing on the tank: the frog pack heals a frog, and
                     // the frog can't be touched while this `&mut Tank`
@@ -4876,7 +4902,7 @@ fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize) -> 
         }
     }
     if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
-        enemy.shield_hp = tuning().shield_capacity;
+        enemy.raise_shield();
     }
     roll_track_distortion(&mut enemy, rng);
     enemy
@@ -5321,7 +5347,7 @@ mod determinism_tests {
         // Never bump these to go green - work out which change moved them
         // first.
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (6_990_181_534_668_061_109, 9_249_013_669_643_947_675), "(one seat, two seats)");
+        assert_eq!((one, two), (1_494_875_205_296_571_598, 9_249_013_669_643_947_675), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round
@@ -7385,9 +7411,33 @@ cells."30,20" = { kind = "frog" }
             let tank = q.get().expect("player tank");
             assert!(tank.spend_shield(capacity), "the blow that empties the pool shatters it");
             assert!(!tank.is_shielded());
-            assert_eq!(tank.take_damage(30.0, MAX_DAMAGE), 30.0);
-            assert_eq!(tank.damage, 30.0, "unshielded again once the pool is spent");
+            let landed = 30.0 * tuning().player_armor_factor;
+            assert_eq!(tank.take_damage(30.0, MAX_DAMAGE), landed);
+            assert_eq!(tank.damage, landed, "unshielded again once the pool is spent");
         }
+    }
+
+    #[test]
+    fn a_picked_up_shield_shatters_when_its_clock_runs_out() {
+        let mut game = game_on(SEALED_SHIELD_MAP, 1, Some(0));
+        let player = game.player().expect("player");
+        with_tank_mut(&game.world, player, |t| t.shield_hp = 0.0);
+        step(&mut game, Input::default());
+        assert!(player_snapshot(&game).shield_hp > 0.0, "picked up");
+        // No respawn into the sealed ring to refill it mid-test.
+        game.map_pickup_slots.clear();
+        let frames = (tuning().shield_seconds / PHYSICS_FIXED_DT).ceil() as usize + 2;
+        let mut broke_at = None;
+        for frame in 1..=frames {
+            step(&mut game, Input::default());
+            if game.events().iter().any(|e| matches!(e, Event::ShieldBroken { .. })) {
+                broke_at = Some(frame);
+                break;
+            }
+        }
+        let broke_at = broke_at.expect("the clock shattered it, untouched");
+        assert!(broke_at + 3 >= frames, "not before its time: frame {broke_at} of {frames}");
+        assert_eq!(player_snapshot(&game).shield_hp, 0.0);
     }
 
     /// The pool is what ends a shield, and an oversized hit is absorbed in

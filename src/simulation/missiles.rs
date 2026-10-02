@@ -310,30 +310,21 @@ mod tests {
     }
 
     #[test]
-    fn a_trigger_pull_fires_two_salvos_of_four() {
+    fn a_trigger_pull_fires_one_salvo_of_four_a_pickups_worth() {
         let mut game = sandbox("");
-        arm(&mut game, 24);
+        arm(&mut game, tuning().missile_ammo_per_pickup);
         let events = fire(&mut game);
         assert!(events.iter().any(|e| matches!(e, Event::Fired { weapon: "missiles", .. })));
         assert_eq!(missiles_in_air(&game), 1, "the first leaves at once");
-        // Watch the pod frame by frame: it empties through the first
-        // salvo, holds empty through the gap, reloads and empties again.
-        let tubes = |game: &Game| with_tank(&game.world, player(game), |t| t.missile_tubes_empty);
+        // Watch the pod frame by frame: it empties through the salvo and
+        // fires no second one.
         let mut counts = Vec::new();
-        let mut tube_readings = Vec::new();
         for _ in 0..40 {
             idle(&mut game, 1);
             counts.push(missiles_in_air(&game));
-            tube_readings.push(tubes(&game));
         }
-        let first_four = counts.iter().position(|&n| n == 4).expect("the first salvo completes");
-        assert!(counts[first_four..].iter().take(8).all(|&n| n == 4), "a gap before the second salvo: {counts:?}");
-        assert_eq!(*counts.last().unwrap(), 8, "then four more: {counts:?}");
-        let reload = tube_readings.windows(2).position(|w| w[0] == 4 && w[1] < 4).expect("the pod reloads between salvos");
-        assert_eq!(tube_readings[reload + 1..].iter().max(), Some(&4), "and empties again: {tube_readings:?}");
-        assert_eq!(with_tank(&game.world, player(&game), |t| t.missile_ammo), 16);
-        idle(&mut game, 240);
-        assert_eq!(tubes(&game), 0, "reloaded for the next pull");
+        assert_eq!(counts.iter().max(), Some(&4), "one salvo of four: {counts:?}");
+        assert_eq!(with_tank(&game.world, player(&game), |t| t.missile_ammo), 0, "a pickup is one pull");
     }
 
     #[test]

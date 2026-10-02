@@ -530,6 +530,10 @@ pub struct Tank {
     /// anything, so only a tank that breaks contact recovers - see
     /// `Game::tick_timers`.
     pub shield_recharge_delay: f32,
+    /// Seconds left before a live shield shatters on its own
+    /// (`shield_seconds`, set by `raise_shield`). 0 is a shield with no
+    /// clock - one a test or a tool set straight on `shield_hp`.
+    pub shield_timer: f32,
     /// Set by `spend_shield` on the frame the shield shatters, drained and
     /// cleared by `Game::drain_shield_breaks` at the end of the frame's
     /// damage phases.
@@ -666,6 +670,7 @@ impl Default for Tank {
             throttle: 1.0,
             shield_hp: 0.0,
             shield_recharge_delay: 0.0,
+            shield_timer: 0.0,
             shield_broke: false,
             recharge_timer: 0.0,
             fire_cooldown: 0.0,
@@ -799,6 +804,13 @@ impl Tank {
         if capacity > 0.0 { (self.shield_hp / capacity).clamp(0.0, 1.0) } else { 0.0 }
     }
 
+    /// A fresh shield: the full pool on a fresh clock. A second one
+    /// refills both rather than stacking.
+    pub fn raise_shield(&mut self) {
+        self.shield_hp = tuning().shield_capacity;
+        self.shield_timer = tuning().shield_seconds;
+    }
+
     /// Spend `amount` of shield on a hit the shield is taking instead of the
     /// hull, and report whether that shattered it (true on the one frame the
     /// pool crosses zero, never again - the edge-trigger shape
@@ -819,8 +831,9 @@ impl Tank {
         true
     }
 
-    /// The one way damage lands on a tank's *hull*: adds `amount`, capped at
-    /// `cap` (MAX_DAMAGE, or one below it for the player's frog bites), and
+    /// The one way damage lands on a tank's *hull*: adds `amount` - a
+    /// player's scaled by `player_armor_factor` - capped at `cap`
+    /// (MAX_DAMAGE, or one below it for the player's frog bites), and
     /// returns how much actually landed. Callers keep their hit
     /// flash/knockback/alert side effects either way, so an absorbed hit
     /// still visibly lands.
@@ -837,6 +850,7 @@ impl Tank {
             self.spend_shield(amount);
             return 0.0;
         }
+        let amount = if self.is_player() { amount * tuning().player_armor_factor } else { amount };
         let before = self.damage;
         self.damage = (self.damage + amount).min(cap);
         self.damage - before
@@ -1317,7 +1331,19 @@ impl Tank {
     pub fn tick_shield(&mut self, dt: f32) {
         if !self.is_shielded() {
             self.shield_recharge_delay = 0.0;
+            self.shield_timer = 0.0;
             return;
+        }
+        if self.shield_timer > 0.0 {
+            self.shield_timer -= dt;
+            if self.shield_timer <= 0.0 {
+                // Out of time: it shatters as a spent one does.
+                self.shield_timer = 0.0;
+                self.shield_hp = 0.0;
+                self.shield_recharge_delay = 0.0;
+                self.shield_broke = true;
+                return;
+            }
         }
         self.shield_recharge_delay = (self.shield_recharge_delay - dt).max(0.0);
         if self.shield_recharge_delay > 0.0 {
@@ -2303,7 +2329,7 @@ mod shield_tests {
     fn damage_lands_and_caps_once_the_shield_is_gone() {
         let mut tank = Tank { damage: 10.0, shield_hp: 0.0, ..Tank::default() };
         tank.take_damage(30.0, MAX_DAMAGE);
-        assert_eq!(tank.damage, 40.0);
+        assert_eq!(tank.damage, 10.0 + 30.0 * tuning().player_armor_factor, "a player's armour takes its share");
         tank.take_damage(1000.0, MAX_DAMAGE - 1.0);
         assert_eq!(tank.damage, MAX_DAMAGE - 1.0, "capped at the caller's ceiling");
         assert!(!tank.is_wreck());

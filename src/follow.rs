@@ -1063,11 +1063,16 @@ mod follow_tests {
 
     const DT: f32 = 1.0 / 60.0;
 
+    /// The spring the coast, edge-ease and split-closing numbers below were
+    /// measured under, so they test those rules rather than the default
+    /// spring a play test settles on.
+    const MEASURED_SPRING: f32 = 0.16;
+
     #[test]
     fn the_rules_come_from_the_camera_group() {
         let r = rules();
         assert_eq!(r.dead_zone_px, 12.8, "about 0.4 cell");
-        assert_eq!((r.lead_at_rest, r.lead_ease_seconds, r.spring_seconds), (0.35, 0.5, 0.06));
+        assert_eq!((r.lead_at_rest, r.lead_ease_seconds, r.spring_seconds), (0.35, 0.5, 0.5));
         for name in [
             "camera_dead_zone_px",
             "camera_lead_at_rest",
@@ -1111,7 +1116,9 @@ mod follow_tests {
     fn the_dead_zone_holds_the_view_until_the_seat_leaves_it() {
         let mut f = Follow::default();
         let s = open_stage();
-        let r = FollowRules { lead_at_rest: 0.0, ..rules() };
+        // The spring these feel numbers were measured under; the default's
+        // own is checked by `the_rules_come_from_the_camera_group`.
+        let r = FollowRules { lead_at_rest: 0.0, spring_seconds: MEASURED_SPRING, ..rules() };
         let mut t = tank(0, 700.0, 400.0);
         t.facing = Vec2::new(0.0, -1.0);
         let start = f.update(&one(t), DT, &s, &r).center;
@@ -1328,7 +1335,7 @@ mod follow_tests {
         // Full speed toward the right wall: the view's step shrinks frame
         // by frame to nothing at the edge, which it never passes.
         let s = stage();
-        let r = rules();
+        let r = FollowRules { spring_seconds: MEASURED_SPRING, ..rules() };
         let edge = s.field.0 - s.visible.0 / 2.0;
         let mut f = Follow::default();
         let mut t = tank(0, 700.0, 384.0);
@@ -1625,7 +1632,7 @@ mod follow_tests {
         // rather than the second half resting where the edge's ease would
         // set a view of its own seat alone, a few pixels off the first.
         let s = Stage { visible: (1280.0, 720.0), field: (2560.0, 1440.0), sight: SightBox::from_cells(11.5, 7.5) };
-        let r = rules();
+        let r = FollowRules { spring_seconds: MEASURED_SPRING, ..rules() };
         let mut a = tank(0, 240.0, 768.0);
         let mut b = tank(1, 647.0, 1072.0);
         let mut f = Follow::default();
@@ -1706,9 +1713,7 @@ mod follow_tests {
             }
             let shot = f.update(&pair(a, b), DT, &s, &r);
             assert_eq!((shot.kind, shot.seat, shot.split, shot.cut), (ShotKind::Seat, Some(kept), None, false), "seat {down} down");
-            // The spring glides the view on from there: under a cell in the
-            // first frame, never a cut to where the one view will stand.
-            assert!((shot.center - at).length() < 32.0, "the view goes on from the half seat {kept} had: {at:?} -> {:?}", shot.center);
+            assert!((shot.center - at).length() < 8.0, "the view goes on from the half seat {kept} had: {at:?} -> {:?}", shot.center);
         }
     }
 

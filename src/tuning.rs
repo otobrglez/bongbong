@@ -542,6 +542,11 @@ tunables! {
         /// Enemy shell damage range (weaker than the player's).
         enemy_damage_min: f32 = 5.0 in 0.0 ..= 100.0;
         enemy_damage_max: f32 = 15.0 in 0.0 ..= 100.0;
+        /// A player's hull armour: every hit that lands on a seat's hull -
+        /// shells, bullets, blasts, rams, fire, towers, frogs - is scaled
+        /// by this (`Tank::take_damage`), so 0.77 makes a player's tank
+        /// 30 % tougher (1 / 0.77). The shield is spent in full.
+        player_armor_factor: f32 = 0.77 in 0.1 ..= 1.0;
         /// Firing recoil: a small backward impulse on the shooter along the
         /// shell's own travel axis, mass-normalized so a heavier chassis
         /// visibly recoils less per shot. Deliberately much smaller than
@@ -672,9 +677,9 @@ tunables! {
     }
 
     group missiles {
-        /// Seeker missiles granted per pickup - three full volleys of two
-        /// salvos from the four-tube pod.
-        missile_ammo_per_pickup: i32 = 24 in 1 ..= 400;
+        /// Seeker missiles granted per pickup - one volley from the
+        /// four-tube pod.
+        missile_ammo_per_pickup: i32 = 4 in 1 ..= 400;
         /// Missiles per salvo, one per tube, so at most the pod's four.
         /// The first leaves at once, the rest
         /// `missile_launch_delay_seconds` apart (`Tank::missile_volley`).
@@ -682,7 +687,7 @@ tunables! {
         /// Salvos per trigger pull: the pod empties, reloads its tubes in
         /// `missile_salvo_gap_seconds` and fires again, so a pull is
         /// `missile_volley_size` x this many missiles.
-        missile_salvos: u32 = 2 in 1 ..= 4;
+        missile_salvos: u32 = 1 in 1 ..= 4;
         /// Gap between two missiles of one salvo leaving their tubes.
         missile_launch_delay_seconds: f32 = 0.05 in 0.0 ..= 1.0;
         /// Gap between one salvo's last missile and the next salvo's first.
@@ -940,12 +945,17 @@ tunables! {
         speed_boost_duration_seconds: f32 = 12.0 in 0.0 ..= 120.0;
         /// Rainbow shield: collecting one heals the tank to full and *sets*
         /// `Tank::shield_hp` to this (a second one refills it rather than
-        /// stacking). The shield is a pool of absorption, not a clock - it
-        /// soaks damage until spent and then shatters, so concentrated fire
-        /// is what ends it. `MAX_DAMAGE` is 100, so the default is worth two
-        /// hulls. See `Tank::take_damage` for the absorb path and
-        /// `Game::resolve_projectiles` for the deflect one.
-        shield_capacity: f32 = 200.0 in 0.0 ..= 1000.0;
+        /// stacking). The shield is a pool of absorption on a clock
+        /// (`shield_seconds`) - it soaks damage until spent or the clock
+        /// runs out, whichever comes first. At the default an enemy's
+        /// shell deflected costs 20 (`shield_deflect_cost_factor`), so
+        /// three or four of them shatter it. See `Tank::take_damage` for
+        /// the absorb path and `Game::resolve_projectiles` for the deflect
+        /// one.
+        shield_capacity: f32 = 70.0 in 0.0 ..= 1000.0;
+        /// The longest a shield lasts, in seconds, however little it has
+        /// been hit: it shatters when this runs out (`Tank::tick_shield`).
+        shield_seconds: f32 = 6.0 in 0.5 ..= 60.0;
         /// What a *deflected* projectile costs the shield, as a multiple of
         /// the shot's own mid-range damage - shells, bullets and plasma
         /// bounce off (`Event::Deflected`) rather than landing, and pay this
@@ -1942,7 +1952,7 @@ tunables! {
         /// spring of this smoothing time (Unity's `SmoothDamp`), the seat's
         /// velocity fed forward so a steady drive does not trail. 0 sticks
         /// the view to its goal.
-        camera_spring_seconds: f32 = 0.06 in 0.0 ..= 2.0;
+        camera_spring_seconds: f32 = 0.5 in 0.0 ..= 2.0;
         /// Seconds a screen stays on its seat's wreck before it follows the
         /// nearest live teammate - in a wave round the seat comes back
         /// through a gate with the next wave, and the view cuts back to it
