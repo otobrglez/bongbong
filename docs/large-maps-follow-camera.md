@@ -815,8 +815,10 @@ won after 148 s against 246. The stranding above (0x3fe) is won after 165
 s. Longwater's thirty rounds had none, the arenas' recipes and
 `probe-fields` read line for line as before - no round of theirs has a
 straggler - and `probe-defend` keeps never-arrived at 0. The tank riding
-column 74 (0x3fd) is still out at seven minutes: in sight of every
-screen, it is no re-roll's to take.
+column 74 (0x3fd) is still out at seven minutes: a hunter after the frog,
+it drives the column 12 px west of its centre line between rows 21 and
+43, turning back at either end rather than west toward the frog, and a
+screen round the seat could see it go, so it is no re-roll's to take.
 
 **Flow fields as far as they are read** (`pathfind::Grid`): the frame's
 routing grid carried each seat's and the frog's flow field as a Dijkstra
