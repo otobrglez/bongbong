@@ -47,6 +47,7 @@ use crate::math::{Color, Rectangle, Vec2};
 
 use crate::ground::{self, GroundGrid};
 use crate::hud::{mode_button_rect, Corners};
+use crate::maplint::{LintCell, LintFinding, LintFix, LintSetup, LintSeverity};
 use crate::minimap::{Class, Minimap, MinimapRules};
 use crate::level::{Mission, SpawnKind, Tier};
 use crate::map::{self, CellObject, MapEntry, MapFile, Theme, Weather};
@@ -85,11 +86,35 @@ const MAP_BUTTON_W: f32 = 64.0;
 /// FIT, after MAP: the camera back to the whole canvas. A small button
 /// like UNDO's.
 const SLOT_FIT: f32 = 788.0;
+/// CHECK, after FIT: the map's check (`Popup::Lint`), the linter's
+/// findings with a jump to each and its quick fix. A small button.
+const SLOT_CHECK: f32 = 832.0;
+const CHECK_W: f32 = 56.0;
 /// PLAY HERE, just before PLAY at the bar's right end: a round from the
 /// middle of the view rather than the map's start. A small button, wide
 /// enough for its two words.
 const SLOT_HERE: f32 = 936.0;
 const HERE_W: f32 = 68.0;
+/// The CHECK panel: as wide as a finding's title, its place and its FIX
+/// button need, and this many findings a page - a header row above them
+/// and, when there are more, a pager row below, which keeps the panel
+/// inside the standard field's 544 px on any screen.
+const LINT_PANEL_W: f32 = 440.0;
+const LINT_PAGE_ROWS: usize = 7;
+/// A finding row's FIX button, at the row's right end.
+const LINT_FIX_W: f32 = 80.0;
+/// A finding row's mark (a 12 px square) and words, inset from the row's
+/// left; the words run from 8 px past the mark to 8 px short of the FIX
+/// button - what `text_tests` holds every language's to, in 16 px.
+const LINT_TEXT_INSET: f32 = 12.0;
+const LINT_MARK: f32 = 12.0;
+pub(crate) const LINT_FINDING_W: f32 = LINT_PANEL_W - LINT_TEXT_INSET - LINT_MARK - 8.0 - SETTINGS_INSET - LINT_FIX_W - 8.0;
+/// What a jump to a finding shows round its cells at least, in cells
+/// across and down, so a one-cell finding is seen in its surroundings
+/// rather than filling the canvas.
+const LINT_JUMP_CONTEXT_CELLS: (f32, f32) = (14.0, 9.0);
+/// The gap a jump keeps between what it frames and the open CHECK panel.
+const LINT_FREE_GAP: f32 = 16.0;
 /// How many rows the Load list shows at once (eight fit the 480 px
 /// standard field). When there are more maps than that, the last row is a
 /// pager a tap turns (a touch screen has no wheel) and the wheel scrolls
@@ -393,6 +418,27 @@ enum Popup {
     Load { entries: Vec<MapEntry>, scroll: usize },
     /// The Save-as prompt (native only).
     Save { name: String },
+    /// The CHECK panel, below the CHECK button: the linter's findings
+    /// over the canvas (`MapEditor::lint`), `page` pages in.
+    Lint { page: usize },
+}
+
+/// One run of the linter over the canvas, for the CHECK panel.
+#[derive(Clone, Debug)]
+pub struct LintReport {
+    /// Errors first, then warnings, then notes, each in check order
+    /// (`maplint::lint`).
+    pub findings: Vec<LintFinding>,
+    /// `MapEditor::edits` when it ran: a report older than the map is
+    /// stale.
+    edits: u64,
+}
+
+impl LintReport {
+    /// How many findings of `severity` there are.
+    pub fn count(&self, severity: LintSeverity) -> usize {
+        self.findings.iter().filter(|f| f.severity == severity).count()
+    }
 }
 
 /// The FILE menu's rows. `SAVE` and `SAVE AS` exist only where a file can
@@ -546,6 +592,20 @@ pub struct MapEditor {
     /// panel stays open: the next press folds into that step, so a run of
     /// presses is one undo step.
     resize_session: Option<usize>,
+    /// Bumped by every change to the map (`map_changed`): what the CHECK
+    /// panel's report is measured against.
+    edits: u64,
+    /// The CHECK panel's last run of the linter over the canvas: made when
+    /// the panel opens and again on the panel's first frame after an edit.
+    lint: Option<LintReport>,
+    /// The finding whose cells the canvas marks, an index into `lint`'s
+    /// findings: a press on its row picks it, and the next edit - which
+    /// may well have answered it - lets it go.
+    lint_marked: Option<usize>,
+    /// What the canvas is linted under: the round PLAY would set up - the
+    /// session's seed, seats and overrides (`mode::Session` refreshes it
+    /// every frame).
+    pub lint_setup: LintSetup,
     pub cli_overrides: CliOverrides,
     /// `render` draws a flat white field instead of the ground tileset -
     /// the builder-side twin of `Game::plain_canvas`.
@@ -590,6 +650,10 @@ impl MapEditor {
             nav_drag: false,
             resize_anchor: Anchor::default(),
             resize_session: None,
+            edits: 0,
+            lint: None,
+            lint_marked: None,
+            lint_setup: LintSetup { seed: 0xB0B5, ..LintSetup::default() },
             cli_overrides: CliOverrides::default(),
         };
         editor.rebuild_ground();
@@ -812,6 +876,7 @@ impl MapEditor {
         self.resize_session = None;
         let field = self.map.field_size();
         let step = self.history.undo(&mut self.map)?;
+        self.map_changed();
         self.ground_after(&step);
         self.follow_whole_map_step(&step, field, -1);
         Some(step)
@@ -822,9 +887,18 @@ impl MapEditor {
         self.resize_session = None;
         let field = self.map.field_size();
         let step = self.history.redo(&mut self.map)?;
+        self.map_changed();
         self.ground_after(&step);
         self.follow_whole_map_step(&step, field, 1);
         Some(step)
+    }
+
+    /// Every change to the map comes through here: the CHECK panel's
+    /// report is now older than the map (run again on the panel's next
+    /// frame) and the canvas lets go of the finding it was marking.
+    fn map_changed(&mut self) {
+        self.edits += 1;
+        self.lint_marked = None;
     }
 
     /// The camera after a step was undone (`way` -1) or redone (1): a
@@ -907,6 +981,7 @@ impl MapEditor {
         }
         self.resize_session = fold.then(|| self.history.undo_depth());
         self.camera.shift(Vec2::new(shift.0 as f32 * cell, shift.1 as f32 * cell));
+        self.map_changed();
         self.rebuild_ground();
         true
     }
@@ -930,6 +1005,7 @@ impl MapEditor {
         self.finish_stroke();
         after.write_to(&mut self.map);
         self.history.push(EditStep::Settings { before, after });
+        self.map_changed();
         if after.theme != before.theme {
             self.rebuild_ground();
         }
@@ -943,6 +1019,7 @@ impl MapEditor {
         self.map = map;
         self.baseline = self.map.clone();
         self.history.push(EditStep::Map { before: Box::new(before), after: Box::new(self.map.clone()) });
+        self.map_changed();
         self.rebuild_ground();
         self.camera.fit();
         self.pending_look = None;
@@ -959,6 +1036,7 @@ impl MapEditor {
         self.map = map;
         self.baseline = self.map.clone();
         self.history.clear();
+        self.map_changed();
         self.rebuild_ground();
         self.camera.fit();
         self.pending_look = None;
@@ -976,6 +1054,7 @@ impl MapEditor {
         self.map = self.baseline.clone();
         self.map.name = name;
         self.history.push(EditStep::Map { before: Box::new(before), after: Box::new(self.map.clone()) });
+        self.map_changed();
         self.rebuild_ground();
         self.refit_if_resized(field);
     }
@@ -994,6 +1073,7 @@ impl MapEditor {
         let before = self.map.clone();
         self.map.cells.clear();
         self.history.push(EditStep::Map { before: Box::new(before), after: Box::new(self.map.clone()) });
+        self.map_changed();
         self.rebuild_ground();
     }
 
@@ -1059,6 +1139,9 @@ impl MapEditor {
                 None => self.map.clear_cell(c.col, c.row),
             }
         }
+        if !stroke.changes.is_empty() {
+            self.map_changed();
+        }
         self.repaint_ground(stroke.changes.iter().map(|c| (c.col, c.row)));
     }
 
@@ -1103,10 +1186,48 @@ impl MapEditor {
         if changes.is_empty() {
             return;
         }
+        self.map_changed();
         self.repaint_ground(changes.iter().map(|c| (c.col, c.row)));
         if let Some(stroke) = &mut self.stroke {
             stroke.changes.extend(changes);
         }
+    }
+
+    /// Make a lint quick fix (`maplint::LintFix`) on the map as one undo
+    /// step, like a stroke: a move clears its cell and fills the empty one,
+    /// a placement fills an empty cell, a removal clears one. A fix the map
+    /// no longer matches - its object gone, its target taken - changes
+    /// nothing. Whether it was made.
+    pub fn apply_fix(&mut self, fix: LintFix) -> bool {
+        self.finish_stroke();
+        let cell = |map: &MapFile, (col, row): (i32, i32)| map.cell(col, row).copied();
+        let changes: Vec<CellChange> = match fix {
+            LintFix::Move { from, to } => match (cell(&self.map, from), cell(&self.map, to)) {
+                (Some(obj), None) if from != to => vec![
+                    CellChange { col: from.0, row: from.1, before: Some(obj), after: None },
+                    CellChange { col: to.0, row: to.1, before: None, after: Some(obj) },
+                ],
+                _ => return false,
+            },
+            LintFix::Place { object, at } => match cell(&self.map, at) {
+                None => vec![CellChange { col: at.0, row: at.1, before: None, after: Some(object) }],
+                Some(_) => return false,
+            },
+            LintFix::Remove { at } => match cell(&self.map, at) {
+                Some(obj) => vec![CellChange { col: at.0, row: at.1, before: Some(obj), after: None }],
+                None => return false,
+            },
+        };
+        for c in &changes {
+            match c.after {
+                Some(obj) => self.map.set_cell(c.col, c.row, obj),
+                None => self.map.clear_cell(c.col, c.row),
+            }
+        }
+        self.history.push(EditStep::Cells(changes.clone()));
+        self.map_changed();
+        self.repaint_ground(changes.iter().map(|c| (c.col, c.row)));
+        true
     }
 
     /// Make the decorative ground layer again from the map's wall, road
@@ -1234,7 +1355,123 @@ impl MapEditor {
             Some(Popup::File) => Some("file"),
             Some(Popup::Load { .. }) => Some("load"),
             Some(Popup::Save { .. }) => Some("save"),
+            Some(Popup::Lint { .. }) => Some("check"),
         }
+    }
+
+    // ----- the CHECK panel (docs/large-maps-patterns.md, "Lint panel with
+    // jump-to and fixes") -----
+
+    /// Run the linter over the canvas now (`maplint::lint_map`, the dev
+    /// server's `lint` tool's own entry), errors first.
+    pub fn run_lint(&mut self) {
+        let (_, mut findings) = crate::maplint::lint_map(&self.map, &self.lint_setup);
+        // A stable sort: each severity keeps the linter's check order.
+        findings.sort_by_key(|f| match f.severity {
+            LintSeverity::Error => 0,
+            LintSeverity::Warning => 1,
+            LintSeverity::Info => 2,
+        });
+        self.lint = Some(LintReport { findings, edits: self.edits });
+        self.lint_marked = None;
+    }
+
+    /// The CHECK panel's last report, and whether the map has changed
+    /// since it ran.
+    pub fn lint_report(&self) -> Option<(&LintReport, bool)> {
+        self.lint.as_ref().map(|report| (report, report.edits != self.edits))
+    }
+
+    /// The finding the canvas marks, if any.
+    pub fn lint_marked(&self) -> Option<&LintFinding> {
+        self.lint.as_ref()?.findings.get(self.lint_marked?)
+    }
+
+    /// Open the CHECK panel on a fresh run of the linter - the CHECK
+    /// button.
+    pub fn open_lint(&mut self) {
+        self.finish_stroke();
+        self.run_lint();
+        self.popup = Some(Popup::Lint { page: 0 });
+    }
+
+    /// Pick finding `index` of the panel's report: the canvas marks its
+    /// cells and the camera frames them (`frame_cells`), beside the
+    /// panel. Whether there was such a finding.
+    pub fn pick_finding(&mut self, index: usize, layout: &Layout) -> bool {
+        let Some(cells) = self.lint.as_ref().and_then(|r| r.findings.get(index)).map(|f| f.cells.clone()) else {
+            return false;
+        };
+        self.lint_marked = Some(index);
+        self.frame_cells(&cells, layout);
+        true
+    }
+
+    /// Make finding `index`'s quick fix, as one undo step, then lint the
+    /// map it leaves and frame where the fix put the map right. Whether a
+    /// fix was made.
+    pub fn fix_finding(&mut self, index: usize, layout: &Layout) -> bool {
+        let Some(fix) = self.lint.as_ref().and_then(|r| r.findings.get(index)).and_then(|f| f.fix) else {
+            return false;
+        };
+        if !self.apply_fix(fix) {
+            return false;
+        }
+        self.run_lint();
+        let (col, row) = fix.target();
+        self.frame_cells(&[LintCell::Map(col, row)], layout);
+        true
+    }
+
+    /// Pan and zoom the canvas onto `cells` (docs/large-maps-patterns.md):
+    /// their bounds, grown to at least `LINT_JUMP_CONTEXT_CELLS` about
+    /// their middle and by a cell all round, fitted into the part of the
+    /// canvas the CHECK panel leaves free and centred there - on the
+    /// canvas's middle when no panel is open. Never past the largest zoom,
+    /// and FIT where the whole field already shows them that big. A finding
+    /// with no cells moves nothing.
+    pub fn frame_cells(&mut self, cells: &[LintCell], layout: &Layout) {
+        let Some(bounds) = crate::maplint::cells_bounds(cells) else { return };
+        let cell = crate::OBSTACLE_GRID_SIZE;
+        let (min_w, min_h) = (LINT_JUMP_CONTEXT_CELLS.0 * cell, LINT_JUMP_CONTEXT_CELLS.1 * cell);
+        let middle = Vec2::new(bounds.x + bounds.width / 2.0, bounds.y + bounds.height / 2.0);
+        let (w, h) = ((bounds.width + 2.0 * cell).max(min_w), (bounds.height + 2.0 * cell).max(min_h));
+        let free = self.free_canvas(layout);
+        let vp = self.viewport_in(layout);
+        let scale = (free.width / w).min(free.height / h);
+        let area = layout.field;
+        // The world point the canvas's middle shows, so `middle` lands on
+        // the free part's.
+        let shift = Vec2::new(
+            (area.x + area.w / 2.0 - (free.x + free.width / 2.0)) / scale,
+            (area.y + area.h / 2.0 - (free.y + free.height / 2.0)) / scale,
+        );
+        self.camera.set(Vec2::new(middle.x + shift.x, middle.y + shift.y), scale, &vp, &CanvasRules::current());
+    }
+
+    /// The part of the canvas area the CHECK panel leaves free, in bitmap
+    /// pixels: left of it where it hangs (a margin's gap short of it), the
+    /// whole area when it is shut.
+    pub fn free_canvas(&self, layout: &Layout) -> Rectangle {
+        let area = Rectangle::new(layout.field.x, layout.field.y, layout.field.w, layout.field.h);
+        match (&self.popup, self.popup_rect(layout)) {
+            (Some(Popup::Lint { .. }), Some(panel)) if panel.x > area.x => {
+                Rectangle::new(area.x, area.y, (panel.x - LINT_FREE_GAP - area.x).max(1.0), area.height)
+            }
+            _ => area,
+        }
+    }
+
+    /// How many findings the CHECK panel's report holds (none before it
+    /// first ran).
+    fn lint_len(&self) -> usize {
+        self.lint.as_ref().map_or(0, |r| r.findings.len())
+    }
+
+    /// The CHECK panel's pages: one per `LINT_PAGE_ROWS` findings, and one
+    /// for none.
+    fn lint_pages(findings: usize) -> usize {
+        findings.div_ceil(LINT_PAGE_ROWS).max(1)
     }
 
     // --- bar geometry, window space ---
@@ -1279,16 +1516,70 @@ impl MapEditor {
         Self::bar_button(layout.panel, SLOT_HERE, HERE_W)
     }
 
+    /// The CHECK button: the CHECK panel.
+    pub(crate) fn check_rect(layout: &Layout) -> Rectangle {
+        Self::bar_button(layout.panel, SLOT_CHECK, CHECK_W)
+    }
+
+    /// The CHECK panel, hanging from the bar below its button and slid
+    /// left to stay on the field like the MAP panel: a header row, a page
+    /// of finding rows (one row saying there are none, when there are
+    /// none) and, past a page, the pager row.
+    fn lint_panel_rect(layout: &Layout, findings: usize) -> Rectangle {
+        let button = Self::check_rect(layout);
+        let paged = findings > LINT_PAGE_ROWS;
+        let rows = 1 + findings.clamp(1, LINT_PAGE_ROWS) + paged as usize;
+        let right = layout.field.x + layout.field.w;
+        Rectangle::new(
+            button.x.min(right - LINT_PANEL_W).max(layout.field.x),
+            layout.panel.y + layout.panel.h,
+            LINT_PANEL_W,
+            rows as f32 * EDITOR_DROPDOWN_ROW_H,
+        )
+    }
+
+    /// The CHECK panel's `index`-th row: 0 is the header, 1 to
+    /// `LINT_PAGE_ROWS` the page's findings, the one after them the pager.
+    fn lint_row_rect(panel: Rectangle, index: usize) -> Rectangle {
+        Rectangle::new(panel.x, panel.y + index as f32 * EDITOR_DROPDOWN_ROW_H, panel.width, EDITOR_DROPDOWN_ROW_H)
+    }
+
+    /// A finding row's FIX button, at its right end.
+    fn lint_fix_rect(row: Rectangle) -> Rectangle {
+        Rectangle::new(row.x + row.width - SETTINGS_INSET - LINT_FIX_W, row.y + 4.0, LINT_FIX_W, row.height - 8.0)
+    }
+
     /// The bar's buttons a tool presses by name, in bitmap pixels - the
-    /// rects the hit tests read (the dev server's `status.builder.buttons`).
+    /// rects the hit tests read (the dev server's `status.builder.buttons`)
+    /// - and, while the CHECK panel is open, its rows (`finding_N`, from
+    /// 0 over the whole report), their FIX buttons (`fix_N`) and its
+    /// pager's halves (`page_back`, `page_next`).
     pub fn named_buttons(&self, layout: &Layout) -> Vec<(String, Rectangle)> {
-        vec![
+        let mut out = vec![
             ("play".to_string(), mode_button_rect(layout.panel)),
             ("play_here".to_string(), Self::here_rect(layout)),
+            ("check".to_string(), Self::check_rect(layout)),
             ("fit".to_string(), Self::fit_rect(layout)),
             ("map".to_string(), Self::map_rect(layout)),
             ("file".to_string(), Self::file_rect(layout)),
-        ]
+        ];
+        if let (Some(Popup::Lint { page }), Some(report)) = (&self.popup, &self.lint) {
+            let panel = Self::lint_panel_rect(layout, report.findings.len());
+            for (i, finding) in report.findings.iter().enumerate().skip(page * LINT_PAGE_ROWS).take(LINT_PAGE_ROWS) {
+                let row = Self::lint_row_rect(panel, 1 + i - page * LINT_PAGE_ROWS);
+                out.push((format!("finding_{i}"), row));
+                if finding.fix.is_some() {
+                    out.push((format!("fix_{i}"), Self::lint_fix_rect(row)));
+                }
+            }
+            if report.findings.len() > LINT_PAGE_ROWS {
+                let pager = Self::lint_row_rect(panel, 1 + LINT_PAGE_ROWS);
+                let half = pager.width / 2.0;
+                out.push(("page_back".to_string(), Rectangle::new(pager.x, pager.y, half, pager.height)));
+                out.push(("page_next".to_string(), Rectangle::new(pager.x + half, pager.y, half, pager.height)));
+            }
+        }
+        out
     }
 
     /// The bar button under a window position, if any. Every button's
@@ -1327,6 +1618,9 @@ impl MapEditor {
         }
         if on(Self::fit_rect(layout)) {
             return Some(BarButton::Fit);
+        }
+        if on(Self::check_rect(layout)) {
+            return Some(BarButton::Check);
         }
         if on(Self::here_rect(layout)) {
             return Some(BarButton::PlayHere);
@@ -1439,6 +1733,7 @@ impl MapEditor {
             Some(Popup::File) => Some(Self::file_menu_rect(layout)),
             Some(Popup::Load { entries, .. }) => Some(Self::load_panel_rect(layout, entries.len())),
             Some(Popup::Save { .. }) => Some(Self::save_prompt_rect(layout)),
+            Some(Popup::Lint { .. }) => Some(Self::lint_panel_rect(layout, self.lint_len())),
         }
     }
 
@@ -1775,6 +2070,7 @@ impl MapEditor {
             }
             BarButton::Map => self.popup = Some(Popup::Settings),
             BarButton::Fit => self.camera.fit(),
+            BarButton::Check => self.open_lint(),
         }
         EditorAction::None
     }
@@ -1872,6 +2168,51 @@ impl MapEditor {
                     }
                 }
                 self.popup = Some(Popup::Load { entries, scroll });
+            }
+            Popup::Lint { page } => {
+                // An edit since the last run - an undo key, a fix, a tool's
+                // stroke - is linted again before the panel reads it.
+                if self.lint_report().is_none_or(|(_, stale)| stale) {
+                    self.run_lint();
+                }
+                let len = self.lint_len();
+                let last = Self::lint_pages(len) - 1;
+                let mut page = page.min(last);
+                if input.wheel != 0.0 {
+                    page = if input.wheel < 0.0 { (page + 1).min(last) } else { page.saturating_sub(1) };
+                }
+                self.popup = Some(Popup::Lint { page });
+                let Some(pointer) = input.pointer.filter(|_| pressed) else { return };
+                let panel = Self::lint_panel_rect(layout, len);
+                if !panel.contains(pointer) {
+                    // A press anywhere else closes the panel; the marks it
+                    // made stay until the next edit.
+                    self.popup = None;
+                    return;
+                }
+                if !input.pressed {
+                    return;
+                }
+                let pager = Self::lint_row_rect(panel, 1 + LINT_PAGE_ROWS);
+                if len > LINT_PAGE_ROWS && pager.contains(pointer) {
+                    page = if pointer.x < pager.x + pager.width / 2.0 { page.saturating_sub(1) } else { (page + 1).min(last) };
+                    self.popup = Some(Popup::Lint { page });
+                    return;
+                }
+                let on_page = (page * LINT_PAGE_ROWS..len).take(LINT_PAGE_ROWS);
+                for (slot, index) in on_page.enumerate() {
+                    let row = Self::lint_row_rect(panel, 1 + slot);
+                    if !row.contains(pointer) {
+                        continue;
+                    }
+                    let has_fix = self.lint.as_ref().is_some_and(|r| r.findings[index].fix.is_some());
+                    if has_fix && Self::lint_fix_rect(row).contains(pointer) {
+                        self.fix_finding(index, layout);
+                    } else {
+                        self.pick_finding(index, layout);
+                    }
+                    break;
+                }
             }
             Popup::Dropdown(category) => {
                 let Some(pointer) = input.pointer.filter(|_| pressed) else {
@@ -1986,6 +2327,8 @@ enum BarButton {
     File,
     /// The camera back to the whole canvas.
     Fit,
+    /// The CHECK panel.
+    Check,
     Play,
     /// PLAY from the middle of the view.
     PlayHere,
@@ -2577,6 +2920,160 @@ mod editor_tests {
         ed.update(&BuilderInput { dt: 1.0 / 60.0, ..Default::default() }, &layout);
         assert!(ed.map().cells.is_empty());
         assert_eq!(ed.history().undo_depth(), 0);
+    }
+
+    /// A 96 x 54 map holding a start penned in by iron, a lone portal and
+    /// `gates` gates off the edge, in the builder on a 1080p desktop.
+    fn check_editor(gates: i32) -> (MapEditor, Layout) {
+        let mut map = MapFile::new();
+        map.size = Some((96.0, 54.0));
+        for c in 38..=42 {
+            map.set_cell(c, 25, CellObject::Wall { material: Material::Iron });
+            map.set_cell(c, 29, CellObject::Wall { material: Material::Iron });
+        }
+        for r in 25..=29 {
+            map.set_cell(38, r, CellObject::Wall { material: Material::Iron });
+            map.set_cell(42, r, CellObject::Wall { material: Material::Iron });
+        }
+        map.set_cell(40, 27, CellObject::Start);
+        map.set_cell(60, 20, CellObject::Portal);
+        for i in 0..gates {
+            map.set_cell(20 + 2 * i, 40, CellObject::Gate);
+        }
+        let (layout, view) = camera::canvas_frame((1920.0, 1080.0), None);
+        let mut ed = MapEditor::new(map);
+        let screen = CanvasScreen { device_per_px: view.scale, points_per_px: view.scale, coarse: true };
+        ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &layout);
+        (ed, layout)
+    }
+
+    /// The rect a named button stands at (`named_buttons`).
+    fn named(ed: &MapEditor, layout: &Layout, name: &str) -> Rectangle {
+        ed.named_buttons(layout).into_iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("no {name} button")).1
+    }
+
+    /// A click on the middle of a named button.
+    fn press_named(ed: &mut MapEditor, layout: &Layout, name: &str) {
+        let at = center(named(ed, layout, name));
+        click(ed, layout, at);
+    }
+
+    /// The index of the first finding of `kind` in the panel's report.
+    fn finding_index(ed: &MapEditor, kind: crate::maplint::LintKind) -> usize {
+        let (report, _) = ed.lint_report().expect("a report");
+        report.findings.iter().position(|f| f.kind == kind).unwrap_or_else(|| panic!("no {kind:?}"))
+    }
+
+    /// CHECK opens the panel on a fresh lint, errors first; a press on a
+    /// finding marks it and brings its cells to the middle of the canvas
+    /// the panel leaves free; a press outside closes the panel and leaves
+    /// the mark, which the next edit takes away.
+    #[test]
+    fn the_check_panel_lists_findings_errors_first_and_jumps_to_them() {
+        use crate::maplint::LintKind;
+        let (mut ed, layout) = check_editor(0);
+        assert_eq!(ed.free_canvas(&layout), Rectangle::new(layout.field.x, layout.field.y, layout.field.w, layout.field.h));
+        click(&mut ed, &layout, center(MapEditor::check_rect(&layout)));
+        assert_eq!(ed.open_menu(), Some("check"));
+        let (report, stale) = ed.lint_report().expect("CHECK lints the canvas");
+        assert!(!stale);
+        let order: Vec<LintSeverity> = report.findings.iter().map(|f| f.severity).collect();
+        let mut sorted = order.clone();
+        sorted.sort_by_key(|s| *s as u8);
+        assert_eq!(order, sorted, "errors first, then warnings, then notes");
+        assert!(report.count(LintSeverity::Error) >= 1 && report.count(LintSeverity::Warning) >= 1, "{:?}", report.findings);
+        // A press on the penned start's row - away from its FIX button.
+        let i = finding_index(&ed, LintKind::StartPenned);
+        let row = named(&ed, &layout, &format!("finding_{i}"));
+        click(&mut ed, &layout, Vec2::new(row.x + 40.0, row.y + row.height / 2.0));
+        assert_eq!(ed.open_menu(), Some("check"), "the panel stays open");
+        assert_eq!(ed.lint_marked().map(|f| f.kind), Some(LintKind::StartPenned));
+        assert!(!ed.camera().is_fit(), "the jump zooms in");
+        let cells = ed.lint_marked().unwrap().cells.clone();
+        let bounds = crate::maplint::cells_bounds(&cells).unwrap();
+        let middle = Vec2::new(bounds.x + bounds.width / 2.0, bounds.y + bounds.height / 2.0);
+        let on = ed.view_camera(&layout).to_view(middle);
+        let free = ed.free_canvas(&layout);
+        assert!(free.width < layout.field.w, "the open panel takes the canvas's right: {free:?}");
+        let (x, y) = (on.x + layout.field.x, on.y + layout.field.y);
+        assert!((x - (free.x + free.width / 2.0)).abs() < 2.0 && (y - (free.y + free.height / 2.0)).abs() < 2.0, "centred: {x},{y} in {free:?}");
+        // The pen and what is round it all show, left of the panel.
+        let vp = ed.viewport();
+        let scale = ed.camera().scale(&vp);
+        assert!(LINT_JUMP_CONTEXT_CELLS.0 * 32.0 * scale <= free.width + 1.0, "{scale}");
+        // Closing the panel keeps the mark; an edit lets it go.
+        click(&mut ed, &layout, Vec2::new(layout.field.x + 40.0, layout.field.y + 300.0));
+        assert_eq!(ed.open_menu(), None);
+        assert!(ed.lint_marked().is_some(), "the mark outlives the panel");
+        assert!(ed.map().cells.len() > 3, "the closing press painted nothing");
+        let painted = ed.map().cells.len();
+        click(&mut ed, &layout, Vec2::new(layout.field.x + 40.0, layout.field.y + 300.0));
+        assert_eq!(ed.map().cells.len(), painted + 1);
+        assert!(ed.lint_marked().is_none(), "an edit takes the mark away");
+        assert!(ed.lint_report().unwrap().1, "and the report is older than the map");
+    }
+
+    /// FIX makes a finding's quick fix as one undo step - the penned start
+    /// moved out, the lone portal taken away - and the panel lints the
+    /// map it leaves; undo brings the finding back.
+    #[test]
+    fn each_quick_fix_is_one_undo_step() {
+        use crate::maplint::LintKind;
+        let (mut ed, layout) = check_editor(0);
+        click(&mut ed, &layout, center(MapEditor::check_rect(&layout)));
+        let depth = ed.history().undo_depth();
+        let i = finding_index(&ed, LintKind::StartPenned);
+        press_named(&mut ed, &layout, &format!("fix_{i}"));
+        assert_eq!(ed.history().undo_depth(), depth + 1, "one step");
+        let start = ed.map().start_cell().expect("the start is still on the map");
+        assert_ne!(start, (40, 27), "moved out of the pen");
+        assert!(!(start.0 > 38 && start.0 < 42 && start.1 > 25 && start.1 < 29), "{start:?}");
+        assert!(ed.lint_report().unwrap().0.findings.iter().all(|f| f.kind != LintKind::StartPenned), "linted again");
+        assert_eq!(ed.open_menu(), Some("check"));
+        let i = finding_index(&ed, LintKind::PortalAlone);
+        press_named(&mut ed, &layout, &format!("fix_{i}"));
+        assert_eq!(ed.history().undo_depth(), depth + 2);
+        assert!(ed.map().portal_cells().is_empty());
+        // Undo, under the panel: the portal is back, and so is its finding.
+        ed.update(&BuilderInput { undo: true, ..Default::default() }, &layout);
+        assert_eq!(ed.map().portal_cells(), vec![(60, 20)]);
+        assert!(ed.lint_report().unwrap().0.findings.iter().any(|f| f.kind == LintKind::PortalAlone));
+        ed.undo();
+        assert_eq!(ed.map().start_cell(), Some((40, 27)));
+        // A fix the map no longer matches makes nothing.
+        assert!(!ed.apply_fix(crate::maplint::LintFix::Remove { at: (61, 20) }));
+        assert!(!ed.apply_fix(crate::maplint::LintFix::Move { from: (60, 20), to: (40, 25) }), "onto a wall");
+        assert_eq!(ed.history().undo_depth(), depth);
+    }
+
+    /// Past a page of findings the panel pages, by the pager's halves -
+    /// the touch screen's way - and by the wheel.
+    #[test]
+    fn the_check_panel_pages() {
+        use crate::maplint::LintKind;
+        let (mut ed, layout) = check_editor(9);
+        click(&mut ed, &layout, center(MapEditor::check_rect(&layout)));
+        let len = ed.lint_report().unwrap().0.findings.len();
+        assert!(len > LINT_PAGE_ROWS, "{len} findings");
+        let panel = MapEditor::lint_panel_rect(&layout, len);
+        assert!(panel.y + panel.height <= layout.field.y + layout.field.h, "the panel fits the field");
+        assert!(named(&ed, &layout, "finding_0").y > panel.y, "under the header");
+        assert!(!ed.named_buttons(&layout).iter().any(|(n, _)| n == &format!("finding_{LINT_PAGE_ROWS}")), "one page at a time");
+        press_named(&mut ed, &layout, "page_next");
+        assert!(ed.named_buttons(&layout).iter().any(|(n, _)| n == &format!("finding_{LINT_PAGE_ROWS}")));
+        press_named(&mut ed, &layout, "page_back");
+        assert!(ed.named_buttons(&layout).iter().any(|(n, _)| n == "finding_0"));
+        ed.update(&BuilderInput { pointer: Some(center(panel)), wheel: -1.0, ..Default::default() }, &layout);
+        assert!(ed.named_buttons(&layout).iter().any(|(n, _)| n == &format!("finding_{LINT_PAGE_ROWS}")), "the wheel turns it too");
+        // Every interior gate is an error with its fix; one of them, on
+        // the second page, taken away.
+        let gates = ed.map().gate_cells().len();
+        let i = (LINT_PAGE_ROWS..len).find(|&i| ed.lint_report().unwrap().0.findings[i].kind == LintKind::GateNotOnEdge).expect("a gate on page two");
+        press_named(&mut ed, &layout, &format!("fix_{i}"));
+        assert_eq!(ed.map().gate_cells().len(), gates - 1);
+        // Esc closes it.
+        ed.update(&BuilderInput { escape: true, ..Default::default() }, &layout);
+        assert_eq!(ed.open_menu(), None);
     }
 
     /// A press-and-release at a window position, the way a click or a

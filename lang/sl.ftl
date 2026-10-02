@@ -178,6 +178,35 @@ editor-file = MENI
 editor-map = IGRA
 editor-fit = VSE
 editor-play-here = IGRAJ TU
+editor-check = PREGLED
+
+check-title = PREGLED ZEMLJEVIDA
+check-hint = Izberi težavo, da jo vidiš na zemljevidu. POPRAVI naredi spremembo, ki jo terja.
+check-none = NI TEŽAV
+check-fix = POPRAVI
+
+lint-unreachable-frog = ŽABA JE NEDOSEGLJIVA
+lint-unreachable-pickup = BONUS JE NEDOSEGLJIV
+lint-gated-pickup = BONUS ZA ZIDOVI
+lint-disconnected-region = ODREZANO OBMOČJE
+lint-boxed-in-cell = ZAPRTO POLJE
+lint-spawn-band-too-tight = NI PROSTORA ZA SOVRAŽNIKE
+lint-planner-physics-mismatch = POT SKOZI ZID
+lint-narrow-corridor = OZEK PREHOD
+lint-gate-not-on-edge = VRATA NISO NA ROBU
+lint-gate-blocked = POT OD VRAT JE ZAPRTA
+lint-waves-no-gates = VALOVI BREZ VRAT
+lint-hunt-missing-enemy-frog = LOV BREZ SOVRAŽNE ŽABE
+lint-enemy-frog-unreachable = SOVRAŽNA ŽABA JE NEDOSEGLJIVA
+lint-no-start = NI ZAČETKA IGRALCA
+lint-start-penned = ZAČETEK JE ZAPRT
+lint-player2-unreachable = IGRALEC 2 JE ODREZAN
+lint-players-too-close = ZAČETKA STA PREBLIZU
+lint-portal-alone = OSAMLJEN PORTAL
+lint-portal-blocked = PORTAL JE ZAPRT
+lint-tower-at-start = STOLP POKRIVA ZAČETEK
+lint-tower-no-reach = STOLP NE DOSEŽE NIČESAR
+lint-too-many-towers = PREVEČ STOLPOV NA ENI STRANI
 editor-tool = ORODJE
 
 category-wall = ZID

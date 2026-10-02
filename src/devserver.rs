@@ -1388,6 +1388,7 @@ impl DevServer {
                 "camera": builder_camera_json(&session.builder),
                 "navigator": self.navigator_json(session, width, height),
                 "buttons": self.builder_buttons_json(session, width, height),
+                "check": builder_check_json(&session.builder),
             },
             "events_kept": self.events.len(),
             "next_event_seq": self.next_seq,
@@ -2246,17 +2247,8 @@ fn lint_json(session: &Session, source: Option<&str>) -> Result<Value, String> {
     // In an online round the map to lint is the room's, as the replica
     // was built from it.
     let live = session.shown();
-    let mut game = Game::default();
-    game.map = if source == "builder" { session.builder.map().clone() } else { live.map.clone() };
-    game.seed_override = Some(live.seed_override.unwrap_or_else(|| live.round_seed()));
-    game.players = live.players;
-    game.enemy_count_override = live.enemy_count_override;
-    game.player_row_override = live.player_row_override;
-    game.player2_row_override = live.player2_row_override;
-    game.level_overrides = live.level_overrides;
-    let (width, height) = game.map.field_size();
-    game.init(width, height);
-    let findings = crate::maplint::lint(&game, width, height);
+    let map = if source == "builder" { session.builder.map() } else { &live.map };
+    let (game, findings) = crate::maplint::lint_map(map, &crate::maplint::LintSetup::of(live));
     let count = |severity: LintSeverity| findings.iter().filter(|f| f.severity == severity).count();
     Ok(json!({
         "source": source,
@@ -2266,11 +2258,40 @@ fn lint_json(session: &Session, source: Option<&str>) -> Result<Value, String> {
         "errors": count(LintSeverity::Error),
         "warnings": count(LintSeverity::Warning),
         "infos": count(LintSeverity::Info),
-        "findings": findings
-            .iter()
-            .map(|f| json!({ "severity": f.severity.to_string(), "kind": f.kind.tag(), "message": f.message }))
-            .collect::<Vec<_>>(),
+        "findings": findings.iter().map(lint_finding_json).collect::<Vec<_>>(),
     }))
+}
+
+/// `status.builder.check`: the builder's CHECK panel - whether it is
+/// open, its last report (counts, findings as the `lint` tool spells them)
+/// and whether the map has moved on since it ran, and the finding the
+/// canvas marks. `null` before the panel first opened.
+fn builder_check_json(b: &MapEditor) -> Value {
+    let Some((report, stale)) = b.lint_report() else { return Value::Null };
+    json!({
+        "open": b.open_menu() == Some("check"),
+        "stale": stale,
+        "errors": report.count(LintSeverity::Error),
+        "warnings": report.count(LintSeverity::Warning),
+        "infos": report.count(LintSeverity::Info),
+        "findings": report.findings.iter().map(lint_finding_json).collect::<Vec<_>>(),
+        "marked": b.lint_marked().map(lint_finding_json),
+    })
+}
+
+/// One finding as the `lint` tool and `status.builder.check` spell it: its
+/// severity, kind and message, the map cells and the nav cells it is
+/// about, and its quick fix, if it has one.
+fn lint_finding_json(f: &crate::maplint::LintFinding) -> Value {
+    use crate::maplint::{LintCell, LintFix};
+    let map: Vec<[i32; 2]> = f.cells.iter().filter_map(|c| if let LintCell::Map(col, row) = *c { Some([col, row]) } else { None }).collect();
+    let nav: Vec<[usize; 2]> = f.cells.iter().filter_map(|c| if let LintCell::Nav(col, row) = *c { Some([col, row]) } else { None }).collect();
+    let fix = f.fix.map(|fix| match fix {
+        LintFix::Move { from, to } => json!({ "move": { "from": [from.0, from.1], "to": [to.0, to.1] } }),
+        LintFix::Place { object, at } => json!({ "place": { "object": object, "at": [at.0, at.1] } }),
+        LintFix::Remove { at } => json!({ "remove": { "at": [at.0, at.1] } }),
+    });
+    json!({ "severity": f.severity.to_string(), "kind": f.kind.tag(), "message": f.message, "cells": map, "nav_cells": nav, "fix": fix })
 }
 
 /// `terrain`: every live tile plus the fire layer - see the tool's

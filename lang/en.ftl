@@ -247,6 +247,44 @@ editor-fit = FIT
 # A round from the middle of the view rather than the map's start, 10 px
 # in a 68 px button just before PLAY (about 9 letters).
 editor-play-here = PLAY HERE
+# The map's check (its findings and quick fixes), 10 px in a 56 px button
+# after FIT (about 6 letters).
+editor-check = CHECK
+
+# The CHECK panel, 440 px wide under its button: the title (16 px, about
+# 20 letters, left of the counts), the line under it (10 px, about 70
+# letters), the line a map with no findings shows (16 px) and the button
+# that makes a finding's one fix (16 px in 80 px, about 6 letters).
+check-title = MAP CHECK
+check-hint = Pick a problem to see it on the map. FIX makes the change it asks for.
+check-none = NO PROBLEMS FOUND
+check-fix = FIX
+
+# What the map linter found, one line per finding in the CHECK panel, 16 px
+# beside its mark and before its FIX button (about 28 letters). The key is
+# `lint-` and the finding's kind as the dev server's `lint` tool spells it.
+lint-unreachable-frog = FROG OUT OF REACH
+lint-unreachable-pickup = PICKUP OUT OF REACH
+lint-gated-pickup = PICKUP BEHIND WALLS
+lint-disconnected-region = CUT-OFF GROUND
+lint-boxed-in-cell = BOXED-IN SPOT
+lint-spawn-band-too-tight = NO ROOM TO PLACE ENEMIES
+lint-planner-physics-mismatch = ROUTE THROUGH A WALL
+lint-narrow-corridor = ONE-CELL PASSAGE
+lint-gate-not-on-edge = GATE OFF THE EDGE
+lint-gate-blocked = GATE LANE BLOCKED
+lint-waves-no-gates = WAVES WITH NO WAY IN
+lint-hunt-missing-enemy-frog = HUNT WITH NO ENEMY FROG
+lint-enemy-frog-unreachable = ENEMY FROG OUT OF REACH
+lint-no-start = NO PLAYER START
+lint-start-penned = START PENNED IN
+lint-player2-unreachable = PLAYER 2 CUT OFF
+lint-players-too-close = STARTS TOO CLOSE
+lint-portal-alone = LONE PORTAL
+lint-portal-blocked = PORTAL BLOCKED
+lint-tower-at-start = TOWER COVERS A START
+lint-tower-no-reach = TOWER CAN'T REACH ANYTHING
+lint-too-many-towers = MANY TOWERS ON ONE SIDE
 # The status line's fallback before a category is active.
 editor-tool = TOOL
 

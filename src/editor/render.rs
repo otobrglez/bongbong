@@ -333,6 +333,7 @@ impl MapEditor {
             None => {}
             Some(Popup::Dropdown(category)) => self.draw_dropdown(d, layout, textures, *category),
             Some(Popup::Settings) => self.draw_settings(d, layout, textures),
+            Some(Popup::Lint { page }) => self.draw_lint_panel(d, layout, *page),
             Some(Popup::File) => Self::draw_file_menu(d, layout),
             Some(Popup::Load { entries, scroll }) => Self::draw_load_list(d, layout, entries, *scroll),
             Some(Popup::Save { name }) => {
@@ -502,6 +503,9 @@ impl MapEditor {
                 }
             }
 
+            // The finding the CHECK panel picked, over the map.
+            self.draw_lint_marks(d, &culled);
+
             // Hover highlight - no visible grid lines otherwise, per
             // docs/map-editor-design.md. On touch this is the last tapped
             // cell.
@@ -552,6 +556,9 @@ impl MapEditor {
         // FIT, dim while the whole canvas is what is shown.
         let fit_color = if self.camera.is_fit() { DIM } else { TEXT };
         draw_small_button(d, Self::fit_rect(layout), &text().get(keys::EDITOR_FIT), fit_color);
+        // CHECK, in the accent while its panel is open.
+        let check_color = if matches!(self.popup, Some(Popup::Lint { .. })) { BUILD_ACCENT } else { TEXT };
+        draw_small_button(d, Self::check_rect(layout), &text().get(keys::EDITOR_CHECK), check_color);
 
         let _ = cursor; // the readout is the field's status line, see `render`
         // PLAY HERE beside PLAY, in PLAY's amber.
@@ -691,6 +698,135 @@ impl MapEditor {
                 d.draw_text(&text().get(keys::SETTINGS_CLI), x, text_y + 5, HUD_LABEL_SIZE, DIM);
             }
         }
+    }
+
+    /// The CHECK panel (docs/large-maps-patterns.md, "Lint panel with
+    /// jump-to and fixes"): a header with the panel's title, a line on how
+    /// it works and each severity's count beside its mark; then a page of
+    /// findings, each its mark, its words (`lint-<kind>`), where it is
+    /// and, where it has one, its FIX button; the pager past a page.
+    fn draw_lint_panel(&self, d: &mut impl RaylibDraw, layout: &Layout, page: usize) {
+        let t = text();
+        let len = self.lint_len();
+        let panel = Self::lint_panel_rect(layout, len);
+        draw_hanging_panel(d, panel);
+        let header = Self::lint_row_rect(panel, 0);
+        let left = (header.x + LINT_TEXT_INSET) as i32;
+        d.draw_text(&t.get(keys::CHECK_TITLE), left, (header.y + 8.0) as i32, LINT_TITLE_SIZE, TEXT);
+        d.draw_text(&t.get(keys::CHECK_HINT), left, (header.y + 30.0) as i32, HUD_LABEL_SIZE, DIM);
+        let Some(report) = &self.lint else { return };
+        // The counts at the header's right end, errors first.
+        let mut x = header.x + header.width - LINT_TEXT_INSET;
+        for severity in [LintSeverity::Info, LintSeverity::Warning, LintSeverity::Error] {
+            let n = report.count(severity);
+            if n == 0 {
+                continue;
+            }
+            let count = n.to_string();
+            x -= text_width(&count, LINT_TITLE_SIZE);
+            d.draw_text(&count, x as i32, (header.y + 8.0) as i32, LINT_TITLE_SIZE, TEXT);
+            x -= LINT_MARK + 4.0;
+            draw_severity_mark(d, x, header.y + 10.0, severity);
+            x -= LINT_COUNT_GAP;
+        }
+        if report.findings.is_empty() {
+            let row = Self::lint_row_rect(panel, 1);
+            let y = (row.y + (row.height - LINT_TITLE_SIZE as f32) / 2.0) as i32;
+            d.draw_text(&t.get(keys::CHECK_NONE), left, y, LINT_TITLE_SIZE, LINT_CLEAN);
+            return;
+        }
+        let page = page.min(Self::lint_pages(len) - 1);
+        for (slot, (index, finding)) in report.findings.iter().enumerate().skip(page * LINT_PAGE_ROWS).take(LINT_PAGE_ROWS).enumerate() {
+            let row = Self::lint_row_rect(panel, 1 + slot);
+            if self.lint_marked == Some(index) {
+                let inset = Rectangle::new(row.x + 4.0, row.y + 2.0, row.width - 8.0, row.height - 4.0);
+                d.draw_rectangle_rounded(inset, 0.2, EDITOR_PANEL_SEGMENTS, Color::new(255, 255, 255, 40));
+            }
+            draw_severity_mark(d, row.x + LINT_TEXT_INSET, row.y + 18.0, finding.severity);
+            let words = fit_text(&t.named("lint", finding.kind.tag()), LINT_FINDING_W, LINT_TITLE_SIZE);
+            let text_x = (row.x + LINT_TEXT_INSET + LINT_MARK + 8.0) as i32;
+            d.draw_text(&words, text_x, (row.y + 8.0) as i32, LINT_TITLE_SIZE, TEXT);
+            d.draw_text(&place_text(&finding.cells), text_x, (row.y + 30.0) as i32, HUD_LABEL_SIZE, DIM);
+            if finding.fix.is_some() {
+                let fix = Self::lint_fix_rect(row);
+                d.draw_rectangle_rounded_lines_ex(fix, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
+                let label = t.get(keys::CHECK_FIX);
+                let w = text_width(&label, LINT_TITLE_SIZE);
+                let y = (fix.y + (fix.height - LINT_TITLE_SIZE as f32) / 2.0) as i32;
+                d.draw_text(&label, (fix.x + (fix.width - w) / 2.0) as i32, y, LINT_TITLE_SIZE, BUILD_ACCENT);
+            }
+        }
+        if len > LINT_PAGE_ROWS {
+            // The pager, as the Load list draws its own.
+            let pager = Self::lint_row_rect(panel, 1 + LINT_PAGE_ROWS);
+            let last = Self::lint_pages(len) - 1;
+            let arrow_y = (pager.y + (pager.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
+            d.draw_text("<", pager.x as i32 + 16, arrow_y, HUD_TEXT_SIZE, if page > 0 { TEXT } else { DIM });
+            let right = pager.x + pager.width - 16.0 - text_width(">", HUD_TEXT_SIZE);
+            d.draw_text(">", right as i32, arrow_y, HUD_TEXT_SIZE, if page < last { TEXT } else { DIM });
+            let from = page * LINT_PAGE_ROWS + 1;
+            let to = (from + LINT_PAGE_ROWS - 1).min(len);
+            let hint = t.fmt(keys::EDITOR_PAGE, &[("from", from.into()), ("to", to.into()), ("n", len.into())]);
+            let hint_x = pager.x + (pager.width - text_width(&hint, HUD_LABEL_SIZE)) / 2.0;
+            d.draw_text(&hint, hint_x as i32, (pager.y + (pager.height - HUD_LABEL_SIZE as f32) / 2.0) as i32, HUD_LABEL_SIZE, DIM);
+        }
+    }
+
+    /// The finding the CHECK panel picked, on the canvas in world pixels:
+    /// each of its cells filled faintly and outlined in its severity's
+    /// colour.
+    fn draw_lint_marks<D: RaylibDraw>(&self, d: &mut D, culled: impl Fn(Position, f32) -> bool) {
+        let Some(finding) = self.lint_marked() else { return };
+        let color = severity_color(finding.severity);
+        let fill = Color::new(color.r, color.g, color.b, 70);
+        for cell in &finding.cells {
+            let r = cell.rect();
+            if culled(Position::new(r.x + r.width / 2.0, r.y + r.height / 2.0), r.width) {
+                continue;
+            }
+            d.draw_rectangle_rec(r, fill);
+            d.draw_rectangle_lines_ex(r, 2.0, color);
+        }
+    }
+}
+
+/// The CHECK panel's text: its header and its findings' words in 16 px,
+/// inset from the panel's left; a severity's mark is a 12 px square of
+/// whole blocks. A finding's words run `LINT_FINDING_W` from beside it.
+const LINT_TITLE_SIZE: i32 = 16;
+/// The gap between two counts in the header.
+const LINT_COUNT_GAP: f32 = 12.0;
+const LINT_ERROR: Color = Color::new(232, 72, 64, 255);
+const LINT_WARNING: Color = Color::new(255, 176, 48, 255);
+const LINT_INFO: Color = Color::new(120, 170, 230, 255);
+/// The line a clean map's panel says it with.
+const LINT_CLEAN: Color = Color::new(120, 220, 90, 255);
+
+fn severity_color(severity: LintSeverity) -> Color {
+    match severity {
+        LintSeverity::Error => LINT_ERROR,
+        LintSeverity::Warning => LINT_WARNING,
+        LintSeverity::Info => LINT_INFO,
+    }
+}
+
+/// A severity's mark: a square of 2 px blocks in its colour, with a dark
+/// block in the middle so it reads on the panel at any size.
+fn draw_severity_mark(d: &mut impl RaylibDraw, x: f32, y: f32, severity: LintSeverity) {
+    d.draw_rectangle(x as i32, y as i32, LINT_MARK as i32, LINT_MARK as i32, severity_color(severity));
+    d.draw_rectangle(x as i32 + 4, y as i32 + 4, 4, 4, Color::new(0, 0, 0, 120));
+}
+
+/// Where a finding is, as its row says it: the map cell under its first
+/// cell's middle - what the cursor readout would name there - and how
+/// many more it covers. Numbers only, so no language has to say it.
+fn place_text(cells: &[LintCell]) -> String {
+    let Some(first) = cells.first() else { return String::new() };
+    let r = first.rect();
+    let (col, row) = map::world_to_cell(Position::new(r.x + r.width / 2.0, r.y + r.height / 2.0));
+    match cells.len() {
+        1 => format!("{col},{row}"),
+        n => format!("{col},{row} +{}", n - 1),
     }
 }
 
@@ -1123,7 +1259,8 @@ mod bar_tests {
         assert!(SLOT_REDO + SMALL_BUTTON_W <= SLOT_FILE);
         assert!(SLOT_FILE + MAP_BUTTON_W <= SLOT_MAP);
         assert!(SLOT_MAP + MAP_BUTTON_W <= SLOT_FIT);
-        assert!(SLOT_FIT + SMALL_BUTTON_W <= SLOT_HERE, "FIT runs into PLAY HERE");
+        assert!(SLOT_FIT + SMALL_BUTTON_W <= SLOT_CHECK, "FIT runs into CHECK");
+        assert!(SLOT_CHECK + CHECK_W <= SLOT_HERE, "CHECK runs into PLAY HERE");
         let layout = Layout::for_field(W, H);
         let play = mode_button_rect(layout.panel);
         assert!(SLOT_HERE + HERE_W <= play.x, "PLAY HERE runs into PLAY");

@@ -783,6 +783,8 @@ impl Session {
         if self.driver != Driver::Build {
             return;
         }
+        // The CHECK panel lints the canvas the way PLAY would set it up.
+        self.builder.lint_setup = crate::maplint::LintSetup::of(&self.game);
         match self.builder.update(input, layout) {
             EditorAction::None => {}
             EditorAction::Play => {

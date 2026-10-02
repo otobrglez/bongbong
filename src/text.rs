@@ -195,6 +195,11 @@ keys! {
     EDITOR_MAP = "editor-map";
     EDITOR_FIT = "editor-fit";
     EDITOR_PLAY_HERE = "editor-play-here";
+    EDITOR_CHECK = "editor-check";
+    CHECK_TITLE = "check-title";
+    CHECK_HINT = "check-hint";
+    CHECK_NONE = "check-none";
+    CHECK_FIX = "check-fix";
     EDITOR_TOOL = "editor-tool";
     CATEGORY_WALL = "category-wall";
     CATEGORY_PROP = "category-prop";
@@ -666,6 +671,9 @@ mod text_tests {
         for tier in crate::level::Tier::ALL {
             ids.push(format!("tier-{}", tier.name()));
         }
+        for kind in crate::maplint::LintKind::ALL {
+            ids.push(format!("lint-{}", kind.tag()));
+        }
         ids.push("status-label-room".to_string());
         ids
     }
@@ -842,6 +850,15 @@ mod text_tests {
             (keys::EDITOR_FIT, HUD_LABEL_SIZE, 36, vec![]),
             // PLAY HERE in its wider small button, 10 px in 64.
             (keys::EDITOR_PLAY_HERE, HUD_LABEL_SIZE, 60, vec![]),
+            // CHECK in its small button, 10 px in 52; its panel's title,
+            // 16 px, left of the three counts; the line under it, 10 px
+            // across the 440 px panel; a clean map's line, 16 px; FIX in
+            // its 80 px button.
+            (keys::EDITOR_CHECK, HUD_LABEL_SIZE, 48, vec![]),
+            (keys::CHECK_TITLE, 16, 240, vec![]),
+            (keys::CHECK_HINT, HUD_LABEL_SIZE, 412, vec![]),
+            (keys::CHECK_NONE, 16, 412, vec![]),
+            (keys::CHECK_FIX, 16, 72, vec![]),
             (keys::FILE_LOAD, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE_AS, HUD_TEXT_SIZE, 168, vec![]),
@@ -962,6 +979,14 @@ mod text_tests {
                 let short = catalogue.message(&format!("tool-short-{}", tool.name()), &[]).unwrap_or(long);
                 if width(&short, HUD_LABEL_SIZE) > 48 {
                     over.push(format!("{tag}: short tool name {short:?} overflows the bar's line"));
+                }
+            }
+            // The CHECK panel's findings, 16 px from beside a row's mark to
+            // its FIX button.
+            for kind in crate::maplint::LintKind::ALL {
+                let words = catalogue.named("lint", kind.tag());
+                if width(&words, 16) > crate::editor::LINT_FINDING_W as i32 {
+                    over.push(format!("{tag}: finding {} = {words:?} runs into its FIX button", kind.tag()));
                 }
             }
             // A settings row's value runs from 180 px into the row to its
