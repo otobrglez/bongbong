@@ -1780,7 +1780,7 @@ tunables! {
         /// so a big screen would otherwise blow it up - 2x on a 1080p
         /// monitor, a 35 mm tank - while a phone sees it at 8 mm; the cap
         /// draws it at this scale at most and fills the rest of the window
-        /// with the bar's colour. 1.0 is the classic desktop look (a 64 px
+        /// with the backdrop's colour. 1.0 is the classic desktop look (a 64 px
         /// tank), 1.5 about the old window on a laptop. 0 turns the cap
         /// off. A phone is never affected: its fit is below any cap. Also
         /// `--zoom`. Live.

@@ -8,8 +8,10 @@
 //! changes width. This half is headless - the model, the shared colours and
 //! sizes, the window the chrome is laid out in (`UiFrame`, a UI scale in
 //! points, never the world's) and every button and dialog rect the hit
-//! tests read (`corners`); the slot tables and the drawing are the `render`
-//! half.
+//! tests read - `corners`, the two dialogs, the end screen's
+//! `result_layout` and the banners' sizes, all in UI points and centred in
+//! the chrome's area, so they keep their size whatever the map; the slot
+//! tables and the drawing are the `render` half.
 //!
 //! The left cluster is the seat's vitals: health as a number and a gauge,
 //! shells, the speed and shield gauges, and the weapon queue with the live
@@ -748,9 +750,9 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     }
 }
 
-/// The leave-round dialog's geometry, in field space: the panel and its
-/// two buttons (`LEAVE ROUND`, `KEEP PLAYING`), each at least 48 px tall
-/// and 160 px wide so a finger cannot miss.
+/// The leave-round dialog's geometry, in UI points: the panel and its two
+/// buttons (`LEAVE ROUND`, `KEEP PLAYING`), each at least 48 points tall
+/// and 160 wide so a finger cannot miss.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LeaveDialogRects {
     pub panel: Rectangle,
@@ -763,12 +765,22 @@ pub const DIALOG_H: f32 = 170.0;
 pub const DIALOG_BUTTON_W: f32 = 176.0;
 pub const DIALOG_BUTTON_H: f32 = 48.0;
 
-/// A centred `DIALOG_W` x `DIALOG_H` panel with two buttons on a row 16 px
-/// up from its bottom, 16 px apart: (panel, left, right). Both dialogs.
-fn two_button_dialog(field: Rect) -> (Rectangle, Rectangle, Rectangle) {
-    let x = (field.w - DIALOG_W) / 2.0;
-    let y = (field.h - DIALOG_H) / 2.0;
-    let panel = Rectangle::new(x, y, DIALOG_W, DIALOG_H);
+/// Where `w` x `h` points stand centred in `area`, on whole points - a
+/// dialog's, a panel's or the end screen's place in the chrome's area
+/// (`UiFrame::area`), so it stays inside the safe area whatever the
+/// window. A box larger than the area keeps to its top-left corner.
+pub fn centred_in(area: Rect, w: f32, h: f32) -> Rectangle {
+    let x = (area.x + ((area.w - w) / 2.0).max(0.0)).round();
+    let y = (area.y + ((area.h - h) / 2.0).max(0.0)).round();
+    Rectangle::new(x, y, w, h)
+}
+
+/// A `DIALOG_W` x `DIALOG_H` panel centred in `area` (UI points) with two
+/// buttons on a row 16 points up from its bottom, 16 apart: (panel, left,
+/// right). Both dialogs.
+fn two_button_dialog(area: Rect) -> (Rectangle, Rectangle, Rectangle) {
+    let panel = centred_in(area, DIALOG_W, DIALOG_H);
+    let (x, y) = (panel.x, panel.y);
     let by = y + DIALOG_H - 16.0 - DIALOG_BUTTON_H;
     let gap = 16.0;
     let bx = x + (DIALOG_W - 2.0 * DIALOG_BUTTON_W - gap) / 2.0;
@@ -779,12 +791,14 @@ fn two_button_dialog(field: Rect) -> (Rectangle, Rectangle, Rectangle) {
     )
 }
 
-pub fn leave_dialog_rects(field: Rect) -> LeaveDialogRects {
-    let (panel, leave, stay) = two_button_dialog(field);
+/// The leave dialog centred in the chrome's `area` (UI points): the one
+/// geometry its painter and every hit test read.
+pub fn leave_dialog_rects(area: Rect) -> LeaveDialogRects {
+    let (panel, leave, stay) = two_button_dialog(area);
     LeaveDialogRects { panel, leave, stay }
 }
 
-/// The players dialog's geometry (field space): the panel and its `1
+/// The players dialog's geometry (UI points): the panel and its `1
 /// PLAYER` / `2 PLAYERS` buttons, the leave dialog's shape.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlayersDialogRects {
@@ -793,8 +807,9 @@ pub struct PlayersDialogRects {
     pub two: Rectangle,
 }
 
-pub fn players_dialog_rects(field: Rect) -> PlayersDialogRects {
-    let (panel, one, two) = two_button_dialog(field);
+/// The players dialog centred in the chrome's `area` (UI points).
+pub fn players_dialog_rects(area: Rect) -> PlayersDialogRects {
+    let (panel, one, two) = two_button_dialog(area);
     PlayersDialogRects { panel, one, two }
 }
 
@@ -845,7 +860,7 @@ pub enum NextLevel {
     FirstAgain { levels: usize },
 }
 
-/// The end screen's buttons, field space.
+/// The end screen's buttons, in UI points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ResultRects {
     /// `LEVELS`, the level select, on the left.
@@ -855,7 +870,7 @@ pub struct ResultRects {
     pub next: Option<Rectangle>,
 }
 
-/// Where each line of the end screen goes, field space - the one
+/// Where each line of the end screen goes, in UI points - the one
 /// geometry the drawing and every hit test read, so a button that is not
 /// drawn cannot be pressed.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -884,22 +899,47 @@ pub const RESULT_STATS_GAP: i32 = 40;
 /// half the banner's size.
 pub const LEVEL_NUMBER_SIZE: i32 = 28;
 pub const LEVEL_TITLE_SIZE: i32 = 36;
-/// The room one line of a level's banner or the end screen has: the
-/// smallest field the game ships (`maps/crossplay/`, 768 px) less 16 px a
-/// side - the budget `text_tests` measures every language against.
-pub const RESULT_TEXT_PX: i32 = 768 - 32;
+/// The mission banner and the end screen's outcome, the `WAVE N` banner
+/// and PAUSED: the sizes they are set in where the line has the room
+/// (`banner_size`).
+pub const BANNER_SIZE: i32 = 72;
+pub const WAVE_BANNER_SIZE: i32 = 48;
+/// The free-play end screen's countdown and the online one's.
+pub const BANNER_SUB_SIZE: i32 = 28;
+/// The least a banner shrinks to on a narrow window (`banner_size`):
+/// `text_tests` holds every language's banners to it in the smallest area.
+pub const BANNER_MIN_SIZE: i32 = 48;
+/// The room one line of a banner or the end screen has in the smallest
+/// area the chrome lays itself out in (`UI_MIN_W` less the edges) less 16
+/// points a side - the budget `text_tests` measures every language
+/// against.
+pub const RESULT_TEXT_PX: i32 = (UI_MIN_W - 2.0 * UI_EDGE_PT) as i32 - 32;
+
+/// The room a banner's line has in `area`: its width less 16 points a
+/// side, and never less than `RESULT_TEXT_PX`, which every area holds.
+pub fn banner_px(area: Rect) -> i32 {
+    ((area.w - 32.0) as i32).max(RESULT_TEXT_PX)
+}
+
+/// The size `text` is set in as a banner of `size` in `area`: `size` where
+/// the line has the room, else the largest that fits it (`text::fit_size`)
+/// - a long mission banner in a narrow language on a phone - but never
+/// under `BANNER_MIN_SIZE`.
+pub fn banner_size(text: &str, size: i32, area: Rect) -> i32 {
+    crate::text::fit_size(text, size, banner_px(area)).max(BANNER_MIN_SIZE.min(size))
+}
 pub const RESULT_BUTTON_W: f32 = 224.0;
 pub const RESULT_BUTTON_H: f32 = 48.0;
 pub const RESULT_BUTTON_GAP: f32 = 24.0;
 /// `LEVELS` is the quieter way out, and narrower.
 pub const RESULT_LEVELS_W: f32 = 160.0;
 
-/// The end screen stacked and centred on the field: the outcome, then
-/// whichever lines `view` carries, then the buttons or the countdown. A
-/// level's buttons sit in one centred row - `LEVELS`, `PLAY AGAIN`, and
-/// after a win the way on - so the way forward is always on the right;
-/// free play's countdown stands where they would.
-pub fn result_layout(field: Rect, view: &ResultView) -> ResultLayout {
+/// The end screen stacked and centred in the chrome's `area` (UI points):
+/// the outcome, then whichever lines `view` carries, then the buttons or
+/// the countdown. A level's buttons sit in one centred row - `LEVELS`,
+/// `PLAY AGAIN`, and after a win the way on - so the way forward is always
+/// on the right; free play's countdown stands where they would.
+pub fn result_layout(area: Rect, view: &ResultView) -> ResultLayout {
     let line = RESULT_LINE_SIZE as f32;
     let all_clear = matches!(view.buttons, Some(ResultButtons { next: Some(NextLevel::FirstAgain { .. }), .. }));
     let rows = 16.0
@@ -909,7 +949,7 @@ pub fn result_layout(field: Rect, view: &ResultView) -> ResultLayout {
         + if view.seats >= 2 { RESULT_SEATS_SIZE as f32 + 10.0 } else { 0.0 }
         + 14.0
         + if view.buttons.is_some() { RESULT_BUTTON_H } else { line };
-    let top = ((field.h - RESULT_TITLE_SIZE as f32 - rows) / 2.0).max(8.0).round();
+    let top = centred_in(area, 0.0, RESULT_TITLE_SIZE as f32 + rows).y;
     let mut y = top + RESULT_TITLE_SIZE as f32 + 16.0;
     let all_clear_y = all_clear.then(|| {
         let at = y;
@@ -928,7 +968,7 @@ pub fn result_layout(field: Rect, view: &ResultView) -> ResultLayout {
     let buttons = view.buttons.map(|b| {
         let (w, h, gap, levels_w) = (RESULT_BUTTON_W, RESULT_BUTTON_H, RESULT_BUTTON_GAP, RESULT_LEVELS_W);
         let row = levels_w + gap + w + if b.next.is_some() { gap + w } else { 0.0 };
-        let x = ((field.w - row) / 2.0).round();
+        let x = centred_in(area, row, h).x;
         let again = Rectangle::new(x + levels_w + gap, y, w, h);
         ResultRects {
             levels: Rectangle::new(x, y, levels_w, h),
@@ -1165,7 +1205,7 @@ mod hud_tests {
 
     /// The block is the local seat's, whichever seat that is, and the
     /// chips are all the others - so a four-seat room at seat 2 reads its
-    /// own shells in the bar and seats 1, 2 and 4 in the strip.
+    /// own shells in the block and seats 1, 2 and 4 in the strip.
     #[test]
     fn the_block_is_the_local_seats_and_the_chips_are_the_rest() {
         let game = round(4);
@@ -1429,30 +1469,65 @@ mod hud_tests {
         assert_eq!(covered(&c, &[], &screen), [false, false]);
     }
 
+    /// The chrome's areas the screens over the round are held to: the
+    /// smallest any window lays it out in, an iPhone's inside its safe
+    /// area, and a 1080p monitor's.
+    fn areas() -> [Rect; 3] {
+        [
+            UiFrame::plain((UI_MIN_W, UI_MIN_H)).area,
+            UiFrame::new((852.0, 393.0), 1.0, 1.0, Insets { left: 59.0, top: 0.0, right: 59.0, bottom: 21.0 }, true).area,
+            UiFrame::plain((1920.0, 1080.0)).area,
+        ]
+    }
+
+    /// Both dialogs, centred in every area: finger-sized buttons in
+    /// points, inside their panel and apart, the panel inside the area.
     #[test]
-    fn both_dialogs_have_finger_sized_buttons_inside_the_field() {
-        let field = Rect::new(0.0, 32.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32);
-        let l = leave_dialog_rects(field);
-        let p = players_dialog_rects(field);
-        for (panel, left, right) in [(l.panel, l.leave, l.stay), (p.panel, p.one, p.two)] {
-            for b in [left, right] {
-                assert!(b.width >= 160.0 && b.height >= 48.0);
-                assert!(b.x >= panel.x && b.x + b.width <= panel.x + panel.width);
-                assert!(b.y >= panel.y && b.y + b.height <= panel.y + panel.height);
+    fn both_dialogs_have_finger_sized_buttons_inside_the_area() {
+        for area in areas() {
+            let l = leave_dialog_rects(area);
+            let p = players_dialog_rects(area);
+            for (panel, left, right) in [(l.panel, l.leave, l.stay), (p.panel, p.one, p.two)] {
+                for b in [left, right] {
+                    assert!(b.width >= 160.0 && b.height >= 48.0 && b.height >= UI_TOUCH_PT);
+                    assert!(b.x >= panel.x && b.x + b.width <= panel.x + panel.width);
+                    assert!(b.y >= panel.y && b.y + b.height <= panel.y + panel.height);
+                }
+                assert!(left.x + left.width + 16.0 <= right.x);
+                assert!(panel.x >= area.x && panel.x + panel.width <= area.x + area.w, "{area:?}");
+                assert!(panel.y >= area.y && panel.y + panel.height <= area.y + area.h, "{area:?}");
+                let middle = |r: Rectangle| (r.x + r.width / 2.0, r.y + r.height / 2.0);
+                let (mx, my) = middle(panel);
+                assert!((mx - (area.x + area.w / 2.0)).abs() <= 0.5 && (my - (area.y + area.h / 2.0)).abs() <= 0.5, "centred");
             }
-            assert!(left.x + left.width + 16.0 <= right.x);
-            assert!(panel.x >= 0.0 && panel.x + panel.width <= field.w);
         }
     }
 
-    /// The end screen fits the smallest field the game ships in its
-    /// tallest and widest form - every level complete, eight seats'
-    /// shares, three buttons - its buttons finger-sized, apart and in one
-    /// centred row, and each form puts its lines top to bottom without
-    /// overlapping; a level's countdown is in a button, never a line.
+    /// A banner keeps its size where the area has the room and shrinks to
+    /// fit where it has not, never under `BANNER_MIN_SIZE`.
     #[test]
-    fn the_end_screen_fits_the_smallest_field_in_every_form() {
-        let fields = [Rect::new(0.0, 0.0, 768.0, 384.0), Rect::new(0.0, 0.0, W, H), Rect::new(0.0, 0.0, 1536.0, 768.0)];
+    fn a_banner_shrinks_to_fit_its_area() {
+        let [small, _, desktop] = areas();
+        assert_eq!(banner_px(small), RESULT_TEXT_PX, "the smallest area is the budget's");
+        let banner = "PROTECT THE FROG!";
+        assert_eq!(banner_size(banner, BANNER_SIZE, desktop), BANNER_SIZE);
+        let fitted = banner_size(banner, BANNER_SIZE, small);
+        assert!(fitted < BANNER_SIZE && fitted >= BANNER_MIN_SIZE, "{fitted}");
+        assert!(crate::text::width(banner, fitted) <= banner_px(small));
+        assert_eq!(banner_size("YOU WIN", BANNER_SIZE, small), BANNER_SIZE);
+        assert_eq!(banner_size(&"W".repeat(80), BANNER_SIZE, small), BANNER_MIN_SIZE, "never under the floor");
+        assert_eq!(banner_size("LEVEL 3 / 14", LEVEL_NUMBER_SIZE, small), LEVEL_NUMBER_SIZE, "a size under the floor stays");
+    }
+
+    /// The end screen fits the smallest area the chrome is laid out in, in
+    /// its tallest and widest form - every level complete, eight seats'
+    /// shares, three buttons - its buttons finger-sized, apart and in one
+    /// row centred on the area, and each form puts its lines top to bottom
+    /// without overlapping; a level's countdown is in a button, never a
+    /// line.
+    #[test]
+    fn the_end_screen_fits_the_smallest_area_in_every_form() {
+        let fields = areas();
         let forms = [
             None,
             Some(ResultButtons { next: None, countdown: Some(3) }),
@@ -1467,7 +1542,7 @@ mod hud_tests {
                     let view = ResultView { stats: RoundStats::default(), seats, buttons };
                     let rows = result_layout(field, &view);
                     let what = format!("{}x{}, {seats} seats, {buttons:?}", field.w, field.h);
-                    assert!(rows.title_y >= 0.0, "{what}");
+                    assert!(rows.title_y >= field.y, "{what}");
                     let mut y = rows.title_y + RESULT_TITLE_SIZE as f32;
                     for (line, size) in [(rows.all_clear_y, RESULT_LINE_SIZE), (Some(rows.stats_y), RESULT_LINE_SIZE), (rows.seats_y, RESULT_SEATS_SIZE)] {
                         if let Some(at) = line {
@@ -1480,22 +1555,22 @@ mod hud_tests {
                         Some(r) => {
                             let row: Vec<Rectangle> = [Some(r.levels), Some(r.again), r.next].into_iter().flatten().collect();
                             for b in &row {
-                                assert!(b.y >= y && b.y + b.height <= field.h, "{what}: the buttons leave the field");
+                                assert!(b.y >= y && b.y + b.height <= field.y + field.h, "{what}: the buttons leave the area");
                                 assert!(b.width >= crate::lobby::LOBBY_TOUCH_MIN && b.height >= crate::lobby::LOBBY_TOUCH_MIN);
-                                assert!(b.x >= 16.0 && b.x + b.width <= field.w - 16.0, "{what}: a button runs off the side");
+                                assert!(b.x >= field.x + 16.0 && b.x + b.width <= field.x + field.w - 16.0, "{what}: a button runs off the side");
                                 assert_eq!(b.y, r.again.y, "{what}: one row");
                             }
                             for pair in row.windows(2) {
                                 assert!(pair[0].x + pair[0].width + 16.0 <= pair[1].x, "{what}: two buttons touch");
                             }
                             let (left, right) = (row[0].x, row[row.len() - 1].x + row[row.len() - 1].width);
-                            assert!(((left + right) / 2.0 - field.w / 2.0).abs() <= 1.0, "{what}: the row is centred");
+                            assert!(((left + right) / 2.0 - (field.x + field.w / 2.0)).abs() <= 1.0, "{what}: the row is centred");
                             assert_eq!(r.next.is_some(), buttons.is_some_and(|b| b.next.is_some()), "{what}: a way on only after a win");
                         }
                         None => {
                             assert!(buttons.is_none());
                             let at = rows.countdown_y.expect("free play counts down");
-                            assert!(at >= y && at + RESULT_LINE_SIZE as f32 <= field.h, "{what}");
+                            assert!(at >= y && at + RESULT_LINE_SIZE as f32 <= field.y + field.h, "{what}");
                         }
                     }
                 }

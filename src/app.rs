@@ -1555,9 +1555,10 @@ pub fn run(args: Args) {
         touch_held_last_frame = touching;
         let mouse_pressed = rl.is_mouse_button_pressed(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
         let mouse_held = rl.is_mouse_button_down(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
-        // A pointer is read twice: in bitmap pixels, where the dialogs and
-        // the builder hit-test and never learn what the window is, and in
-        // UI points, where the corners' buttons stand.
+        // A pointer is read twice: in bitmap pixels, where the builder
+        // hit-tests and never learns what the window is, and in UI points,
+        // where the corners' buttons, the dialogs, the end screen, the
+        // level select and the lobby stand.
         let window_pointer: crate::math::Vec2 = if touching { rl.get_touch_position(0).into() } else { rl.get_mouse_position().into() };
         let pointer = view.to_bitmap(window_pointer);
         let ui_pointer = ui.to_ui(window_pointer);
@@ -1604,7 +1605,7 @@ pub fn run(args: Args) {
                         touch.claim(&touch_points);
                     }
                     let input = SelectInput {
-                        pointer: Some(layout.to_field(pointer)),
+                        pointer: Some(ui_pointer),
                         pressed,
                         left: rl.is_key_pressed(KeyboardKey::KEY_LEFT),
                         right: rl.is_key_pressed(KeyboardKey::KEY_RIGHT),
@@ -1613,16 +1614,15 @@ pub fn run(args: Args) {
                         enter: rl.is_key_pressed(KeyboardKey::KEY_ENTER),
                         escape: rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab,
                     };
-                    session.update_level_select(&input, layout.field);
+                    session.update_level_select(&input, ui.area);
                 } else if session.players_dialog {
-                    let rects = players_dialog_rects(layout.field);
-                    let field_p = layout.to_field(pointer);
+                    let rects = players_dialog_rects(ui.area);
                     if pressed {
-                        if rects.one.contains(field_p) {
+                        if rects.one.contains(ui_pointer) {
                             session.answer_players(PlayerCount::ONE);
-                        } else if rects.two.contains(field_p) {
+                        } else if rects.two.contains(ui_pointer) {
                             session.answer_players(PlayerCount::TWO);
-                        } else if !rects.panel.contains(field_p) {
+                        } else if !rects.panel.contains(ui_pointer) {
                             session.close_players_dialog();
                         }
                     }
@@ -1640,16 +1640,13 @@ pub fn run(args: Args) {
                         session.close_players_dialog();
                     }
                 } else if session.dialog {
-                    let rects = leave_dialog_rects(layout.field);
-                    let field_p = layout.to_field(pointer);
+                    let rects = leave_dialog_rects(ui.area);
                     if pressed {
                         // The dialog's own press is nobody's shot.
                         touch.claim(&touch_points);
-                        if rects.leave.contains(field_p) {
+                        if rects.leave.contains(ui_pointer) {
                             session.answer_dialog(true);
-                        } else if rects.stay.contains(field_p)
-                            || !rects.panel.contains(field_p)
-                        {
+                        } else if rects.stay.contains(ui_pointer) || !rects.panel.contains(ui_pointer) {
                             session.answer_dialog(false);
                         }
                     }
@@ -1658,7 +1655,7 @@ pub fn run(args: Args) {
                     } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab {
                         session.answer_dialog(false);
                     }
-                } else if pressed && session.press_result(layout.to_field(pointer)) {
+                } else if pressed && session.press_result(ui_pointer, ui.area) {
                     // A level's end screen (docs/levels.md): PLAY AGAIN or
                     // the way on. The tap that pressed it must not also be
                     // the fire press that skips the next banner.
@@ -1688,21 +1685,20 @@ pub fn run(args: Args) {
                 }
             }
             Driver::Lobby => {
-                // The lobby's own screen: the pointer is already in
-                // bitmap space, and its rects are the field's.
+                // The lobby's own screen, in UI points like its rects.
                 let mut typed = String::new();
                 while let Some(c) = rl.get_char_pressed() {
                     typed.push(c);
                 }
                 let input = LobbyInput {
-                    pointer: Some(layout.to_field(pointer)),
+                    pointer: Some(ui_pointer),
                     pressed,
                     typed,
                     backspace: rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE),
                     enter: rl.is_key_pressed(KeyboardKey::KEY_ENTER),
                     escape: rl.is_key_pressed(KeyboardKey::KEY_ESCAPE),
                 };
-                session.update_lobby(&input, layout.field, dt);
+                session.update_lobby(&input, ui.area, dt);
             }
             Driver::Online => {
                 // A round belongs to its room: the corners carry one

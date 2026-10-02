@@ -101,7 +101,7 @@ pub const GAME_ONLY_TOOLS: &[&str] = &[
 /// `events`, `history`, `nav_grid`, `field`, `map_get`, `lint`,
 /// `overlays`, `screenshot`, `mode`, `builder_files` and the `tuning_*`
 /// tools - describes the online round instead (`Session::shown`), and
-/// `key {escape}` gives the seat up, as does a `click` on the bar's
+/// `key {escape}` gives the seat up, as does a `click` on the corners'
 /// `LEAVE` button - the one thing a click has to press in this mode.
 pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
     "step", "input", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "players", "play",
@@ -155,7 +155,7 @@ const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"inte
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|apart|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, and in play and online the corners' `buttons` and `clusters` in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|apart|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, in play and online the corners' `buttons` and `clusters`, and the `screen_buttons` of whatever stands over the round - the level select's open tiles (`level_N`) and `back`, a dialog's `one`/`two` or `leave`/`stay`, a level's end screen's `levels`/`again`/`next`, the lobby's live buttons (`host`, `join`, `key_a`, `confirm`, `ready`, `start`, `kick_1`, ...) - all in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -429,7 +429,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "click",
-        description: "A raw press at a window position - the window's own coordinates, which `status.ui.buttons` and `status.camera.window_field` give (with no window, the live mode's bitmap at its own size: the builder's under its 32 px bar, play's field alone) - in either mode, on the same hit-tests a mouse or a finger uses: in play mode the corners' buttons (BUILD, the players button, ONLINE, RESTART on a keyboard-less build, and the level button on a level - `status.ui.buttons`), either dialog's buttons (a press outside a dialog closes it), a level's end-screen buttons (LEVELS, PLAY AGAIN, the way on) and the level select's tiles and BACK (a press outside it closes it) - a press on the field itself does nothing in play mode; online the corners' LEAVE; in build mode the bar's buttons (PLAY starts the round like `play`), a dropdown row, a settings stepper or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`, with `world` - the world point the press landed on, through the camera - for a press on the field outside the builder. This tests the UI; `build`/`play`/`builder_*` address the model directly.",
+        description: "A raw press at a window position - the window's own coordinates, which `status.ui.buttons` and `status.camera.window_field` give (with no window, the live mode's bitmap at its own size: the builder's under its 32 px bar, play's field alone) - in either mode, on the same hit-tests a mouse or a finger uses: in play mode the corners' buttons (BUILD, the players button, ONLINE, RESTART on a keyboard-less build, and the level button on a level - `status.ui.buttons`), either dialog's buttons (a press outside a dialog closes it), a level's end-screen buttons (LEVELS, PLAY AGAIN, the way on) and the level select's tiles and BACK (a press outside it closes it) - `status.ui.screen_buttons` - and a press on the field itself does nothing in play mode; the lobby's buttons (`status.ui.screen_buttons`); online the corners' LEAVE; in build mode the bar's buttons (PLAY starts the round like `play`), a dropdown row, a settings stepper or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`, with `world` - the world point the press landed on, through the camera - for a press on the field outside the builder. This tests the UI; `build`/`play`/`builder_*` address the model directly.",
         schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right"],"default":"left"},"drag_to":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"[x, y] to drag to before releasing"}},"required":["x","y"]}"#,
         read_only: false,
         destructive: false,
@@ -929,9 +929,10 @@ impl DevServer {
     /// (window units per point), the window and the safe area the chrome
     /// keeps to, both in points, and whether it is laid out for touch -
     /// and, in play and online, the corners: every `button` and both
-    /// `clusters` in window coordinates, which is what `click` takes. With
-    /// no window, the frame `click` lays the chrome out in
-    /// (`click_frame`).
+    /// `clusters`; and the `screen_buttons` of whatever stands over the
+    /// round (`screen_buttons`) - all in window coordinates, which is what
+    /// `click` takes. With no window, the frame `click` lays the chrome out
+    /// in (`click_frame`).
     fn ui_json(&self, session: &Session, width: f32, height: f32) -> Value {
         let (_, _, ui) = self.click_frame(session, width, height);
         let rect = |r: crate::Rect| json!({ "x": r.x, "y": r.y, "w": r.w, "h": r.h });
@@ -946,7 +947,42 @@ impl DevServer {
             v["buttons"] = Value::Object(buttons);
             v["clusters"] = json!({ "left": on_window(left), "right": on_window(right) });
         }
+        let screen = Self::screen_buttons(session, &ui);
+        if !screen.is_empty() {
+            v["screen_buttons"] = Value::Object(screen.into_iter().map(|(name, r)| (name, on_window(r))).collect());
+        }
         v
+    }
+
+    /// The live buttons of whatever stands over the round and takes a press
+    /// before the corners do - the level select's open tiles and BACK, a
+    /// dialog's two, a level's end screen's, the lobby's - by name, in UI
+    /// points, from the same geometry the painter and `click` read.
+    fn screen_buttons(session: &Session, ui: &UiFrame) -> Vec<(String, crate::math::Rectangle)> {
+        use crate::level_select::{back_rect, tile_rect, TileState};
+        let chrome = session.play_chrome();
+        let mut out = Vec::new();
+        if let Some(levels) = &chrome.levels {
+            for (i, tile) in levels.tiles.iter().enumerate().filter(|(_, t)| t.state != TileState::Locked) {
+                out.push((format!("level_{}", tile.number), tile_rect(ui.area, i)));
+            }
+            out.push(("back".to_string(), back_rect(ui.area)));
+        } else if chrome.players_dialog {
+            let r = players_dialog_rects(ui.area);
+            out.extend([("one".to_string(), r.one), ("two".to_string(), r.two)]);
+        } else if chrome.leave_dialog {
+            let r = leave_dialog_rects(ui.area);
+            out.extend([("leave".to_string(), r.leave), ("stay".to_string(), r.stay)]);
+        } else if let Some(r) = chrome.result.as_ref().and_then(|view| crate::hud::result_layout(ui.area, view).buttons) {
+            out.extend([("levels".to_string(), r.levels), ("again".to_string(), r.again)]);
+            out.extend(r.next.map(|next| ("next".to_string(), next)));
+        }
+        if let Some(lobby) = &chrome.lobby {
+            for b in lobby.buttons.iter().filter(|b| b.enabled) {
+                out.push((lobby_button_name(b.button), crate::lobby::button_rect(ui.area, b.button)));
+            }
+        }
+        out
     }
 
     /// `status.camera` and the `camera` tool's reply: the view in force -
@@ -1869,21 +1905,23 @@ impl DevServer {
         };
         let (layout, view, ui) = self.click_frame(session, width, height);
         let window_point = Vec2::new(x, y);
+        // In the bitmap's pixels for the builder, in UI points for
+        // everything play, the lobby and a room draw over the world.
         let point = view.to_bitmap(window_point);
-        let corner = Self::corners(session, &ui).and_then(|corners| corners.hit(ui.to_ui(window_point)));
+        let p = ui.to_ui(window_point);
+        let corner = Self::corners(session, &ui).and_then(|corners| corners.hit(p));
         match session.mode() {
             Driver::Play => {
                 // The same order as `app.rs`: the level select or an
                 // open dialog eats every press while it is up, then the
                 // end screen, then the corners' buttons.
                 if session.level_select.is_some() {
-                    let input = SelectInput { pointer: Some(layout.to_field(point)), pressed: !right, ..SelectInput::default() };
-                    if session.update_level_select(&input, layout.field) {
+                    let input = SelectInput { pointer: Some(p), pressed: !right, ..SelectInput::default() };
+                    if session.update_level_select(&input, ui.area) {
                         self.round_started(session);
                     }
                 } else if session.players_dialog {
-                    let rects = players_dialog_rects(layout.field);
-                    let p = layout.to_field(point);
+                    let rects = players_dialog_rects(ui.area);
                     let before = session.game.players;
                     if rects.one.contains(p) {
                         session.answer_players(PlayerCount::ONE);
@@ -1896,14 +1934,13 @@ impl DevServer {
                         self.round_started(session);
                     }
                 } else if session.dialog {
-                    let rects = leave_dialog_rects(layout.field);
-                    let p = layout.to_field(point);
+                    let rects = leave_dialog_rects(ui.area);
                     if rects.leave.contains(p) {
                         session.answer_dialog(true);
                     } else if rects.stay.contains(p) || !rects.panel.contains(p) {
                         session.answer_dialog(false);
                     }
-                } else if !right && session.press_result(layout.to_field(point)) {
+                } else if !right && session.press_result(p, ui.area) {
                     // A level's end screen: PLAY AGAIN or the way on start
                     // a round; LEVELS opens the level select over this one.
                     if session.level_select.is_none() {
@@ -1924,12 +1961,8 @@ impl DevServer {
             // The lobby's own hit tests, on the same `LobbyInput`
             // `app.rs` fills: a tool's click lands where a finger does.
             Driver::Lobby => {
-                let input = crate::lobby::LobbyInput {
-                    pointer: Some(layout.to_field(point)),
-                    pressed: !right,
-                    ..crate::lobby::LobbyInput::default()
-                };
-                session.update_lobby(&input, layout.field, crate::PHYSICS_FIXED_DT);
+                let input = crate::lobby::LobbyInput { pointer: Some(p), pressed: !right, ..crate::lobby::LobbyInput::default() };
+                session.update_lobby(&input, ui.area, crate::PHYSICS_FIXED_DT);
             }
             // An online round is the room's: the corners carry the one
             // button that is this window's to press, and the round itself
@@ -1983,7 +2016,7 @@ impl DevServer {
     /// `key`: one key for one frame, or typed text, through the same
     /// paths `app.rs` takes for the keyboard.
     fn key(&mut self, session: &mut Session, params: &Value, width: f32, height: f32) -> Result<Value, String> {
-        let (layout, _, _) = self.click_frame(session, width, height);
+        let (layout, _, ui) = self.click_frame(session, width, height);
         let layout = &layout;
         let key = match params.get("key") {
             None | Some(Value::Null) => None,
@@ -2012,7 +2045,7 @@ impl DevServer {
                     escape: matches!(key, Some("escape") | Some("tab")),
                     ..SelectInput::default()
                 };
-                if session.update_level_select(&input, layout.field) {
+                if session.update_level_select(&input, ui.area) {
                     self.round_started(session);
                 }
             }
@@ -2075,7 +2108,7 @@ impl DevServer {
                     escape: key == Some("escape"),
                     ..crate::lobby::LobbyInput::default()
                 };
-                session.update_lobby(&input, layout.field, crate::PHYSICS_FIXED_DT);
+                session.update_lobby(&input, ui.area, crate::PHYSICS_FIXED_DT);
             }
             // The one key an online round answers, the same one `app.rs`
             // reads: Esc gives the seat up and comes back to the local
@@ -2107,6 +2140,32 @@ impl DevServer {
         }
         Ok(mode_json(session))
     }
+}
+
+/// A lobby button's name in `status.ui.screen_buttons`: its action, a key
+/// by its letter, a kick by its row.
+fn lobby_button_name(button: crate::lobby::Button) -> String {
+    use crate::lobby::Button as B;
+    let name = match button {
+        B::Host => "host",
+        B::Join => "join",
+        B::Back => "back",
+        B::MapPrev => "map_prev",
+        B::MapNext => "map_next",
+        B::MissionPrev => "mission_prev",
+        B::MissionNext => "mission_next",
+        B::Del => "delete",
+        B::Confirm => "confirm",
+        B::Ready => "ready",
+        B::Start => "start",
+        B::Leave => "leave",
+        B::Key(i) => {
+            let c = crate::net::rooms::CODE_ALPHABET[i as usize % crate::net::rooms::CODE_ALPHABET.len()] as char;
+            return format!("key_{}", c.to_ascii_lowercase());
+        }
+        B::Kick(row) => return format!("kick_{row}"),
+    };
+    name.to_string()
 }
 
 /// `lint`: the map linter over the builder's canvas or the round's map,
@@ -3753,9 +3812,19 @@ cells."1,1" = { kind = "wall" }"#;
     /// Where `click` presses the corners' button `name`: the middle of
     /// its rect as `status.ui.buttons` reports it, in window coordinates.
     fn corner_button(server: &mut DevServer, tx: &mpsc::Sender<Request>, session: &mut Session, name: &str) -> Value {
+        ui_button(server, tx, session, "buttons", name)
+    }
+
+    /// Where `click` presses the button `name` of whatever stands over the
+    /// round, as `status.ui.screen_buttons` reports it.
+    fn screen_button(server: &mut DevServer, tx: &mpsc::Sender<Request>, session: &mut Session, name: &str) -> Value {
+        ui_button(server, tx, session, "screen_buttons", name)
+    }
+
+    fn ui_button(server: &mut DevServer, tx: &mpsc::Sender<Request>, session: &mut Session, list: &str, name: &str) -> Value {
         let status = ask(server, tx, session, "status", json!({})).unwrap();
-        let b = &status["ui"]["buttons"][name];
-        let at = |k: &str| b[k].as_f64().unwrap_or_else(|| panic!("no {name} button in {status}"));
+        let b = &status["ui"][list][name];
+        let at = |k: &str| b[k].as_f64().unwrap_or_else(|| panic!("no {name} in `ui.{list}` of {status}"));
         json!({ "x": at("x") + at("w") / 2.0, "y": at("y") + at("h") / 2.0 })
     }
 
@@ -4260,10 +4329,7 @@ cells."1,1" = { kind = "wall" }"#;
         s.game.update(Input::default(), crate::PHYSICS_FIXED_DT, w, h);
         let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
         assert_eq!((status["outcome"].as_str(), status["stats"]["destroyed"].as_u64()), (Some("won"), Some(1)), "{status}");
-        let view = s.play_chrome().result.expect("the end screen");
-        let rects = crate::hud::result_layout(crate::Rect::new(0.0, 0.0, w, h), &view).buttons.expect("a level's buttons");
-        let next = rects.next.expect("the way on");
-        let at = json!({ "x": next.x + next.width / 2.0, "y": next.y + next.height / 2.0 + Layout::bare(w, h).field.y });
+        let at = screen_button(&mut server, &tx, &mut s, "next");
         let m = ask(&mut server, &tx, &mut s, "click", at).unwrap();
         assert_eq!(m["level"]["number"], 2, "{m}");
         assert_eq!(m["mode"], "play");
@@ -4278,7 +4344,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(s.game.outcome(), crate::simulation::Outcome::Playing);
     }
 
-    /// The level select through the tools: the bar's level button and
+    /// The level select through the tools: the HUD's level button and
     /// Esc open it, a locked tile is no button, the arrows and Enter start
     /// a level reached, and `step` refuses by name while the screen stands
     /// over the round rather than waiting for frames that never run.
@@ -4295,16 +4361,21 @@ cells."1,1" = { kind = "wall" }"#;
         game.init(w, h);
         let mut s = Session::new(game);
         s.set_campaign(campaign);
-        let layout = Layout::bare(w, h);
         let button = corner_button(&mut server, &tx, &mut s, "level");
         let m = ask(&mut server, &tx, &mut s, "click", button).unwrap();
         assert_eq!((m["levels_open"].as_bool(), m["levels_focus"].as_u64()), (Some(true), Some(2)), "{m}");
         let err = ask(&mut server, &tx, &mut s, "step", json!({ "frames": 1 })).unwrap_err();
         assert!(err.contains("level select"), "{err}");
 
-        let field = crate::Rect::new(0.0, 0.0, w, h);
-        let r = crate::level_select::tile_rect(field, 2);
-        let locked = json!({ "x": r.x + r.width / 2.0, "y": r.y + r.height / 2.0 + layout.field.y });
+        // Only the open tiles are buttons: level 3 is locked, and a press
+        // on it - where the window draws it, the chrome's area of a window
+        // the size of play's bitmap - does nothing.
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let screen = &status["ui"]["screen_buttons"];
+        assert!(screen["level_2"].is_object() && screen["level_3"].is_null() && screen["back"].is_object(), "{screen}");
+        let (ww, wh) = Layout::bare(w, h).window_size();
+        let r = crate::level_select::tile_rect(UiFrame::plain((ww as f32, wh as f32)).area, 2);
+        let locked = json!({ "x": r.x + r.width / 2.0, "y": r.y + r.height / 2.0 });
         let m = ask(&mut server, &tx, &mut s, "click", locked).unwrap();
         assert_eq!((m["levels_open"].as_bool(), m["level"]["number"].as_u64()), (Some(true), Some(2)), "a locked tile: {m}");
 
@@ -4349,16 +4420,20 @@ cells."1,1" = { kind = "wall" }"#;
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": 640.0, "y": 32.0 + 400.0 })).unwrap();
         assert_eq!(m["mode"], "play", "{m}");
         assert_eq!(m["dialog_open"], false);
-        // The dialog's own buttons.
+        // The dialog's own buttons, where `status.ui.screen_buttons` puts
+        // them - centred on the window, in the UI's points.
         ask(&mut server, &tx, &mut s, "key", json!({ "key": "tab" })).unwrap();
-        let rects = leave_dialog_rects(layout.field);
+        let stay = screen_button(&mut server, &tx, &mut s, "stay");
+        let (ww, wh) = layout.window_size();
+        let rects = leave_dialog_rects(UiFrame::plain((ww as f32, wh as f32)).area);
         let (sx, sy) = centre(rects.stay);
-        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": sx, "y": sy + layout.field.y })).unwrap();
+        assert_eq!((stay["x"].as_f64(), stay["y"].as_f64()), (Some(sx as f64), Some(sy as f64)), "the rects the painter reads");
+        let m = ask(&mut server, &tx, &mut s, "click", stay).unwrap();
         assert_eq!(m["dialog_open"], false, "{m}");
         assert_eq!(m["mode"], "play");
         ask(&mut server, &tx, &mut s, "key", json!({ "key": "tab" })).unwrap();
-        let (lx, ly) = centre(rects.leave);
-        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": lx, "y": ly + layout.field.y })).unwrap();
+        let leave = screen_button(&mut server, &tx, &mut s, "leave");
+        let m = ask(&mut server, &tx, &mut s, "click", leave).unwrap();
         assert_eq!(m["mode"], "build", "{m}");
 
         // Build mode: a click on a field cell paints with the active brush,

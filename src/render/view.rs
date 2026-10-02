@@ -60,8 +60,8 @@ pub fn present_into(d: &mut impl RaylibDraw, composite: &RenderTexture2D, view: 
 /// hold, applied here as a shift of whole device pixels
 /// (`Camera::following` rounded it so), which keeps every block whole.
 /// The window is cleared to `backdrop` first, for the bars of a screen
-/// past the aspect clamp. Drawn into the frame `d` is drawing; the bar and
-/// what stands over the field come after it, onto the same frame.
+/// past the aspect clamp. Drawn into the frame `d` is drawing; the chrome
+/// comes after it, onto the same frame.
 pub fn present_world(d: &mut impl RaylibDraw, world: &RenderTexture2D, camera: &Camera, view: &View, layout: &Layout, backdrop: Color) {
     d.clear_background(backdrop);
     let (_, target_h) = camera.target_size();

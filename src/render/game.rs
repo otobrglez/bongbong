@@ -10,10 +10,11 @@
 //! `on_field` (the ripples' quads, the debug overlays), and the bitmap
 //! goes onto the window through `view::present_into` - or, for a followed
 //! field map (`Camera::follows`), shifted by the camera's sub-block offset
-//! (`view::present_world`). The chrome is then drawn on the window itself:
-//! the HUD's corner clusters in UI points (`hud::UiFrame`), and the
-//! banners and the dialogs over the field, so they stand still while the
-//! world slides under them. Reads `Game`, never mutates it. `Textures` and
+//! (`view::present_world`). The chrome is then drawn on the window itself,
+//! in UI points (`hud::UiFrame`) - the HUD's corner clusters, the banners,
+//! the end screen, the dialogs, the lobby and the level select - so it
+//! stands still while the world slides under it and keeps its size
+//! whatever the map. Reads `Game`, never mutates it. `Textures` and
 //! `Effects` bundle what a frame draws from.
 
 use sola_raylib::prelude::*;
@@ -24,8 +25,9 @@ use crate::canvas::Sheet;
 use crate::decal::draw_decal;
 use crate::game::PaintOptions;
 use crate::hud::{
-    corners, version_line, CornerShape, Corners, Fade, HudModel, PlayChrome, UiFrame, BUILD_COLOR, HUD_STATUS_COLOR,
-    HUD_STATUS_TEXT_SIZE, HUD_VERSION_COLOR, HUD_VERSION_TEXT_SIZE,
+    banner_size, corners, version_line, CornerShape, Corners, Fade, HudModel, PlayChrome, UiFrame, BANNER_SIZE,
+    BANNER_SUB_SIZE, BUILD_COLOR, HUD_STATUS_COLOR, HUD_STATUS_TEXT_SIZE, HUD_VERSION_COLOR, HUD_VERSION_TEXT_SIZE,
+    LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE, RESULT_TITLE_SIZE, WAVE_BANNER_SIZE,
 };
 use crate::math::{Color, Rectangle};
 use crate::obstacle::{draw_flying_drum, Obstacle};
@@ -40,7 +42,7 @@ use crate::render::bullet::{draw_bullet, draw_bullet_light, draw_bullet_shadow};
 use crate::render::canvas::{GpuCanvas, Sheets};
 use crate::render::decal::draw_decal_shadow;
 use crate::render::frog::FrogVariantTextures;
-use crate::render::hud::{draw_corners, draw_leave_dialog, draw_players_dialog, draw_result, Line};
+use crate::render::hud::{draw_banner, draw_corners, draw_leave_dialog, draw_players_dialog, draw_result, Line};
 use crate::render::laser::{draw_laser_beam, draw_laser_bloom, draw_laser_flares};
 use crate::render::plasma::{draw_plasma, draw_plasma_shadow};
 use crate::render::portal::draw_portal_glow;
@@ -295,9 +297,9 @@ impl Game {
         ui: &UiFrame,
         fade: Fade,
     ) {
-        // The field area of the bitmap, which the UI over the field fills:
-        // whole pixels, rounded up so a followed view of a fractional size
-        // is covered to its edge.
+        // The field area of the bitmap, which what covers the whole world
+        // (a kill's flash) fills: whole pixels, rounded up so a followed
+        // view of a fractional size is covered to its edge.
         let screen_width = layout.field.w.ceil() as i32;
         let screen_height = layout.field.h.ceil() as i32;
         // The scene target: the camera's view at a texel per world pixel,
@@ -321,8 +323,8 @@ impl Game {
             (true, None) => (0..self.players.count().min(2) as u8).collect(),
         };
 
-        // Precompute the centered end-of-round banner (text width must be
-        // measured on the RaylibHandle, outside the draw closure).
+        // What the end screen, the banners and PAUSED say; `draw_chrome`
+        // sets each in the chrome's area.
         let banner = match self.outcome {
             Outcome::Playing => None,
             Outcome::Won => Some((t.get(keys::ROUND_WON), Color::DARKGREEN)),
@@ -337,34 +339,21 @@ impl Game {
             } else {
                 (self.intro_fade / crate::simulation::INTRO_FADE_SECONDS).clamp(0.0, 1.0)
             };
-            (alpha > 0.0 && self.outcome == Outcome::Playing).then(|| {
-                let text = t.get(crate::text::mission_banner(self.mission));
-                let size = 72;
-                let w = rl.measure_text(&text, size);
-                (text, size, w, alpha)
-            })
+            (alpha > 0.0 && self.outcome == Outcome::Playing).then(|| (t.get(crate::text::mission_banner(self.mission)), alpha))
         };
         // Wave rounds: the `WAVE N` banner during the breather before a
         // wave - smaller than the mission banner, no dim overlay, and never
         // over the end-of-round banner. The counter itself is in the right
         // cluster.
         let wave_banner = self.wave_banner().filter(|_| self.outcome == Outcome::Playing).map(|banner| {
-            let text = if banner.is_final { t.get(keys::WAVE_FINAL) } else { t.fmt(keys::WAVE_BANNER, &[("n", banner.next.into())]) };
-            let size = 48;
-            let w = rl.measure_text(&text, size);
-            (text, size, w)
+            if banner.is_final { t.get(keys::WAVE_FINAL) } else { t.fmt(keys::WAVE_BANNER, &[("n", banner.next.into())]) }
         });
         let banner = banner.map(|(text, color)| {
-            let title_size = 72;
-            let title_w = rl.measure_text(&text, title_size);
             let seconds = self.restart_timer.ceil().max(0.0) as i32;
             let sub = t.fmt(chrome.countdown_label.unwrap_or(keys::ROUND_RESTARTING), &[("seconds", seconds.into())]);
-            let sub_size = 28;
-            let sub_w = rl.measure_text(&sub, sub_size);
-            (text, color, title_size, title_w, sub, sub_size, sub_w)
+            (text, color, sub)
         });
         let paused = t.get(keys::PAUSED);
-        let paused_w = rl.measure_text(&paused, 72);
 
         // Pass 1: draw the world (tracks, tanks, shells) into an offscreen
         // render texture, so a shockwave can distort the finished frame as a
@@ -580,9 +569,6 @@ impl Game {
             intro,
             wave_banner,
             paused,
-            paused_w,
-            screen_width,
-            screen_height,
             #[cfg(feature = "dev-tools")]
             frame_ms,
         };
@@ -628,22 +614,18 @@ struct WorldPass<'a> {
     backdrop: Color,
 }
 
-/// The strings `Game::render` measured before drawing - a text's width is
-/// read off the `RaylibHandle`, which the draw closures borrow - with the
-/// field area's size, for `Game::draw_chrome`.
+/// What `Game::draw_chrome` writes, gathered by `Game::render` in the
+/// language on screen.
 struct ChromeText<'a> {
     t: &'a crate::text::Catalogue,
-    /// The end screen: title, colour, size, width, the countdown line, its
-    /// size and width.
-    banner: Option<(String, Color, i32, i32, String, i32, i32)>,
-    /// The mission banner: text, size, width, opacity.
-    intro: Option<(String, i32, i32, f32)>,
-    /// The `WAVE N` banner: text, size, width.
-    wave_banner: Option<(String, i32, i32)>,
+    /// The end screen: its outcome, the outcome's colour and the
+    /// countdown line.
+    banner: Option<(String, Color, String)>,
+    /// The mission banner and its opacity.
+    intro: Option<(String, f32)>,
+    /// The `WAVE N` banner.
+    wave_banner: Option<String>,
     paused: String,
-    paused_w: i32,
-    screen_width: i32,
-    screen_height: i32,
     #[cfg(feature = "dev-tools")]
     frame_ms: f32,
 }
@@ -784,8 +766,8 @@ impl Game {
 
         // A followed view of a map shorter than the view on an axis shows
         // past the field's edge, where nothing is drawn: the backdrop's
-        // colour there, the letterbox's and the bar's, moving with the
-        // shake like the field it borders.
+        // colour there, the letterbox's, moving with the shake like the
+        // field it borders.
         if camera.follows() {
             let r = camera.target_rect();
             let bands = [
@@ -826,12 +808,15 @@ impl Game {
     }
 
     /// What stands over the world, on the window: the off-screen
-    /// indicators; the corner clusters with the lines under the left one -
-    /// an online round's status, the build stamp, the dev label - in UI
-    /// points at the frame's fade; the end screen, the mission and `WAVE N`
-    /// banners, PAUSED, the dialogs, the lobby and the level select over
-    /// the field area, through `base`, the camera that puts each bitmap
-    /// pixel where `View` puts it; and the touch stick over everything.
+    /// indicators, through `base` (the camera that puts each bitmap pixel
+    /// where `View` puts it); then everything else in UI points at the UI
+    /// scale (`hud::UiFrame`), centred in the chrome's area with its dims
+    /// over the whole window - the end screen, the mission and `WAVE N`
+    /// banners and PAUSED under the corner clusters (the lines under the
+    /// left one: an online round's status, the build stamp, the dev label)
+    /// at the frame's fade, and the dialogs, the lobby and the level select
+    /// over them, since nothing behind a question can be pressed; and the
+    /// touch stick over everything, through `base` again.
     #[allow(clippy::too_many_arguments)]
     fn draw_chrome<D: RaylibDraw>(
         &self,
@@ -851,22 +836,13 @@ impl Game {
         #[cfg(not(feature = "dev-tools"))]
         let _ = fx_live;
         let t = c.t;
-        let (screen_width, screen_height) = (c.screen_width, c.screen_height);
-        // The field area, for what stands over the field.
-        let origin = layout.field_origin();
-        let field_camera = Camera2D {
-            offset: Vector2::new(base.offset.x + origin.x * base.zoom, base.offset.y + origin.y * base.zoom),
-            target: Vector2::new(0.0, 0.0),
-            rotation: 0.0,
-            zoom: base.zoom,
-        };
 
         // What the screen cannot see (indicators.rs): its marks in the
         // world, where the frame shows the world, and its arrows and labels
         // in the bitmap's pixels - over the world layer, so no sky darkens
         // them, and under the HUD, the banners and the dialogs.
         if let Some(picture) = indicators {
-            let on_field = camera.on_field(origin);
+            let on_field = camera.on_field(layout.field_origin());
             let world = Camera2D {
                 offset: Vector2::new(base.offset.x + on_field.offset.x * base.zoom, base.offset.y + on_field.offset.y * base.zoom),
                 target: on_field.target,
@@ -876,53 +852,53 @@ impl Game {
             crate::render::indicators::draw_indicators(d, picture, world, Some(base));
         }
 
-        // The corner clusters, in UI points: on the window at the UI
-        // scale, never the world's, under the dims of whatever asks.
-        if let Some(corners) = frame.corners {
-            let mut lines = Vec::new();
-            // An online round says where it stands: the room, the seat and
-            // how much of the snapshot stream is in hand.
-            if let Some(status) = &chrome.status {
-                lines.push(Line { text: status.clone(), size: HUD_STATUS_TEXT_SIZE, color: HUD_STATUS_COLOR });
-            }
-            lines.push(Line { text: version_line(), size: HUD_VERSION_TEXT_SIZE, color: HUD_VERSION_COLOR });
-            // Which overlay preset is live, so the I key's cycling is
-            // visible without counting layers; frame time and the live
-            // particle count ride the same line - the FX budget has to
-            // hold on the wasm build, and without a number on screen that
-            // is an assertion nobody can check while playing.
-            #[cfg(feature = "dev-tools")]
-            if let Some(preset) = self.debug_overlays.preset_name() {
-                lines.push(Line {
-                    text: format!("DEV overlays: {preset} (I cycles)  |  {:.1} ms  {} fx", c.frame_ms, fx_live),
-                    size: 14,
-                    color: Color::new(80, 200, 255, 255),
-                });
-            }
-            let ui_camera = Camera2D { offset: Vector2::new(0.0, 0.0), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: frame.ui.scale };
-            d.draw_mode2D(ui_camera, |mut d, _| draw_corners(&mut d, corners, hud, chrome, self.players, textures, frame.fade, &lines));
+        // The lines under the left cluster.
+        let mut lines = Vec::new();
+        // An online round says where it stands: the room, the seat and how
+        // much of the snapshot stream is in hand.
+        if let Some(status) = &chrome.status {
+            lines.push(Line { text: status.clone(), size: HUD_STATUS_TEXT_SIZE, color: HUD_STATUS_COLOR });
+        }
+        lines.push(Line { text: version_line(), size: HUD_VERSION_TEXT_SIZE, color: HUD_VERSION_COLOR });
+        // Which overlay preset is live, so the I key's cycling is visible
+        // without counting layers; frame time and the live particle count
+        // ride the same line - the FX budget has to hold on the wasm build,
+        // and without a number on screen that is an assertion nobody can
+        // check while playing.
+        #[cfg(feature = "dev-tools")]
+        if let Some(preset) = self.debug_overlays.preset_name() {
+            lines.push(Line {
+                text: format!("DEV overlays: {preset} (I cycles)  |  {:.1} ms  {} fx", c.frame_ms, fx_live),
+                size: 14,
+                color: Color::new(80, 200, 255, 255),
+            });
         }
 
-        // Everything from here to the stick stands over the field: the
-        // banners and the dims all centre on and cover the field area.
-        d.draw_mode2D(field_camera, |mut d, _| {
+        // Everything from here to the stick is in UI points: the window at
+        // the UI scale, never the world's. The dims cover the whole window
+        // and every banner centres on the chrome's area.
+        let ui = frame.ui;
+        let ui_camera = Camera2D { offset: Vector2::new(0.0, 0.0), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: ui.scale };
+        let area = ui.area;
+        let (screen_w, screen_h) = (ui.screen.w.ceil() as i32, ui.screen.h.ceil() as i32);
+        let cy = (area.y + area.h / 2.0).round() as i32;
+        d.draw_mode2D(ui_camera, |mut d, _| {
             // End-of-round banner over a dimming overlay. A local round
             // stacks its numbers and a level's buttons under it
             // (`hud::result_layout`); an online one counts down to the
             // room's lobby.
-            if let Some((title, color, title_size, title_w, sub, sub_size, sub_w)) = &c.banner {
-                d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, 120));
-                let cx = screen_width / 2;
-                let cy = screen_height / 2;
+            if let Some((title, color, sub)) = &c.banner {
+                d.draw_rectangle(0, 0, screen_w, screen_h, Color::new(0, 0, 0, 120));
                 match &chrome.result {
                     Some(view) => {
-                        let rows = crate::hud::result_layout(layout.field, view);
-                        d.draw_text(title, cx - title_w / 2, rows.title_y as i32, *title_size, *color);
-                        draw_result(&mut d, layout.field, view, sub);
+                        let rows = crate::hud::result_layout(area, view);
+                        draw_banner(&mut d, area, title, RESULT_TITLE_SIZE, rows.title_y as i32, *color);
+                        draw_result(&mut d, area, view, sub);
                     }
                     None => {
-                        d.draw_text(title, cx - title_w / 2, cy - title_size, *title_size, *color);
-                        d.draw_text(sub, cx - sub_w / 2, cy + 20, *sub_size, Color::RAYWHITE);
+                        let size = banner_size(title, RESULT_TITLE_SIZE, area);
+                        draw_banner(&mut d, area, title, size, cy - size, *color);
+                        draw_banner(&mut d, area, sub, BANNER_SUB_SIZE, cy + 20, Color::RAYWHITE);
                     }
                 }
             }
@@ -930,63 +906,61 @@ impl Game {
             // Mission banner: big white text over a dim overlay that both
             // fade together once the round unfreezes. A level adds its
             // number above and its title below, at half the size.
-            if let Some((text, size, w, alpha)) = &c.intro {
+            if let Some((text, alpha)) = &c.intro {
                 let a = |max: f32| (max * alpha) as u8;
-                d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, a(120.0)));
-                d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, *size, Color::new(255, 255, 255, a(255.0)));
+                d.draw_rectangle(0, 0, screen_w, screen_h, Color::new(0, 0, 0, a(120.0)));
+                let size = banner_size(text, BANNER_SIZE, area);
+                let white = Color::new(255, 255, 255, a(255.0));
+                draw_banner(&mut d, area, text, size, cy - size / 2, white);
                 if let Some(level) = &chrome.level {
-                    use crate::hud::{LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE};
                     let number = t.fmt(keys::LEVEL_NUMBER, &[("n", level.number.into()), ("count", level.count.into())]);
-                    let number_w = crate::text::width(&number, LEVEL_NUMBER_SIZE);
-                    let number_y = screen_height / 2 - size / 2 - 14 - LEVEL_NUMBER_SIZE;
                     let amber = Color::new(BUILD_COLOR.r, BUILD_COLOR.g, BUILD_COLOR.b, a(255.0));
-                    d.draw_text(&number, screen_width / 2 - number_w / 2, number_y, LEVEL_NUMBER_SIZE, amber);
-                    let title_w = crate::text::width(&level.title, LEVEL_TITLE_SIZE);
-                    let title_y = screen_height / 2 + size / 2 + 14;
-                    d.draw_text(&level.title, screen_width / 2 - title_w / 2, title_y, LEVEL_TITLE_SIZE, Color::new(255, 255, 255, a(255.0)));
+                    draw_banner(&mut d, area, &number, LEVEL_NUMBER_SIZE, cy - size / 2 - 14 - LEVEL_NUMBER_SIZE, amber);
+                    draw_banner(&mut d, area, &level.title, LEVEL_TITLE_SIZE, cy + size / 2 + 14, white);
                 }
             }
-            if let Some((text, size, w)) = &c.wave_banner {
-                d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, *size, Color::RAYWHITE);
+            if let Some(text) = &c.wave_banner {
+                let size = banner_size(text, WAVE_BANNER_SIZE, area);
+                draw_banner(&mut d, area, text, size, cy - size / 2, Color::RAYWHITE);
             }
 
             // Paused overlay draws over everything else, including the
             // end-of-round banner (its countdown is frozen too).
             if self.paused {
-                d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, 120));
-                let title_size = 72;
-                d.draw_text(
-                    &c.paused,
-                    screen_width / 2 - c.paused_w / 2,
-                    screen_height / 2 - title_size / 2,
-                    title_size,
-                    Color::RAYWHITE,
-                );
+                d.draw_rectangle(0, 0, screen_w, screen_h, Color::new(0, 0, 0, 120));
+                let size = banner_size(&c.paused, BANNER_SIZE, area);
+                draw_banner(&mut d, area, &c.paused, size, cy - size / 2, Color::RAYWHITE);
+            }
+
+            // The corner clusters, over the banners and their dims, which
+            // leave them pressable, and at the frame's fade.
+            if let Some(corners) = frame.corners {
+                draw_corners(&mut d, corners, hud, chrome, self.players, textures, frame.fade, &lines);
             }
 
             // The leave-round question (docs/game-editor-fusion.md
-            // section 6): the same dim as PAUSED, the dialog on top.
-            // The round is frozen by `main.rs` not calling `update`,
+            // section 6): the same dim as PAUSED, over the corners too -
+            // nothing behind a question is pressable - and the dialog on
+            // top. The round is frozen by `app.rs` not calling `update`,
             // so nothing here is simulation state.
             if chrome.leave_dialog || chrome.players_dialog {
-                d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, 120));
+                d.draw_rectangle(0, 0, screen_w, screen_h, Color::new(0, 0, 0, 120));
             }
             if chrome.leave_dialog {
-                draw_leave_dialog(&mut d, layout.field);
+                draw_leave_dialog(&mut d, area);
             } else if chrome.players_dialog {
-                draw_players_dialog(&mut d, layout.field, self.players);
+                draw_players_dialog(&mut d, area, self.players);
             }
-            // The lobby (lobby.rs) stands over the whole field, in
-            // the dialogs' field space and with their dim: the round
-            // behind it is the local one, frozen because nothing
-            // calls `update` in this mode.
+            // The lobby (lobby.rs), with its own dim: the round behind it
+            // is the local one, frozen because nothing calls `update` in
+            // this mode.
             if let Some(lobby) = &chrome.lobby {
-                draw_lobby(&mut d, layout.field, lobby, textures);
+                draw_lobby(&mut d, ui, lobby, textures);
             }
-            // The level select (level_select.rs), with its own dim,
-            // over a round that stands still behind it.
+            // The level select (level_select.rs), with its own dim, over
+            // a round that stands still behind it.
             if let Some(levels) = &chrome.levels {
-                draw_level_select(&mut d, layout.field, levels);
+                draw_level_select(&mut d, ui, levels);
             }
         });
 

@@ -276,16 +276,16 @@ impl Session {
         }
     }
 
-    /// A press at `p` (field space) on a level's end screen: `PLAY AGAIN`
-    /// or the way on. Answers whether it landed on a button; a press
-    /// anywhere else is the caller's.
-    pub fn press_result(&mut self, p: crate::math::Vec2) -> bool {
+    /// A press at `p` on a level's end screen, in UI points with the
+    /// screen laid out in the chrome's `area` (`hud::UiFrame`): `LEVELS`,
+    /// `PLAY AGAIN` or the way on. Answers whether it landed on a button;
+    /// a press anywhere else is the caller's.
+    pub fn press_result(&mut self, p: crate::math::Vec2, area: Rect) -> bool {
         if !self.playing() {
             return false;
         }
         let Some(view) = self.result_view() else { return false };
-        let (width, height) = self.game.map.field_size();
-        let Some(rects) = result_layout(Rect::new(0.0, 0.0, width, height), &view).buttons else { return false };
+        let Some(rects) = result_layout(area, &view).buttons else { return false };
         if rects.again.contains(p) {
             self.play_again();
             true
@@ -302,7 +302,7 @@ impl Session {
 
     /// The level select: open it over the round, which stands still
     /// behind it (`playing()` is false while it is up), or close it if it
-    /// already is - the bar's level button, the end screen's `LEVELS` and
+    /// already is - the HUD's level button, the end screen's `LEVELS` and
     /// Esc. Play mode with levels only; a dialog that was asking closes.
     /// Answers whether it is open.
     pub fn press_levels(&mut self) -> bool {
@@ -319,12 +319,13 @@ impl Session {
         true
     }
 
-    /// One frame of the level select (`input` in field space): its hit
-    /// tests and keys, and whatever they ask. Answers whether a level
-    /// started - a new round, with its banner.
-    pub fn update_level_select(&mut self, input: &SelectInput, field: Rect) -> bool {
+    /// One frame of the level select (`input` in UI points, the panel
+    /// centred in the chrome's `area`): its hit tests and keys, and
+    /// whatever they ask. Answers whether a level started - a new round,
+    /// with its banner.
+    pub fn update_level_select(&mut self, input: &SelectInput, area: Rect) -> bool {
         let (Some(select), Some(campaign)) = (&mut self.level_select, &self.campaign) else { return false };
-        match select.update(input, field, campaign.levels.len(), campaign.reached()) {
+        match select.update(input, area, campaign.levels.len(), campaign.reached()) {
             SelectAction::Stay => false,
             SelectAction::Close => {
                 self.level_select = None;
@@ -341,7 +342,7 @@ impl Session {
         }
     }
 
-    /// The number of the level on the field, for the bar's level button
+    /// The number of the level on the field, for the HUD's level button
     /// in the mission word's place: a local round in play mode on a
     /// level. The painter and every hit test read it, so the button is
     /// pressable exactly where it is drawn.
@@ -420,7 +421,7 @@ impl Session {
         self.driver = Driver::Build;
     }
 
-    /// The players button in the bar: open the players dialog, or close it
+    /// The players button in the HUD: open the players dialog, or close it
     /// if it is already up. Play mode only, and a no-op while the leave
     /// dialog is asking or the level select is up - one question at a
     /// time. Works on the end screen
@@ -585,9 +586,10 @@ impl Session {
     }
 
     /// One frame of the lobby: what the room says, then the screen's own
-    /// hit tests, then whatever it asked for. `app.rs` and the dev server
-    /// both fill the same `LobbyInput`, so a tool's click lands on the
-    /// hit test a finger does.
+    /// hit tests - the panel centred in the chrome's `area`, UI points -
+    /// then whatever it asked for. `app.rs` and the dev server both fill
+    /// the same `LobbyInput`, so a tool's click lands on the hit test a
+    /// finger does.
     ///
     /// The room's round is polled from here, which is what makes a seat
     /// fill up and a roster arrive while the screen is on; the seat sends
@@ -595,7 +597,7 @@ impl Session {
     /// only while the room's round is playing. The frame the
     /// room starts the round the window hands over to `Driver::Online`
     /// and the replica is what is drawn. Returns the mode afterwards.
-    pub fn update_lobby(&mut self, input: &LobbyInput, field: Rect, dt: f32) -> Driver {
+    pub fn update_lobby(&mut self, input: &LobbyInput, area: Rect, dt: f32) -> Driver {
         if self.driver != Driver::Lobby {
             return self.driver;
         }
@@ -604,7 +606,7 @@ impl Session {
         }
         let room = self.online.as_ref().map(RoomView::of);
         let Some(lobby) = &mut self.lobby else { return self.driver };
-        match lobby.update(input, field, room.as_ref()) {
+        match lobby.update(input, area, room.as_ref()) {
             LobbyAction::None => {}
             LobbyAction::Host { map, mission } => {
                 self.dial(Target::Host(RoomSetup { map, map_toml: None, mission, seed: None }));
@@ -771,10 +773,7 @@ impl Session {
                 }),
                 result: self.result_view(),
                 level_button: self.level_button(),
-                levels: self.level_select.as_ref().zip(self.campaign.as_ref()).map(|(select, campaign)| {
-                    let (width, height) = self.game.map.field_size();
-                    select.view(campaign, self.level(), Rect::new(0.0, 0.0, width, height))
-                }),
+                levels: self.level_select.as_ref().zip(self.campaign.as_ref()).map(|(select, campaign)| select.view(campaign, self.level())),
             },
         }
     }
@@ -1041,7 +1040,7 @@ mod session_tests {
 
         // Frames of it change nothing about the round or the canvas, and
         // walking into the code entry and back out is all local.
-        let field = crate::Rect::new(0.0, 32.0, W, H);
+        let field = area();
         let press = |b: Button| {
             let r = button_rect(field, b);
             LobbyInput {
@@ -1094,7 +1093,7 @@ mod session_tests {
         s.open_lobby_with(OnlineRound::new(client, "ROOM"));
         assert_eq!(s.mode(), Driver::Lobby);
         assert!(!s.playing());
-        let field = crate::Rect::new(0.0, 32.0, W, H);
+        let field = area();
         // Nobody answers, so the screen stays on "reaching the room" and
         // the local round is still the picture behind it.
         for _ in 0..5 {
@@ -1124,7 +1123,7 @@ mod session_tests {
         use crate::net::{MAX_SEATS, encode};
 
         const DT: f32 = 1.0 / 60.0;
-        let field = crate::Rect::new(0.0, 32.0, W, H);
+        let field = area();
         let mut s = session();
         let local = s.game.frame();
 
@@ -1259,10 +1258,16 @@ mod session_tests {
         crate::math::Vec2::new(r.x + r.width / 2.0, r.y + r.height / 2.0)
     }
 
+    /// The chrome's area on a window of the default map's bitmap, a point
+    /// a pixel: where the end screen, the level select and the lobby lay
+    /// themselves out (`hud::UiFrame`).
+    fn area() -> Rect {
+        crate::hud::UiFrame::plain((1088.0, 576.0)).area
+    }
+
     fn result_rects(s: &Session) -> Option<crate::hud::ResultRects> {
         let view = s.play_chrome().result?;
-        let (w, h) = s.game.map.field_size();
-        crate::hud::result_layout(Rect::new(0.0, 0.0, w, h), &view).buttons
+        crate::hud::result_layout(area(), &view).buttons
     }
 
     /// A level opens with its number and title, and a win is progress the
@@ -1310,7 +1315,7 @@ mod session_tests {
         }
         assert_eq!((s.level(), s.game.outcome()), (Some(1), Outcome::Won), "the campaign's end waits");
         let rects = result_rects(&s).expect("the buttons");
-        assert!(s.press_result(centre(rects.next.expect("the way on"))));
+        assert!(s.press_result(centre(rects.next.expect("the way on")), area()));
         assert_eq!(s.level(), Some(0), "round to the first");
 
         // Enter does not wait for the countdown.
@@ -1334,7 +1339,7 @@ mod session_tests {
         assert!(!s.next_level(), "no way on after a loss");
         let rects = result_rects(&s).expect("the button");
         assert!(rects.next.is_none());
-        assert!(!s.press_result(crate::math::Vec2::new(4.0, 4.0)), "a press off the buttons");
+        assert!(!s.press_result(crate::math::Vec2::new(4.0, 4.0), area()), "a press off the buttons");
         assert_eq!(s.game.outcome(), Outcome::Lost);
 
         for _ in 0..60 {
@@ -1353,7 +1358,7 @@ mod session_tests {
         assert!(s.game.frame() < 90, "a fresh round");
 
         finish(&mut s, false);
-        assert!(s.press_result(centre(result_rects(&s).expect("the button").again)));
+        assert!(s.press_result(centre(result_rects(&s).expect("the button").again), area()));
         assert_eq!((s.level(), s.game.outcome()), (Some(0), Outcome::Playing));
         finish(&mut s, false);
         assert!(s.enter_result());
@@ -1384,21 +1389,20 @@ mod session_tests {
         finish(&mut s, true);
         s.press_build();
         assert_eq!(s.mode(), Driver::Build, "the end screen switches at once");
-        assert!(!s.press_result(centre(result_rects(&s).expect("buttons").again)), "not while the builder is up");
+        assert!(!s.press_result(centre(result_rects(&s).expect("buttons").again), area()), "not while the builder is up");
     }
 
     /// The level select stands over a frozen round and starts only a
     /// level already reached; closing it leaves the round exactly where
     /// it stood, and a replay - won or lost - moves nothing. The end
-    /// screen's `LEVELS` opens it, as the bar's level button does.
+    /// screen's `LEVELS` opens it, as the HUD's level button does.
     #[test]
     fn the_level_select_replays_a_reached_level_over_a_frozen_round() {
         use crate::level_select::{back_rect, tile_rect, SelectInput, TileState};
         assert!(!session().press_levels(), "a session with no levels has no level select");
 
         let mut s = level_session(two_levels(), 0);
-        let (w, h) = s.game.map.field_size();
-        let field = Rect::new(0.0, 0.0, w, h);
+        let field = area();
         let press = |p| SelectInput { pointer: Some(p), pressed: true, ..SelectInput::default() };
         assert_eq!(s.level_button(), Some(1));
         step(&mut s);
@@ -1420,7 +1424,7 @@ mod session_tests {
         // Won: level 2 is reached, and the end screen opens the screen.
         finish(&mut s, true);
         assert_eq!(s.take_progress().as_deref(), Some("glasshouses"));
-        assert!(s.press_result(centre(result_rects(&s).expect("the buttons").levels)));
+        assert!(s.press_result(centre(result_rects(&s).expect("the buttons").levels), area()));
         assert!(s.level_select.is_some());
         assert!(s.update_level_select(&press(centre(tile_rect(field, 0))), field), "level 1 again");
         assert_eq!((s.level(), s.game.outcome()), (Some(0), Outcome::Playing));

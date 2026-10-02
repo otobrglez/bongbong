@@ -3,7 +3,7 @@
 //! `--rooms` stop being the only way in.
 //!
 //! It is a mode of its own beside Play and Build - `mode::Driver::Lobby`,
-//! entered by the bar's `ONLINE` button - rather than a face of
+//! entered by the HUD's `ONLINE` button - rather than a face of
 //! `Driver::Online`, because it exists before any room does: pressing
 //! `ONLINE` opens it with no socket, no seat and nothing to draw a round
 //! from. Once the room says the round has begun, `Session` hands over to
@@ -31,10 +31,11 @@ use crate::tank::TankKind;
 use crate::text::{fold, keys, text, Key};
 use crate::Rect;
 
-/// The panel, centred in the field. Fixed rather than fitted to the
-/// window so no button moves under a finger, and small enough for the
-/// smallest field the game ships (`maps/crossplay/`, 24 x 12 cells =
-/// 768 x 384 px).
+/// The panel, centred in the chrome's area (`hud::UiFrame::area`), in UI
+/// points like everything in this screen. Fixed rather than fitted to the
+/// window so no button moves under a finger; the UI frame shrinks the
+/// point on a window too small for it (`hud::UI_MIN_W` is this panel and
+/// its edges).
 pub const LOBBY_W: f32 = 704.0;
 pub const LOBBY_H: f32 = 336.0;
 /// The gutter between the panel's edge and anything in it.
@@ -47,23 +48,29 @@ pub const LOBBY_BUTTON_H: f32 = 48.0;
 /// The two wide buttons of the opening face (`HOST A ROOM`, `JOIN`).
 pub const LOBBY_WIDE_W: f32 = 200.0;
 
-/// The smallest a button in this screen may be. The phones have no
-/// keyboard at all (`KEYBOARD_AVAILABLE`), so every one of them is a
-/// touch target; `lobby_tests` holds the whole screen to it.
-pub const LOBBY_TOUCH_MIN: f32 = 44.0;
+/// The smallest a button in this screen may be, in points. The phones
+/// have no keyboard at all (`KEYBOARD_AVAILABLE`), so every one of them
+/// is a touch target; `lobby_tests` holds the whole screen to it, and the
+/// level select and the end screen are held to it too.
+pub const LOBBY_TOUCH_MIN: f32 = crate::hud::UI_TOUCH_PT;
 
 /// Seat rows the panel shows at once. A longer roster is a `+N MORE`
 /// line under them - `MAX_SEATS` is eight and four rows is what fits
-/// beside the QR on the smallest field.
+/// beside the QR.
 pub const LOBBY_SEAT_ROWS: usize = 4;
 pub const LOBBY_SEAT_H: f32 = 48.0;
+/// Where a seat row's chassis and state start, from the row's left edge;
+/// the state runs to the kick button (`text_tests` measures every
+/// language against both columns).
+pub const LOBBY_SEAT_CHASSIS_X: f32 = 190.0;
+pub const LOBBY_SEAT_STATE_X: f32 = 280.0;
 /// Wide enough for the longest word a shipped language spells it with
 /// (Slovenian's `ODSTRANI`); `text_tests` measures every language against
 /// it, less its padding.
 pub const LOBBY_KICK_W: f32 = 100.0;
 
-/// The square the QR is drawn in, top-right of the panel: 148 px holds a
-/// version 3 code (37 modules with its quiet zone) at four pixels a
+/// The square the QR is drawn in, top-right of the panel: 148 points hold
+/// a version 3 code (37 modules with its quiet zone) at four points a
 /// module, which is every link this game makes.
 pub const LOBBY_QR_BOX: f32 = 148.0;
 
@@ -343,10 +350,11 @@ impl Lobby {
         }
     }
 
-    /// The button under `point` (field space), if one is there and live.
-    pub fn hit(&self, field: Rect, point: Vec2, room: Option<&RoomView>) -> Option<Button> {
+    /// The button under `point` (UI points, the panel centred in `area`),
+    /// if one is there and live.
+    pub fn hit(&self, area: Rect, point: Vec2, room: Option<&RoomView>) -> Option<Button> {
         let enabled = |b: Button| self.enabled(b, room);
-        self.buttons(room).into_iter().find(|&b| enabled(b) && button_rect(field, b).contains(point))
+        self.buttons(room).into_iter().find(|&b| enabled(b) && button_rect(area, b).contains(point))
     }
 
     /// Whether pressing `button` would do anything.
@@ -360,16 +368,17 @@ impl Lobby {
         }
     }
 
-    /// One frame of the screen: the keys, then the pointer. `room` is the
-    /// live room, absent until one has been opened.
-    pub fn update(&mut self, input: &LobbyInput, field: Rect, room: Option<&RoomView>) -> LobbyAction {
+    /// One frame of the screen: the keys, then the pointer, the panel
+    /// centred in `area` (UI points). `room` is the live room, absent until
+    /// one has been opened.
+    pub fn update(&mut self, input: &LobbyInput, area: Rect, room: Option<&RoomView>) -> LobbyAction {
         self.refresh_qr(room);
         let stage = self.stage(room);
         if let Some(action) = self.keys(input, stage, room) {
             return action;
         }
         let Some(point) = input.pointer.filter(|_| input.pressed) else { return LobbyAction::None };
-        match self.hit(field, point, room) {
+        match self.hit(area, point, room) {
             Some(button) => self.press(button, room),
             None => LobbyAction::None,
         }
@@ -617,12 +626,12 @@ fn code_error_text(error: &rooms::CodeError) -> String {
     }
 }
 
-/// The frame's input for the lobby, filled the same way by `app.rs` and
-/// by a test: a pointer already through `View::to_bitmap` and
-/// `Layout::to_field`, and the keys where there is a keyboard.
+/// The frame's input for the lobby, filled the same way by `app.rs`, the
+/// dev server and a test: a pointer already in UI points
+/// (`hud::UiFrame::to_ui`), and the keys where there is a keyboard.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LobbyInput {
-    /// Field-space pointer.
+    /// The pointer in UI points.
     pub pointer: Option<Vec2>,
     pub pressed: bool,
     /// Characters typed this frame.
@@ -632,58 +641,56 @@ pub struct LobbyInput {
     pub escape: bool,
 }
 
-/// The panel, centred in the field.
-pub fn panel_rect(field: Rect) -> Rectangle {
-    let x = ((field.w - LOBBY_W) / 2.0).round().max(0.0);
-    let y = ((field.h - LOBBY_H) / 2.0).round().max(0.0);
-    Rectangle::new(x, y, LOBBY_W, LOBBY_H)
+/// The panel, centred in the chrome's `area` (UI points).
+pub fn panel_rect(area: Rect) -> Rectangle {
+    crate::hud::centred_in(area, LOBBY_W, LOBBY_H)
 }
 
 /// The content box inside the panel: the margin taken off every side.
-pub fn content_rect(field: Rect) -> Rectangle {
-    let p = panel_rect(field);
+pub fn content_rect(area: Rect) -> Rectangle {
+    let p = panel_rect(area);
     Rectangle::new(p.x + LOBBY_MARGIN, p.y + LOBBY_MARGIN, LOBBY_W - 2.0 * LOBBY_MARGIN, LOBBY_H - 2.0 * LOBBY_MARGIN)
 }
 
 /// The row of action buttons along the content's bottom edge.
-fn action_y(field: Rect) -> f32 {
-    let c = content_rect(field);
+fn action_y(area: Rect) -> f32 {
+    let c = content_rect(area);
     c.y + c.height - LOBBY_BUTTON_H
 }
 
 /// The square the QR is drawn in, top-right of the content box.
-pub fn qr_rect(field: Rect) -> Rectangle {
-    let c = content_rect(field);
+pub fn qr_rect(area: Rect) -> Rectangle {
+    let c = content_rect(area);
     Rectangle::new(c.x + c.width - LOBBY_QR_BOX, c.y, LOBBY_QR_BOX, LOBBY_QR_BOX)
 }
 
 /// The column the seats are listed in, left of the QR.
-pub fn seats_rect(field: Rect) -> Rectangle {
-    let c = content_rect(field);
-    let right = qr_rect(field).x - LOBBY_MARGIN;
+pub fn seats_rect(area: Rect) -> Rectangle {
+    let c = content_rect(area);
+    let right = qr_rect(area).x - LOBBY_MARGIN;
     Rectangle::new(c.x, c.y + 24.0, right - c.x, LOBBY_SEAT_ROWS as f32 * LOBBY_SEAT_H)
 }
 
 /// One seat's row, `row` from the top of [`seats_rect`].
-pub fn seat_row_rect(field: Rect, row: usize) -> Rectangle {
-    let s = seats_rect(field);
+pub fn seat_row_rect(area: Rect, row: usize) -> Rectangle {
+    let s = seats_rect(area);
     Rectangle::new(s.x, s.y + row as f32 * LOBBY_SEAT_H, s.width, LOBBY_SEAT_H)
 }
 
 /// The five code boxes, `i` from the left.
-pub fn code_box_rect(field: Rect, i: usize) -> Rectangle {
-    let c = content_rect(field);
+pub fn code_box_rect(area: Rect, i: usize) -> Rectangle {
+    let c = content_rect(area);
     let span = CODE_LETTERS as f32 * LOBBY_CODE_BOX + (CODE_LETTERS - 1) as f32 * LOBBY_CODE_GAP;
     let x = c.x + (c.width - span) / 2.0 + i as f32 * (LOBBY_CODE_BOX + LOBBY_CODE_GAP);
     Rectangle::new(x, c.y + 44.0, LOBBY_CODE_BOX, LOBBY_CODE_BOX)
 }
 
-/// **The one geometry table**: where a button is, in field space. The
-/// drawing and every hit test read it, so a tool's click and a finger land
-/// on the same rect.
-pub fn button_rect(field: Rect, button: Button) -> Rectangle {
-    let c = content_rect(field);
-    let bottom = action_y(field);
+/// **The one geometry table**: where a button is, in UI points, the panel
+/// centred in the chrome's `area`. The drawing and every hit test read
+/// it, so a tool's click and a finger land on the same rect.
+pub fn button_rect(area: Rect, button: Button) -> Rectangle {
+    let c = content_rect(area);
+    let bottom = action_y(area);
     let left = Rectangle::new(c.x, bottom, LOBBY_BUTTON_W, LOBBY_BUTTON_H);
     let middle = Rectangle::new(c.x + LOBBY_BUTTON_W + LOBBY_MARGIN * 0.8, bottom, LOBBY_BUTTON_W, LOBBY_BUTTON_H);
     let right = Rectangle::new(c.x + c.width - LOBBY_BUTTON_W, bottom, LOBBY_BUTTON_W, LOBBY_BUTTON_H);
@@ -720,7 +727,7 @@ pub fn button_rect(field: Rect, button: Button) -> Rectangle {
         Button::Confirm | Button::Start => middle,
         Button::Back | Button::Leave => right,
         Button::Kick(row) => {
-            let r = seat_row_rect(field, row as usize % LOBBY_SEAT_ROWS);
+            let r = seat_row_rect(area, row as usize % LOBBY_SEAT_ROWS);
             Rectangle::new(r.x + r.width - LOBBY_KICK_W, r.y, LOBBY_KICK_W, LOBBY_SEAT_H)
         }
     }
@@ -731,9 +738,14 @@ mod lobby_tests {
     use super::*;
     use crate::net::wire::{RosterSeat, RoundOutcome};
 
-    const FIELD: Rect = Rect::new(0.0, 32.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32);
-    /// The smallest field the game ships a map for (`maps/crossplay/`).
-    const SMALL: Rect = Rect::new(0.0, 32.0, 24.0 * 32.0, 12.0 * 32.0);
+    use crate::hud::{UiFrame, UI_EDGE_PT};
+
+    /// The chrome's area (UI points) on a window of the default map's
+    /// bitmap, a point a pixel.
+    const AREA: Rect = Rect::new(UI_EDGE_PT, UI_EDGE_PT, 1088.0 - 2.0 * UI_EDGE_PT, 576.0 - 2.0 * UI_EDGE_PT);
+    /// The smallest area any window lays the chrome out in: the panel
+    /// itself (`hud::UI_MIN_W` x `UI_MIN_H` less the edges).
+    const SMALL: Rect = Rect::new(UI_EDGE_PT, UI_EDGE_PT, LOBBY_W, LOBBY_H);
 
     fn lobby() -> Lobby {
         Lobby::new(SiteBase::deployed(), RoomsHost::deployed())
@@ -779,14 +791,15 @@ mod lobby_tests {
         let mut lobby = lobby();
         let playing = room(true, vec![seat(0, "oto", false), seat(1, "ana", true)]);
         let rooms = [None, Some(playing.clone()), Some(ended(playing, RoundOutcome::Lost))];
-        for field in [FIELD, SMALL] {
-            let panel = panel_rect(field);
-            assert!(panel.width <= field.w && panel.height <= field.h, "the panel fits the field");
+        for area in [AREA, SMALL] {
+            let panel = panel_rect(area);
+            assert!(panel.x >= area.x && panel.x + panel.width <= area.x + area.w, "the panel fits the area");
+            assert!(panel.y >= area.y && panel.y + panel.height <= area.y + area.h, "the panel fits the area");
             for open in [false, true] {
                 lobby.entry_open = open;
                 for room in &rooms {
                     let buttons = lobby.buttons(room.as_ref());
-                    let rects: Vec<Rectangle> = buttons.iter().map(|&b| button_rect(field, b)).collect();
+                    let rects: Vec<Rectangle> = buttons.iter().map(|&b| button_rect(area, b)).collect();
                     for (b, r) in buttons.iter().zip(&rects) {
                         assert!(r.width >= LOBBY_TOUCH_MIN && r.height >= LOBBY_TOUCH_MIN, "{b:?} is too small to hit");
                         assert!(r.x >= panel.x && r.x + r.width <= panel.x + panel.width, "{b:?} runs out of the panel");
@@ -803,35 +816,40 @@ mod lobby_tests {
         }
     }
 
-    /// The pointer path a browser actually takes, end to end. The page
-    /// keeps the canvas at the bitmap's own shape and raylib maps a tap
-    /// by dividing by the canvas's CSS box, so a tap arrives in window
-    /// pixels at whatever scale the page chose - a phone's narrow box,
-    /// one bitmap pixel each, or the 1.5x cap on a monitor. `View` and
-    /// `Layout` are what carry it back onto the panel, and a button that
-    /// is drawn at one place and hit at another is exactly what a fixed
-    /// panel in a scaled canvas would go wrong at.
+    /// The pointer path a window actually takes, end to end. The screen
+    /// is drawn in UI points at the scale the window's frame chose - a
+    /// desktop's pixel, a phone's point inside its safe area, Android's
+    /// dp, the knob's 1.5, or a window too small for the panel, which
+    /// shrinks the point - and a tap arrives in window units. `UiFrame`
+    /// is what carries it back onto the panel, and a button that is drawn
+    /// at one place and hit at another is exactly what a fixed panel in a
+    /// scaled window would go wrong at.
     #[test]
-    fn a_tap_on_a_scaled_canvas_lands_on_the_button_it_is_drawn_on() {
-        let layout = crate::Layout::for_field(crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32);
-        let (w, h) = layout.window_size();
-        let bitmap = (w as f32, h as f32);
+    fn a_tap_on_a_scaled_window_lands_on_the_button_it_is_drawn_on() {
+        use crate::hud::Insets;
+        let frames = [
+            UiFrame::new((1088.0, 576.0), 1.0, 1.0, Insets::default(), false),
+            UiFrame::new((852.0, 393.0), 1.0, 1.0, Insets { left: 59.0, top: 0.0, right: 59.0, bottom: 21.0 }, true),
+            UiFrame::new((2400.0, 1080.0), 2.625, 1.0, Insets::default(), true),
+            UiFrame::new((1920.0, 1080.0), 1.0, 1.5, Insets::default(), false),
+            UiFrame::new((380.0, 190.0), 1.0, 1.0, Insets::default(), true),
+        ];
         let mut lobby = lobby();
         let playing = room(true, vec![seat(0, "oto", false), seat(1, "ana", true)]);
-        for scale in [0.35_f32, 1.0, 1.5] {
-            let view = crate::view::View::fit(bitmap, (bitmap.0 * scale, bitmap.1 * scale));
+        for ui in frames {
+            let panel = panel_rect(ui.area);
+            assert!(panel.x >= ui.area.x && panel.x + panel.width <= ui.area.x + ui.area.w + 0.5, "{ui:?}");
+            assert!(panel.y >= ui.area.y && panel.y + panel.height <= ui.area.y + ui.area.h + 0.5, "{ui:?}");
             for (open, room) in [(false, None), (true, None), (false, Some(&playing))] {
                 lobby.entry_open = open;
                 for button in lobby.buttons(room) {
                     if !lobby.enabled(button, room) {
                         continue;
                     }
-                    let drawn = centre(button_rect(layout.field, button));
-                    // Where the page puts that pixel on the canvas, and
-                    // the tap on it coming back the other way.
-                    let on_canvas = view.to_window(Vec2::new(drawn.x + layout.field.x, drawn.y + layout.field.y));
-                    let tapped = layout.to_field(view.to_bitmap(on_canvas));
-                    assert_eq!(lobby.hit(layout.field, tapped, room), Some(button), "at {scale}x");
+                    // Where the window puts the button's centre, and the
+                    // tap on it coming back the other way.
+                    let on_window = ui.to_window(centre(button_rect(ui.area, button)));
+                    assert_eq!(lobby.hit(ui.area, ui.to_ui(on_window), room), Some(button), "{ui:?}");
                 }
             }
         }
@@ -841,16 +859,16 @@ mod lobby_tests {
     /// and neither reaches the buttons.
     #[test]
     fn the_qr_and_the_seats_share_the_panel_without_touching() {
-        let qr = qr_rect(FIELD);
-        let seats = seats_rect(FIELD);
+        let qr = qr_rect(AREA);
+        let seats = seats_rect(AREA);
         assert!(seats.x + seats.width <= qr.x, "the seats run under the QR");
-        assert!(qr.width >= 4.0 * 37.0, "a version 3 code needs 148 px at four pixels a module");
-        let bottom = button_rect(FIELD, Button::Ready).y;
+        assert!(qr.width >= 4.0 * 37.0, "a version 3 code needs 148 points at four a module");
+        let bottom = button_rect(AREA, Button::Ready).y;
         assert!(seats.y + seats.height <= bottom, "the seat rows run into the buttons");
         assert!(qr.y + qr.height <= bottom, "the QR runs into the buttons");
         for row in 0..LOBBY_SEAT_ROWS {
-            let r = seat_row_rect(FIELD, row);
-            let kick = button_rect(FIELD, Button::Kick(row as u8));
+            let r = seat_row_rect(AREA, row);
+            let kick = button_rect(AREA, Button::Kick(row as u8));
             assert!(kick.x + kick.width <= r.x + r.width && kick.y == r.y);
         }
     }
@@ -861,24 +879,24 @@ mod lobby_tests {
     fn the_code_entry_fills_from_the_on_screen_alphabet_and_gates_join() {
         let mut lobby = lobby();
         assert_eq!(lobby.stage(None), Stage::Start);
-        lobby.update(&tap(centre(button_rect(FIELD, Button::Join))), FIELD, None);
+        lobby.update(&tap(centre(button_rect(AREA, Button::Join))), AREA, None);
         assert_eq!(lobby.stage(None), Stage::Code);
         // `JOIN` and `DELETE` are dead on an empty entry, so a tap on
         // them is nothing at all.
-        assert_eq!(lobby.hit(FIELD, centre(button_rect(FIELD, Button::Confirm)), None), None);
-        assert_eq!(lobby.hit(FIELD, centre(button_rect(FIELD, Button::Del)), None), None);
+        assert_eq!(lobby.hit(AREA, centre(button_rect(AREA, Button::Confirm)), None), None);
+        assert_eq!(lobby.hit(AREA, centre(button_rect(AREA, Button::Del)), None), None);
         // C D F G H, the first five keys.
         for i in 0..5u8 {
-            assert_eq!(lobby.update(&tap(centre(button_rect(FIELD, Button::Key(i)))), FIELD, None), LobbyAction::None);
+            assert_eq!(lobby.update(&tap(centre(button_rect(AREA, Button::Key(i)))), AREA, None), LobbyAction::None);
         }
         assert_eq!(lobby.entry(), "CDFGH");
         // A sixth key is refused: a code is five characters.
-        lobby.update(&tap(centre(button_rect(FIELD, Button::Key(5)))), FIELD, None);
+        lobby.update(&tap(centre(button_rect(AREA, Button::Key(5)))), AREA, None);
         assert_eq!(lobby.entry(), "CDFGH");
-        assert_eq!(lobby.update(&tap(centre(button_rect(FIELD, Button::Del))), FIELD, None), LobbyAction::None);
+        assert_eq!(lobby.update(&tap(centre(button_rect(AREA, Button::Del))), AREA, None), LobbyAction::None);
         assert_eq!(lobby.entry(), "CDFG");
-        lobby.update(&tap(centre(button_rect(FIELD, Button::Key(4)))), FIELD, None);
-        let action = lobby.update(&tap(centre(button_rect(FIELD, Button::Confirm))), FIELD, None);
+        lobby.update(&tap(centre(button_rect(AREA, Button::Key(4)))), AREA, None);
+        let action = lobby.update(&tap(centre(button_rect(AREA, Button::Confirm))), AREA, None);
         assert_eq!(action, LobbyAction::Join { code: "CDFGH".into() });
     }
 
@@ -888,24 +906,24 @@ mod lobby_tests {
     #[test]
     fn the_keyboard_types_a_code_including_a_letter_off_the_alphabet() {
         let mut lobby = lobby();
-        lobby.update(&tap(centre(button_rect(FIELD, Button::Join))), FIELD, None);
+        lobby.update(&tap(centre(button_rect(AREA, Button::Join))), AREA, None);
         let typed = |text: &str| LobbyInput { typed: text.into(), ..Default::default() };
-        lobby.update(&typed("ak7qx"), FIELD, None);
+        lobby.update(&typed("ak7qx"), AREA, None);
         assert_eq!(lobby.entry(), "AK7QX", "upper-cased as it is typed");
-        assert_eq!(lobby.update(&LobbyInput { backspace: true, ..Default::default() }, FIELD, None), LobbyAction::None);
+        assert_eq!(lobby.update(&LobbyInput { backspace: true, ..Default::default() }, AREA, None), LobbyAction::None);
         assert_eq!(lobby.entry(), "AK7Q");
         // Enter with an incomplete code does nothing.
-        assert_eq!(lobby.update(&LobbyInput { enter: true, ..Default::default() }, FIELD, None), LobbyAction::None);
-        lobby.update(&typed("x"), FIELD, None);
+        assert_eq!(lobby.update(&LobbyInput { enter: true, ..Default::default() }, AREA, None), LobbyAction::None);
+        lobby.update(&typed("x"), AREA, None);
         assert_eq!(
-            lobby.update(&LobbyInput { enter: true, ..Default::default() }, FIELD, None),
+            lobby.update(&LobbyInput { enter: true, ..Default::default() }, AREA, None),
             LobbyAction::Join { code: "AK7QX".into() }
         );
         // Escape steps out of the entry, and then out of the lobby.
         let esc = LobbyInput { escape: true, ..Default::default() };
-        assert_eq!(lobby.update(&esc, FIELD, None), LobbyAction::None);
+        assert_eq!(lobby.update(&esc, AREA, None), LobbyAction::None);
         assert_eq!(lobby.stage(None), Stage::Start);
-        assert_eq!(lobby.update(&esc, FIELD, None), LobbyAction::Leave);
+        assert_eq!(lobby.update(&esc, AREA, None), LobbyAction::Leave);
     }
 
     /// The opening face: the map and mission steppers walk the shipped
@@ -914,14 +932,14 @@ mod lobby_tests {
     fn the_steppers_pick_the_map_and_mission_the_host_button_sends() {
         let mut lobby = lobby();
         assert_eq!(lobby.map(), SHIPPED_MAPS[0].0);
-        lobby.update(&tap(centre(button_rect(FIELD, Button::MapNext))), FIELD, None);
+        lobby.update(&tap(centre(button_rect(AREA, Button::MapNext))), AREA, None);
         assert_eq!(lobby.map(), SHIPPED_MAPS[1].0);
-        lobby.update(&tap(centre(button_rect(FIELD, Button::MapPrev))), FIELD, None);
-        lobby.update(&tap(centre(button_rect(FIELD, Button::MapPrev))), FIELD, None);
+        lobby.update(&tap(centre(button_rect(AREA, Button::MapPrev))), AREA, None);
+        lobby.update(&tap(centre(button_rect(AREA, Button::MapPrev))), AREA, None);
         assert_eq!(lobby.map(), SHIPPED_MAPS[SHIPPED_MAPS.len() - 1].0, "the stepper wraps");
-        lobby.update(&tap(centre(button_rect(FIELD, Button::MissionNext))), FIELD, None);
+        lobby.update(&tap(centre(button_rect(AREA, Button::MissionNext))), AREA, None);
         assert_eq!(lobby.mission(), Mission::Hunt);
-        let action = lobby.update(&tap(centre(button_rect(FIELD, Button::Host))), FIELD, None);
+        let action = lobby.update(&tap(centre(button_rect(AREA, Button::Host))), AREA, None);
         assert_eq!(action, LobbyAction::Host { map: SHIPPED_MAPS[SHIPPED_MAPS.len() - 1].0.into(), mission: Mission::Hunt });
     }
 
@@ -935,23 +953,23 @@ mod lobby_tests {
         assert!(!waiting.can_start);
         assert_eq!(lobby.stage(Some(&waiting)), Stage::Room);
         assert!(lobby.buttons(Some(&waiting)).contains(&Button::Start), "the host's button is drawn");
-        assert_eq!(lobby.hit(FIELD, centre(button_rect(FIELD, Button::Start)), Some(&waiting)), None, "dead until the room can start");
-        assert_eq!(lobby.update(&LobbyInput { enter: true, ..Default::default() }, FIELD, Some(&waiting)), LobbyAction::None);
+        assert_eq!(lobby.hit(AREA, centre(button_rect(AREA, Button::Start)), Some(&waiting)), None, "dead until the room can start");
+        assert_eq!(lobby.update(&LobbyInput { enter: true, ..Default::default() }, AREA, Some(&waiting)), LobbyAction::None);
 
         let ready = room(true, vec![seat(0, "oto", false), seat(1, "ana", true)]);
         assert!(ready.can_start);
-        assert_eq!(lobby.update(&tap(centre(button_rect(FIELD, Button::Start))), FIELD, Some(&ready)), LobbyAction::Start);
-        assert_eq!(lobby.update(&LobbyInput { enter: true, ..Default::default() }, FIELD, Some(&ready)), LobbyAction::Start);
+        assert_eq!(lobby.update(&tap(centre(button_rect(AREA, Button::Start))), AREA, Some(&ready)), LobbyAction::Start);
+        assert_eq!(lobby.update(&LobbyInput { enter: true, ..Default::default() }, AREA, Some(&ready)), LobbyAction::Start);
         // Row 1 is the other seat; row 0 is the host itself and has no button.
         assert_eq!(lobby.buttons(Some(&ready)).iter().filter(|b| matches!(b, Button::Kick(_))).count(), 1);
-        assert_eq!(lobby.update(&tap(centre(button_rect(FIELD, Button::Kick(1)))), FIELD, Some(&ready)), LobbyAction::Kick { seat: 1 });
+        assert_eq!(lobby.update(&tap(centre(button_rect(AREA, Button::Kick(1)))), AREA, Some(&ready)), LobbyAction::Kick { seat: 1 });
 
         let guest = room(false, vec![seat(0, "oto", false), seat(1, "ana", false)]);
         let buttons = lobby.buttons(Some(&guest));
         assert!(!buttons.contains(&Button::Start), "a guest never starts the round");
         assert!(!buttons.iter().any(|b| matches!(b, Button::Kick(_))), "a guest never kicks");
-        assert_eq!(lobby.update(&tap(centre(button_rect(FIELD, Button::Ready))), FIELD, Some(&guest)), LobbyAction::Ready);
-        assert_eq!(lobby.update(&tap(centre(button_rect(FIELD, Button::Leave))), FIELD, Some(&guest)), LobbyAction::Leave);
+        assert_eq!(lobby.update(&tap(centre(button_rect(AREA, Button::Ready))), AREA, Some(&guest)), LobbyAction::Ready);
+        assert_eq!(lobby.update(&tap(centre(button_rect(AREA, Button::Leave))), AREA, Some(&guest)), LobbyAction::Leave);
     }
 
     /// The view a painter reads: the room's code, its link, a QR of that
@@ -963,7 +981,7 @@ mod lobby_tests {
         let mut away = seat(2, "kaj", false);
         away.connected = false;
         let room = room(false, vec![seat(0, "oto", false), seat(1, "ana", true), away]);
-        lobby.update(&LobbyInput::default(), FIELD, Some(&room));
+        lobby.update(&LobbyInput::default(), AREA, Some(&room));
         let view = lobby.view(Some(&room));
         assert_eq!(view.stage, Stage::Room);
         assert_eq!(view.code.as_deref(), Some("AK7QX"));
@@ -992,7 +1010,7 @@ mod lobby_tests {
     fn a_local_rooms_override_travels_in_the_link_and_its_qr() {
         let mut lobby = Lobby::new(SiteBase::deployed(), RoomsHost::overriding("ws://127.0.0.1:4848"));
         let room = room(true, vec![seat(0, "oto", false)]);
-        lobby.update(&LobbyInput::default(), FIELD, Some(&room));
+        lobby.update(&LobbyInput::default(), AREA, Some(&room));
         let view = lobby.view(Some(&room));
         assert_eq!(view.join_url.as_deref(), Some("https://bongbong.io/?join=AK7QX&rooms=ws://127.0.0.1:4848"));
         // Four characters longer than the path form, which is one QR
@@ -1012,7 +1030,7 @@ mod lobby_tests {
         // rematch is asked for the way the first round was.
         let seats = vec![seat(0, "oto", false), seat(1, "ana", true)];
         let host = ended(room(true, seats.clone()), RoundOutcome::Won);
-        lobby.update(&LobbyInput::default(), FIELD, Some(&host));
+        lobby.update(&LobbyInput::default(), AREA, Some(&host));
         let view = lobby.view(Some(&host));
         assert_eq!(view.stage, Stage::Room, "the room outlives its round");
         assert_eq!(view.code.as_deref(), Some("AK7QX"));
@@ -1027,12 +1045,12 @@ mod lobby_tests {
         // `START` is before the first round.
         let waiting = ended(room(true, vec![seat(0, "oto", false), seat(1, "ana", false)]), RoundOutcome::Won);
         assert_eq!(action(&lobby.view(Some(&waiting))), Some(("REMATCH".to_string(), false)));
-        assert_eq!(lobby.hit(FIELD, centre(button_rect(FIELD, Button::Start)), Some(&waiting)), None);
+        assert_eq!(lobby.hit(AREA, centre(button_rect(AREA, Button::Start)), Some(&waiting)), None);
         // The rects are the ones a finger already knows: a relabelled
         // button is the same button.
-        assert_eq!(button_rect(FIELD, Button::Start), button_rect(FIELD, Button::Confirm));
-        assert_eq!(lobby.update(&tap(centre(button_rect(FIELD, Button::Start))), FIELD, Some(&host)), LobbyAction::Start);
-        assert_eq!(lobby.update(&tap(centre(button_rect(FIELD, Button::Leave))), FIELD, Some(&host)), LobbyAction::Leave);
+        assert_eq!(button_rect(AREA, Button::Start), button_rect(AREA, Button::Confirm));
+        assert_eq!(lobby.update(&tap(centre(button_rect(AREA, Button::Start))), AREA, Some(&host)), LobbyAction::Start);
+        assert_eq!(lobby.update(&tap(centre(button_rect(AREA, Button::Leave))), AREA, Some(&host)), LobbyAction::Leave);
 
         // A lost round says so, and a guest is told whose move it is.
         let lost = ended(room(true, seats.clone()), RoundOutcome::Lost);
@@ -1051,7 +1069,7 @@ mod lobby_tests {
         let mut lobby = lobby();
         let seats: Vec<RosterSeat> = (0..crate::MAX_SEATS as u8).map(|i| seat(i, "p", i > 0)).collect();
         let room = room(true, seats);
-        lobby.update(&LobbyInput::default(), FIELD, Some(&room));
+        lobby.update(&LobbyInput::default(), AREA, Some(&room));
         let view = lobby.view(Some(&room));
         assert_eq!(view.seats.len(), LOBBY_SEAT_ROWS);
         assert_eq!(view.more, crate::MAX_SEATS - LOBBY_SEAT_ROWS);
@@ -1071,9 +1089,9 @@ mod lobby_tests {
             })
             .collect();
         assert_eq!(kicks, vec![1, 2, 3], "the host's own row has no kick, and no row past the panel's");
-        let column = seats_rect(FIELD);
+        let column = seats_rect(AREA);
         for row in kicks {
-            let r = button_rect(FIELD, Button::Kick(row));
+            let r = button_rect(AREA, Button::Kick(row));
             assert!(r.y >= column.y && r.y + r.height <= column.y + column.height);
         }
     }

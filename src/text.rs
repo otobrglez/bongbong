@@ -598,16 +598,27 @@ pub fn fit(text: &str, max_px: i32, size: i32) -> Cow<'_, str> {
     Cow::Owned("~".to_string())
 }
 
+/// The largest size, at most `size`, at which `text` is no wider than
+/// `max_px` - a banner on a narrow window - and `BASE_SIZE` when even that
+/// is too wide, the font's own size being the least it draws at.
+pub fn fit_size(text: &str, size: i32, max_px: i32) -> i32 {
+    (BASE_SIZE..=size.max(BASE_SIZE)).rev().find(|&s| width(text, s) <= max_px).unwrap_or(BASE_SIZE)
+}
+
 #[cfg(test)]
 mod text_tests {
     use super::*;
     use crate::hud::{
-        DIALOG_BUTTON_W, DIALOG_W, HUD_GAUGE_LABEL_MAX_PX, HUD_LABEL_SIZE, HUD_TEXT_SIZE, INFO_TITLE_W, LEVEL_BUTTON_W,
-        LEVEL_BUTTON_WORD_GAP, LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE, MODE_BUTTON_W, ONLINE_BUTTON_W, RESULT_BUTTON_W,
-        RESULT_LEVELS_W, RESULT_LINE_SIZE, RESULT_STATS_GAP, RESULT_TEXT_PX, UI_SMALL_TEXT,
+        BANNER_MIN_SIZE, BANNER_SIZE, BANNER_SUB_SIZE, DIALOG_BUTTON_W, DIALOG_W, HUD_GAUGE_LABEL_MAX_PX, HUD_LABEL_SIZE,
+        HUD_TEXT_SIZE, INFO_TITLE_W, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP, LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE,
+        MODE_BUTTON_W, ONLINE_BUTTON_W, RESULT_BUTTON_W, RESULT_LEVELS_W, RESULT_LINE_SIZE, RESULT_STATS_GAP,
+        RESULT_TEXT_PX, RESULT_TITLE_SIZE, UI_SMALL_TEXT, WAVE_BANNER_SIZE,
     };
+    use crate::level::Mission;
     use crate::level_select::{SELECT_BACK_W, SELECT_MARGIN, SELECT_W, TILE_TITLE_SIZE};
-    use crate::lobby::{LOBBY_BUTTON_W, LOBBY_KICK_W, LOBBY_WIDE_W, LOBBY_W, LOBBY_MARGIN};
+    use crate::lobby::{
+        LOBBY_BUTTON_W, LOBBY_KICK_W, LOBBY_MARGIN, LOBBY_SEAT_CHASSIS_X, LOBBY_SEAT_STATE_X, LOBBY_WIDE_W, LOBBY_W,
+    };
 
     /// The ids of every message in a shipped file: a message starts a
     /// line with its id and `=`; comments, blank lines and the
@@ -755,8 +766,8 @@ mod text_tests {
         let lobby_button = |k: Key| (k, HUD_TEXT_SIZE, LOBBY_BUTTON_W as i32 - 12, vec![]);
         let wide = |k: Key| (k, HUD_TEXT_SIZE, LOBBY_WIDE_W as i32 - 12, vec![]);
         let content = (LOBBY_W - 2.0 * LOBBY_MARGIN) as i32;
-        let field = crate::Rect::new(0.0, 32.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32);
-        let seat_state_px = (crate::lobby::seats_rect(field).width - LOBBY_KICK_W) as i32 - 280 - 4;
+        let area = crate::hud::UiFrame::plain((crate::hud::UI_MIN_W, crate::hud::UI_MIN_H)).area;
+        let seat_state_px = (crate::lobby::seats_rect(area).width - LOBBY_KICK_W - LOBBY_SEAT_STATE_X) as i32 - 4;
         vec![
             // A gauge's label over its bar, in the corners' small size.
             (keys::HUD_SPEED, UI_SMALL_TEXT, HUD_GAUGE_LABEL_MAX_PX, vec![]),
@@ -785,20 +796,20 @@ mod text_tests {
             (keys::LOBBY_TITLE_CLOSED, 22, content, vec![]),
             (keys::LOBBY_TITLE_HOST, 22, content, vec![]),
             (keys::LOBBY_TITLE_GUEST, 22, content, vec![]),
-            (keys::LOBBY_SUB_START, HUD_LABEL_SIZE + 2, content, vec![]),
-            (keys::LOBBY_SUB_CODE, HUD_LABEL_SIZE + 2, content, vec![]),
-            (keys::LOBBY_SUB_CLOSED, HUD_LABEL_SIZE + 2, content, vec![]),
-            (keys::LOBBY_SUB_HOST, HUD_LABEL_SIZE, content, vec![]),
-            (keys::LOBBY_SUB_GUEST, HUD_LABEL_SIZE, content, vec![]),
+            (keys::LOBBY_SUB_START, UI_SMALL_TEXT, content, vec![]),
+            (keys::LOBBY_SUB_CODE, UI_SMALL_TEXT, content, vec![]),
+            (keys::LOBBY_SUB_CLOSED, UI_SMALL_TEXT, content, vec![]),
+            (keys::LOBBY_SUB_HOST, UI_SMALL_TEXT, content, vec![]),
+            (keys::LOBBY_SUB_GUEST, UI_SMALL_TEXT, content, vec![]),
             (keys::LOBBY_MAP, HUD_TEXT_SIZE, 152, vec![]),
             (keys::LOBBY_MISSION, HUD_TEXT_SIZE, 152, vec![]),
-            // A seat's state runs from its 280 px column to the kick button
-            // at the row's right end.
-            (keys::SEAT_AWAY, HUD_LABEL_SIZE, seat_state_px, vec![]),
-            (keys::SEAT_HOST, HUD_LABEL_SIZE, seat_state_px, vec![]),
-            (keys::SEAT_READY, HUD_LABEL_SIZE, seat_state_px, vec![]),
-            (keys::SEAT_WAITING, HUD_LABEL_SIZE, seat_state_px, vec![]),
-            (keys::SEAT_EMPTY, HUD_LABEL_SIZE, 200, vec![]),
+            // A seat's state runs from its column to the kick button at
+            // the row's right end.
+            (keys::SEAT_AWAY, UI_SMALL_TEXT, seat_state_px, vec![]),
+            (keys::SEAT_HOST, UI_SMALL_TEXT, seat_state_px, vec![]),
+            (keys::SEAT_READY, UI_SMALL_TEXT, seat_state_px, vec![]),
+            (keys::SEAT_WAITING, UI_SMALL_TEXT, seat_state_px, vec![]),
+            (keys::SEAT_EMPTY, UI_SMALL_TEXT, 200, vec![]),
             wide(keys::LOBBY_HOST),
             wide(keys::LOBBY_JOIN),
             lobby_button(keys::LOBBY_BACK),
@@ -840,9 +851,14 @@ mod text_tests {
             (keys::SETTINGS_WEATHER, 16, 116, vec![]),
             (keys::SETTINGS_RESET, 16, 116, vec![]),
             // The level's lines and the end screen: across the smallest
-            // field the game ships (maps/crossplay/, 768 px) less a margin,
-            // the end screen's two numbers side by side with a gap.
+            // area the chrome is laid out in less a margin, the end
+            // screen's two numbers side by side with a gap, and the
+            // countdown free play and a room's round end on, two digits.
             (keys::LEVEL_NUMBER, LEVEL_NUMBER_SIZE, RESULT_TEXT_PX, vec![("n", 14.into()), ("count", 14.into())]),
+            (keys::ROUND_RESTARTING, BANNER_SUB_SIZE, RESULT_TEXT_PX, vec![("seconds", 30.into())]),
+            (keys::ROUND_BACK_TO_LOBBY, BANNER_SUB_SIZE, RESULT_TEXT_PX, vec![("seconds", 30.into())]),
+            (keys::ROUND_WON, RESULT_TITLE_SIZE, RESULT_TEXT_PX, vec![]),
+            (keys::ROUND_LOST, RESULT_TITLE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::RESULT_ALL_CLEAR, RESULT_LINE_SIZE, RESULT_TEXT_PX, vec![("count", 14.into())]),
             (keys::RESULT_TIME, RESULT_LINE_SIZE, (RESULT_TEXT_PX - RESULT_STATS_GAP) / 2, vec![("time", "59:59".into())]),
             (keys::RESULT_WRECKS, RESULT_LINE_SIZE, (RESULT_TEXT_PX - RESULT_STATS_GAP) / 2, vec![("n", 99.into()), ("total", 99.into())]),
@@ -858,7 +874,7 @@ mod text_tests {
             // its content, BACK in its button; the corners' level button
             // holds its word, in the small size, and a two-digit number.
             (keys::LEVELS_TITLE, 22, (SELECT_W - 2.0 * SELECT_MARGIN) as i32, vec![]),
-            (keys::LEVELS_SUB, HUD_LABEL_SIZE + 2, (SELECT_W - 2.0 * SELECT_MARGIN) as i32, vec![]),
+            (keys::LEVELS_SUB, UI_SMALL_TEXT, (SELECT_W - 2.0 * SELECT_MARGIN) as i32, vec![]),
             (keys::LEVELS_BACK, HUD_TEXT_SIZE, SELECT_BACK_W as i32 - 12, vec![]),
             (
                 keys::BAR_LEVEL,
@@ -883,13 +899,37 @@ mod text_tests {
                     over.push(format!("{tag}: {} = {text:?} is {w} px at {size} px, over its {max_px} px budget", key.0));
                 }
             }
+            // The banners: set at their size where the line has the room
+            // and shrunk to fit where it has not, but never under
+            // `BANNER_MIN_SIZE` in the smallest area the chrome is laid
+            // out in.
+            let mut banners: Vec<(String, i32)> = [Mission::Protect, Mission::Hunt, Mission::Destroy]
+                .into_iter()
+                .map(|m| (catalogue.get(mission_banner(m)), BANNER_SIZE))
+                .collect();
+            banners.push((catalogue.get(keys::PAUSED), BANNER_SIZE));
+            banners.push((catalogue.get(keys::WAVE_FINAL), WAVE_BANNER_SIZE));
+            banners.push((catalogue.fmt(keys::WAVE_BANNER, &[("n", 99.into())]), WAVE_BANNER_SIZE));
+            for (banner, size) in banners {
+                let fitted = fit_size(&banner, size, RESULT_TEXT_PX);
+                if fitted < BANNER_MIN_SIZE.min(size) {
+                    over.push(format!("{tag}: banner {banner:?} only fits at {fitted} px, under {BANNER_MIN_SIZE}"));
+                }
+            }
+            // A seat's chassis runs from its column to the state's.
+            for kind in crate::tank::TankKind::ALL {
+                let name = catalogue.named("tank", kind.name());
+                if width(&name, UI_SMALL_TEXT) > (LOBBY_SEAT_STATE_X - LOBBY_SEAT_CHASSIS_X) as i32 - 4 {
+                    over.push(format!("{tag}: chassis {name:?} runs into the seat's state"));
+                }
+            }
             // Every level's title under the mission banner, and on its
             // tile in the level select, whole.
-            let tile_px = crate::level_select::tile_text_px(crate::Rect::new(0.0, 0.0, 768.0, 384.0));
+            let tile_px = crate::level_select::tile_text_px();
             for level in crate::levels::Levels::shipped().iter() {
                 let title = catalogue.message(&format!("level-{}", level.map), &[]).unwrap_or_else(|| fold(&level.title).into_owned());
                 if width(&title, LEVEL_TITLE_SIZE) > RESULT_TEXT_PX {
-                    over.push(format!("{tag}: level {} = {title:?} overflows the field", level.map));
+                    over.push(format!("{tag}: level {} = {title:?} overflows the smallest area", level.map));
                 }
                 let lines = crate::level_select::wrap(&title, tile_px, TILE_TITLE_SIZE);
                 if lines.iter().any(|line| line.ends_with('~')) {
@@ -971,6 +1011,19 @@ mod text_tests {
         let cut = fit("A VERY LONG MAP NAME INDEED", 60, 18);
         assert!(cut.ends_with('~') && width(&cut, 18) <= 60, "{cut}");
         assert_eq!(fit("WIDE", 1, 18), "~");
+    }
+
+    /// `fit_size` keeps the size where the text fits and otherwise takes
+    /// the largest that does, down to the font's own.
+    #[test]
+    fn fit_size_shrinks_only_what_does_not_fit() {
+        assert_eq!(fit_size("YOU WIN", 72, 1000), 72);
+        let banner = "PROTECT THE FROG!";
+        let fitted = fit_size(banner, 72, 672);
+        assert!(fitted < 72 && width(banner, fitted) <= 672, "{fitted}");
+        assert!(width(banner, fitted + 1) > 672, "the largest size that fits");
+        assert_eq!(fit_size(banner, 72, 1), BASE_SIZE, "nothing narrower than the font's own size");
+        assert_eq!(fit_size("", 72, 0), 72);
     }
 
     /// Tags: exact, case and separator aside, then by language subtag,

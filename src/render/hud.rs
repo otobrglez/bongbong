@@ -1,12 +1,13 @@
 //! Drawing the HUD - the two corner clusters and their buttons, the
-//! builder bar's mode button, the dialogs and the end screen - and the slot
-//! tables the clusters' rows are laid out from (`hud.rs` owns the model,
-//! the shared colours and sizes, and every rect the hit tests read).
+//! builder bar's mode button, the banners, the dialogs and the end screen,
+//! all in UI points but the builder's button - and the slot tables the
+//! clusters' rows are laid out from (`hud.rs` owns the model, the shared
+//! colours and sizes, and every rect the hit tests read).
 
 use sola_raylib::prelude::*;
 
 use crate::hud::{
-    clock_text, leave_dialog_rects, mode_button_rect, players_dialog_rects, result_layout, weapon_color, Corners, Fade,
+    banner_size, clock_text, leave_dialog_rects, mode_button_rect, players_dialog_rects, result_layout, weapon_color, Corners, Fade,
     HudModel, NextLevel, PlayChrome, PlayerHud, ResultButtons, ResultView, SeatHud, BUILD_COLOR, DIALOG_W, DIM,
     HUD_TEXT_SIZE, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP, LINE_H, ONLINE_COLOR, RESULT_LINE_SIZE,
     RESULT_SEATS_SIZE, RESULT_STATS_GAP, ROW_H, TEXT, UI_SMALL_TEXT, WEAPON_SLOTS,
@@ -417,12 +418,12 @@ fn draw_dialog_button(d: &mut impl RaylibDraw, rect: Rectangle, label: &str, col
     d.draw_text(label, (rect.x + (rect.width - w as f32) / 2.0) as i32, (rect.y + (rect.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, color);
 }
 
-/// Draw the players dialog over the (already dimmed) field: the live
-/// count's button highlighted, the other in the action colour. Field
-/// space, like `draw_leave_dialog`.
-pub fn draw_players_dialog(d: &mut impl RaylibDraw, field: Rect, players: PlayerCount) {
+/// Draw the players dialog over the (already dimmed) window: the live
+/// count's button highlighted, the other in the action colour. In UI
+/// points, centred in the chrome's `area`, like `draw_leave_dialog`.
+pub fn draw_players_dialog(d: &mut impl RaylibDraw, area: Rect, players: PlayerCount) {
     let t = text();
-    let r = players_dialog_rects(field);
+    let r = players_dialog_rects(area);
     draw_dialog_panel(d, r.panel, &t.get(keys::PLAYERS_TITLE), &t.get(keys::PLAYERS_KEYS));
     let live_fill = Some(Color::new(255, 255, 255, 40));
     let one_live = players == PlayerCount::ONE;
@@ -430,36 +431,49 @@ pub fn draw_players_dialog(d: &mut impl RaylibDraw, field: Rect, players: Player
     draw_dialog_button(d, r.two, &t.get(keys::PLAYERS_TWO), if one_live { BUILD_COLOR } else { TEXT }, (!one_live).then_some(live_fill).flatten());
 }
 
-/// Draw the leave-round dialog over the (already dimmed) field. Field
-/// space: call inside the field camera.
-pub fn draw_leave_dialog(d: &mut impl RaylibDraw, field: Rect) {
+/// Draw the leave-round dialog over the (already dimmed) window. In UI
+/// points: call inside the UI camera, centred in the chrome's `area`.
+pub fn draw_leave_dialog(d: &mut impl RaylibDraw, area: Rect) {
     let t = text();
-    let r = leave_dialog_rects(field);
+    let r = leave_dialog_rects(area);
     draw_dialog_panel(d, r.panel, &t.get(keys::LEAVE_TITLE), &t.get(keys::LEAVE_SUB));
     draw_dialog_button(d, r.leave, &t.get(keys::LEAVE_CONFIRM), BUILD_COLOR, None);
     draw_dialog_button(d, r.stay, &t.get(keys::LEAVE_STAY), TEXT, None);
+}
+
+/// One line of a banner in UI points, centred on the chrome's `area` at
+/// `y`: set in `size` where the area has the room and smaller where it has
+/// not (`hud::banner_size`). Answers the size it was set in.
+pub fn draw_banner(d: &mut impl RaylibDraw, area: Rect, text: &str, size: i32, y: i32, color: Color) -> i32 {
+    let size = banner_size(text, size, area);
+    let w = width(text, size);
+    d.draw_text(text, (area.x + area.w / 2.0).round() as i32 - w / 2, y, size, color);
+    size
 }
 
 /// Draw the end screen under its outcome (docs/levels.md): every level
 /// complete after the last one's win, the round's time and wrecks, the
 /// wrecks by seat from two seats, then a level's buttons - the way it is
 /// counting down to carrying the count - or free play's `countdown` in
-/// their place. Field space, over the dim, at the rows
-/// `hud::result_layout` gives, which is what the hit tests read too.
-pub fn draw_result(d: &mut impl RaylibDraw, field: Rect, view: &ResultView, countdown: &str) {
-    fn centred(d: &mut impl RaylibDraw, field: Rect, line: &str, y: f32, size: i32, color: Color) {
+/// their place. In UI points over the dim, centred in the chrome's
+/// `area`, at the rows `hud::result_layout` gives, which is what the hit
+/// tests read too.
+pub fn draw_result(d: &mut impl RaylibDraw, area: Rect, view: &ResultView, countdown: &str) {
+    fn centred(d: &mut impl RaylibDraw, middle: i32, line: &str, y: f32, size: i32, color: Color) {
         let w = width(line, size);
-        d.draw_text(line, (field.w as i32 - w) / 2, y as i32, size, color);
+        d.draw_text(line, middle - w / 2, y as i32, size, color);
     }
+    // Every line's centre: the area's, on a whole point.
+    let middle = (area.x + area.w / 2.0).round() as i32;
     let t = text();
-    let rows = result_layout(field, view);
+    let rows = result_layout(area, view);
     if let (Some(y), Some(ResultButtons { next: Some(NextLevel::FirstAgain { levels }), .. })) = (rows.all_clear_y, view.buttons) {
-        centred(d, field, &t.fmt(keys::RESULT_ALL_CLEAR, &[("count", levels.into())]), y, RESULT_LINE_SIZE, BUILD_COLOR);
+        centred(d, middle, &t.fmt(keys::RESULT_ALL_CLEAR, &[("count", levels.into())]), y, RESULT_LINE_SIZE, BUILD_COLOR);
     }
     let time = t.fmt(keys::RESULT_TIME, &[("time", clock_text(view.stats.seconds).into())]);
     let wrecks = t.fmt(keys::RESULT_WRECKS, &[("n", view.stats.destroyed.into()), ("total", view.stats.enemies.into())]);
     let (time_w, wrecks_w) = (width(&time, RESULT_LINE_SIZE), width(&wrecks, RESULT_LINE_SIZE));
-    let x = (field.w as i32 - time_w - RESULT_STATS_GAP - wrecks_w) / 2;
+    let x = middle - (time_w + RESULT_STATS_GAP + wrecks_w) / 2;
     d.draw_text(&time, x, rows.stats_y as i32, RESULT_LINE_SIZE, Color::RAYWHITE);
     d.draw_text(&wrecks, x + time_w + RESULT_STATS_GAP, rows.stats_y as i32, RESULT_LINE_SIZE, Color::RAYWHITE);
     if let Some(y) = rows.seats_y {
@@ -470,7 +484,7 @@ pub fn draw_result(d: &mut impl RaylibDraw, field: Rect, view: &ResultView, coun
             .map(|seat| format!("{} {}", t.fmt(keys::SEAT_LABEL, &[("n", (seat + 1).into())]), view.stats.by_seat[seat]))
             .collect();
         let total: i32 = parts.iter().map(|p| width(p, RESULT_SEATS_SIZE)).sum::<i32>() + gap * (seats as i32 - 1);
-        let mut x = (field.w as i32 - total) / 2;
+        let mut x = middle - total / 2;
         for (seat, part) in parts.iter().enumerate() {
             d.draw_text(part, x, y as i32, RESULT_SEATS_SIZE, team_color(seat as u8));
             x += width(part, RESULT_SEATS_SIZE) + gap;
@@ -504,7 +518,7 @@ pub fn draw_result(d: &mut impl RaylibDraw, field: Rect, view: &ResultView, coun
         }
         (None, _) => {
             if let Some(y) = rows.countdown_y {
-                centred(d, field, countdown, y, RESULT_LINE_SIZE, Color::RAYWHITE);
+                centred(d, middle, countdown, y, RESULT_LINE_SIZE, Color::RAYWHITE);
             }
         }
     }
