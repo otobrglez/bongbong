@@ -515,7 +515,14 @@ impl Game {
         // and the HUD deliberately aren't shifted: they're either their own
         // small on-screen quad or meant to stay put. The field origin is
         // added on top: the scene lands on the field's place in the bitmap.
-        let shake = crate::shockwave::camera_shake(&self.shocks, (!camera.shows_whole_field()).then(|| camera.rect()), &tuning());
+        // Reduced motion (`motion.rs`) has no shake, and no ripple bending
+        // the whole screen either (`WorldPass::bend`).
+        let still = crate::motion::reduced();
+        let shake = if still {
+            crate::math::Vec2::new(0.0, 0.0)
+        } else {
+            crate::shockwave::camera_shake(&self.shocks, (!camera.shows_whole_field()).then(|| camera.rect()), &tuning())
+        };
         let blit_offset = Vector2::new(shake.x, shake.y);
 
         // Where pass 2 puts the world, and at what scale: the field area of
@@ -537,6 +544,7 @@ impl Game {
             camera: *camera,
             cull,
             backdrop,
+            bend: !still,
         };
         let text = ChromeText {
             t: &t,
@@ -610,6 +618,9 @@ struct WorldPass<'a> {
     camera: Camera,
     cull: Option<Rectangle>,
     backdrop: Color,
+    /// Whether the kill ripples bend the whole scene: not under reduced
+    /// motion (`motion.rs`).
+    bend: bool,
 }
 
 /// What `Game::draw_chrome` writes, gathered by `Game::render` in the
@@ -639,7 +650,8 @@ struct ChromeFrame<'a> {
 
 impl Game {
     /// Pass 2's world: the scene target (through the shockwave while one
-    /// plays), the muzzle and impact ripples' quads over it, the kill flash
+    /// plays, unless motion is reduced), the muzzle and impact ripples'
+    /// quads over it, the kill flash
     /// over the whole of it, a followed view's world past the field's edge
     /// in the backdrop's colour, and the debug overlays.
     fn draw_world_layer<D: RaylibDraw>(&self, d: &mut D, w: &WorldPass, effects: &mut Effects) {
@@ -651,7 +663,7 @@ impl Game {
         let target_height = camera.target_size().1;
         let texel = |at: Position| Vector2::new(at.x - camera.origin.x, target_height as f32 - (at.y - camera.origin.y));
 
-        if !self.shocks.is_empty() {
+        if !self.shocks.is_empty() && w.bend {
             d.draw_shader_mode(&mut effects.shock.shader, |mut sd| {
                 sd.draw_texture_pro(w.scene, w.source, w.blit, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
             });

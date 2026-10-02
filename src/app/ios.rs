@@ -38,6 +38,10 @@ unsafe extern "C" {
     fn SDL_GetWindowSizeInPixels(window: *mut c_void, w: *mut c_int, h: *mut c_int) -> bool;
     fn SDL_GetPreferredLocales(count: *mut c_int) -> *mut *mut SdlLocale;
     fn SDL_free(mem: *mut c_void);
+    /// UIKit's Reduce Motion (Settings > Accessibility > Motion): a plain
+    /// C function returning a `BOOL`, one byte on arm64. UIKit is linked
+    /// with SDL's frameworks (`build.rs`'s `ios_link`).
+    fn UIAccessibilityIsReduceMotionEnabled() -> u8;
     /// glad's entries for glBindFramebuffer/glBindRenderbuffer inside
     /// libraylib.a: raylib was built with glad loading GL ES through
     /// SDL_GL_GetProcAddress, so every rlgl GL call goes through a
@@ -105,6 +109,14 @@ pub fn route_default_framebuffer(rl: &mut sola_raylib::RaylibHandle) {
             real(GL_RENDERBUFFER, rbo as u32);
         }
     }
+}
+
+/// Whether the player turned on Reduce Motion: the platform's answer to
+/// the one motion switch (`motion.rs`), read once at startup.
+pub fn reduce_motion() -> bool {
+    // SAFETY: a plain UIKit query with no arguments, on the main thread
+    // inside the app's launch.
+    unsafe { UIAccessibilityIsReduceMotionEnabled() != 0 }
 }
 
 pub fn main() -> ! {

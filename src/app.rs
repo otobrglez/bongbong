@@ -365,6 +365,12 @@ const PAGE_INVITE: &std::ffi::CStr = c"(function(){try{return String(window.bbIn
 #[cfg(target_os = "emscripten")]
 const PAGE_LANG: &std::ffi::CStr = c"(function(){try{return String(window.bbLang||'')}catch(e){return ''}})()";
 
+/// Whether the browser asks for reduced motion, as the page published it
+/// (`site/src/scripts/motion.ts`, the `prefers-reduced-motion` media
+/// query): `reduce`, `no-preference`, or nothing.
+#[cfg(target_os = "emscripten")]
+const PAGE_MOTION: &std::ffi::CStr = c"(function(){try{return String(window.bbMotion||'')}catch(e){return ''}})()";
+
 /// This browser's reconnect key, minted and kept by the page - one per
 /// tab, so two tabs in one browser are two seats rather than one seat
 /// taken twice.
@@ -444,6 +450,26 @@ fn platform_languages() -> Vec<String> {
     #[cfg(not(any(target_os = "emscripten", target_os = "ios", target_os = "android")))]
     {
         crate::text::platform_languages()
+    }
+}
+
+/// Whether this platform asks for reduced motion (`motion.rs`): the page's
+/// `prefers-reduced-motion` on the web, iOS's Reduce Motion, and nothing
+/// anywhere the answer would take more than one plain call - Android's
+/// needs JNI; macOS, Linux and Windows are left at full motion too - so
+/// the switch starts off there.
+fn platform_motion() -> Option<bool> {
+    #[cfg(target_os = "emscripten")]
+    {
+        crate::motion::from_page(&page_string(PAGE_MOTION))
+    }
+    #[cfg(target_os = "ios")]
+    {
+        Some(ios::reduce_motion())
+    }
+    #[cfg(not(any(target_os = "emscripten", target_os = "ios")))]
+    {
+        None
     }
 }
 
@@ -1039,6 +1065,17 @@ pub fn run(args: Args) {
     // string; the dev server's `lang` tool is the only later writer.
     let language = crate::text::set_language(crate::text::choose(explicit_language(&args).as_deref(), &platform_languages()));
     eprintln!("[text] language {language}");
+    // The platform's word on motion (`motion.rs`), read once like the
+    // language: the `reduce_motion` row follows it unless set.
+    crate::motion::set_platform(platform_motion());
+    eprintln!(
+        "[motion] the platform asks for {}",
+        match crate::motion::platform() {
+            Some(true) => "reduced motion",
+            Some(false) => "full motion",
+            None => "nothing (full motion)",
+        }
+    );
 
     // The battlefield is the map's (`MapFile::field_size`); the bitmap the
     // game draws is that field - under the builder's bar in Build

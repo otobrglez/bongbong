@@ -1848,6 +1848,15 @@ tunables! {
     }
 
     group camera {
+        /// The one motion switch (`motion.rs`, docs/large-maps-follow-camera.md
+        /// section 6): 0 follows the platform - iOS's Reduce Motion, the
+        /// browser's `prefers-reduced-motion`; Android, macOS, Linux and
+        /// Windows say nothing, which is full motion -, 1 is full motion
+        /// and 2 reduced. Reduced motion has no camera shake, no ripple
+        /// bending the whole screen and no zoom at a round's opening (the
+        /// establishing shot cuts to the tank); the follow camera, the
+        /// arrows and every effect of the fight itself stay.
+        reduce_motion: i32 = 0 in 0 ..= 2;
         /// The follow camera on a field map (`follow.rs`,
         /// docs/large-maps-follow-camera.md section 6): how far the seat
         /// moves inside the view on an axis, in pixels either way, before

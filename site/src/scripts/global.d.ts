@@ -21,6 +21,11 @@ declare global {
     /** This tab's reconnect key in a room, read once at startup by
      *  `app.rs`. See `room.ts`. */
     bbToken: string;
+    /** "reduce" or "no-preference" - the `prefers-reduced-motion` media
+     *  query - or empty where the browser cannot say: the web build's word
+     *  on the game's motion switch (src/motion.rs), read once at startup.
+     *  See `motion.ts`. */
+    bbMotion: string;
   }
 
   // Old WebKit's prefixed Fullscreen API (see fullscreen.ts).

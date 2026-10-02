@@ -951,6 +951,7 @@ pub mod maplint;
 pub mod math;
 pub mod minimap;
 pub mod missile;
+pub mod motion;
 pub mod obstacle;
 pub mod pathfind;
 pub mod physics;
