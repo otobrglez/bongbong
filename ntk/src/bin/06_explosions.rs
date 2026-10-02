@@ -113,6 +113,8 @@ fn main() {
     // draws no HUD over it.
     let mut scene = rl.load_render_texture(&thread, w as u32, h as u32).expect("scene target");
     let mut composite_build = rl.load_render_texture(&thread, w as u32, (h + HUD_BAR_HEIGHT) as u32).expect("composite");
+    // Where the builder draws a zoomed canvas: made when first needed.
+    let mut builder_scene = bongbong::editor::render::BuilderScene::default();
     let mut composite_play = rl.load_render_texture(&thread, w as u32, h as u32).expect("composite");
     let layout_build = Layout::for_field(width, height);
     let layout_play = Layout::bare(width, height);
@@ -228,6 +230,7 @@ fn main() {
                     undo: ctrl && rl.is_key_pressed(KeyboardKey::KEY_Z),
                     redo: ctrl && rl.is_key_pressed(KeyboardKey::KEY_Y),
                     typed: String::new(),
+                    ..BuilderInput::default()
                 };
                 session.update_builder(&input, layout);
                 if session.mode() == Driver::Build {
@@ -235,6 +238,7 @@ fn main() {
                         rl,
                         thread,
                         &mut composite_build,
+                        &mut builder_scene,
                         &view,
                         bongbong::math::Color::WHITE,
                         layout,

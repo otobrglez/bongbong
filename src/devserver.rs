@@ -1911,6 +1911,7 @@ impl DevServer {
                 if session.mode() != Driver::Build {
                     Err("builder_touch needs build mode - call `build` first".to_string())
                 } else {
+                    let (layout, _, _) = self.click_frame(session, width, height);
                     touch_frames(params).map(|(frames, dt)| {
                         let mut down = false;
                         for touches in frames.into_iter().chain(std::iter::once(Vec::new())) {
