@@ -349,12 +349,15 @@ impl Game {
         }
         let grid = self.nav_grid(f.width, f.height);
         let walk = grid.walk_costs(&fight);
+        // The lanes depend on the grid, the seats and the frog, none of
+        // which a re-roll moves.
+        let lanes = self.wave_lanes(&grid, f);
         for (slot, entity, at) in lost {
             let from = walk.from_hull(at);
             if !field::far_by_walk(from) {
                 continue;
             }
-            let gates = field::reroll_gates(self.wave_lanes(&grid, f), &walk, &seats, from);
+            let gates = field::reroll_gates(lanes.clone(), &walk, &seats, from);
             if let GatePick::Free(gate) = self.draw_lane(gates, f) {
                 self.reroll(entity, slot, at, gate, f);
             }
@@ -509,7 +512,15 @@ impl Game {
     /// whoever takes it.
     fn pick_gate(&mut self, f: &mut Frame) -> GatePick {
         let grid = self.nav_grid(f.width, f.height);
-        let mut gates = self.wave_lanes(&grid, f);
+        let (lanes, player) = self.open_lanes(&grid, f);
+        // Every preference below keeps some of the lanes it is given, so
+        // with every lane busy the answer is `Busy` whichever it would
+        // keep - said before the components and the walk are worked out
+        // for nothing on every frame a wave waits for a lane.
+        if !lanes.is_empty() && self.free_lanes(&lanes).is_empty() {
+            return GatePick::Busy;
+        }
+        let mut gates = Self::toward_the_fight(&grid, lanes, player);
         // A field map keeps a wave out of sight and within reach: lanes
         // outside every seat's sight box, those whose walk to the nearest
         // seat is about `field_walk_seconds` where there are any
@@ -520,19 +531,27 @@ impl Game {
         self.draw_lane(gates, f)
     }
 
-    /// Every lane a wave may roll in through on `grid`, the live nav grid:
+    /// Every lane a wave may roll in through on `grid`, the live nav grid
+    /// (`open_lanes`), and of those the ones that lead to the fight where
+    /// any does (`toward_the_fight`).
+    fn wave_lanes(&self, grid: &Grid, f: &Frame) -> Vec<Gate> {
+        let (lanes, player) = self.open_lanes(grid, f);
+        Self::toward_the_fight(grid, lanes, player)
+    }
+
+    /// The lanes a wave may roll in through on `grid`, the live nav grid:
     /// the map's own `gate` cells when it has any, else the lanes the grid
     /// offers (`battlefield::gate_candidates`, so walls shot away since
     /// open new lanes), either way none within `wave_gate_min_player_dist`
-    /// of a seat or the players' frog where any lane is farther, and of
-    /// those the ones that lead to the fight where any does.
-    fn wave_lanes(&self, grid: &Grid, f: &Frame) -> Vec<Gate> {
+    /// of a seat or the players' frog where any lane is farther - with
+    /// where player 1 stands, the fight `toward_the_fight` routes to.
+    fn open_lanes(&self, grid: &Grid, f: &Frame) -> (Vec<Gate>, Position) {
         let (inward, min_dist) = {
             let t = tuning();
             (t.wave_gate_inward_cells, t.wave_gate_min_player_dist)
         };
         // Every seat that holds a tank; `avoid[0]` stays player 1, the one
-        // the connectivity preference below routes to.
+        // the connectivity preference routes to.
         let mut avoid: Vec<Position> = self
             .players()
             .into_iter()
@@ -555,16 +574,17 @@ impl Game {
         if gates.is_empty() {
             gates = battlefield::gate_candidates(grid, f.width, f.height, &avoid, min_dist, inward);
         }
-        // Prefer lanes that lead to the fight: a lane open on its own can
-        // still end in a pocket walled off from the player (the default
-        // map's gated strips). Only when no lane connects is any lane used.
+        (gates, avoid[0])
+    }
+
+    /// Of `lanes`, the ones that lead to the fight - connected to `player`
+    /// on `grid` - where any does: a lane open on its own can still end in
+    /// a pocket walled off from the player (the default map's gated
+    /// strips). Only when no lane connects is any lane used.
+    fn toward_the_fight(grid: &Grid, lanes: Vec<Gate>, player: Position) -> Vec<Gate> {
         let components = grid.components();
-        let connected: Vec<Gate> =
-            gates.iter().copied().filter(|g| components.connected(grid, g.inside, avoid[0])).collect();
-        if !connected.is_empty() {
-            gates = connected;
-        }
-        gates
+        let connected: Vec<Gate> = lanes.iter().copied().filter(|g| components.connected(grid, g.inside, player)).collect();
+        if connected.is_empty() { lanes } else { connected }
     }
 
     /// One of `gates` for a tank to start down now: of the free ones
@@ -575,7 +595,7 @@ impl Game {
         if gates.is_empty() {
             return GatePick::None;
         }
-        let free = self.free_lanes(gates);
+        let free = self.free_lanes(&gates);
         if free.is_empty() {
             return GatePick::Busy;
         }
@@ -590,13 +610,14 @@ impl Game {
     /// The lanes of `gates` a tank may start down now, in the order given:
     /// none with a tank still rolling along it or anyone standing on its
     /// inside point.
-    fn free_lanes(&self, gates: Vec<Gate>) -> Vec<Gate> {
+    fn free_lanes(&self, gates: &[Gate]) -> Vec<Gate> {
         let clearance = Tank::default().size() * 1.5;
         let entering: Vec<Position> = self.world.query::<(&Tank, &RollIn)>().iter().map(|(t, _)| t.position).collect();
         let standing: Vec<Position> =
             self.world.query::<&Tank>().iter().filter(|t| t.body.is_some()).map(|t| t.position).collect();
         gates
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|g| {
                 entering.iter().all(|&p| segment_distance(p, g.outside, g.inside) >= clearance)
                     && standing.iter().all(|&p| p.distance_to(g.inside) >= clearance)
@@ -624,10 +645,15 @@ impl Game {
         if gates.is_empty() {
             return GatePick::None;
         }
-        let walk = grid.walk_costs(&self.live_seat_positions());
-        let Some(gate) = self.free_lanes(field::nearest_gates(gates, &walk)).into_iter().next() else {
+        // The free lanes first, so a frame with every lane busy works out
+        // no walk; the order by walk is stable, so the nearest free lane is
+        // the one it would be in the order of every lane.
+        let free = self.free_lanes(&gates);
+        if free.is_empty() {
             return GatePick::Busy;
-        };
+        }
+        let walk = grid.walk_costs(&self.live_seat_positions());
+        let gate = field::nearest_gates(free, &walk)[0];
         self.wave.used_gates.push((gate.edge.index(), gate.cell));
         GatePick::Free(gate)
     }
