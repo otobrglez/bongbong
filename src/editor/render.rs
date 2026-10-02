@@ -463,16 +463,19 @@ impl MapEditor {
                 ground::draw_shade(&mut GpuCanvas::new(&mut *d, textures), &self.ground);
             }
 
+            // The cells as the kept index holds them, made once per edit
+            // rather than parsed and sorted again every frame.
+            let index = self.cell_index();
             // Portals first, under every other cell: three cells of art on
-            // one anchor cell, and `iter_cells` is row-sorted, so a portal
+            // one anchor cell, and the cells are row-sorted, so a portal
             // drawn in the loop would cover a wall placed above it. Ghosted
             // while the network is inactive (fewer than two), with the
             // anchor outlined like a gate off its edge - placed, not
             // usable. `time` is the wall clock above.
-            let portals = self.map.portal_cells();
+            let portals = index.portals();
             let active = portals.len() >= 2;
             let tint = if active { Color::WHITE } else { Color::new(255, 255, 255, 110) };
-            for &(col, row) in &portals {
+            for &(col, row) in portals {
                 let pos = map::cell_to_world(col, row);
                 if culled(pos, 0.0) {
                     continue;
@@ -484,13 +487,14 @@ impl MapEditor {
                 }
             }
 
-            for (col, row, obj) in self.map.iter_cells() {
+            // Only the rows the cull spans (`CellIndex::near`).
+            for (col, row, obj) in index.near(cull) {
                 // Road and water are painted into `self.ground`, portals in
                 // the pre-pass above.
                 if matches!(obj, CellObject::Road | CellObject::Water | CellObject::Portal) {
                     continue;
                 }
-                let pos = map::cell_to_world(col, row);
+                let pos = map::cell_to_world(*col, *row);
                 // A tower's reach ring spreads far past its cell.
                 let reach = obj.tower().map_or(0.0, |(kind, _)| kind.range());
                 if culled(pos, reach) {

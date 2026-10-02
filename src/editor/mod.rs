@@ -77,6 +77,7 @@ pub mod camera;
 pub mod chrome;
 pub mod gesture;
 pub mod history;
+pub mod index;
 #[cfg(feature = "render")]
 pub mod render;
 pub mod select;
@@ -107,6 +108,7 @@ use crate::tank::TankKind;
 use crate::{EDITOR_STEPPER_SIZE, Layout, PATHFIND_CELL_SIZE, Position};
 use chrome::{LintLayout, LoadLayout, Palette, SettingsLayout, LINT_HEAD_ROWS};
 pub use history::{CellChange, EditStep, MapDiff, MapSettings, UndoStack};
+pub use index::CellIndex;
 
 /// The builder's accent: the amber the `BUILD` label, the active
 /// category's outline and the mode button share (`hud::BUILD_COLOR`).
@@ -896,6 +898,15 @@ pub struct MapEditor {
     /// The canvas's revision with the edit count it was worked out at
     /// (`edits`): worked out again only after an edit.
     revision: std::cell::Cell<Option<(u64, u64)>>,
+    /// The canvas's cells as a frame reads them (`index.rs`): an edit of
+    /// cells takes its cells in (`cells_changed`), any other edit lets it
+    /// go to be worked out again on the next read.
+    index: std::cell::OnceCell<CellIndex>,
+    /// The baseline's, worked out on the first read after it moves.
+    baseline_index: std::cell::OnceCell<CellIndex>,
+    /// Whether the canvas differs from its baseline (`dirty`): worked out
+    /// on the first read after an edit or a move of the baseline.
+    dirty: std::cell::Cell<Option<bool>>,
     pub cli_overrides: CliOverrides,
     /// `render` draws a flat white field instead of the ground tileset -
     /// the builder-side twin of `Game::plain_canvas`.
@@ -960,6 +971,9 @@ impl MapEditor {
             thumbs: thumbs::Thumbs::default(),
             hover: None,
             revision: std::cell::Cell::new(None),
+            index: std::cell::OnceCell::new(),
+            baseline_index: std::cell::OnceCell::new(),
+            dirty: std::cell::Cell::new(None),
             cli_overrides: CliOverrides::default(),
         };
         if let Some((revision, par)) = stamp {
@@ -1148,9 +1162,26 @@ impl MapEditor {
         self.map.name.clone().unwrap_or_else(|| crate::text::text().get(crate::text::keys::EDITOR_UNTITLED))
     }
 
-    /// Edited since it was seeded or last loaded.
+    /// Edited since it was seeded, loaded or last saved: its cells, its
+    /// settings or its size differ from the baseline's - what `diff` finds
+    /// non-empty, compared on the kept indexes rather than the maps, once
+    /// per edit (the bar's `*`, the status line and the MAP panel's RESET
+    /// read it every frame).
     pub fn dirty(&self) -> bool {
-        !self.diff().is_empty()
+        if let Some(dirty) = self.dirty.get() {
+            return dirty;
+        }
+        let dirty = self.cell_index().cells() != self.baseline_index.get_or_init(|| CellIndex::of(&self.baseline)).cells()
+            || MapSettings::of(&self.map) != MapSettings::of(&self.baseline)
+            || self.map.field_size() != self.baseline.field_size();
+        self.dirty.set(Some(dirty));
+        dirty
+    }
+
+    /// The canvas's cells as a frame reads them (`CellIndex`), kept across
+    /// frames and edits.
+    pub fn cell_index(&self) -> &CellIndex {
+        self.index.get_or_init(|| CellIndex::of(&self.map))
     }
 
     pub fn diff(&self) -> MapDiff {
@@ -1273,10 +1304,36 @@ impl MapEditor {
 
     /// Every change to the map comes through here: the CHECK panel's
     /// report is now older than the map (run again on the panel's next
-    /// frame) and the canvas lets go of the finding it was marking.
+    /// frame), the canvas lets go of the finding it was marking, and what
+    /// is kept of the map per edit - its revision, its cells as a frame
+    /// reads them, whether it differs from the baseline - is worked out
+    /// again when next read.
     fn map_changed(&mut self) {
         self.edits += 1;
         self.lint_marked = None;
+        self.index.take();
+        self.dirty.set(None);
+    }
+
+    /// `map_changed` for an edit of the cells `changes` touched alone: the
+    /// kept index takes them in (`CellIndex::update`) rather than being
+    /// worked out again from the whole map on the next read - a stroke on
+    /// a large map costs a search a cell a frame, not a sort of the map.
+    fn cells_changed(&mut self, changes: &[CellChange]) {
+        let index = self.index.take();
+        self.map_changed();
+        if let Some(mut index) = index {
+            index.update(&self.map, changes);
+            let _ = self.index.set(index);
+        }
+    }
+
+    /// The canvas as it stands becomes the baseline `dirty` is measured
+    /// from: a load, a new document, a save.
+    fn set_baseline(&mut self) {
+        self.baseline = self.map.clone();
+        self.baseline_index.take();
+        self.dirty.set(None);
     }
 
     /// The camera after a step was undone (`way` -1) or redone (1): a
@@ -1405,7 +1462,7 @@ impl MapEditor {
         }
         let before = self.map.clone();
         self.map = map;
-        self.baseline = self.map.clone();
+        self.set_baseline();
         self.history.push(EditStep::Map { before: Box::new(before), after: Box::new(self.map.clone()) });
         self.map_changed();
         self.rebuild_ground();
@@ -1427,7 +1484,7 @@ impl MapEditor {
             self.note_clear(revision, par);
         }
         self.map = map;
-        self.baseline = self.map.clone();
+        self.set_baseline();
         self.history.clear();
         self.map_changed();
         self.rebuild_ground();
@@ -1579,7 +1636,7 @@ impl MapEditor {
             }
         }
         if !stroke.changes.is_empty() {
-            self.map_changed();
+            self.cells_changed(&stroke.changes);
         }
         self.repaint_ground(&stroke.changes);
     }
@@ -1608,11 +1665,12 @@ impl MapEditor {
             }
         } else if let Some(obj) = self.active_tool.object() {
             if self.active_tool.is_singleton() {
+                let index = self.cell_index();
                 let old = match self.active_tool {
-                    Tool::Frog => self.map.frog_cell(),
-                    Tool::Start => self.map.start_cell(),
-                    Tool::Start2 => self.map.start2_cell(),
-                    Tool::EnemyFrog => self.map.enemy_frog_cell(),
+                    Tool::Frog => index.frog(),
+                    Tool::Start => index.start(),
+                    Tool::Start2 => index.start2(),
+                    Tool::EnemyFrog => index.enemy_frog(),
                     _ => None,
                 };
                 if let Some((oc, or)) = old.filter(|&c| c != (col, row)) {
@@ -1628,7 +1686,7 @@ impl MapEditor {
         if changes.is_empty() {
             return;
         }
-        self.map_changed();
+        self.cells_changed(&changes);
         self.repaint_ground(&changes);
         if let Some(stroke) = &mut self.stroke {
             stroke.changes.extend(changes);
@@ -1646,7 +1704,7 @@ impl MapEditor {
         if changes.is_empty() {
             return;
         }
-        self.map_changed();
+        self.cells_changed(&changes);
         self.repaint_ground(&changes);
         if let Some(stroke) = &mut self.stroke {
             stroke.changes.extend(changes);
@@ -1740,7 +1798,7 @@ impl MapEditor {
             }
         }
         self.history.push(EditStep::Cells(changes.clone()));
-        self.map_changed();
+        self.cells_changed(&changes);
         self.repaint_ground(&changes);
         true
     }
@@ -2006,7 +2064,7 @@ impl MapEditor {
             return changes;
         }
         self.history.push(EditStep::Cells(changes.clone()));
-        self.map_changed();
+        self.cells_changed(&changes);
         self.repaint_ground(&changes);
         changes
     }
@@ -2021,8 +2079,8 @@ impl MapEditor {
             }
         }
         if !changes.is_empty() {
-            self.map_changed();
-            self.repaint_ground(&changes);
+            self.cells_changed(changes);
+            self.repaint_ground(changes);
         }
     }
 
@@ -2091,7 +2149,7 @@ impl MapEditor {
             self.change_cell(col, row, None, &mut changes);
         }
         if !changes.is_empty() {
-            self.map_changed();
+            self.cells_changed(&changes);
             self.repaint_ground(&changes);
         }
         self.drag = Some(Drag::Move { grab, by: (0, 0), from, lifted, changes });
@@ -2337,7 +2395,7 @@ impl MapEditor {
         let path = map::maps_dir().join(format!("{name}.toml"));
         self.map_to_save().save(&path)?;
         self.map.name = Some(name.clone());
-        self.baseline = self.map.clone();
+        self.set_baseline();
         let line = t.fmt(crate::text::keys::EDITOR_SAVED, &[("name", name.as_str().into())]);
         self.status = Some(line.clone());
         Ok(line)
@@ -3568,13 +3626,14 @@ impl MapEditor {
     // --- drawing ---
 
     /// Whether the singleton `tool` already has its object on the map -
-    /// the badge on its icon.
+    /// the badge on its icon, read from the kept index.
     pub fn singleton_placed(&self, tool: Tool) -> bool {
+        let index = self.cell_index();
         match tool {
-            Tool::Frog => self.map.frog_cell().is_some(),
-            Tool::Start => self.map.start_cell().is_some(),
-            Tool::Start2 => self.map.start2_cell().is_some(),
-            Tool::EnemyFrog => self.map.enemy_frog_cell().is_some(),
+            Tool::Frog => index.frog().is_some(),
+            Tool::Start => index.start().is_some(),
+            Tool::Start2 => index.start2().is_some(),
+            Tool::EnemyFrog => index.enemy_frog().is_some(),
             _ => false,
         }
     }
@@ -5728,6 +5787,256 @@ mod editor_tests {
                 eprintln!("  flood from the middle, at most {max}: {found:?} in {:.1} ms", ms(t));
             }
         }
+    }
+
+    /// A 250 x 250 map painted edge to edge - each cell a wall, a prop, a
+    /// tree, grass, road, water, oil or a pickup - with a start, a frog, two
+    /// portals and a tower among them.
+    fn dense_map() -> MapFile {
+        let mut map = MapFile::new();
+        map.size = Some((250.0, 250.0));
+        let kinds = [
+            brick(),
+            CellObject::Wall { material: Material::Iron },
+            CellObject::Wall { material: Material::Wood },
+            CellObject::Sandbag,
+            CellObject::Barrel { drum: None },
+            CellObject::Fence,
+            CellObject::Tree,
+            CellObject::Pine,
+            CellObject::TallGrass,
+            CellObject::Road,
+            CellObject::Water,
+            CellObject::Oil,
+            CellObject::Pickup { pickup: PickupKind::Health },
+        ];
+        for row in 0..250 {
+            for col in 0..250 {
+                map.set_cell(col, row, kinds[((col * 7 + row * 13 + col * row) % kinds.len() as i32) as usize]);
+            }
+        }
+        map.set_cell(10, 10, CellObject::Start);
+        map.set_cell(240, 240, CellObject::Frog);
+        map.set_cell(100, 100, CellObject::Portal);
+        map.set_cell(150, 150, CellObject::Portal);
+        map.set_cell(120, 60, CellObject::Tesla { side: None });
+        map
+    }
+
+    /// What a frame of the builder reads of the map, on `dense_map`: the
+    /// name's edited mark twice (the status line and the bar), the canvas's
+    /// portals and its cells (every one at FIT, those of the rows a phone's
+    /// zoomed view spans otherwise) and the ACTOR button's badge - walked
+    /// out of `MapFile`, and read from the kept index; and the frame after
+    /// a cell painted (the index takes it in) and after a whole-map edit
+    /// (the index is worked out again). Prints; run with `--ignored
+    /// --nocapture` (and `--release` for a phone's order).
+    #[test]
+    #[ignore]
+    fn a_dense_maps_frame_timing() {
+        let ms = |t: std::time::Instant, n: usize| t.elapsed().as_secs_f64() * 1e3 / n as f64;
+        let t = std::time::Instant::now();
+        let mut ed = MapEditor::new(dense_map());
+        eprintln!("dense 250 x 250, {} cells: opened in {:.0} ms", ed.map().cells.len(), ms(t, 1));
+        // What the clear flag works out once after an edit, while the
+        // session has cleared a revision of the canvas.
+        let t = std::time::Instant::now();
+        std::hint::black_box(ed.map().revision());
+        eprintln!("  its revision: {:.1} ms", ms(t, 1));
+        let shown = |cull: Option<Rectangle>, col: i32, row: i32| {
+            let pos = map::cell_to_world(col, row);
+            cull.is_none_or(|r| pos.x >= r.x && pos.y >= r.y && pos.x <= r.x + r.width && pos.y <= r.y + r.height)
+        };
+        let frames = 20;
+        let zoomed = Rectangle::new(110.0 * 32.0, 115.0 * 32.0, 40.0 * 32.0, 20.0 * 32.0);
+        for (view, cull) in [("FIT", None), ("a zoomed 40 x 20 cells", Some(zoomed))] {
+            let (map, baseline) = (ed.map().clone(), ed.baseline().clone());
+            let walk = || {
+                let mut seen = 0;
+                for _ in 0..2 {
+                    seen += !MapDiff::between(&baseline, &map).is_empty() as usize;
+                }
+                seen += map.portal_cells().len();
+                seen += map.iter_cells().filter(|&(c, r, _)| shown(cull, c, r)).count();
+                seen + map.start_cell().is_some() as usize
+            };
+            let read = |ed: &MapEditor| {
+                let mut seen = 0;
+                for _ in 0..2 {
+                    seen += ed.dirty() as usize;
+                }
+                let index = ed.cell_index();
+                seen += index.portals().len();
+                seen += index.near(cull).filter(|&&(c, r, _)| shown(cull, c, r)).count();
+                seen + ed.singleton_placed(Tool::Start) as usize
+            };
+            assert_eq!(walk(), read(&ed), "the index reads what the walks read");
+            let t = std::time::Instant::now();
+            for _ in 0..frames {
+                std::hint::black_box(walk());
+            }
+            let walked = ms(t, frames);
+            let t = std::time::Instant::now();
+            for _ in 0..frames {
+                std::hint::black_box(read(&ed));
+            }
+            let kept = ms(t, frames);
+            let t = std::time::Instant::now();
+            for _ in 0..frames {
+                ed.map_changed();
+                std::hint::black_box(read(&ed));
+            }
+            let remade = ms(t, frames);
+            // A stroke's frame: a cell painted and taken in.
+            let t = std::time::Instant::now();
+            for i in 0..frames {
+                let mut changes = Vec::new();
+                let obj = if i % 2 == 0 { CellObject::Fence } else { CellObject::Sandbag };
+                ed.change_cell(120 + i as i32, 125, Some(obj), &mut changes);
+                ed.cells_changed(&changes);
+                std::hint::black_box(read(&ed));
+            }
+            let painted = ms(t, frames);
+            assert_eq!(ed.cell_index(), &CellIndex::of(ed.map()));
+            eprintln!(
+                "  {view}: walked {walked:.2} ms a frame; kept {kept:.3} ms a frame, {painted:.3} ms on a stroke's frame, {remade:.2} ms on the frame after a whole-map edit"
+            );
+        }
+    }
+
+    /// The kept index is the map's own after every kind of edit, whether it
+    /// took the edit in or was worked out again: strokes, a rectangle, a
+    /// fill and a scatter, a singleton moved, a selection lifted and
+    /// carried, a paste, a flip, a delete, a quick fix, a stroke taken
+    /// back by a second finger, undo and redo, a clear and a load.
+    #[test]
+    fn the_kept_index_follows_every_edit() {
+        let (mut ed, frame) = touch_arena();
+        ed.load(select_map());
+        let steps: Vec<(&str, Box<dyn Fn(&mut MapEditor)>)> = vec![
+            ("a stroke", Box::new(|ed| drop(ed.stroke(&[(10, 10), (14, 10)], false)))),
+            ("an erasing stroke", Box::new(|ed| drop(ed.stroke(&[(10, 10), (12, 10)], false)))),
+            (
+                "the start moved",
+                Box::new(|ed| {
+                    ed.select_tool(Tool::Start);
+                    drop(ed.stroke(&[(20, 5), (22, 5)], false));
+                }),
+            ),
+            (
+                "a rectangle",
+                Box::new(|ed| {
+                    ed.select_tool(Tool::Wall(Material::Wood));
+                    ed.set_shape(Shape::Rect);
+                    drop(ed.stroke(&[(2, 12), (6, 14)], false));
+                }),
+            ),
+            (
+                "a scatter",
+                Box::new(|ed| {
+                    ed.select_tool(Tool::Prop(Material::Tree));
+                    ed.set_shape(Shape::Scatter);
+                    drop(ed.stroke(&[(12, 3), (18, 6)], false));
+                }),
+            ),
+            (
+                "a selection carried",
+                Box::new(|ed| {
+                    ed.select_cells(CellRect::spanning((3, 3), (6, 6)));
+                    drop(ed.move_selection((5, 1)));
+                }),
+            ),
+            (
+                "a paste",
+                Box::new(|ed| {
+                    ed.copy_selection();
+                    ed.paste(Some((24, 12)));
+                    drop(ed.place_ghost());
+                }),
+            ),
+            ("a flip", Box::new(|ed| drop(ed.flip(Axis::Horizontal)))),
+            ("a delete", Box::new(|ed| drop(ed.delete_selection()))),
+            (
+                "a quick fix",
+                Box::new(|ed| {
+                    let (col, row, _) = ed.cell_index().cells()[0];
+                    assert!(ed.apply_fix(LintFix::Remove { at: (col, row) }));
+                }),
+            ),
+            (
+                "a fill",
+                Box::new(|ed| {
+                    ed.select_tool(Tool::Road);
+                    ed.set_shape(Shape::Fill);
+                    drop(ed.stroke(&[(30, 2)], false));
+                }),
+            ),
+            ("an undo", Box::new(|ed| drop(ed.undo()))),
+            ("a redo", Box::new(|ed| drop(ed.redo()))),
+            ("a clear", Box::new(|ed| ed.clear())),
+            ("the clear undone", Box::new(|ed| drop(ed.undo()))),
+            ("a load", Box::new(|ed| ed.load(select_map()))),
+        ];
+        for (what, edit) in &steps {
+            let _ = ed.cell_index();
+            edit(&mut ed);
+            assert_eq!(ed.cell_index(), &CellIndex::of(ed.map()), "{what}");
+        }
+        // A second finger takes a stroke back, cell by cell.
+        ed.select_tool(Tool::Wall(Material::Brick));
+        ed.set_shape(Shape::Pen);
+        let _ = ed.cell_index();
+        let Vec2 { x: x0, y } = on_cell(&ed, &frame, 4, 8);
+        let x1 = on_cell(&ed, &frame, 8, 8).x;
+        hold_fingers(&mut ed, &frame, &[vec![(1, x0, y)], vec![(1, x1, y)]]);
+        assert_eq!(ed.cell_index(), &CellIndex::of(ed.map()), "a stroke under way");
+        hold_fingers(&mut ed, &frame, &[vec![(1, x1, y), (2, x1 + 100.0, y)]]);
+        assert_eq!(ed.cell_index(), &CellIndex::of(ed.map()), "the stroke taken back");
+    }
+
+    /// The edited mark read from the kept indexes is `diff`'s: through
+    /// strokes, an undo back to the baseline, a settings change, a resize,
+    /// a load and a move of the baseline.
+    #[test]
+    fn the_kept_edited_mark_is_the_diffs() {
+        let frame = arena();
+        let mut ed = MapEditor::new(select_map());
+        let check = |ed: &MapEditor, what: &str| assert_eq!(ed.dirty(), !ed.diff().is_empty(), "{what}");
+        check(&ed, "fresh");
+        assert!(!ed.dirty());
+        ed.stroke(&[(10, 10), (12, 10)], false);
+        check(&ed, "a stroke");
+        assert!(ed.dirty());
+        ed.undo();
+        check(&ed, "undone back to the baseline");
+        assert!(!ed.dirty());
+        ed.redo();
+        check(&ed, "redone");
+        ed.stroke(&[(10, 10), (12, 10)], false);
+        check(&ed, "erased again by the toggle");
+        assert!(!ed.dirty());
+        press_named(&mut ed, &frame, "map");
+        ed.step_setting(SettingsRow::Theme, true);
+        check(&ed, "a theme");
+        assert!(ed.dirty());
+        ed.undo();
+        check(&ed, "the theme undone");
+        ed.resize(30.0, 17.0, Anchor::TopLeft);
+        check(&ed, "a resize");
+        assert!(ed.dirty());
+        ed.undo();
+        check(&ed, "the resize undone");
+        assert!(!ed.dirty());
+        ed.stroke(&[(3, 3)], false);
+        ed.set_baseline();
+        check(&ed, "the baseline moved, as a save moves it");
+        assert!(!ed.dirty());
+        ed.load(MapFile::new());
+        check(&ed, "a load");
+        assert!(!ed.dirty());
+        ed.undo();
+        check(&ed, "the load undone");
+        assert!(ed.dirty());
     }
 
     /// The Save prompt takes text and Enter; Esc cancels it, and so does a
