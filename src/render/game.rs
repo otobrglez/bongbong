@@ -198,7 +198,55 @@ pub struct Effects<'a> {
     /// (`render::margin`, `margin.rs`); `None` draws the margins as flat
     /// bars in the backdrop's colour.
     pub margins: Option<&'a mut crate::render::margin::MarginFx>,
+    /// A couch's split screen (`follow::Split`): the second half, put on
+    /// the window past the divider after the first; `None` draws one view.
+    pub split: Option<SplitLayer<'a>>,
 }
+
+/// The second half of a couch's split screen, as a frame draws it
+/// (`Effects::split`).
+pub enum SplitLayer<'a> {
+    /// The follow camera's split: the second half's own view of the world,
+    /// drawn after the first through its own camera and targets.
+    Follow {
+        /// The second half's camera (`Camera::following` of
+        /// `follow::Split`).
+        camera: Camera,
+        /// Its own pass-1 target and composite, the first half's sizes.
+        scene: &'a mut RenderTexture2D,
+        composite: &'a mut RenderTexture2D,
+        /// The divider, in the followed bitmap's pixels: a point on it and
+        /// the unit normal into the second half
+        /// (`follow::Split::at`/`normal`).
+        at: crate::math::Vec2,
+        normal: crate::math::Vec2,
+        /// How far apart the halves' views stand, world px: the divider
+        /// fades in with it.
+        apart: f32,
+        /// The indicators' blocks that lie in each half's world, first
+        /// half first (`indicators::Picture::world`).
+        marks: [&'a [crate::indicators::Fill]; 2],
+    },
+    /// The establishing shot zooming into a split (`establish::ZoomSplit`):
+    /// the whole field drawn once and put on the window twice, the second
+    /// time through `view` past the divider.
+    Zoom {
+        /// The second half's zoom, as a `View` of the whole field's bitmap.
+        view: View,
+        /// The divider, window units: a point on it and the unit normal
+        /// into the second half.
+        at: crate::math::Vec2,
+        normal: crate::math::Vec2,
+        /// How far the zoom has drawn the divider in, and how far apart the
+        /// follow views it lands on stand (world px).
+        alpha: f32,
+        apart: f32,
+    },
+}
+
+/// The divider between a split screen's halves: the corner clusters'
+/// near-black.
+const DIVIDER: Color = Color::new(0x14, 0x14, 0x18, 255);
 
 impl Game {
     /// The light shots throw on the ground (inside the first additive
@@ -308,17 +356,6 @@ impl Game {
         ui: &UiFrame,
         fade: Fade,
     ) {
-        // The field area of the bitmap, which what covers the whole world
-        // (a kill's flash) fills: whole pixels, rounded up so a followed
-        // view of a fractional size is covered to its edge.
-        let screen_width = layout.field.w.ceil() as i32;
-        let screen_height = layout.field.h.ceil() as i32;
-        // The scene target: the camera's view at a texel per world pixel,
-        // the world rectangle worth drawing into it, and the cameras pass 1
-        // and pass 2 draw the world through.
-        let (target_width, target_height) = camera.target_size();
-        let cull = camera.cull();
-        let in_target = camera.in_target();
         // Must be read off the handle out here: the draw closures below
         // borrow it, and the dev label needs the number.
         #[cfg(feature = "dev-tools")]
@@ -366,6 +403,119 @@ impl Game {
         });
         let paused = t.get(keys::PAUSED);
 
+        // The world, through `camera` into `composite`; and on a couch's
+        // split screen the second half's, through its own camera into its
+        // own targets, each with the indicators' marks that lie in it, so
+        // the divider cuts them as it cuts the world.
+        let mut split = effects.split.take();
+        let marks: [&[crate::indicators::Fill]; 2] = match &split {
+            Some(SplitLayer::Follow { marks, .. }) => *marks,
+            _ => [&[], &[]],
+        };
+        let weather = self.draw_world(rl, thread, scene_target, composite, camera, layout, effects, textures, &ammo_seats, backdrop, marks[0]);
+        if let Some(SplitLayer::Follow { camera, scene, composite, .. }) = split.as_mut() {
+            let camera = *camera;
+            self.draw_world(rl, thread, &mut **scene, &mut **composite, &camera, layout, effects, textures, &ammo_seats, backdrop, marks[1]);
+        }
+
+        let text = ChromeText {
+            t: &t,
+            banner,
+            intro,
+            wave_banner,
+            paused,
+            #[cfg(feature = "dev-tools")]
+            frame_ms,
+        };
+        let touch = effects.touch;
+        let fx_live = effects.fx.live();
+        let indicators = effects.indicators;
+        let minimap = effects.minimap.take();
+        let corners = CornerShape::of(chrome, self.players.count()).map(|shape| corners(ui, &shape));
+        let frame = ChromeFrame { ui, fade, corners: corners.as_ref() };
+
+        // An arena's window margins show the world past its field
+        // (`margin.rs`) where the window's shape is not the field's.
+        let margin_frame = match effects.margins {
+            Some(_) if camera.is_whole() => crate::margin::MarginFrame::of(view, layout),
+            _ => None,
+        };
+        let margins = match (margin_frame, effects.margins.as_deref_mut()) {
+            (Some(frame), Some(fx)) => {
+                let sky = match (effects.weather.as_deref_mut(), weather.as_ref()) {
+                    (Some(fx), Some(frame)) => Some((fx, frame)),
+                    _ => None,
+                };
+                let at = layout.field_origin();
+                let in_bitmap = |r: Rectangle| Rectangle::new(r.x + at.x, r.y + at.y, r.width, r.height);
+                fx.draw(rl, thread, self, &frame, textures, backdrop, sky).map(|target| crate::render::view::Margins {
+                    target,
+                    rect: in_bitmap(frame.rect),
+                    parts: frame.parts(0.0).into_iter().map(in_bitmap).collect(),
+                })
+            }
+            _ => None,
+        };
+        let mut d = rl.begin_drawing(thread);
+        if camera.follows() {
+            crate::render::view::present_world(&mut d, composite, camera, view, layout, backdrop);
+        } else {
+            crate::render::view::present_into(&mut d, composite, view, backdrop, margins.as_ref());
+        }
+        // A split screen's second half over the first, past the divider,
+        // and the divider over both.
+        match &split {
+            Some(SplitLayer::Follow { camera: second, composite: world, at, normal, apart, .. }) if camera.follows() => {
+                crate::render::view::present_half(&mut d, world, second, view, layout, *at, *normal);
+                crate::render::view::draw_divider(&mut d, view, layout, *at, *normal, *apart, DIVIDER);
+            }
+            Some(SplitLayer::Zoom { view: second, at, normal, alpha, apart }) if !camera.follows() => {
+                crate::render::view::present_zoom_half(&mut d, composite, second, *at, *normal, backdrop);
+                crate::render::view::draw_zoom_divider(&mut d, view.window, *at, *normal, second.scale, *alpha, *apart, DIVIDER);
+            }
+            _ => {}
+        }
+        let base = Camera2D { offset: view.offset.into(), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: view.scale };
+        self.draw_chrome(&mut d, &text, &hud, chrome, &frame, layout, camera, indicators, minimap.as_ref(), textures, touch, fx_live, base);
+    }
+}
+
+impl Game {
+    /// One view of the world, through `camera`: pass 1 into `scene_target`
+    /// (`Camera::target_size`, a texel per world pixel) - under the sky in
+    /// the weather's stages when there is one - then pass 2 into
+    /// `composite`: the scene through the kill ripple, shaken, the ripples'
+    /// quads, the kill flash, the debug overlays and `marks`, the
+    /// indicators' blocks that lie in the world (`indicators::Picture`'s,
+    /// drawn here only for a split screen's halves). The frame's sky, for
+    /// an arena's margins.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_world(
+        &self,
+        rl: &mut RaylibHandle,
+        thread: &RaylibThread,
+        scene_target: &mut RenderTexture2D,
+        composite: &mut RenderTexture2D,
+        camera: &Camera,
+        layout: &Layout,
+        effects: &mut Effects,
+        textures: &Textures,
+        ammo_seats: &[u8],
+        backdrop: Color,
+        marks: &[crate::indicators::Fill],
+    ) -> Option<crate::render::weather::WeatherFrame> {
+        // The field area of the bitmap, which what covers the whole world
+        // (a kill's flash) fills: whole pixels, rounded up so a followed
+        // view of a fractional size is covered to its edge.
+        let screen_width = layout.field.w.ceil() as i32;
+        let screen_height = layout.field.h.ceil() as i32;
+        // The scene target: the camera's view at a texel per world pixel,
+        // the world rectangle worth drawing into it, and the cameras pass 1
+        // and pass 2 draw the world through.
+        let (target_width, target_height) = camera.target_size();
+        let cull = camera.cull();
+        let in_target = camera.in_target();
+
         // Pass 1: draw the world (tracks, tanks, shells) into an offscreen
         // render texture, so a shockwave can distort the finished frame as a
         // whole-screen shader pass in pass 2. Under a sky (docs/weather.md,
@@ -385,7 +535,7 @@ impl Game {
                     d.clear_background(Color::WHITE);
                     d.draw_mode2D(in_target, |mut d, _| {
                         self.paint_field_lit(&mut d, textures, false, cull);
-                        self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, 1.0, camera, &ammo_seats);
+                        self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, 1.0, camera, ammo_seats);
                     });
                 });
             }
@@ -410,13 +560,13 @@ impl Game {
                         }
                         self.paint_field_lit(&mut d, textures, snowed, cull);
                         if !plan.lit {
-                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, &ammo_seats);
+                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, ammo_seats);
                         }
                     });
                     if plan.lit {
                         crate::render::weather::multiply_light(&mut d, light, &frame);
                         d.draw_mode2D(in_target, |mut d, _| {
-                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, &ammo_seats);
+                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, ammo_seats);
                         });
                     }
                     if plan.sky {
@@ -448,7 +598,7 @@ impl Game {
                         d.draw_mode2D(in_target, |mut d, _| {
                             self.paint_field_lit(&mut d, textures, plan.ground, cull);
                             if !plan.lit {
-                                self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, &ammo_seats);
+                                self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, ammo_seats);
                             }
                         });
                     });
@@ -459,7 +609,7 @@ impl Game {
                     rl.draw_texture_mode(thread, to, |mut d| {
                         passes.draw_lit(&mut d, under, &frame);
                         d.draw_mode2D(in_target, |mut d, _| {
-                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, &ammo_seats);
+                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, ammo_seats);
                         });
                     });
                 }
@@ -545,57 +695,13 @@ impl Game {
             cull,
             backdrop,
             bend: !still,
+            marks,
         };
-        let text = ChromeText {
-            t: &t,
-            banner,
-            intro,
-            wave_banner,
-            paused,
-            #[cfg(feature = "dev-tools")]
-            frame_ms,
-        };
-        let touch = effects.touch;
-        let fx_live = effects.fx.live();
-        let indicators = effects.indicators;
-        let minimap = effects.minimap.take();
-        let corners = CornerShape::of(chrome, self.players.count()).map(|shape| corners(ui, &shape));
-        let frame = ChromeFrame { ui, fade, corners: corners.as_ref() };
-
         rl.draw_texture_mode(thread, composite, |mut d| {
             d.clear_background(Color::BLACK);
             self.draw_world_layer(&mut d, &world, effects);
         });
-        // An arena's window margins show the world past its field
-        // (`margin.rs`) where the window's shape is not the field's.
-        let margin_frame = match effects.margins {
-            Some(_) if camera.is_whole() => crate::margin::MarginFrame::of(view, layout),
-            _ => None,
-        };
-        let margins = match (margin_frame, effects.margins.as_deref_mut()) {
-            (Some(frame), Some(fx)) => {
-                let sky = match (effects.weather.as_deref_mut(), weather.as_ref()) {
-                    (Some(fx), Some(frame)) => Some((fx, frame)),
-                    _ => None,
-                };
-                let at = layout.field_origin();
-                let in_bitmap = |r: Rectangle| Rectangle::new(r.x + at.x, r.y + at.y, r.width, r.height);
-                fx.draw(rl, thread, self, &frame, textures, backdrop, sky).map(|target| crate::render::view::Margins {
-                    target,
-                    rect: in_bitmap(frame.rect),
-                    parts: frame.parts(0.0).into_iter().map(in_bitmap).collect(),
-                })
-            }
-            _ => None,
-        };
-        let mut d = rl.begin_drawing(thread);
-        if camera.follows() {
-            crate::render::view::present_world(&mut d, composite, camera, view, layout, backdrop);
-        } else {
-            crate::render::view::present_into(&mut d, composite, view, backdrop, margins.as_ref());
-        }
-        let base = Camera2D { offset: view.offset.into(), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: view.scale };
-        self.draw_chrome(&mut d, &text, &hud, chrome, &frame, layout, camera, indicators, minimap.as_ref(), textures, touch, fx_live, base);
+        weather
     }
 }
 
@@ -621,6 +727,10 @@ struct WorldPass<'a> {
     /// Whether the kill ripples bend the whole scene: not under reduced
     /// motion (`motion.rs`).
     bend: bool,
+    /// The indicators' blocks that lie in this view's world: a split
+    /// screen half's (`Effects::split`); empty otherwise, the indicators
+    /// being drawn with the chrome.
+    marks: &'a [crate::indicators::Fill],
 }
 
 /// What `Game::draw_chrome` writes, gathered by `Game::render` in the
@@ -815,6 +925,16 @@ impl Game {
             }
             self.draw_debug_overlays(&mut d, field_w, field_h);
         });
+
+        // A split screen half's off-screen marks in its own world, so they
+        // end at the divider with it.
+        if !w.marks.is_empty() {
+            d.draw_mode2D(w.on_field, |mut d, _| {
+                for f in w.marks {
+                    d.draw_rectangle(f.x, f.y, f.w, f.h, f.color);
+                }
+            });
+        }
     }
 
     /// What stands over the world, on the window: the off-screen

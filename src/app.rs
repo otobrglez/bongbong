@@ -1406,6 +1406,10 @@ pub fn run(args: Args) {
     // A field map's establishing shot (establish.rs): the round it opens
     // and how far it has come.
     let mut establish = crate::establish::Establish::default();
+    // The second half of a couch's split screen (follow::Split): its own
+    // scene target and composite at the first half's size, made the first
+    // time a split opens and kept for the next.
+    let mut split_targets: Option<(sola_raylib::prelude::RenderTexture2D, sola_raylib::prelude::RenderTexture2D, (i32, i32))> = None;
     let mut touch = crate::touch::TouchScheme::default();
     // How far each corner cluster has faded under the fight (`hud::Fade`).
     let mut fade = Fade::default();
@@ -2145,6 +2149,14 @@ pub fn run(args: Args) {
         // the round still.
         let mut establishing = false;
         let mut shown_rect: Option<crate::math::Rectangle> = None;
+        // A couch's split screen: the second half's camera and the split,
+        // or while the establishing shot zooms into it, the second half's
+        // zoom (`establish::zoom_split`) and how far apart the follow views
+        // it lands on stand; and the world the second half shows, for the
+        // minimap.
+        let mut split_view: Option<(Camera, crate::follow::Split)> = None;
+        let mut zoom_split: Option<(View, crate::establish::ZoomSplit, f32)> = None;
+        let mut second_shown: Option<crate::math::Rectangle> = None;
         let camera = match plan.followed {
             Some(frame) => {
                 // The round on screen: a room's replica or the local round
@@ -2166,7 +2178,10 @@ pub fn run(args: Args) {
                 let local: Vec<usize> = local_seats(&session).into_iter().map(usize::from).collect();
                 let stage = crate::follow::Stage { visible: frame.framing.visible, field, sight: frame.sight };
                 let shot = follow.update(&crate::follow::Seats::of(game, &local), advanced, &stage, &crate::follow::FollowRules::current());
-                let follow_camera = Camera::following(field, shot.corner, frame.framing.visible, 1.0, frame.device_scale(framebuffer_ratio(rl)));
+                let device_scale = frame.device_scale(framebuffer_ratio(rl));
+                let follow_camera = Camera::following(field, shot.corner, frame.framing.visible, 1.0, device_scale);
+                // A couch pair apart: the second half's own camera.
+                let second = shot.split.map(|split| (Camera::following(field, split.corner, frame.framing.visible, 1.0, device_scale), split));
                 // The establishing shot (establish.rs): a local round's
                 // opening on a field map its view shows part of shows the
                 // whole map, then zooms down to the follow view - drawn
@@ -2191,11 +2206,24 @@ pub fn run(args: Args) {
                         crate::establish::Phase::Zoom(q) => crate::establish::between(from, to, q),
                         _ => from,
                     };
+                    // A couch pair the round opens apart: the second half
+                    // zooms from the same whole map into its own follow
+                    // view, so the zoom lands on the split screen.
+                    if let (Some((second, split)), crate::establish::Phase::Zoom(q)) = (second, phase) {
+                        let to = crate::establish::Mapping::of(&second, frame.layout.field_origin(), &frame.view);
+                        let zoom = crate::establish::between(from, to, q);
+                        if let (Some(a), Some(b)) = (shot.keeps[0], split.keeps[0]) {
+                            zoom_split = Some((zoom.view(field, window), crate::establish::zoom_split(mapping, zoom, (a, b), q), split.apart));
+                            second_shown = Some(zoom.shows(window));
+                        }
+                    }
                     layout = Layout::bare(field.0, field.1);
                     view = mapping.view(field, window);
                     shown_rect = Some(mapping.shows(window));
                     whole
                 } else {
+                    split_view = second;
+                    second_shown = second.map(|(camera, _)| camera.rect());
                     follow_camera
                 };
                 #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
@@ -2212,6 +2240,7 @@ pub fn run(args: Args) {
                             sight: frame.sight,
                             shot,
                             establishing: phase,
+                            second: second.map(|(camera, _)| camera),
                         }),
                     });
                 }
@@ -2253,8 +2282,24 @@ pub fn run(args: Args) {
         if let Some(corners) = &corners {
             let on_screen = hud::WorldOnScreen { camera, field_origin: layout.field_origin(), view, ui_scale: ui.scale };
             let t = tuning();
-            fade.step(hud::covered(corners, &hud::action_marks(game), &on_screen), fx_dt, t.ui_fade_opacity, t.ui_fade_seconds);
+            let marks = hud::action_marks(game);
+            let covered = match &split_view {
+                // A split screen: each half counts what it shows on its side
+                // of the divider.
+                Some((second, split)) => {
+                    let (first, other): (Vec<_>, Vec<_>) = marks.iter().copied().partition(|&(at, _)| !split.in_second(camera.to_view(at)));
+                    let other: Vec<_> = other.into_iter().filter(|&(at, _)| split.in_second(second.to_view(at))).collect();
+                    let a = hud::covered(corners, &first, &on_screen);
+                    let b = hud::covered(corners, &other, &hud::WorldOnScreen { camera: *second, ..on_screen });
+                    [a[0] || b[0], a[1] || b[1]]
+                }
+                None => hud::covered(corners, &marks, &on_screen),
+            };
+            fade.step(covered, fx_dt, t.ui_fade_opacity, t.ui_fade_seconds);
         }
+        // A split screen's halves draw the indicators' marks in their own
+        // worlds, first half first.
+        let mut split_marks: [Vec<crate::indicators::Fill>; 2] = [Vec::new(), Vec::new()];
         let indicators = (matches!(session.mode(), Driver::Play | Driver::Online) && !camera.shows_whole_field()).then(|| {
             // The bitmap's pixels to a UI point, so an arrow is its rows'
             // size on the glass however the bitmap is scaled, at the scale
@@ -2275,7 +2320,28 @@ pub fn run(args: Args) {
             }
             // No arrow lands under a corner cluster or the minimap.
             frame.keep_out.extend(corners.iter().flat_map(Corners::keep_out).map(|r| ui_rect_on_bitmap(&ui, &view, r)));
-            awareness.picture(game, &seats, &frame, points)
+            match &split_view {
+                // A couch's split screen: each half its own seat's arrows,
+                // the other half off screen for it; the marks that lie in
+                // the world go into each half's own picture of it.
+                Some((second, split)) => {
+                    // The divider in the bitmap's pixels, where the frames
+                    // lay their arrows out.
+                    let line = split.at + crate::math::Vec2::new(field.x, field.y);
+                    let first = frame.clone().split_at(line, split.normal, &t);
+                    let mut other = crate::indicators::ViewFrame::of_camera(second, field, &t).split_at(line, split.normal * -1.0, &t);
+                    other.keep_out = first.keep_out.clone();
+                    let mut halves = awareness.pictures(game, &seats, &[first, other], points).into_iter();
+                    let (a, b) = (halves.next().unwrap_or_default(), halves.next().unwrap_or_default());
+                    split_marks = [a.world, b.world];
+                    crate::indicators::Picture {
+                        world: Vec::new(),
+                        screen: a.screen.into_iter().chain(b.screen).collect(),
+                        labels: a.labels.into_iter().chain(b.labels).collect(),
+                    }
+                }
+                None => awareness.picture(game, &seats, &frame, points),
+            }
         });
         // The minimap, where the corners hold its slot: the round's
         // picture, synced to the round on screen and uploaded where it
@@ -2283,7 +2349,8 @@ pub fn run(args: Args) {
         // arrows could point at.
         let minimap_marks = corners.as_ref().and_then(|c| c.minimap).map(|_| {
             let shown: &[crate::indicators::Indicators] = if indicators.is_some() { awareness.shown() } else { &[] };
-            crate::minimap::Marks::gather(game, &seats, shown, shown_rect.unwrap_or(camera.rect()))
+            let marks = crate::minimap::Marks::gather(game, &seats, shown, shown_rect.unwrap_or(camera.rect()));
+            crate::minimap::Marks { second_view: second_shown, ..marks }
         });
         let minimap_image = minimap_marks.is_some().then(|| round_minimap.sync(game));
         let minimap_texture = minimap_image.and_then(|m| round_minimap_texture.sync(rl, thread, m.image()));
@@ -2291,6 +2358,11 @@ pub fn run(args: Args) {
             (Some((_, texture)), Some(marks), Some(image)) => Some(crate::render::minimap::MinimapLayer { texture, field: image.field(), marks }),
             _ => None,
         };
+        // The second half's targets, the first half's size.
+        if split_view.is_some() && split_targets.as_ref().is_none_or(|(_, _, size)| *size != plan.scene) {
+            let mut make = || rl.load_render_texture(thread, plan.scene.0 as u32, plan.scene.1 as u32).expect("failed creating a split half's render texture");
+            split_targets = Some((make(), make(), plan.scene));
+        }
         let shade = round_shade.sync(rl, thread, game.ground.shade());
         game.render(
             rl,
@@ -2315,6 +2387,25 @@ pub fn run(args: Args) {
                 // An establishing shot is drawn whole as an arena is, but
                 // zooms: no margins, which stand still round an arena.
                 margins: (!establishing).then_some(&mut margin_fx),
+                split: match (split_view, split_targets.as_mut(), zoom_split) {
+                    (Some((camera, split)), Some((scene, composite, _)), _) => Some(crate::render::game::SplitLayer::Follow {
+                        camera,
+                        scene,
+                        composite,
+                        at: split.at,
+                        normal: split.normal,
+                        apart: split.apart,
+                        marks: [&split_marks[0], &split_marks[1]],
+                    }),
+                    (_, _, Some((view, zoom, apart))) => Some(crate::render::game::SplitLayer::Zoom {
+                        view,
+                        at: zoom.at,
+                        normal: zoom.normal,
+                        alpha: zoom.alpha,
+                        apart,
+                    }),
+                    _ => None,
+                },
             },
             &Textures {
                 tanks: &tanks_texture,

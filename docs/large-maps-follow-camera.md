@@ -839,8 +839,15 @@ Landed so far: step 1 whole (`view::Camera`); from step 2 the view rules
 (`framing.rs`), the map's `view` key and the follow camera itself
 (`follow.rs`: the dead zone, the look-ahead inside the sight box, the
 spring, the sub-block present, cuts, spectating a teammate, the couch's
-shared view, `status.camera`) - the split screen, the establishing shot
-and the motion switch are still to come; step 3's HUD in the corners
+shared view and its Voronoi split screen - each half at the local zoom,
+opening and closing with no jump, its arrows on the divider -,
+`status.camera`), the establishing shot (`establish.rs`: the whole map
+for a second inside the mission banner, then a fast zoom to the follow
+view, into the split where a couch round opens apart), the shake
+attenuated by distance from the view (`shockwave::camera_shake`) and one
+motion switch seeded by the platform (`motion.rs`: under reduced motion
+no shake, no whole-screen ripple, and the establishing shot cuts); step
+3's HUD in the corners
 (`hud::corners` inside the safe area at a UI scale in points, the play
 bar gone, ammo pips on the tank, a cluster fading while play is under
 it, banners, dialogs, the end screen, the lobby and the level select in

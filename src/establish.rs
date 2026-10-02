@@ -16,7 +16,10 @@
 //! banner's own clock, so a lockstep `step` plays it frame for frame; and
 //! `Mapping`/`between` are the zoom, the world's place on the window moved
 //! from the whole map's to the follow view's about the one world point both
-//! put at the same place, so the picture zooms straight into it.
+//! put at the same place, so the picture zooms straight into it. A couch
+//! pair whose round opens apart zooms into the split screen (`zoom_split`):
+//! each half zooms into its own follow view, the divider drawn in as the
+//! two pictures part.
 
 use crate::math::{Rectangle, Vec2};
 use crate::tuning::{tuning, Tuning};
@@ -249,6 +252,37 @@ pub fn between(from: Mapping, to: Mapping, q: f32) -> Mapping {
     Mapping { scale, origin: Vec2::new(at.x - f.x * scale, at.y - f.y * scale) }
 }
 
+/// A couch's split screen (`follow::Split`) as the zoom opens it: the
+/// halves' two mappings this frame, the divider between them on the window
+/// and how far it is drawn in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ZoomSplit {
+    /// A point on the divider, window units ...
+    pub at: Vec2,
+    /// ... and the unit normal into the second half.
+    pub normal: Vec2,
+    /// How far the divider is drawn in, 0 to 1: the zoom's progress, so it
+    /// comes in from nothing on the whole map, where the two halves are one
+    /// picture.
+    pub alpha: f32,
+}
+
+/// The split `q` of the way through the zoom (`Phase::Zoom`), the first
+/// half's mapping `first` and the second's `second` this frame (each
+/// `between` the whole map's and its own follow view's), the couch's seats
+/// at `seats` (world px). The divider is the perpendicular bisector of the
+/// two seats as the two mappings put them on the window - the follow
+/// split's own rule, so it lands on the follow split's line as the zoom
+/// does, and each seat stands on its own side of it all the way down.
+pub fn zoom_split(first: Mapping, second: Mapping, seats: (Vec2, Vec2), q: f32) -> ZoomSplit {
+    let (a, b) = (first.to_window(seats.0), second.to_window(seats.1));
+    let d = b - a;
+    let len = d.length();
+    let normal = if len > 1e-4 { d * (1.0 / len) } else { Vec2::new(1.0, 0.0) };
+    let q = if q.is_finite() { q.clamp(0.0, 1.0) } else { 0.0 };
+    ZoomSplit { at: (a + b) * 0.5, normal, alpha: q }
+}
+
 #[cfg(test)]
 mod establish_tests {
     use super::*;
@@ -359,6 +393,57 @@ mod establish_tests {
         // Shorter than the zoom: no hold, and the zoom fills the banner.
         assert!(matches!(phase_at(0.0, 0.3, &r, false), Phase::Zoom(q) if q == 0.0));
         assert_eq!(phase_at(0.0, 0.0, &r, false), Phase::Follow);
+    }
+
+    /// A couch pair whose round opens apart: each half zooms from the
+    /// whole map into its own follow view, the two one picture at the
+    /// start, the divider between them always the bisector of where the
+    /// two halves show their seats - each seat on its own side - and,
+    /// once the zoom lands, the follow split's own line on the window.
+    #[test]
+    fn a_couch_pair_apart_zooms_into_the_split_screen() {
+        use crate::follow::{Follow, FollowRules, SeatTank, Seats, Stage};
+        use crate::framing::SightBox;
+        let field = (2560.0, 1440.0);
+        let window = (1600.0, 900.0);
+        let visible = (1066.0, 600.0);
+        let stage = Stage { visible, field, sight: SightBox::from_cells(11.5, 7.5) };
+        let tank = |seat: usize, x: f32, y: f32| SeatTank {
+            seat,
+            position: Vec2::new(x, y),
+            facing: Vec2::new(1.0, 0.0),
+            velocity: Vec2::new(0.0, 0.0),
+            top_speed: 210.0,
+            live: true,
+        };
+        let seats = Seats { local: vec![0, 1], tanks: vec![tank(0, 300.0, 300.0), tank(1, 2200.0, 1100.0)] };
+        let shot = Follow::default().update(&seats, 1.0 / 60.0, &stage, &FollowRules::of(&Tuning::DEFAULT));
+        let split = shot.split.expect("too far apart for one view");
+        let view = View::fill(visible, window);
+        let first_camera = Camera::following(field, shot.corner, visible, 1.0, 1.5);
+        let second_camera = Camera::following(field, split.corner, visible, 1.0, 1.5);
+        let whole = Mapping::of(&Camera::whole(field), Vec2::new(0.0, 0.0), &View::fit(field, window));
+        let first = Mapping::of(&first_camera, Vec2::new(0.0, 0.0), &view);
+        let second = Mapping::of(&second_camera, Vec2::new(0.0, 0.0), &view);
+        let (a, b) = (seats.tanks[0].position, seats.tanks[1].position);
+        // On the whole map the two halves are one picture, and no line.
+        let open = zoom_split(between(whole, first, 0.0), between(whole, second, 0.0), (a, b), 0.0);
+        assert_eq!(between(whole, first, 0.0), between(whole, second, 0.0));
+        assert_eq!(open.alpha, 0.0);
+        let side = |z: &ZoomSplit, p: Vec2| (p.x - z.at.x) * z.normal.x + (p.y - z.at.y) * z.normal.y;
+        for k in 0..=20 {
+            let q = k as f32 / 20.0;
+            let (m1, m2) = (between(whole, first, q), between(whole, second, q));
+            let z = zoom_split(m1, m2, (a, b), q);
+            assert!(side(&z, m1.to_window(a)) < 0.0 && side(&z, m2.to_window(b)) > 0.0, "{q}: {z:?}");
+            assert!((z.alpha - q).abs() < 1e-6);
+        }
+        // Landed: the follow split's line, put on the window.
+        let landed = zoom_split(first, second, (a, b), 1.0);
+        let at = view.to_window(split.at);
+        assert!((landed.at - at).length() < 1.0, "{landed:?} vs {at:?}");
+        assert!((landed.normal - split.normal).length() < 1e-2, "{landed:?} vs {split:?}");
+        assert_eq!(landed.alpha, 1.0);
     }
 
     #[test]

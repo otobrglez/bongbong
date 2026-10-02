@@ -550,6 +550,9 @@ pub struct GateMark {
 pub struct Marks {
     /// The world rectangle the camera shows.
     pub view: Option<Rectangle>,
+    /// The second half's, while a couch's screen is split
+    /// (`follow::Split`): both views are outlined.
+    pub second_view: Option<Rectangle>,
     /// Every live seat, in seat order.
     pub seats: Vec<SeatMark>,
     pub frogs: Vec<FrogMark>,
@@ -638,10 +641,11 @@ pub struct Picture {
 /// (`indicators::HOSTILE` and its neighbours) with the near-black rim every
 /// mark of theirs wears: the gates flashing in amber, blinking at
 /// `indicator_gate_blink_hz` on the round clock; the view's outline in
-/// white; the enemies in sight in the hostile red; the frogs in the FROG
-/// gauge's green, the enemy frog rimmed red; and the seats in their ring
-/// colours, the screen's own rimmed white and the others numbered in a
-/// round of two or more - the numbers set in `font` on dark plates.
+/// white, both halves' on a split screen; the enemies in sight in the
+/// hostile red; the frogs in the FROG gauge's green, the enemy frog rimmed
+/// red; and the seats in their ring colours, the screen's own rimmed white
+/// and the others numbered in a round of two or more - the numbers set in
+/// `font` on dark plates.
 pub fn picture(marks: &Marks, rect: Rectangle, field: (f32, f32), font: i32, t: &Tuning) -> Picture {
     use crate::indicators::{FROG_GREEN, GATE_AMBER, HOSTILE, RIM, WHITE};
     let mut out = Picture::default();
@@ -662,7 +666,7 @@ pub fn picture(marks: &Marks, rect: Rectangle, field: (f32, f32), font: i32, t: 
             frame(&mut out.fills, x - half, y - half, GATE_FRAME_PT, RIM_PT, crate::pyro::alpha(GATE_AMBER, alpha), inside);
         }
     }
-    if let Some(view) = marks.view.and_then(|v| rect_on(rect, field, v)) {
+    for view in [marks.view, marks.second_view].into_iter().flatten().filter_map(|v| rect_on(rect, field, v)) {
         let (x0, y0) = (view.x.round() as i32, view.y.round() as i32);
         let (x1, y1) = ((view.x + view.width).round() as i32, (view.y + view.height).round() as i32);
         let w = (x1 - x0).max(2);
@@ -1026,6 +1030,7 @@ mod minimap_tests {
         let rect = Rectangle::new(100.0, 50.0, 160.0, 90.0);
         let marks = Marks {
             view: Some(Rectangle::new(800.0, 400.0, 960.0, 540.0)),
+            second_view: None,
             seats: vec![
                 SeatMark { seat: 0, at: Position::new(1280.0, 720.0), local: true },
                 SeatMark { seat: 1, at: Position::new(2560.0, 0.0), local: false },
@@ -1049,6 +1054,12 @@ mod minimap_tests {
         let dark = picture(&Marks { time: 0.5 / t.indicator_gate_blink_hz + 0.01, ..marks.clone() }, rect, field, 10, &t);
         let amber = |p: &Picture| p.fills.iter().filter(|f| (f.color.r, f.color.g, f.color.b) == (0xEE, 0xA3, 0x43)).count();
         assert_eq!(amber(&dark), 0, "and dark in the other half");
+        // A split screen outlines both halves' views, inside like the rest.
+        let one = picture(&marks, rect, field, 10, &t);
+        let both = picture(&Marks { second_view: Some(Rectangle::new(1700.0, 100.0, 960.0, 540.0)), ..marks.clone() }, rect, field, 10, &t);
+        let white = |p: &Picture| p.fills.iter().filter(|f| (f.color.r, f.color.g, f.color.b) == (255, 255, 255)).count();
+        assert!(white(&both) > white(&one), "{} vs {}", white(&both), white(&one));
+        assert!(both.fills.iter().all(inside));
         // One seat alone carries no number.
         let solo = Marks { numbered: false, ..marks };
         assert!(picture(&solo, rect, field, 10, &t).labels.is_empty());

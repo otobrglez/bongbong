@@ -155,7 +155,7 @@ const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"inte
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|apart|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`; and `motion`, the one motion switch - whether motion is `reduced` (no shake, no whole-screen ripple, the establishing shot cut rather than zoomed), the `reduce_motion` row's `setting` (platform|off|on) and what the `platform` said at startup, null where it says nothing), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, in play and online the corners' `buttons` and `clusters` and the `minimap` picture under the right cluster (`null` where none is drawn - an arena shown whole, a phone; a press there does nothing), and the `screen_buttons` of whatever stands over the round - the level select's open tiles (`level_N`) and `back`, a dialog's `one`/`two` or `leave`/`stay`, a level's end screen's `levels`/`again`/`next`, the lobby's live buttons (`host`, `join`, `key_a`, `confirm`, `ready`, `start`, `kick_1`, ...) - all in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state (`builder.navigator`: the navigator's picture in window coordinates for `click`, with its `bitmap` rect for `builder_touch`; `null` at FIT on an arena), and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|split|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `split` of a couch pair apart (null for one view: the divider's `line` - a point and the unit normal into the second half in the followed bitmap's pixels - and `window_line`, how far `apart` the halves' views stand and each half's `seat`, `rect`, `offset`, `cut` and `in_view`), the `establishing` shot's `phase` (whole|zoom|follow) and `progress` (view `establishing` while it plays), the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`; and `motion`, the one motion switch - whether motion is `reduced` (no shake, no whole-screen ripple, the establishing shot cut rather than zoomed), the `reduce_motion` row's `setting` (platform|off|on) and what the `platform` said at startup, null where it says nothing), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, in play and online the corners' `buttons` and `clusters` and the `minimap` picture under the right cluster (`null` where none is drawn - an arena shown whole, a phone; a press there does nothing), and the `screen_buttons` of whatever stands over the round - the level select's open tiles (`level_N`) and `back`, a dialog's `one`/`two` or `leave`/`stay`, a level's end screen's `levels`/`again`/`next`, the lobby's live buttons (`host`, `join`, `key_a`, `confirm`, `ready`, `start`, `kick_1`, ...) - all in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state (`builder.navigator`: the navigator's picture in window coordinates for `click`, with its `bitmap` rect for `builder_touch`; `null` at FIT on an arena), and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -1016,7 +1016,7 @@ impl DevServer {
                 let corner = view.to_window(Vec2::new(field.x, field.y));
                 v["window_field"] = json!({ "x": corner.x, "y": corner.y, "w": field.w * view.scale, "h": field.h * view.scale });
                 if let Some(follow) = &drawn.follow {
-                    v.as_object_mut().expect("an object").extend(follow_json(follow, &drawn.camera).as_object().expect("an object").clone());
+                    v.as_object_mut().expect("an object").extend(follow_json(follow, &drawn.camera, &drawn.view, &drawn.layout).as_object().expect("an object").clone());
                 }
                 v
             }
@@ -2054,7 +2054,14 @@ impl DevServer {
             && session.mode() != Driver::Build
             && drawn.layout.field.contains(point)
         {
-            let world = drawn.camera.to_world(drawn.layout.to_field(point));
+            let at = drawn.layout.to_field(point);
+            // On a couch's split screen, past the divider is the second
+            // half's view.
+            let camera = match drawn.follow.and_then(|f| f.shot.split.zip(f.second)) {
+                Some((split, second)) if split.in_second(at) => second,
+                _ => drawn.camera,
+            };
+            let world = camera.to_world(at);
             reply["world"] = json!({ "x": world.x, "y": world.y });
         }
         // In the builder, the world point and the cell under the press
@@ -2841,14 +2848,20 @@ fn motion_json() -> Value {
 
 /// A followed view's half of `status.camera` (docs/large-maps-follow-camera.md
 /// §5, §6): the seat it follows and how (`focus`: `seat`, `shared`,
-/// `apart` - a couch pair too far apart for one view, the split screen
-/// being later work - `spectating` or `nobody`), whether this frame cut,
+/// `split` - a couch pair too far apart for one view, each in its half of a
+/// split screen - `spectating` or `nobody`), whether this frame cut,
 /// the look-ahead and the sub-block offset the picture was shifted by;
 /// the framing behind its size - the world in cells, device pixels per
 /// world pixel and per block, whether the zoom snapped to whole blocks,
 /// the tank in points and millimetres, the bars past the aspect clamp;
-/// and the sight box the view keeps, with whether all of it is on screen.
-fn follow_json(f: &FollowReport, camera: &Camera) -> Value {
+/// and the sight box the view keeps, with whether all of it is on screen;
+/// and the `split` (`null` for one view): the divider through `line` (a
+/// point and the unit normal into the second half, in the followed
+/// bitmap's pixels, and `window_line` the point on the window), how far
+/// `apart` the halves' views stand, and each half's seat, world `rect`,
+/// sub-block `offset`, whether it `cut` and whether its seat's sight box
+/// is `in_view`, the first half - the view above - first.
+fn follow_json(f: &FollowReport, camera: &Camera, view: &View, layout: &Layout) -> Value {
     let fr = &f.framing;
     let (cols, rows) = fr.visible_cells();
     let shot = &f.shot;
@@ -2878,6 +2891,34 @@ fn follow_json(f: &FollowReport, camera: &Camera) -> Value {
         "establishing": {
             "phase": f.establishing.name(),
             "progress": (f.establishing.progress() * 100.0).round() / 100.0,
+        },
+        "split": match (shot.split, f.second) {
+            (Some(split), Some(second)) => {
+                let rect = |r: crate::math::Rectangle| json!({ "x": r.x, "y": r.y, "w": r.width, "h": r.height });
+                let on_window = view.to_window(Vec2::new(layout.field.x + split.at.x, layout.field.y + split.at.y));
+                json!({
+                    "line": { "x": split.at.x, "y": split.at.y, "nx": split.normal.x, "ny": split.normal.y },
+                    "window_line": { "x": on_window.x, "y": on_window.y },
+                    "apart": r1(split.apart),
+                    "halves": [
+                        {
+                            "seat": shot.seat,
+                            "rect": rect(camera.rect()),
+                            "offset": { "x": camera.offset.x, "y": camera.offset.y },
+                            "cut": shot.cut,
+                            "in_view": shot.boxes_in(camera.rect(), camera.field, f.sight, 1.0),
+                        },
+                        {
+                            "seat": split.seat,
+                            "rect": rect(second.rect()),
+                            "offset": { "x": second.offset.x, "y": second.offset.y },
+                            "cut": split.cut,
+                            "in_view": split.boxes_in(second.rect(), second.field, f.sight, 1.0),
+                        },
+                    ],
+                })
+            }
+            _ => Value::Null,
         },
     })
 }
@@ -3257,13 +3298,14 @@ mod tests {
             keeps: [Some(seat), None],
             lead: Vec2::new(0.0, 0.0),
             cut: false,
+            split: None,
         };
         server.publish_camera(CameraReport {
             mode: CameraMode::Follow,
             camera,
             layout,
             view,
-            follow: Some(FollowReport { framing, seating: Seating::Local, sight, shot, establishing: crate::establish::Phase::Follow }),
+            follow: Some(FollowReport { framing, seating: Seating::Local, sight, shot, establishing: crate::establish::Phase::Follow, second: None }),
         });
         server.publish_ui(UiFrame::plain((1920.0, 1080.0)));
         let status = at(&mut server, &mut s, "status", json!({})).unwrap();
@@ -3297,6 +3339,80 @@ mod tests {
         assert_eq!(pinned["view"], "pinned");
         let back = at(&mut server, &mut s, "camera", json!({ "reset": true })).unwrap();
         assert_eq!(back["view"], "follow", "{back}");
+    }
+
+    /// A couch's split screen as the window drew it: `status.camera` names
+    /// the split, the divider on the bitmap and on the window, and each
+    /// half's seat and camera; a `click` lands in the world of the half it
+    /// falls in.
+    #[test]
+    fn status_reports_a_split_screen_and_a_click_lands_in_its_half() {
+        use crate::follow::{CameraMode, CameraReport, FollowReport, Shot, ShotKind, Split};
+        use crate::framing::{Screen, SightBox, ViewRules};
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(7);
+        s.game.map = MapFile::from_toml_str("version = 1\nsize = [100, 50]\n").unwrap();
+        let field = s.game.map.field_size();
+        s.game.init(field.0, field.1);
+        let at = |server: &mut DevServer, s: &mut Session, method: &str, params: Value| {
+            let rx = call(&tx, method, params);
+            server.before_frame(s, field.0, field.1);
+            rx.recv().unwrap()
+        };
+        let sight = SightBox::from_cells(11.5, 7.5);
+        let screen = Screen::new(1920.0, 1080.0, 1.0, 92.0).with_panel_width(1920.0);
+        let frame = crate::view::FollowFrame::new(screen, (1920.0, 1080.0), Seating::Local, sight, &ViewRules::of(&crate::tuning::Tuning::DEFAULT));
+        let framing = frame.framing;
+        // Seat 0's half on the left, seat 1's on the right, the divider
+        // straight down the middle of the 1280 x 720 view.
+        let (seat_a, seat_b) = (Vec2::new(760.0, 380.0), Vec2::new(2400.0, 400.0));
+        let (corner_a, corner_b) = (Vec2::new(120.0, 20.0), Vec2::new(1900.0, 40.0));
+        let first = Camera::following(field, corner_a, framing.visible, 1.0, 1.5);
+        let second = Camera::following(field, corner_b, framing.visible, 1.0, 1.5);
+        let split = Split {
+            corner: corner_b,
+            center: corner_b + Vec2::new(640.0, 360.0),
+            seat: 1,
+            keeps: [Some(seat_b), None],
+            cut: false,
+            at: Vec2::new(640.0, 360.0),
+            normal: Vec2::new(1.0, 0.0),
+            apart: 1780.0,
+        };
+        let shot = Shot {
+            corner: corner_a,
+            center: corner_a + Vec2::new(640.0, 360.0),
+            kind: ShotKind::Split,
+            seat: Some(0),
+            keeps: [Some(seat_a), None],
+            lead: Vec2::new(0.0, 0.0),
+            cut: false,
+            split: Some(split),
+        };
+        server.publish_camera(CameraReport {
+            mode: CameraMode::Follow,
+            camera: first,
+            layout: frame.layout,
+            view: frame.view,
+            follow: Some(FollowReport { framing, seating: Seating::Local, sight, shot, establishing: crate::establish::Phase::Follow, second: Some(second) }),
+        });
+        server.publish_ui(UiFrame::plain((1920.0, 1080.0)));
+        let status = at(&mut server, &mut s, "status", json!({})).unwrap();
+        let c = &status["camera"];
+        assert_eq!(c["focus"], "split", "{c}");
+        let sp = &c["split"];
+        assert_eq!(sp["line"], json!({ "x": 640.0, "y": 360.0, "nx": 1.0, "ny": 0.0 }), "{sp}");
+        assert_eq!(sp["window_line"], json!({ "x": 960.0, "y": 540.0 }), "the bitmap's middle is the window's");
+        assert_eq!(sp["apart"], 1780.0);
+        assert_eq!((sp["halves"][0]["seat"].clone(), sp["halves"][1]["seat"].clone()), (json!(0), json!(1)));
+        assert_eq!(sp["halves"][0]["rect"], json!({ "x": 120.0, "y": 20.0, "w": 1280.0, "h": 720.0 }));
+        assert_eq!(sp["halves"][1]["rect"], json!({ "x": 1900.0, "y": 40.0, "w": 1280.0, "h": 720.0 }));
+        assert_eq!((sp["halves"][0]["in_view"].clone(), sp["halves"][1]["in_view"].clone()), (json!(true), json!(true)));
+        // Left of the divider is seat 0's world, right of it seat 1's.
+        let m = at(&mut server, &mut s, "click", json!({ "x": 660.0, "y": 540.0 })).unwrap();
+        assert_eq!(m["world"], json!({ "x": 560.0, "y": 380.0 }), "{m}");
+        let m = at(&mut server, &mut s, "click", json!({ "x": 1260.0, "y": 540.0 })).unwrap();
+        assert_eq!(m["world"], json!({ "x": 2740.0, "y": 400.0 }), "{m}");
     }
 
     /// The players tool and the button/keys behind it: the dialog freezes

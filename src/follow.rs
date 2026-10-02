@@ -11,16 +11,27 @@
 //! - `Seats::of` reads the round into plain values: every seat's tank -
 //!   where it is, the way its hull faces, how fast it can go, whether it is
 //!   in the fight - and which seats this screen plays.
-//! - `Follow::update` turns those into the view, one frame at a time, on
+//! - `Follow::update` turns those into the view - or, for a couch pair
+//!   apart, the two halves of a split screen - one frame at a time, on
 //!   the time the round advanced that frame (a frame that ran no step
 //!   moves nothing, so the view and the tanks move together):
 //!   - **Who.** The screen's own seat. Two seats on one screen (couch
 //!     play) share one view on their midpoint while both sight boxes fit in
-//!     it; apart, the view follows seat 0 and says so (`ShotKind::Apart`) -
-//!     the split screen is later work. A seat that is a wreck or on its way
-//!     back through a gate keeps the view for
+//!     it; apart, the screen splits in two (`Split`): each half follows its
+//!     own seat at the same zoom, shifted toward the other by as far as it
+//!     stood from the shared view's middle when the boxes stopped fitting,
+//!     cut along the perpendicular bisector of the two tanks as the halves
+//!     show them - a Voronoi split, the LEGO games' and Godot's - so the
+//!     split opens with neither half jumping, turns as the pair does, and
+//!     closes once the pair fits one view again and the two halves have
+//!     met. Each half keeps its own seat's sight box in its view; what of
+//!     it lies past the divider is the other half's picture, which the
+//!     arrows (`indicators::ViewFrame::split_at`) treat as off screen, so a
+//!     threat there is marked on the divider. A seat that is a wreck or on
+//!     its way back through a gate keeps the view for
 //!     `camera_spectate_delay_seconds`, then the nearest live teammate has
-//!     it until the seat is back in the fight.
+//!     it until the seat is back in the fight; a couch seat down hands the
+//!     screen to the other.
 //!   - **Dead zone.** The view's anchor stays put while the seat moves
 //!     within `camera_dead_zone_px` of it on an axis, so four-way
 //!     corrections and slides along a wall do not wobble the view; past
@@ -203,9 +214,9 @@ pub enum ShotKind {
     /// The two seats of a couch round, on their midpoint: both sight boxes
     /// fit in the view.
     Shared,
-    /// The two seats of a couch round, too far apart for both boxes: the
-    /// view is seat 0's and the other seat may be off it.
-    Apart,
+    /// The two seats of a couch round, too far apart for both boxes, each
+    /// in its own half of a split screen (`Shot::split`).
+    Split,
     /// A live teammate, while the screen's own seat waits as a wreck or
     /// drives back in through a gate.
     Spectating,
@@ -220,7 +231,7 @@ impl ShotKind {
         match self {
             ShotKind::Seat => "seat",
             ShotKind::Shared => "shared",
-            ShotKind::Apart => "apart",
+            ShotKind::Split => "split",
             ShotKind::Spectating => "spectating",
             ShotKind::Nobody => "nobody",
         }
@@ -246,6 +257,10 @@ pub struct Shot {
     pub lead: Vec2,
     /// Whether the view cut to this frame rather than moving to it.
     pub cut: bool,
+    /// The couch's split screen while the view is two (`ShotKind::Split`):
+    /// this shot is then the first half's, seat 0's, and `split` holds the
+    /// second half's and the line between them. `None` for one view.
+    pub split: Option<Split>,
 }
 
 impl Shot {
@@ -255,46 +270,125 @@ impl Shot {
     /// there is nothing to see. `slack` world pixels of rounding are
     /// allowed on every edge.
     pub fn boxes_in(&self, view: Rectangle, field: (f32, f32), sight: SightBox, slack: f32) -> bool {
-        self.keeps.iter().flatten().all(|p| {
-            let x0 = (p.x - sight.half.0).max(0.0);
-            let y0 = (p.y - sight.half.1).max(0.0);
-            let x1 = (p.x + sight.half.0).min(field.0);
-            let y1 = (p.y + sight.half.1).min(field.1);
-            x0 >= view.x - slack && y0 >= view.y - slack && x1 <= view.x + view.width + slack && y1 <= view.y + view.height + slack
-        })
+        boxes_in(&self.keeps, view, field, sight, slack)
     }
 }
 
-/// Two couch seats that went apart share a view again only once they are
-/// this much closer than the boxes need, so a pair standing at the edge of
-/// fitting does not swing the view back and forth.
-const SHARE_AGAIN_PX: f32 = 32.0;
+/// Whether the sight box round every seat at `keeps` is in `view`, as far
+/// as the field reaches (`Shot::boxes_in`).
+fn boxes_in(keeps: &[Option<Vec2>; 2], view: Rectangle, field: (f32, f32), sight: SightBox, slack: f32) -> bool {
+    keeps.iter().flatten().all(|p| {
+        let x0 = (p.x - sight.half.0).max(0.0);
+        let y0 = (p.y - sight.half.1).max(0.0);
+        let x1 = (p.x + sight.half.0).min(field.0);
+        let y1 = (p.y + sight.half.1).min(field.1);
+        x0 >= view.x - slack && y0 >= view.y - slack && x1 <= view.x + view.width + slack && y1 <= view.y + view.height + slack
+    })
+}
+
+/// The couch's split screen (docs/large-maps-follow-camera.md section 6,
+/// the dynamic split of the LEGO games and Godot's demo): two seats too far
+/// apart for both sight boxes in one view each get a half of the screen,
+/// cut along the perpendicular bisector of the two tanks as each half shows
+/// them. Each half follows its own seat at the same zoom, the seat shifted
+/// toward the other by as far as it stood from the middle of the shared
+/// view the moment that stopped holding both boxes (`split_aims`), so
+/// neither half jumps as the split opens, and the line turns as the pair
+/// does. `Shot` is the first half; this is the second, and the line.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Split {
+    /// The second half's view: its top-left corner and centre, world px,
+    /// exact - `Camera::following` snaps it as it does the first's.
+    pub corner: Vec2,
+    pub center: Vec2,
+    /// The seat it follows: the couch's second.
+    pub seat: usize,
+    /// Where that seat stands, the one sight box this half keeps.
+    pub keeps: [Option<Vec2>; 2],
+    /// Whether this half cut to this frame.
+    pub cut: bool,
+    /// The divider, in a view's own pixels (world px from the view's
+    /// top-left corner, which is what a followed bitmap's pixels are): a
+    /// point on it, halfway between where the two halves show their seats
+    /// ...
+    pub at: Vec2,
+    /// ... and the unit normal from the first half into the second.
+    pub normal: Vec2,
+    /// How far apart the two halves' views stand, world px: 0 where the
+    /// two pictures are one, which is how the split opens and how it
+    /// closes - the divider fades in with it.
+    pub apart: f32,
+}
+
+impl Split {
+    /// Whether the point `p` of the view (its own pixels) is in the second
+    /// half.
+    pub fn in_second(&self, p: Vec2) -> bool {
+        (p.x - self.at.x) * self.normal.x + (p.y - self.at.y) * self.normal.y > 0.0
+    }
+
+    /// Whether every sight box the second half keeps is in `view`
+    /// (`Shot::boxes_in`).
+    pub fn boxes_in(&self, view: Rectangle, field: (f32, f32), sight: SightBox, slack: f32) -> bool {
+        boxes_in(&self.keeps, view, field, sight, slack)
+    }
+}
 
 /// A seat that moved further in one frame than this past what it could
 /// drive in the time went somewhere rather than drove there: the view cuts.
 const JUMP_PX: f32 = 64.0;
+
+/// A split closes into one view again once the pair fits one and the two
+/// halves stand within this many world pixels of each other, moving within
+/// `MERGE_SPEED` of each other: the last half to go is never a visible
+/// step.
+const MERGE_PX: f32 = 0.25;
+
+/// See `MERGE_PX`, px/s.
+const MERGE_SPEED: f32 = 4.0;
 
 /// What the view frames this frame.
 #[derive(Clone, Copy, Debug)]
 enum Target {
     One(SeatTank, ShotKind),
     Shared(SeatTank, SeatTank),
+    /// The couch pair, each in a half of a split screen (`Split`).
+    Split(SeatTank, SeatTank),
 }
 
-impl Target {
-    /// Who the view is on, which decides whether a frame continues the last
-    /// one's motion: the seat, or the pair.
-    fn key(self) -> (usize, Option<usize>) {
-        match self {
-            Target::One(t, _) => (t.seat, None),
-            Target::Shared(a, b) => (a.seat, Some(b.seat)),
-        }
-    }
+/// Who a view is on, which decides whether a frame continues the last
+/// one's motion: a seat, or a pair - a shared view's, or a half's, its own
+/// seat first.
+type Key = (usize, Option<usize>);
+
+/// What one view frames this frame.
+#[derive(Clone, Copy, Debug)]
+struct Aim {
+    /// The point the view centres on, before the look-ahead.
+    anchor: Vec2,
+    /// The way the followed hull faces; `None` leads nowhere.
+    facing: Option<Vec2>,
+    /// What the body says the anchor is doing, px/s, and the top speed
+    /// the look-ahead reaches its full length at.
+    velocity: Vec2,
+    top_speed: f32,
+    /// Where the seats whose sight boxes the view keeps stand.
+    keeps: [Option<Vec2>; 2],
+    /// Whether those boxes need be on screen only as far as the field
+    /// reaches (`holds`) - a couch pair's, whose shared view and split
+    /// halves are decided by what fits that way - rather than whole.
+    clipped: bool,
+    key: Key,
+    /// How far the anchor moves inside the view before it drags it.
+    dead_zone: f32,
+    /// How far from the field's edge the goal eases into it
+    /// (`ease_into_field`).
+    ease: f32,
 }
 
-/// The follow camera's state from one frame to the next.
+/// One view's camera from one frame to the next.
 #[derive(Clone, Debug, Default)]
-pub struct Follow {
+struct Tracker {
     /// The view's centre and its velocity: the spring. `None` before the
     /// first frame, which cuts.
     center: Option<Vec2>,
@@ -307,11 +401,135 @@ pub struct Follow {
     /// How long the hull has faced against `lead_dir`.
     reversed_for: f32,
     /// Who the view was on last frame, and where the anchor stood.
-    last: Option<((usize, Option<usize>), Vec2)>,
+    last: Option<(Key, Vec2)>,
+}
+
+impl Tracker {
+    /// Move the view on by `dt` toward `aim`: a cut where `cut` asks for
+    /// one, where the anchor moved further than its seat can drive, or
+    /// where the view comes to a new target more than a screen away; else
+    /// the dead zone, the look-ahead and the spring. Then the sight boxes,
+    /// then the field. The view's centre, and whether it cut.
+    fn step(&mut self, aim: &Aim, cut: bool, dt: f32, stage: &Stage, rules: &FollowRules) -> (Vec2, bool) {
+        let room = stage.room();
+        let anchor = aim.anchor;
+        let same = self.last.is_some_and(|(k, _)| k == aim.key);
+        let moved = self.last.map_or(Vec2::new(0.0, 0.0), |(_, at)| anchor - at);
+        let jumped = same && moved.length() > aim.top_speed.max(0.0) * 2.0 * dt + JUMP_PX;
+        let far = !same
+            && self
+                .center
+                .is_some_and(|c| (anchor.x - c.x).abs() > stage.visible.0 || (anchor.y - c.y).abs() > stage.visible.1);
+        let cut = self.center.is_none() || cut || jumped || far;
+        self.last = Some((aim.key, anchor));
+
+        // How the anchor moves: what it did since the last frame, when that
+        // was a drive and not a jump - the body's velocity reports motion
+        // for a hull jammed against a wall - else what the body says.
+        let velocity = if same && !cut && dt > 0.0 { moved * (1.0 / dt) } else { aim.velocity };
+        let speed = if aim.top_speed > 0.0 { (velocity.length() / aim.top_speed).clamp(0.0, 1.0) } else { 0.0 };
+
+        let dead_zone = aim.dead_zone.max(0.0);
+        let cap = ((room.0 - dead_zone).max(0.0), (room.1 - dead_zone).max(0.0));
+        let goal_velocity;
+        if cut {
+            self.base = anchor;
+            self.lead_dir = aim.facing.unwrap_or(Vec2::new(0.0, 0.0));
+            self.reversed_for = 0.0;
+            self.lead = lead_for(self.lead_dir, speed, cap, rules);
+            goal_velocity = velocity;
+            self.center = Some(anchor + self.lead);
+            self.velocity = goal_velocity;
+        } else {
+            // Dead zone: the anchor drags the base once it is past the
+            // zone's edge, and only then is the anchor's velocity the
+            // goal's.
+            let (base_x, drag_x) = dead_zone_axis(self.base.x, anchor.x, velocity.x, dead_zone);
+            let (base_y, drag_y) = dead_zone_axis(self.base.y, anchor.y, velocity.y, dead_zone);
+            self.base = Vec2::new(base_x, base_y);
+            goal_velocity = Vec2::new(if drag_x { velocity.x } else { 0.0 }, if drag_y { velocity.y } else { 0.0 });
+
+            // Look-ahead: which way, then how far, eased.
+            match aim.facing {
+                Some(f) if self.lead_dir == Vec2::new(0.0, 0.0) => self.lead_dir = f,
+                Some(f) if f == self.lead_dir => self.reversed_for = 0.0,
+                Some(f) if f == self.lead_dir * -1.0 => {
+                    self.reversed_for += dt;
+                    if self.reversed_for >= rules.reverse_hold_seconds {
+                        self.lead_dir = f;
+                        self.reversed_for = 0.0;
+                    }
+                }
+                Some(f) => {
+                    self.lead_dir = f;
+                    self.reversed_for = 0.0;
+                }
+                None => {
+                    self.lead_dir = Vec2::new(0.0, 0.0);
+                    self.reversed_for = 0.0;
+                }
+            }
+            let want = lead_for(self.lead_dir, speed, cap, rules);
+            self.lead = Vec2::new(
+                ease_toward(self.lead.x, want.x, cap.0, dt, rules.lead_ease_seconds),
+                ease_toward(self.lead.y, want.y, cap.1, dt, rules.lead_ease_seconds),
+            );
+
+            // The spring, on each axis, toward a goal eased into the field
+            // over its last `aim.ease` pixels (`camera_edge_ease_px`), so
+            // the view slows into the field's edge rather than running into
+            // it.
+            let center = self.center.unwrap_or(anchor);
+            let goal = self.base + self.lead;
+            let (gx, kx) = ease_into_field(goal.x, stage.visible.0, stage.field.0, aim.ease);
+            let (gy, ky) = ease_into_field(goal.y, stage.visible.1, stage.field.1, aim.ease);
+            let (x, vx) = spring(center.x, self.velocity.x, gx, goal_velocity.x * kx, dt, rules.spring_seconds);
+            let (y, vy) = spring(center.y, self.velocity.y, gy, goal_velocity.y * ky, dt, rules.spring_seconds);
+            self.center = Some(Vec2::new(x, y));
+            self.velocity = Vec2::new(vx, vy);
+        }
+
+        // The sight boxes, then the field.
+        let mut center = self.center.unwrap_or(anchor);
+        let holds_on = |p: f32, room: f32, half: f32, visible: f32, field: f32| {
+            if aim.clipped { holds(p, half, visible, field) } else { Some((p - room, p + room)) }
+        };
+        let half = stage.sight.half;
+        let along_x: Vec<(f32, f32)> = aim.keeps.iter().flatten().filter_map(|p| holds_on(p.x, room.0, half.0, stage.visible.0, stage.field.0)).collect();
+        let along_y: Vec<(f32, f32)> = aim.keeps.iter().flatten().filter_map(|p| holds_on(p.y, room.1, half.1, stage.visible.1, stage.field.1)).collect();
+        let (cx, held_x) = keep_within(center.x, &along_x);
+        let (cy, held_y) = keep_within(center.y, &along_y);
+        center = Vec2::new(cx, cy);
+        if held_x {
+            self.velocity.x = goal_velocity.x;
+        }
+        if held_y {
+            self.velocity.y = goal_velocity.y;
+        }
+        let (fx, edge_x) = keep_in_field(center.x, stage.visible.0, stage.field.0);
+        let (fy, edge_y) = keep_in_field(center.y, stage.visible.1, stage.field.1);
+        center = Vec2::new(fx, fy);
+        if edge_x {
+            self.velocity.x = 0.0;
+        }
+        if edge_y {
+            self.velocity.y = 0.0;
+        }
+        self.center = Some(center);
+        (center, cut)
+    }
+}
+
+/// The follow camera's state from one frame to the next.
+#[derive(Clone, Debug, Default)]
+pub struct Follow {
+    /// The view - the first half's while the couch's view is split.
+    view: Tracker,
+    /// The second half's view and the seat it follows, while the couch's
+    /// view is split.
+    second: Option<(usize, Tracker)>,
     /// How long the screen's own seat has been out of the fight.
     out_for: f32,
-    /// Couch: whether the pair was too far apart last frame.
-    apart: bool,
     /// Cuts the round's events asked for: seats (a bit each) that went
     /// through a portal or came in through a gate, or everything, for a
     /// round that started.
@@ -360,137 +578,123 @@ impl Follow {
     /// that ran no step, so the view stands still with the round.
     pub fn update(&mut self, seats: &Seats, dt: f32, stage: &Stage, rules: &FollowRules) -> Shot {
         let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
-        let room = stage.room();
         let Some(target) = self.choose(seats, dt, stage, rules) else {
             return self.hold(stage);
         };
-
-        // The anchor, and how it moves.
-        let (anchor, facing, body_velocity, top_speed, keeps, kind, seat) = match target {
-            Target::One(t, kind) => (t.position, Some(t.facing), t.velocity, t.top_speed, [Some(t.position), None], kind, t.seat),
-            Target::Shared(a, b) => (
-                (a.position + b.position) * 0.5,
-                None,
-                (a.velocity + b.velocity) * 0.5,
-                a.top_speed.min(b.top_speed),
-                [Some(a.position), Some(b.position)],
-                ShotKind::Shared,
-                a.seat,
-            ),
-        };
-        let key = target.key();
-        let same = self.last.is_some_and(|(k, _)| k == key);
-        let moved = self.last.map_or(Vec2::new(0.0, 0.0), |(_, at)| anchor - at);
-        let jumped = same && moved.length() > top_speed.max(0.0) * 2.0 * dt + JUMP_PX;
-        let far = !same
-            && self
-                .center
-                .is_some_and(|c| (anchor.x - c.x).abs() > stage.visible.0 || (anchor.y - c.y).abs() > stage.visible.1);
-        let seat_bit = |s: usize| s < 32 && self.cut_seats & (1 << s) != 0;
-        let portal = match target {
-            Target::One(t, _) => seat_bit(t.seat),
-            Target::Shared(a, b) => seat_bit(a.seat) || seat_bit(b.seat),
-        };
-        let cut = self.center.is_none() || self.cut_all || portal || jumped || far;
+        let (cut_all, cut_seats) = (self.cut_all, self.cut_seats);
         self.cut_all = false;
         self.cut_seats = 0;
-        self.last = Some((key, anchor));
-
-        // How the anchor moves: what it did since the last frame, when that
-        // was a drive and not a jump - the body's velocity reports motion
-        // for a hull jammed against a wall - else what the body says.
-        let velocity = if same && !cut && dt > 0.0 { moved * (1.0 / dt) } else { body_velocity };
-        let speed = if top_speed > 0.0 { (velocity.length() / top_speed).clamp(0.0, 1.0) } else { 0.0 };
-
-        let dead_zone = rules.dead_zone_px.max(0.0);
-        let cap = ((room.0 - dead_zone).max(0.0), (room.1 - dead_zone).max(0.0));
-        let goal_velocity;
-        if cut {
-            self.base = anchor;
-            self.lead_dir = facing.unwrap_or(Vec2::new(0.0, 0.0));
-            self.reversed_for = 0.0;
-            self.lead = lead_for(self.lead_dir, speed, cap, rules);
-            goal_velocity = velocity;
-            self.center = Some(anchor + self.lead);
-            self.velocity = goal_velocity;
-        } else {
-            // Dead zone: the anchor drags the base once it is past the
-            // zone's edge, and only then is the anchor's velocity the
-            // goal's.
-            let (base_x, drag_x) = dead_zone_axis(self.base.x, anchor.x, velocity.x, dead_zone);
-            let (base_y, drag_y) = dead_zone_axis(self.base.y, anchor.y, velocity.y, dead_zone);
-            self.base = Vec2::new(base_x, base_y);
-            goal_velocity = Vec2::new(if drag_x { velocity.x } else { 0.0 }, if drag_y { velocity.y } else { 0.0 });
-
-            // Look-ahead: which way, then how far, eased.
-            match facing {
-                Some(f) if self.lead_dir == Vec2::new(0.0, 0.0) => self.lead_dir = f,
-                Some(f) if f == self.lead_dir => self.reversed_for = 0.0,
-                Some(f) if f == self.lead_dir * -1.0 => {
-                    self.reversed_for += dt;
-                    if self.reversed_for >= rules.reverse_hold_seconds {
-                        self.lead_dir = f;
-                        self.reversed_for = 0.0;
+        let asked = |s: usize| cut_all || (s < 32 && cut_seats & (1 << s) != 0);
+        match target {
+            Target::One(t, kind) => {
+                // A split closing onto one seat: the half that seat had goes
+                // on as the view.
+                if let Some((seat, half)) = self.second.take() {
+                    if seat == t.seat {
+                        self.view = half;
                     }
                 }
-                Some(f) => {
-                    self.lead_dir = f;
-                    self.reversed_for = 0.0;
-                }
-                None => {
-                    self.lead_dir = Vec2::new(0.0, 0.0);
-                    self.reversed_for = 0.0;
-                }
+                let aim = Aim {
+                    anchor: t.position,
+                    facing: Some(t.facing),
+                    velocity: t.velocity,
+                    top_speed: t.top_speed,
+                    keeps: [Some(t.position), None],
+                    clipped: false,
+                    key: (t.seat, None),
+                    dead_zone: rules.dead_zone_px,
+                    ease: rules.edge_ease_px,
+                };
+                let (center, cut) = self.view.step(&aim, asked(t.seat), dt, stage, rules);
+                self.shot(center, kind, t.seat, aim.keeps, cut, None, stage)
             }
-            let want = lead_for(self.lead_dir, speed, cap, rules);
-            self.lead = Vec2::new(
-                ease_toward(self.lead.x, want.x, cap.0, dt, rules.lead_ease_seconds),
-                ease_toward(self.lead.y, want.y, cap.1, dt, rules.lead_ease_seconds),
-            );
+            Target::Shared(a, b) => {
+                let aim = Aim {
+                    anchor: (a.position + b.position) * 0.5,
+                    facing: None,
+                    velocity: (a.velocity + b.velocity) * 0.5,
+                    top_speed: a.top_speed.min(b.top_speed),
+                    keeps: [Some(a.position), Some(b.position)],
+                    clipped: true,
+                    key: (a.seat, Some(b.seat)),
+                    dead_zone: rules.dead_zone_px,
+                    ease: rules.edge_ease_px,
+                };
+                let (center, cut) = self.view.step(&aim, asked(a.seat) || asked(b.seat), dt, stage, rules);
+                self.shot(center, ShotKind::Shared, a.seat, aim.keeps, cut, None, stage)
+            }
+            Target::Split(a, b) => {
+                let aims = split_aims(a.position, b.position, stage);
+                // Each half follows its own seat. The dead zone and the
+                // edge's ease hold while the split is open; once the pair
+                // fits one view again both halves chase the one shared
+                // centre without either - the ease would set each half's
+                // goal off the edge where one seat's box holds its half on
+                // it - so they meet exactly and close into one view with no
+                // step.
+                let (dead_zone, ease) = if aims.open { (rules.dead_zone_px, rules.edge_ease_px) } else { (0.0, 0.0) };
+                let aim_a = Aim {
+                    anchor: aims.a,
+                    facing: None,
+                    velocity: a.velocity,
+                    top_speed: a.top_speed,
+                    keeps: [Some(a.position), None],
+                    clipped: true,
+                    key: (a.seat, Some(b.seat)),
+                    dead_zone,
+                    ease,
+                };
+                let aim_b = Aim { anchor: aims.b, velocity: b.velocity, top_speed: b.top_speed, keeps: [Some(b.position), None], key: (b.seat, Some(a.seat)), ..aim_a };
+                // The split opening: the second half starts as the view
+                // stands, so neither half jumps.
+                let mut half = match self.second.take() {
+                    Some((seat, half)) if seat == b.seat => half,
+                    _ => {
+                        let mut half = self.view.clone();
+                        half.last = half.last.map(|(_, at)| (aim_b.key, at));
+                        half
+                    }
+                };
+                let (center_a, cut_a) = self.view.step(&aim_a, asked(a.seat), dt, stage, rules);
+                let (center_b, cut_b) = half.step(&aim_b, asked(b.seat), dt, stage, rules);
+                let apart = (center_b - center_a).length();
+                if !aims.open && apart <= MERGE_PX && (half.velocity - self.view.velocity).length() <= MERGE_SPEED {
+                    return self.shot(center_a, ShotKind::Shared, a.seat, [Some(a.position), Some(b.position)], cut_a, None, stage);
+                }
+                // The line: halfway between where the halves show their
+                // seats, square to the line from one to the other.
+                let half_extent = Vec2::new(stage.visible.0 / 2.0, stage.visible.1 / 2.0);
+                let (corner_a, corner_b) = (center_a - half_extent, center_b - half_extent);
+                let (on_a, on_b) = (a.position - corner_a, b.position - corner_b);
+                let normal = unit(on_b - on_a).unwrap_or(aims.dir);
+                let split = Split {
+                    corner: corner_b,
+                    center: center_b,
+                    seat: b.seat,
+                    keeps: aim_b.keeps,
+                    cut: cut_b,
+                    at: (on_a + on_b) * 0.5,
+                    normal,
+                    apart,
+                };
+                self.second = Some((b.seat, half));
+                self.shot(center_a, ShotKind::Split, a.seat, aim_a.keeps, cut_a, Some(split), stage)
+            }
+        }
+    }
 
-            // The spring, on each axis, toward a goal eased into the field
-            // over its last `camera_edge_ease_px`, so the view slows into
-            // the field's edge rather than running into it.
-            let center = self.center.unwrap_or(anchor);
-            let goal = self.base + self.lead;
-            let (gx, kx) = ease_into_field(goal.x, stage.visible.0, stage.field.0, rules.edge_ease_px);
-            let (gy, ky) = ease_into_field(goal.y, stage.visible.1, stage.field.1, rules.edge_ease_px);
-            let (x, vx) = spring(center.x, self.velocity.x, gx, goal_velocity.x * kx, dt, rules.spring_seconds);
-            let (y, vy) = spring(center.y, self.velocity.y, gy, goal_velocity.y * ky, dt, rules.spring_seconds);
-            self.center = Some(Vec2::new(x, y));
-            self.velocity = Vec2::new(vx, vy);
-        }
-
-        // The sight boxes, then the field.
-        let mut center = self.center.unwrap_or(anchor);
-        let (cx, held_x) = keep_boxes(center.x, keeps.iter().flatten().map(|p| p.x), room.0);
-        let (cy, held_y) = keep_boxes(center.y, keeps.iter().flatten().map(|p| p.y), room.1);
-        center = Vec2::new(cx, cy);
-        if held_x {
-            self.velocity.x = goal_velocity.x;
-        }
-        if held_y {
-            self.velocity.y = goal_velocity.y;
-        }
-        let (fx, edge_x) = keep_in_field(center.x, stage.visible.0, stage.field.0);
-        let (fy, edge_y) = keep_in_field(center.y, stage.visible.1, stage.field.1);
-        center = Vec2::new(fx, fy);
-        if edge_x {
-            self.velocity.x = 0.0;
-        }
-        if edge_y {
-            self.velocity.y = 0.0;
-        }
-        self.center = Some(center);
-
+    /// The shot of a view centred at `center`.
+    #[allow(clippy::too_many_arguments)]
+    fn shot(&self, center: Vec2, kind: ShotKind, seat: usize, keeps: [Option<Vec2>; 2], cut: bool, split: Option<Split>, stage: &Stage) -> Shot {
         Shot {
             corner: Vec2::new(center.x - stage.visible.0 / 2.0, center.y - stage.visible.1 / 2.0),
             center,
             kind,
             seat: Some(seat),
             keeps,
-            lead: self.lead,
+            lead: self.view.lead,
             cut,
+            split,
         }
     }
 
@@ -501,23 +705,13 @@ impl Follow {
         if let [a, b, ..] = local[..] {
             self.out_for = 0.0;
             return Some(match (a.live, b.live) {
-                (true, true) => {
-                    let slack = if self.apart { SHARE_AGAIN_PX } else { 0.0 };
-                    let gap = b.position - a.position;
-                    let fits = |gap: f32, visible: f32, half: f32| gap.abs() + 2.0 * half + slack <= visible;
-                    if fits(gap.x, stage.visible.0, stage.sight.half.0) && fits(gap.y, stage.visible.1, stage.sight.half.1) {
-                        self.apart = false;
-                        Target::Shared(a, b)
-                    } else {
-                        self.apart = true;
-                        Target::One(a, ShotKind::Apart)
-                    }
-                }
+                // Apart, or still closing a split: two halves.
+                (true, true) if self.second.is_some() || split_aims(a.position, b.position, stage).open => Target::Split(a, b),
+                (true, true) => Target::Shared(a, b),
                 (false, true) => Target::One(b, ShotKind::Seat),
                 _ => Target::One(a, ShotKind::Seat),
             });
         }
-        self.apart = false;
         if first.live {
             self.out_for = 0.0;
             return Some(Target::One(first, ShotKind::Seat));
@@ -542,12 +736,13 @@ impl Follow {
     /// No seat to follow: the view stays where it was, or on the field's
     /// middle, inside the field.
     fn hold(&mut self, stage: &Stage) -> Shot {
+        self.second = None;
         let middle = Vec2::new(stage.field.0 / 2.0, stage.field.1 / 2.0);
-        let at = self.center.unwrap_or(middle);
+        let at = self.view.center.unwrap_or(middle);
         let center = Vec2::new(keep_in_field(at.x, stage.visible.0, stage.field.0).0, keep_in_field(at.y, stage.visible.1, stage.field.1).0);
-        self.center = Some(center);
-        self.velocity = Vec2::new(0.0, 0.0);
-        self.last = None;
+        self.view.center = Some(center);
+        self.view.velocity = Vec2::new(0.0, 0.0);
+        self.view.last = None;
         Shot {
             corner: Vec2::new(center.x - stage.visible.0 / 2.0, center.y - stage.visible.1 / 2.0),
             center,
@@ -556,8 +751,94 @@ impl Follow {
             keeps: [None, None],
             lead: Vec2::new(0.0, 0.0),
             cut: false,
+            split: None,
         }
     }
+}
+
+/// Where the two halves of a couch pair's split screen centre, before the
+/// dead zone and the spring (`split_aims`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SplitAims {
+    /// The first seat's half and the second's.
+    a: Vec2,
+    b: Vec2,
+    /// Whether the pair is too far apart for both sight boxes in one view.
+    open: bool,
+    /// The unit direction from the first seat to the second.
+    dir: Vec2,
+}
+
+/// The couch pair at `a` and `b` on `stage`. The shared view would stand
+/// on their midpoint kept inside the field; while it holds both seats'
+/// sight boxes - as far as the field reaches (`holds`) - both halves aim
+/// there, one picture. Past that, each half aims at the first point on the
+/// way from there to its own seat at which its seat's box is all on screen:
+/// the seat held at the edge of the room the box leaves, along the line it
+/// stood on in the shared view, so neither half jumps as the split opens
+/// and each shows its seat shifted toward the other. Away from the field's
+/// edges that is the seat moved toward the other by as far as a seat may
+/// stand from a view's middle with its box on screen.
+fn split_aims(a: Vec2, b: Vec2, stage: &Stage) -> SplitAims {
+    let d = b - a;
+    let len = d.length();
+    let dir = if len > 1e-3 { d * (1.0 / len) } else { Vec2::new(1.0, 0.0) };
+    let middle = (a + b) * 0.5;
+    let shared = Vec2::new(keep_in_field(middle.x, stage.visible.0, stage.field.0).0, keep_in_field(middle.y, stage.visible.1, stage.field.1).0);
+    let (half, visible, field) = (stage.sight.half, stage.visible, stage.field);
+    let box_of = |p: Vec2| [holds(p.x, half.0, visible.0, field.0), holds(p.y, half.1, visible.1, field.1)];
+    let fits = |bounds: [Option<(f32, f32)>; 2]| {
+        let within = |c: f32, bound: Option<(f32, f32)>| bound.is_none_or(|(lo, hi)| (lo..=hi).contains(&c));
+        within(shared.x, bounds[0]) && within(shared.y, bounds[1])
+    };
+    let (box_a, box_b) = (box_of(a), box_of(b));
+    SplitAims { a: entry(shared, a, box_a), b: entry(shared, b, box_b), open: !(fits(box_a) && fits(box_b)), dir }
+}
+
+/// The first point of the segment from `from` to `to` inside `bounds`, an
+/// interval on each axis (`None` bounds nothing): `from` where it is
+/// inside, `to` where none of the segment is.
+fn entry(from: Vec2, to: Vec2, bounds: [Option<(f32, f32)>; 2]) -> Vec2 {
+    let d = to - from;
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for (at, step, bound) in [(from.x, d.x, bounds[0]), (from.y, d.y, bounds[1])] {
+        let Some((lo, hi)) = bound else { continue };
+        if step.abs() < 1e-9 {
+            if at < lo || at > hi {
+                return to;
+            }
+            continue;
+        }
+        let (ta, tb) = ((lo - at) / step, (hi - at) / step);
+        t0 = t0.max(ta.min(tb));
+        t1 = t1.min(ta.max(tb));
+    }
+    if t0 > t1 {
+        return to;
+    }
+    from + d * t0
+}
+
+/// The centres a view `visible` long may take on an axis of a field
+/// `field` long and still show all of the sight box of half-extent `half`
+/// round a seat at `p`, as far as the field reaches - a box that hangs
+/// past the field's edge needs only its part on the field on screen -
+/// and `None` on an axis the view is the longer, whose middle the field's
+/// is and on which every box is on screen. A box longer than the view
+/// leaves the one centre between.
+fn holds(p: f32, half: f32, visible: f32, field: f32) -> Option<(f32, f32)> {
+    if visible >= field {
+        return None;
+    }
+    let lo = (p + half).min(field) - visible / 2.0;
+    let hi = (p - half).max(0.0) + visible / 2.0;
+    Some(if lo <= hi { (lo, hi) } else { ((lo + hi) / 2.0, (lo + hi) / 2.0) })
+}
+
+/// `v` scaled to length 1, `None` when it has none.
+fn unit(v: Vec2) -> Option<Vec2> {
+    let len = v.length();
+    (len > 1e-4).then(|| v * (1.0 / len))
 }
 
 /// The look-ahead along `dir` at `speed` (0 at rest to 1 at top speed):
@@ -616,19 +897,16 @@ pub fn spring(x: f32, v: f32, goal: f32, goal_v: f32, dt: f32, smooth: f32) -> (
     (goal + (e + j * dt) * decay, goal_v + (de - w * j * dt) * decay)
 }
 
-/// One axis of the sight boxes: `center` moved into reach of every seat at
-/// `seats` - no further than `room` from any - and whether it had to move.
-/// Seats too far apart for one centre (which `Follow::choose` never frames
-/// together) keep the first one's reach.
-fn keep_boxes(center: f32, seats: impl Iterator<Item = f32> + Clone, room: f32) -> (f32, bool) {
-    let lo = seats.clone().map(|p| p - room).fold(f32::NEG_INFINITY, f32::max);
-    let hi = seats.clone().map(|p| p + room).fold(f32::INFINITY, f32::min);
-    let (lo, hi) = if lo <= hi {
-        (lo, hi)
-    } else {
-        let first = seats.clone().next().unwrap_or(center);
-        (first - room, first + room)
-    };
+/// One axis of the sight boxes: `center` moved into every one of `holds`
+/// - the centres that keep a seat's box on screen, a seat's own reach of
+/// the room either way (`Stage::room`) or what fits as far as the field
+/// reaches (`holds`) - and whether it had to move. Boxes no one centre
+/// holds together (which `Follow::choose` never frames in one view) keep
+/// the first one's.
+fn keep_within(center: f32, holds: &[(f32, f32)]) -> (f32, bool) {
+    let lo = holds.iter().map(|h| h.0).fold(f32::NEG_INFINITY, f32::max);
+    let hi = holds.iter().map(|h| h.1).fold(f32::INFINITY, f32::min);
+    let (lo, hi) = if lo <= hi { (lo, hi) } else { holds.first().copied().unwrap_or((center, center)) };
     if !lo.is_finite() || !hi.is_finite() {
         return (center, false);
     }
@@ -737,6 +1015,9 @@ pub struct FollowReport {
     /// Where the establishing shot stands (`establish::Phase::Follow` once
     /// it is over, or where none plays).
     pub establishing: crate::establish::Phase,
+    /// The second half's camera while a couch's screen is split
+    /// (`Shot::split`).
+    pub second: Option<Camera>,
 }
 
 #[cfg(test)]
@@ -1148,33 +1429,279 @@ mod follow_tests {
         }
     }
 
+    /// How far from a view's middle along the unit `dir` a seat may stand
+    /// with all of its sight box on screen, away from the field's edges:
+    /// where the ray meets the edge of the room the box leaves.
+    fn reach(dir: Vec2, room: (f32, f32)) -> f32 {
+        let along = |room: f32, d: f32| if d.abs() > 1e-6 { room.max(0.0) / d.abs() } else { f32::INFINITY };
+        along(room.0, dir.x).min(along(room.1, dir.y))
+    }
+
+    fn pair(a: SeatTank, b: SeatTank) -> Seats {
+        Seats { local: vec![0, 1], tanks: vec![a, b] }
+    }
+
     #[test]
-    fn a_couch_pair_shares_the_view_while_both_boxes_fit_and_seat_0_has_it_when_not() {
-        let s = stage();
+    fn a_couch_pair_shares_the_view_while_both_boxes_fit_and_splits_when_they_do_not() {
+        let s = open_stage();
         let r = rules();
+        let room = s.room();
         let mut f = Follow::default();
-        let a = tank(0, 500.0, 384.0);
-        let mut b = tank(1, 800.0, 384.0);
-        let pair = |a: SeatTank, b: SeatTank| Seats { local: vec![0, 1], tanks: vec![a, b] };
+        let a = tank(0, 1500.0, 1000.0);
+        let mut b = tank(1, 1800.0, 1000.0);
         let shot = f.update(&pair(a, b), DT, &s, &r);
-        assert_eq!(shot.kind, ShotKind::Shared);
-        assert_eq!(shot.center, Vec2::new(650.0, 384.0), "the midpoint, no look-ahead");
+        assert_eq!((shot.kind, shot.split), (ShotKind::Shared, None));
+        assert_eq!(shot.center, Vec2::new(1650.0, 1000.0), "the midpoint, no look-ahead");
         let rect = |shot: &Shot| Rectangle::new(shot.corner.x, shot.corner.y, s.visible.0, s.visible.1);
         assert!(shot.boxes_in(rect(&shot), s.field, s.sight, 1e-3));
-        // Further apart than two boxes fit: seat 0's view, reported.
-        b.position.x = 500.0 + (1280.0 - 2.0 * 368.0) + 10.0;
-        let shot = f.update(&pair(a, b), DT, &s, &r);
-        assert_eq!((shot.kind, shot.seat), (ShotKind::Apart, Some(0)));
-        // Back to just fitting is not enough to share again ...
-        b.position.x = 500.0 + (1280.0 - 2.0 * 368.0) - 10.0;
-        assert_eq!(f.update(&pair(a, b), DT, &s, &r).kind, ShotKind::Apart);
-        // ... a cell closer is.
-        b.position.x -= 32.0;
+        // Exactly as far apart as both boxes fit: still one view.
+        b.position.x = a.position.x + 2.0 * room.0;
         assert_eq!(f.update(&pair(a, b), DT, &s, &r).kind, ShotKind::Shared);
-        // One of the pair down: the other's own view.
+        // A pixel more and the split opens: seat 0's half, and seat 1's.
+        b.position.x += 1.0;
+        let shot = f.update(&pair(a, b), DT, &s, &r);
+        assert_eq!((shot.kind, shot.seat), (ShotKind::Split, Some(0)));
+        let split = shot.split.expect("the second half");
+        assert_eq!(split.seat, 1);
+        // A pixel past the boxes, the halves stand a pixel apart: the split
+        // opens from one picture.
+        assert!(split.apart <= 1.0 + 1e-3, "it opens on one picture: {split:?}");
+        // Up and down, the boxes stop fitting sooner.
+        let mut f = Follow::default();
+        let c = tank(1, 1500.0, 1000.0 + 2.0 * room.1 + 1.0);
+        assert_eq!(f.update(&pair(a, c), DT, &s, &r).kind, ShotKind::Split);
+        // One of the pair down: the other's own view, in one piece.
+        let mut f = Follow::default();
+        b.position.x = a.position.x + 1000.0;
+        f.update(&pair(a, b), DT, &s, &r);
         b.live = false;
         let shot = f.update(&pair(a, b), DT, &s, &r);
-        assert_eq!((shot.kind, shot.seat), (ShotKind::Seat, Some(0)));
+        assert_eq!((shot.kind, shot.seat, shot.split), (ShotKind::Seat, Some(0), None));
+    }
+
+    #[test]
+    fn each_half_follows_its_seat_shifted_toward_the_other_and_the_line_is_their_bisector() {
+        let s = open_stage();
+        let r = rules();
+        let room = s.room();
+        let middle = Vec2::new(s.visible.0 / 2.0, s.visible.1 / 2.0);
+        for (dx, dy) in [(1000.0, 0.0), (-800.0, 0.0), (0.0, 600.0), (0.0, -500.0), (-900.0, -500.0), (700.0, 450.0)] {
+            let mut f = Follow::default();
+            let a = tank(0, 2000.0, 1000.0);
+            let b = tank(1, 2000.0 + dx, 1000.0 + dy);
+            let mut shot = f.update(&pair(a, b), DT, &s, &r);
+            for _ in 0..120 {
+                shot = f.update(&pair(a, b), DT, &s, &r);
+            }
+            let split = shot.split.expect("too far apart for one view");
+            let d = Vec2::new(dx, dy);
+            let dir = d * (1.0 / d.length());
+            let along = reach(dir, room);
+            // Each half centres on its seat, shifted toward the other by
+            // as far as a seat may stand from a view's middle with its box
+            // on screen.
+            assert!((shot.center - (a.position + dir * along)).length() < 0.5, "{d:?}: {shot:?}");
+            assert!((split.center - (b.position - dir * along)).length() < 0.5, "{d:?}: {split:?}");
+            // The line is square to the pair, through the view's middle, so
+            // each seat shows where the shared view showed it as it split.
+            assert!((split.normal - dir).length() < 1e-3, "{d:?}: {split:?}");
+            assert!((split.at - middle).length() < 0.5, "{d:?}: {split:?}");
+            assert!(!split.in_second(a.position - shot.corner) && split.in_second(b.position - split.corner), "{d:?}");
+            // Each half keeps its own seat's sight box on screen.
+            let rect = |corner: Vec2| Rectangle::new(corner.x, corner.y, s.visible.0, s.visible.1);
+            assert!(shot.boxes_in(rect(shot.corner), s.field, s.sight, 1e-3) && split.boxes_in(rect(split.corner), s.field, s.sight, 1e-3), "{d:?}");
+            assert!(split.apart > 100.0, "{d:?}: {split:?}");
+        }
+    }
+
+    #[test]
+    fn the_split_opens_and_closes_without_a_jump() {
+        // Seat 1 drives away from seat 0 at top speed until the split is
+        // wide open, then back until it has closed: no frame moves either
+        // half's view by more than the spring catching up with a tank at top
+        // speed can - a split that jumped would move a half by half a
+        // screen - the split opening and closing included.
+        let s = open_stage();
+        let r = rules();
+        let speed = 210.0;
+        let mut f = Follow::default();
+        let a = tank(0, 2000.0, 1000.0);
+        let mut b = tank(1, 2100.0, 1010.0);
+        let mut last = f.update(&pair(a, b), DT, &s, &r);
+        for _ in 0..60 {
+            last = f.update(&pair(a, b), DT, &s, &r);
+        }
+        let (mut opened, mut closed) = (None, None);
+        for frame in 0..700 {
+            let v = if frame < 320 { speed } else { -speed };
+            b.position.x += v * DT;
+            b.velocity = Vec2::new(v, 0.0);
+            let shot = f.update(&pair(a, b), DT, &s, &r);
+            let second = |s: &Shot| s.split.map_or(s.center, |sp| sp.center);
+            let step_a = (shot.center - last.center).length();
+            let step_b = (second(&shot) - second(&last)).length();
+            assert!(step_a <= 2.0 * speed * DT && step_b <= 2.0 * speed * DT, "frame {frame}: {step_a} {step_b}\n{last:?}\n{shot:?}");
+            assert!(!shot.cut, "frame {frame}");
+            match (last.split, shot.split) {
+                (None, Some(split)) => {
+                    // The two pictures part by no more than the seat drove
+                    // past the point where both boxes stopped fitting.
+                    assert!(split.apart <= speed * DT + 0.5, "frame {frame}: opens on one picture: {split:?}");
+                    opened.get_or_insert(frame);
+                }
+                (Some(_), None) => {
+                    assert_eq!(shot.kind, ShotKind::Shared);
+                    closed = Some(frame);
+                }
+                _ => {}
+            }
+            last = shot;
+        }
+        let (opened, closed) = (opened.expect("the split opened"), closed.expect("and closed"));
+        assert!(opened < 320 && closed > 320, "{opened} {closed}");
+        assert_eq!(last.kind, ShotKind::Shared, "one view again");
+    }
+
+    #[test]
+    fn by_the_fields_edge_the_pair_shares_what_fits_and_splits_from_there() {
+        // A field whose bottom edge holds the view: a pair a box and more
+        // apart up and down still shares one view while their boxes, cut
+        // off by the edge, fit it; driven further apart the split opens
+        // from that view with no jump, each half keeping its seat's box on
+        // screen as far as the field reaches, and closes again on the way
+        // back.
+        let s = Stage { field: (4000.0, 1400.0), ..stage() };
+        let r = rules();
+        let speed = 210.0;
+        let a = tank(0, 2000.0, 1300.0);
+        let mut b = tank(1, 2000.0, 1000.0);
+        assert!(b.position.y < a.position.y - 2.0 * s.room().1, "further apart than two whole boxes");
+        let mut f = Follow::default();
+        let mut last = f.update(&pair(a, b), DT, &s, &r);
+        for _ in 0..60 {
+            last = f.update(&pair(a, b), DT, &s, &r);
+        }
+        assert_eq!(last.kind, ShotKind::Shared, "the edge cuts both boxes down to what one view holds");
+        let rect = |corner: Vec2| Rectangle::new(corner.x, corner.y, s.visible.0, s.visible.1);
+        assert!(last.boxes_in(rect(last.corner), s.field, s.sight, 0.5), "{last:?}");
+        let (mut opened, mut closed) = (None, None);
+        for frame in 0..400 {
+            let v = if frame < 150 { -speed } else { speed };
+            b.position.y += v * DT;
+            b.velocity = Vec2::new(0.0, v);
+            let shot = f.update(&pair(a, b), DT, &s, &r);
+            let second = |s: &Shot| s.split.map_or(s.center, |sp| sp.center);
+            assert!((shot.center - last.center).length() <= 2.0 * speed * DT, "frame {frame}: {last:?} -> {shot:?}");
+            assert!((second(&shot) - second(&last)).length() <= 2.0 * speed * DT, "frame {frame}: {last:?} -> {shot:?}");
+            if let Some(split) = shot.split {
+                assert!(shot.boxes_in(rect(shot.corner), s.field, s.sight, 0.5), "frame {frame}: {shot:?}");
+                assert!(split.boxes_in(rect(split.corner), s.field, s.sight, 0.5), "frame {frame}: {split:?}");
+                assert!(!split.in_second(a.position - shot.corner) && split.in_second(b.position - split.corner), "frame {frame}");
+            }
+            match (last.split, shot.split) {
+                (None, Some(_)) => {
+                    opened.get_or_insert(frame);
+                }
+                (Some(_), None) => closed = Some(frame),
+                _ => {}
+            }
+            last = shot;
+        }
+        let (opened, closed) = (opened.expect("the split opened"), closed.expect("and closed"));
+        assert!(opened < 150 && closed > 150, "{opened} {closed}");
+    }
+
+    #[test]
+    fn a_split_by_the_fields_edge_closes_once_the_pair_fits() {
+        // By the field's left edge, the shared view stands on the edge
+        // with seat 0's box holding it there: driven back together from a
+        // split, the two halves meet on that one view and the split closes,
+        // rather than the second half resting where the edge's ease would
+        // set a view of its own seat alone, a few pixels off the first.
+        let s = Stage { visible: (1280.0, 720.0), field: (2560.0, 1440.0), sight: SightBox::from_cells(11.5, 7.5) };
+        let r = rules();
+        let mut a = tank(0, 240.0, 768.0);
+        let mut b = tank(1, 647.0, 1072.0);
+        let mut f = Follow::default();
+        let mut last = f.update(&pair(a, b), DT, &s, &r);
+        for _ in 0..60 {
+            last = f.update(&pair(a, b), DT, &s, &r);
+        }
+        assert!(last.split.is_some(), "too far apart up and down: {last:?}");
+        let mut closed = None;
+        for frame in 0..180 {
+            // A second of driving back - seat 0 down, seat 1 left - then
+            // standing still.
+            let (va, vb) = if frame < 60 { (Vec2::new(0.0, 132.0), Vec2::new(-147.0, 0.0)) } else { (Vec2::new(0.0, 0.0), Vec2::new(0.0, 0.0)) };
+            a.position = a.position + va * DT;
+            b.position = b.position + vb * DT;
+            a.velocity = va;
+            b.velocity = vb;
+            let shot = f.update(&pair(a, b), DT, &s, &r);
+            let second = |s: &Shot| s.split.map_or(s.center, |sp| sp.center);
+            assert!((shot.center - last.center).length() <= 2.0 * 147.0 * DT, "frame {frame}: {last:?} -> {shot:?}");
+            assert!((second(&shot) - second(&last)).length() <= 2.0 * 147.0 * DT, "frame {frame}: {last:?} -> {shot:?}");
+            if last.split.is_some() && shot.split.is_none() {
+                closed = Some(frame);
+            }
+            last = shot;
+        }
+        assert!(!split_aims(a.position, b.position, &s).open, "the pair fits one view at the end");
+        let closed = closed.expect("the split closed");
+        assert!(closed < 120, "within a second of the pair standing still: {closed}");
+        assert_eq!(last.kind, ShotKind::Shared);
+        assert!(last.boxes_in(Rectangle::new(last.corner.x, last.corner.y, s.visible.0, s.visible.1), s.field, s.sight, 0.5), "{last:?}");
+    }
+
+    #[test]
+    fn the_split_line_turns_with_the_pair() {
+        // Seat 1 circles seat 0 well past the split: the line turns with
+        // the pair a little each frame, never flipping, and each seat stays
+        // on its own side of it.
+        let s = open_stage();
+        let r = rules();
+        let mut f = Follow::default();
+        let a = tank(0, 2000.0, 1000.0);
+        let mut last: Option<Vec2> = None;
+        for k in 0..=720 {
+            let angle = (k as f32 * 0.5).to_radians();
+            let b = tank(1, 2000.0 + 600.0 * angle.cos(), 1000.0 + 600.0 * angle.sin());
+            let shot = f.update(&pair(a, b), DT, &s, &r);
+            let split = shot.split.expect("always apart");
+            assert!(!split.in_second(a.position - shot.corner) && split.in_second(b.position - split.corner), "{k}");
+            if let Some(n) = last {
+                let turn = (n.x * split.normal.x + n.y * split.normal.y).clamp(-1.0, 1.0).acos().to_degrees();
+                assert!(turn < 5.0, "{k}: the line turned {turn} degrees in a frame");
+            }
+            last = Some(split.normal);
+        }
+        let end = last.expect("a line");
+        assert!(end.x > 0.99, "a full turn back to the right: {end:?}");
+    }
+
+    #[test]
+    fn a_seat_down_hands_the_split_screen_to_the_other_without_a_cut() {
+        let s = open_stage();
+        let r = rules();
+        for down in [0, 1] {
+            let mut f = Follow::default();
+            let mut a = tank(0, 1500.0, 1000.0);
+            let mut b = tank(1, 2600.0, 1000.0);
+            let mut last = f.update(&pair(a, b), DT, &s, &r);
+            for _ in 0..30 {
+                last = f.update(&pair(a, b), DT, &s, &r);
+            }
+            let split = last.split.expect("apart");
+            let (kept, at) = if down == 0 { (1, split.center) } else { (0, last.center) };
+            if down == 0 {
+                a.live = false;
+            } else {
+                b.live = false;
+            }
+            let shot = f.update(&pair(a, b), DT, &s, &r);
+            assert_eq!((shot.kind, shot.seat, shot.split, shot.cut), (ShotKind::Seat, Some(kept), None, false), "seat {down} down");
+            assert!((shot.center - at).length() < 8.0, "the view goes on from the half seat {kept} had: {at:?} -> {:?}", shot.center);
+        }
     }
 
     #[test]

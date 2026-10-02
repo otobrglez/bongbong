@@ -159,6 +159,64 @@ pub struct ViewFrame {
     /// Screen rectangles no arrow may sit in, in points: the HUD clusters,
     /// the thumbs' rests, the minimap where there is one.
     pub keep_out: Vec<Rectangle>,
+    /// The part of the screen this view does not show - the other half of
+    /// a couch's split screen (`follow::Split`) - which it treats as off
+    /// screen, its arrows sitting on the divider; `None` for a view of the
+    /// whole screen.
+    pub beyond: Option<Beyond>,
+}
+
+/// The other half of a split screen, as one view of it sees it: everything
+/// past a line, in the screen's points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Beyond {
+    /// A point on the divider ...
+    pub at: Vec2,
+    /// ... and the unit normal into the half the view does not show.
+    pub normal: Vec2,
+    /// How far inside the divider an arrow sits: the `indicator_inset_pt`
+    /// the arrows keep from the screen's edge.
+    pub inset: f32,
+}
+
+impl Beyond {
+    /// How far past the divider `p` is, in points; negative on this side.
+    fn past(&self, p: Vec2) -> f32 {
+        (p.x - self.at.x) * self.normal.x + (p.y - self.at.y) * self.normal.y
+    }
+
+    /// The inset rectangle's edge that faces the way the divider does: what
+    /// an arrow on the divider counts as for the edge counts.
+    fn edge(&self) -> Edge {
+        let n = self.normal;
+        if n.x.abs() >= n.y.abs() {
+            if n.x > 0.0 { Edge::Right } else { Edge::Left }
+        } else if n.y > 0.0 {
+            Edge::Bottom
+        } else {
+            Edge::Top
+        }
+    }
+
+    /// `at`, an arrow's place on the inset rectangle, kept to this side of
+    /// the divider: one that sits past the line `inset` inside it moves to
+    /// where the line from `origin` toward `to` crosses it, or, for a line
+    /// that never does, straight back onto it.
+    fn clip(&self, origin: Vec2, to: Vec2, at: Vec2, edge: Edge) -> (Vec2, Edge) {
+        let limit = -self.inset;
+        if self.past(at) <= limit {
+            return (at, edge);
+        }
+        let d = to - origin;
+        let along = d.x * self.normal.x + d.y * self.normal.y;
+        let from = self.past(origin);
+        let hit = if along > 1e-6 && from < limit { Some(origin + d * ((limit - from) / along)) } else { None };
+        let on = hit.unwrap_or_else(|| {
+            let back = self.past(at) - limit;
+            Vec2::new(at.x - self.normal.x * back, at.y - self.normal.y * back)
+        });
+        (on, self.edge())
+    }
 }
 
 impl ViewFrame {
@@ -166,7 +224,16 @@ impl ViewFrame {
     /// `origin`, its arrows on `safe` - the screen's safe area - inset by
     /// `indicator_inset_pt`, and nothing kept out yet.
     pub fn new(world: Rectangle, scale: f32, origin: Vec2, safe: Rectangle, t: &Tuning) -> ViewFrame {
-        ViewFrame { world, scale, origin, inset: ViewFrame::inset_of(safe, t), keep_out: Vec::new() }
+        ViewFrame { world, scale, origin, inset: ViewFrame::inset_of(safe, t), keep_out: Vec::new(), beyond: None }
+    }
+
+    /// This view as one half of a split screen: the screen past the line
+    /// through `at` square to the unit `normal` (in the view's points) is
+    /// the other half's, off screen for this one, and its arrows keep
+    /// `indicator_inset_pt` inside the line as they do inside the screen's
+    /// edge.
+    pub fn split_at(self, at: Vec2, normal: Vec2, t: &Tuning) -> ViewFrame {
+        ViewFrame { beyond: Some(Beyond { at, normal, inset: t.indicator_inset_pt.max(0.0) }), ..self }
     }
 
     /// What `camera` draws onto `field`, the field area of the bitmap: the
@@ -197,9 +264,10 @@ impl ViewFrame {
         Vec2::new(self.origin.x + (p.x - self.world.x) * self.scale, self.origin.y + (p.y - self.world.y) * self.scale)
     }
 
-    /// Whether the screen shows the world position `p`.
+    /// Whether the screen shows the world position `p`: inside the view,
+    /// and on a split screen on this view's side of the divider.
     pub fn shows(&self, p: Position) -> bool {
-        self.world.contains(p)
+        self.world.contains(p) && self.beyond.is_none_or(|b| b.past(self.to_screen(p)) <= 0.0)
     }
 
     /// The middle of what the screen shows, in world pixels.
@@ -1124,6 +1192,22 @@ impl ScreenAwareness {
         picture(&self.shown, view, game.time, &t, label_font(points))
     }
 
+    /// A couch's split screen: each of `seats` on its own half, `views`
+    /// in the same order (`ViewFrame::split_at`), each half's picture its
+    /// own seat's alone - its arrows, counts and marks - as `picture`
+    /// composes one seat's. The indicators of both are `shown`.
+    pub fn pictures(&mut self, game: &Game, seats: &[u8], views: &[ViewFrame], points: f32) -> Vec<Picture> {
+        self.seats.resize_with(seats.len(), Awareness::new);
+        let t = in_points(&tuning(), points);
+        self.shown.clear();
+        for ((memory, &seat), view) in self.seats.iter_mut().zip(seats).zip(views) {
+            memory.observe_events(game, seat);
+            self.shown.push(memory.frame(&Scene::of(game, seat), view, &t));
+        }
+        let font = label_font(points);
+        self.shown.iter().zip(views).map(|(ind, view)| picture(std::slice::from_ref(ind), view, game.time, &t, font)).collect()
+    }
+
     /// The indicators the last `picture` composed, one per seat on the
     /// screen: what the minimap reads its enemies and flashing gates from
     /// (`minimap::Marks`), under the same concealment as the arrows.
@@ -1162,6 +1246,11 @@ fn place(view: &ViewFrame, origin: Vec2, target: Position, margin: f32) -> Optio
     let to = view.to_screen(target);
     let (hit, edge) = cast(view.inset, origin, to)?;
     let (at, edge) = slide(view.inset, hit, edge, &view.keep_out, margin);
+    // On a split screen the divider is this view's edge too.
+    let (at, edge) = match view.beyond {
+        Some(beyond) => beyond.clip(origin, to, at, edge),
+        None => (at, edge),
+    };
     let dir = unit(to - at).or_else(|| unit(to - origin))?;
     Some(EdgePoint { at, edge, dir })
 }
@@ -1932,6 +2021,45 @@ mod indicator_tests {
         assert_eq!((a.edge, a.at.y), (Edge::Bottom, 290.0));
         assert!(close(a.at.x, 142.0) || close(a.at.x, 258.0), "half an arrow clear of the pad: {a:?}");
         assert!(a.dir.y > 0.9, "still pointing down at the enemy: {a:?}");
+    }
+
+    /// One half of a couch's split screen treats the other half as off
+    /// screen: what stands past the divider gets an arrow on it, the inset
+    /// inside, where the line from the tank crosses it; what stands on this
+    /// side shows as ever, and what lies past the screen's own edge on this
+    /// side keeps its arrow there.
+    #[test]
+    fn a_split_screens_half_puts_arrows_on_the_divider_for_what_is_past_it() {
+        let t = Tuning::DEFAULT;
+        // The divider straight down the screen at x = 300, the other half
+        // on its right.
+        let view = screen().split_at(Vec2::new(300.0, 150.0), Vec2::new(1.0, 0.0), &t);
+        assert!(view.shows(Position::new(100.0, 150.0)) && view.shows(Position::new(299.0, 20.0)));
+        assert!(!view.shows(Position::new(350.0, 150.0)), "past the divider is the other half's");
+        let ind = Awareness::new().frame(&scene(0.0, vec![enemy(5, 350.0, 150.0), enemy(6, 100.0, 150.0)]), &view, &t);
+        assert_eq!(ind.arrows.len(), 1, "the enemy on this side shows; the one past the divider gets the arrow");
+        let a = ind.arrows[0].place;
+        assert_eq!((a.edge, a.at), (Edge::Right, Vec2::new(290.0, 150.0)));
+        assert!(a.dir.x > 0.99, "{a:?}");
+        // A teammate over there: its arrow too, never merged.
+        let mate = TankView { seat: Some(1), ..enemy(1, 360.0, 160.0) };
+        let ind = Awareness::new().frame(&scene(0.0, vec![mate]), &view, &t);
+        assert_eq!(kinds(&ind), vec![ArrowKind::Teammate { seat: 1, entering: false }]);
+        assert!(ind.arrows[0].place.at.x <= 290.0 + 1e-3);
+        // Far off past the top edge, on this side of the line: the screen's
+        // own edge, as on a whole screen.
+        let ind = Awareness::new().frame(&scene(0.0, vec![enemy(5, 230.0, -500.0)]), &view, &t);
+        assert_eq!(ind.arrows[0].place.edge, Edge::Top);
+        // A slanted divider: the arrow sits where the line from the tank
+        // crosses it, the inset inside, on the edge it faces.
+        let n = Vec2::new(0.6, 0.8);
+        let view = screen().split_at(Vec2::new(250.0, 200.0), n, &t);
+        let ind = Awareness::new().frame(&scene(0.0, vec![enemy(5, 390.0, 290.0)]), &view, &t);
+        let a = ind.arrows[0].place;
+        let past = (a.at.x - 250.0) * n.x + (a.at.y - 200.0) * n.y;
+        assert!(close(past, -t.indicator_inset_pt), "{a:?}: {past}");
+        assert!(((a.at.x - SEAT.x) * 140.0 - (a.at.y - SEAT.y) * 190.0).abs() < 1e-2, "on the line to the enemy: {a:?}");
+        assert_eq!(a.edge, Edge::Bottom);
     }
 
     /// Size and opacity are full up to a screen away and least from four
