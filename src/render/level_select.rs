@@ -1,23 +1,22 @@
 //! Drawing the level select (`level_select.rs` owns the state, every rect
-//! and the view): the lobby's panel over the dimmed field, one tile per
+//! and the view): the lobby's panel over the dimmed window, one tile per
 //! level, painted from the [`LevelSelectView`] a frame gathered.
 
 use sola_raylib::prelude::*;
 
-use crate::hud::{BUILD_COLOR, DIM, HUD_LABEL_SIZE, HUD_TEXT_SIZE, TEXT};
+use crate::hud::{UiFrame, BUILD_COLOR, DIM, HUD_TEXT_SIZE, TEXT, UI_SMALL_TEXT};
 use crate::level_select::{
     back_rect, content_rect, panel_rect, tile_rect, LevelSelectView, TileState, TileView, TILE_NUMBER_SIZE, TILE_TITLE_SIZE,
 };
 use crate::math::{Color, Rectangle};
 use crate::text::width;
-use crate::Rect;
 
 /// The panel and the dim behind it: the lobby's and the dialogs', so the
 /// screens read as one family.
 const PANEL_FILL: Color = Color::new(20, 20, 24, 244);
 const PANEL_SHADOW: Color = Color::new(0, 0, 0, 90);
 const PANEL_EDGE: Color = Color::new(0, 0, 0, 150);
-const FIELD_DIM: Color = Color::new(0, 0, 0, 150);
+const WINDOW_DIM: Color = Color::new(0, 0, 0, 150);
 /// A won tile's backing; the furthest reached one's amber wash, the
 /// colour of the way on everywhere else (`NEXT LEVEL`, the banner's
 /// number); a locked one's darker well.
@@ -36,23 +35,25 @@ const NUMBER_TOP: f32 = 12.0;
 const TITLE_TOP: f32 = 48.0;
 const TITLE_LEADING: f32 = 3.0;
 
-/// Draw the whole screen over the field. Field space: call inside the
-/// field camera, as the dialogs and the lobby are called.
-pub fn draw_level_select<D: RaylibDraw>(d: &mut D, field: Rect, view: &LevelSelectView) {
-    d.draw_rectangle(0, 0, field.w.round() as i32, field.h.round() as i32, FIELD_DIM);
-    let panel = panel_rect(field);
+/// Draw the whole screen over the window: the dim over all of it, the
+/// panel centred in the chrome's area. In UI points: call inside the UI
+/// camera, as the dialogs and the lobby are called.
+pub fn draw_level_select<D: RaylibDraw>(d: &mut D, ui: &UiFrame, view: &LevelSelectView) {
+    let (screen, area) = (ui.screen, ui.area);
+    d.draw_rectangle(0, 0, screen.w.ceil() as i32, screen.h.ceil() as i32, WINDOW_DIM);
+    let panel = panel_rect(area);
     d.draw_rectangle_rounded(Rectangle::new(panel.x + 4.0, panel.y + 4.0, panel.width, panel.height), 0.05, 8, PANEL_SHADOW);
     d.draw_rectangle_rounded(panel, 0.05, 8, PANEL_FILL);
     d.draw_rectangle_rounded_lines_ex(panel, 0.05, 8, 1.5, PANEL_EDGE);
 
-    let c = content_rect(field);
+    let c = content_rect(area);
     d.draw_text(&view.title, c.x as i32, c.y as i32, 22, BUILD_COLOR);
-    d.draw_text(&view.sub, c.x as i32, c.y as i32 + 26, HUD_LABEL_SIZE + 2, DIM);
+    d.draw_text(&view.sub, c.x as i32, c.y as i32 + 26, UI_SMALL_TEXT, DIM);
     for (i, tile) in view.tiles.iter().enumerate() {
-        draw_tile(d, tile_rect(field, i), tile);
+        draw_tile(d, tile_rect(area, i), tile);
     }
 
-    let back = back_rect(field);
+    let back = back_rect(area);
     d.draw_rectangle_rounded_lines_ex(back, 0.2, 8, 2.0, TEXT);
     let w = width(&view.back, HUD_TEXT_SIZE);
     d.draw_text(

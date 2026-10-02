@@ -17,8 +17,15 @@ fn run(seed: u64, shielded: bool) -> (Game, usize, usize, usize) {
     run_seats(seed, shielded, 1)
 }
 
+/// The shipped default map and the field it is played on.
+fn default_map() -> (MapFile, (f32, f32)) {
+    let map = MapFile::from_toml_str(include_str!("../maps/default.toml")).expect("default map parses");
+    let field = map.field_size();
+    (map, field)
+}
+
 fn run_seats(seed: u64, shielded: bool, seats: usize) -> (Game, usize, usize, usize) {
-    let (w, h) = (1280.0, 720.0);
+    let (map, (w, h)) = default_map();
     let mut game = Game::default();
     game.players = PlayerCount::from_count(seats).expect("a seat count the round takes");
     game.seed_override = Some(seed);
@@ -29,7 +36,7 @@ fn run_seats(seed: u64, shielded: bool, seats: usize) -> (Game, usize, usize, us
     // Pinned, like the other two: an unset override falls through to
     // the map's own `spawn.growth`, and the shipped map's is not 1.
     game.level_overrides.wave_growth = Some(1);
-    game.map = MapFile::from_toml_str(include_str!("../maps/default.toml")).expect("default map parses");
+    game.map = map;
     game.init(w, h);
     if shielded {
         for seat in 0..seats {
@@ -64,7 +71,7 @@ fn run_seats(seed: u64, shielded: bool, seats: usize) -> (Game, usize, usize, us
 
 #[test]
 fn a_three_wave_destroy_round_on_the_default_map_plays_through() {
-    let (w, h) = (1280.0, 720.0);
+    let (_, (w, h)) = default_map();
     let (game, waves, entered, removed) = run(0xB0B5, true);
     assert_eq!(waves, 3, "every wave was called");
     // Growth 1 from size 2: waves of 2, 3 and 4.

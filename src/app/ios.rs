@@ -38,6 +38,10 @@ unsafe extern "C" {
     fn SDL_GetWindowSizeInPixels(window: *mut c_void, w: *mut c_int, h: *mut c_int) -> bool;
     fn SDL_GetPreferredLocales(count: *mut c_int) -> *mut *mut SdlLocale;
     fn SDL_free(mem: *mut c_void);
+    /// UIKit's Reduce Motion (Settings > Accessibility > Motion): a plain
+    /// C function returning a `BOOL`, one byte on arm64. UIKit is linked
+    /// with SDL's frameworks (`build.rs`'s `ios_link`).
+    fn UIAccessibilityIsReduceMotionEnabled() -> u8;
     /// glad's entries for glBindFramebuffer/glBindRenderbuffer inside
     /// libraylib.a: raylib was built with glad loading GL ES through
     /// SDL_GL_GetProcAddress, so every rlgl GL call goes through a
@@ -105,6 +109,14 @@ pub fn route_default_framebuffer(rl: &mut sola_raylib::RaylibHandle) {
             real(GL_RENDERBUFFER, rbo as u32);
         }
     }
+}
+
+/// Whether the player turned on Reduce Motion: the platform's answer to
+/// the one motion switch (`motion.rs`), read once at startup.
+pub fn reduce_motion() -> bool {
+    // SAFETY: a plain UIKit query with no arguments, on the main thread
+    // inside the app's launch.
+    unsafe { UIAccessibilityIsReduceMotionEnabled() != 0 }
 }
 
 pub fn main() -> ! {
@@ -202,6 +214,29 @@ pub fn log_screen_geometry(rl: &mut sola_raylib::RaylibHandle) {
             safe.y
         );
     }
+}
+
+/// The window's safe area as insets from each edge, in points - the
+/// strips the Dynamic Island or the notch, the rounded corners and the
+/// home indicator take (`hud::UiFrame`). Read every frame: turning the
+/// phone over swaps the island's side. `None` when SDL has no answer.
+pub fn safe_area_insets(rl: &mut sola_raylib::RaylibHandle) -> Option<crate::hud::Insets> {
+    // SAFETY: main thread, after InitWindow; the rect is ours.
+    let safe = unsafe {
+        let window = rl.get_window_handle();
+        let mut safe = SdlRect { x: 0, y: 0, w: 0, h: 0 };
+        if window.is_null() || !SDL_GetWindowSafeArea(window, &mut safe) || safe.w <= 0 || safe.h <= 0 {
+            return None;
+        }
+        safe
+    };
+    let (w, h) = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+    Some(crate::hud::Insets {
+        left: safe.x as f32,
+        top: safe.y as f32,
+        right: (w - (safe.x + safe.w) as f32).max(0.0),
+        bottom: (h - (safe.y + safe.h) as f32).max(0.0),
+    })
 }
 
 /// The screen in points, landscape, read from SDL before raylib's

@@ -166,27 +166,28 @@ mod tests {
     /// shows - re-baseline consciously after a deliberate art, map or
     /// tuning change, never to go green.
     #[cfg(feature = "render")]
-    const PINNED: [(&str, u64); 20] = [
-        ("default", 0xc969_2550_063a_66c9),
-        ("default-desert", 0x65a9_f4c1_bbef_1f24),
-        ("hunt-basic", 0xc757_87c0_f4ff_6b22),
-        ("waves-basic", 0x39cd_f934_718a_6bac),
-        ("portals", 0x7d63_bb51_758c_88b3),
-        ("towers", 0x94f2_f4ec_a7b0_f996),
-        ("lotus-lagoon", 0xf446_471a_7853_10ef),
-        ("hedge-maze", 0x4429_c4e1_b898_1a2b),
-        ("oasis-bazaar", 0xad6d_9b7d_be99_0ba1),
-        ("castle-moat", 0x2c25_88f8_6b27_d036),
-        ("archipelago", 0x7a8d_be95_d95f_4463),
-        ("black-gold", 0x96bd_6cbb_e98b_9da3),
-        ("harbor-lights", 0x378c_1a0a_c168_1cbd),
-        ("carnival", 0xd09c_5cff_ee07_4a7f),
-        ("jungle-temple", 0x6667_891d_4dce_dd6c),
-        ("serpent-river", 0x78a8_5c17_6c2d_a418),
-        ("no-mans-land", 0xb2d2_a942_8c84_576e),
-        ("glasshouses", 0xbd44_8f31_4c4c_7429),
-        ("scrapyard", 0x6648_9627_5cff_60e9),
-        ("grand-campaign", 0x1f1f_b163_20b6_93d0),
+    const PINNED: [(&str, u64); 21] = [
+        ("default", 0xda6a_0eeb_f70f_0d08),
+        ("default-desert", 0xd2ee_8be5_8b03_58e1),
+        ("hunt-basic", 0x8f85_772e_3737_ccc8),
+        ("waves-basic", 0x7d97_026c_8f83_5bd8),
+        ("portals", 0xd2d0_80f3_d1b8_5866),
+        ("towers", 0xa1d6_d10c_9175_2ecc),
+        ("longwater", 0x3f57_27a6_cbae_ca03),
+        ("lotus-lagoon", 0xbe96_5ee8_0626_6eef),
+        ("hedge-maze", 0x4bfa_c048_a2f4_2391),
+        ("oasis-bazaar", 0x1264_f8ab_8b98_9788),
+        ("castle-moat", 0xb011_75a9_813d_0272),
+        ("archipelago", 0xf85b_934d_07ec_5a37),
+        ("black-gold", 0x389b_3b21_4612_7c71),
+        ("harbor-lights", 0x0095_88a5_7636_34cd),
+        ("carnival", 0x36d4_a400_4ddf_b21a),
+        ("jungle-temple", 0x3081_8bfd_bf57_81dc),
+        ("serpent-river", 0x052b_b47a_be93_433b),
+        ("no-mans-land", 0x662a_8691_f8f1_6497),
+        ("glasshouses", 0x1663_2f3c_2f3c_9b4f),
+        ("scrapyard", 0x6bec_77c9_ef05_0e6b),
+        ("grand-campaign", 0x1ca1_ccb2_ee74_377a),
     ];
 
     /// Decoding the sheets is raylib's job, so this and the next test run
@@ -257,6 +258,48 @@ mod tests {
         assert!((far.off_fraction - 1.0 / 16.0).abs() < 1e-9);
         assert!((far.mean_channel_diff - 255.0 / 16.0).abs() < 1e-6);
         assert!(!far.within_tolerance());
+    }
+
+    /// What a picture of a map for the builder's Load list costs on the
+    /// largest shipped maps, by the two renderers there are: this module's
+    /// staged round painted on the CPU canvas (`stage_round` and
+    /// `render_cpu`, the sheets decoded once beforehand) against the
+    /// minimap's texel a cell (`editor::thumbs::minimap_of`), beside the
+    /// map's parse and revision every picture needs first. Prints; run with
+    /// `--ignored --nocapture`, and `--release` for a phone's order.
+    #[cfg(feature = "render")]
+    #[test]
+    #[ignore]
+    fn a_load_list_thumbnail_timing() {
+        use std::time::Instant;
+        quiet_raylib();
+        let ms = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
+        let t = Instant::now();
+        let sheets = load_cpu_sheets().expect("sheets under static/");
+        eprintln!("decoding the sheets for the CPU canvas: {:.1} ms", ms(t));
+        for name in ["longwater", "grand-campaign", "castle-moat", "default"] {
+            let t = Instant::now();
+            let map = shipped(name);
+            let parse = ms(t);
+            let t = Instant::now();
+            let _ = map.revision();
+            let revision = ms(t);
+            let t = Instant::now();
+            let game = stage_round(map.clone(), &ThumbnailOptions::default());
+            let stage = ms(t);
+            let t = Instant::now();
+            let canvas = render_cpu(&game, &sheets);
+            let paint = ms(t);
+            let t = Instant::now();
+            let minimap = crate::editor::thumbs::minimap_of(&map);
+            let mini = ms(t);
+            let (cols, rows) = minimap.cells();
+            eprintln!(
+                "{name}: parse {parse:.2} ms, revision {revision:.2} ms; CPU: stage {stage:.1} ms + paint {paint:.1} ms for {} x {} px; minimap {mini:.3} ms for {cols} x {rows} texels",
+                canvas.width(),
+                canvas.height()
+            );
+        }
     }
 
 }

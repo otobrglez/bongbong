@@ -23,10 +23,11 @@ out vec4 finalColor;
 uniform float time;
 uniform float seed;
 uniform float reach;       // stream length, px (the bloom and the slug spacing are in px)
-uniform vec2 origin;       // the nozzle, field px
+uniform vec2 origin;       // the nozzle, world px
 uniform vec2 dir;          // down the stream, a unit vector
 uniform float halfWidth;   // the quad's half width, px
-uniform float fieldHeight; // the field's height, px: the render target's y is flipped
+uniform vec2 viewOrigin;   // the world px at the render target's top-left corner
+uniform float viewHeight;  // the render target's height, px (a texel per world px): its y is flipped
 
 float hash(vec3 p) {
     p = fract(p * 0.3183099 + vec3(0.71, 0.113, 0.419));
@@ -78,10 +79,10 @@ vec3 fire(float h) {
 }
 
 void main() {
-    // The block this fragment is in, in field px, and its centre in the
+    // The block this fragment is in, in world px, and its centre in the
     // stream's frame.
-    vec2 field = vec2(gl_FragCoord.x, fieldHeight - gl_FragCoord.y);
-    vec2 blk = floor(field / 2.0);
+    vec2 world = viewOrigin + vec2(gl_FragCoord.x, viewHeight - gl_FragCoord.y);
+    vec2 blk = floor(world / 2.0);
     vec2 d = (blk + 0.5) * 2.0 - origin;
     vec2 across = vec2(-dir.y, dir.x);
     float px = dot(d, dir);

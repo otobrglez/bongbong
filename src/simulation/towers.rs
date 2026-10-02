@@ -14,6 +14,7 @@ use rand::RngExt;
 
 use super::props::DamageCause;
 use super::*;
+use crate::ai::in_sight_box;
 use crate::bullet::BulletState;
 use crate::tower::{Glob, OozePuddle, TeslaBolt, Tower, TowerKind, TowerRuin, side_of_variant};
 
@@ -41,6 +42,17 @@ struct Candidate {
 /// the high byte, its column in the low one.
 pub(crate) fn tower_cell_id(cell: (i32, i32)) -> u16 {
     ((cell.1.clamp(0, 255) as u16) << 8) | cell.0.clamp(0, 255) as u16
+}
+
+/// Whether `tower` may fight `c` under the sight-box rule
+/// (docs/large-maps-follow-camera.md section 5): a seat only while the
+/// tower stands inside that seat's sight box (`ai::in_sight_box`), as every
+/// enemy fires at a seat. At the defaults only the gun tower reaches past
+/// the box - straight up or down, its reach is longer than the box's half
+/// height - while the tesla's strike and chain and the bio slush's lob stay
+/// inside it; the test is applied to all three alike.
+fn box_allows(tower: &Tower, c: &Candidate) -> bool {
+    !c.owner.is_player() || in_sight_box(c.pos, tower.position)
 }
 
 /// Distance from `p` to the nearest point of the box (`center`, `half`).
@@ -190,8 +202,9 @@ impl Game {
     }
 
     /// The nearest opposing tank between `min` and `max` px that the tower
-    /// can see - unconcealed too when `needs_sight` - keeping its current
-    /// target until another is `tower_switch_margin_px` nearer.
+    /// can see - unconcealed too when `needs_sight`, a seat only from
+    /// inside its sight box (`box_allows`) - keeping its current target
+    /// until another is `tower_switch_margin_px` nearer.
     fn pick_target(&self, f: &Frame, tower: &Tower, cands: &[Candidate], min: f32, max: f32, needs_sight: bool) -> Option<Candidate> {
         let valid = |c: &Candidate| {
             let d = c.pos.distance_to(tower.position);
@@ -199,6 +212,7 @@ impl Game {
                 && d >= min
                 && d <= max
                 && !(needs_sight && c.concealed)
+                && box_allows(tower, c)
                 && f.terrain.line_of_sight_from(tower.entity, tower.position, c.pos)
         };
         let dist = |c: &Candidate| c.pos.distance_to(tower.position);
@@ -216,8 +230,9 @@ impl Game {
     }
 
     /// The tesla coil: charges while an opposing tank is in reach - by its
-    /// hull box, concealed or not - drains while none is, and at full
-    /// charge strikes the nearest.
+    /// hull box, concealed or not, a seat only from inside its sight box
+    /// (`box_allows`) - drains while none is, and at full charge strikes
+    /// the nearest.
     fn tick_tesla(&mut self, f: &mut Frame, cell: (i32, i32), tower: &mut Tower, cands: &[Candidate]) {
         let t = tuning();
         tower.cooldown = (tower.cooldown - f.dt).max(0.0);
@@ -231,6 +246,7 @@ impl Game {
             .filter(|c| {
                 tower.opposes(c.owner)
                     && box_distance(tower.position, c.hull) <= t.tesla_range
+                    && box_allows(tower, c)
                     && f.terrain.line_of_sight_from(tower.entity, tower.position, c.pos)
             })
             .min_by(|a, b| {
@@ -255,7 +271,9 @@ impl Game {
 
     /// One strike: a bolt to `first`, then up to `tesla_chain_jumps` jumps,
     /// each to the nearest other opposing tank within `tesla_chain_radius`
-    /// of the last one hit, for `tesla_chain_factor` of the damage before.
+    /// of the last one hit (a seat only while the coil stands inside its
+    /// sight box, `box_allows`), for `tesla_chain_factor` of the damage
+    /// before.
     fn tesla_strike(&mut self, f: &mut Frame, cell: (i32, i32), tower: &Tower, first: Candidate, cands: &[Candidate]) {
         let t = tuning();
         let owner = tower.owner(tower_cell_id(cell));
@@ -282,6 +300,7 @@ impl Game {
                     tower.opposes(c.owner)
                         && !hit.contains(&c.entity)
                         && c.pos.distance_to(to) <= t.tesla_chain_radius
+                        && box_allows(tower, c)
                         && f.terrain.line_of_sight(to, c.pos)
                         && !with_tank(&self.world, c.entity, Tank::is_wreck)
                 })

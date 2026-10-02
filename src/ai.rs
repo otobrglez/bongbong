@@ -6,7 +6,7 @@ use crate::math::Vec2;
 
 use crate::bt::{Node, Status, action, condition, selector, sequence};
 use crate::obstacle::Material;
-use crate::pathfind::Grid;
+use crate::pathfind::{Grid, RouteAhead};
 use crate::pickup::PickupKind;
 use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::{
@@ -199,6 +199,11 @@ pub struct Ai {
     /// Where this tank stood at the previous tick - the baseline the next
     /// tick's displacement is measured from. `None` before the first tick.
     last_position: Option<Position>,
+    /// The hull's displacement per second since the previous think - how
+    /// it is really moving, whatever it was told, which is what its slide
+    /// through a turn is reckoned from (`lane_turn`, `walks_into_wall`).
+    /// Zero before there is a displacement to judge.
+    motion: Vec2,
     /// Displacement per second along the commanded heading, smoothed over
     /// `stuck_progress_window_seconds` (an exponential average). `None`
     /// while the tank is deliberately holding position or has no
@@ -249,6 +254,12 @@ pub struct Ai {
     /// only, nothing in `think` reads them back.
     last_action: Option<&'static str>,
     last_intent: Intent,
+    /// The seat the last `think`'s trigger pull was aimed at: set when it
+    /// fires at the seat it fights (the attack tier, a hunter's snipe),
+    /// `None` when it fired at a frog, a tower or a tile or did not fire.
+    /// Inspection only, like `last_action` - the probe's `offbox-fire`
+    /// check reads it (`TankSnapshot::shot_at_seat`).
+    shot_at_seat: Option<u8>,
     /// Seconds running that the tank has commanded movement straight into
     /// a destructible tile (`walls_ahead` in its `last_move_dir`) - the
     /// trigger for a breach. Velocity-independent on purpose: a tank
@@ -268,6 +279,49 @@ pub struct Ai {
     /// round; with more seats `enemy_phase` retargets it to the nearest
     /// live, visible one past `enemy_target_switch_margin_px`.
     target_player: u8,
+    /// What bounds this tank on a field map - its own alert, its home,
+    /// its call to the fight, whether anything has woken it. Kept by
+    /// `simulation::field` and never touched on an arena, where it stays
+    /// at its default and every reader below sees exactly the arena's
+    /// tank.
+    pub(crate) field: FieldMind,
+}
+
+/// The memory a tank carries only on a field map
+/// (docs/large-maps-follow-camera.md section 12, `simulation::field`):
+/// what replaces the arena's one shared alert, and what decides how often
+/// the tank thinks. Plain values the simulation writes between thinks; the
+/// tree reads `home` (`Brain::home_leash`) and the alert it is handed.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct FieldMind {
+    /// This tank's own alert: where a seat was last seen, by itself or by
+    /// a neighbour down the chain (`enemy_alert_chain_px`), and the
+    /// seconds it still holds (`enemy_alert_hold_seconds` when fresh).
+    pub(crate) alert: Option<Position>,
+    pub(crate) alert_timer: f32,
+    /// Where the tank first stood on the field - its spawn cell, or its
+    /// gate's inside point - the anchor of its leash (`enemy_leash_px`).
+    pub(crate) home: Option<Position>,
+    /// A wave tank sent to the fight: it routes at the seat it fights
+    /// until it first comes within sight range of a seat or takes a hit.
+    pub(crate) called: bool,
+    /// It came onto the field with a wave - through a gate, or into the
+    /// band a map with no gate falls back to - so it may be a straggler
+    /// the round rolls in again through a nearer gate
+    /// (`Game::reroll_stragglers`).
+    pub(crate) wave: bool,
+    /// Seconds a wave tank has gone without a live seat, or the players'
+    /// frog, within its sight: counted from its arrival and back to zero
+    /// whenever one is (`field::mind`). How long it has been lost to the
+    /// fight.
+    pub(crate) lost: f32,
+    /// Something has reached it - an alert, a hit, a call, a seat within
+    /// `enemy_far_px`, a frog to hunt. A far tank that was never woken
+    /// does not think at all; once woken it stays so.
+    pub(crate) awake: bool,
+    /// Seconds since its last think while far thinking skips ticks: the
+    /// `dt` its next think covers.
+    pub(crate) think_debt: f32,
 }
 
 /// Read-only view of an `Ai`'s memory for tooling (`Ai::snapshot`).
@@ -306,6 +360,14 @@ pub struct AiSnapshot {
     pub escapes: u32,
     /// `Ai::target_player`.
     pub target_player: u8,
+    /// The seat the last tick's trigger pull was aimed at (`Ai::shot_at_seat`).
+    pub shot_at_seat: Option<u8>,
+    /// Field maps (`FieldMind`): the tank's own alert point, its home, its
+    /// call to the fight and whether it is awake. `None`/false on an arena.
+    pub field_alert: Option<(f32, f32)>,
+    pub home: Option<(f32, f32)>,
+    pub called: bool,
+    pub awake: bool,
 }
 
 impl Default for Ai {
@@ -325,17 +387,20 @@ impl Default for Ai {
             retreating: false,
             last_move_dir: None,
             last_position: None,
+            motion: Vec2::new(0.0, 0.0),
             progress_avg: None,
             stuck_timer: 0.0,
             hit_alert_timer: 0.0,
             wander_pocketed: false,
             last_action: None,
             last_intent: Intent::default(),
+            shot_at_seat: None,
             wall_ahead_timer: 0.0,
             breach: None,
             grudge: None,
             escapes: 0,
             target_player: 0,
+            field: FieldMind::default(),
         }
     }
 }
@@ -361,7 +426,10 @@ impl Ai {
     /// the field currently has the player within sight (`Game::enemy_sight`),
     /// or did within the last `ENEMY_ALERT_HOLD_SECONDS`, so an enemy that can't
     /// personally see the player can still converge on where the group last
-    /// saw them instead of wandering randomly - see `act_patrol`.
+    /// saw them instead of wandering randomly - see `act_patrol`. On a field
+    /// map it is this tank's own alert instead, or its call to the fight
+    /// (`simulation::field`): an alert there reaches only the enemies
+    /// chained to the one that saw.
     /// `engage_target` is this tank's assigned point on the shared
     /// engagement ring around the player (see `simulation.rs::Game::update`'s
     /// `engage_targets`, and `ENGAGE_RING_RADIUS`'s doc comment) - `Some`
@@ -438,6 +506,7 @@ impl Ai {
         self.dir_hold += dt;
         self.dodge_timer = (self.dodge_timer - dt).max(0.0);
         self.snipe_cooldown = (self.snipe_cooldown - dt).max(0.0);
+        self.shot_at_seat = None;
         if let Some(grudge) = &mut self.grudge {
             grudge.timer -= dt;
             if grudge.timer <= 0.0 {
@@ -457,6 +526,7 @@ impl Ai {
         // `steer_toward`'s escape.
         let moved = self.last_position.map(|p| Position::new(me.position.x - p.x, me.position.y - p.y));
         self.last_position = Some(me.position);
+        self.motion = moved.map_or(Vec2::new(0.0, 0.0), |m| Vec2::new(m.x / dt.max(f32::EPSILON), m.y / dt.max(f32::EPSILON)));
         match (self.last_move_dir, moved) {
             (Some(dir), Some(moved)) => {
                 let progress = (moved.x * dir.vec().x + moved.y * dir.vec().y) / dt.max(f32::EPSILON);
@@ -597,12 +667,28 @@ impl Ai {
             breach_timer: self.breach.map(|b| b.timer),
             escapes: self.escapes,
             target_player: self.target_player,
+            shot_at_seat: self.shot_at_seat,
+            field_alert: self.field.alert.map(|p| (p.x, p.y)),
+            home: self.field.home.map(|p| (p.x, p.y)),
+            called: self.field.called,
+            awake: self.field.awake,
         }
+    }
+
+    /// The intent the last `think` produced - what a far tank keeps
+    /// driving between thinks (`simulation::field`).
+    pub(crate) fn last_intent(&self) -> Intent {
+        self.last_intent
     }
 
     /// Which human player this tank is fighting - see the field.
     pub fn target_player(&self) -> u8 {
         self.target_player
+    }
+
+    /// The seat the last tick's trigger pull was aimed at - see the field.
+    pub fn shot_at_seat(&self) -> Option<u8> {
+        self.shot_at_seat
     }
 
     /// Point this tank at the other player (`enemy_phase`'s retarget pass).
@@ -659,6 +745,7 @@ impl Ai {
         self.yield_timer = 0.0;
         self.last_move_dir = None;
         self.last_position = None;
+        self.motion = Vec2::new(0.0, 0.0);
         self.progress_avg = None;
         self.stuck_timer = 0.0;
         self.wander_pocketed = false;
@@ -723,11 +810,12 @@ impl Ai {
         grid: &Grid,
         rng: &mut SmallRng,
     ) -> Dir {
-        let path = if ctx.on_portal_cooldown { grid.next_step_walking(from, target) } else { grid.next_step(from, target) };
-        if path.is_none() && !grid.same_cell(from, target) {
+        let heading = self.route_heading();
+        let route = if ctx.on_portal_cooldown { grid.route_ahead_walking(from, target) } else { grid.route_ahead(from, target, heading) };
+        if route.is_none() && !grid.same_cell(from, target) {
             return self.wander(from, bounds, half, margin, None, ctx, grid, rng);
         }
-        self.steer_toward(from, path, target, bounds, half, ctx, grid)
+        self.steer_toward(from, route, target, bounds, half, ctx, grid)
     }
 
     /// Wander toward a roaming local waypoint - `act_patrol`'s own
@@ -864,31 +952,54 @@ impl Ai {
             });
             self.retarget_timer = tuning().enemy_retarget_seconds;
         }
-        let path =
-            if ctx.on_portal_cooldown { grid.next_step_walking(from, self.waypoint) } else { grid.next_step(from, self.waypoint) };
-        self.steer_toward(from, path, self.waypoint, bounds, half, ctx, grid)
+        let heading = self.route_heading();
+        let route =
+            if ctx.on_portal_cooldown { grid.route_ahead_walking(from, self.waypoint) } else { grid.route_ahead(from, self.waypoint, heading) };
+        self.steer_toward(from, route, self.waypoint, bounds, half, ctx, grid)
+    }
+
+    /// Whether this tank reads its route as lanes (`lane_turn`): on a field
+    /// map - the one place a tank keeps a home (`FieldMind::home`, set the
+    /// first tick it stands there) - while `ai_lane_turns` is on. An arena
+    /// steers by the switch margin alone, as it always has.
+    fn lanes(&self) -> bool {
+        self.field.home.is_some() && tuning().ai_lane_turns
+    }
+
+    /// The heading a route is straightened along (`Grid::route_ahead`):
+    /// the one held, while the route is read as lanes.
+    fn route_heading(&self) -> Option<Position> {
+        self.committed_dir.filter(|_| self.lanes()).map(Dir::vec)
     }
 
     /// Shared point-convergence core for both `steer` (chasing/fleeing/etc.
     /// a real target) and `wander` (patrolling a fallback waypoint) once
-    /// the target is known-reachable (or "same cell", i.e. arrived):
-    /// commitment/hold-margin hysteresis, the obstacle-ahead override, the
-    /// stuck-escape safety net, and predictive collision dodging. `path` is
-    /// `grid.next_step(from, target)`, already computed by the caller (it
+    /// the target is known-reachable (or "same cell", i.e. arrived): the
+    /// route read as lanes (`lane_turn`), commitment/hold-margin hysteresis
+    /// for everything else, the obstacle-ahead override, the stuck-escape
+    /// safety net, and predictive collision dodging. `route` is
+    /// `grid.route_ahead(from, target)`, already computed by the caller (it
     /// needed the result anyway, to decide whether to route here or to
     /// `wander` in `target`'s place).
+    #[allow(clippy::too_many_arguments)] // perception is passed by value, not bundled
     fn steer_toward(
         &mut self,
         from: Position,
-        path: Option<Position>,
+        route: Option<RouteAhead>,
         target: Position,
         bounds: (f32, f32),
         half: f32,
         ctx: AvoidCtx,
         grid: &Grid,
     ) -> Dir {
-        let routed = path.unwrap_or(target);
+        let routed = route.map_or(target, |r| r.first());
         let fresh = Dir::toward(from, routed);
+        // The route as lanes, against the heading held: `Some` while it
+        // walks whole cells from the hull's own (see `lane_turn`).
+        let lane = match (self.committed_dir, route) {
+            (Some(heading), Some(route)) if self.lanes() => self.lane_turn(from, heading, &route, ctx, grid),
+            _ => None,
+        };
         // Continuing on the committed heading would walk into a cell the
         // grid already knows is blocked. That's a hard geometric fact, not
         // the wobbling-live-target case the hold/margin gate below exists
@@ -901,10 +1012,16 @@ impl Ai {
         // very jitter commitment exists to prevent, just obstacle-triggered
         // instead of diagonal-target-triggered (see that constant's own
         // comment - found via the probe harness's `--rounds` sweep).
-        let obstacle_ahead = self.dir_hold >= tuning().ai_obstacle_override_hold_seconds
-            && self
-                .committed_dir
-                .is_some_and(|committed| grid.blocked_ahead(from, committed.vec()));
+        let obstacle_ahead =
+            self.dir_hold >= tuning().ai_obstacle_override_hold_seconds && self.walks_into_wall(from, ctx, grid);
+
+        // A due turn waits out the same hold as any other switch, so a
+        // route that may step either way holds each leg that long rather
+        // than turning on every cell.
+        let turn = match lane {
+            Some(Lane::Turn(turn)) if self.dir_hold >= tuning().ai_dir_hold_seconds => Some(turn),
+            _ => None,
+        };
 
         let dir = if self.stuck_timer >= tuning().stuck_escape_seconds {
             // Asked to move for STUCK_ESCAPE_SECONDS running and made no
@@ -933,17 +1050,20 @@ impl Ai {
                 .find(|&d| !blocked(d))
                 .unwrap_or_else(|| perpendicular(failing, left))
         } else {
-            match self.committed_dir {
-                None => {
+            match (self.committed_dir, turn) {
+                (None, _) => {
                     self.commit(fresh);
                     fresh
                 }
-                Some(_) if obstacle_ahead => fresh,
-                Some(committed) if self.dir_hold < tuning().ai_dir_hold_seconds => {
+                (Some(_), _) if obstacle_ahead => fresh,
+                (Some(_), Some(turn)) => turn,
+                // On its lane, short of its turn or with none in sight: on.
+                (Some(committed), None) if lane.is_some() => committed,
+                (Some(committed), None) if self.dir_hold < tuning().ai_dir_hold_seconds => {
                     // Not held long enough yet: stick with the current heading.
                     committed
                 }
-                Some(committed) => {
+                (Some(committed), None) => {
                     // How far off each axis is the (routed) aim point? Only switch
                     // if the fresh heading is meaningfully better (reduces the
                     // perpendicular error). Uses `routed`, not `target`, so this
@@ -980,6 +1100,122 @@ impl Ai {
         let dir = self.avoid_collisions(dir, from, bounds, half, ctx, grid);
         self.commit(dir);
         dir
+    }
+
+    /// Whether driving on along the heading held walks into a cell the
+    /// grid knows is blocked (`steer_toward`'s obstacle-ahead override).
+    /// On a field map it is judged from where the slide across that
+    /// heading will leave the hull rather than from its centre: a lane
+    /// turn comes the slide's length before its turning (`lane_turn`), so
+    /// for a moment after it the centre still stands in the lane the hull
+    /// is leaving, whose cell ahead can be the very wall the turn was
+    /// timed to clear; judged from the centre, a hull entering a one-lane
+    /// passage would be thrown back and forth across its mouth.
+    fn walks_into_wall(&self, from: Position, ctx: AvoidCtx, grid: &Grid) -> bool {
+        self.committed_dir.is_some_and(|heading| {
+            let at = if self.lanes() {
+                // The motion across the heading, and the signed slide it
+                // carries the hull on for.
+                let ahead = heading.vec();
+                let across = Vec2::new(self.motion.x * ahead.y.abs(), self.motion.y * ahead.x.abs());
+                let slide = |v: f32| v * v.abs() / (2.0 * ctx.grip.max(1.0));
+                Position::new(from.x + slide(across.x), from.y + slide(across.y))
+            } else {
+                from
+            };
+            grid.blocked_ahead(at, heading.vec())
+        })
+    }
+
+    /// The route read as lanes - the rows and columns of nav cells a hull
+    /// drives along - against `heading`, the heading the hull holds.
+    ///
+    /// A hull does not turn on the spot: whatever it is told, its tracks
+    /// only scrub off the speed along its old heading at their grip
+    /// (`tank_turn_grip_force` over its mass), so it slides on for
+    /// `v^2 / 2a` after it turns - four fifths of a cell for an assault at
+    /// an enemy's pace, more than two for the heaviest hull at its fastest.
+    /// Judged by the switch margin alone, a turn waits until the hull is
+    /// well into the turning, and the slide then carries it past the new
+    /// lane's centre line to its far edge, closer to the next row's centre
+    /// than `ai_dir_switch_margin_px`: no step into that row can ever beat
+    /// the margin again, and a hull whose route turns that way drives past
+    /// every turning, to and fro, for the rest of the round
+    /// (docs/large-maps-follow-camera.md section 12). Here the turn comes
+    /// where the slide ends on the centre line of the cell the route turns
+    /// in - the hull's rest point, its position plus the slide, reaching
+    /// that line on the think nearest the crossing - so a hull drives its
+    /// lanes on their centre lines and the hull's place across its lane
+    /// plays no part in when it turns.
+    ///
+    /// `Lane::Turn` when the route turns across `heading` and that moment has
+    /// come; `Lane::Hold` while the route runs on along `heading` as far as
+    /// it reads, turns further on, or turns where the hull comes too late for
+    /// its slide to end within half a cell of the line (the route from
+    /// further on decides then - never so strictly that the cell it turns in
+    /// offers the hull no think at all); `None` when the route is no walk
+    /// along lanes from here and the margin decides - its first step is
+    /// straight back (blind to a reversal, as ever) or out through a portal,
+    /// or it was searched rather than read from a flow field
+    /// (`RouteAhead::shared`) and the margin can still turn the hull onto it:
+    /// a search's path is one of many as cheap toward a target of the tank's
+    /// own that moves, an engagement slot most of all, and read as lanes it
+    /// crowds a level's corridors (docs/large-maps-follow-camera.md
+    /// section 12). Where the margin never can (`margin_never_turns`: the
+    /// hull rides the edge of its lane on the side the route turns to, or so
+    /// near it that the margin's window is narrower than the ground the hull
+    /// covers between two thinks), a searched route's turn is a lane turn
+    /// too - that is the hull this is for, wherever its route comes from. A
+    /// turn taken before the hull is in the cell it turns in sweeps the cells
+    /// beside the ones it still crosses, so it waits for that cell while any
+    /// of them is blocked: the nav grid keeps a hull's centre clear of the
+    /// walls there.
+    fn lane_turn(&self, from: Position, heading: Dir, route: &RouteAhead, ctx: AvoidCtx, grid: &Grid) -> Option<Lane> {
+        let along = |p: Vec2| p.x * heading.vec().x + p.y * heading.vec().y;
+        let v = along(self.motion);
+        // What the hull covers along its heading until the next think.
+        let stride = v.abs() * ctx.dt;
+        if !route.shared() && !margin_never_turns(from, heading, route, stride) {
+            return None;
+        }
+        let mut at = route.start();
+        for (i, &next) in route.cells().iter().enumerate() {
+            let step = cell_step(at, next)?;
+            if step == heading {
+                at = next;
+                continue;
+            }
+            if step == opposite(heading) {
+                return if i == 0 { None } else { Some(Lane::Hold) };
+            }
+            let slide = v * v.abs() / (2.0 * ctx.grip.max(1.0));
+            let (rest, line) = (along(from) + slide, along(route.centre(at)));
+            // The think nearest the crossing: half of what the hull covers
+            // until the next one either side of the line.
+            if rest + 0.5 * stride < line {
+                return Some(Lane::Hold);
+            }
+            // Too late to land in the turn's lane - the slide would end
+            // more than half a cell past its line - and the turn is the
+            // route's from further on. Never so tight that the cell it
+            // turns in offers no think at all: a slide longer than a cell
+            // reaches past the line from the moment the hull comes in.
+            let half = route.cell_size() * 0.5;
+            if rest > line + half.max(slide - half + stride) {
+                return Some(Lane::Hold);
+            }
+            let side = |c: (usize, usize)| {
+                let (dc, dr) = (step.vec().x as isize, step.vec().y as isize);
+                let (col, row) = (c.0 as isize + dc, c.1 as isize + dr);
+                col < 0 || row < 0 || grid.is_blocked(col as usize, row as usize)
+            };
+            let mut crossing = std::iter::once(route.start()).chain(route.cells()[..i].iter().copied()).take_while(|&c| c != at);
+            if crossing.any(side) {
+                return Some(Lane::Hold);
+            }
+            return Some(Lane::Turn(step));
+        }
+        Some(Lane::Hold)
     }
 
     /// Predictively sidestep a likely collision. Given the `desired` heading, look
@@ -1202,6 +1438,51 @@ pub(crate) fn opposite(dir: Dir) -> Dir {
     }
 }
 
+/// What the route read as lanes tells a hull (`Ai::lane_turn`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Lane {
+    /// Keep to the heading: the route runs on along it, or turns further on.
+    Hold,
+    /// Turn this way now: the hull's slide through the turn ends on the
+    /// centre line of the cell the route turns in.
+    Turn(Dir),
+}
+
+/// Whether `steer_toward`'s switch margin can never turn a hull at `from`,
+/// heading `heading` and covering `stride` px along it between two thinks,
+/// onto the first step of `route`, a step across the heading. The margin
+/// turns a hull on a think where its error across the heading, to the
+/// step's cell, beats its error along it by `ai_dir_switch_margin_px`, and
+/// driving on never changes the error across. A hull nearer the step's
+/// centre line than the margin - riding the edge of its own lane on that
+/// side - never turns; one a little farther turns only on a think whose
+/// error along is under what its error across beats the margin by, a
+/// window twice that wide about the turning's centre, and a window
+/// narrower than `stride` can fall between two thinks - on a lane a hull
+/// drives to and fro at one pace, pass after pass (`Ai::lane_turn`).
+fn margin_never_turns(from: Position, heading: Dir, route: &RouteAhead, stride: f32) -> bool {
+    let Some(&next) = route.cells().first() else { return false };
+    match cell_step(route.start(), next) {
+        Some(step) if step != heading && step != opposite(heading) => {
+            let across = |p: Vec2| p.x * step.vec().x + p.y * step.vec().y;
+            across(route.centre(next)) - across(from) - tuning().ai_dir_switch_margin_px <= 0.5 * stride
+        }
+        _ => false,
+    }
+}
+
+/// The heading of one route step between two side-by-side cells, `None`
+/// for any other pair (a portal's exit).
+fn cell_step(from: (usize, usize), to: (usize, usize)) -> Option<Dir> {
+    match (to.0 as isize - from.0 as isize, to.1 as isize - from.1 as isize) {
+        (1, 0) => Some(Dir::Right),
+        (-1, 0) => Some(Dir::Left),
+        (0, 1) => Some(Dir::Down),
+        (0, -1) => Some(Dir::Up),
+        _ => None,
+    }
+}
+
 /// True if heading `dir` from `from` would drive further into a battlefield edge
 /// the tank is already pressed against (within a 1px skin over the clamp margin).
 fn heads_into_wall(dir: Dir, from: Position, bounds: (f32, f32), half: f32) -> bool {
@@ -1226,6 +1507,12 @@ struct AvoidCtx<'a> {
     radius: f32,
     /// This tank's movement speed (px/s).
     speed: f32,
+    /// How hard its tracks scrub off sideways speed (px/s^2):
+    /// `tank_turn_grip_force` over its mass - what sets its slide through
+    /// a turn (`Ai::lane_turn`).
+    grip: f32,
+    /// The seconds this think covers, about the time to the next one.
+    dt: f32,
     /// This tank's portal cooldown is running (`Tank::portal_cooldown`),
     /// so it routes on foot only (`Grid::next_step_walking`): a route
     /// through the hub would walk it back onto the portal it just came out
@@ -1290,6 +1577,25 @@ struct Brain<'a> {
     sight: f32,
 }
 
+impl<'a> Brain<'a> {
+    /// This tank as `Ai::steer` and `Ai::wander` see it: the motion
+    /// snapshot, its collision radius (`Tank::avoidance_radius` - a safe
+    /// over-approximation of the tank's real, per-row physics collider),
+    /// its top speed and its tracks' grip, this think's span and its
+    /// portal cooldown.
+    fn avoid_ctx(&self) -> AvoidCtx<'a> {
+        AvoidCtx {
+            movers: self.movers,
+            my_index: self.my_index,
+            radius: self.me.avoidance_radius(),
+            speed: self.me.effective_speed(),
+            grip: tuning().tank_turn_grip_force / self.me.mass(),
+            dt: self.dt,
+            on_portal_cooldown: self.me.portal_cooldown > 0.0,
+        }
+    }
+}
+
 impl Brain<'_> {
     /// `enemy_attack_range`, never past what this tank sees: in a fog
     /// thick enough to hide a target inside it, the attack waits until the
@@ -1347,6 +1653,33 @@ impl Brain<'_> {
         Some(Leash { anchor, radius, keep_off })
     }
 
+    /// The leash around this tank's home on a field map
+    /// (`FieldMind::home`, `enemy_leash_px` less a hull, so a waypoint on
+    /// the rim never carries the hull over the line), `None` on an arena,
+    /// where no home is ever kept. It binds a tank with nothing to fight:
+    /// `act_patrol` without an alert, and the pickups it detours for.
+    fn home_leash(&self) -> Option<Leash> {
+        let anchor = self.ai.field.home?;
+        let radius = (tuning().enemy_leash_px - self.me.size()).max(self.me.size());
+        Some(Leash { anchor, radius, keep_off: 0.0 })
+    }
+
+    /// The nearest live pickup of `kind` worth a detour: any on an arena,
+    /// only those inside the home leash on a field map
+    /// (`home_leash`), so a tank with nothing to fight never crosses the
+    /// map for one.
+    fn seek(&self, kind: PickupKind) -> Option<Position> {
+        match self.home_leash() {
+            None => self.nearest_pickup(kind),
+            Some(leash) => self
+                .pickups
+                .iter()
+                .filter(|&&(k, at)| k == kind && at.distance_to(leash.anchor) <= leash.radius)
+                .map(|&(_, at)| at)
+                .min_by(|&a, &b| self.me.position.distance_to(a).total_cmp(&self.me.position.distance_to(b))),
+        }
+    }
+
     /// Whether a guard should hold its beat rather than fight: the player
     /// is dead or outside `guard_leash_px` of its frog.
     fn guard_holds(&self) -> bool {
@@ -1356,19 +1689,32 @@ impl Brain<'_> {
     }
 
     /// Whether a hunter can take the opportunistic shot at the player this
-    /// tick: the player is alive, within attack range, in clear sight and
+    /// tick: the player is alive, within attack range, in clear sight,
     /// already lined up on one of this tank's firing axes - so no
-    /// repositioning away from the frog is ever spent on it - and the last
-    /// snipe's `hunter_snipe_cooldown_seconds` have passed.
+    /// repositioning away from the frog is ever spent on it - with this
+    /// tank inside the player's sight box (`may_fire_at_seat`), and the
+    /// last snipe's `hunter_snipe_cooldown_seconds` have passed.
     fn can_snipe_player(&self) -> bool {
         if !self.hunting_frog() || !self.player_alive() || !self.player_line_of_sight || self.ai.snipe_cooldown > 0.0 {
             return false;
         }
-        if self.dist_to_player() > self.attack_range() {
+        if self.dist_to_player() > self.attack_range() || !self.may_fire_at_seat() {
             return false;
         }
         let (_, off_axis, in_front) = self.aim_alignment_at(self.player.position);
         off_axis <= tuning().enemy_fire_align_px && in_front
+    }
+
+    /// Whether this tank stands where it may fire at the seat it fights
+    /// (`player`): inside that seat's sight box (`in_sight_box`), the
+    /// rule every enemy shot at a seat obeys, so nobody is shot from
+    /// beyond the edge of their own screen
+    /// (docs/large-maps-follow-camera.md section 5). Sideways the box
+    /// reaches past `enemy_attack_range`, so a shot lined up on a row is
+    /// never held back by it; up and down it is shorter, and a tank lined
+    /// up on a column closes in before it fires.
+    fn may_fire_at_seat(&self) -> bool {
+        in_sight_box(self.player.position, self.me.position)
     }
 
     /// This tank's own position to the nearest currently-live pickup of
@@ -1429,14 +1775,8 @@ impl Brain<'_> {
     /// within), the motion snapshot for avoidance, and this frame's
     /// obstacle grid.
     fn steer(&mut self, target: Position) -> Dir {
-        let radius = self.me.avoidance_radius();
-        let ctx = AvoidCtx {
-            movers: self.movers,
-            my_index: self.my_index,
-            radius,
-            speed: self.me.effective_speed(),
-            on_portal_cooldown: self.me.portal_cooldown > 0.0,
-        };
+        let ctx = self.avoid_ctx();
+        let radius = ctx.radius;
         self.ai.steer(
             self.me.position,
             target,
@@ -1453,14 +1793,8 @@ impl Brain<'_> {
     /// mind - `act_patrol`'s own top-level behavior. Thin wrapper around
     /// `Ai::wander`, same shape as `steer` above.
     fn wander(&mut self) -> Dir {
-        let radius = self.me.avoidance_radius();
-        let ctx = AvoidCtx {
-            movers: self.movers,
-            my_index: self.my_index,
-            radius,
-            speed: self.me.effective_speed(),
-            on_portal_cooldown: self.me.portal_cooldown > 0.0,
-        };
+        let ctx = self.avoid_ctx();
+        let radius = ctx.radius;
         self.ai.wander(
             self.me.position,
             (self.width, self.height),
@@ -1475,14 +1809,8 @@ impl Brain<'_> {
 
     /// `wander` confined to `leash` - a guard's beat.
     fn wander_within(&mut self, leash: Leash) -> Dir {
-        let radius = self.me.avoidance_radius();
-        let ctx = AvoidCtx {
-            movers: self.movers,
-            my_index: self.my_index,
-            radius,
-            speed: self.me.effective_speed(),
-            on_portal_cooldown: self.me.portal_cooldown > 0.0,
-        };
+        let ctx = self.avoid_ctx();
+        let radius = ctx.radius;
         self.ai.wander(
             self.me.position,
             (self.width, self.height),
@@ -1509,10 +1837,6 @@ impl Brain<'_> {
         (dir, off_axis, forward > 0.0)
     }
 
-    /// Hold position facing `fire_dir` and, once the aim has settled for
-    /// `enemy_aim_settle` and the fire timer allows, shoot at the point
-    /// `range` px ahead - the aligned half of `act_attack`, shared with the
-    /// hunter's snipe. Holds fire (mostly) when a teammate is in the way.
     /// A shot back at the tower this tank holds a grudge against: the
     /// fire direction and range while the tower is in sight, within its
     /// own reach of the tank and lined up on an axis - the tower is a whole
@@ -1530,7 +1854,15 @@ impl Brain<'_> {
         (in_front && off_axis <= t.enemy_fire_align_px + OBSTACLE_GRID_SIZE * 0.5 && range <= reach).then_some((dir, range))
     }
 
-    fn hold_and_fire(&mut self, fire_dir: Dir, range: f32) {
+    /// Hold position facing `fire_dir` and, once the aim has settled for
+    /// `enemy_aim_settle` and the fire timer allows, shoot at the point
+    /// `range` px ahead - the aligned half of `act_attack`, shared with the
+    /// hunter's snipe and the grudge shot. Holds fire (mostly) when a
+    /// teammate is in the way. `at_seat` is the seat the shot is aimed at,
+    /// `None` for a frog or a tower; the caller has already held the tank
+    /// to that seat's sight box (`may_fire_at_seat`), and a shot taken
+    /// records it in `Ai::shot_at_seat`.
+    fn hold_and_fire(&mut self, fire_dir: Dir, range: f32, at_seat: Option<u8>) {
         self.ai.aim_settle += self.dt;
         self.intent.face = Some(fire_dir);
         // Keep the committed heading in sync so leaving Attack doesn't snap.
@@ -1549,6 +1881,7 @@ impl Brain<'_> {
             if !hold_fire {
                 self.intent.fire = true;
                 self.intent.fire_aim_offset = self.roll_misfire(range);
+                self.ai.shot_at_seat = at_seat;
             }
         }
     }
@@ -1666,14 +1999,34 @@ pub(crate) fn axis_offsets(from: Position, to: Position, dir: Dir) -> (f32, f32)
     }
 }
 
+/// Whether `at` stands inside the sight box of the seat whose tank is at
+/// `seat`: no further than the box's half extents
+/// (`Tuning::sight_box_half_px`) from it on either axis, centre to centre,
+/// the edge included. The one test every enemy fire decision at a seat
+/// takes - a tank's attack and snipe (`Brain::may_fire_at_seat`), a seeker
+/// missile's lock (`Game::guide_missiles`), an enemy tower's pick
+/// (`simulation::towers`) - and the one the probe's `offbox-fire` check
+/// holds them to (docs/large-maps-follow-camera.md section 5).
+pub fn in_sight_box(seat: Position, at: Position) -> bool {
+    in_sight_box_of(tuning().sight_box_half_px(), seat, at)
+}
+
+/// `in_sight_box` with the box's half extents read once by the caller
+/// (`Tuning::sight_box_half_px`), for a loop over many points.
+pub fn in_sight_box_of((half_w, half_h): (f32, f32), seat: Position, at: Position) -> bool {
+    (at.x - seat.x).abs() <= half_w && (at.y - seat.y).abs() <= half_h
+}
+
 /// Build the enemy behavior tree. Priority (Selector) order, highest first:
 ///   1. Dead? do nothing.
 ///   2. Flee when badly hurt.
 ///   3. Retreat to recharge when ammo is low.
 ///   3.4. A tower that hurt it lined up in sight: fire back.
-///   3.5. A hunter lined up on the player in range: snipe (hold, fire).
+///   3.5. A hunter lined up on the player in range and inside the
+///      player's sight box: snipe (hold, fire).
 ///   3.6. A guard whose player is outside the leash: hold the beat.
-///   4. Attack when the target is in range (aim, settle, fire; else close in).
+///   4. Attack when the target is in range (aim, settle, fire - a seat
+///      only from inside its sight box; else close in).
 ///   5. Chase when the target is visible.
 ///   6. Patrol otherwise.
 ///
@@ -1725,13 +2078,14 @@ fn build<'a>() -> Node<Brain<'a>> {
             condition(|b: &mut Brain| b.grudge_shot().is_some()),
             action("grudge", |b: &mut Brain| {
                 let Some((dir, range)) = b.grudge_shot() else { return Status::Failure };
-                b.hold_and_fire(dir, range);
+                b.hold_and_fire(dir, range, None);
                 Status::Success
             }),
         ]),
         // 3.5. A hunter that happens to be lined up on the player within
-        // attack range shoots the player this tick instead of the frog - an
-        // opportunity taken, never a detour (see `Brain::can_snipe_player`).
+        // attack range, inside the player's sight box, shoots the player
+        // this tick instead of the frog - an opportunity taken, never a
+        // detour (see `Brain::can_snipe_player`).
         sequence(vec![
             condition(|b: &mut Brain| b.can_snipe_player()),
             action("snipe", act_snipe),
@@ -1789,10 +2143,12 @@ fn build<'a>() -> Node<Brain<'a>> {
         // the two below are each gated only on "not already stocked with
         // that kind"; which detour is worth taking *first* is expressed by
         // their tier order (laser, then plasma, then missiles, then minigun
-        // - strongest first). See `act_seek_laser`.
+        // - strongest first). See `act_seek_laser`. On a field map only a
+        // pickup inside the tank's home leash is worth the detour
+        // (`Brain::seek`).
         sequence(vec![
             condition(|b: &mut Brain| {
-                b.me.wants_pickup(PickupKind::Laser) && b.pickups.iter().any(|(k, _)| *k == PickupKind::Laser)
+                b.me.wants_pickup(PickupKind::Laser) && b.seek(PickupKind::Laser).is_some()
             }),
             action("seek_laser", act_seek_laser),
         ]),
@@ -1802,7 +2158,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.me.wants_pickup(PickupKind::Plasma)
-                    && b.pickups.iter().any(|(k, _)| *k == PickupKind::Plasma)
+                    && b.seek(PickupKind::Plasma).is_some()
             }),
             action("seek_plasma", act_seek_plasma),
         ]),
@@ -1811,7 +2167,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.me.wants_pickup(PickupKind::Missiles)
-                    && b.pickups.iter().any(|(k, _)| *k == PickupKind::Missiles)
+                    && b.seek(PickupKind::Missiles).is_some()
             }),
             action("seek_missiles", act_seek_missiles),
         ]),
@@ -1820,7 +2176,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.me.wants_pickup(PickupKind::Minigun)
-                    && b.pickups.iter().any(|(k, _)| *k == PickupKind::Minigun)
+                    && b.seek(PickupKind::Minigun).is_some()
             }),
             action("seek_minigun", act_seek_minigun),
         ]),
@@ -1831,7 +2187,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.me.wants_pickup(PickupKind::SpeedUp)
-                    && b.pickups.iter().any(|(k, _)| *k == PickupKind::SpeedUp)
+                    && b.seek(PickupKind::SpeedUp).is_some()
             }),
             action("seek_speedup", act_seek_speedup),
         ]),
@@ -1840,7 +2196,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         // detour at any health.
         sequence(vec![
             condition(|b: &mut Brain| {
-                b.me.wants_pickup(PickupKind::Shield) && b.pickups.iter().any(|(k, _)| *k == PickupKind::Shield)
+                b.me.wants_pickup(PickupKind::Shield) && b.seek(PickupKind::Shield).is_some()
             }),
             action("seek_shield", act_seek_shield),
         ]),
@@ -1910,7 +2266,7 @@ fn act_retreat(b: &mut Brain) -> Status {
 /// wandering toward a spot that's no longer there.
 fn act_seek_laser(b: &mut Brain) -> Status {
     b.reset_aim();
-    let Some(target) = b.nearest_pickup(PickupKind::Laser) else {
+    let Some(target) = b.seek(PickupKind::Laser) else {
         return Status::Failure;
     };
     b.intent.move_dir = Some(b.steer(target));
@@ -1921,7 +2277,7 @@ fn act_seek_laser(b: &mut Brain) -> Status {
 /// 5.6 (`build`) for when this is actually reached.
 fn act_seek_plasma(b: &mut Brain) -> Status {
     b.reset_aim();
-    let Some(target) = b.nearest_pickup(PickupKind::Plasma) else {
+    let Some(target) = b.seek(PickupKind::Plasma) else {
         return Status::Failure;
     };
     b.intent.move_dir = Some(b.steer(target));
@@ -1932,7 +2288,7 @@ fn act_seek_plasma(b: &mut Brain) -> Status {
 /// 5.65 (`build`) for when this is actually reached.
 fn act_seek_missiles(b: &mut Brain) -> Status {
     b.reset_aim();
-    let Some(target) = b.nearest_pickup(PickupKind::Missiles) else {
+    let Some(target) = b.seek(PickupKind::Missiles) else {
         return Status::Failure;
     };
     b.intent.move_dir = Some(b.steer(target));
@@ -1943,7 +2299,7 @@ fn act_seek_missiles(b: &mut Brain) -> Status {
 /// 5.7 (`build`) for when this is actually reached.
 fn act_seek_minigun(b: &mut Brain) -> Status {
     b.reset_aim();
-    let Some(target) = b.nearest_pickup(PickupKind::Minigun) else {
+    let Some(target) = b.seek(PickupKind::Minigun) else {
         return Status::Failure;
     };
     b.intent.move_dir = Some(b.steer(target));
@@ -1954,7 +2310,7 @@ fn act_seek_minigun(b: &mut Brain) -> Status {
 /// 5.8 (`build`) for when this is actually reached.
 fn act_seek_speedup(b: &mut Brain) -> Status {
     b.reset_aim();
-    let Some(target) = b.nearest_pickup(PickupKind::SpeedUp) else {
+    let Some(target) = b.seek(PickupKind::SpeedUp) else {
         return Status::Failure;
     };
     b.intent.move_dir = Some(b.steer(target));
@@ -1965,7 +2321,7 @@ fn act_seek_speedup(b: &mut Brain) -> Status {
 /// 5.9 (`build`) for when this is actually reached.
 fn act_seek_shield(b: &mut Brain) -> Status {
     b.reset_aim();
-    let Some(target) = b.nearest_pickup(PickupKind::Shield) else {
+    let Some(target) = b.seek(PickupKind::Shield) else {
         return Status::Failure;
     };
     b.intent.move_dir = Some(b.steer(target));
@@ -1974,18 +2330,31 @@ fn act_seek_shield(b: &mut Brain) -> Status {
 
 /// Hold near the target and shoot when lined up on a cardinal axis. The tank
 /// only fires after staying aligned for ENEMY_AIM_SETTLE, and stops to aim.
+/// A seat is only fired at from inside its sight box
+/// (`Brain::may_fire_at_seat`): lined up on a seat's column further out
+/// than the box reaches, the tank keeps closing in.
 fn act_attack(b: &mut Brain) -> Status {
     let (fire_dir, off_axis, in_front) = b.aim_alignment();
+    let at_seat = !b.hunting_frog();
     // A geometrically on-axis spot the AI can't actually shoot from (a wall
     // in the way) is treated the same as not being aligned at all, so the
     // tank repositions instead of settling in and holding a shot it can
     // never take - see `think`'s `line_of_sight` parameter doc comment.
-    let aligned = off_axis <= tuning().enemy_fire_align_px && in_front && b.line_of_sight;
+    // So is a spot outside the seat's sight box: the reposition below
+    // steers at the tank's engagement slot - a firing slot stands inside
+    // the box, a reserve beyond attack range where nothing fires - or at
+    // the seat itself, so a tank closes into the box to fire rather than
+    // holding outside it on a shot the rule never lets it take.
+    let aligned = off_axis <= tuning().enemy_fire_align_px
+        && in_front
+        && b.line_of_sight
+        && (!at_seat || b.may_fire_at_seat());
 
     if aligned {
         // Line up: face the fire direction and hold position while settling.
         let range = b.dist_to_target();
-        b.hold_and_fire(fire_dir, range);
+        let seat = at_seat.then_some(b.ai.target_player);
+        b.hold_and_fire(fire_dir, range, seat);
     } else {
         // Not lined up: reposition toward this tank's engagement-ring slot
         // (with commitment) rather than the target's exact position, so a
@@ -2002,7 +2371,8 @@ fn act_attack(b: &mut Brain) -> Status {
 fn act_snipe(b: &mut Brain) -> Status {
     let (fire_dir, _, _) = b.aim_alignment_at(b.player.position);
     let range = b.dist_to_player();
-    b.hold_and_fire(fire_dir, range);
+    let seat = b.ai.target_player;
+    b.hold_and_fire(fire_dir, range, Some(seat));
     if b.intent.fire {
         b.ai.snipe_cooldown = tuning().hunter_snipe_cooldown_seconds;
     }
@@ -2078,9 +2448,31 @@ fn act_chase(b: &mut Brain) -> Status {
 /// assignment to every alerted tank, not just hit ones, made clustering
 /// worse instead of better (a still-distant pack funnels toward its
 /// eventual axis slots through the same bottleneck for its whole transit).
+///
+/// On a field map the alert is the tank's own (`simulation::field`: it
+/// reached the tank down a chain of neighbours, or it is the call that
+/// sends a wave tank to the fight), and a tank without one is leashed to
+/// its home (`Brain::home_leash`): past the leash it turns back, inside it
+/// it wanders within it.
 fn act_patrol(b: &mut Brain) -> Status {
     if let Some(target) = b.alert {
         b.intent.move_dir = Some(b.steer(b.engage_target.unwrap_or(target)));
+    } else if let Some(leash) = b.home_leash() {
+        let me = b.me.position;
+        if me.distance_to(leash.anchor) > leash.radius {
+            // Home is where the tank stood, an open cell, so it is routed
+            // to directly. A committed heading still pointing away is
+            // dropped so the turn happens now: the hold/margin gate is
+            // blind to a straight reversal by design (`act_guard` does the
+            // same on its beat).
+            let away = Vec2::new(me.x - leash.anchor.x, me.y - leash.anchor.y);
+            if b.ai.committed_dir.is_some_and(|d| d.vec().x * away.x + d.vec().y * away.y > 0.0) {
+                b.ai.committed_dir = None;
+            }
+            b.intent.move_dir = Some(b.steer(leash.anchor));
+        } else {
+            b.intent.move_dir = Some(b.wander_within(leash));
+        }
     } else {
         b.intent.move_dir = Some(b.wander());
     }
@@ -2163,6 +2555,63 @@ mod role_tests {
         )
     }
 
+    /// A tank with nothing to fight detours for a pickup it wants only
+    /// inside its home leash on a field map (`Brain::seek`): a laser 400 px
+    /// from home is sought, one 900 px away is left alone for the patrol,
+    /// and on an arena - no home kept - the far one is sought too.
+    #[test]
+    fn a_leashed_tank_seeks_only_the_pickups_inside_its_leash() {
+        let (width, height) = (3200.0, 1280.0);
+        let home = Position::new(1600.0, 640.0);
+        let player_at = Position::new(200.0, 640.0);
+        assert!(home.distance_to(player_at) > tuning().enemy_view_range, "nothing to fight in sight");
+        let leash = tuning().enemy_leash_px;
+        let (near, far) = (Position::new(home.x + 400.0, home.y), Position::new(home.x + 900.0, home.y));
+        assert!(near.distance_to(home) < leash - 32.0 && far.distance_to(home) > leash, "the case this is about");
+        let act = |home_kept: bool, pickup: Position| {
+            let mut ai = Ai::with_role(Role::Player);
+            if home_kept {
+                ai.field.home = Some(home);
+            }
+            let mut me = Tank::default();
+            me.position = home;
+            let mut player = Tank::default();
+            player.position = player_at;
+            assert!(me.wants_pickup(PickupKind::Laser));
+            let grid = Grid::build(width, height, 48.0, 0.0, std::iter::empty());
+            let movers = [
+                Mover { position: player_at, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
+                Mover { position: home, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
+            ];
+            let mut rng = SmallRng::seed_from_u64(7);
+            ai.think(
+                &me,
+                &player,
+                player_at,
+                None,
+                width,
+                height,
+                1.0 / 60.0,
+                &movers,
+                1,
+                &grid,
+                &mut rng,
+                None,
+                None,
+                &[(PickupKind::Laser, pickup)],
+                true,
+                true,
+                false,
+                [None; 4],
+                tuning().enemy_view_range,
+            );
+            ai.snapshot().last_action
+        };
+        assert_eq!(act(true, near), Some("seek_laser"), "inside the leash");
+        assert_ne!(act(true, far), Some("seek_laser"), "past the leash");
+        assert_eq!(act(false, far), Some("seek_laser"), "an arena keeps no home");
+    }
+
     #[test]
     fn a_hunter_closes_on_its_frog_and_reverts_to_the_player_without_one() {
         let mut ai = Ai::with_role(Role::Hunter);
@@ -2225,6 +2674,25 @@ mod role_tests {
         assert_eq!(ai.snapshot().last_action, Some("chase"));
     }
 
+    /// A snipe is a shot at a seat, so it is taken only from inside the
+    /// player's sight box: lined up and in attack range but further out on
+    /// the player's column than the box reaches, the hunter goes on after
+    /// the frog.
+    #[test]
+    fn a_hunter_snipes_only_from_inside_the_players_sight_box() {
+        let (_, half_h) = tuning().sight_box_half_px();
+        let me = Position::new(600.0, 300.0);
+        let frog = Position::new(1100.0, 300.0);
+        let action_with_player_below = |below: f32| {
+            let mut ai = Ai::with_role(Role::Hunter);
+            tick(&mut ai, me, Position::new(me.x, me.y + below), frog, Some(frog));
+            ai.snapshot().last_action
+        };
+        assert!(half_h + 30.0 < tuning().enemy_attack_range, "the defaults this is about");
+        assert_eq!(action_with_player_below(half_h + 30.0), Some("chase"), "outside the box: back to the frog");
+        assert_eq!(action_with_player_below(half_h - 30.0), Some("snipe"));
+    }
+
     #[test]
     fn a_guard_holds_its_beat_until_the_player_comes_close() {
         let frog = Position::new(1100.0, 300.0);
@@ -2253,6 +2721,138 @@ mod role_tests {
         let player = Position::new(frog.x - leash * 0.5, frog.y);
         tick(&mut ai, Position::new(400.0, 300.0), player, player, Some(frog));
         assert_eq!(ai.snapshot().last_action, Some("chase"));
+    }
+}
+
+#[cfg(test)]
+mod lane_tests {
+    use super::*;
+    use crate::PATHFIND_CELL_SIZE as CELL;
+
+    /// An assault's grip (px/s^2) and an enemy's pace (px/s): a slide of
+    /// 160^2 / 1000 = 25.6 px through a turn.
+    const GRIP: f32 = 500.0;
+    const PACE: f32 = 160.0;
+
+    fn at(col: usize, row: usize) -> Position {
+        Position::new((col as f32 + 0.5) * CELL, (row as f32 + 0.5) * CELL)
+    }
+
+    /// A 40 x 30 grid, `walls` blocked, with a field toward cell (10, 20):
+    /// a hull heading east along row 5 west of column 10 reads its route
+    /// on east to column 10 and then south.
+    fn grid(walls: &[(usize, usize)]) -> Grid {
+        let obstacles: Vec<(Position, f32)> = walls.iter().map(|&(c, r)| (at(c, r), CELL / 2.0)).collect();
+        let mut grid = Grid::build(40.0 * CELL, 30.0 * CELL, CELL, 0.0, obstacles.into_iter());
+        grid.add_field(at(10, 20));
+        grid
+    }
+
+    /// What the lanes tell a hull at `from` heading east at `pace`, routed
+    /// to cell (10, 20).
+    fn read(grid: &Grid, from: Position, pace: f32) -> Option<Lane> {
+        read_to(grid, from, pace, at(10, 20))
+    }
+
+    /// `read`, routed to `to`.
+    fn read_to(grid: &Grid, from: Position, pace: f32, to: Position) -> Option<Lane> {
+        let ai = Ai { committed_dir: Some(Dir::Right), motion: Vec2::new(pace, 0.0), ..Ai::default() };
+        let ctx = AvoidCtx { movers: &[], my_index: 0, radius: 20.0, speed: PACE, grip: GRIP, dt: 1.0 / 60.0, on_portal_cooldown: false };
+        let route = grid.route_ahead(from, to, Some(Dir::Right.vec())).expect("routes");
+        ai.lane_turn(from, Dir::Right, &route, ctx, grid)
+    }
+
+    /// The turn comes where the slide ends on the turn's centre line: a
+    /// slide short of column 10's centre holds on, one that reaches it
+    /// turns, a cell before the turning - and where the hull rides across
+    /// its lane makes no difference at all.
+    #[test]
+    fn a_turn_comes_where_the_slide_ends_on_the_turns_centre_line() {
+        let grid = grid(&[]);
+        let line = at(10, 5).x;
+        let slide = PACE * PACE / (2.0 * GRIP);
+        for across in [0.0, 15.5, -15.5] {
+            let y = at(10, 5).y + across;
+            assert_eq!(read(&grid, Position::new(line - slide - 4.0, y), PACE), Some(Lane::Hold), "{across} px across");
+            assert_eq!(read(&grid, Position::new(line - slide, y), PACE), Some(Lane::Turn(Dir::Down)), "{across} px across");
+        }
+        // Standing still it turns on the line itself.
+        assert_eq!(read(&grid, Position::new(line - 2.0, at(10, 5).y), 0.0), Some(Lane::Hold));
+        assert_eq!(read(&grid, Position::new(line, at(10, 5).y), 0.0), Some(Lane::Turn(Dir::Down)));
+        // Far from the turning: on along the lane.
+        assert_eq!(read(&grid, at(3, 5), PACE), Some(Lane::Hold));
+    }
+
+    /// A turn not taken early - the corner it would have cut was shut, or
+    /// the turn came into view too late - is taken in the cell it turns in
+    /// while the slide still ends within half a cell of the line, and left
+    /// to the route from further on past that; a slide longer than a cell
+    /// still gets the first think inside.
+    #[test]
+    fn a_turn_too_late_to_land_in_its_lane_is_left_to_the_route_on() {
+        // Column 9 shut below row 5: the corner a turn from it would cut.
+        let shut = grid(&[(9, 6)]);
+        let (line, y) = (at(10, 5).x, at(10, 5).y);
+        let slide = PACE * PACE / (2.0 * GRIP);
+        assert_eq!(read(&shut, Position::new(line - slide, y), PACE), Some(Lane::Hold), "no cutting the shut corner");
+        assert_eq!(read(&shut, Position::new(line - 15.0, y), PACE), Some(Lane::Turn(Dir::Down)), "in its cell, slide ending 10.6 px past the line");
+        assert_eq!(read(&shut, Position::new(line - 9.0, y), PACE), Some(Lane::Hold), "slide ending 16.6 px past the line");
+        // Half as fast again, a 57.6 px slide: past the line from the moment
+        // it comes in, and it turns there all the same.
+        let fast = 1.5 * PACE;
+        assert_eq!(read(&shut, Position::new(line - 15.0, y), fast), Some(Lane::Turn(Dir::Down)));
+        assert_eq!(read(&shut, Position::new(line - 10.0, y), fast), Some(Lane::Hold));
+    }
+
+    /// A searched route - toward a target of the tank's own, with no field
+    /// to read - is the margin's, as every arena's route is, while the
+    /// margin can turn the hull onto it. Riding the edge of its lane on the
+    /// side the route turns to, nearer the next lane's centre line than
+    /// `ai_dir_switch_margin_px`, the margin never could, and the turn is
+    /// a lane turn: taken where the slide still ends within half a cell of
+    /// the turning's centre line, held past that.
+    #[test]
+    fn a_searched_route_is_left_to_the_margin_but_on_the_edge_of_its_lane() {
+        let plain = Grid::build(40.0 * CELL, 30.0 * CELL, CELL, 0.0, std::iter::empty());
+        let slide = PACE * PACE / (2.0 * GRIP);
+        assert_eq!(read(&plain, Position::new(at(10, 5).x - slide, at(10, 5).y), PACE), None);
+        // Down column 6 is the search's one way from it to (6, 20), and the
+        // turn shows only once the hull is in column 6.
+        let (line, to) = (at(6, 5).x, at(6, 20));
+        let x = line + 12.0 - slide;
+        assert_eq!(read_to(&plain, Position::new(x, at(6, 5).y), PACE, to), None, "on its lane's centre line");
+        let edge = at(6, 5).y + 15.5;
+        assert!(at(6, 6).y - edge <= tuning().ai_dir_switch_margin_px, "the case this is about");
+        assert_eq!(read_to(&plain, Position::new(x, edge), PACE, to), Some(Lane::Turn(Dir::Down)), "slide ending 12 px past the line");
+        assert_eq!(read_to(&plain, Position::new(line + 18.0 - slide, edge), PACE, to), Some(Lane::Hold), "18 px past it");
+    }
+
+    /// Just after an early turn north into a one-lane gap at column 18, the
+    /// hull's centre still stands in column 19, below a wall, while its
+    /// slide west carries it under the gap: on a field map the wall ahead
+    /// is judged where the slide ends, so the turn is not thrown back
+    /// across the gap's mouth; an arena still judges the centre.
+    #[test]
+    fn a_wall_ahead_is_judged_where_the_slide_across_ends() {
+        let grid = grid(&[(19, 4), (17, 4)]);
+        let from = Position::new(611.6, 188.1);
+        let sliding = Ai { committed_dir: Some(Dir::Up), motion: Vec2::new(-129.0, -101.0), ..Ai::default() };
+        let ctx = AvoidCtx { movers: &[], my_index: 0, radius: 20.0, speed: PACE, grip: GRIP, dt: 1.0 / 60.0, on_portal_cooldown: false };
+        let field = Ai { field: FieldMind { home: Some(at(0, 0)), ..FieldMind::default() }, ..sliding };
+        assert!(!field.walks_into_wall(from, ctx, &grid), "a 16.6 px slide ends in column 18, under the gap");
+        assert!(sliding.walks_into_wall(from, ctx, &grid), "an arena judges the centre, under the wall");
+        // Sliding no further than the centre's own column, the wall counts.
+        let slow = Ai { motion: Vec2::new(-60.0, -101.0), ..field };
+        assert!(slow.walks_into_wall(from, ctx, &grid), "a 3.6 px slide stays in column 19");
+    }
+
+    /// A route whose first step is straight back is no walk along the
+    /// lanes from here: the margin decides, blind to a reversal as ever.
+    #[test]
+    fn a_route_straight_back_is_left_to_the_margin() {
+        // Row 6 shut east of column 10: past the turning, the only way is back.
+        let walls: Vec<(usize, usize)> = (11..=20).map(|c| (c, 6)).collect();
+        assert_eq!(read(&grid(&walls), at(14, 5), PACE), None);
     }
 }
 

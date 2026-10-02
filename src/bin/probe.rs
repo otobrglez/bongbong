@@ -33,11 +33,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use bongbong::Position;
-use bongbong::ai::Intent;
+use bongbong::ai::{Intent, in_sight_box};
 use bongbong::map::MapFile;
 use bongbong::level::SpawnKind;
 use bongbong::simulation::debug::{JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, signed_quarter_turn};
-use bongbong::simulation::{Event, Game, Input, Outcome, TankSnapshot};
+use bongbong::simulation::{Event, Game, HitTarget, Input, Outcome, TankSnapshot};
 use bongbong::tank::{Dir, TankKind};
 use bongbong::{
     DEFAULT_SCREEN_HEIGHT,
@@ -270,7 +270,20 @@ const PILEUP_FRAMES: u32 = 60; // 1s
 // ends quickly (post-grid-fix an AFK player can be dead inside ~6s) can
 // never false-flag: elapsed stays under NAV_GRACE_SECONDS alone.
 const NAV_GRACE_SECONDS: f32 = 10.0;
+// The `defend` scenario's reach by default (`--defend-reach`): an enemy this
+// close to a live seat or the players' frog is destroyed. Past
+// `enemy_attack_range` (340 px), so no enemy ever gets near enough to
+// attack what the defence guards.
+const DEFEND_REACH_PX: f32 = 400.0;
 const NAV_STRETCH_MAX: f32 = 4.0;
+// --- Pacing: the time between engagements (`Lulls`) ---
+// A frame is in contact while a live enemy on the field stands within
+// `enemy_attack_range` of a live seat or the players' frog - within
+// the defence's reach under the `defend` scenario, which destroys it
+// there - and a lull is a stretch of frames with none between two such
+// frames. Shorter stretches are an enemy stepping in and out of range
+// mid-fight, not a pause in it.
+const LULL_MIN_SECONDS: f32 = 3.0;
 // --- Frame-invariant sanity bounds (kind=invariant) ---
 // Physics sanity rather than behavior: any violation is a hard bug (solver
 // explosion, tunneling through the boundary walls, NaN poisoning) with the
@@ -310,6 +323,16 @@ enum Scenario {
     /// reach the player in this short a window anyway). Run with
     /// `--frames 60 --log-every 1` to see the curve frame-by-frame.
     Brake,
+    /// A perfect defence: the seats never move or fire, and every enemy
+    /// that comes within `--defend-reach` of a live seat or the players'
+    /// frog is destroyed on the spot, through the normal kill path
+    /// (`Game::debug_kill`). No enemy gets near enough to attack, so a round
+    /// lasts until every enemy it calls has come to the fight - on a waves
+    /// map, exactly as long as its stragglers keep it waiting. Each tank's arrival at the
+    /// defence is its `time_to_engage`, so the walk to the fight and
+    /// `never-arrived` read the same as in the other scenarios
+    /// (docs/large-maps-follow-camera.md section 12).
+    Defend,
     /// Player drives a continuous square loop (1s per leg: Up, Right, Down,
     /// Left) without firing - a perpetually moving target whose bearing from
     /// every enemy keeps sweeping across the 45-degree diagonals and whose
@@ -381,6 +404,14 @@ struct Args {
     /// nearest live player, which is what the AI targets.
     #[arg(long = "players", default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=bongbong::MAX_SEATS as i64))]
     players: u8,
+
+    /// The `defend` scenario's reach (px): an enemy this close to a live
+    /// seat or the players' frog is destroyed. The default, 400, is past
+    /// `enemy_attack_range`, so nobody is ever attacked; inside it the
+    /// defence lets the enemies land a few shots first, which is what a
+    /// team under pressure looks like to the pacing director.
+    #[arg(long = "defend-reach", default_value_t = DEFEND_REACH_PX)]
+    defend_reach: f32,
 
     /// Two-player rounds: pin player 2's chassis (over the map's `tank2`
     /// key, else a random roll), like `--tank` for player 1.
@@ -492,7 +523,7 @@ fn input_for_frame(args: &Args, frame: u32) -> Input {
 fn intent_for_frame(scenario: Scenario, frame: u32) -> Intent {
     let mut player_intent = Intent::default();
     match scenario {
-        Scenario::Afk => {}
+        Scenario::Afk | Scenario::Defend => {}
         Scenario::Advance => {
             player_intent.move_dir = Some(Dir::Up);
             player_intent.fire = frame % 30 == 0;
@@ -512,6 +543,24 @@ fn intent_for_frame(scenario: Scenario, frame: u32) -> Intent {
         }
     }
     player_intent
+}
+
+/// The `defend` scenario's perfect defence: every enemy on the field within
+/// `reach` of a live seat or the players' frog is queued to die at the top
+/// of the next frame (`Game::debug_kill`), and the frame it got there is
+/// its arrival at the fight (`TankTrack::time_to_engage`).
+fn defend(game: &mut Game, tracks: &mut BTreeMap<usize, TankTrack>, frame: u32, reach: f32) {
+    let snapshots = game.tank_snapshots();
+    let mut guarded: Vec<Position> =
+        snapshots.iter().filter(|t| t.is_player && !t.is_wreck && !t.entering).map(|t| t.position).collect();
+    guarded.extend(game.frog_position());
+    for tank in snapshots.iter().filter(|t| !t.is_player && !t.is_wreck && !t.entering) {
+        if guarded.iter().any(|g| g.distance_to(tank.position) <= reach) && game.debug_kill(tank.slot).is_ok() {
+            if let Some(track) = tracks.get_mut(&tank.slot) {
+                track.time_to_engage.get_or_insert(frame as f32 * DT);
+            }
+        }
+    }
 }
 
 fn outcome_str(outcome: Outcome) -> &'static str {
@@ -558,15 +607,16 @@ struct AnomalyTotals {
     invariant: u32,
     tank_grind: u32,
     pile_up: u32,
+    offbox_fire: u32,
 }
 
 /// Canonical anomaly-kind tags in reporting order - exactly the strings
 /// `report` prints in ANOMALY lines. The single source of truth wiring a
 /// kind into `--budget` validation, the `--json-out` `anomalies` object
-/// (tags with `-` swapped for `_`), and the `--heatmap` per-kind ordering:
-/// a new kind added here and in `AnomalyTotals::count` reaches all three
-/// automatically.
-const ANOMALY_KINDS: [&str; 14] = [
+/// (tags with `-` swapped for `_`), the `--heatmap` per-kind ordering and
+/// the sweep totals (`AnomalyTotals::add`): a new kind added here and in
+/// `AnomalyTotals::count`/`count_mut` reaches all four automatically.
+const ANOMALY_KINDS: [&str; 15] = [
     "stale-start",
     "stall",
     "border-stuck",
@@ -581,6 +631,7 @@ const ANOMALY_KINDS: [&str; 14] = [
     "invariant",
     "tank-grind",
     "pile-up",
+    "offbox-fire",
 ];
 
 /// `kind=count` for every kind in `ANOMALY_KINDS`, in reporting order - the
@@ -603,23 +654,95 @@ impl AnomalyTotals {
     /// read `--budget`/`--json-out` need, kept next to the field list so
     /// the two can't drift.
     fn count(&self, kind: &str) -> u32 {
+        let mut copy = *self;
+        *copy.count_mut(kind)
+    }
+
+    /// The field behind one `ANOMALY_KINDS` tag.
+    fn count_mut(&mut self, kind: &str) -> &mut u32 {
         match kind {
-            "stale-start" => self.stale_start,
-            "stall" => self.stall,
-            "border-stuck" => self.border_stuck,
-            "jitter" => self.jitter,
-            "spin" => self.spin,
-            "churn" => self.churn,
-            "clustering" => self.clustering,
-            "wall-grind" => self.wall_grind,
-            "bump-rate" => self.bump_rate,
-            "low-progress" => self.low_progress,
-            "never-arrived" => self.never_arrived,
-            "invariant" => self.invariant,
-            "tank-grind" => self.tank_grind,
-            "pile-up" => self.pile_up,
+            "stale-start" => &mut self.stale_start,
+            "stall" => &mut self.stall,
+            "border-stuck" => &mut self.border_stuck,
+            "jitter" => &mut self.jitter,
+            "spin" => &mut self.spin,
+            "churn" => &mut self.churn,
+            "clustering" => &mut self.clustering,
+            "wall-grind" => &mut self.wall_grind,
+            "bump-rate" => &mut self.bump_rate,
+            "low-progress" => &mut self.low_progress,
+            "never-arrived" => &mut self.never_arrived,
+            "invariant" => &mut self.invariant,
+            "tank-grind" => &mut self.tank_grind,
+            "pile-up" => &mut self.pile_up,
+            "offbox-fire" => &mut self.offbox_fire,
             _ => unreachable!("unknown anomaly kind '{kind}' - not in ANOMALY_KINDS"),
         }
+    }
+
+    /// Fold one round's totals into a sweep's, every kind in
+    /// `ANOMALY_KINDS`.
+    fn add(&mut self, other: &AnomalyTotals) {
+        for kind in ANOMALY_KINDS {
+            *self.count_mut(kind) += other.count(kind);
+        }
+    }
+}
+
+/// One round's fire, read off `Game::events()` and the tank snapshots by
+/// `check_fire` (docs/large-maps-follow-camera.md section 5): counters,
+/// not anomalies - the anomaly is `offbox-fire`. The sight box is the
+/// rule's own (`bongbong::ai::in_sight_box`), measured centre to centre.
+#[derive(Default, Clone, Copy)]
+struct FireTally {
+    /// Enemy trigger pulls (`Event::Fired` from an enemy slot).
+    enemy_shots: u32,
+    /// The ones aimed at a seat (`TankSnapshot::shot_at_seat`)...
+    shots_at_seats: u32,
+    /// ...and of those, the ones taken from outside that seat's sight box
+    /// - every one an `offbox-fire` (which flags each tank once a round).
+    shots_at_seats_offbox: u32,
+    /// Enemy seeker missiles that locked onto a seat
+    /// (`Event::MissileLocked`), and the ones whose launcher stood
+    /// outside that seat's box.
+    missile_locks_on_seats: u32,
+    missile_locks_offbox: u32,
+    /// Shots, beams and flames that landed on a seat (`Event::Hit`), from
+    /// anyone.
+    hits_on_seats: u32,
+    /// A seat's hits on enemies (`TankSnapshot::hit_by_seat`)...
+    seat_hits: u32,
+    /// ...on an enemy standing outside that seat's sight box when it
+    /// landed - the reverse unfairness: that enemy cannot answer until it
+    /// closes in.
+    seat_hits_offbox: u32,
+}
+
+impl FireTally {
+    fn add(&mut self, other: &FireTally) {
+        self.enemy_shots += other.enemy_shots;
+        self.shots_at_seats += other.shots_at_seats;
+        self.shots_at_seats_offbox += other.shots_at_seats_offbox;
+        self.missile_locks_on_seats += other.missile_locks_on_seats;
+        self.missile_locks_offbox += other.missile_locks_offbox;
+        self.hits_on_seats += other.hits_on_seats;
+        self.seat_hits += other.seat_hits;
+        self.seat_hits_offbox += other.seat_hits_offbox;
+    }
+
+    /// `(name, value)` in reporting order - the summary line and the
+    /// `--json-out` `fire` object read the same list.
+    fn fields(&self) -> [(&'static str, u32); 8] {
+        [
+            ("enemy_shots", self.enemy_shots),
+            ("shots_at_seats", self.shots_at_seats),
+            ("shots_at_seats_offbox", self.shots_at_seats_offbox),
+            ("missile_locks_on_seats", self.missile_locks_on_seats),
+            ("missile_locks_offbox", self.missile_locks_offbox),
+            ("hits_on_seats", self.hits_on_seats),
+            ("seat_hits", self.seat_hits),
+            ("seat_hits_offbox", self.seat_hits_offbox),
+        ]
     }
 }
 
@@ -728,6 +851,13 @@ struct TankTrack {
     // that engaged once and then retreated (or was wrecked afterwards)
     // still counts as having arrived. `None` = never engaged.
     time_to_engage: Option<f32>,
+    // A straggler the round took off to roll in again through a nearer
+    // gate (`Event::Rerolled`) is back in a gate lane: no check reads it
+    // until it is through, and then its motion windows start again
+    // (`rejoin`) - the jump to the gate is no driving of its own.
+    away: bool,
+    // How many times the round rolled this tank in again.
+    rerolls: u32,
 }
 
 impl TankTrack {
@@ -737,10 +867,17 @@ impl TankTrack {
     /// (`act_attack`'s fire/cooldown rhythm); it currently holds an
     /// aligned, in-range firing solution on the live player
     /// (`act_attack`'s aim-settle hold - within ENEMY_FIRE_ALIGN_PX of a
-    /// cardinal axis and inside ENEMY_ATTACK_RANGE); or it's parked
-    /// outside ENEMY_RETREAT_RANGE with shells still below
-    /// ENEMY_AMMO_RESUME (`act_retreat`'s wait-out-the-recharge hold).
+    /// cardinal axis, inside ENEMY_ATTACK_RANGE and inside the player's
+    /// sight box, outside which the AI closes in rather than holds, so a
+    /// tank standing still there is a stall); or it's parked outside
+    /// ENEMY_RETREAT_RANGE with shells still below ENEMY_AMMO_RESUME
+    /// (`act_retreat`'s wait-out-the-recharge hold).
     fn deliberate_hold(&self, frame: u32, tank: &TankSnapshot, player: &TankSnapshot) -> bool {
+        // A field map's enemy nothing has woken yet holds still by design
+        // (`simulation::field`): far from every seat, it does not think.
+        if tank.asleep {
+            return true;
+        }
         if self
             .last_fire_frame
             .is_some_and(|f| frame - f <= FIRED_RECENTLY_FRAMES)
@@ -753,7 +890,9 @@ impl TankTrack {
         let dx = (player.position.x - tank.position.x).abs();
         let dy = (player.position.y - tank.position.y).abs();
         let dist = tank.position.distance_to(player.position);
-        let aligned_in_range = dx.min(dy) <= tuning().enemy_fire_align_px && dist <= tuning().enemy_attack_range;
+        let aligned_in_range = dx.min(dy) <= tuning().enemy_fire_align_px
+            && dist <= tuning().enemy_attack_range
+            && in_sight_box(player.position, tank.position);
         let retreat_wait = dist >= tuning().enemy_retreat_range() && tank.shells_ammo < tuning().enemy_ammo_resume;
         aligned_in_range || retreat_wait
     }
@@ -818,7 +957,35 @@ impl TankTrack {
             path_cells,
             ideal_seconds,
             time_to_engage: None,
+            away: false,
+            rerolls: 0,
         }
+    }
+
+    /// The tank is through its gate again after a re-roll (`away`): every
+    /// window that reads its motion starts over where it stands, so the
+    /// jump from where it was taken off is never read as driving. What
+    /// it has done - its arrival at the fight, its totals, its walk's
+    /// budget from the first arrival - stands.
+    fn rejoin(&mut self, snapshot: &TankSnapshot, frame: u32) {
+        self.away = false;
+        self.stall_frames = 0;
+        self.border_frames = 0;
+        self.cluster_frames = 0;
+        self.heading_history.clear();
+        self.heading_history.push_back(snapshot.rotation);
+        self.recent_flips.clear();
+        self.last_heading = snapshot.rotation;
+        self.spin_sum = 0.0;
+        self.spin_start_frame = frame;
+        self.spin_start_pos = snapshot.position;
+        self.trail.clear();
+        self.trail_path_len = 0.0;
+        self.grind_frames = 0;
+        self.was_touching = false;
+        self.progress_frames = 0;
+        self.tank_grind_frames = 0;
+        self.pileup_frames = 0;
     }
 }
 
@@ -921,11 +1088,17 @@ fn check_anomalies(
     };
 
     // Every enemy on the field gets a track the first frame it is seen
-    // there - band tanks at frame 0, wave tanks the frame they arrive.
-    for tank in &snapshots {
-        if !tank.is_player && !tank.entering && !tracks.contains_key(&tank.slot) {
-            let player_pos = nearest_player(tank.position).position;
-            tracks.insert(tank.slot, TankTrack::new(game, tank, player_pos, frame));
+    // there - band tanks at frame 0, wave tanks the frame they arrive - and
+    // a straggler rolled in again picks its own up where it left it.
+    for tank in snapshots.iter().filter(|t| !t.is_player) {
+        match tracks.get_mut(&tank.slot) {
+            None if !tank.entering => {
+                let player_pos = nearest_player(tank.position).position;
+                tracks.insert(tank.slot, TankTrack::new(game, tank, player_pos, frame));
+            }
+            Some(track) if tank.entering => track.away = true,
+            Some(track) if track.away => track.rejoin(tank, frame),
+            _ => {}
         }
     }
 
@@ -1435,6 +1608,117 @@ fn check_anomalies(
     }
 }
 
+/// Where every tank stood when a frame's decisions were made - the
+/// previous frame's positions, which is what `enemy_phase`,
+/// `guide_missiles` and the towers read (nothing moves a hull between the
+/// top of `update` and those phases but a portal or a roll-in) - and
+/// whether it was still rolling in. Refreshed by `check_fire`.
+type Stood = BTreeMap<usize, (Position, bool)>;
+
+fn stood_now(game: &Game) -> Stood {
+    game.tank_snapshots().iter().map(|t| (t.slot, (t.position, t.entering))).collect()
+}
+
+/// The display name of seat `seat` (see `tank_label`).
+fn seat_label(seat: usize, first_enemy: usize) -> String {
+    if first_enemy == 1 { "PLAYER".to_string() } else { format!("PLAYER{}", seat + 1) }
+}
+
+/// This frame's fire against the sight-box rule
+/// (docs/large-maps-follow-camera.md section 5): every enemy trigger pull
+/// aimed at a seat (`Event::Fired` with `TankSnapshot::shot_at_seat`) and
+/// every enemy missile that locked onto a seat (`Event::MissileLocked`)
+/// is measured from where the shooter and the seat stood when it was
+/// decided (`stood`), and one taken from outside the seat's box is an
+/// `offbox-fire` - reported once per enemy per round (`flagged`), every
+/// one counted in `fire`. The tally also counts hits on seats and seat
+/// hits on enemies, and the ones on an enemy outside the hitting seat's
+/// box (where they stand after the frame, which is when the hit landed).
+/// A tank that came through a portal this frame, or is rolling in, is
+/// not measured: where it stood is not where it was decided from. Runs on
+/// every frame, the one the round ends on included - its shots were
+/// decided while it was still being played.
+#[allow(clippy::too_many_arguments)]
+fn check_fire(
+    game: &Game,
+    stood: &mut Stood,
+    round: u32,
+    frame: u32,
+    fire: &mut FireTally,
+    flagged: &mut BTreeSet<usize>,
+    totals: &mut AnomalyTotals,
+    heat: &mut Vec<(String, Position)>,
+) {
+    let first_enemy = game.first_enemy_slot();
+    let seed = game.round_seed();
+    let snapshots = game.tank_snapshots();
+    let events = game.events();
+    let jumped: BTreeSet<usize> =
+        events.iter().filter_map(|e| if let Event::Teleported { slot, .. } = e { Some(*slot) } else { None }).collect();
+    let decided_at =
+        |slot: usize| stood.get(&slot).filter(|&&(_, entering)| !entering && !jumped.contains(&slot)).map(|&(p, _)| p);
+    let (half_w, half_h) = tuning().sight_box_half_px();
+    // Whether `shooter` stood outside `seat`'s box when it decided to fire
+    // at it; the first time a round catches a tank at it is its anomaly.
+    let mut offbox = |shooter: usize, seat: usize, what: &str| -> bool {
+        let (Some(at), Some(seat_pos)) = (decided_at(shooter), decided_at(seat)) else { return false };
+        if in_sight_box(seat_pos, at) {
+            return false;
+        }
+        if flagged.insert(shooter) {
+            report(
+                heat,
+                round,
+                seed,
+                frame,
+                &enemy_label(shooter, first_enemy),
+                "offbox-fire",
+                &format!(
+                    "{what} {} from outside its sight box (dx={:.0} dy={:.0}, box +-{half_w:.0} x +-{half_h:.0})",
+                    seat_label(seat, first_enemy),
+                    at.x - seat_pos.x,
+                    at.y - seat_pos.y,
+                ),
+                at,
+            );
+            totals.offbox_fire += 1;
+        }
+        true
+    };
+    for event in events {
+        match *event {
+            Event::Fired { slot, .. } if slot >= first_enemy => {
+                fire.enemy_shots += 1;
+                let Some(seat) = snapshots.iter().find(|t| t.slot == slot).and_then(|t| t.shot_at_seat) else {
+                    continue;
+                };
+                fire.shots_at_seats += 1;
+                if offbox(slot, seat as usize, "fired at") {
+                    fire.shots_at_seats_offbox += 1;
+                }
+            }
+            Event::MissileLocked { slot, target: Some(target), .. } if slot >= first_enemy && target < first_enemy => {
+                fire.missile_locks_on_seats += 1;
+                if offbox(slot, target, "missile locked onto") {
+                    fire.missile_locks_offbox += 1;
+                }
+            }
+            Event::Hit { target: HitTarget::Player { .. }, .. } => fire.hits_on_seats += 1,
+            _ => {}
+        }
+    }
+    for tank in &snapshots {
+        let Some(seat) = tank.hit_by_seat else { continue };
+        fire.seat_hits += 1;
+        if let Some(by) = snapshots.iter().find(|t| t.slot == seat as usize)
+            && !in_sight_box(by.position, tank.position)
+        {
+            fire.seat_hits_offbox += 1;
+        }
+    }
+    *stood = snapshots.iter().map(|t| (t.slot, (t.position, t.entering))).collect();
+}
+
 /// Per-enemy end-of-round metrics for one `--json-out` record, read off
 /// the same `TankTrack` state the anomaly checks maintained all round.
 struct TankReport {
@@ -1486,6 +1770,8 @@ struct RoundResult {
     /// one, budgeting it would budget the feature
     /// (docs/enemy-command-and-control-prd.md section 10).
     rams: RamTally,
+    /// This round's shots and hits against the sight-box rule (`check_fire`).
+    fire: FireTally,
     frames_run: u32,
     outcome: Outcome,
     tanks: Vec<TankReport>,
@@ -1493,6 +1779,73 @@ struct RoundResult {
     /// reported, so a JSONL record names the rules it played under.
     mission: bongbong::level::Mission,
     spawn: bongbong::level::SpawnKind,
+    /// When the fight first reached a seat, in round seconds (`Contact`).
+    contact: Contact,
+    /// The round's lulls between engagements, in seconds (`Lulls`).
+    lulls: Vec<f32>,
+    /// Stragglers the round rolled in again (`Event::Rerolled`).
+    rerolls: u32,
+    /// Wall-clock seconds spent inside `Game::update` this round, over
+    /// `frames_run` ticks - the simulation's own cost, the probe's checks
+    /// left out.
+    update_seconds: f64,
+}
+
+/// When the fight first reached a seat in one round, in round seconds:
+/// `None` where it never did. The pacing reading for field maps
+/// (docs/large-maps-follow-camera.md section 12) - how long the walk to
+/// the fight took - printed beside the anomalies, never budgeted.
+#[derive(Default, Clone, Copy)]
+struct Contact {
+    /// The first enemy within `enemy_attack_range` of the nearest live
+    /// seat (the earliest `TankTrack::time_to_engage`).
+    engage: Option<f32>,
+    /// The first enemy trigger pull aimed at a seat
+    /// (`FireTally::shots_at_seats`).
+    shot: Option<f32>,
+    /// The first shot, beam or flame to land on a seat
+    /// (`FireTally::hits_on_seats`).
+    hit: Option<f32>,
+}
+
+/// The time between engagements (docs/large-maps-follow-camera.md section
+/// 12, the pacing director): every stretch of at least `LULL_MIN_SECONDS`
+/// with no enemy in reach of the team (`in_contact`) between two frames
+/// with one. The stretch before the first contact is the walk to the
+/// fight (`Contact`), and the one after the last ends with the round, so
+/// neither is a lull.
+#[derive(Default)]
+struct Lulls {
+    last_contact: Option<u32>,
+    lulls: Vec<f32>,
+}
+
+impl Lulls {
+    fn observe(&mut self, frame: u32, contact: bool) {
+        if !contact {
+            return;
+        }
+        if let Some(last) = self.last_contact {
+            let lull = frame.saturating_sub(last + 1) as f32 * DT;
+            if lull >= LULL_MIN_SECONDS {
+                self.lulls.push(lull);
+            }
+        }
+        self.last_contact = Some(frame);
+    }
+}
+
+/// Whether the fight is on this frame: a live enemy on the field within
+/// `reach` of a live seat on the field or of the players' frog.
+fn in_contact(game: &Game, reach: f32) -> bool {
+    let snapshots = game.tank_snapshots();
+    let mut team: Vec<Position> =
+        snapshots.iter().filter(|t| t.is_player && !t.is_wreck && !t.entering).map(|t| t.position).collect();
+    team.extend(game.frog_position());
+    snapshots
+        .iter()
+        .filter(|t| !t.is_player && !t.is_wreck && !t.entering)
+        .any(|t| team.iter().any(|&p| p.distance_to(t.position) <= reach))
 }
 
 /// Runs one round to completion (or the frame limit). `trace` controls
@@ -1543,6 +1896,11 @@ fn run_round(
         if let Some(kind) = game.player2_chassis() {
             println!("player 2 chassis={}", kind.name());
         }
+        // Which rules the enemies play by: a field map's are bounded
+        // (chained alerts, leashes, far enemies thinking less, spawns by
+        // their walk to the fight - docs/large-maps-follow-camera.md
+        // section 12), an arena's are the shared alert and the edge band.
+        println!("map class={}", if game.field_map() { "field" } else { "arena" });
     }
 
     // Both keyed by owner slot and filled as tanks come onto the field
@@ -1552,6 +1910,11 @@ fn run_round(
     let mut invariant_flagged: BTreeSet<usize> = BTreeSet::new();
     let mut totals = AnomalyTotals::default();
     let mut rams = RamTally::default();
+    // `check_fire`'s state: where every tank stood as the frame began, the
+    // enemies already flagged `offbox-fire`, and the round's tally.
+    let mut stood = stood_now(&game);
+    let mut offbox_flagged: BTreeSet<usize> = BTreeSet::new();
+    let mut fire = FireTally::default();
     let first_enemy = game.first_enemy_slot();
 
     if trace {
@@ -1560,12 +1923,19 @@ fn run_round(
     check_anomalies(&mut tracks, &mut invariant_flagged, &game, round, 0, &mut totals, heat);
 
     let mut frames_run = args.frames;
+    let mut contact = Contact::default();
+    let mut lulls = Lulls::default();
+    let mut rerolls = 0u32;
+    let reach = if matches!(args.scenario, Scenario::Defend) { args.defend_reach } else { tuning().enemy_attack_range };
+    let mut update_seconds = 0.0f64;
     for frame in 1..=args.frames {
         let input = input_for_frame(args, frame);
+        let started = std::time::Instant::now();
         game.update(input, DT, field_width(), field_height());
-        // The one place the probe reads the event log: ram damage is
-        // invisible to `tank_snapshots`, which reports health but never who
-        // took it off. Costs nothing - recording an event draws no RNG.
+        update_seconds += started.elapsed().as_secs_f64();
+        // Ram damage is invisible to `tank_snapshots`, which reports health
+        // but never who took it off, so it is read off the event log.
+        // Costs nothing - recording an event draws no RNG.
         for event in game.events() {
             if let Event::Ram { slot, other_slot, damage } = event {
                 if *slot >= first_enemy && *other_slot >= first_enemy {
@@ -1575,8 +1945,44 @@ fn run_round(
                 }
                 rams.rolled_damage += damage;
             }
+            // A straggler taken off to roll in again through a nearer gate
+            // (`Game::reroll_stragglers`): counted, and named in a trace.
+            if let Event::Rerolled { slot, x, y } = event {
+                rerolls += 1;
+                if let Some(track) = tracks.get_mut(slot) {
+                    track.rerolls += 1;
+                }
+                if trace {
+                    println!(
+                        "probe: t={:.1}s {} rolled in again, taken off at ({x:.0},{y:.0})",
+                        frame as f32 * DT,
+                        enemy_label(*slot, first_enemy),
+                    );
+                }
+            }
+            if let Event::TankEntered { slot } = event
+                && trace
+                && tracks.get(slot).is_some_and(|t| t.rerolls > 0)
+            {
+                let at = game.tank_snapshots().iter().find(|t| t.slot == *slot).map(|t| t.position).unwrap_or_default();
+                println!("probe: t={:.1}s {} back through its gate at ({:.0},{:.0})", frame as f32 * DT, enemy_label(*slot, first_enemy), at.x, at.y);
+            }
         }
+        check_fire(&game, &mut stood, round, frame, &mut fire, &mut offbox_flagged, &mut totals, heat);
         check_anomalies(&mut tracks, &mut invariant_flagged, &game, round, frame, &mut totals, heat);
+        if game.outcome() == Outcome::Playing {
+            lulls.observe(frame, in_contact(&game, reach));
+        }
+        if matches!(args.scenario, Scenario::Defend) {
+            defend(&mut game, &mut tracks, frame, args.defend_reach);
+        }
+        let now = frame as f32 * DT;
+        if contact.shot.is_none() && fire.shots_at_seats > 0 {
+            contact.shot = Some(now);
+        }
+        if contact.hit.is_none() && fire.hits_on_seats > 0 {
+            contact.hit = Some(now);
+        }
 
         if trace && frame % args.log_every == 0 {
             log_frame(&game, frame);
@@ -1652,6 +2058,13 @@ fn run_round(
         let Some(tank) = snapshot.filter(|t| !t.is_wreck) else {
             continue;
         };
+        // On a field map an enemy that nothing has called to the fight -
+        // asleep, or keeping to its home leash with no alert - is not
+        // headed for the player at all, so not arriving is no routing
+        // failure (docs/large-maps-follow-camera.md section 12).
+        if tank.asleep || tank.leashed {
+            continue;
+        }
         let budget = NAV_GRACE_SECONDS + NAV_STRETCH_MAX * track.ideal_seconds;
         if elapsed > budget {
             report(
@@ -1671,15 +2084,70 @@ fn run_round(
         }
     }
 
+    contact.engage = tracks.values().filter_map(|t| t.time_to_engage).min_by(f32::total_cmp);
+    if trace {
+        println!(
+            "probe: first contact: engage={} shot-at-seat={} hit-on-seat={}",
+            seconds_or_never(contact.engage),
+            seconds_or_never(contact.shot),
+            seconds_or_never(contact.hit),
+        );
+        println!(
+            "probe: lulls: [{}]",
+            lulls.lulls.iter().map(|l| format!("{l:.1}s")).collect::<Vec<_>>().join(" ")
+        );
+    }
+
     RoundResult {
         totals,
         rams,
+        fire,
         frames_run,
         outcome: game.outcome(),
         tanks: reports,
         mission: game.mission,
         spawn: game.spawn_plan.kind(),
+        contact,
+        lulls: lulls.lulls,
+        rerolls,
+        update_seconds,
     }
+}
+
+/// `12.3s`, or `never`.
+fn seconds_or_never(t: Option<f32>) -> String {
+    t.map_or("never".to_string(), |t| format!("{t:.1}s"))
+}
+
+/// The mean and the median of `values`, `None` when there are none.
+fn mean_median(values: &[f32]) -> Option<(f32, f32)> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f32::total_cmp);
+    let mid = sorted.len() / 2;
+    let median = if sorted.len() % 2 == 0 { (sorted[mid - 1] + sorted[mid]) * 0.5 } else { sorted[mid] };
+    Some((sorted.iter().sum::<f32>() / sorted.len() as f32, median))
+}
+
+/// `mean=12.3s median=11.0s (n=27)`, or `n=0` where nothing was measured.
+fn mean_median_line(values: &[f32], unit: &str) -> String {
+    match mean_median(values) {
+        Some((mean, median)) => format!("mean={mean:.1}{unit} median={median:.1}{unit} (n={})", values.len()),
+        None => "n=0".to_string(),
+    }
+}
+
+/// `mean_median_line` plus the 90th percentile and the largest:
+/// `mean=12.3s median=11.0s p90=20.1s max=31.0s (n=27)`.
+fn spread_line(values: &[f32], unit: &str) -> String {
+    let Some((mean, median)) = mean_median(values) else { return "n=0".to_string() };
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f32::total_cmp);
+    let p90 = sorted[((sorted.len() as f32 * 0.9).ceil() as usize).clamp(1, sorted.len()) - 1];
+    let max = sorted[sorted.len() - 1];
+    format!("mean={mean:.1}{unit} median={median:.1}{unit} p90={p90:.1}{unit} max={max:.1}{unit} (n={})", values.len())
 }
 
 /// The header/JSONL name for the scenario - one place, so the two can't
@@ -1687,6 +2155,7 @@ fn run_round(
 fn scenario_str(scenario: Scenario) -> &'static str {
     match scenario {
         Scenario::Afk => "afk",
+        Scenario::Defend => "defend",
         Scenario::Advance => "advance",
         Scenario::Brake => "brake",
         Scenario::Circle => "circle",
@@ -1750,8 +2219,17 @@ fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult, tun
         })
         .collect::<Vec<_>>()
         .join(",");
+    let fire = result.fire.fields().iter().map(|(name, v)| format!("\"{name}\":{v}")).collect::<Vec<_>>().join(",");
+    let contact = format!(
+        "\"engage\":{},\"shot_at_seat\":{},\"hit_on_seat\":{}",
+        opt_f32(result.contact.engage),
+        opt_f32(result.contact.shot),
+        opt_f32(result.contact.hit),
+    );
+    let ms_per_tick = result.update_seconds * 1000.0 / result.frames_run.max(1) as f64;
+    let lulls = result.lulls.iter().map(|l| format!("{l:.2}")).collect::<Vec<_>>().join(",");
     format!(
-        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"players\":{},\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"anomalies\":{{{anomalies}}},\"rams\":{{\"pair\":{},\"into_player\":{},\"rolled_damage\":{:.1}}},\"tanks\":[{tanks}]}}",
+        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"players\":{},\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"ms_per_tick\":{ms_per_tick:.4},\"first_contact\":{{{contact}}},\"lulls\":[{lulls}],\"rerolls\":{},\"anomalies\":{{{anomalies}}},\"rams\":{{\"pair\":{},\"into_player\":{},\"rolled_damage\":{:.1}}},\"fire\":{{{fire}}},\"tanks\":[{tanks}]}}",
         json_escape(map_display(args)),
         result.mission.name(),
         result.spawn.name(),
@@ -1760,6 +2238,7 @@ fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult, tun
         result.tanks.len(),
         result.frames_run,
         outcome_str(result.outcome),
+        result.rerolls,
         result.rams.pair,
         result.rams.into_player,
         result.rams.rolled_damage,
@@ -1906,11 +2385,21 @@ fn main() -> ExitCode {
 
     let mut grand_total = AnomalyTotals::default();
     let mut grand_rams = RamTally::default();
+    let mut grand_fire = FireTally::default();
     // Every flagged round's (round, seed), for the end-of-sweep replay
     // recap - the per-round lines above it scroll away on a big sweep.
     let mut flagged: Vec<(u32, u64)> = Vec::new();
     // Every reported anomaly's (kind, position), for --heatmap.
     let mut heat: Vec<(String, Position)> = Vec::new();
+    // How the rounds ended, how long a lost one lasted, when the fight
+    // first reached a seat, and what `Game::update` cost - the pacing and
+    // the budget side of a sweep, beside its anomalies.
+    let (mut won, mut lost, mut unfinished) = (0u32, 0u32, 0u32);
+    let (mut won_seconds, mut lost_seconds): (Vec<f32>, Vec<f32>) = (Vec::new(), Vec::new());
+    let (mut engage, mut shot, mut hit): (Vec<f32>, Vec<f32>, Vec<f32>) = (Vec::new(), Vec::new(), Vec::new());
+    let mut lulls: Vec<f32> = Vec::new();
+    let (mut rerolls, mut rerolled_rounds) = (0u32, 0u32);
+    let (mut update_seconds, mut ticks) = (0.0f64, 0u64);
 
     for round in 0..args.rounds {
         let seed = base_seed.wrapping_add(round as u64);
@@ -1923,30 +2412,35 @@ fn main() -> ExitCode {
         grand_rams.pair += result.rams.pair;
         grand_rams.into_player += result.rams.into_player;
         grand_rams.rolled_damage += result.rams.rolled_damage;
-        if sweep {
-            if totals.total() > 0 {
-                flagged.push((round, seed));
-                println!(
-                    "round={round} seed=0x{seed:016x} anomalies={} ({})",
-                    totals.total(),
-                    totals_line(&totals),
-                );
+        grand_fire.add(&result.fire);
+        match result.outcome {
+            Outcome::Won => {
+                won += 1;
+                won_seconds.push(result.frames_run as f32 * DT);
             }
-            grand_total.stale_start += totals.stale_start;
-            grand_total.stall += totals.stall;
-            grand_total.border_stuck += totals.border_stuck;
-            grand_total.jitter += totals.jitter;
-            grand_total.spin += totals.spin;
-            grand_total.churn += totals.churn;
-            grand_total.clustering += totals.clustering;
-            grand_total.wall_grind += totals.wall_grind;
-            grand_total.bump_rate += totals.bump_rate;
-            grand_total.low_progress += totals.low_progress;
-            grand_total.never_arrived += totals.never_arrived;
-            grand_total.invariant += totals.invariant;
-        } else {
-            grand_total = totals;
+            Outcome::Lost => {
+                lost += 1;
+                lost_seconds.push(result.frames_run as f32 * DT);
+            }
+            Outcome::Playing => unfinished += 1,
         }
+        engage.extend(result.contact.engage);
+        shot.extend(result.contact.shot);
+        hit.extend(result.contact.hit);
+        lulls.extend(&result.lulls);
+        rerolls += result.rerolls;
+        rerolled_rounds += u32::from(result.rerolls > 0);
+        update_seconds += result.update_seconds;
+        ticks += result.frames_run as u64;
+        if sweep && totals.total() > 0 {
+            flagged.push((round, seed));
+            println!(
+                "round={round} seed=0x{seed:016x} anomalies={} ({})",
+                totals.total(),
+                totals_line(&totals),
+            );
+        }
+        grand_total.add(&totals);
     }
 
     if sweep {
@@ -1976,6 +2470,48 @@ fn main() -> ExitCode {
     } else if grand_total.total() == 0 {
         println!("probe: no anomalies detected");
     }
+    // Fire against the sight-box rule (docs/large-maps-follow-camera.md
+    // section 5): counters beside the `offbox-fire` anomaly, which is the
+    // one budgeted. `seat-hits-offbox` is the reverse unfairness - seat
+    // hits on enemies outside that seat's box, which cannot answer until
+    // they close in - and is a reading, not a failure.
+    println!(
+        "probe: fire: {}",
+        grand_fire.fields().iter().map(|(name, v)| format!("{}={v}", name.replace('_', "-"))).collect::<Vec<_>>().join(" ")
+    );
+    // Pacing (docs/large-maps-follow-camera.md section 12): how the rounds
+    // ended, how long a lost one lasted, and how long the walk to the
+    // fight took - the first enemy in attack range of a seat, its first
+    // shot at one, the first hit on one. Readings, never budgeted. A
+    // sweep prints them over every round; a single round prints its own
+    // above.
+    if sweep {
+        println!(
+            "probe: outcomes: won={won} lost={lost} unfinished={unfinished} won-after {} | lost-after {}",
+            mean_median_line(&won_seconds, "s"),
+            mean_median_line(&lost_seconds, "s"),
+        );
+        println!(
+            "probe: first contact: engage {} | shot-at-seat {} | hit-on-seat {}",
+            mean_median_line(&engage, "s"),
+            mean_median_line(&shot, "s"),
+            mean_median_line(&hit, "s"),
+        );
+        // The time between engagements (`Lulls`): how long the team waits
+        // between one fight and the next - what the pacing director
+        // stretches after a peak and shortens while nothing happens.
+        println!("probe: lulls: {}", spread_line(&lulls, "s"));
+        // Stragglers rolled in again through a nearer gate (field maps'
+        // wave rounds, `Game::reroll_stragglers`).
+        println!("probe: rerolls: {rerolls} in {rerolled_rounds} of {} rounds", args.rounds);
+    }
+    // What the simulation cost, wall clock inside `Game::update` alone:
+    // a release build's number is the one to quote.
+    println!(
+        "probe: timing: {:.3} ms/tick over {ticks} ticks{}",
+        update_seconds * 1000.0 / ticks.max(1) as f64,
+        if cfg!(debug_assertions) { " (debug build)" } else { "" },
+    );
 
     if args.heatmap {
         print_heatmaps(&args, &heat);

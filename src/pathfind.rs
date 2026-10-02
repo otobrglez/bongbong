@@ -6,10 +6,12 @@
 //!
 //! Kept game-agnostic in spirit (like `bt.rs`): this module only knows about
 //! a rectangular grid of blocked/open cells, not about tanks, obstacles, or
-//! any other game type. `Game::update` builds a fresh `Grid` each frame from
-//! the current obstacle layout and hands it down through `Ai::think`, in
-//! keeping with `docs/physics-engine-design.md`'s "AI decoupling" principle:
-//! the AI reasons over lightweight snapshots, never the physics world or ECS
+//! any other game type. `Game::update` hands a `Grid` of the current
+//! obstacle layout down through `Ai::think` each frame - the occupancy and
+//! its labels kept across frames and rebuilt only when the layout changes
+//! (`simulation::nav`), the prices and fields the frame's own - in keeping
+//! with `docs/physics-engine-design.md`'s "AI decoupling" principle: the AI
+//! reasons over lightweight snapshots, never the physics world or ECS
 //! directly.
 //!
 //! Two ways to route on one grid, behind the one `next_step` call:
@@ -23,7 +25,17 @@
 //!   frame, so however many enemies are alive the frame's routing work is
 //!   bounded by the number of targets, not searchers. `next_step` picks
 //!   the field whose goal cell the target falls in and falls back to A\*
-//!   otherwise, so callers never know which served them.
+//!   otherwise, so callers never know which served them. A field is worked
+//!   out only **as far as it is read** (`Dijkstra`): a query runs the
+//!   search on until no cell still ahead of it could change the answer, so
+//!   a frame whose enemies all stand near the fight pays for the cells
+//!   between them and it, and a field nobody reads costs nothing - and
+//!   every answer is the one the whole table gives.
+//!
+//! `route_ahead` is `next_step` read a few cells further, what a hull
+//! needs to see its next turn coming before it gets there
+//! (`ai::Ai::lane_turn`); a field's read can be straightened along the
+//! hull's heading where that costs nothing.
 //!
 //! Step costs (`cost`) are what make the field tactical: `weigh` prices a
 //! ford, `surcharge` adds to the cells a player's barrel points down and
@@ -47,13 +59,15 @@
 //! target served by a field is reached through a portal exactly when
 //! A* would go through one.
 
-use std::cmp::Ordering;
+use std::cell::RefCell;
+use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, VecDeque};
 
 use crate::Position;
 
 /// Connected-component labels over a `Grid`'s open cells - see
 /// `Grid::components`.
+#[derive(Clone)]
 pub struct Components {
     /// Per cell: 0 for blocked, otherwise a component id starting at 1.
     label: Vec<u32>,
@@ -73,6 +87,57 @@ impl Components {
     }
 }
 
+/// Every cell's step cost to the nearest of several goals, from
+/// `Grid::walk_costs`: the field a router would read, kept for lookups
+/// instead (how far a spawn cell or a gate is from the nearest seat).
+pub struct WalkCosts {
+    cols: usize,
+    rows: usize,
+    cell_size: f32,
+    to_goal: Vec<u32>,
+}
+
+impl WalkCosts {
+    /// The cost from the cell `p` falls in to the nearest goal, in the
+    /// grid's step costs (one per plain cell), `None` where no route
+    /// reaches one. A point off the grid reads its nearest edge cell.
+    pub fn at(&self, p: Position) -> Option<u32> {
+        let (col, row) = self.cell(p);
+        let cost = self.to_goal[row * self.cols + col];
+        (cost != UNREACHABLE).then_some(cost)
+    }
+
+    /// The walk ahead of a hull standing at `p`: `at`, or, where its cell
+    /// is blocked - a hull pressed against a wall stands in the margin the
+    /// grid keeps round it -, one step more than the cheapest of its open
+    /// cardinal neighbours, which is where its route starts, as a search
+    /// takes its start open (`Grid::search`). `None` where no neighbour
+    /// reaches a goal either.
+    pub fn from_hull(&self, p: Position) -> Option<u32> {
+        if let Some(cost) = self.at(p) {
+            return Some(cost);
+        }
+        let (col, row) = self.cell(p);
+        [(0i32, -1i32), (0, 1), (-1, 0), (1, 0)]
+            .into_iter()
+            .filter_map(|(dc, dr)| {
+                let (c, r) = (col as i32 + dc, row as i32 + dr);
+                (c >= 0 && r >= 0 && (c as usize) < self.cols && (r as usize) < self.rows).then(|| self.to_goal[r as usize * self.cols + c as usize])
+            })
+            .filter(|&cost| cost != UNREACHABLE)
+            .min()
+            .map(|cost| cost + 1)
+    }
+
+    /// The cell `p` falls in; a point off the grid reads its nearest edge
+    /// cell.
+    fn cell(&self, p: Position) -> (usize, usize) {
+        let col = ((p.x / self.cell_size) as isize).clamp(0, self.cols as isize - 1) as usize;
+        let row = ((p.y / self.cell_size) as isize).clamp(0, self.rows as isize - 1) as usize;
+        (col, row)
+    }
+}
+
 /// A coarse occupancy grid over a rectangular area, marking which cells are
 /// blocked (a static obstacle occupies them, plus a clearance margin - see
 /// `build`) versus open.
@@ -80,6 +145,9 @@ pub struct Grid {
     cell_size: f32,
     cols: usize,
     rows: usize,
+    /// The clearance every obstacle is grown by, and the boundary with it
+    /// (`build`), kept so `block` can add an obstacle to a built grid.
+    margin: f32,
     blocked: Vec<bool>,
 
     /// Per portal, its nav footprint: the open cells whose centre lies
@@ -113,18 +181,98 @@ pub struct Grid {
 /// Every cell's cost to reach one goal cell along cardinal steps - a
 /// Dijkstra run outward from the goal over the grid's `cost`s, stored
 /// so that routing from any cell is a read of its neighbours. Built by
-/// `Grid::add_field`, consulted by `Grid::next_step` and `path_cost`.
+/// `Grid::add_field`, consulted by `Grid::next_step` and `path_cost`, and
+/// run only as far as those reads need (`Grid::descend`): the search is
+/// kept open behind a `RefCell`, so a read through `&Grid` can take it on.
 struct Field {
     goal: (usize, usize),
-    /// Per cell: the summed step cost from that cell to `goal`
-    /// (`UNREACHABLE` where no route exists, `0` at the goal). Stepping
-    /// *into* a cell costs that cell's `Grid::cost`, so a cell's value
-    /// is its cheapest neighbour's value plus that neighbour's cost.
+    search: RefCell<Dijkstra>,
+}
+
+/// A Dijkstra outward from one or more goal cells, kept open so it can be
+/// run out a little at a time (`Grid::settle_next`) and read wherever it
+/// is already exact: per cell, the summed step cost to the nearest goal,
+/// stepping *into* a cell costing that cell's `Grid::cost`, so a cell's
+/// value is its cheapest neighbour's plus that neighbour's cost.
+struct Dijkstra {
+    /// Per cell: the cost found so far - `0` at a goal, `UNREACHABLE`
+    /// where nothing has reached yet. Exact for every cell at or under
+    /// the frontier's lowest cost (`Grid::frontier`), and for every cell
+    /// once the frontier is empty; at least the true cost everywhere.
     to_goal: Vec<u32>,
+    /// The frontier, lowest cost first: (cost, cell index). An entry whose
+    /// cost is above its cell's `to_goal` is stale, left for the pop.
+    open: BinaryHeap<Reverse<(u32, usize)>>,
 }
 
 /// `Field::to_goal` for a cell no route reaches.
 const UNREACHABLE: u32 = u32::MAX;
+
+/// How many cells of a route `Grid::route_ahead` reads past the cell it
+/// starts in: enough for a hull to see its route's next turn before its
+/// slide through that turn would carry it past the turning
+/// (`ai::Ai::lane_turn`) - the heaviest chassis at full pace slides more
+/// than two cells.
+pub const ROUTE_AHEAD_CELLS: usize = 4;
+
+/// The first cells of a route, from `Grid::route_ahead`: the cell the
+/// route starts in, the point `next_step` would hand out, and the cells
+/// the route walks next in order - at most `ROUTE_AHEAD_CELLS`, ending at
+/// the goal, or at the first portal cell of a route that may teleport,
+/// past which the route is the far side's.
+#[derive(Clone, Copy, Debug)]
+pub struct RouteAhead {
+    start: (usize, usize),
+    first: Position,
+    cells: [(usize, usize); ROUTE_AHEAD_CELLS],
+    len: usize,
+    cell_size: f32,
+    shared: bool,
+}
+
+impl RouteAhead {
+    /// What `next_step` hands out for the same query: the first cell's
+    /// centre, or the centre of the portal it belongs to.
+    pub fn first(&self) -> Position {
+        self.first
+    }
+
+    /// The cell the route starts in - the one its `from` falls in.
+    pub fn start(&self) -> (usize, usize) {
+        self.start
+    }
+
+    /// The route's first cells, in the order it walks them (never empty).
+    pub fn cells(&self) -> &[(usize, usize)] {
+        &self.cells[..self.len]
+    }
+
+    /// Whether the route was read from a flow field (`Grid::add_field`):
+    /// the route every tank going to that seat or frog shares, read cell
+    /// by cell, rather than the head of one search's path - one of many as
+    /// cheap, toward a target of the tank's own that moves (an engagement
+    /// slot follows its seat).
+    pub fn shared(&self) -> bool {
+        self.shared
+    }
+
+    /// The pitch of the grid the route was read from (px).
+    pub fn cell_size(&self) -> f32 {
+        self.cell_size
+    }
+
+    /// The centre of `cell` on the grid the route was read from.
+    pub fn centre(&self, cell: (usize, usize)) -> Position {
+        Position::new((cell.0 as f32 + 0.5) * self.cell_size, (cell.1 as f32 + 0.5) * self.cell_size)
+    }
+
+    fn push(&mut self, cell: (usize, usize)) {
+        if self.len < ROUTE_AHEAD_CELLS {
+            self.cells[self.len] = cell;
+            self.len += 1;
+        }
+    }
+}
 
 impl Grid {
     /// Build a grid covering `0..width, 0..height` in `cell_size`-px cells.
@@ -167,6 +315,17 @@ impl Grid {
         margin: f32,
         obstacles: impl Iterator<Item = (Position, f32)>,
     ) -> Self {
+        let mut grid = Self::open(width, height, cell_size, margin);
+        for (center, half_extent) in obstacles {
+            grid.block(center, half_extent);
+        }
+        grid
+    }
+
+    /// `build` with no obstacle: only the area's own boundary blocked, by
+    /// the same `margin` - the grid `block` adds obstacles to one at a time
+    /// (`simulation::nav` keeps one that way across frames).
+    pub fn open(width: f32, height: f32, cell_size: f32, margin: f32) -> Self {
         let cols = ((width / cell_size).ceil() as usize).max(1);
         let rows = ((height / cell_size).ceil() as usize).max(1);
         let mut blocked = vec![false; cols * rows];
@@ -198,42 +357,12 @@ impl Grid {
             }
         }
 
-        for (center, half_extent) in obstacles {
-            let reach = half_extent + margin;
-            // Lowest/highest cell index whose center (at `(i + 0.5) *
-            // cell_size`) falls inside `[center-reach, center+reach]`:
-            // solving `(i + 0.5) * cell_size >= center - reach` for the
-            // lower bound and the mirror for the upper. A center landing
-            // exactly on the boundary counts as blocked (it would leave
-            // exactly zero hull clearance).
-            let min_col_raw = ((center.x - reach) / cell_size - 0.5).ceil() as isize;
-            let max_col_raw = ((center.x + reach) / cell_size - 0.5).floor() as isize;
-            let min_row_raw = ((center.y - reach) / cell_size - 0.5).ceil() as isize;
-            let max_row_raw = ((center.y + reach) / cell_size - 0.5).floor() as isize;
-            // Entirely outside the grid on at least one axis - no cell to mark.
-            if max_col_raw < 0
-                || min_col_raw >= cols as isize
-                || max_row_raw < 0
-                || min_row_raw >= rows as isize
-            {
-                continue;
-            }
-            let min_col = min_col_raw.clamp(0, cols as isize - 1) as usize;
-            let max_col = max_col_raw.clamp(0, cols as isize - 1) as usize;
-            let min_row = min_row_raw.clamp(0, rows as isize - 1) as usize;
-            let max_row = max_row_raw.clamp(0, rows as isize - 1) as usize;
-            for row in min_row..=max_row {
-                for col in min_col..=max_col {
-                    blocked[row * cols + col] = true;
-                }
-            }
-        }
-
         let cost = vec![1; cols * rows];
         Self {
             cell_size,
             cols,
             rows,
+            margin,
             blocked,
             portals: Vec::new(),
             portal_centres: Vec::new(),
@@ -245,6 +374,88 @@ impl Grid {
         }
     }
 
+    /// Block the cells one obstacle covers, as `build` does for each of
+    /// its own: every cell whose centre lies within `half_extent + margin`
+    /// of `center` on both axes. Blocking only ever adds, so the order the
+    /// obstacles come in makes no difference to the grid. Occupancy is
+    /// what the portals' footprints, the labels and the fields are worked
+    /// out from, so every obstacle comes before any of them.
+    pub fn block(&mut self, center: Position, half_extent: f32) {
+        debug_assert!(
+            self.portal_cells.is_empty() && self.comps.is_none() && self.fields.is_empty(),
+            "the portals, the labels and the fields read the occupancy: block every obstacle first"
+        );
+        let (cell_size, cols, rows) = (self.cell_size, self.cols, self.rows);
+        let reach = half_extent + self.margin;
+        // Lowest/highest cell index whose center (at `(i + 0.5) *
+        // cell_size`) falls inside `[center-reach, center+reach]`:
+        // solving `(i + 0.5) * cell_size >= center - reach` for the
+        // lower bound and the mirror for the upper. A center landing
+        // exactly on the boundary counts as blocked (it would leave
+        // exactly zero hull clearance).
+        let min_col_raw = ((center.x - reach) / cell_size - 0.5).ceil() as isize;
+        let max_col_raw = ((center.x + reach) / cell_size - 0.5).floor() as isize;
+        let min_row_raw = ((center.y - reach) / cell_size - 0.5).ceil() as isize;
+        let max_row_raw = ((center.y + reach) / cell_size - 0.5).floor() as isize;
+        // Entirely outside the grid on at least one axis - no cell to mark.
+        if max_col_raw < 0 || min_col_raw >= cols as isize || max_row_raw < 0 || min_row_raw >= rows as isize {
+            return;
+        }
+        let min_col = min_col_raw.clamp(0, cols as isize - 1) as usize;
+        let max_col = max_col_raw.clamp(0, cols as isize - 1) as usize;
+        let min_row = min_row_raw.clamp(0, rows as isize - 1) as usize;
+        let max_row = max_row_raw.clamp(0, rows as isize - 1) as usize;
+        for row in min_row..=max_row {
+            for col in min_col..=max_col {
+                self.blocked[row * cols + col] = true;
+            }
+        }
+    }
+
+    /// This grid without its flow fields: the same occupancy, portals,
+    /// prices and labels, ready for fields of its own (`add_field`) - how a
+    /// frame's routing grid starts from the one the round keeps across
+    /// frames (`simulation::nav`).
+    pub fn without_fields(&self) -> Grid {
+        Grid {
+            cell_size: self.cell_size,
+            cols: self.cols,
+            rows: self.rows,
+            margin: self.margin,
+            blocked: self.blocked.clone(),
+            portals: self.portals.clone(),
+            portal_cells: self.portal_cells.clone(),
+            portal_centres: self.portal_centres.clone(),
+            hop_cost: self.hop_cost,
+            cost: self.cost.clone(),
+            fields: Vec::new(),
+            comps: self.comps.clone(),
+        }
+    }
+
+    /// Whether `other` covers the same cells and blocks exactly the ones
+    /// this grid does: what `with_portals` and `label` work out is a
+    /// function of that, the portals' anchors and their knobs.
+    pub fn same_occupancy(&self, other: &Grid) -> bool {
+        self.cols == other.cols && self.rows == other.rows && self.cell_size == other.cell_size && self.blocked == other.blocked
+    }
+
+    /// Whether `other` is this grid cell for cell: its occupancy, margin,
+    /// prices, portals and labels and the goals of its fields - so every
+    /// query one answers, the other answers the same.
+    #[cfg(test)]
+    pub(crate) fn same_as(&self, other: &Grid) -> bool {
+        self.same_occupancy(other)
+            && self.margin == other.margin
+            && self.cost == other.cost
+            && self.portals == other.portals
+            && self.portal_cells == other.portal_cells
+            && self.portal_centres == other.portal_centres
+            && self.hop_cost == other.hop_cost
+            && self.comps.as_ref().map(|c| &c.label) == other.comps.as_ref().map(|c| &c.label)
+            && self.goals().eq(other.goals())
+    }
+
     /// Make every cell whose centre a position in `cells` falls in cost
     /// `cost` (at least 1) to step into, where it was 1: the router then
     /// takes such a cell only when the dry way round is longer than the
@@ -252,6 +463,7 @@ impl Grid {
     /// open to `usable`, `blocked_ahead` and the flood fills - so this
     /// changes which route is chosen, never whether one exists.
     pub fn weigh(&mut self, cells: impl Iterator<Item = Position>, cost: u32) {
+        debug_assert!(self.fields.is_empty(), "a field reads the prices as it runs: weigh the grid before adding one");
         let cost = cost.clamp(1, u8::MAX as u32) as u8;
         for pos in cells {
             if pos.x < 0.0 || pos.y < 0.0 || pos.x > self.cols as f32 * self.cell_size || pos.y > self.rows as f32 * self.cell_size {
@@ -284,6 +496,7 @@ impl Grid {
     /// changes no cost, and the first step it can change is from a cell
     /// the tank teleports off before it moves anyway.
     pub fn with_portals(mut self, centres: &[Position], radius: f32, hop_cost: f32) -> Self {
+        debug_assert!(self.fields.is_empty(), "a field walks the hub as it runs: add the portals before a field");
         let mut portals: Vec<Vec<(usize, usize)>> = Vec::with_capacity(centres.len());
         let mut kept: Vec<Position> = Vec::with_capacity(centres.len());
         for &centre in centres {
@@ -370,9 +583,10 @@ impl Grid {
     /// layer on top of `weigh`'s absolute prices (a firing lane, a cell
     /// another tank stands in). Like `weigh`, occupancy is untouched: a
     /// surcharged cell is still open, it is only dearer, so a route that
-    /// has no other way through still takes it. Call before `add_field`,
-    /// which bakes the costs in.
+    /// has no other way through still takes it. Call before `add_field`:
+    /// a field reads the costs as it is worked out.
     pub fn surcharge(&mut self, cells: impl Iterator<Item = Position>, extra: u32) {
+        debug_assert!(self.fields.is_empty(), "a field reads the prices as it runs: surcharge the grid before adding one");
         if extra == 0 {
             return;
         }
@@ -388,8 +602,8 @@ impl Grid {
 
     /// Run the connected-component flood fill (`components`) once and
     /// keep the labels, so `connected` answers from them for the rest of
-    /// this grid's life. Occupancy never changes after `build`, so the
-    /// labels cannot go stale.
+    /// this grid's life. Occupancy never changes once they are worked out
+    /// (`block` refuses to), so the labels cannot go stale.
     pub fn label(&mut self) {
         self.comps = Some(self.components());
     }
@@ -411,56 +625,153 @@ impl Grid {
     /// `next_step` and `path_cost` toward any point in `goal`'s cell read
     /// the field instead of searching. The goal cell counts as open
     /// whatever `blocked` says, exactly as A* treats it. Adding a goal
-    /// whose cell already has a field is a no-op. Costs are read at build
-    /// time, so `weigh`/`surcharge` first.
+    /// whose cell already has a field is a no-op. The field is worked out
+    /// as it is read (`descend`) and reads the costs as it goes, so
+    /// `weigh`/`surcharge` first.
     pub fn add_field(&mut self, goal: Position) {
         let goal = self.cell_of(goal);
         if self.field_for(goal).is_some() {
             return;
         }
-        let n = self.cols * self.rows;
+        let search = RefCell::new(self.dijkstra(&[goal]));
+        self.fields.push(Field { goal, search });
+    }
+
+    /// Every cell's cost to reach the nearest of `goals` - one Dijkstra
+    /// outward from all of them at once, the multi-goal reading of a flow
+    /// field, kept rather than added to the router (`add_field`). What a
+    /// field map measures the walk from a spawn cell or a gate to the
+    /// nearest seat with (`simulation::field`). Each goal's cell counts as
+    /// open whatever `blocked` says, as a field's goal does.
+    pub fn walk_costs(&self, goals: &[Position]) -> WalkCosts {
+        let mut cells: Vec<(usize, usize)> = goals.iter().map(|&g| self.cell_of(g)).collect();
+        cells.sort_unstable();
+        cells.dedup();
+        WalkCosts { cols: self.cols, rows: self.rows, cell_size: self.cell_size, to_goal: self.costs_to(&cells) }
+    }
+
+    /// The Dijkstra behind `walk_costs`, run to the end: per cell, the
+    /// summed step cost to the nearest of `goals` (`UNREACHABLE` where no
+    /// route exists, 0 at a goal).
+    fn costs_to(&self, goals: &[(usize, usize)]) -> Vec<u32> {
+        let mut search = self.dijkstra(goals);
+        while self.frontier(&mut search).is_some() {
+            self.settle_next(&mut search);
+        }
+        search.to_goal
+    }
+
+    /// A Dijkstra outward from `goals` that has settled nothing yet: each
+    /// goal at 0 on the frontier.
+    fn dijkstra(&self, goals: &[(usize, usize)]) -> Dijkstra {
         let idx = |c: (usize, usize)| c.1 * self.cols + c.0;
-        let mut to_goal = vec![UNREACHABLE; n];
+        let mut to_goal = vec![UNREACHABLE; self.cols * self.rows];
         // (cost, cell index): a min-heap through `Reverse`. Ties pop by
-        // index, though the final costs are the same whatever the order.
+        // index, though the costs come out the same whatever the order.
         let mut open = BinaryHeap::new();
-        to_goal[idx(goal)] = 0;
-        open.push(std::cmp::Reverse((0u32, idx(goal))));
-        while let Some(std::cmp::Reverse((cost, at))) = open.pop() {
-            if cost > to_goal[at] {
+        for &goal in goals {
+            to_goal[idx(goal)] = 0;
+            open.push(Reverse((0u32, idx(goal))));
+        }
+        Dijkstra { to_goal, open }
+    }
+
+    /// The lowest cost on `search`'s frontier, its stale entries dropped:
+    /// every cell not yet settled costs at least this, and every cell
+    /// whose `to_goal` is at or under it is exact. `None` once the search
+    /// has reached everything it can.
+    fn frontier(&self, search: &mut Dijkstra) -> Option<u32> {
+        while let Some(&Reverse((cost, at))) = search.open.peek() {
+            if cost > search.to_goal[at] {
+                search.open.pop();
                 continue;
             }
-            let cell = (at % self.cols, at / self.cols);
-            // Reaching the goal from a neighbour means stepping *into*
-            // this cell, which costs this cell's own price.
-            let via = cost + self.cost[at] as u32;
-            for next in self.neighbors(cell) {
-                let ni = idx(next);
-                if self.blocked[ni] || via >= to_goal[ni] {
+            return Some(cost);
+        }
+        None
+    }
+
+    /// Settle the cell at the top of `search`'s frontier - the search's
+    /// one step, called once `frontier` has dropped the stale entries -
+    /// stepping into a cell costing that cell's price and the portal hub
+    /// walked backwards.
+    fn settle_next(&self, search: &mut Dijkstra) {
+        let Some(Reverse((cost, at))) = search.open.pop() else { return };
+        let idx = |c: (usize, usize)| c.1 * self.cols + c.0;
+        let cell = (at % self.cols, at / self.cols);
+        // Reaching the goal from a neighbour means stepping *into* this
+        // cell, which costs this cell's own price.
+        let via = cost + self.cost[at] as u32;
+        for next in self.neighbors(cell) {
+            let ni = idx(next);
+            if self.blocked[ni] || via >= search.to_goal[ni] {
+                continue;
+            }
+            search.to_goal[ni] = via;
+            search.open.push(Reverse((via, ni)));
+        }
+        // The hub, walked backwards: this cell is the free exit of a hop
+        // whose entrance is any other portal cell, so each of them reaches
+        // the goal for this cost plus the hop - the exit's own price is
+        // not charged, exactly as `search` relaxes an exit at the hub's
+        // cost. The hop is rounded once, as `search` rounds its whole
+        // total.
+        if self.is_portal_cell(cell) {
+            let hop = cost + self.hop_cost.round() as u32;
+            for &entrance in &self.portal_cells {
+                let ei = idx(entrance);
+                if entrance == cell || hop >= search.to_goal[ei] {
                     continue;
                 }
-                to_goal[ni] = via;
-                open.push(std::cmp::Reverse((via, ni)));
+                search.to_goal[ei] = hop;
+                search.open.push(Reverse((hop, ei)));
             }
-            // The hub, walked backwards: this cell is the free exit of a
-            // hop whose entrance is any other portal cell, so each of
-            // them reaches the goal for this cost plus the hop - the
-            // exit's own price is not charged, exactly as `search` relaxes
-            // an exit at the hub's cost. The hop is rounded once, as
-            // `search` rounds its whole total.
-            if self.is_portal_cell(cell) {
-                let hop = cost + self.hop_cost.round() as u32;
-                for &entrance in &self.portal_cells {
-                    let ei = idx(entrance);
-                    if entrance == cell || hop >= to_goal[ei] {
-                        continue;
-                    }
-                    to_goal[ei] = hop;
-                    open.push(std::cmp::Reverse((hop, ei)));
+        }
+    }
+
+    /// The cheapest step from `start` toward `goal` that `search` knows
+    /// so far: over every neighbour `descend` may step into (and every
+    /// other portal cell from a portal cell), its cost to the goal plus
+    /// the step's price. `UNREACHABLE` with none known.
+    fn best_step(&self, search: &Dijkstra, goal: (usize, usize), start: (usize, usize)) -> u32 {
+        let idx = |c: (usize, usize)| c.1 * self.cols + c.0;
+        let mut best = UNREACHABLE;
+        for next in self.neighbors(start) {
+            let ni = idx(next);
+            let there = search.to_goal[ni];
+            if (next != goal && self.blocked[ni]) || there == UNREACHABLE {
+                continue;
+            }
+            best = best.min(there + self.cost[ni] as u32);
+        }
+        if self.is_portal_cell(start) {
+            let hop = self.hop_cost.round() as u32;
+            for &exit in &self.portal_cells {
+                let there = search.to_goal[idx(exit)];
+                if exit != start && there != UNREACHABLE {
+                    best = best.min(there + hop);
                 }
             }
         }
-        self.fields.push(Field { goal, to_goal });
+        best
+    }
+
+    /// Run `search` on until the step `descend` takes from `start` is the
+    /// one the whole table gives: until the frontier's lowest cost is at
+    /// least the cheapest step known. Every cell still ahead costs at
+    /// least that, and every step into one at least one more (a cell's
+    /// price is at least 1, and so is the hub's hop), so no step left
+    /// unknown could beat the cheapest or tie it, and every step that does
+    /// tie it reads a settled, exact cost. Most queries near the goal
+    /// stop after a few cells; one from the far side of the map runs the
+    /// search that far, once, for every later read this frame.
+    fn settle_for_step(&self, search: &mut Dijkstra, goal: (usize, usize), start: (usize, usize)) {
+        while let Some(low) = self.frontier(search) {
+            if low >= self.best_step(search, goal, start) {
+                return;
+            }
+            self.settle_next(search);
+        }
     }
 
     /// A cell's step cost - 1 for plain ground, more where `weigh` or
@@ -478,6 +789,18 @@ impl Grid {
         self.fields.iter().map(|f| f.goal)
     }
 
+    /// Work every field out whole now, as if every cell had been read:
+    /// what a field worked out only as far as it is read must agree with.
+    #[cfg(test)]
+    pub(crate) fn settle_fields(&self) {
+        for field in &self.fields {
+            let mut search = field.search.borrow_mut();
+            while self.frontier(&mut search).is_some() {
+                self.settle_next(&mut search);
+            }
+        }
+    }
+
     /// From cell (`col`, `row`), the neighbour cell the field toward
     /// `goal`'s cell hands out - the arrow an overlay draws - or `None`
     /// when there is no field for that goal, the cell is the goal, or no
@@ -487,7 +810,7 @@ impl Grid {
         if (col, row) == goal || col >= self.cols || row >= self.rows {
             return None;
         }
-        self.field_for(goal).and_then(|f| self.descend(f, (col, row))).map(|hit| hit.first_step)
+        self.field_for(goal).and_then(|f| self.descend(f, (col, row), None)).map(|hit| hit.first_step)
     }
 
     /// The field's stored cost from cell (`col`, `row`) to `goal`'s cell -
@@ -499,7 +822,14 @@ impl Grid {
             return None;
         }
         let field = self.field_for(goal)?;
-        let cost = field.to_goal[row * self.cols + col];
+        let mut search = field.search.borrow_mut();
+        // Run on until this cell's cost is exact: settled, or at or under
+        // the frontier, or the frontier gone.
+        let at = row * self.cols + col;
+        while self.frontier(&mut search).is_some_and(|low| search.to_goal[at] > low) {
+            self.settle_next(&mut search);
+        }
+        let cost = search.to_goal[at];
         (cost != UNREACHABLE).then_some(cost)
     }
 
@@ -511,23 +841,37 @@ impl Grid {
     /// `field`'s goal, with the whole route's cost through it: the
     /// field's equivalent of `search`, including its rules that the start
     /// cell is open whatever `blocked` says and the goal cell is enterable.
-    /// Ties break on the lowest cell index, so the answer is a pure
-    /// function of the grid. `None` when no neighbour reaches the goal.
-    fn descend(&self, field: &Field, start: (usize, usize)) -> Option<SearchHit> {
+    /// Ties break on `prefer` when there is one (`route_ahead`: that step,
+    /// then a turn off it before a step straight back), then on the lowest
+    /// cell index, so the answer is a pure function of the grid and the
+    /// preference. `None` when no neighbour reaches the goal.
+    fn descend(&self, field: &Field, start: (usize, usize), prefer: Option<Step>) -> Option<SearchHit> {
+        let mut search = field.search.borrow_mut();
+        self.settle_for_step(&mut search, field.goal, start);
+        let to_goal = &search.to_goal;
         let idx = |c: (usize, usize)| c.1 * self.cols + c.0;
-        let mut best: Option<(u32, usize, (usize, usize))> = None;
+        // The tie-break: the preferred step first, then a turn off it
+        // before a step straight back, then the lowest index.
+        let rank = |next: (usize, usize)| match (prefer, step_of(start, next)) {
+            (Some(p), Some(s)) if s == p => 0u8,
+            (Some(p), Some(s)) if s == (-p.0, -p.1) => 2,
+            (Some(_), _) => 1,
+            (None, _) => 0,
+        };
+        let mut best: Option<(u32, u8, usize, (usize, usize))> = None;
         for next in self.neighbors(start) {
             let ni = idx(next);
             if next != field.goal && self.blocked[ni] {
                 continue;
             }
-            let there = field.to_goal[ni];
+            let there = to_goal[ni];
             if there == UNREACHABLE {
                 continue;
             }
             let total = there + self.cost[ni] as u32;
-            if best.is_none_or(|(c, i, _)| (total, ni) < (c, i)) {
-                best = Some((total, ni, next));
+            let key = (total, rank(next), ni);
+            if best.is_none_or(|(c, r, i, _)| key < (c, r, i)) {
+                best = Some((total, key.1, ni, next));
             }
         }
         // From a portal cell the hub is a step too: out at any other
@@ -539,16 +883,17 @@ impl Grid {
             let hop = self.hop_cost.round() as u32;
             for &exit in &self.portal_cells {
                 let ei = idx(exit);
-                if exit == start || field.to_goal[ei] == UNREACHABLE {
+                if exit == start || to_goal[ei] == UNREACHABLE {
                     continue;
                 }
-                let total = field.to_goal[ei] + hop;
-                if best.is_none_or(|(c, i, _)| (total, ei) < (c, i)) {
-                    best = Some((total, ei, exit));
+                let total = to_goal[ei] + hop;
+                let rank = u8::from(prefer.is_some());
+                if best.is_none_or(|(c, r, i, _)| (total, rank, ei) < (c, r, i)) {
+                    best = Some((total, rank, ei, exit));
                 }
             }
         }
-        best.map(|(cost, _, first_step)| SearchHit { first_step, cost })
+        best.map(|(cost, _, _, first_step)| SearchHit { first_step, cost })
     }
 
     fn cell_of(&self, p: Position) -> (usize, usize) {
@@ -897,9 +1242,83 @@ impl Grid {
     /// disagree about which served a target.
     fn route(&self, start: (usize, usize), goal: (usize, usize)) -> Option<SearchHit> {
         match self.field_for(goal) {
-            Some(field) => self.descend(field, start),
+            Some(field) => self.descend(field, start, None),
             None => self.search(start, goal, true),
         }
+    }
+
+    /// `next_step` and the route's first cells after it (`RouteAhead`):
+    /// the same route, read a few cells further - what a hull needs to
+    /// see its next turn coming before it gets there. `None` exactly
+    /// where `next_step` is.
+    ///
+    /// `heading` (a unit step, like `blocked_ahead`'s) straightens the
+    /// route where that costs nothing: among steps that are equally cheap
+    /// the one along `heading` is taken first, and each cell after it
+    /// prefers to go on the way the route came in, so a route that may
+    /// turn now or later turns once, where it has to, rather than in a
+    /// staircase along the first wall it meets (the lowest-index rule
+    /// alone hugs it). `None` reads the route `next_step` walks. A field
+    /// is walked by reading it from each cell in turn; a search hands
+    /// back the head of the path it found.
+    pub fn route_ahead(&self, from: Position, to: Position, heading: Option<Position>) -> Option<RouteAhead> {
+        let start = self.cell_of(from);
+        let goal = self.cell_of(to);
+        if start == goal {
+            return None;
+        }
+        let prefer = heading.map(unit_step);
+        let mut ahead = match self.field_for(goal) {
+            Some(field) => {
+                let hit = self.descend(field, start, prefer)?;
+                let mut ahead = self.ahead_of(start, hit.first_step);
+                let (mut from, mut at) = (start, hit.first_step);
+                while ahead.len < ROUTE_AHEAD_CELLS && at != goal && !self.is_portal_cell(at) {
+                    let on = prefer.and(step_of(from, at));
+                    let Some(next) = self.descend(field, at, on) else { break };
+                    ahead.push(next.first_step);
+                    (from, at) = (at, next.first_step);
+                }
+                ahead.shared = true;
+                ahead
+            }
+            // A search's path is one of many as cheap, its shape
+            // whatever order the search met the cells in - a staircase as
+            // often as not - so only its first step is read.
+            None => self.ahead_of(start, self.search(start, goal, true)?.first_step),
+        };
+        // Past a portal cell the route may be the far side's.
+        if let Some(i) = ahead.cells().iter().position(|&c| self.is_portal_cell(c)) {
+            ahead.len = i + 1;
+        }
+        ahead.first = self.portal_centre_of(ahead.cells[0]).unwrap_or_else(|| self.center_of(ahead.cells[0]));
+        Some(ahead)
+    }
+
+    /// `route_ahead` on foot, the route `next_step_walking` walks: the
+    /// portal hub left out, so a portal cell is ground like any other.
+    pub fn route_ahead_walking(&self, from: Position, to: Position) -> Option<RouteAhead> {
+        let start = self.cell_of(from);
+        let goal = self.cell_of(to);
+        if start == goal {
+            return None;
+        }
+        self.search(start, goal, false).map(|hit| self.ahead_of(start, hit.first_step))
+    }
+
+    /// A `RouteAhead` from `start` holding `first` alone, its first point
+    /// that cell's centre.
+    fn ahead_of(&self, start: (usize, usize), first: (usize, usize)) -> RouteAhead {
+        let mut ahead = RouteAhead {
+            start,
+            first: self.center_of(first),
+            cells: [first; ROUTE_AHEAD_CELLS],
+            len: 0,
+            cell_size: self.cell_size,
+            shared: false,
+        };
+        ahead.push(first);
+        ahead
     }
 
     /// `next_step` on foot: the same route with the portal hub left out,
@@ -941,24 +1360,14 @@ impl Grid {
     /// skipped outright and the search is the plain grid A*, tie order
     /// included.
     fn search(&self, start: (usize, usize), goal: (usize, usize), hub: bool) -> Option<SearchHit> {
+        SEARCH_TABLES.with_borrow_mut(|tables| self.search_in(tables, start, goal, hub))
+    }
+
+    /// `search` on the thread's kept tables (`SearchTables`), begun here.
+    fn search_in(&self, t: &mut SearchTables, start: (usize, usize), goal: (usize, usize), hub: bool) -> Option<SearchHit> {
         let hub = hub && !self.portal_cells.is_empty();
-        let mut open = BinaryHeap::new();
         // One slot per cell plus the hub's sentinel slot at the end.
-        let slots = self.cols * self.rows + 1;
-        let mut came_from: Vec<Option<NavNode>> = vec![None; slots];
-        let mut g_score = vec![f32::INFINITY; slots];
-        // Nodes already expanded (popped and relaxed) once. Without this, a
-        // cell whose g_score improves after it's already been expanded gets
-        // pushed to `open` again and, once repopped, has its neighbors
-        // relaxed all over again - on an open grid with many reachable
-        // cells this reprocessing cascades combinatorially instead of the
-        // O(cells) A* is supposed to guarantee, which is cheap enough not to
-        // matter on native but was enough to stall a frame for minutes on
-        // wasm's slower per-op cost (observed as a frozen, unresponsive tab
-        // during web playtesting). Marking a cell closed the first time it's
-        // popped bounds every cell to at most one expansion, same as
-        // textbook Dijkstra/A*.
-        let mut closed = vec![false; slots];
+        t.begin(self.cols * self.rows + 1);
         let idx = |n: NavNode| n.idx(self.cols, self.rows);
 
         let exit_h = self
@@ -983,32 +1392,50 @@ impl Grid {
                 }
             }
         };
+        // Reach `next` from `node` at `tentative` when that beats the best
+        // known, and queue it.
+        let relax = |t: &mut SearchTables, node: NavNode, next: NavNode, tentative: f32| {
+            let slot = idx(next);
+            if tentative < t.g(slot) {
+                t.reach(slot, tentative, Some(node));
+                t.open.push(OpenEntry {
+                    node: next,
+                    priority: tentative + h(next),
+                });
+            }
+        };
 
         let start_node = NavNode::Cell(start);
-        g_score[idx(start_node)] = 0.0;
-        open.push(OpenEntry {
+        t.reach(idx(start_node), 0.0, None);
+        t.open.push(OpenEntry {
             node: start_node,
             priority: h(start_node),
         });
 
-        while let Some(OpenEntry { node, .. }) = open.pop() {
-            if closed[idx(node)] {
+        while let Some(OpenEntry { node, .. }) = t.open.pop() {
+            // A node is expanded (popped and relaxed) once at most. Without
+            // the closed mark, a cell whose cost improves after its
+            // expansion is pushed again and, once repopped, relaxes its
+            // neighbours all over again - on an open grid that cascades
+            // combinatorially instead of the O(cells) A* guarantees, enough
+            // to stall a frame for minutes at wasm's per-op cost.
+            if t.is_closed(idx(node)) {
                 // Stale heap entry from before this node's last improvement.
                 continue;
             }
-            closed[idx(node)] = true;
+            t.close(idx(node));
 
             if node == NavNode::Cell(goal) {
                 // Unit steps summed in f32 stay exact integers (well under
                 // f32's 2^24 exact-integer range on any sane grid); only a
                 // fractional hop cost makes the rounding do anything.
-                let cost = g_score[idx(node)].round() as u32;
+                let cost = t.g(idx(node)).round() as u32;
                 // Walk back to the step right after `start`, skipping the
                 // hub: the first step is always a cell, the exit when the
                 // route teleports straight out of `start`.
                 let mut at = node;
                 let mut first_step = goal;
-                while let Some(prev) = came_from[idx(at)] {
+                while let Some(prev) = t.parent(idx(at)) {
                     if prev == start_node {
                         break;
                     }
@@ -1020,21 +1447,11 @@ impl Grid {
                 return Some(SearchHit { first_step, cost });
             }
 
-            let g = g_score[idx(node)];
-            let mut relax = |next: NavNode, tentative: f32| {
-                if tentative < g_score[idx(next)] {
-                    came_from[idx(next)] = Some(node);
-                    g_score[idx(next)] = tentative;
-                    open.push(OpenEntry {
-                        node: next,
-                        priority: tentative + h(next),
-                    });
-                }
-            };
+            let g = t.g(idx(node));
             match node {
                 NavNode::Cell(cell) => {
                     for next in self.neighbors(cell) {
-                        if closed[idx(NavNode::Cell(next))] {
+                        if t.is_closed(idx(NavNode::Cell(next))) {
                             continue;
                         }
                         if next != goal && self.blocked_at(next) {
@@ -1042,18 +1459,18 @@ impl Grid {
                         }
                         // A step costs what the cell charges (`weigh`), 1 on
                         // open ground.
-                        relax(NavNode::Cell(next), g + self.cost[idx(NavNode::Cell(next))] as f32);
+                        relax(t, node, NavNode::Cell(next), g + self.cost[idx(NavNode::Cell(next))] as f32);
                     }
-                    if hub && !closed[idx(NavNode::Hub)] && self.is_portal_cell(cell) {
-                        relax(NavNode::Hub, g + self.hop_cost);
+                    if hub && !t.is_closed(idx(NavNode::Hub)) && self.is_portal_cell(cell) {
+                        relax(t, node, NavNode::Hub, g + self.hop_cost);
                     }
                 }
                 NavNode::Hub => {
                     for &exit in &self.portal_cells {
-                        if closed[idx(NavNode::Cell(exit))] {
+                        if t.is_closed(idx(NavNode::Cell(exit))) {
                             continue;
                         }
-                        relax(NavNode::Cell(exit), g);
+                        relax(t, node, NavNode::Cell(exit), g);
                     }
                 }
             }
@@ -1062,12 +1479,102 @@ impl Grid {
     }
 }
 
-/// What one successful `Grid::search` run hands back to its two public
-/// wrappers: the first cell to step into (for `next_step`) and the full
-/// path's cost in cells (for `path_cost`).
+/// `Grid::search`'s per-node tables, kept on the thread from one search to
+/// the next so a query costs the cells it reaches rather than an
+/// allocation and a fill of the whole grid. A slot's cost and parent count
+/// only while it is stamped with the running search (`begin`), and every
+/// other slot reads as unreached and open - the tables a fresh search
+/// starts with, so the search runs exactly as on new ones.
+#[derive(Default)]
+struct SearchTables {
+    /// The running search's stamp; never 0 once one has begun.
+    search: u32,
+    /// Per slot, the search that last gave it a cost and a parent.
+    reached: Vec<u32>,
+    /// Per slot, the search that expanded it.
+    closed: Vec<u32>,
+    g_score: Vec<f32>,
+    came_from: Vec<Option<NavNode>>,
+    open: BinaryHeap<OpenEntry>,
+}
+
+impl SearchTables {
+    /// Start a search over `slots` slots: none reached, none closed, the
+    /// open set empty. The tables only ever grow - a slot past the grid's
+    /// is never read - and a stamp that comes round to 0 forgets every
+    /// slot rather than take an old one for the new search's.
+    fn begin(&mut self, slots: usize) {
+        if self.reached.len() < slots {
+            self.reached.resize(slots, 0);
+            self.closed.resize(slots, 0);
+            self.g_score.resize(slots, f32::INFINITY);
+            self.came_from.resize(slots, None);
+        }
+        self.search = self.search.wrapping_add(1);
+        if self.search == 0 {
+            self.reached.fill(0);
+            self.closed.fill(0);
+            self.search = 1;
+        }
+        self.open.clear();
+    }
+
+    /// The best known cost to `slot` this search, infinite when unreached.
+    fn g(&self, slot: usize) -> f32 {
+        if self.reached[slot] == self.search { self.g_score[slot] } else { f32::INFINITY }
+    }
+
+    /// The node `slot` was reached from this search, if any.
+    fn parent(&self, slot: usize) -> Option<NavNode> {
+        if self.reached[slot] == self.search { self.came_from[slot] } else { None }
+    }
+
+    /// `slot` reached at `g` from `from`.
+    fn reach(&mut self, slot: usize, g: f32, from: Option<NavNode>) {
+        self.reached[slot] = self.search;
+        self.g_score[slot] = g;
+        self.came_from[slot] = from;
+    }
+
+    /// Whether `slot` has been expanded this search.
+    fn is_closed(&self, slot: usize) -> bool {
+        self.closed[slot] == self.search
+    }
+
+    /// `slot` expanded.
+    fn close(&mut self, slot: usize) {
+        self.closed[slot] = self.search;
+    }
+}
+
+thread_local! {
+    /// The thread's `SearchTables`.
+    static SEARCH_TABLES: RefCell<SearchTables> = RefCell::new(SearchTables::default());
+}
+
+/// What one successful `Grid::search` or `Grid::descend` hands back to
+/// the public routers: the first cell to step into (for `next_step`) and
+/// the full path's cost in cells (for `path_cost`).
 struct SearchHit {
     first_step: (usize, usize),
     cost: u32,
+}
+
+/// One cardinal step on the grid, as (column, row) deltas.
+type Step = (i8, i8);
+
+/// The step from cell `a` to cell `b` when they are side by side.
+fn step_of(a: (usize, usize), b: (usize, usize)) -> Option<Step> {
+    match (b.0 as isize - a.0 as isize, b.1 as isize - a.1 as isize) {
+        (dc @ -1..=1, 0) if dc != 0 => Some((dc as i8, 0)),
+        (0, dr @ -1..=1) if dr != 0 => Some((0, dr as i8)),
+        _ => None,
+    }
+}
+
+/// A unit direction (`Dir::vec`) as a grid step.
+fn unit_step(dir: Position) -> Step {
+    (dir.x.round() as i8, dir.y.round() as i8)
 }
 
 /// Manhattan distance in cells - admissible since movement is 4-directional
@@ -1312,6 +1819,54 @@ mod tests {
             .with_portals(&[corner(1, 1), corner(7, 7)], RADIUS, hop)
     }
 
+    /// A search on the tables the thread keeps answers as one on fresh
+    /// tables, from every cell of a grid with a wall, a gap and a portal
+    /// pair, with and without the hub - with a bigger grid searched before
+    /// each, so the kept tables are larger than this grid and stamped by
+    /// other searches, and again across the stamp coming round to 0.
+    #[test]
+    fn a_search_on_the_kept_tables_answers_as_one_on_fresh_tables() {
+        let grid = Grid::build(SIDE, SIDE, CELL, 0.0, wall(5, &[8]).into_iter()).with_portals(&[corner(1, 1), corner(7, 7)], RADIUS, 3.0);
+        let big = Grid::build(SIDE * 3.0, SIDE * 2.0, CELL, 0.0, std::iter::empty());
+        let hit = |h: Option<SearchHit>| h.map(|h| (h.first_step, h.cost));
+        let cells: Vec<(usize, usize)> = (0..10).flat_map(|row| (0..10).map(move |col| (col, row))).collect();
+        let check = |label: &str| {
+            for &from in &cells {
+                for &to in cells.iter().step_by(7) {
+                    if from == to {
+                        continue;
+                    }
+                    assert!(big.search((0, 0), (29, 19), true).is_some());
+                    for hub in [true, false] {
+                        let kept = hit(grid.search(from, to, hub));
+                        let fresh = hit(grid.search_in(&mut SearchTables::default(), from, to, hub));
+                        assert_eq!(kept, fresh, "{label}: {from:?} to {to:?}, hub {hub}");
+                    }
+                }
+            }
+        };
+        check("kept tables");
+        SEARCH_TABLES.with_borrow_mut(|t| t.search = u32::MAX - 3);
+        check("across the stamp's wrap");
+        assert!(SEARCH_TABLES.with_borrow(|t| t.search) < 10_000, "the stamp came round");
+    }
+
+    /// Past a portal cell a route may teleport, so the read stops at the
+    /// first one, and a first step onto a footprint reads as the portal's
+    /// centre, as `next_step` hands it out.
+    #[test]
+    fn a_route_read_ahead_stops_at_a_portal_cell() {
+        let mut grid = two_portal_grid(3.0);
+        let goal = at(8, 2);
+        grid.add_field(goal);
+        let ahead = grid.route_ahead(at(1, 5), goal, None).expect("routes through the portals");
+        assert_eq!(ahead.cells(), &[(1, 4), (1, 3), (1, 2)], "up to the footprint and no further");
+        let onto = grid.route_ahead(at(1, 3), goal, None).expect("routes");
+        assert_eq!(onto.cells(), &[(1, 2)]);
+        assert_eq!(onto.first(), corner(1, 1));
+        assert_eq!(Some(onto.first()), grid.next_step(at(1, 3), goal));
+    }
+
     #[test]
     fn portals_route_across_a_sealed_wall() {
         let grid = two_portal_grid(3.0);
@@ -1465,6 +2020,44 @@ mod tests {
         let walled = Grid::build(SIDE, SIDE, CELL, 0.0, wall(5, &[]).into_iter());
         let far_side = |p: Position| p.x > 6.0 * CELL;
         assert_eq!(walled.nearest_open_reachable(at(0, 0), 100, far_side), None);
+    }
+
+    /// A grid built an obstacle at a time (`open`, then `block`) is the
+    /// grid `build` makes of the same obstacles, whatever order they come
+    /// in, and so is everything worked out on it - the portals, the
+    /// prices, the labels; `without_fields` keeps all of that and leaves
+    /// the fields behind.
+    #[test]
+    fn a_grid_built_an_obstacle_at_a_time_is_the_built_grid_in_any_order() {
+        let mut obstacles = wall(5, &[2, 7]);
+        // Overlapping shapes, one of them off the cell grid.
+        obstacles.extend([block(7, 7), block(8, 7), (Position::new(13.0, 61.0), 6.0), (Position::new(30.0, 330.0), 25.0)]);
+        let finish = |grid: Grid| {
+            let mut grid = grid.with_portals(&[corner(1, 1), corner(7, 2)], RADIUS, 3.0);
+            grid.weigh([at(3, 3), at(3, 4)].into_iter(), 4);
+            grid.label();
+            grid
+        };
+        let built = finish(Grid::build(SIDE, SIDE, CELL, 3.0, obstacles.clone().into_iter()));
+        assert!(!built.portal_cells().is_empty(), "the case this is about: a grid with portals");
+        let mut reversed = Grid::open(SIDE, SIDE, CELL, 3.0);
+        for &(center, half_extent) in obstacles.iter().rev() {
+            reversed.block(center, half_extent);
+        }
+        let reversed = finish(reversed);
+        assert!(built.same_as(&reversed), "an obstacle at a time, in reverse, is the built grid");
+        for a in 0..100 {
+            for b in 0..100 {
+                let (from, to) = (at(a % 10, a / 10), at(b % 10, b / 10));
+                assert_eq!(built.next_step(from, to), reversed.next_step(from, to), "{from:?} -> {to:?}");
+                assert_eq!(built.connected(from, to), reversed.connected(from, to), "{from:?} -> {to:?}");
+            }
+        }
+        let mut fielded = built.without_fields();
+        assert!(fielded.same_as(&built), "a copy is the grid");
+        fielded.add_field(at(9, 9));
+        assert!(!fielded.same_as(&built), "a field is part of what is compared");
+        assert!(fielded.without_fields().same_as(&built), "and it is left behind");
     }
 
     #[test]
@@ -1676,6 +2269,63 @@ mod field_tests {
         assert_eq!(grid.flow(at(7, 2), 7, 2), None, "the goal has no arrow");
     }
 
+    /// `walk_costs` toward several goals reads, from every cell, the cost
+    /// to the nearest of them: the smaller of the two goals' own fields,
+    /// unreachable where both are.
+    #[test]
+    fn walk_costs_read_the_nearest_goals_field() {
+        let mut grid = nine_by_five();
+        grid.surcharge(std::iter::once(at(3, 2)), 3);
+        let (a, b) = (at(1, 1), at(7, 3));
+        let walk = grid.walk_costs(&[a, b]);
+        grid.add_field(a);
+        grid.add_field(b);
+        for row in 0..5 {
+            for col in 0..9 {
+                let nearest = match (grid.to_goal(a, col, row), grid.to_goal(b, col, row)) {
+                    (Some(x), Some(y)) => Some(x.min(y)),
+                    (x, y) => x.or(y),
+                };
+                assert_eq!(walk.at(at(col, row)), nearest, "cell ({col}, {row})");
+            }
+        }
+        assert_eq!(walk.at(at(4, 0)), None, "a wall cell reaches nobody");
+        assert_eq!(grid.walk_costs(&[]).at(a), None, "no goal, no walk");
+    }
+
+    /// A hull in a blocked cell - pressed against a wall, in the margin the
+    /// grid keeps round it - walks from its open neighbours: one step more
+    /// than the cheapest of them, where `at` reads no walk at all; an open
+    /// cell reads as `at` does.
+    #[test]
+    fn a_hull_against_a_wall_walks_from_its_open_neighbours() {
+        let grid = nine_by_five();
+        let goal = at(1, 1);
+        let walk = grid.walk_costs(&[goal]);
+        for row in 0..5usize {
+            for col in 0..9usize {
+                let p = at(col, row);
+                match walk.at(p) {
+                    Some(cost) => assert_eq!(walk.from_hull(p), Some(cost), "open cell ({col}, {row})"),
+                    None => {
+                        let near = [(0i32, -1i32), (0, 1), (-1, 0), (1, 0)]
+                            .into_iter()
+                            .filter_map(|(dc, dr)| {
+                                let (c, r) = (col as i32 + dc, row as i32 + dr);
+                                ((0..9).contains(&c) && (0..5).contains(&r)).then(|| walk.at(at(c as usize, r as usize))).flatten()
+                            })
+                            .min();
+                        assert_eq!(walk.from_hull(p), near.map(|c| c + 1), "blocked cell ({col}, {row})");
+                    }
+                }
+            }
+        }
+        // The wall's foot borders the open ground: no walk read from its
+        // cell, one from the hull standing there.
+        assert_eq!(walk.at(at(4, 0)), None);
+        assert!(walk.from_hull(at(4, 0)).is_some(), "the hull at the wall walks on");
+    }
+
     /// Adding the same goal twice keeps one field, and a second goal gets
     /// its own - `next_step` toward each reads its own table.
     #[test]
@@ -1688,6 +2338,81 @@ mod field_tests {
         assert_eq!(grid.fields.len(), 2);
         assert_eq!(grid.cell_of(grid.next_step(at(0, 2), at(0, 0)).unwrap()), (0, 1));
         assert_eq!(grid.cell_of(grid.next_step(at(0, 2), at(7, 2)).unwrap()), (1, 2));
+    }
+
+    /// A field worked out only as far as it is read gives every answer the
+    /// whole table gives, whatever the order the reads come in: on mazes of
+    /// walls, dear cells and portals, every query read from every cell the
+    /// goal reaches - the cells beside the goal first, the search barely
+    /// begun, then the rest shuffled - each query on a field of its own and
+    /// then all of them on one, against the same field settled whole. The
+    /// cells the goal does not reach come last: a read from one has to run
+    /// the search to its end to know, after which every read is the
+    /// table's whatever the rule.
+    #[test]
+    fn a_field_read_as_far_as_it_is_needed_answers_as_the_whole_table_does() {
+        use rand::rngs::SmallRng;
+        use rand::{RngExt, SeedableRng};
+        let cell = 32.0;
+        let (cols, rows) = (30usize, 20usize);
+        let at = |c: usize, r: usize| Position::new((c as f32 + 0.5) * cell, (r as f32 + 0.5) * cell);
+        let headings = [None, Some(Position::new(0.0, -1.0)), Some(Position::new(0.0, 1.0)), Some(Position::new(-1.0, 0.0)), Some(Position::new(1.0, 0.0))];
+        let read = |route: Option<RouteAhead>| route.map(|route| (route.first(), route.cells().to_vec()));
+        for seed in 0..12u64 {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let walls: Vec<(Position, f32)> = (0..cols * rows)
+                .filter(|_| rng.random_range(0.0..1.0) < 0.22)
+                .map(|i| (at(i % cols, i / cols), cell / 2.0))
+                .collect();
+            let dear: Vec<Position> = (0..40).map(|_| at(rng.random_range(0..cols), rng.random_range(0..rows))).collect();
+            let portals: &[Position] =
+                if seed % 2 == 0 { &[Position::new(4.0 * cell, 4.0 * cell), Position::new(26.0 * cell, 16.0 * cell)] } else { &[] };
+            let goal = at(rng.random_range(0..cols), rng.random_range(0..rows));
+            let fresh = || {
+                let mut grid = Grid::build(cols as f32 * cell, rows as f32 * cell, cell, 0.0, walls.iter().copied())
+                    .with_portals(portals, cell, 2.0);
+                grid.surcharge(dear.iter().copied(), 3);
+                grid.add_field(goal);
+                grid
+            };
+            let whole = fresh();
+            whole.settle_fields();
+            assert!(whole.frontier(&mut whole.fields[0].search.borrow_mut()).is_none(), "seed {seed}: the whole table is settled");
+            let (gc, gr) = whole.cell_of(goal);
+            let (mut reached, unreached): (Vec<(usize, usize)>, Vec<(usize, usize)>) =
+                (0..rows).flat_map(|r| (0..cols).map(move |c| (c, r))).partition(|&(c, r)| whole.to_goal(goal, c, r).is_some());
+            assert!(reached.len() > cols * rows / 2, "seed {seed}: the goal reaches most of the maze");
+            reached.sort_by_key(|&(c, r)| c.abs_diff(gc) + r.abs_diff(gr));
+            for i in (8..reached.len()).rev() {
+                let j = rng.random_range(8..=i);
+                reached.swap(i, j);
+            }
+            for query in 0..6 {
+                let lazy = fresh();
+                let asks = |q: usize| query == q || query == 5;
+                for &(c, r) in reached.iter().chain(&unreached) {
+                    let from = at(c, r);
+                    if asks(0) {
+                        assert_eq!(lazy.next_step(from, goal), whole.next_step(from, goal), "seed {seed}: next_step from ({c}, {r})");
+                    }
+                    if asks(1) {
+                        assert_eq!(lazy.path_cost(from, goal), whole.path_cost(from, goal), "seed {seed}: path_cost from ({c}, {r})");
+                    }
+                    if asks(2) {
+                        for heading in headings {
+                            let (a, b) = (lazy.route_ahead(from, goal, heading), whole.route_ahead(from, goal, heading));
+                            assert_eq!(read(a), read(b), "seed {seed}: route_ahead from ({c}, {r}) heading {heading:?}");
+                        }
+                    }
+                    if asks(3) {
+                        assert_eq!(lazy.flow(goal, c, r), whole.flow(goal, c, r), "seed {seed}: flow at ({c}, {r})");
+                    }
+                    if asks(4) {
+                        assert_eq!(lazy.to_goal(goal, c, r), whole.to_goal(goal, c, r), "seed {seed}: to_goal at ({c}, {r})");
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1734,5 +2459,89 @@ mod dims_tests {
         assert_eq!(grid.path_cost(at(1, 1), at(7, 1)), Some(9), "5 dry steps plus one ford at 4");
         assert!(grid.usable(at(4, 1)), "a weighed cell is still open");
         assert!(!grid.blocked_ahead(at(3, 1), Position::new(1.0, 0.0)));
+    }
+}
+
+#[cfg(test)]
+mod route_ahead_tests {
+    use super::*;
+
+    const CELL: f32 = 32.0;
+    const DOWN: Position = Position::new(0.0, 1.0);
+    const RIGHT: Position = Position::new(1.0, 0.0);
+
+    /// The centre of cell (`col`, `row`).
+    fn at(col: usize, row: usize) -> Position {
+        Position::new((col as f32 + 0.5) * CELL, (row as f32 + 0.5) * CELL)
+    }
+
+    /// A `cols` x `rows` grid of 32 px cells, margin 0, `walls` blocked.
+    fn grid(cols: usize, rows: usize, walls: &[(usize, usize)]) -> Grid {
+        let obstacles: Vec<(Position, f32)> = walls.iter().map(|&(c, r)| (at(c, r), CELL / 2.0)).collect();
+        Grid::build(cols as f32 * CELL, rows as f32 * CELL, CELL, 0.0, obstacles.into_iter())
+    }
+
+    /// Without a heading the read is the route `next_step` walks: each cell
+    /// is what `next_step` answers from the one before, and the first point
+    /// is `next_step`'s own.
+    #[test]
+    fn without_a_heading_it_reads_the_route_next_step_walks() {
+        let mut grid = grid(20, 12, &[]);
+        let goal = at(15, 9);
+        grid.add_field(goal);
+        let from = at(2, 2);
+        let ahead = grid.route_ahead(from, goal, None).expect("routes");
+        assert_eq!(ahead.start(), (2, 2));
+        assert_eq!(Some(ahead.first()), grid.next_step(from, goal));
+        assert_eq!(ahead.cells().len(), ROUTE_AHEAD_CELLS);
+        let mut pos = from;
+        for &cell in ahead.cells() {
+            pos = grid.next_step(pos, goal).expect("routes");
+            assert_eq!(grid.cell_of(pos), cell);
+        }
+        assert!(grid.route_ahead(from, at(2, 2), None).is_none(), "the same cell is no route, as for next_step");
+    }
+
+    /// The lowest-index tie-break takes a goal below and to the right
+    /// across first; a hull heading down reads the same field down first,
+    /// as far as that costs nothing, and turns once.
+    #[test]
+    fn a_heading_straightens_a_field_route() {
+        let mut grid = grid(20, 12, &[]);
+        let goal = at(9, 9);
+        grid.add_field(goal);
+        let from = at(2, 2);
+        assert_eq!(grid.route_ahead(from, goal, None).unwrap().cells(), &[(3, 2), (4, 2), (5, 2), (6, 2)]);
+        assert_eq!(grid.route_ahead(from, goal, Some(DOWN)).unwrap().cells(), &[(2, 3), (2, 4), (2, 5), (2, 6)]);
+        // Close to the goal's row the read turns where it has to, once.
+        assert_eq!(grid.route_ahead(at(2, 7), goal, Some(DOWN)).unwrap().cells(), &[(2, 8), (2, 9), (3, 9), (4, 9)]);
+    }
+
+    /// With the heading's own step dearer, a turn off it comes before a
+    /// step straight back: heading east into the east wall of a two-lane
+    /// corridor that runs south, the read goes on south rather than back
+    /// across the corridor, which the lowest index alone would choose.
+    #[test]
+    fn a_turn_comes_before_a_step_straight_back() {
+        let walls: Vec<(usize, usize)> = (0..12).flat_map(|r| [(3, r), (6, r)]).collect();
+        let mut grid = grid(10, 12, &walls);
+        let goal = at(4, 11);
+        grid.add_field(goal);
+        assert_eq!(grid.route_ahead(at(5, 3), goal, None).unwrap().cells()[0], (4, 3), "the lowest index steps back west");
+        assert_eq!(grid.route_ahead(at(5, 3), goal, Some(RIGHT)).unwrap().cells()[0], (5, 4));
+    }
+
+    /// A search's path is one of many as cheap, its shape whatever order
+    /// the search met the cells in, so only its first step is read.
+    #[test]
+    fn a_searched_route_reads_its_first_step_only() {
+        let grid = grid(20, 12, &[]);
+        let (from, goal) = (at(2, 2), at(9, 9));
+        let ahead = grid.route_ahead(from, goal, Some(DOWN)).unwrap();
+        assert_eq!(ahead.cells().len(), 1);
+        assert_eq!(Some(ahead.first()), grid.next_step(from, goal));
+        let walking = grid.route_ahead_walking(from, goal).unwrap();
+        assert_eq!(walking.cells().len(), 1);
+        assert_eq!(Some(walking.first()), grid.next_step_walking(from, goal));
     }
 }

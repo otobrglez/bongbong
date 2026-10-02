@@ -131,6 +131,11 @@ pub enum EditStep {
     Settings { before: MapSettings, after: MapSettings },
     /// The whole map replaced: a load or a reset.
     Map { before: Box<MapFile>, after: Box<MapFile> },
+    /// The map resized (`MapEditor::resize`): the map before - every cell
+    /// the new size dropped included - and after, and the whole cells the
+    /// old map moved by to sit at its anchor, which a zoomed view moves by
+    /// too.
+    Resize { before: Box<MapFile>, after: Box<MapFile>, shift: (i32, i32) },
 }
 
 impl EditStep {
@@ -156,7 +161,7 @@ impl EditStep {
             EditStep::Settings { before, after } => {
                 if forward { after } else { before }.write_to(map);
             }
-            EditStep::Map { before, after } => {
+            EditStep::Map { before, after } | EditStep::Resize { before, after, .. } => {
                 let source = if forward { after } else { before };
                 let name = map.name.take();
                 *map = (**source).clone();
@@ -197,20 +202,39 @@ impl UndoStack {
         }
     }
 
-    /// Revert the newest step; `Some` with that step when there was one.
-    pub fn undo(&mut self, map: &mut MapFile) -> Option<EditStep> {
+    /// Revert the newest step; `Some` with that step, moved to the redo
+    /// side, when there was one.
+    pub fn undo(&mut self, map: &mut MapFile) -> Option<&EditStep> {
         let step = self.undo.pop()?;
         step.apply(map, false);
-        self.redo.push(step.clone());
-        Some(step)
+        self.redo.push(step);
+        self.redo.last()
     }
 
-    /// Re-apply the newest undone step; `Some` with it when there was one.
-    pub fn redo(&mut self, map: &mut MapFile) -> Option<EditStep> {
+    /// Re-apply the newest undone step; `Some` with it, back on the undo
+    /// side, when there was one.
+    pub fn redo(&mut self, map: &mut MapFile) -> Option<&EditStep> {
         let step = self.redo.pop()?;
         step.apply(map, true);
-        self.undo.push(step.clone());
-        Some(step)
+        self.undo.push(step);
+        self.undo.last()
+    }
+
+    /// The step the last `undo` took back: the newest on the redo side.
+    pub fn last_undone(&self) -> Option<&EditStep> {
+        self.redo.last()
+    }
+
+    /// The step the last `redo` made again, or the last edit: the newest
+    /// on the undo side.
+    pub fn last_done(&self) -> Option<&EditStep> {
+        self.undo.last()
+    }
+
+    /// The newest step on the undo side, to fold a run of presses of one
+    /// stepper into it (`MapEditor`'s size steppers).
+    pub fn last_mut(&mut self) -> Option<&mut EditStep> {
+        self.undo.last_mut()
     }
 
     pub fn undo_depth(&self) -> usize {
@@ -252,6 +276,9 @@ impl MapDiff {
             }
         }
         diff.settings = MapSettings::of(baseline).changed_fields(&MapSettings::of(current));
+        if baseline.field_size() != current.field_size() {
+            diff.settings.push("size");
+        }
         diff
     }
 

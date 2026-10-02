@@ -36,8 +36,12 @@ button-online = ONLINE
 
 # The players dialog: a 28 px title and a 16 px line across a 440 px
 # panel, then two 176 px buttons in 18 px text (about 14 letters each).
+# The line names the controls in the hands that last pressed something:
+# the keys after a key press, and after a touch the stick and the tap of
+# player 1 - player 2 is always the keyboard's.
 players-title = How many players?
 players-keys = P1 arrows + Space    P2 WASD + L.Shift
+players-touch = P1 drag + tap    P2 WASD + L.Shift
 players-one = 1 PLAYER
 players-two = 2 PLAYERS
 
@@ -122,7 +126,8 @@ bar-level = LEVEL
 # seat's number. Keep it short - it sits over a 48 px hull.
 seat-label = P{ $n }
 
-# The touch hints over each half of the field, 20 px text, drawn once.
+# The touch hints over each half of the field, 20 px text, drawn once,
+# the first time a touch lands - and not while the keys are in use.
 touch-steer = DRAG TO STEER
 touch-fire = TAP TO FIRE
 
@@ -204,6 +209,8 @@ status-waiting = { $room } { $code } - SEAT { $seat }{ $rtt } - WAITING FOR THE 
 status-offline = { $room } - OFFLINE: { $reason }
 note-tuning-refused = the room's tuning was refused: { $detail }
 note-welcome-refused = the room's round could not be built: { $detail }
+# `--host -m` on a map nobody has won as it stands.
+note-not-cleared = this map is not cleared: win it from PLAY in the builder, then save it
 
 ## What the room server refused, and why (net::wire::Refusal). Shown
 ## under the lobby's title or on the status line. `{ $detail }` is the
@@ -235,24 +242,79 @@ refusal-room-closed = the room closed
 
 ## The builder (src/editor/mod.rs, src/editor/render.rs)
 
-# The build bar, 18 px: BUILD in 64 px, FILE and MAP in 42 px beside a
-# caret (about 4 letters), UNDO/REDO in 10 px inside 40 px buttons.
+# The build bar, in points: BUILD at 18 in 64, FILE and MAP at 18 in 42
+# beside a caret (about 4 letters); UNDO/REDO/FIT at 11 inside 36 with a
+# mouse and at 12 inside 40 on a touch screen.
 editor-build = BUILD
 editor-undo = UNDO
 editor-redo = REDO
 editor-file = FILE
 editor-map = MAP
+# The camera back to the whole canvas.
+editor-fit = FIT
+# A round from the middle of the view rather than the map's start, just
+# before PLAY: 11 pt in 64 with a mouse, 12 in 72 on a touch screen
+# (about 9 letters).
+editor-play-here = PLAY HERE
+# The map's check (its findings and quick fixes), after FIT: 11 pt in 52
+# with a mouse, 12 in 60 on a touch screen (about 6 letters).
+editor-check = CHECK
+
+# The CHECK panel, 500 pt wide under its button: the title (16 pt, about
+# 20 letters, left of the counts), the line under it (12 pt, about 70
+# letters), the line a map with no findings shows (16 pt) and the button
+# that makes a finding's one fix (16 pt in 80, about 6 letters).
+check-title = MAP CHECK
+check-hint = Pick a problem to see it on the map. FIX makes the change it asks for.
+check-none = NO PROBLEMS FOUND
+check-fix = FIX
+# The clear check's row in the panel: whether this revision of the map has
+# been won from PLAY, its par (the clear time, m:ss) and what clearing
+# means, 12 pt under them.
+check-cleared = CLEARED
+check-not-cleared = NOT CLEARED
+check-par = PAR { $time }
+check-cleared-hint = Won from PLAY as it stands. An edit is a new revision to clear.
+check-not-cleared-hint = Win it from PLAY, alone, with no edits since, to host it in a room.
+
+# What the map linter found, one line per finding in the CHECK panel, 16 px
+# beside its mark and before its FIX button (about 28 letters). The key is
+# `lint-` and the finding's kind as the dev server's `lint` tool spells it.
+lint-unreachable-frog = FROG OUT OF REACH
+lint-unreachable-pickup = PICKUP OUT OF REACH
+lint-gated-pickup = PICKUP BEHIND WALLS
+lint-disconnected-region = CUT-OFF GROUND
+lint-boxed-in-cell = BOXED-IN SPOT
+lint-spawn-band-too-tight = NO ROOM TO PLACE ENEMIES
+lint-planner-physics-mismatch = ROUTE THROUGH A WALL
+lint-narrow-corridor = ONE-CELL PASSAGE
+lint-gate-not-on-edge = GATE OFF THE EDGE
+lint-gate-blocked = GATE LANE BLOCKED
+lint-waves-no-gates = WAVES WITH NO WAY IN
+lint-hunt-missing-enemy-frog = HUNT WITH NO ENEMY FROG
+lint-enemy-frog-unreachable = ENEMY FROG OUT OF REACH
+lint-no-start = NO PLAYER START
+lint-start-penned = START PENNED IN
+lint-player2-unreachable = PLAYER 2 CUT OFF
+lint-players-too-close = STARTS TOO CLOSE
+lint-portal-alone = LONE PORTAL
+lint-portal-blocked = PORTAL BLOCKED
+lint-tower-at-start = TOWER COVERS A START
+lint-tower-no-reach = TOWER CAN'T REACH ANYTHING
+lint-too-many-towers = MANY TOWERS ON ONE SIDE
 # The status line's fallback before a category is active.
 editor-tool = TOOL
 
-# The five tool groups, in the field's status line.
+# The five tool groups, in the status line and, at 12 pt in 60, beside
+# their row of the palette a narrow bar folds them into.
 category-wall = WALL
 category-prop = PROP
 category-ground = GROUND
 category-actor = ACTOR
 category-pickup = PICKUP
 
-# The FILE menu's rows, 18 px in a 200 px menu.
+# The FILE menu's rows, 18 px in a 200 px menu; file-save is the Save
+# prompt's button too, 12 pt in 60 pt.
 file-load = LOAD...
 file-save = SAVE
 file-save-as = SAVE AS...
@@ -271,18 +333,29 @@ settings-tier-start = TIER START
 settings-tier-end = TIER END
 settings-theme = THEME
 settings-weather = WEATHER
+# The map's size in cells, and where the old map sits when it changes.
+settings-width = WIDTH
+settings-height = HEIGHT
+settings-anchor = ANCHOR
 settings-reset = RESET MAP
 # A settings value the map leaves to the game.
 settings-auto = auto
-# Beside a value a command-line flag outranks.
+# Beside a value a command-line flag outranks, 12 pt.
 settings-cli = (cli)
 
-# The popups.
+# The popups. The Save prompt's line, 12 pt in 276 pt, names the keys,
+# or after a touch its SAVE button (file-save) and the tap outside the
+# prompt that cancels it.
 editor-save-as = Save as:
 editor-save-hint = Enter to save, Esc to cancel
+editor-save-hint-touch = Tap SAVE to save, outside to cancel
 editor-no-maps = no maps to load
 editor-shipped = shipped
+# A long list's pager: the span on screen, 12 pt between its < and > in
+# a 340 pt row, and how to turn it - the mouse's wheel, or after a touch a
+# tap on either arrow.
 editor-page = { $from }-{ $to } of { $n }  (wheel)
+editor-page-touch = { $from }-{ $to } of { $n }  (tap < or >)
 editor-untitled = untitled
 
 # The status line's answers.
@@ -291,6 +364,46 @@ editor-loaded = loaded { $name }
 editor-saving-unavailable = saving is not available in this build: edits stay in memory for the session
 editor-no-name = the map has no name yet: use SAVE AS
 editor-bad-name = map name "{ $name }" may only use letters, digits, - and _
+editor-copied = copied { $n } cells
+editor-cut = cut { $n } cells
+editor-stamp-kept = kept as { $name } in STAMPS
+editor-stamp-empty = nothing to keep: the selection is empty
+editor-fill-too-large = too large to fill: more than { $n } cells
+
+# BRUSH: how a press on the canvas paints - a pen, a rectangle filled when
+# the drag ends, a flood fill of the region pressed, a scatter of a share
+# of the cells round the drag -, the select tool and the stamps. The
+# palette's row of them is named at 12 pt in 60, like a category; the
+# list's rows at 18 px in a 200 px row after a 32 px icon (about 12
+# letters), like the tools.
+editor-brush = BRUSH
+brush-pen = pen
+brush-rect = rectangle
+brush-fill = fill
+brush-scatter = scatter
+brush-stamps = stamps...
+
+# The select tool's strip under the bar: a word on each button, 11 pt in
+# 60 with a mouse and 12 in 72 on a touch screen (about 8 letters). COPY,
+# CUT, PASTE and DELETE act on the selection; + STAMP keeps it as a stamp
+# for the session; STAMPS opens their list; PLACE puts a paste down where
+# it stands and CANCEL takes it away.
+select-copy = COPY
+select-cut = CUT
+select-paste = PASTE
+select-delete = DELETE
+select-save-stamp = + STAMP
+select-stamps = STAMPS
+select-place = PLACE
+select-cancel = CANCEL
+
+# The stamps in the STAMPS list, 18 px between a stamp's picture and its
+# size (about 12 letters): the shipped ones by their file's name under
+# maps/stamps/, and the ones kept this session numbered.
+stamp-fort = fort
+stamp-bunker = bunker
+stamp-river-bend = river bend
+stamp-saved = my stamp { $n }
 
 # The tools, as the dropdown rows spell them, 18 px in a 200 px row
 # after a 32 px icon (about 12 letters). The key is `tool-` and the
@@ -334,6 +447,7 @@ tool-gun_tower_enemy = enemy gun
 tool-bio_slush = bio slush
 tool-bio_slush_enemy = enemy slush
 tool-eraser = eraser
+tool-select = select
 
 # The short spelling for the bar's 10 px line and the cursor readout,
 # where a tool's full name has no room (about 6 letters). A tool without

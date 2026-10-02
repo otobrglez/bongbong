@@ -9,6 +9,12 @@
 
 version = 1
 size = [40, 22.5]
+# view = "whole": drawn at 40 x 22.5 when that was the standard field,
+# this fixture is shown whole and played by the arena's AI - the shared
+# alert and the edge band its probe-fixtures budgets were measured on.
+# The field-map AI (docs/large-maps-follow-camera.md section 12) is swept
+# on the field maps themselves by `just probe-fields`.
+view = "whole"
 tanks = 4
 
 cells."10,8" = { kind = "wall", material = "iron" }

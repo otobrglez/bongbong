@@ -12,7 +12,7 @@ use crate::canvas::{Canvas, Sheet};
 use crate::{PICKUP_SCALE, PICKUP_TEXTURE_SIZE, Position};
 
 /// Which effect a pickup has when collected - see `simulation::collect_pickups`.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PickupKind {
     Health,
@@ -37,7 +37,7 @@ pub enum PickupKind {
     Plasma,
     /// Grants `missile_ammo_per_pickup` seeker missiles and queues the
     /// four-tube pod (FIFO, as above) - while live and stocked, a trigger
-    /// pull fires a volley (two salvos of four by default) that climb,
+    /// pull fires a volley (one salvo of four by default) that climb,
     /// lock onto the nearest opposing tank and dive on it (`missile.rs`).
     /// Players and enemies both use it.
     Missiles,
@@ -51,9 +51,9 @@ pub enum PickupKind {
     /// `tank::Tank::shield_hp` to `shield_capacity`. Refills rather than
     /// stacks, like `SpeedUp`.
     ///
-    /// The shield is a **pool of absorption, not an invulnerability
-    /// window**: it soaks damage until spent and then shatters
-    /// (`Event::ShieldBroken`), so concentrated fire is what ends it and
+    /// The shield is a **pool of absorption on a short clock**: it soaks
+    /// damage until spent, or until `shield_seconds` run out, and then
+    /// shatters (`Event::ShieldBroken`), so concentrated fire ends it early and
     /// breaking contact is what preserves it (`Tank::tick_shield` refills a
     /// live shield after `shield_recharge_delay_seconds`; a shattered one
     /// never returns on its own). It is spent at two seams, because a

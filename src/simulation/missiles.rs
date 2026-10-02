@@ -1,15 +1,16 @@
 //! The seeker missiles' world-facing half (`missile.rs` is the flight):
 //! locking a missile at the top of its climb onto the nearest opposing
-//! tank, keeping its aim on that tank while it chases, and bursting it in
-//! a small blast where it comes down. No RNG outside the blast's damage
-//! rolls, which are drawn only for what is inside the radius - a round
-//! with no missiles in the air draws exactly what it did before.
+//! tank (an enemy's onto a seat only from inside its sight box), keeping
+//! its aim on that tank while it chases, and bursting it in a small blast
+//! where it comes down. No RNG outside the blast's damage rolls, which are
+//! drawn only for what is inside the radius - a round with no missiles in
+//! the air draws exactly what it did before.
 
 use crate::tuning::tuning;
 use hecs::Entity;
 use crate::math::Vec2;
 
-use crate::ai::Ai;
+use crate::ai::{Ai, in_sight_box};
 use crate::blast::{BlastFx, BlastKind, BlastShape, Lean, Scorch};
 use crate::frog::{Frog, Side};
 use crate::missile::Missile;
@@ -47,12 +48,18 @@ impl Game {
     /// keeps the launcher's aim point - either way offset by its tube
     /// (`Missile::impact_offset`) so a salvo lands spread out; a missile
     /// following a tank takes the tank's position plus that offset as its
-    /// aim, and one whose tank has died dives on where it last aimed. No
-    /// RNG.
+    /// aim, and one whose tank has died dives on where it last aimed. An
+    /// enemy's missile locks onto a seat only while its launcher stands
+    /// inside that seat's sight box (`ai::in_sight_box`) - the rule every
+    /// enemy fires at a seat by, and the one a volley would otherwise slip
+    /// past, since its seek reaches much further than the box - and a
+    /// launcher gone from the field locks onto none. No RNG.
     pub(super) fn guide_missiles(&mut self, f: &mut Frame) {
         // Everything a missile can lock: live tanks with a body (a wave tank
-        // still rolling in has neither a body nor an `Ai`).
+        // still rolling in has neither a body nor an `Ai`). And where every
+        // enemy launcher stands, wrecks included.
         let mut targets: Vec<(Entity, usize, Owner, Position)> = Vec::new();
+        let mut launchers: Vec<(usize, Position)> = Vec::new();
         for player in self.players().into_iter().flatten() {
             super::with_tank(&self.world, player, |t| {
                 if !t.is_wreck() {
@@ -64,14 +71,26 @@ impl Game {
             if !tank.is_wreck() {
                 targets.push((entity, tank.owner_slot(), tank.owner(), tank.position));
             }
+            launchers.push((tank.owner_slot(), tank.position));
         }
         targets.sort_by_key(|&(_, slot, _, _)| slot);
         let range = tuning().missile_seek_range;
         for missile in self.world.query::<&mut Missile>().iter() {
             if missile.wants_lock() {
+                // Where an enemy's launcher stands (`None` once it is gone);
+                // a seat's missile is bound by no box.
+                let launcher = match missile.owner {
+                    Owner::Enemy(slot) => Some(launchers.iter().find(|&&(s, _)| s == slot).map(|&(_, at)| at)),
+                    _ => None,
+                };
+                let may_lock = |owner: Owner, pos: Position| match launcher {
+                    Some(at) if owner.is_player() => at.is_some_and(|at| in_sight_box(pos, at)),
+                    _ => true,
+                };
                 let nearest = targets
                     .iter()
                     .filter(|(_, _, owner, _)| !owner.same_side(missile.owner))
+                    .filter(|&&(_, _, owner, pos)| may_lock(owner, pos))
                     .map(|&(e, slot, _, pos)| (e, slot, pos, pos.distance_to(missile.position)))
                     .filter(|&(_, _, _, d)| d <= range)
                     // `targets` is in slot order and `min_by` keeps the
@@ -291,30 +310,21 @@ mod tests {
     }
 
     #[test]
-    fn a_trigger_pull_fires_two_salvos_of_four() {
+    fn a_trigger_pull_fires_one_salvo_of_four_a_pickups_worth() {
         let mut game = sandbox("");
-        arm(&mut game, 24);
+        arm(&mut game, tuning().missile_ammo_per_pickup);
         let events = fire(&mut game);
         assert!(events.iter().any(|e| matches!(e, Event::Fired { weapon: "missiles", .. })));
         assert_eq!(missiles_in_air(&game), 1, "the first leaves at once");
-        // Watch the pod frame by frame: it empties through the first
-        // salvo, holds empty through the gap, reloads and empties again.
-        let tubes = |game: &Game| with_tank(&game.world, player(game), |t| t.missile_tubes_empty);
+        // Watch the pod frame by frame: it empties through the salvo and
+        // fires no second one.
         let mut counts = Vec::new();
-        let mut tube_readings = Vec::new();
         for _ in 0..40 {
             idle(&mut game, 1);
             counts.push(missiles_in_air(&game));
-            tube_readings.push(tubes(&game));
         }
-        let first_four = counts.iter().position(|&n| n == 4).expect("the first salvo completes");
-        assert!(counts[first_four..].iter().take(8).all(|&n| n == 4), "a gap before the second salvo: {counts:?}");
-        assert_eq!(*counts.last().unwrap(), 8, "then four more: {counts:?}");
-        let reload = tube_readings.windows(2).position(|w| w[0] == 4 && w[1] < 4).expect("the pod reloads between salvos");
-        assert_eq!(tube_readings[reload + 1..].iter().max(), Some(&4), "and empties again: {tube_readings:?}");
-        assert_eq!(with_tank(&game.world, player(&game), |t| t.missile_ammo), 16);
-        idle(&mut game, 240);
-        assert_eq!(tubes(&game), 0, "reloaded for the next pull");
+        assert_eq!(counts.iter().max(), Some(&4), "one salvo of four: {counts:?}");
+        assert_eq!(with_tank(&game.world, player(&game), |t| t.missile_ammo), 0, "a pickup is one pull");
     }
 
     #[test]

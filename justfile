@@ -8,15 +8,17 @@ watch:
 # docs/gameplay-verification-design.md and CLAUDE.md's probe bullets.
 # Pinned to a Protect band round: the shipped map's own level tables may
 # say otherwise (the probe refuses --enemies under a waves plan).
+# offbox-fire is the sight-box rule (docs/large-maps-follow-camera.md
+# section 5): no enemy fires at a seat from outside the seat's box, ever.
 probe-sweep:
-    cargo run --bin probe -- --scenario afk --mission protect --spawn band --enemies 4 --frames 1800 --rounds 30 --heatmap
+    cargo run --bin probe -- --scenario afk --mission protect --spawn band --enemies 4 --frames 1800 --rounds 30 --heatmap --budget offbox-fire=0
 
 # Waves spawn plan health check: the maps/missions/ waves fixture, Destroy
 # mission (no frog, so an AFK player only loses to gunfire), 30 seeded
 # rounds. Rolling-in tanks are exempt from the anomaly checks until they
 # arrive. See docs/maps-to-levels.md.
 probe-waves:
-    cargo run --bin probe -- --map maps/missions/waves-basic.toml --scenario afk --frames 3600 --rounds 30 --seed 2000 --heatmap
+    cargo run --bin probe -- --map maps/missions/waves-basic.toml --scenario afk --frames 3600 --rounds 30 --seed 2000 --heatmap --budget offbox-fire=0
 
 # Sweep every maps/test/ adversarial fixture at a pinned seed and hold it
 # to the recorded baseline: each ceiling is the observed maximum across all
@@ -25,17 +27,16 @@ probe-waves:
 # change shifts the numbers: rerun, read the new totals, and re-baseline
 # consciously - never bump a ceiling just to go green. Zero-ceilings
 # (stale-start, stall, wall-grind, bump-rate, low-progress, never-arrived,
-# invariant, tank-grind, pile-up) are kinds no fixture currently produces at
-# all.
-# tank-grind and pile-up joined that list 2026-09-14 with the enemy command
-# & control instrumentation (docs/enemy-command-and-control-prd.md). They are
-# the first two kinds that measure a tank against *another tank* rather than
-# against the map, and both read 0 across the corpus and the default map at
-# the time they were added - so they are regression insurance, not a
-# currently-failing gate. The number that work actually has to move is the
-# ram tally the sweep now prints beside the totals, which is not budgeted:
-# a ram is not a failure, and once C2 can order one, budgeting it would
-# budget the feature.
+# invariant, tank-grind, offbox-fire) are kinds no fixture currently
+# produces at all.
+# tank-grind and pile-up joined the budgets 2026-09-14 with the enemy
+# command & control instrumentation (docs/enemy-command-and-control-prd.md).
+# They are the first two kinds that measure a tank against *another tank*
+# rather than against the map, and were added as regression insurance, not
+# a currently-failing gate (pile-up's real reading came later, below). The
+# number that work actually has to move is the ram tally the sweep now
+# prints beside the totals, which is not budgeted: a ram is not a failure,
+# and once C2 can order one, budgeting it would budget the feature.
 # Re-measured 2026-09-04, twice. First after the Protect mission's hunter
 # roll (`enemy_hunter_share_protect`, one RNG draw per enemy in
 # `Game::init`) shifted every stream: with the share zeroed the previous
@@ -52,8 +53,126 @@ probe-waves:
 # tanks: one wedging at the map corner for ~1.5 s while routing around
 # the maze's edge, one holding an aligned firing line on the player 26 px
 # from the bottom wall). See docs/gameplay-verification-design.md.
+# Re-measured 2026-10-01 for the sight-box rule (docs/large-maps-follow-
+# camera.md section 5): an enemy fires at a seat only from inside the
+# seat's +-11.5 x +-7.5 cell box, and offbox-fire=0 holds every fixture to
+# it (before the rule choke, pockets, props and towers fired 10, 20, 42 and
+# 10 shots from outside it). The same change made the sweep totals sum
+# every kind: they used to drop tank-grind and pile-up, so those two zero
+# ceilings had never been read off a sweep. pile-up=2 is maze's, with or
+# without the rule (round 1, 0x3e9: two flags in the maze's middle); choke
+# reads 1 (round 8, 0x3f0: three tanks on the player's row at the gap's
+# mouth, the funnel this fixture provokes, on a timeline the rule moved -
+# its north tank now fires from 224 px rather than 283). Every other
+# fixture's totals are unchanged but props (border-stuck 0 -> 1, churn
+# 4 -> 5) and towers (spin 0 -> 1, clustering 1 -> 0), all inside their
+# ceilings.
 probe-fixtures:
-    for m in maps/test/*.toml; do cargo run --bin probe -- --map $m --frames 1800 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=6 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=0 || exit 1; done
+    for m in maps/test/*.toml; do cargo run --bin probe -- --map $m --frames 1800 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=6 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=2 --budget offbox-fire=0 || exit 1; done
+
+# Field maps (docs/large-maps-follow-camera.md section 12): the rules only
+# a map the camera follows plays by (`simulation::field`) - alerts chained
+# from neighbour to neighbour with leashes home, far enemies thinking every
+# few ticks or asleep, band spawns and wave gates out of every seat's
+# sight box and about a 15 s walk out where the map has one, a wave called
+# to the fight, a fallen seat back through the gate nearest its team. The
+# 96 x 54 study map, longwater (the shipped 112 x 63 free-play field) and
+# five levels 56 wide, AFK, at a pinned seed; the maps/test/ fixtures
+# stay arenas (`view = "whole"`), so this is where a change to the
+# field-map AI shows. Ceilings are each kind's maximum over the seven maps,
+# recorded 2026-10-02 and re-baselined the same day for lanes (a hull turns
+# where its slide ends on the centre line of the lane it turns into,
+# docs/large-maps-follow-camera.md section 12) - re-baseline consciously,
+# never to go green. Lanes re-time every round, and over eight 30-round
+# sweeps of each 40-wide level (seeds 1000 and 2000, AFK and advancing, one
+# seat and two) every kind's total held or fell - jitter -4 %, spin -3 %,
+# stall -14 %, low-progress -45 %, clustering level - but for hedge-maze's
+# jitter (+9 %, in its one-lane gaps) and harbor-lights' clustering and
+# pile-ups (+23 %, +26 %, at its seat's north firing slot, which the fight
+# reaches sooner); these ten rounds read, before -> after: jitter=28 is
+# harbor-lights (23 -> 28; 18 -> 27 on hedge-maze); spin=8 is archipelago
+# (5 -> 8, tanks circling its islands' shores); clustering=10 is hedge-maze
+# (5 -> 10; the old ceiling, 6, was archipelago's, now 3); stall=1 is
+# archipelago (round 7, 0x3ef: a hunter standing to fire at the players'
+# frog, a hold the probe mutes only for a seat); low-progress=1 is
+# archipelago (round 7 again: a tank pressed for three seconds against
+# another's hull, on a route of its own the margin still steers, before its
+# stuck escape). border-stuck=3 (hedge-maze, 3 -> 3: enemies spawned in the
+# maze's lanes along its top and bottom edge, which they drive for their
+# first seconds), churn=20 and pile-up=6 stand. The study map reads
+# border-stuck=1 jitter=13 churn=8 and meets the fight about 12 s in, in
+# all ten rounds (it was 13 s, in nine); longwater reads jitter=4 spin=1
+# churn=3 and meets it about 11 s in, in all ten (in round 0x3f1 two of the
+# first wave were still out at 60 s, riding the edge of a nav row past
+# their turning). Re-baselined a second time the same day for the
+# margin's window (a hull whose switch-margin window is no wider than the
+# ground it covers between two thinks can cross it unseen, pass after
+# pass, so its searched route's turn is a lane turn too -
+# `ai::margin_never_turns`, docs/large-maps-follow-camera.md section 12):
+# about a third of the sweeps' rounds re-time, and over sixteen 30-round
+# sweeps of each 40-wide level (seeds 1000 to 4000) clustering and
+# pile-ups held, churn fell 4 % and jitter rose 2 %, 5 % on hedge-maze,
+# whose maze routes are a search's staircases a hull on that sliver used
+# to drive past. These ten rounds read: jitter=30 is hedge-maze (27 -> 30:
+# 0x3e8, 0x3e9, 0x3ec, 0x3ef and 0x3f1 one more each, 0x3ed two fewer -
+# collision dodges in the maze's lanes on a re-timed first contact, and in
+# 0x3ec and 0x3ef a staircase turn the old margin let the hull drive past;
+# harbor-lights stays at 28). stall=1 and low-progress=1 stand, archipelago
+# no longer reading them (round 7 re-times: 1 -> 0 each); spin=8 stands
+# (archipelago 8 -> 6), as do border-stuck=3 (hedge-maze 3 -> 3),
+# clustering=10 (hedge-maze 10 -> 10), churn=20 and pile-up=6 (hedge-maze
+# 6 -> 6). The study map reads border-stuck=1 jitter=13 churn=6 pile-up=2
+# (churn 8 -> 6, pile-up 0 -> 2) and still meets the fight about 12 s in;
+# longwater reads as before, black-gold and castle-moat but for a point of
+# churn. Re-baselined again when the shipped maps grew by 40 % a side
+# (34 x 17 to 48 x 24, 40 x 20 to 56 x 28, longwater 80 x 45 to 112 x 63;
+# the study map is as it was): border-stuck=8 is castle-moat (0 -> 8: the
+# south gate's tanks drive the strip between the moat and the field's edge,
+# behind a line of fences, to the bridge - the strip they always took, a
+# third again as long); spin=9 and churn=39 are hedge-maze (2 -> 9 and
+# 12 -> 39: its walks run longer, and a tank with nobody in sight wanders
+# more of them); wall-grind=1 is harbor-lights (0 -> 1: in round 0x3ef a
+# tank pressed toward the frog against the pier beside it on the beach).
+# Every other ceiling stands: jitter 24 on hedge-maze (from 30) and 20 on
+# harbor-lights (from 28), clustering=10 on both, pile-up 5 on hedge-maze
+# (from 6). The fight comes later on the larger fields: longwater about
+# 13.5 s in (10.4), black-gold 14.9 s (5.6), hedge-maze 9.7 s (2.6). Prints
+# first contact and ms per tick beside the anomalies. Re-baselined once more
+# for the play-test pass (players' armour 0.77, a shield of 70 on a 6 s clock,
+# a rocket pickup one salvo of four), which re-times the rounds: spin=12,
+# churn=43 and clustering=11 are hedge-maze (9, 39, 10), pile-up=8 is
+# archipelago (5 -> 8), tank-grind=1 is hedge-maze and archipelago (0 -> 1);
+# with the old armour and shield hedge-maze reads its old ceilings exactly.
+# Not in CI: well over two minutes in a debug build, the study map alone
+# more than one.
+probe-fields:
+    for m in maps/study/frontier.toml maps/longwater.toml maps/hedge-maze.toml maps/archipelago.toml maps/black-gold.toml maps/harbor-lights.toml maps/castle-moat.toml; do cargo run --bin probe -- --map $m --frames 3600 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=1 --budget border-stuck=8 --budget jitter=30 --budget spin=12 --budget churn=43 --budget clustering=11 --budget wall-grind=1 --budget bump-rate=0 --budget low-progress=1 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=1 --budget pile-up=8 --budget offbox-fire=0 || exit 1; done
+
+# The perfect defence (docs/large-maps-follow-camera.md section 12): the
+# probe's `defend` scenario - every enemy destroyed the moment it comes
+# within 400 px of a live seat or the players' frog, so nobody is ever
+# attacked - on the two maps that need the follow camera, ten seven-minute
+# rounds each at a pinned seed. A round lasts exactly as long as its last
+# straggler keeps it waiting, and never-arrived counts one still out. Every
+# round is won; a tank's walk to the defence has a median of 15 s on
+# longwater and 10 s on the study map, the longest 37 s and 54 s, and the
+# rounds last 149 to 169 s on longwater and 118 to 199 s on the study map,
+# whose rounds 0x3ec and 0x3ee each roll two stragglers in again through a
+# nearer gate (`probe: rerolls:`) - 0x3ec's last a wave tank the portals
+# and the pickups beyond them led off across the map. On the 80 x 45
+# longwater, before the shipped maps grew by 40 % a side, the walk's
+# median was 11 s, its longest 24 s and the rounds 117 to 133 s; the
+# figures before that are the 80 x 45 field's too. Before the margin's
+# window (docs/large-maps-follow-camera.md section 12) re-timed them, the
+# longest walks were 40 and 48 s and the rounds lasted 122 to 138 and 118
+# to 167 s; before the pacing director shortened the calm breathers and
+# the stragglers were rolled in again, 51 and 86 s, 123 to 152 and 123 to
+# 259 s. Before lanes, 8 of longwater's ten rounds and 7 of the study
+# map's still had a tank out at seven minutes, the longest walks 147 and
+# 149 s, and tanks still walking after 339 and 378. Release: in a debug
+# build the twenty rounds take the better part of an hour.
+probe-defend:
+    for m in maps/longwater.toml maps/study/frontier.toml; do cargo run --release --bin probe -- --map $m --scenario defend --frames 25200 --rounds 10 --seed 1000 --budget never-arrived=0 || exit 1; done
 
 run:
     cargo run

@@ -4,13 +4,22 @@ in vec2 fragTexCoord;
 out vec4 finalColor;
 
 uniform sampler2D texture0;   // the rendered scene
-uniform vec2 center;          // hit point, in 0..1 UV coords
+uniform vec2 center;          // hit point, in the ripple frame
 uniform float time;           // seconds since the impact started
-uniform vec2 resolution;      // screen size, to keep the pulse round
+uniform vec2 resolution;      // the ripple frame (the standard field), to keep the pulse round
 
-uniform float speed;          // pulse growth, UV units/sec
-uniform float width;          // thickness of the distorted band, UV units
-uniform float strength;       // how hard the pulse bends the image, UV units
+// The scene target in the ripple frame (`Camera::ripple_view`, the
+// standard field's units): its texture coordinate t is the ripple point
+// viewUv + t * viewUvSize, viewUv standing at the target's bottom-left
+// corner, where every centre is measured from too - so a ripple is the
+// same size in world pixels on every map, and the numbers stay small on a
+// large one.
+uniform vec2 viewUv;
+uniform vec2 viewUvSize;
+
+uniform float speed;          // pulse growth, ripple units/sec
+uniform float width;          // thickness of the distorted band, ripple units
+uniform float strength;       // how hard the pulse bends the image, ripple units
 uniform float duration;       // seconds the effect plays before fully fading
 
 // A shell impact: a single sharp outward punch (not the death shockwave's
@@ -18,7 +27,7 @@ uniform float duration;       // seconds the effect plays before fully fading
 // rolling kill ring and the muzzle's soft heat-shimmer. The flash itself is
 // the hit's burst, drawn in blocks (burst.rs); this only bends the picture.
 void main() {
-    vec2 toPixel = fragTexCoord - center;
+    vec2 toPixel = viewUv + fragTexCoord * viewUvSize - center;
 
     // aspect-correct so the pulse is a circle, not an ellipse
     vec2 corrected = toPixel;
@@ -40,7 +49,7 @@ void main() {
 
     vec2 uv = fragTexCoord;
     if (dist > 0.0001) {
-        uv -= normalize(toPixel) * amount;
+        uv -= normalize(toPixel) * amount / viewUvSize;
     }
     vec4 color = texture(texture0, uv);
 

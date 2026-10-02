@@ -32,8 +32,10 @@ use crate::math::Vec2;
 use sola_raylib::prelude::{RaylibHandle, RaylibTexture2D, RaylibThread, RenderTexture2D};
 
 use crate::ai::Intent;
-use crate::editor::{BuilderInput, Category, CellChange, MapEditor, Tool, parse_mission, parse_spawn, parse_tank, parse_tier};
-use crate::hud::{leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects, restart_button_rect};
+use crate::editor::{
+    Axis, BuilderFrame, BuilderInput, Category, CellChange, CellRect, MapEditor, Shape, Tool, parse_mission, parse_spawn, parse_tank, parse_tier,
+};
+use crate::hud::{leave_dialog_rects, players_dialog_rects, CornerButton, CornerShape, Corners, UiFrame};
 use crate::map::MapFile;
 use crate::maplint::LintSeverity;
 use crate::mode::{Driver, Session};
@@ -46,6 +48,9 @@ use crate::tank::{Dir, TankKind};
 use crate::tuning;
 use crate::level::{Mission, SpawnKind, Tier};
 use crate::level_select::SelectInput;
+use crate::follow::{CameraMode, CameraReport, FollowReport};
+use crate::framing::Seating;
+use crate::view::{Camera, View};
 use crate::{Layout, PHYSICS_FIXED_DT, Position, parse_seed};
 
 /// Port the game listens on unless `--dev-port`/`BONGBONG_DEV_PORT` says
@@ -98,12 +103,12 @@ pub const GAME_ONLY_TOOLS: &[&str] = &[
 /// `events`, `history`, `nav_grid`, `field`, `map_get`, `lint`,
 /// `overlays`, `screenshot`, `mode`, `builder_files` and the `tuning_*`
 /// tools - describes the online round instead (`Session::shown`), and
-/// `key {escape}` gives the seat up, as does a `click` on the bar's
+/// `key {escape}` gives the seat up, as does a `click` on the corners'
 /// `LEAVE` button - the one thing a click has to press in this mode.
 pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
     "step", "input", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "players", "play",
     "build", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings",
-    "builder_map", "builder_save",
+    "builder_map", "builder_save", "builder_touch", "builder_select", "builder_stamp",
 ];
 
 /// Tiles one `terrain` reply lists at most (the standard 34 x 17 field
@@ -111,7 +116,8 @@ pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
 const TERRAIN_MAX_TILES: usize = 800;
 
 /// The `key` tool's key names.
-const KEY_NAMES: &[&str] = &["tab", "escape", "enter", "undo", "redo", "backspace", "1", "2", "left", "right", "up", "down"];
+const KEY_NAMES: &[&str] =
+    &["tab", "escape", "enter", "undo", "redo", "copy", "cut", "paste", "delete", "backspace", "1", "2", "left", "right", "up", "down", "zoom_in", "zoom_out"];
 
 /// One tool: its wire/MCP name, the description the model reads, and its
 /// input JSON schema (an `object` schema, as a string so this table can be
@@ -152,7 +158,7 @@ const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"inte
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|split|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `split` of a couch pair apart (null for one view: the divider's `line` - a point and the unit normal into the second half in the followed bitmap's pixels - and `window_line`, how far `apart` the halves' views stand and each half's `seat`, `rect`, `offset`, `cut` and `in_view`), the `establishing` shot's `phase` (whole|zoom|follow) and `progress` (view `establishing` while it plays), the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`; and `motion`, the one motion switch - whether motion is `reduced` (no shake, no whole-screen ripple, the establishing shot cut rather than zoomed), the `reduce_motion` row's `setting` (platform|off|on) and what the `platform` said at startup, null where it says nothing), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, the input its `hints` name - `keys` or `touch`, the last one used: a touch landing turns them to taps and a key press back -, in play and online the corners' `buttons` and `clusters` and the `minimap` picture under the right cluster (`null` where none is drawn - an arena shown whole, a phone; a press there does nothing), and the `screen_buttons` of whatever stands over the round - the level select's open tiles (`level_N`) and `back`, a dialog's `one`/`two` or `leave`/`stay`, a level's end screen's `levels`/`again`/`next`, the lobby's live buttons (`host`, `join`, `key_a`, `confirm`, `ready`, `start`, `kick_1`, ...) - all in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state (the builder's chrome is laid out on the window in UI points like play's corners - the bar along the top of the safe area, the popups under it -, and its rects come in window coordinates, what `click` and `builder_touch` take, each with its `ui` points; `builder.navigator`: the navigator's picture, `null` at FIT on an arena; `builder.buttons`: the builder's buttons by name - the bar's `play`, `play_here`, `check`, `clear`, `fit`, `map`, `file`, `erase`, `undo`, `redo`, each category's `category_<name>` (its icon half) and `list_<name>` (its list half) and `brush` (BRUSH: the brush's shape, the select tool, the stamps), or the one `tools` button a bar too narrow for the five and BRUSH folds them into; with the select tool the strip under the bar's live buttons - `sel_copy`, `sel_cut`, `sel_paste`, `sel_flip_h`, `sel_flip_v`, `sel_delete`, `sel_stamp` (keep the selection as a stamp), `sel_stamps` (the STAMPS list), or with a paste ghost `sel_place`, `sel_flip_h`, `sel_flip_v`, `sel_cancel`; while a popup is open its own - a list's or the palette's `tool_<name>`, BRUSH's list's and the palette's brush row's `shape_<name>`, `tool_select` and `brush_stamps`, the FILE menu's `load`, `save`, `save_as` and `clear_map`, the Load list's `map_<name>`, the STAMPS list's `stamp_<key>`, the MAP panel's `<row>_dec`/`<row>_inc` and `reset`, the CHECK panel's `finding_N` rows and `fix_N` buttons - and a paged popup's `page_back`/`page_next`; `builder.shape`: how the brush paints (pen, rect, fill or scatter); `builder.rect`: the rectangle a RECT drag is drawing, filled on its release (null with none); `builder.message`: the status line's feedback - a save, a load, a FILL refused for its size - or null; `builder.selection` and `builder.ghost`: the select tool's rectangle and the paste ghost as {col, row, cols, rows} (the ghost with its `cells`), `null` for none; `builder.clipboard`: what COPY and CUT took ({cols, rows, cells}); `builder.stamps`: how many stamps the STAMPS list offers; `builder.check`: the CHECK panel's last report; `builder.clear`: the clear check - the canvas's `revision`, whether it is `cleared` (won from plain PLAY with no edit since) and its `par` in seconds, and the revision PLAY started the local round on (`attempt`); `builder.loupe`: the loupe over a painting finger - where it stands, the `world` it shows, its `device_scale` and the `cell` the stroke paints -, `null` without one; `builder.thumbnails`: while FILE > LOAD's list is open, every map whose thumbnail its pages have made so far, a picture a frame - its `name`, its size in `cells` and whether it has a `picture` (a map that does not parse has none) -, empty while it is closed), and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -208,7 +214,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "map_get",
-        description: "The current map as TOML text (plus name, cell count, default tank count) - edit it and hand it back through `restart {map_toml}`. Format: `version = 1`, optional `tanks = N` (default enemy count), optional `tank = \"titan\"` / `tank2 = \"scout\"` (the players' chassis), optional `theme = \"grass\"|\"desert\"` (the look - ground tileset and tall-grass sheet, grass when absent), optional `weather = \"night\"` (the sky, presentation only: clear, night, dusk, rain, storm, fog, sandstorm, snow or heat_haze; clear when absent), and one `cells.\"col,row\"` entry per occupied 32 px grid cell (col/row from 0 at the top-left; the field is the map's optional `size = [cols, rows]`, 34 x 17 = 1088x544 when absent): `{ kind = \"wall\", material = \"brick\"|\"iron\"|\"wood\"|\"glass\" }`, `{ kind = \"sandbag\" }` / `{ kind = \"barrel\" }` / `{ kind = \"fence\" }` (destructible props: shots sometimes pass over sandbags, barrels explode and chain, fences snap; tanks ram all three), `{ kind = \"barrel\", drum = \"oil\"|\"fuel\" }` (a pinned drum kind: oil leaves a burning pool, fuel goes off harder and launches when another blast sets it off; without `drum` the kind is rolled), `{ kind = \"oil\" }` (an oil trail cell: not solid, a fuse on the ground - a blast or a burning neighbour lights it and the fire runs along it, setting off any drum it reaches), `{ kind = \"tree\" }` / `{ kind = \"pine\" }` (destructible trees, solid like a prop but drawn larger than their cell; they often catch fire when killed and a tank can flatten one by driving into it), `{ kind = \"tall_grass\" }` (not solid - cover a tank hides in, enemies cannot shoot what is standing in it), `{ kind = \"road\" }`, `{ kind = \"water\" }` (a river where it is one cell wide, a lake where it is wider; a lake's open middle is deep - hulls cannot enter, shots fly over - and every other water cell is a ford that slows a hull and, in a north-south stream, carries it downstream; fire never lights on water, frogs hop toward it), `{ kind = \"frog\" }` (one), `{ kind = \"start\" }` (player 1, one), `{ kind = \"start2\" }` (player 2, one, optional - placed beside player 1 when absent, as every seat past the second always is), `{ kind = \"pickup\", pickup = \"health\"|\"ammo\"|\"laser\"|\"minigun\"|\"plasma\"|\"missiles\"|\"speedup\"|\"shield\"|\"flamethrower\"|\"frog_health\" }` (missiles are a four-tube pod firing two salvos of four seeker missiles per pull that climb, lock onto the nearest opposing tank and dive on it over any wall; the flamethrower is player-only: enemies drive over its fuel tank; the frog health pack fully heals the collector's own frog and is left on the ground by a tank whose frog is already at full health). Iron is indestructible, the rest can be shot away. Border walls and enemy spawns are added by the game on top.",
+        description: "The current map as TOML text (plus name, cell count, default tank count) - edit it and hand it back through `restart {map_toml}`. Format: `version = 1`, optional `tanks = N` (default enemy count), optional `tank = \"titan\"` / `tank2 = \"scout\"` (the players' chassis), optional `theme = \"grass\"|\"desert\"` (the look - ground tileset and tall-grass sheet, grass when absent), optional `weather = \"night\"` (the sky, presentation only: clear, night, dusk, rain, storm, fog, sandstorm, snow or heat_haze; clear when absent), and one `cells.\"col,row\"` entry per occupied 32 px grid cell (col/row from 0 at the top-left; the field is the map's optional `size = [cols, rows]`, 34 x 17 = 1088x544 when absent): `{ kind = \"wall\", material = \"brick\"|\"iron\"|\"wood\"|\"glass\" }`, `{ kind = \"sandbag\" }` / `{ kind = \"barrel\" }` / `{ kind = \"fence\" }` (destructible props: shots sometimes pass over sandbags, barrels explode and chain, fences snap; tanks ram all three), `{ kind = \"barrel\", drum = \"oil\"|\"fuel\" }` (a pinned drum kind: oil leaves a burning pool, fuel goes off harder and launches when another blast sets it off; without `drum` the kind is rolled), `{ kind = \"oil\" }` (an oil trail cell: not solid, a fuse on the ground - a blast or a burning neighbour lights it and the fire runs along it, setting off any drum it reaches), `{ kind = \"tree\" }` / `{ kind = \"pine\" }` (destructible trees, solid like a prop but drawn larger than their cell; they often catch fire when killed and a tank can flatten one by driving into it), `{ kind = \"tall_grass\" }` (not solid - cover a tank hides in, enemies cannot shoot what is standing in it), `{ kind = \"road\" }`, `{ kind = \"water\" }` (a river where it is one cell wide, a lake where it is wider; a lake's open middle is deep - hulls cannot enter, shots fly over - and every other water cell is a ford that slows a hull and, in a north-south stream, carries it downstream; fire never lights on water, frogs hop toward it), `{ kind = \"frog\" }` (one), `{ kind = \"start\" }` (player 1, one), `{ kind = \"start2\" }` (player 2, one, optional - placed beside player 1 when absent, as every seat past the second always is), `{ kind = \"pickup\", pickup = \"health\"|\"ammo\"|\"laser\"|\"minigun\"|\"plasma\"|\"missiles\"|\"speedup\"|\"shield\"|\"flamethrower\"|\"frog_health\" }` (missiles are a four-tube pod firing a salvo of four seeker missiles per pull, one pull a pickup, that climb, lock onto the nearest opposing tank and dive on it over any wall; the flamethrower is player-only: enemies drive over its fuel tank; the frog health pack fully heals the collector's own frog and is left on the ground by a tank whose frog is already at full health). Iron is indestructible, the rest can be shot away. Border walls and enemy spawns are added by the game on top.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -245,6 +251,13 @@ pub const TOOLS: &[ToolSpec] = &[
         name: "overlays",
         description: "Set persistent debug overlays drawn on top of the game (visible to the human too), one flag at a time: nav_grid (blocked pathfinding cells), ai (each enemy's waypoint, heading, last behaviour-tree action), projectiles (hit boxes + velocity), engage (engagement-ring targets), pickups (collect radius), hitboxes (each tank's hull and turret damage boxes and its rounded movement collider), stats (each tank's readout card: ammo, weapon, hp, speed, velocity, collider size, an enemy's retreat/fire state). Omitted flags keep their value, an unknown flag is an error; replies with the current flags. The I key in the game window cycles presets instead (off -> inspect = hitboxes + stats -> all); `input {cycle_overlays: true}` presses it.",
         schema: r#"{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"hitboxes":{"type":"boolean"},"stats":{"type":"boolean"}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "camera",
+        description: "Pin the part of the world the window draws, for screenshots (docs/large-maps-follow-camera.md): `x`/`y` a world point in field pixels at the view's centre and `zoom` 1 or more - the view shows the field's size divided by the zoom, kept inside the field and snapped to whole 2 px blocks, and fills the field area under the HUD bar, which is drawn as ever. A field left out keeps the pin's own (the field's centre, zoom 1, for a first pin). A pin outranks a field map's follow camera. `reset: true` lets the pin go: the view is the map's again - the whole field for an arena, the follow camera for a field map; no parameters only report. The pin holds across restarts and map changes, clamped to each field, and changes only the picture - the round, the AI and the builder's canvas never see it. Replies like `status.camera`: `view` (whole|follow|pinned), the visible world `rect`, `scale` (bitmap px per world px), the scene `target` size in texels and a pin's `center` and `zoom` (a followed view's position is the one the window last drew, unknown until it has drawn one).",
+        schema: r#"{"type":"object","properties":{"x":{"type":"number","description":"World x at the view's centre"},"y":{"type":"number","description":"World y at the view's centre"},"zoom":{"type":"number","minimum":1,"description":"How many times the field is magnified"},"reset":{"type":"boolean","default":false,"description":"Show the whole field again"}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -335,8 +348,8 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "weather",
-        description: "The sky over the round on screen (docs/weather.md): drawn, and part of the rules - shorter enemy sight at night, in a storm and in fog, less grip in the rain, the water frozen in the snow, gusts in a sandstorm. A sky is settled when a round starts. Without `name` reports `in_force` (the round's sky - never `random`: a random weather is the sky the round's seed picks, the same for the same seed), `map` (the round's map's own `weather` key), `override` (the `weather_override` tuning knob's, null when it follows the map - `--weather` and the web page's `?weather=` set it; it applies from the next round), `rules` (`on`, `enemy_sight_px`, `grip`, `frozen`, `gust_on_player` - player 1's wind in px/s -, `gust_front` - the sandstorm gust crossing the field, its `start` in round seconds and its `dir`) and every name. With `name` (clear, night, dusk, rain, storm, fog, sandstorm, snow, heat_haze, random) puts that key on the round's map and starts the round over on its own seed, frozen like `restart` leaves it; the key lasts through `restart`s on that map, and the override knob still outranks it. An online window only reports: a room's round is fought under its map's sky. The builder's WEATHER row is `builder_settings {weather}`; `map_get`/`restart {map_toml}` carry the key as `weather = \"night\"`.",
-        schema: r#"{"type":"object","properties":{"name":{"type":"string","enum":["clear","night","dusk","rain","storm","fog","sandstorm","snow","heat_haze","random"],"description":"The sky to draw the round under; random is picked by the round's seed"}}}"#,
+        description: "The sky over the round on screen (docs/weather.md): drawn, and part of the rules - shorter enemy sight at night, in a storm and in fog, less grip in the rain, the water frozen in the snow, gusts in a sandstorm. A sky is settled when a round starts. Without `name` reports `in_force` (the round's sky - never `random`: a random weather is the sky the round's seed picks, the same for the same seed), `map` (the round's map's own `weather` key), `override` (the `weather_override` tuning knob's, null when it follows the map - `--weather` and the web page's `?weather=` set it; it applies from the next round), `rules` (`on`, `enemy_sight_px`, `grip`, `frozen`, `gust_on_player` - player 1's wind in px/s -, `gust_front` - the sandstorm gust crossing the field, its `start` in round seconds and its `dir`), `without_shaders` (the window draws its skies without the weather's shaders - they would not compile here, or the `weather_without_shaders` knob asks: the light map blended in, the snow, fog, sand, rain and falling snow as plain blocks) and every name. With `name` (clear, night, dusk, rain, storm, fog, sandstorm, snow, heat_haze, random) puts that key on the round's map and changes the sky mid-round, the round running on (`Game::change_weather`: snow ices the water over, but ice stays ice until the next round); with `restart: true` it starts the round over on its own seed instead, frozen like `restart` leaves it, so the water is settled from the new sky. The key lasts through `restart`s on that map, and the override knob still outranks it. An online window only reports: a room's round is fought under its map's sky. The builder's WEATHER row is `builder_settings {weather}`; `map_get`/`restart {map_toml}` carry the key as `weather = \"night\"`.",
+        schema: r#"{"type":"object","properties":{"name":{"type":"string","enum":["clear","night","dusk","rain","storm","fog","sandstorm","snow","heat_haze","random"],"description":"The sky to draw the round under; random is picked by the round's seed"},"restart":{"type":"boolean","description":"Start the round over under the new sky rather than changing it mid-round (default false)"}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -363,15 +376,15 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "builder_tool",
-        description: "Select the builder's brush by name - brick, iron, wood, glass (WALL); sandbag, barrel, oil_drum, fuel_drum, fence, tesla, tesla_enemy, gun_tower, gun_tower_enemy, bio_slush, bio_slush_enemy (PROP); road, water, tall_grass, tree, pine, oil_trail, gate, portal (GROUND); start, start2 (player 2's start), frog, enemy_frog (ACTOR); health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack (PICKUP); or eraser - through the category's own selection path, so the bar's category button updates as well. Without `tool`, only reports the active tool and every category's current tool and full list (the authoritative spelling of every brush).",
-        schema: r#"{"type":"object","properties":{"tool":{"type":"string","description":"A tool name (see the description) or eraser"}}}"#,
+        description: "Select the builder's brush by name - brick, iron, wood, glass (WALL); sandbag, barrel, oil_drum, fuel_drum, fence, tesla, tesla_enemy, gun_tower, gun_tower_enemy, bio_slush, bio_slush_enemy (PROP); road, water, tall_grass, tree, pine, oil_trail, gate, portal (GROUND); start, start2 (player 2's start), frog, enemy_frog (ACTOR); health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack (PICKUP); eraser; or select, the rectangle select tool (BRUSH's list; `builder_select` drives it) - through the category's own selection path, so the bar's category button updates as well. Any tool but select lets the selection go and takes a paste ghost away. `shape` sets how the brush paints, BRUSH's list's shapes (docs/large-maps-follow-camera.md section 9): pen (a stroke, under the toggle-erase rule), rect (a rectangle from the press to the release, filled on the release; the eraser or the right button clears it), fill (a flood from the pressed cell over the cells joined to it edge to edge that hold exactly what it holds, at most `builder_fill_max_cells` - past it nothing changes and `status.builder.message` says why -, under the toggle-erase rule) or scatter (a hashed share, `builder_scatter_density`, of the cells within `builder_scatter_radius_cells` of each cell the stroke crosses, laid on empty cells only; erasing, it thins the brush's object, or anything under the eraser). Picking a shape takes a painting brush back from the select tool; a singleton (start, start2, frog, enemy_frog) paints with the pen whatever the shape. Without `tool` or `shape`, only reports the active tool, the brush's `shape` and every category's current tool and full list (the authoritative spelling of every brush).",
+        schema: r#"{"type":"object","properties":{"tool":{"type":"string","description":"A tool name (see the description) or eraser"},"shape":{"type":"string","enum":["pen","rect","fill","scatter"],"description":"How the brush paints"}}}"#,
         read_only: false,
         destructive: false,
     },
     ToolSpec {
         name: "builder_paint",
-        description: "One stroke on the builder's canvas: a press on cells[0], a drag through the rest, a release - so the toggle-erase rule (a press on a cell that already holds exactly the brush's object erases it, and paint-or-erase is decided on the first cell for the whole stroke), singleton moves (start/start2/frog/enemy_frog) and one-undo-step-per-stroke apply exactly as for a mouse. Cells are [col, row] on the 32 px grid (the map's `size`, 34 x 17 when absent, from the top-left). `tool` selects a brush first (see `builder_tool`); `button: right` erases whatever the brush. Replies with every changed cell's object before and after (in the map's own shape, null = empty) and the undo depth.",
-        schema: r#"{"type":"object","properties":{"cells":{"type":"array","items":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2},"minItems":1,"description":"[[col, row], ...] in stroke order"},"tool":{"type":"string"},"button":{"type":"string","enum":["left","right"],"default":"left"}},"required":["cells"]}"#,
+        description: "One stroke on the builder's canvas: a press on cells[0], a drag through the rest, a release - so the toggle-erase rule (a press on a cell that already holds exactly the brush's object erases it, and paint-or-erase is decided on the first cell for the whole stroke), singleton moves (start/start2/frog/enemy_frog) and one-undo-step-per-stroke apply exactly as for a mouse. Cells are [col, row] on the 32 px grid (the map's `size`, 34 x 17 when absent, from the top-left). `tool` selects a brush first and `shape` how it paints (see `builder_tool`): with rect the stroke's first and last cells are the rectangle's corners, with fill only cells[0] counts, with scatter every cell's footprint is laid. `button: right` erases whatever the brush. Replies with every changed cell's object before and after (in the map's own shape, null = empty), the undo depth and the status line's `message` (a FILL refused for its size says so there).",
+        schema: r#"{"type":"object","properties":{"cells":{"type":"array","items":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2},"minItems":1,"description":"[[col, row], ...] in stroke order"},"tool":{"type":"string"},"shape":{"type":"string","enum":["pen","rect","fill","scatter"]},"button":{"type":"string","enum":["left","right"],"default":"left"}},"required":["cells"]}"#,
         read_only: false,
         destructive: false,
     },
@@ -391,8 +404,8 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "builder_settings",
-        description: "The builder's MAP settings - the map file's own level keys: tanks (enemy count 0-31), tank (player 1's chassis name), tank2 (player 2's, two-player rounds), mission (protect|hunt|destroy), spawn (band|waves), waves (1-20), wave_size (1-31), wave_growth (0-10), tier_start/tier_end (light|medium|heavy|super), theme (grass|desert - the look: ground tileset and tall-grass sheet; the canvas redraws in it at once), weather (clear|night|dusk|rain|storm|fog|sandstorm|snow|heat_haze - the sky the round is drawn under, docs/weather.md; the canvas itself stays clear to edit on). A field left out is untouched; a field set to null goes back to auto (unset: the game's own roll or the `waves` tuning group; mission/spawn back to protect/band). Each changed field is one undo step, in the order listed. `reset: true` then reverts cells and settings to the baseline (one undoable step). Replies with the current values (null = auto) and `cli_overrides`: which of them a command-line flag (-e, --tank, --mission, ...) or an earlier `restart` parameter overrides at PLAY, so the map's value is not what the round will use.",
-        schema: r#"{"type":"object","properties":{"tanks":{"type":["integer","null"],"minimum":0,"maximum":31},"tank":{"type":["string","null"],"description":"A chassis name, e.g. titan"},"tank2":{"type":["string","null"],"description":"Player 2's chassis name"},"mission":{"type":["string","null"],"enum":["protect","hunt","destroy",null]},"spawn":{"type":["string","null"],"enum":["band","waves",null]},"waves":{"type":["integer","null"],"minimum":1,"maximum":20},"wave_size":{"type":["integer","null"],"minimum":1,"maximum":31},"wave_growth":{"type":["integer","null"],"minimum":0,"maximum":10},"tier_start":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"tier_end":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"theme":{"type":["string","null"],"enum":["grass","desert",null],"description":"null = grass, the default"},"weather":{"type":["string","null"],"enum":["clear","night","dusk","rain","storm","fog","sandstorm","snow","heat_haze","random",null],"description":"null = clear, the default; random = a sky picked by each round's seed"},"reset":{"type":"boolean","default":false,"description":"Revert cells and settings to the baseline"}}}"#,
+        description: "The builder's MAP settings - the map file's own level keys: tanks (enemy count 0-31), tank (player 1's chassis name), tank2 (player 2's, two-player rounds), mission (protect|hunt|destroy), spawn (band|waves), waves (1-20), wave_size (1-31), wave_growth (0-10), tier_start/tier_end (light|medium|heavy|super), theme (grass|desert - the look: ground tileset and tall-grass sheet; the canvas redraws in it at once), weather (clear|night|dusk|rain|storm|fog|sandstorm|snow|heat_haze - the sky the round is drawn under, docs/weather.md; the canvas itself stays clear to edit on), anchor (where the old map sits when the size changes: top_left|top|top_right|left|center|right|bottom_left|bottom|bottom_right - the panel's ANCHOR, kept for the session), size ([cols, rows] cells, 16 x 9 up to 250 a side: the map resized with the old one placed by the anchor, cells that land past the new edge dropped - one undo step, which brings them back - and the canvas made again on the new field). A field left out is untouched; a field set to null goes back to auto (unset: the game's own roll or the `waves` tuning group; mission/spawn back to protect/band). Each changed field is one undo step, in the order listed. `reset: true` then reverts cells and settings to the baseline (one undoable step). Replies with the current values (null = auto, `size` in cells) and `cli_overrides`: which of them a command-line flag (-e, --tank, --mission, ...) or an earlier `restart` parameter overrides at PLAY, so the map's value is not what the round will use.",
+        schema: r#"{"type":"object","properties":{"tanks":{"type":["integer","null"],"minimum":0,"maximum":31},"tank":{"type":["string","null"],"description":"A chassis name, e.g. titan"},"tank2":{"type":["string","null"],"description":"Player 2's chassis name"},"mission":{"type":["string","null"],"enum":["protect","hunt","destroy",null]},"spawn":{"type":["string","null"],"enum":["band","waves",null]},"waves":{"type":["integer","null"],"minimum":1,"maximum":20},"wave_size":{"type":["integer","null"],"minimum":1,"maximum":31},"wave_growth":{"type":["integer","null"],"minimum":0,"maximum":10},"tier_start":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"tier_end":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"theme":{"type":["string","null"],"enum":["grass","desert",null],"description":"null = grass, the default"},"weather":{"type":["string","null"],"enum":["clear","night","dusk","rain","storm","fog","sandstorm","snow","heat_haze","random",null],"description":"null = clear, the default; random = a sky picked by each round's seed"},"anchor":{"type":"string","enum":["top_left","top","top_right","left","center","right","bottom_left","bottom","bottom_right"],"description":"Where the old map sits when the size changes"},"size":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"[cols, rows] in cells, 16 x 9 to 250 x 250"},"reset":{"type":"boolean","default":false,"description":"Revert cells and settings to the baseline"}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -411,6 +424,34 @@ pub const TOOLS: &[ToolSpec] = &[
         destructive: false,
     },
     ToolSpec {
+        name: "builder_camera",
+        description: "The builder's own camera over its canvas (docs/large-maps-follow-camera.md section 9), the way to frame a screenshot of the builder: `x`/`y` a world point in field pixels to put in the middle of the canvas and `zoom` how many times FIT (1 is FIT, the whole map); a field left out keeps the camera's own. `fit: true` goes back to the whole canvas, as the bar's FIT button does. The zoom is kept between FIT and a cell of `builder_zoom_max_cell_pt` points and the view inside the field, centred on an axis the map does not fill. Independent of the round's `camera` pin. No parameters only reports. Replies like `status.builder.camera`: `fit`, the world `rect` the canvas shows, `scale` (bitmap px per world px), `zoom` (times FIT), `fit_scale`, `device_scale` (device px per world px - whole blocks on the glass when it is a multiple of 0.5), `cell_mm` (a cell's width on a touch screen's glass, what the paint threshold reads) and the canvas `area` (bitmap px, under the bar).",
+        schema: r#"{"type":"object","properties":{"x":{"type":"number","description":"World x (field px) for the middle of the canvas"},"y":{"type":"number","description":"World y (field px) for the middle of the canvas"},"zoom":{"type":"number","minimum":1,"description":"Times FIT; 1 is the whole map"},"fit":{"type":"boolean","default":false,"description":"Back to the whole canvas"}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "builder_touch",
+        description: "Drive the builder with raw touch frames, the way a touch screen does - the multi-finger input `--touch-from-mouse` cannot make (src/editor/gesture.rs, docs/large-maps-follow-camera.md section 9): one finger paints once it moves past the touch slop (`builder_touch_slop_pt`; a resting finger paints nothing) and a quick one-finger tap paints a cell; two fingers pan and pinch-zoom about their middle, a second finger landing on a stroke takes it back, and a coarse screen's zoom settles on whole blocks when they part; a two-finger tap undoes and a three-finger tap redoes (`builder_tap_seconds`). Where a cell is under `builder_paint_min_cell_mm` on the glass (`status.builder.camera.cell_mm`) a one-finger tap zooms in to `builder_tap_zoom_cell_mm` instead and a drag pans. `frames` is a list of frames, each the touch points down that frame as {id, x, y} in window coordinates, as for `click` (`status.builder.buttons` and `status.camera.window_field` give them); a frame with no points lifts every finger, and the tool lifts every finger at its end - unless `hold` is true, which leaves the last frame's fingers down: the window's frames keep them there (a stroke goes on painting under a still finger, the loupe stands over it - `status.builder.loupe`) until the next `builder_touch` carries on from them or lifts them. Each frame is `dt` seconds (default 1/60). Build mode only. Fingers on the glass turn the hints to taps (`status.ui.hints`). Replies like `mode`, with `camera` (as `status.builder.camera`) and `held` (how many fingers are left down).",
+        schema: r#"{"type":"object","properties":{"frames":{"type":"array","items":{"type":"array","items":{"type":"object","properties":{"id":{"type":"integer"},"x":{"type":"number"},"y":{"type":"number"}},"required":["id","x","y"]}},"description":"Frames of touch points, first to last"},"dt":{"type":"number","minimum":0,"description":"Seconds per frame (default 1/60)"},"hold":{"type":"boolean","description":"Leave the last frame's fingers down at the end, for a screenshot mid-gesture (default false)"}},"required":["frames"]}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "builder_select",
+        description: "The builder's select tool (docs/large-maps-patterns.md, \"Selection, copy and stamps\") as a drag and the strip under the bar drive it: `rect` [col0, row0, col1, row1] selects those cells (two opposite corners, inclusive; the part on the field) and takes the select tool, as a drag across them does; `clear` lets the selection go and takes a paste ghost away; `move_by` [dx, dy] carries the selection's cells that many cells, kept on the field, as a drag from inside it does; `action` acts as the strip's buttons and the keys do - copy, cut (a copy and a delete), delete, flip_h, flip_v (mirror the selection in place - or the paste ghost while one stands), stamp (keep the selection, trimmed to its cells, as a stamp for this session: `builder_stamp`), paste (the clipboard as the paste ghost with its middle on `at` [col, row], else in the middle of the view), place (put the ghost down where it stands, or with its top-left on `at`), cancel (take the ghost away). Every move, flip, cut, delete and place is one undo step. A clip is transparent: its empty cells leave the map as it was. A start, player 2's start or a frog moves with its cells; a paste puts one down only where the map holds none of it by then - never two. Replies with the `selection` and the `ghost` ({col, row, cols, rows}, null for none), the `clipboard` ({cols, rows, cells}, null), what the call `changes`d (as `builder_paint`) and `undo_depth`.",
+        schema: r#"{"type":"object","properties":{"rect":{"type":"array","items":{"type":"integer"},"minItems":4,"maxItems":4,"description":"[col0, row0, col1, row1]: opposite corners, inclusive"},"clear":{"type":"boolean","default":false},"move_by":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2,"description":"[dx, dy] in cells"},"action":{"type":"string","enum":["copy","cut","delete","flip_h","flip_v","stamp","paste","place","cancel"]},"at":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2,"description":"[col, row]: the ghost's middle for paste, its top-left for place"}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "builder_stamp",
+        description: "The builder's STAMPS list: without `name`, every stamp it offers - the shipped ones (maps/stamps/: fort, bunker, river-bend) then the ones kept this session (`saved_N`, `builder_select {action: stamp}`) - each with its `key`, its `name` in the language on screen, its size in cells and how many cells it holds. With `name` (a key): that stamp becomes the paste ghost in the middle of the view, with the select tool, as a press on its row does; `at` [col, row] stands the ghost's top-left there instead, and `place: true` puts it down at once (one undo step). Replies with the `stamps`, the `ghost` and, with `place`, the `changes`.",
+        schema: r#"{"type":"object","properties":{"name":{"type":"string","description":"A stamp's key"},"at":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2,"description":"[col, row]: the ghost's top-left"},"place":{"type":"boolean","default":false,"description":"Put the ghost down at once"}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
         name: "builder_save",
         description: "FILE > SAVE / SAVE AS: write the builder's map to maps/<name>.toml (native only; `name` defaults to the map's own name and becomes it) and make the saved state the baseline, so `dirty` clears. Letters, digits, - and _ only. Replies like `builder_map`.",
         schema: r#"{"type":"object","properties":{"name":{"type":"string"}}}"#,
@@ -419,15 +460,15 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "click",
-        description: "A raw press at a window position (pixels, the 32 px HUD bar included: the field starts at y = 32), in either mode, on the same hit-tests a mouse or a finger uses: in play mode the BUILD button (right end of the bar), the players button beside it, the level button at the bar's left end on a level, either dialog's buttons (a press outside a dialog closes it), a level's end-screen buttons (LEVELS, PLAY AGAIN, the way on) and the level select's tiles and BACK (a press outside it closes it) - a press on the field itself does nothing in play mode; in build mode the bar's buttons (PLAY starts the round like `play`), a dropdown row, a settings stepper or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`. This tests the UI; `build`/`play`/`builder_*` address the model directly.",
-        schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right"],"default":"left"},"drag_to":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"[x, y] to drag to before releasing"}},"required":["x","y"]}"#,
+        description: "A raw press at a window position - the window's own coordinates, which `status.ui.buttons` and `status.camera.window_field` give (with no window, the live mode's bitmap at its own size: the builder's under its 32 px bar, play's field alone) - in either mode, on the same hit-tests a mouse or a finger uses: in play mode the corners' buttons (BUILD, the players button, ONLINE, RESTART on a keyboard-less build, and the level button on a level - `status.ui.buttons`), either dialog's buttons (a press outside a dialog closes it), a level's end-screen buttons (LEVELS, PLAY AGAIN, the way on) and the level select's tiles and BACK (a press outside it closes it) - `status.ui.screen_buttons` - and a press on the field itself does nothing in play mode; the lobby's buttons (`status.ui.screen_buttons`); online the corners' LEAVE; in build mode the bar's buttons (PLAY starts the round like `play`), an open popup's rows, steppers and pager - `status.builder.buttons` - or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`, with `world` - the world point the press landed on, through the camera - for a press on the field outside the builder. With `touch`, the press is a tap: the hints turn to taps, as a finger landing turns them (`status.ui.hints`). This tests the UI; `build`/`play`/`builder_*` address the model directly.",
+        schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right"],"default":"left"},"drag_to":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"[x, y] to drag to before releasing"},"touch":{"type":"boolean","default":false,"description":"A tap rather than a mouse press: the hints turn to taps (`status.ui.hints`)"}},"required":["x","y"]}"#,
         read_only: false,
         destructive: false,
     },
     ToolSpec {
         name: "key",
-        description: "Press one key for one frame: tab (BUILD/PLAY - in play mode it opens the leave dialog, or closes an open one; in build mode it starts the round like `play`), escape (keep playing / close a dialog or popup; in play mode with no dialog, open or close the level select), enter (leave the round; in the players dialog, switch to the other count; on a level's end screen, the way on or PLAY AGAIN; in the level select, start the level under the focus; confirm a popup), left / right / up / down (move the level select's focus over the open levels), 1 / 2 (answer the players dialog), undo, redo (Ctrl+Z / Ctrl+Y in the builder), backspace; `text` types characters into an open builder prompt. Replies like `mode` (`levels_open`, `levels_focus`).",
-        schema: r#"{"type":"object","properties":{"key":{"type":"string","enum":["tab","escape","enter","undo","redo","backspace","1","2","left","right","up","down"]},"text":{"type":"string","description":"Characters to type this frame (build mode)"}}}"#,
+        description: "Press one key for one frame: tab (BUILD/PLAY - in play mode it opens the leave dialog, or closes an open one; in build mode it starts the round like `play`), escape (keep playing / close a dialog or popup; in play mode with no dialog, open or close the level select), enter (leave the round; in the players dialog, switch to the other count; on a level's end screen, the way on or PLAY AGAIN; in the level select, start the level under the focus; confirm a popup), left / right / up / down (move the level select's focus over the open levels; in the builder, pan the canvas for one frame the way the arrow points), 1 / 2 (answer the players dialog), undo, redo (Ctrl+Z / Ctrl+Y in the builder), copy, cut, paste (Ctrl+C / Ctrl+X / Ctrl+V in the builder: the selection copied or cut, the clipboard pasted as a ghost in the middle of the view - `builder_select {action: paste, at}` stands it elsewhere), delete (the selection's cells cleared; so does backspace outside the Save prompt; in the builder escape also takes a paste ghost away, then the selection), zoom_in / zoom_out (`+` / `-` in the builder: one zoom step about the canvas's middle), backspace; `text` types characters into an open builder prompt. A key press turns the hints back to the keys (`status.ui.hints`). Replies like `mode` (`levels_open`, `levels_focus`).",
+        schema: r#"{"type":"object","properties":{"key":{"type":"string","enum":["tab","escape","enter","undo","redo","copy","cut","paste","delete","backspace","1","2","left","right","up","down","zoom_in","zoom_out"]},"text":{"type":"string","description":"Characters to type this frame (build mode)"}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -764,6 +805,37 @@ pub struct DevServer {
     /// The replica tick whose events and track rows are already banked,
     /// in an online round; `None` in every other mode.
     shown_frame: Option<u64>,
+    /// The view the `camera` tool pinned; `None` leaves the view to the
+    /// map: the whole field for an arena, a followed view for a field map.
+    camera: Option<CameraPin>,
+    /// The camera the window drew its last frame with, as it handed it
+    /// over (`publish_camera`): what `status.camera` reports, and the
+    /// bitmap a `click` lands on. `None` in a server with no window.
+    drawn: Option<CameraReport>,
+    /// The window's UI frame for the frame it drew last
+    /// (`publish_ui`): what `status.ui` reports and what a `click` on the
+    /// chrome is measured in. `None` in a server with no window, which
+    /// lays the chrome out in the bitmap's own size (`UiFrame::plain`).
+    drawn_ui: Option<UiFrame>,
+    /// The fingers a `builder_touch {hold: true}` left down, in window
+    /// coordinates: the window's builder frames take them in place of its own
+    /// empty touch screen (`held_touches`) until the next `builder_touch`
+    /// lifts them, so a screenshot catches a gesture mid-way.
+    held_touches: Vec<crate::touch::TouchPoint>,
+    /// The input a tool last stood in for - `key` the keys, a
+    /// `builder_touch` or a `click {touch}` a tap -, which the window's
+    /// hints turn to (`take_hints`, `hud::Hints`); a server with no window
+    /// lays its chrome out with it.
+    hints: Option<crate::hud::Hints>,
+}
+
+/// A view the `camera` tool pinned: the world point at its centre and how
+/// many times the field is magnified (`view::Camera::zoomed`, which keeps
+/// it inside whichever field is on screen).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CameraPin {
+    center: Vec2,
+    zoom: f32,
 }
 
 impl DevServer {
@@ -809,6 +881,237 @@ impl DevServer {
             history: VecDeque::with_capacity(HISTORY_FRAMES),
             turns: BTreeMap::new(),
             shown_frame: None,
+            camera: None,
+            drawn: None,
+            drawn_ui: None,
+            held_touches: Vec::new(),
+            hints: None,
+        }
+    }
+
+    /// The input a tool stood in for since the window last asked - the
+    /// keys or a tap -, for the window's hints to follow as they follow
+    /// the input it reads itself (`hud::Hints`).
+    pub fn take_hints(&mut self) -> Option<crate::hud::Hints> {
+        self.hints.take()
+    }
+
+    /// The fingers a `builder_touch {hold: true}` keeps down, which the
+    /// window's builder frames take in place of its own touch screen's
+    /// while it reports none; empty when none are held.
+    pub fn held_touches(&self) -> &[crate::touch::TouchPoint] {
+        &self.held_touches
+    }
+
+    /// The view the `camera` tool pinned, over a field of `field`; `None`
+    /// leaves the view to the map.
+    pub fn pinned_camera(&self, field: (f32, f32)) -> Option<Camera> {
+        self.camera.map(|pin| Camera::zoomed(field, pin.center, pin.zoom))
+    }
+
+    /// The pinned view over a field of `field`, else the whole field: what
+    /// an arena draws.
+    pub fn camera(&self, field: (f32, f32)) -> Camera {
+        self.pinned_camera(field).unwrap_or(Camera::whole(field))
+    }
+
+    /// The window's camera for the frame it is drawing, handed over once a
+    /// frame: `status.camera` reports the last one, and `click` hit-tests
+    /// on its bitmap.
+    pub fn publish_camera(&mut self, report: CameraReport) {
+        self.drawn = Some(report);
+    }
+
+    /// The window's UI frame for the frame it is drawing, handed over once
+    /// a frame like the camera: `status.ui` reports it.
+    pub fn publish_ui(&mut self, ui: UiFrame) {
+        self.drawn_ui = Some(ui);
+    }
+
+    /// What a `click` lands on, in the window's own coordinates: the bitmap
+    /// the window drew last and the view that put it there, and the UI
+    /// frame its chrome is laid out in - while that bitmap is this mode's
+    /// (the builder's canvas, or the round). With no window drawn yet, or a
+    /// mode switched since, the live mode's own bitmap in a window of
+    /// exactly its size - the builder's canvas under its bar
+    /// (`BuilderFrame::headless`), or play's field alone - which is all a
+    /// server with no window ever has.
+    fn click_frame(&self, session: &Session, width: f32, height: f32) -> (Layout, View, UiFrame) {
+        let build = session.mode() == Driver::Build;
+        match (&self.drawn, self.drawn_ui) {
+            (Some(drawn), Some(ui)) if build == (drawn.mode == CameraMode::Build) => (drawn.layout, drawn.view, ui),
+            _ if build => {
+                let map = session.builder.map();
+                let frame = BuilderFrame::headless(map.field_size(), map.class());
+                (frame.layout, frame.view, frame.ui.with_hints(self.hints.unwrap_or_default()))
+            }
+            _ => {
+                let layout = Layout::bare(width, height);
+                let (w, h) = layout.window_size();
+                let window = (w as f32, h as f32);
+                (layout, View::fit(window, window), UiFrame::plain(window).with_hints(self.hints.unwrap_or_default()))
+            }
+        }
+    }
+
+    /// The builder's frame a `click` or a `builder_touch` lands in
+    /// (`click_frame`): its canvas through the view, its chrome in the UI.
+    fn builder_frame(&self, session: &Session, width: f32, height: f32) -> BuilderFrame {
+        let (layout, view, ui) = self.click_frame(session, width, height);
+        BuilderFrame { layout, view, ui }
+    }
+
+    /// A rect of the builder's chrome, in UI points, as `status.builder`
+    /// reports it: in window coordinates - what `click` and `builder_touch`
+    /// take - with the points themselves as `ui`.
+    fn ui_rect_json(ui: &UiFrame, r: crate::math::Rectangle) -> Value {
+        let w = ui.rect_to_window(r);
+        json!({ "x": w.x, "y": w.y, "w": w.width, "h": w.height, "ui": { "x": r.x, "y": r.y, "w": r.width, "h": r.height } })
+    }
+
+    /// `status.builder.navigator`: where the builder's navigator stands
+    /// (`MapEditor::navigator_rect`) through the frame the window last drew
+    /// the builder in - in window coordinates, what `click` and
+    /// `builder_touch` take, with its `ui` points; `null` where there is
+    /// none (FIT on an arena) or the window is not in build mode.
+    fn navigator_json(&self, session: &Session, width: f32, height: f32) -> Value {
+        if session.mode() != Driver::Build {
+            return Value::Null;
+        }
+        let frame = self.builder_frame(session, width, height);
+        session.builder.navigator_rect(&frame).map_or(Value::Null, |r| Self::ui_rect_json(&frame.ui, r))
+    }
+
+    /// `status.builder.buttons`: the builder's own buttons a tool clicks
+    /// by name (`MapEditor::named_buttons`) through the frame the window
+    /// last drew the builder in: window coordinates, what `click` and
+    /// `builder_touch` take, each with its `ui` points. Empty outside build
+    /// mode.
+    fn builder_buttons_json(&self, session: &Session, width: f32, height: f32) -> Value {
+        if session.mode() != Driver::Build {
+            return json!({});
+        }
+        let frame = self.builder_frame(session, width, height);
+        let buttons: Map<String, Value> =
+            session.builder.named_buttons(&frame).into_iter().map(|(name, r)| (name, Self::ui_rect_json(&frame.ui, r))).collect();
+        Value::Object(buttons)
+    }
+
+    /// `status.builder.loupe`: the loupe over a painting finger
+    /// (`MapEditor::loupe`) - where it stands in window coordinates, with
+    /// its `ui` points; the world it shows; its device pixels per world
+    /// pixel; the cell the stroke paints. `null` while there is none - no
+    /// finger painting, a mouse, a cell over `builder_loupe_cell_mm` - and
+    /// outside build mode. A `builder_touch` lifts its fingers at its end
+    /// unless it `hold`s them, which is how a shell reads it mid-stroke.
+    fn loupe_json(&self, session: &Session, width: f32, height: f32) -> Value {
+        if session.mode() != Driver::Build {
+            return Value::Null;
+        }
+        let frame = self.builder_frame(session, width, height);
+        let Some(loupe) = session.builder.loupe(&frame) else { return Value::Null };
+        let mut v = Self::ui_rect_json(&frame.ui, loupe.rect);
+        let w = loupe.world;
+        v["world"] = json!({ "x": w.x, "y": w.y, "w": w.width, "h": w.height });
+        v["device_scale"] = json!(loupe.device_scale);
+        v["cell"] = json!([loupe.cell.0, loupe.cell.1]);
+        v["erase"] = json!(loupe.erase);
+        v
+    }
+
+    /// The corners the window lays out for the live mode in `ui`
+    /// (`hud::corners`), `None` where it draws none.
+    fn corners(session: &Session, ui: &UiFrame) -> Option<Corners> {
+        CornerShape::of(&session.play_chrome(), session.shown().players.count()).map(|shape| crate::hud::corners(ui, &shape))
+    }
+
+    /// `camera`: pin a view, let it go, or say where it is. A pin's field
+    /// left out keeps the one it had (the field's centre at zoom 1 for a
+    /// first pin).
+    fn pin_camera(&mut self, params: &Value, session: &Session, field: (f32, f32)) -> Result<Value, String> {
+        if params.get("reset").and_then(Value::as_bool).unwrap_or(false) {
+            self.camera = None;
+            return Ok(self.camera_json(session, field));
+        }
+        let number = |key: &str| -> Result<Option<f32>, String> {
+            match params.get(key) {
+                None | Some(Value::Null) => Ok(None),
+                Some(v) => match v.as_f64() {
+                    Some(n) if n.is_finite() => Ok(Some(n as f32)),
+                    _ => Err(format!("{key} must be a number, got {v}")),
+                },
+            }
+        };
+        let (x, y, zoom) = (number("x")?, number("y")?, number("zoom")?);
+        if x.is_some() || y.is_some() || zoom.is_some() {
+            let pin = self.camera.unwrap_or(CameraPin { center: Vec2::new(field.0 / 2.0, field.1 / 2.0), zoom: 1.0 });
+            let zoom = zoom.unwrap_or(pin.zoom);
+            if zoom < 1.0 {
+                return Err(format!("zoom must be 1 or more (1 is the whole field), got {zoom}"));
+            }
+            self.camera = Some(CameraPin { center: Vec2::new(x.unwrap_or(pin.center.x), y.unwrap_or(pin.center.y)), zoom });
+        }
+        Ok(self.camera_json(session, field))
+    }
+
+    /// `status.ui`: the chrome as the window last laid it out
+    /// (`capi::ui_status`) - in window coordinates, which is what `click`
+    /// takes. With no window, the frame `click` lays the chrome out in
+    /// (`click_frame`).
+    fn ui_json(&self, session: &Session, width: f32, height: f32) -> Value {
+        let (_, _, ui) = self.click_frame(session, width, height);
+        crate::capi::ui_status(session, &ui)
+    }
+
+    /// `status.camera` and the `camera` tool's reply: the view in force -
+    /// `pinned`, `whole` or `follow` - the world rectangle on screen, its
+    /// scale and the scene target's size; a pin's centre and zoom; and a
+    /// followed view's seat, focus and framing as the window last drew it.
+    /// With no frame drawn since the pin went (or no window at all), the
+    /// view the map's class gives, its position unknown. `motion` is the
+    /// motion switch in force (`motion_json`).
+    fn camera_json(&self, session: &Session, field: (f32, f32)) -> Value {
+        let mut v = self.view_json(session, field);
+        v["motion"] = motion_json();
+        v
+    }
+
+    /// `camera_json` but for the motion switch.
+    fn view_json(&self, session: &Session, field: (f32, f32)) -> Value {
+        let plain = |view: &str, camera: Camera| {
+            let rect = camera.rect();
+            let (w, h) = camera.target_size();
+            json!({
+                "view": view,
+                "rect": { "x": rect.x, "y": rect.y, "w": rect.width, "h": rect.height },
+                "scale": camera.scale,
+                "target": [w, h],
+                "center": self.camera.map(|pin| json!({ "x": pin.center.x, "y": pin.center.y })),
+                "zoom": self.camera.map(|pin| pin.zoom),
+            })
+        };
+        if let Some(camera) = self.pinned_camera(field) {
+            return plain("pinned", camera);
+        }
+        match &self.drawn {
+            Some(drawn) if drawn.mode != CameraMode::Pinned => {
+                let mut v = plain(drawn.mode.name(), drawn.camera);
+                // Where the field area landed on the window, in its points.
+                let (view, field) = (drawn.view, drawn.layout.field);
+                let corner = view.to_window(Vec2::new(field.x, field.y));
+                v["window_field"] = json!({ "x": corner.x, "y": corner.y, "w": field.w * view.scale, "h": field.h * view.scale });
+                if let Some(follow) = &drawn.follow {
+                    v.as_object_mut().expect("an object").extend(follow_json(follow, &drawn.camera, &drawn.view, &drawn.layout).as_object().expect("an object").clone());
+                }
+                v
+            }
+            _ if session.mode() != Driver::Build && session.shown().map.class().follows() => json!({
+                "view": "follow",
+                "rect": Value::Null,
+                "center": Value::Null,
+                "zoom": Value::Null,
+            }),
+            _ => plain("whole", Camera::whole(field)),
         }
     }
 
@@ -830,6 +1133,10 @@ impl DevServer {
         self.observe_replica(session);
         while let Ok(req) = self.rx.try_recv() {
             self.dispatch(session, req, width, height);
+        }
+        // Held fingers are the builder's alone: another mode lets them go.
+        if session.mode() != Driver::Build {
+            self.held_touches.clear();
         }
     }
 
@@ -1120,6 +1427,7 @@ impl DevServer {
             "mission": game.mission.name(),
             "spawn": game.spawn_plan,
             "wave": game.wave_status(),
+            "pacing": game.pacing(),
             "intro_seconds_left": game.intro_timer,
             "paused": snap.paused,
             "lockstep": self.lockstep,
@@ -1132,6 +1440,8 @@ impl DevServer {
             "players": game.players.count(),
             "map": map_json(&game.map),
             "weather": weather_json(game),
+            "camera": self.camera_json(session, (width, height)),
+            "ui": self.ui_json(session, width, height),
             "mode": session.mode().name(),
             "language": crate::text::language(),
             "dialog_open": session.dialog,
@@ -1139,12 +1449,38 @@ impl DevServer {
             "levels_open": session.level_select.is_some(),
             "levels_focus": session.level_select.as_ref().map(|select| select.focus() + 1),
             "level": level_json(session),
+            // The builder's PLAY HERE spot the local round started from,
+            // `null` for a round from the map's own start.
+            "play_here": session.game.start_override.map(|(c, r)| [c, r]),
             "stats": game.round_stats(),
-            "builder": { "dirty": session.builder.dirty(), "tool": session.builder.tool().name() },
+            "builder": self.builder_json(session, width, height),
             "events_kept": self.events.len(),
             "next_event_seq": self.next_seq,
             "history_frames": self.history.len(),
             "turns": self.turns_summary(),
+        })
+    }
+
+    /// `status.builder`: the builder's state - see the `status` tool.
+    fn builder_json(&self, session: &Session, width: f32, height: f32) -> Value {
+        let b = &session.builder;
+        json!({
+            "dirty": b.dirty(),
+            "tool": b.tool().name(),
+            "shape": b.shape().name(),
+            "rect": cell_rect_json(b.rect_stroke().map(|(rect, _)| rect)),
+            "message": b.status(),
+            "selection": cell_rect_json(b.selection()),
+            "ghost": ghost_json(b),
+            "clipboard": clipboard_json(b),
+            "stamps": b.stamps().len(),
+            "camera": builder_camera_json(&session.builder),
+            "navigator": self.navigator_json(session, width, height),
+            "buttons": self.builder_buttons_json(session, width, height),
+            "check": builder_check_json(&session.builder),
+            "clear": builder_clear_json(session),
+            "loupe": self.loupe_json(session, width, height),
+            "thumbnails": thumbnails_json(b),
         })
     }
 
@@ -1313,7 +1649,7 @@ impl DevServer {
                 // field that was renamed rather than let a cached schema or
                 // an old script silently no-op.
                 if params.get("shield_timer").is_some() {
-                    return Err("shield_timer is gone: the shield is a pool of absorption, not a timer - use shield_hp (damage points, over shield_capacity)".to_string());
+                    return Err("shield_timer is not settable: a pickup sets the shield's clock - use shield_hp (damage points, over shield_capacity), which no clock ends".to_string());
                 }
                 let patch: TankPatch = serde_json::from_value(params.clone()).map_err(|e| e.to_string())?;
                 game.debug_set_tank(slot, &patch)?;
@@ -1473,12 +1809,16 @@ impl DevServer {
                     .into());
             }
             let game = &mut session.game;
-            game.map.weather = sky;
-            let pinned = game.seed_override.replace(game.round_seed());
-            let (width, height) = game.map.field_size();
-            game.init(width, height);
-            game.seed_override = pinned;
-            self.round_started(session);
+            if params.get("restart").and_then(Value::as_bool).unwrap_or(false) {
+                game.map.weather = sky;
+                let pinned = game.seed_override.replace(game.round_seed());
+                let (width, height) = game.map.field_size();
+                game.init(width, height);
+                game.seed_override = pinned;
+                self.round_started(session);
+            } else {
+                game.change_weather(sky);
+            }
         }
         Ok(weather_json(session.shown()))
     }
@@ -1505,7 +1845,6 @@ impl DevServer {
         width: f32,
         height: f32,
     ) -> Option<Result<Value, String>> {
-        let layout = Layout::for_field(width, height);
         let result = match method {
             "status" => Ok(self.status(session, width, height)),
             "pause" => {
@@ -1519,6 +1858,7 @@ impl DevServer {
             }
             "restart" => self.restart(session, params),
             "weather" => self.weather(session, params),
+            "camera" => self.pin_camera(params, session, (width, height)),
             "lint" => lint_json(session, params.get("source").and_then(Value::as_str)),
             "mode" => Ok(mode_json(session)),
             "lang" => {
@@ -1575,40 +1915,40 @@ impl DevServer {
                     Ok(self.status(session, width, height))
                 }
             }
-            "builder_tool" => tool_param(params).map(|tool| {
-                if let Some(tool) = tool {
-                    session.builder.select_tool(tool);
+            "builder_tool" => match (tool_param(params), shape_param(params)) {
+                (Ok(tool), Ok(shape)) => {
+                    brush_from_params(&mut session.builder, tool, shape);
+                    Ok(tool_json(&session.builder))
                 }
-                tool_json(&session.builder)
-            }),
-            "builder_paint" => match (cells_param(params), button_param(params), tool_param(params)) {
-                (Ok(cells), Ok(right), Ok(tool)) => {
-                    if let Some(tool) = tool {
-                        session.builder.select_tool(tool);
-                    }
+                (Err(e), _) | (_, Err(e)) => Err(e),
+            },
+            "builder_paint" => match (cells_param(params), button_param(params), tool_param(params), shape_param(params)) {
+                (Ok(cells), Ok(right), Ok(tool), Ok(shape)) => {
+                    brush_from_params(&mut session.builder, tool, shape);
                     let changes = session.builder.stroke(&cells, right);
                     Ok(json!({
                         "changes": changes_json(&changes),
                         "undo_depth": session.builder.history().undo_depth(),
+                        "message": session.builder.status(),
                     }))
                 }
-                (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => Err(e),
+                (Err(e), _, _, _) | (_, Err(e), _, _) | (_, _, Err(e), _) | (_, _, _, Err(e)) => Err(e),
             },
             "builder_undo" | "builder_redo" => steps_param(params).map(|steps| {
                 let undo = method == "builder_undo";
                 let mut done = 0;
-                let mut last = None;
                 for _ in 0..steps {
-                    let step = if undo { session.builder.undo() } else { session.builder.redo() };
-                    match step {
-                        Some(step) => {
-                            done += 1;
-                            last = Some(step);
-                        }
-                        None => break,
+                    if !(if undo { session.builder.undo() } else { session.builder.redo() }) {
+                        break;
                     }
+                    done += 1;
                 }
                 let history = session.builder.history();
+                let last = match (done, undo) {
+                    (0, _) => None,
+                    (_, true) => history.last_undone(),
+                    (_, false) => history.last_done(),
+                };
                 let mut v = json!({
                     "undo_depth": history.undo_depth(),
                     "redo_depth": history.redo_depth(),
@@ -1649,6 +1989,58 @@ impl DevServer {
                     }),
                 })
             }
+            "builder_camera" => {
+                let b = &mut session.builder;
+                if params.get("fit").and_then(Value::as_bool).unwrap_or(false) {
+                    b.fit_camera();
+                } else {
+                    let (x, y, zoom) = (f32_param(params, "x"), f32_param(params, "y"), f32_param(params, "zoom"));
+                    if x.is_some() || y.is_some() || zoom.is_some() {
+                        let vp = b.viewport();
+                        let center = b.camera().center(&vp);
+                        let zoom = zoom.unwrap_or(b.camera().scale(&vp) / vp.fit_scale());
+                        b.frame_camera(Vec2::new(x.unwrap_or(center.x), y.unwrap_or(center.y)), zoom);
+                    }
+                }
+                Ok(builder_camera_json(&session.builder))
+            }
+            "builder_touch" => {
+                if session.mode() != Driver::Build {
+                    Err("builder_touch needs build mode - call `build` first".to_string())
+                } else {
+                    // Fingers on the glass: the hints turn to taps.
+                    self.hints = Some(crate::hud::Hints::Touch);
+                    let frame = self.builder_frame(session, width, height);
+                    let hold = params.get("hold").and_then(Value::as_bool).unwrap_or(false);
+                    touch_frames(params).map(|(frames, dt)| {
+                        // Fingers a held call left down are still down.
+                        let mut down = !self.held_touches.is_empty();
+                        let mut last = Vec::new();
+                        let lift = (!hold).then(Vec::new);
+                        for touches in frames.into_iter().chain(lift) {
+                            let now = !touches.is_empty();
+                            let input = BuilderInput {
+                                pointer: touches.first().map(|t| t.pos),
+                                pressed: now && !down,
+                                held: now,
+                                touches: touches.clone(),
+                                dt,
+                                ..BuilderInput::default()
+                            };
+                            session.update_builder(&input, &frame);
+                            down = now;
+                            last = touches;
+                        }
+                        self.held_touches = if hold { last } else { Vec::new() };
+                        let mut reply = mode_json(session);
+                        reply["camera"] = builder_camera_json(&session.builder);
+                        reply["held"] = json!(self.held_touches.len());
+                        reply
+                    })
+                }
+            }
+            "builder_select" => builder_select(&mut session.builder, params),
+            "builder_stamp" => builder_stamp(&mut session.builder, params),
             "builder_files" => Ok(json!({
                 "maps": crate::map::available_maps(),
                 "can_save": crate::map::saving_available(),
@@ -1657,18 +2049,21 @@ impl DevServer {
                 let name = params.get("name").and_then(Value::as_str);
                 session.builder.save(name).and_then(|_| builder_map_json(&session.builder))
             }
-            "click" => self.click(session, params, &layout),
-            "key" => self.key(session, params, &layout),
+            "click" => self.click(session, params, width, height),
+            "key" => self.key(session, params, width, height),
             _ => return None,
         };
         Some(result)
     }
 
     /// `click`: one press (and optionally a drag) at a window position,
-    /// through the same hit-tests `main.rs` runs on the mouse.
-    fn click(&mut self, session: &mut Session, params: &Value, layout: &Layout) -> Result<Value, String> {
+    /// through the same hit-tests `app.rs` runs on the mouse: the corners'
+    /// buttons in UI points, the dialogs and the builder in the bitmap's
+    /// pixels, each through the frame the window last drew
+    /// (`click_frame`).
+    fn click(&mut self, session: &mut Session, params: &Value, width: f32, height: f32) -> Result<Value, String> {
         let (Some(x), Some(y)) = (f32_param(params, "x"), f32_param(params, "y")) else {
-            return Err("click needs numeric x and y (window pixels, the bar included)".to_string());
+            return Err("click needs numeric x and y (window coordinates, as `status.ui` and `status.camera` give them)".to_string());
         };
         let right = button_param(params)?;
         let drag_to = match params.get("drag_to") {
@@ -1681,20 +2076,29 @@ impl DevServer {
                 _ => return Err(format!("drag_to must be [x, y], got {v}")),
             },
         };
-        let point = Vec2::new(x, y);
+        // A tap rather than a mouse press: the hints turn to taps.
+        if params.get("touch").and_then(Value::as_bool).unwrap_or(false) {
+            self.hints = Some(crate::hud::Hints::Touch);
+        }
+        let (layout, view, ui) = self.click_frame(session, width, height);
+        let window_point = Vec2::new(x, y);
+        // In the bitmap's pixels for the builder, in UI points for
+        // everything play, the lobby and a room draw over the world.
+        let point = view.to_bitmap(window_point);
+        let p = ui.to_ui(window_point);
+        let corner = Self::corners(session, &ui).and_then(|corners| corners.hit(p));
         match session.mode() {
             Driver::Play => {
-                // The same order as `main.rs`: the level select or an
+                // The same order as `app.rs`: the level select or an
                 // open dialog eats every press while it is up, then the
-                // end screen, then the bar's buttons.
+                // end screen, then the corners' buttons.
                 if session.level_select.is_some() {
-                    let input = SelectInput { pointer: Some(layout.to_field(point)), pressed: !right, ..SelectInput::default() };
-                    if session.update_level_select(&input, layout.field) {
+                    let input = SelectInput { pointer: Some(p), pressed: !right, ..SelectInput::default() };
+                    if session.update_level_select(&input, ui.area) {
                         self.round_started(session);
                     }
                 } else if session.players_dialog {
-                    let rects = players_dialog_rects(layout.field);
-                    let p = layout.to_field(point);
+                    let rects = players_dialog_rects(ui.area);
                     let before = session.game.players;
                     if rects.one.contains(p) {
                         session.answer_players(PlayerCount::ONE);
@@ -1707,82 +2111,111 @@ impl DevServer {
                         self.round_started(session);
                     }
                 } else if session.dialog {
-                    let rects = leave_dialog_rects(layout.field);
-                    let p = layout.to_field(point);
+                    let rects = leave_dialog_rects(ui.area);
                     if rects.leave.contains(p) {
                         session.answer_dialog(true);
                     } else if rects.stay.contains(p) || !rects.panel.contains(p) {
                         session.answer_dialog(false);
                     }
-                } else if !right && session.press_result(layout.to_field(point)) {
+                } else if !right && session.press_result(p, ui.area) {
                     // A level's end screen: PLAY AGAIN or the way on start
                     // a round; LEVELS opens the level select over this one.
                     if session.level_select.is_none() {
                         self.round_started(session);
                     }
-                } else if !right && session.level_button().is_some() && crate::hud::level_button_rect(layout.panel).contains(point) {
+                } else if !right && session.level_button().is_some() && corner == Some(CornerButton::Level) {
                     session.press_levels();
-                } else if mode_button_rect(layout.panel).contains(point) {
+                } else if corner == Some(CornerButton::Build) {
                     session.press_build();
-                } else if crate::TWO_PLAYERS_AVAILABLE && players_button_rect(layout.panel).contains(point) {
+                } else if crate::TWO_PLAYERS_AVAILABLE && corner == Some(CornerButton::Players) {
                     session.press_players();
-                } else if crate::ONLINE_AVAILABLE && crate::hud::online_button_rect(layout.panel).contains(point) {
+                } else if crate::ONLINE_AVAILABLE && corner == Some(CornerButton::Online) {
                     session.press_online();
-                } else if !crate::KEYBOARD_AVAILABLE && restart_button_rect(layout.panel).contains(point) {
+                } else if !crate::KEYBOARD_AVAILABLE && corner == Some(CornerButton::Restart) {
                     crate::tuning::request_restart();
                 }
             }
             // The lobby's own hit tests, on the same `LobbyInput`
             // `app.rs` fills: a tool's click lands where a finger does.
             Driver::Lobby => {
-                let input = crate::lobby::LobbyInput {
-                    pointer: Some(layout.to_field(point)),
-                    pressed: !right,
-                    ..crate::lobby::LobbyInput::default()
-                };
-                session.update_lobby(&input, layout.field, crate::PHYSICS_FIXED_DT);
+                let input = crate::lobby::LobbyInput { pointer: Some(p), pressed: !right, ..crate::lobby::LobbyInput::default() };
+                session.update_lobby(&input, ui.area, crate::PHYSICS_FIXED_DT);
             }
-            // An online round is the room's: the bar carries the one
-            // button that is this window's to press, and the round
-            // itself is left to the keyboard and the touch scheme.
+            // An online round is the room's: the corners carry the one
+            // button that is this window's to press, and the round itself
+            // is left to the keyboard and the touch scheme.
             Driver::Online => {
-                if !right && crate::hud::leave_button_rect(layout.panel).contains(point) {
+                if !right && corner == Some(CornerButton::Leave) {
                     session.leave_online();
                 }
             }
             Driver::Build => {
+                // The builder takes the window's own coordinates, its frame
+                // putting each point on the canvas or on its chrome.
+                let frame = BuilderFrame { layout, view, ui };
                 let press = BuilderInput {
-                    pointer: Some(point),
+                    pointer: Some(window_point),
                     pressed: !right,
                     held: !right,
                     right_pressed: right,
                     right_held: right,
                     ..BuilderInput::default()
                 };
-                session.update_builder(&press, layout);
-                let mut last = point;
+                session.update_builder(&press, &frame);
+                let mut last = window_point;
                 if let Some(to) = drag_to {
-                    let steps = (point.distance_to(to) / CLICK_DRAG_STEP_PX).ceil().max(1.0) as usize;
+                    // Steps of about `CLICK_DRAG_STEP_PX` on the canvas.
+                    let span = view.to_bitmap(window_point).distance_to(view.to_bitmap(to));
+                    let steps = (span / CLICK_DRAG_STEP_PX).ceil().max(1.0) as usize;
                     for i in 1..=steps {
                         let t = i as f32 / steps as f32;
-                        last = Vec2::new(point.x + (to.x - point.x) * t, point.y + (to.y - point.y) * t);
+                        last = Vec2::new(window_point.x + (to.x - window_point.x) * t, window_point.y + (to.y - window_point.y) * t);
                         let held = BuilderInput { pointer: Some(last), held: !right, right_held: right, ..BuilderInput::default() };
-                        session.update_builder(&held, layout);
+                        session.update_builder(&held, &frame);
                     }
                 }
-                session.update_builder(&BuilderInput { pointer: Some(last), ..BuilderInput::default() }, layout);
+                session.update_builder(&BuilderInput { pointer: Some(last), ..BuilderInput::default() }, &frame);
                 // The press may have been PLAY.
                 if session.mode() == Driver::Play {
                     self.round_started(session);
                 }
             }
         }
-        Ok(mode_json(session))
+        let mut reply = mode_json(session);
+        // Where the press landed in the world, through the camera the
+        // window last drew with (`Camera::to_world`): on a followed field
+        // map that is wherever the view stood.
+        if let Some(drawn) = &self.drawn
+            && session.mode() != Driver::Build
+            && drawn.layout.field.contains(point)
+        {
+            let at = drawn.layout.to_field(point);
+            // On a couch's split screen, past the divider is the second
+            // half's view.
+            let camera = match drawn.follow.and_then(|f| f.shot.split.zip(f.second)) {
+                Some((split, second)) if split.in_second(at) => second,
+                _ => drawn.camera,
+            };
+            let world = camera.to_world(at);
+            reply["world"] = json!({ "x": world.x, "y": world.y });
+        }
+        // In the builder, the world point and the cell under the press
+        // through the builder's own camera.
+        let frame = BuilderFrame { layout, view, ui };
+        if session.mode() == Driver::Build
+            && let Some(world) = session.builder.world_at(window_point, &frame)
+        {
+            reply["world"] = json!({ "x": world.x, "y": world.y });
+            reply["cell"] = json!(session.builder.cell_at(window_point, &frame).map(|(c, r)| [c, r]));
+        }
+        Ok(reply)
     }
 
     /// `key`: one key for one frame, or typed text, through the same
-    /// paths `main.rs` takes for the keyboard.
-    fn key(&mut self, session: &mut Session, params: &Value, layout: &Layout) -> Result<Value, String> {
+    /// paths `app.rs` takes for the keyboard.
+    fn key(&mut self, session: &mut Session, params: &Value, width: f32, height: f32) -> Result<Value, String> {
+        let (layout, view, ui) = self.click_frame(session, width, height);
+        let frame = BuilderFrame { layout, view, ui };
         let key = match params.get("key") {
             None | Some(Value::Null) => None,
             Some(Value::String(s)) => Some(s.as_str()),
@@ -1797,6 +2230,8 @@ impl DevServer {
         if key.is_none() && text.is_empty() {
             return Err(format!("key needs `key` ({}) or `text`", KEY_NAMES.join("|")));
         }
+        // A key pressed: the hints turn back to the keys.
+        self.hints = Some(crate::hud::Hints::Keys);
         match session.mode() {
             // The level select's keys, as `app.rs` reads them: the arrows
             // walk the open tiles, Enter starts one, Esc and Tab close it.
@@ -1810,7 +2245,7 @@ impl DevServer {
                     escape: matches!(key, Some("escape") | Some("tab")),
                     ..SelectInput::default()
                 };
-                if session.update_level_select(&input, layout.field) {
+                if session.update_level_select(&input, ui.area) {
                     self.round_started(session);
                 }
             }
@@ -1873,7 +2308,7 @@ impl DevServer {
                     escape: key == Some("escape"),
                     ..crate::lobby::LobbyInput::default()
                 };
-                session.update_lobby(&input, layout.field, crate::PHYSICS_FIXED_DT);
+                session.update_lobby(&input, ui.area, crate::PHYSICS_FIXED_DT);
             }
             // The one key an online round answers, the same one `app.rs`
             // reads: Esc gives the seat up and comes back to the local
@@ -1890,16 +2325,25 @@ impl DevServer {
                         self.round_started(session);
                     }
                 } else {
+                    let arrow = |less: &str, more: &str| (key == Some(more)) as i32 as f32 - (key == Some(less)) as i32 as f32;
                     let input = BuilderInput {
                         escape: key == Some("escape"),
                         enter: key == Some("enter"),
                         backspace: key == Some("backspace"),
                         undo: key == Some("undo"),
                         redo: key == Some("redo"),
+                        copy: key == Some("copy"),
+                        cut: key == Some("cut"),
+                        paste: key == Some("paste"),
+                        delete: key == Some("delete"),
+                        zoom_in: key == Some("zoom_in"),
+                        zoom_out: key == Some("zoom_out"),
+                        pan_keys: Vec2::new(arrow("left", "right"), arrow("up", "down")),
+                        dt: crate::PHYSICS_FIXED_DT,
                         typed: text,
                         ..BuilderInput::default()
                     };
-                    session.update_builder(&input, layout);
+                    session.update_builder(&input, &frame);
                 }
             }
         }
@@ -1921,17 +2365,8 @@ fn lint_json(session: &Session, source: Option<&str>) -> Result<Value, String> {
     // In an online round the map to lint is the room's, as the replica
     // was built from it.
     let live = session.shown();
-    let mut game = Game::default();
-    game.map = if source == "builder" { session.builder.map().clone() } else { live.map.clone() };
-    game.seed_override = Some(live.seed_override.unwrap_or_else(|| live.round_seed()));
-    game.players = live.players;
-    game.enemy_count_override = live.enemy_count_override;
-    game.player_row_override = live.player_row_override;
-    game.player2_row_override = live.player2_row_override;
-    game.level_overrides = live.level_overrides;
-    let (width, height) = game.map.field_size();
-    game.init(width, height);
-    let findings = crate::maplint::lint(&game, width, height);
+    let map = if source == "builder" { session.builder.map() } else { &live.map };
+    let (game, findings) = crate::maplint::lint_map(map, &crate::maplint::LintSetup::of(live));
     let count = |severity: LintSeverity| findings.iter().filter(|f| f.severity == severity).count();
     Ok(json!({
         "source": source,
@@ -1941,11 +2376,57 @@ fn lint_json(session: &Session, source: Option<&str>) -> Result<Value, String> {
         "errors": count(LintSeverity::Error),
         "warnings": count(LintSeverity::Warning),
         "infos": count(LintSeverity::Info),
-        "findings": findings
-            .iter()
-            .map(|f| json!({ "severity": f.severity.to_string(), "kind": f.kind.tag(), "message": f.message }))
-            .collect::<Vec<_>>(),
+        "findings": findings.iter().map(lint_finding_json).collect::<Vec<_>>(),
     }))
+}
+
+/// `status.builder.check`: the builder's CHECK panel - whether it is
+/// open, its last report (counts, findings as the `lint` tool spells them)
+/// and whether the map has moved on since it ran, and the finding the
+/// canvas marks. `null` before the panel first opened.
+fn builder_check_json(b: &MapEditor) -> Value {
+    let Some((report, stale)) = b.lint_report() else { return Value::Null };
+    json!({
+        "open": b.open_menu() == Some("check"),
+        "stale": stale,
+        "errors": report.count(LintSeverity::Error),
+        "warnings": report.count(LintSeverity::Warning),
+        "infos": report.count(LintSeverity::Info),
+        "findings": report.findings.iter().map(lint_finding_json).collect::<Vec<_>>(),
+        "marked": b.lint_marked().map(lint_finding_json),
+    })
+}
+
+/// `status.builder.clear`: the clear check (docs/large-maps-patterns.md,
+/// "Clear check before sharing") - the canvas's `revision` as a map file's
+/// stamp spells it, whether that revision is `cleared` (won from plain
+/// PLAY with no edit since) and its `par` in seconds (`null` until it is),
+/// and `attempt`, the revision the local round's PLAY started on (`null`
+/// for a round PLAY did not start - a level, PLAY HERE, a restart on
+/// another map).
+fn builder_clear_json(session: &Session) -> Value {
+    let b = &session.builder;
+    json!({
+        "revision": crate::map::revision_text(b.revision()),
+        "cleared": b.par().is_some(),
+        "par": b.par(),
+        "attempt": session.clear_attempt.map(crate::map::revision_text),
+    })
+}
+
+/// One finding as the `lint` tool and `status.builder.check` spell it: its
+/// severity, kind and message, the map cells and the nav cells it is
+/// about, and its quick fix, if it has one.
+fn lint_finding_json(f: &crate::maplint::LintFinding) -> Value {
+    use crate::maplint::{LintCell, LintFix};
+    let map: Vec<[i32; 2]> = f.cells.iter().filter_map(|c| if let LintCell::Map(col, row) = *c { Some([col, row]) } else { None }).collect();
+    let nav: Vec<[usize; 2]> = f.cells.iter().filter_map(|c| if let LintCell::Nav(col, row) = *c { Some([col, row]) } else { None }).collect();
+    let fix = f.fix.map(|fix| match fix {
+        LintFix::Move { from, to } => json!({ "move": { "from": [from.0, from.1], "to": [to.0, to.1] } }),
+        LintFix::Place { object, at } => json!({ "place": { "object": object, "at": [at.0, at.1] } }),
+        LintFix::Remove { at } => json!({ "remove": { "at": [at.0, at.1] } }),
+    });
+    json!({ "severity": f.severity.to_string(), "kind": f.kind.tag(), "message": f.message, "cells": map, "nav_cells": nav, "fix": fix })
 }
 
 /// `terrain`: every live tile plus the fire layer - see the tool's
@@ -2166,7 +2647,218 @@ fn tool_json(b: &MapEditor) -> Value {
             })
         })
         .collect();
-    json!({ "tool": b.tool().name(), "category": b.active_category().map(category_name), "categories": categories })
+    json!({ "tool": b.tool().name(), "shape": b.shape().name(), "category": b.active_category().map(category_name), "categories": categories })
+}
+
+/// `status.builder.thumbnails`: the Load list's thumbnails made so far,
+/// while it is open.
+fn thumbnails_json(b: &MapEditor) -> Value {
+    Value::Array(b.thumbnails().map(|(name, t)| json!({ "name": name, "cells": [t.cells.0, t.cells.1], "picture": t.image.is_some() })).collect())
+}
+
+/// A rectangle of cells as `status.builder` and `builder_select` spell it:
+/// its top-left cell and its size, `null` for none.
+fn cell_rect_json(rect: Option<CellRect>) -> Value {
+    rect.map_or(Value::Null, |r| json!({ "col": r.col, "row": r.row, "cols": r.cols, "rows": r.rows }))
+}
+
+/// The paste ghost: where it stands and how many cells it carries.
+fn ghost_json(b: &MapEditor) -> Value {
+    match b.ghost() {
+        Some(ghost) => {
+            let mut v = cell_rect_json(Some(ghost.rect()));
+            v["cells"] = json!(ghost.clip.cells.len());
+            v
+        }
+        None => Value::Null,
+    }
+}
+
+/// The clipboard: its size and how many cells it holds.
+fn clipboard_json(b: &MapEditor) -> Value {
+    b.clipboard().map_or(Value::Null, |c| json!({ "cols": c.cols, "rows": c.rows, "cells": c.cells.len() }))
+}
+
+/// `builder_select`'s reply.
+fn select_json(b: &MapEditor, changes: &[CellChange]) -> Value {
+    json!({
+        "tool": b.tool().name(),
+        "selection": cell_rect_json(b.selection()),
+        "ghost": ghost_json(b),
+        "clipboard": clipboard_json(b),
+        "changes": changes_json(changes),
+        "undo_depth": b.history().undo_depth(),
+    })
+}
+
+/// `n` integers under `key`, `None` when absent.
+fn ints_param(params: &Value, key: &str, n: usize) -> Result<Option<Vec<i32>>, String> {
+    match params.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(items)) if items.len() == n => items
+            .iter()
+            .map(|v| v.as_i64().map(|i| i as i32).ok_or_else(|| format!("{key} must be {n} integers, got {v}")))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some),
+        Some(v) => Err(format!("{key} must be an array of {n} integers, got {v}")),
+    }
+}
+
+/// `builder_select`: the select tool, as the `builder_select` tool's
+/// description has it - a rectangle, a clear, a move, then an action, in
+/// that order.
+fn builder_select(b: &mut MapEditor, params: &Value) -> Result<Value, String> {
+    let rect = ints_param(params, "rect", 4)?;
+    let move_by = ints_param(params, "move_by", 2)?;
+    let at = ints_param(params, "at", 2)?.map(|v| (v[0], v[1]));
+    let action = match params.get("action") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(other) => return Err(format!("action must be a string, got {other}")),
+    };
+    let mut changes = Vec::new();
+    if params.get("clear").and_then(Value::as_bool).unwrap_or(false) {
+        b.cancel_ghost();
+        b.clear_selection();
+    }
+    if let Some(r) = rect
+        && !b.select_cells(CellRect::spanning((r[0], r[1]), (r[2], r[3])))
+    {
+        return Err(format!("rect {r:?} is off the map, whose cells are {:?}", b.field_cells()));
+    }
+    let selected = |b: &MapEditor, what: &str| if b.selection().is_some() { Ok(()) } else { Err(format!("{what} needs a selection: give `rect` first")) };
+    if let Some(by) = move_by {
+        selected(b, "move_by")?;
+        changes.extend(b.move_selection((by[0], by[1])));
+    }
+    match action.as_deref() {
+        None => {}
+        Some("copy") => {
+            selected(b, "copy")?;
+            b.copy_selection();
+        }
+        Some("cut") => {
+            selected(b, "cut")?;
+            changes.extend(b.cut_selection());
+        }
+        Some("delete") => {
+            selected(b, "delete")?;
+            changes.extend(b.delete_selection());
+        }
+        Some(flip @ ("flip_h" | "flip_v")) => {
+            if b.selection().is_none() && b.ghost().is_none() {
+                return Err(format!("{flip} needs a selection or a paste ghost"));
+            }
+            changes.extend(b.flip(if flip == "flip_h" { Axis::Horizontal } else { Axis::Vertical }));
+        }
+        Some("stamp") => {
+            selected(b, "stamp")?;
+            if b.save_stamp().is_none() {
+                return Err("the selection holds nothing to keep as a stamp".to_string());
+            }
+        }
+        Some("paste") => {
+            if !b.paste(at) {
+                return Err("the clipboard is empty: copy or cut first".to_string());
+            }
+        }
+        Some("place") => {
+            if b.ghost().is_none() {
+                return Err("no paste ghost to place: paste or builder_stamp first".to_string());
+            }
+            if let Some(at) = at {
+                b.move_ghost(at);
+            }
+            changes.extend(b.place_ghost());
+        }
+        Some("cancel") => b.cancel_ghost(),
+        Some(other) => return Err(format!("unknown action {other:?}; one of copy, cut, delete, flip_h, flip_v, stamp, paste, place, cancel")),
+    }
+    Ok(select_json(b, &changes))
+}
+
+/// `builder_stamp`: the STAMPS list, or one of them as the paste ghost.
+fn builder_stamp(b: &mut MapEditor, params: &Value) -> Result<Value, String> {
+    let at = ints_param(params, "at", 2)?.map(|v| (v[0], v[1]));
+    let mut changes = Vec::new();
+    match params.get("name") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(name)) => {
+            let Some(index) = b.stamps().iter().position(|s| s.key() == *name) else {
+                let keys: Vec<String> = b.stamps().iter().map(|s| s.key()).collect();
+                return Err(format!("no stamp {name:?}; one of {}", keys.join(", ")));
+            };
+            b.use_stamp(index);
+            if let Some(at) = at {
+                b.move_ghost(at);
+            }
+            if params.get("place").and_then(Value::as_bool).unwrap_or(false) {
+                changes = b.place_ghost();
+            }
+        }
+        Some(other) => return Err(format!("name must be a stamp's key, got {other}")),
+    }
+    let stamps: Vec<Value> = b
+        .stamps()
+        .iter()
+        .map(|s| json!({ "key": s.key(), "name": s.label(), "cols": s.clip.cols, "rows": s.clip.rows, "cells": s.clip.cells.len() }))
+        .collect();
+    Ok(json!({
+        "stamps": stamps,
+        "ghost": ghost_json(b),
+        "changes": changes_json(&changes),
+        "undo_depth": b.history().undo_depth(),
+    }))
+}
+
+/// `builder_touch`'s frames - each a list of `{id, x, y}` touch points in
+/// bitmap pixels - and its seconds per frame.
+fn touch_frames(params: &Value) -> Result<(Vec<Vec<crate::touch::TouchPoint>>, f32), String> {
+    let dt = match params.get("dt") {
+        None | Some(Value::Null) => PHYSICS_FIXED_DT,
+        Some(v) => match v.as_f64() {
+            Some(s) if s.is_finite() && s >= 0.0 => s as f32,
+            _ => return Err(format!("dt must be seconds, 0 or more, got {v}")),
+        },
+    };
+    let Some(frames) = params.get("frames").and_then(Value::as_array) else {
+        return Err("builder_touch needs `frames`: a list of frames, each a list of {id, x, y}".to_string());
+    };
+    let point = |p: &Value| -> Result<crate::touch::TouchPoint, String> {
+        let (Some(id), Some(x), Some(y)) = (p.get("id").and_then(Value::as_i64), p.get("x").and_then(Value::as_f64), p.get("y").and_then(Value::as_f64)) else {
+            return Err(format!("a touch point is {{id, x, y}} (an integer id and two numbers), got {p}"));
+        };
+        Ok(crate::touch::TouchPoint { id: id as i32, pos: Vec2::new(x as f32, y as f32) })
+    };
+    let frames = frames
+        .iter()
+        .map(|f| match f.as_array() {
+            Some(points) => points.iter().map(point).collect::<Result<Vec<_>, _>>(),
+            None => Err(format!("a frame is a list of touch points, got {f}")),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((frames, dt))
+}
+
+/// `status.builder.camera` and `builder_camera`'s reply: the builder's
+/// view over the canvas area it was last given - FIT or not, the world it
+/// shows, how large, and a cell's size on a touch screen's glass.
+fn builder_camera_json(b: &MapEditor) -> Value {
+    let vp = b.viewport();
+    let camera = b.camera();
+    let scale = camera.scale(&vp);
+    let fit = vp.fit_scale();
+    let rect = camera.view(&vp).rect();
+    json!({
+        "fit": camera.is_fit(),
+        "rect": { "x": rect.x, "y": rect.y, "w": rect.width, "h": rect.height },
+        "scale": scale,
+        "zoom": scale / fit,
+        "fit_scale": fit,
+        "device_scale": vp.device_scale(scale),
+        "cell_mm": vp.cell_mm(scale),
+        "area": [vp.area.0, vp.area.1],
+    })
 }
 
 /// `builder_map`'s reply: the canvas as TOML plus how it differs from
@@ -2284,6 +2976,28 @@ fn builder_settings(session: &mut Session, params: &Value) -> Result<Value, Stri
             .unwrap_or_default();
         b.apply_settings(s);
     }
+    // The anchor first, so a size in the same call is placed by it.
+    match params.get("anchor") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(name)) => {
+            let names: Vec<&str> = crate::editor::Anchor::ALL.iter().map(|a| a.name()).collect();
+            b.set_resize_anchor(parse_or("anchor", name, crate::editor::Anchor::parse, &names)?);
+        }
+        Some(v) => return Err(format!("anchor must be a string, got {v}")),
+    }
+    match params.get("size") {
+        None | Some(Value::Null) => {}
+        Some(v) => match v.as_array().map(Vec::as_slice) {
+            Some([cols, rows]) => match (cols.as_f64(), rows.as_f64()) {
+                (Some(cols), Some(rows)) if cols.is_finite() && rows.is_finite() => {
+                    let anchor = b.resize_anchor();
+                    b.resize(cols as f32, rows as f32, anchor);
+                }
+                _ => return Err(format!("size must be [cols, rows] numbers, got {v}")),
+            },
+            _ => return Err(format!("size must be [cols, rows], got {v}")),
+        },
+    }
     if params.get("reset").and_then(Value::as_bool).unwrap_or(false) {
         b.reset();
     }
@@ -2296,6 +3010,10 @@ fn builder_settings(session: &mut Session, params: &Value) -> Result<Value, Stri
 fn settings_json(session: &Session) -> Value {
     let s = session.builder.settings();
     let g = &session.game;
+    let size = {
+        let (cols, rows) = session.builder.size_cells();
+        [cols, rows]
+    };
     json!({
         "tanks": s.tanks,
         "tank": s.tank.map(TankKind::name),
@@ -2309,6 +3027,8 @@ fn settings_json(session: &Session) -> Value {
         "tier_end": s.tier_end.map(Tier::name),
         "theme": s.theme.name(),
         "weather": s.weather.name(),
+        "size": size,
+        "anchor": session.builder.resize_anchor().name(),
         "cli_overrides": {
             "tanks": g.enemy_count_override.is_some(),
             "tank": g.player_row_override.is_some(),
@@ -2362,6 +3082,27 @@ fn tool_param(params: &Value) -> Result<Option<Tool>, String> {
             format!("unknown tool {s:?}; one of {}", names.join(", "))
         }),
         Some(other) => Err(format!("tool must be a string, got {other}")),
+    }
+}
+
+/// `shape` from `params`: how the brush paints (`Shape::parse`).
+fn shape_param(params: &Value) -> Result<Option<Shape>, String> {
+    match params.get("shape") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Shape::parse(s).map(Some).ok_or_else(|| format!("unknown shape {s:?}; one of pen, rect, fill, scatter")),
+        Some(other) => Err(format!("shape must be a string, got {other}")),
+    }
+}
+
+/// `builder_tool`'s and `builder_paint`'s brush: the tool first, then the
+/// shape - which takes a painting brush back from the select tool, as
+/// BRUSH's list does.
+fn brush_from_params(b: &mut MapEditor, tool: Option<Tool>, shape: Option<Shape>) {
+    if let Some(tool) = tool {
+        b.select_tool(tool);
+    }
+    if let Some(shape) = shape {
+        b.set_shape(shape);
     }
 }
 
@@ -2454,6 +3195,95 @@ fn to_value<T: Serialize>(v: T) -> Value {
     serde_json::to_value(v).unwrap_or(Value::Null)
 }
 
+/// `status.camera.motion`: the one motion switch (`motion.rs`) - whether
+/// motion is `reduced` this frame, the `reduce_motion` row's `setting`
+/// (`platform`, `off` or `on`) and what the `platform` said at startup
+/// (`null` where it says nothing).
+fn motion_json() -> Value {
+    json!({
+        "reduced": crate::motion::reduced(),
+        "setting": crate::motion::setting_name(crate::tuning::tuning().reduce_motion),
+        "platform": crate::motion::platform(),
+    })
+}
+
+/// A followed view's half of `status.camera` (docs/large-maps-follow-camera.md
+/// §5, §6): the seat it follows and how (`focus`: `seat`, `shared`,
+/// `split` - a couch pair too far apart for one view, each in its half of a
+/// split screen - `spectating` or `nobody`), whether this frame cut,
+/// the look-ahead and the sub-block offset the picture was shifted by;
+/// the framing behind its size - the world in cells, device pixels per
+/// world pixel and per block, whether the zoom snapped to whole blocks,
+/// the tank in points and millimetres, the bars past the aspect clamp;
+/// and the sight box the view keeps, with whether all of it is on screen;
+/// and the `split` (`null` for one view): the divider through `line` (a
+/// point and the unit normal into the second half, in the followed
+/// bitmap's pixels, and `window_line` the point on the window), how far
+/// `apart` the halves' views stand, and each half's seat, world `rect`,
+/// sub-block `offset`, whether it `cut` and whether its seat's sight box
+/// is `in_view`, the first half - the view above - first.
+fn follow_json(f: &FollowReport, camera: &Camera, view: &View, layout: &Layout) -> Value {
+    let fr = &f.framing;
+    let (cols, rows) = fr.visible_cells();
+    let shot = &f.shot;
+    let room = fr.room_outside(f.sight);
+    json!({
+        "seat": shot.seat,
+        "focus": shot.kind.name(),
+        "cut": shot.cut,
+        "lead": { "x": r1(shot.lead.x), "y": r1(shot.lead.y) },
+        "offset": { "x": camera.offset.x, "y": camera.offset.y },
+        "seating": match f.seating { Seating::Room => "room", Seating::Local => "local" },
+        "framing": {
+            "visible_cells": [cols, rows],
+            "device_scale": fr.scale,
+            "point_scale": fr.point_scale,
+            "block_px": fr.block(),
+            "snapped": fr.snapped,
+            "tank_points": fr.tank_points,
+            "tank_mm": fr.tank_mm,
+            "bars": [fr.bars.0, fr.bars.1],
+        },
+        "sight_box": {
+            "half": [f.sight.half.0, f.sight.half.1],
+            "room": [room.0, room.1],
+            "in_view": shot.boxes_in(camera.rect(), camera.field, f.sight, 1.0),
+        },
+        "establishing": {
+            "phase": f.establishing.name(),
+            "progress": (f.establishing.progress() * 100.0).round() / 100.0,
+        },
+        "split": match (shot.split, f.second) {
+            (Some(split), Some(second)) => {
+                let rect = |r: crate::math::Rectangle| json!({ "x": r.x, "y": r.y, "w": r.width, "h": r.height });
+                let on_window = view.to_window(Vec2::new(layout.field.x + split.at.x, layout.field.y + split.at.y));
+                json!({
+                    "line": { "x": split.at.x, "y": split.at.y, "nx": split.normal.x, "ny": split.normal.y },
+                    "window_line": { "x": on_window.x, "y": on_window.y },
+                    "apart": r1(split.apart),
+                    "halves": [
+                        {
+                            "seat": shot.seat,
+                            "rect": rect(camera.rect()),
+                            "offset": { "x": camera.offset.x, "y": camera.offset.y },
+                            "cut": shot.cut,
+                            "in_view": shot.boxes_in(camera.rect(), camera.field, f.sight, 1.0),
+                        },
+                        {
+                            "seat": split.seat,
+                            "rect": rect(second.rect()),
+                            "offset": { "x": second.offset.x, "y": second.offset.y },
+                            "cut": split.cut,
+                            "in_view": split.boxes_in(second.rect(), second.field, f.sight, 1.0),
+                        },
+                    ],
+                })
+            }
+            _ => Value::Null,
+        },
+    })
+}
+
 /// The loaded map's identity for `status`/`map_get`.
 fn map_json(map: &MapFile) -> Value {
     json!({
@@ -2486,6 +3316,7 @@ fn weather_json(game: &Game) -> Value {
         "in_force": sky.name(),
         "map": game.map.weather.name(),
         "override": pick.map(crate::map::Weather::name),
+        "without_shaders": crate::weather::plain::without_shaders(&t),
         "names": crate::map::Weather::ALL.iter().map(|w| w.name()).collect::<Vec<_>>(),
         "rules": {
             "on": t.weather_rules,
@@ -2662,6 +3493,15 @@ mod tests {
         Session::new(game)
     }
 
+    /// A fresh round on a map shown whole: the inline 34 x 17 map, an
+    /// arena, which no shipped map is.
+    fn arena(seed: u64) -> Session {
+        let mut s = game(seed);
+        s.replace_map(MapFile::from_toml_str(INLINE_MAP).expect("inline map parses"));
+        s.game.init(W, H);
+        s
+    }
+
     /// Queue `method` on a headless server and return its reply receiver.
     fn call(tx: &mpsc::Sender<Request>, method: &str, params: Value) -> mpsc::Receiver<Result<Value, String>> {
         let (reply, rx) = mpsc::channel();
@@ -2742,6 +3582,209 @@ mod tests {
         assert_eq!(status["players_dialog_open"], false);
     }
 
+    /// The camera tool pins the view the window draws and `status` reports
+    /// it; a field left out keeps the pin's, a corner is clamped into the
+    /// field, a zoom under one or a word for a number is refused, and
+    /// `reset` shows the whole field again. The round never sees any of it.
+    #[test]
+    fn the_camera_tool_pins_a_view_and_lets_it_go() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = arena(7);
+        let field = (W, H);
+        let before = s.game.frame();
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(status["camera"]["view"], "whole", "{status}");
+        assert_eq!(status["camera"]["scale"], 1.0);
+        assert_eq!(status["camera"]["target"], json!([1280, 720]));
+        // The motion switch follows a platform that, in a test, said nothing.
+        assert_eq!(status["camera"]["motion"], json!({ "reduced": false, "setting": "platform", "platform": null }), "{status}");
+
+        let pinned = ask(&mut server, &tx, &mut s, "camera", json!({ "x": 640.0, "y": 360.0, "zoom": 2.0 })).unwrap();
+        assert_eq!(pinned["view"], "pinned", "{pinned}");
+        assert_eq!(pinned["rect"], json!({ "x": 320.0, "y": 180.0, "w": 640.0, "h": 360.0 }));
+        assert_eq!(pinned["scale"], 2.0);
+        assert_eq!(server.camera(field), Camera::zoomed(field, Vec2::new(640.0, 360.0), 2.0));
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(status["camera"], pinned);
+
+        ask(&mut server, &tx, &mut s, "camera", json!({ "zoom": 4.0 })).unwrap();
+        assert_eq!(server.camera(field), Camera::zoomed(field, Vec2::new(640.0, 360.0), 4.0), "the centre stays");
+        let corner = ask(&mut server, &tx, &mut s, "camera", json!({ "x": 0.0, "y": 0.0 })).unwrap();
+        assert_eq!((corner["rect"]["x"].as_f64(), corner["rect"]["y"].as_f64()), (Some(0.0), Some(0.0)), "{corner}");
+        assert_eq!(corner["zoom"], 4.0, "the zoom stays");
+        let report = ask(&mut server, &tx, &mut s, "camera", json!({})).unwrap();
+        assert_eq!(report, corner, "no parameters only report");
+
+        assert!(ask(&mut server, &tx, &mut s, "camera", json!({ "zoom": 0.5 })).unwrap_err().contains("zoom"));
+        assert!(ask(&mut server, &tx, &mut s, "camera", json!({ "x": "left" })).unwrap_err().contains("x must be a number"));
+        assert_eq!(server.camera(field), Camera::zoomed(field, Vec2::new(0.0, 0.0), 4.0), "a refused call changes nothing");
+
+        let whole = ask(&mut server, &tx, &mut s, "camera", json!({ "reset": true })).unwrap();
+        assert_eq!(whole["view"], "whole");
+        assert_eq!(whole["zoom"], Value::Null);
+        assert_eq!(server.camera(field), Camera::whole(field));
+        assert_eq!(s.game.frame(), before, "the round never moved");
+    }
+
+    /// A field map with no window behind the server is still reported as
+    /// followed; with the window's frame handed over, `status.camera`
+    /// carries the followed seat, the framing (scale, snap, the tank's
+    /// size) and whether the sight box is on screen, and a `click` lands
+    /// on the bitmap that frame drew. A pin outranks it, and `reset` hands
+    /// the view back to the map.
+    #[test]
+    fn status_reports_a_followed_view_as_the_window_drew_it() {
+        use crate::follow::{CameraMode, CameraReport, FollowReport, Shot, ShotKind};
+        use crate::framing::{Screen, SightBox, ViewRules};
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(7);
+        s.game.map = MapFile::from_toml_str("version = 1\nsize = [48, 24]\n").unwrap();
+        let field = s.game.map.field_size();
+        s.game.init(field.0, field.1);
+        let at = |server: &mut DevServer, s: &mut Session, method: &str, params: Value| {
+            let rx = call(&tx, method, params);
+            server.before_frame(s, field.0, field.1);
+            rx.recv().unwrap()
+        };
+        let status = at(&mut server, &mut s, "status", json!({})).unwrap();
+        assert_eq!(status["camera"]["view"], "follow", "{status}");
+        assert_eq!(status["camera"]["rect"], Value::Null, "no frame drawn yet");
+
+        // The window's frame: the 1080p monitor's local view, the whole
+        // window the world's, the seat followed near the middle.
+        let sight = SightBox::from_cells(11.5, 7.5);
+        let screen = Screen::new(1920.0, 1080.0, 1.0, 92.0).with_panel_width(1920.0);
+        let frame = crate::view::FollowFrame::new(screen, (1920.0, 1080.0), Seating::Local, sight, &ViewRules::of(&crate::tuning::Tuning::DEFAULT));
+        let framing = frame.framing;
+        let seat = Vec2::new(760.0, 380.0);
+        let corner = Vec2::new(seat.x - 640.0, seat.y - 360.0);
+        let camera = Camera::following(field, corner, framing.visible, 1.0, 1.5);
+        let (layout, view) = (frame.layout, frame.view);
+        let shot = Shot {
+            corner,
+            center: seat,
+            kind: ShotKind::Seat,
+            seat: Some(0),
+            keeps: [Some(seat), None],
+            lead: Vec2::new(0.0, 0.0),
+            cut: false,
+            split: None,
+        };
+        server.publish_camera(CameraReport {
+            mode: CameraMode::Follow,
+            camera,
+            layout,
+            view,
+            follow: Some(FollowReport { framing, seating: Seating::Local, sight, shot, establishing: crate::establish::Phase::Follow, second: None }),
+        });
+        server.publish_ui(UiFrame::plain((1920.0, 1080.0)));
+        let status = at(&mut server, &mut s, "status", json!({})).unwrap();
+        let c = status["camera"].clone();
+        assert_eq!(c["view"], "follow", "{c}");
+        assert_eq!(c["seat"], 0);
+        assert_eq!(c["focus"], "seat");
+        assert_eq!(c["rect"], json!({ "x": 120.0, "y": 20.0, "w": 1280.0, "h": 720.0 }));
+        assert_eq!(c["framing"]["visible_cells"], json!([40.0, 22.5]), "no bar: the whole window is the world's");
+        assert_eq!(c["framing"]["device_scale"], 1.5);
+        assert_eq!(c["framing"]["snapped"], true);
+        assert_eq!(c["framing"]["tank_points"], 96.0);
+        assert!(c["framing"]["tank_mm"].as_f64().is_some_and(|mm| (mm - 26.5).abs() < 0.1), "{c}");
+        assert_eq!(c["sight_box"]["in_view"], true);
+        assert_eq!(c["target"], json!([1282, 722]));
+        // The corners' buttons are hit on the window, where `status.ui`
+        // says they are: BUILD at the window's top-right.
+        let b = &status["ui"]["buttons"]["build"];
+        let (bx, by) = (b["x"].as_f64().unwrap() + 36.0, b["y"].as_f64().unwrap() + 16.0);
+        assert!(bx > 1800.0 && by < 60.0, "{b}");
+        let m = at(&mut server, &mut s, "click", json!({ "x": bx, "y": by })).unwrap();
+        assert_eq!(m["dialog_open"], true, "{m}");
+        at(&mut server, &mut s, "key", json!({ "key": "escape" })).unwrap();
+        // A press on the field lands in the world through that camera: the
+        // window's middle is the followed seat.
+        let m = at(&mut server, &mut s, "click", json!({ "x": 960.0, "y": 540.0 })).unwrap();
+        assert_eq!(m["world"], json!({ "x": seat.x, "y": seat.y }), "{m}");
+        assert_eq!(m["dialog_open"], false);
+        // A pin outranks the follow; `reset` gives the view back.
+        let pinned = at(&mut server, &mut s, "camera", json!({ "zoom": 2.0 })).unwrap();
+        assert_eq!(pinned["view"], "pinned");
+        let back = at(&mut server, &mut s, "camera", json!({ "reset": true })).unwrap();
+        assert_eq!(back["view"], "follow", "{back}");
+    }
+
+    /// A couch's split screen as the window drew it: `status.camera` names
+    /// the split, the divider on the bitmap and on the window, and each
+    /// half's seat and camera; a `click` lands in the world of the half it
+    /// falls in.
+    #[test]
+    fn status_reports_a_split_screen_and_a_click_lands_in_its_half() {
+        use crate::follow::{CameraMode, CameraReport, FollowReport, Shot, ShotKind, Split};
+        use crate::framing::{Screen, SightBox, ViewRules};
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(7);
+        s.game.map = MapFile::from_toml_str("version = 1\nsize = [100, 50]\n").unwrap();
+        let field = s.game.map.field_size();
+        s.game.init(field.0, field.1);
+        let at = |server: &mut DevServer, s: &mut Session, method: &str, params: Value| {
+            let rx = call(&tx, method, params);
+            server.before_frame(s, field.0, field.1);
+            rx.recv().unwrap()
+        };
+        let sight = SightBox::from_cells(11.5, 7.5);
+        let screen = Screen::new(1920.0, 1080.0, 1.0, 92.0).with_panel_width(1920.0);
+        let frame = crate::view::FollowFrame::new(screen, (1920.0, 1080.0), Seating::Local, sight, &ViewRules::of(&crate::tuning::Tuning::DEFAULT));
+        let framing = frame.framing;
+        // Seat 0's half on the left, seat 1's on the right, the divider
+        // straight down the middle of the 1280 x 720 view.
+        let (seat_a, seat_b) = (Vec2::new(760.0, 380.0), Vec2::new(2400.0, 400.0));
+        let (corner_a, corner_b) = (Vec2::new(120.0, 20.0), Vec2::new(1900.0, 40.0));
+        let first = Camera::following(field, corner_a, framing.visible, 1.0, 1.5);
+        let second = Camera::following(field, corner_b, framing.visible, 1.0, 1.5);
+        let split = Split {
+            corner: corner_b,
+            center: corner_b + Vec2::new(640.0, 360.0),
+            seat: 1,
+            keeps: [Some(seat_b), None],
+            cut: false,
+            at: Vec2::new(640.0, 360.0),
+            normal: Vec2::new(1.0, 0.0),
+            apart: 1780.0,
+        };
+        let shot = Shot {
+            corner: corner_a,
+            center: corner_a + Vec2::new(640.0, 360.0),
+            kind: ShotKind::Split,
+            seat: Some(0),
+            keeps: [Some(seat_a), None],
+            lead: Vec2::new(0.0, 0.0),
+            cut: false,
+            split: Some(split),
+        };
+        server.publish_camera(CameraReport {
+            mode: CameraMode::Follow,
+            camera: first,
+            layout: frame.layout,
+            view: frame.view,
+            follow: Some(FollowReport { framing, seating: Seating::Local, sight, shot, establishing: crate::establish::Phase::Follow, second: Some(second) }),
+        });
+        server.publish_ui(UiFrame::plain((1920.0, 1080.0)));
+        let status = at(&mut server, &mut s, "status", json!({})).unwrap();
+        let c = &status["camera"];
+        assert_eq!(c["focus"], "split", "{c}");
+        let sp = &c["split"];
+        assert_eq!(sp["line"], json!({ "x": 640.0, "y": 360.0, "nx": 1.0, "ny": 0.0 }), "{sp}");
+        assert_eq!(sp["window_line"], json!({ "x": 960.0, "y": 540.0 }), "the bitmap's middle is the window's");
+        assert_eq!(sp["apart"], 1780.0);
+        assert_eq!((sp["halves"][0]["seat"].clone(), sp["halves"][1]["seat"].clone()), (json!(0), json!(1)));
+        assert_eq!(sp["halves"][0]["rect"], json!({ "x": 120.0, "y": 20.0, "w": 1280.0, "h": 720.0 }));
+        assert_eq!(sp["halves"][1]["rect"], json!({ "x": 1900.0, "y": 40.0, "w": 1280.0, "h": 720.0 }));
+        assert_eq!((sp["halves"][0]["in_view"].clone(), sp["halves"][1]["in_view"].clone()), (json!(true), json!(true)));
+        // Left of the divider is seat 0's world, right of it seat 1's.
+        let m = at(&mut server, &mut s, "click", json!({ "x": 660.0, "y": 540.0 })).unwrap();
+        assert_eq!(m["world"], json!({ "x": 560.0, "y": 380.0 }), "{m}");
+        let m = at(&mut server, &mut s, "click", json!({ "x": 1260.0, "y": 540.0 })).unwrap();
+        assert_eq!(m["world"], json!({ "x": 2740.0, "y": 400.0 }), "{m}");
+    }
+
     /// The players tool and the button/keys behind it: the dialog freezes
     /// the round, a new count restarts in that mode with player 2 in slot
     /// 1, `step` drives player 2 through `p2_*`, and `restart {players: 1}`
@@ -2750,15 +3793,14 @@ mod tests {
     fn players_tool_switches_mode_and_the_button_opens_the_dialog() {
         let (mut server, tx) = DevServer::headless();
         let mut s = game(41);
-        let layout = Layout::for_field(W, H);
         // The button opens it and the round freezes; a press outside closes it.
         let m = ask(&mut server, &tx, &mut s, "players", json!({})).unwrap();
         assert_eq!(m["players_dialog_open"], true, "{m}");
         assert!(!s.playing());
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": 10.0, "y": 100.0 })).unwrap();
         assert_eq!(m["players_dialog_open"], false, "{m}");
-        let b = players_button_rect(layout.panel);
-        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": b.x + b.width / 2.0, "y": b.y + b.height / 2.0 })).unwrap();
+        let b = corner_button(&mut server, &tx, &mut s, "players");
+        let m = ask(&mut server, &tx, &mut s, "click", b).unwrap();
         assert_eq!(m["players_dialog_open"], true, "{m}");
         let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
         assert_eq!(m["players_dialog_open"], false);
@@ -2990,13 +4032,18 @@ mod tests {
         assert_eq!(w["names"].as_array().unwrap().len(), crate::map::Weather::ALL.len(), "{w}");
         assert_eq!(w["rules"]["enemy_sight_px"], json!(crate::tuning::tuning().enemy_view_range), "{w}");
         assert_eq!(w["rules"]["grip"], json!(1.0), "{w}");
-        // Setting a sky starts the round over under it on its own seed:
-        // the rules read it from the start.
+        // No window compiled anything here, and the knob is off.
+        assert_eq!(w["without_shaders"], false, "{w}");
+        // Setting a sky changes it mid-round: the round runs on under it.
         for _ in 0..5 {
             game.game.update(Input::default(), crate::PHYSICS_FIXED_DT, W, H);
         }
         let seed = game.game.round_seed();
-        let w = ask(&mut server, &mut game, "weather", json!({ "name": "storm" })).unwrap();
+        let w = ask(&mut server, &mut game, "weather", json!({ "name": "fog" })).unwrap();
+        assert_eq!((w["map"].as_str(), w["in_force"].as_str()), (Some("fog"), Some("fog")), "{w}");
+        assert_eq!(game.game.frame(), 5, "the round runs on");
+        // `restart` starts it over under the sky on its own seed instead.
+        let w = ask(&mut server, &mut game, "weather", json!({ "name": "storm", "restart": true })).unwrap();
         assert_eq!(w["map"], "storm", "{w}");
         assert_eq!(w["in_force"], "storm", "{w}");
         assert_eq!(game.game.map.weather, crate::map::Weather::Storm);
@@ -3381,6 +4428,25 @@ cells."1,1" = { kind = "wall" }"#;
         rx.recv().unwrap()
     }
 
+    /// Where `click` presses the corners' button `name`: the middle of
+    /// its rect as `status.ui.buttons` reports it, in window coordinates.
+    fn corner_button(server: &mut DevServer, tx: &mpsc::Sender<Request>, session: &mut Session, name: &str) -> Value {
+        ui_button(server, tx, session, "buttons", name)
+    }
+
+    /// Where `click` presses the button `name` of whatever stands over the
+    /// round, as `status.ui.screen_buttons` reports it.
+    fn screen_button(server: &mut DevServer, tx: &mpsc::Sender<Request>, session: &mut Session, name: &str) -> Value {
+        ui_button(server, tx, session, "screen_buttons", name)
+    }
+
+    fn ui_button(server: &mut DevServer, tx: &mpsc::Sender<Request>, session: &mut Session, list: &str, name: &str) -> Value {
+        let status = ask(server, tx, session, "status", json!({})).unwrap();
+        let b = &status["ui"][list][name];
+        let at = |k: &str| b[k].as_f64().unwrap_or_else(|| panic!("no {name} in `ui.{list}` of {status}"));
+        json!({ "x": at("x") + at("w") / 2.0, "y": at("y") + at("h") / 2.0 })
+    }
+
     /// BUILD, then confirm the dialog: the builder is live afterwards.
     fn enter_build(server: &mut DevServer, tx: &mpsc::Sender<Request>, session: &mut Session) {
         ask(server, tx, session, "build", json!({})).unwrap();
@@ -3641,20 +4707,18 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(rx.recv().unwrap().unwrap()["frame"], 1);
     }
 
-    /// The bar's own way out of a room: a `click` on `LEAVE` lands on
+    /// The corners' own way out of a room: a `click` on `LEAVE` lands on
     /// the hit test a finger lands on, and comes back to the local round
     /// the way Esc does.
     #[test]
     fn a_click_on_leave_gives_the_seat_up() {
         let (mut s, _room) = online(53);
         let (mut server, tx) = DevServer::headless();
-        let layout = Layout::for_field(W, H);
-        let r = crate::hud::leave_button_rect(layout.panel);
+        let leave = corner_button(&mut server, &tx, &mut s, "leave");
         // A press anywhere else on the replica does nothing.
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": 10.0, "y": 200.0 })).unwrap();
         assert_eq!(m["mode"], "online", "{m}");
-        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": r.x + r.width / 2.0, "y": r.y + r.height / 2.0 }))
-            .unwrap();
+        let m = ask(&mut server, &tx, &mut s, "click", leave).unwrap();
         assert_eq!(m["mode"], "play", "{m}");
         let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
         assert_eq!(st["round"]["kind"], "local", "{st}");
@@ -3715,6 +4779,164 @@ cells."1,1" = { kind = "wall" }"#;
         let m = ask(&mut server, &tx, &mut s, "mode", json!({})).unwrap();
         assert_eq!(m["dirty"], true);
         assert_eq!(m["tool"], "road");
+    }
+
+    /// `builder_tool {shape}` sets how the brush paints and `builder_paint`
+    /// lays the shape: a rectangle between the first and last cells, a
+    /// fill from the one cell, a scatter's footprints, each one step; a
+    /// fill past `builder_fill_max_cells` changes nothing and says why in
+    /// `message`, as `status.builder` does.
+    #[test]
+    fn builder_shapes_lay_rects_fills_and_scatters() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(35);
+        ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 2 })).unwrap();
+        enter_build(&mut server, &tx, &mut s);
+        let base = s.builder.history().undo_depth() as u64;
+        let t = ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "water", "shape": "rect" })).unwrap();
+        assert_eq!((&t["tool"], &t["shape"]), (&json!("water"), &json!("rect")), "{t}");
+        let err = ask(&mut server, &tx, &mut s, "builder_tool", json!({ "shape": "lasso" })).unwrap_err();
+        assert!(err.contains("scatter"), "{err}");
+        let r = ask(&mut server, &tx, &mut s, "builder_paint", json!({ "cells": [[12, 9], [10, 8]] })).unwrap();
+        let changes = r["changes"].as_array().unwrap();
+        assert_eq!(changes.len(), 6, "{r}");
+        assert!(changes.iter().all(|c| c["after"]["kind"] == "water"), "{r}");
+        assert_eq!(r["undo_depth"], base + 1);
+        assert!(r["message"].is_null());
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!((&st["builder"]["shape"], &st["builder"]["rect"]), (&json!("rect"), &Value::Null), "{}", st["builder"]);
+        // A fill of road over the water: the six cells joined to the one pressed.
+        let r = ask(&mut server, &tx, &mut s, "builder_paint", json!({ "cells": [[11, 8]], "tool": "road", "shape": "fill" })).unwrap();
+        assert_eq!(r["changes"].as_array().unwrap().len(), 6, "{r}");
+        assert_eq!(r["undo_depth"], base + 2);
+        // A scatter of trees round a short line: empty cells only, the start kept.
+        let r = ask(&mut server, &tx, &mut s, "builder_paint", json!({ "cells": [[3, 5], [7, 5]], "tool": "tree", "shape": "scatter" })).unwrap();
+        let changes = r["changes"].as_array().unwrap();
+        assert!(!changes.is_empty() && changes.iter().all(|c| c["before"].is_null() && c["after"]["kind"] == "tree"), "{r}");
+        assert_eq!(s.builder.map().cell(5, 5), Some(&crate::map::CellObject::Start));
+        // A field past the cap: a fill of its open ground is refused.
+        ask(&mut server, &tx, &mut s, "builder_settings", json!({ "size": [80, 60] })).unwrap();
+        let depth = s.builder.history().undo_depth() as u64;
+        let r = ask(&mut server, &tx, &mut s, "builder_paint", json!({ "cells": [[60, 40]], "tool": "tall_grass", "shape": "fill" })).unwrap();
+        assert!(r["changes"].as_array().unwrap().is_empty(), "{r}");
+        assert_eq!(r["undo_depth"], depth);
+        let max = crate::tuning::Tuning::DEFAULT.builder_fill_max_cells.to_string();
+        assert!(r["message"].as_str().is_some_and(|m| m.contains(&max)), "{r}");
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(st["builder"]["message"], r["message"]);
+    }
+
+    /// FILE > LOAD's thumbnails: the list's page makes them a picture a
+    /// frame, `status.builder.thumbnails` names each with its size in cells
+    /// while the list is open, and none once it closes.
+    #[test]
+    fn the_load_list_reports_its_thumbnails_while_it_is_open() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(36);
+        enter_build(&mut server, &tx, &mut s);
+        let press = |name: &str, server: &mut DevServer, s: &mut Session| {
+            let st = ask(server, &tx, s, "status", json!({})).unwrap();
+            let b = &st["builder"]["buttons"][name];
+            assert!(b.is_object(), "no {name}: {}", st["builder"]["buttons"]);
+            let (x, y) = (b["x"].as_f64().unwrap() + b["w"].as_f64().unwrap() / 2.0, b["y"].as_f64().unwrap() + b["h"].as_f64().unwrap() / 2.0);
+            ask(server, &tx, s, "click", json!({ "x": x, "y": y })).unwrap();
+        };
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(st["builder"]["thumbnails"], json!([]), "nothing while the list is closed");
+        press("file", &mut server, &mut s);
+        press("load", &mut server, &mut s);
+        // A frame a key press the list does not take.
+        for _ in 0..12 {
+            ask(&mut server, &tx, &mut s, "key", json!({ "key": "left" })).unwrap();
+        }
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let thumbs = st["builder"]["thumbnails"].as_array().expect("a list").clone();
+        assert!(thumbs.len() >= 2, "{thumbs:?}");
+        let buttons = &st["builder"]["buttons"];
+        for t in &thumbs {
+            let name = t["name"].as_str().unwrap();
+            assert!(buttons[format!("map_{name}")].is_object(), "{name} is a row of the page");
+            if t["picture"] == true {
+                assert!(t["cells"][0].as_f64().unwrap() > 0.0 && t["cells"][1].as_f64().unwrap() > 0.0, "{t}");
+            }
+        }
+        ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(st["builder"]["thumbnails"], json!([]), "none once it closes");
+    }
+
+    /// `builder_select` and `builder_stamp` drive the select tool the way a
+    /// drag and the strip do - a rectangle, a move, a copy pasted and
+    /// placed where `at` says, a stamp kept and one put down, each edit one
+    /// undo step - and `status.builder` reports it; the strip's live
+    /// buttons come by name for a `click`, and the keys copy, paste and
+    /// let go.
+    #[test]
+    fn builder_select_and_stamp_drive_the_select_tool() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(34);
+        ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 2 })).unwrap();
+        enter_build(&mut server, &tx, &mut s);
+        let iron = crate::map::CellObject::Wall { material: crate::obstacle::Material::Iron };
+        let base = s.builder.history().undo_depth() as u64;
+        // A rectangle round the iron wall at (20, 8).
+        let r = ask(&mut server, &tx, &mut s, "builder_select", json!({ "rect": [21, 9, 19, 7] })).unwrap();
+        assert_eq!(r["tool"], "select", "{r}");
+        assert_eq!(r["selection"], json!({ "col": 19, "row": 7, "cols": 3, "rows": 3 }));
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let b = &st["builder"];
+        assert_eq!((&b["tool"], &b["shape"], &b["selection"]["cols"]), (&json!("select"), &json!("pen"), &json!(3)), "{b}");
+        assert!(b["buttons"]["sel_copy"].is_object() && b["buttons"]["sel_paste"].is_null(), "PASTE is dim with nothing copied: {}", b["buttons"]);
+        // Two cells right: one step, the wall with it.
+        let r = ask(&mut server, &tx, &mut s, "builder_select", json!({ "move_by": [2, 0] })).unwrap();
+        assert_eq!(r["changes"].as_array().unwrap().len(), 2, "{r}");
+        assert_eq!(r["undo_depth"], base + 1);
+        assert_eq!(s.builder.map().cell(22, 8), Some(&iron));
+        assert_eq!(r["selection"]["col"], 21);
+        // Copied, pasted as a ghost, put down with its top-left at (5, 12).
+        ask(&mut server, &tx, &mut s, "builder_select", json!({ "action": "copy" })).unwrap();
+        let r = ask(&mut server, &tx, &mut s, "builder_select", json!({ "action": "paste", "at": [8, 12] })).unwrap();
+        assert_eq!(r["ghost"]["cells"], 1, "{r}");
+        assert_eq!(r["clipboard"], json!({ "cols": 3, "rows": 3, "cells": 1 }));
+        let r = ask(&mut server, &tx, &mut s, "builder_select", json!({ "action": "place", "at": [5, 12] })).unwrap();
+        assert!(r["ghost"].is_null(), "{r}");
+        assert_eq!(s.builder.map().cell(6, 13), Some(&iron));
+        assert_eq!(r["undo_depth"], base + 2);
+        assert!(ask(&mut server, &tx, &mut s, "builder_select", json!({ "action": "spin" })).is_err());
+        assert!(ask(&mut server, &tx, &mut s, "builder_select", json!({ "rect": [1, 2] })).is_err());
+        assert!(ask(&mut server, &tx, &mut s, "builder_select", json!({ "action": "place" })).is_err(), "no ghost to place");
+        // The stamps: listed, one kept, the bunker put down.
+        let r = ask(&mut server, &tx, &mut s, "builder_stamp", json!({})).unwrap();
+        let keys: Vec<&str> = r["stamps"].as_array().unwrap().iter().map(|s| s["key"].as_str().unwrap()).collect();
+        assert_eq!(keys, ["fort", "bunker", "river-bend"]);
+        ask(&mut server, &tx, &mut s, "builder_select", json!({ "action": "stamp" })).unwrap();
+        let r = ask(&mut server, &tx, &mut s, "builder_stamp", json!({ "name": "bunker", "at": [2, 2], "place": true })).unwrap();
+        assert_eq!(r["stamps"].as_array().unwrap().len(), 4, "{r}");
+        assert_eq!(r["stamps"][3]["key"], "saved_1");
+        assert!(!r["changes"].as_array().unwrap().is_empty());
+        assert_eq!(s.builder.map().cell(3, 2), Some(&iron));
+        assert_eq!(s.builder.map().start_cell(), Some((5, 5)), "the bunker's empty middle left the start where it was");
+        assert!(ask(&mut server, &tx, &mut s, "builder_stamp", json!({ "name": "castle" })).is_err());
+        // The strip's DELETE by a click on it.
+        ask(&mut server, &tx, &mut s, "builder_select", json!({ "rect": [21, 7, 23, 9] })).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let del = &st["builder"]["buttons"]["sel_delete"];
+        let (x, y) = (del["x"].as_f64().unwrap() + del["w"].as_f64().unwrap() / 2.0, del["y"].as_f64().unwrap() + del["h"].as_f64().unwrap() / 2.0);
+        ask(&mut server, &tx, &mut s, "click", json!({ "x": x, "y": y })).unwrap();
+        assert_eq!(s.builder.map().cell(22, 8), None);
+        // The keys: undo, copy, paste, and Escape twice - the ghost, then
+        // the selection.
+        ask(&mut server, &tx, &mut s, "key", json!({ "key": "undo" })).unwrap();
+        assert_eq!(s.builder.map().cell(22, 8), Some(&iron));
+        ask(&mut server, &tx, &mut s, "key", json!({ "key": "copy" })).unwrap();
+        ask(&mut server, &tx, &mut s, "key", json!({ "key": "paste" })).unwrap();
+        assert!(s.builder.ghost().is_some());
+        ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
+        assert!(s.builder.ghost().is_none() && s.builder.selection().is_some());
+        ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
+        assert!(s.builder.selection().is_none());
+        let m = ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "road" })).unwrap();
+        assert_eq!((&m["tool"], &m["shape"]), (&json!("road"), &json!("pen")));
     }
 
     /// `builder_map {clear}` is FILE > CLEAR MAP: the cells go, the
@@ -3884,10 +5106,7 @@ cells."1,1" = { kind = "wall" }"#;
         s.game.update(Input::default(), crate::PHYSICS_FIXED_DT, w, h);
         let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
         assert_eq!((status["outcome"].as_str(), status["stats"]["destroyed"].as_u64()), (Some("won"), Some(1)), "{status}");
-        let view = s.play_chrome().result.expect("the end screen");
-        let rects = crate::hud::result_layout(crate::Rect::new(0.0, 0.0, w, h), &view).buttons.expect("a level's buttons");
-        let next = rects.next.expect("the way on");
-        let at = json!({ "x": next.x + next.width / 2.0, "y": next.y + next.height / 2.0 + Layout::for_field(w, h).field.y });
+        let at = screen_button(&mut server, &tx, &mut s, "next");
         let m = ask(&mut server, &tx, &mut s, "click", at).unwrap();
         assert_eq!(m["level"]["number"], 2, "{m}");
         assert_eq!(m["mode"], "play");
@@ -3902,7 +5121,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(s.game.outcome(), crate::simulation::Outcome::Playing);
     }
 
-    /// The level select through the tools: the bar's level button and
+    /// The level select through the tools: the HUD's level button and
     /// Esc open it, a locked tile is no button, the arrows and Enter start
     /// a level reached, and `step` refuses by name while the screen stands
     /// over the round rather than waiting for frames that never run.
@@ -3919,16 +5138,21 @@ cells."1,1" = { kind = "wall" }"#;
         game.init(w, h);
         let mut s = Session::new(game);
         s.set_campaign(campaign);
-        let layout = Layout::for_field(w, h);
-        let button = crate::hud::level_button_rect(layout.panel);
-        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": button.x + 10.0, "y": button.y + 16.0 })).unwrap();
+        let button = corner_button(&mut server, &tx, &mut s, "level");
+        let m = ask(&mut server, &tx, &mut s, "click", button).unwrap();
         assert_eq!((m["levels_open"].as_bool(), m["levels_focus"].as_u64()), (Some(true), Some(2)), "{m}");
         let err = ask(&mut server, &tx, &mut s, "step", json!({ "frames": 1 })).unwrap_err();
         assert!(err.contains("level select"), "{err}");
 
-        let field = crate::Rect::new(0.0, 0.0, w, h);
-        let r = crate::level_select::tile_rect(field, 2);
-        let locked = json!({ "x": r.x + r.width / 2.0, "y": r.y + r.height / 2.0 + layout.field.y });
+        // Only the open tiles are buttons: level 3 is locked, and a press
+        // on it - where the window draws it, the chrome's area of a window
+        // the size of play's bitmap - does nothing.
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let screen = &status["ui"]["screen_buttons"];
+        assert!(screen["level_2"].is_object() && screen["level_3"].is_null() && screen["back"].is_object(), "{screen}");
+        let (ww, wh) = Layout::bare(w, h).window_size();
+        let r = crate::level_select::tile_rect(UiFrame::plain((ww as f32, wh as f32)).area, 2);
+        let locked = json!({ "x": r.x + r.width / 2.0, "y": r.y + r.height / 2.0 });
         let m = ask(&mut server, &tx, &mut s, "click", locked).unwrap();
         assert_eq!((m["levels_open"].as_bool(), m["level"]["number"].as_u64()), (Some(true), Some(2)), "a locked tile: {m}");
 
@@ -3943,17 +5167,286 @@ cells."1,1" = { kind = "wall" }"#;
         assert!(server.lockstep(), "a new round, frozen like `restart`'s");
     }
 
+    /// The builder's own camera: `status.builder.camera` reports FIT,
+    /// `builder_camera` frames a world point at a zoom, a `click` then lands
+    /// on the cell drawn under it, `fit` takes the view back, and the
+    /// round's `camera` pin never moves it.
+    #[test]
+    fn builder_camera_frames_the_canvas_and_clicks_land_through_it() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(42);
+        ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
+        enter_build(&mut server, &tx, &mut s);
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let cam = &status["builder"]["camera"];
+        assert_eq!((cam["fit"].as_bool(), cam["zoom"].as_f64()), (Some(true), Some(1.0)), "{status}");
+        assert_eq!(cam["rect"], json!({ "x": 0.0, "y": 0.0, "w": 1088.0, "h": 544.0 }));
+
+        let framed = ask(&mut server, &tx, &mut s, "builder_camera", json!({ "x": 300.0, "y": 200.0, "zoom": 3.0 })).unwrap();
+        assert_eq!(framed["fit"], false, "{framed}");
+        assert!((framed["zoom"].as_f64().unwrap() - 3.0).abs() < 1e-4, "{framed}");
+        let r = &framed["rect"];
+        let mid = (r["x"].as_f64().unwrap() + r["w"].as_f64().unwrap() / 2.0, r["y"].as_f64().unwrap() + r["h"].as_f64().unwrap() / 2.0);
+        assert!((mid.0 - 300.0).abs() <= 1.0 && (mid.1 - 200.0).abs() <= 1.0, "{framed}");
+        // The middle of the canvas is that world point: a click there paints
+        // the cell under it.
+        ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "glass" })).unwrap();
+        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": 544.0, "y": 32.0 + 272.0 })).unwrap();
+        assert_eq!(m["cell"], json!([9, 6]), "{m}");
+        let glass = crate::map::CellObject::Wall { material: crate::obstacle::Material::Glass };
+        assert_eq!(s.builder.map().cell(9, 6), Some(&glass));
+        // Only the zoom: the middle stays.
+        let zoomed = ask(&mut server, &tx, &mut s, "builder_camera", json!({ "zoom": 2.0 })).unwrap();
+        assert!((zoomed["zoom"].as_f64().unwrap() - 2.0).abs() < 1e-4);
+        // The round's pin is the round's.
+        ask(&mut server, &tx, &mut s, "camera", json!({ "zoom": 2.0 })).unwrap();
+        let report = ask(&mut server, &tx, &mut s, "builder_camera", json!({})).unwrap();
+        assert_eq!(report, zoomed, "no parameters only report, and the round's pin changed nothing");
+        let fit = ask(&mut server, &tx, &mut s, "builder_camera", json!({ "fit": true })).unwrap();
+        assert_eq!(fit["fit"], true);
+        // A zoom that cannot be: FIT is the floor, the largest cell the roof.
+        let far = ask(&mut server, &tx, &mut s, "builder_camera", json!({ "zoom": 1000.0 })).unwrap();
+        assert!(far["zoom"].as_f64().unwrap() < 1000.0 && far["cell_mm"].as_f64().unwrap() > 0.0, "{far}");
+    }
+
+    /// `builder_touch` plays frames of fingers through the builder: a
+    /// quick tap paints, a two-finger tap undoes it, spread fingers zoom,
+    /// and the tool refuses outside build mode or on a malformed frame.
+    #[test]
+    fn builder_touch_drives_the_builder_with_fingers() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(43);
+        ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
+        let refused = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [] })).unwrap_err();
+        assert!(refused.contains("build mode"), "{refused}");
+        enter_build(&mut server, &tx, &mut s);
+        // A screen where a cell is a finger's size (the window hands the
+        // builder its screen every frame; a test hands it once).
+        let screen = crate::editor::CanvasScreen { device_per_px: 3.0, points_per_px: 1.5, coarse: false };
+        let frame = crate::editor::BuilderFrame::headless((1088.0, 544.0), crate::framing::MapClass::Arena);
+        s.update_builder(&BuilderInput { screen: Some(screen), ..BuilderInput::default() }, &frame);
+        ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "iron" })).unwrap();
+        let base = s.builder.history().undo_depth() as u64;
+        let (x, y) = (12.0 * 32.0, 32.0 + 7.0 * 32.0);
+        let tap = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [[{ "id": 1, "x": x, "y": y }]] })).unwrap();
+        assert_eq!(tap["undo_depth"], base + 1, "{tap}");
+        let iron = crate::map::CellObject::Wall { material: crate::obstacle::Material::Iron };
+        assert_eq!(s.builder.map().cell(12, 7), Some(&iron));
+        let two = json!([[{ "id": 1, "x": 300.0, "y": 300.0 }], [{ "id": 1, "x": 300.0, "y": 300.0 }, { "id": 2, "x": 380.0, "y": 300.0 }]]);
+        let undone = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": two })).unwrap();
+        assert_eq!(undone["undo_depth"], base, "a two-finger tap undoes: {undone}");
+        assert_eq!(s.builder.map().cell(12, 7), None);
+        let pinch: Vec<Value> = (0..=12)
+            .map(|i| json!([{ "id": 3, "x": 500.0 - 10.0 * i as f32, "y": 300.0 }, { "id": 4, "x": 580.0 + 10.0 * i as f32, "y": 300.0 }]))
+            .collect();
+        let zoomed = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": pinch })).unwrap();
+        assert_eq!(zoomed["camera"]["fit"], false, "{zoomed}");
+        assert!(zoomed["camera"]["zoom"].as_f64().unwrap() > 2.0, "{zoomed}");
+        assert!(ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [[{ "id": 1 }]] })).unwrap_err().contains("{id, x, y}"));
+        assert!(ask(&mut server, &tx, &mut s, "builder_touch", json!({})).unwrap_err().contains("frames"));
+    }
+
+    /// `status.builder.clear` is the clear check as the builder keeps it:
+    /// the canvas's revision, not cleared until a win in the round its
+    /// PLAY started (`attempt`), then cleared with the round clock as its
+    /// par; and the bar's flag is a button `click` reaches, which opens
+    /// the CHECK panel.
+    #[test]
+    fn status_reports_the_clear_check_and_click_reaches_its_flag() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = Game::default();
+        game.seed_override = Some(3);
+        game.show_intro = false;
+        game.map = MapFile::from_toml_str("version = 1\ntanks = 1\ncells.\"3,8\" = { kind = \"start\" }\n").unwrap();
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        let mut s = Session::new(game);
+        enter_build(&mut server, &tx, &mut s);
+        let before = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap()["builder"]["clear"].clone();
+        assert_eq!(before["cleared"], false, "{before}");
+        assert_eq!(before["par"], Value::Null);
+        assert_eq!(before["revision"].as_str().map(str::len), Some(16), "{before}");
+        // The flag opens the CHECK panel.
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let flag = &status["builder"]["buttons"]["clear"];
+        let (x, y) = (flag["x"].as_f64().unwrap() + flag["w"].as_f64().unwrap() / 2.0, flag["y"].as_f64().unwrap() + flag["h"].as_f64().unwrap() / 2.0);
+        ask(&mut server, &tx, &mut s, "click", json!({ "x": x, "y": y })).unwrap();
+        assert_eq!(s.builder.open_menu(), Some("check"));
+        ask(&mut server, &tx, &mut s, "play", json!({})).unwrap();
+        let playing = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap()["builder"]["clear"].clone();
+        assert_eq!(playing["attempt"], before["revision"], "{playing}");
+        let enemy = s.game.world.query::<&crate::tank::Tank>().with::<&crate::ai::Ai>().iter().map(|t| t.owner_slot()).min().expect("an enemy");
+        ask(&mut server, &tx, &mut s, "kill", json!({ "slot": enemy })).unwrap();
+        for _ in 0..2 {
+            s.game.update(Input::default(), crate::PHYSICS_FIXED_DT, w, h);
+        }
+        // What `app.rs` does after every frame's steps.
+        s.note_outcome();
+        let after = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap()["builder"]["clear"].clone();
+        assert_eq!(after["cleared"], true, "{after}");
+        assert_eq!(after["revision"], before["revision"]);
+        assert!(after["par"].as_f64().is_some_and(|par| par >= 0.0), "{after}");
+    }
+
+    /// `builder_touch {hold: true}` leaves a painting finger down, so the
+    /// loupe stands over it in `status.builder.loupe` - over the cell the
+    /// stroke paints -, the window's frames keep it there, the next call
+    /// lifts it and the stroke is one undo step, and leaving build mode
+    /// lets held fingers go.
+    #[test]
+    fn builder_touch_holds_a_finger_for_the_loupe() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(45);
+        ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
+        enter_build(&mut server, &tx, &mut s);
+        // Cells of 7.6 mm on the glass: a finger paints, and the loupe shows.
+        let screen = crate::editor::CanvasScreen { device_per_px: 3.0, points_per_px: 1.5, coarse: false };
+        let frame = crate::editor::BuilderFrame::headless((1088.0, 544.0), crate::framing::MapClass::Arena);
+        s.update_builder(&BuilderInput { screen: Some(screen), ..BuilderInput::default() }, &frame);
+        ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "brick" })).unwrap();
+        let base = s.builder.history().undo_depth() as u64;
+        let none = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(none["builder"]["loupe"], Value::Null, "no finger, no loupe");
+        let stroke: Vec<Value> = (0..=10).map(|i| json!([{ "id": 1, "x": 300.0 + 10.0 * i as f32, "y": 300.0 }])).collect();
+        let held = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": stroke, "hold": true })).unwrap();
+        assert_eq!(held["held"], 1, "{held}");
+        assert_eq!(server.held_touches().len(), 1);
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let loupe = &status["builder"]["loupe"];
+        let under = crate::map::world_to_cell(crate::math::Vec2::new(400.0, 300.0 - 32.0));
+        assert_eq!(loupe["cell"], json!([under.0, under.1]), "over the cell under the finger: {loupe}");
+        assert!(loupe["y"].as_f64().unwrap() + loupe["h"].as_f64().unwrap() < 300.0, "above the finger: {loupe}");
+        let lifted = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [[]] })).unwrap();
+        assert_eq!(lifted["held"], 0, "{lifted}");
+        assert_eq!(lifted["undo_depth"], base + 1, "the stroke is one step: {lifted}");
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(status["builder"]["loupe"], Value::Null, "lifted, gone");
+        // Held fingers are build mode's alone.
+        let stroke: Vec<Value> = (0..=10).map(|i| json!([{ "id": 2, "x": 300.0 + 10.0 * i as f32, "y": 400.0 }])).collect();
+        ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": stroke, "hold": true })).unwrap();
+        assert_eq!(server.held_touches().len(), 1);
+        ask(&mut server, &tx, &mut s, "play", json!({})).unwrap();
+        assert!(server.held_touches().is_empty(), "play lets them go");
+    }
+
+    /// The hints follow the input a tool stands in for: a `click {touch}`
+    /// and a `builder_touch` are taps, a `key` a key press, a plain
+    /// `click` neither. A server with no window lays its chrome out with
+    /// the last (`status.ui.hints`); a window takes each once
+    /// (`take_hints`) and lays its own out with it.
+    #[test]
+    fn the_input_tools_turn_the_hints() {
+        use crate::hud::Hints;
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(46);
+        let hints = |server: &mut DevServer, s: &mut Session| ask(server, &tx, s, "status", json!({})).unwrap()["ui"]["hints"].clone();
+        assert_eq!(hints(&mut server, &mut s), "keys", "a window with a keyboard opens on the keys");
+        ask(&mut server, &tx, &mut s, "click", json!({ "x": 600.0, "y": 300.0, "touch": true })).unwrap();
+        assert_eq!(hints(&mut server, &mut s), "touch");
+        ask(&mut server, &tx, &mut s, "click", json!({ "x": 600.0, "y": 300.0 })).unwrap();
+        assert_eq!(hints(&mut server, &mut s), "touch", "a mouse press is no key");
+        ask(&mut server, &tx, &mut s, "key", json!({ "key": "tab" })).unwrap();
+        assert_eq!(hints(&mut server, &mut s), "keys");
+        assert_eq!(server.take_hints(), Some(Hints::Keys));
+        assert_eq!(server.take_hints(), None, "taken once");
+        ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
+        enter_build(&mut server, &tx, &mut s);
+        ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [[]] })).unwrap();
+        assert_eq!(hints(&mut server, &mut s), "touch");
+        assert_eq!(server.take_hints(), Some(Hints::Touch));
+    }
+
+    /// The builder's navigator is one hit test that `click` and
+    /// `builder_touch` both reach: `status.builder.navigator` says where it
+    /// stands (nowhere at FIT on an arena), a click on it puts the view's
+    /// middle on the point under it, a drag carries the view along, a
+    /// finger does what the mouse does, and none of it paints.
+    #[test]
+    fn the_navigator_is_reached_by_click_and_by_a_finger() {
+        const FIELD_MAP: &str = r#"
+version = 1
+size = [80, 45]
+cells."5,5" = { kind = "start" }
+cells."40,30" = { kind = "frog" }
+"#;
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(44);
+        ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
+        enter_build(&mut server, &tx, &mut s);
+        let arena = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(arena["builder"]["navigator"], Value::Null, "none at FIT on an arena");
+
+        ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": FIELD_MAP, "seed": 1 })).unwrap();
+        enter_build(&mut server, &tx, &mut s);
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let nav = status["builder"]["navigator"].clone();
+        assert!(nav.is_object() && nav["ui"].is_object(), "a field map's navigator stands at FIT too: {status}");
+        let n = |v: &Value, k: &str| v[k].as_f64().unwrap() as f32;
+        let at = |r: &Value, fx: f32, fy: f32| (n(r, "x") + n(r, "w") * fx, n(r, "y") + n(r, "h") * fy);
+        let centre = |s: &Session| s.builder.camera().center(&s.builder.viewport());
+        let undo = s.builder.history().undo_depth();
+        let middle = Vec2::new(40.0 * 32.0, 22.5 * 32.0);
+
+        let (x, y) = at(&nav, 0.6, 0.6);
+        let clicked = ask(&mut server, &tx, &mut s, "click", json!({ "x": x, "y": y })).unwrap();
+        assert!(clicked.get("cell").is_none(), "a press on the navigator is not on the canvas: {clicked}");
+        assert!(!s.builder.camera().is_fit(), "a press from FIT zooms in on the point");
+        let after_click = centre(&s);
+        assert!(after_click.x > middle.x && after_click.y > middle.y, "the view went right and down: {after_click:?}");
+
+        let (x2, y2) = at(&nav, 0.2, 0.3);
+        ask(&mut server, &tx, &mut s, "click", json!({ "x": x, "y": y, "drag_to": [x2, y2] })).unwrap();
+        let after_drag = centre(&s);
+        assert!(after_drag.x < after_click.x && after_drag.y < after_click.y, "the drag carried it up and left: {after_drag:?}");
+
+        // A finger, in the same window coordinates.
+        let (tx0, ty0) = at(&nav, 0.5, 0.5);
+        let (tx1, ty1) = at(&nav, 0.8, 0.8);
+        let frames = json!([[{ "id": 1, "x": tx0, "y": ty0 }], [{ "id": 1, "x": tx1, "y": ty1 }]]);
+        let touched = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": frames })).unwrap();
+        let after_touch = centre(&s);
+        assert!(after_touch.x > after_drag.x && after_touch.y > after_drag.y, "the finger moved it: {after_touch:?}");
+        assert_eq!(touched["dirty"], false, "{touched}");
+        assert_eq!(s.builder.history().undo_depth(), undo, "the navigator never paints");
+    }
+
+    /// `builder_settings {size, anchor}` resizes the canvas about the
+    /// anchor as one undo step and reports the size and the anchor;
+    /// `builder_undo` brings the dropped cells back.
+    #[test]
+    fn builder_settings_resizes_the_map_about_its_anchor() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(44);
+        ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
+        enter_build(&mut server, &tx, &mut s);
+        let before = s.builder.map().clone();
+        let depth = s.builder.history().undo_depth() as u64;
+        let r = ask(&mut server, &tx, &mut s, "builder_settings", json!({ "anchor": "bottom_right", "size": [24, 12] })).unwrap();
+        assert_eq!((r["size"].clone(), r["anchor"].clone()), (json!([24.0, 12.0]), json!("bottom_right")), "{r}");
+        // Bottom-right: the map moves 10 left and 5 up; the start at 5,5
+        // falls off, the frog at 30,15 lands at 20,10.
+        assert_eq!(s.builder.map().cell(20, 10), Some(&crate::map::CellObject::Frog));
+        assert_eq!(s.builder.map().start_cell(), None);
+        assert_eq!(s.builder.history().undo_depth() as u64, depth + 1);
+        let m = ask(&mut server, &tx, &mut s, "builder_map", json!({})).unwrap();
+        assert!(m["diff"]["settings"].as_array().unwrap().contains(&json!("size")), "{m}");
+        ask(&mut server, &tx, &mut s, "builder_undo", json!({})).unwrap();
+        assert_eq!(s.builder.map(), &before);
+        assert!(ask(&mut server, &tx, &mut s, "builder_settings", json!({ "anchor": "nowhere" })).unwrap_err().contains("top_left"));
+        assert!(ask(&mut server, &tx, &mut s, "builder_settings", json!({ "size": [24] })).unwrap_err().contains("[cols, rows]"));
+    }
+
     #[test]
     fn click_and_key_take_the_same_paths_as_the_mouse_and_keyboard() {
         let (mut server, tx) = DevServer::headless();
         let mut s = game(36);
         ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
-        let layout = Layout::for_field(W, H);
-        let button = mode_button_rect(layout.panel);
+        // Play's bitmap is the field alone.
+        let layout = Layout::bare(W, H);
         let centre = |r: crate::math::Rectangle| (r.x + r.width / 2.0, r.y + r.height / 2.0);
         // A click on BUILD opens the dialog like `build`.
-        let (bx, by) = centre(button);
-        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": bx, "y": by })).unwrap();
+        let build = corner_button(&mut server, &tx, &mut s, "build");
+        let m = ask(&mut server, &tx, &mut s, "click", build).unwrap();
         assert_eq!(m["dialog_open"], true, "{m}");
         assert_eq!(m["mode"], "play");
         // A press outside the dialog keeps playing.
@@ -3971,23 +5464,30 @@ cells."1,1" = { kind = "wall" }"#;
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": 640.0, "y": 32.0 + 400.0 })).unwrap();
         assert_eq!(m["mode"], "play", "{m}");
         assert_eq!(m["dialog_open"], false);
-        // The dialog's own buttons.
+        // The dialog's own buttons, where `status.ui.screen_buttons` puts
+        // them - centred on the window, in the UI's points.
         ask(&mut server, &tx, &mut s, "key", json!({ "key": "tab" })).unwrap();
-        let rects = leave_dialog_rects(layout.field);
+        let stay = screen_button(&mut server, &tx, &mut s, "stay");
+        let (ww, wh) = layout.window_size();
+        let rects = leave_dialog_rects(UiFrame::plain((ww as f32, wh as f32)).area);
         let (sx, sy) = centre(rects.stay);
-        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": sx, "y": sy + layout.field.y })).unwrap();
+        assert_eq!((stay["x"].as_f64(), stay["y"].as_f64()), (Some(sx as f64), Some(sy as f64)), "the rects the painter reads");
+        let m = ask(&mut server, &tx, &mut s, "click", stay).unwrap();
         assert_eq!(m["dialog_open"], false, "{m}");
         assert_eq!(m["mode"], "play");
         ask(&mut server, &tx, &mut s, "key", json!({ "key": "tab" })).unwrap();
-        let (lx, ly) = centre(rects.leave);
-        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": lx, "y": ly + layout.field.y })).unwrap();
+        let leave = screen_button(&mut server, &tx, &mut s, "leave");
+        let m = ask(&mut server, &tx, &mut s, "click", leave).unwrap();
         assert_eq!(m["mode"], "build", "{m}");
 
         // Build mode: a click on a field cell paints with the active brush,
         // a drag crosses every cell, undo is a key.
         ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "iron" })).unwrap();
-        // A cell's world position is its centre (`map::cell_to_world`).
-        let cell_centre = |c: i32, r: i32| (c as f32 * 32.0, layout.field.y + r as f32 * 32.0);
+        // The builder's canvas stands under its bar, in a window of just
+        // its size while none is drawn. A cell's world position is its
+        // centre (`map::cell_to_world`).
+        let builder = crate::editor::BuilderFrame::headless(s.builder.map().field_size(), s.builder.map().class());
+        let cell_centre = |c: i32, r: i32| (c as f32 * 32.0, builder.view.offset.y + r as f32 * 32.0);
         let base = s.builder.history().undo_depth() as u64;
         let (cx, cy) = cell_centre(10, 5);
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": cx, "y": cy })).unwrap();
@@ -4010,9 +5510,10 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(m["redo_depth"], 1);
         assert_eq!(s.builder.map().cell(10, 5), Some(&iron));
         assert!(ask(&mut server, &tx, &mut s, "click", json!({ "x": 1.0, "y": 1.0, "drag_to": [1.0] })).is_err());
-        // PLAY from the bar starts the round frozen, like `play`.
+        // PLAY from the bar starts the round frozen, like `play` - on the
+        // builder's own bitmap, its whole canvas under the bar.
         server.lockstep = false;
-        let (px, py) = centre(button);
+        let (px, py) = centre(builder.ui.rect_to_window(builder.bar().play));
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": px, "y": py })).unwrap();
         assert_eq!(m["mode"], "play", "{m}");
         assert!(server.lockstep());

@@ -35,24 +35,46 @@ pub struct BlockTexture {
 impl BlockTexture {
     /// Make the held texture `image`'s, uploading only when the stamp
     /// changed (a new round, a builder edit) and reusing the texture when
-    /// the size did not. Returns the stamp and texture for a `Sheets`.
+    /// the size did not. A copy the image's patches reach from (a builder
+    /// edit baked in place) uploads only the texels they name
+    /// (`BlockImage::changed_since`). Returns the stamp and texture for a
+    /// `Sheets`.
     pub fn sync(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, image: &BlockImage) -> Option<(u64, &Texture2D)> {
         if image.width == 0 || image.height == 0 || image.texels.len() != image.width * image.height {
             return None;
         }
-        let current = matches!(&self.held, Some((stamp, ..)) if *stamp == image.stamp);
-        if !current {
-            let bytes: Vec<u8> = image.texels.iter().flat_map(|c| [c.r, c.g, c.b, c.a]).collect();
-            let reuse = matches!(&self.held, Some((_, w, h, _)) if *w == image.width && *h == image.height);
+        let held = self.held.as_ref().map(|(stamp, w, h, _)| (*stamp, *w, *h));
+        if held.is_none_or(|(stamp, ..)| stamp != image.stamp) {
+            let reuse = held.is_some_and(|(_, w, h)| w == image.width && h == image.height);
+            let patch = held.filter(|_| reuse).and_then(|(stamp, ..)| image.changed_since(stamp));
             if !reuse {
                 let blank = Image::gen_image_color(image.width as i32, image.height as i32, Color::new(0, 0, 0, 0));
                 let texture = rl.load_texture_from_image(thread, &blank).ok()?;
                 self.held = Some((0, image.width, image.height, texture));
             }
             let (stamp, _, _, texture) = self.held.as_mut()?;
-            texture.update_texture(&bytes).ok()?;
+            match patch {
+                Some(p) if p.width > 0 && p.height > 0 => {
+                    let bytes: Vec<u8> = (p.y..p.y + p.height)
+                        .flat_map(|y| &image.texels[y * image.width + p.x..y * image.width + p.x + p.width])
+                        .flat_map(|c| [c.r, c.g, c.b, c.a])
+                        .collect();
+                    let rect = Rectangle::new(p.x as f32, p.y as f32, p.width as f32, p.height as f32);
+                    texture.update_texture_rec(rect, &bytes).ok()?;
+                }
+                Some(_) => {}
+                None => {
+                    let bytes: Vec<u8> = image.texels.iter().flat_map(|c| [c.r, c.g, c.b, c.a]).collect();
+                    texture.update_texture(&bytes).ok()?;
+                }
+            }
             *stamp = image.stamp;
         }
+        self.held.as_ref().map(|(stamp, _, _, texture)| (*stamp, texture))
+    }
+
+    /// The texture held and the stamp of the image it shows, if any.
+    pub fn held(&self) -> Option<(u64, &Texture2D)> {
         self.held.as_ref().map(|(stamp, _, _, texture)| (*stamp, texture))
     }
 }
@@ -62,11 +84,19 @@ impl BlockTexture {
 pub struct GpuCanvas<'a, D, S> {
     d: &'a mut D,
     sheets: &'a S,
+    cull: Option<Rectangle>,
 }
 
 impl<'a, D: RaylibDraw, S: Sheets> GpuCanvas<'a, D, S> {
+    /// A canvas that draws everything it is asked to.
     pub fn new(d: &'a mut D, sheets: &'a S) -> Self {
-        GpuCanvas { d, sheets }
+        Self::culled(d, sheets, None)
+    }
+
+    /// A canvas over a camera's view: `cull` is the world rectangle worth
+    /// drawing (`view::Camera::cull`), `None` for everything.
+    pub fn culled(d: &'a mut D, sheets: &'a S, cull: Option<Rectangle>) -> Self {
+        GpuCanvas { d, sheets, cull }
     }
 }
 
@@ -100,6 +130,10 @@ impl<D: RaylibDraw, S: Sheets> Canvas for GpuCanvas<'_, D, S> {
         let (w, h) = (image.width as f32, image.height as f32);
         let b = image.block as f32;
         self.d.draw_texture_pro(texture, Rectangle::new(0.0, 0.0, w, h), Rectangle::new(0.0, 0.0, w * b, h * b), Vec2::new(0.0, 0.0), 0.0, Color::WHITE);
+    }
+
+    fn cull(&self) -> Option<Rectangle> {
+        self.cull
     }
 }
 impl Pixels {

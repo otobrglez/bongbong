@@ -15,8 +15,10 @@ out vec4 finalColor;
 uniform sampler2D texture0;   // the bare ground
 uniform sampler2D cellMask;   // per map cell: r water (0 dry, 0.5 ford, 1 deep or ice), g road
 uniform float frozen;         // 1 when the rules froze the water: the ice is solid
-uniform vec2 fieldSize;       // the field, px
+uniform vec2 viewOrigin;      // the world px at the target's top-left corner
+uniform vec2 viewSize;        // the target, px: a texel per world px
 uniform vec2 cells;           // the mask's size, in cells
+uniform vec2 cellOrigin;      // the world cell the mask's first texel is: 0 for a field's own
 uniform float time;           // round seconds
 uniform float rain;           // how hard it rains
 uniform float splashRate;     // how often drops splash
@@ -72,9 +74,10 @@ float lum(vec3 c) {
     return dot(c, vec3(0.299, 0.587, 0.114));
 }
 
-// The map cell under field pixel p: cell (c, r) is centred on (c, r) * 32.
+// The map cell under field pixel p: cell (c, r) is centred on (c, r) * 32,
+// and the mask starts at cell `cellOrigin`.
 vec4 cellAt(vec2 p) {
-    return texture(cellMask, (floor((p + 16.0) / 32.0) + 0.5) / cells);
+    return texture(cellMask, (floor((p + 16.0) / 32.0) - cellOrigin + 0.5) / cells);
 }
 
 // One expanding ring per `g` px cell now and then: a drop's splash on the
@@ -99,7 +102,8 @@ vec3 drops(vec3 col, vec2 pb, float g, float chance, float life, float reach, fl
 }
 
 void main() {
-    vec2 p = vec2(fragTexCoord.x, 1.0 - fragTexCoord.y) * fieldSize;
+    // World pixels, y down (the render texture is read flipped).
+    vec2 p = viewOrigin + vec2(fragTexCoord.x, 1.0 - fragTexCoord.y) * viewSize;
     vec2 blk = floor(p / 2.0);
     vec2 pb = blk * 2.0 + 1.0;
     vec3 base = texture(texture0, fragTexCoord).rgb;

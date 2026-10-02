@@ -8,12 +8,9 @@
 
 use crate::tuning::tuning;
 use crate::ai::Intent;
-use crate::editor::{BuilderInput, CliOverrides, EditorTextures};
+use crate::editor::{BuilderInput, CanvasScreen, CliOverrides, EditorTextures};
 use crate::render::game::{Effects, Textures};
-use crate::hud::{
-    leave_button_rect, leave_dialog_rects, level_button_rect, mode_button_rect, online_button_rect, players_button_rect,
-    players_dialog_rects, restart_button_rect, BAR_FILL,
-};
+use crate::hud::{self, leave_dialog_rects, players_dialog_rects, CornerButton, CornerShape, Corners, Fade, UiFrame, BAR_FILL};
 use crate::level_select::SelectInput;
 use crate::levels::{Campaign, Levels};
 use crate::lobby::LobbyInput;
@@ -32,7 +29,8 @@ use crate::simulation::{Game, Input, PlayerCount};
 use crate::tuning;
 use crate::tank::{Dir, TankKind};
 use crate::touch::TouchPoint;
-use crate::view::{ScaleCap, View};
+use crate::framing::{Screen, Seating, SightBox, ViewRules};
+use crate::view::{Camera, FollowFrame, ScaleCap, View};
 use crate::{
     Layout,
     PHYSICS_FIXED_DT,
@@ -96,6 +94,310 @@ fn left_shift_down(rl: &RaylibHandle) -> bool {
     rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT)
 }
 
+/// Whether a key was pressed this frame, what turns the hints back to the
+/// keys (`hud::Hints`): any key but the buttons an Android phone sends from
+/// outside the game - Back, Menu and the volume keys, raylib's 4, 5, 24
+/// and 25. Drains raylib's queue of pressed keys, which nothing else reads
+/// (every key the game acts on it asks for by name, `is_key_pressed`).
+fn key_pressed(rl: &mut RaylibHandle) -> bool {
+    let mut any = false;
+    while let Some(key) = rl.get_key_pressed_number() {
+        any |= !matches!(key, 4 | 5 | 24 | 25);
+    }
+    any
+}
+
+/// The seats this window plays, the first the one its arrows are cast for
+/// (`indicators::picture`): the room's one in an online round, once there
+/// is a replica to read, else player 1 and, on a couch, player 2. A seat
+/// past the keyboard's two stands idle in a local round, a teammate on
+/// this screen rather than a seat of it.
+fn local_seats(session: &Session) -> Vec<u8> {
+    match session.mode() {
+        Driver::Online => session.online.as_ref().filter(|round| round.game().is_some()).and_then(|round| round.seat()).into_iter().collect(),
+        _ => (0..session.game.players.count().min(2) as u8).collect(),
+    }
+}
+
+/// How many of the window's units make a point - what the indicators'
+/// sizes are given in (`indicators::in_points`): one where the window is
+/// laid out in points, and where it is in device pixels, the device pixels
+/// a point is - on Android the display's density over 160 of them to the
+/// dp, on the web the canvas buffer's pixels to the CSS pixel
+/// (`web::units_per_point`).
+fn window_units_per_point(_rl: &RaylibHandle) -> f32 {
+    #[cfg(target_os = "android")]
+    let units = _rl.get_window_scale_dpi().x.max(1.0);
+    #[cfg(target_os = "emscripten")]
+    let units = web::units_per_point(_rl);
+    #[cfg(not(any(target_os = "android", target_os = "emscripten")))]
+    let units = 1.0;
+    units
+}
+
+/// The window as the chrome lays itself out in it (`hud::UiFrame`): its
+/// size, the window units a point is (`window_units_per_point`), the
+/// `ui_scale` knob and the safe area - read from SDL on iOS, whose window
+/// covers the whole screen, the Dynamic Island and the rounded corners
+/// included; on the web the band along the canvas's top that the page's
+/// own controls take on a touch screen (`web::overlay`), since the page
+/// pads the canvas with `env(safe-area-inset-*)` itself; none elsewhere,
+/// since Android's NativeActivity keeps a landscape window out of the
+/// cutout. `touch` is whether thumbs are on the glass, which makes every
+/// button a finger's size.
+fn ui_frame(rl: &mut RaylibHandle, touch: bool) -> UiFrame {
+    let window = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+    #[cfg(target_os = "ios")]
+    let insets = ios::safe_area_insets(rl).unwrap_or_default();
+    #[cfg(target_os = "emscripten")]
+    let insets = web::overlay().insets(window_units_per_point(rl));
+    #[cfg(not(any(target_os = "ios", target_os = "emscripten")))]
+    let insets = crate::hud::Insets::default();
+    UiFrame::new(window, window_units_per_point(rl), tuning().ui_scale, insets, touch)
+}
+
+/// A rectangle of the chrome's, in UI points, in the bitmap's pixels: what
+/// the off-screen arrows, laid out on the bitmap, keep out of.
+fn ui_rect_on_bitmap(ui: &UiFrame, view: &View, r: crate::math::Rectangle) -> crate::math::Rectangle {
+    let a = view.to_bitmap(ui.to_window(crate::math::Vec2::new(r.x, r.y)));
+    let b = view.to_bitmap(ui.to_window(crate::math::Vec2::new(r.x + r.width, r.y + r.height)));
+    crate::math::Rectangle::new(a.x, a.y, b.x - a.x, b.y - a.y)
+}
+
+/// This window as the framing rules see it (`framing::Screen`,
+/// docs/large-maps-follow-camera.md §3): its size in points, the device
+/// pixels a point is (raylib's window scale DPI), how dense they are and,
+/// where the platform says, how big a point is.
+///
+/// - A desktop reads the monitor the window is on: its physical width
+///   when it reports one - the density and the millimetres both follow -
+///   and otherwise a desktop's 96 points to the inch, its size unknown.
+///   GLFW gives a monitor's mode in points on macOS and in pixels
+///   elsewhere.
+/// - The web has no physical size to read. Its window is the canvas's
+///   buffer in device pixels, which `web::units_per_point` turns back into
+///   CSS pixels; on a desktop a CSS pixel is the reference pixel, 96 points
+///   to the inch, while a touch screen's page (`web::touch_screen`) is a
+///   phone or a tablet, framed as the app on that device is - fine, its
+///   size unknown -, so a room's seats in a browser and in the app see the
+///   same world.
+/// - A phone or a tablet is fine (above `view_fine_ppi`), so the zoom stays
+///   exact, its size unknown. Android's window is in device pixels, which
+///   the scale DPI turns back into points.
+fn screen(rl: &RaylibHandle) -> Screen {
+    let (width, height) = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+    #[cfg(not(target_os = "emscripten"))]
+    let dpr = Some(rl.get_window_scale_dpi().x).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(1.0);
+    #[cfg(target_os = "emscripten")]
+    {
+        let units = web::units_per_point(rl);
+        if web::touch_screen() {
+            Screen::new(width / units, height / units, units, f32::INFINITY)
+        } else {
+            Screen::new(width / units, height / units, units, 96.0 * units).with_mm_per_point(25.4 / 96.0)
+        }
+    }
+    #[cfg(target_os = "android")]
+    {
+        Screen::new(width / dpr, height / dpr, dpr, f32::INFINITY)
+    }
+    #[cfg(target_os = "ios")]
+    {
+        Screen::new(width, height, dpr, f32::INFINITY)
+    }
+    #[cfg(not(any(target_os = "emscripten", target_os = "android", target_os = "ios")))]
+    {
+        use sola_raylib::core::window::{get_current_monitor, get_monitor_physical_width, get_monitor_width};
+        let screen = Screen::new(width, height, dpr, 96.0 * dpr);
+        let monitor = get_current_monitor();
+        let mm = get_monitor_physical_width(monitor) as f32;
+        let mode = get_monitor_width(monitor) as f32;
+        let points = if cfg!(target_os = "macos") { mode } else { mode / dpr };
+        if mm > 0.0 && points > 0.0 {
+            Screen { ppi: points * dpr / (mm / 25.4), ..screen }.with_mm_per_point(mm / points)
+        } else {
+            screen
+        }
+    }
+}
+
+/// Device pixels per unit of the window's coordinates: what the
+/// framebuffer holds across one point - 2 on a Retina desktop, 1 on the
+/// web canvas and on Android, whose window is in pixels already. A
+/// followed view's sub-block shift is rounded to these.
+fn framebuffer_ratio(rl: &RaylibHandle) -> f32 {
+    let (screen, render) = (rl.get_screen_width(), rl.get_render_width());
+    if screen > 0 && render > 0 { render as f32 / screen as f32 } else { 1.0 }
+}
+
+/// Hand the page's scripts the window as this frame laid it out
+/// (`capi::bb_ui_json`): the chrome in `ui`, the bitmap through `view`, and
+/// the last press. Every frame that presents publishes, the builder's too.
+#[cfg(all(feature = "dev-tools", target_os = "emscripten"))]
+fn publish_window(rl: &RaylibHandle, session: &Session, ui: &UiFrame, layout: &Layout, view: &View, frame: u64, press: Option<crate::capi::Press>) {
+    crate::capi::publish_window(crate::capi::window_json(&crate::capi::WindowReport {
+        session,
+        ui,
+        layout,
+        view,
+        window: (rl.get_screen_width(), rl.get_screen_height()),
+        units_per_point: window_units_per_point(rl),
+        frame,
+        press,
+        page_overlay: web::overlay(),
+    }));
+}
+
+/// How a frame lands on the window (docs/large-maps-follow-camera.md): the
+/// bitmap's layout and the view that puts it on the window, and the render
+/// targets that takes. An arena - and a view the dev server pinned - is the
+/// bitmap of the whole field, fitted into whatever the window is
+/// (`View::fit_capped`). A field map is followed: its bitmap is the world
+/// this window shows, framed into the whole window, a bitmap pixel per
+/// world pixel (`FollowFrame`) - `Seating::Room` in a room's round, `Local`
+/// otherwise, the sight box the tuning table's. Play draws no bar: its HUD
+/// stands in the window's corners (`hud::corners`). The builder's bar
+/// stands on the window in UI points and its canvas under it
+/// (`editor::BuilderFrame`): an arena's field fitted there, a field map's
+/// canvas made to the shape of the window under the bar, the builder's own
+/// camera choosing what of the map it shows. While a field map's
+/// establishing shot plays (`establish.rs`) its frame keeps the follow
+/// camera going underneath, but the targets hold the whole field, a texel a
+/// world pixel, as an arena's do.
+struct Presentation {
+    /// The field it was made for, and the mode: a change of either makes it
+    /// stale (`stale`).
+    field: (f32, f32),
+    mode: Driver,
+    /// A field map's frame; `None` for the whole-field bitmap.
+    followed: Option<FollowFrame>,
+    /// Whether the targets are made for the establishing shot.
+    establishing: bool,
+    /// The view the dev server pinned, if one is.
+    pinned: Option<Camera>,
+    layout: Layout,
+    view: View,
+    /// The scene target's size and `composite`'s: a followed view's
+    /// composite holds the scene target's every texel (`Game::render`).
+    scene: (i32, i32),
+    composite: (i32, i32),
+}
+
+impl Presentation {
+    fn of(rl: &RaylibHandle, session: &Session, pinned: Option<Camera>, establishing: bool, ui: &UiFrame) -> Presentation {
+        let field = session.field_size();
+        let mode = session.mode();
+        let window = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+        let follows = pinned.is_none() && mode != Driver::Build && session.shown().map.class().follows();
+        if follows {
+            let (half_w, half_h) = tuning().sight_box_half_px();
+            let seating = if mode == Driver::Online { Seating::Room } else { Seating::Local };
+            let frame = FollowFrame::new(screen(rl), window, seating, SightBox::new(half_w, half_h), &ViewRules::current());
+            let (scene, composite) = if establishing {
+                (Camera::whole(field).target_size(), Layout::bare(field.0, field.1).window_size())
+            } else {
+                (frame.target_size(), frame.target_size())
+            };
+            return Presentation { field, mode, followed: Some(frame), establishing, pinned, layout: frame.layout, view: frame.view, scene, composite };
+        }
+        // The cap is for a window that can be any size - a desktop's, or
+        // the web page's canvas, which fills its box on a monitor too. The
+        // knob is in points, and the web's window in device pixels. A
+        // phone's or a tablet's screen is never large enough for it to
+        // bind.
+        let cap = if cfg!(any(target_os = "ios", target_os = "android")) {
+            None
+        } else {
+            let t = tuning();
+            let units = window_units_per_point(rl);
+            (t.view_max_scale > 0.0).then(|| ScaleCap { max_scale: t.view_max_scale * units, snap_half: t.view_scale_snap != 0 })
+        };
+        if mode == Driver::Build {
+            // The bar on the window under the safe area's top - and the
+            // band the web page's controls take along it on a touch screen,
+            // which the UI frame counts as one -, the canvas under it.
+            let class = session.builder.map().class();
+            let frame = crate::editor::BuilderFrame::new(*ui, field, class, cap);
+            let bitmap = frame.layout.window_size();
+            let (pinned, scene) = if class.follows() { (None, bitmap) } else { (pinned, pinned.unwrap_or(Camera::whole(field)).target_size()) };
+            return Presentation { field, mode, followed: None, establishing: false, pinned, layout: frame.layout, view: frame.view, scene, composite: bitmap };
+        }
+        // Play draws the field alone, its HUD standing in the window's
+        // corners (`hud::corners`).
+        let layout = Layout::bare(field.0, field.1);
+        let (w, h) = layout.window_size();
+        Presentation {
+            field,
+            mode,
+            followed: None,
+            establishing: false,
+            pinned,
+            layout,
+            view: View::fit_capped((w as f32, h as f32), window, cap),
+            scene: pinned.unwrap_or(Camera::whole(field)).target_size(),
+            composite: layout.window_size(),
+        }
+    }
+
+    /// The builder's frame on the window: this presentation's canvas bitmap
+    /// and view, and the UI frame its chrome is laid out in.
+    fn builder_frame(&self, ui: &UiFrame) -> crate::editor::BuilderFrame {
+        crate::editor::BuilderFrame { layout: self.layout, view: self.view, ui: *ui }
+    }
+
+    /// Whether the session has moved on to another mode or field since.
+    fn stale(&self, session: &Session) -> bool {
+        session.mode() != self.mode || session.field_size() != self.field
+    }
+
+    /// Whether the view shows less than the whole field: a followed field
+    /// map wider or taller than its view by more than half a world pixel,
+    /// or a pinned zoom - where the minimap is drawn
+    /// (docs/large-maps-follow-camera.md §7). An arena drawn whole, and a
+    /// field map no larger than a monitor's wide view, show none.
+    fn shows_part(&self) -> bool {
+        let short = |visible: f32, field: f32| visible + 0.5 < field;
+        match (&self.followed, &self.pinned) {
+            (Some(frame), _) => short(frame.framing.visible.0, self.field.0) || short(frame.framing.visible.1, self.field.1),
+            (None, Some(pin)) => !pin.shows_whole_field(),
+            (None, None) => false,
+        }
+    }
+
+    /// Whether this window draws the play minimap this frame
+    /// (`Session::minimap_on`): a round, in play or a room's, on a screen
+    /// that shows one (`minimap::MinimapRules::shown_on` - not a phone's,
+    /// as `minimap_show` says), whose view shows part of the field.
+    fn minimap_on(&self, screen: &Screen) -> bool {
+        matches!(self.mode, Driver::Play | Driver::Online) && self.shows_part() && crate::minimap::MinimapRules::current().shown_on(screen)
+    }
+
+    /// Re-create the render targets this presentation needs where their
+    /// sizes differ.
+    fn fit_targets(
+        &self,
+        rl: &mut RaylibHandle,
+        thread: &sola_raylib::prelude::RaylibThread,
+        scene_target: &mut sola_raylib::prelude::RenderTexture2D,
+        scene_size: &mut (i32, i32),
+        composite: &mut sola_raylib::prelude::RenderTexture2D,
+        composite_size: &mut (i32, i32),
+    ) {
+        if self.scene != *scene_size {
+            *scene_size = self.scene;
+            *scene_target = rl
+                .load_render_texture(thread, scene_size.0 as u32, scene_size.1 as u32)
+                .expect("failed re-creating scene render texture");
+        }
+        if self.composite != *composite_size {
+            *composite_size = self.composite;
+            *composite = rl
+                .load_render_texture(thread, composite_size.0 as u32, composite_size.1 as u32)
+                .expect("failed re-creating composite render texture");
+        }
+    }
+}
+
 /// The URL the page was opened on, as the page published it
 /// (`site/src/scripts/room.ts`). The web build's command line, in full:
 /// a browser has no argv, so the room a link names, the rooms server a
@@ -110,6 +412,18 @@ const PAGE_INVITE: &std::ffi::CStr = c"(function(){try{return String(window.bbIn
 /// language to speak (docs/localization-prd.md section 4.5).
 #[cfg(target_os = "emscripten")]
 const PAGE_LANG: &std::ffi::CStr = c"(function(){try{return String(window.bbLang||'')}catch(e){return ''}})()";
+
+/// Whether the browser asks for reduced motion, as the page published it
+/// (`site/src/scripts/motion.ts`, the `prefers-reduced-motion` media
+/// query): `reduce`, `no-preference`, or nothing.
+#[cfg(target_os = "emscripten")]
+const PAGE_MOTION: &std::ffi::CStr = c"(function(){try{return String(window.bbMotion||'')}catch(e){return ''}})()";
+
+/// Whether the page is on a touch screen, as it published it
+/// (`site/src/scripts/overlay.ts`, the query its controls move by): `1`,
+/// or nothing.
+#[cfg(target_os = "emscripten")]
+const PAGE_TOUCH: &std::ffi::CStr = c"(function(){try{return String(window.bbTouch||'')}catch(e){return ''}})()";
 
 /// This browser's reconnect key, minted and kept by the page - one per
 /// tab, so two tabs in one browser are two seats rather than one seat
@@ -190,6 +504,26 @@ fn platform_languages() -> Vec<String> {
     #[cfg(not(any(target_os = "emscripten", target_os = "ios", target_os = "android")))]
     {
         crate::text::platform_languages()
+    }
+}
+
+/// Whether this platform asks for reduced motion (`motion.rs`): the page's
+/// `prefers-reduced-motion` on the web, iOS's Reduce Motion, and nothing
+/// anywhere the answer would take more than one plain call - Android's
+/// needs JNI; macOS, Linux and Windows are left at full motion too - so
+/// the switch starts off there.
+fn platform_motion() -> Option<bool> {
+    #[cfg(target_os = "emscripten")]
+    {
+        crate::motion::from_page(&page_string(PAGE_MOTION))
+    }
+    #[cfg(target_os = "ios")]
+    {
+        Some(ios::reduce_motion())
+    }
+    #[cfg(not(any(target_os = "emscripten", target_os = "ios")))]
+    {
+        None
     }
 }
 
@@ -372,7 +706,7 @@ pub struct Args {
     tank2: Option<TankKind>,
 
     /// How many seats the round holds, 1 to `MAX_SEATS` - the players
-    /// button in the HUD bar switches between one and two later
+    /// button in the HUD's corner switches between one and two later
     /// (docs/two-players.md). Player 1 is always the arrows + Space; two
     /// players adds player 2 on WASD + Left Shift, and the seats past
     /// those two have no keys of their own: they are a room's, and stand
@@ -381,7 +715,8 @@ pub struct Args {
     players: u8,
 
     /// The window's initial size, e.g. `--resolution 1920x1080` (default:
-    /// the map's own bitmap, the field plus the HUD bar). The battlefield
+    /// the map's own bitmap - the field, under the builder's bar with
+    /// `--editor` - at 1.5x where the monitor has the room). The battlefield
     /// itself is the map's `size` and every player in a match shares it;
     /// the window only decides how large it is drawn, letterboxed so the
     /// whole field is always on screen (view.rs). Resizable afterwards;
@@ -582,6 +917,7 @@ fn open_online(args: &Args, map: &crate::map::MapFile) -> Option<(AnyRound, Opti
             return None;
         }
         let host = RoomsHost::resolve(args.rooms.as_deref());
+        let identity = Identity::new(args.nick.clone(), device_token(&args.nick));
         let target = match args.join.as_deref().map(RoomCode::parse) {
             Some(Ok(code)) => Target::Join(code),
             Some(Err(e)) => {
@@ -590,14 +926,26 @@ fn open_online(args: &Args, map: &crate::map::MapFile) -> Option<(AnyRound, Opti
             }
             // `-m` carries the whole map to the room; the lobby's own
             // `HOST` sends a shipped map's name instead.
-            None => Target::Host(RoomSetup {
-                map: map.name.clone().unwrap_or_else(|| "default".into()),
-                map_toml: args.map.as_ref().and_then(|m| m.to_toml_string().ok()),
-                mission: args.mission.unwrap_or(crate::level::Mission::Protect),
-                seed: args.seed,
-            }),
+            None => {
+                let setup = RoomSetup {
+                    map: map.name.clone().unwrap_or_else(|| "default".into()),
+                    map_toml: args.map.as_ref().and_then(|m| m.to_toml_string().ok()),
+                    mission: args.mission.unwrap_or(crate::level::Mission::Protect),
+                    seed: args.seed,
+                };
+                // The clear check: a map of one's own goes to a room only
+                // once won as it stands (`MapFile::hostable`). Refused, the
+                // room is never dialled and the lobby opens on its closed
+                // face saying why, the way a socket that never opened does.
+                if args.map.as_ref().is_some_and(|m| !m.hostable()) {
+                    let why = crate::text::text().get(crate::text::keys::NOTE_NOT_CLEARED);
+                    eprintln!("[online] {why}");
+                    let refused = Box::new(crate::net::transport::Failed::new(why)) as Box<dyn Transport>;
+                    return Some((OnlineRound::new(RoomClient::host(refused, identity, setup), "ROOM"), None));
+                }
+                Target::Host(setup)
+            }
         };
-        let identity = Identity::new(args.nick.clone(), device_token(&args.nick));
         return Some((OnlineRound::new(crate::net::client::connect(&host, identity, target), "ROOM"), None));
     }
     #[cfg(not(feature = "online"))]
@@ -721,15 +1069,13 @@ impl TuningWatch {
     }
 }
 
-/// The three ripple post-effects at one field size (their UV maths is in
-/// field pixels, so a field of another size needs them reloaded).
-fn load_ripples(rl: &mut RaylibHandle, thread: &sola_raylib::prelude::RaylibThread, width: i32, height: i32) -> (RippleFx, RippleFx, RippleFx) {
+/// The three ripple post-effects, compiled once: they measure every ring in
+/// the standard field (`shockwave::RIPPLE_FRAME`) whatever the map.
+fn load_ripples(rl: &mut RaylibHandle, thread: &sola_raylib::prelude::RaylibThread) -> (RippleFx, RippleFx, RippleFx) {
     let shock = RippleFx::load(
         rl,
         thread,
         &shader_path("shockwave.fs"),
-        width,
-        height,
         RippleTuning {
             speed: tuning().shockwave_speed,
             width: tuning().shockwave_width,
@@ -741,8 +1087,6 @@ fn load_ripples(rl: &mut RaylibHandle, thread: &sola_raylib::prelude::RaylibThre
         rl,
         thread,
         &shader_path("muzzle_flash.fs"),
-        width,
-        height,
         RippleTuning {
             speed: tuning().muzzle_flash_speed,
             width: tuning().muzzle_flash_width,
@@ -754,8 +1098,6 @@ fn load_ripples(rl: &mut RaylibHandle, thread: &sola_raylib::prelude::RaylibThre
         rl,
         thread,
         &shader_path("impact.fs"),
-        width,
-        height,
         RippleTuning {
             speed: tuning().impact_flash_speed,
             width: tuning().impact_flash_width,
@@ -784,10 +1126,25 @@ pub fn run(args: Args) {
     // string; the dev server's `lang` tool is the only later writer.
     let language = crate::text::set_language(crate::text::choose(explicit_language(&args).as_deref(), &platform_languages()));
     eprintln!("[text] language {language}");
+    // The platform's word on motion (`motion.rs`), read once like the
+    // language: the `reduce_motion` row follows it unless set.
+    crate::motion::set_platform(platform_motion());
+    // A page on a touch screen is framed as the app on that device
+    // (`screen`), read once like the motion switch.
+    #[cfg(target_os = "emscripten")]
+    web::set_touch_screen(page_string(PAGE_TOUCH).trim() == "1");
+    eprintln!(
+        "[motion] the platform asks for {}",
+        match crate::motion::platform() {
+            Some(true) => "reduced motion",
+            Some(false) => "full motion",
+            None => "nothing (full motion)",
+        }
+    );
 
     // The battlefield is the map's (`MapFile::field_size`); the bitmap the
-    // game draws is that field plus the HUD bar above it
-    // (docs/hud-and-builder-layout-design.md), and the window is whatever
+    // game draws is that field - under the builder's bar in Build
+    // (docs/hud-and-builder-layout-design.md) - and the window is whatever
     // the player makes it - the bitmap is fitted into it by `view::View`.
     // The simulation, the physics, the maps and the probe only ever see
     // the field.
@@ -815,7 +1172,22 @@ pub fn run(args: Args) {
         let (w, h) = map.field_size();
         (w.round() as i32, h.round() as i32)
     };
+    // The window of the first frame: the field alone in Play, under the
+    // builder's 32 pt bar with `--editor`.
     let bitmap = Layout::for_field(screen_width as f32, screen_height as f32).window_size();
+    // The field a desktop window opens for: the map's when it is shown
+    // whole, the standard field's when the camera follows it - a followed
+    // map is framed into any window, so its window need not hold the
+    // field, and one that tried would outgrow the monitor.
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_os = "emscripten")))]
+    let opening = {
+        let (w, h) = if map.class().follows() {
+            (crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32)
+        } else {
+            (screen_width as f32, screen_height as f32)
+        };
+        if args.editor { Layout::for_field(w, h).window_size() } else { Layout::bare(w, h).window_size() }
+    };
     // iOS: the window is the screen, and raylib's SDL backend sizes its
     // render target from the size InitWindow is asked for (it never reads
     // the window back), so the screen's point size has to go in here.
@@ -831,33 +1203,36 @@ pub fn run(args: Args) {
     // upscaled by the compositor instead, on top of `view::View`.
     #[cfg(target_os = "android")]
     let (window_width, window_height) = (0, 0);
-    // A desktop window opens at the size it will play at: the bitmap at
-    // the scale cap (1.5x the standard field), clamped to the monitor.
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    // The web: the window is the canvas's buffer, the canvas's box in
+    // device pixels (`web::follow_canvas`), which the page has laid out by
+    // the time the runtime starts.
+    #[cfg(target_os = "emscripten")]
+    let (window_width, window_height) = web::canvas_buffer().map_or(bitmap, |(size, _)| size);
+    // A desktop window opens at the size it will play at: the opening
+    // field's bitmap at the scale cap (1.5x), shrunk where the monitor has
+    // less room - never past half the bitmap, the smallest window that
+    // still reads.
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_os = "emscripten")))]
     let (window_width, window_height) = args.resolution.unwrap_or_else(|| {
-        if crate::EMBEDDED {
-            return bitmap;
-        }
         let zoom = args.zoom.unwrap_or(tuning().view_max_scale);
         let open_at = if zoom > 0.0 { zoom.min(1.5).max(1.0) } else { 1.5 };
         let monitor = sola_raylib::core::window::get_current_monitor();
         let (mw, mh) = (sola_raylib::core::window::get_monitor_width(monitor), sola_raylib::core::window::get_monitor_height(monitor));
-        let w = ((bitmap.0 as f32) * open_at).round() as i32;
-        let h = ((bitmap.1 as f32) * open_at).round() as i32;
-        if mw > 0 && mh > 0 && (w > mw - 80 || h > mh - 120) {
-            bitmap
+        let room = if mw > 0 && mh > 0 {
+            ((mw - 80) as f32 / opening.0 as f32).min((mh - 120) as f32 / opening.1 as f32)
         } else {
-            (w, h)
-        }
+            open_at
+        };
+        let scale = open_at.min(room).max(0.5);
+        (((opening.0 as f32) * scale).round() as i32, ((opening.1 as f32) * scale).round() as i32)
     });
 
     let mut builder = sola_raylib::init();
     builder.size(window_width, window_height).title(&format!("BongBong! v{}", env!("CARGO_PKG_VERSION")));
-    // On the web the canvas box keeps the bitmap's own shape (see
-    // index.astro) and raylib maps a touch against that box, so the
-    // canvas must stay the bitmap's size: a resizable web window would
-    // follow the tab instead. On iOS the window is the screen, drawn at
-    // the panel's full density (the raylib build carries
+    // On the web the window follows the canvas's box once a frame
+    // (`web::follow_canvas`); raylib's resizable flag would size it to the
+    // tab instead. On iOS the window is the screen, drawn at the panel's
+    // full density (the raylib build carries
     // tools/ios/raylib-sdl-highdpi.patch for that; screen coordinates,
     // touch included, stay in points). Native windows resize freely and
     // draw at the panel's real density.
@@ -881,8 +1256,10 @@ pub fn run(args: Args) {
         rl.get_render_height()
     );
     if !crate::EMBEDDED {
-        // Half the bitmap is the smallest window that still reads.
-        rl.set_window_min_size(bitmap.0 / 2, bitmap.1 / 2);
+        // Half the standard field's bitmap is the smallest window that
+        // still reads; a larger map is fitted or followed into it.
+        let standard = Layout::for_field(crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32).window_size();
+        rl.set_window_min_size(standard.0 / 2, standard.1 / 2);
         if args.fullscreen {
             rl.toggle_borderless_windowed();
         }
@@ -1017,7 +1394,7 @@ pub fn run(args: Args) {
         .load_texture(&thread, "static/ui/eraser.png")
         .expect("failed loading eraser texture");
 
-    let (mut shock_fx, mut muzzle_fx, mut impact_fx) = load_ripples(&mut rl, &thread, screen_width, screen_height);
+    let (mut shock_fx, mut muzzle_fx, mut impact_fx) = load_ripples(&mut rl, &thread);
     // The plasma orb and flame jet shaders. A driver that cannot compile
     // them still plays: the bolt flies as its baked sprite and the stream
     // is its particles.
@@ -1029,25 +1406,39 @@ pub fn run(args: Args) {
         }
     };
     // The weather's passes (docs/weather.md). A driver that cannot compile
-    // them draws every sky clear; the round plays the same either way.
-    let mut weather_fx = match crate::render::weather::WeatherFx::load(&mut rl, &thread) {
-        Ok(w) => Some(w),
-        Err(e) => {
-            eprintln!("[render] weather shaders unavailable, every sky is clear: {e}");
-            None
-        }
-    };
+    // them draws every sky without them (`weather::plain`), so the night
+    // stays dark there too; the round plays the same either way.
+    let mut weather_fx = crate::render::weather::WeatherFx::load(&mut rl, &thread);
+    // The world an arena shows past its field in the window's margins
+    // (`margin.rs`): made for each round's floor and kept.
+    let mut margin_fx = crate::render::margin::MarginFx::default();
     // The short-lived particle layer lives here rather than on `Game`:
     // it is presentation only, so nothing in the simulation can see it and
     // it is free to use `rand::rng()` (see fx.rs). The web build starts at
     // a lower density - wasm is the tighter budget and a dense wave is
     // where that shows.
     let mut fx = crate::fx::Fx::default();
+    // What the screen cannot see (indicators.rs, docs/large-maps-follow-
+    // camera.md section 7): a memory per local seat on this screen, fed
+    // every step's events like the particle layer - presentation only, and
+    // a new round, seat or replica starts it over by itself.
+    let mut awareness = crate::indicators::ScreenAwareness::default();
     // The GPU copies of the floor shade the round and the builder bake
     // (`ground::GroundGrid::shade`): uploaded once per bake, a new round or
     // a builder edit, and drawn in one call.
     let mut round_shade = crate::render::canvas::BlockTexture::default();
     let mut builder_shade = crate::render::canvas::BlockTexture::default();
+    // The minimaps (minimap.rs): the round's, baked once per round and
+    // patched where a tile dies, and the builder's navigator's, repainted
+    // with every stroke - each uploaded only where it changed.
+    let mut round_minimap = crate::minimap::RoundMinimap::default();
+    let mut round_minimap_texture = crate::render::canvas::BlockTexture::default();
+    let mut builder_minimap_texture = crate::render::canvas::BlockTexture::default();
+    // The Load list's thumbnails, held only while the list shows them.
+    let mut builder_thumbnails = crate::editor::ThumbnailTextures::default();
+    // The builder's own scene target, for a canvas zoomed or a field map
+    // (`editor::render::BuilderScene`): made when first needed.
+    let mut builder_scene = crate::editor::render::BuilderScene::default();
     // iOS dev-tools builds report frame time to the console every few
     // seconds: the phone has no keyboard for the overlay cycle and its dev
     // server is not reachable from the Mac, so the console is the one
@@ -1060,18 +1451,38 @@ pub fn run(args: Args) {
         let _ = tuning::submit_json(r#"{"fx_density": 0.5}"#);
     }
 
+    // Pass 1's target: the part of the world the frame shows (`Camera`), a
+    // texel per world pixel - the whole field for an arena, the view and a
+    // block of margin for a followed field map. Re-created when that
+    // changes size (a dev-server `restart` on a map of another size, the
+    // builder loading one, a `camera` pin, a resized window).
+    let mut scene_size = Camera::whole((screen_width as f32, screen_height as f32)).target_size();
     let mut scene_target = rl
-        .load_render_texture(&thread, screen_width as u32, screen_height as u32)
+        .load_render_texture(&thread, scene_size.0 as u32, scene_size.1 as u32)
         .expect("failed creating scene render texture");
-    // The composited bitmap - the field plus the bar - that `view::present`
-    // fits into the window. Both targets are re-created when the field
-    // changes size (a dev-server `restart` on a map of another size, or
-    // the builder loading one).
+    // The composited bitmap - the field, under the builder's bar in Build -
+    // that `view::present` fits into the window, or a followed view's world
+    // alone, the scene target's size (`Game::render`); re-created when that
+    // size changes.
+    let mut composite_size = bitmap;
     let mut composite = rl
         .load_render_texture(&thread, bitmap.0 as u32, bitmap.1 as u32)
         .expect("failed creating composite render texture");
-    let mut target_field = (screen_width as f32, screen_height as f32);
+    // The follow camera's state (follow.rs), and what it last followed in -
+    // a room's round or the local one, and the map - so a change of either
+    // cuts.
+    let mut follow = crate::follow::Follow::default();
+    let mut followed_in: Option<(bool, Option<String>, (f32, f32))> = None;
+    // A field map's establishing shot (establish.rs): the round it opens
+    // and how far it has come.
+    let mut establish = crate::establish::Establish::default();
+    // The second half of a couch's split screen (follow::Split): its own
+    // scene target and composite at the first half's size, made the first
+    // time a split opens and kept for the next.
+    let mut split_targets: Option<(sola_raylib::prelude::RenderTexture2D, sola_raylib::prelude::RenderTexture2D, (i32, i32))> = None;
     let mut touch = crate::touch::TouchScheme::default();
+    // How far each corner cluster has faded under the fight (`hud::Fade`).
+    let mut fade = Fade::default();
     let touch_from_mouse = args.touch_from_mouse;
 
     // `--zoom` is the `view_max_scale` knob, staged like a `--tuning`
@@ -1217,6 +1628,10 @@ pub fn run(args: Args) {
     // the press edge has to be found here - one tap must produce exactly one
     // builder stroke or button press.
     let mut touch_held_last_frame = false;
+    // Which input the hints name (`hud::Hints`): the last one used - a
+    // touch landing, a key pressed - opening on taps where there is no
+    // keyboard or the mouse stands in for a finger.
+    let mut hints = crate::hud::Hints::at_start(!crate::KEYBOARD_AVAILABLE || touch_from_mouse);
 
     // game_loop::run drives a plain `while !window_should_close()` loop on
     // native, and hands this closure to emscripten's main loop on web - same
@@ -1265,7 +1680,19 @@ pub fn run(args: Args) {
     // What `bb_net_stats` hands the page: the online round's readings.
     #[cfg(feature = "dev-tools")]
     let mut net_stats = crate::capi::NetStatsFeed::default();
+    // The frames drawn and the last press the window saw, which
+    // `bb_ui_json` reports.
+    #[cfg(all(feature = "dev-tools", target_os = "emscripten"))]
+    let (mut frames_drawn, mut last_press): (u64, Option<crate::capi::Press>) = (0, None);
     game_loop::run(rl, thread, target_fps, move |rl, thread| {
+        // The web's window is the canvas's box: it follows a resize, a
+        // rotation or full screen before anything reads its size.
+        #[cfg(target_os = "emscripten")]
+        web::follow_canvas(rl);
+        #[cfg(all(feature = "dev-tools", target_os = "emscripten"))]
+        {
+            frames_drawn += 1;
+        }
         // Frame boundary, first: dev-server requests (state reads and
         // writes, tuning patches, an armed step or screenshot), so anything
         // they stage lands in this same frame.
@@ -1275,43 +1702,56 @@ pub fn run(args: Args) {
             dev.before_frame(&mut session, width, height);
         }
         // The field is the live mode's map's (a `restart` above may have
-        // just swapped it); the bitmap is the field plus the bar, and the
-        // view fits that bitmap into whatever the window is right now.
+        // just swapped it).
         let (width, height) = session.field_size();
-        let layout = Layout::for_field(width, height);
-        if (width, height) != target_field {
-            let bitmap = layout.window_size();
-            scene_target = rl
-                .load_render_texture(thread, width as u32, height as u32)
-                .expect("failed re-creating scene render texture");
-            composite = rl
-                .load_render_texture(thread, bitmap.0 as u32, bitmap.1 as u32)
-                .expect("failed re-creating composite render texture");
-            let (s, m, i) = load_ripples(rl, thread, width as i32, height as i32);
-            shock_fx = s;
-            muzzle_fx = m;
-            impact_fx = i;
-            target_field = (width, height);
+        // How the frame lands on the window (`Presentation`), and the
+        // render targets that takes. A view the dev server's `camera` tool
+        // pinned outranks the map.
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        let pinned = dev.as_ref().and_then(|dev| dev.pinned_camera((width, height)));
+        #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
+        let pinned: Option<Camera> = None;
+        // Raw pointer state, shared by every mode. Touch is edge-detected
+        // by hand because raylib reports a held finger as a point count,
+        // not a press.
+        let touching = rl.get_touch_point_count() > 0;
+        let touch_pressed = touching && !touch_held_last_frame;
+        touch_held_last_frame = touching;
+        let mouse_pressed = rl.is_mouse_button_pressed(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
+        let mouse_held = rl.is_mouse_button_down(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
+        // The hints follow the input last used: a touch landing - or the
+        // mouse's press standing in for one - turns them to taps, a key
+        // turns them back; the dev server's `key`, `builder_touch` and
+        // `click {touch}` stand in for the same.
+        hints = hints.follow(touch_pressed || (touch_from_mouse && mouse_pressed), key_pressed(rl));
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        if let Some(used) = dev.as_mut().and_then(|dev| dev.take_hints()) {
+            hints = used;
         }
-        // The cap is a desktop matter: an embedded build (web, iOS) draws
-        // the bitmap into a canvas or screen that is never larger than it.
-        let cap = if crate::EMBEDDED {
-            None
-        } else {
-            let t = tuning();
-            (t.view_max_scale > 0.0).then(|| ScaleCap { max_scale: t.view_max_scale, snap_half: t.view_scale_snap != 0 })
-        };
-        let view = View::fit_capped(
-            {
-                let (w, h) = layout.window_size();
-                (w as f32, h as f32)
-            },
-            (rl.get_screen_width() as f32, rl.get_screen_height() as f32),
-            cap,
-        );
+        // The window the chrome lays itself out in (`hud::UiFrame`): its
+        // size in points, its safe area, and whether thumbs are on the
+        // glass - a build with no keyboard, `--touch-from-mouse`, a touch
+        // seen this session or one landing now (`TouchScheme::touch_chrome`:
+        // the frame a finger lands on is already the one it lifts from) -,
+        // and the hints. The builder's canvas stands under its bar, so the
+        // frame is laid out first.
+        let touch_screen = touch.touch_chrome(crate::KEYBOARD_AVAILABLE, touch_from_mouse, touching);
+        let ui = ui_frame(rl, touch_screen).with_hints(hints);
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        if let Some(dev) = &mut dev {
+            dev.publish_ui(ui);
+        }
+        let mut plan = Presentation::of(rl, &session, pinned, establish.showing(), &ui);
+        plan.fit_targets(rl, thread, &mut scene_target, &mut scene_size, &mut composite, &mut composite_size);
+        let (mut layout, mut view) = (plan.layout, plan.view);
         if !crate::EMBEDDED && rl.is_key_pressed(KeyboardKey::KEY_F11) {
             rl.toggle_borderless_windowed();
         }
+        // The minimap's slot in the right cluster, which the hit tests and
+        // the painter read alike (`PlayChrome::minimap`): this screen, this
+        // view.
+        let this_screen = screen(rl);
+        session.minimap_on = plan.minimap_on(&this_screen);
         // Then land any tuning edits staged since last frame (dev panel
         // via capi.rs, the `--tuning` file watch, or the dev server)
         // before the simulation reads the table, so a frame never sees two
@@ -1341,29 +1781,39 @@ pub fn run(args: Args) {
                 duration: t.impact_flash_duration,
             });
         }
-        // Raw pointer state, shared by both modes. Touch is edge-detected
-        // by hand because raylib reports a held finger as a point count,
-        // not a press.
-        let touching = rl.get_touch_point_count() > 0;
-        let touch_pressed = touching && !touch_held_last_frame;
-        touch_held_last_frame = touching;
-        let mouse_pressed = rl.is_mouse_button_pressed(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
-        let mouse_held = rl.is_mouse_button_down(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
-        // Every pointer is read in bitmap pixels: the bar, the dialogs and
-        // the builder hit-test there and never learn what the window is.
-        let pointer = view.to_bitmap(if touching { rl.get_touch_position(0).into() } else { rl.get_mouse_position().into() });
-        // This frame's touch points for the touch scheme, ids included so
-        // a stick follows its own finger. `--touch-from-mouse` stands a
-        // held left button in for one.
-        let mut touch_points: Vec<TouchPoint> = (0..rl.get_touch_point_count())
-            .map(|i| TouchPoint { id: rl.get_touch_point_id(i), pos: view.to_bitmap(rl.get_touch_position(i).into()) })
-            .collect();
-        if touch_from_mouse && mouse_held && touch_points.is_empty() {
-            touch_points.push(TouchPoint { id: -1, pos: view.to_bitmap(rl.get_mouse_position().into()) });
+        // A pointer is read on the window, where the builder takes it (its
+        // frame puts it on the canvas or on its chrome), and in UI points,
+        // where the corners' buttons, the dialogs, the end screen, the
+        // level select and the lobby stand.
+        let window_pointer: crate::math::Vec2 = if touching { rl.get_touch_position(0).into() } else { rl.get_mouse_position().into() };
+        let ui_pointer = ui.to_ui(window_pointer);
+        // The corners as this frame finds them (`hud::corners`), the one
+        // geometry the painter draws and these hit tests read. A touch that
+        // lands on either cluster is the HUD's, never a stick or a shot.
+        let corners = CornerShape::of(&session.play_chrome(), session.shown().players.count()).map(|shape| hud::corners(&ui, &shape));
+        let corner_hit = corners.as_ref().and_then(|c| c.hit(ui_pointer));
+        let keep_out: Vec<crate::math::Rectangle> = corners.iter().flat_map(Corners::keep_out).collect();
+        touch.set_keep_out(&keep_out);
+        // This frame's touch points, ids included so a stick follows its
+        // own finger: on the window in UI points for the touch scheme,
+        // which lives there like the HUD, and on the window itself for the
+        // builder's gestures. `--touch-from-mouse` stands a held left
+        // button in for one.
+        let mut window_touches: Vec<(i32, crate::math::Vec2)> =
+            (0..rl.get_touch_point_count()).map(|i| (rl.get_touch_point_id(i), rl.get_touch_position(i).into())).collect();
+        if touch_from_mouse && mouse_held && window_touches.is_empty() {
+            window_touches.push((-1, rl.get_mouse_position().into()));
         }
+        let touch_points: Vec<TouchPoint> = window_touches.iter().map(|&(id, at)| TouchPoint { id, pos: at }).collect();
+        let ui_touch_points: Vec<TouchPoint> = window_touches.iter().map(|&(id, at)| TouchPoint { id, pos: ui.to_ui(at) }).collect();
         let steer_right = crate::TOUCH_STEER_RIGHT;
         let pressed = mouse_pressed || touch_pressed;
         let held = mouse_held || touching;
+        #[cfg(all(feature = "dev-tools", target_os = "emscripten"))]
+        if pressed {
+            let count = last_press.map_or(1, |p| p.count + 1);
+            last_press = Some(crate::capi::Press { count, at: window_pointer, touch: touch_pressed });
+        }
         let tab = rl.is_key_pressed(KeyboardKey::KEY_TAB);
         let ctrl = rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL)
             || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL)
@@ -1384,10 +1834,10 @@ pub fn run(args: Args) {
                     // is up, and a press on it is nobody's shot - neither
                     // the round's it closes back onto nor the next level's.
                     if pressed {
-                        touch.claim(&touch_points);
+                        touch.claim(&ui_touch_points);
                     }
                     let input = SelectInput {
-                        pointer: Some(layout.to_field(pointer)),
+                        pointer: Some(ui_pointer),
                         pressed,
                         left: rl.is_key_pressed(KeyboardKey::KEY_LEFT),
                         right: rl.is_key_pressed(KeyboardKey::KEY_RIGHT),
@@ -1396,16 +1846,18 @@ pub fn run(args: Args) {
                         enter: rl.is_key_pressed(KeyboardKey::KEY_ENTER),
                         escape: rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab,
                     };
-                    session.update_level_select(&input, layout.field);
+                    session.update_level_select(&input, ui.area);
                 } else if session.players_dialog {
-                    let rects = players_dialog_rects(layout.field);
-                    let field_p = layout.to_field(pointer);
+                    let rects = players_dialog_rects(ui.area);
                     if pressed {
-                        if rects.one.contains(field_p) {
+                        // The dialog's own press is nobody's shot: ONE or
+                        // TWO starts a round under the finger.
+                        touch.claim(&ui_touch_points);
+                        if rects.one.contains(ui_pointer) {
                             session.answer_players(PlayerCount::ONE);
-                        } else if rects.two.contains(field_p) {
+                        } else if rects.two.contains(ui_pointer) {
                             session.answer_players(PlayerCount::TWO);
-                        } else if !rects.panel.contains(field_p) {
+                        } else if !rects.panel.contains(ui_pointer) {
                             session.close_players_dialog();
                         }
                     }
@@ -1423,16 +1875,13 @@ pub fn run(args: Args) {
                         session.close_players_dialog();
                     }
                 } else if session.dialog {
-                    let rects = leave_dialog_rects(layout.field);
-                    let field_p = layout.to_field(pointer);
+                    let rects = leave_dialog_rects(ui.area);
                     if pressed {
                         // The dialog's own press is nobody's shot.
-                        touch.claim(&touch_points);
-                        if rects.leave.contains(field_p) {
+                        touch.claim(&ui_touch_points);
+                        if rects.leave.contains(ui_pointer) {
                             session.answer_dialog(true);
-                        } else if rects.stay.contains(field_p)
-                            || !rects.panel.contains(field_p)
-                        {
+                        } else if rects.stay.contains(ui_pointer) || !rects.panel.contains(ui_pointer) {
                             session.answer_dialog(false);
                         }
                     }
@@ -1441,35 +1890,29 @@ pub fn run(args: Args) {
                     } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab {
                         session.answer_dialog(false);
                     }
-                } else if pressed && session.press_result(layout.to_field(pointer)) {
+                } else if pressed && session.press_result(ui_pointer, ui.area) {
                     // A level's end screen (docs/levels.md): PLAY AGAIN or
                     // the way on. The tap that pressed it must not also be
                     // the fire press that skips the next banner.
-                    touch.claim(&touch_points);
+                    touch.claim(&ui_touch_points);
                 } else if rl.is_key_pressed(KeyboardKey::KEY_ENTER) && session.enter_result() {
                     // Enter takes the way on after a win, PLAY AGAIN after
                     // a loss; R is the simulation's own restart.
                 } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) && session.press_levels() {
                     // Esc opens the level select over the round, wherever
                     // it stands (docs/levels.md).
-                } else if pressed && session.level_button().is_some() && level_button_rect(layout.panel).contains(pointer) {
-                    // The bar's level button, in the mission word's place.
+                } else if pressed && session.level_button().is_some() && corner_hit == Some(CornerButton::Level) {
+                    // The level button, in the mission word's place.
                     session.press_levels();
-                } else if tab || (pressed && mode_button_rect(layout.panel).contains(pointer)) {
+                } else if tab || (pressed && corner_hit == Some(CornerButton::Build)) {
                     session.press_build();
-                } else if crate::TWO_PLAYERS_AVAILABLE
-                    && pressed
-                    && players_button_rect(layout.panel).contains(pointer)
-                {
+                } else if crate::TWO_PLAYERS_AVAILABLE && pressed && corner_hit == Some(CornerButton::Players) {
                     session.press_players();
-                } else if crate::ONLINE_AVAILABLE && pressed && online_button_rect(layout.panel).contains(pointer) {
+                } else if crate::ONLINE_AVAILABLE && pressed && corner_hit == Some(CornerButton::Online) {
                     // The ONLINE button opens the lobby over the local
                     // round, which is left exactly where it stands.
                     session.press_online();
-                } else if !crate::KEYBOARD_AVAILABLE
-                    && pressed
-                    && restart_button_rect(layout.panel).contains(pointer)
-                {
+                } else if !crate::KEYBOARD_AVAILABLE && pressed && corner_hit == Some(CornerButton::Restart) {
                     // The RESTART button stands in for the R key: staged the
                     // way the dev panel's button is, it becomes this frame's
                     // `Input::restart_pressed`.
@@ -1477,76 +1920,145 @@ pub fn run(args: Args) {
                 }
             }
             Driver::Lobby => {
-                // The lobby's own screen: the pointer is already in
-                // bitmap space, and its rects are the field's.
+                // The lobby's own screen, in UI points like its rects.
+                // Its touches are its own, and a finger still down when
+                // START, REMATCH or LEAVE hands the window to a round is
+                // nobody's stick or shot there.
+                touch.claim(&ui_touch_points);
                 let mut typed = String::new();
                 while let Some(c) = rl.get_char_pressed() {
                     typed.push(c);
                 }
                 let input = LobbyInput {
-                    pointer: Some(layout.to_field(pointer)),
+                    pointer: Some(ui_pointer),
                     pressed,
                     typed,
                     backspace: rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE),
                     enter: rl.is_key_pressed(KeyboardKey::KEY_ENTER),
                     escape: rl.is_key_pressed(KeyboardKey::KEY_ESCAPE),
                 };
-                session.update_lobby(&input, layout.field, dt);
+                session.update_lobby(&input, ui.area, dt);
             }
             Driver::Online => {
-                // A round belongs to its room: the bar carries one
+                // A round belongs to its room: the corners carry one
                 // button, `LEAVE`, and Esc does the same thing - the
                 // seat goes back and the window comes out at the local
-                // round exactly where it stood. A press on the bar is
+                // round exactly where it stood. A press on the corners is
                 // never a play input, so the hit test is safe here.
-                let left = pressed && leave_button_rect(layout.panel).contains(pointer);
+                let left = pressed && corner_hit == Some(CornerButton::Leave);
                 if left || rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
                     session.leave_online();
                 }
             }
             Driver::Build => {
+                // Every touch is the builder's, and one still down when
+                // PLAY or PLAY HERE starts a round under it is nobody's
+                // stick or shot there - it would skip the round's banner.
+                touch.claim(&ui_touch_points);
                 let mut typed = String::new();
                 while let Some(c) = rl.get_char_pressed() {
                     typed.push(c);
                 }
+                // The arrows pan the canvas while held, each the way it
+                // points.
+                let axis = |less: KeyboardKey, more: KeyboardKey| (rl.is_key_down(more) as i32 - rl.is_key_down(less) as i32) as f32;
                 let input = BuilderInput {
-                    pointer: Some(pointer),
+                    pointer: Some(window_pointer),
                     pressed,
                     held,
                     right_pressed: rl.is_mouse_button_pressed(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_RIGHT),
                     right_held: rl.is_mouse_button_down(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_RIGHT),
+                    middle_held: rl.is_mouse_button_down(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_MIDDLE),
+                    space_held: rl.is_key_down(KeyboardKey::KEY_SPACE),
                     wheel: rl.get_mouse_wheel_move(),
+                    zoom_in: rl.is_key_pressed(KeyboardKey::KEY_EQUAL) || rl.is_key_pressed(KeyboardKey::KEY_KP_ADD),
+                    zoom_out: rl.is_key_pressed(KeyboardKey::KEY_MINUS) || rl.is_key_pressed(KeyboardKey::KEY_KP_SUBTRACT),
+                    pan_keys: crate::math::Vec2::new(
+                        axis(KeyboardKey::KEY_LEFT, KeyboardKey::KEY_RIGHT),
+                        axis(KeyboardKey::KEY_UP, KeyboardKey::KEY_DOWN),
+                    ),
                     escape: rl.is_key_pressed(KeyboardKey::KEY_ESCAPE),
                     enter: rl.is_key_pressed(KeyboardKey::KEY_ENTER),
                     backspace: rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE),
                     undo: ctrl && rl.is_key_pressed(KeyboardKey::KEY_Z),
                     redo: ctrl && rl.is_key_pressed(KeyboardKey::KEY_Y),
+                    copy: ctrl && rl.is_key_pressed(KeyboardKey::KEY_C),
+                    cut: ctrl && rl.is_key_pressed(KeyboardKey::KEY_X),
+                    paste: ctrl && rl.is_key_pressed(KeyboardKey::KEY_V),
+                    delete: rl.is_key_pressed(KeyboardKey::KEY_DELETE),
                     typed,
+                    // The fingers themselves, ids and all - the builder's
+                    // gestures read every one (`editor::gesture`), and
+                    // `--touch-from-mouse` stands a held left button in
+                    // for one.
+                    touches: touch_points.clone(),
+                    dt,
+                    // The screen the canvas is measured on: its zoom steps
+                    // in device pixels, its touch sizes in points.
+                    screen: Some(CanvasScreen {
+                        device_per_px: view.scale * framebuffer_ratio(rl),
+                        points_per_px: view.scale / window_units_per_point(rl),
+                        coarse: screen(rl).ppi < tuning().view_fine_ppi,
+                    }),
+                };
+                // Fingers a dev server's `builder_touch {hold: true}` left
+                // down stay down across frames while the screen has none.
+                #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+                let input = match dev.as_ref().map(|dev| dev.held_touches()).filter(|held| !held.is_empty() && input.touches.is_empty()) {
+                    Some(held) => BuilderInput { pointer: held.first().map(|t| t.pos), pressed: false, held: true, touches: held.to_vec(), ..input },
+                    None => input,
                 };
                 if tab {
                     session.toggle();
                 } else {
-                    session.update_builder(&input, &layout);
+                    session.update_builder(&input, &plan.builder_frame(&ui));
                 }
             }
         }
 
+        // A press this frame may have changed what the window shows -
+        // BUILD, PLAY, a level started on another map: the frame presents
+        // that rather than what it began with (its presses were hit-tested
+        // on what was on screen).
+        if plan.stale(&session) {
+            #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+            let pinned = dev.as_ref().and_then(|dev| dev.pinned_camera(session.field_size()));
+            #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
+            let pinned: Option<Camera> = None;
+            plan = Presentation::of(rl, &session, pinned, establish.showing(), &ui);
+            plan.fit_targets(rl, thread, &mut scene_target, &mut scene_size, &mut composite, &mut composite_size);
+            (layout, view) = (plan.layout, plan.view);
+            session.minimap_on = plan.minimap_on(&this_screen);
+        }
+
+        // The Load list's thumbnails, every frame, so the frame the list
+        // closes - or the builder is left - lets their textures go.
+        builder_thumbnails.sync(rl, thread, &session.builder);
+
         if session.mode() == Driver::Build {
-            // Nothing is steering while the builder is up, but the scheme
+            // Nothing is steering while the builder is up - every touch is
+            // its own, so the scheme's area is empty -, but the scheme
             // still sees the frame so a finger lifted here is not a stick
             // still held when play resumes - on a fresh clock, owing no
             // step and no press.
-            touch.update(&touch_points, &layout, steer_right, dt);
+            touch.update(&ui_touch_points, crate::Rect::new(0.0, 0.0, 0.0, 0.0), steer_right, dt);
             clock.reset();
             carried = Input::default();
+            // The builder shows its canvas through its own camera.
+            #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+            if let Some(dev) = &mut dev {
+                let camera = session.builder.view_camera(&layout);
+                dev.publish_camera(crate::follow::CameraReport { mode: crate::follow::CameraMode::Build, camera, layout, view, follow: None });
+            }
             let shade = builder_shade.sync(rl, thread, session.builder.ground().shade());
+            let minimap = builder_minimap_texture.sync(rl, thread, session.builder.minimap().image());
             session.builder.render(
                 rl,
                 thread,
                 &mut composite,
-                &view,
+                &mut builder_scene,
+                &plan.builder_frame(&ui),
                 BAR_FILL,
-                &layout,
                 &EditorTextures {
                     obstacles: &obstacles_texture,
                     props: &props_texture,
@@ -1573,6 +2085,8 @@ pub fn run(args: Args) {
                     portal: &portal_texture,
                     tanks: &tanks_texture,
                     shade,
+                    minimap,
+                    thumbnails: Some(&builder_thumbnails),
                 },
             );
             // The presented frame is the builder; a pending `screenshot`
@@ -1581,6 +2095,8 @@ pub fn run(args: Args) {
             if let Some(dev) = &mut dev {
                 dev.after_render(rl, thread, &scene_target, &session.game);
             }
+            #[cfg(all(feature = "dev-tools", target_os = "emscripten"))]
+            publish_window(rl, &session, &ui, &layout, &view, frames_drawn, last_press);
             return;
         }
 
@@ -1592,8 +2108,10 @@ pub fn run(args: Args) {
         // A touch screen drives player 1 through the same intent the
         // keyboard does; a held key still wins the direction, a tap or a
         // key both fire. Fed every frame, dialog or not, so a lifted
-        // finger is never a stick still held.
-        let touch_intent = touch.update(&touch_points, &layout, steer_right, dt);
+        // finger is never a stick still held. The scheme takes touches
+        // from the whole window, in UI points: an arena's margins are
+        // where a tablet's thumbs rest.
+        let touch_intent = touch.update(&ui_touch_points, ui.screen, steer_right, dt);
         player1.move_dir = player1.move_dir.or(touch_intent.move_dir);
         player1.fire = player1.fire || touch_intent.fire;
         let mut input = Input::two(player1, player2);
@@ -1653,6 +2171,9 @@ pub fn run(args: Args) {
         // them at their real pace.
         #[cfg_attr(not(all(feature = "dev-tools", not(target_os = "emscripten"))), allow(unused_mut))]
         let mut fx_dt = dt;
+        // How far the local round got this frame, which is how far a
+        // followed view moves: with the round, step for step.
+        let frame_before = session.game.frame();
         if session.playing() {
             #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
             let frozen = dev.as_ref().is_some_and(|dev| dev.lockstep());
@@ -1664,11 +2185,16 @@ pub fn run(args: Args) {
             } else {
                 clock.advance(dt)
             };
+            let seats = local_seats(&session);
             #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
             let advanced = match &mut dev {
                 Some(dev) => {
                     let before = session.game.frame();
-                    dev.advance(&mut session.game, input, steps, width, height, &mut |game| fx.observe_events(game));
+                    dev.advance(&mut session.game, input, steps, width, height, &mut |game| {
+                        fx.observe_events(game);
+                        follow.observe_events(game);
+                        awareness.observe_events(game, &seats);
+                    });
                     if frozen {
                         fx_dt = session.game.frame().saturating_sub(before) as f32 * PHYSICS_FIXED_DT;
                     }
@@ -1682,9 +2208,12 @@ pub fn run(args: Args) {
                 for i in 0..steps {
                     let step_input = if i == 0 { input } else { input.held_only() };
                     session.game.update(step_input, PHYSICS_FIXED_DT, width, height);
-                    // The particle layer reads each step's events before
-                    // the next step clears them.
+                    // The particle layer, the follow camera and the
+                    // indicators read each step's events before the next
+                    // step clears them.
                     fx.observe_events(&session.game);
+                    follow.observe_events(&session.game);
+                    awareness.observe_events(&session.game, &seats);
                 }
             }
             carried = if steps == 0 && !frozen { input } else { Input::default() };
@@ -1701,15 +2230,249 @@ pub fn run(args: Args) {
         // A level's end screen that has counted down takes its way: the
         // next level after a win, the same one again after a loss.
         session.follow_countdown();
+        // A level's end screen that counted down may have opened another
+        // map: present that one.
+        if plan.stale(&session) {
+            #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+            let pinned = dev.as_ref().and_then(|dev| dev.pinned_camera(session.field_size()));
+            #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
+            let pinned: Option<Camera> = None;
+            plan = Presentation::of(rl, &session, pinned, establish.showing(), &ui);
+            plan.fit_targets(rl, thread, &mut scene_target, &mut scene_size, &mut composite, &mut composite_size);
+            (layout, view) = (plan.layout, plan.view);
+            session.minimap_on = plan.minimap_on(&this_screen);
+        }
+        let field = plan.field;
         // The round on screen: the room's replica in an online round,
         // the session's own otherwise.
         let game = session.shown();
+        // The part of the world this frame shows: a pinned view, the whole
+        // field, or a field map's followed view, moved on by the time the
+        // round on screen advanced - a local round's steps, a replica's
+        // frame of real time, nothing while a dialog or the lobby holds
+        // the round still.
+        let mut establishing = false;
+        let mut shown_rect: Option<crate::math::Rectangle> = None;
+        // A couch's split screen: the second half's camera and the split,
+        // or while the establishing shot zooms into it, the second half's
+        // zoom (`establish::zoom_split`) and how far apart the follow views
+        // it lands on stand; and the world the second half shows, for the
+        // minimap.
+        let mut split_view: Option<(Camera, crate::follow::Split)> = None;
+        let mut zoom_split: Option<(View, crate::establish::ZoomSplit, f32)> = None;
+        let mut second_shown: Option<crate::math::Rectangle> = None;
+        let camera = match plan.followed {
+            Some(frame) => {
+                // The round on screen: a room's replica or the local round
+                // (which the lobby and the dialogs stand over, still), on
+                // which map.
+                let scene = (session.mode() == Driver::Online, game.map.name.clone(), field);
+                if followed_in.as_ref() != Some(&scene) {
+                    follow.cut();
+                    followed_in = Some(scene);
+                }
+                follow.observe_events(game);
+                let advanced = match session.mode() {
+                    Driver::Online => dt,
+                    _ => session.game.frame().checked_sub(frame_before).unwrap_or(0) as f32 * PHYSICS_FIXED_DT,
+                };
+                // The seats this screen plays (`local_seats`): until a
+                // room's `Welcome` the window draws the local round, where
+                // the room's seat is nobody's, and the view holds.
+                let local: Vec<usize> = local_seats(&session).into_iter().map(usize::from).collect();
+                let stage = crate::follow::Stage { visible: frame.framing.visible, field, sight: frame.sight };
+                let shot = follow.update(&crate::follow::Seats::of(game, &local), advanced, &stage, &crate::follow::FollowRules::current());
+                let device_scale = frame.device_scale(framebuffer_ratio(rl));
+                let follow_camera = Camera::following(field, shot.corner, frame.framing.visible, 1.0, device_scale);
+                // A couch pair apart: the second half's own camera.
+                let second = shot.split.map(|split| (Camera::following(field, split.corner, frame.framing.visible, 1.0, device_scale), split));
+                // The establishing shot (establish.rs): a local round's
+                // opening on a field map its view shows part of shows the
+                // whole map, then zooms down to the follow view - drawn
+                // through whole-field targets, as an arena is, and put on
+                // the window by the zoom's mapping - while the follow camera
+                // keeps going underneath, so the zoom lands where it stands.
+                let rules = crate::establish::EstablishRules::current();
+                let wanted = crate::establish::wanted(session.mode() == Driver::Play, plan.shows_part(), field, &rules);
+                let phase = establish.update(game.round_seed(), game.frame(), game.intro_timer, wanted, &rules, crate::motion::reduced());
+                establishing = phase.showing();
+                if establishing != plan.establishing {
+                    plan = Presentation::of(rl, &session, plan.pinned, establishing, &ui);
+                    plan.fit_targets(rl, thread, &mut scene_target, &mut scene_size, &mut composite, &mut composite_size);
+                    (layout, view) = (plan.layout, plan.view);
+                }
+                let camera = if establishing {
+                    let window = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+                    let whole = Camera::whole(field);
+                    let from = crate::establish::Mapping::of(&whole, crate::math::Vec2::zero(), &View::fit(field, window));
+                    let to = crate::establish::Mapping::of(&follow_camera, frame.layout.field_origin(), &frame.view);
+                    let mapping = match phase {
+                        crate::establish::Phase::Zoom(q) => crate::establish::between(from, to, q),
+                        _ => from,
+                    };
+                    // A couch pair the round opens apart: the second half
+                    // zooms from the same whole map into its own follow
+                    // view, so the zoom lands on the split screen.
+                    if let (Some((second, split)), crate::establish::Phase::Zoom(q)) = (second, phase) {
+                        let to = crate::establish::Mapping::of(&second, frame.layout.field_origin(), &frame.view);
+                        let zoom = crate::establish::between(from, to, q);
+                        if let (Some(a), Some(b)) = (shot.keeps[0], split.keeps[0]) {
+                            zoom_split = Some((zoom.view(field, window), crate::establish::zoom_split(mapping, zoom, (a, b), q), split.apart));
+                            second_shown = Some(zoom.shows(window));
+                        }
+                    }
+                    layout = Layout::bare(field.0, field.1);
+                    view = mapping.view(field, window);
+                    shown_rect = Some(mapping.shows(window));
+                    whole
+                } else {
+                    split_view = second;
+                    second_shown = second.map(|(camera, _)| camera.rect());
+                    follow_camera
+                };
+                #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+                if let Some(dev) = &mut dev {
+                    let mode = if establishing { crate::follow::CameraMode::Establishing } else { crate::follow::CameraMode::Follow };
+                    dev.publish_camera(crate::follow::CameraReport {
+                        mode,
+                        camera,
+                        layout,
+                        view,
+                        follow: Some(crate::follow::FollowReport {
+                            framing: frame.framing,
+                            seating: frame.seating,
+                            sight: frame.sight,
+                            shot,
+                            establishing: phase,
+                            second: second.map(|(camera, _)| camera),
+                        }),
+                    });
+                }
+                camera
+            }
+            None => {
+                followed_in = None;
+                let camera = plan.pinned.unwrap_or(Camera::whole(field));
+                #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+                if let Some(dev) = &mut dev {
+                    let mode = if plan.pinned.is_some() { crate::follow::CameraMode::Pinned } else { crate::follow::CameraMode::Whole };
+                    dev.publish_camera(crate::follow::CameraReport { mode, camera, layout, view, follow: None });
+                }
+                camera
+            }
+        };
         // Between the steps and the draw: the particle layer samples the
         // world the round is at (its events it read after each step),
         // then ages what is already in flight. Deliberately not inside
         // `Game` - see fx.rs.
         fx.observe(game, fx_dt);
         fx.tick(fx_dt);
+        // What the screen cannot see: a replica's events read once a frame
+        // (a local round's were read after every step), and the arrows
+        // drawn only while the camera shows less than the whole field, so
+        // an arena draws none. A touch screen keeps them out from under the
+        // thumbs.
+        let seats = local_seats(&session);
+        if session.mode() == Driver::Online {
+            awareness.observe_events(game, &seats);
+        }
+        // The chrome the frame draws, and its corners laid out on the
+        // window as this frame left it - a press may have opened a dialog
+        // or started another round since the hit tests ran.
+        let chrome = session.play_chrome();
+        let corners = CornerShape::of(&chrome, game.players.count()).map(|shape| hud::corners(&ui, &shape));
+        // A cluster fades while a tank, a shot or a blast is under it, on
+        // the frame's own time - a lockstep `step`'s, as the particles'.
+        if let Some(corners) = &corners {
+            let on_screen = hud::WorldOnScreen { camera, field_origin: layout.field_origin(), view, ui_scale: ui.scale };
+            let t = tuning();
+            let marks = hud::action_marks(game);
+            let covered = match &split_view {
+                // A split screen: each half counts what it shows on its side
+                // of the divider.
+                Some((second, split)) => {
+                    let (first, other): (Vec<_>, Vec<_>) = marks.iter().copied().partition(|&(at, _)| !split.in_second(camera.to_view(at)));
+                    let other: Vec<_> = other.into_iter().filter(|&(at, _)| split.in_second(second.to_view(at))).collect();
+                    let a = hud::covered(corners, &first, &on_screen);
+                    let b = hud::covered(corners, &other, &hud::WorldOnScreen { camera: *second, ..on_screen });
+                    [a[0] || b[0], a[1] || b[1]]
+                }
+                None => hud::covered(corners, &marks, &on_screen),
+            };
+            fade.step(covered, fx_dt, t.ui_fade_opacity, t.ui_fade_seconds);
+        }
+        // A split screen's halves draw the indicators' marks in their own
+        // worlds, first half first.
+        let mut split_marks: [Vec<crate::indicators::Fill>; 2] = [Vec::new(), Vec::new()];
+        let indicators = (matches!(session.mode(), Driver::Play | Driver::Online) && !camera.shows_whole_field()).then(|| {
+            // The bitmap's pixels to a UI point, so an arrow is its rows'
+            // size on the glass however the bitmap is scaled, at the scale
+            // the rest of the chrome is drawn at.
+            let points = ui.scale / view.scale;
+            let t = crate::indicators::in_points(&tuning(), points);
+            let field = crate::math::Rectangle::new(layout.field.x, layout.field.y, layout.field.w, layout.field.h);
+            let mut frame = crate::indicators::ViewFrame::of_camera(&camera, field, &t);
+            if touch_screen {
+                // The thumbs are where they are on the glass, whatever the
+                // UI scale: their pads are measured in the window's own
+                // points.
+                let corner = view.to_bitmap(crate::math::Vec2::zero());
+                let far = view.to_bitmap(crate::math::Vec2::new(view.window.0, view.window.1));
+                let screen = crate::math::Rectangle::new(corner.x, corner.y, far.x - corner.x, far.y - corner.y);
+                let physical = window_units_per_point(rl) / view.scale;
+                frame.keep_out.extend(crate::indicators::thumb_rests(screen, physical, &t));
+            }
+            // No arrow lands under a corner cluster or the minimap, nor
+            // under the page's own controls.
+            frame.keep_out.extend(corners.iter().flat_map(Corners::keep_out).map(|r| ui_rect_on_bitmap(&ui, &view, r)));
+            #[cfg(target_os = "emscripten")]
+            if let Some(r) = web::overlay().rect_in(window_units_per_point(rl)) {
+                let ui_rect = crate::math::Rectangle::new(r.x / ui.scale, r.y / ui.scale, r.width / ui.scale, r.height / ui.scale);
+                frame.keep_out.push(ui_rect_on_bitmap(&ui, &view, ui_rect));
+            }
+            match &split_view {
+                // A couch's split screen: each half its own seat's arrows,
+                // the other half off screen for it; the marks that lie in
+                // the world go into each half's own picture of it.
+                Some((second, split)) => {
+                    // The divider in the bitmap's pixels, where the frames
+                    // lay their arrows out.
+                    let line = split.at + crate::math::Vec2::new(field.x, field.y);
+                    let first = frame.clone().split_at(line, split.normal, &t);
+                    let mut other = crate::indicators::ViewFrame::of_camera(second, field, &t).split_at(line, split.normal * -1.0, &t);
+                    other.keep_out = first.keep_out.clone();
+                    let mut halves = awareness.pictures(game, &seats, &[first, other], points).into_iter();
+                    let (a, b) = (halves.next().unwrap_or_default(), halves.next().unwrap_or_default());
+                    split_marks = [a.world, b.world];
+                    crate::indicators::Picture {
+                        world: Vec::new(),
+                        screen: a.screen.into_iter().chain(b.screen).collect(),
+                        labels: a.labels.into_iter().chain(b.labels).collect(),
+                    }
+                }
+                None => awareness.picture(game, &seats, &frame, points),
+            }
+        });
+        // The minimap, where the corners hold its slot: the round's
+        // picture, synced to the round on screen and uploaded where it
+        // changed, and this frame's marks - its enemies the ones the
+        // arrows could point at.
+        let minimap_marks = corners.as_ref().and_then(|c| c.minimap).map(|_| {
+            let shown: &[crate::indicators::Indicators] = if indicators.is_some() { awareness.shown() } else { &[] };
+            let marks = crate::minimap::Marks::gather(game, &seats, shown, shown_rect.unwrap_or(camera.rect()));
+            crate::minimap::Marks { second_view: second_shown, ..marks }
+        });
+        let minimap_image = minimap_marks.is_some().then(|| round_minimap.sync(game));
+        let minimap_texture = minimap_image.and_then(|m| round_minimap_texture.sync(rl, thread, m.image()));
+        let minimap = match (minimap_texture, minimap_marks.as_ref(), minimap_image) {
+            (Some((_, texture)), Some(marks), Some(image)) => Some(crate::render::minimap::MinimapLayer { texture, field: image.field(), marks }),
+            _ => None,
+        };
+        // The second half's targets, the first half's size.
+        if split_view.is_some() && split_targets.as_ref().is_none_or(|(_, _, size)| *size != plan.scene) {
+            let mut make = || rl.load_render_texture(thread, plan.scene.0 as u32, plan.scene.1 as u32).expect("failed creating a split half's render texture");
+            split_targets = Some((make(), make(), plan.scene));
+        }
         let shade = round_shade.sync(rl, thread, game.ground.shade());
         game.render(
             rl,
@@ -1717,17 +2480,42 @@ pub fn run(args: Args) {
             &mut scene_target,
             &mut composite,
             &view,
+            &camera,
             BAR_FILL,
             &mut Effects {
                 shock: &mut shock_fx,
                 muzzle: &mut muzzle_fx,
                 impact: &mut impact_fx,
                 shots: shot_shaders.as_mut(),
-                weather: weather_fx.as_mut(),
+                weather: Some(&mut weather_fx),
                 fx: &fx,
                 // No stick over the lobby: the field behind it is frozen
                 // and every press there belongs to the screen.
                 touch: (session.mode() != Driver::Lobby).then_some((&touch, steer_right)),
+                indicators: indicators.as_ref(),
+                minimap,
+                // An establishing shot is drawn whole as an arena is, but
+                // zooms: no margins, which stand still round an arena.
+                margins: (!establishing).then_some(&mut margin_fx),
+                split: match (split_view, split_targets.as_mut(), zoom_split) {
+                    (Some((camera, split)), Some((scene, composite, _)), _) => Some(crate::render::game::SplitLayer::Follow {
+                        camera,
+                        scene,
+                        composite,
+                        at: split.at,
+                        normal: split.normal,
+                        apart: split.apart,
+                        marks: [&split_marks[0], &split_marks[1]],
+                    }),
+                    (_, _, Some((view, zoom, apart))) => Some(crate::render::game::SplitLayer::Zoom {
+                        view,
+                        at: zoom.at,
+                        normal: zoom.normal,
+                        alpha: zoom.alpha,
+                        apart,
+                    }),
+                    _ => None,
+                },
             },
             &Textures {
                 tanks: &tanks_texture,
@@ -1762,12 +2550,20 @@ pub fn run(args: Args) {
                 shade,
             },
             &layout,
-            &session.play_chrome(),
+            &chrome,
+            &ui,
+            fade,
         );
         // A pending screenshot reads the frame just presented.
         #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
         if let Some(dev) = &mut dev {
             dev.after_render(rl, thread, &scene_target, session.shown());
+        }
+        #[cfg(all(feature = "dev-tools", target_os = "emscripten"))]
+        publish_window(rl, &session, &ui, &layout, &view, frames_drawn, last_press);
+        // What the local round showed, for BUILD to open the builder on.
+        if session.mode() == Driver::Play {
+            session.play_view = Some(camera.rect());
         }
     });
 }
@@ -1776,6 +2572,8 @@ pub fn run(args: Args) {
 pub mod ios;
 #[cfg(target_os = "android")]
 pub mod android;
+#[cfg(target_os = "emscripten")]
+mod web;
 
 /// Frame-time sampling for the console on a phone, dev-tools builds only:
 /// no keyboard for the overlay cycle there, and the dev server binds the
@@ -1830,6 +2628,26 @@ mod tests {
         assert_eq!((0..120).map(|_| clock.advance(1.0 / 120.0)).sum::<u32>(), 60);
         let mut clock = StepClock::default();
         assert!((0..30).all(|_| clock.advance(1.0 / 30.0) == 2), "two steps per 30 Hz frame");
+    }
+
+    /// `--host -m` with a map nobody has won as it stands never dials: the
+    /// round opens closed, its note the clear check's refusal, which is
+    /// what the lobby's closed face shows.
+    #[cfg(feature = "online")]
+    #[test]
+    fn hosting_a_map_nobody_has_cleared_is_refused_before_dialling() {
+        let dir = std::env::temp_dir().join(format!("bongbong-host-{}", std::process::id()));
+        let path = dir.join("mine.toml");
+        let mut map = crate::map::MapFile::new();
+        map.set_cell(3, 8, crate::map::CellObject::Start);
+        map.save(&path).expect("the map is written");
+        let args = Args::parse_from(["bongbong", "--host", "-m", path.to_str().expect("a path")]);
+        let (mut round, rig) = open_online(&args, args.map.as_ref().expect("the map")).expect("a round");
+        assert!(rig.is_none());
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        let why = crate::text::text().get(crate::text::keys::NOTE_NOT_CLEARED);
+        assert_eq!(round.note(), Some(why.as_str()));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A stall runs the cap and forgets the rest: the next frame owes

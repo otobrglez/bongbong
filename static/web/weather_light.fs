@@ -23,12 +23,14 @@ varying vec4 fragColor;
 
 uniform sampler2D texture0;   // the field before its lights
 uniform sampler2D lightMap;   // the light map, halved: 1.0 stored is 2.0 of light
-uniform vec2 fieldSize;       // the field, px
+uniform vec2 fieldSize;       // the field, px: the sun's gradient spans it
+uniform vec2 viewOrigin;      // the world px at the target's top-left corner
+uniform vec2 viewSize;        // the target, px: a texel per world px
 uniform vec3 ambient;         // the light the map was cleared to
 uniform float bands;          // steps per unit of light above the ambient; 0 = smooth
 uniform float dither;         // 1 = dither between the steps (2x2 Bayer)
 uniform float darkness;       // how dark the ambient is, 0..1
-uniform float vignette;       // how much the field darkens toward its edges
+uniform float vignette;       // how much the view darkens toward its edges
 uniform vec3 sun;             // the low sun's warmth at the west edge, gone by the east
 
 float bayer(vec2 blk) {
@@ -48,10 +50,14 @@ float band(float x, float levels, vec2 blk, bool hard) {
 }
 
 void main() {
-    // Field pixels, y down (the render texture is read flipped).
-    vec2 p = vec2(fragTexCoord.x, 1.0 - fragTexCoord.y) * fieldSize;
+    // The target's pixels and the world's, y down (the render texture
+    // is read flipped): the steps keep to the world's blocks, the
+    // vignette frames the view.
+    vec2 vp = vec2(fragTexCoord.x, 1.0 - fragTexCoord.y) * viewSize;
+    vec2 p = viewOrigin + vp;
     vec2 blk = floor(p / 2.0);
     vec2 pb = blk * 2.0 + 1.0;
+    vec2 vb = pb - viewOrigin;
     vec3 base = texture2D(texture0, fragTexCoord).rgb;
 
     vec3 light;
@@ -59,7 +65,7 @@ void main() {
         // One reading per 2 px block, stepped above the ambient: the dark
         // itself stays flat, only what the lamps add is banded, by its
         // brightness so a lamp keeps its colour from step to step.
-        vec3 l = texture2D(lightMap, vec2(pb.x / fieldSize.x, 1.0 - pb.y / fieldSize.y)).rgb * 2.0;
+        vec3 l = texture2D(lightMap, vec2(vb.x / viewSize.x, 1.0 - vb.y / viewSize.y)).rgb * 2.0;
         vec3 lamp = max(l - ambient, vec3(0.0));
         float strength = dot(lamp, vec3(0.299, 0.587, 0.114));
         if (strength > 0.001) {
@@ -81,7 +87,7 @@ void main() {
     vec3 col = mix(base, vec3(grey) * vec3(0.78, 0.88, 1.12), 0.6 * dim);
     col *= light;
 
-    float v = length((p / fieldSize - 0.5) * vec2(1.25, 1.0));
+    float v = length((vp / viewSize - 0.5) * vec2(1.25, 1.0));
     col *= 1.0 - vignette * smoothstep(0.45, 1.05, v);
     gl_FragColor = vec4(col, 1.0);
 }

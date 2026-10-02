@@ -1,0 +1,36 @@
+# A builder stamp (src/editor/select.rs, docs/large-maps-patterns.md
+# "Selection, copy and stamps"): offered in the builder's STAMPS list,
+# where choosing it makes it the paste ghost. Not a map to play - `size`
+# is the stamp's own extent in cells, from its top-left - and it holds no
+# start, frog or gate, so putting it down never moves one. Embedded in the
+# binary (`editor::select::SHIPPED_STAMPS`), so every build offers it.
+#
+# river-bend: a one-cell river turning from south to east, 8 x 6 cells,
+# with tall grass in the crook of the bend and a pine and a tree on the
+# far bank. A one-cell line of water is drawn as a river and is a ford a
+# hull wades (docs/water.md); the ground auto-tiles it, so two bends put
+# end to end - one flipped - make a meander.
+
+version = 1
+size = [8, 6]
+
+cells."1,0" = { kind = "water" }
+cells."4,0" = { kind = "pine" }
+cells."1,1" = { kind = "water" }
+cells."1,2" = { kind = "water" }
+cells."2,2" = { kind = "water" }
+cells."6,2" = { kind = "tree" }
+cells."0,3" = { kind = "tall_grass" }
+cells."2,3" = { kind = "water" }
+cells."3,3" = { kind = "water" }
+cells."0,4" = { kind = "tall_grass" }
+cells."1,4" = { kind = "tall_grass" }
+cells."3,4" = { kind = "water" }
+cells."4,4" = { kind = "water" }
+cells."0,5" = { kind = "tall_grass" }
+cells."1,5" = { kind = "tall_grass" }
+cells."2,5" = { kind = "tall_grass" }
+cells."4,5" = { kind = "water" }
+cells."5,5" = { kind = "water" }
+cells."6,5" = { kind = "water" }
+cells."7,5" = { kind = "water" }

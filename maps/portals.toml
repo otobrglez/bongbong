@@ -2,7 +2,7 @@
 # re-saving from the map editor would drop these comments.
 #
 # Three portals in a triangle - two up in the corners, one down at the
-# bottom centre - each with a clear 3x3 of ground. Four 2x2 brick blocks
+# bottom centre - each with a clear 5x5 of ground. Four 3x3 brick blocks
 # ring the centre where the player starts with the frog just above; two
 # short iron walls beside the corner portals make each of them a real
 # shortcut around the wall rather than a detour. Enemies spawn in the
@@ -13,45 +13,70 @@
 # centre by the third portal.
 
 version = 1
+size = [48, 24]
 mission.kind = "protect"
 spawn.kind = "band"
 tanks = 5
 
-cells."17,9" = { kind = "start" }
-cells."17,5" = { kind = "frog" }
-cells."6,4" = { kind = "portal" }
-cells."27,4" = { kind = "portal" }
-cells."17,13" = { kind = "portal" }
+cells."24,13" = { kind = "start" }
+cells."24,7" = { kind = "frog" }
+cells."8,6" = { kind = "portal" }
+cells."38,6" = { kind = "portal" }
+cells."24,18" = { kind = "portal" }
 
-cells."17,2" = { kind = "pickup", pickup = "health" }
-cells."3,14" = { kind = "pickup", pickup = "ammo" }
-cells."30,14" = { kind = "pickup", pickup = "ammo" }
-cells."17,15" = { kind = "pickup", pickup = "shield" }
+cells."24,3" = { kind = "pickup", pickup = "health" }
+cells."4,20" = { kind = "pickup", pickup = "ammo" }
+cells."42,20" = { kind = "pickup", pickup = "ammo" }
+cells."24,21" = { kind = "pickup", pickup = "shield" }
 
-cells."10,6" = { kind = "wall", material = "brick" }
-cells."10,7" = { kind = "wall", material = "brick" }
-cells."11,6" = { kind = "wall", material = "brick" }
-cells."11,7" = { kind = "wall", material = "brick" }
-cells."22,6" = { kind = "wall", material = "brick" }
-cells."22,7" = { kind = "wall", material = "brick" }
-cells."23,6" = { kind = "wall", material = "brick" }
-cells."23,7" = { kind = "wall", material = "brick" }
-cells."10,10" = { kind = "wall", material = "brick" }
-cells."10,11" = { kind = "wall", material = "brick" }
-cells."11,10" = { kind = "wall", material = "brick" }
-cells."11,11" = { kind = "wall", material = "brick" }
-cells."22,10" = { kind = "wall", material = "brick" }
-cells."22,11" = { kind = "wall", material = "brick" }
-cells."23,10" = { kind = "wall", material = "brick" }
-cells."23,11" = { kind = "wall", material = "brick" }
+cells."14,8" = { kind = "wall", material = "brick" }
+cells."15,8" = { kind = "wall", material = "brick" }
+cells."16,8" = { kind = "wall", material = "brick" }
+cells."31,8" = { kind = "wall", material = "brick" }
+cells."32,8" = { kind = "wall", material = "brick" }
+cells."33,8" = { kind = "wall", material = "brick" }
+cells."14,9" = { kind = "wall", material = "brick" }
+cells."15,9" = { kind = "wall", material = "brick" }
+cells."16,9" = { kind = "wall", material = "brick" }
+cells."31,9" = { kind = "wall", material = "brick" }
+cells."32,9" = { kind = "wall", material = "brick" }
+cells."33,9" = { kind = "wall", material = "brick" }
+cells."14,10" = { kind = "wall", material = "brick" }
+cells."15,10" = { kind = "wall", material = "brick" }
+cells."16,10" = { kind = "wall", material = "brick" }
+cells."31,10" = { kind = "wall", material = "brick" }
+cells."32,10" = { kind = "wall", material = "brick" }
+cells."33,10" = { kind = "wall", material = "brick" }
+cells."14,14" = { kind = "wall", material = "brick" }
+cells."15,14" = { kind = "wall", material = "brick" }
+cells."16,14" = { kind = "wall", material = "brick" }
+cells."31,14" = { kind = "wall", material = "brick" }
+cells."32,14" = { kind = "wall", material = "brick" }
+cells."33,14" = { kind = "wall", material = "brick" }
+cells."14,15" = { kind = "wall", material = "brick" }
+cells."15,15" = { kind = "wall", material = "brick" }
+cells."16,15" = { kind = "wall", material = "brick" }
+cells."31,15" = { kind = "wall", material = "brick" }
+cells."32,15" = { kind = "wall", material = "brick" }
+cells."33,15" = { kind = "wall", material = "brick" }
+cells."14,16" = { kind = "wall", material = "brick" }
+cells."15,16" = { kind = "wall", material = "brick" }
+cells."16,16" = { kind = "wall", material = "brick" }
+cells."31,16" = { kind = "wall", material = "brick" }
+cells."32,16" = { kind = "wall", material = "brick" }
+cells."33,16" = { kind = "wall", material = "brick" }
 
-cells."9,2" = { kind = "wall", material = "iron" }
-cells."9,3" = { kind = "wall", material = "iron" }
-cells."9,4" = { kind = "wall", material = "iron" }
-cells."9,5" = { kind = "wall", material = "iron" }
-cells."9,6" = { kind = "wall", material = "iron" }
-cells."24,2" = { kind = "wall", material = "iron" }
-cells."24,3" = { kind = "wall", material = "iron" }
-cells."24,4" = { kind = "wall", material = "iron" }
-cells."24,5" = { kind = "wall", material = "iron" }
-cells."24,6" = { kind = "wall", material = "iron" }
+cells."13,3" = { kind = "wall", material = "iron" }
+cells."34,3" = { kind = "wall", material = "iron" }
+cells."13,4" = { kind = "wall", material = "iron" }
+cells."34,4" = { kind = "wall", material = "iron" }
+cells."13,5" = { kind = "wall", material = "iron" }
+cells."34,5" = { kind = "wall", material = "iron" }
+cells."13,6" = { kind = "wall", material = "iron" }
+cells."34,6" = { kind = "wall", material = "iron" }
+cells."13,7" = { kind = "wall", material = "iron" }
+cells."34,7" = { kind = "wall", material = "iron" }
+cells."13,8" = { kind = "wall", material = "iron" }
+cells."34,8" = { kind = "wall", material = "iron" }
+cells."13,9" = { kind = "wall", material = "iron" }
+cells."34,9" = { kind = "wall", material = "iron" }

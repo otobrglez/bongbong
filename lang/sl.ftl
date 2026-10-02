@@ -15,6 +15,7 @@ button-online = SPLET
 
 players-title = Koliko igralcev?
 players-keys = P1 puščice + preslednica    P2 WASD + levi Shift
+players-touch = P1 vleci + tapni    P2 WASD + levi Shift
 players-one = 1 IGRALEC
 players-two = 2 IGRALCA
 
@@ -143,6 +144,7 @@ status-waiting = { $room } { $code } - SEDEŽ { $seat }{ $rtt } - ČAKANJE NA SO
 status-offline = { $room } - BREZ POVEZAVE: { $reason }
 note-tuning-refused = nastavitve sobe niso bile sprejete: { $detail }
 note-welcome-refused = igre v sobi ni bilo mogoče zgraditi: { $detail }
+note-not-cleared = ta zemljevid še ni preigran: zmagaj ga z IGRAJ v graditelju, nato ga shrani
 
 ## Zavrnitve strežnika
 
@@ -176,6 +178,42 @@ refusal-room-closed = soba se je zaprla
 editor-build = GRADI
 editor-file = MENI
 editor-map = IGRA
+editor-fit = VSE
+editor-play-here = IGRAJ TU
+editor-check = PREGLED
+
+check-title = PREGLED ZEMLJEVIDA
+check-hint = Izberi težavo, da jo vidiš na zemljevidu. POPRAVI naredi spremembo, ki jo terja.
+check-none = NI TEŽAV
+check-fix = POPRAVI
+check-cleared = PREIGRANO
+check-not-cleared = ŠE NI PREIGRANO
+check-par = ČAS AVTORJA { $time }
+check-cleared-hint = Zmagan z IGRAJ, tak kot je. Vsaka sprememba je nova različica.
+check-not-cleared-hint = Zmagaj ga z IGRAJ, sam in brez sprememb, da ga lahko gostiš v sobi.
+
+lint-unreachable-frog = ŽABA JE NEDOSEGLJIVA
+lint-unreachable-pickup = BONUS JE NEDOSEGLJIV
+lint-gated-pickup = BONUS ZA ZIDOVI
+lint-disconnected-region = ODREZANO OBMOČJE
+lint-boxed-in-cell = ZAPRTO POLJE
+lint-spawn-band-too-tight = NI PROSTORA ZA SOVRAŽNIKE
+lint-planner-physics-mismatch = POT SKOZI ZID
+lint-narrow-corridor = OZEK PREHOD
+lint-gate-not-on-edge = VRATA NISO NA ROBU
+lint-gate-blocked = POT OD VRAT JE ZAPRTA
+lint-waves-no-gates = VALOVI BREZ VRAT
+lint-hunt-missing-enemy-frog = LOV BREZ SOVRAŽNE ŽABE
+lint-enemy-frog-unreachable = SOVRAŽNA ŽABA JE NEDOSEGLJIVA
+lint-no-start = NI ZAČETKA IGRALCA
+lint-start-penned = ZAČETEK JE ZAPRT
+lint-player2-unreachable = IGRALEC 2 JE ODREZAN
+lint-players-too-close = ZAČETKA STA PREBLIZU
+lint-portal-alone = OSAMLJEN PORTAL
+lint-portal-blocked = PORTAL JE ZAPRT
+lint-tower-at-start = STOLP POKRIVA ZAČETEK
+lint-tower-no-reach = STOLP NE DOSEŽE NIČESAR
+lint-too-many-towers = PREVEČ STOLPOV NA ENI STRANI
 editor-tool = ORODJE
 
 category-wall = ZID
@@ -201,15 +239,20 @@ settings-tier-start = RAZRED OD
 settings-tier-end = RAZRED DO
 settings-theme = TEMA
 settings-weather = VREME
+settings-width = ŠIRINA
+settings-height = VIŠINA
+settings-anchor = SIDRO
 settings-reset = PONASTAVI
 settings-auto = samodejno
 settings-cli = (cli)
 
 editor-save-as = Shrani kot:
 editor-save-hint = Enter shrani, Esc prekliče
+editor-save-hint-touch = Tapni SHRANI, zunaj za preklic
 editor-no-maps = ni zemljevidov
 editor-shipped = vgrajen
 editor-page = { $from }-{ $to } od { $n }  (kolešček)
+editor-page-touch = { $from }-{ $to } od { $n }  (tapni < ali >)
 editor-untitled = neimenovan
 
 editor-saved = shranjeno v { $name }.toml
@@ -217,6 +260,42 @@ editor-loaded = naloženo: { $name }
 editor-saving-unavailable = shranjevanje v tej izdaji ni na voljo: spremembe ostanejo v pomnilniku do konca seje
 editor-no-name = zemljevid še nima imena: uporabi SHRANI KOT
 editor-bad-name = ime "{ $name }" sme imeti le črke, števke, - in _
+editor-copied = { $n ->
+    [one] kopirana { $n } celica
+    [two] kopirani { $n } celici
+    [few] kopirane { $n } celice
+   *[other] kopiranih { $n } celic
+}
+editor-cut = { $n ->
+    [one] izrezana { $n } celica
+    [two] izrezani { $n } celici
+    [few] izrezane { $n } celice
+   *[other] izrezanih { $n } celic
+}
+editor-stamp-kept = shranjeno kot { $name } med VZORCI
+editor-stamp-empty = ničesar za shraniti: izbor je prazen
+editor-fill-too-large = preveliko za polnjenje: več kot { $n } celic
+
+editor-brush = ČOPIČ
+brush-pen = svinčnik
+brush-rect = pravokotnik
+brush-fill = polnjenje
+brush-scatter = raztros
+brush-stamps = vzorci...
+
+select-copy = KOPIRAJ
+select-cut = IZREŽI
+select-paste = PRILEPI
+select-delete = IZBRIŠI
+select-save-stamp = + VZOREC
+select-stamps = VZORCI
+select-place = POLOŽI
+select-cancel = PREKLIČI
+
+stamp-fort = trdnjava
+stamp-bunker = bunker
+stamp-river-bend = rečni zavoj
+stamp-saved = moj vzorec { $n }
 
 tool-brick = opeka
 tool-iron = železo
@@ -257,6 +336,7 @@ tool-gun_tower_enemy = s. strojnica
 tool-bio_slush = bio brozga
 tool-bio_slush_enemy = s. brozga
 tool-eraser = radirka
+tool-select = izbor
 
 tool-short-tall_grass = trava
 tool-short-oil_drum = olje

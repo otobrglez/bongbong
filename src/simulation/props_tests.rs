@@ -1135,7 +1135,7 @@ cells."22,8" = { kind = "wall", material = "wood" }
         step(&mut game, Input::default());
     }
     let burn = player_damage(&game) - before;
-    let expected = tuning().oil_pool_damage_per_second;
+    let expected = tuning().oil_pool_damage_per_second * tuning().player_armor_factor;
     assert!(burn > expected * 0.8 && burn < expected * 1.3, "a second in the pool costs about {expected}: {burn}");
 
     // The wood beside the pool is alight (it was rolled flammable at this

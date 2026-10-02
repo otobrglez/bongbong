@@ -48,7 +48,10 @@ Non-goals, for now
 - A map gallery on the site, thumbnails in the builder's load dialog or a
   level select. The renderer is designed so the CPU path *could* run in
   the wasm build later (it is plain Rust over a pixel buffer), but no page
-  or dialog is built here.
+  or dialog is built here. *Status: the builder's Load list has
+  thumbnails since, drawn from each map's minimap rather than this
+  renderer, which paints a large map in a quarter of a second -
+  docs/large-maps-follow-camera.md section 9.*
 - Window framing: no HUD bar, no letterbox, no `View` scaling. The output
   is the field the map defines.
 - Mid-round states (wrecks, fire, rubble). The devserver's `screenshot`

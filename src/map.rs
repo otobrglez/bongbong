@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::framing::MapClass;
 use crate::level::{MissionConfig, SpawnConfig};
 use crate::frog::Side;
 use crate::obstacle::{Drum, Material};
@@ -37,7 +38,7 @@ pub const CURRENT_VERSION: u32 = 1;
 /// property of the TOML shape itself (e.g. `kind = "wall"` with no
 /// `material` key fails to parse) rather than something callers have to
 /// double-check.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum CellObject {
     Wall { material: Material },
@@ -365,6 +366,46 @@ fn is_default_weather(w: &Weather) -> bool {
     *w == Weather::Clear
 }
 
+/// How the map asks to be shown (TOML: a top-level `view = "whole"` or
+/// `view = "follow"`; docs/large-maps-follow-camera.md §1): whole on every
+/// screen like an arena, or followed by a camera like a field map, over
+/// what its size says (`framing::MapClass::by_size`). Absent means by
+/// size, which is not written back, so every older file parses and
+/// re-saves unchanged. `MapFile::class` is the answer with the key applied.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MapView {
+    /// Shown whole, however big the map is.
+    Whole,
+    /// Followed by a camera, however small the map is.
+    Follow,
+}
+
+impl MapView {
+    /// Both choices, whole first.
+    pub const ALL: [MapView; 2] = [MapView::Whole, MapView::Follow];
+
+    /// The TOML spelling.
+    pub fn name(self) -> &'static str {
+        match self {
+            MapView::Whole => "whole",
+            MapView::Follow => "follow",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<MapView> {
+        MapView::ALL.iter().copied().find(|v| v.name() == s)
+    }
+
+    /// The class this choice puts a map in.
+    pub fn class(self) -> MapClass {
+        match self {
+            MapView::Whole => MapClass::Arena,
+            MapView::Follow => MapClass::Field,
+        }
+    }
+}
+
 /// A saved battlefield layout. Keys are `"<col>,<row>"` grid-cell strings
 /// (TOML tables require string keys) - only occupied cells are stored, so a
 /// mostly-empty map stays a small file.
@@ -405,6 +446,11 @@ pub struct MapFile {
     /// WEATHER row). Absent means clear, and clear is not written back.
     #[serde(default, skip_serializing_if = "is_default_weather")]
     pub weather: Weather,
+    /// How the map is shown (TOML: a top-level `view = "whole"|"follow"`).
+    /// `None`, the key absent, leaves it to the map's size (`class`) and is
+    /// not written back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<MapView>,
     /// The `[mission]` table - what ends the round (docs/maps-to-levels.md).
     /// Absent means Protect.
     #[serde(default)]
@@ -422,6 +468,14 @@ pub struct MapFile {
     /// `DEFAULT_SCREEN_HEIGHT`, so older files parse unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<(f32, f32)>,
+    /// The clear check's stamp (TOML: a `[cleared]` table the builder's
+    /// SAVE writes): the revision of this map its author won from the
+    /// builder's plain PLAY, and the par. It counts only while it names the
+    /// map's own revision (`cleared_par`) - a map edited since, by hand or
+    /// in the builder, is a new revision nobody has won. Absent, and not
+    /// written back, until a revision is cleared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleared: Option<Cleared>,
     /// Where this map came from, for display only: the file stem when
     /// `load` read it, `"default"` for the embedded map, `None` for text
     /// handed over directly (the dev server's inline `map_toml`). Never
@@ -429,6 +483,28 @@ pub struct MapFile {
     #[serde(skip)]
     pub name: Option<String>,
 }
+
+/// The most cells a map spans on either side: what an online round can
+/// carry. Positions travel as quarter pixels in an `i16`, which saturates
+/// at 8191 px (`net::wire::POSITION_MAX_PX`) - 250 cells and the tank
+/// length a wave tank starts beyond the edge - and a cell index as a
+/// `u16`, which holds 250 x 250 cells.
+pub const MAX_SIDE_CELLS: f32 = 250.0;
+
+/// The fewest cells a map spans on either side: room for a tank to stand
+/// and wander a cell clear of the border on each side. Narrower, the
+/// enemies' patrol had no ground to pick a point in and the round
+/// panicked. The builder keeps a larger floor of its own
+/// (`editor::MIN_MAP_CELLS`); this is what a hand-written or sent map is
+/// held to.
+pub const MIN_SIDE_CELLS: f32 = 8.0;
+
+/// The most cells a map drawn whole (`view = "whole"`) may span on either
+/// side: its round draws the field into a target a texel per world pixel,
+/// and 4096 texels a side is what every GPU the game runs on holds - the
+/// establishing shot's bound too (`establish::MAX_TEXELS`). A larger map
+/// asking to be seen whole is followed instead.
+pub const WHOLE_MAX_CELLS: f32 = 128.0;
 
 fn cell_key(col: i32, row: i32) -> String {
     format!("{col},{row}")
@@ -466,12 +542,107 @@ impl MapFile {
             tank2: None,
             theme: Theme::default(),
             weather: Weather::default(),
+            view: None,
             mission: MissionConfig::default(),
             spawn: SpawnConfig::default(),
             size: None,
+            cleared: None,
             name: None,
         }
     }
+
+    /// The map's revision (docs/large-maps-patterns.md, "Clear check
+    /// before sharing"): a 64-bit FNV-1a hash of its TOML in one canonical
+    /// form - every table's keys sorted, the clear stamp left out, since
+    /// it names a revision and cannot be part of one, and the display name
+    /// with it, which is never written. The same map is the same revision
+    /// in every build and on every platform, and any edit to a cell or a
+    /// setting is another one.
+    pub fn revision(&self) -> u64 {
+        let text = toml::Value::try_from(self)
+            .ok()
+            .and_then(|mut value| {
+                if let Some(table) = value.as_table_mut() {
+                    table.remove("cleared");
+                }
+                toml::to_string(&sorted_keys(value)).ok()
+            })
+            .unwrap_or_default();
+        fnv1a(text.as_bytes())
+    }
+
+    /// The par this map's stamp holds for it, in seconds: `None` without a
+    /// stamp or with one for another revision.
+    pub fn cleared_par(&self) -> Option<f64> {
+        let stamp = self.cleared.as_ref()?;
+        (stamp.revision == revision_text(self.revision())).then_some(stamp.par)
+    }
+
+    /// Whether a room may be given this map, by the clear check: one of
+    /// `SHIPPED_MAPS` as it ships - what the lobby's own HOST sends by
+    /// name - or a map whose stamp says it was won as it stands
+    /// (`cleared_par`).
+    pub fn hostable(&self) -> bool {
+        self.cleared_par().is_some() || shipped_revisions().contains(&self.revision())
+    }
+}
+
+/// The clear check's stamp in a map file (`MapFile::cleared`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Cleared {
+    /// The revision that was won (`MapFile::revision`), as 16 hex digits.
+    pub revision: String,
+    /// The par: the round clock when it was won, in seconds to a tenth.
+    pub par: f64,
+}
+
+impl Cleared {
+    /// The stamp for `revision` won in `par` seconds.
+    pub fn new(revision: u64, par: f64) -> Cleared {
+        Cleared { revision: revision_text(revision), par }
+    }
+}
+
+/// `value` with every table's keys in sorted order: the canonical form a
+/// revision hashes, whichever map the toml crate keeps tables in - sorted
+/// by default, in insertion order under its `preserve_order` feature, which
+/// would hand the cells over in a `HashMap`'s order, another each run.
+fn sorted_keys(value: toml::Value) -> toml::Value {
+    match value {
+        toml::Value::Table(table) => {
+            let mut entries: Vec<(String, toml::Value)> = table.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            toml::Value::Table(entries.into_iter().map(|(key, value)| (key, sorted_keys(value))).collect())
+        }
+        toml::Value::Array(items) => toml::Value::Array(items.into_iter().map(sorted_keys).collect()),
+        other => other,
+    }
+}
+
+/// The 64-bit FNV-1a hash of `bytes`: a map's revision is this of its
+/// canonical TOML, and the builder's thumbnails are kept by this of the
+/// text a map is read from.
+pub fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// A revision as a stamp spells it: 16 lowercase hex digits.
+pub fn revision_text(revision: u64) -> String {
+    format!("{revision:016x}")
+}
+
+/// The revisions of `SHIPPED_MAPS` as they ship, worked out once.
+fn shipped_revisions() -> &'static [u64] {
+    static REVISIONS: std::sync::OnceLock<Vec<u64>> = std::sync::OnceLock::new();
+    REVISIONS.get_or_init(|| SHIPPED_MAPS.iter().filter_map(|(_, text)| MapFile::from_toml_str(text).ok()).map(|map| map.revision()).collect())
+}
+
+impl MapFile {
 
     /// The battlefield size in world pixels this map asks for: `size`
     /// times the cell, or the default field when the map names none.
@@ -479,6 +650,21 @@ impl MapFile {
         match self.size {
             Some((cols, rows)) if cols > 0.0 && rows > 0.0 => (cols * OBSTACLE_GRID_SIZE, rows * OBSTACLE_GRID_SIZE),
             _ => (crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32),
+        }
+    }
+
+    /// Whether the map is shown whole or followed by a camera
+    /// (docs/large-maps-follow-camera.md §1, §15): its `view` key when it
+    /// has one - `whole` only while the map fits `WHOLE_MAX_CELLS` both
+    /// ways - else its size, an arena up to 36 x 18 cells and a field map
+    /// past that (`framing::MapClass::by_size`).
+    pub fn class(&self) -> MapClass {
+        let (width, height) = self.field_size();
+        let (cols, rows) = (width / OBSTACLE_GRID_SIZE, height / OBSTACLE_GRID_SIZE);
+        match self.view {
+            Some(MapView::Whole) if cols > WHOLE_MAX_CELLS || rows > WHOLE_MAX_CELLS => MapClass::Field,
+            Some(view) => view.class(),
+            None => MapClass::by_size(cols, rows),
         }
     }
 
@@ -503,6 +689,24 @@ impl MapFile {
     /// `maps/*.toml` from disk via `load` - only the game's built-in
     /// fallback needed to stop depending on that.
     pub fn from_toml_str(text: &str) -> Result<Self, String> {
+        let map = Self::from_toml_str_any_size(text)?;
+        if let Some((cols, rows)) = map.size {
+            if !(cols.is_finite() && rows.is_finite() && cols <= MAX_SIDE_CELLS && rows <= MAX_SIDE_CELLS) {
+                return Err(format!("size = [{cols}, {rows}] is past the largest map, {MAX_SIDE_CELLS} cells a side"));
+            }
+            if cols < MIN_SIDE_CELLS || rows < MIN_SIDE_CELLS {
+                return Err(format!("size = [{cols}, {rows}] is under the smallest map, {MIN_SIDE_CELLS} cells a side"));
+            }
+        }
+        Ok(map)
+    }
+
+    /// The map in `text`, its version checked and its `size` taken as
+    /// written: what a builder stamp is read with (`editor::select`), whose
+    /// `size` is its own extent rather than a field's, so a playable map's
+    /// bounds do not hold it. Everything that plays a map reads it through
+    /// `from_toml_str`.
+    pub fn from_toml_str_any_size(text: &str) -> Result<Self, String> {
         let map: MapFile = toml::from_str(text).map_err(|e| format!("{e}"))?;
         if map.version > CURRENT_VERSION {
             return Err(format!(
@@ -677,11 +881,13 @@ pub fn maps_dir() -> PathBuf {
 }
 
 /// The maps compiled into the binary, by name: the default battlefields,
-/// the two mission fixtures, the portal map, then the hand-authored levels
-/// (each file's header says how it plays). They are what the web build can
-/// offer its Load list, since nothing outside `static/` ships in the wasm,
-/// what the online lobby's map stepper walks, in this order, and what the
-/// room server can open; they stand in on native for a checkout without a
+/// the two mission fixtures, the portal and tower maps, the big field
+/// (`longwater`, free play several screens across, the one the follow
+/// camera was built for), then the hand-authored levels (each file's
+/// header says how it plays). They are what the web build can offer its
+/// Load list, since nothing outside `static/` ships in the wasm, what the
+/// online lobby's map stepper walks, in this order, and what the room
+/// server can open; they stand in on native for a checkout without a
 /// `maps/` directory.
 pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("default", include_str!("../maps/default.toml")),
@@ -690,6 +896,7 @@ pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("waves-basic", include_str!("../maps/missions/waves-basic.toml")),
     ("portals", include_str!("../maps/portals.toml")),
     ("towers", include_str!("../maps/towers.toml")),
+    ("longwater", include_str!("../maps/longwater.toml")),
     ("lotus-lagoon", include_str!("../maps/lotus-lagoon.toml")),
     ("hedge-maze", include_str!("../maps/hedge-maze.toml")),
     ("oasis-bazaar", include_str!("../maps/oasis-bazaar.toml")),
@@ -743,17 +950,24 @@ pub fn available_maps() -> Vec<MapEntry> {
 /// there is one (native), else the shipped map of that name. The result
 /// carries `name` for display.
 pub fn open_map(name: &str) -> Result<MapFile, String> {
-    let path = maps_dir().join(format!("{name}.toml"));
-    if saving_available() && path.is_file() {
-        return MapFile::load(&path);
-    }
-    let (_, text) = SHIPPED_MAPS
-        .iter()
-        .find(|(n, _)| *n == name)
-        .ok_or_else(|| format!("no map named {name:?}"))?;
-    let mut map = MapFile::from_toml_str(text).map_err(|e| format!("parsing shipped map {name}: {e}"))?;
+    let text = map_source(name)?;
+    let mut map = MapFile::from_toml_str(&text).map_err(|e| format!("parsing map {name}: {e}"))?;
     map.name = Some(name.to_string());
     Ok(map)
+}
+
+/// The text `open_map` reads a map by its Load-list name from: the file
+/// under `maps_dir()` when there is one (native), else the shipped map's.
+pub fn map_source(name: &str) -> Result<std::borrow::Cow<'static, str>, String> {
+    let path = maps_dir().join(format!("{name}.toml"));
+    if saving_available() && path.is_file() {
+        return std::fs::read_to_string(&path).map(std::borrow::Cow::Owned).map_err(|e| format!("reading map {}: {e}", path.display()));
+    }
+    SHIPPED_MAPS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, text)| std::borrow::Cow::Borrowed(*text))
+        .ok_or_else(|| format!("no map named {name:?}"))
 }
 
 /// Every `.toml` file under `maps_dir()`, by file stem, sorted - the
@@ -852,6 +1066,61 @@ mod toml_tests {
     }
 
     #[test]
+    fn view_round_trips_and_defaults_to_the_maps_size() {
+        let map = MapFile::from_toml_str("version = 1\n").unwrap();
+        assert_eq!(map.view, None);
+        assert!(!map.to_toml_string().unwrap().contains("view"), "by size is not written back");
+        for v in MapView::ALL {
+            let text = format!("version = 1\nview = \"{}\"\ncells.\"1,1\" = {{ kind = \"road\" }}\n", v.name());
+            let map = MapFile::from_toml_str(&text).unwrap();
+            assert_eq!(map.view, Some(v), "{}", v.name());
+            let back = map.to_toml_string().unwrap();
+            assert!(back.contains(&format!("view = \"{}\"", v.name())), "{back}");
+            assert_eq!(MapFile::from_toml_str(&back).unwrap().view, Some(v));
+            assert_eq!(MapView::parse(v.name()), Some(v));
+        }
+        assert!(MapFile::from_toml_str("version = 1\nview = \"zoom\"\n").is_err(), "an unknown view is a parse error");
+        assert_eq!(MapView::parse("auto"), None, "by size has no spelling: it is the key left out");
+    }
+
+    #[test]
+    fn a_maps_view_key_overrides_its_size() {
+        let class = |lines: &str| MapFile::from_toml_str(&format!("version = 1\n{lines}")).unwrap().class();
+        assert_eq!(class(""), MapClass::Arena, "no size is the standard 34 x 17");
+        assert_eq!(class("size = [36, 18]\n"), MapClass::Arena);
+        assert_eq!(class("size = [36, 18.5]\n"), MapClass::Field);
+        assert_eq!(class("size = [40, 20]\n"), MapClass::Field);
+        assert_eq!(class("size = [48, 24]\nview = \"whole\"\n"), MapClass::Arena);
+        assert_eq!(class("size = [34, 17]\nview = \"follow\"\n"), MapClass::Field);
+        assert_eq!(class("view = \"follow\"\n"), MapClass::Field);
+        assert_eq!(class("size = [36, 18]\nview = \"whole\"\n"), MapClass::Arena);
+        let mut map = MapFile::new();
+        assert_eq!(map.class(), MapClass::Arena);
+        map.size = Some((96.0, 54.0));
+        assert_eq!(map.class(), MapClass::Field);
+        map.view = Some(MapView::Whole);
+        assert_eq!(map.class(), MapClass::Arena);
+        // Past what a target drawn whole holds, `whole` is followed.
+        assert_eq!(class("size = [128, 128]\nview = \"whole\"\n"), MapClass::Arena);
+        assert_eq!(class("size = [129, 40]\nview = \"whole\"\n"), MapClass::Field);
+        assert_eq!(class("size = [250, 250]\nview = \"whole\"\n"), MapClass::Field);
+    }
+
+    #[test]
+    fn every_shipped_map_is_a_field_map() {
+        // Every level and free-play map is past 36 x 18 - the smallest are
+        // 48 x 24 - so the follow camera frames each of them; an arena is a
+        // map of your own, or a fixture under maps/test/.
+        for (name, text) in SHIPPED_MAPS {
+            assert_eq!(MapFile::from_toml_str(text).unwrap().class(), MapClass::Field, "{name}");
+        }
+        let big = open_map("longwater").unwrap();
+        assert_eq!((big.size, big.class()), (Some((112.0, 63.0)), MapClass::Field));
+        let study = MapFile::load(Path::new("maps/study/frontier.toml")).unwrap();
+        assert_eq!((study.size, study.class()), (Some((96.0, 54.0)), MapClass::Field));
+    }
+
+    #[test]
     fn missing_level_tables_mean_protect_and_band() {
         let map = MapFile::from_toml_str("version = 1\n").unwrap();
         assert_eq!(map.mission, MissionConfig::default());
@@ -926,6 +1195,41 @@ cells."10,5" = { kind = "portal" }
         assert_eq!(ints.field_size(), (960.0, 480.0));
     }
 
+    /// The largest map is one an online round can carry: its far corner,
+    /// and a wave tank waiting a tank length past it, are positions the
+    /// wire holds, and its last cell an index the wire holds.
+    #[test]
+    fn a_map_is_no_larger_than_the_wire_carries() {
+        let largest = MapFile::from_toml_str("version = 1\nsize = [250, 250]\n").unwrap();
+        let (w, h) = largest.field_size();
+        let past = w.max(h) + 2.0 * OBSTACLE_GRID_SIZE;
+        assert!(past <= crate::net::wire::POSITION_MAX_PX, "{past} px does not fit the wire");
+        let last = (MAX_SIDE_CELLS as u32) * (MAX_SIDE_CELLS as u32);
+        assert!(last <= u16::MAX as u32, "{last} cells do not fit a u16 index");
+        for size in ["[251, 20]", "[40, 250.5]", "[nan, 20]", "[40, inf]"] {
+            let err = MapFile::from_toml_str(&format!("version = 1\nsize = {size}\n")).unwrap_err();
+            assert!(err.contains("largest map"), "{size}: {err}");
+        }
+    }
+
+    /// A map has room for a tank to stand and wander on either axis: a
+    /// sliver of a map is refused by name rather than played, and every
+    /// map shipped or under `maps/` is at least that large.
+    #[test]
+    fn a_map_is_no_smaller_than_a_round_can_play_on() {
+        for size in ["[1.5, 20]", "[40, 7.5]", "[0, 0]", "[-3, 20]"] {
+            let err = MapFile::from_toml_str(&format!("version = 1\nsize = {size}\n")).unwrap_err();
+            assert!(err.contains("smallest map"), "{size}: {err}");
+        }
+        assert!(MapFile::from_toml_str("version = 1\nsize = [8, 8]\n").is_ok());
+        // A builder stamp's size is its own extent, read without the bound.
+        assert_eq!(MapFile::from_toml_str_any_size("version = 1\nsize = [6, 5]\n").unwrap().size, Some((6.0, 5.0)));
+        for (name, text) in SHIPPED_MAPS {
+            let (w, h) = MapFile::from_toml_str(text).unwrap().field_size();
+            assert!(w / OBSTACLE_GRID_SIZE >= MIN_SIDE_CELLS && h / OBSTACLE_GRID_SIZE >= MIN_SIDE_CELLS, "{name}");
+        }
+    }
+
     #[test]
     fn prop_cells_round_trip_and_count_as_solid() {
         let text = r#"
@@ -961,5 +1265,89 @@ cells."8,4" = { kind = "water" }
         let map = MapFile::load(Path::new("maps/test/choke.toml")).unwrap();
         assert_eq!(map.name.as_deref(), Some("choke"));
         assert_eq!(map.tanks, Some(4));
+    }
+
+    /// A revision is the map and nothing else: the order its cells went in,
+    /// its display name and its stamp are no part of it, the TOML it
+    /// writes reads back as the same revision, and any edit to a cell or a
+    /// setting is another.
+    #[test]
+    fn a_revision_is_the_map_and_nothing_else() {
+        let mut a = MapFile::new();
+        a.set_cell(3, 4, CellObject::Start);
+        a.set_cell(10, 2, CellObject::Wall { material: Material::Brick });
+        a.set_cell(2, 10, CellObject::Frog);
+        let mut b = MapFile::new();
+        b.set_cell(2, 10, CellObject::Frog);
+        b.set_cell(10, 2, CellObject::Wall { material: Material::Brick });
+        b.set_cell(3, 4, CellObject::Start);
+        assert_eq!(a.revision(), b.revision(), "the order the cells went in");
+        b.name = Some("mine".into());
+        b.cleared = Some(Cleared::new(7, 12.5));
+        assert_eq!(a.revision(), b.revision(), "the name and the stamp");
+        let back = MapFile::from_toml_str(&a.to_toml_string().unwrap()).unwrap();
+        assert_eq!(back.revision(), a.revision(), "read back from its TOML");
+        let mut edited = a.clone();
+        edited.set_cell(5, 5, CellObject::Gate);
+        assert_ne!(edited.revision(), a.revision(), "a cell placed");
+        let mut edited = a.clone();
+        edited.set_cell(10, 2, CellObject::Wall { material: Material::Iron });
+        assert_ne!(edited.revision(), a.revision(), "a cell changed");
+        let mut edited = a.clone();
+        edited.tanks = Some(3);
+        assert_ne!(edited.revision(), a.revision(), "a setting");
+        let mut edited = a.clone();
+        edited.size = Some((40.0, 22.5));
+        assert_ne!(edited.revision(), a.revision(), "the size");
+        assert_eq!(revision_text(a.revision()).len(), 16);
+    }
+
+    /// The clear check's stamp counts for the revision it names and no
+    /// other, rides the TOML both ways, and is what lets a map of one's own
+    /// be hosted; a shipped map as it ships needs none, and an edited one
+    /// is a map of one's own.
+    #[test]
+    fn a_stamp_counts_for_its_own_revision_only() {
+        let mut map = MapFile::new();
+        map.set_cell(3, 8, CellObject::Start);
+        assert_eq!(map.cleared_par(), None);
+        assert!(!map.hostable(), "nobody has won it");
+        map.cleared = Some(Cleared::new(map.revision(), 83.4));
+        assert_eq!(map.cleared_par(), Some(83.4));
+        assert!(map.hostable());
+        let text = map.to_toml_string().unwrap();
+        assert!(text.contains("[cleared]") && text.contains("par = 83.4"), "{text}");
+        let back = MapFile::from_toml_str(&text).unwrap();
+        assert_eq!(back.cleared_par(), Some(83.4), "read back");
+        let mut edited = back.clone();
+        edited.set_cell(6, 6, CellObject::Gate);
+        assert_eq!(edited.cleared_par(), None, "an edit since: a revision nobody has won");
+        assert!(!edited.hostable());
+        let plain = MapFile::new();
+        assert!(!plain.to_toml_string().unwrap().contains("cleared"), "no stamp is written until there is one");
+        for (name, text) in SHIPPED_MAPS {
+            let shipped = MapFile::from_toml_str(text).unwrap();
+            assert!(shipped.hostable(), "{name} as it ships");
+            let mut changed = shipped.clone();
+            changed.set_cell(1, 1, CellObject::Gate);
+            assert!(!changed.hostable(), "{name} edited");
+        }
+    }
+
+    /// What a revision costs on the 96 x 54 study map - the builder works
+    /// one out after each edit it shows the clear check of:
+    /// `cargo test --lib a_revision_of_the_study_map_timing -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn a_revision_of_the_study_map_timing() {
+        let map = MapFile::load(Path::new("maps/study/frontier.toml")).unwrap();
+        let runs = 20;
+        let start = std::time::Instant::now();
+        let mut last = 0;
+        for _ in 0..runs {
+            last = std::hint::black_box(&map).revision();
+        }
+        let ms = start.elapsed().as_secs_f64() * 1000.0 / runs as f64;
+        println!("frontier: {} cells, revision {} in {ms:.2} ms", map.cells.len(), revision_text(last));
     }
 }

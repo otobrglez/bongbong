@@ -10,7 +10,7 @@ use crate::{Position, OBSTACLE_TEXTURE_SIZE};
 
 /// The shadow under a piece still in the air, drawn at the point on the
 /// ground it is over. Shrinks as the piece rises, which is what actually
-/// sells the height in a game with no camera.
+/// sells the height in a game seen straight from above.
 pub fn draw_decal_shadow(d: &mut impl RaylibDraw, decal: &Decal) {
     let h = decal.height();
     if h <= 0.0 {

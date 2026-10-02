@@ -13,7 +13,8 @@ fn source_rec(missile: &Missile) -> Rectangle {
 }
 
 /// The missile's shadow on the ground under it: its own silhouette,
-/// shrinking and fading as it rises (what sells the height with no camera).
+/// shrinking and fading as it rises (what sells the height with no
+/// perspective).
 pub fn draw_missile_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, missile: &Missile) {
     let lift = missile.lift();
     let size = MISSILE_TEXTURE_SIZE * MISSILE_SCALE * (1.0 - 0.3 * lift);

@@ -52,7 +52,7 @@ export function installFullscreenToggle(): void {
     // promise, so `.then` on it would throw and abort the whole
     // handler - leaving neither real full screen nor the fallback.
     if (p && typeof p.then === "function") {
-      p.then(label, fallback);
+      p.then(() => { label(); lockLandscape(); }, fallback);
     } else {
       setTimeout(() => { if (real()) label(); else fallback(); }, 120);
     }
@@ -76,6 +76,20 @@ export function installFullscreenToggle(): void {
   document.addEventListener("fullscreenchange", label);
   document.addEventListener("webkitfullscreenchange", label);
   label();
+}
+
+// The game is landscape. A page in full screen may lock the screen's
+// orientation where the browser has the lock - Chrome on Android - which
+// turns a phone held upright into the game's shape; Safari and the
+// desktops have none and refuse, which leaves the page as it was. Leaving
+// full screen lets the lock go.
+function lockLandscape(): void {
+  const orientation = (screen as Screen & { orientation?: { lock?: (o: string) => Promise<void> } }).orientation;
+  try {
+    orientation?.lock?.("landscape")?.catch(() => { /* no lock here */ });
+  } catch {
+    /* no lock here */
+  }
 }
 
 // Keep the visible viewport on the root as `--vv-top/left/width/height`,

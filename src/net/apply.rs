@@ -1372,7 +1372,7 @@ mod tests {
     fn a_seeker_volley_reaches_the_replica() {
         let seen = round_trip(DEFAULT_MAP, 0xB0B5, 420, |game, frame| {
             // Hand the seat a pod and pull the trigger: `intent` fires
-            // every twelfth frame, and a pod puts two salvos of four in
+            // every twelfth frame, and a pod puts a salvo of four in
             // the air per press.
             if frame == 30 {
                 let patch = crate::simulation::debug::TankPatch { missile_ammo: Some(40), ..Default::default() };

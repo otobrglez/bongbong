@@ -1890,6 +1890,46 @@ cells."11,4" = { kind = "start2" }
         }
     }
 
+    /// Every shipped map - what the lobby's stepper offers - is a room's
+    /// map by its own name, for the metrics and for `open_map`; a builder's
+    /// map or a name the build does not ship is `custom`.
+    #[test]
+    fn every_shipped_map_is_labelled_by_name_and_opens() {
+        for (name, _) in bongbong::map::SHIPPED_MAPS {
+            assert_eq!(map_label(false, name), *name);
+            assert!(bongbong::map::open_map(name).is_ok(), "{name} does not open");
+        }
+        assert_eq!(map_label(false, "no-such-map"), "custom");
+        assert_eq!(map_label(true, "longwater"), "custom", "a builder's map is custom whatever it is called");
+    }
+
+    /// A room plays the big field: four bots seated on `longwater`, the
+    /// round a field map, its first wave called and rolling in through the
+    /// map's gates within a few seconds of the start.
+    #[cfg(feature = "dev-tools")]
+    #[tokio::test]
+    async fn a_room_of_four_plays_the_big_field() {
+        use crate::metrics::Metrics;
+        use serde_json::json;
+
+        let params = RoomParams::for_dev("longwater", None, None, Some(7)).expect("the room's setup");
+        assert_eq!(params.map_label, "longwater");
+        let (_commands, rx) = mpsc::channel(1);
+        let hub = Hub::new(8, Arc::new(Metrics::new()));
+        let stats = Arc::new(RoomStats::new(params.map_label.clone(), params.mission));
+        let mut room = Room::new(hub, "TESTS".into(), params, rx, stats);
+        room.dev("room_open", &json!({ "seats": 4 })).expect("four bots seated");
+        let mut entered = 0;
+        for _ in 0..240 {
+            room.tick();
+            entered += room.prev.events.iter().filter(|e| matches!(e, WireEvent::TankEntered { .. })).count();
+        }
+        let game = room.game.as_ref().expect("a round");
+        assert!(game.field_map(), "longwater is followed, not shown whole");
+        assert_eq!(game.players.count(), 4);
+        assert!(entered > 0, "no wave tank rolled in within four seconds");
+    }
+
     #[test]
     fn phase_round_trips_through_its_byte() {
         for phase in [Phase::Waiting, Phase::Playing, Phase::Paused, Phase::Ended] {

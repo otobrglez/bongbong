@@ -3,6 +3,9 @@
 
 use sola_raylib::prelude::*;
 
+use crate::math::Vec2;
+use crate::shockwave::{ripple_uv, RIPPLE_FRAME};
+use crate::view::Camera;
 use crate::Position;
 
 /// The GPU side of a ripple effect: `static/shockwave.fs` compiled with its
@@ -28,6 +31,12 @@ pub struct RippleFx {
     width_loc: i32,
     strength_loc: i32,
     duration_loc: i32,
+    /// The scene target's extent in the ripple frame (`Camera::ripple_view`).
+    view_uv_loc: i32,
+    view_uv_size_loc: i32,
+    /// The world point the scene target's texture coordinate `(0, 0)`
+    /// stands on this frame (`set_view`): every centre is measured from it.
+    corner: Vec2,
 }
 
 /// The tuning knobs for one `RippleFx` instance, set at load and re-uploaded
@@ -43,7 +52,8 @@ pub struct RippleTuning {
 
 impl RippleFx {
     /// Compile `shader_path` and set up the uniforms that never change after
-    /// startup: the screen resolution and this instance's `tuning`. Every
+    /// startup: the ripple frame (`shockwave::RIPPLE_FRAME`) and this
+    /// instance's `tuning`. Every
     /// ripple effect (kill shockwave, muzzle flash, shell impact, ...) is its
     /// own `RippleFx`, and each may point at its own fragment shader file as
     /// well as its own tuning, so a new effect can look genuinely different
@@ -52,8 +62,6 @@ impl RippleFx {
         rl: &mut RaylibHandle,
         thread: &RaylibThread,
         shader_path: &str,
-        screen_width: i32,
-        screen_height: i32,
         tuning: RippleTuning,
     ) -> Self {
         #[cfg(not(target_os = "android"))]
@@ -89,15 +97,19 @@ impl RippleFx {
         let width_loc = shader.get_shader_location("width");
         let strength_loc = shader.get_shader_location("strength");
         let duration_loc = shader.get_shader_location("duration");
+        let view_uv_loc = shader.get_shader_location("viewUv");
+        let view_uv_size_loc = shader.get_shader_location("viewUvSize");
 
-        shader.set_shader_value(
-            resolution_loc,
-            Vector2::new(screen_width as f32, screen_height as f32),
-        );
+        shader.set_shader_value(resolution_loc, Vector2::new(RIPPLE_FRAME.0, RIPPLE_FRAME.1));
         shader.set_shader_value(speed_loc, tuning.speed);
         shader.set_shader_value(width_loc, tuning.width);
         shader.set_shader_value(strength_loc, tuning.strength);
         shader.set_shader_value(duration_loc, tuning.duration);
+        // The standard field until a frame says otherwise (`set_view`); the
+        // centres are measured from the target's corner, so `viewUv` stays
+        // at the origin.
+        shader.set_shader_value(view_uv_loc, Vector2::new(0.0, 0.0));
+        shader.set_shader_value(view_uv_size_loc, Vector2::new(1.0, 1.0));
 
         RippleFx {
             shader,
@@ -110,7 +122,27 @@ impl RippleFx {
             width_loc,
             strength_loc,
             duration_loc,
+            view_uv_loc,
+            view_uv_size_loc,
+            corner: Vec2::new(0.0, RIPPLE_FRAME.1),
         }
+    }
+
+    /// Point the ripple at the part of the field `camera` shows: the scene
+    /// target it samples is that view, its extent in the ripple frame
+    /// (`Camera::ripple_view`), and the centres `uv_of` gives from here on
+    /// are measured from its corner. Set every frame, before the blit.
+    pub fn set_view(&mut self, camera: &Camera) {
+        let (corner, size) = camera.ripple_view();
+        self.corner = corner;
+        self.shader.set_shader_value(self.view_uv_loc, Vector2::new(0.0, 0.0));
+        self.shader.set_shader_value(self.view_uv_size_loc, Vector2::new(size.x, size.y));
+    }
+
+    /// A ripple's centre at the world position `pos`, in the frame
+    /// `set_view` last put the shader in (`shockwave::ripple_uv`).
+    pub fn uv_of(&self, pos: Position) -> Vector2 {
+        ripple_uv(self.corner, pos).into()
     }
 
     /// Re-upload the tuning uniforms - called by `main.rs` whenever the
@@ -124,13 +156,3 @@ impl RippleFx {
     }
 }
 
-/// Convert a screen-space pixel position into the UV space the ripple shader
-/// actually samples in. raylib stores a `RenderTexture2D`'s pixels vertically
-/// flipped relative to a loaded image, so `Game::render` blits `scene_target`
-/// through a negative-height source rect to undo that - which also flips the
-/// fragment shader's `fragTexCoord` relative to plain top-down screen space.
-/// Any ripple `center` has to be flipped the same way to land on the point on
-/// screen that `pos` actually names.
-pub fn screen_to_ripple_uv(pos: Position, screen_width: f32, screen_height: f32) -> Vector2 {
-    Vector2::new(pos.x / screen_width, 1.0 - pos.y / screen_height)
-}

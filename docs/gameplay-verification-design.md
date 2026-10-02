@@ -731,6 +731,48 @@ participants and refuses while either is live, so in a three-tank jam one ram
 suppresses the other two pairings for half a second. `tank_contact_seconds`
 does not saturate and is the honest jam measure.
 
+**Landed 2026-10-01 - `offbox-fire` and the fire tally.** The sight-box rule
+(docs/large-maps-follow-camera.md section 5: an enemy fires at a seat only
+from inside the seat's +-11.5 x +-7.5 cell box) has its anomaly kind:
+`check_fire` measures every enemy trigger pull aimed at a seat
+(`Event::Fired` with `TankSnapshot::shot_at_seat`) and every enemy missile
+lock onto a seat (`Event::MissileLocked`) from where the two stood as the
+frame began - the positions the decision was made from - and flags a tank
+the first time it fires from outside, once a round. It is budgeted at 0 in
+every probe recipe. Beside it, not budgeted, a fire tally in the summary and
+`--json-out`'s `fire` object: enemy shots, shots at seats and the ones from
+outside the box, missile locks on seats and the ones from outside, hits on
+seats, seat hits on enemies (`TankSnapshot::hit_by_seat`) and the ones on an
+enemy outside that seat's box - the reverse unfairness, an enemy that cannot
+answer until it closes in.
+
+The same change made the sweep totals sum every kind through
+`AnomalyTotals::add`. They used to add the first twelve by hand and drop
+`tank-grind` and `pile-up`, so the "0 across all seven fixtures" reading
+above was the sweep line's, not the rounds': the per-round lines and the
+JSONL had them all along. At `--seed 1000` maze reads `pile-up=2` with or
+without the rule, which is where `probe-fixtures`' `pile-up` ceiling comes
+from.
+
+**Landed 2026-10-02 - pacing, cost and field maps.** A sweep now prints how
+its rounds ended (won, lost, unfinished, and how long a lost one lasted),
+the first contact (the first enemy within `enemy_attack_range` of a seat,
+its first shot at one, the first hit on one, each as mean and median over
+the rounds) and the wall-clock ms per tick spent inside `Game::update`
+alone; a single round prints its own first contact and map class, and
+`--json-out` carries `ms_per_tick` and `first_contact`. Readings, never
+budgeted. They exist for the field-map AI (docs/large-maps-follow-camera.md
+section 12, `simulation::field`), which only maps a camera follows play by:
+`TankSnapshot::asleep` (a far enemy nothing has woken, holding still by
+design) counts as a deliberate hold, and an enemy `asleep` or `leashed`
+(nothing has called it to the fight) when the round ends is no
+`never-arrived`. Every `maps/test/` fixture is 40 x 22.5, which by size is
+a field map, so each says `view = "whole"`: they stay arenas and their
+budgets were measured, and still read, under the arena's rules. The field
+maps get their own recipe, `just probe-fields` - the 96 x 54 study map,
+longwater and five of the levels (56 wide since the shipped maps grew by
+40 % a side), budgeted the way `probe-fixtures` is.
+
 ---
 
 ## Phase 5 — Navigation e2e (path-stretch)

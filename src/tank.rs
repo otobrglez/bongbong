@@ -464,6 +464,13 @@ pub struct Tank {
     /// (`Game::round_stats`). `None` until a seat touches it, and always on
     /// a seat's own tank.
     pub last_hit_by: Option<u8>,
+    /// The seat that damaged this tank in the frame just simulated, if one
+    /// did: set by `credit` beside `last_hit_by` and cleared at the top of
+    /// every frame (`Game::tick_timers`). Nothing in the round reads it;
+    /// it is the instantaneous fact `TankSnapshot::hit_by_seat` reports,
+    /// which the probe counts seat hits on enemies outside the seat's
+    /// sight box by.
+    pub hit_by_seat: Option<u8>,
     /// Seconds of wet tread marks left after wading (docs/water.md):
     /// refreshed every frame the hull is in water, counted down by
     /// `tick_timers`, read by `lay_tracks`.
@@ -523,6 +530,10 @@ pub struct Tank {
     /// anything, so only a tank that breaks contact recovers - see
     /// `Game::tick_timers`.
     pub shield_recharge_delay: f32,
+    /// Seconds left before a live shield shatters on its own
+    /// (`shield_seconds`, set by `raise_shield`). 0 is a shield with no
+    /// clock - one a test or a tool set straight on `shield_hp`.
+    pub shield_timer: f32,
     /// Set by `spend_shield` on the frame the shield shatters, drained and
     /// cleared by `Game::drain_shield_breaks` at the end of the frame's
     /// damage phases.
@@ -646,6 +657,7 @@ impl Default for Tank {
             flame_held: false,
             burn_timer: 0.0,
             last_hit_by: None,
+            hit_by_seat: None,
             slime_timer: 0.0,
             wet_timer: 0.0,
             laser_variant: LaserVariant::Red,
@@ -658,6 +670,7 @@ impl Default for Tank {
             throttle: 1.0,
             shield_hp: 0.0,
             shield_recharge_delay: 0.0,
+            shield_timer: 0.0,
             shield_broke: false,
             recharge_timer: 0.0,
             fire_cooldown: 0.0,
@@ -791,6 +804,13 @@ impl Tank {
         if capacity > 0.0 { (self.shield_hp / capacity).clamp(0.0, 1.0) } else { 0.0 }
     }
 
+    /// A fresh shield: the full pool on a fresh clock. A second one
+    /// refills both rather than stacking.
+    pub fn raise_shield(&mut self) {
+        self.shield_hp = tuning().shield_capacity;
+        self.shield_timer = tuning().shield_seconds;
+    }
+
     /// Spend `amount` of shield on a hit the shield is taking instead of the
     /// hull, and report whether that shattered it (true on the one frame the
     /// pool crosses zero, never again - the edge-trigger shape
@@ -811,8 +831,9 @@ impl Tank {
         true
     }
 
-    /// The one way damage lands on a tank's *hull*: adds `amount`, capped at
-    /// `cap` (MAX_DAMAGE, or one below it for the player's frog bites), and
+    /// The one way damage lands on a tank's *hull*: adds `amount` - a
+    /// player's scaled by `player_armor_factor` - capped at `cap`
+    /// (MAX_DAMAGE, or one below it for the player's frog bites), and
     /// returns how much actually landed. Callers keep their hit
     /// flash/knockback/alert side effects either way, so an absorbed hit
     /// still visibly lands.
@@ -829,6 +850,7 @@ impl Tank {
             self.spend_shield(amount);
             return 0.0;
         }
+        let amount = if self.is_player() { amount * tuning().player_armor_factor } else { amount };
         let before = self.damage;
         self.damage = (self.damage + amount).min(cap);
         self.damage - before
@@ -1309,7 +1331,19 @@ impl Tank {
     pub fn tick_shield(&mut self, dt: f32) {
         if !self.is_shielded() {
             self.shield_recharge_delay = 0.0;
+            self.shield_timer = 0.0;
             return;
+        }
+        if self.shield_timer > 0.0 {
+            self.shield_timer -= dt;
+            if self.shield_timer <= 0.0 {
+                // Out of time: it shatters as a spent one does.
+                self.shield_timer = 0.0;
+                self.shield_hp = 0.0;
+                self.shield_recharge_delay = 0.0;
+                self.shield_broke = true;
+                return;
+            }
         }
         self.shield_recharge_delay = (self.shield_recharge_delay - dt).max(0.0);
         if self.shield_recharge_delay > 0.0 {
@@ -1357,13 +1391,15 @@ impl Tank {
     }
 
     /// `by` has just damaged this tank: a seat's hit on an enemy makes
-    /// that seat the one its wreck is credited to (`last_hit_by`). An
-    /// enemy's hit, or any hit on a seat, credits nobody.
+    /// that seat the one its wreck is credited to (`last_hit_by`) and the
+    /// one that hit it this frame (`hit_by_seat`). An enemy's hit, or any
+    /// hit on a seat, credits nobody.
     pub fn credit(&mut self, by: Owner) {
         if let Owner::Player(seat) = by
             && !self.owner.is_player()
         {
             self.last_hit_by = Some(seat);
+            self.hit_by_seat = Some(seat);
         }
     }
 
@@ -2096,6 +2132,106 @@ pub fn player_locate_active(elapsed: f32) -> bool {
     elapsed < tuning().player_locate_seconds
 }
 
+/// The most pips the ammo gauge under a seat's ring shows (`ammo_pips`):
+/// past it a pip stands for more than one shell.
+pub const AMMO_PIPS: i32 = 10;
+/// A pip's side and its dark rim's, in world pixels: whole 2 px blocks, so
+/// the gauge keeps the art's grid - a 4 px pip is still about 2.7 pt on a
+/// phone's follow camera, and its rim makes it read on any ground.
+pub const PIP_PX: i32 = 4;
+pub const PIP_RIM_PX: i32 = 8;
+/// How far apart the pips' centres are laid along the arc, and how far
+/// outside the ring's band they sit - inside the hit arc's radius
+/// (`indicator_hit_arc_px`), which points the other way only for a moment.
+const PIP_PITCH_PX: f32 = 7.0;
+const PIP_OUT_PX: f32 = 3.0;
+/// An empty pip, and every pip's rim.
+const PIP_EMPTY: Color = Color::new(70, 70, 76, 230);
+const PIP_RIM: Color = Color::new(0x14, 0x14, 0x16, 210);
+
+/// How full one pip of the ammo gauge is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PipFill {
+    Full,
+    /// It stands for more than one shell and holds only some of them.
+    Part,
+    Empty,
+}
+
+/// One pip: its centre, on the 2 px block grid, and how full it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pip {
+    pub x: i32,
+    pub y: i32,
+    pub fill: PipFill,
+}
+
+/// The outer edge of a tank's ground ring as a steady gauge draws it
+/// (`draw_ground_ring_scaled` at its fixed pulse, `tank_ring_radius_scale`
+/// wide): where the pips of `ammo_pips` stand outside.
+pub fn ring_outer_radius(tank: &Tank) -> f32 {
+    tank.size() * tuning().shield_glow_radius_factor * 0.97 * ring_scale(tank)
+}
+
+/// The pips of an ammo gauge holding `shells` of `max`, round a ring of
+/// `radius` at `center`: one a shell up to `AMMO_PIPS`, else as many shells
+/// a pip as fit `max` into that many; centred on the ring's lowest point
+/// and laid along its lower arc left to right, full from the left, so the
+/// shells drain from the right; a pip that stands for several shells and
+/// holds only some is part-full. Each centre is snapped to the 2 px block
+/// grid.
+pub fn ammo_pips(center: Position, radius: f32, shells: i32, max: i32) -> Vec<Pip> {
+    if max <= 0 {
+        return Vec::new();
+    }
+    let per = (max + AMMO_PIPS - 1) / AMMO_PIPS;
+    let slots = (max + per - 1) / per;
+    let shells = shells.clamp(0, max);
+    let (full, part) = (shells / per, shells % per > 0);
+    let r = radius + PIP_OUT_PX;
+    let step = PIP_PITCH_PX / r.max(1.0);
+    // Raylib's angles: from +x, clockwise on the y-down screen, so a
+    // quarter turn is straight down and the arc's left end is past it.
+    let left = std::f32::consts::FRAC_PI_2 + step * (slots - 1) as f32 / 2.0;
+    let block = |v: f32| ((v / 2.0).round() * 2.0) as i32;
+    (0..slots)
+        .map(|i| {
+            let a = left - step * i as f32;
+            let fill = if i < full {
+                PipFill::Full
+            } else if i == full && part {
+                PipFill::Part
+            } else {
+                PipFill::Empty
+            };
+            Pip { x: block(center.x + r * a.cos()), y: block(center.y + r * a.sin()), fill }
+        })
+        .collect()
+}
+
+/// Draw a seat's shells as pips under its ring (`ammo_pips`): a dark rim
+/// round each pip, full ones in `color`, a part-full one at half its
+/// strength, empty ones dark. Only the local seats' tanks carry it, drawn
+/// over the hull with the locate label so neither the tank nor a night
+/// sky hides the number that matters most (`render::game`).
+pub fn draw_ammo_pips(c: &mut impl Canvas, tank: &Tank, shells: i32, max: i32, color: Color) {
+    if tank.is_wreck() {
+        return;
+    }
+    let pips = ammo_pips(tank.ring_position, ring_outer_radius(tank), shells, max);
+    for pip in &pips {
+        c.fill_rect(pip.x - PIP_RIM_PX / 2, pip.y - PIP_RIM_PX / 2, PIP_RIM_PX, PIP_RIM_PX, PIP_RIM);
+    }
+    for pip in &pips {
+        let fill = match pip.fill {
+            PipFill::Full => color,
+            PipFill::Part => Color::new(color.r, color.g, color.b, color.a / 2),
+            PipFill::Empty => PIP_EMPTY,
+        };
+        c.fill_rect(pip.x - PIP_PX / 2, pip.y - PIP_PX / 2, PIP_PX, PIP_PX, fill);
+    }
+}
+
 /// Draw this tank's drop shadow: every layer `draw_tank` draws (each at its
 /// own eased angle), offset toward a fixed screen-space direction and
 /// tinted flat black - see docs/sprite-shadows-design.md. Must be called
@@ -2193,7 +2329,7 @@ mod shield_tests {
     fn damage_lands_and_caps_once_the_shield_is_gone() {
         let mut tank = Tank { damage: 10.0, shield_hp: 0.0, ..Tank::default() };
         tank.take_damage(30.0, MAX_DAMAGE);
-        assert_eq!(tank.damage, 40.0);
+        assert_eq!(tank.damage, 10.0 + 30.0 * tuning().player_armor_factor, "a player's armour takes its share");
         tank.take_damage(1000.0, MAX_DAMAGE - 1.0);
         assert_eq!(tank.damage, MAX_DAMAGE - 1.0, "capped at the caller's ceiling");
         assert!(!tank.is_wreck());
@@ -2269,6 +2405,40 @@ mod shield_ring_tests {
 #[cfg(test)]
 mod health_ring_tests {
     use super::*;
+
+    /// The ammo gauge under a seat's ring: one pip a shell up to
+    /// `AMMO_PIPS`, else as many shells a pip as fit; all of them on the
+    /// ring's lower arc, centred under it, on the block grid, apart, and
+    /// full from the left with a part-full pip where one is only partly
+    /// spent.
+    #[test]
+    fn the_ammo_pips_run_along_the_rings_lower_arc() {
+        let center = Position::new(400.0, 300.0);
+        let fills = |pips: &[Pip]| pips.iter().map(|p| p.fill).collect::<Vec<_>>();
+        use PipFill::{Empty, Full, Part};
+        // Twenty shells, the shipped magazine: a pip is two.
+        let pips = ammo_pips(center, 26.0, 13, 20);
+        assert_eq!(pips.len(), AMMO_PIPS as usize);
+        assert_eq!(fills(&pips), vec![Full, Full, Full, Full, Full, Full, Part, Empty, Empty, Empty]);
+        for p in &pips {
+            assert!(p.x % 2 == 0 && p.y % 2 == 0, "on the block grid: {p:?}");
+            assert!(p.y as f32 > center.y + 10.0, "on the lower arc: {p:?}");
+            let r = ((p.x as f32 - center.x).powi(2) + (p.y as f32 - center.y).powi(2)).sqrt();
+            assert!(r > 26.0 && r < 32.0, "outside the ring's band, inside the hit arc: {r}");
+        }
+        assert!(pips.windows(2).all(|w| w[0].x < w[1].x), "left to right");
+        assert!(pips.windows(2).all(|w| (w[1].x - w[0].x).abs().max((w[1].y - w[0].y).abs()) >= PIP_PX), "no two pips overlap");
+        let (lo, hi) = (pips[0].x as f32 - center.x, pips[pips.len() - 1].x as f32 - center.x);
+        assert!((lo + hi).abs() <= 2.0, "centred under the ring: {lo} {hi}");
+        // Five shells of five: a pip each, all full; none left, all empty.
+        assert_eq!(fills(&ammo_pips(center, 26.0, 5, 5)), vec![Full; 5]);
+        assert_eq!(fills(&ammo_pips(center, 26.0, 0, 5)), vec![Empty; 5]);
+        // A hundred: ten a pip, a part-full pip past the last full one.
+        assert_eq!(fills(&ammo_pips(center, 26.0, 35, 100))[2..5], [Full, Part, Empty]);
+        // Over the magazine reads full; nonsense draws nothing.
+        assert_eq!(fills(&ammo_pips(center, 26.0, 99, 20)), vec![Full; 10]);
+        assert!(ammo_pips(center, 26.0, 5, 0).is_empty());
+    }
 
     fn enemy(damage: f32, hit_flash_timer: f32) -> Tank {
         Tank { owner: Owner::Enemy(1), damage, hit_flash_timer, ..Tank::default() }

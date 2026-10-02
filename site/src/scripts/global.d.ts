@@ -21,6 +21,19 @@ declare global {
     /** This tab's reconnect key in a room, read once at startup by
      *  `app.rs`. See `room.ts`. */
     bbToken: string;
+    /** "reduce" or "no-preference" - the `prefers-reduced-motion` media
+     *  query - or empty where the browser cannot say: the web build's word
+     *  on the game's motion switch (src/motion.rs), read once at startup.
+     *  See `motion.ts`. */
+    bbMotion: string;
+    /** Where the page's own controls stand over the canvas, `top x y
+     *  width height` in CSS pixels, read once a frame by `app/web.rs`.
+     *  See `overlay.ts`. */
+    bbOverlay: string;
+    /** "1" on a touch screen - `(hover: none) and (pointer: coarse)` -,
+     *  else empty: read once at startup by `app.rs`, which frames a phone's
+     *  or a tablet's browser as the app on that device. See `overlay.ts`. */
+    bbTouch: string;
   }
 
   // Old WebKit's prefixed Fullscreen API (see fullscreen.ts).

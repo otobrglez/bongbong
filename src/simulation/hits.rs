@@ -440,6 +440,11 @@ impl Terrain {
             if ignore.contains(&b.entity) {
                 continue;
             }
+            // A tower fires from above the battlefield, over the low cover
+            // its aim already sees past (`Material::blocks_sight`).
+            if shooter.is_tower() && !b.material.blocks_sight() {
+                continue;
+            }
             consider_hit(&mut best, segment_hits_aabb(p0, p1, b.center, b.half + pad), 3, ShellTarget::Obstacle(b.entity));
         }
 

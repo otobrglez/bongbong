@@ -27,6 +27,7 @@ use hecs::Entity;
 use crate::frog::{Frog, Side};
 use crate::level::{Mission, SpawnKind};
 use crate::map::{self, CellObject};
+use crate::math::Rectangle;
 use crate::obstacle::Obstacle;
 use crate::pathfind::Grid;
 use crate::simulation::Game;
@@ -166,8 +167,35 @@ pub enum LintKind {
 }
 
 impl LintKind {
+    /// Every kind, in check order.
+    pub const ALL: [LintKind; 22] = [
+        LintKind::UnreachableFrog,
+        LintKind::UnreachablePickup,
+        LintKind::GatedPickup,
+        LintKind::DisconnectedRegion,
+        LintKind::BoxedInCell,
+        LintKind::SpawnBandTooTight,
+        LintKind::PlannerPhysicsMismatch,
+        LintKind::NarrowCorridor,
+        LintKind::GateNotOnEdge,
+        LintKind::GateBlocked,
+        LintKind::WavesNoGates,
+        LintKind::HuntMissingEnemyFrog,
+        LintKind::EnemyFrogUnreachable,
+        LintKind::NoStart,
+        LintKind::StartPenned,
+        LintKind::Player2Unreachable,
+        LintKind::PlayersTooClose,
+        LintKind::PortalAlone,
+        LintKind::PortalBlocked,
+        LintKind::TowerAtStart,
+        LintKind::TowerNoReach,
+        LintKind::TooManyTowers,
+    ];
+
     /// The kebab-case name the lint's output and the dev server's `lint`
-    /// tool use.
+    /// tool use - and the builder's CHECK panel looks its words up by
+    /// (`lint-<tag>` in the catalogue).
     pub(crate) fn tag(self) -> &'static str {
         match self {
             LintKind::UnreachableFrog => "unreachable-frog",
@@ -197,11 +225,144 @@ impl LintKind {
 }
 
 /// One lint result: severity + which check + a self-contained message
-/// (nav-grid cell coordinates and world px where relevant).
+/// (nav-grid cell coordinates and world px where relevant), the cells it
+/// is about and, where exactly one edit makes it go away, that edit.
+#[derive(Clone, Debug, PartialEq)]
 pub struct LintFinding {
     pub severity: LintSeverity,
     pub kind: LintKind,
     pub message: String,
+    /// Where on the map the finding is - what the builder's CHECK panel
+    /// frames and marks: the object a check names (a start, a portal, a
+    /// pickup, a gate, a tower), or the nav cells of what it measured (a
+    /// pocket, a corridor, a lane's blocked cell). Empty for a finding
+    /// about the whole map (no gate anywhere, the spawn band).
+    pub cells: Vec<LintCell>,
+    /// The quick fix, where the check knows the one edit that answers it
+    /// (a penned start moved to the nearest cell it can drive from, a
+    /// lone portal taken away), worked out against the round the finding
+    /// was made on. `None` where the answer is the author's to choose.
+    pub fix: Option<LintFix>,
+}
+
+impl LintFinding {
+    /// A finding about `cells`, with no fix.
+    fn new(severity: LintSeverity, kind: LintKind, message: String, cells: Vec<LintCell>) -> LintFinding {
+        LintFinding { severity, kind, message, cells, fix: None }
+    }
+
+    fn with_fix(mut self, fix: Option<LintFix>) -> LintFinding {
+        self.fix = fix;
+        self
+    }
+}
+
+/// A place a finding is about, as the check knows it: a map cell, the
+/// square round `map::cell_to_world`'s point where an object the author
+/// placed stands, or a cell of the nav grid the reachability checks run
+/// on - `PATHFIND_CELL_SIZE` squares from the field's corner, half a map
+/// cell off the map's own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LintCell {
+    Map(i32, i32),
+    Nav(usize, usize),
+}
+
+impl LintCell {
+    /// The cell's square in world pixels.
+    pub fn rect(self) -> Rectangle {
+        match self {
+            LintCell::Map(col, row) => {
+                let p = map::cell_to_world(col, row);
+                let half = crate::OBSTACLE_GRID_SIZE / 2.0;
+                Rectangle::new(p.x - half, p.y - half, crate::OBSTACLE_GRID_SIZE, crate::OBSTACLE_GRID_SIZE)
+            }
+            LintCell::Nav(col, row) => {
+                Rectangle::new(col as f32 * PATHFIND_CELL_SIZE, row as f32 * PATHFIND_CELL_SIZE, PATHFIND_CELL_SIZE, PATHFIND_CELL_SIZE)
+            }
+        }
+    }
+}
+
+/// The world rectangle round every cell of `cells`, `None` for none.
+pub fn cells_bounds(cells: &[LintCell]) -> Option<Rectangle> {
+    let mut rects = cells.iter().map(|c| c.rect());
+    let first = rects.next()?;
+    Some(rects.fold(first, |a, b| {
+        let (x, y) = (a.x.min(b.x), a.y.min(b.y));
+        Rectangle::new(x, y, (a.x + a.width).max(b.x + b.width) - x, (a.y + a.height).max(b.y + b.height) - y)
+    }))
+}
+
+/// A quick fix: the one edit that answers a finding, in map cells. Each
+/// is one undo step in the builder (`MapEditor::apply_fix`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LintFix {
+    /// Move the object on `from` to the empty cell `to`.
+    Move { from: (i32, i32), to: (i32, i32) },
+    /// Put `object` on the empty cell `at`.
+    Place { object: CellObject, at: (i32, i32) },
+    /// Take the object on `at` off the map.
+    Remove { at: (i32, i32) },
+}
+
+impl LintFix {
+    /// The cells the fix leaves something on - where the builder shows
+    /// the map after it.
+    pub fn target(self) -> (i32, i32) {
+        match self {
+            LintFix::Move { to, .. } => to,
+            LintFix::Place { at, .. } | LintFix::Remove { at } => at,
+        }
+    }
+}
+
+/// What a map is linted under: the round PLAY would set up on it - the
+/// seed, the seats and the command line's overrides of the session asking
+/// (`LintSetup::of`) - since the checks read the terrain and the seats a
+/// `Game::init` laid out.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LintSetup {
+    pub seed: u64,
+    pub players: crate::simulation::PlayerCount,
+    pub enemy_count_override: Option<usize>,
+    pub player_row_override: Option<i32>,
+    pub player2_row_override: Option<i32>,
+    pub level_overrides: crate::level::LevelOverrides,
+}
+
+impl LintSetup {
+    /// The setup of the round `game` is: its pinned seed or the one it
+    /// drew, its seats and its overrides.
+    pub fn of(game: &Game) -> LintSetup {
+        LintSetup {
+            seed: game.seed_override.unwrap_or_else(|| game.round_seed()),
+            players: game.players,
+            enemy_count_override: game.enemy_count_override,
+            player_row_override: game.player_row_override,
+            player2_row_override: game.player2_row_override,
+            level_overrides: game.level_overrides,
+        }
+    }
+}
+
+/// Lint `map` on a fresh headless round set up by `setup` (§3.1's
+/// setup): the one entry the dev server's `lint` tool and the builder's
+/// CHECK panel share, so the two cannot disagree. The round comes back
+/// with the findings, for what a caller reports of it.
+pub fn lint_map(map: &crate::map::MapFile, setup: &LintSetup) -> (Game, Vec<LintFinding>) {
+    let mut game = Game::default();
+    game.map = map.clone();
+    game.seed_override = Some(setup.seed);
+    game.players = setup.players;
+    game.enemy_count_override = setup.enemy_count_override;
+    game.player_row_override = setup.player_row_override;
+    game.player2_row_override = setup.player2_row_override;
+    game.level_overrides = setup.level_overrides;
+    let (width, height) = game.map.field_size();
+    game.init(width, height);
+    let findings = lint(&game, width, height);
+    (game, findings)
 }
 
 impl fmt::Display for LintFinding {
@@ -436,7 +597,8 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     let frog_pos = game.world.query::<&Frog>().iter().next().map(|f| f.position);
 
     let mut findings = Vec::new();
-    check_players(game, &cells, start, player_pos, player_size, &others, &mut findings);
+    let places = Places { game, grid: &grid, cells: &cells };
+    check_players(&places, start, player_pos, player_size, &others, &mut findings);
     check_reachability(game, &cells, &breach_cells, frog_pos, &mut findings);
     check_enemy_frog(game, &cells, &mut findings);
     check_gates(game, &grid, width, height, &mut findings);
@@ -465,6 +627,28 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     findings
 }
 
+/// Where a quick fix can put an object down: the round's own answer to
+/// "where can a tank start" (`Game::drop_cell` - spawn-legal clearance,
+/// out of deep water, off a portal) narrowed to the playfield and to the
+/// map's empty cells, since a fix moves or places an object and must not
+/// paint over another.
+struct Places<'a> {
+    game: &'a Game,
+    grid: &'a Grid,
+    cells: &'a Cells,
+}
+
+impl Places<'_> {
+    /// The empty playfield cell nearest `near` a tank can start on that
+    /// also passes `also`.
+    fn empty_cell(&self, near: Position, also: impl Fn(Position) -> bool) -> Option<(i32, i32)> {
+        self.game.drop_cell(self.grid, near, |(col, row), p| {
+            let (c, r) = self.cells.cell_of(p);
+            self.cells.in_playfield(c, r) && self.game.map.cell(col, row).is_none() && also(p)
+        })
+    }
+}
+
 /// Where player 1's start sits relative to the playfield (see `lint`).
 #[derive(Clone, Copy)]
 struct StartStatus {
@@ -479,24 +663,32 @@ struct StartStatus {
 /// destructible and an error once it is permanent; every seat past the
 /// first has to share the playfield with player 1, and the two authored
 /// starts have to leave a tank's width between them.
+///
+/// The fixes put a start where a tank can start from in the playfield,
+/// nearest where it was: the missing start where the game would have put
+/// player 1 anyway, a penned start out of its pen, an authored `start2`
+/// off its island or out of player 1's clearance.
 fn check_players(
-    game: &Game,
-    cells: &Cells,
+    places: &Places,
     start: StartStatus,
     player_pos: Position,
     player_size: f32,
     others: &[Position],
     findings: &mut Vec<LintFinding>,
 ) {
+    let (game, cells) = (places.game, places.cells);
+    let start_cell = LintCell::Map(map::world_to_cell(player_pos).0, map::world_to_cell(player_pos).1);
+    let put_start = |to: (i32, i32)| match game.map.start_cell() {
+        Some(from) => LintFix::Move { from, to },
+        None => LintFix::Place { object: CellObject::Start, at: to },
+    };
     if game.map.start_cell().is_none() {
-        findings.push(LintFinding {
-            severity: LintSeverity::Warning,
-            kind: LintKind::NoStart,
-            message: format!(
-                "no `start` cell: player 1 spawns at the nearest free cell to the centre, ({:.0},{:.0})",
-                player_pos.x, player_pos.y
-            ),
-        });
+        let message = format!(
+            "no `start` cell: player 1 spawns at the nearest free cell to the centre, ({:.0},{:.0})",
+            player_pos.x, player_pos.y
+        );
+        let fix = places.empty_cell(player_pos, |_| true).map(put_start);
+        findings.push(LintFinding::new(LintSeverity::Warning, LintKind::NoStart, message, vec![start_cell]).with_fix(fix));
     }
     if !start.in_playfield {
         let (col, row) = cells.cell_of(player_pos);
@@ -505,43 +697,55 @@ fn check_players(
         } else {
             (LintSeverity::Error, "sealed off by permanent walls - the player can never leave")
         };
-        findings.push(LintFinding {
-            severity,
-            kind: LintKind::StartPenned,
-            message: format!(
-                "player 1 starts at ({:.0},{:.0}) - nav cell ({col},{row}) - outside the playfield, {how}",
-                player_pos.x, player_pos.y
-            ),
-        });
+        let message = format!(
+            "player 1 starts at ({:.0},{:.0}) - nav cell ({col},{row}) - outside the playfield, {how}",
+            player_pos.x, player_pos.y
+        );
+        let fix = places.empty_cell(player_pos, |_| true).map(put_start);
+        findings.push(LintFinding::new(severity, LintKind::StartPenned, message, vec![start_cell]).with_fix(fix));
     }
+    let clear = player_size * 2.0;
     for (i, &pos) in others.iter().enumerate() {
         let (col, row) = cells.cell_of(pos);
         if !cells.touches_playfield((col, row)) {
-            findings.push(LintFinding {
-                severity: LintSeverity::Error,
-                kind: LintKind::Player2Unreachable,
-                message: format!(
-                    "player {} spawns at ({:.0},{:.0}) - nav cell ({col},{row}) - outside the playfield: the seats start in separate regions",
-                    i + 2,
-                    pos.x,
-                    pos.y
-                ),
+            let message = format!(
+                "player {} spawns at ({:.0},{:.0}) - nav cell ({col},{row}) - outside the playfield: the seats start in separate regions",
+                i + 2,
+                pos.x,
+                pos.y
+            );
+            // Player 2 on the map's own `start2`: that cell moves, kept a
+            // clear tank's width off player 1 so the game honours it.
+            let authored = (i == 0)
+                .then(|| game.map.start2_cell())
+                .flatten()
+                .filter(|&(c, r)| {
+                    let (c, r) = game.map.nearest_free_cell(c, r);
+                    map::cell_to_world(c, r) == pos
+                });
+            let fix = authored.and_then(|from| {
+                places.empty_cell(pos, |p| p.distance_to(player_pos) >= clear).map(|to| LintFix::Move { from, to })
             });
+            let at = map::world_to_cell(pos);
+            findings.push(
+                LintFinding::new(LintSeverity::Error, LintKind::Player2Unreachable, message, vec![LintCell::Map(at.0, at.1)]).with_fix(fix),
+            );
         }
     }
     // The same clearance `Game::init` demands of a `start2` cell before
     // it honours it (`tank.size() * 2.0`), measured on the map's cells.
     if let (Some(s1), Some(s2)) = (game.map.start_cell(), game.map.start2_cell()) {
-        let clear = player_size * 2.0;
-        let gap = map::cell_to_world(s2.0, s2.1).distance_to(map::cell_to_world(s1.0, s1.1));
+        let first = map::cell_to_world(s1.0, s1.1);
+        let gap = map::cell_to_world(s2.0, s2.1).distance_to(first);
         if gap < clear {
-            findings.push(LintFinding {
-                severity: LintSeverity::Warning,
-                kind: LintKind::PlayersTooClose,
-                message: format!(
-                    "the start2 cell is {gap:.0}px from the start cell, inside the {clear:.0}px clearance the game keeps between the players: it is ignored and player 2 is placed at the nearest open cell beside player 1 instead"
-                ),
-            });
+            let message = format!(
+                "the start2 cell is {gap:.0}px from the start cell, inside the {clear:.0}px clearance the game keeps between the players: it is ignored and player 2 is placed at the nearest open cell beside player 1 instead"
+            );
+            let fix = places
+                .empty_cell(map::cell_to_world(s2.0, s2.1), |p| p.distance_to(first) >= clear)
+                .map(|to| LintFix::Move { from: s2, to });
+            let cells = vec![LintCell::Map(s1.0, s1.1), LintCell::Map(s2.0, s2.1)];
+            findings.push(LintFinding::new(LintSeverity::Warning, LintKind::PlayersTooClose, message, cells).with_fix(fix));
         }
     }
 }
@@ -557,11 +761,12 @@ fn check_enemy_frog(game: &Game, cells: &Cells, findings: &mut Vec<LintFinding>)
     let map = &game.map;
     let Some((col, row)) = map.enemy_frog_cell() else {
         if map.mission.kind == Mission::Hunt {
-            findings.push(LintFinding {
-                severity: LintSeverity::Warning,
-                kind: LintKind::HuntMissingEnemyFrog,
-                message: "hunt mission with no enemy_frog cell - the round falls back to a procedural spot in the enemy spawn band".to_string(),
-            });
+            findings.push(LintFinding::new(
+                LintSeverity::Warning,
+                LintKind::HuntMissingEnemyFrog,
+                "hunt mission with no enemy_frog cell - the round falls back to a procedural spot in the enemy spawn band".to_string(),
+                Vec::new(),
+            ));
         }
         return;
     };
@@ -570,14 +775,11 @@ fn check_enemy_frog(game: &Game, cells: &Cells, findings: &mut Vec<LintFinding>)
         + battlefield::max_tank_clearance_half_extent()
         + APPROACH_SLACK;
     if !point_reachable(cells, pos, reach) {
-        findings.push(LintFinding {
-            severity: LintSeverity::Error,
-            kind: LintKind::EnemyFrogUnreachable,
-            message: format!(
-                "enemy_frog at map cell ({col},{row}) = ({:.0},{:.0}) has no playfield cell within {reach:.0}px - hunters can never reach it",
-                pos.x, pos.y
-            ),
-        });
+        let message = format!(
+            "enemy_frog at map cell ({col},{row}) = ({:.0},{:.0}) has no playfield cell within {reach:.0}px - hunters can never reach it",
+            pos.x, pos.y
+        );
+        findings.push(LintFinding::new(LintSeverity::Error, LintKind::EnemyFrogUnreachable, message, vec![LintCell::Map(col, row)]));
     }
 }
 
@@ -609,14 +811,14 @@ fn check_gates(game: &Game, grid: &Grid, width: f32, height: f32, findings: &mut
         } else if gr == rows - 1 {
             (0, -1)
         } else {
-            findings.push(LintFinding {
-                severity: LintSeverity::Error,
-                kind: LintKind::GateNotOnEdge,
-                message: format!(
-                    "gate at map cell ({col},{row}) = ({:.0},{:.0}) is nav-grid cell ({gc},{gr}), not on an edge of the {cols}x{rows} grid",
-                    pos.x, pos.y
-                ),
-            });
+            let message = format!(
+                "gate at map cell ({col},{row}) = ({:.0},{:.0}) is nav-grid cell ({gc},{gr}), not on an edge of the {cols}x{rows} grid",
+                pos.x, pos.y
+            );
+            // The round drops a gate with no outside to roll in from, so
+            // taking it off the map changes nothing but the warning.
+            let fix = Some(LintFix::Remove { at: (col, row) });
+            findings.push(LintFinding::new(LintSeverity::Error, LintKind::GateNotOnEdge, message, vec![LintCell::Map(col, row)]).with_fix(fix));
             continue;
         };
         // Start past the cells the boundary clearance margin blocks, the
@@ -634,14 +836,15 @@ fn check_gates(game: &Game, grid: &Grid, width: f32, height: f32, findings: &mut
             .map(|k| (gc + k * inward.0, gr + k * inward.1))
             .find(|&(c, r)| c < 0 || r < 0 || c >= cols || r >= rows || !grid.usable(center(c, r)));
         if let Some((c, r)) = blocked {
-            findings.push(LintFinding {
-                severity: LintSeverity::Error,
-                kind: LintKind::GateBlocked,
-                message: format!(
-                    "gate at map cell ({col},{row}) = ({:.0},{:.0}) needs its {inward_cells}-cell lane from nav-grid cell ({gc},{gr}) inward all usable, but ({c},{r}) is not",
-                    pos.x, pos.y
-                ),
-            });
+            let message = format!(
+                "gate at map cell ({col},{row}) = ({:.0},{:.0}) needs its {inward_cells}-cell lane from nav-grid cell ({gc},{gr}) inward all usable, but ({c},{r}) is not",
+                pos.x, pos.y
+            );
+            let mut at = vec![LintCell::Map(col, row)];
+            if c >= 0 && r >= 0 && c < cols && r < rows {
+                at.push(LintCell::Nav(c as usize, r as usize));
+            }
+            findings.push(LintFinding::new(LintSeverity::Error, LintKind::GateBlocked, message, at));
         }
     }
 }
@@ -672,13 +875,10 @@ fn check_wave_gates(
     let mut avoid = player_positions.to_vec();
     avoid.extend(game.world.query::<&Frog>().iter().filter(|fr| fr.side == Side::Player).map(|fr| fr.position));
     if battlefield::gate_candidates(grid, width, height, &avoid, min_dist, inward).is_empty() {
-        findings.push(LintFinding {
-            severity: LintSeverity::Error,
-            kind: LintKind::WavesNoGates,
-            message: format!(
-                "waves plan with no gate cells, and no edge lane ({inward} usable nav cells straight in, at least {min_dist:.0}px from the player start and frog) for the automatic scan to use: every wave would fall back to the spawn band"
-            ),
-        });
+        let message = format!(
+            "waves plan with no gate cells, and no edge lane ({inward} usable nav cells straight in, at least {min_dist:.0}px from the player start and frog) for the automatic scan to use: every wave would fall back to the spawn band"
+        );
+        findings.push(LintFinding::new(LintSeverity::Error, LintKind::WavesNoGates, message, Vec::new()));
     }
 }
 
@@ -752,14 +952,10 @@ fn check_reachability(
         let frog_reach =
             FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1) + tank_radius + APPROACH_SLACK;
         if !point_reachable(cells, frog, frog_reach) {
-            findings.push(LintFinding {
-                severity: LintSeverity::Error,
-                kind: LintKind::UnreachableFrog,
-                message: format!(
-                    "frog at ({:.0},{:.0}) has no playfield cell within {frog_reach:.0}px - tanks can never reach it",
-                    frog.x, frog.y
-                ),
-            });
+            let message =
+                format!("frog at ({:.0},{:.0}) has no playfield cell within {frog_reach:.0}px - tanks can never reach it", frog.x, frog.y);
+            let (col, row) = map::world_to_cell(frog);
+            findings.push(LintFinding::new(LintSeverity::Error, LintKind::UnreachableFrog, message, vec![LintCell::Map(col, row)]));
         }
     }
     let pickup_reach = tank_radius + APPROACH_SLACK;
@@ -776,23 +972,17 @@ fn check_reachability(
         // Not approachable on intact terrain. Gated loot if shooting the
         // breakable walls away opens a way in; sealed for good otherwise.
         if point_reachable(breach_cells, pos, pickup_reach) {
-            findings.push(LintFinding {
-                severity: LintSeverity::Warning,
-                kind: LintKind::GatedPickup,
-                message: format!(
-                    "pickup slot at map cell ({col},{row}) = ({:.0},{:.0}) is only reachable by destroying walls - the AI never will",
-                    pos.x, pos.y
-                ),
-            });
+            let message = format!(
+                "pickup slot at map cell ({col},{row}) = ({:.0},{:.0}) is only reachable by destroying walls - the AI never will",
+                pos.x, pos.y
+            );
+            findings.push(LintFinding::new(LintSeverity::Warning, LintKind::GatedPickup, message, vec![LintCell::Map(col, row)]));
         } else {
-            findings.push(LintFinding {
-                severity: LintSeverity::Error,
-                kind: LintKind::UnreachablePickup,
-                message: format!(
-                    "pickup slot at map cell ({col},{row}) = ({:.0},{:.0}) has no playfield cell within {pickup_reach:.0}px even with every destructible wall gone",
-                    pos.x, pos.y
-                ),
-            });
+            let message = format!(
+                "pickup slot at map cell ({col},{row}) = ({:.0},{:.0}) has no playfield cell within {pickup_reach:.0}px even with every destructible wall gone",
+                pos.x, pos.y
+            );
+            findings.push(LintFinding::new(LintSeverity::Error, LintKind::UnreachablePickup, message, vec![LintCell::Map(col, row)]));
         }
     }
 }
@@ -829,15 +1019,14 @@ fn check_towers(game: &Game, cells: &Cells, player_positions: &[Position], findi
             for (seat, &at) in player_positions.iter().enumerate() {
                 let d = at.distance_to(view.position);
                 if d <= range && d >= min_range {
-                    findings.push(LintFinding {
-                        severity: LintSeverity::Warning,
-                        kind: LintKind::TowerAtStart,
-                        message: format!(
-                            "enemy {} at map cell ({col},{row}) reaches player {}'s start {d:.0}px away (reach {range:.0}px): the round opens under fire",
-                            view.kind.name(),
-                            seat + 1
-                        ),
-                    });
+                    let message = format!(
+                        "enemy {} at map cell ({col},{row}) reaches player {}'s start {d:.0}px away (reach {range:.0}px): the round opens under fire",
+                        view.kind.name(),
+                        seat + 1
+                    );
+                    let start = map::world_to_cell(at);
+                    let cells = vec![LintCell::Map(col, row), LintCell::Map(start.0, start.1)];
+                    findings.push(LintFinding::new(LintSeverity::Warning, LintKind::TowerAtStart, message, cells));
                 }
             }
         }
@@ -846,21 +1035,23 @@ fn check_towers(game: &Game, cells: &Cells, player_positions: &[Position], findi
             cells.in_playfield(c, r) && d <= range && d >= min_range
         });
         if !reaches {
-            findings.push(LintFinding {
-                severity: LintSeverity::Info,
-                kind: LintKind::TowerNoReach,
-                message: format!("{} at map cell ({col},{row}) reaches no playfield cell: it can never fire", view.kind.name()),
-            });
+            let message = format!("{} at map cell ({col},{row}) reaches no playfield cell: it can never fire", view.kind.name());
+            findings.push(LintFinding::new(LintSeverity::Info, LintKind::TowerNoReach, message, vec![LintCell::Map(col, row)]));
         }
     }
     for side in [Side::Player, Side::Enemy] {
-        let n = towers.iter().filter(|v| v.side == side).count();
+        let mine: Vec<LintCell> = towers
+            .iter()
+            .filter(|v| v.side == side)
+            .map(|v| {
+                let (col, row) = map::world_to_cell(v.position);
+                LintCell::Map(col, row)
+            })
+            .collect();
+        let n = mine.len();
         if n > TOWERS_PER_SIDE_INFO {
-            findings.push(LintFinding {
-                severity: LintSeverity::Info,
-                kind: LintKind::TooManyTowers,
-                message: format!("{n} {} towers (more than {TOWERS_PER_SIDE_INFO}): heavy on the tick and on the player", side.name()),
-            });
+            let message = format!("{n} {} towers (more than {TOWERS_PER_SIDE_INFO}): heavy on the tick and on the player", side.name());
+            findings.push(LintFinding::new(LintSeverity::Info, LintKind::TooManyTowers, message, mine));
         }
     }
 }
@@ -869,13 +1060,11 @@ fn check_portals(game: &Game, cells: &Cells, findings: &mut Vec<LintFinding>) {
     let anchors = game.map.portal_cells();
     if anchors.len() == 1 {
         let (col, row) = anchors[0];
-        findings.push(LintFinding {
-            severity: LintSeverity::Warning,
-            kind: LintKind::PortalAlone,
-            message: format!(
-                "one portal at map cell ({col},{row}): a network needs two - this one is inert and the round draws nothing"
-            ),
-        });
+        let message = format!("one portal at map cell ({col},{row}): a network needs two - this one is inert and the round draws nothing");
+        // Inert and undrawn in the round: taking it away changes nothing
+        // but the warning.
+        let fix = Some(LintFix::Remove { at: (col, row) });
+        findings.push(LintFinding::new(LintSeverity::Warning, LintKind::PortalAlone, message, vec![LintCell::Map(col, row)]).with_fix(fix));
     }
     let radius = tuning().portal_trigger_radius;
     for (col, row) in anchors {
@@ -885,23 +1074,17 @@ fn check_portals(game: &Game, cells: &Cells, findings: &mut Vec<LintFinding>) {
             .filter(|&(c, r)| cells.is_open(c as isize, r as isize) && cells.center(c, r).distance_to(at) <= radius)
             .collect();
         if footprint.is_empty() {
-            findings.push(LintFinding {
-                severity: LintSeverity::Error,
-                kind: LintKind::PortalBlocked,
-                message: format!(
-                    "portal at map cell ({col},{row}) = ({:.0},{:.0}) has no open nav cell within {radius:.0}px: it sits in terrain",
-                    at.x, at.y
-                ),
-            });
+            let message = format!(
+                "portal at map cell ({col},{row}) = ({:.0},{:.0}) has no open nav cell within {radius:.0}px: it sits in terrain",
+                at.x, at.y
+            );
+            findings.push(LintFinding::new(LintSeverity::Error, LintKind::PortalBlocked, message, vec![LintCell::Map(col, row)]));
         } else if game.portals_active() && !footprint.iter().any(|&c| cells.touches_playfield(c)) {
-            findings.push(LintFinding {
-                severity: LintSeverity::Error,
-                kind: LintKind::PortalBlocked,
-                message: format!(
-                    "portal at map cell ({col},{row}) = ({:.0},{:.0}) is not in the playfield: nothing can reach it or arrive through it",
-                    at.x, at.y
-                ),
-            });
+            let message = format!(
+                "portal at map cell ({col},{row}) = ({:.0},{:.0}) is not in the playfield: nothing can reach it or arrive through it",
+                at.x, at.y
+            );
+            findings.push(LintFinding::new(LintSeverity::Error, LintKind::PortalBlocked, message, vec![LintCell::Map(col, row)]));
         }
     }
 }
@@ -932,16 +1115,14 @@ fn check_disconnected_regions(cells: &Cells, findings: &mut Vec<LintFinding>) {
                 LintSeverity::Info
             };
             let (c0, r0) = component[0];
-            findings.push(LintFinding {
-                severity,
-                kind: LintKind::DisconnectedRegion,
-                message: format!(
-                    "{} open cell(s) unreachable from the playfield, e.g. grid cell ({c0},{r0}) around ({:.0},{:.0})",
-                    component.len(),
-                    cells.center(c0, r0).x,
-                    cells.center(c0, r0).y
-                ),
-            });
+            let message = format!(
+                "{} open cell(s) unreachable from the playfield, e.g. grid cell ({c0},{r0}) around ({:.0},{:.0})",
+                component.len(),
+                cells.center(c0, r0).x,
+                cells.center(c0, r0).y
+            );
+            let at = component.iter().map(|&(c, r)| LintCell::Nav(c, r)).collect();
+            findings.push(LintFinding::new(severity, LintKind::DisconnectedRegion, message, at));
         }
     }
 }
@@ -955,14 +1136,11 @@ fn check_boxed_in(grid: &Grid, cells: &Cells, findings: &mut Vec<LintFinding>) {
             }
             let center = cells.center(col, row);
             if grid.boxed_in(center) {
-                findings.push(LintFinding {
-                    severity: LintSeverity::Error,
-                    kind: LintKind::BoxedInCell,
-                    message: format!(
-                        "grid cell ({col},{row}) around ({:.0},{:.0}) is open but every neighbor is blocked - unusable, and a trap for knocked-back tanks",
-                        center.x, center.y
-                    ),
-                });
+                let message = format!(
+                    "grid cell ({col},{row}) around ({:.0},{:.0}) is open but every neighbor is blocked - unusable, and a trap for knocked-back tanks",
+                    center.x, center.y
+                );
+                findings.push(LintFinding::new(LintSeverity::Error, LintKind::BoxedInCell, message, vec![LintCell::Nav(col, row)]));
             }
         }
     }
@@ -1033,22 +1211,16 @@ fn check_spawn_band(
         .map(|n| (n as usize).clamp(1, 31))
         .unwrap_or(tuning().enemy_count_min);
     if capacity < required {
-        findings.push(LintFinding {
-            severity: LintSeverity::Error,
-            kind: LintKind::SpawnBandTooTight,
-            message: format!(
-                "only {capacity} legal enemy-spawn cell(s) in the border band for {required} tank(s) - spawning will hit the rejection-sampling attempt cap"
-            ),
-        });
+        let message = format!(
+            "only {capacity} legal enemy-spawn cell(s) in the border band for {required} tank(s) - spawning will hit the rejection-sampling attempt cap"
+        );
+        findings.push(LintFinding::new(LintSeverity::Error, LintKind::SpawnBandTooTight, message, Vec::new()));
     } else if capacity < tuning().enemy_count_max {
-        findings.push(LintFinding {
-            severity: LintSeverity::Warning,
-            kind: LintKind::SpawnBandTooTight,
-            message: format!(
-                "only {capacity} legal enemy-spawn cell(s) in the border band (fewer than enemy_count_max = {}) - high tank counts will crowd or degrade to the attempt cap",
-                tuning().enemy_count_max
-            ),
-        });
+        let message = format!(
+            "only {capacity} legal enemy-spawn cell(s) in the border band (fewer than enemy_count_max = {}) - high tank counts will crowd or degrade to the attempt cap",
+            tuning().enemy_count_max
+        );
+        findings.push(LintFinding::new(LintSeverity::Warning, LintKind::SpawnBandTooTight, message, Vec::new()));
     }
 }
 
@@ -1099,22 +1271,40 @@ fn check_planner_physics(
     findings: &mut Vec<LintFinding>,
 ) {
     let tank_half = battlefield::max_tank_clearance_half_extent();
+    // Each box filed under every nav cell whose centre it could overlap a
+    // tank at, so a cell is tested against its few neighbours rather than
+    // every box on the map - the same boxes in the same order, so the
+    // same first overlap is reported.
+    let mut near: Vec<Vec<usize>> = vec![Vec::new(); cells.cols * cells.rows];
+    for (i, &(pos, half)) in boxes.iter().enumerate() {
+        let reach_x = tank_half + half.x;
+        let reach_y = tank_half + half.y;
+        let span = |c: f32, reach: f32, n: usize| {
+            let lo = ((c - reach) / PATHFIND_CELL_SIZE - 0.5).floor().max(0.0) as usize;
+            let hi = (((c + reach) / PATHFIND_CELL_SIZE - 0.5).ceil().max(0.0) as usize).min(n.saturating_sub(1));
+            lo..=hi
+        };
+        for row in span(pos.y, reach_y, cells.rows) {
+            for col in span(pos.x, reach_x, cells.cols) {
+                near[cells.idx(col, row)].push(i);
+            }
+        }
+    }
     for row in 0..cells.rows {
         for col in 0..cells.cols {
             if !cells.is_open(col as isize, row as isize) {
                 continue;
             }
             let center = cells.center(col, row);
-            for &(pos, half) in boxes {
+            for &(pos, half) in near[cells.idx(col, row)].iter().map(|&i| &boxes[i]) {
                 if aabb_overlap(center, tank_half, pos, half) {
-                    findings.push(LintFinding {
-                        severity: LintSeverity::Error,
-                        kind: LintKind::PlannerPhysicsMismatch,
-                        message: format!(
-                            "grid cell ({col},{row}) around ({:.0},{:.0}) is open but a worst-case tank there overlaps the collider at ({:.0},{:.0})",
-                            center.x, center.y, pos.x, pos.y
-                        ),
-                    });
+                    let message = format!(
+                        "grid cell ({col},{row}) around ({:.0},{:.0}) is open but a worst-case tank there overlaps the collider at ({:.0},{:.0})",
+                        center.x, center.y, pos.x, pos.y
+                    );
+                    let (c, r) = map::world_to_cell(pos);
+                    let at = vec![LintCell::Nav(col, row), LintCell::Map(c, r)];
+                    findings.push(LintFinding::new(LintSeverity::Error, LintKind::PlannerPhysicsMismatch, message, at));
                     break; // one report per cell is enough
                 }
             }
@@ -1150,14 +1340,8 @@ fn check_narrow_corridors(cells: &Cells, findings: &mut Vec<LintFinding>) {
             let y_flows = cells.is_open(c, r - 1) || cells.is_open(c, r + 1);
             if (x_sealed && y_flows) || (y_sealed && x_flows) {
                 let center = cells.center(col, row);
-                findings.push(LintFinding {
-                    severity: LintSeverity::Info,
-                    kind: LintKind::NarrowCorridor,
-                    message: format!(
-                        "grid cell ({col},{row}) around ({:.0},{:.0}) is a single-cell-wide passage",
-                        center.x, center.y
-                    ),
-                });
+                let message = format!("grid cell ({col},{row}) around ({:.0},{:.0}) is a single-cell-wide passage", center.x, center.y);
+                findings.push(LintFinding::new(LintSeverity::Info, LintKind::NarrowCorridor, message, vec![LintCell::Nav(col, row)]));
             }
         }
     }
@@ -1189,6 +1373,7 @@ mod map_lint_tests {
         "maps/default.toml",
         "maps/default-desert.toml",
         "maps/towers.toml",
+        "maps/longwater.toml",
         "maps/lotus-lagoon.toml",
         "maps/hedge-maze.toml",
         "maps/oasis-bazaar.toml",
@@ -2155,6 +2340,176 @@ mod map_lint_tests {
         dump("portals (shipped)", &f);
         assert!(errors(&f).is_empty(), "the shipped portal map must be fully legal");
         assert!(!has(&f, LintKind::PortalAlone) && !has(&f, LintKind::PortalBlocked));
+    }
+
+    /// `fix` applied to `map` the way the builder applies it.
+    fn apply(map: &mut MapFile, fix: LintFix) {
+        match fix {
+            LintFix::Move { from, to } => {
+                let obj = *map.cell(from.0, from.1).expect("a fix moves an object that is there");
+                assert!(map.cell(to.0, to.1).is_none(), "a fix moves onto an empty cell");
+                map.clear_cell(from.0, from.1);
+                map.set_cell(to.0, to.1, obj);
+            }
+            LintFix::Place { object, at } => {
+                assert!(map.cell(at.0, at.1).is_none(), "a fix places onto an empty cell");
+                map.set_cell(at.0, at.1, object);
+            }
+            LintFix::Remove { at } => {
+                assert!(map.cell(at.0, at.1).is_some(), "a fix removes an object that is there");
+                map.clear_cell(at.0, at.1);
+            }
+        }
+    }
+
+    fn finding(findings: &[LintFinding], kind: LintKind) -> &LintFinding {
+        findings.iter().find(|f| f.kind == kind).unwrap_or_else(|| panic!("no {kind:?} in {findings:?}"))
+    }
+
+    /// Every finding names its place: the object a check is about as its
+    /// map cell, what it measured as nav cells - a pocket's every cell, a
+    /// boxed-in cell, a lane's blocked one - and nothing for a finding
+    /// about the whole map.
+    #[test]
+    fn findings_carry_the_cells_they_are_about() {
+        let mut map = base_map();
+        map.set_cell(20, 5, CellObject::Portal);
+        sealed_ring(&mut map);
+        map.set_cell(20, 11, CellObject::Gate);
+        map.mission.kind = Mission::Hunt;
+        let f = lint_map(map);
+        dump("cells", &f);
+        assert_eq!(finding(&f, LintKind::PortalAlone).cells, vec![LintCell::Map(20, 5)]);
+        assert_eq!(finding(&f, LintKind::GateNotOnEdge).cells, vec![LintCell::Map(20, 11)]);
+        let boxed = finding(&f, LintKind::BoxedInCell);
+        assert!(matches!(boxed.cells[..], [LintCell::Nav(..)]), "{boxed:?}");
+        // The boxed-in cell is the one the ring closes round: inside it.
+        let inside = boxed.cells[0].rect();
+        let ring = Rectangle::new(14.0 * 32.0, 8.0 * 32.0, 3.0 * 32.0, 3.0 * 32.0);
+        assert!(inside.x >= ring.x && inside.y >= ring.y && inside.x + inside.width <= ring.x + ring.width + 1.0, "{inside:?} in {ring:?}");
+        let region = finding(&f, LintKind::DisconnectedRegion);
+        assert!(!region.cells.is_empty() && region.cells.iter().all(|c| matches!(c, LintCell::Nav(..))), "{region:?}");
+        assert!(finding(&f, LintKind::HuntMissingEnemyFrog).cells.is_empty(), "about the whole map");
+        // The bounds of a finding's cells hold every one of them.
+        let b = cells_bounds(&region.cells).unwrap();
+        for c in &region.cells {
+            let r = c.rect();
+            assert!(r.x >= b.x && r.y >= b.y && r.x + r.width <= b.x + b.width && r.y + r.height <= b.y + b.height);
+        }
+        assert_eq!(cells_bounds(&[]), None);
+    }
+
+    /// The quick fixes: each is the one edit its finding asks for, onto an
+    /// empty cell where it puts something down, and the map it leaves
+    /// lints clean of that finding.
+    #[test]
+    fn each_quick_fix_answers_its_finding() {
+        // A lone portal and an interior gate: taken away.
+        let mut map = base_map();
+        map.set_cell(20, 5, CellObject::Portal);
+        map.set_cell(20, 11, CellObject::Gate);
+        let f = lint_map(map.clone());
+        assert_eq!(finding(&f, LintKind::PortalAlone).fix, Some(LintFix::Remove { at: (20, 5) }));
+        assert_eq!(finding(&f, LintKind::GateNotOnEdge).fix, Some(LintFix::Remove { at: (20, 11) }));
+        for kind in [LintKind::PortalAlone, LintKind::GateNotOnEdge] {
+            apply(&mut map, finding(&f, kind).fix.unwrap());
+        }
+        let after = lint_map(map);
+        assert!(!has(&after, LintKind::PortalAlone) && !has(&after, LintKind::GateNotOnEdge), "{after:?}");
+
+        // A start penned in iron: moved out to the nearest cell a tank can
+        // start from on the playfield, which is the start's own side.
+        let mut map = base_map();
+        for c in 25..=29 {
+            wall(&mut map, c, 9);
+            wall(&mut map, c, 13);
+        }
+        for r in 9..=13 {
+            wall(&mut map, 25, r);
+            wall(&mut map, 29, r);
+        }
+        let f = lint_map(map.clone());
+        let penned = finding(&f, LintKind::StartPenned);
+        assert_eq!(penned.cells, vec![LintCell::Map(27, 11)]);
+        let Some(LintFix::Move { from, to }) = penned.fix else { panic!("{penned:?}") };
+        assert_eq!(from, (27, 11));
+        let d = map::cell_to_world(to.0, to.1).distance_to(map::cell_to_world(27, 11));
+        assert!(d < 5.0 * 32.0, "nearby: {to:?}");
+        apply(&mut map, penned.fix.unwrap());
+        let after = lint_map(map.clone());
+        dump("start moved out", &after);
+        assert!(!has(&after, LintKind::StartPenned), "{after:?}");
+
+        // No start at all: put where the game would have put player 1.
+        let mut map = wide();
+        map.set_cell(7, 12, CellObject::Frog);
+        let f = lint_map(map.clone());
+        let none = finding(&f, LintKind::NoStart);
+        let Some(LintFix::Place { object: CellObject::Start, at }) = none.fix else { panic!("{none:?}") };
+        assert_eq!(none.cells, vec![LintCell::Map(at.0, at.1)], "where the game puts player 1 is a cell a start can be");
+        apply(&mut map, none.fix.unwrap());
+        assert!(!has(&lint_map(map), LintKind::NoStart));
+
+        // Player 2's start inside player 1's clearance: moved out of it.
+        let mut map = base_map();
+        map.set_cell(28, 11, CellObject::Start2);
+        let f = lint_map(map.clone());
+        let close = finding(&f, LintKind::PlayersTooClose);
+        assert_eq!(close.cells, vec![LintCell::Map(27, 11), LintCell::Map(28, 11)]);
+        apply(&mut map, close.fix.expect("a fix"));
+        assert!(!has(&lint_map(map), LintKind::PlayersTooClose));
+
+        // Player 2's start sealed off: moved onto the playfield, a clear
+        // tank's width off player 1.
+        let mut map = base_map();
+        map.set_cell(3, 3, CellObject::Start2);
+        for (c, r) in [(2, 2), (3, 2), (4, 2), (2, 3), (4, 3), (2, 4), (3, 4), (4, 4)] {
+            wall(&mut map, c, r);
+        }
+        let f = lint_map(map.clone());
+        let sealed = finding(&f, LintKind::Player2Unreachable);
+        assert!(matches!(sealed.fix, Some(LintFix::Move { from: (3, 3), .. })), "{sealed:?}");
+        apply(&mut map, sealed.fix.unwrap());
+        let after = lint_map(map);
+        assert!(!has(&after, LintKind::Player2Unreachable) && !has(&after, LintKind::PlayersTooClose), "{after:?}");
+
+        // Where the answer is the author's - a sealed pickup, a blocked
+        // gate's lane - there is no fix.
+        let mut map = base_map();
+        sealed_vault(&mut map);
+        map.set_cell(17, 11, CellObject::Pickup { pickup: PickupKind::Health });
+        assert_eq!(finding(&lint_map(map), LintKind::UnreachablePickup).fix, None);
+    }
+
+    /// What linting a large map costs, the way the builder's CHECK panel
+    /// runs it (a headless round set up and linted): prints, run with
+    /// `--ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn lint_timing_on_the_large_maps() {
+        for path in ["maps/study/frontier.toml", "maps/longwater.toml", "maps/default.toml"] {
+            let map = MapFile::load(std::path::Path::new(path)).expect("the map loads");
+            let setup = LintSetup { seed: 0xB0B5, ..LintSetup::default() };
+            let _ = super::lint_map(&map, &setup);
+            let runs = 5;
+            let start = std::time::Instant::now();
+            let mut n = 0;
+            for _ in 0..runs {
+                n = super::lint_map(&map, &setup).1.len();
+            }
+            let each = start.elapsed().as_secs_f64() * 1e3 / runs as f64;
+            let mut game = Game::default();
+            game.seed_override = Some(0xB0B5);
+            game.map = map.clone();
+            let (w, h) = map.field_size();
+            let t = std::time::Instant::now();
+            game.init(w, h);
+            let init = t.elapsed().as_secs_f64() * 1e3;
+            let t = std::time::Instant::now();
+            let _ = lint(&game, w, h);
+            let checks = t.elapsed().as_secs_f64() * 1e3;
+            eprintln!("{path}: {each:.1} ms a run ({init:.1} ms the round, {checks:.1} ms the checks), {n} findings");
+        }
     }
 
     /// Everything else under maps/ is scratch: lint-and-print only

@@ -12,7 +12,8 @@
 //! the small helpers those phases share; `weapons` fires shots and ticks
 //! queued ones; `hits` is the swept projectile hit test over a per-frame
 //! terrain snapshot; `combat` applies damage, knockback, rams and
-//! explosions; `engage` hands attacking enemies distinct engagement slots.
+//! explosions; `engage` hands attacking enemies distinct engagement slots;
+//! `nav` builds the nav grid the AI routes by and keeps it across frames.
 //!
 //! Determinism: all round randomness flows from the one seeded `SmallRng`
 //! in `Game::rng` (never `rand::rng()` on the simulation path, never
@@ -23,10 +24,13 @@ mod combat;
 mod command;
 mod comms;
 pub mod debug;
+mod director;
 mod engage;
+mod field;
 mod flame;
 mod hits;
 mod missiles;
+mod nav;
 pub mod present;
 mod props;
 mod towers;
@@ -48,8 +52,9 @@ mod waves;
 mod weather_tests;
 mod weapons;
 
+pub use director::Pacing;
 pub use waves::{RollIn, WaveStatus};
-pub use weapons::FlameJet;
+pub use weapons::{laser_reach, FlameJet};
 
 /// Which projectile a client's provisional shot is drawn as
 /// (`net::predict`): the three the wire also carries.
@@ -171,7 +176,7 @@ use crate::{
 use combat::{frog_hop_target, ram, HitEffects};
 use engage::{EngageCtx, EngageReport, EngageRing, EngageStatus, EngageTank};
 use hits::{HitBoxFrame, HitBoxHistory, REWIND_MAX_TICKS, ShellTarget, Terrain};
-use weapons::{dispatch_fire, dispatch_fire_from, laser_damage_range, tick_queued_shots, PendingLaserShot, Projectile, Rewind, laser_beam_half_width};
+use weapons::{dispatch_fire, dispatch_fire_from, laser_damage_range, laser_end, tick_queued_shots, PendingLaserShot, Projectile, Rewind, laser_beam_half_width};
 
 /// One step's player input, gathered by the caller (`app.rs` reading a
 /// live `RaylibHandle`, the dev server, a scripted probe) - the entire
@@ -385,6 +390,12 @@ pub enum Event {
     /// A wave tank in `slot` finished rolling in: it now has a body and an
     /// `Ai`, and counts as an enemy on the field.
     TankEntered { slot: usize },
+    /// A field map took the straggler in `slot` off the field at (`x`,
+    /// `y`), out of every seat's sight, to roll it in again through a gate
+    /// nearer the fight (`Game::reroll_stragglers`); its `TankEntered`
+    /// follows when it is through. Not sent: a replica sees the hull
+    /// leave and come back through the gate by itself.
+    Rerolled { slot: usize, x: f32, y: f32 },
     /// A wave round removed the wreck in `slot` after
     /// `wave_wreck_despawn_seconds`.
     WreckRemoved { slot: usize },
@@ -647,6 +658,13 @@ pub struct Game {
     pub mission: Mission,
     /// How enemies arrive this round - resolved by `init` like `mission`.
     pub spawn_plan: SpawnPlan,
+    /// The round is fought on a field map - one the camera follows,
+    /// `MapFile::class` - and the enemies are bounded the way such a map
+    /// needs (`field`: chained alerts and leashes instead of the shared
+    /// alert, far enemies thinking less, spawns and gates by their walk to
+    /// the fight). Set by `init` from the map; false on every arena, which
+    /// plays exactly as it always has.
+    pub(crate) field_map: bool,
     /// How many enemies the band plan placed at init. Zero is a sandbox
     /// round (`tanks = 0` / `--enemies 0`): nothing to wreck, so it never
     /// ends by wreck count - only by the player's or the frog's death.
@@ -654,6 +672,10 @@ pub struct Game {
     /// The wave scheduler (`waves.rs`): idle under the band plan apart
     /// from handing out owner slots.
     wave: WaveState,
+    /// The pacing director (`director`): how hard each seat is pressed,
+    /// and from that the breather before a field map's next wave. Read
+    /// and written by `wave_phase` on a field map's wave round only.
+    director: director::Director,
     /// Seconds the round stays frozen behind the opening mission banner.
     /// `update` ticks nothing else while it is positive; a move or fire
     /// input ends it early.
@@ -727,10 +749,10 @@ pub struct Game {
     /// (see `blast.rs`).
     pub(crate) blast_fx: Vec<BlastFx>,
     /// Burn marks left by barrel blasts this round, oldest first, capped at
-    /// `SCORCH_MAX`.
+    /// `mark_caps` (`SCORCH_MAX` on an arena).
     pub(crate) scorches: Vec<Scorch>,
     /// Rubble left where a wall tile died this round, oldest first, capped
-    /// at `DECAL_MAX` (see `decal.rs`).
+    /// at `mark_caps` (`DECAL_MAX` on an arena; see `decal.rs`).
     pub(crate) decals: Vec<Decal>,
     /// Cells the map marked as tall grass. The concealment query
     /// (`grass::conceals`) runs against these, not against the drawn tufts:
@@ -823,6 +845,14 @@ pub struct Game {
     /// `--seed`: pins the round seed, so every restart replays the
     /// identical round - the repro loop for a round the probe flagged.
     pub seed_override: Option<u64>,
+    /// The builder's PLAY HERE (`mode::Session::play_here`): the map cell
+    /// seat 1 starts on in place of the map's `start`, the map itself left
+    /// as it is. Set before `init` and kept across restarts, so a round
+    /// tried from here starts here again; PLAY, a level and a map put in
+    /// the round's place clear it. With it set, seat 2 takes the fallback
+    /// beside seat 1 rather than the map's `start2`. `None` - every round
+    /// but the builder's test from a spot - is the map's own start.
+    pub start_override: Option<(i32, i32)>,
     /// The seed this round actually ran with (see `round_seed()`).
     round_seed: u64,
     /// The sky this round is fought and drawn under (docs/weather.md),
@@ -836,6 +866,9 @@ pub struct Game {
     /// map's sky and every client has to draw and drive under that one.
     /// Kept across restarts.
     pub weather_from_map: bool,
+    /// The static bodies `init` put on the deep water cells, which a
+    /// snowfall mid-round (`change_weather`) takes off as the water ices.
+    deep_water_bodies: Vec<rapier2d::prelude::RigidBodyHandle>,
     /// The round's single RNG stream - see the module doc. `None` only
     /// before the first `init`. `update` takes it into the frame context
     /// and puts it back at its end.
@@ -888,6 +921,19 @@ pub struct Game {
     /// Tooling-only: the dev server turns it on; the simulation never
     /// reads it, and off by default so a quiet frame has no events.
     pub trace_ai: bool,
+    /// Tests only: work every flow field out whole as the frame's routing
+    /// grid is built (`Grid::settle_fields`), the yardstick a field worked
+    /// out only as far as it is read is held to.
+    #[cfg(test)]
+    pub(crate) whole_fields: bool,
+    /// The nav grid kept across frames (`nav`): its occupancy and labels,
+    /// rebuilt only where the terrain changed. Emptied by `init`.
+    pub(crate) nav: nav::NavCache,
+    /// Tests only: build every frame's routing grid from scratch
+    /// (`route_grid`) rather than on the kept one, the yardstick the kept
+    /// grid is held to.
+    #[cfg(test)]
+    pub(crate) scratch_nav: bool,
 }
 
 /// Per-frame scratch state threaded through `Game::update`'s phases: the
@@ -1048,6 +1094,27 @@ pub(crate) const SHOCK_SHIELD_BREAK: f32 = 0.45;
 pub(crate) const SHOCK_TELEPORT: f32 = 0.3;
 
 impl Game {
+    /// Put `sky` on the round's map and fight the rest of the round under
+    /// it, no restart: the look, sight, grip and gusts change at once (the
+    /// override knob still outranks the map's key, as in `init`). Snow
+    /// ices the water over where it was open - its deep cells lose their
+    /// bodies and the nav grid is built again - but ice does not thaw
+    /// back mid-round, since a hull may stand on what would be deep
+    /// water; the next round settles the water from its own sky. Draws no
+    /// RNG.
+    pub fn change_weather(&mut self, sky: crate::map::Weather) {
+        self.map.weather = sky;
+        let t = tuning();
+        self.weather = crate::weather::in_force(sky, self.round_seed(), self.weather_from_map, &t);
+        if crate::weather::freezes(self.weather, &t) && !self.water.is_frozen() {
+            self.water.freeze();
+            for body in std::mem::take(&mut self.deep_water_bodies) {
+                self.physics.remove_body(body);
+            }
+            self.nav.clear();
+        }
+    }
+
     /// Set up a fresh round: player, map terrain, enemies, frog, pickups,
     /// ground. Also the restart path. `width`/`height` are the battlefield
     /// size in pixels.
@@ -1109,6 +1176,9 @@ impl Game {
         self.tower_ruins.clear();
         self.frame = 0;
         self.hit_history.clear();
+        // The water and the portals are the round's: what was kept of the
+        // last round's nav grid goes with them.
+        self.nav.clear();
         self.seat_view = [None; MAX_SEATS];
         // `frame` starts over, so an update number held from the last
         // round would name one of this round's.
@@ -1122,6 +1192,7 @@ impl Game {
         self.enemy_frog = None;
         self.mission = self.level_overrides.resolve_mission(&self.map.mission);
         self.spawn_plan = self.level_overrides.resolve_spawn(&self.map.spawn, self.enemy_count_override);
+        self.field_map = self.map.class() == crate::framing::MapClass::Field;
         self.intro_timer = if self.show_intro { tuning().mission_banner_seconds } else { 0.0 };
         self.intro_fade = 0.0;
 
@@ -1155,18 +1226,21 @@ impl Game {
             self.water.freeze();
         }
         let deep_cells: HashSet<(i32, i32)> = self.water.deep_grid_cells().collect();
+        self.deep_water_bodies.clear();
         for (gx, gy) in self.water.deep_grid_cells() {
             let half = battlefield::tile_hull_half_extent(&deep_cells, gx, gy, OBSTACLE_GRID_SIZE * 0.5);
-            self.physics.spawn_static(map::cell_to_world(gx, gy), half);
+            let body = self.physics.spawn_static(map::cell_to_world(gx, gy), half);
+            self.deep_water_bodies.push(body);
         }
 
         // --- Player ---
         let row = resolve_player_row(self.player_row_override, tuning().player_tank, self.map.tank, || {
             rng.random_range(0..TANK_VARIANTS)
         });
-        // The map's start cell, else the nearest non-wall cell to the
-        // center so a wall at the center doesn't spawn the player inside it.
-        let start_cell = self.map.start_cell().unwrap_or_else(|| {
+        // The builder's PLAY HERE cell, else the map's start cell, else the
+        // nearest non-wall cell to the center so a wall at the center
+        // doesn't spawn the player inside it.
+        let start_cell = self.start_override.or_else(|| self.map.start_cell()).unwrap_or_else(|| {
             let (center_col, center_row) = map::world_to_cell(Position::new(width / 2.0, height / 2.0));
             self.map.nearest_free_cell(center_col, center_row)
         });
@@ -1180,7 +1254,7 @@ impl Game {
             ..Tank::default()
         };
         if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
-            tank.shield_hp = tuning().shield_capacity;
+            tank.raise_shield();
         }
         roll_track_distortion(&mut tank, &mut rng);
         // Spawn facing up (rotation 0): the Y-axis collider orientation.
@@ -1247,6 +1321,7 @@ impl Game {
         };
         self.band_enemy_count = enemy_count;
         self.wave = WaveState::new(self.first_enemy_slot() + enemy_count);
+        self.director = director::Director::default();
 
         // Terrain legality is the nav grid's `usable` test (see
         // `battlefield::enemy_spawn_legal`); the frog is not down yet, so
@@ -1269,12 +1344,13 @@ impl Game {
             let row = resolve_player_row(pin, -1, map_row, || rng.random_range(0..TANK_VARIANTS));
             // Seat 1 takes the map's `start2` cell (nudged off a solid
             // tile); every seat without an authored start - and seat 1 with
-            // a `start2` inside player 1's clearance - takes the nearest
-            // usable nav cell to player 1 that keeps a clear tank's width
-            // from every seat already down, moved ashore if that lands it
-            // in a lake.
+            // a `start2` inside player 1's clearance, or in a round started
+            // from the builder's spot, whose `start2` is by the map's start
+            // and not by player 1 - takes the nearest usable nav cell to
+            // player 1 that keeps a clear tank's width from every seat
+            // already down, moved ashore if that lands it in a lake.
             let placed: Vec<Position> = std::iter::once(center).chain(others.iter().copied()).collect();
-            let position = (seat == 1)
+            let position = (seat == 1 && self.start_override.is_none())
                 .then(|| self.map.start2_cell())
                 .flatten()
                 .map(|(col, row)| {
@@ -1317,7 +1393,7 @@ impl Game {
                 ..Tank::default()
             };
             if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
-                tank.shield_hp = tuning().shield_capacity;
+                tank.raise_shield();
             }
             roll_track_distortion(&mut tank, &mut rng);
             tank.body = Some(self.physics.spawn_tank(tank.position, tank.move_half_extents(false), tank.mass()));
@@ -1326,8 +1402,26 @@ impl Game {
         }
         let clear_of_others = |pos: Position| others.iter().all(|&c| pos.distance_to(c) >= clear);
 
+        // A field map's band is not a ring in from the edges but the cells
+        // outside every seat's sight box, those whose walk to the nearest
+        // seat is about `field_walk_seconds` where the map has any
+        // (`field::spawn_cells`). An
+        // arena has none, draws nothing for them and places every enemy in
+        // its band exactly as before; a field map whose cells run out falls
+        // back to that band too.
+        let field_cells = if self.field_map && enemy_count > 0 {
+            let seats: Vec<Position> = std::iter::once(center).chain(others.iter().copied()).collect();
+            field::spawn_cells(&spawn_grid, &seats, &obstacle_positions)
+        } else {
+            Vec::new()
+        };
+
         let mut enemy_positions: Vec<Position> = Vec::with_capacity(enemy_count);
+        // The field cells clear of the seats, less each enemy's
+        // neighbourhood as it goes down (`field::SpawnPool`).
+        let mut field_pool = field::SpawnPool::new(&field_cells, |pos| pos.distance_to(center) >= clear && clear_of_others(pos));
         while enemy_positions.len() < enemy_count {
+            let field_pick = field_pool.pick(&mut rng, &enemy_positions);
             let legal = |pos: Position| {
                 battlefield::enemy_spawn_legal(
                     pos,
@@ -1341,22 +1435,24 @@ impl Game {
                     &obstacle_positions,
                 ) && clear_of_others(pos)
             };
-            let pos = battlefield::sample_clear_position(&mut rng, width, height, margin_min, |pos| {
-                legal(pos) && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
-            })
-            .unwrap_or_else(|| {
-                // Attempt cap: the band is too crowded for a fully legal
-                // spot. Snap one more band sample to the nearest usable
-                // cell that keeps its distance from the tanks already
-                // down, so the fallback can still never land in a wall.
-                let sample = Position::new(
-                    rng.random_range(margin_min..(width - margin_min)),
-                    rng.random_range(margin_min..(height - margin_min)),
-                );
-                let mut avoid = enemy_positions.clone();
-                avoid.push(center);
-                avoid.extend(others.iter().copied());
-                spawn_grid.nearest_open(sample, &avoid, enemy_clear)
+            let pos = field_pick.unwrap_or_else(|| {
+                battlefield::sample_clear_position(&mut rng, width, height, margin_min, |pos| {
+                    legal(pos) && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
+                })
+                .unwrap_or_else(|| {
+                    // Attempt cap: the band is too crowded for a fully legal
+                    // spot. Snap one more band sample to the nearest usable
+                    // cell that keeps its distance from the tanks already
+                    // down, so the fallback can still never land in a wall.
+                    let sample = Position::new(
+                        rng.random_range(margin_min..(width - margin_min)),
+                        rng.random_range(margin_min..(height - margin_min)),
+                    );
+                    let mut avoid = enemy_positions.clone();
+                    avoid.push(center);
+                    avoid.extend(others.iter().copied());
+                    spawn_grid.nearest_open(sample, &avoid, enemy_clear)
+                })
             });
             let erow = TANK_SPRITE_ORDER[enemy_positions.len() % TANK_SPRITE_ORDER.len()];
             let mut enemy = roll_enemy_tank(&mut rng, erow, pos, self.first_enemy_slot() + enemy_positions.len());
@@ -1366,6 +1462,7 @@ impl Game {
             let role = roll_role(self.mission, &mut rng);
             enemy.body = Some(self.physics.spawn_tank(pos, enemy.move_half_extents(false), enemy.mass()));
             enemy_positions.push(pos);
+            field_pool.place(pos, enemy_clear);
             self.world.spawn((enemy, Ai::with_role(role)));
         }
 
@@ -1548,11 +1645,15 @@ impl Game {
         self.tick_timers(dt, &mut rng);
         let terrain = Terrain::build(&self.world, width, height, &self.grass_cells, &self.water);
         // One nav grid for the whole frame - labelled, priced and with a
-        // flow field per shared target (`route_grid`) - passed to the
-        // phases that need it rather than parked on `Frame`: a borrow
-        // living there would alias every `&mut Frame` the other phases
-        // take.
-        let grid = self.route_grid(width, height);
+        // flow field per shared target (`route_grid_on`), on the occupancy
+        // and labels the round keeps across frames (`refresh_nav`) -
+        // passed to the phases that need it rather than parked on `Frame`:
+        // a borrow living there would alias every `&mut Frame` the other
+        // phases take.
+        self.refresh_nav(width, height);
+        let grid = self.route_grid_on(self.nav.base().without_fields(), width, height);
+        #[cfg(test)]
+        let grid = if self.scratch_nav { self.route_grid(width, height) } else { grid };
         let mut f = Frame::new(dt, width, height, rng, terrain);
         for (owned, &frame) in f.shoves.owned.iter_mut().zip(&self.seat_owned) {
             *owned = frame != 0 && frame == self.frame;
@@ -1638,22 +1739,32 @@ impl Game {
         self.rng = Some(rng);
     }
 
-    /// Put `show` on screen, each list held to its ceiling: `SCORCH_MAX`
-    /// and `DECAL_MAX` drop the oldest, `SHOCK_MAX` the weakest. Every
-    /// frame of a round ends here, and a replica's spectacle comes here
-    /// too.
+    /// How many scorches and rubble decals the round keeps: `SCORCH_MAX`
+    /// and `DECAL_MAX` on an arena, and on a field map as many per
+    /// standard field of its area, so a large map keeps its marks as
+    /// densely as an arena keeps its own rather than wearing away the
+    /// ones still on screen.
+    pub fn mark_caps(&self) -> (usize, usize) {
+        mark_caps(&self.map)
+    }
+
+    /// Put `show` on screen, each list held to its ceiling: scorches and
+    /// decals (`mark_caps`) drop the oldest, `SHOCK_MAX` the weakest.
+    /// Every frame of a round ends here, and a replica's spectacle comes
+    /// here too.
     pub(crate) fn show(&mut self, show: Spectacle) {
         self.muzzle_flashes.extend(show.muzzle_flashes);
         self.impact_flashes.extend(show.impact_flashes);
         self.blast_fx.extend(show.blast_fx);
+        let (scorch_max, decal_max) = self.mark_caps();
         self.scorches.extend(show.scorches);
-        if self.scorches.len() > SCORCH_MAX {
-            let excess = self.scorches.len() - SCORCH_MAX;
+        if self.scorches.len() > scorch_max {
+            let excess = self.scorches.len() - scorch_max;
             self.scorches.drain(..excess);
         }
         self.decals.extend(show.decals);
-        if self.decals.len() > DECAL_MAX {
-            let excess = self.decals.len() - DECAL_MAX;
+        if self.decals.len() > decal_max {
+            let excess = self.decals.len() - decal_max;
             self.decals.drain(..excess);
         }
         self.shocks.extend(show.shocks);
@@ -1713,6 +1824,7 @@ impl Game {
         let portals: &[Position] = if self.portals.len() >= 2 { &self.portals } else { &[] };
         let trigger_radius = tuning().portal_trigger_radius;
         for tank in self.world.query::<&mut Tank>().iter() {
+            tank.hit_by_seat = None;
             tank.tick_recharge(dt);
             tank.fire_cooldown = (tank.fire_cooldown - dt).max(0.0);
             tank.ram_cooldown = (tank.ram_cooldown - dt).max(0.0);
@@ -2377,7 +2489,7 @@ impl Game {
                     // plus a refreshed, never stacked, invulnerability window.
                     PickupKind::Shield => {
                         tank.damage = 0.0;
-                        tank.shield_hp = tuning().shield_capacity;
+                        tank.raise_shield();
                     }
                     // Nothing on the tank: the frog pack heals a frog, and
                     // the frog can't be touched while this `&mut Tank`
@@ -2678,38 +2790,54 @@ impl Game {
         }
         let target_pos_of = |ai: &Ai| players[(ai.target_player() as usize).min(players.len() - 1)].pos;
 
-        // Shared aggression: any enemy seeing a player refreshes the
-        // group's last-known position (the nearest sighting when both
-        // players are seen), so the rest converge instead of patrolling
-        // blind - and, since concealment gates this too, a player who
-        // stays hidden is genuinely *lost* once `enemy_alert_hold_seconds`
-        // runs out, rather than merely un-shootable.
-        let alert_before = self.alert_position.filter(|_| self.alert_timer > 0.0);
         // How far an enemy sees is the sky's say too (docs/weather.md).
         let view_range = self.enemy_sight();
-        let mut seen: Option<(f32, Position)> = None;
-        for p in players.iter().filter(|p| !p.concealed && !p.wreck && !p.entering) {
-            for m in &movers[players.len()..] {
-                let d = m.position.distance_to(p.pos);
-                if d <= view_range && seen.is_none_or(|(best, _)| d < best) {
-                    seen = Some((d, p.pos));
+        // The live seats standing on the field, which a field map's alerts,
+        // calls and far test measure against (`field`); empty on an arena,
+        // which reads none of them.
+        let field = self.field_map;
+        let live_seats: Vec<Position> =
+            if field { players.iter().filter(|p| !p.wreck && !p.entering).map(|p| p.pos).collect() } else { Vec::new() };
+        let alert = if field {
+            // A field map has no shared alert: each enemy keeps its own,
+            // passed only down a chain of neighbours (`field_alerts`).
+            let seen: Vec<Position> = players.iter().filter(|p| !p.concealed && !p.wreck && !p.entering).map(|p| p.pos).collect();
+            self.field_alerts(&seen, &live_seats, view_range, f);
+            None
+        } else {
+            // Shared aggression: any enemy seeing a player refreshes the
+            // group's last-known position (the nearest sighting when both
+            // players are seen), so the rest converge instead of patrolling
+            // blind - and, since concealment gates this too, a player who
+            // stays hidden is genuinely *lost* once
+            // `enemy_alert_hold_seconds` runs out, rather than merely
+            // un-shootable.
+            let alert_before = self.alert_position.filter(|_| self.alert_timer > 0.0);
+            let mut seen: Option<(f32, Position)> = None;
+            for p in players.iter().filter(|p| !p.concealed && !p.wreck && !p.entering) {
+                for m in &movers[players.len()..] {
+                    let d = m.position.distance_to(p.pos);
+                    if d <= view_range && seen.is_none_or(|(best, _)| d < best) {
+                        seen = Some((d, p.pos));
+                    }
                 }
             }
-        }
-        if let Some((_, pos)) = seen {
-            self.alert_position = Some(pos);
-            self.alert_timer = tuning().enemy_alert_hold_seconds;
-        } else {
-            self.alert_timer = (self.alert_timer - f.dt).max(0.0);
-            if self.alert_timer <= 0.0 {
-                self.alert_position = None;
+            if let Some((_, pos)) = seen {
+                self.alert_position = Some(pos);
+                self.alert_timer = tuning().enemy_alert_hold_seconds;
+            } else {
+                self.alert_timer = (self.alert_timer - f.dt).max(0.0);
+                if self.alert_timer <= 0.0 {
+                    self.alert_position = None;
+                }
             }
-        }
-        let alert = self.alert_position.filter(|_| self.alert_timer > 0.0);
-        if self.trace_ai && alert_before.is_some() != alert.is_some() {
-            let p = alert.or(alert_before).unwrap_or(players[0].pos);
-            f.events.push(Event::Alert { on: alert.is_some(), x: p.x, y: p.y });
-        }
+            let alert = self.alert_position.filter(|_| self.alert_timer > 0.0);
+            if self.trace_ai && alert_before.is_some() != alert.is_some() {
+                let p = alert.or(alert_before).unwrap_or(players[0].pos);
+                f.events.push(Event::Alert { on: alert.is_some(), x: p.x, y: p.y });
+            }
+            alert
+        };
 
         // Role targets: hunters fight the player's frog while it lives
         // (`quarry`), guards hold a leash around their own (`home`); both
@@ -2762,10 +2890,20 @@ impl Game {
         // One worst-case tank clear of the wall, plus a little.
         let margin = battlefield::max_tank_clearance_half_extent() + 8.0;
         let line_of_sight = |a: Position, b: Position| f.terrain.line_of_sight(a, b);
+        // A seat's ring keeps its firing slots inside the seat's sight box.
+        let sight_box = Some(tuning().sight_box_half_px());
         if engaged[0].len() >= 2 {
             self.engage[0].assign(
                 &engaged[0],
-                &EngageCtx { target_pos: players[0].pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &line_of_sight },
+                &EngageCtx {
+                    target_pos: players[0].pos,
+                    width: f.width,
+                    height: f.height,
+                    margin,
+                    sight_box,
+                    reachable: &reachable,
+                    line_of_sight: &line_of_sight,
+                },
                 &mut report,
             );
         }
@@ -2782,7 +2920,15 @@ impl Game {
             };
             self.engage[seat].assign(
                 &engaged[seat],
-                &EngageCtx { target_pos: players[seat].pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &line_of_sight },
+                &EngageCtx {
+                    target_pos: players[seat].pos,
+                    width: f.width,
+                    height: f.height,
+                    margin,
+                    sight_box,
+                    reachable: &reachable,
+                    line_of_sight: &line_of_sight,
+                },
                 &mut seat_report,
             );
             for t in seat_report.tanks {
@@ -2814,7 +2960,15 @@ impl Game {
             };
             self.engage_frog.assign(
                 &engaged_frog,
-                &EngageCtx { target_pos: frog_pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &line_of_sight },
+                &EngageCtx {
+                    target_pos: frog_pos,
+                    width: f.width,
+                    height: f.height,
+                    margin,
+                    sight_box: None,
+                    reachable: &reachable,
+                    line_of_sight: &line_of_sight,
+                },
                 &mut frog_report,
             );
             for t in frog_report.tanks {
@@ -2849,11 +3003,51 @@ impl Game {
         // Towers an enemy may hold a grudge against (`Ai::notify_tower_hit`).
         let standing_towers = if self.towers.is_empty() { Vec::new() } else { self.standing_towers() };
 
+        // Field maps: what keeps a tank thinking every tick when it is near
+        // - the live seats and the players' frog (`field::mind`).
+        let anchors: Vec<Position> =
+            if field { live_seats.iter().copied().chain(quarry.map(|(_, p)| p)).collect() } else { Vec::new() };
+        let frame = self.frame;
+
         // --- collect pass: perception, `think`, aim and fire, exactly as
         // before. Only the impulse is deferred. ---
         let mut pending: Vec<Pending> = Vec::new();
         for (entity, tank, ai) in self.world.query::<(Entity, &mut Tank, &mut Ai)>().iter() {
             let my_index = enemy_indices[&entity];
+            // A field map first decides whether this tank thinks this tick
+            // (`field::mind`): a far one coasts on its last intent between
+            // thinks, its trigger released, and one nothing has woken
+            // holds still. A think then covers every tick since the last.
+            let think_dt = if field {
+                let hunting = ai.role == Role::Hunter && quarry.is_some();
+                match field::mind(ai, tank.position, tank.owner_slot(), &anchors, view_range, hunting, frame, f.dt) {
+                    field::Mind::Think(dt) => dt,
+                    idle => {
+                        let intent = match idle {
+                            field::Mind::Coast(intent) => intent,
+                            _ => Intent::default(),
+                        };
+                        let handle = tank.body.expect("a live enemy always has a body here");
+                        let current = self.physics.velocity(handle);
+                        let facing_before = tank.rotation;
+                        tank.control(intent.move_dir, intent.face);
+                        let owner = tank.owner();
+                        tick_queued_shots(&mut self.physics, f, tank, owner);
+                        pending.push(Pending { entity, slot: tank.owner_slot(), intent, current, facing_before });
+                        continue;
+                    }
+                }
+            } else {
+                f.dt
+            };
+            // On a field map the alert is the tank's own, and a wave tank
+            // still called to the fight heads for the nearest live seat.
+            let alert = if field {
+                let call = if ai.field.called { field::call_target(&live_seats, tank.position) } else { None };
+                call.or(ai.field.alert)
+            } else {
+                alert
+            };
             let reach = tank.hull_size() * 0.5 + breach_reach_extra;
             let walls_ahead = Dir::ALL.map(|d| {
                 f.terrain
@@ -2937,7 +3131,7 @@ impl Game {
                     frog_target,
                     f.width,
                     f.height,
-                    f.dt,
+                    think_dt,
                     &movers,
                     my_index,
                     &grid,
@@ -3084,21 +3278,23 @@ impl Game {
     fn resolve_lasers(&mut self, f: &mut Frame) {
         let players = self.seats_on_field();
         let shots = std::mem::take(&mut f.pending_lasers);
+        let reach = laser_reach(self.map.field_size());
         for shot in shots {
             let past = self.rewound_boxes(self.seat_rewind(shot.owner));
+            let end = laser_end(&shot, reach);
             let hit = f.terrain.sweep_rewound(
                 &self.world,
                 players,
                 shot.owner,
                 shot.start,
-                shot.end,
+                end,
                 laser_beam_half_width(),
                 &[],
                 past,
             );
             let (hit_pos, target) = match hit {
-                Some((target, t)) => (shot.start + (shot.end - shot.start) * t, Some(target)),
-                None => (shot.end, None),
+                Some((target, t)) => (shot.start + (end - shot.start) * t, Some(target)),
+                None => (end, None),
             };
             f.muzzle_flashes.push(Shockwave::new(shot.lens));
             self.laser_beams.push(LaserBeam::new(shot.lens, hit_pos, shot.variant));
@@ -3775,75 +3971,22 @@ impl Game {
         (movers, enemy_indices)
     }
 
-    /// The obstacle-occupancy grid the AI routes by this frame (see
-    /// `pathfind::Grid`), rebuilt each frame from the current terrain and
-    /// built exactly the same way by the map linter, so the two can't
-    /// drift. The margin is the worst-case tank in the roster, so no route
-    /// is too narrow for a titan. The frog is included: it is a solid
-    /// static body that blocks movement exactly like a tile and can move.
-    /// The battlefield's own boundary needs no entry here - `Grid::build`
-    /// insets its outer edge by the same margin.
-    ///
-    /// Tiles are taken at the *seam-closed* extent
-    /// (`battlefield::tile_half_extent`, the same one `hits::Terrain` and
-    /// the physics colliders use), reduced to the larger axis because
-    /// `Grid::build` carries one scalar per obstacle. The plain
-    /// `hull_size() * 0.5` this used to pass is 12px against a run's real
-    /// 16px, i.e. the planner modelling walls as *smaller* than the solver
-    /// does - the exact direction of error `maplint::check_planner_physics`
-    /// exists to catch, which only stayed silent because the old 48px cell
-    /// pitch happened to skip the band where it would have fired.
-    pub(crate) fn nav_grid(&self, width: f32, height: f32) -> Grid {
-        // Trees are left out of the seam-close set for the same reason
-        // `hits::Terrain::build` leaves them out: they never close a seam,
-        // here or in physics, so they must not close anybody else's.
-        let seam_cells: HashSet<(i32, i32)> = self
-            .world
-            .query::<&Obstacle>()
-            .iter()
-            .filter(|o| !o.material.is_tree())
-            .map(|o| battlefield::pos_to_cell(o.position))
-            .collect();
-        // An active portal network joins the grid as one hub the planner
-        // may route through (`Grid::with_portals`); with fewer than two
-        // portals the grid is exactly the plain one.
-        let t = tuning();
-        let mut grid = Grid::build(
-            width,
-            height,
-            PATHFIND_CELL_SIZE,
-            battlefield::max_tank_clearance_half_extent(),
-            self.world
-                .query::<&Obstacle>()
-                .iter()
-                .map(|o| {
-                    let (gx, gy) = battlefield::pos_to_cell(o.position);
-                    let half = battlefield::tile_half_extent(
-                        o.material,
-                        &seam_cells,
-                        gx,
-                        gy,
-                        o.hull_size() * 0.5,
-                    );
-                    (o.position, half.x.max(half.y))
-                })
-                .chain(self.world.query::<&Frog>().iter().map(|fr| {
-                    (fr.position, FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1))
-                }))
-                // A burning cell is a wall for as long as it burns: the AI
-                // routes around a pool rather than through it. A tiny
-                // half-extent, so only the margin decides how wide the
-                // detour is.
-                .chain(self.fires.iter().map(|fire| (fire.position(), 1.0)))
-                // Deep water is a wall (docs/water.md): the same cells the
-                // static colliders stand on, at a cell's half-extent.
-                .chain(self.water.deep_cells().map(|p| (p, OBSTACLE_GRID_SIZE * 0.5))),
-        )
-        .with_portals(self.active_portals(), t.portal_trigger_radius, t.portal_hop_cost);
-        // A ford is open but dear: the router wades only when the dry way
-        // round costs more.
-        grid.weigh(self.water.shallow_cells(), tuning().water_ford_path_cost.max(1) as u32);
-        grid
+    /// The map cell nearest `near` a tank can be put down on in this
+    /// round's terrain (`battlefield::drop_cell` over `grid`, this round's
+    /// `nav_grid`): a worst-case tank's box clear of every tile and deep
+    /// cell, out of deep water, off every active portal's trigger - a hull
+    /// put down on one would be sent through at once - and passing `ok`.
+    /// The builder's PLAY HERE spot and the linter's quick fixes ask it.
+    /// Reads the round, draws no RNG.
+    pub fn drop_cell(&self, grid: &Grid, near: Position, ok: impl Fn((i32, i32), Position) -> bool) -> Option<(i32, i32)> {
+        let (width, height) = self.map.field_size();
+        let mut obstacles: Vec<Position> = self.world.query::<&Obstacle>().iter().map(|o| o.position).collect();
+        obstacles.extend(self.water.deep_cells());
+        let trigger = tuning().portal_trigger_radius;
+        let portals = self.active_portals();
+        battlefield::drop_cell(width, height, grid, &obstacles, near, |cell, p| {
+            self.water.depth_at(p) != crate::ground::Depth::Deep && portals.iter().all(|&q| q.distance_to(p) > trigger) && ok(cell, p)
+        })
     }
 
     /// The map's portal anchors, active or not (docs/teleporting.md).
@@ -3862,71 +4005,6 @@ impl Game {
     /// server share one rule.
     fn active_portals(&self) -> &[Position] {
         if self.portals_active() { &self.portals } else { &[] }
-    }
-
-    /// The frame's routing grid: `nav_grid` labelled for O(1) reachability,
-    /// priced with the tactical surcharges, and carrying one flow field
-    /// per target the pack shares - every live player and, while it
-    /// lives, the player's frog (a hunter's quarry). Enemies then route
-    /// toward those by reading the field; only a target of their own (an
-    /// engagement slot, a wander waypoint, a pickup) still costs a search.
-    ///
-    /// The lane surcharge walks the cells in front of each live player's
-    /// barrel (`Tank::rotation` is the axis a shot flies along) out to
-    /// `route_lane_cells`, stopping at the first blocked cell - a shell
-    /// flies further, but no tank can stand there anyway. The crowd
-    /// surcharge is the cell each live enemy stands in. Both are read at
-    /// field-build time, so this is the one place they are applied. No
-    /// RNG: a surcharge is a pure function of positions, and the field's
-    /// ties break on cell index.
-    pub(crate) fn route_grid(&self, width: f32, height: f32) -> Grid {
-        let mut grid = self.nav_grid(width, height);
-        let t = tuning();
-        let players: Vec<(Position, f32)> = self
-            .seats_on_field()
-            .into_iter()
-            .flatten()
-            .filter_map(|e| with_tank(&self.world, e, |tank| (!tank.is_wreck()).then_some((tank.position, tank.rotation))))
-            .collect();
-        if t.route_lane_cost > 0 {
-            let mut lane = Vec::new();
-            for &(pos, rotation) in &players {
-                let Some(dir) = Dir::from_rotation(rotation) else {
-                    continue;
-                };
-                let step = dir.vec();
-                let mut at = pos;
-                for _ in 0..t.route_lane_cells {
-                    if grid.blocked_ahead(at, step) {
-                        break;
-                    }
-                    at = Position::new(at.x + step.x * PATHFIND_CELL_SIZE, at.y + step.y * PATHFIND_CELL_SIZE);
-                    lane.push(at);
-                }
-            }
-            grid.surcharge(lane.into_iter(), t.route_lane_cost as u32);
-        }
-        if t.route_crowd_cost > 0 {
-            let standing: Vec<Position> =
-                self.world.query::<(&Tank, &Ai)>().iter().filter(|(tank, _)| !tank.is_wreck()).map(|(tank, _)| tank.position).collect();
-            grid.surcharge(standing.into_iter(), t.route_crowd_cost as u32);
-        }
-        // The player's towers and the ooze on the ground (docs/defence-
-        // towers-prd.md section 9): cells an enemy would rather go round.
-        if !self.towers.is_empty() {
-            grid.surcharge(self.player_tower_reach(width, height).into_iter(), t.route_tower_cost as u32);
-        }
-        if !self.ooze.is_empty() {
-            grid.surcharge(self.ooze_route_cells().into_iter(), t.bio_puddle_path_cost as u32);
-        }
-        grid.label();
-        for &(pos, _) in &players {
-            grid.add_field(pos);
-        }
-        if let Some(frog) = self.frog.and_then(|e| with_frog(&self.world, e, |fr| (!fr.is_dead()).then_some(fr.position))) {
-            grid.add_field(frog);
-        }
-        grid
     }
 
     /// The routing cell a world position falls in (`PATHFIND_CELL_SIZE`
@@ -4139,11 +4217,20 @@ impl Game {
             .collect()
     }
 
+    /// Where the players' frog stands while it lives - for tooling (the
+    /// probe's `defend` scenario guards it like a seat).
+    pub fn frog_position(&self) -> Option<Position> {
+        self.frog.and_then(|e| with_frog(&self.world, e, |fr| (!fr.is_dead()).then_some(fr.position)))
+    }
+
     pub fn tank_snapshots(&self) -> Vec<TankSnapshot> {
+        // A hunter with the players' frog to hunt is on its way to a fight
+        // whatever its alert says (`TankSnapshot::leashed`).
+        let quarry = self.frog.is_some_and(|e| self.world.get::<&Frog>(e).is_ok_and(|fr| !fr.is_dead()));
         self.world
-            .query::<(Entity, &Tank)>()
+            .query::<(Entity, &Tank, Option<&Ai>)>()
             .iter()
-            .map(|(entity, tank)| {
+            .map(|(entity, tank, ai)| {
                 // A tank still rolling in has no body: its kinematic
                 // velocity stands in and it touches nothing.
                 let contact = tank.body.map(|b| self.physics.contact_stats(b)).unwrap_or_default();
@@ -4179,6 +4266,16 @@ impl Game {
                     touching_tank: contact.touching_tank,
                     contact_impulse: contact.max_impulse,
                     is_wreck: tank.is_wreck(),
+                    shot_at_seat: ai.and_then(Ai::shot_at_seat),
+                    hit_by_seat: tank.hit_by_seat,
+                    asleep: self.field_map && ai.is_some_and(|ai| !ai.field.awake),
+                    leashed: self.field_map
+                        && ai.is_some_and(|ai| {
+                            ai.field.alert.is_none()
+                                && !ai.field.called
+                                && !ai.is_hit_alerted()
+                                && !(ai.role == Role::Hunter && quarry)
+                        }),
                 }
             })
             .collect()
@@ -4242,6 +4339,23 @@ pub struct TankSnapshot {
     /// Strongest solver contact impulse on the hull this step.
     pub contact_impulse: f32,
     pub is_wreck: bool,
+    /// The seat this enemy's last decision to fire was aimed at
+    /// (`Ai::shot_at_seat`): the attack on the seat it fights, or a
+    /// hunter's snipe. `None` for a seat's own tank, and for an enemy
+    /// that fired at a frog, a tower or a tile or did not fire. Paired
+    /// with that frame's `Event::Fired`, it is what the probe's
+    /// `offbox-fire` check reads.
+    pub shot_at_seat: Option<u8>,
+    /// The seat that damaged this tank this frame, if one did
+    /// (`Tank::hit_by_seat`).
+    pub hit_by_seat: Option<u8>,
+    /// A field map's enemy nothing has woken yet (`simulation::field`): it
+    /// holds still and thinks nothing, by design. Always false on an arena.
+    pub asleep: bool,
+    /// A field map's enemy with nothing calling it to the fight - no
+    /// alert, no call, no recent hit - so it keeps to its home leash
+    /// rather than heading for a seat. Always false on an arena.
+    pub leashed: bool,
 }
 
 /// Turn an intent into hull rotation plus a mass-aware impulse nudging the
@@ -4788,7 +4902,7 @@ fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize) -> 
         }
     }
     if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
-        enemy.shield_hp = tuning().shield_capacity;
+        enemy.raise_shield();
     }
     roll_track_distortion(&mut enemy, rng);
     enemy
@@ -4932,6 +5046,38 @@ fn ai_transition_events(events: &mut Vec<Event>, slot: usize, before: &AiSnapsho
     }
     if before.escapes != after.escapes {
         events.push(Event::StuckEscape { slot, escapes: after.escapes });
+    }
+}
+
+/// `Game::mark_caps` for a round on `map`.
+fn mark_caps(map: &MapFile) -> (usize, usize) {
+    if map.class() == crate::framing::MapClass::Arena {
+        return (SCORCH_MAX, DECAL_MAX);
+    }
+    let (w, h) = map.field_size();
+    let fields = (w * h / (crate::DEFAULT_SCREEN_WIDTH as f32 * crate::DEFAULT_SCREEN_HEIGHT as f32)).max(1.0);
+    let scaled = |cap: usize| (cap as f32 * fields).ceil() as usize;
+    (scaled(SCORCH_MAX), scaled(DECAL_MAX))
+}
+
+#[cfg(test)]
+mod mark_cap_tests {
+    use super::*;
+
+    fn caps(toml: &str) -> (usize, usize) {
+        mark_caps(&MapFile::from_toml_str(toml).unwrap())
+    }
+
+    #[test]
+    fn an_arena_keeps_the_fixed_ceilings_and_a_field_map_scales_them_by_area() {
+        assert_eq!(caps("version = 1\n"), (SCORCH_MAX, DECAL_MAX));
+        assert_eq!(caps("version = 1\nsize = [36, 18]\n"), (SCORCH_MAX, DECAL_MAX));
+        // Large, but shown whole: an arena still.
+        assert_eq!(caps("version = 1\nsize = [68, 34]\nview = \"whole\"\n"), (SCORCH_MAX, DECAL_MAX));
+        // Four standard fields' worth of ground, four times the marks.
+        assert_eq!(caps("version = 1\nsize = [68, 34]\n"), (4 * SCORCH_MAX, 4 * DECAL_MAX));
+        // A field map smaller than the standard field keeps no fewer.
+        assert_eq!(caps("version = 1\nsize = [30, 15]\nview = \"follow\"\n"), (SCORCH_MAX, DECAL_MAX));
     }
 }
 
@@ -5164,7 +5310,8 @@ mod determinism_tests {
             game.enemy_count_override = Some(4);
             game.players = PlayerCount::from_count(seats).expect("one or two");
             game.map = MapFile::from_toml_str(include_str!("../../maps/default.toml")).expect("embedded default map parses");
-            game.init(1280.0, 720.0);
+            let (w, h) = game.map.field_size();
+            game.init(w, h);
             // FNV-1a over the same bit-exact key the replay tests compare.
             let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
             let mut eat = |bytes: &[u8]| {
@@ -5175,7 +5322,7 @@ mod determinism_tests {
             };
             for frame in 0..=600u32 {
                 if frame > 0 {
-                    game.update(Input::default(), 1.0 / 60.0, 1280.0, 720.0);
+                    game.update(Input::default(), 1.0 / 60.0, w, h);
                 }
                 if frame % 60 != 0 {
                     continue;
@@ -5192,18 +5339,15 @@ mod determinism_tests {
             }
             hash
         };
-        // **Re-baselined for the weapon modules, deliberately.** A minigun's
-        // bullets leave the module beside the main gun, boresighted onto
-        // the gun line (`Bullet::spawn`), and a missile volley leaves the
-        // launcher's tubes (`tank_art::MISSILE_TUBES`), so an enemy's burst
-        // or volley lands a few pixels from where it did and its damage
-        // rolls fall on other frames - which moves everything after them.
-        // Nothing about the walk order this gate exists to protect changed:
-        // the per-seat block still runs once per seat after player 1, so a
-        // second seat does not disturb the first's stream. Never bump these
-        // to go green - work out which change moved them first.
+        // The round is the shipped default map's, on its own 48 x 24 field,
+        // so an edit of that map moves these as surely as a change to the
+        // draws does: re-baseline with the map only once nothing but the
+        // map moved them. The per-seat block runs once per seat after
+        // player 1, so a second seat does not disturb the first's stream.
+        // Never bump these to go green - work out which change moved them
+        // first.
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (14_017_236_720_797_471_165, 9_822_452_777_306_098_975), "(one seat, two seats)");
+        assert_eq!((one, two), (1_494_875_205_296_571_598, 6_928_208_166_224_290_359), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round
@@ -6007,6 +6151,160 @@ cells."22,14" = { kind = "wall", material = "brick" }
         }
         assert!(fired && hit_player, "fired: {fired}, hit the player: {hit_player}");
         assert!(player_snapshot(&game).damage > 0.0);
+    }
+
+    /// The sight-box tests' field (docs/large-maps-follow-camera.md section
+    /// 5): the player near the top middle of an empty map and one enemy, no
+    /// frog - nothing but that enemy ever fires, and nothing stands between
+    /// the two.
+    const SIGHT_BOX_MAP: &str = r#"
+version = 1
+tanks = 1
+cells."20,4" = { kind = "start" }
+"#;
+
+    /// The AFK player on `SIGHT_BOX_MAP` and its one enemy, a plain
+    /// `Role::Player` attacker, put down at `offset` from the player and
+    /// facing it. Returns the round and where the player stands.
+    fn duel(offset: Vec2) -> (Game, Position) {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(7);
+        game.player_row_override = Some(0);
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.map = MapFile::from_toml_str(SIGHT_BOX_MAP).expect("test map parses");
+        game.init(W, H);
+        set_enemy_role(&mut game, Role::Player);
+        let player = player_pos(&game);
+        let at = player + offset;
+        game.debug_teleport(1, at, Some(Dir::toward(at, player).rotation())).expect("enemy in slot 1");
+        (game, player)
+    }
+
+    /// Step until the enemy in slot 1 pulls its trigger, at most `seconds`:
+    /// where it stood as that frame began - the position its decision was
+    /// made from - and where it stood at the start.
+    fn first_shot(game: &mut Game, seconds: f32) -> (Option<Position>, Position) {
+        let start = position_of(game, 1);
+        for _ in 0..(seconds * 60.0) as u32 {
+            let at = position_of(game, 1);
+            step(game, Input::default());
+            if game.events().iter().any(|e| matches!(e, Event::Fired { slot: 1, .. })) {
+                return (Some(at), start);
+            }
+        }
+        (None, start)
+    }
+
+    /// An enemy lined up on a seat's column, in attack range but further
+    /// out than the seat's sight box reaches, does not fire from there: it
+    /// closes in and fires from inside the box.
+    #[test]
+    fn an_enemy_lined_up_on_a_column_outside_the_sight_box_closes_in_before_it_fires() {
+        let (_, half_h) = tuning().sight_box_half_px();
+        assert!(300.0 > half_h && 300.0 < tuning().enemy_attack_range, "the defaults this is about");
+        let (mut game, player) = duel(Vec2::new(0.0, 300.0));
+        let (fired_from, _) = first_shot(&mut game, 4.0);
+        let at = fired_from.expect("it never fired");
+        assert!((at.y - player.y).abs() <= half_h, "fired from {:.0} px below the seat, outside its box", at.y - player.y);
+        assert!(crate::ai::in_sight_box(player, at));
+    }
+
+    /// Inside the box the same column is a firing line: the enemy holds
+    /// where it stands and fires, and says whom it fired at.
+    #[test]
+    fn an_enemy_lined_up_on_a_column_inside_the_sight_box_fires_from_where_it_stands() {
+        let (_, half_h) = tuning().sight_box_half_px();
+        assert!(230.0 < half_h, "the defaults this is about");
+        let (mut game, _) = duel(Vec2::new(0.0, 230.0));
+        let (fired_from, start) = first_shot(&mut game, 3.0);
+        let at = fired_from.expect("it never fired");
+        assert!(at.distance_to(start) < 4.0, "it held where it stood, not {:.1} px away", at.distance_to(start));
+        let enemy = game.tank_snapshots().into_iter().find(|t| t.slot == 1).expect("enemy");
+        assert_eq!(enemy.shot_at_seat, Some(0), "the shot was aimed at the seat");
+    }
+
+    /// Sideways the box reaches past the attack range, so a row is a
+    /// firing line all the way out, as it always was.
+    #[test]
+    fn an_enemy_lined_up_on_a_row_fires_from_its_attack_range() {
+        let (half_w, _) = tuning().sight_box_half_px();
+        assert!(330.0 < tuning().enemy_attack_range && tuning().enemy_attack_range < half_w, "the defaults this is about");
+        let (mut game, _) = duel(Vec2::new(330.0, 0.0));
+        let (fired_from, start) = first_shot(&mut game, 3.0);
+        let at = fired_from.expect("it never fired");
+        assert!(at.distance_to(start) < 4.0, "it held where it stood, not {:.1} px away", at.distance_to(start));
+    }
+
+    /// The engagement ring's south firing slot stands inside the seat's
+    /// sight box, half a cell in from its edge, and the tank holding it
+    /// fires from inside the box.
+    #[test]
+    fn the_rings_south_slot_stands_inside_the_sight_box() {
+        let mut game = game_on(OPEN_MAP, 2, Some(0));
+        set_role_of(&mut game, 1, Role::Player);
+        set_role_of(&mut game, 2, Role::Player);
+        let player = player_pos(&game);
+        // Two engaged tanks build the ring: one straight below, one east.
+        game.debug_teleport(1, player + Vec2::new(0.0, 300.0), Some(Dir::Up.rotation())).expect("slot 1");
+        game.debug_teleport(2, player + Vec2::new(300.0, 0.0), Some(Dir::Left.rotation())).expect("slot 2");
+        step(&mut game, Input::default());
+        let below = game.tank_entity_by_slot(1).expect("slot 1");
+        let slot = game.last_engage.slot_of(below).expect("the tank below holds a ring slot");
+        assert_eq!((slot.axis_name(), slot.rank), ("down", 0));
+        let target = game.last_engage.target(below).expect("its slot's point");
+        let (_, half_h) = tuning().sight_box_half_px();
+        assert_eq!(target.y - player.y, half_h - OBSTACLE_GRID_SIZE * 0.5, "half a cell inside the box's edge");
+        assert!(crate::ai::in_sight_box(player, target));
+        let (fired_from, _) = first_shot(&mut game, 4.0);
+        let at = fired_from.expect("the tank on the south slot never fired");
+        assert!(crate::ai::in_sight_box(player, at), "fired from {:.0} px below the seat", at.y - player.y);
+    }
+
+    /// An enemy's seeker missile locks onto a seat only while the tank that
+    /// launched it stands inside the seat's sight box - its seek reaches
+    /// much further - and otherwise comes down on the launcher's aim point.
+    #[test]
+    fn an_enemy_missile_locks_onto_a_seat_only_from_inside_its_sight_box() {
+        let lock = |offset: Vec2| {
+            let (mut game, player) = duel(offset);
+            let launcher = player + offset;
+            assert!(offset.length() < tuning().missile_seek_range, "the seat is within the seek");
+            let mut missile = crate::missile::Missile::spawn(launcher, Vec2::new(0.0, -1.0), Owner::Enemy(1), 0, launcher);
+            missile.stage = crate::missile::MissileStage::Seek;
+            game.world.spawn((missile,));
+            step(&mut game, Input::default());
+            game.events()
+                .iter()
+                .find_map(|e| if let Event::MissileLocked { slot: 1, target, .. } = e { Some(*target) } else { None })
+                .expect("the missile looked for a target")
+        };
+        assert_eq!(lock(Vec2::new(0.0, 300.0)), None, "launched from below the seat's box");
+        assert_eq!(lock(Vec2::new(0.0, 200.0)), Some(0), "launched from inside it");
+        assert_eq!(lock(Vec2::new(330.0, 0.0)), Some(0), "launched from beside the seat, inside the box");
+    }
+
+    /// `TankSnapshot::hit_by_seat` names the seat whose shot landed on an
+    /// enemy on the frame it landed, and nobody on the next.
+    #[test]
+    fn a_snapshot_names_the_seat_that_hit_an_enemy_this_frame() {
+        let (mut game, player) = duel(Vec2::new(0.0, 150.0));
+        game.debug_teleport(0, player, Some(Dir::Down.rotation())).expect("the seat");
+        let fire = Input::single(Intent { fire: true, ..Intent::default() });
+        step(&mut game, fire);
+        let mut hit = false;
+        for _ in 0..60 {
+            step(&mut game, Input::default());
+            let enemy = game.tank_snapshots().into_iter().find(|t| t.slot == 1).expect("enemy");
+            if game.events().iter().any(|e| matches!(e, Event::Hit { target: HitTarget::Enemy { slot: 1 }, .. })) {
+                assert_eq!(enemy.hit_by_seat, Some(0), "the shell was the seat's");
+                hit = true;
+            } else if hit {
+                assert_eq!(enemy.hit_by_seat, None, "the next frame nobody hit it");
+                return;
+            }
+        }
+        panic!("the seat's shell never landed (hit: {hit})");
     }
 
     #[test]
@@ -7113,9 +7411,33 @@ cells."30,20" = { kind = "frog" }
             let tank = q.get().expect("player tank");
             assert!(tank.spend_shield(capacity), "the blow that empties the pool shatters it");
             assert!(!tank.is_shielded());
-            assert_eq!(tank.take_damage(30.0, MAX_DAMAGE), 30.0);
-            assert_eq!(tank.damage, 30.0, "unshielded again once the pool is spent");
+            let landed = 30.0 * tuning().player_armor_factor;
+            assert_eq!(tank.take_damage(30.0, MAX_DAMAGE), landed);
+            assert_eq!(tank.damage, landed, "unshielded again once the pool is spent");
         }
+    }
+
+    #[test]
+    fn a_picked_up_shield_shatters_when_its_clock_runs_out() {
+        let mut game = game_on(SEALED_SHIELD_MAP, 1, Some(0));
+        let player = game.player().expect("player");
+        with_tank_mut(&game.world, player, |t| t.shield_hp = 0.0);
+        step(&mut game, Input::default());
+        assert!(player_snapshot(&game).shield_hp > 0.0, "picked up");
+        // No respawn into the sealed ring to refill it mid-test.
+        game.map_pickup_slots.clear();
+        let frames = (tuning().shield_seconds / PHYSICS_FIXED_DT).ceil() as usize + 2;
+        let mut broke_at = None;
+        for frame in 1..=frames {
+            step(&mut game, Input::default());
+            if game.events().iter().any(|e| matches!(e, Event::ShieldBroken { .. })) {
+                broke_at = Some(frame);
+                break;
+            }
+        }
+        let broke_at = broke_at.expect("the clock shattered it, untouched");
+        assert!(broke_at + 3 >= frames, "not before its time: frame {broke_at} of {frames}");
+        assert_eq!(player_snapshot(&game).shield_hp, 0.0);
     }
 
     /// The pool is what ends a shield, and an oversized hit is absorbed in
@@ -7708,6 +8030,677 @@ cells."30,20" = { kind = "frog" }
         }
         assert_eq!(seen, 2 + 3 + 4 + 5, "every tank of every wave entered");
         assert_eq!(game.outcome(), Outcome::Won, "the round ends once the last wave is wrecked");
+    }
+
+    // --- Field maps: bounded AI and pacing (docs/large-maps-follow-camera.md
+    // section 12, `simulation::field`) ---
+
+    /// A long, empty field map - 110 x 20 cells, far past an arena - with
+    /// the player at its west end and nobody else placed.
+    const FIELD_STRIP: &str = "version = 1\nsize = [110, 20]\ntanks = 0\ncells.\"3,10\" = { kind = \"start\" }\n";
+
+    /// A Destroy round on `map` at the map's own size, seeded, the player's
+    /// chassis pinned. A field map's round, which the tests below check.
+    fn field_round(map: &str) -> Game {
+        let mut game = Game::default();
+        game.seed_override = Some(7);
+        game.player_row_override = Some(0);
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.map = MapFile::from_toml_str(map).expect("test map parses");
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        assert!(game.field_map(), "a field map");
+        game
+    }
+
+    /// One update at the map's own size.
+    fn field_step(game: &mut Game, input: Input) {
+        let (w, h) = game.map.field_size();
+        game.update(input, 1.0 / 60.0, w, h);
+    }
+
+    /// The field-map memory of the enemy in owner slot `slot`.
+    fn field_mind_of(game: &Game, slot: usize) -> crate::ai::FieldMind {
+        game.world
+            .query::<(&Tank, &Ai)>()
+            .iter()
+            .find(|(t, _)| t.owner_slot() == slot)
+            .map(|(_, ai)| ai.field)
+            .expect("an enemy in that slot")
+    }
+
+    #[test]
+    fn a_field_maps_alert_travels_down_the_chain_and_stops_at_its_reach() {
+        let mut game = field_round(FIELD_STRIP);
+        let player = player_pos(&game);
+        let (view, chain) = (game.enemy_sight(), tuning().enemy_alert_chain_px);
+        // A sees the player; B and C each stand inside the chain's reach of
+        // the one before and out of the player's sight; D stands just past
+        // C's reach.
+        let a = Position::new(player.x + view - 100.0, player.y);
+        let b = Position::new(a.x + chain - 80.0, player.y);
+        let c = Position::new(b.x + chain - 80.0, player.y);
+        let d = Position::new(c.x + chain + 120.0, player.y);
+        assert!(b.distance_to(player) > view && d.x < game.map.field_size().0 - 64.0, "the strip is long enough");
+        let slots: Vec<usize> =
+            [a, b, c, d].iter().map(|&p| game.debug_spawn_enemy(p, Some(1), None).expect("an enemy spawns")).collect();
+        field_step(&mut game, Input::default());
+        let alerted: Vec<bool> = slots.iter().map(|&s| field_mind_of(&game, s).alert.is_some()).collect();
+        assert_eq!(alerted, [true, true, true, false], "the sighting reaches A, B and C down the chain, never D");
+        assert_eq!(field_mind_of(&game, slots[2]).alert, Some(player), "C heads for where A saw the player");
+        assert!(game.alert_position.is_none(), "a field map keeps no shared alert");
+    }
+
+    #[test]
+    fn an_arena_keeps_its_shared_alert_and_no_field_memory() {
+        // The strip, shown whole: an arena by its `view` key, so the one
+        // sighting alerts every enemy on the map and nothing of a field
+        // map's memory is ever written.
+        let mut game = Game::default();
+        game.seed_override = Some(7);
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.map = MapFile::from_toml_str(&format!("{FIELD_STRIP}view = \"whole\"\n")).expect("test map parses");
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        assert!(!game.field_map());
+        let player = player_pos(&game);
+        let near = game.debug_spawn_enemy(Position::new(player.x + 600.0, player.y), Some(1), None).unwrap();
+        let far = game.debug_spawn_enemy(Position::new(player.x + 3000.0, player.y), Some(1), None).unwrap();
+        game.update(Input::default(), 1.0 / 60.0, w, h);
+        assert_eq!(game.alert_position, Some(player), "one sighting is the whole map's alert");
+        for slot in [near, far] {
+            let mind = field_mind_of(&game, slot);
+            assert!(mind.alert.is_none() && mind.home.is_none() && !mind.awake && !mind.called, "slot {slot}: {mind:?}");
+        }
+    }
+
+    #[test]
+    fn a_leashed_enemy_with_nothing_to_fight_turns_back_home() {
+        let mut game = field_round(FIELD_STRIP);
+        let player = player_pos(&game);
+        let leash = tuning().enemy_leash_px;
+        // Near enough to think every tick, too far to see the player.
+        let home = Position::new(player.x + game.enemy_sight() + 200.0, player.y);
+        let slot = game.debug_spawn_enemy(home, Some(1), None).expect("an enemy spawns");
+        field_step(&mut game, Input::default());
+        assert_eq!(field_mind_of(&game, slot).home, Some(home), "home is where it first stood");
+        // Carried well past its leash, facing on away from home - where a
+        // chase that lost its target leaves a tank.
+        game.debug_teleport(slot, Position::new(home.x + leash + 300.0, home.y), Some(90.0)).expect("teleports");
+        let mut back = None;
+        for frame in 1..=600 {
+            field_step(&mut game, Input::default());
+            let mind = field_mind_of(&game, slot);
+            assert!(mind.alert.is_none() && !mind.called, "nothing calls it anywhere");
+            if position_of(&game, slot).distance_to(home) <= leash {
+                back = Some(frame);
+                break;
+            }
+        }
+        let frame = back.expect("the enemy never came back inside its leash");
+        // 300 px past the leash at an enemy's pace: a drive home, not a
+        // wander that happened to pass by.
+        assert!(frame < 240, "took {frame} frames to come home");
+    }
+
+    #[test]
+    fn a_far_enemy_thinks_on_its_stagger_and_one_never_woken_sleeps() {
+        let mut game = field_round(FIELD_STRIP);
+        let player = player_pos(&game);
+        let t = tuning();
+        let k = t.enemy_far_think_ticks as u64;
+        assert!(k > 1, "far thinking skips ticks");
+        // Out of the player's sight but within `enemy_far_px`: thinks every
+        // tick. Its twin is woken there too, then carried far away.
+        let x = player.x + t.enemy_far_px - 150.0;
+        assert!(x - player.x > game.enemy_sight());
+        let near = game.debug_spawn_enemy(Position::new(x, player.y - 96.0), Some(1), None).unwrap();
+        let far = game.debug_spawn_enemy(Position::new(x, player.y + 96.0), Some(1), None).unwrap();
+        // Far from the start and never woken by anything.
+        let asleep_at = Position::new(player.x + t.enemy_far_px + 900.0, player.y);
+        let asleep = game.debug_spawn_enemy(asleep_at, Some(1), None).unwrap();
+        field_step(&mut game, Input::default());
+        assert!(field_mind_of(&game, far).awake, "a seat within reach wakes it");
+        game.debug_teleport(far, Position::new(player.x + t.enemy_far_px + 400.0, player.y + 96.0), None).unwrap();
+        let mut beats = 0;
+        for _ in 0..3 * k {
+            field_step(&mut game, Input::default());
+            assert_eq!(field_mind_of(&game, near).think_debt, 0.0, "a near enemy thinks every tick");
+            // `mind` runs with the frame number `update` just counted.
+            let on_beat = (game.frame() + far as u64).is_multiple_of(k);
+            let debt = field_mind_of(&game, far).think_debt;
+            assert_eq!(debt == 0.0, on_beat, "frame {}: a far enemy thinks on its beat only (debt {debt})", game.frame());
+            beats += on_beat as u32;
+            let sleeper = field_mind_of(&game, asleep);
+            assert!(!sleeper.awake && sleeper.think_debt == 0.0, "never woken: {sleeper:?}");
+        }
+        assert_eq!(beats, 3, "once every {k} ticks");
+        assert_eq!(field_mind_of(&game, asleep).home, Some(asleep_at));
+        assert!(position_of(&game, asleep).distance_to(asleep_at) < 1.0, "a sleeper holds still");
+    }
+
+    #[test]
+    fn a_field_maps_band_never_spawns_an_enemy_inside_a_seats_sight_box() {
+        let map = "version = 1\nsize = [60, 30]\ntanks = 8\ncells.\"30,15\" = { kind = \"start\" }\n";
+        for seats in [1, 2] {
+            for seed in 0..10u64 {
+                let mut game = Game::default();
+                game.seed_override = Some(seed);
+                game.players = PlayerCount::from_count(seats).expect("one or two");
+                game.level_overrides.mission = Some(Mission::Destroy);
+                game.map = MapFile::from_toml_str(map).expect("test map parses");
+                let (w, h) = game.map.field_size();
+                game.init(w, h);
+                let tanks = game.tank_snapshots();
+                let seat_at: Vec<Position> = tanks.iter().filter(|t| t.is_player).map(|t| t.position).collect();
+                let enemies: Vec<Position> = tanks.iter().filter(|t| !t.is_player).map(|t| t.position).collect();
+                assert_eq!((seat_at.len(), enemies.len()), (seats, 8));
+                for e in &enemies {
+                    for s in &seat_at {
+                        assert!(!crate::ai::in_sight_box(*s, *e), "seed {seed}, {seats} seats: an enemy at {e:?} inside the box of the seat at {s:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// A 60 x 20 field map under a three-wave plan of one tank a wave, gates
+    /// at both ends: the player holds the east end, a stone's throw from the
+    /// east gate, and player 2 starts beside it.
+    const FIELD_GATES: &str = "version = 1\nsize = [60, 20]\ncells.\"50,10\" = { kind = \"start\" }\ncells.\"50,6\" = { kind = \"start2\" }\ncells.\"0,10\" = { kind = \"gate\" }\ncells.\"59,10\" = { kind = \"gate\" }\n";
+
+    /// A waves round on `FIELD_GATES` with `seats` seats, every one of
+    /// them shielded so only the test ends anything.
+    fn field_waves(seats: usize) -> Game {
+        let mut game = Game::default();
+        game.seed_override = Some(7);
+        game.player_row_override = Some(0);
+        game.players = PlayerCount::from_count(seats).expect("one or two");
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.level_overrides.spawn = Some(SpawnKind::Waves);
+        game.level_overrides.waves = Some(3);
+        game.level_overrides.wave_size = Some(1);
+        game.level_overrides.wave_growth = Some(0);
+        game.map = MapFile::from_toml_str(FIELD_GATES).expect("test map parses");
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        assert!(game.field_map());
+        for seat in game.players().into_iter().flatten() {
+            with_tank_mut(&game.world, seat, |t| t.shield_hp = 1.0e9);
+        }
+        game
+    }
+
+    /// Step until a tank enters (at most `limit` frames): its slot and
+    /// where it came through.
+    fn field_step_until_entered(game: &mut Game, limit: u32) -> (usize, Position) {
+        for _ in 0..limit {
+            field_step(game, Input::default());
+            if let Some(&slot) = tank_entered(game).first() {
+                return (slot, position_of(game, slot));
+            }
+        }
+        panic!("no tank entered within {limit} frames");
+    }
+
+    #[test]
+    fn a_field_maps_wave_rolls_in_out_of_sight_and_is_called_to_the_fight() {
+        let mut game = field_waves(1);
+        let player = player_pos(&game);
+        let (slot, arrived) = field_step_until_entered(&mut game, 600);
+        // The east gate's lane ends inside the player's sight box, so the
+        // wave takes the west one, a walk across the map.
+        assert!(!crate::ai::in_sight_box(player, arrived), "arrived at {arrived:?}, in sight of the player at {player:?}");
+        assert!(arrived.x < game.map.field_size().0 * 0.5, "came in through the west gate: {arrived:?}");
+        assert!(field_mind_of(&game, slot).called, "a field map's wave is called to the fight");
+        // Called, it walks straight to the fight rather than wandering: it
+        // comes within sight of the player well inside twice its walk.
+        let walk = (player.x - arrived.x) / tuning().enemy_speed;
+        let mut seen_at = None;
+        for frame in 1..=(2.0 * walk * 60.0) as u32 + 120 {
+            field_step(&mut game, Input::default());
+            if position_of(&game, slot).distance_to(player) <= game.enemy_sight() {
+                seen_at = Some(frame);
+                break;
+            }
+        }
+        assert!(seen_at.is_some(), "the called tank never reached the fight (walk {walk:.1}s)");
+        field_step(&mut game, Input::default());
+        assert!(!field_mind_of(&game, slot).called, "the call ends once the fight is in sight");
+    }
+
+    #[test]
+    fn a_wrecked_seat_comes_back_through_the_gate_nearest_the_living_seats() {
+        let mut game = field_waves(2);
+        let w = game.map.field_size().0;
+        let (wave_one, arrived) = field_step_until_entered(&mut game, 600);
+        assert!(arrived.x < w * 0.5, "the wave keeps out of sight, through the west gate");
+        game.debug_kill(1).expect("seat 1 is live");
+        field_step(&mut game, Input::default());
+        let seat1 = game.seat(1).expect("seat 1");
+        assert!(with_tank(&game.world, seat1, Tank::is_wreck));
+        // Clearing wave 1 calls wave 2, which seat 1 rejoins: through the
+        // east gate, a few cells from the seat still fighting there.
+        game.debug_kill(wave_one).expect("wave 1's tank");
+        let mut started = None;
+        for _ in 0..900 {
+            field_step(&mut game, Input::default());
+            if game.is_entering(seat1) {
+                started = Some(with_tank(&game.world, seat1, |t| t.position));
+                break;
+            }
+        }
+        let at = started.expect("seat 1 never started back in");
+        assert!(at.x > w, "seat 1 comes back through the east gate, beside its team-mate: {at:?}");
+    }
+
+    // --- The pacing director (`simulation::director`) ---
+
+    /// `field_waves(1)` with wave 1 called, rolled in and destroyed where
+    /// it came through, far from the seat: the frame the breather before
+    /// wave 2 starts.
+    fn field_breather() -> Game {
+        let mut game = field_waves(1);
+        let (slot, _) = field_step_until_entered(&mut game, 600);
+        game.debug_kill(slot).expect("wave 1's tank");
+        for _ in 0..120 {
+            field_step(&mut game, Input::default());
+            if game.wave_banner().is_some() {
+                return game;
+            }
+        }
+        panic!("clearing wave 1 started no breather");
+    }
+
+    /// Frames until wave `wave` is called, at most `limit`, with the
+    /// banner up on every one of them before it.
+    fn frames_until_wave(game: &mut Game, wave: u32, limit: u32) -> u32 {
+        for frame in 1..=limit {
+            field_step(game, Input::default());
+            if wave_started(game) == Some(wave) {
+                return frame;
+            }
+            assert!(game.wave_banner().is_some(), "frame {frame}: the banner went before wave {wave} came");
+        }
+        panic!("wave {wave} never came within {limit} frames");
+    }
+
+    #[test]
+    fn a_calm_field_maps_breather_runs_short() {
+        let t = tuning();
+        let mut game = field_breather();
+        assert!(game.pacing().team <= t.director_calm, "nothing has touched the seat: {:?}", game.pacing());
+        // Nothing is happening, so the breather runs at the calm rate.
+        let frames = frames_until_wave(&mut game, 2, 600) as f32 / 60.0;
+        let calm = (t.wave_gap_seconds / t.director_calm_rate).max(t.director_breather_min_seconds);
+        assert!(calm < t.wave_gap_seconds, "the case this is about");
+        assert!((frames - calm).abs() <= 0.1, "a calm breather of {calm:.2}s took {frames:.2}s");
+    }
+
+    #[test]
+    fn the_director_holds_a_wave_while_the_team_is_at_its_peak_and_rests_it_after() {
+        let t = tuning();
+        let mut game = field_breather();
+        // Three enemies inside the seat's sight box: the team at its peak.
+        let player = player_pos(&game);
+        let crowd: Vec<usize> = (0..3)
+            .map(|i| {
+                let at = Position::new(player.x - 300.0, player.y - 96.0 + 96.0 * i as f32);
+                assert!(crate::ai::in_sight_box(player, at));
+                game.debug_spawn_enemy(at, Some(1), None).expect("an enemy spawns")
+            })
+            .collect();
+        // Ten seconds of fight - far past the plain breather - and wave 2
+        // is held the whole time, the breather owing the rest a peak does.
+        for frame in 0..600 {
+            field_step(&mut game, Input::default());
+            assert_eq!(wave_started(&game), None, "frame {frame}: wave 2 came in the middle of the fight");
+            let pacing = game.pacing();
+            assert!(pacing.team >= t.director_peak, "frame {frame}: {pacing:?}");
+            assert_eq!(game.wave_status().and_then(|w| w.next_in), Some(t.director_relax_seconds), "frame {frame}");
+        }
+        // The fight ends: the intensity falls under the peak, and from
+        // there the team rests `director_relax_seconds` before wave 2.
+        for slot in crowd {
+            game.debug_kill(slot).expect("a live enemy");
+        }
+        let seconds = frames_until_wave(&mut game, 2, 60 * 60) as f32 / 60.0;
+        let owed = (1.0 - t.director_peak) * t.director_fall_seconds + t.director_relax_seconds;
+        assert!((seconds - owed).abs() <= 1.0, "released after {seconds:.2}s, the rest owed was {owed:.2}s");
+    }
+
+    // --- Stragglers (`Game::reroll_stragglers`) ---
+
+    /// A 110 x 20 field map under a three-wave plan of one tank a wave: the
+    /// player at the west end, a gate at the east end and one on the north
+    /// edge half way along.
+    const STRAGGLER_MAP: &str = "version = 1\nsize = [110, 20]\ncells.\"10,10\" = { kind = \"start\" }\ncells.\"60,0\" = { kind = \"gate\" }\ncells.\"109,10\" = { kind = \"gate\" }\n";
+
+    /// Write the field-map memory of the enemy in owner slot `slot`.
+    fn set_field_mind(game: &mut Game, slot: usize, set: impl FnOnce(&mut crate::ai::FieldMind)) {
+        let entity = game.tank_entity_by_slot(slot).expect("a tank in that slot");
+        set(&mut game.world.get::<&mut Ai>(entity).expect("an enemy on the field").field);
+    }
+
+    /// A wave tank that lost its way - out of every seat's sight, a long
+    /// walk from the fight and on no screen - is taken off and rolled in
+    /// again through a gate nearer the fight, keeping its role, and comes
+    /// back called to it; one lost within sight of the screens is left
+    /// where it is.
+    #[test]
+    fn a_straggler_is_rolled_in_again_through_a_nearer_gate_and_a_tank_near_the_fight_is_not() {
+        let mut game = Game::default();
+        game.seed_override = Some(7);
+        game.player_row_override = Some(0);
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.level_overrides.spawn = Some(SpawnKind::Waves);
+        game.level_overrides.waves = Some(3);
+        game.level_overrides.wave_size = Some(1);
+        game.level_overrides.wave_growth = Some(0);
+        game.map = MapFile::from_toml_str(STRAGGLER_MAP).expect("test map parses");
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        assert!(game.field_map());
+        for seat in game.players().into_iter().flatten() {
+            with_tank_mut(&game.world, seat, |t| t.shield_hp = 1.0e9);
+        }
+        let t = tuning();
+        let player = player_pos(&game);
+        let (straggler, _) = field_step_until_entered(&mut game, 900);
+        // Lost at the far east end, its leash there and its call over, a
+        // breath short of a straggler's time.
+        let far = Position::new(w - 6.0 * PATHFIND_CELL_SIZE, player.y);
+        game.debug_teleport(straggler, far, None).expect("teleports");
+        set_field_mind(&mut game, straggler, |m| {
+            m.home = Some(far);
+            m.called = false;
+            m.alert = None;
+            m.lost = t.field_reroll_after_seconds - 1.0;
+        });
+        let role = game.world.get::<&Ai>(game.tank_entity_by_slot(straggler).unwrap()).unwrap().role;
+        // A wave tank lost as long, out of the seat's sight but on its
+        // screen and a short walk away.
+        let near = Position::new(player.x + game.enemy_sight() + 100.0, player.y);
+        assert!(!field::beyond_every_screen(player, near, &t), "the case this is about");
+        let control = game.debug_spawn_enemy(near, Some(1), None).expect("an enemy spawns");
+        set_field_mind(&mut game, control, |m| {
+            m.home = Some(near);
+            m.wave = true;
+            m.lost = t.field_reroll_after_seconds - 1.0;
+        });
+        let mut taken = None;
+        for frame in 1..=180 {
+            field_step(&mut game, Input::default());
+            for e in game.events() {
+                if let Event::Rerolled { slot, x, .. } = *e {
+                    assert_eq!(slot, straggler, "only the straggler is rolled in again");
+                    assert!(x > w * 0.75, "taken off where it was lost: x {x}");
+                    taken = Some(frame);
+                }
+            }
+            if taken.is_some() {
+                break;
+            }
+        }
+        let frame = taken.expect("the straggler was never rolled in again");
+        assert!(frame >= 60, "taken off after {frame} frames, before it was a straggler");
+        let entity = game.tank_entity_by_slot(straggler).expect("the same tank, the same slot");
+        assert!(game.is_entering(entity), "it rolls in again");
+        // Through the north gate, nearer the fight than the east one it
+        // would otherwise walk from.
+        let (_, gate) = field_step_until_entered(&mut game, 900);
+        assert!(gate.y < 5.0 * PATHFIND_CELL_SIZE && (gate.x - 60.5 * PATHFIND_CELL_SIZE).abs() < 2.0 * PATHFIND_CELL_SIZE, "came back at {gate:?}");
+        let mind = field_mind_of(&game, straggler);
+        assert!(mind.called && mind.wave && mind.lost < 0.1, "back called to the fight, lost no more: {mind:?}");
+        assert_eq!(game.world.get::<&Ai>(entity).unwrap().role, role, "it keeps its role");
+        assert!(!game.is_entering(game.tank_entity_by_slot(control).unwrap()), "the tank near the fight stays");
+    }
+
+    /// The straggler's exemptions: a guard while the frog it keeps lives,
+    /// and a hull still burning, are never taken off - though each is lost,
+    /// a long walk from the fight and on no screen, as a straggler is.
+    #[test]
+    fn a_guard_keeping_its_frog_and_a_burning_hull_are_never_rolled_in_again() {
+        for exempt in ["guard", "burning"] {
+            let mut game = Game::default();
+            game.seed_override = Some(7);
+            game.player_row_override = Some(0);
+            game.level_overrides.mission = Some(if exempt == "guard" { Mission::Hunt } else { Mission::Destroy });
+            game.level_overrides.spawn = Some(SpawnKind::Waves);
+            game.level_overrides.waves = Some(3);
+            game.level_overrides.wave_size = Some(1);
+            game.level_overrides.wave_growth = Some(0);
+            game.map = MapFile::from_toml_str(STRAGGLER_MAP).expect("test map parses");
+            let (w, h) = game.map.field_size();
+            game.init(w, h);
+            assert!(game.field_map());
+            for seat in game.players().into_iter().flatten() {
+                with_tank_mut(&game.world, seat, |t| t.shield_hp = 1.0e9);
+            }
+            let t = tuning();
+            let player = player_pos(&game);
+            let (straggler, _) = field_step_until_entered(&mut game, 900);
+            let far = Position::new(w - 6.0 * PATHFIND_CELL_SIZE, player.y);
+            game.debug_teleport(straggler, far, None).expect("teleports");
+            set_field_mind(&mut game, straggler, |m| {
+                m.home = Some(far);
+                m.called = false;
+                m.alert = None;
+                m.lost = t.field_reroll_after_seconds - 1.0;
+            });
+            let entity = game.tank_entity_by_slot(straggler).expect("the straggler");
+            if exempt == "guard" {
+                let frog = game.enemy_frog.expect("a Hunt round keeps an enemy frog");
+                assert!(with_frog(&game.world, frog, |fr| !fr.is_dead()), "its frog lives");
+                game.world.get::<&mut Ai>(entity).expect("an enemy").role = Role::Guard;
+            } else {
+                with_tank_mut(&game.world, entity, |tank| {
+                    tank.burn_timer = 10.0;
+                    tank.shield_hp = 1.0e9;
+                });
+            }
+            for frame in 1..=180 {
+                field_step(&mut game, Input::default());
+                assert!(!game.events().iter().any(|e| matches!(e, Event::Rerolled { .. })), "{exempt}: taken off at frame {frame}");
+            }
+            // It was a straggler in every other way the whole time.
+            let mind = field_mind_of(&game, straggler);
+            let at = position_of(&game, straggler);
+            assert!(mind.lost >= t.field_reroll_after_seconds, "{exempt}: lost long enough: {mind:?}");
+            assert!(field::beyond_every_screen(player_pos(&game), at, &t), "{exempt}: on no screen at {at:?}");
+            assert!(!game.is_entering(entity), "{exempt}: still on the field");
+        }
+    }
+
+    /// A wave called to the fight drives at the nearest seat until a seat
+    /// is in its sight or it is hit: a hit ends the call there and then,
+    /// with every seat still out of its sight.
+    #[test]
+    fn a_called_wave_tank_is_called_no_more_once_it_is_hit() {
+        let mut game = field_round(FIELD_STRIP);
+        let player = player_pos(&game);
+        let at = Position::new(player.x + game.enemy_sight() + 300.0, player.y);
+        let slot = game.debug_spawn_enemy(at, Some(1), None).expect("an enemy spawns");
+        set_field_mind(&mut game, slot, |m| {
+            m.called = true;
+            m.wave = true;
+        });
+        field_step(&mut game, Input::default());
+        assert!(field_mind_of(&game, slot).called, "out of sight and unhurt, it stays called");
+        let entity = game.tank_entity_by_slot(slot).expect("the enemy");
+        game.world.get::<&mut Ai>(entity).expect("an enemy").notify_hit();
+        field_step(&mut game, Input::default());
+        let mind = field_mind_of(&game, slot);
+        assert!(position_of(&game, slot).distance_to(player) > game.enemy_sight(), "still out of sight");
+        assert!(!mind.called, "a hit ends the call: {mind:?}");
+    }
+
+    // --- Flow fields worked out as far as they are read (`pathfind`) ---
+
+    /// A flow field worked out only as far as the round reads it routes
+    /// every enemy as the whole field does: the same seeded round on
+    /// longwater - two seats, so two fields and the frog's, its first wave
+    /// rolling in a long walk out and called across the map to the fort -
+    /// with every field settled whole as each frame's grid is built and
+    /// without, tank for tank and bit for bit.
+    #[test]
+    fn a_field_read_as_far_as_it_is_needed_routes_every_enemy_as_the_whole_field_does() {
+        let run = |whole: bool| {
+            let mut game = Game::default();
+            game.seed_override = Some(0xB0B5);
+            game.players = PlayerCount::from_count(2).expect("two seats");
+            game.map = MapFile::from_toml_str(include_str!("../../maps/longwater.toml")).expect("longwater parses");
+            game.whole_fields = whole;
+            let (w, h) = game.map.field_size();
+            game.init(w, h);
+            assert!(game.field_map());
+            let mut samples = Vec::new();
+            for frame in 1..=900u32 {
+                game.update(Input::default(), 1.0 / 60.0, w, h);
+                if frame % 30 == 0 {
+                    let tanks: Vec<(usize, u32, u32, u32, u32)> = game
+                        .tank_snapshots()
+                        .iter()
+                        .map(|t| (t.slot, t.position.x.to_bits(), t.position.y.to_bits(), t.rotation.to_bits(), t.damage.to_bits()))
+                        .collect();
+                    samples.push(tanks);
+                }
+            }
+            samples
+        };
+        let (read, whole) = (run(false), run(true));
+        assert!(read.last().is_some_and(|tanks| tanks.len() > 4), "the first wave came onto the field");
+        for (i, (a, b)) in read.iter().zip(&whole).enumerate() {
+            assert_eq!(a, b, "sample {i}: an enemy went another way on the field read as far as it was needed");
+        }
+    }
+
+    // --- Steering: lanes and turns (docs/large-maps-follow-camera.md
+    // section 12) ---
+
+    /// A 40 x 20 field map split by an iron wall along row 10, open only
+    /// at a four-tile gap (columns 18 to 21, whose two middle columns are
+    /// the nav lanes a hull fits through), the player south of the wall
+    /// and nobody else placed: every route from the north half turns
+    /// south into the gap, one cell short of it or on it.
+    fn gap_map() -> String {
+        let mut map = String::from("version = 1\nsize = [40, 20]\ntanks = 0\ncells.\"28,15\" = { kind = \"start\" }\n");
+        for c in (0..40).filter(|c| !(18..=21).contains(c)) {
+            map.push_str(&format!("cells.\"{c},10\" = {{ kind = \"wall\", material = \"iron\" }}\n"));
+        }
+        map
+    }
+
+    /// An assault (row 1) on row 8 of `gap_map`, `edge` px above row 9:
+    /// the steering case of a hull riding the far edge of its lane, or
+    /// its centre line. Returns the round and the enemy's slot.
+    fn hull_on_row_8(edge: f32) -> (Game, usize) {
+        let mut game = field_round(&gap_map());
+        let lane_floor = 9.0 * PATHFIND_CELL_SIZE;
+        let slot = game.debug_spawn_enemy(Position::new(208.0, lane_floor - edge), Some(1), None).expect("an enemy spawns");
+        (game, slot)
+    }
+
+    /// Step until the enemy in `slot` is through the wall (its centre past
+    /// the wall's south face), at most `limit` frames: the frame it got
+    /// there and where it was the frame it first crossed the wall's north
+    /// face, or `None` if it never got through.
+    fn through_the_gap(game: &mut Game, slot: usize, limit: u32) -> Option<(u32, Position)> {
+        let (north, south) = (10.0 * PATHFIND_CELL_SIZE, 11.0 * PATHFIND_CELL_SIZE);
+        let mut entered = None;
+        for frame in 1..=limit {
+            field_step(game, Input::default());
+            let at = position_of(game, slot);
+            if entered.is_none() && at.y >= north {
+                entered = Some(at);
+            }
+            if at.y >= south {
+                return entered.map(|e| (frame, e));
+            }
+        }
+        None
+    }
+
+    /// A hull riding the far edge of its lane - its centre 2.5 px above
+    /// the next row, nearer that row's centre than
+    /// `ai_dir_switch_margin_px` - still takes its route's turn south into
+    /// the gap. Held to the margin alone, such a hull can never turn into
+    /// the next row: it drives past the gap, back and forth between the two
+    /// ends of the wall, for as long as the round lasts.
+    #[test]
+    fn a_hull_on_the_far_edge_of_its_lane_takes_its_turn() {
+        let (mut game, slot) = hull_on_row_8(2.5);
+        let start = position_of(&game, slot);
+        let next_row_centre = 9.5 * PATHFIND_CELL_SIZE;
+        assert!(next_row_centre - start.y < tuning().ai_dir_switch_margin_px, "the case this is about: {start:?}");
+        // About 450 px to the turning at an enemy's pace, then through.
+        let (frame, _) = through_the_gap(&mut game, slot, 6 * 60).expect("the hull never turned into the gap");
+        assert!(frame < 5 * 60, "took {frame} frames to get through");
+    }
+
+    /// The turn is taken where the hull's slide through it ends on the
+    /// centre line of the lane it turns into: a hull at speed carries on
+    /// along its old heading for `v^2 / 2a` (the tracks' grip,
+    /// `tank_turn_grip_force` over its mass) after it turns, so it turns
+    /// that much early, and comes down the gap on the centre of the gap's
+    /// lane rather than past it at the far edge - where the next turn its
+    /// way would be the one the margin could never let it take.
+    #[test]
+    fn a_hull_turns_early_enough_to_slide_onto_its_new_lanes_centre_line() {
+        let (mut game, slot) = hull_on_row_8(16.0);
+        let (_, entered) = through_the_gap(&mut game, slot, 6 * 60).expect("the hull never turned into the gap");
+        // The route turns south on column 20, whose centre is x = 656.
+        let lane_centre = 20.5 * PATHFIND_CELL_SIZE;
+        assert!((entered.x - lane_centre).abs() <= 6.0, "came down the gap at x = {:.1}, the lane's centre is {lane_centre}", entered.x);
+    }
+
+    /// The same hull on the far edge of its lane, sent through the gap by a
+    /// route of its own rather than the field every tank shares: the player
+    /// waits in the far corner, out of its sight under fog, and it fetches
+    /// the laser south of the wall, inside its leash (`Brain::seek`), along
+    /// a searched route. The margin could never turn it south into the next
+    /// row, so that turn is a lane turn as well (`ai::margin_never_turns`);
+    /// held to the margin alone, it drives on past the gap along the row's
+    /// edge until it sees the player.
+    #[test]
+    fn a_hull_on_the_far_edge_of_its_lane_takes_its_own_routes_turn() {
+        let map = gap_map().replace("\"28,15\"", "\"38,18\"")
+            + "weather = \"fog\"\ncells.\"23,14\" = { kind = \"pickup\", pickup = \"laser\" }\n";
+        let mut game = field_round(&map);
+        let lane_floor = 9.0 * PATHFIND_CELL_SIZE;
+        let slot = game.debug_spawn_enemy(Position::new(208.0, lane_floor - 2.5), Some(1), None).expect("an enemy spawns");
+        field_step(&mut game, Input::default());
+        let snapshot = game.debug_snapshot(game.map.field_size().0, game.map.field_size().1, debug::Detail::Full);
+        let ai = snapshot.tanks.iter().find(|t| t.slot == slot).and_then(|t| t.ai).expect("the enemy thinks");
+        assert_eq!(ai.last_action, Some("seek_laser"), "the case this is about: a searched route");
+        let (frame, _) = through_the_gap(&mut game, slot, 6 * 60).expect("the hull never turned into the gap");
+        assert!(frame < 5 * 60, "took {frame} frames to get through");
+    }
+
+    /// The same errand from just past the margin's reach: the hull's
+    /// centre 20.2 px across from the centre line of the row its route
+    /// turns into, 0.2 px more than `ai_dir_switch_margin_px`. The margin
+    /// turns a hull only on a think whose error along its heading, to the
+    /// turning's centre, is under what its error across beats the margin
+    /// by - here a window 0.4 px wide - and a hull covering 3 px between
+    /// two thinks drives across it without a think inside and on past the
+    /// gap. On the study map such a hull rode a column to and fro past its
+    /// turnings for the rest of the round (docs/large-maps-follow-camera.md
+    /// section 12).
+    #[test]
+    fn a_hull_just_past_the_margins_reach_takes_its_own_routes_turn() {
+        let map = gap_map().replace("\"28,15\"", "\"38,18\"")
+            + "weather = \"fog\"\ncells.\"23,14\" = { kind = \"pickup\", pickup = \"laser\" }\n";
+        let mut game = field_round(&map);
+        let next_row_centre = 9.5 * PATHFIND_CELL_SIZE;
+        let across = tuning().ai_dir_switch_margin_px + 0.2;
+        let slot = game.debug_spawn_enemy(Position::new(208.0, next_row_centre - across), Some(1), None).expect("an enemy spawns");
+        field_step(&mut game, Input::default());
+        let snapshot = game.debug_snapshot(game.map.field_size().0, game.map.field_size().1, debug::Detail::Full);
+        let ai = snapshot.tanks.iter().find(|t| t.slot == slot).and_then(|t| t.ai).expect("the enemy thinks");
+        assert_eq!(ai.last_action, Some("seek_laser"), "the case this is about: a searched route");
+        let (frame, _) = through_the_gap(&mut game, slot, 6 * 60).expect("the hull never turned into the gap");
+        assert!(frame < 5 * 60, "took {frame} frames to get through");
     }
 }
 

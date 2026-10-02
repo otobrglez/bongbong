@@ -7,6 +7,8 @@
 //! runs these stages through `render::canvas::GpuCanvas` inside
 //! `Game::render` (`render/game.rs`, the raylib half of this module); the
 //! map thumbnail runs them on `canvas::CpuCanvas` with no window at all.
+//! On a canvas over part of the field (`Canvas::cull`) the stages leave
+//! out what lies wholly outside it.
 
 use crate::blast::draw_scorch;
 use crate::canvas::Canvas;
@@ -21,6 +23,7 @@ use crate::tank::{
     draw_enemy_ring, draw_player_locate, draw_player_ring, draw_tank, draw_tank_shadow, draw_tank_shield, Tank,
 };
 use crate::track::draw_track;
+use crate::view::culled;
 use hecs::Entity;
 use std::collections::HashSet;
 
@@ -141,7 +144,8 @@ impl Game {
     }
 
     /// Everything lying flat on the ground: its baked shade (the walls'
-    /// and the edge's, `ground::bake_shade`), then the marks on it.
+    /// and the edge's, `ground::bake_shade`), then the marks on it. Each
+    /// mark the canvas culls (`Canvas::culls`) is left out.
     pub fn paint_floor_marks(&self, c: &mut impl Canvas) {
         if !self.plain_canvas {
             crate::ground::draw_shade(c, &self.ground);
@@ -149,13 +153,17 @@ impl Game {
 
         // Tread marks go down first so tanks and everything else draw on top.
         for track in &self.tracks {
-            draw_track(c, track);
+            if !c.culls(track.position) {
+                draw_track(c, track);
+            }
         }
 
         // Burn marks under everything that stands, so a barrel that
         // survived a neighbour's blast sits on the mark it left.
         for scorch in &self.scorches {
-            draw_scorch(c, scorch);
+            if !c.culls(scorch.center) {
+                draw_scorch(c, scorch);
+            }
         }
 
         // Rubble from tiles that died this round: above the burn marks
@@ -163,17 +171,24 @@ impl Game {
         // but under everything that still stands, so a wall built over
         // old rubble still reads as solid.
         for decal in self.decals.iter().filter(|dc| dc.landed()) {
-            draw_decal(c, decal);
+            if !c.culls(decal.center) {
+                draw_decal(c, decal);
+            }
         }
         // Unlit oil trails: puddles on the ground, under everything.
         for &(col, row) in &self.oil_cells {
-            draw_oil_cell(c, crate::map::cell_to_world(col, row));
+            let at = crate::map::cell_to_world(col, row);
+            if !c.culls(at) {
+                draw_oil_cell(c, at);
+            }
         }
         // Portals last on the floor: over tracks and scorches, under
         // everything that stands. Only an active network draws at all.
         if self.portals_active() {
             for &at in &self.portals {
-                draw_portal(c, at, self.time, Color::WHITE);
+                if !c.culls(at) {
+                    draw_portal(c, at, self.time, Color::WHITE);
+                }
             }
         }
         // What dead towers left, then the ooze over it: a burst vat's spill
@@ -200,10 +215,15 @@ impl Game {
         let towers = self.tower_views();
         if self.shadows_enabled {
             for view in &towers {
-                crate::tower::draw_tower_shadow(c, view.kind, view.side, view.position);
+                if !c.culls(view.position) {
+                    crate::tower::draw_tower_shadow(c, view.kind, view.side, view.position);
+                }
             }
         }
         for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| !o.material.is_tree() && !o.material.is_tower()) {
+            if c.culls(obstacle.position) {
+                continue;
+            }
             let axis = fence_axis(obstacle, &fences);
             if self.shadows_enabled {
                 draw_obstacle_shadow(c, obstacle, axis);
@@ -217,7 +237,9 @@ impl Game {
         // round it so a burning door in a wall is not cut off by the wall
         // beside it.
         for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| o.burning && !o.material.is_tree()) {
-            crate::pyro::draw(c, &tile_flames(obstacle, self.time));
+            if !c.culls(obstacle.position) {
+                crate::pyro::draw(c, &tile_flames(obstacle, self.time));
+            }
         }
     }
 
@@ -240,8 +262,12 @@ impl Game {
     /// crowns of a grove pop in and out of each other as the query
     /// iterates.
     pub fn paint_standing(&self, c: &mut impl Canvas, opts: PaintOptions) {
+        // What the canvas culls (`Canvas::cull`) stands out of the walk.
+        let cull = c.cull();
         for pickup in self.world.query::<&Pickup>().iter() {
-            draw_pickup(c, pickup);
+            if !culled(cull, pickup.position) {
+                draw_pickup(c, pickup);
+            }
         }
 
         let rollins: HashSet<Entity> = {
@@ -267,15 +293,20 @@ impl Game {
             .filter(|(_, item)| {
                 !(self.hide_players && matches!(item, Standing::Tank(_, TankRole::Player)))
             })
+            .filter(|(_, item)| !matches!(item, Standing::Tank(tank, _) if culled(cull, tank.position)))
             .collect();
         for frog_entity in [self.frog, self.enemy_frog].into_iter().flatten() {
-            let y = crate::simulation::with_frog(&self.world, frog_entity, |frog| frog.position.y);
-            standing.push((y, Standing::Frog(frog_entity)));
+            let at = crate::simulation::with_frog(&self.world, frog_entity, |frog| frog.position);
+            if !culled(cull, at) {
+                standing.push((at.y, Standing::Frog(frog_entity)));
+            }
         }
         // A tower rises north of its base, so a tank that drives behind
         // one is drawn behind it.
         for view in self.tower_views() {
-            standing.push((view.position.y, Standing::Tower(view)));
+            if !culled(cull, view.position) {
+                standing.push((view.position.y, Standing::Tower(view)));
+            }
         }
         standing.sort_by(|a, b| a.0.total_cmp(&b.0));
 
@@ -283,7 +314,9 @@ impl Game {
         let grass_up_to = |c: &mut _, upto: f32, from: usize| {
             let mut i = from;
             while i < self.grass.len() && self.grass[i].base.y <= upto {
-                crate::grass::draw_tuft(c, &self.grass[i], self.map.theme, self.time);
+                if !culled(cull, self.grass[i].base) {
+                    crate::grass::draw_tuft(c, &self.grass[i], self.map.theme, self.time);
+                }
                 i += 1;
             }
             i
@@ -319,7 +352,7 @@ impl Game {
             .map(|t| t.position)
             .collect();
         let mut tree_query = self.world.query::<&Obstacle>();
-        let mut trees: Vec<&Obstacle> = tree_query.iter().filter(|o| o.material.is_tree()).collect();
+        let mut trees: Vec<&Obstacle> = tree_query.iter().filter(|o| o.material.is_tree() && !culled(cull, o.position)).collect();
         trees.sort_by(|a, b| a.position.y.total_cmp(&b.position.y));
         for tree in &trees {
             let lean = tree_lean(tree, &movers);

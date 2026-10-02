@@ -1018,8 +1018,10 @@ impl<T: Transport> OnlineRound<T> {
             self.struck.insert(id, at);
             game.remove_shots(&[id]);
         }
+        // A beam is traced as far as the room traces it.
+        let beam_reach = crate::simulation::laser_reach(game.map.field_size());
         for beam in predictor.take_beams() {
-            let far = crate::math::Vec2::new(beam.start.x + beam.dir.x * LASER_REACH_PX, beam.start.y + beam.dir.y * LASER_REACH_PX);
+            let far = crate::math::Vec2::new(beam.start.x + beam.dir.x * beam_reach, beam.start.y + beam.dir.y * beam_reach);
             let end = world
                 .shot_contact(Some(seat), beam.start, far, tuning().shell_hit_half_extent)
                 .map_or(far, |(at, _)| at);
@@ -1298,10 +1300,6 @@ fn smoothstep(x: f32) -> f32 {
 /// What a press's refusal timeout adds to the link's round trip and
 /// picture delay: a few ticks of the room's own scheduling.
 const REFUSAL_MARGIN_SECONDS: f32 = 0.15;
-
-/// How far a predicted beam is traced before it stops at the first thing
-/// it meets: longer than any field's diagonal, as `weapons` traces it.
-const LASER_REACH_PX: f32 = 4000.0;
 
 /// Giving the seat up puts the tuning table back where the room found
 /// it, so the local round the window comes back to is played with the

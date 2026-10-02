@@ -4,7 +4,10 @@
      android_main runs the game from lib__LIB_NAME__.so. configChanges keeps
      the activity alive across rotation (raylib's config-change handling is a
      stub); the theme removes the title and status bars; the icon is the
-     adaptive icon under tools/android/res/. -->
+     adaptive icon under tools/android/res/. appCategory="game" keeps the
+     landscape lock on tablets and foldables: an app targeting API 36 has
+     its screenOrientation, resizeability and aspect-ratio limits ignored on
+     displays 600 dp and wider unless it is a game. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="__PACKAGE__"
     android:versionCode="__VERSION_CODE__"
@@ -18,6 +21,7 @@ __PERMISSIONS__
         android:icon="@mipmap/ic_launcher"
         android:hasCode="false"
         android:allowBackup="false"
+        android:appCategory="game"
         android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
         <activity
             android:name="android.app.NativeActivity"

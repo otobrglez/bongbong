@@ -80,6 +80,7 @@ keys! {
     BUTTON_ONLINE = "button-online";
     PLAYERS_TITLE = "players-title";
     PLAYERS_KEYS = "players-keys";
+    PLAYERS_TOUCH = "players-touch";
     PLAYERS_ONE = "players-one";
     PLAYERS_TWO = "players-two";
     LEAVE_TITLE = "leave-title";
@@ -164,6 +165,7 @@ keys! {
     STATUS_OFFLINE = "status-offline";
     NOTE_TUNING_REFUSED = "note-tuning-refused";
     NOTE_WELCOME_REFUSED = "note-welcome-refused";
+    NOTE_NOT_CLEARED = "note-not-cleared";
     REFUSAL_ALREADY_IN_ROOM = "refusal-already-in-room";
     REFUSAL_NOT_IN_ROOM = "refusal-not-in-room";
     REFUSAL_NOT_YOURS = "refusal-not-yours";
@@ -193,6 +195,18 @@ keys! {
     EDITOR_REDO = "editor-redo";
     EDITOR_FILE = "editor-file";
     EDITOR_MAP = "editor-map";
+    EDITOR_FIT = "editor-fit";
+    EDITOR_PLAY_HERE = "editor-play-here";
+    EDITOR_CHECK = "editor-check";
+    CHECK_TITLE = "check-title";
+    CHECK_HINT = "check-hint";
+    CHECK_NONE = "check-none";
+    CHECK_FIX = "check-fix";
+    CHECK_CLEARED = "check-cleared";
+    CHECK_NOT_CLEARED = "check-not-cleared";
+    CHECK_PAR = "check-par";
+    CHECK_CLEARED_HINT = "check-cleared-hint";
+    CHECK_NOT_CLEARED_HINT = "check-not-cleared-hint";
     EDITOR_TOOL = "editor-tool";
     CATEGORY_WALL = "category-wall";
     CATEGORY_PROP = "category-prop";
@@ -215,20 +229,45 @@ keys! {
     SETTINGS_TIER_END = "settings-tier-end";
     SETTINGS_THEME = "settings-theme";
     SETTINGS_WEATHER = "settings-weather";
+    SETTINGS_WIDTH = "settings-width";
+    SETTINGS_HEIGHT = "settings-height";
+    SETTINGS_ANCHOR = "settings-anchor";
     SETTINGS_RESET = "settings-reset";
     SETTINGS_AUTO = "settings-auto";
     SETTINGS_CLI = "settings-cli";
     EDITOR_SAVE_AS = "editor-save-as";
     EDITOR_SAVE_HINT = "editor-save-hint";
+    EDITOR_SAVE_HINT_TOUCH = "editor-save-hint-touch";
     EDITOR_NO_MAPS = "editor-no-maps";
     EDITOR_SHIPPED = "editor-shipped";
     EDITOR_PAGE = "editor-page";
+    EDITOR_PAGE_TOUCH = "editor-page-touch";
     EDITOR_UNTITLED = "editor-untitled";
     EDITOR_SAVED = "editor-saved";
     EDITOR_LOADED = "editor-loaded";
     EDITOR_SAVING_UNAVAILABLE = "editor-saving-unavailable";
     EDITOR_NO_NAME = "editor-no-name";
     EDITOR_BAD_NAME = "editor-bad-name";
+    EDITOR_BRUSH = "editor-brush";
+    BRUSH_PEN = "brush-pen";
+    BRUSH_RECT = "brush-rect";
+    BRUSH_FILL = "brush-fill";
+    BRUSH_SCATTER = "brush-scatter";
+    BRUSH_STAMPS = "brush-stamps";
+    SELECT_COPY = "select-copy";
+    SELECT_CUT = "select-cut";
+    SELECT_PASTE = "select-paste";
+    SELECT_DELETE = "select-delete";
+    SELECT_SAVE_STAMP = "select-save-stamp";
+    SELECT_STAMPS = "select-stamps";
+    SELECT_PLACE = "select-place";
+    SELECT_CANCEL = "select-cancel";
+    STAMP_SAVED = "stamp-saved";
+    EDITOR_COPIED = "editor-copied";
+    EDITOR_CUT = "editor-cut";
+    EDITOR_STAMP_KEPT = "editor-stamp-kept";
+    EDITOR_STAMP_EMPTY = "editor-stamp-empty";
+    EDITOR_FILL_TOO_LARGE = "editor-fill-too-large";
 }
 
 /// The one-word title of a mission (the bar, the lobby's stepper).
@@ -598,16 +637,27 @@ pub fn fit(text: &str, max_px: i32, size: i32) -> Cow<'_, str> {
     Cow::Owned("~".to_string())
 }
 
+/// The largest size, at most `size`, at which `text` is no wider than
+/// `max_px` - a banner on a narrow window - and `BASE_SIZE` when even that
+/// is too wide, the font's own size being the least it draws at.
+pub fn fit_size(text: &str, size: i32, max_px: i32) -> i32 {
+    (BASE_SIZE..=size.max(BASE_SIZE)).rev().find(|&s| width(text, s) <= max_px).unwrap_or(BASE_SIZE)
+}
+
 #[cfg(test)]
 mod text_tests {
     use super::*;
     use crate::hud::{
-        DIALOG_BUTTON_W, DIALOG_W, HUD_GAUGE_LABEL_MAX_PX, HUD_LABEL_SIZE, HUD_TEXT_SIZE, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP,
-        LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE, MODE_BUTTON_W, ONLINE_BUTTON_W, RESULT_BUTTON_W, RESULT_LEVELS_W, RESULT_LINE_SIZE,
-        RESULT_STATS_GAP, RESULT_TEXT_PX,
+        BANNER_MIN_SIZE, BANNER_SIZE, BANNER_SUB_SIZE, DIALOG_BUTTON_W, DIALOG_W, HUD_GAUGE_LABEL_MAX_PX, HUD_LABEL_SIZE,
+        HUD_TEXT_SIZE, INFO_TITLE_W, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP, LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE,
+        MODE_BUTTON_W, ONLINE_BUTTON_W, RESULT_BUTTON_W, RESULT_LEVELS_W, RESULT_LINE_SIZE, RESULT_STATS_GAP,
+        RESULT_TEXT_PX, RESULT_TITLE_SIZE, UI_SMALL_TEXT, WAVE_BANNER_SIZE,
     };
+    use crate::level::Mission;
     use crate::level_select::{SELECT_BACK_W, SELECT_MARGIN, SELECT_W, TILE_TITLE_SIZE};
-    use crate::lobby::{LOBBY_BUTTON_W, LOBBY_KICK_W, LOBBY_WIDE_W, LOBBY_W, LOBBY_MARGIN};
+    use crate::lobby::{
+        LOBBY_BUTTON_W, LOBBY_KICK_W, LOBBY_MARGIN, LOBBY_SEAT_CHASSIS_X, LOBBY_SEAT_STATE_X, LOBBY_WIDE_W, LOBBY_W,
+    };
 
     /// The ids of every message in a shipped file: a message starts a
     /// line with its id and `=`; comments, blank lines and the
@@ -649,6 +699,12 @@ mod text_tests {
         }
         for tier in crate::level::Tier::ALL {
             ids.push(format!("tier-{}", tier.name()));
+        }
+        for kind in crate::maplint::LintKind::ALL {
+            ids.push(format!("lint-{}", kind.tag()));
+        }
+        for (name, _) in crate::editor::select::SHIPPED_STAMPS {
+            ids.push(format!("stamp-{name}"));
         }
         ids.push("status-label-room".to_string());
         ids
@@ -754,49 +810,62 @@ mod text_tests {
         let dialog_button = |k: Key| (k, HUD_TEXT_SIZE, DIALOG_BUTTON_W as i32 - 16, vec![]);
         let lobby_button = |k: Key| (k, HUD_TEXT_SIZE, LOBBY_BUTTON_W as i32 - 12, vec![]);
         let wide = |k: Key| (k, HUD_TEXT_SIZE, LOBBY_WIDE_W as i32 - 12, vec![]);
+        let pager = |k: Key| {
+            let room = crate::EDITOR_SETTINGS_W as i32 - 2 * (16 + width(">", HUD_TEXT_SIZE) + 8);
+            (k, UI_SMALL_TEXT, room, vec![("from", 99.into()), ("to", 99.into()), ("n", 99.into())])
+        };
         let content = (LOBBY_W - 2.0 * LOBBY_MARGIN) as i32;
-        let field = crate::Rect::new(0.0, 32.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32);
-        let seat_state_px = (crate::lobby::seats_rect(field).width - LOBBY_KICK_W) as i32 - 280 - 4;
-        vec![
-            (keys::HUD_SPEED, HUD_LABEL_SIZE, HUD_GAUGE_LABEL_MAX_PX, vec![]),
-            (keys::HUD_SHIELD, HUD_LABEL_SIZE, HUD_GAUGE_LABEL_MAX_PX, vec![]),
-            (keys::HUD_FROG, HUD_LABEL_SIZE, HUD_GAUGE_LABEL_MAX_PX, vec![]),
+        let area = crate::hud::UiFrame::plain((crate::hud::UI_MIN_W, crate::hud::UI_MIN_H)).area;
+        let seat_state_px = (crate::lobby::seats_rect(area).width - LOBBY_KICK_W - LOBBY_SEAT_STATE_X) as i32 - 4;
+        let mut out = vec![
+            // A gauge's label over its bar, in the corners' small size.
+            (keys::HUD_SPEED, UI_SMALL_TEXT, HUD_GAUGE_LABEL_MAX_PX, vec![]),
+            (keys::HUD_SHIELD, UI_SMALL_TEXT, HUD_GAUGE_LABEL_MAX_PX, vec![]),
+            (keys::HUD_FROG, UI_SMALL_TEXT, HUD_GAUGE_LABEL_MAX_PX, vec![]),
             button(keys::BUTTON_BUILD, MODE_BUTTON_W),
             button(keys::BUTTON_PLAY, MODE_BUTTON_W),
             button(keys::BUTTON_LEAVE, MODE_BUTTON_W),
             button(keys::BUTTON_ONLINE, ONLINE_BUTTON_W),
             (keys::PLAYERS_TITLE, 28, DIALOG_W as i32 - 32, vec![]),
             (keys::PLAYERS_KEYS, 16, DIALOG_W as i32 - 32, vec![]),
+            (keys::PLAYERS_TOUCH, 16, DIALOG_W as i32 - 32, vec![]),
             (keys::LEAVE_TITLE, 28, DIALOG_W as i32 - 32, vec![]),
             (keys::LEAVE_SUB, 16, DIALOG_W as i32 - 32, vec![]),
             dialog_button(keys::PLAYERS_ONE),
             dialog_button(keys::PLAYERS_TWO),
             dialog_button(keys::LEAVE_CONFIRM),
             dialog_button(keys::LEAVE_STAY),
-            // The bar's title shares its slot with " 12/12" in a wave round.
-            (keys::MISSION_PROTECT, HUD_TEXT_SIZE, 158 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
-            (keys::MISSION_HUNT, HUD_TEXT_SIZE, 158 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
-            (keys::MISSION_DESTROY, HUD_TEXT_SIZE, 158 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
+            // The right cluster's title shares its slot with " 12/12" in
+            // a wave round.
+            (keys::MISSION_PROTECT, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
+            (keys::MISSION_HUNT, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
+            (keys::MISSION_DESTROY, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
             (keys::LOBBY_TITLE_START, 22, content, vec![]),
             (keys::LOBBY_TITLE_CODE, 22, content, vec![]),
             (keys::LOBBY_TITLE_WAITING, 22, content, vec![]),
             (keys::LOBBY_TITLE_CLOSED, 22, content, vec![]),
             (keys::LOBBY_TITLE_HOST, 22, content, vec![]),
             (keys::LOBBY_TITLE_GUEST, 22, content, vec![]),
-            (keys::LOBBY_SUB_START, HUD_LABEL_SIZE + 2, content, vec![]),
-            (keys::LOBBY_SUB_CODE, HUD_LABEL_SIZE + 2, content, vec![]),
-            (keys::LOBBY_SUB_CLOSED, HUD_LABEL_SIZE + 2, content, vec![]),
-            (keys::LOBBY_SUB_HOST, HUD_LABEL_SIZE, content, vec![]),
-            (keys::LOBBY_SUB_GUEST, HUD_LABEL_SIZE, content, vec![]),
+            (keys::LOBBY_SUB_START, UI_SMALL_TEXT, content, vec![]),
+            (keys::LOBBY_SUB_CODE, UI_SMALL_TEXT, content, vec![]),
+            (keys::LOBBY_SUB_CLOSED, UI_SMALL_TEXT, content, vec![]),
+            (keys::LOBBY_SUB_HOST, UI_SMALL_TEXT, content, vec![]),
+            (keys::LOBBY_SUB_GUEST, UI_SMALL_TEXT, content, vec![]),
+            // A room refused before it was dialled: the closed face's line.
+            (keys::NOTE_NOT_CLEARED, UI_SMALL_TEXT, content, vec![]),
             (keys::LOBBY_MAP, HUD_TEXT_SIZE, 152, vec![]),
             (keys::LOBBY_MISSION, HUD_TEXT_SIZE, 152, vec![]),
-            // A seat's state runs from its 280 px column to the kick button
-            // at the row's right end.
-            (keys::SEAT_AWAY, HUD_LABEL_SIZE, seat_state_px, vec![]),
-            (keys::SEAT_HOST, HUD_LABEL_SIZE, seat_state_px, vec![]),
-            (keys::SEAT_READY, HUD_LABEL_SIZE, seat_state_px, vec![]),
-            (keys::SEAT_WAITING, HUD_LABEL_SIZE, seat_state_px, vec![]),
-            (keys::SEAT_EMPTY, HUD_LABEL_SIZE, 200, vec![]),
+            // The touch hint, centred on each half of the smallest window
+            // the chrome is laid out in.
+            (keys::TOUCH_STEER, crate::touch::HINT_TEXT_PT, (crate::hud::UI_MIN_W / 2.0) as i32 - 16, vec![]),
+            (keys::TOUCH_FIRE, crate::touch::HINT_TEXT_PT, (crate::hud::UI_MIN_W / 2.0) as i32 - 16, vec![]),
+            // A seat's state runs from its column to the kick button at
+            // the row's right end.
+            (keys::SEAT_AWAY, UI_SMALL_TEXT, seat_state_px, vec![]),
+            (keys::SEAT_HOST, UI_SMALL_TEXT, seat_state_px, vec![]),
+            (keys::SEAT_READY, UI_SMALL_TEXT, seat_state_px, vec![]),
+            (keys::SEAT_WAITING, UI_SMALL_TEXT, seat_state_px, vec![]),
+            (keys::SEAT_EMPTY, UI_SMALL_TEXT, 200, vec![]),
             wide(keys::LOBBY_HOST),
             wide(keys::LOBBY_JOIN),
             lobby_button(keys::LOBBY_BACK),
@@ -809,13 +878,38 @@ mod text_tests {
             lobby_button(keys::LOBBY_REMATCH),
             lobby_button(keys::LOBBY_LEAVE),
             (keys::LOBBY_KICK, HUD_TEXT_SIZE, LOBBY_KICK_W as i32 - 8, vec![]),
-            // The build bar: BUILD before the name slot, FILE and MAP
-            // beside their carets, UNDO and REDO in their small buttons.
+            // The build bar (`editor::Bar`): BUILD in its slot, FILE and
+            // MAP beside their carets; the small buttons' labels are
+            // measured below, in a mouse's bar and a touch screen's.
             (keys::EDITOR_BUILD, HUD_TEXT_SIZE, 64, vec![]),
             (keys::EDITOR_FILE, HUD_TEXT_SIZE, 42, vec![]),
             (keys::EDITOR_MAP, HUD_TEXT_SIZE, 42, vec![]),
-            (keys::EDITOR_UNDO, HUD_LABEL_SIZE, 36, vec![]),
-            (keys::EDITOR_REDO, HUD_LABEL_SIZE, 36, vec![]),
+            // The CHECK panel (`editor::chrome::LINT_PANEL_W`): its title,
+            // 16 pt, left of the three counts; the line under it in the
+            // small size across the panel; a clean map's line, 16 pt; FIX
+            // in its 80 pt button.
+            (keys::CHECK_TITLE, 16, 240, vec![]),
+            (keys::CHECK_HINT, UI_SMALL_TEXT, crate::editor::LINT_HINT_W as i32, vec![]),
+            (keys::CHECK_NONE, 16, crate::editor::LINT_HINT_W as i32, vec![]),
+            (keys::CHECK_FIX, 16, 72, vec![]),
+            // The clear check's row: its title from beside the flag, the
+            // par at the row's right end, the line under them, all inside
+            // the room from the flag's words to the right inset.
+            (keys::CHECK_CLEARED, 16, 200, vec![]),
+            (keys::CHECK_NOT_CLEARED, 16, crate::editor::LINT_CLEAR_W as i32, vec![]),
+            (keys::CHECK_PAR, 16, 160, vec![("time", "59:59".into())]),
+            (keys::CHECK_CLEARED_HINT, UI_SMALL_TEXT, crate::editor::LINT_CLEAR_W as i32, vec![]),
+            (keys::CHECK_NOT_CLEARED_HINT, UI_SMALL_TEXT, crate::editor::LINT_CLEAR_W as i32, vec![]),
+            // A pager's span, in the small size between its `<` and `>`
+            // in the narrowest paged panel, a column of the MAP panel -
+            // with the keys' hint and with a tap's.
+            pager(keys::EDITOR_PAGE),
+            pager(keys::EDITOR_PAGE_TOUCH),
+            // The Save prompt's line under the name, either hint, and its
+            // SAVE button's label inside the button's drawn box.
+            (keys::EDITOR_SAVE_HINT, UI_SMALL_TEXT, crate::editor::chrome::SAVE_PROMPT.0 as i32 - 24, vec![]),
+            (keys::EDITOR_SAVE_HINT_TOUCH, UI_SMALL_TEXT, crate::editor::chrome::SAVE_PROMPT.0 as i32 - 24, vec![]),
+            (keys::FILE_SAVE, UI_SMALL_TEXT, (crate::editor::chrome::SAVE_BUTTON_W - crate::editor::chrome::SMALL_BOX_INSET) as i32 - 8, vec![]),
             (keys::FILE_LOAD, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE_AS, HUD_TEXT_SIZE, 168, vec![]),
@@ -836,11 +930,19 @@ mod text_tests {
             (keys::SETTINGS_TIER_END, 16, 116, vec![]),
             (keys::SETTINGS_THEME, 16, 116, vec![]),
             (keys::SETTINGS_WEATHER, 16, 116, vec![]),
+            (keys::SETTINGS_WIDTH, 16, 116, vec![]),
+            (keys::SETTINGS_HEIGHT, 16, 116, vec![]),
+            (keys::SETTINGS_ANCHOR, 16, 116, vec![]),
             (keys::SETTINGS_RESET, 16, 116, vec![]),
             // The level's lines and the end screen: across the smallest
-            // field the game ships (maps/crossplay/, 768 px) less a margin,
-            // the end screen's two numbers side by side with a gap.
+            // area the chrome is laid out in less a margin, the end
+            // screen's two numbers side by side with a gap, and the
+            // countdown free play and a room's round end on, two digits.
             (keys::LEVEL_NUMBER, LEVEL_NUMBER_SIZE, RESULT_TEXT_PX, vec![("n", 14.into()), ("count", 14.into())]),
+            (keys::ROUND_RESTARTING, BANNER_SUB_SIZE, RESULT_TEXT_PX, vec![("seconds", 30.into())]),
+            (keys::ROUND_BACK_TO_LOBBY, BANNER_SUB_SIZE, RESULT_TEXT_PX, vec![("seconds", 30.into())]),
+            (keys::ROUND_WON, RESULT_TITLE_SIZE, RESULT_TEXT_PX, vec![]),
+            (keys::ROUND_LOST, RESULT_TITLE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::RESULT_ALL_CLEAR, RESULT_LINE_SIZE, RESULT_TEXT_PX, vec![("count", 14.into())]),
             (keys::RESULT_TIME, RESULT_LINE_SIZE, (RESULT_TEXT_PX - RESULT_STATS_GAP) / 2, vec![("time", "59:59".into())]),
             (keys::RESULT_WRECKS, RESULT_LINE_SIZE, (RESULT_TEXT_PX - RESULT_STATS_GAP) / 2, vec![("n", 99.into()), ("total", 99.into())]),
@@ -853,18 +955,74 @@ mod text_tests {
             (keys::RESULT_NEXT_IN, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![("seconds", 30.into())]),
             (keys::RESULT_AGAIN_IN, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![("seconds", 30.into())]),
             // The level select: the lobby's title and line sizes across
-            // its content, BACK in its button; the bar's level button
-            // holds its word and a two-digit number.
+            // its content, BACK in its button; the corners' level button
+            // holds its word, in the small size, and a two-digit number.
             (keys::LEVELS_TITLE, 22, (SELECT_W - 2.0 * SELECT_MARGIN) as i32, vec![]),
-            (keys::LEVELS_SUB, HUD_LABEL_SIZE + 2, (SELECT_W - 2.0 * SELECT_MARGIN) as i32, vec![]),
+            (keys::LEVELS_SUB, UI_SMALL_TEXT, (SELECT_W - 2.0 * SELECT_MARGIN) as i32, vec![]),
             (keys::LEVELS_BACK, HUD_TEXT_SIZE, SELECT_BACK_W as i32 - 12, vec![]),
             (
                 keys::BAR_LEVEL,
-                HUD_LABEL_SIZE,
+                UI_SMALL_TEXT,
                 LEVEL_BUTTON_W as i32 - 12 - LEVEL_BUTTON_WORD_GAP - width("88", HUD_TEXT_SIZE),
                 vec![],
             ),
-        ]
+        ];
+        // The build bar's small buttons - UNDO, REDO, FIT, CHECK, PLAY
+        // HERE - inside their drawn boxes (an outline is drawn outside
+        // its box), at the size each bar draws them
+        // (`editor::chrome::small_text`): a mouse's at 11 pt in a desktop
+        // bar's boxes, a touch screen's at 12 in its
+        // wider ones; and the five categories' names beside their row of
+        // the palette a narrow bar folds them into.
+        for touch in [false, true] {
+            let ui = crate::hud::UiFrame::new((1600.0, 900.0), 1.0, 1.0, crate::hud::Insets::default(), touch);
+            let bar = crate::editor::Bar::of(&ui);
+            let size = crate::editor::chrome::small_text(touch);
+            let room = |r: crate::math::Rectangle| (r.width - crate::editor::chrome::SMALL_BOX_INSET) as i32;
+            for (key, r) in [
+                (keys::EDITOR_UNDO, bar.undo),
+                (keys::EDITOR_REDO, bar.redo),
+                (keys::EDITOR_FIT, bar.fit),
+                (keys::EDITOR_CHECK, bar.check),
+                (keys::EDITOR_PLAY_HERE, bar.here),
+            ] {
+                out.push((key, size, room(r), vec![]));
+            }
+        }
+        for category in crate::editor::Category::ALL {
+            out.push((category.label_key(), UI_SMALL_TEXT, crate::editor::chrome::PALETTE_LABEL_W as i32 - 12, vec![]));
+        }
+        // The brush's row of the palette, named beside its cells like a
+        // category's; BRUSH's list's rows, 18 pt after the icon like a
+        // tool's (`tool-select` is measured with the tools).
+        out.push((keys::EDITOR_BRUSH, UI_SMALL_TEXT, crate::editor::chrome::PALETTE_LABEL_W as i32 - 12, vec![]));
+        for row in crate::editor::BrushRow::ALL {
+            let key = match row {
+                crate::editor::BrushRow::Shape(shape) => shape.label_key(),
+                crate::editor::BrushRow::Stamps => keys::BRUSH_STAMPS,
+                crate::editor::BrushRow::Select => continue,
+            };
+            out.push((key, HUD_TEXT_SIZE, 200 - 48 - 8, vec![]));
+        }
+        // The select tool's strip: each word inside its button's drawn box,
+        // at the bar's small size, with a mouse and on a touch screen.
+        for touch in [false, true] {
+            let w = if touch { crate::editor::chrome::STRIP_WORD_W.1 } else { crate::editor::chrome::STRIP_WORD_W.0 };
+            let room = (w - crate::editor::chrome::SMALL_BOX_INSET) as i32;
+            let size = crate::editor::chrome::small_text(touch);
+            for button in crate::editor::StripButton::SELECTION.into_iter().chain(crate::editor::StripButton::GHOST) {
+                if let Some(key) = button.label_key() {
+                    out.push((key, size, room, vec![]));
+                }
+            }
+        }
+        // A saved stamp's name in its STAMPS row, two digits.
+        out.push((keys::STAMP_SAVED, HUD_TEXT_SIZE, crate::editor::chrome::STAMP_NAME_W as i32, vec![("n", 99.into())]));
+        // A Load row's second line: the largest map's size, then the word
+        // for a map that ships with the game.
+        let size = width("250 x 250   ", UI_SMALL_TEXT);
+        out.push((keys::EDITOR_SHIPPED, UI_SMALL_TEXT, crate::editor::chrome::LOAD_TEXT_W as i32 - size, vec![]));
+        out
     }
 
     /// Every language fits every budget. A language file that does not
@@ -881,13 +1039,37 @@ mod text_tests {
                     over.push(format!("{tag}: {} = {text:?} is {w} px at {size} px, over its {max_px} px budget", key.0));
                 }
             }
+            // The banners: set at their size where the line has the room
+            // and shrunk to fit where it has not, but never under
+            // `BANNER_MIN_SIZE` in the smallest area the chrome is laid
+            // out in.
+            let mut banners: Vec<(String, i32)> = [Mission::Protect, Mission::Hunt, Mission::Destroy]
+                .into_iter()
+                .map(|m| (catalogue.get(mission_banner(m)), BANNER_SIZE))
+                .collect();
+            banners.push((catalogue.get(keys::PAUSED), BANNER_SIZE));
+            banners.push((catalogue.get(keys::WAVE_FINAL), WAVE_BANNER_SIZE));
+            banners.push((catalogue.fmt(keys::WAVE_BANNER, &[("n", 99.into())]), WAVE_BANNER_SIZE));
+            for (banner, size) in banners {
+                let fitted = fit_size(&banner, size, RESULT_TEXT_PX);
+                if fitted < BANNER_MIN_SIZE.min(size) {
+                    over.push(format!("{tag}: banner {banner:?} only fits at {fitted} px, under {BANNER_MIN_SIZE}"));
+                }
+            }
+            // A seat's chassis runs from its column to the state's.
+            for kind in crate::tank::TankKind::ALL {
+                let name = catalogue.named("tank", kind.name());
+                if width(&name, UI_SMALL_TEXT) > (LOBBY_SEAT_STATE_X - LOBBY_SEAT_CHASSIS_X) as i32 - 4 {
+                    over.push(format!("{tag}: chassis {name:?} runs into the seat's state"));
+                }
+            }
             // Every level's title under the mission banner, and on its
             // tile in the level select, whole.
-            let tile_px = crate::level_select::tile_text_px(crate::Rect::new(0.0, 0.0, 768.0, 384.0));
+            let tile_px = crate::level_select::tile_text_px();
             for level in crate::levels::Levels::shipped().iter() {
                 let title = catalogue.message(&format!("level-{}", level.map), &[]).unwrap_or_else(|| fold(&level.title).into_owned());
                 if width(&title, LEVEL_TITLE_SIZE) > RESULT_TEXT_PX {
-                    over.push(format!("{tag}: level {} = {title:?} overflows the field", level.map));
+                    over.push(format!("{tag}: level {} = {title:?} overflows the smallest area", level.map));
                 }
                 let lines = crate::level_select::wrap(&title, tile_px, TILE_TITLE_SIZE);
                 if lines.iter().any(|line| line.ends_with('~')) {
@@ -901,19 +1083,36 @@ mod text_tests {
                 if width(&long, HUD_TEXT_SIZE) > 200 - 48 - 8 {
                     over.push(format!("{tag}: tool {} = {long:?} overflows its row", tool.name()));
                 }
+                // The short name is the status line's and the cursor
+                // readout's, kept to a word or two.
                 let short = catalogue.message(&format!("tool-short-{}", tool.name()), &[]).unwrap_or(long);
                 if width(&short, HUD_LABEL_SIZE) > 48 {
-                    over.push(format!("{tag}: short tool name {short:?} overflows the bar's line"));
+                    over.push(format!("{tag}: short tool name {short:?} is longer than a word or two"));
                 }
             }
-            // A settings row's value runs from 180 px into the row to its
+            // The shipped stamps' names in their STAMPS rows.
+            for (name, _) in crate::editor::select::SHIPPED_STAMPS {
+                let words = catalogue.named("stamp", name);
+                if width(&words, HUD_TEXT_SIZE) > crate::editor::chrome::STAMP_NAME_W as i32 {
+                    over.push(format!("{tag}: stamp {name} = {words:?} runs into its size"));
+                }
+            }
+            // The CHECK panel's findings, 16 px from beside a row's mark to
+            // its FIX button.
+            for kind in crate::maplint::LintKind::ALL {
+                let words = catalogue.named("lint", kind.tag());
+                if width(&words, 16) > crate::editor::LINT_FINDING_W as i32 {
+                    over.push(format!("{tag}: finding {} = {words:?} runs into its FIX button", kind.tag()));
+                }
+            }
+            // A settings row's value runs from 180 pt into the row to its
             // `>` button at 288 (`editor/render.rs`'s `SETTINGS_VALUE_X`,
-            // `settings_inc_rect`), with the `(cli)` mark after it when a
-            // flag outranks the map - the weather's can.
+            // `settings_inc_rect`), with the `(cli)` mark after it in the
+            // small size when a flag outranks the map - the weather's can.
             for weather in crate::map::Weather::ALL {
                 let name = catalogue.named("weather", weather.name());
                 let mark = catalogue.get(keys::SETTINGS_CLI);
-                if width(&name, HUD_TEXT_SIZE) + 4 + width(&mark, HUD_LABEL_SIZE) > 288 - 180 - 4 {
+                if width(&name, HUD_TEXT_SIZE) + 4 + width(&mark, UI_SMALL_TEXT) > 288 - 180 - 4 {
                     over.push(format!("{tag}: weather {} = {name:?} overflows its settings row", weather.name()));
                 }
             }
@@ -969,6 +1168,19 @@ mod text_tests {
         let cut = fit("A VERY LONG MAP NAME INDEED", 60, 18);
         assert!(cut.ends_with('~') && width(&cut, 18) <= 60, "{cut}");
         assert_eq!(fit("WIDE", 1, 18), "~");
+    }
+
+    /// `fit_size` keeps the size where the text fits and otherwise takes
+    /// the largest that does, down to the font's own.
+    #[test]
+    fn fit_size_shrinks_only_what_does_not_fit() {
+        assert_eq!(fit_size("YOU WIN", 72, 1000), 72);
+        let banner = "PROTECT THE FROG!";
+        let fitted = fit_size(banner, 72, 672);
+        assert!(fitted < 72 && width(banner, fitted) <= 672, "{fitted}");
+        assert!(width(banner, fitted + 1) > 672, "the largest size that fits");
+        assert_eq!(fit_size(banner, 72, 1), BASE_SIZE, "nothing narrower than the font's own size");
+        assert_eq!(fit_size("", 72, 0), 72);
     }
 
     /// Tags: exact, case and separator aside, then by language subtag,

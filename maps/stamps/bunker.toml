@@ -1,0 +1,31 @@
+# A builder stamp (src/editor/select.rs, docs/large-maps-patterns.md
+# "Selection, copy and stamps"): offered in the builder's STAMPS list,
+# where choosing it makes it the paste ghost. Not a map to play - `size`
+# is the stamp's own extent in cells, from its top-left - and it holds no
+# start, frog or gate, so putting it down never moves one. Embedded in the
+# binary (`editor::select::SHIPPED_STAMPS`), so every build offers it.
+#
+# bunker: a small hardpoint, 6 x 5 cells, to guard a pickup or a tower
+# with: iron on the top and the sides, which no shot breaks, and a front
+# of sandbags with a two-cell door at the bottom. It faces down the map;
+# FLIP it to face up.
+
+version = 1
+size = [6, 5]
+
+cells."1,0" = { kind = "wall", material = "iron" }
+cells."2,0" = { kind = "wall", material = "iron" }
+cells."3,0" = { kind = "wall", material = "iron" }
+cells."4,0" = { kind = "wall", material = "iron" }
+cells."0,1" = { kind = "wall", material = "iron" }
+cells."1,1" = { kind = "wall", material = "iron" }
+cells."4,1" = { kind = "wall", material = "iron" }
+cells."5,1" = { kind = "wall", material = "iron" }
+cells."0,2" = { kind = "wall", material = "iron" }
+cells."5,2" = { kind = "wall", material = "iron" }
+cells."0,3" = { kind = "sandbag" }
+cells."5,3" = { kind = "sandbag" }
+cells."0,4" = { kind = "sandbag" }
+cells."1,4" = { kind = "sandbag" }
+cells."4,4" = { kind = "sandbag" }
+cells."5,4" = { kind = "sandbag" }

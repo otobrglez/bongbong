@@ -45,8 +45,8 @@ pub struct Decal {
     /// dropped in place, which is every tile's rubble.
     pub origin: Position,
     /// Peak height of the throw in px, 0 for anything that never flew.
-    /// The game is top-down with no camera, so "height" is only a
-    /// draw-time y-offset plus a shrinking shadow - the same trick
+    /// The game looks straight down with no perspective, so "height" is
+    /// only a draw-time y-offset plus a shrinking shadow - the same trick
     /// `Frog`'s hop uses.
     pub arc: f32,
     /// Cosmetic seed - mirror and quarter-turn. A position hash, never a

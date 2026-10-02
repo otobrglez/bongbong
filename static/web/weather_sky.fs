@@ -26,7 +26,8 @@ varying vec4 fragColor;
 
 uniform sampler2D texture0;   // the lit field
 uniform sampler2D lightMap;   // the light map, halved: 1.0 stored is 2.0 of light
-uniform vec2 fieldSize;       // the field, px
+uniform vec2 viewOrigin;      // the world px at the target's top-left corner
+uniform vec2 viewSize;        // the target, px: a texel per world px
 uniform float time;           // round seconds
 uniform float lit;            // 1 when the light map is this frame's
 uniform vec3 ambient;         // the light the field is lit by where no lamp is
@@ -43,7 +44,7 @@ uniform float hazeAmp;        // px
 uniform float hazeSpeed;
 uniform float flash;          // lightning, 0..1
 uniform float clearRadius;    // fog and sand thin out this near a seat; 0 = nowhere
-uniform vec2 seats[8];        // every seat's tank, field px
+uniform vec2 seats[8];        // every seat's tank, world px
 uniform float seatCount;
 uniform float gustOn;         // 1 while a sandstorm's gust crosses the field
 uniform float gustSince;      // seconds since its front left the field's upwind corner
@@ -188,7 +189,8 @@ vec3 grains(vec3 col, vec2 pb, float i, float amount, vec3 tint) {
 }
 
 void main() {
-    vec2 p = vec2(fragTexCoord.x, 1.0 - fragTexCoord.y) * fieldSize;
+    // World pixels, y down (the render texture is read flipped).
+    vec2 p = viewOrigin + vec2(fragTexCoord.x, 1.0 - fragTexCoord.y) * viewSize;
     vec2 blk = floor(p / 2.0);
     vec2 pb = blk * 2.0 + 1.0;
 
@@ -197,7 +199,7 @@ void main() {
     if (haze > 0.0) {
         float n = vnoise(vec2(pb.x * 0.02, pb.y * 0.045 + time * 1.4 * hazeSpeed));
         float w = sin(pb.y * 0.11 - time * 3.6 * hazeSpeed + n * 6.28);
-        uv.x += floor(w * haze * hazeAmp * 0.5 + 0.5) * 2.0 / fieldSize.x;
+        uv.x += floor(w * haze * hazeAmp * 0.5 + 0.5) * 2.0 / viewSize.x;
     }
     vec3 col = texture2D(texture0, uv).rgb;
     vec3 light = lit > 0.5 ? texture2D(lightMap, fragTexCoord).rgb * 2.0 : ambient;

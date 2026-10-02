@@ -869,7 +869,7 @@ impl Game {
             }
             // A shield would absorb the blow.
             tank.shield_hp = 0.0;
-            tank.take_damage(MAX_DAMAGE, MAX_DAMAGE);
+            tank.damage = MAX_DAMAGE;
             tank.mark_hit();
             f.kills.push((tank.position, tank.owner()));
         }

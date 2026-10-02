@@ -8,8 +8,10 @@
 //! to compile here until it is either mirrored or put on the not-sent
 //! list. The AI's trace (`AiAction`, `EngageSlot`, `StuckEscape`, `Breach`,
 //! `Retreat`, `Alert`, `Retarget`), `MissileLocked` (which tank a seeker
-//! picked - a decision, not a picture; its `MissileBlast` does travel) and
-//! `PhysicsQuarantine` (logged server-side) never travel.
+//! picked - a decision, not a picture; its `MissileBlast` does travel),
+//! `Rerolled` (a straggler taken off out of every seat's sight - the
+//! replica sees the hull leave and come back through its gate by itself)
+//! and `PhysicsQuarantine` (logged server-side) never travel.
 //!
 //! `to_event` gives the replica the `Event` its presentation layer already
 //! reads (`fx.rs` diffs `game.events()`), the quantised positions
@@ -29,8 +31,9 @@ use crate::simulation::{Event, HitTarget};
 
 /// The serde tags (`Event`'s `event` field) of the variants
 /// `WireEvent::from_event` never sends.
-pub const NOT_SENT: [&str; 8] = [
+pub const NOT_SENT: [&str; 9] = [
     "physics_quarantine",
+    "rerolled",
     "ai_action",
     "engage_slot",
     "stuck_escape",
@@ -296,6 +299,9 @@ impl WireEvent {
             Event::TowerRepaired { side, x, y } => WireEvent::TowerRepaired { side, x: q(x), y: q(y) },
             // Never sent: logged on the server.
             Event::PhysicsQuarantine { .. } => return None,
+            // Never sent: the hull's leaving and its roll-in through the
+            // new gate are in the snapshots.
+            Event::Rerolled { .. } => return None,
             // Never sent: the AI's trace.
             Event::AiAction { .. }
             | Event::EngageSlot { .. }
@@ -452,6 +458,7 @@ mod tests {
             Event::FrogHealed { side: Side::Player, slot: 0, amount: 40.0, x: 544.0, y: 272.0 },
             Event::WaveStarted { wave: 3, size: 6, tier: Tier::Heavy },
             Event::TankEntered { slot: 9 },
+            Event::Rerolled { slot: 9, x: 96.0, y: 64.0 },
             Event::WreckRemoved { slot: 9 },
             Event::ObstacleDestroyed { material: Material::Pine, x: 96.0, y: 96.0 },
             Event::Blast { x: 128.0, y: 160.0, chained: true, drum: Drum::Fuel },
@@ -496,7 +503,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 41, "one sample per Event variant");
+        assert_eq!(seen.len(), 42, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

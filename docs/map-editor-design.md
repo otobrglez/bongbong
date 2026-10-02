@@ -121,6 +121,11 @@ saves).
 - Maps larger than the default battlefield. The editor canvas is exactly
   the game's normal battlefield size (1280x720 at `OBSTACLE_GRID_SIZE`
   cells) — no scroll/pan/camera.
+  *Status: superseded. A map's `size` sets its field, the MAP panel's
+  WIDTH, HEIGHT and ANCHOR rows change it, and the builder has its own
+  camera on any size - zoom, pan, FIT, touch gestures, edge scroll
+  (docs/game-editor-fusion.md sections 9 and 10,
+  docs/large-maps-follow-camera.md section 9).*
 
 ## Grid & coordinate model
 
@@ -403,6 +408,12 @@ pickup = "ammo"
   means `grass`, and grass is not written back. The MAP panel's THEME row
   edits it, and `builder_settings {theme}` on the dev server. See
   `docs/desert-theme.md`.
+- `view` is an optional top-level `"whole" | "follow"` (`map::MapView`):
+  how the map is shown. Absent, the map's size decides - up to 36 x 18
+  cells it is an arena, shown whole on every screen, and past that a
+  field map, which a camera follows (`framing::MapClass`,
+  `MapFile::class`, docs/large-maps-follow-camera.md) - and the key
+  overrides the size either way. Absent is not written back.
 
 ### Level tables
 

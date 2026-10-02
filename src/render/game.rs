@@ -1,13 +1,21 @@
-//! `Game::render`: the whole frame with raylib. Pass 1 paints the field
-//! into `scene_target` through the three `Canvas` stages of `game.rs`
-//! (`paint_floor`, `paint_tiles`, `paint_standing`) with the live-round
-//! layers between them - fire, glows, the locate label, projectiles,
-//! blasts, airborne debris, particles - drawn on the handle directly; pass
-//! 2 blits it at the field origin inside a `Camera2D` (shake, ripples,
-//! flashes, banners), then the bar in window space, then the bitmap onto
-//! the window through `view::present`. Reads `Game`, never mutates it.
-//! `Textures` and `Effects` bundle what a frame draws from; the debug
-//! overlays (`dev-tools`) draw in screen space after pass 2.
+//! `Game::render`: the whole frame with raylib, through a `view::Camera`.
+//! Pass 1 paints the part of the world the camera shows into
+//! `scene_target`, one texel per world pixel, through the three `Canvas`
+//! stages of `game.rs` (`paint_floor`, `paint_tiles`, `paint_standing`)
+//! with the live-round layers between them - fire, glows, the locate
+//! label, projectiles, blasts, airborne debris, particles - drawn on the
+//! handle directly, all in world pixels inside the camera's `in_target`;
+//! pass 2 blits it into the bitmap at the camera's scale (shake, ripples)
+//! and draws what lies in the world over it through the camera's
+//! `on_field` (the ripples' quads, the debug overlays), and the bitmap
+//! goes onto the window through `view::present_into` - or, for a followed
+//! field map (`Camera::follows`), shifted by the camera's sub-block offset
+//! (`view::present_world`). The chrome is then drawn on the window itself,
+//! in UI points (`hud::UiFrame`) - the HUD's corner clusters, the banners,
+//! the end screen, the dialogs, the lobby and the level select - so it
+//! stands still while the world slides under it and keeps its size
+//! whatever the map. Reads `Game`, never mutates it. `Textures` and
+//! `Effects` bundle what a frame draws from.
 
 use sola_raylib::prelude::*;
 
@@ -17,14 +25,14 @@ use crate::canvas::Sheet;
 use crate::decal::draw_decal;
 use crate::game::PaintOptions;
 use crate::hud::{
-    version_line, HudModel, PlayChrome, BUILD_COLOR, HUD_STATUS_COLOR, HUD_STATUS_INSET, HUD_STATUS_TEXT_SIZE,
-    HUD_VERSION_BOTTOM_INSET, HUD_VERSION_COLOR, HUD_VERSION_RIGHT_INSET,
-    HUD_VERSION_TEXT_SIZE,
+    banner_size, corners, version_line, CornerShape, Corners, Fade, HudModel, PlayChrome, UiFrame, BANNER_SIZE,
+    BANNER_SUB_SIZE, BUILD_COLOR, HUD_STATUS_COLOR, HUD_STATUS_TEXT_SIZE, HUD_VERSION_COLOR, HUD_VERSION_TEXT_SIZE,
+    LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE, RESULT_TITLE_SIZE, WAVE_BANNER_SIZE,
 };
 use crate::math::{Color, Rectangle};
 use crate::obstacle::{draw_flying_drum, Obstacle};
 use crate::render::level_select::draw_level_select;
-use crate::render::lobby::{draw_lobby, draw_online_button};
+use crate::render::lobby::draw_lobby;
 use crate::pickup::PickupKind;
 use crate::plasma::{Plasma, PlasmaState};
 use crate::render::blast::{draw_fire_glow, draw_flame_glow, draw_fuse_glow};
@@ -34,10 +42,7 @@ use crate::render::bullet::{draw_bullet, draw_bullet_light, draw_bullet_shadow};
 use crate::render::canvas::{GpuCanvas, Sheets};
 use crate::render::decal::draw_decal_shadow;
 use crate::render::frog::FrogVariantTextures;
-use crate::render::hud::{
-    draw_bar, draw_leave_button, draw_leave_dialog, draw_mode_button, draw_players_button, draw_players_dialog,
-    draw_restart_button, draw_result,
-};
+use crate::render::hud::{draw_banner, draw_corners, draw_leave_dialog, draw_players_dialog, draw_result, Line};
 use crate::render::laser::{draw_laser_beam, draw_laser_bloom, draw_laser_flares};
 use crate::render::plasma::{draw_plasma, draw_plasma_shadow};
 use crate::render::portal::draw_portal_glow;
@@ -46,8 +51,7 @@ use crate::render::missile::{draw_missile, draw_missile_exhaust, draw_missile_sh
 use crate::render::shell::{draw_shell, draw_shell_light, draw_shell_shadow};
 use crate::render::shot_fx::{at_nozzle, ground_light};
 use crate::render::shot_shaders::ShotShaders;
-use crate::render::weather::{Passes, WeatherFrame};
-use crate::render::shockwave::{screen_to_ripple_uv, RippleFx};
+use crate::render::shockwave::RippleFx;
 use crate::render::tank::draw_player_label;
 use crate::shell::{Shell, ShellState};
 use crate::simulation::{Game, Outcome};
@@ -59,14 +63,14 @@ use crate::tank::Tank;
 #[cfg(feature = "dev-tools")]
 use crate::tank::{ActiveWeapon, Dir};
 use crate::tuning::tuning;
-use crate::view::View;
+use crate::view::{culled, Camera, View};
 use crate::{Layout, Position, SHOCK_MAX};
 #[cfg(feature = "dev-tools")]
 use crate::math::Vec2;
 #[cfg(feature = "dev-tools")]
 use crate::pickup::Pickup;
 #[cfg(feature = "dev-tools")]
-use crate::{HUD_MARGIN, MAX_DAMAGE};
+use crate::MAX_DAMAGE;
 
 /// The sprite atlases `Game::render` draws from, bundled into one param instead
 /// of four so the signature doesn't grow with every new texture.
@@ -177,11 +181,72 @@ pub struct Effects<'a> {
     /// (see `fx.rs`), and read-only here - `render` never mutates it, the
     /// same contract it has with `Game`.
     pub fx: &'a crate::fx::Fx,
-    /// The touch scheme's feedback (`touch.rs`), drawn over the field in
-    /// bitmap space when a keyboard-less device is playing; `None` draws
-    /// nothing. The `bool` is whether the stick lives on the right half.
+    /// The touch scheme's feedback (`touch.rs`), drawn over everything in
+    /// UI points (`hud::UiFrame`) - nothing until a touch is seen; `None`
+    /// draws nothing at all. The `bool` is whether the stick lives on the
+    /// right half.
     pub touch: Option<(&'a crate::touch::TouchScheme, bool)>,
+    /// What the screen cannot see (`indicators.rs`): the arrows at the
+    /// field's edge and the marks in the world, composed by `app.rs` while
+    /// the camera shows less than the whole field; `None` draws nothing.
+    pub indicators: Option<&'a crate::indicators::Picture>,
+    /// The minimap under the right corner cluster (`minimap.rs`), drawn
+    /// where the corners hold its slot (`PlayChrome::minimap`); `None`
+    /// draws none.
+    pub minimap: Option<crate::render::minimap::MinimapLayer<'a>>,
+    /// The world an arena shows past its field in the window's margins
+    /// (`render::margin`, `margin.rs`); `None` draws the margins as flat
+    /// bars in the backdrop's colour.
+    pub margins: Option<&'a mut crate::render::margin::MarginFx>,
+    /// A couch's split screen (`follow::Split`): the second half, put on
+    /// the window past the divider after the first; `None` draws one view.
+    pub split: Option<SplitLayer<'a>>,
 }
+
+/// The second half of a couch's split screen, as a frame draws it
+/// (`Effects::split`).
+pub enum SplitLayer<'a> {
+    /// The follow camera's split: the second half's own view of the world,
+    /// drawn after the first through its own camera and targets.
+    Follow {
+        /// The second half's camera (`Camera::following` of
+        /// `follow::Split`).
+        camera: Camera,
+        /// Its own pass-1 target and composite, the first half's sizes.
+        scene: &'a mut RenderTexture2D,
+        composite: &'a mut RenderTexture2D,
+        /// The divider, in the followed bitmap's pixels: a point on it and
+        /// the unit normal into the second half
+        /// (`follow::Split::at`/`normal`).
+        at: crate::math::Vec2,
+        normal: crate::math::Vec2,
+        /// How far apart the halves' views stand, world px: the divider
+        /// fades in with it.
+        apart: f32,
+        /// The indicators' blocks that lie in each half's world, first
+        /// half first (`indicators::Picture::world`).
+        marks: [&'a [crate::indicators::Fill]; 2],
+    },
+    /// The establishing shot zooming into a split (`establish::ZoomSplit`):
+    /// the whole field drawn once and put on the window twice, the second
+    /// time through `view` past the divider.
+    Zoom {
+        /// The second half's zoom, as a `View` of the whole field's bitmap.
+        view: View,
+        /// The divider, window units: a point on it and the unit normal
+        /// into the second half.
+        at: crate::math::Vec2,
+        normal: crate::math::Vec2,
+        /// How far the zoom has drawn the divider in, and how far apart the
+        /// follow views it lands on stand (world px).
+        alpha: f32,
+        apart: f32,
+    },
+}
+
+/// The divider between a split screen's halves: the corner clusters'
+/// near-black.
+const DIVIDER: Color = Color::new(0x14, 0x14, 0x18, 255);
 
 impl Game {
     /// The light shots throw on the ground (inside the first additive
@@ -190,12 +255,19 @@ impl Game {
     /// stream, where a laser burns, and a flash of it at every muzzle and
     /// impact - so the floor itself says where the fire is. `k` scales the
     /// lot: 1 by day, less where the weather's light map lights the ground
-    /// around the shots instead (`WeatherFrame::day_light_pools`).
-    fn draw_ground_light(&self, d: &mut impl RaylibDraw, k: f32) {
+    /// around the shots instead (`WeatherFrame::day_light_pools`). A pool
+    /// that cannot reach the world worth drawing (`Camera::cull`) is left
+    /// out.
+    fn draw_ground_light(&self, d: &mut impl RaylibDraw, k: f32, cull: Option<Rectangle>) {
         if k <= 0.0 {
             return;
         }
-        let ground_light = |d: &mut _, at: Position, radius: f32, color: Color, strength: f32| ground_light(d, at, radius, color, strength * k);
+        let ground_light = |d: &mut _, at: Position, radius: f32, color: Color, strength: f32| {
+            let reach = cull.map(|r| Rectangle::new(r.x - radius, r.y - radius, r.width + 2.0 * radius, r.height + 2.0 * radius));
+            if !culled(reach, at) {
+                ground_light(d, at, radius, color, strength * k);
+            }
+        };
         let warm = Color::new(255, 140, 50, 255);
         for shell in self.world.query::<&Shell>().iter() {
             if shell.state == ShellState::Flying {
@@ -245,15 +317,28 @@ impl Game {
 }
 
 impl Game {
-    /// Draw the whole scene for this frame: the battlefield into
-    /// `scene_target`, then that plus the HUD bar into `composite` - the
-    /// bitmap, `layout.window_size()` in size, the field at `layout.field`
-    /// and the bar in `layout.panel` - and finally the bitmap onto the
-    /// window through `view` (`view::present`), scaled and centred so the
-    /// whole battlefield is on screen whatever the window is. Everything
-    /// field-relative in the second pass goes through a `Camera2D` whose
-    /// offset is the field origin, so the simulation's pixel positions
-    /// stay usable as they are.
+    /// Draw the whole scene for this frame: the part of the world `camera`
+    /// shows into `scene_target` (`Camera::target_size`, a texel per world
+    /// pixel), then that into `composite` - the bitmap, the field alone
+    /// (`layout.field`) - and the bitmap onto the window through `view`
+    /// (`view::present_into`), scaled and centred so the whole field is on
+    /// screen whatever the window is - the window round it showing the
+    /// world past the field (`Effects::margins`, `render::margin`) where the
+    /// shapes differ. The world is drawn in world pixels through raylib
+    /// cameras built from `camera` (`render::view`), so the simulation's
+    /// positions are used as they are.
+    ///
+    /// A followed field map (`Camera::follows`) is presented shifted, so
+    /// its view can move by less than a block: `composite` holds the scene
+    /// target's every texel and goes onto the window's field area shifted
+    /// by the camera's offset (`present_world`).
+    ///
+    /// The chrome is drawn on the window itself, over the presented world:
+    /// the corner clusters (`hud::corners`) in UI points through a camera
+    /// at `ui`'s scale, each at its `fade`, so they stand still and keep
+    /// their size in points while the world slides and scales under them;
+    /// the banners, the dims and the dialogs through cameras that put the
+    /// bitmap's pixels where `view` puts them.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
@@ -262,27 +347,32 @@ impl Game {
         scene_target: &mut RenderTexture2D,
         composite: &mut RenderTexture2D,
         view: &View,
+        camera: &Camera,
         backdrop: Color,
         effects: &mut Effects,
         textures: &Textures,
         layout: &Layout,
         chrome: &PlayChrome,
+        ui: &UiFrame,
+        fade: Fade,
     ) {
-        let screen_width = layout.field.w.round() as i32;
-        let screen_height = layout.field.h.round() as i32;
         // Must be read off the handle out here: the draw closures below
         // borrow it, and the dev label needs the number.
         #[cfg(feature = "dev-tools")]
         let frame_ms = rl.get_frame_time() * 1000.0;
         let hud = HudModel::gather(self, chrome.seat);
         let t = crate::text::text();
-        // The build stamp, bottom-right of the field (text width must be
-        // measured on the RaylibHandle, outside the draw closure).
-        let version = version_line();
-        let version_w = rl.measure_text(&version, HUD_VERSION_TEXT_SIZE);
+        // The seats whose shells ride under their rings: this window's
+        // own - the room's seat online, the couch's one or two locally -
+        // and only where the HUD is drawn at all.
+        let ammo_seats: Vec<u8> = match (chrome.hud, chrome.seat) {
+            (false, _) => Vec::new(),
+            (true, Some(seat)) => vec![seat],
+            (true, None) => (0..self.players.count().min(2) as u8).collect(),
+        };
 
-        // Precompute the centered end-of-round banner (text width must be
-        // measured on the RaylibHandle, outside the draw closure).
+        // What the end screen, the banners and PAUSED say; `draw_chrome`
+        // sets each in the chrome's area.
         let banner = match self.outcome {
             Outcome::Playing => None,
             Outcome::Won => Some((t.get(keys::ROUND_WON), Color::DARKGREEN)),
@@ -297,39 +387,137 @@ impl Game {
             } else {
                 (self.intro_fade / crate::simulation::INTRO_FADE_SECONDS).clamp(0.0, 1.0)
             };
-            (alpha > 0.0 && self.outcome == Outcome::Playing).then(|| {
-                let text = t.get(crate::text::mission_banner(self.mission));
-                let size = 72;
-                let w = rl.measure_text(&text, size);
-                (text, size, w, alpha)
-            })
+            (alpha > 0.0 && self.outcome == Outcome::Playing).then(|| (t.get(crate::text::mission_banner(self.mission)), alpha))
         };
         // Wave rounds: the `WAVE N` banner during the breather before a
         // wave - smaller than the mission banner, no dim overlay, and never
-        // over the end-of-round banner. The counter itself is in the bar.
+        // over the end-of-round banner. The counter itself is in the right
+        // cluster.
         let wave_banner = self.wave_banner().filter(|_| self.outcome == Outcome::Playing).map(|banner| {
-            let text = if banner.is_final { t.get(keys::WAVE_FINAL) } else { t.fmt(keys::WAVE_BANNER, &[("n", banner.next.into())]) };
-            let size = 48;
-            let w = rl.measure_text(&text, size);
-            (text, size, w)
+            if banner.is_final { t.get(keys::WAVE_FINAL) } else { t.fmt(keys::WAVE_BANNER, &[("n", banner.next.into())]) }
         });
         let banner = banner.map(|(text, color)| {
-            let title_size = 72;
-            let title_w = rl.measure_text(&text, title_size);
             let seconds = self.restart_timer.ceil().max(0.0) as i32;
             let sub = t.fmt(chrome.countdown_label.unwrap_or(keys::ROUND_RESTARTING), &[("seconds", seconds.into())]);
-            let sub_size = 28;
-            let sub_w = rl.measure_text(&sub, sub_size);
-            (text, color, title_size, title_w, sub, sub_size, sub_w)
+            (text, color, sub)
         });
         let paused = t.get(keys::PAUSED);
-        let paused_w = rl.measure_text(&paused, 72);
-        // An online round's one line of chrome (its width is measured
-        // here like every other string, outside the draw closures).
-        let status = chrome.status.as_ref().map(|line| {
-            let w = rl.measure_text(line, HUD_STATUS_TEXT_SIZE);
-            (line.as_str(), w)
-        });
+
+        // The world, through `camera` into `composite`; and on a couch's
+        // split screen the second half's, through its own camera into its
+        // own targets, each with the indicators' marks that lie in it, so
+        // the divider cuts them as it cuts the world.
+        let mut split = effects.split.take();
+        let marks: [&[crate::indicators::Fill]; 2] = match &split {
+            Some(SplitLayer::Follow { marks, .. }) => *marks,
+            _ => [&[], &[]],
+        };
+        let weather = self.draw_world(rl, thread, scene_target, composite, camera, layout, effects, textures, &ammo_seats, backdrop, marks[0]);
+        if let Some(SplitLayer::Follow { camera, scene, composite, .. }) = split.as_mut() {
+            let camera = *camera;
+            self.draw_world(rl, thread, &mut **scene, &mut **composite, &camera, layout, effects, textures, &ammo_seats, backdrop, marks[1]);
+        }
+
+        let text = ChromeText {
+            t: &t,
+            banner,
+            intro,
+            wave_banner,
+            paused,
+            #[cfg(feature = "dev-tools")]
+            frame_ms,
+        };
+        let touch = effects.touch;
+        let fx_live = effects.fx.live();
+        let indicators = effects.indicators;
+        let minimap = effects.minimap.take();
+        let corners = CornerShape::of(chrome, self.players.count()).map(|shape| corners(ui, &shape));
+        let frame = ChromeFrame { ui, fade, corners: corners.as_ref(), units: crate::render::view::window_camera_units(rl) };
+
+        // An arena's window margins show the world past its field
+        // (`margin.rs`) where the window's shape is not the field's.
+        let margin_frame = match effects.margins {
+            Some(_) if camera.is_whole() => crate::margin::MarginFrame::of(view, layout),
+            _ => None,
+        };
+        let margins = match (margin_frame, effects.margins.as_deref_mut()) {
+            (Some(frame), Some(fx)) => {
+                let sky = match (effects.weather.as_deref_mut(), weather.as_ref()) {
+                    (Some(fx), Some(frame)) => Some((fx, frame)),
+                    _ => None,
+                };
+                let at = layout.field_origin();
+                let in_bitmap = |r: Rectangle| Rectangle::new(r.x + at.x, r.y + at.y, r.width, r.height);
+                fx.draw(rl, thread, self, &frame, textures, backdrop, sky).map(|target| crate::render::view::Margins {
+                    target,
+                    rect: in_bitmap(frame.rect),
+                    parts: frame.parts(0.0).into_iter().map(in_bitmap).collect(),
+                })
+            }
+            _ => None,
+        };
+        let mut d = rl.begin_drawing(thread);
+        if camera.follows() {
+            crate::render::view::present_world(&mut d, composite, camera, view, layout, backdrop);
+        } else {
+            crate::render::view::present_into(&mut d, composite, view, backdrop, margins.as_ref());
+        }
+        // A split screen's second half over the first, past the divider,
+        // and the divider over both.
+        match &split {
+            Some(SplitLayer::Follow { camera: second, composite: world, at, normal, apart, .. }) if camera.follows() => {
+                crate::render::view::present_half(&mut d, world, second, view, layout, *at, *normal);
+                crate::render::view::draw_divider(&mut d, view, layout, *at, *normal, *apart, DIVIDER);
+            }
+            Some(SplitLayer::Zoom { view: second, at, normal, alpha, apart }) if !camera.follows() => {
+                crate::render::view::present_zoom_half(&mut d, composite, second, *at, *normal, backdrop);
+                crate::render::view::draw_zoom_divider(&mut d, view.window, *at, *normal, second.scale, *alpha, *apart, DIVIDER);
+            }
+            _ => {}
+        }
+        let base = crate::render::view::onto_window(
+            Camera2D { offset: view.offset.into(), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: view.scale },
+            frame.units,
+        );
+        self.draw_chrome(&mut d, &text, &hud, chrome, &frame, layout, camera, indicators, minimap.as_ref(), textures, touch, fx_live, base);
+    }
+}
+
+impl Game {
+    /// One view of the world, through `camera`: pass 1 into `scene_target`
+    /// (`Camera::target_size`, a texel per world pixel) - under the sky in
+    /// the weather's stages when there is one - then pass 2 into
+    /// `composite`: the scene through the kill ripple, shaken, the ripples'
+    /// quads, the kill flash, the debug overlays and `marks`, the
+    /// indicators' blocks that lie in the world (`indicators::Picture`'s,
+    /// drawn here only for a split screen's halves). The frame's sky, for
+    /// an arena's margins.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_world(
+        &self,
+        rl: &mut RaylibHandle,
+        thread: &RaylibThread,
+        scene_target: &mut RenderTexture2D,
+        composite: &mut RenderTexture2D,
+        camera: &Camera,
+        layout: &Layout,
+        effects: &mut Effects,
+        textures: &Textures,
+        ammo_seats: &[u8],
+        backdrop: Color,
+        marks: &[crate::indicators::Fill],
+    ) -> Option<crate::render::weather::WeatherFrame> {
+        // The field area of the bitmap, which what covers the whole world
+        // (a kill's flash) fills: whole pixels, rounded up so a followed
+        // view of a fractional size is covered to its edge.
+        let screen_width = layout.field.w.ceil() as i32;
+        let screen_height = layout.field.h.ceil() as i32;
+        // The scene target: the camera's view at a texel per world pixel,
+        // the world rectangle worth drawing into it, and the cameras pass 1
+        // and pass 2 draw the world through.
+        let (target_width, target_height) = camera.target_size();
+        let cull = camera.cull();
+        let in_target = camera.in_target();
 
         // Pass 1: draw the world (tracks, tanks, shells) into an offscreen
         // render texture, so a shockwave can distort the finished frame as a
@@ -338,16 +526,58 @@ impl Game {
         // `scene_target` and the weather's own target and always end in
         // `scene_target`: the field under the light, multiplied by the
         // light map, then what shines by itself, then the air over it all.
+        // A pass that covers a whole target - the weather's - is drawn in
+        // the target's own pixels; the world is drawn through `in_target`.
         let weather = match effects.weather.as_deref_mut() {
-            Some(fx) => fx.begin(rl, thread, self, effects.fx, textures),
+            Some(fx) => fx.begin(rl, thread, self, effects.fx, textures, camera),
             None => None,
         };
-        match weather {
+        match weather.as_ref() {
             None => {
                 rl.draw_texture_mode(thread, scene_target, |mut d| {
                     d.clear_background(Color::WHITE);
-                    self.paint_field_lit(&mut d, textures, None);
-                    self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, 1.0);
+                    d.draw_mode2D(in_target, |mut d, _| {
+                        self.paint_field_lit(&mut d, textures, false, cull);
+                        self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, 1.0, camera, ammo_seats);
+                    });
+                });
+            }
+            Some(frame) if frame.plain => {
+                // The sky without its shaders (`weather::plain`), every
+                // stage straight into `scene_target`: the field (on snow
+                // lying over the bare ground, under the marks), the light
+                // map multiplied in by a blend mode, what shines by
+                // itself, then the air as plain blocks.
+                let plan = frame.plan;
+                let day_pools = frame.day_light_pools();
+                let light = effects.weather.as_deref().and_then(|fx| fx.light_map()).expect("`begin` readied the targets");
+                let mut blocks = Vec::new();
+                rl.draw_texture_mode(thread, scene_target, |mut d| {
+                    d.clear_background(Color::WHITE);
+                    d.draw_mode2D(in_target, |mut d, _| {
+                        frame.plain_snow_cover(&mut blocks);
+                        let snowed = !blocks.is_empty();
+                        if snowed {
+                            self.paint_ground(&mut GpuCanvas::culled(&mut d, textures, cull));
+                            crate::render::weather::draw_blocks(&mut d, &blocks);
+                        }
+                        self.paint_field_lit(&mut d, textures, snowed, cull);
+                        if !plan.lit {
+                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, ammo_seats);
+                        }
+                    });
+                    if plan.lit {
+                        crate::render::weather::multiply_light(&mut d, light, &frame);
+                        d.draw_mode2D(in_target, |mut d, _| {
+                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, ammo_seats);
+                        });
+                    }
+                    if plan.sky {
+                        blocks.clear();
+                        frame.plain_air(&mut blocks);
+                        d.draw_mode2D(in_target, |mut d, _| crate::render::weather::draw_blocks(&mut d, &blocks));
+                        crate::render::weather::draw_flash(&mut d, &frame);
+                    }
                 });
             }
             Some(frame) => {
@@ -363,10 +593,17 @@ impl Game {
                     let first: &mut RenderTexture2D = if first_in_scene { &mut *scene_target } else { &mut *lit_target };
                     rl.draw_texture_mode(thread, first, |mut d| {
                         d.clear_background(Color::WHITE);
-                        self.paint_field_lit(&mut d, textures, plan.ground.then_some((&mut passes, &frame)));
-                        if !plan.lit {
-                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools);
+                        // The ground pass draws the bare ground with the
+                        // sky's mark on it in place of the ground tileset.
+                        if plan.ground {
+                            passes.draw_ground(&mut d, &frame);
                         }
+                        d.draw_mode2D(in_target, |mut d, _| {
+                            self.paint_field_lit(&mut d, textures, plan.ground, cull);
+                            if !plan.lit {
+                                self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, ammo_seats);
+                            }
+                        });
                     });
                 }
                 if plan.lit {
@@ -374,7 +611,9 @@ impl Game {
                         if first_in_scene { (&*scene_target, &mut *lit_target) } else { (&*lit_target, &mut *scene_target) };
                     rl.draw_texture_mode(thread, to, |mut d| {
                         passes.draw_lit(&mut d, under, &frame);
-                        self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools);
+                        d.draw_mode2D(in_target, |mut d, _| {
+                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, ammo_seats);
+                        });
                     });
                 }
                 if plan.sky {
@@ -385,6 +624,12 @@ impl Game {
             }
         }
 
+        // The ripples are measured in the standard field's units from the
+        // corner of the camera's part of the world the scene target holds
+        // (`Camera::ripple_view`).
+        for ripple in [&mut *effects.shock, &mut *effects.muzzle, &mut *effects.impact] {
+            ripple.set_view(camera);
+        }
         // If a shockwave is playing, push its current center/time to the shader
         // before the blit below samples through it.
         // Every live ripple goes up as one set of arrays and resolves in a
@@ -395,7 +640,7 @@ impl Game {
             let mut times = [0.0f32; SHOCK_MAX];
             let mut gains = [0.0f32; SHOCK_MAX];
             for (i, shock) in self.shocks.iter().take(SHOCK_MAX).enumerate() {
-                centers[i] = screen_to_ripple_uv(shock.center, screen_width as f32, screen_height as f32);
+                centers[i] = effects.shock.uv_of(shock.center);
                 times[i] = shock.time;
                 gains[i] = shock.strength;
             }
@@ -409,372 +654,461 @@ impl Game {
         let source = Rectangle {
             x: 0.0,
             y: 0.0,
-            width: screen_width as f32,
-            height: -(screen_height as f32),
+            width: target_width as f32,
+            height: -(target_height as f32),
         };
 
-        // Camera shake: a short decaying wobble on the same kill-shockwave
-        // trigger as `self.shock` itself (see CAMERA_SHAKE_DURATION's doc
-        // comment), applied purely as an offset on this blit's destination
-        // rather than a real camera - the game has no camera transform (see
-        // `Shockwave::center`'s doc comment), so shifting where the already-
-        // composited scene lands on screen is the cheapest way to get the
-        // effect. Two out-of-phase sine waves stand in for randomness so x/y
-        // don't shake in lockstep - this is a pure draw pass (see this
-        // module's own doc comment), not the place to reach for an rng.
-        // Muzzle/impact flash quads and the HUD deliberately aren't shifted:
-        // they're either their own small on-screen quad or meant to stay put.
-        // The field origin is added on top: the scene lands below the bar.
-        let mut blit_offset = Vector2::new(0.0, 0.0);
-        // `screen_fx_intensity` scales every whole-screen effect together;
-        // folding it into the magnitude here keeps the stack cap below
-        // proportional.
-        let shake_magnitude = tuning().camera_shake_magnitude * tuning().screen_fx_intensity;
-        for shock in &self.shocks {
-            let decay = (1.0f32 - shock.time / tuning().camera_shake_duration).max(0.0);
-            if decay <= 0.0 {
-                continue;
-            }
-            let mag = shake_magnitude * shock.strength * decay;
-            // Phase each one off its own position hash so several
-            // overlapping shakes interfere instead of beating in lockstep
-            // and doubling cleanly. Still a pure draw pass, still no rng -
-            // see the comment above.
-            let phase = (crate::blast::seed_for(shock.center) % 628) as f32 * 0.01;
-            let t = shock.time * tuning().camera_shake_frequency + phase;
-            blit_offset.x += t.sin() * mag;
-            blit_offset.y += (t * 1.3 + 1.7).sin() * mag;
-        }
-        // Without a ceiling, three kills at once throw the composited scene
-        // far enough off that the screen edge shows through as black.
-        let cap = shake_magnitude * tuning().camera_shake_max_stack;
-        let len = (blit_offset.x * blit_offset.x + blit_offset.y * blit_offset.y).sqrt();
-        if len > cap && len > 0.0 {
-            blit_offset.x *= cap / len;
-            blit_offset.y *= cap / len;
-        }
-        // Snap the shake to whole 2px blocks. This offset moves the entire
-        // composited scene, so at a fractional value every pixel in the
-        // game samples between texels for the duration of the shake and
-        // the whole screen shimmers - the same defect a sub-pixel particle
-        // has, at the scale of everything at once. Blocks keep the art
-        // crisp and make the shake read as a hard jolt rather than a
-        // wobble.
-        blit_offset.x = (blit_offset.x / 2.0).round() * 2.0;
-        blit_offset.y = (blit_offset.y / 2.0).round() * 2.0;
-
-        let origin = layout.field_origin();
-        let blit_at = Vector2::new(blit_offset.x + origin.x, blit_offset.y + origin.y);
-        let field_camera = Camera2D {
-            offset: origin.into(),
-            target: Vector2::new(0.0, 0.0),
-            rotation: 0.0,
-            zoom: 1.0,
+        // Camera shake (`shockwave::camera_shake`): a short decaying wobble
+        // on the same kill-shockwave trigger as `self.shock` itself, applied
+        // purely as an offset on this blit's destination, in world pixels at
+        // the camera's scale - shifting where the already-composited scene
+        // lands is the cheapest way to get the effect. A view of part of
+        // the field is shaken only by what happens near it; the whole field,
+        // an arena's, by everything. Muzzle/impact flash quads
+        // and the HUD deliberately aren't shifted: they're either their own
+        // small on-screen quad or meant to stay put. The field origin is
+        // added on top: the scene lands on the field's place in the bitmap.
+        // Reduced motion (`motion.rs`) has no shake, and no ripple bending
+        // the whole screen either (`WorldPass::bend`).
+        let still = crate::motion::reduced();
+        let shake = if still {
+            crate::math::Vec2::new(0.0, 0.0)
+        } else {
+            crate::shockwave::camera_shake(&self.shocks, (!camera.shows_whole_field()).then(|| camera.rect()), &tuning())
         };
+        let blit_offset = Vector2::new(shake.x, shake.y);
 
+        // Where pass 2 puts the world, and at what scale: the field area of
+        // the bitmap at the camera's - or, for a followed view, the whole
+        // of `composite` at one pixel per texel, which then holds the
+        // world alone for `present_world` to scale onto the window.
+        let (world_origin, world_scale) =
+            if camera.follows() { (crate::math::Vec2::new(0.0, 0.0), 1.0) } else { (layout.field_origin(), camera.scale) };
+        let shaken_origin = crate::math::Vec2::new(world_origin.x + blit_offset.x * world_scale, world_origin.y + blit_offset.y * world_scale);
+        let in_world = |offset: crate::math::Vec2| Camera2D { offset: offset.into(), target: camera.origin.into(), rotation: 0.0, zoom: world_scale };
+        let world = WorldPass {
+            scene: &*scene_target,
+            source,
+            blit: Rectangle::new(shaken_origin.x, shaken_origin.y, target_width as f32 * world_scale, target_height as f32 * world_scale),
+            on_field: in_world(world_origin),
+            shaken: in_world(shaken_origin),
+            area_camera: Camera2D { offset: world_origin.into(), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: 1.0 },
+            area: if camera.follows() { (target_width, target_height) } else { (screen_width, screen_height) },
+            camera: *camera,
+            cull,
+            backdrop,
+            bend: !still,
+            marks,
+        };
         rl.draw_texture_mode(thread, composite, |mut d| {
             d.clear_background(Color::BLACK);
+            self.draw_world_layer(&mut d, &world, effects);
+        });
+        weather
+    }
+}
 
-            if !self.shocks.is_empty() {
-                d.draw_shader_mode(&mut effects.shock.shader, |mut sd| {
-                    sd.draw_texture_rec(&*scene_target, source, blit_at, Color::WHITE);
-                });
-            } else {
-                d.draw_texture_rec(&*scene_target, source, blit_at, Color::WHITE);
-            }
+/// What pass 2 draws the world with (`Game::draw_world_layer`).
+struct WorldPass<'a> {
+    /// Pass 1's picture.
+    scene: &'a RenderTexture2D,
+    /// All of it, flipped: a render texture reads back bottom-up.
+    source: Rectangle,
+    /// Where it lands, with the shake.
+    blit: Rectangle,
+    /// What lies in the world, drawn over it; `shaken` moves with the
+    /// shake as the scene does.
+    on_field: Camera2D,
+    shaken: Camera2D,
+    /// The area the world fills, in its own pixels, for what covers all
+    /// of it: the bitmap's field area, or a followed view's whole target.
+    area_camera: Camera2D,
+    area: (i32, i32),
+    camera: Camera,
+    cull: Option<Rectangle>,
+    backdrop: Color,
+    /// Whether the kill ripples bend the whole scene: not under reduced
+    /// motion (`motion.rs`).
+    bend: bool,
+    /// The indicators' blocks that lie in this view's world: a split
+    /// screen half's (`Effects::split`); empty otherwise, the indicators
+    /// being drawn with the chrome.
+    marks: &'a [crate::indicators::Fill],
+}
 
-            // Everything from here to the bar is field-relative: the flash
-            // quads, the overlays, the banners and the dims all centre on
-            // and cover the field, never the bar.
-            d.draw_mode2D(field_camera, |mut d, _| {
-                // Layer each muzzle flash's tiny heat-haze ripple on top, one small
-                // quad at a time: source and dest are the same on-screen patch (just
-                // re-sampling that bit of the already-composited scene through the
-                // ripple shader), so this reads as a localized wobble rather than
-                // redistorting the whole frame.
-                for flash in &self.muzzle_flashes {
-                    let uv =
-                        screen_to_ripple_uv(flash.center, screen_width as f32, screen_height as f32);
-                    effects
-                        .muzzle
-                        .shader
-                        .set_shader_value(effects.muzzle.center_loc, uv);
-                    effects
-                        .muzzle
-                        .shader
-                        .set_shader_value(effects.muzzle.time_loc, flash.time);
+/// What `Game::draw_chrome` writes, gathered by `Game::render` in the
+/// language on screen.
+struct ChromeText<'a> {
+    t: &'a crate::text::Catalogue,
+    /// The end screen: its outcome, the outcome's colour and the
+    /// countdown line.
+    banner: Option<(String, Color, String)>,
+    /// The mission banner and its opacity.
+    intro: Option<(String, f32)>,
+    /// The `WAVE N` banner.
+    wave_banner: Option<String>,
+    paused: String,
+    #[cfg(feature = "dev-tools")]
+    frame_ms: f32,
+}
 
-                    let r = tuning().muzzle_flash_quad_radius;
-                    let flash_source = Rectangle {
-                        x: flash.center.x - r,
-                        y: (screen_height as f32 - flash.center.y) - r,
-                        width: r * 2.0,
-                        height: -(r * 2.0),
-                    };
-                    let flash_dest = Rectangle {
-                        x: flash.center.x,
-                        y: flash.center.y,
-                        width: r * 2.0,
-                        height: r * 2.0,
-                    };
-                    let origin = Vector2::new(r, r);
+/// The window the chrome stands on: its UI frame, the corner clusters laid
+/// out in it (`None` where the frame draws none), how far each has faded,
+/// and the framebuffer pixels a window unit is under a camera drawn onto
+/// the window (`render::view::window_camera_units`).
+struct ChromeFrame<'a> {
+    ui: &'a UiFrame,
+    fade: Fade,
+    corners: Option<&'a Corners>,
+    units: f32,
+}
 
-                    d.draw_shader_mode(&mut effects.muzzle.shader, |mut sd| {
-                        sd.draw_texture_pro(
-                            &*scene_target,
-                            flash_source,
-                            flash_dest,
-                            origin,
-                            0.0,
-                            Color::WHITE,
-                        );
-                    });
-                }
+impl Game {
+    /// Pass 2's world: the scene target (through the shockwave while one
+    /// plays, unless motion is reduced), the muzzle and impact ripples'
+    /// quads over it, the kill flash
+    /// over the whole of it, a followed view's world past the field's edge
+    /// in the backdrop's colour, and the debug overlays.
+    fn draw_world_layer<D: RaylibDraw>(&self, d: &mut D, w: &WorldPass, effects: &mut Effects) {
+        let camera = &w.camera;
+        let cull = w.cull;
+        let (field_w, field_h) = camera.field;
+        // A point of the world as the scene target's texel, y up the way a
+        // render texture reads.
+        let target_height = camera.target_size().1;
+        let texel = |at: Position| Vector2::new(at.x - camera.origin.x, target_height as f32 - (at.y - camera.origin.y));
 
-                // Same treatment for every in-flight shell-impact flash.
-                for flash in &self.impact_flashes {
-                    let uv =
-                        screen_to_ripple_uv(flash.center, screen_width as f32, screen_height as f32);
-                    effects
-                        .impact
-                        .shader
-                        .set_shader_value(effects.impact.center_loc, uv);
-                    effects
-                        .impact
-                        .shader
-                        .set_shader_value(effects.impact.time_loc, flash.time);
-
-                    let r = tuning().impact_flash_quad_radius;
-                    let flash_source = Rectangle {
-                        x: flash.center.x - r,
-                        y: (screen_height as f32 - flash.center.y) - r,
-                        width: r * 2.0,
-                        height: -(r * 2.0),
-                    };
-                    let flash_dest = Rectangle {
-                        x: flash.center.x,
-                        y: flash.center.y,
-                        width: r * 2.0,
-                        height: r * 2.0,
-                    };
-                    let origin = Vector2::new(r, r);
-
-                    d.draw_shader_mode(&mut effects.impact.shader, |mut sd| {
-                        sd.draw_texture_pro(
-                            &*scene_target,
-                            flash_source,
-                            flash_dest,
-                            origin,
-                            0.0,
-                            Color::WHITE,
-                        );
-                    });
-                }
-
-                // A kill or a barrel blast opens with a brief whole-screen
-                // flash (`Game::screen_flash`, started and spaced out by
-                // `Game::flash_screen`). After the ripple quads, which re-blit
-                // patches of the un-flashed scene and would otherwise punch
-                // darker squares through it.
-                if let Some(age) = self.screen_flash {
-                    let seconds = tuning().blast_screen_flash_seconds;
-                    if seconds > 0.0 && age < seconds {
-                        let peak = tuning().blast_screen_flash_alpha * tuning().screen_fx_intensity;
-                        let a = (255.0 * peak.clamp(0.0, 1.0) * (1.0 - age / seconds)) as u8;
-                        d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(255, 240, 200, a));
-                    }
-                }
-
-                // Debug overlays (dev builds only): the two tank layers -
-                // hitbox/collider outlines and the stats card, each on its
-                // own flag - for every tank, then the dev server's other
-                // layers. Drawn here (screen space, post-composite) rather
-                // than into scene_target, so they're never warped by an
-                // in-flight shockwave and always render crisp - tank.position
-                // is already screen pixels (no camera transform), so the two
-                // spaces line up 1:1 with no extra math.
-                #[cfg(feature = "dev-tools")]
-                {
-                    let ov = self.debug_overlays;
-                    if ov.hitboxes || ov.stats {
-                        for (tank, ai) in self.world.query::<(&Tank, &Ai)>().iter() {
-                            draw_tank_layers(&mut d, ov, tank, Some(ai));
-                        }
-                        for entity in self.players().into_iter().flatten() {
-                            crate::simulation::with_tank(&self.world, entity, |tank| {
-                                draw_tank_layers(&mut d, ov, tank, None);
-                            });
-                        }
-                    }
-                    self.draw_debug_overlays(&mut d, screen_width as f32, screen_height as f32);
-                    // Which preset is live, in the field's top-left corner (the
-                    // player's readouts are in the bar, so this corner is free),
-                    // so the I key's cycling is visible without counting layers.
-                    if let Some(preset) = ov.preset_name() {
-                        // Frame time and live particle count ride the same
-                        // label: the FX budget has to hold on the wasm build,
-                        // and without a number on screen that is an assertion
-                        // nobody can check while playing.
-                        let label = format!(
-                            "DEV overlays: {preset} (I cycles)  |  {:.1} ms  {} fx",
-                            frame_ms,
-                            effects.fx.live(),
-                        );
-                        const LABEL_FONT_SIZE: i32 = 14;
-                        let label_y = HUD_MARGIN;
-                        // Same 8px/char width estimate as `draw_tank_stats`'s
-                        // panel - no font handle inside the draw closure.
-                        let label_w = label.len() as i32 * 8 + 8;
-                        d.draw_rectangle(
-                            HUD_MARGIN - 4,
-                            label_y - 2,
-                            label_w,
-                            LABEL_FONT_SIZE + 4,
-                            Color::new(0, 0, 0, 150),
-                        );
-                        d.draw_text(
-                            &label,
-                            HUD_MARGIN,
-                            label_y,
-                            LABEL_FONT_SIZE,
-                            Color::new(80, 200, 255, 255),
-                        );
-                    }
-                }
-
-                // An online round says where it stands along the field's
-                // top edge: the room, the seat and how much of the
-                // snapshot stream is in hand.
-                if let Some((line, width)) = status {
-                    d.draw_rectangle(
-                        HUD_STATUS_INSET - 4,
-                        HUD_STATUS_INSET - 3,
-                        width + 8,
-                        HUD_STATUS_TEXT_SIZE + 6,
-                        Color::new(0, 0, 0, 150),
-                    );
-                    d.draw_text(line, HUD_STATUS_INSET, HUD_STATUS_INSET, HUD_STATUS_TEXT_SIZE, HUD_STATUS_COLOR);
-                }
-
-                // The build stamp along the field's bottom edge, left of
-                // the corner the web page's Full screen button sits in.
-                d.draw_text(
-                    &version,
-                    screen_width - HUD_VERSION_RIGHT_INSET - version_w,
-                    screen_height - HUD_VERSION_BOTTOM_INSET - HUD_VERSION_TEXT_SIZE,
-                    HUD_VERSION_TEXT_SIZE,
-                    HUD_VERSION_COLOR,
-                );
-
-                // End-of-round banner over a dimming overlay. A local round
-                // stacks its numbers and a level's buttons under it
-                // (`hud::result_layout`); an online one counts down to the
-                // room's lobby.
-                if let Some((title, color, title_size, title_w, sub, sub_size, sub_w)) = &banner {
-                    d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, 120));
-                    let cx = screen_width / 2;
-                    let cy = screen_height / 2;
-                    match &chrome.result {
-                        Some(view) => {
-                            let rows = crate::hud::result_layout(layout.field, view);
-                            d.draw_text(title, cx - title_w / 2, rows.title_y as i32, *title_size, *color);
-                            draw_result(&mut d, layout.field, view, sub);
-                        }
-                        None => {
-                            d.draw_text(title, cx - title_w / 2, cy - title_size, *title_size, *color);
-                            d.draw_text(sub, cx - sub_w / 2, cy + 20, *sub_size, Color::RAYWHITE);
-                        }
-                    }
-                }
-
-                // Mission banner: big white text over a dim overlay that both
-                // fade together once the round unfreezes. A level adds its
-                // number above and its title below, at half the size.
-                if let Some((text, size, w, alpha)) = &intro {
-                    let a = |max: f32| (max * alpha) as u8;
-                    d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, a(120.0)));
-                    d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, *size, Color::new(255, 255, 255, a(255.0)));
-                    if let Some(level) = &chrome.level {
-                        use crate::hud::{LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE};
-                        let number = t.fmt(keys::LEVEL_NUMBER, &[("n", level.number.into()), ("count", level.count.into())]);
-                        let number_w = crate::text::width(&number, LEVEL_NUMBER_SIZE);
-                        let number_y = screen_height / 2 - size / 2 - 14 - LEVEL_NUMBER_SIZE;
-                        let amber = Color::new(BUILD_COLOR.r, BUILD_COLOR.g, BUILD_COLOR.b, a(255.0));
-                        d.draw_text(&number, screen_width / 2 - number_w / 2, number_y, LEVEL_NUMBER_SIZE, amber);
-                        let title_w = crate::text::width(&level.title, LEVEL_TITLE_SIZE);
-                        let title_y = screen_height / 2 + size / 2 + 14;
-                        d.draw_text(&level.title, screen_width / 2 - title_w / 2, title_y, LEVEL_TITLE_SIZE, Color::new(255, 255, 255, a(255.0)));
-                    }
-                }
-                if let Some((text, size, w)) = &wave_banner {
-                    d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, *size, Color::RAYWHITE);
-                }
-
-                // Paused overlay draws over everything else, including the
-                // end-of-round banner (its countdown is frozen too).
-                if self.paused {
-                    d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, 120));
-                    let title_size = 72;
-                    d.draw_text(
-                        &paused,
-                        screen_width / 2 - paused_w / 2,
-                        screen_height / 2 - title_size / 2,
-                        title_size,
-                        Color::RAYWHITE,
-                    );
-                }
-
-                // The leave-round question (docs/game-editor-fusion.md
-                // section 6): the same dim as PAUSED, the dialog on top.
-                // The round is frozen by `main.rs` not calling `update`,
-                // so nothing here is simulation state.
-                if chrome.leave_dialog || chrome.players_dialog {
-                    d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, 120));
-                }
-                if chrome.leave_dialog {
-                    draw_leave_dialog(&mut d, layout.field);
-                } else if chrome.players_dialog {
-                    draw_players_dialog(&mut d, layout.field, self.players);
-                }
-                // The lobby (lobby.rs) stands over the whole field, in
-                // the dialogs' field space and with their dim: the round
-                // behind it is the local one, frozen because nothing
-                // calls `update` in this mode.
-                if let Some(lobby) = &chrome.lobby {
-                    draw_lobby(&mut d, layout.field, lobby, textures);
-                }
-                // The level select (level_select.rs), with its own dim,
-                // over a round that stands still behind it.
-                if let Some(levels) = &chrome.levels {
-                    draw_level_select(&mut d, layout.field, levels);
-                }
+        if !self.shocks.is_empty() && w.bend {
+            d.draw_shader_mode(&mut effects.shock.shader, |mut sd| {
+                sd.draw_texture_pro(w.scene, w.source, w.blit, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
             });
+        } else {
+            d.draw_texture_pro(w.scene, w.source, w.blit, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+        }
 
-            // The HUD bar, in window space, over anything the field pass
-            // might have put on its edge.
-            draw_bar(&mut d, layout.panel, &hud, textures, chrome.level_button.map(|n| (n, chrome.levels.is_some())));
-            if chrome.players_button {
-                draw_players_button(&mut d, layout.panel, self.players, chrome.players_dialog);
+        // The ripples' quads lie in the world: drawn through `on_field`.
+        d.draw_mode2D(w.on_field, |mut d, _| {
+            // Layer each muzzle flash's tiny heat-haze ripple on top, one small
+            // quad at a time: source and dest are the same on-screen patch (just
+            // re-sampling that bit of the already-composited scene through the
+            // ripple shader), so this reads as a localized wobble rather than
+            // redistorting the whole frame.
+            for flash in self.muzzle_flashes.iter().filter(|f| !culled(cull, f.center)) {
+                let uv = effects.muzzle.uv_of(flash.center);
+                effects
+                    .muzzle
+                    .shader
+                    .set_shader_value(effects.muzzle.center_loc, uv);
+                effects
+                    .muzzle
+                    .shader
+                    .set_shader_value(effects.muzzle.time_loc, flash.time);
+
+                let r = tuning().muzzle_flash_quad_radius;
+                let at = texel(flash.center);
+                let flash_source = Rectangle {
+                    x: at.x - r,
+                    y: at.y - r,
+                    width: r * 2.0,
+                    height: -(r * 2.0),
+                };
+                let flash_dest = Rectangle {
+                    x: flash.center.x,
+                    y: flash.center.y,
+                    width: r * 2.0,
+                    height: r * 2.0,
+                };
+                let origin = Vector2::new(r, r);
+
+                d.draw_shader_mode(&mut effects.muzzle.shader, |mut sd| {
+                    sd.draw_texture_pro(
+                        w.scene,
+                        flash_source,
+                        flash_dest,
+                        origin,
+                        0.0,
+                        Color::WHITE,
+                    );
+                });
             }
-            if chrome.restart_button {
-                draw_restart_button(&mut d, layout.panel);
-            }
-            if chrome.build_button {
-                draw_mode_button(&mut d, layout.panel, &t.get(keys::BUTTON_BUILD), BUILD_COLOR);
-            }
-            if chrome.leave_button {
-                draw_leave_button(&mut d, layout.panel);
-            }
-            if chrome.online_button {
-                draw_online_button(&mut d, layout.panel);
-            }
-            // The touch scheme's stick, ripples and hint: over everything,
-            // in bitmap space, so they sit where the thumbs are.
-            if let Some((touch, steer_right)) = effects.touch {
-                touch.draw(&mut d, layout, steer_right);
+
+            // Same treatment for every in-flight shell-impact flash.
+            for flash in self.impact_flashes.iter().filter(|f| !culled(cull, f.center)) {
+                let uv = effects.impact.uv_of(flash.center);
+                effects
+                    .impact
+                    .shader
+                    .set_shader_value(effects.impact.center_loc, uv);
+                effects
+                    .impact
+                    .shader
+                    .set_shader_value(effects.impact.time_loc, flash.time);
+
+                let r = tuning().impact_flash_quad_radius;
+                let at = texel(flash.center);
+                let flash_source = Rectangle {
+                    x: at.x - r,
+                    y: at.y - r,
+                    width: r * 2.0,
+                    height: -(r * 2.0),
+                };
+                let flash_dest = Rectangle {
+                    x: flash.center.x,
+                    y: flash.center.y,
+                    width: r * 2.0,
+                    height: r * 2.0,
+                };
+                let origin = Vector2::new(r, r);
+
+                d.draw_shader_mode(&mut effects.impact.shader, |mut sd| {
+                    sd.draw_texture_pro(
+                        w.scene,
+                        flash_source,
+                        flash_dest,
+                        origin,
+                        0.0,
+                        Color::WHITE,
+                    );
+                });
             }
         });
-        crate::render::view::present(rl, thread, composite, view, backdrop);
+
+        // A kill or a barrel blast opens with a brief whole-screen
+        // flash (`Game::screen_flash`, started and spaced out by
+        // `Game::flash_screen`), over the whole field area. After the
+        // ripple quads, which re-blit patches of the un-flashed scene and
+        // would otherwise punch darker squares through it.
+        d.draw_mode2D(w.area_camera, |mut d, _| {
+            if let Some(age) = self.screen_flash {
+                let seconds = tuning().blast_screen_flash_seconds;
+                if seconds > 0.0 && age < seconds {
+                    let peak = tuning().blast_screen_flash_alpha * tuning().screen_fx_intensity;
+                    let a = (255.0 * peak.clamp(0.0, 1.0) * (1.0 - age / seconds)) as u8;
+                    d.draw_rectangle(0, 0, w.area.0, w.area.1, Color::new(255, 240, 200, a));
+                }
+            }
+        });
+
+        // A followed view of a map shorter than the view on an axis shows
+        // past the field's edge, where nothing is drawn: the backdrop's
+        // colour there, the letterbox's, moving with the shake like the
+        // field it borders.
+        if camera.follows() {
+            let r = camera.target_rect();
+            let bands = [
+                Rectangle::new(r.x, r.y, -r.x, r.height),
+                Rectangle::new(field_w, r.y, r.x + r.width - field_w, r.height),
+                Rectangle::new(r.x, r.y, r.width, -r.y),
+                Rectangle::new(r.x, field_h, r.width, r.y + r.height - field_h),
+            ];
+            d.draw_mode2D(w.shaken, |mut d, _| {
+                for band in bands.iter().filter(|b| b.width > 0.0 && b.height > 0.0) {
+                    d.draw_rectangle_rec(*band, w.backdrop);
+                }
+            });
+        }
+
+        // Debug overlays (dev builds only): the two tank layers -
+        // hitbox/collider outlines and the stats card, each on its own
+        // flag - for every tank, then the dev server's other layers.
+        // Drawn here, post-composite, rather than into scene_target, so
+        // they're never warped by an in-flight shockwave and always
+        // render crisp; they lie in the world, so `on_field` puts them
+        // over what they describe.
+        #[cfg(feature = "dev-tools")]
+        d.draw_mode2D(w.on_field, |mut d, _| {
+            let ov = self.debug_overlays;
+            if ov.hitboxes || ov.stats {
+                for (tank, ai) in self.world.query::<(&Tank, &Ai)>().iter() {
+                    draw_tank_layers(&mut d, ov, tank, Some(ai));
+                }
+                for entity in self.players().into_iter().flatten() {
+                    crate::simulation::with_tank(&self.world, entity, |tank| {
+                        draw_tank_layers(&mut d, ov, tank, None);
+                    });
+                }
+            }
+            self.draw_debug_overlays(&mut d, field_w, field_h);
+        });
+
+        // A split screen half's off-screen marks in its own world, so they
+        // end at the divider with it.
+        if !w.marks.is_empty() {
+            d.draw_mode2D(w.on_field, |mut d, _| {
+                for f in w.marks {
+                    d.draw_rectangle(f.x, f.y, f.w, f.h, f.color);
+                }
+            });
+        }
+    }
+
+    /// What stands over the world, on the window: the off-screen
+    /// indicators, through `base` (the camera that puts each bitmap pixel
+    /// where `View` puts it); then everything else in UI points at the UI
+    /// scale (`hud::UiFrame`), centred in the chrome's area with its dims
+    /// over the whole window - the end screen, the mission and `WAVE N`
+    /// banners and PAUSED under the corner clusters (the lines under the
+    /// left one: an online round's status, the build stamp, the dev label)
+    /// at the frame's fade, and the dialogs, the lobby and the level select
+    /// over them, since nothing behind a question can be pressed; and the
+    /// touch stick over everything, in UI points too.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_chrome<D: RaylibDraw>(
+        &self,
+        d: &mut D,
+        c: &ChromeText,
+        hud: &HudModel,
+        chrome: &PlayChrome,
+        frame: &ChromeFrame,
+        layout: &Layout,
+        camera: &Camera,
+        indicators: Option<&crate::indicators::Picture>,
+        minimap: Option<&crate::render::minimap::MinimapLayer>,
+        textures: &Textures,
+        touch: Option<(&crate::touch::TouchScheme, bool)>,
+        fx_live: usize,
+        base: Camera2D,
+    ) {
+        #[cfg(not(feature = "dev-tools"))]
+        let _ = fx_live;
+        let t = c.t;
+
+        // What the screen cannot see (indicators.rs): its marks in the
+        // world, where the frame shows the world, and its arrows and labels
+        // in the bitmap's pixels - over the world layer, so no sky darkens
+        // them, and under the HUD, the banners and the dialogs.
+        if let Some(picture) = indicators {
+            let on_field = camera.on_field(layout.field_origin());
+            let world = Camera2D {
+                offset: Vector2::new(base.offset.x + on_field.offset.x * base.zoom, base.offset.y + on_field.offset.y * base.zoom),
+                target: on_field.target,
+                rotation: 0.0,
+                zoom: on_field.zoom * base.zoom,
+            };
+            crate::render::indicators::draw_indicators(d, picture, world, Some(base));
+        }
+
+        // The lines under the left cluster.
+        let mut lines = Vec::new();
+        // An online round says where it stands: the room, the seat and how
+        // much of the snapshot stream is in hand.
+        if let Some(status) = &chrome.status {
+            lines.push(Line { text: status.clone(), size: HUD_STATUS_TEXT_SIZE, color: HUD_STATUS_COLOR });
+        }
+        lines.push(Line { text: version_line(), size: HUD_VERSION_TEXT_SIZE, color: HUD_VERSION_COLOR });
+        // Which overlay preset is live, so the I key's cycling is visible
+        // without counting layers; frame time and the live particle count
+        // ride the same line - the FX budget has to hold on the wasm build,
+        // and without a number on screen that is an assertion nobody can
+        // check while playing.
+        #[cfg(feature = "dev-tools")]
+        if let Some(preset) = self.debug_overlays.preset_name() {
+            lines.push(Line {
+                text: format!("DEV overlays: {preset} (I cycles)  |  {:.1} ms  {} fx", c.frame_ms, fx_live),
+                size: 14,
+                color: Color::new(80, 200, 255, 255),
+            });
+        }
+
+        // Everything from here to the stick is in UI points: the window at
+        // the UI scale, never the world's. The dims cover the whole window
+        // and every banner centres on the chrome's area.
+        let ui = frame.ui;
+        let ui_camera = crate::render::view::onto_window(
+            Camera2D { offset: Vector2::new(0.0, 0.0), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: ui.scale },
+            frame.units,
+        );
+        let area = ui.area;
+        let (screen_w, screen_h) = (ui.screen.w.ceil() as i32, ui.screen.h.ceil() as i32);
+        let cy = (area.y + area.h / 2.0).round() as i32;
+        d.draw_mode2D(ui_camera, |mut d, _| {
+            // End-of-round banner over a dimming overlay. A local round
+            // stacks its numbers and a level's buttons under it
+            // (`hud::result_layout`); an online one counts down to the
+            // room's lobby.
+            if let Some((title, color, sub)) = &c.banner {
+                d.draw_rectangle(0, 0, screen_w, screen_h, Color::new(0, 0, 0, 120));
+                match &chrome.result {
+                    Some(view) => {
+                        let rows = crate::hud::result_layout(area, view);
+                        draw_banner(&mut d, area, title, RESULT_TITLE_SIZE, rows.title_y as i32, *color);
+                        draw_result(&mut d, area, view, sub);
+                    }
+                    None => {
+                        let size = banner_size(title, RESULT_TITLE_SIZE, area);
+                        draw_banner(&mut d, area, title, size, cy - size, *color);
+                        draw_banner(&mut d, area, sub, BANNER_SUB_SIZE, cy + 20, Color::RAYWHITE);
+                    }
+                }
+            }
+
+            // Mission banner: big white text over a dim overlay that both
+            // fade together once the round unfreezes. A level adds its
+            // number above and its title below, at half the size.
+            if let Some((text, alpha)) = &c.intro {
+                let a = |max: f32| (max * alpha) as u8;
+                d.draw_rectangle(0, 0, screen_w, screen_h, Color::new(0, 0, 0, a(120.0)));
+                let size = banner_size(text, BANNER_SIZE, area);
+                let white = Color::new(255, 255, 255, a(255.0));
+                draw_banner(&mut d, area, text, size, cy - size / 2, white);
+                if let Some(level) = &chrome.level {
+                    let number = t.fmt(keys::LEVEL_NUMBER, &[("n", level.number.into()), ("count", level.count.into())]);
+                    let amber = Color::new(BUILD_COLOR.r, BUILD_COLOR.g, BUILD_COLOR.b, a(255.0));
+                    draw_banner(&mut d, area, &number, LEVEL_NUMBER_SIZE, cy - size / 2 - 14 - LEVEL_NUMBER_SIZE, amber);
+                    draw_banner(&mut d, area, &level.title, LEVEL_TITLE_SIZE, cy + size / 2 + 14, white);
+                }
+            }
+            if let Some(text) = &c.wave_banner {
+                let size = banner_size(text, WAVE_BANNER_SIZE, area);
+                draw_banner(&mut d, area, text, size, cy - size / 2, Color::RAYWHITE);
+            }
+
+            // Paused overlay draws over everything else, including the
+            // end-of-round banner (its countdown is frozen too).
+            if self.paused {
+                d.draw_rectangle(0, 0, screen_w, screen_h, Color::new(0, 0, 0, 120));
+                let size = banner_size(&c.paused, BANNER_SIZE, area);
+                draw_banner(&mut d, area, &c.paused, size, cy - size / 2, Color::RAYWHITE);
+            }
+
+            // The corner clusters, over the banners and their dims, which
+            // leave them pressable, and at the frame's fade.
+            if let Some(corners) = frame.corners {
+                draw_corners(&mut d, corners, hud, chrome, self.players, textures, frame.fade, &lines, minimap);
+            }
+
+            // The leave-round question (docs/game-editor-fusion.md
+            // section 6): the same dim as PAUSED, over the corners too -
+            // nothing behind a question is pressable - and the dialog on
+            // top. The round is frozen by `app.rs` not calling `update`,
+            // so nothing here is simulation state.
+            if chrome.leave_dialog || chrome.players_dialog {
+                d.draw_rectangle(0, 0, screen_w, screen_h, Color::new(0, 0, 0, 120));
+            }
+            if chrome.leave_dialog {
+                draw_leave_dialog(&mut d, area);
+            } else if chrome.players_dialog {
+                draw_players_dialog(&mut d, area, self.players, ui.hints);
+            }
+            // The lobby (lobby.rs), with its own dim: the round behind it
+            // is the local one, frozen because nothing calls `update` in
+            // this mode.
+            if let Some(lobby) = &chrome.lobby {
+                draw_lobby(&mut d, ui, lobby, textures);
+            }
+            // The level select (level_select.rs), with its own dim, over
+            // a round that stands still behind it.
+            if let Some(levels) = &chrome.levels {
+                draw_level_select(&mut d, ui, levels);
+            }
+        });
+
+        // The touch scheme's stick, ripples and hint over everything,
+        // where the thumbs are, in UI points like the HUD - the same size
+        // on the glass whatever scale the world is drawn at.
+        if let Some((touch, steer_right)) = touch {
+            d.draw_mode2D(ui_camera, |mut d, _| touch.draw(&mut d, steer_right, ui.hints));
+        }
     }
 }
 
@@ -824,9 +1158,10 @@ impl Game {
     /// The field as it stands under the light - under daylight, or under
     /// the weather's light map, which the light pass multiplies it by: the
     /// floor, the fires on it, the tiles and their glows, and everything
-    /// standing on it. `ground` is the weather's ground pass, drawn in
-    /// place of the bare ground tileset.
-    fn paint_field_lit<D: RaylibDraw>(&self, d: &mut D, textures: &Textures, ground: Option<(&mut Passes, &WeatherFrame)>) {
+    /// standing on it, in world pixels. `ground_drawn` says the weather's
+    /// ground pass already covered the target in place of the bare ground
+    /// tileset; `cull` is the world worth drawing (`Camera::cull`).
+    fn paint_field_lit<D: RaylibDraw>(&self, d: &mut D, textures: &Textures, ground_drawn: bool, cull: Option<Rectangle>) {
         // The field itself is painted through the `Canvas` trait in the
         // three stages `mapshot` also runs on a CPU canvas (`paint_floor`,
         // `paint_tiles`, `paint_standing`); between them come the layers
@@ -836,12 +1171,10 @@ impl Game {
         // so each stage makes its own. Under weather the ground pass
         // draws the ground with the sky's mark on it, and the marks lie
         // over that: tracks in the snow.
-        match ground {
-            Some((passes, frame)) => {
-                passes.draw_ground(d, frame);
-                self.paint_floor_marks(&mut GpuCanvas::new(d, textures));
-            }
-            None => self.paint_floor(&mut GpuCanvas::new(d, textures)),
+        if ground_drawn {
+            self.paint_floor_marks(&mut GpuCanvas::culled(d, textures, cull));
+        } else {
+            self.paint_floor(&mut GpuCanvas::culled(d, textures, cull));
         }
 
         // Burning ground cells: tongues of flame standing on each
@@ -850,6 +1183,7 @@ impl Game {
         // over the fire) and under whatever drives through them. Upper
         // cells first, so a lower cell's flames stand in front.
         let mut cells = self.burning_cells();
+        cells.retain(|(at, ..)| !culled(cull, *at));
         if !cells.is_empty() {
             cells.sort_by(|a, b| a.0.y.total_cmp(&b.0.y).then(a.0.x.total_cmp(&b.0.x)));
             let t = tuning();
@@ -865,24 +1199,26 @@ impl Game {
             pyro::draw(&mut GpuCanvas::new(d, textures), &flames);
         }
 
-        self.paint_tiles(&mut GpuCanvas::new(d, textures));
+        self.paint_tiles(&mut GpuCanvas::culled(d, textures, cull));
 
         // A barrel whose fuse is lit pulses (additive, so it reads as
         // light on the drum rather than a disc over it).
         d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
             // An active portal glows from below its spiral.
             if self.portals_active() {
-                for &at in &self.portals {
+                for &at in self.portals.iter().filter(|at| !culled(cull, **at)) {
                     draw_portal_glow(&mut bd, at, self.time);
                 }
             }
             for obstacle in self.world.query::<&Obstacle>().iter() {
-                if obstacle.fuse.is_some() {
+                if obstacle.fuse.is_some() && !culled(cull, obstacle.position) {
                     draw_fuse_glow(&mut bd, obstacle.position, self.time);
                 }
             }
             for (at, left, _total) in self.burning_cells() {
-                draw_fire_glow(&mut bd, at, self.time, left);
+                if !culled(cull, at) {
+                    draw_fire_glow(&mut bd, at, self.time, left);
+                }
             }
             // The flamethrower's nozzle while it fires: a hot disc at
             // the muzzle and a fainter one a third of the way out.
@@ -895,25 +1231,39 @@ impl Game {
             // `paint_standing` and `paint_tiles`.
             let t = tuning();
             let bands = t.glow_bands.max(0) as u32;
-            for tank in self.world.query::<&crate::tank::Tank>().iter() {
+            for tank in self.world.query::<&crate::tank::Tank>().iter().filter(|tank| !culled(cull, tank.position)) {
                 let lean = pyro::smoke_lean(&t, tank.position, self.time);
                 pyro::draw_glows(&mut Rl(&mut bd), &crate::damage_stage::flames(tank, self.time, lean), bands);
             }
-            for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| o.burning) {
+            for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| o.burning && !culled(cull, o.position)) {
                 pyro::draw_glows(&mut Rl(&mut bd), &crate::game::tile_flames(obstacle, self.time), bands);
             }
         });
 
-        self.paint_standing(&mut GpuCanvas::new(d, textures), PaintOptions { locate_cue: true });
+        self.paint_standing(&mut GpuCanvas::culled(d, textures, cull), PaintOptions { locate_cue: true });
     }
 
     /// What shines by its own light, over the lit field and so as bright
-    /// at night as at noon: the locate labels, the light the shots throw,
-    /// the shots, hits, flames and flares, the blasts, whatever is in the
-    /// air and the particles. `day_pools` scales the daylight's glow pools
-    /// on the ground (`draw_ground_light`), which the light map stands in
-    /// for under a dark sky.
-    fn paint_field_glowing<D: RaylibDraw>(&self, d: &mut D, textures: &Textures, mut shots: Option<&mut ShotShaders>, fx: &crate::fx::Fx, day_pools: f32) {
+    /// at night as at noon: the locate labels and the ammo gauges under
+    /// the `ammo_seats`' rings, the light the shots throw, the shots, hits,
+    /// flames and flares, the blasts, whatever is in the air and the
+    /// particles, in world pixels. `day_pools` scales the daylight's glow
+    /// pools on the ground (`draw_ground_light`), which the light map
+    /// stands in for under a dark sky; `camera` is the view the target
+    /// holds, which the shot shaders place themselves in and whose culling
+    /// rectangle the many small things are tested against.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_field_glowing<D: RaylibDraw>(
+        &self,
+        d: &mut D,
+        textures: &Textures,
+        mut shots: Option<&mut ShotShaders>,
+        fx: &crate::fx::Fx,
+        day_pools: f32,
+        camera: &Camera,
+        ammo_seats: &[u8],
+    ) {
+        let cull = camera.cull();
         // A hit lights up what it landed on: the hull or the tile drawn
         // again in light for a few frames, stepping down.
         if !fx.flashes().is_empty() {
@@ -936,7 +1286,7 @@ impl Game {
             d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
                 let mut c = GpuCanvas::new(&mut bd, textures);
                 for tank in self.world.query::<&Tank>().iter() {
-                    if self.hide_players && tank.is_player() {
+                    if (self.hide_players && tank.is_player()) || culled(cull, tank.position) {
                         continue;
                     }
                     crate::tank::draw_tank_glow(&mut c, tank, self.time, tank_glow);
@@ -950,6 +1300,19 @@ impl Game {
             for entity in self.players().into_iter().flatten() {
                 crate::simulation::with_tank(&self.world, entity, |tank| draw_player_label(d, tank, self.time));
             }
+            // The shells this screen's seats have left, as pips along the
+            // lower arc of their rings: the number that matters most,
+            // where the eye already is.
+            let max = tuning().max_shells;
+            for &seat in ammo_seats {
+                let Some(entity) = self.seat(seat as usize) else { continue };
+                crate::simulation::with_tank(&self.world, entity, |tank| {
+                    if !culled(cull, tank.position) {
+                        let color = crate::hud::hud_number_color(tank.shells_ammo as f32, max as f32);
+                        crate::tank::draw_ammo_pips(&mut GpuCanvas::new(d, textures), tank, tank.shells_ammo, max, color);
+                    }
+                });
+            }
         }
 
         // The light the shots throw, under their sprites so each round
@@ -961,11 +1324,11 @@ impl Game {
             d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
                 // Light on the floor first: every shot, burn and flash
                 // lights the ground around it in its own colour.
-                self.draw_ground_light(&mut bd, day_pools);
-                for shell in self.world.query::<&Shell>().iter() {
+                self.draw_ground_light(&mut bd, day_pools, cull);
+                for shell in self.world.query::<&Shell>().iter().filter(|s| !culled(cull, s.position)) {
                     draw_shell_light(&mut bd, shell);
                 }
-                for bullet in self.world.query::<&Bullet>().iter() {
+                for bullet in self.world.query::<&Bullet>().iter().filter(|b| !culled(cull, b.position)) {
                     draw_bullet_light(&mut bd, bullet);
                 }
                 for beam in &self.laser_beams {
@@ -976,7 +1339,7 @@ impl Game {
 
         // A hit is the burst the particle layer's impact composes
         // (`burst.rs`), so the baked impact frames are left out.
-        for shell in self.world.query::<&Shell>().iter() {
+        for shell in self.world.query::<&Shell>().iter().filter(|s| !culled(cull, s.position)) {
             if self.shadows_enabled && shell.state == ShellState::Flying {
                 draw_shell_shadow(d, textures.shells, shell);
             }
@@ -990,19 +1353,19 @@ impl Game {
         // A flying bolt is the shader orb where the shaders loaded; its
         // muzzle and impact frames stay the baked sprite.
         let orb = glow && shots.is_some();
-        for plasma in self.world.query::<&Plasma>().iter() {
+        for plasma in self.world.query::<&Plasma>().iter().filter(|p| !culled(cull, p.position)) {
             let flying = plasma.state == PlasmaState::Flying;
             if self.shadows_enabled && flying {
                 draw_plasma_shadow(d, textures.plasma, plasma, orb);
             }
             match shots.as_deref_mut() {
-                Some(shots) if orb && flying => shots.draw_orb(d, plasma, self.time, self.map.field_size().1),
+                Some(shots) if orb && flying => shots.draw_orb(d, plasma, self.time, camera),
                 _ if !flying => {}
                 _ => draw_plasma(d, textures.plasma, plasma),
             }
         }
 
-        for bullet in self.world.query::<&Bullet>().iter() {
+        for bullet in self.world.query::<&Bullet>().iter().filter(|b| !culled(cull, b.position)) {
             if self.shadows_enabled && bullet.state == BulletState::Flying {
                 draw_bullet_shadow(d, textures.minigun_bullets, bullet);
             }
@@ -1026,6 +1389,7 @@ impl Game {
             let hits: Vec<Vec<pyro::Shape>> = fx
                 .impacts()
                 .iter()
+                .filter(|i| !culled(cull, i.pos))
                 .map(|i| crate::burst::compose(i.kind, i.pos, i.dir, i.age, i.seed, pyro::smoke_lean(&t, i.pos, self.time)))
                 .collect();
             {
@@ -1049,7 +1413,7 @@ impl Game {
         if let Some(shots) = shots.as_deref_mut().filter(|_| glow) {
             for (i, jet) in self.flames().iter().enumerate() {
                 let (from, dir, reach) = jet.drawn();
-                shots.draw_flame(d, from, dir, reach, self.time, i as f32 * 7.31, self.map.field_size().1);
+                shots.draw_flame(d, from, dir, reach, self.time, i as f32 * 7.31, camera);
             }
         }
 
@@ -1063,7 +1427,7 @@ impl Game {
             let flashes: Vec<Vec<pyro::Shape>> = self
                 .muzzle_flashes
                 .iter()
-                .filter(|f| !at_nozzle(f.center, &nozzles))
+                .filter(|f| !at_nozzle(f.center, &nozzles) && !culled(cull, f.center))
                 .map(|f| {
                     let near = crate::fx::shot_near(self, f.center);
                     crate::burst::muzzle(f.center, near.map(|n| n.0), f.time, crate::blast::seed_for(f.center), near.and_then(|n| n.1))
@@ -1123,14 +1487,15 @@ impl Game {
         // off a wreck passes over tanks and shells, not under them.
         // Their shadows go down first so no piece is drawn over
         // another's shadow.
+        let flying = || self.decals.iter().filter(|dc| !dc.landed() && !culled(cull, dc.draw_pos()));
         if self.shadows_enabled {
-            for decal in self.decals.iter().filter(|dc| !dc.landed()) {
+            for decal in flying() {
                 draw_decal_shadow(d, decal);
             }
         }
         {
             let mut c = GpuCanvas::new(d, textures);
-            for decal in self.decals.iter().filter(|dc| !dc.landed()) {
+            for decal in flying() {
                 draw_decal(&mut c, decal);
             }
             // Launched fuel drums, tumbling over the lot on their way to
@@ -1161,7 +1526,7 @@ impl Game {
         // Sparks, chips, dust and smoke over the top of everything in
         // the scene, but still inside pass 1 so an in-flight shockwave
         // warps them and the camera shake carries them along.
-        crate::render::fx::draw(fx, d);
+        crate::render::fx::draw(fx, d, cull);
     }
 }
 
@@ -1369,9 +1734,9 @@ fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
 impl Game {
     /// The debug overlay layers beyond the two tank layers
     /// (`Game::debug_overlays`, docs/dev-server-design.md; dev builds only),
-    /// screen space and post-composite like them: blocked nav cells, each
-    /// enemy's AI memory, projectile hit boxes, engagement targets, pickup
-    /// collect radii. Each layer costs nothing while off.
+    /// in world pixels and post-composite like them: blocked nav cells,
+    /// each enemy's AI memory, projectile hit boxes, engagement targets,
+    /// pickup collect radii. Each layer costs nothing while off.
     fn draw_debug_overlays(&self, d: &mut impl RaylibDraw, width: f32, height: f32) {
         let ov = self.debug_overlays;
         if ov.nav_grid {

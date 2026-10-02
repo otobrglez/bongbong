@@ -7,6 +7,10 @@
 //! so either can fire) and two reserve slots at ENGAGE_RESERVE_RADIUS (rank
 //! 1, beyond attack range so a reserve tank neither fires nor blocks a
 //! lane) - 16 points, claimed greedily with mutual exclusion each frame.
+//! Around a seat a firing slot also stands inside the seat's sight box,
+//! half a cell in from its edge (`EngageCtx::sight_box`): an enemy fires
+//! at a seat only from inside it, so the north and south slots, whose
+//! ring radius reaches past the box's half height, move in to match.
 //! Pure geometry plus two callbacks; no world access, so it is unit-tested
 //! on its own. Every assignment also fills an [`EngageReport`] - which
 //! slot each tank holds, why the others were passed over - for tooling.
@@ -16,8 +20,8 @@ use std::collections::HashMap;
 use hecs::Entity;
 use serde::Serialize;
 
-use crate::Position;
 use crate::tuning::tuning;
+use crate::{OBSTACLE_GRID_SIZE, Position};
 
 /// One slot identity: cardinal axis (0 = N, 1 = E, 2 = S, 3 = W), rank (0
 /// firing line, 1 reserve) and lateral side (-1/+1).
@@ -142,6 +146,13 @@ pub(super) struct EngageCtx<'a> {
     pub height: f32,
     /// Keep every slot at least this far from the battlefield edge.
     pub margin: f32,
+    /// The target's sight box as half extents (sideways, up and down; px,
+    /// `Tuning::sight_box_half_px`) when it is a seat: a firing slot
+    /// stands no further out along its axis than the box reaches less half
+    /// a cell, so its holder fires from inside the box (an enemy fires at a
+    /// seat from nowhere else, `ai::in_sight_box`). `None` for a hunted
+    /// frog's ring, which no such rule bounds.
+    pub sight_box: Option<(f32, f32)>,
     /// Whether a route exists between two points on this frame's nav grid.
     pub reachable: &'a dyn Fn(Position, Position) -> bool,
     /// Whether a shot from the first point reaches the second unobstructed.
@@ -276,10 +287,12 @@ impl EngageRing {
 }
 
 /// The world point for a slot, or `None` if it can't be kept inside the
-/// battlefield. A rank-0 slot clamps its forward distance down to fit (but
-/// never below ENGAGE_MIN_RADIUS, which keeps it out of the forced-misfire
-/// zone); a rank-1 slot never clamps - a clamped reserve would land back in
-/// the firing lane and recreate the pile-up it exists to avoid.
+/// battlefield. A rank-0 slot stands inside the seat's sight box (half a
+/// cell in from its edge, `EngageCtx::sight_box`) and clamps its forward
+/// distance down to fit the battlefield (but never below
+/// ENGAGE_MIN_RADIUS, which keeps it out of the forced-misfire zone); a
+/// rank-1 slot never clamps - a clamped reserve would land back in the
+/// firing lane and recreate the pile-up it exists to avoid.
 fn engage_point(ctx: &EngageCtx, slot: EngageSlot) -> Option<Position> {
     let dir = DIRS[slot.axis as usize];
     let perp = perp_of(dir);
@@ -293,6 +306,10 @@ fn engage_point(ctx: &EngageCtx, slot: EngageSlot) -> Option<Position> {
         return None;
     }
     let mut forward = if slot.rank == 0 { tuning().engage_ring_radius() } else { tuning().engage_reserve_radius() };
+    if let (0, Some((half_w, half_h))) = (slot.rank, ctx.sight_box) {
+        let half = if dir.0 != 0.0 { half_w } else { half_h };
+        forward = forward.min(half - OBSTACLE_GRID_SIZE * 0.5);
+    }
     let room = if dir.0 > 0.0 {
         ctx.width - m - px
     } else if dir.0 < 0.0 {
@@ -319,6 +336,11 @@ mod tests {
 
     fn open_field() -> (Position, f32, f32, f32) {
         (Position::new(640.0, 360.0), 1280.0, 720.0, 40.0)
+    }
+
+    /// A seat's ring: its target's sight box bounds the firing slots.
+    fn seat_box() -> Option<(f32, f32)> {
+        Some(tuning().sight_box_half_px())
     }
 
     fn entity(n: u32) -> Entity {
@@ -352,7 +374,7 @@ mod tests {
     fn opposite_tanks_get_distinct_slots_on_their_own_axes() {
         let (player, w, h, margin) = open_field();
         let yes = |_: Position, _: Position| true;
-        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, reachable: &yes, line_of_sight: &yes };
+        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), reachable: &yes, line_of_sight: &yes };
         let mut ring = EngageRing::default();
         let west = (entity(1), Position::new(200.0, 360.0));
         let east = (entity(2), Position::new(1100.0, 360.0));
@@ -370,11 +392,48 @@ mod tests {
         assert!(report.tanks.iter().all(|t| !t.sticky && t.rejected.claimed == 0));
     }
 
+    /// Every firing slot around a seat stands inside the seat's sight box,
+    /// half a cell in from its edge, so the tank holding it fires from
+    /// where the rule lets it: the north and south slots move in from the
+    /// ring radius to the box (224 px at the defaults), east and west keep
+    /// the ring radius, which the box's width already holds. A hunted
+    /// frog's ring has no box and keeps the ring radius all round.
+    #[test]
+    fn a_seats_firing_slots_stand_inside_its_sight_box() {
+        // A field with room for every slot, the reserves included.
+        let (player, w, h, margin) = (Position::new(1000.0, 700.0), 2000.0, 1400.0, 40.0);
+        let yes = |_: Position, _: Position| true;
+        let (half_w, half_h) = tuning().sight_box_half_px();
+        let ring = tuning().engage_ring_radius();
+        assert!(ring > half_h - OBSTACLE_GRID_SIZE * 0.5, "the defaults this test is about: the ring reaches past the box's half height");
+        let seat = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), reachable: &yes, line_of_sight: &yes };
+        let frog = EngageCtx { sight_box: None, ..seat };
+        for i in 0..SLOT_COUNT {
+            let slot = EngageSlot::from_index(i);
+            let at = engage_point(&seat, slot).expect("an open field fits every slot");
+            let (dx, dy) = ((at.x - player.x).abs(), (at.y - player.y).abs());
+            let forward = if slot.axis % 2 == 0 { dy } else { dx };
+            if slot.rank == 1 {
+                assert_eq!(forward, tuning().engage_reserve_radius(), "{} reserve", slot.axis_name());
+                continue;
+            }
+            assert!(crate::ai::in_sight_box(player, at), "{} firing slot at ({dx}, {dy}) is outside the box", slot.axis_name());
+            if slot.axis % 2 == 0 {
+                assert_eq!(forward, half_h - OBSTACLE_GRID_SIZE * 0.5, "{} slot", slot.axis_name());
+            } else {
+                assert_eq!(forward, ring.min(half_w - OBSTACLE_GRID_SIZE * 0.5), "{} slot", slot.axis_name());
+            }
+            let around_frog = engage_point(&frog, slot).expect("an open field fits every slot");
+            let frog_forward = if slot.axis % 2 == 0 { (around_frog.y - player.y).abs() } else { (around_frog.x - player.x).abs() };
+            assert_eq!(frog_forward, ring, "{} slot of a frog's ring", slot.axis_name());
+        }
+    }
+
     #[test]
     fn a_held_slot_is_kept_while_it_stays_valid() {
         let (player, w, h, margin) = open_field();
         let yes = |_: Position, _: Position| true;
-        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, reachable: &yes, line_of_sight: &yes };
+        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), reachable: &yes, line_of_sight: &yes };
         let mut ring = EngageRing::default();
         let tank = entity(7);
         let first = assign(&mut ring, &[(tank, Position::new(200.0, 300.0))], &ctx);
@@ -391,7 +450,7 @@ mod tests {
         let (player, w, h, margin) = open_field();
         let yes = |_: Position, _: Position| true;
         let no = |_: Position, _: Position| false;
-        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, reachable: &no, line_of_sight: &yes };
+        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), reachable: &no, line_of_sight: &yes };
         let mut ring = EngageRing::default();
         let report = assign(&mut ring, &[(entity(1), Position::new(200.0, 360.0))], &ctx);
         assert!(report.target(entity(1)).is_none());
@@ -407,7 +466,7 @@ mod tests {
         let (_, w, h, margin) = open_field();
         let yes = |_: Position, _: Position| true;
         let player = Position::new(60.0, 60.0);
-        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, reachable: &yes, line_of_sight: &yes };
+        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), reachable: &yes, line_of_sight: &yes };
         let mut ring = EngageRing::default();
         // From the north-west the tank tries the up and left axes first -
         // both fall outside the battlefield here.

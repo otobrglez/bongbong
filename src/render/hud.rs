@@ -1,21 +1,23 @@
-//! Drawing the HUD bar, its buttons and the two dialogs, and the slot
-//! tables the bar is laid out from (`hud.rs` owns the model, the shared
-//! colours and sizes, and every hit rect).
+//! Drawing the HUD - the two corner clusters and their buttons, the
+//! builder bar's mode button, the banners, the dialogs and the end screen,
+//! all in UI points - and the slot tables the clusters' rows are laid out
+//! from (`hud.rs` owns the model, the shared colours and sizes, and every
+//! rect the hit tests read).
 
 use sola_raylib::prelude::*;
 
 use crate::hud::{
-    clock_text, leave_button_rect, leave_dialog_rects, level_button_rect, mode_button_rect, players_button_rect,
-    players_dialog_rects, restart_button_rect, result_layout, weapon_color, HudLayout, HudModel, NextLevel, ResultButtons,
-    ResultView, SeatHud, WeaponSlot, BAR_FILL, BUILD_COLOR, DIALOG_W, DIM, HUD_LABEL_SIZE, HUD_TEXT_SIZE,
-    LEVEL_BUTTON_WORD_GAP, ONLINE_COLOR, RESULT_LINE_SIZE, RESULT_SEATS_SIZE, RESULT_STATS_GAP, TEXT, WEAPON_SLOTS,
+    banner_size, clock_text, leave_dialog_rects, players_dialog_rects, result_layout, weapon_color, Corners, Fade, Hints,
+    HudModel, NextLevel, PlayChrome, PlayerHud, ResultButtons, ResultView, SeatHud, BUILD_COLOR, DIALOG_W, DIM,
+    HUD_TEXT_SIZE, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP, LINE_H, ONLINE_COLOR, RESULT_LINE_SIZE,
+    RESULT_SEATS_SIZE, RESULT_STATS_GAP, ROW_H, TEXT, UI_SMALL_TEXT, WEAPON_SLOTS,
 };
 use crate::math::{Color, Rectangle};
 use crate::text::{keys, text, width, Key};
 use crate::render::game::Textures;
 use crate::simulation::PlayerCount;
-use crate::tank::{team_color, ActiveWeapon, TEAM_COLORS};
-use crate::{Rect, MAX_SEATS, PICKUP_TEXTURE_SIZE, SHELL_TEXTURE_SIZE};
+use crate::tank::{team_color, ActiveWeapon, HealthRamp, TEAM_COLORS};
+use crate::{Rect, MAX_DAMAGE, MAX_SEATS, PICKUP_TEXTURE_SIZE, SHELL_TEXTURE_SIZE};
 
 const HEART: Color = Color::new(230, 60, 70, 255);
 const SPEED_COLOR: Color = Color::new(255, 210, 60, 255);
@@ -24,230 +26,174 @@ const FROG_COLOR: Color = Color::new(120, 220, 90, 255);
 /// What a slot draws in when there is nothing in it: the FROG gauge of a
 /// round without a frog, and a wrecked seat's chip.
 const SPENT: Color = Color::new(60, 60, 66, 255);
+/// A cluster's plate: the builder bar's dark, mostly opaque, so the
+/// readouts read over any ground under any sky. The minimap's plate too.
+const PLATE_FILL: Color = Color::new(21, 21, 24, 208);
+pub(crate) const PLATE_EDGE: Color = Color::new(0, 0, 0, 150);
+/// The dark plate behind each line of text under the left cluster.
+const LINE_FILL: Color = Color::new(0, 0, 0, 150);
 
-// Slot origins along the bar, left to right. Fixed so a wave count or an
-// ammo number changing width never nudges what sits after it.
-const SLOT_TITLE: i32 = 8;
-const BAR_SLOT_W: i32 = 40;
-const BAR_W: i32 = 36;
-const BAR_H: i32 = 8;
-/// The two stacked bars of a two-player round: each this tall, one block
-/// apart, the pair ending where the single bar does.
-const BAR2_H: i32 = 6;
-const BAR2_GAP: i32 = 1;
-/// Approximate default-font advance per character at `HUD_TEXT_SIZE`; the
-/// pairs are laid out in cells of this width.
-pub const CHAR_W: i32 = 12;
-/// The small readout font (the two-player weapon pairs) and its cell.
-const HUD_SMALL_TEXT_SIZE: i32 = 10;
-const CHAR_W_SMALL: i32 = 7;
-
-/// The slot origins one table of readouts is laid out from. One table per
-/// `HudLayout`: the pairs of a two-player round need wider HP, shell and
-/// weapon slots, paid for out of the gap after the enemy count, and the
-/// compact table has to buy a strip's worth of bar back from them. The
-/// width fields are the budget `bar_tests` pins each table against.
+// The vitals block's slots, from its left edge (`hud::VITALS_W` wide, two
+// `hud::ROW_H` rows). Fixed, so a number changing width never nudges what
+// sits after it; `corner_tests` pins that nothing overlaps.
+const V_HEART: i32 = 0;
+const V_HP: i32 = 18;
 #[cfg_attr(not(test), allow(dead_code))]
-struct Slots {
-    enemies: i32,
-    enemy_count: i32,
-    heart: i32,
-    hp: i32,
-    shell: i32,
-    shells: i32,
-    weapons: i32,
-    weapon_slot_w: i32,
-    /// Side of the weapon icon in its slot. The couch tables draw the
-    /// pickup sheet at its own 32 px; the compact table draws it at 28,
-    /// which is what buys the fifth slot in a bar that also has to leave
-    /// 112 px for the seat strip.
-    weapon_icon: i32,
-    bars: i32,
-    /// Width of the HP readout (`100|100` with two players).
-    hp_w: i32,
-    /// Width of a shell or weapon count (`20|20` with two players).
-    count_w: i32,
-    /// Size the single-seat shell and weapon counts are set in; the pairs
-    /// of the two-player table have their own.
-    count_size: i32,
-    /// Where the other seats' strip begins. `None` on the couch tables,
-    /// which draw no strip.
-    seats: Option<i32>,
-}
+const V_HP_W: i32 = 30;
+const V_HEALTH: i32 = 52;
+const V_HEALTH_W: i32 = 48;
+const V_SHELL: i32 = 106;
+const V_SHELLS: i32 = 140;
+/// A count: three digits at `HUD_TEXT_SIZE`.
+const V_COUNT_W: i32 = 30;
+const V_SPEED: i32 = 182;
+const V_SHIELD: i32 = 250;
+/// A gauge's slot: its label over its bar.
+#[cfg_attr(not(test), allow(dead_code))]
+const GAUGE_SLOT_W: i32 = 60;
+const GAUGE_W: i32 = 56;
+const GAUGE_H: i32 = 8;
+/// The weapon queue's slots on the second row: the pickup icon and the
+/// count beside it.
+const V_WEAPON_W: i32 = 62;
+const V_WEAPON_ICON: i32 = 28;
 
-const SLOTS_ONE: Slots = Slots {
-    enemies: 166,
-    enemy_count: 182,
-    heart: 250,
-    hp: 266,
-    shell: 304,
-    shells: 338,
-    weapons: 376,
-    weapon_slot_w: 72,
-    weapon_icon: 32,
-    bars: 738,
-    hp_w: 3 * CHAR_W,
-    count_w: 3 * CHAR_W,
-    count_size: HUD_TEXT_SIZE,
-    seats: None,
-};
-
-/// Two players: every pair - HP, shells and the four weapons - is set in
-/// the small font (`CHAR_W_SMALL`) so the whole row still ends before the
-/// gauges on the 960 px bar.
-const SLOTS_TWO: Slots = Slots {
-    enemies: 166,
-    enemy_count: 182,
-    heart: 250,
-    hp: 266,
-    shell: 317,
-    shells: 351,
-    weapons: 386,
-    weapon_slot_w: 71,
-    weapon_icon: 32,
-    bars: 743,
-    hp_w: 7 * CHAR_W_SMALL,
-    count_w: 5 * CHAR_W_SMALL,
-    count_size: HUD_SMALL_TEXT_SIZE,
-    seats: None,
-};
-
-/// The compact table (docs/online-coop-prd.md §4.11): one seat's whole
-/// block, then a chip per other seat. Seven chips need 112 px of bar that
-/// the one-player table spends on its readouts, so the block pays for
-/// them - the shell and weapon counts drop to the small font and their
-/// slots narrow with them, the way the two-player table already sets its
-/// pairs. HP stays in the full font: it is the number the player playing
-/// this seat glances at, and it is the one that has to stay big.
-const SLOTS_COMPACT: Slots = Slots {
-    enemies: 166,
-    enemy_count: 182,
-    heart: 250,
-    hp: 266,
-    shell: 304,
-    shells: 338,
-    weapons: 361,
-    weapon_slot_w: 53,
-    weapon_icon: 28,
-    bars: 628,
-    hp_w: 3 * CHAR_W,
-    count_w: 3 * CHAR_W_SMALL,
-    count_size: HUD_SMALL_TEXT_SIZE,
-    seats: Some(748),
-};
-
-/// One chip of the seat strip: a seat number over a health gauge, both in
-/// that seat's ring colour. Narrow on purpose - `MAX_SEATS - 1` of them
-/// have to fit between the gauges and the bar's buttons.
-const SEAT_CHIP_W: i32 = 14;
-const SEAT_CHIP_GAP: i32 = 2;
-const SEAT_CHIP_STRIDE: i32 = SEAT_CHIP_W + SEAT_CHIP_GAP;
-
-impl Slots {
-    /// Width of the shells readout: `20|20` in the full font with two
-    /// players (the weapon pairs use `count_w`, in the small font).
-    #[cfg_attr(not(test), allow(dead_code))]
-    const fn shells_pair_w(&self) -> i32 {
-        5 * CHAR_W_SMALL
-    }
-
-    /// The table a layout is drawn from.
-    fn for_layout(layout: HudLayout) -> &'static Slots {
-        match layout {
-            HudLayout::One => &SLOTS_ONE,
-            HudLayout::Two => &SLOTS_TWO,
-            HudLayout::Compact => &SLOTS_COMPACT,
-        }
-    }
-}
-
-/// Where the `i`th chip of the strip sits, counted from the strip's
-/// origin. Fixed per position, so a seat dying or its health changing
-/// never moves the chip beside it.
-const fn seat_chip_x(strip: i32, i: usize) -> i32 {
-    strip + i as i32 * SEAT_CHIP_STRIDE
-}
+// The right cluster's first row (`hud::INFO_W` wide), from its left edge.
+/// The mission word and its wave count, or the level button and the count
+/// beside it.
+#[cfg_attr(not(test), allow(dead_code))]
+const I_TITLE_W: i32 = 160;
+const LEVEL_WAVE_GAP: i32 = 8;
+const I_ENEMIES: i32 = 166;
+const I_ENEMY_COUNT: i32 = 184;
+/// Two digits of enemies, then the dim `+N` still to come.
+const I_PENDING: i32 = 208;
+const I_FROG: i32 = 244;
 
 /// The tank glyph's footprint: 7 x 7 blocks of 2 px (`draw_tank_glyph`).
 #[cfg_attr(not(test), allow(dead_code))]
 const TANK_GLYPH_W: i32 = 14;
 const TANK_GLYPH_H: i32 = 14;
 
-/// Draw the bar into `panel` (window space). Everything is placed from
-/// the panel's origin, so the same function draws it wherever the layout
-/// puts the panel.
-///
-/// `level` is the level button's number and whether the level select it
-/// opens is up (`PlayChrome::level_button`): on a level the button takes
-/// the mission word's place and a wave round's count stands beside it.
-pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures: &Textures, level: Option<(usize, bool)>) {
-    let px = panel.x.round() as i32;
-    let py = panel.y.round() as i32;
-    let pw = panel.w.round() as i32;
-    let ph = panel.h.round() as i32;
-    d.draw_rectangle(px, py, pw, ph, BAR_FILL);
-    let s = Slots::for_layout(model.layout);
-    let p2 = model.second.as_ref();
+/// `c` at a cluster's fade.
+fn faded(c: Color, a: f32) -> Color {
+    Color::new(c.r, c.g, c.b, (c.a as f32 * a.clamp(0.0, 1.0)).round() as u8)
+}
 
-    // Text sits in the vertical middle of the bar.
-    let text_y = py + (ph - HUD_TEXT_SIZE) / 2;
-    // The shell and weapon counts of a single-seat block, which the
-    // compact table sets small so its strip has room.
-    let count_y = py + (ph - s.count_size) / 2;
+/// One line of text under the left cluster.
+pub struct Line {
+    pub text: String,
+    pub size: i32,
+    pub color: Color,
+}
 
-    match level {
-        Some((number, open)) => {
-            draw_level_button(d, panel, number, open);
-            if let Some((index, total)) = model.wave {
-                let r = level_button_rect(panel);
-                d.draw_text(&format!("{index}/{total}"), (r.x + r.width) as i32 + LEVEL_WAVE_GAP, text_y, HUD_TEXT_SIZE, TEXT);
-            }
+/// Draw both corner clusters (`hud::corners`) in UI points - inside the
+/// camera that puts a UI point where `UiFrame` puts it - each at its fade:
+/// the vitals blocks top-left with `lines` under them, the round's numbers,
+/// the buttons and a room's chips top-right, and the minimap under them
+/// from `minimap` where the corners hold one.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_corners(
+    d: &mut impl RaylibDraw,
+    corners: &Corners,
+    model: &HudModel,
+    chrome: &PlayChrome,
+    players: PlayerCount,
+    textures: &Textures,
+    fade: Fade,
+    lines: &[Line],
+    minimap: Option<&crate::render::minimap::MinimapLayer>,
+) {
+    // The left cluster: the local seat's block, and a couch's player 2's.
+    let a = fade.left;
+    let first_seat = chrome.seat.unwrap_or(0);
+    let seats: [(Option<&PlayerHud>, u8); 2] = [(Some(&model.local), first_seat), (model.second.as_ref(), 1)];
+    for (block, (hud, seat)) in corners.blocks.iter().zip(seats) {
+        let Some(hud) = hud else { continue };
+        draw_plate(d, Corners::plate(*block), Color::new(team_color(seat).r, team_color(seat).g, team_color(seat).b, 150), a);
+        draw_vitals(d, *block, hud, seat, textures, a);
+    }
+    let mut y = corners.lines.y;
+    for line in lines {
+        let w = width(&line.text, line.size);
+        let x = corners.lines.x;
+        d.draw_rectangle_rounded(Rectangle::new(x, y, (w + 8) as f32, (line.size + 6) as f32), 0.3, 4, faded(LINE_FILL, a));
+        d.draw_text(&line.text, x as i32 + 4, y as i32 + 3, line.size, faded(line.color, a));
+        y += LINE_H;
+    }
+
+    // The right cluster: the round's numbers, the buttons, the chips.
+    let a = fade.right;
+    draw_plate(d, corners.right, PLATE_EDGE, a);
+    let level = chrome.level_button.map(|n| (n, chrome.levels.is_some()));
+    draw_info(d, corners.info, model, level, a);
+    if let Some(r) = corners.online {
+        draw_label_button(d, r, &text().get(keys::BUTTON_ONLINE), ONLINE_COLOR, a);
+    }
+    if let Some(r) = corners.players {
+        draw_players_button(d, r, players, chrome.players_dialog, a);
+    }
+    if let Some(r) = corners.restart {
+        draw_restart_button(d, r, a);
+    }
+    if let Some(r) = corners.build {
+        draw_label_button(d, r, &text().get(keys::BUTTON_BUILD), BUILD_COLOR, a);
+    }
+    if let Some(r) = corners.leave {
+        draw_label_button(d, r, &text().get(keys::BUTTON_LEAVE), ONLINE_COLOR, a);
+    }
+    for (i, seat) in model.others.iter().take(MAX_SEATS - 1).enumerate() {
+        if let Some(r) = corners.chip(i) {
+            draw_seat_chip(d, r, seat, a);
         }
-        None => d.draw_text(&model.title, px + SLOT_TITLE, text_y, HUD_TEXT_SIZE, TEXT),
     }
+    // The minimap, part of the right cluster: it fades with it.
+    if let (Some(rect), Some(layer)) = (corners.minimap, minimap) {
+        let picture = crate::minimap::picture(layer.marks, rect, layer.field, crate::indicators::label_font(1.0), &crate::tuning::tuning());
+        crate::render::minimap::draw_minimap(d, rect, layer.texture, layer.field, &picture, a);
+    }
+}
 
-    // A tank glyph stands for "enemies": the word does not fit the 960 px
-    // bar beside everything else, and the count next to a tank reads.
-    draw_tank_glyph(d, px + s.enemies, py + (ph - TANK_GLYPH_H) / 2, DIM);
-    let alive = format!("{}", model.enemies_alive);
-    d.draw_text(&alive, px + s.enemy_count, text_y, HUD_TEXT_SIZE, TEXT);
-    if model.enemies_pending > 0 {
-        // Two digits at most before the number stops being a count.
-        let x = px + s.enemy_count + (alive.len() as i32).min(2) * 12 + 6;
-        d.draw_text(&format!("+{}", model.enemies_pending), x, text_y, HUD_TEXT_SIZE, DIM);
-    }
+/// A cluster's plate: the dark fill and an edge in `edge`.
+pub(crate) fn draw_plate(d: &mut impl RaylibDraw, r: Rectangle, edge: Color, a: f32) {
+    d.draw_rectangle_rounded(r, 0.12, 6, faded(PLATE_FILL, a));
+    d.draw_rectangle_rounded_lines_ex(r, 0.12, 6, 1.5, faded(edge, a));
+}
 
-    draw_heart(d, px + s.heart, py + (ph - 12) / 2);
-    match p2 {
-        None => d.draw_text(&format!("{}", model.local.hp), px + s.hp, text_y, HUD_TEXT_SIZE, model.local.hp_color),
-        Some(p2) => {
-            let small_y = py + (ph - HUD_SMALL_TEXT_SIZE) / 2;
-            draw_pair_sized(d, px + s.hp, small_y, 3, (&format!("{}", model.local.hp), team_tinted(model.local.hp_color, 0)), (&format!("{}", p2.hp), team_tinted(p2.hp_color, 1)), HUD_SMALL_TEXT_SIZE, CHAR_W_SMALL);
-        }
-    }
+/// One seat's vitals in `block`: the heart, the health number and its
+/// gauge in the seat's own ring colours, the shell sprite and its count,
+/// the speed and shield gauges; under them the weapon queue, the live
+/// weapon outlined in its accent.
+fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, hud: &PlayerHud, seat: u8, textures: &Textures, a: f32) {
+    let (x, y) = (block.x.round() as i32, block.y.round() as i32);
+    let row = ROW_H as i32;
+    let text_y = y + (row - HUD_TEXT_SIZE) / 2;
+    let white = faded(Color::WHITE, a);
+
+    draw_heart(d, x + V_HEART, y + (row - 12) / 2, a);
+    d.draw_text(&hud.hp.to_string(), x + V_HP, text_y, HUD_TEXT_SIZE, faded(hud.hp_color, a));
+    let health = (hud.hp as f32 / MAX_DAMAGE).clamp(0.0, 1.0);
+    let ramp = HealthRamp::player(seat);
+    draw_gauge(d, x + V_HEALTH, y + (row - GAUGE_H) / 2, V_HEALTH_W, GAUGE_H, health, faded(ramp.color(health), a), faded(DIM, a));
 
     // The shell sprite's in-flight frame, identical on every row of the
     // sheet, full-bleed at its own 32 px.
     let shell_src = Rectangle::new(3.0 * SHELL_TEXTURE_SIZE, 0.0, SHELL_TEXTURE_SIZE, SHELL_TEXTURE_SIZE);
-    let shell_dest = Rectangle::new((px + s.shell) as f32, py as f32, SHELL_TEXTURE_SIZE, SHELL_TEXTURE_SIZE);
-    d.draw_texture_pro(textures.shells, shell_src, shell_dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-    match p2 {
-        None => {
-            if model.local.shells_active {
-                active_outline(d, px + s.shell, py, s.weapons - s.shell - 8, ph, TEXT);
-            }
-            d.draw_text(&format!("{}", model.local.shells), px + s.shells, count_y, s.count_size, model.local.shells_color);
-        }
-        Some(p2) => {
-            let small_y = py + (ph - HUD_SMALL_TEXT_SIZE) / 2;
-            draw_pair_sized(d, px + s.shells, small_y, 2, (&format!("{}", model.local.shells), team_tinted(model.local.shells_color, 0)), (&format!("{}", p2.shells), team_tinted(p2.shells_color, 1)), HUD_SMALL_TEXT_SIZE, CHAR_W_SMALL);
-            draw_pair_underlines_sized(d, px + s.shells, py, ph, 2, model.local.shells_active, p2.shells_active, CHAR_W_SMALL);
-        }
+    let shell_dest = Rectangle::new((x + V_SHELL) as f32, y as f32, SHELL_TEXTURE_SIZE, SHELL_TEXTURE_SIZE);
+    d.draw_texture_pro(textures.shells, shell_src, shell_dest, Vector2::new(0.0, 0.0), 0.0, white);
+    d.draw_text(&hud.shells.to_string(), x + V_SHELLS, text_y, HUD_TEXT_SIZE, faded(hud.shells_color, a));
+    if hud.shells_active {
+        active_outline(d, x + V_SHELL, y, V_SHELLS + V_COUNT_W - V_SHELL, row, faded(TEXT, a));
     }
 
-    for i in 0..WEAPON_SLOTS {
-        let slot = model.local.weapons[i];
-        let x = px + s.weapons + i as i32 * s.weapon_slot_w;
+    let t = text();
+    draw_gauge_slot(d, x + V_SPEED, y, row, &t.get(keys::HUD_SPEED), hud.speed, SPEED_COLOR, true, a);
+    draw_gauge_slot(d, x + V_SHIELD, y, row, &t.get(keys::HUD_SHIELD), hud.shield, SHIELD_COLOR, true, a);
+
+    let y = y + row;
+    let text_y = y + (row - HUD_TEXT_SIZE) / 2;
+    for (i, slot) in hud.weapons.iter().enumerate().take(WEAPON_SLOTS) {
+        let sx = x + i as i32 * V_WEAPON_W;
         let texture = match slot.weapon {
             ActiveWeapon::Laser => textures.pickup_laser,
             ActiveWeapon::Plasma => textures.pickup_plasma,
@@ -256,71 +202,57 @@ pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures
             ActiveWeapon::Flamethrower => textures.pickup_flamethrower,
             ActiveWeapon::Shell => textures.shells,
         };
-        let stocked = slot.count > 0 || p2.is_some_and(|p| p.weapons[i].count > 0);
         let src = Rectangle::new(0.0, 0.0, PICKUP_TEXTURE_SIZE, PICKUP_TEXTURE_SIZE);
-        let icon = s.weapon_icon as f32;
-        let dest = Rectangle::new(x as f32, py as f32, icon, icon);
-        let tint = if stocked { Color::WHITE } else { Color::new(255, 255, 255, 70) };
+        let icon = V_WEAPON_ICON as f32;
+        let dest = Rectangle::new(sx as f32, (y + (row - V_WEAPON_ICON) / 2) as f32, icon, icon);
+        let tint = if slot.count > 0 { white } else { faded(Color::new(255, 255, 255, 70), a) };
         d.draw_texture_pro(texture, src, dest, Vector2::new(0.0, 0.0), 0.0, tint);
-        let count_of = |slot: WeaponSlot| -> (String, Color) {
-            if slot.count > 0 {
-                (format!("{}", slot.count), weapon_color(slot.weapon))
-            } else {
-                ("--".to_string(), DIM)
-            }
-        };
-        let count_x = x + s.weapon_icon + 4;
-        match p2 {
-            None => {
-                let (count, color) = count_of(slot);
-                d.draw_text(&count, count_x, count_y, s.count_size, color);
-                if slot.active {
-                    active_outline(d, x, py, s.weapon_slot_w - 8, ph, weapon_color(slot.weapon));
-                }
-            }
-            Some(p2) => {
-                // The small font: four pairs have to fit before the gauges.
-                let (a, ac) = count_of(slot);
-                let (b, bc) = count_of(p2.weapons[i]);
-                let small_y = py + (ph - HUD_SMALL_TEXT_SIZE) / 2;
-                draw_pair_sized(d, count_x, small_y, 2, (&a, ac), (&b, bc), HUD_SMALL_TEXT_SIZE, CHAR_W_SMALL);
-                draw_pair_underlines_sized(d, count_x, py, ph, 2, slot.active, p2.weapons[i].active, CHAR_W_SMALL);
-            }
-        }
-    }
-
-    let t = text();
-    let bars: [(String, f32, Option<f32>, Color, bool); 3] = [
-        (t.get(keys::HUD_SPEED), model.local.speed, p2.map(|p| p.speed), SPEED_COLOR, true),
-        (t.get(keys::HUD_SHIELD), model.local.shield, p2.map(|p| p.shield), SHIELD_COLOR, true),
-        (t.get(keys::HUD_FROG), model.frog.unwrap_or(0.0), None, FROG_COLOR, model.frog.is_some()),
-    ];
-    for (i, (label, frac, frac2, color, present)) in bars.iter().enumerate() {
-        let x = px + s.bars + i as i32 * BAR_SLOT_W;
-        let label_color = if *present { DIM } else { SPENT };
-        d.draw_text(label, x, py + 5, HUD_LABEL_SIZE, label_color);
-        match frac2 {
-            // Two thin bars, player 1 over player 2, ending where the
-            // single bar does.
-            Some(frac2) => {
-                let bottom = py + ph - 4;
-                draw_gauge(d, x, bottom - 2 * BAR2_H - BAR2_GAP, BAR_W, BAR2_H, *frac, *color, label_color);
-                draw_gauge(d, x, bottom - BAR2_H, BAR_W, BAR2_H, *frac2, *color, label_color);
-            }
-            None => draw_gauge(d, x, py + ph - 4 - BAR_H, BAR_W, BAR_H, if *present { *frac } else { 0.0 }, *color, label_color),
-        }
-    }
-
-    // The other seats, one chip each, at the bar's right end. The couch
-    // tables have no strip and `others` is empty behind them.
-    if let Some(strip) = s.seats {
-        for (i, seat) in model.others.iter().take(MAX_SEATS - 1).enumerate() {
-            draw_seat_chip(d, px + seat_chip_x(strip, i), py, ph, seat);
+        let (count, color) = if slot.count > 0 { (slot.count.to_string(), weapon_color(slot.weapon)) } else { ("--".to_string(), DIM) };
+        d.draw_text(&count, sx + V_WEAPON_ICON + 3, text_y, HUD_TEXT_SIZE, faded(color, a));
+        if slot.active {
+            active_outline(d, sx, y, V_WEAPON_W - 2, row, faded(weapon_color(slot.weapon), a));
         }
     }
 }
 
-/// One outlined bar `w` x `h` px at (`x`, `y`), filled to `frac` in whole
+/// The right cluster's first row in `info`: the level button and the wave
+/// count beside it on a level (`level` is its number and whether the level
+/// select it opens is up), else the mission word with its count; the enemy
+/// count with the ones still to come; the frog's gauge.
+fn draw_info(d: &mut impl RaylibDraw, info: Rectangle, model: &HudModel, level: Option<(usize, bool)>, a: f32) {
+    let (x, y, h) = (info.x.round() as i32, info.y.round() as i32, info.height.round() as i32);
+    let text_y = y + (h - HUD_TEXT_SIZE) / 2;
+    match level {
+        Some((number, open)) => {
+            draw_level_button(d, Rectangle::new(info.x, info.y, LEVEL_BUTTON_W, info.height), number, open, a);
+            if let Some((index, total)) = model.wave {
+                let wx = x + LEVEL_BUTTON_W as i32 + LEVEL_WAVE_GAP;
+                d.draw_text(&format!("{index}/{total}"), wx, text_y, HUD_TEXT_SIZE, faded(TEXT, a));
+            }
+        }
+        None => d.draw_text(&model.title, x, text_y, HUD_TEXT_SIZE, faded(TEXT, a)),
+    }
+    // A tank glyph stands for "enemies": the count next to a tank reads.
+    draw_tank_glyph(d, x + I_ENEMIES, y + (h - TANK_GLYPH_H) / 2, faded(DIM, a));
+    d.draw_text(&model.enemies_alive.to_string(), x + I_ENEMY_COUNT, text_y, HUD_TEXT_SIZE, faded(TEXT, a));
+    if model.enemies_pending > 0 {
+        d.draw_text(&format!("+{}", model.enemies_pending), x + I_PENDING, text_y, HUD_TEXT_SIZE, faded(DIM, a));
+    }
+    draw_gauge_slot(d, x + I_FROG, y, h, &text().get(keys::HUD_FROG), model.frog.unwrap_or(0.0), FROG_COLOR, model.frog.is_some(), a);
+}
+
+/// A gauge in its slot at `x` of a row from `y`, `h` tall: its label over
+/// its bar, both dim when `present` is false (the FROG gauge of a round
+/// without one).
+#[allow(clippy::too_many_arguments)]
+fn draw_gauge_slot(d: &mut impl RaylibDraw, x: i32, y: i32, h: i32, label: &str, frac: f32, color: Color, present: bool, a: f32) {
+    let top = y + (h - ROW_H as i32) / 2;
+    let label_color = faded(if present { DIM } else { SPENT }, a);
+    d.draw_text(label, x, top + 3, UI_SMALL_TEXT, label_color);
+    draw_gauge(d, x, top + 19, GAUGE_W, GAUGE_H, if present { frac } else { 0.0 }, faded(color, a), label_color);
+}
+
+/// One outlined bar `w` x `h` at (`x`, `y`), filled to `frac` in whole
 /// 2 px blocks so it drains in steps like every other gauge in the game.
 fn draw_gauge(d: &mut impl RaylibDraw, x: i32, y: i32, w: i32, h: i32, frac: f32, color: Color, outline: Color) {
     d.draw_rectangle_lines_ex(Rectangle::new(x as f32, y as f32, w as f32, h as f32), 1.0, outline);
@@ -332,74 +264,34 @@ fn draw_gauge(d: &mut impl RaylibDraw, x: i32, y: i32, w: i32, h: i32, frac: f32
     }
 }
 
-/// One seat of the compact strip: its number over its health gauge, both
-/// in the ring colour that seat wears on the field, so the chip and the
-/// tank are read as one. A wreck keeps its place with an empty gauge and
-/// both halves in the spent grey - the strip is as long as the round has
-/// seats, whoever is still standing.
-fn draw_seat_chip(d: &mut impl RaylibDraw, x: i32, y: i32, h: i32, seat: &SeatHud) {
-    let color = if seat.alive { team_color(seat.seat) } else { SPENT };
-    let outline = if seat.alive { DIM } else { SPENT };
+/// One seat of the other seats' strip: its number over its health gauge,
+/// both in the ring colour that seat wears on the field, so the chip and
+/// the tank are read as one. A wreck keeps its place with an empty gauge
+/// and both halves in the spent grey - the strip is as long as the round
+/// has seats, whoever is still standing.
+fn draw_seat_chip(d: &mut impl RaylibDraw, r: Rectangle, seat: &SeatHud, a: f32) {
+    let color = faded(if seat.alive { team_color(seat.seat) } else { SPENT }, a);
+    let outline = faded(if seat.alive { DIM } else { SPENT }, a);
     let label = format!("{}", seat.seat + 1);
-    d.draw_text(&label, x + (SEAT_CHIP_W - CHAR_W_SMALL) / 2, y + 4, HUD_SMALL_TEXT_SIZE, color);
-    draw_gauge(d, x, y + h - 4 - BAR_H, SEAT_CHIP_W, BAR_H, seat.health, color, outline);
+    let (x, y, w, h) = (r.x as i32, r.y as i32, r.width as i32, r.height as i32);
+    d.draw_text(&label, x + (w - width(&label, UI_SMALL_TEXT)) / 2, y + 1, UI_SMALL_TEXT, color);
+    draw_gauge(d, x, y + h - GAUGE_H - 1, w, GAUGE_H, seat.health, color, outline);
 }
 
-/// A two-player readout, `left|right`: the left number right-aligned to
-/// the dim separator in a cell `digits` wide, the right one after it, each
-/// side in its own colour, at an explicit font size and cell width - the weapon
-/// pairs use the small font so four slots fit.
-#[allow(clippy::too_many_arguments)]
-fn draw_pair_sized(d: &mut impl RaylibDraw, x: i32, text_y: i32, digits: i32, left: (&str, Color), right: (&str, Color), size: i32, ch: i32) {
-    let sep_x = x + digits * ch;
-    let left_x = sep_x - left.0.len() as i32 * ch;
-    d.draw_text(left.0, left_x, text_y, size, left.1);
-    d.draw_text("|", sep_x + 2, text_y, size, DIM);
-    d.draw_text(right.0, sep_x + ch, text_y, size, right.1);
-}
-
-/// The two-player stand-in for `active_outline`: a 2 px underline under
-/// whichever side of a pair is what that player's trigger fires, in that
-/// player's team colour, at an explicit cell width - for the small-font
-/// weapon pairs.
-#[allow(clippy::too_many_arguments)]
-fn draw_pair_underlines_sized(d: &mut impl RaylibDraw, x: i32, y: i32, h: i32, digits: i32, left: bool, right: bool, ch: i32) {
-    let w = digits * ch - 2;
-    let uy = y + h - 4;
-    if left {
-        d.draw_rectangle(x, uy, w, 2, TEAM_COLORS[0]);
-    }
-    if right {
-        d.draw_rectangle(x + (digits + 1) * ch, uy, w, 2, TEAM_COLORS[1]);
-    }
-}
-
-/// A two-player readout colour: `hud_number_color`'s plain white becomes
-/// the player's team colour, so each side of a `60|70` pair is its
-/// player's, while the warning and critical colours still win.
-fn team_tinted(color: Color, player: usize) -> Color {
-    let plain = color.r == TEXT.r && color.g == TEXT.g && color.b == TEXT.b && color.a == TEXT.a;
-    if plain { TEAM_COLORS[player % TEAM_COLORS.len()] } else { color }
-}
-
-/// The outline marking which slot the trigger fires: 2 px, inset one
-/// block from the bar's top and bottom edges.
+/// The outline marking which slot the trigger fires: 2 pt, inset one
+/// block from the row's top and bottom edges.
 fn active_outline(d: &mut impl RaylibDraw, x: i32, y: i32, w: i32, h: i32, color: Color) {
-    d.draw_rectangle_lines_ex(
-        Rectangle::new((x - 2) as f32, (y + 2) as f32, (w + 4) as f32, (h - 6) as f32),
-        2.0,
-        color,
-    );
+    d.draw_rectangle_lines_ex(Rectangle::new((x - 2) as f32, (y + 2) as f32, (w + 4) as f32, (h - 4) as f32), 2.0, color);
 }
 
-/// A pixel heart of 2 px blocks, 14x12, for the HP slot. Drawn rather
+/// A pixel heart of 2 px blocks, 14x12, for the health slot. Drawn rather
 /// than loaded: it is the one glyph in the game with no sheet of its own.
-fn draw_heart(d: &mut impl RaylibDraw, x: i32, y: i32) {
+fn draw_heart(d: &mut impl RaylibDraw, x: i32, y: i32, a: f32) {
     const ROWS: [&str; 6] = [".##.##.", "#######", "#######", ".#####.", "..###..", "...#..."];
     for (row, line) in ROWS.iter().enumerate() {
         for (col, c) in line.chars().enumerate() {
             if c == '#' {
-                d.draw_rectangle(x + col as i32 * 2, y + row as i32 * 2, 2, 2, HEART);
+                d.draw_rectangle(x + col as i32 * 2, y + row as i32 * 2, 2, 2, faded(HEART, a));
             }
         }
     }
@@ -407,7 +299,7 @@ fn draw_heart(d: &mut impl RaylibDraw, x: i32, y: i32) {
 
 /// A pixel tank seen from above, 7x7 blocks of 2 px (14x14): tracks down
 /// both sides, the hull between, the barrel up. The players button shows
-/// one or two of these, the play bar one for the enemy count.
+/// one or two of these, the right cluster one for the enemy count.
 fn draw_tank_glyph(d: &mut impl RaylibDraw, x: i32, y: i32, color: Color) {
     const ROWS: [&str; 7] = ["...#...", "...#...", "#.###.#", "#.###.#", "#.###.#", "#.###.#", "#.....#"];
     for (row, line) in ROWS.iter().enumerate() {
@@ -419,92 +311,89 @@ fn draw_tank_glyph(d: &mut impl RaylibDraw, x: i32, y: i32, color: Color) {
     }
 }
 
-/// The players button: outlined like the mode button, dim until the
-/// dialog it opens is up, its glyphs the tank colours themselves.
-pub fn draw_players_button(d: &mut impl RaylibDraw, panel: Rect, players: PlayerCount, open: bool) {
-    let r = players_button_rect(panel);
-    let outline = if open { TEXT } else { DIM };
-    d.draw_rectangle_lines_ex(Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0), 2.0, outline);
-    let glyph = 14;
+/// A button's frame: 2 pt, one block in from the top and bottom of its
+/// rect, the shape every button of the corners and the builder's bar share.
+fn button_frame(r: Rectangle) -> Rectangle {
+    Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0)
+}
+
+/// A framed button with its label centred, in `color`.
+fn draw_label_button(d: &mut impl RaylibDraw, r: Rectangle, label: &str, color: Color, a: f32) {
+    d.draw_rectangle_lines_ex(button_frame(r), 2.0, faded(color, a));
+    let text_w = width(label, HUD_TEXT_SIZE);
+    let (x, y) = ((r.x + (r.width - text_w as f32) / 2.0) as i32, (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32);
+    d.draw_text(label, x, y, HUD_TEXT_SIZE, faded(color, a));
+}
+
+/// The players button: dim until the dialog it opens is up, its glyphs
+/// the tank colours themselves.
+fn draw_players_button(d: &mut impl RaylibDraw, r: Rectangle, players: PlayerCount, open: bool, a: f32) {
+    d.draw_rectangle_lines_ex(button_frame(r), 2.0, faded(if open { TEXT } else { DIM }, a));
+    let glyph = TANK_GLYPH_H;
     let gy = (r.y + (r.height - glyph as f32) / 2.0) as i32;
     if players.count() < 2 {
-        draw_tank_glyph(d, (r.x + (r.width - glyph as f32) / 2.0) as i32, gy, TEAM_COLORS[0]);
+        draw_tank_glyph(d, (r.x + (r.width - glyph as f32) / 2.0) as i32, gy, faded(TEAM_COLORS[0], a));
     } else {
         let gap = 6;
         let x = (r.x + (r.width - (2 * glyph + gap) as f32) / 2.0) as i32;
-        draw_tank_glyph(d, x, gy, TEAM_COLORS[0]);
-        draw_tank_glyph(d, x + glyph + gap, gy, TEAM_COLORS[1]);
+        draw_tank_glyph(d, x, gy, faded(TEAM_COLORS[0], a));
+        draw_tank_glyph(d, x + glyph + gap, gy, faded(TEAM_COLORS[1], a));
     }
 }
 
-/// The RESTART button: the bar's frame around a circular arrow, the one
-/// restart glyph a phone player reads without a label, in the bar's text
-/// colour so it is neither the builder's amber nor a weapon accent. The
-/// press is `tuning::request_restart`, the same path as the dev panel's
-/// button, and lands as `Input::restart_pressed` like the R key.
-pub fn draw_restart_button(d: &mut impl RaylibDraw, panel: Rect) {
-    let r = restart_button_rect(panel);
-    d.draw_rectangle_lines_ex(Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0), 2.0, TEXT);
+/// The RESTART button: the frame around a circular arrow, the one restart
+/// glyph a phone player reads without a label, in the text colour so it
+/// is neither the builder's amber nor a weapon accent. The press is
+/// `tuning::request_restart`, the same path as the dev panel's button, and
+/// lands as `Input::restart_pressed` like the R key.
+fn draw_restart_button(d: &mut impl RaylibDraw, r: Rectangle, a: f32) {
+    let color = faded(TEXT, a);
+    d.draw_rectangle_lines_ex(button_frame(r), 2.0, color);
     let center = Vector2::new(r.x + r.width / 2.0, r.y + r.height / 2.0);
     // Three quarters of a ring, the gap at the right, an arrowhead on the
     // end that points on around the circle.
     let (inner, outer) = (6.0, 10.0);
     let (start, end) = (45.0, 315.0);
-    d.draw_ring(center, inner, outer, start, end, 24, TEXT);
+    d.draw_ring(center, inner, outer, start, end, 24, color);
     let rad = (end as f32).to_radians();
     let mid = (inner + outer) / 2.0;
     let tip_at = Vector2::new(center.x + mid * rad.cos(), center.y + mid * rad.sin());
     let tangent = Vector2::new(-rad.sin(), rad.cos());
     let radial = Vector2::new(rad.cos(), rad.sin());
     let tip = Vector2::new(tip_at.x + tangent.x * 6.0, tip_at.y + tangent.y * 6.0);
-    let a = Vector2::new(tip_at.x + radial.x * 5.0, tip_at.y + radial.y * 5.0);
-    let b = Vector2::new(tip_at.x - radial.x * 5.0, tip_at.y - radial.y * 5.0);
-    d.draw_triangle(a, b, tip, TEXT);
-    d.draw_triangle(tip, b, a, TEXT);
+    let p = Vector2::new(tip_at.x + radial.x * 5.0, tip_at.y + radial.y * 5.0);
+    let q = Vector2::new(tip_at.x - radial.x * 5.0, tip_at.y - radial.y * 5.0);
+    d.draw_triangle(p, q, tip, color);
+    d.draw_triangle(tip, q, p, color);
 }
 
-/// The gap between the level button and the wave count beside it.
-const LEVEL_WAVE_GAP: i32 = 8;
-
-/// The level button: the bar's slot frame in the levels' amber around
-/// `LEVEL 3` - the word small, the number in the bar's size - washed
-/// amber while the level select it opens is up.
-pub fn draw_level_button(d: &mut impl RaylibDraw, panel: Rect, number: usize, open: bool) {
-    let r = level_button_rect(panel);
-    let frame = Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0);
+/// The level button: its frame in the levels' amber around `LEVEL 3` -
+/// the word small, the number in the readouts' size - washed amber while
+/// the level select it opens is up.
+fn draw_level_button(d: &mut impl RaylibDraw, r: Rectangle, number: usize, open: bool, a: f32) {
+    let frame = button_frame(r);
     if open {
-        d.draw_rectangle_rec(frame, Color::new(BUILD_COLOR.r, BUILD_COLOR.g, BUILD_COLOR.b, 50));
+        d.draw_rectangle_rec(frame, faded(Color::new(BUILD_COLOR.r, BUILD_COLOR.g, BUILD_COLOR.b, 50), a));
     }
-    d.draw_rectangle_lines_ex(frame, 2.0, BUILD_COLOR);
+    let amber = faded(BUILD_COLOR, a);
+    d.draw_rectangle_lines_ex(frame, 2.0, amber);
     let word = text().get(keys::BAR_LEVEL);
     let number = number.to_string();
-    let (word_w, number_w) = (width(&word, HUD_LABEL_SIZE), width(&number, HUD_TEXT_SIZE));
+    let (word_w, number_w) = (width(&word, UI_SMALL_TEXT), width(&number, HUD_TEXT_SIZE));
     let x = (r.x + (r.width - (word_w + LEVEL_BUTTON_WORD_GAP + number_w) as f32) / 2.0) as i32;
     let number_y = (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
     // The word sits on the number's baseline rather than its middle.
-    let word_y = number_y + HUD_TEXT_SIZE - HUD_LABEL_SIZE - 2;
-    d.draw_text(&word, x, word_y, HUD_LABEL_SIZE, BUILD_COLOR);
-    d.draw_text(&number, x + word_w + LEVEL_BUTTON_WORD_GAP, number_y, HUD_TEXT_SIZE, BUILD_COLOR);
+    let word_y = number_y + HUD_TEXT_SIZE - UI_SMALL_TEXT - 2;
+    d.draw_text(&word, x, word_y, UI_SMALL_TEXT, amber);
+    d.draw_text(&number, x + word_w + LEVEL_BUTTON_WORD_GAP, number_y, HUD_TEXT_SIZE, amber);
 }
 
-/// An outlined bar slot with its label centred, in `color`: the shape the
-/// mode button and the online round's `LEAVE` button share.
-fn draw_slot_button(d: &mut impl RaylibDraw, r: Rectangle, label: &str, color: Color) {
+/// An outlined bar slot with its label centred, in `color`: the builder
+/// bar's mode button, `PLAY` (`editor::Bar::play`).
+pub fn draw_slot_button(d: &mut impl RaylibDraw, r: Rectangle, label: &str, color: Color) {
     d.draw_rectangle_lines_ex(Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0), 2.0, color);
     let text_w = width(label, HUD_TEXT_SIZE);
     d.draw_text(label, (r.x + (r.width - text_w as f32) / 2.0) as i32, (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, color);
-}
-
-/// The mode button: an outlined slot with its label centred, in `color`.
-pub fn draw_mode_button(d: &mut impl RaylibDraw, panel: Rect, label: &str, color: Color) {
-    draw_slot_button(d, mode_button_rect(panel), label, color);
-}
-
-/// The `LEAVE` button of an online round, in the mode button's slot and
-/// in the room blue: the one way out of a room a finger can reach, and
-/// the only one that names itself.
-pub fn draw_leave_button(d: &mut impl RaylibDraw, panel: Rect) {
-    draw_slot_button(d, leave_button_rect(panel), &text().get(keys::BUTTON_LEAVE), ONLINE_COLOR);
 }
 
 /// The dialog panel both questions share: shadow, rounded fill, outline,
@@ -530,49 +419,63 @@ fn draw_dialog_button(d: &mut impl RaylibDraw, rect: Rectangle, label: &str, col
     d.draw_text(label, (rect.x + (rect.width - w as f32) / 2.0) as i32, (rect.y + (rect.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, color);
 }
 
-/// Draw the players dialog over the (already dimmed) field: the live
-/// count's button highlighted, the other in the action colour. Field
-/// space, like `draw_leave_dialog`.
-pub fn draw_players_dialog(d: &mut impl RaylibDraw, field: Rect, players: PlayerCount) {
+/// Draw the players dialog over the (already dimmed) window: the live
+/// count's button highlighted, the other in the action colour, and its
+/// line naming the controls of the input `hints` says is in use. In UI
+/// points, centred in the chrome's `area`, like `draw_leave_dialog`.
+pub fn draw_players_dialog(d: &mut impl RaylibDraw, area: Rect, players: PlayerCount, hints: Hints) {
     let t = text();
-    let r = players_dialog_rects(field);
-    draw_dialog_panel(d, r.panel, &t.get(keys::PLAYERS_TITLE), &t.get(keys::PLAYERS_KEYS));
+    let r = players_dialog_rects(area);
+    draw_dialog_panel(d, r.panel, &t.get(keys::PLAYERS_TITLE), &t.get(hints.pick(keys::PLAYERS_KEYS, keys::PLAYERS_TOUCH)));
     let live_fill = Some(Color::new(255, 255, 255, 40));
     let one_live = players == PlayerCount::ONE;
     draw_dialog_button(d, r.one, &t.get(keys::PLAYERS_ONE), if one_live { TEXT } else { BUILD_COLOR }, one_live.then_some(live_fill).flatten());
     draw_dialog_button(d, r.two, &t.get(keys::PLAYERS_TWO), if one_live { BUILD_COLOR } else { TEXT }, (!one_live).then_some(live_fill).flatten());
 }
 
-/// Draw the leave-round dialog over the (already dimmed) field. Field
-/// space: call inside the field camera.
-pub fn draw_leave_dialog(d: &mut impl RaylibDraw, field: Rect) {
+/// Draw the leave-round dialog over the (already dimmed) window. In UI
+/// points: call inside the UI camera, centred in the chrome's `area`.
+pub fn draw_leave_dialog(d: &mut impl RaylibDraw, area: Rect) {
     let t = text();
-    let r = leave_dialog_rects(field);
+    let r = leave_dialog_rects(area);
     draw_dialog_panel(d, r.panel, &t.get(keys::LEAVE_TITLE), &t.get(keys::LEAVE_SUB));
     draw_dialog_button(d, r.leave, &t.get(keys::LEAVE_CONFIRM), BUILD_COLOR, None);
     draw_dialog_button(d, r.stay, &t.get(keys::LEAVE_STAY), TEXT, None);
+}
+
+/// One line of a banner in UI points, centred on the chrome's `area` at
+/// `y`: set in `size` where the area has the room and smaller where it has
+/// not (`hud::banner_size`). Answers the size it was set in.
+pub fn draw_banner(d: &mut impl RaylibDraw, area: Rect, text: &str, size: i32, y: i32, color: Color) -> i32 {
+    let size = banner_size(text, size, area);
+    let w = width(text, size);
+    d.draw_text(text, (area.x + area.w / 2.0).round() as i32 - w / 2, y, size, color);
+    size
 }
 
 /// Draw the end screen under its outcome (docs/levels.md): every level
 /// complete after the last one's win, the round's time and wrecks, the
 /// wrecks by seat from two seats, then a level's buttons - the way it is
 /// counting down to carrying the count - or free play's `countdown` in
-/// their place. Field space, over the dim, at the rows
-/// `hud::result_layout` gives, which is what the hit tests read too.
-pub fn draw_result(d: &mut impl RaylibDraw, field: Rect, view: &ResultView, countdown: &str) {
-    fn centred(d: &mut impl RaylibDraw, field: Rect, line: &str, y: f32, size: i32, color: Color) {
+/// their place. In UI points over the dim, centred in the chrome's
+/// `area`, at the rows `hud::result_layout` gives, which is what the hit
+/// tests read too.
+pub fn draw_result(d: &mut impl RaylibDraw, area: Rect, view: &ResultView, countdown: &str) {
+    fn centred(d: &mut impl RaylibDraw, middle: i32, line: &str, y: f32, size: i32, color: Color) {
         let w = width(line, size);
-        d.draw_text(line, (field.w as i32 - w) / 2, y as i32, size, color);
+        d.draw_text(line, middle - w / 2, y as i32, size, color);
     }
+    // Every line's centre: the area's, on a whole point.
+    let middle = (area.x + area.w / 2.0).round() as i32;
     let t = text();
-    let rows = result_layout(field, view);
+    let rows = result_layout(area, view);
     if let (Some(y), Some(ResultButtons { next: Some(NextLevel::FirstAgain { levels }), .. })) = (rows.all_clear_y, view.buttons) {
-        centred(d, field, &t.fmt(keys::RESULT_ALL_CLEAR, &[("count", levels.into())]), y, RESULT_LINE_SIZE, BUILD_COLOR);
+        centred(d, middle, &t.fmt(keys::RESULT_ALL_CLEAR, &[("count", levels.into())]), y, RESULT_LINE_SIZE, BUILD_COLOR);
     }
     let time = t.fmt(keys::RESULT_TIME, &[("time", clock_text(view.stats.seconds).into())]);
     let wrecks = t.fmt(keys::RESULT_WRECKS, &[("n", view.stats.destroyed.into()), ("total", view.stats.enemies.into())]);
     let (time_w, wrecks_w) = (width(&time, RESULT_LINE_SIZE), width(&wrecks, RESULT_LINE_SIZE));
-    let x = (field.w as i32 - time_w - RESULT_STATS_GAP - wrecks_w) / 2;
+    let x = middle - (time_w + RESULT_STATS_GAP + wrecks_w) / 2;
     d.draw_text(&time, x, rows.stats_y as i32, RESULT_LINE_SIZE, Color::RAYWHITE);
     d.draw_text(&wrecks, x + time_w + RESULT_STATS_GAP, rows.stats_y as i32, RESULT_LINE_SIZE, Color::RAYWHITE);
     if let Some(y) = rows.seats_y {
@@ -583,7 +486,7 @@ pub fn draw_result(d: &mut impl RaylibDraw, field: Rect, view: &ResultView, coun
             .map(|seat| format!("{} {}", t.fmt(keys::SEAT_LABEL, &[("n", (seat + 1).into())]), view.stats.by_seat[seat]))
             .collect();
         let total: i32 = parts.iter().map(|p| width(p, RESULT_SEATS_SIZE)).sum::<i32>() + gap * (seats as i32 - 1);
-        let mut x = (field.w as i32 - total) / 2;
+        let mut x = middle - total / 2;
         for (seat, part) in parts.iter().enumerate() {
             d.draw_text(part, x, y as i32, RESULT_SEATS_SIZE, team_color(seat as u8));
             x += width(part, RESULT_SEATS_SIZE) + gap;
@@ -617,168 +520,63 @@ pub fn draw_result(d: &mut impl RaylibDraw, field: Rect, view: &ResultView, coun
         }
         (None, _) => {
             if let Some(y) = rows.countdown_y {
-                centred(d, field, countdown, y, RESULT_LINE_SIZE, Color::RAYWHITE);
+                centred(d, middle, countdown, y, RESULT_LINE_SIZE, Color::RAYWHITE);
             }
         }
     }
 }
+
 
 #[cfg(test)]
-mod bar_tests {
+mod corner_tests {
     use super::*;
-    use crate::hud::{online_button_rect, PLAYERS_BUTTON_GAP};
-    use crate::{PICKUP_TEXTURE_SIZE, SHELL_TEXTURE_SIZE};
+    use crate::hud::{CHIP_H, CHIP_W, HUD_GAUGE_LABEL_MAX_PX, INFO_TITLE_W, INFO_W, VITALS_W};
 
-    fn default_panel() -> Rect {
-        Rect::new(0.0, 0.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::HUD_BAR_HEIGHT as f32)
-    }
-
-    /// The slots must stay inside the default bar and never overlap, in
-    /// both tables: the widest thing each can hold is written down here,
-    /// so growing a slot fails loudly rather than drawing over its
-    /// neighbour.
+    /// The vitals block's slots stay inside its width and its two rows and
+    /// never overlap: the widest thing each holds is written down here, so
+    /// growing a slot fails loudly rather than drawing over its neighbour.
     #[test]
-    fn slots_fit_the_default_bar_without_overlapping() {
-        let ch = CHAR_W;
+    fn the_vitals_slots_fit_the_block_without_overlapping() {
+        let three_digits = width("100", HUD_TEXT_SIZE).max(width("888", HUD_TEXT_SIZE));
+        assert!(V_HEART + 14 <= V_HP, "the heart runs into the health number");
+        assert!(three_digits <= V_HP_W && V_HP + V_HP_W <= V_HEALTH, "the health number runs into its gauge");
+        assert!(V_HEALTH + V_HEALTH_W <= V_SHELL, "the health gauge runs into the shell sprite");
+        assert!(V_SHELL + SHELL_TEXTURE_SIZE as i32 <= V_SHELLS);
+        assert!(three_digits <= V_COUNT_W && V_SHELLS + V_COUNT_W <= V_SPEED, "the shells run into the speed gauge");
+        assert!(V_SPEED + GAUGE_SLOT_W <= V_SHIELD);
+        assert_eq!(V_SHIELD + GAUGE_SLOT_W, VITALS_W as i32, "the first row is the block's width");
+        assert!(GAUGE_W <= GAUGE_SLOT_W);
         // The gauge labels' budget, which `text_tests` measures every
-        // language against, is this table's slot less a gap.
-        assert_eq!(BAR_SLOT_W - 2, crate::hud::HUD_GAUGE_LABEL_MAX_PX);
-        for (name, s) in [("one", &SLOTS_ONE), ("two", &SLOTS_TWO), ("compact", &SLOTS_COMPACT)] {
-            // The widest title in English; every language's is held to
-            // the same 158 px by `text_tests::every_language_fits_every_budget`.
-            let title_end = SLOT_TITLE + width("DESTROY 12/12", HUD_TEXT_SIZE);
-            assert!(title_end <= s.enemies, "{name}: title runs into the enemies glyph");
-            assert_eq!(s.enemies - SLOT_TITLE, 158, "{name}: the title budget the catalogue is measured against");
-            let enemies_end = s.enemies + TANK_GLYPH_W;
-            assert!(enemies_end <= s.enemy_count, "{name}");
-            let count_end = s.enemy_count + 2 * ch + 6 + 3 * ch;
-            assert!(count_end <= s.heart, "{name}");
-            assert!(s.heart + 14 <= s.hp, "{name}");
-            assert!(s.hp + s.hp_w <= s.shell, "{name}: HP runs into the shell sprite");
-            assert!(s.shell + SHELL_TEXTURE_SIZE as i32 <= s.shells, "{name}");
-            assert!(s.shells + s.count_w <= s.weapons, "{name}: shells run into the weapons");
-            assert!(s.weapon_icon <= PICKUP_TEXTURE_SIZE as i32, "{name}: the weapon icon is drawn larger than its sheet");
-            assert!(s.weapon_icon + 4 + s.count_w <= s.weapon_slot_w, "{name}: a weapon count overflows its slot");
-            assert!(
-                s.weapons + WEAPON_SLOTS as i32 * s.weapon_slot_w <= s.bars,
-                "{name}: {WEAPON_SLOTS} weapon slots run into the gauges"
-            );
-            assert!(BAR_W <= BAR_SLOT_W);
-            assert!(s.bars + 3 * BAR_SLOT_W <= crate::DEFAULT_SCREEN_WIDTH);
-            // The leftmost of the three buttons at the bar's right end
-            // is what the gauges have to clear.
-            let button = online_button_rect(default_panel());
-            assert!((s.bars + 3 * BAR_SLOT_W) as f32 <= button.x, "{name}: bars run into the ONLINE button");
-            // A table that draws a strip fits a full one: the gauges
-            // clear its origin and `MAX_SEATS - 1` chips clear the
-            // leftmost button, which is the couch bar's, since a couch
-            // round of three or more draws all three buttons.
-            if let Some(strip) = s.seats {
-                assert!(s.bars + 3 * BAR_SLOT_W <= strip, "{name}: the gauges run into the seat strip");
-                let end = seat_chip_x(strip, MAX_SEATS - 1);
-                assert!((end) as f32 <= button.x, "{name}: a full strip runs into the ONLINE button");
-            }
-        }
-        // The pairs fit their cells: three digits a side for HP, two for
-        // the shells, two in the small font for each weapon.
-        assert!(3 * CHAR_W_SMALL + CHAR_W_SMALL + 3 * CHAR_W_SMALL <= SLOTS_TWO.hp_w);
-        assert!(2 * CHAR_W_SMALL + CHAR_W_SMALL + 2 * CHAR_W_SMALL <= SLOTS_TWO.shells_pair_w());
-        assert!(2 * CHAR_W_SMALL + CHAR_W_SMALL + 2 * CHAR_W_SMALL <= SLOTS_TWO.count_w);
-        assert!(SLOTS_TWO.shells + SLOTS_TWO.shells_pair_w() <= SLOTS_TWO.weapons, "two: the shells pair runs into the weapons");
+        // language against, is the slot less a gap.
+        assert_eq!(HUD_GAUGE_LABEL_MAX_PX, GAUGE_SLOT_W - 4);
+        // A label over its bar, both inside a row.
+        assert!(3 + UI_SMALL_TEXT <= 19 && 19 + GAUGE_H <= ROW_H as i32);
+        // The weapon queue: five slots across the second row, each an icon
+        // no larger than its sheet and three digits beside it.
+        assert_eq!(WEAPON_SLOTS as i32 * V_WEAPON_W, VITALS_W as i32);
+        assert!(V_WEAPON_ICON <= PICKUP_TEXTURE_SIZE as i32 && V_WEAPON_ICON <= ROW_H as i32);
+        assert!(V_WEAPON_ICON + 3 + three_digits <= V_WEAPON_W - 2, "a weapon count overflows its slot");
     }
 
-    /// The couch tables are the bar's own: one seat and two get exactly
-    /// the rows they had, and nothing about the strip reaches them.
+    /// The right cluster's first row: the widest mission word with its
+    /// wave count, or the level button with the widest count beside it,
+    /// ends before the enemy count, which ends before the frog's gauge.
     #[test]
-    fn the_couch_tables_are_untouched_and_draw_no_strip() {
-        // Each layout picks its own table, told apart by where its
-        // readouts start and whether it draws a strip.
-        for (layout, table) in
-            [(HudLayout::One, &SLOTS_ONE), (HudLayout::Two, &SLOTS_TWO), (HudLayout::Compact, &SLOTS_COMPACT)]
-        {
-            let picked = Slots::for_layout(layout);
-            assert_eq!((picked.hp, picked.weapons, picked.bars, picked.seats), (table.hp, table.weapons, table.bars, table.seats), "{layout:?}");
-        }
-        for s in [&SLOTS_ONE, &SLOTS_TWO] {
-            assert!(s.seats.is_none(), "a couch table draws no seat strip");
-        }
-        // The one-player readouts are the full font and the two-player
-        // pairs the small one, whatever else moves: the compact table's
-        // arrival did not change which font a couch table sets, and
-        // nothing since has either.
-        assert_eq!(SLOTS_ONE.count_size, HUD_TEXT_SIZE);
-        assert_eq!(SLOTS_TWO.count_size, HUD_SMALL_TEXT_SIZE);
-        // The origins themselves, re-pinned when the seeker missiles made
-        // the weapon strip five slots wide instead of four. Every gap
-        // between readouts went from four pixels to two to pay for it -
-        // the fonts and the couch icons are the sizes they always were, so
-        // the row is denser and starts further left, nothing is smaller.
-        assert_eq!((SLOTS_ONE.hp, SLOTS_ONE.shells, SLOTS_ONE.weapons, SLOTS_ONE.bars), (266, 338, 376, 738));
-        assert_eq!((SLOTS_TWO.hp, SLOTS_TWO.shells, SLOTS_TWO.weapons, SLOTS_TWO.bars), (266, 351, 386, 743));
-        // The couch tables draw the pickup sheet at its own size; only the
-        // compact block, which also pays for the seat strip, shrinks it.
-        assert_eq!(SLOTS_ONE.weapon_icon, PICKUP_TEXTURE_SIZE as i32);
-        assert_eq!(SLOTS_TWO.weapon_icon, PICKUP_TEXTURE_SIZE as i32);
+    fn the_info_slots_fit_the_row_without_overlapping() {
+        assert_eq!(I_TITLE_W, INFO_TITLE_W as i32, "the title's budget is the slot `text_tests` measures");
+        assert!(width("DESTROY 12/12", HUD_TEXT_SIZE) <= I_TITLE_W && I_TITLE_W <= I_ENEMIES);
+        assert!(LEVEL_BUTTON_W as i32 + LEVEL_WAVE_GAP + width("12/12", HUD_TEXT_SIZE) <= I_ENEMIES, "the wave count runs into the enemies");
+        assert!(I_ENEMIES + TANK_GLYPH_W <= I_ENEMY_COUNT);
+        assert!(I_ENEMY_COUNT + width("88", HUD_TEXT_SIZE) + 4 <= I_PENDING, "two digits of enemies run into the +N");
+        assert!(I_PENDING + width("+88", HUD_TEXT_SIZE) <= I_FROG, "the +N runs into the frog's gauge");
+        assert_eq!(I_FROG + GAUGE_SLOT_W, INFO_W as i32, "the row is the cluster's width");
     }
 
-    /// The strip: every chip is finger-wide enough to read, none of them
-    /// overlaps its neighbour, each sits at the same x whatever the round
-    /// holds, and the whole row stays inside the bar at every seat count
-    /// from one to `MAX_SEATS`.
+    /// A chip: its number over its gauge, both inside it.
     #[test]
-    fn the_seat_strip_fits_from_one_seat_to_eight() {
-        let strip = SLOTS_COMPACT.seats.expect("the compact table draws a strip");
-        let panel = default_panel();
-        for seats in 1..=MAX_SEATS {
-            // Chips for every seat but the local one.
-            for i in 0..seats - 1 {
-                let x = seat_chip_x(strip, i);
-                assert_eq!(x, strip + i as i32 * SEAT_CHIP_STRIDE, "a chip's place is its position, not the count");
-                assert!(x >= SLOTS_COMPACT.bars + 3 * BAR_SLOT_W, "chip {i} sits on the gauges");
-                assert!(x + SEAT_CHIP_W + SEAT_CHIP_GAP <= seat_chip_x(strip, i + 1), "chip {i} runs into the next");
-                assert!((x + SEAT_CHIP_W) as f32 <= online_button_rect(panel).x, "chip {i} of {seats} runs into the buttons");
-            }
-        }
-        // A chip's own two rows: the number above, the gauge below, both
-        // inside the bar and clear of each other.
-        let ph = crate::HUD_BAR_HEIGHT;
-        assert!(4 + HUD_SMALL_TEXT_SIZE <= ph - 4 - BAR_H, "the seat number overlaps its gauge");
-        assert!(ph - 4 <= ph);
-        assert!(SEAT_CHIP_W > 4, "a gauge needs room for its outline and a block of fill");
-    }
-
-    #[test]
-    fn the_three_buttons_sit_between_the_bars_and_the_panels_edge() {
-        let panel = default_panel();
-        let online = online_button_rect(panel);
-        let players = players_button_rect(panel);
-        let build = mode_button_rect(panel);
-        assert!(players.width >= 48.0 && players.height == panel.h);
-        assert!(online.x + online.width + PLAYERS_BUTTON_GAP <= players.x);
-        assert!(players.x + players.width + PLAYERS_BUTTON_GAP <= build.x);
-        assert!((SLOTS_TWO.bars + 3 * BAR_SLOT_W) as f32 <= online.x);
-    }
-
-    /// On a level the title slot holds the level button and, in a wave
-    /// round, the widest wave count beside it: both end before the enemy
-    /// count in every table. (The button's own word is `text_tests`'.)
-    #[test]
-    fn the_level_button_and_a_wave_count_fit_the_title_slot() {
-        let button = crate::hud::level_button_rect(default_panel());
-        assert!(button.width >= 48.0 && button.height == default_panel().h, "a finger's target like the other end's");
-        let end = button.x + button.width + (LEVEL_WAVE_GAP + width("12/12", HUD_TEXT_SIZE)) as f32;
-        for (name, s) in [("one", &SLOTS_ONE), ("two", &SLOTS_TWO), ("compact", &SLOTS_COMPACT)] {
-            assert!(end <= s.enemies as f32, "{name}: the wave count runs into the enemy count");
-        }
-    }
-
-    #[test]
-    fn the_stacked_bars_stay_under_their_label_and_inside_the_bar() {
-        let ph = crate::HUD_BAR_HEIGHT;
-        let bottom = ph - 4;
-        let top = bottom - 2 * BAR2_H - BAR2_GAP;
-        assert!(top >= 5 + HUD_LABEL_SIZE, "the top bar overlaps the label");
-        assert!(bottom <= ph);
+    fn a_chip_holds_its_number_over_its_gauge() {
+        assert!(width("8", UI_SMALL_TEXT) <= CHIP_W as i32);
+        assert!(1 + UI_SMALL_TEXT < CHIP_H as i32 - GAUGE_H - 1, "the seat number overlaps its gauge");
+        assert!(CHIP_W as i32 > 4, "a gauge needs room for its outline and a block of fill");
     }
 }
-

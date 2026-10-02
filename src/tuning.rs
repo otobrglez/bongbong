@@ -328,15 +328,16 @@ tunables! {
         /// `--tank` on the command line outranks this knob; nothing else
         /// does, so dragging this is how a browser round picks a chassis.
         player_tank: i32 = (-1) in -1 ..= 11 @ Restart;
-        /// A drag shorter than this (bitmap px) on both axes from the
-        /// stick's origin is a resting thumb, not a direction.
-        touch_dead_zone_px: f32 = 14.0 in 4.0 ..= 40.0;
+        /// A drag shorter than this (UI points, `hud::UiFrame`) on both
+        /// axes from the stick's origin is a resting thumb, not a
+        /// direction.
+        touch_dead_zone_pt: f32 = 14.0 in 4.0 ..= 40.0;
         /// The stick's origin trails the thumb so the drag never exceeds
-        /// this many px: a change of direction costs the same short slide
-        /// however far the thumb has pushed, and the drawn base sits where
-        /// the rule measures from. 0 pins the origin where the thumb
+        /// this many UI points: a change of direction costs the same short
+        /// slide however far the thumb has pushed, and the drawn base sits
+        /// where the rule measures from. 0 pins the origin where the thumb
         /// landed, and a long push then needs a long slide back.
-        touch_follow_radius_px: f32 = 40.0 in 0.0 ..= 120.0;
+        touch_follow_radius_pt: f32 = 40.0 in 0.0 ..= 120.0;
         /// Degrees off the held axis a drag has to reach before the other
         /// axis takes over - the hysteresis that keeps a drag near a
         /// diagonal from flickering. 45 is no band at all; past 60 a thumb
@@ -541,6 +542,11 @@ tunables! {
         /// Enemy shell damage range (weaker than the player's).
         enemy_damage_min: f32 = 5.0 in 0.0 ..= 100.0;
         enemy_damage_max: f32 = 15.0 in 0.0 ..= 100.0;
+        /// A player's hull armour: every hit that lands on a seat's hull -
+        /// shells, bullets, blasts, rams, fire, towers, frogs - is scaled
+        /// by this (`Tank::take_damage`), so 0.77 makes a player's tank
+        /// 30 % tougher (1 / 0.77). The shield is spent in full.
+        player_armor_factor: f32 = 0.77 in 0.1 ..= 1.0;
         /// Firing recoil: a small backward impulse on the shooter along the
         /// shell's own travel axis, mass-normalized so a heavier chassis
         /// visibly recoils less per shot. Deliberately much smaller than
@@ -671,9 +677,9 @@ tunables! {
     }
 
     group missiles {
-        /// Seeker missiles granted per pickup - three full volleys of two
-        /// salvos from the four-tube pod.
-        missile_ammo_per_pickup: i32 = 24 in 1 ..= 400;
+        /// Seeker missiles granted per pickup - one volley from the
+        /// four-tube pod.
+        missile_ammo_per_pickup: i32 = 4 in 1 ..= 400;
         /// Missiles per salvo, one per tube, so at most the pod's four.
         /// The first leaves at once, the rest
         /// `missile_launch_delay_seconds` apart (`Tank::missile_volley`).
@@ -681,7 +687,7 @@ tunables! {
         /// Salvos per trigger pull: the pod empties, reloads its tubes in
         /// `missile_salvo_gap_seconds` and fires again, so a pull is
         /// `missile_volley_size` x this many missiles.
-        missile_salvos: u32 = 2 in 1 ..= 4;
+        missile_salvos: u32 = 1 in 1 ..= 4;
         /// Gap between two missiles of one salvo leaving their tubes.
         missile_launch_delay_seconds: f32 = 0.05 in 0.0 ..= 1.0;
         /// Gap between one salvo's last missile and the next salvo's first.
@@ -939,12 +945,17 @@ tunables! {
         speed_boost_duration_seconds: f32 = 12.0 in 0.0 ..= 120.0;
         /// Rainbow shield: collecting one heals the tank to full and *sets*
         /// `Tank::shield_hp` to this (a second one refills it rather than
-        /// stacking). The shield is a pool of absorption, not a clock - it
-        /// soaks damage until spent and then shatters, so concentrated fire
-        /// is what ends it. `MAX_DAMAGE` is 100, so the default is worth two
-        /// hulls. See `Tank::take_damage` for the absorb path and
-        /// `Game::resolve_projectiles` for the deflect one.
-        shield_capacity: f32 = 200.0 in 0.0 ..= 1000.0;
+        /// stacking). The shield is a pool of absorption on a clock
+        /// (`shield_seconds`) - it soaks damage until spent or the clock
+        /// runs out, whichever comes first. At the default an enemy's
+        /// shell deflected costs 20 (`shield_deflect_cost_factor`), so
+        /// three or four of them shatter it. See `Tank::take_damage` for
+        /// the absorb path and `Game::resolve_projectiles` for the deflect
+        /// one.
+        shield_capacity: f32 = 70.0 in 0.0 ..= 1000.0;
+        /// The longest a shield lasts, in seconds, however little it has
+        /// been hit: it shatters when this runs out (`Tank::tick_shield`).
+        shield_seconds: f32 = 6.0 in 0.5 ..= 60.0;
         /// What a *deflected* projectile costs the shield, as a multiple of
         /// the shot's own mid-range damage - shells, bullets and plasma
         /// bounce off (`Event::Deflected`) rather than landing, and pay this
@@ -1065,6 +1076,27 @@ tunables! {
         enemy_attack_range: f32 = 340.0 in 50.0 ..= 2000.0;
         /// Fire when the player is within this many px of the firing axis.
         enemy_fire_align_px: f32 = 24.0 in 1.0 ..= 200.0;
+        /// The sight box around every seat, in cells from the seat's
+        /// centre: this many sideways (`sight_box_half_cols`) and up and
+        /// down (`sight_box_half_rows`), +-368 x +-240 px
+        /// (`Tuning::sight_box_half_px`; docs/large-maps-follow-camera.md
+        /// section 5). An enemy fires at a seat only while its centre stands
+        /// inside that seat's box - a tank's attack and a hunter's snipe,
+        /// a seeker missile choosing a seat to lock onto, an enemy tower
+        /// choosing a seat to shoot - and every screen shows at least the
+        /// box around its own seat, so nobody is shot from beyond the edge
+        /// of their screen. Sideways it is wider than `enemy_attack_range`
+        /// and changes nothing; up and down an enemy closes to 240 px
+        /// before it fires, and the engagement ring's north and south
+        /// firing slots stand inside it. A rule of the round, never of a
+        /// window: the round that simulates the enemies applies it - the
+        /// room, online - and every screen frames its own seat's box from
+        /// the table it plays with, which is the build's unless a tester's
+        /// panel or `--tuning` file changes it on that screen alone (a
+        /// room's patch, `Welcome::tuning_json`, carries only the rows that
+        /// size its waves).
+        sight_box_half_cols: f32 = 11.5 in 1.0 ..= 64.0;
+        sight_box_half_rows: f32 = 7.5 in 1.0 ..= 64.0;
         /// Minimum seconds between AI shots at the baseline magazine level.
         enemy_fire_interval: f32 = 1.2 in 0.05 ..= 10.0;
         /// The fuller an enemy's magazine, the faster it re-fires: at
@@ -1128,6 +1160,16 @@ tunables! {
         /// by this margin (px). Together these stop frame-to-frame jitter
         /// near 45-degree diagonals.
         ai_dir_switch_margin_px: f32 = 20.0 in 0.0 ..= 200.0;
+        /// Field maps only: a hull reads its route as lanes, turning where
+        /// its slide through the turn ends on the centre line of the cell
+        /// the route turns in, wherever it rides across its lane - a flow
+        /// field's route always, a searched one where the margin above
+        /// never could turn it - and judges a wall ahead from where that
+        /// slide leaves it (`ai::Ai::lane_turn`, `Ai::walks_into_wall`;
+        /// docs/large-maps-follow-camera.md section 12). The margin decides
+        /// the rest, and everything on an arena. Off, every switch is the
+        /// margin's.
+        ai_lane_turns: bool = true in 0 ..= 1;
         /// A committed heading about to walk into a known-blocked grid cell
         /// can be overridden, but only after this much dwell time - much
         /// shorter than `ai_dir_hold_seconds`, yet without some floor a
@@ -1265,6 +1307,111 @@ tunables! {
         /// `enemy_attack_range` (`Tuning::enemy_retreat_range`), not all the
         /// way to the map edge like the health-based flee does.
         enemy_retreat_range_factor: f32 = 1.3 in 1.0 ..= 5.0;
+    }
+
+    group field {
+        /// Field maps only (a map the camera follows - bigger than an
+        /// arena or `view = "follow"`; docs/large-maps-follow-camera.md
+        /// section 12, `simulation::field`): an enemy that sees a seat
+        /// alerts every enemy within this many px of itself, and they
+        /// pass it on the same way, so an alert travels down a chain of
+        /// neighbours instead of reaching the whole map. Like the
+        /// arena's shared alert, a pure distance test with no line of
+        /// sight. As far as an enemy sees in daylight
+        /// (`enemy_view_range`): a tank alerts the ones it could see, so
+        /// a sighting runs through a group of neighbours, and across a map
+        /// several screens wide only as far as its enemies stand that
+        /// close to one another.
+        enemy_alert_chain_px: f32 = 800.0 in 0.0 ..= 4000.0;
+        /// Field maps only: how far from home (where it spawned, or came
+        /// through its gate) an enemy with nothing to fight may roam. Past
+        /// it, an enemy with no alert, no call to the fight and no target
+        /// in sight turns back home, and it wanders and seeks pickups only
+        /// inside it.
+        enemy_leash_px: f32 = 640.0 in 32.0 ..= 4000.0;
+        /// Field maps only: an enemy farther than this from every live
+        /// seat and the players' frog is far. A far enemy thinks only every
+        /// `enemy_far_think_ticks` ticks, and one nothing has woken yet -
+        /// no alert, no hit, no call, no seat this close - does not think
+        /// or route at all. Past `enemy_view_range`, so a far enemy cannot
+        /// see anyone to fight.
+        enemy_far_px: f32 = 1200.0 in 100.0 ..= 8000.0;
+        /// Field maps only: a far enemy thinks once every this many ticks,
+        /// staggered by owner slot, and keeps driving its last intent
+        /// (never its trigger) on the ticks between. 1 thinks every tick.
+        enemy_far_think_ticks: usize = 4 in 1 ..= 60;
+        /// Field maps only: the walk to the fight a spawn or a wave gate
+        /// aims for, in seconds of path from the nearest seat at
+        /// `enemy_speed` - out of sight, within reach. Of the gates
+        /// outside every seat's sight box a wave takes the ones whose walk
+        /// is within `field_walk_slack_seconds` of this, where the map has
+        /// any, and a band spawn's draws lean toward such cells; a map with
+        /// no walk that long (one about 40 cells across) only keeps its
+        /// spawns out of sight.
+        field_walk_seconds: f32 = 15.0 in 1.0 ..= 120.0;
+        /// The window either side of `field_walk_seconds`: wide enough
+        /// that a wave still spreads over several lanes and a band over a
+        /// region rather than one ring of cells.
+        field_walk_slack_seconds: f32 = 5.0 in 0.0 ..= 60.0;
+        /// How many of those cells a band spawn draws, keeping whichever
+        /// stands farthest from the enemies already down, so a band
+        /// spreads over its region rather than starting in a heap.
+        field_spawn_spread_candidates: u32 = 6 in 1 ..= 32;
+        /// Field maps' wave rounds only: stragglers are rolled in again
+        /// (`Game::reroll_stragglers`) - a wave tank that has gone
+        /// `field_reroll_after_seconds` without a live seat or the players'
+        /// frog in its sight, and stands farther from them by walk than
+        /// any wave's gate is paced for (`field_walk_seconds` less
+        /// `field_walk_slack_seconds`), is taken off where no screen can
+        /// see it go and rolls in again through a gate nearer the fight,
+        /// outside every sight box. Off, a straggler walks on as it is.
+        field_reroll: bool = true in 0 ..= 1;
+        /// How long a wave tank goes without a seat or the frog in its
+        /// sight before it counts as a straggler: long past a wave's walk
+        /// to the fight, so only one that lost its way - through a portal
+        /// for a pickup, its call over, home on its leash - is taken.
+        field_reroll_after_seconds: f32 = 30.0 in 1.0 ..= 600.0;
+    }
+
+    group director {
+        /// Field maps' wave rounds only: the pacing director
+        /// (`simulation::director`, docs/large-maps-follow-camera.md
+        /// section 12) paces the breather before each wave by how hard
+        /// the team is pressed - held while it is at its peak, stretched
+        /// to a rest after one, shortened while nothing happens. Off, a
+        /// field map's breather is `wave_gap_seconds`, as an arena's
+        /// always is.
+        director_enabled: bool = true in 0 ..= 1;
+        /// A seat's intensity (0 to 1) at or above this is the team at its
+        /// peak: the next wave waits, and a rest is owed once it passes.
+        director_peak: f32 = 0.8 in 0.05 ..= 1.0;
+        /// At or under this the team is calm - nothing is happening - and
+        /// with no rest owed the breather runs `director_calm_rate` times
+        /// as fast.
+        director_calm: f32 = 0.2 in 0.0 ..= 1.0;
+        /// The share of a pool lost at once that takes a seat from calm to
+        /// the top: its tank's health and shield (100 points), or the
+        /// players' frog's health (`frog_max_health`), which jolts every
+        /// seat. 0.35 is three or four enemy shells on the tank, one or two
+        /// on the frog's 40.
+        director_hurt_full: f32 = 0.35 in 0.01 ..= 4.0;
+        /// Live enemies inside a seat's sight box that hold its intensity
+        /// at the top; fewer hold it at their share.
+        director_crowd_full: f32 = 3.0 in 0.5 ..= 31.0;
+        /// Seconds a seat's intensity takes to fall from the top to
+        /// nothing once nothing jolts it and its box is empty.
+        director_fall_seconds: f32 = 10.0 in 0.1 ..= 120.0;
+        /// The rest a peak owes the team once it passes, in seconds: no
+        /// breather ends sooner after one.
+        director_relax_seconds: f32 = 12.0 in 0.0 ..= 120.0;
+        /// How many times as fast a breather runs down while the team is
+        /// calm and no rest is owed.
+        director_calm_rate: f32 = 2.0 in 1.0 ..= 10.0;
+        /// The shortest a breather may be, calm or not ...
+        director_breather_min_seconds: f32 = 2.0 in 0.0 ..= 60.0;
+        /// ... and the longest, holds included: past it the next wave
+        /// comes whatever the team is doing, so a round always goes on.
+        director_breather_max_seconds: f32 = 30.0 in 0.0 ..= 300.0;
     }
 
     group portal {
@@ -1713,7 +1860,7 @@ tunables! {
         /// so a big screen would otherwise blow it up - 2x on a 1080p
         /// monitor, a 35 mm tank - while a phone sees it at 8 mm; the cap
         /// draws it at this scale at most and fills the rest of the window
-        /// with the bar's colour. 1.0 is the classic desktop look (a 64 px
+        /// with the backdrop's colour. 1.0 is the classic desktop look (a 64 px
         /// tank), 1.5 about the old window on a laptop. 0 turns the cap
         /// off. A phone is never affected: its fit is below any cap. Also
         /// `--zoom`. Live.
@@ -1723,6 +1870,197 @@ tunables! {
         /// shimmer slightly at a fractional scale, which a static floor
         /// mostly hides.
         view_scale_snap: i32 = 0 in 0 ..= 1;
+        /// How much world a field map shows on a screen, in 32 px cells
+        /// (`framing`, docs/large-maps-follow-camera.md §3). 578 is the
+        /// standard 34 x 17 field's area, the most a landscape phone shows
+        /// at a readable tank. Every screen in a room shows this much world
+        /// whatever its shape - the same amount of information and the
+        /// same time to see a shell coming on a phone, a tablet and a
+        /// monitor - and the screen picks only the outline. Arenas (36 x 18
+        /// cells and smaller) are shown whole and never read it.
+        view_area_cells: f32 = 578.0 in 64.0 ..= 4096.0;
+        /// The narrowest outline a field map's view takes, as width over
+        /// height: 4:3, a hair under so that a 4:3 screen is inside the
+        /// range rather than a rounding error outside it. A narrower screen
+        /// shows the 4:3 outline across its width and bars above and below.
+        view_aspect_min: f32 = 1.3333 in 1.0 ..= 2.0;
+        /// The widest outline a field map's view takes, as width over
+        /// height: 2.4:1. A wider screen (a 32:9 monitor) shows the 2.4:1
+        /// outline across its height and bars at the sides, where its HUD
+        /// can sit; every shape between the two fills its screen.
+        view_aspect_max: f32 = 2.4 in 1.5 ..= 4.0;
+        /// A screen under this many pixels per inch snaps a field map's
+        /// zoom to whole 2 px blocks - a multiple of 0.5 device pixels per
+        /// world pixel, so the pixel art stays crisp - taking the nearer
+        /// step by ratio, and the outward one wherever the nearer would
+        /// hide the sight box. Tablets, laptops, monitors and the 720p
+        /// phones snap. A finer screen (the flagship phones, over 400 ppi)
+        /// keeps the exact zoom: its steps are about 20 % apart, either
+        /// neighbour would push the sight box off screen or shrink the tank
+        /// under 44 pt, and its pixels are too small for the blur to show.
+        /// 0 keeps the exact zoom everywhere.
+        view_fine_ppi: f32 = 360.0 in 0.0 ..= 1000.0;
+        /// A local round - no room, alone or two on one screen - zooms a
+        /// field map out a whole block at a time while a tank stays at
+        /// least this wide, in millimetres, and the view holds at most
+        /// `view_local_max_cells`: nobody shares the round, so a big
+        /// screen may show more. A 24" or 27" monitor then shows 40 x 22.5
+        /// cells with a 26.5 to 30 mm tank instead of the shared view's 30
+        /// to 32 cells across at 35 to 40 mm. Phones, tablets and laptops
+        /// draw a tank under 25 mm already and keep the shared view, a
+        /// screen of unknown size keeps it too, and a room never zooms out.
+        view_local_min_tank_mm: f32 = 25.0 in 0.0 ..= 100.0;
+        /// The most world a local round's zoomed-out view shows, in cells:
+        /// 900 is 40 x 22.5 on a 16:9 monitor. At or under
+        /// `view_area_cells` no screen zooms out.
+        view_local_max_cells: f32 = 900.0 in 64.0 ..= 4096.0;
+    }
+
+    group camera {
+        /// The one motion switch (`motion.rs`, docs/large-maps-follow-camera.md
+        /// section 6): 0 follows the platform - iOS's Reduce Motion, the
+        /// browser's `prefers-reduced-motion`; Android, macOS, Linux and
+        /// Windows say nothing, which is full motion -, 1 is full motion
+        /// and 2 reduced. Reduced motion has no camera shake, no ripple
+        /// bending the whole screen and no zoom at a round's opening (the
+        /// establishing shot cuts to the tank); the follow camera, the
+        /// arrows and every effect of the fight itself stay.
+        reduce_motion: i32 = 0 in 0 ..= 2;
+        /// The follow camera on a field map (`follow.rs`,
+        /// docs/large-maps-follow-camera.md section 6): how far the seat
+        /// moves inside the view on an axis, in pixels either way, before
+        /// it drags the view along - about 0.4 cell, so four-way
+        /// corrections and slides along a wall do not wobble the view.
+        camera_dead_zone_px: f32 = 12.8 in 0.0 ..= 128.0;
+        /// The look-ahead: the view leads the seat the way its hull faces,
+        /// spending the room the sight box leaves on that axis
+        /// (`Framing::room_outside`) less the dead zone - this fraction of
+        /// it at rest, because a tank fires where it faces, and all of it
+        /// at the tank's top speed. The sight box never leaves the screen
+        /// whatever this says.
+        camera_lead_at_rest: f32 = 0.35 in 0.0 ..= 1.0;
+        /// Seconds the look-ahead takes to swing from one side of its room
+        /// to the other: it moves at that steady pace, so a reversal takes
+        /// about this long, a turn or a change of speed less, and a turn
+        /// does not whip the view across. 0 swings it at once.
+        camera_lead_ease_seconds: f32 = 0.5 in 0.0 ..= 5.0;
+        /// Seconds a reversal holds before the look-ahead flips to the
+        /// other side, so a quick back-and-forth does not swing the view
+        /// each time; a turn to either side swings it at once.
+        camera_lead_reverse_hold_seconds: f32 = 0.25 in 0.0 ..= 3.0;
+        /// The spring the view chases its goal on: a critically damped
+        /// spring of this smoothing time (Unity's `SmoothDamp`), the seat's
+        /// velocity fed forward so a steady drive does not trail. 0 sticks
+        /// the view to its goal.
+        camera_spring_seconds: f32 = 0.5 in 0.0 ..= 2.0;
+        /// Seconds a screen stays on its seat's wreck before it follows the
+        /// nearest live teammate - in a wave round the seat comes back
+        /// through a gate with the next wave, and the view cuts back to it
+        /// then. Alone, the view stays on the wreck.
+        camera_spectate_delay_seconds: f32 = 1.0 in 0.0 ..= 10.0;
+        /// How far from the field's edge, in pixels, the view starts to
+        /// ease into it: the goal it chases slows over this last stretch
+        /// and never passes the edge, so the view comes to rest there
+        /// rather than running into it and stopping dead. 0 is a hard
+        /// stop.
+        camera_edge_ease_px: f32 = 48.0 in 0.0 ..= 512.0;
+        /// The establishing shot (`establish.rs`, docs/large-maps-follow-camera.md
+        /// section 6): a field map's round opens on the whole map - the
+        /// frog, the gates - for this many seconds, while its mission
+        /// banner holds the round still. 0 plays no shot.
+        camera_establish_hold_seconds: f32 = 1.0 in 0.0 ..= 5.0;
+        /// ... then zooms down to the tank's follow view over this many
+        /// seconds, or cuts to it under reduced motion. The shot always
+        /// ends with the banner at the latest - a shorter banner shortens
+        /// the hold first - and any steer or shot ends both at once, so it
+        /// never costs a moment of play.
+        camera_establish_zoom_seconds: f32 = 0.45 in 0.0 ..= 3.0;
+    }
+
+    group builder {
+        /// The builder's own camera (`editor/camera.rs`,
+        /// docs/large-maps-follow-camera.md section 9): how much one wheel
+        /// notch or one `+`/`-` press zooms the canvas, as a ratio. On a
+        /// coarse screen (under `view_fine_ppi`) the step lands on the
+        /// nearest whole-block scale past it, so the 2 px blocks stay
+        /// whole on the glass.
+        builder_zoom_step: f32 = 1.25 in 1.05 ..= 2.0;
+        /// The largest a cell is drawn when zoomed in, in points on the
+        /// glass (128 is about 20 mm on a phone).
+        builder_zoom_max_cell_pt: f32 = 128.0 in 32.0 ..= 512.0;
+        /// How far a finger moves on the glass, in points, before a touch
+        /// is a drag: a finger resting on the canvas paints nothing, and a
+        /// two- or three-finger tap stays a tap.
+        builder_touch_slop_pt: f32 = 10.0 in 0.0 ..= 48.0;
+        /// How long a tap may last, in seconds: one finger paints a cell
+        /// (or zooms in, `builder_paint_min_cell_mm`), two undo, three
+        /// redo. A finger held longer without moving does nothing.
+        builder_tap_seconds: f32 = 0.35 in 0.05 ..= 1.5;
+        /// The paint threshold: where a cell is drawn smaller than this on
+        /// the glass, in millimetres, a finger cannot hit one cell, so a
+        /// one-finger tap zooms in (`builder_tap_zoom_cell_mm`) and a
+        /// drag pans instead of painting. Touch only - a mouse paints at
+        /// any size. 0 always paints.
+        builder_paint_min_cell_mm: f32 = 6.0 in 0.0 ..= 20.0;
+        /// The cell a zooming tap brings the canvas to, in millimetres on
+        /// the glass, about the tapped point.
+        builder_tap_zoom_cell_mm: f32 = 9.0 in 3.0 ..= 30.0;
+        /// The loupe (docs/large-maps-patterns.md, "Touch editing without
+        /// clashes, and a loupe"): while one finger paints a stroke where
+        /// a cell is drawn smaller than this on the glass, in millimetres
+        /// - a fingertip's width and some, so the finger hides the cell it
+        /// is on - a magnified view of the cells under the finger stands
+        /// above it, the cell the stroke paints outlined. Above the paint
+        /// threshold (`builder_paint_min_cell_mm`), under which a finger
+        /// paints nothing, and above the zoom a tap brings
+        /// (`builder_tap_zoom_cell_mm`, which a coarse screen rounds up a
+        /// little onto whole blocks), so a stroke after a zooming tap
+        /// still has it. Touch only; 0 never shows it.
+        builder_loupe_cell_mm: f32 = 12.0 in 0.0 ..= 30.0;
+        /// The loupe's magnification over the canvas, before it is put on
+        /// the nearest whole-block scale (`MapEditor::loupe`): the cell a
+        /// finger paints and part of each of its neighbours, larger than
+        /// the finger leaves them.
+        builder_loupe_zoom: f32 = 1.5 in 1.0 ..= 4.0;
+        /// How far the loupe stands off the point under a painting finger,
+        /// in points: above it, clear of the fingertip - or beside it near
+        /// the canvas's right edge and where there is no room above.
+        builder_loupe_lift_pt: f32 = 44.0 in 0.0 ..= 160.0;
+        /// Edge scroll: a stroke whose pointer comes within this many
+        /// points of the canvas's edge scrolls the view toward that edge
+        /// while it is held, so a long wall needs no pan in the middle.
+        /// 0 turns it off.
+        builder_edge_scroll_pt: f32 = 40.0 in 0.0 ..= 160.0;
+        /// How fast edge scroll moves the view at the very edge, in points
+        /// per second; it ramps up from nothing across the margin.
+        builder_edge_scroll_pt_per_s: f32 = 600.0 in 0.0 ..= 4000.0;
+        /// How fast a held arrow key pans the canvas, in points per second.
+        builder_key_pan_pt_per_s: f32 = 800.0 in 0.0 ..= 4000.0;
+        /// What the CHECK panel's jump to a finding shows round its cells
+        /// at least, in cells across (`MapEditor::frame_cells`): a one-cell
+        /// finding is seen in its surroundings rather than filling the
+        /// canvas.
+        builder_lint_jump_cols: f32 = 14.0 in 2.0 ..= 64.0;
+        /// What the CHECK panel's jump to a finding shows round its cells
+        /// at least, in cells down (`builder_lint_jump_cols` across).
+        builder_lint_jump_rows: f32 = 9.0 in 2.0 ..= 64.0;
+        /// The most cells one FILL changes (`editor::brush::flood`): a
+        /// fill that would take more is refused, the status line saying
+        /// so, rather than flooding a 250 x 250 map in one frame when it
+        /// finds its way out through a gap. RECT is not held to it - its
+        /// rectangle is the one drawn. 4096 cells of water or wall cost
+        /// about 10 ms with their repaint in a release build
+        /// (`a_large_fill_timing`).
+        builder_fill_max_cells: usize = 4096 in 16 ..= 62500;
+        /// SCATTER's footprint: the cells within this many cells of each
+        /// cell the stroke crosses (and a half), a disc twice as wide and
+        /// one more - 2 is 21 cells, five across.
+        builder_scatter_radius_cells: i32 = 2 in 0 ..= 8;
+        /// The share of SCATTER's footprint a stroke paints, chosen by a
+        /// hash of the cell and the stroke rather than any random draw;
+        /// another stroke over the same ground picks other cells, so going
+        /// over it again thickens the scatter.
+        builder_scatter_density: f32 = 0.25 in 0.02 ..= 1.0;
     }
 
     group online {
@@ -1963,6 +2301,14 @@ tunables! {
         /// The share of the edge shade's darkest step only the corners
         /// reach, 0-1: the middle of an edge stops short of it.
         ground_edge_shade_corner: f32 = 0.25 in 0.0 ..= 1.0 @ Restart;
+        /// The ground past an arena's field, in the window's margins
+        /// (`margin.rs`): the opacity the edge shade deepens to out there,
+        /// 0-1, toward the same dark - the shade the world off the
+        /// playfield stands in. Taken in whole steps of the edge shade's.
+        ground_margin_shade: f32 = 0.6 in 0.0 ..= 1.0 @ Restart;
+        /// How far past the field's edge, in world px, the edge shade
+        /// deepens to `ground_margin_shade`.
+        ground_margin_ramp_px: f32 = 48.0 in 0.0 ..= 600.0 @ Restart;
         /// How much of the open floor the soft sand patches cover, 0-1:
         /// the pack's sand tiles (hardpan under the desert retint) laid
         /// where a hashed value noise at the cell corners crosses this
@@ -2139,6 +2485,119 @@ tunables! {
         hud_critical_threshold: f32 = 0.104 in 0.0 ..= 1.0;
     }
 
+    group indicators {
+        /// How far inside the screen's safe area the off-screen arrows sit
+        /// (points): the rectangle the line from the tank to what an arrow
+        /// points at stops on (`indicators.rs`,
+        /// docs/large-maps-follow-camera.md section 7).
+        indicator_inset_pt: f32 = 10.0 in 0.0 ..= 64.0;
+        /// An arrow's size at full scale (points). An arrow slid clear of
+        /// a HUD cluster, a thumb's rest or the minimap stops half this
+        /// short of it.
+        indicator_arrow_pt: f32 = 16.0 in 4.0 ..= 64.0;
+        /// Distance is drawn as size and opacity, counted in screens (the
+        /// view's extent along the arrow): full size and opacity up to
+        /// this many screens away ...
+        indicator_near_screens: f32 = 1.0 in 0.0 ..= 10.0;
+        /// ... shrinking to `indicator_far_scale` of the size and
+        /// `indicator_far_alpha` of the opacity at this many, and no
+        /// further beyond.
+        indicator_far_screens: f32 = 4.0 in 0.5 ..= 20.0;
+        indicator_far_scale: f32 = 0.6 in 0.1 ..= 1.0;
+        indicator_far_alpha: f32 = 0.55 in 0.0 ..= 1.0;
+        /// Enemy arrows that land closer together than this (points) merge
+        /// into one that carries a count. Teammates, frogs and gates never
+        /// merge.
+        indicator_cluster_pt: f32 = 22.0 in 0.0 ..= 120.0;
+        /// The most arrows a screen shows at once, filled by priority: lane
+        /// threats, teammates, frogs, flashing gates, then the nearest
+        /// enemies, the enemies left over folded into one count per screen
+        /// edge. Teammates and frogs always show, whatever this says.
+        indicator_max_arrows: usize = 8 in 1 ..= 32;
+        /// An enemy in tall grass gets no arrow unless it fired within
+        /// this many seconds ...
+        indicator_reveal_fire_seconds: f32 = 1.5 in 0.0 ..= 10.0;
+        /// ... or stands within this many pixels of the seat (two cells).
+        indicator_reveal_px: f32 = 64.0 in 0.0 ..= 512.0;
+        /// Seconds the hollow marker an enemy leaves where it slipped out
+        /// of sight lasts, fading. It never moves.
+        indicator_last_seen_seconds: f32 = 4.0 in 0.0 ..= 30.0;
+        /// Seconds the arrow of an enemy lined up on the seat flashes after
+        /// it fires down the lane.
+        indicator_fire_flash_seconds: f32 = 0.3 in 0.0 ..= 2.0;
+        /// Seconds the arc on the seat's own tank points back the way the
+        /// last hit came.
+        indicator_hit_arc_seconds: f32 = 0.8 in 0.0 ..= 5.0;
+        /// Seconds a wave gate flashes after a tank starts rolling in
+        /// through it, and again after one comes through.
+        indicator_gate_flash_seconds: f32 = 3.0 in 0.0 ..= 20.0;
+        /// How fast the ring round a lined-up enemy's arrow pulses, per
+        /// second; it brightens and the arrow swells as the enemy's aim
+        /// settles (`indicators::picture`).
+        indicator_pulse_hz: f32 = 5.0 in 0.5 ..= 20.0;
+        /// How much bigger a lined-up enemy's arrow is at the top of its
+        /// pulse once the aim has settled: 0.2 is a fifth.
+        indicator_pulse_swell: f32 = 0.2 in 0.0 ..= 1.0;
+        /// How fast a flashing gate's marks blink, on and off per second,
+        /// as does a teammate's arrow while it drives back in.
+        indicator_gate_blink_hz: f32 = 3.0 in 0.5 ..= 20.0;
+        /// The hit arc's inner radius round the seat's tank, in world
+        /// pixels: just outside the ground ring.
+        indicator_hit_arc_px: f32 = 32.0 in 8.0 ..= 128.0;
+        /// How far round the tank the hit arc reaches, in degrees, centred
+        /// on the way the hit came.
+        indicator_hit_arc_degrees: f32 = 70.0 in 10.0 ..= 360.0;
+        /// Where a touch screen's thumbs rest, which no arrow sits under:
+        /// a pad this many millimetres wide ...
+        indicator_thumb_pad_mm: f32 = 12.0 in 0.0 ..= 60.0;
+        /// ... centred this far in from each side of the screen ...
+        indicator_thumb_in_mm: f32 = 22.0 in 0.0 ..= 80.0;
+        /// ... and this far up from its bottom edge.
+        indicator_thumb_up_mm: f32 = 18.0 in 0.0 ..= 80.0;
+    }
+
+    group ui {
+        /// How large the chrome is drawn - the corner clusters, the
+        /// banners, the dialogs, the end screen, the lobby and the level
+        /// select - in points: at 1 a 12 pt label is 12 points tall on a
+        /// phone, a tablet and a monitor alike, whatever scale the world is
+        /// drawn at (`hud::UiFrame`, docs/large-maps-follow-camera.md
+        /// section 8). A window too small for the chrome at this size draws
+        /// it smaller, to fit.
+        ui_scale: f32 = 1.0 in 0.5 ..= 3.0;
+        /// A corner cluster drops to this opacity while a tank, a shot or
+        /// a blast is under it, so the HUD never hides the fight ...
+        ui_fade_opacity: f32 = 0.35 in 0.0 ..= 1.0;
+        /// ... moving there, and back once the fight has passed, over this
+        /// many seconds. 0 snaps.
+        ui_fade_seconds: f32 = 0.25 in 0.0 ..= 2.0;
+    }
+
+    group minimap {
+        /// When the play minimap is drawn under the top-right cluster
+        /// (`minimap.rs`, docs/large-maps-follow-camera.md sections 7 and
+        /// 15), and only ever while the camera shows less than the whole
+        /// field: 0 never, 1 on tablets and desktops but not on a phone
+        /// (`minimap_phone_short_pt`), whose edge arrows carry the field,
+        /// 2 on every screen. The builder's navigator is on every device
+        /// whatever this says.
+        minimap_show: i32 = 1 in 0 ..= 2;
+        /// A screen whose short side is under this many points is a
+        /// phone's: a landscape phone is 360 to 440 points tall, the
+        /// smallest tablet 744 ...
+        minimap_phone_short_pt: f32 = 500.0 in 0.0 ..= 2000.0;
+        /// ... and so is one under this many millimetres, where the
+        /// platform reports the screen's size: a small panel that reports a
+        /// desktop's points.
+        minimap_phone_short_mm: f32 = 90.0 in 0.0 ..= 1000.0;
+        /// The box the minimap is fitted into, in points, the map's shape
+        /// kept: a long map as wide as this and shorter ...
+        minimap_width_pt: f32 = 160.0 in 48.0 ..= 480.0;
+        /// ... a tall one as tall as this and narrower. The builder's
+        /// navigator is fitted into the same box.
+        minimap_height_pt: f32 = 120.0 in 32.0 ..= 480.0;
+    }
+
     group fx {
         /// One multiplier on every effect that touches the whole screen -
         /// the kill flash, the shockwave ripple's bend, the camera shake
@@ -2150,11 +2609,13 @@ tunables! {
         /// Kill shockwave (shockwave.fs): seconds the effect plays before
         /// clearing.
         shockwave_duration: f32 = 0.7 in 0.05 ..= 5.0;
-        /// Ring growth speed, UV units/sec.
+        /// Ring growth speed, in the standard field's heights a second
+        /// (`shockwave::RIPPLE_FRAME`, 544 px each) - the same in world
+        /// pixels on every map.
         shockwave_speed: f32 = 0.56 in 0.0 ..= 5.0;
-        /// Thickness of the distorted band, UV units.
+        /// Thickness of the distorted band, in standard field heights.
         shockwave_width: f32 = 0.08 in 0.0 ..= 1.0;
-        /// How hard the ring bends the image, UV units.
+        /// How hard the ring bends the image, in standard field heights.
         shockwave_strength: f32 = 0.045 in 0.0 ..= 0.5;
         /// Camera shake on the same kill trigger: duration (much shorter
         /// than the shockwave so it reads as one punchy hit), px offset at
@@ -2167,25 +2628,50 @@ tunables! {
         camera_shake_max_stack: f32 = 1.5 in 1.0 ..= 5.0;
         camera_shake_magnitude: f32 = 6.0 in 0.0 ..= 100.0;
         camera_shake_frequency: f32 = 40.0 in 1.0 ..= 200.0;
+        /// The shake falls off with distance from what the screen shows
+        /// (`shockwave::camera_shake`, docs/large-maps-follow-camera.md
+        /// section 6), so a blast across a field map does not shake a
+        /// screen that cannot see it: a ripple within this many pixels of
+        /// the view shakes it fully ...
+        camera_shake_margin_px: f32 = 160.0 in 0.0 ..= 2000.0;
+        /// ... and one this many screens past that - a screen being the
+        /// view's width across and its height up and down - not at all,
+        /// fading between: at 1, a blast a screen and a half from the
+        /// view's middle is gone, as a blast on the far shore of a field
+        /// map is. An arena's view is the whole field, which every ripple
+        /// is in, so an arena's shake is every ripple's whole. 0 stops the
+        /// shake at the margin.
+        camera_shake_fade_screens: f32 = 1.0 in 0.0 ..= 20.0;
         /// Muzzle-flash heat haze (muzzle_flash.fs): a one-sided outward
         /// puff at the barrel. Hits full strength at the leading edge, so
         /// tuned lower than the shockwave for similar visual intensity.
         muzzle_flash_duration: f32 = 0.12 in 0.01 ..= 2.0;
+        /// Front growth, in standard field heights a second
+        /// (`shockwave::RIPPLE_FRAME`).
         muzzle_flash_speed: f32 = 0.9 in 0.0 ..= 5.0;
+        /// Thickness of the pushed band, in standard field heights.
         muzzle_flash_width: f32 = 0.032 in 0.0 ..= 0.5;
+        /// How hard the puff shoves the image, in standard field heights.
         muzzle_flash_strength: f32 = 0.015 in 0.0 ..= 0.5;
-        /// Half-extent (px) of the quad the muzzle flash is drawn into -
-        /// must contain the ring's full reach (speed * duration, in screen
-        /// px) plus its band width or it visibly clips.
+        /// Half-extent (world px) of the quad the muzzle flash is drawn
+        /// into - it must hold the puff's whole reach, speed x duration
+        /// plus the band in standard field heights of 544 px (about 76 px
+        /// at the defaults), or the puff visibly clips.
         muzzle_flash_quad_radius: f32 = 90.0 in 10.0 ..= 500.0;
         /// Shell-impact flash (impact.fs): a one-sided punch plus a warm
         /// spark at the hit point - a sharp "thwack".
         impact_flash_duration: f32 = 0.14 in 0.01 ..= 2.0;
+        /// Pulse growth, in standard field heights a second
+        /// (`shockwave::RIPPLE_FRAME`).
         impact_flash_speed: f32 = 1.1 in 0.0 ..= 5.0;
+        /// Thickness of the distorted band, in standard field heights.
         impact_flash_width: f32 = 0.02 in 0.0 ..= 0.5;
+        /// How hard the pulse bends the image, in standard field heights.
         impact_flash_strength: f32 = 0.018 in 0.0 ..= 0.5;
-        /// Half-extent (px) of the impact flash's quad; at 720px tall the
-        /// punch reaches ~125px, so 70 visibly clipped it.
+        /// Half-extent (world px) of the impact flash's quad - it must hold
+        /// the punch's whole reach, speed x duration plus the band in
+        /// standard field heights of 544 px (about 95 px at the defaults),
+        /// or the punch visibly clips.
         impact_flash_quad_radius: f32 = 130.0 in 10.0 ..= 500.0;
     }
 
@@ -2384,6 +2870,12 @@ tunables! {
         /// How much a heavy sky darkens the field toward its edges (a
         /// multiplier on the look's own vignette).
         weather_vignette: f32 = 1.0 in 0.0 ..= 2.0;
+        /// Draw every sky the way a device whose GPU would not compile the
+        /// weather's shaders draws it (docs/weather.md "Without shaders"):
+        /// the light map multiplied in by a blend mode, the snow on the
+        /// ground and the fog, sand, rain and snow in the air as plain
+        /// blocks. For looking at that picture where the shaders work.
+        weather_without_shaders: bool = false in 0 ..= 1;
     }
 }
 
@@ -2404,6 +2896,13 @@ impl Tuning {
     /// Low-ammo retreat distance: `enemy_attack_range * enemy_retreat_range_factor`.
     pub fn enemy_retreat_range(&self) -> f32 {
         self.enemy_attack_range * self.enemy_retreat_range_factor
+    }
+
+    /// The sight box's half extents in world px, (sideways, up and down):
+    /// `sight_box_half_cols` and `sight_box_half_rows` cells of
+    /// `OBSTACLE_GRID_SIZE` - +-368 x +-240 at the defaults.
+    pub fn sight_box_half_px(&self) -> (f32, f32) {
+        (self.sight_box_half_cols * crate::OBSTACLE_GRID_SIZE, self.sight_box_half_rows * crate::OBSTACLE_GRID_SIZE)
     }
 
     /// Fire cooldown held for a whole minigun burst: every queued bullet's
@@ -2822,8 +3321,11 @@ mod tests {
         assert_eq!(t.engage_ring_radius(), 340.0 * 0.8);
         assert_eq!(t.engage_reserve_radius(), 400.0);
         assert_eq!(t.enemy_retreat_range(), 340.0 * 1.3);
+        assert_eq!(t.sight_box_half_px(), (368.0, 240.0));
         t.enemy_attack_range = 500.0;
         assert_eq!(t.engage_ring_radius(), 400.0);
+        t.sight_box_half_rows = 8.0;
+        assert_eq!(t.sight_box_half_px(), (368.0, 256.0));
         assert_eq!(t.minigun_burst_cooldown_seconds(), 5.0 * 0.04 + 0.1);
     }
 

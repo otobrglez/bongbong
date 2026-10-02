@@ -210,7 +210,7 @@ dependencies = [
 
 [[package]]
 name = "bongbong"
-version = "0.2.5"
+version = "0.2.7"
 dependencies = [
  "clap",
  "fluent-bundle",
