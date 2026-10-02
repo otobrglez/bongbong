@@ -396,8 +396,9 @@ impl MapEditor {
             let under = self.map.cell(col, row).map(cell_label).unwrap_or_default();
             line.push_str(&format!("   {col},{row} {under}"));
         }
-        // The selection's size, or the paste ghost's while one stands.
-        if let Some(rect) = self.ghost().map(|g| g.rect()).or(self.selection()) {
+        // The size of the rectangle a RECT drag is drawing, else of the
+        // paste ghost while one stands, else of the selection.
+        if let Some(rect) = self.rect_stroke().map(|(r, _)| r).or(self.ghost().map(|g| g.rect())).or(self.selection()) {
             line.push_str(&format!("   {}x{}", rect.cols, rect.rows));
         }
         if let Some(status) = &self.status {
@@ -460,8 +461,10 @@ impl MapEditor {
                 draw_cell(d, textures, (width, height), pos, obj, 255, time);
             }
 
-            // The select tool's marks over the map.
+            // The select tool's marks over the map, then what the brush's
+            // shape is about to do.
             self.draw_selection(d, textures, time, &culled);
+            self.draw_brush_marks(d, textures, time, cursor, &culled);
 
             // The finding the CHECK panel picked, over the map.
             self.draw_lint_marks(d, &culled);
@@ -980,6 +983,52 @@ impl MapEditor {
         }
     }
 
+    /// What the brush's shape is about to do, in world pixels over the
+    /// map: the rectangle a RECT drag is drawing - the brush's object faint
+    /// in each of its cells (an outline alone past `RECT_GHOST_CELLS`), or a
+    /// red wash where it erases - and SCATTER's footprint round the cell
+    /// under the pointer.
+    fn draw_brush_marks<D: RaylibDraw>(
+        &self,
+        d: &mut D,
+        textures: &EditorTextures,
+        time: f32,
+        cursor: Option<(i32, i32)>,
+        culled: impl Fn(Position, f32) -> bool,
+    ) {
+        if let Some((rect, erase)) = self.rect_stroke() {
+            let r = rect.world();
+            if erase {
+                d.draw_rectangle_rec(r, Color::new(ERASE_MARK.r, ERASE_MARK.g, ERASE_MARK.b, 60));
+                d.draw_rectangle_lines_ex(r, 2.0, ERASE_MARK);
+                return;
+            }
+            if let Some(obj) = self.tool().object()
+                && (rect.cols * rect.rows) as usize <= RECT_GHOST_CELLS
+            {
+                let field = self.map.field_size();
+                for (col, row) in rect.cells() {
+                    let pos = map::cell_to_world(col, row);
+                    if !culled(pos, 0.0) {
+                        draw_cell(d, textures, field, pos, &obj, GHOST_ALPHA, time);
+                    }
+                }
+            } else {
+                d.draw_rectangle_rec(r, Color::new(255, 255, 255, 40));
+            }
+            d.draw_rectangle_lines_ex(r, 2.0, Color::new(255, 255, 255, 220));
+        } else if self.tool() != Tool::Select
+            && self.shape() == Shape::Scatter
+            && let Some(cell) = cursor
+        {
+            let half = OBSTACLE_GRID_SIZE / 2.0;
+            for (col, row) in brush::footprint(cell, BrushRules::current().scatter_radius, self.field_cells()) {
+                let pos = map::cell_to_world(col, row);
+                d.draw_rectangle_rec(Rectangle::new(pos.x - half, pos.y - half, OBSTACLE_GRID_SIZE, OBSTACLE_GRID_SIZE), Color::new(255, 255, 255, 36));
+            }
+        }
+    }
+
     /// The finding the CHECK panel picked, on the canvas in world pixels:
     /// each of its cells filled faintly and outlined in its severity's
     /// colour.
@@ -1351,6 +1400,26 @@ pub fn draw_brush_icon(d: &mut impl RaylibDraw, row: BrushRow, rect: Rectangle, 
                 unit(2.0 + f, 11.0 - f, 3.0, 3.0);
             }
         }
+        BrushRow::Shape(Shape::Rect) => {
+            // A solid block, its corner marked where the drag began.
+            unit(2.0, 4.0, 12.0, 9.0);
+            unit(1.0, 3.0, 2.0, 2.0);
+        }
+        BrushRow::Shape(Shape::Fill) => {
+            // A bucket and its drip.
+            unit(4.0, 1.0, 5.0, 1.0);
+            unit(3.0, 2.0, 1.0, 2.0);
+            unit(9.0, 2.0, 1.0, 2.0);
+            unit(2.0, 4.0, 9.0, 1.0);
+            unit(3.0, 5.0, 7.0, 8.0);
+            unit(12.0, 6.0, 2.0, 3.0);
+            unit(12.0, 11.0, 2.0, 2.0);
+        }
+        BrushRow::Shape(Shape::Scatter) => {
+            for (x, y) in [(2.0, 2.0), (9.0, 1.0), (13.0, 5.0), (5.0, 7.0), (10.0, 9.0), (1.0, 12.0), (7.0, 13.0), (13.0, 13.0)] {
+                unit(x, y, 2.0, 2.0);
+            }
+        }
         BrushRow::Select => {
             // A square of dashes: two units on, one off.
             for i in 0..4 {
@@ -1372,6 +1441,12 @@ pub fn draw_brush_icon(d: &mut impl RaylibDraw, row: BrushRow, rect: Rectangle, 
 
 /// How opaque the cells a drag of the select tool carries are drawn.
 const LIFTED_ALPHA: u8 = 230;
+/// The most cells a RECT drag draws the brush's object in; a larger
+/// rectangle is a wash and an outline, so a drag across a 250 x 250 map
+/// does not draw tens of thousands of sprites a frame.
+const RECT_GHOST_CELLS: usize = 4096;
+/// What an erasing RECT drag is outlined in.
+const ERASE_MARK: Color = Color::new(230, 60, 60, 220);
 /// How opaque the paste ghost's cells are drawn.
 const GHOST_ALPHA: u8 = 150;
 

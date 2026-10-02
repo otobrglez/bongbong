@@ -36,6 +36,20 @@
 //! `builder_paint_min_cell_mm` on the glass - a finger cannot hit one - a
 //! tap zooms in instead of painting and a drag pans (the paint threshold).
 //!
+//! **The brush's shape** (docs/large-maps-patterns.md, "Area brushes:
+//! fill, scatter, auto-tile"; the cells are `brush.rs`), BRUSH's list:
+//! PEN paints a stroke under the toggle-erase rule; RECT fills the
+//! rectangle a drag draws when it ends, the eraser or the secondary button
+//! clearing it instead; FILL floods the region of the pressed cell - the
+//! cells joined to it edge to edge that hold exactly what it holds - under
+//! the toggle-erase rule, and refuses a region past
+//! `builder_fill_max_cells`; SCATTER lays the brush's object on a hashed
+//! share of the empty cells round the drag, never a random draw, and thins
+//! it erasing. A singleton's brush paints with the pen whatever the shape.
+//! Each stroke of any shape is one `EditStep`, and the water and road it
+//! lays auto-tile through the ground's repaint, which makes the whole
+//! ground again for an edit past `REBUILD_SHARE` of the map.
+//!
 //! **The select tool** (docs/large-maps-patterns.md, "Selection, copy and
 //! stamps"; the data is `select.rs`): a drag draws a rectangle of cells,
 //! outlined until Escape, a press outside it or another tool clears it. A
@@ -54,6 +68,7 @@
 //! outlined and named by CHECK, whose FIX puts it back on the edge, and a
 //! pasted portal joins the network.
 
+pub mod brush;
 pub mod camera;
 pub mod chrome;
 pub mod gesture;
@@ -64,6 +79,7 @@ pub mod select;
 #[cfg(feature = "render")]
 pub use render::EditorTextures;
 
+pub use brush::BrushRules;
 pub use camera::{BuilderCamera, CanvasRules, CanvasScreen, Viewport};
 pub use chrome::{Bar, BarButton, BarTools, BuilderFrame, Chrome, PopupLayout, Strip, StripButton};
 pub use select::{Axis, CellRect, Clip, Ghost, Stamp, StampSource};
@@ -441,13 +457,24 @@ impl Category {
 }
 
 /// How the brush lays its object down - BRUSH's list and the palette's
-/// brush row.
+/// brush row (`brush.rs` works out the cells).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Shape {
     /// A stroke: every cell the press and its drag cross, under the
     /// toggle-erase rule.
     #[default]
     Pen,
+    /// A rectangle from the press's cell to the pointer's, filled on the
+    /// release - or cleared by the eraser or the secondary button.
+    Rect,
+    /// A flood from the pressed cell over the cells joined to it edge to
+    /// edge that hold exactly what it holds, up to
+    /// `builder_fill_max_cells`, under the toggle-erase rule.
+    Fill,
+    /// A hashed share of the cells round each cell the stroke crosses,
+    /// laid on empty cells only - or, erasing, thinning the brush's object
+    /// (anything, under the eraser).
+    Scatter,
 }
 
 impl Shape {
@@ -455,6 +482,9 @@ impl Shape {
     pub fn name(self) -> &'static str {
         match self {
             Shape::Pen => "pen",
+            Shape::Rect => "rect",
+            Shape::Fill => "fill",
+            Shape::Scatter => "scatter",
         }
     }
 
@@ -462,7 +492,19 @@ impl Shape {
     pub fn label_key(self) -> crate::text::Key {
         match self {
             Shape::Pen => crate::text::keys::BRUSH_PEN,
+            Shape::Rect => crate::text::keys::BRUSH_RECT,
+            Shape::Fill => crate::text::keys::BRUSH_FILL,
+            Shape::Scatter => crate::text::keys::BRUSH_SCATTER,
         }
+    }
+
+    /// Whether a press on a cell already holding exactly the brush's
+    /// object makes the stroke an erase (docs/game-editor-fusion.md
+    /// section 8): a pen's or a fill's - the one way to take a cell or a
+    /// region back without another tool -, never a rectangle's or a
+    /// scatter's, whose first cell says nothing about the rest.
+    pub fn toggles(self) -> bool {
+        matches!(self, Shape::Pen | Shape::Fill)
     }
 
     pub fn parse(s: &str) -> Option<Shape> {
@@ -484,7 +526,14 @@ pub enum BrushRow {
 
 impl BrushRow {
     /// In list order.
-    pub const ALL: [BrushRow; 3] = [BrushRow::Shape(Shape::Pen), BrushRow::Select, BrushRow::Stamps];
+    pub const ALL: [BrushRow; 6] = [
+        BrushRow::Shape(Shape::Pen),
+        BrushRow::Shape(Shape::Rect),
+        BrushRow::Shape(Shape::Fill),
+        BrushRow::Shape(Shape::Scatter),
+        BrushRow::Select,
+        BrushRow::Stamps,
+    ];
 
     /// As `status.builder.buttons` names it: `shape_<name>`, the select
     /// tool's `tool_select`, `brush_stamps`.
@@ -664,14 +713,29 @@ fn floor_of(obj: Option<&CellObject>) -> ground::CellFloor {
     ground::CellFloor { road: wall || matches!(obj, Some(CellObject::Road)), water: matches!(obj, Some(CellObject::Water)), wall }
 }
 
+/// `repaint_ground` makes the whole ground again once an edit moves the
+/// floor under more than one cell in this many of the map's. A cell of
+/// water or wall repainted costs about what one and a half of the map's
+/// cells made again do in a release build and three in a debug one
+/// (`a_large_fill_timing`), so the two ways meet at two thirds of the map
+/// and at a third: half is between.
+const REBUILD_SHARE: usize = 2;
+
 /// A press-drag-release in progress on the field.
 struct Stroke {
+    /// The brush's shape at the press, held for the whole drag.
+    shape: Shape,
     /// Decided on the first cell (docs/game-editor-fusion.md section 8)
     /// and held for the whole drag.
     erase: bool,
+    /// The cell the press landed on: a rectangle's first corner, a fill's
+    /// start.
+    from: (i32, i32),
     /// The cell painted last, so a held-but-not-moved frame does not
-    /// re-place it every frame.
+    /// re-place it every frame - a rectangle's other corner.
     last_cell: (i32, i32),
+    /// A scatter's stroke counter (`brush::scattered`).
+    seed: u32,
     changes: Vec<CellChange>,
 }
 
@@ -809,6 +873,10 @@ pub struct MapEditor {
     stamps: Vec<Stamp>,
     /// Stamps saved this session, for the next one's number.
     saved_stamps: u32,
+    /// Scatter strokes made this session: each one's cells are hashed with
+    /// its own count (`brush::scattered`), so a second stroke over the same
+    /// ground picks other cells.
+    scatters: u32,
     /// The window pointer on the last frame no button was held: a pointer
     /// that moves with nothing down is a mouse hovering - a touch screen
     /// moves it only under a finger - and the paste ghost follows it.
@@ -875,6 +943,7 @@ impl MapEditor {
             drag: None,
             stamps: select::shipped_stamps(),
             saved_stamps: 0,
+            scatters: 0,
             hover: None,
             revision: std::cell::Cell::new(None),
             cli_overrides: CliOverrides::default(),
@@ -1392,36 +1461,74 @@ impl MapEditor {
     }
 
     /// The first cell of a press: decides paint or erase for the whole
-    /// stroke. Erase when the secondary button is down, the eraser is the
-    /// brush, or the cell already holds exactly the brush's object.
+    /// stroke and lays the shape's first cells. Erase when the secondary
+    /// button is down, the eraser is the brush, or - for a pen or a fill
+    /// (`Shape::toggles`) - the cell already holds exactly the brush's
+    /// object. A pen paints the cell, a fill floods from it and a scatter
+    /// lays its footprint round it; a rectangle waits for the release.
     fn begin_stroke(&mut self, cell: (i32, i32), right: bool) {
+        let shape = self.shape();
         let erase = right
             || self.active_tool == Tool::Eraser
-            || self.active_tool.object().is_some_and(|obj| self.map.cell(cell.0, cell.1) == Some(&obj));
-        self.stroke = Some(Stroke { erase, last_cell: cell, changes: Vec::new() });
-        self.paint(cell);
+            || (shape.toggles() && self.active_tool.object().is_some_and(|obj| self.map.cell(cell.0, cell.1) == Some(&obj)));
+        if shape == Shape::Scatter {
+            self.scatters = self.scatters.wrapping_add(1);
+        }
+        self.stroke = Some(Stroke { shape, erase, from: cell, last_cell: cell, seed: self.scatters, changes: Vec::new() });
+        match shape {
+            Shape::Pen => self.paint(cell),
+            Shape::Rect => {}
+            Shape::Fill => self.fill(cell),
+            Shape::Scatter => self.scatter(cell),
+        }
     }
 
-    /// The drag crossed into `cell` (or stayed on the last one, a no-op).
+    /// The drag crossed into `cell` (or stayed on the last one, a no-op): a
+    /// pen paints it, a scatter lays its footprint round it and a
+    /// rectangle stretches its corner to it. A fill is the press alone.
     fn stroke_to(&mut self, cell: (i32, i32)) {
         let Some(stroke) = &mut self.stroke else { return };
-        if stroke.last_cell == cell {
+        if stroke.last_cell == cell || stroke.shape == Shape::Fill {
             return;
         }
         stroke.last_cell = cell;
-        self.paint(cell);
+        match stroke.shape {
+            Shape::Pen => self.paint(cell),
+            Shape::Scatter => self.scatter(cell),
+            Shape::Rect | Shape::Fill => {}
+        }
     }
 
     /// The pointer moved from the last cell to `cell`, possibly further
     /// than one cell in a frame: paint every cell on the way, stepping one
     /// axis at a time, so a quick or diagonal drag lays a line joined edge
     /// to edge - a river that touches only at corners draws as a string of
-    /// pools. The tools' `stroke` takes its cells as given.
+    /// pools - and a scatter misses no ground between frames. A
+    /// rectangle's corner goes straight there. The tools' `stroke` takes
+    /// its cells as given.
     fn drag_to(&mut self, cell: (i32, i32)) {
-        let Some(from) = self.stroke.as_ref().map(|s| s.last_cell) else { return };
+        let Some((from, shape)) = self.stroke.as_ref().map(|s| (s.last_cell, s.shape)) else { return };
+        if shape == Shape::Rect {
+            self.stroke_to(cell);
+            return;
+        }
         for step in edge_joined_line(from, cell) {
             self.stroke_to(step);
         }
+    }
+
+    /// The rectangle a RECT stroke is drawing, inside the field, and
+    /// whether it erases: what the canvas outlines until the release fills
+    /// it.
+    pub fn rect_stroke(&self) -> Option<(CellRect, bool)> {
+        let stroke = self.stroke.as_ref().filter(|s| s.shape == Shape::Rect)?;
+        CellRect::spanning(stroke.from, stroke.last_cell).within(self.field_cells()).map(|rect| (rect, stroke.erase))
+    }
+
+    /// The status line's feedback - a save, a load, a fill refused - if
+    /// there is any.
+    pub fn status(&self) -> Option<&str> {
+        self.status.as_deref()
     }
 
     fn finish_stroke(&mut self) {
@@ -1450,10 +1557,13 @@ impl MapEditor {
         if !stroke.changes.is_empty() {
             self.map_changed();
         }
-        self.repaint_ground(stroke.changes.iter().map(|c| (c.col, c.row)));
+        self.repaint_ground(&stroke.changes);
     }
 
     fn finish_stroke_changes(&mut self) -> Vec<CellChange> {
+        if self.stroke.as_ref().is_some_and(|s| s.shape == Shape::Rect) {
+            self.fill_rect();
+        }
         let Some(stroke) = self.stroke.take() else { return Vec::new() };
         let changes = stroke.changes;
         if !changes.is_empty() {
@@ -1495,10 +1605,83 @@ impl MapEditor {
             return;
         }
         self.map_changed();
-        self.repaint_ground(changes.iter().map(|c| (c.col, c.row)));
+        self.repaint_ground(&changes);
         if let Some(stroke) = &mut self.stroke {
             stroke.changes.extend(changes);
         }
+    }
+
+    /// Make each of `cells` hold its object (`None` clears it) as the open
+    /// stroke's, the ground and the navigator repainted round them in one
+    /// batch.
+    fn lay(&mut self, cells: impl IntoIterator<Item = ((i32, i32), Option<CellObject>)>) {
+        let mut changes = Vec::new();
+        for ((col, row), after) in cells {
+            self.change_cell(col, row, after, &mut changes);
+        }
+        if changes.is_empty() {
+            return;
+        }
+        self.map_changed();
+        self.repaint_ground(&changes);
+        if let Some(stroke) = &mut self.stroke {
+            stroke.changes.extend(changes);
+        }
+    }
+
+    /// What the open stroke lays on a cell: nothing to clear it, else the
+    /// brush's object. `None` with no stroke open, or a paint stroke with
+    /// no object to paint.
+    fn stroke_object(&self) -> Option<Option<CellObject>> {
+        let stroke = self.stroke.as_ref()?;
+        if stroke.erase { Some(None) } else { self.active_tool.object().map(Some) }
+    }
+
+    /// FILL from `cell` as the open stroke's (`brush::flood`): the region
+    /// that holds what `cell` holds made the brush's object, or cleared by
+    /// an erase. A region past `builder_fill_max_cells` is left as it is,
+    /// the status line saying why.
+    fn fill(&mut self, cell: (i32, i32)) {
+        let Some(after) = self.stroke_object() else { return };
+        if self.map.cell(cell.0, cell.1).copied() == after {
+            return;
+        }
+        let max = BrushRules::current().fill_max_cells;
+        match brush::flood(&self.map, self.field_cells(), cell, max) {
+            Some(cells) => self.lay(cells.into_iter().map(|c| (c, after))),
+            None => self.status = Some(crate::text::text().fmt(crate::text::keys::EDITOR_FILL_TOO_LARGE, &[("n", max.into())])),
+        }
+    }
+
+    /// RECT's release: every cell of the open stroke's rectangle on the
+    /// field made the brush's object, or cleared by an erase.
+    fn fill_rect(&mut self) {
+        let (Some((rect, _)), Some(after)) = (self.rect_stroke(), self.stroke_object()) else { return };
+        self.lay(rect.cells().map(|c| (c, after)));
+    }
+
+    /// SCATTER's footprint round `cell` as the open stroke's: of the cells
+    /// the stroke's hash picks (`brush::scattered`), an empty one takes the
+    /// brush's object - a scatter never paints over a cell - and an erase
+    /// clears one holding the brush's object, or anything under the
+    /// eraser.
+    fn scatter(&mut self, cell: (i32, i32)) {
+        let Some(stroke) = &self.stroke else { return };
+        let (erase, seed) = (stroke.erase, stroke.seed);
+        let rules = BrushRules::current();
+        let object = self.active_tool.object();
+        let picked: Vec<_> = brush::footprint(cell, rules.scatter_radius, self.field_cells())
+            .filter(|&c| brush::scattered(c, seed, rules.scatter_density))
+            .filter_map(|(col, row)| {
+                let held = self.map.cell(col, row).copied();
+                if erase {
+                    (held.is_some() && (object.is_none() || held == object)).then_some(((col, row), None))
+                } else {
+                    (held.is_none() && object.is_some()).then_some(((col, row), object))
+                }
+            })
+            .collect();
+        self.lay(picked);
     }
 
     /// Make a lint quick fix (`maplint::LintFix`) on the map as one undo
@@ -1534,7 +1717,7 @@ impl MapEditor {
         }
         self.history.push(EditStep::Cells(changes.clone()));
         self.map_changed();
-        self.repaint_ground(changes.iter().map(|c| (c.col, c.row)));
+        self.repaint_ground(&changes);
         true
     }
 
@@ -1744,10 +1927,12 @@ impl MapEditor {
         self.ghost = Some(Ghost::new(clip, cell, self.field_cells()));
     }
 
-    /// Escape on the canvas: a drag taken back, else the paste ghost taken
-    /// away, else the selection let go.
+    /// Escape on the canvas: a rectangle being drawn or a drag taken back,
+    /// else the paste ghost taken away, else the selection let go.
     fn escape(&mut self) {
-        if self.drag.is_some() {
+        if self.stroke.as_ref().is_some_and(|s| s.shape == Shape::Rect) {
+            self.cancel_stroke();
+        } else if self.drag.is_some() {
             self.cancel_drag();
         } else if self.ghost.is_some() {
             self.ghost = None;
@@ -1798,7 +1983,7 @@ impl MapEditor {
         }
         self.history.push(EditStep::Cells(changes.clone()));
         self.map_changed();
-        self.repaint_ground(changes.iter().map(|c| (c.col, c.row)));
+        self.repaint_ground(&changes);
         changes
     }
 
@@ -1813,7 +1998,7 @@ impl MapEditor {
         }
         if !changes.is_empty() {
             self.map_changed();
-            self.repaint_ground(changes.iter().map(|c| (c.col, c.row)));
+            self.repaint_ground(&changes);
         }
     }
 
@@ -1883,7 +2068,7 @@ impl MapEditor {
         }
         if !changes.is_empty() {
             self.map_changed();
-            self.repaint_ground(changes.iter().map(|c| (c.col, c.row)));
+            self.repaint_ground(&changes);
         }
         self.drag = Some(Drag::Move { grab, by: (0, 0), from, lifted, changes });
     }
@@ -2040,14 +2225,24 @@ impl MapEditor {
         self.minimap = Minimap::of_map(&self.map, |col, row| self.ground.depth(col, row));
     }
 
-    /// Make the ground agree with the map at `cells`, the only ones an
-    /// edit touched: `GroundGrid::repaint` resolves the tiles and bakes the
-    /// floor shade again only around them, so a stroke across a large map
-    /// costs what it does on a small one. The navigator's picture follows:
-    /// those cells and every one whose water the repaint can have moved
-    /// (`Minimap::repaint`), as a patch of only the texels that changed.
-    fn repaint_ground(&mut self, cells: impl IntoIterator<Item = (i32, i32)>) {
-        let floors: Vec<_> = cells.into_iter().map(|(col, row)| (col, row, floor_of(self.map.cell(col, row)))).collect();
+    /// Make the ground agree with the map where `changes` were made, the
+    /// only cells an edit touched: `GroundGrid::repaint` resolves the tiles
+    /// and bakes the floor shade again only around them, so a stroke across
+    /// a large map costs what it does on a small one. The navigator's
+    /// picture follows: those cells and every one whose water the repaint
+    /// can have moved (`Minimap::repaint`), as a patch of only the texels
+    /// that changed. An edit that moves the floor - road, water or a wall -
+    /// under more than one cell in `REBUILD_SHARE` of the map's (a large
+    /// RECT, FILL or paste, or the undo of one) makes the whole ground
+    /// again instead (`rebuild_ground`), the same picture for less.
+    fn repaint_ground(&mut self, changes: &[CellChange]) {
+        let moved = changes.iter().filter(|c| floor_of(c.before.as_ref()) != floor_of(c.after.as_ref())).count();
+        let (cols, rows) = crate::minimap::cells_of(self.map.field_size());
+        if moved * REBUILD_SHARE > cols * rows {
+            self.rebuild_ground();
+            return;
+        }
+        let floors: Vec<_> = changes.iter().map(|c| (c.col, c.row, floor_of(self.map.cell(c.col, c.row)))).collect();
         let touched = self.ground.repaint(&floors);
         let (map, ground) = (&self.map, &self.ground);
         let edited = floors.iter().map(|&(col, row, _)| (col, row));
@@ -2068,7 +2263,7 @@ impl MapEditor {
     /// any other setting left alone.
     fn ground_after(&mut self, step: &EditStep) {
         match step {
-            EditStep::Cells(changes) => self.repaint_ground(changes.iter().map(|c| (c.col, c.row))),
+            EditStep::Cells(changes) => self.repaint_ground(&changes),
             EditStep::Settings { before, after } if before.theme == after.theme => {}
             _ => self.rebuild_ground(),
         }
@@ -5313,6 +5508,68 @@ mod editor_tests {
         }
     }
 
+    /// What a large RECT or FILL costs - the cells laid, the ground and the
+    /// navigator repainted, the floor shade the next frame draws - against
+    /// making the whole ground again, on the study map, longwater and an
+    /// empty 250 x 250 map: what `repaint_ground`'s switch to a rebuild and
+    /// `builder_fill_max_cells` are set from. Prints; run with
+    /// `--ignored --nocapture` (and `--release` for a phone's order).
+    #[test]
+    #[ignore]
+    fn a_large_fill_timing() {
+        let ms = |t: std::time::Instant| t.elapsed().as_secs_f64() * 1e3;
+        let mut empty = MapFile::default();
+        empty.size = Some((250.0, 250.0));
+        let maps = [
+            ("study 96 x 54", MapFile::load(std::path::Path::new("maps/study/frontier.toml")).expect("the study map")),
+            ("longwater 80 x 45", map::open_map("longwater").expect("longwater")),
+            ("empty 250 x 250", empty),
+        ];
+        for (name, map) in maps {
+            let t = std::time::Instant::now();
+            let mut ed = MapEditor::new(map);
+            let _ = ed.ground().shade();
+            let open = ms(t);
+            let t = std::time::Instant::now();
+            ed.rebuild_ground();
+            let _ = ed.ground().shade();
+            eprintln!("{name}: open {open:.1} ms, rebuild {:.1} ms", ms(t));
+            let (cols, rows) = ed.size_cells();
+            let (cols, rows) = (cols as i32, rows as i32);
+            ed.set_shape(Shape::Rect);
+            for (tool, label) in [(Tool::Water, "water"), (Tool::Wall(Material::Brick), "brick"), (Tool::TallGrass, "grass")] {
+                ed.select_tool(tool);
+                for side in [16, 32, 64, 128, 250] {
+                    if side > cols.max(rows) && side != 250 {
+                        continue;
+                    }
+                    let (w, h) = (side.min(cols), side.min(rows));
+                    let (c0, r0) = ((cols - w) / 2, (rows - h) / 2);
+                    let t = std::time::Instant::now();
+                    let changes = ed.stroke(&[(c0, r0), (c0 + w - 1, r0 + h - 1)], false);
+                    let lay = ms(t);
+                    let t = std::time::Instant::now();
+                    let _ = ed.ground().shade();
+                    let shade = ms(t);
+                    let t = std::time::Instant::now();
+                    ed.undo();
+                    let _ = ed.ground().shade();
+                    let undo = ms(t);
+                    eprintln!("  rect {label:>5} {w:>3} x {h:<3} {:>6} cells: lay {lay:.1} ms, shade {shade:.1} ms, undo {undo:.1} ms", changes.len());
+                    if w == cols && h == rows {
+                        break;
+                    }
+                }
+            }
+            let bounds = ed.field_cells();
+            for max in [4096, 16384, 70000] {
+                let t = std::time::Instant::now();
+                let found = brush::flood(ed.map(), bounds, (cols / 2, rows / 2), max).map(|c| c.len());
+                eprintln!("  flood from the middle, at most {max}: {found:?} in {:.1} ms", ms(t));
+            }
+        }
+    }
+
     /// The Save prompt takes text and Enter; Esc cancels it, and so does a
     /// press outside it - a touch screen's Esc, which the prompt's hint
     /// names after a touch -, painting nothing; a press inside it is the
@@ -5835,6 +6092,304 @@ mod editor_tests {
         ed.popup = Some(Popup::Save { name: String::new() });
         ed.update(&BuilderInput { escape: true, ..Default::default() }, &frame);
         assert!(ed.ghost().is_some(), "Escape closed the prompt, not the ghost");
+    }
+
+    // ----- the brush's shapes -----
+
+    /// A closed ring of brick round cells 2..=6 each way, its inside
+    /// empty.
+    fn ring_map() -> MapFile {
+        let mut map = MapFile::new();
+        for i in 2..=6 {
+            for (c, r) in [(i, 2), (i, 6), (2, i), (6, i)] {
+                map.set_cell(c, r, brick());
+            }
+        }
+        map
+    }
+
+    /// How many cells of `rect` hold `obj`.
+    fn held_in(ed: &MapEditor, rect: CellRect, obj: CellObject) -> usize {
+        rect.cells().filter(|&(c, r)| ed.map().cell(c, r) == Some(&obj)).count()
+    }
+
+    /// RECT: held, the rectangle is only drawn; the release fills it, over
+    /// whatever was there, as one step - begun on the brush's own object
+    /// too, since a rectangle does not toggle. The secondary button and
+    /// the eraser clear it instead, and Escape takes the drag back.
+    #[test]
+    fn a_rect_fills_on_the_release_and_the_eraser_or_the_right_button_clears_it() {
+        let frame = arena();
+        let before = select_map();
+        let mut ed = MapEditor::new(before.clone());
+        ed.set_shape(Shape::Rect);
+        assert_eq!(ed.shape(), Shape::Rect);
+        let rect = CellRect::spanning((3, 3), (7, 6));
+        let (a, b) = (on_cell(&ed, &frame, 7, 6), on_cell(&ed, &frame, 3, 3));
+        ed.update(&BuilderInput { pointer: Some(a), pressed: true, held: true, ..Default::default() }, &frame);
+        ed.update(&BuilderInput { pointer: Some(b), held: true, ..Default::default() }, &frame);
+        assert_eq!(ed.rect_stroke(), Some((rect, false)), "dragged up and left: the same rectangle");
+        assert_eq!(ed.map().cells, before.cells, "nothing laid while the drag is held");
+        ed.update(&BuilderInput { pointer: Some(b), ..Default::default() }, &frame);
+        assert_eq!(ed.rect_stroke(), None);
+        assert_eq!(held_in(&ed, rect, brick()), 20);
+        assert_eq!(count(&ed, CellObject::Start), 0, "painted over, as a pen stroke paints over a start");
+        assert_eq!(ed.history().undo_depth(), 1);
+        ground_is_rebuilt(&ed);
+        undo_redo_exact(&mut ed, &before);
+        // Begun on a brick, it still paints.
+        let before = ed.map().clone();
+        ed.stroke(&[(4, 4), (9, 4)], false);
+        assert_eq!(held_in(&ed, CellRect::spanning((4, 4), (9, 4)), brick()), 6);
+        undo_redo_exact(&mut ed, &before);
+        // The secondary button clears it, whatever is in it ...
+        let before = ed.map().clone();
+        ed.stroke(&[(2, 2), (8, 7)], true);
+        assert_eq!(CellRect::spanning((2, 2), (8, 7)).cells().filter(|&(c, r)| ed.map().cell(c, r).is_some()).count(), 0);
+        assert_eq!(ed.map().cell(20, 10), Some(&CellObject::Frog), "and nothing past it");
+        undo_redo_exact(&mut ed, &before);
+        ground_is_rebuilt(&ed);
+        // ... and so does the eraser.
+        ed.select_tool(Tool::Eraser);
+        ed.stroke(&[(4, 4), (4, 5)], false);
+        assert_eq!((ed.map().cell(4, 4), ed.map().cell(4, 5)), (None, None));
+        ed.undo();
+        // Escape takes a drag back: nothing laid, no step.
+        ed.select_tool(Tool::Water);
+        let (before, depth) = (ed.map().clone(), ed.history().undo_depth());
+        ed.update(&BuilderInput { pointer: Some(on_cell(&ed, &frame, 10, 10)), pressed: true, held: true, ..Default::default() }, &frame);
+        ed.update(&BuilderInput { pointer: Some(on_cell(&ed, &frame, 14, 12)), held: true, ..Default::default() }, &frame);
+        assert!(ed.rect_stroke().is_some());
+        ed.update(&BuilderInput { pointer: Some(on_cell(&ed, &frame, 14, 12)), held: true, escape: true, ..Default::default() }, &frame);
+        ed.update(&BuilderInput { pointer: Some(on_cell(&ed, &frame, 14, 12)), ..Default::default() }, &frame);
+        assert_eq!((ed.map().cells == before.cells, ed.history().undo_depth()), (true, depth));
+    }
+
+    /// FILL: a press floods the region of the pressed cell - the cells
+    /// joined to it edge to edge holding exactly what it holds - as one
+    /// step, and the water it lays auto-tiles; the brush on its own object
+    /// takes the region back (the toggle-erase rule), another brush on a
+    /// region of walls fills the walls, and the secondary button clears.
+    #[test]
+    fn a_fill_floods_the_region_of_the_pressed_cell_and_toggles() {
+        let frame = arena();
+        let before = ring_map();
+        let mut ed = MapEditor::new(before.clone());
+        ed.select_tool(Tool::Water);
+        ed.set_shape(Shape::Fill);
+        let at = on_cell(&ed, &frame, 4, 4);
+        click(&mut ed, &frame, at);
+        assert_eq!(held_in(&ed, CellRect::spanning((3, 3), (5, 5)), CellObject::Water), 9);
+        assert_eq!(count(&ed, CellObject::Water), 9, "the ring holds it in");
+        assert_eq!(ed.history().undo_depth(), 1);
+        ground_is_rebuilt(&ed);
+        assert_eq!(ed.ground().depth(4, 4), ground::Depth::Deep, "a 3 x 3 lake, its middle open water");
+        undo_redo_exact(&mut ed, &before);
+        // The same brush on its own object takes the region back.
+        let filled = ed.map().clone();
+        let at = on_cell(&ed, &frame, 3, 5);
+        click(&mut ed, &frame, at);
+        assert_eq!(count(&ed, CellObject::Water), 0);
+        ground_is_rebuilt(&ed);
+        undo_redo_exact(&mut ed, &filled);
+        ed.undo();
+        // Iron on the ring fills the ring: sixteen bricks joined edge to edge.
+        ed.select_tool(Tool::Wall(Material::Iron));
+        let before = ed.map().clone();
+        ed.stroke(&[(2, 2)], false);
+        let iron = CellObject::Wall { material: Material::Iron };
+        assert_eq!((count(&ed, iron), count(&ed, brick())), (16, 0));
+        undo_redo_exact(&mut ed, &before);
+        // The secondary button clears the region pressed; the eraser too.
+        ed.stroke(&[(6, 4)], true);
+        assert_eq!(count(&ed, iron), 0);
+        assert_eq!(count(&ed, CellObject::Water), 9, "only the region pressed");
+        ed.select_tool(Tool::Eraser);
+        ed.stroke(&[(4, 4)], false);
+        assert!(ed.map().cells.is_empty());
+        // Outside the ring - the rest of the arena, inside its cap - fills
+        // up to the ring and the map's edge, never past them.
+        ed.undo();
+        ed.undo();
+        ed.select_tool(Tool::TallGrass);
+        ed.stroke(&[(0, 0)], false);
+        let field = ed.field_cells();
+        assert_eq!(count(&ed, CellObject::TallGrass), (field.cols * field.rows) as usize - 25);
+    }
+
+    /// FILL past `builder_fill_max_cells` changes nothing, makes no step
+    /// and says why on the status line; within it the same field fills.
+    #[test]
+    fn a_fill_past_its_cap_changes_nothing_and_says_why() {
+        let rules = BrushRules::of(&crate::tuning::Tuning::DEFAULT);
+        let mut map = MapFile::new();
+        map.size = Some((80.0, 60.0));
+        let mut ed = MapEditor::new(map);
+        let field = ed.field_cells();
+        assert!((field.cols * field.rows) as usize > rules.fill_max_cells, "the field is past the cap");
+        ed.select_tool(Tool::TallGrass);
+        ed.set_shape(Shape::Fill);
+        assert!(ed.stroke(&[(10, 10)], false).is_empty());
+        assert!(ed.map().cells.is_empty());
+        assert_eq!(ed.history().undo_depth(), 0, "no step");
+        let message = ed.status().expect("the status line says why");
+        assert!(message.contains(&rules.fill_max_cells.to_string()), "{message}");
+        // Walled off, the corner fills.
+        ed.select_tool(Tool::Wall(Material::Brick));
+        ed.set_shape(Shape::Rect);
+        ed.stroke(&[(30, 0), (30, 30)], false);
+        ed.stroke(&[(0, 30), (30, 30)], false);
+        ed.select_tool(Tool::TallGrass);
+        ed.set_shape(Shape::Fill);
+        assert_eq!(ed.stroke(&[(10, 10)], false).len(), 30 * 30);
+    }
+
+    /// SCATTER: of the cells round each cell the stroke crosses, a hashed
+    /// share takes the brush's object - empty cells only, so a wall in the
+    /// way stays -, the same share for the same stroke in any editor (no
+    /// random draw), another for the next stroke; erasing, it thins what it
+    /// scatters and leaves the rest. One step a stroke.
+    #[test]
+    fn a_scatter_lays_a_hashed_share_of_its_footprint_on_empty_cells_and_thins_erasing() {
+        let rules = BrushRules::current();
+        let mut map = MapFile::new();
+        map.set_cell(14, 5, brick());
+        let line: Vec<(i32, i32)> = (8..=20).map(|c| (c, 5)).collect();
+        let scatter = |map: &MapFile| {
+            let mut ed = MapEditor::new(map.clone());
+            ed.select_tool(Tool::Prop(Material::Tree));
+            ed.set_shape(Shape::Scatter);
+            ed
+        };
+        let mut ed = scatter(&map);
+        let before = ed.map().clone();
+        let changes = ed.stroke(&line, false);
+        let trees = count(&ed, CellObject::Tree);
+        assert_eq!(changes.len(), trees);
+        let reach = (rules.scatter_radius as f32 + 0.5).powi(2);
+        let near = |(c, r): (i32, i32)| line.iter().any(|&(lc, lr)| (((c - lc).pow(2) + (r - lr).pow(2)) as f32) <= reach);
+        let footprint = ed.field_cells().cells().filter(|&c| near(c)).count();
+        assert!(ed.map().iter_cells().all(|(c, r, o)| *o != CellObject::Tree || near((c, r))), "only round the stroke");
+        let share = trees as f32 / footprint as f32;
+        assert!(share > rules.scatter_density * 0.4 && share < rules.scatter_density * 1.8, "{trees} of {footprint}");
+        assert_eq!(ed.map().cell(14, 5), Some(&brick()), "never painted over");
+        assert_eq!(ed.history().undo_depth(), 1);
+        undo_redo_exact(&mut ed, &before);
+        let mut twin = scatter(&map);
+        twin.stroke(&line, false);
+        assert_eq!(twin.map().cells, ed.map().cells, "the same stroke, the same cells");
+        ed.stroke(&line, false);
+        let thick = count(&ed, CellObject::Tree);
+        assert!(thick > trees, "a second stroke picks other cells");
+        let before = ed.map().clone();
+        ed.stroke(&line, true);
+        let thinned = count(&ed, CellObject::Tree);
+        assert!(thinned < thick && thinned > 0, "{thinned} of {thick}");
+        assert_eq!(ed.map().cell(14, 5), Some(&brick()), "a tree brush's erase thins trees only");
+        undo_redo_exact(&mut ed, &before);
+        // Begun on a tree, a scatter still paints.
+        let on = ed.map().iter_cells().find(|(_, _, o)| **o == CellObject::Tree).map(|(c, r, _)| (c, r)).expect("a tree");
+        let n = count(&ed, CellObject::Tree);
+        ed.stroke(&[on], false);
+        assert!(count(&ed, CellObject::Tree) >= n);
+        // Water scattered auto-tiles.
+        ed.select_tool(Tool::Water);
+        ed.stroke(&[(25, 10), (28, 10)], false);
+        ground_is_rebuilt(&ed);
+    }
+
+    /// A singleton's brush paints with the pen whatever the shape: the
+    /// start moves along a stroke, BRUSH's shapes but the pen are dim and
+    /// refused, and the shape comes back with a brush that takes it.
+    /// BRUSH's list and the palette's row pick the shape.
+    #[test]
+    fn a_singletons_brush_paints_with_the_pen_and_brushs_rows_pick_the_shape() {
+        let frame = arena();
+        let mut ed = MapEditor::new(select_map());
+        press_named(&mut ed, &frame, "brush");
+        assert_eq!(ed.open_menu(), Some("brush"));
+        for name in ["shape_pen", "shape_rect", "shape_fill", "shape_scatter", "tool_select", "brush_stamps"] {
+            assert!(has_named(&ed, &frame, name), "{name} in BRUSH's list");
+        }
+        press_named(&mut ed, &frame, "shape_rect");
+        assert_eq!((ed.shape(), ed.open_menu()), (Shape::Rect, None));
+        ed.select_tool(Tool::Start);
+        assert_eq!(ed.shape(), Shape::Pen);
+        assert!(!ed.brush_row_live(BrushRow::Shape(Shape::Fill)) && ed.brush_row_live(BrushRow::Shape(Shape::Pen)));
+        press_named(&mut ed, &frame, "brush");
+        assert!(!has_named(&ed, &frame, "shape_scatter") && has_named(&ed, &frame, "shape_pen"), "dim rows are no buttons");
+        ed.close_popup();
+        ed.set_shape(Shape::Scatter);
+        assert_eq!(ed.shape(), Shape::Pen, "refused");
+        ed.stroke(&[(10, 10), (14, 12)], false);
+        assert_eq!(count(&ed, CellObject::Start), 1, "one start, moved");
+        assert_eq!(ed.map().start_cell(), Some((14, 12)));
+        ed.select_tool(Tool::Wall(Material::Brick));
+        assert_eq!(ed.shape(), Shape::Rect, "back with a brush that takes it");
+        // The folded palette's brush row.
+        let insets = Insets { left: 59.0 * 3.0, top: 0.0, right: 59.0 * 3.0, bottom: 21.0 * 3.0 };
+        let ui = UiFrame::new((852.0 * 3.0, 393.0 * 3.0), 3.0, 1.0, insets, true);
+        let narrow = BuilderFrame::new(ui, (W, H), MapClass::Arena, None);
+        press_named(&mut ed, &narrow, "tools");
+        press_named(&mut ed, &narrow, "shape_fill");
+        assert_eq!(ed.shape(), Shape::Fill);
+    }
+
+    /// With a finger: a drag draws the rectangle and the lift fills it, a
+    /// second finger landing on it takes it back, a tap floods and a drag
+    /// scatters.
+    #[test]
+    fn a_finger_draws_a_rect_floods_with_a_tap_and_scatters_with_a_drag() {
+        let (mut ed, frame) = touch_arena();
+        ed.load(ring_map());
+        let p = |ed: &MapEditor, c: i32, r: i32| on_cell(ed, &frame, c, r);
+        let path = |from: Vec2, to: Vec2| -> Vec<Vec<(i32, f32, f32)>> {
+            (0..=10).map(|i| vec![(1, from.x + (to.x - from.x) * i as f32 / 10.0, from.y + (to.y - from.y) * i as f32 / 10.0)]).collect()
+        };
+        ed.select_tool(Tool::Road);
+        ed.set_shape(Shape::Rect);
+        let frames = path(p(&ed, 10, 3), p(&ed, 14, 5));
+        hold_fingers(&mut ed, &frame, &frames);
+        assert_eq!(ed.rect_stroke(), Some((CellRect::spanning((10, 3), (14, 5)), false)));
+        assert_eq!(count(&ed, CellObject::Road), 0);
+        fingers(&mut ed, &frame, &[]);
+        assert_eq!(count(&ed, CellObject::Road), 15);
+        let (before, depth) = (ed.map().clone(), ed.history().undo_depth());
+        let (from, to) = (p(&ed, 20, 3), p(&ed, 24, 6));
+        let mut frames = path(from, to);
+        frames.push(vec![(1, to.x, to.y), (2, to.x + 60.0, to.y)]);
+        fingers(&mut ed, &frame, &frames);
+        assert_eq!((ed.map().cells == before.cells, ed.history().undo_depth()), (true, depth), "a second finger takes it back");
+        ed.select_tool(Tool::Water);
+        ed.set_shape(Shape::Fill);
+        let at = p(&ed, 4, 4);
+        fingers(&mut ed, &frame, &[vec![(3, at.x, at.y)]]);
+        assert_eq!(count(&ed, CellObject::Water), 9);
+        ed.select_tool(Tool::TallGrass);
+        ed.set_shape(Shape::Scatter);
+        let frames = path(p(&ed, 12, 10), p(&ed, 24, 10));
+        fingers(&mut ed, &frame, &frames);
+        assert!(count(&ed, CellObject::TallGrass) > 0);
+    }
+
+    /// An edit that moves the floor under most of the map makes the ground
+    /// again whole (`REBUILD_SHARE`), a smaller one repaints its cells, and
+    /// both - and their undos - leave the ground a fresh build would make.
+    #[test]
+    fn a_large_edit_makes_the_ground_again_and_a_small_one_repaints_it_alike() {
+        let mut ed = MapEditor::new(select_map());
+        ed.set_shape(Shape::Rect);
+        let field = ed.field_cells();
+        for (tool, to) in [(Tool::Water, (5, 5)), (Tool::Water, (field.cols - 1, field.rows - 1)), (Tool::Road, (30, 12)), (Tool::Wall(Material::Brick), (20, 17))] {
+            ed.select_tool(tool);
+            let changes = ed.stroke(&[(1, 1), to], false);
+            assert!(!changes.is_empty());
+            ground_is_rebuilt(&ed);
+            ed.undo();
+            ground_is_rebuilt(&ed);
+            ed.redo();
+            ground_is_rebuilt(&ed);
+        }
     }
 }
 

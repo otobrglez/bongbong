@@ -366,13 +366,19 @@ editor-copied = copied { $n } cells
 editor-cut = cut { $n } cells
 editor-stamp-kept = kept as { $name } in STAMPS
 editor-stamp-empty = nothing to keep: the selection is empty
+editor-fill-too-large = too large to fill: more than { $n } cells
 
-# BRUSH: how a press on the canvas paints, the select tool and the stamps.
-# The palette's row of them is named at 12 pt in 60, like a category; the
+# BRUSH: how a press on the canvas paints - a pen, a rectangle filled when
+# the drag ends, a flood fill of the region pressed, a scatter of a share
+# of the cells round the drag -, the select tool and the stamps. The
+# palette's row of them is named at 12 pt in 60, like a category; the
 # list's rows at 18 px in a 200 px row after a 32 px icon (about 12
 # letters), like the tools.
 editor-brush = BRUSH
 brush-pen = pen
+brush-rect = rectangle
+brush-fill = fill
+brush-scatter = scatter
 brush-stamps = stamps...
 
 # The select tool's strip under the bar: a word on each button, 11 pt in

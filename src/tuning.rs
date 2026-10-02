@@ -2016,6 +2016,23 @@ tunables! {
         builder_edge_scroll_pt_per_s: f32 = 600.0 in 0.0 ..= 4000.0;
         /// How fast a held arrow key pans the canvas, in points per second.
         builder_key_pan_pt_per_s: f32 = 800.0 in 0.0 ..= 4000.0;
+        /// The most cells one FILL changes (`editor::brush::flood`): a
+        /// fill that would take more is refused, the status line saying
+        /// so, rather than flooding a 250 x 250 map in one frame when it
+        /// finds its way out through a gap. RECT is not held to it - its
+        /// rectangle is the one drawn. 4096 cells of water or wall cost
+        /// about 10 ms with their repaint in a release build
+        /// (`a_large_fill_timing`).
+        builder_fill_max_cells: usize = 4096 in 16 ..= 62500;
+        /// SCATTER's footprint: the cells within this many cells of each
+        /// cell the stroke crosses (and a half), a disc twice as wide and
+        /// one more - 2 is 21 cells, five across.
+        builder_scatter_radius_cells: i32 = 2 in 0 ..= 8;
+        /// The share of SCATTER's footprint a stroke paints, chosen by a
+        /// hash of the cell and the stroke rather than any random draw;
+        /// another stroke over the same ground picks other cells, so going
+        /// over it again thickens the scatter.
+        builder_scatter_density: f32 = 0.25 in 0.02 ..= 1.0;
     }
 
     group online {

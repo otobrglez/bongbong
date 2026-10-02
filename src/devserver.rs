@@ -33,7 +33,7 @@ use sola_raylib::prelude::{RaylibHandle, RaylibTexture2D, RaylibThread, RenderTe
 
 use crate::ai::Intent;
 use crate::editor::{
-    Axis, BuilderFrame, BuilderInput, Category, CellChange, CellRect, MapEditor, Tool, parse_mission, parse_spawn, parse_tank, parse_tier,
+    Axis, BuilderFrame, BuilderInput, Category, CellChange, CellRect, MapEditor, Shape, Tool, parse_mission, parse_spawn, parse_tank, parse_tier,
 };
 use crate::hud::{leave_dialog_rects, players_dialog_rects, CornerButton, CornerShape, Corners, UiFrame};
 use crate::map::MapFile;
@@ -158,7 +158,7 @@ const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"inte
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|split|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `split` of a couch pair apart (null for one view: the divider's `line` - a point and the unit normal into the second half in the followed bitmap's pixels - and `window_line`, how far `apart` the halves' views stand and each half's `seat`, `rect`, `offset`, `cut` and `in_view`), the `establishing` shot's `phase` (whole|zoom|follow) and `progress` (view `establishing` while it plays), the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`; and `motion`, the one motion switch - whether motion is `reduced` (no shake, no whole-screen ripple, the establishing shot cut rather than zoomed), the `reduce_motion` row's `setting` (platform|off|on) and what the `platform` said at startup, null where it says nothing), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, the input its `hints` name - `keys` or `touch`, the last one used: a touch landing turns them to taps and a key press back -, in play and online the corners' `buttons` and `clusters` and the `minimap` picture under the right cluster (`null` where none is drawn - an arena shown whole, a phone; a press there does nothing), and the `screen_buttons` of whatever stands over the round - the level select's open tiles (`level_N`) and `back`, a dialog's `one`/`two` or `leave`/`stay`, a level's end screen's `levels`/`again`/`next`, the lobby's live buttons (`host`, `join`, `key_a`, `confirm`, `ready`, `start`, `kick_1`, ...) - all in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state (the builder's chrome is laid out on the window in UI points like play's corners - the bar along the top of the safe area, the popups under it -, and its rects come in window coordinates, what `click` and `builder_touch` take, each with its `ui` points; `builder.navigator`: the navigator's picture, `null` at FIT on an arena; `builder.buttons`: the builder's buttons by name - the bar's `play`, `play_here`, `check`, `clear`, `fit`, `map`, `file`, `erase`, `undo`, `redo`, each category's `category_<name>` (its icon half) and `list_<name>` (its list half) and `brush` (BRUSH: the brush's shape, the select tool, the stamps), or the one `tools` button a bar too narrow for the five and BRUSH folds them into; with the select tool the strip under the bar's live buttons - `sel_copy`, `sel_cut`, `sel_paste`, `sel_flip_h`, `sel_flip_v`, `sel_delete`, `sel_stamp` (keep the selection as a stamp), `sel_stamps` (the STAMPS list), or with a paste ghost `sel_place`, `sel_flip_h`, `sel_flip_v`, `sel_cancel`; while a popup is open its own - a list's or the palette's `tool_<name>`, BRUSH's list's and the palette's brush row's `shape_<name>`, `tool_select` and `brush_stamps`, the FILE menu's `load`, `save`, `save_as` and `clear_map`, the Load list's `map_<name>`, the STAMPS list's `stamp_<key>`, the MAP panel's `<row>_dec`/`<row>_inc` and `reset`, the CHECK panel's `finding_N` rows and `fix_N` buttons - and a paged popup's `page_back`/`page_next`; `builder.shape`: how the brush paints (pen); `builder.selection` and `builder.ghost`: the select tool's rectangle and the paste ghost as {col, row, cols, rows} (the ghost with its `cells`), `null` for none; `builder.clipboard`: what COPY and CUT took ({cols, rows, cells}); `builder.stamps`: how many stamps the STAMPS list offers; `builder.check`: the CHECK panel's last report; `builder.clear`: the clear check - the canvas's `revision`, whether it is `cleared` (won from plain PLAY with no edit since) and its `par` in seconds, and the revision PLAY started the local round on (`attempt`); `builder.loupe`: the loupe over a painting finger - where it stands, the `world` it shows, its `device_scale` and the `cell` the stroke paints -, `null` without one), and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|split|spectating|nobody), whether it `cut` this frame, its `lead` and sub-block `offset`, the `split` of a couch pair apart (null for one view: the divider's `line` - a point and the unit normal into the second half in the followed bitmap's pixels - and `window_line`, how far `apart` the halves' views stand and each half's `seat`, `rect`, `offset`, `cut` and `in_view`), the `establishing` shot's `phase` (whole|zoom|follow) and `progress` (view `establishing` while it plays), the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`; and `motion`, the one motion switch - whether motion is `reduced` (no shake, no whole-screen ripple, the establishing shot cut rather than zoomed), the `reduce_motion` row's `setting` (platform|off|on) and what the `platform` said at startup, null where it says nothing), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, the input its `hints` name - `keys` or `touch`, the last one used: a touch landing turns them to taps and a key press back -, in play and online the corners' `buttons` and `clusters` and the `minimap` picture under the right cluster (`null` where none is drawn - an arena shown whole, a phone; a press there does nothing), and the `screen_buttons` of whatever stands over the round - the level select's open tiles (`level_N`) and `back`, a dialog's `one`/`two` or `leave`/`stay`, a level's end screen's `levels`/`again`/`next`, the lobby's live buttons (`host`, `join`, `key_a`, `confirm`, `ready`, `start`, `kick_1`, ...) - all in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state (the builder's chrome is laid out on the window in UI points like play's corners - the bar along the top of the safe area, the popups under it -, and its rects come in window coordinates, what `click` and `builder_touch` take, each with its `ui` points; `builder.navigator`: the navigator's picture, `null` at FIT on an arena; `builder.buttons`: the builder's buttons by name - the bar's `play`, `play_here`, `check`, `clear`, `fit`, `map`, `file`, `erase`, `undo`, `redo`, each category's `category_<name>` (its icon half) and `list_<name>` (its list half) and `brush` (BRUSH: the brush's shape, the select tool, the stamps), or the one `tools` button a bar too narrow for the five and BRUSH folds them into; with the select tool the strip under the bar's live buttons - `sel_copy`, `sel_cut`, `sel_paste`, `sel_flip_h`, `sel_flip_v`, `sel_delete`, `sel_stamp` (keep the selection as a stamp), `sel_stamps` (the STAMPS list), or with a paste ghost `sel_place`, `sel_flip_h`, `sel_flip_v`, `sel_cancel`; while a popup is open its own - a list's or the palette's `tool_<name>`, BRUSH's list's and the palette's brush row's `shape_<name>`, `tool_select` and `brush_stamps`, the FILE menu's `load`, `save`, `save_as` and `clear_map`, the Load list's `map_<name>`, the STAMPS list's `stamp_<key>`, the MAP panel's `<row>_dec`/`<row>_inc` and `reset`, the CHECK panel's `finding_N` rows and `fix_N` buttons - and a paged popup's `page_back`/`page_next`; `builder.shape`: how the brush paints (pen, rect, fill or scatter); `builder.rect`: the rectangle a RECT drag is drawing, filled on its release (null with none); `builder.message`: the status line's feedback - a save, a load, a FILL refused for its size - or null; `builder.selection` and `builder.ghost`: the select tool's rectangle and the paste ghost as {col, row, cols, rows} (the ghost with its `cells`), `null` for none; `builder.clipboard`: what COPY and CUT took ({cols, rows, cells}); `builder.stamps`: how many stamps the STAMPS list offers; `builder.check`: the CHECK panel's last report; `builder.clear`: the clear check - the canvas's `revision`, whether it is `cleared` (won from plain PLAY with no edit since) and its `par` in seconds, and the revision PLAY started the local round on (`attempt`); `builder.loupe`: the loupe over a painting finger - where it stands, the `world` it shows, its `device_scale` and the `cell` the stroke paints -, `null` without one), and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -376,15 +376,15 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "builder_tool",
-        description: "Select the builder's brush by name - brick, iron, wood, glass (WALL); sandbag, barrel, oil_drum, fuel_drum, fence, tesla, tesla_enemy, gun_tower, gun_tower_enemy, bio_slush, bio_slush_enemy (PROP); road, water, tall_grass, tree, pine, oil_trail, gate, portal (GROUND); start, start2 (player 2's start), frog, enemy_frog (ACTOR); health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack (PICKUP); eraser; or select, the rectangle select tool (BRUSH's list; `builder_select` drives it) - through the category's own selection path, so the bar's category button updates as well. Any tool but select lets the selection go and takes a paste ghost away. Without `tool`, only reports the active tool, the brush's `shape` and every category's current tool and full list (the authoritative spelling of every brush).",
-        schema: r#"{"type":"object","properties":{"tool":{"type":"string","description":"A tool name (see the description) or eraser"}}}"#,
+        description: "Select the builder's brush by name - brick, iron, wood, glass (WALL); sandbag, barrel, oil_drum, fuel_drum, fence, tesla, tesla_enemy, gun_tower, gun_tower_enemy, bio_slush, bio_slush_enemy (PROP); road, water, tall_grass, tree, pine, oil_trail, gate, portal (GROUND); start, start2 (player 2's start), frog, enemy_frog (ACTOR); health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack (PICKUP); eraser; or select, the rectangle select tool (BRUSH's list; `builder_select` drives it) - through the category's own selection path, so the bar's category button updates as well. Any tool but select lets the selection go and takes a paste ghost away. `shape` sets how the brush paints, BRUSH's list's shapes (docs/large-maps-follow-camera.md section 9): pen (a stroke, under the toggle-erase rule), rect (a rectangle from the press to the release, filled on the release; the eraser or the right button clears it), fill (a flood from the pressed cell over the cells joined to it edge to edge that hold exactly what it holds, at most `builder_fill_max_cells` - past it nothing changes and `status.builder.message` says why -, under the toggle-erase rule) or scatter (a hashed share, `builder_scatter_density`, of the cells within `builder_scatter_radius_cells` of each cell the stroke crosses, laid on empty cells only; erasing, it thins the brush's object, or anything under the eraser). Picking a shape takes a painting brush back from the select tool; a singleton (start, start2, frog, enemy_frog) paints with the pen whatever the shape. Without `tool` or `shape`, only reports the active tool, the brush's `shape` and every category's current tool and full list (the authoritative spelling of every brush).",
+        schema: r#"{"type":"object","properties":{"tool":{"type":"string","description":"A tool name (see the description) or eraser"},"shape":{"type":"string","enum":["pen","rect","fill","scatter"],"description":"How the brush paints"}}}"#,
         read_only: false,
         destructive: false,
     },
     ToolSpec {
         name: "builder_paint",
-        description: "One stroke on the builder's canvas: a press on cells[0], a drag through the rest, a release - so the toggle-erase rule (a press on a cell that already holds exactly the brush's object erases it, and paint-or-erase is decided on the first cell for the whole stroke), singleton moves (start/start2/frog/enemy_frog) and one-undo-step-per-stroke apply exactly as for a mouse. Cells are [col, row] on the 32 px grid (the map's `size`, 34 x 17 when absent, from the top-left). `tool` selects a brush first (see `builder_tool`); `button: right` erases whatever the brush. Replies with every changed cell's object before and after (in the map's own shape, null = empty) and the undo depth.",
-        schema: r#"{"type":"object","properties":{"cells":{"type":"array","items":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2},"minItems":1,"description":"[[col, row], ...] in stroke order"},"tool":{"type":"string"},"button":{"type":"string","enum":["left","right"],"default":"left"}},"required":["cells"]}"#,
+        description: "One stroke on the builder's canvas: a press on cells[0], a drag through the rest, a release - so the toggle-erase rule (a press on a cell that already holds exactly the brush's object erases it, and paint-or-erase is decided on the first cell for the whole stroke), singleton moves (start/start2/frog/enemy_frog) and one-undo-step-per-stroke apply exactly as for a mouse. Cells are [col, row] on the 32 px grid (the map's `size`, 34 x 17 when absent, from the top-left). `tool` selects a brush first and `shape` how it paints (see `builder_tool`): with rect the stroke's first and last cells are the rectangle's corners, with fill only cells[0] counts, with scatter every cell's footprint is laid. `button: right` erases whatever the brush. Replies with every changed cell's object before and after (in the map's own shape, null = empty), the undo depth and the status line's `message` (a FILL refused for its size says so there).",
+        schema: r#"{"type":"object","properties":{"cells":{"type":"array","items":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2},"minItems":1,"description":"[[col, row], ...] in stroke order"},"tool":{"type":"string"},"shape":{"type":"string","enum":["pen","rect","fill","scatter"]},"button":{"type":"string","enum":["left","right"],"default":"left"}},"required":["cells"]}"#,
         read_only: false,
         destructive: false,
     },
@@ -1468,6 +1468,8 @@ impl DevServer {
             "dirty": b.dirty(),
             "tool": b.tool().name(),
             "shape": b.shape().name(),
+            "rect": cell_rect_json(b.rect_stroke().map(|(rect, _)| rect)),
+            "message": b.status(),
             "selection": cell_rect_json(b.selection()),
             "ghost": ghost_json(b),
             "clipboard": clipboard_json(b),
@@ -1908,24 +1910,24 @@ impl DevServer {
                     Ok(self.status(session, width, height))
                 }
             }
-            "builder_tool" => tool_param(params).map(|tool| {
-                if let Some(tool) = tool {
-                    session.builder.select_tool(tool);
+            "builder_tool" => match (tool_param(params), shape_param(params)) {
+                (Ok(tool), Ok(shape)) => {
+                    brush_from_params(&mut session.builder, tool, shape);
+                    Ok(tool_json(&session.builder))
                 }
-                tool_json(&session.builder)
-            }),
-            "builder_paint" => match (cells_param(params), button_param(params), tool_param(params)) {
-                (Ok(cells), Ok(right), Ok(tool)) => {
-                    if let Some(tool) = tool {
-                        session.builder.select_tool(tool);
-                    }
+                (Err(e), _) | (_, Err(e)) => Err(e),
+            },
+            "builder_paint" => match (cells_param(params), button_param(params), tool_param(params), shape_param(params)) {
+                (Ok(cells), Ok(right), Ok(tool), Ok(shape)) => {
+                    brush_from_params(&mut session.builder, tool, shape);
                     let changes = session.builder.stroke(&cells, right);
                     Ok(json!({
                         "changes": changes_json(&changes),
                         "undo_depth": session.builder.history().undo_depth(),
+                        "message": session.builder.status(),
                     }))
                 }
-                (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => Err(e),
+                (Err(e), _, _, _) | (_, Err(e), _, _) | (_, _, Err(e), _) | (_, _, _, Err(e)) => Err(e),
             },
             "builder_undo" | "builder_redo" => steps_param(params).map(|steps| {
                 let undo = method == "builder_undo";
@@ -3069,6 +3071,27 @@ fn tool_param(params: &Value) -> Result<Option<Tool>, String> {
             format!("unknown tool {s:?}; one of {}", names.join(", "))
         }),
         Some(other) => Err(format!("tool must be a string, got {other}")),
+    }
+}
+
+/// `shape` from `params`: how the brush paints (`Shape::parse`).
+fn shape_param(params: &Value) -> Result<Option<Shape>, String> {
+    match params.get("shape") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Shape::parse(s).map(Some).ok_or_else(|| format!("unknown shape {s:?}; one of pen, rect, fill, scatter")),
+        Some(other) => Err(format!("shape must be a string, got {other}")),
+    }
+}
+
+/// `builder_tool`'s and `builder_paint`'s brush: the tool first, then the
+/// shape - which takes a painting brush back from the select tool, as
+/// BRUSH's list does.
+fn brush_from_params(b: &mut MapEditor, tool: Option<Tool>, shape: Option<Shape>) {
+    if let Some(tool) = tool {
+        b.select_tool(tool);
+    }
+    if let Some(shape) = shape {
+        b.set_shape(shape);
     }
 }
 
@@ -4733,6 +4756,51 @@ cells."1,1" = { kind = "wall" }"#;
         let m = ask(&mut server, &tx, &mut s, "mode", json!({})).unwrap();
         assert_eq!(m["dirty"], true);
         assert_eq!(m["tool"], "road");
+    }
+
+    /// `builder_tool {shape}` sets how the brush paints and `builder_paint`
+    /// lays the shape: a rectangle between the first and last cells, a
+    /// fill from the one cell, a scatter's footprints, each one step; a
+    /// fill past `builder_fill_max_cells` changes nothing and says why in
+    /// `message`, as `status.builder` does.
+    #[test]
+    fn builder_shapes_lay_rects_fills_and_scatters() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(35);
+        ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 2 })).unwrap();
+        enter_build(&mut server, &tx, &mut s);
+        let base = s.builder.history().undo_depth() as u64;
+        let t = ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "water", "shape": "rect" })).unwrap();
+        assert_eq!((&t["tool"], &t["shape"]), (&json!("water"), &json!("rect")), "{t}");
+        let err = ask(&mut server, &tx, &mut s, "builder_tool", json!({ "shape": "lasso" })).unwrap_err();
+        assert!(err.contains("scatter"), "{err}");
+        let r = ask(&mut server, &tx, &mut s, "builder_paint", json!({ "cells": [[12, 9], [10, 8]] })).unwrap();
+        let changes = r["changes"].as_array().unwrap();
+        assert_eq!(changes.len(), 6, "{r}");
+        assert!(changes.iter().all(|c| c["after"]["kind"] == "water"), "{r}");
+        assert_eq!(r["undo_depth"], base + 1);
+        assert!(r["message"].is_null());
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!((&st["builder"]["shape"], &st["builder"]["rect"]), (&json!("rect"), &Value::Null), "{}", st["builder"]);
+        // A fill of road over the water: the six cells joined to the one pressed.
+        let r = ask(&mut server, &tx, &mut s, "builder_paint", json!({ "cells": [[11, 8]], "tool": "road", "shape": "fill" })).unwrap();
+        assert_eq!(r["changes"].as_array().unwrap().len(), 6, "{r}");
+        assert_eq!(r["undo_depth"], base + 2);
+        // A scatter of trees round a short line: empty cells only, the start kept.
+        let r = ask(&mut server, &tx, &mut s, "builder_paint", json!({ "cells": [[3, 5], [7, 5]], "tool": "tree", "shape": "scatter" })).unwrap();
+        let changes = r["changes"].as_array().unwrap();
+        assert!(!changes.is_empty() && changes.iter().all(|c| c["before"].is_null() && c["after"]["kind"] == "tree"), "{r}");
+        assert_eq!(s.builder.map().cell(5, 5), Some(&crate::map::CellObject::Start));
+        // A field past the cap: a fill of its open ground is refused.
+        ask(&mut server, &tx, &mut s, "builder_settings", json!({ "size": [80, 60] })).unwrap();
+        let depth = s.builder.history().undo_depth() as u64;
+        let r = ask(&mut server, &tx, &mut s, "builder_paint", json!({ "cells": [[60, 40]], "tool": "tall_grass", "shape": "fill" })).unwrap();
+        assert!(r["changes"].as_array().unwrap().is_empty(), "{r}");
+        assert_eq!(r["undo_depth"], depth);
+        let max = crate::tuning::Tuning::DEFAULT.builder_fill_max_cells.to_string();
+        assert!(r["message"].as_str().is_some_and(|m| m.contains(&max)), "{r}");
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(st["builder"]["message"], r["message"]);
     }
 
     /// `builder_select` and `builder_stamp` drive the select tool the way a

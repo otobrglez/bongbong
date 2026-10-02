@@ -274,9 +274,13 @@ editor-cut = { $n ->
 }
 editor-stamp-kept = shranjeno kot { $name } med VZORCI
 editor-stamp-empty = ničesar za shraniti: izbor je prazen
+editor-fill-too-large = preveliko za polnjenje: več kot { $n } celic
 
 editor-brush = ČOPIČ
 brush-pen = svinčnik
+brush-rect = pravokotnik
+brush-fill = polnjenje
+brush-scatter = raztros
 brush-stamps = vzorci...
 
 select-copy = KOPIRAJ

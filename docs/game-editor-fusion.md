@@ -87,9 +87,10 @@ round as usual and then opens the builder on it.
   does today from `-m`. The linter stays a dev tool.
 - Multi-select, copy/paste, rectangle fill, map size changes, a second
   field size, panning or zooming. *Status: map size changes, field sizes,
-  the builder's own camera (pan, zoom, FIT) and a rectangle select tool
-  with move, copy, paste, flips and stamps have since landed - sections 9
-  and 10, docs/large-maps-follow-camera.md section 9.*
+  the builder's own camera (pan, zoom, FIT), a rectangle select tool
+  with move, copy, paste, flips and stamps, and rectangle, flood and
+  scatter fills have since landed - sections 9 and 10,
+  docs/large-maps-follow-camera.md section 9.*
 - Editing the live, shot-up battlefield. Build mode edits the map as
   authored; a wall the round destroyed is back in the builder.
 
@@ -201,8 +202,10 @@ middle of the view instead of the map's start. All three are
 docs/large-maps-follow-camera.md section 9.
 
 `BRUSH`, after the five category buttons, pictures how a press on the
-canvas works and opens a list of the ways: the brush's shapes, the select
-tool and the STAMPS list; a bar too narrow for the categories folds it into
+canvas works and opens a list of the ways: the brush's shapes - PEN, RECT
+(a rectangle filled on the release), FILL (a flood of the pressed cell's
+region) and SCATTER (a hashed share of the empty cells round the drag) -,
+the select tool and the STAMPS list; a bar too narrow for the categories folds it into
 TOOLS with them, as the palette's last row. With the select tool a strip of
 its actions - COPY, CUT, PASTE, the flips, DELETE, + STAMP, STAMPS, or
 PLACE, the flips and CANCEL while a paste ghost stands - hangs under the
@@ -377,8 +380,8 @@ mode transitions can be unit-tested headlessly through
 | `mode` | none | Reports `mode` (`play`/`build`), whether the leave dialog is open, the builder's `dirty` flag, map name, active tool and category, which popup is open. Cheap; `status` carries the same `mode` field. |
 | `build` | `answer?: "leave" \| "stay"` | Presses BUILD: opens the leave dialog when a round is in progress, switches at once on the end screen. With `answer`, answers an open dialog instead. Replies like `mode`. |
 | `play` | `intro?: bool` | Presses PLAY from Build: the edited map becomes the round's map and a fresh round starts, frozen in lockstep like `restart` (so `step` counts play frames; `resume` for real time). Replies with `status`. Fails in Play mode. |
-| `builder_tool` | `tool?: name` | Selects a brush by name - every `editor::TOOLS` name (`brick`, `iron`, `wood`, `glass`, `sandbag`, `barrel`, `oil_drum`, `fuel_drum`, `fence`, `tesla`, `tesla_enemy`, `gun_tower`, `gun_tower_enemy`, `bio_slush`, `bio_slush_enemy`, `road`, `water`, `tall_grass`, `tree`, `pine`, `oil_trail`, `gate`, `portal`, `start`, `start2`, `frog`, `enemy_frog`, `health`, `ammo`, `laser`, `minigun`, `plasma`, `missiles`, `speedup`, `shield`, `flamethrower`, `frog_health`, `tower_pack`), `eraser` or `select` (the select tool) - through the category's own selection path, so the category button updates. Without `tool`, lists the categories with their current tool and the active one. |
-| `builder_paint` | `cells: [[col,row], ...]`, `tool?: name`, `button?: "left" \| "right"` | One **stroke**: presses on the first cell and drags through the rest, so the toggle-erase rule, singleton moves and the one-undo-step-per-stroke rule all apply exactly as for a mouse. `button: right` erases. Replies with each cell's object before and after and the undo depth. |
+| `builder_tool` | `tool?: name`, `shape?: "pen" \| "rect" \| "fill" \| "scatter"` | Selects a brush by name - every `editor::TOOLS` name (`brick`, `iron`, `wood`, `glass`, `sandbag`, `barrel`, `oil_drum`, `fuel_drum`, `fence`, `tesla`, `tesla_enemy`, `gun_tower`, `gun_tower_enemy`, `bio_slush`, `bio_slush_enemy`, `road`, `water`, `tall_grass`, `tree`, `pine`, `oil_trail`, `gate`, `portal`, `start`, `start2`, `frog`, `enemy_frog`, `health`, `ammo`, `laser`, `minigun`, `plasma`, `missiles`, `speedup`, `shield`, `flamethrower`, `frog_health`, `tower_pack`), `eraser` or `select` (the select tool) - through the category's own selection path, so the category button updates; `shape` is how it paints (BRUSH's list, docs/large-maps-follow-camera.md section 9). Without either, lists the categories with their current tool and the active one, and the shape. |
+| `builder_paint` | `cells: [[col,row], ...]`, `tool?: name`, `shape?`, `button?: "left" \| "right"` | One **stroke**: presses on the first cell and drags through the rest, so the toggle-erase rule, singleton moves and the one-undo-step-per-stroke rule all apply exactly as for a mouse - with `rect` the first and last cells are the rectangle's corners, with `fill` only the first counts, with `scatter` every cell's footprint is laid. `button: right` erases. Replies with each cell's object before and after, the undo depth and the status line's `message` (a fill refused for its size). |
 | `builder_undo` / `builder_redo` | `steps?: n` (default 1) | Undo or redo that many steps. Replies with the depth left on each side and the cells the last step changed. |
 | `builder_settings` | `tanks?`, `tank?`, `tank2?`, `mission?`, `spawn?`, `waves?`, `wave_size?`, `wave_growth?`, `tier_start?`, `tier_end?`, `theme?`, `weather?` (each `null` = auto), `anchor?`, `size?: [cols, rows]`, `reset?: bool` | Sets the MAP ▾ values (each changed field is one undo step, in field order) or, with `reset`, reverts cells and settings to the baseline. `size` resizes the map about the `anchor` (section 9). Without parameters, reports the current values, `size` and `anchor`, and which ones a CLI flag is overriding. |
 | `builder_camera` | `x?`, `y?` (a world point for the canvas's middle), `zoom?` (times FIT), `fit?: bool` | Frames the builder's own camera for a screenshot, or reports it: replies like `status.builder.camera` (`fit`, the world `rect` shown, `scale`, `zoom`, `fit_scale`, `device_scale`, `cell_mm`, the canvas `area`). |

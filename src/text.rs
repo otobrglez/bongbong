@@ -250,6 +250,9 @@ keys! {
     EDITOR_BAD_NAME = "editor-bad-name";
     EDITOR_BRUSH = "editor-brush";
     BRUSH_PEN = "brush-pen";
+    BRUSH_RECT = "brush-rect";
+    BRUSH_FILL = "brush-fill";
+    BRUSH_SCATTER = "brush-scatter";
     BRUSH_STAMPS = "brush-stamps";
     SELECT_COPY = "select-copy";
     SELECT_CUT = "select-cut";
@@ -264,6 +267,7 @@ keys! {
     EDITOR_CUT = "editor-cut";
     EDITOR_STAMP_KEPT = "editor-stamp-kept";
     EDITOR_STAMP_EMPTY = "editor-stamp-empty";
+    EDITOR_FILL_TOO_LARGE = "editor-fill-too-large";
 }
 
 /// The one-word title of a mission (the bar, the lobby's stepper).

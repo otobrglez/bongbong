@@ -535,6 +535,31 @@ shape with the bar at the standard arena's size (`editor::camera`).
   moves while a finger drags or pinches, never stands over the cells being
   worked on, and eight finger-size buttons beside a selection would cover
   a good part of a phone's canvas.
+- **Fills and a scatter brush** (`editor/brush.rs`). The brush has a
+  shape, BRUSH's list and the palette's brush row: PEN is the stroke;
+  RECT draws a rectangle while the drag is held and fills it on the
+  release, the eraser or the secondary button clearing it instead; FILL
+  floods the pressed cell's region - the cells joined to it edge to edge
+  that hold exactly what it holds - and SCATTER lays the brush's object on
+  `builder_scatter_density` of the empty cells within
+  `builder_scatter_radius_cells` of the drag, chosen by a hash of the cell
+  and a stroke counter, so going over the ground again thickens it, and
+  erasing thins it. PEN and FILL keep the toggle-erase rule; a rectangle's
+  or a scatter's first cell says nothing about the rest, so they paint.
+  A start, player 2's start or a frog is one object, painted with the
+  pen whatever the shape. Each stroke is one undo step, and the water and
+  road a fill lays auto-tile like a stroke's. A fill stops at
+  `builder_fill_max_cells` (4096): one that has leaked out of a fort is
+  refused, the status line saying so, rather than flooding a 250 x 250
+  map in a frame. Measured with `a_large_fill_timing` (this machine, a
+  release build; a debug build is about ten times slower): a 4096-cell
+  fill of water or wall costs 9 ms with its repaint, 16384 cells 45 ms;
+  an edit that moves the floor under more than half the map makes the
+  ground again whole instead of cell by cell (`REBUILD_SHARE`), and
+  filling all of an empty 250 x 250 map with water then costs 116 ms
+  (opening it, 66 ms). Walls a repaint adds or takes away are
+  matched against the map's in one pass, so a fill of thousands of walls
+  costs what one pass does.
 - **Thumbnails in the Load list** from `mapshot`, since a large map's name
   says less about it than its picture.
 - **Play from here.** PLAY starts from the map's start; PLAY HERE, beside

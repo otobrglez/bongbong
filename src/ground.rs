@@ -448,19 +448,32 @@ impl GroundGrid {
     /// in row order - every cell whose water `depth` can have, among them.
     pub fn repaint(&mut self, cells: &[(i32, i32, CellFloor)]) -> Vec<(i32, i32)> {
         let mut paint = Vec::new();
-        let mut walls_moved = Vec::new();
+        // Whether each cell is a wall now. The walls that went, then the
+        // ones that came, take one pass over the list each, so a fill of
+        // thousands of walls costs what a pass does rather than a pass a
+        // wall. Their order matters to nothing: the shade lays every wall
+        // with a max.
+        let mut wall_now = std::collections::BTreeMap::new();
         for &(col, row, floor) in cells {
             if self.idx(col, row).is_some() {
                 paint.push(((col as usize, row as usize), floor.material()));
             }
-            match (self.walls.iter().position(|&w| w == (col, row)), floor.wall) {
-                (None, true) => self.walls.push((col, row)),
-                (Some(i), false) => {
-                    self.walls.swap_remove(i);
-                }
-                _ => continue,
+            wall_now.insert((col, row), floor.wall);
+        }
+        let mut walls_moved = Vec::new();
+        self.walls.retain(|w| {
+            let went = wall_now.get(w) == Some(&false);
+            if went {
+                walls_moved.push(*w);
             }
-            walls_moved.push((col, row));
+            !went
+        });
+        let standing: BTreeSet<(i32, i32)> = self.walls.iter().filter(|w| wall_now.get(w) == Some(&true)).copied().collect();
+        for (&cell, &wall) in &wall_now {
+            if wall && !standing.contains(&cell) {
+                self.walls.push(cell);
+                walls_moved.push(cell);
+            }
         }
         let touched = self.layout.repaint(&paint);
         for &(x, y) in &touched {
