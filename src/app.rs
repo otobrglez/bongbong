@@ -108,12 +108,16 @@ fn local_seats(session: &Session) -> Vec<u8> {
 
 /// How many of the window's units make a point - what the indicators'
 /// sizes are given in (`indicators::in_points`): one where the window is
-/// laid out in points or CSS pixels, and on Android, where raylib's window
-/// is in device pixels, the display's density over 160 of them to the dp.
+/// laid out in points, and where it is in device pixels, the device pixels
+/// a point is - on Android the display's density over 160 of them to the
+/// dp, on the web the canvas buffer's pixels to the CSS pixel
+/// (`web::units_per_point`).
 fn window_units_per_point(_rl: &RaylibHandle) -> f32 {
     #[cfg(target_os = "android")]
     let units = _rl.get_window_scale_dpi().x.max(1.0);
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_os = "emscripten")]
+    let units = web::units_per_point(_rl);
+    #[cfg(not(any(target_os = "android", target_os = "emscripten")))]
     let units = 1.0;
     units
 }
@@ -154,16 +158,19 @@ fn ui_rect_on_bitmap(ui: &UiFrame, view: &View, r: crate::math::Rectangle) -> cr
 ///   GLFW gives a monitor's mode in points on macOS and in pixels
 ///   elsewhere.
 /// - The web has no physical size to read: the CSS reference pixel, 96
-///   points to the inch.
+///   points to the inch. Its window is the canvas's buffer in device
+///   pixels, which `web::units_per_point` turns back into CSS pixels.
 /// - A phone or a tablet is fine (above `view_fine_ppi`), so the zoom stays
 ///   exact, its size unknown. Android's window is in device pixels, which
 ///   the scale DPI turns back into points.
 fn screen(rl: &RaylibHandle) -> Screen {
     let (width, height) = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+    #[cfg(not(target_os = "emscripten"))]
     let dpr = Some(rl.get_window_scale_dpi().x).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(1.0);
     #[cfg(target_os = "emscripten")]
     {
-        Screen::new(width, height, dpr, 96.0 * dpr).with_mm_per_point(25.4 / 96.0)
+        let units = web::units_per_point(rl);
+        Screen::new(width / units, height / units, units, 96.0 * units).with_mm_per_point(25.4 / 96.0)
     }
     #[cfg(target_os = "android")]
     {
@@ -243,13 +250,17 @@ impl Presentation {
         // The builder keeps its bar; play draws the field alone, its HUD
         // standing in the window's corners (`hud::corners`).
         let layout = if mode == Driver::Build { Layout::for_field(field.0, field.1) } else { Layout::bare(field.0, field.1) };
-        // The cap is a desktop matter: an embedded build (web, iOS) draws
-        // the bitmap into a canvas or screen that is never larger than it.
-        let cap = if crate::EMBEDDED {
+        // The cap is for a window that can be any size - a desktop's, or
+        // the web page's canvas, which fills its box on a monitor too. The
+        // knob is in points, and the web's window in device pixels. A
+        // phone's or a tablet's screen is never large enough for it to
+        // bind.
+        let cap = if cfg!(any(target_os = "ios", target_os = "android")) {
             None
         } else {
             let t = tuning();
-            (t.view_max_scale > 0.0).then(|| ScaleCap { max_scale: t.view_max_scale, snap_half: t.view_scale_snap != 0 })
+            let units = window_units_per_point(rl);
+            (t.view_max_scale > 0.0).then(|| ScaleCap { max_scale: t.view_max_scale * units, snap_half: t.view_scale_snap != 0 })
         };
         if mode == Driver::Build && session.builder.map().class().follows() {
             let (layout, view) = crate::editor::camera::canvas_frame(window, cap);
@@ -1043,13 +1054,10 @@ pub fn run(args: Args) {
         (w.round() as i32, h.round() as i32)
     };
     // The bitmap of the first frame: the field alone in Play, under the
-    // builder's bar with `--editor`. The web's canvas keeps the builder's
-    // shape whatever the mode - it is the box the page lays out
-    // (index.astro's `--bitmap-w`/`--bitmap-h`) and raylib maps a touch
-    // against it - and play is letterboxed inside it.
+    // builder's bar with `--editor`.
     let bitmap = Layout::for_field(screen_width as f32, screen_height as f32).window_size();
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
-    let opening = if args.editor || crate::EMBEDDED { bitmap } else { Layout::bare(screen_width as f32, screen_height as f32).window_size() };
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_os = "emscripten")))]
+    let opening = if args.editor { bitmap } else { Layout::bare(screen_width as f32, screen_height as f32).window_size() };
     // iOS: the window is the screen, and raylib's SDL backend sizes its
     // render target from the size InitWindow is asked for (it never reads
     // the window back), so the screen's point size has to go in here.
@@ -1065,14 +1073,16 @@ pub fn run(args: Args) {
     // upscaled by the compositor instead, on top of `view::View`.
     #[cfg(target_os = "android")]
     let (window_width, window_height) = (0, 0);
+    // The web: the window is the canvas's buffer, the canvas's box in
+    // device pixels (`web::follow_canvas`), which the page has laid out by
+    // the time the runtime starts.
+    #[cfg(target_os = "emscripten")]
+    let (window_width, window_height) = web::canvas_buffer().map_or(bitmap, |(size, _)| size);
     // A desktop window opens at the size it will play at: the first
     // frame's bitmap at the scale cap (1.5x the standard field), clamped
     // to the monitor.
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_os = "emscripten")))]
     let (window_width, window_height) = args.resolution.unwrap_or_else(|| {
-        if crate::EMBEDDED {
-            return bitmap;
-        }
         let zoom = args.zoom.unwrap_or(tuning().view_max_scale);
         let open_at = if zoom > 0.0 { zoom.min(1.5).max(1.0) } else { 1.5 };
         let monitor = sola_raylib::core::window::get_current_monitor();
@@ -1088,11 +1098,10 @@ pub fn run(args: Args) {
 
     let mut builder = sola_raylib::init();
     builder.size(window_width, window_height).title(&format!("BongBong! v{}", env!("CARGO_PKG_VERSION")));
-    // On the web the canvas box keeps the bitmap's own shape (see
-    // index.astro) and raylib maps a touch against that box, so the
-    // canvas must stay the bitmap's size: a resizable web window would
-    // follow the tab instead. On iOS the window is the screen, drawn at
-    // the panel's full density (the raylib build carries
+    // On the web the window follows the canvas's box once a frame
+    // (`web::follow_canvas`); raylib's resizable flag would size it to the
+    // tab instead. On iOS the window is the screen, drawn at the panel's
+    // full density (the raylib build carries
     // tools/ios/raylib-sdl-highdpi.patch for that; screen coordinates,
     // touch included, stay in points). Native windows resize freely and
     // draw at the panel's real density.
@@ -1527,6 +1536,10 @@ pub fn run(args: Args) {
     #[cfg(feature = "dev-tools")]
     let mut net_stats = crate::capi::NetStatsFeed::default();
     game_loop::run(rl, thread, target_fps, move |rl, thread| {
+        // The web's window is the canvas's box: it follows a resize, a
+        // rotation or full screen before anything reads its size.
+        #[cfg(target_os = "emscripten")]
+        web::follow_canvas(rl);
         // Frame boundary, first: dev-server requests (state reads and
         // writes, tuning patches, an armed step or screenshot), so anything
         // they stage lands in this same frame.
@@ -2232,6 +2245,8 @@ pub fn run(args: Args) {
 pub mod ios;
 #[cfg(target_os = "android")]
 pub mod android;
+#[cfg(target_os = "emscripten")]
+mod web;
 
 /// Frame-time sampling for the console on a phone, dev-tools builds only:
 /// no keyboard for the overlay cycle there, and the dev server binds the

@@ -34,6 +34,12 @@
         align-items: center;
         width: 100%;
         min-height: 100vh;
+        /* `viewport-fit=cover` lays the page out under a phone's notch and
+           home indicator; the column keeps out of both, so the stage, and
+           the HUD and touch controls the game draws in it, never sit
+           under them. */
+        box-sizing: border-box;
+        padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
 
         .game, .footer {
           display: flex;
@@ -44,34 +50,38 @@
 
         .game {
           position: relative;
-          /* The bitmap's size, `Layout::for_field(DEFAULT_SCREEN_*)` in
-             src/lib.rs: a 1088x544 field under the 32 px bar. */
-          --bitmap-w: 1088;
-          --bitmap-h: 576;
-          /* The most the bitmap is scaled up on a big screen: 1.5x, the
-             same cap the native build's `view_max_scale` knob applies
-             (src/view.rs) - the map is shared with phone players and
-             would otherwise be blown up on a monitor. */
-          --canvas-max-w: calc(var(--bitmap-w) * 1.5px);
-          /* One source of truth for the canvas width: `.stage` is the
-             canvas's box, and the overlay controls and the loading panel
-             are positioned inside it, so they sit on the canvas's own
-             edges wherever the stage lands. In the page the stage is as
-             wide as the viewport allows short of the cap, keeping 90 px
-             under itself for the instructions. */
-          --canvas-w: min(100vw, var(--canvas-max-w), calc((100vh - 90px) * var(--bitmap-w) / var(--bitmap-h)));
+          /* The strip kept under the stage for the key hints, on a screen
+             tall enough to spare it; a phone on its side gives the stage
+             every pixel, its hints being for keyboards anyway. */
+          --hints: 72px;
 
+          @media (max-height: 540px) {
+            --hints: 0px;
+          }
+
+          /* The canvas's box, and the one box the overlay controls and the
+             loading panel are positioned in, so they sit on the canvas's
+             own edges wherever it lands. It takes the space it is given
+             at any shape - the column's width and the viewport's height
+             less the hints, here; the whole viewport inside the safe area
+             in immersive mode and full screen - and the game fills
+             whatever that is: its window follows the box
+             (src/app/web.rs), a followed map is framed to it and an
+             arena's margins are drawn as ground. */
           .stage {
             position: relative;
             flex: none;
-            width: var(--canvas-w);
+            width: 100%;
+            height: calc(100vh - var(--hints) - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+            /* The viewport as it is on screen now, a phone's browser bars
+               shown or collapsed. */
+            height: calc(100dvh - var(--hints) - env(safe-area-inset-top) - env(safe-area-inset-bottom));
           }
 
           /* The two overlay controls sit together in the canvas's
-             *bottom-left* corner, off the HUD bar along its top: Full screen
-             first, the subscribe link beside it, one row. The game keeps
-             its version stamp in the opposite corner (src/hud.rs
-             `HUD_VERSION_*_INSET`). */
+             *bottom-left* corner, away from the HUD's corner clusters along
+             its top (src/hud.rs `corners`): Full screen first, the
+             subscribe link beside it, one row. */
           .overlay-controls {
             position: absolute;
             left: 10px;
@@ -180,25 +190,61 @@
             }
           }
 
+          /* A phone held upright. The game is landscape: its chrome is laid
+             out for at least 720 x 352 points, its touch stick and trigger
+             take the two halves of a wide screen, and a followed map is
+             framed no narrower than 4:3 - so in a stage 393 points wide the
+             field would be a band a third of the screen tall with tanks two
+             millimetres across. The card asks for the phone to be turned
+             and covers only the stage; the round runs on behind it and the
+             window keeps following the box, so turning the phone shows the
+             game at once. A tablet held upright is wide enough to play and
+             a desktop window is the player's to size: neither gets it. */
+          .turn {
+            display: none;
+          }
+
+          @media (orientation: portrait) and (max-width: 719.98px) and (hover: none) and (pointer: coarse) {
+            .turn {
+              position: absolute;
+              inset: 0;
+              z-index: 3;
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              justify-content: center;
+              gap: 14px;
+              margin: 0;
+              padding: 0 24px;
+              background: #1b2118;
+              color: #cfe0c4;
+              font-size: calc($font-size * 1.4);
+              text-align: center;
+            }
+
+            /* A phone on its side, drawn rather than an emoji, so every
+               browser shows the same one. */
+            .turn::before {
+              content: "";
+              width: 54px;
+              height: 30px;
+              border: 3px solid #8fd07a;
+              border-radius: 6px;
+            }
+          }
+
           canvas {
             display: block;
-            /* The box has to keep the render target's own shape (the bitmap,
-               the field plus the HUD bar), not just be capped on each axis
-               independently.
-
-               `object-fit: contain` does letterbox a canvas whose box is a
-               different shape - verified in the browser - and raylib maps a
-               touch by dividing by the CSS *box*, not by the letterboxed
-               band inside it (see rcore_web.c's EmscriptenTouchCallback).
-               So a 390x720 box on a phone would put the picture in a ~219px
-               band with ~250px bars, while taps were still measured against
-               the full 720: every tap landed in the wrong place vertically.
-               Sizing the box to the bitmap's own shape means it always
-               fills the box exactly and raylib's normalisation is right by
-               construction. */
+            /* The canvas fills the stage exactly, and the game makes its
+               drawing buffer that box in device pixels (src/app/web.rs),
+               so the picture is drawn one buffer pixel to the device pixel
+               with nothing left to letterbox. That is also what keeps a
+               tap where it lands: raylib maps a touch by dividing by the
+               canvas's CSS box (rcore_web.c's EmscriptenTouchCallback) and
+               GLFW a click the same way, which is right only while the
+               picture fills the box - never under `object-fit`. */
             width: 100%;
-            aspect-ratio: var(--bitmap-w) / var(--bitmap-h);
-            height: auto;
+            height: 100%;
             outline: none;
             /* The builder paints by dragging, so the browser must not claim
                drags for scrolling or pinch-zoom. */
@@ -220,9 +266,9 @@
                reads it off `window.visualViewport` - not `inset: 0`. A
                phone lays a fixed box out in the *layout* viewport, which
                is the largest one, the browser's bars collapsed; while a
-               bar shows it covers a strip of an `inset: 0` box, and a
-               canvas centred in that box loses its top or bottom under
-               the bar. Without the API the box is the layout viewport. */
+               bar shows it covers a strip of an `inset: 0` box, and the
+               canvas filling that box loses its top or bottom under the
+               bar. Without the API the box is the layout viewport. */
             top: var(--vv-top, 0);
             left: var(--vv-left, 0);
             width: var(--vv-width, 100%);
@@ -232,14 +278,13 @@
 
           /* Immersive mode and real full screen, where the .game element
              is the fullscreen root, lay the stage out the same way: the
-             box is the whole viewport, and the stage is centred in what
-             is left inside the notch and home-indicator bands
-             (`viewport-fit=cover` in the head), kept as padding.
-             `border-box`, because the padding has to come out of the
-             box, not be added to it: under content-box sizing the two
-             side bands would widen the box past the viewport and push
-             everything centred in it right by the left band - 47 px on
-             a landscape iPhone, enough to put the canvas's right edge
+             box is the whole viewport, and the stage fills what is left
+             inside the notch and home-indicator bands (`viewport-fit=cover`
+             in the head), kept as padding. `border-box`, because the
+             padding has to come out of the box, not be added to it: under
+             content-box sizing the two side bands would widen the box past
+             the viewport and push the stage right by the left band - 47 px
+             on a landscape iPhone, enough to put the canvas's right edge
              under the browser's own toolbar. */
           &.immersive, &:fullscreen {
             box-sizing: border-box;
@@ -247,13 +292,9 @@
             justify-content: center;
             background: #151515;
 
-            /* The stage fits the padding's inside: the viewport on screen
-               less the bands, the same figures the box is built from. */
-            --canvas-w: min(
-              calc(var(--vv-width, 100vw) - env(safe-area-inset-left) - env(safe-area-inset-right)),
-              var(--canvas-max-w),
-              calc((var(--vv-height, 100vh) - env(safe-area-inset-top) - env(safe-area-inset-bottom)) * var(--bitmap-w) / var(--bitmap-h))
-            );
+            .stage {
+              height: 100%;
+            }
 
             .instructions, .tuning {
               display: none;
@@ -509,6 +550,7 @@
                 </div>
                 <p class="loading-note" id="loading-note" data-i18n="fetching">Fetching the game</p>
             </div>
+            <p class="turn" data-i18n="turn">Turn your phone sideways to play.</p>
         </div>
         <div class="instructions">
             <!-- The words are src/scripts/strings.ts's, in the language the

@@ -50,9 +50,7 @@ pub struct View {
 impl View {
     /// Fit `bitmap` into `window` with its shape kept, centred: the largest
     /// uniform scale at which the whole bitmap is on screen. A window the
-    /// bitmap's own size gives scale 1 and no offset, so a fixed-size
-    /// window (and the web canvas, whose box keeps the bitmap's shape)
-    /// draws exactly as before.
+    /// bitmap's own size gives scale 1 and no offset.
     pub fn fit(bitmap: (f32, f32), window: (f32, f32)) -> Self {
         let (bw, bh) = (bitmap.0.max(1.0), bitmap.1.max(1.0));
         let (ww, wh) = (window.0.max(1.0), window.1.max(1.0));
@@ -62,10 +60,11 @@ impl View {
     /// `fit`, but never drawn larger than `cap` says: on a big screen the
     /// shared standard field would otherwise be blown up to a 35 mm tank on
     /// a 1080p monitor while the phone player sees it at 8 mm. The cap is
-    /// how the desktop presents the same map at a sane size and leaves the
-    /// rest of the window to a backdrop (`present`). It never binds where
-    /// the fit is already smaller - a phone, a small window - and never
-    /// goes below 1.0, the bitmap's own pixels. `None` is the plain fit.
+    /// how a desktop window and the web page's canvas present the same map
+    /// at a sane size and leave the rest to a backdrop (`present`). It
+    /// never binds where the fit is already smaller - a phone, a small
+    /// window - and never goes below 1.0, the bitmap's own pixels. `None`
+    /// is the plain fit.
     pub fn fit_capped(bitmap: (f32, f32), window: (f32, f32), cap: Option<ScaleCap>) -> Self {
         let fit = Self::fit(bitmap, window);
         let Some(cap) = cap else { return fit };
@@ -366,9 +365,70 @@ impl FollowFrame {
     }
 }
 
+/// The most pixels the web build gives a side of its drawing buffer
+/// (`canvas_buffer`). Past it the buffer is scaled down and the browser
+/// stretches it over the box, rather than asking WebGL for a default
+/// framebuffer larger than many GPUs hold.
+pub const CANVAS_MAX_SIDE: f32 = 8192.0;
+
+/// The web build's window for a canvas laid out `css` CSS pixels across at
+/// `dpr` device pixels to the CSS pixel (docs/large-maps-follow-camera.md
+/// §10): the drawing buffer that puts one of its pixels on each device
+/// pixel of the box - the box times the ratio, in whole pixels - scaled
+/// down evenly where a side would pass `CANVAS_MAX_SIDE`, and how many of
+/// its pixels make a CSS pixel, the web's point. `None` for a box under a
+/// CSS pixel on a side (a canvas not laid out) or a ratio that is not a
+/// positive number.
+pub fn canvas_buffer(css: (f32, f32), dpr: f32) -> Option<((i32, i32), f32)> {
+    let (w, h) = css;
+    if !(w.is_finite() && h.is_finite() && dpr.is_finite()) || w < 1.0 || h < 1.0 || dpr <= 0.0 {
+        return None;
+    }
+    let units = dpr.min(CANVAS_MAX_SIDE / w).min(CANVAS_MAX_SIDE / h);
+    let side = |css: f32| ((css * units).round() as i32).clamp(1, CANVAS_MAX_SIDE as i32);
+    Some(((side(w), side(h)), units))
+}
+
 #[cfg(test)]
 mod view_tests {
     use super::*;
+
+    /// The drawing buffer is the canvas's box in device pixels, so the
+    /// picture is never resampled on its way to the glass: a desktop page,
+    /// a phone at three device pixels to the point, a box whose CSS size is
+    /// fractional, an Android ratio that is not whole.
+    #[test]
+    fn the_canvas_buffer_is_the_box_in_device_pixels() {
+        assert_eq!(canvas_buffer((1366.0, 678.0), 1.0), Some(((1366, 678), 1.0)));
+        assert_eq!(canvas_buffer((852.0, 393.0), 3.0), Some(((2556, 1179), 3.0)));
+        assert_eq!(canvas_buffer((393.333_34, 852.0), 3.0), Some(((1180, 2556), 3.0)));
+        assert_eq!(canvas_buffer((915.428_6, 411.428_6), 2.625), Some(((2403, 1080), 2.625)));
+        assert_eq!(canvas_buffer((1536.0, 801.6), 1.25), Some(((1920, 1002), 1.25)));
+    }
+
+    /// A box past what a GPU holds is drawn smaller, evenly on both axes,
+    /// and the units it reports are the ones it was drawn in.
+    #[test]
+    fn a_canvas_past_the_largest_buffer_is_scaled_down_evenly() {
+        let ((w, h), units) = canvas_buffer((3000.0, 2000.0), 3.0).unwrap();
+        assert_eq!(w, CANVAS_MAX_SIDE as i32);
+        assert!((units - CANVAS_MAX_SIDE / 3000.0).abs() < 1e-6, "{units}");
+        assert_eq!(h, (2000.0 * units).round() as i32);
+        let ((w, h), _) = canvas_buffer((5000.0, 9000.0), 1.0).unwrap();
+        assert_eq!(h, CANVAS_MAX_SIDE as i32);
+        assert!(w < h && w > 0);
+    }
+
+    /// No box, no buffer: a canvas not laid out yet, and readings that are
+    /// not numbers, leave the window as it is.
+    #[test]
+    fn a_canvas_with_no_box_has_no_buffer() {
+        assert_eq!(canvas_buffer((0.0, 600.0), 2.0), None);
+        assert_eq!(canvas_buffer((800.0, 0.5), 2.0), None);
+        assert_eq!(canvas_buffer((800.0, 600.0), 0.0), None);
+        assert_eq!(canvas_buffer((f32::NAN, 600.0), 1.0), None);
+        assert_eq!(canvas_buffer((800.0, 600.0), f32::INFINITY), None);
+    }
 
     #[test]
     fn a_window_of_the_bitmaps_size_is_the_identity() {

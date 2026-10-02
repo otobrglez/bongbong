@@ -23,6 +23,8 @@ type Strings = {
   fetching: string;
   starting: string;
   preparing: (done: number, total: number) => string;
+  /** The card over the stage on a phone held upright. */
+  turn: string;
   /** HTML: carries the `<kbd>` markup. */
   keysOne: string;
   keysTwo: string;
@@ -40,6 +42,7 @@ const EN: Strings = {
   fetching: "Fetching the game",
   starting: "Starting",
   preparing: (done, total) => `Preparing (${done}/${total})`,
+  turn: "Turn your phone sideways to play.",
   keysOne: "Arrows to drive, <kbd>Space</kbd> to fire, <kbd>r</kbd> to restart.",
   keysTwo:
     "Two players: Arrows + <kbd>Space</kbd> for player 1, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + <kbd>Left Shift</kbd> for player 2.",
@@ -56,6 +59,7 @@ const SL: Strings = {
   fetching: "Prenašam igro",
   starting: "Zaganjam",
   preparing: (done, total) => `Pripravljam (${done}/${total})`,
+  turn: "Za igranje obrni telefon v ležeči položaj.",
   keysOne: "Puščice za vožnjo, <kbd>preslednica</kbd> za strel, <kbd>r</kbd> za novo igro.",
   keysTwo:
     "Dva igralca: puščice + <kbd>preslednica</kbd> za igralca 1, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + <kbd>levi Shift</kbd> za igralca 2.",
