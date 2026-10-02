@@ -2491,6 +2491,20 @@ tunables! {
         camera_shake_max_stack: f32 = 1.5 in 1.0 ..= 5.0;
         camera_shake_magnitude: f32 = 6.0 in 0.0 ..= 100.0;
         camera_shake_frequency: f32 = 40.0 in 1.0 ..= 200.0;
+        /// The shake falls off with distance from what the screen shows
+        /// (`shockwave::camera_shake`, docs/large-maps-follow-camera.md
+        /// section 6), so a blast across a field map does not shake a
+        /// screen that cannot see it: a ripple within this many pixels of
+        /// the view shakes it fully ...
+        camera_shake_margin_px: f32 = 160.0 in 0.0 ..= 2000.0;
+        /// ... and one this many screens past that - a screen being the
+        /// view's width across and its height up and down - not at all,
+        /// fading between: at 1, a blast a screen and a half from the
+        /// view's middle is gone, as a blast on the far shore of a field
+        /// map is. An arena's view is the whole field, which every ripple
+        /// is in, so an arena shakes as it always did. 0 stops the shake at
+        /// the margin.
+        camera_shake_fade_screens: f32 = 1.0 in 0.0 ..= 20.0;
         /// Muzzle-flash heat haze (muzzle_flash.fs): a one-sided outward
         /// puff at the barrel. Hits full strength at the leading edge, so
         /// tuned lower than the shockwave for similar visual intensity.

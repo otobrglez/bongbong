@@ -505,55 +505,18 @@ impl Game {
             height: -(target_height as f32),
         };
 
-        // Camera shake: a short decaying wobble on the same kill-shockwave
-        // trigger as `self.shock` itself (see CAMERA_SHAKE_DURATION's doc
-        // comment), applied purely as an offset on this blit's destination,
-        // in world pixels at the camera's scale - shifting where the
-        // already-composited scene lands is the cheapest way to get the
-        // effect. Two out-of-phase sine waves stand in for randomness so x/y
-        // don't shake in lockstep - this is a pure draw pass (see this
-        // module's own doc comment), not the place to reach for an rng.
-        // Muzzle/impact flash quads and the HUD deliberately aren't shifted:
-        // they're either their own small on-screen quad or meant to stay put.
-        // The field origin is added on top: the scene lands on the field's
-        // place in the bitmap.
-        let mut blit_offset = Vector2::new(0.0, 0.0);
-        // `screen_fx_intensity` scales every whole-screen effect together;
-        // folding it into the magnitude here keeps the stack cap below
-        // proportional.
-        let shake_magnitude = tuning().camera_shake_magnitude * tuning().screen_fx_intensity;
-        for shock in &self.shocks {
-            let decay = (1.0f32 - shock.time / tuning().camera_shake_duration).max(0.0);
-            if decay <= 0.0 {
-                continue;
-            }
-            let mag = shake_magnitude * shock.strength * decay;
-            // Phase each one off its own position hash so several
-            // overlapping shakes interfere instead of beating in lockstep
-            // and doubling cleanly. Still a pure draw pass, still no rng -
-            // see the comment above.
-            let phase = (crate::blast::seed_for(shock.center) % 628) as f32 * 0.01;
-            let t = shock.time * tuning().camera_shake_frequency + phase;
-            blit_offset.x += t.sin() * mag;
-            blit_offset.y += (t * 1.3 + 1.7).sin() * mag;
-        }
-        // Without a ceiling, three kills at once throw the composited scene
-        // far enough off that the screen edge shows through as black.
-        let cap = shake_magnitude * tuning().camera_shake_max_stack;
-        let len = (blit_offset.x * blit_offset.x + blit_offset.y * blit_offset.y).sqrt();
-        if len > cap && len > 0.0 {
-            blit_offset.x *= cap / len;
-            blit_offset.y *= cap / len;
-        }
-        // Snap the shake to whole 2px blocks. This offset moves the entire
-        // composited scene, so at a fractional value every pixel in the
-        // game samples between texels for the duration of the shake and
-        // the whole screen shimmers - the same defect a sub-pixel particle
-        // has, at the scale of everything at once. Blocks keep the art
-        // crisp and make the shake read as a hard jolt rather than a
-        // wobble.
-        blit_offset.x = (blit_offset.x / 2.0).round() * 2.0;
-        blit_offset.y = (blit_offset.y / 2.0).round() * 2.0;
+        // Camera shake (`shockwave::camera_shake`): a short decaying wobble
+        // on the same kill-shockwave trigger as `self.shock` itself, applied
+        // purely as an offset on this blit's destination, in world pixels at
+        // the camera's scale - shifting where the already-composited scene
+        // lands is the cheapest way to get the effect. A view of part of
+        // the field is shaken only by what happens near it; the whole field
+        // by everything, as an arena always was. Muzzle/impact flash quads
+        // and the HUD deliberately aren't shifted: they're either their own
+        // small on-screen quad or meant to stay put. The field origin is
+        // added on top: the scene lands on the field's place in the bitmap.
+        let shake = crate::shockwave::camera_shake(&self.shocks, (!camera.shows_whole_field()).then(|| camera.rect()), &tuning());
+        let blit_offset = Vector2::new(shake.x, shake.y);
 
         // Where pass 2 puts the world, and at what scale: the field area of
         // the bitmap at the camera's - or, for a followed view, the whole
