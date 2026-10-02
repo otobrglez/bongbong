@@ -727,10 +727,10 @@ pub struct Game {
     /// (see `blast.rs`).
     pub(crate) blast_fx: Vec<BlastFx>,
     /// Burn marks left by barrel blasts this round, oldest first, capped at
-    /// `SCORCH_MAX`.
+    /// `mark_caps` (`SCORCH_MAX` on an arena).
     pub(crate) scorches: Vec<Scorch>,
     /// Rubble left where a wall tile died this round, oldest first, capped
-    /// at `DECAL_MAX` (see `decal.rs`).
+    /// at `mark_caps` (`DECAL_MAX` on an arena; see `decal.rs`).
     pub(crate) decals: Vec<Decal>,
     /// Cells the map marked as tall grass. The concealment query
     /// (`grass::conceals`) runs against these, not against the drawn tufts:
@@ -1638,22 +1638,32 @@ impl Game {
         self.rng = Some(rng);
     }
 
-    /// Put `show` on screen, each list held to its ceiling: `SCORCH_MAX`
-    /// and `DECAL_MAX` drop the oldest, `SHOCK_MAX` the weakest. Every
-    /// frame of a round ends here, and a replica's spectacle comes here
-    /// too.
+    /// How many scorches and rubble decals the round keeps: `SCORCH_MAX`
+    /// and `DECAL_MAX` on an arena, and on a field map as many per
+    /// standard field of its area, so a large map keeps its marks as
+    /// densely as an arena keeps its own rather than wearing away the
+    /// ones still on screen.
+    pub fn mark_caps(&self) -> (usize, usize) {
+        mark_caps(&self.map)
+    }
+
+    /// Put `show` on screen, each list held to its ceiling: scorches and
+    /// decals (`mark_caps`) drop the oldest, `SHOCK_MAX` the weakest.
+    /// Every frame of a round ends here, and a replica's spectacle comes
+    /// here too.
     pub(crate) fn show(&mut self, show: Spectacle) {
         self.muzzle_flashes.extend(show.muzzle_flashes);
         self.impact_flashes.extend(show.impact_flashes);
         self.blast_fx.extend(show.blast_fx);
+        let (scorch_max, decal_max) = self.mark_caps();
         self.scorches.extend(show.scorches);
-        if self.scorches.len() > SCORCH_MAX {
-            let excess = self.scorches.len() - SCORCH_MAX;
+        if self.scorches.len() > scorch_max {
+            let excess = self.scorches.len() - scorch_max;
             self.scorches.drain(..excess);
         }
         self.decals.extend(show.decals);
-        if self.decals.len() > DECAL_MAX {
-            let excess = self.decals.len() - DECAL_MAX;
+        if self.decals.len() > decal_max {
+            let excess = self.decals.len() - decal_max;
             self.decals.drain(..excess);
         }
         self.shocks.extend(show.shocks);
@@ -4973,6 +4983,38 @@ fn ai_transition_events(events: &mut Vec<Event>, slot: usize, before: &AiSnapsho
     }
     if before.escapes != after.escapes {
         events.push(Event::StuckEscape { slot, escapes: after.escapes });
+    }
+}
+
+/// `Game::mark_caps` for a round on `map`.
+fn mark_caps(map: &MapFile) -> (usize, usize) {
+    if map.class() == crate::framing::MapClass::Arena {
+        return (SCORCH_MAX, DECAL_MAX);
+    }
+    let (w, h) = map.field_size();
+    let fields = (w * h / (crate::DEFAULT_SCREEN_WIDTH as f32 * crate::DEFAULT_SCREEN_HEIGHT as f32)).max(1.0);
+    let scaled = |cap: usize| (cap as f32 * fields).ceil() as usize;
+    (scaled(SCORCH_MAX), scaled(DECAL_MAX))
+}
+
+#[cfg(test)]
+mod mark_cap_tests {
+    use super::*;
+
+    fn caps(toml: &str) -> (usize, usize) {
+        mark_caps(&MapFile::from_toml_str(toml).unwrap())
+    }
+
+    #[test]
+    fn an_arena_keeps_the_fixed_ceilings_and_a_field_map_scales_them_by_area() {
+        assert_eq!(caps("version = 1\n"), (SCORCH_MAX, DECAL_MAX));
+        assert_eq!(caps("version = 1\nsize = [36, 18]\n"), (SCORCH_MAX, DECAL_MAX));
+        // Large, but shown whole: an arena still.
+        assert_eq!(caps("version = 1\nsize = [68, 34]\nview = \"whole\"\n"), (SCORCH_MAX, DECAL_MAX));
+        // Four standard fields' worth of ground, four times the marks.
+        assert_eq!(caps("version = 1\nsize = [68, 34]\n"), (4 * SCORCH_MAX, 4 * DECAL_MAX));
+        // A field map smaller than the standard field keeps no fewer.
+        assert_eq!(caps("version = 1\nsize = [30, 15]\nview = \"follow\"\n"), (SCORCH_MAX, DECAL_MAX));
     }
 }
 
