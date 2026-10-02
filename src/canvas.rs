@@ -231,7 +231,10 @@ pub trait Canvas {
 /// layer baked once (`ground::GroundGrid::shade`) rather than computed per
 /// frame. Row-major, `width` x `height` texels, each covering `block` x
 /// `block` field pixels from (0, 0). `stamp` names one bake, so a GPU copy
-/// can tell whether it is the one to draw.
+/// can tell whether it is the one to draw; a part baked again in place
+/// (`ground::GroundGrid::repaint`) takes a new stamp and leaves a
+/// `BlockPatch` naming the texels, so a copy catches up by uploading only
+/// those (`changed_since`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BlockImage {
     pub width: usize,
@@ -239,7 +242,34 @@ pub struct BlockImage {
     pub block: i32,
     pub texels: Vec<Color>,
     pub stamp: u64,
+    /// The last parts baked again, oldest first, at most
+    /// `BLOCK_PATCHES_KEPT`.
+    pub patches: Vec<BlockPatch>,
 }
+
+/// A part of a [`BlockImage`] baked again in place: the texels `x..x +
+/// width` by `y..y + height`, and the stamp the image had before.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BlockPatch {
+    pub from: u64,
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl BlockPatch {
+    /// The smallest patch holding both.
+    fn union(self, other: BlockPatch) -> BlockPatch {
+        let (x0, y0) = (self.x.min(other.x), self.y.min(other.y));
+        let (x1, y1) = ((self.x + self.width).max(other.x + other.width), (self.y + self.height).max(other.y + other.height));
+        BlockPatch { from: self.from, x: x0, y: y0, width: x1 - x0, height: y1 - y0 }
+    }
+}
+
+/// How many patches a [`BlockImage`] keeps: a copy further behind than
+/// that takes the whole image again.
+pub const BLOCK_PATCHES_KEPT: usize = 64;
 
 impl BlockImage {
     /// The texel covering field pixel (x, y), if the image covers it.
@@ -249,6 +279,26 @@ impl BlockImage {
         }
         let (bx, by) = ((x / self.block) as usize, (y / self.block) as usize);
         (bx < self.width && by < self.height).then(|| self.texels[by * self.width + bx])
+    }
+
+    /// What a copy taken at stamp `held` lacks, as one rectangle of texels
+    /// (its `from` is `held`): the patches since then, joined. `None` when
+    /// no patch starts at `held`: the copy is current, or older than the
+    /// patches kept, or a copy of another image - which takes the whole
+    /// image again.
+    pub fn changed_since(&self, held: u64) -> Option<BlockPatch> {
+        let first = self.patches.iter().position(|p| p.from == held)?;
+        self.patches[first..].iter().copied().reduce(BlockPatch::union).map(|p| BlockPatch { from: held, ..p })
+    }
+
+    /// Note the texels `x..x + width` by `y..y + height` baked again in
+    /// place under the new stamp `stamp`.
+    pub fn patched(&mut self, stamp: u64, x: usize, y: usize, width: usize, height: usize) {
+        self.patches.push(BlockPatch { from: self.stamp, x, y, width, height });
+        if self.patches.len() > BLOCK_PATCHES_KEPT {
+            self.patches.remove(0);
+        }
+        self.stamp = stamp;
     }
 }
 
@@ -575,6 +625,27 @@ mod tests {
     /// `Color` derives no `PartialEq`, so the tests compare tuples.
     fn rgba(c: Color) -> (u8, u8, u8, u8) {
         (c.r, c.g, c.b, c.a)
+    }
+
+    /// A copy catches up on the patches since its stamp, joined into one
+    /// rectangle; a current copy, one older than the patches kept and one
+    /// of another image have none to take and take the whole image.
+    #[test]
+    fn a_copy_catches_up_on_the_patches_since_its_stamp() {
+        let mut image = BlockImage { width: 40, height: 30, block: 2, texels: vec![CLEAR; 1200], stamp: 1, patches: Vec::new() };
+        image.patched(2, 4, 5, 3, 2);
+        image.patched(3, 10, 1, 2, 2);
+        assert_eq!(image.stamp, 3);
+        assert_eq!(image.changed_since(2), Some(BlockPatch { from: 2, x: 10, y: 1, width: 2, height: 2 }));
+        assert_eq!(image.changed_since(1), Some(BlockPatch { from: 1, x: 4, y: 1, width: 8, height: 6 }), "both, joined");
+        assert_eq!(image.changed_since(3), None, "current");
+        assert_eq!(image.changed_since(99), None, "another image's");
+        for stamp in 4..4 + BLOCK_PATCHES_KEPT as u64 {
+            image.patched(stamp, 0, 0, 1, 1);
+        }
+        assert_eq!(image.patches.len(), BLOCK_PATCHES_KEPT);
+        assert_eq!(image.changed_since(1), None, "older than the patches kept");
+        assert!(image.changed_since(4).is_some());
     }
 
     trait Px {

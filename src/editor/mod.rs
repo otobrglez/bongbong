@@ -441,6 +441,15 @@ fn edge_joined_line(from: (i32, i32), to: (i32, i32)) -> Vec<(i32, i32)> {
     cells
 }
 
+/// What a map cell lays on the canvas's floor: a wall stands on road and
+/// gathers the walls' shade, as in a round (`Game::init` paints road under
+/// every wall), a road cell is road and a water cell water; anything else
+/// leaves the floor as it is.
+fn floor_of(obj: Option<&CellObject>) -> ground::CellFloor {
+    let wall = matches!(obj, Some(CellObject::Wall { .. }));
+    ground::CellFloor { road: wall || matches!(obj, Some(CellObject::Road)), water: matches!(obj, Some(CellObject::Water)), wall }
+}
+
 /// A press-drag-release in progress on the field.
 struct Stroke {
     /// Decided on the first cell (docs/game-editor-fusion.md section 8)
@@ -730,7 +739,7 @@ impl MapEditor {
         self.resize_session = None;
         let field = self.map.field_size();
         let step = self.history.undo(&mut self.map)?;
-        self.rebuild_ground();
+        self.ground_after(&step);
         self.follow_whole_map_step(&step, field, -1);
         Some(step)
     }
@@ -740,7 +749,7 @@ impl MapEditor {
         self.resize_session = None;
         let field = self.map.field_size();
         let step = self.history.redo(&mut self.map)?;
-        self.rebuild_ground();
+        self.ground_after(&step);
         self.follow_whole_map_step(&step, field, 1);
         Some(step)
     }
@@ -977,9 +986,7 @@ impl MapEditor {
                 None => self.map.clear_cell(c.col, c.row),
             }
         }
-        if !stroke.changes.is_empty() {
-            self.rebuild_ground();
-        }
+        self.repaint_ground(stroke.changes.iter().map(|c| (c.col, c.row)));
     }
 
     fn finish_stroke_changes(&mut self) -> Vec<CellChange> {
@@ -1023,30 +1030,52 @@ impl MapEditor {
         if changes.is_empty() {
             return;
         }
+        self.repaint_ground(changes.iter().map(|c| (c.col, c.row)));
         if let Some(stroke) = &mut self.stroke {
             stroke.changes.extend(changes);
         }
-        self.rebuild_ground();
     }
 
-    /// Recompute the decorative ground layer from the map's current wall,
-    /// road and water cells - every wall cell paints road under itself
-    /// automatically, same as a live round (`Game::init`'s "road_cells =
-    /// obstacle_positions + explicit road cells" convention), plus every
-    /// cell explicitly placed with the Road tool, and water at every cell
-    /// placed with the Water tool. Called after every cell edit.
+    /// Make the decorative ground layer again from the map's wall, road
+    /// and water cells (`floor_of`) - for an edit of the whole map: a load,
+    /// a reset, a resize, a theme. A cell edit repaints only its cells
+    /// (`repaint_ground`).
     fn rebuild_ground(&mut self) {
         let (width, height) = self.map.field_size();
-        let cells_of = |pick: fn(&CellObject) -> bool| -> Vec<Position> {
-            self.map.iter_cells().filter(|(_, _, obj)| pick(obj)).map(|(col, row, _)| map::cell_to_world(col, row)).collect()
-        };
-        let road_cells = cells_of(|obj| matches!(obj, CellObject::Wall { .. } | CellObject::Road));
-        let water_cells = cells_of(|obj| matches!(obj, CellObject::Water));
-        let wall_cells = cells_of(|obj| matches!(obj, CellObject::Wall { .. }));
+        let (mut road_cells, mut water_cells, mut wall_cells) = (Vec::new(), Vec::new(), Vec::new());
+        for (col, row, obj) in self.map.iter_cells() {
+            let floor = floor_of(Some(obj));
+            let at = map::cell_to_world(col, row);
+            for (on, cells) in [(floor.road, &mut road_cells), (floor.water, &mut water_cells), (floor.wall, &mut wall_cells)] {
+                if on {
+                    cells.push(at);
+                }
+            }
+        }
         // The canvas shows the walls' shade but not the round's edge shade:
         // the author works right up to the frame.
         let look = ground::Look { theme: self.map.theme, edge_shade: false };
         self.ground = ground::build(width, height, self.ground_seed, &road_cells, &water_cells, &wall_cells, look);
+    }
+
+    /// Make the ground agree with the map at `cells`, the only ones an
+    /// edit touched: `GroundGrid::repaint` resolves the tiles and bakes the
+    /// floor shade again only around them, so a stroke across a large map
+    /// costs what it does on a small one.
+    fn repaint_ground(&mut self, cells: impl IntoIterator<Item = (i32, i32)>) {
+        let floors: Vec<_> = cells.into_iter().map(|(col, row)| (col, row, floor_of(self.map.cell(col, row)))).collect();
+        self.ground.repaint(&floors);
+    }
+
+    /// The ground after `step` was undone or redone: a stroke's cells
+    /// repainted, a change of theme or of the whole map made again whole,
+    /// any other setting left alone.
+    fn ground_after(&mut self, step: &EditStep) {
+        match step {
+            EditStep::Cells(changes) => self.repaint_ground(changes.iter().map(|c| (c.col, c.row))),
+            EditStep::Settings { before, after } if before.theme == after.theme => {}
+            _ => self.rebuild_ground(),
+        }
     }
 
     // ----- the chrome -----
@@ -3131,43 +3160,114 @@ mod editor_tests {
         assert!((back.x - before.x).abs() < 1e-3, "undo moves it back: {before:?} -> {back:?}");
     }
 
+    /// A cell edit repaints the ground the whole map would make: strokes
+    /// of wall, road, water and the eraser across the study map's water,
+    /// one taken back by a second finger, undo and redo - each against the
+    /// ground built afresh from the map with the same seed.
+    #[test]
+    fn a_stroke_repaints_the_ground_a_rebuild_would_make() {
+        let map = MapFile::load(std::path::Path::new("maps/study/frontier.toml")).expect("the study map");
+        let mut ed = MapEditor::new(map);
+        let _ = ed.ground().shade();
+        let check = |ed: &MapEditor, what: &str| {
+            let mut fresh = MapEditor::new(ed.map().clone());
+            fresh.ground_seed = ed.ground_seed;
+            fresh.rebuild_ground();
+            assert!(ed.ground().draws_like(fresh.ground()), "{what}");
+        };
+        let water: Vec<(i32, i32)> = ed.map().iter_cells().filter(|(_, _, obj)| matches!(obj, CellObject::Water)).map(|(c, r, _)| (c, r)).collect();
+        assert!(water.len() > 20, "the study map has a lake and a river");
+        let (wc, wr) = water[water.len() / 2];
+        let strokes = [
+            (Tool::Wall(Material::Brick), (wc - 6, wr), (wc + 6, wr)),
+            (Tool::Road, (wc, wr - 6), (wc, wr + 6)),
+            (Tool::Water, (wc - 5, wr - 5), (wc + 5, wr + 5)),
+            (Tool::Eraser, (wc - 4, wr + 1), (wc + 4, wr + 1)),
+        ];
+        for (tool, from, to) in strokes {
+            ed.select_tool(tool);
+            ed.begin_stroke(from, false);
+            ed.drag_to(to);
+            check(&ed, tool.name());
+            ed.finish_stroke();
+        }
+        ed.select_tool(Tool::Water);
+        ed.begin_stroke((wc + 2, wr - 3), false);
+        ed.drag_to((wc + 8, wr - 3));
+        ed.cancel_stroke();
+        check(&ed, "a stroke taken back");
+        for (way, what) in [(-1, "undo"), (-1, "a second undo"), (1, "redo")] {
+            if way < 0 {
+                ed.undo();
+            } else {
+                ed.redo();
+            }
+            check(&ed, what);
+        }
+    }
+
     /// What a drag across the 96 x 54 study map costs, a cell a frame: the
-    /// cell painted, then the floor shade the next frame draws. Prints;
-    /// run with `--ignored --nocapture`.
+    /// cell painted, then the floor shade the next frame draws, and the
+    /// texels the frame uploads to catch its copy of the shade up - for a
+    /// wall, a road and a river stroke, and the undo of each. Prints; run
+    /// with `--ignored --nocapture`.
     #[test]
     #[ignore]
     fn a_stroke_across_the_study_map_timing() {
         let map = MapFile::load(std::path::Path::new("maps/study/frontier.toml")).expect("the study map");
         let mut ed = MapEditor::new(map);
-        let _ = ed.ground().shade();
-        ed.select_tool(Tool::Wall(Material::Brick));
-        let row = 27;
-        let start = std::time::Instant::now();
-        let mut paint = std::time::Duration::ZERO;
-        let mut shade = std::time::Duration::ZERO;
-        let t = std::time::Instant::now();
-        ed.begin_stroke((0, row), false);
-        paint += t.elapsed();
-        let t = std::time::Instant::now();
-        let _ = ed.ground().shade();
-        shade += t.elapsed();
-        for col in 1..96 {
-            let t = std::time::Instant::now();
-            ed.drag_to((col, row));
-            paint += t.elapsed();
-            let t = std::time::Instant::now();
+        let (cols, _) = ed.size_cells();
+        let cols = cols as i32;
+        for (tool, row) in [(Tool::Wall(Material::Brick), 27), (Tool::Road, 20), (Tool::Water, 33)] {
             let _ = ed.ground().shade();
-            shade += t.elapsed();
+            ed.select_tool(tool);
+            let mut held = ed.ground().shade().stamp;
+            let mut paint = std::time::Duration::ZERO;
+            let mut shade = std::time::Duration::ZERO;
+            let mut texels = 0usize;
+            let start = std::time::Instant::now();
+            for col in 0..cols {
+                let t = std::time::Instant::now();
+                if col == 0 {
+                    ed.begin_stroke((col, row), false);
+                } else {
+                    ed.drag_to((col, row));
+                }
+                paint += t.elapsed();
+                let t = std::time::Instant::now();
+                let image = ed.ground().shade();
+                shade += t.elapsed();
+                texels += uploaded(image, held);
+                held = image.stamp;
+            }
+            ed.finish_stroke();
+            let total = start.elapsed();
+            let t = std::time::Instant::now();
+            ed.undo();
+            let image = ed.ground().shade();
+            let undo = t.elapsed();
+            let undo_texels = uploaded(image, held);
+            let n = cols as f64;
+            eprintln!(
+                "{:>6} stroke of {cols} cells on 96 x 54: {:.2} ms a cell (paint {:.2} ms, shade {:.2} ms), {:.0} texels uploaded a cell; undo {:.1} ms, {undo_texels} texels",
+                tool.name(),
+                total.as_secs_f64() * 1e3 / n,
+                paint.as_secs_f64() * 1e3 / n,
+                shade.as_secs_f64() * 1e3 / n,
+                texels as f64 / n,
+                undo.as_secs_f64() * 1e3,
+            );
         }
-        ed.finish_stroke();
-        let total = start.elapsed();
-        eprintln!(
-            "stroke of 96 cells on 96 x 54: total {:.1} ms, {:.2} ms a cell (paint {:.2} ms, shade {:.2} ms)",
-            total.as_secs_f64() * 1e3,
-            total.as_secs_f64() * 1e3 / 96.0,
-            paint.as_secs_f64() * 1e3 / 96.0,
-            shade.as_secs_f64() * 1e3 / 96.0
-        );
+
+        /// The texels a copy of the shade holding `held` uploads to show
+        /// `image` (`render::canvas::BlockTexture::sync`).
+        fn uploaded(image: &crate::canvas::BlockImage, held: u64) -> usize {
+            if image.stamp == held {
+                0
+            } else {
+                image.changed_since(held).map_or(image.width * image.height, |p| p.width * p.height)
+            }
+        }
     }
 
     #[test]
