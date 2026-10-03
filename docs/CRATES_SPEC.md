@@ -50,8 +50,9 @@ plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack.
   darker. Dark on purpose: honey wood (`#DE9943`) is the wood walls' and
   fences', and a crate must never read as a wall.
 - **The symbol**: 8 × 8 design pixels between the battens, flat paint in
-  the kind's base ink with a hashed chip or two gone. The shield's is the
-  rainbow swept corner to corner.
+  the kind's base ink with a hashed chip or two gone from its edge - never
+  a hole inside it, which turns a solid symbol like the cross into a blot.
+  The shield's is the rainbow swept corner to corner.
 - **Inks** (`punypalette.PICKUP_INK`, `PickupKind::ink` - shade, base,
   light): off the palette on purpose, the old pickup icons' exemption kept
   for the one part that has to be spotted from across the field; the bases
@@ -75,8 +76,7 @@ plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack.
 
 The symbol sheet is each symbol on its own, lit along its top, shaded along
 its bottom and outlined: what rises out of an opened crate, what a broken
-one spills, and the HUD weapon queue's icons (20 pt in a 28 pt slot,
-`hud::weapon_pickup`).
+one spills, and the HUD's symbols (§3).
 
 ## 3. Drawing
 
@@ -95,7 +95,19 @@ It draws, in order of precedence:
    for the round clock (`crate_fx::glint_col`), each crate on its own
    hashed beat.
 
-The builder draws the crate's column 0 for a pickup cell and its brush.
+The builder draws the crate's column 0 for a pickup cell, its brush and
+its tool icons - the bar's category button, the list and the palette - at a
+whole multiple of the sheet's scale centred on the icon (`draw_tool_icon`),
+so the symbol on the lid keeps every block.
+
+**The HUD** (`render::hud`) labels every readout with the symbol of the crate
+that fills it, at the symbol sheet's own 20 pt: the vitals' health (the
+cross) and shells (ammo), the speed and shield gauges (the bolt and the
+shield), the frog's gauge in the right cluster (the frog pack) and the
+weapon queue (`hud::weapon_pickup`, 20 pt centred in a 28 pt slot). A symbol
+whose readout is empty - no shells, no boost, no shield, a spent weapon, no
+frog - is drawn dim (`SYMBOL_UNLIT`), so the row says at a glance what is
+running. The gauges carry no words.
 
 ## 4. The shows
 

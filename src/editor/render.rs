@@ -1402,10 +1402,15 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
             d.draw_texture_pro(textures.grass, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Pickup(pickup) => {
-            // The crate as it stands on the field: the brush is the thing
-            // it places.
+            // The crate as it stands on the field - the brush is the thing
+            // it places - at a whole multiple of its sheet's scale, so the
+            // symbol on its lid keeps every block: centred on `rect`, its
+            // cell's empty rim free to reach into the inset.
+            let scale = (rect.width.min(rect.height) / crate::CRATE_CELL).floor().max(1.0);
+            let size = crate::CRATE_CELL * scale;
+            let at = Rectangle::new((rect.x + (rect.width - size) / 2.0).round(), (rect.y + (rect.height - size) / 2.0).round(), size, size);
             let src = crate::pickup::crate_src(pickup, crate::CRATE_COL_INTACT);
-            d.draw_texture_pro(textures.crates, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            d.draw_texture_pro(textures.crates, src, at, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Tower(kind, side) => {
             // Base and top as a round draws them, the top pointing up.

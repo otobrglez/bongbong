@@ -148,7 +148,9 @@ def crate(kind, row):
             if ch in GRAIN and h32(x, y, 3) < 0.12:
                 c = GRAIN[ch]
             px[(x, y)] = c
-    # The symbol, sprayed on: flat paint, a hashed chip or two gone.
+    # The symbol, sprayed on: flat paint, a hashed chip or two gone from
+    # its edge - never a hole inside it, which turns a solid symbol (the
+    # cross) into a blot.
     wx, wy, ww, wh = WINDOW
     top, bottom = rows_of(kind)
     gx = wx + (ww - 8) // 2
@@ -158,7 +160,8 @@ def crate(kind, row):
             if not on(kind, x, y):
                 continue
             X, Y = gx + x, gy + y
-            if h32(X, Y, 11 + row) < 0.03:
+            edge = not all(on(kind, x + dx, y + dy) for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+            if edge and h32(X, Y, 11 + row) < 0.03:
                 continue
             px[(X, Y)] = rainbow(x, y) if kind == 'shield' else ink(kind)[1]
     return px
