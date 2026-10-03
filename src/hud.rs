@@ -45,6 +45,10 @@ pub const HUD_LABEL_SIZE: i32 = 10;
 /// points at `UI_SMALL_TEXT`: the gauge's 60 pt slot (`render::hud`) less
 /// a gap. `text_tests` measures every language's labels against it.
 pub const HUD_GAUGE_LABEL_MAX_PX: i32 = 56;
+
+/// The widest the lamp row's word may draw (`render::hud`'s lamp slot),
+/// after the lantern and its count.
+pub const HUD_LAMPS_LABEL_MAX_PX: i32 = 84;
 /// The build stamp under the left cluster, in the chrome's small size.
 pub const HUD_VERSION_TEXT_SIZE: i32 = UI_SMALL_TEXT;
 /// The version line's colour: white at 70%, a step below the HUD's
@@ -102,6 +106,11 @@ pub struct PlayerHud {
     pub speed: f32,
     /// Fraction of a shield left, 0 when none is running.
     pub shield: f32,
+    /// Lanterns left to set down, on a round that gives them
+    /// (`Game::lamps_in_play`); `None` elsewhere.
+    pub lamps: Option<u8>,
+    /// Fraction of a heat shield left, 0 when none is on.
+    pub heat_shield: f32,
 }
 
 impl PlayerHud {
@@ -123,6 +132,8 @@ impl PlayerHud {
             ],
             speed: 0.0,
             shield: 0.0,
+            lamps: None,
+            heat_shield: 0.0,
         }
     }
 
@@ -155,6 +166,8 @@ impl PlayerHud {
                 ],
                 speed: boost,
                 shield: tank.shield_charge(),
+                lamps: game.lamps_in_play().then(|| game.player_index(entity).map_or(0, |seat| game.lamps_left(seat as usize))),
+                heat_shield: tank.heat_shield_fraction(),
             }
         })
     }
@@ -660,6 +673,9 @@ pub struct CornerShape {
     /// The minimap's size in points (`minimap::MinimapRules::size_pt`),
     /// where the frame draws one (`PlayChrome::minimap`).
     pub minimap: Option<(f32, f32)>,
+    /// A third row under each block: the lanterns and the heat shield
+    /// (`PlayChrome::lamp_row`).
+    pub lamp_row: bool,
 }
 
 impl CornerShape {
@@ -680,6 +696,7 @@ impl CornerShape {
                 // The build stamp always; an online round's status over it.
                 lines: 1 + usize::from(chrome.status.is_some()),
                 minimap: chrome.minimap,
+                lamp_row: chrome.lamp_row,
             }
         })
     }
@@ -694,6 +711,9 @@ pub enum CornerButton {
     Restart,
     Build,
     Leave,
+    /// The lamp row's lantern count: a press sets a lantern down, as the
+    /// lamp key does (docs/volcano.md).
+    Lamp,
 }
 
 impl CornerButton {
@@ -706,6 +726,7 @@ impl CornerButton {
             CornerButton::Restart => "restart",
             CornerButton::Build => "build",
             CornerButton::Leave => "leave",
+            CornerButton::Lamp => "lamp",
         }
     }
 }
@@ -735,6 +756,8 @@ pub struct Corners {
     /// cluster on a plate of its own: part of that cluster, which fades as
     /// one. Not a control - a press on it is the HUD's and does nothing.
     pub minimap: Option<Rectangle>,
+    /// The local seat's lantern count in its block's lamp row, a button.
+    pub lamp: Option<Rectangle>,
 }
 
 impl Corners {
@@ -775,6 +798,7 @@ impl Corners {
             (CornerButton::Restart, self.restart),
             (CornerButton::Build, self.build),
             (CornerButton::Leave, self.leave),
+            (CornerButton::Lamp, self.lamp),
         ]
         .into_iter()
         .filter_map(|(button, rect)| rect.map(|rect| (button, rect)))
@@ -819,13 +843,15 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     let left_w = if beside { 2.0 * block_plate + CLUSTER_GAP } else { block_plate };
     let one_row = left_w + SIDE_GAP + right_one_row <= area.w;
 
-    let first = Rectangle::new(area.x + PLATE_PAD, area.y + PLATE_PAD, VITALS_W, VITALS_H);
+    // A round with lanterns or lava gives every block a third row.
+    let block_h = VITALS_H + if shape.lamp_row { button_h } else { 0.0 };
+    let first = Rectangle::new(area.x + PLATE_PAD, area.y + PLATE_PAD, VITALS_W, block_h);
     let mut blocks = vec![first];
     if couch_pair {
         blocks.push(if beside {
-            Rectangle::new(first.x + block_plate + CLUSTER_GAP, first.y, VITALS_W, VITALS_H)
+            Rectangle::new(first.x + block_plate + CLUSTER_GAP, first.y, VITALS_W, block_h)
         } else {
-            Rectangle::new(first.x, first.y + VITALS_H + 2.0 * PLATE_PAD + CLUSTER_GAP, VITALS_W, VITALS_H)
+            Rectangle::new(first.x, first.y + block_h + 2.0 * PLATE_PAD + CLUSTER_GAP, VITALS_W, block_h)
         });
     }
     let bottom = blocks.iter().map(|b| b.y + b.height + PLATE_PAD).fold(area.y, f32::max);
@@ -883,8 +909,12 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
         leave: shape.leave.then_some(mode),
         chips,
         minimap,
+        lamp: shape.lamp_row.then(|| Rectangle::new(first.x, first.y + VITALS_H, LAMP_BUTTON_W, button_h)),
     }
 }
+
+/// The lamp row's button: the lantern, its count and its word.
+pub const LAMP_BUTTON_W: f32 = 150.0;
 
 /// The leave-round dialog's geometry, in UI points: the panel and its two
 /// buttons (`LEAVE ROUND`, `KEEP PLAYING`), each at least 48 points tall
@@ -1173,6 +1203,9 @@ pub struct PlayChrome {
     /// one (not a phone's, `minimap_show`) whose view shows less than the
     /// whole field (`Session::minimap_on`).
     pub minimap: Option<(f32, f32)>,
+    /// The lamp row under each block: a round that gives lanterns or has
+    /// lava to cross (docs/volcano.md).
+    pub lamp_row: bool,
 }
 
 /// The online status line's text size: the first line under the left
@@ -1493,9 +1526,12 @@ mod hud_tests {
             leave: false,
             lines: 1,
             minimap: None,
+            lamp_row: false,
         };
         vec![
             ("one", play),
+            ("lamps", CornerShape { lamp_row: true, ..play }),
+            ("couch pair with lamps", CornerShape { layout: HudLayout::Two, lamp_row: true, ..play }),
             ("free play", CornerShape { level_button: false, ..play }),
             ("phone", CornerShape { players: false, restart: true, ..play }),
             ("couch pair", CornerShape { layout: HudLayout::Two, ..play }),
@@ -1552,7 +1588,9 @@ mod hud_tests {
                 assert!(within(c.info, right), "{what}: the first row leaves its plate");
                 let buttons = c.buttons();
                 for (i, (button, r)) in buttons.iter().enumerate() {
-                    assert!(within(*r, right), "{what}: {button:?} leaves the plate");
+                    // The lamp row is the local block's, in the left cluster.
+                    let plate = if *button == CornerButton::Lamp { Corners::plate(c.blocks[0]) } else { right };
+                    assert!(within(*r, plate), "{what}: {button:?} leaves the plate");
                     if *button != CornerButton::Level {
                         assert!(apart(*r, c.info), "{what}: {button:?} sits on the first row");
                     }

@@ -112,6 +112,9 @@ pub fn draw_corners(
         let Some(hud) = hud else { continue };
         draw_plate(d, Corners::plate(*block), Color::new(team_color(seat).r, team_color(seat).g, team_color(seat).b, 150), a);
         draw_vitals(d, *block, hud, seat, textures, a);
+        if block.height > crate::hud::VITALS_H {
+            draw_lamp_row(d, *block, hud, a);
+        }
     }
     let mut y = corners.lines.y;
     for line in lines {
@@ -214,6 +217,44 @@ fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, hud: &PlayerHud, seat:
         }
     }
 }
+
+/// The lamp row under a block's two (`hud::CornerShape::lamp_row`): the
+/// lantern with how many are left to set down - the lamp key's button on
+/// a touch screen - and, while one is on, the heat shield's gauge in the
+/// shield's slot (docs/volcano.md).
+fn draw_lamp_row(d: &mut impl RaylibDraw, block: Rectangle, hud: &PlayerHud, a: f32) {
+    use crate::pyro::{FIRE, SMOKE};
+    let row_h = (block.height - crate::hud::VITALS_H) as i32;
+    let (x, y) = (block.x.round() as i32, (block.y + crate::hud::VITALS_H).round() as i32);
+    let t = text();
+    if let Some(left) = hud.lamps {
+        // The lantern, drawn in the effects language's blocks: cap, glass
+        // round its flame, base; dark once none is left.
+        let (lx, ly) = (x + 6, y + (row_h - 20) / 2);
+        let lit = left > 0;
+        let flame = if lit { FIRE[5] } else { SMOKE[2] };
+        d.draw_rectangle(lx + 4, ly, 8, 2, faded(SMOKE[1], a));
+        d.draw_rectangle(lx + 2, ly + 2, 12, 2, faded(SMOKE[0], a));
+        d.draw_rectangle(lx + 2, ly + 4, 2, 12, faded(SMOKE[0], a));
+        d.draw_rectangle(lx + 12, ly + 4, 2, 12, faded(SMOKE[0], a));
+        d.draw_rectangle(lx + 4, ly + 4, 8, 12, faded(if lit { FIRE[4] } else { SMOKE[1] }, a));
+        d.draw_rectangle(lx + 6, ly + 6, 4, 6, faded(flame, a));
+        if lit {
+            d.draw_rectangle(lx + 6, ly + 6, 2, 2, faded(FIRE[6], a));
+        }
+        d.draw_rectangle(lx + 2, ly + 16, 12, 4, faded(SMOKE[0], a));
+        let count_y = y + (row_h - HUD_TEXT_SIZE) / 2;
+        let color = if lit { TEXT } else { SPENT };
+        d.draw_text(&left.to_string(), x + 26, count_y, HUD_TEXT_SIZE, faded(color, a));
+        d.draw_text(&t.get(keys::HUD_LAMPS), x + 48, y + (row_h - UI_SMALL_TEXT) / 2, UI_SMALL_TEXT, faded(DIM, a));
+    }
+    if hud.heat_shield > 0.0 {
+        draw_gauge_slot(d, x + V_SHIELD, y, row_h, &t.get(keys::HUD_HEAT), hud.heat_shield, HEAT_SHIELD_COLOR, true, a);
+    }
+}
+
+/// The heat shield gauge's colour: the pickup's molten red.
+const HEAT_SHIELD_COLOR: Color = crate::pyro::FIRE[3];
 
 /// The right cluster's first row in `info`: the level button and the wave
 /// count beside it on a level (`level` is its number and whether the level

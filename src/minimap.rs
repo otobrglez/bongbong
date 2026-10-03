@@ -173,6 +173,12 @@ pub enum Class {
     Tree,
     /// A defence tower, by the side it fights for.
     Tower(Side),
+    /// Lava, ford and lake alike.
+    Lava,
+    /// A volcano's cone.
+    Volcano,
+    /// A lamp post: a bright point, the one tile that reads at night.
+    Lamp,
 }
 
 impl Class {
@@ -186,6 +192,7 @@ impl Class {
             Some(CellObject::Wall { .. } | CellObject::Road) => Class::Road,
             Some(CellObject::Gate) => Class::Gate,
             Some(CellObject::TallGrass) => Class::Grass,
+            Some(CellObject::Lava) => Class::Lava,
             Some(CellObject::Water) => match depth {
                 Depth::Deep => Class::Deep,
                 Depth::Ice => Class::Ice,
@@ -206,6 +213,8 @@ impl Class {
             Material::Sandbag | Material::Barrel | Material::Fence => Class::Prop,
             Material::Tree | Material::Pine => Class::Tree,
             Material::Tesla | Material::GunTower | Material::BioSlush => Class::Tower(side),
+            Material::Volcano => Class::Volcano,
+            Material::Lamp => Class::Lamp,
         }
     }
 
@@ -224,7 +233,8 @@ impl Class {
     /// cover and road GREEN_DK, GREEN_SHADE and SAND_MD, the desert's
     /// SAND_MD, WOOD_ASH and WOOD_DK; fords BLUE_LT, open water BLUE_DK,
     /// ice STONE_PALE, a gate the indicators' amber (GOLD_BRIGHT). A tower
-    /// is TEAL_LT on the player's side and RED_MD on the enemy's.
+    /// is TEAL_LT on the player's side and RED_MD on the enemy's; lava is
+    /// RED_DEEP, a volcano's cone STONE_DARKEST and a lamp post FIRE_PALE.
     pub fn color(self, theme: Theme) -> Color {
         let rgb = |r, g, b| Color::new(r, g, b, 255);
         let desert = theme == Theme::Desert;
@@ -247,6 +257,9 @@ impl Class {
             Class::Tree => rgb(0x1C, 0x4C, 0x33),
             Class::Tower(Side::Player) => rgb(0x00, 0xBB, 0x8F),
             Class::Tower(Side::Enemy) => rgb(0xE4, 0x42, 0x19),
+            Class::Lava => rgb(0x9C, 0x35, 0x27),
+            Class::Volcano => rgb(0x37, 0x37, 0x37),
+            Class::Lamp => rgb(0xFF, 0xE2, 0xA0),
         }
     }
 }
@@ -406,6 +419,13 @@ fn classes_of_map(map: &MapFile, field: (f32, f32), depth: &impl Fn(i32, i32) ->
         floor[i] = Class::floor(Some(obj), depth(col, row));
         solid[i] = Class::solid_of(obj);
     }
+    // A volcano's cone covers the cells round its crater, which the map
+    // holds nothing for.
+    for (col, row) in crate::battlefield::volcano_cone_cells(map) {
+        if col >= 0 && row >= 0 && (col as usize) < cols && (row as usize) < rows {
+            solid[row as usize * cols + col as usize] = Some(Class::Volcano);
+        }
+    }
     (floor, solid)
 }
 
@@ -562,6 +582,9 @@ pub struct Marks {
     /// The enemies the screen's seats have in sight, each once.
     pub enemies: Vec<Position>,
     pub gates: Vec<GateMark>,
+    /// Every volcano that is rumbling or erupting, and whether it is
+    /// erupting yet (docs/volcano.md): a frame pulsing round its crater.
+    pub volcanoes: Vec<(Position, bool)>,
     /// The round clock the gates blink on.
     pub time: f32,
     /// Whether the seats carry their numbers: a round of two or more.
@@ -588,7 +611,16 @@ impl Marks {
             .flatten()
             .filter_map(|e| game.world.get::<&Frog>(e).ok().filter(|f| !f.is_dead()).map(|f| FrogMark { side: f.side, at: f.position }))
             .collect();
-        Marks { view: Some(view), seats, frogs, time: game.time, numbered: game.players.count() > 1, ..Marks::from_shown(shown) }
+        let t = crate::tuning::tuning();
+        let volcanoes = game
+            .volcanoes()
+            .iter()
+            .filter_map(|v| {
+                let phase = v.phase(game.time, &t);
+                phase.is_warning().then(|| (v.centre(), phase.stage == crate::volcano::Stage::Erupt))
+            })
+            .collect();
+        Marks { view: Some(view), seats, frogs, volcanoes, time: game.time, numbered: game.players.count() > 1, ..Marks::from_shown(shown) }
     }
 
     /// The enemies and gates `shown` - one `Indicators` per seat the screen
@@ -670,6 +702,17 @@ pub fn picture(marks: &Marks, rect: Rectangle, field: (f32, f32), font: i32, t: 
             frame(&mut out.fills, x - half - RIM_PT, y - half - RIM_PT, GATE_FRAME_PT + 2 * RIM_PT, RIM_PT, crate::pyro::alpha(RIM, alpha), inside);
             frame(&mut out.fills, x - half, y - half, GATE_FRAME_PT, RIM_PT, crate::pyro::alpha(GATE_AMBER, alpha), inside);
         }
+    }
+    // A waking volcano: a frame round its crater, swelling and shrinking,
+    // amber while it rumbles and red once it throws.
+    for &(crater, erupting) in &marks.volcanoes {
+        let (x, y) = at(crater);
+        let swell = if blink_on(marks.time, t.indicator_pulse_hz) { 2 } else { 0 };
+        let side = GATE_FRAME_PT + 2 + 2 * swell;
+        let half = side / 2;
+        let color = if erupting { HOSTILE } else { GATE_AMBER };
+        frame(&mut out.fills, x - half - RIM_PT, y - half - RIM_PT, side + 2 * RIM_PT, RIM_PT, RIM, inside);
+        frame(&mut out.fills, x - half, y - half, side, RIM_PT, color, inside);
     }
     for view in [marks.view, marks.second_view].into_iter().flatten().filter_map(|v| rect_on(rect, field, v)) {
         let (x0, y0) = (view.x.round() as i32, view.y.round() as i32);
@@ -1044,6 +1087,7 @@ mod minimap_tests {
             frogs: vec![FrogMark { side: Side::Enemy, at: Position::new(0.0, 1440.0) }],
             enemies: vec![Position::new(50.0, 50.0), Position::new(-400.0, 3000.0)],
             gates: vec![GateMark { at: Position::new(1200.0, 0.0), flash: 1.0 }],
+            volcanoes: vec![(Position::new(2560.0, 1440.0), true)],
             time: 0.0,
             numbered: true,
         };

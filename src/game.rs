@@ -20,7 +20,7 @@ use crate::pickup::{draw_pickup, Pickup};
 use crate::portal::draw_portal;
 use crate::simulation::Game;
 use crate::tank::{
-    draw_enemy_ring, draw_player_locate, draw_player_ring, draw_tank, draw_tank_shadow, draw_tank_shield, Tank,
+    draw_enemy_ring, draw_player_locate, draw_player_ring, draw_tank, draw_tank_heat_shield, draw_tank_shadow, draw_tank_shield, Tank,
 };
 use crate::track::draw_track;
 use crate::view::culled;
@@ -47,6 +47,9 @@ enum Standing<'a> {
     Tank(&'a Tank, TankRole),
     Frog(Entity),
     Tower(crate::tower::TowerView),
+    /// A lamp post: its lantern stands above its foot, so a tank that
+    /// drives behind one is drawn behind it.
+    Lamp(crate::Position),
 }
 
 /// A tank and everything drawn on it, in the order the layers stack.
@@ -64,6 +67,7 @@ fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, sh
         TankRole::RollIn => {}
     }
     draw_tank_shield(c, tank, time);
+    draw_tank_heat_shield(c, tank, time);
     if shadows {
         draw_tank_shadow(c, tank, time);
     }
@@ -150,6 +154,16 @@ impl Game {
         if !self.plain_canvas {
             crate::ground::draw_shade(c, &self.ground);
         }
+        // The ground the lava toasts and the cinders round each cone's
+        // foot (docs/volcano.md), under every mark.
+        if !self.lava.is_empty() {
+            c.blocks(self.lava.banks());
+        }
+        for v in &self.volcanoes {
+            if !c.culls(v.centre()) {
+                crate::volcano::draw_skirt(c, v.centre(), &crate::volcano::cone(&v.outlets));
+            }
+        }
 
         // Tread marks go down first so tanks and everything else draw on top.
         for track in &self.tracks {
@@ -175,6 +189,25 @@ impl Game {
                 draw_decal(c, decal);
             }
         }
+        // The lava over the marks it runs across: block by block from each
+        // cell's neighbours, its bands running downstream, its crust
+        // floes drifting with them; then the splashes the bombs threw.
+        if !self.lava.is_empty() {
+            let look = self.lava_look();
+            for (col, row) in self.lava.cells() {
+                if !c.culls(crate::map::cell_to_world(col, row)) {
+                    crate::lava::draw_cell(c, &self.lava, col, row, self.time, look, false, 1.0);
+                    crate::lava::draw_floes(c, &self.lava, col, row, self.time, look);
+                }
+            }
+        }
+        let pools: Vec<((i32, i32), f32)> = self
+            .fires
+            .iter()
+            .filter(|f| f.lava && !c.culls(f.position()))
+            .map(|f| (f.cell, crate::lava::pool_heat(f.left, f.total)))
+            .collect();
+        crate::lava::draw_pools(c, &pools, self.time);
         // Unlit oil trails: puddles on the ground, under everything.
         for &(col, row) in &self.oil_cells {
             let at = crate::map::cell_to_world(col, row);
@@ -189,6 +222,12 @@ impl Game {
                 if !c.culls(at) {
                     draw_portal(c, at, self.time, Color::WHITE);
                 }
+            }
+        }
+        // The lanterns the seats set down, on the ground under the tanks.
+        for lantern in &self.lanterns {
+            if !c.culls(lantern.position) {
+                crate::lamp::draw_lantern(c, lantern, self.time);
             }
         }
         // What dead towers left, then the ooze over it: a burst vat's spill
@@ -220,7 +259,25 @@ impl Game {
                 }
             }
         }
-        for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| !o.material.is_tree() && !o.material.is_tower()) {
+        // A volcano's cone is one picture over all of its tiles, its shadow
+        // first (docs/volcano.md).
+        let t = crate::tuning::tuning();
+        for v in &self.volcanoes {
+            if c.culls(v.centre()) {
+                continue;
+            }
+            let picture = crate::volcano::cone(&v.outlets);
+            if self.shadows_enabled {
+                crate::volcano::draw_cone_shadow(c, v.centre(), &picture, (t.shadow_dir_x, t.shadow_dir_y));
+            }
+            crate::volcano::draw_cone(c, v.centre(), &picture, &v.phase(self.time, &t), self.time);
+        }
+        for obstacle in self
+            .world
+            .query::<&Obstacle>()
+            .iter()
+            .filter(|o| !o.material.is_tree() && !o.material.is_tower() && !o.material.is_drawn())
+        {
             if c.culls(obstacle.position) {
                 continue;
             }
@@ -308,6 +365,11 @@ impl Game {
                 standing.push((view.position.y, Standing::Tower(view)));
             }
         }
+        for at in self.lamp_posts() {
+            if !culled(cull, at) {
+                standing.push((at.y, Standing::Lamp(at)));
+            }
+        }
         standing.sort_by(|a, b| a.0.total_cmp(&b.0));
 
         let mut next_tuft = 0usize;
@@ -339,6 +401,10 @@ impl Game {
                         _ => view.charge,
                     };
                     crate::tower::draw_tower(c, view.kind, view.side, view.position, view.stage, view.heading, glow);
+                }
+                Standing::Lamp(at) => {
+                    let t = crate::tuning::tuning();
+                    crate::lamp::draw_post(c, *at, self.time, (t.shadow_dir_x, t.shadow_dir_y), self.shadows_enabled);
                 }
             }
         }

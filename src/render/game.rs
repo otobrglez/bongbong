@@ -115,18 +115,21 @@ pub struct Textures<'a> {
     /// static/towers_sheet.png - the defence towers (docs/TOWERS_SPEC.md).
     pub towers: &'a Texture2D,
     pub pickup_tower_pack: &'a Texture2D,
+    pub pickup_heat_shield: &'a Texture2D,
     /// static/portal_sheet.png - the turning spiral (portal.rs).
     pub portal: &'a Texture2D,
     /// The round's floor shade as `app.rs` uploaded it before the frame
     /// (`render::canvas::BlockTexture`), with the stamp it was baked under.
     pub shade: Option<(u64, &'a Texture2D)>,
+    /// The lava's scorched banks the same way (`lava::LavaLayout::banks`).
+    pub banks: Option<(u64, &'a Texture2D)>,
 }
 
 /// The game's `Sheet` lookup: what a `GpuCanvas` over these textures blits
 /// from. Every sheet the field can name is here.
 impl Sheets for Textures<'_> {
     fn blocks_texture(&self, stamp: u64) -> Option<&Texture2D> {
-        self.shade.filter(|(held, _)| *held == stamp).map(|(_, texture)| texture)
+        [self.shade, self.banks].into_iter().flatten().find(|(held, _)| *held == stamp).map(|(_, texture)| texture)
     }
 
     fn texture(&self, sheet: Sheet) -> &Texture2D {
@@ -159,6 +162,7 @@ impl Sheets for Textures<'_> {
                 PickupKind::Flamethrower => self.pickup_flamethrower,
                 PickupKind::FrogHealth => self.pickup_frog_health,
                 PickupKind::TowerPack => self.pickup_tower_pack,
+                PickupKind::HeatShield => self.pickup_heat_shield,
             },
             Sheet::Frog { variant, clip } => self.frog_variants[variant as usize % self.frog_variants.len()].clip(clip),
         }
@@ -312,6 +316,23 @@ impl Game {
         }
         if !self.towers.is_empty() || !self.ooze.is_empty() || !self.tesla_bolts.is_empty() {
             self.draw_towers_ground_light(d, k);
+        }
+        // Lava lights the ground along its banks, every other cell so the
+        // pools do not pile up, brighter in the surge; a crater by its
+        // heat; a bomb under it as it comes down (docs/volcano.md).
+        if !self.lava.is_empty() || !self.volcanoes.is_empty() {
+            let surge = self.lava_look().surge;
+            for (col, row) in self.lava.cells().filter(|(c, r)| (c + r) % 2 == 0) {
+                ground_light(d, crate::map::cell_to_world(col, row), 44.0, warm, 0.16 * (1.0 + surge));
+            }
+            let t = tuning();
+            for v in &self.volcanoes {
+                let heat = v.phase(self.time, &t).heat;
+                ground_light(d, v.centre(), 80.0 + 60.0 * heat, warm, 0.25 * heat);
+            }
+            for bomb in &self.lava_bombs {
+                ground_light(d, bomb.ground_pos(&t), 20.0, warm, 0.25 * bomb.flight(&t));
+            }
         }
     }
 }
@@ -1182,7 +1203,10 @@ impl Game {
         // the tiles beside them (a burning doorway's walls still stand
         // over the fire) and under whatever drives through them. Upper
         // cells first, so a lower cell's flames stand in front.
-        let mut cells = self.burning_cells();
+        // A bomb's splash of lava is drawn as molten rock on the floor
+        // (`lava::draw_pools`), not as flames.
+        let mut cells: Vec<(Position, f32, f32)> =
+            self.fires.iter().filter(|f| f.left > 0.0 && !f.lava).map(|f| (f.position(), f.left, f.total)).collect();
         cells.retain(|(at, ..)| !culled(cull, *at));
         if !cells.is_empty() {
             cells.sort_by(|a, b| a.0.y.total_cmp(&b.0.y).then(a.0.x.total_cmp(&b.0.x)));
@@ -1241,6 +1265,18 @@ impl Game {
         });
 
         self.paint_standing(&mut GpuCanvas::culled(d, textures, cull), PaintOptions { locate_cue: true });
+
+        // Over everything that stands: each volcano's plume, steam while
+        // it sleeps and ash from the rumble on (docs/volcano.md). It is
+        // smoke, so the night darkens it with the rest.
+        if !self.volcanoes.is_empty() {
+            let t = tuning();
+            let mut plume = Vec::new();
+            for v in &self.volcanoes {
+                crate::volcano::plume(v, self.time, &t, &mut plume);
+            }
+            pyro::draw(&mut GpuCanvas::new(d, textures), &plume);
+        }
     }
 
     /// What shines by its own light, over the lit field and so as bright
@@ -1290,6 +1326,28 @@ impl Game {
                         continue;
                     }
                     crate::tank::draw_tank_glow(&mut c, tank, self.time, tank_glow);
+                }
+            });
+        }
+
+        // Lava shines by itself: under any sky that darkens the field its
+        // molten blocks and the craters are drawn again over it whole, as
+        // bright as by day - light the sky cannot take away.
+        if tank_glow > 0.0 && (!self.lava.is_empty() || !self.volcanoes.is_empty()) {
+            let look = self.lava_look();
+            let t = tuning();
+            d.draw_blend_mode(BlendMode::BLEND_ALPHA, |mut bd| {
+                let mut c = GpuCanvas::new(&mut bd, textures);
+                for (col, row) in self.lava.cells() {
+                    if !culled(cull, crate::map::cell_to_world(col, row)) {
+                        crate::lava::draw_cell(&mut c, &self.lava, col, row, self.time, look, true, 1.0);
+                    }
+                }
+                for v in &self.volcanoes {
+                    if !culled(cull, v.centre()) {
+                        let picture = crate::volcano::cone(&v.outlets);
+                        crate::volcano::draw_cone_glow(&mut c, v.centre(), &picture, &v.phase(self.time, &t), self.time, 1.0);
+                    }
                 }
             });
         }
@@ -1503,6 +1561,26 @@ impl Game {
             for drum in &self.flying_drums {
                 draw_flying_drum(&mut c, drum, self.shadows_enabled);
             }
+        }
+
+        // The volcanoes: where each bomb in the air will land, the bombs
+        // themselves and the eruption's show over the crater, each with
+        // its light (docs/volcano.md).
+        if !self.volcanoes.is_empty() || !self.lava_bombs.is_empty() {
+            let t = tuning();
+            let mut shapes = Vec::new();
+            for bomb in &self.lava_bombs {
+                crate::volcano::bomb_ring(bomb, self.time, &t, &mut shapes);
+            }
+            for bomb in &self.lava_bombs {
+                crate::volcano::bomb(bomb, self.time, &t, &mut shapes);
+            }
+            for v in &self.volcanoes {
+                crate::volcano::eruption(v, self.time, &t, &mut shapes);
+            }
+            pyro::draw(&mut GpuCanvas::new(d, textures), &shapes);
+            let bands = t.glow_bands.max(0) as u32;
+            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| pyro::draw_glows(&mut Rl(&mut bd), &shapes, bands));
         }
 
         // Seeker missiles are the highest thing in the air: over the

@@ -63,12 +63,19 @@ fn gather_intents(rl: &RaylibHandle, players: PlayerCount) -> (Intent, Intent) {
         }
     };
     let arrows = dir(KeyboardKey::KEY_UP, KeyboardKey::KEY_DOWN, KeyboardKey::KEY_LEFT, KeyboardKey::KEY_RIGHT);
-    let player1 = Intent { move_dir: arrows, fire: rl.is_key_down(KeyboardKey::KEY_SPACE), ..Intent::default() };
+    // The lamp key sets a lantern down (docs/volcano.md): Enter beside the
+    // arrows, E beside WASD.
+    let player1 = Intent {
+        move_dir: arrows,
+        fire: rl.is_key_down(KeyboardKey::KEY_SPACE),
+        lamp: rl.is_key_down(KeyboardKey::KEY_ENTER) || rl.is_key_down(KeyboardKey::KEY_KP_ENTER),
+        ..Intent::default()
+    };
     if players.count() < 2 {
         return (player1, Intent::default());
     }
     let wasd = dir(KeyboardKey::KEY_W, KeyboardKey::KEY_S, KeyboardKey::KEY_A, KeyboardKey::KEY_D);
-    (player1, Intent { move_dir: wasd, fire: left_shift_down(rl), ..Intent::default() })
+    (player1, Intent { move_dir: wasd, fire: left_shift_down(rl), lamp: rl.is_key_down(KeyboardKey::KEY_E), ..Intent::default() })
 }
 
 /// Whether the left Shift key - player 2's fire key - is held. Native reads
@@ -1309,6 +1316,9 @@ pub fn run(args: Args) {
     let pickup_tower_pack_texture = rl
         .load_texture(&thread, "static/pickups/tower_pack.png")
         .expect("failed loading tower pack texture");
+    let pickup_heat_shield_texture = rl
+        .load_texture(&thread, "static/pickups/heat_shield.png")
+        .expect("failed loading heat shield texture");
     let portal_texture = rl
         .load_texture(&thread, "static/portal_sheet.png")
         .expect("failed loading portal texture");
@@ -1427,6 +1437,7 @@ pub fn run(args: Args) {
     // (`ground::GroundGrid::shade`): uploaded once per bake, a new round or
     // a builder edit, and drawn in one call.
     let mut round_shade = crate::render::canvas::BlockTexture::default();
+    let mut round_banks = crate::render::canvas::BlockTexture::default();
     let mut builder_shade = crate::render::canvas::BlockTexture::default();
     // The minimaps (minimap.rs): the round's, baked once per round and
     // patched where a tile dies, and the builder's navigator's, repainted
@@ -1792,6 +1803,8 @@ pub fn run(args: Args) {
         // lands on either cluster is the HUD's, never a stick or a shot.
         let corners = CornerShape::of(&session.play_chrome(), session.shown().players.count()).map(|shape| hud::corners(&ui, &shape));
         let corner_hit = corners.as_ref().and_then(|c| c.hit(ui_pointer));
+        // The lamp row's button, pressed this frame (`CornerButton::Lamp`).
+        let mut lamp_tap = false;
         let keep_out: Vec<crate::math::Rectangle> = corners.iter().flat_map(Corners::keep_out).collect();
         touch.set_keep_out(&keep_out);
         // This frame's touch points, ids included so a stick follows its
@@ -1912,6 +1925,10 @@ pub fn run(args: Args) {
                     // The ONLINE button opens the lobby over the local
                     // round, which is left exactly where it stands.
                     session.press_online();
+                } else if pressed && corner_hit == Some(CornerButton::Lamp) {
+                    // The lamp row's count, the lamp key's stand-in.
+                    lamp_tap = true;
+                    touch.claim(&ui_touch_points);
                 } else if !crate::KEYBOARD_AVAILABLE && pressed && corner_hit == Some(CornerButton::Restart) {
                     // The RESTART button stands in for the R key: staged the
                     // way the dev panel's button is, it becomes this frame's
@@ -1948,6 +1965,9 @@ pub fn run(args: Args) {
                 let left = pressed && corner_hit == Some(CornerButton::Leave);
                 if left || rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
                     session.leave_online();
+                } else if pressed && corner_hit == Some(CornerButton::Lamp) {
+                    lamp_tap = true;
+                    touch.claim(&ui_touch_points);
                 }
             }
             Driver::Build => {
@@ -2067,6 +2087,7 @@ pub fn run(args: Args) {
                     trees: &trees_texture,
                     towers: &towers_texture,
                     pickup_tower_pack: &pickup_tower_pack_texture,
+                    pickup_heat_shield: &pickup_heat_shield_texture,
                     // Palette icon: the first colour variant's idle frame -
                     // a fixed representative sprite, since the builder
                     // places a frog *cell*, not a rolled colour.
@@ -2114,6 +2135,7 @@ pub fn run(args: Args) {
         let touch_intent = touch.update(&ui_touch_points, ui.screen, steer_right, dt);
         player1.move_dir = player1.move_dir.or(touch_intent.move_dir);
         player1.fire = player1.fire || touch_intent.fire;
+        player1.lamp |= lamp_tap;
         let mut input = Input::two(player1, player2);
         input.pause_pressed = rl.is_key_pressed(KeyboardKey::KEY_P);
         // The dev panel's "Restart round" button lands here too, as if R
@@ -2474,6 +2496,7 @@ pub fn run(args: Args) {
             split_targets = Some((make(), make(), plan.scene));
         }
         let shade = round_shade.sync(rl, thread, game.ground.shade());
+        let banks = if game.lava.is_empty() { None } else { round_banks.sync(rl, thread, game.lava.banks()) };
         game.render(
             rl,
             thread,
@@ -2546,8 +2569,10 @@ pub fn run(args: Args) {
                 trees: &trees_texture,
                 towers: &towers_texture,
                 pickup_tower_pack: &pickup_tower_pack_texture,
+                    pickup_heat_shield: &pickup_heat_shield_texture,
                 portal: &portal_texture,
                 shade,
+                banks,
             },
             &layout,
             &chrome,

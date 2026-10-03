@@ -316,6 +316,9 @@ pub struct Scene {
     /// (`Game::enemy_sight`) where the sky shortens it - night, a storm,
     /// fog - and `None` under one that hides nothing.
     pub sight: Option<f32>,
+    /// Every volcano that is rumbling or erupting: its crater and whether
+    /// it is erupting yet.
+    pub volcanoes: Vec<(Position, bool)>,
 }
 
 /// This seat's own tank.
@@ -430,6 +433,9 @@ pub enum ArrowKind {
     Frog { side: Side },
     /// A wave gate a tank is rolling in through; `flash` as in `GateFlash`.
     Gate { flash: f32 },
+    /// A volcano that is rumbling or erupting (docs/volcano.md): the
+    /// warning that bombs are coming, `erupting` once they are.
+    Volcano { erupting: bool },
 }
 
 /// One arrow at the edge of the screen.
@@ -1048,6 +1054,11 @@ impl Awareness {
         for frog in scene.frogs.iter().filter(|f| f.alive && !view.shows(f.pos)) {
             kept.extend(arrow(ArrowKind::Frog { side: frog.side }, frog.pos));
         }
+        // A volcano waking off the screen: never merged, never left out -
+        // its bombs are on their way.
+        for &(at, erupting) in scene.volcanoes.iter().filter(|(at, _)| !view.shows(*at)) {
+            kept.extend(arrow(ArrowKind::Volcano { erupting }, at));
+        }
 
         // Gates off the screen, the most recent first.
         let mut gate_marks: Vec<&GateMark> = self.gates.iter().filter(|g| !view.shows(g.at)).collect();
@@ -1310,12 +1321,21 @@ impl Scene {
             .filter_map(|e| game.world.get::<&Frog>(e).ok().map(|f| FrogView { side: f.side, pos: f.position, alive: !f.is_dead() }))
             .collect();
         let shortened = crate::weather::sight_factor(game.weather, &t) < 1.0;
+        let volcanoes = game
+            .volcanoes()
+            .iter()
+            .filter_map(|v| {
+                let phase = v.phase(game.time, &t);
+                phase.is_warning().then(|| (v.centre(), phase.stage == crate::volcano::Stage::Erupt))
+            })
+            .collect();
         Scene {
             time: game.time,
             seat: me,
             tanks: tanks.into_iter().map(|(tv, _)| tv).collect(),
             frogs,
             sight: shortened.then_some(sight),
+            volcanoes,
         }
     }
 }
@@ -1604,6 +1624,12 @@ pub fn picture(seats: &[Indicators], view: &ViewFrame, time: f32, t: &Tuning, fo
                 }
                 alpha *= 0.4 + 0.6 * flash;
                 (GATE_AMBER, RIM)
+            }
+            // Pulsing on the lane warning's beat, gold while it rumbles and
+            // red-hot once it throws.
+            ArrowKind::Volcano { erupting } => {
+                len *= 1.0 + t.indicator_pulse_swell * throb;
+                (if erupting { HOSTILE } else { GATE_AMBER }, if throb >= 0.5 { crate::pyro::FIRE[6] } else { RIM })
             }
         };
         let middle = behind(arrow.place.at, arrow.place.dir, len * 0.5);
@@ -1980,6 +2006,20 @@ mod indicator_tests {
 
     fn kinds(ind: &Indicators) -> Vec<ArrowKind> {
         ind.arrows.iter().map(|a| a.kind).collect()
+    }
+
+    #[test]
+    fn a_waking_volcano_off_the_screen_has_an_arrow_whatever_the_cap() {
+        let mut t = Tuning::DEFAULT;
+        t.indicator_max_arrows = 1;
+        let mut s = scene(1.0, vec![enemy(5, 900.0, 150.0), enemy(6, 950.0, 400.0)]);
+        s.volcanoes = vec![(Position::new(200.0, -500.0), false)];
+        let ind = Awareness::new().frame(&s, &screen(), &t);
+        assert!(kinds(&ind).contains(&ArrowKind::Volcano { erupting: false }), "{:?}", kinds(&ind));
+        // On the screen, none: the volcano is in sight.
+        s.volcanoes = vec![(Position::new(200.0, 100.0), true)];
+        let ind = Awareness::new().frame(&s, &screen(), &t);
+        assert!(!kinds(&ind).iter().any(|k| matches!(k, ArrowKind::Volcano { .. })));
     }
 
     /// The arrow stops where the line from the tank leaves the inset

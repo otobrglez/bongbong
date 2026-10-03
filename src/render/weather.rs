@@ -527,7 +527,7 @@ impl WeatherFx {
     /// would with no weather at all.
     pub fn begin(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, game: &Game, fx: &Fx, textures: &Textures, camera: &Camera) -> Option<WeatherFrame> {
         let t = tuning();
-        let look = Look::of(game.weather(), &t);
+        let look = game.look(&t);
         let plan = look.plan()?;
         let (w, h) = game.map.field_size();
         let size = camera.target_size();

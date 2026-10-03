@@ -70,6 +70,7 @@ fn main() {
     let trees = load(&mut rl, "static/trees_sheet.png");
     let towers = load(&mut rl, "static/towers_sheet.png");
     let pickup_tower_pack = load(&mut rl, "static/pickups/tower_pack.png");
+    let pickup_heat_shield = load(&mut rl, "static/pickups/heat_shield.png");
     let portal = load(&mut rl, "static/portal_sheet.png");
     let tank_glow = load(&mut rl, "static/scifi_tanks_glow.png");
     let tank_modules = load(&mut rl, "static/tank_modules.png");
@@ -183,6 +184,7 @@ fn main() {
             trees: &trees,
             towers: &towers,
             pickup_tower_pack: &pickup_tower_pack,
+            pickup_heat_shield: &pickup_heat_shield,
             portal: &portal,
             tracks: &tracks,
             obstacles: &obstacles,
@@ -203,6 +205,7 @@ fn main() {
             // The demo paints a plain white canvas, which draws no ground
             // and so no floor shade.
             shade: None,
+            banks: None,
         };
 
         match session.mode() {
@@ -253,6 +256,7 @@ fn main() {
                             trees: &trees,
                             towers: &towers,
                             pickup_tower_pack: &pickup_tower_pack,
+            pickup_heat_shield: &pickup_heat_shield,
                             portal: &portal,
                             frog_idle: &frog_idle,
                             pickup_health: &pickup_health,
