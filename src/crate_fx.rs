@@ -46,9 +46,11 @@ pub struct Drop {
     /// high, squashed and stretched as it lands.
     pub w: f32,
     pub h: f32,
-    /// The shadow's side, px, and its strength as a fraction of an
-    /// obstacle's (`obstacle_shadow_opacity`).
-    pub shadow: f32,
+    /// The shadow's size, px - larger and fainter while the crate is high,
+    /// the crate's own once it is down - and its strength as a fraction of
+    /// an obstacle's (`obstacle_shadow_opacity`).
+    pub shadow_w: f32,
+    pub shadow_h: f32,
     pub shadow_alpha: f32,
     /// The landing's dust, drawn behind the crate.
     pub dust: Vec<Shape>,
@@ -70,7 +72,8 @@ pub fn drop(age: f32, at: Position, t: &Tuning) -> Option<Drop> {
         lift: 0.0,
         w: CRATE_CELL,
         h: CRATE_CELL,
-        shadow: CRATE_CELL,
+        shadow_w: CRATE_CELL,
+        shadow_h: CRATE_CELL,
         shadow_alpha: 1.0,
         dust: Vec::new(),
     };
@@ -81,12 +84,15 @@ pub fn drop(age: f32, at: Position, t: &Tuning) -> Option<Drop> {
         d.lift = even(height);
         d.w = CRATE_CELL + grow;
         d.h = CRATE_CELL + grow;
-        d.shadow = CRATE_CELL + (3.0 * (1.0 - gather)).round() * 4.0;
+        d.shadow_w = CRATE_CELL + (3.0 * (1.0 - gather)).round() * 4.0;
+        d.shadow_h = d.shadow_w;
         d.shadow_alpha = 0.2 + 0.8 * gather;
     } else if age < lands + 0.08 {
         (d.w, d.h) = (CRATE_CELL + 4.0, CRATE_CELL - 6.0);
+        (d.shadow_w, d.shadow_h) = (d.w, d.h);
     } else if age < lands + 0.16 {
         (d.w, d.h, d.lift) = (CRATE_CELL - 2.0, CRATE_CELL + 2.0, 4.0);
+        (d.shadow_w, d.shadow_h) = (d.w, CRATE_CELL);
     }
     let since = age - lands;
     if since >= 0.0 {
@@ -133,6 +139,21 @@ pub struct Symbol {
     pub flash: f32,
 }
 
+/// How a crate's opening goes (`open`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Opening {
+    /// A tank took the crate: it flashes and splits, its symbol rises and
+    /// drops into the tank, now at `toward`.
+    Taken { toward: Position },
+    /// A tank took a broken crate's contents lying loose: no crate is left
+    /// to split, only the symbol rising and flying to `toward`.
+    Spilled { toward: Position },
+    /// A blast or fire broke the crate (`crate_breakable`): it flashes and
+    /// splits, and its planks fly further; what was inside cooks off or
+    /// lies there loose, which the world draws.
+    Broken,
+}
+
 /// One frame of a crate being taken: it flashes, splits into planks that
 /// fly off, its symbol rises, blinks and drops into the tank that took it,
 /// and a ring goes round that tank.
@@ -153,10 +174,10 @@ pub fn open_seconds(t: &Tuning) -> f32 {
     (0.08 * k + CHIP_LIE_SECONDS + 0.25).max(t.crate_open_seconds + RING_SECONDS)
 }
 
-/// The opening `age` seconds after a crate at `at` was taken, the symbol
-/// flying to `toward` (the hull that took it, wherever that is now), in the
-/// symbol's `ink` (`PickupKind::ink`). `None` once it is over.
-pub fn open(age: f32, at: Position, toward: Position, ink: [Color; 3], t: &Tuning) -> Option<Open> {
+/// The opening `age` seconds after a crate at `at` was taken or broken
+/// (`how`), the symbol in its `ink` (`PickupKind::ink`) flying to the hull
+/// that took it, wherever that is now. `None` once it is over.
+pub fn open(age: f32, at: Position, how: Opening, ink: [Color; 3], t: &Tuning) -> Option<Open> {
     if t.crate_open_seconds <= 0.0 || age < 0.0 || age >= open_seconds(t) {
         return None;
     }
@@ -164,10 +185,15 @@ pub fn open(age: f32, at: Position, toward: Position, ink: [Color; 3], t: &Tunin
     let u = age / k;
     let seed = crate::blast::seed_at(at, 47);
     let mut o = Open { crate_alpha: 0.0, crate_flash: 0.0, shapes: Vec::new(), symbol: None };
-    if u < 0.08 {
+    let (whole, toward) = match how {
+        Opening::Taken { toward } => (true, Some(toward)),
+        Opening::Spilled { toward } => (false, Some(toward)),
+        Opening::Broken => (true, None),
+    };
+    if whole && u < 0.08 {
         o.crate_alpha = 1.0;
         o.crate_flash = u / 0.08 * 0.55;
-    } else if u < 0.2 {
+    } else if whole && u < 0.2 {
         o.crate_alpha = 1.0 - (u - 0.08) / 0.12;
     }
 
@@ -175,10 +201,12 @@ pub fn open(age: f32, at: Position, toward: Position, ink: [Color; 3], t: &Tunin
     // for a moment before they go.
     let wood = [rgb(0x68, 0x47, 0x1D), rgb(0x99, 0x65, 0x24), rgb(0xCA, 0x8A, 0x3B), rgb(0xB5, 0x7A, 0x28)];
     let thrown = age - 0.08 * k;
-    if thrown >= 0.0 {
-        for i in 0..OPEN_CHIPS {
+    let chips = if toward.is_none() { OPEN_CHIPS * 2 } else { OPEN_CHIPS };
+    let reach = if toward.is_none() { 1.4 } else { 1.0 };
+    if whole && thrown >= 0.0 {
+        for i in 0..chips {
             let a = pyro::unit(seed, i) * std::f32::consts::TAU;
-            let speed = 50.0 + 70.0 * pyro::unit(seed, i + 32);
+            let speed = (50.0 + 70.0 * pyro::unit(seed, i + 32)) * reach;
             let up = 60.0 + 70.0 * pyro::unit(seed, i + 64);
             let lands = 2.0 * up / 300.0;
             let tt = thrown.min(lands);
@@ -189,7 +217,7 @@ pub fn open(age: f32, at: Position, toward: Position, ink: [Color; 3], t: &Tunin
             if fade <= 0.0 {
                 continue;
             }
-            let color = if i == OPEN_CHIPS - 1 { ink[1] } else { wood[i as usize % wood.len()] };
+            let color = if i % OPEN_CHIPS == OPEN_CHIPS - 1 { ink[1] } else { wood[i as usize % wood.len()] };
             if z > 0.0 {
                 o.shapes.push(Shape::Mark { pos: Position::new(x, y), size: 2, color: pyro::alpha(Color::new(0, 0, 0, 255), 0.3) });
             }
@@ -198,7 +226,7 @@ pub fn open(age: f32, at: Position, toward: Position, ink: [Color; 3], t: &Tunin
         }
     }
     // A puff of wood dust off the lid.
-    if (0.05..0.6).contains(&u) {
+    if whole && (0.05..0.6).contains(&u) {
         let f = (u - 0.05) / 0.55;
         for i in 0..3 {
             let pos = Position::new(at.x - 8.0 + i as f32 * 8.0, at.y - 6.0 - f * 20.0);
@@ -215,6 +243,7 @@ pub fn open(age: f32, at: Position, toward: Position, ink: [Color; 3], t: &Tunin
     }
 
     // The symbol: up out of the crate, a blink, then into the tank.
+    let Some(toward) = toward else { return Some(o) };
     let lift_top = 26.0;
     if (0.06..0.5).contains(&u) {
         let f = ((u - 0.06) / 0.25).clamp(0.0, 1.0);
@@ -313,7 +342,8 @@ mod tests {
         let ink = PickupKind::Plasma.ink();
         for age in every_age(1.5) {
             assert_eq!(drop(age, at, &t), drop(age, at, &t));
-            assert_eq!(open(age, at, Position::new(100.0, 48.0), ink, &t), open(age, at, Position::new(100.0, 48.0), ink, &t));
+            let taken = Opening::Taken { toward: Position::new(100.0, 48.0) };
+            assert_eq!(open(age, at, taken, ink, &t), open(age, at, taken, ink, &t));
         }
     }
 
@@ -323,17 +353,18 @@ mod tests {
         let at = Position::new(144.0, 80.0);
         let tank = Position::new(100.0, 80.0);
         let ink = PickupKind::Health.ink();
-        let start = open(0.0, at, tank, ink, &t).unwrap();
+        let taken = Opening::Taken { toward: tank };
+        let start = open(0.0, at, taken, ink, &t).unwrap();
         assert_eq!(start.crate_alpha, 1.0, "the crate is there when it is taken");
-        let rising = open(0.2, at, tank, ink, &t).unwrap();
+        let rising = open(0.2, at, taken, ink, &t).unwrap();
         let symbol = rising.symbol.expect("the symbol rises");
         assert!(symbol.pos.y < at.y, "above the crate");
-        let arriving = open(t.crate_open_seconds * 0.99, at, tank, ink, &t).unwrap();
+        let arriving = open(t.crate_open_seconds * 0.99, at, taken, ink, &t).unwrap();
         let symbol = arriving.symbol.expect("still flying");
         assert!(symbol.pos.distance_to(tank) < at.distance_to(tank), "on its way to the tank");
-        assert!(open(open_seconds(&t), at, tank, ink, &t).is_none());
+        assert!(open(open_seconds(&t), at, taken, ink, &t).is_none());
         for age in every_age(open_seconds(&t)) {
-            let o = open(age, at, tank, ink, &t).unwrap();
+            let o = open(age, at, taken, ink, &t).unwrap();
             assert!((0.0..=1.0).contains(&o.crate_alpha));
             for s in &o.shapes {
                 match *s {
@@ -343,6 +374,22 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_broken_crate_throws_its_planks_and_spilled_contents_only_fly() {
+        let t = Tuning::DEFAULT;
+        let at = Position::new(144.0, 80.0);
+        let ink = PickupKind::Ammo.ink();
+        let marks = |o: &Open| o.shapes.iter().filter(|s| matches!(s, Shape::Mark { .. })).count();
+        let broken = open(0.3, at, Opening::Broken, ink, &t).unwrap();
+        let taken = open(0.3, at, Opening::Taken { toward: Position::new(100.0, 80.0) }, ink, &t).unwrap();
+        assert!(broken.symbol.is_none(), "nothing rises out of a broken crate");
+        assert!(marks(&broken) > marks(&taken), "a blast throws more planks than a hand");
+        let spilled = open(0.0, at, Opening::Spilled { toward: Position::new(100.0, 80.0) }, ink, &t).unwrap();
+        assert_eq!(spilled.crate_alpha, 0.0, "no crate is left to open");
+        let spilled = open(0.3, at, Opening::Spilled { toward: Position::new(100.0, 80.0) }, ink, &t).unwrap();
+        assert!(spilled.symbol.is_some() && marks(&spilled) == 0, "the symbol flies, no planks");
     }
 
     #[test]

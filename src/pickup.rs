@@ -165,6 +165,17 @@ impl PickupKind {
         };
         [rgb(shade), rgb(base), rgb(light)]
     }
+
+    /// Whether a broken crate of this kind cooks off - ordnance and energy
+    /// go up in a blast of their own - rather than spill its contents
+    /// (`simulation::crates`).
+    pub fn cooks_off(self) -> bool {
+        match self {
+            PickupKind::Ammo | PickupKind::Minigun | PickupKind::Missiles | PickupKind::Flamethrower => true,
+            PickupKind::Laser | PickupKind::Plasma => true,
+            PickupKind::Health | PickupKind::SpeedUp | PickupKind::Shield | PickupKind::FrogHealth | PickupKind::TowerPack => false,
+        }
+    }
 }
 
 pub struct Pickup {
@@ -176,12 +187,28 @@ pub struct Pickup {
     /// (`crate_fx::drop`) - and a crate can be taken the frame it appears,
     /// mid-drop, so no rule waits on it and no replay moves.
     pub dropped_at: Option<f32>,
+    /// The crate's hit points (`crate_hp` fresh), while crates are
+    /// breakable (`simulation::crates`).
+    pub health: f32,
+    /// Seconds a burning crate has left before it falls in; `None` while
+    /// it is not burning.
+    pub burn: Option<f32>,
+    /// Seconds a broken crate's contents have left lying loose on the
+    /// cell; `None` for a crate. Loose contents are drawn as the bare
+    /// symbol and taken like any pickup.
+    pub loose: Option<f32>,
 }
 
 impl Pickup {
     /// A pickup that was on the field from the round's start.
     pub fn placed(kind: PickupKind, position: Position) -> Self {
-        Pickup { kind, position, dropped_at: None }
+        Pickup::dropped(kind, position, None)
+    }
+
+    /// A crate that came down at `dropped_at` on the round clock (`None`
+    /// for one that stood there from the start), whole.
+    pub fn dropped(kind: PickupKind, position: Position, dropped_at: Option<f32>) -> Self {
+        Pickup { kind, position, dropped_at, health: crate::tuning::tuning().crate_hp, burn: None, loose: None }
     }
 
     /// Side length of this pickup's square: one cell, what a hull touches
@@ -214,21 +241,43 @@ pub fn glyph_src(kind: PickupKind) -> Rectangle {
     Rectangle::new(0.0, kind.row() as f32 * PICKUP_GLYPH_CELL, PICKUP_GLYPH_CELL, PICKUP_GLYPH_CELL)
 }
 
-/// Draw one pickup's crate at `time` on the round clock: in its air drop
-/// while it is coming down (`crate_fx::drop`), else standing on its cell
-/// with a drop shadow like an obstacle's and the glint it idles with
-/// (`crate_fx::glint_col`). `shadows` is `Game::shadows_enabled`.
+/// Draw one pickup at `time` on the round clock: a broken crate's loose
+/// contents as the bare symbol, blinking out at the end; a burning crate
+/// charred with flames off its lid, a hurt one split; a crate in its air
+/// drop while it is coming down (`crate_fx::drop`); else the crate standing
+/// on its cell with a drop shadow like an obstacle's and the glint it idles
+/// with (`crate_fx::glint_col`). `shadows` is `Game::shadows_enabled`.
 pub fn draw_pickup(c: &mut impl Canvas, pickup: &Pickup, time: f32, shadows: bool) {
     let t = crate::tuning::tuning();
     let at = pickup.position;
+    if let Some(left) = pickup.loose {
+        // Spilled: the bare symbol on the ground, blinking out over its
+        // last second and a half.
+        if left < 1.5 && ((time / 0.1) as i32) % 2 == 0 {
+            return;
+        }
+        if shadows {
+            draw_glyph(c, pickup.kind, Position::new(at.x + 2.0, at.y + 4.0), PICKUP_GLYPH_CELL, Color::new(0, 0, 0, 77));
+        }
+        draw_glyph(c, pickup.kind, at, PICKUP_GLYPH_CELL, Color::WHITE);
+        return;
+    }
+    if pickup.burn.is_some() || pickup.health < t.crate_hp * 0.5 {
+        let col = if pickup.burn.is_some() { crate::CRATE_COL_CHARRED } else { crate::CRATE_COL_DAMAGED };
+        draw_crate(c, pickup.kind, at, col, shadows, Color::WHITE);
+        if pickup.burn.is_some() {
+            crate::pyro::draw(c, &crate_flames(pickup, time));
+        }
+        return;
+    }
     if let Some(drop) = pickup.dropped_at.and_then(|since| crate::crate_fx::drop(time - since, at, &t)) {
         if shadows && drop.shadow_alpha > 0.0 {
-            let side = drop.shadow;
+            let (w, h) = (drop.shadow_w, drop.shadow_h);
             let dest = Rectangle::new(
-                (at.x - side * 0.5 + t.shadow_dir_x * t.obstacle_shadow_offset).round(),
-                (at.y + CRATE_CELL * 0.5 - side + t.shadow_dir_y * t.obstacle_shadow_offset).round(),
-                side,
-                side,
+                (at.x - w * 0.5 + t.shadow_dir_x * t.obstacle_shadow_offset).round(),
+                (at.y + CRATE_CELL * 0.5 - h + t.shadow_dir_y * t.obstacle_shadow_offset).round(),
+                w,
+                h,
             );
             let shadow = Color::new(0, 0, 0, (255.0 * t.obstacle_shadow_opacity * drop.shadow_alpha) as u8);
             c.blit(Sheet::Crates, crate_src(pickup.kind, CRATE_COL_INTACT), dest, Vec2::new(0.0, 0.0), 0.0, shadow);
@@ -246,6 +295,22 @@ pub fn draw_pickup(c: &mut impl Canvas, pickup: &Pickup, time: f32, shadows: boo
         return;
     }
     draw_crate(c, pickup.kind, at, crate::crate_fx::glint_col(time, at, &t), shadows, Color::WHITE);
+}
+
+/// The flames on a burning crate (`Pickup::burn`): tongues off its lid in
+/// the effects language (`pyro::tongues`), leaning with the wind, their
+/// light among the shapes for the additive pass. Empty for one not burning.
+pub fn crate_flames(pickup: &Pickup, time: f32) -> Vec<crate::pyro::Shape> {
+    let mut out = Vec::new();
+    if pickup.burn.is_none() {
+        return out;
+    }
+    let t = crate::tuning::tuning();
+    let at = pickup.position;
+    let seed = crate::blast::seed_at(at, 49);
+    let lean = crate::pyro::smoke_lean(&t, at, time);
+    crate::pyro::tongues(&mut out, Position::new(at.x, at.y + 6.0), 10.0, t.ground_fire_height_px, 3, seed, time, lean, 1.0);
+    out
 }
 
 /// One crate standing on its cell in sheet column `col`, its shadow first

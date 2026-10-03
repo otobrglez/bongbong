@@ -1225,6 +1225,9 @@ impl Game {
             for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| o.burning && !culled(cull, o.position)) {
                 pyro::draw_glows(&mut Rl(&mut bd), &crate::game::tile_flames(obstacle, self.time), bands);
             }
+            for pickup in self.world.query::<&crate::pickup::Pickup>().iter().filter(|p| p.burn.is_some() && !culled(cull, p.position)) {
+                pyro::draw_glows(&mut Rl(&mut bd), &crate::pickup::crate_flames(pickup, self.time), bands);
+            }
         });
 
         self.paint_standing(&mut GpuCanvas::culled(d, textures, cull), PaintOptions { locate_cue: true });
@@ -1406,8 +1409,15 @@ impl Game {
                 .iter()
                 .filter(|o| !culled(cull, o.at))
                 .filter_map(|o| {
-                    let toward = self.tank_of_slot(o.slot).unwrap_or(o.at);
-                    crate::crate_fx::open(o.age, o.at, toward, o.kind.ink(), &t).map(|open| (*o, open))
+                    use crate::crate_fx::Opening;
+                    let how = match o.slot {
+                        None => Opening::Broken,
+                        Some(slot) => {
+                            let toward = self.tank_of_slot(slot).unwrap_or(o.at);
+                            if o.spilled { Opening::Spilled { toward } } else { Opening::Taken { toward } }
+                        }
+                    };
+                    crate::crate_fx::open(o.age, o.at, how, o.kind.ink(), &t).map(|open| (*o, open))
                 })
                 .collect();
             {

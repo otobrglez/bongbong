@@ -54,7 +54,7 @@ use crate::net::encode::{cell_from_index, cell_index, field_cols};
 use crate::net::events::WireEvent;
 use crate::net::events::WireHitTarget;
 use crate::net::wire::{
-    MissileState, ShotKind, ShotState, Snapshot, TankState, WeaponKind, Welcome, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, frog_flags, tank_flags, tile_flags,
+    MissileState, ShotKind, ShotState, Snapshot, TankState, WeaponKind, Welcome, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, crate_flags, dequantise_health, frog_flags, tank_flags, tile_flags,
 };
 use crate::laser::{LaserBeam, LaserVariant};
 use crate::obstacle::{Drum, Fuse, Obstacle};
@@ -294,6 +294,7 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_beams: &BTreeS
                 game.missile_show(show, center, dir);
             }
             WireEvent::CookOff { x, y } => Game::cookoff_show(show, at(x, y)),
+            WireEvent::CrateBroken { x, y, cooked: true, .. } => game.crate_cookoff_show(show, at(x, y)),
             WireEvent::Hit { target, damage, x, y, .. } => {
                 let contact = damage == 0.0
                     && matches!(target, WireHitTarget::Player { .. } | WireHitTarget::Enemy { .. } | WireHitTarget::Frog { .. })
@@ -920,13 +921,27 @@ fn apply_pickups(game: &mut Game, s: &Snapshot, cols: u16) {
     let slots: Vec<_> = game.pickup_slots().to_vec();
     for (i, (position, kind)) in slots.into_iter().enumerate().take(64) {
         if s.pickups & (1 << i) != 0 {
-            game.world.spawn((Pickup { kind, position, dropped_at: dropped_at(kind, position) },));
+            game.world.spawn((Pickup::dropped(kind, position, dropped_at(kind, position)),));
         }
     }
     for bonus in &s.bonus_pickups {
         let (col, row) = cell_from_index(cols, bonus.cell);
         let position = map::cell_to_world(col, row);
-        game.world.spawn((Pickup { kind: bonus.kind, position, dropped_at: dropped_at(bonus.kind, position) },));
+        game.world.spawn((Pickup::dropped(bonus.kind, position, dropped_at(bonus.kind, position)),));
+    }
+    // The crates that are not whole: hurt, burning, or broken and lying
+    // loose (`crate_breakable`).
+    for state in &s.crates {
+        let (col, row) = cell_from_index(cols, state.cell);
+        let position = map::cell_to_world(col, row);
+        for pickup in game.world.query_mut::<&mut Pickup>() {
+            if pickup.position.distance_to(position) < 0.5 {
+                pickup.health = dequantise_health(state.hp);
+                let left = dequantise_seconds(state.left);
+                pickup.burn = (state.flags & crate_flags::BURNING != 0).then_some(left);
+                pickup.loose = (state.flags & crate_flags::LOOSE != 0).then_some(left);
+            }
+        }
     }
 }
 
@@ -1770,6 +1785,40 @@ mod tests {
         assert!(server.blasts.iter().any(|b| !b.3), "a fireball: {server:?}");
         assert!(!server.shocks.is_empty() && !server.scorches.is_empty() && !server.decals.is_empty(), "{server:?}");
         assert_eq!(client, server, "the replica puts on the round's show");
+    }
+
+    /// Crates a blast breaks, with crates breakable (`simulation::crates`),
+    /// are broken the same on the replica: the ammo crate's cook-off puts
+    /// on its show off `CrateBroken`, the crates it broke lie loose, and a
+    /// crate the blast only hurt stays hurt - and stays so as the clocks
+    /// run.
+    #[test]
+    fn broken_crates_are_the_same_on_the_replica() {
+        let map = r#"
+version = 1
+tanks = 1
+cells."2,2" = { kind = "frog" }
+cells."4,14" = { kind = "start" }
+cells."10,10" = { kind = "barrel", drum = "oil" }
+cells."11,10" = { kind = "pickup", pickup = "ammo" }
+cells."12,10" = { kind = "pickup", pickup = "shield" }
+cells."10,12" = { kind = "pickup", pickup = "speedup" }
+"#;
+        let mut game = quiet_round(map, 0xC4A7E, 1);
+        game.crates_breakable = true;
+        let mut replica = welcome_through_the_codec(&game);
+        game.debug_detonate(map::cell_to_world(10, 10)).expect("the drum");
+        step_and_apply(&mut game, &mut replica);
+        let broke = |g: &Game| g.events().iter().filter(|e| matches!(e, crate::simulation::Event::CrateBroken { .. })).count();
+        assert!(broke(&game) >= 2, "the ammo cooked off and broke the shield crate");
+        assert_eq!(spectacles(&replica), spectacles(&game), "the replica puts on the round's show");
+        assert_eq!(replica.drawable_state().pickups, game.drawable_state().pickups, "the same crates, hurt, burning and loose");
+        let loose = game.drawable_state().pickups.iter().filter(|p| p.loose).count();
+        assert!(loose >= 1, "something lies loose");
+        for _ in 0..30 {
+            step_and_apply(&mut game, &mut replica);
+            assert_eq!(replica.drawable_state().pickups, game.drawable_state().pickups);
+        }
     }
 
     /// The cook-offs a kill queues pop on the server seconds later, each

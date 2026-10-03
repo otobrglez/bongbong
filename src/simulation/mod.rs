@@ -23,6 +23,7 @@
 mod combat;
 mod command;
 mod comms;
+mod crates;
 pub mod debug;
 mod director;
 mod engage;
@@ -37,6 +38,8 @@ mod towers;
 pub use props::{FlyingDrum, GroundFire};
 pub(crate) use props::tile_rubble;
 pub mod replica;
+#[cfg(test)]
+mod crate_tests;
 #[cfg(test)]
 mod flame_tests;
 #[cfg(test)]
@@ -362,9 +365,15 @@ pub enum Event {
     /// than pretending to report an outcome. Sum it for "how hard the pack is
     /// shoving itself", never for "damage dealt".
     Ram { slot: usize, other_slot: usize, damage: f32 },
-    /// `slot` took a `kind` crate standing at (`x`, `y`) - where its
-    /// opening plays (`fx::CrateOpen`).
-    PickupCollected { slot: usize, kind: PickupKind, x: f32, y: f32 },
+    /// `slot` took a `kind` pickup at (`x`, `y`) - where its opening plays
+    /// (`fx::CrateOpen`). `spilled`: it was a broken crate's contents lying
+    /// loose (`Pickup::loose`), so there was no crate left to open.
+    PickupCollected { slot: usize, kind: PickupKind, x: f32, y: f32, spilled: bool },
+    /// A `kind` crate at (`x`, `y`) broke under a blast or fire
+    /// (`crate_breakable`, `simulation::crates`): `cooked`, its contents
+    /// went off in a blast of their own; otherwise they spilled and lie
+    /// there loose.
+    CrateBroken { kind: PickupKind, x: f32, y: f32, cooked: bool },
     PickupRespawned { kind: PickupKind, x: f32, y: f32 },
     /// A projectile bounced off `slot`'s rainbow shield at (`x`, `y`).
     Deflected { slot: usize, x: f32, y: f32 },
@@ -667,6 +676,10 @@ pub struct Game {
     /// the fight). Set by `init` from the map; false on every arena, which
     /// plays exactly as it always has.
     pub(crate) field_map: bool,
+    /// Blasts and fire break the pickups' crates this round
+    /// (`simulation::crates`) - `crate_breakable`, read once by `init`, so
+    /// a round keeps the rule it began under.
+    pub(crate) crates_breakable: bool,
     /// How many enemies the band plan placed at init. Zero is a sandbox
     /// round (`tanks = 0` / `--enemies 0`): nothing to wreck, so it never
     /// ends by wreck count - only by the player's or the frog's death.
@@ -956,6 +969,9 @@ struct Frame {
     /// `kills` as one worklist (a blast that sets off another barrel or
     /// kills a tank appends to it).
     pending_blasts: Vec<props::PendingBlast>,
+    /// Crates a blast or fire broke this frame (`crate_breakable`), in the
+    /// same worklist: a crate cooking off can break another.
+    crate_breaks: Vec<Entity>,
     blast_fx: Vec<BlastFx>,
     scorches: Vec<Scorch>,
     decals: Vec<Decal>,
@@ -1024,6 +1040,7 @@ impl Frame {
             terrain,
             kills: Vec::new(),
             pending_blasts: Vec::new(),
+            crate_breaks: Vec::new(),
             blast_fx: Vec::new(),
             scorches: Vec::new(),
             decals: Vec::new(),
@@ -1195,6 +1212,7 @@ impl Game {
         self.mission = self.level_overrides.resolve_mission(&self.map.mission);
         self.spawn_plan = self.level_overrides.resolve_spawn(&self.map.spawn, self.enemy_count_override);
         self.field_map = self.map.class() == crate::framing::MapClass::Field;
+        self.crates_breakable = tuning().crate_breakable;
         self.intro_timer = if self.show_intro { tuning().mission_banner_seconds } else { 0.0 };
         self.intro_fade = 0.0;
 
@@ -1691,6 +1709,7 @@ impl Game {
             self.tick_ooze(&mut f);
             self.tick_fuses(&mut f);
             self.tick_launches(&mut f);
+            self.tick_crates(&mut f);
             self.tick_grass(f.dt);
             self.drain_shield_breaks(&mut f);
             self.explosions(&mut f, true);
@@ -1714,6 +1733,7 @@ impl Game {
             self.tick_fires(&mut f, false);
             self.tick_fuses(&mut f);
             self.tick_launches(&mut f);
+            self.tick_crates(&mut f);
             self.tick_grass(f.dt);
             self.explosions(&mut f, false);
             self.cleanup_done();
@@ -2418,7 +2438,7 @@ impl Game {
         let player_towers_want = self.tower_pack_wanted(Side::Player);
         let enemy_towers_want = self.tower_pack_wanted(Side::Enemy);
         let towers_want = |e: Entity| if self.is_player(e) { player_towers_want } else { enemy_towers_want };
-        let collected: Vec<(Entity, Entity, PickupKind, Position)> = self
+        let collected: Vec<(Entity, Entity, PickupKind, Position, bool)> = self
             .world
             .query::<(Entity, &Pickup)>()
             .iter()
@@ -2440,10 +2460,10 @@ impl Game {
                     .filter(|&&(e, _, _)| pickup.kind != PickupKind::FrogHealth || !own_frog_full(e))
                     .filter(|&&(e, _, _)| pickup.kind != PickupKind::TowerPack || towers_want(e))
                     .find(|&&(_, center, half)| pickup.in_reach(center, half, pad))
-                    .map(|&(tank_entity, _, _)| (pickup_entity, tank_entity, pickup.kind, pickup.position))
+                    .map(|&(tank_entity, _, _)| (pickup_entity, tank_entity, pickup.kind, pickup.position, pickup.loose.is_some()))
             })
             .collect();
-        for (pickup_entity, tank_entity, kind, at) in collected {
+        for (pickup_entity, tank_entity, kind, at, spilled) in collected {
             let slot = {
                 let mut q = self.world.query_one::<&mut Tank>(tank_entity);
                 let tank = q.get().expect("collector entity always has a Tank");
@@ -2520,7 +2540,7 @@ impl Game {
                     }
                 }
             }
-            f.events.push(Event::PickupCollected { slot, kind, x: at.x, y: at.y });
+            f.events.push(Event::PickupCollected { slot, kind, x: at.x, y: at.y, spilled });
             self.world.despawn(pickup_entity).ok();
         }
 
@@ -3795,8 +3815,8 @@ impl Game {
     /// and a barrel dies once. `live` is false on the end screen, where
     /// blasts play out without damage (no kills happen there).
     fn explosions(&mut self, f: &mut Frame, live: bool) {
-        let (mut i, mut j) = (0, 0);
-        while i < f.kills.len() || j < f.pending_blasts.len() {
+        let (mut i, mut j, mut k) = (0, 0, 0);
+        while i < f.kills.len() || j < f.pending_blasts.len() || k < f.crate_breaks.len() {
             while i < f.kills.len() {
                 let (center, victim) = f.kills[i];
                 i += 1;
@@ -3809,6 +3829,11 @@ impl Game {
                 let blast = f.pending_blasts[j];
                 j += 1;
                 self.apply_blast(f, blast, live);
+            }
+            if k < f.crate_breaks.len() {
+                let crate_entity = f.crate_breaks[k];
+                k += 1;
+                self.break_crate(f, crate_entity, live);
             }
         }
     }
@@ -4589,7 +4614,7 @@ fn tanks_touching(physics: &Physics, a: &Tank, b: &Tank) -> bool {
 /// clock a crate comes down at (its air drop, drawn only), `None` for one
 /// that stands there from the round's start.
 fn spawn_pickup_at(world: &mut hecs::World, pos: Position, kind: PickupKind, dropped_at: Option<f32>) {
-    world.spawn((Pickup { kind, position: pos, dropped_at },));
+    world.spawn((Pickup::dropped(kind, pos, dropped_at),));
 }
 
 impl Game {

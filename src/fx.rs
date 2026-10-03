@@ -159,8 +159,10 @@ pub struct CrateOpen {
     pub(crate) kind: crate::pickup::PickupKind,
     pub(crate) at: Position,
     /// The owner slot of the tank that took it, whose hull the symbol
-    /// flies into.
-    pub(crate) slot: usize,
+    /// flies into; `None` for a crate a blast or fire broke.
+    pub(crate) slot: Option<usize>,
+    /// It was a broken crate's contents lying loose: no crate left to split.
+    pub(crate) spilled: bool,
     pub(crate) age: f32,
 }
 
@@ -234,6 +236,13 @@ impl Fx {
     #[cfg(feature = "render")]
     pub(crate) fn impacts(&self) -> &[Impact] {
         &self.impacts
+    }
+
+    fn start_open(&mut self, open: CrateOpen) {
+        if self.opens.len() >= MAX_OPENS {
+            self.opens.remove(0);
+        }
+        self.opens.push(open);
     }
 
     /// Every crate still being opened, oldest first, for the renderer.
@@ -573,11 +582,16 @@ impl Fx {
             for e in game.events() {
                 match *e {
                     Event::RoundStarted { .. } => self.clear(),
-                    Event::PickupCollected { slot, kind, x, y } => {
-                        if self.opens.len() >= MAX_OPENS {
-                            self.opens.remove(0);
+                    Event::PickupCollected { slot, kind, x, y, spilled } => {
+                        self.start_open(CrateOpen { kind, at: Position::new(x, y), slot: Some(slot), spilled, age: 0.0 });
+                    }
+                    Event::CrateBroken { kind, x, y, .. } => {
+                        let at = Position::new(x, y);
+                        self.start_open(CrateOpen { kind, at, slot: None, spilled: false, age: 0.0 });
+                        if let Some(ramp) = crate::pyro::dust_of(Material::Wood) {
+                            let tints = [ramp[1], ramp[2]];
+                            self.burst(at, ParticleKind::Dust, self.count(6), 50.0, &tints);
                         }
-                        self.opens.push(CrateOpen { kind, at: Position::new(x, y), slot, age: 0.0 });
                     }
                     Event::ObstacleDestroyed { material, x, y } => self.tile_death(material, Position::new(x, y)),
                     // A hit the tile *survived*. Without this, a wall only
