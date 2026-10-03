@@ -74,10 +74,10 @@ thins every layer together, 0 drawing every sky clear.
 | Sky | Ambient light | Lights | Layers |
 | --- | --- | --- | --- |
 | clear | daylight | none | none - pass 1 runs exactly as it always has |
-| night | moonlight: `night_ambient` (0.2) times a blue tint | full | vignette |
+| night | moonlight: `night_ambient` (0.29) times a blue tint | full | vignette |
 | dusk | warm (0.80, 0.62, 0.54) with the low sun rising toward the west edge | 0.6 | vignette |
 | rain | grey (0.76, 0.80, 0.90) | 0.4 | rain 0.7 |
-| storm | gloom, about twice the night's | full | rain 1.0, lightning |
+| storm | gloom, half as bright again as the night | full | rain 1.0, lightning |
 | fog | pale (0.93, 0.95, 0.99) | 0.25 | fog 0.85 |
 | sandstorm | orange (1.0, 0.87, 0.70) | 0.35 | sand 0.9 |
 | snow | cold white (0.98, 1.0, 1.06) | 0.15 | snow 0.85 |

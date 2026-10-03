@@ -2938,8 +2938,8 @@ tunables! {
         sand_gust_spread_deg: f32 = 25.0 in 0.0 ..= 80.0;
         /// How bright full night is: the moonlight the whole field is lit
         /// by before any lamp, fire or shot adds to it (the blue tint is
-        /// the look's own). A storm's gloom is a little over twice this.
-        night_ambient: f32 = 0.2 in 0.0 ..= 1.0;
+        /// the look's own). A storm's gloom is half as bright again.
+        night_ambient: f32 = 0.29 in 0.0 ..= 1.0;
         /// Steps per unit of light the light map is drawn in, on the 2 px
         /// block grid like every other glow; 0 draws smooth light.
         light_bands: i32 = 5 in 0 ..= 16;

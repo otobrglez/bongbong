@@ -120,7 +120,7 @@ impl Look {
             Weather::Dusk => Look { ambient: [0.8, 0.62, 0.54], lights: 0.6, sun: 1.0, vignette: 0.2, ..Look::CLEAR },
             Weather::Rain => Look { ambient: [0.76, 0.8, 0.9], lights: 0.4, vignette: 0.15, rain: 0.7, ..Look::CLEAR },
             Weather::Storm => Look {
-                ambient: tint(STORM_TINT, (t.night_ambient * 2.1).min(1.0)),
+                ambient: tint(STORM_TINT, (t.night_ambient * 1.45).min(1.0)),
                 lights: 1.0,
                 vignette: 0.35,
                 rain: 1.0,
