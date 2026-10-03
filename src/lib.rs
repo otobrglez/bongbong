@@ -996,6 +996,7 @@ pub mod tank_art;
 pub mod text;
 pub mod thumbnail;
 pub mod touch;
+pub mod training;
 pub mod tower;
 pub mod track;
 pub mod trig;

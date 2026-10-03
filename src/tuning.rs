@@ -2885,6 +2885,20 @@ tunables! {
         shot_trail_glint_rate: f32 = 26.0 in 0.0 ..= 200.0;
     }
 
+    group training {
+        /// A wrecked seat in a training round (docs/training-stage.md)
+        /// comes back as a fresh tank inside the last door opened, this
+        /// long after it went (seconds). Training is never lost.
+        training_respawn_seconds: f32 = 2.0 in 0.0 ..= 10.0;
+        /// A training round's frog, once it is down, is back on its feet
+        /// this long after (seconds) - the death animation's length - and
+        /// the beat it fell in starts again.
+        training_frog_revive_seconds: f32 = 1.6 in 0.0 ..= 10.0;
+        /// How far past a flag's cell a hull still takes it, px: the
+        /// hull's box grown by this much touches the flag's square.
+        training_flag_reach_px: f32 = 6.0 in 0.0 ..= 32.0;
+    }
+
     group weather {
         /// Put one sky over every map, by its place in `map::Weather::ALL`:
         /// 0 clear, 1 night, 2 dusk, 3 rain, 4 storm, 5 fog, 6 sandstorm,

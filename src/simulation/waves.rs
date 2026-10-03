@@ -687,6 +687,22 @@ impl Game {
         true
     }
 
+    /// A training beat's tank (docs/training-stage.md): one of chassis
+    /// `row` rolling in through a free lane, as a wave's does, to fight as
+    /// `role` once it arrives. `None` while no lane is free - or the map
+    /// has no gate - so the beat asks again next frame.
+    pub(super) fn training_roll_in(&mut self, f: &mut Frame, row: i32, role: Role) -> Option<Entity> {
+        let GatePick::Free(gate) = self.pick_gate(f) else { return None };
+        let slot = self.take_slot();
+        let mut tank = roll_enemy_tank(&mut f.rng, row, gate.outside, slot);
+        let rotation = gate.heading().rotation();
+        tank.rotation = rotation;
+        tank.visual_rotation = rotation;
+        tank.turret_visual_rotation = rotation;
+        tank.ring_position = gate.outside;
+        Some(self.world.spawn((tank, RollIn { to: gate.inside }, Rejoin { role })))
+    }
+
     /// The gate-less fallback: place the tank in the spawn band exactly as
     /// the band plan does at init (`battlefield::enemy_spawn_legal`, then
     /// `Grid::nearest_open` on the attempt cap), with its body and `Ai`,

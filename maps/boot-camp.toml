@@ -1,0 +1,211 @@
+# boot-camp - the training stage, level 0 (docs/training-stage.md)
+# Saved from the builder drops these comments; put them back after a save.
+#
+# Four pens along one east-west road (row 6), the frog the only guide.
+# Pen 1 (cols 0-9): drive over the three flags; door 1 opens. Pen 2 (cols
+# 11-18): no shells until the ammo crate; door 2 opens. Pen 3 (cols
+# 20-27): a firing range of wood and brick, and a brick wall across the
+# road in column 25 - shooting it opens door 3, two cells behind it; the
+# lane round the wall is open, so the course lints as it plays once its
+# doors open. Pen 4 (cols 29-47): the frog's pad, a pond and sandbag
+# cover; a shell from the east gate hurts the frog, its kit drops, then a
+# scout rolls in through the gate that goes for the frog, then a shield
+# drops and a scout that fights back follows.
+#
+# Training is never lost: a wrecked tank comes back in the last door
+# opened, a fallen frog gets up and its beat starts again. No enemy at the
+# start (`tanks = 0`), so only the script brings any.
+
+version = 1
+tanks = 0
+tank = "glacier"
+size = [48.0, 13.0]
+mission.kind = "protect"
+spawn.kind = "band"
+
+cells."10,0" = { kind = "wall", material = "iron" }
+cells."19,0" = { kind = "wall", material = "iron" }
+cells."28,0" = { kind = "wall", material = "iron" }
+cells."4,1" = { kind = "tall_grass" }
+cells."5,1" = { kind = "tall_grass" }
+cells."10,1" = { kind = "wall", material = "iron" }
+cells."19,1" = { kind = "wall", material = "iron" }
+cells."28,1" = { kind = "wall", material = "iron" }
+cells."33,1" = { kind = "water" }
+cells."34,1" = { kind = "water" }
+cells."35,1" = { kind = "water" }
+cells."36,1" = { kind = "water" }
+cells."37,1" = { kind = "water" }
+cells."44,1" = { kind = "tall_grass" }
+cells."45,1" = { kind = "tall_grass" }
+cells."8,2" = { kind = "flag" }
+cells."10,2" = { kind = "wall", material = "iron" }
+cells."17,2" = { kind = "pickup", pickup = "ammo" }
+cells."19,2" = { kind = "wall", material = "iron" }
+cells."23,2" = { kind = "wall", material = "wood" }
+cells."24,2" = { kind = "wall", material = "wood" }
+cells."28,2" = { kind = "wall", material = "iron" }
+cells."33,2" = { kind = "water" }
+cells."34,2" = { kind = "water" }
+cells."35,2" = { kind = "water" }
+cells."36,2" = { kind = "water" }
+cells."37,2" = { kind = "water" }
+cells."10,3" = { kind = "wall", material = "iron" }
+cells."19,3" = { kind = "wall", material = "iron" }
+cells."28,3" = { kind = "wall", material = "iron" }
+cells."41,3" = { kind = "sandbag" }
+cells."42,3" = { kind = "sandbag" }
+cells."10,4" = { kind = "wall", material = "iron" }
+cells."19,4" = { kind = "wall", material = "iron" }
+cells."21,4" = { kind = "wall", material = "brick" }
+cells."28,4" = { kind = "wall", material = "iron" }
+cells."38,4" = { kind = "sandbag" }
+cells."10,5" = { kind = "door", beat = 1 }
+cells."19,5" = { kind = "door", beat = 2 }
+cells."25,5" = { kind = "wall", material = "brick" }
+cells."28,5" = { kind = "door", beat = 3 }
+cells."47,5" = { kind = "gate" }
+cells."0,6" = { kind = "road" }
+cells."1,6" = { kind = "road" }
+cells."2,6" = { kind = "start" }
+cells."3,6" = { kind = "road" }
+cells."4,6" = { kind = "road" }
+cells."5,6" = { kind = "road" }
+cells."6,6" = { kind = "road" }
+cells."7,6" = { kind = "road" }
+cells."8,6" = { kind = "road" }
+cells."9,6" = { kind = "road" }
+cells."10,6" = { kind = "door", beat = 1 }
+cells."11,6" = { kind = "road" }
+cells."12,6" = { kind = "road" }
+cells."13,6" = { kind = "road" }
+cells."14,6" = { kind = "road" }
+cells."15,6" = { kind = "road" }
+cells."16,6" = { kind = "road" }
+cells."17,6" = { kind = "road" }
+cells."18,6" = { kind = "road" }
+cells."19,6" = { kind = "door", beat = 2 }
+cells."20,6" = { kind = "road" }
+cells."21,6" = { kind = "road" }
+cells."22,6" = { kind = "road" }
+cells."23,6" = { kind = "road" }
+cells."24,6" = { kind = "road" }
+cells."25,6" = { kind = "wall", material = "brick" }
+cells."26,6" = { kind = "road" }
+cells."27,6" = { kind = "road" }
+cells."28,6" = { kind = "door", beat = 3 }
+cells."29,6" = { kind = "road" }
+cells."30,6" = { kind = "road" }
+cells."31,6" = { kind = "road" }
+cells."32,6" = { kind = "road" }
+cells."33,6" = { kind = "road" }
+cells."34,6" = { kind = "frog" }
+cells."35,6" = { kind = "road" }
+cells."36,6" = { kind = "road" }
+cells."37,6" = { kind = "road" }
+cells."38,6" = { kind = "road" }
+cells."39,6" = { kind = "road" }
+cells."40,6" = { kind = "road" }
+cells."41,6" = { kind = "road" }
+cells."42,6" = { kind = "road" }
+cells."43,6" = { kind = "road" }
+cells."44,6" = { kind = "road" }
+cells."45,6" = { kind = "road" }
+cells."46,6" = { kind = "road" }
+cells."47,6" = { kind = "gate" }
+cells."10,7" = { kind = "door", beat = 1 }
+cells."19,7" = { kind = "door", beat = 2 }
+cells."25,7" = { kind = "wall", material = "brick" }
+cells."28,7" = { kind = "door", beat = 3 }
+cells."47,7" = { kind = "gate" }
+cells."10,8" = { kind = "wall", material = "iron" }
+cells."19,8" = { kind = "wall", material = "iron" }
+cells."21,8" = { kind = "wall", material = "brick" }
+cells."28,8" = { kind = "wall", material = "iron" }
+cells."38,8" = { kind = "sandbag" }
+cells."10,9" = { kind = "wall", material = "iron" }
+cells."12,9" = { kind = "pickup", pickup = "speedup" }
+cells."19,9" = { kind = "wall", material = "iron" }
+cells."22,9" = { kind = "wall", material = "wood" }
+cells."23,9" = { kind = "wall", material = "wood" }
+cells."28,9" = { kind = "wall", material = "iron" }
+cells."41,9" = { kind = "sandbag" }
+cells."42,9" = { kind = "sandbag" }
+cells."3,10" = { kind = "flag" }
+cells."8,10" = { kind = "flag" }
+cells."10,10" = { kind = "wall", material = "iron" }
+cells."17,10" = { kind = "pickup", pickup = "health" }
+cells."19,10" = { kind = "wall", material = "iron" }
+cells."20,10" = { kind = "pickup", pickup = "minigun" }
+cells."22,10" = { kind = "wall", material = "wood" }
+cells."23,10" = { kind = "wall", material = "wood" }
+cells."28,10" = { kind = "wall", material = "iron" }
+cells."4,11" = { kind = "tall_grass" }
+cells."5,11" = { kind = "tall_grass" }
+cells."6,11" = { kind = "tall_grass" }
+cells."10,11" = { kind = "wall", material = "iron" }
+cells."12,11" = { kind = "fence" }
+cells."13,11" = { kind = "fence" }
+cells."14,11" = { kind = "fence" }
+cells."19,11" = { kind = "wall", material = "iron" }
+cells."28,11" = { kind = "wall", material = "iron" }
+cells."44,11" = { kind = "tall_grass" }
+cells."45,11" = { kind = "tall_grass" }
+cells."46,11" = { kind = "tall_grass" }
+cells."10,12" = { kind = "wall", material = "iron" }
+cells."19,12" = { kind = "wall", material = "iron" }
+cells."28,12" = { kind = "wall", material = "iron" }
+
+[training]
+start_health = 0.6
+start_shells = 0
+
+[[training.beat]]
+id = "drive"
+frog = [5, 4]
+say = ["frog-hello", "frog-drive", "frog-flags"]
+nudge = "frog-flags-nudge"
+done = { flags = 3 }
+
+[[training.beat]]
+id = "supply"
+frog = [13, 4]
+say = ["frog-crates", "frog-health"]
+nudge = "frog-crates-nudge"
+done = { collect = "ammo" }
+
+[[training.beat]]
+id = "fire"
+frog = [23, 6]
+say = ["frog-fire", "frog-materials", "frog-iron"]
+nudge = "frog-fire-nudge"
+done = { destroyed = [[25, 5], [25, 6], [25, 7]] }
+
+[[training.beat]]
+id = "through"
+frog = [34, 6]
+say = ["frog-wall"]
+done = { past_col = 28 }
+
+[[training.beat]]
+id = "frog"
+frog = [34, 6]
+say = ["frog-pad"]
+start = { shoot_frog = "east", drop = [{ kind = "frog_health", at = [31, 10] }] }
+done = { collect = "frog_health" }
+
+[[training.beat]]
+id = "enemy"
+frog = [34, 6]
+say = ["frog-enemy", "frog-line-up"]
+nudge = "frog-enemy-nudge"
+start = { roll_in = [{ tank = "scout", ai = "dummy", after = 1.5 }] }
+done = { wrecks = 1 }
+
+[[training.beat]]
+id = "shield"
+frog = [34, 6]
+say = ["frog-shield", "frog-shoots-back"]
+nudge = "frog-wave-nudge"
+start = { drop = [{ kind = "shield", at = [31, 4] }], roll_in = [{ tank = "scout", after = 6.0 }] }
+done = { wrecks = 1 }

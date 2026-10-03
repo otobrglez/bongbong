@@ -78,6 +78,12 @@ pub enum Material {
     /// ground round it at night. Drawn by `lamp.rs`, never by
     /// `draw_obstacle`.
     Lamp,
+    /// A training door (docs/training-stage.md): a run of these closes a
+    /// pen until the beat its `variant` names is done, then the round
+    /// takes them away (`Game::training_phase`). Permanent like iron while
+    /// it stands - it stops hulls, shots, sight and light and takes no
+    /// damage. Drawn by `training::draw_door`, never by `draw_obstacle`.
+    Door,
 }
 
 /// The four wall materials, in walls_sheet.png row order - `spawn_from_map`
@@ -120,7 +126,7 @@ impl Material {
     /// cone (`volcano::draw_cone`) and the lamp post (`lamp::draw_post`).
     /// Never a wall, a prop, a tree or a tower.
     pub fn is_drawn(self) -> bool {
-        matches!(self, Material::Volcano | Material::Lamp)
+        matches!(self, Material::Volcano | Material::Lamp | Material::Door)
     }
 
     /// First row in this material's own sheet (see `sheet`) its variants
@@ -138,7 +144,7 @@ impl Material {
             Material::Pine => TREE_ROW_CONIFER,
             // A tower's rows depend on its side as well (`tower::base_row`).
             Material::Tesla | Material::GunTower | Material::BioSlush => 0,
-            Material::Volcano | Material::Lamp => 0,
+            Material::Volcano | Material::Lamp | Material::Door => 0,
         }
     }
 
@@ -153,7 +159,7 @@ impl Material {
             Material::Barrel | Material::Fence => 2,
             Material::Tree | Material::Pine => TREE_VARIANTS,
             Material::Tesla | Material::GunTower | Material::BioSlush => 1,
-            Material::Volcano | Material::Lamp => 1,
+            Material::Volcano | Material::Lamp | Material::Door => 1,
             _ => 4,
         }
     }
@@ -177,7 +183,7 @@ impl Material {
             Material::GunTower => tuning().gun_tower_max_health,
             Material::BioSlush => tuning().bio_max_health,
             // Never spent: `Obstacle::damage` turns every blow away.
-            Material::Volcano => 1.0,
+            Material::Volcano | Material::Door => 1.0,
             Material::Lamp => tuning().lamp_max_health,
         }
     }
@@ -202,7 +208,7 @@ impl Material {
             Material::Tree | Material::Pine => 3,
             // Intact, scuffed, damaged, critical; the ruin is a decal.
             Material::Tesla | Material::GunTower | Material::BioSlush => 4,
-            Material::Volcano | Material::Lamp => 1,
+            Material::Volcano | Material::Lamp | Material::Door => 1,
         }
     }
 
@@ -232,7 +238,9 @@ impl Material {
             )),
             // A lamp post's glass and post are too small to leave a
             // rubble tile; it goes out in a burst of glass (`fx.rs`).
-            Material::Iron | Material::Tesla | Material::GunTower | Material::BioSlush | Material::Volcano | Material::Lamp => None,
+            Material::Iron | Material::Tesla | Material::GunTower | Material::BioSlush | Material::Volcano | Material::Lamp | Material::Door => {
+                None
+            }
         }
     }
 
@@ -271,10 +279,11 @@ impl Material {
         }
     }
 
-    /// Can never be destroyed - the only material that permanently shapes
-    /// the battlefield (line of fire, the linter's breach grid).
+    /// Can never be shot away - the materials that permanently shape the
+    /// battlefield (line of fire, the linter's breach grid). A training
+    /// door is one too: only its beat takes it away.
     pub fn is_permanent(self) -> bool {
-        matches!(self, Material::Iron | Material::Volcano)
+        matches!(self, Material::Iron | Material::Volcano | Material::Door)
     }
 
     /// Whether this tile hides what is behind it from the AI's line of
@@ -290,7 +299,7 @@ impl Material {
     /// trees too open to cast a hard edge, and a tree's canopy is drawn
     /// over the tanks anyway.
     pub fn blocks_light(self) -> bool {
-        (self.is_wall() && self != Material::Glass) || self.is_tower() || self == Material::Volcano
+        (self.is_wall() && self != Material::Glass) || self.is_tower() || matches!(self, Material::Volcano | Material::Door)
     }
 
     /// Odds a projectile sails over this tile instead of hitting it, rolled
@@ -605,9 +614,9 @@ impl Obstacle {
     /// simulation path go through `Game::damage_obstacle`, which layers the
     /// fence and barrel rules on top of this.
     pub fn damage(&mut self, amount: f32) -> bool {
-        // A volcano's cone shrugs every blow off: nothing about it changes,
-        // so it never differs from the fresh map on the wire either.
-        if self.destroyed || self.burning || self.fuse.is_some() || self.material == Material::Volcano {
+        // A volcano's cone and a training door shrug every blow off: nothing
+        // about them changes, so neither differs from the fresh map on the wire.
+        if self.destroyed || self.burning || self.fuse.is_some() || matches!(self.material, Material::Volcano | Material::Door) {
             return false;
         }
         self.health = (self.health - amount).max(0.0);

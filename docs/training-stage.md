@@ -1,6 +1,8 @@
 # Boot Camp: the training stage
 
-Status: **proposed 2026-10-03**, spec only. The concept lab
+Status: **in progress**. The map, its doors and flags and the beat script
+run (build step 2); the frog's voice, the dummy and level 0 follow. The
+concept lab
 (`docs/lab/boot-camp-lab.html`, open it from the repository so it finds
 `static/`) is a playable browser prototype of everything below: drive it,
 then read this.
@@ -27,8 +29,8 @@ script of *beats*, and the player's own frog is the only guide.
 ## The course
 
 Four pens along one east-west road (row 6), each closed by a door the beat
-before it opens. The sketch is not to scale; the lab is the layout until
-`maps/boot-camp.toml` exists. The outer border is iron.
+before it opens. The sketch is not to scale; `maps/boot-camp.toml` is the
+layout.
 
 ```
 col  0         10        19        28                  47
@@ -43,7 +45,8 @@ col  0         10        19        28                  47
        pen 1        pen 2     pen 3          pen 4 (arena)
 ```
 
-`D` a door (iron, three cells, rows 5-7), `B` the brick wall, `E` the enemy
+`D` a door (three cells, rows 5-7), `B` the brick wall (in column 25, two
+cells short of door 3, so a lane runs round it), `E` the enemy
 gate on the east edge, `F` a flag, `A` ammo, `H` health, `S` speed-up, `M`
 minigun, `W` wood, `b` brick targets, `s` sandbags, `~` the pond.
 
@@ -51,10 +54,15 @@ minigun, `W` wood, `b` brick targets, `s` sandbags, `~` the pond.
 |---|---|---|---|---|
 | 1 Drive | Four directions, momentum into turns | Hi! I'm your frog. / `[ARROWS]` to drive. Ease off before turns. (`[STICK]` Drag your left thumb to drive.) / Roll over the three flags. | Three flags taken | - |
 | 2 Supply | Crates open on contact; ammo, health, speed | No shells yet? Bump the crates. / The red cross fixes your hull. | The ammo crate taken | Door 1 opens |
-| 3 Fire | Aim by facing; wood, brick, iron | `[SPACE]` fires where your gun points. (`[TAP]` the right half to fire.) / Wood breaks fast. Brick takes a few. / Iron never breaks. Shoot the brick wall! | A cell of the brick wall gone and the tank past it | Door 2 opens |
-| 4 Your frog | The frog matters; the frog kit; air drops | This is my pad. Come on in. / *(shot)* Ow! That came from the east! / Grab my kit, quick! | The frog back to full | A shot from the east gate hits the frog; the frog kit air-drops |
+| 3 Fire | Aim by facing; wood, brick, iron | `[SPACE]` fires where your gun points. (`[TAP]` the right half to fire.) / Wood breaks fast. Brick takes a few. / Iron never breaks. Shoot the brick wall! | A cell of the brick wall gone | Door 2 opens |
+| - Through | - | Nice shot! Follow me. | The tank past door 3 | Door 3 opens |
+| 4 Your frog | The frog matters; the frog kit; air drops | This is my pad. Come on in. / *(shot)* Ow! That came from the east! / Grab my kit, quick! | The frog kit taken (a kit can only be taken while the frog is hurt) | A shot from the east edge hits the frog; the frog kit air-drops |
 | 5 Enemy | Gates, red rings, lining up; the frog bites | Here it comes! / Line up and fire! | The tank destroyed | A scout rolls in through the east gate, a *dummy* that fires only at the frog |
-| 6 Shield | Shields; an enemy that fires back | Shield first. / This one shoots back! | The second tank destroyed | A shield crate air-drops near the tank, then (on pickup or after 7 s) an ordinary scout rolls in |
+| 6 Shield | Shields; an enemy that fires back | Shield first. / This one shoots back! | The second tank destroyed | A shield crate air-drops, then 6 s later an ordinary scout rolls in |
+
+The script has seven beats: the six lessons and a short *through* beat
+between the wall and the frog, so the shot at the frog comes once the
+player is in its pen.
 
 The player starts with **no shells and 60 of 100 health**, so beat 2 is not
 optional and the red cross has a point. The speed-up and the minigun are
@@ -147,28 +155,37 @@ Every letter folds onto the default font through `text::fold` (č, š, ž).
 
 ### The map
 
-`maps/boot-camp.toml`, `size = [48.0, 13.0]`, `mission.kind = "training"`,
-added to `SHIPPED_MAPS`. Two new cell kinds:
+`maps/boot-camp.toml`, `size = [48.0, 13.0]`, a Protect map on the band
+plan with no enemies (`tanks = 0`), in `SHIPPED_MAPS` (so the builder's
+Load list offers it on every build) and left out of
+`map::hostable_maps`, which the lobby's stepper walks. Training is not a
+mission of its own: a map with a script is a training round, whatever its
+mission, and the script decides how it ends. Two new cell kinds:
 
-- **`door`** (`beat = "<id>"`): solid like iron - a seam-closed static
-  collider, a nav-grid wall, stops shots - until its beat is done, then
-  removed through `obstacle_died`'s funnel with no rubble, so the nav
-  layer rebuilds as for any tile death. Drawn as two banded-iron leaves with
-  a hazard edge that slide apart over `training_door_seconds` and a lamp
-  that turns from red to green. `Event::DoorOpened { cells }`.
-- **`flag`**: not solid; a seat whose hull box touches it takes it
-  (`Event::FlagTaken`), drawn in the seat's team colour and gold once
-  taken.
-
-The rest is today's: pickup slots, gates, the frog's start, walls, props,
-water.
+- **`door`** (`kind = "door", beat = N`): `Material::Door`, permanent like
+  iron - a seam-closed static collider, a nav-grid wall, stops shots and
+  sight and takes no damage - until beat `N` (1-based, in script order)
+  is done, when the round marks every door of that beat destroyed and the
+  frame's cleanup takes it away with no rubble and no `ObstacleDestroyed`
+  (`Event::DoorOpened { beat, x, y }`, one per cell). Its `Obstacle::variant`
+  carries the beat, as a barrel's carries its drum. Drawn by
+  `training::draw_door`: banded iron with a hazard band.
+- **`flag`**: not solid and not an obstacle; the training run keeps the
+  map's flags (`Game::training_flags`), and the first seat whose hull box,
+  grown by `training_flag_reach_px`, touches one takes it
+  (`Event::FlagTaken`). Drawn by `training::draw_flag` in player 1's team
+  colour, gold once taken.
 
 ### The script
 
-Written last in the file, after every cell, as an array of tables so a
-re-save round-trips it (`MapFile::training: Option<Training>`):
+`MapFile::training: Option<training::Training>`, written last as
+`[training]` and `[[training.beat]]` tables so a re-save round-trips it:
 
 ```toml
+[training]
+start_health = 0.6
+start_shells = 0
+
 [[training.beat]]
 id = "drive"
 frog = [5, 4]
@@ -180,61 +197,71 @@ done = { flags = 3 }
 id = "frog"
 frog = [34, 6]
 say = ["frog-pad"]
-start = { shoot_frog = "east", drop = { kind = "frog_health", at = [31, 10] } }
-done = { frog_full = true }
+start = { shoot_frog = "east", drop = [{ kind = "frog_health", at = [31, 10] }] }
+done = { collect = "frog_health" }
 
 [[training.beat]]
 id = "enemy"
 say = ["frog-enemy", "frog-line-up"]
 nudge = "frog-enemy-nudge"
-start = { roll_in = { gate = "east", tank = "scout", ai = "dummy" } }
+start = { roll_in = [{ tank = "scout", ai = "dummy", after = 1.5 }] }
 done = { wrecks = 1 }
 ```
 
-A line naming a control lists its touch twin by convention (`frog-fire` /
-`frog-fire-touch`); the bubble picks one. Triggers (`done`): `flags`,
-`collect` (a pickup kind), `destroyed` (a list of cells, any gone),
-`past_col` (the seat's hull east of a column), `frog_full`, `wrecks`.
-Starts: `shoot_frog` (a shell from a gate that hits only the frog),
-`drop` (an air drop at a cell, `Pickup::dropped_at`), `roll_in` (a tank
-through a gate, the wave roll-in's lane), and the beat's doors open on
-its `done`.
+Triggers (`done`, every one set must hold): `flags` (taken over the
+round), `collect` (a crate kind a seat took since the beat began),
+`destroyed` (any of these cells' tiles gone), `past_col` (seat 1's hull
+east of a column), `frog_full`, `wrecks` (enemy wrecks since the beat
+began); a beat whose tanks are still to roll in is not done. Starts:
+`shoot_frog` (one heavy enemy shell from a cell inside that edge along the
+frog's row or column, landing like any other), `drop` (crates air-dropped
+onto cells), `roll_in` (tanks through the map's gates, `after` seconds into
+the beat). `start_health` and `start_shells` set the seats up at the start.
+`frog`, `say` and `nudge` are read by the frog's voice (build step 3).
 
 ### The simulation
 
-- **`simulation/training.rs`**, a `training_phase` after the round's
-  pickups and before cleanup: the current beat, its triggers checked
-  against round state and the frame's events, the next beat started. **No
-  RNG**: every check is a pure test, every start fixed by the map, so a
-  seeded replay and the probe hold; a map without `[training]` runs none of
-  it and replays byte for byte.
-- **`Mission::Training`**: won when the last beat is done, never lost; a
-  wrecked seat comes back at the last door's west side
-  (`training_respawn_seconds`), a dead frog restarts its beat.
-- **The frog's walk**: `Frog::walk(path)` along the nav grid to the beat's
-  `frog` cell through the open doors, hopping (the hop clip), never pushed
-  by tanks while it walks.
-- **The frog's lines** live in the round (`Game::frog_lines`: a queue,
-  the line up and since when, the quiet clock, the lines said once), driven
-  by the round clock so a lockstep replays them and the dev server reports
-  them (`status.training`: beat, goals, the line up). Only the drawing picks
-  the keys or touch text.
-- **The dummy**: `ai = "dummy"`, an `Ai` role that targets only the
-  opposing frog, never a seat, and fires every `training_dummy_fire_seconds`
-  (2.6). Everything else is the ordinary chase.
-- **Knobs**: a `training` tuning group (`training_nudge_seconds`,
-  `training_line_seconds`, `training_line_seconds_per_char`,
-  `training_respawn_seconds`, `training_door_seconds`,
-  `training_dummy_fire_seconds`).
+- **`simulation/training.rs`**: `Game::init_training` makes the run
+  (`training::Run`) once the seats and the map are down; `training_phase`
+  runs after the frame's blasts and wreck removals and before the
+  cleanup that sweeps away the doors it opens: the crates seats took, the
+  flags, the seats and the frog brought back, the beat's starts, its
+  roll-ins, then its triggers - and on its end its doors and the next beat.
+  **No RNG of its own**: the checks are pure and the starts fixed by the
+  map; only what they set going draws (a roll-in's lane and rolls, a
+  shell's damage). A map without a script runs none of it.
+- **The round**: won when the last beat is done, never lost
+  (`check_round_end` defers to the run). A wrecked seat comes back after
+  `training_respawn_seconds` as a fresh tank of its chassis, keeping its
+  shells, in the middle cell of the last door opened (its own start before
+  any), announced as `TankEntered`. A frog down for
+  `training_frog_revive_seconds` gets up at full health where it fell
+  (`Event::FrogRevived`) and its beat starts again: the beat's live tanks
+  taken away, its starts run once more.
+- **Roll-ins**: `Game::training_roll_in` is a wave tank's roll-in through
+  `pick_gate`'s lane, arriving with the role the script asks for
+  (`ai = "dummy"` is a hunter until the dummy exists).
+- **Knobs**: the `training` tuning group (`training_respawn_seconds`,
+  `training_frog_revive_seconds`, `training_flag_reach_px`).
+- **Events**: `BeatDone`, `DoorOpened`, `FlagTaken` and `FrogRevived`;
+  none travels on the wire, since no room plays a training map.
+- **The linter** opens every door before it checks (`Game::open_every_door`),
+  so a course is judged as it plays once its pens are open, and reports a
+  door that names no beat of the script, or a door or flag on a map
+  without one (`training-door`).
 
-### The presentation
+### Still to come
 
-- **`bubble.rs`** (headless, like `hud.rs`): the bubble's layout from the
-  line, the token glyphs and the frog's place in the view - above the frog,
-  under it near the top, slid inside the view - and `render/bubble.rs`
-  paints it in UI points over the world, under the corner clusters.
-- The frog's off-screen arrow carries the line while it talks.
-- The HUD's mission word reads `TRAINING`; the banner `BOOT CAMP`.
+- **The frog's walk** to each beat's `frog` cell through the open doors,
+  hopping, and **its lines**: a queue on the round clock (so a lockstep
+  replays them and `status.training` reports them), nudges after
+  `training_nudge_seconds`, the bubble (`bubble.rs` and
+  `render/bubble.rs`, in UI points over the world) and the off-screen
+  arrow carrying the line. Only the drawing picks the keys or touch text.
+- **The dummy**: an `Ai` role that targets only the opposing frog and
+  fires every `training_dummy_fire_seconds` (2.6).
+- **Words on screen**: the HUD's mission word `TRAINING`, the banner
+  `BOOT CAMP`, the end screen's `TRAINING COMPLETE`.
 
 ### Levels and skipping
 
@@ -245,34 +272,31 @@ the select (Esc, or the bar's level button) and never sees training again
 once Lotus Lagoon is won. A progress file saved before Boot Camp existed
 names a later map and opens there, untouched. That makes sixteen levels,
 exactly one page of the select (`SELECT_TILES`); a seventeenth needs a
-second page.
-
-A couch round on Boot Camp seats one tank; the lobby's map stepper skips a
-training map, and `hostable()` is false for one.
+second page. A couch round on Boot Camp seats one tank.
 
 ### Tests
 
-- `mechanics_tests`: each trigger on a tiny inline map; a door blocks a
-  tank, a shot and the nav grid until its beat and none of them after; a
-  dead frog restarts its beat; a wrecked seat returns at the door.
-- A headless run of the whole course from a scripted input (the probe's
-  shape, or a dev-server lockstep in a test) finishing in under the par.
-- `determinism_tests`: Boot Camp replays bit for bit from a seed.
-- `maplint`: every door names a beat, beat ids are unique, every beat's
-  frog cell is reachable once the doors before it are open, and the
-  course is finishable.
-- `text_tests` holds the new keys both ways and the bubble's budget.
+- `simulation::training::tests`: a door stands until its beat and opens
+  after it; the last beat wins; a wrecked seat comes back in the last door;
+  a fallen frog gets up and the round goes on; a shot from the east hurts
+  the frog and its kit drops and ends the beat; a beat's tank rolls in
+  through a gate and its wreck ends the beat; Boot Camp parses, is never
+  hostable and lints with no error. `training::tests` round-trips a script.
+- Still to come: a headless run of the whole course from a scripted input,
+  Boot Camp's seeded replay, and the text budgets of the frog's lines.
 
 ## Build order
 
 1. **This spec** and the lab.
-2. **Doors, flags and the script**: the map cells, `[training]` parsing and
-   writing, `training_phase` with every trigger and start, `Mission::Training`,
-   respawn - playable with the frog silent.
+2. **Doors, flags and the script** (done): the map cells, `[training]`
+   parsing and writing, `training_phase` with every trigger and start,
+   respawn, `maps/boot-camp.toml` - playable from the builder's Load list
+   with the frog silent.
 3. **The frog's voice**: the walk, the line queue, nudges, the bubble, the
    off-screen arrow's line, the `frog-*` messages.
-4. **The dummy, the map and level 0**: the dummy role, `maps/boot-camp.toml`
-   tuned by play, `levels.toml` with `skippable`, the level select's rule.
+4. **The dummy, the words and level 0**: the dummy role, the mission word,
+   banner and end screen, `maps/boot-camp.toml` tuned by play,
+   `levels.toml` with `skippable`, the level select's rule.
 
 ## Open
 
