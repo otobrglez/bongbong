@@ -13,7 +13,7 @@
 use crate::math::Color;
 use crate::pyro::{self, Shape};
 use crate::tuning::Tuning;
-use crate::{Position, CRATE_CELL, CRATE_COL_GLINT, CRATE_COL_INTACT, CRATE_GLINT_FRAMES};
+use crate::{Position, CRATE_CELL, CRATE_COL_GLINT, CRATE_COL_INTACT, CRATE_GLINT_FRAMES, PICKUP_GLYPH_CELL};
 
 const fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::new(r, g, b, 255)
@@ -80,18 +80,18 @@ pub fn drop(age: f32, at: Position, t: &Tuning) -> Option<Drop> {
     if age < lands {
         let f = ((age - falls) / (lands - falls)).clamp(0.0, 1.0);
         let height = t.crate_drop_height_px * (1.0 - f * f);
-        let grow = (4.0 * height / t.crate_drop_height_px.max(1.0)).round() * 4.0;
+        let grow = (5.0 * height / t.crate_drop_height_px.max(1.0)).round() * 4.0;
         d.lift = even(height);
         d.w = CRATE_CELL + grow;
         d.h = CRATE_CELL + grow;
-        d.shadow_w = CRATE_CELL + (3.0 * (1.0 - gather)).round() * 4.0;
+        d.shadow_w = CRATE_CELL + (4.0 * (1.0 - gather)).round() * 4.0;
         d.shadow_h = d.shadow_w;
         d.shadow_alpha = 0.2 + 0.8 * gather;
     } else if age < lands + 0.08 {
-        (d.w, d.h) = (CRATE_CELL + 4.0, CRATE_CELL - 6.0);
+        (d.w, d.h) = (CRATE_CELL + 6.0, CRATE_CELL - 8.0);
         (d.shadow_w, d.shadow_h) = (d.w, d.h);
     } else if age < lands + 0.16 {
-        (d.w, d.h, d.lift) = (CRATE_CELL - 2.0, CRATE_CELL + 2.0, 4.0);
+        (d.w, d.h, d.lift) = (CRATE_CELL - 4.0, CRATE_CELL + 2.0, 4.0);
         (d.shadow_w, d.shadow_h) = (d.w, CRATE_CELL);
     }
     let since = age - lands;
@@ -101,9 +101,9 @@ pub fn drop(age: f32, at: Position, t: &Tuning) -> Option<Drop> {
         let n = 9;
         for i in 0..n {
             let a = i as f32 / n as f32 * std::f32::consts::TAU + pyro::unit(seed, i) * 0.6;
-            let reach = (16.0 + 22.0 * pyro::ease_out(f)) * (0.8 + 0.4 * pyro::unit(seed, i + 16));
-            let pos = Position::new(at.x + a.cos() * reach, at.y + 8.0 + a.sin() * reach * 0.55 - f * 4.0);
-            let radius = 4.5 - 2.5 * f;
+            let reach = (20.0 + 28.0 * pyro::ease_out(f)) * (0.8 + 0.4 * pyro::unit(seed, i + 16));
+            let pos = Position::new(at.x + a.cos() * reach, at.y + 10.0 + a.sin() * reach * 0.55 - f * 4.0);
+            let radius = 5.5 - 3.0 * f;
             d.dust.push(Shape::Puff(pyro::dust_puff(pos, radius, 0.6, 1.0 - f * f)));
         }
     }
@@ -131,7 +131,7 @@ pub fn glint_col(time: f32, at: Position, t: &Tuning) -> usize {
 pub struct Symbol {
     /// Its centre, already lifted.
     pub pos: Position,
-    /// Its side, px (20 is the sheet's own scale).
+    /// Its side, px (`PICKUP_GLYPH_CELL` is the sheet's own scale).
     pub size: f32,
     /// Where its shadow falls while it is in the air.
     pub shadow: Option<Position>,
@@ -211,7 +211,7 @@ pub fn open(age: f32, at: Position, how: Opening, ink: [Color; 3], t: &Tuning) -
             let lands = 2.0 * up / 300.0;
             let tt = thrown.min(lands);
             let x = at.x + a.cos() * speed * tt;
-            let y = at.y - 6.0 + a.sin() * speed * tt * 0.7;
+            let y = at.y - 8.0 + a.sin() * speed * tt * 0.7;
             let z = (up * tt - 150.0 * tt * tt).max(0.0);
             let fade = if thrown < CHIP_LIE_SECONDS { 1.0 } else { 1.0 - (thrown - CHIP_LIE_SECONDS) / 0.25 };
             if fade <= 0.0 {
@@ -229,10 +229,10 @@ pub fn open(age: f32, at: Position, how: Opening, ink: [Color; 3], t: &Tuning) -
     if whole && (0.05..0.6).contains(&u) {
         let f = (u - 0.05) / 0.55;
         for i in 0..3 {
-            let pos = Position::new(at.x - 8.0 + i as f32 * 8.0, at.y - 6.0 - f * 20.0);
+            let pos = Position::new(at.x - 10.0 + i as f32 * 10.0, at.y - 8.0 - f * 24.0);
             o.shapes.push(Shape::Puff(pyro::Puff {
                 pos,
-                radius: 6.0 - 3.5 * f,
+                radius: 7.5 - 4.5 * f,
                 body: rgb(0x99, 0x65, 0x24),
                 shadow: Some(rgb(0x68, 0x47, 0x1D)),
                 lit: Some(rgb(0xD8, 0xBF, 0x8E)),
@@ -244,18 +244,18 @@ pub fn open(age: f32, at: Position, how: Opening, ink: [Color; 3], t: &Tuning) -
 
     // The symbol: up out of the crate, a blink, then into the tank.
     let Some(toward) = toward else { return Some(o) };
-    let lift_top = 26.0;
+    let lift_top = 32.0;
     if (0.06..0.5).contains(&u) {
         let f = ((u - 0.06) / 0.25).clamp(0.0, 1.0);
         let lift = lift_top * pyro::ease_out(f);
         let blink = u > 0.32 && ((u / 0.05) as i32) % 2 == 0;
         o.symbol = Some(Symbol {
             pos: Position::new(at.x, at.y - lift),
-            size: 20.0 + (f * 2.0).round() * 4.0,
+            size: PICKUP_GLYPH_CELL + (f * 2.0).round() * 4.0,
             shadow: Some(Position::new(at.x + 2.0, at.y + 4.0)),
             flash: if blink { 0.7 } else { 0.0 },
         });
-        o.shapes.push(Shape::Glow { pos: Position::new(at.x, at.y - lift), radius: 16.0, color: pyro::alpha(ink[1], 0.6) });
+        o.shapes.push(Shape::Glow { pos: Position::new(at.x, at.y - lift), radius: 20.0, color: pyro::alpha(ink[1], 0.6) });
     } else if (0.5..OPEN_ARRIVES).contains(&u) {
         let f = (u - 0.5) / (OPEN_ARRIVES - 0.5);
         let path = |g: f32| {
@@ -263,7 +263,7 @@ pub fn open(age: f32, at: Position, how: Opening, ink: [Color; 3], t: &Tuning) -
             Position::new(at.x + (toward.x - at.x) * e, at.y - lift_top + (toward.y - 6.0 - at.y + lift_top) * e)
         };
         let pos = path(f);
-        o.symbol = Some(Symbol { pos, size: (28.0 - 20.0 * f).max(8.0), shadow: None, flash: 0.0 });
+        o.symbol = Some(Symbol { pos, size: (PICKUP_GLYPH_CELL + 8.0 - 24.0 * f).max(8.0), shadow: None, flash: 0.0 });
         for i in 1..=3 {
             let g = (f - i as f32 * 0.06).max(0.0);
             o.shapes.push(Shape::Mark { pos: path(g), size: 2, color: pyro::alpha(ink[2], 0.75 - i as f32 * 0.2) });
@@ -273,7 +273,7 @@ pub fn open(age: f32, at: Position, how: Opening, ink: [Color; 3], t: &Tuning) -
     let ring = u - OPEN_ARRIVES;
     if ring >= 0.0 && ring < RING_SECONDS / k {
         let f = ring / (RING_SECONDS / k);
-        let radius = 16.0 + 18.0 * pyro::ease_out(f);
+        let radius = 20.0 + 22.0 * pyro::ease_out(f);
         let n = (radius * 1.2) as u32;
         for i in 0..n {
             let a = i as f32 / n as f32 * std::f32::consts::TAU;

@@ -114,6 +114,9 @@ pub struct EditorTextures<'a> {
     pub frog_idle: &'a Texture2D,
     /// static/crates_sheet.png - the pickups' crates, a row per kind.
     pub crates: &'a Texture2D,
+    /// static/pickup_glyphs.png - the crates' symbols on their own: a
+    /// pickup tool's icon where its crate does not fit.
+    pub pickup_glyphs: &'a Texture2D,
     pub eraser: &'a Texture2D,
     /// static/portal_sheet.png - the spiral and its bar icon (portal.rs).
     pub portal: &'a Texture2D,
@@ -220,9 +223,9 @@ impl Sheets for EditorTextures<'_> {
             Sheet::Portal => self.portal,
             Sheet::Tanks => self.tanks,
             Sheet::Crates => self.crates,
+            Sheet::PickupGlyphs => self.pickup_glyphs,
             Sheet::Frog { clip: FrogAnim::Idle, .. } => self.frog_idle,
             Sheet::TankGlow
-            | Sheet::PickupGlyphs
             | Sheet::TankModules
             | Sheet::TankModulesGlow
             | Sheet::Tracks
@@ -1402,10 +1405,20 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
             d.draw_texture_pro(textures.grass, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Pickup(pickup) => {
-            // The crate as it stands on the field: the brush is the thing
-            // it places.
-            let src = crate::pickup::crate_src(pickup, crate::CRATE_COL_INTACT);
-            d.draw_texture_pro(textures.crates, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            // The crate as it stands on the field - the brush is the thing
+            // it places - or, in a slot too small for it (the bar's), its
+            // symbol, either at a whole multiple of its sheet's scale so
+            // every block stays: centred on `rect`, a cell's empty rim free
+            // to reach into the inset.
+            let side = rect.width.min(rect.height);
+            let (texture, cell, src) = if side >= crate::CRATE_CELL {
+                (textures.crates, crate::CRATE_CELL, crate::pickup::crate_src(pickup, crate::CRATE_COL_INTACT))
+            } else {
+                (textures.pickup_glyphs, crate::PICKUP_GLYPH_CELL, crate::pickup::glyph_src(pickup))
+            };
+            let size = cell * (side / cell).floor().max(1.0);
+            let at = Rectangle::new((rect.x + (rect.width - size) / 2.0).round(), (rect.y + (rect.height - size) / 2.0).round(), size, size);
+            d.draw_texture_pro(texture, src, at, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Tower(kind, side) => {
             // Base and top as a round draws them, the top pointing up.
@@ -1581,8 +1594,12 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             None => d.draw_rectangle_lines_ex(Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size), 2.0, faded(GATE_COLOR)),
         },
         CellObject::Pickup { pickup } => {
+            // The crate at its own size, a little past its cell, as a round
+            // stands it.
+            let size = crate::CRATE_CELL;
             let src = crate::pickup::crate_src(pickup, crate::CRATE_COL_INTACT);
-            d.draw_texture_pro(textures.crates, src, dest, origin, 0.0, tint);
+            let dest = Rectangle::new(pos.x, pos.y, size, size);
+            d.draw_texture_pro(textures.crates, src, dest, Vector2::new(size / 2.0, size / 2.0), 0.0, tint);
         }
     }
 }
