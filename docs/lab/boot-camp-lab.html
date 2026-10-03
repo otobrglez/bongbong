@@ -1,0 +1,1205 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The Boot Camp concept lab (docs/training-stage.md): open this file from
+     the repository so the sprites load from static/. -->
+<title>Boot Camp Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap">
+<style>
+/* Layout: a field-manual page. The playable course sits on top like a
+   map pinned to a board, the switches beside it, the beat sheet and
+   build notes below as numbered manual sections. One look: dusk-green
+   board, cream paper, the game's wood amber as the one accent. */
+:root {
+  --board: #16241d;        /* the board the map is pinned to */
+  --board-2: #1d3027;
+  --paper: #efe4c6;        /* cream paper, signs and cards */
+  --paper-dim: #c9bd9c;
+  --ink: #241d14;          /* text on paper */
+  --chalk: #e9e6da;        /* text on the board */
+  --chalk-dim: #a6b3a6;
+  --amber: #de9943;        /* WOOD_LT, the accent */
+  --amber-deep: #99652a;
+  --sky: #4d9be6;          /* P1 team colour */
+  --red: #e44219;          /* enemy */
+  --line: #34493d;
+  --ok: #9fb747;
+  --f-pixel: "Silkscreen", "Courier New", monospace;
+  --f-body: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  background: var(--board);
+  color: var(--chalk);
+  font: 16px/1.55 var(--f-body);
+  margin: 0;
+  padding-inline: 16px;
+  padding-block: 24px 64px;
+}
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; gap: 40px; }
+h1, h2, h3 { font-family: var(--f-pixel); font-weight: 700; text-wrap: balance; margin: 0; letter-spacing: .02em; }
+h1 { font-size: clamp(30px, 5vw, 52px); line-height: 1; color: var(--paper); }
+h2 { font-size: 22px; color: var(--paper); }
+h3 { font-size: 15px; }
+p { margin: 0; max-width: 68ch; }
+.eyebrow { font-family: var(--f-pixel); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--amber); }
+header { display: grid; gap: 12px; }
+header p { color: var(--chalk-dim); font-size: 17px; }
+kbd {
+  font-family: var(--f-pixel); font-size: 11px; color: var(--ink);
+  background: var(--paper); border-radius: 3px; padding: 1px 6px;
+  box-shadow: 0 2px 0 var(--paper-dim);
+}
+
+/* --- the lab --- */
+.lab { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; align-items: start; }
+@media (max-width: 980px) { .lab { grid-template-columns: minmax(0, 1fr); } }
+.stage { display: grid; gap: 10px; min-width: 0; }
+.screen {
+  position: relative; background: #0d1511; border: 2px solid var(--line);
+  border-radius: 6px; overflow: hidden; line-height: 0;
+}
+canvas#field { width: 100%; height: auto; display: block; image-rendering: pixelated; outline: none; touch-action: none; }
+canvas#field:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
+.start {
+  position: absolute; inset: 0; display: grid; place-items: center; line-height: 1.4;
+  background: rgba(13, 21, 17, .55); cursor: pointer; border: 0; color: var(--paper);
+  font: 700 18px var(--f-pixel); width: 100%;
+}
+.start span { background: var(--board); border: 2px solid var(--amber); padding: 10px 18px; border-radius: 4px; }
+.start small { display: block; font: 13px var(--f-body); color: var(--chalk-dim); margin-top: 4px; }
+.under { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; font-size: 14px; color: var(--chalk-dim); }
+.pad { display: none; justify-content: space-between; align-items: center; gap: 16px; padding: 6px 0; }
+.pad.on { display: flex; }
+.dpad { display: grid; grid-template-columns: repeat(3, 54px); grid-template-rows: repeat(3, 54px); gap: 4px; }
+.pad button {
+  font: 700 14px var(--f-pixel); color: var(--ink); background: var(--paper); border: 0;
+  border-radius: 6px; box-shadow: 0 3px 0 var(--paper-dim); touch-action: none; user-select: none; -webkit-user-select: none;
+}
+.pad button:active, .pad button.held { transform: translateY(2px); box-shadow: 0 1px 0 var(--paper-dim); }
+.dpad .u { grid-area: 1/2; } .dpad .l { grid-area: 2/1; } .dpad .r { grid-area: 2/3; } .dpad .d { grid-area: 3/2; }
+.firebtn { width: 96px; height: 96px; border-radius: 50% !important; background: var(--amber) !important; box-shadow: 0 4px 0 var(--amber-deep) !important; }
+
+.panel { display: grid; gap: 18px; background: var(--board-2); border: 1px solid var(--line); border-radius: 6px; padding: 16px; }
+.panel h3 { color: var(--paper); font-size: 13px; letter-spacing: .08em; }
+.group { display: grid; gap: 8px; }
+.toggle { display: grid; grid-template-columns: 22px 1fr; gap: 2px 10px; align-items: start; cursor: pointer; font-size: 14px; }
+.toggle input { margin: 3px 0 0; width: 18px; height: 18px; accent-color: var(--amber); }
+.toggle b { font-weight: 700; color: var(--paper); }
+.toggle small { grid-column: 2; color: var(--chalk-dim); font-size: 13px; line-height: 1.35; }
+.seg { display: flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.seg button { flex: 1; font: 700 12px var(--f-pixel); padding: 7px 4px; border: 0; background: transparent; color: var(--chalk-dim); cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--amber); color: var(--ink); }
+.seg button:focus-visible, .beats button:focus-visible, .btn:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.decided { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 14px; color: var(--chalk-dim); }
+.decided b { color: var(--paper); }
+.beats { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.beats button {
+  width: 100%; text-align: left; display: grid; grid-template-columns: 26px 1fr auto; gap: 8px; align-items: center;
+  background: transparent; border: 1px solid transparent; border-radius: 4px; padding: 5px 6px; color: var(--chalk); cursor: pointer; font: 14px var(--f-body);
+}
+.beats button:hover { border-color: var(--line); }
+.beats .n { font: 700 12px var(--f-pixel); color: var(--chalk-dim); text-align: center; }
+.beats .st { font: 11px var(--f-pixel); color: var(--chalk-dim); }
+.beats li.now button { background: rgba(222, 153, 67, .14); border-color: var(--amber-deep); }
+.beats li.now .n, .beats li.now .st { color: var(--amber); }
+.beats li.done .st { color: var(--ok); }
+.beats li.done .n { color: var(--ok); }
+.btn { font: 700 12px var(--f-pixel); background: transparent; color: var(--paper); border: 1px solid var(--paper-dim); border-radius: 4px; padding: 8px 10px; cursor: pointer; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.clock { font: 12px var(--f-pixel); color: var(--chalk-dim); font-variant-numeric: tabular-nums; }
+
+/* --- manual sections --- */
+section { display: grid; gap: 16px; }
+.lede { color: var(--chalk-dim); }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
+table { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 14px; }
+th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+th { font: 700 11px var(--f-pixel); letter-spacing: .08em; color: var(--amber); background: var(--board-2); }
+tr:last-child td { border-bottom: 0; }
+td.b { font: 700 13px var(--f-pixel); color: var(--paper); white-space: nowrap; }
+td q { color: var(--paper); font-style: italic; quotes: "\201C" "\201D"; }
+.tag { display: inline-block; font: 10px var(--f-pixel); letter-spacing: .06em; padding: 1px 6px; border-radius: 3px; margin: 2px 4px 0 0; }
+.tag.have { background: rgba(159, 183, 71, .18); color: var(--ok); }
+.tag.new { background: rgba(222, 153, 67, .18); color: var(--amber); }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 14px; }
+.card { background: var(--paper); color: var(--ink); border-radius: 4px; padding: 16px; display: grid; gap: 8px; align-content: start; min-width: 0; box-shadow: 0 3px 0 var(--paper-dim); }
+.card h3 { color: var(--ink); }
+.card .k { font: 700 11px var(--f-pixel); letter-spacing: .06em; color: var(--amber-deep); }
+.card p { font-size: 14px; }
+.card .cost { font: 11px var(--f-pixel); color: var(--ink); opacity: .7; }
+.ideas { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px 28px; margin: 0; padding: 0; list-style: none; }
+.ideas li { display: grid; gap: 2px; border-top: 1px solid var(--line); padding-top: 10px; }
+.ideas b { color: var(--paper); font-family: var(--f-pixel); font-size: 13px; }
+.ideas span { color: var(--chalk-dim); font-size: 14px; }
+pre { margin: 0; overflow-x: auto; background: #0d1511; border: 1px solid var(--line); border-radius: 6px; padding: 14px; font: 13px/1.5 ui-monospace, "SFMono-Regular", Menlo, monospace; color: var(--chalk); }
+pre .c { color: #7f9384; }
+pre .s { color: var(--amber); }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.two > * { min-width: 0; }
+.qs { margin: 0; padding-left: 22px; display: grid; gap: 10px; }
+.qs li::marker { font-family: var(--f-pixel); color: var(--amber); }
+.qs b { color: var(--paper); }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Concept lab · level 0 · before Lotus Lagoon</div>
+    <h1>BOOT CAMP</h1>
+    <p>A first training stage that teaches driving, crates, firing, the frog and the first enemy in about three minutes, with your frog as the only guide. Drive it below with <kbd>ARROWS</kbd> or <kbd>WASD</kbd> and <kbd>SPACE</kbd>. Switch KEYS / TOUCH on the right to hear how the frog's words change. Nothing here is engine code yet.</p>
+  </header>
+
+  <div class="lab">
+    <div class="stage">
+      <div class="screen">
+        <canvas id="field" tabindex="0" aria-label="Playable training course"></canvas>
+        <button class="start" id="start" type="button"><span>CLICK TO DRIVE<small>Arrows or WASD, Space to fire, R to restart the beat</small></span></button>
+      </div>
+      <div class="pad" id="pad">
+        <div class="dpad">
+          <button class="u" data-k="up" aria-label="Up">▲</button>
+          <button class="l" data-k="left" aria-label="Left">◀</button>
+          <button class="r" data-k="right" aria-label="Right">▶</button>
+          <button class="d" data-k="down" aria-label="Down">▼</button>
+        </div>
+        <button class="firebtn" data-k="fire">FIRE</button>
+      </div>
+      <div class="under">
+        <span class="clock" id="clock">0:00</span>
+        <span>A 48 x 13 field map: the camera follows you. A red arrow at the edge points to a tank off screen, a green one to the frog.</span>
+      </div>
+    </div>
+
+    <aside class="panel" aria-label="Lab switches">
+      <div class="group">
+        <h3>DECIDED</h3>
+        <ul class="decided">
+          <li><b>Frog guide only.</b> No signs, paint or HUD card.</li>
+          <li><b>Short lines, no name.</b> Eight words or fewer once enemies are out.</li>
+          <li><b>Level 0, skippable.</b> Tile 0 in the level select.</li>
+          <li><b>All six beats.</b> About three minutes.</li>
+          <li><b>Field map, 48 x 13.</b> The camera follows.</li>
+        </ul>
+      </div>
+      <div class="group">
+        <h3>HINTS NAME</h3>
+        <div class="seg" role="group" aria-label="Input the hints name">
+          <button type="button" id="m-keys" aria-pressed="true">KEYS</button>
+          <button type="button" id="m-touch" aria-pressed="false">TOUCH</button>
+        </div>
+        <small style="color:var(--chalk-dim);font-size:13px;line-height:1.35">The game already flips its words between keys and taps (<code>hud::Hints</code>). The frog's lines follow the same switch.</small>
+      </div>
+      <div class="group">
+        <h3>BEATS</h3>
+        <ol class="beats" id="beats"></ol>
+        <div class="row"><button class="btn" id="restart" type="button">RESTART COURSE</button><button class="btn" id="retry" type="button">RETRY BEAT</button></div>
+      </div>
+    </aside>
+  </div>
+
+  <section>
+    <div class="eyebrow">01 · The course</div>
+    <h2>Six beats, one new thing each</h2>
+    <p class="lede">Each pen teaches one idea and the gate out of it opens only when the player has done it once. Nothing is read before it is needed, and every lesson is something the player does rather than something they are told.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>BEAT</th><th>TEACHES</th><th>DONE WHEN</th><th>FROG SAYS</th><th>ENGINE</th></tr></thead>
+        <tbody id="beat-table"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">02 · The frog's voice</div>
+    <h2>Rules for every line</h2>
+    <p class="lede">With signs and the HUD card out, the frog carries every rule. These keep it readable in a fight and cheap to translate.</p>
+    <div class="cards">
+      <article class="card"><span class="k">LENGTH</span><h3>Eight words, then less</h3><p>A line is at most eight words, and in beats 5 and 6 four or fewer. The bubble reveals word by word and stays up for as long as the line needs to be read.</p></article>
+      <article class="card"><span class="k">INPUT</span><h3>Keys or taps, never both</h3><p>A line that names a control has a keys and a touch version, picked by the input last used (<code>hud::Hints</code>). <kbd>SPACE</kbd> becomes "tap the right half".</p></article>
+      <article class="card"><span class="k">NUDGE</span><h3>Repeat the point when stuck</h3><p>After 14 seconds with nothing said, the frog repeats the one thing the beat needs ("The ammo crate is up north."). This replaces the signs a lost player would have reread.</p></article>
+      <article class="card"><span class="k">OFF SCREEN</span><h3>A green arrow to the frog</h3><p>When the frog is out of view, a green arrow at the edge points to it and carries a FROG tag while it talks. It's the same arrow kind the indicators already draw for frogs.</p></article>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">03 · More to try</div>
+    <h2>Ideas parked for later</h2>
+    <ul class="ideas">
+      <li><b>Ghost demo tank</b><span>A translucent tank drives the pen's lesson once (a slide into a turn, a shot at the wall), then fades. Shows momentum better than words.</span></li>
+      <li><b>No failure, only a gate</b><span>Down in training puts you back at the last gate with full health, as here. A lost frog replays the beat, not the course.</span></li>
+      <li><b>Par time and a medal</b><span>The round clock already exists. A bronze, silver and gold time gives returning players a reason to replay level 0.</span></li>
+      <li><b>Signs later</b><span>If the frog alone proves too little, signposts are the cheapest add-on: a map cell and a card, and the builder could place them too.</span></li>
+      <li><b>Dummy tanks</b><span>The first enemy shoots only at the frog and never at the player, so the first fight is about protecting rather than surviving.</span></li>
+      <li><b>Hide in the grass</b><span>A bonus pen with tall grass and an enemy that loses sight of you. Teaches concealment, which no level spells out today.</span></li>
+      <li><b>Couch and online</b><span>Two seats share the course; each gate waits for both tanks. Online, the room runs the script and signs travel as map cells.</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <div class="eyebrow">04 · How it would land</div>
+    <h2>Engine sketch</h2>
+    <div class="two">
+      <div style="display:grid;gap:12px">
+        <p class="lede">Training is a field map like any other, plus a short script. Most of what the course needs exists: crates, air drops, gates, the frog, waves, the follow camera, the Hints switch. New are beat triggers, doors that open on a beat, a scripted frog path and its speech bubble.</p>
+        <ul class="qs" style="padding-left:18px">
+          <li><b>Map cell:</b> <code>door</code>, an iron run bound to a beat that slides open when the beat is done.</li>
+          <li><b>Script:</b> a <code>[training]</code> list of beats, each a trigger (<code>flags</code>, <code>collect</code>, <code>destroy</code>, <code>heal_frog</code>, <code>kill</code>) and what it starts (open a door, drop a crate, roll a tank in through a gate).</li>
+          <li><b>Mission:</b> <code>Mission::Training</code>, so the end screen says TRAINING COMPLETE and leads to level 1. First in <code>levels.toml</code> as <code>boot-camp</code>; a progress file already past level 1 opens on Lotus Lagoon.</li>
+          <li><b>Frog:</b> each beat names a spot; the frog hops there through the open doors and says the beat's lines (<code>say</code>, with <code>keys</code>/<code>touch</code> variants and a <code>nudge</code>). The bubble is a new painter beside the HUD.</li>
+          <li><b>Words:</b> <code>frog-*</code> keys in <code>lang/en.ftl</code> and <code>sl.ftl</code>, held to the bubble's width by the existing budget test.</li>
+          <li><b>Determinism:</b> triggers are pure checks on round state, no RNG, so a seeded replay and the probe still hold.</li>
+        </ul>
+      </div>
+      <pre><span class="c"># maps/boot-camp.toml (sketch)</span>
+size = [48.0, 13.0]
+mission.kind = <span class="s">"training"</span>
+
+[cells.<span class="s">"10,5"</span>]
+kind = <span class="s">"door"</span>
+beat = <span class="s">"drive"</span>
+
+[[training.beat]]
+id = <span class="s">"drive"</span>
+done = { flags = 3 }
+frog = [5, 4]
+say = [<span class="s">"frog-hello"</span>, <span class="s">"frog-drive"</span>, <span class="s">"frog-flags"</span>]
+nudge = <span class="s">"frog-drive-nudge"</span>
+
+[[training.beat]]
+id = <span class="s">"frog"</span>
+start = { shoot_frog = <span class="s">"east"</span>, drop = <span class="s">"frog_health"</span> }
+done = { heal_frog = true }
+
+[[training.beat]]
+id = <span class="s">"enemy"</span>
+start = { roll_in = { gate = <span class="s">"east"</span>, tank = <span class="s">"scout"</span>, ai = <span class="s">"dummy"</span> } }
+done = { kill = 1 }</pre>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">05 · Next</div>
+    <h2>Before the engine work</h2>
+    <ol class="qs">
+      <li><b>Play the lab.</b> Check the frog alone is enough, especially beat 3 (no sign says why the wall matters).</li>
+      <li><b>Write the spec.</b> <code>docs/training-stage.md</code>: the beats, the lines, the triggers, the map.</li>
+      <li><b>Build in order:</b> doors and triggers, then the frog path and bubble, then the map and its lines, then level 0 in <code>levels.toml</code>.</li>
+    </ol>
+  </section>
+</div>
+
+<script>
+"use strict";
+const IMG = {
+  tanks: "../../static/scifi_tanks_sheet.png",
+  crates: "../../static/crates_sheet.png",
+  glyphs: "../../static/pickup_glyphs.png",
+  walls: "../../static/walls_sheet.png",
+  props: "../../static/props_sheet.png",
+  frogIdle: "../../static/toxic_frog/green_blue/idle.png",
+  frogHop: "../../static/toxic_frog/green_blue/hop.png",
+  frogHurt: "../../static/toxic_frog/green_blue/hurt.png",
+};
+
+// ---- palette (tools/punypalette.py) ----
+const P = {
+  black: "#252525", white: "#ffffff", stonePale: "#f0f0f0", stoneLt: "#c1c1c1", stoneMd: "#9e9e96", stoneDk: "#7e7e7e", stoneDarkest: "#373737",
+  sandPale: "#d2ba6b", sandLt: "#c9b266", sandMd: "#b7a248", sandDk: "#67512a",
+  woodPale: "#d8bf8e", woodLt: "#de9943", woodMd: "#ca8a3b", woodAmber: "#b57a28", woodDk: "#996524", woodDeeper: "#68471d", woodDarkest: "#50330b",
+  redBright: "#ff421a", redMd: "#e44219", redDeep: "#9c3527",
+  blueBright: "#27d8c5", blueLt: "#1eb3ae", blueMd: "#04a0b4", blueDk: "#038aab", bluePale: "#93ece2",
+  greenBright: "#9fb747", greenLt: "#85a643", greenMd: "#7c983c", greenDk: "#5f914b", greenDarkest: "#1c4c33", greenShade: "#3d6e3f",
+  goldBright: "#eea343", goldMd: "#dc9c4a", goldPale: "#cac594", firePale: "#ffe0a0",
+  p1: "#4d9be6",
+};
+const FIRE = [P.white, P.firePale, P.goldBright, P.woodLt, P.redBright, P.redDeep, P.stoneDarkest];
+const SMOKE = [P.stoneLt, P.stoneMd, P.stoneDk, P.stoneDarkest];
+
+// ---- world ----
+const CELL = 32, COLS = 48, ROWS = 13, W = COLS * CELL, H = ROWS * CELL;
+const PEN_GATES = [10, 19]; // mechanical gates, rows 5..7
+const WALL_COL = 28;         // the brick wall out of the firing range
+const EAST = 47;             // the enemy gate
+const GATE_ROWS = [5, 6, 7];
+
+const BEATS = [
+  { id: "drive", title: "DRIVE", short: "Drive",
+    sign: { keys: "[ARROWS] drive. Four directions and real weight: ease off before a turn.", touch: "[STICK] Drag your left thumb to drive. Ease off before a turn." },
+    goals: ["Roll over the three flags"],
+    frog: ["Hi! I'm your frog.", { keys: "[ARROWS] to drive. Ease off before turns.", touch: "[STICK] Drag your left thumb to drive." }, "Roll over the three flags."],
+    nudge: "Three flags. Then the gate opens.",
+    done: "Three flags crossed", teach: "Four-way movement with momentum, sliding into turns", engine: ["have:movement", "new:flags trigger", "new:door"] },
+  { id: "supply", title: "SUPPLY", short: "Crates",
+    sign: { keys: "Drive into a crate to open it. You start with no shells.", touch: "Drive into a crate to open it. You start with no shells." },
+    goals: ["Open the ammo crate", "Patch up with the red cross (optional)"],
+    frog: ["No shells yet? Bump the crates.", "The red cross fixes your hull."],
+    nudge: "The ammo crate is up north.",
+    done: "Ammo crate collected", teach: "Crates open on contact; ammo, health, speed", engine: ["have:crates", "new:collect trigger"] },
+  { id: "fire", title: "FIRE", short: "Fire",
+    sign: { keys: "[SPACE] fires where your gun points. Wood breaks fast, brick takes a few hits, iron never.", touch: "[TAP] Tap the right half to fire. Wood breaks fast, brick takes a few, iron never." },
+    goals: ["Break through the brick wall", "Try the minigun crate: hold fire (optional)"],
+    frog: [{ keys: "[SPACE] fires where your gun points.", touch: "[TAP] the right half to fire." }, "Wood breaks fast. Brick takes a few.", "Iron never breaks. Shoot the brick wall!"],
+    nudge: { keys: "Face the brick wall, press [SPACE].", touch: "Face the brick wall and [TAP]." },
+    done: "Through the brick wall", teach: "Aiming by facing, materials, special weapons queue", engine: ["have:materials", "have:minigun", "new:destroy trigger"] },
+  { id: "frog", title: "YOUR FROG", short: "Frog",
+    sign: { keys: "The frog is the heart of every round. If it goes down, the round is lost.", touch: "The frog is the heart of every round. If it goes down, the round is lost." },
+    goals: ["Heal the frog with the frog kit"],
+    frog: ["Ow! That came from the east!", "Grab my kit, quick!"],
+    nudge: "My kit! The green crate!",
+    done: "Frog back to full health", teach: "The frog matters; frog health crate; air drops", engine: ["have:frog health", "have:air drop", "new:scripted shot"] },
+  { id: "enemy", title: "ENEMY", short: "First enemy",
+    sign: { keys: "Red-ringed tanks roll in through gates and go for the frog. Line up and fire.", touch: "Red-ringed tanks roll in through gates and go for the frog. Line up and fire." },
+    goals: ["Stop the tank before it hurts the frog"],
+    frog: ["Here it comes!", "Line up and fire!"],
+    nudge: "Get in line with it!",
+    done: "First tank destroyed", teach: "Enemies, gates, lining up, the frog bites back", engine: ["have:gates", "have:roll-in", "new:dummy AI"] },
+  { id: "wave", title: "SHIELD", short: "Shield & wave",
+    sign: { keys: "A shield soaks hits for a few seconds. Grab it, then take the last tank.", touch: "A shield soaks hits for a few seconds. Grab it, then take the last tank." },
+    goals: ["Grab the shield (optional)", "Destroy the second tank"],
+    frog: ["Shield first.", "This one shoots back!"],
+    nudge: "Last one. You've got this.",
+    done: "Second tank destroyed", teach: "Shield, enemies that fire back, respawn at the gate", engine: ["have:shield", "have:waves", "new:kill trigger"] },
+];
+
+// ---- assets ----
+const img = {};
+function loadAll() {
+  const jobs = Object.entries(IMG).map(([k, src]) => new Promise((res) => { const i = new Image(); i.onload = () => { img[k] = i; res(); }; i.onerror = () => res(); i.src = src; }));
+  const fontJob = (document.fonts && document.fonts.load) ? Promise.all([document.fonts.load("12px Silkscreen"), document.fonts.load("bold 12px Silkscreen")]).catch(() => {}) : Promise.resolve();
+  return Promise.all([...jobs, fontJob]);
+}
+
+// ---- helpers ----
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const hash = (x, y) => { let h = (x * 374761393 + y * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+const cx = (c) => c * CELL + CELL / 2;
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const DIRS = { up: [0, -1, 0], right: [1, 0, 90], down: [0, 1, 180], left: [-1, 0, 270] };
+const lerpAngle = (a, b, t) => { let d = ((b - a + 540) % 360) - 180; return a + d * t; };
+
+// ---- state ----
+let S;
+const opts = { mode: "keys" };
+const keys = { up: false, down: false, left: false, right: false, fire: false };
+const keyOrder = [];
+
+function newWorld() {
+  const tiles = [];
+  for (let r = 0; r < ROWS; r++) { tiles.push([]); for (let c = 0; c < COLS; c++) tiles[r].push(null); }
+  const put = (c, r, t, hp) => { tiles[r][c] = { t, hp: hp || 1, max: hp || 1 }; };
+  for (let c = 0; c < COLS; c++) { put(c, 0, "iron"); put(c, ROWS - 1, "iron"); }
+  for (let r = 0; r < ROWS; r++) { put(0, r, "iron"); if (!GATE_ROWS.includes(r)) put(EAST, r, "iron"); }
+  for (const col of [...PEN_GATES, WALL_COL]) for (let r = 1; r < ROWS - 1; r++) if (!GATE_ROWS.includes(r)) put(col, r, "iron");
+  for (const r of GATE_ROWS) put(WALL_COL, r, "brick", 3);
+  // firing range targets
+  for (const [c, r] of [[24, 9], [25, 9], [24, 10], [25, 10], [25, 2], [26, 2]]) put(c, r, "wood", 2);
+  for (const [c, r] of [[22, 8], [22, 4]]) put(c, r, "brick", 3);
+  // frog pen: pond and sandbag cover
+  for (let c = 33; c <= 37; c++) for (let r = 1; r <= 2; r++) put(c, r, "water");
+  for (const [c, r] of [[41, 3], [42, 3], [41, 9], [42, 9], [38, 4], [38, 8]]) put(c, r, "sandbag", 3);
+  // decorative fences in pen 1 and 2
+  for (const c of [12, 13, 14]) put(c, 11, "fenceH", 1);
+  const signs = [];
+  return {
+    t: 0, clock: 0, beat: 0, beatT: 0, finished: false, finishT: 0,
+    tiles, signs,
+    gates: [...PEN_GATES, EAST].map((c) => ({ c, open: 0, target: 0 })),
+    flags: [[8, 2], [8, 10], [3, 10]].map(([c, r]) => ({ x: cx(c), y: cx(r), got: false, gotT: 0 })),
+    crates: [
+      { kind: 1, x: cx(17), y: cx(2) }, { kind: 0, x: cx(17), y: cx(10) }, { kind: 6, x: cx(12), y: cx(9) },
+      { kind: 3, x: cx(20), y: cx(10) },
+    ].map((k) => ({ ...k, gone: false, drop: 0 })),
+    player: { x: cx(2), y: cx(6), vx: 0, vy: 0, dir: 90, vis: 90, hp: 60, max: 100, shells: 0, mini: 0, shield: 0, shieldT: 0, speedT: 0, cool: 0, kick: 0, frame: 0, dead: 0, flash: 0, ring: 0 },
+    frog: { x: cx(5), y: cx(4), hp: 100, face: 1, path: [], hop: 0, hurt: 0, anim: 0, bite: 0 },
+    enemies: [], shots: [], parts: [], wrecks: [], debris: [],
+    lines: [], line: null, lineT: 0, said: {},
+    toast: null, introShot: false, enemiesSent: 0, shieldDropped: false, respawn: null,
+    camX: 0, frogSpot: [[5, 4], [13, 4], [23, 6], [34, 6], [34, 6], [34, 6]],
+  };
+}
+
+// ---- tiles ----
+function tileAt(c, r) { if (c < 0 || r < 0 || c >= COLS || r >= ROWS) return { t: "iron" }; return S.tiles[r][c]; }
+function gateSolid(c, r) {
+  if (!GATE_ROWS.includes(r)) return false;
+  const g = S.gates.find((g) => g.c === c); return g ? g.open < 0.7 : false;
+}
+function solidCell(c, r) { const t = tileAt(c, r); return !!t || gateSolid(c, r); }
+function shotSolid(c, r) { const t = tileAt(c, r); if (t && (t.t === "water" || t.t === "fenceH")) return false; return !!t || gateSolid(c, r); }
+function boxHits(x, y, h) {
+  const c0 = Math.floor((x - h) / CELL), c1 = Math.floor((x + h - 0.01) / CELL), r0 = Math.floor((y - h) / CELL), r1 = Math.floor((y + h - 0.01) / CELL);
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) if (solidCell(c, r)) return true;
+  return false;
+}
+
+// ---- movement: four directions with weight, and a nudge round corners ----
+function moveTank(t, dx, dy, dt, speed, ghost) {
+  const tvx = dx * speed, tvy = dy * speed, k = 1 - Math.exp(-dt * 6.5);
+  t.vx += (tvx - t.vx) * k; t.vy += (tvy - t.vy) * k;
+  const h = 13;
+  if (ghost) { t.x += t.vx * dt; t.y += t.vy * dt; return; }
+  let nx = t.x + t.vx * dt;
+  if (boxHits(nx, t.y, h)) {
+    let slid = false;
+    if (dx !== 0) for (let n = 2; n <= 14; n += 2) for (const s of [1, -1]) if (!slid && !boxHits(nx, t.y + s * n, h)) { t.y += s * Math.min(n, 120 * dt); slid = true; }
+    if (!slid) { t.vx *= -0.15; nx = t.x; } else nx = t.x;
+  }
+  t.x = nx;
+  let ny = t.y + t.vy * dt;
+  if (boxHits(t.x, ny, h)) {
+    let slid = false;
+    if (dy !== 0) for (let n = 2; n <= 14; n += 2) for (const s of [1, -1]) if (!slid && !boxHits(t.x + s * n, ny, h)) { t.x += s * Math.min(n, 120 * dt); slid = true; }
+    if (!slid) { t.vy *= -0.15; ny = t.y; } else ny = t.y;
+  }
+  t.y = ny;
+}
+
+function heldDir() {
+  for (let i = keyOrder.length - 1; i >= 0; i--) if (keys[keyOrder[i]]) return keyOrder[i];
+  return null;
+}
+
+// ---- beats ----
+function frogGo(beat) {
+  const [c, r] = S.frogSpot[beat];
+  const tx = cx(c), ty = cx(r), f = S.frog, path = [];
+  for (const g of [...PEN_GATES, WALL_COL]) {
+    const gx = cx(g);
+    if ((f.x < gx && tx > gx)) { path.push({ x: gx - 40, y: cx(6) }, { x: gx + 40, y: cx(6) }); }
+  }
+  path.push({ x: tx, y: ty });
+  f.path = path;
+}
+function say(lines, key) {
+  if (key && S.said[key]) return; if (key) S.said[key] = true;
+  S.lines.push(...lines); S.quiet = 0;
+}
+// a line is a string or { keys, touch }, resolved when it is drawn
+const lineText = (l) => (typeof l === "string" ? l : l[opts.mode]);
+function startBeat(i) {
+  S.beat = i; S.beatT = 0;
+  if (i < BEATS.length) { frogGo(i); say(i === 3 ? ["This is my pad. Come on in."] : BEATS[i].frog, "beat" + i); }
+  if (i === 1) S.gates[0].target = 1;
+  if (i === 2) S.gates[1].target = 1;
+  renderBeats();
+}
+function completeBeat() {
+  const i = S.beat;
+  toast(BEATS[i].title + " ✓");
+  if (i + 1 >= BEATS.length) { S.finished = true; S.finishT = 0; say(["You're ready.", "Lotus Lagoon is next."], "end"); renderBeats(); return; }
+  startBeat(i + 1);
+}
+function beatGoals(i) {
+  const p = S.player, g = [];
+  if (i === 0) { const n = S.flags.filter((f) => f.got).length; g.push({ t: "Roll over the flags " + n + "/3", ok: n === 3 }); }
+  if (i === 1) { g.push({ t: "Open the ammo crate", ok: S.crates[0].gone }); g.push({ t: "Red cross: health", ok: S.crates[1].gone, opt: true }); }
+  if (i === 2) { g.push({ t: "Break through the brick wall", ok: wallBroken() }); g.push({ t: "Minigun crate: hold fire", ok: S.crates[3].gone, opt: true }); }
+  if (i === 3) g.push({ t: "Heal the frog " + Math.round(S.frog.hp) + "%", ok: S.frog.hp >= 100 && S.introShot });
+  if (i === 4) g.push({ t: "Stop the tank", ok: false });
+  if (i === 5) { const sc = S.crates.find((c) => c.kind === 7); g.push({ t: "Grab the shield", ok: !!(sc && sc.gone), opt: true }); g.push({ t: "Destroy the second tank", ok: false }); }
+  return g;
+}
+function wallBroken() { return GATE_ROWS.some((r) => !S.tiles[r][WALL_COL]); }
+
+function tickBeat(dt) {
+  const p = S.player, f = S.frog;
+  S.beatT += dt;
+  switch (S.beat) {
+    case 0: if (S.flags.every((g) => g.got)) completeBeat(); break;
+    case 1: if (S.crates[0].gone) completeBeat(); break;
+    case 2: if (wallBroken() && p.x > WALL_COL * CELL + CELL + 8) completeBeat(); break;
+    case 3:
+      if (!S.introShot && f.path.length === 0 && p.x > (WALL_COL + 1) * CELL + 20) {
+        S.introShot = true;
+        S.shots.push({ x: W + 10, y: f.y, vx: -520, vy: 0, kind: "shell", team: "enemy", dmg: 65, frogOnly: true, ghost: true, life: 3 });
+        S.gates[2].target = 1; setTimeout(() => { if (S && S.gates[2]) S.gates[2].target = 0; }, 900);
+      }
+      if (S.introShot && f.hp < 100 && !S.crates.some((c) => c.kind === 9)) {
+        if (S.beatT > 0 && f.hurt <= 0 && S.shots.length === 0) { S.crates.push({ kind: 9, x: cx(31), y: cx(10), gone: false, drop: 1.2 }); }
+      }
+      if (S.introShot && f.hp >= 100 && S.crates.some((c) => c.kind === 9 && c.gone)) completeBeat();
+      break;
+    case 4:
+      if (S.enemiesSent === 0 && S.beatT > 1.6) sendEnemy(1);
+      if (S.enemiesSent >= 1 && S.enemies.length === 0) completeBeat();
+      break;
+    case 5:
+      if (!S.shieldDropped) { S.shieldDropped = true; S.crates.push({ kind: 7, x: clamp(p.x, cx(30), cx(44)), y: clamp(p.y - 64, cx(3), cx(10)), gone: false, drop: 1.2 }); }
+      if (S.enemiesSent === 1 && (S.beatT > 7 || S.crates.some((c) => c.kind === 7 && c.gone)) ) sendEnemy(2);
+      if (S.enemiesSent >= 2 && S.enemies.length === 0) completeBeat();
+      break;
+  }
+}
+
+function sendEnemy(kind) {
+  S.enemiesSent++;
+  S.gates[2].target = 1;
+  S.enemies.push({ kind, x: W + 24, y: cx(6), vx: 0, vy: 0, dir: 270, vis: 270, hp: kind === 1 ? 3 : 4, max: kind === 1 ? 3 : 4, state: "enter", cool: 1.5, commit: 0, mdir: "left", frame: 0, kick: 0, flash: 0, row: kind === 1 ? 0 : 1 });
+}
+
+// ---- crates & flags ----
+const CRATE_NAMES = ["HEALTH", "AMMO +12", "LASER", "MINIGUN", "PLASMA", "MISSILES", "SPEED UP", "SHIELD", "FLAMER", "FROG KIT", "TOWER", "HEAT"];
+function collect(c) {
+  const p = S.player;
+  c.gone = true; c.goneT = 0;
+  burst(c.x, c.y, 14, [P.woodPale, P.woodLt, P.woodMd, P.woodDk], 90, 0.6);
+  floatText(c.x, c.y - 18, CRATE_NAMES[c.kind]);
+  if (c.kind === 1) p.shells += 12;
+  if (c.kind === 0) p.hp = Math.min(p.max, p.hp + 40);
+  if (c.kind === 6) p.speedT = 8;
+  if (c.kind === 3) { p.mini = 40; say(["Hold fire. It eats ammo fast."], "mini"); }
+  if (c.kind === 7) { p.shield = 50; p.shieldT = 8; }
+  if (c.kind === 9) { S.frog.hp = 100; say(["Better! If I go down, we lose."], "healed"); }
+}
+function floatText(x, y, t) { S.parts.push({ x, y, vx: 0, vy: -26, life: 1.1, max: 1.1, text: t }); }
+function toast(t) { S.toast = { t, life: 1.8 }; }
+
+// ---- particles ----
+function burst(x, y, n, ramp, sp, life) {
+  for (let i = 0; i < n; i++) { const a = Math.random() * Math.PI * 2, v = sp * (0.3 + Math.random()); S.parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: life * (0.5 + Math.random() * 0.6), max: life, ramp, sz: Math.random() < 0.3 ? 4 : 2 }); }
+}
+function explode(x, y, big) {
+  burst(x, y, big ? 46 : 14, FIRE, big ? 140 : 80, big ? 0.9 : 0.45);
+  burst(x, y, big ? 22 : 6, SMOKE, big ? 50 : 30, big ? 1.8 : 0.9);
+  for (let i = 0; i < (big ? 6 : 0); i++) S.parts.push({ x, y, vx: (Math.random() - 0.5) * 30, vy: -20 - Math.random() * 20, life: 2.2, max: 2.2, ramp: SMOKE, sz: 6 });
+}
+
+// ---- firing ----
+function fire(t, team, ang, kind) {
+  const r = (ang * Math.PI) / 180, dx = Math.sin(r), dy = -Math.cos(r);
+  const sp = kind === "bullet" ? 640 : 420;
+  const x = t.x + dx * 22, y = t.y + dy * 22;
+  S.shots.push({ x, y, vx: dx * sp, vy: dy * sp, kind, team, dmg: kind === "bullet" ? 0.25 : 1, life: 2.5, frogOnly: t.kind === 1 });
+  t.kick = 0.12;
+  burst(x, y, kind === "bullet" ? 2 : 6, FIRE.slice(0, 4), 60, 0.18);
+  if (team === "player" && kind === "shell") { t.vx -= dx * 40; t.vy -= dy * 40; }
+}
+
+function damageTile(c, r, dmg, x, y) {
+  const t = tileAt(c, r);
+  if (!t || !S.tiles[r] || S.tiles[r][c] !== t) { burst(x, y, 4, [P.white, P.stoneLt], 60, 0.25); return; }
+  if (t.t === "iron" || t.t === "sign") { burst(x, y, 5, [P.white, P.goldBright, P.stoneLt], 90, 0.25); return; }
+  t.hp -= dmg;
+  const dust = t.t === "brick" ? [P.redMd, P.redDeep, P.stoneMd] : t.t === "sandbag" ? [P.sandPale, P.sandMd, P.sandDk] : [P.woodLt, P.woodMd, P.woodDk];
+  burst(x, y, 7, dust, 70, 0.4);
+  if (t.hp <= 0) {
+    S.tiles[r][c] = null; burst(cx(c), cx(r), 18, dust, 80, 0.8); burst(cx(c), cx(r), 6, SMOKE, 25, 1.1);
+    S.debris.push({ c, r, t: t.t, v: Math.floor(hash(c, r) * 8) });
+    if (t.t === "brick" && c === WALL_COL && S.beat === 2) frogGo(3), say(["Nice shot! Follow me."], "wall");
+  }
+}
+
+function tickShots(dt) {
+  const p = S.player, f = S.frog;
+  for (const s of S.shots) {
+    const steps = 3;
+    for (let k = 0; k < steps && s.life > 0; k++) {
+      s.x += (s.vx * dt) / steps; s.y += (s.vy * dt) / steps;
+      const c = Math.floor(s.x / CELL), r = Math.floor(s.y / CELL);
+      if (!s.ghost && shotSolid(c, r)) { damageTile(c, r, s.dmg, s.x, s.y); s.life = 0; break; }
+      if (s.ghost) { if (s.x < EAST * CELL && Math.abs(s.x - f.x) < 18) { hitFrog(s); s.life = 0; break; } continue; }
+      if (s.team === "player") {
+        for (const e of S.enemies) if (e.state !== "enter" && Math.abs(s.x - e.x) < 16 && Math.abs(s.y - e.y) < 16) { e.hp -= s.dmg; e.flash = 0.12; e.state = "hunt"; burst(s.x, s.y, 8, FIRE, 80, 0.35); s.life = 0; if (e.kind === 1 && !S.said.dummyhit) say(["It only wants me. Keep firing!"], "dummyhit"); break; }
+      } else {
+        if (!s.ghost && Math.abs(s.x - f.x) < 15 && Math.abs(s.y - f.y) < 15 && f.hp > 0) { hitFrog(s); s.life = 0; break; }
+        if (!s.frogOnly && p.dead <= 0 && Math.abs(s.x - p.x) < 15 && Math.abs(s.y - p.y) < 15) { hitPlayer(s.kind === "shell" ? 14 : 4); burst(s.x, s.y, 8, FIRE, 80, 0.35); s.life = 0; break; }
+        if (s.frogOnly && p.dead <= 0 && Math.abs(s.x - p.x) < 15 && Math.abs(s.y - p.y) < 15) { hitPlayer(4); burst(s.x, s.y, 6, FIRE, 70, 0.3); s.life = 0; break; }
+      }
+    }
+    s.life -= dt;
+    if (s.kind === "shell" && Math.random() < 0.6) S.parts.push({ x: s.x, y: s.y, vx: 0, vy: 0, life: 0.25, max: 0.25, ramp: s.team === "player" ? [P.bluePale, P.blueLt, P.stoneMd] : [P.goldBright, P.redMd, P.stoneMd], sz: 2 });
+  }
+  S.shots = S.shots.filter((s) => s.life > 0 && s.x > -40 && s.x < W + 60);
+}
+function hitFrog(s) {
+  const f = S.frog; if (f.hp <= 0) return; f.hp = Math.max(0, f.hp - (s.dmg > 5 ? s.dmg : 10)); f.hurt = 0.5;
+  burst(f.x, f.y, 12, [P.greenBright, P.greenLt, P.white], 70, 0.4);
+  if (s.ghost) say(BEATS[3].frog, "ow");
+  if (f.hp <= 0) { explode(f.x, f.y, false); toast("FROG DOWN · BEAT AGAIN"); setTimeout(() => jumpTo(S.beat), 1300); f.hp = 0; }
+}
+function hitPlayer(d) {
+  const p = S.player;
+  if (p.shield > 0) { p.shield -= d; burst(p.x, p.y, 6, [P.bluePale, P.blueBright, P.white], 70, 0.3); return; }
+  p.hp -= d; p.flash = 0.12;
+  if (p.hp <= 0) {
+    p.hp = 0; p.dead = 1.8; explode(p.x, p.y, true);
+    S.wrecks.push({ x: p.x, y: p.y, vis: p.vis, row: 20, col: 16 + Math.floor(Math.random() * 4), life: 6 });
+    say(["You're down! Back to the gate."], null);
+  }
+}
+
+// ---- enemies ----
+function los(a, b) {
+  const n = Math.ceil(dist(a, b) / 8);
+  for (let i = 1; i < n; i++) { const x = a.x + ((b.x - a.x) * i) / n, y = a.y + ((b.y - a.y) * i) / n; if (shotSolid(Math.floor(x / CELL), Math.floor(y / CELL))) return false; }
+  return true;
+}
+function tickEnemy(e, dt) {
+  const p = S.player, f = S.frog;
+  e.cool -= dt; e.kick = Math.max(0, e.kick - dt); e.flash = Math.max(0, e.flash - dt);
+  if (e.state === "enter") {
+    moveTank(e, -1, 0, dt, 70, true); e.dir = 270;
+    if (e.x < cx(EAST - 2)) { e.state = "hunt"; setTimeout(() => { if (S) S.gates[2].target = 0; }, 400); }
+  } else {
+    const tgt = e.kind === 1 || p.dead > 0 ? f : (dist(e, p) < 8 * CELL || f.hp <= 0 ? p : f);
+    const dx = tgt.x - e.x, dy = tgt.y - e.y, d = Math.hypot(dx, dy);
+    const aligned = Math.abs(dx) < 9 || Math.abs(dy) < 9;
+    const range = e.kind === 1 ? 4.5 * CELL : 6 * CELL;
+    if (aligned && d < range && los(e, tgt)) {
+      e.dir = Math.abs(dx) < 9 ? (dy < 0 ? 0 : 180) : dx < 0 ? 270 : 90;
+      moveTank(e, 0, 0, dt, 0);
+      if (e.cool <= 0) { fire(e, "enemy", e.dir, "shell"); e.cool = e.kind === 1 ? 2.6 : 1.5; }
+    } else {
+      e.commit -= dt;
+      if (e.commit <= 0) {
+        // line up on the short axis first, then close in on the long one
+        const ax = Math.abs(dx), ay = Math.abs(dy);
+        let m = ax < ay ? (ax > 8 ? "x" : "y") : (ay > 8 ? "y" : "x");
+        if (d < range * 0.6) m = ax < ay ? "x" : "y";
+        e.mdir = m === "x" ? (dx < 0 ? "left" : "right") : (dy < 0 ? "up" : "down");
+        const [mx, my] = DIRS[e.mdir];
+        if (boxHits(e.x + mx * 10, e.y + my * 10, 13)) { e.mdir = m === "x" ? (dy < 0 ? "up" : "down") : (dx < 0 ? "left" : "right"); }
+        e.commit = 0.45;
+      }
+      const [mx, my, ang] = DIRS[e.mdir]; e.dir = ang;
+      const ox = e.x, oy = e.y;
+      moveTank(e, mx, my, dt, e.kind === 1 ? 46 : 72);
+      if (Math.hypot(e.x - ox, e.y - oy) < 0.2) e.commit = 0;
+    }
+  }
+  e.vis = lerpAngle(e.vis, e.dir, 1 - Math.exp(-dt * 14));
+  if (Math.hypot(e.vx, e.vy) > 8) e.frame = (e.frame + dt * 10) % 4;
+  // the frog bites what comes close
+  if (f.hp > 0 && dist(e, f) < 46 && e.state !== "enter") { e.hp -= dt * 0.7; f.bite = 0.3; if (Math.random() < 0.3) burst(e.x, e.y, 2, [P.greenBright, P.white], 50, 0.25); say(["Chomp!"], "chomp"); }
+  if (e.hp <= 0) {
+    explode(e.x, e.y, true);
+    S.wrecks.push({ x: e.x, y: e.y, vis: e.vis, row: e.row, col: 16 + Math.floor(Math.random() * 4), life: 999 });
+    e.dead = true;
+  }
+}
+
+// ---- update ----
+function update(dt) {
+  if (!S) return;
+  S.t += dt; if (!S.finished) S.clock += dt; else S.finishT += dt;
+  const p = S.player, f = S.frog;
+  // gates
+  for (const g of S.gates) g.open += clamp(g.target - g.open, -dt * 1.6, dt * 1.6);
+  // player
+  if (p.dead > 0) {
+    p.dead -= dt;
+    if (p.dead <= 0) { const spot = S.beat >= 3 ? [29.6, 6] : S.beat >= 2 ? [20.5, 6] : S.beat >= 1 ? [11.5, 6] : [2, 6]; p.x = spot[0] * CELL + 16; p.y = cx(spot[1]); p.vx = p.vy = 0; p.hp = p.max; p.dir = p.vis = 90; p.ring = 0.8; }
+  } else {
+    const d = heldDir();
+    const sp = 128 * (p.speedT > 0 ? 1.45 : 1);
+    if (d) { const [mx, my, a] = DIRS[d]; p.dir = a; moveTank(p, mx, my, dt, sp); } else moveTank(p, 0, 0, dt, sp);
+    p.vis = lerpAngle(p.vis, p.dir, 1 - Math.exp(-dt * 16));
+    if (Math.hypot(p.vx, p.vy) > 8) p.frame = (p.frame + dt * 12) % 4;
+    p.cool -= dt; p.kick = Math.max(0, p.kick - dt); p.flash = Math.max(0, p.flash - dt);
+    if (keys.fire && p.cool <= 0) {
+      if (p.mini > 0) { fire(p, "player", p.vis, "bullet"); p.mini--; p.cool = 0.075; }
+      else if (p.shells > 0 && keys.fireEdge) { fire(p, "player", p.dir, "shell"); p.shells--; p.cool = 0.4; }
+      else if (p.shells <= 0 && keys.fireEdge) { floatText(p.x, p.y - 26, "NO SHELLS"); if (S.beat <= 1) say(["No shells. Find the ammo crate."], "noammo"); }
+    }
+    keys.fireEdge = false;
+    for (const fl of S.flags) if (!fl.got && Math.abs(p.x - fl.x) < 22 && Math.abs(p.y - fl.y) < 22) { fl.got = true; burst(fl.x, fl.y - 10, 16, [P.white, P.goldBright, P.woodLt], 80, 0.6); floatText(fl.x, fl.y - 22, S.flags.filter((x) => x.got).length + "/3"); }
+    for (const c of S.crates) if (!c.gone && c.drop <= 0 && Math.abs(p.x - c.x) < 28 && Math.abs(p.y - c.y) < 28) collect(c);
+  }
+  if (p.speedT > 0) { p.speedT -= dt; if (Math.random() < 0.4 && Math.hypot(p.vx, p.vy) > 40) S.parts.push({ x: p.x - p.vx * 0.12, y: p.y - p.vy * 0.12, vx: 0, vy: 0, life: 0.3, max: 0.3, ramp: [P.bluePale, P.blueLt], sz: 2 }); }
+  if (p.shieldT > 0) { p.shieldT -= dt; if (p.shieldT <= 0 || p.shield <= 0) { p.shield = 0; p.shieldT = 0; burst(p.x, p.y, 14, [P.bluePale, P.blueBright], 90, 0.4); } }
+  p.ring = Math.max(0, p.ring - dt);
+  for (const c of S.crates) if (c.drop > 0) { c.drop -= dt; if (c.drop <= 0) burst(c.x, c.y + 10, 10, [P.sandPale, P.sandMd, P.stoneLt], 60, 0.5); }
+  // frog
+  f.anim += dt; f.hurt = Math.max(0, f.hurt - dt); f.bite = Math.max(0, f.bite - dt);
+  if (f.path.length) {
+    const w = f.path[0], dx = w.x - f.x, dy = w.y - f.y, d = Math.hypot(dx, dy);
+    const sp = 95 * dt; f.hop += dt;
+    if (Math.abs(dx) > 2) f.face = dx > 0 ? 1 : -1;
+    if (d <= sp) { f.x = w.x; f.y = w.y; f.path.shift(); } else { f.x += (dx / d) * sp; f.y += (dy / d) * sp; }
+  } else f.hop = 0;
+  // enemies, shots
+  for (const e of S.enemies) tickEnemy(e, dt);
+  S.enemies = S.enemies.filter((e) => !e.dead);
+  tickShots(dt);
+  for (const q of S.parts) { q.x += q.vx * dt; q.y += q.vy * dt; q.vx *= 1 - dt * 2.4; q.vy *= 1 - dt * 2.4; q.life -= dt; }
+  S.parts = S.parts.filter((q) => q.life > 0);
+  for (const w of S.wrecks) w.life -= dt;
+  S.wrecks = S.wrecks.filter((w) => w.life > 0);
+  if (S.toast) { S.toast.life -= dt; if (S.toast.life <= 0) S.toast = null; }
+  // frog lines
+  if (!S.line && S.lines.length) { S.line = S.lines.shift(); S.lineT = 0; }
+  if (S.line) { S.lineT += dt; if (S.lineT > 1.6 + lineText(S.line).length * 0.055) S.line = null; }
+  // the frog repeats the point when a beat has gone quiet for too long
+  if (!S.line && !S.lines.length && !S.finished) { S.quiet = (S.quiet || 0) + dt; if (S.quiet > 14 && BEATS[S.beat] && BEATS[S.beat].nudge) say([BEATS[S.beat].nudge], null); }
+  if (!S.finished) tickBeat(dt);
+}
+
+// ---- drawing ----
+const cv = document.getElementById("field");
+const ctx = cv.getContext("2d");
+let view = { w: W, scale: 1, dpr: 1 };
+function resize() {
+  const cssW = cv.parentElement.clientWidth;
+  const vw = cssW >= 900 ? 832 : cssW >= 620 ? 640 : 448;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  view = { w: vw, scale: (cssW / vw) * dpr, dpr };
+  cv.width = Math.round(cssW * dpr); cv.height = Math.round((H * cssW) / vw * dpr);
+  cv.style.height = Math.round((H * cssW) / vw) + "px";
+}
+window.addEventListener("resize", resize);
+
+function blk(x, y, w, h, c) { ctx.fillStyle = c; ctx.fillRect(Math.round(x), Math.round(y), w, h); }
+
+function drawGround() {
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const x = c * CELL, y = r * CELL;
+    if (c * CELL > S.camX + view.w + CELL || (c + 1) * CELL < S.camX - CELL) continue;
+    const road = r === 6 && c > 0 && c < COLS - 1;
+    blk(x, y, CELL, CELL, road ? P.sandLt : P.greenLt);
+    for (let by = 0; by < 16; by++) for (let bx = 0; bx < 16; bx++) {
+      const h = hash(c * 16 + bx, r * 16 + by);
+      if (road) { if (h < 0.08) blk(x + bx * 2, y + by * 2, 2, 2, P.sandMd); else if (h > 0.96) blk(x + bx * 2, y + by * 2, 2, 2, P.sandPale); }
+      else { if (h < 0.06) blk(x + bx * 2, y + by * 2, 2, 2, P.greenMd); else if (h > 0.965) blk(x + bx * 2, y + by * 2, 2, 2, P.greenBright); }
+    }
+    if (road && (r === 6)) { blk(x, y, CELL, 2, P.sandMd); blk(x, y + CELL - 2, CELL, 2, P.sandMd); }
+  }
+  // pen floor tint for the pen you are in
+  const pens = [[1, 9], [11, 18], [20, 27], [29, 46]];
+  const pen = S.beat <= 0 ? 0 : S.beat === 1 ? 1 : S.beat === 2 ? 2 : 3;
+  ctx.globalAlpha = 0.08; blk(pens[pen][0] * CELL, CELL, (pens[pen][1] - pens[pen][0] + 1) * CELL, (ROWS - 2) * CELL, P.goldPale); ctx.globalAlpha = 1;
+}
+
+function drawDebris() {
+  const rows = { brick: 14, wood: 15, sandbag: 18 };
+  for (const d of S.debris) if (rows[d.t] && img.walls) ctx.drawImage(img.walls, d.v * 32, rows[d.t] * 32, 32, 32, d.c * CELL, d.r * CELL, 32, 32);
+}
+
+function drawPaint() {
+  ctx.save(); ctx.globalAlpha = 0.5; ctx.fillStyle = P.stonePale; ctx.strokeStyle = P.stonePale;
+  // chevrons on the road
+  for (let c = 2; c < COLS - 1; c += 2) {
+    if ([7, 13, WALL_COL].includes(c)) continue;
+    const x = c * CELL + 10, y = cx(6);
+    for (let i = 0; i < 6; i++) { blk(x + i * 2, y - 6 + i * 2, 2, 2, P.stonePale); blk(x + i * 2, y + 6 - i * 2, 2, 2, P.stonePale); }
+  }
+  // pen 1: the keys stencil
+  if (opts.mode === "keys") paintKeys(cx(2) - 10, cx(8) - 4); else paintStick(cx(3), cx(8) + 4);
+  // pen 2: a crate outline arrow
+  ctx.font = "bold 12px Silkscreen"; ctx.textAlign = "center";
+  ctx.fillText("BUMP", cx(11), cx(4) + 4);
+  // pen 3: crosshair at the wall
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(WALL_COL * CELL - 22, cx(6), 13, 0, Math.PI * 2); ctx.stroke();
+  blk(WALL_COL * CELL - 23, cx(6) - 19, 2, 12, P.stonePale); blk(WALL_COL * CELL - 23, cx(6) + 7, 2, 12, P.stonePale);
+  ctx.fillText(opts.mode === "keys" ? "SPACE" : "TAP", cx(16), cx(8) + 4);
+  // pen 4: the frog pad and the hazard at the gate
+  ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.arc(cx(25), cx(6), 30, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillText("FROG", cx(25), cx(6) + 46);
+  ctx.globalAlpha = 0.65;
+  for (const r of GATE_ROWS) for (let i = 0; i < 4; i++) { ctx.fillStyle = i % 2 ? P.black : P.goldBright; ctx.fillRect((EAST - 1) * CELL + i * 8, r * CELL, 8, CELL); }
+  ctx.restore();
+}
+function paintKeys(x, y) {
+  const k = (kx, ky, tri) => { ctx.strokeRect(kx + 1, ky + 1, 18, 18); ctx.beginPath(); const c = [kx + 10, ky + 10]; const s = 4; const pts = { u: [[0, -s], [s, s / 2], [-s, s / 2]], d: [[0, s], [s, -s / 2], [-s, -s / 2]], l: [[-s, 0], [s / 2, s], [s / 2, -s]], r: [[s, 0], [-s / 2, s], [-s / 2, -s]] }[tri]; ctx.moveTo(c[0] + pts[0][0], c[1] + pts[0][1]); for (const q of pts.slice(1)) ctx.lineTo(c[0] + q[0], c[1] + q[1]); ctx.fill(); };
+  ctx.lineWidth = 2; k(x + 22, y, "u"); k(x, y + 22, "l"); k(x + 22, y + 22, "d"); k(x + 44, y + 22, "r");
+}
+function paintStick(x, y) { ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 18, 0, Math.PI * 2); ctx.stroke(); ctx.beginPath(); ctx.arc(x + 8, y - 4, 7, 0, Math.PI * 2); ctx.fill(); }
+
+function drawTiles() {
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const t = S.tiles[r][c]; if (!t) continue;
+    const x = c * CELL, y = r * CELL;
+    if (x > S.camX + view.w + CELL || x + CELL < S.camX - CELL) continue;
+    if (t.t === "water") { drawWater(c, r); continue; }
+    if (t.t === "sign") continue;
+    if (!img.walls) { blk(x, y, CELL, CELL, P.stoneDk); continue; }
+    if (t.t === "sandbag" || t.t === "fenceH") {
+      blk(x + 3, y + 5, CELL, CELL - 4, "rgba(28,40,30,.35)");
+      const row = t.t === "sandbag" ? 0 : 5; const col = t.t === "sandbag" ? (t.hp >= 3 ? 0 : t.hp === 2 ? 1 : 2) : 0;
+      if (img.props) ctx.drawImage(img.props, col * 32, row * 32, 32, 32, x, y, 32, 32);
+      continue;
+    }
+    blk(x + 4, y + 6, CELL, CELL, "rgba(20,32,24,.38)");
+    let row = 4, col = 0;
+    if (t.t === "brick") { row = 0; col = t.hp >= 3 ? 0 : t.hp >= 2 ? 2 : 4; }
+    if (t.t === "wood") { row = 8; col = t.hp >= 2 ? 0 : 2; }
+    ctx.drawImage(img.walls, col * 32, row * 32, 32, 32, x, y, 32, 32);
+  }
+}
+function drawWater(c, r) {
+  const x = c * CELL, y = r * CELL;
+  blk(x, y, CELL, CELL, P.blueMd);
+  for (let i = 0; i < 6; i++) { const h = hash(c * 7 + i, r * 13); const sx = ((h * 28 + S.t * 8 * (0.5 + h)) % 28) | 0; blk(x + sx + 2, y + 4 + i * 5, 6, 2, i % 2 ? P.blueLt : P.bluePale); }
+  const edge = (cc, rr) => { const t = tileAt(cc, rr); return !(t && t.t === "water"); };
+  if (edge(c, r - 1)) blk(x, y, CELL, 4, P.greenDk);
+  if (edge(c, r + 1)) blk(x, y + CELL - 4, CELL, 4, P.blueDk);
+  if (edge(c - 1, r)) blk(x, y, 4, CELL, P.greenDk);
+  if (edge(c + 1, r)) blk(x + CELL - 4, y, 4, CELL, P.greenDk);
+}
+
+function drawGates() {
+  for (const g of S.gates) {
+    const x = g.c * CELL; const top = GATE_ROWS[0] * CELL, h = GATE_ROWS.length * CELL;
+    const sh = Math.round(h * (1 - g.open) / 2) * 1;
+    // two leaves sliding apart, iron plate with hazard stripes
+    for (const [y0, hh] of [[top, sh], [top + h - sh, sh]]) {
+      if (hh <= 0) continue;
+      ctx.save(); ctx.beginPath(); ctx.rect(x, y0, CELL, hh); ctx.clip();
+      for (let yy = y0 - 32; yy < y0 + hh + 32; yy += 32) if (img.walls) ctx.drawImage(img.walls, 0, 6 * 32, 32, 32, x, yy, 32, 32); else blk(x, yy, 32, 32, P.stoneDk);
+      const ey = y0 === top ? y0 + hh - 6 : y0;
+      for (let i = 0; i < 8; i++) blk(x + i * 4, ey, 4, 6, i % 2 ? P.black : P.goldBright);
+      ctx.restore();
+    }
+    // lamp
+    const lit = g.target > 0;
+    blk(x + 12, top - 10, 8, 6, P.black); blk(x + 14, top - 8, 4, 2, lit ? P.greenBright : P.redBright);
+  }
+}
+
+function drawFlags() {
+  for (const f of S.flags) {
+    const x = Math.round(f.x), y = Math.round(f.y);
+    blk(x - 6, y + 8, 14, 4, "rgba(20,32,24,.35)");
+    blk(x - 1, y - 14, 2, 24, P.stoneDarkest);
+    const wave = Math.round(Math.sin(S.t * 6 + x) * 1);
+    const col = f.got ? P.goldBright : P.p1;
+    for (let i = 0; i < 6; i++) blk(x + 1 + i * 2, y - 14 + (i % 2 ? wave : 0), 2, 8 - Math.floor(i / 2) * 2 + 2, col);
+    blk(x - 2, y + 8, 4, 2, P.stoneDk);
+    if (!f.got && S.beat === 0) { const pulse = (S.t * 1.5) % 1; ctx.globalAlpha = 1 - pulse; ctx.strokeStyle = P.white; ctx.lineWidth = 2; ctx.strokeRect(x - 10 - pulse * 8, y - 10 - pulse * 8, 20 + pulse * 16, 20 + pulse * 16); ctx.globalAlpha = 1; }
+  }
+}
+
+function drawCrates() {
+  for (const c of S.crates) {
+    if (c.gone) continue;
+    const x = Math.round(c.x), y = Math.round(c.y);
+    if (c.drop > 0) {
+      const k = c.drop / 1.2; const lift = Math.round(k * k * 220 / 2) * 2;
+      ctx.globalAlpha = 0.35 * (1 - k * 0.6); blk(x - 14 + 4, y - 8 + 6, 28, 20, P.black); ctx.globalAlpha = 1;
+      if (img.crates) ctx.drawImage(img.crates, 0, c.kind * 40, 40, 40, x - 20, y - 20 - lift, 40, 40);
+      blk(x - 1, y - 20 - lift - 18, 2, 18, P.stoneLt); // the chute line
+      ctx.fillStyle = P.stonePale; ctx.beginPath(); ctx.arc(x, y - 20 - lift - 26, 14, Math.PI, 0); ctx.fill();
+      continue;
+    }
+    ctx.globalAlpha = 0.35; blk(x - 14 + 4, y - 12 + 6, 28, 24, P.black); ctx.globalAlpha = 1;
+    const g = ((S.t + hash(x, y) * 3) % 3); const col = g < 0.4 ? 1 + Math.floor(g / 0.1) : 0;
+    if (img.crates) ctx.drawImage(img.crates, col * 40, c.kind * 40, 40, 40, x - 20, y - 20, 40, 40); else blk(x - 12, y - 12, 24, 24, P.woodMd);
+  }
+}
+
+function drawTank(t, row, team) {
+  if (!img.tanks) return;
+  const x = Math.round(t.x), y = Math.round(t.y);
+  const tier = t.hp / t.max >= 0.75 ? 0 : t.hp / t.max >= 0.5 ? 1 : t.hp / t.max >= 0.25 ? 2 : 3;
+  // ring
+  const ringC = team === "player" ? P.p1 : P.redMd;
+  ctx.lineWidth = 2; ctx.strokeStyle = "rgba(0,0,0,.35)"; ctx.beginPath(); ctx.ellipse(x, y + 2, 20, 20, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = ringC; ctx.beginPath(); ctx.arc(x, y, 20, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * clamp(t.hp / t.max, 0, 1)); ctx.stroke();
+  // shadow
+  ctx.save(); ctx.translate(x + 3, y + 4); ctx.rotate((t.vis * Math.PI) / 180); ctx.globalAlpha = 0.28; ctx.fillStyle = P.black; ctx.fillRect(-13, -15, 26, 30); ctx.restore();
+  ctx.save(); ctx.translate(x, y); ctx.rotate((t.vis * Math.PI) / 180);
+  ctx.drawImage(img.tanks, (tier * 4 + Math.floor(t.frame)) * 40, row * 40, 40, 40, -20, -20, 40, 40);
+  ctx.drawImage(img.tanks, (20 + tier * 3 + (t.kick > 0.06 ? 1 : t.kick > 0 ? 2 : 0)) * 40, row * 40, 40, 40, -20, -20, 40, 40);
+  ctx.restore();
+  if (t.flash > 0) { ctx.globalAlpha = 0.5; blk(x - 14, y - 14, 28, 28, P.white); ctx.globalAlpha = 1; }
+}
+function drawWrecks() {
+  for (const w of S.wrecks) {
+    if (!img.tanks) continue;
+    ctx.save(); ctx.translate(Math.round(w.x), Math.round(w.y)); ctx.rotate((w.vis * Math.PI) / 180); ctx.globalAlpha = Math.min(1, w.life);
+    ctx.drawImage(img.tanks, w.col * 40, w.row * 40, 40, 40, -20, -20, 40, 40); ctx.restore();
+    if (Math.random() < 0.08) S.parts.push({ x: w.x + (Math.random() - 0.5) * 10, y: w.y, vx: 4, vy: -16, life: 1.4, max: 1.4, ramp: SMOKE, sz: 4 });
+  }
+}
+
+function drawFrog() {
+  const f = S.frog; if (f.hp <= 0) return;
+  const x = Math.round(f.x), y = Math.round(f.y);
+  let sheet = img.frogIdle, frames = 8, fr = Math.floor(f.anim * 8) % 8;
+  if (f.hurt > 0) { sheet = img.frogHurt; frames = 4; fr = Math.floor((0.5 - f.hurt) * 8) % 4; }
+  else if (f.path.length) { sheet = img.frogHop; frames = 7; fr = Math.floor(f.hop * 10) % 7; }
+  ctx.globalAlpha = 0.3; ctx.fillStyle = P.black; ctx.beginPath(); ctx.ellipse(x, y + 12, 12, 4, 0, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+  if (sheet) { ctx.save(); ctx.translate(x, y); ctx.scale(f.face, 1); ctx.drawImage(sheet, fr * 48, 0, 48, 48, -24, -30, 48, 48); ctx.restore(); }
+  // the frog's gauge, a little arc under it
+  ctx.lineWidth = 2; ctx.strokeStyle = "rgba(0,0,0,.4)"; ctx.beginPath(); ctx.arc(x, y + 2, 16, Math.PI * 0.15, Math.PI * 0.85); ctx.stroke();
+  ctx.strokeStyle = f.hp < 50 ? P.redBright : P.greenBright; ctx.beginPath(); ctx.arc(x, y + 2, 16, Math.PI * 0.85 - Math.PI * 0.7 * (f.hp / 100), Math.PI * 0.85); ctx.stroke();
+}
+
+function drawShots() {
+  for (const s of S.shots) {
+    const x = Math.round(s.x), y = Math.round(s.y);
+    if (s.kind === "bullet") { blk(x - 1, y - 1, 3, 3, P.goldBright); blk(x, y, 1, 1, P.white); continue; }
+    const c = s.team === "player" ? [P.white, P.bluePale, P.blueLt] : [P.white, P.firePale, P.redBright];
+    ctx.globalAlpha = 0.35; blk(x - 6, y - 6, 12, 12, c[2]); ctx.globalAlpha = 1;
+    blk(x - 3, y - 3, 6, 6, c[1]); blk(x - 1, y - 1, 2, 2, c[0]);
+  }
+}
+function drawParts() {
+  for (const q of S.parts) {
+    if (q.text) { ctx.globalAlpha = Math.min(1, q.life * 2); txt(q.text, q.x, q.y, 10, P.white, "center", true); ctx.globalAlpha = 1; continue; }
+    const k = 1 - q.life / q.max, i = Math.min(q.ramp.length - 1, Math.floor(k * q.ramp.length));
+    const sz = q.sz || 2; blk(Math.round(q.x / 2) * 2, Math.round(q.y / 2) * 2, sz, sz, q.ramp[i]);
+  }
+}
+function drawPlayerExtras() {
+  const p = S.player; if (p.dead > 0) return;
+  if (p.shield > 0) { ctx.globalAlpha = 0.55 + Math.sin(S.t * 10) * 0.15; ctx.strokeStyle = P.bluePale; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, 25, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1; }
+  if (p.ring > 0 || S.t < 2.5) { const k = (S.t * 1.2) % 1; ctx.globalAlpha = 1 - k; ctx.strokeStyle = P.p1; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, 22 + k * 22, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1; }
+  txt("P1", p.x, p.y - 30, 9, P.p1, "center", true);
+}
+
+// ---- text and hint panels ----
+function txt(s, x, y, size, color, align, shadow, bold) {
+  ctx.font = (bold ? "bold " : "") + size + "px Silkscreen, monospace"; ctx.textAlign = align || "left"; ctx.textBaseline = "alphabetic";
+  if (shadow) { ctx.fillStyle = "rgba(20,20,20,.75)"; ctx.fillText(s, Math.round(x) + 1, Math.round(y) + 1); }
+  ctx.fillStyle = color; ctx.fillText(s, Math.round(x), Math.round(y));
+}
+// rich text: [ARROWS] [SPACE] [STICK] [TAP] become key glyphs
+function layoutRich(s, maxW, size) {
+  ctx.font = size + "px Silkscreen, monospace";
+  const words = s.split(" "), lines = [[]]; let w = 0; const space = ctx.measureText(" ").width;
+  for (const word of words) {
+    const tok = /^\[(\w+)\]$/.exec(word);
+    const ww = tok ? glyphW(tok[1], size) : ctx.measureText(word).width;
+    if (w + ww > maxW && lines[lines.length - 1].length) { lines.push([]); w = 0; }
+    lines[lines.length - 1].push({ word, tok: tok && tok[1], w: ww }); w += ww + space;
+  }
+  return { lines, space };
+}
+function glyphW(t, size) { return t === "ARROWS" ? size * 4.4 : t === "SPACE" ? size * 5 : t === "STICK" ? size * 1.8 : size * 3.4; }
+function drawRich(lay, x, y, size, color, lh) {
+  lay.lines.forEach((line, li) => {
+    let cxp = x; const yy = y + li * lh;
+    for (const it of line) {
+      if (it.tok) drawGlyph(it.tok, cxp, yy, size); else txt(it.word, cxp, yy, size, color);
+      cxp += it.w + lay.space;
+    }
+  });
+}
+function keycap(x, y, w, h, label, size, tri) {
+  blk(x, y + 2, w, h, P.woodDk); blk(x, y, w, h, P.stonePale); blk(x + 1, y + h - 2, w - 2, 1, P.stoneLt);
+  if (label) txt(label, x + w / 2, y + h - 3, size - 2, P.ink || "#241d14", "center");
+  if (tri) { ctx.fillStyle = "#241d14"; const c = [x + w / 2, y + h / 2], s = 3; const pts = { u: [[0, -s], [s, s], [-s, s]], d: [[0, s], [s, -s], [-s, -s]], l: [[-s, 0], [s, s], [s, -s]], r: [[s, 0], [-s, s], [-s, -s]] }[tri]; ctx.beginPath(); ctx.moveTo(c[0] + pts[0][0], c[1] + pts[0][1]); for (const q of pts.slice(1)) ctx.lineTo(c[0] + q[0], c[1] + q[1]); ctx.fill(); }
+}
+function drawGlyph(t, x, y, size) {
+  const h = size + 2, top = y - size;
+  if (t === "ARROWS") { const w = size; keycap(x, top, w, h, "", size, "l"); keycap(x + w + 2, top, w, h, "", size, "u"); keycap(x + (w + 2) * 2, top, w, h, "", size, "d"); keycap(x + (w + 2) * 3, top, w, h, "", size, "r"); }
+  else if (t === "SPACE") keycap(x, top, size * 4.8, h, "SPACE", size);
+  else if (t === "STICK") { ctx.strokeStyle = P.woodDk; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x + size * 0.8, y - size / 2 + 1, size * 0.75, 0, Math.PI * 2); ctx.stroke(); ctx.fillStyle = P.woodDk; ctx.beginPath(); ctx.arc(x + size * 1.05, y - size / 2, size * 0.32, 0, Math.PI * 2); ctx.fill(); }
+  else keycap(x, top, size * 3.2, h, "TAP", size);
+}
+
+function drawSigns() {
+  const p = S.player;
+  for (const s of S.signs) {
+    const x = s.c * CELL, y = s.r * CELL;
+    const beatDone = s.beat < S.beat || S.finished, active = s.beat === S.beat && !S.finished;
+    // post and board, wood ramp
+    blk(x + 6, y + 26, 22, 4, "rgba(20,32,24,.35)");
+    blk(x + 14, y + 14, 4, 16, P.woodDeeper); blk(x + 14, y + 14, 2, 16, P.woodDk);
+    blk(x + 3, y + 3, 26, 15, P.woodDarkest); blk(x + 4, y + 4, 24, 13, P.woodMd); blk(x + 4, y + 4, 24, 3, P.woodLt); blk(x + 4, y + 14, 24, 3, P.woodAmber);
+    blk(x + 8, y + 9, 16, 2, P.woodDk); blk(x + 8, y + 12, 10, 1, P.woodDk);
+    if (beatDone) { blk(x + 20, y - 4, 10, 10, P.greenDarkest); txt("✓", x + 25, y + 5, 10, P.greenBright, "center"); }
+    else if (active) { const b = Math.round(Math.sin(S.t * 5) * 2); blk(x + 13, y - 12 + b, 6, 12, P.black); blk(x + 14, y - 11 + b, 4, 7, P.goldBright); blk(x + 14, y - 3 + b, 4, 2, P.goldBright); }
+  }
+}
+function drawSignCards() {
+  const p = S.player; if (p.dead > 0) return;
+  for (const s of S.signs) {
+    const sx = cx(s.c), sy = cx(s.r);
+    if (Math.hypot(p.x - sx, p.y - sy) > 2.6 * CELL) continue;
+    const b = BEATS[s.beat];
+    const size = 10, w = 210, lay = layoutRich(b.sign[opts.mode], w - 20, size);
+    const h = 30 + lay.lines.length * 15;
+    let x = clamp(sx - w / 2, S.camX + 6, S.camX + view.w - w - 6), y = sy - 22 - h;
+    if (y < 4) y = sy + 22;
+    blk(x + 3, y + 4, w, h, "rgba(10,14,12,.45)");
+    blk(x - 2, y - 2, w + 4, h + 4, P.woodDarkest); blk(x, y, w, h, P.woodPale); blk(x, y, w, 3, "#efe4c6");
+    blk(x, y + h - 3, w, 3, P.goldPale);
+    txt(b.title, x + 10, y + 16, 12, P.redDeep, "left", false, true);
+    txt((s.beat + 1) + "/" + BEATS.length, x + w - 10, y + 16, 9, P.woodDk, "right");
+    drawRich(lay, x + 10, y + 34, size, "#241d14", 15);
+  }
+}
+function drawBubble() {
+  if (!S.line) return;
+  const f = S.frog; if (f.hp <= 0) return;
+  const text = lineText(S.line), words = text.split(" ");
+  const shown = words.slice(0, Math.max(1, Math.floor(S.lineT * 9))).join(" ");
+  const size = 11, w = Math.min(220, 28 + text.length * 7.2), lay = layoutRich(shown, w - 16, size);
+  const full = layoutRich(text, w - 16, size);
+  const h = 13 + full.lines.length * 15;
+  let x = clamp(f.x - w / 2 + 20, S.camX + 4, S.camX + view.w - w - 4), y = f.y - 44 - h;
+  if (y < 4) y = f.y + 26;
+  const above = y < f.y;
+  blk(x + 2, y + 3, w, h, "rgba(10,14,12,.35)");
+  blk(x - 2, y, w + 4, h, P.black); blk(x, y - 2, w, h + 4, P.black); blk(x, y, w, h, P.white);
+  // tail made of blocks
+  const tx = clamp(f.x, x + 8, x + w - 14);
+  if (above) for (let i = 0; i < 4; i++) { blk(tx + i * 2 - 2, y + h + i * 2, 8 - i * 2 + 2, 2, P.black); blk(tx + i * 2, y + h + i * 2 - 2, 6 - i * 2, 2, P.white); }
+  drawRich(lay, x + 8, y + 16, size, "#241d14", 15);
+}
+function drawFrogTag() {
+  const f = S.frog; if (f.hp <= 0) return;
+  if (f.x > S.camX - 8 && f.x < S.camX + view.w + 8) return;
+  const right = f.x > S.camX + view.w, ax = right ? view.w - 16 : 16, ay = clamp(f.y, 70, H - 20);
+  ctx.fillStyle = P.black; ctx.beginPath(); ctx.moveTo(ax + (right ? 12 : -12), ay); ctx.lineTo(ax, ay - 10); ctx.lineTo(ax, ay + 10); ctx.fill();
+  ctx.fillStyle = P.greenBright; ctx.beginPath(); ctx.moveTo(ax + (right ? 9 : -9), ay); ctx.lineTo(ax + (right ? 1 : -1), ay - 7); ctx.lineTo(ax + (right ? 1 : -1), ay + 7); ctx.fill();
+  if (S.line) txt("FROG", ax + (right ? -24 : 24), ay + 4, 9, P.greenBright, "center", true);
+}
+function drawCoach() {
+  if (!opts.coach || S.finished) return;
+  const goals = beatGoals(S.beat), b = BEATS[S.beat];
+  const w = 230, h = 30 + goals.length * 16;
+  const x = view.w - w - 10, y = 10;
+  ctx.globalAlpha = 0.9; blk(x, y, w, h, "#16241d"); ctx.globalAlpha = 1;
+  blk(x, y, 3, h, P.woodLt);
+  txt((S.beat + 1) + "/" + BEATS.length + "  " + b.title, x + 12, y + 18, 11, P.woodLt, "left", false, true);
+  goals.forEach((g, i) => {
+    const yy = y + 34 + i * 16;
+    blk(x + 12, yy - 9, 10, 10, g.ok ? P.greenBright : "#34493d"); if (!g.ok) blk(x + 14, yy - 7, 6, 6, "#16241d");
+    txt(g.t + (g.opt ? " *" : ""), x + 28, yy, 9, g.ok ? P.greenBright : "#e9e6da");
+  });
+}
+function drawHud() {
+  const p = S.player;
+  const x = 10, y = 10, w = 158, h = 46;
+  ctx.globalAlpha = 0.86; blk(x, y, w, h, "#16241d"); ctx.globalAlpha = 1;
+  const g = (row, gx, gy) => { if (img.glyphs) ctx.drawImage(img.glyphs, 0, row * 24, 24, 24, gx, gy, 16, 16); };
+  g(0, x + 6, y + 6); blk(x + 26, y + 10, 70, 8, "#34493d"); blk(x + 26, y + 10, Math.round(70 * clamp(p.hp / p.max, 0, 1)), 8, p.hp < 35 ? P.redBright : P.p1);
+  txt(String(Math.ceil(p.hp)), x + 102, y + 18, 10, "#e9e6da");
+  g(1, x + 6, y + 26); txt(String(p.shells), x + 26, y + 38, 10, p.shells ? "#e9e6da" : P.redBright);
+  if (p.mini > 0) { g(3, x + 52, y + 26); txt(String(p.mini), x + 72, y + 38, 10, "#e9e6da"); }
+  if (p.shield > 0) { g(7, x + 98, y + 26); txt(Math.ceil(p.shieldT) + "s", x + 118, y + 38, 10, P.bluePale); }
+  else if (p.speedT > 0) { g(6, x + 98, y + 26); txt(Math.ceil(p.speedT) + "s", x + 118, y + 38, 10, P.bluePale); }
+}
+function drawEdgeArrows() {
+  for (const e of S.enemies) {
+    if (e.x > S.camX - 8 && e.x < S.camX + view.w + 8) continue;
+    const right = e.x > S.camX + view.w, ax = right ? view.w - 14 : 14, ay = clamp(e.y, 60, H - 20);
+    const b = Math.round(Math.sin(S.t * 8) * 2);
+    ctx.fillStyle = P.black; ctx.beginPath(); ctx.moveTo(ax + (right ? 12 : -12) + (right ? b : -b), ay); ctx.lineTo(ax, ay - 10); ctx.lineTo(ax, ay + 10); ctx.fill();
+    ctx.fillStyle = P.redBright; ctx.beginPath(); ctx.moveTo(ax + (right ? 9 : -9) + (right ? b : -b), ay); ctx.lineTo(ax + (right ? 1 : -1), ay - 7); ctx.lineTo(ax + (right ? 1 : -1), ay + 7); ctx.fill();
+  }
+}
+function drawOverlay() {
+  if (S.toast) { const a = Math.min(1, S.toast.life * 2); ctx.globalAlpha = a; const w = 240; blk(view.w / 2 - w / 2, H / 2 - 30, w, 40, "rgba(22,36,29,.92)"); txt(S.toast.t, view.w / 2, H / 2 - 4, 16, P.woodLt, "center", false, true); ctx.globalAlpha = 1; }
+  if (S.finished) {
+    const k = Math.min(1, S.finishT * 2);
+    ctx.globalAlpha = 0.6 * k; blk(0, 0, view.w, H, "#0d1511"); ctx.globalAlpha = k;
+    txt("TRAINING COMPLETE", view.w / 2, H / 2 - 30, 28, P.woodLt, "center", true, true);
+    const m = Math.floor(S.clock / 60), s = Math.floor(S.clock % 60);
+    txt("TIME " + m + ":" + String(s).padStart(2, "0") + "   PAR 3:00", view.w / 2, H / 2 + 4, 12, "#e9e6da", "center");
+    txt("NEXT: LOTUS LAGOON", view.w / 2, H / 2 + 34, 12, P.greenBright, "center");
+    ctx.globalAlpha = 1;
+  }
+}
+
+function render() {
+  if (!S) return;
+  const p = S.player;
+  const target = clamp(p.x - view.w / 2, 0, W - view.w);
+  S.camX += (target - S.camX) * 0.12; S.camX = clamp(S.camX, 0, W - view.w);
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = "#0d1511"; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.setTransform(view.scale, 0, 0, view.scale, -Math.round(S.camX) * view.scale, 0);
+  drawGround(); drawDebris();
+  drawFlags(); drawTiles(); drawGates(); drawCrates(); drawWrecks();
+  drawFrog();
+  if (p.dead <= 0) drawTank(p, 20, "player");
+  for (const e of S.enemies) drawTank(e, e.row, "enemy");
+  drawPlayerExtras(); drawShots(); drawParts();
+  drawBubble();
+  // screen space
+  ctx.setTransform(view.scale, 0, 0, view.scale, 0, 0);
+  drawHud(); drawEdgeArrows(); drawFrogTag(); drawOverlay();
+}
+
+// ---- loop ----
+let last = 0, running = false;
+function frame(t) {
+  const dt = Math.min(0.05, (t - last) / 1000 || 0); last = t;
+  if (running) update(dt);
+  render();
+  document.getElementById("clock").textContent = S ? Math.floor(S.clock / 60) + ":" + String(Math.floor(S.clock % 60)).padStart(2, "0") + " · beat " + Math.min(S.beat + 1, BEATS.length) + "/" + BEATS.length : "";
+  requestAnimationFrame(frame);
+}
+
+// ---- jumping between beats ----
+function jumpTo(i) {
+  S = newWorld();
+  const p = S.player;
+  if (i >= 1) { S.flags.forEach((f) => (f.got = true)); S.gates[0].open = S.gates[0].target = 1; p.x = cx(11) + 8; }
+  if (i >= 2) { S.crates[0].gone = S.crates[1].gone = true; p.shells = 12; p.hp = 100; S.gates[1].open = S.gates[1].target = 1; p.x = cx(20) + 8; }
+  if (i >= 3) { for (const r of GATE_ROWS) { S.tiles[r][WALL_COL] = null; S.debris.push({ c: WALL_COL, r, t: "brick", v: r }); } p.x = cx(29); }
+  if (i >= 4) { S.introShot = true; S.crates.push({ kind: 9, x: cx(31), y: cx(10), gone: true, drop: 0 }); p.x = cx(31); }
+  if (i >= 5) { S.enemiesSent = 1; }
+  p.y = cx(6);
+  const [fc, fr] = S.frogSpot[i]; S.frog.x = cx(fc); S.frog.y = cx(fr);
+  for (let k = 0; k < i; k++) S.said["beat" + k] = true;
+  if (i >= 4) S.said.ow = S.said.healed = true;
+  startBeat(i); S.frog.path = [];
+  S.camX = clamp(p.x - view.w / 2, 0, W - view.w);
+}
+
+// ---- side panel ----
+function renderBeats() {
+  const ol = document.getElementById("beats");
+  ol.innerHTML = "";
+  BEATS.forEach((b, i) => {
+    const li = document.createElement("li");
+    const done = S && (i < S.beat || S.finished), now = S && i === S.beat && !S.finished;
+    if (done) li.className = "done"; if (now) li.className = "now";
+    li.innerHTML = '<button type="button"><span class="n">' + (i + 1) + "</span><span>" + b.short + '</span><span class="st">' + (done ? "DONE" : now ? "NOW" : "") + "</span></button>";
+    li.querySelector("button").addEventListener("click", () => { jumpTo(i); begin(); });
+    ol.appendChild(li);
+  });
+}
+function renderTable() {
+  const tb = document.getElementById("beat-table");
+  tb.innerHTML = BEATS.map((b, i) => "<tr><td class='b'>" + (i + 1) + " " + b.title + "</td><td>" + b.teach + "</td><td>" + b.done + "</td><td><q>" + b.frog.map(lineText).join(" ").replace(/\[(\w+)\]/g, "<kbd>$1</kbd>") + "</q></td><td>" + b.engine.map((e) => { const [k, v] = e.split(":"); return "<span class='tag " + k + "'>" + (k === "have" ? "HAVE " : "NEW ") + v.toUpperCase() + "</span>"; }).join("") + "</td></tr>").join("");
+}
+
+// ---- input ----
+const KEYMAP = { ArrowUp: "up", KeyW: "up", ArrowDown: "down", KeyS: "down", ArrowLeft: "left", KeyA: "left", ArrowRight: "right", KeyD: "right", Space: "fire" };
+function press(k, down) {
+  if (k === "fire") { if (down && !keys.fire) keys.fireEdge = true; keys.fire = down; return; }
+  keys[k] = down; if (down) { const i = keyOrder.indexOf(k); if (i >= 0) keyOrder.splice(i, 1); keyOrder.push(k); }
+}
+function begin() { running = true; document.getElementById("start").hidden = true; cv.focus({ preventScroll: true }); }
+document.getElementById("start").addEventListener("click", begin);
+cv.addEventListener("keydown", (e) => {
+  const k = KEYMAP[e.code];
+  if (k) { e.preventDefault(); if (!e.repeat) press(k, true); if (opts.mode !== "keys") setMode("keys"); }
+  if (e.code === "KeyR") jumpTo(S.beat >= BEATS.length ? 0 : S.beat);
+});
+cv.addEventListener("keyup", (e) => { const k = KEYMAP[e.code]; if (k) { e.preventDefault(); press(k, false); } });
+cv.addEventListener("blur", () => { for (const k in keys) keys[k] = false; });
+cv.addEventListener("pointerdown", () => { if (!running) begin(); });
+for (const b of document.querySelectorAll(".pad button")) {
+  const k = b.dataset.k;
+  const on = (e) => { e.preventDefault(); if (!running) begin(); press(k, true); b.classList.add("held"); if (opts.mode !== "touch") setMode("touch"); };
+  const off = (e) => { e.preventDefault(); press(k, false); b.classList.remove("held"); };
+  b.addEventListener("pointerdown", on); b.addEventListener("pointerup", off); b.addEventListener("pointercancel", off); b.addEventListener("pointerleave", off);
+}
+function setMode(m) {
+  opts.mode = m; if (running && document.activeElement && document.activeElement.closest && document.activeElement.closest('.seg')) cv.focus({ preventScroll: true });
+  document.getElementById("m-keys").setAttribute("aria-pressed", m === "keys");
+  document.getElementById("m-touch").setAttribute("aria-pressed", m === "touch");
+  document.getElementById("pad").classList.toggle("on", m === "touch" || coarse);
+}
+const coarse = window.matchMedia("(pointer: coarse)").matches;
+document.getElementById("m-keys").addEventListener("click", () => setMode("keys"));
+document.getElementById("m-touch").addEventListener("click", () => setMode("touch"));
+document.getElementById("restart").addEventListener("click", () => { jumpTo(0); S.clock = 0; begin(); });
+document.getElementById("retry").addEventListener("click", () => { jumpTo(Math.min(S.beat, BEATS.length - 1)); begin(); });
+
+resize();
+renderTable();
+loadAll().then(() => { jumpTo(0); setMode(coarse ? "touch" : "keys"); requestAnimationFrame(frame); });
+</script>
