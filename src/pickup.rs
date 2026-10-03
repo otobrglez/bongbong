@@ -101,6 +101,14 @@ pub enum PickupKind {
     /// while a player tower is hurt (`tower_pack_near_health_chance`).
     #[serde(rename = "tower_pack")]
     TowerPack,
+    /// The heat shield (docs/volcano.md): red on top and black underneath,
+    /// for `heat_shield_seconds` the collector takes no heat - not from
+    /// lava, a burning bank, a burning cell, afterburn or a flamethrower's
+    /// stream - so a lava stream is a road while it lasts. Blasts still
+    /// hurt and shove. Refreshes rather than stacks, like `SpeedUp`.
+    /// Player-only: an enemy driving over one leaves it where it is.
+    #[serde(rename = "heat_shield")]
+    HeatShield,
 }
 
 pub struct Pickup {

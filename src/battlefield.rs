@@ -216,7 +216,7 @@ pub(crate) fn tile_half_extent(
     gy: i32,
     base: f32,
 ) -> Position {
-    if material.is_tree() {
+    if material.is_tree() || material == Material::Lamp {
         return Position::new(base, base);
     }
     tile_hull_half_extent(cells, gx, gy, base)
@@ -388,6 +388,9 @@ pub struct MapSpawn {
     /// road (nothing spawned, no nav effect); `ground::build` shapes it
     /// into rivers and lakes.
     pub water_cells: Vec<Position>,
+    /// World position of every cell the map marked as lava: ground like
+    /// water, shaped into streams and lakes the same way (`lava.rs`).
+    pub lava_cells: Vec<Position>,
     /// The map's one frog placement, if any - `None` means the map didn't
     /// place a frog, in which case `Game::init` falls back to a random
     /// near-center roll (every round needs exactly one live frog for the
@@ -451,16 +454,21 @@ pub fn spawn_from_map(
     // slab: two trees standing next to each other are two trunks with a
     // gap between them, and a shot threading that gap is the right
     // outcome, not a seam bug.
-    let solid_cells: HashSet<(i32, i32)> = map
+    let mut solid_cells: HashSet<(i32, i32)> = map
         .iter_cells()
-        .filter(|(_, _, obj)| obj.is_solid() && !obj.material().is_some_and(Material::is_tree))
+        .filter(|(_, _, obj)| obj.is_solid() && !obj.material().is_some_and(|m| m.is_tree() || m == Material::Lamp))
         .map(|(col, row, _)| (col, row))
         .collect();
+    // A volcano's cone is one slab: every cell under it closes its seams
+    // against the next, like a run of iron.
+    let cone_cells = volcano_cone_cells(map);
+    solid_cells.extend(cone_cells.iter().copied());
 
     let mut obstacle_positions = Vec::new();
     let mut wall_positions = Vec::new();
     let mut road_cells = Vec::new();
     let mut water_cells = Vec::new();
+    let mut lava_cells = Vec::new();
     let mut grass_cells = Vec::new();
     let mut oil_cells = Vec::new();
     let mut portal_cells = Vec::new();
@@ -519,8 +527,26 @@ pub fn spawn_from_map(
                 obstacle_positions.push(pos);
                 world.spawn((Obstacle::new(material, crate::tower::side_variant(side), pos, false, body),));
             }
+            // A volcano spawns its whole cone at its crater's turn: a
+            // permanent tile on every cell under it (`cone_cells` leaves
+            // out what the map already put there). No RNG.
+            CellObject::Volcano => {
+                for &(c, r) in cone_cells.iter().filter(|&&(c, r)| crate::volcano::in_footprint(col, row, c, r)) {
+                    let at = cell_to_world(c, r);
+                    let body = physics.spawn_static(at, tile_half_extent(Material::Volcano, &solid_cells, c, r, obstacle_half_extent));
+                    obstacle_positions.push(at);
+                    world.spawn((Obstacle::new(Material::Volcano, 0, at, false, body),));
+                }
+            }
+            // A lamp post draws no roll either: one look, never alight.
+            CellObject::Lamp => {
+                let body = physics.spawn_static(pos, tile_half_extent(Material::Lamp, &solid_cells, col, row, obstacle_half_extent));
+                obstacle_positions.push(pos);
+                world.spawn((Obstacle::new(Material::Lamp, 0, pos, false, body),));
+            }
             CellObject::Road => road_cells.push(pos),
             CellObject::Water => water_cells.push(pos),
+            CellObject::Lava => lava_cells.push(pos),
             CellObject::TallGrass => grass_cells.push(pos),
             CellObject::Oil => oil_cells.push((col, row)),
             CellObject::Portal => portal_cells.push((col, row)),
@@ -538,7 +564,23 @@ pub fn spawn_from_map(
         }
     }
 
-    MapSpawn { obstacle_positions, wall_positions, road_cells, water_cells, frog_pos, enemy_frog_pos, pickup_slots, grass_cells, oil_cells, portal_cells }
+    MapSpawn { obstacle_positions, wall_positions, road_cells, water_cells, lava_cells, frog_pos, enemy_frog_pos, pickup_slots, grass_cells, oil_cells, portal_cells }
+}
+
+/// Every cell a volcano's cone puts a tile on: its footprint inside the
+/// field, less the cells the map holds something solid in already (that
+/// tile stands there instead) - the crater itself always the cone's.
+pub fn volcano_cone_cells(map: &MapFile) -> Vec<(i32, i32)> {
+    let (width, height) = map.field_size();
+    let (cols, rows) = ((width / OBSTACLE_GRID_SIZE).round() as i32, (height / OBSTACLE_GRID_SIZE).round() as i32);
+    let mut cells: Vec<(i32, i32)> = map
+        .volcano_footprint()
+        .into_iter()
+        .filter(|&(c, r)| c >= 0 && r >= 0 && c < cols && r < rows)
+        .filter(|&(c, r)| map.cell(c, r).is_none_or(|o| matches!(o, CellObject::Volcano) || !o.is_solid()))
+        .collect();
+    cells.sort_by_key(|&(c, r)| (r, c));
+    cells
 }
 
 /// One entry lane for a wave tank (docs/maps-to-levels.md "Gates and

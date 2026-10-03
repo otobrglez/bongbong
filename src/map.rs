@@ -128,6 +128,27 @@ pub enum CellObject {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         side: Option<Side>,
     },
+    /// Lava (docs/volcano.md): a ground cell painted like water, its shape
+    /// read the same way (`ground::Layout`) - a line of single cells is a
+    /// stream, a block two or more wide a lake. A stream is a burning
+    /// ford: a hull crosses it at a wade and burns the whole way unless it
+    /// carries the heat shield; a lake's open middle is deep, a wall to
+    /// hulls and nothing to shots. It flows away from the volcano it leaves
+    /// (`lava::LavaLayout`) and radiates heat onto its banks. Not an
+    /// `Obstacle`, like water.
+    Lava,
+    /// A volcano (docs/volcano.md): the crater's cell, the centre of a
+    /// cone `volcano::FOOTPRINT` cells across (`volcano::footprint`), each
+    /// of whose cells is a permanent `Material::Volcano` tile - it stops
+    /// shots, hulls and the nav grid like iron. It sleeps, rumbles, erupts
+    /// and cools on a clock of its own and throws lava bombs while it
+    /// erupts. Multi-instance, each on its own clock.
+    Volcano,
+    /// A lamp post (docs/volcano.md): a solid tile that lights the ground
+    /// round it at night (`weather::lights_in`) - and shows whoever stands
+    /// in its light to the enemy at full range (`Game::sight_on`). One shot
+    /// puts it out for good.
+    Lamp,
 }
 
 impl CellObject {
@@ -143,6 +164,8 @@ impl CellObject {
             CellObject::Tesla { .. } => Some(Material::Tesla),
             CellObject::GunTower { .. } => Some(Material::GunTower),
             CellObject::BioSlush { .. } => Some(Material::BioSlush),
+            CellObject::Volcano => Some(Material::Volcano),
+            CellObject::Lamp => Some(Material::Lamp),
             _ => None,
         }
     }
@@ -193,6 +216,7 @@ impl CellObject {
             Material::Fence => Some(CellObject::Fence),
             Material::Tree => Some(CellObject::Tree),
             Material::Pine => Some(CellObject::Pine),
+            Material::Lamp => Some(CellObject::Lamp),
             _ => None,
         }
     }
@@ -451,6 +475,14 @@ pub struct MapFile {
     /// not written back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view: Option<MapView>,
+    /// When night falls (TOML: a top-level `nightfall = 90.0`, seconds of
+    /// the round clock, docs/volcano.md): the round opens under the map's
+    /// sky and darkens into night over the `nightfall_seconds` before it
+    /// (`weather::nightfall_mix`), its rules turning to the night's at
+    /// that moment (`Game::fall_night`). `None`, the key absent, keeps the
+    /// map's sky the whole round and is not written back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nightfall: Option<f32>,
     /// The `[mission]` table - what ends the round (docs/maps-to-levels.md).
     /// Absent means Protect.
     #[serde(default)]
@@ -543,6 +575,7 @@ impl MapFile {
             theme: Theme::default(),
             weather: Weather::default(),
             view: None,
+            nightfall: None,
             mission: MissionConfig::default(),
             spawn: SpawnConfig::default(),
             size: None,
@@ -830,6 +863,29 @@ impl MapFile {
             .collect()
     }
 
+    /// Every volcano's crater cell, in `iter_cells` order - the order
+    /// `Game::volcanoes` keeps.
+    pub fn volcano_cells(&self) -> Vec<(i32, i32)> {
+        self.iter_cells()
+            .filter(|(_, _, obj)| matches!(obj, CellObject::Volcano))
+            .map(|(col, row, _)| (col, row))
+            .collect()
+    }
+
+    /// Every cell a volcano's cone stands on (`volcano::footprint`): solid
+    /// ground a hull can neither stand on nor spawn in, though only the
+    /// crater is a cell of the map.
+    pub fn volcano_footprint(&self) -> std::collections::BTreeSet<(i32, i32)> {
+        self.volcano_cells().into_iter().flat_map(|(c, r)| crate::volcano::footprint(c, r)).collect()
+    }
+
+    /// True when `(col, row)` holds a solid tile or stands under a
+    /// volcano's cone.
+    pub fn solid_at(&self, col: i32, row: i32) -> bool {
+        self.cell(col, row).is_some_and(CellObject::is_solid)
+            || self.volcano_cells().iter().any(|&(c, r)| crate::volcano::in_footprint(c, r, col, row))
+    }
+
     /// Cap on how far `nearest_free_cell` will spiral out looking for an
     /// unwalled cell - 64 cells (2048px at `OBSTACLE_GRID_SIZE`) comfortably
     /// covers the default 1280x720 battlefield (40x22.5 cells) from any
@@ -849,7 +905,8 @@ impl MapFile {
     /// `NEAREST_FREE_CELL_MAX_RADIUS` rings - an occasional wall-embedded
     /// spawn on a pathological map beats an unbounded search.
     pub fn nearest_free_cell(&self, col: i32, row: i32) -> (i32, i32) {
-        let is_wall = |c: i32, r: i32| self.cell(c, r).is_some_and(CellObject::is_solid);
+        let volcano = self.volcano_footprint();
+        let is_wall = |c: i32, r: i32| self.cell(c, r).is_some_and(CellObject::is_solid) || volcano.contains(&(c, r));
         if !is_wall(col, row) {
             return (col, row);
         }
@@ -898,6 +955,7 @@ pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("towers", include_str!("../maps/towers.toml")),
     ("longwater", include_str!("../maps/longwater.toml")),
     ("lotus-lagoon", include_str!("../maps/lotus-lagoon.toml")),
+    ("vulkan", include_str!("../maps/vulkan.toml")),
     ("hedge-maze", include_str!("../maps/hedge-maze.toml")),
     ("oasis-bazaar", include_str!("../maps/oasis-bazaar.toml")),
     ("castle-moat", include_str!("../maps/castle-moat.toml")),

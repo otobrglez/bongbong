@@ -39,6 +39,15 @@ by side, staggered as if they left their tubes a beat apart - lime bodies
 the seeker pod's volley, distinct from the minigun's sparks and the plasma's
 orb. Regenerate with `python3 tools/gen_missiles_pickup.py`.
 
+`heat_shield.png` is likewise not from the pack - generated from scratch by
+`tools/gen_heat_shield_pickup.py`, same raw-PNG-bytes/no-Pillow convention
+and the same loud/high-contrast treatment. A heater shield face on, the top
+half molten red and orange, the bottom half black basalt with a grey
+glint, a gold seam between - the volcano's shield (docs/volcano.md),
+drawn red over black as the note that asked for it drew it, and distinct
+from `shield.png`'s rainbow bubble. Regenerate with
+`python3 tools/gen_heat_shield_pickup.py`.
+
 `flamethrower.png` is likewise not from the pack - generated from scratch by
 `tools/gen_flamethrower_pickup.py`, same raw-PNG-bytes/no-Pillow convention
 and the same loud/high-contrast treatment. A dark fuel drum with a short

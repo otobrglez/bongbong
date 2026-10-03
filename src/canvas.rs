@@ -99,7 +99,7 @@ pub const SINGLE_SHEETS: [Sheet; 11] = [
 
 /// Every pickup kind, each its own sheet (`pickup_file` is exhaustive over
 /// the enum, so a new kind without a row here fails to compile there).
-pub const PICKUP_KINDS: [PickupKind; 11] = [
+pub const PICKUP_KINDS: [PickupKind; 12] = [
     PickupKind::Health,
     PickupKind::Ammo,
     PickupKind::Laser,
@@ -111,6 +111,7 @@ pub const PICKUP_KINDS: [PickupKind; 11] = [
     PickupKind::Flamethrower,
     PickupKind::FrogHealth,
     PickupKind::TowerPack,
+    PickupKind::HeatShield,
 ];
 
 /// The five frog clips, in `FrogAnim` order.
@@ -170,6 +171,7 @@ fn pickup_file(kind: PickupKind) -> &'static str {
         PickupKind::Flamethrower => "flamethrower",
         PickupKind::FrogHealth => "frog_health",
         PickupKind::TowerPack => "tower_pack",
+        PickupKind::HeatShield => "heat_shield",
     }
 }
 

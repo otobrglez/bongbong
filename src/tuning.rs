@@ -1439,6 +1439,101 @@ tunables! {
         portal_arrival_max_cells: i32 = 6 in 1 ..= 32;
     }
 
+    group volcano {
+        /// The volcano's cycle (docs/volcano.md): asleep, a rumble that
+        /// warns, the eruption, then the cooling - a pure function of the
+        /// round clock (`volcano::Phase`), so a replica rumbles on the
+        /// room's tick with nothing on the wire. The whole cycle (seconds).
+        volcano_period_seconds: f32 = 30.0 in 8.0 ..= 300.0;
+        /// The rumble before each eruption: the crater brightens, the
+        /// plume darkens, the ground trembles and the off-screen arrow
+        /// pulses (seconds).
+        volcano_rumble_seconds: f32 = 4.0 in 0.5 ..= 30.0;
+        /// The eruption: the fountain, the shock ring and the lava bombs
+        /// (seconds).
+        volcano_erupt_seconds: f32 = 5.0 in 0.5 ..= 30.0;
+        /// The cooling after it: the rivers' surge dies down (seconds).
+        volcano_cool_seconds: f32 = 7.0 in 0.5 ..= 60.0;
+        /// When the first rumble starts on the round clock (seconds); each
+        /// volcano on a map is offset from it by a hash of its cell.
+        volcano_first_rumble_seconds: f32 = 14.0 in 0.0 ..= 300.0;
+        /// Lava bombs an eruption throws, spread over its length.
+        volcano_bombs_per_eruption: i32 = 9 in 0 ..= 64;
+        /// How far from the crater a bomb lands (px): no nearer than the
+        /// first, no further than the second.
+        volcano_bomb_min_range_px: f32 = 120.0 in 32.0 ..= 2000.0;
+        volcano_bomb_range_px: f32 = 460.0 in 64.0 ..= 4000.0;
+        /// The share of an eruption's bombs thrown at a seat within range
+        /// rather than at a spot round the crater. An aimed bomb lands a
+        /// hashed step off its seat, always inside that seat's sight box,
+        /// so nothing lands on a player from a screen they were never shown.
+        volcano_bomb_aimed_share: f32 = 0.45 in 0.0 ..= 1.0;
+        /// A bomb's flight from the crater to where it lands (seconds) -
+        /// the warning a player has, its ring on the ground the whole way -
+        /// and how high it arcs (px).
+        volcano_bomb_flight_seconds: f32 = 1.9 in 0.3 ..= 6.0;
+        volcano_bomb_arc_px: f32 = 150.0 in 0.0 ..= 600.0;
+        /// A landing bomb's blast: its radius (px), its damage at the
+        /// centre (falling to nothing at the radius) and its shove. It
+        /// hurts both sides and every tile it reaches, like a drum.
+        volcano_bomb_radius_px: f32 = 58.0 in 8.0 ..= 300.0;
+        volcano_bomb_damage_min: f32 = 16.0 in 0.0 ..= 100.0;
+        volcano_bomb_damage_max: f32 = 28.0 in 0.0 ..= 100.0;
+        volcano_bomb_knockback: f32 = 140.0 in 0.0 ..= 1000.0;
+        /// The lava a bomb splashes: the cells it sets burning round where
+        /// it lands (radius, cells) and how long they burn (seconds).
+        volcano_pool_radius_cells: i32 = 1 in 0 ..= 4;
+        volcano_pool_seconds: f32 = 6.0 in 0.5 ..= 60.0;
+        /// The eruption's shock ring and shake, as a fraction of a kill's.
+        volcano_shock_scale: f32 = 1.6 in 0.0 ..= 4.0;
+        /// A lava stream (a ford): the fraction of top speed and of grip a
+        /// hull keeps wading it.
+        lava_speed_factor: f32 = 0.5 in 0.05 ..= 1.0;
+        lava_grip_factor: f32 = 0.7 in 0.05 ..= 1.0;
+        /// What the AI's router charges for a step into a lava ford, in
+        /// grid cells: high enough that an enemy walks round a stream where
+        /// a bridge is anywhere near.
+        lava_ford_path_cost: i32 = 14 in 1 ..= 64 @ Restart;
+        /// Damage per second at full heat - in the lava itself. A bank
+        /// burns by how far its heat stands over `heat_hurt_from`.
+        lava_damage_per_second: f32 = 24.0 in 0.0 ..= 200.0;
+        /// Heat at and under this hurts nothing - the scorched ground
+        /// only.
+        heat_hurt_from: f32 = 0.5 in 0.0 ..= 1.0;
+        /// How long a hull keeps burning after it leaves the lava
+        /// (seconds; the flamethrower's afterburn, `flame_afterburn_dps`).
+        lava_afterburn_seconds: f32 = 1.5 in 0.0 ..= 10.0;
+        /// How fast heat falls off a cell at a time away from the lava:
+        /// each cell out keeps this fraction of the last's.
+        lava_heat_falloff: f32 = 0.55 in 0.05 ..= 0.95 @ Restart;
+        /// How fast the lava's bands run downstream (px/s); the surge of an
+        /// eruption runs them up to twice as fast.
+        lava_flow_speed: f32 = 9.0 in 0.0 ..= 60.0;
+        /// Motes off the lava: sparks a second off each cell, three times
+        /// as many in a surge (the particle layer's, `fx.rs`).
+        lava_mote_rate: f32 = 0.35 in 0.0 ..= 10.0;
+        /// The heat shield pickup: how long it keeps every kind of heat off
+        /// its tank (seconds).
+        heat_shield_seconds: f32 = 10.0 in 0.5 ..= 60.0;
+        /// A lamp post's health: one hit puts it out at the default.
+        lamp_max_health: f32 = 1.0 in 0.1 ..= 500.0;
+        /// How far a lamp's light carries at night (px).
+        lamp_light_px: f32 = 150.0 in 16.0 ..= 600.0;
+        /// Whoever stands this close to a lamp (px) - or on ground at
+        /// least `lava_reveal_heat` hot, where the lava lights them - an
+        /// enemy sees at full `enemy_view_range` however dark the sky:
+        /// light cuts both ways.
+        lamp_reveal_px: f32 = 110.0 in 0.0 ..= 600.0;
+        lava_reveal_heat: f32 = 0.3 in 0.0 ..= 1.0;
+        /// Lanterns each seat may set down in a round, when the round's
+        /// sky is dark or night will fall in it.
+        lamps_per_seat: i32 = 3 in 0 ..= 16;
+        /// How long the dark takes to fall before a map's `nightfall`
+        /// (seconds): the light eases from the map's sky into night's, and
+        /// the rules turn at `nightfall` itself.
+        nightfall_seconds: f32 = 25.0 in 0.0 ..= 300.0;
+    }
+
     group frog {
         /// The frog's health - deliberately much lower than a tank's 100, a
         /// couple of hits end the round, so "protect the frog" is a real

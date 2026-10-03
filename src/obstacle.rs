@@ -69,6 +69,15 @@ pub enum Material {
     Tesla,
     GunTower,
     BioSlush,
+    /// A volcano's cone (docs/volcano.md): every cell of its footprint is
+    /// one of these, permanent like iron - it stops hulls, shots, sight
+    /// and light, and takes no damage. Drawn whole by `volcano.rs`, never
+    /// by `draw_obstacle`.
+    Volcano,
+    /// A lamp post (docs/volcano.md): a one-shot tile that lights the
+    /// ground round it at night. Drawn by `lamp.rs`, never by
+    /// `draw_obstacle`.
+    Lamp,
 }
 
 /// The four wall materials, in walls_sheet.png row order - `spawn_from_map`
@@ -94,6 +103,10 @@ impl Sheet {
 }
 
 impl Material {
+    /// The atlas this material's tiles are drawn from. The drawn materials
+    /// (`is_drawn`: the volcano's cone and the lamp post) have none and
+    /// name the walls sheet only so the answer is total; nothing draws
+    /// them from it.
     pub fn sheet(self) -> Sheet {
         match self {
             Material::Sandbag | Material::Barrel | Material::Fence => Sheet::Props,
@@ -101,6 +114,13 @@ impl Material {
             Material::Tesla | Material::GunTower | Material::BioSlush => Sheet::Towers,
             _ => Sheet::Walls,
         }
+    }
+
+    /// Drawn by code of its own rather than from a sheet: the volcano's
+    /// cone (`volcano::draw_cone`) and the lamp post (`lamp::draw_post`).
+    /// Never a wall, a prop, a tree or a tower.
+    pub fn is_drawn(self) -> bool {
+        matches!(self, Material::Volcano | Material::Lamp)
     }
 
     /// First row in this material's own sheet (see `sheet`) its variants
@@ -118,6 +138,7 @@ impl Material {
             Material::Pine => TREE_ROW_CONIFER,
             // A tower's rows depend on its side as well (`tower::base_row`).
             Material::Tesla | Material::GunTower | Material::BioSlush => 0,
+            Material::Volcano | Material::Lamp => 0,
         }
     }
 
@@ -132,6 +153,7 @@ impl Material {
             Material::Barrel | Material::Fence => 2,
             Material::Tree | Material::Pine => TREE_VARIANTS,
             Material::Tesla | Material::GunTower | Material::BioSlush => 1,
+            Material::Volcano | Material::Lamp => 1,
             _ => 4,
         }
     }
@@ -154,6 +176,9 @@ impl Material {
             Material::Tesla => tuning().tesla_max_health,
             Material::GunTower => tuning().gun_tower_max_health,
             Material::BioSlush => tuning().bio_max_health,
+            // Never spent: `Obstacle::damage` turns every blow away.
+            Material::Volcano => 1.0,
+            Material::Lamp => tuning().lamp_max_health,
         }
     }
 
@@ -177,6 +202,7 @@ impl Material {
             Material::Tree | Material::Pine => 3,
             // Intact, scuffed, damaged, critical; the ruin is a decal.
             Material::Tesla | Material::GunTower | Material::BioSlush => 4,
+            Material::Volcano | Material::Lamp => 1,
         }
     }
 
@@ -204,7 +230,9 @@ impl Material {
                 Sheet::Trees,
                 if charred { RUBBLE_ROW_TREE_CHARRED } else { RUBBLE_ROW_TREE },
             )),
-            Material::Iron | Material::Tesla | Material::GunTower | Material::BioSlush => None,
+            // A lamp post's glass and post are too small to leave a
+            // rubble tile; it goes out in a burst of glass (`fx.rs`).
+            Material::Iron | Material::Tesla | Material::GunTower | Material::BioSlush | Material::Volcano | Material::Lamp => None,
         }
     }
 
@@ -222,7 +250,7 @@ impl Material {
     /// One of the four wall materials - the only ones that autotile into
     /// runs, so the only ones with an edge cap and a `MATERIALS` slot.
     pub fn is_wall(self) -> bool {
-        self.sheet() == Sheet::Walls
+        self.sheet() == Sheet::Walls && !self.is_drawn()
     }
 
     /// A defence tower: it fights (`Game::towers`), burns by its own rule
@@ -246,22 +274,23 @@ impl Material {
     /// Can never be destroyed - the only material that permanently shapes
     /// the battlefield (line of fire, the linter's breach grid).
     pub fn is_permanent(self) -> bool {
-        self == Material::Iron
+        matches!(self, Material::Iron | Material::Volcano)
     }
 
     /// Whether this tile hides what is behind it from the AI's line of
-    /// sight. Sandbags are knee-high and a fence is see-through; everything
-    /// else is a solid block.
+    /// sight. Sandbags are knee-high, a fence is see-through and a lamp
+    /// post is a pole; everything else is a solid block.
     pub fn blocks_sight(self) -> bool {
-        !matches!(self, Material::Sandbag | Material::Fence)
+        !matches!(self, Material::Sandbag | Material::Fence | Material::Lamp)
     }
 
     /// Whether this tile throws a shadow in the weather's light map
-    /// (`weather::Occluders`): the full-height walls and the towers. Glass
-    /// lets light through; props are too low and trees too open to cast a
-    /// hard edge, and a tree's canopy is drawn over the tanks anyway.
+    /// (`weather::Occluders`): the full-height walls, the towers and a
+    /// volcano's cone. Glass lets light through; props are too low and
+    /// trees too open to cast a hard edge, and a tree's canopy is drawn
+    /// over the tanks anyway.
     pub fn blocks_light(self) -> bool {
-        (self.is_wall() && self != Material::Glass) || self.is_tower()
+        (self.is_wall() && self != Material::Glass) || self.is_tower() || self == Material::Volcano
     }
 
     /// Odds a projectile sails over this tile instead of hitting it, rolled
@@ -315,6 +344,12 @@ impl Material {
 pub enum Drum {
     Oil = 0,
     Fuel = 1,
+    /// Not a barrel at all: a volcano's lava bomb landing
+    /// (docs/volcano.md), which goes off through the drums' blast path -
+    /// its own radius and damage (`BlastParams::lava_bomb`), a splash of
+    /// burning lava where a drum would leave its parts. Never a barrel's
+    /// variant and never in `ALL`.
+    Lava = 2,
 }
 
 impl Drum {
@@ -328,6 +363,7 @@ impl Drum {
         match self {
             Drum::Oil => "oil",
             Drum::Fuel => "fuel",
+            Drum::Lava => "lava",
         }
     }
 
@@ -335,7 +371,7 @@ impl Drum {
     /// smoulders, fuel cracks first.
     pub fn fuse_factor(self) -> f32 {
         match self {
-            Drum::Oil => tuning().oil_fuse_factor,
+            Drum::Oil | Drum::Lava => tuning().oil_fuse_factor,
             Drum::Fuel => tuning().fuel_fuse_factor,
         }
     }
@@ -569,14 +605,16 @@ impl Obstacle {
     /// simulation path go through `Game::damage_obstacle`, which layers the
     /// fence and barrel rules on top of this.
     pub fn damage(&mut self, amount: f32) -> bool {
-        if self.destroyed || self.burning || self.fuse.is_some() {
+        // A volcano's cone shrugs every blow off: nothing about it changes,
+        // so it never differs from the fresh map on the wire either.
+        if self.destroyed || self.burning || self.fuse.is_some() || self.material == Material::Volcano {
             return false;
         }
         self.health = (self.health - amount).max(0.0);
         if self.health > 0.0 {
             return false;
         }
-        if self.material == Material::Iron {
+        if self.material.is_permanent() {
             return false;
         }
         if self.flammable {
