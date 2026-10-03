@@ -46,19 +46,19 @@ const SYMBOL_GAP: i32 = 4;
 // `hud::ROW_H` rows). Fixed, so a number changing width never nudges what
 // sits after it; `corner_tests` pins that nothing overlaps.
 const V_HEALTH_SYMBOL: i32 = 0;
-const V_HP: i32 = 24;
+const V_HP: i32 = 28;
 #[cfg_attr(not(test), allow(dead_code))]
 const V_HP_W: i32 = 30;
-const V_HEALTH: i32 = 58;
-const V_HEALTH_W: i32 = 42;
-const V_SHELL: i32 = 106;
-const V_SHELLS: i32 = 130;
+const V_HEALTH: i32 = 62;
+const V_HEALTH_W: i32 = 40;
+const V_SHELL: i32 = 108;
+const V_SHELLS: i32 = 136;
 /// A count: three digits at `HUD_TEXT_SIZE`.
 const V_COUNT_W: i32 = 30;
-const V_SPEED: i32 = 168;
-const V_SHIELD: i32 = 242;
+const V_SPEED: i32 = 172;
+const V_SHIELD: i32 = 244;
 /// A gauge's slot: its symbol, then its bar.
-const GAUGE_SLOT_W: i32 = 68;
+const GAUGE_SLOT_W: i32 = 66;
 const GAUGE_W: i32 = GAUGE_SLOT_W - SYMBOL - SYMBOL_GAP;
 const GAUGE_H: i32 = 8;
 /// The weapon queue's slots on the second row: the pickup icon and the
@@ -72,11 +72,11 @@ const V_WEAPON_ICON: i32 = 28;
 #[cfg_attr(not(test), allow(dead_code))]
 const I_TITLE_W: i32 = 160;
 const LEVEL_WAVE_GAP: i32 = 8;
-const I_ENEMIES: i32 = 164;
-const I_ENEMY_COUNT: i32 = 182;
+const I_ENEMIES: i32 = 166;
+const I_ENEMY_COUNT: i32 = 184;
 /// Two digits of enemies, then the dim `+N` still to come.
-const I_PENDING: i32 = 206;
-const I_FROG: i32 = 236;
+const I_PENDING: i32 = 208;
+const I_FROG: i32 = 238;
 
 /// The tank glyph's footprint: 7 x 7 blocks of 2 px (`draw_tank_glyph`).
 #[cfg_attr(not(test), allow(dead_code))]

@@ -612,7 +612,7 @@ pub const CLUSTER_GAP: f32 = 8.0;
 pub const ROW_GAP: f32 = 4.0;
 /// The least room between the left cluster and the right one.
 pub const SIDE_GAP: f32 = 16.0;
-/// A row of readouts: 32 pt, room for the crates' 20 pt symbols and the
+/// A row of readouts: 32 pt, room for the crates' 24 pt symbols and the
 /// weapon queue's 28 pt icon squares with a margin.
 pub const ROW_H: f32 = 32.0;
 

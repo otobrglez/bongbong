@@ -309,7 +309,7 @@ pub fn crate_flames(pickup: &Pickup, time: f32) -> Vec<crate::pyro::Shape> {
     let at = pickup.position;
     let seed = crate::blast::seed_at(at, 49);
     let lean = crate::pyro::smoke_lean(&t, at, time);
-    crate::pyro::tongues(&mut out, Position::new(at.x, at.y + 6.0), 10.0, t.ground_fire_height_px, 3, seed, time, lean, 1.0);
+    crate::pyro::tongues(&mut out, Position::new(at.x, at.y + 8.0), 12.0, t.ground_fire_height_px, 3, seed, time, lean, 1.0);
     out
 }
 
@@ -327,8 +327,8 @@ pub fn draw_crate(c: &mut impl Canvas, kind: PickupKind, at: Position, col: usiz
     c.blit(Sheet::Crates, crate_src(kind, col), dest, origin, 0.0, tint);
 }
 
-/// The symbol on its own, `size` px square centred on `at` (20 is its
-/// sheet's own scale, 2 px a design pixel).
+/// The symbol on its own, `size` px square centred on `at`
+/// (`PICKUP_GLYPH_CELL` is its sheet's own scale, 2 px a design pixel).
 pub fn draw_glyph(c: &mut impl Canvas, kind: PickupKind, at: Position, size: f32, tint: Color) {
     let dest = Rectangle::new(crate::pyro::snap(at.x - size * 0.5) as f32, crate::pyro::snap(at.y - size * 0.5) as f32, size, size);
     c.blit(Sheet::PickupGlyphs, glyph_src(kind), dest, Vec2::new(0.0, 0.0), 0.0, tint);
