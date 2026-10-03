@@ -265,6 +265,37 @@ keys! {
     EDITOR_STAMP_KEPT = "editor-stamp-kept";
     EDITOR_STAMP_EMPTY = "editor-stamp-empty";
     EDITOR_FILL_TOO_LARGE = "editor-fill-too-large";
+    FROG_HELLO = "frog-hello";
+    FROG_DRIVE = "frog-drive";
+    FROG_DRIVE_TOUCH = "frog-drive-touch";
+    FROG_FLAGS = "frog-flags";
+    FROG_FLAGS_NUDGE = "frog-flags-nudge";
+    FROG_CRATES = "frog-crates";
+    FROG_HEALTH = "frog-health";
+    FROG_CRATES_NUDGE = "frog-crates-nudge";
+    FROG_FIRE = "frog-fire";
+    FROG_FIRE_TOUCH = "frog-fire-touch";
+    FROG_MATERIALS = "frog-materials";
+    FROG_IRON = "frog-iron";
+    FROG_FIRE_NUDGE = "frog-fire-nudge";
+    FROG_FIRE_NUDGE_TOUCH = "frog-fire-nudge-touch";
+    FROG_MINIGUN = "frog-minigun";
+    FROG_WALL = "frog-wall";
+    FROG_PAD = "frog-pad";
+    FROG_OW = "frog-ow";
+    FROG_KIT = "frog-kit";
+    FROG_KIT_NUDGE = "frog-kit-nudge";
+    FROG_HEALED = "frog-healed";
+    FROG_ENEMY = "frog-enemy";
+    FROG_LINE_UP = "frog-line-up";
+    FROG_ENEMY_NUDGE = "frog-enemy-nudge";
+    FROG_ONLY_ME = "frog-only-me";
+    FROG_CHOMP = "frog-chomp";
+    FROG_SHIELD = "frog-shield";
+    FROG_SHOOTS_BACK = "frog-shoots-back";
+    FROG_WAVE_NUDGE = "frog-wave-nudge";
+    FROG_DOWN = "frog-down";
+    FROG_READY = "frog-ready";
 }
 
 /// The one-word title of a mission (the bar, the lobby's stepper).

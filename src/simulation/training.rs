@@ -67,6 +67,9 @@ pub(crate) struct Run {
     respawn: [Option<f32>; MAX_SEATS],
     /// The round clock at which the fallen frog gets up again.
     revive: Option<f32>,
+    /// The seats' shells do not refill on their own: the script starts
+    /// them with a set number, and no seat has opened an ammo crate yet.
+    pub shells_held: bool,
 }
 
 impl Run {
@@ -112,7 +115,8 @@ impl Game {
                 }
             });
         }
-        self.training = Some(Run { beats: script.beat.len(), flags, homes, ..Run::default() });
+        let shells_held = script.start_shells.is_some();
+        self.training = Some(Run { beats: script.beat.len(), flags, homes, shells_held, ..Run::default() });
     }
 
     /// Take every training door away at once - what the linter checks a
@@ -162,6 +166,7 @@ impl Game {
                 && slot < seats
             {
                 run.collected.push(kind);
+                run.shells_held &= kind != PickupKind::Ammo;
             }
         }
         self.take_flags(&mut run, f);
@@ -175,6 +180,7 @@ impl Game {
                 self.begin_beat(&mut run, beat, f);
             }
             self.roll_in_due(&mut run, f);
+            self.walk_frog(beat);
             if self.beat_done(&run, beat) {
                 self.open_doors(run.beat + 1, f);
                 f.events.push(Event::BeatDone { beat: run.beat + 1 });
@@ -363,6 +369,46 @@ impl Game {
         let row = TankKind::Titan.row();
         let shell = Shell::at(id, from, from, velocity, rotation, 0, row, Owner::Enemy(slot));
         self.spawn_shot(shell, 0);
+    }
+
+    /// Whether the players' frog is on its way to the running beat's cell,
+    /// more than a cell and a half from it.
+    pub(super) fn frog_walking(&self) -> bool {
+        let (Some(run), Some(script), Some(frog)) = (&self.training, &self.map.training, self.frog) else { return false };
+        let Some((c, r)) = script.beat(run.beat).and_then(|b| b.frog) else { return false };
+        with_frog(&self.world, frog, |fr| fr.position.distance_to(cell_to_world(c, r)) > OBSTACLE_GRID_SIZE * 1.5)
+    }
+
+    /// The frog hops on toward the running beat's cell, a hop at a time
+    /// along the nav grid, so it goes through the doors its beats opened
+    /// and waits for the player in the next pen. Between hops it keeps its
+    /// own reflexes: it still bites and still shies from a tank.
+    fn walk_frog(&mut self, beat: &Beat) {
+        let (Some(frog), Some((c, r))) = (self.frog, beat.frog) else { return };
+        let target = cell_to_world(c, r);
+        let (pos, ready, reach) = with_frog(&self.world, frog, |fr| (fr.position, fr.can_hop() && fr.hop_timer <= 0.0, fr.hop_distance()));
+        if !ready || pos.distance_to(target) < 2.0 {
+            return;
+        }
+        // No route while a door still stands in the way: the frog waits
+        // rather than hop through it. Within a cell and a half of where it
+        // is going - the grid has no step left to give inside the goal's
+        // cell - the last hop is straight there.
+        let next = match self.nav.layer().next_step(pos, target) {
+            Some(next) => next,
+            None if pos.distance_to(target) <= OBSTACLE_GRID_SIZE * 1.5 => target,
+            None => return,
+        };
+        let dist = pos.distance_to(next);
+        if dist < 0.5 {
+            return;
+        }
+        let step = dist.min(reach * tuning().training_frog_stride);
+        let to = Position::new(pos.x + (next.x - pos.x) * step / dist, pos.y + (next.y - pos.y) * step / dist);
+        with_frog_mut(&self.world, frog, |fr| {
+            fr.start_hop(to);
+            fr.hop_cooldown = 0.0;
+        });
     }
 
     /// Roll in every tank of the beat whose time has come, through a free
@@ -587,6 +633,43 @@ mod tests {
         game.debug_kill(slot).expect("the scout can be killed");
         step(&mut game, 2);
         assert_eq!(game.outcome(), Outcome::Won);
+    }
+
+    #[test]
+    fn the_frog_walks_to_its_next_beats_cell_through_the_door_that_opened() {
+        let script = "\n[[training.beat]]\nfrog = [12, 4]\ndone = { flags = 1 }\n\n[[training.beat]]\nfrog = [5, 4]\ndone = { flags = 2 }\n";
+        let mut game = course(script);
+        let frog = game.frog.expect("a frog");
+        step(&mut game, 60);
+        let still = with_frog(&game.world, frog, |fr| fr.position);
+        assert!(still.distance_to(cell_to_world(12, 4)) < 1.0, "it stays on its cell while the door is shut, at {still:?}");
+        put_seat(&mut game, 6, 4);
+        step(&mut game, 2);
+        // Out of its way, so it does not shy from the tank.
+        put_seat(&mut game, 14, 7);
+        step(&mut game, 600);
+        let at = with_frog(&game.world, frog, |fr| fr.position);
+        assert!(at.distance_to(cell_to_world(5, 4)) < 4.0, "the frog hopped to beat 2's cell, at {at:?}");
+    }
+
+    #[test]
+    fn a_script_that_starts_with_no_shells_holds_the_refill_until_an_ammo_crate() {
+        let script = "\nstart_shells = 0\n\n[[training.beat]]\ndone = { flags = 1 }\n";
+        let mut map_script = String::from("\n[training]");
+        map_script.push_str(script);
+        let mut game = course(&map_script);
+        let seat = game.player().expect("seat 0");
+        step(&mut game, 600);
+        assert_eq!(with_tank(&game.world, seat, |t| t.shells_ammo), 0, "ten seconds and not a shell");
+        let at = with_tank(&game.world, seat, |t| t.position);
+        spawn_pickup_at(&mut game.world, at, PickupKind::Ammo, None);
+        step(&mut game, 2);
+        let after_crate = with_tank(&game.world, seat, |t| t.shells_ammo);
+        assert!(after_crate > 0, "the crate's shells");
+        if after_crate < tuning().max_shells {
+            step(&mut game, (tuning().shell_recharge_seconds * 60.0) as usize + 2);
+            assert!(with_tank(&game.world, seat, |t| t.shells_ammo) > after_crate, "and the refill runs again");
+        }
     }
 
     #[test]

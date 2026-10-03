@@ -1949,9 +1949,14 @@ impl Game {
         // to leave and come back (docs/teleporting.md).
         let portals: &[Position] = if self.portals.len() >= 2 { &self.portals } else { &[] };
         let trigger_radius = tuning().portal_trigger_radius;
+        // A training round that starts its seats with no shells holds
+        // their refill until they have opened an ammo crate (`training.rs`).
+        let shells_held = self.training.as_ref().is_some_and(|run| run.shells_held);
         for tank in self.world.query::<&mut Tank>().iter() {
             tank.hit_by_seat = None;
-            tank.tick_recharge(dt);
+            if !(shells_held && tank.owner().is_player()) {
+                tank.tick_recharge(dt);
+            }
             tank.fire_cooldown = (tank.fire_cooldown - dt).max(0.0);
             tank.ram_cooldown = (tank.ram_cooldown - dt).max(0.0);
             if tank.portal_cooldown > 0.0 && !portals.iter().any(|p| p.distance_to(tank.position) <= trigger_radius) {
@@ -2503,7 +2508,10 @@ impl Game {
             with_frog_mut(&self.world, frog_entity, |fr| fr.start_attack(target_pos));
         }
 
+        // A training frog on its way to its next beat's cell keeps walking
+        // rather than shy from the tank it is leading (`training.rs`).
         if can_hop
+            && !(Some(frog_entity) == self.frog && self.frog_walking())
             && let Some((_, tank_pos, dist, _)) = nearest_any
             && dist <= avoid_range
         {

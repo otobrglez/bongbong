@@ -1,7 +1,8 @@
 # boot-camp - the training stage, level 0 (docs/training-stage.md)
 # Saved from the builder drops these comments; put them back after a save.
 #
-# Four pens along one east-west road (row 6), the frog the only guide.
+# Four pens along one east-west road (row 6), the frog the only guide: it
+# starts in pen 1 and hops on to each beat's cell as the doors open.
 # Pen 1 (cols 0-9): drive over the three flags; door 1 opens. Pen 2 (cols
 # 11-18): no shells until the ammo crate; door 2 opens. Pen 3 (cols
 # 20-27): a firing range of wood and brick, and a brick wall across the
@@ -55,6 +56,7 @@ cells."19,3" = { kind = "wall", material = "iron" }
 cells."28,3" = { kind = "wall", material = "iron" }
 cells."41,3" = { kind = "sandbag" }
 cells."42,3" = { kind = "sandbag" }
+cells."5,4" = { kind = "frog" }
 cells."10,4" = { kind = "wall", material = "iron" }
 cells."19,4" = { kind = "wall", material = "iron" }
 cells."21,4" = { kind = "wall", material = "brick" }
@@ -99,7 +101,7 @@ cells."30,6" = { kind = "road" }
 cells."31,6" = { kind = "road" }
 cells."32,6" = { kind = "road" }
 cells."33,6" = { kind = "road" }
-cells."34,6" = { kind = "frog" }
+cells."34,6" = { kind = "road" }
 cells."35,6" = { kind = "road" }
 cells."36,6" = { kind = "road" }
 cells."37,6" = { kind = "road" }
@@ -191,6 +193,7 @@ done = { past_col = 28 }
 id = "frog"
 frog = [34, 6]
 say = ["frog-pad"]
+nudge = "frog-kit-nudge"
 start = { shoot_frog = "east", drop = [{ kind = "frog_health", at = [31, 10] }] }
 done = { collect = "frog_health" }
 

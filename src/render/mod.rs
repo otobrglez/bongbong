@@ -17,6 +17,7 @@
 
 pub mod batch;
 pub mod blast;
+pub mod bubble;
 pub mod bullet;
 pub mod canvas;
 pub mod decal;

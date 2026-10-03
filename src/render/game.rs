@@ -173,6 +173,9 @@ pub struct Effects<'a> {
     /// field's edge and the marks in the world, composed by `app.rs` while
     /// the camera shows less than the whole field; `None` draws nothing.
     pub indicators: Option<&'a crate::indicators::Picture>,
+    /// The frog's speech bubble in a training round (`bubble.rs`), laid
+    /// out by `app.rs` in the bitmap's pixels; `None` draws none.
+    pub bubble: Option<&'a crate::bubble::Bubble>,
     /// The minimap under the right corner cluster (`minimap.rs`), drawn
     /// where the corners hold its slot (`PlayChrome::minimap`); `None`
     /// draws none.
@@ -479,6 +482,7 @@ impl Game {
         let touch = effects.touch;
         let fx_live = effects.fx.live();
         let indicators = effects.indicators;
+        let bubble = effects.bubble;
         let minimap = effects.minimap.take();
         let corners = CornerShape::of(chrome, self.players.count()).map(|shape| corners(ui, &shape));
         let frame = ChromeFrame { ui, fade, corners: corners.as_ref(), units: crate::render::view::window_camera_units(rl) };
@@ -529,7 +533,7 @@ impl Game {
             frame.units,
         );
         let chrome_stage = crate::frame_stages::stage("chrome");
-        self.draw_chrome(&mut d, &text, &hud, chrome, &frame, layout, camera, indicators, minimap.as_ref(), textures, touch, fx_live, base);
+        self.draw_chrome(&mut d, &text, &hud, chrome, &frame, layout, camera, indicators, bubble, minimap.as_ref(), textures, touch, fx_live, base);
         drop(chrome_stage);
         let _swap = crate::frame_stages::stage("swap");
         drop(d);
@@ -1022,6 +1026,7 @@ impl Game {
         layout: &Layout,
         camera: &Camera,
         indicators: Option<&crate::indicators::Picture>,
+        bubble: Option<&crate::bubble::Bubble>,
         minimap: Option<&crate::render::minimap::MinimapLayer>,
         textures: &Textures,
         touch: Option<(&crate::touch::TouchScheme, bool)>,
@@ -1045,6 +1050,11 @@ impl Game {
                 zoom: on_field.zoom * base.zoom,
             };
             crate::render::indicators::draw_indicators(d, picture, world, Some(base));
+        }
+        // The frog's bubble (bubble.rs), over the world and the arrows,
+        // under the HUD.
+        if let Some(bubble) = bubble {
+            crate::render::bubble::draw_bubble(d, bubble, base);
         }
 
         // The lines under the left cluster.

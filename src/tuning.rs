@@ -2897,6 +2897,24 @@ tunables! {
         /// How far past a flag's cell a hull still takes it, px: the
         /// hull's box grown by this much touches the flag's square.
         training_flag_reach_px: f32 = 6.0 in 0.0 ..= 32.0;
+        /// How far each of the frog's hops takes it while it walks to its
+        /// next beat's cell, as a share of its usual hop
+        /// (`frog_hop_distance_factor`); it hops again as soon as it
+        /// lands.
+        training_frog_stride: f32 = 1.0 in 0.2 ..= 3.0;
+        /// How long the frog's line stays up at the least (seconds), on
+        /// top of `training_line_seconds_per_char` of its length
+        /// (`bubble::FrogVoice`).
+        training_line_seconds: f32 = 1.4 in 0.2 ..= 10.0;
+        /// How much longer a line stays up for each of its letters
+        /// (seconds), so a long line is up as long as it takes to read.
+        training_line_seconds_per_char: f32 = 0.055 in 0.0 ..= 0.3;
+        /// The pace the words of a line come into the bubble (words a
+        /// second; the first is there at once).
+        training_line_words_per_second: f32 = 9.0 in 1.0 ..= 60.0;
+        /// Seconds with nothing said before the frog says the running
+        /// beat's nudge again.
+        training_nudge_seconds: f32 = 14.0 in 2.0 ..= 120.0;
     }
 
     group weather {
