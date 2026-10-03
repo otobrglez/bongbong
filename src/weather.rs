@@ -120,7 +120,7 @@ impl Look {
             Weather::Dusk => Look { ambient: [0.8, 0.62, 0.54], lights: 0.6, sun: 1.0, vignette: 0.2, ..Look::CLEAR },
             Weather::Rain => Look { ambient: [0.76, 0.8, 0.9], lights: 0.4, vignette: 0.15, rain: 0.7, ..Look::CLEAR },
             Weather::Storm => Look {
-                ambient: tint(STORM_TINT, (t.night_ambient * 2.1).min(1.0)),
+                ambient: tint(STORM_TINT, (t.night_ambient * 1.45).min(1.0)),
                 lights: 1.0,
                 vignette: 0.35,
                 rain: 1.0,
@@ -160,6 +160,25 @@ impl Look {
         (lit || ground || sky).then_some(Plan { lit, ground, sky })
     }
 
+    /// This look eased `k` (0..1) of the way toward `to`, every amount in
+    /// between: how dusk falls into night (`Game::look`).
+    pub fn toward(&self, to: &Look, k: f32) -> Look {
+        let k = k.clamp(0.0, 1.0);
+        let mix = |a: f32, b: f32| a + (b - a) * k;
+        Look {
+            ambient: [mix(self.ambient[0], to.ambient[0]), mix(self.ambient[1], to.ambient[1]), mix(self.ambient[2], to.ambient[2])],
+            lights: mix(self.lights, to.lights),
+            sun: mix(self.sun, to.sun),
+            vignette: mix(self.vignette, to.vignette),
+            rain: mix(self.rain, to.rain),
+            lightning: mix(self.lightning, to.lightning),
+            fog: mix(self.fog, to.fog),
+            sand: mix(self.sand, to.sand),
+            snow: mix(self.snow, to.snow),
+            haze: mix(self.haze, to.haze),
+        }
+    }
+
     /// How dark the ambient is, 0 in daylight to 1 in pitch black: what the
     /// light pass desaturates the unlit field by.
     pub fn darkness(&self) -> f32 {
@@ -184,6 +203,19 @@ impl Game {
     /// (`in_force`): never `Random`.
     pub fn weather(&self) -> Weather {
         self.weather
+    }
+
+    /// The look the round is drawn under now: its sky's, eased toward
+    /// night's while night falls on a map with `nightfall`
+    /// (`Game::nightfall_mix`) - the rules turn at `nightfall` itself, the
+    /// light over the `nightfall_seconds` before it.
+    pub fn look(&self, t: &Tuning) -> Look {
+        let look = Look::of(self.weather, t);
+        let k = self.nightfall_mix();
+        if k <= 0.0 || self.night_fallen {
+            return look;
+        }
+        look.toward(&Look::of(Weather::Night, t), k)
     }
 }
 
@@ -332,6 +364,37 @@ impl Game {
     pub fn enemy_sight(&self) -> f32 {
         let t = crate::tuning::tuning();
         t.enemy_view_range * sight_factor(self.weather, &t)
+    }
+
+    /// How far an enemy sees a tank standing at `pos` (px): `enemy_sight`,
+    /// except that under a sky that shortens it a tank in the light is
+    /// seen at the full `enemy_view_range` - within `lamp_reveal_px` of a
+    /// lamp post still standing or a lantern set down, or on ground the
+    /// lava makes at least `lava_reveal_heat` hot (docs/volcano.md). Light
+    /// cuts both ways. Under a clear sky, or on a map with nothing that
+    /// shines, it is `enemy_sight` exactly.
+    pub fn sight_on(&self, pos: Position) -> f32 {
+        let dark = self.enemy_sight();
+        let t = crate::tuning::tuning();
+        if dark >= t.enemy_view_range || !self.is_lit(pos, &t) {
+            return dark;
+        }
+        t.enemy_view_range
+    }
+
+    /// Whether `pos` stands in a lamp's, a lantern's or the lava's light
+    /// (`sight_on`).
+    pub fn is_lit(&self, pos: Position, t: &crate::tuning::Tuning) -> bool {
+        let reach = t.lamp_reveal_px;
+        if reach > 0.0 {
+            if self.lanterns.iter().any(|l| l.position.distance_to(pos) <= reach) {
+                return true;
+            }
+            if self.lamp_posts().iter().any(|p| p.distance_to(pos) <= reach) {
+                return true;
+            }
+        }
+        !self.lava.is_empty() && self.lava.heat_at(pos) >= t.lava_reveal_heat.max(1e-3)
     }
 }
 
@@ -494,21 +557,38 @@ pub struct Light {
     /// otherwise): off for the small, quick lights, which would pay a
     /// raycast for a shadow nobody could see.
     pub shadows: bool,
+    /// Whether it stands still and keeps its shape from frame to frame - a
+    /// lamp post, a lantern, a portal - so a window may draw its shadowed
+    /// pool once and keep the picture for as long as its reach holds.
+    pub still: bool,
 }
 
 impl Light {
     pub fn point(at: Position, radius: f32, color: Rgb) -> Light {
-        Light { at, radius, color, shape: Shape::Point, reach: Vec::new(), shadows: true }
+        Light { at, radius, color, shape: Shape::Point, reach: Vec::new(), shadows: true, still: false }
     }
 
     pub fn cone(at: Position, dir: Vec2, half_angle: f32, radius: f32, color: Rgb) -> Light {
-        Light { at, radius, color, shape: Shape::Cone { dir, half_angle }, reach: Vec::new(), shadows: true }
+        Light { at, radius, color, shape: Shape::Cone { dir, half_angle }, reach: Vec::new(), shadows: true, still: false }
     }
 
     /// The same light, walls or no walls.
     pub fn unshadowed(mut self) -> Light {
         self.shadows = false;
         self
+    }
+
+    /// The same light, standing still (`still`).
+    pub fn still(mut self) -> Light {
+        self.still = true;
+        self
+    }
+
+    /// A round pool with nothing in its way: a point light whose every
+    /// ray reaches its radius, which a window draws as one soft disc
+    /// rather than a fan of rays.
+    pub fn unblocked(&self) -> bool {
+        matches!(self.shape, Shape::Point) && self.reach.iter().all(|&r| r >= self.radius)
     }
 
     /// Whether any of its light can fall inside `rect`: its source is no
@@ -734,7 +814,7 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
     if game.portals_active() {
         for (i, &at) in game.portals.iter().enumerate() {
             let pulse = 0.85 + 0.15 * (time * 2.2 + i as f32 * 1.7).sin();
-            out.push(Light::point(at, 112.0, scale([0.45, 0.6, 1.25], k * 0.9 * pulse)));
+            out.push(Light::point(at, 112.0, scale([0.45, 0.6, 1.25], k * 0.9 * pulse)).still());
         }
     }
 
@@ -756,6 +836,33 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
     }
     for drum in &game.flying_drums {
         out.push(fire(drum.ground_pos(), 56.0, 0.8).unshadowed());
+    }
+
+    // The volcano's lights (docs/volcano.md): the lava, every other cell,
+    // brighter in the surge; each crater by its heat, flaring as it
+    // erupts; the bombs in the air; the lamp posts and the lanterns the
+    // seats set down, warm and steady, which the walls cast shadows from.
+    if !game.lava.is_empty() || !game.volcanoes.is_empty() {
+        let surge = game.lava_look().surge;
+        for (col, row) in game.lava.cells().filter(|(c, r)| (c + r) % 2 == 0) {
+            let at = crate::map::cell_to_world(col, row);
+            out.push(Light::point(at, 76.0, scale([1.0, 0.45, 0.15], k * t.fire_light_strength * 0.75 * (1.0 + 0.5 * surge) * flicker(time, at))).unshadowed());
+        }
+        for v in &game.volcanoes {
+            let phase = v.phase(game.time, t);
+            let flare = if phase.stage == crate::volcano::Stage::Erupt { (1.0 - phase.age / 0.6).max(0.0) } else { 0.0 };
+            out.push(Light::point(v.centre(), 110.0 + 90.0 * phase.heat + 160.0 * flare, scale([1.0, 0.5, 0.2], k * t.fire_light_strength * (0.6 + 0.9 * phase.heat + flare))).unshadowed());
+        }
+        for bomb in &game.lava_bombs {
+            out.push(fire(bomb.ground_pos(t), 60.0, 0.9).unshadowed());
+        }
+    }
+    let lamp = scale([1.0, 0.82, 0.52], k * 1.15);
+    for at in game.lamp_posts() {
+        out.push(Light::point(at, t.lamp_light_px, scale(lamp, flicker(time, at))).still());
+    }
+    for lantern in &game.lanterns {
+        out.push(Light::point(lantern.position, t.lamp_light_px * 0.8, scale(lamp, flicker(time, lantern.position))).still());
     }
 
     // The towers: a tesla's coil as it charges and every bolt along its

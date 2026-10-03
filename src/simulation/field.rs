@@ -348,7 +348,8 @@ impl Game {
     /// The field map's alert pass, run by `enemy_phase` in place of the
     /// arena's shared alert: every enemy's own alert ages by the frame;
     /// an enemy that sees a seat - one of `seen`, the live unconcealed
-    /// seats on the field, within `view_range` - takes a fresh one on the
+    /// seats on the field, each within the range it is seen at
+    /// (`Game::sight_on`) - takes a fresh one on the
     /// nearest; then each group of enemies chained within
     /// `enemy_alert_chain_px` of one another shares the best alert any of
     /// them holds (the freshest, then the nearest sighting, then the
@@ -356,7 +357,7 @@ impl Game {
     /// further. A wreck neither sees nor passes anything on. A called
     /// wave tank's call ends here too, the first frame it is within
     /// `view_range` of one of the `live` seats or has been hit.
-    pub(super) fn field_alerts(&mut self, seen: &[Position], live: &[Position], view_range: f32, f: &mut Frame) {
+    pub(super) fn field_alerts(&mut self, seen: &[(Position, f32)], live: &[Position], view_range: f32, f: &mut Frame) {
         let (hold, chain) = {
             let t = tuning();
             (t.enemy_alert_hold_seconds, t.enemy_alert_chain_px)
@@ -387,7 +388,7 @@ impl Game {
             }
             if !wreck {
                 // The nearest seat it sees, ties to the lower seat.
-                let nearest = seen.iter().map(|&s| (position.distance_to(s), s)).filter(|&(d, _)| d <= view_range).fold(
+                let nearest = seen.iter().map(|&(s, sight)| (position.distance_to(s), s, sight)).filter(|&(d, _, sight)| d <= sight).map(|(d, s, _)| (d, s)).fold(
                     None,
                     |best: Option<(f32, Position)>, (d, s)| if best.is_some_and(|(bd, _)| bd <= d) { best } else { Some((d, s)) },
                 );

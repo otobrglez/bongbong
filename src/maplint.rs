@@ -1375,6 +1375,7 @@ mod map_lint_tests {
         "maps/towers.toml",
         "maps/longwater.toml",
         "maps/lotus-lagoon.toml",
+        "maps/vulkan.toml",
         "maps/hedge-maze.toml",
         "maps/oasis-bazaar.toml",
         "maps/castle-moat.toml",

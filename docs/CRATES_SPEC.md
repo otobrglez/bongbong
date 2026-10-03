@@ -11,8 +11,8 @@ the drawing, the shows a crate puts on and the breakable crates behind
 
 | File | Size | Grid | Drawn at |
 |---|---|---|---|
-| `static/crates_sheet.png` | 280 × 440 | 7 cols × 11 rows of 40 px | 1:1, centred on the pickup's 32 px cell (`CRATE_CELL`) |
-| `static/pickup_glyphs.png` | 24 × 264 | 1 col × 11 rows of 24 px | 1:1 on the field; 24 pt in the HUD and the builder's bar |
+| `static/crates_sheet.png` | 280 × 480 | 7 cols × 12 rows of 40 px | 1:1, centred on the pickup's 32 px cell (`CRATE_CELL`) |
+| `static/pickup_glyphs.png` | 24 × 288 | 1 col × 12 rows of 24 px | 1:1 on the field; 24 pt in the HUD and the builder's bar |
 
 Both are written by `tools/spritegen/gen_crates.py` (raw PNG bytes, no
 Pillow, deterministic - every choice is a position hash):
@@ -24,7 +24,8 @@ just check-sheets
 
 Never edit them by hand. The rows are `PickupKind` in declaration order
 (`PickupKind::row`, the generator's `KINDS`): health, ammo, laser, minigun,
-plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack.
+plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack,
+heat_shield.
 
 ### Columns of `crates_sheet.png`
 
@@ -77,6 +78,7 @@ plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack.
 | flamethrower | a flame | `#FF8A2B` |
 | frog_health | a frog from above | `#7EDB5A` |
 | tower_pack | a spanner | `#8FB0FF` |
+| heat_shield | a shield, molten red over black basalt (docs/volcano.md) | `#F0461E` |
 
 The symbol sheet is each symbol on its own, lit along its top, shaded along
 its bottom and outlined: what rises out of an opened crate, what a broken

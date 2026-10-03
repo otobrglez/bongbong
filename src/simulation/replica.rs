@@ -58,6 +58,8 @@ pub struct DrawableTank {
     /// The hit window is running.
     pub hit: bool,
     pub flame: bool,
+    /// A heat shield is on.
+    pub heat_shield: bool,
     pub weapon: ActiveWeapon,
     /// Rounds left for `weapon`, saturated at 255.
     pub ammo: u8,
@@ -166,8 +168,12 @@ pub struct DrawableState {
     /// Every pickup on the field, by cell.
     pub pickups: Vec<DrawablePickup>,
     pub tiles: Vec<DrawableTile>,
-    /// Every burning ground cell with its time left in tenths.
-    pub fires: Vec<((i32, i32), u8)>,
+    /// Every burning ground cell with its time left in tenths, and
+    /// whether it is a splash of lava.
+    pub fires: Vec<((i32, i32), u8, bool)>,
+    /// Every lantern on the ground: its id, where it stands in quarter
+    /// pixels and its seat.
+    pub lamps: Vec<(u16, i32, i32, u8)>,
     /// The wave (0 under the band plan), live enemies, tanks still to
     /// roll in, the intro banner's and the end screen's time left in
     /// tenths, and the outcome.
@@ -342,6 +348,7 @@ impl Game {
                 burning: t.burn_timer > 0.0,
                 hit: t.hit_flash_timer > 0.0,
                 flame: t.flame_held,
+                heat_shield: t.heat_shield_timer > 0.0,
                 weapon: t.active_weapon(),
                 ammo: t.active_ammo(),
             })
@@ -456,8 +463,11 @@ impl Game {
             .collect();
         tiles.sort_by_key(|t| (t.cell.1, t.cell.0));
 
-        let mut fires: Vec<((i32, i32), u8)> = self.fires.iter().map(|f| (f.cell, tenths(f.left))).collect();
+        let mut fires: Vec<((i32, i32), u8, bool)> = self.fires.iter().map(|f| (f.cell, tenths(f.left), f.lava)).collect();
         fires.sort();
+        let mut lamps: Vec<(u16, i32, i32, u8)> =
+            self.lanterns.iter().map(|l| (l.id, quarter_px(l.position.x), quarter_px(l.position.y), l.seat)).collect();
+        lamps.sort();
 
         let wave = self.wave_status();
         DrawableState {
@@ -468,6 +478,7 @@ impl Game {
             pickups,
             tiles,
             fires,
+            lamps,
             wave: wave.map_or(0, |w| w.index),
             alive: wave.map_or(0, |w| w.alive),
             pending: wave.map_or(0, |w| w.pending),

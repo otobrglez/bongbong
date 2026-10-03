@@ -463,11 +463,11 @@ impl Fx {
         }
         let n = self.count(tuning().tile_burst_particles);
         match material {
-            Material::Brick | Material::Iron => {
+            Material::Brick | Material::Iron | Material::Volcano => {
                 self.burst(at, ParticleKind::Chip, n, 90.0, &[STONE_LT, STONE_MD, STONE_DK]);
                 self.burst(at, ParticleKind::Dust, self.count(6), 40.0, &[DUST_T]);
             }
-            Material::Glass => {
+            Material::Glass | Material::Lamp => {
                 // Glass throws further, lighter and brighter than masonry.
                 self.burst(at, ParticleKind::Chip, self.count(tuning().tile_burst_particles + 6), 150.0, &[GLASS_L, GLASS_M, WHITE_T]);
                 self.burst(at, ParticleKind::Spark, self.count(4), 120.0, &[WHITE_T]);
@@ -549,6 +549,11 @@ impl Fx {
                 self.burst(at, ParticleKind::Spark, self.count((18.0 * scale) as i32), 210.0, &[FIRE_T, EMBER_T]);
                 self.burst(at, ParticleKind::Smoke, self.count((7.0 * scale) as i32), 35.0, &[SOOT_T]);
             }
+            // A lava bomb: a spray of molten drops and grey ash.
+            Drum::Lava => {
+                self.burst(at, ParticleKind::Ember, self.count((16.0 * scale) as i32), 150.0, &[FIRE_T, EMBER_T]);
+                self.burst(at, ParticleKind::Smoke, self.count((6.0 * scale) as i32), 30.0, &[SMOKE_T]);
+            }
             // Fuel: whiter, faster, and hardly any smoke - it burns clean.
             Drum::Fuel => {
                 self.burst(at, ParticleKind::Spark, self.count((22.0 * scale) as i32), 260.0, &[WHITE_T, FIRE_T]);
@@ -623,6 +628,21 @@ impl Fx {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(14), 140.0, &[PORTAL_T, PORTAL_LT_T, WHITE_T]);
                         self.burst(Position::new(to_x, to_y), ParticleKind::Spark, self.count(10), 90.0, &[PORTAL_LT_T, WHITE_T]);
                         self.burst(Position::new(to_x, to_y), ParticleKind::Ember, self.count(6), 40.0, &[PORTAL_T]);
+                    }
+                    // A lava bomb thrown from the crater: a spit of molten
+                    // drops and a puff of ash at the rim (docs/volcano.md).
+                    Event::LavaBombLaunched { x, y, .. } => {
+                        self.burst(Position::new(x, y), ParticleKind::Ember, self.count(6), 70.0, &[FIRE_T, EMBER_T]);
+                        self.burst(Position::new(x, y), ParticleKind::Smoke, self.count(2), 18.0, &[SOOT_T]);
+                    }
+                    // A lantern set down catches with a few sparks; a
+                    // broken one goes out in a spray of glass.
+                    Event::LanternSet { x, y, .. } => {
+                        self.burst(Position::new(x, y), ParticleKind::Spark, self.count(4), 30.0, &[FIRE_T, WHITE_T]);
+                    }
+                    Event::LanternBroken { x, y } => {
+                        self.burst(Position::new(x, y), ParticleKind::Chip, self.count(8), 110.0, &[GLASS_L, GLASS_M, WHITE_T]);
+                        self.burst(Position::new(x, y), ParticleKind::Spark, self.count(3), 60.0, &[FIRE_T]);
                     }
                     // Something the flamethrower lit or collapsed.
                     Event::Ignited { x, y, .. } => {
@@ -863,6 +883,29 @@ impl Fx {
             }
             if self.due(key ^ 0x2b7e, smoke_rate * dying * tuning().fx_density, dt) {
                 self.burst(pos, ParticleKind::Smoke, 1, 12.0, &[SOOT_T]);
+            }
+        }
+        // Lava throws motes: single sparks off its surface that rise and
+        // cool down the fire ramp, more in the surge; an erupting crater
+        // throws a stream of them (docs/volcano.md).
+        if !game.lava().is_empty() || !game.volcanoes().is_empty() {
+            let t = tuning();
+            let surge = game.lava_look().surge;
+            let rate = t.lava_mote_rate * (1.0 + 2.0 * surge) * t.fx_density;
+            if rate > 0.0 {
+                for (col, row) in game.lava().cells() {
+                    let pos = crate::map::cell_to_world(col, row);
+                    if self.due(crate::blast::seed_at(pos, 12), rate, dt) {
+                        self.burst(pos, ParticleKind::Ember, 1, 18.0, &[EMBER_T, FIRE_T]);
+                    }
+                }
+            }
+            for v in game.volcanoes() {
+                let phase = v.phase(game.time, &t);
+                let key = crate::blast::seed_at(v.centre(), 13);
+                if self.due(key, t.lava_mote_rate * 8.0 * phase.heat * t.fx_density, dt) {
+                    self.burst(v.centre(), ParticleKind::Ember, 1, 30.0 + 60.0 * phase.heat, &[EMBER_T, FIRE_T, WHITE_T]);
+                }
             }
         }
         // Towers: a damaged one leaks smoke (and sparks, at its last

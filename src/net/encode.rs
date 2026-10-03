@@ -17,7 +17,7 @@ use crate::net::MAX_SEATS;
 use crate::net::PROTOCOL_VERSION;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    BonusPickup, CrateState, FireState, FrogState, MissileState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
+    BonusPickup, CrateState, FireState, FrogState, LampState, MissileState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
 };
 use crate::bullet::Bullet;
 use crate::frog::Frog;
@@ -91,7 +91,12 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
         pickups: 0,
         bonus_pickups: Vec::new(),
         tiles: tiles(game, cols),
-        fires: game.fires.iter().map(|f| FireState { cell: cell_index(cols, f.cell), left: quantise_seconds(f.left) }).collect(),
+        fires: game.fires.iter().map(|f| FireState { cell: cell_index(cols, f.cell), left: quantise_seconds(f.left), lava: f.lava }).collect(),
+        lamps: game
+            .lanterns
+            .iter()
+            .map(|l| LampState { id: l.id, x: quantise_pos(l.position.x), y: quantise_pos(l.position.y), seat: l.seat })
+            .collect(),
         crates: crates(game, cols),
         round: round(game),
         events: wire_events_acked(game.events(), &acked),
@@ -165,6 +170,7 @@ fn tanks(game: &Game) -> Vec<TankState> {
                 (t.burn_timer > 0.0, tank_flags::BURNING),
                 (t.hit_flash_timer > 0.0, tank_flags::HIT),
                 (t.flame_held, tank_flags::FLAME),
+                (t.heat_shield_timer > 0.0, tank_flags::HEAT_SHIELD),
             ] {
                 if on {
                     flags |= bit;

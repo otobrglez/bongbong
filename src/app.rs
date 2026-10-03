@@ -63,12 +63,19 @@ fn gather_intents(rl: &RaylibHandle, players: PlayerCount) -> (Intent, Intent) {
         }
     };
     let arrows = dir(KeyboardKey::KEY_UP, KeyboardKey::KEY_DOWN, KeyboardKey::KEY_LEFT, KeyboardKey::KEY_RIGHT);
-    let player1 = Intent { move_dir: arrows, fire: rl.is_key_down(KeyboardKey::KEY_SPACE), ..Intent::default() };
+    // The lamp key sets a lantern down (docs/volcano.md): Enter beside the
+    // arrows, E beside WASD.
+    let player1 = Intent {
+        move_dir: arrows,
+        fire: rl.is_key_down(KeyboardKey::KEY_SPACE),
+        lamp: rl.is_key_down(KeyboardKey::KEY_ENTER) || rl.is_key_down(KeyboardKey::KEY_KP_ENTER),
+        ..Intent::default()
+    };
     if players.count() < 2 {
         return (player1, Intent::default());
     }
     let wasd = dir(KeyboardKey::KEY_W, KeyboardKey::KEY_S, KeyboardKey::KEY_A, KeyboardKey::KEY_D);
-    (player1, Intent { move_dir: wasd, fire: left_shift_down(rl), ..Intent::default() })
+    (player1, Intent { move_dir: wasd, fire: left_shift_down(rl), lamp: rl.is_key_down(KeyboardKey::KEY_E), ..Intent::default() })
 }
 
 /// Whether the left Shift key - player 2's fire key - is held. Native reads
@@ -1264,6 +1271,12 @@ pub fn run(args: Args) {
             rl.toggle_borderless_windowed();
         }
     }
+    // ES 2's draw batch is a quarter of the desktop's; give it the
+    // desktop's (`render::batch`). The frame's closure holds it, since on
+    // the web `game_loop::run` returns while the loop goes on, and natively
+    // drops the closure before the handle.
+    #[cfg(any(target_os = "ios", target_os = "android", target_os = "emscripten"))]
+    let batch = crate::render::batch::RenderBatch::load();
     // raylib closes the window on Esc by default; here Esc keeps playing
     // in the leave dialog and dismisses a builder menu, so it must never
     // reach `window_should_close`.
@@ -1396,10 +1409,12 @@ pub fn run(args: Args) {
     // every step's events like the particle layer - presentation only, and
     // a new round, seat or replica starts it over by itself.
     let mut awareness = crate::indicators::ScreenAwareness::default();
-    // The GPU copies of the floor shade the round and the builder bake
-    // (`ground::GroundGrid::shade`): uploaded once per bake, a new round or
-    // a builder edit, and drawn in one call.
-    let mut round_shade = crate::render::canvas::BlockTexture::default();
+    // The GPU copies of what the round and the builder bake: the floor
+    // shade (`ground::GroundGrid::shade`), the lava's banks and the
+    // pictures it keeps between frames, the cones
+    // (`Game::with_block_images`) - uploaded where a bake changed them, a
+    // new round or a builder edit, and drawn a quad each.
+    let mut round_blocks = crate::render::canvas::BlockTextures::default();
     let mut builder_shade = crate::render::canvas::BlockTexture::default();
     // The minimaps (minimap.rs): the round's, baked once per round and
     // patched where a tile dies, and the builder's navigator's, repainted
@@ -1658,6 +1673,9 @@ pub fn run(args: Args) {
     #[cfg(all(feature = "dev-tools", target_os = "emscripten"))]
     let (mut frames_drawn, mut last_press): (u64, Option<crate::capi::Press>) = (0, None);
     game_loop::run(rl, thread, target_fps, move |rl, thread| {
+        #[cfg(any(target_os = "ios", target_os = "android", target_os = "emscripten"))]
+        let _held = &batch;
+        crate::frame_stages::frame_done(rl.get_frame_time() * 1000.0);
         // The web's window is the canvas's box: it follows a resize, a
         // rotation or full screen before anything reads its size.
         #[cfg(target_os = "emscripten")]
@@ -1765,6 +1783,8 @@ pub fn run(args: Args) {
         // lands on either cluster is the HUD's, never a stick or a shot.
         let corners = CornerShape::of(&session.play_chrome(), session.shown().players.count()).map(|shape| hud::corners(&ui, &shape));
         let corner_hit = corners.as_ref().and_then(|c| c.hit(ui_pointer));
+        // The lamp row's button, pressed this frame (`CornerButton::Lamp`).
+        let mut lamp_tap = false;
         let keep_out: Vec<crate::math::Rectangle> = corners.iter().flat_map(Corners::keep_out).collect();
         touch.set_keep_out(&keep_out);
         // This frame's touch points, ids included so a stick follows its
@@ -1885,6 +1905,10 @@ pub fn run(args: Args) {
                     // The ONLINE button opens the lobby over the local
                     // round, which is left exactly where it stands.
                     session.press_online();
+                } else if pressed && corner_hit == Some(CornerButton::Lamp) {
+                    // The lamp row's count, the lamp key's stand-in.
+                    lamp_tap = true;
+                    touch.claim(&ui_touch_points);
                 } else if !crate::KEYBOARD_AVAILABLE && pressed && corner_hit == Some(CornerButton::Restart) {
                     // The RESTART button stands in for the R key: staged the
                     // way the dev panel's button is, it becomes this frame's
@@ -1921,6 +1945,9 @@ pub fn run(args: Args) {
                 let left = pressed && corner_hit == Some(CornerButton::Leave);
                 if left || rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
                     session.leave_online();
+                } else if pressed && corner_hit == Some(CornerButton::Lamp) {
+                    lamp_tap = true;
+                    touch.claim(&ui_touch_points);
                 }
             }
             Driver::Build => {
@@ -2078,6 +2105,7 @@ pub fn run(args: Args) {
         let touch_intent = touch.update(&ui_touch_points, ui.screen, steer_right, dt);
         player1.move_dir = player1.move_dir.or(touch_intent.move_dir);
         player1.fire = player1.fire || touch_intent.fire;
+        player1.lamp |= lamp_tap;
         let mut input = Input::two(player1, player2);
         input.pause_pressed = rl.is_key_pressed(KeyboardKey::KEY_P);
         // The dev panel's "Restart round" button lands here too, as if R
@@ -2149,6 +2177,7 @@ pub fn run(args: Args) {
             } else {
                 clock.advance(dt)
             };
+            let steps_stage = crate::frame_stages::stage("sim");
             let seats = local_seats(&session);
             #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
             let advanced = match &mut dev {
@@ -2180,6 +2209,7 @@ pub fn run(args: Args) {
                     awareness.observe_events(&session.game, &seats);
                 }
             }
+            drop(steps_stage);
             carried = if steps == 0 && !frozen { input } else { Input::default() };
         } else {
             clock.reset();
@@ -2329,8 +2359,10 @@ pub fn run(args: Args) {
         // world the round is at (its events it read after each step),
         // then ages what is already in flight. Deliberately not inside
         // `Game` - see fx.rs.
+        let fx_stage = crate::frame_stages::stage("fx");
         fx.observe(game, fx_dt);
         fx.tick(fx_dt);
+        drop(fx_stage);
         // What the screen cannot see: a replica's events read once a frame
         // (a local round's were read after every step), and the arrows
         // drawn only while the camera shows less than the whole field, so
@@ -2437,7 +2469,18 @@ pub fn run(args: Args) {
             let mut make = || rl.load_render_texture(thread, plan.scene.0 as u32, plan.scene.1 as u32).expect("failed creating a split half's render texture");
             split_targets = Some((make(), make(), plan.scene));
         }
-        let shade = round_shade.sync(rl, thread, game.ground.shade());
+        // The pictures the round keeps (the lava, its pools, the craters)
+        // brought up to this frame for what the window shows, then every
+        // baked image uploaded where it changed - before the draw, which
+        // only reads them.
+        let views: Vec<crate::math::Rectangle> = match (camera.cull(), split_view.as_ref().map(|(second, _)| second.cull())) {
+            (None, _) | (_, Some(None)) => Vec::new(),
+            (Some(first), second) => std::iter::once(first).chain(second.flatten()).collect(),
+        };
+        let pictures_stage = crate::frame_stages::stage("pictures");
+        game.refresh_pictures(&views);
+        let blocks = game.with_block_images(|images| round_blocks.sync(rl, thread, images));
+        drop(pictures_stage);
         game.render(
             rl,
             thread,
@@ -2502,7 +2545,7 @@ pub fn run(args: Args) {
                 crates: &crates_texture,
                 pickup_glyphs: &pickup_glyphs_texture,
                 portal: &portal_texture,
-                shade,
+                blocks,
             },
             &layout,
             &chrome,
@@ -2553,12 +2596,13 @@ impl FrameStats {
         self.frames += 1;
         if now - self.last_report >= Self::REPORT_EVERY_SECONDS && self.frames > 0 {
             eprintln!(
-                "bongbong: frame avg {:.2} ms, max {:.2} ms, {} fps, {} fx over {} frames",
+                "bongbong: frame avg {:.2} ms, max {:.2} ms, {} fps, {} fx over {} frames; {}",
                 self.sum / self.frames as f32 * 1000.0,
                 self.max * 1000.0,
                 fps,
                 live_fx,
-                self.frames
+                self.frames,
+                crate::frame_stages::line()
             );
             *self = Self { last_report: now, ..Self::default() };
         }

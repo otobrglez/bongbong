@@ -225,6 +225,14 @@ pub enum Tool {
     /// Water: ground like road, shaped by the cells around it into a
     /// river (a line one cell wide) or a lake (a block) - `ground::build`.
     Water,
+    /// Lava (docs/volcano.md): painted like water, shaped into a stream
+    /// (a burning ford) or a lake (deep in its middle) the same way, and
+    /// flowing away from the volcano it touches.
+    Lava,
+    /// A volcano's crater (docs/volcano.md): the cone it stands at the
+    /// middle of covers the cells round it (`volcano::footprint`). Any
+    /// number, each on its own clock.
+    Volcano,
     Frog,
     /// Player 1's start - singleton, moved on placement like `Frog`.
     Start,
@@ -257,10 +265,10 @@ pub enum Tool {
 }
 
 /// Every tool, in bar order: the categories one after another, then the
-/// eraser and the select tool, which no category holds. The trees sit with
-/// the ground's vegetation, which leaves PROP room for the six tower tools
-/// inside the eleven rows a dropdown fits.
-pub const TOOLS: [Tool; 40] = [
+/// eraser and the select tool, which no category holds. The trees, the
+/// volcano and the lamp post sit with the ground, which leaves PROP room
+/// for the six tower tools inside the eleven rows a dropdown fits.
+pub const TOOLS: [Tool; 44] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -278,12 +286,15 @@ pub const TOOLS: [Tool; 40] = [
     Tool::Tower(TowerKind::Bio, Side::Enemy),
     Tool::Road,
     Tool::Water,
+    Tool::Lava,
     Tool::TallGrass,
     Tool::Prop(Material::Tree),
     Tool::Prop(Material::Pine),
     Tool::OilTrail,
     Tool::Gate,
     Tool::Portal,
+    Tool::Volcano,
+    Tool::Prop(Material::Lamp),
     Tool::Start,
     Tool::Start2,
     Tool::Frog,
@@ -299,6 +310,7 @@ pub const TOOLS: [Tool; 40] = [
     Tool::Pickup(PickupKind::Flamethrower),
     Tool::Pickup(PickupKind::FrogHealth),
     Tool::Pickup(PickupKind::TowerPack),
+    Tool::Pickup(PickupKind::HeatShield),
     Tool::Eraser,
     Tool::Select,
 ];
@@ -317,12 +329,17 @@ impl Tool {
             Tool::Prop(Material::Fence) => "fence",
             Tool::Prop(Material::Tree) => "tree",
             Tool::Prop(Material::Pine) => "pine",
+            Tool::Prop(Material::Lamp) => "lamp",
             Tool::Prop(_) => "prop",
             Tool::Drum(Drum::Oil) => "oil_drum",
             Tool::Drum(Drum::Fuel) => "fuel_drum",
+            // Not a tool: a volcano's bomb is no barrel.
+            Tool::Drum(Drum::Lava) => "lava_drum",
             Tool::OilTrail => "oil_trail",
             Tool::Road => "road",
             Tool::Water => "water",
+            Tool::Lava => "lava",
+            Tool::Volcano => "volcano",
             Tool::TallGrass => "tall_grass",
             Tool::Gate => "gate",
             Tool::Portal => "portal",
@@ -341,6 +358,7 @@ impl Tool {
             Tool::Pickup(PickupKind::Flamethrower) => "flamethrower",
             Tool::Pickup(PickupKind::FrogHealth) => "frog_health",
             Tool::Pickup(PickupKind::TowerPack) => "tower_pack",
+            Tool::Pickup(PickupKind::HeatShield) => "heat_shield",
             Tool::Tower(TowerKind::Tesla, Side::Player) => "tesla",
             Tool::Tower(TowerKind::Tesla, Side::Enemy) => "tesla_enemy",
             Tool::Tower(TowerKind::Gun, Side::Player) => "gun_tower",
@@ -361,9 +379,11 @@ impl Tool {
     pub fn category(self) -> Option<Category> {
         match self {
             Tool::Wall(_) => Some(Category::Wall),
-            Tool::Prop(Material::Tree | Material::Pine) => Some(Category::Ground),
+            Tool::Prop(Material::Tree | Material::Pine | Material::Lamp) => Some(Category::Ground),
             Tool::Prop(_) | Tool::Drum(_) | Tool::Tower(..) => Some(Category::Prop),
-            Tool::Road | Tool::Water | Tool::TallGrass | Tool::OilTrail | Tool::Gate | Tool::Portal => Some(Category::Ground),
+            Tool::Road | Tool::Water | Tool::Lava | Tool::Volcano | Tool::TallGrass | Tool::OilTrail | Tool::Gate | Tool::Portal => {
+                Some(Category::Ground)
+            }
             Tool::Start | Tool::Start2 | Tool::Frog | Tool::EnemyFrog => Some(Category::Actor),
             Tool::Pickup(_) => Some(Category::Pickup),
             Tool::Eraser | Tool::Select => None,
@@ -380,6 +400,8 @@ impl Tool {
             Tool::OilTrail => Some(CellObject::Oil),
             Tool::Road => Some(CellObject::Road),
             Tool::Water => Some(CellObject::Water),
+            Tool::Lava => Some(CellObject::Lava),
+            Tool::Volcano => Some(CellObject::Volcano),
             Tool::Frog => Some(CellObject::Frog),
             Tool::Start => Some(CellObject::Start),
             Tool::Start2 => Some(CellObject::Start2),
@@ -702,11 +724,11 @@ fn edge_joined_line(from: (i32, i32), to: (i32, i32)) -> Vec<(i32, i32)> {
 
 /// What a map cell lays on the canvas's floor: a wall stands on road and
 /// gathers the walls' shade, as in a round (`Game::init` paints road under
-/// every wall), a road cell is road and a water cell water; anything else
-/// leaves the floor as it is.
+/// every wall), a road cell is road, lava runs over road and a water cell
+/// is water; anything else leaves the floor as it is.
 fn floor_of(obj: Option<&CellObject>) -> ground::CellFloor {
     let wall = matches!(obj, Some(CellObject::Wall { .. }));
-    ground::CellFloor { road: wall || matches!(obj, Some(CellObject::Road)), water: matches!(obj, Some(CellObject::Water)), wall }
+    ground::CellFloor { road: wall || matches!(obj, Some(CellObject::Road | CellObject::Lava)), water: matches!(obj, Some(CellObject::Water)), wall }
 }
 
 /// `repaint_ground` makes the whole ground again once an edit moves the
@@ -917,6 +939,10 @@ pub struct MapEditor {
     /// cells takes its cells in (`cells_changed`), any other edit lets it
     /// go to be worked out again on the next read.
     index: std::cell::OnceCell<CellIndex>,
+    /// The canvas's lava as a round would lay it out (`lava::LavaLayout`),
+    /// with the cells' digest and the field it was worked out for: made
+    /// again only after an edit moves either.
+    lava: std::cell::RefCell<Option<(u64, (f32, f32), std::rc::Rc<crate::lava::LavaLayout>)>>,
     /// The baseline's, worked out on the first read after it moves.
     baseline_index: std::cell::OnceCell<CellIndex>,
     /// Whether the canvas differs from its baseline (`dirty`): worked out
@@ -988,6 +1014,7 @@ impl MapEditor {
             hover: None,
             revision: std::cell::Cell::new(None),
             index: std::cell::OnceCell::new(),
+            lava: std::cell::RefCell::new(None),
             baseline_index: std::cell::OnceCell::new(),
             dirty: std::cell::Cell::new(None),
             cli_overrides: CliOverrides::default(),
@@ -1196,6 +1223,33 @@ impl MapEditor {
     /// frames and edits.
     pub fn cell_index(&self) -> &CellIndex {
         self.index.get_or_init(|| CellIndex::of(&self.map))
+    }
+
+    /// The canvas's lava laid out as a round lays it (docs/volcano.md):
+    /// its streams and lakes and which way each flows from the volcano.
+    /// Worked out again only after an edit moves the cells or the size.
+    pub fn lava_layout(&self) -> std::rc::Rc<crate::lava::LavaLayout> {
+        let digest = self.cell_index().digest();
+        let field = self.map.field_size();
+        if let Some((d, f, layout)) = self.lava.borrow().as_ref()
+            && *d == digest
+            && *f == field
+        {
+            return layout.clone();
+        }
+        let cells = |pick: fn(&CellObject) -> bool| -> Vec<Position> {
+            self.map.iter_cells().filter(|(_, _, o)| pick(o)).map(|(c, r, _)| map::cell_to_world(c, r)).collect()
+        };
+        let layout = std::rc::Rc::new(crate::lava::LavaLayout::build(
+            field.0,
+            field.1,
+            &cells(|o| matches!(o, CellObject::Wall { .. } | CellObject::Road)),
+            &cells(|o| matches!(o, CellObject::Lava)),
+            &self.map.volcano_cells(),
+            crate::tuning::tuning().lava_heat_falloff,
+        ));
+        *self.lava.borrow_mut() = Some((digest, field, layout.clone()));
+        layout
     }
 
     pub fn diff(&self) -> MapDiff {

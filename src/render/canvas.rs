@@ -79,6 +79,27 @@ impl BlockTexture {
     }
 }
 
+/// The GPU copies of a list of [`BlockImage`]s - a round's floor shade,
+/// the lava's banks and its tile atlases, the cones - one
+/// [`BlockTexture`] per place in the list, so an image that keeps its
+/// place keeps its texture and uploads only what changed.
+#[derive(Default)]
+pub struct BlockTextures {
+    held: Vec<BlockTexture>,
+}
+
+impl BlockTextures {
+    /// Bring every copy up to its image (`BlockTexture::sync`) and hand
+    /// out the stamps and textures for a `Sheets`.
+    pub fn sync(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, images: &[&BlockImage]) -> Vec<(u64, &Texture2D)> {
+        self.held.resize_with(images.len(), BlockTexture::default);
+        for (texture, image) in self.held.iter_mut().zip(images) {
+            texture.sync(rl, thread, image);
+        }
+        self.held.iter().filter_map(BlockTexture::held).collect()
+    }
+}
+
 /// A [`Canvas`] over a raylib draw handle: every call forwards to the
 /// raylib call the trait is named after.
 pub struct GpuCanvas<'a, D, S> {
@@ -130,6 +151,17 @@ impl<D: RaylibDraw, S: Sheets> Canvas for GpuCanvas<'_, D, S> {
         let (w, h) = (image.width as f32, image.height as f32);
         let b = image.block as f32;
         self.d.draw_texture_pro(texture, Rectangle::new(0.0, 0.0, w, h), Rectangle::new(0.0, 0.0, w * b, h * b), Vec2::new(0.0, 0.0), 0.0, Color::WHITE);
+    }
+
+    fn blocks_part(&mut self, image: &BlockImage, src: (usize, usize, usize, usize), at: (i32, i32)) {
+        let Some(texture) = self.sheets.blocks_texture(image.stamp) else { return };
+        let (x, y, w, h) = (src.0 as f32, src.1 as f32, src.2 as f32, src.3 as f32);
+        let b = image.block as f32;
+        self.d.draw_texture_pro(texture, Rectangle::new(x, y, w, h), Rectangle::new(at.0 as f32, at.1 as f32, w * b, h * b), Vec2::new(0.0, 0.0), 0.0, Color::WHITE);
+    }
+
+    fn has_blocks(&self, stamp: u64) -> bool {
+        self.sheets.blocks_texture(stamp).is_some()
     }
 
     fn cull(&self) -> Option<Rectangle> {

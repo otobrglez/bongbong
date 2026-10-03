@@ -183,7 +183,7 @@ fn main() {
             frog_variants: &[],
             // The demo paints a plain white canvas, which draws no ground
             // and so no floor shade.
-            shade: None,
+            blocks: Vec::new(),
         };
 
         match session.mode() {

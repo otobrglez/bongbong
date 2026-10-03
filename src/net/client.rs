@@ -227,6 +227,8 @@ pub struct RoomClient<T: Transport> {
     started: bool,
     intent_tick: u32,
     fire_held: u8,
+    /// The lamp key's hold, as `fire_held`.
+    lamp_held: u8,
     /// Reused by `poll` so a frame allocates nothing.
     scratch: Vec<(Msg, std::time::Instant)>,
     /// When the oldest ping nothing has answered yet went out: any
@@ -269,6 +271,7 @@ impl<T: Transport> RoomClient<T> {
             started: false,
             intent_tick: 0,
             fire_held: 0,
+            lamp_held: 0,
             scratch: Vec::new(),
             unanswered_since: None,
             silent_after: ROOM_SILENT_AFTER,
@@ -375,6 +378,13 @@ impl<T: Transport> RoomClient<T> {
         } else if self.fire_held > 0 {
             self.fire_held -= 1;
             msg.fire = true;
+        }
+        // The lamp key is held the same way, so a tap survives sampling.
+        if msg.lamp {
+            self.lamp_held = FIRE_HOLD_TICKS.saturating_sub(1);
+        } else if self.lamp_held > 0 {
+            self.lamp_held -= 1;
+            msg.lamp = true;
         }
         self.intent_tick = self.intent_tick.wrapping_add(1);
         // The packet this carries, so a caller predicting the same input

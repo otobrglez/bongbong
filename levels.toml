@@ -18,6 +18,10 @@ map = "lotus-lagoon"
 title = "Lotus Lagoon"
 
 [[level]]
+map = "vulkan"
+title = "Vulkan"
+
+[[level]]
 map = "glasshouses"
 title = "Glasshouse Gardens"
 

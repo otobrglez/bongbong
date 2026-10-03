@@ -349,7 +349,11 @@ impl Inner {
         self.last_starved = false;
         self.starved_run = 0;
         let fire = self.deliver(scan.press, newest_taken.fire);
-        Some(IntentMsg { fire, ..newest_taken })
+        // The lamp key is read as held if any intent taken held it, so a
+        // press inside a merge still reaches the round; its edge is the
+        // round's to find (docs/volcano.md).
+        let lamp = taken.values().any(|m| m.lamp);
+        Some(IntentMsg { fire, lamp, ..newest_taken })
     }
 
     /// An owned read with nothing to apply: a starvation, the last pose

@@ -1351,6 +1351,7 @@ pub fn carries_state(event: &WireEvent, seat: Option<u8>) -> bool {
         | WireEvent::RoundEnded { .. }
         | WireEvent::ObstacleDestroyed { .. }
         | WireEvent::DrumLaunched { .. }
+        | WireEvent::LavaBombLaunched { .. }
         | WireEvent::Placed { .. }
         | WireEvent::Teleported { .. }
         | WireEvent::TankEntered { .. }

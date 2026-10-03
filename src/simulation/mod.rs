@@ -35,6 +35,7 @@ mod nav;
 pub mod present;
 mod props;
 mod towers;
+mod volcano;
 pub use props::{FlyingDrum, GroundFire};
 pub(crate) use props::tile_rubble;
 pub mod replica;
@@ -239,7 +240,7 @@ impl Input {
     }
 
     /// This input with `pending`'s presses folded in: every seat's `fire`
-    /// and every one-shot toggle is either input's. The caller keeps the
+    /// and `lamp` and every one-shot toggle is either input's. The caller keeps the
     /// input of a rendered frame that ran no step and folds it into the
     /// next frame's, so a tap that lands between two steps still reaches
     /// the simulation as a held fire key or a pressed toggle; directions
@@ -247,6 +248,7 @@ impl Input {
     pub fn or_presses(mut self, pending: Input) -> Input {
         for (seat, carried) in self.seats.iter_mut().zip(pending.seats) {
             seat.fire |= carried.fire;
+            seat.lamp |= carried.lamp;
         }
         self.pause_pressed |= pending.pause_pressed;
         self.restart_pressed |= pending.restart_pressed;
@@ -420,6 +422,14 @@ pub enum Event {
     /// A fuel drum set off by another blast launched from (`x`, `y`)
     /// toward (`to_x`, `to_y`), where it will detonate when it lands.
     DrumLaunched { x: f32, y: f32, to_x: f32, to_y: f32 },
+    /// Seat `seat` set a lantern down at (`x`, `y`) (docs/volcano.md).
+    LanternSet { seat: u8, x: f32, y: f32 },
+    /// A blast broke the lantern at (`x`, `y`).
+    LanternBroken { x: f32, y: f32 },
+    /// An erupting volcano threw a lava bomb from its crater at (`x`, `y`)
+    /// toward (`to_x`, `to_y`), where it will burst when it lands
+    /// (docs/volcano.md).
+    LavaBombLaunched { x: f32, y: f32, to_x: f32, to_y: f32 },
     /// `slot`'s tank entered the portal at (`x`, `y`) and was placed at
     /// (`to_x`, `to_y`), beside another portal (`Game::portal_phase`).
     Teleported { slot: usize, x: f32, y: f32, to_x: f32, to_y: f32 },
@@ -715,6 +725,11 @@ pub struct Game {
     /// ford, where the current runs. Built from the map's cells at the top
     /// of `init`, before anything is placed.
     pub(crate) water: crate::ground::WaterLayout,
+    /// The map's lava as the rules see it (docs/volcano.md): what is deep
+    /// (static colliders, like deep water), what is a burning ford, which
+    /// way it flows and the heat it radiates. Built from the map's cells
+    /// beside the water in `init`; empty on a map without lava.
+    pub(crate) lava: crate::lava::LavaLayout,
     /// Fading tread marks, oldest first. Kept out of `world`: pure visual
     /// trail data nothing ever queries alongside another component.
     pub(crate) tracks: Vec<Track>,
@@ -797,6 +812,29 @@ pub struct Game {
     /// Fuel drums in the air, launched by another blast and about to
     /// detonate where they land (`props::tick_launches`).
     pub(crate) flying_drums: Vec<FlyingDrum>,
+    /// The volcanoes on the field (docs/volcano.md), one per crater cell
+    /// in the map's order (`volcano::build_volcanoes`).
+    pub(crate) volcanoes: Vec<crate::volcano::Volcano>,
+    /// The last rumble and eruption each volcano's show was staged for
+    /// (`Game::eruption_show`), so each plays once.
+    pub(crate) eruptions_shown: Vec<(i64, i64)>,
+    /// Lava bombs in the air, about to burst where they land
+    /// (`volcano::tick_lava_bombs`).
+    pub(crate) lava_bombs: Vec<crate::volcano::LavaBomb>,
+    /// The lanterns the seats have set down this round (docs/volcano.md,
+    /// `lamp::Lantern`), in the order they were set down.
+    pub(crate) lanterns: Vec<crate::lamp::Lantern>,
+    /// The next lantern's id (`lamp::Lantern::id`), counted up per round.
+    lantern_next_id: u16,
+    /// Lanterns each seat has left to set down this round
+    /// (`lamps_per_seat` where `lamps_in_play`, else none).
+    pub(crate) lamps_left: [u8; MAX_SEATS],
+    /// Whether each seat's lamp key was down last frame: a lantern goes
+    /// down on the press, not while it is held.
+    player_lamp_held_last_frame: [bool; MAX_SEATS],
+    /// Night has fallen on a map with `nightfall` (`Game::fall_night`):
+    /// the sky is night's from here to the round's end.
+    pub(crate) night_fallen: bool,
     /// The whole-screen flash a kill or a barrel opens with: its age in
     /// seconds while one is playing (`game.rs` fades it out over
     /// `blast_screen_flash_seconds`). Explicit state rather than derived
@@ -1148,6 +1186,9 @@ impl Game {
         // renderer does, so it is settled once rather than asked of the
         // knobs frame by frame. A hash of the seed, no RNG.
         self.weather = crate::weather::in_force(self.map.weather, seed, self.weather_from_map, &tuning());
+        // Lanterns for every seat where the dark is part of the round.
+        let lamps = if self.lamps_in_play() { tuning().lamps_per_seat.clamp(0, u8::MAX as i32) as u8 } else { 0 };
+        self.lamps_left = [lamps; MAX_SEATS];
 
         self.world = hecs::World::new();
         self.tracks.clear();
@@ -1180,6 +1221,11 @@ impl Game {
         self.oil_cells.clear();
         self.portals.clear();
         self.flying_drums.clear();
+        self.lava_bombs.clear();
+        self.lanterns.clear();
+        self.lantern_next_id = 0;
+        self.player_lamp_held_last_frame = [false; MAX_SEATS];
+        self.night_fallen = false;
         self.screen_flash = None;
         self.screen_flash_cooldown = 0.0;
         self.grass_cells.clear();
@@ -1253,6 +1299,30 @@ impl Game {
             self.deep_water_bodies.push(body);
         }
 
+        // --- Lava (docs/volcano.md) ---
+        // Water's shape and water's deep cells - a static collider each,
+        // nothing in `world`, so every shot flies over - but its own rules:
+        // it never freezes, it flows away from the volcano and it burns.
+        // An empty map's layout is empty and spawns nothing.
+        self.lava = {
+            let painted = |pick: fn(&CellObject) -> bool| -> Vec<Position> {
+                self.map.iter_cells().filter(|(_, _, o)| pick(o)).map(|(c, r, _)| map::cell_to_world(c, r)).collect()
+            };
+            crate::lava::LavaLayout::build(
+                width,
+                height,
+                &painted(|o| matches!(o, CellObject::Wall { .. } | CellObject::Road)),
+                &painted(|o| matches!(o, CellObject::Lava)),
+                &self.map.volcano_cells(),
+                tuning().lava_heat_falloff,
+            )
+        };
+        let deep_lava: HashSet<(i32, i32)> = self.lava.deep_grid_cells().collect();
+        for &(gx, gy) in &deep_lava {
+            let half = battlefield::tile_hull_half_extent(&deep_lava, gx, gy, OBSTACLE_GRID_SIZE * 0.5);
+            self.physics.spawn_static(map::cell_to_world(gx, gy), half);
+        }
+
         // --- Player ---
         let row = resolve_player_row(self.player_row_override, tuning().player_tank, self.map.tank, || {
             rng.random_range(0..TANK_VARIANTS)
@@ -1264,7 +1334,7 @@ impl Game {
             let (center_col, center_row) = map::world_to_cell(Position::new(width / 2.0, height / 2.0));
             self.map.nearest_free_cell(center_col, center_row)
         });
-        let start_cell = dry_cell_near(&self.map, &self.water, start_cell);
+        let start_cell = dry_cell_near(&self.map, &self.water, &self.lava, start_cell);
         let mut tank = Tank {
             row,
             shell_variant: TANK_SHELL_VARIANT_BY_ROW[row as usize],
@@ -1295,6 +1365,8 @@ impl Game {
         self.refresh_edge_masks();
         // The towers' weapons, one per tower tile. No RNG.
         self.build_towers(width, height);
+        // The volcanoes, one per crater. No RNG.
+        self.build_volcanoes();
         // Tall grass: whole cells from the map, each scattering a handful
         // of tufts. Hashed from position, so this draws no round RNG.
         self.grass_cells = map_spawn.grass_cells.clone();
@@ -1315,9 +1387,12 @@ impl Game {
         // no enemy, frog or bonus spawns in a lake.
         let mut obstacle_positions = map_spawn.obstacle_positions;
         obstacle_positions.extend(self.water.deep_cells());
+        // And lava of every depth: nothing spawns to burn.
+        obstacle_positions.extend(self.lava.cells().map(|(c, r)| map::cell_to_world(c, r)));
         let wall_positions = map_spawn.wall_positions;
         let map_road_cells = map_spawn.road_cells;
         let map_water_cells = map_spawn.water_cells;
+        let map_lava_cells = map_spawn.lava_cells;
         let map_frog_pos = map_spawn.frog_pos;
         self.map_pickup_slots = map_spawn.pickup_slots;
 
@@ -1401,7 +1476,7 @@ impl Game {
                     // the lake reaches into it - and leaves the grid's own
                     // answer alone when it does not.
                     let cell = map::world_to_cell(open);
-                    let dry = dry_cell_near(&self.map, &self.water, cell);
+                    let dry = dry_cell_near(&self.map, &self.water, &self.lava, cell);
                     if dry == cell { open } else { map::cell_to_world(dry.0, dry.1) }
                 });
             let mut tank = Tank {
@@ -1582,6 +1657,9 @@ impl Game {
         // (props stand on plain ground) ---
         let mut road_cells = wall_positions.clone();
         road_cells.extend(map_road_cells);
+        // Lava runs over dirt: what shows between its banks' rounded
+        // corners is a road's floor, never grass.
+        road_cells.extend(map_lava_cells);
         // Wall cells go in twice on purpose: folded into the road set they
         // paint dirt underfoot, and passed separately they cast the baked
         // shading that makes a wall look like it is standing on the floor
@@ -1662,6 +1740,7 @@ impl Game {
         self.tick_effects(dt);
         let mut rng = self.rng.take().expect("rng seeded in init");
         self.time += dt;
+        self.tick_nightfall();
         self.tick_timers(dt, &mut rng);
         let terrain = Terrain::build(&self.world, width, height, &self.grass_cells, &self.water);
         // One nav grid for the whole frame - labelled, priced and with a
@@ -1678,6 +1757,8 @@ impl Game {
         for (owned, &frame) in f.shoves.owned.iter_mut().zip(&self.seat_owned) {
             *owned = frame != 0 && frame == self.frame;
         }
+        let eruption = self.eruption_show();
+        f.stage(eruption);
 
         if self.outcome == Outcome::Playing {
             self.apply_debug_kills(&mut f);
@@ -1690,6 +1771,7 @@ impl Game {
             self.enemy_phase(&mut f, &grid);
             self.wave_phase(&mut f);
             self.tower_phase(&mut f);
+            self.volcano_phase(&mut f);
             self.spawn_pending(&mut f);
             self.guide_missiles(&mut f);
             self.resolve_lasers(&mut f);
@@ -1706,9 +1788,11 @@ impl Game {
             self.tick_cookoffs(&mut f);
             self.tick_burns(&mut f);
             self.tick_fires(&mut f, true);
+            self.lava_phase(&mut f);
             self.tick_ooze(&mut f);
             self.tick_fuses(&mut f);
             self.tick_launches(&mut f);
+            self.tick_lava_bombs(&mut f);
             self.tick_crates(&mut f);
             self.tick_grass(f.dt);
             self.drain_shield_breaks(&mut f);
@@ -1733,6 +1817,7 @@ impl Game {
             self.tick_fires(&mut f, false);
             self.tick_fuses(&mut f);
             self.tick_launches(&mut f);
+            self.tick_lava_bombs(&mut f);
             self.tick_crates(&mut f);
             self.tick_grass(f.dt);
             self.explosions(&mut f, false);
@@ -1855,6 +1940,7 @@ impl Game {
             }
             tank.hit_flash_timer = (tank.hit_flash_timer - dt).max(0.0);
             tank.speed_boost_timer = (tank.speed_boost_timer - dt).max(0.0);
+            tank.heat_shield_timer = (tank.heat_shield_timer - dt).max(0.0);
             tank.tick_shield(dt);
             tank.burn_timer = (tank.burn_timer - dt).max(0.0);
             tank.wet_timer = (tank.wet_timer - dt).max(0.0);
@@ -1975,14 +2061,14 @@ impl Game {
         let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
         // Disjoint borrows: `drive_tank` wants the solver and the hull at
         // once, and they are two fields of the same struct.
-        let Game { world, physics, water, weather, time, .. } = self;
+        let Game { world, physics, water, lava, weather, time, .. } = self;
         let Ok(mut tank) = world.get::<&mut Tank>(entity) else { return };
         if tank.body.is_none() || tank.is_wreck() {
             return;
         }
         // The sandbox's clock stands at the last snapshot's tick, so a
         // gust reaches the predicted hull when the drawn sand front does.
-        let footing = Footing::at(water, *weather, tank.position, *time);
+        let footing = Footing::at(water, lava, *weather, tank.position, *time);
         drive_tank(physics, &mut tank, intent, dt, footing);
         physics.step();
         // The solver moved the body; the tank's own position is what
@@ -2053,7 +2139,7 @@ impl Game {
             let ticks = (reach_ticks as f32).max(POSE_REACH_TICKS);
             // The ground's own drift - a current, a gust - carries a hull
             // past its top speed, and the rules put it there.
-            let flow = Footing::at(&self.water, self.weather, tank.position, self.time).flow;
+            let flow = Footing::at(&self.water, &self.lava, self.weather, tank.position, self.time).flow;
             let drift = (flow.x * flow.x + flow.y * flow.y).sqrt();
             (tank.position, (tank.effective_speed() + drift) * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX)
         };
@@ -2067,11 +2153,14 @@ impl Game {
             return Err("outside the field");
         }
         let (col, row) = map::world_to_cell(pose.position);
-        if self.map.cell(col, row).is_some_and(CellObject::is_solid) {
+        if self.map.solid_at(col, row) {
             return Err("inside a solid tile");
         }
         if self.water.depth_at(pose.position) == crate::ground::Depth::Deep {
             return Err("in deep water");
+        }
+        if self.lava.depth_at(pose.position) == crate::ground::Depth::Deep {
+            return Err("in deep lava");
         }
         // One tick back along the reported velocity: the coming update's
         // solver step carries the body forward by exactly that much, so
@@ -2303,6 +2392,8 @@ impl Game {
         if !frozen {
             self.time += dt;
         }
+        // Night falls on the round clock, which stands on the room's tick.
+        self.tick_nightfall();
         self.tick_wave_banner(dt);
         self.ease_hulls(dt);
         self.fade_tracks(dt);
@@ -2314,11 +2405,21 @@ impl Game {
         // carries that a tank is a wreck, not how long it has burnt.
         for tank in self.world.query_mut::<&mut Tank>() {
             tank.tick_wreck(dt);
+            // A heat shield's ring drains on the replica's own clock; the
+            // room's flag going off is what ends it.
+            if tank.heat_shield_timer > 0.0 {
+                tank.heat_shield_timer = (tank.heat_shield_timer - dt).max(f32::EPSILON);
+            }
         }
         // A drum that lands blasts where the server says it did, so the
         // landed ones are dropped here and the `Blast` event carries the
-        // rest.
+        // rest. A lava bomb the same.
         self.age_flying_drums(dt);
+        self.age_lava_bombs(dt);
+        // The eruption's ring and flash come off the cycle's clock, which
+        // stands on the room's tick.
+        let eruption = self.eruption_show();
+        self.show(eruption);
         // A streaming flamethrower is a flag on the wire; the jet the
         // glow and the particles are drawn from is rebuilt from it.
         self.derive_flame_jets();
@@ -2520,6 +2621,12 @@ impl Game {
                     // Nothing on the tank either: it repairs its side's
                     // towers, just below.
                     PickupKind::TowerPack => {}
+                    // Refreshes rather than stacks, and puts out a hull
+                    // already burning.
+                    PickupKind::HeatShield => {
+                        tank.heat_shield_timer = tuning().heat_shield_seconds;
+                        tank.burn_timer = 0.0;
+                    }
                 }
                 tank.owner_slot()
             };
@@ -2714,7 +2821,7 @@ impl Game {
         // A seat whose client owns the hull was put where it is by
         // `accept_seat_pose` before this tick; the stick only fires.
         if self.seat_owned[index] != self.frame {
-            let footing = Footing::at(&self.water, self.weather, tank.position, self.time);
+            let footing = Footing::at(&self.water, &self.lava, self.weather, tank.position, self.time);
             drive_tank(&mut self.physics, tank, intent, f.dt, footing);
         }
         tick_queued_shots(&mut self.physics, f, tank, owner);
@@ -2742,6 +2849,22 @@ impl Game {
             tank.flame_held = false;
             dispatch_fire(&mut self.physics, f, tank, owner, 0.0);
         }
+
+        // The lamp key sets a lantern down behind the hull, on the press.
+        let lamp_pressed = intent.lamp && !self.player_lamp_held_last_frame[index];
+        self.player_lamp_held_last_frame[index] = intent.lamp;
+        if lamp_pressed && self.lamps_left[index] > 0 {
+            let back = Dir::from_rotation(tank.rotation).map_or(Vec2::zero(), |d| d.vec());
+            let behind = tank.hull_size() * 0.5 + 8.0;
+            let at = Position::new(tank.position.x - back.x * behind, tank.position.y - back.y * behind);
+            let inset = OBSTACLE_GRID_SIZE * 0.5;
+            let at = Position::new(at.x.clamp(inset, f.width - inset), at.y.clamp(inset, f.height - inset));
+            self.lamps_left[index] -= 1;
+            let id = self.lantern_next_id;
+            self.lantern_next_id = self.lantern_next_id.wrapping_add(1);
+            self.lanterns.push(crate::lamp::Lantern { id, position: at, seat: index as u8, lit_at: self.time });
+            f.events.push(Event::LanternSet { seat: index as u8, x: at.x, y: at.y });
+        }
     }
 
     /// Every enemy perceives (motion snapshot, nav grid, shared alert,
@@ -2762,6 +2885,9 @@ impl Game {
             concealed: bool,
             /// Driving back in through a gate, so off the field entirely.
             entering: bool,
+            /// How far an enemy sees this seat (`Game::sight_on`): the
+            /// sky's range, or the full one where it stands in the light.
+            sight: f32,
         }
         // Built from `players()`, not `seats_on_field()`: the index is the
         // seat number that `Ai::target_player`, the engagement rings and
@@ -2773,7 +2899,7 @@ impl Game {
             .flatten()
             .map(|entity| {
                 let (pos, wreck) = with_tank(&self.world, entity, |t| (t.position, t.is_wreck()));
-                PlayerView { entity, pos, wreck, concealed: f.terrain.conceals(pos), entering: entering(entity) }
+                PlayerView { entity, pos, wreck, concealed: f.terrain.conceals(pos), entering: entering(entity), sight: self.sight_on(pos) }
             })
             .collect();
 
@@ -2824,7 +2950,8 @@ impl Game {
         let alert = if field {
             // A field map has no shared alert: each enemy keeps its own,
             // passed only down a chain of neighbours (`field_alerts`).
-            let seen: Vec<Position> = players.iter().filter(|p| !p.concealed && !p.wreck && !p.entering).map(|p| p.pos).collect();
+            let seen: Vec<(Position, f32)> =
+                players.iter().filter(|p| !p.concealed && !p.wreck && !p.entering).map(|p| (p.pos, p.sight)).collect();
             self.field_alerts(&seen, &live_seats, view_range, f);
             None
         } else {
@@ -2840,7 +2967,7 @@ impl Game {
             for p in players.iter().filter(|p| !p.concealed && !p.wreck && !p.entering) {
                 for m in &movers[players.len()..] {
                     let d = m.position.distance_to(p.pos);
-                    if d <= view_range && seen.is_none_or(|(best, _)| d < best) {
+                    if d <= p.sight && seen.is_none_or(|(best, _)| d < best) {
                         seen = Some((d, p.pos));
                     }
                 }
@@ -2893,7 +3020,9 @@ impl Game {
         let mut engaged_frog: Vec<(Entity, Position)> = Vec::new();
         for (entity, tank, ai) in self.world.query::<(Entity, &Tank, &Ai)>().iter() {
             let (target, hunting) = target_of(ai);
-            let status = if guard_holds(ai) { EngageStatus::OutOfRange } else { engage_status(tank, ai, target, view_range) };
+            // A seat in the light is seen from further; a frog by the sky.
+            let sight = if hunting.is_some() { view_range } else { players[(ai.target_player() as usize).min(players.len() - 1)].sight };
+            let status = if guard_holds(ai) { EngageStatus::OutOfRange } else { engage_status(tank, ai, target, sight) };
             report.tanks.push(EngageTank::new(entity, tank.owner_slot(), status));
             if status == EngageStatus::Engaged {
                 if hunting.is_some() {
@@ -3125,6 +3254,7 @@ impl Game {
             // point-blank shots that never miss, and measured *worse* for
             // the player than standing in the open.
             let fighting = &players[(ai.target_player() as usize).min(players.len() - 1)];
+            let fighting_sight = fighting.sight;
             let player_hidden = fighting.concealed && !ai.is_hit_alerted();
             let player_line_of_sight = !player_hidden && f.terrain.line_of_sight(tank.position, fighting.pos);
             // A hunter's fire gate is line of *fire* to the frog: only iron
@@ -3166,7 +3296,7 @@ impl Game {
                     player_line_of_sight,
                     player_hidden,
                     walls_ahead,
-                    view_range,
+                    fighting_sight,
                 )
             });
             if let Some(before) = before {
@@ -3239,7 +3369,7 @@ impl Game {
         for p in &pending {
             let intent = self.commander.apply(p.slot, p.intent);
             with_tank_mut(&self.world, p.entity, |tank| {
-                let footing = Footing::at(&self.water, self.weather, tank.position, self.time);
+                let footing = Footing::at(&self.water, &self.lava, self.weather, tank.position, self.time);
                 drive_tank_with(&mut self.physics, tank, intent, f.dt, p.current, p.facing_before, footing);
             });
         }
@@ -4010,10 +4140,14 @@ impl Game {
         let (width, height) = self.map.field_size();
         let mut obstacles: Vec<Position> = self.world.query::<&Obstacle>().iter().map(|o| o.position).collect();
         obstacles.extend(self.water.deep_cells());
+        obstacles.extend(self.lava.cells().map(|(c, r)| map::cell_to_world(c, r)));
         let trigger = tuning().portal_trigger_radius;
         let portals = self.active_portals();
         battlefield::drop_cell(width, height, grid, &obstacles, near, |cell, p| {
-            self.water.depth_at(p) != crate::ground::Depth::Deep && portals.iter().all(|&q| q.distance_to(p) > trigger) && ok(cell, p)
+            self.water.depth_at(p) != crate::ground::Depth::Deep
+                && self.lava.depth_at(p) == crate::ground::Depth::Dry
+                && portals.iter().all(|&q| q.distance_to(p) > trigger)
+                && ok(cell, p)
         })
     }
 
@@ -4436,9 +4570,11 @@ impl Footing {
         Footing { pace: 1.0, grip: 1.0, traction: 1.0, brake: 1.0, flow: Position::new(0.0, 0.0), wading: false };
 
     /// The footing at `pos` at round time `time` under the round's `sky`:
-    /// the water's (a ford slows and loosens, ice slides) and then the
-    /// sky's on top (wet ground loosens every hull, a gust carries it).
-    pub(crate) fn at(water: &crate::ground::WaterLayout, sky: crate::map::Weather, pos: Position, time: f32) -> Footing {
+    /// the water's (a ford slows and loosens, ice slides), the lava's (a
+    /// burning ford slows and loosens too, with no current and no wet
+    /// tracks) and then the sky's on top (wet ground loosens every hull, a
+    /// gust carries it).
+    pub(crate) fn at(water: &crate::ground::WaterLayout, lava: &crate::lava::LavaLayout, sky: crate::map::Weather, pos: Position, time: f32) -> Footing {
         let t = tuning();
         let mut footing = match water.depth_at(pos) {
             crate::ground::Depth::Dry => Footing::DRY,
@@ -4453,6 +4589,10 @@ impl Footing {
                 Footing { pace: t.water_speed_factor, grip: t.water_grip_factor, flow: Position::new(0.0, flow), wading: true, ..Footing::DRY }
             }
         };
+        if lava.depth_at(pos) != crate::ground::Depth::Dry {
+            footing.pace *= t.lava_speed_factor;
+            footing.grip *= t.lava_grip_factor;
+        }
         let wet = crate::weather::grip_factor(sky, &t);
         if wet != 1.0 {
             footing.grip *= wet;
@@ -4567,15 +4707,20 @@ fn drive_tank_with(
     physics.apply_impulse(handle, Position::new(delta.x * tank.mass(), delta.y * tank.mass()));
 }
 
-/// `cell` unless it is deep water, else the nearest map cell (square
-/// rings outward, the map's own `nearest_free_cell` order) that is neither
-/// solid nor deep. A `start` cell can never be water itself (a cell holds
+/// `cell` unless it is deep water or lava, else the nearest map cell
+/// (square rings outward, the map's own `nearest_free_cell` order) that is
+/// neither solid (a volcano's cone included) nor deep nor lava. A `start` cell can never be water itself (a cell holds
 /// one object), so this only matters for the centre fallback of a map
 /// without one: a lake over the middle of the field spawns the player on
 /// its shore rather than inside the lake's colliders.
-fn dry_cell_near(map: &MapFile, water: &crate::ground::WaterLayout, cell: (i32, i32)) -> (i32, i32) {
-    let deep = |c: i32, r: i32| water.depth_at(map::cell_to_world(c, r)) == crate::ground::Depth::Deep;
-    let solid = |c: i32, r: i32| map.cell(c, r).is_some_and(CellObject::is_solid);
+fn dry_cell_near(map: &MapFile, water: &crate::ground::WaterLayout, lava: &crate::lava::LavaLayout, cell: (i32, i32)) -> (i32, i32) {
+    // Lava of any depth counts: a start on a ford would burn the round's
+    // first seconds away.
+    let deep = |c: i32, r: i32| {
+        let at = map::cell_to_world(c, r);
+        water.depth_at(at) == crate::ground::Depth::Deep || lava.depth_at(at) != crate::ground::Depth::Dry
+    };
+    let solid = |c: i32, r: i32| map.solid_at(c, r);
     if !deep(cell.0, cell.1) {
         return cell;
     }
@@ -5657,6 +5802,113 @@ mod mechanics_tests {
             }
         }
         panic!("the shell never reached the wall beyond the lake");
+    }
+
+    /// The water sandbox's shapes painted in lava instead: a 5 x 5 lake
+    /// at columns 14..=18, rows 9..=13 (its 3 x 3 interior deep), a
+    /// north-south stream at column 26 and a sideways stream along row 4
+    /// from column 8 to column 14.
+    fn lava_map(extra: &str) -> String {
+        water_map(extra).replace("kind = \"water\"", "kind = \"lava\"")
+    }
+
+    fn damage_of(game: &Game) -> f32 {
+        with_tank(&game.world, game.player().expect("player"), |t| t.damage)
+    }
+
+    #[test]
+    fn a_lava_lake_stops_a_hull_but_not_a_shell() {
+        let mut game = sandbox(&lava_map(""));
+        assert_eq!(game.lava().deep_cells().count(), 9, "the 3 x 3 interior is deep");
+        with_tank_mut(&game.world, game.player().expect("player"), |t| t.heat_shield_timer = 100.0);
+        teleport_player(&mut game, map::cell_to_world(11, 11));
+        drive(&mut game, Some(Dir::Right), 420);
+        let p = player_pos(&game);
+        assert!(p.x < 464.0, "the hull stopped short of the deep lava: {p:?}");
+        assert!(p.x > 400.0, "but it did wade into the edge first: {p:?}");
+        let mut input = Input::default();
+        input.seats[0].fire = true;
+        step(&mut game, input);
+        for _ in 0..240 {
+            step(&mut game, Input::default());
+            if game.events().iter().any(|e| matches!(e, Event::Hit { target: HitTarget::Obstacle { .. }, .. })) {
+                return;
+            }
+        }
+        panic!("the shell never reached the wall beyond the lake");
+    }
+
+    #[test]
+    fn a_lava_ford_slows_and_burns_a_hull_which_keeps_burning_after() {
+        let mut dry = sandbox(&lava_map(""));
+        teleport_player(&mut dry, map::cell_to_world(6, 16));
+        drive(&mut dry, Some(Dir::Right), 120);
+        let dry_dist = player_pos(&dry).x - map::cell_to_world(6, 16).x;
+
+        let mut hot = sandbox(&lava_map(""));
+        teleport_player(&mut hot, map::cell_to_world(6, 4));
+        drive(&mut hot, Some(Dir::Right), 120);
+        let hot_dist = player_pos(&hot).x - map::cell_to_world(6, 4).x;
+        assert!(hot_dist < dry_dist * 0.8, "wading lava is slower: dry {dry_dist:.0} px, lava {hot_dist:.0} px");
+        assert!(damage_of(&hot) > 5.0, "and it burns: {}", damage_of(&hot));
+        let burning = with_tank(&hot.world, hot.player().expect("player"), |t| t.burn_timer);
+        assert!(burning > 0.0, "the hull leaves the lava alight");
+        // Out of the lava and its heat: the afterburn still hurts for a
+        // while, then nothing does.
+        teleport_player(&mut hot, map::cell_to_world(6, 18));
+        let before = damage_of(&hot);
+        drive(&mut hot, None, 30);
+        let after = damage_of(&hot);
+        assert!(after > before, "afterburn: {before} -> {after}");
+        drive(&mut hot, None, 240);
+        let settled = damage_of(&hot);
+        drive(&mut hot, None, 60);
+        assert_eq!(damage_of(&hot), settled, "the fire went out");
+    }
+
+    #[test]
+    fn heat_falls_off_the_banks_and_hurts_only_close_in() {
+        let mut game = sandbox(&lava_map(""));
+        // Three cells off the north-south stream at column 26: shimmer
+        // only, nothing hurts.
+        teleport_player(&mut game, map::cell_to_world(23, 16));
+        drive(&mut game, None, 120);
+        assert_eq!(damage_of(&game), 0.0, "three cells out is safe");
+        assert!(game.heat_at(map::cell_to_world(23, 16)) > 0.0, "though it is warm");
+        // On the bank, a cell away: hurt, slowly.
+        let mut bank = sandbox(&lava_map(""));
+        teleport_player(&mut bank, map::cell_to_world(25, 16));
+        drive(&mut bank, None, 120);
+        let hurt = damage_of(&bank);
+        assert!(hurt > 0.0 && hurt < 15.0, "a bank burns a little: {hurt}");
+    }
+
+    #[test]
+    fn a_heat_shield_carries_a_hull_across_the_lava_unhurt() {
+        let mut game = sandbox(&lava_map(""));
+        let player = game.player().expect("player");
+        with_tank_mut(&game.world, player, |t| t.heat_shield_timer = tuning().heat_shield_seconds);
+        teleport_player(&mut game, map::cell_to_world(24, 16));
+        drive(&mut game, Some(Dir::Right), 150);
+        assert!(player_pos(&game).x > map::cell_to_world(27, 16).x, "across the stream");
+        assert_eq!(damage_of(&game), 0.0);
+        assert_eq!(with_tank(&game.world, player, |t| t.burn_timer), 0.0, "and not alight");
+    }
+
+    #[test]
+    fn the_router_walls_off_a_lava_lake_and_prices_a_lava_ford() {
+        let game = sandbox(&lava_map(""));
+        let grid = game.nav_grid(W, H);
+        assert!(!grid.usable(map::cell_to_world(16, 11)), "the lake's deep middle is a wall");
+        assert!(game.lava().ford_cells().count() > 20);
+    }
+
+    #[test]
+    fn lava_never_freezes_under_snow() {
+        let mut game = sandbox(&lava_map(""));
+        game.change_weather(crate::map::Weather::Snow);
+        assert_eq!(game.lava().deep_cells().count(), 9);
+        assert_eq!(game.lava().depth_at(map::cell_to_world(26, 8)), crate::ground::Depth::Shallow);
     }
 
     #[test]

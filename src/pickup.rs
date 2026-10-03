@@ -107,12 +107,20 @@ pub enum PickupKind {
     /// while a player tower is hurt (`tower_pack_near_health_chance`).
     #[serde(rename = "tower_pack")]
     TowerPack,
+    /// The heat shield (docs/volcano.md): red on top and black underneath,
+    /// for `heat_shield_seconds` the collector takes no heat - not from
+    /// lava, a burning bank, a burning cell, afterburn or a flamethrower's
+    /// stream - so a lava stream is a road while it lasts. Blasts still
+    /// hurt and shove. Refreshes rather than stacks, like `SpeedUp`.
+    /// Player-only: an enemy driving over one leaves it where it is.
+    #[serde(rename = "heat_shield")]
+    HeatShield,
 }
 
 impl PickupKind {
     /// Every kind in declaration order: the crate and symbol sheets' row
     /// order (`row`).
-    pub const ALL: [PickupKind; 11] = [
+    pub const ALL: [PickupKind; 12] = [
         PickupKind::Health,
         PickupKind::Ammo,
         PickupKind::Laser,
@@ -124,6 +132,7 @@ impl PickupKind {
         PickupKind::Flamethrower,
         PickupKind::FrogHealth,
         PickupKind::TowerPack,
+        PickupKind::HeatShield,
     ];
 
     /// This kind's row on static/crates_sheet.png and
@@ -141,6 +150,7 @@ impl PickupKind {
             PickupKind::Flamethrower => 8,
             PickupKind::FrogHealth => 9,
             PickupKind::TowerPack => 10,
+            PickupKind::HeatShield => 11,
         }
     }
 
@@ -162,6 +172,8 @@ impl PickupKind {
             PickupKind::Flamethrower => [0xC2501A, 0xFF8A2B, 0xFFC27A],
             PickupKind::FrogHealth => [0x3F9A35, 0x7EDB5A, 0xC2F7A0],
             PickupKind::TowerPack => [0x4F6FC7, 0x8FB0FF, 0xCFDCFF],
+            // Two-tone: the shade is the basalt its lower half is painted in.
+            PickupKind::HeatShield => [0x3A3030, 0xF0461E, 0xFFA84A],
         };
         [rgb(shade), rgb(base), rgb(light)]
     }
@@ -173,7 +185,12 @@ impl PickupKind {
         match self {
             PickupKind::Ammo | PickupKind::Minigun | PickupKind::Missiles | PickupKind::Flamethrower => true,
             PickupKind::Laser | PickupKind::Plasma => true,
-            PickupKind::Health | PickupKind::SpeedUp | PickupKind::Shield | PickupKind::FrogHealth | PickupKind::TowerPack => false,
+            PickupKind::Health
+            | PickupKind::SpeedUp
+            | PickupKind::Shield
+            | PickupKind::FrogHealth
+            | PickupKind::TowerPack
+            | PickupKind::HeatShield => false,
         }
     }
 }

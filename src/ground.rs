@@ -389,6 +389,13 @@ pub struct Look {
 /// taken for another's (`render::canvas::BlockTexture`).
 static NEXT_SHADE_STAMP: AtomicU64 = AtomicU64::new(1);
 
+/// A fresh name for a floor layer baked into a `BlockImage` - a shade, or
+/// the lava's scorched banks (`lava::LavaLayout::banks`) - from the one
+/// counter, so no two are ever taken for each other.
+pub fn next_block_stamp() -> u64 {
+    NEXT_SHADE_STAMP.fetch_add(1, Ordering::Relaxed)
+}
+
 /// This round's resolved ground layer: a flat, row-major grid of source
 /// tile ids (into `punyworld-overworld-tileset.png`), one per
 /// `GROUND_WORLD_TILE` cell. Built by `build`, drawn every frame by `draw`

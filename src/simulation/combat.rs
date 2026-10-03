@@ -67,6 +67,16 @@ impl BlastParams {
         }
     }
 
+    /// A volcano's lava bomb landing (docs/volcano.md).
+    pub fn lava_bomb() -> Self {
+        BlastParams {
+            radius: tuning().volcano_bomb_radius_px,
+            damage: (tuning().volcano_bomb_damage_min, tuning().volcano_bomb_damage_max),
+            knockback: tuning().volcano_bomb_knockback,
+            by: None,
+        }
+    }
+
     /// Centre damage before falloff. Tolerates a live-tuned inverted
     /// range (min >= max) by returning `min` instead of panicking.
     pub fn roll_damage(&self, rng: &mut SmallRng) -> f32 {

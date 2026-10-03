@@ -92,6 +92,8 @@ blows up - they throw none.
 | Particles | `fx.rs`, drawn by `render/fx.rs` | sparks and embers cool down the fire ramp; smoke, dust and a missile's trail are shaded puffs; chips are small squares |
 | The light shots throw | `render/shot_fx.rs` | stepped glows and streaks of blocks |
 | The flamethrower's jet, the plasma orb | `static/flame_jet.fs`, `static/plasma_orb.fs` | worked out per 2 px block, coloured in their ramps' flat steps, edges dithered |
+| A volcano's cone, smoke and eruption; a lava bomb | `volcano.rs` (docs/volcano.md) | the cone a baked picture of blocks in `ASH`/`SCORIA` with molten gullies; the plume shaded `SMOKE` puffs leaning with the wind; an eruption a flash with rays, a fountain of `pyro::tongues`, drops and a shock ring of marks; a bomb a rock with a glowing trail and a warning ring of marks where it lands |
+| Lava | `lava.rs` (docs/volcano.md) | every 2 px block a `FIRE` step - flow bands running down the stream, crust plates on a lake, a toasted bank baked once into a `BlockImage`; a bomb's pool a metaball cooling down the ramp |
 
 A tank's damage, a step per tier of the tank sheet (`TANK_DAMAGE_TIERS`,
 docs/SPRITESHEET_SPEC.md). The sheet carries the wear - scuffs, plates

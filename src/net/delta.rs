@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 use crate::net::MAX_SEATS;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    BonusPickup, CrateState, FireState, FrogState, MissileState, RoundState, ShotState, Snapshot, TankState, TileState,
-    side_code,
+    BonusPickup, CrateState, FireState, FrogState, LampState, MissileState, RoundState, ShotState, Snapshot, TankState,
+    TileState, side_code,
 };
 
 /// An entry that kept every field but its position, which moved by
@@ -70,6 +70,9 @@ pub struct SnapshotDelta {
     /// New or changed fires, in full.
     pub fires: Vec<FireState>,
     pub fires_gone: Vec<u16>,
+    /// New lanterns, in full.
+    pub lamps: Vec<LampState>,
+    pub lamps_gone: Vec<u16>,
     /// New or changed crates, in full.
     pub crates: Vec<CrateState>,
     pub crates_gone: Vec<u16>,
@@ -165,6 +168,12 @@ impl Keyed for FireState {
     }
 }
 
+impl Keyed for LampState {
+    fn key(&self) -> u16 {
+        self.id
+    }
+}
+
 impl Keyed for CrateState {
     fn key(&self) -> u16 {
         self.cell
@@ -246,6 +255,7 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
     let (frogs, frogs_moved, frogs_gone) = diff_positioned(&prev.frogs, &next.frogs);
     let (tiles, tiles_gone) = diff_keyed(&prev.tiles, &next.tiles);
     let (fires, fires_gone) = diff_keyed(&prev.fires, &next.fires);
+    let (lamps, lamps_gone) = diff_keyed(&prev.lamps, &next.lamps);
     let (crates, crates_gone) = diff_keyed(&prev.crates, &next.crates);
     let mut bonus_pickups = next.bonus_pickups.clone();
     bonus_pickups.sort();
@@ -276,6 +286,8 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
         tiles_gone,
         fires,
         fires_gone,
+        lamps,
+        lamps_gone,
         crates,
         crates_gone,
         round: (next.round != prev.round).then_some(next.round),
@@ -306,6 +318,7 @@ pub fn apply_delta(prev: &Snapshot, delta: &SnapshotDelta) -> Snapshot {
         bonus_pickups,
         tiles: apply_keyed(&prev.tiles, &delta.tiles, &delta.tiles_gone),
         fires: apply_keyed(&prev.fires, &delta.fires, &delta.fires_gone),
+        lamps: apply_keyed(&prev.lamps, &delta.lamps, &delta.lamps_gone),
         crates: apply_keyed(&prev.crates, &delta.crates, &delta.crates_gone),
         round: delta.round.unwrap_or(prev.round),
         events: delta.events.clone(),
@@ -420,7 +433,11 @@ mod tests {
             .into_iter()
             .map(|cell| TileState { cell, hp: rng.random(), flags: rng.random(), faces: rng.random_range(0..16) })
             .collect();
-        let fires = random_keys(rng, 10, 600).into_iter().map(|cell| FireState { cell, left: rng.random() }).collect();
+        let fires = random_keys(rng, 10, 600).into_iter().map(|cell| FireState { cell, left: rng.random(), lava: rng.random() }).collect();
+        let lamps = random_keys(rng, 4, 200)
+            .into_iter()
+            .map(|id| LampState { id, x: rng.random(), y: rng.random(), seat: rng.random_range(0..8) })
+            .collect();
         let crates = random_keys(rng, 4, 600)
             .into_iter()
             .map(|cell| CrateState { cell, hp: rng.random(), flags: rng.random_range(0..4), left: rng.random() })
@@ -438,6 +455,7 @@ mod tests {
             bonus_pickups,
             tiles,
             fires,
+            lamps,
             crates,
             round: RoundState {
                 wave: rng.random_range(0..10),
@@ -508,7 +526,11 @@ mod tests {
             next.tiles.push(TileState { cell, hp: rng.random(), flags: 0, faces: 0 });
         }
         for cell in random_keys(rng, 2, 600) {
-            next.fires.push(FireState { cell, left: rng.random() });
+            next.fires.push(FireState { cell, left: rng.random(), lava: rng.random() });
+        }
+        next.lamps.retain(|_| !rng.random_ratio(1, 6));
+        for id in random_keys(rng, 1, 200) {
+            next.lamps.push(LampState { id, x: rng.random(), y: rng.random(), seat: rng.random_range(0..8) });
         }
         next.crates.retain(|_| !rng.random_ratio(1, 3));
         for cell in random_keys(rng, 1, 600) {
@@ -530,6 +552,7 @@ mod tests {
         next.shots.reverse();
         next.tiles.reverse();
         next.fires.reverse();
+        next.lamps.reverse();
         next.crates.reverse();
         next.normalise();
         next
