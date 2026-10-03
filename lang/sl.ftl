@@ -6,6 +6,8 @@
 
 hud-speed = TEMPO
 hud-shield = ŠČIT
+hud-lamps = LUČKE
+hud-heat = VROČINA
 hud-frog = ŽABA
 
 button-build = GRADI
@@ -61,6 +63,7 @@ levels-back = NAZAJ
 bar-level = STOPNJA
 
 level-lotus-lagoon = Lotosova laguna
+level-vulkan = Vulkan
 level-glasshouses = Vrt s steklenjaki
 level-oasis-bazaar = Bazar v oazi
 level-carnival = Karneval
@@ -311,9 +314,12 @@ tool-fuel_drum = sod goriva
 tool-oil_trail = sled olja
 tool-road = cesta
 tool-water = voda
+tool-lava = lava
 tool-tall_grass = visoka trava
 tool-gate = vrata
 tool-portal = portal
+tool-volcano = vulkan
+tool-lamp = lučka
 tool-start = začetek p1
 tool-start2 = začetek p2
 tool-frog = žaba
@@ -329,6 +335,7 @@ tool-shield = ščit
 tool-flamethrower = metalec ognja
 tool-frog_health = paket za žabo
 tool-tower_pack = popravilo
+tool-heat_shield = toplotni ščit
 tool-tesla = tesla stolp
 tool-tesla_enemy = sovr. tesla
 tool-gun_tower = strojnica
@@ -346,6 +353,8 @@ tool-short-enemy_frog = s.žaba
 tool-short-flamethrower = ogenj
 tool-short-frog_health = žaba+
 tool-short-tower_pack = stolp+
+tool-short-heat_shield = ščit+
+tool-short-volcano = vulkan
 tool-short-tesla = tesla
 tool-short-tesla_enemy = s.tsl
 tool-short-gun_tower = strel

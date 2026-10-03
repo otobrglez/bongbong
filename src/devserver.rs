@@ -179,15 +179,15 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "step",
-        description: "Freeze the game in lockstep and advance exactly `frames` simulation frames at the fixed 1/60 s timestep (all in one rendered frame, so it is fast and deterministic). Optional player input is held for those frames (`move_dir`/`face`/`fire` for player 1, `p2_move_dir`/`p2_face`/`p2_fire` for player 2 in a two-player round); shells/plasma fire once per press, so set fire_every=N to tap the trigger every N frames instead of holding it. Replies with the events of the step (first 256; `kinds`/`exclude` filter by event name, see `events`) and, by default, a compact snapshot. Use `resume` to let the game run in real time again.",
-        schema: r#"{"type":"object","properties":{"frames":{"type":"integer","default":1,"minimum":1,"maximum":100000},"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"p2_move_dir":{"type":"string","enum":["up","down","left","right"]},"p2_face":{"type":"string","enum":["up","down","left","right"]},"p2_fire":{"type":"boolean"},"fire_every":{"type":"integer","minimum":1,"description":"With fire=true: press the trigger on frames 0, N, 2N... and release in between (both players)"},"snapshot":{"type":"boolean","default":true},"detail":{"type":"string","enum":["compact","full"],"default":"compact"},"kinds":{"type":"array","items":{"type":"string"}},"exclude":{"type":"array","items":{"type":"string"}}}}"#,
+        description: "Freeze the game in lockstep and advance exactly `frames` simulation frames at the fixed 1/60 s timestep (all in one rendered frame, so it is fast and deterministic). Optional player input is held for those frames (`move_dir`/`face`/`fire`/`lamp` for player 1, `p2_move_dir`/`p2_face`/`p2_fire`/`p2_lamp` for player 2 in a two-player round; a held `lamp` sets one lantern down, on the press - docs/volcano.md); shells/plasma fire once per press, so set fire_every=N to tap the trigger every N frames instead of holding it. Replies with the events of the step (first 256; `kinds`/`exclude` filter by event name, see `events`) and, by default, a compact snapshot. Use `resume` to let the game run in real time again.",
+        schema: r#"{"type":"object","properties":{"frames":{"type":"integer","default":1,"minimum":1,"maximum":100000},"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"lamp":{"type":"boolean"},"p2_move_dir":{"type":"string","enum":["up","down","left","right"]},"p2_face":{"type":"string","enum":["up","down","left","right"]},"p2_fire":{"type":"boolean"},"p2_lamp":{"type":"boolean"},"fire_every":{"type":"integer","minimum":1,"description":"With fire=true: press the trigger on frames 0, N, 2N... and release in between (both players)"},"snapshot":{"type":"boolean","default":true},"detail":{"type":"string","enum":["compact","full"],"default":"compact"},"kinds":{"type":"array","items":{"type":"string"}},"exclude":{"type":"array","items":{"type":"string"}}}}"#,
         read_only: false,
         destructive: false,
     },
     ToolSpec {
         name: "input",
-        description: "Override a player's input for the next `frames` real-time frames (keyboard is ignored meanwhile): `move_dir`/`face`/`fire` for player 1, `p2_move_dir`/`p2_face`/`p2_fire` for player 2 in a two-player round. Works while the game runs; in lockstep prefer step's own input fields. `cycle_overlays: true` presses the I key once: cycles the overlay presets off -> inspect -> all -> off (with no move_dir/face/fire it leaves the keyboard alone).",
-        schema: r#"{"type":"object","properties":{"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"p2_move_dir":{"type":"string","enum":["up","down","left","right"]},"p2_face":{"type":"string","enum":["up","down","left","right"]},"p2_fire":{"type":"boolean"},"frames":{"type":"integer","default":1},"cycle_overlays":{"type":"boolean","default":false}}}"#,
+        description: "Override a player's input for the next `frames` real-time frames (keyboard is ignored meanwhile): `move_dir`/`face`/`fire`/`lamp` for player 1, `p2_move_dir`/`p2_face`/`p2_fire`/`p2_lamp` for player 2 in a two-player round. Works while the game runs; in lockstep prefer step's own input fields. `cycle_overlays: true` presses the I key once: cycles the overlay presets off -> inspect -> all -> off (with no move_dir/face/fire it leaves the keyboard alone).",
+        schema: r#"{"type":"object","properties":{"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"lamp":{"type":"boolean"},"p2_move_dir":{"type":"string","enum":["up","down","left","right"]},"p2_face":{"type":"string","enum":["up","down","left","right"]},"p2_fire":{"type":"boolean"},"p2_lamp":{"type":"boolean"},"frames":{"type":"integer","default":1},"cycle_overlays":{"type":"boolean","default":false}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -376,7 +376,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "builder_tool",
-        description: "Select the builder's brush by name - brick, iron, wood, glass (WALL); sandbag, barrel, oil_drum, fuel_drum, fence, tesla, tesla_enemy, gun_tower, gun_tower_enemy, bio_slush, bio_slush_enemy (PROP); road, water, tall_grass, tree, pine, oil_trail, gate, portal (GROUND); start, start2 (player 2's start), frog, enemy_frog (ACTOR); health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack (PICKUP); eraser; or select, the rectangle select tool (BRUSH's list; `builder_select` drives it) - through the category's own selection path, so the bar's category button updates as well. Any tool but select lets the selection go and takes a paste ghost away. `shape` sets how the brush paints, BRUSH's list's shapes (docs/large-maps-follow-camera.md section 9): pen (a stroke, under the toggle-erase rule), rect (a rectangle from the press to the release, filled on the release; the eraser or the right button clears it), fill (a flood from the pressed cell over the cells joined to it edge to edge that hold exactly what it holds, at most `builder_fill_max_cells` - past it nothing changes and `status.builder.message` says why -, under the toggle-erase rule) or scatter (a hashed share, `builder_scatter_density`, of the cells within `builder_scatter_radius_cells` of each cell the stroke crosses, laid on empty cells only; erasing, it thins the brush's object, or anything under the eraser). Picking a shape takes a painting brush back from the select tool; a singleton (start, start2, frog, enemy_frog) paints with the pen whatever the shape. Without `tool` or `shape`, only reports the active tool, the brush's `shape` and every category's current tool and full list (the authoritative spelling of every brush).",
+        description: "Select the builder's brush by name - brick, iron, wood, glass (WALL); sandbag, barrel, oil_drum, fuel_drum, fence, tesla, tesla_enemy, gun_tower, gun_tower_enemy, bio_slush, bio_slush_enemy (PROP); road, water, lava, tall_grass, tree, pine, oil_trail, gate, portal, volcano, lamp (GROUND); start, start2 (player 2's start), frog, enemy_frog (ACTOR); health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack, heat_shield (PICKUP); eraser; or select, the rectangle select tool (BRUSH's list; `builder_select` drives it) - through the category's own selection path, so the bar's category button updates as well. Any tool but select lets the selection go and takes a paste ghost away. `shape` sets how the brush paints, BRUSH's list's shapes (docs/large-maps-follow-camera.md section 9): pen (a stroke, under the toggle-erase rule), rect (a rectangle from the press to the release, filled on the release; the eraser or the right button clears it), fill (a flood from the pressed cell over the cells joined to it edge to edge that hold exactly what it holds, at most `builder_fill_max_cells` - past it nothing changes and `status.builder.message` says why -, under the toggle-erase rule) or scatter (a hashed share, `builder_scatter_density`, of the cells within `builder_scatter_radius_cells` of each cell the stroke crosses, laid on empty cells only; erasing, it thins the brush's object, or anything under the eraser). Picking a shape takes a painting brush back from the select tool; a singleton (start, start2, frog, enemy_frog) paints with the pen whatever the shape. Without `tool` or `shape`, only reports the active tool, the brush's `shape` and every category's current tool and full list (the authoritative spelling of every brush).",
         schema: r#"{"type":"object","properties":{"tool":{"type":"string","description":"A tool name (see the description) or eraser"},"shape":{"type":"string","enum":["pen","rect","fill","scatter"],"description":"How the brush paints"}}}"#,
         read_only: false,
         destructive: false,
@@ -3424,11 +3424,10 @@ fn f32_param(params: &Value, key: &str) -> Option<f32> {
     params.get(key).and_then(Value::as_f64).map(|v| v as f32)
 }
 
-/// `move_dir`/`face`/`fire` from `params`: `None` when none is given (the
-/// keyboard stays in charge), an error for an unknown direction.
-/// One player's intent from `move_dir`/`face`/`fire` under `prefix` (`""`
-/// for player 1, `"p2_"` for player 2); `None` when none of the three is
-/// present, so the keyboard keeps that player.
+/// One player's intent from `move_dir`/`face`/`fire`/`lamp` under
+/// `prefix` (`""` for player 1, `"p2_"` for player 2); `None` when none of
+/// them is present, so the keyboard keeps that player; an error for an
+/// unknown direction.
 fn parse_intent(params: &Value, prefix: &str) -> Result<Option<Intent>, String> {
     let dir = |key: &str| -> Result<Option<Dir>, String> {
         let key = format!("{prefix}{key}");
@@ -3440,10 +3439,11 @@ fn parse_intent(params: &Value, prefix: &str) -> Result<Option<Intent>, String> 
     let move_dir = dir("move_dir")?;
     let face = dir("face")?;
     let fire = params.get(format!("{prefix}fire")).and_then(Value::as_bool);
-    if move_dir.is_none() && face.is_none() && fire.is_none() {
+    let lamp = params.get(format!("{prefix}lamp")).and_then(Value::as_bool);
+    if move_dir.is_none() && face.is_none() && fire.is_none() && lamp.is_none() {
         return Ok(None);
     }
-    Ok(Some(Intent { move_dir, face, fire: fire.unwrap_or(false), fire_aim_offset: 0.0, slow: 0.0 }))
+    Ok(Some(Intent { move_dir, face, fire: fire.unwrap_or(false), fire_aim_offset: 0.0, slow: 0.0, lamp: lamp.unwrap_or(false) }))
 }
 
 /// Standard base64 (RFC 4648, padded) - the one encoder this crate needs,
@@ -4738,7 +4738,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(cats.len(), 5);
         assert_eq!(cats[0]["name"], "wall");
         assert_eq!(cats[0]["current"], "iron");
-        assert_eq!(cats[4]["tools"].as_array().unwrap().len(), 11, "{}", cats[4]);
+        assert_eq!(cats[4]["tools"].as_array().unwrap().len(), 12, "{}", cats[4]);
         let err = ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "granite" })).unwrap_err();
         assert!(err.contains("brick") && err.contains("eraser"), "{err}");
 

@@ -25,6 +25,8 @@
 # Label over a 36 px gauge in a 40 px slot, 10 px text: about 6 letters.
 hud-speed = SPEED
 hud-shield = SHIELD
+hud-lamps = LAMPS
+hud-heat = HEAT
 hud-frog = FROG
 
 # The bar's buttons at its right end, 18 px text. BUILD/PLAY share a 72 px
@@ -422,9 +424,12 @@ tool-fuel_drum = fuel drum
 tool-oil_trail = oil trail
 tool-road = road
 tool-water = water
+tool-lava = lava
 tool-tall_grass = tall grass
 tool-gate = gate
 tool-portal = portal
+tool-volcano = volcano
+tool-lamp = lamp post
 tool-start = p1 start
 tool-start2 = p2 start
 tool-frog = frog
@@ -440,6 +445,7 @@ tool-shield = shield
 tool-flamethrower = flamethrower
 tool-frog_health = frog pack
 tool-tower_pack = tower pack
+tool-heat_shield = heat shield
 tool-tesla = tesla coil
 tool-tesla_enemy = enemy tesla
 tool-gun_tower = gun tower
@@ -462,6 +468,9 @@ tool-short-enemy_frog = e.frog
 tool-short-flamethrower = flame
 tool-short-frog_health = frog+
 tool-short-tower_pack = tower+
+tool-short-heat_shield = heat
+tool-short-lamp = lamp
+tool-short-volcano = volc
 tool-short-tesla = tesla
 tool-short-tesla_enemy = e.tsl
 tool-short-gun_tower = gun

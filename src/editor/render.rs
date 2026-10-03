@@ -130,6 +130,7 @@ pub struct EditorTextures<'a> {
     /// static/towers_sheet.png - the defence towers' bases and tops.
     pub towers: &'a Texture2D,
     pub pickup_tower_pack: &'a Texture2D,
+    pub pickup_heat_shield: &'a Texture2D,
     /// The canvas's floor shade as `app.rs` uploaded it before the frame,
     /// with the stamp it was baked under.
     pub shade: Option<(u64, &'a Texture2D)>,
@@ -240,6 +241,7 @@ impl Sheets for EditorTextures<'_> {
             Sheet::Pickup(PickupKind::Flamethrower) => self.pickup_flamethrower,
             Sheet::Pickup(PickupKind::FrogHealth) => self.pickup_frog_health,
             Sheet::Pickup(PickupKind::TowerPack) => self.pickup_tower_pack,
+            Sheet::Pickup(PickupKind::HeatShield) => self.pickup_heat_shield,
             Sheet::TankGlow
             | Sheet::TankModules
             | Sheet::TankModulesGlow
@@ -501,11 +503,44 @@ impl MapEditor {
                 }
             }
 
+            // The lava over the ground, from the canvas's own layout, then
+            // each volcano's cone at its crater (docs/volcano.md): a round's
+            // picture, asleep and calm, under every other cell.
+            let lava = self.lava_layout();
+            if !lava.is_empty() {
+                let look = crate::lava::Look { surge: 0.0, speed: crate::tuning::tuning().lava_flow_speed };
+                let mut c = GpuCanvas::new(&mut *d, textures);
+                for (col, row) in lava.cells() {
+                    if !culled(map::cell_to_world(col, row), 0.0) {
+                        crate::lava::draw_cell(&mut c, &lava, col, row, time, look, false, 1.0);
+                        crate::lava::draw_floes(&mut c, &lava, col, row, time, look);
+                    }
+                }
+            }
+            let t = crate::tuning::tuning();
+            for &(col, row) in &self.map.volcano_cells() {
+                let pos = map::cell_to_world(col, row);
+                if culled(pos, 96.0) {
+                    continue;
+                }
+                let outlets: Vec<f32> = lava
+                    .cells()
+                    .filter(|&(c, r)| (-1..=1).any(|dr| (-1..=1).any(|dc| crate::volcano::in_footprint(col, row, c + dc, r + dr))))
+                    .map(|(c, r)| ((r - row) as f32).atan2((c - col) as f32))
+                    .collect();
+                let picture = crate::volcano::cone(&outlets);
+                let asleep = crate::volcano::phase(-1.0, 0.0, &t);
+                let mut c = GpuCanvas::new(&mut *d, textures);
+                crate::volcano::draw_skirt(&mut c, pos, &picture);
+                crate::volcano::draw_cone_shadow(&mut c, pos, &picture, (t.shadow_dir_x, t.shadow_dir_y));
+                crate::volcano::draw_cone(&mut c, pos, &picture, &asleep, time);
+            }
+
             // Only the rows the cull spans (`CellIndex::near`).
             for (col, row, obj) in index.near(cull) {
-                // Road and water are painted into `self.ground`, portals in
-                // the pre-pass above.
-                if matches!(obj, CellObject::Road | CellObject::Water | CellObject::Portal) {
+                // Road and water are painted into `self.ground`, lava,
+                // volcanoes and portals in the pre-passes above.
+                if matches!(obj, CellObject::Road | CellObject::Water | CellObject::Lava | CellObject::Volcano | CellObject::Portal) {
                     continue;
                 }
                 let pos = map::cell_to_world(*col, *row);
@@ -1316,6 +1351,7 @@ fn pickup_texture<'a>(textures: &EditorTextures<'a>, pickup: PickupKind) -> &'a 
         PickupKind::Flamethrower => textures.pickup_flamethrower,
         PickupKind::FrogHealth => textures.pickup_frog_health,
         PickupKind::TowerPack => textures.pickup_tower_pack,
+        PickupKind::HeatShield => textures.pickup_heat_shield,
     }
 }
 
@@ -1375,6 +1411,9 @@ const PANEL_BORDER: Color = Color::new(0, 0, 0, (255.0 * EDITOR_PANEL_BORDER_OPA
 pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme: Theme, tool: Tool, rect: Rectangle) {
     let dest = Rectangle::new(rect.x + 4.0, rect.y + 4.0, rect.width - 8.0, rect.height - 8.0);
     match tool {
+        Tool::Prop(crate::obstacle::Material::Lamp) => draw_lamp_icon(d, dest),
+        Tool::Lava => draw_lava_icon(d, dest),
+        Tool::Volcano => draw_volcano_icon(d, dest),
         Tool::Wall(material) | Tool::Prop(material) => {
             let (sheet, src) = obstacle::icon_source_rec(material);
             d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
@@ -1459,6 +1498,46 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
         }
         Tool::Select => draw_brush_icon(d, BrushRow::Select, rect, TEXT),
     }
+}
+
+/// The lava tool's icon: a molten pool in the fire ramp's steps inside a
+/// crust of black, bands of gold running across it.
+fn draw_lava_icon(d: &mut impl RaylibDraw, dest: Rectangle) {
+    use crate::pyro::{FIRE, SMOKE};
+    d.draw_rectangle_rounded(dest, 0.3, EDITOR_PANEL_SEGMENTS, SMOKE[0]);
+    let inner = Rectangle::new(dest.x + 3.0, dest.y + 3.0, dest.width - 6.0, dest.height - 6.0);
+    d.draw_rectangle_rounded(inner, 0.3, EDITOR_PANEL_SEGMENTS, FIRE[3]);
+    let band = inner.height / 5.0;
+    for (i, color) in [(1, FIRE[5]), (3, FIRE[4])] {
+        d.draw_rectangle_rec(Rectangle::new(inner.x + 2.0, inner.y + band * i as f32, inner.width - 4.0, band * 0.6), color);
+    }
+    d.draw_rectangle_rec(Rectangle::new(inner.x + inner.width * 0.3, inner.y + band, band, band * 0.6), FIRE[6]);
+}
+
+/// The volcano tool's icon: the cone from above, ash at its foot and rust
+/// at its rim, the crater molten.
+fn draw_volcano_icon(d: &mut impl RaylibDraw, dest: Rectangle) {
+    use crate::pyro::{FIRE, SMOKE};
+    let c = Vector2::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
+    let r = dest.width.min(dest.height) / 2.0;
+    d.draw_circle_v(c, r, SMOKE[0]);
+    d.draw_circle_v(c, r - 2.0, SMOKE[2]);
+    d.draw_circle_v(Vector2::new(c.x - 1.0, c.y - 1.0), r * 0.68, Color::new(0x8D, 0x4A, 0x25, 255));
+    d.draw_circle_v(c, r * 0.36, SMOKE[0]);
+    d.draw_circle_v(c, r * 0.28, FIRE[3]);
+    d.draw_circle_v(Vector2::new(c.x - 1.0, c.y - 1.0), r * 0.14, FIRE[6]);
+}
+
+/// The lamp post's icon: the post and its lantern, lit.
+fn draw_lamp_icon(d: &mut impl RaylibDraw, dest: Rectangle) {
+    use crate::pyro::{FIRE, SMOKE};
+    let (cx, w, h) = (dest.x + dest.width / 2.0, dest.width, dest.height);
+    d.draw_circle_v(Vector2::new(cx, dest.y + h * 0.3), w * 0.32, Color::new(255, 214, 120, 70));
+    d.draw_rectangle_rec(Rectangle::new(cx - w * 0.06, dest.y + h * 0.35, w * 0.12, h * 0.55), SMOKE[0]);
+    d.draw_rectangle_rec(Rectangle::new(cx - w * 0.22, dest.y + h * 0.85, w * 0.44, h * 0.1), SMOKE[1]);
+    d.draw_rectangle_rec(Rectangle::new(cx - w * 0.18, dest.y + h * 0.12, w * 0.36, h * 0.3), SMOKE[0]);
+    d.draw_rectangle_rec(Rectangle::new(cx - w * 0.12, dest.y + h * 0.16, w * 0.24, h * 0.22), FIRE[5]);
+    d.draw_rectangle_rec(Rectangle::new(cx - w * 0.05, dest.y + h * 0.2, w * 0.1, h * 0.12), FIRE[6]);
 }
 
 /// A row of BRUSH's list as a picture inside `rect` (4 pt inset, like a
@@ -1583,6 +1662,23 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
         }
         CellObject::Water => {
             d.draw_texture_pro(textures.ground, ground::water_icon_source_rec(), dest, origin, 0.0, tint);
+        }
+        // A lifted or pasted lava cell on its own: the stream piece with
+        // no neighbours. The canvas draws the map's lava from its layout.
+        CellObject::Lava => {
+            let r = Rectangle::new(pos.x - size / 2.0 + 2.0, pos.y - size / 2.0 + 2.0, size - 4.0, size - 4.0);
+            d.draw_rectangle_rounded(r, 0.4, EDITOR_PANEL_SEGMENTS, faded(crate::pyro::SMOKE[0]));
+            let inner = Rectangle::new(r.x + 4.0, r.y + 4.0, r.width - 8.0, r.height - 8.0);
+            d.draw_rectangle_rounded(inner, 0.4, EDITOR_PANEL_SEGMENTS, faded(crate::pyro::FIRE[3]));
+        }
+        CellObject::Volcano => {
+            let picture = crate::volcano::cone(&[]);
+            let asleep = crate::volcano::phase(-1.0, 0.0, &crate::tuning::tuning());
+            crate::volcano::draw_cone(&mut GpuCanvas::new(&mut *d, textures), pos, &picture, &asleep, time);
+        }
+        CellObject::Lamp => {
+            let t = crate::tuning::tuning();
+            crate::lamp::draw_post(&mut GpuCanvas::new(&mut *d, textures), pos, time, (t.shadow_dir_x, t.shadow_dir_y), true);
         }
         CellObject::Portal => draw_portal(&mut GpuCanvas::new(&mut *d, textures), pos, time, tint),
         CellObject::TallGrass => {
