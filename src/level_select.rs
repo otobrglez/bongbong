@@ -267,7 +267,7 @@ impl LevelSelect {
             .take(SELECT_TILES)
             .enumerate()
             .map(|(i, level)| TileView {
-                number: i + 1,
+                number: campaign.levels.number(i),
                 lines: wrap(&level.title(), max_px, TILE_TITLE_SIZE),
                 // Past the furthest reached, a skippable level leaves the
                 // one after it open (`Campaign::open_to`).
@@ -433,7 +433,7 @@ mod level_select_tests {
         assert!(v.tiles[3..].iter().all(|t| t.state == TileState::Locked));
         assert!(v.tiles[0].current && v.tiles[0].focus);
         assert!(v.tiles[1..].iter().all(|t| !t.current && !t.focus));
-        assert_eq!(v.tiles[13].number, 14);
+        assert_eq!((v.tiles[0].number, v.tiles[13].number), (0, 13), "Boot Camp is level 0");
     }
 
     #[test]

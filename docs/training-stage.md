@@ -1,6 +1,6 @@
 # Boot Camp: the training stage
 
-Status: **built** (steps 2-4). The course is level 1 of `levels.toml`
+Status: **built** (steps 2-4). The course is the first entry of `levels.toml`, shown as `LEVEL 0`,
 and can be passed over; what is left is tuning by play. The concept lab
 (`docs/lab/boot-camp-lab.html`, open it from the repository so it finds
 `static/`) is a playable browser prototype of everything below: drive it,
@@ -17,7 +17,7 @@ script of *beats*, and the player's own frog is the only guide.
 |---|---|
 | Teaching | **The frog alone.** No signs, floor paint or HUD checklist: the player's own frog hops ahead from pen to pen and says each rule in a speech bubble. |
 | The frog's voice | Short, light lines and no name. At most eight words a line, four or fewer once an enemy is on the field. |
-| Placement | **Level 0, skippable.** First in `levels.toml` (so `LEVEL 1` on screen); a new progress file opens on it, a file already further opens where it was, and Lotus Lagoon is open in the level select from the start. |
+| Placement | **Level 0, skippable.** First in `levels.toml` (shown as `LEVEL 0`, so Lotus Lagoon stays `LEVEL 1`; the last level leads round to Lotus Lagoon, never back to training); a new progress file opens on it, a file already further opens where it was, and Lotus Lagoon is open in the level select from the start. |
 | Scope | All six beats: drive, supply, fire, the frog, the first enemy, the shield and a second enemy. |
 | Map | A **field map**, 48 x 13 cells, past the arena size on purpose: the follow camera leads the player east, and the off-screen arrows (an enemy's, the frog's) get introduced in passing. |
 | Script | **Data in the map**: a `[[training.beat]]` list in the map's TOML, so the course is edited like a map and another map could use the same machinery. |

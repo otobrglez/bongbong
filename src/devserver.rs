@@ -1451,7 +1451,7 @@ impl DevServer {
             "dialog_open": session.dialog,
             "players_dialog_open": session.players_dialog,
             "levels_open": session.level_select.is_some(),
-            "levels_focus": session.level_select.as_ref().map(|select| select.focus() + 1),
+            "levels_focus": session.level_select.as_ref().zip(session.campaign.as_ref()).map(|(select, campaign)| campaign.levels.number(select.focus())),
             "level": level_json(session),
             // The builder's PLAY HERE spot the local round started from,
             // `null` for a round from the map's own start.
@@ -2565,11 +2565,11 @@ fn level_json(session: &Session) -> Value {
     let (Some(i), Some(campaign)) = (session.level(), session.campaign.as_ref()) else { return Value::Null };
     let Some(level) = campaign.levels.get(i) else { return Value::Null };
     json!({
-        "number": i + 1,
-        "count": campaign.levels.len(),
+        "number": campaign.levels.number(i),
+        "count": campaign.levels.last_number(),
         "map": level.map,
         "title": level.title(),
-        "reached": campaign.reached() + 1,
+        "reached": campaign.levels.number(campaign.reached()),
         "last": campaign.is_last(i),
     })
 }
@@ -2581,7 +2581,7 @@ fn mode_json(session: &Session) -> Value {
         "dialog_open": session.dialog,
         "players_dialog_open": session.players_dialog,
         "levels_open": session.level_select.is_some(),
-        "levels_focus": session.level_select.as_ref().map(|select| select.focus() + 1),
+        "levels_focus": session.level_select.as_ref().zip(session.campaign.as_ref()).map(|(select, campaign)| campaign.levels.number(select.focus())),
         "players": session.game.players.count(),
         "dirty": b.dirty(),
         "map_name": b.name(),
@@ -5091,7 +5091,7 @@ cells."1,1" = { kind = "wall" }"#;
     #[test]
     fn a_levels_end_screen_takes_clicks_and_enter() {
         let (mut server, tx) = DevServer::headless();
-        // Past Boot Camp, level 1, to the first level with an enemy.
+        // Past Boot Camp, level 0, to the first level with an enemy.
         let mut campaign = crate::levels::Campaign::new(crate::levels::Levels::shipped(), None);
         campaign.won(0);
         let mut game = Game::default();
@@ -5103,7 +5103,7 @@ cells."1,1" = { kind = "wall" }"#;
         let mut s = Session::new(game);
         s.set_campaign(campaign);
         let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
-        assert_eq!(status["level"]["number"], 2, "{status}");
+        assert_eq!(status["level"]["number"], 1, "{status}");
         assert_eq!(status["level"]["map"], "lotus-lagoon");
         assert_eq!(status["stats"]["enemies"], 1);
 
@@ -5114,7 +5114,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!((status["outcome"].as_str(), status["stats"]["destroyed"].as_u64()), (Some("won"), Some(1)), "{status}");
         let at = screen_button(&mut server, &tx, &mut s, "next");
         let m = ask(&mut server, &tx, &mut s, "click", at).unwrap();
-        assert_eq!(m["level"]["number"], 3, "{m}");
+        assert_eq!(m["level"]["number"], 2, "{m}");
         assert_eq!(m["mode"], "play");
         assert!(server.lockstep(), "a new round, frozen like `restart`'s");
 
@@ -5123,7 +5123,7 @@ cells."1,1" = { kind = "wall" }"#;
         s.game.update(Input::default(), crate::PHYSICS_FIXED_DT, w, h);
         assert_eq!(s.game.outcome(), crate::simulation::Outcome::Lost);
         let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "enter" })).unwrap();
-        assert_eq!(m["level"]["number"], 3, "Enter after a loss is the same level again: {m}");
+        assert_eq!(m["level"]["number"], 2, "Enter after a loss is the same level again: {m}");
         assert_eq!(s.game.outcome(), crate::simulation::Outcome::Playing);
     }
 
@@ -5146,30 +5146,30 @@ cells."1,1" = { kind = "wall" }"#;
         s.set_campaign(campaign);
         let button = corner_button(&mut server, &tx, &mut s, "level");
         let m = ask(&mut server, &tx, &mut s, "click", button).unwrap();
-        assert_eq!((m["levels_open"].as_bool(), m["levels_focus"].as_u64()), (Some(true), Some(2)), "{m}");
+        assert_eq!((m["levels_open"].as_bool(), m["levels_focus"].as_u64()), (Some(true), Some(1)), "{m}");
         let err = ask(&mut server, &tx, &mut s, "step", json!({ "frames": 1 })).unwrap_err();
         assert!(err.contains("level select"), "{err}");
 
-        // Only the open tiles are buttons: level 3 is locked, and a press
+        // Only the open tiles are buttons: level 2 is locked, and a press
         // on it - where the window draws it, the chrome's area of a window
         // the size of play's bitmap - does nothing.
         let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
         let screen = &status["ui"]["screen_buttons"];
-        assert!(screen["level_2"].is_object() && screen["level_3"].is_null() && screen["back"].is_object(), "{screen}");
+        assert!(screen["level_1"].is_object() && screen["level_2"].is_null() && screen["back"].is_object(), "{screen}");
         let (ww, wh) = Layout::bare(w, h).window_size();
         let r = crate::level_select::tile_rect(UiFrame::plain((ww as f32, wh as f32)).area, 2);
         let locked = json!({ "x": r.x + r.width / 2.0, "y": r.y + r.height / 2.0 });
         let m = ask(&mut server, &tx, &mut s, "click", locked).unwrap();
-        assert_eq!((m["levels_open"].as_bool(), m["level"]["number"].as_u64()), (Some(true), Some(2)), "a locked tile: {m}");
+        assert_eq!((m["levels_open"].as_bool(), m["level"]["number"].as_u64()), (Some(true), Some(1)), "a locked tile: {m}");
 
         let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
         assert_eq!(m["levels_open"], false, "{m}");
         let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
         assert_eq!(m["levels_open"], true, "Esc opens it over the round: {m}");
         let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "left" })).unwrap();
-        assert_eq!(m["levels_focus"], 1, "{m}");
+        assert_eq!(m["levels_focus"], 0, "{m}");
         let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "enter" })).unwrap();
-        assert_eq!((m["levels_open"].as_bool(), m["level"]["number"].as_u64()), (Some(false), Some(1)), "{m}");
+        assert_eq!((m["levels_open"].as_bool(), m["level"]["number"].as_u64()), (Some(false), Some(0)), "{m}");
         assert!(server.lockstep(), "a new round, frozen like `restart`'s");
     }
 

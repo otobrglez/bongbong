@@ -107,12 +107,30 @@ impl Levels {
         self.0.iter().position(|l| l.map == map)
     }
 
-    /// A level as the command line names it (`--level`): its number,
-    /// counted from 1, or its map's name.
+    /// The number the first level is shown by: 0 where it is skippable
+    /// (the training stage, docs/training-stage.md), so the first real
+    /// level is still level 1; else 1.
+    pub fn first_number(&self) -> usize {
+        if self.0.first().is_some_and(|l| l.skippable) { 0 } else { 1 }
+    }
+
+    /// The number level `i` (an index) is shown by: on the banner, the
+    /// level button, its tile, `--level` and the dev server.
+    pub fn number(&self, i: usize) -> usize {
+        i + self.first_number()
+    }
+
+    /// The highest number shown, the banner's count.
+    pub fn last_number(&self) -> usize {
+        self.number(self.len() - 1)
+    }
+
+    /// A level as the command line names it (`--level`): its number as
+    /// shown (`number`), or its map's name.
     pub fn find(&self, spec: &str) -> Option<usize> {
         let spec = spec.trim();
         match spec.parse::<usize>() {
-            Ok(n) => (1..=self.len()).contains(&n).then(|| n - 1),
+            Ok(n) => (self.first_number()..=self.last_number()).contains(&n).then(|| n - self.first_number()),
             Err(_) => self.position(spec),
         }
     }
@@ -180,9 +198,14 @@ impl Campaign {
         }
     }
 
-    /// The level after `i`: the first again after the last.
+    /// The level after `i`: after the last, the first again - level 1,
+    /// not the training stage before it.
     pub fn next(&self, i: usize) -> usize {
-        (i + 1) % self.levels.len()
+        match (i + 1) % self.levels.len() {
+            // Round from the last level to level 1, past the training stage.
+            0 if self.levels.first_number() == 0 && self.levels.len() > 1 => 1,
+            next => next,
+        }
     }
 
     /// Whether `i` is the last level.
@@ -281,9 +304,10 @@ mod level_tests {
         assert_eq!((c.reached(), c.open_to()), (0, 1), "the level after the skippable one is open");
         c.won(1);
         assert_eq!((c.reached(), c.open_to()), (2, 2), "winning it passes over the skippable level");
+        assert_eq!(c.next(2), 1, "the last level leads round to level 1, not back to training");
     }
 
-    /// Boot Camp is level 1 and Lotus Lagoon open beside it from the start.
+    /// Boot Camp is level 0 and Lotus Lagoon open beside it from the start.
     #[test]
     fn boot_camp_opens_the_list_and_can_be_skipped() {
         let levels = Levels::shipped();
@@ -331,6 +355,17 @@ mod level_tests {
         assert_eq!(levels.find("0"), None);
         assert_eq!(levels.find("b"), Some(1));
         assert_eq!(levels.find("c"), None);
+    }
+
+    /// A skippable first level is level 0, so the first real level is
+    /// still level 1, and `--level` takes the numbers as shown.
+    #[test]
+    fn a_skippable_first_level_is_level_zero() {
+        let levels = Levels::parse("[[level]]\nmap = \"a\"\ntitle = \"A\"\nskippable = true\n[[level]]\nmap = \"b\"\ntitle = \"B\"\n").unwrap();
+        assert_eq!((levels.number(0), levels.number(1), levels.last_number()), (0, 1, 1));
+        assert_eq!((levels.find("0"), levels.find("1"), levels.find("2")), (Some(0), Some(1), None));
+        let shipped = Levels::shipped();
+        assert_eq!((shipped.number(0), shipped.get(0).map(|l| l.map.as_str())), (0, Some("boot-camp")));
     }
 
     fn three() -> Levels {
