@@ -3,7 +3,7 @@
 //! keeps one `Snapshot` per room and the client one per socket, and both
 //! step them with `apply_delta`. `Welcome` carries the first full one.
 //!
-//! Per keyed family (`tanks`, `shots`, `missiles`, `frogs`, `tiles`, `fires`) a delta
+//! Per keyed family (`tanks`, `shots`, `missiles`, `frogs`, `tiles`, `fires`, `crates`) a delta
 //! carries three lists: entries that are new or changed (in full),
 //! entries that only moved by less than 32 px on each axis (`Moved`: the
 //! key and two `i8` quarter-pixel steps, the common case for every hull
@@ -24,7 +24,8 @@ use serde::{Deserialize, Serialize};
 use crate::net::MAX_SEATS;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    BonusPickup, FireState, FrogState, LampState, MissileState, RoundState, ShotState, Snapshot, TankState, TileState, side_code,
+    BonusPickup, CrateState, FireState, FrogState, LampState, MissileState, RoundState, ShotState, Snapshot, TankState,
+    TileState, side_code,
 };
 
 /// An entry that kept every field but its position, which moved by
@@ -72,6 +73,9 @@ pub struct SnapshotDelta {
     /// New lanterns, in full.
     pub lamps: Vec<LampState>,
     pub lamps_gone: Vec<u16>,
+    /// New or changed crates, in full.
+    pub crates: Vec<CrateState>,
+    pub crates_gone: Vec<u16>,
     pub round: Option<RoundState>,
     pub events: Vec<WireEvent>,
 }
@@ -170,6 +174,12 @@ impl Keyed for LampState {
     }
 }
 
+impl Keyed for CrateState {
+    fn key(&self) -> u16 {
+        self.cell
+    }
+}
+
 fn by_key<T: Keyed>(entries: &[T]) -> BTreeMap<u16, &T> {
     entries.iter().map(|e| (e.key(), e)).collect()
 }
@@ -246,6 +256,7 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
     let (tiles, tiles_gone) = diff_keyed(&prev.tiles, &next.tiles);
     let (fires, fires_gone) = diff_keyed(&prev.fires, &next.fires);
     let (lamps, lamps_gone) = diff_keyed(&prev.lamps, &next.lamps);
+    let (crates, crates_gone) = diff_keyed(&prev.crates, &next.crates);
     let mut bonus_pickups = next.bonus_pickups.clone();
     bonus_pickups.sort();
     bonus_pickups.dedup();
@@ -277,6 +288,8 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
         fires_gone,
         lamps,
         lamps_gone,
+        crates,
+        crates_gone,
         round: (next.round != prev.round).then_some(next.round),
         events: next.events.clone(),
     }
@@ -306,6 +319,7 @@ pub fn apply_delta(prev: &Snapshot, delta: &SnapshotDelta) -> Snapshot {
         tiles: apply_keyed(&prev.tiles, &delta.tiles, &delta.tiles_gone),
         fires: apply_keyed(&prev.fires, &delta.fires, &delta.fires_gone),
         lamps: apply_keyed(&prev.lamps, &delta.lamps, &delta.lamps_gone),
+        crates: apply_keyed(&prev.crates, &delta.crates, &delta.crates_gone),
         round: delta.round.unwrap_or(prev.round),
         events: delta.events.clone(),
     }
@@ -424,6 +438,10 @@ mod tests {
             .into_iter()
             .map(|id| LampState { id, x: rng.random(), y: rng.random(), seat: rng.random_range(0..8) })
             .collect();
+        let crates = random_keys(rng, 4, 600)
+            .into_iter()
+            .map(|cell| CrateState { cell, hp: rng.random(), flags: rng.random_range(0..4), left: rng.random() })
+            .collect();
         let mut s = Snapshot {
             tick: rng.random_range(0..200_000),
             server_ms: rng.random(),
@@ -438,6 +456,7 @@ mod tests {
             tiles,
             fires,
             lamps,
+            crates,
             round: RoundState {
                 wave: rng.random_range(0..10),
                 alive: rng.random_range(0..40),
@@ -513,6 +532,10 @@ mod tests {
         for id in random_keys(rng, 1, 200) {
             next.lamps.push(LampState { id, x: rng.random(), y: rng.random(), seat: rng.random_range(0..8) });
         }
+        next.crates.retain(|_| !rng.random_ratio(1, 3));
+        for cell in random_keys(rng, 1, 600) {
+            next.crates.push(CrateState { cell, hp: rng.random(), flags: rng.random_range(0..4), left: rng.random() });
+        }
         if rng.random_ratio(1, 5) {
             next.pickups ^= 1 << rng.random_range(0..64);
         }
@@ -530,6 +553,7 @@ mod tests {
         next.tiles.reverse();
         next.fires.reverse();
         next.lamps.reverse();
+        next.crates.reverse();
         next.normalise();
         next
     }

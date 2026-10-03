@@ -815,17 +815,33 @@ pub const FROG_SPRITE_BODY_CENTER_X: f32 = 21.0;
 // case, and the sign of its near-zero dx would otherwise be float noise.
 pub const FROG_FACING_DEADBAND_PX: f32 = 4.0;
 
-// Health/ammo pickups (pickup.rs): spawn only at the map's own `Pickup`
-// cells (see `map::CellObject::Pickup`, `battlefield::spawn_from_map`) - the
-// map's placed cells are the pickup *slots*, respawning at a random
+// Pickups (pickup.rs): spawn only at the map's own `Pickup` cells (see
+// `map::CellObject::Pickup`, `battlefield::spawn_from_map`) - the map's
+// placed cells are the pickup *slots*, respawning at a random
 // currently-empty slot after a delay once collected. A map with no pickup
-// cells simply has no pickups; there's no random-placement fallback. Sprite
-// is 32x32 (see static/pickups/SOURCE.md) drawn 1:1, same convention as
-// obstacles (OBSTACLE_SCALE = 1.0) rather than the tanks' chunky 2x - a
-// pickup icon reads fine at native res and doesn't need to match the tanks'
-// pixelated look the way terrain does.
-pub const PICKUP_TEXTURE_SIZE: f32 = 32.0;
-pub const PICKUP_SCALE: f32 = 1.0;
+// cells simply has no pickups; there's no random-placement fallback.
+//
+// A pickup is one cell's square: what a hull has to touch to collect it
+// (`Pickup::in_reach`). It is drawn as a supply crate
+// (static/crates_sheet.png, docs/CRATES_SPEC.md): 32 px cells drawn 1:1,
+// authored on the 2 px block grid like the walls - 16 x 16 design pixels,
+// the crate itself 14 x 14 of them - a row per `PickupKind`
+// (`PickupKind::row`) and a column per look.
+pub const PICKUP_SIZE: f32 = 32.0;
+pub const CRATE_CELL: f32 = 32.0;
+pub const CRATE_COL_INTACT: usize = 0;
+/// The idle glint's four frames, a band sweeping the lid (`crate_fx::glint_col`).
+pub const CRATE_COL_GLINT: usize = 1;
+pub const CRATE_GLINT_FRAMES: usize = 4;
+/// A crate a blast or fire has hurt (`Pickup::health` under half).
+pub const CRATE_COL_DAMAGED: usize = 5;
+/// A crate on fire (`Pickup::burn`), charred.
+pub const CRATE_COL_CHARRED: usize = 6;
+// The symbols on their own (static/pickup_glyphs.png): the 8 x 8 design
+// pixel symbol and its outline, 10 x 10 design pixels on 20 px cells, a row
+// per kind - what rises from an opened crate, what a broken one spills,
+// the HUD's weapon queue and the builder's brushes.
+pub const PICKUP_GLYPH_CELL: f32 = 20.0;
 
 pub const MINIGUN_BULLET_TEXTURE_SIZE: f32 = 32.0;
 pub const MINIGUN_BULLET_SCALE: f32 = 2.0; // matches SHELL_SCALE - same on-screen chunkiness
@@ -923,6 +939,7 @@ pub mod bt;
 pub mod bullet;
 pub mod burst;
 pub mod canvas;
+pub mod crate_fx;
 #[cfg(feature = "dev-tools")]
 pub mod capi;
 pub mod damage_stage;

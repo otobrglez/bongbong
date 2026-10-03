@@ -637,7 +637,7 @@ fn a_tower_pack_mends_and_puts_out_the_players_towers() {
     assert!(tower(&game, (12, 10)).burning, "set alight before the pack arrives");
     place(&mut game, 0, (20, 15));
     let events = idle(&mut game, 2);
-    assert!(events.iter().any(|e| matches!(e, Event::PickupCollected { slot: 0, kind: PickupKind::TowerPack })));
+    assert!(events.iter().any(|e| matches!(e, Event::PickupCollected { slot: 0, kind: PickupKind::TowerPack, .. })));
     assert_eq!(events.iter().filter(|e| matches!(e, Event::TowerRepaired { side: Side::Player, .. })).count(), 2);
     for cell in [(10, 10), (12, 10)] {
         let (health, max) = tile_health(&game, cell).unwrap();

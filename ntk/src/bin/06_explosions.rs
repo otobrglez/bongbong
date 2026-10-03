@@ -69,8 +69,8 @@ fn main() {
     let grass = load(&mut rl, "static/nature_sheet.png");
     let trees = load(&mut rl, "static/trees_sheet.png");
     let towers = load(&mut rl, "static/towers_sheet.png");
-    let pickup_tower_pack = load(&mut rl, "static/pickups/tower_pack.png");
-    let pickup_heat_shield = load(&mut rl, "static/pickups/heat_shield.png");
+    let crates = load(&mut rl, "static/crates_sheet.png");
+    let pickup_glyphs = load(&mut rl, "static/pickup_glyphs.png");
     let portal = load(&mut rl, "static/portal_sheet.png");
     let tank_glow = load(&mut rl, "static/scifi_tanks_glow.png");
     let tank_modules = load(&mut rl, "static/tank_modules.png");
@@ -82,17 +82,6 @@ fn main() {
     let barrel_explosion = load(&mut rl, "static/barrel_explosion.png");
     let ground = load(&mut rl, "static/punyworld/punyworld-overworld-tileset.png");
     let frog_idle = load(&mut rl, &format!("static/toxic_frog/{}/idle.png", bongbong::frog::FROG_VARIANT_DIRS[0]));
-    let pickup = |rl: &mut RaylibHandle, name: &str| load(rl, &format!("static/pickups/{name}.png"));
-    let pickup_health = pickup(&mut rl, "health");
-    let pickup_ammo = pickup(&mut rl, "ammo");
-    let pickup_laser = pickup(&mut rl, "laser");
-    let pickup_minigun = pickup(&mut rl, "minigun");
-    let pickup_plasma = pickup(&mut rl, "plasma");
-    let pickup_missiles = pickup(&mut rl, "missiles");
-    let pickup_speedup = pickup(&mut rl, "speedup");
-    let pickup_shield = pickup(&mut rl, "shield");
-    let pickup_flamethrower = pickup(&mut rl, "flamethrower");
-    let pickup_frog_health = pickup(&mut rl, "frog_health");
     let eraser = load(&mut rl, "static/ui/eraser.png");
 
     // The three full-screen ripple shaders the renderer resolves in pass 2.
@@ -183,8 +172,8 @@ fn main() {
             grass: &grass,
             trees: &trees,
             towers: &towers,
-            pickup_tower_pack: &pickup_tower_pack,
-            pickup_heat_shield: &pickup_heat_shield,
+            crates: &crates,
+            pickup_glyphs: &pickup_glyphs,
             portal: &portal,
             tracks: &tracks,
             obstacles: &obstacles,
@@ -192,16 +181,6 @@ fn main() {
             barrel_explosion: &barrel_explosion,
             ground: &ground,
             frog_variants: &[],
-            pickup_health: &pickup_health,
-            pickup_ammo: &pickup_ammo,
-            pickup_laser: &pickup_laser,
-            pickup_minigun: &pickup_minigun,
-            pickup_plasma: &pickup_plasma,
-            pickup_missiles: &pickup_missiles,
-            pickup_speedup: &pickup_speedup,
-            pickup_shield: &pickup_shield,
-            pickup_flamethrower: &pickup_flamethrower,
-            pickup_frog_health: &pickup_frog_health,
             // The demo paints a plain white canvas, which draws no ground
             // and so no floor shade.
             shade: None,
@@ -255,20 +234,9 @@ fn main() {
                             grass: &grass,
                             trees: &trees,
                             towers: &towers,
-                            pickup_tower_pack: &pickup_tower_pack,
-            pickup_heat_shield: &pickup_heat_shield,
+                            crates: &crates,
                             portal: &portal,
                             frog_idle: &frog_idle,
-                            pickup_health: &pickup_health,
-                            pickup_ammo: &pickup_ammo,
-                            pickup_laser: &pickup_laser,
-                            pickup_minigun: &pickup_minigun,
-                            pickup_plasma: &pickup_plasma,
-                            pickup_missiles: &pickup_missiles,
-                            pickup_speedup: &pickup_speedup,
-                            pickup_shield: &pickup_shield,
-                            pickup_flamethrower: &pickup_flamethrower,
-                            pickup_frog_health: &pickup_frog_health,
                             eraser: &eraser,
                             tanks: &tanks,
                             shade: None,

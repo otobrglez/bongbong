@@ -600,6 +600,31 @@ pub struct TileState {
     pub faces: u8,
 }
 
+/// A pickup's crate that differs from a whole one (`crate_breakable`,
+/// `simulation::crates`): hurt, burning, or broken with its contents lying
+/// loose, keyed by cell. Whole crates never appear: the slot bitmask and
+/// `bonus_pickups` already say where they stand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrateState {
+    /// `row * cols + col` on the map's 32 px grid.
+    pub cell: u16,
+    /// Hit points left, whole points (`quantise_health`).
+    pub hp: u8,
+    /// `crate_flags` bits.
+    pub flags: u8,
+    /// The burning crate's or the loose contents' time left, tenths of a
+    /// second (`quantise_seconds`).
+    pub left: u8,
+}
+
+/// `CrateState::flags`.
+pub mod crate_flags {
+    /// The crate is burning (`Pickup::burn`).
+    pub const BURNING: u8 = 1 << 0;
+    /// The crate broke and its contents lie loose (`Pickup::loose`).
+    pub const LOOSE: u8 = 1 << 1;
+}
+
 /// A burning ground cell (an oil pool or a lit trail cell), keyed by cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FireState {
@@ -675,6 +700,8 @@ pub struct Snapshot {
     pub fires: Vec<FireState>,
     /// The lanterns on the ground, by id.
     pub lamps: Vec<LampState>,
+    /// The crates that are not whole (`CrateState`), by cell.
+    pub crates: Vec<CrateState>,
     pub round: RoundState,
     /// What happened on the ticks since the previous snapshot, the AI's
     /// trace left out (`WireEvent::from_event`).
@@ -699,6 +726,8 @@ impl Snapshot {
         self.fires.dedup_by_key(|f| f.cell);
         self.lamps.sort_by_key(|l| l.id);
         self.lamps.dedup_by_key(|l| l.id);
+        self.crates.sort_by_key(|c| c.cell);
+        self.crates.dedup_by_key(|c| c.cell);
     }
 }
 

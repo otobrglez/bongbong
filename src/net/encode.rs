@@ -17,7 +17,7 @@ use crate::net::MAX_SEATS;
 use crate::net::PROTOCOL_VERSION;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    BonusPickup, FireState, FrogState, LampState, MissileState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, tank_flags, tile_flags,
+    BonusPickup, CrateState, FireState, FrogState, LampState, MissileState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
 };
 use crate::bullet::Bullet;
 use crate::frog::Frog;
@@ -30,6 +30,7 @@ use crate::shell::Shell;
 use crate::simulation::replica::plasma_variant_index;
 use crate::simulation::{Event, Game};
 use crate::tank::{Dir, Tank};
+use crate::tuning::tuning;
 use crate::{OBSTACLE_GRID_SIZE, Position};
 
 /// The map's width in cells, the stride of every `row * cols + col` cell
@@ -96,6 +97,7 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
             .iter()
             .map(|l| LampState { id: l.id, x: quantise_pos(l.position.x), y: quantise_pos(l.position.y), seat: l.seat })
             .collect(),
+        crates: crates(game, cols),
         round: round(game),
         events: wire_events_acked(game.events(), &acked),
     };
@@ -297,6 +299,31 @@ fn pickups(game: &Game, cols: u16) -> (u64, Vec<BonusPickup>) {
         }
     }
     (mask, bonus)
+}
+
+/// Every crate that is not whole (`CrateState`): hurt, burning, or broken
+/// with its contents lying loose. Whole crates travel as the slot bitmask
+/// and `bonus_pickups` alone.
+fn crates(game: &Game, cols: u16) -> Vec<CrateState> {
+    let whole = quantise_health(tuning().crate_hp);
+    game.world
+        .query::<&Pickup>()
+        .iter()
+        .filter_map(|p| {
+            let hp = quantise_health(p.health);
+            let mut flags = 0;
+            let mut left = 0.0;
+            if let Some(burn) = p.burn {
+                flags |= crate_flags::BURNING;
+                left = burn;
+            }
+            if let Some(loose) = p.loose {
+                flags |= crate_flags::LOOSE;
+                left = loose;
+            }
+            (flags != 0 || hp != whole).then(|| CrateState { cell: cell_index(cols, map::world_to_cell(p.position)), hp, flags, left: quantise_seconds(left) })
+        })
+        .collect()
 }
 
 /// Every live tile that differs from its fresh state, then a `DESTROYED`

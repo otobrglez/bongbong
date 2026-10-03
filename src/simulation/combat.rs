@@ -264,6 +264,7 @@ impl Game {
             let amount = params.roll_damage(&mut f.rng) * falloff;
             self.damage_obstacle(f, entity, amount, DamageCause::Blast { falloff, from: center });
         }
+        self.blast_crates(f, center, &params);
     }
 }
 

@@ -112,16 +112,8 @@ pub struct EditorTextures<'a> {
     /// (`Theme::grass_texture_path`).
     pub grass: &'a Texture2D,
     pub frog_idle: &'a Texture2D,
-    pub pickup_health: &'a Texture2D,
-    pub pickup_ammo: &'a Texture2D,
-    pub pickup_laser: &'a Texture2D,
-    pub pickup_minigun: &'a Texture2D,
-    pub pickup_plasma: &'a Texture2D,
-    pub pickup_missiles: &'a Texture2D,
-    pub pickup_speedup: &'a Texture2D,
-    pub pickup_shield: &'a Texture2D,
-    pub pickup_flamethrower: &'a Texture2D,
-    pub pickup_frog_health: &'a Texture2D,
+    /// static/crates_sheet.png - the pickups' crates, a row per kind.
+    pub crates: &'a Texture2D,
     pub eraser: &'a Texture2D,
     /// static/portal_sheet.png - the spiral and its bar icon (portal.rs).
     pub portal: &'a Texture2D,
@@ -129,8 +121,6 @@ pub struct EditorTextures<'a> {
     pub trees: &'a Texture2D,
     /// static/towers_sheet.png - the defence towers' bases and tops.
     pub towers: &'a Texture2D,
-    pub pickup_tower_pack: &'a Texture2D,
-    pub pickup_heat_shield: &'a Texture2D,
     /// The canvas's floor shade as `app.rs` uploaded it before the frame,
     /// with the stamp it was baked under.
     pub shade: Option<(u64, &'a Texture2D)>,
@@ -229,20 +219,10 @@ impl Sheets for EditorTextures<'_> {
             Sheet::Grass(_) => self.grass,
             Sheet::Portal => self.portal,
             Sheet::Tanks => self.tanks,
+            Sheet::Crates => self.crates,
             Sheet::Frog { clip: FrogAnim::Idle, .. } => self.frog_idle,
-            Sheet::Pickup(PickupKind::Health) => self.pickup_health,
-            Sheet::Pickup(PickupKind::Ammo) => self.pickup_ammo,
-            Sheet::Pickup(PickupKind::Laser) => self.pickup_laser,
-            Sheet::Pickup(PickupKind::Minigun) => self.pickup_minigun,
-            Sheet::Pickup(PickupKind::Plasma) => self.pickup_plasma,
-            Sheet::Pickup(PickupKind::Missiles) => self.pickup_missiles,
-            Sheet::Pickup(PickupKind::SpeedUp) => self.pickup_speedup,
-            Sheet::Pickup(PickupKind::Shield) => self.pickup_shield,
-            Sheet::Pickup(PickupKind::Flamethrower) => self.pickup_flamethrower,
-            Sheet::Pickup(PickupKind::FrogHealth) => self.pickup_frog_health,
-            Sheet::Pickup(PickupKind::TowerPack) => self.pickup_tower_pack,
-            Sheet::Pickup(PickupKind::HeatShield) => self.pickup_heat_shield,
             Sheet::TankGlow
+            | Sheet::PickupGlyphs
             | Sheet::TankModules
             | Sheet::TankModulesGlow
             | Sheet::Tracks
@@ -1337,24 +1317,6 @@ fn draw_small_button(d: &mut impl RaylibDraw, rect: Rectangle, text: &str, color
     d.draw_text(text, (inset.x + (inset.width - w) / 2.0) as i32, (rect.y + (rect.height - size as f32) / 2.0) as i32, size, color);
 }
 
-/// The pickup icon for a kind.
-fn pickup_texture<'a>(textures: &EditorTextures<'a>, pickup: PickupKind) -> &'a Texture2D {
-    match pickup {
-        PickupKind::Health => textures.pickup_health,
-        PickupKind::Ammo => textures.pickup_ammo,
-        PickupKind::Laser => textures.pickup_laser,
-        PickupKind::Minigun => textures.pickup_minigun,
-        PickupKind::Plasma => textures.pickup_plasma,
-        PickupKind::Missiles => textures.pickup_missiles,
-        PickupKind::SpeedUp => textures.pickup_speedup,
-        PickupKind::Shield => textures.pickup_shield,
-        PickupKind::Flamethrower => textures.pickup_flamethrower,
-        PickupKind::FrogHealth => textures.pickup_frog_health,
-        PickupKind::TowerPack => textures.pickup_tower_pack,
-        PickupKind::HeatShield => textures.pickup_heat_shield,
-    }
-}
-
 /// Draw a rounded, bordered, drop-shadowed panel background - shared by
 /// the builder's panels (the dropdowns, the FILE menu and its Load list,
 /// the Save prompt), per docs/map-editor-design.md's "Panel chrome"
@@ -1476,9 +1438,10 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
             d.draw_texture_pro(textures.grass, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Pickup(pickup) => {
-            let texture = pickup_texture(textures, pickup);
-            let src = Rectangle::new(0.0, 0.0, crate::PICKUP_TEXTURE_SIZE, crate::PICKUP_TEXTURE_SIZE);
-            d.draw_texture_pro(texture, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            // The crate as it stands on the field: the brush is the thing
+            // it places.
+            let src = crate::pickup::crate_src(pickup, crate::CRATE_COL_INTACT);
+            d.draw_texture_pro(textures.crates, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Tower(kind, side) => {
             // Base and top as a round draws them, the top pointing up.
@@ -1711,9 +1674,8 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             None => d.draw_rectangle_lines_ex(Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size), 2.0, faded(GATE_COLOR)),
         },
         CellObject::Pickup { pickup } => {
-            let texture = pickup_texture(textures, pickup);
-            let src = Rectangle::new(0.0, 0.0, crate::PICKUP_TEXTURE_SIZE, crate::PICKUP_TEXTURE_SIZE);
-            d.draw_texture_pro(texture, src, dest, origin, 0.0, tint);
+            let src = crate::pickup::crate_src(pickup, crate::CRATE_COL_INTACT);
+            d.draw_texture_pro(textures.crates, src, dest, origin, 0.0, tint);
         }
     }
 }

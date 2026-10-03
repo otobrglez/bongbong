@@ -128,6 +128,8 @@ while a heat shield is up, its gauge.
 `heat_shield_seconds` (10) of no heat at all: no lava or bank damage, no
 afterburn, no burning ground, no flamethrower cone - and a burning tank
 that collects one is put out. A red-over-black ring round the hull shows it.
+Its supply crate carries a shield painted molten red over black basalt
+(docs/CRATES_SPEC.md).
 Enemies never collect it.
 
 ## Online
@@ -143,7 +145,7 @@ The cycle needs nothing on the wire. What does travel:
 - `WireEvent::LavaBombLaunched` (the bomb in the air on the replica),
   `LanternSet`, `LanternBroken`.
 
-`net::PROTOCOL_VERSION` is 11.
+`net::PROTOCOL_VERSION` is 12.
 
 ## Not done
 

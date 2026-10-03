@@ -7,7 +7,7 @@
 use sola_raylib::prelude::*;
 
 use crate::hud::{
-    banner_size, clock_text, leave_dialog_rects, players_dialog_rects, result_layout, weapon_color, Corners, Fade, Hints,
+    banner_size, clock_text, leave_dialog_rects, players_dialog_rects, result_layout, weapon_color, weapon_pickup, Corners, Fade, Hints,
     HudModel, NextLevel, PlayChrome, PlayerHud, ResultButtons, ResultView, SeatHud, BUILD_COLOR, DIALOG_W, DIM,
     HUD_TEXT_SIZE, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP, LINE_H, ONLINE_COLOR, RESULT_LINE_SIZE,
     RESULT_SEATS_SIZE, RESULT_STATS_GAP, ROW_H, TEXT, UI_SMALL_TEXT, WEAPON_SLOTS,
@@ -16,8 +16,8 @@ use crate::math::{Color, Rectangle};
 use crate::text::{keys, text, width, Key};
 use crate::render::game::Textures;
 use crate::simulation::PlayerCount;
-use crate::tank::{team_color, ActiveWeapon, HealthRamp, TEAM_COLORS};
-use crate::{Rect, MAX_DAMAGE, MAX_SEATS, PICKUP_TEXTURE_SIZE, SHELL_TEXTURE_SIZE};
+use crate::tank::{team_color, HealthRamp, TEAM_COLORS};
+use crate::{Rect, MAX_DAMAGE, MAX_SEATS, PICKUP_GLYPH_CELL, SHELL_TEXTURE_SIZE};
 
 const HEART: Color = Color::new(230, 60, 70, 255);
 const SPEED_COLOR: Color = Color::new(255, 210, 60, 255);
@@ -197,18 +197,18 @@ fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, hud: &PlayerHud, seat:
     let text_y = y + (row - HUD_TEXT_SIZE) / 2;
     for (i, slot) in hud.weapons.iter().enumerate().take(WEAPON_SLOTS) {
         let sx = x + i as i32 * V_WEAPON_W;
-        let texture = match slot.weapon {
-            ActiveWeapon::Laser => textures.pickup_laser,
-            ActiveWeapon::Plasma => textures.pickup_plasma,
-            ActiveWeapon::Minigun => textures.pickup_minigun,
-            ActiveWeapon::Missiles => textures.pickup_missiles,
-            ActiveWeapon::Flamethrower => textures.pickup_flamethrower,
-            ActiveWeapon::Shell => textures.shells,
-        };
-        let src = Rectangle::new(0.0, 0.0, PICKUP_TEXTURE_SIZE, PICKUP_TEXTURE_SIZE);
         let icon = V_WEAPON_ICON as f32;
-        let dest = Rectangle::new(sx as f32, (y + (row - V_WEAPON_ICON) / 2) as f32, icon, icon);
+        let (ix, iy) = (sx as f32, (y + (row - V_WEAPON_ICON) / 2) as f32);
         let tint = if slot.count > 0 { white } else { faded(Color::new(255, 255, 255, 70), a) };
+        // A special weapon is its crate's symbol at the symbol sheet's own
+        // scale, centred in the icon's square; the shell is the shell.
+        let (texture, src, dest) = match weapon_pickup(slot.weapon) {
+            Some(kind) => {
+                let g = PICKUP_GLYPH_CELL;
+                (textures.pickup_glyphs, crate::pickup::glyph_src(kind), Rectangle::new(ix + (icon - g) / 2.0, iy + (icon - g) / 2.0, g, g))
+            }
+            None => (textures.shells, Rectangle::new(0.0, 0.0, SHELL_TEXTURE_SIZE, SHELL_TEXTURE_SIZE), Rectangle::new(ix, iy, icon, icon)),
+        };
         d.draw_texture_pro(texture, src, dest, Vector2::new(0.0, 0.0), 0.0, tint);
         let (count, color) = if slot.count > 0 { (slot.count.to_string(), weapon_color(slot.weapon)) } else { ("--".to_string(), DIM) };
         d.draw_text(&count, sx + V_WEAPON_ICON + 3, text_y, HUD_TEXT_SIZE, faded(color, a));
@@ -593,9 +593,10 @@ mod corner_tests {
         // A label over its bar, both inside a row.
         assert!(3 + UI_SMALL_TEXT <= 19 && 19 + GAUGE_H <= ROW_H as i32);
         // The weapon queue: five slots across the second row, each an icon
-        // no larger than its sheet and three digits beside it.
+        // square that holds a symbol at its sheet's own scale, and three
+        // digits beside it.
         assert_eq!(WEAPON_SLOTS as i32 * V_WEAPON_W, VITALS_W as i32);
-        assert!(V_WEAPON_ICON <= PICKUP_TEXTURE_SIZE as i32 && V_WEAPON_ICON <= ROW_H as i32);
+        assert!(PICKUP_GLYPH_CELL as i32 <= V_WEAPON_ICON && V_WEAPON_ICON <= ROW_H as i32);
         assert!(V_WEAPON_ICON + 3 + three_digits <= V_WEAPON_W - 2, "a weapon count overflows its slot");
     }
 

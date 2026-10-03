@@ -33,7 +33,6 @@ use crate::math::{Color, Rectangle};
 use crate::obstacle::{draw_flying_drum, Obstacle};
 use crate::render::level_select::draw_level_select;
 use crate::render::lobby::draw_lobby;
-use crate::pickup::PickupKind;
 use crate::plasma::{Plasma, PlasmaState};
 use crate::render::blast::{draw_fire_glow, draw_flame_glow, draw_fuse_glow};
 use crate::pyro;
@@ -94,16 +93,10 @@ pub struct Textures<'a> {
     /// One `FrogVariantTextures` per `frog::FROG_VARIANT_DIRS` entry, in the
     /// same order - `render` indexes into this by `Frog::variant`.
     pub frog_variants: &'a [FrogVariantTextures],
-    pub pickup_health: &'a Texture2D,
-    pub pickup_ammo: &'a Texture2D,
-    pub pickup_laser: &'a Texture2D,
-    pub pickup_minigun: &'a Texture2D,
-    pub pickup_plasma: &'a Texture2D,
-    pub pickup_missiles: &'a Texture2D,
-    pub pickup_speedup: &'a Texture2D,
-    pub pickup_shield: &'a Texture2D,
-    pub pickup_flamethrower: &'a Texture2D,
-    pub pickup_frog_health: &'a Texture2D,
+    /// static/crates_sheet.png - the pickups' supply crates (docs/CRATES_SPEC.md).
+    pub crates: &'a Texture2D,
+    /// static/pickup_glyphs.png - the pickups' symbols on their own.
+    pub pickup_glyphs: &'a Texture2D,
     /// static/missile.png - a seeker missile in flight (missile.rs).
     pub missile: &'a Texture2D,
     /// The tall-grass sheet of the round's map theme
@@ -114,8 +107,6 @@ pub struct Textures<'a> {
     pub trees: &'a Texture2D,
     /// static/towers_sheet.png - the defence towers (docs/TOWERS_SPEC.md).
     pub towers: &'a Texture2D,
-    pub pickup_tower_pack: &'a Texture2D,
-    pub pickup_heat_shield: &'a Texture2D,
     /// static/portal_sheet.png - the turning spiral (portal.rs).
     pub portal: &'a Texture2D,
     /// The round's floor shade as `app.rs` uploaded it before the frame
@@ -150,20 +141,8 @@ impl Sheets for Textures<'_> {
             Sheet::Tracks => self.tracks,
             Sheet::BarrelExplosion => self.barrel_explosion,
             Sheet::Portal => self.portal,
-            Sheet::Pickup(kind) => match kind {
-                PickupKind::Health => self.pickup_health,
-                PickupKind::Ammo => self.pickup_ammo,
-                PickupKind::Laser => self.pickup_laser,
-                PickupKind::Minigun => self.pickup_minigun,
-                PickupKind::Plasma => self.pickup_plasma,
-                PickupKind::Missiles => self.pickup_missiles,
-                PickupKind::SpeedUp => self.pickup_speedup,
-                PickupKind::Shield => self.pickup_shield,
-                PickupKind::Flamethrower => self.pickup_flamethrower,
-                PickupKind::FrogHealth => self.pickup_frog_health,
-                PickupKind::TowerPack => self.pickup_tower_pack,
-                PickupKind::HeatShield => self.pickup_heat_shield,
-            },
+            Sheet::Crates => self.crates,
+            Sheet::PickupGlyphs => self.pickup_glyphs,
             Sheet::Frog { variant, clip } => self.frog_variants[variant as usize % self.frog_variants.len()].clip(clip),
         }
     }
@@ -1134,6 +1113,12 @@ impl Game {
 }
 
 impl Game {
+    /// Where the tank in owner slot `slot` stands, wrecks included: where a
+    /// crate's symbol flies to (`crate_fx::open`).
+    fn tank_of_slot(&self, slot: usize) -> Option<Position> {
+        self.world.query::<&Tank>().iter().find(|t| t.owner_slot() == slot).map(|t| t.position)
+    }
+
     /// Every hit's flash (`fx::Flash`), inside an additive blend: the hull
     /// or the tile it landed on drawn again over itself, which doubles its
     /// light - the white-hot frames of a hit. A tile is found under the
@@ -1261,6 +1246,9 @@ impl Game {
             }
             for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| o.burning && !culled(cull, o.position)) {
                 pyro::draw_glows(&mut Rl(&mut bd), &crate::game::tile_flames(obstacle, self.time), bands);
+            }
+            for pickup in self.world.query::<&crate::pickup::Pickup>().iter().filter(|p| p.burn.is_some() && !culled(cull, p.position)) {
+                pyro::draw_glows(&mut Rl(&mut bd), &crate::pickup::crate_flames(pickup, self.time), bands);
             }
         });
 
@@ -1464,6 +1452,68 @@ impl Game {
                     }
                 });
             }
+        }
+
+        // Every crate being taken (`crate_fx::open`): what is left of it,
+        // its planks and dust, its symbol rising and flying into the tank
+        // that took it, the ring round that tank - over the tanks, since the
+        // hull that takes a crate stands over it the frame it does.
+        if !fx.opens().is_empty() {
+            let t = tuning();
+            let opens: Vec<(crate::fx::CrateOpen, crate::crate_fx::Open)> = fx
+                .opens()
+                .iter()
+                .filter(|o| !culled(cull, o.at))
+                .filter_map(|o| {
+                    use crate::crate_fx::Opening;
+                    let how = match o.slot {
+                        None => Opening::Broken,
+                        Some(slot) => {
+                            let toward = self.tank_of_slot(slot).unwrap_or(o.at);
+                            if o.spilled { Opening::Spilled { toward } } else { Opening::Taken { toward } }
+                        }
+                    };
+                    crate::crate_fx::open(o.age, o.at, how, o.kind.ink(), &t).map(|open| (*o, open))
+                })
+                .collect();
+            {
+                let mut c = GpuCanvas::new(d, textures);
+                for (o, open) in &opens {
+                    if open.crate_alpha > 0.0 {
+                        let tint = pyro::alpha(Color::WHITE, open.crate_alpha);
+                        crate::pickup::draw_crate(&mut c, o.kind, o.at, crate::CRATE_COL_INTACT, self.shadows_enabled, tint);
+                    }
+                    pyro::draw(&mut c, &open.shapes);
+                    if let Some(symbol) = open.symbol {
+                        if let Some(at) = symbol.shadow.filter(|_| self.shadows_enabled) {
+                            crate::pickup::draw_glyph(&mut c, o.kind, at, symbol.size, Color::new(0, 0, 0, 77));
+                        }
+                        crate::pickup::draw_glyph(&mut c, o.kind, symbol.pos, symbol.size, Color::WHITE);
+                    }
+                }
+            }
+            // The crate's flash and the symbol's blink are the sprite again
+            // over itself in light, as a hit's flash is; then the glows.
+            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                {
+                    let mut c = GpuCanvas::new(&mut bd, textures);
+                    for (o, open) in &opens {
+                        if open.crate_flash > 0.0 {
+                            let tint = pyro::alpha(Color::WHITE, open.crate_flash);
+                            crate::pickup::draw_crate(&mut c, o.kind, o.at, crate::CRATE_COL_INTACT, false, tint);
+                        }
+                        if let Some(symbol) = open.symbol.filter(|s| s.flash > 0.0) {
+                            crate::pickup::draw_glyph(&mut c, o.kind, symbol.pos, symbol.size, pyro::alpha(Color::WHITE, symbol.flash));
+                        }
+                    }
+                }
+                if glow {
+                    let bands = t.glow_bands.max(0) as u32;
+                    for (_, open) in &opens {
+                        pyro::draw_glows(&mut Rl(&mut bd), &open.shapes, bands);
+                    }
+                }
+            });
         }
 
         // The flamethrower's jet of burning fuel, over the tanks and

@@ -345,6 +345,7 @@ impl Game {
                 let amount = if material.is_explosive() { f32::MAX } else { params.roll_damage(&mut f.rng) * falloff };
                 self.damage_obstacle(f, entity, amount, DamageCause::Blast { falloff, from: center });
             }
+            self.blast_crates(f, center, &params);
             // A lava bomb splashes burning lava round where it lands: a
             // plus at one cell, a diamond further, no RNG.
             if drum == Drum::Lava && t.volcano_pool_radius_cells >= 0 {

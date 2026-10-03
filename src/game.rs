@@ -323,7 +323,7 @@ impl Game {
         let cull = c.cull();
         for pickup in self.world.query::<&Pickup>().iter() {
             if !culled(cull, pickup.position) {
-                draw_pickup(c, pickup);
+                draw_pickup(c, pickup, self.time, self.shadows_enabled);
             }
         }
 

@@ -13,8 +13,8 @@ int main(int argc, char *argv[])
     InitWindow(0, 0, "smoke");
     const int w = GetScreenWidth(), h = GetScreenHeight();
     __android_log_print(ANDROID_LOG_INFO, "smoke", "screen %dx%d render %dx%d", w, h, GetRenderWidth(), GetRenderHeight());
-    Texture2D tex = LoadTexture("static/pickups/health.png");
-    __android_log_print(ANDROID_LOG_INFO, "smoke", "asset static/pickups/health.png: %dx%d (0x0 = asset load failed)", tex.width, tex.height);
+    Texture2D tex = LoadTexture("static/crates_sheet.png");
+    __android_log_print(ANDROID_LOG_INFO, "smoke", "asset static/crates_sheet.png: %dx%d (0x0 = asset load failed)", tex.width, tex.height);
     int frame = 0;
     while (!WindowShouldClose()) {
         int touches = GetTouchPointCount();

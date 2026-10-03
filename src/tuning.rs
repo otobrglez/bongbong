@@ -997,6 +997,50 @@ tunables! {
         frog_pack_bonus_below: f32 = 0.75 in 0.0 ..= 1.0;
     }
 
+    group crates {
+        /// Seconds from a crate appearing to its landing: the air drop it
+        /// comes down in (`crate_fx::drop` - a shadow gathers, the crate
+        /// falls into it, squashes and throws a ring of dust). Only the
+        /// drawing waits on it; the crate can be taken the frame it
+        /// appears. 0 turns the drop off.
+        crate_drop_seconds: f32 = 0.62 in 0.0 ..= 3.0;
+        /// How high the crate falls from, px - drawn that far above its
+        /// cell, and larger the higher it is.
+        crate_drop_height_px: f32 = 110.0 in 0.0 ..= 400.0;
+        /// Seconds from a crate being taken to its symbol landing in the
+        /// tank that took it (`crate_fx::open`): the flash, the planks
+        /// flying off, the symbol rising and blinking. 0 turns it off.
+        crate_open_seconds: f32 = 0.75 in 0.0 ..= 3.0;
+        /// A standing crate's glint sweeps its lid about this often,
+        /// seconds (each crate on its own beat). 0 turns it off.
+        crate_glint_period_seconds: f32 = 3.2 in 0.0 ..= 30.0;
+        /// Seconds per frame of the glint's four.
+        crate_glint_frame_seconds: f32 = 0.06 in 0.01 ..= 1.0;
+        /// Breakable crates (docs/CRATES_SPEC.md): a blast or fire breaks a
+        /// pickup's crate - shells and bullets still fly over it. Ordnance
+        /// and energy cook off in a blast of their own; the rest spill,
+        /// lying loose for `crate_spill_seconds`. Off, a crate is
+        /// unbreakable and every round replays as it did. Read when a
+        /// round begins.
+        crate_breakable: bool = false in 0 ..= 1 @ Restart;
+        /// A crate's hit points: a blast takes its mid damage times its
+        /// falloff off them (no roll). At 8 an oil drum next to it breaks
+        /// it, a missile landing on it does, a crate cooking off beside it
+        /// does, and a dying tank's blast alone does not.
+        crate_hp: f32 = 8.0 in 1.0 ..= 500.0;
+        /// Seconds of the flamethrower's heat on a crate's cell before it
+        /// catches; a burning ground cell under it lights it at once.
+        crate_ignite_seconds: f32 = 0.5 in 0.0 ..= 10.0;
+        /// Seconds a burning crate holds before it falls in.
+        crate_burn_seconds: f32 = 2.0 in 0.1 ..= 20.0;
+        /// Seconds a broken crate's contents lie loose, takeable, before
+        /// they are gone and the slot refills as usual.
+        crate_spill_seconds: f32 = 8.0 in 0.5 ..= 60.0;
+        /// A crate cooking off: its blast as a fraction of an oil drum's -
+        /// radius, damage and knockback.
+        crate_cookoff_scale: f32 = 0.75 in 0.0 ..= 2.0;
+    }
+
     group combat {
         /// Ramming: after taking collision damage a tank is immune for this
         /// long, so continuous touching doesn't drain damage every frame.

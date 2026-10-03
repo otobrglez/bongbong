@@ -129,7 +129,7 @@ fn a_fuel_tank_arms_the_flamethrower_and_a_held_trigger_drains_it() {
     let mut game = armed_game(&map, 3, 0.0);
     assert_eq!(player_weapon(&game), ActiveWeapon::Shell);
     step(&mut game, Input::default());
-    assert!(game.events().iter().any(|e| matches!(e, Event::PickupCollected { slot: 0, kind: PickupKind::Flamethrower })));
+    assert!(game.events().iter().any(|e| matches!(e, Event::PickupCollected { slot: 0, kind: PickupKind::Flamethrower, .. })));
     let fuel = tuning().flame_fuel_per_pickup;
     assert!((snapshot(&game, 0).flame_fuel - fuel).abs() < 1e-4, "the pickup grants the whole tank");
     assert_eq!(player_weapon(&game), ActiveWeapon::Flamethrower, "a first pickup arms it at once");
