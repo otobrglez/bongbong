@@ -53,6 +53,7 @@ struct Setting {
     portal_radius: u32,
     portal_hop_cost: u32,
     ford_cost: i32,
+    lava_cost: i32,
 }
 
 impl Setting {
@@ -64,6 +65,7 @@ impl Setting {
             portal_radius: t.portal_trigger_radius.to_bits(),
             portal_hop_cost: t.portal_hop_cost.to_bits(),
             ford_cost: t.water_ford_path_cost,
+            lava_cost: t.lava_ford_path_cost,
         }
     }
 }
@@ -158,7 +160,7 @@ impl Game {
     }
 
     /// What the layer blocks: every tile at its seam-closed extent and
-    /// every deep water cell (`nav_grid`).
+    /// every deep water and deep lava cell (`nav_grid`).
     fn nav_tile_shapes(&self) -> Vec<(Position, f32)> {
         // Trees are left out of the seam-close set for the same reason
         // `hits::Terrain::build` leaves them out: they never close a seam,
@@ -181,6 +183,8 @@ impl Game {
             // Deep water is a wall (docs/water.md): the same cells the
             // static colliders stand on, at a cell's half-extent.
             .chain(self.water.deep_cells().map(|p| (p, OBSTACLE_GRID_SIZE * 0.5)))
+            // So is a lava lake's deep middle (docs/volcano.md).
+            .chain(self.lava.deep_cells().map(|p| (p, OBSTACLE_GRID_SIZE * 0.5)))
             .collect()
     }
 
@@ -209,6 +213,9 @@ impl Game {
         // A ford is open but dear: the router wades only when the dry way
         // round costs more.
         grid.weigh(self.water.shallow_cells(), t.water_ford_path_cost.max(1) as u32);
+        // A lava ford burns: the router crosses one only when the way round
+        // is far longer (docs/volcano.md).
+        grid.weigh(self.lava.ford_cells(), t.lava_ford_path_cost.max(1) as u32);
         grid
     }
 

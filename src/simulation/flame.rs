@@ -138,10 +138,13 @@ impl Game {
                         d *= t.friendly_fire_damage_factor;
                     }
                     let entered = !self.flame_contacts.contains(&entity);
-                    tank.take_damage(d, MAX_DAMAGE);
-                    tank.mark_hit();
-                    tank.credit(jet.owner);
-                    tank.burn_timer = t.flame_afterburn_seconds;
+                    // A heat shield turns the stream: no burn, no afterburn.
+                    if tank.takes_heat() {
+                        tank.take_damage(d, MAX_DAMAGE);
+                        tank.mark_hit();
+                        tank.credit(jet.owner);
+                        tank.burn_timer = t.flame_afterburn_seconds;
+                    }
                     (tank.is_wreck(), tank.position, tank.owner(), entered)
                 };
                 touched.push(entity);
@@ -204,8 +207,14 @@ impl Game {
                     continue;
                 }
                 // Wading puts the fire out (docs/water.md); ice does not.
-                if self.water.depth_at(tank.position).is_wet() {
+                // A heat shield puts it out too.
+                if self.water.depth_at(tank.position).is_wet() || !tank.takes_heat() {
                     tank.burn_timer = 0.0;
+                    continue;
+                }
+                // In the lava itself the lava charges the full rate
+                // (`Game::lava_phase`); the afterburn is for after.
+                if self.lava.depth_at(tank.position) != crate::ground::Depth::Dry {
                     continue;
                 }
                 tank.take_damage(t.flame_afterburn_dps * f.dt, MAX_DAMAGE);

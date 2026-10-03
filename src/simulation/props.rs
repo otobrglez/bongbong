@@ -11,7 +11,8 @@ use rapier2d::prelude::RigidBodyHandle;
 use crate::math::Vec2;
 
 use crate::ai::Ai;
-use crate::blast::{BlastFx, BlastKind, BlastShape, Lean, Scorch};
+use crate::blast::{BlastFx, BlastKind, Lean, Scorch};
+pub(crate) use crate::blast::BlastShape;
 use crate::decal::Decal;
 use crate::frog::Frog;
 use crate::map::{cell_to_world, world_to_cell};
@@ -82,6 +83,9 @@ pub struct GroundFire {
     pub spread_at: Option<f32>,
     /// From a drum's pool rather than a painted trail cell.
     pub pool: bool,
+    /// A splash of lava a volcano's bomb threw (docs/volcano.md): it burns
+    /// like a pool and is drawn as molten rock cooling, not as flames.
+    pub lava: bool,
 }
 
 impl GroundFire {
@@ -268,6 +272,7 @@ impl Game {
         let mut params = match drum {
             Drum::Oil => BlastParams::barrel(),
             Drum::Fuel => BlastParams::fuel(),
+            Drum::Lava => BlastParams::lava_bomb(),
         };
         if shape == BlastShape::Ram {
             // The hull is on top of the drum: it lurches.
@@ -303,6 +308,19 @@ impl Game {
             for pos in dead_frogs {
                 f.shocks.push(Shockwave::scaled(pos, SHOCK_FROG));
             }
+            // A lantern on the ground near the blast is knocked out.
+            let reach = params.radius * 0.6;
+            let mut broken = Vec::new();
+            self.lanterns.retain(|l| {
+                let hit = l.position.distance_to(center) <= reach;
+                if hit {
+                    broken.push(l.position);
+                }
+                !hit
+            });
+            for at in broken {
+                f.events.push(Event::LanternBroken { x: at.x, y: at.y });
+            }
             // Collect first: `damage_obstacle` needs the world free.
             let hits: Vec<(Entity, Material, f32)> = self
                 .world
@@ -326,6 +344,19 @@ impl Game {
                 // Barrels inside always chain - no roll needed.
                 let amount = if material.is_explosive() { f32::MAX } else { params.roll_damage(&mut f.rng) * falloff };
                 self.damage_obstacle(f, entity, amount, DamageCause::Blast { falloff, from: center });
+            }
+            // A lava bomb splashes burning lava round where it lands: a
+            // plus at one cell, a diamond further, no RNG.
+            if drum == Drum::Lava && t.volcano_pool_radius_cells >= 0 {
+                let (c, r) = cell_of(center);
+                let reach = t.volcano_pool_radius_cells;
+                for dr in -reach..=reach {
+                    for dc in -reach..=reach {
+                        if dc.abs() + dr.abs() <= reach {
+                            self.light_cell_as(f, (c + dc, r + dr), t.volcano_pool_seconds, true, true);
+                        }
+                    }
+                }
             }
             // An oil drum leaves a pool of fire; either drum lights any
             // trail cell in range.
@@ -370,8 +401,9 @@ impl Game {
         f.stage(show);
 
         // Delayed secondaries, hashed 0..=max per blast so a third of
-        // drums get none; the same queue a wreck's cook-offs use.
-        let max = t.barrel_cookoff_max.max(0) as u32;
+        // drums get none; the same queue a wreck's cook-offs use. A lava
+        // bomb has nothing left to cook off.
+        let max = if drum == Drum::Lava { 0 } else { t.barrel_cookoff_max.max(0) as u32 };
         if max > 0 {
             let count = crate::blast::seed_at(center, 90) % (max + 1);
             let window = t.cookoff_window_seconds;
@@ -399,16 +431,26 @@ impl Game {
         let radius = match drum {
             Drum::Oil => BlastParams::barrel(),
             Drum::Fuel => BlastParams::fuel(),
+            Drum::Lava => BlastParams::lava_bomb(),
         }
         .radius;
         let kind = match drum {
-            Drum::Oil => BlastKind::Oil,
+            Drum::Oil | Drum::Lava => BlastKind::Oil,
             Drum::Fuel => BlastKind::Fuel,
         };
         show.shocks.push(Shockwave::scaled(center, if drum == Drum::Fuel { SHOCK_FUEL } else { SHOCK_BARREL }));
         show.impact_flashes.push(Shockwave::new(center));
-        show.blast_fx.push(BlastFx::shaped(center, kind, shape));
-        self.flash_screen();
+        let mut fx = BlastFx::shaped(center, kind, shape);
+        if drum == Drum::Lava {
+            // A bomb is a splash, not a drum: a smaller fireball.
+            fx.scale *= 0.7;
+        }
+        show.blast_fx.push(fx);
+        // A rain of bombs would strobe the screen; the eruption flashes
+        // once for all of them (`Game::volcano_show`).
+        if drum != Drum::Lava {
+            self.flash_screen();
+        }
         let streak = match shape {
             BlastShape::Shot { dir } => Some(dir),
             _ => None,
@@ -422,9 +464,9 @@ impl Game {
 
         // Drum parts thrown in arcs to hashed landing spots (the same
         // machinery a wreck's hull parts use); with none, the plain
-        // rubble decal in place.
-        let parts = t.barrel_parts.max(0) as u32;
-        if parts == 0 {
+        // rubble decal in place. A lava bomb throws none: it was rock.
+        let parts = if drum == Drum::Lava { 0 } else { t.barrel_parts.max(0) as u32 };
+        if parts == 0 && drum != Drum::Lava {
             if let Some(decal) = Decal::new(Material::Barrel, center, false) {
                 show.decals.push(decal);
             }
@@ -472,6 +514,12 @@ impl Game {
     /// pool cell burns where the drum stood; a trail cell also carries the
     /// fire on to its oil neighbours one step later.
     pub(super) fn light_cell(&mut self, f: &mut Frame, cell: (i32, i32), seconds: f32, pool: bool) {
+        self.light_cell_as(f, cell, seconds, pool, false);
+    }
+
+    /// `light_cell`, with `lava` saying whether a volcano's bomb splashed
+    /// it: no fire takes on lava itself either.
+    pub(super) fn light_cell_as(&mut self, f: &mut Frame, cell: (i32, i32), seconds: f32, pool: bool, lava: bool) {
         if self.fires.iter().any(|fire| fire.cell == cell) {
             return;
         }
@@ -481,11 +529,11 @@ impl Game {
         }
         // Water does not burn (docs/water.md): no pool forms on it and a
         // trail's fire stops at its edge.
-        if self.water.depth_at(pos) != crate::ground::Depth::Dry {
+        if self.water.depth_at(pos) != crate::ground::Depth::Dry || self.lava.depth_at(pos) != crate::ground::Depth::Dry {
             return;
         }
         let step = 1.0 / tuning().oil_trail_cells_per_second.max(0.5);
-        self.fires.push(GroundFire { cell, left: seconds, total: seconds, spread_at: Some(self.time + step), pool });
+        self.fires.push(GroundFire { cell, left: seconds, total: seconds, spread_at: Some(self.time + step), pool, lava });
         f.events.push(Event::FireStarted { x: pos.x, y: pos.y, pool });
     }
 
@@ -545,7 +593,8 @@ impl Game {
                 for entity in order {
                     let mut q = self.world.query_one::<&mut Tank>(entity);
                     let Ok(tank) = q.get() else { continue };
-                    if tank.is_wreck() {
+                    // A heat shield keeps a burning cell off the hull too.
+                    if tank.is_wreck() || !tank.takes_heat() {
                         continue;
                     }
                     let reach = tank.hull_size() * 0.5 + half_cell;

@@ -503,6 +503,10 @@ pub struct Tank {
     /// pickup refreshes the duration instead of stacking with an
     /// already-active boost - see `PickupKind::SpeedUp`'s doc comment.
     pub speed_boost_timer: f32,
+    /// Seconds of heat shield left (`PickupKind::HeatShield`): while
+    /// positive no heat reaches the hull - lava, a hot bank, a burning
+    /// cell, afterburn, a flamethrower's stream (`Tank::takes_heat`).
+    pub heat_shield_timer: f32,
     /// Absorption left in a `pickup::PickupKind::Shield` - a pool of damage
     /// points, not a clock. While positive `take_damage` spends this instead
     /// of health and `draw_tank_shield` draws the rainbow ring; at zero the
@@ -667,6 +671,7 @@ impl Default for Tank {
             missile_ammo: 0,
             weapon_queue: Vec::new(),
             speed_boost_timer: 0.0,
+            heat_shield_timer: 0.0,
             throttle: 1.0,
             shield_hp: 0.0,
             shield_recharge_delay: 0.0,
@@ -775,7 +780,21 @@ impl Tank {
             PickupKind::FrogHealth => true,
             // Decided by the towers' state (`Game::tower_pack_wanted`).
             PickupKind::TowerPack => true,
+            // Player-only, like the fuel: a heat shield is the players'
+            // way across the lava.
+            PickupKind::HeatShield => false,
         }
+    }
+
+    /// Whether heat reaches this hull: false while a heat shield is on it.
+    pub fn takes_heat(&self) -> bool {
+        self.heat_shield_timer <= 0.0
+    }
+
+    /// How much of a heat shield is left, 0..=1 of `heat_shield_seconds`
+    /// (its ring drains with it).
+    pub fn heat_shield_fraction(&self) -> f32 {
+        (self.heat_shield_timer / tuning().heat_shield_seconds.max(1e-3)).clamp(0.0, 1.0)
     }
 
     pub fn is_shielded(&self) -> bool {
@@ -2019,6 +2038,38 @@ pub fn draw_tank_shield(c: &mut impl Canvas, tank: &Tank, time: f32) {
     };
     let style = RingStyle::Rainbow { base_hue, charge: tank.shield_charge(), base };
     draw_ground_ring(c, tank, time, style, shield_visibility(tank));
+}
+
+/// The heat shield's ring round a hull (docs/volcano.md): blocks of red
+/// and black by turns, the pickup's own two colours, draining clockwise
+/// from the top with the shield's clock (`Tank::heat_shield_fraction`),
+/// a bright step running round it so it reads as alive.
+pub fn draw_tank_heat_shield(c: &mut impl Canvas, tank: &Tank, time: f32) {
+    if tank.is_wreck() || tank.heat_shield_timer <= 0.0 {
+        return;
+    }
+    let frac = tank.heat_shield_fraction();
+    let centre = tank.ring_position;
+    let r = tank.size() * 0.95;
+    let count = ((r * std::f32::consts::TAU) / 4.0) as i32;
+    let lit = ((time * 12.0) as i32).rem_euclid(count.max(1));
+    for i in 0..count {
+        let k = i as f32 / count as f32;
+        if k > frac {
+            break;
+        }
+        let a = k * std::f32::consts::TAU;
+        let (x, y) = (crate::pyro::snap(centre.x + a.sin() * r), crate::pyro::snap(centre.y - a.cos() * r));
+        let color = if (i - lit).rem_euclid(count) < 2 {
+            crate::pyro::FIRE[5]
+        } else if (i / 3) % 2 == 0 {
+            crate::pyro::FIRE[3]
+        } else {
+            crate::pyro::SMOKE[0]
+        };
+        c.fill_rect(x - 1, y - 1, 2, 2, color);
+        c.fill_rect(x - 1 + (a.sin() * 2.0).round() as i32, y - 1 - (a.cos() * 2.0).round() as i32, 2, 2, crate::pyro::SMOKE[0]);
+    }
 }
 
 /// Which ramp step `frac` (remaining health, 0..=1) falls in: 0 above three

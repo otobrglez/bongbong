@@ -64,6 +64,11 @@ pub struct Intent {
     /// (docs/enemy-command-and-control-prd.md), and the player always leaves
     /// it at 0.
     pub slow: f32,
+    /// The lamp key held (docs/volcano.md): a player's seat sets a lantern
+    /// down on the press, while it has any left. Held, like `fire`, so the
+    /// simulation finds the edge and an online packet that repeats a held
+    /// key never drops two. The AI never sets it.
+    pub lamp: bool,
 }
 
 impl Intent {
@@ -555,7 +560,7 @@ impl Ai {
         let into_wall = self
             .last_move_dir
             .and_then(|d| walls_ahead[d.index()])
-            .is_some_and(|w| w.material != Material::Iron);
+            .is_some_and(|w| !w.material.is_permanent());
         if into_wall {
             self.wall_ahead_timer += dt;
         } else {
@@ -1901,7 +1906,7 @@ impl Brain<'_> {
         let can_afford = self.me.damage <= t.enemy_breach_max_damage
             && (self.me.active_weapon() != ActiveWeapon::Shell || self.me.shells_ammo >= t.enemy_breach_min_shells);
         let walls = self.walls_ahead;
-        let wall_in = |dir: Dir| walls[dir.index()].filter(|w| w.material != Material::Iron);
+        let wall_in = |dir: Dir| walls[dir.index()].filter(|w| !w.material.is_permanent());
         if let Some(breach) = self.ai.breach {
             if can_afford && breach.timer > 0.0 && wall_in(breach.dir).is_some() {
                 return true;

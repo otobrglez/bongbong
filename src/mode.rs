@@ -70,9 +70,11 @@ impl Driver {
 /// tool or the `player_tank` knob (read as it stands at the win; the round
 /// was set up under it unless it was moved since).
 fn played_as_authored(game: &Game, t: &crate::tuning::Tuning) -> bool {
-    // The map's sky, or a `random` one's pick for this seed: what the round
-    // is fought under when no `--weather` puts another in.
-    let own_sky = crate::weather::in_force(game.map.weather, game.round_seed(), true, &crate::tuning::Tuning::DEFAULT);
+    // The map's sky, or a `random` one's pick for this seed - or night,
+    // once the map's `nightfall` has passed: what the round is fought
+    // under when no `--weather` puts another in.
+    let key = if game.night_has_fallen() { crate::map::Weather::Night } else { game.map.weather };
+    let own_sky = crate::weather::in_force(key, game.round_seed(), true, &crate::tuning::Tuning::DEFAULT);
     game.players == PlayerCount::ONE
         && game.start_override.is_none()
         && game.enemy_count_override.is_none()
@@ -902,6 +904,7 @@ impl Session {
                 // end screen counts down to the lobby it came from.
                 countdown_label: Some(crate::text::keys::ROUND_BACK_TO_LOBBY),
                 minimap: self.minimap_slot(),
+                lamp_row: self.shown().lamps_in_play() || !self.shown().lava().is_empty(),
                 ..PlayChrome::default()
             },
             Driver::Lobby => {
@@ -933,6 +936,7 @@ impl Session {
                 level_button: self.level_button(),
                 levels: self.level_select.as_ref().zip(self.campaign.as_ref()).map(|(select, campaign)| select.view(campaign, self.level())),
                 minimap: (self.driver == Driver::Play).then(|| self.minimap_slot()).flatten(),
+                lamp_row: self.game.lamps_in_play() || !self.game.lava().is_empty(),
             },
         }
     }
@@ -1752,6 +1756,14 @@ mod session_tests {
         assert!(played_as_authored(&s.game, &crate::tuning::Tuning::DEFAULT));
         let picked = crate::tuning::Tuning { player_tank: 3, ..crate::tuning::Tuning::DEFAULT };
         assert!(!played_as_authored(&s.game, &picked), "a chassis from the knob");
+
+        // Night falling on a map that asks for it is the map's own sky.
+        let mut s = clear_session();
+        s.play();
+        s.game.map.nightfall = Some(0.0);
+        s.game.tick_nightfall();
+        assert_eq!(s.game.weather(), crate::map::Weather::Night);
+        assert!(played_as_authored(&s.game, &crate::tuning::Tuning::DEFAULT), "nightfall is the map's");
 
         let mut s = clear_session();
         s.driver = Driver::Play;
