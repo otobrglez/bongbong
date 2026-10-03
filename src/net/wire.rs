@@ -285,6 +285,9 @@ pub struct IntentMsg {
     /// `Intent::fire`, held for at least two ticks by the client so a short
     /// press survives sampling.
     pub fire: bool,
+    /// `Intent::lamp`, held like `fire` (docs/volcano.md): the room sets a
+    /// lantern down on the press.
+    pub lamp: bool,
     /// The client owns its hull (docs/online-coop-prd.md §4.14,
     /// `online_client_hull`): the pose below is where it is this tick, and
     /// the room puts the seat there instead of driving it from `move_dir`.
@@ -315,6 +318,7 @@ impl IntentMsg {
             move_dir: dir_code(intent.move_dir),
             face: dir_code(intent.face),
             fire: intent.fire,
+            lamp: intent.lamp,
             owned: false,
             x: 0,
             y: 0,
@@ -362,6 +366,7 @@ impl IntentMsg {
             move_dir: dir_from_code(self.move_dir),
             face: dir_from_code(self.face),
             fire: self.fire,
+            lamp: self.lamp,
             ..Intent::default()
         }
     }
@@ -410,6 +415,8 @@ pub mod tank_flags {
     pub const HIT: u8 = 1 << 4;
     /// The flamethrower's stream is on.
     pub const FLAME: u8 = 1 << 5;
+    /// A heat shield is on (docs/volcano.md).
+    pub const HEAT_SHIELD: u8 = 1 << 6;
 }
 
 
@@ -600,6 +607,21 @@ pub struct FireState {
     pub cell: u16,
     /// Time left, tenths of a second (`quantise_seconds`).
     pub left: u8,
+    /// A splash of lava a volcano's bomb threw (`GroundFire::lava`), drawn
+    /// as molten rock rather than flames.
+    pub lava: bool,
+}
+
+/// A lantern a seat set down (docs/volcano.md, `lamp::Lantern`), keyed by
+/// its per-round id.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LampState {
+    pub id: u16,
+    /// Quarter pixels (`quantise_pos`).
+    pub x: i16,
+    pub y: i16,
+    /// The seat that set it down.
+    pub seat: u8,
 }
 
 /// The round's scalar state.
@@ -651,6 +673,8 @@ pub struct Snapshot {
     pub bonus_pickups: Vec<BonusPickup>,
     pub tiles: Vec<TileState>,
     pub fires: Vec<FireState>,
+    /// The lanterns on the ground, by id.
+    pub lamps: Vec<LampState>,
     pub round: RoundState,
     /// What happened on the ticks since the previous snapshot, the AI's
     /// trace left out (`WireEvent::from_event`).
@@ -673,6 +697,8 @@ impl Snapshot {
         self.tiles.dedup_by_key(|t| t.cell);
         self.fires.sort_by_key(|f| f.cell);
         self.fires.dedup_by_key(|f| f.cell);
+        self.lamps.sort_by_key(|l| l.id);
+        self.lamps.dedup_by_key(|l| l.id);
     }
 }
 
@@ -1062,13 +1088,14 @@ mod tests {
         let dirs = [None, Some(Dir::Up), Some(Dir::Down), Some(Dir::Left), Some(Dir::Right)];
         for &move_dir in &dirs {
             for &face in &dirs {
-                for fire in [false, true] {
-                    let intent = Intent { move_dir, face, fire, fire_aim_offset: 12.5, slow: 0.5 };
+                for (fire, lamp) in [(false, false), (true, false), (false, true), (true, true)] {
+                    let intent = Intent { move_dir, face, fire, fire_aim_offset: 12.5, slow: 0.5, lamp };
                     let msg = IntentMsg::new(7, &intent);
                     let back: Intent = (&msg).into();
                     assert_eq!(back.move_dir, move_dir);
                     assert_eq!(back.face, face);
                     assert_eq!(back.fire, fire);
+                    assert_eq!(back.lamp, lamp);
                     assert_eq!(back.fire_aim_offset, 0.0, "AI-only field must not travel");
                     assert_eq!(back.slow, 0.0, "AI-only field must not travel");
                     assert_eq!(msg.tick, 7);
@@ -1128,7 +1155,7 @@ mod tests {
                 TankState { id: 1, hp: 9, ..Default::default() },
                 TankState { id: 1, hp: 2, ..Default::default() },
             ],
-            fires: vec![FireState { cell: 9, left: 1 }, FireState { cell: 2, left: 1 }],
+            fires: vec![FireState { cell: 9, left: 1, lava: false }, FireState { cell: 2, left: 1, lava: true }],
             ..Default::default()
         };
         s.normalise();

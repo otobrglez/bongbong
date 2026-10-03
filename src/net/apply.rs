@@ -188,7 +188,33 @@ pub fn welcome(w: &Welcome) -> Result<Game, String> {
     game.oil_cells = w.oil_cells.iter().map(|&i| cell_from_index(cols, i)).collect();
     remove_tiles(&mut game, &w.dead_cells.iter().copied().collect(), cols);
     apply(&mut game, &w.snapshot, Show::Quiet);
+    // The lanterns each seat has set down already are spent; one a blast
+    // broke before this client came in is forgotten.
+    for seat in 0..game.lamps_left.len() {
+        let set = game.lanterns.iter().filter(|l| l.seat as usize == seat).count();
+        game.lamps_left[seat] = game.lamps_left[seat].saturating_sub(set.min(u8::MAX as usize) as u8);
+    }
     Ok(game)
+}
+
+/// The lanterns the snapshot lists: kept where the replica already has
+/// them (their flame's age with them), new ones lit now, the rest gone.
+fn apply_lamps(game: &mut Game, s: &Snapshot) {
+    let now = game.time;
+    let lanterns = s
+        .lamps
+        .iter()
+        .map(|l| {
+            let lit_at = game.lanterns.iter().find(|k| k.id == l.id).map_or(now, |k| k.lit_at);
+            crate::lamp::Lantern {
+                id: l.id,
+                position: Position::new(dequantise_pos(l.x), dequantise_pos(l.y)),
+                seat: l.seat,
+                lit_at,
+            }
+        })
+        .collect();
+    game.lanterns = lanterns;
 }
 
 /// Take the tiles in `dead` out of the world, bodies included, and recap
@@ -244,6 +270,7 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_frogs(game, s, drawn.then_some(&mut spectacle));
     apply_pickups(game, s, cols);
     apply_fires(game, s, cols);
+    apply_lamps(game, s);
     apply_round(game, s);
     game.show(spectacle);
     game.frame = s.tick as u64;
@@ -402,6 +429,7 @@ fn drawn_muzzle(game: &mut Game, slot: usize, weapon: WeaponKind) -> Option<Posi
 /// no family for something that is neither a tile nor a shot; its arc is
 /// derived from an age `tick_presentation` advances, and the blast it
 /// sets off when it lands arrives as the server's own `Blast`. A
+/// `LavaBombLaunched` puts a volcano's bomb in the air the same way. A
 /// `LaserBeam` is drawn likewise. Both are the moment's, so a quiet
 /// apply puts neither up, and a beam the client drew itself (`own_beams`,
 /// indices into `s.events`) is neither drawn nor handed on.
@@ -430,6 +458,20 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_beams:
                 let to = Position::new(dequantise_pos(to_x), dequantise_pos(to_y));
                 // Only a fuel drum ever launches (`props::tick_fuses`).
                 game.drum_in_flight(from, to, Drum::Fuel as i32);
+            }
+            // A seat's lantern is spent the moment it is set down, however
+            // late the news: the HUD counts what is left.
+            WireEvent::LanternSet { seat, .. } => {
+                if let Some(left) = game.lamps_left.get_mut(seat as usize) {
+                    *left = left.saturating_sub(1);
+                }
+            }
+            // A lava bomb flies the same way, and bursts on the room's
+            // `Blast`.
+            WireEvent::LavaBombLaunched { x, y, to_x, to_y } if show.drawn() => {
+                let from = Position::new(dequantise_pos(x), dequantise_pos(y));
+                let to = Position::new(dequantise_pos(to_x), dequantise_pos(to_y));
+                game.bomb_in_flight(from, to);
             }
             // An instant hit: the beam is the only trace, and the replica's
             // `tick_effects` fades it as a local round's does.
@@ -600,6 +642,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
         set_timer(&mut tank.speed_boost_timer, on(tank_flags::BOOST), knobs.speed_boost_duration_seconds);
         set_timer(&mut tank.burn_timer, on(tank_flags::BURNING), knobs.flame_afterburn_seconds);
         set_timer(&mut tank.hit_flash_timer, on(tank_flags::HIT), knobs.health_ring_hit_seconds);
+        set_timer(&mut tank.heat_shield_timer, on(tank_flags::HEAT_SHIELD), knobs.heat_shield_seconds);
         tank.flame_held = on(tank_flags::FLAME);
         let weapon: ActiveWeapon = t.weapon.into();
         tank.weapon_queue = if weapon == ActiveWeapon::Shell { Vec::new() } else { vec![weapon] };
@@ -933,6 +976,7 @@ fn apply_fires(game: &mut Game, s: &Snapshot, cols: u16) {
                 total: known.map_or(left.max(trail_seconds), |g| g.total),
                 spread_at: None,
                 pool: known.map_or(!game.oil_cells.contains(&cell), |g| g.pool),
+                lava: f.lava,
             }
         })
         .collect();

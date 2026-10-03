@@ -220,6 +220,9 @@ pub struct OnlineRound<T: Transport> {
     /// A trigger pulled since the last packet went out, so a tap between
     /// two packets still reaches the room.
     pending_fire: bool,
+    /// A lamp tap on a frame that sent nothing, carried into the next
+    /// packet like `pending_fire`.
+    pending_lamp: bool,
     /// The frame's own trigger, for the flamethrower's cone: a stream
     /// the local seat is drawn holding while the key is down.
     trigger_down: bool,
@@ -292,6 +295,7 @@ impl<T: Transport> OnlineRound<T> {
             predictor: None,
             send_owed: 0.0,
             pending_fire: false,
+            pending_lamp: false,
             trigger_down: false,
             lead: Lead::new(),
             client_hull: tuning().online_client_hull,
@@ -750,9 +754,11 @@ impl<T: Transport> OnlineRound<T> {
         if *self.client.phase() != Phase::Playing {
             self.send_owed = 0.0;
             self.pending_fire = false;
+            self.pending_lamp = false;
             return;
         }
         self.pending_fire |= intent.fire;
+        self.pending_lamp |= intent.lamp;
         self.send_owed = (self.send_owed + dt.max(0.0)).min(SEND_CATCH_UP_TICKS as f32 * PHYSICS_FIXED_DT);
         while self.send_owed >= PHYSICS_FIXED_DT {
             self.send_owed -= PHYSICS_FIXED_DT;
@@ -779,6 +785,7 @@ impl<T: Transport> OnlineRound<T> {
     fn send_one(&mut self, intent: &Intent) {
         let mut out = *intent;
         out.fire |= self.pending_fire;
+        out.lamp |= self.pending_lamp;
         // One counter for both: the sandbox steps on exactly the input
         // the packet carries - fire hold included, since that is the bit
         // the server's press edge will see - stamped with exactly the
@@ -786,6 +793,7 @@ impl<T: Transport> OnlineRound<T> {
         let Some(msg) = self.client.prepare_intent(&out) else { return };
         let mut msg = msg.with_view(self.view.0, self.view.1);
         self.pending_fire = false;
+        self.pending_lamp = false;
         let shots = self.predict_shots();
         if let Some(predictor) = self.predictor.as_mut() {
             // The knob is live: read each tick, so a shot pressed after

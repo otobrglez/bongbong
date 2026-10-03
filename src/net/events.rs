@@ -186,6 +186,13 @@ pub enum WireEvent {
     Slimed { slot: u16 },
     SlimeWashed { slot: u16 },
     TowerRepaired { side: Side, x: i16, y: i16 },
+    /// A volcano's lava bomb thrown from its crater toward where it will
+    /// burst; `Event::LavaBombLaunched` (docs/volcano.md).
+    LavaBombLaunched { x: i16, y: i16, to_x: i16, to_y: i16 },
+    /// A seat set a lantern down; `Event::LanternSet`.
+    LanternSet { seat: u8, x: i16, y: i16 },
+    /// A blast broke a lantern; `Event::LanternBroken`.
+    LanternBroken { x: i16, y: i16 },
 }
 
 fn slot_u16(slot: usize) -> u16 {
@@ -244,6 +251,11 @@ impl WireEvent {
                 WireEvent::ObstacleDestroyed { material, x: q(x), y: q(y) }
             }
             Event::Blast { x, y, chained, drum } => WireEvent::Blast { x: q(x), y: q(y), chained, drum },
+            Event::LavaBombLaunched { x, y, to_x, to_y } => {
+                WireEvent::LavaBombLaunched { x: q(x), y: q(y), to_x: q(to_x), to_y: q(to_y) }
+            }
+            Event::LanternSet { seat, x, y } => WireEvent::LanternSet { seat, x: q(x), y: q(y) },
+            Event::LanternBroken { x, y } => WireEvent::LanternBroken { x: q(x), y: q(y) },
             Event::DrumLaunched { x, y, to_x, to_y } => {
                 WireEvent::DrumLaunched { x: q(x), y: q(y), to_x: q(to_x), to_y: q(to_y) }
             }
@@ -353,6 +365,11 @@ impl WireEvent {
             WireEvent::WreckRemoved { slot } => Event::WreckRemoved { slot: slot as usize },
             WireEvent::ObstacleDestroyed { material, x, y } => Event::ObstacleDestroyed { material, x: d(x), y: d(y) },
             WireEvent::Blast { x, y, chained, drum } => Event::Blast { x: d(x), y: d(y), chained, drum },
+            WireEvent::LavaBombLaunched { x, y, to_x, to_y } => {
+                Event::LavaBombLaunched { x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y) }
+            }
+            WireEvent::LanternSet { seat, x, y } => Event::LanternSet { seat, x: d(x), y: d(y) },
+            WireEvent::LanternBroken { x, y } => Event::LanternBroken { x: d(x), y: d(y) },
             WireEvent::DrumLaunched { x, y, to_x, to_y } => {
                 Event::DrumLaunched { x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y) }
             }
@@ -463,6 +480,9 @@ mod tests {
             Event::ObstacleDestroyed { material: Material::Pine, x: 96.0, y: 96.0 },
             Event::Blast { x: 128.0, y: 160.0, chained: true, drum: Drum::Fuel },
             Event::DrumLaunched { x: 128.0, y: 160.0, to_x: 256.0, to_y: 160.0 },
+            Event::LavaBombLaunched { x: 640.0, y: 352.0, to_x: 800.0, to_y: 416.0 },
+            Event::LanternSet { seat: 1, x: 200.0, y: 96.0 },
+            Event::LanternBroken { x: 200.0, y: 96.0 },
             Event::LaserBeam { x0: 100.0, y0: 200.0, x1: 100.0, y1: 32.0, variant: "blue", seat: 1 },
             Event::Shoved { seat: 0, vx: 120.0, vy: -40.0 },
             Event::Placed { seat: 2, x: 320.0, y: 160.0, rotation: 90.0 },
@@ -503,7 +523,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 42, "one sample per Event variant");
+        assert_eq!(seen.len(), 45, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }
