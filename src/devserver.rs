@@ -1441,6 +1441,9 @@ impl DevServer {
             "map": map_json(&game.map),
             "weather": weather_json(game),
             "camera": self.camera_json(session, (width, height)),
+            // Where the window's frames spend their time, ms a frame
+            // averaged over about half a second (`frame_stages.rs`).
+            "frame_stages": crate::frame_stages::averages().into_iter().map(|(name, ms)| (name.to_string(), json!((ms * 1000.0).round() / 1000.0))).collect::<serde_json::Map<String, Value>>(),
             "ui": self.ui_json(session, width, height),
             "mode": session.mode().name(),
             "language": crate::text::language(),

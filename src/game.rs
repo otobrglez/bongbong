@@ -126,6 +126,48 @@ pub struct PaintOptions {
 }
 
 impl Game {
+    /// Bring the pictures the round keeps between frames - the lava's,
+    /// the bombs' pools', the craters' molten rock (`lava::LavaPictures`)
+    /// - up to this frame, for `views`, the world rectangles the window
+    /// shows (empty: the whole field). A window calls it before it uploads
+    /// the frame's textures (`with_block_images`); a painter draws from the
+    /// pictures only on the frame they were brought up to.
+    pub fn refresh_pictures(&self, views: &[crate::math::Rectangle]) {
+        if self.lava.is_empty() && self.volcanoes.is_empty() && !self.fires.iter().any(|f| f.lava) {
+            return;
+        }
+        let t = crate::tuning::tuning();
+        let pools: Vec<((i32, i32), f32)> =
+            self.fires.iter().filter(|f| f.lava).map(|f| (f.cell, crate::lava::pool_heat(f.left, f.total))).collect();
+        let cones: Vec<_> = self.volcanoes.iter().map(|v| (v.cell, crate::volcano::cone(&v.outlets), v.phase(self.time, &t))).collect();
+        self.lava.refresh_pictures(&crate::lava::PictureFrame {
+            time: self.time,
+            look: self.lava_look(),
+            views,
+            pools: &pools,
+            cones: &cones,
+            bands: t.glow_bands.max(0) as u32,
+        });
+    }
+
+    /// Every baked image the round draws from, in an order that holds
+    /// while the round does, for the window's GPU copies: the floor shade,
+    /// the lava's banks, the kept pictures, then each cone's.
+    pub fn with_block_images<R>(&self, f: impl FnOnce(&[&crate::canvas::BlockImage]) -> R) -> R {
+        let pictures = self.lava.pictures();
+        let cones: Vec<_> = self.volcanoes.iter().map(|v| crate::volcano::cone(&v.outlets)).collect();
+        let mut images = vec![self.ground.shade()];
+        if !self.lava.is_empty() {
+            images.push(self.lava.banks());
+        }
+        images.extend(pictures.images());
+        for cone in &cones {
+            let parts = cone.images();
+            images.extend([&parts.body, &parts.shadow, &parts.skirt]);
+        }
+        f(&images)
+    }
+
     /// The floor of the field: the ground tileset and its baked shade (a
     /// flat white sheet under `plain_canvas`), tread marks, burn marks,
     /// landed rubble and unlit oil pools - everything lying flat under
@@ -191,23 +233,38 @@ impl Game {
         }
         // The lava over the marks it runs across: block by block from each
         // cell's neighbours, its bands running downstream, its crust
-        // floes drifting with them; then the splashes the bombs threw.
+        // floes drifting with them; then the splashes the bombs threw. A
+        // window draws the lava and the pools from the pictures it kept
+        // for this frame (`refresh_pictures`), a tile a quad.
+        let pictures = self.lava.pictures();
+        let fresh = pictures.fresh(self.time);
         if !self.lava.is_empty() {
             let look = self.lava_look();
+            let kept = fresh && c.has_blocks(pictures.lava.image.stamp);
+            if kept {
+                pictures.lava.draw(c);
+            }
             for (col, row) in self.lava.cells() {
                 if !c.culls(crate::map::cell_to_world(col, row)) {
-                    crate::lava::draw_cell(c, &self.lava, col, row, self.time, look, false, 1.0);
+                    if !kept {
+                        crate::lava::draw_cell(c, &self.lava, col, row, self.time, look, false, 1.0);
+                    }
                     crate::lava::draw_floes(c, &self.lava, col, row, self.time, look);
                 }
             }
         }
-        let pools: Vec<((i32, i32), f32)> = self
-            .fires
-            .iter()
-            .filter(|f| f.lava && !c.culls(f.position()))
-            .map(|f| (f.cell, crate::lava::pool_heat(f.left, f.total)))
-            .collect();
-        crate::lava::draw_pools(c, &pools, self.time);
+        if fresh && c.has_blocks(pictures.pools().image.stamp) {
+            pictures.pools().draw(c);
+        } else {
+            let pools: Vec<((i32, i32), f32)> = self
+                .fires
+                .iter()
+                .filter(|f| f.lava && !c.culls(f.position()))
+                .map(|f| (f.cell, crate::lava::pool_heat(f.left, f.total)))
+                .collect();
+            crate::lava::draw_pools(c, &pools, self.time);
+        }
+        drop(pictures);
         // Unlit oil trails: puddles on the ground, under everything.
         for &(col, row) in &self.oil_cells {
             let at = crate::map::cell_to_world(col, row);
@@ -262,6 +319,8 @@ impl Game {
         // A volcano's cone is one picture over all of its tiles, its shadow
         // first (docs/volcano.md).
         let t = crate::tuning::tuning();
+        let pictures = self.lava.pictures();
+        let fresh = pictures.fresh(self.time);
         for v in &self.volcanoes {
             if c.culls(v.centre()) {
                 continue;
@@ -270,8 +329,10 @@ impl Game {
             if self.shadows_enabled {
                 crate::volcano::draw_cone_shadow(c, v.centre(), &picture, (t.shadow_dir_x, t.shadow_dir_y));
             }
-            crate::volcano::draw_cone(c, v.centre(), &picture, &v.phase(self.time, &t), self.time);
+            let molten = if fresh { pictures.cone(v.cell).map(|(body, _)| body) } else { None };
+            crate::volcano::draw_cone_with(c, v.centre(), &picture, molten, &v.phase(self.time, &t), self.time);
         }
+        drop(pictures);
         for obstacle in self
             .world
             .query::<&Obstacle>()

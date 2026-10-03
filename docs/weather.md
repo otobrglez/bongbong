@@ -152,9 +152,10 @@ island, and they cluster there more.
 
 `render/weather.rs` runs around pass 1 of `Game::render`:
 
-1. **The light map** (a field-sized target): cleared to the ambient, then
-   every light of `weather::lights` added in. Stored halved, so a pixel
-   can be lit to twice daylight.
+1. **The light map** (the scene target's view, a texel per 2 px block -
+   the light pass reads it once a block): cleared to the ambient, then
+   every light of `weather::lights` added in (below). Stored halved, so a
+   pixel can be lit to twice daylight.
 2. **The ground pass** (`static/weather_ground.fs`): the bare ground
    tileset (`Game::paint_ground`, into its own target) drawn onto the
    field with the sky's mark on it - snow cover in three steps, ice over
@@ -266,6 +267,18 @@ neighbours. `light_shadows` off draws every ray to full reach. The fan is
 drawn with a vertex colour per ring down each ray (`RINGS`), bright at the
 source and falling off with distance, straight into raylib's batch.
 
+Most lights need no fan. A point light no ray of which was cut short
+(`Light::unblocked`) is the same falloff all round, so it is drawn as one
+soft disc, a texture of that falloff made once and scaled to the light. A
+still light (`Light::still`: a portal, a lamp post, a lantern) that a
+wall does cut is drawn once, at full white, into a tile of an atlas
+(`LightCache`) and kept while its place, radius and every ray's reach stay
+the same - a lamp's pool is drawn again only when a wall near it falls -
+and a frame draws the tile tinted by the light's colour, which carries its
+flicker. Only what moves and is shadowed - headlights, a fire against a
+wall - is a fan each frame. A colour past the 2.0 a texel stores is drawn
+in as many shares as it takes.
+
 **Lightning** (`weather::lightning`) is a pure function of the round
 clock: a strike in most `lightning_gap_seconds` windows, a sharp flash and
 a second flicker, lifting the light map's ambient toward daylight while it
@@ -301,12 +314,13 @@ The `weather` tuning group, every row `Live` but `weather_override`
 
 ## What it costs
 
-- Three field-sized RGBA8 targets (about 7 MB at 1088 x 544), made on the
-  first weathered frame and re-made when the field changes size, and the
-  cell mask, one texel per map cell, uploaded when it changes.
+- Two RGBA8 targets the scene target's size and the light map a quarter
+  of it, made on the first weathered frame and re-made when the view
+  changes size; the cell mask, one texel per map cell, uploaded when it
+  changes; the disc and the still lights' atlas (up to 64 tiles).
 - Per frame: the light list and its raycasts on the CPU (a few thousand
-  grid steps), the light fans (tens of thousands of vertices on a busy
-  night), and up to four full-field shader blits.
+  grid steps), a quad for every disc and kept pool, the fans of the moving
+  shadowed lights, and up to four full-field shader blits.
 - A clear sky makes no target and runs no blit.
 
 The shaders' clock wraps every half hour (`CLOCK_WRAP_SECONDS`) and their

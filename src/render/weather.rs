@@ -67,6 +67,20 @@ const CLOCK_WRAP_SECONDS: f32 = 1800.0;
 /// straight-edged triangles between them draw a smooth pool.
 const RINGS: [f32; 5] = [0.0, 0.16, 0.38, 0.66, 1.0];
 
+/// World pixels a light map texel covers: the light pass reads the map
+/// once per 2 px block (`weather_light.fs`), so the map is drawn a texel a
+/// block - a quarter of the pixels a texel per pixel would fill.
+const LIGHT_MAP_SCALE: f32 = 2.0;
+
+/// Texels across the soft disc an unblocked point light is drawn with
+/// (`Light::unblocked`): its falloff baked once, scaled to each light.
+const DISC_TEXELS: usize = 256;
+
+/// Tiles a row of the still lights' atlas holds (`LightCache`), and the
+/// most tiles it grows to before the least recently drawn give way.
+const CACHE_COLUMNS: i32 = 8;
+const CACHE_MAX_TILES: usize = 64;
+
 struct LightLocs {
     field_size: i32,
     view_origin: i32,
@@ -132,13 +146,169 @@ struct PassShaders {
     sky_locs: SkyLocs,
 }
 
-/// The render targets, each the scene target's size, re-created when the
+/// The render targets, each the scene target's size - the light map a
+/// texel per 2 px block of it (`LIGHT_MAP_SCALE`) - re-created when the
 /// camera's view changes size.
 struct Targets {
     size: (i32, i32),
     light: RenderTexture2D,
     ground: RenderTexture2D,
     lit: RenderTexture2D,
+}
+
+/// The light map's size for a scene target of `size`.
+fn light_map_size(size: (i32, i32)) -> (i32, i32) {
+    let s = LIGHT_MAP_SCALE as i32;
+    ((size.0 + s - 1) / s, (size.1 + s - 1) / s)
+}
+
+/// The camera the light map is drawn through: `camera`'s view at a texel
+/// per `LIGHT_MAP_SCALE` world pixels.
+fn light_camera(camera: &Camera) -> Camera2D {
+    Camera2D { zoom: 1.0 / LIGHT_MAP_SCALE, ..camera.in_target() }
+}
+
+/// The shadowed pools of light the still lights throw (`Light::still`),
+/// drawn once each into a tile of one atlas and kept while the light's
+/// position, radius and every ray's reach stay the same - a lamp post's
+/// pool is drawn again only when a wall near it falls. Each tile holds
+/// the pool at full white (stored 1.0, 2.0 of light); a frame draws it
+/// tinted by the light's colour, which carries its flicker.
+#[derive(Default)]
+struct LightCache {
+    atlas: Option<RenderTexture2D>,
+    /// Texels across a tile.
+    tile: i32,
+    /// Per tile: the key of the pool drawn in it and the frame it was last
+    /// drawn on.
+    tiles: Vec<Option<(u64, u64)>>,
+    frame: u64,
+}
+
+impl LightCache {
+    /// What a still light's pool looks like: where it stands, how far it
+    /// reaches and every ray's reach.
+    fn key(light: &Light) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut eat = |v: u32| {
+            h ^= v as u64;
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        };
+        eat(light.at.x.to_bits());
+        eat(light.at.y.to_bits());
+        eat(light.radius.to_bits());
+        for r in &light.reach {
+            eat(r.to_bits());
+        }
+        h
+    }
+
+    /// The lights the cache draws: still points with something in their
+    /// way (an unblocked one is a disc, cheaper still).
+    fn holds(light: &Light) -> bool {
+        light.still && matches!(light.shape, Shape::Point) && !light.unblocked()
+    }
+
+    /// The texels a light's pool needs across.
+    fn texels(light: &Light) -> i32 {
+        (2.0 * light.radius / LIGHT_MAP_SCALE).ceil() as i32 + 2
+    }
+
+    /// Make sure every still light in `lights` has its pool in a tile,
+    /// drawing the ones that do not: growing the atlas (and drawing every
+    /// kept pool again) where a pool is wider than a tile or the tiles are
+    /// all taken, up to `CACHE_MAX_TILES`, past which the least recently
+    /// drawn tile gives way.
+    fn prepare(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, lights: &[Light]) {
+        self.frame += 1;
+        let frame = self.frame;
+        let held: Vec<&Light> = lights.iter().filter(|l| Self::holds(l)).collect();
+        if held.is_empty() {
+            return;
+        }
+        let mut missing = Vec::new();
+        for light in &held {
+            let key = Self::key(light);
+            match self.tiles.iter_mut().flatten().find(|(k, _)| *k == key) {
+                Some(tile) => tile.1 = frame,
+                None => missing.push(*light),
+            }
+        }
+        if missing.is_empty() {
+            return;
+        }
+        let wide = held.iter().map(|l| Self::texels(l)).max().unwrap_or(1);
+        let free = self.tiles.iter().filter(|t| t.is_none()).count();
+        let mut redraw_all = Vec::new();
+        if self.atlas.is_none() || wide > self.tile || missing.len() > free {
+            // Grow: every pool drawn this frame, in a fresh atlas big
+            // enough for them and room to spare.
+            let want = (held.len() * 2).clamp(CACHE_COLUMNS as usize, CACHE_MAX_TILES);
+            let tile = wide.max(self.tile);
+            let rows = (want as i32 + CACHE_COLUMNS - 1) / CACHE_COLUMNS;
+            let Ok(atlas) = rl.load_render_texture(thread, (tile * CACHE_COLUMNS) as u32, (tile * rows) as u32) else {
+                self.atlas = None;
+                self.tiles.clear();
+                return;
+            };
+            self.atlas = Some(atlas);
+            self.tile = tile;
+            self.tiles = vec![None; (rows * CACHE_COLUMNS) as usize];
+            redraw_all = held.clone();
+        }
+        let todo: Vec<&Light> = if redraw_all.is_empty() { missing } else { redraw_all };
+        let tile = self.tile;
+        let mut places = Vec::new();
+        for light in todo {
+            let slot = match self.tiles.iter().position(|t| t.is_none()) {
+                Some(slot) => slot,
+                None => {
+                    // Full at its largest: the tile drawn longest ago goes.
+                    let oldest = self.tiles.iter().enumerate().min_by_key(|(_, t)| t.map_or(0, |(_, used)| used)).map(|(i, _)| i);
+                    match oldest {
+                        Some(slot) => slot,
+                        None => continue,
+                    }
+                }
+            };
+            self.tiles[slot] = Some((Self::key(light), frame));
+            places.push((slot, light));
+        }
+        let Some(atlas) = self.atlas.as_mut() else { return };
+        let fresh = places.len() == self.tiles.iter().flatten().count();
+        rl.draw_texture_mode(thread, atlas, |mut d| {
+            if fresh {
+                d.clear_background(Color::new(0, 0, 0, 0));
+            }
+            for (slot, light) in &places {
+                let (x, y) = ((*slot as i32 % CACHE_COLUMNS) * tile, (*slot as i32 / CACHE_COLUMNS) * tile);
+                // The tile cleared to black (an additive draw adds nothing
+                // where it is), then the pool at full white about its
+                // middle.
+                d.draw_rectangle(x, y, tile, tile, Color::new(0, 0, 0, 255));
+                let middle = Vector2::new(x as f32 + tile as f32 / 2.0, y as f32 + tile as f32 / 2.0);
+                let camera = Camera2D { offset: middle, target: Vector2::new(light.at.x, light.at.y), rotation: 0.0, zoom: 1.0 / LIGHT_MAP_SCALE };
+                let white = Light { color: [2.0, 2.0, 2.0], ..(*light).clone() };
+                d.draw_mode2D(camera, |mut d, _| {
+                    d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| draw_light(&mut bd, &white));
+                });
+            }
+        });
+    }
+
+    /// The slot `light`'s pool is kept in, if it is.
+    fn slot(&self, light: &Light) -> Option<usize> {
+        let key = Self::key(light);
+        self.tiles.iter().position(|t| t.is_some_and(|(k, _)| k == key))
+    }
+}
+
+/// The light's colour as the additive draws that add up to it: one, or as
+/// many as it takes to bring each share under the 2.0 a stored texel holds.
+fn shares(color: Rgb) -> (u32, Color) {
+    let top = color.iter().copied().fold(0.0f32, f32::max);
+    let n = (top / 2.0).ceil().max(1.0) as u32;
+    (n, stored(color.map(|c| c / n as f32), 255))
 }
 
 /// What the ground pass knows about each map cell - its water and its
@@ -159,6 +329,11 @@ pub struct WeatherFx {
     /// drawn without them.
     shaders: Option<PassShaders>,
     targets: Option<Targets>,
+    /// The soft disc an unblocked point light is drawn with, made with the
+    /// first light map.
+    disc: Option<Texture2D>,
+    /// The still lights' kept pools.
+    cache: LightCache,
     mask: Option<Mask>,
     /// What `mask` was made for and the frame it was last checked on.
     mask_for: Option<(MaskFor, u64)>,
@@ -441,7 +616,7 @@ impl WeatherFx {
                 None
             }
         };
-        WeatherFx { shaders, targets: None, mask: None, mask_for: None, warned: false }
+        WeatherFx { shaders, targets: None, disc: None, cache: LightCache::default(), mask: None, mask_for: None, warned: false }
     }
 }
 
@@ -549,11 +724,16 @@ impl WeatherFx {
         // calms the kill flash and the shake calms it too.
         let flash = if look.lightning > 0.0 { (lightning(game.time, &t) * look.lightning * t.screen_fx_intensity).clamp(0.0, 1.5) } else { 0.0 };
         let ambient = look.ambient.map(|a| a + (1.05 - a).max(0.0) * (flash * 0.9).min(1.0));
-        let targets = self.targets.as_mut().expect("ensure_targets made them");
         if plan.lit {
             let all = lights_in(game, fx.impacts(), &look, &t, camera.part());
-            draw_light_map(rl, thread, &mut targets.light, ambient, &all, camera);
+            if self.disc.is_none() {
+                self.disc = make_disc(rl, thread);
+            }
+            self.cache.prepare(rl, thread, &all);
+            let targets = self.targets.as_mut().expect("ensure_targets made them");
+            draw_light_map(rl, thread, &mut targets.light, ambient, &all, camera, self.disc.as_ref(), &self.cache);
         }
+        let targets = self.targets.as_mut().expect("ensure_targets made them");
         if ground {
             rl.draw_texture_mode(thread, &mut targets.ground, |mut d| {
                 d.clear_background(Color::WHITE);
@@ -615,10 +795,10 @@ impl WeatherFx {
         if self.targets.as_ref().is_some_and(|t| t.size == size) {
             return Ok(());
         }
-        let make = |rl: &mut RaylibHandle| rl.load_render_texture(thread, size.0 as u32, size.1 as u32).map_err(|e| format!("weather target: {e}"));
-        let light = make(rl)?;
-        let ground = make(rl)?;
-        let lit = make(rl)?;
+        let make = |rl: &mut RaylibHandle, size: (i32, i32)| rl.load_render_texture(thread, size.0 as u32, size.1 as u32).map_err(|e| format!("weather target: {e}"));
+        let light = make(rl, light_map_size(size))?;
+        let ground = make(rl, size)?;
+        let lit = make(rl, size)?;
         self.targets = Some(Targets { size, light, ground, lit });
         Ok(())
     }
@@ -671,14 +851,94 @@ fn mask_bytes(game: &Game) -> (i32, i32, Vec<u8>) {
     (cols, rows, bytes)
 }
 
-/// Draw the light map over `camera`'s view: `ambient` everywhere and every
-/// light added over it, in world pixels.
-fn draw_light_map(rl: &mut RaylibHandle, thread: &RaylibThread, target: &mut RenderTexture2D, ambient: Rgb, lights: &[Light], camera: &Camera) {
+/// How bright a point light's fan is `t` of its radius out, at full
+/// white: `(1 - t)^2` at each of `RINGS` and straight between them, as
+/// the fan's vertex colours run - so a disc and a fan of the same light
+/// are the same pool.
+fn ring_falloff(t: f32) -> f32 {
+    let at = |r: f32| (1.0 - r).clamp(0.0, 1.0).powi(2);
+    let t = t.clamp(0.0, 1.0);
+    let i = RINGS.windows(2).position(|w| t <= w[1]).unwrap_or(RINGS.len() - 2);
+    let (a, b) = (RINGS[i], RINGS[i + 1]);
+    at(a) + (at(b) - at(a)) * (t - a) / (b - a)
+}
+
+/// The soft disc an unblocked point light is drawn with: the point
+/// light's falloff (`ring_falloff`) at full white, filtered so it scales
+/// smoothly.
+fn make_disc(rl: &mut RaylibHandle, thread: &RaylibThread) -> Option<Texture2D> {
+    let n = DISC_TEXELS;
+    let half = n as f32 / 2.0;
+    let mut bytes = Vec::with_capacity(n * n * 4);
+    for y in 0..n {
+        for x in 0..n {
+            let (dx, dy) = ((x as f32 + 0.5 - half) / half, (y as f32 + 0.5 - half) / half);
+            let v = (ring_falloff((dx * dx + dy * dy).sqrt()) * 255.0).round() as u8;
+            bytes.extend_from_slice(&[v, v, v, 255]);
+        }
+    }
+    let blank = Image::gen_image_color(n as i32, n as i32, Color::new(0, 0, 0, 255));
+    let mut texture = rl.load_texture_from_image(thread, &blank).ok()?;
+    texture.update_texture(&bytes).ok()?;
+    texture.set_texture_filter(thread, TextureFilter::TEXTURE_FILTER_BILINEAR);
+    Some(texture)
+}
+
+/// Draw the light map over `camera`'s view, a texel per 2 px block:
+/// `ambient` everywhere and every light added over it - an unblocked
+/// point as the soft `disc`, a still light's shadowed pool from `cache`,
+/// any other as its fan of rays - each kind in one run, so the batch is
+/// not broken between textures.
+#[allow(clippy::too_many_arguments)]
+fn draw_light_map(
+    rl: &mut RaylibHandle,
+    thread: &RaylibThread,
+    target: &mut RenderTexture2D,
+    ambient: Rgb,
+    lights: &[Light],
+    camera: &Camera,
+    disc: Option<&Texture2D>,
+    cache: &LightCache,
+) {
     rl.draw_texture_mode(thread, target, |mut d| {
         d.clear_background(stored(ambient, 255));
-        d.draw_mode2D(camera.in_target(), |mut d, _| {
+        d.draw_mode2D(light_camera(camera), |mut d, _| {
             d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                let mut fans = Vec::new();
+                let mut kept = Vec::new();
                 for light in lights {
+                    match disc {
+                        Some(texture) if light.unblocked() && light.radius >= 1.0 => {
+                            let source = Rectangle::new(0.0, 0.0, DISC_TEXELS as f32, DISC_TEXELS as f32);
+                            let dest = Rectangle::new(light.at.x - light.radius, light.at.y - light.radius, 2.0 * light.radius, 2.0 * light.radius);
+                            let (n, tint) = shares(light.color);
+                            for _ in 0..n {
+                                bd.draw_texture_pro(texture, source, dest, Vector2::new(0.0, 0.0), 0.0, tint);
+                            }
+                        }
+                        _ => match cache.slot(light).filter(|_| LightCache::holds(light)) {
+                            Some(slot) => kept.push((slot, light)),
+                            None => fans.push(light),
+                        },
+                    }
+                }
+                if let Some(atlas) = cache.atlas.as_ref() {
+                    let tile = cache.tile as f32;
+                    for (slot, light) in kept {
+                        let (x, y) = ((slot as i32 % CACHE_COLUMNS) as f32 * tile, (slot as i32 / CACHE_COLUMNS) as f32 * tile);
+                        // The atlas reads back bottom-up, so the source
+                        // rectangle counts from its bottom edge, flipped.
+                        let h = atlas.texture.height as f32;
+                        let source = Rectangle::new(x, h - y - tile, tile, -tile);
+                        let span = tile * LIGHT_MAP_SCALE;
+                        let dest = Rectangle::new(light.at.x - span / 2.0, light.at.y - span / 2.0, span, span);
+                        let (n, tint) = shares(light.color);
+                        for _ in 0..n {
+                            bd.draw_texture_pro(atlas.texture(), source, dest, Vector2::new(0.0, 0.0), 0.0, tint);
+                        }
+                    }
+                }
+                for light in fans {
                     draw_light(&mut bd, light);
                 }
             });
@@ -757,7 +1017,9 @@ pub fn multiply_light<D: RaylibDraw>(d: &mut D, light: &RenderTexture2D, frame: 
     use sola_raylib::ffi::{RL_DST_COLOR, RL_FUNC_ADD, RL_SRC_COLOR};
     d.set_blend_factors(RL_DST_COLOR as i32, RL_SRC_COLOR as i32, RL_FUNC_ADD as i32);
     d.draw_blend_mode(BlendMode::BLEND_CUSTOM, |mut bd| {
-        bd.draw_texture_rec(light, whole(frame.size), Vector2::new(0.0, 0.0), Color::WHITE);
+        let map = light_map_size(frame.size);
+        let dest = Rectangle::new(0.0, 0.0, frame.size.0 as f32, frame.size.1 as f32);
+        bd.draw_texture_pro(light, whole(map), dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
     });
 }
 
@@ -965,5 +1227,42 @@ impl PassShaders {
             unsafe { sola_raylib::ffi::SetShaderValueTexture(raw, light_loc, light_tex) };
             copy_over(&mut sd, source, at);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The disc's falloff is the fan's: `(1 - t)^2` on every ring, straight
+    /// between them, never brightening outward and gone at the radius.
+    #[test]
+    fn the_disc_falls_off_as_the_fan_does() {
+        for &r in &RINGS {
+            assert!((ring_falloff(r) - (1.0 - r).powi(2)).abs() < 1e-6, "ring {r}");
+        }
+        for w in RINGS.windows(2) {
+            let mid = (w[0] + w[1]) / 2.0;
+            let between = ((1.0 - w[0]).powi(2) + (1.0 - w[1]).powi(2)) / 2.0;
+            assert!((ring_falloff(mid) - between).abs() < 1e-6, "between {} and {}", w[0], w[1]);
+        }
+        let mut last = ring_falloff(0.0);
+        for i in 1..=100 {
+            let v = ring_falloff(i as f32 / 100.0);
+            assert!(v <= last + 1e-6);
+            last = v;
+        }
+        assert_eq!(ring_falloff(1.0), 0.0);
+        assert_eq!(ring_falloff(1.5), 0.0);
+    }
+
+    /// A colour past the 2.0 a texel stores is drawn in shares that add up
+    /// to it, each within what a texel holds.
+    #[test]
+    fn a_bright_light_is_drawn_in_shares() {
+        assert_eq!(shares([1.0, 0.5, 0.2]).0, 1);
+        let (n, tint) = shares([4.6, 1.0, 0.0]);
+        assert_eq!(n, 3);
+        assert_eq!(tint, stored([4.6 / 3.0, 1.0 / 3.0, 0.0], 255));
     }
 }

@@ -262,7 +262,7 @@ mod tests {
 // once per set of outlets in the effects language and kept; the crater and
 // the gullies' molten pixels are coloured each frame from the cycle.
 
-use crate::canvas::Canvas;
+use crate::canvas::{BlockImage, Canvas};
 use crate::math::Color;
 use crate::pyro::{Puff, Shape, FIRE, SMOKE};
 use std::sync::{Arc, Mutex};
@@ -312,7 +312,46 @@ pub struct ConePicture {
     /// pixels wider each way.
     skirt: Vec<(i16, i16, i16, Color)>,
     molten: Vec<Molten>,
+    /// The runs above baked as images the first time they are asked for
+    /// (`images`), so a round draws each as one quad.
+    images: std::sync::OnceLock<ConeImages>,
 }
+
+/// What of a cone's picture never changes, as images a texel per design
+/// pixel: the slopes (`CONE_DESIGN` across), the shadow's silhouette and
+/// the cinder skirt (eight design pixels wider each way).
+#[derive(Debug)]
+pub struct ConeImages {
+    pub body: BlockImage,
+    pub shadow: BlockImage,
+    pub skirt: BlockImage,
+}
+
+/// An image `size` texels square of `runs`, transparent elsewhere.
+fn image_of(runs: impl Iterator<Item = (i16, i16, i16, Color)>, size: i32) -> BlockImage {
+    let size = size.max(1) as usize;
+    let mut texels = vec![Color::new(0, 0, 0, 0); size * size];
+    for (y, x0, x1, color) in runs {
+        for x in x0..x1 {
+            texels[y as usize * size + x as usize] = color;
+        }
+    }
+    BlockImage { width: size, height: size, block: 2, texels, stamp: crate::ground::next_block_stamp(), patches: Vec::new() }
+}
+
+impl ConePicture {
+    /// The fixed parts as images, baked on first use.
+    pub fn images(&self) -> &ConeImages {
+        self.images.get_or_init(|| ConeImages {
+            body: image_of(self.runs.iter().copied(), CONE_DESIGN),
+            shadow: image_of(self.shadow.iter().map(|&(y, x0, x1)| (y, x0, x1, SHADOW)), CONE_DESIGN),
+            skirt: image_of(self.skirt.iter().copied(), CONE_DESIGN + 16),
+        })
+    }
+}
+
+/// The cone's shadow's shade.
+const SHADOW: Color = Color::new(0, 0, 0, 90);
 
 fn noise_a(th: f32, s: i32) -> f32 {
     use crate::lava::hash3;
@@ -506,7 +545,7 @@ fn compose_cone(outlets: &[f32]) -> ConePicture {
             });
         }
     }
-    ConePicture { runs, shadow, skirt: runs_of(&skirt, sd), molten }
+    ConePicture { runs, shadow, skirt: runs_of(&skirt, sd), molten, images: std::sync::OnceLock::new() }
 }
 
 /// The picture of a cone whose gullies run toward `outlets`, made once and
@@ -568,6 +607,11 @@ fn cone_origin(centre: Position) -> (i32, i32) {
 /// The cinder skirt round a cone's foot: floor art, under its shadow.
 pub fn draw_skirt(c: &mut impl Canvas, centre: Position, picture: &ConePicture) {
     let (ox, oy) = cone_origin(centre);
+    let image = &picture.images().skirt;
+    if c.has_blocks(image.stamp) {
+        c.blocks_part(image, (0, 0, image.width, image.height), (ox - 16, oy - 16));
+        return;
+    }
     for &(y, x0, x1, color) in &picture.skirt {
         c.fill_rect(ox - 16 + x0 as i32 * 2, oy - 16 + y as i32 * 2, (x1 - x0) as i32 * 2, 2, color);
     }
@@ -578,27 +622,78 @@ pub fn draw_skirt(c: &mut impl Canvas, centre: Position, picture: &ConePicture) 
 pub fn draw_cone_shadow(c: &mut impl Canvas, centre: Position, picture: &ConePicture, shadow_dir: (f32, f32)) {
     let (ox, oy) = cone_origin(centre);
     let (sx, sy) = (((shadow_dir.0 * 12.0) / 2.0).round() as i32 * 2, ((shadow_dir.1 * 12.0) / 2.0).round() as i32 * 2);
-    let shade = Color::new(0, 0, 0, 90);
+    let image = &picture.images().shadow;
+    if c.has_blocks(image.stamp) {
+        c.blocks_part(image, (0, 0, image.width, image.height), (ox + sx, oy + sy));
+        return;
+    }
     for &(y, x0, x1) in &picture.shadow {
-        c.fill_rect(ox + sx + x0 as i32 * 2, oy + sy + y as i32 * 2, (x1 - x0) as i32 * 2, 2, shade);
+        c.fill_rect(ox + sx + x0 as i32 * 2, oy + sy + y as i32 * 2, (x1 - x0) as i32 * 2, 2, SHADOW);
     }
 }
 
 /// The cone, its crater and gullies coloured for `phase` at `time`.
 pub fn draw_cone(c: &mut impl Canvas, centre: Position, picture: &ConePicture, phase: &Phase, time: f32) {
+    draw_cone_with(c, centre, picture, None, phase, time);
+}
+
+/// `draw_cone` with the molten pixels baked (`bake_molten`) where a round
+/// keeps them: its slopes and crater as two quads where the canvas has
+/// them uploaded, pixel by pixel where it has not.
+pub fn draw_cone_with(c: &mut impl Canvas, centre: Position, picture: &ConePicture, molten: Option<&BlockImage>, phase: &Phase, time: f32) {
     let (ox, oy) = cone_origin(centre);
-    for &(y, x0, x1, color) in &picture.runs {
-        c.fill_rect(ox + x0 as i32 * 2, oy + y as i32 * 2, (x1 - x0) as i32 * 2, 2, color);
+    let body = &picture.images().body;
+    if c.has_blocks(body.stamp) {
+        c.blocks_part(body, (0, 0, body.width, body.height), (ox, oy));
+    } else {
+        for &(y, x0, x1, color) in &picture.runs {
+            c.fill_rect(ox + x0 as i32 * 2, oy + y as i32 * 2, (x1 - x0) as i32 * 2, 2, color);
+        }
+    }
+    if let Some(image) = molten.filter(|image| c.has_blocks(image.stamp)) {
+        c.blocks_part(image, (0, 0, image.width, image.height), (ox, oy));
+        return;
     }
     for m in &picture.molten {
         c.fill_rect(ox + m.x as i32 * 2, oy + m.y as i32 * 2, 2, 2, molten_color(m, phase, time));
     }
 }
 
+/// Bake `picture`'s molten pixels at `phase` and `time`: every one into
+/// `body`, the ones bright enough to shine into `glow` (what
+/// `draw_cone_glow` draws), both images of the picture's size under a new
+/// stamp.
+pub fn bake_molten(picture: &ConePicture, phase: &Phase, time: f32, body: &mut BlockImage, glow: &mut BlockImage) {
+    let size = CONE_DESIGN as usize;
+    for image in [&mut *body, &mut *glow] {
+        if image.width != size || image.height != size {
+            *image = BlockImage { width: size, height: size, block: 2, texels: vec![Color::new(0, 0, 0, 0); size * size], stamp: 0, patches: Vec::new() };
+        }
+    }
+    for m in &picture.molten {
+        let color = molten_color(m, phase, time);
+        let at = m.y as usize * size + m.x as usize;
+        body.texels[at] = color;
+        glow.texels[at] = if FIRE[3..].contains(&color) { color } else { Color::new(0, 0, 0, 0) };
+    }
+    body.stamp = crate::ground::next_block_stamp();
+    glow.stamp = crate::ground::next_block_stamp();
+}
+
 /// The crater's molten pixels alone, those bright enough to shine: what
 /// the glowing pass draws again over a darkened field.
 pub fn draw_cone_glow(c: &mut impl Canvas, centre: Position, picture: &ConePicture, phase: &Phase, time: f32, alpha: f32) {
+    draw_cone_glow_with(c, centre, picture, None, phase, time, alpha);
+}
+
+/// `draw_cone_glow` from the baked bright pixels (`bake_molten`) where the
+/// canvas has them uploaded.
+pub fn draw_cone_glow_with(c: &mut impl Canvas, centre: Position, picture: &ConePicture, glow: Option<&BlockImage>, phase: &Phase, time: f32, alpha: f32) {
     let (ox, oy) = cone_origin(centre);
+    if let Some(image) = glow.filter(|image| alpha >= 1.0 && c.has_blocks(image.stamp)) {
+        c.blocks_part(image, (0, 0, image.width, image.height), (ox, oy));
+        return;
+    }
     for m in &picture.molten {
         let color = molten_color(m, phase, time);
         if FIRE[3..].contains(&color) {

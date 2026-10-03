@@ -951,6 +951,7 @@ pub mod establish;
 pub mod frog;
 pub mod fireball;
 pub mod follow;
+pub mod frame_stages;
 pub mod framing;
 pub mod fx;
 pub mod grass;

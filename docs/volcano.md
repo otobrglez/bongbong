@@ -132,6 +132,55 @@ Its supply crate carries a shield painted molten red over black basalt
 (docs/CRATES_SPEC.md).
 Enemies never collect it.
 
+## Drawing it cheaply
+
+Lava is drawn in 2 px blocks, a stream's cell alone a hundred and more of
+them with its flow bands, crust and glow, and the level's dusk turns into a
+night full of lamps. Drawn block by block every frame, Vulkan cost a
+release build twice the frame of any other level. Nothing on screen
+changes faster than a few frames, so the picture is kept between frames
+and a frame draws a quad a cell:
+
+- **The lava** (`lava::LavaPictures`, brought up by `Game::refresh_pictures`
+  before the frame's textures are synced): each cell's blocks keep what is
+  fixed about them (`BlockGeo`: which block, its crust and plate, its
+  place along the flow), and the colour is worked out from the clock. A
+  cell is baked into a tile of a `canvas::TileAtlas` (16 x 16 texels, a
+  texel a block) and its bright blocks into a second atlas the night draws
+  over the dark field; a quarter of the tiles on screen are baked each
+  frame (`STAGGER`), so a tile is never more than three frames old, and a
+  clock that jumped (a dev-server step, a replica catching up) bakes them
+  all. Tiles off every view wait their turn.
+- **The bombs' pools** keep their metaball shape until a pool comes or
+  goes, and are recoloured as they cool.
+- **The light on the banks** by day is baked once at a surge's strength
+  and drawn fainter when calm, added to the colour alone
+  (`Game::draw_lava_ground_light`, a separate colour and alpha blend):
+  an additive blend would add its alpha to the scene target's too.
+- **The cones** are baked once per set of outlets, outline and shadow
+  included (`volcano::ConeImages`), and each crater's molten pixels in
+  turn.
+- **The night's light map** (docs/weather.md, "Lights") is drawn a texel a
+  2 px block, an unblocked light as one soft disc and a lamp post's or a
+  lantern's shadowed pool kept in an atlas until a wall near it falls.
+
+A painter draws from the pictures only on the frame they were brought up
+to (`LavaPictures::fresh`) and with their texture uploaded
+(`Canvas::has_blocks`); anything else - a thumbnail, the builder, a test -
+draws block by block, the same picture, and the tests hold the two to
+each other texel for texel. On the GLES builds (the web, iOS, Android)
+raylib's draw batch is raised to the desktop's 8192 quads
+(`render::batch`), since ES 2's default flushes four times as often.
+
+In a release build at 1920 x 1080 (llvmpipe, uncapped), a frame of Vulkan
+went from 16.8 to 9.0 ms at dusk, 16.3 to 7.6 at night and 27.6 to 12.9 at
+the worst of an eruption; another level's frame is about 7.5 ms. A
+dev-tools build times each stage of the frame (`frame_stages.rs`: the
+steps, the particles, the pictures, the lights, the world, the post pass,
+the chrome and the swap) - `status.frame_stages`, the line under the left
+cluster with `ui_frame_stages` on (a PR preview's tuning panel, on a phone
+too) and a phone's `FrameStats` log line.
+
 ## Online
 
 The cycle needs nothing on the wire. What does travel:

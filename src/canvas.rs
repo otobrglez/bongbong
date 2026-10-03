@@ -183,6 +183,20 @@ pub trait Canvas {
     /// in one call (`render::canvas::BlockTexture`) and nothing when that
     /// upload is missing or stale.
     fn blocks(&mut self, image: &BlockImage);
+    /// Part of a baked [`BlockImage`]: the texels `src` (x, y, width,
+    /// height) laid over the field with their top-left corner at `at`
+    /// (field px), each a `block` square, alpha-blended - one tile of a
+    /// [`TileAtlas`], or a picture baked away from the field's corner.
+    /// Drawn like `blocks`: nothing on the GPU without the upload.
+    fn blocks_part(&mut self, image: &BlockImage, src: (usize, usize, usize, usize), at: (i32, i32));
+    /// Whether a baked image under `stamp` can be drawn here: always on a
+    /// canvas that reads the texels itself, on the GPU only where the
+    /// image's owner uploaded it before the frame. A painter with a
+    /// per-frame way to draw the same picture takes that where this says
+    /// no.
+    fn has_blocks(&self, _stamp: u64) -> bool {
+        true
+    }
 
     /// The world rectangle worth drawing on this canvas
     /// (`view::Camera::cull`): a loop over many things may skip one
@@ -270,6 +284,146 @@ impl BlockImage {
             self.patches.remove(0);
         }
         self.stamp = stamp;
+    }
+}
+
+/// How many 2 px blocks a side of a [`TileAtlas`] tile holds: one map
+/// cell's.
+pub const TILE_BLOCKS: usize = 16;
+
+/// How many tiles a row of a [`TileAtlas`]'s image holds.
+const ATLAS_COLUMNS: usize = 16;
+
+/// Baked pictures of some of the map's cells, a tile of
+/// [`TILE_BLOCKS`] x [`TILE_BLOCKS`] 2 px blocks per cell, packed into one
+/// [`BlockImage`]: a layer that covers a few cells of a map of any size
+/// for the price of those cells, uploaded once per change and drawn a
+/// quad a tile (`Canvas::blocks_part`) rather than a rect a block. Cell
+/// `(c, r)` is the one centred on `(c, r) * 32`, as every tile's. A tile
+/// is put again in place; `commit` stamps the batch of puts since the last
+/// one as a patch, so the GPU copy uploads what changed.
+#[derive(Clone, Debug)]
+pub struct TileAtlas {
+    pub image: BlockImage,
+    slots: BTreeMap<(i32, i32), usize>,
+    free: Vec<usize>,
+    /// The texels put since the last `commit`: (x0, y0, x1, y1).
+    dirty: Option<(usize, usize, usize, usize)>,
+}
+
+impl Default for TileAtlas {
+    fn default() -> Self {
+        TileAtlas {
+            image: BlockImage { width: ATLAS_COLUMNS * TILE_BLOCKS, height: 0, block: 2, texels: Vec::new(), stamp: 0, patches: Vec::new() },
+            slots: BTreeMap::new(),
+            free: Vec::new(),
+            dirty: None,
+        }
+    }
+}
+
+impl TileAtlas {
+    pub fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    pub fn has(&self, cell: (i32, i32)) -> bool {
+        self.slots.contains_key(&cell)
+    }
+
+    /// The cells with a tile, in cell order.
+    pub fn cells(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        self.slots.keys().copied()
+    }
+
+    /// The texel rectangle of slot `slot` in the image.
+    fn rect(slot: usize) -> (usize, usize, usize, usize) {
+        ((slot % ATLAS_COLUMNS) * TILE_BLOCKS, (slot / ATLAS_COLUMNS) * TILE_BLOCKS, TILE_BLOCKS, TILE_BLOCKS)
+    }
+
+    /// The field pixel of cell `cell`'s top-left corner.
+    pub fn origin(cell: (i32, i32)) -> (i32, i32) {
+        let half = crate::OBSTACLE_GRID_SIZE as i32 / 2;
+        (cell.0 * crate::OBSTACLE_GRID_SIZE as i32 - half, cell.1 * crate::OBSTACLE_GRID_SIZE as i32 - half)
+    }
+
+    /// Put cell `cell`'s tile, block `(u, v)` (0..16 across and down) the
+    /// colour `texel` answers, transparent where it answers `None`.
+    pub fn put(&mut self, cell: (i32, i32), mut texel: impl FnMut(usize, usize) -> Option<Color>) {
+        let slot = match self.slots.get(&cell) {
+            Some(&slot) => slot,
+            None => {
+                let slot = self.free.pop().unwrap_or(self.slots.len());
+                self.slots.insert(cell, slot);
+                let rows = slot / ATLAS_COLUMNS + 1;
+                if rows * TILE_BLOCKS > self.image.height {
+                    self.image.height = rows * TILE_BLOCKS;
+                    self.image.texels.resize(self.image.width * self.image.height, Color::new(0, 0, 0, 0));
+                }
+                slot
+            }
+        };
+        let (x, y, w, h) = Self::rect(slot);
+        let width = self.image.width;
+        for v in 0..h {
+            for u in 0..w {
+                self.image.texels[(y + v) * width + x + u] = texel(u, v).unwrap_or(Color::new(0, 0, 0, 0));
+            }
+        }
+        self.mark(x, y, w, h);
+    }
+
+    /// Drop cell `cell`'s tile.
+    pub fn remove(&mut self, cell: (i32, i32)) {
+        let Some(slot) = self.slots.remove(&cell) else { return };
+        let (x, y, w, h) = Self::rect(slot);
+        let width = self.image.width;
+        for v in 0..h {
+            self.image.texels[(y + v) * width + x..(y + v) * width + x + w].fill(Color::new(0, 0, 0, 0));
+        }
+        self.free.push(slot);
+        self.mark(x, y, w, h);
+    }
+
+    fn mark(&mut self, x: usize, y: usize, w: usize, h: usize) {
+        self.dirty = Some(match self.dirty {
+            None => (x, y, x + w, y + h),
+            Some((x0, y0, x1, y1)) => (x0.min(x), y0.min(y), x1.max(x + w), y1.max(y + h)),
+        });
+    }
+
+    /// Stamp what was put since the last commit, if anything, so a GPU
+    /// copy (`render::canvas::BlockTexture`) catches up on it alone.
+    pub fn commit(&mut self) {
+        if let Some((x0, y0, x1, y1)) = self.dirty.take() {
+            let stamp = crate::ground::next_block_stamp();
+            if self.image.stamp == 0 {
+                self.image.stamp = stamp;
+            } else {
+                self.image.patched(stamp, x0, y0, x1 - x0, y1 - y0);
+            }
+        }
+    }
+
+    /// Every tile whose cell is not culled, over the field from its cell's
+    /// corner.
+    pub fn draw(&self, c: &mut impl Canvas) {
+        let cull = c.cull().map(|r| Rectangle::new(r.x - 16.0, r.y - 16.0, r.width + 32.0, r.height + 32.0));
+        for (&cell, &slot) in &self.slots {
+            if !crate::view::culled(cull, crate::map::cell_to_world(cell.0, cell.1)) {
+                c.blocks_part(&self.image, Self::rect(slot), Self::origin(cell));
+            }
+        }
+    }
+
+    /// The tiles as (cell's top-left corner in field px, the slot's texel
+    /// rectangle), for a draw that is not a `Canvas`'s.
+    pub fn tiles(&self) -> impl Iterator<Item = ((i32, i32), (usize, usize, usize, usize))> + '_ {
+        self.slots.iter().map(|(&cell, &slot)| (Self::origin(cell), Self::rect(slot)))
     }
 }
 
@@ -492,6 +646,22 @@ impl Canvas for CpuCanvas {
                 let texel = image.texels[by * image.width + bx];
                 if texel.a > 0 {
                     self.fill_rect(bx as i32 * b, by as i32 * b, b, b, texel);
+                }
+            }
+        }
+    }
+
+    fn blocks_part(&mut self, image: &BlockImage, src: (usize, usize, usize, usize), at: (i32, i32)) {
+        let b = image.block;
+        let (sx, sy, w, h) = src;
+        if b <= 0 || sx + w > image.width || sy + h > image.height {
+            return;
+        }
+        for by in 0..h {
+            for bx in 0..w {
+                let texel = image.texels[(sy + by) * image.width + sx + bx];
+                if texel.a > 0 {
+                    self.fill_rect(at.0 + bx as i32 * b, at.1 + by as i32 * b, b, b, texel);
                 }
             }
         }

@@ -557,21 +557,38 @@ pub struct Light {
     /// otherwise): off for the small, quick lights, which would pay a
     /// raycast for a shadow nobody could see.
     pub shadows: bool,
+    /// Whether it stands still and keeps its shape from frame to frame - a
+    /// lamp post, a lantern, a portal - so a window may draw its shadowed
+    /// pool once and keep the picture for as long as its reach holds.
+    pub still: bool,
 }
 
 impl Light {
     pub fn point(at: Position, radius: f32, color: Rgb) -> Light {
-        Light { at, radius, color, shape: Shape::Point, reach: Vec::new(), shadows: true }
+        Light { at, radius, color, shape: Shape::Point, reach: Vec::new(), shadows: true, still: false }
     }
 
     pub fn cone(at: Position, dir: Vec2, half_angle: f32, radius: f32, color: Rgb) -> Light {
-        Light { at, radius, color, shape: Shape::Cone { dir, half_angle }, reach: Vec::new(), shadows: true }
+        Light { at, radius, color, shape: Shape::Cone { dir, half_angle }, reach: Vec::new(), shadows: true, still: false }
     }
 
     /// The same light, walls or no walls.
     pub fn unshadowed(mut self) -> Light {
         self.shadows = false;
         self
+    }
+
+    /// The same light, standing still (`still`).
+    pub fn still(mut self) -> Light {
+        self.still = true;
+        self
+    }
+
+    /// A round pool with nothing in its way: a point light whose every
+    /// ray reaches its radius, which a window draws as one soft disc
+    /// rather than a fan of rays.
+    pub fn unblocked(&self) -> bool {
+        matches!(self.shape, Shape::Point) && self.reach.iter().all(|&r| r >= self.radius)
     }
 
     /// Whether any of its light can fall inside `rect`: its source is no
@@ -797,7 +814,7 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
     if game.portals_active() {
         for (i, &at) in game.portals.iter().enumerate() {
             let pulse = 0.85 + 0.15 * (time * 2.2 + i as f32 * 1.7).sin();
-            out.push(Light::point(at, 112.0, scale([0.45, 0.6, 1.25], k * 0.9 * pulse)));
+            out.push(Light::point(at, 112.0, scale([0.45, 0.6, 1.25], k * 0.9 * pulse)).still());
         }
     }
 
@@ -842,10 +859,10 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
     }
     let lamp = scale([1.0, 0.82, 0.52], k * 1.15);
     for at in game.lamp_posts() {
-        out.push(Light::point(at, t.lamp_light_px, scale(lamp, flicker(time, at))));
+        out.push(Light::point(at, t.lamp_light_px, scale(lamp, flicker(time, at))).still());
     }
     for lantern in &game.lanterns {
-        out.push(Light::point(lantern.position, t.lamp_light_px * 0.8, scale(lamp, flicker(time, lantern.position))));
+        out.push(Light::point(lantern.position, t.lamp_light_px * 0.8, scale(lamp, flicker(time, lantern.position))).still());
     }
 
     // The towers: a tesla's coil as it charges and every bolt along its

@@ -2710,6 +2710,12 @@ tunables! {
         /// ... moving there, and back once the fight has passed, over this
         /// many seconds. 0 snaps.
         ui_fade_seconds: f32 = 0.25 in 0.0 ..= 2.0;
+        /// In a build with the dev tools, where each frame's time goes -
+        /// the frame, the steps, the pictures kept, the lights, the world,
+        /// the chrome, the swap (`frame_stages.rs`) - on a line under the
+        /// left cluster: a PR preview's tuning panel turns it on, on a
+        /// phone too. Nothing in any other build.
+        ui_frame_stages: bool = false in 0 ..= 1;
     }
 
     group minimap {
