@@ -169,9 +169,8 @@ All of it exists already and is reused as is:
   `Game::burning_tanks()` (tanks with `burn_timer > 0`) the way a burning
   wreck does, plus the hit flash on contact.
 - **Lit ground** is the existing ground-fire loop and glow.
-- **The pickup icon** is `static/pickups/flamethrower.png`, a 32 px nozzle
-  with a tongue of flame, loud orange like the other pickups, written by
-  `tools/gen_flamethrower_pickup.py` in the raw-PNG convention.
+- **The pickup** is a supply crate with a flame sprayed on its lid in loud
+  orange (`static/crates_sheet.png`, docs/CRATES_SPEC.md).
 - No shader work: nothing here needs a GLSL ES port.
 
 ## 9. HUD, pickup, map and tools

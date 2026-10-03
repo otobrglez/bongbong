@@ -362,7 +362,9 @@ pub enum Event {
     /// than pretending to report an outcome. Sum it for "how hard the pack is
     /// shoving itself", never for "damage dealt".
     Ram { slot: usize, other_slot: usize, damage: f32 },
-    PickupCollected { slot: usize, kind: PickupKind },
+    /// `slot` took a `kind` crate standing at (`x`, `y`) - where its
+    /// opening plays (`fx::CrateOpen`).
+    PickupCollected { slot: usize, kind: PickupKind, x: f32, y: f32 },
     PickupRespawned { kind: PickupKind, x: f32, y: f32 },
     /// A projectile bounced off `slot`'s rainbow shield at (`x`, `y`).
     Deflected { slot: usize, x: f32, y: f32 },
@@ -1545,7 +1547,7 @@ impl Game {
 
         // --- Pickups: every map slot spawns immediately ---
         for &(pos, kind) in &self.map_pickup_slots {
-            spawn_pickup_at(&mut self.world, pos, kind);
+            spawn_pickup_at(&mut self.world, pos, kind, None);
         }
         // Bonus shields roll only once every slot is placed, so a bonus
         // can't land on a slot that hasn't spawned yet.
@@ -1554,7 +1556,7 @@ impl Game {
                 // The frog was created at full health a few lines up, so
                 // no frog pack is ever rolled here and round setup draws
                 // the RNG it always drew.
-                maybe_spawn_health_slot_bonuses(&mut self.world, &self.map, pos, width, height, BonusGates::default(), &mut rng);
+                maybe_spawn_health_slot_bonuses(&mut self.world, &self.map, pos, width, height, BonusGates::default(), None, &mut rng);
             }
         }
 
@@ -2416,7 +2418,7 @@ impl Game {
         let player_towers_want = self.tower_pack_wanted(Side::Player);
         let enemy_towers_want = self.tower_pack_wanted(Side::Enemy);
         let towers_want = |e: Entity| if self.is_player(e) { player_towers_want } else { enemy_towers_want };
-        let collected: Vec<(Entity, Entity, PickupKind)> = self
+        let collected: Vec<(Entity, Entity, PickupKind, Position)> = self
             .world
             .query::<(Entity, &Pickup)>()
             .iter()
@@ -2438,10 +2440,10 @@ impl Game {
                     .filter(|&&(e, _, _)| pickup.kind != PickupKind::FrogHealth || !own_frog_full(e))
                     .filter(|&&(e, _, _)| pickup.kind != PickupKind::TowerPack || towers_want(e))
                     .find(|&&(_, center, half)| pickup.in_reach(center, half, pad))
-                    .map(|&(tank_entity, _, _)| (pickup_entity, tank_entity, pickup.kind))
+                    .map(|&(tank_entity, _, _)| (pickup_entity, tank_entity, pickup.kind, pickup.position))
             })
             .collect();
-        for (pickup_entity, tank_entity, kind) in collected {
+        for (pickup_entity, tank_entity, kind, at) in collected {
             let slot = {
                 let mut q = self.world.query_one::<&mut Tank>(tank_entity);
                 let tank = q.get().expect("collector entity always has a Tank");
@@ -2518,7 +2520,7 @@ impl Game {
                     }
                 }
             }
-            f.events.push(Event::PickupCollected { slot, kind });
+            f.events.push(Event::PickupCollected { slot, kind, x: at.x, y: at.y });
             self.world.despawn(pickup_entity).ok();
         }
 
@@ -2533,6 +2535,7 @@ impl Game {
                     f.width,
                     f.height,
                     hurt,
+                    Some(self.time),
                     &mut f.rng,
                 );
                 if let Some((pos, kind)) = respawned {
@@ -4582,9 +4585,11 @@ fn tanks_touching(physics: &Physics, a: &Tank, b: &Tank) -> bool {
 }
 
 /// Spawn one pickup at a map slot - unconditionally; the map's placement
-/// is deliberate and not rejection-sampled.
-fn spawn_pickup_at(world: &mut hecs::World, pos: Position, kind: PickupKind) {
-    world.spawn((Pickup { kind, position: pos },));
+/// is deliberate and not rejection-sampled. `dropped_at` is the round
+/// clock a crate comes down at (its air drop, drawn only), `None` for one
+/// that stands there from the round's start.
+fn spawn_pickup_at(world: &mut hecs::World, pos: Position, kind: PickupKind, dropped_at: Option<f32>) {
+    world.spawn((Pickup { kind, position: pos, dropped_at },));
 }
 
 impl Game {
@@ -4660,6 +4665,7 @@ fn respawn_from_slots(
     width: f32,
     height: f32,
     hurt: BonusGates,
+    dropped_at: Option<f32>,
     rng: &mut SmallRng,
 ) -> Option<(Position, PickupKind)> {
     let occupied: Vec<Position> = world.query::<&Pickup>().iter().map(|p| p.position).collect();
@@ -4672,9 +4678,9 @@ fn respawn_from_slots(
         return None;
     }
     let (pos, kind) = free[rng.random_range(0..free.len())];
-    spawn_pickup_at(world, pos, kind);
+    spawn_pickup_at(world, pos, kind, dropped_at);
     if kind == PickupKind::Health {
-        maybe_spawn_health_slot_bonuses(world, map, pos, width, height, hurt, rng);
+        maybe_spawn_health_slot_bonuses(world, map, pos, width, height, hurt, dropped_at, rng);
     }
     Some((pos, kind))
 }
@@ -4697,16 +4703,17 @@ fn maybe_spawn_health_slot_bonuses(
     width: f32,
     height: f32,
     hurt: BonusGates,
+    dropped_at: Option<f32>,
     rng: &mut SmallRng,
 ) {
-    maybe_spawn_bonus(world, map, slot, PickupKind::Shield, tuning().shield_near_health_chance, width, height, rng);
+    maybe_spawn_bonus(world, map, slot, PickupKind::Shield, tuning().shield_near_health_chance, width, height, dropped_at, rng);
     if hurt.frog {
         let chance = tuning().frog_pack_near_health_chance;
-        maybe_spawn_bonus(world, map, slot, PickupKind::FrogHealth, chance, width, height, rng);
+        maybe_spawn_bonus(world, map, slot, PickupKind::FrogHealth, chance, width, height, dropped_at, rng);
     }
     if hurt.towers {
         let chance = tuning().tower_pack_near_health_chance;
-        maybe_spawn_bonus(world, map, slot, PickupKind::TowerPack, chance, width, height, rng);
+        maybe_spawn_bonus(world, map, slot, PickupKind::TowerPack, chance, width, height, dropped_at, rng);
     }
 }
 
@@ -4722,6 +4729,7 @@ fn maybe_spawn_bonus(
     chance: f32,
     width: f32,
     height: f32,
+    dropped_at: Option<f32>,
     rng: &mut SmallRng,
 ) {
     let occupied: Vec<Position> = world.query::<&Pickup>().iter().map(|p| p.position).collect();
@@ -4733,7 +4741,7 @@ fn maybe_spawn_bonus(
         return;
     }
     if let Some(pos) = bonus_pickup_cell(map, slot, &occupied, width, height, rng) {
-        spawn_pickup_at(world, pos, kind);
+        spawn_pickup_at(world, pos, kind, dropped_at);
     }
 }
 
@@ -6692,7 +6700,7 @@ cells."30,20" = { kind = "frog" }
         let at = Position::new(640.0, 360.0);
         let try_at = |offset: Position| {
             let mut game = game_on(OPEN_MAP, 1, Some(1));
-            spawn_pickup_at(&mut game.world, at, PickupKind::Ammo);
+            spawn_pickup_at(&mut game.world, at, PickupKind::Ammo, None);
             teleport_player(&mut game, Position::new(at.x + offset.x, at.y + offset.y));
             let before = player_ammo(&game);
             step(&mut game, Input::default());
@@ -7056,7 +7064,7 @@ cells."4,4" = { kind = "enemy_frog" }
         assert!(
             game.events()
                 .iter()
-                .any(|e| matches!(e, Event::PickupCollected { slot: 0, kind: PickupKind::FrogHealth })),
+                .any(|e| matches!(e, Event::PickupCollected { slot: 0, kind: PickupKind::FrogHealth, .. })),
             "{:?}",
             game.events()
         );
@@ -7195,9 +7203,9 @@ cells."30,20" = { kind = "frog" }
         let slot = map::cell_to_world(11, 10);
         let (mut with_gate, mut shield_only) = (SmallRng::seed_from_u64(99), SmallRng::seed_from_u64(99));
         let (mut wa, mut wb) = (hecs::World::new(), hecs::World::new());
-        maybe_spawn_health_slot_bonuses(&mut wa, &map, slot, W, H, BonusGates::default(), &mut with_gate);
+        maybe_spawn_health_slot_bonuses(&mut wa, &map, slot, W, H, BonusGates::default(), None, &mut with_gate);
         let chance = tuning().shield_near_health_chance;
-        maybe_spawn_bonus(&mut wb, &map, slot, PickupKind::Shield, chance, W, H, &mut shield_only);
+        maybe_spawn_bonus(&mut wb, &map, slot, PickupKind::Shield, chance, W, H, None, &mut shield_only);
         assert_eq!(
             with_gate.random::<u64>(),
             shield_only.random::<u64>(),
@@ -7222,7 +7230,7 @@ cells."30,20" = { kind = "frog" }
         let mut game = game_on(SEALED_CRATE_MAP, 1, Some(0));
         assert!(matches!(game.events(), [Event::RoundStarted { enemies: 1, .. }]));
         step(&mut game, Input::default());
-        let collected = game.events().iter().any(|e| matches!(e, Event::PickupCollected { slot: 0, kind: PickupKind::Ammo }));
+        let collected = game.events().iter().any(|e| matches!(e, Event::PickupCollected { slot: 0, kind: PickupKind::Ammo, .. }));
         assert!(collected, "{:?}", game.events());
         step(&mut game, Input::default());
         assert!(game.events().is_empty(), "{:?}", game.events());

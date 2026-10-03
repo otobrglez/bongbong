@@ -193,10 +193,8 @@ pub const PLASMA_PURPLE_DAMAGE_FACTOR: f32 = 1.10;
 
 - `ShellState`, `Shell`, `shells.png` — entirely untouched by this sheet.
 - `BulletState`, `Bullet`, `minigun_bullets.png` — untouched.
-- The ground pickup icon is a separate, standalone 32×32 PNG
-  (`static/pickups/plasma.png`, `tools/gen_plasma_pickup.py`, raw PNG bytes,
-  no Pillow — same convention as `gen_laser_pickup.py`/`gen_minigun_pickup.py`),
-  not part of this sheet, and doesn't distinguish `PlasmaVariant` (same as
-  `laser.png`'s ground icon not distinguishing Red/Blue - which variant a
-  pickup grants is rolled on collection, so the icon on the ground can't
-  promise one or the other).
+- The pickup on the ground is its supply crate (`static/crates_sheet.png`,
+  docs/CRATES_SPEC.md), not part of this sheet, and doesn't distinguish
+  `PlasmaVariant` (the laser's crate doesn't distinguish Red/Blue either -
+  which variant a pickup grants is rolled on collection, so the crate on the
+  ground can't promise one or the other).

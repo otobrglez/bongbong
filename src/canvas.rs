@@ -34,7 +34,6 @@
 
 use crate::frog::{FROG_VARIANT_DIRS, FrogAnim};
 use crate::map::Theme;
-use crate::pickup::PickupKind;
 use crate::Position;
 use crate::math::{Color, Rectangle, Vec2};
 use std::collections::BTreeMap;
@@ -75,15 +74,19 @@ pub enum Sheet {
     BarrelExplosion,
     /// static/portal_sheet.png - the turning spiral (portal.rs).
     Portal,
-    /// static/pickups/<kind>.png - each kind its own 32 x 32 image.
-    Pickup(PickupKind),
+    /// static/crates_sheet.png - the pickups' supply crates, a row per
+    /// kind (docs/CRATES_SPEC.md, `pickup::draw_pickup`).
+    Crates,
+    /// static/pickup_glyphs.png - the pickups' symbols on their own, a row
+    /// per kind (`pickup::draw_glyph`).
+    PickupGlyphs,
     /// static/toxic_frog/<variant dir>/<clip>.png - one filmstrip per clip
     /// per colour variant (`FROG_VARIANT_DIRS`, docs/FROG_SPEC.md).
     Frog { variant: u8, clip: FrogAnim },
 }
 
-/// The eleven sheets that are one file each regardless of theme.
-pub const SINGLE_SHEETS: [Sheet; 11] = [
+/// The thirteen sheets that are one file each regardless of theme.
+pub const SINGLE_SHEETS: [Sheet; 13] = [
     Sheet::Tanks,
     Sheet::TankGlow,
     Sheet::TankModules,
@@ -95,22 +98,8 @@ pub const SINGLE_SHEETS: [Sheet; 11] = [
     Sheet::Tracks,
     Sheet::BarrelExplosion,
     Sheet::Portal,
-];
-
-/// Every pickup kind, each its own sheet (`pickup_file` is exhaustive over
-/// the enum, so a new kind without a row here fails to compile there).
-pub const PICKUP_KINDS: [PickupKind; 11] = [
-    PickupKind::Health,
-    PickupKind::Ammo,
-    PickupKind::Laser,
-    PickupKind::Minigun,
-    PickupKind::Plasma,
-    PickupKind::Missiles,
-    PickupKind::SpeedUp,
-    PickupKind::Shield,
-    PickupKind::Flamethrower,
-    PickupKind::FrogHealth,
-    PickupKind::TowerPack,
+    Sheet::Crates,
+    Sheet::PickupGlyphs,
 ];
 
 /// The five frog clips, in `FrogAnim` order.
@@ -134,7 +123,8 @@ impl Sheet {
             Sheet::Tracks => "static/tracks.png".into(),
             Sheet::BarrelExplosion => "static/barrel_explosion.png".into(),
             Sheet::Portal => "static/portal_sheet.png".into(),
-            Sheet::Pickup(kind) => format!("static/pickups/{}.png", pickup_file(kind)),
+            Sheet::Crates => "static/crates_sheet.png".into(),
+            Sheet::PickupGlyphs => "static/pickup_glyphs.png".into(),
             Sheet::Frog { variant, clip } => {
                 let dir = FROG_VARIANT_DIRS[variant as usize % FROG_VARIANT_DIRS.len()];
                 format!("static/toxic_frog/{dir}/{}.png", frog_clip_file(clip))
@@ -143,33 +133,14 @@ impl Sheet {
     }
 
     /// Every sheet the field can ask for: the ground and grass sheets of
-    /// every theme, the single sheets, one per pickup kind, and every
-    /// frog variant's five clips.
+    /// every theme, the single sheets and every frog variant's five clips.
     pub fn all() -> Vec<Sheet> {
         let mut all: Vec<Sheet> = Theme::ALL.iter().flat_map(|&t| [Sheet::Ground(t), Sheet::Grass(t)]).collect();
         all.extend(SINGLE_SHEETS);
-        all.extend(PICKUP_KINDS.iter().map(|&k| Sheet::Pickup(k)));
         for variant in 0..FROG_VARIANT_DIRS.len() as u8 {
             all.extend(FROG_CLIPS.iter().map(|&clip| Sheet::Frog { variant, clip }));
         }
         all
-    }
-}
-
-/// The pickup icon file stem for a kind (static/pickups/SOURCE.md).
-fn pickup_file(kind: PickupKind) -> &'static str {
-    match kind {
-        PickupKind::Health => "health",
-        PickupKind::Ammo => "ammo",
-        PickupKind::Laser => "laser",
-        PickupKind::Minigun => "minigun",
-        PickupKind::Plasma => "plasma",
-        PickupKind::Missiles => "missiles",
-        PickupKind::SpeedUp => "speedup",
-        PickupKind::Shield => "shield",
-        PickupKind::Flamethrower => "flamethrower",
-        PickupKind::FrogHealth => "frog_health",
-        PickupKind::TowerPack => "tower_pack",
     }
 }
 
@@ -819,7 +790,7 @@ mod tests {
         paths.sort();
         paths.dedup();
         assert_eq!(paths.len(), n);
-        assert_eq!(n, 2 * Theme::ALL.len() + SINGLE_SHEETS.len() + PICKUP_KINDS.len() + FROG_VARIANT_DIRS.len() * FROG_CLIPS.len());
+        assert_eq!(n, 2 * Theme::ALL.len() + SINGLE_SHEETS.len() + FROG_VARIANT_DIRS.len() * FROG_CLIPS.len());
     }
 
     /// The ground and grass sheets follow the theme, the way `app.rs`

@@ -139,7 +139,7 @@ pub enum WireEvent {
     Hit { target: WireHitTarget, damage: f32, killed: bool, x: i16, y: i16 },
     Wreck { slot: u16, x: i16, y: i16 },
     Ram { slot: u16, other_slot: u16, damage: f32 },
-    PickupCollected { slot: u16, kind: PickupKind },
+    PickupCollected { slot: u16, kind: PickupKind, x: i16, y: i16 },
     PickupRespawned { kind: PickupKind, x: i16, y: i16 },
     Deflected { slot: u16, x: i16, y: i16 },
     ShieldBroken { slot: u16, x: i16, y: i16 },
@@ -222,7 +222,7 @@ impl WireEvent {
             Event::Ram { slot, other_slot, damage } => {
                 WireEvent::Ram { slot: slot_u16(slot), other_slot: slot_u16(other_slot), damage }
             }
-            Event::PickupCollected { slot, kind } => WireEvent::PickupCollected { slot: slot_u16(slot), kind },
+            Event::PickupCollected { slot, kind, x, y } => WireEvent::PickupCollected { slot: slot_u16(slot), kind, x: q(x), y: q(y) },
             Event::PickupRespawned { kind, x, y } => WireEvent::PickupRespawned { kind, x: q(x), y: q(y) },
             Event::Deflected { slot, x, y } => WireEvent::Deflected { slot: slot_u16(slot), x: q(x), y: q(y) },
             Event::ShieldBroken { slot, x, y } => {
@@ -335,7 +335,7 @@ impl WireEvent {
             WireEvent::Ram { slot, other_slot, damage } => {
                 Event::Ram { slot: slot as usize, other_slot: other_slot as usize, damage }
             }
-            WireEvent::PickupCollected { slot, kind } => Event::PickupCollected { slot: slot as usize, kind },
+            WireEvent::PickupCollected { slot, kind, x, y } => Event::PickupCollected { slot: slot as usize, kind, x: d(x), y: d(y) },
             WireEvent::PickupRespawned { kind, x, y } => Event::PickupRespawned { kind, x: d(x), y: d(y) },
             WireEvent::Deflected { slot, x, y } => Event::Deflected { slot: slot as usize, x: d(x), y: d(y) },
             WireEvent::ShieldBroken { slot, x, y } => Event::ShieldBroken { slot: slot as usize, x: d(x), y: d(y) },
@@ -449,7 +449,7 @@ mod tests {
             },
             Event::Wreck { slot: 3, x: 64.0, y: 96.75 },
             Event::Ram { slot: 0, other_slot: 5, damage: 3.25 },
-            Event::PickupCollected { slot: 1, kind: PickupKind::FrogHealth },
+            Event::PickupCollected { slot: 1, kind: PickupKind::FrogHealth, x: 48.0, y: 80.0 },
             Event::PickupRespawned { kind: PickupKind::Shield, x: 32.0, y: 32.0 },
             Event::Deflected { slot: 2, x: 1.5, y: -2.25 },
             Event::ShieldBroken { slot: 2, x: 8.0, y: 9.0 },

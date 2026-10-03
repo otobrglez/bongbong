@@ -58,7 +58,7 @@ use crate::net::wire::{
 };
 use crate::laser::{LaserBeam, LaserVariant};
 use crate::obstacle::{Drum, Fuse, Obstacle};
-use crate::pickup::Pickup;
+use crate::pickup::{Pickup, PickupKind};
 use crate::missile::Missile;
 use crate::plasma::{Plasma, PlasmaState};
 use crate::shell::{Owner, Shell, ShellState};
@@ -901,20 +901,32 @@ fn apply_frogs(game: &mut Game, s: &Snapshot, mut show: Option<&mut Spectacle>) 
     }
 }
 
+/// The pickups the snapshot lists, made afresh. A crate that was already on
+/// the replica keeps when it came down, so its air drop plays on; one the
+/// replica has not seen before came down now, at the snapshot's tick
+/// (`Pickup::dropped_at`) - which is every pickup the room drops in, and
+/// none of the ones a `Welcome`'s `init` already stood on their slots.
 fn apply_pickups(game: &mut Game, s: &Snapshot, cols: u16) {
-    let old: Vec<Entity> = game.world.query::<(Entity, &Pickup)>().iter().map(|(e, _)| e).collect();
-    for entity in old {
+    let old: Vec<(Entity, PickupKind, Position, Option<f32>)> =
+        game.world.query::<(Entity, &Pickup)>().iter().map(|(e, p)| (e, p.kind, p.position, p.dropped_at)).collect();
+    for &(entity, ..) in &old {
         game.world.despawn(entity).ok();
     }
+    let now = s.tick as f32 * PHYSICS_FIXED_DT;
+    let dropped_at = |kind: PickupKind, position: Position| match old.iter().find(|o| o.1 == kind && o.2.distance_to(position) < 0.5) {
+        Some(&(_, _, _, at)) => at,
+        None => Some(now),
+    };
     let slots: Vec<_> = game.pickup_slots().to_vec();
     for (i, (position, kind)) in slots.into_iter().enumerate().take(64) {
         if s.pickups & (1 << i) != 0 {
-            game.world.spawn((Pickup { kind, position },));
+            game.world.spawn((Pickup { kind, position, dropped_at: dropped_at(kind, position) },));
         }
     }
     for bonus in &s.bonus_pickups {
         let (col, row) = cell_from_index(cols, bonus.cell);
-        game.world.spawn((Pickup { kind: bonus.kind, position: map::cell_to_world(col, row) },));
+        let position = map::cell_to_world(col, row);
+        game.world.spawn((Pickup { kind: bonus.kind, position, dropped_at: dropped_at(bonus.kind, position) },));
     }
 }
 
