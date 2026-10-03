@@ -1428,6 +1428,7 @@ impl DevServer {
             "spawn": game.spawn_plan,
             "wave": game.wave_status(),
             "pacing": game.pacing(),
+            "training": game.training_status(),
             "intro_seconds_left": game.intro_timer,
             "paused": snap.paused,
             "lockstep": self.lockstep,

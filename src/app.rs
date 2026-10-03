@@ -1409,6 +1409,10 @@ pub fn run(args: Args) {
     // every step's events like the particle layer - presentation only, and
     // a new round, seat or replica starts it over by itself.
     let mut awareness = crate::indicators::ScreenAwareness::default();
+    // The frog's voice in a training round (bubble.rs,
+    // docs/training-stage.md): fed every step's events like the
+    // indicators, aged on the time the round ran.
+    let mut voice = crate::bubble::FrogVoice::default();
     // The GPU copies of what the round and the builder bake: the floor
     // shade (`ground::GroundGrid::shade`), the lava's banks and the
     // pictures it keeps between frames, the cones
@@ -2187,6 +2191,7 @@ pub fn run(args: Args) {
                         fx.observe_events(game);
                         follow.observe_events(game);
                         awareness.observe_events(game, &seats);
+                        voice.observe(game);
                     });
                     if frozen {
                         fx_dt = session.game.frame().saturating_sub(before) as f32 * PHYSICS_FIXED_DT;
@@ -2207,6 +2212,7 @@ pub fn run(args: Args) {
                     fx.observe_events(&session.game);
                     follow.observe_events(&session.game);
                     awareness.observe_events(&session.game, &seats);
+                    voice.observe(&session.game);
                 }
             }
             drop(steps_stage);
@@ -2449,6 +2455,28 @@ pub fn run(args: Args) {
                 None => awareness.picture(game, &seats, &frame, points),
             }
         });
+        // The frog's line, if it has one up: aged on the time the round
+        // ran (none while a dialog or the level select freezes it), its
+        // keys or taps the input last used, laid out over the frog.
+        let voice_dt = if session.playing() && session.mode() == Driver::Play { fx_dt } else { 0.0 };
+        let catalogue = crate::text::text();
+        let words = |key: &str| catalogue.message(key, &[]).unwrap_or_else(|| key.to_string());
+        voice.update(game, voice_dt, &tuning(), |key| words(key).chars().count());
+        let bubble = (session.mode() == Driver::Play)
+            .then(|| voice.showing())
+            .flatten()
+            .zip(game.frog_position())
+            .map(|(line, frog)| {
+                let touch = ui.hints == hud::Hints::Touch;
+                let key = crate::bubble::key_for(&line.key, touch, |k| catalogue.message(k, &[]).is_some());
+                let text = words(&key);
+                let shown = crate::bubble::revealed(&text, line.age, &tuning());
+                let field = crate::math::Rectangle::new(layout.field.x, layout.field.y, layout.field.w, layout.field.h);
+                let at = camera.to_view(frog) + crate::math::Vec2::new(field.x, field.y);
+                let points = ui.scale / view.scale;
+                let keep_out: Vec<crate::math::Rectangle> = corners.iter().flat_map(Corners::keep_out).map(|r| ui_rect_on_bitmap(&ui, &view, r)).collect();
+                crate::bubble::layout(&text, shown, at, field, &keep_out, points, |w, size| crate::text::width(w, size.round() as i32) as f32)
+            });
         // The minimap, where the corners hold its slot: the round's
         // picture, synced to the round on screen and uploaded where it
         // changed, and this frame's marks - its enemies the ones the
@@ -2500,6 +2528,7 @@ pub fn run(args: Args) {
                 // and every press there belongs to the screen.
                 touch: (session.mode() != Driver::Lobby).then_some((&touch, steer_right)),
                 indicators: indicators.as_ref(),
+                bubble: bubble.as_ref(),
                 minimap,
                 // An establishing shot is drawn whole as an arena is, but
                 // zooms: no margins, which stand still round an arena.

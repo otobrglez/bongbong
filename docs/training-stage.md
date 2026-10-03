@@ -1,8 +1,8 @@
 # Boot Camp: the training stage
 
-Status: **in progress**. The map, its doors and flags and the beat script
-run (build step 2); the frog's voice, the dummy and level 0 follow. The
-concept lab
+Status: **in progress**. The map, its doors and flags, the beat script
+(build step 2) and the frog's voice (step 3) run; the dummy, the words on
+screen and level 0 follow. The concept lab
 (`docs/lab/boot-camp-lab.html`, open it from the repository so it finds
 `static/`) is a playable browser prototype of everything below: drive it,
 then read this.
@@ -52,9 +52,9 @@ minigun, `W` wood, `b` brick targets, `s` sandbags, `~` the pond.
 
 | Beat | Teaches | The frog says (keys / touch) | Done when | Starts |
 |---|---|---|---|---|
-| 1 Drive | Four directions, momentum into turns | Hi! I'm your frog. / `[ARROWS]` to drive. Ease off before turns. (`[STICK]` Drag your left thumb to drive.) / Roll over the three flags. | Three flags taken | - |
-| 2 Supply | Crates open on contact; ammo, health, speed | No shells yet? Bump the crates. / The red cross fixes your hull. | The ammo crate taken | Door 1 opens |
-| 3 Fire | Aim by facing; wood, brick, iron | `[SPACE]` fires where your gun points. (`[TAP]` the right half to fire.) / Wood breaks fast. Brick takes a few. / Iron never breaks. Shoot the brick wall! | A cell of the brick wall gone | Door 2 opens |
+| 1 Drive | Four directions, momentum into turns | Hi! I'm your frog. / `<ARROWS>` to drive. Ease off before turns. (`<STICK>` Drag your left thumb to drive.) / Roll over the three flags. | Three flags taken | - |
+| 2 Supply | Crates open on contact; ammo, health, speed | No shells yet. Bump the crates. / The red cross fixes your hull. | The ammo crate taken | Door 1 opens |
+| 3 Fire | Aim by facing; wood, brick, iron | `<SPACE>` fires where your gun points. (`<TAP>` the right half to fire.) / Wood breaks fast. Brick takes a few. / Iron never breaks. Shoot the brick wall! | A cell of the brick wall gone | Door 2 opens |
 | - Through | - | Nice shot! Follow me. | The tank past door 3 | Door 3 opens |
 | 4 Your frog | The frog matters; the frog kit; air drops | This is my pad. Come on in. / *(shot)* Ow! That came from the east! / Grab my kit, quick! | The frog kit taken (a kit can only be taken while the frog is hurt) | A shot from the east edge hits the frog; the frog kit air-drops |
 | 5 Enemy | Gates, red rings, lining up; the frog bites | Here it comes! / Line up and fire! | The tank destroyed | A scout rolls in through the east gate, a *dummy* that fires only at the frog |
@@ -70,14 +70,21 @@ there to try; nothing waits on them.
 
 **Nudges.** Each beat has one line the frog repeats when nothing has been
 said for `training_nudge_seconds` (14): "Three flags. Then the gate opens.",
-"The ammo crate is up north.", "Face the brick wall, press `[SPACE]`.", "My
+"The ammo crate is up north.", "Face the brick wall, press `<SPACE>`.", "My
 kit! The green crate!", "Get in line with it!", "Last one. You've got
 this." This is what a sign would have done for a player who is lost.
 
-**Situational lines**, once each: "No shells. Find the ammo crate." (a fire
-press with none), "Hold fire. It eats ammo fast." (the minigun), "Nice shot!
-Follow me." (the wall broken), "Better! If I go down, we lose." (healed),
-"It only wants me. Keep firing!" (the dummy hit), "Chomp!" (the frog bites).
+**Situational lines**, once each: "Hold fire. It eats ammo fast." (the
+minigun), "Ow! That came from the east!" and "Grab my kit, quick!" (the
+frog hit in its beat), "Better! If I go down, we lose." (healed), "It only
+wants me. Keep firing!" (the first enemy hit), "Chomp!" (the frog bites),
+and "You're down! Back to the gate." each time the tank is wrecked. "Nice
+shot! Follow me." is the *through* beat's line. A press with no shells says
+nothing: the supply beat's nudge already points at the ammo crate.
+
+**Shells.** A script that sets `start_shells` holds the seats' shell
+refill until one of them opens an ammo crate, so the empty gun is the
+lesson until the crate is found.
 
 **Failure is never the end.** A wrecked tank comes back at the last opened
 door after `training_respawn_seconds` (2) with full health ("You're down!
@@ -99,33 +106,37 @@ Rules for every line, held by tests where a test can hold them:
 - **Input.** A line that names a control has a keys and a touch message
   (`frog-fire`, `frog-fire-touch`), picked when it is drawn from
   `UiFrame::hints`, so the words follow the input last used like the rest
-  of the chrome. A control is a token in the text (`[ARROWS]`, `[SPACE]`,
-  `[STICK]`, `[TAP]`) the bubble draws as a key cap or a thumb.
+  of the chrome. A control is a token in the text (`<ARROWS>`, `<SPACE>`,
+  `<STICK>`, `<TAP>`; angle brackets, since a line opening with `[` would
+  read as a Fluent variant) the bubble draws as a key cap or a thumb.
+- **No question marks.** The catalogue's drawability test takes a `?` in
+  a message for a letter the fold table lacks, so a line asks nothing.
 - **Reveal.** Word by word, then held for `training_line_seconds` plus
   `training_line_seconds_per_char` of the line, so a long line stays as
   long as it takes to read.
-- **Off screen.** While the frog is outside the view the off-screen arrow
-  already drawn for it (`ArrowKind` frog, the FROG gauge's green) carries
-  the bubble's text clipped to one line, so nothing the frog says is lost
-  behind the camera.
+- **Off screen.** While the frog is outside the view its bubble stands at
+  the view's edge nearest it, with no tail, so nothing it says is lost
+  behind the camera; the frog's own off-screen arrow points the way.
+- **Clear of the HUD.** A bubble that would stand over a corner cluster
+  goes under the frog instead.
 
 | Message | en | sl (draft) |
 |---|---|---|
 | `frog-hello` | Hi! I'm your frog. | Živjo! Jaz sem tvoja žaba. |
-| `frog-drive` | [ARROWS] to drive. Ease off before turns. | [ARROWS] za vožnjo. Pred zavojem popusti. |
-| `frog-drive-touch` | [STICK] Drag your left thumb to drive. | [STICK] Za vožnjo vleci z levim palcem. |
+| `frog-drive` | <ARROWS> to drive. Ease off before turns. | <ARROWS> za vožnjo. Pred zavojem popusti. |
+| `frog-drive-touch` | <STICK> Drag your left thumb to drive. | <STICK> Za vožnjo vleci z levim palcem. |
 | `frog-flags` | Roll over the three flags. | Zapelji čez tri zastavice. |
 | `frog-flags-nudge` | Three flags. Then the gate opens. | Tri zastavice. Potem se vrata odprejo. |
-| `frog-crates` | No shells yet? Bump the crates. | Brez granat? Zaleti se v zaboje. |
+| `frog-crates` | No shells yet. Bump the crates. | Brez granat. Zaleti se v zaboje. |
 | `frog-health` | The red cross fixes your hull. | Rdeči križ popravi oklep. |
 | `frog-crates-nudge` | The ammo crate is up north. | Zaboj s strelivom je na severu. |
 | `frog-no-shells` | No shells. Find the ammo crate. | Ni granat. Poišči zaboj s strelivom. |
-| `frog-fire` | [SPACE] fires where your gun points. | [SPACE] strelja, kamor kaže top. |
-| `frog-fire-touch` | [TAP] the right half to fire. | [TAP] desno polovico za strel. |
+| `frog-fire` | <SPACE> fires where your gun points. | <SPACE> strelja, kamor kaže top. |
+| `frog-fire-touch` | <TAP> the right half to fire. | <TAP> desno polovico za strel. |
 | `frog-materials` | Wood breaks fast. Brick takes a few. | Les hitro poči. Opeka zdrži več. |
 | `frog-iron` | Iron never breaks. Shoot the brick wall! | Železo nikoli. Ustreli opečni zid! |
-| `frog-fire-nudge` | Face the brick wall, press [SPACE]. | Obrni se k zidu, pritisni [SPACE]. |
-| `frog-fire-nudge-touch` | Face the brick wall and [TAP]. | Obrni se k zidu in [TAP]. |
+| `frog-fire-nudge` | Face the brick wall, press <SPACE>. | Obrni se k zidu, pritisni <SPACE>. |
+| `frog-fire-nudge-touch` | Face the brick wall and <TAP>. | Obrni se k zidu in <TAP>. |
 | `frog-minigun` | Hold fire. It eats ammo fast. | Drži strel. Hitro porablja strelivo. |
 | `frog-wall` | Nice shot! Follow me. | Lep strel! Za mano. |
 | `frog-pad` | This is my pad. Come on in. | To je moj dom. Kar naprej. |
@@ -217,7 +228,8 @@ began); a beat whose tanks are still to roll in is not done. Starts:
 frog's row or column, landing like any other), `drop` (crates air-dropped
 onto cells), `roll_in` (tanks through the map's gates, `after` seconds into
 the beat). `start_health` and `start_shells` set the seats up at the start.
-`frog`, `say` and `nudge` are read by the frog's voice (build step 3).
+`frog` is where the frog walks for the beat; `say` and `nudge` are its
+lines (message keys).
 
 ### The simulation
 
@@ -250,18 +262,38 @@ the beat). `start_health` and `start_shells` set the seats up at the start.
   door that names no beat of the script, or a door or flag on a map
   without one (`training-door`).
 
+### The frog's voice
+
+- **The walk** (`simulation/training.rs`, `walk_frog`): the frog hops
+  toward the running beat's `frog` cell a hop at a time
+  (`training_frog_stride` of its usual hop, the next as soon as it lands),
+  routed on the nav cache's layer - the tiles with no frog in them - so it
+  waits behind a closed door and goes through it once it opens. While it
+  walks it does not shy from tanks (`frog_walking`); at its cell its
+  reflexes are its own again.
+- **The lines** (`bubble.rs`, `FrogVoice`, owned by `app.rs` beside
+  `fx::Fx`): read after every step - a new beat clears what the last one
+  still had to say and queues its `say` list; the frame's events add the
+  situational lines - and run on the time the round ran, so a frozen round
+  says nothing more. A line stays up `training_line_seconds` plus
+  `training_line_seconds_per_char` of its length in the language on screen,
+  its words coming in at `training_line_words_per_second`; after
+  `training_nudge_seconds` with nothing said the beat's nudge comes again.
+  The round itself never reads a word.
+- **The bubble**: `bubble::layout` is the one geometry, in the bitmap's
+  pixels at the UI's points (`ui.scale / view.scale`, as the indicators
+  are), sized for the whole line so it never grows as the words come in;
+  `render/bubble.rs` paints it after the indicators, under the HUD.
+- **Dev server**: `status.training` is the beat (1-based), the beats, the
+  beat's id and whether the course is done.
+
 ### Still to come
 
-- **The frog's walk** to each beat's `frog` cell through the open doors,
-  hopping, and **its lines**: a queue on the round clock (so a lockstep
-  replays them and `status.training` reports them), nudges after
-  `training_nudge_seconds`, the bubble (`bubble.rs` and
-  `render/bubble.rs`, in UI points over the world) and the off-screen
-  arrow carrying the line. Only the drawing picks the keys or touch text.
 - **The dummy**: an `Ai` role that targets only the opposing frog and
   fires every `training_dummy_fire_seconds` (2.6).
 - **Words on screen**: the HUD's mission word `TRAINING`, the banner
-  `BOOT CAMP`, the end screen's `TRAINING COMPLETE`.
+  `BOOT CAMP`, the end screen's `TRAINING COMPLETE`, and "Next: { $title }"
+  after the last beat.
 
 ### Levels and skipping
 
@@ -282,8 +314,16 @@ second page. A couch round on Boot Camp seats one tank.
   the frog and its kit drops and ends the beat; a beat's tank rolls in
   through a gate and its wreck ends the beat; Boot Camp parses, is never
   hostable and lints with no error. `training::tests` round-trips a script.
-- Still to come: a headless run of the whole course from a scripted input,
-  Boot Camp's seeded replay, and the text budgets of the frog's lines.
+- `bubble::tests`: a line wraps inside the bubble with keys at their
+  width; the body is sized for the whole line; the bubble stands above the
+  frog, under it near the top or over a corner cluster, and at the view's
+  edge with no tail when the frog is off it; a touch screen takes a line's
+  touch twin; the frog says each beat's lines in turn and nudges when it
+  goes quiet; every shipped script's line is a message and a key constant.
+  `simulation::training::tests` add the frog's walk through a door that
+  opened and the held shell refill.
+- Still to come: a headless run of the whole course from a scripted input
+  and Boot Camp's seeded replay.
 
 ## Build order
 
@@ -292,8 +332,8 @@ second page. A couch round on Boot Camp seats one tank.
    parsing and writing, `training_phase` with every trigger and start,
    respawn, `maps/boot-camp.toml` - playable from the builder's Load list
    with the frog silent.
-3. **The frog's voice**: the walk, the line queue, nudges, the bubble, the
-   off-screen arrow's line, the `frog-*` messages.
+3. **The frog's voice** (done): the walk, the line queue, nudges, the
+   bubble, the `frog-*` messages.
 4. **The dummy, the words and level 0**: the dummy role, the mission word,
    banner and end screen, `maps/boot-camp.toml` tuned by play,
    `levels.toml` with `skippable`, the level select's rule.
@@ -302,5 +342,5 @@ second page. A couch round on Boot Camp seats one tank.
 
 - The course's par time (the lab plays in about three minutes with no
   stops).
-- Whether the frog's first line should name the skip ("Know all this? Esc
+- Whether the frog's first line should name the skip ("Know all this already. Esc
   takes you to the levels.") for players who start a fresh device.

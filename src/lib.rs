@@ -938,6 +938,7 @@ pub mod ai;
 pub mod battlefield;
 pub mod blast;
 pub mod bt;
+pub mod bubble;
 pub mod bullet;
 pub mod burst;
 pub mod canvas;
