@@ -31,10 +31,10 @@ pub const SELECT_MARGIN: f32 = 20.0;
 
 /// Tiles per row and rows: the one page holds `SELECT_TILES` levels, and a
 /// test holds `levels.toml` to it.
-pub const SELECT_COLUMNS: usize = 7;
+pub const SELECT_COLUMNS: usize = 8;
 pub const SELECT_ROWS: usize = 2;
 pub const SELECT_TILES: usize = SELECT_COLUMNS * SELECT_ROWS;
-pub const SELECT_TILE_GAP: f32 = 8.0;
+pub const SELECT_TILE_GAP: f32 = 6.0;
 
 /// The title and the line under it take this much of the content's top
 /// before the grid starts.
@@ -51,7 +51,7 @@ pub const SELECT_BACK_H: f32 = 48.0;
 pub const TILE_NUMBER_SIZE: i32 = 28;
 pub const TILE_TITLE_SIZE: i32 = 12;
 /// The inset a tile's title keeps from either side.
-pub const TILE_PAD: f32 = 6.0;
+pub const TILE_PAD: f32 = 4.0;
 
 /// The panel, centred in the chrome's `area` (UI points).
 pub fn panel_rect(area: Rect) -> Rectangle {
@@ -387,13 +387,13 @@ mod level_select_tests {
         s.update(&key(|i| i.right = true), area, 14, 8);
         assert_eq!(s.focus(), 8, "right stops at the last open tile");
         s.update(&key(|i| i.up = true), area, 14, 8);
-        assert_eq!(s.focus(), 1);
+        assert_eq!(s.focus(), 8 - SELECT_COLUMNS);
         s.update(&key(|i| i.down = true), area, 14, 8);
         assert_eq!(s.focus(), 8);
         s.update(&key(|i| i.up = true), area, 14, 8);
         s.update(&key(|i| i.right = true), area, 14, 8);
         s.update(&key(|i| i.down = true), area, 14, 8);
-        assert_eq!(s.focus(), 2, "down onto a locked tile stays put");
+        assert_eq!(s.focus(), 9 - SELECT_COLUMNS, "down onto a locked tile stays put");
         s.update(&key(|i| i.left = true), area, 14, 8);
         s.update(&key(|i| i.left = true), area, 14, 8);
         s.update(&key(|i| i.left = true), area, 14, 8);

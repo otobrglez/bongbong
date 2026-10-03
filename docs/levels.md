@@ -98,7 +98,7 @@ unchanged.
 the lobby's shape: a fixed 704 x 336 panel over the dimmed field (it fits
 the smallest field the game ships, 768 x 384), `tile_rect` and `back_rect`
 the one geometry the painter and every hit test read, and a
-`LevelSelectView` of plain data. Fourteen tiles in two rows of seven, 88 x
+`LevelSelectView` of plain data. Sixteen tiles in two rows of eight, 77 x
 90 px: the number, the title on at most two balanced lines (`wrap`), a tick
 on a level won, a padlock on a locked one, the amber of the furthest
 reached, a white edge where the keyboard's focus is and a pip on the level

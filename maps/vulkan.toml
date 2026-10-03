@@ -1,0 +1,880 @@
+# vulkan - the volcano in the middle (docs/volcano.md), level 2
+# Saved from tools; re-saving from the builder drops these comments, so
+# put them back.
+#
+# Protect on the band plan, five tanks, the sky dusk falling into night at
+# ninety seconds of the round (`nightfall`). The volcano stands in the
+# middle of the field and erupts every half minute, throwing lava bombs
+# round itself and at any tank in range; three rivers of lava leave it -
+# west into a lava lake whose middle is deep, north-east off the east
+# edge, south off the bottom - each a burning ford crossed at a wade, with
+# a stone crossing on each (a road cell) where the roads meet them.
+#
+# The players start in the south-east by the frog's sandbag ring. Lamp
+# posts stand round the base, at every crossing and up the roads: at night
+# they light the way, and show whoever stands in them to the enemy. Three
+# heat shields lie by the rivers; trees on the banks catch fire when an
+# eruption's surge comes past.
+
+version = 1
+tanks = 5
+tank = "warden"
+tank2 = "scout"
+weather = "dusk"
+nightfall = 90.0
+mission.kind = "protect"
+spawn.kind = "band"
+size = [
+    52.0,
+    30.0,
+]
+
+[cells."5,2"]
+kind = "pine"
+
+[cells."48,2"]
+kind = "pine"
+
+[cells."4,3"]
+kind = "pine"
+
+[cells."21,3"]
+kind = "pickup"
+pickup = "shield"
+
+[cells."30,3"]
+kind = "tall_grass"
+
+[cells."31,3"]
+kind = "tall_grass"
+
+[cells."32,3"]
+kind = "tall_grass"
+
+[cells."33,3"]
+kind = "tall_grass"
+
+[cells."37,3"]
+kind = "road"
+
+[cells."49,3"]
+kind = "tree"
+
+[cells."30,4"]
+kind = "tall_grass"
+
+[cells."31,4"]
+kind = "tall_grass"
+
+[cells."32,4"]
+kind = "tall_grass"
+
+[cells."33,4"]
+kind = "tall_grass"
+
+[cells."37,4"]
+kind = "road"
+
+[cells."47,4"]
+kind = "pickup"
+pickup = "health"
+
+[cells."6,5"]
+kind = "pickup"
+pickup = "health"
+
+[cells."24,5"]
+kind = "lamp"
+
+[cells."37,5"]
+kind = "road"
+
+[cells."44,5"]
+kind = "wall"
+material = "iron"
+
+[cells."45,5"]
+kind = "wall"
+material = "brick"
+
+[cells."3,6"]
+kind = "tree"
+
+[cells."37,6"]
+kind = "road"
+
+[cells."34,7"]
+kind = "pickup"
+pickup = "heat_shield"
+
+[cells."37,7"]
+kind = "road"
+
+[cells."12,8"]
+kind = "road"
+
+[cells."13,8"]
+kind = "road"
+
+[cells."14,8"]
+kind = "road"
+
+[cells."15,8"]
+kind = "road"
+
+[cells."16,8"]
+kind = "road"
+
+[cells."17,8"]
+kind = "road"
+
+[cells."18,8"]
+kind = "road"
+
+[cells."19,8"]
+kind = "road"
+
+[cells."20,8"]
+kind = "road"
+
+[cells."21,8"]
+kind = "road"
+
+[cells."22,8"]
+kind = "road"
+
+[cells."37,8"]
+kind = "road"
+
+[cells."44,8"]
+kind = "lava"
+
+[cells."45,8"]
+kind = "lava"
+
+[cells."46,8"]
+kind = "lava"
+
+[cells."47,8"]
+kind = "lava"
+
+[cells."48,8"]
+kind = "lava"
+
+[cells."49,8"]
+kind = "lava"
+
+[cells."50,8"]
+kind = "lava"
+
+[cells."51,8"]
+kind = "lava"
+
+[cells."3,9"]
+kind = "tall_grass"
+
+[cells."4,9"]
+kind = "tall_grass"
+
+[cells."5,9"]
+kind = "tall_grass"
+
+[cells."6,9"]
+kind = "tall_grass"
+
+[cells."8,9"]
+kind = "lamp"
+
+[cells."12,9"]
+kind = "road"
+
+[cells."37,9"]
+kind = "road"
+
+[cells."38,9"]
+kind = "lamp"
+
+[cells."40,9"]
+kind = "lava"
+
+[cells."41,9"]
+kind = "lava"
+
+[cells."42,9"]
+kind = "lava"
+
+[cells."43,9"]
+kind = "lava"
+
+[cells."44,9"]
+kind = "lava"
+
+[cells."3,10"]
+kind = "tall_grass"
+
+[cells."4,10"]
+kind = "tall_grass"
+
+[cells."5,10"]
+kind = "tall_grass"
+
+[cells."6,10"]
+kind = "tall_grass"
+
+[cells."12,10"]
+kind = "road"
+
+[cells."33,10"]
+kind = "lava"
+
+[cells."34,10"]
+kind = "lava"
+
+[cells."35,10"]
+kind = "lava"
+
+[cells."36,10"]
+kind = "lava"
+
+[cells."37,10"]
+kind = "road"
+
+[cells."38,10"]
+kind = "lava"
+
+[cells."39,10"]
+kind = "lava"
+
+[cells."40,10"]
+kind = "lava"
+
+[cells."3,11"]
+kind = "tall_grass"
+
+[cells."4,11"]
+kind = "tall_grass"
+
+[cells."5,11"]
+kind = "tall_grass"
+
+[cells."6,11"]
+kind = "tall_grass"
+
+[cells."12,11"]
+kind = "road"
+
+[cells."14,11"]
+kind = "wall"
+material = "iron"
+
+[cells."15,11"]
+kind = "wall"
+material = "iron"
+
+[cells."16,11"]
+kind = "wall"
+material = "brick"
+
+[cells."17,11"]
+kind = "wall"
+material = "brick"
+
+[cells."30,11"]
+kind = "lava"
+
+[cells."31,11"]
+kind = "lava"
+
+[cells."32,11"]
+kind = "lava"
+
+[cells."33,11"]
+kind = "lava"
+
+[cells."36,11"]
+kind = "lamp"
+
+[cells."37,11"]
+kind = "road"
+
+[cells."42,11"]
+kind = "tree"
+
+[cells."2,12"]
+kind = "pine"
+
+[cells."12,12"]
+kind = "road"
+
+[cells."21,12"]
+kind = "lamp"
+
+[cells."28,12"]
+kind = "lava"
+
+[cells."29,12"]
+kind = "lava"
+
+[cells."30,12"]
+kind = "lava"
+
+[cells."35,12"]
+kind = "tree"
+
+[cells."37,12"]
+kind = "road"
+
+[cells."3,13"]
+kind = "pine"
+
+[cells."8,13"]
+kind = "tall_grass"
+
+[cells."9,13"]
+kind = "tall_grass"
+
+[cells."10,13"]
+kind = "tall_grass"
+
+[cells."12,13"]
+kind = "road"
+
+[cells."28,13"]
+kind = "lava"
+
+[cells."31,13"]
+kind = "tree"
+
+[cells."37,13"]
+kind = "road"
+
+[cells."8,14"]
+kind = "tall_grass"
+
+[cells."9,14"]
+kind = "tall_grass"
+
+[cells."10,14"]
+kind = "tall_grass"
+
+[cells."12,14"]
+kind = "road"
+
+[cells."37,14"]
+kind = "road"
+
+[cells."38,14"]
+kind = "road"
+
+[cells."39,14"]
+kind = "road"
+
+[cells."40,14"]
+kind = "road"
+
+[cells."48,14"]
+kind = "lamp"
+
+[cells."12,15"]
+kind = "road"
+
+[cells."14,15"]
+kind = "pickup"
+pickup = "heat_shield"
+
+[cells."19,15"]
+kind = "tree"
+
+[cells."26,15"]
+kind = "volcano"
+
+[cells."40,15"]
+kind = "road"
+
+[cells."45,15"]
+kind = "tree"
+
+[cells."5,16"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."12,16"]
+kind = "road"
+
+[cells."21,16"]
+kind = "lava"
+
+[cells."22,16"]
+kind = "lava"
+
+[cells."23,16"]
+kind = "lava"
+
+[cells."40,16"]
+kind = "road"
+
+[cells."44,16"]
+kind = "tall_grass"
+
+[cells."45,16"]
+kind = "tall_grass"
+
+[cells."46,16"]
+kind = "tall_grass"
+
+[cells."12,17"]
+kind = "road"
+
+[cells."15,17"]
+kind = "lamp"
+
+[cells."18,17"]
+kind = "lava"
+
+[cells."19,17"]
+kind = "lava"
+
+[cells."20,17"]
+kind = "lava"
+
+[cells."21,17"]
+kind = "lava"
+
+[cells."40,17"]
+kind = "road"
+
+[cells."44,17"]
+kind = "tall_grass"
+
+[cells."45,17"]
+kind = "tall_grass"
+
+[cells."46,17"]
+kind = "tall_grass"
+
+[cells."6,18"]
+kind = "wall"
+material = "brick"
+
+[cells."12,18"]
+kind = "road"
+
+[cells."13,18"]
+kind = "road"
+
+[cells."14,18"]
+kind = "road"
+
+[cells."15,18"]
+kind = "road"
+
+[cells."16,18"]
+kind = "road"
+
+[cells."17,18"]
+kind = "lava"
+
+[cells."18,18"]
+kind = "lava"
+
+[cells."20,18"]
+kind = "tree"
+
+[cells."26,18"]
+kind = "lava"
+
+[cells."31,18"]
+kind = "lamp"
+
+[cells."40,18"]
+kind = "road"
+
+[cells."44,18"]
+kind = "tall_grass"
+
+[cells."45,18"]
+kind = "tall_grass"
+
+[cells."46,18"]
+kind = "tall_grass"
+
+[cells."6,19"]
+kind = "wall"
+material = "brick"
+
+[cells."8,19"]
+kind = "pine"
+
+[cells."14,19"]
+kind = "lava"
+
+[cells."15,19"]
+kind = "lava"
+
+[cells."16,19"]
+kind = "lava"
+
+[cells."17,19"]
+kind = "road"
+
+[cells."26,19"]
+kind = "lava"
+
+[cells."33,19"]
+kind = "wall"
+material = "brick"
+
+[cells."34,19"]
+kind = "wall"
+material = "brick"
+
+[cells."40,19"]
+kind = "road"
+
+[cells."49,19"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."12,20"]
+kind = "lava"
+
+[cells."13,20"]
+kind = "lava"
+
+[cells."14,20"]
+kind = "lava"
+
+[cells."17,20"]
+kind = "road"
+
+[cells."26,20"]
+kind = "lava"
+
+[cells."27,20"]
+kind = "lava"
+
+[cells."34,20"]
+kind = "wall"
+material = "brick"
+
+[cells."40,20"]
+kind = "road"
+
+[cells."9,21"]
+kind = "lava"
+
+[cells."10,21"]
+kind = "lava"
+
+[cells."11,21"]
+kind = "lava"
+
+[cells."12,21"]
+kind = "lava"
+
+[cells."17,21"]
+kind = "road"
+
+[cells."24,21"]
+kind = "pickup"
+pickup = "heat_shield"
+
+[cells."25,21"]
+kind = "tree"
+
+[cells."27,21"]
+kind = "lava"
+
+[cells."29,21"]
+kind = "tree"
+
+[cells."34,21"]
+kind = "wall"
+material = "iron"
+
+[cells."40,21"]
+kind = "road"
+
+[cells."9,22"]
+kind = "lava"
+
+[cells."10,22"]
+kind = "lava"
+
+[cells."11,22"]
+kind = "lava"
+
+[cells."12,22"]
+kind = "lava"
+
+[cells."13,22"]
+kind = "pine"
+
+[cells."17,22"]
+kind = "road"
+
+[cells."27,22"]
+kind = "lava"
+
+[cells."39,22"]
+kind = "lamp"
+
+[cells."40,22"]
+kind = "road"
+
+[cells."47,22"]
+kind = "lamp"
+
+[cells."7,23"]
+kind = "pine"
+
+[cells."9,23"]
+kind = "lava"
+
+[cells."10,23"]
+kind = "lava"
+
+[cells."11,23"]
+kind = "lava"
+
+[cells."12,23"]
+kind = "lava"
+
+[cells."17,23"]
+kind = "road"
+
+[cells."27,23"]
+kind = "lava"
+
+[cells."28,23"]
+kind = "lava"
+
+[cells."40,23"]
+kind = "road"
+
+[cells."41,23"]
+kind = "start"
+
+[cells."9,24"]
+kind = "lava"
+
+[cells."10,24"]
+kind = "lava"
+
+[cells."11,24"]
+kind = "lava"
+
+[cells."12,24"]
+kind = "lava"
+
+[cells."17,24"]
+kind = "road"
+
+[cells."28,24"]
+kind = "lava"
+
+[cells."29,24"]
+kind = "lamp"
+
+[cells."40,24"]
+kind = "road"
+
+[cells."45,24"]
+kind = "start2"
+
+[cells."14,25"]
+kind = "tree"
+
+[cells."17,25"]
+kind = "road"
+
+[cells."18,25"]
+kind = "road"
+
+[cells."19,25"]
+kind = "road"
+
+[cells."20,25"]
+kind = "road"
+
+[cells."21,25"]
+kind = "road"
+
+[cells."22,25"]
+kind = "road"
+
+[cells."23,25"]
+kind = "road"
+
+[cells."24,25"]
+kind = "road"
+
+[cells."25,25"]
+kind = "road"
+
+[cells."26,25"]
+kind = "road"
+
+[cells."27,25"]
+kind = "road"
+
+[cells."28,25"]
+kind = "road"
+
+[cells."29,25"]
+kind = "road"
+
+[cells."30,25"]
+kind = "road"
+
+[cells."31,25"]
+kind = "road"
+
+[cells."32,25"]
+kind = "road"
+
+[cells."33,25"]
+kind = "road"
+
+[cells."34,25"]
+kind = "road"
+
+[cells."35,25"]
+kind = "road"
+
+[cells."36,25"]
+kind = "road"
+
+[cells."37,25"]
+kind = "road"
+
+[cells."38,25"]
+kind = "road"
+
+[cells."39,25"]
+kind = "road"
+
+[cells."40,25"]
+kind = "road"
+
+[cells."41,25"]
+kind = "road"
+
+[cells."42,25"]
+kind = "road"
+
+[cells."43,25"]
+kind = "road"
+
+[cells."44,25"]
+kind = "road"
+
+[cells."45,25"]
+kind = "road"
+
+[cells."46,25"]
+kind = "road"
+
+[cells."49,25"]
+kind = "pine"
+
+[cells."12,26"]
+kind = "lamp"
+
+[cells."20,26"]
+kind = "tall_grass"
+
+[cells."21,26"]
+kind = "tall_grass"
+
+[cells."22,26"]
+kind = "tall_grass"
+
+[cells."23,26"]
+kind = "tall_grass"
+
+[cells."27,26"]
+kind = "lamp"
+
+[cells."28,26"]
+kind = "lava"
+
+[cells."31,26"]
+kind = "pine"
+
+[cells."43,26"]
+kind = "sandbag"
+
+[cells."44,26"]
+kind = "sandbag"
+
+[cells."45,26"]
+kind = "fence"
+
+[cells."46,26"]
+kind = "sandbag"
+
+[cells."47,26"]
+kind = "sandbag"
+
+[cells."7,27"]
+kind = "pickup"
+pickup = "health"
+
+[cells."20,27"]
+kind = "tall_grass"
+
+[cells."21,27"]
+kind = "tall_grass"
+
+[cells."22,27"]
+kind = "tall_grass"
+
+[cells."23,27"]
+kind = "tall_grass"
+
+[cells."25,27"]
+kind = "tree"
+
+[cells."28,27"]
+kind = "lava"
+
+[cells."30,27"]
+kind = "tree"
+
+[cells."33,27"]
+kind = "lamp"
+
+[cells."35,27"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."43,27"]
+kind = "sandbag"
+
+[cells."45,27"]
+kind = "frog"
+
+[cells."47,27"]
+kind = "sandbag"
+
+[cells."28,28"]
+kind = "lava"
+
+[cells."42,28"]
+kind = "lamp"
+
+[cells."43,28"]
+kind = "sandbag"
+
+[cells."44,28"]
+kind = "sandbag"
+
+[cells."46,28"]
+kind = "sandbag"
+
+[cells."47,28"]
+kind = "sandbag"
+
+[cells."28,29"]
+kind = "lava"
