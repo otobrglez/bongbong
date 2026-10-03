@@ -30,6 +30,10 @@ pub struct Level {
     pub map: String,
     /// The English title, as the opening banner draws it.
     pub title: String,
+    /// A level a player may pass over (docs/training-stage.md): while it
+    /// is the furthest reached, the level after it is open too.
+    #[serde(default)]
+    pub skippable: bool,
 }
 
 impl Level {
@@ -142,6 +146,14 @@ impl Campaign {
     /// The furthest level reached - the one a new session opens on.
     pub fn reached(&self) -> usize {
         self.reached
+    }
+
+    /// The furthest level open to play: the furthest reached, or the one
+    /// after it while that one is skippable. Winning an open level moves
+    /// `reached` past it (`won`), so a skipped level stays open behind.
+    pub fn open_to(&self) -> usize {
+        let skip = self.levels.get(self.reached).is_some_and(|l| l.skippable);
+        if skip { (self.reached + 1).min(self.levels.len() - 1) } else { self.reached }
     }
 
     /// Which level the map called `name` is, if any.
@@ -260,6 +272,26 @@ pub fn progress_path() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod level_tests {
+    /// A skippable level leaves the next one open while it is the
+    /// furthest reached, and winning that next one moves past both.
+    #[test]
+    fn a_skippable_level_leaves_the_next_one_open() {
+        let levels = Levels::parse("[[level]]\nmap = \"a\"\ntitle = \"A\"\nskippable = true\n\n[[level]]\nmap = \"b\"\ntitle = \"B\"\n\n[[level]]\nmap = \"c\"\ntitle = \"C\"\n").expect("parses");
+        let mut c = Campaign::new(levels, None);
+        assert_eq!((c.reached(), c.open_to()), (0, 1), "the level after the skippable one is open");
+        c.won(1);
+        assert_eq!((c.reached(), c.open_to()), (2, 2), "winning it passes over the skippable level");
+    }
+
+    /// Boot Camp is level 1 and Lotus Lagoon open beside it from the start.
+    #[test]
+    fn boot_camp_opens_the_list_and_can_be_skipped() {
+        let levels = Levels::shipped();
+        let c = Campaign::new(levels, None);
+        assert_eq!(c.levels.get(0).map(|l| l.map.as_str()), Some("boot-camp"));
+        assert_eq!((c.reached(), c.open_to()), (0, 1));
+    }
+
     use super::*;
 
     /// Every level names a shipped map that opens, so the web build and

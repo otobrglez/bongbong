@@ -5091,17 +5091,19 @@ cells."1,1" = { kind = "wall" }"#;
     #[test]
     fn a_levels_end_screen_takes_clicks_and_enter() {
         let (mut server, tx) = DevServer::headless();
-        let campaign = crate::levels::Campaign::new(crate::levels::Levels::shipped(), None);
+        // Past Boot Camp, level 1, to the first level with an enemy.
+        let mut campaign = crate::levels::Campaign::new(crate::levels::Levels::shipped(), None);
+        campaign.won(0);
         let mut game = Game::default();
         game.enemy_count_override = Some(1);
         game.seed_override = Some(3);
-        game.map = campaign.map(0).expect("level 1 opens");
+        game.map = campaign.map(1).expect("level 2 opens");
         let (w, h) = game.map.field_size();
         game.init(w, h);
         let mut s = Session::new(game);
         s.set_campaign(campaign);
         let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
-        assert_eq!(status["level"]["number"], 1, "{status}");
+        assert_eq!(status["level"]["number"], 2, "{status}");
         assert_eq!(status["level"]["map"], "lotus-lagoon");
         assert_eq!(status["stats"]["enemies"], 1);
 
@@ -5112,7 +5114,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!((status["outcome"].as_str(), status["stats"]["destroyed"].as_u64()), (Some("won"), Some(1)), "{status}");
         let at = screen_button(&mut server, &tx, &mut s, "next");
         let m = ask(&mut server, &tx, &mut s, "click", at).unwrap();
-        assert_eq!(m["level"]["number"], 2, "{m}");
+        assert_eq!(m["level"]["number"], 3, "{m}");
         assert_eq!(m["mode"], "play");
         assert!(server.lockstep(), "a new round, frozen like `restart`'s");
 
@@ -5121,7 +5123,7 @@ cells."1,1" = { kind = "wall" }"#;
         s.game.update(Input::default(), crate::PHYSICS_FIXED_DT, w, h);
         assert_eq!(s.game.outcome(), crate::simulation::Outcome::Lost);
         let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "enter" })).unwrap();
-        assert_eq!(m["level"]["number"], 2, "Enter after a loss is the same level again: {m}");
+        assert_eq!(m["level"]["number"], 3, "Enter after a loss is the same level again: {m}");
         assert_eq!(s.game.outcome(), crate::simulation::Outcome::Playing);
     }
 

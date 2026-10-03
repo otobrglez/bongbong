@@ -23,6 +23,7 @@ leave-stay = IGRAJ NAPREJ
 ## Igra
 
 round-won = ZMAGA
+round-trained = OPRAVLJENO!
 round-lost = PORAZ
 round-restarting = Nova igra čez { $seconds }...
 round-back-to-lobby = Nazaj v sobo čez { $seconds }...
@@ -31,10 +32,12 @@ paused = PAVZA
 mission-protect = BRANI
 mission-hunt = LOV
 mission-destroy = UNIČI
+mission-training = URJENJE
 
 mission-protect-banner = BRANI ŽABO!
 mission-hunt-banner = ULOVI ŽABO!
 mission-destroy-banner = UNIČI VSE!
+mission-training-banner = SLEDI ŽABI!
 
 wave-banner = VAL { $n }
 wave-final = ZADNJI VAL
@@ -56,6 +59,7 @@ levels-sub = Izberi stopnjo. Zmaga odpre naslednjo.
 levels-back = NAZAJ
 bar-level = STOPNJA
 
+level-boot-camp = Vadišče
 level-lotus-lagoon = Lotosova laguna
 level-vulkan = Vulkan
 level-glasshouses = Vrt s steklenjaki

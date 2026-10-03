@@ -414,7 +414,7 @@ impl Session {
         }
         self.dialog = false;
         self.players_dialog = false;
-        self.level_select = Some(LevelSelect::open(self.level(), campaign.reached()));
+        self.level_select = Some(LevelSelect::open(self.level(), campaign.open_to()));
         true
     }
 
@@ -424,7 +424,7 @@ impl Session {
     /// with its banner.
     pub fn update_level_select(&mut self, input: &SelectInput, area: Rect) -> bool {
         let (Some(select), Some(campaign)) = (&mut self.level_select, &self.campaign) else { return false };
-        match select.update(input, area, campaign.levels.len(), campaign.reached()) {
+        match select.update(input, area, campaign.levels.len(), campaign.open_to()) {
             SelectAction::Stay => false,
             SelectAction::Close => {
                 self.level_select = None;

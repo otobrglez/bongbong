@@ -11,7 +11,7 @@ after a win, the same one after a loss - instead of restarting the round.
 | Topic | Decision |
 |---|---|
 | The list | `levels.toml` at the repository root: `[[level]]` entries in play order, each naming a map (`map`, its file stem under `maps/`, one of `SHIPPED_MAPS`) and the `title` its banner shows. The maps stay separate files. Compiled in. |
-| Order | Roughly easy to hard: Lotus Lagoon (5 tanks) first, Grand Campaign (7 waves) last. Edit `levels.toml` to change it. |
+| Order | Boot Camp, the training stage (docs/training-stage.md), first and `skippable`; then roughly easy to hard: Lotus Lagoon (5 tanks) next, Grand Campaign (7 waves) last. Edit `levels.toml` to change it. |
 | Progression | Only a win opens the next level. A loss offers the same level again. Winning the last level shows "all levels complete" and leads back to level 1. |
 | Start and save | A session opens on the furthest level reached. On the web that is the page's `localStorage` (`bongbong.level`); on a desktop or a phone, a file. Progress is kept by map name, so reordering the list keeps it. |
 | End screen | Counts down like free play's (`restart_delay`, 3 s), inside the button it will press: `NEXT LEVEL IN 3, 2, 1` after a win, `PLAY AGAIN IN 3, 2, 1` after a loss, then takes that way by itself - a press on the counting button takes it at once. The last level's win counts nothing down: `ALL 14 LEVELS COMPLETE!` waits for `BACK TO LEVEL 1`, going round being the player's call. The buttons - `LEVELS` and `PLAY AGAIN` always, `NEXT LEVEL` after a win - take a way at once; Enter takes the way on after a win and plays again after a loss; R plays again, as it always did; Esc opens the level select, which, like a dialog or the builder, stops the countdown. |

@@ -427,6 +427,8 @@ impl Game {
         // sets each in the chrome's area.
         let banner = match self.outcome {
             Outcome::Playing => None,
+            // A training round's win is the course done (docs/training-stage.md).
+            Outcome::Won if self.map.training.is_some() => Some((t.get(keys::ROUND_TRAINED), Color::DARKGREEN)),
             Outcome::Won => Some((t.get(keys::ROUND_WON), Color::DARKGREEN)),
             Outcome::Lost => Some((t.get(keys::ROUND_LOST), Color::MAROON)),
         };
@@ -439,7 +441,9 @@ impl Game {
             } else {
                 (self.intro_fade / crate::simulation::INTRO_FADE_SECONDS).clamp(0.0, 1.0)
             };
-            (alpha > 0.0 && self.outcome == Outcome::Playing).then(|| (t.get(crate::text::mission_banner(self.mission)), alpha))
+            // A training round opens on its own banner, whatever its mission.
+            let words = if self.map.training.is_some() { keys::MISSION_TRAINING_BANNER } else { crate::text::mission_banner(self.mission) };
+            (alpha > 0.0 && self.outcome == Outcome::Playing).then(|| (t.get(words), alpha))
         };
         // Wave rounds: the `WAVE N` banner during the breather before a
         // wave - smaller than the mission banner, no dim overlay, and never

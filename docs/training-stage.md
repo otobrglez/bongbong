@@ -1,8 +1,7 @@
 # Boot Camp: the training stage
 
-Status: **in progress**. The map, its doors and flags, the beat script
-(build step 2) and the frog's voice (step 3) run; the dummy, the words on
-screen and level 0 follow. The concept lab
+Status: **built** (steps 2-4). The course is level 1 of `levels.toml`
+and can be passed over; what is left is tuning by play. The concept lab
 (`docs/lab/boot-camp-lab.html`, open it from the repository so it finds
 `static/`) is a playable browser prototype of everything below: drive it,
 then read this.
@@ -18,7 +17,7 @@ script of *beats*, and the player's own frog is the only guide.
 |---|---|
 | Teaching | **The frog alone.** No signs, floor paint or HUD checklist: the player's own frog hops ahead from pen to pen and says each rule in a speech bubble. |
 | The frog's voice | Short, light lines and no name. At most eight words a line, four or fewer once an enemy is on the field. |
-| Placement | **Level 0, skippable.** First in `levels.toml`; a new progress file opens on it, a file already further opens where it was, and Lotus Lagoon is open in the level select from the start. |
+| Placement | **Level 0, skippable.** First in `levels.toml` (so `LEVEL 1` on screen); a new progress file opens on it, a file already further opens where it was, and Lotus Lagoon is open in the level select from the start. |
 | Scope | All six beats: drive, supply, fire, the frog, the first enemy, the shield and a second enemy. |
 | Map | A **field map**, 48 x 13 cells, past the arena size on purpose: the follow camera leads the player east, and the off-screen arrows (an enemy's, the frog's) get introduced in passing. |
 | Script | **Data in the map**: a `[[training.beat]]` list in the map's TOML, so the course is edited like a map and another map could use the same machinery. |
@@ -287,24 +286,38 @@ lines (message keys).
 - **Dev server**: `status.training` is the beat (1-based), the beats, the
   beat's id and whether the course is done.
 
-### Still to come
+### The dummy and the words
 
-- **The dummy**: an `Ai` role that targets only the opposing frog and
-  fires every `training_dummy_fire_seconds` (2.6).
-- **Words on screen**: the HUD's mission word `TRAINING`, the banner
-  `BOOT CAMP`, the end screen's `TRAINING COMPLETE`, and "Next: { $title }"
-  after the last beat.
+- **The dummy** (`ai = "dummy"`): a hunter with `Ai::frog_only` set, which
+  `Brain::may_fire_at_seat` reads - it drives at the frog and fires at it
+  as a hunter does, and never takes a shot at a seat. The flag rides the
+  roll-in's `Rejoin`, so a straggler rolled in again keeps it.
+- **Words**: a round with a script is a training round whatever its
+  mission, so the HUD's mission word reads `TRAINING` (`URJENJE`), the
+  opening banner `FOLLOW THE FROG!` (`SLEDI ŽABI!`) and the end screen's
+  title `TRAINING DONE!` (`OPRAVLJENO!`); the level's title, Boot Camp
+  (`Vadišče`), stands under the banner as every level's does. The frog's
+  last line is "You're ready."; the end screen's `NEXT LEVEL` names the
+  way on.
+- **A lane a seat stands in is busy**, as it is for a wave: a tank parked
+  within a cell and a half of the east gate's inside point holds the
+  beat's tank outside until it moves. The beat's nudge keeps saying "Get
+  in line with it!" meanwhile; a better line for it is open.
 
 ### Levels and skipping
 
-`levels.toml` gains Boot Camp first with `skippable = true`. A skippable
-level keeps the next level open in the level select while it is the
-furthest reached, so a player who knows the game picks Lotus Lagoon from
-the select (Esc, or the bar's level button) and never sees training again
-once Lotus Lagoon is won. A progress file saved before Boot Camp existed
+`levels.toml` has Boot Camp first with `skippable = true`
+(`levels::Level::skippable`). A skippable level keeps the next level open
+in the level select while it is the furthest reached
+(`Campaign::open_to`, which the select's tiles, focus and presses read), so
+a player who knows the game picks Lotus Lagoon from the select (Esc, or
+the bar's level button) and never sees training again once Lotus Lagoon is
+won (`Campaign::won` moves `reached` past both). A progress file saved before Boot Camp existed
 names a later map and opens there, untouched. That makes sixteen levels,
 exactly one page of the select (`SELECT_TILES`); a seventeenth needs a
-second page. A couch round on Boot Camp seats one tank.
+second page. A couch round on Boot Camp plays with both tanks for now:
+the script, the respawn and the flags serve every seat; seating one is
+open.
 
 ### Tests
 
@@ -334,9 +347,9 @@ second page. A couch round on Boot Camp seats one tank.
    with the frog silent.
 3. **The frog's voice** (done): the walk, the line queue, nudges, the
    bubble, the `frog-*` messages.
-4. **The dummy, the words and level 0**: the dummy role, the mission word,
-   banner and end screen, `maps/boot-camp.toml` tuned by play,
-   `levels.toml` with `skippable`, the level select's rule.
+4. **The dummy, the words and level 0** (done): the dummy, the mission
+   word, banner and end screen, `levels.toml` with `skippable`, the level
+   select's rule. `maps/boot-camp.toml` is tuned by play from here.
 
 ## Open
 
