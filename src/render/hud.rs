@@ -13,19 +13,22 @@ use crate::hud::{
     RESULT_SEATS_SIZE, RESULT_STATS_GAP, ROW_H, TEXT, UI_SMALL_TEXT, WEAPON_SLOTS,
 };
 use crate::math::{Color, Rectangle};
+use crate::pickup::PickupKind;
 use crate::text::{keys, text, width, Key};
 use crate::render::game::Textures;
 use crate::simulation::PlayerCount;
 use crate::tank::{team_color, HealthRamp, TEAM_COLORS};
 use crate::{Rect, MAX_DAMAGE, MAX_SEATS, PICKUP_GLYPH_CELL, SHELL_TEXTURE_SIZE};
 
-const HEART: Color = Color::new(230, 60, 70, 255);
 const SPEED_COLOR: Color = Color::new(255, 210, 60, 255);
 const SHIELD_COLOR: Color = Color::new(170, 120, 255, 255);
 const FROG_COLOR: Color = Color::new(120, 220, 90, 255);
 /// What a slot draws in when there is nothing in it: the FROG gauge of a
 /// round without a frog, and a wrecked seat's chip.
 const SPENT: Color = Color::new(60, 60, 66, 255);
+/// A symbol whose readout is empty - no shells, no boost, no shield, no
+/// frog - drawn at this alpha, as an empty weapon slot's is.
+const SYMBOL_UNLIT: u8 = 70;
 /// A cluster's plate: the builder bar's dark, mostly opaque, so the
 /// readouts read over any ground under any sky. The minimap's plate too.
 const PLATE_FILL: Color = Color::new(21, 21, 24, 208);
@@ -33,25 +36,30 @@ pub(crate) const PLATE_EDGE: Color = Color::new(0, 0, 0, 150);
 /// The dark plate behind each line of text under the left cluster.
 const LINE_FILL: Color = Color::new(0, 0, 0, 150);
 
+/// A readout's symbol: the crate's (`pickup_glyphs.png`) at the sheet's own
+/// scale - the crate that fills the readout stands beside it.
+const SYMBOL: i32 = PICKUP_GLYPH_CELL as i32;
+/// The gap between a symbol and its number or bar.
+const SYMBOL_GAP: i32 = 4;
+
 // The vitals block's slots, from its left edge (`hud::VITALS_W` wide, two
 // `hud::ROW_H` rows). Fixed, so a number changing width never nudges what
 // sits after it; `corner_tests` pins that nothing overlaps.
-const V_HEART: i32 = 0;
-const V_HP: i32 = 18;
+const V_HEALTH_SYMBOL: i32 = 0;
+const V_HP: i32 = 28;
 #[cfg_attr(not(test), allow(dead_code))]
 const V_HP_W: i32 = 30;
-const V_HEALTH: i32 = 52;
-const V_HEALTH_W: i32 = 48;
-const V_SHELL: i32 = 106;
-const V_SHELLS: i32 = 140;
+const V_HEALTH: i32 = 62;
+const V_HEALTH_W: i32 = 40;
+const V_SHELL: i32 = 108;
+const V_SHELLS: i32 = 136;
 /// A count: three digits at `HUD_TEXT_SIZE`.
 const V_COUNT_W: i32 = 30;
-const V_SPEED: i32 = 182;
-const V_SHIELD: i32 = 250;
-/// A gauge's slot: its label over its bar.
-#[cfg_attr(not(test), allow(dead_code))]
-const GAUGE_SLOT_W: i32 = 60;
-const GAUGE_W: i32 = 56;
+const V_SPEED: i32 = 172;
+const V_SHIELD: i32 = 244;
+/// A gauge's slot: its symbol, then its bar.
+const GAUGE_SLOT_W: i32 = 66;
+const GAUGE_W: i32 = GAUGE_SLOT_W - SYMBOL - SYMBOL_GAP;
 const GAUGE_H: i32 = 8;
 /// The weapon queue's slots on the second row: the pickup icon and the
 /// count beside it.
@@ -68,7 +76,7 @@ const I_ENEMIES: i32 = 166;
 const I_ENEMY_COUNT: i32 = 184;
 /// Two digits of enemies, then the dim `+N` still to come.
 const I_PENDING: i32 = 208;
-const I_FROG: i32 = 244;
+const I_FROG: i32 = 238;
 
 /// The tank glyph's footprint: 7 x 7 blocks of 2 px (`draw_tank_glyph`).
 #[cfg_attr(not(test), allow(dead_code))]
@@ -113,7 +121,7 @@ pub fn draw_corners(
         draw_plate(d, Corners::plate(*block), Color::new(team_color(seat).r, team_color(seat).g, team_color(seat).b, 150), a);
         draw_vitals(d, *block, hud, seat, textures, a);
         if block.height > crate::hud::VITALS_H {
-            draw_lamp_row(d, *block, hud, a);
+            draw_lamp_row(d, *block, hud, textures, a);
         }
     }
     let mut y = corners.lines.y;
@@ -129,7 +137,7 @@ pub fn draw_corners(
     let a = fade.right;
     draw_plate(d, corners.right, PLATE_EDGE, a);
     let level = chrome.level_button.map(|n| (n, chrome.levels.is_some()));
-    draw_info(d, corners.info, model, level, a);
+    draw_info(d, corners.info, model, level, textures, a);
     if let Some(r) = corners.online {
         draw_label_button(d, r, &text().get(keys::BUTTON_ONLINE), ONLINE_COLOR, a);
     }
@@ -163,35 +171,31 @@ pub(crate) fn draw_plate(d: &mut impl RaylibDraw, r: Rectangle, edge: Color, a: 
     d.draw_rectangle_rounded_lines_ex(r, 0.12, 6, 1.5, faded(edge, a));
 }
 
-/// One seat's vitals in `block`: the heart, the health number and its
-/// gauge in the seat's own ring colours, the shell sprite and its count,
-/// the speed and shield gauges; under them the weapon queue, the live
-/// weapon outlined in its accent.
+/// One seat's vitals in `block`, each readout beside the symbol of the
+/// crate that fills it: health's cross with the health number and its gauge
+/// in the seat's own ring colours, ammo's shells with the shell count, the
+/// speed and shield gauges under the bolt and the shield; under them the
+/// weapon queue, the live weapon outlined in its accent.
 fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, hud: &PlayerHud, seat: u8, textures: &Textures, a: f32) {
     let (x, y) = (block.x.round() as i32, block.y.round() as i32);
     let row = ROW_H as i32;
     let text_y = y + (row - HUD_TEXT_SIZE) / 2;
     let white = faded(Color::WHITE, a);
 
-    draw_heart(d, x + V_HEART, y + (row - 12) / 2, a);
+    draw_symbol(d, textures, PickupKind::Health, x + V_HEALTH_SYMBOL, y, row, hud.hp > 0, a);
     d.draw_text(&hud.hp.to_string(), x + V_HP, text_y, HUD_TEXT_SIZE, faded(hud.hp_color, a));
     let health = (hud.hp as f32 / MAX_DAMAGE).clamp(0.0, 1.0);
     let ramp = HealthRamp::player(seat);
     draw_gauge(d, x + V_HEALTH, y + (row - GAUGE_H) / 2, V_HEALTH_W, GAUGE_H, health, faded(ramp.color(health), a), faded(DIM, a));
 
-    // The shell sprite's in-flight frame, identical on every row of the
-    // sheet, full-bleed at its own 32 px.
-    let shell_src = Rectangle::new(3.0 * SHELL_TEXTURE_SIZE, 0.0, SHELL_TEXTURE_SIZE, SHELL_TEXTURE_SIZE);
-    let shell_dest = Rectangle::new((x + V_SHELL) as f32, y as f32, SHELL_TEXTURE_SIZE, SHELL_TEXTURE_SIZE);
-    d.draw_texture_pro(textures.shells, shell_src, shell_dest, Vector2::new(0.0, 0.0), 0.0, white);
+    draw_symbol(d, textures, PickupKind::Ammo, x + V_SHELL, y, row, hud.shells > 0, a);
     d.draw_text(&hud.shells.to_string(), x + V_SHELLS, text_y, HUD_TEXT_SIZE, faded(hud.shells_color, a));
     if hud.shells_active {
         active_outline(d, x + V_SHELL, y, V_SHELLS + V_COUNT_W - V_SHELL, row, faded(TEXT, a));
     }
 
-    let t = text();
-    draw_gauge_slot(d, x + V_SPEED, y, row, &t.get(keys::HUD_SPEED), hud.speed, SPEED_COLOR, true, a);
-    draw_gauge_slot(d, x + V_SHIELD, y, row, &t.get(keys::HUD_SHIELD), hud.shield, SHIELD_COLOR, true, a);
+    draw_symbol_gauge(d, textures, PickupKind::SpeedUp, x + V_SPEED, y, row, hud.speed, SPEED_COLOR, true, a);
+    draw_symbol_gauge(d, textures, PickupKind::Shield, x + V_SHIELD, y, row, hud.shield, SHIELD_COLOR, true, a);
 
     let y = y + row;
     let text_y = y + (row - HUD_TEXT_SIZE) / 2;
@@ -199,7 +203,7 @@ fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, hud: &PlayerHud, seat:
         let sx = x + i as i32 * V_WEAPON_W;
         let icon = V_WEAPON_ICON as f32;
         let (ix, iy) = (sx as f32, (y + (row - V_WEAPON_ICON) / 2) as f32);
-        let tint = if slot.count > 0 { white } else { faded(Color::new(255, 255, 255, 70), a) };
+        let tint = if slot.count > 0 { white } else { faded(Color::new(255, 255, 255, SYMBOL_UNLIT), a) };
         // A special weapon is its crate's symbol at the symbol sheet's own
         // scale, centred in the icon's square; the shell is the shell.
         let (texture, src, dest) = match weapon_pickup(slot.weapon) {
@@ -220,13 +224,12 @@ fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, hud: &PlayerHud, seat:
 
 /// The lamp row under a block's two (`hud::CornerShape::lamp_row`): the
 /// lantern with how many are left to set down - the lamp key's button on
-/// a touch screen - and, while one is on, the heat shield's gauge in the
-/// shield's slot (docs/volcano.md).
-fn draw_lamp_row(d: &mut impl RaylibDraw, block: Rectangle, hud: &PlayerHud, a: f32) {
+/// a touch screen - and, while one is on, the heat shield's gauge under its
+/// crate's symbol in the shield's slot (docs/volcano.md).
+fn draw_lamp_row(d: &mut impl RaylibDraw, block: Rectangle, hud: &PlayerHud, textures: &Textures, a: f32) {
     use crate::pyro::{FIRE, SMOKE};
     let row_h = (block.height - crate::hud::VITALS_H) as i32;
     let (x, y) = (block.x.round() as i32, (block.y + crate::hud::VITALS_H).round() as i32);
-    let t = text();
     if let Some(left) = hud.lamps {
         // The lantern, drawn in the effects language's blocks: cap, glass
         // round its flame, base; dark once none is left.
@@ -246,10 +249,9 @@ fn draw_lamp_row(d: &mut impl RaylibDraw, block: Rectangle, hud: &PlayerHud, a: 
         let count_y = y + (row_h - HUD_TEXT_SIZE) / 2;
         let color = if lit { TEXT } else { SPENT };
         d.draw_text(&left.to_string(), x + 26, count_y, HUD_TEXT_SIZE, faded(color, a));
-        d.draw_text(&t.get(keys::HUD_LAMPS), x + 48, y + (row_h - UI_SMALL_TEXT) / 2, UI_SMALL_TEXT, faded(DIM, a));
     }
     if hud.heat_shield > 0.0 {
-        draw_gauge_slot(d, x + V_SHIELD, y, row_h, &t.get(keys::HUD_HEAT), hud.heat_shield, HEAT_SHIELD_COLOR, true, a);
+        draw_symbol_gauge(d, textures, PickupKind::HeatShield, x + V_SHIELD, y, row_h, hud.heat_shield, HEAT_SHIELD_COLOR, true, a);
     }
 }
 
@@ -259,8 +261,9 @@ const HEAT_SHIELD_COLOR: Color = crate::pyro::FIRE[3];
 /// The right cluster's first row in `info`: the level button and the wave
 /// count beside it on a level (`level` is its number and whether the level
 /// select it opens is up), else the mission word with its count; the enemy
-/// count with the ones still to come; the frog's gauge.
-fn draw_info(d: &mut impl RaylibDraw, info: Rectangle, model: &HudModel, level: Option<(usize, bool)>, a: f32) {
+/// count with the ones still to come; the frog's gauge under the frog pack's
+/// symbol.
+fn draw_info(d: &mut impl RaylibDraw, info: Rectangle, model: &HudModel, level: Option<(usize, bool)>, textures: &Textures, a: f32) {
     let (x, y, h) = (info.x.round() as i32, info.y.round() as i32, info.height.round() as i32);
     let text_y = y + (h - HUD_TEXT_SIZE) / 2;
     match level {
@@ -279,18 +282,39 @@ fn draw_info(d: &mut impl RaylibDraw, info: Rectangle, model: &HudModel, level: 
     if model.enemies_pending > 0 {
         d.draw_text(&format!("+{}", model.enemies_pending), x + I_PENDING, text_y, HUD_TEXT_SIZE, faded(DIM, a));
     }
-    draw_gauge_slot(d, x + I_FROG, y, h, &text().get(keys::HUD_FROG), model.frog.unwrap_or(0.0), FROG_COLOR, model.frog.is_some(), a);
+    draw_symbol_gauge(d, textures, PickupKind::FrogHealth, x + I_FROG, y, h, model.frog.unwrap_or(0.0), FROG_COLOR, model.frog.is_some(), a);
 }
 
-/// A gauge in its slot at `x` of a row from `y`, `h` tall: its label over
-/// its bar, both dim when `present` is false (the FROG gauge of a round
-/// without one).
+/// A crate's symbol in a row from `y`, `h` tall, at `x`: lit while its
+/// readout holds something, dim while it is empty.
 #[allow(clippy::too_many_arguments)]
-fn draw_gauge_slot(d: &mut impl RaylibDraw, x: i32, y: i32, h: i32, label: &str, frac: f32, color: Color, present: bool, a: f32) {
-    let top = y + (h - ROW_H as i32) / 2;
-    let label_color = faded(if present { DIM } else { SPENT }, a);
-    d.draw_text(label, x, top + 3, UI_SMALL_TEXT, label_color);
-    draw_gauge(d, x, top + 19, GAUGE_W, GAUGE_H, if present { frac } else { 0.0 }, faded(color, a), label_color);
+fn draw_symbol(d: &mut impl RaylibDraw, textures: &Textures, kind: PickupKind, x: i32, y: i32, h: i32, lit: bool, a: f32) {
+    let tint = faded(if lit { Color::WHITE } else { Color::new(255, 255, 255, SYMBOL_UNLIT) }, a);
+    let dest = Rectangle::new(x as f32, (y + (h - SYMBOL) / 2) as f32, SYMBOL as f32, SYMBOL as f32);
+    d.draw_texture_pro(textures.pickup_glyphs, crate::pickup::glyph_src(kind), dest, Vector2::new(0.0, 0.0), 0.0, tint);
+}
+
+/// A gauge in its slot at `x` of a row from `y`, `h` tall: the symbol of
+/// the crate that fills it, then its bar, both dim when `present` is false
+/// (the FROG gauge of a round without one) and the symbol dim while the
+/// bar is empty.
+#[allow(clippy::too_many_arguments)]
+fn draw_symbol_gauge(
+    d: &mut impl RaylibDraw,
+    textures: &Textures,
+    kind: PickupKind,
+    x: i32,
+    y: i32,
+    h: i32,
+    frac: f32,
+    color: Color,
+    present: bool,
+    a: f32,
+) {
+    draw_symbol(d, textures, kind, x, y, h, present && frac > 0.0, a);
+    let outline = faded(if present { DIM } else { SPENT }, a);
+    let bar_x = x + SYMBOL + SYMBOL_GAP;
+    draw_gauge(d, bar_x, y + (h - GAUGE_H) / 2, GAUGE_W, GAUGE_H, if present { frac } else { 0.0 }, faded(color, a), outline);
 }
 
 /// One outlined bar `w` x `h` at (`x`, `y`), filled to `frac` in whole
@@ -323,19 +347,6 @@ fn draw_seat_chip(d: &mut impl RaylibDraw, r: Rectangle, seat: &SeatHud, a: f32)
 /// block from the row's top and bottom edges.
 fn active_outline(d: &mut impl RaylibDraw, x: i32, y: i32, w: i32, h: i32, color: Color) {
     d.draw_rectangle_lines_ex(Rectangle::new((x - 2) as f32, (y + 2) as f32, (w + 4) as f32, (h - 4) as f32), 2.0, color);
-}
-
-/// A pixel heart of 2 px blocks, 14x12, for the health slot. Drawn rather
-/// than loaded: it is the one glyph in the game with no sheet of its own.
-fn draw_heart(d: &mut impl RaylibDraw, x: i32, y: i32, a: f32) {
-    const ROWS: [&str; 6] = [".##.##.", "#######", "#######", ".#####.", "..###..", "...#..."];
-    for (row, line) in ROWS.iter().enumerate() {
-        for (col, c) in line.chars().enumerate() {
-            if c == '#' {
-                d.draw_rectangle(x + col as i32 * 2, y + row as i32 * 2, 2, 2, faded(HEART, a));
-            }
-        }
-    }
 }
 
 /// A pixel tank seen from above, 7x7 blocks of 2 px (14x14): tracks down
@@ -571,7 +582,7 @@ pub fn draw_result(d: &mut impl RaylibDraw, area: Rect, view: &ResultView, count
 #[cfg(test)]
 mod corner_tests {
     use super::*;
-    use crate::hud::{CHIP_H, CHIP_W, HUD_GAUGE_LABEL_MAX_PX, INFO_TITLE_W, INFO_W, VITALS_W};
+    use crate::hud::{CHIP_H, CHIP_W, INFO_TITLE_W, INFO_W, VITALS_W};
 
     /// The vitals block's slots stay inside its width and its two rows and
     /// never overlap: the widest thing each holds is written down here, so
@@ -579,19 +590,18 @@ mod corner_tests {
     #[test]
     fn the_vitals_slots_fit_the_block_without_overlapping() {
         let three_digits = width("100", HUD_TEXT_SIZE).max(width("888", HUD_TEXT_SIZE));
-        assert!(V_HEART + 14 <= V_HP, "the heart runs into the health number");
+        assert!(V_HEALTH_SYMBOL + SYMBOL + SYMBOL_GAP <= V_HP, "the cross runs into the health number");
         assert!(three_digits <= V_HP_W && V_HP + V_HP_W <= V_HEALTH, "the health number runs into its gauge");
-        assert!(V_HEALTH + V_HEALTH_W <= V_SHELL, "the health gauge runs into the shell sprite");
-        assert!(V_SHELL + SHELL_TEXTURE_SIZE as i32 <= V_SHELLS);
-        assert!(three_digits <= V_COUNT_W && V_SHELLS + V_COUNT_W <= V_SPEED, "the shells run into the speed gauge");
+        assert!(V_HEALTH + V_HEALTH_W <= V_SHELL, "the health gauge runs into the ammo symbol");
+        assert!(V_SHELL + SYMBOL + SYMBOL_GAP <= V_SHELLS);
+        // The shells' outline reaches 2 pt past the slot on either side.
+        assert!(three_digits <= V_COUNT_W && V_SHELLS + V_COUNT_W + 2 <= V_SPEED, "the shells run into the speed gauge");
+        assert!(V_HEALTH + V_HEALTH_W + 2 <= V_SHELL, "the shells' outline runs into the health gauge");
         assert!(V_SPEED + GAUGE_SLOT_W <= V_SHIELD);
         assert_eq!(V_SHIELD + GAUGE_SLOT_W, VITALS_W as i32, "the first row is the block's width");
-        assert!(GAUGE_W <= GAUGE_SLOT_W);
-        // The gauge labels' budget, which `text_tests` measures every
-        // language against, is the slot less a gap.
-        assert_eq!(HUD_GAUGE_LABEL_MAX_PX, GAUGE_SLOT_W - 4);
-        // A label over its bar, both inside a row.
-        assert!(3 + UI_SMALL_TEXT <= 19 && 19 + GAUGE_H <= ROW_H as i32);
+        assert!(GAUGE_W >= 4 + 2 * 10, "a bar needs its outline and room to drain in steps");
+        // A symbol and a bar, both inside a row.
+        assert!(SYMBOL <= ROW_H as i32 && GAUGE_H <= ROW_H as i32);
         // The weapon queue: five slots across the second row, each an icon
         // square that holds a symbol at its sheet's own scale, and three
         // digits beside it.

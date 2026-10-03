@@ -2067,6 +2067,7 @@ pub fn run(args: Args) {
                     trees: &trees_texture,
                     towers: &towers_texture,
                     crates: &crates_texture,
+                    pickup_glyphs: &pickup_glyphs_texture,
                     // Palette icon: the first colour variant's idle frame -
                     // a fixed representative sprite, since the builder
                     // places a frog *cell*, not a rolled colour.

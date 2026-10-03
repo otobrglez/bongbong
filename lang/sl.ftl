@@ -4,12 +4,6 @@
 
 ## Vrstica HUD
 
-hud-speed = TEMPO
-hud-shield = ŠČIT
-hud-lamps = LUČKE
-hud-heat = VROČINA
-hud-frog = ŽABA
-
 button-build = GRADI
 button-play = IGRAJ
 button-leave = VEN

@@ -234,6 +234,7 @@ fn main() {
                             trees: &trees,
                             towers: &towers,
                             crates: &crates,
+                            pickup_glyphs: &pickup_glyphs,
                             portal: &portal,
                             frog_idle: &frog_idle,
                             eraser: &eraser,

@@ -22,13 +22,6 @@
 
 ## The HUD bar (src/hud.rs, src/render/hud.rs)
 
-# Label over a 36 px gauge in a 40 px slot, 10 px text: about 6 letters.
-hud-speed = SPEED
-hud-shield = SHIELD
-hud-lamps = LAMPS
-hud-heat = HEAT
-hud-frog = FROG
-
 # The bar's buttons at its right end, 18 px text. BUILD/PLAY share a 72 px
 # slot (about 6 letters), LEAVE the same, ONLINE an 80 px one.
 button-build = BUILD

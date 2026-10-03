@@ -823,12 +823,14 @@ pub const FROG_FACING_DEADBAND_PX: f32 = 4.0;
 //
 // A pickup is one cell's square: what a hull has to touch to collect it
 // (`Pickup::in_reach`). It is drawn as a supply crate
-// (static/crates_sheet.png, docs/CRATES_SPEC.md): 32 px cells drawn 1:1,
-// authored on the 2 px block grid like the walls - 16 x 16 design pixels,
-// the crate itself 14 x 14 of them - a row per `PickupKind`
-// (`PickupKind::row`) and a column per look.
+// (static/crates_sheet.png, docs/CRATES_SPEC.md): 40 px cells drawn 1:1,
+// authored on the 2 px block grid like the walls - 20 x 20 design pixels,
+// the crate itself 18 x 18 of them, 36 px, standing 2 px past its square on
+// every side and still well inside what a hull collects from
+// (`pickup_collect_pad_px`) - a row per `PickupKind` (`PickupKind::row`)
+// and a column per look.
 pub const PICKUP_SIZE: f32 = 32.0;
-pub const CRATE_CELL: f32 = 32.0;
+pub const CRATE_CELL: f32 = 40.0;
 pub const CRATE_COL_INTACT: usize = 0;
 /// The idle glint's four frames, a band sweeping the lid (`crate_fx::glint_col`).
 pub const CRATE_COL_GLINT: usize = 1;
@@ -837,11 +839,11 @@ pub const CRATE_GLINT_FRAMES: usize = 4;
 pub const CRATE_COL_DAMAGED: usize = 5;
 /// A crate on fire (`Pickup::burn`), charred.
 pub const CRATE_COL_CHARRED: usize = 6;
-// The symbols on their own (static/pickup_glyphs.png): the 8 x 8 design
-// pixel symbol and its outline, 10 x 10 design pixels on 20 px cells, a row
+// The symbols on their own (static/pickup_glyphs.png): the 10 x 10 design
+// pixel symbol and its outline, 12 x 12 design pixels on 24 px cells, a row
 // per kind - what rises from an opened crate, what a broken one spills,
-// the HUD's weapon queue and the builder's brushes.
-pub const PICKUP_GLYPH_CELL: f32 = 20.0;
+// the HUD's readouts and the builder's bar.
+pub const PICKUP_GLYPH_CELL: f32 = 24.0;
 
 pub const MINIGUN_BULLET_TEXTURE_SIZE: f32 = 32.0;
 pub const MINIGUN_BULLET_SCALE: f32 = 2.0; // matches SHELL_SCALE - same on-screen chunkiness

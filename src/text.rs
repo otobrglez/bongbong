@@ -71,11 +71,6 @@ macro_rules! keys {
 }
 
 keys! {
-    HUD_SPEED = "hud-speed";
-    HUD_SHIELD = "hud-shield";
-    HUD_LAMPS = "hud-lamps";
-    HUD_HEAT = "hud-heat";
-    HUD_FROG = "hud-frog";
     BUTTON_BUILD = "button-build";
     BUTTON_PLAY = "button-play";
     BUTTON_LEAVE = "button-leave";
@@ -650,7 +645,7 @@ pub fn fit_size(text: &str, size: i32, max_px: i32) -> i32 {
 mod text_tests {
     use super::*;
     use crate::hud::{
-        BANNER_MIN_SIZE, BANNER_SIZE, BANNER_SUB_SIZE, DIALOG_BUTTON_W, DIALOG_W, HUD_GAUGE_LABEL_MAX_PX, HUD_LABEL_SIZE, HUD_LAMPS_LABEL_MAX_PX,
+        BANNER_MIN_SIZE, BANNER_SIZE, BANNER_SUB_SIZE, DIALOG_BUTTON_W, DIALOG_W, HUD_LABEL_SIZE,
         HUD_TEXT_SIZE, INFO_TITLE_W, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP, LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE,
         MODE_BUTTON_W, ONLINE_BUTTON_W, RESULT_BUTTON_W, RESULT_LEVELS_W, RESULT_LINE_SIZE, RESULT_STATS_GAP,
         RESULT_TEXT_PX, RESULT_TITLE_SIZE, UI_SMALL_TEXT, WAVE_BANNER_SIZE,
@@ -820,12 +815,6 @@ mod text_tests {
         let area = crate::hud::UiFrame::plain((crate::hud::UI_MIN_W, crate::hud::UI_MIN_H)).area;
         let seat_state_px = (crate::lobby::seats_rect(area).width - LOBBY_KICK_W - LOBBY_SEAT_STATE_X) as i32 - 4;
         let mut out = vec![
-            // A gauge's label over its bar, in the corners' small size.
-            (keys::HUD_SPEED, UI_SMALL_TEXT, HUD_GAUGE_LABEL_MAX_PX, vec![]),
-            (keys::HUD_SHIELD, UI_SMALL_TEXT, HUD_GAUGE_LABEL_MAX_PX, vec![]),
-            (keys::HUD_HEAT, UI_SMALL_TEXT, HUD_GAUGE_LABEL_MAX_PX, vec![]),
-            (keys::HUD_LAMPS, UI_SMALL_TEXT, HUD_LAMPS_LABEL_MAX_PX, vec![]),
-            (keys::HUD_FROG, UI_SMALL_TEXT, HUD_GAUGE_LABEL_MAX_PX, vec![]),
             button(keys::BUTTON_BUILD, MODE_BUTTON_W),
             button(keys::BUTTON_PLAY, MODE_BUTTON_W),
             button(keys::BUTTON_LEAVE, MODE_BUTTON_W),

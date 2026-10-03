@@ -11,8 +11,8 @@ the drawing, the shows a crate puts on and the breakable crates behind
 
 | File | Size | Grid | Drawn at |
 |---|---|---|---|
-| `static/crates_sheet.png` | 224 × 384 | 7 cols × 12 rows of 32 px | 1:1, like an obstacle (`CRATE_CELL`) |
-| `static/pickup_glyphs.png` | 20 × 240 | 1 col × 12 rows of 20 px | 1:1 on the field; 20 pt in the HUD |
+| `static/crates_sheet.png` | 280 × 480 | 7 cols × 12 rows of 40 px | 1:1, centred on the pickup's 32 px cell (`CRATE_CELL`) |
+| `static/pickup_glyphs.png` | 24 × 288 | 1 col × 12 rows of 24 px | 1:1 on the field; 24 pt in the HUD and the builder's bar |
 
 Both are written by `tools/spritegen/gen_crates.py` (raw PNG bytes, no
 Pillow, deterministic - every choice is a position hash):
@@ -38,9 +38,12 @@ heat_shield.
 
 ## 2. The art
 
-- **Density**: a 32 px cell is 16 × 16 design pixels, each a 2 × 2 block,
-  like the walls and props; the crate is 14 × 14 of them (28 px), so the
-  ground shows round it and it reads as an item beside a 32 px wall tile.
+- **Density**: a 40 px cell is 20 × 20 design pixels, each a 2 × 2 block,
+  like the walls and props; the crate is 18 × 18 of them (36 px), three
+  planks between two battens, standing 2 px past its 32 px map cell on every
+  side - big enough to read across the field beside the tanks, still inside
+  what a hull collects from (`PICKUP_SIZE` grown by `pickup_collect_pad_px`).
+  Two crates on neighbouring cells stand edge to edge like stacked stores.
 - **Perspective**: straight down with a two-row front face as the tilt cue
   (the props' `front_strip`), lit from the top left, the tanks' `#252525`
   outline. The runtime drop shadow is an obstacle's
@@ -50,9 +53,11 @@ heat_shield.
   `WOOD_AMBER`), nails in `STONE_MID`, a hashed grain speckle a step
   darker. Dark on purpose: honey wood (`#DE9943`) is the wood walls' and
   fences', and a crate must never read as a wall.
-- **The symbol**: 8 × 8 design pixels between the battens, flat paint in
-  the kind's base ink with a hashed chip or two gone. The shield's is the
-  rainbow swept corner to corner.
+- **The symbol**: 10 × 10 design pixels between the battens, a plank's
+  width clear of them on either side, flat paint in
+  the kind's base ink with a hashed chip or two gone from its edge - never
+  a hole inside it, which turns a solid symbol like the cross into a blot.
+  The shield's is the rainbow swept corner to corner.
 - **Inks** (`punypalette.PICKUP_INK`, `PickupKind::ink` - shade, base,
   light): off the palette on purpose, the old pickup icons' exemption kept
   for the one part that has to be spotted from across the field; the bases
@@ -77,8 +82,7 @@ heat_shield.
 
 The symbol sheet is each symbol on its own, lit along its top, shaded along
 its bottom and outlined: what rises out of an opened crate, what a broken
-one spills, and the HUD weapon queue's icons (20 pt in a 28 pt slot,
-`hud::weapon_pickup`).
+one spills, and the HUD's symbols (§3).
 
 ## 3. Drawing
 
@@ -97,7 +101,20 @@ It draws, in order of precedence:
    for the round clock (`crate_fx::glint_col`), each crate on its own
    hashed beat.
 
-The builder draws the crate's column 0 for a pickup cell and its brush.
+The builder draws the crate's column 0 for a pickup cell at its own size,
+and a pickup tool's icon (`draw_tool_icon`) at a whole multiple of a sheet's
+scale centred on the icon, so every block stays: the crate where it fits
+(the list and the palette, every touch slot), the symbol alone in the bar's
+32 pt category button.
+
+**The HUD** (`render::hud`) labels every readout with the symbol of the crate
+that fills it, at the symbol sheet's own 24 pt: the vitals' health (the
+cross) and shells (ammo), the speed and shield gauges (the bolt and the
+shield), the frog's gauge in the right cluster (the frog pack) and the
+weapon queue (`hud::weapon_pickup`, 24 pt centred in a 28 pt slot). A symbol
+whose readout is empty - no shells, no boost, no shield, a spent weapon, no
+frog - is drawn dim (`SYMBOL_UNLIT`), so the row says at a glance what is
+running. The gauges carry no words.
 
 ## 4. The shows
 

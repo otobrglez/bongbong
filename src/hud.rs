@@ -41,14 +41,6 @@ pub const HUD_TEXT_SIZE: i32 = 18;
 /// The default font's own size, which the indicators' labels are drawn at
 /// whole multiples of (`indicators::label_font`).
 pub const HUD_LABEL_SIZE: i32 = 10;
-/// The room a gauge's label (`SPEED`/`SHIELD`/`FROG`) has over its bar, in
-/// points at `UI_SMALL_TEXT`: the gauge's 60 pt slot (`render::hud`) less
-/// a gap. `text_tests` measures every language's labels against it.
-pub const HUD_GAUGE_LABEL_MAX_PX: i32 = 56;
-
-/// The widest the lamp row's word may draw (`render::hud`'s lamp slot),
-/// after the lantern and its count.
-pub const HUD_LAMPS_LABEL_MAX_PX: i32 = 84;
 /// The build stamp under the left cluster, in the chrome's small size.
 pub const HUD_VERSION_TEXT_SIZE: i32 = UI_SMALL_TEXT;
 /// The version line's colour: white at 70%, a step below the HUD's
@@ -629,8 +621,8 @@ pub const CLUSTER_GAP: f32 = 8.0;
 pub const ROW_GAP: f32 = 4.0;
 /// The least room between the left cluster and the right one.
 pub const SIDE_GAP: f32 = 16.0;
-/// A row of readouts: the 32 pt the pickup icons and the shell sprite sit
-/// in full-bleed.
+/// A row of readouts: 32 pt, room for the crates' 24 pt symbols and the
+/// weapon queue's 28 pt icon squares with a margin.
 pub const ROW_H: f32 = 32.0;
 
 /// A button's height: a readouts' row under a mouse, a finger's on a touch
