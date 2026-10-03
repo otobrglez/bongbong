@@ -164,11 +164,15 @@ pub enum LintKind {
     TowerNoReach,
     /// More than `TOWERS_PER_SIDE_INFO` towers on one side.
     TooManyTowers,
+    /// A training door (docs/training-stage.md) that names no beat of the
+    /// map's script, or a door or flag on a map with no script at all: it
+    /// never opens, or it is never counted.
+    TrainingDoor,
 }
 
 impl LintKind {
     /// Every kind, in check order.
-    pub const ALL: [LintKind; 22] = [
+    pub const ALL: [LintKind; 23] = [
         LintKind::UnreachableFrog,
         LintKind::UnreachablePickup,
         LintKind::GatedPickup,
@@ -191,6 +195,7 @@ impl LintKind {
         LintKind::TowerAtStart,
         LintKind::TowerNoReach,
         LintKind::TooManyTowers,
+        LintKind::TrainingDoor,
     ];
 
     /// The kebab-case name the lint's output and the dev server's `lint`
@@ -220,6 +225,7 @@ impl LintKind {
             LintKind::TowerAtStart => "tower-at-start",
             LintKind::TowerNoReach => "tower-no-reach",
             LintKind::TooManyTowers => "too-many-towers",
+            LintKind::TrainingDoor => "training-door",
         }
     }
 }
@@ -361,6 +367,9 @@ pub fn lint_map(map: &crate::map::MapFile, setup: &LintSetup) -> (Game, Vec<Lint
     game.level_overrides = setup.level_overrides;
     let (width, height) = game.map.field_size();
     game.init(width, height);
+    // A training course is checked as it plays once its pens are open:
+    // every door its beats will take away taken away now.
+    game.open_every_door();
     let findings = lint(&game, width, height);
     (game, findings)
 }
@@ -604,6 +613,7 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     check_gates(game, &grid, width, height, &mut findings);
     check_wave_gates(game, &grid, width, height, &player_positions, &mut findings);
     check_portals(game, &cells, &mut findings);
+    check_training(game, &mut findings);
     check_towers(game, &cells, &player_positions, &mut findings);
     check_disconnected_regions(&cells, &mut findings);
     check_boxed_in(&grid, &cells, &mut findings);
@@ -1053,6 +1063,23 @@ fn check_towers(game: &Game, cells: &Cells, player_positions: &[Position], findi
             let message = format!("{n} {} towers (more than {TOWERS_PER_SIDE_INFO}): heavy on the tick and on the player", side.name());
             findings.push(LintFinding::new(LintSeverity::Info, LintKind::TooManyTowers, message, mine));
         }
+    }
+}
+
+/// Every training door names a beat of the script, and doors and flags
+/// stand only on a map that has one.
+fn check_training(game: &Game, findings: &mut Vec<LintFinding>) {
+    let beats = game.map.training.as_ref().map_or(0, |t| t.beat.len());
+    for (col, row, obj) in game.map.iter_cells() {
+        let message = match *obj {
+            map::CellObject::Door { .. } if beats == 0 => format!("door at map cell ({col},{row}) on a map with no training script: it never opens"),
+            map::CellObject::Door { beat } if beat == 0 || beat as usize > beats => {
+                format!("door at map cell ({col},{row}) opens on beat {beat}, but the script has {beats} beats: it never opens")
+            }
+            map::CellObject::Flag if beats == 0 => format!("flag at map cell ({col},{row}) on a map with no training script: nothing counts it"),
+            _ => continue,
+        };
+        findings.push(LintFinding::new(LintSeverity::Error, LintKind::TrainingDoor, message, vec![LintCell::Map(col, row)]));
     }
 }
 

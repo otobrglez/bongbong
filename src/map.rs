@@ -149,6 +149,14 @@ pub enum CellObject {
     /// in its light to the enemy at full range (`Game::sight_on`). One shot
     /// puts it out for good.
     Lamp,
+    /// A training door (docs/training-stage.md): a solid, permanent tile
+    /// that closes a pen until beat `beat` (1-based, in the map's
+    /// `[[training.beat]]` order) is done, when the round takes every door
+    /// of that beat away. Multi-instance: a door is a run of these cells.
+    Door { beat: u8 },
+    /// A training flag (docs/training-stage.md): not solid, taken by the
+    /// first seat whose hull reaches it and counted by a beat's `flags`.
+    Flag,
 }
 
 impl CellObject {
@@ -166,6 +174,7 @@ impl CellObject {
             CellObject::BioSlush { .. } => Some(Material::BioSlush),
             CellObject::Volcano => Some(Material::Volcano),
             CellObject::Lamp => Some(Material::Lamp),
+            CellObject::Door { .. } => Some(Material::Door),
             _ => None,
         }
     }
@@ -508,6 +517,11 @@ pub struct MapFile {
     /// written back, until a revision is cleared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cleared: Option<Cleared>,
+    /// A training map's script (docs/training-stage.md): its beats in
+    /// order, written last as `[[training.beat]]` tables. Absent on every
+    /// other map, which runs none of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub training: Option<crate::training::Training>,
     /// Where this map came from, for display only: the file stem when
     /// `load` read it, `"default"` for the embedded map, `None` for text
     /// handed over directly (the dev server's inline `map_toml`). Never
@@ -580,6 +594,7 @@ impl MapFile {
             spawn: SpawnConfig::default(),
             size: None,
             cleared: None,
+            training: None,
             name: None,
         }
     }
@@ -615,8 +630,10 @@ impl MapFile {
     /// `SHIPPED_MAPS` as it ships - what the lobby's own HOST sends by
     /// name - or a map whose stamp says it was won as it stands
     /// (`cleared_par`).
+    ///
+    /// A training map never is: its script plays one seat.
     pub fn hostable(&self) -> bool {
-        self.cleared_par().is_some() || shipped_revisions().contains(&self.revision())
+        self.training.is_none() && (self.cleared_par().is_some() || shipped_revisions().contains(&self.revision()))
     }
 }
 
@@ -969,7 +986,22 @@ pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("glasshouses", include_str!("../maps/glasshouses.toml")),
     ("scrapyard", include_str!("../maps/scrapyard.toml")),
     ("grand-campaign", include_str!("../maps/grand-campaign.toml")),
+    ("boot-camp", include_str!("../maps/boot-camp.toml")),
 ];
+
+/// The names of the `SHIPPED_MAPS` a room may play, in their order: every
+/// one but a training map (`MapFile::hostable`), which plays one seat.
+/// What the lobby's map stepper walks.
+pub fn hostable_maps() -> &'static [&'static str] {
+    static HOSTABLE: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    HOSTABLE.get_or_init(|| {
+        SHIPPED_MAPS
+            .iter()
+            .filter(|(_, text)| MapFile::from_toml_str(text).is_ok_and(|map| map.training.is_none()))
+            .map(|(name, _)| *name)
+            .collect()
+    })
+}
 
 /// Whether this build can write a map to disk: native yes; web and iOS no
 /// (their edits live in memory for the session - docs/game-editor-fusion.md;
@@ -1383,12 +1415,18 @@ cells."8,4" = { kind = "water" }
         assert!(!edited.hostable());
         let plain = MapFile::new();
         assert!(!plain.to_toml_string().unwrap().contains("cleared"), "no stamp is written until there is one");
-        for (name, text) in SHIPPED_MAPS {
+        for name in hostable_maps() {
+            let text = SHIPPED_MAPS.iter().find(|(n, _)| n == name).map(|(_, text)| *text).unwrap();
             let shipped = MapFile::from_toml_str(text).unwrap();
             assert!(shipped.hostable(), "{name} as it ships");
             let mut changed = shipped.clone();
             changed.set_cell(1, 1, CellObject::Gate);
             assert!(!changed.hostable(), "{name} edited");
+        }
+        let training = SHIPPED_MAPS.iter().filter(|(_, text)| MapFile::from_toml_str(text).unwrap().training.is_some());
+        for (name, text) in training {
+            assert!(!MapFile::from_toml_str(text).unwrap().hostable(), "{name} is a training map, never a room's");
+            assert!(!hostable_maps().contains(name));
         }
     }
 

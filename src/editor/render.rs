@@ -1657,6 +1657,10 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             crate::lamp::draw_post(&mut GpuCanvas::new(&mut *d, textures), pos, time, (t.shadow_dir_x, t.shadow_dir_y), true);
         }
         CellObject::Portal => draw_portal(&mut GpuCanvas::new(&mut *d, textures), pos, time, tint),
+        CellObject::Door { .. } => crate::training::draw_door(&mut GpuCanvas::new(&mut *d, textures), pos),
+        CellObject::Flag => {
+            crate::training::draw_flag(&mut GpuCanvas::new(&mut *d, textures), pos, crate::tank::team_color(0), false, time);
+        }
         CellObject::TallGrass => {
             // The round scatters several hashed tufts per cell; one centred
             // tuft is enough to show the cell is grassed.

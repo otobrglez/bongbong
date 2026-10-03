@@ -297,6 +297,7 @@ lint-portal-blocked = PORTAL BLOCKED
 lint-tower-at-start = TOWER COVERS A START
 lint-tower-no-reach = TOWER CAN'T REACH ANYTHING
 lint-too-many-towers = MANY TOWERS ON ONE SIDE
+lint-training-door = DOOR THAT NEVER OPENS
 # The status line's fallback before a category is active.
 editor-tool = TOOL
 
