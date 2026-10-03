@@ -141,6 +141,20 @@ pub struct DrawableTile {
     pub lean: u8,
 }
 
+/// A pickup as it is drawn: its crate whole, hurt, burning, or broken with
+/// its contents lying loose (`crate_breakable`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DrawablePickup {
+    pub cell: (i32, i32),
+    pub kind: PickupKind,
+    /// The crate's hit points, whole.
+    pub hp: u8,
+    pub burning: bool,
+    pub loose: bool,
+    /// The burning crate's or the loose contents' time left, tenths.
+    pub left: u8,
+}
+
 /// The whole picture at one tick, every family sorted by its key so two
 /// states compare with `==`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -149,8 +163,8 @@ pub struct DrawableState {
     pub shots: Vec<DrawableShot>,
     pub missiles: Vec<DrawableMissile>,
     pub frogs: Vec<DrawableFrog>,
-    /// Every pickup on the field: its cell and kind.
-    pub pickups: Vec<((i32, i32), PickupKind)>,
+    /// Every pickup on the field, by cell.
+    pub pickups: Vec<DrawablePickup>,
     pub tiles: Vec<DrawableTile>,
     /// Every burning ground cell with its time left in tenths.
     pub fires: Vec<((i32, i32), u8)>,
@@ -409,11 +423,18 @@ impl Game {
             .collect();
         frogs.sort_by_key(|f| f.side == Side::Enemy);
 
-        let mut pickups: Vec<((i32, i32), PickupKind)> = self
+        let mut pickups: Vec<DrawablePickup> = self
             .world
             .query::<&Pickup>()
             .iter()
-            .map(|p| (crate::map::world_to_cell(p.position), p.kind))
+            .map(|p| DrawablePickup {
+                cell: crate::map::world_to_cell(p.position),
+                kind: p.kind,
+                hp: p.health.round().clamp(0.0, 255.0) as u8,
+                burning: p.burn.is_some(),
+                loose: p.loose.is_some(),
+                left: tenths(p.burn.or(p.loose).unwrap_or(0.0)),
+            })
             .collect();
         pickups.sort();
 

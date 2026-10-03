@@ -1306,9 +1306,12 @@ pub fn run(args: Args) {
     let towers_texture = rl
         .load_texture(&thread, "static/towers_sheet.png")
         .expect("failed loading towers texture");
-    let pickup_tower_pack_texture = rl
-        .load_texture(&thread, "static/pickups/tower_pack.png")
-        .expect("failed loading tower pack texture");
+    let crates_texture = rl
+        .load_texture(&thread, "static/crates_sheet.png")
+        .expect("failed loading crates texture");
+    let pickup_glyphs_texture = rl
+        .load_texture(&thread, "static/pickup_glyphs.png")
+        .expect("failed loading pickup symbols texture");
     let portal_texture = rl
         .load_texture(&thread, "static/portal_sheet.png")
         .expect("failed loading portal texture");
@@ -1360,36 +1363,6 @@ pub fn run(args: Args) {
                 .expect("failed loading frog explosion texture"),
         })
         .collect();
-    let pickup_health_texture = rl
-        .load_texture(&thread, "static/pickups/health.png")
-        .expect("failed loading health pickup texture");
-    let pickup_ammo_texture = rl
-        .load_texture(&thread, "static/pickups/ammo.png")
-        .expect("failed loading ammo pickup texture");
-    let pickup_laser_texture = rl
-        .load_texture(&thread, "static/pickups/laser.png")
-        .expect("failed loading laser pickup texture");
-    let pickup_minigun_texture = rl
-        .load_texture(&thread, "static/pickups/minigun.png")
-        .expect("failed loading minigun pickup texture");
-    let pickup_plasma_texture = rl
-        .load_texture(&thread, "static/pickups/plasma.png")
-        .expect("failed loading plasma pickup texture");
-    let pickup_missiles_texture = rl
-        .load_texture(&thread, "static/pickups/missiles.png")
-        .expect("failed loading missiles pickup texture");
-    let pickup_speedup_texture = rl
-        .load_texture(&thread, "static/pickups/speedup.png")
-        .expect("failed loading speed-up pickup texture");
-    let pickup_shield_texture = rl
-        .load_texture(&thread, "static/pickups/shield.png")
-        .expect("failed loading shield pickup texture");
-    let pickup_flamethrower_texture = rl
-        .load_texture(&thread, "static/pickups/flamethrower.png")
-        .expect("failed loading flamethrower pickup texture");
-    let pickup_frog_health_texture = rl
-        .load_texture(&thread, "static/pickups/frog_health.png")
-        .expect("failed loading frog health pack pickup texture");
     let eraser_texture = rl
         .load_texture(&thread, "static/ui/eraser.png")
         .expect("failed loading eraser texture");
@@ -2066,21 +2039,11 @@ pub fn run(args: Args) {
                     grass: &grass_textures[theme_index(session.builder.map().theme)],
                     trees: &trees_texture,
                     towers: &towers_texture,
-                    pickup_tower_pack: &pickup_tower_pack_texture,
+                    crates: &crates_texture,
                     // Palette icon: the first colour variant's idle frame -
                     // a fixed representative sprite, since the builder
                     // places a frog *cell*, not a rolled colour.
                     frog_idle: &frog_textures[0].idle,
-                    pickup_health: &pickup_health_texture,
-                    pickup_ammo: &pickup_ammo_texture,
-                    pickup_laser: &pickup_laser_texture,
-                    pickup_minigun: &pickup_minigun_texture,
-                    pickup_plasma: &pickup_plasma_texture,
-                    pickup_missiles: &pickup_missiles_texture,
-                    pickup_speedup: &pickup_speedup_texture,
-                    pickup_shield: &pickup_shield_texture,
-                    pickup_flamethrower: &pickup_flamethrower_texture,
-                    pickup_frog_health: &pickup_frog_health_texture,
                     eraser: &eraser_texture,
                     portal: &portal_texture,
                     tanks: &tanks_texture,
@@ -2532,20 +2495,11 @@ pub fn run(args: Args) {
                 barrel_explosion: &barrel_explosion_texture,
                 ground: &ground_textures[theme_index(game.map.theme)],
                 frog_variants: &frog_textures,
-                pickup_health: &pickup_health_texture,
-                pickup_ammo: &pickup_ammo_texture,
-                pickup_laser: &pickup_laser_texture,
-                pickup_minigun: &pickup_minigun_texture,
-                pickup_plasma: &pickup_plasma_texture,
-                pickup_missiles: &pickup_missiles_texture,
-                pickup_speedup: &pickup_speedup_texture,
-                pickup_shield: &pickup_shield_texture,
-                pickup_flamethrower: &pickup_flamethrower_texture,
-                pickup_frog_health: &pickup_frog_health_texture,
                 grass: &grass_textures[theme_index(game.map.theme)],
                 trees: &trees_texture,
                 towers: &towers_texture,
-                pickup_tower_pack: &pickup_tower_pack_texture,
+                crates: &crates_texture,
+                pickup_glyphs: &pickup_glyphs_texture,
                 portal: &portal_texture,
                 shade,
             },

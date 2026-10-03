@@ -150,6 +150,22 @@ impl Flash {
     }
 }
 
+/// A crate being taken, playing out where it stood (`crate_fx::open`):
+/// started by `Event::PickupCollected`, on this layer's clock, so it runs on
+/// a replica as it does in a local round - the crate itself is gone from
+/// the world the frame it is taken.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct CrateOpen {
+    pub(crate) kind: crate::pickup::PickupKind,
+    pub(crate) at: Position,
+    /// The owner slot of the tank that took it, whose hull the symbol
+    /// flies into; `None` for a crate a blast or fire broke.
+    pub(crate) slot: Option<usize>,
+    /// It was a broken crate's contents lying loose: no crate left to split.
+    pub(crate) spilled: bool,
+    pub(crate) age: f32,
+}
+
 pub struct Particle {
     pub(crate) pos: Position,
     /// Only the drawing reads it outside this module: a fast spark is
@@ -193,6 +209,8 @@ pub struct Fx {
     trail_last: HashMap<u32, Position>,
     /// Hits playing out, oldest first (`Impact`).
     impacts: Vec<Impact>,
+    /// Crates being taken, oldest first (`CrateOpen`).
+    opens: Vec<CrateOpen>,
     /// Ids of the shots already seen in their impact frames, so each hit
     /// is started once.
     impacts_seen: HashSet<u32>,
@@ -218,6 +236,18 @@ impl Fx {
     #[cfg(feature = "render")]
     pub(crate) fn impacts(&self) -> &[Impact] {
         &self.impacts
+    }
+
+    fn start_open(&mut self, open: CrateOpen) {
+        if self.opens.len() >= MAX_OPENS {
+            self.opens.remove(0);
+        }
+        self.opens.push(open);
+    }
+
+    /// Every crate still being opened, oldest first, for the renderer.
+    pub fn opens(&self) -> &[CrateOpen] {
+        &self.opens
     }
 
     /// Every hull and tile still flashing from a hit, for the renderer.
@@ -264,6 +294,7 @@ impl Fx {
         self.trail_last.clear();
         self.impacts.clear();
         self.impacts_seen.clear();
+        self.opens.clear();
         self.flashes.clear();
         self.burning.clear();
     }
@@ -551,6 +582,17 @@ impl Fx {
             for e in game.events() {
                 match *e {
                     Event::RoundStarted { .. } => self.clear(),
+                    Event::PickupCollected { slot, kind, x, y, spilled } => {
+                        self.start_open(CrateOpen { kind, at: Position::new(x, y), slot: Some(slot), spilled, age: 0.0 });
+                    }
+                    Event::CrateBroken { kind, x, y, .. } => {
+                        let at = Position::new(x, y);
+                        self.start_open(CrateOpen { kind, at, slot: None, spilled: false, age: 0.0 });
+                        if let Some(ramp) = crate::pyro::dust_of(Material::Wood) {
+                            let tints = [ramp[1], ramp[2]];
+                            self.burst(at, ParticleKind::Dust, self.count(6), 50.0, &tints);
+                        }
+                    }
                     Event::ObstacleDestroyed { material, x, y } => self.tile_death(material, Position::new(x, y)),
                     // A hit the tile *survived*. Without this, a wall only
                     // ever throws anything on the shot that finishes it,
@@ -1064,6 +1106,11 @@ impl Fx {
             i.age += dt;
             i.age < i.kind.seconds()
         });
+        let open = crate::crate_fx::open_seconds(&tuning());
+        self.opens.retain_mut(|o| {
+            o.age += dt;
+            o.age < open
+        });
         let flash = tuning().hit_flash_seconds;
         self.flashes.retain_mut(|f| {
             f.age += dt;
@@ -1182,6 +1229,8 @@ pub(crate) const FX_GRID: f32 = 2.0;
 /// Hits kept playing at once; a minigun burst into a wall is the case
 /// that reaches it, and the oldest go first.
 const MAX_IMPACTS: usize = 48;
+/// The most crates being opened at once; the oldest goes first.
+const MAX_OPENS: usize = 16;
 
 // Particle tints. Deliberately literals rather than a palette import:
 // these are light, not surface, and several are drawn additively where a

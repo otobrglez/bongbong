@@ -334,6 +334,20 @@ pub fn weapon_color(weapon: ActiveWeapon) -> Color {
     }
 }
 
+/// The pickup whose symbol stands for `weapon` in the queue (its crate's,
+/// `pickup::draw_glyph`); the shell has none.
+pub fn weapon_pickup(weapon: ActiveWeapon) -> Option<crate::pickup::PickupKind> {
+    use crate::pickup::PickupKind;
+    match weapon {
+        ActiveWeapon::Laser => Some(PickupKind::Laser),
+        ActiveWeapon::Plasma => Some(PickupKind::Plasma),
+        ActiveWeapon::Minigun => Some(PickupKind::Minigun),
+        ActiveWeapon::Missiles => Some(PickupKind::Missiles),
+        ActiveWeapon::Flamethrower => Some(PickupKind::Flamethrower),
+        ActiveWeapon::Shell => None,
+    }
+}
+
 // ---- the window the chrome is laid out in ----------------------------------
 
 /// The least room the chrome keeps inside the window's safe area, on every

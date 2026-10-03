@@ -587,21 +587,10 @@ fn headlight_color(player: bool) -> Rgb {
     if player { [1.0, 0.95, 0.82] } else { [1.0, 0.68, 0.42] }
 }
 
-/// The colour a pickup glows in, keyed to its icon.
+/// The colour a pickup glows in: its symbol's ink (`PickupKind::ink`).
 fn pickup_color(kind: PickupKind) -> Rgb {
-    match kind {
-        PickupKind::Health => [1.0, 0.36, 0.36],
-        PickupKind::Ammo => [1.0, 0.86, 0.36],
-        PickupKind::Laser => [1.0, 0.32, 0.3],
-        PickupKind::Minigun => [1.0, 0.7, 0.3],
-        PickupKind::Plasma => [0.4, 0.95, 1.0],
-        PickupKind::Missiles => [1.0, 0.6, 0.3],
-        PickupKind::SpeedUp => [0.85, 1.0, 0.4],
-        PickupKind::Shield => [0.45, 0.7, 1.0],
-        PickupKind::Flamethrower => [1.0, 0.55, 0.2],
-        PickupKind::FrogHealth => [0.45, 1.0, 0.55],
-        PickupKind::TowerPack => [0.8, 0.7, 1.0],
-    }
+    let c = kind.ink()[1];
+    [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0]
 }
 
 fn plasma_color(variant: PlasmaVariant) -> Rgb {

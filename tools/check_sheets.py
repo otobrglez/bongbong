@@ -51,6 +51,12 @@ the extended set and the no-green rule, with two admissions of its own
 `punypalette.OOZE`, the bio slush's glowing acid lime - off the palette on
 purpose like plasma.png, and not one of the grass greens the rule counts.
 
+The pickups' crates (`crates_sheet.png`, docs/CRATES_SPEC.md) are wood on
+the extended set plus the symbols' inks (`punypalette.PICKUP_INK`,
+`PICKUP_RAINBOW`), loud on purpose like the old pickup icons, and are held
+to the no-green rule since a crate sits on the grass; the symbol sheet
+(`pickup_glyphs.png`) is those inks with the outline and white alone.
+
 Run: `just check-sheets` (or `python3 tools/check_sheets.py`). Exits 1 on
 any violation and names the offending sheet.
 """
@@ -87,11 +93,14 @@ ON_PALETTE = [
     'tracks.png',
     'portal_sheet.png',
     'towers_sheet.png',
+    'crates_sheet.png',
+    'pickup_glyphs.png',
 ]
 
 # The subset that is drawn over the ground layer and so must carry no green.
 NO_GREEN = [
     'walls_sheet.png', 'props_sheet.png', 'barrel_explosion.png', 'portal_sheet.png', 'missile.png', 'towers_sheet.png',
+    'crates_sheet.png',
 ]
 
 PALETTE = {tuple(c) for c in pp.PUNY_PALETTE}
@@ -128,6 +137,11 @@ EXTENDED = {'walls_sheet.png', 'nature_sheet.png', 'nature_sheet_desert.png', 't
 TOWER_SHEET = 'towers_sheet.png'
 TOWER_EXTRA = {tuple(c) for c in pp.TEAM_P1} | {tuple(c) for c in pp.OOZE}
 
+# The pickups' symbols: their inks, loud on purpose (see the module docstring).
+PICKUP_INK = {tuple(c) for ramp in pp.PICKUP_INK.values() for c in ramp} | {tuple(c) for c in pp.PICKUP_RAINBOW}
+CRATE_SHEET = 'crates_sheet.png'
+GLYPH_SHEET = 'pickup_glyphs.png'
+
 
 def scan(name):
     allowed = PALETTE_ALL if name in EXTENDED else PALETTE
@@ -135,6 +149,10 @@ def scan(name):
         allowed = PALETTE | TEAM
     if name == TOWER_SHEET:
         allowed = PALETTE_ALL | TOWER_EXTRA
+    if name == CRATE_SHEET:
+        allowed = PALETTE_ALL | PICKUP_INK
+    if name == GLYPH_SHEET:
+        allowed = PICKUP_INK | {tuple(pp.BLACK), tuple(pp.WHITE)}
     if name in TANK_MODULE_SHEETS:
         allowed = TANK_BASE
     img = Image.open(os.path.join(STATIC, name)).convert('RGBA')
@@ -156,7 +174,7 @@ def main():
     failures = []
     for name in ON_PALETTE:
         off, green = scan(name)
-        extended = name in EXTENDED or name in TANK_SHEETS or name in TANK_MODULE_SHEETS
+        extended = name in EXTENDED or name in TANK_SHEETS or name in TANK_MODULE_SHEETS or name == CRATE_SHEET
         checks = [f'off-palette={off}' + (' (extended set)' if extended else '')]
         if off:
             failures.append(f'{name}: {off} off-palette pixels')
