@@ -421,11 +421,12 @@ impl Game {
                 waiting.push(spec);
                 continue;
             }
-            let role = match spec.ai {
-                Some(TrainingAi::Dummy) => Role::Hunter,
-                None => Role::Player,
+            // A dummy hunts the frog and never fires at a seat.
+            let (role, frog_only) = match spec.ai {
+                Some(TrainingAi::Dummy) => (Role::Hunter, true),
+                None => (Role::Player, false),
             };
-            match self.training_roll_in(f, spec.tank.row(), role) {
+            match self.training_roll_in(f, spec.tank.row(), role, frog_only) {
                 Some(entity) => run.tanks.push(entity),
                 None => waiting.push(spec),
             }
@@ -670,6 +671,29 @@ mod tests {
             step(&mut game, (tuning().shell_recharge_seconds * 60.0) as usize + 2);
             assert!(with_tank(&game.world, seat, |t| t.shells_ammo) > after_crate, "and the refill runs again");
         }
+    }
+
+    #[test]
+    fn a_dummy_goes_for_the_frog_and_never_fires_at_the_seat() {
+        let script = "\n[[training.beat]]\nstart = { roll_in = [{ tank = \"scout\", ai = \"dummy\" }] }\ndone = { wrecks = 1 }\n";
+        let mut game = course(script);
+        // The seat stands clear of the gate's lane - a tank in a lane keeps
+        // it busy, and nothing rolls in through it.
+        put_seat(&mut game, 7, 7);
+        let mut at_frog = false;
+        for _ in 0..1800 {
+            step(&mut game, 1);
+            for event in game.events() {
+                match event {
+                    Event::Hit { target: crate::simulation::HitTarget::Player { .. }, .. } => panic!("a dummy hit the seat"),
+                    Event::Hit { target: crate::simulation::HitTarget::Frog { .. }, .. } => at_frog = true,
+                    _ => {}
+                }
+            }
+            let dummy = game.world.query::<&crate::ai::Ai>().iter().next().map(|ai| ai.frog_only);
+            assert!(dummy != Some(false), "the beat's tank is a dummy");
+        }
+        assert!(at_frog, "and it fired at the frog");
     }
 
     #[test]

@@ -51,6 +51,8 @@ leave-stay = KEEP PLAYING
 # The end screen: a 72 px banner, measured and centred over the whole
 # field, and the 28 px countdown under it.
 round-won = YOU WIN
+# A training round's win (docs/training-stage.md).
+round-trained = TRAINING DONE!
 round-lost = YOU LOSE
 round-restarting = Restarting in { $seconds }...
 round-back-to-lobby = Back to the lobby in { $seconds }...
@@ -62,11 +64,13 @@ paused = PAUSED
 mission-protect = PROTECT
 mission-hunt = HUNT
 mission-destroy = DESTROY
+mission-training = TRAINING
 
 # The 72 px banner the round opens with, centred over the field.
 mission-protect-banner = PROTECT THE FROG!
 mission-hunt-banner = HUNT THE FROG!
 mission-destroy-banner = DESTROY!
+mission-training-banner = FOLLOW THE FROG!
 
 # The 48 px banner during the breather before a wave rolls in.
 wave-banner = WAVE { $n }

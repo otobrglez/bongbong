@@ -1164,13 +1164,13 @@ pub fn run(args: Args) {
         None => {
             let start = match args.level.as_deref() {
                 Some(spec) => campaign.levels.find(spec).unwrap_or_else(|| {
-                    eprintln!("[levels] no level {spec:?}: a number from 1 to {} or a level's map name", campaign.levels.len());
+                    eprintln!("[levels] no level {spec:?}: a number from {} to {} or a level's map name", campaign.levels.first_number(), campaign.levels.last_number());
                     std::process::exit(2);
                 }),
                 None => campaign.reached(),
             };
             campaign.map(start).unwrap_or_else(|e| {
-                eprintln!("[levels] level {}: {e}; playing the default map", start + 1);
+                eprintln!("[levels] level {}: {e}; playing the default map", campaign.levels.number(start));
                 default_map()
             })
         }

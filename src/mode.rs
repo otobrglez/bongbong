@@ -287,7 +287,7 @@ impl Session {
         match self.start_level(next) {
             Ok(()) => true,
             Err(e) => {
-                eprintln!("[levels] level {}: {e}", next + 1);
+                eprintln!("[levels] level {}: {e}", self.campaign.as_ref().map_or(next + 1, |c| c.levels.number(next)));
                 false
             }
         }
@@ -414,7 +414,7 @@ impl Session {
         }
         self.dialog = false;
         self.players_dialog = false;
-        self.level_select = Some(LevelSelect::open(self.level(), campaign.reached()));
+        self.level_select = Some(LevelSelect::open(self.level(), campaign.open_to()));
         true
     }
 
@@ -424,7 +424,7 @@ impl Session {
     /// with its banner.
     pub fn update_level_select(&mut self, input: &SelectInput, area: Rect) -> bool {
         let (Some(select), Some(campaign)) = (&mut self.level_select, &self.campaign) else { return false };
-        match select.update(input, area, campaign.levels.len(), campaign.reached()) {
+        match select.update(input, area, campaign.levels.len(), campaign.open_to()) {
             SelectAction::Stay => false,
             SelectAction::Close => {
                 self.level_select = None;
@@ -446,7 +446,8 @@ impl Session {
     /// level. The painter and every hit test read it, so the button is
     /// pressable exactly where it is drawn.
     pub fn level_button(&self) -> Option<usize> {
-        (self.driver == Driver::Play).then(|| self.level()).flatten().map(|i| i + 1)
+        let levels = &self.campaign.as_ref()?.levels;
+        (self.driver == Driver::Play).then(|| self.level()).flatten().map(|i| levels.number(i))
     }
 
     /// Enter on a level's end screen: the way on after a win, `PLAY
@@ -930,7 +931,7 @@ impl Session {
                 countdown_label: None,
                 level: self.level().zip(self.campaign.as_ref()).and_then(|(i, campaign)| {
                     let level = campaign.levels.get(i)?;
-                    Some(LevelBanner { number: i + 1, count: campaign.levels.len(), title: level.title() })
+                    Some(LevelBanner { number: campaign.levels.number(i), count: campaign.levels.last_number(), title: level.title() })
                 }),
                 result: self.result_view(),
                 level_button: self.level_button(),
