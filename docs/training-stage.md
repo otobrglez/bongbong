@@ -331,9 +331,10 @@ the bar's level button) and never sees training again once Lotus Lagoon is
 won (`Campaign::won` moves `reached` past both). A progress file saved before Boot Camp existed
 names a later map and opens there, untouched. That makes sixteen levels,
 exactly one page of the select (`SELECT_TILES`); a seventeenth needs a
-second page. A couch round on Boot Camp plays with both tanks for now:
-the script, the respawn and the flags serve every seat; seating one is
-open.
+second page. A couch round on Boot Camp seats one: `Game::init` sets the
+couch's count aside on a map with a training script and puts it back on
+the next map without one, and the corners offer no players button there
+(nor does the dialog open), so player 2 is back for Lotus Lagoon.
 
 ### Tests
 
