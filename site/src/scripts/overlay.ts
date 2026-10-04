@@ -1,15 +1,14 @@
-// Where the page's own controls stand over the canvas - Full screen, and
-// with a mouse the subscribe link beside it - published for the game (src/hud.rs `PageOverlay`, read once a
+// Where the page's own controls (Full screen, Subscribe) stand over the
+// canvas, published for the game (src/hud.rs `PageOverlay`, read once a
 // frame by src/app/web.rs): `window.bbOverlay` is `top x y width height`
 // in CSS pixels from the canvas's corner.
 //
 // `x y width height` is the controls' box, which the game's off-screen
 // arrows keep off wherever it is. `top` is the band along the canvas's top
 // the game's chrome keeps out of, the way it keeps out of a safe area: on a
-// touch screen the full-screen button stands there, its icon alone, and
-// the subscribe link moves to the footer (index.astro), so the corner
-// clusters, the panels and the builder's bar are laid out below it; with a
-// mouse both keep to the bottom-left corner and take no band.
+// touch screen the controls stand there (index.astro), so the corner
+// clusters, the panels and the builder's bar are laid out below them; with
+// a mouse they keep to the bottom-left corner and take no band.
 
 /// The same test the page's CSS moves the controls by.
 const TOUCH = "(hover: none) and (pointer: coarse)";

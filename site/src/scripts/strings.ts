@@ -34,9 +34,9 @@ type Strings = {
 
 const EN: Strings = {
   title: "BongBong!",
-  fullscreen: "Full screen",
+  fullscreen: "&#9974; Full screen",
   fullscreenTitle: "Play full screen",
-  exitFullscreen: "Exit full screen",
+  exitFullscreen: "&#9974; Exit full screen",
   subscribe: "Subscribe for updates.",
   loading: "Loading…",
   fetching: "Fetching the game",
@@ -51,9 +51,9 @@ const EN: Strings = {
 
 const SL: Strings = {
   title: "BongBong!",
-  fullscreen: "Celoten zaslon",
+  fullscreen: "&#9974; Celoten zaslon",
   fullscreenTitle: "Igraj na celotnem zaslonu",
-  exitFullscreen: "Zapri celoten zaslon",
+  exitFullscreen: "&#9974; Zapri celoten zaslon",
   subscribe: "Naroči se na novice.",
   loading: "Nalaganje…",
   fetching: "Prenašam igro",
@@ -129,8 +129,8 @@ export function applyStrings(): Lang {
     const key = el.dataset.i18n as keyof Strings | undefined;
     if (!key || key === "preparing") continue;
     const value = table[key];
-    // The key hints and the footer carry markup.
-    if (key === "keysOne" || key === "keysTwo" || key === "feedback") {
+    // The key hints, the footer and the full-screen label carry markup.
+    if (key === "keysOne" || key === "keysTwo" || key === "feedback" || key === "fullscreen") {
       el.innerHTML = value;
     } else {
       el.textContent = value;

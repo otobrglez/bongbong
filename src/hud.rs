@@ -440,8 +440,8 @@ pub struct Insets {
     pub bottom: f32,
 }
 
-/// What the web page's own controls - Full screen, and with a mouse the
-/// subscribe link - take of the canvas (site/src/scripts/overlay.ts publishes it as `window.bbOverlay`):
+/// What the web page's own controls - Full screen, Subscribe - take of the
+/// canvas (site/src/scripts/overlay.ts publishes it as `window.bbOverlay`):
 /// the band along the canvas's top the game's chrome keeps out of, the way
 /// it keeps out of a safe area, and the controls' own rectangle, which the
 /// off-screen arrows keep off. In CSS pixels from the canvas's corner.
