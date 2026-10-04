@@ -117,7 +117,7 @@ pub fn draw_corners(
     let seats: [(Option<&PlayerHud>, u8); 2] = [(Some(&model.local), first_seat), (model.second.as_ref(), 1)];
     for (block, (hud, seat)) in corners.blocks.iter().zip(seats) {
         let Some(hud) = hud else { continue };
-        draw_plate(d, Corners::plate(*block), Color::new(team_color(seat).r, team_color(seat).g, team_color(seat).b, 150), a);
+        draw_cluster_plate(d, Corners::plate(*block), a);
         draw_vitals(d, *block, hud, seat, textures, a);
         if block.height > crate::hud::VITALS_H {
             draw_lamp_row(d, *block, hud, textures, a);
@@ -134,7 +134,7 @@ pub fn draw_corners(
 
     // The right cluster: the round's numbers, the buttons, the chips.
     let a = fade.right;
-    draw_plate(d, corners.right, PLATE_EDGE, a);
+    draw_cluster_plate(d, corners.right, a);
     let level = chrome.level_button.map(|n| (n, chrome.levels.is_some()));
     draw_info(d, corners.info, model, level, textures, a);
     if let Some(r) = corners.online {
@@ -164,7 +164,18 @@ pub fn draw_corners(
     }
 }
 
-/// A cluster's plate: the dark fill and an edge in `edge`.
+/// How round a corner cluster's plate is: raylib's roundness, the corner's
+/// radius as a share of half the plate's shorter side.
+const CLUSTER_ROUNDNESS: f32 = 0.18;
+
+/// A corner cluster's plate: the dark fill alone, no edge, so the readouts
+/// stand on one quiet shape.
+fn draw_cluster_plate(d: &mut impl RaylibDraw, r: Rectangle, a: f32) {
+    d.draw_rectangle_rounded(r, CLUSTER_ROUNDNESS, 6, faded(PLATE_FILL, a));
+}
+
+/// A panel's plate - the minimap's, the builder's select strip's and its
+/// loupe's: the dark fill and an edge in `edge`.
 pub(crate) fn draw_plate(d: &mut impl RaylibDraw, r: Rectangle, edge: Color, a: f32) {
     d.draw_rectangle_rounded(r, 0.12, 6, faded(PLATE_FILL, a));
     d.draw_rectangle_rounded_lines_ex(r, 0.12, 6, 1.5, faded(edge, a));

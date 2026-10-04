@@ -18,8 +18,8 @@
 //! weapon carried (a tank holds one at a time, `Tank::take_weapon`), else
 //! shells -, and the speed and shield gauges. A two-player couch round
 //! (docs/two-players.md) gives player 2 a block of its own beside player
-//! 1's, or under it on a narrow window, each edged in its player's team
-//! colour.
+//! 1's, or under it on a narrow window, each block's health gauge in its
+//! player's team colour.
 //!
 //! Past two seats there is no couch pair, so the HUD goes *compact*
 //! (docs/online-coop-prd.md §4.11): one seat - the one this window is
