@@ -19,7 +19,7 @@ use crate::pickup::{Pickup, PickupKind};
 use crate::plasma::{Plasma, PlasmaState};
 use crate::shell::Owner;
 use crate::shell::{Shell, ShellState};
-use crate::tank::{ActiveWeapon, Dir, Tank, enemy_health_ring_visibility, player_health_ring_visibility};
+use crate::tank::{Dir, Tank, enemy_health_ring_visibility, player_health_ring_visibility};
 use crate::tuning::{TANK_NAMES, tuning};
 use crate::{DAMAGE_VARIANTS, MAX_DAMAGE, Position, TANK_SHELL_VARIANT_BY_ROW};
 
@@ -787,8 +787,9 @@ impl Game {
     }
 
     /// Overwrite the given fields of the tank in `slot`. Setting a special
-    /// weapon's stock above zero also queues that weapon, exactly as
-    /// collecting its pickup would, so it can actually fire.
+    /// weapon's stock above zero makes it the one special the tank carries,
+    /// the others put down (`Tank::disarm`), as collecting its pickup
+    /// would; of two stocks set at once the later field in this order wins.
     pub fn debug_set_tank(&mut self, slot: usize, patch: &TankPatch) -> Result<(), String> {
         let entity = self.tank_entity_by_slot(slot).ok_or_else(|| format!("no tank in slot {slot}"))?;
         let mut q = self.world.query_one::<&mut Tank>(entity);
@@ -800,34 +801,34 @@ impl Game {
             tank.shells_ammo = n.max(0);
         }
         if let Some(n) = patch.minigun_ammo {
-            tank.minigun_ammo = n.max(0);
             if n > 0 {
-                tank.enqueue_weapon(ActiveWeapon::Minigun);
+                tank.disarm();
             }
+            tank.minigun_ammo = n.max(0);
         }
         if let Some(n) = patch.missile_ammo {
-            tank.missile_ammo = n.max(0);
             if n > 0 {
-                tank.enqueue_weapon(ActiveWeapon::Missiles);
+                tank.disarm();
             }
+            tank.missile_ammo = n.max(0);
         }
         if let Some(n) = patch.plasma_ammo {
-            tank.plasma_ammo = n.max(0);
             if n > 0 {
-                tank.enqueue_weapon(ActiveWeapon::Plasma);
+                tank.disarm();
             }
+            tank.plasma_ammo = n.max(0);
         }
         if let Some(n) = patch.laser_charges {
-            tank.laser_charges = n.max(0);
             if n > 0 {
-                tank.enqueue_weapon(ActiveWeapon::Laser);
+                tank.disarm();
             }
+            tank.laser_charges = n.max(0);
         }
         if let Some(s) = patch.flame_fuel {
-            tank.flame_fuel = s.max(0.0);
             if s > 0.0 {
-                tank.enqueue_weapon(ActiveWeapon::Flamethrower);
+                tank.disarm();
             }
+            tank.flame_fuel = s.max(0.0);
         }
         if let Some(t) = patch.shield_hp {
             tank.shield_hp = t.max(0.0);

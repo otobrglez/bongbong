@@ -1877,11 +1877,10 @@ fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
     let (mx, my) = geo.move_half;
     let corner = geo.corner;
     let speed = (tank.velocity.x * tank.velocity.x + tank.velocity.y * tank.velocity.y).sqrt();
-    // What the trigger fires right now, with its own remaining ammo -
-    // under the FIFO inventory (`Tank::weapon_queue`) this advances when
-    // the live weapon runs dry (and a first pickup arms it directly), so
-    // surface it here to watch the handover live (WPN SHELL duplicates the
-    // AMMO line above; harmless, and it keeps this line self-contained).
+    // What the trigger fires right now, with its own remaining ammo: the
+    // special weapon carried (`Tank::take_weapon`) until it runs dry, then
+    // shells (WPN SHELL duplicates the AMMO line above; harmless, and it
+    // keeps this line self-contained).
     let (wpn_name, wpn_ammo) = match tank.active_weapon() {
         ActiveWeapon::Laser => ("LASER", tank.laser_charges),
         ActiveWeapon::Plasma => ("PLASMA", tank.plasma_ammo),

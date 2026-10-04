@@ -13,11 +13,13 @@
 //! the chrome's area, so they keep their size whatever the map; the slot
 //! tables and the drawing are the `render` half.
 //!
-//! The left cluster is the seat's vitals: health as a number and a gauge,
-//! shells, the speed and shield gauges, and the weapon queue with the live
-//! weapon outlined. A two-player couch round (docs/two-players.md) gives
-//! player 2 a block of its own beside player 1's, or under it on a narrow
-//! window, each edged in its player's team colour.
+//! The left cluster is the seat's vitals, one row: health as a number and
+//! a gauge, shells, the special weapon carried (a tank holds one at a time,
+//! `Tank::take_weapon`), the speed and shield gauges, whichever of shells
+//! and the special the trigger fires outlined. A two-player couch round
+//! (docs/two-players.md) gives player 2 a block of its own beside player
+//! 1's, or under it on a narrow window, each edged in its player's team
+//! colour.
 //!
 //! Past two seats there is no couch pair, so the HUD goes *compact*
 //! (docs/online-coop-prd.md §4.11): one seat - the one this window is
@@ -53,8 +55,8 @@ pub fn version_line() -> String {
     format!("v{} @otobrglez", env!("CARGO_PKG_VERSION"))
 }
 
-/// Accent colours for the special weapons: their count in the weapon
-/// queue always, their slot's outline while that weapon is the live one.
+/// Accent colours for the special weapons: the weapon slot's count and
+/// outline while that weapon is carried.
 pub const HUD_LASER_COLOR: Color = Color::new(255, 60, 160, 255);
 pub const HUD_PLASMA_COLOR: Color = Color::new(60, 220, 200, 255);
 pub const HUD_MINIGUN_COLOR: Color = Color::new(190, 205, 215, 255);
@@ -70,18 +72,13 @@ pub const HUD_FLAME_COLOR: Color = Color::new(255, 140, 40, 255);
 pub const BAR_FILL: Color = Color::new(21, 21, 21, 255);
 pub const TEXT: Color = Color::WHITE;
 pub const DIM: Color = Color::new(110, 110, 118, 255);
-/// Weapon slots, in queue order. Five of them: laser, plasma, minigun,
-/// missiles, flamethrower.
-pub const WEAPON_SLOTS: usize = 5;
-
-/// One of the three special-weapon slots.
+/// The special weapon a tank carries, as its vitals show it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WeaponSlot {
     pub weapon: ActiveWeapon,
-    /// Charges/ammo left; 0 draws the slot empty (`--`).
+    /// Charges, rounds or seconds of fuel left; always above zero, since a
+    /// spent weapon is no longer carried.
     pub count: i32,
-    /// This is what the trigger fires right now.
-    pub active: bool,
 }
 
 /// One player's readouts.
@@ -91,9 +88,9 @@ pub struct PlayerHud {
     pub hp_color: Color,
     pub shells: i32,
     pub shells_color: Color,
-    /// The trigger fires plain shells right now.
-    pub shells_active: bool,
-    pub weapons: [WeaponSlot; WEAPON_SLOTS],
+    /// The special weapon carried, which the trigger fires instead of
+    /// shells; `None` while it fires shells.
+    pub weapon: Option<WeaponSlot>,
     /// Fraction of a speed boost left, 0 when none is running.
     pub speed: f32,
     /// Fraction of a shield left, 0 when none is running.
@@ -108,20 +105,12 @@ pub struct PlayerHud {
 impl PlayerHud {
     /// A wreck's readouts: everything at zero, nothing live.
     fn empty() -> Self {
-        let slot = |weapon| WeaponSlot { weapon, count: 0, active: false };
         PlayerHud {
             hp: 0,
             hp_color: hud_number_color(0.0, MAX_DAMAGE),
             shells: 0,
             shells_color: hud_number_color(0.0, tuning().max_shells as f32),
-            shells_active: false,
-            weapons: [
-                slot(ActiveWeapon::Laser),
-                slot(ActiveWeapon::Plasma),
-                slot(ActiveWeapon::Minigun),
-                slot(ActiveWeapon::Missiles),
-                slot(ActiveWeapon::Flamethrower),
-            ],
+            weapon: None,
             speed: 0.0,
             shield: 0.0,
             lamps: None,
@@ -142,20 +131,14 @@ impl PlayerHud {
             };
             let hp = (MAX_DAMAGE - tank.damage).max(0.0).round() as i32;
             let active = tank.active_weapon();
+            // Fuel in whole seconds, rounded up.
+            let weapon = (active != ActiveWeapon::Shell).then(|| WeaponSlot { weapon: active, count: tank.weapon_ammo(active) });
             PlayerHud {
                 hp,
                 hp_color: hud_number_color(hp as f32, MAX_DAMAGE),
                 shells: tank.shells_ammo,
                 shells_color: hud_number_color(tank.shells_ammo as f32, t.max_shells as f32),
-                shells_active: active == ActiveWeapon::Shell,
-                weapons: [
-                    WeaponSlot { weapon: ActiveWeapon::Laser, count: tank.laser_charges, active: active == ActiveWeapon::Laser },
-                    WeaponSlot { weapon: ActiveWeapon::Plasma, count: tank.plasma_ammo, active: active == ActiveWeapon::Plasma },
-                    WeaponSlot { weapon: ActiveWeapon::Minigun, count: tank.minigun_ammo, active: active == ActiveWeapon::Minigun },
-                    WeaponSlot { weapon: ActiveWeapon::Missiles, count: tank.missile_ammo, active: active == ActiveWeapon::Missiles },
-                    // Fuel in whole seconds, rounded up.
-                    WeaponSlot { weapon: ActiveWeapon::Flamethrower, count: tank.flame_fuel_seconds(), active: active == ActiveWeapon::Flamethrower },
-                ],
+                weapon,
                 speed: boost,
                 shield: tank.shield_charge(),
                 lamps: game.lamps_in_play().then(|| game.player_index(entity).map_or(0, |seat| game.lamps_left(seat as usize))),
@@ -339,7 +322,7 @@ pub fn weapon_color(weapon: ActiveWeapon) -> Color {
     }
 }
 
-/// The pickup whose symbol stands for `weapon` in the queue (its crate's,
+/// The pickup whose symbol stands for `weapon` in its slot (its crate's,
 /// `pickup::draw_glyph`); the shell has none.
 pub fn weapon_pickup(weapon: ActiveWeapon) -> Option<crate::pickup::PickupKind> {
     use crate::pickup::PickupKind;
@@ -621,8 +604,8 @@ pub const CLUSTER_GAP: f32 = 8.0;
 pub const ROW_GAP: f32 = 4.0;
 /// The least room between the left cluster and the right one.
 pub const SIDE_GAP: f32 = 16.0;
-/// A row of readouts: 32 pt, room for the crates' 24 pt symbols and the
-/// weapon queue's 28 pt icon squares with a margin.
+/// A row of readouts: 32 pt, room for the crates' 24 pt symbols with a
+/// margin.
 pub const ROW_H: f32 = 32.0;
 
 /// A button's height: a readouts' row under a mouse, a finger's on a touch
@@ -631,11 +614,12 @@ pub fn button_height(touch: bool) -> f32 {
     if touch { UI_TOUCH_PT } else { ROW_H }
 }
 
-/// One seat's vitals: health, shells and the speed and shield gauges on
-/// the first row, the weapon queue on the second (`render::hud`'s slot
-/// table fills it).
-pub const VITALS_W: f32 = 310.0;
-pub const VITALS_H: f32 = 2.0 * ROW_H;
+/// One seat's vitals, one row: health, shells, the special weapon carried
+/// and the speed and shield gauges (`render::hud`'s slot table fills it).
+/// At its widest it still leaves the right cluster its two-row width in the
+/// smallest area (`the_corners_fit_every_screen_inside_its_safe_area`).
+pub const VITALS_W: f32 = 368.0;
+pub const VITALS_H: f32 = ROW_H;
 /// The right cluster's first row: the mission word or the level button,
 /// the wave, the enemy count and the frog's gauge.
 pub const INFO_W: f32 = 304.0;

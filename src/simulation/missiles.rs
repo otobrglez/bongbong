@@ -238,7 +238,6 @@ mod tests {
     use crate::level::Mission;
     use crate::map::MapFile;
     use crate::simulation::{with_tank, with_tank_mut, Input};
-    use crate::tank::ActiveWeapon;
 
     const W: f32 = 1280.0;
     const H: f32 = 720.0;
@@ -262,7 +261,7 @@ mod tests {
         with_tank_mut(&game.world, entity, |t| {
             t.speed_scale = 0.0;
             t.shells_ammo = 0;
-            t.weapon_queue.clear();
+            t.disarm();
         });
         entity
     }
@@ -274,8 +273,8 @@ mod tests {
     /// Hand player 1 `count` missiles, facing right.
     fn arm(game: &mut Game, count: i32) {
         with_tank_mut(&game.world, player(game), |t| {
-            t.enqueue_weapon(ActiveWeapon::Missiles);
-            t.missile_ammo += count;
+            t.disarm();
+            t.missile_ammo = count;
             t.rotation = 90.0;
         });
     }

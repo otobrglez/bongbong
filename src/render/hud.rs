@@ -10,7 +10,7 @@ use crate::hud::{
     banner_size, clock_text, leave_dialog_rects, players_dialog_rects, result_layout, weapon_color, weapon_pickup, Corners, Fade, Hints,
     HudModel, NextLevel, PlayChrome, PlayerHud, ResultButtons, ResultView, SeatHud, BUILD_COLOR, DIALOG_W, DIM,
     HUD_TEXT_SIZE, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP, LINE_H, ONLINE_COLOR, RESULT_LINE_SIZE,
-    RESULT_SEATS_SIZE, RESULT_STATS_GAP, ROW_H, TEXT, UI_SMALL_TEXT, WEAPON_SLOTS,
+    RESULT_SEATS_SIZE, RESULT_STATS_GAP, ROW_H, TEXT, UI_SMALL_TEXT,
 };
 use crate::math::{Color, Rectangle};
 use crate::pickup::PickupKind;
@@ -18,7 +18,7 @@ use crate::text::{keys, text, width, Key};
 use crate::render::game::Textures;
 use crate::simulation::PlayerCount;
 use crate::tank::{team_color, HealthRamp, TEAM_COLORS};
-use crate::{Rect, MAX_DAMAGE, MAX_SEATS, PICKUP_GLYPH_CELL, SHELL_TEXTURE_SIZE};
+use crate::{Rect, MAX_DAMAGE, MAX_SEATS, PICKUP_GLYPH_CELL};
 
 const SPEED_COLOR: Color = Color::new(255, 210, 60, 255);
 const SHIELD_COLOR: Color = Color::new(170, 120, 255, 255);
@@ -27,7 +27,7 @@ const FROG_COLOR: Color = Color::new(120, 220, 90, 255);
 /// round without a frog, and a wrecked seat's chip.
 const SPENT: Color = Color::new(60, 60, 66, 255);
 /// A symbol whose readout is empty - no shells, no boost, no shield, no
-/// frog - drawn at this alpha, as an empty weapon slot's is.
+/// frog - drawn at this alpha.
 const SYMBOL_UNLIT: u8 = 70;
 /// A cluster's plate: the builder bar's dark, mostly opaque, so the
 /// readouts read over any ground under any sky. The minimap's plate too.
@@ -42,8 +42,8 @@ const SYMBOL: i32 = PICKUP_GLYPH_CELL as i32;
 /// The gap between a symbol and its number or bar.
 const SYMBOL_GAP: i32 = 4;
 
-// The vitals block's slots, from its left edge (`hud::VITALS_W` wide, two
-// `hud::ROW_H` rows). Fixed, so a number changing width never nudges what
+// The vitals block's slots, from its left edge (`hud::VITALS_W` wide, one
+// `hud::ROW_H` row). Fixed, so a number changing width never nudges what
 // sits after it; `corner_tests` pins that nothing overlaps.
 const V_HEALTH_SYMBOL: i32 = 0;
 const V_HP: i32 = 28;
@@ -55,16 +55,17 @@ const V_SHELL: i32 = 108;
 const V_SHELLS: i32 = 136;
 /// A count: three digits at `HUD_TEXT_SIZE`.
 const V_COUNT_W: i32 = 30;
-const V_SPEED: i32 = 172;
-const V_SHIELD: i32 = 244;
+/// The special weapon carried: its crate's symbol, then its count.
+const V_WEAPON: i32 = 172;
+const V_WEAPON_COUNT: i32 = 200;
+const V_SPEED: i32 = 236;
+const V_SHIELD: i32 = 302;
 /// A gauge's slot: its symbol, then its bar.
 const GAUGE_SLOT_W: i32 = 66;
 const GAUGE_W: i32 = GAUGE_SLOT_W - SYMBOL - SYMBOL_GAP;
 const GAUGE_H: i32 = 8;
-/// The weapon queue's slots on the second row: the pickup icon and the
-/// count beside it.
-const V_WEAPON_W: i32 = 62;
-const V_WEAPON_ICON: i32 = 28;
+/// What the weapon slot shows while the trigger fires shells.
+const NO_WEAPON: &str = "--";
 
 // The right cluster's first row (`hud::INFO_W` wide), from its left edge.
 /// The mission word and its wave count, or the level button and the count
@@ -171,16 +172,17 @@ pub(crate) fn draw_plate(d: &mut impl RaylibDraw, r: Rectangle, edge: Color, a: 
     d.draw_rectangle_rounded_lines_ex(r, 0.12, 6, 1.5, faded(edge, a));
 }
 
-/// One seat's vitals in `block`, each readout beside the symbol of the
-/// crate that fills it: health's cross with the health number and its gauge
-/// in the seat's own ring colours, ammo's shells with the shell count, the
-/// speed and shield gauges under the bolt and the shield; under them the
-/// weapon queue, the live weapon outlined in its accent.
+/// One seat's vitals in `block`, one row, each readout beside the symbol
+/// of the crate that fills it: health's cross with the health number and
+/// its gauge in the seat's own ring colours, ammo's shells with the shell
+/// count, the special weapon's crate with its count in its accent (`--`
+/// while there is none), and the speed and shield gauges under the bolt and
+/// the shield. Whichever of shells and the special the trigger fires is
+/// outlined.
 fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, hud: &PlayerHud, seat: u8, textures: &Textures, a: f32) {
     let (x, y) = (block.x.round() as i32, block.y.round() as i32);
     let row = ROW_H as i32;
     let text_y = y + (row - HUD_TEXT_SIZE) / 2;
-    let white = faded(Color::WHITE, a);
 
     draw_symbol(d, textures, PickupKind::Health, x + V_HEALTH_SYMBOL, y, row, hud.hp > 0, a);
     d.draw_text(&hud.hp.to_string(), x + V_HP, text_y, HUD_TEXT_SIZE, faded(hud.hp_color, a));
@@ -190,36 +192,25 @@ fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, hud: &PlayerHud, seat:
 
     draw_symbol(d, textures, PickupKind::Ammo, x + V_SHELL, y, row, hud.shells > 0, a);
     d.draw_text(&hud.shells.to_string(), x + V_SHELLS, text_y, HUD_TEXT_SIZE, faded(hud.shells_color, a));
-    if hud.shells_active {
-        active_outline(d, x + V_SHELL, y, V_SHELLS + V_COUNT_W - V_SHELL, row, faded(TEXT, a));
+    match hud.weapon {
+        None => {
+            active_outline(d, x + V_SHELL, y, V_SHELLS + V_COUNT_W - V_SHELL, row, faded(TEXT, a));
+            let slot_w = V_WEAPON_COUNT + V_COUNT_W - V_WEAPON;
+            let dash_x = x + V_WEAPON + (slot_w - width(NO_WEAPON, HUD_TEXT_SIZE)) / 2;
+            d.draw_text(NO_WEAPON, dash_x, text_y, HUD_TEXT_SIZE, faded(DIM, a));
+        }
+        Some(slot) => {
+            if let Some(kind) = weapon_pickup(slot.weapon) {
+                draw_symbol(d, textures, kind, x + V_WEAPON, y, row, true, a);
+            }
+            let color = faded(weapon_color(slot.weapon), a);
+            d.draw_text(&slot.count.to_string(), x + V_WEAPON_COUNT, text_y, HUD_TEXT_SIZE, color);
+            active_outline(d, x + V_WEAPON, y, V_WEAPON_COUNT + V_COUNT_W - V_WEAPON, row, color);
+        }
     }
 
     draw_symbol_gauge(d, textures, PickupKind::SpeedUp, x + V_SPEED, y, row, hud.speed, SPEED_COLOR, true, a);
     draw_symbol_gauge(d, textures, PickupKind::Shield, x + V_SHIELD, y, row, hud.shield, SHIELD_COLOR, true, a);
-
-    let y = y + row;
-    let text_y = y + (row - HUD_TEXT_SIZE) / 2;
-    for (i, slot) in hud.weapons.iter().enumerate().take(WEAPON_SLOTS) {
-        let sx = x + i as i32 * V_WEAPON_W;
-        let icon = V_WEAPON_ICON as f32;
-        let (ix, iy) = (sx as f32, (y + (row - V_WEAPON_ICON) / 2) as f32);
-        let tint = if slot.count > 0 { white } else { faded(Color::new(255, 255, 255, SYMBOL_UNLIT), a) };
-        // A special weapon is its crate's symbol at the symbol sheet's own
-        // scale, centred in the icon's square; the shell is the shell.
-        let (texture, src, dest) = match weapon_pickup(slot.weapon) {
-            Some(kind) => {
-                let g = PICKUP_GLYPH_CELL;
-                (textures.pickup_glyphs, crate::pickup::glyph_src(kind), Rectangle::new(ix + (icon - g) / 2.0, iy + (icon - g) / 2.0, g, g))
-            }
-            None => (textures.shells, Rectangle::new(0.0, 0.0, SHELL_TEXTURE_SIZE, SHELL_TEXTURE_SIZE), Rectangle::new(ix, iy, icon, icon)),
-        };
-        d.draw_texture_pro(texture, src, dest, Vector2::new(0.0, 0.0), 0.0, tint);
-        let (count, color) = if slot.count > 0 { (slot.count.to_string(), weapon_color(slot.weapon)) } else { ("--".to_string(), DIM) };
-        d.draw_text(&count, sx + V_WEAPON_ICON + 3, text_y, HUD_TEXT_SIZE, faded(color, a));
-        if slot.active {
-            active_outline(d, sx, y, V_WEAPON_W - 2, row, faded(weapon_color(slot.weapon), a));
-        }
-    }
 }
 
 /// The lamp row under a block's two (`hud::CornerShape::lamp_row`): the
@@ -582,9 +573,9 @@ pub fn draw_result(d: &mut impl RaylibDraw, area: Rect, view: &ResultView, count
 #[cfg(test)]
 mod corner_tests {
     use super::*;
-    use crate::hud::{CHIP_H, CHIP_W, INFO_TITLE_W, INFO_W, VITALS_W};
+    use crate::hud::{CHIP_H, CHIP_W, INFO_TITLE_W, INFO_W, VITALS_H, VITALS_W};
 
-    /// The vitals block's slots stay inside its width and its two rows and
+    /// The vitals block's slots stay inside its width and its one row and
     /// never overlap: the widest thing each holds is written down here, so
     /// growing a slot fails loudly rather than drawing over its neighbour.
     #[test]
@@ -595,19 +586,21 @@ mod corner_tests {
         assert!(V_HEALTH + V_HEALTH_W <= V_SHELL, "the health gauge runs into the ammo symbol");
         assert!(V_SHELL + SYMBOL + SYMBOL_GAP <= V_SHELLS);
         // The shells' outline reaches 2 pt past the slot on either side.
-        assert!(three_digits <= V_COUNT_W && V_SHELLS + V_COUNT_W + 2 <= V_SPEED, "the shells run into the speed gauge");
+        assert!(three_digits <= V_COUNT_W, "three digits overflow a count");
         assert!(V_HEALTH + V_HEALTH_W + 2 <= V_SHELL, "the shells' outline runs into the health gauge");
+        // The weapon slot: its outline clear of the shells' on its left and
+        // of the speed gauge on its right, its symbol of its count, and the
+        // dash it shows while there is no weapon inside it.
+        assert!(V_SHELLS + V_COUNT_W + 2 <= V_WEAPON - 2, "the shells' outline meets the weapon's");
+        assert!(V_WEAPON + SYMBOL + SYMBOL_GAP <= V_WEAPON_COUNT, "the weapon's symbol runs into its count");
+        assert!(V_WEAPON_COUNT + V_COUNT_W + 2 <= V_SPEED, "the weapon's count runs into the speed gauge");
+        assert!(width(NO_WEAPON, HUD_TEXT_SIZE) <= V_WEAPON_COUNT + V_COUNT_W - V_WEAPON);
         assert!(V_SPEED + GAUGE_SLOT_W <= V_SHIELD);
         assert_eq!(V_SHIELD + GAUGE_SLOT_W, VITALS_W as i32, "the first row is the block's width");
         assert!(GAUGE_W >= 4 + 2 * 10, "a bar needs its outline and room to drain in steps");
         // A symbol and a bar, both inside a row.
         assert!(SYMBOL <= ROW_H as i32 && GAUGE_H <= ROW_H as i32);
-        // The weapon queue: five slots across the second row, each an icon
-        // square that holds a symbol at its sheet's own scale, and three
-        // digits beside it.
-        assert_eq!(WEAPON_SLOTS as i32 * V_WEAPON_W, VITALS_W as i32);
-        assert!(PICKUP_GLYPH_CELL as i32 <= V_WEAPON_ICON && V_WEAPON_ICON <= ROW_H as i32);
-        assert!(V_WEAPON_ICON + 3 + three_digits <= V_WEAPON_W - 2, "a weapon count overflows its slot");
+        assert_eq!(VITALS_H, ROW_H, "the vitals are one row");
     }
 
     /// The right cluster's first row: the widest mission word with its

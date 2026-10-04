@@ -2060,12 +2060,12 @@ fn build<'a>() -> Node<Brain<'a>> {
             action("breach", act_breach),
         ]),
         // 3. Low on shells: back off and hold fire until recharged - unless
-        // a queued special weapon still has ammo, since firing that costs
+        // the special weapon carried still has ammo, since firing that costs
         // no shells at all and there's nothing to recharge by retreating
         // from. Deliberately short-circuits before `wants_retreat` so its
         // ammo hysteresis doesn't even latch on while a special covers for
-        // it; once the whole queue runs dry (`active_weapon()` falls back
-        // to Shell), the next tick evaluates fresh against whatever
+        // it; once the special runs dry (`active_weapon()` falls back to
+        // Shell), the next tick evaluates fresh against whatever
         // `shells_ammo` actually is by then.
         sequence(vec![
             condition(|b: &mut Brain| {
@@ -2138,17 +2138,16 @@ fn build<'a>() -> Node<Brain<'a>> {
             }),
             action("chase", act_chase),
         ]),
-        // 5.5. Opportunistically go collect a live Laser pickup when out of
-        // charges - reached only once nothing higher-priority (fleeing,
+        // 5.5. Opportunistically go collect a live Laser pickup while firing
+        // shells - reached only once nothing higher-priority (fleeing,
         // retreating, attacking, chasing) already claimed this tank, so it
         // never interrupts a fight, just fills idle patrol time with a
-        // purposeful detour instead. Under the FIFO inventory (see
-        // `Tank::weapon_queue`) collecting a weapon never downgrades what's
-        // currently firing - it just lines up behind it - so this tier and
-        // the two below are each gated only on "not already stocked with
-        // that kind"; which detour is worth taking *first* is expressed by
-        // their tier order (laser, then plasma, then missiles, then minigun
-        // - strongest first). See `act_seek_laser`. On a field map only a
+        // purposeful detour instead. A tank carries one special weapon and
+        // a crate replaces it (`Tank::take_weapon`), so this tier and the
+        // weapon tiers below are each gated on carrying none
+        // (`Tank::wants_pickup`); which detour is worth taking *first* is
+        // expressed by their tier order (laser, then plasma, then missiles,
+        // then minigun - strongest first). See `act_seek_laser`. On a field map only a
         // pickup inside the tank's home leash is worth the detour
         // (`Brain::seek`).
         sequence(vec![
@@ -2157,9 +2156,7 @@ fn build<'a>() -> Node<Brain<'a>> {
             }),
             action("seek_laser", act_seek_laser),
         ]),
-        // 5.6. Same idea for a live Plasma pickup - queueing it behind
-        // whatever is currently live is a pure gain (see tier 5.5's
-        // comment), so no gating on the live weapon.
+        // 5.6. Same idea for a live Plasma pickup (see tier 5.5's comment).
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.me.wants_pickup(PickupKind::Plasma)

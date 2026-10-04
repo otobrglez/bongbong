@@ -463,8 +463,9 @@ home indicator, keeps the centre clear, and anchors each section to a
 side at a constant size rather than scaling the whole UI. The thumbs rest
 at the bottom corners, where the floating stick already lives.
 
-- **Top-left:** health (number and gauge), shells, the weapon queue with
-  the active weapon outlined.
+- **Top-left:** health (number and gauge), shells, the special weapon
+  carried (one at a time), whichever of the two the trigger fires
+  outlined.
 - **Top-right:** the level and wave with the enemy count, then the
   buttons (levels, BUILD, ONLINE or LEAVE), then the seat chips of a room,
   then the minimap (not on phones).

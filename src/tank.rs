@@ -274,6 +274,12 @@ impl ActiveWeapon {
     }
 }
 
+/// The special weapons, each the cargo of its own crate. A tank carries at
+/// most one of them at a time (`Tank::take_weapon`); with none, or once it
+/// runs dry, the trigger fires shells.
+pub const SPECIAL_WEAPONS: [ActiveWeapon; 5] =
+    [ActiveWeapon::Laser, ActiveWeapon::Plasma, ActiveWeapon::Minigun, ActiveWeapon::Missiles, ActiveWeapon::Flamethrower];
+
 pub struct Tank {
     /// Which of the 12 tank archetypes in scifi_tanks_sheet.png this tank
     /// draws (see TANK_VARIANTS/TANK_SPRITE_ORDER in simulation.rs). The hull
@@ -416,11 +422,10 @@ pub struct Tank {
     /// Remaining shells this tank can fire before it must recharge.
     pub shells_ammo: i32,
     /// Remaining laser charges (see `pickup::PickupKind::Laser`,
-    /// `laser.rs`). While this is the live weapon (front of the stocked
-    /// `weapon_queue` - see `active_weapon`) and positive, firing consumes
-    /// one charge and resolves an instant beam hit instead of a normal
-    /// shell (see `simulation.rs`'s fire dispatch); a nonzero balance sits
-    /// waiting while an earlier-queued weapon holds the trigger.
+    /// `laser.rs`). While positive the laser is the weapon this tank
+    /// carries (`active_weapon`; one special at a time, `take_weapon`):
+    /// firing consumes one charge and resolves an instant beam hit instead
+    /// of a normal shell (see `simulation.rs`'s fire dispatch).
     pub laser_charges: i32,
     /// Which `laser::LaserVariant` the current charge batch fires as -
     /// rolled fresh on each `PickupKind::Laser` pickup (see
@@ -480,23 +485,6 @@ pub struct Tank {
     /// corrodes at `bio_slime_dps` and drives at `bio_slime_speed_factor`
     /// of its pace. Set, never added to; water washes it off.
     pub slime_timer: f32,
-    /// FIFO queue of this tank's collected special weapons. The inventory
-    /// rule: the weapon at the front keeps firing until its own ammo runs
-    /// dry - a fresh pickup never interrupts it, it lines up *behind* (see
-    /// `enqueue_weapon`, called from `Game::update`'s pickup-collection
-    /// block and the armed-spawn roll in `Game::init`) - then the next
-    /// queued weapon takes over, and only once every queued special is
-    /// spent does the trigger fall back to the default, always-recharging
-    /// shell cannon. `active_weapon` derives all of that by scanning this
-    /// queue; spent entries are skipped there and pruned lazily on the next
-    /// pickup (`enqueue_weapon`) rather than eagerly popped at the many
-    /// places ammo can hit zero. Ammo/Health/SpeedUp pickups never touch
-    /// this: an ammo crate is a resupply for the shell cannon, not a queue
-    /// entry. At most one entry per weapon kind ever sits here (a repeat
-    /// pickup of a still-stocked kind just tops up its ammo counter and
-    /// keeps its place in line), so the queue never exceeds the three
-    /// special kinds.
-    pub weapon_queue: Vec<ActiveWeapon>,
     /// Seconds remaining on a `pickup::PickupKind::SpeedUp` boost - while
     /// positive, `effective_speed` scales top speed by
     /// SPEED_BOOST_MULTIPLIER. Set (not added to) on pickup, so a fresh
@@ -669,7 +657,6 @@ impl Default for Tank {
             plasma_ammo: 0,
             plasma_variant: PlasmaVariant::Teal,
             missile_ammo: 0,
-            weapon_queue: Vec::new(),
             speed_boost_timer: 0.0,
             heat_shield_timer: 0.0,
             throttle: 1.0,
@@ -767,10 +754,12 @@ impl Tank {
         match kind {
             PickupKind::Health => self.damage > 0.0,
             PickupKind::Ammo => self.shells_ammo < tuning().max_shells,
-            PickupKind::Laser => self.laser_charges <= 0,
-            PickupKind::Plasma => self.plasma_ammo <= 0,
-            PickupKind::Minigun => self.minigun_ammo <= 0,
-            PickupKind::Missiles => self.missile_ammo <= 0,
+            // One special at a time, and a crate replaces what is carried:
+            // an enemy takes a weapon only while it fires shells, so it
+            // never trades away a stocked one.
+            PickupKind::Laser | PickupKind::Plasma | PickupKind::Minigun | PickupKind::Missiles => {
+                self.active_weapon() == ActiveWeapon::Shell
+            }
             PickupKind::SpeedUp => self.speed_boost_timer <= 0.0,
             PickupKind::Shield => self.shield_hp <= 0.0,
             // Player-only: the fuel tank does nothing for an enemy at all.
@@ -1059,29 +1048,21 @@ impl Tank {
         }
     }
 
-    /// Which weapon this tank's next trigger-pull actually fires: the
-    /// first entry in `weapon_queue` that still has ammo (FIFO - the front
-    /// weapon holds the trigger until it runs dry, then the next queued
-    /// pickup takes over; see that field's doc comment), or the default
-    /// shell cannon once every queued special is spent. Spent entries are
-    /// *skipped* here rather than eagerly popped at every place ammo can
-    /// hit zero (player dispatch, enemy dispatch, mid-burst) -
-    /// `enqueue_weapon` prunes them on the next pickup instead. Purely
-    /// picks the *tier* - whether that tier's own ammo is actually
-    /// sufficient to fire *this instant* is still checked at each dispatch
-    /// site in `Game::update` (a twin-barrel chassis needing 2 shells/bolts
-    /// per shot can still be `ActiveWeapon::Shell`/`Plasma` while short of
-    /// the 2 it needs, exactly as before this existed).
+    /// Which weapon this tank's next trigger-pull fires: the special
+    /// weapon it carries while that has ammo left, else the shell cannon.
+    /// A tank carries one special at a time (`take_weapon` empties every
+    /// other stock), so at most one stock is ever above zero; the fixed
+    /// `SPECIAL_WEAPONS` order only decides between stocks set by hand (a
+    /// test, the dev server's `set_tank`). Whether the stock covers *this*
+    /// shot is still checked at each dispatch site in `Game::update` (a
+    /// twin-barrel chassis needing 2 shells/bolts per shot can be
+    /// `ActiveWeapon::Shell`/`Plasma` while short of the 2 it needs).
     pub fn active_weapon(&self) -> ActiveWeapon {
-        self.weapon_queue
-            .iter()
-            .copied()
-            .find(|&w| self.weapon_ammo(w) > 0)
-            .unwrap_or(ActiveWeapon::Shell)
+        SPECIAL_WEAPONS.into_iter().find(|&w| self.weapon_ammo(w) > 0).unwrap_or(ActiveWeapon::Shell)
     }
 
     /// The ammo counter behind `weapon` - the one shared currency between
-    /// the queue logic (`active_weapon`/`enqueue_weapon`) and the fire
+    /// the inventory rule (`active_weapon`/`take_weapon`) and the fire
     /// dispatch sites that actually decrement these fields.
     pub(crate) fn weapon_ammo(&self, weapon: ActiveWeapon) -> i32 {
         match weapon {
@@ -1101,23 +1082,47 @@ impl Tank {
         self.weapon_ammo(ActiveWeapon::Flamethrower)
     }
 
-    /// Register a collected special-weapon pickup in `weapon_queue` (see
-    /// that field's doc comment for the FIFO inventory rule). Call this
-    /// *before* adding the pickup's ammo grant: it first prunes entries
-    /// whose ammo has run dry - which must still read zero at that point,
-    /// so a re-collected spent weapon re-enters at the *back* of the line
-    /// instead of resurrecting in its old slot - then appends `weapon`
-    /// unless a still-stocked batch of it is already queued (a repeat
-    /// pickup is then just a top-up that keeps its place in line).
-    pub fn enqueue_weapon(&mut self, weapon: ActiveWeapon) {
-        let queue = std::mem::take(&mut self.weapon_queue);
-        let kept: Vec<ActiveWeapon> = queue
-            .into_iter()
-            .filter(|&w| self.weapon_ammo(w) > 0)
-            .collect();
-        self.weapon_queue = kept;
-        if !self.weapon_queue.contains(&weapon) {
-            self.weapon_queue.push(weapon);
+    /// Take up `weapon` from its crate - the inventory rule: one special
+    /// weapon at a time, kept until its ammo is spent, then shells. A
+    /// different weapon replaces the one carried, whose ammo is lost; the
+    /// same weapon refills to one crate's worth (`*_per_pickup`), never
+    /// past it and never below what is left. The shell cannon is not part
+    /// of this: its magazine stays as it is. A burst or volley still in
+    /// the air when the weapon is swapped stops short, as one running dry
+    /// does (`tick_queued_shots`).
+    pub fn take_weapon(&mut self, weapon: ActiveWeapon) {
+        let t = tuning();
+        for other in SPECIAL_WEAPONS.into_iter().filter(|&w| w != weapon) {
+            self.empty_stock(other);
+        }
+        match weapon {
+            ActiveWeapon::Laser => self.laser_charges = self.laser_charges.max(t.laser_charges_per_pickup),
+            ActiveWeapon::Plasma => self.plasma_ammo = self.plasma_ammo.max(t.plasma_ammo_per_pickup),
+            ActiveWeapon::Minigun => self.minigun_ammo = self.minigun_ammo.max(t.minigun_ammo_per_pickup),
+            ActiveWeapon::Missiles => self.missile_ammo = self.missile_ammo.max(t.missile_ammo_per_pickup),
+            ActiveWeapon::Flamethrower => self.flame_fuel = self.flame_fuel.max(t.flame_fuel_per_pickup),
+            ActiveWeapon::Shell => {}
+        }
+    }
+
+    /// Put every special weapon down: the trigger fires shells.
+    pub fn disarm(&mut self) {
+        for weapon in SPECIAL_WEAPONS {
+            self.empty_stock(weapon);
+        }
+    }
+
+    fn empty_stock(&mut self, weapon: ActiveWeapon) {
+        match weapon {
+            ActiveWeapon::Laser => self.laser_charges = 0,
+            ActiveWeapon::Plasma => self.plasma_ammo = 0,
+            ActiveWeapon::Minigun => self.minigun_ammo = 0,
+            ActiveWeapon::Missiles => self.missile_ammo = 0,
+            ActiveWeapon::Flamethrower => {
+                self.flame_fuel = 0.0;
+                self.flame_held = false;
+            }
+            ActiveWeapon::Shell => {}
         }
     }
 
@@ -2299,68 +2304,67 @@ pub fn draw_tank_shadow(c: &mut impl Canvas, tank: &Tank, time: f32) {
     }
 }
 
-// The FIFO weapon-inventory rule (`weapon_queue`/`active_weapon`/
-// `enqueue_weapon`) is pure `Tank` logic - no physics, no rendering - so it
-// gets a real unit test rather than staying play-tested-only, same
-// reasoning as `pathfind.rs`'s tests (see CLAUDE.md's testing section).
-// Ammo is set directly here instead of going through `Game`'s pickup
-// collection; the contract under test is the queue's, and the collection
-// block's only obligations (enqueue before granting ammo, one call per
-// pickup) are documented on `enqueue_weapon` itself.
+// The one-weapon inventory rule (`active_weapon`/`take_weapon`/`disarm`)
+// is pure `Tank` logic - no physics, no rendering - so it gets a real unit
+// test rather than staying play-tested-only, same reasoning as
+// `pathfind.rs`'s tests (see CLAUDE.md's testing section). The collection
+// block in `Game::update` only calls `take_weapon` once per pickup; the
+// round itself is covered by `mechanics_tests`.
 #[cfg(test)]
-mod weapon_queue_tests {
+mod weapon_inventory_tests {
     use super::*;
 
     #[test]
-    fn fifo_weapon_rotation() {
-        let mut tank = Tank::default();
+    fn a_tank_carries_one_special_weapon_until_it_runs_dry() {
+        let t = tuning();
+        let mut tank = Tank { shells_ammo: 7, ..Tank::default() };
         assert_eq!(tank.active_weapon(), ActiveWeapon::Shell);
 
-        // A first pickup arms immediately (nothing ahead of it in line).
-        tank.enqueue_weapon(ActiveWeapon::Minigun);
-        tank.minigun_ammo += 40;
+        // A pickup arms its weapon at once, at one crate's worth.
+        tank.take_weapon(ActiveWeapon::Minigun);
         assert_eq!(tank.active_weapon(), ActiveWeapon::Minigun);
+        assert_eq!(tank.minigun_ammo, t.minigun_ammo_per_pickup);
 
-        // A later pickup queues *behind* the live weapon - it must not
-        // hijack the trigger.
-        tank.enqueue_weapon(ActiveWeapon::Laser);
-        tank.laser_charges += 3;
-        assert_eq!(tank.active_weapon(), ActiveWeapon::Minigun);
-
-        // Depleting the live weapon hands the trigger to the next in line.
-        tank.minigun_ammo = 0;
+        // A different weapon replaces it, and the old stock is gone.
+        tank.minigun_ammo -= 5;
+        tank.take_weapon(ActiveWeapon::Laser);
         assert_eq!(tank.active_weapon(), ActiveWeapon::Laser);
+        assert_eq!((tank.minigun_ammo, tank.laser_charges), (0, t.laser_charges_per_pickup));
 
-        // Re-collecting a spent weapon re-enters at the *back* of the
-        // line, never resurrecting in its old front slot.
-        tank.enqueue_weapon(ActiveWeapon::Minigun);
-        tank.minigun_ammo += 40;
-        assert_eq!(tank.active_weapon(), ActiveWeapon::Laser);
-
-        // The rotation keeps advancing in pickup order, and only a fully
-        // spent queue falls back to shells.
+        // Spent, the trigger falls back to shells - nothing was queued.
         tank.laser_charges = 0;
-        assert_eq!(tank.active_weapon(), ActiveWeapon::Minigun);
-        tank.minigun_ammo = 0;
         assert_eq!(tank.active_weapon(), ActiveWeapon::Shell);
+        assert_eq!(tank.shells_ammo, 7, "the shell magazine is never touched");
     }
 
     #[test]
-    fn topping_up_keeps_place_in_line() {
+    fn the_same_weapon_refills_to_one_crates_worth() {
+        let t = tuning();
         let mut tank = Tank::default();
-        tank.enqueue_weapon(ActiveWeapon::Plasma);
-        tank.plasma_ammo += 4;
-        tank.enqueue_weapon(ActiveWeapon::Minigun);
-        tank.minigun_ammo += 40;
-        // Re-collecting the still-stocked live weapon is a plain top-up: no
-        // duplicate entry, no change to the order.
-        tank.enqueue_weapon(ActiveWeapon::Plasma);
-        tank.plasma_ammo += 4;
-        assert_eq!(
-            tank.weapon_queue,
-            vec![ActiveWeapon::Plasma, ActiveWeapon::Minigun]
-        );
-        assert_eq!(tank.active_weapon(), ActiveWeapon::Plasma);
+        tank.take_weapon(ActiveWeapon::Plasma);
+        tank.plasma_ammo = 2;
+        tank.take_weapon(ActiveWeapon::Plasma);
+        assert_eq!(tank.plasma_ammo, t.plasma_ammo_per_pickup, "refilled, not stacked");
+        tank.take_weapon(ActiveWeapon::Plasma);
+        assert_eq!(tank.plasma_ammo, t.plasma_ammo_per_pickup, "a full stock stays full");
+        // A stock already past a crate's worth keeps what it has.
+        tank.plasma_ammo = 3 * t.plasma_ammo_per_pickup;
+        tank.take_weapon(ActiveWeapon::Plasma);
+        assert_eq!(tank.plasma_ammo, 3 * t.plasma_ammo_per_pickup);
+        // The flamethrower's fuel the same way, in seconds.
+        tank.take_weapon(ActiveWeapon::Flamethrower);
+        assert_eq!((tank.plasma_ammo, tank.flame_fuel), (0, t.flame_fuel_per_pickup));
+        tank.flame_fuel = 1.0;
+        tank.take_weapon(ActiveWeapon::Flamethrower);
+        assert_eq!(tank.flame_fuel, t.flame_fuel_per_pickup);
+    }
+
+    #[test]
+    fn disarming_puts_every_special_down() {
+        let mut tank = Tank { missile_ammo: 4, flame_fuel: 3.0, flame_held: true, ..Tank::default() };
+        tank.disarm();
+        assert_eq!(tank.active_weapon(), ActiveWeapon::Shell);
+        assert_eq!((tank.missile_ammo, tank.flame_fuel, tank.flame_held), (0, 0.0, false));
     }
 }
 

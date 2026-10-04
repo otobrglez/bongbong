@@ -111,10 +111,9 @@ scale centred on the icon, so every block stays: the crate where it fits
 that fills it, at the symbol sheet's own 24 pt: the vitals' health (the
 cross) and shells (ammo), the speed and shield gauges (the bolt and the
 shield), the frog's gauge in the right cluster (the frog pack) and the
-weapon queue (`hud::weapon_pickup`, 24 pt centred in a 28 pt slot). A symbol
-whose readout is empty - no shells, no boost, no shield, a spent weapon, no
-frog - is drawn dim (`SYMBOL_UNLIT`), so the row says at a glance what is
-running. The gauges carry no words.
+special weapon carried (`hud::weapon_pickup`; `--` while there is none). A
+symbol whose readout is empty - no shells, no boost, no shield, no frog - is
+drawn dim (`SYMBOL_UNLIT`), so the row says at a glance what is running. The gauges carry no words.
 
 ## 4. The shows
 

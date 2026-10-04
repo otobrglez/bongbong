@@ -49,12 +49,13 @@ against them. It is also the first weapon that can hurt its user.
 
 ## 3. The weapon
 
-- **Slot and queue.** `ActiveWeapon::Flamethrower`, granted by
-  `PickupKind::Flamethrower`. It joins `Tank::weapon_queue` through
-  `enqueue_weapon` like the other three, so the FIFO rule holds: a pickup
-  collected while the minigun is live waits its turn.
-- **Fuel.** `Tank::flame_fuel: f32`, seconds of burn. A pickup adds
-  `flame_fuel_per_pickup` (9 s); a second pickup stacks. The weapon counts
+- **One weapon at a time.** `ActiveWeapon::Flamethrower`, granted by
+  `PickupKind::Flamethrower` through `Tank::take_weapon` like the other
+  specials: a tank carries one special at a time, so the flamethrower
+  replaces the minigun it was carrying, and the trigger fires shells again
+  once the fuel is spent.
+- **Fuel.** `Tank::flame_fuel: f32`, seconds of burn. A pickup fills it to
+  `flame_fuel_per_pickup` (9 s); a second pickup refills, never stacks. The weapon counts
   as stocked while `flame_fuel > 0` (`weapon_ammo` reports the fuel
   rounded up, so the last fraction of a second still fires).
 - **Trigger.** Full-auto while held, like the laser and minigun, but with
@@ -213,7 +214,7 @@ One new `tunables!` group, `flamethrower`:
 
 `mechanics_tests`/`props_tests`, one per promised rule, headless:
 
-1. A pickup grants fuel and queues the weapon; holding fire drains it at
+1. A pickup grants fuel and arms the weapon; holding fire drains it at
    one second per second; the slot empties at zero.
 2. An enemy directly ahead inside the range takes damage; one behind, or
    beside the cone, takes none; one past a wall takes none.
