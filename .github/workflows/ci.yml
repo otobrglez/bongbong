@@ -82,3 +82,29 @@ jobs:
         uses: ./.github/actions/build-web
         with:
           cargo-features: --features dev-tools
+
+  # Builds the room server image on every push to master, pushing nothing,
+  # so the Dockerfile's dependency layer is in GitHub's cache (scope
+  # `rooms-server`) where every PR's room server build and every release
+  # tag's deploy can read it. Needs no Tailscale and no registry.
+  rooms-cache:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # A plain `docker buildx build` is given no Actions runtime token.
+      - name: Expose the Actions cache to buildx
+        uses: crazy-max/ghaction-github-runtime@v3
+
+      - name: Build the room server image into the cache
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --cache-from type=gha,scope=rooms-server \
+            --cache-to type=gha,scope=rooms-server,mode=max \
+            --output type=cacheonly \
+            .

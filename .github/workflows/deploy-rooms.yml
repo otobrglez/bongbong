@@ -72,17 +72,21 @@ jobs:
 
       # linux/amd64 only: the cluster's nodes are x86_64 and a second
       # platform would double a build that already compiles rapier.
-      # The build cache is the registry's `buildcache` tag (a plain
-      # `docker buildx build` cannot reach the GitHub Actions cache), which
-      # every PR's room server build reads too; mode=max keeps the
-      # Dockerfile's dependency layer, the one worth having.
+      # The build cache is GitHub's (scope `rooms-server`), written by
+      # ci.yml's `rooms-cache` job on master; a tag reads master's entries,
+      # so the Dockerfile's dependency layer comes back rather than being
+      # compiled. Nothing is written back: a tag's entries would be readable
+      # by that tag's re-runs alone. A plain `docker buildx build` is given
+      # no Actions runtime token, so the step before it exposes one.
+      - name: Expose the Actions cache to buildx
+        uses: crazy-max/ghaction-github-runtime@v3
+
       - name: Build and push
         run: |
           docker buildx build \
             --network host \
             --platform linux/amd64 \
-            --cache-from "type=registry,ref=$IMAGE:buildcache" \
-            --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
+            --cache-from type=gha,scope=rooms-server \
             -t "$IMAGE:latest" \
             -t "$IMAGE:${{ steps.get-tag.outputs.tag }}" \
             --push \
@@ -212,12 +216,12 @@ jobs:
           tags: tag:ci
 
       # Keeps the newest three release tags (`git describe` of a version
-      # tag, v...), as boo-run does. Only those are counted: `latest`, the
-      # `buildcache` and every open PR's `pr-<N>-...` images are left alone,
-      # since a preview pod that restarts pulls its image again (each PR's
-      # teardown prunes its own). The registry has no garbage collection of
-      # its own. The Accept list names every manifest kind the registry
-      # holds, an image index included, so the digest is the tag's own.
+      # tag, v...), as boo-run does. Only those are counted: `latest` and
+      # every open PR's `pr-<N>-...` images are left alone, since a preview
+      # pod that restarts pulls its image again (each PR's teardown prunes
+      # its own). The registry has no garbage collection of its own. The
+      # Accept list names every manifest kind the registry holds, an image
+      # index included, so the digest is the tag's own.
       - name: Cleanup old images
         run: |
           REPO=bongbong/bongbong-server

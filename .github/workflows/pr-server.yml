@@ -86,21 +86,22 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Building $IMAGE:$TAG"
 
-      # The build cache lives in the registry beside the images, where a
-      # plain `docker buildx build` can reach it (the GitHub Actions cache
-      # backend needs a runtime token a `run:` step is not given). This PR
-      # writes its own `pr-<N>-buildcache`, which the teardown prunes with
-      # its images, and reads it and the shared `buildcache` that production
-      # deploys write - never writing that one, so a PR that changes the
-      # dependencies cannot swap production's layers for its own.
+      # The build cache is GitHub's (scope `rooms-server`), which a run
+      # reads at the runner's own speed - the registry is reached through a
+      # Tailscale relay, too slow to pull the Dockerfile's dependency layer
+      # from. A PR reads master's entries, which ci.yml's `rooms-cache` job
+      # writes, and its own. A plain `docker buildx build` is given no
+      # Actions runtime token, so the step before it exposes one.
+      - name: Expose the Actions cache to buildx
+        uses: crazy-max/ghaction-github-runtime@v3
+
       - name: Build and push
         run: |
           docker buildx build \
             --network host \
             --platform linux/amd64 \
-            --cache-from "type=registry,ref=$IMAGE:buildcache" \
-            --cache-from "type=registry,ref=$IMAGE:pr-${{ github.event.pull_request.number }}-buildcache" \
-            --cache-to "type=registry,ref=$IMAGE:pr-${{ github.event.pull_request.number }}-buildcache,mode=max" \
+            --cache-from type=gha,scope=rooms-server \
+            --cache-to type=gha,scope=rooms-server,mode=max \
             -t "$IMAGE:${{ steps.tag.outputs.tag }}" \
             --push \
             .
@@ -250,13 +251,12 @@ jobs:
           kubectl delete namespace "$NAMESPACE" --ignore-not-found --wait=true --timeout=5m
           echo "Namespace $NAMESPACE is gone."
 
-      # Best effort: the preview's images and its build cache
-      # (`pr-<N>-buildcache`) are dead weight once the namespace is. A
-      # registry that refuses the delete is not worth failing a teardown
-      # over, so this never fails the job. The Accept list names every
-      # manifest kind the registry holds - an image is an index once it
-      # carries an attestation, and so is the build cache - so the digest
-      # is the tag's own.
+      # Best effort: the preview's images are dead weight once the
+      # namespace is. A registry that refuses the delete is not worth
+      # failing a teardown over, so this never fails the job. The Accept
+      # list names every manifest kind the registry holds - an image is an
+      # index once it carries an attestation - so the digest is the tag's
+      # own.
       - name: Prune this PR's images
         continue-on-error: true
         run: |

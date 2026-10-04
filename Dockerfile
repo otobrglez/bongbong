@@ -16,9 +16,9 @@
 # cargo-chef splits the build in two, so the dependencies (about half the
 # compile) are a layer of their own that only a change to a manifest or the
 # lockfile rebuilds; any other change starts from that layer and compiles
-# the game crate and the server alone. The layers are cached in the
-# registry (the `buildcache` tags deploy-rooms.yml and pr-server.yml
-# write), so a CI runner starting from nothing finds them.
+# the game crate and the server alone. In CI the layers are kept in
+# GitHub's Actions cache (scope `rooms-server`, written on master by
+# ci.yml's `rooms-cache` job), so a runner starting from nothing finds them.
 FROM rust:1.98.1-bookworm AS chef
 RUN cargo install cargo-chef --version 0.1.78 --locked
 WORKDIR /src
