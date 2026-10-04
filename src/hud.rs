@@ -320,7 +320,7 @@ pub fn hud_number_color(current: f32, max: f32) -> Color {
     }
 }
 
-/// The accent a special weapon's count and active outline are drawn in.
+/// The accent a special weapon's count and ammo pips are drawn in.
 pub fn weapon_color(weapon: ActiveWeapon) -> Color {
     match weapon {
         ActiveWeapon::Laser => HUD_LASER_COLOR,
