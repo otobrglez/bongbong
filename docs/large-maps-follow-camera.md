@@ -463,15 +463,16 @@ home indicator, keeps the centre clear, and anchors each section to a
 side at a constant size rather than scaling the whole UI. The thumbs rest
 at the bottom corners, where the floating stick already lives.
 
-- **Top-left:** health (number and gauge), shells, the special weapon
-  carried (one at a time), whichever of the two the trigger fires
-  outlined.
+- **Top-left:** health (number and gauge), what the trigger fires and
+  what it has left - the special weapon carried (one at a time), else
+  shells.
 - **Top-right:** the level and wave with the enemy count, then the
   buttons (levels, BUILD, ONLINE or LEAVE), then the seat chips of a room,
   then the minimap (not on phones).
 - **On the tank:** the health ring the player tank already draws
-  (`RingStyle::Gauge`), plus ammo pips on its lower arc, so the number
-  that matters most never needs a glance away.
+  (`RingStyle::Gauge`), plus ammo pips on its lower arc - the same
+  readout as the vitals', the special carried or else shells - so the
+  number that matters most never needs a glance away.
 - **Fade under action:** a cluster drops to about 35% opacity while a
   tank or a shell is under it.
 - **The bar remains** as the builder's toolbar, where tools matter more

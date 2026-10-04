@@ -272,6 +272,24 @@ impl ActiveWeapon {
             ActiveWeapon::Shell => "shell",
         }
     }
+
+    /// The ammo a full stock of this weapon holds: a full magazine of
+    /// shells (`max_shells`), a crate's worth of a special (`*_per_pickup`;
+    /// the flamethrower's fuel in whole seconds, rounded up, as
+    /// `Tank::weapon_ammo` counts it). What the trigger's gauges - the
+    /// vitals' count colour and the pips under a seat's ring - measure
+    /// against.
+    pub fn full_load(self) -> i32 {
+        let t = tuning();
+        match self {
+            ActiveWeapon::Laser => t.laser_charges_per_pickup,
+            ActiveWeapon::Plasma => t.plasma_ammo_per_pickup,
+            ActiveWeapon::Minigun => t.minigun_ammo_per_pickup,
+            ActiveWeapon::Missiles => t.missile_ammo_per_pickup,
+            ActiveWeapon::Flamethrower => t.flame_fuel_per_pickup.ceil() as i32,
+            ActiveWeapon::Shell => t.max_shells,
+        }
+    }
 }
 
 /// The special weapons, each the cargo of its own crate. A tank carries at
@@ -2189,7 +2207,7 @@ pub fn player_locate_active(elapsed: f32) -> bool {
 }
 
 /// The most pips the ammo gauge under a seat's ring shows (`ammo_pips`):
-/// past it a pip stands for more than one shell.
+/// past it a pip stands for more than one round.
 pub const AMMO_PIPS: i32 = 10;
 /// A pip's side and its dark rim's, in world pixels: whole 2 px blocks, so
 /// the gauge keeps the art's grid - a 4 px pip is still about 2.7 pt on a
@@ -2209,7 +2227,7 @@ const PIP_RIM: Color = Color::new(0x14, 0x14, 0x16, 210);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PipFill {
     Full,
-    /// It stands for more than one shell and holds only some of them.
+    /// It stands for more than one round and holds only some of them.
     Part,
     Empty,
 }
@@ -2229,21 +2247,21 @@ pub fn ring_outer_radius(tank: &Tank) -> f32 {
     tank.size() * tuning().shield_glow_radius_factor * 0.97 * ring_scale(tank)
 }
 
-/// The pips of an ammo gauge holding `shells` of `max`, round a ring of
-/// `radius` at `center`: one a shell up to `AMMO_PIPS`, else as many shells
+/// The pips of an ammo gauge holding `rounds` of `max`, round a ring of
+/// `radius` at `center`: one a round up to `AMMO_PIPS`, else as many rounds
 /// a pip as fit `max` into that many; centred on the ring's lowest point
 /// and laid along its lower arc left to right, full from the left, so the
-/// shells drain from the right; a pip that stands for several shells and
+/// rounds drain from the right; a pip that stands for several rounds and
 /// holds only some is part-full. Each centre is snapped to the 2 px block
 /// grid.
-pub fn ammo_pips(center: Position, radius: f32, shells: i32, max: i32) -> Vec<Pip> {
+pub fn ammo_pips(center: Position, radius: f32, rounds: i32, max: i32) -> Vec<Pip> {
     if max <= 0 {
         return Vec::new();
     }
     let per = (max + AMMO_PIPS - 1) / AMMO_PIPS;
     let slots = (max + per - 1) / per;
-    let shells = shells.clamp(0, max);
-    let (full, part) = (shells / per, shells % per > 0);
+    let rounds = rounds.clamp(0, max);
+    let (full, part) = (rounds / per, rounds % per > 0);
     let r = radius + PIP_OUT_PX;
     let step = PIP_PITCH_PX / r.max(1.0);
     // Raylib's angles: from +x, clockwise on the y-down screen, so a
@@ -2265,16 +2283,18 @@ pub fn ammo_pips(center: Position, radius: f32, shells: i32, max: i32) -> Vec<Pi
         .collect()
 }
 
-/// Draw a seat's shells as pips under its ring (`ammo_pips`): a dark rim
-/// round each pip, full ones in `color`, a part-full one at half its
-/// strength, empty ones dark. Only the local seats' tanks carry it, drawn
-/// over the hull with the locate label so neither the tank nor a night
-/// sky hides the number that matters most (`render::game`).
-pub fn draw_ammo_pips(c: &mut impl Canvas, tank: &Tank, shells: i32, max: i32, color: Color) {
+/// Draw what a seat's trigger has left as pips under its ring
+/// (`ammo_pips`; the special weapon carried, else shells -
+/// `hud::WeaponSlot::of`): a dark rim round each pip, full ones in `color`,
+/// a part-full one at half its strength, empty ones dark. Only the local
+/// seats' tanks carry it, drawn over the hull with the locate label so
+/// neither the tank nor a night sky hides the number that matters most
+/// (`render::game`).
+pub fn draw_ammo_pips(c: &mut impl Canvas, tank: &Tank, rounds: i32, max: i32, color: Color) {
     if tank.is_wreck() {
         return;
     }
-    let pips = ammo_pips(tank.ring_position, ring_outer_radius(tank), shells, max);
+    let pips = ammo_pips(tank.ring_position, ring_outer_radius(tank), rounds, max);
     for pip in &pips {
         c.fill_rect(pip.x - PIP_RIM_PX / 2, pip.y - PIP_RIM_PX / 2, PIP_RIM_PX, PIP_RIM_PX, PIP_RIM);
     }
@@ -2357,6 +2377,18 @@ mod weapon_inventory_tests {
         tank.flame_fuel = 1.0;
         tank.take_weapon(ActiveWeapon::Flamethrower);
         assert_eq!(tank.flame_fuel, t.flame_fuel_per_pickup);
+    }
+
+    /// A crate's worth of any special is exactly its full load, so the
+    /// gauges show a fresh pickup full; the shell magazine's is `max_shells`.
+    #[test]
+    fn a_fresh_crate_is_a_full_load() {
+        for weapon in SPECIAL_WEAPONS {
+            let mut tank = Tank::default();
+            tank.take_weapon(weapon);
+            assert_eq!(tank.weapon_ammo(weapon), weapon.full_load(), "{weapon:?}");
+        }
+        assert_eq!(ActiveWeapon::Shell.full_load(), tuning().max_shells);
     }
 
     #[test]

@@ -7,7 +7,7 @@
 use sola_raylib::prelude::*;
 
 use crate::hud::{
-    banner_size, clock_text, leave_dialog_rects, players_dialog_rects, result_layout, weapon_color, weapon_pickup, Corners, Fade, Hints,
+    banner_size, clock_text, leave_dialog_rects, players_dialog_rects, result_layout, weapon_pickup, Corners, Fade, Hints,
     HudModel, NextLevel, PlayChrome, PlayerHud, ResultButtons, ResultView, SeatHud, BUILD_COLOR, DIALOG_W, DIM,
     HUD_TEXT_SIZE, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP, LINE_H, ONLINE_COLOR, RESULT_LINE_SIZE,
     RESULT_SEATS_SIZE, RESULT_STATS_GAP, ROW_H, TEXT, UI_SMALL_TEXT,
@@ -51,21 +51,19 @@ const V_HP: i32 = 28;
 const V_HP_W: i32 = 30;
 const V_HEALTH: i32 = 62;
 const V_HEALTH_W: i32 = 40;
-const V_SHELL: i32 = 108;
-const V_SHELLS: i32 = 136;
+/// What the trigger fires: its crate's symbol (the ammo crate's for
+/// shells), then its count.
+const V_WEAPON: i32 = 108;
+const V_WEAPON_COUNT: i32 = 136;
 /// A count: three digits at `HUD_TEXT_SIZE`.
+#[cfg_attr(not(test), allow(dead_code))]
 const V_COUNT_W: i32 = 30;
-/// The special weapon carried: its crate's symbol, then its count.
-const V_WEAPON: i32 = 172;
-const V_WEAPON_COUNT: i32 = 200;
-const V_SPEED: i32 = 236;
-const V_SHIELD: i32 = 302;
+const V_SPEED: i32 = 172;
+const V_SHIELD: i32 = 244;
 /// A gauge's slot: its symbol, then its bar.
 const GAUGE_SLOT_W: i32 = 66;
 const GAUGE_W: i32 = GAUGE_SLOT_W - SYMBOL - SYMBOL_GAP;
 const GAUGE_H: i32 = 8;
-/// What the weapon slot shows while the trigger fires shells.
-const NO_WEAPON: &str = "--";
 
 // The right cluster's first row (`hud::INFO_W` wide), from its left edge.
 /// The mission word and its wave count, or the level button and the count
@@ -174,11 +172,10 @@ pub(crate) fn draw_plate(d: &mut impl RaylibDraw, r: Rectangle, edge: Color, a: 
 
 /// One seat's vitals in `block`, one row, each readout beside the symbol
 /// of the crate that fills it: health's cross with the health number and
-/// its gauge in the seat's own ring colours, ammo's shells with the shell
-/// count, the special weapon's crate with its count in its accent (`--`
-/// while there is none), and the speed and shield gauges under the bolt and
-/// the shield. Whichever of shells and the special the trigger fires is
-/// outlined.
+/// its gauge in the seat's own ring colours, what the trigger fires with
+/// what it has left - the special weapon carried in its accent, else the
+/// ammo crate's shells by how full the magazine is (`hud::WeaponSlot`) -,
+/// and the speed and shield gauges under the bolt and the shield.
 fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, hud: &PlayerHud, seat: u8, textures: &Textures, a: f32) {
     let (x, y) = (block.x.round() as i32, block.y.round() as i32);
     let row = ROW_H as i32;
@@ -190,24 +187,10 @@ fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, hud: &PlayerHud, seat:
     let ramp = HealthRamp::player(seat);
     draw_gauge(d, x + V_HEALTH, y + (row - GAUGE_H) / 2, V_HEALTH_W, GAUGE_H, health, faded(ramp.color(health), a), faded(DIM, a));
 
-    draw_symbol(d, textures, PickupKind::Ammo, x + V_SHELL, y, row, hud.shells > 0, a);
-    d.draw_text(&hud.shells.to_string(), x + V_SHELLS, text_y, HUD_TEXT_SIZE, faded(hud.shells_color, a));
-    match hud.weapon {
-        None => {
-            active_outline(d, x + V_SHELL, y, V_SHELLS + V_COUNT_W - V_SHELL, row, faded(TEXT, a));
-            let slot_w = V_WEAPON_COUNT + V_COUNT_W - V_WEAPON;
-            let dash_x = x + V_WEAPON + (slot_w - width(NO_WEAPON, HUD_TEXT_SIZE)) / 2;
-            d.draw_text(NO_WEAPON, dash_x, text_y, HUD_TEXT_SIZE, faded(DIM, a));
-        }
-        Some(slot) => {
-            if let Some(kind) = weapon_pickup(slot.weapon) {
-                draw_symbol(d, textures, kind, x + V_WEAPON, y, row, true, a);
-            }
-            let color = faded(weapon_color(slot.weapon), a);
-            d.draw_text(&slot.count.to_string(), x + V_WEAPON_COUNT, text_y, HUD_TEXT_SIZE, color);
-            active_outline(d, x + V_WEAPON, y, V_WEAPON_COUNT + V_COUNT_W - V_WEAPON, row, color);
-        }
-    }
+    let slot = hud.weapon;
+    let symbol = weapon_pickup(slot.weapon).unwrap_or(PickupKind::Ammo);
+    draw_symbol(d, textures, symbol, x + V_WEAPON, y, row, slot.count > 0, a);
+    d.draw_text(&slot.count.to_string(), x + V_WEAPON_COUNT, text_y, HUD_TEXT_SIZE, faded(slot.color, a));
 
     draw_symbol_gauge(d, textures, PickupKind::SpeedUp, x + V_SPEED, y, row, hud.speed, SPEED_COLOR, true, a);
     draw_symbol_gauge(d, textures, PickupKind::Shield, x + V_SHIELD, y, row, hud.shield, SHIELD_COLOR, true, a);
@@ -332,12 +315,6 @@ fn draw_seat_chip(d: &mut impl RaylibDraw, r: Rectangle, seat: &SeatHud, a: f32)
     let (x, y, w, h) = (r.x as i32, r.y as i32, r.width as i32, r.height as i32);
     d.draw_text(&label, x + (w - width(&label, UI_SMALL_TEXT)) / 2, y + 1, UI_SMALL_TEXT, color);
     draw_gauge(d, x, y + h - GAUGE_H - 1, w, GAUGE_H, seat.health, color, outline);
-}
-
-/// The outline marking which slot the trigger fires: 2 pt, inset one
-/// block from the row's top and bottom edges.
-fn active_outline(d: &mut impl RaylibDraw, x: i32, y: i32, w: i32, h: i32, color: Color) {
-    d.draw_rectangle_lines_ex(Rectangle::new((x - 2) as f32, (y + 2) as f32, (w + 4) as f32, (h - 4) as f32), 2.0, color);
 }
 
 /// A pixel tank seen from above, 7x7 blocks of 2 px (14x14): tracks down
@@ -583,18 +560,9 @@ mod corner_tests {
         let three_digits = width("100", HUD_TEXT_SIZE).max(width("888", HUD_TEXT_SIZE));
         assert!(V_HEALTH_SYMBOL + SYMBOL + SYMBOL_GAP <= V_HP, "the cross runs into the health number");
         assert!(three_digits <= V_HP_W && V_HP + V_HP_W <= V_HEALTH, "the health number runs into its gauge");
-        assert!(V_HEALTH + V_HEALTH_W <= V_SHELL, "the health gauge runs into the ammo symbol");
-        assert!(V_SHELL + SYMBOL + SYMBOL_GAP <= V_SHELLS);
-        // The shells' outline reaches 2 pt past the slot on either side.
-        assert!(three_digits <= V_COUNT_W, "three digits overflow a count");
-        assert!(V_HEALTH + V_HEALTH_W + 2 <= V_SHELL, "the shells' outline runs into the health gauge");
-        // The weapon slot: its outline clear of the shells' on its left and
-        // of the speed gauge on its right, its symbol of its count, and the
-        // dash it shows while there is no weapon inside it.
-        assert!(V_SHELLS + V_COUNT_W + 2 <= V_WEAPON - 2, "the shells' outline meets the weapon's");
+        assert!(V_HEALTH + V_HEALTH_W <= V_WEAPON, "the health gauge runs into the weapon's symbol");
         assert!(V_WEAPON + SYMBOL + SYMBOL_GAP <= V_WEAPON_COUNT, "the weapon's symbol runs into its count");
-        assert!(V_WEAPON_COUNT + V_COUNT_W + 2 <= V_SPEED, "the weapon's count runs into the speed gauge");
-        assert!(width(NO_WEAPON, HUD_TEXT_SIZE) <= V_WEAPON_COUNT + V_COUNT_W - V_WEAPON);
+        assert!(three_digits <= V_COUNT_W && V_WEAPON_COUNT + V_COUNT_W <= V_SPEED, "the count runs into the speed gauge");
         assert!(V_SPEED + GAUGE_SLOT_W <= V_SHIELD);
         assert_eq!(V_SHIELD + GAUGE_SLOT_W, VITALS_W as i32, "the first row is the block's width");
         assert!(GAUGE_W >= 4 + 2 * 10, "a bar needs its outline and room to drain in steps");

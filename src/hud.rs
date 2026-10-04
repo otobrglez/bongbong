@@ -14,9 +14,9 @@
 //! tables and the drawing are the `render` half.
 //!
 //! The left cluster is the seat's vitals, one row: health as a number and
-//! a gauge, shells, the special weapon carried (a tank holds one at a time,
-//! `Tank::take_weapon`), the speed and shield gauges, whichever of shells
-//! and the special the trigger fires outlined. A two-player couch round
+//! a gauge, what the trigger fires with what it has left - the special
+//! weapon carried (a tank holds one at a time, `Tank::take_weapon`), else
+//! shells -, and the speed and shield gauges. A two-player couch round
 //! (docs/two-players.md) gives player 2 a block of its own beside player
 //! 1's, or under it on a narrow window, each edged in its player's team
 //! colour.
@@ -55,8 +55,8 @@ pub fn version_line() -> String {
     format!("v{} @otobrglez", env!("CARGO_PKG_VERSION"))
 }
 
-/// Accent colours for the special weapons: the weapon slot's count and
-/// outline while that weapon is carried.
+/// Accent colours for the special weapons: the count the vitals show and
+/// the pips under the ring while that weapon is carried.
 pub const HUD_LASER_COLOR: Color = Color::new(255, 60, 160, 255);
 pub const HUD_PLASMA_COLOR: Color = Color::new(60, 220, 200, 255);
 pub const HUD_MINIGUN_COLOR: Color = Color::new(190, 205, 215, 255);
@@ -72,13 +72,33 @@ pub const HUD_FLAME_COLOR: Color = Color::new(255, 140, 40, 255);
 pub const BAR_FILL: Color = Color::new(21, 21, 21, 255);
 pub const TEXT: Color = Color::WHITE;
 pub const DIM: Color = Color::new(110, 110, 118, 255);
-/// The special weapon a tank carries, as its vitals show it.
+/// What a tank's trigger fires, as its vitals and the pips under its ring
+/// show it: the special weapon it carries, else shells - one readout,
+/// since a tank carries one special at a time and fires it until it is
+/// spent (`Tank::take_weapon`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WeaponSlot {
     pub weapon: ActiveWeapon,
-    /// Charges, rounds or seconds of fuel left; always above zero, since a
-    /// spent weapon is no longer carried.
+    /// Shells, charges, rounds or seconds of fuel left.
     pub count: i32,
+    /// What a full stock holds (`ActiveWeapon::full_load`).
+    pub full: i32,
+    /// The count's colour: shells by how full the magazine is
+    /// (`hud_number_color`), a special in its accent (`weapon_color`).
+    pub color: Color,
+}
+
+impl WeaponSlot {
+    /// `tank`'s trigger as the vitals and the ring's pips show it.
+    pub fn of(tank: &Tank) -> WeaponSlot {
+        let weapon = tank.active_weapon();
+        let (count, full) = (tank.weapon_ammo(weapon), weapon.full_load());
+        let color = match weapon {
+            ActiveWeapon::Shell => hud_number_color(count as f32, full as f32),
+            special => weapon_color(special),
+        };
+        WeaponSlot { weapon, count, full, color }
+    }
 }
 
 /// One player's readouts.
@@ -86,11 +106,8 @@ pub struct WeaponSlot {
 pub struct PlayerHud {
     pub hp: i32,
     pub hp_color: Color,
-    pub shells: i32,
-    pub shells_color: Color,
-    /// The special weapon carried, which the trigger fires instead of
-    /// shells; `None` while it fires shells.
-    pub weapon: Option<WeaponSlot>,
+    /// What the trigger fires and what it has left.
+    pub weapon: WeaponSlot,
     /// Fraction of a speed boost left, 0 when none is running.
     pub speed: f32,
     /// Fraction of a shield left, 0 when none is running.
@@ -108,9 +125,7 @@ impl PlayerHud {
         PlayerHud {
             hp: 0,
             hp_color: hud_number_color(0.0, MAX_DAMAGE),
-            shells: 0,
-            shells_color: hud_number_color(0.0, tuning().max_shells as f32),
-            weapon: None,
+            weapon: WeaponSlot { weapon: ActiveWeapon::Shell, count: 0, full: tuning().max_shells, color: hud_number_color(0.0, 1.0) },
             speed: 0.0,
             shield: 0.0,
             lamps: None,
@@ -130,15 +145,10 @@ impl PlayerHud {
                 0.0
             };
             let hp = (MAX_DAMAGE - tank.damage).max(0.0).round() as i32;
-            let active = tank.active_weapon();
-            // Fuel in whole seconds, rounded up.
-            let weapon = (active != ActiveWeapon::Shell).then(|| WeaponSlot { weapon: active, count: tank.weapon_ammo(active) });
             PlayerHud {
                 hp,
                 hp_color: hud_number_color(hp as f32, MAX_DAMAGE),
-                shells: tank.shells_ammo,
-                shells_color: hud_number_color(tank.shells_ammo as f32, t.max_shells as f32),
-                weapon,
+                weapon: WeaponSlot::of(tank),
                 speed: boost,
                 shield: tank.shield_charge(),
                 lamps: game.lamps_in_play().then(|| game.player_index(entity).map_or(0, |seat| game.lamps_left(seat as usize))),
@@ -614,11 +624,10 @@ pub fn button_height(touch: bool) -> f32 {
     if touch { UI_TOUCH_PT } else { ROW_H }
 }
 
-/// One seat's vitals, one row: health, shells, the special weapon carried
-/// and the speed and shield gauges (`render::hud`'s slot table fills it).
-/// At its widest it still leaves the right cluster its two-row width in the
-/// smallest area (`the_corners_fit_every_screen_inside_its_safe_area`).
-pub const VITALS_W: f32 = 368.0;
+/// One seat's vitals, one row: health, what the trigger fires (the special
+/// carried, else shells) and the speed and shield gauges (`render::hud`'s
+/// slot table fills it).
+pub const VITALS_W: f32 = 310.0;
 pub const VITALS_H: f32 = ROW_H;
 /// The right cluster's first row: the mission word or the level button,
 /// the wave, the enemy count and the frog's gauge.
@@ -1411,9 +1420,29 @@ mod hud_tests {
         }
     }
 
+    /// The vitals show what the trigger fires and nothing else: shells
+    /// against the magazine while no special is carried, the special in
+    /// its accent against a crate's worth once one is - the same readout
+    /// the pips under the ring are drawn from.
+    #[test]
+    fn the_trigger_readout_is_the_special_carried_else_shells() {
+        let t = tuning();
+        let mut tank = Tank { shells_ammo: 7, ..Tank::default() };
+        let shells = WeaponSlot::of(&tank);
+        assert_eq!((shells.weapon, shells.count, shells.full), (ActiveWeapon::Shell, 7, t.max_shells));
+        assert_eq!(shells.color, hud_number_color(7.0, t.max_shells as f32));
+        tank.take_weapon(ActiveWeapon::Laser);
+        tank.laser_charges -= 2;
+        let laser = WeaponSlot::of(&tank);
+        assert_eq!((laser.weapon, laser.count, laser.full), (ActiveWeapon::Laser, t.laser_charges_per_pickup - 2, t.laser_charges_per_pickup));
+        assert_eq!(laser.color, HUD_LASER_COLOR, "no shells while a special is carried");
+        tank.laser_charges = 0;
+        assert_eq!(WeaponSlot::of(&tank).count, 7, "spent, back to the shells");
+    }
+
     /// The block is the local seat's, whichever seat that is, and the
     /// chips are all the others - so a four-seat room at seat 2 reads its
-    /// own shells in the block and seats 1, 2 and 4 in the strip.
+    /// own ammo in the block and seats 1, 2 and 4 in the strip.
     #[test]
     fn the_block_is_the_local_seats_and_the_chips_are_the_rest() {
         let game = round(4);
@@ -1424,7 +1453,7 @@ mod hud_tests {
         for seat in 0..4u8 {
             let model = HudModel::gather(&game, Some(seat));
             assert_eq!(model.layout, HudLayout::Compact);
-            assert_eq!(model.local.shells, 3 + seat as i32, "seat {seat}'s own block");
+            assert_eq!(model.local.weapon.count, 3 + seat as i32, "seat {seat}'s own block");
             assert_eq!(model.second, None, "the compact layout pairs nothing");
             let listed: Vec<u8> = model.others.iter().map(|s| s.seat).collect();
             assert_eq!(listed, (0..4u8).filter(|&i| i != seat).collect::<Vec<_>>());
@@ -1433,7 +1462,7 @@ mod hud_tests {
         // A couch round of four is the same layout, read from seat 0.
         let couch = HudModel::gather(&game, None);
         assert_eq!(couch.layout, HudLayout::Compact);
-        assert_eq!(couch.local.shells, 3);
+        assert_eq!(couch.local.weapon.count, 3);
         assert_eq!(couch.others.iter().map(|s| s.seat).collect::<Vec<_>>(), vec![1, 2, 3]);
     }
 

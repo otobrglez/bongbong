@@ -109,11 +109,12 @@ scale centred on the icon, so every block stays: the crate where it fits
 
 **The HUD** (`render::hud`) labels every readout with the symbol of the crate
 that fills it, at the symbol sheet's own 24 pt: the vitals' health (the
-cross) and shells (ammo), the speed and shield gauges (the bolt and the
-shield), the frog's gauge in the right cluster (the frog pack) and the
-special weapon carried (`hud::weapon_pickup`; `--` while there is none). A
-symbol whose readout is empty - no shells, no boost, no shield, no frog - is
-drawn dim (`SYMBOL_UNLIT`), so the row says at a glance what is running. The gauges carry no words.
+cross) and what the trigger fires - the special weapon carried
+(`hud::weapon_pickup`), else shells (ammo) -, the speed and shield gauges
+(the bolt and the shield) and the frog's gauge in the right cluster (the
+frog pack). A symbol whose readout is empty - no shells, no boost, no
+shield, no frog - is drawn dim (`SYMBOL_UNLIT`), so the row says at a glance
+what is running. The gauges carry no words.
 
 ## 4. The shows
 

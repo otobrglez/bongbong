@@ -1418,16 +1418,16 @@ impl Game {
             for entity in self.players().into_iter().flatten() {
                 crate::simulation::with_tank(&self.world, entity, |tank| draw_player_label(d, tank, self.time));
             }
-            // The shells this screen's seats have left, as pips along the
-            // lower arc of their rings: the number that matters most,
-            // where the eye already is.
-            let max = tuning().max_shells;
+            // What this screen's seats' triggers have left - the special
+            // carried, else shells, the vitals' one readout
+            // (`hud::WeaponSlot`) - as pips along the lower arc of their
+            // rings: the number that matters most, where the eye already is.
             for &seat in ammo_seats {
                 let Some(entity) = self.seat(seat as usize) else { continue };
                 crate::simulation::with_tank(&self.world, entity, |tank| {
                     if !culled(cull, tank.position) {
-                        let color = crate::hud::hud_number_color(tank.shells_ammo as f32, max as f32);
-                        crate::tank::draw_ammo_pips(&mut GpuCanvas::new(d, textures), tank, tank.shells_ammo, max, color);
+                        let slot = crate::hud::WeaponSlot::of(tank);
+                        crate::tank::draw_ammo_pips(&mut GpuCanvas::new(d, textures), tank, slot.count, slot.full, slot.color);
                     }
                 });
             }
