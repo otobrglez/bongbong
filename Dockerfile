@@ -13,23 +13,33 @@
 # .github/actions/build-web/action.yml and devenv.nix's
 # languages.rust.version.
 
-FROM rust:1.98.1-bookworm AS build
+# cargo-chef splits the build in two, so the dependencies (about half the
+# compile) are a layer of their own that only a change to a manifest or the
+# lockfile rebuilds; any other change starts from that layer and compiles
+# the game crate and the server alone. The layers are cached in the
+# registry (the `buildcache` tags deploy-rooms.yml and pr-server.yml
+# write), so a CI runner starting from nothing finds them.
+FROM rust:1.98.1-bookworm AS chef
+RUN cargo install cargo-chef --version 0.1.78 --locked
 WORKDIR /src
-COPY . .
 
-# The cache mounts make a rebuild on this machine cheap; in CI the layer
-# cache does that job instead, so neither is load-bearing. The binary is
-# copied out inside the same RUN because a cache mount is not part of the
-# layer it was mounted into.
-RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,target=/src/target,sharing=locked \
-    set -eux; \
+# The recipe: every manifest and the lockfile, with the sources left out
+# and the workspace's own versions masked, so a version bump or an edit
+# to the code leaves it, and the dependency layer, as it was.
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS build
+COPY --from=planner /src/recipe.json recipe.json
+RUN cargo chef cook --release -p bongbong-server --recipe-path recipe.json
+COPY . .
+RUN set -eux; \
     if cargo tree -p bongbong-server -e normal | grep -q sola; then \
       echo "raylib is in the room server's graph; the image must stay headless" >&2; \
       exit 1; \
     fi; \
-    cargo build --release -p bongbong-server; \
-    cp target/release/bongbong-server /bongbong-server
+    cargo build --release -p bongbong-server
 
 # distroless/cc carries glibc and libgcc, which the release binary links
 # against; rustls' `ring` needs no OpenSSL, so nothing else is wanted.
@@ -40,7 +50,7 @@ FROM gcr.io/distroless/cc-debian12
 # (the deployment routes only the first through its Ingress).
 EXPOSE 4848/tcp 4850/tcp
 
-COPY --from=build /bongbong-server /bongbong-server
+COPY --from=build /src/target/release/bongbong-server /bongbong-server
 
 # 0.0.0.0 because a container's loopback is its own. No `--insecure`: the
 # flag only declares that nothing terminates TLS in front, and here the

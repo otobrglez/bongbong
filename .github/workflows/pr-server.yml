@@ -86,13 +86,21 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Building $IMAGE:$TAG"
 
+      # The build cache lives in the registry beside the images, where a
+      # plain `docker buildx build` can reach it (the GitHub Actions cache
+      # backend needs a runtime token a `run:` step is not given). This PR
+      # writes its own `pr-<N>-buildcache`, which the teardown prunes with
+      # its images, and reads it and the shared `buildcache` that production
+      # deploys write - never writing that one, so a PR that changes the
+      # dependencies cannot swap production's layers for its own.
       - name: Build and push
         run: |
           docker buildx build \
             --network host \
             --platform linux/amd64 \
-            --cache-from type=gha \
-            --cache-to type=gha,mode=max \
+            --cache-from "type=registry,ref=$IMAGE:buildcache" \
+            --cache-from "type=registry,ref=$IMAGE:pr-${{ github.event.pull_request.number }}-buildcache" \
+            --cache-to "type=registry,ref=$IMAGE:pr-${{ github.event.pull_request.number }}-buildcache,mode=max" \
             -t "$IMAGE:${{ steps.tag.outputs.tag }}" \
             --push \
             .
@@ -242,21 +250,26 @@ jobs:
           kubectl delete namespace "$NAMESPACE" --ignore-not-found --wait=true --timeout=5m
           echo "Namespace $NAMESPACE is gone."
 
-      # Best effort: the preview's images are dead weight once the
-      # namespace is. A registry that refuses the delete is not worth
-      # failing a teardown over, so this never fails the job.
+      # Best effort: the preview's images and its build cache
+      # (`pr-<N>-buildcache`) are dead weight once the namespace is. A
+      # registry that refuses the delete is not worth failing a teardown
+      # over, so this never fails the job. The Accept list names every
+      # manifest kind the registry holds - an image is an index once it
+      # carries an attestation, and so is the build cache - so the digest
+      # is the tag's own.
       - name: Prune this PR's images
         continue-on-error: true
         run: |
           REPO=bongbong/bongbong-server
           AUTH="${{ secrets.DOCKER_REGISTRY_USERNAME }}:${{ secrets.DOCKER_REGISTRY_PASSWORD }}"
+          ACCEPT="application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json"
           PREFIX="pr-${{ github.event.pull_request.number }}-"
           TAGS=$(curl -s -u "$AUTH" "https://$REGISTRY/v2/$REPO/tags/list" \
             | jq -r '.tags[]?' | grep "^$PREFIX" || true)
           for tag in $TAGS; do
             echo "Deleting $REPO:$tag"
             DIGEST=$(curl -s -o /dev/null -w '%header{docker-content-digest}' \
-              -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+              -H "Accept: $ACCEPT" \
               -u "$AUTH" "https://$REGISTRY/v2/$REPO/manifests/$tag")
             [ -n "$DIGEST" ] && curl -sS -X DELETE -u "$AUTH" \
               "https://$REGISTRY/v2/$REPO/manifests/$DIGEST"

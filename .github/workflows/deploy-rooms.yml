@@ -72,13 +72,17 @@ jobs:
 
       # linux/amd64 only: the cluster's nodes are x86_64 and a second
       # platform would double a build that already compiles rapier.
+      # The build cache is the registry's `buildcache` tag (a plain
+      # `docker buildx build` cannot reach the GitHub Actions cache), which
+      # every PR's room server build reads too; mode=max keeps the
+      # Dockerfile's dependency layer, the one worth having.
       - name: Build and push
         run: |
           docker buildx build \
             --network host \
             --platform linux/amd64 \
-            --cache-from type=gha \
-            --cache-to type=gha,mode=max \
+            --cache-from "type=registry,ref=$IMAGE:buildcache" \
+            --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
             -t "$IMAGE:latest" \
             -t "$IMAGE:${{ steps.get-tag.outputs.tag }}" \
             --push \
@@ -207,19 +211,25 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
 
-      # Keeps the newest three tags besides `latest`, as boo-run does.
-      # The registry has no garbage collection of its own.
+      # Keeps the newest three release tags (`git describe` of a version
+      # tag, v...), as boo-run does. Only those are counted: `latest`, the
+      # `buildcache` and every open PR's `pr-<N>-...` images are left alone,
+      # since a preview pod that restarts pulls its image again (each PR's
+      # teardown prunes its own). The registry has no garbage collection of
+      # its own. The Accept list names every manifest kind the registry
+      # holds, an image index included, so the digest is the tag's own.
       - name: Cleanup old images
         run: |
           REPO=bongbong/bongbong-server
           AUTH="${{ secrets.DOCKER_REGISTRY_USERNAME }}:${{ secrets.DOCKER_REGISTRY_PASSWORD }}"
+          ACCEPT="application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json"
           TAGS=$(curl -s -u "$AUTH" "https://$REGISTRY/v2/$REPO/tags/list" \
-            | jq -r '.tags[]?' | grep -v '^latest$' | sort -V -r)
+            | jq -r '.tags[]?' | grep -E '^v[0-9]' | sort -V -r)
           echo "$TAGS" | tail -n +4 | while read -r tag; do
             [ -z "$tag" ] && continue
             echo "Deleting $REPO:$tag"
             DIGEST=$(curl -s -o /dev/null -w '%header{docker-content-digest}' \
-              -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+              -H "Accept: $ACCEPT" \
               -u "$AUTH" "https://$REGISTRY/v2/$REPO/manifests/$tag")
             [ -z "$DIGEST" ] && { echo "  no digest, skipping"; continue; }
             curl -sS -X DELETE -u "$AUTH" "https://$REGISTRY/v2/$REPO/manifests/$DIGEST"
