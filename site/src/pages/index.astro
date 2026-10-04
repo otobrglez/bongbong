@@ -241,8 +241,10 @@
               gap: 14px;
               margin: 0;
               padding: 0 24px;
-              background: #1b2118;
-              color: #cfe0c4;
+              /* The page's own background and its light text, so the card
+                 reads as the page rather than a coloured panel. */
+              background: #151515;
+              color: #ddd;
               font-size: calc($font-size * 1.4);
               text-align: center;
             }
@@ -253,7 +255,7 @@
               content: "";
               width: 54px;
               height: 30px;
-              border: 3px solid #8fd07a;
+              border: 3px solid #fff;
               border-radius: 6px;
             }
           }
