@@ -279,8 +279,10 @@ impl HudModel {
             _ => Vec::new(),
         };
         // The mission as one word, in the language on screen; the data
-        // name (`Mission::name`) is never shown.
-        let mut title = crate::text::text().get(crate::text::mission_title(game.mission));
+        // name (`Mission::name`) is never shown. A training round says so
+        // whatever its mission.
+        let mission = if game.map.training.is_some() { crate::text::keys::MISSION_TRAINING } else { crate::text::mission_title(game.mission) };
+        let mut title = crate::text::text().get(mission);
         let wave = game.wave_status();
         if let Some(w) = &wave {
             title.push_str(&format!(" {}/{}", w.index, w.total));

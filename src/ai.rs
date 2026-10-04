@@ -162,6 +162,10 @@ impl Role {
 pub struct Ai {
     /// What this enemy is for - see `Role`. Set at spawn, never changes.
     pub role: Role,
+    /// A training dummy (docs/training-stage.md): it never fires at a
+    /// seat (`Brain::may_fire_at_seat`), so with the hunter's role it goes
+    /// only for the frog. False for every other tank.
+    pub frog_only: bool,
     /// Roaming target used while patrolling.
     waypoint: Position,
     /// Seconds until we pick a fresh patrol waypoint (avoids per-frame jitter).
@@ -379,6 +383,7 @@ impl Default for Ai {
     fn default() -> Self {
         Self {
             role: Role::Player,
+            frog_only: false,
             waypoint: Position::default(),
             retarget_timer: 0.0,
             fire_timer: tuning().enemy_fire_interval,
@@ -1718,8 +1723,10 @@ impl Brain<'_> {
     /// reaches past `enemy_attack_range`, so a shot lined up on a row is
     /// never held back by it; up and down it is shorter, and a tank lined
     /// up on a column closes in before it fires.
+    ///
+    /// A training dummy (`Ai::frog_only`) never may.
     fn may_fire_at_seat(&self) -> bool {
-        in_sight_box(self.player.position, self.me.position)
+        !self.ai.frog_only && in_sight_box(self.player.position, self.me.position)
     }
 
     /// This tank's own position to the nearest currently-live pickup of

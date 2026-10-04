@@ -35,6 +35,7 @@ mod nav;
 pub mod present;
 mod props;
 mod towers;
+pub mod training;
 mod volcano;
 pub use props::{FlyingDrum, GroundFire};
 pub(crate) use props::tile_rubble;
@@ -470,6 +471,16 @@ pub enum Event {
     /// A tower pack restored the `side` tower at (`x`, `y`) to full health
     /// and put it out.
     TowerRepaired { side: Side, x: f32, y: f32 },
+    /// A training beat (1-based) was done (docs/training-stage.md).
+    BeatDone { beat: usize },
+    /// A training door of beat `beat` opened at (`x`, `y`): its cell is
+    /// open ground from now on.
+    DoorOpened { beat: usize, x: f32, y: f32 },
+    /// Seat `seat` took the training flag at (`x`, `y`).
+    FlagTaken { seat: usize, x: f32, y: f32 },
+    /// A training round's fallen frog got up again at (`x`, `y`), and the
+    /// beat it fell in starts over.
+    FrogRevived { x: f32, y: f32 },
     /// Rapier quarantined `bodies` bodies and `colliders` colliders on one
     /// fixed step because their state went non-finite (see
     /// `Physics::quarantined`). A solver blow-up, never normal play - the
@@ -824,6 +835,9 @@ pub struct Game {
     /// The lanterns the seats have set down this round (docs/volcano.md,
     /// `lamp::Lantern`), in the order they were set down.
     pub(crate) lanterns: Vec<crate::lamp::Lantern>,
+    /// A training map's run (docs/training-stage.md, `training.rs`):
+    /// `None` on every other map, which runs none of it.
+    pub(crate) training: Option<training::Run>,
     /// The next lantern's id (`lamp::Lantern::id`), counted up per round.
     lantern_next_id: u16,
     /// Lanterns each seat has left to set down this round
@@ -895,6 +909,10 @@ pub struct Game {
     /// How many seats this round holds. Set before `init` and kept across
     /// restarts; `init` spawns exactly `players.count()` tanks.
     pub players: PlayerCount,
+    /// The couch's own seat count while a training round seats one
+    /// (docs/training-stage.md): `init` sets it aside on a map with a
+    /// training script and puts it back on the next map without one.
+    couch_players: Option<PlayerCount>,
     /// `--seed`: pins the round seed, so every restart replays the
     /// identical round - the repro loop for a round the probe flagged.
     pub seed_override: Option<u64>,
@@ -1176,6 +1194,16 @@ impl Game {
     /// ground. Also the restart path. `width`/`height` are the battlefield
     /// size in pixels.
     pub fn init(&mut self, width: f32, height: f32) {
+        // A training round is played alone: a couch's second seat waits
+        // out the course and is back for the next map. No RNG.
+        if self.map.training.is_some() {
+            if self.players != PlayerCount::ONE {
+                self.couch_players = Some(self.players);
+                self.players = PlayerCount::ONE;
+            }
+        } else if let Some(count) = self.couch_players.take() {
+            self.players = count;
+        }
         // The only `rand::rng()` on the simulation path: it picks the seed,
         // so an unseeded round is replayable once its seed is printed.
         let seed = self.seed_override.unwrap_or_else(|| rand::rng().random());
@@ -1667,6 +1695,10 @@ impl Game {
         let look = crate::ground::Look { theme: self.map.theme, edge_shade: true };
         self.ground = crate::ground::build(width, height, rng.random(), &road_cells, &map_water_cells, &wall_positions, look);
 
+        // --- Training (docs/training-stage.md): the script's run, on the
+        // seats and the map just laid out. No RNG. ---
+        self.init_training();
+
         self.rng = Some(rng);
         // Not cleared here: a restart mid-`update` (R key, round end) still
         // reports what that frame did before the new round's start.
@@ -1798,6 +1830,7 @@ impl Game {
             self.drain_shield_breaks(&mut f);
             self.explosions(&mut f, true);
             self.despawn_wrecks(&mut f);
+            self.training_phase(&mut f);
             self.cleanup_done();
             self.check_round_end(&mut f);
         } else {
@@ -1930,9 +1963,14 @@ impl Game {
         // to leave and come back (docs/teleporting.md).
         let portals: &[Position] = if self.portals.len() >= 2 { &self.portals } else { &[] };
         let trigger_radius = tuning().portal_trigger_radius;
+        // A training round that starts its seats with no shells holds
+        // their refill until they have opened an ammo crate (`training.rs`).
+        let shells_held = self.training.as_ref().is_some_and(|run| run.shells_held);
         for tank in self.world.query::<&mut Tank>().iter() {
             tank.hit_by_seat = None;
-            tank.tick_recharge(dt);
+            if !(shells_held && tank.owner().is_player()) {
+                tank.tick_recharge(dt);
+            }
             tank.fire_cooldown = (tank.fire_cooldown - dt).max(0.0);
             tank.ram_cooldown = (tank.ram_cooldown - dt).max(0.0);
             if tank.portal_cooldown > 0.0 && !portals.iter().any(|p| p.distance_to(tank.position) <= trigger_radius) {
@@ -2484,7 +2522,10 @@ impl Game {
             with_frog_mut(&self.world, frog_entity, |fr| fr.start_attack(target_pos));
         }
 
+        // A training frog on its way to its next beat's cell keeps walking
+        // rather than shy from the tank it is leading (`training.rs`).
         if can_hop
+            && !(Some(frog_entity) == self.frog && self.frog_walking())
             && let Some((_, tank_pos, dist, _)) = nearest_any
             && dist <= avoid_range
         {
@@ -4043,6 +4084,14 @@ impl Game {
     /// the player's frog dead) takes precedence over winning when both
     /// happen on the same frame.
     fn check_round_end(&mut self, f: &mut Frame) {
+        // A training round is won by its last beat and never lost: a
+        // wrecked seat and a fallen frog come back (`training_phase`).
+        if let Some(run) = &self.training {
+            if run.finished() {
+                self.end_round(f, Outcome::Won);
+            }
+            return;
+        }
         // Lost once every human tank is a wreck - the one player's in a
         // single-player round, every seat's in a team round - or the frog
         // dies. `players()`, not `seats_on_field()`: a seat driving back

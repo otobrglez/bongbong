@@ -10,8 +10,10 @@
 //! `Retreat`, `Alert`, `Retarget`), `MissileLocked` (which tank a seeker
 //! picked - a decision, not a picture; its `MissileBlast` does travel),
 //! `Rerolled` (a straggler taken off out of every seat's sight - the
-//! replica sees the hull leave and come back through its gate by itself)
-//! and `PhysicsQuarantine` (logged server-side) never travel.
+//! replica sees the hull leave and come back through its gate by itself),
+//! `PhysicsQuarantine` (logged server-side) and a training round's
+//! `BeatDone`, `DoorOpened`, `FlagTaken` and `FrogRevived` (a training map
+//! is never hosted) never travel.
 //!
 //! `to_event` gives the replica the `Event` its presentation layer already
 //! reads (`fx.rs` diffs `game.events()`), the quantised positions
@@ -31,8 +33,12 @@ use crate::simulation::{Event, HitTarget};
 
 /// The serde tags (`Event`'s `event` field) of the variants
 /// `WireEvent::from_event` never sends.
-pub const NOT_SENT: [&str; 9] = [
+pub const NOT_SENT: [&str; 13] = [
     "physics_quarantine",
+    "beat_done",
+    "door_opened",
+    "flag_taken",
+    "frog_revived",
     "rerolled",
     "ai_action",
     "engage_slot",
@@ -313,6 +319,9 @@ impl WireEvent {
             Event::TowerRepaired { side, x, y } => WireEvent::TowerRepaired { side, x: q(x), y: q(y) },
             // Never sent: logged on the server.
             Event::PhysicsQuarantine { .. } => return None,
+            // Never sent: a training map is never hosted
+            // (`MapFile::hostable`), so no room runs its script.
+            Event::BeatDone { .. } | Event::DoorOpened { .. } | Event::FlagTaken { .. } | Event::FrogRevived { .. } => return None,
             // Never sent: the hull's leaving and its roll-in through the
             // new gate are in the snapshots.
             Event::Rerolled { .. } => return None,
@@ -502,6 +511,10 @@ mod tests {
             Event::SlimeWashed { slot: 4 },
             Event::TowerRepaired { side: Side::Enemy, x: 176.0, y: 80.0 },
             Event::PhysicsQuarantine { bodies: 1, colliders: 2 },
+            Event::BeatDone { beat: 2 },
+            Event::DoorOpened { beat: 1, x: 320.0, y: 176.0 },
+            Event::FlagTaken { seat: 0, x: 256.0, y: 80.0 },
+            Event::FrogRevived { x: 1088.0, y: 208.0 },
             Event::AiAction { slot: 5, from: None, to: Some("attack") },
             Event::EngageSlot { slot: 5, from: Some(1), to: None },
             Event::StuckEscape { slot: 5, escapes: 2 },
@@ -527,7 +540,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 46, "one sample per Event variant");
+        assert_eq!(seen.len(), 50, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

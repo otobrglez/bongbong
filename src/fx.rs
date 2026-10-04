@@ -463,7 +463,7 @@ impl Fx {
         }
         let n = self.count(tuning().tile_burst_particles);
         match material {
-            Material::Brick | Material::Iron | Material::Volcano => {
+            Material::Brick | Material::Iron | Material::Volcano | Material::Door => {
                 self.burst(at, ParticleKind::Chip, n, 90.0, &[STONE_LT, STONE_MD, STONE_DK]);
                 self.burst(at, ParticleKind::Dust, self.count(6), 40.0, &[DUST_T]);
             }

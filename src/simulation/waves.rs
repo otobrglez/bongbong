@@ -63,9 +63,12 @@ pub struct RollIn {
 
 /// A straggler taken off the field and rolling in again through a nearer
 /// gate (`Game::reroll_stragglers`), beside its `RollIn`: the role it
-/// keeps once it is back, so its arrival rolls none.
+/// keeps once it is back, so its arrival rolls none. A training beat's
+/// tank rolls in with one too, the role and the dummy's flag its script
+/// asked for (`Game::training_roll_in`).
 pub(crate) struct Rejoin {
     role: Role,
+    frog_only: bool,
 }
 
 /// How often the round looks for stragglers, in ticks: once a second. A
@@ -224,11 +227,12 @@ impl Game {
                 // Roles roll on arrival, the moment the tank joins the
                 // fight - but for a straggler coming back, which keeps the
                 // role it had.
-                let role = match self.world.remove_one::<Rejoin>(entity) {
-                    Ok(rejoin) => rejoin.role,
-                    Err(_) => roll_role(self.mission, &mut f.rng),
+                let (role, frog_only) = match self.world.remove_one::<Rejoin>(entity) {
+                    Ok(rejoin) => (rejoin.role, rejoin.frog_only),
+                    Err(_) => (roll_role(self.mission, &mut f.rng), false),
                 };
                 let mut ai = Ai::with_role(role);
+                ai.frog_only = frog_only;
                 // On a field map the wave is called to the fight: the walk
                 // its gate was picked for (`field`).
                 ai.field.called = self.field_map;
@@ -368,11 +372,12 @@ impl Game {
     /// off the field and start it rolling in again through `gate`: its
     /// body and its `Ai` go, as a wave tank still outside has neither, and
     /// it keeps everything else - its slot, its chassis, its damage, its
-    /// ammunition and weapons - and its role, which a `Rejoin` carries to
-    /// its arrival. It arrives called to the fight like any wave tank, with
-    /// a fresh memory and its new gate for home.
+    /// ammunition and weapons - and its role and a dummy's flag, which a
+    /// `Rejoin` carries to its arrival. It arrives called to the fight like
+    /// any wave tank, with a fresh memory and its new gate for home.
     fn reroll(&mut self, entity: Entity, slot: usize, from: Position, gate: Gate, f: &mut Frame) {
-        let role = self.world.remove_one::<Ai>(entity).expect("a straggler is an enemy on the field").role;
+        let ai = self.world.remove_one::<Ai>(entity).expect("a straggler is an enemy on the field");
+        let (role, frog_only) = (ai.role, ai.frog_only);
         if let Some(body) = with_tank(&self.world, entity, |t| t.body) {
             self.physics.remove_body(body);
         }
@@ -392,7 +397,7 @@ impl Game {
             t.minigun_burst = None;
             t.missile_volley = None;
         });
-        self.world.insert(entity, (RollIn { to: gate.inside }, Rejoin { role })).expect("a straggler is never despawned");
+        self.world.insert(entity, (RollIn { to: gate.inside }, Rejoin { role, frog_only })).expect("a straggler is never despawned");
         // The slots it held were round the fight it never reached.
         for ring in &mut self.engage {
             ring.release(entity);
@@ -687,11 +692,28 @@ impl Game {
         true
     }
 
+    /// A training beat's tank (docs/training-stage.md): one of chassis
+    /// `row` rolling in through a free lane, as a wave's does, to fight as
+    /// `role` once it arrives - a dummy (`frog_only`) never at a seat.
+    /// `None` while no lane is free - or the map has no gate - so the beat
+    /// asks again next frame.
+    pub(super) fn training_roll_in(&mut self, f: &mut Frame, row: i32, role: Role, frog_only: bool) -> Option<Entity> {
+        let GatePick::Free(gate) = self.pick_gate(f) else { return None };
+        let slot = self.take_slot();
+        let mut tank = roll_enemy_tank(&mut f.rng, row, gate.outside, slot);
+        let rotation = gate.heading().rotation();
+        tank.rotation = rotation;
+        tank.visual_rotation = rotation;
+        tank.turret_visual_rotation = rotation;
+        tank.ring_position = gate.outside;
+        Some(self.world.spawn((tank, RollIn { to: gate.inside }, Rejoin { role, frog_only })))
+    }
+
     /// The gate-less fallback: place the tank in the spawn band exactly as
     /// the band plan does at init (`battlefield::enemy_spawn_legal`, then
     /// `Grid::nearest_open` on the attempt cap), with its body and `Ai`,
     /// and announce it as entered.
-    fn spawn_in_band(&mut self, f: &mut Frame, row: i32) {
+    pub(super) fn spawn_in_band(&mut self, f: &mut Frame, row: i32) -> Entity {
         let (margin_min, margin_max) = {
             let t = tuning();
             let short_side = f.width.min(f.height);
@@ -751,8 +773,9 @@ impl Game {
         // A wave tank all the same: called to the fight on a field map.
         ai.field.called = self.field_map;
         ai.field.wave = self.field_map;
-        self.world.spawn((tank, ai));
+        let entity = self.world.spawn((tank, ai));
         f.events.push(Event::TankEntered { slot });
+        entity
     }
 
     /// The next owner slot for a tank the scheduler (or the dev server's

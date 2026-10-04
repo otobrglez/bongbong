@@ -95,6 +95,9 @@ keys! {
     MISSION_PROTECT_BANNER = "mission-protect-banner";
     MISSION_HUNT_BANNER = "mission-hunt-banner";
     MISSION_DESTROY_BANNER = "mission-destroy-banner";
+    MISSION_TRAINING = "mission-training";
+    MISSION_TRAINING_BANNER = "mission-training-banner";
+    ROUND_TRAINED = "round-trained";
     WAVE_BANNER = "wave-banner";
     WAVE_FINAL = "wave-final";
     LEVEL_NUMBER = "level-number";
@@ -265,6 +268,37 @@ keys! {
     EDITOR_STAMP_KEPT = "editor-stamp-kept";
     EDITOR_STAMP_EMPTY = "editor-stamp-empty";
     EDITOR_FILL_TOO_LARGE = "editor-fill-too-large";
+    FROG_HELLO = "frog-hello";
+    FROG_DRIVE = "frog-drive";
+    FROG_DRIVE_TOUCH = "frog-drive-touch";
+    FROG_FLAGS = "frog-flags";
+    FROG_FLAGS_NUDGE = "frog-flags-nudge";
+    FROG_CRATES = "frog-crates";
+    FROG_HEALTH = "frog-health";
+    FROG_CRATES_NUDGE = "frog-crates-nudge";
+    FROG_FIRE = "frog-fire";
+    FROG_FIRE_TOUCH = "frog-fire-touch";
+    FROG_MATERIALS = "frog-materials";
+    FROG_IRON = "frog-iron";
+    FROG_FIRE_NUDGE = "frog-fire-nudge";
+    FROG_FIRE_NUDGE_TOUCH = "frog-fire-nudge-touch";
+    FROG_MINIGUN = "frog-minigun";
+    FROG_WALL = "frog-wall";
+    FROG_PAD = "frog-pad";
+    FROG_OW = "frog-ow";
+    FROG_KIT = "frog-kit";
+    FROG_KIT_NUDGE = "frog-kit-nudge";
+    FROG_HEALED = "frog-healed";
+    FROG_ENEMY = "frog-enemy";
+    FROG_LINE_UP = "frog-line-up";
+    FROG_ENEMY_NUDGE = "frog-enemy-nudge";
+    FROG_ONLY_ME = "frog-only-me";
+    FROG_CHOMP = "frog-chomp";
+    FROG_SHIELD = "frog-shield";
+    FROG_SHOOTS_BACK = "frog-shoots-back";
+    FROG_WAVE_NUDGE = "frog-wave-nudge";
+    FROG_DOWN = "frog-down";
+    FROG_READY = "frog-ready";
 }
 
 /// The one-word title of a mission (the bar, the lobby's stepper).
@@ -833,6 +867,7 @@ mod text_tests {
             (keys::MISSION_PROTECT, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
             (keys::MISSION_HUNT, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
             (keys::MISSION_DESTROY, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
+            (keys::MISSION_TRAINING, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
             (keys::LOBBY_TITLE_START, 22, content, vec![]),
             (keys::LOBBY_TITLE_CODE, 22, content, vec![]),
             (keys::LOBBY_TITLE_WAITING, 22, content, vec![]),
@@ -935,6 +970,7 @@ mod text_tests {
             (keys::ROUND_RESTARTING, BANNER_SUB_SIZE, RESULT_TEXT_PX, vec![("seconds", 30.into())]),
             (keys::ROUND_BACK_TO_LOBBY, BANNER_SUB_SIZE, RESULT_TEXT_PX, vec![("seconds", 30.into())]),
             (keys::ROUND_WON, RESULT_TITLE_SIZE, RESULT_TEXT_PX, vec![]),
+            (keys::ROUND_TRAINED, RESULT_TITLE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::ROUND_LOST, RESULT_TITLE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::RESULT_ALL_CLEAR, RESULT_LINE_SIZE, RESULT_TEXT_PX, vec![("count", 14.into())]),
             (keys::RESULT_TIME, RESULT_LINE_SIZE, (RESULT_TEXT_PX - RESULT_STATS_GAP) / 2, vec![("time", "59:59".into())]),
@@ -1040,6 +1076,7 @@ mod text_tests {
                 .into_iter()
                 .map(|m| (catalogue.get(mission_banner(m)), BANNER_SIZE))
                 .collect();
+            banners.push((catalogue.get(keys::MISSION_TRAINING_BANNER), BANNER_SIZE));
             banners.push((catalogue.get(keys::PAUSED), BANNER_SIZE));
             banners.push((catalogue.get(keys::WAVE_FINAL), WAVE_BANNER_SIZE));
             banners.push((catalogue.fmt(keys::WAVE_BANNER, &[("n", 99.into())]), WAVE_BANNER_SIZE));

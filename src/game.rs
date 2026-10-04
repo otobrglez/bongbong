@@ -351,6 +351,19 @@ impl Game {
             // of tiles reads as one structure rather than as a grid.
             draw_obstacle_cap(c, obstacle);
         }
+        // Training doors and flags (docs/training-stage.md): drawn by
+        // their own code, doors with the tiles, flags standing on the
+        // ground beside them.
+        for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| o.material == crate::obstacle::Material::Door) {
+            if !c.culls(obstacle.position) {
+                crate::training::draw_door(c, obstacle.position);
+            }
+        }
+        for flag in self.training_flags() {
+            if !c.culls(flag.at) {
+                crate::training::draw_flag(c, flag.at, crate::tank::team_color(0), flag.taken, self.time);
+            }
+        }
         // Burning timber: flames standing on each plank, over the tiles
         // round it so a burning door in a wall is not cut off by the wall
         // beside it.
