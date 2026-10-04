@@ -10,7 +10,7 @@ use crate::hud::{
     banner_size, clock_text, leave_dialog_rects, players_dialog_rects, result_layout, weapon_pickup, Corners, Fade, Hints,
     HudModel, NextLevel, PlayChrome, PlayerHud, ResultButtons, ResultView, SeatHud, BUILD_COLOR, DIALOG_W, DIM,
     HUD_TEXT_SIZE, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP, LINE_H, ONLINE_COLOR, RESULT_LINE_SIZE,
-    RESULT_SEATS_SIZE, RESULT_STATS_GAP, ROW_H, TEXT, UI_SMALL_TEXT,
+    RESULT_SEATS_SIZE, RESULT_STATS_GAP, TEXT, UI_SMALL_TEXT,
 };
 use crate::math::{Color, Rectangle};
 use crate::pickup::PickupKind;
@@ -118,9 +118,10 @@ pub fn draw_corners(
     for (block, (hud, seat)) in corners.blocks.iter().zip(seats) {
         let Some(hud) = hud else { continue };
         draw_cluster_plate(d, Corners::plate(*block), a);
-        draw_vitals(d, *block, hud, seat, textures, a);
-        if block.height > crate::hud::VITALS_H {
-            draw_lamp_row(d, *block, hud, textures, a);
+        draw_vitals(d, *block, corners.row_h, hud, seat, textures, a);
+        if block.height > corners.row_h {
+            let row = Rectangle::new(block.x, block.y + block.height - corners.row_h, block.width, corners.row_h);
+            draw_lamp_row(d, row, hud, textures, a);
         }
     }
     let mut y = corners.lines.y;
@@ -181,15 +182,17 @@ pub(crate) fn draw_plate(d: &mut impl RaylibDraw, r: Rectangle, edge: Color, a: 
     d.draw_rectangle_rounded_lines_ex(r, 0.12, 6, 1.5, faded(edge, a));
 }
 
-/// One seat's vitals in `block`, one row, each readout beside the symbol
-/// of the crate that fills it: health's cross with the health number and
-/// its gauge in the seat's own ring colours, what the trigger fires with
-/// what it has left - the special weapon carried in its accent, else the
-/// ammo crate's shells by how full the magazine is (`hud::WeaponSlot`) -,
-/// and the speed and shield gauges under the bolt and the shield.
-fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, hud: &PlayerHud, seat: u8, textures: &Textures, a: f32) {
+/// One seat's vitals along the first `row_h` of `block`, centred on that
+/// row as the right cluster's numbers are on theirs, each readout beside
+/// the symbol of the crate that fills it: health's cross with the health
+/// number and its gauge in the seat's own ring colours, what the trigger
+/// fires with what it has left - the special weapon carried in its accent,
+/// else the ammo crate's shells by how full the magazine is
+/// (`hud::WeaponSlot`) -, and the speed and shield gauges under the bolt
+/// and the shield.
+fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, row_h: f32, hud: &PlayerHud, seat: u8, textures: &Textures, a: f32) {
     let (x, y) = (block.x.round() as i32, block.y.round() as i32);
-    let row = ROW_H as i32;
+    let row = row_h.round() as i32;
     let text_y = y + (row - HUD_TEXT_SIZE) / 2;
 
     draw_symbol(d, textures, PickupKind::Health, x + V_HEALTH_SYMBOL, y, row, hud.hp > 0, a);
@@ -207,14 +210,14 @@ fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, hud: &PlayerHud, seat:
     draw_symbol_gauge(d, textures, PickupKind::Shield, x + V_SHIELD, y, row, hud.shield, SHIELD_COLOR, true, a);
 }
 
-/// The lamp row under a block's two (`hud::CornerShape::lamp_row`): the
+/// A block's lamp row, `row` (`hud::CornerShape::lamp_row`): the
 /// lantern with how many are left to set down - the lamp key's button on
 /// a touch screen - and, while one is on, the heat shield's gauge under its
 /// crate's symbol in the shield's slot (docs/volcano.md).
-fn draw_lamp_row(d: &mut impl RaylibDraw, block: Rectangle, hud: &PlayerHud, textures: &Textures, a: f32) {
+fn draw_lamp_row(d: &mut impl RaylibDraw, row: Rectangle, hud: &PlayerHud, textures: &Textures, a: f32) {
     use crate::pyro::{FIRE, SMOKE};
-    let row_h = (block.height - crate::hud::VITALS_H) as i32;
-    let (x, y) = (block.x.round() as i32, (block.y + crate::hud::VITALS_H).round() as i32);
+    let row_h = row.height.round() as i32;
+    let (x, y) = (row.x.round() as i32, row.y.round() as i32);
     if let Some(left) = hud.lamps {
         // The lantern, drawn in the effects language's blocks: cap, glass
         // round its flame, base; dark once none is left.
@@ -561,7 +564,7 @@ pub fn draw_result(d: &mut impl RaylibDraw, area: Rect, view: &ResultView, count
 #[cfg(test)]
 mod corner_tests {
     use super::*;
-    use crate::hud::{CHIP_H, CHIP_W, INFO_TITLE_W, INFO_W, VITALS_H, VITALS_W};
+    use crate::hud::{CHIP_H, CHIP_W, INFO_TITLE_W, INFO_W, ROW_H, VITALS_W};
 
     /// The vitals block's slots stay inside its width and its one row and
     /// never overlap: the widest thing each holds is written down here, so
@@ -579,7 +582,6 @@ mod corner_tests {
         assert!(GAUGE_W >= 4 + 2 * 10, "a bar needs its outline and room to drain in steps");
         // A symbol and a bar, both inside a row.
         assert!(SYMBOL <= ROW_H as i32 && GAUGE_H <= ROW_H as i32);
-        assert_eq!(VITALS_H, ROW_H, "the vitals are one row");
     }
 
     /// The right cluster's first row: the widest mission word with its

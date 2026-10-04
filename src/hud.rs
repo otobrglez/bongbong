@@ -16,7 +16,9 @@
 //! The left cluster is the seat's vitals, one row: health as a number and
 //! a gauge, what the trigger fires with what it has left - the special
 //! weapon carried (a tank holds one at a time, `Tank::take_weapon`), else
-//! shells -, and the speed and shield gauges. A two-player couch round
+//! shells -, and the speed and shield gauges, on a row as tall as the
+//! right cluster's first row (`Corners::row_h`), so the two corners read
+//! along one line on a phone as on a monitor. A two-player couch round
 //! (docs/two-players.md) gives player 2 a block of its own beside player
 //! 1's, or under it on a narrow window, each block's health gauge in its
 //! player's team colour.
@@ -626,9 +628,8 @@ pub fn button_height(touch: bool) -> f32 {
 
 /// One seat's vitals, one row: health, what the trigger fires (the special
 /// carried, else shells) and the speed and shield gauges (`render::hud`'s
-/// slot table fills it).
+/// slot table fills it). The row is `Corners::row_h` tall.
 pub const VITALS_W: f32 = 310.0;
-pub const VITALS_H: f32 = ROW_H;
 /// The right cluster's first row: the mission word or the level button,
 /// the wave, the enemy count and the frog's gauge.
 pub const INFO_W: f32 = 304.0;
@@ -739,6 +740,14 @@ pub struct Corners {
     pub blocks: Vec<Rectangle>,
     /// The box the lines under the left cluster are kept to.
     pub lines: Rectangle,
+    /// The corners' first row, the vitals' and the round's numbers' alike:
+    /// a button's height (`button_height`), so the two corners read along
+    /// one line on every screen - one top, one height, every readout
+    /// centred on it - even where a touch screen grows the level button to
+    /// a finger's. A block's lamp row, as tall, is its last `row_h`, on the
+    /// line of the right cluster's buttons where they wrap under its first
+    /// row.
+    pub row_h: f32,
     /// The right cluster's plate.
     pub right: Rectangle,
     /// Its first row (`INFO_W` wide).
@@ -842,8 +851,11 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     let left_w = if beside { 2.0 * block_plate + CLUSTER_GAP } else { block_plate };
     let one_row = left_w + SIDE_GAP + right_one_row <= area.w;
 
-    // A round with lanterns or lava gives every block a third row.
-    let block_h = VITALS_H + if shape.lamp_row { button_h } else { 0.0 };
+    // The vitals' row is the right cluster's first row's height, so the
+    // two corners share one line; a round with lanterns or lava gives
+    // every block a lamp row under it, as far under as the right
+    // cluster's buttons stand under its first row where they wrap.
+    let block_h = button_h + if shape.lamp_row { ROW_GAP + button_h } else { 0.0 };
     let first = Rectangle::new(area.x + PLATE_PAD, area.y + PLATE_PAD, VITALS_W, block_h);
     let mut blocks = vec![first];
     if couch_pair {
@@ -898,6 +910,7 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     Corners {
         blocks,
         lines,
+        row_h: button_h,
         right,
         info,
         level_button: shape.level_button.then(|| Rectangle::new(info.x, info.y, LEVEL_BUTTON_W, button_h)),
@@ -908,7 +921,7 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
         leave: shape.leave.then_some(mode),
         chips,
         minimap,
-        lamp: shape.lamp_row.then(|| Rectangle::new(first.x, first.y + VITALS_H, LAMP_BUTTON_W, button_h)),
+        lamp: shape.lamp_row.then(|| Rectangle::new(first.x, first.y + button_h + ROW_GAP, LAMP_BUTTON_W, button_h)),
     }
 }
 
@@ -1757,6 +1770,37 @@ mod hud_tests {
         assert_eq!(c.hit(Vec2::new(ui.screen.w / 2.0, ui.screen.h / 2.0)), None);
     }
 
+    /// The two corners read along one line on every screen and in every
+    /// shape: every block's first row and the right cluster's start at
+    /// one top and are one height - a finger's on a touch screen, where
+    /// the level button grows to one - and the plates' tops meet, so the
+    /// vitals and the round's numbers are centred on the same line; a lamp
+    /// row and the buttons' row, where they wrap, share the second line.
+    #[test]
+    fn the_two_corners_read_along_one_line() {
+        for (screen, ui) in screens() {
+            for (shape_name, shape) in shapes() {
+                let what = format!("{shape_name} on {screen}");
+                let c = corners(&ui, &shape);
+                assert_eq!(c.row_h, c.info.height, "{what}: the first rows differ in height");
+                assert_eq!(c.row_h, button_height(ui.touch), "{what}");
+                let first = c.blocks[0];
+                assert_eq!(first.y, c.info.y, "{what}: the first rows start apart");
+                assert_eq!(Corners::plate(first).y, c.right.y, "{what}: the plates' tops differ");
+                let centre = |y: f32, h: f32| y + h / 2.0;
+                assert_eq!(centre(first.y, c.row_h), centre(c.info.y, c.info.height), "{what}: the rows' centre lines differ");
+                if let Some(lamp) = c.lamp {
+                    assert_eq!(lamp.y + lamp.height, first.y + first.height, "{what}: the lamp row is not the block's last");
+                    let wrapped = c.build.or(c.leave).filter(|b| b.y > c.info.y);
+                    if let Some(button) = wrapped {
+                        assert_eq!(lamp.y, button.y, "{what}: the lamp row and the buttons' row start apart");
+                        assert_eq!(lamp.height, button.height, "{what}");
+                    }
+                }
+            }
+        }
+    }
+
     /// A couch pair's two blocks sit side by side where the window has the
     /// room for both and the right cluster, and player 2's under player
     /// 1's where it has not; the right cluster's first row and its buttons
@@ -1769,7 +1813,7 @@ mod hud_tests {
         assert!(wide.blocks[1].x > wide.blocks[0].x + VITALS_W);
         let narrow = corners(&UiFrame::plain((900.0, 600.0)), &pair);
         assert_eq!(narrow.blocks[0].x, narrow.blocks[1].x, "under on 900");
-        assert!(narrow.blocks[1].y >= narrow.blocks[0].y + VITALS_H + 2.0 * PLATE_PAD);
+        assert!(narrow.blocks[1].y >= narrow.blocks[0].y + narrow.row_h + 2.0 * PLATE_PAD);
         let one = shapes()[0].1;
         let desk = corners(&UiFrame::plain((1600.0, 900.0)), &one);
         assert_eq!(desk.info.y, desk.build.unwrap().y, "one row on a monitor");
