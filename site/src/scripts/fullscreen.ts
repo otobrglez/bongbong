@@ -32,8 +32,16 @@ export function installFullscreenToggle(): void {
 
   const real = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
   const active = () => real() || game.classList.contains("immersive");
+  // The words go in the label beside the icon, which a touch screen hides
+  // (index.astro), so they are the button's name and tooltip too.
+  const words = button.querySelector<HTMLElement>(".fs-label");
   const label = () => {
-    button.innerHTML = active() ? t("exitFullscreen") : t("fullscreen");
+    const on = active();
+    const text = on ? t("exitFullscreen") : t("fullscreen");
+    if (words) words.textContent = text;
+    button.classList.toggle("is-active", on);
+    button.setAttribute("aria-label", text);
+    button.title = on ? text : t("fullscreenTitle");
   };
   const fallback = () => {
     game.classList.add("immersive");

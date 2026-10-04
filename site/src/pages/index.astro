@@ -78,7 +78,7 @@
             height: calc(100dvh - var(--hints) - env(safe-area-inset-top) - env(safe-area-inset-bottom));
           }
 
-          /* The two overlay controls sit together in one row, Full screen
+          /* The overlay controls sit together in one row, Full screen
              first, the subscribe link beside it. With a mouse they keep to
              the canvas's *bottom-left* corner, away from the HUD's corner
              clusters along its top (src/hud.rs `corners`). Wherever they
@@ -99,14 +99,15 @@
              half of the canvas steers wherever a thumb lands and the right
              half fires (src/touch.rs), and the thumbs rest about 22 mm in
              and 18 mm up from those corners (`indicators::thumb_rests`).
-             The top corners are the HUD's clusters, and between them there
-             is too little room for two labels on a narrow phone - 74
-             points, 69 CSS pixels on an iPhone SE. So the controls take a
-             band of their own along the top, centred, and the game lays
-             its chrome out below it as it does below a safe area: the
-             clusters, the panels and the builder's bar all stand clear of
-             it, and the world shows on either side. Above the turn card,
-             so the way out of immersive mode is always there. */
+             The top corners are the HUD's clusters. So only Full screen
+             stands over the canvas, as its icon alone, in a band of its
+             own along the top, centred, and the game lays its chrome out
+             below it as it does below a safe area: the clusters, the
+             panels and the builder's bar all stand clear of it, and the
+             world shows on either side. The band is the button's height;
+             the subscribe link moves under the canvas, into the footer.
+             Above the turn card, so the way out of immersive mode is always
+             there. */
           @media (hover: none) and (pointer: coarse) {
             .overlay-controls {
               top: 3px;
@@ -114,6 +115,10 @@
               left: 50%;
               transform: translateX(-50%);
               z-index: 4;
+
+              .subscribe-link {
+                display: none;
+              }
             }
           }
 
@@ -327,6 +332,8 @@
           }
 
           .fullscreen-toggle {
+            display: inline-flex;
+            align-items: center;
             padding: 3px 9px;
             border-radius: 3px;
             border: 0;
@@ -334,11 +341,54 @@
             color: #ddd;
             font-family: sans-serif;
             font-size: $font-size;
+            line-height: 16px;
             cursor: pointer;
 
             &:hover, &:focus-visible {
               color: #fff;
               background: rgba(46, 46, 46, 0.95);
+            }
+
+            /* Four corner brackets on a 14 px grid, drawn in the label's
+               colour: pointing out to go full screen, in to leave it
+               (fullscreen.ts sets `is-active`). An SVG rather than a
+               glyph, which not every phone's fonts carry. */
+            .fs-icon {
+              width: 14px;
+              height: 14px;
+              margin-right: 5px;
+              fill: none;
+              stroke: currentColor;
+              stroke-width: 2;
+              shape-rendering: crispEdges;
+            }
+
+            .fs-exit {
+              display: none;
+            }
+
+            &.is-active {
+              .fs-enter {
+                display: none;
+              }
+
+              .fs-exit {
+                display: inline;
+              }
+            }
+
+            /* On a touch screen, the icon alone in a 22 px square: the
+               band the game keeps clear is as tall as this. */
+            @media (hover: none) and (pointer: coarse) {
+              padding: 4px;
+
+              .fs-icon {
+                margin: 0;
+              }
+
+              .fs-label {
+                display: none;
+              }
             }
           }
 
@@ -357,6 +407,18 @@
         .footer {
           p {
             margin: 0.3em 0;
+          }
+
+          /* The subscribe link's place on a touch screen, where it does
+             not stand over the canvas; with a mouse it stays beside Full
+             screen there. */
+          .footer-subscribe {
+            display: none;
+            text-align: center;
+
+            @media (hover: none) and (pointer: coarse) {
+              display: block;
+            }
           }
         }
       }
@@ -564,7 +626,11 @@
             <canvas id="canvas" tabindex="-1"></canvas>
             <div class="overlay-controls">
                 <button class="fullscreen-toggle" id="fullscreen-toggle" type="button"
-                        title="Play full screen" data-i18n="fullscreen" data-i18n-title="fullscreenTitle">&#9974; Full screen
+                        title="Play full screen" aria-label="Full screen" data-i18n-title="fullscreenTitle">
+                    <svg class="fs-icon" viewBox="0 0 14 14" aria-hidden="true">
+                        <path class="fs-enter" d="M1 5V1h4M9 1h4v4M13 9v4H9M5 13H1V9"/>
+                        <path class="fs-exit" d="M5 1v4H1M9 1v4h4M13 9H9v4M1 9h4v4"/>
+                    </svg><span class="fs-label" data-i18n="fullscreen">Full screen</span>
                 </button>
                 <a class="subscribe-link" href="/subscribe" data-i18n="subscribe">Subscribe for updates.</a>
             </div>
@@ -613,6 +679,7 @@
     </div>
     <div class="footer">
         <div>
+            <p class="footer-subscribe"><a href="/subscribe" data-i18n="subscribe">Subscribe for updates.</a></p>
             <p data-i18n="feedback">Feedback and suggestions are welcome via <a href="https://github.com/otobrglez">@otobrglez</a>. </p>
         </div>
     </div>
