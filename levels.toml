@@ -13,6 +13,14 @@
 # furthest level a player has reached. The file is compiled in, and a
 # test holds every entry to a shipped map.
 
+# Level 0, the training stage (docs/training-stage.md): a new progress
+# file opens on it, and `skippable` keeps Lotus Lagoon open beside it, so a
+# player who knows the game passes over it from the level select.
+[[level]]
+map = "boot-camp"
+title = "Boot Camp"
+skippable = true
+
 [[level]]
 map = "lotus-lagoon"
 title = "Lotus Lagoon"

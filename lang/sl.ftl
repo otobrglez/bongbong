@@ -23,6 +23,7 @@ leave-stay = IGRAJ NAPREJ
 ## Igra
 
 round-won = ZMAGA
+round-trained = OPRAVLJENO!
 round-lost = PORAZ
 round-restarting = Nova igra čez { $seconds }...
 round-back-to-lobby = Nazaj v sobo čez { $seconds }...
@@ -31,10 +32,12 @@ paused = PAVZA
 mission-protect = BRANI
 mission-hunt = LOV
 mission-destroy = UNIČI
+mission-training = URJENJE
 
 mission-protect-banner = BRANI ŽABO!
 mission-hunt-banner = ULOVI ŽABO!
 mission-destroy-banner = UNIČI VSE!
+mission-training-banner = SLEDI ŽABI!
 
 wave-banner = VAL { $n }
 wave-final = ZADNJI VAL
@@ -56,6 +59,7 @@ levels-sub = Izberi stopnjo. Zmaga odpre naslednjo.
 levels-back = NAZAJ
 bar-level = STOPNJA
 
+level-boot-camp = Vadišče
 level-lotus-lagoon = Lotosova laguna
 level-vulkan = Vulkan
 level-glasshouses = Vrt s steklenjaki
@@ -211,6 +215,7 @@ lint-portal-blocked = PORTAL JE ZAPRT
 lint-tower-at-start = STOLP POKRIVA ZAČETEK
 lint-tower-no-reach = STOLP NE DOSEŽE NIČESAR
 lint-too-many-towers = PREVEČ STOLPOV NA ENI STRANI
+lint-training-door = VRATA, KI SE NE ODPREJO
 editor-tool = ORODJE
 
 category-wall = ZID
@@ -392,3 +397,36 @@ tank-glacier = glacier
 tank-obelisk = obelisk
 tank-titan = titan
 tank-leviathan = leviathan
+
+## Žabine vrstice v urjenju (docs/training-stage.md).
+frog-hello = Živjo! Jaz sem tvoja žaba.
+frog-drive = <ARROWS> za vožnjo. Pred zavojem popusti.
+frog-drive-touch = <STICK> Za vožnjo vleci z levim palcem.
+frog-flags = Zapelji čez tri zastavice.
+frog-flags-nudge = Tri zastavice. Potem se vrata odprejo.
+frog-crates = Brez granat. Zaleti se v zaboje.
+frog-health = Rdeči križ popravi oklep.
+frog-crates-nudge = Zaboj s strelivom je na severu.
+frog-fire = <SPACE> strelja, kamor kaže top.
+frog-fire-touch = <TAP> desno polovico za strel.
+frog-materials = Les hitro poči. Opeka zdrži več.
+frog-iron = Železo nikoli. Ustreli opečni zid!
+frog-fire-nudge = Obrni se k zidu, pritisni <SPACE>.
+frog-fire-nudge-touch = Obrni se k zidu in <TAP>.
+frog-minigun = Drži strel. Hitro porablja strelivo.
+frog-wall = Lep strel! Za mano.
+frog-pad = To je moj dom. Kar naprej.
+frog-ow = Au! To je priletelo z vzhoda!
+frog-kit = Hitro, poberi moj zaboj!
+frog-kit-nudge = Moj zaboj! Zeleni!
+frog-healed = Bolje! Če padem, izgubiva.
+frog-enemy = Prihaja!
+frog-line-up = Poravnaj se in streljaj!
+frog-enemy-nudge = Poravnaj se z njim!
+frog-only-me = Hoče samo mene. Streljaj!
+frog-chomp = Hrsk!
+frog-shield = Najprej ščit.
+frog-shoots-back = Ta strelja nazaj!
+frog-wave-nudge = Še zadnji. Zmoreš.
+frog-down = Tank je uničen! Nazaj k vratom.
+frog-ready = Vse je nared.

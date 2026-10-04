@@ -2885,6 +2885,53 @@ tunables! {
         shot_trail_glint_rate: f32 = 26.0 in 0.0 ..= 200.0;
     }
 
+    group training {
+        /// A wrecked seat in a training round (docs/training-stage.md)
+        /// comes back as a fresh tank inside the last door opened, this
+        /// long after it went (seconds). Training is never lost.
+        training_respawn_seconds: f32 = 2.0 in 0.0 ..= 10.0;
+        /// A training round's frog, once it is down, is back on its feet
+        /// this long after (seconds) - the death animation's length - and
+        /// the beat it fell in starts again.
+        training_frog_revive_seconds: f32 = 1.6 in 0.0 ..= 10.0;
+        /// An enemy wreck in a training round fades and is taken off the
+        /// field this long after it went (seconds), so the course stays
+        /// clear and no wreck keeps a gate's lane from the next beat's
+        /// tank.
+        training_wreck_seconds: f32 = 4.0 in 0.5 ..= 60.0;
+        /// A beat's tank that has waited this long (seconds) for a free
+        /// gate lane - a seat parked in it - drops onto the field out of
+        /// sight instead, as a band round places one, so a beat never
+        /// waits for ever.
+        training_lane_wait_seconds: f32 = 5.0 in 0.5 ..= 60.0;
+        /// A training beat's shot at the frog is fired again this long
+        /// after the last (seconds) while the frog is still unhurt - the
+        /// shell met a tank or a tile on the way - so a beat that waits on
+        /// the frog's kit always gets a frog that needs it.
+        training_frog_shot_retry_seconds: f32 = 3.0 in 0.5 ..= 30.0;
+        /// How far past a flag's cell a hull still takes it, px: the
+        /// hull's box grown by this much touches the flag's square.
+        training_flag_reach_px: f32 = 6.0 in 0.0 ..= 32.0;
+        /// How far each of the frog's hops takes it while it walks to its
+        /// next beat's cell, as a share of its usual hop
+        /// (`frog_hop_distance_factor`); it hops again as soon as it
+        /// lands.
+        training_frog_stride: f32 = 1.0 in 0.2 ..= 3.0;
+        /// How long the frog's line stays up at the least (seconds), on
+        /// top of `training_line_seconds_per_char` of its length
+        /// (`bubble::FrogVoice`).
+        training_line_seconds: f32 = 1.4 in 0.2 ..= 10.0;
+        /// How much longer a line stays up for each of its letters
+        /// (seconds), so a long line is up as long as it takes to read.
+        training_line_seconds_per_char: f32 = 0.055 in 0.0 ..= 0.3;
+        /// The pace the words of a line come into the bubble (words a
+        /// second; the first is there at once).
+        training_line_words_per_second: f32 = 9.0 in 1.0 ..= 60.0;
+        /// Seconds with nothing said before the frog says the running
+        /// beat's nudge again.
+        training_nudge_seconds: f32 = 14.0 in 2.0 ..= 120.0;
+    }
+
     group weather {
         /// Put one sky over every map, by its place in `map::Weather::ALL`:
         /// 0 clear, 1 night, 2 dusk, 3 rain, 4 storm, 5 fog, 6 sandstorm,
