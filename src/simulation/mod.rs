@@ -909,6 +909,10 @@ pub struct Game {
     /// How many seats this round holds. Set before `init` and kept across
     /// restarts; `init` spawns exactly `players.count()` tanks.
     pub players: PlayerCount,
+    /// The couch's own seat count while a training round seats one
+    /// (docs/training-stage.md): `init` sets it aside on a map with a
+    /// training script and puts it back on the next map without one.
+    couch_players: Option<PlayerCount>,
     /// `--seed`: pins the round seed, so every restart replays the
     /// identical round - the repro loop for a round the probe flagged.
     pub seed_override: Option<u64>,
@@ -1190,6 +1194,16 @@ impl Game {
     /// ground. Also the restart path. `width`/`height` are the battlefield
     /// size in pixels.
     pub fn init(&mut self, width: f32, height: f32) {
+        // A training round is played alone: a couch's second seat waits
+        // out the course and is back for the next map. No RNG.
+        if self.map.training.is_some() {
+            if self.players != PlayerCount::ONE {
+                self.couch_players = Some(self.players);
+                self.players = PlayerCount::ONE;
+            }
+        } else if let Some(count) = self.couch_players.take() {
+            self.players = count;
+        }
         // The only `rand::rng()` on the simulation path: it picks the seed,
         // so an unseeded round is replayable once its seed is printed.
         let seed = self.seed_override.unwrap_or_else(|| rand::rng().random());

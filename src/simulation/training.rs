@@ -906,6 +906,27 @@ mod tests {
         assert_eq!(game.outcome(), Outcome::Won, "the course is done");
     }
 
+    /// A couch of two plays the course alone, and has its second seat
+    /// back on the next map without a script.
+    #[test]
+    fn a_training_round_seats_one_and_the_couch_gets_its_second_back_after() {
+        let mut game = Game::default();
+        game.seed_override = Some(5);
+        game.players = crate::simulation::PlayerCount::TWO;
+        game.map = MapFile::from_toml_str(include_str!("../../maps/boot-camp.toml")).expect("boot-camp parses");
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        assert_eq!(game.players, crate::simulation::PlayerCount::ONE, "the course seats one");
+        assert_eq!(game.players().iter().flatten().count(), 1);
+        game.init(w, h);
+        assert_eq!(game.players().iter().flatten().count(), 1, "and goes on seating one when it starts over");
+        game.map = MapFile::from_toml_str(include_str!("../../maps/lotus-lagoon.toml")).expect("lotus-lagoon parses");
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        assert_eq!(game.players, crate::simulation::PlayerCount::TWO, "the couch's count is back");
+        assert_eq!(game.players().iter().flatten().count(), 2);
+    }
+
     #[test]
     fn boot_camp_reads_and_lints_with_no_error() {
         let map = MapFile::from_toml_str(include_str!("../../maps/boot-camp.toml")).expect("boot-camp parses");

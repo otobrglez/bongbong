@@ -537,7 +537,12 @@ impl Session {
     /// too (the restart countdown waits). Returns whether it is open. Never
     /// opens where two players are not offered (`TWO_PLAYERS_AVAILABLE`).
     pub fn press_players(&mut self) -> bool {
-        if crate::TWO_PLAYERS_AVAILABLE && self.driver == Driver::Play && !self.dialog && self.level_select.is_none() {
+        if crate::TWO_PLAYERS_AVAILABLE
+            && self.driver == Driver::Play
+            && !self.dialog
+            && self.level_select.is_none()
+            && self.game.map.training.is_none()
+        {
             self.players_dialog = !self.players_dialog;
         }
         self.players_dialog
@@ -919,7 +924,8 @@ impl Session {
                 // The builder draws its own bar and none of this.
                 hud: self.driver == Driver::Play,
                 build_button: true,
-                players_button: crate::TWO_PLAYERS_AVAILABLE,
+                // A training round seats one, so it offers no second.
+                players_button: crate::TWO_PLAYERS_AVAILABLE && self.game.map.training.is_none(),
                 online_button: crate::ONLINE_AVAILABLE,
                 restart_button: !crate::KEYBOARD_AVAILABLE,
                 leave_button: false,
@@ -1825,6 +1831,16 @@ mod session_tests {
         let mut s = Session::new(game);
         s.set_campaign(campaign);
         s
+    }
+
+    /// Boot Camp is played alone: its corners offer no players button and
+    /// the dialog does not open over it.
+    #[test]
+    fn a_training_round_offers_no_second_seat() {
+        let mut s = level_session(crate::levels::Levels::shipped(), 0);
+        assert!(s.game.map.training.is_some(), "level 0 is the training stage");
+        assert!(!s.play_chrome().players_button);
+        assert!(!s.press_players(), "the players dialog stays shut");
     }
 
     /// One frame as `app.rs` runs it: a step while the round is live,
