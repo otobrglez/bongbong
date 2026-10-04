@@ -119,8 +119,7 @@ pub fn draw_corners(
         let Some(hud) = hud else { continue };
         draw_cluster_plate(d, Corners::plate(*block), a);
         draw_vitals(d, *block, corners.row_h, hud, seat, textures, a);
-        if block.height > corners.row_h {
-            let row = Rectangle::new(block.x, block.y + block.height - corners.row_h, block.width, corners.row_h);
+        if let Some(row) = corners.lamp_row(*block) {
             draw_lamp_row(d, row, hud, textures, a);
         }
     }

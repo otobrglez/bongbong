@@ -17,8 +17,9 @@
 //! a gauge, what the trigger fires with what it has left - the special
 //! weapon carried (a tank holds one at a time, `Tank::take_weapon`), else
 //! shells -, and the speed and shield gauges, on a row as tall as the
-//! right cluster's first row (`Corners::row_h`), so the two corners read
-//! along one line on a phone as on a monitor. A two-player couch round
+//! right cluster's first row (`Corners::row_h`) and a plate as tall as the
+//! right cluster's, so the two corners read along one line and stand one
+//! height on a phone as on a monitor. A two-player couch round
 //! (docs/two-players.md) gives player 2 a block of its own beside player
 //! 1's, or under it on a narrow window, each block's health gauge in its
 //! player's team colour.
@@ -734,9 +735,11 @@ impl CornerButton {
 /// Where everything in the two corners is, in UI points (`corners`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Corners {
-    /// The vitals blocks' rows: the local seat's first, a couch's player
-    /// 2's after it - beside it where the area has the width, else under
-    /// it.
+    /// The vitals blocks: the local seat's first, a couch's player 2's
+    /// after it - beside it where the area has the width, else under it.
+    /// Each is as tall as the right cluster's rows, so every plate along
+    /// the top (`Corners::plate`, `right`) is one height; its row along its
+    /// top, its lamp row under that (`Corners::lamp_row`).
     pub blocks: Vec<Rectangle>,
     /// The box the lines under the left cluster are kept to.
     pub lines: Rectangle,
@@ -744,10 +747,10 @@ pub struct Corners {
     /// a button's height (`button_height`), so the two corners read along
     /// one line on every screen - one top, one height, every readout
     /// centred on it - even where a touch screen grows the level button to
-    /// a finger's. A block's lamp row, as tall, is its last `row_h`, on the
-    /// line of the right cluster's buttons where they wrap under its first
-    /// row.
+    /// a finger's.
     pub row_h: f32,
+    /// Every block has a lamp row (`CornerShape::lamp_row`).
+    pub lamp_rows: bool,
     /// The right cluster's plate.
     pub right: Rectangle,
     /// Its first row (`INFO_W` wide).
@@ -778,6 +781,13 @@ impl Corners {
     /// what fades as one.
     pub fn left(&self) -> Rectangle {
         self.blocks.iter().fold(self.lines, |r, block| union(r, Corners::plate(*block)))
+    }
+
+    /// `block`'s lamp row, where the round has lamp rows: as tall as its
+    /// first row and a row gap under it, on the line of the right
+    /// cluster's buttons, which wrap under its first row beside one.
+    pub fn lamp_row(&self, block: Rectangle) -> Option<Rectangle> {
+        self.lamp_rows.then(|| Rectangle::new(block.x, block.y + self.row_h + ROW_GAP, block.width, self.row_h))
     }
 
     /// The minimap's plate, where there is one.
@@ -834,10 +844,13 @@ fn union(a: Rectangle, b: Rectangle) -> Rectangle {
 /// a room's chips under them; the minimap, where the frame draws one, on a
 /// plate of its own under the right cluster, flush with its right edge,
 /// shrunk to the room left above the area's bottom and left out where that
-/// is under `MINIMAP_MIN_PT` or would reach the left cluster. Every button
-/// is `button_height` tall - 44 pt on a touch screen - and the corners
-/// never meet: the area is at least `UI_MIN_W` less its edges, which holds
-/// the widest pair.
+/// is under `MINIMAP_MIN_PT` or would reach the left cluster. Every plate
+/// along the top - each block's and the right cluster's - is one height,
+/// the taller of a block's rows and the right cluster's, and a lamp row
+/// wraps the right cluster's buttons under its first row, onto the lamp
+/// row's line. Every button is `button_height` tall - 44 pt on a touch
+/// screen - and the corners never meet: the area is at least `UI_MIN_W`
+/// less its edges, which holds the widest pair.
 pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     let area = ui.area;
     let button_h = button_height(ui.touch);
@@ -849,25 +862,13 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     let couch_pair = shape.layout == HudLayout::Two;
     let beside = couch_pair && 2.0 * block_plate + CLUSTER_GAP + SIDE_GAP + right_two_rows <= area.w;
     let left_w = if beside { 2.0 * block_plate + CLUSTER_GAP } else { block_plate };
-    let one_row = left_w + SIDE_GAP + right_one_row <= area.w;
+    // A lamp row gives the left cluster a second line, which the right
+    // cluster fills with its buttons rather than standing half empty
+    // beside it.
+    let one_row = !shape.lamp_row && left_w + SIDE_GAP + right_one_row <= area.w;
 
-    // The vitals' row is the right cluster's first row's height, so the
-    // two corners share one line; a round with lanterns or lava gives
-    // every block a lamp row under it, as far under as the right
-    // cluster's buttons stand under its first row where they wrap.
-    let block_h = button_h + if shape.lamp_row { ROW_GAP + button_h } else { 0.0 };
-    let first = Rectangle::new(area.x + PLATE_PAD, area.y + PLATE_PAD, VITALS_W, block_h);
-    let mut blocks = vec![first];
-    if couch_pair {
-        blocks.push(if beside {
-            Rectangle::new(first.x + block_plate + CLUSTER_GAP, first.y, VITALS_W, block_h)
-        } else {
-            Rectangle::new(first.x, first.y + block_h + 2.0 * PLATE_PAD + CLUSTER_GAP, VITALS_W, block_h)
-        });
-    }
-    let bottom = blocks.iter().map(|b| b.y + b.height + PLATE_PAD).fold(area.y, f32::max);
-    let lines = Rectangle::new(area.x, bottom + ROW_GAP, block_plate, shape.lines as f32 * LINE_H);
-
+    // The right cluster first, since the corners' height is the taller of
+    // its rows and a block's.
     let row_y = area.y + PLATE_PAD;
     let right_edge = area.x + area.w - PLATE_PAD;
     let (info, buttons_row) = if one_row {
@@ -879,8 +880,28 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     };
     let chips = (shape.chips > 0).then(|| Rectangle::new(right_edge - chips_w, buttons_row.y + button_h + ROW_GAP, chips_w, CHIP_H));
     let content_bottom = chips.map_or(buttons_row.y + button_h, |c| c.y + c.height);
+
+    // The vitals' row is the right cluster's first row's height, so the
+    // two corners share one line, and a round with lanterns or lava gives
+    // every block a lamp row a row gap under it; every plate along the top
+    // is as tall as the taller of those rows and the right cluster's.
+    let block_rows = button_h + if shape.lamp_row { ROW_GAP + button_h } else { 0.0 };
+    let plate_h = (block_rows + 2.0 * PLATE_PAD).max(content_bottom + PLATE_PAD - area.y);
     let right_w = if one_row { right_one_row } else { right_two_rows };
-    let right = Rectangle::new(area.x + area.w - right_w, area.y, right_w, content_bottom + PLATE_PAD - area.y);
+    let right = Rectangle::new(area.x + area.w - right_w, area.y, right_w, plate_h);
+
+    let block_h = plate_h - 2.0 * PLATE_PAD;
+    let first = Rectangle::new(area.x + PLATE_PAD, area.y + PLATE_PAD, VITALS_W, block_h);
+    let mut blocks = vec![first];
+    if couch_pair {
+        blocks.push(if beside {
+            Rectangle::new(first.x + block_plate + CLUSTER_GAP, first.y, VITALS_W, block_h)
+        } else {
+            Rectangle::new(first.x, first.y + block_h + 2.0 * PLATE_PAD + CLUSTER_GAP, VITALS_W, block_h)
+        });
+    }
+    let bottom = blocks.iter().map(|b| b.y + b.height + PLATE_PAD).fold(area.y, f32::max);
+    let lines = Rectangle::new(area.x, bottom + ROW_GAP, block_plate, shape.lines as f32 * LINE_H);
 
     // The buttons from the row's right end - the mode slot, the players
     // slot, the online slot - each always in its own place, whichever of
@@ -911,6 +932,7 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
         blocks,
         lines,
         row_h: button_h,
+        lamp_rows: shape.lamp_row,
         right,
         info,
         level_button: shape.level_button.then(|| Rectangle::new(info.x, info.y, LEVEL_BUTTON_W, button_h)),
@@ -1771,11 +1793,11 @@ mod hud_tests {
     }
 
     /// The two corners read along one line on every screen and in every
-    /// shape: every block's first row and the right cluster's start at
-    /// one top and are one height - a finger's on a touch screen, where
-    /// the level button grows to one - and the plates' tops meet, so the
-    /// vitals and the round's numbers are centred on the same line; a lamp
-    /// row and the buttons' row, where they wrap, share the second line.
+    /// shape: every plate along the top - each block's and the right
+    /// cluster's - starts at one top and is one height, the first rows are
+    /// one height - a finger's on a touch screen, where the level button
+    /// grows to one - and centred on one line, and a lamp row shares the
+    /// second line with the right cluster's buttons, which wrap beside it.
     #[test]
     fn the_two_corners_read_along_one_line() {
         for (screen, ui) in screens() {
@@ -1786,16 +1808,28 @@ mod hud_tests {
                 assert_eq!(c.row_h, button_height(ui.touch), "{what}");
                 let first = c.blocks[0];
                 assert_eq!(first.y, c.info.y, "{what}: the first rows start apart");
-                assert_eq!(Corners::plate(first).y, c.right.y, "{what}: the plates' tops differ");
+                for block in &c.blocks {
+                    let plate = Corners::plate(*block);
+                    assert_eq!(plate.height, c.right.height, "{what}: a block's plate and the right cluster's differ in height");
+                    if block.y == first.y {
+                        assert_eq!(plate.y, c.right.y, "{what}: the plates' tops differ");
+                    }
+                }
+                let content = [Some(c.info), c.online, c.players, c.restart, c.build, c.leave, c.chips].into_iter().flatten();
+                let bottom = content.map(|r| r.y + r.height).fold(f32::MIN, f32::max);
+                assert!(bottom <= c.right.y + c.right.height - PLATE_PAD + 1e-3, "{what}: the right cluster's rows leave its plate");
                 let centre = |y: f32, h: f32| y + h / 2.0;
                 assert_eq!(centre(first.y, c.row_h), centre(c.info.y, c.info.height), "{what}: the rows' centre lines differ");
+                assert_eq!(c.lamp.is_some(), shape.lamp_row, "{what}");
                 if let Some(lamp) = c.lamp {
-                    assert_eq!(lamp.y + lamp.height, first.y + first.height, "{what}: the lamp row is not the block's last");
-                    let wrapped = c.build.or(c.leave).filter(|b| b.y > c.info.y);
-                    if let Some(button) = wrapped {
-                        assert_eq!(lamp.y, button.y, "{what}: the lamp row and the buttons' row start apart");
-                        assert_eq!(lamp.height, button.height, "{what}");
-                    }
+                    let row = c.lamp_row(first).expect("a lamp row");
+                    assert!(within(row, first), "{what}: the lamp row leaves its block");
+                    assert_eq!((lamp.y, lamp.height), (row.y, row.height), "{what}: the lamp button is not on its row");
+                    let button = c.build.or(c.leave).or(c.online).expect("a button");
+                    assert!(button.y > c.info.y, "{what}: the buttons do not wrap beside a lamp row");
+                    assert_eq!((lamp.y, lamp.height), (button.y, button.height), "{what}: the lamp row and the buttons' row are on two lines");
+                } else {
+                    assert_eq!(c.lamp_row(first), None, "{what}");
                 }
             }
         }
