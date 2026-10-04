@@ -713,7 +713,7 @@ impl Game {
     /// the band plan does at init (`battlefield::enemy_spawn_legal`, then
     /// `Grid::nearest_open` on the attempt cap), with its body and `Ai`,
     /// and announce it as entered.
-    fn spawn_in_band(&mut self, f: &mut Frame, row: i32) {
+    pub(super) fn spawn_in_band(&mut self, f: &mut Frame, row: i32) -> Entity {
         let (margin_min, margin_max) = {
             let t = tuning();
             let short_side = f.width.min(f.height);
@@ -773,8 +773,9 @@ impl Game {
         // A wave tank all the same: called to the fight on a field map.
         ai.field.called = self.field_map;
         ai.field.wave = self.field_map;
-        self.world.spawn((tank, ai));
+        let entity = self.world.spawn((tank, ai));
         f.events.push(Event::TankEntered { slot });
+        entity
     }
 
     /// The next owner slot for a tank the scheduler (or the dev server's

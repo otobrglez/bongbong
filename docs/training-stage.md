@@ -224,7 +224,10 @@ round), `collect` (a crate kind a seat took since the beat began),
 east of a column), `frog_full`, `wrecks` (enemy wrecks since the beat
 began); a beat whose tanks are still to roll in is not done. Starts:
 `shoot_frog` (one heavy enemy shell from a cell inside that edge along the
-frog's row or column, landing like any other), `drop` (crates air-dropped
+frog's row or column, landing like any other, fired once the frog stands on
+the beat's cell and again every `training_frog_shot_retry_seconds` until
+one has hurt it - a shell that met a wall or a tank on the way is fired
+again), `drop` (crates air-dropped
 onto cells), `roll_in` (tanks through the map's gates, `after` seconds into
 the beat). `start_health` and `start_shells` set the seats up at the start.
 `frog` is where the frog walks for the beat; `say` and `nudge` are its
@@ -251,9 +254,22 @@ lines (message keys).
   taken away, its starts run once more.
 - **Roll-ins**: `Game::training_roll_in` is a wave tank's roll-in through
   `pick_gate`'s lane, arriving with the role the script asks for
-  (`ai = "dummy"` is a hunter until the dummy exists).
+  (`ai = "dummy"` is a hunter with `Ai::frog_only`).
+- **Nothing a player does stalls a beat.** A band round keeps its wrecks,
+  and a wreck a cell and a half from a gate's inside point keeps that lane
+  busy as a standing tank does - a dummy shot the moment it rolls in
+  would keep the last beat's scout out for good. So an enemy wreck fades
+  off the field `training_wreck_seconds` after it went
+  (`fade_training_wrecks`, through `despawn_wrecks`), and a roll-in that
+  finds no free lane for `training_lane_wait_seconds` - a seat parked in it
+  - drops onto the field out of sight as a band round places one
+  (`spawn_in_band`), with the role the script asks for. A beat started
+  again takes back the tanks still standing and the crates still lying
+  that it put down, so its starts never pile up.
 - **Knobs**: the `training` tuning group (`training_respawn_seconds`,
-  `training_frog_revive_seconds`, `training_flag_reach_px`).
+  `training_frog_revive_seconds`, `training_flag_reach_px`,
+  `training_wreck_seconds`, `training_lane_wait_seconds`,
+  `training_frog_shot_retry_seconds`, and the voice's).
 - **Events**: `BeatDone`, `DoorOpened`, `FlagTaken` and `FrogRevived`;
   none travels on the wire, since no room plays a training map.
 - **The linter** opens every door before it checks (`Game::open_every_door`),
@@ -301,8 +317,8 @@ lines (message keys).
   way on.
 - **A lane a seat stands in is busy**, as it is for a wave: a tank parked
   within a cell and a half of the east gate's inside point holds the
-  beat's tank outside until it moves. The beat's nudge keeps saying "Get
-  in line with it!" meanwhile; a better line for it is open.
+  beat's tank outside for `training_lane_wait_seconds`, after which it
+  drops onto the field out of sight instead.
 
 ### Levels and skipping
 
@@ -325,8 +341,13 @@ open.
   after it; the last beat wins; a wrecked seat comes back in the last door;
   a fallen frog gets up and the round goes on; a shot from the east hurts
   the frog and its kit drops and ends the beat; a beat's tank rolls in
-  through a gate and its wreck ends the beat; Boot Camp parses, is never
-  hostable and lints with no error. `training::tests` round-trips a script.
+  through a gate and its wreck ends the beat; a wreck in the lane never
+  keeps the next beat's tank out; a seat parked in the lane holds the
+  beat's tank only so long; a beat started again puts its crates down once;
+  Boot Camp plays through from the first beat to the last the way a player
+  rushing it would (the dummy shot in the lane, the wall breached while the
+  frog is still on its way); Boot Camp parses, is never hostable and lints
+  with no error. `training::tests` round-trips a script.
 - `bubble::tests`: a line wraps inside the bubble with keys at their
   width; the body is sized for the whole line; the bubble stands above the
   frog, under it near the top or over a corner cluster, and at the view's

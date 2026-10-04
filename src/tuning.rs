@@ -2894,6 +2894,21 @@ tunables! {
         /// this long after (seconds) - the death animation's length - and
         /// the beat it fell in starts again.
         training_frog_revive_seconds: f32 = 1.6 in 0.0 ..= 10.0;
+        /// An enemy wreck in a training round fades and is taken off the
+        /// field this long after it went (seconds), so the course stays
+        /// clear and no wreck keeps a gate's lane from the next beat's
+        /// tank.
+        training_wreck_seconds: f32 = 4.0 in 0.5 ..= 60.0;
+        /// A beat's tank that has waited this long (seconds) for a free
+        /// gate lane - a seat parked in it - drops onto the field out of
+        /// sight instead, as a band round places one, so a beat never
+        /// waits for ever.
+        training_lane_wait_seconds: f32 = 5.0 in 0.5 ..= 60.0;
+        /// A training beat's shot at the frog is fired again this long
+        /// after the last (seconds) while the frog is still unhurt - the
+        /// shell met a tank or a tile on the way - so a beat that waits on
+        /// the frog's kit always gets a frog that needs it.
+        training_frog_shot_retry_seconds: f32 = 3.0 in 0.5 ..= 30.0;
         /// How far past a flag's cell a hull still takes it, px: the
         /// hull's box grown by this much touches the flag's square.
         training_flag_reach_px: f32 = 6.0 in 0.0 ..= 32.0;

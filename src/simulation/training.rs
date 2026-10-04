@@ -5,6 +5,13 @@
 //! sets holds; its doors (`map::CellObject::Door`) then open and the next
 //! beat begins. The last beat done wins the round.
 //!
+//! Nothing a player does can stall a beat. An enemy wreck fades off the
+//! field after `training_wreck_seconds`, so none keeps a gate's lane from
+//! the next beat's tank, and a beat's tank that finds no free lane for
+//! `training_lane_wait_seconds` drops onto the field out of sight the way
+//! a band round places one. A beat started again takes back the tanks and
+//! the crates it put down.
+//!
 //! Training is never lost. A wrecked seat comes back as a fresh tank in the
 //! last door opened after `training_respawn_seconds`, and a frog that goes
 //! down is back on its feet after `training_frog_revive_seconds`, with the
@@ -17,18 +24,20 @@
 
 use hecs::Entity;
 
-use crate::ai::Role;
 use crate::map::{CellObject, cell_to_world};
 use crate::math::Vec2;
 use crate::obstacle::{Material, Obstacle};
-use crate::pickup::PickupKind;
+use crate::ai::{Ai, Role};
+use crate::pickup::{Pickup, PickupKind};
 use crate::shell::{Owner, Shell};
 use crate::tank::{Tank, TankKind};
 use crate::training::{Beat, Edge, RollInSpec, TrainingAi};
 use crate::tuning::tuning;
 use crate::{MAX_SEATS, OBSTACLE_GRID_SIZE, Position};
 
-use super::{Event, Frame, Game, spawn_pickup_at, with_frog, with_frog_mut, with_tank, with_tank_mut};
+use crate::level::SpawnPlan;
+
+use super::{Event, Frame, Game, with_frog, with_frog_mut, with_tank, with_tank_mut};
 
 /// A flag on the field and whether a seat has it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -56,6 +65,15 @@ pub(crate) struct Run {
     collected: Vec<PickupKind>,
     /// Roll-ins of the running beat still to come.
     rolls: Vec<RollInSpec>,
+    /// The round clock since which a roll-in due has found no free lane,
+    /// `None` while none waits.
+    lane_busy_since: Option<f32>,
+    /// The edge the running beat's shot at the frog comes from, until it
+    /// has hurt the frog, and the round clock it was last fired at.
+    shot: Option<(Edge, Option<f32>)>,
+    /// The crates the running beat dropped, taken away if it starts
+    /// again (one taken is already gone).
+    crates: Vec<Entity>,
     /// The enemy tanks the running beat brought in, taken away if it
     /// starts again.
     tanks: Vec<Entity>,
@@ -170,6 +188,7 @@ impl Game {
             }
         }
         self.take_flags(&mut run, f);
+        self.fade_training_wrecks(f.dt);
         self.bring_back_seats(&mut run, f);
         if self.bring_back_frog(&mut run, f) {
             self.restart_beat(&mut run);
@@ -177,10 +196,11 @@ impl Game {
         if !run.finished() {
             let beat = &script.beat[run.beat];
             if !run.begun {
-                self.begin_beat(&mut run, beat, f);
+                self.begin_beat(&mut run, beat);
             }
             self.roll_in_due(&mut run, f);
             self.walk_frog(beat);
+            self.aim_at_frog(&mut run, beat, f);
             if self.beat_done(&run, beat) {
                 self.open_doors(run.beat + 1, f);
                 f.events.push(Event::BeatDone { beat: run.beat + 1 });
@@ -328,24 +348,71 @@ impl Game {
             }
             self.world.despawn(entity).ok();
         }
+        for entity in std::mem::take(&mut run.crates) {
+            if self.world.get::<&Pickup>(entity).is_ok() {
+                self.world.despawn(entity).ok();
+            }
+        }
         run.begun = false;
         run.rolls.clear();
+        run.lane_busy_since = None;
+    }
+
+    /// Count every enemy wreck's fade down and arm a new one's, so
+    /// `despawn_wrecks` takes it off the field `training_wreck_seconds`
+    /// after it went - a band round keeps its wrecks otherwise, and one in
+    /// a gate's lane would keep the next beat's tank out for good. A wave
+    /// round's wrecks fade on their own clock (`fade_wrecks`).
+    fn fade_training_wrecks(&mut self, dt: f32) {
+        if matches!(self.spawn_plan, SpawnPlan::Waves { .. }) {
+            return;
+        }
+        let seconds = tuning().training_wreck_seconds;
+        for tank in self.world.query::<&mut Tank>().iter() {
+            if tank.is_player() || !tank.is_wreck() {
+                continue;
+            }
+            tank.despawn_timer = Some(match tank.despawn_timer {
+                None => seconds,
+                Some(left) => left - dt,
+            });
+        }
     }
 
     /// The running beat's starts.
-    fn begin_beat(&mut self, run: &mut Run, beat: &Beat, f: &mut Frame) {
+    fn begin_beat(&mut self, run: &mut Run, beat: &Beat) {
         run.begun = true;
         run.since = self.time;
         run.wrecks_at = self.enemies_destroyed;
         run.collected.clear();
         run.rolls = beat.start.roll_in.clone();
-        if let Some(edge) = beat.start.shoot_frog {
-            self.shoot_frog(edge, f);
-        }
+        run.lane_busy_since = None;
+        run.shot = beat.start.shoot_frog.map(|edge| (edge, None));
         for drop in &beat.start.drop {
             let (c, r) = drop.at;
-            spawn_pickup_at(&mut self.world, cell_to_world(c, r), drop.kind, Some(self.time));
+            run.crates.push(self.world.spawn((Pickup::dropped(drop.kind, cell_to_world(c, r), Some(self.time)),)));
         }
+    }
+
+    /// The running beat's shot at the frog, once the frog stands on the
+    /// beat's cell - so it flies along the row the beat was laid out for,
+    /// not into a wall the frog is still hopping past - and again every
+    /// `training_frog_shot_retry_seconds` until one has hurt it: a beat
+    /// that waits on the frog's kit can only end once the frog needs it.
+    fn aim_at_frog(&mut self, run: &mut Run, beat: &Beat, f: &mut Frame) {
+        let (Some((edge, fired)), Some(frog)) = (run.shot, self.frog) else { return };
+        if with_frog(&self.world, frog, |fr| fr.is_dead() || fr.health < fr.max_health) {
+            run.shot = None;
+            return;
+        }
+        let arrived = beat.frog.is_none_or(|(c, r)| {
+            with_frog(&self.world, frog, |fr| fr.position.distance_to(cell_to_world(c, r)) <= OBSTACLE_GRID_SIZE * 1.5)
+        });
+        if !arrived || fired.is_some_and(|at| self.time - at < tuning().training_frog_shot_retry_seconds) {
+            return;
+        }
+        self.shoot_frog(edge, f);
+        run.shot = Some((edge, Some(self.time)));
     }
 
     /// One heavy shell fired at the players' frog from `edge`, a cell in
@@ -412,9 +479,13 @@ impl Game {
     }
 
     /// Roll in every tank of the beat whose time has come, through a free
-    /// lane; one with every lane busy waits for the next frame.
+    /// lane; one with every lane busy waits for the next frame, and once
+    /// the lanes have stayed busy `training_lane_wait_seconds` it drops onto
+    /// the field out of sight instead (`spawn_in_band`), so a seat parked
+    /// in a lane never holds the beat up.
     fn roll_in_due(&mut self, run: &mut Run, f: &mut Frame) {
         let elapsed = self.time - run.since;
+        let wait = tuning().training_lane_wait_seconds;
         let mut waiting = Vec::new();
         for spec in std::mem::take(&mut run.rolls) {
             if elapsed < spec.after {
@@ -426,10 +497,24 @@ impl Game {
                 Some(TrainingAi::Dummy) => (Role::Hunter, true),
                 None => (Role::Player, false),
             };
-            match self.training_roll_in(f, spec.tank.row(), role, frog_only) {
-                Some(entity) => run.tanks.push(entity),
-                None => waiting.push(spec),
+            if let Some(entity) = self.training_roll_in(f, spec.tank.row(), role, frog_only) {
+                run.tanks.push(entity);
+                run.lane_busy_since = None;
+                continue;
             }
+            let since = *run.lane_busy_since.get_or_insert(self.time);
+            if self.time - since < wait {
+                waiting.push(spec);
+                continue;
+            }
+            let entity = self.spawn_in_band(f, spec.tank.row());
+            let mut ai = Ai::with_role(role);
+            ai.frog_only = frog_only;
+            ai.field.called = self.field_map;
+            ai.field.wave = self.field_map;
+            self.world.insert_one(entity, ai).expect("the tank spawn_in_band just placed");
+            run.tanks.push(entity);
+            run.lane_busy_since = None;
         }
         run.rolls = waiting;
     }
@@ -663,7 +748,7 @@ mod tests {
         step(&mut game, 600);
         assert_eq!(with_tank(&game.world, seat, |t| t.shells_ammo), 0, "ten seconds and not a shell");
         let at = with_tank(&game.world, seat, |t| t.position);
-        spawn_pickup_at(&mut game.world, at, PickupKind::Ammo, None);
+        crate::simulation::spawn_pickup_at(&mut game.world, at, PickupKind::Ammo, None);
         step(&mut game, 2);
         let after_crate = with_tank(&game.world, seat, |t| t.shells_ammo);
         assert!(after_crate > 0, "the crate's shells");
@@ -694,6 +779,131 @@ mod tests {
             assert!(dummy != Some(false), "the beat's tank is a dummy");
         }
         assert!(at_frog, "and it fired at the frog");
+    }
+
+    /// Run `game` until an enemy rolls in, and answer its slot.
+    fn next_arrival(game: &mut Game, frames: usize) -> Option<usize> {
+        for _ in 0..frames {
+            step(game, 1);
+            let slot = game.events().iter().find_map(|e| match *e {
+                Event::TankEntered { slot } if slot >= game.first_enemy_slot() => Some(slot),
+                _ => None,
+            });
+            if slot.is_some() {
+                return slot;
+            }
+        }
+        None
+    }
+
+    /// The wreck of one beat's tank, killed the moment it rolls in - in
+    /// its gate's lane - never keeps the next beat's tank out.
+    #[test]
+    fn a_wreck_in_the_lane_never_keeps_the_next_beats_tank_out() {
+        let script = "\n[[training.beat]]\nstart = { roll_in = [{ tank = \"scout\", ai = \"dummy\" }] }\ndone = { wrecks = 1 }\n\n\
+                      [[training.beat]]\nstart = { roll_in = [{ tank = \"scout\", ai = \"dummy\", after = 1.0 }] }\ndone = { wrecks = 1 }\n";
+        let mut game = course(script);
+        put_seat(&mut game, 7, 7);
+        let first = next_arrival(&mut game, 600).expect("the first beat's scout rolled in");
+        game.debug_kill(first).expect("the scout can be killed");
+        let second = next_arrival(&mut game, 60 * 60).expect("the second beat's scout rolled in past the first one's wreck");
+        game.debug_kill(second).expect("the scout can be killed");
+        step(&mut game, 2);
+        assert_eq!(game.outcome(), Outcome::Won);
+    }
+
+    /// A seat parked on the gate's lane holds a beat's tank only for
+    /// `training_lane_wait_seconds`: then it drops onto the field anyway.
+    #[test]
+    fn a_seat_parked_in_the_lane_holds_the_beats_tank_only_so_long() {
+        let script = "\n[[training.beat]]\nstart = { roll_in = [{ tank = \"scout\", ai = \"dummy\" }] }\ndone = { wrecks = 1 }\n";
+        let mut game = course(script);
+        let gate = game.map.gate_cells()[1];
+        put_seat(&mut game, gate.0 - 1, gate.1);
+        let wait = tuning().training_lane_wait_seconds;
+        let slot = next_arrival(&mut game, ((wait + 2.0) * 60.0) as usize).expect("the scout came in all the same");
+        let entity = game.world.query::<(hecs::Entity, &Tank)>().iter().find(|(_, t)| t.owner_slot() == slot).map(|(e, _)| e).unwrap();
+        assert_eq!(game.world.get::<&Ai>(entity).map(|ai| ai.frog_only).ok(), Some(true), "still the beat's dummy");
+        game.debug_kill(slot).expect("the scout can be killed");
+        step(&mut game, 2);
+        assert_eq!(game.outcome(), Outcome::Won);
+    }
+
+    /// A beat started again - its frog fell - puts down its crates once,
+    /// not once more for every start.
+    #[test]
+    fn a_beat_started_again_takes_back_the_crates_it_dropped() {
+        let script = "\n[[training.beat]]\nstart = { drop = [{ kind = \"shield\", at = [4, 7] }] }\ndone = { flags = 1 }\n";
+        let mut game = course(script);
+        step(&mut game, 2);
+        let crates = |game: &Game| game.world.query::<&Pickup>().iter().filter(|p| p.kind == PickupKind::Shield).count();
+        assert_eq!(crates(&game), 1);
+        let frog = game.frog.expect("a frog");
+        for _ in 0..3 {
+            with_frog_mut(&game.world, frog, |fr| fr.damage(fr.max_health));
+            step(&mut game, ((tuning().training_frog_revive_seconds + 0.5) * 60.0) as usize);
+        }
+        assert_eq!(crates(&game), 1, "one shield crate after three starts");
+    }
+
+    /// Boot Camp from the first beat to the last, the player's way: the
+    /// flags, the ammo crate, the brick wall, the pen, the frog's kit, the
+    /// dummy shot the moment it rolls in - its wreck in the gate's lane -
+    /// and the last beat's scout.
+    #[test]
+    fn boot_camp_plays_through_to_the_end() {
+        let mut game = Game::default();
+        game.seed_override = Some(11);
+        game.map = MapFile::from_toml_str(include_str!("../../maps/boot-camp.toml")).expect("boot-camp parses");
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        let beat = |game: &Game| game.training_status().map(|s| s.beat).unwrap_or(0);
+        let until = |game: &mut Game, b: usize, what: &str| {
+            for _ in 0..60 * 60 {
+                if beat(game) >= b || game.outcome() == Outcome::Won {
+                    return;
+                }
+                step(game, 1);
+            }
+            panic!("stuck before beat {b}: {what} (on beat {})", beat(game));
+        };
+        step(&mut game, 2);
+        for (c, r) in [(8, 2), (8, 10), (3, 10)] {
+            put_seat(&mut game, c, r);
+            step(&mut game, 2);
+        }
+        until(&mut game, 2, "the flags");
+        put_seat(&mut game, 17, 2);
+        until(&mut game, 3, "the ammo crate");
+        for o in game.world.query::<&mut Obstacle>().iter() {
+            if o.cell() == (25, 6) {
+                o.destroyed = true;
+            }
+        }
+        until(&mut game, 4, "the brick wall");
+        put_seat(&mut game, 30, 6);
+        until(&mut game, 5, "into the pen");
+        // The shot at the frog lands, then the seat takes its kit.
+        let frog = game.frog.expect("a frog");
+        let mut hurt = false;
+        for _ in 0..60 * 40 {
+            step(&mut game, 1);
+            hurt = with_frog(&game.world, frog, |fr| fr.health < fr.max_health);
+            if hurt {
+                break;
+            }
+        }
+        assert!(hurt, "the shot found the frog once it reached its pen");
+        put_seat(&mut game, 31, 10);
+        until(&mut game, 6, "the frog's kit");
+        put_seat(&mut game, 30, 9);
+        let dummy = next_arrival(&mut game, 60 * 20).expect("the dummy rolled in");
+        game.debug_kill(dummy).expect("the dummy can be killed");
+        until(&mut game, 7, "the dummy");
+        let scout = next_arrival(&mut game, 60 * 30).expect("the last beat's scout rolled in past the dummy's wreck");
+        game.debug_kill(scout).expect("the scout can be killed");
+        step(&mut game, 2);
+        assert_eq!(game.outcome(), Outcome::Won, "the course is done");
     }
 
     #[test]
