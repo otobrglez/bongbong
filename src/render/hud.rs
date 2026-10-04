@@ -97,10 +97,42 @@ pub struct Line {
 /// Draw both corner clusters (`hud::corners`) in UI points - inside the
 /// camera that puts a UI point where `UiFrame` puts it - each at its fade:
 /// the vitals blocks top-left with `lines` under them, the round's numbers,
-/// the buttons and a room's chips top-right, and the minimap under them
-/// from `minimap` where the corners hold one.
+/// a room's chips and the buttons top-right, and the minimap under them
+/// from `minimap` where the corners hold one. The full-size layout is drawn
+/// under a transform `Corners::scale` times as large about its origin, so
+/// on a window too narrow for the one row every slot table below shrinks
+/// with it.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_corners(
+    d: &mut impl RaylibDraw,
+    corners: &Corners,
+    model: &HudModel,
+    chrome: &PlayChrome,
+    players: PlayerCount,
+    textures: &Textures,
+    fade: Fade,
+    lines: &[Line],
+    minimap: Option<&crate::render::minimap::MinimapLayer>,
+) {
+    let (s, o) = (corners.scale, corners.origin);
+    if s == 1.0 {
+        return draw_full_corners(d, corners, model, chrome, players, textures, fade, lines, minimap);
+    }
+    // rlgl transforms every vertex drawn while a matrix is pushed, raylib's
+    // own shapes, textures and text alike.
+    unsafe {
+        sola_raylib::ffi::rlPushMatrix();
+        sola_raylib::ffi::rlTranslatef(o.x, o.y, 0.0);
+        sola_raylib::ffi::rlScalef(s, s, 1.0);
+        sola_raylib::ffi::rlTranslatef(-o.x, -o.y, 0.0);
+    }
+    draw_full_corners(d, &corners.unscaled(), model, chrome, players, textures, fade, lines, minimap);
+    unsafe { sola_raylib::ffi::rlPopMatrix() };
+}
+
+/// `draw_corners` at full size.
+#[allow(clippy::too_many_arguments)]
+fn draw_full_corners(
     d: &mut impl RaylibDraw,
     corners: &Corners,
     model: &HudModel,
