@@ -969,7 +969,7 @@ map tank counts):
 | pockets | 1/10 | churn=2 |
 
 `invariant` and `bump-rate` are zero everywhere. The fixture gate
-(`just probe-fixtures`, mirrored in ci.yml) pins the seed and holds each
+(`just probe-fixtures`, which ci.yml runs) pins the seed and holds each
 kind to its cross-fixture maximum exactly — deterministic, so an
 exceedance is a real behavior change; the justfile comment carries the
 re-baselining policy.
