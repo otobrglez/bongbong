@@ -67,8 +67,31 @@ probe-waves:
 # fixture's totals are unchanged but props (border-stuck 0 -> 1, churn
 # 4 -> 5) and towers (spin 0 -> 1, clustering 1 -> 0), all inside their
 # ceilings.
+# The probe is built once and the fixtures run side by side, one per core,
+# each into its own log, printed in fixture order once all are done; every
+# fixture runs even after one fails, and the recipe fails if any did. CI
+# runs this recipe (.github/workflows/ci.yml), so these are the only copy
+# of the ceilings.
 probe-fixtures:
-    for m in maps/test/*.toml; do cargo run --bin probe -- --map $m --frames 1800 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=6 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=2 --budget offbox-fire=0 || exit 1; done
+    #!/usr/bin/env bash
+    set -euo pipefail
+    budgets="--budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=6 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=2 --budget offbox-fire=0"
+    cargo build --bin probe
+    probe="${CARGO_TARGET_DIR:-target}/debug/probe"
+    logs=$(mktemp -d)
+    trap 'rm -rf "$logs"' EXIT
+    printf '%s\n' maps/test/*.toml | xargs -P "$(getconf _NPROCESSORS_ONLN)" -I{} sh -c \
+        '"$1" --map "$2" --frames 1800 --rounds 10 --seed 1000 $3 > "$4/$(basename "$2").log" 2>&1 || touch "$4/$(basename "$2").failed"' \
+        _ "$probe" {} "$budgets" "$logs"
+    failed=0
+    for m in maps/test/*.toml; do
+        cat "$logs/$(basename "$m").log"
+        if [ -e "$logs/$(basename "$m").failed" ]; then
+            echo "probe-fixtures: $m is over its ceilings" >&2
+            failed=1
+        fi
+    done
+    exit "$failed"
 
 # Field maps (docs/large-maps-follow-camera.md section 12): the rules only
 # a map the camera follows plays by (`simulation::field`) - alerts chained
@@ -228,7 +251,7 @@ _build-web features:
         command -v emcc >/dev/null 2>&1 \
             || source ~/.local/share/emsdk/emsdk_env.sh >/dev/null 2>&1 \
             || { echo "[build-web] emcc not on PATH and no emsdk at ~/.local/share/emsdk/. Run just setup-web first." >&2; exit 1; }; \
-        cargo build --release --target wasm32-unknown-emscripten {{features}}'
+        cargo build --release --target wasm32-unknown-emscripten --bin bongbong {{features}}'
     mkdir -p site/public/game
     rm -f site/public/game/*
     cp target/wasm32-unknown-emscripten/release/bongbong.wasm site/public/game/
