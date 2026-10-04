@@ -58,6 +58,12 @@ runs:
       working-directory: site
       run: yarn install --immutable
 
+    # A run reads only caches saved on its own ref or on master, and this
+    # build would otherwise never run on master: ci.yml's `web-cache` job
+    # builds it on every push there, so a PR's first push and a release tag
+    # start from master's dependencies rather than from nothing. A run that
+    # finds its exact key saves nothing, so a PR stores a copy of its own
+    # only when it changes Cargo.lock.
     - name: Cache cargo/emsdk
       uses: actions/cache@v6
       with:
@@ -88,8 +94,11 @@ runs:
         CARGO_FEATURES: ${{ inputs.cargo-features }}
       run: |
         source ~/.local/share/emsdk/emsdk_env.sh
+        # `--bin bongbong`: the page ships that binary alone, and every
+        # other bin (probe, mapshot, bbmcp) would be compiled and emcc-linked
+        # for nothing.
         # shellcheck disable=SC2086 - the input is deliberately word-split into flags
-        cargo build --release --target wasm32-unknown-emscripten $CARGO_FEATURES
+        cargo build --release --target wasm32-unknown-emscripten --bin bongbong $CARGO_FEATURES
         mkdir -p site/public/game
         rm -f site/public/game/*
         cp target/wasm32-unknown-emscripten/release/bongbong.wasm site/public/game/

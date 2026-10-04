@@ -2,8 +2,6 @@
 # (unit + determinism + map lint) plus the budgeted probe fixture sweeps.
 # Deliberately separate from the deploy lanes (cloudflare-deploy.yml /
 # pr-preview.yml) and never touching release.yml (cargo-dist-generated).
-# First real validation happens on push - a workflow file can't run before
-# it exists on the branch.
 name: CI
 
 on:
@@ -11,9 +9,24 @@ on:
     branches: [master]
   pull_request:
 
+# A new push to a PR supersedes the run in progress for it. Master's runs
+# each finish: every one is a merge, and each saves the caches PRs read.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # The dev profile at opt-level 1 (dependencies stay at Cargo.toml's
+      # opt-level 3): the game crate takes about a minute longer to compile
+      # and its tests, the CPU thumbnail renders and the probe sweeps run
+      # several times faster, which is the larger share of this job. Debug
+      # assertions and overflow checks stay on, and the determinism pins
+      # hold at either level. Line tables only keep the target small.
+      CARGO_PROFILE_DEV_OPT_LEVEL: "1"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v7
 
@@ -34,16 +47,14 @@ jobs:
         with:
           toolchain: "1.98.1"
 
-      - name: Cache cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ci-test-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ci-test-${{ runner.os }}-
+      # Dependencies only: the workspace's own crates are rebuilt on every
+      # run anyway, so they are left out of the saved cache. Keyed on the
+      # lockfile, the manifests, the toolchain and the CARGO_* variables
+      # above; a PR saves a copy of its own only when one of those differs
+      # from master's.
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: extractions/setup-just@v4
 
       # The whole `cargo test --lib` suite: pathfind/shell-sweep/tile-seam/
       # weapon-queue units, the seeded-replay determinism guard, and the
@@ -52,20 +63,22 @@ jobs:
         run: cargo test --lib
 
       # Budgeted probe sweeps over every fixture map - headless, no display
-      # needed. Mirrors the justfile's `probe-fixtures` recipe inline (no
-      # `just` on the runner): pinned seed, ceilings = the recipe's current
-      # baseline maxima across the fixtures (deterministic under the pinned
-      # seed, so an exceedance is a real behavior change). These budgets
-      # MUST be copied verbatim from the justfile recipe whenever it is
-      # re-baselined - that recipe's comment carries the policy and the
-      # per-fixture explanation of every non-zero ceiling.
+      # needed. The justfile recipe holds the ceilings and the policy for
+      # re-baselining them.
       - name: probe fixture sweeps
-        run: |
-          for m in maps/test/*.toml; do
-            cargo run --bin probe -- --map "$m" --frames 1800 --rounds 10 --seed 1000 \
-              --budget stale-start=0 --budget stall=0 --budget border-stuck=1 \
-              --budget jitter=6 --budget spin=1 --budget churn=10 --budget clustering=9 \
-              --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 \
-              --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=2 \
-              --budget offbox-fire=0 || exit 1
-          done
+        run: just probe-fixtures
+
+  # Builds the web client on every push to master, so its cargo and emsdk
+  # cache is saved where every PR preview and release tag can read it (a
+  # run reads only caches saved on its own ref or on master). Nothing is
+  # deployed. Built with dev-tools, as the PR previews that read it most are.
+  web-cache:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build web (wasm + Astro site, dev-tools)
+        uses: ./.github/actions/build-web
+        with:
+          cargo-features: --features dev-tools
