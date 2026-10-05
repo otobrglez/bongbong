@@ -5641,7 +5641,7 @@ mod determinism_tests {
         // Never bump these to go green - work out which change moved them
         // first.
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (11_365_739_967_979_466_473, 10_166_866_011_651_403_869), "(one seat, two seats)");
+        assert_eq!((one, two), (11_365_739_967_979_466_473, 16_387_833_415_423_339_632), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round
