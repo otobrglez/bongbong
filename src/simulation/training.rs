@@ -448,8 +448,9 @@ impl Game {
 
     /// The frog hops on toward the running beat's cell, a hop at a time
     /// along the nav grid, so it goes through the doors its beats opened
-    /// and waits for the player in the next pen. Between hops it keeps its
-    /// own reflexes: it still bites and still shies from a tank.
+    /// and waits for the player in the next pen. At its cell it still bites
+    /// an enemy and shies from one; it never shies from a seat
+    /// (`frog_reflexes`).
     fn walk_frog(&mut self, beat: &Beat) {
         let (Some(frog), Some((c, r))) = (self.frog, beat.frog) else { return };
         let target = cell_to_world(c, r);
@@ -734,11 +735,68 @@ mod tests {
         assert!(still.distance_to(cell_to_world(12, 4)) < 1.0, "it stays on its cell while the door is shut, at {still:?}");
         put_seat(&mut game, 6, 4);
         step(&mut game, 2);
-        // Out of its way, so it does not shy from the tank.
+        // Out of its way, so the tank does not stand in its path.
         put_seat(&mut game, 14, 7);
         step(&mut game, 600);
         let at = with_frog(&game.world, frog, |fr| fr.position);
         assert!(at.distance_to(cell_to_world(5, 4)) < 4.0, "the frog hopped to beat 2's cell, at {at:?}");
+    }
+
+    /// Open the course's door and drive seat 0 east along the frog's row
+    /// from (6, 4) for `frames`, and answer the frog's position at the
+    /// start and whether it hopped.
+    fn drive_up_to_the_frog(game: &mut Game, frames: usize) -> (Position, bool) {
+        let frog = game.frog.expect("a frog");
+        game.open_every_door();
+        put_seat(game, 6, 4);
+        step(game, 1);
+        let start = with_frog(&game.world, frog, |fr| fr.position);
+        let (w, h) = game.map.field_size();
+        let east = Input::single(crate::ai::Intent { move_dir: Some(crate::tank::Dir::Right), ..Default::default() });
+        let mut hopped = false;
+        for _ in 0..frames {
+            game.update(east, 1.0 / 60.0, w, h);
+            hopped |= with_frog(&game.world, frog, |fr| fr.position.distance_to(start) > 0.5);
+        }
+        (start, hopped)
+    }
+
+    /// A tank driven right up to a training frog standing on its beat's
+    /// cell leaves it where it is: the frog leads the seat and never shies
+    /// from it. The same drive on a map with no script sends it hopping.
+    #[test]
+    fn a_training_frog_lets_the_seat_drive_right_up_to_it() {
+        let script = "\n[[training.beat]]\nfrog = [12, 4]\ndone = { flags = 9 }\n";
+        let mut game = course(script);
+        let (start, hopped) = drive_up_to_the_frog(&mut game, 180);
+        let seat = game.player().expect("seat 0");
+        let near = with_tank(&game.world, seat, |t| t.position.distance_to(start));
+        let avoid = game.frog.map(|e| with_frog(&game.world, e, crate::frog::Frog::avoid_range)).expect("a frog");
+        assert!(near < avoid, "the seat came within the frog's avoid range ({near} px of {avoid})");
+        assert!(!hopped, "the training frog stayed put");
+
+        let mut plain = course("");
+        assert!(plain.training_status().is_none(), "no script, no training round");
+        let (_, hopped) = drive_up_to_the_frog(&mut plain, 180);
+        assert!(hopped, "a frog in any other round shies from the tank");
+    }
+
+    /// A training frog still hops away from an enemy tank.
+    #[test]
+    fn a_training_frog_still_shies_from_an_enemy_tank() {
+        let script = "\n[[training.beat]]\nfrog = [12, 4]\ndone = { flags = 9 }\n";
+        let mut game = course(script);
+        put_seat(&mut game, 2, 7);
+        step(&mut game, 2);
+        let frog = game.frog.expect("a frog");
+        let start = with_frog(&game.world, frog, |fr| fr.position);
+        game.debug_spawn_enemy(cell_to_world(12, 6), Some(TankKind::Scout.row()), Some(Role::Guard)).expect("an enemy spawns");
+        let mut hopped = false;
+        for _ in 0..30 {
+            step(&mut game, 1);
+            hopped |= with_frog(&game.world, frog, |fr| fr.position.distance_to(start) > 0.5);
+        }
+        assert!(hopped, "the frog shied from the enemy");
     }
 
     #[test]

@@ -302,9 +302,11 @@ lines (message keys).
   toward the running beat's `frog` cell a hop at a time
   (`training_frog_stride` of its usual hop, the next as soon as it lands),
   routed on the nav cache's layer - the tiles with no frog in them - so it
-  waits behind a closed door and goes through it once it opens. While it
-  walks it does not shy from tanks (`frog_walking`); at its cell its
-  reflexes are its own again.
+  waits behind a closed door and goes through it once it opens. It never
+  shies from a seat, so the player can drive right up to it and follow
+  it; it still hops away from an enemy tank, except while it walks
+  (`frog_walking`). It does not dodge shells at all - the frog beat needs
+  the shot from the east to land.
 - **The lines** (`bubble.rs`, `FrogVoice`, owned by `app.rs` beside
   `fx::Fx`): read after every step - a new beat clears what the last one
   still had to say and queues its `say` list; the frame's events add the
