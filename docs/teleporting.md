@@ -63,6 +63,63 @@ already agree when `sync_tanks_and_ram` measures travel and `lay_tracks` sees no
 - **Events**: `Event::Teleported { slot, x, y, to_x, to_y }` and two `SHOCK_TELEPORT` ripples
   (from and to). No screen flash.
 
+## Shots (`simulation/portals.rs`)
+
+Shells, bullets, plasma bolts and laser beams go through the network too, while `portal_shots`
+is on (a tower's bullets included). Missiles do not: they fly over everything and only their
+burst touches the ground, so a portal under one is open ground.
+
+- **Going in**: a shot whose path this frame passes within `portal_shot_radius` (28 px, under a
+  tank's 40: a shot is a point and should have to hit the swirl, not graze the rim) of an
+  anchor goes in at the point of its path nearest the anchor (`portals::shot_entry`). It is
+  judged only up to that point (`Game::resolve_projectiles` sweeps `prev..entry`), so whatever
+  stands before it stops it and nothing beyond it on that side does.
+- **Coming out**: at the same offset from another portal's anchor, a hair (`EXIT_CLEARANCE_PX`)
+  along its heading, with heading, speed, owner, damage, lag-compensation rewind and pass-over
+  list kept (`portals::exit_point`, `Game::shot_through`). The exit is one round-RNG draw,
+  uniform among the other portals, made only where a shot goes in - a round in which no shot
+  meets a portal draws exactly what it would on a map with none. No room check: a shot may
+  come out into a wall beside the exit, and bursts on it.
+- **Leaving a portal**: a shot inside a swirl it came out of, or one fired by a tank standing
+  on a portal, is *leaving* that portal (`ShotPortals::leaving`, a component attached only
+  then) and cannot go into it until it has left the swirl - the shot's portal cooldown. A shot
+  that came out also heads away from its exit's anchor, so the nearest-point rule would not
+  take it back anyway.
+- **Passes**: `portal_shot_max_passes` (4) per shot or beam; past it the portals let it fly
+  over. Two portals lined up on a heading would otherwise hand a shot back and forth for ever.
+- **The laser** is bent leg by leg (`Game::resolve_lasers`): each leg is swept up to the next
+  portal it reaches, then carries on from the exit on the same heading for the reach it has
+  left, so hits are judged along the bent path. Each leg is drawn as its own `LaserBeam` and
+  logged as its own `Event::LaserBeam` (`leg` 0 from the lens, `portal` when the leg ends going
+  in), each pass between two as a `ShotTeleported` with no id.
+- **Events**: `Event::ShotTeleported { id, x, y, to_x, to_y }` (`id` the projectile's, `None`
+  for a beam): a small blue spark flare at each end in `fx.rs`, no ripple and no shake - a
+  minigun burst can send a dozen through in a second.
+- **The AI** does not know about any of it: an enemy lined up on a seat through a portal fires
+  as it would through open ground, and its shot comes out somewhere else.
+
+**Online.** `WireEvent::ShotTeleported` and `LaserBeam`'s `leg`/`portal` travel (protocol
+13). The interpolator draws a shot whose far snapshot carries its `ShotTeleported` as a jump -
+held at the near end, drawn at the exit the frame render time reaches it, its correction offset
+dropped - exactly as a hull's `Teleported`; a replica flashes a beam's lens on its first leg
+alone. What is drawn in the present cannot know the room's draw, so it stops at the portal:
+
+- *This seat's provisional shots* (`net::predict`) are swept against the portals too
+  (`PresentWorld::portal_entry`, the same rule, the `leaving` portal included). One that goes
+  in leaves the picture at the point it went in, with no impact; its room copy stays hidden
+  until the interpolator hands over that copy's own `ShotTeleported`
+  (`Predictor::shot_teleported`), and is then the shot, drawn from the exit on the room's
+  timeline. A copy that bursts short of the portal, or flies on past it, is shown at once.
+  The compromise: between the provisional going in and the room's copy coming out the shot is
+  in neither picture, for about a round trip plus the picture's delay.
+- *A beam drawn on the press* stops at the first portal on its line; the legs past it are the
+  room's `LaserBeam`s (the seat's first, claimed, is the one it drew), a round trip later.
+- *Incoming fire carried into the present* (`net::round`) is taken off the picture for the
+  frames its carried path runs into a portal, and starts afresh from the exit, eased up to the
+  lead as from a muzzle, on the frame its `ShotTeleported` is handed over. A foreign shot fired
+  inside a swirl is not known to be leaving it there, so it may blink out for those frames.
+
+
 ## AI routing: the optimistic hub
 
 `Grid::with_portals(centres, radius, hop_cost)` (called from `Game::nav_grid`, so the AI,
@@ -136,5 +193,7 @@ footprint rule the planner routes by, so a portal-only room is playfield and not
 ## Tooling
 
 `snapshot` lists `portals`/`portals_active` and each tank's `portal_cooldown` (also settable
-through `set_tank`); `terrain` carries the same list; `events` filters `teleported`. The probe
-restarts a tank's trail and spin chain on the frame it hops, so a jump never reads as churn.
+through `set_tank`); `terrain` carries the same list; `events` filters `teleported` and
+`shot_teleported`. The probe restarts a tank's trail and spin chain on the frame it hops, so a
+jump never reads as churn. `portal_shots` off in a `--tuning` patch flies every shot over
+the portals, for comparing a sweep.

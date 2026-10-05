@@ -60,6 +60,8 @@ pub struct PresentWorld {
     frogs: Vec<Position>,
     width: f32,
     height: f32,
+    /// The portals a shot goes into (`Game::shot_portals`).
+    portals: Vec<Position>,
 }
 
 impl Game {
@@ -87,7 +89,7 @@ impl Game {
             .flatten()
             .filter_map(|e| self.world.get::<&crate::frog::Frog>(e).ok().filter(|f| !f.is_dead()).map(|f| f.position))
             .collect();
-        PresentWorld { terrain, tanks, frogs, width, height }
+        PresentWorld { terrain, tanks, frogs, width, height, portals: self.shot_portals().to_vec() }
     }
 
     /// Kick one seat's hull back from a shot it just fired along
@@ -357,8 +359,25 @@ impl PresentWorld {
         best.map(|(t, c)| (Position::new(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t), c))
     }
 
+    /// Where a shot flying `p0..p1`, leaving the portal `leaving` if any,
+    /// goes into a portal, the way the room puts it through
+    /// (`simulation::portals::shot_entry`). Which portal it comes out of is
+    /// the room's draw, so a shot drawn in the present goes no further than
+    /// this.
+    pub fn portal_entry(&self, p0: Position, p1: Position, leaving: Option<usize>) -> Option<Position> {
+        crate::simulation::portals::shot_entry(p0, p1, &self.portals, tuning().portal_shot_radius, leaving).map(|(_, at)| at)
+    }
+
+    /// The portal whose swirl `p` stands inside, if any - the one a shot
+    /// fired there is leaving (`simulation::portals::inside`).
+    pub fn portal_inside(&self, p: Position) -> Option<usize> {
+        crate::simulation::portals::inside(p, &self.portals, tuning().portal_shot_radius)
+    }
+
+
     /// Where `p0..p1` first meets a tile or the field's edge - the statics
     /// only, for a shot drawn ahead of where the room has it.
+
     pub fn static_contact(&self, p0: Position, p1: Position) -> Option<Position> {
         let t = [self.terrain.first_solid_along(p0, p1), self.edge_along(p0, p1)].into_iter().flatten().min_by(f32::total_cmp)?;
         Some(Position::new(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t))

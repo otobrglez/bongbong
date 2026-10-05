@@ -1506,6 +1506,21 @@ tunables! {
         /// outside the exit's trigger radius. Nothing free within it means
         /// the teleport does not happen this frame.
         portal_arrival_max_cells: i32 = 6 in 1 ..= 32;
+        /// Whether shells, bullets, plasma bolts and laser beams pass
+        /// through portals too (docs/teleporting.md, "Shots"). Off, a
+        /// shot flies over a portal as over open ground.
+        portal_shots: bool = true in 0 ..= 1;
+        /// A shot whose path passes this close (px) to a portal's anchor
+        /// goes in, at the point of its path nearest the anchor, and comes
+        /// out of another portal at the same offset from its anchor,
+        /// heading and speed kept. Smaller than a tank's trigger: a shot is
+        /// a point, and should have to hit the swirl rather than graze the
+        /// rim.
+        portal_shot_radius: f32 = 28.0 in 4.0 ..= 120.0;
+        /// How many portals one shot or beam may pass through; past it the
+        /// portals let it fly over. A shot lined up between two portals
+        /// would otherwise loop for ever.
+        portal_shot_max_passes: i32 = 4 in 0 ..= 32;
     }
 
     group volcano {
