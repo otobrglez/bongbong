@@ -284,6 +284,11 @@ keys! {
     FROG_FIRE_NUDGE_TOUCH = "frog-fire-nudge-touch";
     FROG_MINIGUN = "frog-minigun";
     FROG_WALL = "frog-wall";
+    FROG_DRUMS = "frog-drums";
+    FROG_DRUM_KINDS = "frog-drum-kinds";
+    FROG_OIL = "frog-oil";
+    FROG_DRUMS_NUDGE = "frog-drums-nudge";
+    FROG_BOOM = "frog-boom";
     FROG_PAD = "frog-pad";
     FROG_OW = "frog-ow";
     FROG_KIT = "frog-kit";
