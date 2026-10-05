@@ -2402,6 +2402,12 @@ tunables! {
         /// pixel rather than on the walls sheet's 2px block grid. Stacking
         /// the two made grass twice as chunky as the world around it.
         grass_scale: f32 = 2.0 in 0.5 ..= 4.0;
+        /// How far a tuft may stand in front of the foot of a wall to its
+        /// north, px over the wall's bottom edge (`grass::keep_off`): a
+        /// quarter of a cell, about one course of bricks, reads as grass
+        /// growing at the wall's foot; more covers the wall itself. A wall
+        /// beside or below a tuft is never overlapped.
+        grass_wall_overlap_px: f32 = 8.0 in 0.0 ..= 16.0 @ Restart;
         /// Each tuft's own flutter on top of the wind (`grass::bend`): how
         /// far a tip travels, and how fast. Hashed per tuft, so it is what
         /// keeps a field bending in a gust from moving as one sheet.

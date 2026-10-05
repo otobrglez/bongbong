@@ -297,14 +297,8 @@ impl Game {
 
     /// The tiles: every wall and prop with its shadow and edge cap. Trees
     /// are not tiles here - their canopies belong over the tanks, so they
-    /// close `paint_standing` instead. The tufts whose art reaches a tile
-    /// (`GrassTuft::under_tiles`) come first, so the tile covers them.
+    /// close `paint_standing` instead.
     pub fn paint_tiles(&self, c: &mut impl Canvas) {
-        for tuft in self.grass.iter().filter(|g| g.under_tiles) {
-            if !c.culls(tuft.base) {
-                crate::grass::draw_tuft(c, tuft, self.map.theme, self.time);
-            }
-        }
         let fences: HashSet<(i32, i32)> = self
             .world
             .query::<&Obstacle>()
@@ -382,8 +376,7 @@ impl Game {
 
     /// Everything standing on the ground: pickups, then tanks, frogs and
     /// grass drawn back to front by where they *meet* the ground, then the
-    /// trees over the lot. A tuft that reaches a tile is not here: it was
-    /// drawn under the tiles (`paint_tiles`).
+    /// trees over the lot.
     ///
     /// Grass has to be interleaved rather than drawn on top of the lot: a
     /// tuft rooted behind a tank should be hidden by it, and drawing all
@@ -457,7 +450,7 @@ impl Game {
         let grass_up_to = |c: &mut _, upto: f32, from: usize| {
             let mut i = from;
             while i < self.grass.len() && self.grass[i].base.y <= upto {
-                if !self.grass[i].under_tiles && !culled(cull, self.grass[i].base) {
+                if !culled(cull, self.grass[i].base) {
                     crate::grass::draw_tuft(c, &self.grass[i], self.map.theme, self.time);
                 }
                 i += 1;
