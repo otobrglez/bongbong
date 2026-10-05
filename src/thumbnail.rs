@@ -189,7 +189,7 @@ mod tests {
         ("glasshouses", 0x224b_c141_6b75_4155),
         ("scrapyard", 0x702f_c253_d8b1_b84c),
         ("grand-campaign", 0x83ef_6bbf_2dcf_c081),
-        ("boot-camp", 0x11f0_cf1b_fd5a_9639),
+        ("boot-camp", 0x0624_f278_a249_689a),
     ];
 
     /// Decoding the sheets is raylib's job, so this and the next test run

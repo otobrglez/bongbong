@@ -127,6 +127,10 @@ pub struct BeatDone {
     /// Any one of these cells' tiles is gone.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub destroyed: Vec<(i32, i32)>,
+    /// Every one of these cells' tiles is gone: a range of drums is done
+    /// once the last of them has gone up, whichever one was shot.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub destroyed_all: Vec<(i32, i32)>,
     /// The first seat's hull stands east of this column.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub past_col: Option<i32>,
@@ -207,12 +211,16 @@ done = { frog_full = true }
 id = "enemy"
 start = { roll_in = [{ tank = "scout", ai = "dummy", after = 1.5 }] }
 done = { wrecks = 1, destroyed = [[28, 6], [28, 5]] }
+
+[[beat]]
+id = "barrels"
+done = { destroyed_all = [[31, 7], [35, 6]] }
 "#;
 
     #[test]
     fn a_script_reads_its_beats_in_order_and_writes_back_the_same() {
         let t: Training = toml::from_str(SCRIPT).expect("script parses");
-        assert_eq!(t.beat.len(), 3);
+        assert_eq!(t.beat.len(), 4);
         assert_eq!(t.beat[0].done.flags, Some(3));
         assert_eq!(t.beat[0].frog, Some((5, 4)));
         assert_eq!(t.beat[1].start.shoot_frog, Some(Edge::East));
@@ -221,6 +229,7 @@ done = { wrecks = 1, destroyed = [[28, 6], [28, 5]] }
         let roll = t.beat[2].start.roll_in[0];
         assert_eq!((roll.tank, roll.ai, roll.after), (TankKind::Scout, Some(TrainingAi::Dummy), 1.5));
         assert_eq!(t.beat[2].done.destroyed, vec![(28, 6), (28, 5)]);
+        assert_eq!(t.beat[3].done.destroyed_all, vec![(31, 7), (35, 6)]);
         let again: Training = toml::from_str(&toml::to_string(&t).expect("writes")).expect("reads back");
         assert_eq!(again, t);
     }
