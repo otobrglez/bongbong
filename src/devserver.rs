@@ -460,7 +460,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "click",
-        description: "A raw press at a window position - the window's own coordinates, which `status.ui.buttons` and `status.camera.window_field` give (with no window, the live mode's bitmap at its own size: the builder's under its 32 px bar, play's field alone) - in either mode, on the same hit-tests a mouse or a finger uses: in play mode the corners' buttons (BUILD, the players button, ONLINE, RESTART on a keyboard-less build, and the level button on a level - `status.ui.buttons`), either dialog's buttons (a press outside a dialog closes it), a level's end-screen buttons (LEVELS, PLAY AGAIN, the way on) and the level select's tiles and BACK (a press outside it closes it) - `status.ui.screen_buttons` - and a press on the field itself does nothing in play mode; the lobby's buttons (`status.ui.screen_buttons`); online the corners' LEAVE; in build mode the bar's buttons (PLAY starts the round like `play`), an open popup's rows, steppers and pager - `status.builder.buttons` - or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`, with `world` - the world point the press landed on, through the camera - for a press on the field outside the builder. With `touch`, the press is a tap: the hints turn to taps, as a finger landing turns them (`status.ui.hints`). This tests the UI; `build`/`play`/`builder_*` address the model directly.",
+        description: "A raw press at a window position - the window's own coordinates, which `status.ui.buttons` and `status.camera.window_field` give (with no window, the live mode's bitmap at its own size: the builder's under its 32 px bar, play's field alone) - in either mode, on the same hit-tests a mouse or a finger uses: in play mode the corners' buttons (BUILD, the pause button left of it, the players button, ONLINE, RESTART on a keyboard-less build, and the level button on a level - `status.ui.buttons`), either dialog's buttons (a press outside a dialog closes it), a level's end-screen buttons (LEVELS, PLAY AGAIN, the way on) and the level select's tiles and BACK (a press outside it closes it) - `status.ui.screen_buttons` - and a press on the field itself does nothing in play mode; the lobby's buttons (`status.ui.screen_buttons`); online the corners' LEAVE; in build mode the bar's buttons (PLAY starts the round like `play`), an open popup's rows, steppers and pager - `status.builder.buttons` - or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`, with `world` - the world point the press landed on, through the camera - for a press on the field outside the builder. With `touch`, the press is a tap: the hints turn to taps, as a finger landing turns them (`status.ui.hints`). This tests the UI; `build`/`play`/`builder_*` address the model directly.",
         schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right"],"default":"left"},"drag_to":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"[x, y] to drag to before releasing"},"touch":{"type":"boolean","default":false,"description":"A tap rather than a mouse press: the hints turn to taps (`status.ui.hints`)"}},"required":["x","y"]}"#,
         read_only: false,
         destructive: false,
@@ -2135,6 +2135,10 @@ impl DevServer {
                     session.press_players();
                 } else if crate::ONLINE_AVAILABLE && corner == Some(CornerButton::Online) {
                     session.press_online();
+                } else if !right && corner == Some(CornerButton::Pause) {
+                    // What the P key's `Input::pause_pressed` does at the
+                    // top of the next update, here at the frame boundary.
+                    session.game.paused = !session.game.paused;
                 } else if !crate::KEYBOARD_AVAILABLE && corner == Some(CornerButton::Restart) {
                     crate::tuning::request_restart();
                 }
@@ -5128,6 +5132,29 @@ cells."1,1" = { kind = "wall" }"#;
     }
 
     /// The level select through the tools: the HUD's level button and
+    /// The pause button left of BUILD is the P key with no keyboard: a
+    /// click pauses the round, `status.ui` keeps reporting it where it
+    /// stood, and a second click takes the round on again.
+    #[test]
+    fn the_pause_button_pauses_and_resumes_the_round() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(3);
+        game.init(crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32);
+        let mut s = Session::new(game);
+        assert!(!s.game.paused);
+        let button = corner_button(&mut server, &tx, &mut s, "pause");
+        let build = corner_button(&mut server, &tx, &mut s, "build");
+        assert!(button["x"].as_f64() < build["x"].as_f64(), "pause stands left of BUILD: {button} {build}");
+        ask(&mut server, &tx, &mut s, "click", button.clone()).unwrap();
+        assert!(s.game.paused, "a click pauses the round");
+        assert!(s.play_chrome().paused, "the button shows the play triangle");
+        assert_eq!(corner_button(&mut server, &tx, &mut s, "pause"), button, "the button stays where it was");
+        ask(&mut server, &tx, &mut s, "click", button).unwrap();
+        assert!(!s.game.paused, "a second click takes the round on again");
+    }
+
     /// Esc open it, a locked tile is no button, the arrows and Enter start
     /// a level reached, and `step` refuses by name while the screen stands
     /// over the round rather than waiting for frames that never run.
