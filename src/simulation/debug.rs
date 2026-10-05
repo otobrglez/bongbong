@@ -769,8 +769,6 @@ impl Game {
             let mut q = self.world.query_one::<&mut Tank>(entity);
             let tank = q.get().map_err(|e| e.to_string())?;
             tank.position = pos;
-            tank.ring_position = pos;
-            tank.ring_velocity = Vec2::new(0.0, 0.0);
             tank.velocity = Vec2::new(0.0, 0.0);
             if let Some(rot) = rotation {
                 tank.rotation = rot;

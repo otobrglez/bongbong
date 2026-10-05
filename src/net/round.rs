@@ -1227,11 +1227,10 @@ impl<T: Transport> OnlineRound<T> {
     }
 }
 
-/// Lift the tread-mark trail of every tank whose owner slot is in `slots`
-/// and put its ring follower under the hull, as `net::apply` does for a
-/// hull it moves further than driving would: the next `tick_presentation`
-/// starts the trail again from where the hull landed instead of pressing
-/// marks across the jump, and the ring does not glide over after it.
+/// Lift the tread-mark trail of every tank whose owner slot is in `slots`,
+/// as `net::apply` does for a hull it moves further than driving would:
+/// the next `tick_presentation` starts the trail again from where the hull
+/// landed instead of pressing marks across the jump.
 fn lift_trails(game: &mut Game, slots: &BTreeSet<usize>) {
     if slots.is_empty() {
         return;
@@ -1239,8 +1238,6 @@ fn lift_trails(game: &mut Game, slots: &BTreeSet<usize>) {
     for tank in game.world.query::<&mut Tank>().iter() {
         if slots.contains(&tank.owner_slot()) {
             tank.track_from = None;
-            tank.ring_position = tank.position;
-            tank.ring_velocity = crate::math::Vec2::new(0.0, 0.0);
         }
     }
 }

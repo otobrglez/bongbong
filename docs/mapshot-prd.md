@@ -100,12 +100,8 @@ Non-goals, for now
   (src/simulation/mod.rs:1001), so do the frogs (:962, :997); ground and
   grass are built at :1023 from the round RNG, so `seed_override` pins
   every cosmetic tile pick.
-- **The first frame is init plus one update.** `Tank::ring_position`
-  starts at `Position::default()` (src/tank.rs:559) and is snapped onto
-  the hull by `ease_ring_position` inside `Game::update`
-  (src/simulation/mod.rs:2928). The windowed game always updates before
-  its first render. A renderer that skips the update draws the player
-  ring at (0, 0). With no enemies that one update draws no RNG, so the
+- **The first frame is init plus one update.** The windowed game always
+  updates before its first render. With no enemies that one update draws no RNG, so the
   frame is still a pure function of (map, seed).
 - `Game::ground`, `grass` and `oil_cells` are `pub(crate)`
   (src/simulation/mod.rs:441): a bin cannot paint the field on its own,
