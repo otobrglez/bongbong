@@ -51,14 +51,18 @@
 //!
 //! **Tiles.** A tuft's art is wider than half a cell and taller than a
 //! whole one, and the standing pass comes after the tiles, so a tuft rooted
-//! by a wall would be drawn over it. Two rules keep it off (`keep_off`):
-//! the root moves away from a solid tile beside or below its cell as far as
-//! the tuft's art (`TUFT_EXTENTS`) and its steady lean need, and its lean
-//! toward that tile is capped at the room left (`GrassTuft::lean`); a tuft
-//! whose art still reaches a solid cell - one north of it, or a cell too
-//! narrow for it - is `under_tiles`, drawn at the head of `paint_tiles`, so
-//! the tile covers whatever reaches it. Trees are not counted: they are
-//! drawn over every tuft anyway.
+//! by a wall would be drawn over it. `keep_off` places every tuft so it
+//! is not: the root moves away from a solid tile beside or below its cell
+//! as far as the tuft's art (`TUFT_EXTENTS`) and its steady lean need, its
+//! lean toward a tile beside it is capped at the room left
+//! (`GrassTuft::lean`), and under a wall to the north the root moves down
+//! until the art overlaps the wall's foot by no more than
+//! `grass_wall_overlap_px` - grass growing in front of the wall, never on
+//! it. A tuft too tall or too wide for the room takes the next of the
+//! sheet's tufts that fits, and a cell with room for none (walled in on
+//! three sides) grows none. Every tuft stands in the y-sorted walk among
+//! the tanks. Trees are not counted: they are drawn over every tuft
+//! anyway.
 
 use crate::math::{Color, Rectangle, Vec2};
 
@@ -93,10 +97,6 @@ pub struct GrassTuft {
     /// the art crosses into a solid tile beside its cell. Unbounded on a
     /// side with no tile.
     pub lean: [f32; 2],
-    /// The art reaches a solid tile wherever the root is put, so the tuft
-    /// is drawn under the tiles (`Game::paint_tiles`) rather than in the
-    /// standing walk.
-    pub under_tiles: bool,
 }
 
 /// Each tuft's art in sheet pixels about its root, the bottom centre it is
@@ -136,13 +136,13 @@ pub fn tufts_for_cell(t: &Tuning, center: Position, solid: impl Fn((i32, i32)) -
     let per_cell = t.grass_tufts_per_cell.max(0);
     let half = OBSTACLE_GRID_SIZE / 2.0;
     (0..per_cell)
-        .map(|i| {
+        .filter_map(|i| {
             let h = crate::blast::seed_at(center, 60 + i as u32 * 5);
             // Spread across the cell, but keep the base inside it so a
             // tuft belongs to the cell that owns it.
             let ox = (h % 1000) as f32 / 1000.0 * OBSTACLE_GRID_SIZE - half;
             let oy = ((h >> 10) % 1000) as f32 / 1000.0 * OBSTACLE_GRID_SIZE - half;
-            let mut tuft = GrassTuft {
+            let tuft = GrassTuft {
                 base: Position::new(center.x + ox, center.y + oy),
                 row: ((h >> 20) % GRASS_SPECIES as u32) as i32,
                 col: ((h >> 24) % GRASS_VARIANTS as u32) as i32,
@@ -151,10 +151,8 @@ pub fn tufts_for_cell(t: &Tuning, center: Position, solid: impl Fn((i32, i32)) -
                 push: 0.0,
                 burnt: false,
                 lean: [f32::INFINITY; 2],
-                under_tiles: false,
             };
-            keep_off(t, &mut tuft, center, &solid);
-            tuft
+            keep_off(t, tuft, center, &solid)
         })
         .collect()
 }
@@ -188,42 +186,85 @@ pub fn reach(t: &Tuning, tuft: &GrassTuft) -> (f32, f32, f32, f32) {
     )
 }
 
-/// Keep `tuft`'s art off the solid tiles round its cell: move its root
-/// away from one beside or below the cell as far as its art and the
-/// steady lean (wind, gust and flutter - never a passing hull's shove)
-/// need, cap its lean toward a tile beside it at the room left, and mark it
-/// `under_tiles` if whatever it can still reach holds a tile. Pure in its
-/// inputs, no RNG.
-fn keep_off(t: &Tuning, tuft: &mut GrassTuft, center: Position, solid: &impl Fn((i32, i32)) -> bool) {
+/// Place `tuft` so its art keeps off the solid tiles round its cell, or
+/// `None` where no tuft of the sheet fits. The hashed tuft is tried first,
+/// then the rest of the sheet in a fixed order from it (`place`), so most
+/// tufts keep the art and spot they hashed and only a crowded cell changes
+/// any. Pure in its inputs, no RNG.
+fn keep_off(t: &Tuning, tuft: GrassTuft, center: Position, solid: &impl Fn((i32, i32)) -> bool) -> Option<GrassTuft> {
+    let all = GRASS_SPECIES * GRASS_VARIANTS;
+    let first = tuft.row * GRASS_VARIANTS + tuft.col;
+    (0..all).find_map(|k| {
+        let i = (first + k) % all;
+        let mut tried = GrassTuft { row: i / GRASS_VARIANTS, col: i % GRASS_VARIANTS, ..tuft };
+        place(t, &mut tried, center, solid).then_some(tried)
+    })
+}
+
+/// Move `tuft`'s root within its cell so its art keeps off the tiles round
+/// it, and say whether it could:
+///
+/// - a tile in the cell's row, beside it or a cell further: the root moves
+///   away from it by the art's reach and the steady lean (wind, gust and
+///   flutter - never a passing hull's shove), and the lean toward it is
+///   capped at the room left;
+/// - a tile in the row below, beside it or not: the root moves up by what
+///   a lean dips the art's lower corners;
+/// - a tile in either row above that the art spans: the root moves down
+///   until the art's top overlaps that tile's bottom edge by no more than
+///   `grass_wall_overlap_px`, standing in front of the wall's foot.
+fn place(t: &Tuning, tuft: &mut GrassTuft, center: Position, solid: &impl Fn((i32, i32)) -> bool) -> bool {
     let (l, r, up) = art_extents(t, tuft);
     let half = OBSTACLE_GRID_SIZE / 2.0;
     let size = GRASS_TEXTURE_SIZE * t.grass_scale;
     let travel = up / size;
     let steady = (t.grass_wind_px + t.grass_gust_px + t.grass_sway_px) * travel;
     let (col, row) = crate::map::world_to_cell(center);
-    let (west, east) = (solid((col - 1, row)), solid((col + 1, row)));
-    let lo = if west { center.x - half + l + steady + TILE_SLACK_PX } else { f32::NEG_INFINITY };
-    let hi = if east { center.x + half - r - steady - TILE_SLACK_PX } else { f32::INFINITY };
-    if lo <= hi {
-        tuft.base.x = tuft.base.x.clamp(lo, hi);
+    // The near edge of the nearest tile in the cell's row on each side, a
+    // cell or two away: the art is never wider than that.
+    let edge = |dir: i32| {
+        (1..=2).find(|&k| solid((col + dir * k, row))).map(|k| center.x + dir as f32 * (half + (k - 1) as f32 * OBSTACLE_GRID_SIZE))
+    };
+    let (west, east) = (edge(-1), edge(1));
+    let lo = west.map_or(f32::NEG_INFINITY, |w| w + l + steady + TILE_SLACK_PX);
+    let hi = east.map_or(f32::INFINITY, |e| e - r - steady - TILE_SLACK_PX);
+    if lo > hi {
+        return false;
     }
-    if west {
-        tuft.lean[0] = ((tuft.base.x - l - (center.x - half) - TILE_SLACK_PX) / travel).max(0.0);
+    tuft.base.x = tuft.base.x.clamp(lo, hi);
+    tuft.lean = [f32::INFINITY; 2];
+    if let Some(w) = west {
+        tuft.lean[0] = ((tuft.base.x - l - w - TILE_SLACK_PX) / travel).max(0.0);
     }
-    if east {
-        tuft.lean[1] = ((center.x + half - tuft.base.x - r - TILE_SLACK_PX) / travel).max(0.0);
+    if let Some(e) = east {
+        tuft.lean[1] = ((e - tuft.base.x - r - TILE_SLACK_PX) / travel).max(0.0);
     }
-    if solid((col, row + 1)) {
-        let dip = reach(t, tuft).3 - tuft.base.y;
-        tuft.base.y = tuft.base.y.min(center.y + half - dip - TILE_SLACK_PX);
-    }
-    let (x0, y0, x1, y1) = reach(t, tuft);
+    // The columns the art can reach at any lean it is allowed. A pixel is
+    // drawn where its centre is covered, so an edge less than half a pixel
+    // into the next cell draws nothing there.
+    let (x0, _, x1, bottom) = reach(t, tuft);
+    let dip = bottom - tuft.base.y;
     let cell = |v: f32| ((v + half) / OBSTACLE_GRID_SIZE).floor() as i32;
-    // A pixel is drawn where its centre is covered, so an edge less than
-    // half a pixel into the next cell draws nothing there.
-    let (c0, c1) = (cell(x0 + 0.5), cell(x1 - 0.5));
-    let (r0, r1) = (cell(y0 + 0.5), cell(y1 - 0.5));
-    tuft.under_tiles = (r0..=r1).any(|rr| (c0..=c1).any(|cc| (cc, rr) != (col, row) && solid((cc, rr))));
+    let cols = cell(x0 + 0.5)..=cell(x1 - 0.5);
+    let walled = |row: i32| cols.clone().any(|c| solid((c, row)));
+    let top_edge = center.y - half;
+    let mut lowest = top_edge;
+    let mut highest = center.y + half;
+    if walled(row + 1) {
+        highest = highest.min(center.y + half - dip - TILE_SLACK_PX);
+    }
+    for k in 1..=2 {
+        if walled(row - k) {
+            // That row's bottom edge, which the art may overlap only so far.
+            let edge = top_edge - (k - 1) as f32 * OBSTACLE_GRID_SIZE;
+            lowest = lowest.max(edge - t.grass_wall_overlap_px.max(0.0) + up);
+        }
+    }
+    if lowest > highest {
+        return false;
+    }
+    tuft.base.y = tuft.base.y.clamp(lowest, highest);
+    true
 }
 
 /// Is `p` inside a tall-grass cell?
@@ -430,12 +471,18 @@ mod tests {
         b.0 < x + half && b.2 > x - half && b.1 < y + half && b.3 > y - half
     }
 
+    /// How far the box (left, top, right, bottom) reaches up into `cell`
+    /// from its bottom edge, 0 where it covers no pixel centre of it.
+    fn over_foot(b: (f32, f32, f32, f32), (col, row): (i32, i32)) -> f32 {
+        let bottom = row as f32 * OBSTACLE_GRID_SIZE + OBSTACLE_GRID_SIZE / 2.0;
+        if covers(b, (col, row)) { (bottom - b.1).max(0.0) } else { 0.0 }
+    }
+
     #[test]
-    fn a_tuft_never_reaches_a_tile_it_is_drawn_over() {
+    fn a_tuft_never_covers_a_tile_past_a_walls_foot() {
         let t = Tuning { grass_tufts_per_cell: 6, ..Tuning::DEFAULT };
-        let neighbours = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1), (0, -2), (-2, 0), (2, 0)];
-        let mut checked = 0;
-        let mut kept = 0;
+        let neighbours = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1), (0, -2), (-2, 0), (2, 0), (-1, -2), (1, -2)];
+        let (mut seeded, mut grown, mut at_a_foot) = (0, 0, 0);
         // Every set of the first eight neighbours, on cells all over the
         // field so the hashed spots and variants vary.
         for mask in 0u32..256 {
@@ -449,32 +496,61 @@ mod tests {
                 let (col, row) = (3 + mask as i32 % 29 + k * 7, 2 + k * 5);
                 let shifted: Vec<(i32, i32)> = solid.iter().map(|&(c, r)| (c + col, r + row)).collect();
                 let center = crate::map::cell_to_world(col, row);
+                seeded += t.grass_tufts_per_cell as usize;
                 for tuft in tufts_for_cell(&t, center, around(&shifted)) {
-                    checked += 1;
-                    if tuft.under_tiles {
-                        continue;
-                    }
-                    kept += 1;
-                    let b = reach(&t, &tuft);
-                    for &cell in &shifted {
-                        assert!(!covers(b, cell), "a standing tuft at {:?} reaches the tile at {cell:?}: {b:?}", tuft.base);
-                    }
+                    grown += 1;
                     let half = OBSTACLE_GRID_SIZE / 2.0;
                     assert!((tuft.base.x - center.x).abs() <= half && (tuft.base.y - center.y).abs() <= half, "rooted in its cell");
+                    let b = reach(&t, &tuft);
+                    for &cell in &shifted {
+                        if cell.1 >= row {
+                            assert!(!covers(b, cell), "a tuft at {:?} reaches the tile at {cell:?} beside or below it: {b:?}", tuft.base);
+                        } else {
+                            let over = over_foot(b, cell);
+                            assert!(over <= t.grass_wall_overlap_px + 0.5, "a tuft at {:?} covers {over} px of the wall at {cell:?}", tuft.base);
+                            if over > 0.0 {
+                                at_a_foot += 1;
+                            }
+                        }
+                    }
                 }
             }
         }
-        assert!(kept > 0 && kept < checked, "{kept} of {checked} stand");
-        // A wall along one side of a meadow keeps most of its tufts in the
-        // standing walk, among the tanks.
-        for side in [(-1, 0), (1, 0), (0, 1)] {
-            let (mut standing, mut all) = (0, 0);
+        assert!(at_a_foot > 0, "some tufts stand in front of a wall's foot");
+        assert!(grown * 10 > seeded * 9, "few cells are too crowded for a tuft: {grown} of {seeded}");
+        // A wall along one side of a meadow takes none of its tufts away.
+        for side in [(-1, 0), (1, 0), (0, 1), (0, -1)] {
             for i in 0..200 {
                 let tufts = tufts_for_cell(&t, crate::map::cell_to_world(i, 3), |(c, r)| (c - i, r - 3) == side);
-                all += tufts.len();
-                standing += tufts.iter().filter(|g| !g.under_tiles).count();
+                assert_eq!(tufts.len(), t.grass_tufts_per_cell as usize, "a wall at {side:?}");
             }
-            assert!(standing * 4 > all * 3, "a wall at {side:?}: {standing} of {all} stand");
+        }
+    }
+
+    #[test]
+    fn grass_under_a_wall_stands_at_its_foot() {
+        let t = Tuning::DEFAULT;
+        let foot = |center: Position, t: &Tuning| center.y - OBSTACLE_GRID_SIZE / 2.0 - t.grass_wall_overlap_px;
+        for i in 0..200 {
+            let center = crate::map::cell_to_world(i, 5);
+            let open = tufts_for_cell(&t, center, |_| false);
+            let walled = tufts_for_cell(&t, center, |c| c == (i, 4));
+            for (a, b) in open.iter().zip(&walled) {
+                // Short enough, a tuft stays as it grew; too tall, it moves
+                // down or gives way to a shorter one.
+                if a.base.y - art_extents(&t, a).2 >= foot(center, &t) {
+                    assert_eq!((a.base.x, a.base.y, a.row, a.col), (b.base.x, b.base.y, b.row, b.col));
+                }
+                assert!(b.base.y - art_extents(&t, b).2 >= foot(center, &t) - 1e-3);
+            }
+        }
+        // No overlap allowed: the grass stops at the wall's edge.
+        let flush = Tuning { grass_wall_overlap_px: 0.0, ..t };
+        for i in 0..200 {
+            let center = crate::map::cell_to_world(i, 5);
+            for b in tufts_for_cell(&flush, center, |c| c == (i, 4)) {
+                assert!(b.base.y - art_extents(&flush, &b).2 >= foot(center, &flush) - 1e-3);
+            }
         }
     }
 
@@ -487,8 +563,8 @@ mod tests {
             // A tile two cells off is out of every tuft's reach.
             let far = tufts_for_cell(&t, center, |(c, r)| (c - (i * 3 + 1)).abs() > 2 || (r - i % 17).abs() > 2);
             for (a, b) in open.iter().zip(&far) {
-                assert!(!a.under_tiles && a.lean == [f32::INFINITY; 2]);
-                assert_eq!((a.base.x, a.base.y, a.under_tiles), (b.base.x, b.base.y, b.under_tiles));
+                assert!(a.lean == [f32::INFINITY; 2]);
+                assert_eq!((a.base.x, a.base.y, a.row, a.col), (b.base.x, b.base.y, b.row, b.col));
             }
         }
     }
@@ -499,7 +575,7 @@ mod tests {
         for i in 0..60 {
             let center = crate::map::cell_to_world(i, 4);
             let tufts = tufts_for_cell(&t, center, |c| c == (i - 1, 4));
-            for tuft in tufts.iter().filter(|g| !g.under_tiles) {
+            for tuft in &tufts {
                 assert!(tuft.lean[0].is_finite() && tuft.lean[1].is_infinite());
                 // The steady lean always fits: wind, gust and flutter.
                 let (_, _, up) = art_extents(&t, tuft);
