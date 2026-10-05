@@ -1180,7 +1180,7 @@ pub fn run(args: Args) {
         (w.round() as i32, h.round() as i32)
     };
     // The window of the first frame: the field alone in Play, under the
-    // builder's 32 pt bar with `--editor`.
+    // builder's bar (`HUD_BAR_HEIGHT`) with `--editor`.
     let bitmap = Layout::for_field(screen_width as f32, screen_height as f32).window_size();
     // The field a desktop window opens for: the map's when it is shown
     // whole, the standard field's when the camera follows it - a followed
