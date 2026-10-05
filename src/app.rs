@@ -534,15 +534,22 @@ fn platform_motion() -> Option<bool> {
     }
 }
 
-/// The reconnect key a desktop, iOS or Android build takes into a room
-/// (docs/online-coop-prd.md §4.13): the machine's, per nickname. Two
-/// clients here under two names are two seats, and either reclaims its
-/// own seat on a reconnect. A browser cannot use this rule - every tab
-/// would be the same player - and mints its own instead
-/// (`site/src/scripts/room.ts`).
+/// Who a desktop, iOS or Android build is to a room
+/// (docs/online-coop-prd.md §4.13), made once per run. A `--nick` picks
+/// the machine's reconnect key for that name, so two clients here under
+/// two names are two seats and either reclaims its own seat on a
+/// reconnect, even after a restart. With no name - a phone always, a
+/// desktop window started without `--nick` - the player is
+/// `Identity::anonymous`: a token minted for this run and the
+/// `Player #ABC102` read off it, so two such windows are two seats under
+/// two names rather than one seat each takes from the other. A browser
+/// mints its token per tab instead (`site/src/scripts/room.ts`).
 #[cfg(all(feature = "online", not(target_os = "emscripten")))]
-fn device_token(nick: &str) -> String {
-    format!("bongbong-{nick}")
+fn cli_identity(args: &Args) -> Identity {
+    match args.nick.as_deref().map(str::trim) {
+        Some(nick) if !nick.is_empty() => Identity::new(nick, format!("bongbong-{nick}")),
+        _ => Identity::anonymous(),
+    }
 }
 
 /// The level progress the page kept in `localStorage`: the map name of
@@ -854,9 +861,11 @@ pub struct Args {
 
     /// The name on the room's roster. Also picks this machine's device
     /// token, so two clients under different nicknames are two seats.
+    /// Without it the window is `Player #` and six random letters and
+    /// digits, with a device token of its own for this run.
     #[cfg(all(feature = "online", not(target_os = "emscripten")))]
-    #[arg(long = "nick", default_value = "player")]
-    nick: String,
+    #[arg(long = "nick")]
+    nick: Option<String>,
 
     /// The rooms server to talk to, over `BONGBONG_ROOMS` and the
     /// cluster's own (`ws://127.0.0.1:4848` for `just run-server`).
@@ -891,7 +900,7 @@ pub struct Args {
 /// Whichever it is, the window's side is the same `OnlineRound` over a
 /// boxed transport, so nothing past this function knows which.
 #[cfg(not(target_os = "emscripten"))]
-fn open_online(args: &Args, map: &crate::map::MapFile) -> Option<(AnyRound, Option<crate::net::rig::Rig>)> {
+fn open_online(args: &Args, map: &crate::map::MapFile, identity: &Identity) -> Option<(AnyRound, Option<crate::net::rig::Rig>)> {
     if args.rig {
         let options = crate::net::rig::RigOptions {
             map: map.clone(),
@@ -924,7 +933,7 @@ fn open_online(args: &Args, map: &crate::map::MapFile) -> Option<(AnyRound, Opti
             return None;
         }
         let host = RoomsHost::resolve(args.rooms.as_deref());
-        let identity = Identity::new(args.nick.clone(), device_token(&args.nick));
+        let identity = identity.clone();
         let target = match args.join.as_deref().map(RoomCode::parse) {
             Some(Ok(code)) => Target::Join(code),
             Some(Err(e)) => {
@@ -956,7 +965,10 @@ fn open_online(args: &Args, map: &crate::map::MapFile) -> Option<(AnyRound, Opti
         return Some((OnlineRound::new(crate::net::client::connect(&host, identity, target), "ROOM"), None));
     }
     #[cfg(not(feature = "online"))]
-    None
+    {
+        let _ = identity;
+        None
+    }
 }
 
 /// The mission and spawn overrides the command line carries, shared by
@@ -1545,8 +1557,9 @@ pub fn run(args: Args) {
     #[cfg(all(feature = "online", not(target_os = "emscripten")))]
     {
         session.rooms = crate::net::rooms::RoomsHost::resolve(args.rooms.as_deref());
-        session.nick = args.nick.clone();
-        session.token = device_token(&args.nick);
+        let identity = cli_identity(&args);
+        session.nick = identity.nick;
+        session.token = identity.device_token;
     }
     // The web build's command line is the page it was opened on: the
     // room a `/j/AK7QX` or `?join=AK7QX` link names, the `?rooms=`
@@ -1566,9 +1579,13 @@ pub fn run(args: Args) {
         if let Some(site) = invite.site.clone() {
             session.site = site;
         }
+        // The page's token is this tab's; the name is read off it, so a
+        // reload keeps both (`Identity::anonymous_with`).
         let token = page_string(PAGE_TOKEN);
         if !token.trim().is_empty() {
-            session.token = token;
+            let identity = crate::net::client::Identity::anonymous_with(token);
+            session.nick = identity.nick;
+            session.token = identity.device_token;
         }
         eprintln!(
             "[online] site {}, rooms {}, seat token {}, link code {}",
@@ -1582,7 +1599,7 @@ pub fn run(args: Args) {
         }
     }
     #[cfg(not(target_os = "emscripten"))]
-    let _rig = match open_online(&args, &room_map) {
+    let _rig = match open_online(&args, &room_map, &Identity::new(session.nick.clone(), session.token.clone())) {
         // The lobby shows the code and the QR while the room fills up
         // and hands over to `Driver::Online` when the round begins; the
         // rig's room is already playing by the time it answers, so
@@ -2683,7 +2700,7 @@ mod tests {
         map.set_cell(3, 8, crate::map::CellObject::Start);
         map.save(&path).expect("the map is written");
         let args = Args::parse_from(["bongbong", "--host", "-m", path.to_str().expect("a path")]);
-        let (mut round, rig) = open_online(&args, args.map.as_ref().expect("the map")).expect("a round");
+        let (mut round, rig) = open_online(&args, args.map.as_ref().expect("the map"), &cli_identity(&args)).expect("a round");
         assert!(rig.is_none());
         round.frame(&Intent::default(), 1.0 / 60.0);
         let why = crate::text::text().get(crate::text::keys::NOTE_NOT_CLEARED);

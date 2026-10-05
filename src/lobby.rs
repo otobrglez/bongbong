@@ -28,7 +28,7 @@ use crate::net::transport::Transport;
 use crate::net::wire::{RosterSeat, RoundOutcome};
 use crate::qr::Qr;
 use crate::tank::TankKind;
-use crate::text::{fold, keys, text, Key};
+use crate::text::{fit, fold, keys, text, Key};
 use crate::Rect;
 
 /// The panel, centred in the chrome's area (`hud::UiFrame::area`), in UI
@@ -59,11 +59,17 @@ pub const LOBBY_TOUCH_MIN: f32 = crate::hud::UI_TOUCH_PT;
 /// beside the QR.
 pub const LOBBY_SEAT_ROWS: usize = 4;
 pub const LOBBY_SEAT_H: f32 = 48.0;
-/// Where a seat row's chassis and state start, from the row's left edge;
-/// the state runs to the kick button (`text_tests` measures every
-/// language against both columns).
-pub const LOBBY_SEAT_CHASSIS_X: f32 = 190.0;
-pub const LOBBY_SEAT_STATE_X: f32 = 280.0;
+/// Where a seat row's nickname starts, from the row's left edge, after
+/// the seat's number, and the room it has: the widest name a player who
+/// entered none is given (`net::client::anonymous_nick`, `Player #MMMMMM`
+/// at `HUD_TEXT_SIZE`) whole; a longer one is cut (`text::fit`).
+pub const LOBBY_SEAT_NICK_X: f32 = 46.0;
+pub const LOBBY_SEAT_NICK_W: f32 = 156.0;
+/// Where a seat row's chassis and state start, from the row's left edge,
+/// the chassis a gap past the nickname's room; the state runs to the kick
+/// button (`text_tests` measures every language against both columns).
+pub const LOBBY_SEAT_CHASSIS_X: f32 = LOBBY_SEAT_NICK_X + LOBBY_SEAT_NICK_W + 8.0;
+pub const LOBBY_SEAT_STATE_X: f32 = LOBBY_SEAT_CHASSIS_X + 90.0;
 /// Wide enough for the longest word a shipped language spells it with
 /// (Slovenian's `ODSTRANI`); `text_tests` measures every language against
 /// it, less its padding.
@@ -607,8 +613,8 @@ impl Lobby {
                     slot: t.fmt(keys::SEAT_LABEL, &[("n", (seat.seat + 1).into())]),
                     // A nickname is anyone's text: folded here, where it
                     // enters the picture, so the painter draws what the
-                    // font has.
-                    nick: fold(&seat.nick).into_owned(),
+                    // font has, and cut to its column.
+                    nick: fit(&fold(&seat.nick), LOBBY_SEAT_NICK_W as i32, crate::hud::HUD_TEXT_SIZE).into_owned(),
                     chassis: TankKind::from_row(seat.chassis as i32).map_or_else(|| "-".to_string(), |kind| t.named("tank", kind.name())),
                     state: t.get(match (seat.connected, host, seat.ready) {
                         (false, _, _) => keys::SEAT_AWAY,
@@ -1042,6 +1048,30 @@ mod lobby_tests {
         // A refusal from the room is the line under the title.
         let refused = RoomView { note: Some("the room is full".into()), ..room };
         assert_eq!(lobby.view(Some(&refused)).sub, "the room is full");
+    }
+
+    /// A seat row holds the name a player who entered none is given whole,
+    /// however wide its letters, and cuts a longer name to its column
+    /// rather than run it into the chassis.
+    #[test]
+    fn a_seat_row_holds_an_anonymous_name_and_cuts_a_long_one() {
+        use crate::net::client::{ANONYMOUS_NICK_ALPHABET, ANONYMOUS_NICK_LETTERS, ANONYMOUS_NICK_PREFIX};
+        use crate::text::width;
+        let size = crate::hud::HUD_TEXT_SIZE;
+        for &c in ANONYMOUS_NICK_ALPHABET {
+            let widest = format!("{ANONYMOUS_NICK_PREFIX}{}", (c as char).to_string().repeat(ANONYMOUS_NICK_LETTERS));
+            assert!(width(&widest, size) as f32 <= LOBBY_SEAT_NICK_W, "{widest:?} overflows its seat row");
+        }
+        let mut lobby = lobby();
+        let anonymous = crate::net::client::anonymous_nick("bongbong-0123456789abcdef");
+        let long = "Šime the Magnificent Tank".to_string();
+        let room = room(false, vec![seat(0, &anonymous, false), seat(1, &long, true)]);
+        lobby.update(&LobbyInput::default(), AREA, Some(&room));
+        let view = lobby.view(Some(&room));
+        assert_eq!(view.seats[0].nick, anonymous, "an anonymous name is drawn whole");
+        assert!(view.seats[1].nick.ends_with('~') && view.seats[1].nick.starts_with("Sime"), "{:?}", view.seats[1].nick);
+        assert!(width(&view.seats[1].nick, size) as f32 <= LOBBY_SEAT_NICK_W);
+        assert!(LOBBY_SEAT_NICK_X + LOBBY_SEAT_NICK_W < LOBBY_SEAT_CHASSIS_X, "the name keeps clear of the chassis");
     }
 
     /// A local override rides along in the link, so a scan reaches the
