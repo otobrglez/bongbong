@@ -47,8 +47,18 @@
 //!
 //! **Depth.** `game.rs` draws tufts interleaved with tanks by ground-contact
 //! y, so a tuft rooted behind a tank is drawn behind it. Drawing all grass
-//! last - which is what it used to do - buries a tank in grass that is
-//! rooted well past it.
+//! last buries a tank in grass that is rooted well past it.
+//!
+//! **Tiles.** A tuft's art is wider than half a cell and taller than a
+//! whole one, and the standing pass comes after the tiles, so a tuft rooted
+//! by a wall would be drawn over it. Two rules keep it off (`keep_off`):
+//! the root moves away from a solid tile beside or below its cell as far as
+//! the tuft's art (`TUFT_EXTENTS`) and its steady lean need, and its lean
+//! toward that tile is capped at the room left (`GrassTuft::lean`); a tuft
+//! whose art still reaches a solid cell - one north of it, or a cell too
+//! narrow for it - is `under_tiles`, drawn at the head of `paint_tiles`, so
+//! the tile covers whatever reaches it. Trees are not counted: they are
+//! drawn over every tuft anyway.
 
 use crate::math::{Color, Rectangle, Vec2};
 
@@ -78,7 +88,31 @@ pub struct GrassTuft {
     /// leaves `Game::grass_cells` at the same moment, so it no longer
     /// conceals.
     pub burnt: bool,
+    /// How far the tip may lean left and right (`bend`'s units, px of
+    /// travel at the sprite's top), both positive: the room left before
+    /// the art crosses into a solid tile beside its cell. Unbounded on a
+    /// side with no tile.
+    pub lean: [f32; 2],
+    /// The art reaches a solid tile wherever the root is put, so the tuft
+    /// is drawn under the tiles (`Game::paint_tiles`) rather than in the
+    /// standing walk.
+    pub under_tiles: bool,
 }
+
+/// Each tuft's art in sheet pixels about its root, the bottom centre it is
+/// drawn from: how far it reaches left of the root, right of it and above
+/// it, by species (row) and variant (column), unmirrored. The larger of
+/// the two themes' sheets for each cell, so one table serves both
+/// (`tuft_extents_cover_both_sheets` holds it against the PNGs).
+pub const TUFT_EXTENTS: [[(u8, u8, u8); GRASS_VARIANTS as usize]; GRASS_SPECIES as usize] = [
+    [(6, 1, 18), (4, 13, 17), (13, 6, 18), (6, 13, 18), (11, 4, 17), (6, 10, 17), (13, 2, 17), (13, 6, 17)],
+    [(0, 6, 23), (0, 11, 23), (2, 3, 22), (5, 7, 22), (7, 5, 21), (5, 5, 23), (2, 9, 22), (2, 11, 22)],
+    [(8, 11, 14), (8, 8, 14), (7, 12, 14), (12, 10, 14), (6, 12, 14), (6, 10, 13), (7, 10, 14), (10, 5, 14)],
+];
+
+/// Px of slack round a tuft's art when it is kept off a tile: the root is
+/// not on the 2 px grid, so its art can land a pixel over.
+const TILE_SLACK_PX: f32 = 1.0;
 
 /// A tank as the grass sees it. Velocity is the *body's*, not
 /// `Tank::velocity` - that one is the commanded cardinal vector and reads
@@ -96,8 +130,10 @@ pub struct Mover {
 /// The tufts one grass cell scatters. Everything - count, offsets, species,
 /// variant, phase - comes out of `blast::seed_at` salted per tuft, so a
 /// grass field is identical on replay and costs the round RNG nothing.
-pub fn tufts_for_cell(center: Position) -> Vec<GrassTuft> {
-    let per_cell = tuning().grass_tufts_per_cell.max(0);
+/// `solid` names the cells (`map::world_to_cell`) holding a tile a tuft
+/// must not be drawn over; see `keep_off`.
+pub fn tufts_for_cell(t: &Tuning, center: Position, solid: impl Fn((i32, i32)) -> bool) -> Vec<GrassTuft> {
+    let per_cell = t.grass_tufts_per_cell.max(0);
     let half = OBSTACLE_GRID_SIZE / 2.0;
     (0..per_cell)
         .map(|i| {
@@ -106,7 +142,7 @@ pub fn tufts_for_cell(center: Position) -> Vec<GrassTuft> {
             // tuft belongs to the cell that owns it.
             let ox = (h % 1000) as f32 / 1000.0 * OBSTACLE_GRID_SIZE - half;
             let oy = ((h >> 10) % 1000) as f32 / 1000.0 * OBSTACLE_GRID_SIZE - half;
-            GrassTuft {
+            let mut tuft = GrassTuft {
                 base: Position::new(center.x + ox, center.y + oy),
                 row: ((h >> 20) % GRASS_SPECIES as u32) as i32,
                 col: ((h >> 24) % GRASS_VARIANTS as u32) as i32,
@@ -114,9 +150,80 @@ pub fn tufts_for_cell(center: Position) -> Vec<GrassTuft> {
                 crush: 0.0,
                 push: 0.0,
                 burnt: false,
-            }
+                lean: [f32::INFINITY; 2],
+                under_tiles: false,
+            };
+            keep_off(t, &mut tuft, center, &solid);
+            tuft
         })
         .collect()
+}
+
+/// The tuft's art about its root in world px at `grass_scale`: left,
+/// right and up, mirrored the way `draw_tuft` mirrors it.
+pub fn art_extents(t: &Tuning, tuft: &GrassTuft) -> (f32, f32, f32) {
+    let (l, r, up) = TUFT_EXTENTS[tuft.row as usize][tuft.col as usize];
+    let (l, r) = if tuft.seed & 1 != 0 { (r, l) } else { (l, r) };
+    let s = t.grass_scale;
+    (l as f32 * s, r as f32 * s, up as f32 * s)
+}
+
+/// The box `tuft`'s art can cover at any lean it is allowed, in world px:
+/// left, top, right, bottom. A lean swings the art about its root, so the
+/// top travels sideways and the lower corners dip a little below it.
+pub fn reach(t: &Tuning, tuft: &GrassTuft) -> (f32, f32, f32, f32) {
+    let (l, r, up) = art_extents(t, tuft);
+    let size = GRASS_TEXTURE_SIZE * t.grass_scale;
+    // The most `tick` and the wind can bend a tuft: the steady lean, a
+    // gust, its flutter and a hull's bow wave.
+    let most = t.grass_wind_px + t.grass_gust_px + t.grass_sway_px + t.grass_part_px * 1.2;
+    let (left, right) = (most.min(tuft.lean[0]), most.min(tuft.lean[1]));
+    let travel = up / size;
+    let dip = l.max(r) * (left.max(right) / size).atan().sin();
+    (
+        tuft.base.x - l - left * travel,
+        tuft.base.y - up,
+        tuft.base.x + r + right * travel,
+        tuft.base.y + dip,
+    )
+}
+
+/// Keep `tuft`'s art off the solid tiles round its cell: move its root
+/// away from one beside or below the cell as far as its art and the
+/// steady lean (wind, gust and flutter - never a passing hull's shove)
+/// need, cap its lean toward a tile beside it at the room left, and mark it
+/// `under_tiles` if whatever it can still reach holds a tile. Pure in its
+/// inputs, no RNG.
+fn keep_off(t: &Tuning, tuft: &mut GrassTuft, center: Position, solid: &impl Fn((i32, i32)) -> bool) {
+    let (l, r, up) = art_extents(t, tuft);
+    let half = OBSTACLE_GRID_SIZE / 2.0;
+    let size = GRASS_TEXTURE_SIZE * t.grass_scale;
+    let travel = up / size;
+    let steady = (t.grass_wind_px + t.grass_gust_px + t.grass_sway_px) * travel;
+    let (col, row) = crate::map::world_to_cell(center);
+    let (west, east) = (solid((col - 1, row)), solid((col + 1, row)));
+    let lo = if west { center.x - half + l + steady + TILE_SLACK_PX } else { f32::NEG_INFINITY };
+    let hi = if east { center.x + half - r - steady - TILE_SLACK_PX } else { f32::INFINITY };
+    if lo <= hi {
+        tuft.base.x = tuft.base.x.clamp(lo, hi);
+    }
+    if west {
+        tuft.lean[0] = ((tuft.base.x - l - (center.x - half) - TILE_SLACK_PX) / travel).max(0.0);
+    }
+    if east {
+        tuft.lean[1] = ((center.x + half - tuft.base.x - r - TILE_SLACK_PX) / travel).max(0.0);
+    }
+    if solid((col, row + 1)) {
+        let dip = reach(t, tuft).3 - tuft.base.y;
+        tuft.base.y = tuft.base.y.min(center.y + half - dip - TILE_SLACK_PX);
+    }
+    let (x0, y0, x1, y1) = reach(t, tuft);
+    let cell = |v: f32| ((v + half) / OBSTACLE_GRID_SIZE).floor() as i32;
+    // A pixel is drawn where its centre is covered, so an edge less than
+    // half a pixel into the next cell draws nothing there.
+    let (c0, c1) = (cell(x0 + 0.5), cell(x1 - 0.5));
+    let (r0, r1) = (cell(y0 + 0.5), cell(y1 - 0.5));
+    tuft.under_tiles = (r0..=r1).any(|rr| (c0..=c1).any(|cc| (cc, rr) != (col, row) && solid((cc, rr))));
 }
 
 /// Is `p` inside a tall-grass cell?
@@ -227,7 +334,9 @@ fn bend(tuft: &GrassTuft, time: f32) -> f32 {
     // Per-tuft phase, so a field in a gust does not move as one sheet.
     let phase = (tuft.seed % 628) as f32 * 0.01;
     let flutter = crate::trig::sin(time * t.grass_sway_speed + phase) * t.grass_sway_px;
-    (wind_at(&t, tuft.base, time) + flutter) * (1.0 - tuft.crush) + tuft.push
+    let lean = (wind_at(&t, tuft.base, time) + flutter) * (1.0 - tuft.crush) + tuft.push;
+    // Never over a tile beside the cell (`keep_off`).
+    lean.clamp(-tuft.lean[0], tuft.lean[1])
 }
 
 /// Draw one tuft, leaning and squashed by however flat it is lying, from
@@ -306,6 +415,129 @@ mod tests {
         }
         let still = Tuning { grass_wind_px: 0.0, grass_gust_px: 0.0, ..Tuning::DEFAULT };
         assert_eq!(wind_at(&still, Position::new(100.0, 100.0), 7.0), 0.0);
+    }
+
+    /// Cells round the origin cell (0, 0), as `tufts_for_cell` names them.
+    fn around(solid: &[(i32, i32)]) -> impl Fn((i32, i32)) -> bool + '_ {
+        move |cell| solid.contains(&cell)
+    }
+
+    /// Does the box (left, top, right, bottom) cover a pixel centre of
+    /// `cell`?
+    fn covers(b: (f32, f32, f32, f32), (col, row): (i32, i32)) -> bool {
+        let half = OBSTACLE_GRID_SIZE / 2.0 - 0.5;
+        let (x, y) = (col as f32 * OBSTACLE_GRID_SIZE, row as f32 * OBSTACLE_GRID_SIZE);
+        b.0 < x + half && b.2 > x - half && b.1 < y + half && b.3 > y - half
+    }
+
+    #[test]
+    fn a_tuft_never_reaches_a_tile_it_is_drawn_over() {
+        let t = Tuning { grass_tufts_per_cell: 6, ..Tuning::DEFAULT };
+        let neighbours = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1), (0, -2), (-2, 0), (2, 0)];
+        let mut checked = 0;
+        let mut kept = 0;
+        // Every set of the first eight neighbours, on cells all over the
+        // field so the hashed spots and variants vary.
+        for mask in 0u32..256 {
+            let mut solid: Vec<(i32, i32)> = (0..8).filter(|b| mask & (1 << b) != 0).map(|b| neighbours[b]).collect();
+            if mask % 3 == 0 {
+                solid.extend_from_slice(&neighbours[8..]);
+            }
+            for k in 0..6 {
+                // `tufts_for_cell` names cells by `world_to_cell` of the
+                // centre, so the solid cells move with it.
+                let (col, row) = (3 + mask as i32 % 29 + k * 7, 2 + k * 5);
+                let shifted: Vec<(i32, i32)> = solid.iter().map(|&(c, r)| (c + col, r + row)).collect();
+                let center = crate::map::cell_to_world(col, row);
+                for tuft in tufts_for_cell(&t, center, around(&shifted)) {
+                    checked += 1;
+                    if tuft.under_tiles {
+                        continue;
+                    }
+                    kept += 1;
+                    let b = reach(&t, &tuft);
+                    for &cell in &shifted {
+                        assert!(!covers(b, cell), "a standing tuft at {:?} reaches the tile at {cell:?}: {b:?}", tuft.base);
+                    }
+                    let half = OBSTACLE_GRID_SIZE / 2.0;
+                    assert!((tuft.base.x - center.x).abs() <= half && (tuft.base.y - center.y).abs() <= half, "rooted in its cell");
+                }
+            }
+        }
+        assert!(kept > 0 && kept < checked, "{kept} of {checked} stand");
+        // A wall along one side of a meadow keeps most of its tufts in the
+        // standing walk, among the tanks.
+        for side in [(-1, 0), (1, 0), (0, 1)] {
+            let (mut standing, mut all) = (0, 0);
+            for i in 0..200 {
+                let tufts = tufts_for_cell(&t, crate::map::cell_to_world(i, 3), |(c, r)| (c - i, r - 3) == side);
+                all += tufts.len();
+                standing += tufts.iter().filter(|g| !g.under_tiles).count();
+            }
+            assert!(standing * 4 > all * 3, "a wall at {side:?}: {standing} of {all} stand");
+        }
+    }
+
+    #[test]
+    fn a_tuft_with_no_tile_round_it_is_left_alone() {
+        let t = Tuning { grass_tufts_per_cell: 8, ..Tuning::DEFAULT };
+        for i in 0..40 {
+            let center = crate::map::cell_to_world(i * 3 + 1, i % 17);
+            let open = tufts_for_cell(&t, center, |_| false);
+            // A tile two cells off is out of every tuft's reach.
+            let far = tufts_for_cell(&t, center, |(c, r)| (c - (i * 3 + 1)).abs() > 2 || (r - i % 17).abs() > 2);
+            for (a, b) in open.iter().zip(&far) {
+                assert!(!a.under_tiles && a.lean == [f32::INFINITY; 2]);
+                assert_eq!((a.base.x, a.base.y, a.under_tiles), (b.base.x, b.base.y, b.under_tiles));
+            }
+        }
+    }
+
+    #[test]
+    fn a_tile_beside_the_cell_caps_the_lean_toward_it() {
+        let t = Tuning::DEFAULT;
+        for i in 0..60 {
+            let center = crate::map::cell_to_world(i, 4);
+            let tufts = tufts_for_cell(&t, center, |c| c == (i - 1, 4));
+            for tuft in tufts.iter().filter(|g| !g.under_tiles) {
+                assert!(tuft.lean[0].is_finite() && tuft.lean[1].is_infinite());
+                // The steady lean always fits: wind, gust and flutter.
+                let (_, _, up) = art_extents(&t, tuft);
+                let steady = (t.grass_wind_px + t.grass_gust_px + t.grass_sway_px) * up / (GRASS_TEXTURE_SIZE * t.grass_scale);
+                assert!(tuft.lean[0] * up / (GRASS_TEXTURE_SIZE * t.grass_scale) >= steady - 1e-3);
+            }
+        }
+    }
+
+    /// `TUFT_EXTENTS` covers every tuft's opaque pixels in both themes'
+    /// sheets. Decoding is raylib's, so this needs the `render` feature.
+    #[cfg(feature = "render")]
+    #[test]
+    fn tuft_extents_cover_both_sheets() {
+        use crate::canvas::Pixels;
+        let cell = GRASS_TEXTURE_SIZE as usize;
+        for theme in [Theme::Grass, Theme::Desert] {
+            let sheet = Pixels::load(&Sheet::Grass(theme).path()).unwrap();
+            for row in 0..GRASS_SPECIES as usize {
+                for col in 0..GRASS_VARIANTS as usize {
+                    let (l, r, up) = TUFT_EXTENTS[row][col];
+                    for y in 0..cell {
+                        for x in 0..cell {
+                            if sheet.data[(row * cell + y) * sheet.width + col * cell + x].a == 0 {
+                                continue;
+                            }
+                            let root = cell as i32 / 2;
+                            let (x, y) = (x as i32, y as i32);
+                            assert!(
+                                x >= root - l as i32 && x < root + r as i32 && y >= cell as i32 - up as i32,
+                                "{theme:?} tuft ({row}, {col}) has a pixel at ({x}, {y}) past {:?}",
+                                (l, r, up)
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
