@@ -103,6 +103,10 @@
 //!   `Frame::snapped` so the caller can lift its tread marks. A
 //!   `TankEntered` is no such cue: it marks a rolling-in hull reaching the
 //!   inside of its gate at the end of a drive the snapshots show whole.
+//!   A shot whose far end carries its `ShotTeleported` - it went through
+//!   a portal - holds the same way, and its correction offset is dropped
+//!   the frame it is drawn at the exit.
+
 //! - Everything discrete - tiles, fires, pickups, the round's scalars, the
 //!   flags on a hull - is the near end's, so the picture never shows a
 //!   state the server has not reached yet.
@@ -1026,6 +1030,11 @@ impl Interpolator {
                 self.stale_events += hand_over(&passed, cutoff, self.seat, &mut events);
             }
             snapped.extend(teleported(&passed, &self.buffer[0]));
+            // A shot that came out of a portal starts afresh at the exit:
+            // no correction carried over from the far side of the field.
+            for id in shots_teleported(&self.buffer[0].events) {
+                self.offsets.remove(&Key::Shot(id));
+            }
             self.previous = Some(passed);
         }
         // The near end is the snapshot on screen, however far back its
@@ -1436,8 +1445,18 @@ fn jumped(a: &TankState, b: &TankState, span_s: f32, top_speed: f32, events: &[W
     distance > 2.0 * fastest * span_s + TELEPORT_SLACK_PX
 }
 
+/// The shots `events` says went through a portal (`ShotTeleported`), by
+/// the id `ShotState` keys them under.
+fn shots_teleported(events: &[WireEvent]) -> impl Iterator<Item = u16> + '_ {
+    events.iter().filter_map(|event| match *event {
+        WireEvent::ShotTeleported { id, .. } => id,
+        _ => None,
+    })
+}
+
 /// `from`, with every position moved `alpha` of the way toward `to`.
-fn blend(from: &Snapshot, to: &Snapshot, alpha: f32) -> Snapshot {
+fn blend(
+from: &Snapshot, to: &Snapshot, alpha: f32) -> Snapshot {
     let mut out = from.clone();
     let span_s = ((tick_ms(to.tick) - tick_ms(from.tick)) / 1000.0).max(0.0) as f32;
     let top = tuning().tank_speed;
@@ -1452,8 +1471,14 @@ fn blend(from: &Snapshot, to: &Snapshot, alpha: f32) -> Snapshot {
             tank.y = lerp(tank.y, next.y, alpha);
         }
     }
+    let through: Vec<u16> = shots_teleported(&to.events).collect();
     for shot in &mut out.shots {
         if let Ok(i) = to.shots.binary_search_by_key(&shot.id, |s| s.id) {
+            // Through a portal, like a hull's jump: drawn at the far
+            // end's tick, not lerped across the field.
+            if through.contains(&shot.id) {
+                continue;
+            }
             shot.x = lerp(shot.x, to.shots[i].x, alpha);
             shot.y = lerp(shot.y, to.shots[i].y, alpha);
         }
@@ -1810,8 +1835,41 @@ mod tests {
         assert_eq!(frame.snapped, vec![5]);
     }
 
+    /// A shot whose far end says it came through a portal holds at the
+    /// near end and is drawn at the exit whole - never slid across the
+    /// field between the two portals - while one with no such event is
+    /// lerped as ever.
+    #[test]
+    fn a_shot_through_a_portal_is_drawn_as_a_jump() {
+        let shot = |id: u16, x: i16| ShotState {
+            id,
+            kind: ShotKind::Shell,
+            x,
+            y: 1_000,
+            heading: quantise_heading(90.0),
+            state: ShellState::Flying.col() as u8,
+            variant: 0,
+            owner: crate::net::wire::NO_SEAT,
+        };
+        let mut a = snapshot(3);
+        a.shots = vec![shot(7, 1_000), shot(8, 1_000)];
+        let mut b = snapshot(6);
+        b.shots = vec![shot(7, 4_000), shot(8, 1_080)];
+        b.events = vec![WireEvent::ShotTeleported { id: Some(7), x: 1_040, y: 1_000, to_x: 3_960, to_y: 1_000 }];
+        let mut interp = Interpolator::default();
+        interp.accept(a, exact(3));
+        interp.accept(b, exact(6));
+        let before = interp.sample(at(&interp, 90.0)).expect("a frame");
+        assert_eq!(before.snapshot.shots[0].x, 1_000, "held at the near end, not slid toward the exit");
+        assert!(before.snapshot.shots[1].x > 1_000, "the other shot is lerped");
+        let after = interp.sample(at(&interp, 101.0)).expect("a frame");
+        assert_eq!(after.snapshot.tick, 6);
+        assert!((after.snapshot.shots[0].x - 4_000).abs() <= 8, "drawn at the exit whole, a millisecond on: {:?}", after.snapshot.shots[0]);
+    }
+
     #[test]
     fn the_clock_follows_the_fastest_arrivals_and_snaps_on_a_jump() {
+
         let mut clock = ServerClock::default();
         assert_eq!(clock.now(0), None, "nothing is known before the first reading");
         // The first reading is taken whole: server 1000 ms at local 0 ms.

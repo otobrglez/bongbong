@@ -640,6 +640,16 @@ impl Fx {
                         self.burst(Position::new(to_x, to_y), ParticleKind::Spark, self.count(10), 90.0, &[PORTAL_LT_T, WHITE_T]);
                         self.burst(Position::new(to_x, to_y), ParticleKind::Ember, self.count(6), 40.0, &[PORTAL_T]);
                     }
+                    // A shot or a beam through a portal: the same blue,
+                    // smaller - a spit of sparks where it went in and a
+                    // softer one where it came out, so the eye follows it
+                    // across. Slight, since a minigun burst can send a
+                    // dozen through in a second.
+                    Event::ShotTeleported { x, y, to_x, to_y, .. } => {
+                        self.burst(Position::new(x, y), ParticleKind::Spark, self.count(5), 90.0, &[PORTAL_T, PORTAL_LT_T, WHITE_T]);
+                        self.burst(Position::new(to_x, to_y), ParticleKind::Spark, self.count(4), 70.0, &[PORTAL_LT_T, WHITE_T]);
+                        self.burst(Position::new(to_x, to_y), ParticleKind::Ember, self.count(2), 30.0, &[PORTAL_T]);
+                    }
                     // A lava bomb thrown from the crater: a spit of molten
                     // drops and a puff of ash at the rim (docs/volcano.md).
                     Event::LavaBombLaunched { x, y, .. } => {
@@ -764,8 +774,10 @@ impl Fx {
                         self.burst(Position::new(x, y), ParticleKind::Ember, self.count(6), 36.0, &RAINBOW_TINTS);
                     }
                     // A laser's burn: sparks in the beam's colour splashing
-                    // back off whatever stopped it.
-                    Event::LaserBeam { x0, y0, x1, y1, variant, .. } => {
+                    // back off whatever stopped it. A leg that ends going
+                    // into a portal stopped on nothing.
+                    Event::LaserBeam { x0, y0, x1, y1, variant, portal: false, .. } => {
+
                         let (dx, dy) = (x0 - x1, y0 - y1);
                         let len = (dx * dx + dy * dy).sqrt();
                         if len > 0.5 {

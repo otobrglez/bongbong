@@ -32,6 +32,7 @@ mod flame;
 mod hits;
 mod missiles;
 mod nav;
+pub mod portals;
 pub mod present;
 mod props;
 mod towers;
@@ -375,7 +376,11 @@ pub enum Event {
     /// to where the gun line stopped it at (`x1`, `y1`): an instant hit
     /// leaves nothing in the world for a snapshot to carry, so the beam
     /// itself is the event a replica draws it from (`LaserVariant::name`).
-    LaserBeam { x0: f32, y0: f32, x1: f32, y1: f32, variant: &'static str, seat: u8 },
+    /// A beam bent by portals is one event a leg (docs/teleporting.md,
+    /// "Shots"): `leg` 0 leaves the lens, a later one the portal the last
+    /// came out of, and `portal` says the leg ends going into a portal
+    /// rather than where the beam stopped.
+    LaserBeam { x0: f32, y0: f32, x1: f32, y1: f32, variant: &'static str, seat: u8, leg: u8, portal: bool },
     /// A velocity change the room put on a client-owned hull (knockback, a
     /// blast, a ram, a missile launch's recoil); the owner applies it to
     /// its own body, since the room places that hull wherever the owner
@@ -463,6 +468,12 @@ pub enum Event {
     /// `slot`'s tank entered the portal at (`x`, `y`) and was placed at
     /// (`to_x`, `to_y`), beside another portal (`Game::portal_phase`).
     Teleported { slot: usize, x: f32, y: f32, to_x: f32, to_y: f32 },
+    /// A shot or a laser beam went into a portal at (`x`, `y`) - the point
+    /// of its path nearest the anchor - and came out of another at
+    /// (`to_x`, `to_y`), on the same heading (`simulation::portals`,
+    /// docs/teleporting.md). `id` is the projectile's (`Shell::id`),
+    /// `None` for a beam, whose legs are its `LaserBeam`s.
+    ShotTeleported { id: Option<u32>, x: f32, y: f32, to_x: f32, to_y: f32 },
     /// A ground cell centred on (`x`, `y`) caught fire: an oil drum's
     /// pool (`pool`) or a lit trail cell.
     FireStarted { x: f32, y: f32, pool: bool },
@@ -1435,11 +1446,14 @@ impl Game {
         // order every frame to get the depth right (a tuft rooted behind a
         // tank has to be drawn behind it). Sorting here keeps the per-frame
         // cost a merge walk instead of a sort of several hundred sprites.
-        self.grass = self
-            .grass_cells
-            .iter()
-            .flat_map(|c| crate::grass::tufts_for_cell(*c))
-            .collect();
+        // A tuft is kept off the tiles round its cell (`grass::keep_off`);
+        // trees are left out, since every tuft is drawn under them.
+        self.grass = {
+            let tiles: HashSet<(i32, i32)> =
+                self.world.query::<&Obstacle>().iter().filter(|o| !o.material.is_tree()).map(|o| o.cell()).collect();
+            let t = tuning();
+            self.grass_cells.iter().flat_map(|c| crate::grass::tufts_for_cell(&t, *c, |cell| tiles.contains(&cell))).collect()
+        };
         self.grass.sort_by(|a, b| a.base.y.total_cmp(&b.base.y));
         // Deep water counts as terrain for every clearance roll below:
         // no enemy, frog or bonus spawns in a lake.
@@ -3465,12 +3479,14 @@ impl Game {
     }
 
     /// Put one projectile in the world, with its `Rewind` only when it has
-    /// one: a shot judged in the present spawns as a bare projectile.
+    /// one: a shot judged in the present spawns as a bare projectile. One
+    /// fired inside a portal's swirl is leaving that portal
+    /// (`portals::ShotPortals`).
     fn spawn_shot<P: Projectile>(&mut self, shot: P, rewind: u8) {
-        if rewind > 0 {
-            self.world.spawn((shot, Rewind(rewind)));
-        } else {
-            self.world.spawn((shot,));
+        let leaving = self.fired_inside_portal(shot.position());
+        let entity = if rewind > 0 { self.world.spawn((shot, Rewind(rewind))) } else { self.world.spawn((shot,)) };
+        if let Some(state) = leaving {
+            self.world.insert_one(entity, state).ok();
         }
     }
 
@@ -3487,42 +3503,67 @@ impl Game {
     ///
     /// A seat's beam is swept against the enemies and frogs its client was
     /// drawing (`seat_rewind`, `rewound_boxes`), like its shells.
+    ///
+    /// A beam that reaches a portal before anything else goes in at the
+    /// point of its line nearest the anchor and carries on out of another
+    /// (`simulation::portals`, one RNG draw a pass) on the same heading for
+    /// the reach it has left, judged leg by leg, up to
+    /// `portal_shot_max_passes` passes. Each leg is drawn and logged as its
+    /// own `LaserBeam`, a pass between two as a `ShotTeleported`.
     fn resolve_lasers(&mut self, f: &mut Frame) {
         let players = self.seats_on_field();
         let shots = std::mem::take(&mut f.pending_lasers);
         let reach = laser_reach(self.map.field_size());
+        let (portal_radius, max_passes) = (tuning().portal_shot_radius, tuning().portal_shot_max_passes.max(0) as u8);
         for shot in shots {
-            let past = self.rewound_boxes(self.seat_rewind(shot.owner));
-            let end = laser_end(&shot, reach);
-            let hit = f.terrain.sweep_rewound(
-                &self.world,
-                players,
-                shot.owner,
-                shot.start,
-                end,
-                laser_beam_half_width(),
-                &[],
-                past,
-            );
-            let (hit_pos, target) = match hit {
-                Some((target, t)) => (shot.start + (end - shot.start) * t, Some(target)),
-                None => (end, None),
-            };
+            let rewind = self.seat_rewind(shot.owner);
+            let full = laser_end(&shot, reach);
+            let length = (full - shot.start).length().max(f32::EPSILON);
+            let dir = (full - shot.start) * (1.0 / length);
             f.muzzle_flashes.push(Shockwave::new(shot.lens));
-            self.laser_beams.push(LaserBeam::new(shot.lens, hit_pos, shot.variant));
-            f.events.push(Event::LaserBeam {
-                x0: shot.lens.x,
-                y0: shot.lens.y,
-                x1: hit_pos.x,
-                y1: hit_pos.y,
-                variant: shot.variant.name(),
-                seat: crate::net::encode::owner_seat(shot.owner),
-            });
-            let Some(target) = target else { continue };
-            f.impact_flashes.push(Shockwave::new(hit_pos));
-            // No knockback and no frog hop: an instant beam isn't something
-            // to be shoved by or to dodge.
-            self.apply_hit(f, target, hit_pos, laser_damage_range(&shot), HitEffects::none(), shot.owner);
+            // The leg being judged: from `from` to `end`, drawn from `drawn`.
+            let (mut from, mut end, mut drawn, mut left) = (shot.start, full, shot.lens, length);
+            // A beam from a tank standing on a portal leaves that portal.
+            let mut leaving = portals::inside(from, self.shot_portals(), portal_radius);
+            let mut leg = 0u8;
+            loop {
+                let entry = if leg < max_passes { portals::shot_entry(from, end, self.shot_portals(), portal_radius, leaving) } else { None };
+                let stop = entry.map_or(end, |(_, at)| at);
+                let past = self.rewound_boxes(rewind);
+                let hit = f.terrain.sweep_rewound(&self.world, players, shot.owner, from, stop, laser_beam_half_width(), &[], past);
+                let (hit_pos, target) = match hit {
+                    Some((target, t)) => (from + (stop - from) * t, Some(target)),
+                    None => (stop, None),
+                };
+                let through = target.is_none() && entry.is_some();
+                self.laser_beams.push(LaserBeam::new(drawn, hit_pos, shot.variant));
+                f.events.push(Event::LaserBeam {
+                    x0: drawn.x,
+                    y0: drawn.y,
+                    x1: hit_pos.x,
+                    y1: hit_pos.y,
+                    variant: shot.variant.name(),
+                    seat: crate::net::encode::owner_seat(shot.owner),
+                    leg,
+                    portal: through,
+                });
+                if let (true, Some((entrance, at))) = (through, entry) {
+                    let exit = self.draw_shot_exit(f, entrance);
+                    let out = portals::exit_point(self.portals[entrance], self.portals[exit], at, dir);
+                    f.events.push(Event::ShotTeleported { id: None, x: at.x, y: at.y, to_x: out.x, to_y: out.y });
+                    left -= (at - from).length();
+                    (from, end, drawn) = (out, out + dir * left, out);
+                    leaving = Some(exit);
+                    leg += 1;
+                    continue;
+                }
+                let Some(target) = target else { break };
+                f.impact_flashes.push(Shockwave::new(hit_pos));
+                // No knockback and no frog hop: an instant beam isn't
+                // something to be shoved by or to dodge.
+                self.apply_hit(f, target, hit_pos, laser_damage_range(&shot), HitEffects::none(), shot.owner);
+                break;
+            }
         }
     }
 
@@ -3741,6 +3782,11 @@ impl Game {
     /// snapshot and the tanks: sweep its frame segment, flash at the entry
     /// point, ricochet if it can (shells off Iron), otherwise detonate at
     /// that point and - when `live` - apply damage/knockback/frog hop.
+    ///
+    /// A shot whose segment passes through a portal before it meets
+    /// anything goes in there and comes out of another
+    /// (`simulation::portals`); the sweep is judged only up to the point it
+    /// goes in.
     fn resolve_projectiles<P: Projectile>(&mut self, f: &mut Frame, live: bool) {
         let players = self.seats_on_field();
         struct Flight {
@@ -3751,13 +3797,14 @@ impl Game {
             owner: Owner,
             dmg: (f32, f32),
             rewind: u8,
+            portals: portals::ShotPortals,
         }
         let flying: Vec<Flight> = self
             .world
-            .query::<(Entity, &P, Option<&Rewind>)>()
+            .query::<(Entity, &P, Option<&Rewind>, Option<&portals::ShotPortals>)>()
             .iter()
-            .filter(|(_, p, _)| p.is_flying())
-            .map(|(entity, p, rewind)| Flight {
+            .filter(|(_, p, _, _)| p.is_flying())
+            .map(|(entity, p, rewind, portals)| Flight {
                 entity,
                 prev: p.prev_position(),
                 pos: p.position(),
@@ -3765,9 +3812,21 @@ impl Game {
                 owner: p.owner(),
                 dmg: p.damage_range(),
                 rewind: rewind.map_or(0, |r| r.0),
+                portals: portals.copied().unwrap_or_default(),
             })
             .collect();
-        for Flight { entity, prev, pos, vel, owner, dmg, rewind } in flying {
+        let (portal_radius, max_passes) = (tuning().portal_shot_radius, tuning().portal_shot_max_passes.max(0) as u8);
+        for Flight { entity, prev, pos, vel, owner, dmg, rewind, portals: through } in flying {
+            // Into a portal on the way: judged only up to where it goes in.
+            let entry = if through.passes < max_passes {
+                portals::shot_entry(prev, pos, self.shot_portals(), portal_radius, through.leaving)
+            } else {
+                None
+            };
+            if entry.is_none() && through.leaving.is_some() {
+                self.note_left_portal(entity, pos);
+            }
+            let pos = entry.map_or(pos, |(_, at)| at);
             // Lag compensation: a seat's shot meets the enemies and frogs
             // where its client drew them (`Rewind`); 0 is the present.
             let past = self.rewound_boxes(rewind);
@@ -3795,6 +3854,9 @@ impl Game {
                 break Some((target, t));
             };
             let Some((target, t)) = hit else {
+                if let Some((entrance, at)) = entry {
+                    self.shot_through::<P>(f, entity, entrance, at, vel);
+                }
                 continue;
             };
             let hit_pos = prev + (pos - prev) * t;
@@ -7394,6 +7456,172 @@ cells."30,20" = { kind = "frog" }
             }
         }
         assert!(on_portal, "the player did stand on portal A");
+    }
+
+    /// Shots through portals (docs/teleporting.md, "Shots"): the player at
+    /// (4, 11) facing right, portal A (12, 11) in its line, portal B
+    /// (28, 5) on the far side of an iron column at col 20, and a brick
+    /// wall at (36, 5) on B's row - in line with A only through the
+    /// portal. A frog keeps the round going.
+    const SHOT_PORTALS_MAP: &str = r#"
+version = 1
+size = [40, 22]
+tanks = 0
+cells."4,11" = { kind = "start" }
+cells."4,17" = { kind = "frog" }
+cells."12,11" = { kind = "portal" }
+cells."28,5" = { kind = "portal" }
+cells."36,5" = { kind = "wall", material = "brick" }
+"#;
+
+    fn shot_portals_map() -> String {
+        let mut map = String::from(SHOT_PORTALS_MAP);
+        for row in 0..22 {
+            map.push_str(&format!("cells.\"20,{row}\" = {{ kind = \"wall\", material = \"iron\" }}\n"));
+        }
+        map
+    }
+
+    fn shot_teleports(game: &Game) -> Vec<(Option<u32>, Position, Position)> {
+        game.events()
+            .iter()
+            .filter_map(|e| match *e {
+                Event::ShotTeleported { id, x, y, to_x, to_y } => Some((id, Position::new(x, y), Position::new(to_x, to_y))),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A shell fired into portal A comes out of portal B at the same
+    /// offset, heading and speed kept, and flies on to the brick wall on
+    /// B's row - one `ShotTeleported` naming it, and its hit on the far
+    /// side of the iron.
+    #[test]
+    fn a_shell_fired_into_a_portal_comes_out_of_the_other() {
+        let mut game = game_on(&shot_portals_map(), 0, None);
+        assert!(game.portals_active());
+        let (a, b) = (map::cell_to_world(12, 11), map::cell_to_world(28, 5));
+        game.debug_teleport(0, map::cell_to_world(4, 11), Some(90.0)).unwrap();
+        step(&mut game, Input::single(Intent { fire: true, ..Intent::default() }));
+        let shell = game.world.query::<&Shell>().iter().map(|s| (s.id, s.velocity)).next().expect("the shell left");
+        let mut passed = None;
+        let mut wall_hit = None;
+        for _ in 0..240 {
+            step(&mut game, Input::default());
+            if let Some(&pass) = shot_teleports(&game).first() {
+                assert!(passed.is_none(), "one pass");
+                passed = Some(pass);
+                let moved = game.world.query::<&Shell>().iter().find(|s| s.id == shell.0).map(|s| (s.position, s.velocity)).expect("still flying");
+                assert_eq!(moved.1, shell.1, "heading and speed kept");
+                assert!(moved.0.distance_to(pass.2) < 1e-3, "placed where the event says");
+            }
+            wall_hit = game.events().iter().find_map(|e| match *e {
+                Event::Hit { target: HitTarget::Obstacle { material: Material::Brick }, x, y, .. } => Some(Position::new(x, y)),
+                _ => None,
+            });
+            if wall_hit.is_some() {
+                break;
+            }
+        }
+        let (id, at, to) = passed.expect("the shell went through portal A");
+        assert_eq!(id, Some(shell.0));
+        assert!(at.distance_to(a) <= tuning().portal_shot_radius, "went in at A: {at:?}");
+        assert!((to.x - b.x).abs() < 1.0 && (to.y - b.y).abs() < 1.0, "came out of B's anchor in line: {to:?}");
+        let hit = wall_hit.expect("the shell reached the brick wall past B");
+        assert!(hit.x > map::cell_to_world(20, 0).x && (hit.y - b.y).abs() < 1.0, "on B's row, past the iron: {hit:?}");
+    }
+
+    /// A laser fired into a portal is bent: one leg into A, a pass, a leg
+    /// out of B on the same heading - judged along the bent path - that
+    /// burns the enemy standing past B, whom no straight line from the
+    /// player reaches.
+    #[test]
+    fn a_laser_fired_into_a_portal_is_bent_and_hits_past_the_exit() {
+        let mut game = game_on(&shot_portals_map(), 0, None);
+        let (a, b) = (map::cell_to_world(12, 11), map::cell_to_world(28, 5));
+        game.debug_teleport(0, map::cell_to_world(4, 11), Some(90.0)).unwrap();
+        game.debug_set_tank(0, &crate::simulation::debug::TankPatch { laser_charges: Some(1), ..Default::default() }).unwrap();
+        let slot = game.debug_spawn_enemy(map::cell_to_world(33, 5), None, None).expect("an enemy past B");
+        step(&mut game, Input::single(Intent { fire: true, ..Intent::default() }));
+        let legs: Vec<(u8, bool, Position, Position)> = game
+            .events()
+            .iter()
+            .filter_map(|e| match *e {
+                Event::LaserBeam { x0, y0, x1, y1, leg, portal, .. } => Some((leg, portal, Position::new(x0, y0), Position::new(x1, y1))),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(legs.len(), 2, "two legs: {legs:?}");
+        let (first, second) = (legs[0], legs[1]);
+        assert_eq!((first.0, first.1), (0, true), "the first leg ends going into a portal");
+        assert!(first.3.distance_to(a) <= tuning().portal_shot_radius, "into A: {first:?}");
+        assert_eq!((second.0, second.1), (1, false), "the second leg stops on something");
+        assert!((second.2.y - b.y).abs() < 1.0 && (second.2.x - b.x).abs() < 1.0, "out of B: {second:?}");
+        assert!(second.3.x > b.x && (second.3.y - b.y).abs() < 1.0, "on the same heading: {second:?}");
+        let passes = shot_teleports(&game);
+        assert_eq!(passes.len(), 1);
+        assert_eq!(passes[0].0, None, "a beam's pass names no projectile");
+        let burnt = game.events().iter().any(|e| matches!(*e, Event::Hit { target: HitTarget::Enemy { slot: s }, .. } if s == slot));
+        assert!(burnt, "the bent beam hit the enemy past B: {:?}", game.events());
+    }
+
+    /// Whether a shot met the iron column at col 20 this frame - a shell
+    /// ricochets off iron, so its first contact there is a `Ricochet`.
+    fn struck_the_iron(game: &Game) -> bool {
+        let wall = map::cell_to_world(20, 0).x;
+        game.events().iter().any(|e| match *e {
+            Event::Ricochet { x, .. } | Event::Hit { x, .. } => (x - wall).abs() < OBSTACLE_GRID_SIZE,
+            _ => false,
+        })
+    }
+
+    /// The pass cap: a shot that has been through
+    /// `portal_shot_max_passes` portals flies over the next as over open
+    /// ground - the shell crosses A and meets the iron column.
+    #[test]
+    fn a_shot_past_its_passes_flies_over_the_portal() {
+        let mut game = game_on(&shot_portals_map(), 0, None);
+        game.debug_teleport(0, map::cell_to_world(4, 11), Some(90.0)).unwrap();
+        step(&mut game, Input::single(Intent { fire: true, ..Intent::default() }));
+        let shell = game.world.query::<(Entity, &Shell)>().iter().map(|(e, _)| e).next().expect("the shell left");
+        let cap = tuning().portal_shot_max_passes.max(0) as u8;
+        game.world.insert_one(shell, portals::ShotPortals { passes: cap, leaving: None }).unwrap();
+        let mut iron = false;
+        for _ in 0..240 {
+            step(&mut game, Input::default());
+            assert!(shot_teleports(&game).is_empty(), "no pass past the cap");
+            iron = struck_the_iron(&game);
+            if iron {
+                break;
+            }
+        }
+        assert!(iron, "the shell flew over A and met the iron");
+    }
+
+    /// A tank standing on a portal (its cooldown holding it there) fires
+    /// out of it: the shell, leaving the muzzle inside the swirl and short
+    /// of the anchor, leaves that portal rather than falling into it, and
+    /// meets the iron column.
+    #[test]
+    fn a_shot_fired_on_a_portal_leaves_it() {
+        let mut game = game_on(&shot_portals_map(), 0, None);
+        let a = map::cell_to_world(12, 11);
+        let muzzle = with_tank(&game.world, game.player().unwrap(), |t| tuning().tank_muzzle_forward_offset[t.row as usize] * t.scale);
+        game.debug_teleport(0, Position::new(a.x - muzzle - 6.0, a.y), Some(90.0)).unwrap();
+        game.debug_set_tank(0, &crate::simulation::debug::TankPatch { portal_cooldown: Some(5.0), ..Default::default() }).unwrap();
+        step(&mut game, Input::single(Intent { fire: true, ..Intent::default() }));
+        let spawned = game.world.query::<&Shell>().iter().map(|s| s.position).next().expect("the shell left");
+        assert!(spawned.x < a.x && spawned.distance_to(a) <= tuning().portal_shot_radius, "fired inside the swirl, short of the anchor: {spawned:?}");
+        let mut iron = false;
+        for _ in 0..240 {
+            step(&mut game, Input::default());
+            assert!(shot_teleports(&game).is_empty(), "the shell does not fall into the portal it was fired on");
+            iron = struck_the_iron(&game);
+            if iron {
+                break;
+            }
+        }
+        assert!(iron, "the shell flew out of A and met the iron");
     }
 
     /// Enemies only take what they would actually use. A pack that hoovers

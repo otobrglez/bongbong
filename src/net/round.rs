@@ -999,6 +999,7 @@ impl<T: Transport> OnlineRound<T> {
     /// its impact drawn there at once; beams pressed since the last frame
     /// are drawn to where they stop.
     fn fly_own_shots(&mut self, dt: f32, world: &crate::simulation::present::PresentWorld, seat: u8, shells: &[IncomingShell]) {
+        use crate::net::predict::ShotStop;
         use crate::simulation::present::{Contact, shot_half_extent};
         let (Some(predictor), Some(game)) = (self.predictor.as_mut(), self.replica.as_mut()) else { return };
         for (at, kind) in predictor.take_muzzles() {
@@ -1011,25 +1012,34 @@ impl<T: Transport> OnlineRound<T> {
         // picture is the crossing in the room.
         let reach = tuning().shell_hit_half_extent * 2.0;
         let mut met: Vec<(u16, crate::math::Vec2)> = Vec::new();
-        predictor.advance_shots(dt, |kind, from, to| {
+        predictor.advance_shots(dt, |kind, from, to, leaving| {
+            // Into a portal before anything else: judged no further, as the
+            // room judges it (`Game::resolve_projectiles`).
+            let portal = world.portal_entry(from, to, leaving);
+            let to = portal.unwrap_or(to);
             let world_hit = world
                 .shot_contact(Some(seat), from, to, shot_half_extent(kind))
                 .map(|(at, contact)| (at, matches!(contact, Contact::Tank { .. } | Contact::Frog)));
             let opposing: &[IncomingShell] = if kind == crate::simulation::ProvisionalKind::Shell { shells } else { &[] };
-            let (at, tank, shell) = first_contact(from, to, world_hit, opposing, reach, &met)?;
+            let Some((at, tank, shell)) = first_contact(from, to, world_hit, opposing, reach, &met) else {
+                return portal.map(|at| (at, ShotStop::Portal));
+            };
             if let Some(id) = shell {
                 met.push((id, at));
             }
-            Some((at, tank))
+            Some((at, if tank { ShotStop::Body } else { ShotStop::Struck }))
         });
         for (id, at) in met {
             self.struck.insert(id, at);
             game.remove_shots(&[id]);
         }
-        // A beam is traced as far as the room traces it.
+        // A beam is traced as far as the room traces it, or into the first
+        // portal on its way: the room draws which one it comes out of, and
+        // the legs past it arrive as the room's own `LaserBeam`s.
         let beam_reach = crate::simulation::laser_reach(game.map.field_size());
         for beam in predictor.take_beams() {
             let far = crate::math::Vec2::new(beam.start.x + beam.dir.x * beam_reach, beam.start.y + beam.dir.y * beam_reach);
+            let far = world.portal_entry(beam.start, far, world.portal_inside(beam.start)).unwrap_or(far);
             let end = world
                 .shot_contact(Some(seat), beam.start, far, tuning().shell_hit_half_extent)
                 .map_or(far, |(at, _)| at);
@@ -1088,7 +1098,17 @@ impl<T: Transport> OnlineRound<T> {
         self.flying_since.retain(|id, _| alive.contains(id));
         self.incoming_drawn.retain(|id, _| alive.contains(id));
         self.struck.retain(|id, _| game.has_shot(*id));
+        // A shot the frame shows coming out of a portal starts afresh at
+        // the exit, as from a muzzle: eased up to the lead again, with no
+        // stretch drawn from the far side of the field.
+        for event in &frame.snapshot.events {
+            if let WireEvent::ShotTeleported { id: Some(id), .. } = *event {
+                self.flying_since.insert(id, now);
+                self.incoming_drawn.remove(&id);
+            }
+        }
         let mut struck_now = Vec::new();
+        let mut in_portal = Vec::new();
         let mut shells = Vec::new();
         for shot in foreign {
             if let Some(&at) = self.struck.get(&shot.id) {
@@ -1109,6 +1129,14 @@ impl<T: Transport> OnlineRound<T> {
             if let Some(stop) = world.static_contact(shot.position, to) {
                 to = stop;
             }
+            // Carried into a portal: it is in there until the room's copy
+            // comes out of whichever one the room drew.
+            if world.portal_entry(shot.position, to, None).is_some() {
+
+                in_portal.push(shot.id);
+                self.incoming_drawn.remove(&shot.id);
+                continue;
+            }
             if let Some((centre, half)) = hull {
                 let grow = crate::math::Vec2::new(shot.half_extent, shot.half_extent);
                 if let Some(t) = segment_box(shot.position, to, centre, half + grow) {
@@ -1128,7 +1156,8 @@ impl<T: Transport> OnlineRound<T> {
             game.move_shot(shot.id, to);
         }
         self.struck.extend(struck_now);
-        let hidden: Vec<u16> = self.struck.keys().copied().collect();
+        let mut hidden: Vec<u16> = self.struck.keys().copied().collect();
+        hidden.extend(in_portal);
         game.remove_shots(&hidden);
         shells
     }
@@ -1183,19 +1212,24 @@ impl<T: Transport> OnlineRound<T> {
     /// The interpolator handed a snapshot's events over: each `Fired` of
     /// this seat's confirms the press that travelled on its input tick
     /// (`Predictor::confirm_fired`), and one with no press waiting seeds
-    /// the local gate from the room's. A laser's is `confirm_beams`'.
+    /// the local gate from the room's. A laser's is `confirm_beams`'. Each
+    /// `ShotTeleported` tells the predictor a room shot came through a
+    /// portal, for a provisional that went into one to hand over to it
+    /// (`Predictor::shot_teleported`).
     fn confirm_shots(&mut self, frame: &Snapshot) {
+
         if !self.sandbox_follows_room() {
             return;
         }
         let (Some(predictor), Some(seat)) = (self.predictor.as_mut(), self.client.seat()) else { return };
         for event in &frame.events {
-            if let WireEvent::Fired { slot, weapon, input_tick } = *event
-                && slot as u8 == seat
-            {
-                predictor.confirm_fired(weapon, input_tick);
+            match *event {
+                WireEvent::Fired { slot, weapon, input_tick } if slot as u8 == seat => predictor.confirm_fired(weapon, input_tick),
+                WireEvent::ShotTeleported { id: Some(id), .. } => predictor.shot_teleported(id),
+                _ => {}
             }
         }
+
     }
 
     /// The interpolator is handing a snapshot's events over, before they
@@ -1855,6 +1889,8 @@ mod tests {
             y1: quantise_pos(40.0),
             variant: 0,
             seat: 0,
+            leg: 0,
+            portal: false,
         };
         let mut fired = on_schedule(&room, 21);
         fired.events = vec![

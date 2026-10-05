@@ -333,9 +333,12 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_beams: &BTreeS
             WireEvent::Deflected { x, y, .. } | WireEvent::Ricochet { x, y, .. } | WireEvent::ShellsCollided { x, y } => {
                 show.impact_flashes.push(Shockwave::new(at(x, y)));
             }
-            WireEvent::LaserBeam { x0, y0, .. } if !own_beams.contains(&i) => {
+            // A beam's lens flashes; a later leg of one bent by a portal
+            // starts at the portal it came out of, which has no lens.
+            WireEvent::LaserBeam { x0, y0, leg: 0, .. } if !own_beams.contains(&i) => {
                 show.muzzle_flashes.push(Shockwave::new(at(x0, y0)));
             }
+
             WireEvent::Fired { slot, weapon, .. } if !mode.client_drew(slot as usize) => {
                 kick_turret(game, slot as usize, weapon);
                 if let Some(muzzle) = drawn_muzzle(game, slot as usize, weapon) {
@@ -1661,8 +1664,83 @@ mod tests {
         assert!(replica.laser_beams.is_empty(), "the beam faded");
     }
 
+    /// The seat at (4, 11) facing right with portal A (12, 11) in its line
+    /// and portal B (28, 5) beyond an iron column - the mechanics tests'
+    /// shot-portal map, with a frog to keep the round going.
+    fn portal_shots_round() -> Game {
+        let mut map = String::from(
+            "version = 1\nsize = [40, 22]\ntanks = 0\ncells.\"4,11\" = { kind = \"start\" }\ncells.\"4,17\" = { kind = \"frog\" }\ncells.\"12,11\" = { kind = \"portal\" }\ncells.\"28,5\" = { kind = \"portal\" }\n",
+        );
+        for row in 0..22 {
+            map.push_str(&format!("cells.\"20,{row}\" = {{ kind = \"wall\", material = \"iron\" }}\n"));
+        }
+        let mut game = quiet_round(&map, 0xB0B5, 0);
+        game.debug_teleport(0, map::cell_to_world(4, 11), Some(90.0)).expect("the seat's tank");
+        game
+    }
+
+    /// A shell through a portal reaches the replica at the exit: the
+    /// `ShotTeleported` is on the wire with the shell's key, and every
+    /// frame of its flight, the pass included, the replica draws the
+    /// authority's picture.
+    #[test]
+    fn a_shell_through_a_portal_reaches_the_replica_at_the_exit() {
+        let mut game = portal_shots_round();
+        let mut replica = welcome_through_the_codec(&game);
+        let (width, height) = game.map.field_size();
+        game.update(Input::single(Intent { fire: true, ..Intent::default() }), PHYSICS_FIXED_DT, width, height);
+        let mut passed = false;
+        for _ in 0..120 {
+            step_and_apply(&mut game, &mut replica);
+            assert_eq!(replica.drawable_state(), game.drawable_state(), "the replica draws the authority's picture");
+            let pass = replica.events().iter().find_map(|e| match *e {
+                crate::simulation::Event::ShotTeleported { id, to_x, to_y, .. } => Some((id, Position::new(to_x, to_y))),
+                _ => None,
+            });
+            if let Some((id, to)) = pass {
+                let id = id.expect("a shell's pass names it") as u32;
+                let shell = replica.world.query::<&Shell>().iter().find(|s| s.id == id).map(|s| s.position).expect("the shell is on the replica");
+                assert!(shell.distance_to(to) < 0.5, "drawn at the exit: {shell:?} vs {to:?}");
+                passed = true;
+                break;
+            }
+        }
+        assert!(passed, "the shell went through the portal");
+    }
+
+    /// A beam bent by a portal reaches the replica leg by leg: both legs
+    /// drawn, the lens flashing for the first alone - the second starts at
+    /// the portal it came out of.
+    #[test]
+    fn a_bent_beam_reaches_the_replica_leg_by_leg() {
+        let mut game = portal_shots_round();
+        let patch = crate::simulation::debug::TankPatch { laser_charges: Some(1), ..Default::default() };
+        game.debug_set_tank(0, &patch).expect("the seat's tank");
+        let mut replica = welcome_through_the_codec(&game);
+        let (width, height) = game.map.field_size();
+        game.update(Input::single(Intent { fire: true, ..Intent::default() }), PHYSICS_FIXED_DT, width, height);
+        let wire = enc::snapshot(&game, [0; MAX_SEATS]);
+        let legs: Vec<(u8, bool)> = wire
+            .events
+            .iter()
+            .filter_map(|e| match *e {
+                WireEvent::LaserBeam { leg, portal, .. } => Some((leg, portal)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(legs, vec![(0, true), (1, false)], "two legs on the wire");
+        let Msg::Snapshot(wire) = decode(&encode(&Msg::Snapshot(wire))).expect("decodes") else { panic!("kind") };
+        snapshot(&mut replica, &wire);
+        assert_eq!(replica.laser_beams.len(), 2, "both legs drawn");
+        assert_eq!(replica.muzzle_flashes.len(), 1, "one lens flash, at the first leg's start");
+        let lens = replica.laser_beams[0].start;
+        let flash = replica.muzzle_flashes[0].center;
+        assert!(flash.distance_to(lens) < 0.5, "the flash is the lens's: {flash:?} vs {lens:?}");
+    }
+
     #[test]
     fn a_launched_drum_flies_on_the_replica() {
+
         let mut game = authoritative(PROPS_MAP, 0xC0FFEE, 2);
         let mut replica = welcome_through_the_codec(&game);
         // A cascade can launch more than one drum on the same frame.
@@ -2127,7 +2205,7 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
         let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
         snap.events = vec![
             WireEvent::Fired { slot: 0, weapon: WeaponKind::Laser, input_tick: 1 },
-            WireEvent::LaserBeam { x0: 400, y0: 400, x1: 1600, y1: 400, variant: 0, seat: 0 },
+            WireEvent::LaserBeam { x0: 400, y0: 400, x1: 1600, y1: 400, variant: 0, seat: 0, leg: 0, portal: false },
             WireEvent::Hit { target: WireHitTarget::Enemy { slot: 1 }, damage: 0.0, killed: false, x: 1600, y: 400 },
             WireEvent::Hit { target: WireHitTarget::Enemy { slot: 2 }, damage: 0.0, killed: false, x: 2000, y: 800 },
         ];
@@ -2161,10 +2239,10 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
         let enemy = game.first_enemy_slot() as u16;
         snap.events = vec![
             WireEvent::Fired { slot: 0, weapon: WeaponKind::Laser, input_tick: 3 },
-            WireEvent::LaserBeam { x0: 400, y0: 400, x1: 1600, y1: 400, variant: 0, seat: 0 },
+            WireEvent::LaserBeam { x0: 400, y0: 400, x1: 1600, y1: 400, variant: 0, seat: 0, leg: 0, portal: false },
             WireEvent::Fired { slot: enemy, weapon: WeaponKind::Shell, input_tick: 0 },
             WireEvent::Fired { slot: 0, weapon: WeaponKind::Laser, input_tick: 5 },
-            WireEvent::LaserBeam { x0: 400, y0: 800, x1: 1600, y1: 800, variant: 0, seat: 0 },
+            WireEvent::LaserBeam { x0: 400, y0: 800, x1: 1600, y1: 800, variant: 0, seat: 0, leg: 0, portal: false },
         ];
         let beams = |g: &Game| g.events().iter().filter(|e| matches!(e, crate::simulation::Event::LaserBeam { .. })).count();
 
