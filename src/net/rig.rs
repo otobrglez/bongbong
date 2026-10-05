@@ -867,7 +867,7 @@ mod tests {
         // A player's shell is fired on the press, so the trigger is
         // pulled rather than held; the weapon's own cooldown paces it.
         let mut won_at = None;
-        for tick in 0..600 {
+        for tick in 0..900 {
             rig.drive(Intent { face: Some(Dir::Up), fire: tick % 6 == 0, ..Intent::default() });
             rig.step(1);
             let game = rig.authority().expect("the room is running a round");
@@ -885,7 +885,7 @@ mod tests {
         // ticking for the whole countdown and only then said so.
         let truth = rig.authority().expect("the world outlives the round");
         let screen = truth.frame() - won_at;
-        let expected = (tuning().restart_delay / PHYSICS_FIXED_DT) as u64;
+        let expected = (truth.end_beats().total() / PHYSICS_FIXED_DT) as u64;
         assert!(
             screen.abs_diff(expected) <= 2,
             "the end screen ran {screen} ticks of an expected {expected}"

@@ -476,12 +476,18 @@ fn draw_dialog_panel(d: &mut impl RaylibDraw, panel: Rectangle, title: &str, sub
 
 /// One dialog button: an outlined rounded box with its label centred.
 fn draw_dialog_button(d: &mut impl RaylibDraw, rect: Rectangle, label: &str, color: Color, fill: Option<Color>) {
+    draw_faded_button(d, rect, label, color, fill, 1.0);
+}
+
+/// `draw_dialog_button` at `a` of its opacity: the end screen's, as it
+/// eases in.
+fn draw_faded_button(d: &mut impl RaylibDraw, rect: Rectangle, label: &str, color: Color, fill: Option<Color>, a: f32) {
     if let Some(fill) = fill {
-        d.draw_rectangle_rounded(rect, 0.2, 8, fill);
+        d.draw_rectangle_rounded(rect, 0.2, 8, faded(fill, a));
     }
-    d.draw_rectangle_rounded_lines_ex(rect, 0.2, 8, 2.0, color);
+    d.draw_rectangle_rounded_lines_ex(rect, 0.2, 8, 2.0, faded(color, a));
     let w = width(label, HUD_TEXT_SIZE);
-    d.draw_text(label, (rect.x + (rect.width - w as f32) / 2.0) as i32, (rect.y + (rect.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, color);
+    d.draw_text(label, (rect.x + (rect.width - w as f32) / 2.0) as i32, (rect.y + (rect.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, faded(color, a));
 }
 
 /// Draw the players dialog over the (already dimmed) window: the live
@@ -525,7 +531,7 @@ pub fn draw_banner(d: &mut impl RaylibDraw, area: Rect, text: &str, size: i32, y
 /// their place. In UI points over the dim, centred in the chrome's
 /// `area`, at the rows `hud::result_layout` gives, which is what the hit
 /// tests read too.
-pub fn draw_result(d: &mut impl RaylibDraw, area: Rect, view: &ResultView, countdown: &str) {
+pub fn draw_result(d: &mut impl RaylibDraw, area: Rect, view: &ResultView, countdown: &str, a: f32) {
     fn centred(d: &mut impl RaylibDraw, middle: i32, line: &str, y: f32, size: i32, color: Color) {
         let w = width(line, size);
         d.draw_text(line, middle - w / 2, y as i32, size, color);
@@ -535,14 +541,14 @@ pub fn draw_result(d: &mut impl RaylibDraw, area: Rect, view: &ResultView, count
     let t = text();
     let rows = result_layout(area, view);
     if let (Some(y), Some(ResultButtons { next: Some(NextLevel::FirstAgain { levels }), .. })) = (rows.all_clear_y, view.buttons) {
-        centred(d, middle, &t.fmt(keys::RESULT_ALL_CLEAR, &[("count", levels.into())]), y, RESULT_LINE_SIZE, BUILD_COLOR);
+        centred(d, middle, &t.fmt(keys::RESULT_ALL_CLEAR, &[("count", levels.into())]), y, RESULT_LINE_SIZE, faded(BUILD_COLOR, a));
     }
     let time = t.fmt(keys::RESULT_TIME, &[("time", clock_text(view.stats.seconds).into())]);
     let wrecks = t.fmt(keys::RESULT_WRECKS, &[("n", view.stats.destroyed.into()), ("total", view.stats.enemies.into())]);
     let (time_w, wrecks_w) = (width(&time, RESULT_LINE_SIZE), width(&wrecks, RESULT_LINE_SIZE));
     let x = middle - (time_w + RESULT_STATS_GAP + wrecks_w) / 2;
-    d.draw_text(&time, x, rows.stats_y as i32, RESULT_LINE_SIZE, Color::RAYWHITE);
-    d.draw_text(&wrecks, x + time_w + RESULT_STATS_GAP, rows.stats_y as i32, RESULT_LINE_SIZE, Color::RAYWHITE);
+    d.draw_text(&time, x, rows.stats_y as i32, RESULT_LINE_SIZE, faded(Color::RAYWHITE, a));
+    d.draw_text(&wrecks, x + time_w + RESULT_STATS_GAP, rows.stats_y as i32, RESULT_LINE_SIZE, faded(Color::RAYWHITE, a));
     if let Some(y) = rows.seats_y {
         // Each seat's share in the colour its tank wears, `P1 7  P2 5`.
         let seats = view.seats.min(MAX_SEATS);
@@ -553,13 +559,13 @@ pub fn draw_result(d: &mut impl RaylibDraw, area: Rect, view: &ResultView, count
         let total: i32 = parts.iter().map(|p| width(p, RESULT_SEATS_SIZE)).sum::<i32>() + gap * (seats as i32 - 1);
         let mut x = middle - total / 2;
         for (seat, part) in parts.iter().enumerate() {
-            d.draw_text(part, x, y as i32, RESULT_SEATS_SIZE, team_color(seat as u8));
+            d.draw_text(part, x, y as i32, RESULT_SEATS_SIZE, faded(team_color(seat as u8), a));
             x += width(part, RESULT_SEATS_SIZE) + gap;
         }
     }
     let lit = Some(Color::new(BUILD_COLOR.r, BUILD_COLOR.g, BUILD_COLOR.b, 40));
     if let Some(rects) = rows.buttons {
-        draw_dialog_button(d, rects.levels, &t.get(keys::RESULT_LEVELS), TEXT, None);
+        draw_faded_button(d, rects.levels, &t.get(keys::RESULT_LEVELS), TEXT, None, a);
     }
     // The button the screen is counting down to says so and counts: the
     // press that skips the wait is the one the eye is already on.
@@ -571,21 +577,21 @@ pub fn draw_result(d: &mut impl RaylibDraw, area: Rect, view: &ResultView, count
     match (rows.buttons, view.buttons.and_then(|b| b.next)) {
         // The way on is the one to press; PLAY AGAIN stands beside it.
         (Some(rects), Some(next)) => {
-            draw_dialog_button(d, rects.again, &t.get(keys::RESULT_AGAIN), TEXT, None);
+            draw_faded_button(d, rects.again, &t.get(keys::RESULT_AGAIN), TEXT, None, a);
             let label = match next {
                 NextLevel::Next => counting(keys::RESULT_NEXT_IN, keys::RESULT_NEXT),
                 NextLevel::FirstAgain { .. } => t.get(keys::RESULT_FIRST),
             };
             if let Some(rect) = rects.next {
-                draw_dialog_button(d, rect, &label, BUILD_COLOR, lit);
+                draw_faded_button(d, rect, &label, BUILD_COLOR, lit, a);
             }
         }
         (Some(rects), None) => {
-            draw_dialog_button(d, rects.again, &counting(keys::RESULT_AGAIN_IN, keys::RESULT_AGAIN), BUILD_COLOR, lit)
+            draw_faded_button(d, rects.again, &counting(keys::RESULT_AGAIN_IN, keys::RESULT_AGAIN), BUILD_COLOR, lit, a)
         }
         (None, _) => {
             if let Some(y) = rows.countdown_y {
-                centred(d, middle, countdown, y, RESULT_LINE_SIZE, Color::RAYWHITE);
+                centred(d, middle, countdown, y, RESULT_LINE_SIZE, faded(Color::RAYWHITE, a));
             }
         }
     }

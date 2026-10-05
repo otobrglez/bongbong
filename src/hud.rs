@@ -1309,6 +1309,9 @@ pub struct PlayChrome {
     /// The lamp row under each block: a round that gives lanterns or has
     /// lava to cross (docs/volcano.md).
     pub lamp_row: bool,
+    /// How dark the fade through black between rounds is, 0 to 1
+    /// (`Session::curtain`), drawn over everything else.
+    pub curtain: f32,
 }
 
 /// The online status line's text size: the first line under the left

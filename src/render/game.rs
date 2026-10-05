@@ -452,8 +452,21 @@ impl Game {
         let wave_banner = self.wave_banner().filter(|_| self.outcome == Outcome::Playing).map(|banner| {
             if banner.is_final { t.get(keys::WAVE_FINAL) } else { t.fmt(keys::WAVE_BANNER, &[("n", banner.next.into())]) }
         });
+        // The end's beats (`EndBeats`): the finale with nothing over the
+        // world, then the end screen easing in with the corners.
+        let beats = self.end_beats();
+        let since_end = self.since_end();
+        let verdict = since_end.map_or(1.0, |s| beats.verdict(s));
+        let hud_end = since_end.map_or(1.0, |s| {
+            if s < beats.finale {
+                let k = (s / HUD_END_FADE_SECONDS).clamp(0.0, 1.0);
+                (1.0 - k) * (1.0 - k)
+            } else {
+                verdict
+            }
+        });
         let banner = banner.map(|(text, color)| {
-            let seconds = self.restart_timer.ceil().max(0.0) as i32;
+            let seconds = self.restart_timer.min(beats.countdown).ceil().max(0.0) as i32;
             let sub = t.fmt(chrome.countdown_label.unwrap_or(keys::ROUND_RESTARTING), &[("seconds", seconds.into())]);
             (text, color, sub)
         });
@@ -477,6 +490,8 @@ impl Game {
         let text = ChromeText {
             t: &t,
             banner,
+            verdict,
+            hud_end,
             intro,
             wave_banner,
             paused,
@@ -803,6 +818,10 @@ struct WorldPass<'a> {
     marks: &'a [crate::indicators::Fill],
 }
 
+/// Seconds the corner clusters take to step aside once the round is
+/// decided, so the finale plays with nothing over the world.
+const HUD_END_FADE_SECONDS: f32 = 0.4;
+
 /// What `Game::draw_chrome` writes, gathered by `Game::render` in the
 /// language on screen.
 struct ChromeText<'a> {
@@ -810,6 +829,12 @@ struct ChromeText<'a> {
     /// The end screen: its outcome, the outcome's colour and the
     /// countdown line.
     banner: Option<(String, Color, String)>,
+    /// How far the end screen has eased in after the finale, 0 to 1
+    /// (`EndBeats::verdict`).
+    verdict: f32,
+    /// The corner clusters' opacity at the round's end: gone for the
+    /// finale, back with the verdict; 1 while the round plays.
+    hud_end: f32,
     /// The mission banner and its opacity.
     intro: Option<(String, f32)>,
     /// The `WAVE N` banner.
@@ -1105,18 +1130,24 @@ impl Game {
             // stacks its numbers and a level's buttons under it
             // (`hud::result_layout`); an online one counts down to the
             // room's lobby.
-            if let Some((title, color, sub)) = &c.banner {
-                d.draw_rectangle(0, 0, screen_w, screen_h, Color::new(0, 0, 0, 120));
+            if let Some((title, color, sub)) = c.banner.as_ref().filter(|_| c.verdict > 0.0) {
+                // Eased in after the finale: the dim deepens, the title
+                // settles from a little above its row, everything fades up.
+                let v = c.verdict;
+                let eased = 1.0 - (1.0 - v) * (1.0 - v) * (1.0 - v);
+                let fade = |col: Color| Color::new(col.r, col.g, col.b, (col.a as f32 * eased).round() as u8);
+                let drop = ((1.0 - eased) * -16.0).round() as i32;
+                d.draw_rectangle(0, 0, screen_w, screen_h, Color::new(0, 0, 0, (120.0 * eased).round() as u8));
                 match &chrome.result {
                     Some(view) => {
                         let rows = crate::hud::result_layout(area, view);
-                        draw_banner(&mut d, area, title, RESULT_TITLE_SIZE, rows.title_y as i32, *color);
-                        draw_result(&mut d, area, view, sub);
+                        draw_banner(&mut d, area, title, RESULT_TITLE_SIZE, rows.title_y as i32 + drop, fade(*color));
+                        draw_result(&mut d, area, view, sub, eased);
                     }
                     None => {
                         let size = banner_size(title, RESULT_TITLE_SIZE, area);
-                        draw_banner(&mut d, area, title, size, cy - size, *color);
-                        draw_banner(&mut d, area, sub, BANNER_SUB_SIZE, cy + 20, Color::RAYWHITE);
+                        draw_banner(&mut d, area, title, size, cy - size + drop, fade(*color));
+                        draw_banner(&mut d, area, sub, BANNER_SUB_SIZE, cy + 20, fade(Color::RAYWHITE));
                     }
                 }
             }
@@ -1153,7 +1184,8 @@ impl Game {
             // The corner clusters, over the banners and their dims, which
             // leave them pressable, and at the frame's fade.
             if let Some(corners) = frame.corners {
-                draw_corners(&mut d, corners, hud, chrome, self.players, textures, frame.fade, &lines, minimap);
+                let fade = Fade { left: frame.fade.left * c.hud_end, right: frame.fade.right * c.hud_end };
+                draw_corners(&mut d, corners, hud, chrome, self.players, textures, fade, &lines, minimap);
             }
 
             // The leave-round question (docs/game-editor-fusion.md
@@ -1187,6 +1219,12 @@ impl Game {
         // on the glass whatever scale the world is drawn at.
         if let Some((touch, steer_right)) = touch {
             d.draw_mode2D(ui_camera, |mut d, _| touch.draw(&mut d, steer_right, ui.hints));
+        }
+
+        // The fade through black between rounds, over everything.
+        if chrome.curtain > 0.0 {
+            let black = Color::new(0, 0, 0, (255.0 * chrome.curtain.clamp(0.0, 1.0)).round() as u8);
+            d.draw_mode2D(ui_camera, |mut d, _| d.draw_rectangle(0, 0, screen_w, screen_h, black));
         }
     }
 }

@@ -2121,7 +2121,7 @@ impl DevServer {
                     } else if rects.stay.contains(p) || !rects.panel.contains(p) {
                         session.answer_dialog(false);
                     }
-                } else if !right && session.press_result(p, ui.area) {
+                } else if !right && session.press_result_at_once(p, ui.area) {
                     // A level's end screen: PLAY AGAIN or the way on start
                     // a round; LEVELS opens the level select over this one.
                     if session.level_select.is_none() {
@@ -2295,7 +2295,7 @@ impl DevServer {
                 Some("enter") => {
                     if session.dialog {
                         session.answer_dialog(true);
-                    } else if session.enter_result() {
+                    } else if session.enter_result_at_once() {
                         self.round_started(session);
                     }
                 }
