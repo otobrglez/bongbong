@@ -790,6 +790,58 @@ tunables! {
         missile_shadow_opacity: f32 = 0.3 in 0.0 ..= 1.0;
     }
 
+    group grenades {
+        /// Grenades one grenade crate loads into the launcher's drum
+        /// (`pickup::PickupKind::Grenades`, `grenade.rs`). One per press.
+        grenade_ammo_per_pickup: i32 = 4 in 1 ..= 40;
+        /// Seconds between two launches.
+        grenade_reload_seconds: f32 = 0.6 in 0.0 ..= 10.0;
+        /// How fast a grenade leaves the barrel (px/s), plus this share of
+        /// the launching hull's own velocity.
+        grenade_launch_speed: f32 = 280.0 in 0.0 ..= 1500.0;
+        grenade_launch_carry: f32 = 1.0 in 0.0 ..= 2.0;
+        /// The ball's radius (px): what it bounces off walls and hulls by.
+        grenade_radius: f32 = 6.0 in 1.0 ..= 16.0;
+        /// How quickly a rolling grenade slows (1/s): its speed falls by
+        /// this share a second, and under `grenade_stop_speed` px/s it
+        /// comes to rest.
+        grenade_roll_drag: f32 = 1.1 in 0.0 ..= 20.0;
+        grenade_stop_speed: f32 = 6.0 in 0.0 ..= 100.0;
+        /// The drag in water, and on ice, as multiples of the ground's:
+        /// a grenade wallows in a ford and skates over a frozen lake.
+        grenade_water_drag_factor: f32 = 4.0 in 0.0 ..= 50.0;
+        grenade_ice_drag_factor: f32 = 0.25 in 0.0 ..= 5.0;
+        /// The speed a grenade keeps off a wall, a tile or the field's
+        /// edge (along the face it struck), and off a hull - which also
+        /// hands it the hull's own motion, so a tank driving into one
+        /// pushes it along and knocks it away.
+        grenade_wall_restitution: f32 = 0.7 in 0.0 ..= 1.0;
+        grenade_tank_restitution: f32 = 0.6 in 0.0 ..= 1.0;
+        /// A grenade never rolls faster than this (px/s).
+        grenade_max_speed: f32 = 600.0 in 1.0 ..= 3000.0;
+        /// Seconds from launch to the blast.
+        grenade_fuse_seconds: f32 = 6.0 in 0.1 ..= 30.0;
+        /// The lamp's blink (Hz) at launch and at the blast: it quickens
+        /// across the fuse, so how fast it flashes is how soon it goes.
+        grenade_blink_hz_start: f32 = 1.5 in 0.1 ..= 30.0;
+        grenade_blink_hz_end: f32 = 10.0 in 0.1 ..= 30.0;
+        /// The blast: radius (px), centre damage (falling off linearly to
+        /// 0 at the edge) and the shove. Only the side opposing the
+        /// launcher is hurt; everything in range is shoved, and tiles crack
+        /// like under any blast.
+        grenade_blast_radius: f32 = 88.0 in 0.0 ..= 400.0;
+        grenade_blast_damage_min: f32 = 18.0 in 0.0 ..= 100.0;
+        grenade_blast_damage_max: f32 = 32.0 in 0.0 ..= 100.0;
+        grenade_blast_knockback_speed: f32 = 180.0 in 0.0 ..= 500.0;
+        /// Size of the fireball and scorch against a barrel's, and how
+        /// hard its shockwave ripples and shakes against a tank dying.
+        grenade_blast_fx_scale: f32 = 0.9 in 0.1 ..= 2.0;
+        grenade_shock: f32 = 0.7 in 0.0 ..= 2.0;
+        /// Launch kick.
+        grenade_recoil_speed: f32 = 10.0 in 0.0 ..= 200.0;
+        grenade_recoil_max_speed: f32 = 20.0 in 0.0 ..= 400.0;
+    }
+
     group flamethrower {
         /// Seconds of burn one flamethrower pickup grants; a second pickup
         /// stacks. The weapon is stocked while any fuel is left, and the

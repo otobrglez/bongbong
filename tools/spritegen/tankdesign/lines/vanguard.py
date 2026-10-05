@@ -288,6 +288,31 @@ def flame(d, b, st, hp):
                'fire', z=3.5, name='fl_jet')
 
 
+@LINE.module_fn('grenade')
+def grenade(d, b, st, hp):
+    """A grenade launcher on the roof: a round gunmetal drum of four
+    chambers, each loaded one a brass grenade lit on its top left, each fired
+    one a dark empty chamber (`st` fired, front row first), and a short
+    wide-bore steel barrel forward with a muzzle band. It shares the
+    missiles' hardpoint unless the design gives it its own - a tank carries
+    one special weapon at a time."""
+    hx, hy = hp.get('grenade', hp['missiles'])
+    b.meta['muzzle'] = (hx + 0.5, hy - 6.0)
+    b.part(chamfer(hx - 3, hy - 3, hx + 3, hy + 3, tl=2, tr=2, br=2, bl=2), GUNMETAL, 'plate', 5, step=0,
+           corner=False, name='gl_drum')
+    b.part({(hx, hy)}, STEEL, 'flat', 5.2, step=1, name='gl_axle')
+    b.part(rect(hx - 1, hy - 6, hx + 1, hy - 3), STEEL, 'cylv', 5.4, step=0, bevel=0, name='gl_barrel')
+    b.part(rect(hx - 1, hy - 6, hx + 1, hy - 6), STEEL, 'flat', 5.5, step=2, name='gl_muzzle')
+    b.part({(hx, hy - 6)}, DARK, 'flat', 5.6, step=-1, name='gl_bore')
+    cells = [(hx - 2, hy - 2), (hx + 1, hy - 2), (hx - 2, hy + 1), (hx + 1, hy + 1)]
+    for i, (x, y) in enumerate(cells):
+        px = rect(x, y, x + 1, y + 1)
+        if i >= st:
+            b.dome(px, BRASS, 5.5, gain=0.8, bevel=0, name='gl_round')
+        else:
+            b.part(px, DARK, 'flat', 5.5, step=-1, name='gl_chamber')
+
+
 # ---------------------------------------------------------------------------
 # Scout - fast recon. Silhouette: an arrowhead nose ahead of short narrow
 # runs, a small round turret with the optic pod bulging off its left cheek

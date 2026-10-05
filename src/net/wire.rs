@@ -110,6 +110,17 @@ pub fn quantise_seconds(seconds: f32) -> u8 {
     saturate_u8(seconds * TIMER_STEPS_PER_SECOND)
 }
 
+/// A grenade's fuse to hundredths of a second, saturating.
+pub fn quantise_fuse(seconds: f32) -> u16 {
+    let r = (seconds * 100.0).round();
+    if r.is_nan() { 0 } else { r.clamp(0.0, u16::MAX as f32) as u16 }
+}
+
+/// Hundredths of a second back to seconds.
+pub fn dequantise_fuse(q: u16) -> f32 {
+    q as f32 / 100.0
+}
+
 /// Tenths of a second back to seconds.
 pub fn dequantise_seconds(q: u8) -> f32 {
     q as f32 / TIMER_STEPS_PER_SECOND
@@ -173,17 +184,19 @@ pub enum WeaponKind {
     Minigun,
     Missiles,
     Flamethrower,
+    Grenades,
 }
 
 impl WeaponKind {
     /// Every kind, in wire order.
-    pub const ALL: [WeaponKind; 6] = [
+    pub const ALL: [WeaponKind; 7] = [
         WeaponKind::Shell,
         WeaponKind::Laser,
         WeaponKind::Plasma,
         WeaponKind::Minigun,
         WeaponKind::Missiles,
         WeaponKind::Flamethrower,
+        WeaponKind::Grenades,
     ];
 
     /// The name `ActiveWeapon::name` gives, which is what `Event::Fired`
@@ -207,6 +220,7 @@ impl From<ActiveWeapon> for WeaponKind {
             ActiveWeapon::Minigun => WeaponKind::Minigun,
             ActiveWeapon::Missiles => WeaponKind::Missiles,
             ActiveWeapon::Flamethrower => WeaponKind::Flamethrower,
+            ActiveWeapon::Grenades => WeaponKind::Grenades,
         }
     }
 }
@@ -220,6 +234,7 @@ impl From<WeaponKind> for ActiveWeapon {
             WeaponKind::Minigun => ActiveWeapon::Minigun,
             WeaponKind::Missiles => ActiveWeapon::Missiles,
             WeaponKind::Flamethrower => ActiveWeapon::Flamethrower,
+            WeaponKind::Grenades => ActiveWeapon::Grenades,
         }
     }
 }
@@ -522,6 +537,26 @@ pub struct MissileState {
     pub tube: u8,
 }
 
+/// One grenade on the ground (`grenade.rs`).
+///
+/// A replica never rolls one - the bounces and the blast are the room's -
+/// so only where it is and how long its fuse has left travel: the lamp's
+/// blink is a function of the fuse, which the replica runs down itself
+/// between snapshots, and the roll its lamp turns with is worked out from
+/// the way the replica's copy moved. The fuse goes in hundredths rather
+/// than a timer's tenths: the blink quickens to several a second, and a
+/// tenth's step would jerk it on every snapshot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrenadeState {
+    pub id: u16,
+    /// Quarter pixels (`quantise_pos`).
+    pub x: i16,
+    /// Quarter pixels (`quantise_pos`).
+    pub y: i16,
+    /// `Grenade::fuse` in hundredths of a second (`quantise_fuse`).
+    pub fuse: u16,
+}
+
 /// Bits of `FrogState::state`.
 pub mod frog_flags {
     /// The frog is dead.
@@ -692,6 +727,8 @@ pub struct Snapshot {
     pub shots: Vec<ShotState>,
     /// Seeker missiles in flight, by `Missile::id`.
     pub missiles: Vec<MissileState>,
+    /// Grenades on the ground, by `Grenade::id`.
+    pub grenades: Vec<GrenadeState>,
     pub frogs: Vec<FrogState>,
     /// One bit per map pickup slot, set while its pickup is on the field.
     pub pickups: u64,

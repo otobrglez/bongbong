@@ -115,12 +115,20 @@ pub enum PickupKind {
     /// Player-only: an enemy driving over one leaves it where it is.
     #[serde(rename = "heat_shield")]
     HeatShield,
+    /// The grenade launcher: loads `grenade_ammo_per_pickup` grenades into
+    /// its drum (one weapon at a time, as above). While stocked, each press
+    /// of the trigger lobs a grenade along the gun line that rolls and
+    /// bounces off walls and hulls - a tank driving into one shoves it away
+    /// - blinking ever faster until it goes off with a shockwave after
+    /// `grenade_fuse_seconds` (`grenade.rs`). Player-only: an enemy
+    /// driving over one leaves it where it is.
+    Grenades,
 }
 
 impl PickupKind {
     /// Every kind in declaration order: the crate and symbol sheets' row
     /// order (`row`).
-    pub const ALL: [PickupKind; 12] = [
+    pub const ALL: [PickupKind; 13] = [
         PickupKind::Health,
         PickupKind::Ammo,
         PickupKind::Laser,
@@ -133,6 +141,7 @@ impl PickupKind {
         PickupKind::FrogHealth,
         PickupKind::TowerPack,
         PickupKind::HeatShield,
+        PickupKind::Grenades,
     ];
 
     /// This kind's row on static/crates_sheet.png and
@@ -151,6 +160,7 @@ impl PickupKind {
             PickupKind::FrogHealth => 9,
             PickupKind::TowerPack => 10,
             PickupKind::HeatShield => 11,
+            PickupKind::Grenades => 12,
         }
     }
 
@@ -174,6 +184,7 @@ impl PickupKind {
             PickupKind::TowerPack => [0x4F6FC7, 0x8FB0FF, 0xCFDCFF],
             // Two-tone: the shade is the basalt its lower half is painted in.
             PickupKind::HeatShield => [0x3A3030, 0xF0461E, 0xFFA84A],
+            PickupKind::Grenades => [0x8C2CB0, 0xD656F5, 0xF4B6FF],
         };
         [rgb(shade), rgb(base), rgb(light)]
     }
@@ -183,7 +194,7 @@ impl PickupKind {
     /// (`simulation::crates`).
     pub fn cooks_off(self) -> bool {
         match self {
-            PickupKind::Ammo | PickupKind::Minigun | PickupKind::Missiles | PickupKind::Flamethrower => true,
+            PickupKind::Ammo | PickupKind::Minigun | PickupKind::Missiles | PickupKind::Flamethrower | PickupKind::Grenades => true,
             PickupKind::Laser | PickupKind::Plasma => true,
             PickupKind::Health
             | PickupKind::SpeedUp

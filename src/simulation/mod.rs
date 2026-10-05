@@ -31,6 +31,7 @@ mod field;
 mod flame;
 mod hits;
 mod missiles;
+mod grenades;
 mod nav;
 pub mod portals;
 pub mod present;
@@ -144,6 +145,7 @@ use crate::bullet::Bullet;
 use crate::frog::{Facing, Frog, Side};
 use crate::laser::{LaserBeam, LaserVariant};
 use crate::missile::Missile;
+use crate::grenade::Grenade;
 use crate::level::{LevelOverrides, Mission, SpawnPlan};
 use crate::map::{self, CellObject, MapFile};
 use crate::obstacle::{Drum, Material, Obstacle, neighbour_mask};
@@ -488,6 +490,8 @@ pub enum Event {
     MissileLocked { slot: usize, target: Option<usize>, x: f32, y: f32 },
     /// A seeker missile fired by `slot` came down and burst at (`x`, `y`).
     MissileBlast { slot: usize, x: f32, y: f32 },
+    /// A grenade launched by `slot` went off at (`x`, `y`), its fuse spent.
+    GrenadeBlast { slot: usize, x: f32, y: f32 },
     /// A delayed secondary pop from a wreck's ammo cooking off. Purely
     /// cosmetic - it deals no damage - but recorded so tooling and the
     /// presentation layer can see it.
@@ -1076,6 +1080,7 @@ struct Frame {
     pending_plasmas: Vec<Plasma>,
     pending_bullets: Vec<Bullet>,
     pending_missiles: Vec<Missile>,
+    pending_grenades: Vec<Grenade>,
     pending_lasers: Vec<PendingLaserShot>,
     /// Flame jets emitted this frame, one per firing nozzle
     /// (`resolve_flames` takes them).
@@ -1145,6 +1150,7 @@ impl Frame {
             pending_plasmas: Vec::new(),
             pending_bullets: Vec::new(),
             pending_missiles: Vec::new(),
+            pending_grenades: Vec::new(),
             pending_lasers: Vec::new(),
             flame_jets: Vec::new(),
             muzzle_flashes: Vec::new(),
@@ -1855,11 +1861,13 @@ impl Game {
             self.step_world(&mut f, true);
             self.sync_tanks_and_ram(&mut f);
             self.ram_props(&mut f);
+            self.roll_grenades(&mut f);
             self.shell_vs_shell(&mut f);
             self.resolve_projectiles::<Shell>(&mut f, true);
             self.resolve_projectiles::<Bullet>(&mut f, true);
             self.resolve_projectiles::<Plasma>(&mut f, true);
             self.resolve_missiles(&mut f, true);
+            self.resolve_grenades(&mut f, true);
             self.resolve_globs(&mut f, true);
             self.tick_cookoffs(&mut f);
             self.tick_burns(&mut f);
@@ -1884,10 +1892,12 @@ impl Game {
             // Physics doesn't step, so nothing drifts.
             self.guide_missiles(&mut f);
             self.step_world(&mut f, false);
+            self.roll_grenades(&mut f);
             self.resolve_projectiles::<Shell>(&mut f, false);
             self.resolve_projectiles::<Bullet>(&mut f, false);
             self.resolve_projectiles::<Plasma>(&mut f, false);
             self.resolve_missiles(&mut f, false);
+            self.resolve_grenades(&mut f, false);
             self.resolve_globs(&mut f, false);
             self.tick_cookoffs(&mut f);
             self.tick_burns(&mut f);
@@ -2497,6 +2507,12 @@ impl Game {
         // rest. A lava bomb the same.
         self.age_flying_drums(dt);
         self.age_lava_bombs(dt);
+        // A grenade's fuse runs down on the replica's own clock, so its
+        // lamp blinks smoothly between snapshots; the room's blast is what
+        // ends it.
+        for grenade in self.world.query_mut::<&mut Grenade>() {
+            grenade.fuse = (grenade.fuse - dt).max(f32::EPSILON);
+        }
         // The eruption's ring and flash come off the cycle's clock, which
         // stands on the room's tick.
         let eruption = self.eruption_show();
@@ -2669,6 +2685,7 @@ impl Game {
                     }
                     PickupKind::Minigun => tank.take_weapon(ActiveWeapon::Minigun),
                     PickupKind::Missiles => tank.take_weapon(ActiveWeapon::Missiles),
+                    PickupKind::Grenades => tank.take_weapon(ActiveWeapon::Grenades),
                     // Fuel in seconds; a second tank refills it.
                     PickupKind::Flamethrower => tank.take_weapon(ActiveWeapon::Flamethrower),
                     PickupKind::Plasma => {
@@ -2901,7 +2918,7 @@ impl Game {
 
         // A laser, minigun or missile pod is full-auto while the key is
         // held (still paced by `fire_cooldown` - for the pod, its reload);
-        // shells and plasma fire once per physical press, so a held key can
+        // shells, plasma and grenades fire once per physical press, so a held key can
         // never re-arm them. The
         // flamethrower is a stream: every held frame emits, with no
         // cooldown between frames at all.
@@ -2910,7 +2927,7 @@ impl Game {
         let weapon = tank.active_weapon();
         let should_fire = match weapon {
             ActiveWeapon::Laser | ActiveWeapon::Minigun | ActiveWeapon::Missiles | ActiveWeapon::Flamethrower => intent.fire,
-            ActiveWeapon::Plasma | ActiveWeapon::Shell => fire_pressed,
+            ActiveWeapon::Plasma | ActiveWeapon::Grenades | ActiveWeapon::Shell => fire_pressed,
         };
         if weapon == ActiveWeapon::Flamethrower {
             if should_fire {
@@ -3475,6 +3492,10 @@ impl Game {
         for mut missile in f.pending_missiles.drain(..) {
             missile.set_id(self.take_shot_id());
             self.world.spawn((missile,));
+        }
+        for mut grenade in f.pending_grenades.drain(..) {
+            grenade.id = self.take_shot_id();
+            self.world.spawn((grenade,));
         }
     }
 
@@ -4598,6 +4619,7 @@ impl Game {
                     shells_ammo: tank.shells_ammo,
                     minigun_ammo: tank.minigun_ammo,
                     missile_ammo: tank.missile_ammo,
+                    grenade_ammo: tank.grenade_ammo,
                     plasma_ammo: tank.plasma_ammo,
                     laser_charges: tank.laser_charges,
                     flame_fuel: tank.flame_fuel,
@@ -4653,6 +4675,7 @@ pub struct TankSnapshot {
     pub shells_ammo: i32,
     pub minigun_ammo: i32,
     pub missile_ammo: i32,
+    pub grenade_ammo: i32,
     pub plasma_ammo: i32,
     pub laser_charges: i32,
     /// Flamethrower fuel left, in seconds of burn.

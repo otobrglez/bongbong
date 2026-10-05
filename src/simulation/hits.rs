@@ -238,6 +238,13 @@ impl Terrain {
         self.water.depth_at(p)
     }
 
+    /// Every tile's box and the field's four walls, as (centre,
+    /// half-extents), tiles first in the snapshot's order: what a grenade
+    /// bounces off (`grenade::Surroundings::solids`).
+    pub fn solid_boxes(&self) -> Vec<(Position, Position)> {
+        self.obstacles.iter().map(|b| (b.center, b.half)).chain(self.walls.iter().copied()).collect()
+    }
+
     /// The entry fraction (0..1) of the first solid tile along the
     /// segment `p0..p1`, if any - what caps a flame stream's reach. Every
     /// tile counts, sandbags and fences included: a stream does not sail

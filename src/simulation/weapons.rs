@@ -1,5 +1,5 @@
-//! Firing. Spawning shells, plasma bolts, bullets, seeker missiles and
-//! laser beams from a tank's muzzle (with recoil), ticking a twin-barrel
+//! Firing. Spawning shells, plasma bolts, bullets, seeker missiles,
+//! grenades and laser beams from a tank's muzzle (with recoil), ticking a twin-barrel
 //! chassis's queued second shot, a minigun burst and a missile volley, the
 //! per-weapon trigger dispatch the
 //! player and every enemy share, and the `Projectile` view of the three
@@ -11,6 +11,7 @@ use rand::RngExt;
 use crate::math::Vec2;
 
 use crate::bullet::{Bullet, BulletState};
+use crate::grenade::Grenade;
 use crate::laser::LaserVariant;
 use crate::missile::Missile;
 use crate::physics::Physics;
@@ -153,11 +154,11 @@ fn laser_shot(tank: &Tank, owner: Owner, aim_offset: f32, variant: LaserVariant)
 /// `max_speed`. Returns the velocity change, `None` when nothing was
 /// pushed.
 ///
-/// Only a missile launch's goes on to `Frame::shoves`. A client that owns
-/// its hull kicks it itself at every shell, bolt and bullet it launches
-/// (`net::predict`, `Game::seat_recoil`), so an `Event::Shoved` for those
-/// would kick it twice; it draws no missile, so that kick is the room's to
-/// tell it about.
+/// Only a missile launch's and a grenade's go on to `Frame::shoves`. A
+/// client that owns its hull kicks it itself at every shell, bolt and
+/// bullet it launches (`net::predict`, `Game::seat_recoil`), so an
+/// `Event::Shoved` for those would kick it twice; it draws no missile or
+/// grenade, so those kicks are the room's to tell it about.
 fn apply_recoil(physics: &mut Physics, tank: &Tank, velocity: Vec2, speed: f32, max_speed: f32) -> Option<Vec2> {
     let len = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
     let handle = tank.body?;
@@ -234,6 +235,28 @@ fn fire_missile(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, owner: Ow
     }
     tank.missile_tubes_empty = tank.missile_tubes_empty.saturating_add(1).min(offsets.len() as u8);
     f.pending_missiles.push(Missile::spawn(mouth, launch, owner, tube, aim));
+}
+
+/// Lob one grenade from `tank`'s launcher along the gun line: from just
+/// clear of the hull (so its own tank does not knock it back), at
+/// `grenade_launch_speed` plus `grenade_launch_carry` of the hull's own
+/// velocity, a puff at the launcher's barrel (`tank_art::GRENADE_MUZZLE`)
+/// and a small kick. No RNG.
+fn fire_grenade(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, aim_offset: f32) {
+    let t = tuning();
+    let rot = (tank.rotation + aim_offset).to_radians();
+    let dir = Vec2::new(rot.sin(), -rot.cos());
+    let (_, half) = tank.hull_bbox_world();
+    let clear = dir.x.abs() * half.x + dir.y.abs() * half.y + t.grenade_radius + 1.0;
+    let start = tank.position + dir * clear;
+    let carry = tank.body.map_or(Vec2::zero(), |h| physics.velocity(h)) * t.grenade_launch_carry;
+    f.muzzle_flashes.push(Shockwave::new(tank.turret_point(crate::tank_art::GRENADE_MUZZLE[tank.row as usize])));
+    // The kick goes on `Frame::shoves` like a missile launch's: a client
+    // that owns its hull draws no grenade, so it hears of the kick here.
+    if let Some(dv) = apply_recoil(physics, tank, dir, t.grenade_recoil_speed, t.grenade_recoil_max_speed) {
+        f.shoves.push(owner, dv);
+    }
+    f.pending_grenades.push(Grenade::launch(start, dir, carry, owner));
 }
 
 /// Tick a tank's queued shots: a twin-barrel chassis's second shell or
@@ -414,6 +437,14 @@ pub(super) fn dispatch_fire_from(
                     tank.missile_volley = Some(MissileVolley { missiles_remaining: volley - 1, timer, next_tube });
                 }
                 tank.fire_cooldown = tuning().missile_volley_cooldown_seconds();
+            }
+        }
+        ActiveWeapon::Grenades => {
+            if tank.grenade_ammo > 0 {
+                f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::Grenades.name() });
+                tank.grenade_ammo -= 1;
+                tank.fire_cooldown = tuning().grenade_reload_seconds;
+                fire_grenade(physics, f, tank, owner, aim_offset);
             }
         }
         ActiveWeapon::Plasma => {

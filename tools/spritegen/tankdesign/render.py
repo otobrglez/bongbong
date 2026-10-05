@@ -51,6 +51,9 @@ C_TURRET = 20
 C_BROKEN = 32
 N_COLS = 33
 MODULE_COLS = sum(WEAPON_STATES[w] for w in WEAPONS)
+# The modules a preview draws on one tank at once: the grenade launcher
+# shares the missiles' roof, and a tank carries one special at a time.
+SHOWN_TOGETHER = [w for w in WEAPONS if w != 'grenade']
 
 
 def load_line(key):
@@ -318,13 +321,15 @@ def preview_design(r, scale=2, theme='grass'):
         if w != 'blown':
             layers.append((e['broken'][0], e['broken'][1], 'turret'))
         tiles.append(tile(layers, w, turret_rot=20 if w == 'gutted' else -15))
+    # Every module at once, but the grenade launcher, which shares the
+    # missiles' roof.
     mods = [H(0), T(0)]
-    for w in WEAPONS:
+    for w in SHOWN_TOGETHER:
         mb, me = r.modules[w, 0]
         mods.append((mb, me, 'turret'))
     tiles.append(tile(mods, 'all mods'))
     mods2 = [H(0), T(0)]
-    for w in WEAPONS:
+    for w in SHOWN_TOGETHER:
         mb, me = r.modules[w, min(1, WEAPON_STATES[w] - 1)]
         mods2.append((mb, me, 'turret'))
     tiles.append(tile(mods2, 'mods n', night=True))
@@ -423,8 +428,11 @@ def hero(line_key, chassis_list, out=None, zoom=8, states=None):
                 layers = [(e['wreck', st][0], e['wreck', st][1], 'hull')]
                 if st != 'blown':
                     layers.append((e['broken'][0], e['broken'][1], 'turret'))
+            elif st.startswith('mod:'):
+                _, w, n = st.split(':')
+                layers = [H(), T()] + [(r.modules[w, int(n)][0], r.modules[w, int(n)][1], 'turret')]
             elif st == 'mods':
-                layers = [H(), T()] + [(r.modules[w, 0][0], r.modules[w, 0][1], 'turret') for w in WEAPONS]
+                layers = [H(), T()] + [(r.modules[w, 0][0], r.modules[w, 0][1], 'turret') for w in SHOWN_TOGETHER]
             else:
                 continue
             b, em = stack(layers, hr, tr, d.hover)

@@ -136,75 +136,80 @@ impl Game {
     }
 
     /// One missile's burst at `center`, fired by `owner`, travelling `dir`
-    /// as it came down. When `live`: the side opposing `owner` takes
-    /// linear-falloff damage and every live tank in range is shoved (the
-    /// wreck blast's rule - `explosion_hit` - so one draw per tank in
-    /// range, players first, then enemies; a seat's shove goes on
-    /// `Frame::shoves`, which tells a client-owned hull's client); frogs of
-    /// the opposing side take damage; tiles crack and barrels go off
-    /// (`damage_obstacle`, as any blast). Then the show: a small fireball
-    /// leaning downrange, a ripple, a scorch and flattened grass.
+    /// as it came down: when `live` the damage (`side_blast`), then the
+    /// show - a small fireball leaning downrange, a ripple, a scorch and
+    /// flattened grass.
     fn missile_blast(&mut self, f: &mut Frame, center: Position, owner: Owner, dir: Vec2, live: bool) {
-        let params = BlastParams::missile(owner);
         f.events.push(Event::MissileBlast { slot: owner.slot(), x: center.x, y: center.y });
         if live {
-            for player in self.players().into_iter().flatten() {
-                let mut q = self.world.query_one::<&mut Tank>(player);
-                let tank = q.get().expect("player entity always has a Tank");
-                let hurts = !owner.same_side(tank.owner());
-                if let Some(dv) = explosion_hit(tank, center, hurts, &mut self.physics, &mut f.rng, &mut f.kills, &params) {
-                    f.shoves.push(tank.owner(), dv);
-                }
-            }
-            for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
-                let hurts = !owner.same_side(tank.owner());
-                explosion_hit(tank, center, hurts, &mut self.physics, &mut f.rng, &mut f.kills, &params);
-            }
-            let own_side = if owner.is_player() { Side::Player } else { Side::Enemy };
-            let mut dead_frogs = Vec::new();
-            for frog in self.world.query::<&mut Frog>().iter() {
-                if frog.is_dead() || frog.side == own_side {
-                    continue;
-                }
-                let dist = frog.position.distance_to(center);
-                if dist > params.radius {
-                    continue;
-                }
-                frog.damage(params.roll_damage(&mut f.rng) * (1.0 - dist / params.radius));
-                if frog.is_dead() {
-                    dead_frogs.push(frog.position);
-                }
-            }
-            for pos in dead_frogs {
-                f.shocks.push(Shockwave::scaled(pos, SHOCK_FROG));
-            }
-            // Collect first: `damage_obstacle` needs the world free.
-            let hits: Vec<(Entity, f32)> = self
-                .world
-                .query::<(Entity, &mut Obstacle)>()
-                .iter()
-                .filter(|(_, o)| !o.destroyed)
-                .filter_map(|(e, o)| {
-                    let dist = o.position.distance_to(center);
-                    if dist > params.radius {
-                        return None;
-                    }
-                    if o.material.is_wall() {
-                        o.scorched |= face_toward(o.position, center);
-                    }
-                    Some((e, 1.0 - dist / params.radius))
-                })
-                .collect();
-            for (entity, falloff) in hits {
-                let amount = params.roll_damage(&mut f.rng) * falloff;
-                self.damage_obstacle(f, entity, amount, DamageCause::Blast { falloff, from: center });
-            }
-            self.blast_crates(f, center, &params);
+            self.side_blast(f, center, owner, &BlastParams::missile(owner));
         }
-
         let mut show = Spectacle::default();
         self.missile_show(&mut show, center, dir);
         f.stage(show);
+    }
+
+    /// The damage of ordnance fired by `owner` going off at `center` - a
+    /// missile's burst or a grenade's blast: the side opposing `owner`
+    /// takes linear-falloff damage and every live tank in range is shoved
+    /// (the wreck blast's rule - `explosion_hit` - so one draw per tank in
+    /// range, players first, then enemies; a seat's shove goes on
+    /// `Frame::shoves`, which tells a client-owned hull's client); frogs of
+    /// the opposing side take damage; tiles crack and barrels go off
+    /// (`damage_obstacle`, as any blast), and crates break.
+    pub(super) fn side_blast(&mut self, f: &mut Frame, center: Position, owner: Owner, params: &BlastParams) {
+        for player in self.players().into_iter().flatten() {
+            let mut q = self.world.query_one::<&mut Tank>(player);
+            let tank = q.get().expect("player entity always has a Tank");
+            let hurts = !owner.same_side(tank.owner());
+            if let Some(dv) = explosion_hit(tank, center, hurts, &mut self.physics, &mut f.rng, &mut f.kills, params) {
+                f.shoves.push(tank.owner(), dv);
+            }
+        }
+        for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
+            let hurts = !owner.same_side(tank.owner());
+            explosion_hit(tank, center, hurts, &mut self.physics, &mut f.rng, &mut f.kills, params);
+        }
+        let own_side = if owner.is_player() { Side::Player } else { Side::Enemy };
+        let mut dead_frogs = Vec::new();
+        for frog in self.world.query::<&mut Frog>().iter() {
+            if frog.is_dead() || frog.side == own_side {
+                continue;
+            }
+            let dist = frog.position.distance_to(center);
+            if dist > params.radius {
+                continue;
+            }
+            frog.damage(params.roll_damage(&mut f.rng) * (1.0 - dist / params.radius));
+            if frog.is_dead() {
+                dead_frogs.push(frog.position);
+            }
+        }
+        for pos in dead_frogs {
+            f.shocks.push(Shockwave::scaled(pos, SHOCK_FROG));
+        }
+        // Collect first: `damage_obstacle` needs the world free.
+        let hits: Vec<(Entity, f32)> = self
+            .world
+            .query::<(Entity, &mut Obstacle)>()
+            .iter()
+            .filter(|(_, o)| !o.destroyed)
+            .filter_map(|(e, o)| {
+                let dist = o.position.distance_to(center);
+                if dist > params.radius {
+                    return None;
+                }
+                if o.material.is_wall() {
+                    o.scorched |= face_toward(o.position, center);
+                }
+                Some((e, 1.0 - dist / params.radius))
+            })
+            .collect();
+        for (entity, falloff) in hits {
+            let amount = params.roll_damage(&mut f.rng) * falloff;
+            self.damage_obstacle(f, entity, amount, DamageCause::Blast { falloff, from: center });
+        }
+        self.blast_crates(f, center, params);
     }
 
     /// The show a missile bursting at `center`, coming down along `dir`,

@@ -276,6 +276,12 @@ impl Game {
         for missile in self.world.query::<&Missile>().iter() {
             ground_light(d, missile.position, 26.0, warm, 0.3 * (1.0 - 0.6 * missile.lift()));
         }
+        let [_, lamp, _] = crate::pickup::PickupKind::Grenades.ink();
+        for grenade in self.world.query::<&crate::grenade::Grenade>().iter() {
+            if grenade.lamp_lit() {
+                ground_light(d, grenade.lamp_point(), 10.0, lamp, 0.2);
+            }
+        }
         for jet in self.flames() {
             let flicker = 0.8 + 0.2 * (self.time * 29.0).sin();
             let (from, dir, reach) = jet.drawn();
@@ -1942,6 +1948,7 @@ fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
         ActiveWeapon::Minigun => ("MINIGUN", tank.minigun_ammo),
         ActiveWeapon::Missiles => ("MISSILES", tank.missile_ammo),
         ActiveWeapon::Flamethrower => ("FLAME", tank.flame_fuel_seconds()),
+        ActiveWeapon::Grenades => ("GRENADES", tank.grenade_ammo),
         ActiveWeapon::Shell => ("SHELL", tank.shells_ammo),
     };
     let mut lines = vec![

@@ -50,6 +50,9 @@ enum Standing<'a> {
     /// A lamp post: its lantern stands above its foot, so a tank that
     /// drives behind one is drawn behind it.
     Lamp(crate::Position),
+    /// A grenade on the ground, in the grass like anything else: only the
+    /// tufts in front of it cover it, so its lamp still shows in a field.
+    Grenade(&'a crate::grenade::Grenade),
 }
 
 /// A tank and everything drawn on it, in the order the layers stack.
@@ -444,6 +447,12 @@ impl Game {
                 standing.push((at.y, Standing::Lamp(at)));
             }
         }
+        let mut grenade_query = self.world.query::<&crate::grenade::Grenade>();
+        for grenade in grenade_query.iter() {
+            if !culled(cull, grenade.position) {
+                standing.push((grenade.position.y, Standing::Grenade(grenade)));
+            }
+        }
         standing.sort_by(|a, b| a.0.total_cmp(&b.0));
 
         let mut next_tuft = 0usize;
@@ -480,6 +489,7 @@ impl Game {
                     let t = crate::tuning::tuning();
                     crate::lamp::draw_post(c, *at, self.time, (t.shadow_dir_x, t.shadow_dir_y), self.shadows_enabled);
                 }
+                Standing::Grenade(grenade) => crate::grenade::draw_grenade(c, grenade),
             }
         }
         grass_up_to(c, f32::INFINITY, next_tuft);

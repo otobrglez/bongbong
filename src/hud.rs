@@ -70,6 +70,9 @@ pub const HUD_MINIGUN_COLOR: Color = Color::new(190, 205, 215, 255);
 pub const HUD_MISSILES_COLOR: Color = Color::new(190, 240, 70, 255);
 /// The flamethrower's accent: fuel-orange, the fire ramp's middle.
 pub const HUD_FLAME_COLOR: Color = Color::new(255, 140, 40, 255);
+/// The grenade launcher's accent: the grenade crate's ink, the lamp that
+/// blinks on every grenade.
+pub const HUD_GRENADES_COLOR: Color = Color::new(0xD6, 0x56, 0xF5, 255);
 
 /// The builder bar's fill - the same `#151515` the web page is set in, so
 /// the bar and the page read as one surface around the field - and the
@@ -335,6 +338,7 @@ pub fn weapon_color(weapon: ActiveWeapon) -> Color {
         ActiveWeapon::Minigun => HUD_MINIGUN_COLOR,
         ActiveWeapon::Missiles => HUD_MISSILES_COLOR,
         ActiveWeapon::Flamethrower => HUD_FLAME_COLOR,
+        ActiveWeapon::Grenades => HUD_GRENADES_COLOR,
         ActiveWeapon::Shell => TEXT,
     }
 }
@@ -349,6 +353,7 @@ pub fn weapon_pickup(weapon: ActiveWeapon) -> Option<crate::pickup::PickupKind> 
         ActiveWeapon::Minigun => Some(PickupKind::Minigun),
         ActiveWeapon::Missiles => Some(PickupKind::Missiles),
         ActiveWeapon::Flamethrower => Some(PickupKind::Flamethrower),
+        ActiveWeapon::Grenades => Some(PickupKind::Grenades),
         ActiveWeapon::Shell => None,
     }
 }

@@ -230,6 +230,10 @@ PICKUP_INK = {
     # The heat shield is two-tone (docs/volcano.md): molten red over black
     # basalt - its shade is the basalt the lower half is painted in.
     'heat_shield': ((0x3A, 0x30, 0x30), (0xF0, 0x46, 0x1E), (0xFF, 0xA8, 0x4A)),
+    # The grenades: orchid, the one hue the inks above leave free (between
+    # the shield's lavender and the laser's pink); the light is the lamp
+    # each grenade flashes.
+    'grenades': ((0x8C, 0x2C, 0xB0), (0xD6, 0x56, 0xF5), (0xF4, 0xB6, 0xFF)),
 }
 # The rainbow shield's symbol, swept corner to corner like the old icon.
 PICKUP_RAINBOW = ((0xE8, 0x4A, 0x3C), (0xFF, 0x8A, 0x2B), (0xFF, 0xD9, 0x3D), (0x7E, 0xDB, 0x5A),

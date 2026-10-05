@@ -9,8 +9,8 @@ change the design and export again (§9).
 |---|---|---|
 | `static/scifi_tanks_sheet.png` | 1320 × 2400 | the paint: 33 columns × 60 rows of 40 × 40 cells |
 | `static/scifi_tanks_glow.png` | 1320 × 2400 | the light layer, the same layout |
-| `static/tank_modules.png` | 760 × 480 | the weapon modules: 19 columns × 12 rows |
-| `static/tank_modules_glow.png` | 760 × 480 | their light layer |
+| `static/tank_modules.png` | 960 × 480 | the weapon modules: 24 columns × 12 rows |
+| `static/tank_modules_glow.png` | 960 × 480 | their light layer |
 | `src/tank_art.rs` | — | the anchors the engine reads: lamps, muzzles, tube mouths (§7) |
 
 Exact palette PNGs - every colour the art uses in the palette, alpha in
@@ -160,6 +160,7 @@ the shared pivot:
 | 9–11 | plasma | idle, armed (the live weapon), firing |
 | 12–14 | laser | idle, armed, firing (the lens flash) |
 | 15–18 | flamethrower | pilot flame (two frames), firing (two frames) |
+| 19–23 | grenade launcher | 0–4 rounds fired from its drum, front pair first; it sits on the missiles' roof hardpoint, since a tank carries one special at a time |
 
 A module is hardware, not a firing-mode indicator: `module_cols` draws one
 for every special weapon the tank carries, in the order above, over the
@@ -180,6 +181,7 @@ from the pivot (x right, y toward the tail):
   `minigun_boresight_px` ahead (`Bullet::spawn`).
 - `MISSILE_TUBES` - the four tube mouths in firing order, front pair first
   (`MISSILE_TUBE_OFFSETS` is each tube's place in the fan and the landing).
+- `GRENADE_MUZZLE` - the launcher's barrel mouth, where a grenade leaves.
 - `LASER_MUZZLE`, `FLAME_MUZZLE` - where the beam and the jet are **drawn**
   from. Both are judged along the gun line from `Tank::gun_line_muzzle`, so
   a side-mounted module never moves what they hit; the beam is drawn from

@@ -9,7 +9,7 @@ Writes, under the repo (docs/SPRITESHEET_SPEC.md has the layout):
   static/scifi_tanks_sheet.png   the paint: 33 columns x 60 rows of 40 px cells,
                                  five team blocks of the twelve chassis
   static/scifi_tanks_glow.png    the light layer, the same layout
-  static/tank_modules.png        the weapon modules: 19 columns x 12 rows
+  static/tank_modules.png        the weapon modules: 24 columns x 12 rows
   static/tank_modules_glow.png   their light layer
   src/tank_art.rs                the anchors the engine reads (lamps, muzzles,
                                  missile tubes), generated - never edited by hand
@@ -104,7 +104,7 @@ def main(argv):
         # as its own function drew it.
         hp = r.hardpoints
         mm = {}
-        for w in ('minigun', 'laser', 'flame', 'missiles'):
+        for w in ('minigun', 'laser', 'flame', 'missiles', 'grenade'):
             b = Builder(Ctx(ch, 'enemy'), 'module', 0, 0)
             design.module(b, w, 0, hp)
             mm[w] = b.meta
@@ -113,6 +113,7 @@ def main(argv):
         muzzles = [tuple(m) for m in r.turret_meta.get('muzzles', [])]
         art.append(dict(chassis=ch, codename=design.codename, heads=heads, spots=spots, muzzles=muzzles,
                         minigun=mm['minigun']['muzzle'], laser=mm['laser']['muzzle'], flame=mm['flame']['muzzle'],
+                        grenade=mm['grenade']['muzzle'],
                         tubes=mm['missiles']['tubes']))
         print('exported', ch, design.codename)
     static = os.path.join(repo, 'static')
@@ -158,7 +159,8 @@ def write_rust(path, line_key, art):
     L.append('')
     for key, doc in (('minigun', 'The minigun module\'s muzzle, where its bullets leave (turret frame).'),
                      ('laser', 'The laser module\'s lens, where its beam starts (turret frame).'),
-                     ('flame', 'The flamethrower module\'s nozzle, where its jet starts (turret frame).')):
+                     ('flame', 'The flamethrower module\'s nozzle, where its jet starts (turret frame).'),
+                     ('grenade', 'The grenade launcher module\'s barrel mouth, where its grenades leave (turret frame).')):
         L.append('/// %s' % doc)
         L.append('pub const %s_MUZZLE: [(f32, f32); 12] = [' % key.upper())
         for a in art:

@@ -87,9 +87,10 @@
 //!
 //! What blends and what does not:
 //!
-//! - Positions - hulls, shots, missiles, frogs - move linearly between
-//!   the two ends of the bracket, on the wire's own quarter-pixel grid; a
-//!   missile's height too, and its two headings by the shortest arc.
+//! - Positions - hulls, shots, missiles, grenades, frogs - move linearly
+//!   between the two ends of the bracket, on the wire's own quarter-pixel
+//!   grid; a missile's height too, and its two headings by the shortest
+//!   arc.
 //! - A hull's facing does not: movement is four-directional
 //!   (`Tank::control` snaps `rotation`), so a heading is a fact about a
 //!   tick, not a value to average. The bracket's near end owns it, and the
@@ -1486,6 +1487,12 @@ from: &Snapshot, to: &Snapshot, alpha: f32) -> Snapshot {
     for missile in &mut out.missiles {
         if let Some(next) = to.missiles.iter().find(|m| m.id == missile.id) {
             blend_missile(missile, next, alpha);
+        }
+    }
+    for grenade in &mut out.grenades {
+        if let Some(next) = to.grenades.iter().find(|g| g.id == grenade.id) {
+            grenade.x = lerp(grenade.x, next.x, alpha);
+            grenade.y = lerp(grenade.y, next.y, alpha);
         }
     }
     for frog in &mut out.frogs {
