@@ -225,11 +225,20 @@ pub struct Fx {
     /// The cells of the tiles burning at the last `observe`: a tile that
     /// dies in one of them burnt out, and falls in as ash.
     burning: HashSet<(i32, i32)>,
+    /// The fish in the round's water (`fish.rs`): hashed, never rolled,
+    /// and stepped on the round's clock rather than this layer's, so a
+    /// lockstep replays them; a new round makes them again by itself.
+    shoal: crate::fish::Shoal,
 }
 
 impl Fx {
     pub fn live(&self) -> usize {
         self.particles.len()
+    }
+
+    /// The fish, for the renderer (`render::fish`).
+    pub fn shoal(&self) -> &crate::fish::Shoal {
+        &self.shoal
     }
 
     /// Every hit still playing, oldest first, for the renderer.
@@ -577,6 +586,8 @@ impl Fx {
     /// runs two steps calls this after each or the first step's bursts are
     /// gone before the draw. A frame already consumed emits nothing.
     pub fn observe_events(&mut self, game: &Game) {
+        // The fish keep their own count of the frames they have seen.
+        self.shoal.observe(game);
         if game.frame() != self.last_frame {
             // A restart rewinds the counter, which is also the moment the
             // old round's particles should go.

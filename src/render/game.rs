@@ -616,7 +616,7 @@ impl Game {
                 rl.draw_texture_mode(thread, scene_target, |mut d| {
                     d.clear_background(Color::WHITE);
                     d.draw_mode2D(in_target, |mut d, _| {
-                        self.paint_field_lit(&mut d, textures, false, cull);
+                        self.paint_field_lit(&mut d, textures, effects.fx, false, cull);
                         self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, 1.0, camera, ammo_seats);
                     });
                 });
@@ -640,7 +640,7 @@ impl Game {
                             self.paint_ground(&mut GpuCanvas::culled(&mut d, textures, cull));
                             crate::render::weather::draw_blocks(&mut d, &blocks);
                         }
-                        self.paint_field_lit(&mut d, textures, snowed, cull);
+                        self.paint_field_lit(&mut d, textures, effects.fx, snowed, cull);
                         if !plan.lit {
                             self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, ammo_seats);
                         }
@@ -678,7 +678,7 @@ impl Game {
                             passes.draw_ground(&mut d, &frame);
                         }
                         d.draw_mode2D(in_target, |mut d, _| {
-                            self.paint_field_lit(&mut d, textures, plan.ground, cull);
+                            self.paint_field_lit(&mut d, textures, effects.fx, plan.ground, cull);
                             if !plan.lit {
                                 self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, ammo_seats);
                             }
@@ -1284,7 +1284,7 @@ impl Game {
     /// standing on it, in world pixels. `ground_drawn` says the weather's
     /// ground pass already covered the target in place of the bare ground
     /// tileset; `cull` is the world worth drawing (`Camera::cull`).
-    fn paint_field_lit<D: RaylibDraw>(&self, d: &mut D, textures: &Textures, ground_drawn: bool, cull: Option<Rectangle>) {
+    fn paint_field_lit<D: RaylibDraw>(&self, d: &mut D, textures: &Textures, fx: &crate::fx::Fx, ground_drawn: bool, cull: Option<Rectangle>) {
         // The field itself is painted through the `Canvas` trait in the
         // three stages `mapshot` also runs on a CPU canvas (`paint_floor`,
         // `paint_tiles`, `paint_standing`); between them come the layers
@@ -1299,6 +1299,9 @@ impl Game {
         } else {
             self.paint_floor(&mut GpuCanvas::culled(d, textures, cull));
         }
+        // The fish under the water's surface (`fish.rs`): over its tiles,
+        // under everything that burns, stands or flies over it.
+        crate::render::fish::draw_fish(d, textures, self, fx.shoal(), cull);
 
         // Burning ground cells: tongues of flame standing on each
         // (`pyro::tongues`), leaning with the wind, over the ground, under

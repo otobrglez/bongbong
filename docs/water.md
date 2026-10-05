@@ -105,6 +105,21 @@ pack (docs/frog-health-pack-prd.md).
   nothing is pressed into a river bed. For `water_wet_track_seconds` after
   wading out a hull lays *wet* marks (`Track::wet`): `water_wet_track_darken`
   times darker, fading over that same time.
+- **Fish** (`fish.rs`): a small school per stretch of a lake's open water
+  (`fish_school_cells` deep cells, `fish_per_school` at most), swimming
+  from near one deep cell's centre to near a neighbouring one's, so a
+  whole fish stays over water, and making for a spot of the lake that
+  changes every `fish_school_seconds`. A fish darts away at
+  `fish_dart_speed` from a live hull within `fish_scatter_px`, a shot in
+  the air, a hit, a ricochet or a laser beam within `fish_shot_scatter_px`,
+  and a blast or a wreck within `fish_blast_scatter_px`, settling over
+  `fish_calm_seconds`. A north/south stream carries the odd fish down its
+  current, one every `fish_stream_seconds` a column. Drawn as dark block
+  silhouettes under the surface (`fish_opacity`), over the water's tiles
+  and under everything else; none under ice. Presentation only: the
+  layer lives in `fx::Fx`, steps on the round's clock, hashes every
+  choice and draws no RNG, so nothing in the simulation, the wire or a
+  seeded replay sees a fish.
 
 ## Knobs
 
@@ -112,7 +127,8 @@ All in `tuning.rs`'s ground group: `water_speed_factor`,
 `water_grip_factor`, `water_current_speed`, `water_ford_path_cost`
 (restart), `water_wet_track_seconds`, `water_wet_track_darken`,
 `water_spray_rate`; the picture's `water_frame_seconds`,
-`water_flow_speed`, `water_flow_lanes`.
+`water_flow_speed`, `water_flow_lanes`. The fish have their own `fish`
+group (`fish_*`).
 
 ## Not done, on purpose
 

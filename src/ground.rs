@@ -1089,6 +1089,23 @@ impl WaterLayout {
         let cols = self.cols;
         self.depth.iter().enumerate().filter(|(_, d)| **d == Depth::Deep).map(move |(i, _)| ((i % cols) as i32, (i / cols) as i32))
     }
+
+    /// Grid cell coordinates of every cell the current runs down
+    /// (`pushes_south`), in row-major order: where `fish.rs` carries a fish
+    /// downstream.
+    pub fn current_grid_cells(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        let cols = self.cols;
+        self.current.iter().enumerate().filter(|(_, c)| **c).map(move |(i, _)| ((i % cols) as i32, (i / cols) as i32))
+    }
+
+    /// The depth of grid cell (`col`, `row`); off the grid is dry.
+    pub fn depth_of_cell(&self, col: i32, row: i32) -> Depth {
+        if col < 0 || row < 0 || col as usize >= self.cols || row as usize >= self.rows {
+            Depth::Dry
+        } else {
+            self.depth[row as usize * self.cols + col as usize]
+        }
+    }
 }
 
 /// Roll this round's ground layout: grass everywhere, sand drifted over it

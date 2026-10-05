@@ -93,6 +93,7 @@ blows up - they throw none.
 | The light shots throw | `render/shot_fx.rs` | stepped glows and streaks of blocks |
 | The flamethrower's jet, the plasma orb | `static/flame_jet.fs`, `static/plasma_orb.fs` | worked out per 2 px block, coloured in their ramps' flat steps, edges dithered |
 | A volcano's cone, smoke and eruption; a lava bomb | `volcano.rs` (docs/volcano.md) | the cone a baked picture of blocks in `ASH`/`SCORIA` with molten gullies; the plume shaded `SMOKE` puffs leaning with the wind; an eruption a flash with rays, a fountain of `pyro::tongues`, drops and a shock ring of marks; a bomb a rock with a glowing trail and a warning ring of marks where it lands |
+| Fish under the water | `fish.rs` (docs/water.md) | a silhouette rasterised onto blocks in sixteen headings, `BLUE_DEEP` at `fish_opacity` in eighths, a fainter tail fin swinging a block either way, a `BLUE_PALE` glint |
 | Lava | `lava.rs` (docs/volcano.md) | every 2 px block a `FIRE` step - flow bands running down the stream, crust plates on a lake, a toasted bank baked once into a `BlockImage`; a bomb's pool a metaball cooling down the ramp |
 
 A tank's damage, a step per tier of the tank sheet (`TANK_DAMAGE_TIERS`,
