@@ -178,6 +178,9 @@ fn draw_full_corners(
     if let Some(r) = corners.restart {
         draw_restart_button(d, r, a);
     }
+    if let Some(r) = corners.pause {
+        draw_pause_button(d, r, chrome.paused, a);
+    }
     if let Some(r) = corners.build {
         draw_label_button(d, r, &text().get(keys::BUTTON_BUILD), BUILD_COLOR, a);
     }
@@ -430,6 +433,32 @@ fn draw_restart_button(d: &mut impl RaylibDraw, r: Rectangle, a: f32) {
     let q = Vector2::new(tip_at.x - radial.x * 5.0, tip_at.y - radial.y * 5.0);
     d.draw_triangle(p, q, tip, color);
     d.draw_triangle(tip, q, p, color);
+}
+
+/// The pause button: two bars while the round runs, a play triangle - and
+/// the frame washed, like a button whose dialog is up - while it is
+/// paused, in whole 2 pt blocks like the tank glyph and in the text colour
+/// the RESTART button wears. The press is `Input::pause_pressed`, the P
+/// key's.
+fn draw_pause_button(d: &mut impl RaylibDraw, r: Rectangle, paused: bool, a: f32) {
+    let frame = button_frame(r);
+    if paused {
+        d.draw_rectangle_rec(frame, faded(Color::new(TEXT.r, TEXT.g, TEXT.b, 40), a));
+    }
+    let color = faded(TEXT, a);
+    d.draw_rectangle_lines_ex(frame, 2.0, color);
+    // 7x7 blocks of 2 pt, centred on the button's whole points.
+    const PAUSE: [&str; 7] = ["##...##", "##...##", "##...##", "##...##", "##...##", "##...##", "##...##"];
+    const PLAY: [&str; 7] = ["#......", "###....", "#####..", "#######", "#####..", "###....", "#......"];
+    let rows = if paused { PLAY } else { PAUSE };
+    let (x, y) = ((r.x + (r.width - 14.0) / 2.0).round() as i32, (r.y + (r.height - 14.0) / 2.0).round() as i32);
+    for (row, line) in rows.iter().enumerate() {
+        for (col, c) in line.chars().enumerate() {
+            if c == '#' {
+                d.draw_rectangle(x + col as i32 * 2, y + row as i32 * 2, 2, 2, color);
+            }
+        }
+    }
 }
 
 /// The level button: its frame in the levels' amber around `LEVEL 3` -

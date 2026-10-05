@@ -1124,6 +1124,9 @@ impl Session {
                 online_button: crate::ONLINE_AVAILABLE,
                 restart_button: !crate::KEYBOARD_AVAILABLE,
                 leave_button: false,
+                // The P key's stand-in, which a phone has no other way to.
+                pause_button: true,
+                paused: self.game.paused,
                 seat: None,
                 leave_dialog: self.dialog,
                 players_dialog: self.players_dialog,
@@ -1492,7 +1495,7 @@ mod session_tests {
 
         // Play's own buttons are gone while the round belongs to a room.
         let chrome = s.play_chrome();
-        assert!(!chrome.build_button && !chrome.players_button && !chrome.restart_button);
+        assert!(!chrome.build_button && !chrome.players_button && !chrome.restart_button && !chrome.pause_button);
         assert!(chrome.status.is_some_and(|line| line.contains("ROOM")), "the status line names the mode");
         // Tab is inert; leaving comes back to the local round as it was.
         assert_eq!(s.toggle(), Driver::Online);
