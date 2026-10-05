@@ -8,7 +8,11 @@ posts the map places and lanterns the players set down - light the way, and
 show whoever stands in their light to the enemy. A heat shield keeps every
 kind of heat off a tank for a while.
 
-The level that shows all of it is `maps/vulkan.toml`, level 2.
+The level that shows the volcano and its lava is `maps/vulkan.toml`, level 2,
+fought under a clear sky with no lamp posts (a dark sky and its lights
+were too much on top of the eruptions); no shipped map places a lamp post
+or `nightfall` now, so the lamps and the night are tried on a map of
+one's own (`weather`, `nightfall`, `kind = "lamp"`).
 
 | Where | What |
 |---|---|
@@ -102,9 +106,9 @@ the only RNG the volcano draws is a blast's damage roll, as a drum's.
 
 ## Lamps and the night
 
-`weather = "dusk"` with `nightfall = 90.0` is the level's sky: dusk, the
-light easing into night's over the `nightfall_seconds` (25) before ninety,
-and the rules turning to the night's at ninety itself (`Game::
+`weather = "dusk"` with `nightfall = 90.0` is dusk, the light easing into
+night's over the `nightfall_seconds` (25) before ninety, and the rules
+turning to the night's at ninety itself (`Game::
 tick_nightfall`, which keeps the map's own key, so the round still counts as
 played as authored).
 
@@ -135,11 +139,11 @@ Enemies never collect it.
 ## Drawing it cheaply
 
 Lava is drawn in 2 px blocks, a stream's cell alone a hundred and more of
-them with its flow bands, crust and glow, and the level's dusk turns into a
-night full of lamps. Drawn block by block every frame, Vulkan cost a
-release build twice the frame of any other level. Nothing on screen
-changes faster than a few frames, so the picture is kept between frames
-and a frame draws a quad a cell:
+them with its flow bands, crust and glow, and a dark sky over it adds a
+light map full of lamps. Drawn block by block every frame, Vulkan (then
+at dusk falling into night) cost a release build twice the frame of any
+other level. Nothing on screen changes faster than a few frames, so the
+picture is kept between frames and a frame draws a quad a cell:
 
 - **The lava** (`lava::LavaPictures`, brought up by `Game::refresh_pictures`
   before the frame's textures are synced): each cell's blocks keep what is
@@ -173,7 +177,7 @@ raylib's draw batch is raised to the desktop's 8192 quads
 (`render::batch`), since ES 2's default flushes four times as often.
 
 In a release build at 1920 x 1080 (llvmpipe, uncapped), a frame of Vulkan
-went from 16.8 to 9.0 ms at dusk, 16.3 to 7.6 at night and 27.6 to 12.9 at
+under that sky went from 16.8 to 9.0 ms at dusk, 16.3 to 7.6 at night and 27.6 to 12.9 at
 the worst of an eruption; another level's frame is about 7.5 ms. A
 dev-tools build times each stage of the frame (`frame_stages.rs`: the
 steps, the particles, the pictures, the lights, the world, the post pass,
