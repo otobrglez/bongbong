@@ -197,7 +197,7 @@ fn tanks(game: &Game) -> Vec<TankState> {
 #[allow(clippy::too_many_arguments)]
 fn shot(id: u32, kind: ShotKind, position: Position, rotation: f32, state: i32, variant: i32, owner: crate::shell::Owner) -> ShotState {
     ShotState {
-        id: (id & 0xFFFF) as u16,
+        id: shot_wire_id(id),
         kind,
         x: quantise_pos(position.x),
         y: quantise_pos(position.y),
@@ -208,8 +208,15 @@ fn shot(id: u32, kind: ShotKind, position: Position, rotation: f32, state: i32, 
     }
 }
 
+/// The key a shot travels under (`ShotState::id`, `WireEvent::ShotTeleported`):
+/// the low sixteen bits of the round's projectile number.
+pub fn shot_wire_id(id: u32) -> u16 {
+    (id & 0xFFFF) as u16
+}
+
 /// The seat an owner is, or `NO_SEAT`.
-pub fn owner_seat(owner: crate::shell::Owner) -> u8 {
+pub fn owner_seat(
+owner: crate::shell::Owner) -> u8 {
     match owner {
         crate::shell::Owner::Player(seat) => seat,
         crate::shell::Owner::Enemy(_) | crate::shell::Owner::Tower { .. } => crate::net::wire::NO_SEAT,

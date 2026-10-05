@@ -41,6 +41,14 @@
 //! handed: where it meets a tile, the field's edge, a tank or a frog it
 //! stops and plays its impact at once. Damage stays the room's.
 //!
+//! **Into a portal** (`ShotStop::Portal`) a provisional goes no further:
+//! which portal it comes out of is the room's draw. It leaves the picture
+//! at the point it went in, and its room copy is kept off the picture
+//! until that copy's own `ShotTeleported` has been handed over
+//! (`shot_teleported`) - it is then shown from the exit on, on the room's
+//! timeline, the shot's one compromise. A room copy that bursts instead,
+//! or flies on past the portal, is shown at once.
+//!
 //! A press is **confirmed by its `Fired`**, which names the input tick the
 //! press travelled on (`confirm_fired`), on the frame the interpolator
 //! hands that `Fired` over - the frame the room's copy of its first shot
@@ -95,6 +103,7 @@ use crate::ai::Intent;
 use crate::math::Vec2 as Position;
 use crate::net::apply;
 use crate::net::wire::{Snapshot, WeaponKind};
+use crate::simulation::portals;
 use crate::simulation::{Game, ProvisionalKind, ProvisionalShot};
 use crate::tank::ActiveWeapon;
 use crate::tuning::tuning;
@@ -240,6 +249,28 @@ struct Live {
     /// over, or the copy died before one was cut. Nothing is paired with it
     /// any more, so the next shot's copy is never taken for it.
     orphaned: bool,
+    /// Where it went into a portal in the drawn world: off the picture
+    /// from there, until its room copy has come through (`ShotStop::Portal`).
+    portal: Option<Position>,
+    /// The portal whose swirl it was fired inside, by its place in
+    /// `Game::shot_portals`, while it is still inside it: it leaves that
+    /// portal rather than going into it, as the room's copy does
+    /// (`simulation::portals::ShotPortals`).
+    leaving: Option<usize>,
+}
+
+/// What a provisional shot met in the drawn world, for
+/// `Predictor::advance_shots`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShotStop {
+    /// A tile, the field's edge or an opposing shell: it bursts there.
+    Struck,
+    /// A tank or a frog: it bursts there, and the room's word on the hit
+    /// is scored against it (`crossings`).
+    Body,
+    /// A portal: it goes in there and leaves the picture; its room copy
+    /// takes over once it has come through (`Predictor::shot_teleported`).
+    Portal,
 }
 
 impl Live {
@@ -414,6 +445,11 @@ pub struct Predictor {
     /// seconds of `clock`): held back from the picture for a moment in
     /// case their press is about to claim them, drawn if nothing does.
     unpaired: std::collections::BTreeMap<u16, f32>,
+    /// Room shots whose `ShotTeleported` has been handed over, by id: a
+    /// provisional that went into a portal hands the picture to its room
+    /// copy once that copy is among them. Kept while the room still lists
+    /// the shot.
+    teleported: std::collections::BTreeSet<u16>,
     /// Seconds of shot-time this predictor has run, for `unpaired`.
     clock: f32,
     /// The next shot's own number (`Live::id`).
@@ -454,6 +490,7 @@ impl Predictor {
             impacts: Vec::new(),
             muzzles: Vec::new(),
             unpaired: std::collections::BTreeMap::new(),
+            teleported: std::collections::BTreeSet::new(),
             next_shot: 0,
             clock: 0.0,
             refusal_after: PROVISIONAL_SECONDS,
@@ -687,6 +724,7 @@ impl Predictor {
                 if press.drawn {
                     let id = self.next_shot;
                     self.next_shot = self.next_shot.wrapping_add(1);
+                    let leaving = portals::inside(shot.position, self.sandbox.shot_portals(), tuning().portal_shot_radius);
                     press.live.push(Live {
                         id,
                         shot,
@@ -699,6 +737,8 @@ impl Predictor {
                         after: press.ticks,
                         due: false,
                         orphaned: false,
+                        portal: None,
+                        leaving,
                     });
                 } else {
                     press.undrawn += 1;
@@ -852,12 +892,35 @@ impl Predictor {
         }
         let by_id: std::collections::BTreeMap<u16, &ServerShot> = shots.iter().map(|s| (s.id, s)).collect();
         self.unpaired.retain(|id, _| by_id.contains_key(id));
+        self.teleported.retain(|id| by_id.contains_key(id));
         for live in self.presses.iter_mut().flat_map(|p| p.live.iter_mut()) {
             let Some(id) = live.server else { continue };
             let Some(s) = by_id.get(&id) else {
                 live.server_gone = true;
                 continue;
             };
+            if !live.show_server && self.teleported.contains(&id) {
+                // The room's copy came through a portal: it is the shot
+                // from the exit on, whatever this client drew.
+                live.show_server = true;
+                live.shot.done = true;
+                if let Some((_, true)) = live.local_hit
+                    && !live.scored
+                {
+                    live.scored = true;
+                    self.report.crossings_missed += 1;
+                }
+                continue;
+            }
+            if let Some(at) = live.portal
+                && !live.show_server
+                && (s.impact || (s.flying && flown_past(s, at)))
+            {
+                // Into a portal here, but the room's copy burst short of it
+                // or flew on past: the room's shot is the one drawn.
+                live.show_server = true;
+                continue;
+            }
             match live.local_hit {
                 None if s.impact && live.shot.is_flying() => {
                     // The room's shot hit something this client's did not
@@ -868,9 +931,7 @@ impl Predictor {
                 Some((at, tank)) if !live.show_server && s.flying => {
                     // Flown past where this client drew it stop: the room
                     // missed. Show its shot from here on.
-                    let past = (s.position.x - at.x) * s.velocity.x + (s.position.y - at.y) * s.velocity.y;
-                    let speed2 = s.velocity.x * s.velocity.x + s.velocity.y * s.velocity.y;
-                    if speed2 > 0.0 && past / speed2.sqrt() > MISS_MARGIN_PX {
+                    if flown_past(s, at) {
                         live.show_server = true;
                         if tank && !live.scored {
                             live.scored = true;
@@ -902,6 +963,13 @@ impl Predictor {
         }
     }
 
+    /// The room's shot `id` went through a portal, and the interpolator
+    /// has handed that over: the provisional standing for it, if any,
+    /// gives the picture to it (`observe_server_shots`, the same frame).
+    pub fn shot_teleported(&mut self, id: u16) {
+        self.teleported.insert(id);
+    }
+
     /// The room's copies of this seat's shots the picture should not
     /// show: every paired one whose provisional stands for it, and an
     /// unpaired one for `UNPAIRED_HOLD_SECONDS`, in case its press is about
@@ -926,7 +994,15 @@ impl Predictor {
     /// or is known never to be coming (`Live::finished`); a press nobody
     /// claimed within the refusal wait goes, counted, and so does a drawn
     /// beam whose `Fired` never came.
-    pub fn advance_shots(&mut self, dt: f32, mut contact: impl FnMut(ProvisionalKind, Position, Position) -> Option<(Position, bool)>) {
+    ///
+    /// `contact` is handed the shot's kind, its stretch of the frame and
+    /// the portal it is leaving, if any (`Live::leaving`).
+    pub fn advance_shots(
+        &mut self,
+        dt: f32,
+        mut contact: impl FnMut(ProvisionalKind, Position, Position, Option<usize>) -> Option<(Position, ShotStop)>,
+    ) {
+        let portal_radius = tuning().portal_shot_radius;
         self.clock += dt;
         for beam in &mut self.drawn_beams {
             beam.1 += dt;
@@ -942,14 +1018,28 @@ impl Predictor {
                 let from = live.shot.position;
                 let flying = live.shot.is_flying();
                 live.shot.advance(dt);
-                if flying && live.local_hit.is_none()
-                    && let Some((at, tank)) = contact(live.shot.kind, from, live.shot.position)
+                if let Some(i) = live.leaving
+                    && self.sandbox.shot_portals().get(i).is_none_or(|&anchor| live.shot.position.distance_to(anchor) > portal_radius)
                 {
-                    live.shot.detonate_at(at);
-                    live.local_hit = Some((at, tank));
-                    self.impacts.push(at);
-                    if tank {
-                        self.report.crossings += 1;
+                    live.leaving = None;
+                }
+                if flying && live.local_hit.is_none() && live.portal.is_none()
+                    && let Some((at, stop)) = contact(live.shot.kind, from, live.shot.position, live.leaving)
+                {
+
+                    if stop == ShotStop::Portal {
+                        // In: off the picture, no impact.
+                        live.shot.position = at;
+                        live.shot.done = true;
+                        live.portal = Some(at);
+                    } else {
+                        let tank = stop == ShotStop::Body;
+                        live.shot.detonate_at(at);
+                        live.local_hit = Some((at, tank));
+                        self.impacts.push(at);
+                        if tank {
+                            self.report.crossings += 1;
+                        }
                     }
                 }
             }
@@ -1130,7 +1220,16 @@ impl Predictor {
 
 /// A unit hash of two counters, for a bullet's spread: the server rolls
 /// one per bullet and the picture only needs the variety.
+/// Whether the room's copy `s` has flown on more than `MISS_MARGIN_PX`
+/// past `at` along its heading.
+fn flown_past(s: &ServerShot, at: Position) -> bool {
+    let past = (s.position.x - at.x) * s.velocity.x + (s.position.y - at.y) * s.velocity.y;
+    let speed2 = s.velocity.x * s.velocity.x + s.velocity.y * s.velocity.y;
+    speed2 > 0.0 && past / speed2.sqrt() > MISS_MARGIN_PX
+}
+
 fn hash01(a: u32, b: u32) -> f32 {
+
     let h = a.wrapping_mul(2_654_435_761).wrapping_add(b.wrapping_mul(0x9E37_79B9)) >> 8;
     (h % 10_000) as f32 / 10_000.0
 }
@@ -1364,7 +1463,7 @@ mod tests {
     }
 
     /// No contact anywhere: a frame of flight in open air.
-    fn open_air(_: ProvisionalKind, _: Position, _: Position) -> Option<(Position, bool)> {
+    fn open_air(_: ProvisionalKind, _: Position, _: Position, _: Option<usize>) -> Option<(Position, ShotStop)> {
         None
     }
 
@@ -1542,7 +1641,7 @@ mod tests {
         fly(&mut predictor, 12);
         let (_, shot) = predictor.shots().next().expect("the first shell in flight");
         let wall = shot.position;
-        predictor.advance_shots(1.0 / 60.0, |_, _, _| Some((wall, false)));
+        predictor.advance_shots(1.0 / 60.0, |_, _, _, _| Some((wall, ShotStop::Struck)));
         fly(&mut predictor, 30);
         assert_eq!(predictor.provisional_count(), 0, "the first shell has played its impact out");
         // A second press, flying.
@@ -1616,7 +1715,7 @@ mod tests {
         // A's shell - in flight, while B's is still in its muzzle frames -
         // meets a wall and plays its impact out; it goes the moment it is
         // off the picture, well inside the refusal wait.
-        predictor.advance_shots(1.0 / 60.0, |_, _, to| Some((to, false)));
+        predictor.advance_shots(1.0 / 60.0, |_, _, to, _| Some((to, ShotStop::Struck)));
         assert!(predictor.presses[1].live[0].local_hit.is_none(), "B's shell was not in flight yet");
         let mut frames = 0;
         while predictor.presses_waiting() > 1 && frames < 120 {
@@ -1720,7 +1819,7 @@ mod tests {
         fly(&mut predictor, 12);
         let (_, shot) = predictor.shots().next().expect("a shell in flight");
         let wall = Position::new(shot.position.x + shot.velocity.x * 0.05, shot.position.y + shot.velocity.y * 0.05);
-        predictor.advance_shots(1.0 / 60.0, |_, _, _| Some((wall, true)));
+        predictor.advance_shots(1.0 / 60.0, |_, _, _, _| Some((wall, ShotStop::Body)));
         let (_, stopped) = predictor.shots().next().expect("its impact frames");
         assert!(stopped.is_impact(), "stopped and playing its impact");
         assert_eq!(stopped.position, wall);
@@ -1735,7 +1834,46 @@ mod tests {
         assert_eq!(predictor.report(0, 0).crossings_missed, 1);
     }
 
+    /// **Into a portal the provisional leaves the picture, and its room
+    /// copy comes back out.** The shot stops where it went in with no
+    /// impact drawn; the room's copy, still on the near side in the
+    /// picture's past, stays hidden; once its `ShotTeleported` is handed
+    /// over it is the shot, drawn from the exit on. A copy that bursts
+    /// short of the portal instead is shown at once.
+    #[test]
+    fn a_shot_into_a_portal_hands_the_picture_to_its_room_copy() {
+        for burst_short in [false, true] {
+            let mut predictor = Predictor::new(round_with(single_barrel_row(), 0), 0, 0);
+            let tick = predictor.step(press());
+            predictor.confirm_fired(WeaponKind::Shell, tick);
+            fly(&mut predictor, 12);
+            let (_, shot) = predictor.shots().next().expect("a shell in flight");
+            let mouth = Position::new(shot.position.x + shot.velocity.x * 0.05, shot.position.y + shot.velocity.y * 0.05);
+            predictor.advance_shots(1.0 / 60.0, |_, _, _, _| Some((mouth, ShotStop::Portal)));
+            assert_eq!(predictor.shots().count(), 0, "off the picture");
+            assert!(predictor.take_impacts().is_empty(), "no impact: it went in");
+            assert_eq!(predictor.report(0, 0).crossings, 0);
+            let near = ServerShot { id: 4, kind: ProvisionalKind::Shell, position: shot.position, velocity: shot.velocity, flying: true, impact: false };
+            predictor.observe_server_shots(10, &[near]);
+            assert!(predictor.hidden_server_shots().contains(&4), "its room copy, short of the portal, stays hidden");
+            fly(&mut predictor, 4);
+            assert!(predictor.hidden_server_shots().contains(&4), "and stays so while it flies at the portal");
+            if burst_short {
+                let burst = ServerShot { flying: false, impact: true, ..near };
+                predictor.observe_server_shots(13, &[burst]);
+                assert!(!predictor.hidden_server_shots().contains(&4), "a room copy that burst short of the portal is shown");
+            } else {
+                let exit = Position::new(2_000.0, 300.0);
+                predictor.shot_teleported(4);
+                predictor.observe_server_shots(13, &[ServerShot { position: exit, ..near }]);
+                assert!(!predictor.hidden_server_shots().contains(&4), "through the portal, the room's copy is the shot");
+                assert_eq!(predictor.shots().count(), 0, "and the provisional stays off");
+            }
+        }
+    }
+
     /// **A drawn tank hit is the room's hit only where the room burst.**
+
     /// The provisional stops against a tank; the room's copy bursting within
     /// `HIT_MATCH_PX` of that point is `crossings_hit`, and one bursting
     /// anywhere else - on something the picture did not show it meeting -
@@ -1749,7 +1887,7 @@ mod tests {
             fly(&mut predictor, 12);
             let (_, shot) = predictor.shots().next().expect("a shell in flight");
             let at = Position::new(shot.position.x + shot.velocity.x * 0.05, shot.position.y + shot.velocity.y * 0.05);
-            predictor.advance_shots(1.0 / 60.0, |_, _, _| Some((at, true)));
+            predictor.advance_shots(1.0 / 60.0, |_, _, _, _| Some((at, ShotStop::Body)));
             assert_eq!(predictor.report(0, 0).crossings, 1, "a tank hit this client drew");
             // The room's copy bursts `off` short of that point.
             let speed = (shot.velocity.x * shot.velocity.x + shot.velocity.y * shot.velocity.y).sqrt();

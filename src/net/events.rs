@@ -161,8 +161,10 @@ pub enum WireEvent {
     DrumLaunched { x: i16, y: i16, to_x: i16, to_y: i16 },
     /// A laser's beam, muzzle to where it stopped (`LaserVariant::index`),
     /// and the seat that fired it (`wire::NO_SEAT` for an enemy): the
-    /// shooter draws its own beam on the press and skips this one.
-    LaserBeam { x0: i16, y0: i16, x1: i16, y1: i16, variant: u8, seat: u8 },
+    /// shooter draws its own beam on the press and skips this one. A beam
+    /// bent by portals is one a leg, in order (`Event::LaserBeam`'s `leg`
+    /// and `portal`): the shooter skips the first, which is the one it drew.
+    LaserBeam { x0: i16, y0: i16, x1: i16, y1: i16, variant: u8, seat: u8, leg: u8, portal: bool },
     /// A shove the room put on a client-owned hull - knockback, a blast, a
     /// ram, a missile launch's recoil - that the owner applies to its own
     /// body, since the room places that hull wherever the owner says
@@ -174,6 +176,11 @@ pub enum WireEvent {
     /// (`dir_index`).
     Placed { seat: u8, x: i16, y: i16, dir: u8 },
     Teleported { slot: u16, x: i16, y: i16, to_x: i16, to_y: i16 },
+    /// A shot through a portal; `Event::ShotTeleported`. `id` is the shot's
+    /// as `ShotState::id` keys it, `None` for a beam: the interpolator
+    /// draws the shot's jump as a jump rather than a slide across the
+    /// field.
+    ShotTeleported { id: Option<u16>, x: i16, y: i16, to_x: i16, to_y: i16 },
     FireStarted { x: i16, y: i16, pool: bool },
     Ignited { x: i16, y: i16, what: IgnitedWhat },
     CookOff { x: i16, y: i16 },
@@ -273,12 +280,12 @@ impl WireEvent {
                 y: q(y),
                 dir: dir_index(Dir::from_rotation(rotation).unwrap_or(Dir::Up)),
             },
-            Event::LaserBeam { x0, y0, x1, y1, variant, seat } => {
+            Event::LaserBeam { x0, y0, x1, y1, variant, seat, leg, portal } => {
                 let variant = LaserVariant::parse(variant).unwrap_or_else(|| {
                     debug_assert!(false, "unknown laser variant {variant:?} in Event::LaserBeam");
                     LaserVariant::Red
                 });
-                WireEvent::LaserBeam { x0: q(x0), y0: q(y0), x1: q(x1), y1: q(y1), variant: variant.index(), seat }
+                WireEvent::LaserBeam { x0: q(x0), y0: q(y0), x1: q(x1), y1: q(y1), variant: variant.index(), seat, leg, portal }
             }
             Event::Shoved { seat, vx, vy } => WireEvent::Shoved {
                 seat: seat.min(u8::MAX as usize) as u8,
@@ -288,6 +295,13 @@ impl WireEvent {
             Event::Teleported { slot, x, y, to_x, to_y } => {
                 WireEvent::Teleported { slot: slot_u16(slot), x: q(x), y: q(y), to_x: q(to_x), to_y: q(to_y) }
             }
+            Event::ShotTeleported { id, x, y, to_x, to_y } => WireEvent::ShotTeleported {
+                id: id.map(crate::net::encode::shot_wire_id),
+                x: q(x),
+                y: q(y),
+                to_x: q(to_x),
+                to_y: q(to_y),
+            },
             Event::FireStarted { x, y, pool } => WireEvent::FireStarted { x: q(x), y: q(y), pool },
             Event::Ignited { x, y, what } => {
                 let kind = IgnitedWhat::parse(what).unwrap_or_else(|| {
@@ -396,8 +410,10 @@ impl WireEvent {
                 vx: crate::net::wire::dequantise_velocity(vx),
                 vy: crate::net::wire::dequantise_velocity(vy),
             },
-            WireEvent::LaserBeam { x0, y0, x1, y1, variant, seat } => Event::LaserBeam {
+            WireEvent::LaserBeam { x0, y0, x1, y1, variant, seat, leg, portal } => Event::LaserBeam {
                 seat,
+                leg,
+                portal,
                 x0: d(x0),
                 y0: d(y0),
                 x1: d(x1),
@@ -406,6 +422,9 @@ impl WireEvent {
             },
             WireEvent::Teleported { slot, x, y, to_x, to_y } => {
                 Event::Teleported { slot: slot as usize, x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y) }
+            }
+            WireEvent::ShotTeleported { id, x, y, to_x, to_y } => {
+                Event::ShotTeleported { id: id.map(u32::from), x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y) }
             }
             WireEvent::FireStarted { x, y, pool } => Event::FireStarted { x: d(x), y: d(y), pool },
             WireEvent::Ignited { x, y, what } => Event::Ignited { x: d(x), y: d(y), what: what.name() },
@@ -496,10 +515,12 @@ mod tests {
             Event::LavaBombLaunched { x: 640.0, y: 352.0, to_x: 800.0, to_y: 416.0 },
             Event::LanternSet { seat: 1, x: 200.0, y: 96.0 },
             Event::LanternBroken { x: 200.0, y: 96.0 },
-            Event::LaserBeam { x0: 100.0, y0: 200.0, x1: 100.0, y1: 32.0, variant: "blue", seat: 1 },
+            Event::LaserBeam { x0: 100.0, y0: 200.0, x1: 100.0, y1: 32.0, variant: "blue", seat: 1, leg: 1, portal: true },
             Event::Shoved { seat: 0, vx: 120.0, vy: -40.0 },
             Event::Placed { seat: 2, x: 320.0, y: 160.0, rotation: 90.0 },
             Event::Teleported { slot: 1, x: 64.0, y: 64.0, to_x: 960.0, to_y: 480.0 },
+            Event::ShotTeleported { id: Some(41), x: 320.0, y: 362.25, to_x: 960.0, to_y: 362.25 },
+
             Event::FireStarted { x: 48.0, y: 48.0, pool: true },
             Event::Ignited { x: 48.0, y: 80.0, what: "sandbag" },
             Event::CookOff { x: 64.0, y: 96.75 },
@@ -540,7 +561,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 50, "one sample per Event variant");
+        assert_eq!(seen.len(), 51, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }
