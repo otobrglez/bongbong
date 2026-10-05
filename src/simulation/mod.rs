@@ -1446,11 +1446,14 @@ impl Game {
         // order every frame to get the depth right (a tuft rooted behind a
         // tank has to be drawn behind it). Sorting here keeps the per-frame
         // cost a merge walk instead of a sort of several hundred sprites.
-        self.grass = self
-            .grass_cells
-            .iter()
-            .flat_map(|c| crate::grass::tufts_for_cell(*c))
-            .collect();
+        // A tuft is kept off the tiles round its cell (`grass::keep_off`);
+        // trees are left out, since every tuft is drawn under them.
+        self.grass = {
+            let tiles: HashSet<(i32, i32)> =
+                self.world.query::<&Obstacle>().iter().filter(|o| !o.material.is_tree()).map(|o| o.cell()).collect();
+            let t = tuning();
+            self.grass_cells.iter().flat_map(|c| crate::grass::tufts_for_cell(&t, *c, |cell| tiles.contains(&cell))).collect()
+        };
         self.grass.sort_by(|a, b| a.base.y.total_cmp(&b.base.y));
         // Deep water counts as terrain for every clearance roll below:
         // no enemy, frog or bonus spawns in a lake.
