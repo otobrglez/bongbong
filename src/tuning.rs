@@ -2910,6 +2910,44 @@ tunables! {
         shot_trail_glint_rate: f32 = 26.0 in 0.0 ..= 200.0;
     }
 
+    group fish {
+        /// Fish in the lakes (`fish.rs`): cosmetic, read by nothing in the
+        /// simulation. The most fish a school holds; each school takes a
+        /// hashed count from half of this up. 0 leaves the water empty.
+        fish_per_school: i32 = 5 in 0 ..= 16 @ Restart;
+        /// Deep lake cells per school: a lake of this many open cells holds
+        /// one, twice as many two. A lake under `fish_min_lake_cells` holds
+        /// none.
+        fish_school_cells: f32 = 40.0 in 4.0 ..= 1000.0 @ Restart;
+        fish_min_lake_cells: i32 = 4 in 1 ..= 100 @ Restart;
+        /// A fish's cruising pace and the pace it darts away at, px/s.
+        fish_speed: f32 = 12.0 in 0.0 ..= 100.0;
+        fish_dart_speed: f32 = 72.0 in 0.0 ..= 300.0;
+        /// How near a hull has to come before the fish under the bank
+        /// scatter, px from its centre.
+        fish_scatter_px: f32 = 72.0 in 0.0 ..= 400.0;
+        /// The same for a shot flying over the water or landing beside it
+        /// (a hit, a ricochet, a laser's end).
+        fish_shot_scatter_px: f32 = 40.0 in 0.0 ..= 400.0;
+        /// The same for a blast, a missile's burst or a wreck going up.
+        fish_blast_scatter_px: f32 = 168.0 in 0.0 ..= 800.0;
+        /// How long a scared fish keeps darting before it settles back to
+        /// its school.
+        fish_calm_seconds: f32 = 2.5 in 0.1 ..= 20.0;
+        /// How long a school keeps making for one spot of its lake before
+        /// it picks another.
+        fish_school_seconds: f32 = 7.0 in 0.5 ..= 60.0;
+        /// Tail beats a second at cruising pace; a darting fish beats three
+        /// times as fast.
+        fish_tail_hz: f32 = 2.5 in 0.0 ..= 20.0;
+        /// How strongly a fish shows through the water, stepped to eighths
+        /// (`pyro::alpha`).
+        fish_opacity: f32 = 0.75 in 0.0 ..= 1.0;
+        /// Seconds, on average, between two fish carried down one column
+        /// of a north/south stream. 0 sends none.
+        fish_stream_seconds: f32 = 24.0 in 0.0 ..= 600.0;
+    }
+
     group training {
         /// A wrecked seat in a training round (docs/training-stage.md)
         /// comes back as a fresh tank inside the last door opened, this

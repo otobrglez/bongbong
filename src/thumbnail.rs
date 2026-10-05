@@ -175,7 +175,7 @@ mod tests {
         ("towers", 0x5985_4558_8f64_3572),
         ("longwater", 0x52dd_2e37_054c_236e),
         ("lotus-lagoon", 0xfb31_fd4c_bec3_0a60),
-        ("vulkan", 0xea2b_d23f_e57a_abce),
+        ("vulkan", 0xc246_7e7d_7623_02ae),
         ("hedge-maze", 0x8ae3_3e15_7bab_1f70),
         ("oasis-bazaar", 0xbed9_055a_561e_910f),
         ("castle-moat", 0x9985_47b6_9ce3_8b2f),
@@ -189,7 +189,7 @@ mod tests {
         ("glasshouses", 0x09af_9978_4f4b_9d82),
         ("scrapyard", 0x9fdf_ab1d_4a77_653f),
         ("grand-campaign", 0x83ef_6bbf_2dcf_c081),
-        ("boot-camp", 0xfd21_e239_b2c9_9b7b),
+        ("boot-camp", 0xb7e9_43b2_f4c3_b44e),
     ];
 
     /// Decoding the sheets is raylib's job, so this and the next test run

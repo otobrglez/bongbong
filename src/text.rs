@@ -284,6 +284,11 @@ keys! {
     FROG_FIRE_NUDGE_TOUCH = "frog-fire-nudge-touch";
     FROG_MINIGUN = "frog-minigun";
     FROG_WALL = "frog-wall";
+    FROG_DRUMS = "frog-drums";
+    FROG_DRUM_KINDS = "frog-drum-kinds";
+    FROG_OIL = "frog-oil";
+    FROG_DRUMS_NUDGE = "frog-drums-nudge";
+    FROG_BOOM = "frog-boom";
     FROG_PAD = "frog-pad";
     FROG_OW = "frog-ow";
     FROG_KIT = "frog-kit";
@@ -996,27 +1001,27 @@ mod text_tests {
                 vec![],
             ),
         ];
-        // The build bar's small buttons - UNDO, REDO, FIT, CHECK, PLAY
-        // HERE - inside their drawn boxes (an outline is drawn outside
-        // its box), at the size each bar draws them
-        // (`editor::chrome::small_text`): a mouse's at 11 pt in a desktop
-        // bar's boxes, a touch screen's at 12 in its
-        // wider ones; and the five categories' names beside their row of
-        // the palette a narrow bar folds them into.
+        // The build bar's small buttons - UNDO, REDO, FIT, CHECK - inside
+        // their drawn boxes (an outline is drawn outside its box), at the
+        // bar's small size (`editor::chrome::BAR_SMALL_TEXT`), in a
+        // mouse's boxes and a touch screen's; PLAY HERE at PLAY's size;
+        // and the five categories' names beside their row of the palette a
+        // narrow bar folds them into.
         for touch in [false, true] {
             let ui = crate::hud::UiFrame::new((1600.0, 900.0), 1.0, 1.0, crate::hud::Insets::default(), touch);
             let bar = crate::editor::Bar::of(&ui);
-            let size = crate::editor::chrome::small_text(touch);
+            let size = crate::editor::chrome::BAR_SMALL_TEXT;
             let room = |r: crate::math::Rectangle| (r.width - crate::editor::chrome::SMALL_BOX_INSET) as i32;
             for (key, r) in [
                 (keys::EDITOR_UNDO, bar.undo),
                 (keys::EDITOR_REDO, bar.redo),
                 (keys::EDITOR_FIT, bar.fit),
                 (keys::EDITOR_CHECK, bar.check),
-                (keys::EDITOR_PLAY_HERE, bar.here),
             ] {
                 out.push((key, size, room(r), vec![]));
             }
+            // PLAY HERE, drawn as PLAY is, 4 points clear a side.
+            out.push((keys::EDITOR_PLAY_HERE, HUD_TEXT_SIZE, bar.here.width as i32 - 8, vec![]));
         }
         for category in crate::editor::Category::ALL {
             out.push((category.label_key(), UI_SMALL_TEXT, crate::editor::chrome::PALETTE_LABEL_W as i32 - 12, vec![]));
@@ -1038,7 +1043,7 @@ mod text_tests {
         for touch in [false, true] {
             let w = if touch { crate::editor::chrome::STRIP_WORD_W.1 } else { crate::editor::chrome::STRIP_WORD_W.0 };
             let room = (w - crate::editor::chrome::SMALL_BOX_INSET) as i32;
-            let size = crate::editor::chrome::small_text(touch);
+            let size = crate::editor::chrome::BAR_SMALL_TEXT;
             for button in crate::editor::StripButton::SELECTION.into_iter().chain(crate::editor::StripButton::GHOST) {
                 if let Some(key) = button.label_key() {
                     out.push((key, size, room, vec![]));

@@ -722,7 +722,7 @@ impl Room {
                 if self.occupied() >= SEATS_PLAYABLE {
                     return Err(Refusal::RoomFull { seats: SEATS_PLAYABLE as u8 });
                 }
-                let nick = clean_nick(&nick);
+                let nick = distinct_nick(&clean_nick(&nick), self.seats.iter().flatten().map(|s| s.nick.as_str()));
                 let i = self.seats.len();
                 self.seats.push(Some(Seat {
                     nick: nick.clone(),
@@ -1334,6 +1334,29 @@ fn clean_nick(nick: &str) -> String {
     if nick.is_empty() { "player".into() } else { nick }
 }
 
+/// `nick` for a seat joining a room whose seats already go by `taken`:
+/// itself where no seat has it (letter case aside), else the first of
+/// `nick 2`, `nick 3`, ... none has, the name cut to keep the number
+/// within `NICK_MAX`. Seats are the device token's, never the name's, so
+/// two players under one name were always two seats; this only keeps
+/// the roster, the ready check's refusal and the chips from naming two
+/// players alike. A seat reclaimed keeps the name it had.
+fn distinct_nick<'a>(nick: &str, taken: impl Iterator<Item = &'a str> + Clone) -> String {
+    let free = |name: &str| !taken.clone().any(|t| t.to_lowercase() == name.to_lowercase());
+    if free(nick) {
+        return nick.to_string();
+    }
+    (2..)
+        .map(|n| {
+            let suffix = format!(" {n}");
+            let keep = NICK_MAX.saturating_sub(suffix.chars().count());
+            let stem: String = nick.chars().take(keep).collect();
+            format!("{}{suffix}", stem.trim_end())
+        })
+        .find(|name| free(name))
+        .expect("a room has fewer seats than numbers")
+}
+
 /// Whether a dev tool has taken this room off real time (`room_step`).
 /// Always false in a build without the tools, so the tick guard reads
 /// the same either way.
@@ -1942,5 +1965,19 @@ cells."11,4" = { kind = "start2" }
         assert_eq!(clean_nick("  oto "), "oto");
         assert_eq!(clean_nick("   "), "player");
         assert_eq!(clean_nick(&"x".repeat(100)).len(), NICK_MAX);
+    }
+
+    /// A name a seat already has, in any case, gets the first number free
+    /// after it, and a long one is cut to keep the number inside
+    /// `NICK_MAX`; a free name is left alone.
+    #[test]
+    fn a_name_already_in_the_room_gets_a_number() {
+        assert_eq!(distinct_nick("oto", ["ana"].into_iter()), "oto");
+        assert_eq!(distinct_nick("oto", ["ana", "OTO"].into_iter()), "oto 2");
+        assert_eq!(distinct_nick("player", ["player", "player 2"].into_iter()), "player 3");
+        let long = "x".repeat(NICK_MAX);
+        let named = distinct_nick(&long, [long.as_str()].into_iter());
+        assert_eq!(named.chars().count(), NICK_MAX);
+        assert!(named.ends_with(" 2"), "{named}");
     }
 }

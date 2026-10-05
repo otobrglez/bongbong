@@ -18,8 +18,8 @@ script of *beats*, and the player's own frog is the only guide.
 | Teaching | **The frog alone.** No signs, floor paint or HUD checklist: the player's own frog hops ahead from pen to pen and says each rule in a speech bubble. |
 | The frog's voice | Short, light lines and no name. At most eight words a line, four or fewer once an enemy is on the field. |
 | Placement | **Level 0, skippable.** First in `levels.toml` (shown as `LEVEL 0`, so Lotus Lagoon stays `LEVEL 1`; the last level leads round to Lotus Lagoon, never back to training); a new progress file opens on it, a file already further opens where it was, and Lotus Lagoon is open in the level select from the start. |
-| Scope | All six beats: drive, supply, fire, the frog, the first enemy, the shield and a second enemy. |
-| Map | A **field map**, 48 x 13 cells, past the arena size on purpose: the follow camera leads the player east, and the off-screen arrows (an enemy's, the frog's) get introduced in passing. |
+| Scope | Seven lessons: drive, supply, fire, the drums, the frog, the first enemy, the shield and a second enemy. |
+| Map | A **field map**, 60 x 24 cells (the course in rows 5-17), past the arena size on purpose: the follow camera leads the player east, and the off-screen arrows (an enemy's, the frog's) get introduced in passing. |
 | Script | **Data in the map**: a `[[training.beat]]` list in the map's TOML, so the course is edited like a map and another map could use the same machinery. |
 | Seats | **Solo.** One seat, local only. A couch session plays it with one seat; the lobby's map stepper never offers it. |
 | Words | Every line a `frog-*` message in `lang/en.ftl`, with Slovenian drafted in `lang/sl.ftl` for review. |
@@ -27,27 +27,35 @@ script of *beats*, and the player's own frog is the only guide.
 
 ## The course
 
-Four pens along one east-west road (row 6), each closed by a door the beat
+Five pens along one east-west road (row 11), each closed by a door the beat
 before it opens. The sketch is not to scale; `maps/boot-camp.toml` is the
 layout.
 
 ```
-col  0         10        19        28                  47
-     #########################################################
-     #  F     F  #  A      #     W W #   ~~~~~           #
-     #           #         #  b      #           s s     #
-     #   frog    D  frog   D    frog B     PAD   s       E
-     ======================================================== road
-     #           D         D         B           s       E
-     #  F     F  #  S  H   #  M b W W#   kit     s s     E
-     #########################################################
-       pen 1        pen 2     pen 3          pen 4 (arena)
+col  0         10        19        28          40                  59
+     ###################################################################
+     #  F     F  #  A      #     W W #   WWWW  ff #   ~~~~~           #
+     #           #         #  b      # o~~~oF     #           s s     #
+     #   frog    D  frog   D    frog B            D     PAD   s       E
+     =================================================================== road
+     #           D         D         B   sss      D           s       E
+     #  F     F  #  S  H   #  M b W W#   frog     #   kit     s s     E
+     ###################################################################
+       pen 1        pen 2     pen 3     pen 4 (drums)    pen 5 (arena)
 ```
 
-`D` a door (three cells, rows 5-7), `B` the brick wall (in column 25, two
+`D` a door (three cells, rows 10-12), `B` the brick wall (in column 25, two
 cells short of door 3, so a lane runs round it), `E` the enemy
 gate on the east edge, `F` a flag, `A` ammo, `H` health, `S` speed-up, `M`
-minigun, `W` wood, `b` brick targets, `s` sandbags, `~` the pond.
+minigun, `W` wood, `b` brick targets, `s` sandbags, `~` the pond. In pen 4
+`o` an oil drum, `F` a fuel drum, `~` an oil trail, `f` a fence and `WWWW`
+a wooden shed: a lone oil drum (31,7) four rows north of the road, the
+trail east of it and a cluster of two oil and two fuel drums (35-36, 6-7)
+under the shed. One drum set off takes the rest: the oil drums burn, the
+trail carries the fire across, and the fuel drums are thrown north and
+east and blast the shed, the fence and the wood and brick by them where
+they land. Nothing reaches the road with more than a scratch, and the frog
+watches from behind the sandbags at (33,15).
 
 | Beat | Teaches | The frog says (keys / touch) | Done when | Starts |
 |---|---|---|---|---|
@@ -55,13 +63,18 @@ minigun, `W` wood, `b` brick targets, `s` sandbags, `~` the pond.
 | 2 Supply | Crates open on contact; ammo, health, speed | No shells yet. Bump the crates. / The red cross fixes your hull. | The ammo crate taken | Door 1 opens |
 | 3 Fire | Aim by facing; wood, brick, iron | `<SPACE>` fires where your gun points. (`<TAP>` the right half to fire.) / Wood breaks fast. Brick takes a few. / Iron never breaks. Shoot the brick wall! | A cell of the brick wall gone | Door 2 opens |
 | - Through | - | Nice shot! Follow me. | The tank past door 3 | Door 3 opens |
-| 4 Your frog | The frog matters; the frog kit; air drops | This is my pad. Come on in. / *(shot)* Ow! That came from the east! / Grab my kit, quick! | The frog kit taken (a kit can only be taken while the frog is hurt) | A shot from the east edge hits the frog; the frog kit air-drops |
-| 5 Enemy | Gates, red rings, lining up; the frog bites | Here it comes! / Line up and fire! | The tank destroyed | A scout rolls in through the east gate, a *dummy* that fires only at the frog |
-| 6 Shield | Shields; an enemy that fires back | Shield first. / This one shoots back! | The second tank destroyed | A shield crate air-drops, then 6 s later an ordinary scout rolls in |
+| 4 Drums | Drums explode and chain; oil burns, fire runs along a trail, fuel drums fly; a blast breaks walls | Drums blow up. Shoot from afar. / Red ones burn. Grey ones fly. / Fire runs along spilled oil. | Every drum on the range gone (`destroyed_all`) | - |
+| - Onward | - | Boom! Blasts break walls too. Follow me. | The tank past door 5 | Door 5 opens |
+| 5 Your frog | The frog matters; the frog kit; air drops | This is my pad. Come on in. / *(shot)* Ow! That came from the east! / Grab my kit, quick! | The frog kit taken (a kit can only be taken while the frog is hurt) | A shot from the east edge hits the frog; the frog kit air-drops |
+| 6 Enemy | Gates, red rings, lining up; the frog bites | Here it comes! / Line up and fire! | The tank destroyed | A scout rolls in through the east gate, a *dummy* that fires only at the frog |
+| 7 Shield | Shields; an enemy that fires back | Shield first. / This one shoots back! | The second tank destroyed | A shield crate air-drops, then 6 s later an ordinary scout rolls in |
 
-The script has seven beats: the six lessons and a short *through* beat
-between the wall and the frog, so the shot at the frog comes once the
-player is in its pen.
+The script has nine beats: the seven lessons and two short *through*
+beats, one into the drum range and one after it, so the shot at the frog
+comes once the player is in its pen. The drum range waits for the last
+drum, not the first, so a player who shoots the cluster rather than the
+lone drum still sees the whole chain, and a drum the fire missed can be
+shot.
 
 The player starts with **no shells and 60 of 100 health**, so beat 2 is not
 optional and the red cross has a point. The speed-up and the minigun are
@@ -69,8 +82,8 @@ there to try; nothing waits on them.
 
 **Nudges.** Each beat has one line the frog repeats when nothing has been
 said for `training_nudge_seconds` (14): "Three flags. Then the gate opens.",
-"The ammo crate is up north.", "Face the brick wall, press `<SPACE>`.", "My
-kit! The green crate!", "Get in line with it!", "Last one. You've got
+"The ammo crate is up north.", "Face the brick wall, press `<SPACE>`.",
+"Shoot a drum. Watch the chain!", "My kit! The green crate!", "Get in line with it!", "Last one. You've got
 this." This is what a sign would have done for a player who is lost.
 
 **Situational lines**, once each: "Hold fire. It eats ammo fast." (the
@@ -99,7 +112,7 @@ like any level ("You're ready. Next: Lotus Lagoon.").
 
 Rules for every line, held by tests where a test can hold them:
 
-- **Length.** At most eight words; four or fewer in beats 5 and 6. The
+- **Length.** At most eight words; four or fewer in the two enemy beats. The
   bubble's width is a budget in `every_language_fits_every_budget`
   (220 pt, three lines at the bubble's size).
 - **Input.** A line that names a control has a keys and a touch message
@@ -138,6 +151,11 @@ Rules for every line, held by tests where a test can hold them:
 | `frog-fire-nudge-touch` | Face the brick wall and <TAP>. | Obrni se k zidu in <TAP>. |
 | `frog-minigun` | Hold fire. It eats ammo fast. | Drži strel. Hitro porablja strelivo. |
 | `frog-wall` | Nice shot! Follow me. | Lep strel! Za mano. |
+| `frog-drums` | Drums blow up. Shoot from afar. | Sodi eksplodirajo. Streljaj od daleč. |
+| `frog-drum-kinds` | Red ones burn. Grey ones fly. | Rdeči gorijo. Sivi letijo. |
+| `frog-oil` | Fire runs along spilled oil. | Ogenj steče po razliti nafti. |
+| `frog-drums-nudge` | Shoot a drum. Watch the chain! | Ustreli sod. Opazuj verižno reakcijo! |
+| `frog-boom` | Boom! Blasts break walls too. Follow me. | Bum! Eksplozija podre tudi zid. Za mano. |
 | `frog-pad` | This is my pad. Come on in. | To je moj dom. Kar naprej. |
 | `frog-ow` | Ow! That came from the east! | Au! To je priletelo z vzhoda! |
 | `frog-kit` | Grab my kit, quick! | Hitro, poberi moj zaboj! |
@@ -220,7 +238,8 @@ done = { wrecks = 1 }
 
 Triggers (`done`, every one set must hold): `flags` (taken over the
 round), `collect` (a crate kind a seat took since the beat began),
-`destroyed` (any of these cells' tiles gone), `past_col` (seat 1's hull
+`destroyed` (any of these cells' tiles gone), `destroyed_all` (every one
+of them gone), `past_col` (seat 1's hull
 east of a column), `frog_full`, `wrecks` (enemy wrecks since the beat
 began); a beat whose tanks are still to roll in is not done. Starts:
 `shoot_frog` (one heavy enemy shell from a cell inside that edge along the
@@ -345,6 +364,9 @@ the next map without one, and the corners offer no players button there
   through a gate and its wreck ends the beat; a wreck in the lane never
   keeps the next beat's tank out; a seat parked in the lane holds the
   beat's tank only so long; a beat started again puts its crates down once;
+  a `destroyed_all` beat waits for its last cell; Boot Camp's drum range
+  goes up from the lone drum over six seeds, a fuel drum thrown and the
+  shed blasted, with the frog unhurt and the seat on the road whole;
   Boot Camp plays through from the first beat to the last the way a player
   rushing it would (the dummy shot in the lane, the wall breached while the
   frog is still on its way); Boot Camp parses, is never hostable and lints

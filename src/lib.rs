@@ -391,14 +391,16 @@ pub const ONLINE_AVAILABLE: bool = cfg!(feature = "online");
 pub const MAX_SEATS: usize = 8;
 
 // The builder's bar's height with a mouse, in UI points (docs/hud-and-
-// builder-layout-design.md, variant A; `editor::chrome::Bar`): one
-// obstacle cell tall, so the tool icons sit in it full-bleed - and a touch
-// screen's bar is a finger's 44 (`hud::UI_TOUCH_PT`). The bar stands on
-// the window above the builder's canvas, never in its bitmap; play mode
-// draws no bar, its HUD standing in the window's corners
-// (`hud::corners`). Layout, not a knob: the dev panel has no business
-// resizing it.
-pub const HUD_BAR_HEIGHT: i32 = 32;
+// builder-layout-design.md, variant A; `editor::chrome::Bar`): a play
+// corner plate's height with a mouse - a readouts' row (`hud::ROW_H`, 32)
+// and `hud::PLATE_PAD` above and below it - so the builder's bar reads at
+// the HUD's scale, its buttons' drawn boxes a HUD button's 32 and the tool
+// icons a cell's 32 inside it; a touch screen's bar is a finger's 44
+// (`hud::UI_TOUCH_PT`). The bar stands on the window above the builder's
+// canvas, never in its bitmap; play mode draws no bar, its HUD standing in
+// the window's corners (`hud::corners`). Layout, not a knob: the dev panel
+// has no business resizing it.
+pub const HUD_BAR_HEIGHT: i32 = 40;
 
 /// An axis-aligned window rectangle in pixels, the one shape `Layout`
 /// hands around. Not raylib's `Rectangle` so the probe and the tests can
@@ -953,6 +955,7 @@ pub mod editor;
 pub mod establish;
 pub mod frog;
 pub mod fireball;
+pub mod fish;
 pub mod follow;
 pub mod frame_stages;
 pub mod framing;

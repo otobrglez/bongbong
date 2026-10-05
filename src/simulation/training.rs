@@ -532,7 +532,7 @@ impl Game {
         {
             return false;
         }
-        if !done.destroyed.is_empty() {
+        if !done.destroyed.is_empty() || !done.destroyed_all.is_empty() {
             let standing: Vec<(i32, i32)> = self
                 .world
                 .query::<&Obstacle>()
@@ -540,7 +540,10 @@ impl Game {
                 .filter(|o| !o.destroyed)
                 .map(|o| o.cell())
                 .collect();
-            if done.destroyed.iter().all(|cell| standing.contains(cell)) {
+            if !done.destroyed.is_empty() && done.destroyed.iter().all(|cell| standing.contains(cell)) {
+                return false;
+            }
+            if done.destroyed_all.iter().any(|cell| standing.contains(cell)) {
                 return false;
             }
         }
@@ -846,17 +849,114 @@ mod tests {
         assert_eq!(crates(&game), 1, "one shield crate after three starts");
     }
 
-    /// Boot Camp from the first beat to the last, the player's way: the
-    /// flags, the ammo crate, the brick wall, the pen, the frog's kit, the
-    /// dummy shot the moment it rolls in - its wreck in the gate's lane -
-    /// and the last beat's scout.
-    #[test]
-    fn boot_camp_plays_through_to_the_end() {
+    fn boot_camp(seed: u64) -> Game {
         let mut game = Game::default();
-        game.seed_override = Some(11);
+        game.seed_override = Some(seed);
         game.map = MapFile::from_toml_str(include_str!("../../maps/boot-camp.toml")).expect("boot-camp parses");
         let (w, h) = game.map.field_size();
         game.init(w, h);
+        game
+    }
+
+    /// A beat whose `destroyed_all` lists several cells runs until the
+    /// last of them is gone, not the first.
+    #[test]
+    fn a_beat_that_needs_every_cell_gone_waits_for_the_last() {
+        let mut script = String::new();
+        for r in [2, 6] {
+            script.push_str(&format!("cells.\"5,{r}\" = {{ kind = \"wall\", material = \"wood\" }}\n"));
+        }
+        script.push_str("\n[[training.beat]]\ndone = { destroyed_all = [[5, 2], [5, 6]] }\n");
+        let mut game = course(&script);
+        let knock = |game: &mut Game, cell: (i32, i32)| {
+            for o in game.world.query::<&mut Obstacle>().iter() {
+                if o.cell() == cell {
+                    o.destroyed = true;
+                }
+            }
+        };
+        step(&mut game, 2);
+        knock(&mut game, (5, 2));
+        step(&mut game, 2);
+        assert_eq!(game.outcome(), Outcome::Playing, "one of the two walls still stands");
+        knock(&mut game, (5, 6));
+        step(&mut game, 2);
+        assert_eq!(game.outcome(), Outcome::Won, "both gone ends the only beat");
+    }
+
+    /// Boot Camp's drum range from the road: a shot or two north at the
+    /// lone oil drum - a shell can fly over a drum, glance off it or leave
+    /// it standing on a low roll - and the fire and the blasts take every
+    /// drum on the range, the shed by them goes too, a fuel drum is thrown,
+    /// and the frog behind its sandbags and the seat on the road come
+    /// through it - over a handful of seeds, since the rolls are the
+    /// round's.
+    #[test]
+    fn boot_camps_drum_range_goes_up_from_the_lone_drum_and_spares_the_frog_and_the_seat() {
+        let range = [(31, 7), (35, 6), (36, 6), (35, 7), (36, 7)];
+        for seed in 1..=6 {
+            let mut game = boot_camp(seed);
+            game.open_every_door();
+            let run = game.training.as_mut().expect("a training run");
+            run.beat = 4;
+            run.begun = false;
+            run.shells_held = false;
+            assert_eq!(game.training_status().map(|s| s.id), Some("barrels".to_string()));
+            let frog = game.frog.expect("a frog");
+            let seat = game.player().expect("seat 0");
+            // Out of the frog's way while it walks to its cell.
+            put_seat(&mut game, 38, 16);
+            let home = cell_to_world(33, 15);
+            for _ in 0..60 * 90 {
+                if with_frog(&game.world, frog, |fr| fr.position.distance_to(home) < 4.0) {
+                    break;
+                }
+                step(&mut game, 1);
+            }
+            assert!(with_frog(&game.world, frog, |fr| fr.position.distance_to(home) < 4.0), "seed {seed}: the frog took cover");
+            game.debug_teleport(0, cell_to_world(31, 11), Some(0.0)).expect("seat 0 is on the field");
+            with_tank_mut(&game.world, seat, |t| {
+                t.shells_ammo = 10;
+                t.damage = 0.0;
+            });
+            let (w, h) = game.map.field_size();
+            let fire = crate::ai::Intent { face: Some(crate::tank::Dir::Up), fire: true, ..Default::default() };
+            let mut launched = 0;
+            let mut frog_hurt = false;
+            let mut shots = 0;
+            for frame in 0..60 * 30 {
+                // Fire again every two seconds while the lone drum stands.
+                let lone_stands = game.world.query::<&Obstacle>().iter().any(|o| !o.destroyed && o.cell() == range[0]);
+                let input = if frame % 120 == 0 && lone_stands {
+                    shots += 1;
+                    Input::single(fire)
+                } else {
+                    Input::default()
+                };
+                game.update(input, 1.0 / 60.0, w, h);
+                launched += game.events().iter().filter(|e| matches!(e, Event::DrumLaunched { .. })).count();
+                frog_hurt |= with_frog(&game.world, frog, |fr| fr.health < fr.max_health);
+                assert!(!with_tank(&game.world, seat, Tank::is_wreck), "seed {seed}: the seat on the road was wrecked");
+            }
+            let standing: Vec<(i32, i32)> = game.world.query::<&Obstacle>().iter().filter(|o| !o.destroyed).map(|o| o.cell()).collect();
+            assert!(range.iter().all(|c| !standing.contains(c)), "seed {seed}: every drum went up");
+            assert!(shots <= 4, "seed {seed}: the lone drum took {shots} shots");
+            assert!(game.training_status().is_some_and(|s| s.id == "onward"), "seed {seed}: the range is done");
+            assert!(launched >= 1, "seed {seed}: a fuel drum was thrown");
+            assert!((33..=36).any(|c| !standing.contains(&(c, 4))), "seed {seed}: a blast took the shed");
+            assert!(!frog_hurt, "seed {seed}: the frog was hurt");
+            let lost = with_tank(&game.world, seat, |t| t.damage);
+            assert!(lost < crate::MAX_DAMAGE * 0.25, "seed {seed}: the seat on the road lost {lost}");
+        }
+    }
+
+    /// Boot Camp from the first beat to the last, the player's way: the
+    /// flags, the ammo crate, the brick wall, the drum range, the pen, the
+    /// frog's kit, the dummy shot the moment it rolls in - its wreck in the
+    /// gate's lane - and the last beat's scout.
+    #[test]
+    fn boot_camp_plays_through_to_the_end() {
+        let mut game = boot_camp(11);
         let beat = |game: &Game| game.training_status().map(|s| s.beat).unwrap_or(0);
         let until = |game: &mut Game, b: usize, what: &str| {
             for _ in 0..60 * 60 {
@@ -882,7 +982,11 @@ mod tests {
         }
         until(&mut game, 4, "the brick wall");
         put_seat(&mut game, 30, 11);
-        until(&mut game, 5, "into the pen");
+        until(&mut game, 5, "into the drum range");
+        game.debug_detonate(cell_to_world(31, 7)).expect("the lone oil drum");
+        until(&mut game, 6, "the drums");
+        put_seat(&mut game, 42, 11);
+        until(&mut game, 7, "into the pen");
         // The shot at the frog lands, then the seat takes its kit.
         let frog = game.frog.expect("a frog");
         let mut hurt = false;
@@ -894,12 +998,12 @@ mod tests {
             }
         }
         assert!(hurt, "the shot found the frog once it reached its pen");
-        put_seat(&mut game, 31, 15);
-        until(&mut game, 6, "the frog's kit");
-        put_seat(&mut game, 30, 14);
+        put_seat(&mut game, 43, 15);
+        until(&mut game, 8, "the frog's kit");
+        put_seat(&mut game, 42, 14);
         let dummy = next_arrival(&mut game, 60 * 20).expect("the dummy rolled in");
         game.debug_kill(dummy).expect("the dummy can be killed");
-        until(&mut game, 7, "the dummy");
+        until(&mut game, 9, "the dummy");
         let scout = next_arrival(&mut game, 60 * 30).expect("the last beat's scout rolled in past the dummy's wreck");
         game.debug_kill(scout).expect("the scout can be killed");
         step(&mut game, 2);
@@ -930,7 +1034,7 @@ mod tests {
     #[test]
     fn boot_camp_reads_and_lints_with_no_error() {
         let map = MapFile::from_toml_str(include_str!("../../maps/boot-camp.toml")).expect("boot-camp parses");
-        assert_eq!(map.training.as_ref().map(|t| t.beat.len()), Some(7));
+        assert_eq!(map.training.as_ref().map(|t| t.beat.len()), Some(9));
         assert!(!map.hostable(), "a training map is never hosted");
         let setup = crate::maplint::LintSetup {
             seed: 0xB0B5,

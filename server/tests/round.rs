@@ -514,6 +514,41 @@ async fn a_room_fills_to_the_seats_it_takes_and_refuses_the_next() {
     assert!(refused.contains("full") && refused.contains(&format!("{SEATS_PLAYABLE} seats")), "{refused}");
 }
 
+/// A seat is its device token's, never its name's. Two clients under one
+/// name and two tokens are two seats, the second told apart on the roster
+/// (`host 2`); a client under a token already seated takes that seat, and
+/// the socket that held it is told so and closed - which is what two
+/// windows given no `--nick` did to each other when both derived the same
+/// token from the same default name (BB-17).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_seat_is_its_tokens_and_a_name_already_taken_is_told_apart() {
+    let (addr, _hub) = start_server().await;
+    let mut host = connect(addr).await;
+    send(&mut host, &create(11)).await;
+    let code = expect(&mut host, "the code", |m| match m {
+        Msg::Lobby(Lobby::RoomCreated { code }) => Ok(code),
+        other => Err(other),
+    })
+    .await;
+    let _ = expect_welcome(&mut host).await;
+
+    let mut namesake = connect(addr).await;
+    send(&mut namesake, &join("HOST", "tok-namesake", &code)).await;
+    let w = expect_welcome(&mut namesake).await;
+    assert_eq!(w.seat, 1, "a second token is a second seat, whatever its name");
+    let nicks: Vec<&str> = w.roster.iter().map(|s| s.nick.as_str()).collect();
+    assert_eq!(nicks, vec!["host", "HOST 2"], "the roster tells the two apart");
+
+    let mut same_token = connect(addr).await;
+    send(&mut same_token, &join("someone", "tok-namesake", &code)).await;
+    let w = expect_welcome(&mut same_token).await;
+    assert_eq!(w.seat, 1, "the same token reclaims its seat");
+    assert_eq!(w.roster.len(), 2, "and takes no other");
+    assert_eq!(w.roster[1].nick, "HOST 2", "a reclaimed seat keeps its name");
+    assert_eq!(expect_lobby_error(&mut namesake).await, "reconnected from another socket");
+    closed_by_server(&mut namesake).await;
+}
+
 /// Four seats, one round: the room starts with four players, every
 /// client is welcomed into it, and every client's replica draws exactly
 /// the tanks the wire carries as the stream goes on.
