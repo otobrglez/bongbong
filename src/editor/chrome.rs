@@ -1243,8 +1243,8 @@ mod chrome_tests {
         // right end.
         let wide = Bar::of(&UiFrame::plain((1600.0, 900.0)));
         assert_eq!((wide.erase.x, wide.clear.x, wide.play.x), (560.0, 950.0, 1600.0 - 8.0 - 72.0));
-        // The arena's own window: the label gone, the name and every button
-        // whole.
+        // The arena's own window: the label gone, the name narrowed and
+        // every button whole.
         let arena = Bar::of(&UiFrame::plain((1088.0, 576.0)));
         assert!(arena.label.is_none() && matches!(arena.tools, BarTools::Categories(_)), "{arena:?}");
         assert_eq!(arena.name, Some(Rectangle::new(8.0, 0.0, 118.0, 32.0)));
