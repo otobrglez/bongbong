@@ -295,7 +295,6 @@ impl Game {
                 track_scale_jitter: t.track_scale_jitter,
                 shells_ammo: t.shells_ammo,
                 position: at,
-                ring_position: at,
                 owner: t.owner,
                 ..Tank::default()
             };

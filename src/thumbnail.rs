@@ -6,11 +6,10 @@
 //! decoding the sheets, the GPU renderer and the PNG encoder are
 //! `render::thumbnail`.
 //!
-//! **The first frame is init plus one update.** `Tank::ring_position`
-//! starts at the origin and is only snapped onto the hull by
-//! `Game::update`, which the windowed game always runs before its first
-//! render. With no enemies on the field that update draws no RNG, so the
-//! frame is a pure function of (map, seed, options).
+//! **The first frame is init plus one update**, as the windowed game
+//! always runs one before its first render. With no enemies on the field
+//! that update draws no RNG, so the frame is a pure function of (map,
+//! seed, options).
 
 use crate::canvas::{CpuCanvas, Pixels, Sheet};
 use crate::game::PaintOptions;
@@ -182,7 +181,7 @@ mod tests {
         ("archipelago", 0x7519_79df_b159_267f),
         ("black-gold", 0x7be5_ab85_f6da_94ce),
         ("harbor-lights", 0x5174_f638_98ad_108e),
-        ("carnival", 0xe560_57f6_8475_d670),
+        ("carnival", 0xeaff_059a_3a29_5394),
         ("jungle-temple", 0x1257_f043_f914_5a5b),
         ("serpent-river", 0xf917_b9e2_58f7_5631),
         ("no-mans-land", 0x7f34_faf8_c8a6_ebb7),

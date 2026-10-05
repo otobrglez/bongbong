@@ -78,8 +78,8 @@ const REPLICA_OWNER: Owner = Owner::Enemy(usize::MAX);
 /// How far (px) a hull may move between two applies before the replica
 /// reads it as a jump - a portal, a seat driven back in at a gate, the
 /// room placing a hull - rather than as driving: past it the tread marks
-/// start again from where the hull landed and the ring follower is put
-/// under it, so nothing is drawn across the gap. Half again a cell: a
+/// start again from where the hull landed, so nothing is drawn across the
+/// gap. Half again a cell: a
 /// hull at full boost covers a few pixels a frame, and the interpolator
 /// blends every other move.
 const JUMP_PX: f32 = 48.0;
@@ -592,7 +592,6 @@ fn spawn_tank(game: &mut Game, t: &TankState, player: bool) -> Entity {
         rotation,
         visual_rotation: rotation,
         turret_visual_rotation: rotation,
-        ring_position: position,
         owner,
         ..Tank::default()
     };
@@ -624,11 +623,8 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
         let mut q = game.world.query_one::<&mut Tank>(entity);
         let Ok(tank) = q.get() else { return };
         if track.unwrap_or(tank.position).distance_to(position) > JUMP_PX {
-            // A jump, not a drive: no marks across it, and the ring put
-            // under the hull rather than left to chase it.
+            // A jump, not a drive: no marks across it.
             tank.track_from = None;
-            tank.ring_position = position;
-            tank.ring_velocity = Vec2::new(0.0, 0.0);
         }
         tank.position = position;
         // The hull's facing snaps the way `Tank::control` snaps it; the
@@ -2111,16 +2107,14 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
         assert!(replica.blast_fx.is_empty() && replica.shocks.is_empty() && replica.screen_flash.is_none());
     }
 
-    /// Where the replica's hull stands and how many tread marks it has.
-    fn player_marks(replica: &Game) -> (Position, Position, usize) {
-        let player = replica.player().expect("a seat");
-        let tank = replica.world.get::<&Tank>(player).expect("its tank");
-        (tank.position, tank.ring_position, replica.tracks.len())
+    /// How many tread marks the replica has.
+    fn player_marks(replica: &Game) -> usize {
+        replica.tracks.len()
     }
 
     /// A hull that jumps - a portal, a gate, the room placing it - lays no
-    /// tread marks across the gap and takes its ring with it, while one
-    /// that drives lays marks along the way as ever.
+    /// tread marks across the gap, while one that drives lays marks along
+    /// the way as ever.
     #[test]
     fn a_hull_that_jumps_lays_no_tread_marks_across_the_gap() {
         let game = quiet_round(DEFAULT_MAP, 0xB0B5, 0);
@@ -2135,21 +2129,20 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
             s
         };
 
-        let (_, _, marks) = player_marks(&replica);
+        let marks = player_marks(&replica);
         snapshot(&mut replica, &moved(40));
         replica.tick_presentation(PHYSICS_FIXED_DT);
-        let (_, _, driven) = player_marks(&replica);
+        let driven = player_marks(&replica);
         assert!(driven > marks, "a drive of 40 px lays marks: {marks} -> {driven}");
 
         snapshot(&mut replica, &moved(40 + 200));
         replica.tick_presentation(PHYSICS_FIXED_DT);
-        let (hull, ring, jumped) = player_marks(&replica);
+        let jumped = player_marks(&replica);
         assert_eq!(jumped, driven, "no mark across a 200 px jump");
-        assert_eq!(ring, hull, "the ring is under the hull, not flying after it");
 
         snapshot(&mut replica, &moved(40 + 200 + 40));
         replica.tick_presentation(PHYSICS_FIXED_DT);
-        let (_, _, after) = player_marks(&replica);
+        let after = player_marks(&replica);
         assert!(after > jumped, "and it lays marks again from where it landed");
     }
 
@@ -2157,8 +2150,8 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
     /// (`net::round` writes it over the replica every frame, between the
     /// apply and the presentation tick), ahead of its wire track by the
     /// picture's delay and the round trip. That gap is no jump: a drive on
-    /// the wire keeps the tread marks coming and the ring following. A
-    /// jump on the wire itself still is one.
+    /// the wire keeps the tread marks coming. A jump on the wire itself
+    /// still is one.
     #[test]
     fn a_hull_drawn_ahead_of_its_wire_track_is_no_jump() {
         let game = quiet_round(DEFAULT_MAP, 0xB0B5, 0);
@@ -2182,26 +2175,23 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
         };
         draw_ahead(&mut replica);
         replica.tick_presentation(PHYSICS_FIXED_DT);
-        let (_, _, marks) = player_marks(&replica);
+        let marks = player_marks(&replica);
 
         for step in 1..=8 {
             snapshot(&mut replica, &moved(8 * step));
             {
                 let tank = replica.world.get::<&Tank>(player).expect("its tank");
                 assert!(tank.track_from.is_some(), "step {step}: an 8 px drive read as a jump - the marks start over");
-                assert!(tank.ring_position != tank.position, "step {step}: the ring was put under the wire track");
             }
             draw_ahead(&mut replica);
             replica.tick_presentation(PHYSICS_FIXED_DT);
         }
-        let (_, _, driven) = player_marks(&replica);
+        let driven = player_marks(&replica);
         assert!(driven > marks, "the drawn hull drove 64 px and laid marks: {marks} -> {driven}");
 
         snapshot(&mut replica, &moved(8 * 8 + 200));
-        let (hull, ring, _) = player_marks(&replica);
         let tank = replica.world.get::<&Tank>(player).expect("its tank");
         assert!(tank.track_from.is_none(), "a 200 px jump on the wire lays no mark across it");
-        assert_eq!(ring, hull, "and takes the ring with it");
     }
 
     /// A beam stopped by a shield deals nothing, and flashes where it
