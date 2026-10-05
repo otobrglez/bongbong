@@ -2497,7 +2497,8 @@ impl Game {
     /// single nearest live *hostile* tank within its attack range (never the
     /// killing blow on a player - it is a hazard, not a fair fight) and,
     /// independently, hops away from the nearest tank of any side within its
-    /// wider avoid range. Each on its own cooldown.
+    /// wider avoid range - a training round's frog from the nearest enemy
+    /// only. Each on its own cooldown.
     fn frog_phase(&mut self, f: &mut Frame) {
         for frog_entity in [self.frog, self.enemy_frog].into_iter().flatten() {
             self.frog_reflexes(f, frog_entity);
@@ -2509,7 +2510,9 @@ impl Game {
     /// The two reflexes pick their own tank: the bite only ever lands on the
     /// other side (`Side::bites` - your own frog is an objective to defend,
     /// not a hazard to park away from), while the hop is indiscriminate, so
-    /// a frog still shies away from the tanks that guard it.
+    /// a frog still shies away from the tanks that guard it - except in a
+    /// training round, where the players' frog leads the seats and a tank
+    /// that drives up to it has come to follow it.
     ///
     /// Both set the frog's `facing`, and the hop runs second so it wins a
     /// frame that does both - which is right, because `Frog::anim` draws the
@@ -2552,11 +2555,15 @@ impl Game {
             with_frog_mut(&self.world, frog_entity, |fr| fr.start_attack(target_pos));
         }
 
-        // A training frog on its way to its next beat's cell keeps walking
-        // rather than shy from the tank it is leading (`training.rs`).
+        // A training frog is the player's guide (`training.rs`): it never
+        // shies from the seats it leads, only from the enemy's tanks, and
+        // not even from those while it walks on to its next beat's cell.
+        // Every other round's frog shies from any tank.
+        let calm = Some(frog_entity) == self.frog && self.training.is_some();
+        let shy_from = if calm { nearest_foe } else { nearest_any };
         if can_hop
-            && !(Some(frog_entity) == self.frog && self.frog_walking())
-            && let Some((_, tank_pos, dist, _)) = nearest_any
+            && !(calm && self.frog_walking())
+            && let Some((_, tank_pos, dist, _)) = shy_from
             && dist <= avoid_range
         {
             let away = Vec2::new(frog_pos.x - tank_pos.x, frog_pos.y - tank_pos.y);
