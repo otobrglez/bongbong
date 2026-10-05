@@ -13,8 +13,8 @@ use crate::render::canvas::Sheets;
 use crate::hud::{UiFrame, BUILD_COLOR, DIM, HUD_TEXT_SIZE, ONLINE_COLOR, TEXT, UI_SMALL_TEXT};
 use crate::lobby::{
     Button, ButtonView, LobbyView, SeatRow, Stage, button_rect, code_box_rect, content_rect, panel_rect, qr_rect,
-    seat_row_rect, seats_rect, LOBBY_CODE_BOX, LOBBY_MARGIN, LOBBY_QR_BOX, LOBBY_SEAT_CHASSIS_X, LOBBY_SEAT_ROWS,
-    LOBBY_SEAT_STATE_X,
+    seat_row_rect, seats_rect, LOBBY_CODE_BOX, LOBBY_MARGIN, LOBBY_QR_BOX, LOBBY_SEAT_CHASSIS_X, LOBBY_SEAT_NICK_X,
+    LOBBY_SEAT_ROWS, LOBBY_SEAT_STATE_X,
 };
 use crate::math::{Color, Rectangle};
 use crate::render::canvas::GpuCanvas;
@@ -186,7 +186,7 @@ fn draw_seat<D: RaylibDraw>(d: &mut D, r: Rectangle, seat: Option<&SeatRow>) {
     // tank carries on the field.
     let slot_color = TEAM_COLORS[seat.seat as usize % TEAM_COLORS.len()];
     d.draw_text(&seat.slot, (r.x + 10.0) as i32, text_y, HUD_TEXT_SIZE, slot_color);
-    d.draw_text(&seat.nick, (r.x + 46.0) as i32, text_y, HUD_TEXT_SIZE, if seat.you { TEXT } else { Color::new(210, 210, 216, 255) });
+    d.draw_text(&seat.nick, (r.x + LOBBY_SEAT_NICK_X) as i32, text_y, HUD_TEXT_SIZE, if seat.you { TEXT } else { Color::new(210, 210, 216, 255) });
     // The small columns sit on the name's middle.
     let small_y = text_y + (HUD_TEXT_SIZE - UI_SMALL_TEXT) / 2;
     d.draw_text(&seat.chassis, (r.x + LOBBY_SEAT_CHASSIS_X) as i32, small_y, UI_SMALL_TEXT, DIM);

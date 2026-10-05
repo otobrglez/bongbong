@@ -74,6 +74,57 @@ impl Identity {
     pub fn new(nick: impl Into<String>, device_token: impl Into<String>) -> Identity {
         Identity { nick: nick.into(), device_token: device_token.into() }
     }
+
+    /// A player who has entered no nickname, behind a device token minted
+    /// here (`mint_token`): its own, so two such clients on one machine
+    /// are two seats rather than one seat reclaimed back and forth, and
+    /// the nickname read off it (`anonymous_nick`). Made once per run and
+    /// kept by the session, so a reconnect reclaims the seat.
+    pub fn anonymous() -> Identity {
+        Identity::anonymous_with(mint_token())
+    }
+
+    /// The player behind `device_token` who has entered no nickname: the
+    /// nickname is read off the token (`anonymous_nick`), so a token kept
+    /// across reloads - the web page's, per tab - keeps its name too.
+    pub fn anonymous_with(device_token: impl Into<String>) -> Identity {
+        let device_token = device_token.into();
+        Identity { nick: anonymous_nick(&device_token), device_token }
+    }
+}
+
+/// What a nickname read off a device token starts with (`anonymous_nick`).
+pub const ANONYMOUS_NICK_PREFIX: &str = "Player #";
+
+/// The letters and digits an anonymous nickname ends with, and how many:
+/// `Player #ABC102`.
+pub const ANONYMOUS_NICK_ALPHABET: &[u8; 36] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+pub const ANONYMOUS_NICK_LETTERS: usize = 6;
+
+/// The nickname a player who has entered none takes into a room:
+/// `Player #` and six of `[A-Z0-9]` read off a hash of its device token
+/// (`map::fnv1a`). The token is random, so the name is; the same token
+/// always gives the same name. Plain ASCII, so the default font draws it
+/// as it is (`text::fold` leaves it alone) and it fits a lobby seat row
+/// (`lobby_tests`).
+pub fn anonymous_nick(device_token: &str) -> String {
+    let mut hash = crate::map::fnv1a(device_token.as_bytes());
+    let mut nick = String::from(ANONYMOUS_NICK_PREFIX);
+    for _ in 0..ANONYMOUS_NICK_LETTERS {
+        let n = ANONYMOUS_NICK_ALPHABET.len() as u64;
+        nick.push(ANONYMOUS_NICK_ALPHABET[(hash % n) as usize] as char);
+        hash /= n;
+    }
+    nick
+}
+
+/// A fresh device token: `bongbong-` and sixteen random hex digits, the
+/// page's own shape (`site/src/scripts/room.ts`). Drawn from the system's
+/// randomness - nothing here is part of a round.
+pub fn mint_token() -> String {
+    use rand::RngExt;
+    let mut rng = rand::rng();
+    format!("bongbong-{:016x}", rng.random::<u64>())
 }
 
 /// What a host asks for when it opens a room.
@@ -616,6 +667,29 @@ impl<T: Transport> RoomClient<T> {
 mod tests {
     use super::*;
     use crate::net::codec;
+
+    /// A player who entered no name is `Player #` and six of `[A-Z0-9]`,
+    /// the same for the same token and different for another, behind a
+    /// token minted for it - never one another anonymous client holds, so
+    /// two such windows are two seats rather than one seat reclaimed back
+    /// and forth.
+    #[test]
+    fn a_player_with_no_name_gets_one_and_a_token_of_its_own() {
+        let nick = anonymous_nick("bongbong-0123456789abcdef");
+        assert!(nick.starts_with(ANONYMOUS_NICK_PREFIX), "{nick}");
+        let tail = &nick[ANONYMOUS_NICK_PREFIX.len()..];
+        assert_eq!(tail.len(), ANONYMOUS_NICK_LETTERS);
+        assert!(tail.bytes().all(|b| ANONYMOUS_NICK_ALPHABET.contains(&b)), "{nick}");
+        assert!(nick.is_ascii(), "the default font draws it as it is");
+        assert_eq!(anonymous_nick("bongbong-0123456789abcdef"), nick, "the same token, the same name");
+        assert_ne!(anonymous_nick("bongbong-0123456789abcdee"), nick);
+
+        let (a, b) = (Identity::anonymous(), Identity::anonymous());
+        assert_ne!(a.device_token, b.device_token, "two anonymous clients are two seats");
+        assert_eq!(a.nick, anonymous_nick(&a.device_token));
+        assert!(a.device_token.starts_with("bongbong-") && a.device_token.len() == "bongbong-".len() + 16, "{}", a.device_token);
+        assert_eq!(Identity::anonymous_with("tab-1"), Identity::new(anonymous_nick("tab-1"), "tab-1"));
+    }
     use crate::net::delta::delta;
     use crate::net::loopback::{self, LinkQuality};
     use crate::net::transport::Transport;

@@ -131,16 +131,20 @@ pub struct Session {
     /// otherwise (`app.rs` reads `window.bbInvite`), which is what keeps
     /// a PR preview's invite inside that preview.
     pub site: SiteBase,
-    /// The name this player takes into a room (`--nick`).
+    /// The name this player takes into a room: `--nick`, else
+    /// `Player #` and six letters and digits read off the token
+    /// (`net::client::anonymous_nick`).
     pub nick: String,
     /// The reconnect key this session takes into a room
     /// (`net::client::Identity::device_token`): the same token in a
     /// later join reclaims the same seat for the room's life, so it has
-    /// to be this player's and nobody else's. A desktop build derives it
-    /// from the nickname, which is what makes two `--nick`s on one
-    /// machine two seats; the web page mints a random one and keeps it
-    /// per tab (`site/src/scripts/room.ts`), which is what makes two
-    /// tabs two players. `app.rs` sets it once at startup.
+    /// to be this player's and nobody else's. A desktop build given a
+    /// `--nick` derives it from the nickname, which is what makes two
+    /// `--nick`s on one machine two seats; a build given none - every
+    /// phone - mints one for the run (`Identity::anonymous`), which is
+    /// what makes two such windows two seats; the web page mints a random
+    /// one and keeps it per tab (`site/src/scripts/room.ts`), which is
+    /// what makes two tabs two players. `app.rs` sets it once at startup.
     pub token: String,
     /// The levels and how far this player has got (`levels.rs`), set by
     /// `set_campaign`. `None` - a test's session, a tool's - makes every
@@ -228,6 +232,9 @@ impl Session {
     /// round and the builder's canvas never need to be told it.
     pub fn new(game: Game) -> Self {
         let builder = MapEditor::new(game.map.clone());
+        // Nobody until `app.rs` says who: a token of this session's own,
+        // never one another client could be holding.
+        let anonymous = crate::net::client::Identity::anonymous();
         Session {
             driver: Driver::Play,
             game,
@@ -238,8 +245,8 @@ impl Session {
             lobby: None,
             rooms: RoomsHost::deployed(),
             site: SiteBase::deployed(),
-            nick: "player".into(),
-            token: "bongbong-player".into(),
+            nick: anonymous.nick,
+            token: anonymous.device_token,
             campaign: None,
             level_select: None,
             play_view: None,
