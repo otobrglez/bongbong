@@ -2,17 +2,16 @@
 # Saved from tools; re-saving from the builder drops these comments, so
 # put them back.
 #
-# Protect on the band plan, five tanks, the sky dusk falling into night at
-# ninety seconds of the round (`nightfall`). The volcano stands in the
-# middle of the field and erupts every half minute, throwing lava bombs
-# round itself and at any tank in range; three rivers of lava leave it -
-# west into a lava lake whose middle is deep, north-east off the east
-# edge, south off the bottom - each a burning ford crossed at a wade, with
-# a stone crossing on each (a road cell) where the roads meet them.
+# Protect on the band plan, five tanks, under a clear sky: the lava and the
+# eruptions are the spectacle, so the level is fought in daylight with no
+# night, no lamp posts and no lanterns. The volcano stands in the middle of
+# the field and erupts every half minute, throwing lava bombs round itself
+# and at any tank in range; three rivers of lava leave it - west into a
+# lava lake whose middle is deep, north-east off the east edge, south off
+# the bottom - each a burning ford crossed at a wade, with a stone crossing
+# on each (a road cell) where the roads meet them.
 #
-# The players start in the south-east by the frog's sandbag ring. Lamp
-# posts stand round the base, at every crossing and up the roads: at night
-# they light the way, and show whoever stands in them to the enemy. Three
+# The players start in the south-east by the frog's sandbag ring. Three
 # heat shields lie by the rivers; trees on the banks catch fire when an
 # eruption's surge comes past.
 
@@ -20,8 +19,6 @@ version = 1
 tanks = 5
 tank = "warden"
 tank2 = "scout"
-weather = "dusk"
-nightfall = 90.0
 mission.kind = "protect"
 spawn.kind = "band"
 size = [
@@ -82,9 +79,6 @@ pickup = "health"
 [cells."6,5"]
 kind = "pickup"
 pickup = "health"
-
-[cells."24,5"]
-kind = "lamp"
 
 [cells."37,5"]
 kind = "road"
@@ -182,17 +176,11 @@ kind = "tall_grass"
 [cells."6,9"]
 kind = "tall_grass"
 
-[cells."8,9"]
-kind = "lamp"
-
 [cells."12,9"]
 kind = "road"
 
 [cells."37,9"]
 kind = "road"
-
-[cells."38,9"]
-kind = "lamp"
 
 [cells."40,9"]
 kind = "lava"
@@ -291,9 +279,6 @@ kind = "lava"
 [cells."33,11"]
 kind = "lava"
 
-[cells."36,11"]
-kind = "lamp"
-
 [cells."37,11"]
 kind = "road"
 
@@ -305,9 +290,6 @@ kind = "pine"
 
 [cells."12,12"]
 kind = "road"
-
-[cells."21,12"]
-kind = "lamp"
 
 [cells."28,12"]
 kind = "lava"
@@ -372,9 +354,6 @@ kind = "road"
 [cells."40,14"]
 kind = "road"
 
-[cells."48,14"]
-kind = "lamp"
-
 [cells."12,15"]
 kind = "road"
 
@@ -424,9 +403,6 @@ kind = "tall_grass"
 
 [cells."12,17"]
 kind = "road"
-
-[cells."15,17"]
-kind = "lamp"
 
 [cells."18,17"]
 kind = "lava"
@@ -482,9 +458,6 @@ kind = "tree"
 
 [cells."26,18"]
 kind = "lava"
-
-[cells."31,18"]
-kind = "lamp"
 
 [cells."40,18"]
 kind = "road"
@@ -616,14 +589,8 @@ kind = "road"
 [cells."27,22"]
 kind = "lava"
 
-[cells."39,22"]
-kind = "lamp"
-
 [cells."40,22"]
 kind = "road"
-
-[cells."47,22"]
-kind = "lamp"
 
 [cells."7,23"]
 kind = "pine"
@@ -672,9 +639,6 @@ kind = "road"
 
 [cells."28,24"]
 kind = "lava"
-
-[cells."29,24"]
-kind = "lamp"
 
 [cells."40,24"]
 kind = "road"
@@ -778,9 +742,6 @@ kind = "road"
 [cells."49,25"]
 kind = "pine"
 
-[cells."12,26"]
-kind = "lamp"
-
 [cells."20,26"]
 kind = "tall_grass"
 
@@ -792,9 +753,6 @@ kind = "tall_grass"
 
 [cells."23,26"]
 kind = "tall_grass"
-
-[cells."27,26"]
-kind = "lamp"
 
 [cells."28,26"]
 kind = "lava"
@@ -842,9 +800,6 @@ kind = "lava"
 [cells."30,27"]
 kind = "tree"
 
-[cells."33,27"]
-kind = "lamp"
-
 [cells."35,27"]
 kind = "pickup"
 pickup = "ammo"
@@ -860,9 +815,6 @@ kind = "sandbag"
 
 [cells."28,28"]
 kind = "lava"
-
-[cells."42,28"]
-kind = "lamp"
 
 [cells."43,28"]
 kind = "sandbag"
