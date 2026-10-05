@@ -53,8 +53,8 @@ use crate::{Layout, EDITOR_BAR_HIT_SLACK, EDITOR_DROPDOWN_ROW_H, EDITOR_DROPDOWN
 
 use super::{BrushRow, Category};
 
-/// The text size of the bar's small labels - UNDO, REDO, FIT, CHECK, PLAY
-/// HERE and the clear flag's par - with a mouse: the 11 points Apple's
+/// The text size of the bar's small labels - UNDO, REDO, FIT, CHECK and
+/// the clear flag's par - with a mouse: the 11 points Apple's
 /// guidance holds text to, at which every language's label fits inside a
 /// desktop bar's buttons (a button's outline is drawn outside its box).
 pub const BAR_MOUSE_TEXT: i32 = 11;
@@ -157,10 +157,18 @@ const fn slot(w: f32, gap: f32) -> Slot {
     Slot { w, gap }
 }
 
+/// PLAY HERE's width, on a mouse's bar and a touch screen's: it is drawn
+/// as PLAY is (`render::hud::draw_slot_button`, `hud::HUD_TEXT_SIZE`), so
+/// the two read as one pair, and its label keeps the 4 points a side PLAY's
+/// keeps in every language (`chrome_tests`, `text_tests`).
+pub const HERE_W: f32 = 106.0;
+
 /// Every element's slot, for a mouse or a touch screen. The mouse's are a
 /// desktop bar's, a point a pixel; a touch screen's are at least
 /// `hud::UI_TOUCH_PT` across for every press, a category button's two
-/// halves included.
+/// halves included, 4 points apart from the eraser to MAP (their drawn
+/// boxes keep their own insets) so the folded bar holds PLAY HERE whole
+/// at `hud::UI_MIN_W`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Metrics {
     /// `BUILD`, the mode, in the builder's amber.
@@ -208,7 +216,7 @@ const MOUSE: Metrics = Metrics {
     check: slot(56.0, 2.0),
     clear: slot(44.0, 0.0),
     right_gap: 2.0,
-    here: slot(68.0, 4.0),
+    here: slot(HERE_W, 4.0),
     play: crate::hud::MODE_BUTTON_W,
 };
 
@@ -220,16 +228,16 @@ const TOUCH: Metrics = Metrics {
     categories_gap: 8.0,
     brush: slot(64.0, 8.0),
     folded: slot(64.0, 8.0),
-    erase: slot(44.0, 8.0),
-    undo: slot(44.0, 8.0),
-    redo: slot(44.0, 8.0),
-    file: slot(64.0, 8.0),
-    map: slot(64.0, 8.0),
+    erase: slot(44.0, 4.0),
+    undo: slot(44.0, 4.0),
+    redo: slot(44.0, 4.0),
+    file: slot(64.0, 4.0),
+    map: slot(64.0, 4.0),
     fit: slot(44.0, 4.0),
     check: slot(64.0, 2.0),
     clear: slot(52.0, 0.0),
     right_gap: 2.0,
-    here: slot(76.0, 4.0),
+    here: slot(HERE_W, 4.0),
     play: crate::hud::MODE_BUTTON_W,
 };
 
@@ -1225,7 +1233,7 @@ mod chrome_tests {
             (bar.fit, 848.0, 40.0),
             (bar.check, 892.0, 56.0),
             (bar.clear, 950.0, 44.0),
-            (bar.here, 1128.0, 68.0),
+            (bar.here, 1090.0, HERE_W),
             (bar.play, 1200.0, 72.0),
         ];
         for (r, x, w) in slots {
@@ -1235,12 +1243,12 @@ mod chrome_tests {
         // right end.
         let wide = Bar::of(&UiFrame::plain((1600.0, 900.0)));
         assert_eq!((wide.erase.x, wide.clear.x, wide.play.x), (560.0, 950.0, 1600.0 - 8.0 - 72.0));
-        // The arena's own window: the label gone, the name and every button
-        // whole.
+        // The arena's own window: the label gone, the name narrowed and
+        // every button whole.
         let arena = Bar::of(&UiFrame::plain((1088.0, 576.0)));
         assert!(arena.label.is_none() && matches!(arena.tools, BarTools::Categories(_)), "{arena:?}");
-        assert_eq!(arena.name, Some(Rectangle::new(8.0, 0.0, 152.0, 32.0)));
-        assert_eq!((arena.erase.x, arena.clear.x, arena.here.x), (496.0, 886.0, 936.0));
+        assert_eq!(arena.name, Some(Rectangle::new(8.0, 0.0, 118.0, 32.0)));
+        assert_eq!((arena.erase.x, arena.clear.x, arena.here.x), (462.0, 852.0, 898.0));
         // Narrower: the categories and BRUSH fold into TOOLS, and the room
         // it frees gives the label back; narrower still, the name goes.
         let narrow = Bar::of(&UiFrame::plain((900.0, 500.0)));
@@ -1254,7 +1262,7 @@ mod chrome_tests {
     /// Every label the bar draws fits its box in every shipped language, at
     /// the size it is drawn in, on every window: BUILD in its slot, FILE
     /// and MAP beside their carets, the small buttons' labels in their
-    /// boxes, PLAY in its button and the clear flag's longest par beside
+    /// boxes, PLAY HERE and PLAY in theirs and the clear flag's longest par beside
     /// the flag; and every size is at least 11 points.
     #[test]
     fn every_bar_label_fits_its_box_in_every_language() {
@@ -1280,11 +1288,12 @@ mod chrome_tests {
                     (keys::EDITOR_REDO, bar.redo),
                     (keys::EDITOR_FIT, bar.fit),
                     (keys::EDITOR_CHECK, bar.check),
-                    (keys::EDITOR_PLAY_HERE, bar.here),
                 ] {
                     // Inside the drawn box; its outline is drawn outside it.
                     fits(key, small, r.width - SMALL_BOX_INSET);
                 }
+                // PLAY HERE and PLAY: one size, 4 points clear a side.
+                fits(keys::EDITOR_PLAY_HERE, crate::hud::HUD_TEXT_SIZE, bar.here.width - 8.0);
                 fits(keys::BUTTON_PLAY, crate::hud::HUD_TEXT_SIZE, bar.play.width - 8.0);
                 // The readout has no box: the flag, then the par from 16 in.
                 assert!(16.0 + width("59:59", small) as f32 <= bar.clear.width, "touch={touch}: the par overflows its readout");

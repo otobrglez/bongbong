@@ -613,8 +613,9 @@ impl MapEditor {
         draw_small_button(d, bar.check, &text().get(keys::EDITOR_CHECK), check_color, small);
         draw_clear_readout(d, bar.clear, self.par(), small);
 
-        // PLAY HERE beside PLAY, in PLAY's amber.
-        draw_small_button(d, bar.here, &text().get(keys::EDITOR_PLAY_HERE), BUILD_ACCENT, small);
+        // PLAY HERE beside PLAY, drawn as PLAY is: its amber, its box and
+        // its text size.
+        crate::render::hud::draw_slot_button(d, bar.here, &text().get(keys::EDITOR_PLAY_HERE), BUILD_ACCENT);
         crate::render::hud::draw_slot_button(d, bar.play, &text().get(keys::BUTTON_PLAY), BUILD_ACCENT);
     }
 
@@ -1312,7 +1313,7 @@ fn draw_menu_button(d: &mut impl RaylibDraw, rect: Rectangle, label: &str, open:
 }
 
 /// An outlined bar button with its label centred in it in `size`: UNDO,
-/// REDO, FIT, CHECK, PLAY HERE (`chrome::small_text`).
+/// REDO, FIT, CHECK (`chrome::small_text`).
 fn draw_small_button(d: &mut impl RaylibDraw, rect: Rectangle, text: &str, color: Color, size: i32) {
     let inset = Rectangle::new(rect.x, rect.y + 4.0, rect.width - SMALL_BOX_INSET, rect.height - 8.0);
     d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
