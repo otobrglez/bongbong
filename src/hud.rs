@@ -576,6 +576,12 @@ pub const PLAYERS_BUTTON_GAP: f32 = 8.0;
 /// online round's `LEAVE` takes its place.
 pub const MODE_BUTTON_W: f32 = 72.0;
 
+/// The pause button: two bars while the round runs, a play triangle while
+/// it is paused - the P key's stand-in on a screen with no keyboard, drawn
+/// on every local round so one press works the same everywhere. A
+/// finger's width, since it carries no label.
+pub const PAUSE_BUTTON_W: f32 = UI_TOUCH_PT;
+
 /// The `ONLINE` button: the way into the lobby (`lobby.rs`,
 /// docs/online-coop-prd.md §4.10). Wide enough for its six characters.
 /// Not drawn where a build cannot reach a room (`ONLINE_AVAILABLE`).
@@ -642,9 +648,11 @@ pub const INFO_W: f32 = 304.0;
 /// included: the budget `text_tests` measures every language's mission
 /// word against.
 pub const INFO_TITLE_W: f32 = 160.0;
-/// The buttons' row: `ONLINE`, the players (or RESTART) and the mode
-/// button, right to left from its right end.
-pub const BUTTONS_W: f32 = ONLINE_BUTTON_W + PLAYERS_BUTTON_GAP + PLAYERS_BUTTON_W + PLAYERS_BUTTON_GAP + MODE_BUTTON_W;
+/// The buttons' row: `ONLINE`, the players (or RESTART), the pause button
+/// and the mode button, right to left from its right end.
+pub const BUTTONS_W: f32 = ONLINE_BUTTON_W + PLAYERS_BUTTON_GAP + PLAYERS_BUTTON_W + PLAYERS_BUTTON_GAP + PAUSE_SPAN;
+/// The pause button and the mode button to its right.
+const PAUSE_SPAN: f32 = PAUSE_BUTTON_W + PLAYERS_BUTTON_GAP + MODE_BUTTON_W;
 /// One chip of the other seats' strip: its number over its health gauge.
 pub const CHIP_W: f32 = 20.0;
 pub const CHIP_H: f32 = 26.0;
@@ -673,6 +681,8 @@ pub struct CornerShape {
     pub restart: bool,
     pub build: bool,
     pub leave: bool,
+    /// The pause button, left of the mode button.
+    pub pause: bool,
     /// Lines of text under the left cluster.
     pub lines: usize,
     /// The minimap's size in points (`minimap::MinimapRules::size_pt`),
@@ -698,6 +708,7 @@ impl CornerShape {
                 restart: chrome.restart_button,
                 build: chrome.build_button,
                 leave: chrome.leave_button,
+                pause: chrome.pause_button,
                 // The build stamp always; an online round's status over it.
                 lines: 1 + usize::from(chrome.status.is_some()),
                 minimap: chrome.minimap,
@@ -716,6 +727,8 @@ pub enum CornerButton {
     Restart,
     Build,
     Leave,
+    /// Pauses the round or takes it on again, as the P key does.
+    Pause,
     /// The lamp row's lantern count: a press sets a lantern down, as the
     /// lamp key does (docs/volcano.md).
     Lamp,
@@ -731,6 +744,7 @@ impl CornerButton {
             CornerButton::Restart => "restart",
             CornerButton::Build => "build",
             CornerButton::Leave => "leave",
+            CornerButton::Pause => "pause",
             CornerButton::Lamp => "lamp",
         }
     }
@@ -769,6 +783,7 @@ pub struct Corners {
     pub restart: Option<Rectangle>,
     pub build: Option<Rectangle>,
     pub leave: Option<Rectangle>,
+    pub pause: Option<Rectangle>,
     /// The other seats' strip, in the right cluster's row between its
     /// numbers and its buttons.
     pub chips: Option<Rectangle>,
@@ -837,6 +852,7 @@ impl Corners {
             (CornerButton::Restart, self.restart),
             (CornerButton::Build, self.build),
             (CornerButton::Leave, self.leave),
+            (CornerButton::Pause, self.pause),
             (CornerButton::Lamp, self.lamp),
         ]
         .into_iter()
@@ -873,6 +889,7 @@ impl Corners {
             restart: opt(self.restart),
             build: opt(self.build),
             leave: opt(self.leave),
+            pause: opt(self.pause),
             chips: opt(self.chips),
             minimap: opt(self.minimap),
             lamp: opt(self.lamp),
@@ -912,12 +929,15 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     let block_plate = VITALS_W + 2.0 * PLATE_PAD;
     let chips_w = if shape.chips > 0 { shape.chips as f32 * (CHIP_W + CHIP_GAP) - CHIP_GAP } else { 0.0 };
     // The buttons' row reaches from its right end to the leftmost slot the
-    // round draws a button in - the mode slot, the players slot, the
-    // online slot - so each keeps its own place whichever are drawn.
+    // round draws a button in - the mode slot, the pause slot, the players
+    // slot, the online slot - so each keeps its own place whichever are
+    // drawn.
     let buttons_w = if shape.online {
         BUTTONS_W
     } else if shape.players || shape.restart {
-        PLAYERS_BUTTON_W + PLAYERS_BUTTON_GAP + MODE_BUTTON_W
+        PLAYERS_BUTTON_W + PLAYERS_BUTTON_GAP + PAUSE_SPAN
+    } else if shape.pause {
+        PAUSE_SPAN
     } else if shape.build || shape.leave {
         MODE_BUTTON_W
     } else {
@@ -965,11 +985,12 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     let bottom = blocks.iter().map(|b| b.y + b.height + PLATE_PAD).fold(area.y, f32::max);
     let lines = Rectangle::new(area.x, bottom + ROW_GAP, block_plate, shape.lines as f32 * LINE_H);
 
-    // The buttons from the row's right end - the mode slot, the players
-    // slot, the online slot - each always in its own place, whichever of
-    // them a round draws.
+    // The buttons from the row's right end - the mode slot, the pause slot,
+    // the players slot, the online slot - each always in its own place,
+    // whichever of them a round draws.
     let mode = Rectangle::new(buttons_row.x + buttons_row.width - MODE_BUTTON_W, buttons_row.y, MODE_BUTTON_W, button_h);
-    let players = Rectangle::new(mode.x - PLAYERS_BUTTON_GAP - PLAYERS_BUTTON_W, mode.y, PLAYERS_BUTTON_W, button_h);
+    let pause = Rectangle::new(mode.x - PLAYERS_BUTTON_GAP - PAUSE_BUTTON_W, mode.y, PAUSE_BUTTON_W, button_h);
+    let players = Rectangle::new(pause.x - PLAYERS_BUTTON_GAP - PLAYERS_BUTTON_W, mode.y, PLAYERS_BUTTON_W, button_h);
     let online = Rectangle::new(players.x - PLAYERS_BUTTON_GAP - ONLINE_BUTTON_W, mode.y, ONLINE_BUTTON_W, button_h);
 
     // The minimap: under the right cluster's plate, its own plate flush
@@ -1003,6 +1024,7 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
         restart: shape.restart.then_some(players),
         build: shape.build.then_some(mode),
         leave: shape.leave.then_some(mode),
+        pause: shape.pause.then_some(pause),
         chips,
         minimap,
         lamp: shape.lamp_row.then(|| Rectangle::new(first.x, first.y + button_h + ROW_GAP, LAMP_BUTTON_W, button_h)),
@@ -1272,6 +1294,12 @@ pub struct PlayChrome {
     /// The `LEAVE` button in the mode button's slot: an online round's
     /// way back to the local one without a keyboard.
     pub leave_button: bool,
+    /// The pause button left of the mode button: a local round's, since a
+    /// room's round is not this window's to stop.
+    pub pause_button: bool,
+    /// The local round is paused: the pause button shows the play
+    /// triangle that takes it on again.
+    pub paused: bool,
     /// The seat this window is playing in a room, whose block the left
     /// cluster shows. `None` in a couch round, where the first block is
     /// player 1's and the couch layouts apply.
@@ -1650,6 +1678,7 @@ mod hud_tests {
             restart: false,
             build: true,
             leave: false,
+            pause: true,
             lines: 1,
             minimap: None,
             lamp_row: false,
@@ -1672,6 +1701,7 @@ mod hud_tests {
                     players: false,
                     build: false,
                     leave: true,
+                    pause: false,
                     lines: 2,
                     ..play
                 },
@@ -1838,14 +1868,24 @@ mod hud_tests {
     #[test]
     fn the_corners_hold_the_buttons_the_chrome_draws() {
         let ui = UiFrame::plain((1600.0, 900.0));
-        let play = PlayChrome { hud: true, build_button: true, players_button: true, online_button: true, level_button: Some(3), ..PlayChrome::default() };
+        let play = PlayChrome {
+            hud: true,
+            build_button: true,
+            players_button: true,
+            online_button: true,
+            pause_button: true,
+            level_button: Some(3),
+            ..PlayChrome::default()
+        };
         let c = corners(&ui, &CornerShape::of(&play, 1).expect("play draws the corners"));
         let names: Vec<CornerButton> = c.buttons().into_iter().map(|(b, _)| b).collect();
-        assert_eq!(names, vec![CornerButton::Level, CornerButton::Online, CornerButton::Players, CornerButton::Build]);
-        // The mode slot is at the right end, the players' and ONLINE's
-        // left of it, each in its own place.
-        let (online, players, build) = (c.online.unwrap(), c.players.unwrap(), c.build.unwrap());
-        assert!(online.x + online.width + PLAYERS_BUTTON_GAP <= players.x && players.x + players.width + PLAYERS_BUTTON_GAP <= build.x);
+        assert_eq!(names, vec![CornerButton::Level, CornerButton::Online, CornerButton::Players, CornerButton::Build, CornerButton::Pause]);
+        // The mode slot is at the right end, the pause button left of it,
+        // then the players' and ONLINE's, each in its own place.
+        let (online, players, pause, build) = (c.online.unwrap(), c.players.unwrap(), c.pause.unwrap(), c.build.unwrap());
+        assert!(online.x + online.width + PLAYERS_BUTTON_GAP <= players.x && players.x + players.width + PLAYERS_BUTTON_GAP <= pause.x);
+        assert!(pause.x + pause.width + PLAYERS_BUTTON_GAP <= build.x);
+        assert!(pause.width >= UI_TOUCH_PT, "an icon a finger can hit");
         assert!((build.x + build.width - (ui.area.x + ui.area.w - PLATE_PAD)).abs() < 1e-3, "BUILD at the right end");
         // Free play: the mission word, no level button.
         let free = PlayChrome { level_button: None, ..play.clone() };

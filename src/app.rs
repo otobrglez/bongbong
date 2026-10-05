@@ -1789,6 +1789,8 @@ pub fn run(args: Args) {
         let corner_hit = corners.as_ref().and_then(|c| c.hit(ui_pointer));
         // The lamp row's button, pressed this frame (`CornerButton::Lamp`).
         let mut lamp_tap = false;
+        // The pause button, pressed this frame (`CornerButton::Pause`).
+        let mut pause_tap = false;
         let keep_out: Vec<crate::math::Rectangle> = corners.iter().flat_map(Corners::keep_out).collect();
         touch.set_keep_out(&keep_out);
         // This frame's touch points, ids included so a stick follows its
@@ -1912,6 +1914,11 @@ pub fn run(args: Args) {
                 } else if pressed && corner_hit == Some(CornerButton::Lamp) {
                     // The lamp row's count, the lamp key's stand-in.
                     lamp_tap = true;
+                    touch.claim(&ui_touch_points);
+                } else if pressed && corner_hit == Some(CornerButton::Pause) {
+                    // The pause button, the P key's stand-in: this frame's
+                    // `Input::pause_pressed`.
+                    pause_tap = true;
                     touch.claim(&ui_touch_points);
                 } else if !crate::KEYBOARD_AVAILABLE && pressed && corner_hit == Some(CornerButton::Restart) {
                     // The RESTART button stands in for the R key: staged the
@@ -2111,7 +2118,7 @@ pub fn run(args: Args) {
         player1.fire = player1.fire || touch_intent.fire;
         player1.lamp |= lamp_tap;
         let mut input = Input::two(player1, player2);
-        input.pause_pressed = rl.is_key_pressed(KeyboardKey::KEY_P);
+        input.pause_pressed = rl.is_key_pressed(KeyboardKey::KEY_P) || pause_tap;
         // The dev panel's "Restart round" button lands here too, as if R
         // had been pressed - the simulation never learns a browser exists.
         input.restart_pressed = rl.is_key_pressed(KeyboardKey::KEY_R) || tuning::take_restart_request();
