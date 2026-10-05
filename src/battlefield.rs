@@ -538,6 +538,15 @@ pub fn spawn_from_map(
                     world.spawn((Obstacle::new(Material::Volcano, 0, at, false, body),));
                 }
             }
+            // A training door draws no roll: its `variant` is the beat that
+            // opens it (docs/training-stage.md).
+            CellObject::Door { beat } => {
+                let body = physics.spawn_static(pos, tile_half_extent(Material::Door, &solid_cells, col, row, obstacle_half_extent));
+                obstacle_positions.push(pos);
+                world.spawn((Obstacle::new(Material::Door, beat as i32, pos, false, body),));
+            }
+            // A flag is the training run's (`Game::init_training`).
+            CellObject::Flag => {}
             // A lamp post draws no roll either: one look, never alight.
             CellObject::Lamp => {
                 let body = physics.spawn_static(pos, tile_half_extent(Material::Lamp, &solid_cells, col, row, obstacle_half_extent));

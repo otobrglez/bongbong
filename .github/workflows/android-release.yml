@@ -115,10 +115,10 @@ jobs:
 
   apk:
     needs: [pr-gate]
-    # Release also runs on pull requests (dist's plan-only mode); only a
-    # successful run of a pushed version tag has a release to attach to. A
-    # pull request builds when pr-gate says so; `!cancelled()` lets the other
-    # events run past the gate they skip.
+    # Release runs on version tags alone (dist-workspace.toml's
+    # pr-run-mode), and only one that succeeded has a release to attach
+    # to. A pull request builds when pr-gate says so; `!cancelled()` lets
+    # the other events run past the gate they skip.
     if: >-
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'pull_request' && needs.pr-gate.outputs.build == 'true') ||

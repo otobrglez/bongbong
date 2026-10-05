@@ -115,6 +115,13 @@ impl NavCache {
         self.base.as_ref().expect("refresh_nav runs before the base is read")
     }
 
+    /// The layer as of the last `Game::refresh_nav`: the boundary, the
+    /// tiles and the deep water, with no frog in it - what a frog walks
+    /// by, since the base blocks the frog's own cells.
+    pub(crate) fn layer(&self) -> &Grid {
+        self.layer.as_ref().expect("refresh_nav runs before the layer is read")
+    }
+
     /// Forget everything kept: the next `Game::refresh_nav` builds both
     /// layers anew.
     pub(crate) fn clear(&mut self) {

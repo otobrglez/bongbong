@@ -198,7 +198,8 @@ pub struct LevelSelect {
 
 impl LevelSelect {
     /// The screen with the focus on `current` - the level on the field -
-    /// when that one is open, else on the furthest reached.
+    /// when that one is open, else on `reached`, the furthest open
+    /// (`Campaign::open_to`).
     pub fn open(current: Option<usize>, reached: usize) -> Self {
         LevelSelect { focus: current.filter(|&i| i <= reached).unwrap_or(reached), last_pointer: None }
     }
@@ -211,7 +212,7 @@ impl LevelSelect {
     /// outside the panel closes the screen, and one anywhere else in the
     /// panel - a locked tile included - does nothing. The panel is
     /// centred in `area` (UI points); `count` levels, `reached` the
-    /// furthest (`Campaign::reached`).
+    /// furthest open (`Campaign::open_to`).
     pub fn update(&mut self, input: &SelectInput, area: Rect, count: usize, reached: usize) -> SelectAction {
         let open = last_open(count, reached);
         self.focus = self.focus.min(open);
@@ -258,6 +259,7 @@ impl LevelSelect {
     pub fn view(&self, campaign: &Campaign, current: Option<usize>) -> LevelSelectView {
         let t = text();
         let reached = campaign.reached();
+        let open = campaign.open_to();
         let max_px = tile_text_px();
         let tiles = campaign
             .levels
@@ -265,11 +267,14 @@ impl LevelSelect {
             .take(SELECT_TILES)
             .enumerate()
             .map(|(i, level)| TileView {
-                number: i + 1,
+                number: campaign.levels.number(i),
                 lines: wrap(&level.title(), max_px, TILE_TITLE_SIZE),
+                // Past the furthest reached, a skippable level leaves the
+                // one after it open (`Campaign::open_to`).
                 state: match i.cmp(&reached) {
                     std::cmp::Ordering::Less => TileState::Won,
                     std::cmp::Ordering::Equal => TileState::Next,
+                    std::cmp::Ordering::Greater if i <= open => TileState::Next,
                     std::cmp::Ordering::Greater => TileState::Locked,
                 },
                 current: current == Some(i),
@@ -428,7 +433,7 @@ mod level_select_tests {
         assert!(v.tiles[3..].iter().all(|t| t.state == TileState::Locked));
         assert!(v.tiles[0].current && v.tiles[0].focus);
         assert!(v.tiles[1..].iter().all(|t| !t.current && !t.focus));
-        assert_eq!(v.tiles[13].number, 14);
+        assert_eq!((v.tiles[0].number, v.tiles[13].number), (0, 13), "Boot Camp is level 0");
     }
 
     #[test]

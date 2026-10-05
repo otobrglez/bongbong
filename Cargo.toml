@@ -111,6 +111,13 @@ online = ["dep:tungstenite", "dep:rustls"]
 [profile.dev]
 opt-level = 0
 
+# Dependencies (rapier above all) are built optimised in the dev profile
+# too: the test suite runs about a fifth quicker and a debug round with it,
+# and they are compiled once and cached, so editing the game's own code
+# costs nothing more. The workspace's crates keep the profile's own level.
+[profile.dev.package."*"]
+opt-level = 3
+
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"

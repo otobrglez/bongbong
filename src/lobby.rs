@@ -19,7 +19,7 @@
 //! exactly the path the command line takes.
 
 use crate::level::Mission;
-use crate::map::SHIPPED_MAPS;
+use crate::map::hostable_maps;
 use crate::math::{Rectangle, Vec2};
 use crate::net::client::Phase;
 use crate::net::rooms::{self, CODE_ALPHABET, CODE_LETTERS, RoomCode, RoomsHost, SiteBase};
@@ -172,7 +172,7 @@ impl Button {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LobbyAction {
     None,
-    /// Open a room: `map` is a `SHIPPED_MAPS` name.
+    /// Open a room: `map` is a `map::hostable_maps` name.
     Host { map: String, mission: Mission },
     /// Take a seat in the room this code names, canonical and checked.
     Join { code: String },
@@ -338,7 +338,8 @@ impl Lobby {
 
     /// The shipped map this lobby would host.
     pub fn map(&self) -> &'static str {
-        SHIPPED_MAPS[self.map % SHIPPED_MAPS.len()].0
+        let maps = hostable_maps();
+        maps[self.map % maps.len()]
     }
 
     pub fn mission(&self) -> Mission {
@@ -508,7 +509,7 @@ impl Lobby {
     }
 
     fn step_map(&mut self, by: isize) -> LobbyAction {
-        let n = SHIPPED_MAPS.len();
+        let n = hostable_maps().len();
         self.map = (self.map + n).wrapping_add_signed(by) % n;
         LobbyAction::None
     }
@@ -959,16 +960,16 @@ mod lobby_tests {
     #[test]
     fn the_steppers_pick_the_map_and_mission_the_host_button_sends() {
         let mut lobby = lobby();
-        assert_eq!(lobby.map(), SHIPPED_MAPS[0].0);
+        assert_eq!(lobby.map(), hostable_maps()[0]);
         lobby.update(&tap(centre(button_rect(AREA, Button::MapNext))), AREA, None);
-        assert_eq!(lobby.map(), SHIPPED_MAPS[1].0);
+        assert_eq!(lobby.map(), hostable_maps()[1]);
         lobby.update(&tap(centre(button_rect(AREA, Button::MapPrev))), AREA, None);
         lobby.update(&tap(centre(button_rect(AREA, Button::MapPrev))), AREA, None);
-        assert_eq!(lobby.map(), SHIPPED_MAPS[SHIPPED_MAPS.len() - 1].0, "the stepper wraps");
+        assert_eq!(lobby.map(), hostable_maps()[hostable_maps().len() - 1], "the stepper wraps");
         lobby.update(&tap(centre(button_rect(AREA, Button::MissionNext))), AREA, None);
         assert_eq!(lobby.mission(), Mission::Hunt);
         let action = lobby.update(&tap(centre(button_rect(AREA, Button::Host))), AREA, None);
-        assert_eq!(action, LobbyAction::Host { map: SHIPPED_MAPS[SHIPPED_MAPS.len() - 1].0.into(), mission: Mission::Hunt });
+        assert_eq!(action, LobbyAction::Host { map: hostable_maps()[hostable_maps().len() - 1].into(), mission: Mission::Hunt });
     }
 
     /// The map stepper draws a map as its slug, uppercased, 24 pt in from
@@ -980,7 +981,7 @@ mod lobby_tests {
         let (prev, next) = (button_rect(AREA, Button::MapPrev), button_rect(AREA, Button::MapNext));
         let room = next.x - (prev.x + prev.width + 24.0);
         assert_eq!(room, 204.0);
-        for (name, _) in SHIPPED_MAPS {
+        for name in hostable_maps() {
             let width = crate::text::width(&name.to_ascii_uppercase(), crate::hud::HUD_TEXT_SIZE) as f32;
             assert!(width <= room, "{name} is {width} px wide in the stepper, {room} px fit");
         }

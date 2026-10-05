@@ -51,6 +51,8 @@ leave-stay = KEEP PLAYING
 # The end screen: a 72 px banner, measured and centred over the whole
 # field, and the 28 px countdown under it.
 round-won = YOU WIN
+# A training round's win (docs/training-stage.md).
+round-trained = TRAINING DONE!
 round-lost = YOU LOSE
 round-restarting = Restarting in { $seconds }...
 round-back-to-lobby = Back to the lobby in { $seconds }...
@@ -62,11 +64,13 @@ paused = PAUSED
 mission-protect = PROTECT
 mission-hunt = HUNT
 mission-destroy = DESTROY
+mission-training = TRAINING
 
 # The 72 px banner the round opens with, centred over the field.
 mission-protect-banner = PROTECT THE FROG!
 mission-hunt-banner = HUNT THE FROG!
 mission-destroy-banner = DESTROY!
+mission-training-banner = FOLLOW THE FROG!
 
 # The 48 px banner during the breather before a wave rolls in.
 wave-banner = WAVE { $n }
@@ -297,6 +301,7 @@ lint-portal-blocked = PORTAL BLOCKED
 lint-tower-at-start = TOWER COVERS A START
 lint-tower-no-reach = TOWER CAN'T REACH ANYTHING
 lint-too-many-towers = MANY TOWERS ON ONE SIDE
+lint-training-door = DOOR THAT NEVER OPENS
 # The status line's fallback before a category is active.
 editor-tool = TOOL
 
@@ -506,3 +511,39 @@ tank-glacier = glacier
 tank-obelisk = obelisk
 tank-titan = titan
 tank-leviathan = leviathan
+
+## The frog's lines in a training round (docs/training-stage.md). A
+## control is a token the bubble draws as a key: <ARROWS>, <SPACE>,
+## <STICK>, <TAP>; a line with a `-touch` twin is that line on a touch
+## screen.
+frog-hello = Hi! I'm your frog.
+frog-drive = <ARROWS> to drive. Ease off before turns.
+frog-drive-touch = <STICK> Drag your left thumb to drive.
+frog-flags = Roll over the three flags.
+frog-flags-nudge = Three flags. Then the gate opens.
+frog-crates = No shells yet. Bump the crates.
+frog-health = The red cross fixes your hull.
+frog-crates-nudge = The ammo crate is up north.
+frog-fire = <SPACE> fires where your gun points.
+frog-fire-touch = <TAP> the right half to fire.
+frog-materials = Wood breaks fast. Brick takes a few.
+frog-iron = Iron never breaks. Shoot the brick wall!
+frog-fire-nudge = Face the brick wall, press <SPACE>.
+frog-fire-nudge-touch = Face the brick wall and <TAP>.
+frog-minigun = Hold fire. It eats ammo fast.
+frog-wall = Nice shot! Follow me.
+frog-pad = This is my pad. Come on in.
+frog-ow = Ow! That came from the east!
+frog-kit = Grab my kit, quick!
+frog-kit-nudge = My kit! The green crate!
+frog-healed = Better! If I go down, we lose.
+frog-enemy = Here it comes!
+frog-line-up = Line up and fire!
+frog-enemy-nudge = Get in line with it!
+frog-only-me = It only wants me. Keep firing!
+frog-chomp = Chomp!
+frog-shield = Shield first.
+frog-shoots-back = This one shoots back!
+frog-wave-nudge = Last one. You've got this.
+frog-down = You're down! Back to the gate.
+frog-ready = You're ready.

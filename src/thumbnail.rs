@@ -166,7 +166,7 @@ mod tests {
     /// shows - re-baseline consciously after a deliberate art, map or
     /// tuning change, never to go green.
     #[cfg(feature = "render")]
-    const PINNED: [(&str, u64); 22] = [
+    const PINNED: [(&str, u64); 23] = [
         ("default", 0xa8c5_4c3f_c3e9_9c14),
         ("default-desert", 0x1972_b701_45df_bc5e),
         ("hunt-basic", 0x22d1_0372_23a7_c2d8),
@@ -189,6 +189,7 @@ mod tests {
         ("glasshouses", 0x224b_c141_6b75_4155),
         ("scrapyard", 0x702f_c253_d8b1_b84c),
         ("grand-campaign", 0x83ef_6bbf_2dcf_c081),
+        ("boot-camp", 0x02fa_963a_11c0_7311),
     ];
 
     /// Decoding the sheets is raylib's job, so this and the next test run
