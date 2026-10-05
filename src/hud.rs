@@ -13,16 +13,23 @@
 //! the chrome's area, so they keep their size whatever the map; the slot
 //! tables and the drawing are the `render` half.
 //!
-//! The left cluster is the seat's vitals: health as a number and a gauge,
-//! shells, the speed and shield gauges, and the weapon queue with the live
-//! weapon outlined. A two-player couch round (docs/two-players.md) gives
-//! player 2 a block of its own beside player 1's, or under it on a narrow
-//! window, each edged in its player's team colour.
+//! The left cluster is the seat's vitals, one row: health as a number and
+//! a gauge, what the trigger fires with what it has left - the special
+//! weapon carried (a tank holds one at a time, `Tank::take_weapon`), else
+//! shells -, and the speed and shield gauges, on a row as tall as the
+//! right cluster's row (`Corners::row_h`) and a plate as tall as the
+//! right cluster's, so the two corners read along one line and stand one
+//! height on a phone as on a monitor; the right cluster is always that one
+//! row, and a window too narrow for it draws both corners smaller
+//! (`Corners::scale`) rather than wrapping it. A two-player couch round
+//! (docs/two-players.md) gives player 2 a block of its own beside player
+//! 1's, or under it on a narrow window, each block's health gauge in its
+//! player's team colour.
 //!
 //! Past two seats there is no couch pair, so the HUD goes *compact*
 //! (docs/online-coop-prd.md §4.11): one seat - the one this window is
 //! playing - keeps a whole block of readouts, and every other seat becomes
-//! a chip in a strip under the right cluster's buttons, its number and its
+//! a chip in a strip in the right cluster's row, before its buttons, its number and its
 //! health gauge in the ring colour that seat's tank wears on the field. An
 //! online round is compact from two seats up, since the seat this window
 //! steers is rarely seat 1 and the local block has to be *this* player's; a
@@ -53,8 +60,8 @@ pub fn version_line() -> String {
     format!("v{} @otobrglez", env!("CARGO_PKG_VERSION"))
 }
 
-/// Accent colours for the special weapons: their count in the weapon
-/// queue always, their slot's outline while that weapon is the live one.
+/// Accent colours for the special weapons: the count the vitals show and
+/// the pips under the ring while that weapon is carried.
 pub const HUD_LASER_COLOR: Color = Color::new(255, 60, 160, 255);
 pub const HUD_PLASMA_COLOR: Color = Color::new(60, 220, 200, 255);
 pub const HUD_MINIGUN_COLOR: Color = Color::new(190, 205, 215, 255);
@@ -70,18 +77,33 @@ pub const HUD_FLAME_COLOR: Color = Color::new(255, 140, 40, 255);
 pub const BAR_FILL: Color = Color::new(21, 21, 21, 255);
 pub const TEXT: Color = Color::WHITE;
 pub const DIM: Color = Color::new(110, 110, 118, 255);
-/// Weapon slots, in queue order. Five of them: laser, plasma, minigun,
-/// missiles, flamethrower.
-pub const WEAPON_SLOTS: usize = 5;
-
-/// One of the three special-weapon slots.
+/// What a tank's trigger fires, as its vitals and the pips under its ring
+/// show it: the special weapon it carries, else shells - one readout,
+/// since a tank carries one special at a time and fires it until it is
+/// spent (`Tank::take_weapon`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WeaponSlot {
     pub weapon: ActiveWeapon,
-    /// Charges/ammo left; 0 draws the slot empty (`--`).
+    /// Shells, charges, rounds or seconds of fuel left.
     pub count: i32,
-    /// This is what the trigger fires right now.
-    pub active: bool,
+    /// What a full stock holds (`ActiveWeapon::full_load`).
+    pub full: i32,
+    /// The count's colour: shells by how full the magazine is
+    /// (`hud_number_color`), a special in its accent (`weapon_color`).
+    pub color: Color,
+}
+
+impl WeaponSlot {
+    /// `tank`'s trigger as the vitals and the ring's pips show it.
+    pub fn of(tank: &Tank) -> WeaponSlot {
+        let weapon = tank.active_weapon();
+        let (count, full) = (tank.weapon_ammo(weapon), weapon.full_load());
+        let color = match weapon {
+            ActiveWeapon::Shell => hud_number_color(count as f32, full as f32),
+            special => weapon_color(special),
+        };
+        WeaponSlot { weapon, count, full, color }
+    }
 }
 
 /// One player's readouts.
@@ -89,11 +111,8 @@ pub struct WeaponSlot {
 pub struct PlayerHud {
     pub hp: i32,
     pub hp_color: Color,
-    pub shells: i32,
-    pub shells_color: Color,
-    /// The trigger fires plain shells right now.
-    pub shells_active: bool,
-    pub weapons: [WeaponSlot; WEAPON_SLOTS],
+    /// What the trigger fires and what it has left.
+    pub weapon: WeaponSlot,
     /// Fraction of a speed boost left, 0 when none is running.
     pub speed: f32,
     /// Fraction of a shield left, 0 when none is running.
@@ -108,20 +127,10 @@ pub struct PlayerHud {
 impl PlayerHud {
     /// A wreck's readouts: everything at zero, nothing live.
     fn empty() -> Self {
-        let slot = |weapon| WeaponSlot { weapon, count: 0, active: false };
         PlayerHud {
             hp: 0,
             hp_color: hud_number_color(0.0, MAX_DAMAGE),
-            shells: 0,
-            shells_color: hud_number_color(0.0, tuning().max_shells as f32),
-            shells_active: false,
-            weapons: [
-                slot(ActiveWeapon::Laser),
-                slot(ActiveWeapon::Plasma),
-                slot(ActiveWeapon::Minigun),
-                slot(ActiveWeapon::Missiles),
-                slot(ActiveWeapon::Flamethrower),
-            ],
+            weapon: WeaponSlot { weapon: ActiveWeapon::Shell, count: 0, full: tuning().max_shells, color: hud_number_color(0.0, 1.0) },
             speed: 0.0,
             shield: 0.0,
             lamps: None,
@@ -141,21 +150,10 @@ impl PlayerHud {
                 0.0
             };
             let hp = (MAX_DAMAGE - tank.damage).max(0.0).round() as i32;
-            let active = tank.active_weapon();
             PlayerHud {
                 hp,
                 hp_color: hud_number_color(hp as f32, MAX_DAMAGE),
-                shells: tank.shells_ammo,
-                shells_color: hud_number_color(tank.shells_ammo as f32, t.max_shells as f32),
-                shells_active: active == ActiveWeapon::Shell,
-                weapons: [
-                    WeaponSlot { weapon: ActiveWeapon::Laser, count: tank.laser_charges, active: active == ActiveWeapon::Laser },
-                    WeaponSlot { weapon: ActiveWeapon::Plasma, count: tank.plasma_ammo, active: active == ActiveWeapon::Plasma },
-                    WeaponSlot { weapon: ActiveWeapon::Minigun, count: tank.minigun_ammo, active: active == ActiveWeapon::Minigun },
-                    WeaponSlot { weapon: ActiveWeapon::Missiles, count: tank.missile_ammo, active: active == ActiveWeapon::Missiles },
-                    // Fuel in whole seconds, rounded up.
-                    WeaponSlot { weapon: ActiveWeapon::Flamethrower, count: tank.flame_fuel_seconds(), active: active == ActiveWeapon::Flamethrower },
-                ],
+                weapon: WeaponSlot::of(tank),
                 speed: boost,
                 shield: tank.shield_charge(),
                 lamps: game.lamps_in_play().then(|| game.player_index(entity).map_or(0, |seat| game.lamps_left(seat as usize))),
@@ -329,7 +327,7 @@ pub fn hud_number_color(current: f32, max: f32) -> Color {
     }
 }
 
-/// The accent a special weapon's count and active outline are drawn in.
+/// The accent a special weapon's count and ammo pips are drawn in.
 pub fn weapon_color(weapon: ActiveWeapon) -> Color {
     match weapon {
         ActiveWeapon::Laser => HUD_LASER_COLOR,
@@ -341,7 +339,7 @@ pub fn weapon_color(weapon: ActiveWeapon) -> Color {
     }
 }
 
-/// The pickup whose symbol stands for `weapon` in the queue (its crate's,
+/// The pickup whose symbol stands for `weapon` in its slot (its crate's,
 /// `pickup::draw_glyph`); the shell has none.
 pub fn weapon_pickup(weapon: ActiveWeapon) -> Option<crate::pickup::PickupKind> {
     use crate::pickup::PickupKind;
@@ -623,8 +621,8 @@ pub const CLUSTER_GAP: f32 = 8.0;
 pub const ROW_GAP: f32 = 4.0;
 /// The least room between the left cluster and the right one.
 pub const SIDE_GAP: f32 = 16.0;
-/// A row of readouts: 32 pt, room for the crates' 24 pt symbols and the
-/// weapon queue's 28 pt icon squares with a margin.
+/// A row of readouts: 32 pt, room for the crates' 24 pt symbols with a
+/// margin.
 pub const ROW_H: f32 = 32.0;
 
 /// A button's height: a readouts' row under a mouse, a finger's on a touch
@@ -633,11 +631,10 @@ pub fn button_height(touch: bool) -> f32 {
     if touch { UI_TOUCH_PT } else { ROW_H }
 }
 
-/// One seat's vitals: health, shells and the speed and shield gauges on
-/// the first row, the weapon queue on the second (`render::hud`'s slot
-/// table fills it).
+/// One seat's vitals, one row: health, what the trigger fires (the special
+/// carried, else shells) and the speed and shield gauges (`render::hud`'s
+/// slot table fills it). The row is `Corners::row_h` tall.
 pub const VITALS_W: f32 = 310.0;
-pub const VITALS_H: f32 = 2.0 * ROW_H;
 /// The right cluster's first row: the mission word or the level button,
 /// the wave, the enemy count and the frog's gauge.
 pub const INFO_W: f32 = 304.0;
@@ -739,18 +736,32 @@ impl CornerButton {
     }
 }
 
-/// Where everything in the two corners is, in UI points (`corners`).
+/// Where everything in the two corners is, in UI points (`corners`): laid
+/// out at full size and drawn `scale` times as large about `origin`, so on
+/// a window too narrow for the one row the whole of both corners is
+/// smaller rather than wrapped (`unscaled` is the full-size layout the
+/// painter draws under that scale).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Corners {
-    /// The vitals blocks' rows: the local seat's first, a couch's player
-    /// 2's after it - beside it where the area has the width, else under
-    /// it.
+    /// The vitals blocks: the local seat's first, a couch's player 2's
+    /// after it - beside it where the area has the width, else under it.
+    /// Each is as tall as the right cluster's row, so every plate along
+    /// the top (`block_plate`, `right`) is one height; its row along its
+    /// top, its lamp row under that (`lamp_row`).
     pub blocks: Vec<Rectangle>,
     /// The box the lines under the left cluster are kept to.
     pub lines: Rectangle,
-    /// The right cluster's plate.
+    /// The corners' first row, the vitals' and the right cluster's alike:
+    /// a button's height (`button_height`) times `scale`, so the two
+    /// corners read along one line on every screen - one top, one height,
+    /// every readout centred on it - even where a touch screen grows the
+    /// level button to a finger's.
+    pub row_h: f32,
+    /// Every block has a lamp row (`CornerShape::lamp_row`).
+    pub lamp_rows: bool,
+    /// The right cluster's plate: one row, whatever the window.
     pub right: Rectangle,
-    /// Its first row (`INFO_W` wide).
+    /// Its round's numbers (`INFO_W` wide at full size).
     pub info: Rectangle,
     pub level_button: Option<Rectangle>,
     pub online: Option<Rectangle>,
@@ -758,7 +769,8 @@ pub struct Corners {
     pub restart: Option<Rectangle>,
     pub build: Option<Rectangle>,
     pub leave: Option<Rectangle>,
-    /// The other seats' strip, right-aligned under the buttons.
+    /// The other seats' strip, in the right cluster's row between its
+    /// numbers and its buttons.
     pub chips: Option<Rectangle>,
     /// The minimap's image (`minimap.rs`), right-aligned under the right
     /// cluster on a plate of its own: part of that cluster, which fades as
@@ -766,23 +778,41 @@ pub struct Corners {
     pub minimap: Option<Rectangle>,
     /// The local seat's lantern count in its block's lamp row, a button.
     pub lamp: Option<Rectangle>,
+    /// How large the corners are drawn: 1 wherever the one row fits the
+    /// area at full size, else the factor that makes it fit exactly.
+    pub scale: f32,
+    /// The point they are scaled about: the area's top-left corner.
+    pub origin: Vec2,
 }
 
 impl Corners {
-    /// A block's plate: its rows and `PLATE_PAD` round them.
+    /// A full-size block's plate: its rows and `PLATE_PAD` round them (the
+    /// navigator's, the loupe's and the minimap's plates too).
     pub fn plate(block: Rectangle) -> Rectangle {
         Rectangle::new(block.x - PLATE_PAD, block.y - PLATE_PAD, block.width + 2.0 * PLATE_PAD, block.height + 2.0 * PLATE_PAD)
+    }
+
+    /// A block's plate at these corners' scale.
+    pub fn block_plate(&self, block: Rectangle) -> Rectangle {
+        let pad = PLATE_PAD * self.scale;
+        Rectangle::new(block.x - pad, block.y - pad, block.width + 2.0 * pad, block.height + 2.0 * pad)
     }
 
     /// The left cluster: every block's plate and the lines under them -
     /// what fades as one.
     pub fn left(&self) -> Rectangle {
-        self.blocks.iter().fold(self.lines, |r, block| union(r, Corners::plate(*block)))
+        self.blocks.iter().fold(self.lines, |r, block| union(r, self.block_plate(*block)))
+    }
+
+    /// `block`'s lamp row, where the round has lamp rows: as tall as its
+    /// first row and a row gap under it.
+    pub fn lamp_row(&self, block: Rectangle) -> Option<Rectangle> {
+        self.lamp_rows.then(|| Rectangle::new(block.x, block.y + self.row_h + ROW_GAP * self.scale, block.width, self.row_h))
     }
 
     /// The minimap's plate, where there is one.
     pub fn minimap_plate(&self) -> Option<Rectangle> {
-        self.minimap.map(Corners::plate)
+        self.minimap.map(|r| self.block_plate(r))
     }
 
     /// What no off-screen arrow may sit on and no touch may steer or fire
@@ -794,7 +824,8 @@ impl Corners {
     /// The `i`th chip of the strip: fixed per position, so a seat dying
     /// never moves the chip beside it.
     pub fn chip(&self, i: usize) -> Option<Rectangle> {
-        self.chips.map(|strip| Rectangle::new(strip.x + i as f32 * (CHIP_W + CHIP_GAP), strip.y, CHIP_W, CHIP_H))
+        let s = self.scale;
+        self.chips.map(|strip| Rectangle::new(strip.x + i as f32 * (CHIP_W + CHIP_GAP) * s, strip.y, CHIP_W * s, CHIP_H * s))
     }
 
     /// Every button there is, with what it is.
@@ -817,6 +848,42 @@ impl Corners {
     pub fn hit(&self, p: Vec2) -> Option<CornerButton> {
         self.buttons().into_iter().find(|(_, rect)| rect.contains(p)).map(|(button, _)| button)
     }
+
+    /// The same corners at full size, `scale` 1: what the painter draws
+    /// under a transform `scale` times as large about `origin`.
+    pub fn unscaled(&self) -> Corners {
+        let s = self.scale;
+        let mut full = self.map(|r| about(r, self.origin, 1.0 / s));
+        full.row_h = self.row_h / s;
+        full.scale = 1.0;
+        full
+    }
+
+    /// Every rectangle put through `f`.
+    fn map(&self, f: impl Fn(Rectangle) -> Rectangle) -> Corners {
+        let opt = |r: Option<Rectangle>| r.map(&f);
+        Corners {
+            blocks: self.blocks.iter().map(|b| f(*b)).collect(),
+            lines: f(self.lines),
+            right: f(self.right),
+            info: f(self.info),
+            level_button: opt(self.level_button),
+            online: opt(self.online),
+            players: opt(self.players),
+            restart: opt(self.restart),
+            build: opt(self.build),
+            leave: opt(self.leave),
+            chips: opt(self.chips),
+            minimap: opt(self.minimap),
+            lamp: opt(self.lamp),
+            ..self.clone()
+        }
+    }
+}
+
+/// `r` scaled `s` times about `o`.
+fn about(r: Rectangle, o: Vec2, s: f32) -> Rectangle {
+    Rectangle::new(o.x + (r.x - o.x) * s, o.y + (r.y - o.y) * s, r.width * s, r.height * s)
 }
 
 /// The smallest rectangle holding both.
@@ -829,30 +896,63 @@ fn union(a: Rectangle, b: Rectangle) -> Rectangle {
 /// Lay the two clusters out in `ui`'s area (docs/large-maps-follow-camera.md
 /// §8): the vitals top-left, a couch's second block beside the first where
 /// the area holds both and the right cluster, else under it; the right
-/// cluster in the top-right corner, its first row and its buttons side by
-/// side where the area has the width, else the buttons under the row, and
-/// a room's chips under them; the minimap, where the frame draws one, on a
-/// plate of its own under the right cluster, flush with its right edge,
-/// shrunk to the room left above the area's bottom and left out where that
-/// is under `MINIMAP_MIN_PT` or would reach the left cluster. Every button
-/// is `button_height` tall - 44 pt on a touch screen - and the corners
-/// never meet: the area is at least `UI_MIN_W` less its edges, which holds
-/// the widest pair.
+/// cluster in the top-right corner as one row - the round's numbers, a
+/// room's chips, then the buttons; the minimap, where the frame draws one,
+/// on a plate of its own under the right cluster, flush with its right
+/// edge, shrunk to the room left above the area's bottom and left out where
+/// that is under `MINIMAP_MIN_PT` or would reach the left cluster. Every
+/// plate along the top - each block's and the right cluster's - is one
+/// height, a block's rows'. Laid out at full size - every button
+/// `button_height` tall, 44 pt on a touch screen - and where the row is
+/// wider than the area, all of it drawn smaller by the one factor that fits
+/// it (`Corners::scale`), so the corners never wrap and never meet.
 pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     let area = ui.area;
     let button_h = button_height(ui.touch);
     let block_plate = VITALS_W + 2.0 * PLATE_PAD;
     let chips_w = if shape.chips > 0 { shape.chips as f32 * (CHIP_W + CHIP_GAP) - CHIP_GAP } else { 0.0 };
-    let right_two_rows = INFO_W.max(BUTTONS_W).max(chips_w) + 2.0 * PLATE_PAD;
-    let right_one_row = (INFO_W + CLUSTER_GAP + BUTTONS_W).max(chips_w) + 2.0 * PLATE_PAD;
+    // The buttons' row reaches from its right end to the leftmost slot the
+    // round draws a button in - the mode slot, the players slot, the
+    // online slot - so each keeps its own place whichever are drawn.
+    let buttons_w = if shape.online {
+        BUTTONS_W
+    } else if shape.players || shape.restart {
+        PLAYERS_BUTTON_W + PLAYERS_BUTTON_GAP + MODE_BUTTON_W
+    } else if shape.build || shape.leave {
+        MODE_BUTTON_W
+    } else {
+        0.0
+    };
+    let after = |w: f32| if w > 0.0 { CLUSTER_GAP + w } else { 0.0 };
+    let right_w = INFO_W + after(chips_w) + after(buttons_w) + 2.0 * PLATE_PAD;
 
     let couch_pair = shape.layout == HudLayout::Two;
-    let beside = couch_pair && 2.0 * block_plate + CLUSTER_GAP + SIDE_GAP + right_two_rows <= area.w;
+    let beside = couch_pair && 2.0 * block_plate + CLUSTER_GAP + SIDE_GAP + right_w <= area.w;
     let left_w = if beside { 2.0 * block_plate + CLUSTER_GAP } else { block_plate };
-    let one_row = left_w + SIDE_GAP + right_one_row <= area.w;
+    // The one row at full size, and the area it is laid out in: the real
+    // one where it fits, else one as many times larger as the row is too
+    // wide, which the scale below brings back down onto the real one.
+    let scale = (area.w / (left_w + SIDE_GAP + right_w)).min(1.0);
+    let origin = Vec2::new(area.x, area.y);
+    let area = Rect { x: area.x, y: area.y, w: area.w / scale, h: area.h / scale };
 
-    // A round with lanterns or lava gives every block a third row.
-    let block_h = VITALS_H + if shape.lamp_row { button_h } else { 0.0 };
+    // The right cluster's row, from its right end: the buttons, the chips,
+    // the round's numbers.
+    let row_y = area.y + PLATE_PAD;
+    let right_edge = area.x + area.w - PLATE_PAD;
+    let buttons_row = Rectangle::new(right_edge - buttons_w, row_y, buttons_w, button_h);
+    // A gap before the buttons only where there are buttons.
+    let to_buttons = if buttons_w > 0.0 { CLUSTER_GAP } else { 0.0 };
+    let chips = (shape.chips > 0).then(|| Rectangle::new(buttons_row.x - to_buttons - chips_w, row_y + (button_h - CHIP_H) / 2.0, chips_w, CHIP_H));
+    let info_end = chips.map_or(buttons_row.x - to_buttons, |c| c.x - CLUSTER_GAP);
+    let info = Rectangle::new(info_end - INFO_W, row_y, INFO_W, button_h);
+
+    // The vitals' row is the right cluster's row's height, so the two
+    // corners share one line, and a round with lanterns or lava gives
+    // every block a lamp row a row gap under it; the right cluster's plate
+    // is as tall as a block's.
+    let block_h = button_h + if shape.lamp_row { ROW_GAP + button_h } else { 0.0 };
+    let right = Rectangle::new(area.x + area.w - right_w, area.y, right_w, block_h + 2.0 * PLATE_PAD);
     let first = Rectangle::new(area.x + PLATE_PAD, area.y + PLATE_PAD, VITALS_W, block_h);
     let mut blocks = vec![first];
     if couch_pair {
@@ -864,20 +964,6 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     }
     let bottom = blocks.iter().map(|b| b.y + b.height + PLATE_PAD).fold(area.y, f32::max);
     let lines = Rectangle::new(area.x, bottom + ROW_GAP, block_plate, shape.lines as f32 * LINE_H);
-
-    let row_y = area.y + PLATE_PAD;
-    let right_edge = area.x + area.w - PLATE_PAD;
-    let (info, buttons_row) = if one_row {
-        let buttons = Rectangle::new(right_edge - BUTTONS_W, row_y, BUTTONS_W, button_h);
-        (Rectangle::new(buttons.x - CLUSTER_GAP - INFO_W, row_y, INFO_W, button_h), buttons)
-    } else {
-        let info = Rectangle::new(right_edge - INFO_W, row_y, INFO_W, button_h);
-        (info, Rectangle::new(right_edge - BUTTONS_W, info.y + button_h + ROW_GAP, BUTTONS_W, button_h))
-    };
-    let chips = (shape.chips > 0).then(|| Rectangle::new(right_edge - chips_w, buttons_row.y + button_h + ROW_GAP, chips_w, CHIP_H));
-    let content_bottom = chips.map_or(buttons_row.y + button_h, |c| c.y + c.height);
-    let right_w = if one_row { right_one_row } else { right_two_rows };
-    let right = Rectangle::new(area.x + area.w - right_w, area.y, right_w, content_bottom + PLATE_PAD - area.y);
 
     // The buttons from the row's right end - the mode slot, the players
     // slot, the online slot - each always in its own place, whichever of
@@ -896,7 +982,7 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
         let top = right.y + right.height + ROW_GAP + PLATE_PAD;
         let room = area.y + area.h - PLATE_PAD - top;
         let fit = (room / h).min(1.0);
-        if fit < 1.0 && h * fit < MINIMAP_MIN_PT {
+        if fit < 1.0 && h * fit * scale < MINIMAP_MIN_PT {
             return None;
         }
         let (w, h) = (w * fit, h * fit);
@@ -904,9 +990,11 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
         let clear = rect.x - PLATE_PAD >= left.x + left.width + SIDE_GAP || rect.y - PLATE_PAD >= left.y + left.height + ROW_GAP;
         clear.then_some(rect)
     });
-    Corners {
+    let full = Corners {
         blocks,
         lines,
+        row_h: button_h,
+        lamp_rows: shape.lamp_row,
         right,
         info,
         level_button: shape.level_button.then(|| Rectangle::new(info.x, info.y, LEVEL_BUTTON_W, button_h)),
@@ -917,7 +1005,14 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
         leave: shape.leave.then_some(mode),
         chips,
         minimap,
-        lamp: shape.lamp_row.then(|| Rectangle::new(first.x, first.y + VITALS_H, LAMP_BUTTON_W, button_h)),
+        lamp: shape.lamp_row.then(|| Rectangle::new(first.x, first.y + button_h + ROW_GAP, LAMP_BUTTON_W, button_h)),
+        scale: 1.0,
+        origin,
+    };
+    if scale < 1.0 {
+        Corners { row_h: button_h * scale, scale, ..full.map(|r| about(r, origin, scale)) }
+    } else {
+        full
     }
 }
 
@@ -1214,6 +1309,9 @@ pub struct PlayChrome {
     /// The lamp row under each block: a round that gives lanterns or has
     /// lava to cross (docs/volcano.md).
     pub lamp_row: bool,
+    /// How dark the fade through black between rounds is, 0 to 1
+    /// (`Session::curtain`), drawn over everything else.
+    pub curtain: f32,
 }
 
 /// The online status line's text size: the first line under the left
@@ -1429,9 +1527,29 @@ mod hud_tests {
         }
     }
 
+    /// The vitals show what the trigger fires and nothing else: shells
+    /// against the magazine while no special is carried, the special in
+    /// its accent against a crate's worth once one is - the same readout
+    /// the pips under the ring are drawn from.
+    #[test]
+    fn the_trigger_readout_is_the_special_carried_else_shells() {
+        let t = tuning();
+        let mut tank = Tank { shells_ammo: 7, ..Tank::default() };
+        let shells = WeaponSlot::of(&tank);
+        assert_eq!((shells.weapon, shells.count, shells.full), (ActiveWeapon::Shell, 7, t.max_shells));
+        assert_eq!(shells.color, hud_number_color(7.0, t.max_shells as f32));
+        tank.take_weapon(ActiveWeapon::Laser);
+        tank.laser_charges -= 2;
+        let laser = WeaponSlot::of(&tank);
+        assert_eq!((laser.weapon, laser.count, laser.full), (ActiveWeapon::Laser, t.laser_charges_per_pickup - 2, t.laser_charges_per_pickup));
+        assert_eq!(laser.color, HUD_LASER_COLOR, "no shells while a special is carried");
+        tank.laser_charges = 0;
+        assert_eq!(WeaponSlot::of(&tank).count, 7, "spent, back to the shells");
+    }
+
     /// The block is the local seat's, whichever seat that is, and the
     /// chips are all the others - so a four-seat room at seat 2 reads its
-    /// own shells in the block and seats 1, 2 and 4 in the strip.
+    /// own ammo in the block and seats 1, 2 and 4 in the strip.
     #[test]
     fn the_block_is_the_local_seats_and_the_chips_are_the_rest() {
         let game = round(4);
@@ -1442,7 +1560,7 @@ mod hud_tests {
         for seat in 0..4u8 {
             let model = HudModel::gather(&game, Some(seat));
             assert_eq!(model.layout, HudLayout::Compact);
-            assert_eq!(model.local.shells, 3 + seat as i32, "seat {seat}'s own block");
+            assert_eq!(model.local.weapon.count, 3 + seat as i32, "seat {seat}'s own block");
             assert_eq!(model.second, None, "the compact layout pairs nothing");
             let listed: Vec<u8> = model.others.iter().map(|s| s.seat).collect();
             assert_eq!(listed, (0..4u8).filter(|&i| i != seat).collect::<Vec<_>>());
@@ -1451,7 +1569,7 @@ mod hud_tests {
         // A couch round of four is the same layout, read from seat 0.
         let couch = HudModel::gather(&game, None);
         assert_eq!(couch.layout, HudLayout::Compact);
-        assert_eq!(couch.local.shells, 3);
+        assert_eq!(couch.local.weapon.count, 3);
         assert_eq!(couch.others.iter().map(|s| s.seat).collect::<Vec<_>>(), vec![1, 2, 3]);
     }
 
@@ -1576,7 +1694,8 @@ mod hud_tests {
     /// On every screen and in every shape the two clusters stay inside the
     /// safe area and apart, every button inside the right one, none on
     /// another or on the first row's readouts, every chip inside it too,
-    /// and on a touch screen every button is a finger's 44 pt both ways.
+    /// and on a touch screen every button a finger's 44 pt both ways at
+    /// the corners' scale.
     #[test]
     fn the_corners_fit_every_screen_inside_its_safe_area() {
         for (screen, ui) in screens() {
@@ -1586,24 +1705,25 @@ mod hud_tests {
                 let (left, right) = (c.left(), c.right);
                 assert!(inside(left, ui.area) && inside(right, ui.area), "{what}: a cluster leaves the safe area: {left:?} {right:?} in {:?}", ui.area);
                 assert!(apart(left, right), "{what}: the clusters meet: {left:?} {right:?}");
-                assert!(right.x - (left.x + left.width) >= SIDE_GAP - 1e-3 || left.y + left.height <= right.y, "{what}: too close");
+                assert!(right.x - (left.x + left.width) >= SIDE_GAP * c.scale - 1e-3 || left.y + left.height <= right.y, "{what}: too close");
                 for (i, a) in c.blocks.iter().enumerate() {
-                    assert!(within(Corners::plate(*a), left), "{what}");
+                    assert!(within(c.block_plate(*a), left), "{what}");
                     for b in &c.blocks[i + 1..] {
-                        assert!(apart(Corners::plate(*a), Corners::plate(*b)), "{what}: two blocks overlap");
+                        assert!(apart(c.block_plate(*a), c.block_plate(*b)), "{what}: two blocks overlap");
                     }
                 }
                 assert!(within(c.info, right), "{what}: the first row leaves its plate");
                 let buttons = c.buttons();
                 for (i, (button, r)) in buttons.iter().enumerate() {
                     // The lamp row is the local block's, in the left cluster.
-                    let plate = if *button == CornerButton::Lamp { Corners::plate(c.blocks[0]) } else { right };
+                    let plate = if *button == CornerButton::Lamp { c.block_plate(c.blocks[0]) } else { right };
                     assert!(within(*r, plate), "{what}: {button:?} leaves the plate");
                     if *button != CornerButton::Level {
                         assert!(apart(*r, c.info), "{what}: {button:?} sits on the first row");
                     }
                     if ui.touch {
-                        assert!(r.width >= UI_TOUCH_PT && r.height >= UI_TOUCH_PT, "{what}: {button:?} is {r:?}, under a finger");
+                        let finger = UI_TOUCH_PT * c.scale - 1e-3;
+                        assert!(r.width >= finger && r.height >= finger, "{what}: {button:?} is {r:?}, under a finger at {}", c.scale);
                     }
                     for (other, o) in &buttons[i + 1..] {
                         assert!(apart(*r, *o), "{what}: {button:?} overlaps {other:?}");
@@ -1624,9 +1744,9 @@ mod hud_tests {
                     let plate = c.minimap_plate().expect("a plate");
                     assert!(inside(plate, ui.area), "{what}: the minimap leaves the safe area: {plate:?} in {:?}", ui.area);
                     assert!(apart(plate, left) && apart(plate, right), "{what}: the minimap meets a cluster: {plate:?}");
-                    assert!(plate.y >= right.y + right.height + ROW_GAP - 1e-3, "{what}: under the right cluster");
+                    assert!(plate.y >= right.y + right.height + ROW_GAP * c.scale - 1e-3, "{what}: under the right cluster");
                     assert!((plate.x + plate.width - (right.x + right.width)).abs() < 1e-3, "{what}: flush with its right edge");
-                    assert!((map.width - w).abs() < 1e-3 && (map.height - h).abs() < 1e-3, "{what}: {map:?}");
+                    assert!((map.width - w * c.scale).abs() < 1e-3 && (map.height - h * c.scale).abs() < 1e-3, "{what}: {map:?}");
                     assert!(c.buttons().iter().all(|(_, r)| apart(*r, plate)), "{what}: on a button");
                     assert!(c.keep_out().contains(&plate), "{what}: a keep-out");
                     assert_eq!(c.hit(Vec2::new(map.x + map.width / 2.0, map.y + map.height / 2.0)), None, "{what}: not a button");
@@ -1656,8 +1776,8 @@ mod hud_tests {
                         assert!(inside(plate, ui.area), "{what}: {plate:?} leaves {:?}", ui.area);
                         assert!(apart(plate, c.left()) && apart(plate, c.right), "{what}: {plate:?}");
                         let (_, want_h) = shape.minimap.expect("asked");
-                        assert!(map.height >= MINIMAP_MIN_PT.min(want_h) - 1e-3, "{what}: shrunk too far: {map:?}");
-                        assert!(map.height <= want_h + 1e-3);
+                        assert!(map.height >= MINIMAP_MIN_PT.min(want_h * c.scale) - 1e-3, "{what}: shrunk too far: {map:?}");
+                        assert!(map.height <= want_h * c.scale + 1e-3);
                     }
                 }
             }
@@ -1746,10 +1866,84 @@ mod hud_tests {
         assert_eq!(c.hit(Vec2::new(ui.screen.w / 2.0, ui.screen.h / 2.0)), None);
     }
 
+    /// The two corners read along one line on every screen and in every
+    /// shape: every plate along the top - each block's and the right
+    /// cluster's - starts at one top and is one height, the first rows are
+    /// one height - a finger's on a touch screen, where the level button
+    /// grows to one, at the corners' scale - and centred on one line, and
+    /// the right cluster is that one row whole: its numbers, a room's chips
+    /// and every button.
+    #[test]
+    fn the_two_corners_read_along_one_line() {
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        for (screen, ui) in screens() {
+            for (shape_name, shape) in shapes() {
+                let what = format!("{shape_name} on {screen}");
+                let c = corners(&ui, &shape);
+                assert!(near(c.row_h, c.info.height), "{what}: the first rows differ in height");
+                assert!(near(c.row_h, button_height(ui.touch) * c.scale), "{what}");
+                let first = c.blocks[0];
+                assert!(near(first.y, c.info.y), "{what}: the first rows start apart");
+                for block in &c.blocks {
+                    let plate = c.block_plate(*block);
+                    assert!(near(plate.height, c.right.height), "{what}: a block's plate and the right cluster's differ in height");
+                    if block.y == first.y {
+                        assert!(near(plate.y, c.right.y), "{what}: the plates' tops differ");
+                    }
+                }
+                let centre = |r: Rectangle| r.y + r.height / 2.0;
+                for (button, r) in c.buttons().into_iter().filter(|(b, _)| *b != CornerButton::Lamp) {
+                    assert!(near(centre(r), centre(c.info)), "{what}: {button:?} is off the row");
+                }
+                if let Some(chips) = c.chips {
+                    assert!(near(centre(chips), centre(c.info)), "{what}: the chips are off the row");
+                }
+                assert!(near(first.y + c.row_h / 2.0, centre(c.info)), "{what}: the rows' centre lines differ");
+                assert_eq!(c.lamp.is_some(), shape.lamp_row, "{what}");
+                if let Some(lamp) = c.lamp {
+                    let row = c.lamp_row(first).expect("a lamp row");
+                    assert!(within(row, first), "{what}: the lamp row leaves its block");
+                    assert!(near(lamp.y, row.y) && near(lamp.height, row.height), "{what}: the lamp button is not on its row");
+                } else {
+                    assert_eq!(c.lamp_row(first), None, "{what}");
+                }
+            }
+        }
+    }
+
+    /// The corners are drawn at full size wherever their one row fits the
+    /// area, and where it does not, smaller by the one factor that makes it
+    /// reach exactly across: the vitals at the area's left edge, the right
+    /// cluster at its right, the scaled gap between them.
+    #[test]
+    fn the_corners_shrink_only_to_fit_the_row() {
+        for (screen, ui) in screens() {
+            for (shape_name, shape) in shapes() {
+                let what = format!("{shape_name} on {screen}");
+                let c = corners(&ui, &shape);
+                assert!(c.scale > 0.0 && c.scale <= 1.0, "{what}: {}", c.scale);
+                if c.scale < 1.0 {
+                    // Drawn smaller only by as much as the row needs: it
+                    // reaches from edge to edge with the gap between the
+                    // clusters no wider than the scaled one.
+                    let left = c.left();
+                    assert!((left.x - ui.area.x).abs() < 1e-2, "{what}: {left:?}");
+                    assert!((c.right.x + c.right.width - (ui.area.x + ui.area.w)).abs() < 1e-2, "{what}: the row does not reach across");
+                    let gap = c.right.x - (left.x + left.width);
+                    assert!((gap - SIDE_GAP * c.scale).abs() < 1e-2, "{what}: shrunk further than the row needs ({gap} apart)");
+                }
+                // What the painter draws is the same corners at full size.
+                let unscaled = c.unscaled();
+                assert_eq!(unscaled.scale, 1.0);
+                assert!((unscaled.row_h - button_height(ui.touch)).abs() < 1e-3, "{what}");
+            }
+        }
+    }
+
     /// A couch pair's two blocks sit side by side where the window has the
     /// room for both and the right cluster, and player 2's under player
-    /// 1's where it has not; the right cluster's first row and its buttons
-    /// share one row on a wide window and stack on a phone's.
+    /// 1's where it has not; the right cluster is one row on every window,
+    /// drawn smaller on a phone's.
     #[test]
     fn the_corners_arrange_themselves_by_the_windows_width() {
         let pair = shapes().into_iter().find(|(n, _)| *n == "couch pair").unwrap().1;
@@ -1758,13 +1952,15 @@ mod hud_tests {
         assert!(wide.blocks[1].x > wide.blocks[0].x + VITALS_W);
         let narrow = corners(&UiFrame::plain((900.0, 600.0)), &pair);
         assert_eq!(narrow.blocks[0].x, narrow.blocks[1].x, "under on 900");
-        assert!(narrow.blocks[1].y >= narrow.blocks[0].y + VITALS_H + 2.0 * PLATE_PAD);
+        assert!(narrow.blocks[1].y >= narrow.blocks[0].y + narrow.row_h + 2.0 * PLATE_PAD);
         let one = shapes()[0].1;
         let desk = corners(&UiFrame::plain((1600.0, 900.0)), &one);
         assert_eq!(desk.info.y, desk.build.unwrap().y, "one row on a monitor");
+        assert_eq!(desk.scale, 1.0, "full size on a monitor");
         let phone = corners(&UiFrame::new((852.0, 393.0), 1.0, 1.0, Insets { left: 59.0, top: 0.0, right: 59.0, bottom: 21.0 }, true), &one);
-        assert!(phone.build.unwrap().y >= phone.info.y + phone.info.height, "the buttons under the first row on a phone");
-        assert!(phone.info.height >= UI_TOUCH_PT, "the level button is a finger's");
+        assert_eq!(phone.info.y, phone.build.unwrap().y, "one row on a phone");
+        assert!(phone.scale < 1.0, "drawn smaller on a phone");
+        assert!((phone.info.height - UI_TOUCH_PT * phone.scale).abs() < 1e-3, "the level button a finger's at the corners' scale");
     }
 
     /// A cluster fades to `ui_fade_opacity` while something is under it,

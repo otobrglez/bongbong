@@ -2165,8 +2165,12 @@ pub fn run(args: Args) {
         // time the frame's `step` ran - so a frozen round's sparks and hits
         // freeze with it and a recording stepped a frame at a time plays
         // them at their real pace.
+        // The blow that decided the round is held, then slowed
+        // (`Session::time_scale`): the round's clock and the particle
+        // layer take that share of the frame's real time.
+        let scaled_dt = dt * session.time_scale();
         #[cfg_attr(not(all(feature = "dev-tools", not(target_os = "emscripten"))), allow(unused_mut))]
-        let mut fx_dt = dt;
+        let mut fx_dt = scaled_dt;
         // How far the local round got this frame, which is how far a
         // followed view moves: with the round, step for step.
         let frame_before = session.game.frame();
@@ -2179,7 +2183,7 @@ pub fn run(args: Args) {
                 clock.reset();
                 0
             } else {
-                clock.advance(dt)
+                clock.advance(scaled_dt)
             };
             let steps_stage = crate::frame_stages::stage("sim");
             let seats = local_seats(&session);
@@ -2228,8 +2232,10 @@ pub fn run(args: Args) {
             save_progress(&level);
         }
         // A level's end screen that has counted down takes its way: the
-        // next level after a win, the same one again after a loss.
+        // next level after a win, the same one again after a loss. Then
+        // the fade through black between rounds moves on a frame.
         session.follow_countdown();
+        session.tick_curtain(dt);
         // A level's end screen that counted down may have opened another
         // map: present that one.
         if plan.stale(&session) {

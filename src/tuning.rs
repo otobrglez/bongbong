@@ -344,10 +344,35 @@ tunables! {
         /// reads the band as the tank refusing to turn.
         touch_axis_switch_deg: f32 = 50.0 in 45.0 ..= 75.0;
         /// When the round ends (player destroyed, or all enemies destroyed)
-        /// the result is shown for this long, then the game restarts - or,
-        /// on a level, goes on to the next level after a win and plays the
-        /// same one again after a loss.
+        /// the result counts down this long once its finale and its fade
+        /// have played (`round_finale_seconds`,
+        /// `round_verdict_fade_seconds`), then the game restarts - or, on a
+        /// level, goes on to the next level after a win
+        /// (`level_loss_retry_seconds` counts a lost level down).
         restart_delay: f32 = 3.0 in 0.0 ..= 30.0;
+        /// A lost level's end screen counts this long before it plays the
+        /// level again; a press takes it sooner.
+        level_loss_retry_seconds: f32 = 5.0 in 0.0 ..= 30.0;
+        /// Once the round is decided the world plays on this long with
+        /// nothing over it, so the blast that decided it is seen whole.
+        /// Nothing deals damage; a press or a tap skips to the verdict.
+        round_finale_seconds: f32 = 2.4 in 0.0 ..= 6.0;
+        /// After the finale the end screen's dim, title and numbers ease
+        /// in over this long, and the corner clusters come back with them.
+        round_verdict_fade_seconds: f32 = 0.5 in 0.0 ..= 2.0;
+        /// The picture holds this long, in real seconds, on the blow that
+        /// decided the round. 0 is no hold; reduced motion has none.
+        round_hitstop_seconds: f32 = 0.05 in 0.0 ..= 0.5;
+        /// Then the round runs at this share of its speed for
+        /// `round_slowmo_seconds`, easing back to full speed. 1 is no slow
+        /// motion; reduced motion has none.
+        round_slowmo_scale: f32 = 0.5 in 0.1 ..= 1.0;
+        round_slowmo_seconds: f32 = 0.5 in 0.0 ..= 2.0;
+        /// The fade through black to another level, out and in, each this
+        /// many seconds.
+        level_fade_seconds: f32 = 0.4 in 0.0 ..= 2.0;
+        /// The fade through black playing the same map again, out and in.
+        retry_fade_seconds: f32 = 0.25 in 0.0 ..= 2.0;
     }
 
     group mission {

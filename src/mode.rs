@@ -174,6 +174,37 @@ pub struct Session {
     /// on the first frame of the win; a round seen playing again lets the
     /// next win be put.
     clear_noted: bool,
+    /// The fade through black between local rounds, the way an end screen
+    /// takes, and the real time since the round was decided (`Curtain`).
+    curtain: Curtain,
+}
+
+/// The fade through black between local rounds and the end's slowed
+/// picture, headless (`Session::tick_curtain`, `curtain`, `time_scale`). The
+/// fade out is read off the end screen's own clock - its last
+/// `level_fade_seconds` or `retry_fade_seconds` - so it lands black on the
+/// frame the next round starts; the fade in runs on real time from there.
+#[derive(Clone, Copy, Debug, Default)]
+struct Curtain {
+    /// The way a press on the end screen chose, taken when its clock runs
+    /// out behind the fade out (`press_result`, `enter_result`).
+    pending: Option<Pending>,
+    /// The fade in's seconds left, and its length.
+    fade_in: f32,
+    fade_in_of: f32,
+    /// The local round's frame last frame: a round that starts over by
+    /// itself (free play, the R key) is seen by its frame going back.
+    last_frame: u64,
+    /// Real seconds since the local round was decided, for the hold and
+    /// the slow motion on the deciding blow; `None` while it plays.
+    since_end: Option<f32>,
+}
+
+/// The way an end screen was told to take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pending {
+    NextLevel,
+    PlayAgain,
 }
 
 /// A session reads as its round: the dev server, its tests and `main.rs`
@@ -215,6 +246,7 @@ impl Session {
             minimap_on: false,
             clear_attempt: None,
             clear_noted: false,
+            curtain: Curtain::default(),
         }
     }
 
@@ -262,6 +294,7 @@ impl Session {
         self.level_select = None;
         let (width, height) = self.game.map.field_size();
         self.game.init(width, height);
+        self.open_curtain(crate::tuning::tuning().level_fade_seconds);
         Ok(())
     }
 
@@ -273,6 +306,7 @@ impl Session {
             self.players_dialog = false;
             let (width, height) = self.game.map.field_size();
             self.game.init(width, height);
+            self.open_curtain(crate::tuning::tuning().retry_fade_seconds);
         }
     }
 
@@ -347,8 +381,8 @@ impl Session {
             });
             // Whole seconds, never 0: at zero the screen is taking its
             // way (`follow_countdown`), which it does the same frame.
-            let countdown = (!matches!(next, Some(NextLevel::FirstAgain { .. })))
-                .then(|| self.game.restart_countdown().ceil().max(1.0) as u32);
+            let left = self.game.restart_countdown().min(self.game.end_beats().countdown);
+            let countdown = (!matches!(next, Some(NextLevel::FirstAgain { .. }))).then(|| left.ceil().max(1.0) as u32);
             ResultButtons { next, countdown }
         });
         Some(ResultView { stats: self.game.round_stats(), seats: self.game.players.count(), buttons })
@@ -365,6 +399,14 @@ impl Session {
         if !self.playing() || self.game.restart_countdown() > 0.0 {
             return false;
         }
+        match self.curtain.pending.take() {
+            Some(Pending::NextLevel) => return self.next_level(),
+            Some(Pending::PlayAgain) => {
+                self.play_again();
+                return true;
+            }
+            None => {}
+        }
         match self.result_view().and_then(|view| view.buttons) {
             Some(ResultButtons { countdown: Some(_), next: Some(_) }) => self.next_level(),
             Some(ResultButtons { countdown: Some(_), next: None }) => {
@@ -380,16 +422,26 @@ impl Session {
     /// `PLAY AGAIN` or the way on. Answers whether it landed on a button;
     /// a press anywhere else is the caller's.
     pub fn press_result(&mut self, p: crate::math::Vec2, area: Rect) -> bool {
-        if !self.playing() {
+        if !self.playing() || self.game.outcome() == Outcome::Playing {
             return false;
+        }
+        // The finale: any press goes straight to the verdict, and one
+        // while the end screen eases in or the screen is fading out is
+        // claimed and does nothing - no button is there to be pressed.
+        if self.game.in_finale() {
+            self.game.skip_finale();
+            return true;
+        }
+        if !self.verdict_ready() || self.curtain.pending.is_some() {
+            return true;
         }
         let Some(view) = self.result_view() else { return false };
         let Some(rects) = result_layout(area, &view).buttons else { return false };
         if rects.again.contains(p) {
-            self.play_again();
+            self.take_way(Pending::PlayAgain);
             true
         } else if rects.next.is_some_and(|r| r.contains(p)) {
-            self.next_level();
+            self.take_way(Pending::NextLevel);
             true
         } else if rects.levels.contains(p) {
             self.press_levels();
@@ -453,17 +505,160 @@ impl Session {
     /// Enter on a level's end screen: the way on after a win, `PLAY
     /// AGAIN` after a loss. Answers whether there was a screen to answer.
     pub fn enter_result(&mut self) -> bool {
-        if !self.playing() {
+        if !self.playing() || self.game.outcome() == Outcome::Playing {
+            return false;
+        }
+        if self.game.in_finale() {
+            self.game.skip_finale();
+            return true;
+        }
+        if !self.verdict_ready() || self.curtain.pending.is_some() {
             return false;
         }
         match self.result_view().and_then(|view| view.buttons) {
-            Some(ResultButtons { next: Some(_), .. }) => self.next_level(),
+            Some(ResultButtons { next: Some(_), .. }) => {
+                self.take_way(Pending::NextLevel);
+                true
+            }
             Some(ResultButtons { next: None, .. }) => {
-                self.play_again();
+                self.take_way(Pending::PlayAgain);
                 true
             }
             None => false,
         }
+    }
+
+    /// The end screen's press for a tool, which runs no frames between a
+    /// request and its answer (the dev server's `click`): the finale and
+    /// the fade are skipped and the way pressed is taken at once, so the
+    /// answer describes the round it led to.
+    pub fn press_result_at_once(&mut self, p: crate::math::Vec2, area: Rect) -> bool {
+        if self.playing() {
+            self.game.skip_to_verdict();
+        }
+        let hit = self.press_result(p, area);
+        self.take_way_now();
+        hit
+    }
+
+    /// `enter_result` for a tool, as `press_result_at_once`.
+    pub fn enter_result_at_once(&mut self) -> bool {
+        if self.playing() {
+            self.game.skip_to_verdict();
+        }
+        let took = self.enter_result();
+        self.take_way_now();
+        took
+    }
+
+    /// Take a way pressed on the end screen without its fade out.
+    fn take_way_now(&mut self) {
+        if self.curtain.pending.is_some() {
+            self.game.hurry_end(0.0);
+            self.follow_countdown();
+        }
+    }
+
+    /// Whether a decided round's end screen has eased in far enough for
+    /// its buttons to take presses.
+    fn verdict_ready(&self) -> bool {
+        let beats = self.game.end_beats();
+        self.game.since_end().is_some_and(|s| s >= beats.finale + beats.fade * 0.5)
+    }
+
+    /// Take the end screen's `way` behind the fade out: its clock runs
+    /// down to the fade's length and `follow_countdown` takes the way when
+    /// it is out.
+    fn take_way(&mut self, way: Pending) {
+        let t = crate::tuning::tuning();
+        let fade = match way {
+            Pending::NextLevel => t.level_fade_seconds,
+            Pending::PlayAgain => t.retry_fade_seconds,
+        };
+        self.curtain.pending = Some(way);
+        self.game.hurry_end(fade);
+    }
+
+    /// Start the fade in onto a round just started, `seconds` long.
+    fn open_curtain(&mut self, seconds: f32) {
+        self.curtain.pending = None;
+        self.curtain.fade_in = seconds;
+        self.curtain.fade_in_of = seconds;
+        self.curtain.last_frame = self.game.frame();
+    }
+
+    /// One frame of the curtain, `dt` real seconds: the fade in runs down,
+    /// a local round that started over by itself (free play's end, the R
+    /// key) fades in, and the time since the round was decided counts.
+    /// `app.rs` calls it once a frame, after `follow_countdown`.
+    pub fn tick_curtain(&mut self, dt: f32) {
+        let frame = self.game.frame();
+        if self.driver == Driver::Play && frame < self.curtain.last_frame && self.curtain.fade_in <= 0.0 {
+            self.open_curtain(crate::tuning::tuning().retry_fade_seconds);
+        }
+        self.curtain.last_frame = frame;
+        self.curtain.fade_in = (self.curtain.fade_in - dt).max(0.0);
+        self.curtain.since_end = match (self.game.outcome(), self.curtain.since_end) {
+            (Outcome::Playing, _) => None,
+            (_, since) if !self.playing() => since,
+            (_, since) => Some(since.unwrap_or(0.0) + dt),
+        };
+    }
+
+    /// How dark the curtain is, 0 to 1, over a local round in play mode:
+    /// the fade out over the end screen's last seconds where it is about
+    /// to take a way by itself or was told to, the fade in after.
+    pub fn curtain(&self) -> f32 {
+        if self.driver != Driver::Play {
+            return 0.0;
+        }
+        let fade_in = if self.curtain.fade_in_of > 0.0 { self.curtain.fade_in / self.curtain.fade_in_of } else { 0.0 };
+        let t = crate::tuning::tuning();
+        let way = self.curtain.pending.or_else(|| {
+            if self.game.outcome() == Outcome::Playing {
+                return None;
+            }
+            if !self.game.hold_end_screen {
+                // Free play restarts itself on the same map.
+                return Some(Pending::PlayAgain);
+            }
+            match self.result_view().and_then(|view| view.buttons) {
+                Some(ResultButtons { countdown: Some(_), next: Some(_) }) => Some(Pending::NextLevel),
+                Some(ResultButtons { countdown: Some(_), next: None }) => Some(Pending::PlayAgain),
+                _ => None,
+            }
+        });
+        let fade_out = way.map_or(0.0, |way| {
+            let seconds = match way {
+                Pending::NextLevel => t.level_fade_seconds,
+                Pending::PlayAgain => t.retry_fade_seconds,
+            };
+            let left = self.game.restart_countdown();
+            if seconds > 0.0 && left < seconds { 1.0 - left / seconds } else { 0.0 }
+        });
+        fade_out.max(fade_in).clamp(0.0, 1.0)
+    }
+
+    /// The share of real time the local round runs at: held for
+    /// `round_hitstop_seconds` on the blow that decided it, then
+    /// `round_slowmo_scale` for `round_slowmo_seconds`, easing back over
+    /// the last of them. 1 under reduced motion and while the round plays.
+    pub fn time_scale(&self) -> f32 {
+        let Some(since) = self.curtain.since_end else { return 1.0 };
+        if crate::motion::reduced() {
+            return 1.0;
+        }
+        let t = crate::tuning::tuning();
+        if since < t.round_hitstop_seconds {
+            return 0.0;
+        }
+        let slow = since - t.round_hitstop_seconds;
+        if slow >= t.round_slowmo_seconds {
+            return 1.0;
+        }
+        // The last 40 % of the slow motion eases back to full speed.
+        let back = (slow / t.round_slowmo_seconds - 0.6).max(0.0) / 0.4;
+        t.round_slowmo_scale + (1.0 - t.round_slowmo_scale) * back
     }
 
     pub fn mode(&self) -> Driver {
@@ -940,6 +1135,7 @@ impl Session {
                     Some(LevelBanner { number: campaign.levels.number(i), count: campaign.levels.last_number(), title: level.title() })
                 }),
                 result: self.result_view(),
+                curtain: self.curtain(),
                 level_button: self.level_button(),
                 levels: self.level_select.as_ref().zip(self.campaign.as_ref()).map(|(select, campaign)| select.view(campaign, self.level())),
                 minimap: (self.driver == Driver::Play).then(|| self.minimap_slot()).flatten(),
@@ -1646,8 +1842,10 @@ mod session_tests {
         let view = s.play_chrome().result.expect("the end screen");
         assert_eq!(view.buttons, None, "free play's end screen: no way on to the next level");
         assert!(!s.next_level(), "and nothing leads there");
+        let frames = end_frames(&s);
+        to_verdict(&mut s);
         assert!(!s.enter_result());
-        for _ in 0..countdown_frames() + 60 {
+        for _ in 0..frames + 60 {
             step(&mut s);
         }
         assert_eq!((s.level(), s.game.outcome(), s.game.start_override), (Some(0), Outcome::Playing, Some(spot)), "the same level again, from the spot");
@@ -1852,11 +2050,38 @@ mod session_tests {
         }
         s.note_outcome();
         s.follow_countdown();
+        s.tick_curtain(crate::PHYSICS_FIXED_DT);
     }
 
-    /// The end screen's countdown, in frames.
-    fn countdown_frames() -> usize {
-        (crate::tuning::tuning().restart_delay * 60.0).ceil() as usize
+    /// A decided round's whole end screen, in frames: its finale, its
+    /// fade and its countdown (`EndBeats::total`).
+    fn end_frames(s: &Session) -> usize {
+        (s.game.end_beats().total() * 60.0).ceil() as usize
+    }
+
+    /// Skip the finale and step until the end screen takes presses.
+    fn to_verdict(s: &mut Session) {
+        assert!(s.game.in_finale(), "the round was just decided");
+        s.game.skip_finale();
+        for _ in 0..(crate::tuning::tuning().round_verdict_fade_seconds * 60.0).ceil() as usize + 1 {
+            step(s);
+        }
+    }
+
+    /// Step until the end screen takes presses, the finale already skipped.
+    fn to_verdict_from_skip(s: &mut Session) {
+        for _ in 0..(crate::tuning::tuning().round_verdict_fade_seconds * 60.0).ceil() as usize + 1 {
+            step(s);
+        }
+    }
+
+    /// Step through the fade out a press on the end screen runs before it
+    /// takes its way.
+    fn through_fade(s: &mut Session) {
+        let t = crate::tuning::tuning();
+        for _ in 0..(t.level_fade_seconds.max(t.retry_fade_seconds) * 60.0).ceil() as usize + 2 {
+            step(s);
+        }
     }
 
     /// Wreck the round's enemy (`win`) or player 1 (`!win`) and step
@@ -1923,7 +2148,8 @@ mod session_tests {
         let seconds = crate::tuning::tuning().restart_delay.ceil() as u32;
         assert_eq!(view.buttons, Some(ResultButtons { next: Some(NextLevel::Next), countdown: Some(seconds) }));
         assert_eq!((view.stats.destroyed, view.stats.enemies), (1, 1));
-        for _ in 0..countdown_frames() - 30 {
+        assert!(s.play_chrome().result.is_some() && s.game.in_finale(), "the finale plays before the end screen");
+        for _ in 0..end_frames(&s) - 30 {
             step(&mut s);
         }
         assert_eq!((s.level(), s.game.outcome()), (Some(0), Outcome::Won), "still counting");
@@ -1942,17 +2168,24 @@ mod session_tests {
         assert_eq!(s.take_progress(), None, "the last level opens nothing further");
         let buttons = s.play_chrome().result.and_then(|v| v.buttons).expect("the buttons");
         assert_eq!(buttons, ResultButtons { next: Some(NextLevel::FirstAgain { levels: 2 }), countdown: None });
-        for _ in 0..countdown_frames() + 60 {
+        for _ in 0..end_frames(&s) + 60 {
             step(&mut s);
         }
         assert_eq!((s.level(), s.game.outcome()), (Some(1), Outcome::Won), "the campaign's end waits");
         let rects = result_rects(&s).expect("the buttons");
         assert!(s.press_result(centre(rects.next.expect("the way on")), area()));
+        assert!(s.curtain() < 1.0, "the fade out runs first");
+        through_fade(&mut s);
         assert_eq!(s.level(), Some(0), "round to the first");
 
-        // Enter does not wait for the countdown.
+        // A press in the finale goes to the verdict; then Enter does not
+        // wait for the countdown.
         finish(&mut s, true);
+        assert!(s.enter_result(), "Enter skips the finale");
+        assert!(!s.game.in_finale());
+        to_verdict_from_skip(&mut s);
         assert!(s.enter_result());
+        through_fade(&mut s);
         assert_eq!((s.level(), s.game.outcome()), (Some(1), Outcome::Playing));
     }
 
@@ -1966,9 +2199,11 @@ mod session_tests {
         finish(&mut s, false);
         assert_eq!(s.take_progress(), None);
         let view = s.play_chrome().result.expect("the end screen");
-        let seconds = crate::tuning::tuning().restart_delay.ceil() as u32;
+        let seconds = crate::tuning::tuning().level_loss_retry_seconds.ceil() as u32;
         assert_eq!(view.buttons, Some(ResultButtons { next: None, countdown: Some(seconds) }));
         assert!(!s.next_level(), "no way on after a loss");
+        let frames = end_frames(&s);
+        to_verdict(&mut s);
         let rects = result_rects(&s).expect("the button");
         assert!(rects.next.is_none());
         assert!(!s.press_result(crate::math::Vec2::new(4.0, 4.0), area()), "a press off the buttons");
@@ -1978,22 +2213,29 @@ mod session_tests {
             step(&mut s);
         }
         assert!(s.press_levels());
-        for _ in 0..countdown_frames() + 60 {
+        for _ in 0..frames + 60 {
             step(&mut s);
         }
         assert_eq!((s.level(), s.game.outcome()), (Some(0), Outcome::Lost), "frozen behind the level select");
         assert!(!s.press_levels());
-        for _ in 0..countdown_frames() {
+        for _ in 0..frames {
             step(&mut s);
+            if s.game.outcome() == Outcome::Playing {
+                break;
+            }
         }
         assert_eq!((s.level(), s.game.outcome()), (Some(0), Outcome::Playing), "the same level again, by itself");
         assert!(s.game.frame() < 90, "a fresh round");
 
         finish(&mut s, false);
+        to_verdict(&mut s);
         assert!(s.press_result(centre(result_rects(&s).expect("the button").again), area()));
+        through_fade(&mut s);
         assert_eq!((s.level(), s.game.outcome()), (Some(0), Outcome::Playing));
         finish(&mut s, false);
+        to_verdict(&mut s);
         assert!(s.enter_result());
+        through_fade(&mut s);
         assert_eq!((s.level(), s.game.outcome()), (Some(0), Outcome::Playing));
     }
 
@@ -2056,6 +2298,7 @@ mod session_tests {
         // Won: level 2 is reached, and the end screen opens the screen.
         finish(&mut s, true);
         assert_eq!(s.take_progress().as_deref(), Some("glasshouses"));
+        to_verdict(&mut s);
         assert!(s.press_result(centre(result_rects(&s).expect("the buttons").levels), area()));
         assert!(s.level_select.is_some());
         assert!(s.update_level_select(&press(centre(tile_rect(field, 0))), field), "level 1 again");
@@ -2099,6 +2342,7 @@ mod session_tests {
         let view = s.play_chrome().result.expect("the numbers still show");
         assert_eq!(view.buttons, None);
         assert_eq!(s.take_progress(), None);
+        to_verdict(&mut s);
         assert!(!s.enter_result() && !s.next_level());
         // A level's map by name makes it that level, however it arrives.
         s.replace_map(crate::map::open_map("glasshouses").unwrap());

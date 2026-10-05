@@ -23,26 +23,26 @@ use crate::{CRATE_CELL, CRATE_COL_INTACT, PICKUP_GLYPH_CELL, PICKUP_SIZE, Positi
 pub enum PickupKind {
     Health,
     Ammo,
-    /// Grants LASER_CHARGES_PER_PICKUP laser charges and queues the laser
-    /// in the collector's FIFO weapon rotation (see
-    /// `tank::Tank::weapon_queue` - the weapon currently firing keeps the
-    /// trigger until depleted; a first pickup arms immediately) - while
-    /// live and charged, firing resolves an instant beam hit instead of
+    /// Arms the laser with `laser_charges_per_pickup` charges. A tank
+    /// carries one special weapon at a time (`tank::Tank::take_weapon`): a
+    /// weapon crate replaces the one carried and refills the same one to a
+    /// crate's worth, and the trigger falls back to shells once it is
+    /// spent. While charged, firing resolves an instant beam hit instead of
     /// the tank's normal shell.
     Laser,
-    /// Grants MINIGUN_AMMO_PER_PICKUP rounds of minigun ammo and queues
-    /// the minigun (FIFO, as above) - while live and stocked, the trigger
+    /// Arms the minigun with `minigun_ammo_per_pickup` rounds (one weapon
+    /// at a time, as above) - while stocked, the trigger
     /// fires a multi-bullet burst instead of a normal shell - see
     /// `tank::Tank::active_weapon`.
     Minigun,
-    /// Grants PLASMA_AMMO_PER_PICKUP rounds of plasma ammo and queues the
-    /// plasma cannon (FIFO, as above) - while live and stocked, firing
+    /// Arms the plasma cannon with `plasma_ammo_per_pickup` rounds (one
+    /// weapon at a time, as above) - while stocked, firing
     /// shoots a glowing plasma bolt from the barrel instead of a normal
     /// shell (one bolt per barrel on a twin-barrel chassis, same as
     /// `Shell`) - see `tank::Tank::active_weapon`.
     Plasma,
-    /// Grants `missile_ammo_per_pickup` seeker missiles and queues the
-    /// four-tube pod (FIFO, as above) - while live and stocked, a trigger
+    /// Arms the four-tube pod with `missile_ammo_per_pickup` seeker
+    /// missiles (one weapon at a time, as above) - while stocked, a trigger
     /// pull fires a volley (one salvo of four by default) that climb,
     /// lock onto the nearest opposing tank and dive on it (`missile.rs`).
     /// Players and enemies both use it.
@@ -75,8 +75,8 @@ pub enum PickupKind {
     /// also place one as a slot of its own.
     Shield,
     /// The flamethrower (docs/flamethrower-prd.md): grants
-    /// `flame_fuel_per_pickup` seconds of fuel and queues the weapon (FIFO
-    /// like the others). While live and fuelled, holding fire pours a
+    /// `flame_fuel_per_pickup` seconds of fuel (one weapon at a time, like
+    /// the others). While fuelled, holding fire pours a
     /// short cone of flame that burns tanks, lights the ground and sets
     /// the map's own props alight. Player-only: an enemy driving over one
     /// leaves it where it is.

@@ -868,20 +868,20 @@ mod tests {
             panic!("stuck before beat {b}: {what} (on beat {})", beat(game));
         };
         step(&mut game, 2);
-        for (c, r) in [(8, 2), (8, 10), (3, 10)] {
+        for (c, r) in [(8, 7), (8, 15), (3, 15)] {
             put_seat(&mut game, c, r);
             step(&mut game, 2);
         }
         until(&mut game, 2, "the flags");
-        put_seat(&mut game, 17, 2);
+        put_seat(&mut game, 17, 7);
         until(&mut game, 3, "the ammo crate");
         for o in game.world.query::<&mut Obstacle>().iter() {
-            if o.cell() == (25, 6) {
+            if o.cell() == (25, 11) {
                 o.destroyed = true;
             }
         }
         until(&mut game, 4, "the brick wall");
-        put_seat(&mut game, 30, 6);
+        put_seat(&mut game, 30, 11);
         until(&mut game, 5, "into the pen");
         // The shot at the frog lands, then the seat takes its kit.
         let frog = game.frog.expect("a frog");
@@ -894,9 +894,9 @@ mod tests {
             }
         }
         assert!(hurt, "the shot found the frog once it reached its pen");
-        put_seat(&mut game, 31, 10);
+        put_seat(&mut game, 31, 15);
         until(&mut game, 6, "the frog's kit");
-        put_seat(&mut game, 30, 9);
+        put_seat(&mut game, 30, 14);
         let dummy = next_arrival(&mut game, 60 * 20).expect("the dummy rolled in");
         game.debug_kill(dummy).expect("the dummy can be killed");
         until(&mut game, 7, "the dummy");

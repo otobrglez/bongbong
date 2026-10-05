@@ -284,7 +284,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "set_tank",
-        description: "Overwrite a tank's damage (0 = pristine, 100 = wreck), ammo counts (setting a special weapon's stock above 0 also arms it, like its pickup would), shield_hp (rainbow-shield absorption left in damage points, not seconds), the speed-boost timer and portal_cooldown (seconds before it may enter a portal again). Omitted fields are untouched.",
+        description: "Overwrite a tank's damage (0 = pristine, 100 = wreck), ammo counts (setting a special weapon's stock above 0 also arms it in place of the one special the tank carries, like its pickup would), shield_hp (rainbow-shield absorption left in damage points, not seconds), the speed-boost timer and portal_cooldown (seconds before it may enter a portal again). Omitted fields are untouched.",
         schema: r#"{"type":"object","properties":{"slot":{"type":"integer"},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}},"required":["slot"]}"#,
         read_only: false,
         destructive: false,
@@ -2121,7 +2121,7 @@ impl DevServer {
                     } else if rects.stay.contains(p) || !rects.panel.contains(p) {
                         session.answer_dialog(false);
                     }
-                } else if !right && session.press_result(p, ui.area) {
+                } else if !right && session.press_result_at_once(p, ui.area) {
                     // A level's end screen: PLAY AGAIN or the way on start
                     // a round; LEVELS opens the level select over this one.
                     if session.level_select.is_none() {
@@ -2295,7 +2295,7 @@ impl DevServer {
                 Some("enter") => {
                     if session.dialog {
                         session.answer_dialog(true);
-                    } else if session.enter_result() {
+                    } else if session.enter_result_at_once() {
                         self.round_started(session);
                     }
                 }

@@ -784,8 +784,9 @@ async fn the_games_own_transport_hosts_a_round_and_keeps_up_with_it() {
 /// `Lobby::Create` carries it whole, so the room needs no file of its own.
 const HUNT_MAP: &str = include_str!("../../maps/test/online/hunt-duel.toml");
 
-/// The end screen's length in snapshots, 3 s of `restart_delay` at 20 Hz
-/// less the slack of where in the interval the round turned.
+/// The fewest snapshots the end screen sends: its countdown alone, 3 s of
+/// `restart_delay` at 20 Hz less the slack of where in the interval the
+/// round turned (the finale and the verdict's fade come before it).
 const END_SCREEN_SNAPSHOTS: usize = 50;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

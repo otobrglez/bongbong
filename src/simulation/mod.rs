@@ -296,6 +296,35 @@ impl Default for PlayerCount {
 /// next number; the enemies count up from `Game::first_enemy_slot`.
 pub(crate) const PLAYER_OWNER_SLOT: usize = 0;
 
+/// The beats of a decided round's end (`Game::end_beats`), in seconds: the
+/// finale, in which the world plays on with nothing over it; the verdict's
+/// fade, in which the end screen eases in; and the countdown to the way on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EndBeats {
+    pub finale: f32,
+    pub fade: f32,
+    pub countdown: f32,
+}
+
+impl EndBeats {
+    /// The whole end screen, which `restart_timer` counts down from.
+    pub fn total(&self) -> f32 {
+        self.finale + self.fade + self.countdown
+    }
+
+    /// How far the end screen has eased in, 0 to 1, `since` seconds after
+    /// the round was decided.
+    pub fn verdict(&self, since: f32) -> f32 {
+        if since < self.finale {
+            0.0
+        } else if self.fade <= 0.0 {
+            1.0
+        } else {
+            ((since - self.finale) / self.fade).clamp(0.0, 1.0)
+        }
+    }
+}
+
 /// How the current round is going.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -748,10 +777,11 @@ pub struct Game {
     pub(crate) time: f32,
     pub(crate) outcome: Outcome,
     /// Seconds until the automatic restart once the round has ended - or,
-    /// on a held end screen, until the caller takes over.
+    /// on a held end screen, until the caller takes over: the whole of
+    /// `end_beats`, the finale and the verdict's fade first.
     pub(crate) restart_timer: f32,
     /// The end screen's countdown runs out into a hold instead of a
-    /// restart: `restart_timer` counts `restart_delay` down to zero and
+    /// restart: `restart_timer` counts `end_beats` down to zero and
     /// stays there until the caller starts the next round (`init`, or the
     /// R key's restart). A level's end screen is held, because where it
     /// goes - the next level or the same one again - is the session's to
@@ -2609,15 +2639,14 @@ impl Game {
             let slot = {
                 let mut q = self.world.query_one::<&mut Tank>(tank_entity);
                 let tank = q.get().expect("collector entity always has a Tank");
-                // A weapon pickup queues that weapon (FIFO, see
-                // `Tank::weapon_queue`); `enqueue_weapon` must run before
-                // the ammo grant. Health/Ammo/SpeedUp never touch the queue.
+                // A weapon pickup is the one special the tank carries
+                // (`Tank::take_weapon`): another replaces it, the same one
+                // refills. Health/Ammo/SpeedUp never touch it.
                 match kind {
                     PickupKind::Health => tank.damage = (tank.damage - tuning().pickup_heal_amount).max(0.0),
                     PickupKind::Ammo => tank.shells_ammo += tuning().pickup_ammo_amount,
                     PickupKind::Laser => {
-                        tank.enqueue_weapon(ActiveWeapon::Laser);
-                        tank.laser_charges += tuning().laser_charges_per_pickup;
+                        tank.take_weapon(ActiveWeapon::Laser);
                         // Rerolled per pickup so a fresh batch can swap the variant.
                         tank.laser_variant = if f.rng.random_range(0.0..1.0) < tuning().laser_blue_pickup_chance {
                             LaserVariant::Blue
@@ -2625,22 +2654,12 @@ impl Game {
                             LaserVariant::Red
                         };
                     }
-                    PickupKind::Minigun => {
-                        tank.enqueue_weapon(ActiveWeapon::Minigun);
-                        tank.minigun_ammo += tuning().minigun_ammo_per_pickup;
-                    }
-                    PickupKind::Missiles => {
-                        tank.enqueue_weapon(ActiveWeapon::Missiles);
-                        tank.missile_ammo += tuning().missile_ammo_per_pickup;
-                    }
-                    // Fuel in seconds; a second tank stacks.
-                    PickupKind::Flamethrower => {
-                        tank.enqueue_weapon(ActiveWeapon::Flamethrower);
-                        tank.flame_fuel += tuning().flame_fuel_per_pickup;
-                    }
+                    PickupKind::Minigun => tank.take_weapon(ActiveWeapon::Minigun),
+                    PickupKind::Missiles => tank.take_weapon(ActiveWeapon::Missiles),
+                    // Fuel in seconds; a second tank refills it.
+                    PickupKind::Flamethrower => tank.take_weapon(ActiveWeapon::Flamethrower),
                     PickupKind::Plasma => {
-                        tank.enqueue_weapon(ActiveWeapon::Plasma);
-                        tank.plasma_ammo += tuning().plasma_ammo_per_pickup;
+                        tank.take_weapon(ActiveWeapon::Plasma);
                         tank.plasma_variant = if f.rng.random_range(0.0..1.0) < tuning().plasma_purple_pickup_chance {
                             PlasmaVariant::Purple
                         } else {
@@ -4149,8 +4168,59 @@ impl Game {
     fn end_round(&mut self, f: &mut Frame, outcome: Outcome) {
         self.outcome = outcome;
         self.ended_at = Some(self.time);
-        self.restart_timer = tuning().restart_delay;
+        self.restart_timer = self.end_beats().total();
         f.events.push(Event::RoundEnded { outcome });
+    }
+
+    /// How this round's end plays out once it is decided: the finale with
+    /// nothing over the world, the verdict easing in, then the countdown -
+    /// `level_loss_retry_seconds` on a lost level (a held end screen),
+    /// `restart_delay` everywhere else.
+    pub fn end_beats(&self) -> EndBeats {
+        let t = tuning();
+        let countdown =
+            if self.hold_end_screen && self.outcome == Outcome::Lost { t.level_loss_retry_seconds } else { t.restart_delay };
+        EndBeats { finale: t.round_finale_seconds, fade: t.round_verdict_fade_seconds, countdown }
+    }
+
+    /// Seconds since the round was decided, read off the end screen's own
+    /// clock (`restart_timer`, which a replica is sent), so a room's
+    /// clients play the end's beats on the room's clock; `None` while the
+    /// round plays.
+    pub fn since_end(&self) -> Option<f32> {
+        (self.outcome != Outcome::Playing).then(|| (self.end_beats().total() - self.restart_timer).max(0.0))
+    }
+
+    /// Whether the end screen's finale is still playing: the round is
+    /// decided and nothing is over the world yet.
+    pub fn in_finale(&self) -> bool {
+        self.since_end().is_some_and(|s| s < self.end_beats().finale)
+    }
+
+    /// Cut the finale short: the verdict starts easing in now.
+    pub fn skip_finale(&mut self) {
+        if self.in_finale() {
+            let beats = self.end_beats();
+            self.restart_timer = beats.fade + beats.countdown;
+        }
+    }
+
+    /// Skip the finale and the verdict's fade: the end screen stands whole
+    /// now, its countdown at the start.
+    pub fn skip_to_verdict(&mut self) {
+        if self.outcome != Outcome::Playing {
+            self.restart_timer = self.restart_timer.min(self.end_beats().countdown);
+        }
+    }
+
+    /// Put the end screen's clock at `left` seconds - fewer where it shows
+    /// fewer, `left` again where it already stands at zero, waiting: a
+    /// press that takes the screen's way sooner, behind a whole fade out.
+    pub fn hurry_end(&mut self, left: f32) {
+        if self.outcome != Outcome::Playing {
+            let left = left.max(0.0);
+            self.restart_timer = if self.restart_timer > 0.0 { self.restart_timer.min(left) } else { left };
+        }
     }
 
     /// Every tank's motion for the AI's predictive avoidance: the players
@@ -5108,24 +5178,21 @@ fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize) -> 
     };
     if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_chance {
         if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_laser_share {
-            enemy.enqueue_weapon(ActiveWeapon::Laser);
-            enemy.laser_charges += tuning().laser_charges_per_pickup;
+            enemy.take_weapon(ActiveWeapon::Laser);
             enemy.laser_variant = if rng.random_range(0.0..1.0) < tuning().laser_blue_pickup_chance {
                 LaserVariant::Blue
             } else {
                 LaserVariant::Red
             };
         } else if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_plasma_share {
-            enemy.enqueue_weapon(ActiveWeapon::Plasma);
-            enemy.plasma_ammo += tuning().plasma_ammo_per_pickup;
+            enemy.take_weapon(ActiveWeapon::Plasma);
             enemy.plasma_variant = if rng.random_range(0.0..1.0) < tuning().plasma_purple_pickup_chance {
                 PlasmaVariant::Purple
             } else {
                 PlasmaVariant::Teal
             };
         } else {
-            enemy.enqueue_weapon(ActiveWeapon::Minigun);
-            enemy.minigun_ammo += tuning().minigun_ammo_per_pickup;
+            enemy.take_weapon(ActiveWeapon::Minigun);
         }
     }
     if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
@@ -5574,7 +5641,7 @@ mod determinism_tests {
         // Never bump these to go green - work out which change moved them
         // first.
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (1_494_875_205_296_571_598, 6_928_208_166_224_290_359), "(one seat, two seats)");
+        assert_eq!((one, two), (11_365_739_967_979_466_473, 10_166_866_011_651_403_869), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round
@@ -6176,7 +6243,7 @@ mod mechanics_tests {
             let full = game.restart_countdown();
             step(&mut game, Input::default());
             assert!(game.restart_countdown() < full, "hold {hold}: the countdown runs");
-            let frames = (tuning().restart_delay * 60.0).ceil() as usize + 60;
+            let frames = (game.end_beats().total() * 60.0).ceil() as usize + 60;
             for _ in 0..frames {
                 step(&mut game, Input::default());
             }
@@ -7046,6 +7113,64 @@ cells."30,20" = { kind = "frog" }
         assert!(!try_at(Position::new(0.0, reach_y + 1.0)), "in front of it, a px short");
         assert!(try_at(Position::new(reach_x - 1.0, reach_y - 1.0)), "corner to corner, touching");
         assert!(!try_at(Position::new(reach_x + 1.0, reach_y + 1.0)), "corner to corner, a px short");
+    }
+
+    /// A tank carries one special weapon at a time (`Tank::take_weapon`):
+    /// a crate for another weapon replaces the one carried, its ammo lost; a
+    /// crate for the same weapon refills it to one crate's worth rather than
+    /// stacking; spent, the trigger fires shells, whose magazine no weapon
+    /// crate touches.
+    #[test]
+    fn a_weapon_crate_replaces_the_special_carried_and_refills_the_same() {
+        let at = Position::new(640.0, 360.0);
+        let mut game = game_on(OPEN_MAP, 0, Some(1));
+        let player = game.player().expect("player");
+        teleport_player(&mut game, at);
+        with_tank_mut(&game.world, player, |t| t.take_weapon(ActiveWeapon::Minigun));
+        let shells = with_tank(&game.world, player, |t| t.shells_ammo);
+        let collect = |game: &mut Game, kind: PickupKind| {
+            spawn_pickup_at(&mut game.world, at, kind, None);
+            step(game, Input::default());
+            assert_eq!(game.world.query::<&Pickup>().iter().count(), 0, "{kind:?} collected");
+        };
+
+        collect(&mut game, PickupKind::Laser);
+        let t = tuning();
+        let held = |game: &Game| with_tank(&game.world, player, |t| (t.active_weapon(), t.minigun_ammo, t.laser_charges, t.shells_ammo));
+        assert_eq!(held(&game), (ActiveWeapon::Laser, 0, t.laser_charges_per_pickup, shells), "the laser replaced the minigun");
+
+        with_tank_mut(&game.world, player, |t| t.laser_charges = 1);
+        collect(&mut game, PickupKind::Laser);
+        assert_eq!(held(&game).2, t.laser_charges_per_pickup, "the same weapon refills to a crate's worth");
+        collect(&mut game, PickupKind::Laser);
+        assert_eq!(held(&game).2, t.laser_charges_per_pickup, "and never stacks past it");
+
+        with_tank_mut(&game.world, player, |t| t.laser_charges = 0);
+        assert_eq!(held(&game), (ActiveWeapon::Shell, 0, 0, shells), "spent, the trigger fires shells");
+    }
+
+    /// An enemy takes a weapon crate only while it fires shells
+    /// (`Tank::wants_pickup`): one carrying a special drives over it rather
+    /// than trading the weapon it has away.
+    #[test]
+    fn an_armed_enemy_leaves_a_weapon_crate_for_one_on_shells() {
+        let at = Position::new(300.0, 560.0);
+        let mut game = game_on(OPEN_MAP, 1, Some(1));
+        game.debug_teleport(1, at, Some(0.0)).expect("enemy in slot 1");
+        let enemy = game.tank_entity_by_slot(1).expect("enemy");
+        with_tank_mut(&game.world, enemy, |t| {
+            t.disarm();
+            t.take_weapon(ActiveWeapon::Minigun);
+        });
+        spawn_pickup_at(&mut game.world, at, PickupKind::Laser, None);
+        step(&mut game, Input::default());
+        assert_eq!(game.world.query::<&Pickup>().iter().count(), 1, "an armed enemy drives over it");
+        assert_eq!(with_tank(&game.world, enemy, |t| t.active_weapon()), ActiveWeapon::Minigun);
+
+        with_tank_mut(&game.world, enemy, |t| t.disarm());
+        step(&mut game, Input::default());
+        assert_eq!(game.world.query::<&Pickup>().iter().count(), 0, "one on shells takes it");
+        assert_eq!(with_tank(&game.world, enemy, |t| t.active_weapon()), ActiveWeapon::Laser);
     }
 
     /// The forgiveness a thumb needs (`player_shot_hit_pad_px`): a player's
@@ -8263,7 +8388,7 @@ cells."30,20" = { kind = "frog" }
         assert_eq!(game.outcome(), Outcome::Lost);
         // Up to the restart the end screen plays out; nothing comes back
         // on it, because `wave_phase` only runs while the round does.
-        for _ in 0..(tuning().restart_delay * 60.0) as u32 - 10 {
+        for _ in 0..(game.end_beats().total() * 60.0) as u32 - 10 {
             step(&mut game, Input::default());
             assert!(with_tank(&game.world, seat1, Tank::is_wreck), "the round is over; nobody comes back");
             assert!(!game.is_entering(seat1));
