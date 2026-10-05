@@ -592,8 +592,10 @@ tunables! {
     }
 
     group minigun {
-        /// Rounds granted per minigun pickup (~5 full bursts at 8/burst).
-        minigun_ammo_per_pickup: i32 = 40 in 1 ..= 1000;
+        /// Rounds granted per minigun pickup: ten full bursts at
+        /// `minigun_burst_size` 6, so each of the ring's ten ammo pips
+        /// (`tank::AMMO_PIPS`) is one burst.
+        minigun_ammo_per_pickup: i32 = 60 in 1 ..= 1000;
         /// Bullets per burst: the first fires on the trigger frame, the rest
         /// are queued `minigun_bullet_delay_seconds` apart
         /// (`Tank::minigun_burst`). Each is an individually simulated
