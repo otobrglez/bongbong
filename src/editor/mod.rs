@@ -4338,8 +4338,8 @@ mod editor_tests {
     }
 
     /// The builder on the standard arena in a window just its size under a
-    /// 32 pt bar (`BuilderFrame::headless`), a unit a point, no touch: the
-    /// canvas at (0, 32) at its own size, the bar along the top.
+    /// 40 pt bar (`BuilderFrame::headless`), a unit a point, no touch: the
+    /// canvas at (0, 40) at its own size, the bar along the top.
     fn arena() -> BuilderFrame {
         BuilderFrame::headless((W, H), MapClass::Arena)
     }
@@ -5023,7 +5023,10 @@ mod editor_tests {
                                     let w = Vec2::new(world.x + dx, world.y + dy);
                                     let inside = w.x >= 0.0 && w.y >= 0.0 && w.x < ed.map().field_size().0 && w.y < ed.map().field_size().1;
                                     let got = ed.cell_at(at, &frame);
-                                    if ed.navigator_rect(&frame).is_some_and(|r| Corners::plate(r).contains(frame.to_ui(at))) {
+                                    // Through the canvas, as `on_canvas` reads it, so a
+                                    // point on the plate's edge is judged alike both ways.
+                                    let ui = frame.canvas_to_ui(frame.to_canvas(at));
+                                    if ed.navigator_rect(&frame).is_some_and(|r| Corners::plate(r).contains(ui)) {
                                         assert_eq!(got, None, "the navigator stands over the canvas there");
                                     } else if inside {
                                         assert_eq!(got, Some((col, row)), "{window:?} arena={arena} steps={zoom_steps} pan={pan:?} at {at:?}");
@@ -7111,7 +7114,7 @@ mod file_tests {
     const H: f32 = DEFAULT_SCREEN_HEIGHT as f32;
 
     /// The builder on the standard arena in a window just its size under a
-    /// 32 pt bar (`BuilderFrame::headless`), a unit a point.
+    /// 40 pt bar (`BuilderFrame::headless`), a unit a point.
     fn arena() -> BuilderFrame {
         BuilderFrame::headless((W, H), MapClass::Arena)
     }

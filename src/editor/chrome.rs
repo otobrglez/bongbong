@@ -46,7 +46,7 @@
 //! a phone's canvas wherever the selection was.
 
 use crate::framing::MapClass;
-use crate::hud::{button_height, UiFrame, PLATE_PAD, UI_EDGE_PT, UI_SMALL_TEXT};
+use crate::hud::{button_height, UiFrame, PLATE_PAD, UI_EDGE_PT};
 use crate::math::{Rectangle, Vec2};
 use crate::view::{ScaleCap, View};
 use crate::{Layout, EDITOR_BAR_HIT_SLACK, EDITOR_DROPDOWN_ROW_H, EDITOR_DROPDOWN_W, EDITOR_SETTINGS_W, HUD_BAR_HEIGHT};
@@ -54,16 +54,20 @@ use crate::{Layout, EDITOR_BAR_HIT_SLACK, EDITOR_DROPDOWN_ROW_H, EDITOR_DROPDOWN
 use super::{BrushRow, Category};
 
 /// The text size of the bar's small labels - UNDO, REDO, FIT, CHECK and
-/// the clear flag's par - with a mouse: the 11 points Apple's
-/// guidance holds text to, at which every language's label fits inside a
-/// desktop bar's buttons (a button's outline is drawn outside its box).
-pub const BAR_MOUSE_TEXT: i32 = 11;
+/// the clear flag's par -, the select tool's strip's words and the Save
+/// prompt's SAVE, with a mouse and on a touch screen alike: 14 points,
+/// between the HUD's small words (`hud::UI_SMALL_TEXT`, 12) and its
+/// buttons' 18, so the bar reads at the HUD's scale while every language's
+/// label still fits inside its box (a button's outline is drawn outside
+/// its box) - and still over 11 where the UI frame shrinks the point on
+/// the smallest phones.
+pub const BAR_SMALL_TEXT: i32 = 14;
 
-/// The bar's small labels' text size: `UI_SMALL_TEXT` on a touch screen -
-/// 12 points, still over 11 where the UI frame shrinks the point on the
-/// smallest phones - and `BAR_MOUSE_TEXT` with a mouse.
-pub fn small_text(touch: bool) -> i32 {
-    if touch { UI_SMALL_TEXT } else { BAR_MOUSE_TEXT }
+/// The bar's height: `HUD_BAR_HEIGHT` with a mouse - a play corner
+/// plate's - and a finger's (`hud::UI_TOUCH_PT`) on a touch screen. The
+/// select tool's strip's buttons are as tall.
+pub fn bar_height(touch: bool) -> f32 {
+    if touch { button_height(true) } else { HUD_BAR_HEIGHT as f32 }
 }
 
 /// The CHECK panel's width, in points: a finding's words, its place and
@@ -164,11 +168,12 @@ const fn slot(w: f32, gap: f32) -> Slot {
 pub const HERE_W: f32 = 106.0;
 
 /// Every element's slot, for a mouse or a touch screen. The mouse's are a
-/// desktop bar's, a point a pixel; a touch screen's are at least
-/// `hud::UI_TOUCH_PT` across for every press, a category button's two
-/// halves included, 4 points apart from the eraser to MAP (their drawn
-/// boxes keep their own insets) so the folded bar holds PLAY HERE whole
-/// at `hud::UI_MIN_W`.
+/// desktop bar's, a point a pixel, at the HUD's scale - a 40-point bar of
+/// 32-point boxes, as a play corner's plate holds its buttons; a touch
+/// screen's are at least `hud::UI_TOUCH_PT` across for every press, a
+/// category button's two halves included. Both keep 4 points apart from
+/// the TOOLS button to MAP (their drawn boxes keep their own insets) so
+/// the folded bar holds PLAY HERE whole at `hud::UI_MIN_W`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Metrics {
     /// `BUILD`, the mode, in the builder's amber.
@@ -202,19 +207,19 @@ struct Metrics {
 const MOUSE: Metrics = Metrics {
     label: slot(64.0, 0.0),
     name: slot(152.0, 8.0),
-    category_icon: 32.0,
+    category_icon: 36.0,
     category_list: 20.0,
     categories_gap: 8.0,
-    brush: slot(52.0, 8.0),
-    folded: slot(52.0, 8.0),
-    erase: slot(40.0, 8.0),
-    undo: slot(40.0, 8.0),
-    redo: slot(40.0, 8.0),
-    file: slot(64.0, 8.0),
-    map: slot(64.0, 8.0),
-    fit: slot(40.0, 4.0),
-    check: slot(56.0, 2.0),
-    clear: slot(44.0, 0.0),
+    brush: slot(56.0, 8.0),
+    folded: slot(56.0, 4.0),
+    erase: slot(44.0, 4.0),
+    undo: slot(48.0, 4.0),
+    redo: slot(48.0, 4.0),
+    file: slot(64.0, 4.0),
+    map: slot(64.0, 4.0),
+    fit: slot(44.0, 4.0),
+    check: slot(68.0, 2.0),
+    clear: slot(52.0, 0.0),
     right_gap: 2.0,
     here: slot(HERE_W, 4.0),
     play: crate::hud::MODE_BUTTON_W,
@@ -227,14 +232,14 @@ const TOUCH: Metrics = Metrics {
     category_list: 44.0,
     categories_gap: 8.0,
     brush: slot(64.0, 8.0),
-    folded: slot(64.0, 8.0),
+    folded: slot(64.0, 4.0),
     erase: slot(44.0, 4.0),
     undo: slot(44.0, 4.0),
     redo: slot(44.0, 4.0),
     file: slot(64.0, 4.0),
     map: slot(64.0, 4.0),
     fit: slot(44.0, 4.0),
-    check: slot(64.0, 2.0),
+    check: slot(68.0, 2.0),
     clear: slot(52.0, 0.0),
     right_gap: 2.0,
     here: slot(HERE_W, 4.0),
@@ -330,11 +335,10 @@ pub enum BarButton {
 
 impl Bar {
     /// The strip alone: across the window, from the safe area's top edge,
-    /// a button's height - `hud::button_height`, 44 points on a touch
-    /// screen and 32 with a mouse.
+    /// `bar_height` tall - 44 points on a touch screen and 40 with a
+    /// mouse.
     pub fn strip_of(ui: &UiFrame) -> Rectangle {
-        let height = if ui.touch { button_height(true) } else { HUD_BAR_HEIGHT as f32 };
-        Rectangle::new(0.0, ui.area.y - UI_EDGE_PT, ui.screen.w, height)
+        Rectangle::new(0.0, ui.area.y - UI_EDGE_PT, ui.screen.w, bar_height(ui.touch))
     }
 
     /// The bar laid out in `ui` (see the module docs): PLAY at the safe
@@ -533,11 +537,12 @@ impl BuilderFrame {
         BuilderFrame { layout, view, ui }
     }
 
-    /// The builder in a window of the map's field and a 32 px bar under
-    /// it, a unit a point, nothing inset, no touch: what a dev server with
-    /// no window lays the builder out in, and the tests. A field of at
-    /// least `hud::UI_MIN_W` x `UI_MIN_H` less the bar (720 x 320) - the
-    /// standard arena's, say - stands at (0, 32) at its own size; a smaller
+    /// The builder in a window of the map's field and a 40 px bar
+    /// (`HUD_BAR_HEIGHT`) over it, a unit a point, nothing inset, no
+    /// touch: what a dev server with no window lays the builder out in, and
+    /// the tests. A field of at
+    /// least `hud::UI_MIN_W` x `UI_MIN_H` less the bar (720 x 312) - the
+    /// standard arena's, say - stands at (0, 40) at its own size; a smaller
     /// one shrinks the UI point (`UiFrame::new`), so its bar is shorter and
     /// the field is centred in the room left under it.
     pub fn headless(field: (f32, f32), class: MapClass) -> BuilderFrame {
@@ -1010,13 +1015,14 @@ impl StripButton {
 }
 
 /// A strip button with a word, with a mouse and on a touch screen: its
-/// label in the chrome's small text inside its box (`SMALL_BOX_INSET`
-/// short of it), the room `text_tests` holds every language to.
-pub const STRIP_WORD_W: (f32, f32) = (64.0, 76.0);
+/// label in the bar's small text (`BAR_SMALL_TEXT`) inside its box
+/// (`SMALL_BOX_INSET` short of it), the room `text_tests` holds every
+/// language to.
+pub const STRIP_WORD_W: (f32, f32) = (76.0, 76.0);
 
-/// A strip button with a picture: the bar's small buttons' 32 with a
-/// mouse, 44 on a touch screen.
-pub const STRIP_ICON_W: (f32, f32) = (32.0, 44.0);
+/// A strip button with a picture: square, the bar's height (`bar_height`)
+/// - 40 with a mouse, 44 on a touch screen.
+pub const STRIP_ICON_W: (f32, f32) = (40.0, 44.0);
 
 /// Between two of the strip's buttons.
 const STRIP_GAP: f32 = 4.0;
@@ -1043,7 +1049,7 @@ impl Strip {
     /// The strip of `buttons` (each with whether it can act now) in `room`,
     /// laid out for a touch screen or a mouse.
     pub fn of(room: Rectangle, touch: bool, buttons: &[(StripButton, bool)]) -> Strip {
-        let h = button_height(touch);
+        let h = bar_height(touch);
         let y = room.y + PLATE_PAD;
         let mut x = room.x + PLATE_PAD;
         let slots: Vec<StripSlot> = buttons
@@ -1115,7 +1121,7 @@ pub fn navigator(room: Rectangle, size: (f32, f32)) -> Option<Rectangle> {
 #[cfg(test)]
 mod chrome_tests {
     use super::*;
-    use crate::hud::{Insets, UI_TOUCH_PT};
+    use crate::hud::{Insets, UI_SMALL_TEXT, UI_TOUCH_PT};
     use crate::text::{width, Catalogue, SHIPPED_LANGS};
 
     /// Every window the tests lay the builder out in: phones to a 1440p
@@ -1172,7 +1178,7 @@ mod chrome_tests {
 
     /// The bar on every window: inside the safe area under its top edge,
     /// every button inside the chrome's area, no two overlapping, PLAY at
-    /// the right end, 44 points both ways on a touch screen and the 32 a
+    /// the right end, 44 points both ways on a touch screen and the 40 a
     /// desktop's bar has with a mouse; BRUSH beside the five categories
     /// exactly while they are in the bar.
     #[test]
@@ -1217,38 +1223,38 @@ mod chrome_tests {
     fn a_desktops_bar_keeps_its_slots_and_a_narrow_one_folds() {
         let ui = UiFrame::plain((1280.0, 720.0));
         let bar = Bar::of(&ui);
-        assert_eq!(bar.strip, Rectangle::new(0.0, 0.0, 1280.0, 32.0));
+        assert_eq!(bar.strip, Rectangle::new(0.0, 0.0, 1280.0, 40.0));
         assert_eq!(bar.label.map(|r| r.x), Some(8.0));
-        assert_eq!(bar.name, Some(Rectangle::new(72.0, 0.0, 152.0, 32.0)));
+        assert_eq!(bar.name, Some(Rectangle::new(72.0, 0.0, 152.0, 40.0)));
         let wall = bar.category(Category::Wall).expect("five category buttons");
-        assert_eq!(wall.rect, Rectangle::new(232.0, 0.0, 52.0, 32.0));
-        assert_eq!(wall.icon.width, 32.0);
+        assert_eq!(wall.rect, Rectangle::new(232.0, 0.0, 56.0, 40.0));
+        assert_eq!(wall.icon.width, 36.0);
         let slots = [
-            (bar.brush.expect("BRUSH beside the five"), 500.0, 52.0),
-            (bar.erase, 560.0, 40.0),
-            (bar.undo, 608.0, 40.0),
-            (bar.redo, 656.0, 40.0),
-            (bar.file, 704.0, 64.0),
-            (bar.map, 776.0, 64.0),
-            (bar.fit, 848.0, 40.0),
-            (bar.check, 892.0, 56.0),
-            (bar.clear, 950.0, 44.0),
+            (bar.brush.expect("BRUSH beside the five"), 520.0, 56.0),
+            (bar.erase, 584.0, 44.0),
+            (bar.undo, 632.0, 48.0),
+            (bar.redo, 684.0, 48.0),
+            (bar.file, 736.0, 64.0),
+            (bar.map, 804.0, 64.0),
+            (bar.fit, 872.0, 44.0),
+            (bar.check, 920.0, 68.0),
+            (bar.clear, 990.0, 52.0),
             (bar.here, 1090.0, HERE_W),
             (bar.play, 1200.0, 72.0),
         ];
         for (r, x, w) in slots {
-            assert_eq!((r.x, r.width, r.y, r.height), (x, w, 0.0, 32.0), "{r:?}");
+            assert_eq!((r.x, r.width, r.y, r.height), (x, w, 0.0, 40.0), "{r:?}");
         }
         // Wider: the same slots from the left, PLAY HERE and PLAY at the
         // right end.
         let wide = Bar::of(&UiFrame::plain((1600.0, 900.0)));
-        assert_eq!((wide.erase.x, wide.clear.x, wide.play.x), (560.0, 950.0, 1600.0 - 8.0 - 72.0));
+        assert_eq!((wide.erase.x, wide.clear.x, wide.play.x), (584.0, 990.0, 1600.0 - 8.0 - 72.0));
         // The arena's own window: the label gone, the name narrowed and
         // every button whole.
         let arena = Bar::of(&UiFrame::plain((1088.0, 576.0)));
         assert!(arena.label.is_none() && matches!(arena.tools, BarTools::Categories(_)), "{arena:?}");
-        assert_eq!(arena.name, Some(Rectangle::new(8.0, 0.0, 118.0, 32.0)));
-        assert_eq!((arena.erase.x, arena.clear.x, arena.here.x), (462.0, 852.0, 898.0));
+        assert_eq!(arena.name, Some(Rectangle::new(8.0, 0.0, 70.0, 40.0)));
+        assert_eq!((arena.erase.x, arena.clear.x, arena.here.x), (438.0, 844.0, 898.0));
         // Narrower: the categories and BRUSH fold into TOOLS, and the room
         // it frees gives the label back; narrower still, the name goes.
         let narrow = Bar::of(&UiFrame::plain((900.0, 500.0)));
@@ -1256,7 +1262,7 @@ mod chrome_tests {
         assert_eq!(narrow.name.map(|r| r.width), Some(152.0));
         let narrower = Bar::of(&UiFrame::plain((720.0, 400.0)));
         assert!(narrower.name.is_none() && matches!(narrower.tools, BarTools::Folded(_)), "{narrower:?}");
-        assert_eq!(narrower.erase.width, 40.0, "folded, not shrunk");
+        assert_eq!(narrower.erase.width, 44.0, "folded, not shrunk");
     }
 
     /// Every label the bar draws fits its box in every shipped language, at
@@ -1272,7 +1278,7 @@ mod chrome_tests {
             for touch in [false, true] {
                 let ui = UiFrame::new((1600.0, 900.0), 1.0, 1.0, Insets::default(), touch);
                 let bar = Bar::of(&ui);
-                let small = small_text(touch);
+                let small = BAR_SMALL_TEXT;
                 assert!(small >= 11);
                 let fits = |key, size: i32, room: f32| {
                     let label = t.get(key);
@@ -1489,7 +1495,7 @@ mod chrome_tests {
         assert_eq!(LoadLayout::of(room, 40).per_page, LOAD_VISIBLE_ROWS - 1);
         let prop = menu_list(bar.tools_anchor(Category::Prop), room, Category::Prop.tools().count());
         assert_eq!(prop.per_column, Category::Prop.tools().count());
-        assert_eq!(prop.panel.y, 32.0, "hanging from the bar");
+        assert_eq!(prop.panel.y, HUD_BAR_HEIGHT as f32, "hanging from the bar");
     }
 
     /// A press anywhere on a button's drawn box, in window coordinates on
@@ -1541,10 +1547,10 @@ mod chrome_tests {
                 assert!((round.x - p.x).abs() < 1e-2 && (round.y - p.y).abs() < 1e-2);
             }
         }
-        // A desktop's arena stands right under the 32 pt bar at its own
+        // A desktop's arena stands right under the 40 pt bar at its own
         // size.
         let frame = BuilderFrame::headless((1088.0, 544.0), MapClass::Arena);
-        assert_eq!((frame.view.scale, frame.view.offset), (1.0, Vec2::new(0.0, 32.0)));
+        assert_eq!((frame.view.scale, frame.view.offset), (1.0, Vec2::new(0.0, HUD_BAR_HEIGHT as f32)));
     }
 
     /// The canvas keeps to the safe area's sides on every window - on a

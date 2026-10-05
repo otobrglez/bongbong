@@ -10,7 +10,7 @@ use sola_raylib::prelude::*;
 
 use super::*;
 use super::camera::{scene_plan, window_mapping};
-use super::chrome::{small_text, BarTools, CategoryButton, MENU_BOX_INSET, SMALL_BOX_INSET, STAMP_NAME_W, STAMP_PICTURE};
+use super::chrome::{BarTools, BAR_SMALL_TEXT, CategoryButton, MENU_BOX_INSET, SMALL_BOX_INSET, STAMP_NAME_W, STAMP_PICTURE};
 use crate::text::{keys, text};
 use crate::canvas::Sheet;
 use crate::frog::FrogAnim;
@@ -356,7 +356,7 @@ impl MapEditor {
             self.draw_navigator(&mut d, frame, textures, camera);
             self.draw_bar(&mut d, &chrome.bar, textures);
             if let Some(strip) = &chrome.strip {
-                self.draw_strip(&mut d, strip, frame.ui.touch);
+                self.draw_strip(&mut d, strip);
             }
             self.draw_popup(&mut d, chrome, textures, frame.ui.hints);
             if let Some((loupe, picture)) = magnified {
@@ -571,7 +571,7 @@ impl MapEditor {
     /// and PLAY.
     fn draw_bar(&self, d: &mut impl RaylibDraw, bar: &Bar, textures: &EditorTextures) {
         d.draw_rectangle_rec(bar.strip, BAR_FILL);
-        let small = small_text(bar.touch);
+        let small = BAR_SMALL_TEXT;
         let text_y = |r: Rectangle| (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
         if let Some(r) = bar.label {
             d.draw_text(&text().get(keys::EDITOR_BUILD), r.x as i32, text_y(r), HUD_TEXT_SIZE, BUILD_ACCENT);
@@ -736,9 +736,9 @@ impl MapEditor {
     /// The select tool's strip under the bar: its plate and its buttons -
     /// a word's in the bar's small buttons' style, a flip's a picture - a
     /// dim one where it cannot act, PLACE in the accent.
-    fn draw_strip(&self, d: &mut impl RaylibDraw, strip: &Strip, touch: bool) {
+    fn draw_strip(&self, d: &mut impl RaylibDraw, strip: &Strip) {
         crate::render::hud::draw_plate(d, strip.panel, crate::render::hud::PLATE_EDGE, 1.0);
-        let small = small_text(touch);
+        let small = BAR_SMALL_TEXT;
         for slot in &strip.slots {
             let color = match (slot.enabled, slot.button) {
                 (false, _) => DIM,
@@ -773,7 +773,7 @@ impl MapEditor {
                 let typed = tail_fit(&format!("{name}_"), chrome::SAVE_NAME_W, 18);
                 d.draw_text(&typed, (panel.x + 12.0) as i32, (panel.y + 34.0) as i32, 18, TEXT);
                 let color = if name.is_empty() { DIM } else { BUILD_ACCENT };
-                draw_small_button(d, chrome::save_button(panel, touch), &text().get(keys::FILE_SAVE), color, small_text(touch));
+                draw_small_button(d, chrome::save_button(panel, touch), &text().get(keys::FILE_SAVE), color, BAR_SMALL_TEXT);
                 let hint = text().get(hints.pick(keys::EDITOR_SAVE_HINT, keys::EDITOR_SAVE_HINT_TOUCH));
                 d.draw_text(&hint, (panel.x + 12.0) as i32, (panel.y + 58.0) as i32, UI_SMALL_TEXT, Color::GRAY);
             }
@@ -1313,7 +1313,7 @@ fn draw_menu_button(d: &mut impl RaylibDraw, rect: Rectangle, label: &str, open:
 }
 
 /// An outlined bar button with its label centred in it in `size`: UNDO,
-/// REDO, FIT, CHECK (`chrome::small_text`).
+/// REDO, FIT, CHECK (`chrome::BAR_SMALL_TEXT`).
 fn draw_small_button(d: &mut impl RaylibDraw, rect: Rectangle, text: &str, color: Color, size: i32) {
     let inset = Rectangle::new(rect.x, rect.y + 4.0, rect.width - SMALL_BOX_INSET, rect.height - 8.0);
     d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
@@ -2020,8 +2020,8 @@ mod bar_tests {
 
     /// A category button's icon and caret, with a mouse and on a touch
     /// screen: the icon inside the icon half, the caret clear of it and
-    /// inside the button's drawn box, at the 34 pt a desktop's bar draws
-    /// it at with a mouse.
+    /// inside the button's drawn box, at the 38 pt a desktop's bar draws
+    /// it at with a mouse, the icon centred top to bottom in the bar.
     #[test]
     fn a_category_buttons_icon_and_caret_stay_in_their_halves() {
         for touch in [false, true] {
@@ -2035,8 +2035,9 @@ mod bar_tests {
             assert!(caret_x >= icon.x + icon.width, "touch={touch}: the caret overlaps the icon");
             assert!(caret_x + CARET_W as f32 <= button.rect.x + button.rect.width - BUTTON_GAP, "touch={touch}: the caret leaves the button");
             if !touch {
-                assert_eq!(caret_x - button.rect.x, 34.0);
-                assert_eq!(icon, Rectangle::new(button.rect.x, button.rect.y, ICON_PX, ICON_PX));
+                assert_eq!(caret_x - button.rect.x, 38.0);
+                let y = button.rect.y + (crate::HUD_BAR_HEIGHT as f32 - ICON_PX) / 2.0;
+                assert_eq!(icon, Rectangle::new(button.rect.x, y, ICON_PX, ICON_PX));
             }
         }
     }

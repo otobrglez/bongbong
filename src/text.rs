@@ -1003,15 +1003,14 @@ mod text_tests {
         ];
         // The build bar's small buttons - UNDO, REDO, FIT, CHECK - inside
         // their drawn boxes (an outline is drawn outside its box), at the
-        // size each bar draws them (`editor::chrome::small_text`): a
-        // mouse's at 11 pt in a desktop bar's boxes, a touch screen's at
-        // 12 in its wider ones; PLAY HERE at PLAY's size; and the five
-        // categories' names beside their row of the palette a narrow bar
-        // folds them into.
+        // bar's small size (`editor::chrome::BAR_SMALL_TEXT`), in a
+        // mouse's boxes and a touch screen's; PLAY HERE at PLAY's size;
+        // and the five categories' names beside their row of the palette a
+        // narrow bar folds them into.
         for touch in [false, true] {
             let ui = crate::hud::UiFrame::new((1600.0, 900.0), 1.0, 1.0, crate::hud::Insets::default(), touch);
             let bar = crate::editor::Bar::of(&ui);
-            let size = crate::editor::chrome::small_text(touch);
+            let size = crate::editor::chrome::BAR_SMALL_TEXT;
             let room = |r: crate::math::Rectangle| (r.width - crate::editor::chrome::SMALL_BOX_INSET) as i32;
             for (key, r) in [
                 (keys::EDITOR_UNDO, bar.undo),
@@ -1044,7 +1043,7 @@ mod text_tests {
         for touch in [false, true] {
             let w = if touch { crate::editor::chrome::STRIP_WORD_W.1 } else { crate::editor::chrome::STRIP_WORD_W.0 };
             let room = (w - crate::editor::chrome::SMALL_BOX_INSET) as i32;
-            let size = crate::editor::chrome::small_text(touch);
+            let size = crate::editor::chrome::BAR_SMALL_TEXT;
             for button in crate::editor::StripButton::SELECTION.into_iter().chain(crate::editor::StripButton::GHOST) {
                 if let Some(key) = button.label_key() {
                     out.push((key, size, room, vec![]));
