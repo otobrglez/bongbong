@@ -277,7 +277,7 @@ sees. This table is the first pass; the phase 1 audit finalises it.
 
 | Family | Travels | Derived | Local |
 |---|---|---|---|
-| Tank (51 fields) | `position`, `rotation`, body velocity, `damage`, `wreck_col`, `row` (in `Welcome`), `owner`, ammo counts, `flame_fuel`, active weapon and variants, `shield_hp` and `shield_broke`, `speed_boost_timer`, `burn_timer`, `portal_cooldown`, a "hit this interval" bit, `flame_held` | `damage_variant`/stage from `damage`; `shell_variant` from row and the alternating shot; `hull_frame` from velocity and time; `wet_timer` from the hull's own wading (the water layout is the map's); `despawn_timer` armed the first frame a wreck is seen, so the fade costs no bytes | `visual_rotation`, `turret_visual_rotation`, `ring_position`/`ring_velocity`, `hull_anim_accum`, `minigun_cycle_timer`, track wobble and jitter, `track_accum`, `pending_shot` timing (the second barrel's shell arrives as its own `Fired`); `throttle` and `shield_recharge_delay` are server bookkeeping and never travel |
+| Tank (51 fields) | `position`, `rotation`, body velocity, `damage`, `wreck_col`, `row` (in `Welcome`), `owner`, ammo counts, `flame_fuel`, active weapon and variants, `shield_hp` and `shield_broke`, `speed_boost_timer`, `burn_timer`, `portal_cooldown`, a "hit this interval" bit, `flame_held` | `damage_variant`/stage from `damage`; `shell_variant` from row and the alternating shot; `hull_frame` from velocity and time; `wet_timer` from the hull's own wading (the water layout is the map's); `despawn_timer` armed the first frame a wreck is seen, so the fade costs no bytes | `visual_rotation`, `turret_visual_rotation`, `hull_anim_accum`, `minigun_cycle_timer`, track wobble and jitter, `track_accum`, `pending_shot` timing (the second barrel's shell arrives as its own `Fired`); `throttle` and `shield_recharge_delay` are server bookkeeping and never travel |
 | Frog (two) | `position`, `health`, a state byte with phase, `hop_end` while hopping | animation frame | — |
 | Obstacle (one per solid cell: 578 on the default 34 x 17 field, more on a map with its own `size`) | layout in `Welcome`; then deltas: `health`, `burning`, `fuse` armed with total, `scorched` mask, `destroyed`, a ram-lean byte | `variant`, `edge_mask` (recomputed as `refresh_edge_masks` does), `burn_frame` from time since ignition | `burn_frame_timer`, `heat` (ignition is an event) |
 | Portals (docs/teleporting.md) | anchors in `Welcome`; a hop is `Teleported` plus the tank's new position in the next snapshot | whether the network is active (two or more anchors) | the spiral's turn, the arrival flash |
@@ -399,7 +399,7 @@ Four pieces:
   arrivals on the tick schedule (§4.16, "A controlled playout clock").
 - `Game::tick_presentation(dt)`: `tick_effects` plus the cosmetic parts of the
   entity ticks (`ease_visual_rotation`, `ease_turret_visual_rotation`,
-  `ease_ring_position`, hull animation, tread marks from displacement - none
+  hull animation, tread marks from displacement - none
   in water, wet for `wet_timer` after a ford -, grass crush and push from hull
   boxes, fire and fuse frames, decal flight, the drum's arc, the wave banner
   timer), and the round clock the water's shimmer and current marks and the

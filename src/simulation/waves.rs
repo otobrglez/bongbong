@@ -214,7 +214,6 @@ impl Game {
             }
             tank.ease_visual_rotation(f.dt);
             tank.ease_turret_visual_rotation(f.dt);
-            tank.ease_ring_position(f.dt);
             lay_tracks(&mut self.tracks, tank, before, self.water.depth_at(tank.position));
         }
         for (entity, slot) in arrived {
@@ -389,8 +388,6 @@ impl Game {
             t.rotation = rotation;
             t.visual_rotation = rotation;
             t.turret_visual_rotation = rotation;
-            t.ring_position = gate.outside;
-            t.ring_velocity = Vec2::new(0.0, 0.0);
             t.track_from = None;
             t.flame_held = false;
             t.pending_plasma_shot = None;
@@ -491,7 +488,6 @@ impl Game {
                 rotation,
                 visual_rotation: rotation,
                 turret_visual_rotation: rotation,
-                ring_position: gate.outside,
                 owner: t.owner,
                 ..Tank::default()
             };
@@ -686,7 +682,6 @@ impl Game {
         tank.rotation = rotation;
         tank.visual_rotation = rotation;
         tank.turret_visual_rotation = rotation;
-        tank.ring_position = gate.outside;
         self.world.spawn((tank, RollIn { to: gate.inside }));
         self.wave.pending.pop_front();
         true
@@ -705,7 +700,6 @@ impl Game {
         tank.rotation = rotation;
         tank.visual_rotation = rotation;
         tank.turret_visual_rotation = rotation;
-        tank.ring_position = gate.outside;
         Some(self.world.spawn((tank, RollIn { to: gate.inside }, Rejoin { role, frog_only })))
     }
 
@@ -767,7 +761,6 @@ impl Game {
         let mut tank = roll_enemy_tank(&mut f.rng, row, pos, slot);
         tank.visual_rotation = tank.rotation;
         tank.turret_visual_rotation = tank.rotation;
-        tank.ring_position = pos;
         tank.body = Some(self.physics.spawn_tank(pos, tank.move_half_extents(false), tank.mass()));
         let mut ai = Ai::with_role(roll_role(self.mission, &mut f.rng));
         // A wave tank all the same: called to the fight on a field map.

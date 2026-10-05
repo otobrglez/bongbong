@@ -2083,7 +2083,6 @@ impl Game {
         for tank in self.world.query::<&mut Tank>().iter() {
             tank.ease_visual_rotation(dt);
             tank.ease_turret_visual_rotation(dt);
-            tank.ease_ring_position(dt);
             tank.tick_minigun_spin(dt);
             tank.tick_recoil(dt);
             let depth = self.water.depth_at(tank.position);
@@ -4836,7 +4835,6 @@ fn drive_tank_with(
     tank.control(intent.move_dir, intent.face);
     tank.ease_visual_rotation(dt);
     tank.ease_turret_visual_rotation(dt);
-    tank.ease_ring_position(dt);
     let target = tank.velocity;
 
     if tank.rotation != facing_before {
