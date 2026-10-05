@@ -953,6 +953,7 @@ pub mod editor;
 pub mod establish;
 pub mod frog;
 pub mod fireball;
+pub mod fish;
 pub mod follow;
 pub mod frame_stages;
 pub mod framing;
