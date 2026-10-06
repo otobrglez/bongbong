@@ -539,8 +539,9 @@ pub struct MissileState {
 
 /// One grenade on the ground (`grenade.rs`).
 ///
-/// A replica never rolls one - the bounces and the blast are the room's -
-/// so only where it is and how long its fuse has left travel: the lamp's
+/// A replica never rolls one - the arc, the bounces and the blast are the
+/// room's - so only where it is, how high and how long its fuse has left
+/// travel: the flash's
 /// blink is a function of the fuse, which the replica runs down itself
 /// between snapshots, and the roll its lamp turns with is worked out from
 /// the way the replica's copy moved. The fuse goes in hundredths rather
@@ -553,6 +554,8 @@ pub struct GrenadeState {
     pub x: i16,
     /// Quarter pixels (`quantise_pos`).
     pub y: i16,
+    /// Height above the ground in quarter pixels (`quantise_pos`).
+    pub height: i16,
     /// `Grenade::fuse` in hundredths of a second (`quantise_fuse`).
     pub fuse: u16,
 }

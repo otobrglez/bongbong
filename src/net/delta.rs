@@ -446,7 +446,7 @@ mod tests {
             .collect();
         let grenades: Vec<GrenadeState> = random_keys(rng, 6, 400)
             .into_iter()
-            .map(|id| GrenadeState { id, x: rng.random(), y: rng.random(), fuse: rng.random_range(0..3000) })
+            .map(|id| GrenadeState { id, x: rng.random(), y: rng.random(), height: rng.random_range(0..400), fuse: rng.random_range(0..3000) })
             .collect();
         let mut frogs = Vec::new();
         for side in [Side::Player, Side::Enemy] {

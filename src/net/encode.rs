@@ -273,6 +273,7 @@ fn grenades(game: &Game) -> Vec<GrenadeState> {
             id: g.id.min(u16::MAX as u32) as u16,
             x: quantise_pos(g.position.x),
             y: quantise_pos(g.position.y),
+            height: quantise_pos(g.height),
             fuse: crate::net::wire::quantise_fuse(g.fuse),
         })
         .collect();

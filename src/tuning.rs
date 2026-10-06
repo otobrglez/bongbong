@@ -793,15 +793,32 @@ tunables! {
     group grenades {
         /// Grenades one grenade crate loads into the launcher's drum
         /// (`pickup::PickupKind::Grenades`, `grenade.rs`). One per press.
-        grenade_ammo_per_pickup: i32 = 4 in 1 ..= 40;
+        grenade_ammo_per_pickup: i32 = 6 in 1 ..= 40;
         /// Seconds between two launches.
         grenade_reload_seconds: f32 = 0.6 in 0.0 ..= 10.0;
-        /// How fast a grenade leaves the barrel (px/s), plus this share of
-        /// the launching hull's own velocity.
-        grenade_launch_speed: f32 = 280.0 in 0.0 ..= 1500.0;
+        /// How fast a grenade leaves the barrel over the ground (px/s),
+        /// plus this share of the launching hull's own velocity.
+        grenade_launch_speed: f32 = 168.0 in 0.0 ..= 1500.0;
         grenade_launch_carry: f32 = 1.0 in 0.0 ..= 2.0;
+        /// The lob: the height it leaves the barrel at (px), how fast it
+        /// climbs (px/s) and the gravity that brings it down (px/s^2). In
+        /// the air it flies over walls, props and tanks; the defaults carry
+        /// it about 105 px, 36 px up at the top.
+        grenade_launch_height: f32 = 6.0 in 0.0 ..= 100.0;
+        grenade_launch_climb: f32 = 200.0 in 0.0 ..= 2000.0;
+        grenade_gravity: f32 = 640.0 in 1.0 ..= 5000.0;
+        /// Coming down it hops back up at this share of its fall while the
+        /// fall is faster than `grenade_hop_min_speed` (px/s), and keeps
+        /// `grenade_landing_keep` of its speed over the ground each landing.
+        grenade_ground_bounce: f32 = 0.35 in 0.0 ..= 1.0;
+        grenade_hop_min_speed: f32 = 60.0 in 0.0 ..= 1000.0;
+        grenade_landing_keep: f32 = 0.75 in 0.0 ..= 1.0;
+        /// How much bigger a grenade draws at `grenade_draw_lift_px` up and
+        /// over - nearer the camera.
+        grenade_apex_draw_scale: f32 = 1.3 in 1.0 ..= 3.0;
+        grenade_draw_lift_px: f32 = 40.0 in 1.0 ..= 500.0;
         /// The ball's radius (px): what it bounces off walls and hulls by.
-        grenade_radius: f32 = 6.0 in 1.0 ..= 16.0;
+        grenade_radius: f32 = 12.0 in 1.0 ..= 32.0;
         /// How quickly a rolling grenade slows (1/s): its speed falls by
         /// this share a second, and under `grenade_stop_speed` px/s it
         /// comes to rest.
@@ -829,14 +846,22 @@ tunables! {
         /// 0 at the edge) and the shove. Only the side opposing the
         /// launcher is hurt; everything in range is shoved, and tiles crack
         /// like under any blast.
-        grenade_blast_radius: f32 = 88.0 in 0.0 ..= 400.0;
-        grenade_blast_damage_min: f32 = 18.0 in 0.0 ..= 100.0;
-        grenade_blast_damage_max: f32 = 32.0 in 0.0 ..= 100.0;
-        grenade_blast_knockback_speed: f32 = 180.0 in 0.0 ..= 500.0;
+        grenade_blast_radius: f32 = 128.0 in 0.0 ..= 400.0;
+        grenade_blast_damage_min: f32 = 30.0 in 0.0 ..= 100.0;
+        grenade_blast_damage_max: f32 = 50.0 in 0.0 ..= 100.0;
+        grenade_blast_knockback_speed: f32 = 240.0 in 0.0 ..= 500.0;
         /// Size of the fireball and scorch against a barrel's, and how
         /// hard its shockwave ripples and shakes against a tank dying.
-        grenade_blast_fx_scale: f32 = 0.9 in 0.1 ..= 2.0;
-        grenade_shock: f32 = 0.7 in 0.0 ..= 2.0;
+        grenade_blast_fx_scale: f32 = 1.5 in 0.1 ..= 3.0;
+        grenade_shock: f32 = 1.0 in 0.0 ..= 2.0;
+        /// The white plume a grenade trails while in the air or rolling
+        /// faster than `grenade_trail_min_speed` (px/s): a puff every this
+        /// many px (0 turns it off), each swelling and gone in
+        /// `grenade_trail_seconds` - thick, but much shorter than a
+        /// missile's trail.
+        grenade_trail_spacing: f32 = 5.0 in 0.0 ..= 64.0;
+        grenade_trail_seconds: f32 = 0.55 in 0.05 ..= 10.0;
+        grenade_trail_min_speed: f32 = 80.0 in 0.0 ..= 1000.0;
         /// Launch kick.
         grenade_recoil_speed: f32 = 10.0 in 0.0 ..= 200.0;
         grenade_recoil_max_speed: f32 = 20.0 in 0.0 ..= 400.0;

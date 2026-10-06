@@ -753,7 +753,7 @@ fn apply_missiles(game: &mut Game, s: &Snapshot, mut show: Option<&mut Spectacle
 }
 
 /// The grenades the snapshot lists, spawned, moved or dropped. A replica
-/// never rolls one; it holds the position and the fuse the room sent,
+/// never rolls one; it holds the position, height and fuse the room sent,
 /// turns the lamp by how far that moved it, and runs the fuse down between
 /// snapshots itself (`Game::tick_presentation`).
 fn apply_grenades(game: &mut Game, s: &Snapshot) {
@@ -771,6 +771,7 @@ fn apply_grenades(game: &mut Game, s: &Snapshot) {
     for (id, gs) in wanted {
         let at = Position::new(dequantise_pos(gs.x), dequantise_pos(gs.y));
         let fuse = crate::net::wire::dequantise_fuse(gs.fuse);
+        let height = dequantise_pos(gs.height);
         match existing.get(&id) {
             Some(&entity) => {
                 let mut q = game.world.query_one::<&mut Grenade>(entity);
@@ -782,6 +783,7 @@ fn apply_grenades(game: &mut Game, s: &Snapshot) {
                         g.roll += distance / r;
                     }
                     g.position = at;
+                    g.height = height;
                     g.fuse = fuse;
                 }
             }
@@ -789,6 +791,8 @@ fn apply_grenades(game: &mut Game, s: &Snapshot) {
                 let mut g = Grenade::launch(at, Vec2::new(0.0, -1.0), Vec2::zero(), REPLICA_OWNER);
                 g.id = id as u32;
                 g.velocity = Vec2::zero();
+                g.height = height;
+                g.climb = 0.0;
                 g.fuse = fuse;
                 game.world.spawn((g,));
             }

@@ -36,9 +36,9 @@ impl BlastParams {
 }
 
 impl Game {
-    /// One tick of rolling for every grenade on the ground
-    /// (`Grenade::roll`): among this frame's tiles and walls and every
-    /// tank with a body - a live one moving at its body's velocity, a
+    /// One tick for every grenade (`Grenade::roll`): in the air over
+    /// everything but the field's walls, on the ground among this frame's
+    /// tiles and walls and every tank with a body - a live one moving at its body's velocity, a
     /// wreck still - after the world stepped, so a hull that drove into a
     /// grenade this tick hands it its motion. Also runs on the end screen,
     /// where a grenade keeps rolling and its blast hurts nothing.
@@ -46,7 +46,7 @@ impl Game {
         if self.world.query::<&Grenade>().iter().next().is_none() {
             return;
         }
-        let mut around = Surroundings { solids: f.terrain.solid_boxes(), hulls: Vec::new() };
+        let mut around = Surroundings { solids: f.terrain.tile_boxes(), edges: f.terrain.edge_boxes(), hulls: Vec::new() };
         let mut add = |tank: &Tank, physics: &crate::physics::Physics| {
             let Some(body) = tank.body else { return };
             let moving = if tank.is_wreck() { Vec2::zero() } else { physics.velocity(body) };
@@ -93,7 +93,20 @@ impl Game {
         }
     }
 
-    /// The show a grenade going off at `center` puts on: a round fireball,
+    /// The grenades laying smoke, for the presentation: (a stable key,
+    /// where the ball is drawn) for each one in the air or rolling faster
+    /// than `grenade_trail_min_speed`.
+    pub fn grenade_trails(&self) -> Vec<(u32, Position)> {
+        let fast = tuning().grenade_trail_min_speed;
+        self.world
+            .query::<&Grenade>()
+            .iter()
+            .filter(|g| g.airborne() || g.velocity.length() > fast)
+            .map(|g| (g.id, g.draw_pos()))
+            .collect()
+    }
+
+    /// The show a grenade going off at `center` puts on: a big round fireball,
     /// its shockwave rippling the screen, the impact flash, the screen's
     /// flash, a scorch on dry ground and flattened grass. Everything but
     /// the damage, which is why a replica can call it off
@@ -190,36 +203,40 @@ mod tests {
     }
 
     #[test]
-    fn a_crate_loads_four_and_each_press_lobs_one() {
+    fn a_crate_loads_six_and_each_press_lobs_one() {
         let mut game = sandbox("");
         arm(&mut game);
         assert_eq!(with_tank(&game.world, player(&game), |t| t.grenade_ammo), tuning().grenade_ammo_per_pickup);
+        assert_eq!(tuning().grenade_ammo_per_pickup, 6);
         assert_eq!(with_tank(&game.world, player(&game), |t| t.active_weapon()), crate::tank::ActiveWeapon::Grenades);
-        let events = step(&mut game, true);
-        assert!(events.iter().any(|e| matches!(e, Event::Fired { weapon: "grenades", .. })));
+        let launched = |events: &[Event]| events.iter().filter(|e| matches!(e, Event::Fired { weapon: "grenades", .. })).count();
+        let mut fired = launched(&step(&mut game, true));
+        assert_eq!(fired, 1);
         // Holding the trigger does not lob another.
         for _ in 0..60 {
-            step(&mut game, true);
+            fired += launched(&step(&mut game, true));
         }
-        assert_eq!(grenades(&game).len(), 1, "one per press");
-        for _ in 0..3 {
-            step(&mut game, false);
+        assert_eq!(fired, 1, "one per press");
+        // Press after press, a press a second: a crate's worth, then shells.
+        for _ in 0..8 {
+            fired += launched(&step(&mut game, false));
             for _ in 0..60 {
-                step(&mut game, true);
+                fired += launched(&step(&mut game, true));
             }
         }
-        assert_eq!(grenades(&game).len(), 4);
+        assert_eq!(fired, 6, "a crate's worth");
         assert_eq!(with_tank(&game.world, player(&game), |t| (t.grenade_ammo, t.active_weapon())), (0, crate::tank::ActiveWeapon::Shell));
     }
 
     #[test]
-    fn it_rolls_away_from_the_launcher_and_goes_off_when_the_fuse_runs_out() {
+    fn it_is_lobbed_ahead_and_goes_off_when_the_fuse_runs_out() {
         let mut game = sandbox("");
         let from = with_tank(&game.world, player(&game), |t| t.position);
         arm(&mut game);
         step(&mut game, true);
         let (at, v) = grenades(&game)[0];
         assert!(at.x > from.x && v.x > 0.0, "lobbed ahead: {at:?} {v:?}");
+        assert!(game.world.query::<&Grenade>().iter().all(|g| g.airborne()), "up in the air");
         let fuse = (tuning().grenade_fuse_seconds / DT).ceil() as usize;
         let mut blasts = Vec::new();
         for frame in 0..fuse + 2 {
@@ -241,7 +258,7 @@ mod tests {
         let enemy = parked_enemy(&mut game, Position::new(12.0 * 32.0 + 16.0, 6.0 * 32.0 + 16.0));
         let near = with_tank(&game.world, enemy, |t| t.position) + Vec2::new(-30.0, 0.0);
         let mut g = Grenade::launch(near, Vec2::new(1.0, 0.0), Vec2::zero(), Owner::Player(0));
-        g.velocity = Vec2::zero();
+        (g.velocity, g.height, g.climb) = (Vec2::zero(), 0.0, 0.0);
         g.fuse = DT * 0.5;
         game.world.spawn((g,));
         let events = step(&mut game, false);
@@ -250,30 +267,37 @@ mod tests {
     }
 
     #[test]
-    fn it_bounces_off_a_wall() {
-        let wall = "cells.\"8,5\" = { kind = \"wall\", material = \"iron\" }\ncells.\"8,6\" = { kind = \"wall\", material = \"iron\" }\ncells.\"8,7\" = { kind = \"wall\", material = \"iron\" }\n";
-        let mut game = sandbox(wall);
+    fn it_flies_over_a_near_wall_and_bounces_off_a_far_one() {
+        // A wall right ahead of the launcher, and another beyond where the
+        // lob comes down: the first is flown over, the second rolled into.
+        let mut walls = String::new();
+        for row in 4..=8 {
+            walls.push_str(&format!("cells.\"5,{row}\" = {{ kind = \"wall\", material = \"iron\" }}\n"));
+            walls.push_str(&format!("cells.\"11,{row}\" = {{ kind = \"wall\", material = \"iron\" }}\n"));
+        }
+        let mut game = sandbox(&walls);
         arm(&mut game);
         step(&mut game, true);
-        let face = 8.0 * 32.0;
+        let far_face = 11.0 * 32.0;
         let mut furthest: f32 = 0.0;
         let mut came_back = false;
-        for _ in 0..90 {
+        for _ in 0..240 {
             step(&mut game, false);
             let (at, v) = grenades(&game)[0];
             furthest = furthest.max(at.x);
-            came_back |= v.x < 0.0;
+            came_back |= v.x < 0.0 && at.x > 6.0 * 32.0;
         }
-        assert!(furthest < face, "never through the wall: {furthest}");
-        assert!(came_back, "bounced back off it");
+        assert!(furthest > 6.0 * 32.0, "flew over the near wall: {furthest}");
+        assert!(furthest < far_face, "never through the far wall: {furthest}");
+        assert!(came_back, "bounced back off the far wall");
     }
 
     #[test]
     fn a_tank_driving_into_a_grenade_shoves_it_along() {
         let mut game = sandbox("");
         let from = with_tank(&game.world, player(&game), |t| t.position);
-        let mut g = Grenade::launch(from + Vec2::new(40.0, 0.0), Vec2::new(1.0, 0.0), Vec2::zero(), Owner::Player(0));
-        g.velocity = Vec2::zero();
+        let mut g = Grenade::launch(from + Vec2::new(48.0, 0.0), Vec2::new(1.0, 0.0), Vec2::zero(), Owner::Player(0));
+        (g.velocity, g.height, g.climb) = (Vec2::zero(), 0.0, 0.0);
         let start = g.position;
         game.world.spawn((g,));
         for _ in 0..90 {

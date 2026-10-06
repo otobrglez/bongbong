@@ -238,11 +238,17 @@ impl Terrain {
         self.water.depth_at(p)
     }
 
-    /// Every tile's box and the field's four walls, as (centre,
-    /// half-extents), tiles first in the snapshot's order: what a grenade
-    /// bounces off (`grenade::Surroundings::solids`).
-    pub fn solid_boxes(&self) -> Vec<(Position, Position)> {
-        self.obstacles.iter().map(|b| (b.center, b.half)).chain(self.walls.iter().copied()).collect()
+    /// Every tile's box, as (centre, half-extents) in the snapshot's
+    /// order: what a grenade on the ground bounces off
+    /// (`grenade::Surroundings::solids`).
+    pub fn tile_boxes(&self) -> Vec<(Position, Position)> {
+        self.obstacles.iter().map(|b| (b.center, b.half)).collect()
+    }
+
+    /// The field's four walls, as (centre, half-extents): what stops a
+    /// grenade in the air too (`grenade::Surroundings::edges`).
+    pub fn edge_boxes(&self) -> Vec<(Position, Position)> {
+        self.walls.to_vec()
     }
 
     /// The entry fraction (0..1) of the first solid tile along the

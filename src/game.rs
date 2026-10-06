@@ -51,7 +51,8 @@ enum Standing<'a> {
     /// drives behind one is drawn behind it.
     Lamp(crate::Position),
     /// A grenade on the ground, in the grass like anything else: only the
-    /// tufts in front of it cover it, so its lamp still shows in a field.
+    /// tufts in front of it cover it, so its flash still shows in a field.
+    /// One in the air is over everything that stands.
     Grenade(&'a crate::grenade::Grenade),
 }
 
@@ -450,7 +451,8 @@ impl Game {
         let mut grenade_query = self.world.query::<&crate::grenade::Grenade>();
         for grenade in grenade_query.iter() {
             if !culled(cull, grenade.position) {
-                standing.push((grenade.position.y, Standing::Grenade(grenade)));
+                let key = if grenade.airborne() { f32::MAX } else { grenade.position.y };
+                standing.push((key, Standing::Grenade(grenade)));
             }
         }
         standing.sort_by(|a, b| a.0.total_cmp(&b.0));

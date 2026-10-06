@@ -46,6 +46,9 @@ pub enum ParticleKind {
     /// A puff of a seeker missile's smoke trail: hangs in the air where
     /// the missile left it, swells a little and pales away.
     Trail,
+    /// A puff of a grenade's plume: white and shaded, swelling fast and
+    /// gone in `grenade_trail_seconds`.
+    Plume,
 }
 
 /// Which weapon a hit came from - each has its own burst.
@@ -385,6 +388,7 @@ impl Fx {
                 ParticleKind::Ember => (tuning().ember_lifetime, FX_GRID, 0.0),
                 ParticleKind::Spray => (tuning().chip_lifetime, FX_GRID, -rng.random_range(50.0..130.0)),
                 ParticleKind::Trail => (tuning().missile_trail_seconds, FX_GRID * 2.0, 0.0),
+                ParticleKind::Plume => (tuning().grenade_trail_seconds, FX_GRID * 2.0, 0.0),
             };
             self.push(Particle {
                 pos: at,
@@ -441,9 +445,10 @@ impl Fx {
         });
     }
 
-    /// One puff of a missile's smoke trail at `at`, drifting a touch so
-    /// the line frays as it thins.
-    fn trail_puff(&mut self, at: Position) {
+    /// One puff of a smoke trail at `at` hanging about `life` seconds - a
+    /// missile's `Trail` or a grenade's `Plume` - drifting a touch so the
+    /// line frays as it thins.
+    fn trail_puff(&mut self, at: Position, life: f32, kind: ParticleKind) {
         let mut rng = rand::rng();
         let a = rng.random_range(0.0..std::f32::consts::TAU);
         let s = rng.random_range(0.0..6.0);
@@ -454,10 +459,10 @@ impl Fx {
             z: 0.0,
             vz: 0.0,
             age: 0.0,
-            life: tuning().missile_trail_seconds * rng.random_range(0.75..1.25),
-            size: FX_GRID * 2.0,
+            life: life * rng.random_range(0.75..1.25),
+            size: if kind == ParticleKind::Plume { FX_GRID * 4.0 } else { FX_GRID * 2.0 },
             tint: tints[rng.random_range(0..tints.len())],
-            kind: ParticleKind::Trail,
+            kind,
         });
     }
 
@@ -1046,13 +1051,31 @@ impl Fx {
             let steps = ((d / spacing) as usize).min(64);
             for k in 1..=steps {
                 let at = from + (tail - from) * (k as f32 * spacing / d);
-                self.trail_puff(at);
+                self.trail_puff(at, tuning().missile_trail_seconds, ParticleKind::Trail);
             }
             if steps > 0 {
                 self.trail_last.insert(id, from + (tail - from) * (steps as f32 * spacing / d));
             }
             if self.due(0x3155_0000 ^ id, 8.0 * tuning().fx_density, dt) {
                 self.burst(tail, ParticleKind::Spark, 1, 40.0, &[FIRE_T, EMBER_T]);
+            }
+        }
+        // A grenade trails a short, thick plume of white smoke while it
+        // flies and while it rolls fast.
+        let (spacing, life) = (tuning().grenade_trail_spacing, tuning().grenade_trail_seconds);
+        for (id, at) in game.grenade_trails() {
+            flying.insert(id);
+            if spacing <= 0.0 {
+                continue;
+            }
+            let from = *self.trail_last.entry(id).or_insert(at);
+            let d = from.distance_to(at);
+            let steps = ((d / spacing) as usize).min(64);
+            for k in 1..=steps {
+                self.trail_puff(from + (at - from) * (k as f32 * spacing / d), life, ParticleKind::Plume);
+            }
+            if steps > 0 {
+                self.trail_last.insert(id, from + (at - from) * (steps as f32 * spacing / d));
             }
         }
         self.trail_last.retain(|id, _| flying.contains(id));
@@ -1211,8 +1234,9 @@ impl Fx {
                 }
                 // Swells to about three blocks over its life, and drifts
                 // with the wind where it hangs.
-                ParticleKind::Trail => {
-                    p.size += FX_GRID * 2.0 * dt / p.life.max(0.05);
+                ParticleKind::Trail | ParticleKind::Plume => {
+                    let swell = if p.kind == ParticleKind::Plume { 5.0 } else { 2.0 };
+                    p.size += FX_GRID * swell * dt / p.life.max(0.05);
                     p.pos.x += crate::pyro::smoke_lean(&t, p.pos, clock) * 10.0 * dt;
                 }
                 // Dust hugs the ground and blows along it.

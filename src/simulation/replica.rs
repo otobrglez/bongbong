@@ -164,10 +164,10 @@ pub struct DrawableState {
     pub tanks: Vec<DrawableTank>,
     pub shots: Vec<DrawableShot>,
     pub missiles: Vec<DrawableMissile>,
-    /// Every grenade on the ground: its id and where it is in quarter
+    /// Every grenade: its id, where it is and how high, in quarter
     /// pixels. Its fuse is left out: a replica runs it down on its own
     /// clock between snapshots (`Game::tick_presentation`).
-    pub grenades: Vec<(u32, i32, i32)>,
+    pub grenades: Vec<(u32, i32, i32, i32)>,
     pub frogs: Vec<DrawableFrog>,
     /// Every pickup on the field, by cell.
     pub pickups: Vec<DrawablePickup>,
@@ -411,11 +411,11 @@ impl Game {
             .collect();
         missiles.sort_by_key(|m| m.id);
 
-        let mut grenades: Vec<(u32, i32, i32)> = self
+        let mut grenades: Vec<(u32, i32, i32, i32)> = self
             .world
             .query::<&crate::grenade::Grenade>()
             .iter()
-            .map(|g| (g.id, quarter_px(g.position.x), quarter_px(g.position.y)))
+            .map(|g| (g.id, quarter_px(g.position.x), quarter_px(g.position.y), quarter_px(g.height)))
             .collect();
         grenades.sort();
 

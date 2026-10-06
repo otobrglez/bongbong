@@ -53,6 +53,13 @@ const SOOT_RAMP: [Color; 3] = [SMOKE[1], SMOKE[2], SMOKE[3]];
 /// thins.
 const TRAIL_RAMP: [Color; 4] = [SMOKE[6], SMOKE[5], SMOKE[4], SMOKE[3]];
 
+/// A grenade's plume: near-white body paling to the lightest smoke, lit in
+/// white and shaded in the stone's mid step (STONE_PALE, STONE_HI,
+/// STONE_LT; WHITE; STONE_MID).
+const PLUME_RAMP: [Color; 3] = [Color::new(0xF0, 0xF0, 0xF0, 255), SMOKE[6], SMOKE[5]];
+const PLUME_LIT: Color = Color::new(0xFF, 0xFF, 0xFF, 255);
+const PLUME_SHADE: Color = Color::new(0xB0, 0xB0, 0xB0, 255);
+
 /// The step `t` (0..1) of the way down `ramp`: never a blend of two.
 fn ramp_at(ramp: &[Color], t: f32) -> Color {
     let i = (t.clamp(0.0, 1.0) * ramp.len() as f32) as usize;
@@ -102,7 +109,7 @@ fn draw_particle(d: &mut impl RaylibDraw, p: &Particle) {
         // Air: a shaded puff, paler as it rises and thinner as it goes,
         // the whole puff one translucent step (eighths), so a column of
         // them builds up where it is thick.
-        ParticleKind::Smoke | ParticleKind::Trail | ParticleKind::Dust => {
+        ParticleKind::Smoke | ParticleKind::Trail | ParticleKind::Plume | ParticleKind::Dust => {
             let (opacity, body, lit, shadow) = match p.kind {
                 ParticleKind::Smoke => {
                     let soot = p.tint.r == SOOT_T.r && p.tint.g == SOOT_T.g && p.tint.b == SOOT_T.b;
@@ -113,6 +120,7 @@ fn draw_particle(d: &mut impl RaylibDraw, p: &Particle) {
                     let body = ramp_at(&TRAIL_RAMP, t);
                     (tuning().missile_trail_opacity, body, lighter(&SMOKE, body), darker(&SMOKE, body))
                 }
+                ParticleKind::Plume => (1.0, ramp_at(&PLUME_RAMP, t), Some(PLUME_LIT), Some(PLUME_SHADE)),
                 // Dust keeps the colour of whatever it came off.
                 _ => (0.9, p.tint, None, None),
             };
@@ -120,7 +128,14 @@ fn draw_particle(d: &mut impl RaylibDraw, p: &Particle) {
             if k <= 0.05 {
                 return;
             }
-            let fade = |c: Color| pyro::alpha(c, k.min(1.0));
+            // A plume thins by the dither, in whole opaque blocks: blended
+            // white over the scene's target lands grey, since the target's
+            // own alpha drops with it.
+            let plume = p.kind == ParticleKind::Plume;
+            if plume && k < 0.5 {
+                return;
+            }
+            let fade = |c: Color| if plume { c } else { pyro::alpha(c, k.min(1.0)) };
             let puff = Puff {
                 pos: at,
                 radius: (p.size * 0.5 + 0.5).max(BLOCK),
@@ -128,7 +143,7 @@ fn draw_particle(d: &mut impl RaylibDraw, p: &Particle) {
                 shadow: shadow.map(fade),
                 lit: lit.map(fade),
                 core: None,
-                cover: 1.0,
+                cover: if plume { k.min(1.0) } else { 1.0 },
             };
             pyro::draw_puff(&mut b, &puff);
         }

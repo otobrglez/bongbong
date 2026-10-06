@@ -1637,10 +1637,12 @@ fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 6] {
                 ((time * 6.0 + tank.anim_phase()) as i32).rem_euclid(2)
             }
     });
-    // The drum shows the rounds fired from a crate's worth.
+    // The drum's four chambers show what is left of a crate's worth,
+    // rounded up, so the last grenade always shows.
     let grenades = (tank.grenade_ammo > 0).then(|| {
-        let spent = (tuning().grenade_ammo_per_pickup - tank.grenade_ammo).clamp(0, 4);
-        TANK_MODULE_GRENADE_COL + spent
+        let full = tuning().grenade_ammo_per_pickup.max(1);
+        let loaded = (tank.grenade_ammo.min(full) * 4 + full - 1) / full;
+        TANK_MODULE_GRENADE_COL + (4 - loaded).clamp(0, 4)
     });
     [minigun, missiles, plasma, laser, flame, grenades]
 }

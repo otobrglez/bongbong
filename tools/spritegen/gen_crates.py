@@ -188,18 +188,19 @@ GLYPHS = {
         '......XXXX',
         '.......XXX',
     ],
-    # Four grenades, each with its lamp (`o`, the ink's light) lit.
+    # Four grenade canisters standing in two rows, each with its cap on
+    # top and its band (`o`, the ink's light) round the middle.
     'grenades': [
-        '.XX....XX.',
-        'XXoX..XXoX',
-        'XXXX..XXXX',
-        '.XX....XX.',
+        '..X....X..',
+        '.XXX..XXX.',
+        '.ooo..ooo.',
+        '.XXX..XXX.',
         '..........',
+        '..X....X..',
+        '.XXX..XXX.',
+        '.ooo..ooo.',
+        '.XXX..XXX.',
         '..........',
-        '.XX....XX.',
-        'XXoX..XXoX',
-        'XXXX..XXXX',
-        '.XX....XX.',
     ],
     'heat_shield': [
         'XXXXXXXXXX',
