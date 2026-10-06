@@ -46,6 +46,18 @@ leave-sub = Your progress is lost. The map is kept.
 leave-confirm = LEAVE ROUND
 leave-stay = KEEP PLAYING
 
+# A question about a map the player changed, 28 px over 16 px in a
+# 600 pt panel, with two dialog buttons: FILE's revert, and a modified
+# copy whose original a new version of the game changed.
+question-revert-title = Revert { $name }?
+question-revert-sub = Your changes are deleted and the original comes back.
+question-revert-yes = REVERT
+question-revert-no = KEEP
+question-changed-title = The original { $name } changed
+question-changed-sub = Switch to the original and lose your changes?
+question-changed-yes = SWITCH
+question-changed-no = KEEP MINE
+
 ## The round (src/render/game.rs, src/level.rs, src/simulation/waves.rs)
 
 # The end screen: a 72 px banner, measured and centred over the whole
@@ -319,6 +331,7 @@ file-load = LOAD...
 file-save = SAVE
 file-save-as = SAVE AS...
 file-clear = CLEAR MAP
+file-revert = REVERT MAP
 
 # The MAP settings rows, 16 px labels in a 120 px column.
 settings-tanks = TANKS
@@ -351,6 +364,7 @@ editor-save-hint = Enter to save, Esc to cancel
 editor-save-hint-touch = Tap SAVE to save, outside to cancel
 editor-no-maps = no maps to load
 editor-shipped = shipped
+editor-modified = modified
 # A long list's pager: the span on screen, 12 pt between its < and > in
 # a 340 pt row, and how to turn it - the mouse's wheel, or after a touch a
 # tap on either arrow.
@@ -364,6 +378,10 @@ editor-loaded = loaded { $name }
 editor-saving-unavailable = saving is not available in this build: edits stay in memory for the session
 editor-no-name = the map has no name yet: use SAVE AS
 editor-bad-name = map name "{ $name }" may only use letters, digits, - and _
+editor-kept = saved { $name }
+editor-kept-modified = kept your changes to { $name }
+editor-kept-original = { $name } is the original again
+editor-reverted = { $name } is back to the original
 editor-copied = copied { $n } cells
 editor-cut = cut { $n } cells
 editor-stamp-kept = kept as { $name } in STAMPS

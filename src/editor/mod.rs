@@ -655,26 +655,23 @@ pub fn loupe_rect(finger: Vec2, side: f32, lift: f32, area: Rectangle) -> Rectan
     Rectangle::new(x, y, side, side)
 }
 
-/// The FILE menu's rows. `SAVE` and `SAVE AS` exist only where a file can
-/// be written (`map::saving_available`); the web build's menu is `LOAD`
-/// and `CLEAR MAP`.
+/// The FILE menu's rows, as `MapEditor::file_rows` offers them: `SAVE`
+/// only where a map can be kept (`map::saving_available`), `SAVE AS` there
+/// with a keyboard to type the name on, `REVERT TO ORIGINAL` on a shipped
+/// map the player has changed (`mapstore`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FileRow {
     Load,
     Save,
     SaveAs,
+    /// Ask to forget the shipped map's modified copy
+    /// (`mapstore::Question::Revert`).
+    Revert,
     /// Empty the canvas of every placed object (`MapEditor::clear`).
     Clear,
 }
 
 impl FileRow {
-    fn all() -> &'static [FileRow] {
-        if map::saving_available() {
-            &[FileRow::Load, FileRow::Save, FileRow::SaveAs, FileRow::Clear]
-        } else {
-            &[FileRow::Load, FileRow::Clear]
-        }
-    }
 
     /// The row as `status.builder.buttons` names it.
     fn name(self) -> &'static str {
@@ -682,6 +679,7 @@ impl FileRow {
             FileRow::Load => "load",
             FileRow::Save => "save",
             FileRow::SaveAs => "save_as",
+            FileRow::Revert => "revert",
             FileRow::Clear => "clear_map",
         }
     }
@@ -885,6 +883,19 @@ pub struct MapEditor {
     /// Bumped by every change to the map (`map_changed`): what the CHECK
     /// panel's report is measured against.
     edits: u64,
+    /// `edits` when the canvas was last kept or opened: an autosave is
+    /// owed while the two differ (`autosave_tick`).
+    kept_edits: u64,
+    /// `edits` when `autosave_tick` last saw it, and the seconds since
+    /// then with nothing under way: an edit restarts the wait.
+    seen_edits: u64,
+    idle: f32,
+    /// A question FILE asked for, for `mode::Session` to put up
+    /// (`take_question`).
+    question: Option<crate::mapstore::Question>,
+    /// The player's map store the canvas is kept in: the run's
+    /// (`mapstore::store`) from `new`, none with map modding off.
+    store: Option<crate::mapstore::Store<'static>>,
     /// The CHECK panel's last run of the linter over the canvas: made when
     /// the panel opens and again on the panel's first frame after an edit.
     lint: Option<LintReport>,
@@ -999,6 +1010,11 @@ impl MapEditor {
             resize_anchor: Anchor::default(),
             resize_session: None,
             edits: 0,
+            kept_edits: 0,
+            seen_edits: 0,
+            idle: 0.0,
+            question: None,
+            store: crate::mapstore::store(),
             lint: None,
             lint_marked: None,
             lint_setup: LintSetup { seed: 0xB0B5, ..LintSetup::default() },
@@ -1023,6 +1039,7 @@ impl MapEditor {
         };
         editor.note_stamp(stamp);
         editor.rebuild_ground();
+        editor.mark_kept();
         editor
     }
 
@@ -1553,6 +1570,7 @@ impl MapEditor {
         self.rebuild_ground();
         self.camera.fit();
         self.pending_look = None;
+        self.mark_kept();
     }
 
     /// Open `map` as a new document: the canvas, the baseline and an
@@ -1574,6 +1592,7 @@ impl MapEditor {
         self.rebuild_ground();
         self.camera.fit();
         self.pending_look = None;
+        self.mark_kept();
     }
 
     /// Revert cells and settings to the baseline, as one undo step.
@@ -1694,6 +1713,12 @@ impl MapEditor {
     /// there is any.
     pub fn status(&self) -> Option<&str> {
         self.status.as_deref()
+    }
+
+    /// Put `line` on the status line - what the session says after
+    /// answering a question about the canvas's map.
+    pub fn set_status(&mut self, line: String) {
+        self.status = Some(line);
     }
 
     fn finish_stroke(&mut self) {
@@ -2459,10 +2484,11 @@ impl MapEditor {
 
     // ----- the chrome -----
 
-    /// Write the map to `maps/<name>.toml` (`name` defaults to the map's
-    /// own name) and make the saved state the baseline. Native only:
-    /// `map::saving_available` is false on the web. Returns the status
-    /// line to show.
+    /// Keep the map under `name` (the map's own name by default) and make
+    /// the saved state the baseline: in the player's store with map
+    /// modding on (`mapstore::Store::save` - a shipped map as its modified
+    /// copy), else written to `maps/<name>.toml`, which only a native build
+    /// does (`map::saving_available`). Returns the status line to show.
     pub fn save(&mut self, name: Option<&str>) -> Result<String, String> {
         let t = crate::text::text();
         if !map::saving_available() {
@@ -2476,13 +2502,117 @@ impl MapEditor {
             return Err(t.fmt(crate::text::keys::EDITOR_BAD_NAME, &[("name", name.as_str().into())]));
         }
         self.settle();
-        let path = map::maps_dir().join(format!("{name}.toml"));
-        self.map_to_save().save(&path)?;
+        let line = match self.store {
+            Some(store) => {
+                if name.ends_with(crate::mapstore::MODIFIED_SUFFIX) {
+                    return Err(t.fmt(crate::text::keys::EDITOR_BAD_NAME, &[("name", name.as_str().into())]));
+                }
+                let key = match store.save(&name, &self.map_to_save())? {
+                    crate::mapstore::Saved::Modified => crate::text::keys::EDITOR_KEPT_MODIFIED,
+                    crate::mapstore::Saved::Original => crate::text::keys::EDITOR_KEPT_ORIGINAL,
+                    crate::mapstore::Saved::Own => crate::text::keys::EDITOR_KEPT,
+                };
+                t.fmt(key, &[("name", name.as_str().into())])
+            }
+            None => {
+                let path = map::maps_dir().join(format!("{name}.toml"));
+                self.map_to_save().save(&path)?;
+                t.fmt(crate::text::keys::EDITOR_SAVED, &[("name", name.as_str().into())])
+            }
+        };
         self.map.name = Some(name.clone());
         self.set_baseline();
-        let line = t.fmt(crate::text::keys::EDITOR_SAVED, &[("name", name.as_str().into())]);
+        self.mark_kept();
         self.status = Some(line.clone());
         Ok(line)
+    }
+
+    /// The FILE menu's rows on this canvas (`FileRow`).
+    fn file_rows(&self) -> Vec<FileRow> {
+        let mut rows = vec![FileRow::Load];
+        if map::saving_available() {
+            rows.push(FileRow::Save);
+            if crate::KEYBOARD_AVAILABLE {
+                rows.push(FileRow::SaveAs);
+            }
+        }
+        if self.revertible() {
+            rows.push(FileRow::Revert);
+        }
+        rows.push(FileRow::Clear);
+        rows
+    }
+
+    /// Whether the canvas is a shipped map the player has changed - kept
+    /// as its modified copy, or edited since it opened - so FILE offers to
+    /// take it back to the original. Map modding on only.
+    pub fn revertible(&self) -> bool {
+        let (Some(store), Some(name)) = (self.store, self.map.name.as_deref()) else { return false };
+        crate::mapstore::original(name).is_some() && (store.is_modified(name) || self.dirty())
+    }
+
+    /// The canvas as it stands is the one kept: no autosave is owed.
+    fn mark_kept(&mut self) {
+        self.kept_edits = self.edits;
+        self.seen_edits = self.edits;
+        self.idle = 0.0;
+    }
+
+    /// Keep the canvas in the player's store, where map modding is on, the
+    /// canvas has a name and it changed since it was last kept or opened:
+    /// a shipped map as its modified copy, any other under its name
+    /// (`mapstore::Store::save`). Silent unless it fails - the status line
+    /// says so then. Not a new baseline: RESET still goes back to the map
+    /// as it opened. What leaving the builder and a pause in the editing
+    /// (`autosave_tick`) do.
+    pub fn autosave(&mut self) {
+        if self.kept_edits == self.edits {
+            return;
+        }
+        let (Some(store), Some(name)) = (self.store, self.map.name.clone()) else { return };
+        self.settle();
+        self.mark_kept();
+        if let Err(e) = store.save(&name, &self.map_to_save()) {
+            eprintln!("[mapstore] {name}: {e}");
+            self.status = Some(e);
+        }
+    }
+
+    /// One frame of the autosave's wait: `builder_autosave_seconds` after
+    /// the last edit, with no stroke, carry or typing under way, the canvas
+    /// is kept.
+    fn autosave_tick(&mut self, dt: f32) {
+        if self.kept_edits == self.edits || self.store.is_none() {
+            return;
+        }
+        if self.seen_edits != self.edits {
+            self.seen_edits = self.edits;
+            self.idle = 0.0;
+            return;
+        }
+        if self.stroke.is_some() || self.lifted().is_some() || self.text_entry_open() {
+            return;
+        }
+        self.idle += dt;
+        if self.idle >= crate::tuning::tuning().builder_autosave_seconds {
+            self.autosave();
+        }
+    }
+
+    /// The player's map store the canvas is kept in, if map modding is on.
+    pub fn store(&self) -> Option<crate::mapstore::Store<'static>> {
+        self.store
+    }
+
+    /// Keep the canvas in `store` from here on: a test's own, in place of
+    /// the run's.
+    pub fn use_store(&mut self, store: Option<crate::mapstore::Store<'static>>) {
+        self.store = store;
+    }
+
+    /// The question FILE asked for this frame, for the session to put up.
+    pub fn take_question(&mut self) -> Option<crate::mapstore::Question> {
+        self.question.take()
     }
 
     // ----- the clear check -----
@@ -2611,6 +2741,7 @@ impl MapEditor {
         }
         self.cancel_drag();
         self.settle();
+        self.autosave();
         self.gestures = gesture::Gestures::default();
         self.entering = true;
         self.stroke_pointer = None;
@@ -2769,7 +2900,7 @@ impl MapEditor {
             Popup::Brush => PopupLayout::Brush(chrome::menu_list(bar.brush.unwrap_or_else(|| bar.tools_anchor(Category::Wall)), room, BrushRow::ALL.len())),
             Popup::Palette => PopupLayout::Palette(Palette::of(bar.tools_anchor(Category::Wall), room)),
             Popup::Settings { .. } => PopupLayout::Settings(SettingsLayout::of(bar.map, room, SETTINGS_ROWS.len())),
-            Popup::File => PopupLayout::File(chrome::menu_list(bar.file, room, FileRow::all().len())),
+            Popup::File => PopupLayout::File(chrome::menu_list(bar.file, room, self.file_rows().len())),
             Popup::Load { entries, .. } => PopupLayout::Load(LoadLayout::of(room, entries.len())),
             Popup::Stamps { .. } => {
                 PopupLayout::Stamps(LoadLayout::sized(room, self.stamps.len(), chrome::STAMPS_PANEL_W, chrome::STAMPS_VISIBLE_ROWS))
@@ -2841,7 +2972,7 @@ impl MapEditor {
                 pager(&mut out, list.pager);
             }
             (Some(Popup::File), Some(PopupLayout::File(rows))) => {
-                for (i, row) in FileRow::all().iter().enumerate() {
+                for (i, row) in self.file_rows().iter().enumerate() {
                     out.push((row.name().to_string(), rows.row(i)));
                 }
             }
@@ -2957,6 +3088,7 @@ impl MapEditor {
         }
         self.area = (layout.field.w, layout.field.h);
         self.framed = true;
+        self.autosave_tick(input.dt);
         if let Some(rect) = self.pending_look.take() {
             self.apply_look(rect);
         }
@@ -3504,7 +3636,7 @@ impl MapEditor {
                 };
                 // A pick or a press elsewhere: the menu closes either way.
                 if input.pressed {
-                    let picked = FileRow::all().iter().enumerate().find(|&(i, _)| rows.row(i).contains(pointer)).map(|(_, row)| *row);
+                    let picked = self.file_rows().into_iter().enumerate().find(|&(i, _)| rows.row(i).contains(pointer)).map(|(_, row)| row);
                     match picked {
                         Some(FileRow::Load) => self.open_load_list(),
                         Some(FileRow::Save) if self.map.name.is_some() => {
@@ -3514,6 +3646,9 @@ impl MapEditor {
                         }
                         Some(FileRow::Save) | Some(FileRow::SaveAs) => {
                             self.popup = Some(Popup::Save { name: self.map.name.clone().unwrap_or_default() })
+                        }
+                        Some(FileRow::Revert) => {
+                            self.question = self.map.name.clone().map(|name| crate::mapstore::Question::Revert { name });
                         }
                         Some(FileRow::Clear) => self.clear(),
                         None => {}
@@ -7145,6 +7280,81 @@ mod file_tests {
         }
     }
 
+    /// A store of a test's own (`mapstore`), for the run's life.
+    fn memory_store() -> crate::mapstore::Store<'static> {
+        crate::mapstore::Store(Box::leak(Box::new(crate::mapstore::Memory::default())))
+    }
+
+    /// The shipped map `name`, named, as the Load list opens it.
+    fn shipped(name: &str) -> MapFile {
+        let mut map = MapFile::from_toml_str(crate::mapstore::original(name).expect("shipped")).expect("parses");
+        map.name = Some(name.to_string());
+        map
+    }
+
+    /// With map modding on, an edit of a shipped map is kept as its
+    /// modified copy once the editing pauses for `builder_autosave_seconds`
+    /// - not while a stroke is under way, not before - and at once on
+    /// leaving the builder; undoing back to the original takes the copy
+    /// away, and opening a map owes nothing.
+    #[test]
+    fn edits_of_a_shipped_map_are_kept_as_its_modified_copy() {
+        let store = memory_store();
+        let mut ed = MapEditor::new(shipped("default"));
+        ed.use_store(Some(store));
+        let wait = crate::tuning::Tuning::DEFAULT.builder_autosave_seconds;
+        ed.autosave_tick(wait * 2.0);
+        assert!(!store.is_modified("default"), "an opened map owes no save");
+        ed.select_tool(Tool::Wall(Material::Glass));
+        ed.stroke(&[(7, 7)], false);
+        ed.autosave_tick(wait * 2.0);
+        assert!(!store.is_modified("default"), "the frame that sees the edit starts the wait");
+        ed.autosave_tick(wait * 0.5);
+        assert!(!store.is_modified("default"), "before the wait is over");
+        ed.autosave_tick(wait);
+        assert!(store.is_modified("default"), "kept after the pause");
+        let kept = MapFile::from_toml_str(&store.source("default").expect("opens")).expect("parses");
+        assert_eq!(kept.cell(7, 7), Some(&CellObject::Wall { material: Material::Glass }));
+        assert!(ed.revertible(), "FILE offers the original back");
+
+        ed.undo();
+        ed.leave();
+        assert!(!store.is_modified("default"), "the original again keeps no copy");
+        assert!(!ed.revertible());
+
+        ed.stroke(&[(8, 8)], false);
+        ed.leave();
+        assert!(store.is_modified("default"), "leaving keeps the canvas at once");
+    }
+
+    /// With map modding on, SAVE keeps a shipped map as its modified copy
+    /// and SAVE AS a map of the player's own under its name; a name ending
+    /// in the copy's suffix is refused. FILE carries REVERT MAP only on a
+    /// shipped map the player changed, and the row asks the session.
+    #[test]
+    fn save_and_revert_go_through_the_store() {
+        let store = memory_store();
+        let frame = arena();
+        let mut ed = MapEditor::new(shipped("portals"));
+        ed.use_store(Some(store));
+        assert!(!ed.file_rows().contains(&FileRow::Revert));
+        ed.select_tool(Tool::Wall(Material::Glass));
+        ed.stroke(&[(7, 7)], false);
+        assert!(ed.file_rows().contains(&FileRow::Revert), "an edit not yet kept can be reverted too");
+        ed.save(None).expect("saves");
+        assert!(store.is_modified("portals") && !ed.dirty());
+        assert!(ed.save(Some("mine-modd")).is_err(), "the copy's suffix is the store's");
+        ed.save(Some("mine")).expect("saves as");
+        assert_eq!(store.own_maps(), vec!["mine".to_string()]);
+        assert!(!ed.file_rows().contains(&FileRow::Revert), "a map of the player's own has no original");
+
+        ed.load(shipped("portals"));
+        press_named(&mut ed, &frame, "file");
+        press_named(&mut ed, &frame, "revert");
+        assert_eq!(ed.take_question(), Some(crate::mapstore::Question::Revert { name: "portals".to_string() }));
+        assert_eq!(ed.open_menu(), None);
+    }
+
     /// FILE > CLEAR MAP is the menu's last row on every build.
     #[test]
     fn file_menu_clear_map_row_clears_the_canvas_and_closes_the_menu() {
@@ -7154,7 +7364,7 @@ mod file_tests {
         let mut ed = MapEditor::new(base);
         press_named(&mut ed, &frame, "file");
         assert_eq!(ed.open_menu(), Some("file"));
-        let rows = FileRow::all();
+        let rows = ed.file_rows();
         assert_eq!(rows.last(), Some(&FileRow::Clear));
         press_named(&mut ed, &frame, "clear_map");
         assert_eq!(ed.open_menu(), None);

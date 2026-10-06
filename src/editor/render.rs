@@ -266,6 +266,7 @@ impl MapEditor {
         frame: &BuilderFrame,
         backdrop: Color,
         textures: &EditorTextures,
+        question: Option<&crate::mapstore::Question>,
     ) {
         let (layout, view) = (&frame.layout, &frame.view);
         let cursor = self.cursor_cell(frame);
@@ -287,7 +288,7 @@ impl MapEditor {
             let magnified = self.loupe(frame).and_then(|loupe| Some((loupe, self.draw_loupe_world(rl, thread, &mut scene.loupe, &loupe, textures, time)?)));
             rl.draw(thread, |mut d| {
                 crate::render::view::present_into(&mut d, composite, view, backdrop, None);
-                self.draw_window_chrome(&mut d, frame, &chrome, textures, cursor, &camera, magnified.as_ref().map(|(l, p)| (l, *p)), units);
+                self.draw_window_chrome(&mut d, frame, &chrome, textures, cursor, &camera, magnified.as_ref().map(|(l, p)| (l, *p)), units, question);
             });
             return;
         }
@@ -326,7 +327,7 @@ impl MapEditor {
             d.clear_background(Color::BLACK);
             crate::render::view::letterbox(&mut d, view, backdrop);
             d.draw_texture_pro(target, source, area, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-            self.draw_window_chrome(&mut d, frame, &chrome, textures, cursor, &camera, magnified.as_ref().map(|(l, p)| (l, *p)), units);
+            self.draw_window_chrome(&mut d, frame, &chrome, textures, cursor, &camera, magnified.as_ref().map(|(l, p)| (l, *p)), units, question);
         });
     }
 
@@ -346,6 +347,7 @@ impl MapEditor {
         camera: &crate::view::Camera,
         magnified: Option<(&Loupe, &RenderTexture2D)>,
         units: f32,
+        question: Option<&crate::mapstore::Question>,
     ) {
         let ui = crate::render::view::onto_window(
             Camera2D { offset: Vector2::new(0.0, 0.0), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: frame.ui.scale },
@@ -361,6 +363,10 @@ impl MapEditor {
             self.draw_popup(&mut d, chrome, textures, frame.ui.hints);
             if let Some((loupe, picture)) = magnified {
                 draw_loupe(&mut d, loupe, picture);
+            }
+            // A question about the canvas's map (BB-33), over everything.
+            if let Some(question) = question {
+                crate::render::hud::draw_question(&mut d, frame.ui.screen, frame.ui.area, question);
             }
         });
     }
@@ -762,7 +768,7 @@ impl MapEditor {
             (Some(Popup::Palette), Some(PopupLayout::Palette(palette))) => self.draw_palette(d, palette, textures),
             (Some(Popup::Settings { page }), Some(PopupLayout::Settings(settings))) => self.draw_settings(d, settings, *page, textures, hints),
             (Some(Popup::Lint { page }), Some(PopupLayout::Lint(lint))) => self.draw_lint_panel(d, lint, *page, hints),
-            (Some(Popup::File), Some(PopupLayout::File(rows))) => Self::draw_file_menu(d, rows),
+            (Some(Popup::File), Some(PopupLayout::File(rows))) => Self::draw_file_menu(d, rows, &self.file_rows()),
             (Some(Popup::Load { entries, scroll }), Some(PopupLayout::Load(load))) => self.draw_load_list(d, load, entries, *scroll, hints, textures),
             (Some(Popup::Save { name }), Some(PopupLayout::Save(panel))) => {
                 let panel = *panel;
@@ -782,9 +788,9 @@ impl MapEditor {
     }
 
     /// The FILE menu below its button.
-    fn draw_file_menu(d: &mut impl RaylibDraw, rows: &chrome::Rows) {
+    fn draw_file_menu(d: &mut impl RaylibDraw, rows: &chrome::Rows, file_rows: &[FileRow]) {
         draw_panel(d, rows.panel);
-        for (i, row) in FileRow::all().iter().enumerate() {
+        for (i, row) in file_rows.iter().enumerate() {
             let rect = rows.row(i);
             d.draw_text(&row.label(), rect.x as i32 + 16, (rect.y + (rect.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, TEXT);
         }
@@ -824,7 +830,7 @@ impl MapEditor {
                 if !detail.is_empty() {
                     detail.push_str("   ");
                 }
-                detail.push_str(&text().get(keys::EDITOR_SHIPPED));
+                detail.push_str(&text().get(if entry.modified { keys::EDITOR_MODIFIED } else { keys::EDITOR_SHIPPED }));
             }
             d.draw_text(&fit_text(&detail, at.width, UI_SMALL_TEXT), at.x as i32, (row.y + chrome::LOAD_DETAIL_Y) as i32, UI_SMALL_TEXT, DIM);
         }
@@ -1870,6 +1876,7 @@ impl FileRow {
             FileRow::Load => keys::FILE_LOAD,
             FileRow::Save => keys::FILE_SAVE,
             FileRow::SaveAs => keys::FILE_SAVE_AS,
+            FileRow::Revert => keys::FILE_REVERT,
             FileRow::Clear => keys::FILE_CLEAR,
         })
     }

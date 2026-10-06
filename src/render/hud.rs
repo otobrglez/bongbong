@@ -543,6 +543,36 @@ pub fn draw_leave_dialog(d: &mut impl RaylibDraw, area: Rect) {
     draw_dialog_button(d, r.stay, &t.get(keys::LEAVE_STAY), TEXT, None);
 }
 
+/// Draw a question about a kept map (`mapstore::Question`) over a dim of
+/// the whole `screen`, in UI points like `draw_leave_dialog`: its title and
+/// line naming the map, the answer it asks for on the left. Play's chrome
+/// and the builder's both call it, over everything else they draw.
+pub fn draw_question(d: &mut impl RaylibDraw, screen: Rect, area: Rect, question: &crate::mapstore::Question) {
+    use crate::mapstore::Question;
+    let t = text();
+    d.draw_rectangle(screen.x as i32, screen.y as i32, screen.w.ceil() as i32, screen.h.ceil() as i32, Color::new(0, 0, 0, 120));
+    let r = crate::hud::question_rects(area);
+    let (title, sub, yes, no) = match question {
+        Question::Revert { .. } => (keys::QUESTION_REVERT_TITLE, keys::QUESTION_REVERT_SUB, keys::QUESTION_REVERT_YES, keys::QUESTION_REVERT_NO),
+        Question::OriginalChanged { .. } => {
+            (keys::QUESTION_CHANGED_TITLE, keys::QUESTION_CHANGED_SUB, keys::QUESTION_CHANGED_YES, keys::QUESTION_CHANGED_NO)
+        }
+    };
+    let name = [("name", question.name().into())];
+    let (title, sub) = (t.fmt(title, &name), t.fmt(sub, &name));
+    let room = (crate::hud::QUESTION_W - 32.0) as i32;
+    let (title, sub) = (crate::text::fit(&title, room, 28), crate::text::fit(&sub, room, 16));
+    let shadow = Rectangle::new(r.panel.x + 4.0, r.panel.y + 4.0, r.panel.width, r.panel.height);
+    d.draw_rectangle_rounded(shadow, 0.08, 8, Color::new(0, 0, 0, 90));
+    d.draw_rectangle_rounded(r.panel, 0.08, 8, Color::new(20, 20, 24, 240));
+    d.draw_rectangle_rounded_lines_ex(r.panel, 0.08, 8, 1.5, Color::new(0, 0, 0, 150));
+    let centre = r.panel.x + r.panel.width / 2.0;
+    d.draw_text(&title, (centre - width(&title, 28) as f32 / 2.0) as i32, (r.panel.y + 22.0) as i32, 28, TEXT);
+    d.draw_text(&sub, (centre - width(&sub, 16) as f32 / 2.0) as i32, (r.panel.y + 62.0) as i32, 16, DIM);
+    draw_dialog_button(d, r.yes, &t.get(yes), BUILD_COLOR, None);
+    draw_dialog_button(d, r.no, &t.get(no), TEXT, None);
+}
+
 /// One line of a banner in UI points, centred on the chrome's `area` at
 /// `y`: set in `size` where the area has the room and smaller where it has
 /// not (`hud::banner_size`). Answers the size it was set in.

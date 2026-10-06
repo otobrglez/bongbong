@@ -198,6 +198,13 @@ impl Campaign {
         }
     }
 
+    /// Forget the session's edit of the level whose map is `name`: its map
+    /// is the one `map::open_map` opens again - what a revert to the
+    /// original does.
+    pub fn forget_edit(&mut self, name: &str) {
+        self.edits.remove(name);
+    }
+
     /// The level after `i`: after the last, the first again - level 1,
     /// not the training stage before it.
     pub fn next(&self, i: usize) -> usize {

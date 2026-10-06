@@ -1128,6 +1128,7 @@ impl DevServer {
     /// that can be answered now and arm `step`/`screenshot` for later in
     /// this frame. `width`/`height` are the battlefield size.
     pub fn before_frame(&mut self, session: &mut Session, width: f32, height: f32) {
+        session.watch_originals();
         // The AI-decision events exist for this server's `events` feed.
         session.game.trace_ai = true;
         self.observe_replica(session);
@@ -1416,7 +1417,7 @@ impl DevServer {
     fn status(&self, session: &Session, width: f32, height: f32) -> Value {
         let game = session.shown();
         let snap = game.debug_snapshot(width, height, Detail::Compact);
-        json!({
+        let mut status = json!({
             "version": env!("CARGO_PKG_VERSION"),
             "port": self.port,
             "round": round_json(session),
@@ -1462,7 +1463,11 @@ impl DevServer {
             "next_event_seq": self.next_seq,
             "history_frames": self.history.len(),
             "turns": self.turns_summary(),
-        })
+        });
+        // Past the macro's recursion limit, so set here.
+        status["question"] = question_json(session);
+        status["map_modding"] = json!(crate::mapstore::enabled());
+        status
     }
 
     /// `status.builder`: the builder's state - see the `status` tool.
@@ -1500,7 +1505,9 @@ impl DevServer {
         // wait for frames that never run (`app.rs` advances only while
         // `Session::playing`): say what is asking instead.
         if method == "step" && session.mode() == Driver::Play && !session.playing() {
-            let what = if session.level_select.is_some() {
+            let what = if session.question.is_some() {
+                "a question about a kept map is open - click status.ui.screen_buttons' yes or no"
+            } else if session.level_select.is_some() {
                 "the level select is open - key escape closes it, key enter or a click on a tile starts a level"
             } else if session.players_dialog {
                 "the players dialog is open - key escape closes it"
@@ -2096,7 +2103,13 @@ impl DevServer {
                 // The same order as `app.rs`: the level select or an
                 // open dialog eats every press while it is up, then the
                 // end screen, then the corners' buttons.
-                if session.level_select.is_some() {
+                if session.question.is_some() {
+                    let level = (session.game.map.name.clone(), session.game.frame());
+                    session.press_question(p, ui.area);
+                    if (session.game.map.name.clone(), session.game.frame()) != level {
+                        self.round_started(session);
+                    }
+                } else if session.level_select.is_some() {
                     let input = SelectInput { pointer: Some(p), pressed: !right, ..SelectInput::default() };
                     if session.update_level_select(&input, ui.area) {
                         self.round_started(session);
@@ -2565,6 +2578,21 @@ fn terrain_json(game: &Game, params: &Value) -> Result<Value, String> {
 /// `mode`'s reply: the session's mode and the builder's state in one look.
 /// The level the local round is (docs/levels.md) - its number, map and
 /// title, and the furthest one reached - or `null` in free play.
+/// `status.question`: the question about a kept map (BB-33) - `revert` or
+/// `original_changed` and the map - `null` when none is asked; a `click`
+/// on `status.ui.screen_buttons`' `yes`/`no` answers it.
+fn question_json(session: &Session) -> Value {
+    session.question.as_ref().map_or(Value::Null, |q| {
+        json!({
+            "kind": match q {
+                crate::mapstore::Question::Revert { .. } => "revert",
+                crate::mapstore::Question::OriginalChanged { .. } => "original_changed",
+            },
+            "map": q.name(),
+        })
+    })
+}
+
 fn level_json(session: &Session) -> Value {
     let (Some(i), Some(campaign)) = (session.level(), session.campaign.as_ref()) else { return Value::Null };
     let Some(level) = campaign.levels.get(i) else { return Value::Null };

@@ -1014,42 +1014,52 @@ pub fn hostable_maps() -> &'static [&'static str] {
     })
 }
 
-/// Whether this build can write a map to disk: native yes; web and iOS no
-/// (their edits live in memory for the session - docs/game-editor-fusion.md;
-/// an app bundle is read-only).
-pub const fn saving_available() -> bool {
-    !crate::EMBEDDED
+/// Whether this build keeps the maps the builder saves: everywhere while
+/// map modding is on (`mapstore`, the player's own store on every
+/// platform); with it off, native yes - under `maps_dir()` - and the web,
+/// iOS and Android no (their edits live in memory for the session -
+/// docs/game-editor-fusion.md; an app bundle is read-only).
+pub fn saving_available() -> bool {
+    crate::mapstore::enabled() || !crate::EMBEDDED
 }
 
 /// One map the builder's Load list can offer.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct MapEntry {
     pub name: String,
-    /// A file under `maps_dir()` (native); otherwise one of `SHIPPED_MAPS`.
+    /// Kept by the player: a file under `maps_dir()` (map modding off) or a
+    /// map of their own in the store (`mapstore`); otherwise one of
+    /// `SHIPPED_MAPS`.
     pub on_disk: bool,
+    /// A shipped map the player has a modified copy of, which is what
+    /// opens under its name (`mapstore`).
+    pub modified: bool,
 }
 
-/// Every map the builder can load, sorted by name: the files under
-/// `maps_dir()` on native, plus the shipped maps not shadowed by a file of
-/// the same name. The web build lists only the shipped ones.
+/// Every map the builder can load, sorted by name. With map modding on,
+/// every shipped map - each marked where the player modified it - and the
+/// player's own maps. Off, the files under `maps_dir()` on native, plus the
+/// shipped maps not shadowed by a file of the same name; the web build
+/// lists only the shipped ones.
 pub fn available_maps() -> Vec<MapEntry> {
-    let mut entries: Vec<MapEntry> = if saving_available() {
-        list_maps().into_iter().map(|name| MapEntry { name, on_disk: true }).collect()
-    } else {
-        Vec::new()
+    let mut entries: Vec<MapEntry> = match crate::mapstore::store() {
+        Some(store) => store.own_maps().into_iter().map(|name| MapEntry { name, on_disk: true, modified: false }).collect(),
+        None if saving_available() => list_maps().into_iter().map(|name| MapEntry { name, on_disk: true, modified: false }).collect(),
+        None => Vec::new(),
     };
+    let store = crate::mapstore::store();
     for (name, _) in SHIPPED_MAPS {
         if !entries.iter().any(|e| e.name == *name) {
-            entries.push(MapEntry { name: (*name).to_string(), on_disk: false });
+            let modified = store.is_some_and(|store| store.is_modified(name));
+            entries.push(MapEntry { name: (*name).to_string(), on_disk: false, modified });
         }
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     entries
 }
 
-/// Open a map by its Load-list name: the file under `maps_dir()` when
-/// there is one (native), else the shipped map of that name. The result
-/// carries `name` for display.
+/// Open a map by its Load-list name (`map_source`). The result carries
+/// `name` for display.
 pub fn open_map(name: &str) -> Result<MapFile, String> {
     let text = map_source(name)?;
     let mut map = MapFile::from_toml_str(&text).map_err(|e| format!("parsing map {name}: {e}"))?;
@@ -1057,9 +1067,15 @@ pub fn open_map(name: &str) -> Result<MapFile, String> {
     Ok(map)
 }
 
-/// The text `open_map` reads a map by its Load-list name from: the file
-/// under `maps_dir()` when there is one (native), else the shipped map's.
+/// The text `open_map` reads a map by its Load-list name from. With map
+/// modding on, the player's store (`mapstore::Store::source`: a shipped
+/// map's modified copy, else their own map, else the shipped text). Off,
+/// the file under `maps_dir()` when there is one (native), else the
+/// shipped map's.
 pub fn map_source(name: &str) -> Result<std::borrow::Cow<'static, str>, String> {
+    if let Some(store) = crate::mapstore::store() {
+        return store.source(name).ok_or_else(|| format!("no map named {name:?}"));
+    }
     let path = maps_dir().join(format!("{name}.toml"));
     if saving_available() && path.is_file() {
         return std::fs::read_to_string(&path).map(std::borrow::Cow::Owned).map_err(|e| format!("reading map {}: {e}", path.display()));

@@ -2310,6 +2310,10 @@ tunables! {
         /// about 10 ms with their repaint in a release build
         /// (`a_large_fill_timing`).
         builder_fill_max_cells: usize = 4096 in 16 ..= 62500;
+        /// With map modding on (`mapstore`, BB-33), the builder keeps the
+        /// canvas this many seconds after the last edit, nothing being
+        /// painted, carried or typed - and on leaving the builder at once.
+        builder_autosave_seconds: f32 = 2.0 in 0.2 ..= 60.0;
         /// SCATTER's footprint: the cells within this many cells of each
         /// cell the stroke crosses (and a half), a disc twice as wide and
         /// one more - 2 is 21 cells, five across.
