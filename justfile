@@ -475,6 +475,25 @@ ios-testflight *ARGS:
 ios-icon *ARGS:
     nix-shell -p "python3.withPackages (ps: [ps.pillow])" --run "python3 tools/ios/gen_app_icon.py {{ARGS}}"
 
+# --- macOS app (tools/macos/, CLAUDE.md's Releases section) ---
+
+# Run outside a release, it is the same app macos-release.yml ships;
+# MACOS_ARCHS=aarch64 builds Apple Silicon alone.
+# Build target/macos/BongBong.app (Apple Silicon and Intel, static/ inside).
+macos-app:
+    ./tools/macos/bundle.sh
+
+# Needs a Developer ID Application certificate and the ASC_* key in .envrc;
+# without the certificate it signs ad hoc. --no-notarize skips Apple.
+# Sign and notarize BongBong.app into target/macos/bongbong-macos.dmg.
+macos-dmg *ARGS: macos-app
+    ./tools/macos/package.sh {{ARGS}}
+
+# tools/macos/gen_app_icon.py; --row N picks another chassis.
+# Regenerate the macOS app icon.
+macos-icon *ARGS:
+    nix-shell -p "python3.withPackages (ps: [ps.pillow])" --run "python3 tools/macos/gen_app_icon.py {{ARGS}}"
+
 # --- Android (docs/android-port-prd.md, CLAUDE.md's Android section) ---
 # Every recipe sources tools/android/env.sh: the SDK, NDK and JDK paths,
 # the API pins, the prebuilt raylib prefix and the NDK compiler for cargo.

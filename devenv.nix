@@ -31,11 +31,14 @@ in {
     # to Xcode's, see the PRD.
     # aarch64-linux-android: the Android port (docs/android-port-prd.md);
     # the NDK, SDK and emulator come from tools/setup_android.sh.
+    # x86_64-apple-darwin: the Intel half of the macOS app
+    # (tools/macos/bundle.sh), cross-compiled on Apple Silicon.
     targets = [
       "wasm32-unknown-emscripten"
       "aarch64-apple-ios"
       "aarch64-apple-ios-sim"
       "aarch64-linux-android"
+      "x86_64-apple-darwin"
     ];
   };
 

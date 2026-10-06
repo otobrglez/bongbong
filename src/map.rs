@@ -946,12 +946,23 @@ impl MapFile {
     }
 }
 
-/// Directory saved maps live under, relative to the process's working
-/// directory - same "path relative to CWD, not the binary" convention every
-/// other asset path in this project already follows (see CLAUDE.md's
-/// Releases section).
+/// Directory saved maps live under: `maps`, relative to the process's
+/// working directory - the "path relative to CWD, not the binary"
+/// convention every asset path in this project follows (see CLAUDE.md's
+/// Releases section) - unless `set_maps_dir` named another, which the
+/// macOS app does (`app::macos`), since a signed bundle must not be
+/// written to.
 pub fn maps_dir() -> PathBuf {
-    PathBuf::from("maps")
+    MAPS_DIR.get().cloned().unwrap_or_else(|| PathBuf::from("maps"))
+}
+
+/// The directory `maps_dir` answers in place of `maps`.
+static MAPS_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Keep saved maps under `dir` for the rest of the process; set once, at
+/// startup, before anything lists or saves a map. A later call is ignored.
+pub fn set_maps_dir(dir: PathBuf) {
+    let _ = MAPS_DIR.set(dir);
 }
 
 /// The maps compiled into the binary, by name: the default battlefields,

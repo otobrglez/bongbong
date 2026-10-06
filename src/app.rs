@@ -1138,6 +1138,11 @@ pub fn run(args: Args) {
     #[cfg(feature = "dev-tools")]
     crate::capi::keep_alive();
 
+    // Started from BongBong.app, the game works out of the bundle's
+    // Resources and saves maps under the user's data directory.
+    #[cfg(target_os = "macos")]
+    macos::enter_bundle();
+
     // The language every string is drawn in (docs/localization-prd.md
     // section 4.5): an explicit `--lang` - or the page's `?lang=` on the
     // web - when it names a shipped language, else the platform's own
@@ -1261,6 +1266,8 @@ pub fn run(args: Args) {
     #[cfg(target_os = "ios")]
     builder.fullscreen().highdpi().vsync();
     let (mut rl, thread) = builder.build();
+    #[cfg(target_os = "macos")]
+    macos::dock_icon();
     #[cfg(target_os = "ios")]
     {
         ios::route_default_framebuffer(&mut rl);
@@ -2629,6 +2636,8 @@ pub fn run(args: Args) {
 pub mod ios;
 #[cfg(target_os = "android")]
 pub mod android;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(target_os = "emscripten")]
 mod web;
 

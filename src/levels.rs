@@ -267,18 +267,25 @@ pub fn write_progress(path: &Path, level: &str) -> Result<(), String> {
     std::fs::write(path, progress_text(level)).map_err(|e| format!("writing {}: {e}", path.display()))
 }
 
-/// Where a desktop or an iPhone keeps the progress file: the platform's
-/// per-user data directory - `%APPDATA%` on Windows, `~/Library/Application
-/// Support` on Apple's platforms (on iOS `HOME` is the app's own
-/// container), `$XDG_DATA_HOME` or `~/.local/share` elsewhere - then
-/// `bongbong/progress.toml`. `BONGBONG_PROGRESS` names a file outright.
-/// `None` where the environment names no such directory. Android's
-/// directory comes from its activity (`app::android::data_dir`) and the
-/// web keeps its progress in the page's `localStorage`.
+/// Where a desktop or an iPhone keeps the progress file: `data_dir`'s
+/// `progress.toml`. `BONGBONG_PROGRESS` names a file outright. `None`
+/// where the environment names no data directory. Android's directory
+/// comes from its activity (`app::android::data_dir`) and the web keeps
+/// its progress in the page's `localStorage`.
 pub fn progress_path() -> Option<PathBuf> {
     if let Some(file) = std::env::var_os("BONGBONG_PROGRESS").filter(|f| !f.is_empty()) {
         return Some(PathBuf::from(file));
     }
+    Some(data_dir()?.join("progress.toml"))
+}
+
+/// The game's own folder in the platform's per-user data directory -
+/// `%APPDATA%` on Windows, `~/Library/Application Support` on Apple's
+/// platforms (on iOS `HOME` is the app's own container), `$XDG_DATA_HOME`
+/// or `~/.local/share` elsewhere - then `bongbong`. Where the progress file
+/// lives, and the macOS app's saved maps (`app::macos`). `None` where the
+/// environment names no such directory.
+pub fn data_dir() -> Option<PathBuf> {
     let home = || std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
     let dir = if cfg!(windows) {
         std::env::var_os("APPDATA").filter(|d| !d.is_empty()).map(PathBuf::from)
@@ -290,7 +297,7 @@ pub fn progress_path() -> Option<PathBuf> {
             .filter(|d| d.is_absolute())
             .or_else(|| home().map(|h| h.join(".local").join("share")))
     }?;
-    Some(dir.join("bongbong").join("progress.toml"))
+    Some(dir.join("bongbong"))
 }
 
 #[cfg(test)]
