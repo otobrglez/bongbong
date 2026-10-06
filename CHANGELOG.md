@@ -4,6 +4,49 @@ What changed in each release of bongbong, newest first. Each entry is also
 that release's notes on GitHub, above the downloads. The 0.0.x builds before
 0.1.0 are in the git history.
 
+## 0.2.7 - 2026-10-06
+
+Bigger maps with a camera that follows your tank, a training level, a
+volcano level and a grenade launcher, and a builder made for large maps.
+
+### New
+- Maps larger than the screen: the camera follows your tank, a round opens on the whole map before zooming in, and two players on one machine get a split screen when they drift apart. The levels are bigger too (#68)
+- Arrows at the screen's edge point to enemies, teammates, the frog and wave gates off screen, and tablets and desktops get a minimap (#68)
+- Boot Camp, LEVEL 0: a short course for one player where the frog teaches driving, crates, firing, a chain of exploding drums and your first enemy. You can skip it and start on level 1 (#74, #79, #81, #88)
+- Vulkan, the new level 2: a volcano that erupts every half minute and throws lava bombs, rivers and lakes of lava, and a heat shield crate that keeps all of it off you (#72, #84)
+- A grenade launcher: lob canisters over walls, watch them roll and bounce, and get clear before the fuse runs out (#96)
+- Shells, bullets, plasma and the laser now go through portals (#95)
+- Every pickup is a supply crate with its symbol on the lid; crates drop in from the air and crack open when taken (#71, #73)
+- Fish swim in the lakes and scatter from tanks, shots and blasts (#91)
+- Lamp posts, lanterns and dusk falling into night, for maps of your own (#72)
+- The builder works on large maps: zoom, pan and pinch, a navigator, select with copy, paste, flip and stamps, RECT, FILL and SCATTER brushes, PLAY HERE, and a CHECK panel that finds problems and fixes them in one tap (#68)
+- A pause button next to BUILD (#83)
+
+### Changed
+- The HUD sits in the screen's two top corners on one row instead of a bar, and fades while the action is under it (#68, #81)
+- You carry one special weapon at a time: a different weapon crate replaces it, and when it runs dry you are back on shells (#81)
+- A round's end plays out: the deciding hit slows down, the end screen eases in, levels change through a fade, and a lost level restarts by itself after 5 s (#81)
+- Enemies only fire at you from close enough to be on your screen (#68)
+- The minigun crate holds 60 rounds (#94)
+- Nights are a little less dark (#72)
+- The builder's bar is taller with larger labels, and folds its tools into one TOOLS button where the window is narrow (#68, #85, #92)
+- With Reduce Motion on, the screen does not shake or ripple (#68)
+
+### Fixed
+- The ring under your tank stays right under it at any speed instead of trailing behind (#93)
+- Tall grass no longer covers walls and props; next to a wall it grows at its foot (#86, #97)
+
+### Online
+- Players without a nickname no longer take each other's seat; each gets a name of their own, like Player #8VA62T (#90)
+- A map you made must be cleared, won from PLAY in the builder, before it can be hosted (#68)
+
+### Platforms
+- Web: the game fills the browser window at any shape, in full screen and through rotations, and a phone held upright is asked to turn (#68, #81)
+- Testers can install a pull request's build on iOS through TestFlight or on Android as an APK before it merges (#65)
+
+### Behind the scenes
+- Faster tests and builds in CI, and preview servers no longer lose their images on a release (#80)
+
 ## 0.2.6 - 2026-10-01
 
 The tanks are rebuilt from the ground up, and every explosion, hit and fire
