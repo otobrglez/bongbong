@@ -1,9 +1,10 @@
-# Themes — the grass and desert battlefields
+# Themes — the grass, desert and moon battlefields
 
 A map's `theme` key picks its look: `grass` (the default, and what every
 older file gets) or `desert` — pale dust in place of the grass floor, dry
 scrub in place of the green tufts, soft hardpan drifts across the open
-ground. Purely presentational: the simulation, the nav grid and the linter
+ground - or `moon` - grey regolith under a black sky, crater chasms
+and crystal shards (below, "The moon"). Purely presentational: the simulation, the nav grid and the linter
 never read it, so two maps that differ only in theme play identically.
 
 ![grass, the same map in desert, and the shipped desert map](desert-theme-before-after.png)
@@ -21,11 +22,13 @@ never read it, so two maps that differ only in theme play identically.
   `status`/`map_get` report the round's `map.theme`.
 - **Shipped**: `maps/default-desert.toml` is in `SHIPPED_MAPS`, so the web
   build lists it too, and `maplint` holds it to zero errors like
-  `default.toml`.
+  `default.toml`; `maps/moon-base.toml` is the moon's.
 - **Adding a theme** (ice is the obvious next one): one `Theme` variant
   with its two asset paths, one curve/table in `tools/retint_ground.py`,
   one species set in `tools/spritegen/gen_grass.py`, a line in
-  `tools/check_sheets.py`. Nothing else in Rust names a theme.
+  `tools/check_sheets.py`, and the few presentation matches the compiler
+  points at (`fx.rs`'s rustle flecks, `ground::edge_shade_color`, the
+  minimap's floor classes, the `theme-` message in each language).
 
 ## How a theme is drawn
 
@@ -79,6 +82,58 @@ piers. Every lane is two nav cells wide: the nav grid pads a solid cell one
 cell to its left and above, so obstacles stand three free cells apart and
 each breach is three cells wide.
 
+## The moon
+
+![moon-base.toml as a thumbnail, and in the game under the lunar sky](moon-theme.png)
+
+`theme = "moon"` (BB-24). Every cosmetic layer that would read as Earth is
+turned to the moon; every rule is the one the cell already had, so a map
+plays the same on any theme.
+
+- **The floor** (`retint_ground.py`'s `moon` entry): the grass fill turns
+  to grey regolith (`#7C7B78`, its specks grains and pebbles), the dirt
+  paths to dark compacted basalt (`#545359`, rover tracks), the sand to a
+  lighter ejecta dust that drifts across the open like crater rays
+  (`Theme::drifts`), and every water tile to a dark blue-violet chasm.
+  Wood and roofs are untouched, as on the desert. The field's edge
+  deepens to the vacuum's near-black (`ground::edge_shade_color`).
+- **Water is a chasm and a dust channel.** Deep water already blocks a
+  hull and lets a shot fly over, which is a crater pit; a ford already
+  slows and loosens a hull, which is a channel of loose dust. So the cells
+  keep water's rules and lose water's dressing (`Theme::liquid` is false):
+  no fish (`fish::Shoal`), regolith thrown up where spray would be
+  (`fx.rs`'s `splash`), and the current's marks drawn as faint dust
+  (`ground::DUST_FLOW_MARK`). The minimap draws fords and chasms in the
+  dust's dark greys. Snow still freezes them: the weather's rules come
+  first.
+- **Crystal shards** for tall grass (`gen_grass.py`'s `draw_crystal`,
+  `nature_sheet_moon.png`): a cluster fanning out of a rubble base, tall
+  twin spires, a low geode clump of pebbles with crystal points; faceted
+  with a lit left face, a shaded right one and a pale tip, in
+  `punypalette.CRYSTAL` - a cold violet-blue the terrain never uses, off
+  the palette on purpose and admitted on that sheet alone. Each tuft is
+  clipped to `grass::TUFT_EXTENTS` (read from the Rust source), so a new
+  sheet never widens the table the other themes' grass is placed by.
+  Concealment, crush, sway and burn are the grass's. A hull kicks up
+  crystal chips (`fx.rs`'s `CRYSTAL_*`).
+- **The lunar sky** (`weather = "lunar"`, docs/weather.md): dark and cool,
+  every light at full - headlights, lamp posts, fires and muzzle flashes
+  carry the picture. Looks only: enemies see as far and hulls grip as
+  well as under a clear sky. A moon map names it; the theme does not
+  force it, so a moon map can still be played in daylight or at night.
+- **Kept as they are, for now**: walls (the orange brick and teal glass
+  stand out on grey - a regolith-block and habitat-panel set is the next
+  pass, so moon maps lean on iron and sandbags), trees (green, so
+  `moon-base` has none; a rock-spire sheet is the next pass), the frog
+  (a helmet overlay was sketched, not drawn).
+
+`maps/moon-base.toml` (its header describes it): Protect, band plan, five
+tanks, the scout. The Mare crater fills the west, a rille comes in off the
+north edge, a crystal field holds the frog health pack in the open centre,
+an iron outpost with two fuel drums and the plasma pickup stands in the
+east, and the habitat at the bottom has two iron piers round the frog and
+lamp posts lighting the start. It lints to zero errors like the desert's.
+
 ## Deliberately not changed
 
 - **Trees** stay green on the desert: on dust they read as an oasis grove.
@@ -91,7 +146,7 @@ each breach is three cells wide.
 ## Regenerating
 
 ```sh
-python3 tools/retint_ground.py                         # both tilesets (BONGBONG_THEME=x for one)
-SPRITE_OUT=static python3 tools/spritegen/gen_grass.py # both grass sheets
+python3 tools/retint_ground.py                         # every tileset (BONGBONG_THEME=x for one)
+SPRITE_OUT=static python3 tools/spritegen/gen_grass.py # every grass sheet
 python3 tools/check_sheets.py
 ```

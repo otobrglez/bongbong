@@ -247,17 +247,23 @@ pub enum Theme {
     #[default]
     Grass,
     Desert,
+    /// Grey regolith under a black sky: lighter ejecta drifts, dark basalt
+    /// tracks, crater chasms where water is painted and crystal shards for
+    /// tall grass (docs/desert-theme.md). Its maps pair it with the
+    /// `lunar` sky.
+    Moon,
 }
 
 impl Theme {
     /// Every theme, in the order the builder's THEME row cycles them.
-    pub const ALL: [Theme; 2] = [Theme::Grass, Theme::Desert];
+    pub const ALL: [Theme; 3] = [Theme::Grass, Theme::Desert, Theme::Moon];
 
     /// The TOML spelling, also the dev server's and the builder's.
     pub fn name(self) -> &'static str {
         match self {
             Theme::Grass => "grass",
             Theme::Desert => "desert",
+            Theme::Moon => "moon",
         }
     }
 
@@ -271,6 +277,7 @@ impl Theme {
         match self {
             Theme::Grass => "static/punyworld/punyworld-overworld-tileset.png",
             Theme::Desert => "static/punyworld/punyworld-overworld-tileset-desert.png",
+            Theme::Moon => "static/punyworld/punyworld-overworld-tileset-moon.png",
         }
     }
 
@@ -279,16 +286,17 @@ impl Theme {
         match self {
             Theme::Grass => "static/nature_sheet.png",
             Theme::Desert => "static/nature_sheet_desert.png",
+            Theme::Moon => "static/nature_sheet_moon.png",
         }
     }
 
     /// Whether `ground::build` drifts the pack's sand tiles over the open
     /// floor. Only where the retint makes them a near tone of the fill
-    /// (the desert's hardpan): on the grass retint they are a khaki that
+    /// (the desert's hardpan, the moon's ejecta): on the grass retint they are a khaki that
     /// reads as dirt patches, which the object-driven road placement
     /// deliberately replaced (docs/GROUND_SPEC.md §5).
     pub fn drifts(self) -> bool {
-        matches!(self, Theme::Desert)
+        matches!(self, Theme::Desert | Theme::Moon)
     }
 
     /// The tint a tall-grass cell's flecks and the builder's grass icon
@@ -297,7 +305,16 @@ impl Theme {
         match self {
             Theme::Grass => (0x61, 0x95, 0x41),
             Theme::Desert => (0xCC, 0xB3, 0x85),
+            Theme::Moon => (0x7C, 0x7B, 0x78),
         }
+    }
+
+    /// Whether the water cells are dressed as water: fish, blue spray and
+    /// the current's cyan marks. Not on the moon, where the same cells are
+    /// crater chasms and dust channels (the rules are water's either way -
+    /// the theme is presentation only).
+    pub fn liquid(self) -> bool {
+        !matches!(self, Theme::Moon)
     }
 }
 
@@ -335,11 +352,16 @@ pub enum Weather {
     /// always brings the same sky, and every replica of a room draws the
     /// room's (`weather::in_force`).
     Random,
+    /// The moon's sky: a dark, cool ambient with every light the round
+    /// throws at full, and no rule of its own - enemies see and hulls grip
+    /// as under a clear sky (docs/weather.md). Not one of `SKIES`, so a
+    /// random sky never picks it; a map asks for it by name.
+    Lunar,
 }
 
 impl Weather {
-    /// Every sky a round can be drawn under - everything but `Random`, in
-    /// `ALL`'s order. What `Random` picks from.
+    /// The skies `Random` picks from, in `ALL`'s order: everything but
+    /// `Random` itself and the moon's `Lunar`, which a map names.
     pub const SKIES: [Weather; 9] = [
         Weather::Clear,
         Weather::Night,
@@ -354,7 +376,7 @@ impl Weather {
 
     /// Every weather, in the order the builder's WEATHER row cycles them;
     /// a weather's index here is its `weather_override` value.
-    pub const ALL: [Weather; 10] = [
+    pub const ALL: [Weather; 11] = [
         Weather::Clear,
         Weather::Night,
         Weather::Dusk,
@@ -365,6 +387,7 @@ impl Weather {
         Weather::Snow,
         Weather::HeatHaze,
         Weather::Random,
+        Weather::Lunar,
     ];
 
     /// The TOML spelling, also the dev server's, the command line's and
@@ -381,6 +404,7 @@ impl Weather {
             Weather::Snow => "snow",
             Weather::HeatHaze => "heat_haze",
             Weather::Random => "random",
+            Weather::Lunar => "lunar",
         }
     }
 
@@ -977,6 +1001,7 @@ pub fn set_maps_dir(dir: PathBuf) {
 pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("default", include_str!("../maps/default.toml")),
     ("default-desert", include_str!("../maps/default-desert.toml")),
+    ("moon-base", include_str!("../maps/moon-base.toml")),
     ("hunt-basic", include_str!("../maps/missions/hunt-basic.toml")),
     ("waves-basic", include_str!("../maps/missions/waves-basic.toml")),
     ("portals", include_str!("../maps/portals.toml")),
@@ -1156,9 +1181,12 @@ mod toml_tests {
             let text = format!("version = 1\nweather = \"{}\"\n", w.name());
             assert_eq!(MapFile::from_toml_str(&text).unwrap().weather, w, "{}", w.name());
         }
-        // `SKIES` is `ALL` without `Random`, in the same order, so a sky's
-        // override index is the same in both.
-        assert_eq!(Weather::ALL.iter().filter(|w| **w != Weather::Random).copied().collect::<Vec<_>>(), Weather::SKIES);
+        // `SKIES` is `ALL` without `Random` and the moon's `Lunar`, in the
+        // same order, so a sky's override index is the same in both.
+        assert_eq!(
+            Weather::ALL.iter().filter(|w| !matches!(w, Weather::Random | Weather::Lunar)).copied().collect::<Vec<_>>(),
+            Weather::SKIES
+        );
         let mut random = MapFile::new();
         random.weather = Weather::Random;
         let text = random.to_toml_string().unwrap();

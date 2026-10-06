@@ -366,8 +366,13 @@ const WATER_FLOW_MARK_BLOCKS: i32 = 3;
 
 /// The pack's own water highlight (the ripple tone on its shore and stream
 /// tiles), so a mark is a pixel the sheet already has. Outside the hue
-/// band `tools/retint_ground.py` moves, so it matches under every theme.
+/// band `tools/retint_ground.py` moves on grass and desert, so it matches
+/// both; the moon turns that band into chasms and takes `DUST_FLOW_MARK`.
 const WATER_FLOW_MARK: Color = Color::new(29, 204, 203, 210);
+
+/// The moon's current mark: loose dust sliding down a channel, the
+/// regolith's grain grey, fainter than the water's highlight.
+const DUST_FLOW_MARK: Color = Color::new(0x8F, 0x8E, 0x8A, 150);
 
 /// The source rectangle of the flat-water tile - the builder's icon for
 /// the water brush.
@@ -1300,12 +1305,14 @@ fn shade_step(v: f32, steps: u8, threshold: f32) -> u8 {
 const WALL_SHADE_COLOR: Color = Color::new(16, 44, 52, 255);
 
 /// What the field's edge deepens toward, by theme: the canopy's own green
-/// on grass, a dusk umber on the desert - a darker version of the ground,
-/// never black.
+/// on grass, a dusk umber on the desert - a darker version of the ground -
+/// and on the moon the vacuum's black-violet, the one theme whose edge
+/// is meant to read as nearly black.
 fn edge_shade_color(theme: Theme) -> Color {
     match theme {
         Theme::Grass => Color::new(10, 55, 40, 255),
         Theme::Desert => Color::new(45, 38, 40, 255),
+        Theme::Moon => Color::new(14, 14, 20, 255),
     }
 }
 
@@ -1685,7 +1692,8 @@ pub fn draw(c: &mut impl Canvas, grid: &GroundGrid, theme: Theme, time: f32) {
             c.blit(Sheet::Ground(theme), src, dest, origin, 0.0, Color::WHITE);
         }
     }
-    draw_current(c, grid, time, t.water_flow_speed, t.water_flow_lanes.max(0) as u32);
+    let mark = if theme.liquid() { WATER_FLOW_MARK } else { DUST_FLOW_MARK };
+    draw_current(c, grid, time, t.water_flow_speed, t.water_flow_lanes.max(0) as u32, mark);
 }
 
 /// The columns and rows of `grid`'s cells a culling rectangle
@@ -1731,7 +1739,7 @@ fn lane_hash(x: i32, lane: u32) -> u64 {
 /// the *same* lane at the same moment, so a mark leaving one cell's bottom
 /// edge enters the next cell's top edge without a jump - the flow reads as
 /// one body of water, not a grid of looping cells.
-fn draw_current(c: &mut impl Canvas, grid: &GroundGrid, time: f32, speed: f32, lanes: u32) {
+fn draw_current(c: &mut impl Canvas, grid: &GroundGrid, time: f32, speed: f32, lanes: u32, mark: Color) {
     if lanes == 0 {
         return;
     }
@@ -1767,7 +1775,7 @@ fn draw_current(c: &mut impl Canvas, grid: &GroundGrid, time: f32, speed: f32, l
                 for block in 0..WATER_FLOW_MARK_BLOCKS {
                     let by = ly + 2.0 * block as f32;
                     if (0.0..tile).contains(&by) {
-                        c.fill_rect((left + lx) as i32, (top + by) as i32, 2, 2, WATER_FLOW_MARK);
+                        c.fill_rect((left + lx) as i32, (top + by) as i32, 2, 2, mark);
                     }
                 }
             }
@@ -2478,7 +2486,8 @@ mod tests {
 
     /// The seam every rule here exists to prevent: along the edge between
     /// two neighbouring cells, one tile shows water where the other shows
-    /// land. Checked pixel by pixel on the live sheets, both themes, every
+    /// land. Checked pixel by pixel on the live sheets of the themes whose
+    /// water is blue (the moon's chasms share the tile ids), every
     /// animation frame, over the shapes the tests above name and a few
     /// hundred random fields. A shoreline's anti-aliasing can disagree by
     /// a pixel or two; a missing tile disagrees by half the edge or more.

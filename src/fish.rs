@@ -390,7 +390,12 @@ impl Shoal {
         let restarted = game.events().iter().any(|e| matches!(e, Event::RoundStarted { .. }));
         if self.round != Some(game.round_seed()) || frame < self.last_frame || (restarted && frame != self.last_frame) {
             let t = tuning();
-            *self = Shoal::new(game.water(), game.round_seed(), &t);
+            // The moon's water cells are chasms: nothing swims there.
+            *self = if game.map.theme.liquid() {
+                Shoal::new(game.water(), game.round_seed(), &t)
+            } else {
+                Shoal { round: Some(game.round_seed()), ..Shoal::default() }
+            };
             self.clock = game.time;
             self.last_frame = frame;
             return;

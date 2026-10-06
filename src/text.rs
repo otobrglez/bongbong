@@ -724,7 +724,7 @@ mod text_tests {
         for name in crate::tuning::TANK_NAMES {
             ids.push(format!("tank-{name}"));
         }
-        for theme in [crate::map::Theme::Grass, crate::map::Theme::Desert] {
+        for theme in crate::map::Theme::ALL {
             ids.push(format!("theme-{}", theme.name()));
         }
         for weather in crate::map::Weather::ALL {

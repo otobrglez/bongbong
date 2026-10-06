@@ -14,13 +14,21 @@ from the pristine original every time this runs - one file per
           darker, wind-smoothed hardpan that ground.rs scatters in soft
           patches (`Material::Sand`, `Theme::drifts`). Wood, roofs, water
           and greys are untouched.
+  moon    static/punyworld/punyworld-overworld-tileset-moon.png - the
+          grass fill becomes grey regolith with lighter grains and darker
+          pebbles, the dirt paths dark compacted basalt (rover tracks),
+          the sand a lighter ejecta dust that ground.rs scatters in
+          patches like the desert's hardpan, and every water tile a dark
+          crater chasm (docs/desert-theme.md: deep water's rules - a pit
+          hulls cannot cross and shots fly over - are a chasm's). Wood
+          and roofs are untouched.
 
 Before retinting, `tools/water_tiles.py` composes the water tiles the
 pack lacks (saddles and corner mouths) into transparent cells of the
 image in memory, so both themes carry them in their own tones and
 `_original/` stays pristine.
 
-Every theme is written by default; BONGBONG_THEME=grass|desert writes one.
+Every theme is written by default; BONGBONG_THEME=grass|desert|moon writes one.
 The same variable drives tools/spritegen/gen_grass.py, whose sheets pair
 with these per theme.
 
@@ -124,6 +132,42 @@ THEMES = {
             # ground.rs paints in soft patches.
             hx("#C9B266"): hx("#C2A87D"),
             hx("#C6AD5A"): hx("#BEA478"),
+        },
+    },
+    "moon": {
+        "dst": "static/punyworld/punyworld-overworld-tileset-moon.png",
+        # Everything in the grass and dirt band to a near-neutral grey of
+        # its own value, so the sheet's shading survives; the water band
+        # (the pack's cyans and its teal shore rings) turned toward
+        # blue-violet and pushed dark - the chasm's floor keeps the
+        # shimmer's relative steps as faint dust glints.
+        "curve": [
+            (38.0, 0.0, 1.00, 1.00),
+            (44.0, 0.0, 0.06, 0.72),
+            (112.0, 0.0, 0.06, 0.72),
+            (138.0, 30.0, 0.15, 0.55),
+            (146.0, 60.0, 0.18, 0.42),
+            (205.0, 40.0, 0.18, 0.42),
+            (214.0, 0.0, 1.00, 1.00),
+        ],
+        "table": {
+            # grass fill -> regolith, its specks as grains and pebbles.
+            hx("#85A643"): hx("#7C7B78"),
+            hx("#9FB747"): hx("#8F8E8A"),
+            hx("#96B146"): hx("#86857F"),
+            hx("#7E9E3F"): hx("#6A6966"),
+            # dirt paths -> dark compacted basalt.
+            hx("#C4B253"): hx("#545359"),
+            hx("#C0AB4A"): hx("#5B5A5F"),
+            # the dithers dirt and sand share at their grass edge:
+            # between the regolith and the ejecta.
+            hx("#B7A248"): hx("#6F6E6E"),
+            hx("#B8AF49"): hx("#767572"),
+            hx("#9DA747"): hx("#7A7975"),
+            # sand -> ejecta: a step lighter than the regolith, so the
+            # drifts read as crater rays rather than as holes.
+            hx("#C9B266"): hx("#8E8D89"),
+            hx("#C6AD5A"): hx("#8A8985"),
         },
     },
 }

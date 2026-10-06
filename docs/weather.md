@@ -36,7 +36,7 @@ probe and the determinism pins hold it to that).
   the builder and in `map_get`.
 - **Over every local round**: the `weather_override` knob (`weather`
   tuning group) takes a weather's index in `Weather::ALL`, `-1` following
-  the map and 9 a random sky for every round. It is a `Restart` row: a sky
+  the map, 9 a random sky for every round and 10 the lunar sky. It is a `Restart` row: a sky
   is settled when a round starts, so a change shows from the next one.
   `--weather night` (or `--weather random`) stages it at startup the way
   `--zoom` stages `view_max_scale`, the web build reads `?weather=night`
@@ -82,10 +82,19 @@ thins every layer together, 0 drawing every sky clear.
 | sandstorm | orange (1.0, 0.87, 0.70) | 0.35 | sand 0.9 |
 | snow | cold white (0.98, 1.0, 1.06) | 0.15 | snow 0.85 |
 | heat_haze | hot (1.08, 1.0, 0.86) | none | haze 1.0 |
+| lunar | dark and cool (0.42, 0.44, 0.56): starlight and earthshine | full | vignette |
 
 `Look::plan` says which of the renderer's stages a look needs; a look
 whose light is daylight, with no lamps and no layer, is `None` and costs
 nothing.
+
+**Lunar** is the moon theme's sky (docs/desert-theme.md, `maps/moon-base.toml`):
+darker than dusk and lighter than the night, so the grey regolith still
+reads, with every headlight, lamp post, fire and muzzle flash at full. It
+is looks only - no row of the rules table below names it, so enemies see
+and hulls grip as under a clear sky - and it is not one of `Weather::SKIES`,
+so `random` never picks it; a map names it. It sits after `random` in
+`Weather::ALL` so every older `weather_override` index keeps its sky.
 
 ## The rules
 

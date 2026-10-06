@@ -207,6 +207,16 @@ PUNY_TEAM = [c for ramp in (TEAM_P1, TEAM_P2) for c in ramp]
 # towers_sheet.png alone; `tower::OOZE_*` are the same values in the game.
 OOZE = ((0xF4, 0xFF, 0xC4), (0xC8, 0xFF, 0x4D), (0x93, 0xE2, 0x3D), (0x52, 0xA9, 0x2F), (0x2B, 0x5F, 0x25))
 
+# The moon theme's crystal shards (tools/spritegen/gen_grass.py, the moon's
+# "tall grass"; docs/desert-theme.md): pale, lt, md, dk, deep. A cold
+# violet-blue - the one hue region the terrain never occupies, so a shard
+# reads as something growing out of the regolith rather than as more rock,
+# and stays apart from the water blues and the P1 team ramp. Off the Puny
+# set for the same reason as OOZE; admitted by check_sheets.py on
+# nature_sheet_moon.png alone, and `fx.rs`'s `CRYSTAL_*` flecks are its
+# middle three.
+CRYSTAL = ((0xDC, 0xDE, 0xF4), (0xAA, 0xAF, 0xE0), (0x80, 0x86, 0xC0), (0x58, 0x5C, 0x93), (0x38, 0x3A, 0x60))
+
 # The pickup symbols' inks (docs/CRATES_SPEC.md): shade, base, light per
 # kind, keyed by the kind's file stem. A crate is wood on the Puny set; its
 # symbol is the one thing on it that has to be spotted from across the

@@ -231,14 +231,22 @@ impl Class {
     /// (STONE_MD), trees the darkest green (GREEN_DARKEST) - the floor a
     /// step or two under the marks drawn over it: the grass theme's ground,
     /// cover and road GREEN_DK, GREEN_SHADE and SAND_MD, the desert's
-    /// SAND_MD, WOOD_ASH and WOOD_DK; fords BLUE_LT, open water BLUE_DK,
+    /// SAND_MD, WOOD_ASH and WOOD_DK, the moon's regolith, crystal and
+    /// basalt (the tileset's own greys and `CRYSTAL`'s dark step) with its
+    /// fords and chasms in the dust's dark greys; fords BLUE_LT, open water BLUE_DK,
     /// ice STONE_PALE, a gate the indicators' amber (GOLD_BRIGHT). A tower
     /// is TEAL_LT on the player's side and RED_MD on the enemy's; lava is
     /// RED_DEEP, a volcano's cone STONE_DARKEST and a lamp post FIRE_PALE.
     pub fn color(self, theme: Theme) -> Color {
         let rgb = |r, g, b| Color::new(r, g, b, 255);
         let desert = theme == Theme::Desert;
+        let moon = theme == Theme::Moon;
         match self {
+            Class::Ground if moon => rgb(0x7C, 0x7B, 0x78),
+            Class::Grass if moon => rgb(0x58, 0x5C, 0x93),
+            Class::Road if moon => rgb(0x54, 0x53, 0x59),
+            Class::Shallow if moon => rgb(0x4A, 0x4A, 0x56),
+            Class::Deep if moon => rgb(0x2F, 0x2F, 0x3A),
             Class::Ground if desert => rgb(0xB7, 0xA2, 0x48),
             Class::Ground => rgb(0x5F, 0x91, 0x4B),
             Class::Grass if desert => rgb(0x73, 0x62, 0x4D),

@@ -483,6 +483,7 @@ tool-short-bio_slush_enemy = e.bio
 
 theme-grass = grass
 theme-desert = desert
+theme-moon = moon
 weather-clear = clear
 weather-night = night
 weather-dusk = dusk
@@ -493,6 +494,7 @@ weather-sandstorm = sand
 weather-snow = snow
 weather-heat_haze = haze
 weather-random = random
+weather-lunar = lunar
 spawn-band = band
 spawn-waves = waves
 tier-light = light
