@@ -70,10 +70,10 @@ impl Driver {
 /// tool or the `player_tank` knob (read as it stands at the win; the round
 /// was set up under it unless it was moved since).
 fn played_as_authored(game: &Game, t: &crate::tuning::Tuning) -> bool {
-    // The map's sky, or a `random` one's pick for this seed - or night,
+    // The map's sky, or the one of its skies this seed picks - or night,
     // once the map's `nightfall` has passed: what the round is fought
     // under when no `--weather` puts another in.
-    let key = if game.night_has_fallen() { crate::map::Weather::Night } else { game.map.weather };
+    let key = if game.night_has_fallen() { crate::map::Weather::Night.into() } else { game.map.weather };
     let own_sky = crate::weather::in_force(key, game.round_seed(), true, &crate::tuning::Tuning::DEFAULT);
     game.players == PlayerCount::ONE
         && game.start_override.is_none()
