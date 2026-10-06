@@ -1942,6 +1942,7 @@ fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
         ActiveWeapon::Minigun => ("MINIGUN", tank.minigun_ammo),
         ActiveWeapon::Missiles => ("MISSILES", tank.missile_ammo),
         ActiveWeapon::Flamethrower => ("FLAME", tank.flame_fuel_seconds()),
+        ActiveWeapon::Grenades => ("GRENADES", tank.grenade_ammo),
         ActiveWeapon::Shell => ("SHELL", tank.shells_ammo),
     };
     let mut lines = vec![

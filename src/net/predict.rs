@@ -657,8 +657,9 @@ impl Predictor {
                 }
                 return;
             }
-            // The pod's volley is a seeker's and the flamethrower's cone
-            // the room's (§4.16); nothing here.
+            // The pod's volley is a seeker's, a grenade rolls the room's
+            // world and the flamethrower's cone is the room's (§4.16);
+            // nothing here.
             _ => return,
         };
         if ammo - self.owed(kind) < cost {
@@ -829,6 +830,7 @@ impl Predictor {
             WeaponKind::Shell | WeaponKind::Plasma | WeaponKind::Laser => t.player_fire_interval,
             WeaponKind::Minigun => t.minigun_burst_cooldown_seconds(),
             WeaponKind::Missiles => t.missile_volley_cooldown_seconds(),
+            WeaponKind::Grenades => t.grenade_reload_seconds,
             WeaponKind::Flamethrower => 0.0,
         };
         let ago = self.tick.wrapping_sub(input_tick) as f32 * PHYSICS_FIXED_DT;

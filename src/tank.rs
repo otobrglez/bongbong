@@ -19,6 +19,7 @@ use crate::{
     TANK_HULL_BBOX_BY_ROW,
     TANK_HULL_FRACTION,
     TANK_MODULE_FLAME_COL,
+    TANK_MODULE_GRENADE_COL,
     TANK_MODULE_LASER_COL,
     TANK_MODULE_MINIGUN_COL,
     TANK_MODULE_MISSILES_COL,
@@ -257,6 +258,7 @@ pub enum ActiveWeapon {
     Minigun,
     Missiles,
     Flamethrower,
+    Grenades,
     Shell,
 }
 
@@ -269,6 +271,7 @@ impl ActiveWeapon {
             ActiveWeapon::Minigun => "minigun",
             ActiveWeapon::Missiles => "missiles",
             ActiveWeapon::Flamethrower => "flamethrower",
+            ActiveWeapon::Grenades => "grenades",
             ActiveWeapon::Shell => "shell",
         }
     }
@@ -287,6 +290,7 @@ impl ActiveWeapon {
             ActiveWeapon::Minigun => t.minigun_ammo_per_pickup,
             ActiveWeapon::Missiles => t.missile_ammo_per_pickup,
             ActiveWeapon::Flamethrower => t.flame_fuel_per_pickup.ceil() as i32,
+            ActiveWeapon::Grenades => t.grenade_ammo_per_pickup,
             ActiveWeapon::Shell => t.max_shells,
         }
     }
@@ -295,8 +299,14 @@ impl ActiveWeapon {
 /// The special weapons, each the cargo of its own crate. A tank carries at
 /// most one of them at a time (`Tank::take_weapon`); with none, or once it
 /// runs dry, the trigger fires shells.
-pub const SPECIAL_WEAPONS: [ActiveWeapon; 5] =
-    [ActiveWeapon::Laser, ActiveWeapon::Plasma, ActiveWeapon::Minigun, ActiveWeapon::Missiles, ActiveWeapon::Flamethrower];
+pub const SPECIAL_WEAPONS: [ActiveWeapon; 6] = [
+    ActiveWeapon::Laser,
+    ActiveWeapon::Plasma,
+    ActiveWeapon::Minigun,
+    ActiveWeapon::Missiles,
+    ActiveWeapon::Flamethrower,
+    ActiveWeapon::Grenades,
+];
 
 pub struct Tank {
     /// Which of the 12 tank archetypes in scifi_tanks_sheet.png this tank
@@ -463,6 +473,9 @@ pub struct Tank {
     /// Flamethrower`, docs/flamethrower-prd.md). Pickup-only; drained by
     /// `dt` every frame the trigger is held with the flamethrower live.
     pub flame_fuel: f32,
+    /// Grenades left in the launcher's drum (`pickup::PickupKind::Grenades`,
+    /// `grenade.rs`). Pickup-only, one per press.
+    pub grenade_ammo: i32,
     /// True while the trigger has been held on the flamethrower since the
     /// last frame it was not: `Event::Fired` is recorded once per hold.
     pub flame_held: bool,
@@ -661,6 +674,7 @@ impl Default for Tank {
             plasma_ammo: 0,
             plasma_variant: PlasmaVariant::Teal,
             missile_ammo: 0,
+            grenade_ammo: 0,
             speed_boost_timer: 0.0,
             heat_shield_timer: 0.0,
             throttle: 1.0,
@@ -776,6 +790,8 @@ impl Tank {
             // Player-only, like the fuel: a heat shield is the players'
             // way across the lava.
             PickupKind::HeatShield => false,
+            // Player-only: the AI has no use for a ball it cannot aim.
+            PickupKind::Grenades => false,
         }
     }
 
@@ -1076,6 +1092,7 @@ impl Tank {
             ActiveWeapon::Missiles => self.missile_ammo,
             // Whole seconds, rounded up: the last fraction still fires.
             ActiveWeapon::Flamethrower => self.flame_fuel.ceil().max(0.0) as i32,
+            ActiveWeapon::Grenades => self.grenade_ammo,
             ActiveWeapon::Shell => self.shells_ammo,
         }
     }
@@ -1105,6 +1122,7 @@ impl Tank {
             ActiveWeapon::Minigun => self.minigun_ammo = self.minigun_ammo.max(t.minigun_ammo_per_pickup),
             ActiveWeapon::Missiles => self.missile_ammo = self.missile_ammo.max(t.missile_ammo_per_pickup),
             ActiveWeapon::Flamethrower => self.flame_fuel = self.flame_fuel.max(t.flame_fuel_per_pickup),
+            ActiveWeapon::Grenades => self.grenade_ammo = self.grenade_ammo.max(t.grenade_ammo_per_pickup),
             ActiveWeapon::Shell => {}
         }
     }
@@ -1126,6 +1144,7 @@ impl Tank {
                 self.flame_fuel = 0.0;
                 self.flame_held = false;
             }
+            ActiveWeapon::Grenades => self.grenade_ammo = 0,
             ActiveWeapon::Shell => {}
         }
     }
@@ -1580,9 +1599,9 @@ fn blit_layers(c: &mut impl Canvas, tank: &Tank, layers: &[Layer], tint: Color) 
 /// / firing, the flamethrower's pilot flickering or its jet while held. A
 /// module is hardware, not a firing-mode indicator: it shows whenever the
 /// weapon is carried, and a wreck carries none.
-fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 5] {
+fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 6] {
     if tank.is_wreck() {
-        return [None; 5];
+        return [None; 6];
     }
     let live = tank.active_weapon();
     let minigun = (tank.minigun_ammo > 0 || tank.minigun_burst.is_some()).then(|| {
@@ -1618,7 +1637,14 @@ fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 5] {
                 ((time * 6.0 + tank.anim_phase()) as i32).rem_euclid(2)
             }
     });
-    [minigun, missiles, plasma, laser, flame]
+    // The drum's four chambers show what is left of a crate's worth,
+    // rounded up, so the last grenade always shows.
+    let grenades = (tank.grenade_ammo > 0).then(|| {
+        let full = tuning().grenade_ammo_per_pickup.max(1);
+        let loaded = (tank.grenade_ammo.min(full) * 4 + full - 1) / full;
+        TANK_MODULE_GRENADE_COL + (4 - loaded).clamp(0, 4)
+    });
+    [minigun, missiles, plasma, laser, flame, grenades]
 }
 
 /// Draw a tank: hull, turret and the weapon modules it carries, each at its

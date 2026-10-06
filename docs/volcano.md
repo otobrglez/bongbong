@@ -198,7 +198,7 @@ The cycle needs nothing on the wire. What does travel:
 - `WireEvent::LavaBombLaunched` (the bomb in the air on the replica),
   `LanternSet`, `LanternBroken`.
 
-`net::PROTOCOL_VERSION` is 12.
+These took `net::PROTOCOL_VERSION` to 12.
 
 ## Not done
 

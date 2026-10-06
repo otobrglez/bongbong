@@ -54,12 +54,13 @@ use crate::net::encode::{cell_from_index, cell_index, field_cols};
 use crate::net::events::WireEvent;
 use crate::net::events::WireHitTarget;
 use crate::net::wire::{
-    MissileState, ShotKind, ShotState, Snapshot, TankState, WeaponKind, Welcome, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, crate_flags, dequantise_health, frog_flags, tank_flags, tile_flags,
+    GrenadeState, MissileState, ShotKind, ShotState, Snapshot, TankState, WeaponKind, Welcome, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, crate_flags, dequantise_health, frog_flags, tank_flags, tile_flags,
 };
 use crate::laser::{LaserBeam, LaserVariant};
 use crate::obstacle::{Drum, Fuse, Obstacle};
 use crate::pickup::{Pickup, PickupKind};
 use crate::missile::Missile;
+use crate::grenade::Grenade;
 use crate::plasma::{Plasma, PlasmaState};
 use crate::shell::{Owner, Shell, ShellState};
 use crate::simulation::replica::plasma_variant_from_index;
@@ -267,6 +268,7 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_tanks(game, s);
     apply_shots(game, s);
     apply_missiles(game, s, drawn.then_some(&mut spectacle));
+    apply_grenades(game, s);
     apply_frogs(game, s, drawn.then_some(&mut spectacle));
     apply_pickups(game, s, cols);
     apply_fires(game, s, cols);
@@ -320,6 +322,7 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_beams: &BTreeS
                 let dir = landing_dir(game, center);
                 game.missile_show(show, center, dir);
             }
+            WireEvent::GrenadeBlast { x, y, .. } => game.grenade_show(show, at(x, y)),
             WireEvent::CookOff { x, y } => Game::cookoff_show(show, at(x, y)),
             WireEvent::CrateBroken { x, y, cooked: true, .. } => game.crate_cookoff_show(show, at(x, y)),
             WireEvent::Hit { target, damage, x, y, .. } => {
@@ -389,7 +392,7 @@ fn kick_turret(game: &mut Game, slot: usize, weapon: WeaponKind) {
             WeaponKind::Shell => tank.kick(false),
             WeaponKind::Plasma => tank.kick(true),
             WeaponKind::Laser => tank.kick_laser(),
-            WeaponKind::Minigun | WeaponKind::Missiles | WeaponKind::Flamethrower => {}
+            WeaponKind::Minigun | WeaponKind::Missiles | WeaponKind::Flamethrower | WeaponKind::Grenades => {}
         }
         break;
     }
@@ -415,6 +418,7 @@ fn drawn_muzzle(game: &mut Game, slot: usize, weapon: WeaponKind) -> Option<Posi
         WeaponKind::Plasma => Some(Plasma::spawn(tank, owner, tank.plasma_variant, 0.0, -lateral).position),
         WeaponKind::Minigun => Some(Bullet::spawn(tank, owner, 0.0).position),
         WeaponKind::Laser | WeaponKind::Missiles | WeaponKind::Flamethrower => None,
+        WeaponKind::Grenades => Some(tank.turret_point(crate::tank_art::GRENADE_MUZZLE[tank.row as usize])),
     };
     tank.rotation = facing;
     muzzle
@@ -654,6 +658,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
         tank.minigun_ammo = 0;
         tank.missile_ammo = 0;
         tank.flame_fuel = 0.0;
+        tank.grenade_ammo = 0;
         let ammo = t.ammo as i32;
         match weapon {
             ActiveWeapon::Shell => tank.shells_ammo = ammo,
@@ -662,6 +667,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
             ActiveWeapon::Minigun => tank.minigun_ammo = ammo,
             ActiveWeapon::Missiles => tank.missile_ammo = ammo,
             ActiveWeapon::Flamethrower => tank.flame_fuel = ammo as f32,
+            ActiveWeapon::Grenades => tank.grenade_ammo = ammo,
         }
         (tank.body, tank.move_half_extents(tank.facing_along_x()), turned)
     };
@@ -741,6 +747,54 @@ fn apply_missiles(game: &mut Game, s: &Snapshot, mut show: Option<&mut Spectacle
                 if let Some(show) = show.as_deref_mut() {
                     show.muzzle_flashes.push(Shockwave::new(ground));
                 }
+            }
+        }
+    }
+}
+
+/// The grenades the snapshot lists, spawned, moved or dropped. A replica
+/// never rolls one; it holds the position, height and fuse the room sent,
+/// turns the lamp by how far that moved it, and runs the fuse down between
+/// snapshots itself (`Game::tick_presentation`).
+fn apply_grenades(game: &mut Game, s: &Snapshot) {
+    let mut existing: BTreeMap<u16, Entity> = BTreeMap::new();
+    for (e, g) in game.world.query::<(Entity, &Grenade)>().iter() {
+        existing.insert((g.id & 0xFFFF) as u16, e);
+    }
+    let wanted: BTreeMap<u16, &GrenadeState> = s.grenades.iter().map(|g| (g.id, g)).collect();
+    for (id, entity) in &existing {
+        if !wanted.contains_key(id) {
+            game.world.despawn(*entity).ok();
+        }
+    }
+    let r = tuning().grenade_radius;
+    for (id, gs) in wanted {
+        let at = Position::new(dequantise_pos(gs.x), dequantise_pos(gs.y));
+        let fuse = crate::net::wire::dequantise_fuse(gs.fuse);
+        let height = dequantise_pos(gs.height);
+        match existing.get(&id) {
+            Some(&entity) => {
+                let mut q = game.world.query_one::<&mut Grenade>(entity);
+                if let Ok(g) = q.get() {
+                    let moved = at - g.position;
+                    let distance = moved.length();
+                    if distance > 0.01 {
+                        g.heading = moved * (1.0 / distance);
+                        g.roll += distance / r;
+                    }
+                    g.position = at;
+                    g.height = height;
+                    g.fuse = fuse;
+                }
+            }
+            None => {
+                let mut g = Grenade::launch(at, Vec2::new(0.0, -1.0), Vec2::zero(), REPLICA_OWNER);
+                g.id = id as u32;
+                g.velocity = Vec2::zero();
+                g.height = height;
+                g.climb = 0.0;
+                g.fuse = fuse;
+                game.world.spawn((g,));
             }
         }
     }
@@ -1154,6 +1208,7 @@ mod tests {
         wrecks: usize,
         shots: usize,
         missiles: usize,
+        grenades: usize,
         changed_tiles: usize,
         fires: usize,
         pickups_taken: usize,
@@ -1175,6 +1230,7 @@ mod tests {
             self.wrecks += state.tanks.iter().filter(|t| t.wreck).count();
             self.shots += state.shots.len();
             self.missiles += state.missiles.len();
+            self.grenades += state.grenades.len();
             self.changed_tiles += state
                 .tiles
                 .iter()
@@ -1449,6 +1505,20 @@ mod tests {
             }
         });
         assert!(seen.missiles > 0, "{seen:?}: no missile was ever in the air, so nothing was checked");
+    }
+
+    /// Grenades are a keyed family of their own (`wire::GrenadeState`):
+    /// every one the room rolls stands where the room has it on the
+    /// replica, and goes when it goes off.
+    #[test]
+    fn grenades_reach_the_replica() {
+        let seen = round_trip(DEFAULT_MAP, 0xB0B5, 600, |game, frame| {
+            if frame == 30 {
+                let patch = crate::simulation::debug::TankPatch { grenade_ammo: Some(40), ..Default::default() };
+                game.debug_set_tank(0, &patch).expect("the seat's tank");
+            }
+        });
+        assert!(seen.grenades > 0, "{seen:?}: no grenade was ever on the ground, so nothing was checked");
     }
 
     #[test]

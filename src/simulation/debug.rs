@@ -144,6 +144,7 @@ pub struct TankDebug {
     pub shells: i32,
     pub minigun: i32,
     pub missiles: i32,
+    pub grenades: i32,
     pub plasma: i32,
     pub laser: i32,
     /// Flamethrower fuel, seconds.
@@ -326,6 +327,7 @@ pub struct TankPatch {
     pub shells_ammo: Option<i32>,
     pub minigun_ammo: Option<i32>,
     pub missile_ammo: Option<i32>,
+    pub grenade_ammo: Option<i32>,
     pub plasma_ammo: Option<i32>,
     pub laser_charges: Option<i32>,
     /// Flamethrower fuel, in seconds.
@@ -537,6 +539,7 @@ impl Game {
                     shells: tank.shells_ammo,
                     minigun: tank.minigun_ammo,
                     missiles: tank.missile_ammo,
+                    grenades: tank.grenade_ammo,
                     plasma: tank.plasma_ammo,
                     laser: tank.laser_charges,
                     flame_fuel: r1(tank.flame_fuel),
@@ -605,6 +608,17 @@ impl Game {
                 vx: r1(m.dir.x * m.speed),
                 vy: r1(m.dir.y * m.speed),
                 state: m.stage.name(),
+            });
+        }
+        for g in self.world.query::<&crate::grenade::Grenade>().iter() {
+            projectiles.push(ProjectileDebug {
+                kind: "grenade",
+                owner: g.owner.slot(),
+                x: r1(g.position.x),
+                y: r1(g.position.y),
+                vx: r1(g.velocity.x),
+                vy: r1(g.velocity.y),
+                state: if g.velocity.length() > 0.0 { "rolling" } else { "resting" },
             });
         }
         let projectiles_total = projectiles.len();
@@ -809,6 +823,12 @@ impl Game {
                 tank.disarm();
             }
             tank.missile_ammo = n.max(0);
+        }
+        if let Some(n) = patch.grenade_ammo {
+            if n > 0 {
+                tank.disarm();
+            }
+            tank.grenade_ammo = n.max(0);
         }
         if let Some(n) = patch.plasma_ammo {
             if n > 0 {

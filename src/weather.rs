@@ -936,6 +936,12 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
     for missile in game.world.query::<&Missile>().iter() {
         out.push(Light::point(missile.position, 48.0, scale([1.0, 0.6, 0.3], s * 0.85 * (1.0 - 0.5 * missile.lift()))).unshadowed());
     }
+    // A grenade, on the beat it flashes.
+    for grenade in game.world.query::<&crate::grenade::Grenade>().iter() {
+        if grenade.lamp_lit() {
+            out.push(Light::point(grenade.draw_pos(), 56.0, scale([1.0, 0.6, 0.3], s * 0.9)).unshadowed());
+        }
+    }
     for jet in game.flames() {
         let (from, dir, reach) = jet.drawn();
         for along in [0.25, 0.55, 0.85] {

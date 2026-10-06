@@ -3,7 +3,7 @@
 //! keeps one `Snapshot` per room and the client one per socket, and both
 //! step them with `apply_delta`. `Welcome` carries the first full one.
 //!
-//! Per keyed family (`tanks`, `shots`, `missiles`, `frogs`, `tiles`, `fires`, `crates`) a delta
+//! Per keyed family (`tanks`, `shots`, `missiles`, `grenades`, `frogs`, `tiles`, `fires`, `crates`) a delta
 //! carries three lists: entries that are new or changed (in full),
 //! entries that only moved by less than 32 px on each axis (`Moved`: the
 //! key and two `i8` quarter-pixel steps, the common case for every hull
@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::net::MAX_SEATS;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    BonusPickup, CrateState, FireState, FrogState, LampState, MissileState, RoundState, ShotState, Snapshot, TankState,
+    BonusPickup, CrateState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, ShotState, Snapshot, TankState,
     TileState, side_code,
 };
 
@@ -57,6 +57,10 @@ pub struct SnapshotDelta {
     pub missiles: Vec<MissileState>,
     pub missiles_moved: Vec<Moved>,
     pub missiles_gone: Vec<u16>,
+    /// New or changed grenades, in full.
+    pub grenades: Vec<GrenadeState>,
+    pub grenades_moved: Vec<Moved>,
+    pub grenades_gone: Vec<u16>,
     /// New or changed frogs, in full.
     pub frogs: Vec<FrogState>,
     pub frogs_moved: Vec<Moved>,
@@ -137,6 +141,22 @@ impl Positioned for MissileState {
 
     fn with_xy(&self, x: i16, y: i16) -> Self {
         MissileState { x, y, ..*self }
+    }
+}
+
+impl Keyed for GrenadeState {
+    fn key(&self) -> u16 {
+        self.id
+    }
+}
+
+impl Positioned for GrenadeState {
+    fn xy(&self) -> (i16, i16) {
+        (self.x, self.y)
+    }
+
+    fn with_xy(&self, x: i16, y: i16) -> Self {
+        GrenadeState { x, y, ..*self }
     }
 }
 
@@ -252,6 +272,7 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
     let (tanks, tanks_moved, tanks_gone) = diff_positioned(&prev.tanks, &next.tanks);
     let (shots, shots_moved, shots_gone) = diff_positioned(&prev.shots, &next.shots);
     let (missiles, missiles_moved, missiles_gone) = diff_positioned(&prev.missiles, &next.missiles);
+    let (grenades, grenades_moved, grenades_gone) = diff_positioned(&prev.grenades, &next.grenades);
     let (frogs, frogs_moved, frogs_gone) = diff_positioned(&prev.frogs, &next.frogs);
     let (tiles, tiles_gone) = diff_keyed(&prev.tiles, &next.tiles);
     let (fires, fires_gone) = diff_keyed(&prev.fires, &next.fires);
@@ -277,6 +298,9 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
         missiles,
         missiles_moved,
         missiles_gone,
+        grenades,
+        grenades_moved,
+        grenades_gone,
         frogs,
         frogs_moved,
         frogs_gone,
@@ -313,6 +337,7 @@ pub fn apply_delta(prev: &Snapshot, delta: &SnapshotDelta) -> Snapshot {
         tanks: apply_positioned(&prev.tanks, &delta.tanks, &delta.tanks_moved, &delta.tanks_gone),
         shots: apply_positioned(&prev.shots, &delta.shots, &delta.shots_moved, &delta.shots_gone),
         missiles: apply_positioned(&prev.missiles, &delta.missiles, &delta.missiles_moved, &delta.missiles_gone),
+        grenades: apply_positioned(&prev.grenades, &delta.grenades, &delta.grenades_moved, &delta.grenades_gone),
         frogs: apply_positioned(&prev.frogs, &delta.frogs, &delta.frogs_moved, &delta.frogs_gone),
         pickups: delta.pickups.unwrap_or(prev.pickups),
         bonus_pickups,
@@ -419,6 +444,10 @@ mod tests {
                 tube: rng.random_range(0..4),
             })
             .collect();
+        let grenades: Vec<GrenadeState> = random_keys(rng, 6, 400)
+            .into_iter()
+            .map(|id| GrenadeState { id, x: rng.random(), y: rng.random(), height: rng.random_range(0..400), fuse: rng.random_range(0..3000) })
+            .collect();
         let mut frogs = Vec::new();
         for side in [Side::Player, Side::Enemy] {
             if rng.random::<bool>() {
@@ -450,6 +479,7 @@ mod tests {
             tanks,
             shots,
             missiles,
+            grenades,
             frogs,
             pickups: rng.random(),
             bonus_pickups,
@@ -717,11 +747,13 @@ mod tests {
         let idle = encode(&Msg::Delta(delta(&a, &a))).len();
         println!("snapshot sizes: full {full} B, delta moving {moving} B, delta busy {busy} B, delta idle {idle} B");
         // Every delta carries `acked` and `mailbox` whole: eight
-        // varints and eight bytes, the header the idle bound is. A new
-        // shot costs one more byte for its owner (protocol 8).
+        // varints and eight bytes, the header the idle bound is, and a
+        // length byte for each keyed family's lists, the grenades' three
+        // included. A new shot costs one more byte for its owner
+        // (protocol 8).
         assert!(full <= 440, "full snapshot {full} B");
         assert!(moving <= 210, "moving delta {moving} B");
         assert!(busy <= 276, "busy delta {busy} B");
-        assert!(idle <= 48, "idle delta {idle} B");
+        assert!(idle <= 51, "idle delta {idle} B");
     }
 }
