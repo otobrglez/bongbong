@@ -489,6 +489,13 @@ macos-app:
 macos-dmg *ARGS: macos-app
     ./tools/macos/package.sh {{ARGS}}
 
+# tools/macos/testflight.sh: the app sandboxed, signed through Apple's
+# cloud-managed certificates (the ASC_* key and BONGBONG_IOS_TEAM in .envrc,
+# as for iOS) and uploaded; --export stops at a signed .pkg.
+# Build, sign and upload the Mac app to TestFlight.
+macos-testflight *ARGS:
+    ./tools/macos/testflight.sh {{ARGS}}
+
 # tools/macos/gen_app_icon.py; --row N picks another chassis.
 # Regenerate the macOS app icon.
 macos-icon *ARGS:

@@ -11,7 +11,8 @@
 #                local try where the x86_64 std is not installed)
 #   MACOS_MIN    the oldest macOS it runs on (default 11.0, the first with
 #                Apple Silicon), for rustc, cc-rs, cmake and the plist alike
-#   MACOS_BUILD  CFBundleVersion (default the UTC time, YYYYMMDD.HHMM)
+#   MACOS_BUILD  CFBundleVersion, the build number App Store Connect needs
+#                raised on every upload (default the UTC time, YYYYMMDD.HHMM)
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 ARCHS="${MACOS_ARCHS:-aarch64 x86_64}"
@@ -51,6 +52,8 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null
 # What the desktop game reads: not the web build's GLSL ES shaders, the
 # art backups or the ground tileset's pristine originals.
 rsync -a --exclude '_backup' --exclude '_original' --exclude '/static/web' static "$APP/Contents/Resources/"
+# The required-reason APIs the binary imports, the same Rust as the iOS app's.
+cp tools/ios/PrivacyInfo.xcprivacy "$APP/Contents/Resources/"
 
 ICONSET="$OUT/AppIcon.iconset"
 rm -rf "$ICONSET" && mkdir -p "$ICONSET"
