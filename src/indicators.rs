@@ -319,6 +319,9 @@ pub struct Scene {
     /// Every volcano that is rumbling or erupting: its crater and whether
     /// it is erupting yet.
     pub volcanoes: Vec<(Position, bool)>,
+    /// Every mushroom still out (docs/mushroom-hunt-prd.md) and its cap's
+    /// colour this frame, in map order.
+    pub mushrooms: Vec<(Position, crate::math::Color)>,
 }
 
 /// This seat's own tank.
@@ -436,7 +439,15 @@ pub enum ArrowKind {
     /// A volcano that is rumbling or erupting (docs/volcano.md): the
     /// warning that bombs are coming, `erupting` once they are.
     Volcano { erupting: bool },
+    /// A mushroom still out (docs/mushroom-hunt-prd.md), in its cap's
+    /// colour: one of the `MUSHROOM_ARROWS` nearest off the screen.
+    Mushroom { color: crate::math::Color },
 }
+
+/// How many of the nearest mushrooms off the screen get an arrow: enough
+/// to say which way the hunt goes on, few enough to leave the enemies'
+/// arrows room.
+pub const MUSHROOM_ARROWS: usize = 3;
 
 /// One arrow at the edge of the screen.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1059,6 +1070,19 @@ impl Awareness {
         for &(at, erupting) in scene.volcanoes.iter().filter(|(at, _)| !view.shows(*at)) {
             kept.extend(arrow(ArrowKind::Volcano { erupting }, at));
         }
+        // The nearest mushrooms off the screen: never merged, never left
+        // out, ties in map order.
+        let mut mushrooms: Vec<(f32, usize, Position, crate::math::Color)> = scene
+            .mushrooms
+            .iter()
+            .enumerate()
+            .filter(|(_, (at, _))| !view.shows(*at))
+            .map(|(i, &(at, color))| (anchor.distance_to(at), i, at, color))
+            .collect();
+        mushrooms.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        for &(_, _, at, color) in mushrooms.iter().take(MUSHROOM_ARROWS) {
+            kept.extend(arrow(ArrowKind::Mushroom { color }, at));
+        }
 
         // Gates off the screen, the most recent first.
         let mut gate_marks: Vec<&GateMark> = self.gates.iter().filter(|g| !view.shows(g.at)).collect();
@@ -1329,6 +1353,12 @@ impl Scene {
                 phase.is_warning().then(|| (v.centre(), phase.stage == crate::volcano::Stage::Erupt))
             })
             .collect();
+        let mushrooms = game
+            .mushrooms()
+            .iter()
+            .filter(|m| !m.taken)
+            .map(|m| (m.at, crate::mushroom::cap_color(m.col, m.row, game.time, t.mushroom_cycle_seconds)))
+            .collect();
         Scene {
             time: game.time,
             seat: me,
@@ -1336,6 +1366,7 @@ impl Scene {
             frogs,
             sight: shortened.then_some(sight),
             volcanoes,
+            mushrooms,
         }
     }
 }
@@ -1631,6 +1662,7 @@ pub fn picture(seats: &[Indicators], view: &ViewFrame, time: f32, t: &Tuning, fo
                 len *= 1.0 + t.indicator_pulse_swell * throb;
                 (if erupting { HOSTILE } else { GATE_AMBER }, if throb >= 0.5 { crate::pyro::FIRE[6] } else { RIM })
             }
+            ArrowKind::Mushroom { color } => (color, RIM),
         };
         let middle = behind(arrow.place.at, arrow.place.dir, len * 0.5);
         rimmed(&mut out.screen, middle, &arrow_cells(arrow.place.dir, len), body, rim, alpha);
@@ -1644,6 +1676,7 @@ pub fn picture(seats: &[Indicators], view: &ViewFrame, time: f32, t: &Tuning, fo
                 (name, crate::tank::team_color(seat))
             }
             ArrowKind::Frog { .. } => ((arrow.cells.round() as i64).to_string(), FROG_GREEN),
+            ArrowKind::Mushroom { color } => ((arrow.cells.round() as i64).to_string(), color),
             _ => continue,
         };
         let alpha = arrow.alpha.max(LABEL_ALPHA_MIN);
@@ -2006,6 +2039,31 @@ mod indicator_tests {
 
     fn kinds(ind: &Indicators) -> Vec<ArrowKind> {
         ind.arrows.iter().map(|a| a.kind).collect()
+    }
+
+    /// The mushroom hunt: the `MUSHROOM_ARROWS` nearest mushrooms off the
+    /// screen get an arrow in their cap's colour, whatever the cap, and
+    /// one on the screen gets none.
+    #[test]
+    fn the_nearest_mushrooms_off_the_screen_have_arrows() {
+        let mut t = Tuning::DEFAULT;
+        t.indicator_max_arrows = 1;
+        let mut s = scene(1.0, vec![enemy(5, 900.0, 150.0)]);
+        let red = crate::mushroom::RAMPS[0][1];
+        s.mushrooms = vec![
+            (Position::new(200.0, 100.0), red),
+            (Position::new(-300.0, 100.0), red),
+            (Position::new(-600.0, 100.0), red),
+            (Position::new(200.0, 900.0), red),
+            (Position::new(2600.0, 100.0), red),
+        ];
+        let ind = Awareness::new().frame(&s, &screen(), &t);
+        let arrows: Vec<Position> =
+            ind.arrows.iter().filter(|a| matches!(a.kind, ArrowKind::Mushroom { .. })).map(|a| a.target).collect();
+        assert_eq!(arrows.len(), MUSHROOM_ARROWS, "{arrows:?}");
+        assert!(!arrows.contains(&Position::new(200.0, 100.0)), "the one on the screen");
+        assert!(!arrows.contains(&Position::new(2600.0, 100.0)), "the farthest");
+        assert!(kinds(&ind).contains(&ArrowKind::Mushroom { color: red }));
     }
 
     #[test]

@@ -68,6 +68,7 @@ pub struct SnapshotDelta {
     pub frogs_gone: Vec<u16>,
     pub pickups: Option<u64>,
     pub bonus_pickups: Option<Vec<BonusPickup>>,
+    pub mushrooms: Option<u64>,
     /// New or changed tiles, in full.
     pub tiles: Vec<TileState>,
     pub tiles_gone: Vec<u16>,
@@ -306,6 +307,7 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
         frogs_gone,
         pickups: (next.pickups != prev.pickups).then_some(next.pickups),
         bonus_pickups: (bonus_pickups != prev_bonus).then_some(bonus_pickups),
+        mushrooms: (next.mushrooms != prev.mushrooms).then_some(next.mushrooms),
         tiles,
         tiles_gone,
         fires,
@@ -341,6 +343,7 @@ pub fn apply_delta(prev: &Snapshot, delta: &SnapshotDelta) -> Snapshot {
         frogs: apply_positioned(&prev.frogs, &delta.frogs, &delta.frogs_moved, &delta.frogs_gone),
         pickups: delta.pickups.unwrap_or(prev.pickups),
         bonus_pickups,
+        mushrooms: delta.mushrooms.unwrap_or(prev.mushrooms),
         tiles: apply_keyed(&prev.tiles, &delta.tiles, &delta.tiles_gone),
         fires: apply_keyed(&prev.fires, &delta.fires, &delta.fires_gone),
         lamps: apply_keyed(&prev.lamps, &delta.lamps, &delta.lamps_gone),
@@ -483,6 +486,7 @@ mod tests {
             frogs,
             pickups: rng.random(),
             bonus_pickups,
+            mushrooms: rng.random(),
             tiles,
             fires,
             lamps,
@@ -568,6 +572,7 @@ mod tests {
         }
         if rng.random_ratio(1, 5) {
             next.pickups ^= 1 << rng.random_range(0..64);
+            next.mushrooms |= 1 << rng.random_range(0..64);
         }
         if rng.random_ratio(1, 5) {
             next.bonus_pickups.push(BonusPickup { cell: rng.random_range(0..600), kind: PickupKind::Shield });

@@ -1,7 +1,7 @@
 # PRD: the mushroom hunt
 
-Status: **draft, 2026-10-06.** Nothing is implemented. This is BB-6, the
-design document for BB-5. Section 2 lists the decisions the feature needs,
+Status: **first version built, 2026-10-06** (section 14, "As built"). This
+is BB-6, the design document for BB-5. Section 2 lists the decisions the feature needs,
 each with the answer this document assumes until the author changes it. The
 art is being chosen in the "Mushroom picks" artifact
 (https://claude.ai/artifact/85JnrZJxxPaNeKkf5ZuGPR). It holds six mushrooms,
@@ -46,6 +46,7 @@ Contents
 11. Tests
 12. Non-goals and open questions
 13. Phases
+14. As built
 
 ## 1. Why
 
@@ -122,8 +123,8 @@ MUSHROOM!") and the end screen's words.
 ## 5. Finding them: the count, the arrows, the minimap
 
 - **The count** is the R pick (section 6). In Forage it takes the right
-  cluster's enemy slot (`Corners`), and the enemy count moves down to the
-  status line. It is laid out like every slot, so `corner_tests` pin it, and
+  cluster's frog gauge slot (`Corners`), which a forage round has no frog
+  for; the enemy count stays where it is. It is laid out like every slot, so `corner_tests` pin it, and
   `every_language_fits_every_budget` measures its words.
 - **Off-screen arrows** (`indicators.rs`): `ArrowKind::Mushroom`, drawn in
   the mushroom's current cap colour, for the nearest
@@ -139,11 +140,11 @@ MUSHROOM!") and the end screen's words.
 
 | Pick | Options | Chosen |
 |---|---|---|
-| Mushroom | M1 fly agaric, M2 king bolete, M3 troop, M4 glowcap, M5 parasol, M6 morel | _pending_ |
-| Colour change | C1 rainbow sweep, C2 beacon blink, C3 spot chase, C4 glow breath, C5 confetti drift | _pending_ |
-| Size | S1 48 px (a tree), S2 64 px (two cells), S3 96 px (three cells) | _pending_ |
-| Pick-up show | P1 pop, P2 gulp, P3 spore puff | _pending_ |
-| Count | R1 count readout, R2 pip row, R3 readout + toast | _pending_ |
+| Mushroom | M1 fly agaric, M2 king bolete, M3 troop, M4 glowcap, M5 parasol, M6 morel | **M1 fly agaric** (built; the page's default until the author picks) |
+| Colour change | C1 rainbow sweep, C2 beacon blink, C3 spot chase, C4 glow breath, C5 confetti drift | **C1 rainbow sweep** (built) |
+| Size | S1 48 px (a tree), S2 64 px (two cells), S3 96 px (three cells) | **S2 64 px** (built) |
+| Pick-up show | P1 pop, P2 gulp, P3 spore puff | **P1 pop** (built) |
+| Count | R1 count readout, R2 pip row, R3 readout + toast | **R1 count readout** (built) |
 
 All the candidates follow the rules the other sheets do, and so does the
 chosen one:
@@ -282,3 +283,37 @@ A `mushrooms` tuning group:
 5. **Online**: the bitmask, the event, the protocol bump, a `netlab` drive
    that collects.
 6. **A level**: one Forage level in `levels.toml`, play-tested.
+
+## 14. As built
+
+The first version, on the picker page's defaults (M1, C1, S2, P1, R1):
+
+- **Rules** (`simulation/forage.rs`, `forage_tests.rs`): `Mission::Forage`
+  (`forage`; players read **MUSHROOMS** in the HUD, **MUSHROOM HUNT!** on
+  the banner; Slovenian GOBE / LOV NA GOBE!), `CellObject::Mushroom`,
+  `Event::MushroomTaken { seat, col, row, left }`, win on the last
+  mushroom, lose only when every seat is a wreck, no frog. Decisions 1-11
+  as section 2 proposed; `mushroom_heal` is not built.
+- **Art** is drawn in code (`mushroom.rs`) rather than from a generated
+  sheet: the picker page's renderer ported to Rust and drawn as runs of
+  2 px blocks, six cap ramps. A different pick changes that one file. No
+  `gen_mushrooms.py` and no sheet, so `check_sheets.py` is untouched.
+- **The pop** is drawn from `Mushroom::taken_at` on the round clock, not by
+  `fx.rs`: no particle state, and a replica pops on its own clock.
+- **Finding them**: the HUD count in the frog's slot (left in the row's
+  text, `/total` smaller), a minimap mark per mushroom still out in its
+  cap's colour, and arrows to the three nearest off the screen
+  (`indicators::MUSHROOM_ARROWS`, a constant rather than the
+  `indicator_mushroom_arrows` knob). No night light yet.
+- **Builder and linter**: `Tool::Mushroom` in the ACTOR group;
+  `forage-no-mushrooms` (error), `mushroom-unreachable` (error, fix:
+  remove), `too-many-mushrooms` (warning). `forage-frog-ignored` is not
+  built: a frog cell on a forage map is ignored as on Destroy.
+- **Online**: `Snapshot::mushrooms` (a taken mask) and
+  `WireEvent::MushroomTaken`, `PROTOCOL_VERSION` 15. Collection stays the
+  room's; no provisional pop.
+- **A map**: `maps/missions/forage-basic.toml`, shipped (`SHIPPED_MAPS`,
+  the lobby's stepper and the builder's Load list), lint-clean, its
+  thumbnail pinned. No level in `levels.toml` yet.
+- **Not built**: the C2 guard tactic, the sway, a heal, the end screen's
+  mushroom stats.

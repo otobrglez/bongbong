@@ -545,8 +545,9 @@ pub fn spawn_from_map(
                 obstacle_positions.push(pos);
                 world.spawn((Obstacle::new(Material::Door, beat as i32, pos, false, body),));
             }
-            // A flag is the training run's (`Game::init_training`).
-            CellObject::Flag => {}
+            // A flag is the training run's (`Game::init_training`), a
+            // mushroom the round's (`Game::init_mushrooms`).
+            CellObject::Flag | CellObject::Mushroom => {}
             // A lamp post draws no roll either: one look, never alight.
             CellObject::Lamp => {
                 let body = physics.spawn_static(pos, tile_half_extent(Material::Lamp, &solid_cells, col, row, obstacle_half_extent));

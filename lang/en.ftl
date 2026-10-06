@@ -64,12 +64,14 @@ paused = PAUSED
 mission-protect = PROTECT
 mission-hunt = HUNT
 mission-destroy = DESTROY
+mission-forage = MUSHROOMS
 mission-training = TRAINING
 
 # The 72 px banner the round opens with, centred over the field.
 mission-protect-banner = PROTECT THE FROG!
 mission-hunt-banner = HUNT THE FROG!
 mission-destroy-banner = DESTROY!
+mission-forage-banner = MUSHROOM HUNT!
 mission-training-banner = FOLLOW THE FROG!
 
 # The 48 px banner during the breather before a wave rolls in.
@@ -302,6 +304,9 @@ lint-tower-at-start = TOWER COVERS A START
 lint-tower-no-reach = TOWER CAN'T REACH ANYTHING
 lint-too-many-towers = MANY TOWERS ON ONE SIDE
 lint-training-door = DOOR THAT NEVER OPENS
+lint-forage-no-mushrooms = NO MUSHROOMS
+lint-mushroom-unreachable = MUSHROOM OUT OF REACH
+lint-too-many-mushrooms = TOO MANY MUSHROOMS
 # The status line's fallback before a category is active.
 editor-tool = TOOL
 
@@ -432,6 +437,7 @@ tool-start = p1 start
 tool-start2 = p2 start
 tool-frog = frog
 tool-enemy_frog = enemy frog
+tool-mushroom = mushroom
 tool-health = health
 tool-ammo = ammo
 tool-laser = laser
@@ -464,6 +470,7 @@ tool-short-oil_drum = oil
 tool-short-fuel_drum = fuel
 tool-short-oil_trail = oil
 tool-short-enemy_frog = e.frog
+tool-short-mushroom = mushroom
 tool-short-flamethrower = flame
 tool-short-frog_health = frog+
 tool-short-tower_pack = tower+

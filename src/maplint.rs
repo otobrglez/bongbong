@@ -168,11 +168,20 @@ pub enum LintKind {
     /// map's script, or a door or flag on a map with no script at all: it
     /// never opens, or it is never counted.
     TrainingDoor,
+    /// A `forage` round on a map with no mushroom: there is nothing to win
+    /// it by (docs/mushroom-hunt-prd.md).
+    ForageNoMushrooms,
+    /// A mushroom no seat can drive into: no playfield cell within a
+    /// hull's reach of its cell.
+    MushroomUnreachable,
+    /// More mushrooms than `mushroom::MUSHROOM_MAX`: the ones past it are
+    /// left off the round.
+    TooManyMushrooms,
 }
 
 impl LintKind {
     /// Every kind, in check order.
-    pub const ALL: [LintKind; 23] = [
+    pub const ALL: [LintKind; 26] = [
         LintKind::UnreachableFrog,
         LintKind::UnreachablePickup,
         LintKind::GatedPickup,
@@ -196,6 +205,9 @@ impl LintKind {
         LintKind::TowerNoReach,
         LintKind::TooManyTowers,
         LintKind::TrainingDoor,
+        LintKind::ForageNoMushrooms,
+        LintKind::MushroomUnreachable,
+        LintKind::TooManyMushrooms,
     ];
 
     /// The kebab-case name the lint's output and the dev server's `lint`
@@ -226,6 +238,9 @@ impl LintKind {
             LintKind::TowerNoReach => "tower-no-reach",
             LintKind::TooManyTowers => "too-many-towers",
             LintKind::TrainingDoor => "training-door",
+            LintKind::ForageNoMushrooms => "forage-no-mushrooms",
+            LintKind::MushroomUnreachable => "mushroom-unreachable",
+            LintKind::TooManyMushrooms => "too-many-mushrooms",
         }
     }
 }
@@ -610,6 +625,7 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     check_players(&places, start, player_pos, player_size, &others, &mut findings);
     check_reachability(game, &cells, &breach_cells, frog_pos, &mut findings);
     check_enemy_frog(game, &cells, &mut findings);
+    check_mushrooms(game, &cells, &mut findings);
     check_gates(game, &grid, width, height, &mut findings);
     check_wave_gates(game, &grid, width, height, &player_positions, &mut findings);
     check_portals(game, &cells, &mut findings);
@@ -790,6 +806,46 @@ fn check_enemy_frog(game: &Game, cells: &Cells, findings: &mut Vec<LintFinding>)
             pos.x, pos.y
         );
         findings.push(LintFinding::new(LintSeverity::Error, LintKind::EnemyFrogUnreachable, message, vec![LintCell::Map(col, row)]));
+    }
+}
+
+/// The mushrooms (docs/mushroom-hunt-prd.md): a `forage` round needs at
+/// least one, every one needs a playfield cell within a hull's reach of
+/// its cell (`Mushroom::in_reach` from the worst-case tank's box, whatever
+/// the mission - one out of reach in a forage round makes it unwinnable),
+/// and the map holds at most `MUSHROOM_MAX`. Read from the map's cells, so
+/// the ones past the cap are named too.
+fn check_mushrooms(game: &Game, cells: &Cells, findings: &mut Vec<LintFinding>) {
+    let mushrooms: Vec<(i32, i32)> =
+        game.map.iter_cells().filter(|(_, _, o)| matches!(o, CellObject::Mushroom)).map(|(c, r, _)| (c, r)).collect();
+    if mushrooms.is_empty() {
+        if game.mission == Mission::Forage {
+            findings.push(LintFinding::new(
+                LintSeverity::Error,
+                LintKind::ForageNoMushrooms,
+                "forage mission with no mushroom cell - the round can never be won".to_string(),
+                Vec::new(),
+            ));
+        }
+        return;
+    }
+    let max = crate::mushroom::MUSHROOM_MAX;
+    if mushrooms.len() > max {
+        let past: Vec<LintCell> = mushrooms[max..].iter().map(|&(c, r)| LintCell::Map(c, r)).collect();
+        let message = format!("{} mushrooms, past the {max} a round holds - the last {} are left off", mushrooms.len(), past.len());
+        findings.push(LintFinding::new(LintSeverity::Warning, LintKind::TooManyMushrooms, message, past));
+    }
+    let reach = crate::OBSTACLE_GRID_SIZE * 0.5 + tuning().mushroom_collect_pad_px + battlefield::max_tank_clearance_half_extent();
+    for &(col, row) in mushrooms.iter().take(max) {
+        let pos = map::cell_to_world(col, row);
+        if !point_reachable(cells, pos, reach) {
+            let message = format!(
+                "mushroom at map cell ({col},{row}) = ({:.0},{:.0}) has no playfield cell within {reach:.0}px - no seat can take it",
+                pos.x, pos.y
+            );
+            let fix = Some(LintFix::Remove { at: (col, row) });
+            findings.push(LintFinding::new(LintSeverity::Error, LintKind::MushroomUnreachable, message, vec![LintCell::Map(col, row)]).with_fix(fix));
+        }
     }
 }
 
@@ -1989,6 +2045,34 @@ mod map_lint_tests {
         assert!(used.is_empty(), "a gate the linter flags as blocked is one the round drops");
     }
 
+    /// The mushroom hunt (docs/mushroom-hunt-prd.md): a forage map with no
+    /// mushroom cannot be won, one sealed in iron cannot be taken (with
+    /// the fix that takes it away), and one out in the open is clean.
+    #[test]
+    fn mushrooms_are_linted_for_the_forage_round() {
+        let mut map = base_map();
+        map.mission.kind = Mission::Forage;
+        let findings = lint_map(map.clone());
+        assert!(findings.iter().any(|f| f.kind == LintKind::ForageNoMushrooms && f.severity == LintSeverity::Error));
+
+        map.set_cell(20, 5, CellObject::Mushroom);
+        for (col, row) in [(31, 4), (32, 4), (33, 4), (31, 5), (33, 5), (31, 6), (32, 6), (33, 6)] {
+            wall(&mut map, col, row);
+        }
+        map.set_cell(32, 5, CellObject::Mushroom);
+        let findings = lint_map(map.clone());
+        dump("forage, one sealed", &findings);
+        assert!(!has(&findings, LintKind::ForageNoMushrooms));
+        let sealed: Vec<&LintFinding> = findings.iter().filter(|f| f.kind == LintKind::MushroomUnreachable).collect();
+        assert_eq!(sealed.len(), 1, "only the sealed one");
+        assert_eq!(sealed[0].cells, vec![LintCell::Map(32, 5)]);
+        assert_eq!(sealed[0].fix, Some(LintFix::Remove { at: (32, 5) }));
+
+        map.mission.kind = Mission::Destroy;
+        map.set_cell(32, 5, CellObject::Wall { material: Material::Iron });
+        assert!(!lint_map(map).iter().any(|f| matches!(f.kind, LintKind::ForageNoMushrooms | LintKind::MushroomUnreachable)));
+    }
+
     /// An iron ring one map cell in from every edge blocks every edge
     /// lane the automatic gate scan could offer: under the waves plan,
     /// with no explicit gate, that is `WavesNoGates`; the same ring under
@@ -2357,6 +2441,11 @@ mod map_lint_tests {
         dump("hunt-basic", &f);
         assert!(errors(&f).is_empty(), "hunt-basic must be fully legal");
         assert!(!has(&f, LintKind::HuntMissingEnemyFrog), "hunt-basic places its enemy frog");
+
+        let f = lint_path("maps/missions/forage-basic.toml").expect("fixture loads");
+        dump("forage-basic", &f);
+        assert!(errors(&f).is_empty(), "forage-basic must be fully legal");
+        assert!(!has(&f, LintKind::ForageNoMushrooms) && !has(&f, LintKind::MushroomUnreachable), "every mushroom can be taken");
 
         let f = lint_path("maps/missions/waves-basic.toml").expect("fixture loads");
         dump("waves-basic", &f);

@@ -189,6 +189,11 @@ pub fn welcome(w: &Welcome) -> Result<Game, String> {
     game.oil_cells = w.oil_cells.iter().map(|&i| cell_from_index(cols, i)).collect();
     remove_tiles(&mut game, &w.dead_cells.iter().copied().collect(), cols);
     apply(&mut game, &w.snapshot, Show::Quiet);
+    // The mushrooms taken before this client came in are gone, not
+    // popping: a pop is for one taken while it watches.
+    for m in game.mushrooms.iter_mut().filter(|m| m.taken) {
+        m.taken_at = None;
+    }
     // The lanterns each seat has set down already are spent; one a blast
     // broke before this client came in is forgotten.
     for seat in 0..game.lamps_left.len() {
@@ -271,6 +276,7 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_grenades(game, s);
     apply_frogs(game, s, drawn.then_some(&mut spectacle));
     apply_pickups(game, s, cols);
+    game.set_mushrooms_taken(s.mushrooms);
     apply_fires(game, s, cols);
     apply_lamps(game, s);
     apply_round(game, s);
@@ -1552,6 +1558,32 @@ mod tests {
         let welcome = |g: &Game| enc::welcome(g, 0, roster(g), "{}".into(), [1; MAX_SEATS]).unwrap();
         assert_eq!(encode(&Msg::Welcome(welcome(&game))), encode(&Msg::Welcome(welcome(&game))));
         println!("default map, frame 240: snapshot {} B, welcome {} B", a.len(), encode(&Msg::Welcome(welcome(&game))).len());
+    }
+
+    /// The mushroom hunt (docs/mushroom-hunt-prd.md): a mushroom the room
+    /// hands a seat is taken on the replica by the next snapshot and pops
+    /// there, and a client joining after it sees it gone without a pop.
+    #[test]
+    fn a_taken_mushroom_reaches_the_replica() {
+        let map = "version = 1\ntanks = 0\ncells.\"5,11\" = { kind = \"start\" }\ncells.\"20,11\" = { kind = \"mushroom\" }\ncells.\"30,11\" = { kind = \"mushroom\" }\n";
+        let mut game = authoritative(map, 3, 0);
+        game.level_overrides.mission = Some(Mission::Forage);
+        let (width, height) = game.map.field_size();
+        game.init(width, height);
+        let mut replica = welcome_through_the_codec(&game);
+        assert_eq!(replica.mushrooms_left(), 2);
+        game.debug_teleport(0, crate::map::cell_to_world(20, 11), None).expect("seat 0 stands on the field");
+        game.update(Input::default(), PHYSICS_FIXED_DT, width, height);
+        let s = enc::snapshot(&game, [0; MAX_SEATS]);
+        assert_eq!(s.mushrooms, 0b01);
+        assert!(s.events.iter().any(|e| matches!(e, WireEvent::MushroomTaken { seat: 0, col: 20, row: 11, left: 1 })));
+        snapshot(&mut replica, &s);
+        assert_eq!(replica.drawable_state().mushrooms, game.drawable_state().mushrooms);
+        assert!(replica.mushrooms()[0].taken_at.is_some(), "the replica pops it");
+
+        let late = welcome_through_the_codec(&game);
+        assert_eq!(late.mushrooms_left(), 1);
+        assert!(late.mushrooms()[0].taken && late.mushrooms()[0].taken_at.is_none(), "taken before it came in: gone, no pop");
     }
 
     #[test]

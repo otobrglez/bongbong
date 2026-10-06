@@ -1,504 +1,488 @@
-//! The mushroom cloud a dying tank goes up in (docs/mushroom-cloud.md),
-//! composed at draw time rather than played from a sheet, in the effects
-//! language every explosion shares (`pyro.rs`, docs/effects.md). The look
-//! aims at test-range footage rather than a cartoon: a white-hot flash with
-//! a few short rays, a ring of dust racing out along the ground, then a
-//! fireball that climbs a narrow stem into a wide cap rolling over itself,
-//! briefly wrapped in a condensation shell and collar, cooling from a
-//! glowing core to heavy smoke that leans with the wind while debris
-//! streaks away.
+//! The mushrooms of the mushroom hunt (docs/mushroom-hunt-prd.md): what
+//! one is, and its drawing, generic over `canvas::Canvas` so a thumbnail
+//! and the round draw it alike. The rules are `simulation/forage.rs`.
 //!
-//! Every puff is shaded rather than outlined - a dark body, a shadow step
-//! down and right, a lit side up and to the left, and while it still burns
-//! a fire core that shrinks as it cools - all discs of whole 2 px blocks on
-//! the field's grid, in the fire and smoke ramps; its light is stepped
-//! glows. Time is continuous, so it animates every frame.
+//! A mushroom is map data (`map::CellObject::Mushroom`) turned into a plain
+//! value at `init`, not an `Obstacle`: no collider, no nav-grid cell, no
+//! cover - the nav grid and the linter treat every obstacle as impassable,
+//! and a tank has to drive into a mushroom to take it. A seat's hull box
+//! touching the cell's square, grown by `mushroom_collect_pad_px`, takes it
+//! (`Mushroom::in_reach`).
 //!
-//! No two clouds match: `Cloud::new` hashes the height, cap size, roll
-//! speed, puff counts and pace from the blast's seed, and every puff hashes
-//! its own place, size and cooling. The lean is the wind's, read where the
-//! tank died (`pyro::smoke_lean`). Nothing draws RNG; `compose` is a pure
-//! function of the cloud, its age and the wind, so it is tested headless
-//! and `draw` only paints what it returns.
+//! **The look is the picks' (the "Mushroom picks" artifact):** M1, the fly
+//! agaric - a domed cap with white spots, a skirt on the stem - at S2, 64 px
+//! across (32 design pixels of 2 px blocks), so it stands taller and wider
+//! than a tank's 36 px hull; C1, the cap stepping through six loud ramps,
+//! one step every `mushroom_cycle_seconds`, each mushroom from its own
+//! hashed place in the cycle; P1, the pop (`pop`). The caps' ramps are
+//! deliberately off the Puny palette, like the crates' symbols: a mushroom
+//! has to be spotted from across the field. The stem, the spots and the
+//! outline are on it. Colours step from ramp to ramp and never blend.
+//!
+//! The art is worked out once (`raster`), as cells of a material and a
+//! ramp step, then turned into horizontal runs per cap ramp (`runs`), so a
+//! frame draws a mushroom as a few dozen rectangles. No RNG anywhere; every
+//! choice is hashed from the cell.
 
-use crate::Position;
-use crate::blast::hash_unit;
-use crate::math::Color;
-use crate::pyro::{self, Blocks, Puff, Shape, BLOCK, DUST, SMOKE};
-use crate::tuning::tuning;
-use std::f32::consts::{PI, TAU};
+use std::sync::OnceLock;
 
-/// Fire from white hot to embers, brightest first: the effects ramp's
-/// white, pale gold, gold, gold-orange, red, deep red and darkest red
-/// (`pyro::FIRE`, top down).
-const FIRE: [Color; 7] = [pyro::FIRE[7], pyro::FIRE[6], pyro::FIRE[5], pyro::FIRE[4], pyro::FIRE[3], pyro::FIRE[2], pyro::FIRE[1]];
+use crate::canvas::Canvas;
+use crate::math::{Color, Vec2};
+use crate::pyro::bayer;
+use crate::{Position, OBSTACLE_GRID_SIZE};
 
-/// Condensation: the pale shell and collar the shock leaves in the air.
-const VAPOUR: Color = SMOKE[6];
+/// The most mushrooms a map holds: what the wire's one-bit-each mask
+/// carries (`net::wire::Snapshot::mushrooms`). A map's cells past it are
+/// left out, in `MapFile::iter_cells` order, and the linter says so.
+pub const MUSHROOM_MAX: usize = 64;
 
-/// The dust the shock lifts off the ground as it races out: the pale sand
-/// front and its darker echo.
-const SHOCK_DUST: [Color; 2] = [DUST[4], DUST[2]];
+/// Design pixels a side, each a 2 px block: 64 px of art.
+pub const DESIGN: i32 = 32;
 
-/// One cloud's hashed shape. Built once when the tank dies; the live
-/// knobs are read then, so a tuning change affects the next kill.
+/// A design pixel on the field.
+pub const BLOCK: i32 = 2;
+
+/// How far below its cell's centre the art stands: the stem's foot sits
+/// near the cell's bottom edge, so the cap rises over the cells north of
+/// it the way a tree's crown does.
+pub const BASE_DROP: f32 = 10.0;
+
+/// The six cap ramps, light to dark: red, gold, teal, blue, magenta,
+/// violet. Off the Puny palette on purpose (module docs).
+pub const RAMPS: [[Color; 5]; 6] = [
+    [rgb(0xff, 0xb3, 0x8a), rgb(0xff, 0x5a, 0x3c), rgb(0xe8, 0x34, 0x2a), rgb(0xa8, 0x23, 0x2a), rgb(0x5c, 0x17, 0x24)],
+    [rgb(0xff, 0xf1, 0xa0), rgb(0xff, 0xd9, 0x3d), rgb(0xf0, 0xa0, 0x20), rgb(0xb5, 0x6a, 0x18), rgb(0x5c, 0x34, 0x10)],
+    [rgb(0xb8, 0xff, 0xf0), rgb(0x3d, 0xff, 0xd0), rgb(0x00, 0xc8, 0x90), rgb(0x00, 0x7e, 0x60), rgb(0x00, 0x3a, 0x2c)],
+    [rgb(0xbf, 0xe4, 0xff), rgb(0x5a, 0xb4, 0xff), rgb(0x2a, 0x6f, 0xf0), rgb(0x1c, 0x3f, 0xa8), rgb(0x14, 0x21, 0x5c)],
+    [rgb(0xff, 0xc4, 0xf4), rgb(0xff, 0x5a, 0xd8), rgb(0xd4, 0x2a, 0xb0), rgb(0x8a, 0x1a, 0x78), rgb(0x45, 0x10, 0x3e)],
+    [rgb(0xe2, 0xc8, 0xff), rgb(0xb0, 0x7a, 0xff), rgb(0x7a, 0x3e, 0xf0), rgb(0x4a, 0x22, 0xa0), rgb(0x24, 0x12, 0x4f)],
+];
+
+/// The stem and the spots, on the Puny palette's neutral greys.
+const STEM: [Color; 5] = [rgb(0xf0, 0xf0, 0xf0), rgb(0xda, 0xda, 0xda), rgb(0xc1, 0xc1, 0xc1), rgb(0x9e, 0x9e, 0x96), rgb(0x7e, 0x7e, 0x7e)];
+const SPOT: [Color; 3] = [rgb(0xff, 0xff, 0xff), rgb(0xf0, 0xf0, 0xf0), rgb(0xc1, 0xc1, 0xc1)];
+const OUTLINE: Color = rgb(0x25, 0x25, 0x25);
+/// The drop shadow, an obstacle's.
+const SHADOW: Color = Color::new(0x14, 0x1e, 0x14, 82);
+
+const fn rgb(r: u8, g: u8, b: u8) -> Color {
+    Color::new(r, g, b, 255)
+}
+
+/// One mushroom of the round: its cell, the cell's centre, whether a seat
+/// has taken it, and the round time it was taken at - what its pop
+/// (`draw_pop`) plays from, so the pop is drawn straight off the round,
+/// the replica's as much as the room's.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Cloud {
-    pub seed: u32,
-    /// How long the whole cloud lives; the blast is done after this.
-    pub seconds: f32,
-    /// How high (px) the cap's centre climbs above the hull.
-    height: f32,
-    /// The cap's radius (px) once it has spread.
-    cap: f32,
-    /// This cloud's own sideways drift per px of height, signed: a small
-    /// hashed nudge on top of the wind's.
-    wind: f32,
-    /// How fast (rad/s) the cap rolls over itself.
-    roll: f32,
-    /// Vertical squash of everything that lies in the ground plane (the
-    /// cap's ring, the shock ring, the dust) - the tilt of the top-down view.
-    squash: f32,
-    stem_width: f32,
-    /// Puff spacings per second the stem's puffs travel up it.
-    flow: f32,
-    /// Phase of the stem's wobble.
-    wobble: f32,
-    /// Where up the stem (fraction of its height) the collar forms.
-    collar: f32,
-    cap_puffs: u32,
-    dome_puffs: u32,
-    skirt_puffs: u32,
-    debris: u32,
+pub struct Mushroom {
+    pub col: i32,
+    pub row: i32,
+    pub at: Position,
+    pub taken: bool,
+    pub taken_at: Option<f32>,
 }
 
-use pyro::{alpha as fade, ease_out};
+impl Mushroom {
+    pub fn new(col: i32, row: i32) -> Mushroom {
+        Mushroom { col, row, at: crate::map::cell_to_world(col, row), taken: false, taken_at: None }
+    }
 
-/// How much of a puff is left once it starts to dissolve at `start`
-/// (a fraction of the cloud's life): 1 until then, 0 a short while after.
-fn dissolve(p: f32, start: f32) -> f32 {
-    1.0 - ((p - start) / 0.14).clamp(0.0, 1.0)
+    /// Take it at round time `time`.
+    pub fn take(&mut self, time: f32) {
+        self.taken = true;
+        self.taken_at = Some(time);
+    }
+
+    /// Where the art stands on the ground: its foot, the key the standing
+    /// walk sorts it by.
+    pub fn base(&self) -> Position {
+        Vec2::new(self.at.x, self.at.y + BASE_DROP)
+    }
+
+    /// Whether a hull box centred at `hull_center` with half-extents
+    /// `hull_half` touches this mushroom's cell grown by `pad` on every
+    /// side - `Pickup::in_reach`'s box test on the cell, whatever the
+    /// art's size, so the big cap never collects from two cells away.
+    pub fn in_reach(&self, hull_center: Position, hull_half: Position, pad: f32) -> bool {
+        let half = OBSTACLE_GRID_SIZE * 0.5 + pad;
+        (hull_center.x - self.at.x).abs() <= hull_half.x + half && (hull_center.y - self.at.y).abs() <= hull_half.y + half
+    }
+
+    /// The cap's ramp at round time `time`: its own hashed place in the
+    /// cycle, stepped on by one ramp every `cycle` seconds.
+    pub fn ramp(&self, time: f32, cycle: f32) -> usize {
+        ramp_at(self.col, self.row, time, cycle)
+    }
 }
 
-/// A shaded puff by `heat` (1 white hot, 0 burnt out) and `ash` (0 soot,
-/// 1 pale) - the effects language's shading (`pyro::shade`) - with one
-/// case of its own: `underlit` is a smoke puff on the cap's underside,
-/// kept dark under the warm glow the cap's belly throws.
-fn puff(pos: Position, radius: f32, heat: f32, ash: f32, sunlit: bool, underlit: bool) -> Puff {
-    let (body, shadow, lit, core) = pyro::shade(heat, ash, sunlit && !underlit);
-    if underlit && heat <= pyro::FIREBALL {
-        return Puff { pos, radius, body: SMOKE[1], shadow: Some(SMOKE[0]), lit: None, core, cover: 1.0 };
-    }
-    Puff { pos, radius, body, shadow, lit, core, cover: 1.0 }
+/// The cap ramp of the mushroom on cell (`col`, `row`) at `time`.
+pub fn ramp_at(col: i32, row: i32, time: f32, cycle: f32) -> usize {
+    let seed = (crate::pyro::unit(col as u32 ^ (row as u32).wrapping_mul(0x9E37_79B9), 0x6d75) * RAMPS.len() as f32) as usize;
+    let step = if cycle > 0.0 { (time.max(0.0) / cycle) as usize } else { 0 };
+    (seed + step) % RAMPS.len()
 }
 
-impl Cloud {
-    /// The cloud for a blast with this `seed`, sized by its `scale`.
-    pub fn new(seed: u32, scale: f32) -> Self {
-        let t = tuning();
-        let u = |k: u32| hash_unit(seed, k);
-        let cap = t.mushroom_cap_px * scale * (0.85 + 0.4 * u(3));
-        Cloud {
-            seed,
-            seconds: t.mushroom_seconds * (0.85 + 0.3 * u(1)),
-            height: t.mushroom_height_px * scale * (0.8 + 0.45 * u(2)),
-            cap,
-            wind: (u(4) - 0.5) * 0.1,
-            roll: 1.2 + 1.6 * u(5),
-            squash: 0.3 + 0.14 * u(10),
-            stem_width: cap * (0.14 + 0.07 * u(11)),
-            flow: 1.5 + 2.0 * u(12),
-            wobble: u(13) * TAU,
-            collar: 0.45 + 0.2 * u(16),
-            cap_puffs: 22 + (u(6) * 12.0) as u32,
-            dome_puffs: 2 + (u(15) * 3.0) as u32,
-            skirt_puffs: 16 + (u(8) * 10.0) as u32,
-            debris: 10 + (u(9) * 10.0) as u32,
-        }
+/// The cap's bright step on (`col`, `row`) at `time`: the colour a mark
+/// standing for this mushroom wears (the HUD's glyph, the minimap, the
+/// off-screen arrow).
+pub fn cap_color(col: i32, row: i32, time: f32, cycle: f32) -> Color {
+    RAMPS[ramp_at(col, row, time, cycle)][1]
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mat {
+    Cap,
+    Spot,
+    Stem,
+    Gills,
+    Outline,
+}
+
+/// One design pixel of the art: what it is and its ramp step (0 lit .. 4
+/// dark).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Px {
+    mat: Mat,
+    step: u8,
+}
+
+/// The art: `DESIGN` x `DESIGN` design pixels, row-major, and the lowest
+/// row anything stands on.
+struct Raster {
+    cells: Vec<Option<Px>>,
+    base: i32,
+}
+
+fn in_ellipse(u: f32, v: f32, cx: f32, cy: f32, rx: f32, ry: f32) -> bool {
+    ((u - cx) / rx).powi(2) + ((v - cy) / ry).powi(2) <= 1.0
+}
+
+/// A cap's step at (`u`, `v`): lit from the top left in five bands with
+/// dithered edges, its rim darkened.
+fn cap_step(u: f32, v: f32, cx: f32, cy: f32, rx: f32, ry: f32, x: i32, y: i32) -> u8 {
+    let (nx, ny) = ((u - cx) / rx, (v - cy) / ry);
+    let b = 0.6 * -nx + 0.8 * -ny + (bayer(x, y) - 0.5) * 0.22;
+    let mut s = if b > 0.62 {
+        0
+    } else if b > 0.18 {
+        1
+    } else if b > -0.28 {
+        2
+    } else if b > -0.7 {
+        3
+    } else {
+        4
+    };
+    if nx * nx + ny * ny > 0.86 && s < 3 && ny > -0.2 {
+        s = 3;
     }
+    s
+}
 
-    pub fn done(&self, time: f32) -> bool {
-        time >= self.seconds
+/// A stem's step: lit from the left.
+fn stem_step(u: f32, cx: f32, hw: f32, x: i32, y: i32) -> u8 {
+    let sx = (u - cx) / hw + (bayer(x, y) - 0.5) * 0.3;
+    if sx < -0.3 {
+        0
+    } else if sx < 0.4 {
+        1
+    } else {
+        2
     }
+}
 
-    fn u(&self, k: u32) -> f32 {
-        hash_unit(self.seed, k)
-    }
-
-    /// Everything to paint `time` seconds after the kill at `base`, back
-    /// to front, the smoke leaning `wind` px sideways per px it climbs
-    /// (`pyro::smoke_lean`).
-    pub fn compose(&self, base: Position, time: f32, wind: f32) -> Vec<Shape> {
-        let d = self.seconds;
-        let t = time.clamp(0.0, d);
-        let p = t / d;
-        let fire_life = 0.3 * d;
-
-        // The head: climbs fast, then keeps drifting up; spreads as it goes.
-        let h = self.height * (ease_out(t / (0.36 * d)) + 0.1 * p);
-        let lean = (self.wind + wind) * (0.6 + 0.8 * p);
-        let head = Position::new(base.x + lean * h, base.y - h);
-        let cap = self.cap * (0.3 + 0.7 * ease_out(t / (0.42 * d))) * (1.0 + 0.2 * p);
-        let ring = cap * 0.74;
-        let tube = cap * 0.3;
-
-        let mut out = Vec::new();
-        let mut glows = Vec::new();
-
-        // The shock ring, on the ground under everything: a thin front of
-        // pale dust with a darker echo behind it.
-        let shock = 0.5;
-        if t < shock {
-            let k = t / shock;
-            let a = (1.0 - k).powf(1.5);
-            let reach = self.cap * 3.4 * ease_out(k);
-            self.ellipse(&mut out, base, reach, self.squash, 0.0, TAU, 1, fade(SHOCK_DUST[0], a));
-            self.ellipse(&mut out, base, reach * 0.82, self.squash, 0.0, TAU, 2, fade(SHOCK_DUST[1], a * 0.6));
-        }
-
-        // Dust the shock lifts off the ground, rolling out behind the ring.
-        let mut skirt_front = Vec::new();
-        if t > 0.05 {
-            for j in 0..self.skirt_puffs {
-                let s = 600 + j * 4;
-                let a = TAU * j as f32 / self.skirt_puffs as f32 + self.u(s) * 0.4 + t * 0.1;
-                let reach = self.cap * 1.25 * ease_out(t / (0.55 * d)) * (0.75 + 0.5 * self.u(s + 1));
-                let r = self.cap * 0.22 * (0.7 + 0.6 * self.u(s + 2)) * (1.0 - 0.3 * p) * dissolve(p, 0.3 + 0.35 * self.u(s + 3));
-                if r < BLOCK {
-                    continue;
-                }
-                let pos = Position::new(base.x + a.cos() * reach, base.y + 4.0 + a.sin() * reach * self.squash);
-                let mut p = puff(pos, r, 0.0, 0.5 + 0.4 * p, true, false);
-                p.core = None;
-                let p = Shape::Puff(p);
-                if a.sin() < 0.0 { out.push(p) } else { skirt_front.push(p) }
-            }
-        }
-
-        // The condensation collar around the stem: a flat pale ring that
-        // forms as the stem rises through it and thins away.
-        let collar_env = self.envelope(p, 0.18, 0.26, 0.45);
-        let collar_at = Position::new(base.x + lean * h * self.collar, base.y - h * self.collar);
-        let collar_r = self.stem_width * 3.2 + cap * 0.3;
-        if collar_env > 0.0 {
-            self.ellipse(&mut out, collar_at, collar_r, self.squash, PI, TAU, 2, fade(VAPOUR, 0.3 * collar_env));
-        }
-
-        // The stem: puffs ride up a conveyor, fed from the ground, flared
-        // at the foot; it breaks up from the bottom once the fire is out.
-        let cutoff = ((p - 0.5) / 0.3).clamp(0.0, 1.0);
-        let top = (h - tube * 0.4).max(1.0);
-        let spacing = (self.stem_width * 0.55).max(2.0);
-        let slots = (self.height * 1.2 / spacing).ceil() as u32 + 1;
-        let period = slots as f32 * spacing;
-        for k in 0..slots {
-            let rise = (k as f32 * spacing + t * self.flow * spacing) % period;
-            if rise > top {
-                continue;
-            }
-            let frac = rise / top;
-            if frac < cutoff {
-                continue;
-            }
-            let wob = (frac * 9.0 + t * 4.0 + self.wobble).sin() * 1.5;
-            let pos = Position::new(base.x + lean * rise + wob, base.y - rise);
-            let feed = (frac / 0.12).clamp(0.0, 1.0);
-            let flare = 1.0 + 0.8 * (1.0 - frac).powi(3);
-            let edge = if cutoff > 0.0 { ((frac - cutoff) / 0.15).clamp(0.0, 1.0) } else { 1.0 };
-            let r = self.stem_width * flare * feed * (1.0 - 0.35 * p) * edge;
-            if r < BLOCK {
-                continue;
-            }
-            let hot = fire_life * (1.2 + 0.9 * (1.0 - frac));
-            let heat = (1.0 - t / hot).max(0.0);
-            let ash = 0.1 + ((t - hot) / (0.6 * d)).clamp(0.0, 1.0) * 0.5;
-            if heat > 0.3 {
-                glows.push(Shape::Glow { pos, radius: r * 2.0, color: fade(FIRE[2], 0.18 * heat) });
-            }
-            out.push(Shape::Puff(puff(pos, r, heat, ash, false, false)));
-        }
-
-        if collar_env > 0.0 {
-            self.ellipse(&mut out, collar_at, collar_r, self.squash, 0.0, PI, 2, fade(VAPOUR, 0.45 * collar_env));
-        }
-
-        // The cap: a ring of puffs rolling over itself like a smoke ring -
-        // out over the top, down the outside, back in underneath - seen
-        // from above at the view's tilt. The underside keeps its fire and
-        // then its glow longest; the top cools first and pales.
-        let mut cap_back: Vec<(f32, Puff)> = Vec::new();
-        let mut cap_front: Vec<(f32, Puff)> = Vec::new();
-        for i in 0..self.cap_puffs {
-            let s = 100 + i * 6;
-            let az = TAU * i as f32 / self.cap_puffs as f32 + self.u(s) * 0.4;
-            let roll = self.u(s + 1) * TAU - self.roll * t;
-            let radial = ring + tube * roll.cos();
-            let up = tube * roll.sin() * 0.6;
-            let depth = az.sin();
-            let pos = Position::new(head.x + radial * az.cos(), head.y - up + radial * depth * self.squash);
-            let r = tube * (0.85 + 0.45 * self.u(s + 2)) * dissolve(p, 0.56 + 0.28 * self.u(s + 3));
-            if r < BLOCK {
-                continue;
-            }
-            let under = roll.sin() < 0.0;
-            let hot = fire_life * (0.55 + 0.7 * self.u(s + 4)) * if under { 1.5 } else { 1.0 };
-            let heat = (1.0 - t / hot).max(0.0);
-            let ash = 0.15 + 0.85 * ((t - hot) / (0.6 * d)).clamp(0.0, 1.0) * (0.5 + 0.5 * (roll.sin() * 0.5 + 0.5));
-            let underlit = under && t < hot * 1.35;
-            if heat > 0.3 {
-                glows.push(Shape::Glow { pos, radius: r * 1.8, color: fade(FIRE[2], 0.15 * heat) });
-            }
-            let p = puff(pos, r, heat, ash, roll.sin() > 0.2, underlit);
-            if depth >= 0.0 { cap_front.push((depth, p)) } else { cap_back.push((depth, p)) }
-        }
-        // Back to front, so the near side of the ring covers the far side.
-        let by_depth = |a: &(f32, Puff), b: &(f32, Puff)| a.0.total_cmp(&b.0);
-        cap_back.sort_by(by_depth);
-        cap_front.sort_by(by_depth);
-        out.extend(cap_back.into_iter().map(|(_, p)| Shape::Puff(p)));
-
-        // The belly still glowing from the fire under it: a translucent
-        // warm band along the cap's underside, fading once the fire is out.
-        let belly = 1.0 - ((t - fire_life) / (0.35 * d)).clamp(0.0, 1.0);
-        if belly > 0.0 && t > 0.2 * fire_life {
-            for i in 0..3 {
-                let x = head.x + (i as f32 - 1.0) * ring * 0.55;
-                glows.push(Shape::Glow { pos: Position::new(x, head.y + tube * 0.6), radius: cap * 0.42, color: fade(FIRE[4], 0.24 * belly) });
-            }
-        }
-
-        // The dome the ring rolls around, bulging up out of its middle.
-        for i in 0..self.dome_puffs {
-            let s = 300 + i * 5;
-            let pos = Position::new(
-                head.x + (self.u(s) - 0.5) * cap * 0.8,
-                head.y - tube * (0.3 + 0.4 * self.u(s + 1)) + (t * 2.0 + self.u(s + 2) * TAU).sin(),
-            );
-            let r = tube * (0.9 + 0.3 * self.u(s + 3)) * dissolve(p, 0.6 + 0.24 * self.u(s + 4));
-            if r < BLOCK {
-                continue;
-            }
-            let hot = fire_life * (0.45 + 0.4 * self.u(s + 4));
-            let heat = (1.0 - t / hot).max(0.0);
-            let ash = 0.3 + 0.7 * ((t - hot) / (0.5 * d)).clamp(0.0, 1.0);
-            out.push(Shape::Puff(puff(pos, r, heat, ash, true, false)));
-        }
-        out.extend(cap_front.into_iter().map(|(_, p)| Shape::Puff(p)));
-        out.extend(skirt_front);
-
-        // The condensation shell: a pale arc over the cap that the shock
-        // leaves in the air for a moment.
-        let shell = self.envelope(p, 0.1, 0.18, 0.42);
-        if shell > 0.0 {
-            let rx = cap * 1.45;
-            self.ellipse(&mut out, Position::new(head.x, head.y + tube * 0.4), rx, 0.62, PI * 1.08, PI * 1.92, 2, fade(VAPOUR, 0.5 * shell));
-            self.ellipse(&mut out, Position::new(head.x, head.y + tube * 0.4), rx * 1.08, 0.62, PI * 1.15, PI * 1.85, 3, fade(VAPOUR, 0.3 * shell));
-        }
-
-        // Debris streaking away on ballistic arcs: hot fragments and dark
-        // chunks, each drawn as a short trail behind where it is now.
-        for e in 0..self.debris {
-            let s = 800 + e * 5;
-            let life = 0.5 + 0.9 * self.u(s);
-            if t < 0.03 || t >= life {
-                continue;
-            }
-            let a = -PI / 2.0 + (self.u(s + 1) - 0.5) * 2.6;
-            let speed = (90.0 + 150.0 * self.u(s + 2)) * self.cap / 30.0;
-            let at = |t: f32| Position::new(base.x + a.cos() * speed * t, base.y + a.sin() * speed * t + 120.0 * t * t);
-            let k = t / life;
-            let color = if self.u(s + 3) < 0.4 {
-                fade(SMOKE[0], 1.0 - k * k)
+/// The fly agaric at (`u`, `v`) in the unit square, or nothing.
+fn agaric(u: f32, v: f32, x: i32, y: i32) -> Option<Px> {
+    const SPOTS: [(f32, f32, f32); 6] =
+        [(0.32, 0.30, 0.065), (0.56, 0.19, 0.07), (0.71, 0.37, 0.055), (0.45, 0.41, 0.05), (0.21, 0.44, 0.04), (0.81, 0.47, 0.035)];
+    let (cx, cy, rx, ry) = (0.5, 0.47, 0.44, 0.37);
+    if v <= 0.5 && in_ellipse(u, v, cx, cy, rx, ry) {
+        let step = cap_step(u, v, cx, cy, rx, ry, x, y);
+        if SPOTS.iter().any(|&(sx, sy, r)| (u - sx).powi(2) + (v - sy).powi(2) <= r * r) {
+            let spot = if step > 2 {
+                2
+            } else if step > 0 {
+                1
             } else {
-                fade(if k < 0.3 { FIRE[1] } else if k < 0.6 { FIRE[3] } else { FIRE[5] }, 1.0 - k * k)
+                0
             };
-            self.segment(&mut out, at((t - 0.05).max(0.0)), at(t), color);
+            return Some(Px { mat: Mat::Spot, step: spot });
         }
+        return Some(Px { mat: Mat::Cap, step });
+    }
+    if v > 0.5 && v <= 0.555 && in_ellipse(u, v, 0.5, 0.5, 0.37, 0.055) {
+        return Some(Px { mat: Mat::Gills, step: 4 });
+    }
+    // The skirt round the stem.
+    if (0.6..=0.655).contains(&v) && (u - 0.5).abs() < 0.155 {
+        return Some(Px { mat: Mat::Stem, step: if v < 0.625 { 0 } else { 3 } });
+    }
+    let hw = 0.1 + (v - 0.55) * 0.07;
+    if v > 0.5 && v <= 0.9 && (u - 0.5).abs() < hw {
+        return Some(Px { mat: Mat::Stem, step: if v < 0.6 { 3 } else { stem_step(u, 0.5, hw, x, y) } });
+    }
+    if in_ellipse(u, v, 0.5, 0.885, 0.15, 0.06) {
+        return Some(Px { mat: Mat::Stem, step: stem_step(u, 0.5, 0.15, x, y) });
+    }
+    None
+}
 
-        // The flash: a white-hot core swelling for a frame and a few short
-        // rays, gone in a few frames, over a wide warm light.
-        let flash = 0.14;
-        if t < flash {
-            let k = 1.0 - t / flash;
-            glows.push(Shape::Glow { pos: base, radius: 26.0 + 40.0 * k, color: fade(FIRE[1], 0.55 * k) });
-            if t < flash * 0.6 {
-                let rays = 6 + (self.u(40) * 3.0) as u32;
-                for ray in 0..rays {
-                    let a = TAU * (ray as f32 + 0.5 * self.u(41 + ray)) / rays as f32;
-                    let len = (26.0 + 30.0 * self.u(50 + ray)) * (0.5 + 0.5 * k);
-                    let tip = Position::new(base.x + a.cos() * len, base.y + a.sin() * len * 0.8);
-                    out.push(Shape::Line { from: base, to: tip, width: 2.0, head: FIRE[0], tail: fade(FIRE[2], 0.0) });
+fn raster() -> &'static Raster {
+    static RASTER: OnceLock<Raster> = OnceLock::new();
+    RASTER.get_or_init(|| {
+        let n = DESIGN;
+        let at = |x: i32, y: i32| agaric((x as f32 + 0.5) / n as f32, (y as f32 + 0.5) / n as f32, x, y);
+        let shape: Vec<Option<Px>> = (0..n * n).map(|i| at(i % n, i / n)).collect();
+        let filled = |x: i32, y: i32| x >= 0 && y >= 0 && x < n && y < n && shape[(y * n + x) as usize].is_some();
+        // A one-pixel outline round the whole of it, the tanks' rule.
+        let cells: Vec<Option<Px>> = (0..n * n)
+            .map(|i| {
+                let (x, y) = (i % n, i / n);
+                shape[i as usize].or_else(|| {
+                    [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                        .iter()
+                        .any(|&(dx, dy)| filled(x + dx, y + dy))
+                        .then_some(Px { mat: Mat::Outline, step: 0 })
+                })
+            })
+            .collect();
+        let base = (0..n * n).filter(|&i| cells[i as usize].is_some()).map(|i| i / n).max().unwrap_or(n - 1);
+        Raster { cells, base }
+    })
+}
+
+/// A horizontal run of one colour: design-pixel row and column, length.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Run {
+    x: i32,
+    y: i32,
+    len: i32,
+    color: Color,
+}
+
+fn color_of(px: Px, ramp: usize) -> Color {
+    match px.mat {
+        Mat::Cap => RAMPS[ramp][px.step as usize],
+        Mat::Spot => SPOT[px.step.min(2) as usize],
+        Mat::Stem => STEM[px.step as usize],
+        Mat::Gills => RAMPS[ramp][4],
+        Mat::Outline => OUTLINE,
+    }
+}
+
+/// The art as runs, once per cap ramp.
+fn runs(ramp: usize) -> &'static [Run] {
+    static RUNS: OnceLock<Vec<Vec<Run>>> = OnceLock::new();
+    &RUNS.get_or_init(|| {
+        let r = raster();
+        (0..RAMPS.len())
+            .map(|ramp| {
+                let mut out = Vec::new();
+                for y in 0..DESIGN {
+                    let mut x = 0;
+                    while x < DESIGN {
+                        let Some(px) = r.cells[(y * DESIGN + x) as usize] else {
+                            x += 1;
+                            continue;
+                        };
+                        let color = color_of(px, ramp);
+                        let start = x;
+                        while x < DESIGN && r.cells[(y * DESIGN + x) as usize].is_some_and(|p| color_of(p, ramp) == color) {
+                            x += 1;
+                        }
+                        out.push(Run { x: start, y, len: x - start, color });
+                    }
                 }
-            }
-            out.push(Shape::Puff(Puff { pos: base, radius: 4.0 + 12.0 * k, body: FIRE[1], shadow: None, lit: None, core: Some((FIRE[0], 0.7)), cover: 1.0 }));
-        }
+                out
+            })
+            .collect()
+    })[ramp]
+}
 
-        out.extend(glows);
-        out
-    }
+/// The art's top-left corner in field px for a mushroom standing at
+/// `base`, on the 2 px grid.
+fn origin(base: Position) -> (i32, i32) {
+    let snap = |v: f32| ((v / BLOCK as f32).floor() as i32) * BLOCK;
+    (snap(base.x) - DESIGN * BLOCK / 2, snap(base.y) - (raster().base + 1) * BLOCK)
+}
 
-    /// 0 before `start`, ramping to 1 by `peak`, back to 0 by `end`
-    /// (fractions of the cloud's life), with a hashed nudge per cloud.
-    fn envelope(&self, p: f32, start: f32, peak: f32, end: f32) -> f32 {
-        let nudge = (self.u(30) - 0.5) * 0.06;
-        let p = p - nudge;
-        if p <= start || p >= end {
-            0.0
-        } else if p < peak {
-            (p - start) / (peak - start)
-        } else {
-            1.0 - (p - peak) / (end - peak)
-        }
-    }
-
-    /// Marks along an ellipse of radius `rx` (and `rx * squash` tall)
-    /// from angle `from` to `to`, one block apart; `stride` 2 or more
-    /// leaves gaps, which is how vapour reads thinner than the shock.
-    #[allow(clippy::too_many_arguments)]
-    fn ellipse(&self, out: &mut Vec<Shape>, center: Position, rx: f32, squash: f32, from: f32, to: f32, stride: u32, color: Color) {
-        if rx < BLOCK || color.a == 0 {
-            return;
-        }
-        let steps = ((to - from) * rx / BLOCK).ceil().max(1.0) as u32;
-        for i in (0..=steps).step_by(stride.max(1) as usize) {
-            let a = from + (to - from) * i as f32 / steps as f32;
-            let pos = Position::new(center.x + a.cos() * rx, center.y + a.sin() * rx * squash);
-            out.push(Shape::Mark { pos, size: 2, color });
-        }
-    }
-
-    /// Marks along a straight line, one block apart.
-    fn segment(&self, out: &mut Vec<Shape>, from: Position, to: Position, color: Color) {
-        if color.a == 0 {
-            return;
-        }
-        let len = ((to.x - from.x).powi(2) + (to.y - from.y).powi(2)).sqrt();
-        let steps = (len / BLOCK).ceil().max(1.0) as u32;
-        for i in 0..=steps {
-            let k = i as f32 / steps as f32;
-            let pos = Position::new(from.x + (to.x - from.x) * k, from.y + (to.y - from.y) * k);
-            out.push(Shape::Mark { pos, size: 2, color });
+/// The drop shadow under a mushroom standing at `base`, leaning the way
+/// every shadow on the field does.
+pub fn draw_shadow(c: &mut impl Canvas, base: Position) {
+    let (rx, ry) = (DESIGN * 34 / 100, (DESIGN * 9 / 100).max(2));
+    let (bx, by) = ((base.x / BLOCK as f32).floor() as i32 + rx / 4, (base.y / BLOCK as f32).floor() as i32);
+    for dy in -ry..=ry {
+        let half = (rx as f32 * (1.0 - (dy as f32 / ry as f32).powi(2)).max(0.0).sqrt()).round() as i32;
+        if half > 0 {
+            c.fill_rect((bx - half) * BLOCK, (by + dy) * BLOCK, half * 2 * BLOCK, BLOCK, SHADOW);
         }
     }
 }
 
-/// Paint the cloud of a kill at `base`, `time` seconds in, leaning with
-/// `wind` (`compose`): the puffs and marks, then its light, which a live
-/// round draws inside an additive blend and a CPU preview simply lays
-/// over. Through `pyro::Blocks`, so the headless tests and previews paint
-/// what the game does.
-pub fn draw(c: &mut impl Blocks, cloud: &Cloud, base: Position, time: f32, wind: f32) {
-    let shapes = cloud.compose(base, time, wind);
-    pyro::draw(c, &shapes);
-    pyro::draw_glows(c, &shapes, tuning().glow_bands.max(0) as u32);
+/// A mushroom standing at `base` with its cap in ramp `ramp`.
+pub fn draw_at(c: &mut impl Canvas, base: Position, ramp: usize, shadow: bool) {
+    if shadow {
+        draw_shadow(c, base);
+    }
+    let (ox, oy) = origin(base);
+    for run in runs(ramp % RAMPS.len()) {
+        c.fill_rect(ox + run.x * BLOCK, oy + run.y * BLOCK, run.len * BLOCK, BLOCK, run.color);
+    }
+}
+
+/// A mushroom on the field at round time `time`: standing while it is
+/// out, its pop for `POP_SECONDS` after it is taken, then nothing.
+pub fn draw_mushroom(c: &mut impl Canvas, m: &Mushroom, time: f32, cycle: f32, shadow: bool) {
+    match (m.taken, m.taken_at) {
+        (false, _) => draw_at(c, m.base(), m.ramp(time, cycle), shadow),
+        (true, Some(at)) if (0.0..POP_SECONDS).contains(&(time - at)) => {
+            draw_pop(c, m.base(), m.col, m.row, m.ramp(at, cycle), time - at);
+        }
+        _ => {}
+    }
+}
+
+/// The HUD's mushroom: 7 x 7 blocks, `1` the outline, `2` the cap, `3`
+/// the stem and spots.
+pub const GLYPH: [&str; 7] = ["0011100", "0122210", "1232321", "1111111", "0013100", "0013100", "0113110"];
+
+/// The glyph's blocks as (column, row, colour), its cap in `cap`.
+pub fn glyph_blocks(cap: Color) -> impl Iterator<Item = (i32, i32, Color)> {
+    GLYPH.iter().enumerate().flat_map(move |(y, row)| {
+        row.bytes().enumerate().filter_map(move |(x, b)| {
+            let color = match b {
+                b'1' => OUTLINE,
+                b'2' => cap,
+                b'3' => STEM[0],
+                _ => return None,
+            };
+            Some((x as i32, y as i32, color))
+        })
+    })
+}
+
+/// How long the pop (`pop`) plays, in seconds.
+pub const POP_SECONDS: f32 = 1.2;
+
+/// The pop a mushroom goes in the moment a seat takes it (the P1 pick),
+/// `age` seconds on: the art squashed for a tenth of a second, then a ring
+/// racing out and a shower of spores in the cap's ramp and white, falling
+/// a little and dithering away. Pure in its inputs, every spore hashed
+/// from the cell, so a replica pops the same.
+pub fn draw_pop(c: &mut impl Canvas, base: Position, col: i32, row: i32, ramp: usize, age: f32) {
+    let ramp = ramp % RAMPS.len();
+    let ramp_colors = RAMPS[ramp];
+    let mid = Vec2::new(base.x, base.y - DESIGN as f32 * BLOCK as f32 * 0.45);
+    if age < 0.1 {
+        // Squashed: wider and lower about the foot, drawn run by run.
+        let (ox, oy) = origin(base);
+        let r = raster();
+        let tall = (r.base + 1) as f32;
+        for run in runs(ramp) {
+            let y = oy as f32 + (tall - (tall - run.y as f32) * 0.72) * BLOCK as f32;
+            let x = base.x + ((ox + run.x * BLOCK) as f32 - base.x) * 1.18;
+            c.fill_rect(x.round() as i32, y.round() as i32, ((run.len * BLOCK) as f32 * 1.18).ceil() as i32, BLOCK, run.color);
+        }
+        return;
+    }
+    let age = age - 0.1;
+    let seed = (col as u32).wrapping_mul(73_856_093) ^ (row as u32).wrapping_mul(19_349_663);
+    let block = |c: &mut dyn FnMut(i32, i32, Color), x: f32, y: f32, color: Color, keep: f32| {
+        let (bx, by) = crate::pyro::block_of(x, y);
+        if bayer(bx, by) < keep {
+            c(bx, by, color);
+        }
+    };
+    let mut put = |bx: i32, by: i32, color: Color| c.fill_rect(bx * BLOCK, by * BLOCK, BLOCK, BLOCK, color);
+    // The ring.
+    if age < 0.32 {
+        let r = 6.0 + age / 0.32 * DESIGN as f32 * BLOCK as f32 * 0.55;
+        for k in 0..48 {
+            let a = k as f32 / 48.0 * std::f32::consts::TAU;
+            block(&mut put, mid.x + crate::trig::cos(a) * r, mid.y + crate::trig::sin(a) * r * 0.7, ramp_colors[1], 1.0 - age / 0.32);
+        }
+    }
+    // The spores.
+    for k in 0..28u32 {
+        let life = 0.6 + crate::pyro::unit(seed, k * 3 + 1) * 0.5;
+        if age > life {
+            continue;
+        }
+        let a = crate::pyro::unit(seed, k * 3 + 2) * std::f32::consts::TAU;
+        let speed = 36.0 + crate::pyro::unit(seed, k * 3 + 3) * 68.0;
+        let d = speed * (1.0 - (-age * 3.0).exp()) / 3.0 * 3.0;
+        let x = mid.x + crate::trig::cos(a) * d;
+        let y = mid.y + crate::trig::sin(a) * d * 0.75 + age * age * 28.0;
+        let color = if k % 4 == 0 { SPOT[0] } else { ramp_colors[(k % 3) as usize] };
+        block(&mut put, x, y, color, 1.15 - age / life);
+        if k % 3 == 0 {
+            block(&mut put, x + BLOCK as f32, y, color, 1.15 - age / life);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn cloud(seed: u32) -> Cloud {
-        Cloud::new(seed, 1.0)
-    }
-
-    fn puffs(c: &Cloud, time: f32) -> Vec<Puff> {
-        c.compose(Position::new(200.0, 200.0), time, 0.0)
-            .into_iter()
-            .filter_map(|s| if let Shape::Puff(p) = s { Some(p) } else { None })
-            .collect()
-    }
-
-    fn top(c: &Cloud, time: f32) -> f32 {
-        puffs(c, time).iter().map(|p| p.pos.y - p.radius).fold(f32::MAX, f32::min)
-    }
-
+    /// The art stands on its foot, inside its square, bigger than a tank.
     #[test]
-    fn the_cloud_flashes_climbs_burns_out_and_is_gone_at_the_end() {
-        let c = cloud(0xB0B5);
-        assert!(puffs(&c, 0.0).iter().any(|p| p.core.is_some_and(|(core, _)| core == FIRE[0])), "the white-hot flash is up on the first frame");
-        assert!(top(&c, c.seconds * 0.5) < top(&c, 0.2) - 30.0, "the cap climbs well above the hull");
-        let burning = |time: f32| puffs(&c, time).iter().filter(|p| p.core.is_some()).count();
-        assert!(burning(0.3) > burning(c.seconds * 0.8), "the fire burns out into smoke");
-        assert!(puffs(&c, c.seconds * 0.999).is_empty(), "every puff has dissolved");
-    }
-
-    #[test]
-    fn the_shock_ring_races_out_and_fades() {
-        let c = cloud(3);
-        let base = Position::new(200.0, 200.0);
-        let reach = |time: f32| {
-            c.compose(base, time, 0.0)
-                .iter()
-                .filter_map(|s| match s {
-                    Shape::Mark { pos, color, .. } if color.r == SHOCK_DUST[0].r && color.b == SHOCK_DUST[0].b => Some((pos.x - base.x).abs()),
-                    _ => None,
-                })
-                .fold(0.0, f32::max)
-        };
-        assert!(reach(0.4) > reach(0.16) + 20.0, "the ring spreads");
-        assert_eq!(reach(0.6), 0.0, "and is gone within a beat");
-    }
-
-    #[test]
-    fn no_two_clouds_look_alike_and_one_cloud_always_looks_the_same() {
-        let base = Position::new(300.0, 150.0);
-        assert_eq!(cloud(1).compose(base, 0.8, 0.0), cloud(1).compose(base, 0.8, 0.0));
-        let shapes: std::collections::HashSet<(u32, u32, u32)> = (0..40)
-            .map(|s| {
-                let c = cloud(crate::blast::seed_for(Position::new(s as f32 * 37.0, 90.0)));
-                (c.cap_puffs, c.skirt_puffs, (c.height / 4.0) as u32)
-            })
-            .collect();
-        assert!(shapes.len() >= 20, "forty kills give many shapes: {shapes:?}");
-    }
-
-    #[test]
-    fn the_cap_rolls_so_consecutive_frames_differ() {
-        let c = cloud(7);
-        let base = Position::new(100.0, 100.0);
-        assert_ne!(c.compose(base, 1.0, 0.0), c.compose(base, 1.0 + 1.0 / 60.0, 0.0));
-    }
-
-    /// `cargo test --lib mushroom::tests::preview -- --ignored` writes
-    /// target/mushroom_preview.png (six clouds over their life, doubled)
-    /// and target/mushroom_frames/*.png (four clouds at 30 fps, for a GIF).
-    #[test]
-    #[ignore]
-    #[cfg(feature = "render")] // write_png is raylib's PNG encoder
-    fn preview() {
-        let ground = Color::new(0x5e, 0x80, 0x3c, 255);
-        let hull = Color::new(0x44, 0x44, 0x44, 255);
-        let (cols, rows, cell_w, cell_h) = (14, 6, 150, 190);
-        let mut c = crate::canvas::CpuCanvas::blank(cols * cell_w, rows * cell_h);
-        c.clear(ground);
-        for r in 0..rows {
-            let cl = cloud(crate::blast::seed_for(Position::new(r as f32 * 64.0 + 32.0, 96.0)));
-            for k in 0..cols {
-                let t = cl.seconds * k as f32 / (cols - 1) as f32 * 0.97;
-                let base = Position::new((k * cell_w + cell_w / 2) as f32, (r * cell_h + cell_h - 40) as f32);
-                c.fill_rect(base.x as i32 - 14, base.y as i32 - 10, 28, 20, hull);
-                draw(&mut c, &cl, base, t, 0.0);
+    fn the_art_is_bigger_than_a_tank_and_fits_its_square() {
+        let r = raster();
+        let (mut x0, mut x1, mut y0) = (DESIGN, 0, DESIGN);
+        for (i, c) in r.cells.iter().enumerate() {
+            if c.is_some() {
+                let (x, y) = (i as i32 % DESIGN, i as i32 / DESIGN);
+                x0 = x0.min(x);
+                x1 = x1.max(x);
+                y0 = y0.min(y);
             }
         }
-        c.write_png(std::path::Path::new("target/mushroom_preview.png"), 2).unwrap();
+        let wide = (x1 - x0 + 1) * BLOCK;
+        let tall = (r.base - y0 + 1) * BLOCK;
+        assert!(wide > 40 && tall > 40, "a mushroom is {wide} x {tall} px, no bigger than a tank's sprite");
+        assert!(x0 > 0 && x1 < DESIGN - 1, "the outline fits the square");
+    }
 
-        let dir = std::path::Path::new("target/mushroom_frames");
-        let _ = std::fs::remove_dir_all(dir);
-        std::fs::create_dir_all(dir).unwrap();
-        let clouds: Vec<Cloud> = (0..4).map(|r| cloud(crate::blast::seed_for(Position::new(r as f32 * 64.0 + 32.0, 96.0)))).collect();
-        let longest = clouds.iter().map(|c| c.seconds).fold(0.0, f32::max);
-        for f in 0..((longest + 0.3) * 30.0) as usize {
-            let t = f as f32 / 30.0;
-            let mut c = crate::canvas::CpuCanvas::blank(4 * 160, 220);
-            c.clear(ground);
-            for (i, cl) in clouds.iter().enumerate() {
-                let base = Position::new(80.0 + i as f32 * 160.0, 175.0);
-                c.fill_rect(base.x as i32 - 14, base.y as i32 - 10, 28, 20, hull);
-                if !cl.done(t) {
-                    draw(&mut c, cl, base, t, 0.0);
+    /// Every run is one colour from the art's palette, and the runs of a
+    /// ramp cover the art exactly once.
+    #[test]
+    fn the_runs_cover_the_art_once() {
+        let r = raster();
+        for ramp in 0..RAMPS.len() {
+            let mut seen = vec![0u8; (DESIGN * DESIGN) as usize];
+            for run in runs(ramp) {
+                for x in run.x..run.x + run.len {
+                    seen[(run.y * DESIGN + x) as usize] += 1;
                 }
             }
-            c.write_png(&dir.join(format!("{f:03}.png")), 2).unwrap();
+            for (i, c) in r.cells.iter().enumerate() {
+                assert_eq!(seen[i], u8::from(c.is_some()), "pixel {i} of ramp {ramp}");
+            }
         }
+    }
+
+    /// The cap steps through every ramp on the cycle, a mushroom from its
+    /// own place, and stands still with no cycle.
+    #[test]
+    fn the_cap_steps_through_the_ramps() {
+        let seen: std::collections::BTreeSet<usize> = (0..12).map(|k| ramp_at(3, 4, k as f32 * 0.35 + 0.01, 0.35)).collect();
+        assert_eq!(seen.len(), RAMPS.len());
+        assert_eq!(ramp_at(3, 4, 0.0, 0.35), ramp_at(3, 4, 0.34, 0.35));
+        assert_ne!(ramp_at(3, 4, 0.0, 0.35), ramp_at(3, 4, 0.36, 0.35));
+        assert_eq!(ramp_at(3, 4, 0.0, 0.0), ramp_at(3, 4, 99.0, 0.0));
+        let starts: std::collections::BTreeSet<usize> = (0..20).map(|c| ramp_at(c, 7, 0.0, 0.35)).collect();
+        assert!(starts.len() > 1, "every mushroom starts the cycle at the same place");
+    }
+
+    /// The collect box is the cell's, grown by the pad.
+    #[test]
+    fn it_is_taken_by_touch_on_its_cell() {
+        let m = Mushroom::new(4, 4);
+        let half = Vec2::new(16.0, 16.0);
+        let reach = 16.0 + 16.0 + 6.0;
+        assert!(m.in_reach(Vec2::new(m.at.x + reach, m.at.y), half, 6.0));
+        assert!(!m.in_reach(Vec2::new(m.at.x + reach + 1.0, m.at.y), half, 6.0));
+        assert!(!m.in_reach(Vec2::new(m.at.x, m.at.y - 64.0), half, 6.0), "the cap overhead collects nothing");
     }
 }

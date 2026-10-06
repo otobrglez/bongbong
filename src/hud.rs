@@ -259,6 +259,12 @@ pub struct HudModel {
     pub others: Vec<SeatHud>,
     /// The objective frog's health fraction, `None` in a round without one.
     pub frog: Option<f32>,
+    /// A `forage` round's mushrooms still out and on the map, and the
+    /// colour the glyph beside them wears (the first mushroom still out's
+    /// cap, stepping through the ramps as it does); `None` in every other
+    /// mission. It takes the frog gauge's slot, which a forage round has no
+    /// frog for (docs/mushroom-hunt-prd.md).
+    pub mushrooms: Option<(usize, usize, crate::math::Color)>,
 }
 
 impl HudModel {
@@ -311,7 +317,13 @@ impl HudModel {
             .or(game.enemy_frog)
             .map(|e| with_frog(&game.world, e, |f| f.health_fraction()));
         let wave = wave.map(|w| (w.index, w.total));
-        HudModel { title, wave, enemies_alive, enemies_pending, layout, local, second, others, frog }
+        let mushrooms = (game.mission == crate::level::Mission::Forage).then(|| {
+            let cycle = crate::tuning::tuning().mushroom_cycle_seconds;
+            let shown = game.mushrooms().iter().find(|m| !m.taken).or(game.mushrooms().first());
+            let color = shown.map_or(crate::mushroom::RAMPS[0][1], |m| crate::mushroom::cap_color(m.col, m.row, game.time, cycle));
+            (game.mushrooms_left(), game.mushrooms().len(), color)
+        });
+        HudModel { title, wave, enemies_alive, enemies_pending, layout, local, second, others, frog, mushrooms }
     }
 }
 

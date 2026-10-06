@@ -29,6 +29,7 @@ mod director;
 mod engage;
 mod field;
 mod flame;
+mod forage;
 mod hits;
 mod missiles;
 mod grenades;
@@ -50,6 +51,8 @@ mod flame_tests;
 mod lagcomp_tests;
 #[cfg(test)]
 mod props_tests;
+#[cfg(test)]
+mod forage_tests;
 #[cfg(test)]
 mod seat_tests;
 #[cfg(test)]
@@ -522,6 +525,9 @@ pub enum Event {
     DoorOpened { beat: usize, x: f32, y: f32 },
     /// Seat `seat` took the training flag at (`x`, `y`).
     FlagTaken { seat: usize, x: f32, y: f32 },
+    /// Seat `seat` took the mushroom on cell (`col`, `row`), leaving `left`
+    /// on the field (docs/mushroom-hunt-prd.md).
+    MushroomTaken { seat: u8, col: i16, row: i16, left: u16 },
     /// A training round's fallen frog got up again at (`x`, `y`), and the
     /// beat it fell in starts over.
     FrogRevived { x: f32, y: f32 },
@@ -883,6 +889,10 @@ pub struct Game {
     /// A training map's run (docs/training-stage.md, `training.rs`):
     /// `None` on every other map, which runs none of it.
     pub(crate) training: Option<training::Run>,
+    /// The map's mushrooms (docs/mushroom-hunt-prd.md, `forage.rs`), in
+    /// `MapFile::iter_cells` order, taken or not: what a `forage` round is
+    /// won by picking up.
+    pub(crate) mushrooms: Vec<crate::mushroom::Mushroom>,
     /// The next lantern's id (`lamp::Lantern::id`), counted up per round.
     lantern_next_id: u16,
     /// Lanterns each seat has left to set down this round
@@ -1749,6 +1759,10 @@ impl Game {
         // seats and the map just laid out. No RNG. ---
         self.init_training();
 
+        // --- The mushrooms (docs/mushroom-hunt-prd.md): the map's, none
+        // taken. No RNG. ---
+        self.init_mushrooms();
+
         self.rng = Some(rng);
         // Not cleared here: a restart mid-`update` (R key, round end) still
         // reports what that frame did before the new round's start.
@@ -1847,6 +1861,7 @@ impl Game {
             self.apply_debug_detonations(&mut f);
             self.frog_phase(&mut f);
             self.pickup_phase(&mut f);
+            self.mushroom_phase(&mut f);
             self.portal_phase(&mut f, &grid);
             self.player_phase(input, &mut f);
             self.rollin_phase(&mut f);
@@ -4228,6 +4243,10 @@ impl Game {
         let won = match self.mission {
             Mission::Hunt => frog_dead(self.enemy_frog),
             Mission::Protect | Mission::Destroy => !sandbox && self.spawn_plan_finished() && self.all_enemies_wrecked(),
+            // The last mushroom, whatever is still standing. A map with
+            // none has nothing to win by (the linter's
+            // `forage-no-mushrooms`).
+            Mission::Forage => self.all_mushrooms_taken(),
         };
         if won {
             self.end_round(f, Outcome::Won);
@@ -5311,7 +5330,7 @@ fn roll_role(mission: Mission, rng: &mut SmallRng) -> Role {
         Mission::Hunt => {
             if rolls(tuning().enemy_hunter_share_hunt) { Role::Hunter } else { Role::Guard }
         }
-        Mission::Destroy => Role::Player,
+        Mission::Destroy | Mission::Forage => Role::Player,
     }
 }
 

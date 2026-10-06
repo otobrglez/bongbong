@@ -91,7 +91,7 @@ pub const LOBBY_KEY_H: f32 = 48.0;
 pub const LOBBY_KEY_GAP: f32 = 8.0;
 
 /// The missions a host can pick, in the order the stepper walks them.
-pub const MISSIONS: [Mission; 3] = [Mission::Protect, Mission::Hunt, Mission::Destroy];
+pub const MISSIONS: [Mission; 4] = [Mission::Protect, Mission::Hunt, Mission::Destroy, Mission::Forage];
 
 /// Which face of the lobby is up. Derived from whether a room has been
 /// opened and how far along it is, never stored, so the screen can never

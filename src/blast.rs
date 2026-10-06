@@ -2,7 +2,7 @@
 //! the mark it leaves - and the scorch decal, painted over `Canvas` from
 //! `static/barrel_explosion.png` (docs/PROPS_SPEC.md). The explosion itself
 //! is composed at draw time in the effects language: `fireball.rs` for
-//! every blast, `mushroom.rs` for the share of kills that go up as a
+//! every blast, `mushroom_cloud.rs` for the share of kills that go up as a
 //! cloud (docs/effects.md). The simulation (`simulation::props`) only
 //! pushes the records, and never draws RNG for them - every seed is a hash
 //! of the blast position, so a purely cosmetic field can't shift a seeded
@@ -16,7 +16,7 @@
 //! smouldered.
 
 use crate::canvas::{Canvas, Sheet};
-use crate::mushroom::Cloud;
+use crate::mushroom_cloud::Cloud;
 use crate::tuning::tuning;
 use crate::math::{Color, Rectangle, Vec2};
 
@@ -138,7 +138,7 @@ pub struct BlastFx {
     pub offset: Lean,
     pub kind: BlastKind,
     /// A dying tank's mushroom cloud, composed at draw time
-    /// (`mushroom.rs`), in place of the fireball.
+    /// (`mushroom_cloud.rs`), in place of the fireball.
     pub cloud: Option<Cloud>,
 }
 

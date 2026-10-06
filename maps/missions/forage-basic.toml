@@ -1,0 +1,112 @@
+# maps/missions/ fixture - a clean starting point for one mission/spawn
+# combination; see docs/maps-to-levels.md. Hand-authored: re-saving from
+# the map editor would drop these comments. The level tables are written
+# as dotted keys on purpose - a `[mission]`/`[spawn]` table header would
+# swallow every `cells.` line after it.
+#
+# forage-basic: the mushroom hunt (docs/mushroom-hunt-prd.md) on the band
+# plan, four tanks, no frog. Ten mushrooms are spread over the whole field,
+# so picking them all up is a tour of it: one in the open north of the
+# iron bar over the start, one in tall grass, one in a sandbag nest to the
+# west, one in a brick pen open to the west, one behind barrels in the
+# north east, one beside a pond, one among trees in the south west and the
+# rest in the corners' open ground, clear of the spawn band's edge cells.
+# The last mushroom wins the round, whatever is still standing.
+
+version = 1
+size = [56, 31.5]
+tanks = 4
+mission.kind = "forage"
+spawn.kind = "band"
+
+cells."8,5" = { kind = "mushroom" }
+cells."45,5" = { kind = "barrel" }
+cells."29,6" = { kind = "tall_grass" }
+cells."30,6" = { kind = "tall_grass" }
+cells."31,6" = { kind = "tall_grass" }
+cells."32,6" = { kind = "tall_grass" }
+cells."33,6" = { kind = "tall_grass" }
+cells."47,6" = { kind = "mushroom" }
+cells."29,7" = { kind = "tall_grass" }
+cells."30,7" = { kind = "tall_grass" }
+cells."31,7" = { kind = "mushroom" }
+cells."32,7" = { kind = "tall_grass" }
+cells."33,7" = { kind = "tall_grass" }
+cells."49,7" = { kind = "barrel" }
+cells."29,8" = { kind = "tall_grass" }
+cells."30,8" = { kind = "tall_grass" }
+cells."31,8" = { kind = "tall_grass" }
+cells."32,8" = { kind = "tall_grass" }
+cells."33,8" = { kind = "tall_grass" }
+cells."21,9" = { kind = "mushroom" }
+cells."36,9" = { kind = "pickup", pickup = "ammo" }
+cells."22,11" = { kind = "wall", material = "iron" }
+cells."23,11" = { kind = "wall", material = "iron" }
+cells."24,11" = { kind = "wall", material = "iron" }
+cells."25,11" = { kind = "wall", material = "iron" }
+cells."26,11" = { kind = "wall", material = "iron" }
+cells."27,11" = { kind = "wall", material = "iron" }
+cells."28,11" = { kind = "wall", material = "iron" }
+cells."29,11" = { kind = "wall", material = "iron" }
+cells."30,11" = { kind = "wall", material = "iron" }
+cells."31,11" = { kind = "wall", material = "iron" }
+cells."32,11" = { kind = "wall", material = "iron" }
+cells."33,11" = { kind = "wall", material = "iron" }
+cells."34,11" = { kind = "wall", material = "iron" }
+cells."40,12" = { kind = "wall", material = "brick" }
+cells."41,12" = { kind = "wall", material = "brick" }
+cells."42,12" = { kind = "wall", material = "brick" }
+cells."43,12" = { kind = "wall", material = "brick" }
+cells."44,12" = { kind = "wall", material = "brick" }
+cells."13,13" = { kind = "sandbag" }
+cells."14,13" = { kind = "sandbag" }
+cells."16,13" = { kind = "sandbag" }
+cells."17,13" = { kind = "sandbag" }
+cells."44,13" = { kind = "wall", material = "brick" }
+cells."44,14" = { kind = "wall", material = "brick" }
+cells."15,15" = { kind = "mushroom" }
+cells."28,15" = { kind = "start" }
+cells."41,15" = { kind = "mushroom" }
+cells."44,15" = { kind = "wall", material = "brick" }
+cells."44,16" = { kind = "wall", material = "brick" }
+cells."13,17" = { kind = "sandbag" }
+cells."14,17" = { kind = "sandbag" }
+cells."16,17" = { kind = "sandbag" }
+cells."17,17" = { kind = "sandbag" }
+cells."44,17" = { kind = "wall", material = "brick" }
+cells."40,18" = { kind = "wall", material = "brick" }
+cells."41,18" = { kind = "wall", material = "brick" }
+cells."42,18" = { kind = "wall", material = "brick" }
+cells."43,18" = { kind = "wall", material = "brick" }
+cells."44,18" = { kind = "wall", material = "brick" }
+cells."20,20" = { kind = "pickup", pickup = "health" }
+cells."5,21" = { kind = "tree" }
+cells."10,21" = { kind = "tree" }
+cells."7,22" = { kind = "tree" }
+cells."38,22" = { kind = "water" }
+cells."39,22" = { kind = "water" }
+cells."40,22" = { kind = "water" }
+cells."41,22" = { kind = "water" }
+cells."42,22" = { kind = "water" }
+cells."12,23" = { kind = "tree" }
+cells."38,23" = { kind = "water" }
+cells."39,23" = { kind = "water" }
+cells."40,23" = { kind = "water" }
+cells."41,23" = { kind = "water" }
+cells."42,23" = { kind = "water" }
+cells."6,24" = { kind = "tree" }
+cells."28,24" = { kind = "mushroom" }
+cells."37,24" = { kind = "mushroom" }
+cells."38,24" = { kind = "water" }
+cells."39,24" = { kind = "water" }
+cells."40,24" = { kind = "water" }
+cells."41,24" = { kind = "water" }
+cells."42,24" = { kind = "water" }
+cells."38,25" = { kind = "water" }
+cells."39,25" = { kind = "water" }
+cells."40,25" = { kind = "water" }
+cells."41,25" = { kind = "water" }
+cells."42,25" = { kind = "water" }
+cells."48,25" = { kind = "mushroom" }
+cells."8,26" = { kind = "mushroom" }
+cells."11,26" = { kind = "tree" }

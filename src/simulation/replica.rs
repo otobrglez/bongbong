@@ -178,6 +178,8 @@ pub struct DrawableState {
     /// Every lantern on the ground: its id, where it stands in quarter
     /// pixels and its seat.
     pub lamps: Vec<(u16, i32, i32, u8)>,
+    /// The mushrooms taken, one bit each in map order.
+    pub mushrooms: u64,
     /// The wave (0 under the band plan), live enemies, tanks still to
     /// roll in, the intro banner's and the end screen's time left in
     /// tenths, and the outcome.
@@ -492,6 +494,7 @@ impl Game {
             tiles,
             fires,
             lamps,
+            mushrooms: self.mushrooms_taken_mask(),
             wave: wave.map_or(0, |w| w.index),
             alive: wave.map_or(0, |w| w.alive),
             pending: wave.map_or(0, |w| w.pending),

@@ -1431,6 +1431,16 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
         Tool::Portal => {
             d.draw_texture_pro(textures.portal, portal_icon_source_rec(), dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
+        Tool::Mushroom => {
+            // The HUD's mushroom glyph in whole blocks, centred, its cap in
+            // the first ramp's red.
+            let block = ((dest.width.min(dest.height) / 7.0).floor() as i32).max(1);
+            let x0 = (dest.x + (dest.width - (block * 7) as f32) / 2.0).round() as i32;
+            let y0 = (dest.y + (dest.height - (block * 7) as f32) / 2.0).round() as i32;
+            for (bx, by, color) in crate::mushroom::glyph_blocks(crate::mushroom::RAMPS[0][1]) {
+                d.draw_rectangle(x0 + bx * block, y0 + by * block, block, block, color);
+            }
+        }
         Tool::TallGrass => {
             // One tuft from the nature sheet on a patch of the theme's
             // floor, so the icon reads as grass-on-ground rather than
@@ -1661,6 +1671,12 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
         CellObject::Door { .. } => crate::training::draw_door(&mut GpuCanvas::new(&mut *d, textures), pos),
         CellObject::Flag => {
             crate::training::draw_flag(&mut GpuCanvas::new(&mut *d, textures), pos, crate::tank::team_color(0), false, time);
+        }
+        CellObject::Mushroom => {
+            let (col, row) = ((pos.x / size).floor() as i32, (pos.y / size).floor() as i32);
+            let ramp = crate::mushroom::ramp_at(col, row, time, crate::tuning::tuning().mushroom_cycle_seconds);
+            let base = Position::new(pos.x, pos.y + crate::mushroom::BASE_DROP);
+            crate::mushroom::draw_at(&mut GpuCanvas::new(&mut *d, textures), base, ramp, true);
         }
         CellObject::TallGrass => {
             // The round scatters several hashed tufts per cell; one centred

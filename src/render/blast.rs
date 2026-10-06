@@ -1,7 +1,7 @@
 //! The glows a live round draws with raylib directly - a lit fuse, a
 //! burning cell, the flamethrower's nozzle - as stepped block discs
 //! (`render::shot_fx::glow`) inside an additive blend block. The blasts
-//! themselves are composed in `fireball.rs` and `mushroom.rs`, the flames
+//! themselves are composed in `fireball.rs` and `mushroom_cloud.rs`, the flames
 //! in `pyro::tongues` (a burning hull's and tile's carry their own light,
 //! `damage_stage::flames`, `game::tile_flames`); the scorch decal, generic
 //! over `Canvas`, stays in `blast.rs`.
