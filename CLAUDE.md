@@ -2,6 +2,16 @@
 
 Bongbong is a tank shooter: fast, fun, pixelated in the spirit of old arcade tank games, with semi-realistic physics, challenging AI and a built-in battlefield builder.
 
+# Development rules (Linear)
+
+These MUST be followed. Where one cannot be, **ask Oto to bypass it** and wait for the answer; never take the exception silently.
+
+- **No work that Linear does not trace.** Anything that changes the repository, the Linear workspace, a deployment or a release belongs to a Linear issue (team **BongBong**, key `BB`, `linear.app/bongbong`, the `linear-server` MCP tools). Use the issue if one exists (search first); otherwise file one before starting (the `linear-file` skill). Answering a question or reading code changes nothing and needs none.
+- **Starting work sets the issue to In Progress** (assigned to `me`), before the first edit, **and comments the session** so Oto can resume it: `$CLAUDE_CODE_SESSION_ID`, the working directory and `cd <dir> && claude --resume <id>` (sessions are kept per directory, so a worktree's is its own), once per session that works on the issue.
+- **Needing a human sets it to AI Blocked** - a question, a clarification, an approval (to commit, open a PR, deploy, take an exception, choose between options), or finished work waiting for review - with a comment on the issue saying exactly what is needed, ending with the resume line. Back to In Progress when the answer comes.
+
+How the work is done is the `linear-issue` skill: the branch is the issue's `gitBranchName`, the commit subject and PR title are `<what changed> (BB-N)`, and the PR body opens with `Fixes BB-N` for each issue it finishes (`Part of BB-N` links without closing); the GitHub integration moves the issue to In Review when the PR opens and to Done when it merges, so nothing sets those by hand. Labels: one type (`Feature`, `Bug`, `Improvement`) plus areas (`gameplay`, `Maps`, `HUD`, `Design`, `server`, `security`). Work found outside the issue in hand is filed as its own issue, not folded into the PR.
+
 # Architecture & environment
 
 - Rust, edition 2024. raylib through the `sola-raylib` bindings (source and many examples in `../sola-raylib`, raylib's C source in `../raylib`), `rapier2d` for physics (`../rapier`), `hecs` as the ECS. Everything has to compile to wasm - the web is a main distribution channel. **raylib is behind the `render` feature** (on by default for every client build): `--no-default-features` builds the headless crate - the simulation, the probe, the tests, the dev server - with no C compiler, no cmake and no raylib in the graph (docs/online-coop-prd.md §4.5); only the server image and CI's bare check turn it off.
