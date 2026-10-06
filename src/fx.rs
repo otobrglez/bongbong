@@ -768,7 +768,7 @@ impl Fx {
                     // fleck or two in it.
                     Event::SlimeWashed { slot } => {
                         if let Some(&(_, at, _)) = game.wading().iter().find(|w| w.0 == slot) {
-                            self.burst(at, ParticleKind::Spray, self.count(10), 80.0, &[WATER_L, WATER_M, WHITE_T]);
+                            self.burst(at, ParticleKind::Spray, self.count(10), 80.0, splash(game.map.theme));
                             self.burst(at, ParticleKind::Spray, self.count(4), 60.0, &OOZE_TINTS);
                         }
                     }
@@ -865,7 +865,7 @@ impl Fx {
     /// scorch (docs/water.md).
     fn splash_if_wet(&mut self, game: &Game, at: Position, n: i32) {
         if game.water().depth_at(at).is_wet() {
-            self.burst(at, ParticleKind::Spray, self.count(n), 130.0, &[WATER_L, WATER_M, WHITE_T]);
+            self.burst(at, ParticleKind::Spray, self.count(n), 130.0, splash(game.map.theme));
         }
     }
 
@@ -879,12 +879,12 @@ impl Fx {
         for (slot, pos, speed) in game.wading() {
             wading_now.insert(slot);
             if !self.wading.contains(&slot) {
-                self.burst(pos, ParticleKind::Spray, self.count(10), 80.0, &[WATER_L, WATER_M, WHITE_T]);
+                self.burst(pos, ParticleKind::Spray, self.count(10), 80.0, splash(game.map.theme));
             }
             if spray > 0.0 && speed > 15.0 {
                 let rate = spray * (speed / 120.0).clamp(0.2, 1.5) * tuning().fx_density;
                 if self.due(0x5A7E_0000 ^ slot as u32, rate, dt) {
-                    self.burst(pos, ParticleKind::Spray, 1, 50.0, &[WATER_L, WATER_M]);
+                    self.burst(pos, ParticleKind::Spray, 1, 50.0, &splash(game.map.theme)[..2]);
                 }
             }
         }
@@ -1123,8 +1123,9 @@ impl Fx {
             }
         }
         // Flecks kicked up by a hull crossing tall grass - leaf on the
-        // grass theme, straw on the desert's dry scrub. The only emitter
-        // whose source is not something on fire or in contact -
+        // grass theme, straw on the desert's dry scrub, crystal chips on
+        // the moon. The only emitter whose source is not something on
+        // fire or in contact -
         // `grass_disturbed` reports the cells a *moving* tank is in, so a
         // parked one rustles nothing.
         let rustle = tuning().grass_rustle_rate;
@@ -1132,6 +1133,7 @@ impl Fx {
             let flecks: &[Color] = match game.map.theme {
                 crate::map::Theme::Grass => &[LEAF_L, LEAF_M, LEAF_D],
                 crate::map::Theme::Desert => &[STRAW_L, STRAW_M, STRAW_D],
+                crate::map::Theme::Moon => &[CRYSTAL_L, CRYSTAL_M, CRYSTAL_D],
             };
             for pos in game.grass_disturbed() {
                 if self.due(crate::blast::seed_at(pos, 3), rustle * tuning().fx_density, dt) {
@@ -1354,6 +1356,19 @@ pub(crate) const WHITE_T: Color = Color::new(0xFF, 0xFF, 0xFF, 255);
 // flat lake), so spray is the water it came out of.
 const WATER_L: Color = Color::new(0x1D, 0xCC, 0xCB, 255);
 const WATER_M: Color = Color::new(0x04, 0xA0, 0xB4, 255);
+const SPLASH: [Color; 3] = [WATER_L, WATER_M, WHITE_T];
+// The moon's water cells are chasms and dust channels: what a blast or a
+// wading hull throws out of them is regolith, the tileset's own grain,
+// fill and pebble greys.
+const REGOLITH_L: Color = Color::new(0x8F, 0x8E, 0x8A, 255);
+const REGOLITH_M: Color = Color::new(0x7C, 0x7B, 0x78, 255);
+const REGOLITH_D: Color = Color::new(0x6A, 0x69, 0x66, 255);
+const DUST_SPLASH: [Color; 3] = [REGOLITH_L, REGOLITH_M, REGOLITH_D];
+
+/// What a water cell throws: water, or the moon's dust (`Theme::liquid`).
+fn splash(theme: crate::map::Theme) -> &'static [Color] {
+    if theme.liquid() { &SPLASH } else { &DUST_SPLASH }
+}
 // Foliage. The one place particles are allowed green - it is the same
 // exemption trees_sheet.png/nature_sheet.png take (`just check-sheets`):
 // manufactured objects are never green, vegetation is.
@@ -1366,6 +1381,11 @@ const LEAF_D: Color = Color::new(0x1C, 0x4C, 0x33, 255);
 const STRAW_L: Color = Color::new(0xD2, 0xBA, 0x6B, 255);
 const STRAW_M: Color = Color::new(0xB7, 0xA2, 0x48, 255);
 const STRAW_D: Color = Color::new(0x67, 0x51, 0x2A, 255);
+// The moon's crystal shards: `punypalette.CRYSTAL`'s middle three, the
+// colours gen_grass.py faces a shard with.
+const CRYSTAL_L: Color = Color::new(0xAA, 0xAF, 0xE0, 255);
+const CRYSTAL_M: Color = Color::new(0x80, 0x86, 0xC0, 255);
+const CRYSTAL_D: Color = Color::new(0x58, 0x5C, 0x93, 255);
 // The frog health pack's burst. Green under the same exemption - the frog
 // is the one living thing on the field, and `hud::FROG_COLOR` is what the
 // bar already reads it in.

@@ -585,14 +585,14 @@ mod tests {
         }
     }
 
-    /// `TUFT_EXTENTS` covers every tuft's opaque pixels in both themes'
-    /// sheets. Decoding is raylib's, so this needs the `render` feature.
+    /// `TUFT_EXTENTS` covers every tuft's opaque pixels in every theme's
+    /// sheet (the moon's generator clips its crystals to it). Decoding is raylib's, so this needs the `render` feature.
     #[cfg(feature = "render")]
     #[test]
     fn tuft_extents_cover_both_sheets() {
         use crate::canvas::Pixels;
         let cell = GRASS_TEXTURE_SIZE as usize;
-        for theme in [Theme::Grass, Theme::Desert] {
+        for theme in Theme::ALL {
             let sheet = Pixels::load(&Sheet::Grass(theme).path()).unwrap();
             for row in 0..GRASS_SPECIES as usize {
                 for col in 0..GRASS_VARIANTS as usize {

@@ -21,9 +21,14 @@ Two checks, both of which have caught real defects:
    tank chassis is a real colour choice, so the tank sheets are not
    checked.
 
-   `nature_sheet.png`, `nature_sheet_desert.png` and `trees_sheet.png` are the deliberate exceptions,
+   `nature_sheet.png`, `nature_sheet_desert.png`, `nature_sheet_moon.png` and `trees_sheet.png` are the deliberate exceptions,
    and they are what the rule always meant: **manufactured objects are
    never green; vegetation is.** Grass that cannot be green is not grass.
+
+The moon's grass sheet (`nature_sheet_moon.png`) is crystal shards in
+`punypalette.CRYSTAL`, a cold violet-blue off the palette on purpose (the
+one hue the terrain never uses, so a shard reads as growing out of the
+regolith), over the extended stone greys.
 
 `plasma.png` is deliberately off-palette (a glowing bolt that does not sit
 in the terrain), so it is not listed here.
@@ -80,6 +85,7 @@ ON_PALETTE = [
     'walls_sheet.png',
     'nature_sheet.png',
     'nature_sheet_desert.png',
+    'nature_sheet_moon.png',
     'trees_sheet.png',
     'props_sheet.png',
     'barrel_explosion.png',
@@ -131,7 +137,12 @@ TEAM_SHEETS = {'portal_sheet.png'}
 # Sheets allowed the palette extension (punypalette.PUNY_EXTRA): the walls
 # sheet for its stone/rust steps, the vegetation sheets for GREEN_SHADE
 # (and, on trees, WOOD_ASH for burnt-out foliage).
-EXTENDED = {'walls_sheet.png', 'nature_sheet.png', 'nature_sheet_desert.png', 'trees_sheet.png', 'towers_sheet.png'}
+EXTENDED = {'walls_sheet.png', 'nature_sheet.png', 'nature_sheet_desert.png', 'nature_sheet_moon.png', 'trees_sheet.png', 'towers_sheet.png'}
+
+# The moon's crystal shards (`punypalette.CRYSTAL`), admitted on its own
+# grass sheet alone.
+MOON_GRASS_SHEET = 'nature_sheet_moon.png'
+CRYSTAL = {tuple(c) for c in pp.CRYSTAL}
 
 # The towers sheet's own admissions: the player's trim and the ooze.
 TOWER_SHEET = 'towers_sheet.png'
@@ -155,6 +166,8 @@ def scan(name):
         allowed = PICKUP_INK | {tuple(pp.BLACK), tuple(pp.WHITE)}
     if name in TANK_MODULE_SHEETS:
         allowed = TANK_BASE
+    if name == MOON_GRASS_SHEET:
+        allowed = PALETTE_ALL | CRYSTAL
     img = Image.open(os.path.join(STATIC, name)).convert('RGBA')
     off = green = 0
     for y in range(img.height):

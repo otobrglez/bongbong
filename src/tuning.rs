@@ -3085,11 +3085,11 @@ tunables! {
         /// Put one sky over every map, by its place in `map::Weather::ALL`:
         /// 0 clear, 1 night, 2 dusk, 3 rain, 4 storm, 5 fog, 6 sandstorm,
         /// 7 snow, 8 heat haze, 9 random (a sky picked by each round's
-        /// seed). -1 plays each map's own `weather` key. `--weather` and
+        /// seed), 10 lunar. -1 plays each map's own `weather` key. `--weather` and
         /// the web page's `?weather=` set it at startup. A sky is settled
         /// when a round starts - the rules read it - so a change shows on
         /// the next one; a room's round is its map's, whatever this says.
-        weather_override: i32 = (-1) in -1 ..= 9 @ Restart;
+        weather_override: i32 = (-1) in -1 ..= 10 @ Restart;
         /// One multiplier on every weather (docs/weather.md): the light
         /// eases toward daylight and every layer thins with it. 0 draws
         /// every sky clear, 1 as designed.

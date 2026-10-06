@@ -370,6 +370,7 @@ tool-short-start2 = start p2
 
 theme-grass = trava
 theme-desert = puščava
+theme-moon = luna
 weather-clear = jasno
 weather-night = noč
 weather-dusk = mrak
@@ -380,6 +381,7 @@ weather-sandstorm = vihar
 weather-snow = sneg
 weather-heat_haze = vročina
 weather-random = naključno
+weather-lunar = lunarno
 spawn-band = pas
 spawn-waves = valovi
 tier-light = lahki

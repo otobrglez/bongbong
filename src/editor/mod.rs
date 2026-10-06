@@ -4775,6 +4775,8 @@ mod editor_tests {
         assert_eq!(ed.settings().theme, Theme::Desert);
         assert_eq!(ed.map().theme, Theme::Desert);
         press_named(&mut ed, &frame, &inc(SettingsRow::Theme));
+        assert_eq!(ed.settings().theme, Theme::Moon);
+        press_named(&mut ed, &frame, &inc(SettingsRow::Theme));
         assert_eq!(ed.settings().theme, Theme::Grass, "wraps");
         // WEATHER cycles every sky, backwards from clear to the last.
         press_named(&mut ed, &frame, &inc(SettingsRow::Weather));

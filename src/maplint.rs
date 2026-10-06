@@ -1399,6 +1399,7 @@ mod map_lint_tests {
     const SUPPORTED_MAPS: &[&str] = &[
         "maps/default.toml",
         "maps/default-desert.toml",
+        "maps/moon-base.toml",
         "maps/towers.toml",
         "maps/longwater.toml",
         "maps/lotus-lagoon.toml",
@@ -1439,7 +1440,7 @@ mod map_lint_tests {
     /// `sample_clear_position`'s attempt-cap fallback (a very plausible
     /// source of this map's recorded stale-start/stall anomaly baseline).
     const KNOWN_ERROR_KINDS: &[(&str, &[LintKind])] =
-        &[("maps/default.toml", &[]), ("maps/default-desert.toml", &[]), ("maps/towers.toml", &[])];
+        &[("maps/default.toml", &[]), ("maps/default-desert.toml", &[]), ("maps/moon-base.toml", &[]), ("maps/towers.toml", &[])];
 
     /// Headless seeded round on `map`, linted - the §3.1 setup. The fixed
     /// seed matters for maps that leave frog/start placement to `init`'s

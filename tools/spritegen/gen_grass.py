@@ -18,6 +18,12 @@ its `theme` key. Every theme is written by default, BONGBONG_THEME=x one:
           tall stalks carrying seed heads, and a low sagebrush clump - a
           grey-green mound on dark twigs, the one thing in the field that
           is still alive.
+  moon    static/nature_sheet_moon.png - crystal shards for the regolith.
+          Three species: a cluster of shards splaying out of a rubble
+          base, tall twin spires, and a low geode clump of pebbles with
+          crystal points. Faceted - a lit left face, a shaded right face,
+          a pale tip - in `punypalette.CRYSTAL`, a cold violet-blue the
+          terrain never uses, over the extended stone greys.
 
 Two things about the colours are worth knowing before editing them:
 
@@ -52,14 +58,15 @@ Run: SPRITE_OUT=static python3 tools/spritegen/gen_grass.py
 """
 
 from PIL import Image
-import os, random, sys
+import os, random, re, sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from punypalette import (
     GOLD_PALE,
     GREEN_BRIGHT, GREEN_DARKEST, GREEN_DK, GREEN_MD, GREEN_SHADE,
     SAND_DK, SAND_MD, SAND_PALE,
-    STONE_MD,
+    STONE_DK, STONE_MD, STONE_MDK, STONE_SHADE, STONE_DARKEST,
+    CRYSTAL,
     WOOD_ASH, WOOD_DARKEST, WOOD_DEEPER, WOOD_DK,
 )
 
@@ -302,10 +309,119 @@ def draw_dry_tuft(species, variant, seed):
     return img
 
 
+# --- moon ramp: crystal faces over regolith rubble.
+C_PALE, C_LT, C_MD, C_DK, C_DEEP = (op(c) for c in CRYSTAL)
+M_PEBBLE_LIT = op(STONE_MD)
+M_PEBBLE = op(STONE_MDK)
+M_PEBBLE_SHADE = op(STONE_SHADE)
+M_GRIT = op(STONE_DARKEST)
+
+
+def tuft_extents():
+    """`grass::TUFT_EXTENTS`, read from the Rust source: the box every
+    tuft's art must stay inside (left of the root, right of it, up). The
+    moon's tufts are clipped to it, so a new theme never widens the table
+    the other two themes' placement is worked out from."""
+    src = open(os.path.join(os.path.dirname(__file__), '..', '..', 'src', 'grass.rs')).read()
+    body = src[src.index('pub const TUFT_EXTENTS'):]
+    body = body[body.index('= [') + 3:]
+    body = body[:body.index('];')]
+    rows = []
+    for line in body.strip().splitlines():
+        cells = re.findall(r'\((\d+), (\d+), (\d+)\)', line)
+        if cells:
+            rows.append([tuple(int(v) for v in c) for c in cells])
+    return rows
+
+
+EXTENTS = tuft_extents()
+
+
+def shard(img, base_x, base_y, height, lean, width=2):
+    """One crystal: a column `width` wide tapering to a point, leaning
+    `lean` px per px of height. Left face lit, right face in shade, the top
+    two pixels pale - a facet edge, not a blade, so no curve."""
+    for i in range(height):
+        y = base_y - i
+        x = base_x + int(round(lean * i))
+        t = i / max(1, height - 1)
+        w = width if t < 0.55 else max(1, width - 1)
+        if t > 0.86:
+            dpx(img, x, y, C_PALE)
+            continue
+        dpx(img, x, y, C_LT if t > 0.35 else C_MD)
+        for k in range(1, w):
+            dpx(img, x + k, y, C_DK if t > 0.2 else C_DEEP)
+        # The facet's dark edge on the shaded side, low down only.
+        if t < 0.45:
+            dpx(img, x + w, y, C_DEEP)
+
+
+def rubble(img, rng, cx, n, spread):
+    """Pebbles and grit at a crystal's foot: the regolith it broke out of."""
+    base = D - 1
+    for _ in range(n):
+        x = cx + rng.randint(-spread, spread)
+        r = rng.choice((1, 1, 2))
+        for dy in range(r):
+            for dx in range(r + 1):
+                c = M_PEBBLE_LIT if dy == r - 1 and dx == 0 else M_PEBBLE
+                if dx == r:
+                    c = M_PEBBLE_SHADE
+                dpx(img, x + dx, base - dy, c)
+        dpx(img, x + r + 1, base, M_GRIT)
+
+
+def draw_crystal(species, variant, seed):
+    """One moon tuft: crystal shards growing out of the regolith. Same
+    scatter-at-draw-time contract as the grass: small, several per cell,
+    gaps between them. Clipped to `grass::TUFT_EXTENTS`."""
+    rng = random.Random(seed)
+    img = blank()
+    # Centred in the room the extents give this cell, and no wider.
+    l, r, up = EXTENTS[species][variant]
+    root = D // 2 + (r - l) // 2
+    half = max(2, (l + r) // 2 - 2)
+    base = D - 2
+    if species == 0:
+        # A cluster: shards fanning out of one base, the middle tallest.
+        n = min(3 + variant // 3, 1 + half // 2)
+        step = min(2.4, (2 * half - 2) / max(1, n - 1))
+        for k in range(n):
+            off = (k - (n - 1) / 2) * step + rng.uniform(-0.6, 0.6)
+            bx = int(round(root + off)) - 1
+            h = min(up - 2, rng.randint(9, 15) - int(abs(off) * 0.6))
+            shard(img, bx, base, max(5, h), off * 0.06 + rng.uniform(-0.04, 0.04))
+        rubble(img, rng, root - 1, 3, max(1, half - 2))
+    elif species == 1:
+        # Spires: two or three tall, near-upright crystals, the tallest
+        # thing in the field.
+        n = min(2 + variant % 2, max(1, half // 2))
+        for k in range(n):
+            bx = root - 1 + int(round((k - (n - 1) / 2) * min(4, half)))
+            h = min(up - 2, rng.randint(14, 21))
+            shard(img, bx, base, h, rng.uniform(-0.04, 0.04), width=3 if k == 0 else 2)
+        rubble(img, rng, root - 1, 2, max(1, half - 2))
+    else:
+        # A geode clump: a low mound of pebbles with short crystal points.
+        rubble(img, rng, root - 1, 6 + variant % 3, max(1, half - 1))
+        for _ in range(2 + variant % 3):
+            bx = root - 1 + rng.randint(-max(1, half - 2), max(1, half - 2))
+            shard(img, bx, base - 1, min(up - 3, rng.randint(4, 8)), rng.uniform(-0.15, 0.15))
+    for y in range(S):
+        for x in range(S):
+            if img.getpixel((x, y))[3] == 0:
+                continue
+            if not (x >= S // 2 - l and x < S // 2 + r and y >= S - up):
+                img.putpixel((x, y), (0, 0, 0, 0))
+    return img
+
+
 # Output names must match `map::Theme::grass_texture_path`.
 THEMES = {
     'grass': ('nature_sheet.png', draw_tuft),
     'desert': ('nature_sheet_desert.png', draw_dry_tuft),
+    'moon': ('nature_sheet_moon.png', draw_crystal),
 }
 for name, (filename, draw) in THEMES.items():
     if ONLY is not None and ONLY != name:

@@ -52,6 +52,10 @@ const NIGHT_TINT: Rgb = [0.75, 0.9, 1.45];
 /// A storm's gloom, at `night_ambient` 1 - greyer than the night's.
 const STORM_TINT: Rgb = [0.9, 0.97, 1.2];
 
+/// The lunar sky's light: dark and cool, the grey regolith tinted toward
+/// earthshine, about half the night's darkness again.
+const LUNAR_AMBIENT: Rgb = [0.42, 0.44, 0.56];
+
 /// How far past a cone's half angle its soft edge runs, as a factor of
 /// that angle.
 const CONE_EDGE: f32 = 1.3;
@@ -131,6 +135,10 @@ impl Look {
             Weather::Sandstorm => Look { ambient: [1.0, 0.87, 0.7], lights: 0.35, vignette: 0.25, sand: 0.9, ..Look::CLEAR },
             Weather::Snow => Look { ambient: [0.98, 1.0, 1.06], lights: 0.15, vignette: 0.05, snow: 0.85, ..Look::CLEAR },
             Weather::HeatHaze => Look { ambient: [1.08, 1.0, 0.86], haze: 1.0, ..Look::CLEAR },
+            // No air to scatter light: a field lit by starlight and the
+            // Earth's cool glow, brighter than the night's so the regolith
+            // still reads, every lamp, fire and muzzle flash at full.
+            Weather::Lunar => Look { ambient: LUNAR_AMBIENT, lights: 1.0, vignette: 0.3, ..Look::CLEAR },
             // Not a sky of its own: `in_force` puts one of `SKIES` in its
             // place before a look is asked for.
             Weather::Random => Look::CLEAR,
@@ -1038,6 +1046,25 @@ mod tests {
         assert!(snow.ground && snow.sky, "snow covers the ground and falls");
         let haze = Look::of(Weather::HeatHaze, &t).plan().unwrap();
         assert!(!haze.ground && haze.sky, "haze is the air alone");
+    }
+
+    /// The moon's sky is dark and lit by the round's lights, and it is
+    /// looks only: enemies see as far, hulls grip as well and the water
+    /// stays as it is, as under a clear sky; and a random sky never
+    /// picks it.
+    #[test]
+    fn the_lunar_sky_is_dark_light_alone_and_changes_no_rule() {
+        let t = Tuning::DEFAULT;
+        let look = Look::of(Weather::Lunar, &t);
+        assert_eq!(look.plan(), Some(Plan { lit: true, ground: false, sky: false }), "light alone, like the night");
+        assert_eq!(look.lights, 1.0, "every lamp at full");
+        assert!(look.darkness() > 0.4, "dark: {}", look.darkness());
+        assert!(look.darkness() < Look::of(Weather::Night, &t).darkness(), "but the regolith still reads");
+        assert_eq!(sight_factor(Weather::Lunar, &t), 1.0);
+        assert_eq!(grip_factor(Weather::Lunar, &t), 1.0);
+        assert!(!freezes(Weather::Lunar, &t));
+        assert!(!Weather::SKIES.contains(&Weather::Lunar));
+        assert!((0..200u64).all(|seed| random_sky(seed) != Weather::Lunar));
     }
 
     #[test]

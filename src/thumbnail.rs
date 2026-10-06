@@ -165,9 +165,10 @@ mod tests {
     /// shows - re-baseline consciously after a deliberate art, map or
     /// tuning change, never to go green.
     #[cfg(feature = "render")]
-    const PINNED: [(&str, u64); 23] = [
+    const PINNED: [(&str, u64); 24] = [
         ("default", 0x162c_f74b_e81b_b647),
         ("default-desert", 0x9cc0_0deb_d0c6_7fba),
+        ("moon-base", 0xa5ee_3200_0e19_6f17),
         ("hunt-basic", 0x22d1_0372_23a7_c2d8),
         ("waves-basic", 0x3a19_a312_0b59_7fc1),
         ("portals", 0xa7ce_43c1_fa77_12a0),
