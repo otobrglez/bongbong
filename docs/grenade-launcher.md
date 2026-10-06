@@ -53,7 +53,7 @@ drives over the crate and leaves it where it is (`Tank::wants_pickup`).
 | `src/simulation/grenades.rs` | `roll_grenades`, `resolve_grenades`, `grenade_show`; the blast shares `side_blast` with the missiles |
 | `src/simulation/weapons.rs` | `fire_grenade`, the dispatch arm |
 | `src/tank.rs` | `grenade_ammo`, `ActiveWeapon::Grenades`, the drum module's cell |
-| `net/wire.rs` | `GrenadeState` (protocol 13), `WireEvent::GrenadeBlast` |
+| `net/wire.rs` | `GrenadeState` (protocol 14), `WireEvent::GrenadeBlast` |
 
 No physics body: rapier is never told about a grenade, so a round with none
 steps, draws RNG and replays exactly as before. No RNG of its own; the
