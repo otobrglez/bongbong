@@ -92,6 +92,7 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
         frogs: frogs(game),
         pickups: 0,
         bonus_pickups: Vec::new(),
+        mushrooms: game.mushrooms_taken_mask(),
         tiles: tiles(game, cols),
         fires: game.fires.iter().map(|f| FireState { cell: cell_index(cols, f.cell), left: quantise_seconds(f.left), lava: f.lava }).collect(),
         lamps: game

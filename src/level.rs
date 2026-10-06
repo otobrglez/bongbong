@@ -22,6 +22,9 @@ pub enum Mission {
     Hunt,
     /// No frog at all: wreck every enemy.
     Destroy,
+    /// No frog at all: pick up every mushroom on the map (docs/mushroom-hunt-prd.md).
+    /// The enemies are in the way; the last mushroom wins the round.
+    Forage,
 }
 
 impl Mission {
@@ -33,12 +36,13 @@ impl Mission {
             Mission::Protect => "protect",
             Mission::Hunt => "hunt",
             Mission::Destroy => "destroy",
+            Mission::Forage => "forage",
         }
     }
 
     /// Whether the player's frog is on the field.
     pub fn has_player_frog(self) -> bool {
-        !matches!(self, Mission::Destroy)
+        !matches!(self, Mission::Destroy | Mission::Forage)
     }
 
     /// Whether an enemy frog is on the field.

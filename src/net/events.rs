@@ -209,6 +209,9 @@ pub enum WireEvent {
     LanternBroken { x: i16, y: i16 },
     /// `slot`'s grenade went off at (`x`, `y`); `Event::GrenadeBlast`.
     GrenadeBlast { slot: u16, x: i16, y: i16 },
+    /// A seat took the mushroom on a cell; `Event::MushroomTaken`
+    /// (docs/mushroom-hunt-prd.md).
+    MushroomTaken { seat: u8, col: i16, row: i16, left: u16 },
 }
 
 fn slot_u16(slot: usize) -> u16 {
@@ -334,6 +337,7 @@ impl WireEvent {
             Event::Slimed { slot } => WireEvent::Slimed { slot: slot_u16(slot) },
             Event::SlimeWashed { slot } => WireEvent::SlimeWashed { slot: slot_u16(slot) },
             Event::TowerRepaired { side, x, y } => WireEvent::TowerRepaired { side, x: q(x), y: q(y) },
+            Event::MushroomTaken { seat, col, row, left } => WireEvent::MushroomTaken { seat, col, row, left },
             // Never sent: logged on the server.
             Event::PhysicsQuarantine { .. } => return None,
             // Never sent: a training map is never hosted
@@ -398,6 +402,7 @@ impl WireEvent {
                 Event::LavaBombLaunched { x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y) }
             }
             WireEvent::LanternSet { seat, x, y } => Event::LanternSet { seat, x: d(x), y: d(y) },
+            WireEvent::MushroomTaken { seat, col, row, left } => Event::MushroomTaken { seat, col, row, left },
             WireEvent::LanternBroken { x, y } => Event::LanternBroken { x: d(x), y: d(y) },
             WireEvent::GrenadeBlast { slot, x, y } => Event::GrenadeBlast { slot: slot as usize, x: d(x), y: d(y) },
             WireEvent::DrumLaunched { x, y, to_x, to_y } => {
@@ -518,6 +523,7 @@ mod tests {
             Event::DrumLaunched { x: 128.0, y: 160.0, to_x: 256.0, to_y: 160.0 },
             Event::LavaBombLaunched { x: 640.0, y: 352.0, to_x: 800.0, to_y: 416.0 },
             Event::LanternSet { seat: 1, x: 200.0, y: 96.0 },
+            Event::MushroomTaken { seat: 1, col: 12, row: 7, left: 3 },
             Event::LanternBroken { x: 200.0, y: 96.0 },
             Event::GrenadeBlast { slot: 0, x: 200.0, y: 96.0 },
             Event::LaserBeam { x0: 100.0, y0: 200.0, x1: 100.0, y1: 32.0, variant: "blue", seat: 1, leg: 1, portal: true },
@@ -566,7 +572,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 52, "one sample per Event variant");
+        assert_eq!(seen.len(), 53, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

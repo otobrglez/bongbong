@@ -76,6 +76,12 @@ const I_ENEMY_COUNT: i32 = 184;
 /// Two digits of enemies, then the dim `+N` still to come.
 const I_PENDING: i32 = 208;
 const I_FROG: i32 = 238;
+/// A forage round's count in the frog's slot: the mushroom glyph (7 x 7
+/// blocks of 2 px), then what is left in the row's text and the map's
+/// total after it, smaller.
+const MUSHROOM_GLYPH_W: i32 = 14;
+const MUSHROOM_GLYPH_H: i32 = 14;
+const I_MUSHROOM_COUNT: i32 = I_FROG + MUSHROOM_GLYPH_W + 4;
 
 /// The tank glyph's footprint: 7 x 7 blocks of 2 px (`draw_tank_glyph`).
 #[cfg_attr(not(test), allow(dead_code))]
@@ -304,7 +310,24 @@ fn draw_info(d: &mut impl RaylibDraw, info: Rectangle, model: &HudModel, level: 
     if model.enemies_pending > 0 {
         d.draw_text(&format!("+{}", model.enemies_pending), x + I_PENDING, text_y, HUD_TEXT_SIZE, faded(DIM, a));
     }
-    draw_symbol_gauge(d, textures, PickupKind::FrogHealth, x + I_FROG, y, h, model.frog.unwrap_or(0.0), FROG_COLOR, model.frog.is_some(), a);
+    match model.mushrooms {
+        // A forage round has no frog: its slot counts the mushrooms still
+        // out against the map's, beside a mushroom in a cap's colour.
+        Some((left, total, cap)) => {
+            let gy = y + (h - MUSHROOM_GLYPH_H) / 2;
+            for (bx, by, color) in crate::mushroom::glyph_blocks(cap) {
+                d.draw_rectangle(x + I_FROG + bx * 2, gy + by * 2, 2, 2, faded(color, a));
+            }
+            let count = left.to_string();
+            d.draw_text(&count, x + I_MUSHROOM_COUNT, text_y, HUD_TEXT_SIZE, faded(if left > 0 { TEXT } else { DIM }, a));
+            let of_x = x + I_MUSHROOM_COUNT + width(&count, HUD_TEXT_SIZE) + 2;
+            let of_y = text_y + HUD_TEXT_SIZE - UI_SMALL_TEXT - 1;
+            d.draw_text(&format!("/{total}"), of_x, of_y, UI_SMALL_TEXT, faded(DIM, a));
+        }
+        None => {
+            draw_symbol_gauge(d, textures, PickupKind::FrogHealth, x + I_FROG, y, h, model.frog.unwrap_or(0.0), FROG_COLOR, model.frog.is_some(), a)
+        }
+    }
 }
 
 /// A crate's symbol in a row from `y`, `h` tall, at `x`: lit while its
@@ -662,6 +685,10 @@ mod corner_tests {
         assert!(I_ENEMY_COUNT + width("88", HUD_TEXT_SIZE) + 4 <= I_PENDING, "two digits of enemies run into the +N");
         assert!(I_PENDING + width("+88", HUD_TEXT_SIZE) <= I_FROG, "the +N runs into the frog's gauge");
         assert_eq!(I_FROG + GAUGE_SLOT_W, INFO_W as i32, "the row is the cluster's width");
+        // The widest mushroom count, every mushroom a map holds still out.
+        let most = crate::mushroom::MUSHROOM_MAX.to_string();
+        let count = width(&most, HUD_TEXT_SIZE) + 2 + width(&format!("/{most}"), UI_SMALL_TEXT);
+        assert!(I_MUSHROOM_COUNT + count <= INFO_W as i32, "the mushroom count runs out of the frog's slot");
     }
 
     /// A chip: its number over its gauge, both inside it.

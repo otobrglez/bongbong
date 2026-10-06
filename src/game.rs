@@ -54,6 +54,10 @@ enum Standing<'a> {
     /// tufts in front of it cover it, so its flash still shows in a field.
     /// One in the air is over everything that stands.
     Grenade(&'a crate::grenade::Grenade),
+    /// A mushroom (docs/mushroom-hunt-prd.md), standing or popping, keyed
+    /// by its foot: its cap rises over the cells north of it, so a tank
+    /// that drives behind one is drawn behind it.
+    Mushroom(&'a crate::mushroom::Mushroom),
 }
 
 /// A tank and everything drawn on it, in the order the layers stack.
@@ -448,6 +452,12 @@ impl Game {
                 standing.push((at.y, Standing::Lamp(at)));
             }
         }
+        for m in self.mushrooms() {
+            let shown = !m.taken || m.taken_at.is_some_and(|at| self.time - at < crate::mushroom::POP_SECONDS);
+            if shown && !culled(cull, m.base()) {
+                standing.push((m.base().y, Standing::Mushroom(m)));
+            }
+        }
         let mut grenade_query = self.world.query::<&crate::grenade::Grenade>();
         for grenade in grenade_query.iter() {
             if !culled(cull, grenade.position) {
@@ -492,6 +502,10 @@ impl Game {
                     crate::lamp::draw_post(c, *at, self.time, (t.shadow_dir_x, t.shadow_dir_y), self.shadows_enabled);
                 }
                 Standing::Grenade(grenade) => crate::grenade::draw_grenade(c, grenade),
+                Standing::Mushroom(m) => {
+                    let cycle = crate::tuning::tuning().mushroom_cycle_seconds;
+                    crate::mushroom::draw_mushroom(c, m, self.time, cycle, self.shadows_enabled);
+                }
             }
         }
         grass_up_to(c, f32::INFINITY, next_tuft);

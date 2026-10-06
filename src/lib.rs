@@ -592,7 +592,7 @@ pub const PROPS_OIL_VARIANTS: i32 = 4;
 // row 1 is drawn: SCORCH_VARIANTS burn marks a blast or a burnt-out fire
 // leaves on the ground, plus the directional streak at SCORCH_STREAK_COL.
 // Every fireball is composed at draw time instead (`fireball.rs`, and
-// `mushroom.rs` for a dying tank's cloud), so the sheet's other rows are
+// `mushroom_cloud.rs` for a dying tank's cloud), so the sheet's other rows are
 // not sampled. See docs/PROPS_SPEC.md and blast.rs.
 pub const BARREL_EXPLOSION_TEXTURE_SIZE: f32 = 64.0;
 pub const SCORCH_ROW: i32 = 1;
@@ -978,6 +978,7 @@ pub mod lobby;
 pub mod map;
 pub mod margin;
 pub mod mushroom;
+pub mod mushroom_cloud;
 pub mod mode;
 pub mod net;
 pub mod maplint;

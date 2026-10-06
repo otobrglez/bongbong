@@ -157,6 +157,12 @@ pub enum CellObject {
     /// A training flag (docs/training-stage.md): not solid, taken by the
     /// first seat whose hull reaches it and counted by a beat's `flags`.
     Flag,
+    /// A mushroom (docs/mushroom-hunt-prd.md): not solid and not an
+    /// `Obstacle`, taken by the first seat whose hull reaches it. Every
+    /// one on the map is the objective of a `forage` round; in any other
+    /// mission they are taken all the same and count for nothing.
+    /// Multi-instance, at most `mushroom::MUSHROOM_MAX` a map.
+    Mushroom,
 }
 
 impl CellObject {
@@ -979,6 +985,7 @@ pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("default-desert", include_str!("../maps/default-desert.toml")),
     ("hunt-basic", include_str!("../maps/missions/hunt-basic.toml")),
     ("waves-basic", include_str!("../maps/missions/waves-basic.toml")),
+    ("forage-basic", include_str!("../maps/missions/forage-basic.toml")),
     ("portals", include_str!("../maps/portals.toml")),
     ("towers", include_str!("../maps/towers.toml")),
     ("longwater", include_str!("../maps/longwater.toml")),

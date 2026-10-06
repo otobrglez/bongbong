@@ -257,6 +257,9 @@ pub enum Tool {
     /// One tool per kind and side rather than a side switch: the cursor's
     /// readout names a cell by the tool that paints exactly its object.
     Tower(TowerKind, Side),
+    /// A mushroom (docs/mushroom-hunt-prd.md): any number, not solid, the
+    /// objective of a `forage` round.
+    Mushroom,
     Eraser,
     /// The rectangle select tool (the module docs): a press selects,
     /// carries or pastes rather than paints. BRUSH's list and the palette's
@@ -268,7 +271,7 @@ pub enum Tool {
 /// eraser and the select tool, which no category holds. The trees, the
 /// volcano and the lamp post sit with the ground, which leaves PROP room
 /// for the six tower tools inside the eleven rows a dropdown fits.
-pub const TOOLS: [Tool; 45] = [
+pub const TOOLS: [Tool; 46] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -299,6 +302,7 @@ pub const TOOLS: [Tool; 45] = [
     Tool::Start2,
     Tool::Frog,
     Tool::EnemyFrog,
+    Tool::Mushroom,
     Tool::Pickup(PickupKind::Health),
     Tool::Pickup(PickupKind::Ammo),
     Tool::Pickup(PickupKind::Laser),
@@ -348,6 +352,7 @@ impl Tool {
             Tool::Start2 => "start2",
             Tool::Frog => "frog",
             Tool::EnemyFrog => "enemy_frog",
+            Tool::Mushroom => "mushroom",
             Tool::Pickup(PickupKind::Health) => "health",
             Tool::Pickup(PickupKind::Ammo) => "ammo",
             Tool::Pickup(PickupKind::Laser) => "laser",
@@ -386,7 +391,7 @@ impl Tool {
             Tool::Road | Tool::Water | Tool::Lava | Tool::Volcano | Tool::TallGrass | Tool::OilTrail | Tool::Gate | Tool::Portal => {
                 Some(Category::Ground)
             }
-            Tool::Start | Tool::Start2 | Tool::Frog | Tool::EnemyFrog => Some(Category::Actor),
+            Tool::Start | Tool::Start2 | Tool::Frog | Tool::EnemyFrog | Tool::Mushroom => Some(Category::Actor),
             Tool::Pickup(_) => Some(Category::Pickup),
             Tool::Eraser | Tool::Select => None,
         }
@@ -408,6 +413,7 @@ impl Tool {
             Tool::Start => Some(CellObject::Start),
             Tool::Start2 => Some(CellObject::Start2),
             Tool::EnemyFrog => Some(CellObject::EnemyFrog),
+            Tool::Mushroom => Some(CellObject::Mushroom),
             Tool::Gate => Some(CellObject::Gate),
             Tool::Portal => Some(CellObject::Portal),
             Tool::Pickup(pickup) => Some(CellObject::Pickup { pickup }),
@@ -3848,7 +3854,7 @@ const SETTINGS_ROWS: [SettingsRow; 16] = [
     SettingsRow::Reset,
 ];
 
-const MISSIONS: [Mission; 3] = [Mission::Protect, Mission::Hunt, Mission::Destroy];
+const MISSIONS: [Mission; 4] = [Mission::Protect, Mission::Hunt, Mission::Destroy, Mission::Forage];
 
 /// The smallest map the size steppers make, in cells: a phone's view of
 /// a field map is about 35 x 16, and nothing smaller than this is worth a
@@ -4001,6 +4007,7 @@ pub fn parse_mission(s: &str) -> Option<Mission> {
         "protect" => Some(Mission::Protect),
         "hunt" => Some(Mission::Hunt),
         "destroy" => Some(Mission::Destroy),
+        "forage" => Some(Mission::Forage),
         _ => None,
     }
 }

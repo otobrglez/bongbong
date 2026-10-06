@@ -736,6 +736,9 @@ pub struct Snapshot {
     /// One bit per map pickup slot, set while its pickup is on the field.
     pub pickups: u64,
     pub bonus_pickups: Vec<BonusPickup>,
+    /// One bit per map mushroom (`Game::mushrooms`, map order), set once a
+    /// seat has taken it (docs/mushroom-hunt-prd.md).
+    pub mushrooms: u64,
     pub tiles: Vec<TileState>,
     pub fires: Vec<FireState>,
     /// The lanterns on the ground, by id.

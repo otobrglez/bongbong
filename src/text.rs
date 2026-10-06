@@ -92,9 +92,11 @@ keys! {
     MISSION_PROTECT = "mission-protect";
     MISSION_HUNT = "mission-hunt";
     MISSION_DESTROY = "mission-destroy";
+    MISSION_FORAGE = "mission-forage";
     MISSION_PROTECT_BANNER = "mission-protect-banner";
     MISSION_HUNT_BANNER = "mission-hunt-banner";
     MISSION_DESTROY_BANNER = "mission-destroy-banner";
+    MISSION_FORAGE_BANNER = "mission-forage-banner";
     MISSION_TRAINING = "mission-training";
     MISSION_TRAINING_BANNER = "mission-training-banner";
     ROUND_TRAINED = "round-trained";
@@ -313,6 +315,7 @@ pub fn mission_title(mission: crate::level::Mission) -> Key {
         Mission::Protect => keys::MISSION_PROTECT,
         Mission::Hunt => keys::MISSION_HUNT,
         Mission::Destroy => keys::MISSION_DESTROY,
+        Mission::Forage => keys::MISSION_FORAGE,
     }
 }
 
@@ -323,6 +326,7 @@ pub fn mission_banner(mission: crate::level::Mission) -> Key {
         Mission::Protect => keys::MISSION_PROTECT_BANNER,
         Mission::Hunt => keys::MISSION_HUNT_BANNER,
         Mission::Destroy => keys::MISSION_DESTROY_BANNER,
+        Mission::Forage => keys::MISSION_FORAGE_BANNER,
     }
 }
 
@@ -872,6 +876,7 @@ mod text_tests {
             (keys::MISSION_PROTECT, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
             (keys::MISSION_HUNT, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
             (keys::MISSION_DESTROY, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
+            (keys::MISSION_FORAGE, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
             (keys::MISSION_TRAINING, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
             (keys::LOBBY_TITLE_START, 22, content, vec![]),
             (keys::LOBBY_TITLE_CODE, 22, content, vec![]),
@@ -1077,7 +1082,7 @@ mod text_tests {
             // and shrunk to fit where it has not, but never under
             // `BANNER_MIN_SIZE` in the smallest area the chrome is laid
             // out in.
-            let mut banners: Vec<(String, i32)> = [Mission::Protect, Mission::Hunt, Mission::Destroy]
+            let mut banners: Vec<(String, i32)> = [Mission::Protect, Mission::Hunt, Mission::Destroy, Mission::Forage]
                 .into_iter()
                 .map(|m| (catalogue.get(mission_banner(m)), BANNER_SIZE))
                 .collect();

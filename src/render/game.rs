@@ -1692,7 +1692,7 @@ impl Game {
         }
 
         // Blasts last, so the fire covers tanks and shots. Each is
-        // composed once (`fireball.rs`, or `mushroom.rs` for a cloud),
+        // composed once (`fireball.rs`, or `mushroom_cloud.rs` for a cloud),
         // its smoke leaning with the wind where it went off; the puffs
         // oldest first - a chained blast's flash lands on top of the
         // earlier fireball and reads as a second detonation - then all

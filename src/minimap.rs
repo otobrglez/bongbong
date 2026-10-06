@@ -585,6 +585,9 @@ pub struct Marks {
     /// Every volcano that is rumbling or erupting, and whether it is
     /// erupting yet (docs/volcano.md): a frame pulsing round its crater.
     pub volcanoes: Vec<(Position, bool)>,
+    /// Every mushroom still out and its cap's colour this frame
+    /// (docs/mushroom-hunt-prd.md): what is left to find, at a glance.
+    pub mushrooms: Vec<(Position, Color)>,
     /// The round clock the gates blink on.
     pub time: f32,
     /// Whether the seats carry their numbers: a round of two or more.
@@ -620,7 +623,22 @@ impl Marks {
                 phase.is_warning().then(|| (v.centre(), phase.stage == crate::volcano::Stage::Erupt))
             })
             .collect();
-        Marks { view: Some(view), seats, frogs, volcanoes, time: game.time, numbered: game.players.count() > 1, ..Marks::from_shown(shown) }
+        let mushrooms = game
+            .mushrooms()
+            .iter()
+            .filter(|m| !m.taken)
+            .map(|m| (m.at, crate::mushroom::cap_color(m.col, m.row, game.time, t.mushroom_cycle_seconds)))
+            .collect();
+        Marks {
+            view: Some(view),
+            seats,
+            frogs,
+            volcanoes,
+            mushrooms,
+            time: game.time,
+            numbered: game.players.count() > 1,
+            ..Marks::from_shown(shown)
+        }
     }
 
     /// The enemies and gates `shown` - one `Indicators` per seat the screen
@@ -655,6 +673,7 @@ fn onto_field(p: Position, field: (f32, f32)) -> Position {
 /// outline.
 const ENEMY_PT: i32 = 3;
 const FROG_PT: i32 = 4;
+const MUSHROOM_PT: i32 = 3;
 const SEAT_PT: i32 = 4;
 const RIM_PT: i32 = 1;
 const GATE_FRAME_PT: i32 = 9;
@@ -721,6 +740,9 @@ pub fn picture(marks: &Marks, rect: Rectangle, field: (f32, f32), font: i32, t: 
         let h = (y1 - y0).max(2);
         outline(&mut out.fills, x0 - RIM_PT, y0 - RIM_PT, w + 2 * RIM_PT, h + 2 * RIM_PT, RIM_PT, crate::pyro::alpha(RIM, VIEW_ALPHA), inside);
         outline(&mut out.fills, x0, y0, w, h, VIEW_LINE_PT, crate::pyro::alpha(WHITE, VIEW_ALPHA), inside);
+    }
+    for &(mushroom, cap) in &marks.mushrooms {
+        square(&mut out.fills, at(mushroom), MUSHROOM_PT, cap, RIM, inside);
     }
     for &enemy in &marks.enemies {
         square(&mut out.fills, at(enemy), ENEMY_PT, HOSTILE, RIM, inside);
@@ -1088,6 +1110,7 @@ mod minimap_tests {
             enemies: vec![Position::new(50.0, 50.0), Position::new(-400.0, 3000.0)],
             gates: vec![GateMark { at: Position::new(1200.0, 0.0), flash: 1.0 }],
             volcanoes: vec![(Position::new(2560.0, 1440.0), true)],
+            mushrooms: Vec::new(),
             time: 0.0,
             numbered: true,
         };

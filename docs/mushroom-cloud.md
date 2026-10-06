@@ -9,7 +9,7 @@ RNG is drawn and a seeded replay is unchanged. Barrels never use it.
 
 ## Composed, not baked
 
-`mushroom.rs` builds the cloud at draw time in the effects language
+`mushroom_cloud.rs` builds the cloud at draw time in the effects language
 (docs/effects.md): nothing comes from a sprite sheet, and time is
 continuous, so it moves every frame. `Cloud::compose(base, time, wind)` is
 a pure function returning `pyro::Shape`s in painting order, the smoke

@@ -1101,6 +1101,15 @@ tunables! {
         frog_pack_bonus_below: f32 = 0.75 in 0.0 ..= 1.0;
     }
 
+    group mushrooms {
+        /// How far past its cell's square a hull reaches a mushroom, px
+        /// (`Mushroom::in_reach`): the cell's box, whatever the art's
+        /// size, so the big cap never collects from two cells away.
+        mushroom_collect_pad_px: f32 = 6.0 in 0.0 ..= 32.0;
+        /// Seconds a mushroom's cap holds one colour before it steps on to
+        /// the next ramp (`mushroom::ramp_at`). 0 holds every cap still.
+        mushroom_cycle_seconds: f32 = 0.35 in 0.0 ..= 10.0;
+    }
     group crates {
         /// Seconds from a crate appearing to its landing: the air drop it
         /// comes down in (`crate_fx::drop` - a shadow gathers, the crate
@@ -2000,7 +2009,7 @@ tunables! {
         wreck_mushroom_chance: f32 = 0.7 in 0.0 ..= 1.0;
         /// The mushroom cloud's life in seconds, its height (px the cap
         /// climbs above the hull) and its cap's radius (px) - each
-        /// jittered per kill by the position hash (`mushroom::Cloud`).
+        /// jittered per kill by the position hash (`mushroom_cloud::Cloud`).
         mushroom_seconds: f32 = 2.8 in 0.5 ..= 8.0;
         mushroom_height_px: f32 = 84.0 in 16.0 ..= 240.0;
         mushroom_cap_px: f32 = 30.0 in 8.0 ..= 96.0;
