@@ -1,0 +1,208 @@
+name: macOS Release
+
+# Builds the macOS app (tools/macos/bundle.sh: BongBong.app, one binary for
+# Apple Silicon and Intel, static/ in its Resources), signs it with the
+# Developer ID certificate, has Apple notarize it and wraps it in a dmg
+# (tools/macos/package.sh), then attaches bongbong-macos.dmg to the GitHub
+# Release release.yml made for the same tag, with a row in the notes'
+# download table (tools/release/table_row.sh). The dmg is the only macOS
+# download: dist builds no macOS archive (dist-workspace.toml), since a bare
+# binary is one Gatekeeper refuses to open and Finder cannot start.
+#
+# It runs when the Release workflow finishes on a version tag, because dist
+# creates the release with `gh release create`, which fails if one exists
+# already: the dmg goes second, as android-release.yml's APK does. A manual
+# run builds the picked ref and uploads to that tag's release (input
+# `tag`), or only keeps the dmg as a workflow artifact (input `upload` =
+# false), which is how a change to this pipeline is tried on a branch. A
+# pull request that touches the macOS packaging builds it as a check:
+# signed but not notarized on the repo's own PRs, signed ad hoc from a
+# fork, which gets no secrets by design - never "fix" that with
+# pull_request_target.
+#
+# Secrets:
+#   MACOS_CERT_P12_B64    the Developer ID Application certificate and its
+#                         key, exported from Keychain Access as .p12, base64
+#   MACOS_CERT_PASSWORD   the .p12's password
+#   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8
+#                         the App Store Connect API key notarytool signs in
+#                         with - testflight.yml's
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  pull_request:
+    paths:
+      - .github/workflows/macos-release.yml
+      - tools/macos/**
+      - src/app/macos.rs
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to upload to (default: the ref's own tag)"
+        required: false
+        type: string
+      upload:
+        description: "Upload to the GitHub Release (off: keep the dmg as a workflow artifact only)"
+        required: false
+        type: boolean
+        default: true
+
+env:
+  # Pinned to devenv.nix's languages.rust.version.
+  RUST_VERSION: 1.98.1
+  CARGO_TERM_COLOR: always
+  # The tag a workflow_run carries is the branch the Release run was on,
+  # which for a tag push is the tag itself.
+  RELEASE_TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || inputs.tag || github.ref_name }}
+  CHECKOUT_REF: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.ref }}
+
+jobs:
+  dmg:
+    # Release runs on version tags alone (dist-workspace.toml's
+    # pr-run-mode), and only one that succeeded has a release to attach to.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    # Apple Silicon; the Intel half is cross-compiled, as dist built it.
+    runs-on: macos-14
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    concurrency:
+      group: ${{ github.event_name == 'pull_request' && format('macos-pr-{0}', github.event.pull_request.number) || format('macos-{0}', github.run_id) }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: macos-cargo-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: macos-cargo-${{ env.RUST_VERSION }}-
+
+      - name: Build BongBong.app
+        run: tools/macos/bundle.sh
+
+      # A keychain of the run's own holding the Developer ID certificate,
+      # unlocked for codesign and searched first; deleted at the end.
+      - name: Install the signing certificate
+        id: cert
+        env:
+          MACOS_CERT_P12_B64: ${{ secrets.MACOS_CERT_P12_B64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          if [[ -z "$MACOS_CERT_P12_B64" || -z "$MACOS_CERT_PASSWORD" ]]; then
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              echo "::warning::no signing secrets (a fork's PR): the app is signed ad hoc"; exit 0
+            fi
+            echo "::error::MACOS_CERT_P12_B64 and MACOS_CERT_PASSWORD secrets are required"; exit 1
+          fi
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          PASS="$(uuidgen)"
+          umask 077
+          printf '%s' "$MACOS_CERT_P12_B64" | base64 -d > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$PASS" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PASS" "$KEYCHAIN" >/dev/null
+          read -ra SEARCHED <<<"$(security list-keychains -d user | tr -d '"' | xargs)"
+          security list-keychains -d user -s "$KEYCHAIN" "${SEARCHED[@]}"
+          rm -f "$RUNNER_TEMP/cert.p12"
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | sed -n 's/.*"\(Developer ID Application: .*\)"$/\1/p' | head -1)"
+          [[ -n "$IDENTITY" ]] || { echo "::error::the .p12 holds no Developer ID Application identity"; exit 1; }
+          echo "MACOS_SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "keychain=$KEYCHAIN" >> "$GITHUB_OUTPUT"
+
+      - name: Install the App Store Connect key
+        if: github.event_name != 'pull_request'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          [[ -n "$ASC_KEY_ID" && -n "$ASC_KEY_P8" ]] || { echo "::error::ASC_KEY_ID and ASC_KEY_P8 secrets are required"; exit 1; }
+          umask 077
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s\n' "$ASC_KEY_P8" > ~/.appstoreconnect/private_keys/"AuthKey_$ASC_KEY_ID.p8"
+
+      # A pull request's check stops short of Apple: notarizing takes
+      # minutes and proves nothing a release run does not.
+      - name: Sign, notarize and package the dmg
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: tools/macos/package.sh ${{ github.event_name == 'pull_request' && '--no-notarize' || '' }}
+
+      - name: Check Gatekeeper's verdict
+        if: github.event_name != 'pull_request'
+        run: |
+          spctl --assess --type execute --verbose=4 target/macos/BongBong.app
+          spctl --assess --type open --context context:primary-signature --verbose=4 target/macos/bongbong-macos.dmg
+          xcrun stapler validate target/macos/bongbong-macos.dmg
+
+      - name: Remove the signing keychain and key
+        if: always()
+        run: |
+          if [[ -n "${{ steps.cert.outputs.keychain }}" ]]; then
+            security delete-keychain "${{ steps.cert.outputs.keychain }}" || true
+          fi
+          rm -rf ~/.appstoreconnect/private_keys
+
+      - name: Keep the dmg as a workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bongbong-macos
+          path: |
+            target/macos/bongbong-macos.dmg
+            target/macos/bongbong-macos.dmg.sha256
+          retention-days: 14
+
+      - name: Attach to the GitHub Release
+        if: ${{ github.event_name == 'workflow_run' || inputs.upload }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$RELEASE_TAG" --json tagName -q .tagName \
+            || { echo "::error::no GitHub Release for $RELEASE_TAG - release.yml creates it; run this after it, or with upload=false"; exit 1; }
+          gh release upload "$RELEASE_TAG" --clobber \
+            target/macos/bongbong-macos.dmg target/macos/bongbong-macos.dmg.sha256
+          echo "uploaded to https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG"
+
+  # dist wrote the notes' download table before the dmg existed; give it
+  # its row. A job of its own so it can share android-release.yml's group:
+  # both rewrite the notes whole, and one at a time keeps both rows.
+  release-notes:
+    needs: [dmg]
+    if: >-
+      !cancelled() && needs.dmg.result == 'success' &&
+      (github.event_name == 'workflow_run' || inputs.upload)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release-notes-${{ github.event.workflow_run.head_branch || inputs.tag || github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+      - name: Add the dmg to the download table
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: tools/release/table_row.sh "$RELEASE_TAG" bongbong-macos.dmg "macOS (Apple Silicon and Intel)"

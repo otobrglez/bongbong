@@ -4,7 +4,7 @@ name: Android Release
 # shared object, the assets, the icon, signed with the release key) and
 # attaches it to the GitHub Release release.yml made for the same tag, as
 # bongbong-aarch64-linux-android.apk beside the cargo-dist archives, with a
-# row in the notes' download table (tools/android/release_table.sh). dist
+# row in the notes' download table (tools/release/table_row.sh). dist
 # cannot build an APK, and release.yml is generated and checked by dist, so
 # this is its own workflow - the shape testflight.yml has for iOS.
 #
@@ -276,10 +276,33 @@ jobs:
             || { echo "::error::no GitHub Release for $RELEASE_TAG - release.yml creates it; run this after it, or with upload=false"; exit 1; }
           gh release upload "$RELEASE_TAG" --clobber \
             bongbong-aarch64-linux-android.apk bongbong-aarch64-linux-android.apk.sha256
-          # dist wrote the notes' download table before the APK existed;
-          # give it its row.
-          GH_REPO="${{ github.repository }}" tools/android/release_table.sh "$RELEASE_TAG" bongbong-aarch64-linux-android.apk
           echo "uploaded to https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG"
+
+  # dist wrote the notes' download table before the APK existed; give it
+  # its row. A job of its own so it can share macos-release.yml's group:
+  # both rewrite the notes whole, and one at a time keeps both rows.
+  release-notes:
+    needs: [apk]
+    # apk ran past a skipped pr-gate, and a skip passes down a chain of
+    # needs unless the job asks for its own result.
+    if: >-
+      !cancelled() && needs.apk.result == 'success' &&
+      (github.event_name == 'workflow_run' || inputs.upload)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release-notes-${{ github.event.workflow_run.head_branch || inputs.tag || github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+      - name: Add the APK to the download table
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: tools/release/table_row.sh "$RELEASE_TAG" bongbong-aarch64-linux-android.apk "Android (arm64 APK)"
 
   # A closed PR's APKs are deleted: every artifact named
   # `bongbong-pr-<N>.apk`, from any of its runs. Runs on every same-repo

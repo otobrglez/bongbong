@@ -20,6 +20,7 @@ Everything runs from inside the devenv (Nix) shell. `just --list` has the rest.
 | iPhone | `just ios-setup-device` (plus an Apple ID in Xcode) | `just run-ios-device` |
 | Android emulator / phone | `just android-setup` | `just run-android` |
 | Android APK (sideload) | - | download `bongbong-aarch64-linux-android.apk` from the latest [release](https://github.com/otobrglez/bongbong/releases) and allow installs from your browser |
+| macOS app | - | `just macos-app` builds `target/macos/BongBong.app`; a release's `bongbong-macos.dmg` is the signed, notarized one - open it and drag BongBong to Applications |
 
 ```bash
 # Options work the same on every desktop run

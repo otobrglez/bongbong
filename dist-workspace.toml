@@ -9,8 +9,11 @@ cargo-dist-version = "0.32.0"
 ci = "github"
 # The installers to generate for each app
 installers = []
-# Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+# Target platforms to build apps for (Rust target-triple syntax). No macOS:
+# a bare binary in a tarball is one Gatekeeper refuses to open and Finder
+# cannot start, so macos-release.yml ships a signed, notarized
+# BongBong.app in a dmg instead (tools/macos/).
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Extra static files to include in each App (path relative to this Cargo.toml's dir)
 include = ["static"]
 # cargo-dist defaults to statically linking the Windows CRT (+crt-static),
@@ -32,20 +35,12 @@ pr-run-mode = "skip"
 # features) never produces it, and without this list dist fails the build
 # looking for it ("failed to find bin bbmcp").
 [dist.binaries]
-aarch64-apple-darwin = ["bongbong", "probe"]
-x86_64-apple-darwin = ["bongbong", "probe"]
 x86_64-unknown-linux-gnu = ["bongbong", "probe"]
 x86_64-pc-windows-msvc = ["bongbong", "probe"]
 
-# The Intel Mac build cross-compiles on an Apple Silicon runner: the Intel
-# runner took 11 minutes of a 12-minute release, the arm64 one 4, and Apple's
-# toolchain builds either architecture natively.
-[dist.github-custom-runners]
-x86_64-apple-darwin = "macos-14"
-
 # raylib (via sola-raylib -> raylib-sys) needs X11/OpenGL/audio/input dev
-# headers to build on Linux; macOS and Windows runners need nothing extra
-# (Xcode/MSVC already have what's required). Same package list as
+# headers to build on Linux; the Windows runner needs nothing extra (MSVC
+# already has what's required). Same package list as
 # sola-raylib's own working CI (../sola-raylib/.github/workflows/ci.yml),
 # which builds this exact dependency across ubuntu-latest/-arm, macos-latest
 # and windows-latest already - not a guess assembled from general raylib
