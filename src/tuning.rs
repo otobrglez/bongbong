@@ -3069,10 +3069,10 @@ tunables! {
         /// How long the frog's line stays up at the least (seconds), on
         /// top of `training_line_seconds_per_char` of its length
         /// (`bubble::FrogVoice`).
-        training_line_seconds: f32 = 1.4 in 0.2 ..= 10.0;
+        training_line_seconds: f32 = 3.0 in 0.2 ..= 10.0;
         /// How much longer a line stays up for each of its letters
         /// (seconds), so a long line is up as long as it takes to read.
-        training_line_seconds_per_char: f32 = 0.055 in 0.0 ..= 0.3;
+        training_line_seconds_per_char: f32 = 0.1 in 0.0 ..= 0.3;
         /// The pace the words of a line come into the bubble (words a
         /// second; the first is there at once).
         training_line_words_per_second: f32 = 9.0 in 1.0 ..= 60.0;
