@@ -526,3 +526,42 @@ android-swipe X1 Y1 X2 Y2 MS="300":
 # demo under ntk/src/bin/. `just ntk 01_hello`.
 ntk NAME *ARGS:
     cargo run -p ntk-demos --bin {{NAME}} -- {{ARGS}}
+
+# --- Releases (CLAUDE.md's Releases section, tools/release/) ---
+
+# .github/workflows/prepare-release.yml: an empty VERSION releases the one
+# Cargo.toml carries, another bumps it in the same PR.
+# CI: Claude writes the next release's CHANGELOG.md entry and opens a "Release X.Y.Z" PR.
+release-prepare VERSION="":
+    gh workflow run prepare-release.yml --ref master {{ if VERSION == "" { "" } else { "-f version=" + VERSION } }}
+    @echo "Started; follow it with: gh run watch \$(gh run list --workflow prepare-release.yml -L 1 --json databaseId -q '.[0].databaseId')"
+
+# Nothing is committed; read and edit the entry, then commit it yourself.
+# Write the next release's CHANGELOG.md entry locally with `claude`.
+release-notes VERSION="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="{{VERSION}}"; version="${version:-$(sed -nE 's/^version = "(.*)"$/\1/p' Cargo.toml | head -1)}"
+    mkdir -p target/release-notes
+    tools/release/gather.sh > target/release-notes/context.md
+    # The prompt goes on stdin: --allowedTools would take it for one more tool.
+    printf 'Follow the instructions in tools/release/notes-prompt.md.\n\nVersion: %s\nDate: %s\nContext file: target/release-notes/context.md\nChangelog: CHANGELOG.md\n' \
+        "$version" "$(date -u +%Y-%m-%d)" \
+        | claude -p --model claude-opus-5-5 --allowedTools Read,Edit,Write,Glob,Grep
+    tools/release/entry.sh "$version"
+
+# Refused unless master is clean, matches origin and CHANGELOG.md has the
+# version's entry (else the release goes out with its download table alone).
+# Tag master as Cargo.toml's version and push it, starting every release workflow.
+release-tag:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="$(sed -nE 's/^version = "(.*)"$/\1/p' Cargo.toml | head -1)"
+    [[ "$(git branch --show-current)" == master ]] || { echo "switch to master first"; exit 1; }
+    [[ -z "$(git status --porcelain)" ]] || { echo "the working tree is not clean"; exit 1; }
+    git fetch -q origin master
+    [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/master)" ]] || { echo "master is not origin/master: pull or push first"; exit 1; }
+    tools/release/entry.sh "$version" >/dev/null || { echo "CHANGELOG.md has no '## $version - <date>' entry: just release-prepare"; exit 1; }
+    git tag "v$version"
+    git push origin "v$version"
+    echo "Pushed v$version: gh run list --limit 6"
