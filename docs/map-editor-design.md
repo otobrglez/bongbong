@@ -405,7 +405,7 @@ pickup = "ammo"
 - `theme` is an optional top-level `"grass" | "desert"` (`map::Theme`):
   the look the map is drawn in — its ground tileset, its tall-grass sheet
   and whether the floor carries sand drifts. Presentation only; absent
-  means `grass`, and grass is not written back. The MAP panel's THEME row
+  means `grass`, and grass is not written back. The MAP panel's THEME choice
   edits it, and `builder_settings {theme}` on the dev server. See
   `docs/desert-theme.md`.
 - `view` is an optional top-level `"whole" | "follow"` (`map::MapView`):

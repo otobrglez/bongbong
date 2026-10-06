@@ -1216,15 +1216,16 @@ pub(crate) const SHOCK_SHIELD_BREAK: f32 = 0.45;
 pub(crate) const SHOCK_TELEPORT: f32 = 0.3;
 
 impl Game {
-    /// Put `sky` on the round's map and fight the rest of the round under
-    /// it, no restart: the look, sight, grip and gusts change at once (the
+    /// Put `sky` on the round's map - one sky, or several of which the
+    /// round's seed picks one, as `init` would - and fight the rest of the
+    /// round under it, no restart: the look, sight, grip and gusts change at once (the
     /// override knob still outranks the map's key, as in `init`). Snow
     /// ices the water over where it was open - its deep cells lose their
     /// bodies and the nav grid is built again - but ice does not thaw
     /// back mid-round, since a hull may stand on what would be deep
     /// water; the next round settles the water from its own sky. Draws no
     /// RNG.
-    pub fn change_weather(&mut self, sky: crate::map::Weather) {
+    pub fn change_weather(&mut self, sky: crate::map::Skies) {
         self.map.weather = sky;
         let t = tuning();
         self.weather = crate::weather::in_force(sky, self.round_seed(), self.weather_from_map, &t);
@@ -6105,7 +6106,7 @@ mod mechanics_tests {
     #[test]
     fn lava_never_freezes_under_snow() {
         let mut game = sandbox(&lava_map(""));
-        game.change_weather(crate::map::Weather::Snow);
+        game.change_weather(crate::map::Weather::Snow.into());
         assert_eq!(game.lava().deep_cells().count(), 9);
         assert_eq!(game.lava().depth_at(map::cell_to_world(26, 8)), crate::ground::Depth::Shallow);
     }

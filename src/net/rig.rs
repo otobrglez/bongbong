@@ -443,7 +443,7 @@ impl Room {
         // window's `weather_override` becomes this room's map key, and
         // `--rig --weather snow` is a snowy room on both ends.
         if let Some(sky) = crate::weather::knob(&crate::tuning::tuning()) {
-            game.map.weather = sky;
+            game.map.weather = sky.into();
         }
         game.weather_from_map = true;
         let (width, height) = game.map.field_size();

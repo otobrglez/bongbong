@@ -297,7 +297,7 @@ impl Game {
         }
         self.night_fallen = true;
         let t = tuning();
-        self.weather = crate::weather::in_force(crate::map::Weather::Night, self.round_seed(), self.weather_from_map, &t);
+        self.weather = crate::weather::in_force(crate::map::Weather::Night.into(), self.round_seed(), self.weather_from_map, &t);
     }
 
     /// Whether the map's `nightfall` has passed this round, and the sky in
@@ -466,7 +466,7 @@ mod tests {
         assert_eq!(game.weather(), crate::map::Weather::Night);
         assert!(game.enemy_sight() < dusk);
         assert_eq!(game.nightfall_mix(), 1.0);
-        assert_eq!(game.map.weather, crate::map::Weather::Dusk, "the map keeps its own sky");
+        assert_eq!(game.map.weather, crate::map::Weather::Dusk.into(), "the map keeps its own sky");
     }
 
     #[test]

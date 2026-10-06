@@ -283,43 +283,69 @@ bar (`editor::chrome::Strip`; docs/large-maps-follow-camera.md section 9).
 
 ## 9. The MAP ▾ settings panel
 
-A panel below the button, 340 px wide, rows 48 px tall, each a label with
-a stepper (`<`/`>` or `-`/`+` buttons of 48x48 px and the value between).
-Values are the `MapFile` fields, so nothing new is stored. The panel hangs
-from the bar: its top corners are square where it meets the bar's edge and
-the bottom ones rounded (`editor/render.rs`'s `draw_hanging_panel`).
+A panel hanging from the bar below the button: its top corners are square
+where it meets the bar's edge and the bottom ones rounded
+(`editor/render.rs`'s `draw_hanging_panel`). Its values are the `MapFile`
+fields, so nothing new is stored. `editor::chrome::MapPanel` is the one
+geometry table the painter, every hit test and the dev server's
+`status.builder.buttons` read.
 
-| Row | Field | Range / values |
-| --- | --- | --- |
-| TANKS | `tanks` | 0..=31 (`wave_max_alive`); stepping below 0 shows `auto` = the knob roll (`None`) |
-| TANK / TANK 2 | `tank` / `tank2` | `auto` (`None`) then the 12 `TankKind` names in row order; a picked chassis is drawn beside the `<` button, hull and turret in that seat's team colours (nothing on `auto`) |
-| MISSION | `mission.kind` | protect, hunt, destroy |
-| SPAWN | `spawn.kind` | band, waves |
-| WAVES | `spawn.waves` | 1..=20, `auto` = the `waves` tuning group |
-| SIZE | `spawn.size` | 1..=31, `auto` |
-| GROWTH | `spawn.growth` | 0..=10, `auto` |
-| TIER START / TIER END | `spawn.tier_start`/`tier_end` | auto, light, medium, heavy, super |
-| THEME / WEATHER | `theme` / `weather` | the `map::Theme` and `map::Weather` names |
-| WIDTH / HEIGHT | `size` | cells, a press each, 16 x 9 up to `map::MAX_SIDE_CELLS` |
-| ANCHOR | | where the old map sits when the size changes: a 3 x 3 glyph, the middle at first; the panel's, not the map's |
-| RESET MAP | | Reverts cells and settings to the baseline; asks nothing, it is undoable. |
+**Four groups, two shapes.** The fields are in four groups (`MapTab`):
+ROUND (the mission and the enemies), TANKS (the players' chassis), FIELD
+(the look and the size) and SKY (the skies a round may take), plus RESET
+MAP.
+- **Sections:** where the room under the bar holds the whole panel
+  (884 x 432 pt; a desktop, a tablet), every group stands at once under
+  its heading. ROUND and TANKS fill the left column; FIELD, SKY and RESET
+  MAP fill the right.
+- **Tabs:** where it does not (a phone in landscape, a small window), a
+  rail of tabs down the left shows one group at a time, and RESET MAP is
+  the rail's last slot. The wheel walks the tabs.
 
-A size change (`MapEditor::resize`) is one `EditStep::Resize`: the whole
-map before and after, so the cells that land past the new edge are
-dropped and one undo brings them back. A run of presses while the panel
-stays open folds into one step. An anchor on a side keeps that edge where
-it was and the middle shares the change, counted from the halves of both
-sizes, so one-cell presses come out centred. The ground is made again on
-the new field, a zoomed view moves with the map (and back on undo), and a
-map that crosses the arena limit (36 x 18) is framed as a field map from
-the next frame.
+Nothing pages, and every button is at least 44 pt both ways.
 
-The five wave rows are drawn dimmed while `SPAWN` is `band` (they still
-edit, so a map keeps its wave numbers when switched back). CLI overrides
-(`--enemies`, `--mission`, `--spawn`, ...) still outrank the map's values
-at PLAY exactly as they outrank a file's; the panel shows the map's value
-and marks a row `(cli)` when a flag is overriding it, so a player who
-started the program with `-e 8` understands why TANKS is not honoured.
+**A row** is one control with its label beside it, or several side by side
+with their labels over them. A choice is a row of options with the one in
+force filled; a press picks it. A stepper has `-`/`+` (numbers) or `<`/`>`
+(choices) at its ends and the value between. A sky is a tile that a tap
+puts in or takes out.
+
+| Group | Field | Control | Values |
+| --- | --- | --- | --- |
+| ROUND | `mission.kind` | choice | protect, hunt, destroy |
+| ROUND | `spawn.kind` | choice | band, waves |
+| ROUND | `tanks` (band) | stepper | 0..=31 (`wave_max_alive`); below 0 is `auto` (`None`, the knob's roll) |
+| ROUND | `spawn.waves` / `size` / `growth` (waves) | three steppers | 1..=20 / 1..=31 / 0..=10, each `auto` = the `waves` tuning group |
+| ROUND | `spawn.tier_start` / `tier_end` (waves) | two steppers | auto, light, medium, heavy, super |
+| TANKS | `tank` / `tank2` | stepper | `auto` (`None`) then the 12 `TankKind` names in row order, the picked chassis drawn in that seat's team colours |
+| FIELD | `theme` | choice | the `map::Theme` names |
+| FIELD | `size`, and the anchor | three steppers | WIDTH and HEIGHT in cells, a press each, 16 x 9 up to `map::MAX_SIDE_CELLS`; ANCHOR, where the old map sits when the size changes (a 3 x 3 glyph, the middle at first; the panel's, not the map's) |
+| SKY | `weather` | nine tiles | each of `map::Weather::SKIES`; none in is clear, and CLEAR shows in then |
+| | RESET MAP | button | Reverts cells and settings to the baseline. It asks nothing, since it is undoable. |
+
+**Under SPAWN.** The band's TANKS count shows under `band`, and the wave
+rows show under `waves`. Either way, ROUND keeps the room its wave rows
+take, so a spawn change moves no other group under a finger. A hidden row
+keeps its value, so a map keeps its wave numbers when switched back.
+
+**Resizing.** A size change (`MapEditor::resize`) is one
+`EditStep::Resize`: the whole map before and after, so the cells that
+land past the new edge are dropped and one undo brings them back.
+- A run of presses while the panel stays open folds into one step.
+- An anchor on a side keeps that edge where it was, and the middle anchor
+  shares the change, counted from the halves of both sizes, so one-cell
+  presses come out centred.
+- The ground is made again on the new field, and a zoomed view moves with
+  the map (and back on undo).
+- A map that crosses the arena limit (36 x 18) is framed as a field map
+  from the next frame.
+
+**CLI overrides.** Flags (`--enemies`, `--mission`, `--spawn`,
+`--weather`, ...) still outrank the map's values at PLAY, exactly as they
+outrank a file's. The panel shows the map's value and marks it `(cli)`
+when a flag overrides it: by the label, and on the group's heading or
+tab. A player who started the program with `-e 8` sees why TANKS is not
+honoured.
 
 ## 10. Touch
 

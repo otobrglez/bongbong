@@ -1397,12 +1397,20 @@ mod tests {
         for seed in [0x5EED, 0xB0B5, 0xD1FF, 7, 8, 9] {
             let room = authoritative(&map, seed, 2);
             let replica = welcome_through_the_codec(&room);
-            assert_eq!(replica.map.weather, Weather::Random, "the key rides the welcome's map");
+            assert_eq!(replica.map.weather, crate::map::Skies::ALL, "the key rides the welcome's map");
             assert_ne!(room.weather(), Weather::Random);
             assert_eq!(replica.weather(), room.weather(), "seed {seed:#x}");
             skies.insert(room.weather());
         }
         assert!(skies.len() > 1, "six seeds brought one sky: {skies:?}");
+        // A list of skies rides the same way, and the pick is among them.
+        let map = format!("weather = [\"rain\", \"snow\"]\n{DEFAULT_MAP}");
+        for seed in [0x5EED, 0xB0B5, 0xD1FF, 7, 8, 9] {
+            let room = authoritative(&map, seed, 2);
+            let replica = welcome_through_the_codec(&room);
+            assert!(matches!(room.weather(), Weather::Rain | Weather::Snow), "{:?}", room.weather());
+            assert_eq!(replica.weather(), room.weather(), "seed {seed:#x}");
+        }
 
         let (first, next) = (0x5EED, 0xD1FF);
         assert_ne!(random_sky(first), random_sky(next), "the rematch below has to change the sky to prove anything");

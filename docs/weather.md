@@ -1,9 +1,10 @@
 # Weather — the sky over the battlefield
 
-A map's `weather` key puts a sky over it: `clear` (the default, and what
-every older file gets), `night`, `dusk`, `rain`, `storm`, `fog`,
-`sandstorm`, `snow` or `heat_haze` - or `random`, a sky picked by each
-round's seed. A sky is drawn and it changes the rules (below): enemies see
+A map's `weather` key names the skies it may be fought under: `clear`
+(the default, and what every older file gets), `night`, `dusk`, `rain`,
+`storm`, `fog`, `sandstorm`, `snow` or `heat_haze` - one of them, a list
+of several (`["rain", "snow"]`), of which each round's seed picks one, or
+`random`, every sky. A sky is drawn and it changes the rules (below): enemies see
 less at night and in fog, hulls lose grip in the rain, snow freezes the
 water into ice a tank drives across, and a sandstorm's gusts carry every
 hull downwind. `Game::init` settles the round's sky once, from the map's
@@ -16,24 +17,31 @@ probe and the determinism pins hold it to that).
 
 ## The attribute
 
-- **Map file**: a top-level `weather = "night"` (`map::Weather`, TOML
-  `snake_case`). Absent means `clear`, and clear is not written back, so an
-  editor re-save of an older map is byte-identical. An unknown name is a
+- **Map file**: a top-level `weather = "night"` or `weather = ["night",
+  "rain"]` (`map::Skies`, a set over `Weather::SKIES`; the names are
+  `map::Weather`'s, TOML `snake_case`). Absent, `[]` or `"clear"` alone
+  mean clear, which is not written back; one sky is written as its name,
+  every sky as `"random"`, and any other set as a list in `SKIES` order,
+  so an editor re-save of a map with one sky or none is byte-identical and
+  keeps its clear stamp's revision. `clear` may be one of several
+  (`["clear", "rain"]`: a dry round or a wet one). An unknown name is a
   parse error, not a fallback.
-- **Builder**: the MAP panel's WEATHER row cycles `Weather::ALL`, one undo
-  step per press like every other settings field. The canvas stays clear,
-  since a map is edited in daylight; PLAY starts the round under the sky.
-- **Random**: `random` is one of `Weather::SKIES` (every sky, clear
-  included, as likely as the others) picked afresh for every round by
-  `weather::random_sky`, a hash of the round's seed. It is not a draw from
+- **Builder**: the MAP panel's SKY group is a tile per sky, ringed and
+  ticked while the map holds it: a tap puts the sky in or takes it out,
+  one undo step like every other settings field. With none in, the map is
+  clear and CLEAR shows ticked. The canvas stays clear, since a map is
+  edited in daylight; PLAY starts the round under the sky its seed picks.
+- **The pick**: a round takes one of its map's skies, every one as likely
+  as the others, by `weather::pick_sky`, a hash of the round's seed;
+  `random` is the pick over all of `Weather::SKIES` (`random_sky`). It is not a draw from
   the round's RNG, so the stream is untouched and every seeded replay and
   probe fixture is the same under it, and it is not the wall clock: the
   same seed always brings the same sky - `--seed`, the dev server's
   `restart {seed}` and a room's `Welcome`, whose seed every replica is
   initialised on (a rematch's `RoundStarted` moves them all to the next
   one together). An unpinned round draws a fresh seed, so a fresh sky.
-  `Game::weather()` is never `Random`; the key stays `random` on disk, in
-  the builder and in `map_get`.
+  `Game::weather()` is never `Random` and always one of the map's skies;
+  the key stays as written on disk, in the builder and in `map_get`.
 - **Over every local round**: the `weather_override` knob (`weather`
   tuning group) takes a weather's index in `Weather::ALL`, `-1` following
   the map and 9 a random sky for every round. It is a `Restart` row: a sky
@@ -42,17 +50,18 @@ probe and the determinism pins hold it to that).
   `--zoom` stages `view_max_scale`, the web build reads `?weather=night`
   off its page (`weather::weather_from_url`, through `window.bbInvite`),
   and on a PR preview it is a row in the tuning panel. The builder's row
-  shows `(cli)` while it is set.
-- **Dev server**: `weather` reports the round's sky (`in_force`, a random
-  map's sky by name), the map's own key, the override's pick, every name
+  SKY group shows `(cli)` while it is set.
+- **Dev server**: `weather` reports the round's sky (`in_force`, the
+  seed's pick by name), the map's own key (a name, or the list), the override's pick, every name
   and the `rules` in force (`on`, `enemy_sight_px`, `grip`, `frozen`,
   `gust_on_player` - player 1's wind, px/s - and `gust_front`, the gust
   crossing the field) and `without_shaders` (the window draws its skies
-  plainly, "Without shaders" below); with `name` it puts that key on the
-  round's map and
-  starts the round over on its own seed, frozen in lockstep like
-  `restart`. `status.weather`, `map.weather`, `builder_settings {weather}`
-  (null = clear) and `map_get`/`restart {map_toml}` carry the key too.
+  plainly, "Without shaders" below); with `name` - a weather or a list of
+  them - it puts that key on the round's map and changes the sky
+  mid-round, or with `restart: true` starts the round over on its own
+  seed, frozen in lockstep like `restart`. `status.weather`,
+  `map.weather`, `builder_settings {weather}` (a name or a list; null or
+  `[]` = clear) and `map_get`/`restart {map_toml}` carry the key too.
 - **Online**: a room's round is fought under its map's sky alone
   (`Game::weather_from_map`): the key rides the map TOML every `Welcome`
   carries and the seed rides the same message, so every replica and every

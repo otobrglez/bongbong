@@ -140,7 +140,7 @@ fn snow_mid_round_ices_the_lake_and_a_thaw_waits_for_the_next_round() {
     drive(&mut game, None, 30);
     let (from, to) = (cell_to_world(7, 11), cell_to_world(28, 11));
     let around = game.nav_path_cells(from, to, W, H).expect("the lake can be walked round");
-    game.change_weather(crate::map::Weather::Snow);
+    game.change_weather(crate::map::Weather::Snow.into());
     assert_eq!(game.weather(), crate::map::Weather::Snow);
     assert_eq!(game.frame(), 30, "the round runs on");
     assert!(game.water().is_frozen() && game.water().deep_cells().count() == 0);
@@ -151,7 +151,7 @@ fn snow_mid_round_ices_the_lake_and_a_thaw_waits_for_the_next_round() {
     drive(&mut game, Some(Dir::Right), 240);
     assert!(player_pos(&game).x > cell_to_world(26, 11).x, "the ice carries it over");
     // Rain falls on the ice, which stays ice until the next round.
-    game.change_weather(crate::map::Weather::Rain);
+    game.change_weather(crate::map::Weather::Rain.into());
     assert_eq!(game.weather(), crate::map::Weather::Rain);
     assert!(game.water().is_frozen(), "no thaw under a hull mid-round");
     game.init(W, H);

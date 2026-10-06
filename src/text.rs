@@ -228,11 +228,16 @@ keys! {
     SETTINGS_TIER_START = "settings-tier-start";
     SETTINGS_TIER_END = "settings-tier-end";
     SETTINGS_THEME = "settings-theme";
-    SETTINGS_WEATHER = "settings-weather";
     SETTINGS_WIDTH = "settings-width";
     SETTINGS_HEIGHT = "settings-height";
     SETTINGS_ANCHOR = "settings-anchor";
     SETTINGS_RESET = "settings-reset";
+    SETTINGS_GROUP_ROUND = "settings-group-round";
+    SETTINGS_GROUP_TANKS = "settings-group-tanks";
+    SETTINGS_GROUP_FIELD = "settings-group-field";
+    SETTINGS_GROUP_SKY = "settings-group-sky";
+    SETTINGS_SKY_HINT = "settings-sky-hint";
+    SETTINGS_AUTO_SHORT = "settings-auto-short";
     SETTINGS_AUTO = "settings-auto";
     SETTINGS_CLI = "settings-cli";
     EDITOR_SAVE_AS = "editor-save-as";
@@ -847,7 +852,7 @@ mod text_tests {
         let lobby_button = |k: Key| (k, HUD_TEXT_SIZE, LOBBY_BUTTON_W as i32 - 12, vec![]);
         let wide = |k: Key| (k, HUD_TEXT_SIZE, LOBBY_WIDE_W as i32 - 12, vec![]);
         let pager = |k: Key| {
-            let room = crate::EDITOR_SETTINGS_W as i32 - 2 * (16 + width(">", HUD_TEXT_SIZE) + 8);
+            let room = crate::editor::chrome::STAMPS_PANEL_W as i32 - 2 * (16 + width(">", HUD_TEXT_SIZE) + 8);
             (k, UI_SMALL_TEXT, room, vec![("from", 99.into()), ("to", 99.into()), ("n", 99.into())])
         };
         let content = (LOBBY_W - 2.0 * LOBBY_MARGIN) as i32;
@@ -934,8 +939,8 @@ mod text_tests {
             (keys::CHECK_CLEARED_HINT, UI_SMALL_TEXT, crate::editor::LINT_CLEAR_W as i32, vec![]),
             (keys::CHECK_NOT_CLEARED_HINT, UI_SMALL_TEXT, crate::editor::LINT_CLEAR_W as i32, vec![]),
             // A pager's span, in the small size between its `<` and `>`
-            // in the narrowest paged panel, a column of the MAP panel -
-            // with the keys' hint and with a tap's.
+            // in the narrowest paged panel, the STAMPS list - with the
+            // keys' hint and with a tap's.
             pager(keys::EDITOR_PAGE),
             pager(keys::EDITOR_PAGE_TOUCH),
             // The Save prompt's line under the name, either hint, and its
@@ -947,26 +952,6 @@ mod text_tests {
             (keys::FILE_SAVE, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE_AS, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_CLEAR, HUD_TEXT_SIZE, 168, vec![]),
-            // A settings row's label runs from its 4 px inset to the `<`
-            // button at 124, and the TANK rows' stops at their chassis
-            // icon, 32 px wide and one inset clear of the button
-            // (`editor/render.rs`'s `settings_icon_rect`).
-            (keys::SETTINGS_TANKS, 16, 116, vec![]),
-            (keys::SETTINGS_TANK, 16, 80, vec![]),
-            (keys::SETTINGS_TANK2, 16, 80, vec![]),
-            (keys::SETTINGS_MISSION, 16, 116, vec![]),
-            (keys::SETTINGS_SPAWN, 16, 116, vec![]),
-            (keys::SETTINGS_WAVES, 16, 116, vec![]),
-            (keys::SETTINGS_SIZE, 16, 116, vec![]),
-            (keys::SETTINGS_GROWTH, 16, 116, vec![]),
-            (keys::SETTINGS_TIER_START, 16, 116, vec![]),
-            (keys::SETTINGS_TIER_END, 16, 116, vec![]),
-            (keys::SETTINGS_THEME, 16, 116, vec![]),
-            (keys::SETTINGS_WEATHER, 16, 116, vec![]),
-            (keys::SETTINGS_WIDTH, 16, 116, vec![]),
-            (keys::SETTINGS_HEIGHT, 16, 116, vec![]),
-            (keys::SETTINGS_ANCHOR, 16, 116, vec![]),
-            (keys::SETTINGS_RESET, 16, 116, vec![]),
             // The level's lines and the end screen: across the smallest
             // area the chrome is laid out in less a margin, the end
             // screen's two numbers side by side with a gap, and the
@@ -1140,18 +1125,90 @@ mod text_tests {
                     over.push(format!("{tag}: finding {} = {words:?} runs into its FIX button", kind.tag()));
                 }
             }
-            // A settings row's value runs from 180 pt into the row to its
-            // `>` button at 288 (`editor/render.rs`'s `SETTINGS_VALUE_X`,
-            // `settings_inc_rect`), with the `(cli)` mark after it in the
-            // small size when a flag outranks the map - the weather's can.
-            for weather in crate::map::Weather::ALL {
-                let name = catalogue.named("weather", weather.name());
-                let mark = catalogue.get(keys::SETTINGS_CLI);
-                if width(&name, HUD_TEXT_SIZE) + 4 + width(&mark, UI_SMALL_TEXT) > 288 - 180 - 4 {
-                    over.push(format!("{tag}: weather {} = {name:?} overflows its settings row", weather.name()));
+        }
+        assert!(over.is_empty(), "over budget:\n{}", over.join("\n"));
+    }
+
+    /// The MAP panel's words in every language, measured against the boxes
+    /// `editor::chrome::MapPanel` lays them in (the sections' columns,
+    /// which a rail's group shares): a label beside its control or over
+    /// it with the `(cli)` mark after, every choice's options, every
+    /// stepper's widest value, the sky tiles' names, the rail's tabs and
+    /// RESET MAP, and the headings with the SKY hint.
+    #[test]
+    fn every_language_fits_the_map_panel() {
+        use crate::editor::chrome::*;
+        use crate::editor::{FieldKind, MapField, MapTab};
+        let room = crate::math::Rectangle::new(0.0, 40.0, 2000.0, 1200.0);
+        let panel = MapPanel::of(room, room, MapTab::Round, true);
+        assert_eq!(panel.shape, MapShape::Sections);
+        let mut over = Vec::new();
+        let mut headings = Vec::new();
+        for (tag, _) in SHIPPED_LANGS {
+            let c = Catalogue::new(tag);
+            let mark = width(&c.get(keys::SETTINGS_CLI), UI_SMALL_TEXT);
+            let mut fits = |what: String, words: &str, size: i32, room: f32| {
+                let w = width(words, size);
+                if w as f32 > room {
+                    over.push(format!("{tag}: {what} = {words:?} is {w} pt at {size}, over {room}"));
+                }
+            };
+            for placed in &panel.fields {
+                let field = placed.field;
+                if let (Some(key), Some(label)) = (field.label_key(), placed.label) {
+                    let words = c.get(key);
+                    if label.height >= placed.rect.height {
+                        fits(format!("{} label", field.name()), &words, MAP_LABEL_SIZE, label.width - 8.0);
+                        fits(format!("{} (cli)", field.name()), &c.get(keys::SETTINGS_CLI), UI_SMALL_TEXT, label.width - 8.0);
+                    } else {
+                        fits(format!("{} label", field.name()), &words, UI_SMALL_TEXT, label.width - 4.0 - 4.0 - mark as f32);
+                    }
+                }
+                let middle = placed.rect.width - 2.0 * MAP_STEP_W - 4.0;
+                match field.kind() {
+                    FieldKind::Choice(n) => {
+                        let option = segments(placed.rect, n)[0].width - 8.0;
+                        for i in 0..n {
+                            fits(format!("{} option {i}", field.name()), &field.option_text(&c, i), MAP_VALUE_SIZE, option);
+                        }
+                    }
+                    FieldKind::Stepper => {
+                        let auto = if matches!(field, MapField::Waves | MapField::Size | MapField::Growth) { keys::SETTINGS_AUTO_SHORT } else { keys::SETTINGS_AUTO };
+                        if !matches!(field, MapField::Width | MapField::Height | MapField::Anchor) {
+                            fits(format!("{} auto", field.name()), &c.get(auto), MAP_VALUE_SIZE, middle);
+                        }
+                        if matches!(field, MapField::TierStart | MapField::TierEnd) {
+                            for tier in crate::level::Tier::ALL {
+                                fits(format!("{} {}", field.name(), tier.name()), &c.named("tier", tier.name()), MAP_VALUE_SIZE, middle);
+                            }
+                        }
+                        fits(format!("{} number", field.name()), "22.5", MAP_VALUE_SIZE, middle);
+                    }
+                    FieldKind::Chassis(_) => {
+                        fits(format!("{} auto", field.name()), &c.get(keys::SETTINGS_AUTO), MAP_VALUE_SIZE, middle);
+                        for kind in crate::tank::TankKind::ALL {
+                            fits(format!("{} {}", field.name(), kind.name()), &c.named("tank", kind.name()), MAP_VALUE_SIZE, middle - crate::TANK_FRAME_SIZE - 8.0);
+                        }
+                    }
+                    FieldKind::Sky(sky) => {
+                        let name = crate::editor::sky_label_text(&c, sky);
+                        fits(format!("sky {}", sky.name()), &name, MAP_SKY_SIZE, placed.rect.width - 8.0 - MAP_SWATCH - 8.0 - 8.0 - MAP_CHECK - 8.0);
+                    }
                 }
             }
+            for tab in MapTab::ALL {
+                fits(format!("tab {}", tab.name()), &c.get(tab.key()), MAP_LABEL_SIZE, MAP_RAIL_W - 16.0);
+                let mut heading = width(&c.get(tab.key()), MAP_HEADING_SIZE) + 10 + mark;
+                if tab == MapTab::Sky {
+                    heading += width(&c.get(keys::SETTINGS_SKY_HINT), UI_SMALL_TEXT) + 8;
+                }
+                if heading as f32 > MAP_COLUMN_W - 4.0 {
+                    headings.push(format!("{tag}: the {} heading is {heading} pt, over {MAP_COLUMN_W}", tab.name()));
+                }
+            }
+            fits("RESET MAP in the rail".into(), &c.get(keys::SETTINGS_RESET), MAP_LABEL_SIZE, MAP_RAIL_W - 12.0 - 8.0);
         }
+        over.extend(headings);
         assert!(over.is_empty(), "over budget:\n{}", over.join("\n"));
     }
 

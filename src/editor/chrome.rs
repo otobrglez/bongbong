@@ -49,9 +49,9 @@ use crate::framing::MapClass;
 use crate::hud::{button_height, UiFrame, PLATE_PAD, UI_EDGE_PT};
 use crate::math::{Rectangle, Vec2};
 use crate::view::{ScaleCap, View};
-use crate::{Layout, EDITOR_BAR_HIT_SLACK, EDITOR_DROPDOWN_ROW_H, EDITOR_DROPDOWN_W, EDITOR_SETTINGS_W, HUD_BAR_HEIGHT};
+use crate::{Layout, EDITOR_BAR_HIT_SLACK, EDITOR_DROPDOWN_ROW_H, EDITOR_DROPDOWN_W, HUD_BAR_HEIGHT};
 
-use super::{BrushRow, Category};
+use super::{BrushRow, Category, FieldKind, MapField, MapTab, PanelButton};
 
 /// The text size of the bar's small labels - UNDO, REDO, FIT, CHECK and
 /// the clear flag's par -, the select tool's strip's words and the Save
@@ -137,10 +137,6 @@ pub const PALETTE_LABEL_W: f32 = 72.0;
 
 /// A palette cell: a dropdown row's height, square.
 pub const PALETTE_CELL: f32 = EDITOR_DROPDOWN_ROW_H;
-
-/// The settings panel's columns at most: two hold its sixteen rows in
-/// eight under a desktop's bar.
-const SETTINGS_COLUMNS: usize = 2;
 
 /// The least room the map's name keeps in the bar before it gives its
 /// place up to the buttons: a few letters and the edited mark.
@@ -628,7 +624,7 @@ pub struct Chrome {
 }
 
 /// Where the open popup's panel and rows stand.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum PopupLayout {
     /// A category's tool list, a row per tool.
     Dropdown(Category, Rows),
@@ -643,7 +639,7 @@ pub enum PopupLayout {
     Stamps(LoadLayout),
     /// The Save prompt's panel.
     Save(Rectangle),
-    Settings(SettingsLayout),
+    Settings(MapPanel),
     Lint(LintLayout),
 }
 
@@ -655,7 +651,7 @@ impl PopupLayout {
             PopupLayout::Palette(palette) => palette.panel,
             PopupLayout::Load(list) | PopupLayout::Stamps(list) => list.rows.panel,
             PopupLayout::Save(panel) => *panel,
-            PopupLayout::Settings(settings) => settings.rows.panel,
+            PopupLayout::Settings(panel) => panel.panel,
             PopupLayout::Lint(lint) => lint.panel,
         }
     }
@@ -781,41 +777,221 @@ impl Palette {
     }
 }
 
-/// The MAP settings panel: `EDITOR_SETTINGS_W` rows in up to two columns,
-/// on one page where the room under the bar holds them all, else paged with
-/// a pager row along its bottom.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SettingsLayout {
-    pub rows: Rows,
-    /// Rows a page shows.
-    pub per_page: usize,
-    pub pages: usize,
-    pub pager: Option<Pager>,
+/// The MAP panel's one geometry table (docs/game-editor-fusion.md section
+/// 9): the map file's keys in four groups (`MapTab`) and RESET MAP. Where
+/// the room under the bar holds them all - a desktop, a tablet - every group
+/// stands at once as a section with its heading, ROUND and TANKS in the
+/// left column, FIELD, SKY and RESET MAP in the right (`MapShape::Sections`);
+/// where it does not - a phone, a small window - a rail of tabs down the
+/// left shows one group at a time, RESET MAP its last tab
+/// (`MapShape::Tabs`). A row is one control with its label beside it, or
+/// several side by side with their labels over them; every button is a
+/// finger's size. The groups below a row never move when the spawn plan
+/// changes what that row holds: ROUND keeps the room its wave rows take.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapPanel {
+    pub panel: Rectangle,
+    pub shape: MapShape,
+    /// The group the rail shows (`MapShape::Tabs`); every group is shown
+    /// as sections.
+    pub tab: MapTab,
+    /// The rail's tabs, `MapTab::ALL` top to bottom (none as sections).
+    pub tabs: Vec<(MapTab, Rectangle)>,
+    /// Each group's heading line (none behind tabs).
+    pub headings: Vec<(MapTab, Rectangle)>,
+    pub reset: Rectangle,
+    /// Every control shown.
+    pub fields: Vec<PlacedField>,
 }
 
-impl SettingsLayout {
-    /// The panel of `n` rows hanging from `anchor` in `room`.
-    pub fn of(anchor: Rectangle, room: Rectangle, n: usize) -> SettingsLayout {
-        let (w, h) = (EDITOR_SETTINGS_W, EDITOR_DROPDOWN_ROW_H);
-        let n = n.max(1);
-        let columns = ((room.width / w).floor() as usize).clamp(1, SETTINGS_COLUMNS);
-        let max = rows_in(room, h);
-        let whole = n.div_ceil(columns);
-        let (per_column, pager) = if whole <= max { (whole, false) } else { ((max.max(2) - 1).max(1), true) };
-        let per_page = per_column * columns;
-        let pages = n.div_ceil(per_page);
-        let width = columns as f32 * w;
-        let height = (per_column + pager as usize) as f32 * h;
-        let panel = Rectangle::new(slide(anchor.x, width, room), room.y, width, height);
-        let pager = pager.then(|| Pager { row: Rectangle::new(panel.x, panel.y + per_column as f32 * h, width, h) });
-        SettingsLayout { rows: Rows { panel, per_column, row_w: w, row_h: h }, per_page, pages, pager }
+/// How the MAP panel is laid out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapShape {
+    Sections,
+    Tabs,
+}
+
+/// One control of the MAP panel: its box and, where its row has one, its
+/// label's - beside it for a control alone in its row, over it for one of
+/// several.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlacedField {
+    pub field: MapField,
+    pub rect: Rectangle,
+    pub label: Option<Rectangle>,
+}
+
+/// A group's column, and the room the rail leaves for the group it shows.
+pub const MAP_COLUMN_W: f32 = 420.0;
+
+/// A label beside its control.
+pub const MAP_LABEL_W: f32 = 104.0;
+
+/// A label over its control, in a row of several.
+pub const MAP_ABOVE_H: f32 = 16.0;
+
+/// The rail of tabs down a short panel's left.
+pub const MAP_RAIL_W: f32 = 120.0;
+
+/// A group's heading line, as sections.
+pub const MAP_HEADING_H: f32 = 24.0;
+
+/// A stepper's `-` or `+`, at either end of its box.
+pub const MAP_STEP_W: f32 = crate::hud::UI_TOUCH_PT;
+
+/// Between a choice's options.
+pub const MAP_SEGMENT_GAP: f32 = 4.0;
+
+/// Between the controls of a row and between rows.
+pub const MAP_ROW_GAP: f32 = 6.0;
+
+/// The panel's text: a label beside its control, an option's or a
+/// stepper's value, a group's heading; a label over its control is the
+/// chrome's small text (`hud::UI_SMALL_TEXT`).
+pub const MAP_LABEL_SIZE: i32 = 16;
+pub const MAP_VALUE_SIZE: i32 = 16;
+pub const MAP_HEADING_SIZE: i32 = 16;
+
+/// A sky tile's name, and the swatch before it and the check box after,
+/// each 8 pt in from the next.
+pub const MAP_SKY_SIZE: i32 = 14;
+pub const MAP_SWATCH: f32 = 24.0;
+pub const MAP_CHECK: f32 = 16.0;
+
+const MAP_PAD: f32 = 12.0;
+const MAP_GUTTER: f32 = 20.0;
+const MAP_GROUP_GAP: f32 = 14.0;
+
+impl MapPanel {
+    /// The panel hanging from `anchor` in `room`, showing `tab` where it is
+    /// a rail's, with the wave rows where the spawn plan is `waves`.
+    pub fn of(anchor: Rectangle, room: Rectangle, tab: MapTab, waves: bool) -> MapPanel {
+        let (sections_w, sections_h) = Self::sections_size();
+        if room.width >= sections_w && room.height >= sections_h {
+            let panel = Rectangle::new(slide(anchor.x, sections_w, room), room.y, sections_w, sections_h);
+            let left = panel.x + MAP_PAD;
+            let right = left + MAP_COLUMN_W + MAP_GUTTER;
+            let mut headings = Vec::new();
+            let mut fields = Vec::new();
+            let mut y = panel.y + MAP_PAD;
+            for group in [MapTab::Round, MapTab::Tanks] {
+                headings.push((group, Rectangle::new(left, y, MAP_COLUMN_W, MAP_HEADING_H)));
+                place_group(group, waves, left, y + MAP_HEADING_H, &mut fields);
+                y += MAP_HEADING_H + group_height(group, true) + MAP_GROUP_GAP;
+            }
+            let mut y = panel.y + MAP_PAD;
+            for group in [MapTab::Field, MapTab::Sky] {
+                headings.push((group, Rectangle::new(right, y, MAP_COLUMN_W, MAP_HEADING_H)));
+                place_group(group, waves, right, y + MAP_HEADING_H, &mut fields);
+                y += MAP_HEADING_H + group_height(group, true) + MAP_GROUP_GAP;
+            }
+            let h = EDITOR_DROPDOWN_ROW_H;
+            let reset = Rectangle::new(right, panel.y + panel.height - MAP_PAD - h, MAP_COLUMN_W, h);
+            return MapPanel { panel, shape: MapShape::Sections, tab, tabs: Vec::new(), headings, reset, fields };
+        }
+        let (w, h) = Self::tabs_size();
+        let panel = Rectangle::new(slide(anchor.x, w, room), room.y, w, h);
+        let slots = MapTab::ALL.len() + 1;
+        let slot_h = h / slots as f32;
+        let slot = |i: usize| Rectangle::new(panel.x, panel.y + i as f32 * slot_h, MAP_RAIL_W, slot_h);
+        let tabs = MapTab::ALL.iter().enumerate().map(|(i, t)| (*t, slot(i))).collect();
+        let mut fields = Vec::new();
+        place_group(tab, waves, panel.x + MAP_RAIL_W + MAP_PAD, panel.y + MAP_PAD, &mut fields);
+        MapPanel { panel, shape: MapShape::Tabs, tab, tabs, headings: Vec::new(), reset: slot(slots - 1), fields }
     }
 
-    /// Row `index` of the panel, on `page`: `None` where it is on another
-    /// page.
-    pub fn row(&self, index: usize, page: usize) -> Option<Rectangle> {
-        (index / self.per_page == page).then(|| self.rows.row(index % self.per_page))
+    /// Every group at once: two columns, ROUND and TANKS beside FIELD, SKY
+    /// and RESET MAP.
+    pub fn sections_size() -> (f32, f32) {
+        let column = |groups: &[MapTab]| groups.iter().map(|g| MAP_HEADING_H + group_height(*g, true)).sum::<f32>() + (groups.len() - 1) as f32 * MAP_GROUP_GAP;
+        let left = column(&[MapTab::Round, MapTab::Tanks]);
+        let right = column(&[MapTab::Field, MapTab::Sky]) + MAP_GROUP_GAP + EDITOR_DROPDOWN_ROW_H;
+        (2.0 * MAP_PAD + 2.0 * MAP_COLUMN_W + MAP_GUTTER, 2.0 * MAP_PAD + left.max(right))
     }
+
+    /// One group at a time beside the rail: as tall as the tallest group,
+    /// and never so short a tab is under a finger's size.
+    pub fn tabs_size() -> (f32, f32) {
+        let group = MapTab::ALL.iter().map(|g| group_height(*g, true)).fold(0.0, f32::max) + 2.0 * MAP_PAD;
+        let rail = (MapTab::ALL.len() + 1) as f32 * EDITOR_DROPDOWN_ROW_H;
+        (MAP_RAIL_W + 2.0 * MAP_PAD + MAP_COLUMN_W, group.max(rail))
+    }
+
+    /// Every button the panel holds, as the painter draws it and every hit
+    /// test reads it: the rail's tabs, RESET MAP, then each control's -
+    /// a choice's options, a stepper's `-` and `+`, a sky's tile.
+    pub fn buttons(&self) -> Vec<(PanelButton, Rectangle)> {
+        let mut out: Vec<(PanelButton, Rectangle)> = self.tabs.iter().map(|(t, r)| (PanelButton::Tab(*t), *r)).collect();
+        out.push((PanelButton::Reset, self.reset));
+        for placed in &self.fields {
+            match placed.field.kind() {
+                FieldKind::Choice(n) => {
+                    for (i, r) in segments(placed.rect, n).into_iter().enumerate() {
+                        out.push((PanelButton::Option(placed.field, i), r));
+                    }
+                }
+                FieldKind::Stepper | FieldKind::Chassis(_) => {
+                    out.push((PanelButton::Dec(placed.field), stepper_dec(placed.rect)));
+                    out.push((PanelButton::Inc(placed.field), stepper_inc(placed.rect)));
+                }
+                FieldKind::Sky(sky) => out.push((PanelButton::Toggle(sky), placed.rect)),
+            }
+        }
+        out
+    }
+}
+
+/// The height a group's rows take, its wave rows in or not.
+fn group_height(group: MapTab, waves: bool) -> f32 {
+    let rows = group.rows(waves);
+    rows.iter().map(|r| row_height(r)).sum::<f32>() + rows.len().saturating_sub(1) as f32 * MAP_ROW_GAP
+}
+
+/// A row: a control alone with its label beside it, or several with
+/// their labels over them (a sky's tile carries its own name).
+fn row_height(row: &[MapField]) -> f32 {
+    if labels_above(row) { MAP_ABOVE_H + EDITOR_DROPDOWN_ROW_H } else { EDITOR_DROPDOWN_ROW_H }
+}
+
+fn labels_above(row: &[MapField]) -> bool {
+    row.len() > 1 && !matches!(row[0], MapField::Sky(_))
+}
+
+/// Lay `group`'s rows down from `(x, y)` in a column `MAP_COLUMN_W` wide.
+fn place_group(group: MapTab, waves: bool, x: f32, mut y: f32, out: &mut Vec<PlacedField>) {
+    let h = EDITOR_DROPDOWN_ROW_H;
+    for row in group.rows(waves) {
+        if row.len() == 1 && !matches!(row[0], MapField::Sky(_)) {
+            let label = Rectangle::new(x, y, MAP_LABEL_W, h);
+            out.push(PlacedField { field: row[0], rect: Rectangle::new(x + MAP_LABEL_W, y, MAP_COLUMN_W - MAP_LABEL_W, h), label: Some(label) });
+        } else {
+            let above = if labels_above(&row) { MAP_ABOVE_H } else { 0.0 };
+            let n = row.len() as f32;
+            let w = (MAP_COLUMN_W - (n - 1.0) * MAP_ROW_GAP) / n;
+            for (i, field) in row.iter().enumerate() {
+                let fx = x + i as f32 * (w + MAP_ROW_GAP);
+                let label = (above > 0.0).then(|| Rectangle::new(fx, y, w, above));
+                out.push(PlacedField { field: *field, rect: Rectangle::new(fx, y + above, w, h), label });
+            }
+        }
+        y += row_height(&row) + MAP_ROW_GAP;
+    }
+}
+
+/// A choice's `n` options side by side across `rect`.
+pub fn segments(rect: Rectangle, n: usize) -> Vec<Rectangle> {
+    let w = (rect.width - (n - 1) as f32 * MAP_SEGMENT_GAP) / n as f32;
+    (0..n).map(|i| Rectangle::new(rect.x + i as f32 * (w + MAP_SEGMENT_GAP), rect.y, w, rect.height)).collect()
+}
+
+/// A stepper's `-` (or `<`), at its box's left end.
+pub fn stepper_dec(rect: Rectangle) -> Rectangle {
+    Rectangle::new(rect.x, rect.y, MAP_STEP_W, rect.height)
+}
+
+/// A stepper's `+` (or `>`), at its box's right end.
+pub fn stepper_inc(rect: Rectangle) -> Rectangle {
+    Rectangle::new(rect.x + rect.width - MAP_STEP_W, rect.y, MAP_STEP_W, rect.height)
 }
 
 /// The CHECK panel: its header and the clear check's row, a page of
@@ -1364,18 +1540,23 @@ mod chrome_tests {
             }
             let file = menu_list(bar.file, room, 4);
             check("the FILE menu", file.panel);
-            let settings = SettingsLayout::of(bar.map, room, 16);
-            check("the MAP panel", settings.rows.panel);
-            for page in 0..settings.pages {
-                for i in 0..16 {
-                    if let Some(row) = settings.row(i, page) {
-                        check("a settings row", row);
+            // The MAP panel, each group shown and the spawn plan either
+            // way: inside the room, every button inside its panel and a
+            // finger's size, no two overlapping.
+            for tab in MapTab::ALL {
+                for waves in [false, true] {
+                    let map = MapPanel::of(bar.map, room, tab, waves);
+                    check("the MAP panel", map.panel);
+                    let buttons = map.buttons();
+                    for (i, (button, rect)) in buttons.iter().enumerate() {
+                        assert!(inside(*rect, map.panel), "{ui:?}: {} {rect:?} leaves the MAP panel", button.name());
+                        assert!(rect.width >= UI_TOUCH_PT && rect.height >= UI_TOUCH_PT, "{ui:?}: {} is {rect:?}", button.name());
+                        for (other, r) in &buttons[i + 1..] {
+                            let apart = rect.x + rect.width <= r.x + 1e-3 || r.x + r.width <= rect.x + 1e-3 || rect.y + rect.height <= r.y + 1e-3 || r.y + r.height <= rect.y + 1e-3;
+                            assert!(apart, "{ui:?}: {} overlaps {}", button.name(), other.name());
+                        }
                     }
                 }
-            }
-            assert_eq!((0..16).filter(|&i| (0..settings.pages).any(|p| settings.row(i, p).is_some())).count(), 16, "every row on a page");
-            if let Some(pager) = settings.pager {
-                check("the MAP pager", pager.row);
             }
             for findings in [0, 1, 5, 7, 8, 30] {
                 let lint = LintLayout::of(bar.check, room, findings);
@@ -1480,16 +1661,17 @@ mod chrome_tests {
         }
     }
 
-    /// A desktop's popups keep their size: the MAP panel two columns of
-    /// eight, the CHECK panel seven findings a page, the Load list eight
-    /// rows, the longest category list one column.
+    /// A desktop's popups keep their size: the MAP panel every group at
+    /// once in two columns, the CHECK panel seven findings a page, the Load
+    /// list eight rows, the longest category list one column.
     #[test]
     fn a_desktops_popups_keep_their_shape() {
         let frame = BuilderFrame::headless((1088.0, 544.0), MapClass::Arena);
         let (bar, room) = (frame.bar(), frame.under_bar());
-        let settings = SettingsLayout::of(bar.map, room, 16);
-        assert_eq!((settings.rows.per_column, settings.pages, settings.pager), (8, 1, None));
-        assert_eq!(settings.rows.panel.width, 2.0 * EDITOR_SETTINGS_W);
+        let map = MapPanel::of(bar.map, room, MapTab::Sky, true);
+        assert_eq!(map.shape, MapShape::Sections);
+        assert_eq!((map.panel.width, map.panel.height), MapPanel::sections_size());
+        assert!(map.tabs.is_empty() && map.headings.len() == MapTab::ALL.len());
         let lint = LintLayout::of(bar.check, room, 30);
         assert_eq!(lint.per_page, LINT_PAGE_ROWS);
         assert_eq!(LoadLayout::of(room, 40).per_page, LOAD_VISIBLE_ROWS - 1);
