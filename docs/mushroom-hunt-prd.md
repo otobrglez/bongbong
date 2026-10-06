@@ -63,7 +63,7 @@ arrows and the minimap were built for exactly that.
 |---|---|---|---|
 | 1 | What is the mission called? | `Mission::Forage`, spelt `forage` in data (`mission.kind = "forage"`, `--mission forage`). Players read **MUSHROOM HUNT** (`mission-forage`). | 4 |
 | 2 | Is there combat? | Yes. Enemies spawn by the map's band or waves as in every mission. The mushrooms are the objective and the enemies are the obstacle. | 4 |
-| 3 | How is the round lost? | When every seat is a wreck at once, the same rule as every mission. A map that places a frog also loses on the frog's death, as in Protect, so a level can ask for both. | 4 |
+| 3 | How is the round lost? | When every seat is a wreck at once. **There is no frog in this mission**, so that is the only way to lose. A map's frog and enemy frog cells are ignored, as Destroy ignores them. | 4 |
 | 4 | Must the enemies all be wrecked to win? | No. The last mushroom wins the round on the frame it is picked up. Enemies still alive are left standing. | 4 |
 | 5 | Who can pick one up? | Any seat. Enemies drive over mushrooms and leave them. | 3 |
 | 6 | Does a mushroom do anything else? | No heal, ammo or buff in the first version. It only counts. A small heal is a candidate knob (`mushroom_heal`, default 0). | 3, 10 |
@@ -104,8 +104,10 @@ MUSHROOM!") and the end screen's words.
 
 - **Win**: `check_round_end` sees the last mushroom taken. The outcome is a
   win on that frame, and the enemies are frozen as on any win.
-- **Lose**: every seat wrecked at once, or the players' frog dead on a map
-  that has one (decision 3).
+- **Lose**: every seat wrecked at once, the only way to lose (decision 3).
+- **No frog.** The mushrooms are the whole objective. `init` spawns no frog
+  and no enemy frog on a Forage round, as on Destroy, so nothing guards,
+  heals or hunts a frog, and the right cluster has no frog gauge.
 - **Waves** run as the map says. A wave round does not end when the waves do,
   only when the mushrooms run out. Once the last wave is called the field
   stays as it is, so the lone straggler behind a far mushroom is the finale
@@ -130,7 +132,6 @@ MUSHROOM!") and the end screen's words.
 - **Minimap** (`minimap.rs`): a 2x2-texel mark per mushroom still out,
   blinking in its cap colour, so the map at a glance shows what is left. A
   taken mushroom's mark is gone.
-- **The frog's voice**: no change. The frog only speaks in training.
 
 ## 6. Presentation
 
@@ -199,7 +200,9 @@ count, the arrows and the minimap draw the same mushroom.
   checked with portals as the planner walks them, and the fix is
   `LintFix::Remove`), `mushroom-gated` (warning: reachable only through
   destructible walls, the `gated-pickup` rule) and `mushroom-on-start`
-  (warning: within the collect box of a start).
+  (warning: within the collect box of a start), and `forage-frog-ignored`
+  (warning: a frog or enemy frog cell on a Forage map, with the fix
+  `LintFix::Remove`).
 - **Levels**: one new level in `levels.toml` once the art lands, on a field
   map, so the arrows and the minimap have something to do.
 
@@ -245,8 +248,8 @@ A `mushrooms` tuning group:
 - `mechanics_tests`: a seat touching the collect box takes the mushroom and
   one a cell away does not; two seats on the same frame give it to the lower
   seat; an enemy never takes one; a blast leaves it; the last one wins the
-  round; every seat wrecked loses it; a frog's death loses a Forage map with
-  a frog.
+  round; every seat wrecked loses it; a Forage round on a map with frog
+  cells spawns no frog.
 - `maplint`: each new kind, with a fixture in `maps/test/forage.toml`.
 - `hud_tests`/`corner_tests`: the count slot at every window size, and the
   R3 toast centred.
