@@ -847,7 +847,7 @@ impl<T: Transport> OnlineRound<T> {
     ///
     /// In order (docs/online-coop-prd.md §4.16): this seat's laser `Fired`
     /// in the frame's snapshot claim the beams this client drew
-    /// (`confirm_beams`); the interpolated room is written into the
+    /// (`confirm_presses`); the interpolated room is written into the
     /// replica, less what this client drew itself - its shots' muzzle
     /// ripples and the room's copies of the beams just claimed; this
     /// seat's other `Fired` confirm their presses; the room's copies of
@@ -865,11 +865,11 @@ impl<T: Transport> OnlineRound<T> {
         let sampled = self.interp.sample(now);
         let predicting_shots = self.predict_shots() && self.predictor.is_some();
         if let Some(frame) = &sampled {
-            let beams = self.confirm_beams(&frame.snapshot);
+            let presses = self.confirm_presses(&frame.snapshot);
             // What this seat drew on its own press - its shots' muzzle
-            // ripples, the beams it claimed - is not drawn twice.
+            // ripples, the beams and waves it claimed - is not drawn twice.
             let show = match self.client.seat() {
-                Some(seat) if predicting_shots => apply::Show::OwnShotsDrawn { seat, beams },
+                Some(seat) if predicting_shots => apply::Show::OwnShotsDrawn { seat, presses },
                 _ => apply::Show::All,
             };
             if let Some(game) = self.replica.as_mut() {
@@ -1037,14 +1037,21 @@ impl<T: Transport> OnlineRound<T> {
         // portal on its way: the room draws which one it comes out of, and
         // the legs past it arrive as the room's own `LaserBeam`s.
         let beam_reach = crate::simulation::laser_reach(game.map.field_size());
-        for beam in predictor.take_beams() {
-            let far = crate::math::Vec2::new(beam.start.x + beam.dir.x * beam_reach, beam.start.y + beam.dir.y * beam_reach);
-            let far = world.portal_entry(beam.start, far, world.portal_inside(beam.start)).unwrap_or(far);
-            let end = world
-                .shot_contact(Some(seat), beam.start, far, tuning().shell_hit_half_extent)
-                .map_or(far, |(at, _)| at);
-            game.draw_beam(beam.lens, end, beam.variant);
-            game.flash_seat_laser(seat);
+        for show in predictor.take_press_shows() {
+            match show {
+                crate::net::predict::PressShow::Beam(beam) => {
+                    let far = crate::math::Vec2::new(beam.start.x + beam.dir.x * beam_reach, beam.start.y + beam.dir.y * beam_reach);
+                    let far = world.portal_entry(beam.start, far, world.portal_inside(beam.start)).unwrap_or(far);
+                    let end = world
+                        .shot_contact(Some(seat), beam.start, far, tuning().shell_hit_half_extent)
+                        .map_or(far, |(at, _)| at);
+                    game.draw_beam(beam.lens, end, beam.variant);
+                    game.flash_seat_laser(seat);
+                }
+                // The wave, cast against the replica's own tiles from the
+                // predicted pose; the dish fires with it.
+                crate::net::predict::PressShow::Sonic(press) => game.draw_press_show(seat, press.origin, press.facing),
+            }
         }
         for at in predictor.take_impacts() {
             game.draw_impact(at);
@@ -1198,11 +1205,11 @@ impl<T: Transport> OnlineRound<T> {
         for event in &snapshot.events {
             match *event {
                 WireEvent::Fired { slot, weapon, input_tick } if slot as u8 == seat => predictor.note_fired(weapon, input_tick),
-                WireEvent::Shoved { seat: s, vx, vy } if s == seat && self.client_hull => {
-                    predictor.shove(crate::math::Vec2::new(
-                        crate::net::wire::dequantise_velocity(vx),
-                        crate::net::wire::dequantise_velocity(vy),
-                    ));
+                WireEvent::Shoved { seat: s, vx, vy, skid } if s == seat && self.client_hull => {
+                    predictor.shove(
+                        crate::math::Vec2::new(crate::net::wire::dequantise_velocity(vx), crate::net::wire::dequantise_velocity(vy)),
+                        crate::net::wire::dequantise_seconds(skid),
+                    );
                 }
                 _ => {}
             }
@@ -1212,7 +1219,8 @@ impl<T: Transport> OnlineRound<T> {
     /// The interpolator handed a snapshot's events over: each `Fired` of
     /// this seat's confirms the press that travelled on its input tick
     /// (`Predictor::confirm_fired`), and one with no press waiting seeds
-    /// the local gate from the room's. A laser's is `confirm_beams`'. Each
+    /// the local gate from the room's. A drawn-on-press weapon's is
+    /// `confirm_presses`'. Each
     /// `ShotTeleported` tells the predictor a room shot came through a
     /// portal, for a provisional that went into one to hand over to it
     /// (`Predictor::shot_teleported`).
@@ -1233,14 +1241,16 @@ impl<T: Transport> OnlineRound<T> {
     }
 
     /// The interpolator is handing a snapshot's events over, before they
-    /// are applied: each laser `Fired` of this seat's claims the last beam
-    /// this client drew at or before its input tick, earlier ones still
-    /// waiting having been refused (`Predictor::confirm_beam`), and the ones that did are the room's
-    /// beams for this seat the replica leaves out - bit `k` for the `k`th
-    /// (`apply::Show::OwnShotsDrawn`). A beam the client never drew - the
-    /// local gate refused a press the room fired - is not claimed, so the
-    /// room's is drawn, and it seeds the local gate instead.
-    fn confirm_beams(&mut self, frame: &Snapshot) -> u8 {
+    /// are applied: each `Fired` of this seat's of a weapon drawn on the
+    /// press (`WeaponKind::drawn_on_press`) claims the last press of that
+    /// kind this client drew at or before its input tick, earlier ones still
+    /// waiting having been refused (`Predictor::confirm_press`), and the
+    /// ones that did are the room's shows for this seat - beams, waves - the
+    /// replica leaves out: bit `k` for the `k`th such `Fired`
+    /// (`apply::Show::OwnShotsDrawn`). A press the client never drew - the
+    /// local gate refused one the room fired - is not claimed, so the room's
+    /// show is drawn, and it seeds the local gate instead.
+    fn confirm_presses(&mut self, frame: &Snapshot) -> u8 {
         if !self.sandbox_follows_room() {
             return 0;
         }
@@ -1248,10 +1258,11 @@ impl<T: Transport> OnlineRound<T> {
         let mut claimed = 0u8;
         let mut k = 0u32;
         for event in &frame.events {
-            if let WireEvent::Fired { slot, weapon: crate::net::wire::WeaponKind::Laser, input_tick } = *event
+            if let WireEvent::Fired { slot, weapon, input_tick } = *event
                 && slot == seat as u16
+                && weapon.drawn_on_press()
             {
-                if predictor.confirm_beam(input_tick) && k < u8::BITS {
+                if predictor.confirm_press(weapon, input_tick) && k < u8::BITS {
                     claimed |= 1 << k;
                 }
                 k += 1;
@@ -1944,7 +1955,7 @@ mod tests {
 
         // The room shoved the hull: the poses carry it on.
         let mut shoved = on_schedule(&room, 21);
-        shoved.events = vec![WireEvent::Shoved { seat: 0, vx: quantise_velocity(240.0), vy: 0 }];
+        shoved.events = vec![WireEvent::Shoved { seat: 0, vx: quantise_velocity(240.0), vy: 0, skid: 0 }];
         room.say(Msg::Snapshot(shoved));
         for _ in 0..6 {
             round.frame(&Intent::default(), 1.0 / 60.0);

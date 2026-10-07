@@ -956,7 +956,7 @@ mod minimap_tests {
         let world = Rectangle::new(0.0, 0.0, 400.0, 300.0);
         let view = ViewFrame::new(world, 1.0, Vec2::zero(), world, &t);
         let seat = SeatView { slot: 0, pos: Position::new(200.0, 150.0), wreck: false, gate: None };
-        let hidden = TankView { slot: 5, seat: None, pos: Position::new(900.0, 150.0), wreck: false, gate: None, in_grass: true, lane: false };
+        let hidden = TankView { slot: 5, seat: None, pos: Position::new(900.0, 150.0), wreck: false, gate: None, in_grass: true, windup: None, lane: false };
         let open = TankView { slot: 6, pos: Position::new(-500.0, 150.0), in_grass: false, ..hidden };
         let scene = |time: f32| Scene { time, seat: Some(seat), tanks: vec![hidden, open], ..Scene::default() };
         let mut aw = Awareness::new();

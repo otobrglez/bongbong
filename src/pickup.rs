@@ -123,12 +123,20 @@ pub enum PickupKind {
     /// `grenade_fuse_seconds` (`grenade.rs`). Player-only: an enemy
     /// driving over one leaves it where it is.
     Grenades,
+    /// The sonic hammer (docs/sonic-hammer.md): loads
+    /// `sonic_ammo_per_pickup` blasts (one weapon at a time, as above).
+    /// While stocked, each press sends a cone of sound off the turret that
+    /// shoves and skids every hull it reaches, shatters glass, flattens
+    /// tall grass, throws drums, scares the fish and stuns frogs
+    /// (`sonic.rs`). Players and enemies both use it.
+    #[serde(rename = "sonic_hammer")]
+    SonicHammer,
 }
 
 impl PickupKind {
     /// Every kind in declaration order: the crate and symbol sheets' row
     /// order (`row`).
-    pub const ALL: [PickupKind; 13] = [
+    pub const ALL: [PickupKind; 14] = [
         PickupKind::Health,
         PickupKind::Ammo,
         PickupKind::Laser,
@@ -142,6 +150,7 @@ impl PickupKind {
         PickupKind::TowerPack,
         PickupKind::HeatShield,
         PickupKind::Grenades,
+        PickupKind::SonicHammer,
     ];
 
     /// This kind's row on static/crates_sheet.png and
@@ -161,6 +170,55 @@ impl PickupKind {
             PickupKind::TowerPack => 10,
             PickupKind::HeatShield => 11,
             PickupKind::Grenades => 12,
+            PickupKind::SonicHammer => 13,
+        }
+    }
+
+    /// The serde spelling - a map's `pickup = "..."`, a training script's
+    /// `drop`, the dev server's and the probe's names.
+    pub fn name(self) -> &'static str {
+        match self {
+            PickupKind::Health => "health",
+            PickupKind::Ammo => "ammo",
+            PickupKind::Laser => "laser",
+            PickupKind::Minigun => "minigun",
+            PickupKind::Plasma => "plasma",
+            PickupKind::Missiles => "missiles",
+            PickupKind::SpeedUp => "speedup",
+            PickupKind::Shield => "shield",
+            PickupKind::Flamethrower => "flamethrower",
+            PickupKind::FrogHealth => "frog_health",
+            PickupKind::TowerPack => "tower_pack",
+            PickupKind::HeatShield => "heat_shield",
+            PickupKind::Grenades => "grenades",
+            PickupKind::SonicHammer => "sonic_hammer",
+        }
+    }
+
+    /// The kind `name` spells, if any.
+    pub fn parse(name: &str) -> Option<PickupKind> {
+        PickupKind::ALL.into_iter().find(|k| k.name() == name)
+    }
+
+    /// The special weapon this crate arms (`Tank::take_weapon`), `None` for
+    /// everything that is not a weapon.
+    pub fn weapon(self) -> Option<crate::tank::ActiveWeapon> {
+        use crate::tank::ActiveWeapon;
+        match self {
+            PickupKind::Laser => Some(ActiveWeapon::Laser),
+            PickupKind::Minigun => Some(ActiveWeapon::Minigun),
+            PickupKind::Plasma => Some(ActiveWeapon::Plasma),
+            PickupKind::Missiles => Some(ActiveWeapon::Missiles),
+            PickupKind::Flamethrower => Some(ActiveWeapon::Flamethrower),
+            PickupKind::Grenades => Some(ActiveWeapon::Grenades),
+            PickupKind::SonicHammer => Some(ActiveWeapon::SonicHammer),
+            PickupKind::Health
+            | PickupKind::Ammo
+            | PickupKind::SpeedUp
+            | PickupKind::Shield
+            | PickupKind::FrogHealth
+            | PickupKind::TowerPack
+            | PickupKind::HeatShield => None,
         }
     }
 
@@ -185,6 +243,7 @@ impl PickupKind {
             // Two-tone: the shade is the basalt its lower half is painted in.
             PickupKind::HeatShield => [0x3A3030, 0xF0461E, 0xFFA84A],
             PickupKind::Grenades => [0x8C2CB0, 0xD656F5, 0xF4B6FF],
+            PickupKind::SonicHammer => [0x1E7FB8, 0x46C3F2, 0xA8E6FF],
         };
         [rgb(shade), rgb(base), rgb(light)]
     }
@@ -201,7 +260,9 @@ impl PickupKind {
             | PickupKind::Shield
             | PickupKind::FrogHealth
             | PickupKind::TowerPack
-            | PickupKind::HeatShield => false,
+            | PickupKind::HeatShield
+            // A speaker, not ordnance: it spills.
+            | PickupKind::SonicHammer => false,
         }
     }
 }
@@ -362,6 +423,24 @@ pub fn draw_glyph(c: &mut impl Canvas, kind: PickupKind, at: Position, size: f32
     c.blit(Sheet::PickupGlyphs, glyph_src(kind), dest, Vec2::new(0.0, 0.0), 0.0, tint);
 }
 
+
+#[cfg(test)]
+mod kind_tests {
+    use super::*;
+
+    /// `name` is the serde spelling, `parse` reads it back, for every kind.
+    #[test]
+    fn every_kind_is_named_as_serde_spells_it() {
+        for kind in PickupKind::ALL {
+            let toml = toml::Value::try_from(kind).expect("a kind serialises");
+            assert_eq!(toml.as_str(), Some(kind.name()), "{kind:?}");
+            assert_eq!(PickupKind::parse(kind.name()), Some(kind));
+        }
+        assert_eq!(PickupKind::parse("granite"), None);
+        assert_eq!(PickupKind::SonicHammer.weapon(), Some(crate::tank::ActiveWeapon::SonicHammer));
+        assert_eq!(PickupKind::Health.weapon(), None);
+    }
+}
 
 #[cfg(test)]
 mod reach_tests {

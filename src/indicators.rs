@@ -103,7 +103,7 @@ use crate::math::{Color, Rectangle, Vec2};
 use crate::plasma::Plasma;
 use crate::shell::{Owner, Shell};
 use crate::simulation::{Event, Game, HitTarget, RollIn, with_tank};
-use crate::tank::{Dir, Tank};
+use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::tuning::{Tuning, tuning};
 use crate::view::Camera;
 use crate::{OBSTACLE_GRID_SIZE, Position};
@@ -357,6 +357,9 @@ pub struct TankView {
     /// (`lined_up` and `PresentWorld::line_of_sight`): its aim is settling.
     /// Only ever set on an enemy.
     pub lane: bool,
+    /// An enemy winding up a special (`Tank::windup`, docs/sonic-hammer.md
+    /// "The enemy tell"): the weapon and how far through, 0..1.
+    pub windup: Option<(ActiveWeapon, f32)>,
 }
 
 impl TankView {
@@ -436,6 +439,10 @@ pub enum ArrowKind {
     /// A volcano that is rumbling or erupting (docs/volcano.md): the
     /// warning that bombs are coming, `erupting` once they are.
     Volcano { erupting: bool },
+    /// An enemy winding up a special (`TankView::windup`): never merged,
+    /// never left out, drawn in the weapon's accent rimmed hostile red and
+    /// blinking quicker as it nears going off.
+    Windup { weapon: ActiveWeapon, progress: f32 },
 }
 
 /// One arrow at the edge of the screen.
@@ -895,6 +902,17 @@ impl Awareness {
                         });
                     Some(Note::Fired { slot, at_seat })
                 }
+                // A sonic wave has no shot to read back: the arc points at
+                // the pivot of the newest wave that could have reached the
+                // hull (its reach and a hull's half more).
+                Event::Hit { target: HitTarget::Player { player }, x, y, cause: crate::simulation::HitCause::Sonic, .. } if player == seat => me
+                    .and_then(|(_, pos, hull, _)| {
+                        let at = Position::new(x, y);
+                        let reach = t.sonic_reach_px + hull.1.x.max(hull.1.y);
+                        let wave = game.sonic_waves.iter().rev().find(|w| w.cone.origin.distance_to(at) <= reach)?;
+                        unit(wave.cone.origin - pos)
+                    })
+                    .map(|from| Note::Hit { from }),
                 Event::Hit { target: HitTarget::Player { player }, x, y, .. } if player == seat => me
                     .and_then(|(entity, pos, hull, _)| hit_from(game, entity, pos, hull, Position::new(x, y)))
                     .map(|from| Note::Hit { from }),
@@ -985,7 +1003,8 @@ impl Awareness {
                 self.lined.remove(&tv.slot);
             }
             let distance = anchor.distance_to(tv.pos);
-            let since_fired = self.fired.get(&tv.slot).map(|&at| now - at);
+            // A wind-up gives a tank away as firing does.
+            let since_fired = if tv.windup.is_some() { Some(0.0) } else { self.fired.get(&tv.slot).map(|&at| now - at) };
             let hidden = concealed(tv.in_grass, since_fired, distance, t) || scene.sight.is_some_and(|s| distance > s);
             if hidden {
                 if let Some(at) = self.seen.remove(&tv.slot) {
@@ -1022,7 +1041,12 @@ impl Awareness {
         let in_sight = visible.iter().map(|tv| tv.pos).collect();
         let mut threats: Vec<(LaneWarning, f32, &TankView)> = Vec::new();
         let mut plain: Vec<(f32, &TankView)> = Vec::new();
+        let mut windups: Vec<&TankView> = Vec::new();
         for tv in visible.into_iter().filter(|tv| !view.shows(tv.pos)) {
+            if tv.windup.is_some() {
+                windups.push(tv);
+                continue;
+            }
             let distance = anchor.distance_to(tv.pos);
             match self.warning(tv.slot, now, t) {
                 Some(w) => threats.push((w, distance, tv)),
@@ -1058,6 +1082,13 @@ impl Awareness {
         // its bombs are on their way.
         for &(at, erupting) in scene.volcanoes.iter().filter(|(at, _)| !view.shows(*at)) {
             kept.extend(arrow(ArrowKind::Volcano { erupting }, at));
+        }
+        // An enemy winding up a special off the screen: never merged,
+        // never left out - it is about to go off.
+        for tv in windups {
+            if let Some((weapon, progress)) = tv.windup {
+                kept.extend(arrow(ArrowKind::Windup { weapon, progress }, tv.pos));
+            }
         }
 
         // Gates off the screen, the most recent first.
@@ -1286,6 +1317,7 @@ impl Scene {
         };
         let mut me = None;
         let mut tanks: Vec<(TankView, Dir)> = Vec::new();
+        let cover = game.cover_cells();
         for (entity, tank) in game.world.query::<(Entity, &Tank)>().iter() {
             let gate = gate_of(entity, tank.position);
             if Some(entity) == seat_entity {
@@ -1298,8 +1330,9 @@ impl Scene {
                 pos: tank.position,
                 wreck: tank.is_wreck(),
                 gate,
-                in_grass: crate::grass::conceals(&game.grass_cells, tank.position),
+                in_grass: crate::grass::conceals(&cover, tank.position),
                 lane: false,
+                windup: tank.windup().filter(|_| !tank.is_wreck()).map(|w| (w.weapon, w.progress)),
             };
             tanks.push((view, facing_of(tank.rotation)));
         }
@@ -1630,6 +1663,16 @@ pub fn picture(seats: &[Indicators], view: &ViewFrame, time: f32, t: &Tuning, fo
             ArrowKind::Volcano { erupting } => {
                 len *= 1.0 + t.indicator_pulse_swell * throb;
                 (if erupting { HOSTILE } else { GATE_AMBER }, if throb >= 0.5 { crate::pyro::FIRE[6] } else { RIM })
+            }
+            // A wind-up blinks in its weapon's accent, quicker as it nears,
+            // rimmed hostile red as the enemy frog is: an accent can be a
+            // seat's own colour (the sonic hammer's sky blue is player 1's),
+            // and this is no teammate.
+            ArrowKind::Windup { weapon, progress } => {
+                if !blink_on(time, t.indicator_pulse_hz * (1.0 + 2.0 * progress)) {
+                    continue;
+                }
+                (crate::hud::weapon_color(weapon), HOSTILE)
             }
         };
         let middle = behind(arrow.place.at, arrow.place.dir, len * 0.5);
@@ -1981,7 +2024,7 @@ mod indicator_tests {
     }
 
     fn enemy(slot: usize, x: f32, y: f32) -> TankView {
-        TankView { slot, seat: None, pos: Position::new(x, y), wreck: false, gate: None, in_grass: false, lane: false }
+        TankView { slot, seat: None, pos: Position::new(x, y), wreck: false, gate: None, in_grass: false, lane: false, windup: None }
     }
 
     fn scene(time: f32, tanks: Vec<TankView>) -> Scene {
@@ -2020,6 +2063,27 @@ mod indicator_tests {
         s.volcanoes = vec![(Position::new(200.0, 100.0), true)];
         let ind = Awareness::new().frame(&s, &screen(), &t);
         assert!(!kinds(&ind).iter().any(|k| matches!(k, ArrowKind::Volcano { .. })));
+    }
+
+    /// An enemy winding up a special off the screen gets an arrow of its
+    /// own whatever the cap - and one in grass is shown by its wind-up -
+    /// with the tell's progress on it; on the screen it gets none.
+    #[test]
+    fn a_tell_off_the_screen_has_an_arrow_whatever_the_cap() {
+        let mut t = Tuning::DEFAULT;
+        t.indicator_max_arrows = 1;
+        let mut telling = enemy(7, 200.0, 700.0);
+        telling.windup = Some((ActiveWeapon::SonicHammer, 0.4));
+        telling.in_grass = true;
+        let s = scene(1.0, vec![enemy(5, 900.0, 150.0), enemy(6, 950.0, 400.0), telling]);
+        let ind = Awareness::new().frame(&s, &screen(), &t);
+        let tell = ind.arrows.iter().find(|a| matches!(a.kind, ArrowKind::Windup { .. })).expect("a tell arrow");
+        assert_eq!(tell.kind, ArrowKind::Windup { weapon: ActiveWeapon::SonicHammer, progress: 0.4 });
+        assert_eq!(tell.place.edge, Edge::Bottom);
+        telling.pos = Position::new(250.0, 200.0);
+        let s = scene(1.0, vec![telling]);
+        let ind = Awareness::new().frame(&s, &screen(), &t);
+        assert!(!kinds(&ind).iter().any(|k| matches!(k, ArrowKind::Windup { .. })), "on the screen it is in sight");
     }
 
     /// The arrow stops where the line from the tank leaves the inset
@@ -2843,6 +2907,8 @@ mod picture_tests {
         assert_eq!(body(ArrowKind::Frog { side: Side::Player }), set(&[FROG_GREEN, RIM]));
         assert_eq!(body(ArrowKind::Frog { side: Side::Enemy }), set(&[FROG_GREEN, HOSTILE]));
         assert_eq!(body(ArrowKind::Gate { flash: 1.0 }), set(&[GATE_AMBER, RIM]));
+        let windup = ArrowKind::Windup { weapon: ActiveWeapon::SonicHammer, progress: 0.0 };
+        assert_eq!(body(windup), set(&[crate::hud::weapon_color(ActiveWeapon::SonicHammer), HOSTILE]), "the weapon's accent, rimmed hostile");
     }
 
     /// A lined-up enemy's arrow gets a ring that pulses, dark red while
@@ -3104,7 +3170,7 @@ mod picture_tests {
         let lost = Position::new(far_x, seat.y + (pad_y - seat.y) * (seat.x - far_x) / (seat.x - side_x));
         let scene = Scene {
             seat: Some(SeatView { slot: 0, pos: seat, wreck: false, gate: None }),
-            tanks: vec![TankView { slot: 5, seat: None, pos: lost, wreck: false, gate: None, in_grass: false, lane: false }],
+            tanks: vec![TankView { slot: 5, seat: None, pos: lost, wreck: false, gate: None, in_grass: false, lane: false, windup: None }],
             ..Scene::default()
         };
         let free = Awareness::new().frame(&scene, &view, &t);

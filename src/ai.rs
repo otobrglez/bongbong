@@ -88,6 +88,73 @@ pub struct WallAhead {
     pub burning: bool,
 }
 
+/// What `enemy_phase` measured for the special weapon a tank carries, for
+/// that weapon's rule (`special_rule`, docs/sonic-hammer.md "The AI hook
+/// for special weapons"): one variant per special whose use needs more
+/// than the tree's own perception, every seat in it already held to the
+/// sight-box rule. `None` for every other tank.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum SpecialSense {
+    #[default]
+    None,
+    Hammer(HammerSense),
+}
+
+/// What a sonic hammer's blast each way would do (`Game::hammer_senses`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct HammerSense {
+    /// One per facing, `Dir::index` order.
+    pub aims: [HammerAim; 4],
+    /// Where this tank closes in to, one of the `sonic_ai_closers` hammer
+    /// tanks nearest the seat it fights: a spot square on the seat from
+    /// which a blast reaches it, with no fellow enemy in the way
+    /// (`simulation::sonic::closer_spots`). `None` for every other tank.
+    pub spot: Option<Position>,
+}
+
+/// A blast one way (`HammerSense::aims`). A seat is named only if this
+/// tank stands inside its sight box, and - but for `flush` - only if the
+/// seat is not hidden from it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct HammerAim {
+    /// A seat the knock would slide into trouble.
+    pub trouble: Option<u8>,
+    /// A seat a drum in the cone would be thrown onto.
+    pub drum: Option<u8>,
+    /// The hidden seat whose grass round its alert point the wave would
+    /// flatten.
+    pub flush: Option<u8>,
+    /// A seat in the cone within `sonic_ai_breaker_px`.
+    pub breaker: Option<u8>,
+    /// A hunter's quarry in the cone, not stunned.
+    pub frog: bool,
+    /// A live fellow enemy in the cone: nothing fires this way.
+    pub friend: bool,
+}
+
+/// What a special's rule asks of the tank this tick (`special_rule`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SpecialUse {
+    /// Face `face` and pull the trigger (the simulation runs the weapon's
+    /// tell first); `at_seat` is the seat it is used on, `why` the arm.
+    Fire { face: Dir, at_seat: Option<u8>, why: &'static str },
+    /// Hold still facing `face`; `why` for the trace.
+    Hold { face: Dir, why: &'static str },
+    /// Close in on `to`, to bring a short-range weapon to bear.
+    Approach { to: Position },
+}
+
+/// The BB-36 weapons' crates an enemy detours for, in the order it wants
+/// them (`build`'s `seek_special` tier, after the minigun's).
+pub const SEEK_SPECIALS: [PickupKind; 1] = [PickupKind::SonicHammer];
+
+/// Whether the tree's generic tiers - attack, snipe, grudge, breach - may
+/// pull the trigger on `weapon`: false for a special whose own rule owns
+/// it (`special_rule`).
+pub fn generic_fire(weapon: ActiveWeapon) -> bool {
+    weapon != ActiveWeapon::SonicHammer
+}
+
 /// A latched decision to shoot through the tile in `dir` (see
 /// `Brain::wants_breach`); `timer` is the seconds left before giving up.
 #[derive(Clone, Copy)]
@@ -294,6 +361,10 @@ pub struct Ai {
     /// at its default and every reader below sees exactly the arena's
     /// tank.
     pub(crate) field: FieldMind,
+    /// The arm of its special's rule the last `special` tier ran
+    /// (`SpecialUse::Fire`'s `why`, "hold", "approach"), `None` when it ran
+    /// none. Inspection only, like `last_action`.
+    special_why: Option<&'static str>,
 }
 
 /// The memory a tank carries only on a field map
@@ -367,6 +438,8 @@ pub struct AiSnapshot {
     /// Seconds left before the breach in progress is given up.
     pub breach_timer: Option<f32>,
     pub escapes: u32,
+    /// The special's rule's last arm (`Ai::special_why`).
+    pub special: Option<&'static str>,
     /// `Ai::target_player`.
     pub target_player: u8,
     /// The seat the last tick's trigger pull was aimed at (`Ai::shot_at_seat`).
@@ -409,6 +482,7 @@ impl Default for Ai {
             breach: None,
             grudge: None,
             escapes: 0,
+            special_why: None,
             target_player: 0,
             field: FieldMind::default(),
         }
@@ -487,6 +561,8 @@ impl Ai {
     /// `sight` is how far this tank sees (px): `enemy_view_range` under the
     /// round's sky (`Game::enemy_sight`, docs/weather.md) - the range it
     /// chases from, and a cap on the range it attacks and snipes from.
+    /// `sense` is what the simulation measured for the special this tank
+    /// carries (`SpecialSense`), for that weapon's rule (`special_rule`).
     #[allow(clippy::too_many_arguments)] // perception is passed by value, not bundled
     pub fn think(
         &mut self,
@@ -509,6 +585,7 @@ impl Ai {
         target_concealed: bool,
         walls_ahead: [Option<WallAhead>; 4],
         sight: f32,
+        sense: &SpecialSense,
     ) -> Intent {
         self.fire_timer = (self.fire_timer - dt).max(0.0);
         self.retarget_timer = (self.retarget_timer - dt).max(0.0);
@@ -537,7 +614,12 @@ impl Ai {
         let moved = self.last_position.map(|p| Position::new(me.position.x - p.x, me.position.y - p.y));
         self.last_position = Some(me.position);
         self.motion = moved.map_or(Vec2::new(0.0, 0.0), |m| Vec2::new(m.x / dt.max(f32::EPSILON), m.y / dt.max(f32::EPSILON)));
+        // Knocked off its tracks (`Tank::skid`): the slide it did not ask
+        // for is evidence of nothing, so the stuck and breach clocks stand
+        // still until it ends (docs/sonic-hammer.md).
+        let skidding = me.skid > 0.0;
         match (self.last_move_dir, moved) {
+            _ if skidding => {}
             (Some(dir), Some(moved)) => {
                 let progress = (moved.x * dir.vec().x + moved.y * dir.vec().y) / dt.max(f32::EPSILON);
                 let k = (dt / tuning().stuck_progress_window_seconds).clamp(0.0, 1.0);
@@ -566,15 +648,18 @@ impl Ai {
             .last_move_dir
             .and_then(|d| walls_ahead[d.index()])
             .is_some_and(|w| !w.material.is_permanent());
-        if into_wall {
-            self.wall_ahead_timer += dt;
-        } else {
-            self.wall_ahead_timer = 0.0;
+        if !skidding {
+            if into_wall {
+                self.wall_ahead_timer += dt;
+            } else {
+                self.wall_ahead_timer = 0.0;
+            }
         }
         if let Some(breach) = &mut self.breach {
             breach.timer -= dt;
         }
 
+        self.special_why = None;
         let mut bb = Brain {
             me,
             player,
@@ -597,6 +682,7 @@ impl Ai {
             target_concealed,
             walls_ahead,
             sight,
+            sense,
         };
         let mut last_action = None;
         build().tick_traced(&mut bb, &mut last_action);
@@ -676,6 +762,7 @@ impl Ai {
             retarget_timer: self.retarget_timer,
             breach_timer: self.breach.map(|b| b.timer),
             escapes: self.escapes,
+            special: self.special_why,
             target_player: self.target_player,
             shot_at_seat: self.shot_at_seat,
             field_alert: self.field.alert.map(|p| (p.x, p.y)),
@@ -1392,6 +1479,12 @@ impl Ai {
         self.retreating
     }
 
+    /// Whether its last think kept a guard's beat (`Role::Guard`'s tier):
+    /// the seat it would fight is far from the frog it guards.
+    pub(crate) fn holds_beat(&self) -> bool {
+        self.last_action == Some("guard")
+    }
+
     /// True while this tank is still reacting to a recent hit (see
     /// `notify_hit`/`ENEMY_HIT_ALERT_SECONDS`) - used by `Game::update`'s
     /// engagement-slot assignment so a hit-alerted tank outside normal view
@@ -1585,6 +1678,9 @@ struct Brain<'a> {
     walls_ahead: [Option<WallAhead>; 4],
     /// How far this tank sees - see `think`'s `sight` parameter.
     sight: f32,
+    /// What the simulation measured for its special - see `think`'s
+    /// `sense` parameter.
+    sense: &'a SpecialSense,
 }
 
 impl<'a> Brain<'a> {
@@ -1690,6 +1786,13 @@ impl Brain<'_> {
         }
     }
 
+    /// The nearest BB-36 weapon crate worth the detour: the first kind of
+    /// `SEEK_SPECIALS` this tank would take (`Tank::wants_pickup`) with one
+    /// in reach (`seek`).
+    fn seek_special(&self) -> Option<Position> {
+        SEEK_SPECIALS.into_iter().filter(|&k| self.me.wants_pickup(k)).find_map(|k| self.seek(k))
+    }
+
     /// Whether a guard should hold its beat rather than fight: the player
     /// is dead or outside `guard_leash_px` of its frog.
     fn guard_holds(&self) -> bool {
@@ -1706,6 +1809,11 @@ impl Brain<'_> {
     /// last snipe's `hunter_snipe_cooldown_seconds` have passed.
     fn can_snipe_player(&self) -> bool {
         if !self.hunting_frog() || !self.player_alive() || !self.player_line_of_sight || self.ai.snipe_cooldown > 0.0 {
+            return false;
+        }
+        // A weapon its own rule fires is no sniper's: holding for a shot
+        // it never takes would only park the tank.
+        if !generic_fire(self.me.active_weapon()) {
             return false;
         }
         if self.dist_to_player() > self.attack_range() || !self.may_fire_at_seat() {
@@ -1856,7 +1964,9 @@ impl Brain<'_> {
     /// `enemy_fire_align_px`.
     fn grudge_shot(&self) -> Option<(Dir, f32)> {
         let grudge = self.ai.grudge?;
-        if !grudge.in_sight {
+        // A weapon its own rule fires has no shot to send back: holding
+        // for one would only park the tank in the tower's reach.
+        if !grudge.in_sight || !generic_fire(self.me.active_weapon()) {
             return None;
         }
         let t = tuning();
@@ -1879,6 +1989,12 @@ impl Brain<'_> {
         self.intent.face = Some(fire_dir);
         // Keep the committed heading in sync so leaving Attack doesn't snap.
         self.ai.commit(fire_dir);
+        // A special whose rule owns the trigger is never fired here: the
+        // tank lines up and holds, no more, and spends neither its fire
+        // timer nor a roll on it.
+        if !generic_fire(self.me.active_weapon()) {
+            return;
+        }
 
         if self.ai.aim_settle >= tuning().enemy_aim_settle && self.ai.fire_timer <= 0.0 {
             let blocked = self.friendly_blocks_shot(fire_dir, range);
@@ -1909,6 +2025,12 @@ impl Brain<'_> {
     /// breached. The moment the tile is gone the latch clears and normal
     /// steering finds the fresh gap.
     fn wants_breach(&mut self) -> bool {
+        // A special whose own rule owns the trigger breaches by that rule,
+        // if at all - the sonic hammer breaks glass and nothing else.
+        if !generic_fire(self.me.active_weapon()) {
+            self.ai.breach = None;
+            return false;
+        }
         let t = tuning();
         let can_afford = self.me.damage <= t.enemy_breach_max_damage
             && (self.me.active_weapon() != ActiveWeapon::Shell || self.me.shells_ammo >= t.enemy_breach_min_shells);
@@ -2052,6 +2174,15 @@ fn build<'a>() -> Node<Brain<'a>> {
             condition(|b: &mut Brain| b.me.is_wreck()),
             action("wreck", |_b: &mut Brain| Status::Success),
         ]),
+        // 1.5. The special carried has a use of its own this tick
+        // (`special_rule`): a tell holding, a blast to fire, a close-range
+        // weapon to bring to bear. Above flee: a hurt tank shoving away the
+        // seat in its face is the use (the rule offers a healthy tank alone
+        // the approach).
+        sequence(vec![
+            condition(|b: &mut Brain| special_rule(b).is_some()),
+            action("special", act_special),
+        ]),
         // 2. Flee when badly damaged and the player is still a threat.
         // Takes priority over the ammo-based retreat below: survival first.
         sequence(vec![
@@ -2189,6 +2320,12 @@ fn build<'a>() -> Node<Brain<'a>> {
             }),
             action("seek_minigun", act_seek_minigun),
         ]),
+        // 5.75. The BB-36 weapons' crates (`SEEK_SPECIALS`), in the order
+        // the AI wants them, on the weapon tiers' rule.
+        sequence(vec![
+            condition(|b: &mut Brain| b.seek_special().is_some()),
+            action("seek_special", act_seek_special),
+        ]),
         // 5.8. Same idea for a live SpeedUp pickup, reached whenever this
         // tank isn't currently boosted - unlike the weapon tiers above, this
         // isn't gated on `active_weapon` (a stat buff, not a weapon), just
@@ -2313,6 +2450,134 @@ fn act_seek_minigun(b: &mut Brain) -> Status {
     };
     b.intent.move_dir = Some(b.steer(target));
     Status::Success
+}
+
+/// Head for the nearest BB-36 weapon crate worth the detour - see tier
+/// 5.75 (`build`).
+fn act_seek_special(b: &mut Brain) -> Status {
+    b.reset_aim();
+    let Some(target) = b.seek_special() else {
+        return Status::Failure;
+    };
+    b.intent.move_dir = Some(b.steer(target));
+    Status::Success
+}
+
+/// What the special `b`'s tank carries asks of it this tick
+/// (docs/sonic-hammer.md "The AI hook for special weapons"): first a
+/// wind-up in progress (`Tank::windup`), which belongs to its weapon's
+/// rule (`windup_rule`); then one arm per weapon with a rule. `None` for no
+/// use this tick - the tree goes on.
+fn special_rule(b: &Brain) -> Option<SpecialUse> {
+    if let Some(windup) = b.me.windup() {
+        return windup_rule(b, windup);
+    }
+    match (b.me.active_weapon(), b.sense) {
+        (ActiveWeapon::SonicHammer, SpecialSense::Hammer(sense)) => hammer_rule(b, sense),
+        _ => None,
+    }
+}
+
+/// What a wind-up asks of its tank, by its weapon. Every wind-up so far is
+/// a tell, which holds the tank facing the way it goes off; a weapon whose
+/// wind-up asks something else (a charge that keeps tracking) matches on
+/// `windup.weapon` here for its own arm.
+fn windup_rule(_b: &Brain, windup: crate::tank::Windup) -> Option<SpecialUse> {
+    Some(SpecialUse::Hold { face: windup.facing, why: "hold" })
+}
+
+/// The sonic hammer's rule (docs/sonic-hammer.md "AI"), in priority order:
+/// shout down glass in its way at once; then, each way it could face - its
+/// own facing first, then `Dir::ALL`, never a way a fellow enemy stands -
+/// shove a seat into trouble, throw a drum onto one, flush the grass round
+/// a hidden seat's alert, break a seat in its face, pin a hunter's frog;
+/// then a closer closes in to its spot (`HammerSense::spot`) and waits
+/// there facing the seat.
+/// A fire arm that matched while the fire timer runs holds facing it
+/// (`act_special`). Draws no RNG.
+fn hammer_rule(b: &Brain, sense: &HammerSense) -> Option<SpecialUse> {
+    let t = tuning();
+    // Glass in the way it is driving: down at once.
+    if let Some(dir) = b.ai.last_move_dir
+        && b.walls_ahead[dir.index()].is_some_and(|w| w.material.breaks_by_sound())
+        && b.ai.wall_ahead_timer >= t.sonic_ai_glass_after_seconds
+    {
+        return Some(SpecialUse::Fire { face: dir, at_seat: None, why: "glass" });
+    }
+    let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+    let order = std::iter::once(facing).chain(Dir::ALL.into_iter().filter(|&d| d != facing));
+    let aims: Vec<(Dir, HammerAim)> = order.map(|d| (d, sense.aims[d.index()])).filter(|(_, a)| !a.friend).collect();
+    type Arm = fn(&HammerAim) -> Option<Option<u8>>;
+    let arms: [(&'static str, Arm); 5] = [
+        ("trouble", |a| a.trouble.map(Some)),
+        ("drum", |a| a.drum.map(Some)),
+        ("flush", |a| a.flush.map(Some)),
+        ("breaker", |a| a.breaker.map(Some)),
+        ("frog", |a| a.frog.then_some(None)),
+    ];
+    for (why, arm) in arms {
+        if let Some((face, at_seat)) = aims.iter().find_map(|(d, a)| arm(a).map(|seat| (*d, seat))) {
+            return Some(SpecialUse::Fire { face, at_seat, why });
+        }
+    }
+    // With nothing to shout at, a closer (`HammerSense::spot`), healthy
+    // and free to roam, closes in on the seat it fights - it has no shot
+    // at range - to its spot, square on the seat at the breaker's
+    // distance, and waits there facing it. The others hold their slots of
+    // the ring by the tree's attack tier, which never fires the hammer.
+    let free = b.me.damage < t.enemy_flee_damage && !b.guard_holds();
+    if let Some(spot) = sense.spot
+        && free
+        && b.player_alive()
+        && b.player_line_of_sight
+        && b.dist_to_player() <= b.attack_range()
+    {
+        if b.me.position.distance_to(spot) <= OBSTACLE_GRID_SIZE * 0.5 {
+            return Some(SpecialUse::Hold { face: Dir::toward(b.me.position, b.player.position), why: "close" });
+        }
+        return Some(SpecialUse::Approach { to: spot });
+    }
+    None
+}
+
+/// Apply what the special's rule asked (`special_rule`): fire - face,
+/// commit and, with the fire timer out, pull the trigger, recording the
+/// seat it is used on and resetting the timer to the weapon's own interval;
+/// hold; or close in.
+fn act_special(b: &mut Brain) -> Status {
+    let Some(use_) = special_rule(b) else { return Status::Failure };
+    b.reset_aim();
+    match use_ {
+        SpecialUse::Fire { face, at_seat, why } => {
+            b.intent.face = Some(face);
+            b.ai.commit(face);
+            b.ai.special_why = Some(why);
+            if b.ai.fire_timer <= 0.0 && b.me.fire_cooldown <= 0.0 {
+                b.intent.fire = true;
+                b.ai.fire_timer = special_fire_interval(b.me.active_weapon());
+                b.ai.shot_at_seat = at_seat;
+            }
+        }
+        SpecialUse::Hold { face, why } => {
+            b.intent.face = Some(face);
+            b.ai.commit(face);
+            b.ai.special_why = Some(why);
+        }
+        SpecialUse::Approach { to } => {
+            b.intent.move_dir = Some(b.steer(to));
+            b.ai.special_why = Some("approach");
+        }
+    }
+    Status::Success
+}
+
+/// Seconds an enemy waits between two decisions to use `weapon` by its
+/// rule.
+fn special_fire_interval(weapon: ActiveWeapon) -> f32 {
+    match weapon {
+        ActiveWeapon::SonicHammer => tuning().sonic_ai_fire_interval,
+        _ => tuning().enemy_fire_interval,
+    }
 }
 
 /// Same idea as `act_seek_laser`, for a SpeedUp pickup instead - see tier
@@ -2561,6 +2826,7 @@ mod role_tests {
             false,
             [None; 4],
             tuning().enemy_view_range,
+            &SpecialSense::None,
         )
     }
 
@@ -2613,6 +2879,7 @@ mod role_tests {
                 false,
                 [None; 4],
                 tuning().enemy_view_range,
+                &SpecialSense::None,
             );
             ai.snapshot().last_action
         };
@@ -2905,6 +3172,7 @@ mod stuck_tests {
             false,
             [None; 4],
             tuning().enemy_view_range,
+            &SpecialSense::None,
         )
     }
 
@@ -3100,5 +3368,169 @@ mod separation_tests {
              with the brake disabled, and the point of the brake is that they stop short"
         );
         assert!(pair <= 30, "enemies rammed each other {pair} times; measured 22 here");
+    }
+}
+
+/// The sonic hammer's rule (docs/sonic-hammer.md "AI"), one arm at a time
+/// on an open field: what `enemy_phase` measured is handed in as a
+/// `HammerSense`, so the rule is tested without a world.
+#[cfg(test)]
+mod hammer_tests {
+    use super::*;
+    use rand::SeedableRng;
+
+    const ME: Position = Position::new(640.0, 360.0);
+    const SEAT: Position = Position::new(200.0, 360.0);
+
+    /// An enemy facing up with the hammer, its fire timer out.
+    fn hammer_tank() -> Tank {
+        let mut me = Tank { owner: crate::shell::Owner::Enemy(2), ..Tank::default() };
+        me.position = ME;
+        me.rotation = 0.0;
+        me.sonic_ammo = 3;
+        me
+    }
+
+    fn think(ai: &mut Ai, me: &Tank, sense: SpecialSense, walls: [Option<WallAhead>; 4], seat: Position) -> Intent {
+        let mut player = Tank::default();
+        player.position = seat;
+        let grid = Grid::build(1280.0, 720.0, 48.0, 0.0, std::iter::empty());
+        let movers = [
+            Mover { position: seat, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
+            Mover { position: me.position, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
+        ];
+        let mut rng = SmallRng::seed_from_u64(7);
+        ai.think(me, &player, seat, None, 1280.0, 720.0, 1.0 / 60.0, &movers, 1, &grid, &mut rng, None, None, &[], true, true, false, walls, tuning().enemy_view_range, &sense)
+    }
+
+    /// A fresh memory with its fire timer out.
+    fn ready() -> Ai {
+        Ai { fire_timer: 0.0, ..Ai::with_role(Role::Player) }
+    }
+
+    fn sense_left(aim: HammerAim) -> SpecialSense {
+        let mut aims = [HammerAim::default(); 4];
+        aims[Dir::Left.index()] = aim;
+        SpecialSense::Hammer(HammerSense { aims, spot: None })
+    }
+
+    #[test]
+    fn every_arm_fires_the_way_it_names() {
+        let arms: [(&str, HammerAim); 5] = [
+            ("trouble", HammerAim { trouble: Some(0), ..HammerAim::default() }),
+            ("drum", HammerAim { drum: Some(0), ..HammerAim::default() }),
+            ("flush", HammerAim { flush: Some(0), ..HammerAim::default() }),
+            ("breaker", HammerAim { breaker: Some(0), ..HammerAim::default() }),
+            ("frog", HammerAim { frog: true, ..HammerAim::default() }),
+        ];
+        for (why, aim) in arms {
+            let mut ai = ready();
+            let intent = think(&mut ai, &hammer_tank(), sense_left(aim), [None; 4], SEAT);
+            assert!(intent.fire, "{why}: it pulls the trigger");
+            assert_eq!(intent.face, Some(Dir::Left), "{why}");
+            assert_eq!(ai.special_why, Some(why));
+            assert_eq!(ai.fire_timer, tuning().sonic_ai_fire_interval, "{why}: on the weapon's own interval");
+            // While the timer runs it holds facing the same way, trigger off.
+            let again = think(&mut ai, &hammer_tank(), sense_left(aim), [None; 4], SEAT);
+            assert!(!again.fire && again.face == Some(Dir::Left), "{why}: {again:?}");
+        }
+    }
+
+    #[test]
+    fn the_arms_go_in_order_and_its_own_facing_first() {
+        let mut aims = [HammerAim::default(); 4];
+        aims[Dir::Left.index()] = HammerAim { trouble: Some(0), ..HammerAim::default() };
+        aims[Dir::Up.index()] = HammerAim { breaker: Some(0), ..HammerAim::default() };
+        let mut ai = ready();
+        let intent = think(&mut ai, &hammer_tank(), SpecialSense::Hammer(HammerSense { aims, spot: None }), [None; 4], SEAT);
+        assert_eq!((intent.face, ai.special_why), (Some(Dir::Left), Some("trouble")), "trouble outranks a breaker");
+        let mut aims = [HammerAim::default(); 4];
+        aims[Dir::Left.index()] = HammerAim { breaker: Some(0), ..HammerAim::default() };
+        aims[Dir::Up.index()] = HammerAim { breaker: Some(0), ..HammerAim::default() };
+        let mut ai = ready();
+        let intent = think(&mut ai, &hammer_tank(), SpecialSense::Hammer(HammerSense { aims, spot: None }), [None; 4], SEAT);
+        assert_eq!(intent.face, Some(Dir::Up), "the same arm both ways: the way it already faces");
+    }
+
+    #[test]
+    fn it_never_fires_where_a_fellow_enemy_stands() {
+        let mut ai = ready();
+        let aim = HammerAim { trouble: Some(0), breaker: Some(0), friend: true, ..HammerAim::default() };
+        for _ in 0..120 {
+            let intent = think(&mut ai, &hammer_tank(), sense_left(aim), [None; 4], SEAT);
+            assert!(!intent.fire, "{intent:?}");
+        }
+    }
+
+    /// The generic tiers never pull the trigger on a weapon its rule owns:
+    /// lined up on a seat in range with nothing in the sense, it does not
+    /// fire, where the same tank on shells does.
+    #[test]
+    fn the_generic_tiers_never_fire_the_hammer() {
+        let seat = Position::new(ME.x - 200.0, ME.y);
+        let (mut hammer_fired, mut shell_fired) = (false, false);
+        let (mut a, mut b) = (ready(), ready());
+        let mut shells = hammer_tank();
+        shells.sonic_ammo = 0;
+        shells.rotation = 270.0;
+        let mut hammer = hammer_tank();
+        hammer.rotation = 270.0;
+        let none = SpecialSense::Hammer(HammerSense::default());
+        for _ in 0..240 {
+            hammer_fired |= think(&mut a, &hammer, none, [None; 4], seat).fire;
+            shell_fired |= think(&mut b, &shells, SpecialSense::None, [None; 4], seat).fire;
+        }
+        assert!(shell_fired, "the shells tank fires");
+        assert!(!hammer_fired, "the hammer tank does not");
+    }
+
+    /// With nothing to shout at, a tank given a spot closes in on it and
+    /// waits there facing the seat; one given none leaves it to the tree.
+    #[test]
+    fn a_closer_closes_in_to_its_spot_and_waits_there() {
+        let seat = Position::new(ME.x - 200.0, ME.y);
+        let mut ai = ready();
+        think(&mut ai, &hammer_tank(), SpecialSense::Hammer(HammerSense::default()), [None; 4], seat);
+        assert_eq!(ai.special_why, None, "no spot: the tree's");
+        let spot = Position::new(seat.x + tuning().sonic_ai_breaker_px - 16.0, seat.y);
+        let given = SpecialSense::Hammer(HammerSense { spot: Some(spot), ..HammerSense::default() });
+        let mut ai = ready();
+        let intent = think(&mut ai, &hammer_tank(), given, [None; 4], seat);
+        assert_eq!((ai.special_why, intent.move_dir), (Some("approach"), Some(Dir::Left)));
+        // At its spot: it holds facing the seat.
+        let mut there = hammer_tank();
+        there.position = Position::new(spot.x + 6.0, spot.y);
+        let mut ai = ready();
+        let intent = think(&mut ai, &there, given, [None; 4], seat);
+        assert_eq!((ai.special_why, intent.move_dir, intent.face), (Some("close"), None, Some(Dir::Left)));
+    }
+
+    #[test]
+    fn a_tell_holds_the_tank_facing_its_way() {
+        let mut me = hammer_tank();
+        me.tell = Some(crate::tank::Tell { weapon: ActiveWeapon::SonicHammer, left: 0.3, total: 0.55, facing: Dir::Right });
+        let mut ai = ready();
+        let intent = think(&mut ai, &me, sense_left(HammerAim { trouble: Some(0), ..HammerAim::default() }), [None; 4], SEAT);
+        assert_eq!((intent.face, intent.move_dir, intent.fire), (Some(Dir::Right), None, false));
+        assert_eq!(ai.special_why, Some("hold"));
+    }
+
+    #[test]
+    fn glass_in_its_way_is_shouted_down() {
+        let mut ai = ready();
+        // Driving at the seat to the west, a pane in the way.
+        ai.last_move_dir = Some(Dir::Left);
+        let mut walls = [None; 4];
+        walls[Dir::Left.index()] = Some(WallAhead { material: Material::Glass, burning: false });
+        let mut fired = false;
+        for _ in 0..30 {
+            let intent = think(&mut ai, &hammer_tank(), SpecialSense::Hammer(HammerSense::default()), walls, SEAT);
+            if intent.fire {
+                assert_eq!((intent.face, ai.special_why), (Some(Dir::Left), Some("glass")));
+                fired = true;
+                break;
+            }
+        }
+        assert!(fired, "it shouts the pane down");
     }
 }

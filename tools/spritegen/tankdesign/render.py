@@ -51,9 +51,10 @@ C_TURRET = 20
 C_BROKEN = 32
 N_COLS = 33
 MODULE_COLS = sum(WEAPON_STATES[w] for w in WEAPONS)
-# The modules a preview draws on one tank at once: the grenade launcher
-# shares the missiles' roof, and a tank carries one special at a time.
-SHOWN_TOGETHER = [w for w in WEAPONS if w != 'grenade']
+# The modules a preview draws on one tank at once: the grenade launcher and
+# the sonic hammer share the missiles' roof, and a tank carries one special
+# at a time.
+SHOWN_TOGETHER = [w for w in WEAPONS if w not in ('grenade', 'sonic')]
 
 
 def load_line(key):

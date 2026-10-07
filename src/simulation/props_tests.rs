@@ -1173,7 +1173,7 @@ cells."22,8" = { kind = "barrel", drum = "fuel" }
         step(&mut game, Input::default());
         for e in game.events() {
             match *e {
-                Event::DrumLaunched { x, y, to_x, to_y } => launched = Some((frame, x, y, to_x, to_y)),
+                Event::DrumLaunched { x, y, to_x, to_y, .. } => launched = Some((frame, x, y, to_x, to_y)),
                 Event::Blast { chained: true, drum: crate::obstacle::Drum::Fuel, x, y } => landing_blast = Some((frame, x, y)),
                 _ => {}
             }

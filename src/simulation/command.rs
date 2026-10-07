@@ -325,6 +325,13 @@ impl Commander {
         a.slot > b.slot
     }
 
+    /// Put `order` on `slot` for this frame's `apply`, as a producer would:
+    /// for a test that needs an order with the switch off.
+    #[cfg(test)]
+    pub(crate) fn push_order(&mut self, slot: usize, order: Order) {
+        self.orders.entry(slot).or_default().push(order);
+    }
+
     /// Apply this frame's reflex orders to a tank's intent. The one place an
     /// `Order` ever touches an `Intent`; everything else the commander
     /// decides is read later, through `think`'s own inputs.

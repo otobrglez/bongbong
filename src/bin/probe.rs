@@ -35,6 +35,7 @@ use std::process::ExitCode;
 use bongbong::Position;
 use bongbong::ai::{Intent, in_sight_box};
 use bongbong::map::MapFile;
+use bongbong::pickup::PickupKind;
 use bongbong::level::SpawnKind;
 use bongbong::simulation::debug::{JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, signed_quarter_turn};
 use bongbong::simulation::{Event, Game, HitTarget, Input, Outcome, TankSnapshot};
@@ -127,6 +128,9 @@ const BRAKE_HOLD_FRAMES: u32 = 18;
 // window closes: a tank that drove off and wandered back is not stale.
 const STALE_START_FRAMES: u32 = 120; // 2s
 const STALE_START_EPS: f32 = 5.0; // px
+// A deliberate hold this recent still vetoes stale-start: the frames a tank
+// takes to react once its firing solution is gone.
+const HOLD_REACTION_FRAMES: u32 = 30; // 0.5s
 // After the stale-start window, a tank sitting near-zero speed for this many
 // consecutive frames (while the round is still Playing and it isn't a
 // wreck) is flagged as stalled out mid-round.
@@ -478,6 +482,15 @@ struct Args {
     #[arg(short = 'm', long = "map", value_parser = parse_map)]
     map: Option<NamedMap>,
 
+    /// Turn every special-weapon pickup slot of the map (a laser, plasma,
+    /// minigun, missiles, flamethrower, grenades or sonic hammer crate)
+    /// into this kind for the run - its map spelling, e.g. `sonic_hammer`.
+    /// The slots and their order stay, so the respawn draws are what they
+    /// were and only what is taken differs (docs/sonic-hammer.md "The
+    /// probe's `--crate`").
+    #[arg(long = "crate", value_parser = parse_crate)]
+    crate_kind: Option<PickupKind>,
+
     /// Write one JSON object per round (JSON Lines) to this file,
     /// overwriting it - the machine-readable counterpart of the human
     /// stdout (which is unchanged), for scripts that rank worst seeds,
@@ -585,8 +598,10 @@ fn log_frame(game: &Game, frame: u32) {
         // be read off the out-of-bounds position.
         let entering = if tank.entering { " entering=true" } else { "" };
         println!(
-            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} missiles={:2} grenades={:2} laser={:2} fuel={:4.1} burn={:3.1} shield={:5.1} wreck={}{entering}",
-            tank.position.x, tank.position.y, tank.velocity.x, tank.velocity.y, speed, tank.rotation, tank.damage, tank.shells_ammo, tank.plasma_ammo, tank.minigun_ammo, tank.missile_ammo, tank.grenade_ammo, tank.laser_charges, tank.flame_fuel, tank.burn_timer, tank.shield_hp, tank.is_wreck,
+            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} missiles={:2} grenades={:2} sonic={:2} laser={:2} fuel={:4.1} burn={:3.1} shield={:5.1} wreck={}{entering}{}{}",
+            tank.position.x, tank.position.y, tank.velocity.x, tank.velocity.y, speed, tank.rotation, tank.damage, tank.shells_ammo, tank.plasma_ammo, tank.minigun_ammo, tank.missile_ammo, tank.grenade_ammo, tank.sonic_ammo, tank.laser_charges, tank.flame_fuel, tank.burn_timer, tank.shield_hp, tank.is_wreck,
+            if tank.tell { " tell=true" } else { "" },
+            if tank.skidding { " skid=true" } else { "" },
         );
     }
 }
@@ -799,11 +814,14 @@ struct TankTrack {
     trail: VecDeque<(u32, Position)>,
     trail_path_len: f32,
     // --- deliberate-hold detection (see FIRED_RECENTLY_FRAMES) ---
-    // Last frame's (shells, minigun, plasma, laser, missiles) ammo, to spot
-    // a trigger pull as any pool decreasing; None until the first frame.
-    prev_ammo: Option<(i32, i32, i32, i32, i32)>,
+    // Last frame's (shells, minigun, plasma, laser, missiles, sonic) ammo,
+    // to spot a trigger pull as any pool decreasing; None until the first
+    // frame.
+    prev_ammo: Option<(i32, i32, i32, i32, i32, i32)>,
     // Frame of the most recent detected shot, if any.
     last_fire_frame: Option<u32>,
+    // Frame of the most recent deliberate hold (`deliberate_hold`), if any.
+    last_hold_frame: Option<u32>,
     // --- contact metrics (wall-grind / bump-rate / low-progress) ---
     grind_frames: u32,
     grind_flagged: bool,
@@ -878,6 +896,12 @@ impl TankTrack {
         if tank.asleep {
             return true;
         }
+        // Winding up a special, or knocked off its tracks by one: holding
+        // or sliding where it did not ask to go, on purpose either way
+        // (docs/sonic-hammer.md).
+        if tank.tell || tank.skidding {
+            return true;
+        }
         if self
             .last_fire_frame
             .is_some_and(|f| frame - f <= FIRED_RECENTLY_FRAMES)
@@ -939,6 +963,7 @@ impl TankTrack {
             trail_path_len: 0.0,
             prev_ammo: None,
             last_fire_frame: None,
+            last_hold_frame: None,
             grind_frames: 0,
             grind_flagged: false,
             tank_grind_frames: 0,
@@ -1213,21 +1238,29 @@ fn check_anomalies(
             tank.plasma_ammo,
             tank.laser_charges,
             tank.missile_ammo,
+            tank.sonic_ammo,
         );
         if let Some(prev) = track.prev_ammo
-            && (ammo.0 < prev.0 || ammo.1 < prev.1 || ammo.2 < prev.2 || ammo.3 < prev.3 || ammo.4 < prev.4)
+            && (ammo.0 < prev.0 || ammo.1 < prev.1 || ammo.2 < prev.2 || ammo.3 < prev.3 || ammo.4 < prev.4 || ammo.5 < prev.5)
         {
             track.last_fire_frame = Some(frame);
         }
         track.prev_ammo = Some(ammo);
         let holding = track.deliberate_hold(frame, tank, player_snap);
+        if holding {
+            track.last_hold_frame = Some(frame);
+        }
 
         // Stale-start: never got clear of spawn within STALE_START_FRAMES
         // of coming onto the field.
         if age <= STALE_START_FRAMES {
             track.max_spawn_dist = track.max_spawn_dist.max(pos.distance_to(track.spawn_pos));
         }
-        if !track.stale_flagged && age == STALE_START_FRAMES && !holding {
+        // A tank that held a firing solution at its spawn until a moment
+        // ago - the seat it held on was knocked off its line, say
+        // (docs/sonic-hammer.md "Probe") - is reacting, not stale.
+        let held_lately = track.last_hold_frame.is_some_and(|f| frame - f <= HOLD_REACTION_FRAMES);
+        if !track.stale_flagged && age == STALE_START_FRAMES && !holding && !held_lately {
             if track.max_spawn_dist < STALE_START_EPS {
                 report(
                     heat,
@@ -1883,6 +1916,9 @@ fn run_round(
         Some(named) => named.map.clone(),
         None => default_map(),
     };
+    if let Some(kind) = args.crate_kind {
+        swap_weapon_crates(&mut game.map, kind);
+    }
     let _ = FIELD.set(game.map.field_size());
     game.init(field_width(), field_height());
     if trace {
@@ -2061,8 +2097,11 @@ fn run_round(
         // On a field map an enemy that nothing has called to the fight -
         // asleep, or keeping to its home leash with no alert - is not
         // headed for the player at all, so not arriving is no routing
-        // failure (docs/large-maps-follow-camera.md section 12).
-        if tank.asleep || tank.leashed {
+        // failure (docs/large-maps-follow-camera.md section 12); nor is a
+        // guard keeping its beat while the seat is far from its frog, which
+        // a round outlasting the budget shows (an AFK seat a sonic hammer
+        // pack shoves rather than kills, docs/sonic-hammer.md "Probe").
+        if tank.asleep || tank.leashed || tank.guarding {
             continue;
         }
         let budget = NAV_GRACE_SECONDS + NAV_STRETCH_MAX * track.ideal_seconds;
@@ -2162,6 +2201,23 @@ fn scenario_str(scenario: Scenario) -> &'static str {
     }
 }
 
+/// `--crate`: every special-weapon pickup slot of `map` made a `kind` crate,
+/// in place.
+fn swap_weapon_crates(map: &mut MapFile, kind: PickupKind) {
+    for cell in map.cells.values_mut() {
+        if let bongbong::map::CellObject::Pickup { pickup } = cell
+            && pickup.weapon().is_some()
+        {
+            *pickup = kind;
+        }
+    }
+}
+
+/// `--crate`'s value: a pickup kind by its map spelling.
+fn parse_crate(s: &str) -> Result<PickupKind, String> {
+    PickupKind::parse(s).ok_or_else(|| format!("no pickup is called {s:?}"))
+}
+
 /// The battlefield's display name: the `--map` path, or the embedded
 /// default's marker - shared by the header, `--json-out`, and `--heatmap`.
 fn map_display(args: &Args) -> &str {
@@ -2229,7 +2285,8 @@ fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult, tun
     let ms_per_tick = result.update_seconds * 1000.0 / result.frames_run.max(1) as f64;
     let lulls = result.lulls.iter().map(|l| format!("{l:.2}")).collect::<Vec<_>>().join(",");
     format!(
-        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"players\":{},\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"ms_per_tick\":{ms_per_tick:.4},\"first_contact\":{{{contact}}},\"lulls\":[{lulls}],\"rerolls\":{},\"anomalies\":{{{anomalies}}},\"rams\":{{\"pair\":{},\"into_player\":{},\"rolled_damage\":{:.1}}},\"fire\":{{{fire}}},\"tanks\":[{tanks}]}}",
+        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"crate\":\"{}\",\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"players\":{},\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"ms_per_tick\":{ms_per_tick:.4},\"first_contact\":{{{contact}}},\"lulls\":[{lulls}],\"rerolls\":{},\"anomalies\":{{{anomalies}}},\"rams\":{{\"pair\":{},\"into_player\":{},\"rolled_damage\":{:.1}}},\"fire\":{{{fire}}},\"tanks\":[{tanks}]}}",
+        args.crate_kind.map_or("", PickupKind::name),
         json_escape(map_display(args)),
         result.mission.name(),
         result.spawn.name(),
@@ -2365,7 +2422,7 @@ fn main() -> ExitCode {
     });
 
     println!(
-        "probe: scenario={} enemies={} tank={} mission={} spawn={} frames={} rounds={} seed=0x{base_seed:016x} map={} tuning={}",
+        "probe: scenario={} enemies={} tank={} mission={} spawn={} frames={} rounds={} seed=0x{base_seed:016x} map={}{} tuning={}",
         scenario_str(args.scenario),
         match (args.enemies, spawn_kind(&args)) {
             (_, SpawnKind::Waves) => "waves".to_string(),
@@ -2380,6 +2437,7 @@ fn main() -> ExitCode {
         args.frames,
         args.rounds,
         map_display(&args),
+        args.crate_kind.map_or(String::new(), |k| format!(" crate={}", k.name())),
         if tuning_diff == "{}" { "default".to_string() } else { tuning_diff.clone() },
     );
 

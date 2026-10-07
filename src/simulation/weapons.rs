@@ -1,5 +1,6 @@
 //! Firing. Spawning shells, plasma bolts, bullets, seeker missiles,
-//! grenades and laser beams from a tank's muzzle (with recoil), ticking a twin-barrel
+//! grenades and laser beams from a tank's muzzle (with recoil), queuing a
+//! sonic hammer's blast (`simulation::sonic`), ticking a twin-barrel
 //! chassis's queued second shot, a minigun burst and a missile volley, the
 //! per-weapon trigger dispatch the
 //! player and every enemy share, and the `Projectile` view of the three
@@ -159,7 +160,7 @@ fn laser_shot(tank: &Tank, owner: Owner, aim_offset: f32, variant: LaserVariant)
 /// bullet it launches (`net::predict`, `Game::seat_recoil`), so an
 /// `Event::Shoved` for those would kick it twice; it draws no missile or
 /// grenade, so those kicks are the room's to tell it about.
-fn apply_recoil(physics: &mut Physics, tank: &Tank, velocity: Vec2, speed: f32, max_speed: f32) -> Option<Vec2> {
+pub(super) fn apply_recoil(physics: &mut Physics, tank: &Tank, velocity: Vec2, speed: f32, max_speed: f32) -> Option<Vec2> {
     let len = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
     let handle = tank.body?;
     if len <= f32::EPSILON {
@@ -447,6 +448,14 @@ pub(super) fn dispatch_fire_from(
                 fire_grenade(physics, f, tank, owner, aim_offset);
             }
         }
+        ActiveWeapon::SonicHammer => {
+            if tank.sonic_ammo > 0 {
+                f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::SonicHammer.name() });
+                tank.sonic_ammo -= 1;
+                tank.fire_cooldown = tuning().sonic_reload_seconds;
+                super::sonic::fire_sonic(physics, f, tank, owner);
+            }
+        }
         ActiveWeapon::Plasma => {
             if tank.plasma_ammo >= ammo_cost {
                 f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::Plasma.name() });
@@ -509,6 +518,8 @@ pub(super) trait Projectile: hecs::Component {
     fn knockback_speed() -> Option<f32>;
     /// Whether a surviving frog tries to hop away from this hit.
     fn frog_hops() -> bool;
+    /// What its `Event::Hit` says landed.
+    fn hit_cause() -> super::HitCause;
     /// Bounce off `hit` instead of detonating, if this projectile can by
     /// its own rules (shells off Iron). A barrel's chance deflection goes
     /// through `can_bounce`/`reflect_off` instead.
@@ -630,6 +641,7 @@ impl Projectile for Shell {
     fn damage_range(&self) -> (f32, f32) { side_damage(self.owner, self.shooter_row) }
     fn knockback_speed() -> Option<f32> { Some(tuning().shell_impact_knockback_speed) }
     fn frog_hops() -> bool { true }
+    fn hit_cause() -> super::HitCause { super::HitCause::Shell }
     deflect_impl!();
 
     /// Shells ricochet off indestructible Iron while `bounces_left` lasts:
@@ -675,6 +687,7 @@ impl Projectile for Bullet {
     /// No hop per bullet: several rounds in a third of a second would make
     /// the frog flail rather than dodge.
     fn frog_hops() -> bool { false }
+    fn hit_cause() -> super::HitCause { super::HitCause::Bullet }
     fn can_bounce() -> bool { true }
     deflect_impl!();
 }
@@ -701,6 +714,7 @@ impl Projectile for Plasma {
     }
     fn knockback_speed() -> Option<f32> { Some(tuning().plasma_impact_knockback_speed) }
     fn frog_hops() -> bool { true }
+    fn hit_cause() -> super::HitCause { super::HitCause::Plasma }
     /// A bolt never ricochets (see docs/PLASMA_SPEC.md).
     fn can_bounce() -> bool { false }
     deflect_impl!();

@@ -220,7 +220,7 @@ impl Tank {
 
     /// Rounds left for the live weapon (`active_weapon`), saturated at 255.
     pub fn active_ammo(&self) -> u8 {
-        self.weapon_ammo(self.active_weapon()).clamp(0, 255) as u8
+        self.weapon_ammo(self.special().unwrap_or(crate::tank::ActiveWeapon::Shell)).clamp(0, 255) as u8
     }
 }
 

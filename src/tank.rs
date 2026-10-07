@@ -20,6 +20,7 @@ use crate::{
     TANK_HULL_FRACTION,
     TANK_MODULE_FLAME_COL,
     TANK_MODULE_GRENADE_COL,
+    TANK_MODULE_SONIC_COL,
     TANK_MODULE_LASER_COL,
     TANK_MODULE_MINIGUN_COL,
     TANK_MODULE_MISSILES_COL,
@@ -259,6 +260,7 @@ pub enum ActiveWeapon {
     Missiles,
     Flamethrower,
     Grenades,
+    SonicHammer,
     Shell,
 }
 
@@ -272,7 +274,25 @@ impl ActiveWeapon {
             ActiveWeapon::Missiles => "missiles",
             ActiveWeapon::Flamethrower => "flamethrower",
             ActiveWeapon::Grenades => "grenades",
+            ActiveWeapon::SonicHammer => "sonic_hammer",
             ActiveWeapon::Shell => "shell",
+        }
+    }
+
+    /// The wind-up an enemy shows before this weapon goes off
+    /// (`Tank::tell`, docs/sonic-hammer.md "The enemy tell"), in seconds;
+    /// `None` for a weapon an enemy fires on its decision. A seat's press
+    /// never waits on it.
+    pub fn tell_seconds(self) -> Option<f32> {
+        match self {
+            ActiveWeapon::SonicHammer => Some(tuning().sonic_tell_seconds).filter(|&s| s > 0.0),
+            ActiveWeapon::Laser
+            | ActiveWeapon::Plasma
+            | ActiveWeapon::Minigun
+            | ActiveWeapon::Missiles
+            | ActiveWeapon::Flamethrower
+            | ActiveWeapon::Grenades
+            | ActiveWeapon::Shell => None,
         }
     }
 
@@ -291,6 +311,7 @@ impl ActiveWeapon {
             ActiveWeapon::Missiles => t.missile_ammo_per_pickup,
             ActiveWeapon::Flamethrower => t.flame_fuel_per_pickup.ceil() as i32,
             ActiveWeapon::Grenades => t.grenade_ammo_per_pickup,
+            ActiveWeapon::SonicHammer => t.sonic_ammo_per_pickup,
             ActiveWeapon::Shell => t.max_shells,
         }
     }
@@ -299,14 +320,51 @@ impl ActiveWeapon {
 /// The special weapons, each the cargo of its own crate. A tank carries at
 /// most one of them at a time (`Tank::take_weapon`); with none, or once it
 /// runs dry, the trigger fires shells.
-pub const SPECIAL_WEAPONS: [ActiveWeapon; 6] = [
+pub const SPECIAL_WEAPONS: [ActiveWeapon; 7] = [
     ActiveWeapon::Laser,
     ActiveWeapon::Plasma,
     ActiveWeapon::Minigun,
     ActiveWeapon::Missiles,
     ActiveWeapon::Flamethrower,
     ActiveWeapon::Grenades,
+    ActiveWeapon::SonicHammer,
 ];
+
+/// The wind-up an enemy shows before a special with one goes off
+/// (`ActiveWeapon::tell_seconds`, docs/sonic-hammer.md "The enemy tell"):
+/// set by the simulation when the AI pulls the trigger, counted down in
+/// `enemy_phase`, and the weapon fired along `facing` when it runs out. A
+/// replica draws it from `net::wire::TankState::tell`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tell {
+    pub weapon: ActiveWeapon,
+    /// Seconds until it goes off.
+    pub left: f32,
+    /// Its whole length: what the drawing's progress is measured against.
+    pub total: f32,
+    /// The facing it was started on, which it goes off along.
+    pub facing: Dir,
+}
+
+impl Tell {
+    /// How far through the wind-up it is, 0 at the start to 1 as it goes
+    /// off.
+    pub fn progress(&self) -> f32 {
+        if self.total > 0.0 { (1.0 - self.left / self.total).clamp(0.0, 1.0) } else { 1.0 }
+    }
+}
+
+/// A wind-up in progress, whatever winds it up (`Tank::windup`): what the
+/// AI's rule holds a tank to, the off-screen arrow and the drawing read. A
+/// tell is one; a later weapon's charge joins `Tank::windup` as another.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Windup {
+    pub weapon: ActiveWeapon,
+    /// How far through, 0..1.
+    pub progress: f32,
+    /// The way it goes off.
+    pub facing: Dir,
+}
 
 pub struct Tank {
     /// Which of the 12 tank archetypes in scifi_tanks_sheet.png this tank
@@ -476,6 +534,26 @@ pub struct Tank {
     /// Grenades left in the launcher's drum (`pickup::PickupKind::Grenades`,
     /// `grenade.rs`). Pickup-only, one per press.
     pub grenade_ammo: i32,
+    /// Blasts left in the sonic hammer (`pickup::PickupKind::SonicHammer`,
+    /// `sonic.rs`). Pickup-only, one per press.
+    pub sonic_ammo: i32,
+    /// An enemy's wind-up before its special goes off (`Tell`); `None`
+    /// the rest of the time, and always on a seat.
+    pub tell: Option<Tell>,
+    /// Seconds this hull has left knocked off its tracks
+    /// (docs/sonic-hammer.md "The knock"): while positive its own drive
+    /// does nothing and its motion falls by the skid's friction
+    /// (`Game::drive_tank_with`). Set by `simulation::sonic::knock`,
+    /// counted down in `Game::tick_timers`, ended early once the hull is
+    /// all but still.
+    pub skid: f32,
+    /// The speed the knock that started the skid left the hull at against
+    /// the ground's flow (px/s): what the skid's length was worked out from
+    /// (`sonic::skid_seconds`).
+    pub skid_speed: f32,
+    /// Seconds the sonic hammer's dish shows its firing cell (`kick_sonic`).
+    /// Presentation only.
+    pub sonic_flash: f32,
     /// True while the trigger has been held on the flamethrower since the
     /// last frame it was not: `Event::Fired` is recorded once per hold.
     pub flame_held: bool,
@@ -675,6 +753,11 @@ impl Default for Tank {
             plasma_variant: PlasmaVariant::Teal,
             missile_ammo: 0,
             grenade_ammo: 0,
+            sonic_ammo: 0,
+            tell: None,
+            skid: 0.0,
+            skid_speed: 0.0,
+            sonic_flash: 0.0,
             speed_boost_timer: 0.0,
             heat_shield_timer: 0.0,
             throttle: 1.0,
@@ -775,9 +858,7 @@ impl Tank {
             // One special at a time, and a crate replaces what is carried:
             // an enemy takes a weapon only while it fires shells, so it
             // never trades away a stocked one.
-            PickupKind::Laser | PickupKind::Plasma | PickupKind::Minigun | PickupKind::Missiles => {
-                self.active_weapon() == ActiveWeapon::Shell
-            }
+            PickupKind::Laser | PickupKind::Plasma | PickupKind::Minigun | PickupKind::Missiles => self.special().is_none(),
             PickupKind::SpeedUp => self.speed_boost_timer <= 0.0,
             PickupKind::Shield => self.shield_hp <= 0.0,
             // Player-only: the fuel tank does nothing for an enemy at all.
@@ -792,6 +873,9 @@ impl Tank {
             PickupKind::HeatShield => false,
             // Player-only: the AI has no use for a ball it cannot aim.
             PickupKind::Grenades => false,
+            // Its own rule fires it (`ai::special_rule`), so an enemy takes
+            // one the way it takes any weapon: only while on shells.
+            PickupKind::SonicHammer => self.special().is_none(),
         }
     }
 
@@ -1038,9 +1122,17 @@ impl Tank {
         self.laser_flash_timer = tuning().tank_recoil_seconds * 2.0;
     }
 
-    /// Step the recoil cells `kick` set, and the laser's flash.
+    /// The sonic hammer fired: its dish shows its firing cell for
+    /// `sonic_flash_seconds`.
+    pub fn kick_sonic(&mut self) {
+        self.sonic_flash = tuning().sonic_flash_seconds;
+    }
+
+    /// Step the recoil cells `kick` set, and the laser's and the dish's
+    /// flashes.
     pub fn tick_recoil(&mut self, dt: f32) {
         self.laser_flash_timer = (self.laser_flash_timer - dt).max(0.0);
+        self.sonic_flash = (self.sonic_flash - dt).max(0.0);
         if let Some(left) = self.recoil_second_in {
             let left = left - dt;
             if left <= 0.0 {
@@ -1078,7 +1170,21 @@ impl Tank {
     /// twin-barrel chassis needing 2 shells/bolts per shot can be
     /// `ActiveWeapon::Shell`/`Plasma` while short of the 2 it needs).
     pub fn active_weapon(&self) -> ActiveWeapon {
-        SPECIAL_WEAPONS.into_iter().find(|&w| self.weapon_ammo(w) > 0).unwrap_or(ActiveWeapon::Shell)
+        self.special().unwrap_or(ActiveWeapon::Shell)
+    }
+
+    /// The wind-up this tank is in, if any (`Windup`): its tell.
+    pub fn windup(&self) -> Option<Windup> {
+        self.tell.map(|t| Windup { weapon: t.weapon, progress: t.progress(), facing: t.facing })
+    }
+
+    /// The special weapon this tank carries with ammo left
+    /// (`SPECIAL_WEAPONS` order), `None` on shells alone: what it *carries*
+    /// - its module, the wire's weapon, the HUD's slot, whether it takes a
+    /// weapon crate - as against `active_weapon`, what its trigger fires.
+    /// The two agree but where a special is carried and cannot fire.
+    pub fn special(&self) -> Option<ActiveWeapon> {
+        SPECIAL_WEAPONS.into_iter().find(|&w| self.weapon_ammo(w) > 0)
     }
 
     /// The ammo counter behind `weapon` - the one shared currency between
@@ -1093,6 +1199,7 @@ impl Tank {
             // Whole seconds, rounded up: the last fraction still fires.
             ActiveWeapon::Flamethrower => self.flame_fuel.ceil().max(0.0) as i32,
             ActiveWeapon::Grenades => self.grenade_ammo,
+            ActiveWeapon::SonicHammer => self.sonic_ammo,
             ActiveWeapon::Shell => self.shells_ammo,
         }
     }
@@ -1123,6 +1230,7 @@ impl Tank {
             ActiveWeapon::Missiles => self.missile_ammo = self.missile_ammo.max(t.missile_ammo_per_pickup),
             ActiveWeapon::Flamethrower => self.flame_fuel = self.flame_fuel.max(t.flame_fuel_per_pickup),
             ActiveWeapon::Grenades => self.grenade_ammo = self.grenade_ammo.max(t.grenade_ammo_per_pickup),
+            ActiveWeapon::SonicHammer => self.sonic_ammo = self.sonic_ammo.max(t.sonic_ammo_per_pickup),
             ActiveWeapon::Shell => {}
         }
     }
@@ -1145,6 +1253,7 @@ impl Tank {
                 self.flame_held = false;
             }
             ActiveWeapon::Grenades => self.grenade_ammo = 0,
+            ActiveWeapon::SonicHammer => self.sonic_ammo = 0,
             ActiveWeapon::Shell => {}
         }
     }
@@ -1599,11 +1708,11 @@ fn blit_layers(c: &mut impl Canvas, tank: &Tank, layers: &[Layer], tint: Color) 
 /// / firing, the flamethrower's pilot flickering or its jet while held. A
 /// module is hardware, not a firing-mode indicator: it shows whenever the
 /// weapon is carried, and a wreck carries none.
-fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 6] {
+fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 7] {
     if tank.is_wreck() {
-        return [None; 6];
+        return [None; 7];
     }
-    let live = tank.active_weapon();
+    let live = tank.special().unwrap_or(ActiveWeapon::Shell);
     let minigun = (tank.minigun_ammo > 0 || tank.minigun_burst.is_some()).then(|| {
         TANK_MODULE_MINIGUN_COL + if tank.minigun_burst.is_some() { 1 + tank.minigun_cycle_frame() } else { 0 }
     });
@@ -1644,7 +1753,8 @@ fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 6] {
         let loaded = (tank.grenade_ammo.min(full) * 4 + full - 1) / full;
         TANK_MODULE_GRENADE_COL + (4 - loaded).clamp(0, 4)
     });
-    [minigun, missiles, plasma, laser, flame, grenades]
+    let sonic = (tank.sonic_ammo > 0 || tank.sonic_flash > 0.0).then(|| TANK_MODULE_SONIC_COL + crate::sonic::module_cell(tank, time));
+    [minigun, missiles, plasma, laser, flame, grenades, sonic]
 }
 
 /// Draw a tank: hull, turret and the weapon modules it carries, each at its

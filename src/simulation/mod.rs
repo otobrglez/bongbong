@@ -32,6 +32,7 @@ mod flame;
 mod hits;
 mod missiles;
 mod grenades;
+mod sonic;
 mod nav;
 pub mod portals;
 pub mod present;
@@ -52,6 +53,8 @@ mod lagcomp_tests;
 mod props_tests;
 #[cfg(test)]
 mod seat_tests;
+#[cfg(test)]
+mod sonic_tests;
 #[cfg(test)]
 mod tower_tests;
 mod waves;
@@ -99,6 +102,56 @@ pub const POSE_REACH_TICKS: f32 = 4.0;
 /// solver's own nudge on the room's copy.
 pub const POSE_REACH_SLACK_PX: f32 = 8.0;
 
+/// Ticks past a knock's skid (`sonic::knock`) the pose validator still
+/// allows a client-owned hull the knock's slide: the client hears of the
+/// knock a link's delay after the room put it on, and its skid runs that
+/// much later.
+pub const POSE_KNOCK_GRACE_TICKS: u64 = 60;
+
+/// What the pose validator allows a client-owned seat past its chassis's
+/// reach for the knocks the room put on it (`sonic::knock`,
+/// `Game::accept_seat_pose`): each pose may go `speed` px/s further, and
+/// all of them together no further than `budget` px - the longest slide
+/// the knocks could give, on the slipperiest ground - until frame `until`,
+/// the last skid's end and `POSE_KNOCK_GRACE_TICKS` past it. A client can
+/// claim no knock the room did not put on it, nor more than one gives.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct SeatKnock {
+    speed: f32,
+    budget: f32,
+    until: u64,
+}
+
+impl SeatKnock {
+    /// This allowance and a knock of `speed` px/s for `skid` seconds put on
+    /// at frame `frame`: the faster of the two speeds while either holds,
+    /// the two slides together, until the later end.
+    fn with(self, speed: f32, skid: f32, frame: u64) -> SeatKnock {
+        let t = tuning();
+        let live = if frame <= self.until { self } else { SeatKnock::default() };
+        let slide = crate::sonic::slide(&t, speed, t.sonic_skid_grip_floor) + POSE_REACH_SLACK_PX;
+        let until = frame + (skid / PHYSICS_FIXED_DT).ceil() as u64 + POSE_KNOCK_GRACE_TICKS;
+        SeatKnock { speed: live.speed.max(speed), budget: live.budget + slide, until: until.max(live.until) }
+    }
+
+    /// How much further than its reach a pose covering `ticks` ticks may go
+    /// at frame `frame` (px).
+    fn extra(&self, frame: u64, ticks: f32) -> f32 {
+        if frame > self.until {
+            return 0.0;
+        }
+        (self.speed * PHYSICS_FIXED_DT * ticks).min(self.budget)
+    }
+
+    /// A pose went `past` px further than its reach: that much of the
+    /// budget is spent.
+    fn spend(&mut self, past: f32) {
+        if past > 0.0 {
+            self.budget = (self.budget - past).max(0.0);
+        }
+    }
+}
+
 /// A client's own shot before the server has confirmed it: the pose and
 /// nothing else, since it is drawn and never simulated (`net::predict`).
 /// `Game::seat_shot` builds one from a seat's muzzle and
@@ -139,7 +192,7 @@ use rand::{RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
 use crate::math::Vec2;
 
-use crate::ai::{Ai, AiSnapshot, Intent, Mover, Role, WallAhead};
+use crate::ai::{Ai, AiSnapshot, Intent, Mover, Role, SpecialSense, WallAhead};
 use crate::battlefield;
 use crate::bullet::Bullet;
 use crate::frog::{Facing, Frog, Side};
@@ -384,12 +437,23 @@ pub enum Event {
     /// rather than where the beam stopped.
     LaserBeam { x0: f32, y0: f32, x1: f32, y1: f32, variant: &'static str, seat: u8, leg: u8, portal: bool },
     /// A velocity change the room put on a client-owned hull (knockback, a
-    /// blast, a ram, a missile launch's recoil); the owner applies it to
-    /// its own body, since the room places that hull wherever the owner
-    /// says (docs/online-coop-prd.md §4.16).
-    Shoved { seat: usize, vx: f32, vy: f32 },
-    /// A projectile or beam landed on `target` at (`x`, `y`).
-    Hit { target: HitTarget, damage: f32, killed: bool, x: f32, y: f32 },
+    /// blast, a ram, a missile launch's recoil, a sonic hammer's knock);
+    /// the owner applies it to its own body, since the room places that
+    /// hull wherever the owner says (docs/online-coop-prd.md §4.16).
+    /// `skid` is the seconds a knock takes the hull off its tracks
+    /// (`Tank::skid`, docs/sonic-hammer.md), 0 for every other shove.
+    Shoved { seat: usize, vx: f32, vy: f32, skid: f32 },
+    /// A projectile, beam or wave landed on `target` at (`x`, `y`);
+    /// `cause` says which kind of thing it was, for what draws it.
+    Hit { target: HitTarget, damage: f32, killed: bool, x: f32, y: f32, cause: HitCause },
+    /// A sonic hammer fired by `slot` from the pivot (`x`, `y`) along `dir`
+    /// (`Dir::name`) (docs/sonic-hammer.md): the wave a replica draws.
+    /// Logged right after its `Fired`, in the same tick.
+    SonicBlast { slot: usize, x: f32, y: f32, dir: &'static str },
+    /// An enemy in owner slot `slot` began the wind-up of `weapon`
+    /// (`ActiveWeapon::name`, `tank::Tell`). Not sent: the tell's state
+    /// travels in `TankState::tell`.
+    TellStarted { slot: usize, weapon: &'static str },
     /// A tank became a wreck (any cause) at (`x`, `y`).
     Wreck { slot: usize, x: f32, y: f32 },
     /// Ram contact between the tanks in `slot` and `other_slot`: an enemy and
@@ -456,9 +520,10 @@ pub enum Event {
     /// fuse (or a fire) set it off rather than a shot or a ram; `drum`
     /// says which kind went off.
     Blast { x: f32, y: f32, chained: bool, drum: Drum },
-    /// A fuel drum set off by another blast launched from (`x`, `y`)
-    /// toward (`to_x`, `to_y`), where it will detonate when it lands.
-    DrumLaunched { x: f32, y: f32, to_x: f32, to_y: f32 },
+    /// A drum launched from (`x`, `y`) toward (`to_x`, `to_y`), where it
+    /// will detonate when it lands: a fuel drum another blast set off, or
+    /// any drum a sonic hammer's wave threw.
+    DrumLaunched { x: f32, y: f32, to_x: f32, to_y: f32, drum: Drum },
     /// Seat `seat` set a lantern down at (`x`, `y`) (docs/volcano.md).
     LanternSet { seat: u8, x: f32, y: f32 },
     /// A blast broke the lantern at (`x`, `y`).
@@ -552,6 +617,23 @@ pub enum Event {
     /// Rounds with more than one seat: the enemy in `slot` switched to
     /// fighting `player` (`Ai::target_player`).
     Retarget { slot: usize, player: u8 },
+}
+
+/// What landed in an `Event::Hit`, so a picture can be chosen by its cause
+/// (docs/sonic-hammer.md): every shot, beam and stream draws the burst it
+/// always has, and a sonic hammer's wave a flash and dust rather than
+/// fire. A weapon that lands its own kind of hit adds its cause here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HitCause {
+    Shell,
+    Bullet,
+    Plasma,
+    Laser,
+    Flame,
+    /// A tesla tower's strike.
+    Tesla,
+    Sonic,
 }
 
 /// What an `Event::Hit` landed on.
@@ -720,6 +802,18 @@ pub struct Game {
     /// dropped, one that went back to stage 2 - is the room's to drive
     /// again on the next tick without anybody having to release it.
     seat_owned: [u64; MAX_SEATS],
+    /// The knocks the room put on each client-owned seat (`sonic::knock`)
+    /// that `accept_seat_pose` still allows for (`SeatKnock`).
+    seat_knock: [SeatKnock; MAX_SEATS],
+    /// The sonic hammer's waves running out over the field
+    /// (docs/sonic-hammer.md), in the order they were fired: struck by the
+    /// rules on the round that simulates them (`tick_sonic_waves`), only
+    /// drawn on a replica. Cleared by `init`.
+    pub(crate) sonic_waves: Vec<crate::sonic::SonicWave>,
+    /// Tall-grass cells a sonic wave flattened, with the seconds they hide
+    /// nobody for yet: taken out of the cover `Terrain` reads
+    /// (`cover_cells`). Ordered, ticked down in `tick_timers`.
+    pub(crate) grass_flat: BTreeMap<(i32, i32), f32>,
     /// The enemy and frog hit boxes of the last `REWIND_MAX_TICKS` ticks,
     /// recorded at the end of each update: what a seat's shot is swept
     /// against when its client was drawing the past (`seat_rewind`).
@@ -1082,6 +1176,9 @@ struct Frame {
     pending_missiles: Vec<Missile>,
     pending_grenades: Vec<Grenade>,
     pending_lasers: Vec<PendingLaserShot>,
+    /// Sonic hammer blasts fired this frame, cast into waves by
+    /// `resolve_sonic` once the tank loops are done.
+    pending_sonic: Vec<sonic::PendingSonic>,
     /// Flame jets emitted this frame, one per firing nozzle
     /// (`resolve_flames` takes them).
     flame_jets: Vec<FlameJet>,
@@ -1113,22 +1210,28 @@ struct Frame {
 #[derive(Debug, Default)]
 pub(super) struct Shoves {
     owned: [bool; MAX_SEATS],
-    log: Vec<(usize, Vec2)>,
+    log: Vec<(usize, Vec2, f32)>,
 }
 
 impl Shoves {
     /// A shove of `dv` px/s on the tank `owner` names, kept only when that
     /// tank is a seat its client owns this update.
     pub(super) fn push(&mut self, owner: Owner, dv: Vec2) {
+        self.push_knock(owner, dv, 0.0);
+    }
+
+    /// `push`, for a knock that takes the hull off its tracks for `skid`
+    /// seconds (`sonic::knock`).
+    pub(super) fn push_knock(&mut self, owner: Owner, dv: Vec2, skid: f32) {
         if let Owner::Player(seat) = owner
             && self.owned.get(seat as usize).copied().unwrap_or(false)
         {
-            self.log.push((seat as usize, dv));
+            self.log.push((seat as usize, dv, skid));
         }
     }
 
     fn into_events(self) -> impl Iterator<Item = Event> {
-        self.log.into_iter().map(|(seat, dv)| Event::Shoved { seat, vx: dv.x, vy: dv.y })
+        self.log.into_iter().map(|(seat, dv, skid)| Event::Shoved { seat, vx: dv.x, vy: dv.y, skid })
     }
 }
 
@@ -1152,6 +1255,7 @@ impl Frame {
             pending_missiles: Vec::new(),
             pending_grenades: Vec::new(),
             pending_lasers: Vec::new(),
+            pending_sonic: Vec::new(),
             flame_jets: Vec::new(),
             muzzle_flashes: Vec::new(),
             impact_flashes: Vec::new(),
@@ -1324,6 +1428,9 @@ impl Game {
         // `frame` starts over, so an update number held from the last
         // round would name one of this round's.
         self.seat_owned = [0; MAX_SEATS];
+        self.seat_knock = [SeatKnock::default(); MAX_SEATS];
+        self.sonic_waves.clear();
+        self.grass_flat.clear();
         self.next_shot_id = 0;
         self.last_engage.clear();
         self.debug_kills.clear();
@@ -1783,6 +1890,7 @@ impl Game {
             attack_cooldown: 0.0,
             facing: Facing::Right,
             death_elapsed: None,
+            stun_timer: 0.0,
         },))
     }
 
@@ -1825,7 +1933,7 @@ impl Game {
         self.time += dt;
         self.tick_nightfall();
         self.tick_timers(dt, &mut rng);
-        let terrain = Terrain::build(&self.world, width, height, &self.grass_cells, &self.water);
+        let terrain = Terrain::build(&self.world, width, height, &self.cover_cells(), &self.water);
         // One nav grid for the whole frame - labelled, priced and with a
         // flow field per shared target (`route_grid_on`), on the occupancy
         // and labels the round keeps across frames (`refresh_nav`) -
@@ -1859,6 +1967,8 @@ impl Game {
             self.guide_missiles(&mut f);
             self.resolve_lasers(&mut f);
             self.resolve_flames(&mut f);
+            self.resolve_sonic(&mut f);
+            self.tick_sonic_waves(&mut f, true);
             self.step_world(&mut f, true);
             self.sync_tanks_and_ram(&mut f);
             self.ram_props(&mut f);
@@ -1892,6 +2002,7 @@ impl Game {
             // without hurting anyone) while the restart counts down.
             // Physics doesn't step, so nothing drifts.
             self.guide_missiles(&mut f);
+            self.tick_sonic_waves(&mut f, false);
             self.step_world(&mut f, false);
             self.roll_grenades(&mut f);
             self.resolve_projectiles::<Shell>(&mut f, false);
@@ -1928,6 +2039,11 @@ impl Game {
     /// Append the frame's effects and events and put the RNG back.
     fn finish_frame(&mut self, f: Frame) {
         let Frame { blast_fx, scorches, decals, muzzle_flashes, impact_flashes, shocks, events, shoves, rng, .. } = f;
+        for &(seat, dv, skid) in &shoves.log {
+            if skid > 0.0 && seat < MAX_SEATS {
+                self.seat_knock[seat] = self.seat_knock[seat].with(dv.length(), skid, self.frame);
+            }
+        }
         self.show(Spectacle { blast_fx, scorches, decals, muzzle_flashes, impact_flashes, shocks });
         self.events.extend(events);
         self.events.extend(shoves.into_events());
@@ -2041,6 +2157,11 @@ impl Game {
             tank.tick_minigun_spin(dt);
             tank.tick_missile_pod();
             tank.tick_recoil(dt);
+            tank.skid = (tank.skid - dt).max(0.0);
+            if tank.is_wreck() {
+                tank.tell = None;
+                tank.skid = 0.0;
+            }
             if roll_wreck_col(tank, rng) {
                 // The frame a tank becomes a wreck: stop it behaving like
                 // an air-hockey puck. See `Physics::settle_wreck`.
@@ -2049,6 +2170,11 @@ impl Game {
                 }
             }
         }
+        // Flattened grass stands back up and hides again (`cover_cells`).
+        self.grass_flat.retain(|_, left| {
+            *left -= dt;
+            *left > 0.0
+        });
         for frog in self.world.query::<&mut Frog>().iter() {
             frog.tick(dt);
             self.physics.set_position(frog.body, frog.position);
@@ -2161,6 +2287,9 @@ impl Game {
         // The sandbox's clock stands at the last snapshot's tick, so a
         // gust reaches the predicted hull when the drawn sand front does.
         let footing = Footing::at(water, lava, *weather, tank.position, *time);
+        // The seat's own skid runs on the client's ticks, as the room's
+        // does in `tick_timers` (`Predictor::shove` starts it).
+        tank.skid = (tank.skid - dt).max(0.0);
         drive_tank(physics, &mut tank, intent, dt, footing);
         physics.step();
         // The solver moved the body; the tank's own position is what
@@ -2220,7 +2349,7 @@ impl Game {
     /// `Placed` so the client comes back to it.
     pub fn accept_seat_pose(&mut self, seat: usize, pose: SeatPose, reach_ticks: u32) -> Result<(), &'static str> {
         let Some(entity) = self.seats.get(seat).copied().flatten() else { return Err("no such seat") };
-        let (from, reach) = {
+        let (from, reach, knock) = {
             let Ok(tank) = self.world.get::<&Tank>(entity) else { return Err("no tank") };
             if tank.is_wreck() {
                 return Err("a wreck");
@@ -2233,10 +2362,14 @@ impl Game {
             // past its top speed, and the rules put it there.
             let flow = Footing::at(&self.water, &self.lava, self.weather, tank.position, self.time).flow;
             let drift = (flow.x * flow.x + flow.y * flow.y).sqrt();
-            (tank.position, (tank.effective_speed() + drift) * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX)
+            let reach = (tank.effective_speed() + drift) * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX;
+            // A knock carries it past that too, by no more than the knock
+            // could slide it in all (`SeatKnock`).
+            (tank.position, reach, self.seat_knock[seat].extra(self.frame, ticks))
         };
         let (dx, dy) = (pose.position.x - from.x, pose.position.y - from.y);
-        if (dx * dx + dy * dy).sqrt() > reach {
+        let step = (dx * dx + dy * dy).sqrt();
+        if step > reach + knock {
             return Err("further than the hull could have gone");
         }
         let (width, height) = self.map.field_size();
@@ -2263,6 +2396,7 @@ impl Game {
             pose.position.x - pose.velocity.x * PHYSICS_FIXED_DT,
             pose.position.y - pose.velocity.y * PHYSICS_FIXED_DT,
         );
+        self.seat_knock[seat].spend(step - reach);
         self.place_seat(seat, back, pose.rotation, pose.velocity);
         self.seat_owned[seat] = self.frame + 1;
         Ok(())
@@ -2458,7 +2592,7 @@ impl Game {
             return;
         }
         let (width, height) = self.map.field_size();
-        let terrain = Terrain::build(&self.world, width, height, &self.grass_cells, &self.water);
+        let terrain = Terrain::build(&self.world, width, height, &self.cover_cells(), &self.water);
         for (entity, owner) in streaming {
             let Ok(tank) = self.world.get::<&Tank>(entity) else { continue };
             let jet = weapons::flame_jet(&tank, owner, entity);
@@ -2502,7 +2636,28 @@ impl Game {
             if tank.heat_shield_timer > 0.0 {
                 tank.heat_shield_timer = (tank.heat_shield_timer - dt).max(f32::EPSILON);
             }
+            // An enemy's tell and a hull's skid run down the same way,
+            // until the room's word ends them (`TankState::{tell, skid}`).
+            if let Some(tell) = tank.tell.as_mut() {
+                tell.left = (tell.left - dt).max(f32::EPSILON);
+            }
+            if tank.skid > 0.0 {
+                tank.skid = (tank.skid - dt).max(f32::EPSILON);
+            }
         }
+        // A stunned frog stays stunned until the room says it is not.
+        for frog in self.world.query_mut::<&mut Frog>() {
+            if frog.stun_timer > 0.0 {
+                frog.stun_timer = (frog.stun_timer - dt).max(f32::EPSILON);
+            }
+        }
+        // The sonic waves run out over the picture, flattening the grass
+        // they pass; flattened grass stands back up.
+        self.grass_flat.retain(|_, left| {
+            *left -= dt;
+            *left > 0.0
+        });
+        self.tick_sonic_pictures(dt);
         // A drum that lands blasts where the server says it did, so the
         // landed ones are dropped here and the `Blast` event carries the
         // rest. A lava bomb the same.
@@ -2684,11 +2839,6 @@ impl Game {
                             LaserVariant::Red
                         };
                     }
-                    PickupKind::Minigun => tank.take_weapon(ActiveWeapon::Minigun),
-                    PickupKind::Missiles => tank.take_weapon(ActiveWeapon::Missiles),
-                    PickupKind::Grenades => tank.take_weapon(ActiveWeapon::Grenades),
-                    // Fuel in seconds; a second tank refills it.
-                    PickupKind::Flamethrower => tank.take_weapon(ActiveWeapon::Flamethrower),
                     PickupKind::Plasma => {
                         tank.take_weapon(ActiveWeapon::Plasma);
                         tank.plasma_variant = if f.rng.random_range(0.0..1.0) < tuning().plasma_purple_pickup_chance {
@@ -2717,6 +2867,15 @@ impl Game {
                     PickupKind::HeatShield => {
                         tank.heat_shield_timer = tuning().heat_shield_seconds;
                         tank.burn_timer = 0.0;
+                    }
+                    // Every other weapon crate - the minigun, the missiles,
+                    // the flamethrower's fuel (in seconds), the grenades,
+                    // the sonic hammer - is its weapon taken up, and no
+                    // more (`PickupKind::weapon`).
+                    other => {
+                        if let Some(weapon) = other.weapon() {
+                            tank.take_weapon(weapon);
+                        }
                     }
                 }
                 tank.owner_slot()
@@ -2866,6 +3025,8 @@ impl Game {
                 let mut q = self.world.query_one::<&mut Tank>(entity);
                 let tank = q.get().expect("placed tank exists");
                 tank.portal_cooldown = t.portal_cooldown_seconds;
+                // A teleport ends a wind-up; `place_tank` ended any skid.
+                tank.tell = None;
                 tank.owner_slot()
             };
             if let Ok(mut ai) = self.world.get::<&mut Ai>(entity) {
@@ -2928,7 +3089,7 @@ impl Game {
         let weapon = tank.active_weapon();
         let should_fire = match weapon {
             ActiveWeapon::Laser | ActiveWeapon::Minigun | ActiveWeapon::Missiles | ActiveWeapon::Flamethrower => intent.fire,
-            ActiveWeapon::Plasma | ActiveWeapon::Grenades | ActiveWeapon::Shell => fire_pressed,
+            ActiveWeapon::Plasma | ActiveWeapon::Grenades | ActiveWeapon::SonicHammer | ActiveWeapon::Shell => fire_pressed,
         };
         if weapon == ActiveWeapon::Flamethrower {
             if should_fire {
@@ -3089,8 +3250,11 @@ impl Game {
         };
         let quarry = live_frog(self.frog);
         let home = live_frog(self.enemy_frog).map(|(_, p)| p);
-        let target_of = |ai: &Ai| match (ai.role, quarry) {
-            (Role::Hunter, Some((frog, pos))) => (pos, Some(frog)),
+        // A hunter carrying a weapon its own rule fires (`ai::generic_fire`
+        // false: the sonic hammer, which cannot hurt a frog) fights the
+        // seat like everyone else until it is spent.
+        let target_of = |ai: &Ai, tank: &Tank| match (ai.role, quarry) {
+            (Role::Hunter, Some((frog, pos))) if crate::ai::generic_fire(tank.active_weapon()) => (pos, Some(frog)),
             _ => (target_pos_of(ai), None),
         };
         let guard_holds = |ai: &Ai| {
@@ -3110,7 +3274,7 @@ impl Game {
         let mut engaged: Vec<Vec<(Entity, Position)>> = vec![Vec::new(); players.len()];
         let mut engaged_frog: Vec<(Entity, Position)> = Vec::new();
         for (entity, tank, ai) in self.world.query::<(Entity, &Tank, &Ai)>().iter() {
-            let (target, hunting) = target_of(ai);
+            let (target, hunting) = target_of(ai, tank);
             // A seat in the light is seen from further; a frog by the sky.
             let sight = if hunting.is_some() { view_range } else { players[(ai.target_player() as usize).min(players.len() - 1)].sight };
             let status = if guard_holds(ai) { EngageStatus::OutOfRange } else { engage_status(tank, ai, target, sight) };
@@ -3252,6 +3416,24 @@ impl Game {
             if field { live_seats.iter().copied().chain(quarry.map(|(_, p)| p)).collect() } else { Vec::new() };
         let frame = self.frame;
 
+        // What a hammer-carrying enemy would do with a blast each way it
+        // could face (docs/sonic-hammer.md "AI"), measured before anyone
+        // thinks; only when one carries a hammer, so a round without costs
+        // nothing and every `Brain` is handed `SpecialSense::None`.
+        let armed = self.world.query::<&Tank>().with::<&Ai>().iter().any(|t| t.active_weapon() == ActiveWeapon::SonicHammer);
+        let hammer_senses = if armed {
+            let seats: Vec<sonic::HammerSeat> = players
+                .iter()
+                .enumerate()
+                .map(|(i, p)| with_tank(&self.world, p.entity, |t| sonic::HammerSeat::of(i as u8, t, !p.wreck && !p.entering, p.concealed)))
+                .collect();
+            let alerts: BTreeMap<Entity, Option<Position>> =
+                self.world.query::<(Entity, &Ai)>().iter().map(|(e, ai)| (e, if field { ai.field.alert } else { alert })).collect();
+            self.hammer_senses(f, &seats, &alerts, grid)
+        } else {
+            BTreeMap::new()
+        };
+
         // --- collect pass: perception, `think`, aim and fire, exactly as
         // before. Only the impulse is deferred. ---
         let mut pending: Vec<Pending> = Vec::new();
@@ -3261,8 +3443,14 @@ impl Game {
             // (`field::mind`): a far one coasts on its last intent between
             // thinks, its trigger released, and one nothing has woken
             // holds still. A think then covers every tick since the last.
+            // A tank that does not think this tick coasts (`coast_enemy`):
+            // a branch that takes a tank's thinking away does it here,
+            // before the field map's own choice.
             let think_dt = if field {
-                let hunting = ai.role == Role::Hunter && quarry.is_some();
+                // A hunter carrying a weapon its own rule fires fights the
+                // seat rather than the frog (`target_of`), so it is woken
+                // and leashed as any other tank is.
+                let hunting = ai.role == Role::Hunter && quarry.is_some() && crate::ai::generic_fire(tank.active_weapon());
                 match field::mind(ai, tank.position, tank.owner_slot(), &anchors, view_range, hunting, frame, f.dt) {
                     field::Mind::Think(dt) => dt,
                     idle => {
@@ -3270,13 +3458,7 @@ impl Game {
                             field::Mind::Coast(intent) => intent,
                             _ => Intent::default(),
                         };
-                        let handle = tank.body.expect("a live enemy always has a body here");
-                        let current = self.physics.velocity(handle);
-                        let facing_before = tank.rotation;
-                        tank.control(intent.move_dir, intent.face);
-                        let owner = tank.owner();
-                        tick_queued_shots(&mut self.physics, f, tank, owner);
-                        pending.push(Pending { entity, slot: tank.owner_slot(), intent, current, facing_before });
+                        pending.push(coast_enemy(&mut self.physics, f, entity, tank, intent));
                         continue;
                     }
                 }
@@ -3305,7 +3487,7 @@ impl Game {
                     .map(|&(_, tile)| f.terrain.line_of_sight_from(tile, tank.position, at));
                 ai.set_grudge_sight(sight);
             }
-            let (mut target, mut hunting) = target_of(ai);
+            let (mut target, mut hunting) = target_of(ai, tank);
             // A hunter that cannot route to the frog and holds no slot on
             // its ring (every slot rejected: off the map, unreachable from
             // its half of the field, or iron in the way) has no way at the
@@ -3388,6 +3570,7 @@ impl Game {
                     player_hidden,
                     walls_ahead,
                     fighting_sight,
+                    &hammer_senses.get(&entity).map_or(SpecialSense::None, |s| SpecialSense::Hammer(*s)),
                 )
             });
             if let Some(before) = before {
@@ -3395,15 +3578,16 @@ impl Game {
             }
             // Aim now, drive later. `tank.control` sets the hull rotation
             // a shot flies along, so it has to happen before the shot; the
-            // impulse is the only part that waits for the commander.
+            // impulse is the only part that waits for the commander. A
+            // tank in a tell holds its aim whatever it decided.
+            let intent = hold_for_tell(intent, tank.tell);
             tank.control(intent.move_dir, intent.face);
             let owner = tank.owner();
             tick_queued_shots(&mut self.physics, f, tank, owner);
             // The AI paces itself with its own fire timer; `fire_cooldown`
-            // is the weapon's own minimum (a burst in progress, say).
-            if intent.fire && tank.fire_cooldown <= 0.0 {
-                dispatch_fire(&mut self.physics, f, tank, owner, intent.fire_aim_offset);
-            }
+            // is the weapon's own minimum (a burst in progress, say). A
+            // weapon with a tell winds up first (`enemy_trigger`).
+            enemy_trigger(&mut self.physics, f, tank, owner, intent);
             pending.push(Pending { entity, slot: tank.owner_slot(), intent, current, facing_before });
         }
 
@@ -3458,8 +3642,10 @@ impl Game {
         // it was before the split; sorting here would look tidier and would
         // shift every existing replay.
         for p in &pending {
-            let intent = self.commander.apply(p.slot, p.intent);
             with_tank_mut(&self.world, p.entity, |tank| {
+                // The commander's order is never the last word on a tank
+                // in a tell: it holds its aim (docs/sonic-hammer.md).
+                let intent = commanded_intent(&self.commander, p.slot, p.intent, tank.tell);
                 let footing = Footing::at(&self.water, &self.lava, self.weather, tank.position, self.time);
                 drive_tank_with(&mut self.physics, tank, intent, f.dt, p.current, p.facing_before, footing);
             });
@@ -3583,7 +3769,7 @@ impl Game {
                 f.impact_flashes.push(Shockwave::new(hit_pos));
                 // No knockback and no frog hop: an instant beam isn't
                 // something to be shoved by or to dodge.
-                self.apply_hit(f, target, hit_pos, laser_damage_range(&shot), HitEffects::none(), shot.owner);
+                self.apply_hit(f, target, hit_pos, laser_damage_range(&shot), HitEffects::none(HitCause::Laser), shot.owner);
                 break;
             }
         }
@@ -3954,6 +4140,7 @@ impl Game {
                 knockback: P::knockback_speed().map(|speed| (dir, speed)),
                 frog_hop: P::frog_hops().then_some(vel),
                 travel: Some(dir),
+                cause: P::hit_cause(),
             };
             self.apply_hit(f, target, hit_pos, dmg, effects, owner);
         }
@@ -4480,6 +4667,20 @@ impl Game {
         &self.water
     }
 
+    /// Every live hull knocked off its tracks (`Tank::skid`): its owner
+    /// slot, position and speed (px/s). What `fx.rs` scrapes dust from.
+    pub fn skidding(&self) -> Vec<(usize, Position, f32)> {
+        let mut out: Vec<(usize, Position, f32)> = self
+            .world
+            .query::<&Tank>()
+            .iter()
+            .filter(|t| t.skid > 0.0 && !t.is_wreck())
+            .map(|t| (t.owner_slot(), t.position, t.body.map_or(t.skid_speed, |b| self.physics.velocity(b).length())))
+            .collect();
+        out.sort_by_key(|s| s.0);
+        out
+    }
+
     /// Every live hull in a ford this frame: its owner slot, position and
     /// speed (px/s). What `fx.rs` throws spray from.
     pub fn wading(&self) -> Vec<(usize, Position, f32)> {
@@ -4621,6 +4822,9 @@ impl Game {
                     minigun_ammo: tank.minigun_ammo,
                     missile_ammo: tank.missile_ammo,
                     grenade_ammo: tank.grenade_ammo,
+                    sonic_ammo: tank.sonic_ammo,
+                    tell: tank.tell.is_some(),
+                    skidding: tank.skid > 0.0,
                     plasma_ammo: tank.plasma_ammo,
                     laser_charges: tank.laser_charges,
                     flame_fuel: tank.flame_fuel,
@@ -4639,8 +4843,9 @@ impl Game {
                             ai.field.alert.is_none()
                                 && !ai.field.called
                                 && !ai.is_hit_alerted()
-                                && !(ai.role == Role::Hunter && quarry)
+                                && !(ai.role == Role::Hunter && quarry && crate::ai::generic_fire(tank.active_weapon()))
                         }),
+                    guarding: ai.is_some_and(Ai::holds_beat),
                 }
             })
             .collect()
@@ -4677,6 +4882,12 @@ pub struct TankSnapshot {
     pub minigun_ammo: i32,
     pub missile_ammo: i32,
     pub grenade_ammo: i32,
+    pub sonic_ammo: i32,
+    /// Winding up a special (`Tank::tell`): holding still on purpose.
+    pub tell: bool,
+    /// Knocked off its tracks (`Tank::skid`): sliding where it did not ask
+    /// to go.
+    pub skidding: bool,
     pub plasma_ammo: i32,
     pub laser_charges: i32,
     /// Flamethrower fuel left, in seconds of burn.
@@ -4719,9 +4930,14 @@ pub struct TankSnapshot {
     /// holds still and thinks nothing, by design. Always false on an arena.
     pub asleep: bool,
     /// A field map's enemy with nothing calling it to the fight - no
-    /// alert, no call, no recent hit - so it keeps to its home leash
-    /// rather than heading for a seat. Always false on an arena.
+    /// alert, no call, no recent hit, no frog it hunts - so it keeps to
+    /// its home leash rather than heading for a seat. Always false on an
+    /// arena.
     pub leashed: bool,
+    /// A guard keeping its beat by its frog while the seat it would fight
+    /// is far from it (`Role::Guard`, `Ai::holds_beat`): staying put, by
+    /// design.
+    pub guarding: bool,
 }
 
 /// Turn an intent into hull rotation plus a mass-aware impulse nudging the
@@ -4809,6 +5025,72 @@ impl Footing {
     }
 }
 
+/// One enemy that does not think this tick: a field map's far tank on its
+/// last intent, one nothing has woken on none. It holds a tell's aim, ticks
+/// its queued shots and its tell, its trigger released, and is handed back
+/// as the `Pending` the apply pass drives.
+fn coast_enemy(physics: &mut Physics, f: &mut Frame, entity: Entity, tank: &mut Tank, intent: Intent) -> Pending {
+    let intent = hold_for_tell(intent, tank.tell);
+    let handle = tank.body.expect("a live enemy always has a body here");
+    let current = physics.velocity(handle);
+    let facing_before = tank.rotation;
+    tank.control(intent.move_dir, intent.face);
+    let owner = tank.owner();
+    tick_queued_shots(physics, f, tank, owner);
+    enemy_trigger(physics, f, tank, owner, Intent { fire: false, ..intent });
+    Pending { entity, slot: tank.owner_slot(), intent, current, facing_before }
+}
+
+/// The intent the apply pass drives `slot` by: the commander's orders over
+/// the collect pass's `intent`, then a tell's hold over both - the last
+/// word on a tank winding up is its tell's (docs/sonic-hammer.md).
+fn commanded_intent(commander: &command::Commander, slot: usize, intent: Intent, tell: Option<crate::tank::Tell>) -> Intent {
+    hold_for_tell(commander.apply(slot, intent), tell)
+}
+
+/// `intent` for a tank in a tell (docs/sonic-hammer.md "The enemy tell"):
+/// no movement, no new trigger, facing the way the tell goes off. The
+/// intent as it is for a tank with none.
+fn hold_for_tell(intent: Intent, tell: Option<crate::tank::Tell>) -> Intent {
+    match tell {
+        Some(tell) => Intent { move_dir: None, face: Some(tell.facing), fire: false, ..intent },
+        None => intent,
+    }
+}
+
+/// An enemy's trigger for this frame: a tell running is counted down and,
+/// at its end, the weapon fires along the facing it held (if the tank is
+/// whole, still carries it and its cooldown is out; otherwise the tell
+/// lapses); else a pull with the cooldown out starts the weapon's tell
+/// (`ActiveWeapon::tell_seconds`, `Event::TellStarted`) or, for a weapon
+/// with none, fires it as ever.
+fn enemy_trigger(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, owner: Owner, intent: Intent) {
+    if let Some(mut tell) = tank.tell {
+        tell.left -= f.dt;
+        if tell.left > 0.0 {
+            tank.tell = Some(tell);
+            return;
+        }
+        tank.tell = None;
+        if !tank.is_wreck() && tank.active_weapon() == tell.weapon && tank.fire_cooldown <= 0.0 {
+            dispatch_fire(physics, f, tank, owner, 0.0);
+        }
+        return;
+    }
+    if !intent.fire || tank.fire_cooldown > 0.0 {
+        return;
+    }
+    let weapon = tank.active_weapon();
+    match weapon.tell_seconds() {
+        Some(total) => {
+            let facing = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up);
+            tank.tell = Some(crate::tank::Tell { weapon, left: total, total, facing });
+            f.events.push(Event::TellStarted { slot: tank.owner_slot(), weapon: weapon.name() });
+        }
+        None => dispatch_fire(physics, f, tank, owner, intent.fire_aim_offset),
+    }
+}
+
 fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32, footing: Footing) {
     let handle = tank.body.expect("tank should always have a physics body once spawned");
     drive_tank_with(physics, tank, intent, dt, physics.velocity(handle), tank.rotation, footing)
@@ -4863,6 +5145,24 @@ fn drive_tank_with(
 
     if tank.rotation != facing_before {
         physics.resize_collider(physics.collider_of(handle), tank.move_half_extents(tank.facing_along_x()));
+    }
+
+    // Knocked off its tracks (`Tank::skid`, docs/sonic-hammer.md): the
+    // drive does nothing - the stick still turns the hull - and its motion
+    // against the ground's flow falls by the skid's friction whichever way
+    // it faces, so a knock slides a hull as far head-on as broadside. All
+    // but still, it drives again at once.
+    if tank.skid > 0.0 {
+        let t = tuning();
+        let speed = current.length();
+        if speed < t.tank_decel_snap_px {
+            tank.skid = 0.0;
+        } else {
+            let fall = (crate::sonic::skid_friction(&t, footing.grip) * dt).min(speed);
+            let delta = current * (-fall / speed);
+            physics.apply_impulse(handle, Position::new(delta.x * tank.mass(), delta.y * tank.mass()));
+            return;
+        }
     }
 
     // The commanded top speed, eased off by whatever `intent.slow` asks for
@@ -5243,8 +5543,9 @@ fn with_two_tanks_mut<R>(world: &mut hecs::World, a: Entity, b: Entity, f: impl 
 /// Build one enemy tank of chassis `row` at `pos` in owner slot `slot`,
 /// facing down, with every per-tank spawn roll in this order: speed
 /// spread (`enemy_speed_variance`), damage variant, a possible special
-/// weapon (`enemy_special_weapon_chance`, one pickup's worth), a possible
-/// starting shield (`spawn_shield_chance`, the player's roll too) and
+/// weapon (`enemy_special_weapon_chance`, one pickup's worth, swapped by a
+/// hash for a BB-36 weapon at its share - `sonic::swap_spawn_special`), a
+/// possible starting shield (`spawn_shield_chance`, the player's roll too) and
 /// track wobble. Shared by the band placement in `init` and the wave
 /// scheduler, so a wave tank is kitted exactly like a band tank. No
 /// physics body: the caller spawns one when the tank is on the field.
@@ -5278,6 +5579,9 @@ fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize) -> 
         } else {
             enemy.take_weapon(ActiveWeapon::Minigun);
         }
+        // The BB-36 weapons come in by a hashed swap of the special just
+        // drawn, never by a draw: the stream above is untouched.
+        sonic::swap_spawn_special(&mut enemy, slot, pos);
     }
     if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
         enemy.raise_shield();

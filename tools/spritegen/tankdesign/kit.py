@@ -1066,5 +1066,5 @@ class Line:
         fn(design, b, state, hp)
 
 
-WEAPONS = ['minigun', 'missiles', 'plasma', 'laser', 'flame', 'grenade']
-WEAPON_STATES = {'minigun': 4, 'missiles': 5, 'plasma': 3, 'laser': 3, 'flame': 4, 'grenade': 5}
+WEAPONS = ['minigun', 'missiles', 'plasma', 'laser', 'flame', 'grenade', 'sonic']
+WEAPON_STATES = {'minigun': 4, 'missiles': 5, 'plasma': 3, 'laser': 3, 'flame': 4, 'grenade': 5, 'sonic': 4}

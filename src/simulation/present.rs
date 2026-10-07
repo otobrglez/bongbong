@@ -69,7 +69,7 @@ impl Game {
     /// edge, every live tank with a body, the frogs.
     pub fn present_world(&self) -> PresentWorld {
         let (width, height) = self.map.field_size();
-        let terrain = Terrain::build(&self.world, width, height, &self.grass_cells, &self.water);
+        let terrain = Terrain::build(&self.world, width, height, &self.cover_cells(), &self.water);
         let tanks = self
             .world
             .query::<&Tank>()
@@ -98,15 +98,23 @@ impl Game {
     /// capped. For a client firing from a hull it owns (`net::predict`),
     /// so the kick lands on the press rather than a round trip later.
     pub fn seat_recoil(&mut self, seat: usize, kind: ProvisionalKind, velocity: Vec2) {
-        let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
-        let Ok(tank) = self.world.get::<&Tank>(entity) else { return };
-        let Some(handle) = tank.body else { return };
         let t = tuning();
         let (speed, max_speed) = match kind {
             ProvisionalKind::Shell => (t.shell_recoil_speed, t.shell_recoil_max_speed),
             ProvisionalKind::Bullet => (t.minigun_bullet_recoil_speed, t.minigun_bullet_recoil_max_speed),
             ProvisionalKind::Plasma => (t.plasma_recoil_speed, t.plasma_recoil_max_speed),
         };
+        self.seat_kick(seat, velocity, speed, max_speed);
+    }
+
+    /// Kick one seat's hull back against `velocity` (any length) at `speed`
+    /// px/s normalised to the chassis-free mass and capped at `max_speed`:
+    /// `weapons::apply_recoil` for a client firing from a hull it owns - a
+    /// shot's kick (`seat_recoil`), a sonic hammer's.
+    pub fn seat_kick(&mut self, seat: usize, velocity: Vec2, speed: f32, max_speed: f32) {
+        let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
+        let Ok(tank) = self.world.get::<&Tank>(entity) else { return };
+        let Some(handle) = tank.body else { return };
         let len = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
         if len <= f32::EPSILON {
             return;
@@ -306,6 +314,37 @@ impl Game {
             ProvisionalKind::Shell => tank.kick(false),
             ProvisionalKind::Plasma => tank.kick(true),
             ProvisionalKind::Bullet => {}
+        }
+    }
+
+    /// Draw a sonic hammer's press on this replica from `origin` along
+    /// `facing` (presentation only): the same show the room's `SonicBlast`
+    /// puts on - the wave cast against the replica's tiles, the ripple -
+    /// and the seat's dish firing, on the press rather than a round trip
+    /// later (docs/sonic-hammer.md "Online: the shooter's press is drawn at
+    /// once").
+    pub fn draw_press_show(&mut self, seat: u8, origin: Position, facing: crate::tank::Dir) {
+        let mut show = crate::simulation::Spectacle::default();
+        self.sonic_show(&mut show, origin, facing, Owner::Player(seat));
+        self.show(show);
+        let Some(entity) = self.seats.get(seat as usize).copied().flatten() else { return };
+        if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {
+            tank.kick_sonic();
+        }
+    }
+
+    /// One seat's skid (`Tank::skid`), 0 for none.
+    pub fn seat_skid(&self, seat: usize) -> f32 {
+        let Some(entity) = self.seats.get(seat).copied().flatten() else { return 0.0 };
+        self.world.get::<&Tank>(entity).map_or(0.0, |t| t.skid)
+    }
+
+    /// Set one seat's skid: a client's sandbox taking the room's knock, or
+    /// keeping its own across a reconciliation.
+    pub fn set_seat_skid(&mut self, seat: usize, skid: f32) {
+        let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
+        if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {
+            tank.skid = skid.max(0.0);
         }
     }
 

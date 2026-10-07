@@ -375,6 +375,8 @@ mod tests {
             flags: rng.random(),
             weapon: WeaponKind::ALL[rng.random_range(0..WeaponKind::ALL.len())],
             ammo: rng.random(),
+            tell: rng.random_range(0..8),
+            skid: rng.random_range(0..12),
         }
     }
 
@@ -670,6 +672,8 @@ mod tests {
                 flags: 0,
                 weapon: WeaponKind::Shell,
                 ammo: rng.random_range(5..30),
+                tell: 0,
+                skid: 0,
             })
             .collect();
         let shots = (0..24u16)
@@ -740,7 +744,7 @@ mod tests {
         }
         c.normalise();
         c.events = vec![
-            WireEvent::Hit { target: crate::net::events::WireHitTarget::Enemy { slot: 1 }, damage: 12.0, killed: false, x: 400, y: 800 },
+            WireEvent::Hit { target: crate::net::events::WireHitTarget::Enemy { slot: 1 }, damage: 12.0, killed: false, x: 400, y: 800, cause: crate::simulation::HitCause::Shell },
             WireEvent::Fired { slot: 0, weapon: WeaponKind::Shell, input_tick: 0 },
         ];
         let busy = encode(&Msg::Delta(delta(&b, &c))).len();
@@ -750,8 +754,9 @@ mod tests {
         // varints and eight bytes, the header the idle bound is, and a
         // length byte for each keyed family's lists, the grenades' three
         // included. A new shot costs one more byte for its owner
-        // (protocol 8).
-        assert!(full <= 440, "full snapshot {full} B");
+        // (protocol 8); every tank two for its tell and its skid
+        // (protocol 16).
+        assert!(full <= 456, "full snapshot {full} B");
         assert!(moving <= 210, "moving delta {moving} B");
         assert!(busy <= 276, "busy delta {busy} B");
         assert!(idle <= 51, "idle delta {idle} B");

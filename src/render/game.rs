@@ -1381,6 +1381,18 @@ impl Game {
 
         self.paint_standing(&mut GpuCanvas::culled(d, textures, cull), PaintOptions { locate_cue: true });
 
+        // The dust a sonic hammer's wave lifts and the shards of the panes
+        // it shatters (docs/sonic-hammer.md): lingering, so lit with the
+        // field; the arcs themselves shine in `paint_field_glowing`.
+        if !self.sonic_waves.is_empty() {
+            let t = tuning();
+            let mut dust = Vec::new();
+            for wave in &self.sonic_waves {
+                dust.extend(crate::sonic::wave_dust(wave, &t, self.time));
+            }
+            pyro::draw(&mut GpuCanvas::new(d, textures), &dust);
+        }
+
         // Over everything that stands: each volcano's plume, steam while
         // it sleeps and ash from the rumble on (docs/volcano.md). It is
         // smoke, so the night darkens it with the rest.
@@ -1492,6 +1504,30 @@ impl Game {
                         crate::tank::draw_ammo_pips(&mut GpuCanvas::new(d, textures), tank, slot.count, slot.full, slot.color);
                     }
                 });
+            }
+        }
+
+        // A sonic hammer's arcs, an enemy's wind-up and the stars over a
+        // stunned frog (docs/sonic-hammer.md): bright and brief, drawn
+        // unlit so they read at night - a tell is a warning.
+        {
+            let t = tuning();
+            let mut shapes = Vec::new();
+            for wave in &self.sonic_waves {
+                shapes.extend(crate::sonic::wave_arcs(wave, &t));
+            }
+            for tank in self.world.query::<&Tank>().iter().filter(|tank| !culled(cull, tank.position)) {
+                // Each weapon's wind-up by its own composer.
+                if let Some(w) = tank.windup().filter(|w| w.weapon == crate::tank::ActiveWeapon::SonicHammer) {
+                    let dish = tank.turret_point(crate::tank_art::SONIC_MUZZLE[tank.row as usize]);
+                    shapes.extend(crate::sonic::tell_arcs(dish, w.facing, w.progress, self.time, &t));
+                }
+            }
+            for frog in self.world.query::<&crate::frog::Frog>().iter().filter(|f| !culled(cull, f.position)) {
+                shapes.extend(crate::frog::stun_marks(frog, self.time));
+            }
+            if !shapes.is_empty() {
+                pyro::draw(&mut GpuCanvas::new(d, textures), &shapes);
             }
         }
 
@@ -1950,6 +1986,7 @@ fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
         ActiveWeapon::Missiles => ("MISSILES", tank.missile_ammo),
         ActiveWeapon::Flamethrower => ("FLAME", tank.flame_fuel_seconds()),
         ActiveWeapon::Grenades => ("GRENADES", tank.grenade_ammo),
+        ActiveWeapon::SonicHammer => ("SONIC", tank.sonic_ammo),
         ActiveWeapon::Shell => ("SHELL", tank.shells_ammo),
     };
     let mut lines = vec![

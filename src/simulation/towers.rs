@@ -289,7 +289,7 @@ impl Game {
             // draws its own violet burst off the event (`fx.rs`).
             f.events.push(Event::TeslaStrike { x0: from.x, y0: from.y, x1: to.x, y1: to.y, chained: jump > 0 });
             let dmg = (t.tesla_damage_min * factor, t.tesla_damage_max * factor);
-            self.apply_hit(f, ShellTarget::Tank(target.entity), to, dmg, HitEffects::none(), owner);
+            self.apply_hit(f, ShellTarget::Tank(target.entity), to, dmg, HitEffects::none(super::HitCause::Tesla), owner);
             hit.push(target.entity);
             if jump == jumps {
                 break;

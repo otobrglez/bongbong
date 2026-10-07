@@ -238,10 +238,18 @@ fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, row_h: f32, hud: &Play
     let slot = hud.weapon;
     let symbol = weapon_pickup(slot.weapon).unwrap_or(PickupKind::Ammo);
     draw_symbol(d, textures, symbol, x + V_WEAPON, y, row, slot.count > 0, a);
-    d.draw_text(&slot.count.to_string(), x + V_WEAPON_COUNT, text_y, HUD_TEXT_SIZE, faded(slot.color, a));
+    draw_weapon_readout(d, slot, x + V_WEAPON_COUNT, text_y, a);
 
     draw_symbol_gauge(d, textures, PickupKind::SpeedUp, x + V_SPEED, y, row, hud.speed, SPEED_COLOR, true, a);
     draw_symbol_gauge(d, textures, PickupKind::Shield, x + V_SHIELD, y, row, hud.shield, SHIELD_COLOR, true, a);
+}
+
+/// The weapon slot's readout beside its symbol (`hud::WeaponSlot`): the
+/// count in the slot's colour, its left edge at `x`. The one place it is
+/// drawn, so a weapon whose readout is a gauge (a charge) or words (a
+/// weapon knocked out) matches on `slot.weapon` here.
+fn draw_weapon_readout(d: &mut impl RaylibDraw, slot: crate::hud::WeaponSlot, x: i32, text_y: i32, a: f32) {
+    d.draw_text(&slot.count.to_string(), x, text_y, HUD_TEXT_SIZE, faded(slot.color, a));
 }
 
 /// A block's lamp row, `row` (`hud::CornerShape::lamp_row`): the

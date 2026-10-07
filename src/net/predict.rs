@@ -344,6 +344,24 @@ pub struct BeamPress {
     pub variant: crate::laser::LaserVariant,
 }
 
+/// A sonic hammer's blast the client drew on its press: the pivot it is
+/// cast from and the facing, the sandbox's pose. The round casts it against
+/// the drawn world (`Game::draw_press_show`).
+#[derive(Clone, Copy, Debug)]
+pub struct SonicPress {
+    pub origin: Position,
+    pub facing: crate::tank::Dir,
+}
+
+/// The show of a press this client drew itself, of a weapon drawn on the
+/// press (`WeaponKind::drawn_on_press`, docs/sonic-hammer.md "Online: the
+/// shooter's press is drawn at once"), for the round to draw.
+#[derive(Clone, Copy, Debug)]
+pub enum PressShow {
+    Beam(BeamPress),
+    Sonic(SonicPress),
+}
+
 /// The room's copy of one of this seat's shots, as the frame drew it.
 #[derive(Clone, Copy, Debug)]
 pub struct ServerShot {
@@ -424,16 +442,18 @@ pub struct Predictor {
     /// Presses waiting for the server, oldest first.
     presses: VecDeque<Press>,
     next_press: u32,
-    /// Laser presses whose `Fired` has not arrived: the charges owed.
-    beams_owed: VecDeque<u32>,
-    /// Laser presses whose beam this client drew, by input tick, oldest
-    /// first, with seconds since the press: each claims the room's beam
-    /// for it when that `Fired` is handed over (`confirm_beam`), so only
-    /// the room's beams the client drew are kept off the picture. Dropped
-    /// past the refusal wait.
-    drawn_beams: VecDeque<(u32, f32)>,
-    /// Beams drawn this tick, for the round to finish and draw.
-    beams: Vec<BeamPress>,
+    /// Presses of a weapon drawn on the press whose `Fired` has not
+    /// arrived, by kind and input tick, with seconds since the press: the
+    /// ammo owed. Dropped past the refusal wait.
+    owed_presses: VecDeque<(WeaponKind, u32, f32)>,
+    /// Presses of a weapon drawn on the press whose show this client drew,
+    /// by kind and input tick, oldest first, with seconds since the press:
+    /// each claims the room's show for it when that `Fired` is handed over
+    /// (`confirm_press`), so only the room's shows the client drew are kept
+    /// off the picture. Dropped past the refusal wait.
+    drawn_presses: VecDeque<(WeaponKind, u32, f32)>,
+    /// Shows pressed this tick, for the round to finish and draw.
+    shows: Vec<PressShow>,
     /// Where this frame's provisional shots met something, for the round's
     /// impact flashes.
     impacts: Vec<Position>,
@@ -484,9 +504,9 @@ impl Predictor {
             shots_enabled: true,
             presses: VecDeque::new(),
             next_press: 0,
-            beams_owed: VecDeque::new(),
-            drawn_beams: VecDeque::new(),
-            beams: Vec::new(),
+            owed_presses: VecDeque::new(),
+            drawn_presses: VecDeque::new(),
+            shows: Vec::new(),
             impacts: Vec::new(),
             muzzles: Vec::new(),
             unpaired: std::collections::BTreeMap::new(),
@@ -586,11 +606,21 @@ impl Predictor {
     }
 
     /// A shove the room put on this hull (`Shoved`): the velocity change,
-    /// applied to the sandbox's body so the next pose carries it.
-    pub fn shove(&mut self, dv: crate::math::Vec2) {
+    /// applied to the sandbox's body so the next pose carries it, and the
+    /// skid a knock takes it off its tracks for (`Tank::skid`, 0 for any
+    /// other shove), which `predict_seat` runs down on this client's ticks.
+    pub fn shove(&mut self, dv: crate::math::Vec2, skid: f32) {
         if let Some((p, r, v)) = self.sandbox.seat_motion(self.seat) {
             self.sandbox.place_seat(self.seat, p, r, Position::new(v.x + dv.x, v.y + dv.y));
         }
+        if skid > 0.0 {
+            self.sandbox.set_seat_skid(self.seat, self.sandbox.seat_skid(self.seat).max(skid));
+        }
+    }
+
+    /// Ammo owed by drawn-on-press presses of `kind` not yet answered.
+    fn owed_presses_of(&self, kind: WeaponKind) -> i32 {
+        self.owed_presses.iter().filter(|p| p.0 == kind).count() as i32
     }
 
     /// The local gate, and a press through it.
@@ -643,15 +673,36 @@ impl Predictor {
             // the press from the predicted muzzle, stopped by the round at
             // the first thing it meets in the drawn world.
             ActiveWeapon::Laser if held => {
-                if ammo - self.beams_owed.len() as i32 <= 0 {
+                if ammo - self.owed_presses_of(WeaponKind::Laser) <= 0 {
                     return;
                 }
                 if let Some((start, lens, dir, variant)) = self.sandbox.seat_beam(self.seat) {
                     self.cooldown = t.player_fire_interval;
-                    self.beams_owed.push_back(tick);
+                    self.owed_presses.push_back((WeaponKind::Laser, tick, 0.0));
                     if drawn {
-                        self.beams.push(BeamPress { start, lens, dir, variant });
-                        self.drawn_beams.push_back((tick, 0.0));
+                        self.shows.push(PressShow::Beam(BeamPress { start, lens, dir, variant }));
+                        self.drawn_presses.push_back((WeaponKind::Laser, tick, 0.0));
+                        self.report.shots_drawn += 1;
+                    }
+                }
+                return;
+            }
+            // The sonic hammer fires on the press, its wave drawn from the
+            // predicted pose; an owned hull is kicked on the press, drawn
+            // or not, since the room sends no `Shoved` for the kick.
+            ActiveWeapon::SonicHammer if pressed => {
+                if ammo - self.owed_presses_of(WeaponKind::SonicHammer) <= 0 {
+                    return;
+                }
+                if let Some((origin, facing)) = self.sandbox.seat_sonic(self.seat) {
+                    self.cooldown = t.sonic_reload_seconds;
+                    self.owed_presses.push_back((WeaponKind::SonicHammer, tick, 0.0));
+                    if self.owned {
+                        self.sandbox.seat_kick(self.seat, facing.vec(), t.sonic_recoil_speed, t.sonic_recoil_max_speed);
+                    }
+                    if drawn {
+                        self.shows.push(PressShow::Sonic(SonicPress { origin, facing }));
+                        self.drawn_presses.push_back((WeaponKind::SonicHammer, tick, 0.0));
                         self.report.shots_drawn += 1;
                     }
                 }
@@ -753,10 +804,8 @@ impl Predictor {
     /// ammo in the snapshot the sandbox just took, so none of them is owed
     /// against the gate any more. Retirement waits for `confirm_fired`.
     pub fn note_fired(&mut self, weapon: WeaponKind, input_tick: u32) {
-        if weapon == WeaponKind::Laser {
-            while self.beams_owed.front().is_some_and(|&t| t <= input_tick) {
-                self.beams_owed.pop_front();
-            }
+        if weapon.drawn_on_press() {
+            self.owed_presses.retain(|&(kind, t, _)| kind != weapon || t > input_tick);
             return;
         }
         for press in self.presses.iter_mut().filter(|p| p.tick <= input_tick) {
@@ -773,10 +822,10 @@ impl Predictor {
     /// With no press to confirm - prediction was off for it, or it was
     /// pulled before the sandbox existed - the room's shot still sets the
     /// local gate, measured back from `input_tick`, so the next press
-    /// agrees with the room's cooldown. A laser's `Fired` is
-    /// `confirm_beam`'s.
+    /// agrees with the room's cooldown. The `Fired` of a weapon drawn on
+    /// the press - a laser, a sonic hammer - is `confirm_press`'s.
     pub fn confirm_fired(&mut self, weapon: WeaponKind, input_tick: u32) {
-        if weapon == WeaponKind::Laser {
+        if weapon.drawn_on_press() {
             return;
         }
         let claimed = self.presses.iter().rposition(|p| !p.confirmed && p.tick <= input_tick);
@@ -804,20 +853,26 @@ impl Predictor {
         }
     }
 
-    /// The interpolator is handing over the room's `Fired` for a laser of
-    /// this seat, on input tick `input_tick`: the last beam this client drew
+    /// The interpolator is handing over the room's `Fired` of a weapon
+    /// drawn on the press (`WeaponKind::drawn_on_press`) for this seat, on
+    /// input tick `input_tick`: the last press of that kind this client drew
     /// at or before that tick is the one the room fired - any earlier one
     /// still waiting the room refused, as `confirm_fired` has it for shots -
-    /// and true says the room's own beam for it is not drawn again. False -
-    /// the local gate refused a press the room fired, or beams are not drawn
-    /// - leaves the room's beam on the picture, and its shot seeds the local
-    /// gate as an unclaimed `confirm_fired` does.
-    pub fn confirm_beam(&mut self, input_tick: u32) -> bool {
-        if let Some(i) = self.drawn_beams.iter().rposition(|&(t, _)| t <= input_tick) {
-            self.drawn_beams.drain(..=i);
+    /// and true says the room's own show for it (a beam, a wave) is not
+    /// drawn again. False - the local gate refused a press the room fired,
+    /// or presses are not drawn - leaves the room's show on the picture, and
+    /// its press seeds the local gate as an unclaimed `confirm_fired` does.
+    pub fn confirm_press(&mut self, kind: WeaponKind, input_tick: u32) -> bool {
+        if let Some(i) = self.drawn_presses.iter().rposition(|&(k, t, _)| k == kind && t <= input_tick) {
+            let mut j = 0;
+            self.drawn_presses.retain(|&(k, _, _)| {
+                let drop = k == kind && j <= i;
+                j += 1;
+                !drop
+            });
             return true;
         }
-        self.seed_gate(WeaponKind::Laser, input_tick);
+        self.seed_gate(kind, input_tick);
         false
     }
 
@@ -831,6 +886,7 @@ impl Predictor {
             WeaponKind::Minigun => t.minigun_burst_cooldown_seconds(),
             WeaponKind::Missiles => t.missile_volley_cooldown_seconds(),
             WeaponKind::Grenades => t.grenade_reload_seconds,
+            WeaponKind::SonicHammer => t.sonic_reload_seconds,
             WeaponKind::Flamethrower => 0.0,
         };
         let ago = self.tick.wrapping_sub(input_tick) as f32 * PHYSICS_FIXED_DT;
@@ -1006,12 +1062,12 @@ impl Predictor {
     ) {
         let portal_radius = tuning().portal_shot_radius;
         self.clock += dt;
-        for beam in &mut self.drawn_beams {
-            beam.1 += dt;
+        for press in self.drawn_presses.iter_mut().chain(self.owed_presses.iter_mut()) {
+            press.2 += dt;
         }
-        while self.drawn_beams.front().is_some_and(|&(_, age)| age > self.refusal_after) {
-            self.drawn_beams.pop_front();
-        }
+        let refusal = self.refusal_after;
+        self.drawn_presses.retain(|&(_, _, age)| age <= refusal);
+        self.owed_presses.retain(|&(_, _, age)| age <= refusal);
         let mut presses = std::mem::take(&mut self.presses);
         for press in &mut presses {
             press.age += dt;
@@ -1081,9 +1137,9 @@ impl Predictor {
         self.refusal_after = seconds.max(PROVISIONAL_SECONDS);
     }
 
-    /// The beams pressed since the last call, for the round to draw.
-    pub fn take_beams(&mut self) -> Vec<BeamPress> {
-        std::mem::take(&mut self.beams)
+    /// The press shows pressed since the last call, for the round to draw.
+    pub fn take_press_shows(&mut self) -> Vec<PressShow> {
+        std::mem::take(&mut self.shows)
     }
 
     /// Where provisional shots met something since the last call, for the
@@ -1141,9 +1197,11 @@ impl Predictor {
             // The snapshot's copy of it is where the room had it a round
             // trip ago and is put back where it was before the write.
             let keep = self.sandbox.seat_motion(self.seat);
+            let skid = self.sandbox.seat_skid(self.seat);
             apply::snapshot_with(&mut self.sandbox, snapshot, apply::Show::Quiet);
             if let Some((position, rotation, velocity)) = keep {
                 self.sandbox.place_seat(self.seat, position, rotation, velocity);
+                self.sandbox.set_seat_skid(self.seat, skid);
             }
             self.history.clear();
             self.report.in_flight = 0;
@@ -1919,22 +1977,22 @@ mod tests {
         let patch = TankPatch { laser_charges: Some(5), ..Default::default() };
         predictor.sandbox.debug_set_tank(0, &patch).expect("the seat's tank");
         let drawn = predictor.step(press());
-        assert_eq!(predictor.take_beams().len(), 1, "a beam on the press");
-        assert!(predictor.confirm_beam(drawn), "the room's beam for it is the drawn one");
-        assert!(!predictor.confirm_beam(drawn), "and it is claimed once");
+        assert_eq!(predictor.take_press_shows().len(), 1, "a beam on the press");
+        assert!(predictor.confirm_press(WeaponKind::Laser, drawn), "the room's beam for it is the drawn one");
+        assert!(!predictor.confirm_press(WeaponKind::Laser, drawn), "and it is claimed once");
         // A press the room fired and this client did not draw.
         let ticks = (tuning().player_fire_interval / PHYSICS_FIXED_DT).ceil() as usize;
         idle_ticks(&mut predictor, ticks + 1);
         assert_eq!(predictor.report(0, 0).cooldown, 0.0, "the gate is open");
         let undrawn = predictor.tick() - 1;
-        assert!(!predictor.confirm_beam(undrawn), "nothing drawn to claim");
+        assert!(!predictor.confirm_press(WeaponKind::Laser, undrawn), "nothing drawn to claim");
         assert!(predictor.report(0, 0).cooldown > 0.0, "the room's shot holds the local gate");
         // A drawn beam the room never fires goes after the refusal wait.
         idle_ticks(&mut predictor, ticks + 1);
         let late = predictor.step(press());
-        assert_eq!(predictor.take_beams().len(), 1);
+        assert_eq!(predictor.take_press_shows().len(), 1);
         predictor.advance_shots(PROVISIONAL_SECONDS + 0.1, open_air);
-        assert!(!predictor.confirm_beam(late), "dropped past the refusal wait");
+        assert!(!predictor.confirm_press(WeaponKind::Laser, late), "dropped past the refusal wait");
         // Two drawn beams, the room fires only the second: the first was
         // refused and goes with the claim, so a room shot this client never
         // drew after them claims nothing.
@@ -1942,11 +2000,11 @@ mod tests {
         let _refused = predictor.step(press());
         idle_ticks(&mut predictor, ticks + 1);
         let fired = predictor.step(press());
-        assert_eq!(predictor.take_beams().len(), 2);
-        assert!(predictor.confirm_beam(fired), "the second press's beam is the room's");
+        assert_eq!(predictor.take_press_shows().len(), 2);
+        assert!(predictor.confirm_press(WeaponKind::Laser, fired), "the second press's beam is the room's");
         idle_ticks(&mut predictor, ticks + 1);
         let undrawn = predictor.tick() - 1;
-        assert!(!predictor.confirm_beam(undrawn), "the refused beam claims no later room shot");
+        assert!(!predictor.confirm_press(WeaponKind::Laser, undrawn), "the refused beam claims no later room shot");
     }
 
     /// A press the server never claims - or one passed over by a `Fired`
@@ -2000,15 +2058,63 @@ mod tests {
         let patch = TankPatch { laser_charges: Some(1), ..Default::default() };
         predictor.sandbox.debug_set_tank(0, &patch).expect("the seat's tank");
         let tick = predictor.step(press());
-        let beams = predictor.take_beams();
+        let beams = predictor.take_press_shows();
         assert_eq!(beams.len(), 1, "a beam on the press");
         let ticks = (tuning().player_fire_interval / PHYSICS_FIXED_DT).ceil() as usize;
         for _ in 0..ticks {
             predictor.step(press());
         }
-        assert!(predictor.take_beams().is_empty(), "the one charge is owed");
+        assert!(predictor.take_press_shows().is_empty(), "the one charge is owed");
         predictor.note_fired(WeaponKind::Laser, tick);
-        assert!(predictor.beams_owed.is_empty(), "its Fired settles it");
+        assert!(predictor.owed_presses.is_empty(), "its Fired settles it");
+    }
+
+    /// The sonic hammer is drawn on the press like the laser: its wave
+    /// from the predicted pivot, a blast owed until its `Fired`, the room's
+    /// `SonicBlast` for it claimed once.
+    #[test]
+    fn a_sonic_blast_is_drawn_on_the_press() {
+        let mut predictor = Predictor::new(round(), 0, 0);
+        let patch = TankPatch { sonic_ammo: Some(1), ..Default::default() };
+        predictor.sandbox.debug_set_tank(0, &patch).expect("the seat's tank");
+        let (pivot, rotation, _) = predictor.motion().expect("a hull");
+        let tick = predictor.step(press());
+        let shows = predictor.take_press_shows();
+        let [PressShow::Sonic(blast)] = shows.as_slice() else { panic!("one sonic show: {shows:?}") };
+        assert!(blast.origin.distance_to(pivot) < 4.0, "from the hull's pivot");
+        assert_eq!(Some(blast.facing), Dir::from_rotation(rotation));
+        let ticks = (tuning().sonic_reload_seconds / PHYSICS_FIXED_DT).ceil() as usize;
+        idle_ticks(&mut predictor, ticks + 1);
+        predictor.step(press());
+        assert!(predictor.take_press_shows().is_empty(), "the one blast is owed");
+        predictor.note_fired(WeaponKind::SonicHammer, tick);
+        assert!(predictor.owed_presses.is_empty(), "its Fired settles it");
+        assert!(predictor.confirm_press(WeaponKind::SonicHammer, tick), "the room's blast is the drawn one");
+        assert!(!predictor.confirm_press(WeaponKind::SonicHammer, tick), "claimed once");
+    }
+
+    /// A knock the room sends an owned hull (`Shoved` with a skid) takes
+    /// the sandbox's hull off its tracks: it slides on the shove and the
+    /// stick does not drive it until the skid is over.
+    #[test]
+    fn a_knock_skids_the_owned_hull() {
+        let mut predictor = Predictor::new(round(), 0, 0);
+        predictor.set_owned(true);
+        idle_ticks(&mut predictor, 5);
+        let (from, _, _) = predictor.motion().expect("a hull");
+        predictor.shove(crate::math::Vec2::new(300.0, 0.0), 0.4);
+        let drive = Intent { move_dir: Some(Dir::Up), ..Intent::default() };
+        for _ in 0..10 {
+            predictor.step(drive);
+        }
+        let (during, _, _) = predictor.motion().expect("a hull");
+        assert!(during.x - from.x > 20.0, "it slides on the shove: {from:?} -> {during:?}");
+        assert!((during.y - from.y).abs() < 1.0, "and the stick does not drive it: {from:?} -> {during:?}");
+        for _ in 0..40 {
+            predictor.step(drive);
+        }
+        let (after, _, _) = predictor.motion().expect("a hull");
+        assert!(after.y < during.y - 10.0, "it drives once the skid is over");
     }
 
     /// Firing from an owned hull kicks it back on the press, as the room

@@ -189,8 +189,10 @@ fn tanks(game: &Game) -> Vec<TankState> {
                 hp: t.hull_points(),
                 shield: t.shield_points(),
                 flags,
-                weapon: t.active_weapon().into(),
+                weapon: t.special().unwrap_or(crate::tank::ActiveWeapon::Shell).into(),
                 ammo: t.active_ammo(),
+                tell: t.tell.map_or(0, |tell| quantise_seconds(tell.left).max(1)),
+                skid: if t.skid > 0.0 { quantise_seconds(t.skid).max(1) } else { 0 },
             }
         })
         .collect()
@@ -293,6 +295,7 @@ fn frogs(game: &Game) -> Vec<FrogState> {
                 (hopping, frog_flags::HOPPING),
                 (f.hurt_timer > 0.0, frog_flags::HURT),
                 (f.attack_timer > 0.0, frog_flags::BITING),
+                (f.is_stunned(), frog_flags::STUNNED),
             ] {
                 if on {
                     state |= bit;

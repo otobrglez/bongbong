@@ -789,11 +789,12 @@ impl Game {
         None
     }
 
-    /// Send a fuel drum flying: the obstacle goes at once (its body with
+    /// Send a drum flying - a fuel drum another blast set off, or any drum
+    /// a sonic hammer's wave threw: the obstacle goes at once (its body with
     /// it, through the ordinary destroyed path but with no blast), and a
     /// `FlyingDrum` carries the show to the landing spot, where
     /// `tick_launches` sets the real blast off.
-    fn launch_drum(&mut self, f: &mut Frame, entity: Entity, from: Position, to: Position, variant: i32) {
+    pub(super) fn launch_drum(&mut self, f: &mut Frame, entity: Entity, from: Position, to: Position, variant: i32) {
         {
             let mut q = self.world.query_one::<&mut Obstacle>(entity);
             if let Ok(o) = q.get() {
@@ -801,7 +802,7 @@ impl Game {
             }
         }
         f.events.push(Event::ObstacleDestroyed { material: Material::Barrel, x: from.x, y: from.y });
-        f.events.push(Event::DrumLaunched { x: from.x, y: from.y, to_x: to.x, to_y: to.y });
+        f.events.push(Event::DrumLaunched { x: from.x, y: from.y, to_x: to.x, to_y: to.y, drum: Drum::from_variant(variant) });
         self.drum_in_flight(from, to, variant);
     }
 

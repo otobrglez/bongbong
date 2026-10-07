@@ -24,7 +24,7 @@ use crate::bullet::Bullet;
 use crate::obstacle::{Drum, Material};
 use crate::plasma::{Plasma, PlasmaState, PlasmaVariant};
 use crate::shell::{Shell, ShellState};
-use crate::simulation::{Event, Game, HitTarget};
+use crate::simulation::{Event, Game, HitCause, HitTarget};
 use crate::tuning::tuning;
 use crate::Position;
 
@@ -720,6 +720,19 @@ impl Fx {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(16), 150.0, &[SHIELD_T, WHITE_T]);
                         self.burst(Position::new(x, y), ParticleKind::Smoke, self.count(5), 34.0, &[SMOKE_T]);
                     }
+                    // A sonic hammer's wave landing on a hull: the hull's
+                    // flash and a puff of dust and grit knocked off it - no
+                    // sparks, no fire (docs/sonic-hammer.md).
+                    Event::Hit { target, x, y, cause: HitCause::Sonic, .. } => {
+                        let at = Position::new(x, y);
+                        match target {
+                            HitTarget::Player { player } => self.flash(Flashed::Tank(player as usize)),
+                            HitTarget::Enemy { slot } => self.flash(Flashed::Tank(slot)),
+                            _ => {}
+                        }
+                        self.burst(at, ParticleKind::Dust, self.count(4), 40.0, &[DUST_T]);
+                        self.burst(at, ParticleKind::Chip, self.count(2), 60.0, &[STONE_DK, STONE_MD]);
+                    }
                     // A shot landing on a hull, a frog or the border: a
                     // shower of hot sparks, a couple of dark flecks of
                     // armour and a wisp of smoke. Tiles are `tile_chip`'s.
@@ -889,6 +902,18 @@ impl Fx {
             }
         }
         self.wading = wading_now;
+
+        // A hull knocked off its tracks scrapes up dust as it slides
+        // (`Tank::skid`, docs/sonic-hammer.md), at a rate that follows its
+        // speed.
+        for (slot, pos, speed) in game.skidding() {
+            if speed > 20.0 {
+                let rate = 30.0 * (speed / 200.0).clamp(0.2, 1.5) * tuning().fx_density;
+                if self.due(0x5C1D_0000 ^ slot as u32, rate, dt) {
+                    self.burst(pos, ParticleKind::Dust, 1, 30.0, &[DUST_T]);
+                }
+            }
+        }
 
         let (ember_rate, smoke_rate) = (tuning().wood_ember_rate, tuning().wood_smoke_rate);
         self.burning = game.burning_tiles().iter().map(|&(pos, _)| crate::map::world_to_cell(pos)).collect();
@@ -1439,6 +1464,52 @@ mod fx_tests {
         assert_eq!(fx.live(), cap);
         fx.tick(0.5);
         assert_eq!(fx.live(), cap, "the short-lived ones were the ones evicted");
+    }
+
+    /// A sonic hit draws no fire (docs/sonic-hammer.md): the hull's flash
+    /// and its dust and grit, never a spark, an ember, smoke or a shot's
+    /// impact.
+    #[test]
+    fn a_sonic_hit_starts_no_fire() {
+        use crate::map::MapFile;
+        use crate::simulation::{Event, HitCause, Input};
+        let mut game = Game::default();
+        game.seed_override = Some(7);
+        game.show_intro = false;
+        game.level_overrides.mission = Some(crate::level::Mission::Destroy);
+        game.map = MapFile::from_toml_str("version = 1\ntanks = 0\ncells.\"3,6\" = { kind = \"start\" }\n").unwrap();
+        game.init(1088.0, 544.0);
+        let seat = game.player().unwrap();
+        game.place_tank(seat, Position::new(96.0, 192.0), Some(90.0)).unwrap();
+        {
+            let mut t = game.world.get::<&mut crate::tank::Tank>(seat).unwrap();
+            t.disarm();
+            t.sonic_ammo = 3;
+        }
+        let slot = game.debug_spawn_enemy(Position::new(180.0, 192.0), Some(1), None).unwrap();
+        let enemy = game.tank_entity_by_slot(slot).unwrap();
+        {
+            let mut t = game.world.get::<&mut crate::tank::Tank>(enemy).unwrap();
+            t.speed_scale = 0.0;
+            t.shells_ammo = 0;
+            t.disarm();
+            t.shield_hp = 0.0;
+            t.shield_timer = 0.0;
+        }
+        let mut fx = Fx::default();
+        let mut hit = false;
+        for frame in 0..40 {
+            let mut input = Input::default();
+            input.seats[0].fire = frame == 0;
+            game.update(input, crate::PHYSICS_FIXED_DT, 1088.0, 544.0);
+            hit |= game.events().iter().any(|e| matches!(e, Event::Hit { cause: HitCause::Sonic, .. }));
+            fx.observe(&game, crate::PHYSICS_FIXED_DT);
+            let fiery = fx.particles.iter().filter(|p| matches!(p.kind, ParticleKind::Spark | ParticleKind::Ember | ParticleKind::Smoke)).count();
+            assert_eq!(fiery, 0, "frame {frame}: no spark, ember or smoke");
+            assert!(fx.impacts.is_empty(), "frame {frame}: no impact burst");
+        }
+        assert!(hit, "the wave hit the hull");
+        assert!(!fx.flashes.is_empty() || fx.particles.iter().any(|p| p.kind == ParticleKind::Dust), "the flash and the dust");
     }
 
     #[test]

@@ -517,8 +517,10 @@ impl Game {
         let mut tree_query = self.world.query::<&Obstacle>();
         let mut trees: Vec<&Obstacle> = tree_query.iter().filter(|o| o.material.is_tree() && !culled(cull, o.position)).collect();
         trees.sort_by(|a, b| a.position.y.total_cmp(&b.position.y));
+        let t = crate::tuning::tuning();
         for tree in &trees {
-            let lean = tree_lean(tree, &movers);
+            // A sonic wave passing sways the crown away from its pivot.
+            let lean = tree_lean(tree, &movers) + crate::sonic::tree_push(tree.position, &self.sonic_waves, &t);
             if self.shadows_enabled {
                 draw_tree_shadow(c, tree, lean, self.time);
             }

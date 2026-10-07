@@ -234,6 +234,10 @@ PICKUP_INK = {
     # the shield's lavender and the laser's pink); the light is the lamp
     # each grenade flashes.
     'grenades': ((0x8C, 0x2C, 0xB0), (0xD6, 0x56, 0xF5), (0xF4, 0xB6, 0xFF)),
+    # The sonic hammer (docs/sonic-hammer.md): sky blue, the hue the inks
+    # above leave free between the plasma's teal and the tower pack's
+    # periwinkle; the light is the arcs of sound off its speaker.
+    'sonic_hammer': ((0x1E, 0x7F, 0xB8), (0x46, 0xC3, 0xF2), (0xA8, 0xE6, 0xFF)),
 }
 # The rainbow shield's symbol, swept corner to corner like the old icon.
 PICKUP_RAINBOW = ((0xE8, 0x4A, 0x3C), (0xFF, 0x8A, 0x2B), (0xFF, 0xD9, 0x3D), (0x7E, 0xDB, 0x5A),
