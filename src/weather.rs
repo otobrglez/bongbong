@@ -990,7 +990,8 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
     }
     // A gauss rail (docs/gauss-rail.md "Look"): the white frame lights the
     // ground every `FRAME_LIGHT_SPACING_PX` along it while it is up, the
-    // stop where it ended; a charge glows at the bore, growing with it.
+    // stop where it ended; a charge glows at the bore, growing with it - in
+    // the cold blue of its glows (`pyro::RAIL_LIGHT`).
     for slug in &game.rail_slugs {
         let frame = t.gauss_flash_seconds.max(1e-3) * 3.0;
         let life = 1.0 - (slug.age / frame).clamp(0.0, 1.0);
@@ -999,19 +1000,19 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
             let steps = (span.length() / crate::gauss::FRAME_LIGHT_SPACING_PX).ceil().max(1.0) as usize;
             for i in 0..=steps {
                 let at = slug.start + span * (i as f32 / steps as f32);
-                out.push(Light::point(at, 72.0, scale([0.8, 1.0, 1.0], s * t.gauss_frame_light * life)).unshadowed());
+                out.push(Light::point(at, 72.0, scale([0.75, 0.85, 1.0], s * t.gauss_frame_light * life)).unshadowed());
             }
         }
         let stop = 1.0 - (slug.age / crate::gauss::STOP_SECONDS).clamp(0.0, 1.0);
         if stop > 0.0 && !slug.portal {
-            out.push(Light::point(slug.end, 64.0, scale([0.6, 0.95, 0.9], s * stop)));
+            out.push(Light::point(slug.end, 64.0, scale([0.45, 0.6, 1.0], s * stop)));
         }
     }
     if t.gauss_charge_light > 0.0 {
         for tank in game.world.query::<&Tank>().iter().filter(|tank| !tank.is_wreck()) {
             if let Some(charge) = tank.charge.filter(|c| c.weapon == crate::tank::ActiveWeapon::GaussRail) {
                 let p = charge.progress();
-                out.push(Light::point(crate::gauss::muzzle(tank), 24.0 + 40.0 * p, scale([0.3, 0.9, 0.85], s * t.gauss_charge_light * p)).unshadowed());
+                out.push(Light::point(crate::gauss::muzzle(tank), 24.0 + 40.0 * p, scale([0.35, 0.5, 1.0], s * t.gauss_charge_light * p)).unshadowed());
             }
         }
     }

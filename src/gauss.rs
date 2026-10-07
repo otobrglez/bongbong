@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::math::{Color, Vec2};
 use crate::obstacle::Material;
-use crate::pyro::{self, Puff, RAIL, SHIELD, SMOKE, Shape};
+use crate::pyro::{self, Puff, RAIL, RAIL_LIGHT, SHIELD, SMOKE, Shape};
 use crate::shell::Owner;
 use crate::tank::{ActiveWeapon, Charge, ChargeEnd, ChargeStage, Tank};
 use crate::tuning::Tuning;
@@ -250,7 +250,7 @@ pub fn compose_charge(center: Position, muzzle: Position, charge: &Charge, seed:
             out.push(Shape::Mark { pos, size: 2, color: if d < 8.0 { RAIL[4] } else { RAIL[3] } });
         }
     }
-    out.push(Shape::Glow { pos: muzzle, radius: 10.0 + 16.0 * p, color: pyro::alpha(RAIL[2], p) });
+    out.push(Shape::Glow { pos: muzzle, radius: 8.0 + 12.0 * p, color: pyro::alpha(RAIL_LIGHT, p) });
     if stage != ChargeStage::Charging {
         out.push(Shape::Glow { pos: muzzle, radius: 6.0, color: RAIL[4] });
     }
@@ -301,7 +301,7 @@ pub fn compose_slug(slug: &RailSlug, t: &Tuning) -> Vec<Shape> {
             dithered_line(&mut out, slug.start, slug.end, w, 1.0, |_| RAIL[4], |_| 0.0);
         }
         let mid = slug.start + (slug.end - slug.start) * 0.5;
-        out.push(Shape::Glow { pos: mid, radius: 48.0, color: pyro::alpha(RAIL[3], 0.6) });
+        out.push(Shape::Glow { pos: mid, radius: 48.0, color: pyro::alpha(RAIL_LIGHT, 0.6) });
     } else {
         let span = (t.gauss_trail_seconds - flash).max(1e-3);
         let a = (1.0 - (age - flash) / span).clamp(0.0, 1.0);
@@ -339,7 +339,7 @@ pub fn compose_slug(slug: &RailSlug, t: &Tuning) -> Vec<Shape> {
             let tip = Position::new(slug.end.x + a.cos() * reach, slug.end.y + a.sin() * reach);
             out.push(Shape::Line { from: slug.end, to: tip, width: 1.0, head: RAIL[4], tail: RAIL[3] });
         }
-        out.push(Shape::Glow { pos: slug.end, radius: 16.0, color: pyro::alpha(RAIL[2], 1.0 - k) });
+        out.push(Shape::Glow { pos: slug.end, radius: 16.0, color: pyro::alpha(RAIL_LIGHT, 1.0 - k) });
     }
     out
 }
