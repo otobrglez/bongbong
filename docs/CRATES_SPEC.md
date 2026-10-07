@@ -25,7 +25,7 @@ just check-sheets
 Never edit them by hand. The rows are `PickupKind` in declaration order
 (`PickupKind::row`, the generator's `KINDS`): health, ammo, laser, minigun,
 plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack,
-heat_shield, grenades, sonic_hammer.
+heat_shield, grenades, sonic_hammer, emp_burst.
 
 ### Columns of `crates_sheet.png`
 
@@ -81,6 +81,7 @@ heat_shield, grenades, sonic_hammer.
 | heat_shield | a shield, molten red over black basalt (docs/volcano.md) | `#F0461E` |
 | grenades | four grenades, each with its lamp lit in the light ink (`#F4B6FF`; white on the symbol sheet) | `#D656F5` |
 | sonic_hammer | a speaker's cone and two arcs of sound (docs/sonic-hammer.md) | `#46C3F2` |
+| emp_burst | the power-off sign: a broken ring and its bar, the bar in the light ink (docs/emp-burst.md) | `#4F6BFF` |
 
 The symbol sheet is each symbol on its own, lit along its top, shaded along
 its bottom and outlined: what rises out of an opened crate, what a broken
