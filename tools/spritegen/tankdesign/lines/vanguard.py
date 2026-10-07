@@ -313,6 +313,38 @@ def grenade(d, b, st, hp):
             b.part(px, DARK, 'flat', 5.5, step=-1, name='gl_chamber')
 
 
+@LINE.module_fn('sonic')
+def sonic(d, b, st, hp):
+    """A sonic hammer on the roof (docs/sonic-hammer.md): a long-range
+    acoustic dish - a round gunmetal mount, a short steel stem and a shallow
+    dish across its front whose horns curve forward a pixel, its face a row
+    of transducer dots. `st` 0 at rest, the face dark; 1 and 2 the wind-up,
+    the inner and then the outer dots lit pale; 3 a blast, the whole face
+    lit and the horns flexed forward. It shares the missiles' hardpoint
+    unless the design gives it its own - a tank carries one special weapon
+    at a time."""
+    hx, hy = hp.get('sonic', hp['missiles'])
+    b.meta['muzzle'] = (hx + 0.5, hy - 4.0)
+    b.part(chamfer(hx - 2, hy - 1, hx + 2, hy + 2, tl=1, tr=1, br=1, bl=1), GUNMETAL, 'plate', 5, step=0,
+           corner=False, name='sd_mount')
+    b.part({(hx, hy - 2)}, STEEL, 'flat', 5.2, step=1, name='sd_stem')
+    b.part(rect(hx - 2, hy - 2, hx + 2, hy - 2) - {(hx, hy - 2)}, GUNMETAL, 'flat', 5.3, step=1, name='sd_bowl')
+    horns = {(hx - 3, hy - 3), (hx + 3, hy - 3), (hx - 3, hy - 4), (hx + 3, hy - 4)}
+    if st == 3:
+        horns |= {(hx - 3, hy - 5), (hx + 3, hy - 5)}
+    b.part(horns, STEEL, 'flat', 5.4, step=2, name='sd_horns')
+    b.part(rect(hx - 2, hy - 4, hx + 2, hy - 3), DARK, 'grille', 5.5, step=1, pattern=dict(period=2, dir='v'),
+           name='sd_face')
+    inner = rect(hx - 1, hy - 3, hx + 1, hy - 3)
+    outer = rect(hx - 2, hy - 4, hx + 2, hy - 4) | {(hx - 2, hy - 3), (hx + 2, hy - 3)}
+    if st == 1:
+        b.lamp(inner, 'white', z=5.7, name='sd_inner')
+    elif st == 2:
+        b.lamp(outer, 'white', z=5.7, name='sd_outer')
+    elif st == 3:
+        b.lamp(inner | outer, 'white', z=5.7, name='sd_blast')
+
+
 # ---------------------------------------------------------------------------
 # Scout - fast recon. Silhouette: an arrowhead nose ahead of short narrow
 # runs, a small round turret with the optic pod bulging off its left cheek

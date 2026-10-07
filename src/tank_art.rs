@@ -121,6 +121,22 @@ pub const GRENADE_MUZZLE: [(f32, f32); 12] = [
     (0.5, -3.0), // leviathan
 ];
 
+/// The sonic hammer module's dish, where its wind-up is drawn (turret frame).
+pub const SONIC_MUZZLE: [(f32, f32); 12] = [
+    (0.5, -2.0), // scout
+    (0.5, -1.0), // assault
+    (0.5, -3.0), // breaker
+    (0.5, -1.0), // longbow
+    (0.5, -3.0), // flak
+    (0.5, -3.0), // wraith
+    (0.5, -3.0), // warden
+    (0.5, -3.0), // ravager
+    (0.5, -2.0), // glacier
+    (0.5, -5.0), // obelisk
+    (0.5, -2.0), // titan
+    (0.5, -1.0), // leviathan
+];
+
 /// The missile launcher's four tube mouths, in firing order (turret frame).
 pub const MISSILE_TUBES: [[(f32, f32); 4]; 12] = [
     [(-1.0, 1.0), (1.0, 1.0), (-1.0, 3.0), (1.0, 3.0)], // scout
