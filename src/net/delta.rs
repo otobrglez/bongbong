@@ -755,7 +755,7 @@ mod tests {
         // length byte for each keyed family's lists, the grenades' three
         // included. A new shot costs one more byte for its owner
         // (protocol 8); every tank two for its tell and its skid
-        // (protocol 15).
+        // (protocol 16).
         assert!(full <= 456, "full snapshot {full} B");
         assert!(moving <= 210, "moving delta {moving} B");
         assert!(busy <= 276, "busy delta {busy} B");

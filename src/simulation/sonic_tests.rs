@@ -225,6 +225,19 @@ fn walls_and_towers_shadow_the_cone_and_glass_shatters_as_it_does() {
 }
 
 #[test]
+fn a_range_board_lets_the_wave_through_and_takes_nothing() {
+    let mut game = round("cells.\"5,6\" = { kind = \"target\" }\n");
+    let behind_at = Position::new(240.0, 192.0);
+    let behind = parked_row(&mut game, behind_at, 1);
+    let events = blast(&mut game, 60);
+    assert!(moved(&game, behind, behind_at) > 10.0, "what stands behind a board is reached");
+    let mut boards = game.world.query::<&crate::obstacle::Obstacle>();
+    let board = boards.iter().find(|o| o.material == crate::obstacle::Material::Target).expect("the board stands");
+    assert!(!board.destroyed && !board.burning && board.health >= board.max_health, "the board takes nothing");
+    assert!(!events.iter().any(|e| matches!(e, Event::ObstacleDestroyed { .. })));
+}
+
+#[test]
 fn a_lantern_is_broken_and_a_lamp_post_left_standing() {
     let mut game = round("cells.\"5,7\" = { kind = \"lamp\" }\n");
     game.lanterns.push(crate::lamp::Lantern { id: 1, position: Position::new(170.0, 192.0), seat: 0, lit_at: 0.0 });

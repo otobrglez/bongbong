@@ -341,8 +341,8 @@ impl Material {
 
     /// Whether this tile stops a sonic hammer's wave (docs/sonic-hammer.md):
     /// every wall material - glass too, which shatters as it does - the
-    /// towers, a volcano's cone and a training door. Props, drums, trees
-    /// and lamp posts let it through.
+    /// towers, a volcano's cone and a training door. Props, drums, range
+    /// boards, trees and lamp posts let it through.
     pub fn blocks_sound(self) -> bool {
         self.is_wall() || self.is_tower() || matches!(self, Material::Volcano | Material::Door)
     }

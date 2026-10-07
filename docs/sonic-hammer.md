@@ -42,8 +42,8 @@ tool and the `armory` map.
   `Material::blocks_sound`: every wall material - brick, iron, wood and
   glass - the three towers, a volcano's cone and a training door; its reach
   is the distance to that entry. It also stops at the field's edge. Props,
-  drums, trees, lamp posts, pickups, water, lava, grass and tanks do not
-  stop it. A destroyed tile is not there. The cast records, per ray, its
+  drums, range boards, trees, lamp posts, pickups, water, lava, grass and
+  tanks do not stop it. A destroyed tile is not there. The cast records, per ray, its
   reach, and, per cell any ray entered, the least distance at which a ray
   entered it. "In the cone" from then on means: a point within the half
   angle whose distance is no more than the reach of the rays either side
@@ -161,8 +161,8 @@ tool and the `armory` map.
 - **What it leaves alone**: shots in flight (shells, bullets, plasma,
   missiles, flying drums, lava bombs, globs - a shell outruns sound), wrecks,
   crates (no damage, they do not break), towers (they stop it and take
-  nothing), sandbags and fences (it passes over them), lamp posts, oil,
-  ground fires, ooze, scorches, rubble, tread marks.
+  nothing), sandbags, fences and range boards (it passes over them), lamp
+  posts, oil, ground fires, ooze, scorches, rubble, tread marks.
 - **Portals** do not carry the wave (it is not a shot - `portal_shots`
   covers shells, bullets, plasma and the laser). A tank shoved into a
   portal's trigger radius goes through it as any tank does
@@ -928,7 +928,7 @@ The HUD shows the glyph and a count; the weapon has no other words.
 
 ## 8. Wire
 
-Protocol 15 (from 14), once in the PR.
+Protocol 16 (from 15), once in the PR.
 
 - `WeaponKind::SonicHammer`, appended to `ALL`.
 - `WireEvent::SonicBlast { slot: u16, x: i16, y: i16, dir: u8 }` - the
@@ -997,7 +997,7 @@ seat at cell (3, 6) facing east, parked enemies placed by hand):
   `the_shove_falls_off_with_distance_and_a_heavy_chassis_barely_slides`,
   `walls_and_towers_shadow_the_cone_and_glass_shatters_as_it_does` (iron,
   brick, a tower, glass: behind untouched, beside reached, only glass
-  gone).
+  gone), `a_range_board_lets_the_wave_through_and_takes_nothing`.
 - The skid: `a_skidding_tank_cannot_drive_and_slides_as_far_whichever_way_it_faces`
   (head-on and broadside within 3 px, a held stick ignored during it and
   obeyed after), `the_predicted_slide_is_the_skid` (`sonic::slide`
@@ -1247,6 +1247,7 @@ events on the two maps). How such a pack should play is a question for Oto (§12
 | Towers | Stop the wave, take nothing; an enemy tower's reach is trouble |
 | Frogs | Stunned (either side's, your own too); Hunt's enemy frog stunned is a shot frog |
 | Crates | Untouched, not broken |
+| Range boards (docs/range-target-prd.md) | Passed over as a fence is, and left whole: a board stops no sound and the wave breaks only glass; what stands behind one is shoved |
 | Drums, oil, ground fires | Drums thrown and going off where they land (fused or not); oil and fires untouched; a thrown oil drum leaves its pool |
 | Trees, grass | Trees sway and stop nothing; grass flattened and hides nobody for a while |
 | Glass, lanterns, lamp posts | Shattered; broken; left standing |
@@ -1387,6 +1388,12 @@ events on the two maps). How such a pack should play is a question for Oto (§12
     (review): the accent names the weapon, and the red rim, the enemy
     frog's, says it is no teammate - the hammer's sky blue is player 1's
     own colour.
+28. **A range board lets the wave through** (docs/range-target-prd.md): it
+    is a prop - a plank on an easel, seam-closed like a fence - so the wave
+    passes it as it passes sandbags and fences, and breaks nothing but
+    glass, so the board takes nothing. *Alternative*: stopping the wave as
+    the board stops sight, which would make every board a sound wall - but
+    `blocks_sight` is the AI's line of fire, and a board is no wall.
 
 ### Not in this PR
 
