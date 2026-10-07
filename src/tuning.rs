@@ -1121,8 +1121,10 @@ tunables! {
         /// How far inside a seat's sight box (and its own sight) an enemy
         /// must stand to start a charge at it (px); the release needs only
         /// the box. A tank at the box's very edge otherwise charged, drifted
-        /// a pixel out while it charged and vented, over and over.
-        gauss_ai_box_margin_px: f32 = 16.0 in 0.0 ..= 128.0;
+        /// a pixel out while it charged and vented, over and over; at a
+        /// cell, a charge on a row starts within the attack range, where
+        /// every other enemy engages.
+        gauss_ai_box_margin_px: f32 = 32.0 in 0.0 ..= 128.0;
     }
 
     group flamethrower {
