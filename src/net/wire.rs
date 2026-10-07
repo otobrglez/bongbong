@@ -352,6 +352,11 @@ pub struct IntentMsg {
     /// docs/online-coop-prd.md §4.16). Zero before the first snapshot.
     pub view_tick: u32,
     pub view_frac: u8,
+    /// The client's own rod reticle (docs/rod-from-god.md "The reticle
+    /// report"): the cell it stands on as `encode::cell_index` plus one, 0
+    /// for none, on every packet while a rod's charge runs - the release's
+    /// included. The room puts the seat's reticle there.
+    pub reticle: u16,
 }
 
 impl IntentMsg {
@@ -372,7 +377,15 @@ impl IntentMsg {
             vy: 0,
             view_tick: 0,
             view_frac: 0,
+            reticle: 0,
         }
+    }
+
+    /// The same packet saying where the client's rod reticle stands
+    /// (`reticle`'s encoding).
+    pub fn with_reticle(mut self, reticle: u16) -> IntentMsg {
+        self.reticle = reticle;
+        self
     }
 
     /// The same packet saying which tick of the world the client was
@@ -516,6 +529,9 @@ pub struct TankState {
     /// the whole ticks its trigger has been held, at least 1; 0 for none.
     /// Exact, so a replay starts from the room's count.
     pub charge: u16,
+    /// Its rod's reticle (`Tank::reticle`, docs/rod-from-god.md): the cell
+    /// it stands on as `encode::cell_index` plus one, 0 for none.
+    pub reticle: u16,
 }
 
 /// One live projectile, keyed by a per-round id the server hands out.
@@ -784,6 +800,35 @@ pub struct LampState {
     pub seat: u8,
 }
 
+/// A zone standing on the field (`zone::Zone`, docs/rod-from-god.md), by
+/// its id. Its radius is its kind's knob, not the wire's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZoneState {
+    pub id: u16,
+    /// `Zone::wire_kind`: `zone::ZONE_ROD` for a rod's call.
+    pub kind: u8,
+    /// Its centre, quarter pixels (`quantise_pos`).
+    pub x: i16,
+    pub y: i16,
+    /// When it ends, on the round clock in ticks.
+    pub until: u32,
+    /// Its owner's slot: the kill credit's, and whose screen is not warned
+    /// of its own.
+    pub owner: u16,
+    /// The cell a call lands on, `encode::cell_index`.
+    pub cell: u16,
+}
+
+/// A rod's crater (`rod::Crater`), by the cell struck: its cells are worked
+/// out from the map as the room did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CraterState {
+    /// `encode::cell_index` of the cell struck.
+    pub cell: u16,
+    /// The impact's round tick, for the smoke's age.
+    pub tick: u32,
+}
+
 /// The round's scalar state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoundState {
@@ -844,6 +889,14 @@ pub struct Snapshot {
     pub lamps: Vec<LampState>,
     /// The crates that are not whole (`CrateState`), by cell.
     pub crates: Vec<CrateState>,
+    /// The zones standing (`ZoneState`), by id.
+    pub zones: Vec<ZoneState>,
+    /// The rods' craters (`CraterState`), by cell.
+    pub craters: Vec<CraterState>,
+    /// Each volcano's cycle shift in ticks (`volcano::Volcano::shift`, a
+    /// rod's set-off), in `Game::volcanoes` order; empty while every shift
+    /// is 0.
+    pub volcano_shifts: Vec<i32>,
     pub round: RoundState,
     /// What happened on the ticks since the previous snapshot, the AI's
     /// trace left out (`WireEvent::from_event`).
@@ -872,6 +925,10 @@ impl Snapshot {
         self.lamps.dedup_by_key(|l| l.id);
         self.crates.sort_by_key(|c| c.cell);
         self.crates.dedup_by_key(|c| c.cell);
+        self.zones.sort_by_key(|z| z.id);
+        self.zones.dedup_by_key(|z| z.id);
+        self.craters.sort_by_key(|c| c.cell);
+        self.craters.dedup_by_key(|c| c.cell);
     }
 }
 

@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::net::MAX_SEATS;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    BonusPickup, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, ShotState, Snapshot, TankState,
+    BonusPickup, CraterState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, ShotState, Snapshot, TankState, ZoneState,
     TileState, side_code,
 };
 
@@ -84,6 +84,14 @@ pub struct SnapshotDelta {
     /// New or changed crates, in full.
     pub crates: Vec<CrateState>,
     pub crates_gone: Vec<u16>,
+    /// New zones, in full (a zone never changes; it only comes and goes).
+    pub zones: Vec<ZoneState>,
+    pub zones_gone: Vec<u16>,
+    /// New craters, in full.
+    pub craters: Vec<CraterState>,
+    pub craters_gone: Vec<u16>,
+    /// The volcanoes' shifts, whole, when they changed.
+    pub volcano_shifts: Option<Vec<i32>>,
     pub round: Option<RoundState>,
     pub events: Vec<WireEvent>,
 }
@@ -220,6 +228,18 @@ impl Keyed for CrateState {
     }
 }
 
+impl Keyed for ZoneState {
+    fn key(&self) -> u16 {
+        self.id
+    }
+}
+
+impl Keyed for CraterState {
+    fn key(&self) -> u16 {
+        self.cell
+    }
+}
+
 fn by_key<T: Keyed>(entries: &[T]) -> BTreeMap<u16, &T> {
     entries.iter().map(|e| (e.key(), e)).collect()
 }
@@ -299,6 +319,8 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
     let (fires, fires_gone) = diff_keyed(&prev.fires, &next.fires);
     let (lamps, lamps_gone) = diff_keyed(&prev.lamps, &next.lamps);
     let (crates, crates_gone) = diff_keyed(&prev.crates, &next.crates);
+    let (zones, zones_gone) = diff_keyed(&prev.zones, &next.zones);
+    let (craters, craters_gone) = diff_keyed(&prev.craters, &next.craters);
     let mut bonus_pickups = next.bonus_pickups.clone();
     bonus_pickups.sort();
     bonus_pickups.dedup();
@@ -338,6 +360,11 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
         lamps_gone,
         crates,
         crates_gone,
+        zones,
+        zones_gone,
+        craters,
+        craters_gone,
+        volcano_shifts: (next.volcano_shifts != prev.volcano_shifts).then(|| next.volcano_shifts.clone()),
         round: (next.round != prev.round).then_some(next.round),
         events: next.events.clone(),
     }
@@ -370,6 +397,9 @@ pub fn apply_delta(prev: &Snapshot, delta: &SnapshotDelta) -> Snapshot {
         fires: apply_keyed(&prev.fires, &delta.fires, &delta.fires_gone),
         lamps: apply_keyed(&prev.lamps, &delta.lamps, &delta.lamps_gone),
         crates: apply_keyed(&prev.crates, &delta.crates, &delta.crates_gone),
+        zones: apply_keyed(&prev.zones, &delta.zones, &delta.zones_gone),
+        craters: apply_keyed(&prev.craters, &delta.craters, &delta.craters_gone),
+        volcano_shifts: delta.volcano_shifts.clone().unwrap_or_else(|| prev.volcano_shifts.clone()),
         round: delta.round.unwrap_or(prev.round),
         events: delta.events.clone(),
     }
@@ -406,6 +436,7 @@ mod tests {
             offline: rng.random_range(0..30),
             shells: rng.random_range(0..12),
             charge: if rng.random_range(0..4) == 0 { rng.random_range(1..200) } else { 0 },
+            reticle: if rng.random_range(0..6) == 0 { rng.random_range(1..600) } else { 0 },
         }
     }
 
@@ -517,6 +548,12 @@ mod tests {
             .into_iter()
             .map(|cell| CrateState { cell, hp: rng.random(), flags: rng.random_range(0..4), left: rng.random() })
             .collect();
+        let zones = random_keys(rng, 3, 400)
+            .into_iter()
+            .map(|id| ZoneState { id, kind: 0, x: rng.random(), y: rng.random(), until: rng.random_range(0..200_000), owner: rng.random_range(0..40), cell: rng.random_range(0..600) })
+            .collect();
+        let craters = random_keys(rng, 3, 600).into_iter().map(|cell| CraterState { cell, tick: rng.random_range(0..200_000) }).collect();
+        let volcano_shifts = if rng.random() { vec![rng.random_range(-4000..4000)] } else { Vec::new() };
         let mut s = Snapshot {
             tick: rng.random_range(0..200_000),
             server_ms: rng.random(),
@@ -534,6 +571,9 @@ mod tests {
             fires,
             lamps,
             crates,
+            zones,
+            craters,
+            volcano_shifts,
             round: RoundState {
                 wave: rng.random_range(0..10),
                 alive: rng.random_range(0..40),
@@ -622,6 +662,16 @@ mod tests {
         }
         if rng.random_ratio(1, 5) {
             next.round.alive = next.round.alive.wrapping_add(1);
+        }
+        next.zones.retain(|_| !rng.random_ratio(1, 3));
+        for id in random_keys(rng, 1, 400) {
+            next.zones.push(ZoneState { id, kind: 0, x: rng.random(), y: rng.random(), until: rng.random_range(0..200_000), owner: 3, cell: rng.random_range(0..600) });
+        }
+        for cell in random_keys(rng, 1, 600) {
+            next.craters.push(CraterState { cell, tick: next.tick });
+        }
+        if rng.random_ratio(1, 6) {
+            next.volcano_shifts = vec![rng.random_range(-4000..4000)];
         }
         next.events = random_events(rng);
         // Later pushes of an existing key must win, the way the server's
@@ -724,6 +774,7 @@ mod tests {
                 offline: 0,
                 shells: 10,
                 charge: 0,
+                reticle: 0,
             })
             .collect();
         let shots = (0..24u16)
@@ -808,10 +859,13 @@ mod tests {
         // (protocol 16), and three for an EMP's two outages and its
         // magazine, the round one for the lamps (protocol 17); every tank
         // one for its charge (protocol 18); the drones' family three
-        // (protocol 19).
-        assert!(full <= 489, "full snapshot {full} B");
+        // (protocol 19); every tank one for its reticle and the zones', the
+        // craters' and the volcanoes' shifts' lists one each, the delta two
+        // for the zones and two for the craters and one for the shifts
+        // (protocol 20).
+        assert!(full <= 498, "full snapshot {full} B");
         assert!(moving <= 213, "moving delta {moving} B");
         assert!(busy <= 279, "busy delta {busy} B");
-        assert!(idle <= 54, "idle delta {idle} B");
+        assert!(idle <= 59, "idle delta {idle} B");
     }
 }

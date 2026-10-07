@@ -228,6 +228,52 @@ fn apply_lamps(game: &mut Game, s: &Snapshot) {
     game.lanterns = lanterns;
 }
 
+/// The zones the snapshot lists (docs/rod-from-god.md): the room's,
+/// replaced whole; a client's own provisional ones
+/// (`Zone::provisional`) are its prediction's to keep or drop.
+fn apply_zones(game: &mut Game, s: &Snapshot, cols: u16) {
+    let seats = game.players.count();
+    let mut zones: Vec<crate::zone::Zone> = game.zones.iter().copied().filter(|z| z.provisional()).collect();
+    zones.extend(s.zones.iter().map(|z| {
+        let owner = if (z.owner as usize) < seats { Owner::Player(z.owner as u8) } else { Owner::Enemy(z.owner as usize) };
+        let seat = match owner {
+            Owner::Player(seat) => Some(seat),
+            _ => None,
+        };
+        crate::zone::Zone {
+            id: z.id as u32,
+            kind: crate::zone::ZoneKind::Rod(crate::rod::RodCall { cell: cell_from_index(cols, z.cell), seat }),
+            owner,
+            centre: Position::new(dequantise_pos(z.x), dequantise_pos(z.y)),
+            until: z.until as f32 * PHYSICS_FIXED_DT,
+        }
+    }));
+    zones.sort_by_key(|z| z.id);
+    game.zones = zones;
+}
+
+/// The craters the snapshot lists that the replica has not made yet, made
+/// as the room made them: their cells worked out from the replica's map,
+/// filled under a sky that fills them (`Game::make_crater`).
+fn apply_craters(game: &mut Game, s: &Snapshot, cols: u16) {
+    for c in &s.craters {
+        let cell = cell_from_index(cols, c.cell);
+        if game.craters.list().iter().any(|k| k.cell == cell) {
+            continue;
+        }
+        let cells = game.crater_cells_at(cell);
+        game.make_crater(cell, c.tick as f32 * PHYSICS_FIXED_DT, &cells);
+    }
+}
+
+/// Each volcano's cycle at the room's shift (a rod's set-off), 0 for every
+/// one the snapshot leaves out.
+fn apply_volcano_shifts(game: &mut Game, s: &Snapshot) {
+    for i in 0..game.volcanoes.len() {
+        game.shift_volcano(i, s.volcano_shifts.get(i).copied().unwrap_or(0));
+    }
+}
+
 /// Take the tiles in `dead` out of the world, bodies included, and recap
 /// the walls around the holes.
 fn remove_tiles(game: &mut Game, dead: &BTreeSet<u16>, cols: u16) {
@@ -284,6 +330,9 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_pickups(game, s, cols);
     apply_fires(game, s, cols);
     apply_lamps(game, s);
+    apply_zones(game, s, cols);
+    apply_craters(game, s, cols);
+    apply_volcano_shifts(game, s);
     apply_round(game, s);
     game.show(spectacle);
     game.frame = s.tick as u64;
@@ -334,6 +383,13 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTre
                 game.missile_show(show, center, dir);
             }
             WireEvent::GrenadeBlast { x, y, .. } => game.grenade_show(show, at(x, y)),
+            // A rod's impact: what it struck read before the crater is
+            // made, as the room read it.
+            WireEvent::RodImpact { col, row, .. } => {
+                let c = map::cell_to_world(col as i32, row as i32);
+                let ground = game.ground_struck(c);
+                game.rod_show(show, c, ground);
+            }
             // A drone's burst, leaning down the dive the replica's copy of
             // it was heading along (`fpv::Drone::commit` turns it that way).
             WireEvent::DroneBurst { id, x, y, crown, .. } => {
@@ -358,7 +414,7 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTre
             // A sonic hit flashes the hull and throws dust (`fx`), never a
             // shell's impact flash; a slug's hits are its own picture's
             // (`gauss::compose_slug`).
-            WireEvent::Hit { cause: crate::simulation::HitCause::Sonic | crate::simulation::HitCause::Rail, .. } => {}
+            WireEvent::Hit { cause: crate::simulation::HitCause::Sonic | crate::simulation::HitCause::Rail | crate::simulation::HitCause::Rod, .. } => {}
             // A gauss rail's slug, leg by leg, with what it went through -
             // unless it is this seat's own release, drawn on the release.
             WireEvent::RailSlug { leg, x0, y0, x1, y1, portal, overcharged, ref pierced, .. } if !own_presses.contains(&i) => {
@@ -690,6 +746,7 @@ fn spawn_tank(game: &mut Game, t: &TankState, player: bool) -> Entity {
 /// the hull stands where `init` or `spawn_tank` put it, which nothing has
 /// drawn over.
 fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
+    let cols = field_cols(game);
     let position = Position::new(dequantise_pos(t.x), dequantise_pos(t.y));
     let velocity = Position::new(dequantise_velocity(t.vx), dequantise_velocity(t.vy));
     let rotation = dir_from_index(t.dir).unwrap_or(Dir::Up).rotation();
@@ -768,6 +825,12 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
         // A charge, at the room's count of ticks; the replica counts it up
         // between snapshots (`Game::tick_presentation`).
         tank.charge = (t.charge > 0).then(|| crate::tank::Charge::new(weapon, t.charge as f32 * PHYSICS_FIXED_DT));
+        // A rod's reticle: its cell; the time it has rested there is the
+        // replica's own, kept while it stays put.
+        tank.reticle = crate::net::encode::reticle_from_code(cols, t.reticle).map(|cell| match tank.reticle {
+            Some(r) if r.cell == cell => r,
+            _ => crate::rod::Reticle::new(cell),
+        });
         (tank.body, tank.move_half_extents(tank.facing_along_x()), turned)
     };
     let tracked = game.world.get::<&mut WireTrack>(entity).map(|mut w| w.0 = position).is_ok();
@@ -2746,6 +2809,56 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
             snapshot(&mut replica, &snap);
             assert!(replica.impact_flashes.is_empty(), "{cause:?}");
         }
+    }
+
+    /// A rod's call reaches the replica as the room's zone, with its cell
+    /// and its end; a reticle as its cell on the tank; the impact as the
+    /// room's show, the crater made from the replica's own map and the
+    /// zone gone (docs/rod-from-god.md "Wire").
+    #[test]
+    fn a_rods_call_reticle_impact_and_crater_reach_the_replica() {
+        let mut game = quiet_round(DEFAULT_MAP, 0xB0B5, 0);
+        let (w, h) = game.map.field_size();
+        let seat = game.player().expect("a seat");
+        game.world.get::<&mut Tank>(seat).unwrap().reticle = Some(crate::rod::Reticle::new((12, 4)));
+        let at = map::cell_to_world(20, 9);
+        game.debug_call_rod(at, false).expect("a call");
+        let mut replica = welcome_through_the_codec(&game);
+        snapshot(&mut replica, &enc::snapshot(&game, [0; MAX_SEATS]));
+        let zone = replica.zones().first().copied().expect("the zone");
+        assert_eq!(zone.rod().map(|c| c.cell), Some((20, 9)));
+        assert!((zone.until - game.zones()[0].until).abs() < 1e-3, "{} {}", zone.until, game.zones()[0].until);
+        assert_eq!(replica.seat_reticle(0).map(|r| r.cell), Some((12, 4)));
+        game.world.get::<&mut Tank>(seat).unwrap().reticle = None;
+        let mut seen = Vec::new();
+        while game.craters().is_empty() {
+            game.update(Input::default(), PHYSICS_FIXED_DT, w, h);
+            seen.extend(enc::wire_events(game.events()));
+        }
+        let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
+        snap.events = seen.clone();
+        snapshot(&mut replica, &snap);
+        assert!(seen.iter().any(|e| matches!(e, WireEvent::RodImpact { col: 20, row: 9, crater: true, .. })), "{seen:?}");
+        assert!(replica.zones().is_empty(), "the call is gone with the room's");
+        assert_eq!(replica.craters().cells().collect::<Vec<_>>(), game.craters().cells().collect::<Vec<_>>());
+        assert!(!replica.rod_impacts.is_empty(), "the impact is drawn");
+        assert_eq!(replica.seat_reticle(0), None);
+    }
+
+    /// A volcano a rod set off erupts on the replica on the room's cycle:
+    /// the shift travels in the snapshot.
+    #[test]
+    fn a_volcanos_shift_reaches_the_replica() {
+        let map = "version = 1\ntanks = 0\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"20,8\" = { kind = \"volcano\" }\n";
+        let mut game = quiet_round(map, 0xB0B5, 0);
+        let t = tuning();
+        let (shift, _) = game.volcanoes[0].set_off_shift(game.time, &t).expect("not erupting at the start");
+        game.shift_volcano(0, shift);
+        let mut replica = welcome_through_the_codec(&game);
+        snapshot(&mut replica, &enc::snapshot(&game, [0; MAX_SEATS]));
+        assert_eq!(replica.volcanoes[0].shift, shift);
+        let next = replica.time + PHYSICS_FIXED_DT;
+        assert_eq!(replica.volcanoes[0].phase(next, &t), game.volcanoes[0].phase(next, &t));
     }
 
     #[test]

@@ -619,6 +619,14 @@ impl Mailbox {
         self.inner.lock().expect("mailbox poisoned").hold
     }
 
+    /// The reticle report (docs/rod-from-god.md "The reticle report"): the
+    /// newest applied intent's `IntentMsg::reticle` - a starved read
+    /// repeats the last - which a room hands the round
+    /// (`net::authority::take_reticle`). 0 for none.
+    pub fn reticle(&self) -> u16 {
+        self.inner.lock().expect("mailbox poisoned").last.map_or(0, |m| m.reticle)
+    }
+
     /// How many ticks have found this seat's buffer empty. `/metrics`
     /// reports the total; the client reads each one as it happens off
     /// `wire_state`.

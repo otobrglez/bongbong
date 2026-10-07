@@ -190,6 +190,9 @@ pub(crate) struct SeatCharge {
     /// A rod's reticle cell as it stood when the step began: where a
     /// release calls.
     pub reticle: Option<(i32, i32)>,
+    /// The cell the hull stood on as the trigger was stepped: a release
+    /// with the reticle there is the cancel (`rod::fire_rod`).
+    pub hull_cell: (i32, i32),
     pub start: Position,
     pub muzzle: Position,
     pub dir: Vec2,

@@ -921,6 +921,10 @@ pub struct Game {
     /// the router, the off-screen arrows, the minimap and the wire read. A
     /// replica's are the room's, from the wire. Cleared by `init`.
     pub(crate) zones: Vec<crate::zone::Zone>,
+    /// Seconds ahead of `time` the zones' countdowns are drawn on: 0 in a
+    /// local round; a client's lead to its own present online
+    /// (`set_zone_lead`). Presentation only.
+    pub(crate) zone_lead: f32,
     /// The craters the rods left this round (`rod::Craters`): pits the
     /// footing slows and the router prices, fords while it rains. Cleared by
     /// `init`.
@@ -2533,7 +2537,8 @@ impl Game {
             {
                 gauss::recoil_hull(physics, &mut tank, dir, stage == crate::tank::ChargeStage::Overcharged, footing);
             }
-            charged = Some(gauss::SeatCharge { edge, weapon, start, muzzle, dir, reticle });
+            let hull_cell = crate::map::world_to_cell(tank.position);
+            charged = Some(gauss::SeatCharge { edge, weapon, start, muzzle, dir, reticle, hull_cell });
         }
         physics.step();
         // The solver moved the body; the tank's own position is what
