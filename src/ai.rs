@@ -745,12 +745,12 @@ pub struct Ai {
     /// was chosen (`Game::fpv_senses` keeps it, searching again only when
     /// it no longer hides it or `fpv_ai_cover_seconds` have passed).
     pub(crate) cover_spot: Option<(Position, f32)>,
-    /// Seconds its FPV rule has spent making for cover with no launch
-    /// (`SpecialUse::Approach` "to cover"): past `fpv_ai_cover_seconds` it
-    /// launches from where it stands. Back to 0 on a launch and whenever
-    /// it stands in cover from the seat it would launch at
-    /// (`Game::fpv_senses`).
-    pub(crate) cover_waited: f32,
+    /// Seconds its FPV rule has spent driving to a place to launch from -
+    /// making for cover or backing off (`SpecialUse::Approach` "to cover",
+    /// "back off") - with no launch: past `fpv_ai_cover_seconds` it launches
+    /// from where it stands. Back to 0 on a launch and whenever it stands in
+    /// cover from the seat it would launch at (`Game::fpv_senses`).
+    pub(crate) place_waited: f32,
     /// A seat's drone locked on it this frame (`Game::air_threats`), set
     /// before it thinks; what the `air` tier answers.
     pub(crate) air_threat: Option<AirThreat>,
@@ -893,7 +893,7 @@ impl Default for Ai {
             clear_waited: 0.0,
             air_want: None,
             cover_spot: None,
-            cover_waited: 0.0,
+            place_waited: 0.0,
             air_threat: None,
             air_why: None,
         }
@@ -3117,8 +3117,8 @@ fn special_rule(b: &Brain) -> Option<SpecialUse> {
 /// training dummy never launches; a healthy tank a seat it knows sees from
 /// inside `fpv_ai_min_range_px` backs off; with none of its drones in the
 /// air, one exposed to the seat it would launch at moves to cover first -
-/// for at most `fpv_ai_cover_seconds` (`Ai::cover_waited`), a cover it
-/// cannot get to being none -, then it launches - at that seat, else into the crown over a seat hiding
+/// the two for at most `fpv_ai_cover_seconds` together (`Ai::place_waited`),
+/// a place it cannot get to being none -, then it launches - at that seat, else into the crown over a seat hiding
 /// under a tree, else (a hunter) at the players' frog (`FpvSense::quarry`,
 /// set for a hunter alone) - one at a time, the
 /// fire timer (`fpv_enemy_gap_seconds`) spacing them; with one in the air
@@ -3129,8 +3129,10 @@ fn fpv_rule(b: &Brain, sense: &FpvSense) -> Option<SpecialUse> {
         return None;
     }
     let free = b.me.damage < t.enemy_flee_damage && !b.guard_holds();
+    let patient = b.ai.place_waited < t.fpv_ai_cover_seconds;
     if let Some(spot) = sense.back_off
         && free
+        && patient
         && b.can_reach(spot)
     {
         return Some(SpecialUse::Approach { to: spot, why: "back off" });
@@ -3143,7 +3145,7 @@ fn fpv_rule(b: &Brain, sense: &FpvSense) -> Option<SpecialUse> {
         if let Some(spot) = sense.cover
             && sense.exposed
             && free
-            && b.ai.cover_waited < t.fpv_ai_cover_seconds
+            && patient
             && b.me.position.distance_to(spot) > OBSTACLE_GRID_SIZE * 0.5
         {
             return Some(SpecialUse::Approach { to: spot, why: "to cover" });
@@ -3497,14 +3499,14 @@ fn act_special(b: &mut Brain) -> Status {
                 b.ai.fire_timer = special_fire_interval(b.me.active_weapon());
                 b.ai.shot_at_seat = at_seat;
                 b.ai.air_want = Some(want);
-                b.ai.cover_waited = 0.0;
+                b.ai.place_waited = 0.0;
             }
         }
         SpecialUse::Approach { to, why } => {
             b.intent.move_dir = Some(b.steer(to));
             b.ai.special_why = Some(why);
-            if why == "to cover" {
-                b.ai.cover_waited += b.dt;
+            if why == "to cover" || why == "back off" {
+                b.ai.place_waited += b.dt;
             }
         }
         SpecialUse::Charge { face, why } => {

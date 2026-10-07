@@ -704,3 +704,34 @@ fn a_seats_drawn_bullet_stops_at_an_enemy_drone_not_its_own() {
     let near = own.ground;
     assert!(world.air_contact(Some(0), Position::new(near.x - 40.0, near.y), Position::new(near.x + 40.0, near.y), 2.0).is_none(), "its own");
 }
+
+/// A rainbow shield soaks a drone's burst as it soaks any blast.
+#[test]
+fn a_shield_soaks_the_burst() {
+    let mut game = round("");
+    let enemy = parked(&mut game, cell(13, 6));
+    // A full shield: it recharges to its pool between hits, never past it.
+    let full = Tuning::DEFAULT.shield_capacity;
+    with_tank_mut(&game.world, enemy, |t| {
+        t.shield_hp = full;
+        t.shield_timer = 30.0;
+    });
+    let mut events = step(&mut game, true);
+    while bursts(&events).is_empty() && game.frame() < 400 {
+        events = step(&mut game, false);
+    }
+    assert_eq!(bursts(&events).len(), 1, "it burst");
+    assert_eq!(tank(&game, enemy, |t| t.damage), 0.0, "the hull whole");
+    assert!(tank(&game, enemy, |t| t.shield_hp) < full, "the shield paid");
+}
+
+/// An offline tesla (an EMP) arcs at no drone.
+#[test]
+fn an_offline_tesla_arcs_no_drone() {
+    let mut game = round("cells.\"7,6\" = { kind = \"tesla\", side = \"enemy\" }\n");
+    for tower in game.towers.values_mut() {
+        tower.disabled = 60.0;
+    }
+    let events = launch(&mut game, 300);
+    assert!(downed(&events).is_empty(), "{events:?}");
+}

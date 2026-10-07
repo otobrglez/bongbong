@@ -185,7 +185,7 @@ When a dive's time is up the drone bursts where its ground point is
 - `Event::DroneBurst { id, slot, x, y, crown }` and the ordinary events of
   what the blast did (`Wreck`, `ObstacleDestroyed`, `Blast`, `ShieldBroken`,
   `Shoved`); the show (§5): a small fireball leaning down the dive, a weak
-  ripple (`SHOCK_DRONE`, 0.15 of a tank dying), the impact flash, a small
+  ripple (`fpv_shock`, 0.15 of a tank dying), the impact flash, a small
   scorch on dry ground (none in a crown, none on water), the grass round it
   flattened.
 
@@ -259,7 +259,7 @@ engaged from anywhere.
 losing it at `fpv_fall_drag` (3) a second; its height falls from rest under
 `fpv_fall_gravity` (500 px/s²); it spins (§5). Where it reaches the ground
 it is a **dud**: `Event::DroneCrashed { id, x, y }` (a puff of dust and
-three sparks, `fx::ImpactKind::Dud`), removed, and nothing else - no blast,
+pale sparks, the missile dud's), removed, and nothing else - no blast,
 no damage (§12, decision 8). A falling drone is no longer an air target.
 
 ### Weather, portals, the edge, the end
@@ -299,39 +299,37 @@ no damage (§12, decision 8). A falling drone is no longer an air target.
 
 | File | What |
 |---|---|
-| `src/air.rs` (new) | Air targets (§3.3): `AirTarget`, `AirKey`, `AirStrike`, `strike_box`, `drawn`; the rules every reader keeps, in its doc |
-| `src/fpv.rs` (new) | The weapon's headless half. `Drone` (id, owner, stage, ground point, height, heading, speed, age, stage time, lock, aim, hits; `advance(dt, wind)`, `commit`, `down(by)`, `launch_path`, `in_air`, `as_target`), `DroneStage`, `DroneLock`, `AirWant`, `halo_slot`, `halo_drawn` (the slots as drawn: bob, settle, fall), `pick_lock` (pure, over plain candidates - shared by the simulation and the AI's sense), `crown_box`, `cover_spot` and `tree_spot` (the AI's searches, pure over a grid and closures), the composers `compose_drone`, `compose_shadow`, `compose_halo` (pure, `pyro::Shape`s), `module_cell` |
-| `src/simulation/fpv.rs` (new) | The world half. `fire_fpv` (the dispatch arm's body), `launch_drone`, `guide_drones` (locks and aims, before the step), `resolve_drones(f, live)` (bursts and crashes), `drone_burst`, `drone_show` (the cosmetic half - fireball, ripple, scorch, leaves - which a replica's `DroneBurst` calls too), `Game::{air_targets, strike_air, canopy_over, drones}`, `fpv_field`/`fpv_sense` (what the AI is handed, §4), `air_threats` (§4), `seat_drone_slot` |
-| `src/simulation/hits.rs` | `ShellTarget::Air(AirKey)`; `sweep_rewound` takes `strikes_air` and meets opposing air targets; `HitBoxFrame::air` (lag compensation); the air candidates in `pierce_rewound` |
+| `src/air.rs` (new) | Air targets (§3.3): `AirTarget` (`strike_box`, `drawn`), `AirKey`, `AirStrike` (the wire's order), `strike_box`; the rules every reader keeps, in its doc |
+| `src/fpv.rs` (new) | The weapon's headless half. `Drone` (id, owner, stage, ground point, height, heading, speed, ages, launch slot, lock, aim, the dive's plan, hits, the fall; `launch`, `advance(dt, wind, field)`, `commit`, `down(by)`, `in_air`, `tracking`, `velocity`, `as_target`, `drawn`, `heading_degrees`/`heading_of`, `age_by`), `DroneStage`, `DroneLock` (`code`, `LOCK_NONE`/`LOCK_FROG`/`LOCK_ENEMY_FROG`), `AirWant`, `halo_slot`, `launch_path`, `FPV_LAUNCH_HANDOVER_SECONDS`, `pick_nearest`, `crown_box`, `boxes_overlap`/`box_holds`, `lamp_color`/`lamp_on`, `module_cell`, the composers `compose_drone`, `compose_shadow`, `compose_halo`, `look_of`, `drone_block` |
+| `src/simulation/fpv.rs` (new) | The world half. `fire_fpv` (the dispatch arm's body), `launch_drones`, `pick_lock`, `guide_drones` (locks and aims, before the step), `advance_drones` (in the fixed step), `resolve_drones(f, live)` (bursts and crashes), `drone_show` (the cosmetic half, which a replica's `DroneBurst` calls too), `spared_by_canopy`, `count_drones_out`, `Game::{air_targets, strike_air, drones, standing_trees, canopy_over}`, `fpv_senses` (what the AI is handed, §4, with the cover search), `air_threats` (§4, with the tree search), `seat_drone_slot` |
+| `src/simulation/hits.rs` | `Terrain::sweep_air` (a bullet's sweep against the air targets, lag-compensated) and `air_along` (the rail's lane); `HitBoxFrame::air` |
 | `src/simulation/weapons.rs` | The `ActiveWeapon::FpvSwarm` dispatch arm; `Projectile::strikes_air` (bullets) |
-| `src/simulation/combat.rs`, `src/simulation/missiles.rs` | `BlastParams::drone`; `side_blast_sparing` (`side_blast` with a list of hulls and frogs left out) |
-| `src/simulation/mod.rs` | `Frame::pending_drones`; `spawn_pending` ids; `guide_drones` beside `guide_missiles`; drones advanced in `step_world`'s fixed-step loop beside the missiles; `resolve_drones` after `resolve_missiles` (both branches); `resolve_projectiles::<Bullet>`'s air hits; `enemy_phase` (the senses, the threats, `Ai::air_want` handed to the tank before `dispatch_fire`); `tick_presentation` (a replica's drones age, fall and spin; the module flash); the swap's table entry; `Event::{DroneLaunched, DroneBurst, DroneDowned, DroneCrashed, DroneLockLost}` |
-| `src/simulation/towers.rs` | The tesla's air arc (`Tower::air_cooldown`), the gun tower's air pick and lead; `box_allows` for an air target |
-| `src/simulation/emp.rs` | The drones' arm in `tick_emp_pulses`, after the missiles |
-| `src/simulation/sonic.rs` | The drones' arm in `tick_sonic_waves` |
-| `src/simulation/gauss.rs` | Drones in the pierce walk (`Pierced::Drone`) |
-| `src/simulation/present.rs` | `PresentWorld::shot_contact` meets drawn opposing drones for a bullet (`Contact::Air`); `rail_trace` pierces them; `Game::draw_press_show`'s drone arm; `Game::{add_provisional_drone, hide_drones}` |
-| `src/simulation/replica.rs` | `DrawableDrone`; `DrawableTank::fpv` |
-| `src/tank.rs` | `fpv_drones`, `fpv_flash`, `fpv_want`; `ActiveWeapon::FpvSwarm` (`name`, `full_load`, `tell_seconds` none, `trigger` `Press`), `SPECIAL_WEAPONS`; `weapon_ammo`/`take_weapon`/`empty_stock`/`wants_pickup`; `kick_fpv`; the module's cells in `module_cols` |
-| `src/tower.rs` | `Tower::air_cooldown` |
+| `src/simulation/missiles.rs` | `side_blast_sparing` (`side_blast` with a list of hulls and frogs left out); `BlastParams::drone` lives in `simulation/fpv.rs` |
+| `src/simulation/mod.rs` | `Frame::pending_drones`; `launch_drones` at the end of `spawn_pending`; `guide_drones` beside `guide_missiles`; `advance_drones` in `step_world`'s loop; `resolve_drones` after `resolve_missiles` (both branches); `resolve_projectiles`' air sweep; `enemy_phase` (the senses, the threats, `Ai::air_want` handed to `Tank::fpv_want` before `enemy_trigger`); `tick_presentation` (a replica's drones age); `Event::{DroneLaunched, DroneBurst, DroneDowned, DroneCrashed, DroneLockLost}`; `TankSnapshot::{fpv_drones, fpv_out, air_hold}` |
+| `src/simulation/towers.rs` | The tesla's air arc (`tesla_air`, `Tower::air_cooldown`), the gun tower's air pick and lead (`pick_air`, `Tower::air_target`), `air_candidates`/`air_box_allows` |
+| `src/simulation/emp.rs`, `sonic.rs`, `gauss.rs` | The drones' arm in `tick_emp_pulses` (after the missiles), in the sonic wave's cone, and in the slug's lane (`Pierced::Drone`); `SPAWN_SWAPS` gains the swarm (`sonic.rs`) |
+| `src/simulation/present.rs` | `PresentWorld::air_contact` (a client's own bullets stop at drawn drones), `flash_seat_fpv`, `remove_drones`, `add_drone`, `set_seat_lifting` |
+| `src/simulation/replica.rs` | `DrawableDrone`, `DrawableState::drones` |
+| `src/simulation/debug.rs`, `src/devserver.rs` | `set_tank`'s `fpv_drones`; the snapshot's `fpv`/`fpv_out` and `drones`; `spawn_pickup {kind: "fpv_swarm"}` |
+| `src/tank.rs` | `fpv_drones`, `fpv_out`, `fpv_want`, `fpv_flash`, `fpv_lifting`; `ActiveWeapon::FpvSwarm` (`name`, `full_load`, no tell, `Trigger::Press`), `SPECIAL_WEAPONS`; `weapon_ammo`/`take_weapon`/`empty_stock`/`wants_pickup`; `kick_fpv`; the module's cells in `module_cols` |
+| `src/tower.rs` | `Tower::{air_cooldown, air_target}` |
 | `src/pickup.rs` | `PickupKind::FpvSwarm` (`fpv_swarm`, row 16, its ink, cooks off) |
-| `src/ai.rs` | `SpecialSense::Fpv(FpvSense)`, `fpv_rule`, `SpecialUse::Launch`, `AirWant`, `generic_fire(FpvSwarm)`; `AirThreat`, the `air` tier and `act_air`; `Ai::{air_want, cover_spot}`; `SEEK_SPECIALS` gains the swarm; `AiSnapshot::{air, threat}` |
-| `src/indicators.rs` | `ArrowKind::Drone`, the incoming drones' arrows (never merged, never dropped); `Scene::drones` |
-| `src/hud.rs` | `HUD_FPV_COLOR`, the `weapon_color`/`weapon_pickup` arms |
-| `src/game.rs`, `src/render/game.rs` | The halo in its tank's place of the standing walk; drones' shadows after the floor marks; drones over everything standing; their lamps in the glowing pass; the dev overlay's strike boxes and aims |
-| `src/fx.rs`, `src/burst.rs` | Rotor wash and buzz off drones; a downed drone's spark and smoke; the crash (`ImpactKind::Dud`); leaves off a crown burst; the halo's fall on a wreck |
+| `src/ai.rs` | `SpecialSense::Fpv(FpvSense)`, `fpv_rule`, `SpecialUse::Launch` (and `Approach`'s `why`), `generic_fire(FpvSwarm)`; `AirThreat`, the `air` tier and `act_air`; `Ai::{air_want, cover_spot, place_waited, air_threat, air_hold}`; `SEEK_SPECIALS` gains the swarm; `AiSnapshot::air` |
+| `src/indicators.rs` | `ArrowKind::Drone`, `Scene::drones`, the arrow's X (`DRONE_X`) |
+| `src/hud.rs` | `HUD_FPV_COLOR`, the `weapon_color`/`weapon_pickup` arms; the slot's count less `Tank::fpv_lifting` |
+| `src/game.rs`, `src/render/game.rs` | `halo_of` and the halo with its tank in the standing walk; `paint_drone_shadows` after the floor, `paint_drones` over everything standing, `drone_lamps` in the glowing pass with their light; the dev overlay's strike boxes and aims; `draw_tank_stats`'s `FPV` line |
+| `src/fx.rs` | Rotor wash, buzz and a falling drone's smoke; a launch's ring of dust, a burst's sparks (leaves in a crown), a downed drone's sparks, a crash's dud |
 | `src/weather.rs` | A drone's lamp light |
 | `src/fish.rs` | `DroneBurst` and `DroneCrashed` among the scares |
-| `src/net/wire.rs` | `WeaponKind::FpvSwarm` (`drawn_on_press`), `DroneState`, `Snapshot::drones`, `drone_stage`, `drone_lock`, `AirStrike` |
+| `src/net/wire.rs`, `src/net/mod.rs` | `WeaponKind::FpvSwarm` (`drawn_on_press`), `DroneState`, `Snapshot::drones`; `PROTOCOL_VERSION` 18 and the measured sizes |
 | `src/net/delta.rs` | `drones`, `drones_moved`, `drones_gone` |
-| `src/net/events.rs` | `WireEvent::{DroneLaunched, DroneBurst, DroneDowned, DroneCrashed}`, the `press_show` arm, `drone_lock_lost` on `NOT_SENT` |
-| `src/net/encode.rs`, `src/net/apply.rs` | `drones(game)`, `apply_drones`; the bursts' and crashes' shows; the `kick_turret` arm |
+| `src/net/events.rs` | `WireEvent::{DroneLaunched, DroneBurst, DroneDowned, DroneCrashed}` (`NO_TARGET`), the `press_show` arm, `drone_lock_lost` on `NOT_SENT` |
+| `src/net/encode.rs`, `src/net/apply.rs` | `drones(game)`, `apply_drones`; the burst's show; the `kick_turret` arm; `Show::presses_drawn` read by the round |
 | `src/net/interp.rs` | Drones blended and carried on like missiles |
-| `src/net/predict.rs`, `src/net/round.rs` | `PressShow::Drone`, the eased launch (§8), the shown seat's halo count |
-| `src/simulation/debug.rs`, `src/devserver.rs` | `set_tank`'s `fpv_drones`; the snapshot's `fpv`, `drones`, `air`, `threat`; `spawn_pickup {kind: "fpv_swarm"}` |
-| `src/bin/probe.rs` | The tank line's `fpv=`/`out=`, the fire tuple, the drone locks off the box, the holds |
+| `src/net/predict.rs`, `src/net/round.rs` | `PressShow::Drone`/`DronePress`, `Predictor::refusal_after`; `OwnDrone`, `fly_own_drones` (the eased launch and its handover, §8), the halo's `fpv_lifting`; a drawn bullet's air contact |
+| `src/bin/probe.rs` | The tank line's `fpv=`/`out=`, the fire tuple, the drone locks on and off the box, the `air` hold, a launch at a seat as arrival |
 | `src/editor/mod.rs` | `Tool::Pickup(PickupKind::FpvSwarm)` (`fpv_swarm`) |
-| `maps/armory.toml` | Its crates, two pairs of trees and a player gun tower (§3.4) |
+| `maps/armory.toml` | Its crates, a grove, two pines and a player gun tower (§3.4) |
 | `src/tuning.rs` | The `fpv` group (§6), two rows in `towers`, one in `enemies` |
 | `lang/en.ftl`, `lang/sl.ftl` | §7 |
 | `tools/punypalette.py`, `tools/spritegen/gen_crates.py`, `tools/spritegen/tankdesign/{kit,export,render,lines/vanguard}.py` | The art (§5); writes `static/crates_sheet.png`, `pickup_glyphs.png`, `tank_modules.png`, `tank_modules_glow.png` |
@@ -354,7 +352,7 @@ Each item of the checklist (docs/sonic-hammer.md §3.0) gets its swarm arm:
    `Tank::fpv_drones` with its arms in `weapon_ammo`, `take_weapon`,
    `empty_stock`, `module_cols`. `wants_pickup` reads `special()`: an enemy
    takes the crate only while it carries no special.
-3. The dispatch arm in `weapons::dispatch_fire_from` (`fire_fpv`); the
+3. The dispatch arm in `weapons::dispatch_fire` (`fire_fpv`); the
    trigger in `drive_player` by `ActiveWeapon::trigger` (`Press`).
 4. `pickup_phase` needs nothing.
 5. `ai::SEEK_SPECIALS = [SonicHammer, Emp, GaussRail, FpvSwarm]`;
@@ -378,10 +376,11 @@ Each item of the checklist (docs/sonic-hammer.md §3.0) gets its swarm arm:
 
 And, as they are: the special hook's tier and `act_special` (extended
 below), `Tank::special`/`active_weapon`/`special_down`, the dangers (a
-cover spot and a tree spot are kept out of them, `Brain::out_of_danger`),
-the press show's claim by input tick, `spawn_pickup {kind: "fpv_swarm"}`,
-the probe's `--crate fpv_swarm`, `fx::ImpactKind::Dud` (the EMP's, for a
-crash).
+cover spot and a back-off point are kept out of every danger the tank
+does not own, `Danger::depth`), the press show's claim by input tick
+(`Show::presses_drawn`), `spawn_pickup {kind: "fpv_swarm"}`, the probe's
+`--crate fpv_swarm`, the EMP's dud (a crash is the missile dud's dust and
+pale sparks).
 
 ### 3.2 What this extends
 
@@ -401,28 +400,32 @@ crash).
 
   In `enemy_phase`'s collect pass, where the trigger meets the simulation
   (docs/gauss-rail.md, "Needs" 8), the tank's `fpv_want` is set from
-  `Ai::air_want` right before `dispatch_fire`; the launch takes it (and
+  `Ai::air_want` right before `enemy_trigger`; the launch takes it (and
   clears it), `None` reading as `Nearest`.
-- **`Ai::think`** takes `threat: Option<AirThreat>` beside `sense` and
-  `dangers`, kept on the `Brain` (§4); the `air` tier reads it.
+- **`SpecialUse::Approach { to, why }`** gains its `why` ("approach" for
+  the EMP's and the hammer's closers, "to cover" and "back off" for the
+  swarm's), which `Ai::special_why` reports.
+- **`Ai::air_threat`**: `enemy_phase` puts each enemy's `AirThreat` on its
+  `Ai` before it thinks (§4); the `air` tier reads it.
 - **`ArrowKind::Drone { diving }`**, put with the never-dropped kinds
-  (`Teammate`, `Frog`, `Volcano`, `Tell`): never merged, never left out past
-  `indicator_max_arrows` (§5).
-- **`PressShow::Drone(DronePress)`** and the round's own list of drawn
-  launches, which live past the frame they were pressed in (§8); the
-  replica's `presses_drawn` claim gains the `DroneLaunched` arm through
-  `WireEvent::press_show`.
+  (`Teammate`, `Frog`, `Volcano`, `Windup`): never merged, never left out
+  past `indicator_max_arrows` (§5).
+- **`PressShow::Drone(DronePress)`** and the round's own drawn launches
+  (`OwnDrone`), which live past the frame they were pressed in (§8); the
+  round reads the replica's claim (`Show::presses_drawn`), which gains the
+  `DroneLaunched` arm through `WireEvent::press_show`.
 - **The strike walks of weapons 1-3** gain an air arm each, after
-  everything they already strike: `tick_sonic_waves` (drones of the
-  opposing side, after the grenades), `tick_emp_pulses` (every drone, after
-  the missiles - the EMP's doc keeps the place), the rail's pierce walk
-  (`Terrain::pierce_rewound`'s air candidates and `Pierced::Drone`, every
+  everything they already strike: the sonic wave (drones of the opposing
+  side in its cone), `tick_emp_pulses` (every drone in the ring, after the
+  missiles - the EMP's doc keeps the place), the rail's slug
+  (`Terrain::air_along` up to where it stops, `Pierced::Drone`, every
   drone in the lane).
 - **`side_blast_sparing(f, center, owner, params, spared)`** - the
   missiles' and grenades' `side_blast` with a list of hulls and frogs left
   out; `side_blast` is it with none.
 - **`Projectile::strikes_air()`** - true for bullets, false for shells and
-  plasma; `resolve_projectiles` passes it to the sweep.
+  plasma; `resolve_projectiles` sweeps the air (`Terrain::sweep_air`) only
+  for a kind that does.
 
 ### 3.3 What this adds: air targets
 
@@ -478,23 +481,26 @@ impl AirTarget {
 - **The list**: `Game::air_targets() -> Vec<AirTarget>`, every drone in its
   launch, cruise or dive (a falling drone is not one), sorted by key. Empty
   in a round with no drone in the air, so every reader costs nothing there.
-- **The one setter**: `Game::strike_air(f, key, by, at) -> bool` - counts a
+- **The one setter**: `Game::strike_air(f, key, by) -> bool` - counts a
   bullet's hit or downs the target outright (every other cause), logs
-  `Event::DroneDowned`, and answers whether it went down. Nothing else
-  changes an air target.
-- **The hit test**: `Terrain::sweep_rewound` takes `strikes_air`; with it
-  set, every air target not of the shooter's side (for a tower's shot, not
-  of the tower's) is a candidate at its `strike_box` grown by the shot's
-  half extent - and by `player_shot_hit_pad_px` for a seat's shot, the pad
-  every enemy box takes - as `ShellTarget::Air(key)`. Ranks for an exact
-  tie: seats, enemies, **air**, frogs, tiles, walls (every existing pair
-  keeps its order). Air targets are read from the world at the sweep, as
-  the tanks are, not from the frame's `Terrain`, so a bullet meets a drone
-  where this tick's step left it.
-- **Lag compensation**: `HitBoxHistory::record` keeps every air target's
-  strike box beside the enemies' boxes (`HitBoxFrame::air`, sorted by key),
-  and a seat's shot rewound to its view tick meets the enemy drones where
-  its client drew them; one with no entry is met where it is.
+  `Event::DroneDowned` at the drone's ground point and height, and answers
+  whether it went down. Nothing else changes an air target.
+- **The hit test**: for a kind that `strikes_air`, `resolve_projectiles`
+  sweeps the frame's movement against every air target not of the
+  shooter's side (for a tower's shot, not of the tower's) with
+  `Terrain::sweep_air` - its `strike_box` grown by the shot's half extent
+  and by `player_shot_hit_pad_px` for a seat's shot, the pad every enemy
+  box takes - beside the ground sweep, which keeps its own ranks
+  untouched. The air target is struck when it is met first, or at the
+  same point as anything but a tank (a tank met at the same point keeps
+  the shot). The list is read from the world before the loop, as the
+  tanks are, and a drone downed by one bullet leaves it, so a bullet meets
+  a drone where this tick's step left it and the next bullet flies on.
+- **Lag compensation**: `HitBoxHistory::record` keeps every air target
+  beside the enemies' boxes (`HitBoxFrame::air`, sorted by key), and a
+  seat's shot rewound to its view tick meets the enemy drones where its
+  client drew them (`sweep_air`'s `past`); one with no entry is met where
+  it is.
 - **What strikes them, and the rules every reader keeps** (the module's
   doc):
   1. only a shot that `strikes_air` hits one - bullets; shells, plasma and
@@ -510,9 +516,11 @@ impl AirTarget {
      (a drone's burst);
   5. walks go by key.
 - **The drawn world** (`simulation::present`): `PresentWorld` carries the
-  drawn air targets, `shot_contact` meets an opposing one for a bullet
-  (`Contact::Air { key }`), so a client's provisional bullet stops at a
-  drawn drone; `rail_trace` pierces them.
+  drawn air targets and `air_contact` meets an opposing one for a bullet,
+  so a client's provisional bullet stops at a drawn drone (whether it
+  comes down is the room's word). A rail drawn on the press does not
+  pierce them: the drones it went through come down on the room's
+  `DroneDowned`.
 - **For the gravity well (BB-42)**: it reads `air_targets` and moves one
   through a mover of its own (`Drone`'s ground velocity), as it moves
   grenades and drums; a drone pulled off course re-steers to its aim, a
@@ -534,7 +542,7 @@ docs/gauss-rail.md §3.4); nothing placed by weapons 1-3 moves:
 The rest it needs is there: cover to launch from behind (the brick stub at
 26,2..4, the screen at 27,8..11, the brick at 28,13..14, the iron at
 33..34,8..9, the glass house), the enemy gun tower (34,14) and both teslas
-(3,3 and 34,3) for air defence, the lake and the lava to fly over, the trees
+(3,4 and 34,3) for air defence, the lake and the lava to fly over, the trees
 in the grass patch (16,11 and 10,13).
 
 ```
@@ -543,8 +551,8 @@ in the grass patch (16,11 and 10,13).
  0   ................................L...
  1   .+..........ggggg...............L...
  2   ............g...g...II....b..pp.L...
- 3   ...P........g.s.g...II....b.....L.E.
- 4   .......e...*g...g.........b.....L...
+ 3   ............g.s.g...II....b.....L.E.
+ 4   ...P...e...*g...g.........b.....L...
  5   ............ggggg...........zzz.L...
  6   ...tp..R.............o..........L...
  7   .............................e..L...
@@ -560,11 +568,11 @@ in the grass patch (16,11 and 10,13).
 17   ...................WWWWWWWW.........
 ```
 
-(`r` the column still reserved for weapons 5 and 6.) Checked again in
-Phase 2 against the linter (connectivity, the band's capacity - the player
-gun tower's reach is a detour the band routes round, `player_tower_reach`),
-and the armory's CPU thumbnail pin is re-baselined for the crates, the
-trees and the tower.
+(`r` the column still reserved for weapons 5 and 6.) The linter passes it
+(`supported_maps_no_new_errors`): one warning, the glass house's sealed
+inside, and the corridor notes it had; the band routes round the player
+gun tower's reach (`player_tower_reach`). The armory's CPU thumbnail pin
+is re-baselined for the crates, the trees and the tower.
 
 ## 4. AI
 
@@ -578,12 +586,11 @@ diving at it (the `air` tier).
 
 ### What it is handed
 
-`fpv_field` is built once per frame in `enemy_phase`, only when some live
-enemy carries online drones: every seat (position, hull box, on the field,
-concealed, `Game::sight_on` at it, under canopy and by which tree), the
-players' frog (position, alive, under canopy), the standing trees' crowns,
-each enemy's drones in the air (by owner slot), the frame's `Terrain` and
-grid. `fpv_sense` then gives each thinking drone tank an `FpvSense`:
+`Game::fpv_senses` runs once per frame in `enemy_phase`, only when some
+live enemy carries online drones (`any_fpv`), over every seat (`FpvSeat`:
+position, on the field, concealed, `Game::sight_on` at it), the players'
+frog, the standing trees, the frame's `Terrain`, the grid and the
+dangers, and gives each drone tank an `FpvSense`:
 
 ```rust
 pub struct FpvSense {
@@ -614,17 +621,17 @@ pub struct FpvSense {
 }
 ```
 
-- **The cover spot** (`fpv::cover_spot`): over the nav cells within
-  `fpv_ai_cover_px` (5 cells) of the tank: open, connected to it
+- **The cover spot** (`fpv_cover_spot`): over the map cells within
+  `fpv_ai_cover_px` (5 cells) of the tank: usable, connected to it
   (`Grid::connected`), the cell's centre inside the seat's sight box (so it
   can still launch from there), at least `fpv_ai_min_range_px` from the
-  seat, not inside a danger the tank does not own (`out_of_danger`), and
-  with no line of sight from the seat to it (a wall between); the nearest
-  to the tank, ties to the lower cell index. It is latched on the `Ai`
-  (`Ai::cover_spot`) and searched again only when there is none, it no
-  longer hides from the seat, the seat changed, or `fpv_ai_cover_seconds`
-  (4) passed - at most one search per tank per latch, about 121 cells and a
-  line of sight each.
+  seat, not inside a danger the tank does not own, and with no line of
+  sight from the seat to it (a wall between); the nearest to the tank,
+  ties to the lower cell index. It is latched on the `Ai`
+  (`Ai::cover_spot`, with its age) and searched again only when there is
+  none, it no longer hides the tank from the seat, it is no longer joined
+  to it, or `fpv_ai_cover_seconds` (4) passed - at most one search per tank
+  per latch, about 121 cells and a line of sight each.
 - **The back-off point**: `fpv_ai_min_range_px` plus a cell from the seat
   along the line from the seat through this tank, held a half cell inside
   the field, and moved out of any danger it lands in.
@@ -636,14 +643,23 @@ pub struct FpvSense {
 ### The rule (`fpv_rule`), in priority order
 
 1. **A training dummy** (`Ai::frog_only`): `None`.
-2. **Too close**: a `back_off` point, the tank healthy (under
-   `enemy_flee_damage`) and not a guard that holds: `Approach { to:
-   back_off }` (`"back off"`) - it keeps its distance; drones do not need
-   it close.
+2. **Too close**: a `back_off` point it can drive to (`Brain::can_reach`),
+   the tank healthy (under `enemy_flee_damage`) and not a guard that holds:
+   `Approach { to: back_off, why: "back off" }` - it keeps its distance;
+   drones do not need it close.
 3. **Into cover**: `exposed`, a `cover` spot, healthy, not a guard that
-   holds, none of its drones in the air: `Approach { to: cover }`
-   (`"cover"`) - "preferably from behind a wall". Arrived (within half a
+   holds, none of its drones in the air: `Approach { to: cover, why: "to
+   cover" }` - "preferably from behind a wall". Arrived (within half a
    cell), it is no longer exposed and the next arm launches.
+
+   **Patience**: backing off and making for cover together get
+   `fpv_ai_cover_seconds` (4) since its last launch (`Ai::place_waited`);
+   out of it the tank launches from where it stands. In a hedge maze the
+   way to a cover spot can leave the seat's box, and a tank went back and
+   forth between the cover and the chase with its drones unflown; on an
+   archipelago a tank backed off into a shore for four seconds (§11). The
+   patience starts over on a launch and whenever the tank stands in cover
+   from the seat, not when the seat is lost for a moment.
 4. **Launch, one at a time** - none of its drones in the air:
    1. a seat in `at_seat`: `Launch { want: Seat(s), at_seat: Some(s), why:
       "cover" | "open" }`;
@@ -651,7 +667,10 @@ pub struct FpvSense {
       why: "canopy" }` - the drone bursts in the leaves over the seat,
       three of them fell a broadleaf, and the seat is out in the open;
    3. a hunter's `quarry`: `Launch { want: Frog, at_seat: None, why:
-      "frog" }`.
+      "frog" }` - `quarry` is set for a hunter alone; a hunter carrying the
+      swarm fights the seat like everyone else (`generic_fire` false keeps
+      it off its frog's ring), and sends its drones at the frog when no
+      seat is to be had.
    With `Ai::fire_timer` running (`fpv_enemy_gap_seconds`, 3.0, from the
    last launch) `act_special` holds instead.
 5. **Watch**: one of its drones in the air and a seat (or the quarry) to
@@ -688,54 +707,67 @@ backing off is driving where it asked to.
 ### Reacting to a seat's swarm: the `air` tier
 
 BB-40's "an enemy targeted by a diving drone breaks toward the nearest tree
-or turns its minigun on it if it carries one". `air_threats` is built once
-per frame in `enemy_phase`, only when a seat's drone is in the air, and
-hands each enemy a seat's drone has locked an `AirThreat`:
+or turns its minigun on it if it carries one". `Game::air_threats` runs
+once per frame in `enemy_phase` (empty with no seat's drone past its
+climb), and puts on the `Ai` of each enemy a seat's drone is coming at -
+locked on it, or with no lock going for a point within its blast's reach
+of the tank (`fpv_blast_radius_px` and half a cell), so a tank whose
+drone lost its lock to a tree keeps standing under it - an `AirThreat`
+(`Ai::air_threat`):
 
 ```rust
 pub struct AirThreat {
-    /// The nearest seat's drone locked on this tank, past its climb, within
-    /// this tank's sight (`Game::enemy_sight`): its ground point and its
-    /// seconds to arrive at its speed.
+    /// The nearest such drone within this tank's sight
+    /// (`Game::enemy_sight`): its ground point and its seconds to arrive.
     pub drone: Position,
     pub eta: f32,
     /// This tank stands inside the sight box of the seat that sent it:
     /// it may shoot at the drone (§1, "Air defence keeps the sight box").
     pub may_shoot: bool,
-    /// The nearest tree spot (`fpv::tree_spot`): a nav cell within
-    /// `fpv_ai_tree_px` (5 cells), open, connected, out of every danger,
-    /// where this tank's hull would be under canopy; ties to the lower
-    /// cell index.
-    pub tree: Option<Position>,
+    /// Its hull is under a tree's crown already: it stands.
+    pub covered: bool,
+    /// The nearest tree within `fpv_ai_tree_px` (5 cells) it can get under
+    /// (`fpv_tree_spot`): the usable cell nearest that tree joined to where
+    /// it stands - then nearest the tank, then the lower cell index - and
+    /// the tree's centre.
+    pub tree: Option<(Position, Position)>,
 }
 ```
 
-The `air` tier (1.45, after the wreck check, before `special`):
-`condition(b.threat.is_some() && b.me.windup().is_none())`, `action("air",
-act_air)` - a tell or a charge in progress commits, as everywhere; anything
-else is dropped for the drone. `act_air`, in order:
+The cells round a tree are mostly inside the nav grid's clearance, so a
+cell under the crown is seldom open: the tank drives to the open cell
+nearest the tree and from there straight at the tree's centre until its
+hull is under the crown, against the trunk if need be.
 
-1. **Flak**: it carries an online minigun with rounds and `may_shoot` - it
-   faces the drone (`Dir::toward` its ground point, the larger offset's
-   cardinal), holds still and holds the trigger while the drone is within
-   `fpv_ai_flak_range_px` (192) and its ground point within
-   `fpv_ai_flak_align_px` (20) of the facing's line (`"flak"`). The
-   minigun's own bursts and cooldown pace it. No `shot_at_seat`: a drone is
-   not a seat.
-2. **Into the trees**: a `tree` spot - steer to it (`"tree"`), and once
-   under canopy hold there (`"canopy"`). The drone loses its lock the tick
-   it gets there.
-3. **Break**: none of those, the drone within `fpv_ai_break_px` (112):
+The `air` tier (1.45, after the wreck check, before `special`):
+`condition(b.ai.air_threat.is_some() && b.me.windup().is_none())`,
+`action("air", act_air)` - a tell or a charge in progress commits, as
+everywhere; anything else is dropped for the drone. `act_air`, in order:
+
+1. **Flak**: it carries an online minigun and `may_shoot` - it faces the
+   drone (`Dir::toward` its ground point), holds still and holds the
+   trigger while the drone is ahead, within `fpv_ai_flak_range_px` (192)
+   and its ground point within `fpv_ai_flak_align_px` (20) of the facing's
+   line (`"flak"`). The minigun's own bursts and cooldown pace it. No
+   `shot_at_seat`: a drone is not a seat.
+2. **Under the crown**: `covered` - stand (`"canopy"`). The drone loses its
+   lock the tick the hull gets there.
+3. **Into the trees**: a `tree` - steer to its cell on foot
+   (`Brain::steer_out`), a heading held from the fight that does not lead
+   there giving way as `act_dodge`'s does, then drive at the tree
+   (`"tree"`).
+4. **Break**: none of those, the drone within `fpv_ai_break_px` (112):
    drive across its line - the cardinal perpendicular to the drone's
    bearing whose way is open (`walls_ahead` and the grid), the clockwise
-   one first, then the other (`"break"`). Moving at the commit is what makes
-   a dive miss.
-4. Otherwise (the drone still far, nothing to do yet): `Failure`, the tree
+   one first, then the other (`"break"`). Moving at the commit is what
+   makes a dive miss.
+5. Otherwise (the drone still far, nothing to do yet): `Failure`, the tree
    goes on.
 
-`AiSnapshot::air` names the arm, `AiSnapshot::threat` the drone. No RNG,
-ties on cell index and `Dir::ALL` order; a seat's drone is the only threat
-(an enemy does not shy from its own side's).
+`AiSnapshot::air` names the arm. No RNG, ties on cell index and `Dir`
+order; a seat's drone is the only threat (an enemy does not shy from its
+own side's). Standing for a drone - `"watch"`, `"canopy"` - is a
+deliberate hold (`Ai::air_hold`, the probe's `air` row).
 
 ### Air defence by the towers
 
@@ -787,7 +819,12 @@ ramp steps, Bayer fades; composed at draw time as pure functions of the
 drone, the tank and their age, hashed from ids and slots, never rolled.
 
 - **A drone** (`fpv::compose_drone`), a 4 x 4-block quad on the 2 px grid,
-  drawn at its ground point lifted by its height:
+  drawn at its ground point lifted by its height - **in blocks twice the
+  size, 4 px, above `FPV_WASH_HEIGHT_PX`** (`fpv::drone_block`: up at
+  cruise height it is nearer the eye, as a missile's sprite grows with its
+  height, and an 8 px quad over a 40 px tank read as a speck, not the
+  threat it is - settled on the screenshots), so a launch grows as it
+  climbs past 24 px and a dive shrinks as it comes down:
   - the frame: the two diagonals - the corner blocks and the middle four -
     in `#252525` (`SMOKE[0]`, the tanks' outline);
   - the body: the middle 2 x 2 in `#5A5A5A` (`SMOKE[2]`), its top-left block
@@ -807,51 +844,57 @@ drone, the tank and their age, hashed from ids and slots, never rolled.
   the lit pass after the floor marks, under the tanks: a 3 x 3-block square
   of black at `fpv_shadow_opacity` (0.3), a block smaller from 24 px up,
   shifted 4 px along `shadow_dir` (the missiles' shadow rule).
-- **Draw order**: shadows after the floor marks; the drones themselves after
-  everything standing, trees included - a drone flies over the crowns -
-  in the lit pass (so at night only the lamps glow, the quads are lit by
-  what is around them); the lamps' blocks and their light in the glowing
-  pass.
+- **Draw order**: shadows after the floor and the fish
+  (`game::paint_drone_shadows`); the drones themselves after everything
+  standing, trees included - a drone flies over the crowns - in the lit
+  pass (`game::paint_drones`, so at night only the lamps glow, the quads
+  are lit by what is around them); the lamps' blocks, the halos' among
+  them, and their light in the glowing pass (`game::drone_lamps`).
 - **The halo** (`fpv::compose_halo`), drawn with its tank in the y-sorted
   standing walk, over the hull: each occupied slot a drone at
   `FPV_HALO_HEIGHT_PX`, bobbing one block on a 1.3 s cycle phased by slot
   (drawn only), rotors turning, lamps blinking at `fpv_lamp_hz` phased by
-  slot; their shadows with the tank's shadow. Disabled, they drop to the
-  ground over 0.25 s and lie there, rotors still, lamps `#373737`, and lift
-  over 0.4 s when it ends (eased from `Tank::disabled`, so a replica draws
-  the same). On a wreck, each tumbles to the ground over
-  `FPV_HALO_FALL_SECONDS` from `Tank::wreck_timer` 0 - the falling
-  silhouettes below - and lies dark beside the wreck until its fire is out
-  (`wreck_timer` at `wreck_burn_seconds`), then is drawn no more.
+  slot; their shadows with the tank's shadow (`game::halo_of`, drawn with
+  its tank by `draw_one_tank`). Disabled, they drop to the ground over
+  0.25 s from the EMP's start (eased from `Tank::disabled` against
+  `emp_disable_seconds`, so a replica draws the same) and lie there,
+  rotors still, lamps `#373737`; they are back up the frame it ends. On a
+  wreck, each tumbles to the ground over `FPV_HALO_FALL_SECONDS` from
+  `Tank::wreck_timer` 0 - the falling silhouettes below - and lies dark
+  beside the wreck until its fire is out (`wreck_timer` at
+  `wreck_burn_seconds`), then is drawn no more. A client drawing its own
+  launch draws the halo without the drones it has in the air that the
+  room's count does not know of yet (`Tank::fpv_lifting`).
 - **Rotor wash and buzz** (`fx.rs`, particles, so `rand::rng()`): a drone
   in the air below `FPV_WASH_HEIGHT_PX` (24) - the climb and the dive -
   throws `ParticleKind::Dust` off the ground under it at `fpv_wash_rate`
-  (30 a second) in the ground's dust (`pyro::DUST` by the material under
-  it; `BLUE_PALE` spray over water); in the cruise it sheds a pair of
-  `#C1C1C1` specks every 0.1 s that hang and fade in eighths - the buzz a
-  silent game can show. A launch puts a ring of wash round its slot.
+  (30 a second); in the cruise it sheds a `#C1C1C1` speck ten times a
+  second that hangs and fades - the buzz a silent game can show; a falling
+  one puts up a smoke puff 12.5 times a second. A launch puts a ring of
+  dust round its slot.
 - **The burst** (`drone_show`): a small fireball leaning down the dive,
   `BlastFx::shaped(at, BlastKind::Oil, BlastShape::Shot { dir })` at
   `fpv_blast_fx_scale` (0.35) - the missile's burst, smaller -, the ripple
-  `Shockwave::scaled(at, SHOCK_DRONE)` (0.15), the impact flash, a scorch
-  at that scale on dry ground, the grass round it flattened. In a crown:
-  the same fireball among the leaves and a spray of leaf chips
-  (`ParticleKind::Chip` in `pyro::dust_of(Material::Tree)`, the tree's own
-  colours - vegetation keeps its greens), no scorch.
-- **Shot down**: on `DroneDowned`, the cause's own hit at the drone as drawn
-  - a bullet's spark star (`ImpactKind::Bullet`), the tesla's ring
-  (`ImpactKind::Tesla`, its bolt drawn from `TeslaStrike`), the EMP's sparks,
-  the rail's pierce burst - then **the spinning fall**: the quad alternates
-  its two silhouettes, the frame as an X and as a + (a 45-degree step),
-  `fpv_fall_spin_hz` (6) times a second, drifting with what is left of its
-  ground speed, its lamp dark and a `#373737` smoke puff off it every
-  0.08 s (`ParticleKind::Smoke`). The crash: `ImpactKind::Dud` (a dust puff
-  and three white sparks) where it lands.
-- **The light** (`weather::lights_in`): a drone in the air throws an
+  `Shockwave::scaled(at, fpv_shock)` (0.15), the impact flash, a scorch at
+  that scale on dry ground, the grass round it flattened; sparks and a
+  puff in `fx.rs`. In a crown: the same fireball among the leaves and a
+  spray of leaf chips (`ParticleKind::Chip` in the leaves' colours -
+  vegetation keeps its greens), no scorch.
+- **Shot down**: the cause's own hit - a bullet's impact where it crossed
+  the drone's column, the tesla's bolt to the drone as drawn with its ring
+  (`TeslaStrike`), the EMP's ring, the rail's slug - and on `DroneDowned`
+  sparks at the drone as drawn in the cause's colour; then **the spinning
+  fall**: the quad alternates its two silhouettes, the frame as an X and as
+  a + (a 45-degree step), `fpv_fall_spin_hz` (6) times a second, drifting
+  with what is left of its ground speed, its lamp dark, a smoke puff off it
+  every 0.08 s. The crash (`DroneCrashed`): the missile dud's dust puff and
+  pale sparks where it lands, a splash on water.
+- **The light** (`weather::lights`): a drone in the air throws an
   unshadowed point light in its lamp's colour, 18 px, at `fpv_lamp_light`
   (0.35) on the frames its lamp is on - so an incoming drone reads in the
-  dark, the tell is fair at night; the burst throws the missile burst's
-  light. The halo throws none (the hull's own lamps already do).
+  dark, the tell is fair at night; the burst's fireball throws a blast's
+  light. Under a dark sky every lamp block - the halos' too - also lays a
+  small stepped glow (`ground_light`, 10 px) in the glowing pass.
 - **The module** (`tankdesign`, `lines/vanguard.py`, `module_fn('fpv')`): a
   ground-control relay on the roof - the missiles' hardpoint, shared, since
   a tank carries one special at a time (`hp.get('fpv', hp['missiles'])`): a
@@ -873,47 +916,50 @@ drone, the tank and their age, hashed from ids and slots, never rolled.
 - **The crate**: row 16 of `gen_crates.py`'s sheets (`crates_sheet.png` 280
   x 680, `pickup_glyphs.png` 24 x 408). Its symbol, 10 x 10 design px: a
   quadcopter from above - four rotor discs at the corners on diagonal arms
-  to a body, the rotors' hubs and the body (`o`) in the ink's light:
+  to a body, the rotors' hubs and the body (`o`) lit as its lamps:
 
   ```
-  'XX......XX',
+  '.X......X.',
   'XoX....XoX',
-  '.XX....XX.',
-  '...X..X...',
-  '....oo....',
-  '....oo....',
-  '...X..X...',
-  '.XX....XX.',
+  '.XXX..XXX.',
+  '..XXXXXX..',
+  '...XooX...',
+  '...XooX...',
+  '..XXXXXX..',
+  '.XXX..XXX.',
   'XoX....XoX',
-  'XX......XX',
+  '.X......X.',
   ```
 
   Ink (`punypalette.PICKUP_INK['fpv_swarm']`, admitted on the crate sheets
-  alone like the others): signal crimson - shade `#A3133A`, base `#FF2D5F`,
-  light `#FF9AB0` - the one gap on the hue wheel that is not green: between
-  the laser's hot pink (330 degrees) and the health cross's red (5), at
-  345, a blue-red against the cross's orange-red and darker and redder than
-  the laser's pink; far from the hammer's sky blue `#46C3F2`, the EMP's
-  cobalt `#4F6BFF` and either of the rail's candidates (jade `#36E07A`, hot
-  magenta `#FF3DD8`). The symbol's shape - an X with four discs, unlike any
-  other - carries as much of it as the hue. To be shown beside the other
-  sixteen in a screenshot before it is settled (§12); a two-tone "carbon
-  and crimson" (the frame `#30343E` with crimson rotor hubs, the heat
-  shield's two-tone convention) stands by if crimson reads as the health
-  cross.
-- **The HUD**: `hud::WeaponSlot::of` gives the drones in the halo in
-  `HUD_FPV_COLOR` (`#FF2D5F`, the ink's base) and the glyph; offline, the
+  alone like the others): **two-tone, as the heat shield is** - a warm
+  ivory quadcopter (shade `#BFA77A`, base `#FFF0C8`) with crimson lamps
+  (`#FF2D5F`, the "light", which the generator uses for the hubs and the
+  body) - settled by rendering every candidate beside the sixteen crates
+  as they now stand (the hammer's sky blue, the EMP's cobalt and the
+  rail's magenta taken). Every single loud hue left sits on a neighbour:
+  crimson alone read as the health cross a crate away (its red is 20
+  degrees off), violet as the grenades and the shield, azure as the
+  hammer, vermilion as the flamethrower, and greens are out (objects stay
+  off the grass's colour, Oto's art direction). A white X with red lights
+  is a pattern no other crate has and reads as a drone with its lamps on;
+  ivory rather than silver keeps it off the minigun's grey-blue. The
+  crimson is the HUD's accent too. `target/devshots/fpv-crate-row.png` is
+  the seventeen side by side.
+- **The HUD**: `hud::WeaponSlot::of` gives the drones in the halo (less
+  `Tank::fpv_lifting`) in `HUD_FPV_COLOR` (`#FF2D5F`, the ink's crimson)
+  and the glyph; offline, the
   EMP's `WPN OFFLINE`. The ring's ammo pips are the drones left against
   `full_load` (6). Nothing new to lay out.
 - **Off the screen** (`indicators.rs`): `ArrowKind::Drone { diving }` for
   every opposing drone locked on this seat - or on the players' frog - off
   the screen (`Scene::drones`, from the drones' `lock`, so a replica draws
   them): a notched arrowhead in `HOSTILE`, rimmed near-black, a 3 x 3-block
-  X (the drone) at its tail, blinking at `fpv_lamp_hz`, at
-  `fpv_dive_lamp_hz` and white-cored once it dives. Never merged, never
-  left out past `indicator_max_arrows` (the lane threats' and tells' rule).
-  A seat's own drones and its teammates' get none; a couch shares them
-  (`shared_arrows`).
+  X (the drone, `DRONE_X`) at its tail, blinking at `fpv_lamp_hz`, at
+  `fpv_dive_lamp_hz` and the X white once it dives. Never merged, never
+  left out past `indicator_max_arrows` (the tells' rule). A seat's own
+  drones and its teammates' get none; a couch's shared screen shows the
+  first seat's, as it shows the first seat's enemies.
 - **The dev overlay** (`Overlays::projectiles`): every air target's strike
   box and each drone's line to its aim, the lock's slot by it.
 
@@ -969,8 +1015,9 @@ in `enemies`:
 Constants (geometry, not feel) in `fpv.rs`: `FPV_HALO_START_DEG` (30),
 `FPV_HALO_RADIUS_FRACTION` (0.55), `FPV_HALO_HEIGHT_PX` (14),
 `FPV_HALO_FALL_SECONDS` (0.5), `FPV_ROTOR_FRAME_SECONDS` (0.05),
-`FPV_WASH_HEIGHT_PX` (24); `SHOCK_DRONE` (0.15) beside `SHOCK_MISSILE`; in
-`net::round`, `DRONE_HANDOVER_SECONDS` (0.25, §8).
+`FPV_WASH_HEIGHT_PX` (24), `FPV_LAUNCH_HANDOVER_SECONDS` (0.25, §8); the
+burst's ripple is the `fpv_shock` row; `game.rs`'s `HALO_SETTLE_SECONDS`
+(0.25, §5).
 
 ## 7. Text
 
@@ -993,111 +1040,105 @@ Protocol 18 (from the rail's 17), once in the PR.
 - **A new family, `Snapshot::drones`**, keyed by the drone's id:
 
   ```rust
-  /// One drone in the air (`fpv.rs`), by `Drone::id`. Only what the
-  /// drawing and the indicators need: a replica never flies one.
+  /// One FPV drone in the air (`fpv::Drone`). A replica never flies one,
+  /// so where it is, how high, which way and in what stage travel, with
+  /// the halo slot it left and whose it is.
   pub struct DroneState {
       pub id: u16,
-      /// The ground point under it, quarter pixels (`quantise_pos`).
+      /// Quarter pixels (`quantise_pos`): the point on the ground under it.
       pub x: i16,
       pub y: i16,
-      /// Its height, quarter pixels.
+      /// Height above the ground in quarter pixels.
       pub height: i16,
-      /// Its ground heading (`quantise_heading`): the dive's streak, the
-      /// carry past the newest snapshot.
+      /// `quantise_heading` of its heading over the ground.
       pub heading: u8,
-      /// `drone_stage`: 0 launch, 1 cruise, 2 dive, 3 falling.
+      /// `fpv::DroneStage::code`: 0 launch, 1 cruise, 2 dive, 3 falling.
       pub stage: u8,
+      /// The halo slot it left: its rotors' and lamp's salt.
+      pub halo: u8,
       /// The launcher's owner slot: the lamp's colour (a seat's team
-      /// colour, an enemy's red) and its module's link cell. Never changes.
+      /// colour below the room's first enemy slot, else an enemy's red)
+      /// and its relay module's link cell.
       pub owner: u16,
-      /// What it is locked on (`drone_lock`): a tank's owner slot,
-      /// `PLAYER_FROG`, `ENEMY_FROG`, or `NONE` - what the incoming arrow
-      /// reads.
+      /// What it is locked on (`fpv::DroneLock::code`): a tank's owner
+      /// slot, `LOCK_FROG`, `LOCK_ENEMY_FROG` or `LOCK_NONE` - what the
+      /// incoming arrow reads.
       pub lock: u16,
   }
   ```
 
   `Snapshot::normalise` sorts and dedups it; `delta.rs` treats it as a
-  positioned family (`drones`, `drones_moved`, `drones_gone`); a drone's
-  height changes most snapshots, so it travels whole most of the time, a
-  dozen bytes - and there are rarely more than a few in the air.
-  `MissileState`'s precedent: no speed, aim, stage timer or hits travel.
+  positioned family (`drones`, `drones_moved`, `drones_gone`). The
+  measured sizes (`src/net/mod.rs`): a full snapshot 487 B, a moving delta
+  172 B, a busy one 259 B, an idle one the 52 B header - three bytes more
+  each than the rail's, the new family's three list lengths. Like
+  `MissileState`, no speed, aim, stage timer or hits travel.
 - **Events** (`net/events.rs`, mirrors of the simulation's):
   `WireEvent::DroneLaunched { id: u16, slot: u16, x: i16, y: i16, target:
   u16, frog: bool }` (the launch point; `target` an owner slot or
-  `drone_lock::NONE`), `DroneBurst { id: u16, slot: u16, x: i16, y: i16,
-  crown: bool }`, `DroneDowned { id: u16, x: i16, y: i16, height: i16, by:
-  AirStrike }`, `DroneCrashed { id: u16, x: i16, y: i16 }`.
-  `Event::DroneLockLost` is on `NOT_SENT` (the `lock` field is the state).
-  `AirStrike` mirrors `air::AirStrike`. The tesla's arc at a drone travels
-  as the `TeslaStrike` it already is.
+  `NO_TARGET`), `DroneBurst { id, slot, x, y, crown }`, `DroneDowned { id,
+  x, y, height, by: AirStrike }` (the drone's ground point), `DroneCrashed
+  { id, x, y }`. `Event::DroneLockLost` is on `NOT_SENT` (the `lock` field
+  is the state). `AirStrike` is `air::AirStrike` itself, serialised in its
+  variant order. The tesla's arc at a drone travels as the `TeslaStrike` it
+  already is.
 - `TankState` needs nothing: `weapon` is the special carried, `ammo` the
   drones in the halo; the module's flash rides `Fired`'s `kick_turret`, its
-  link cell the drones' `owner`.
-- **What a replica draws**: drones from the family (`apply_drones`: spawned,
-  moved, dropped by id; a falling one spins and drifts from its own age,
-  which `tick_presentation` runs), interpolated like missiles (`interp.rs`:
-  position and height linearly, the heading by `lerp_heading`, carried on
-  past the newest snapshot along its heading at the speed it covered); on
-  `DroneLaunched`, the wash ring and the module flash (`kick_turret`); on
-  `DroneBurst`, `drone_show`; on `DroneDowned`, the cause's hit; on
-  `DroneCrashed`, the dud. The halo from the tank's count and position. A
-  drone seen in the family for the first time puts nothing up (its launch
-  came with its event).
+  link cell the drones' `owner` (`count_drones_out` on the replica).
+- **What a replica draws** (`apply_drones`): drones from the family,
+  spawned, moved and dropped by id, their lock rebuilt from `lock`; a stage
+  newly reached starts its clock over and `tick_presentation` runs their
+  ages, which the rotors, the lamps and a falling drone's spin read.
+  Interpolated like missiles (`interp.rs`: position and height linearly,
+  the heading by `lerp_heading`, carried on past the newest snapshot along
+  its heading at the speed it covered). On `DroneBurst`, `drone_show`
+  leaning down the replica's copy's heading; the launch, the downing and
+  the crash put up their particles off the events (`fx.rs`). The halo from
+  the tank's count and position. `DrawableState::drones` is what the
+  round-trip tests hold the two sides to (`fpv_drones_reach_the_replica`).
 - **What is drawn at once** (decision 3 of BB-36, the hammer's §3.3): the
   shooter's launch, **eased onto the room's timeline**:
-  - *On the press* (`Predictor::pull_trigger`'s swarm arm: the press edge,
-    drones left less the owed above 0, the local gate open, the special not
-    down - the EMP's `offline_left` included): it sets the gate to
-    `fpv_reload_seconds`, owes the drone and, while presses are drawn,
-    queues `PressShow::Drone(DronePress { slot, from, out, lead })` and the
-    drawn press. `slot` and `out` are the halo slot the room will launch
-    from (`fpv_drones - 1` less the owed) and its outward bearing; `from`
-    its ground point round the hull **as drawn** (the predicted hull,
-    `Game::seat_drone_slot`); `lead` = Δ, how far ahead of the picture this
-    press lands on the room's clock - exactly the incoming fire's lead
-    (`incoming_lead_ticks(newest.tick, acked, the press's input tick,
-    render)` in seconds, §4.16 of docs/online-coop-prd.md): the room
-    applies one input a tick from `acked`, so this press's launch is room
-    tick `newest.tick + (press - acked)`, and the picture stands `lead`
-    behind it. The shown seat's halo loses the drone that frame (the count
-    written is the snapshot's less the owed, where `OnlineRound` writes the
-    drawn pose), and the module's launch cell flashes.
-  - *The eased climb*: `round.rs` keeps each drawn launch as a provisional
-    drone in the replica (`Game::add_provisional_drone`, an id in the
-    provisional band) and draws it, τ seconds after the press, at
-    `fpv::launch_path(from, out, a(τ))` with `a(τ) = τ * h / (h + Δ)` for
-    `τ <= h + Δ` (`h` = `DRONE_HANDOVER_SECONDS`, 0.25, held to at most
-    `fpv_launch_seconds` so the handover always falls in the climb). The
-    room's copy of the drone appears in the picture when render time
-    reaches its launch tick - τ = Δ - and from then stands at age `τ - Δ`;
-    at `τ = h + Δ` the two ages are equal (`a = h`), so the provisional goes
-    and the room's copy - kept off the picture until then
-    (`Game::hide_drones`) - is shown from where the provisional stood. The
-    drone lifts off on the press frame, climbs a little slower than the
-    room's for its first `h + Δ` (between half and two thirds of the pace
-    at the links played), and never jumps or doubles. The climb is the
-    lock's business at no point (§1), so nothing the client does not know
-    enters it. What is left - a difference between the drawn hull and the
-    room's (a stage-2 correction), or a tick either way of the room's
-    playout (`Mailbox`'s controller) - is a pixel or two, blended out
-    linearly over the same span.
-  - *The room's copy late*: if at `τ = h + Δ` the room's copy is not in the
-    picture yet (a late snapshot), the provisional stays on the room's
-    timeline - age `τ - Δ` - to the top of the climb and waits there; the
-    copy, when it comes, is shown at its own age.
+  - *On the press* (`Predictor`'s swarm arm: the press edge, drones left
+    less the owed above 0, the local gate open, the special not down): it
+    sets the gate to `fpv_reload_seconds`, owes the drone and, while
+    presses are drawn, queues `PressShow::Drone(DronePress { slot, origin,
+    out })` and the drawn press. `slot`, `origin` and `out` are the halo
+    slot the room will launch from (the top one, `fpv_drones - 1` less the
+    owed), its ground point round the hull as the sandbox has it and its
+    outward bearing (`Game::seat_drone_slot`).
+  - *The eased climb* (`round.rs`, `OwnDrone`, `fly_own_drones`): the round
+    flashes the module (`flash_seat_fpv`) and keeps the launch with Δ, how
+    far ahead of the picture the press lands on the room's clock - the
+    incoming fire's lead, `incoming_lead_ticks` as last measured
+    (docs/online-coop-prd.md §4.16). τ seconds after the press it draws
+    the drone in the replica (`add_drone`, an id past the wire's,
+    `OWN_DRONE_ID_BASE`) at `fpv::launch_path(origin, out, a(τ))` with
+    `a(τ) = min(τ * h / (h + Δ), h)` (`h` = `FPV_LAUNCH_HANDOVER_SECONDS`,
+    0.25, held to at most `fpv_launch_seconds` so the handover always falls
+    in the climb). The room's copy appears in the picture when render time
+    reaches its launch tick - τ = Δ - and the round, reading the replica's
+    claim (`Show::presses_drawn` on the seat's `DroneLaunched`), pairs it
+    with the oldest launch waiting and keeps it off the picture
+    (`remove_drones`) until it is `h` into its own climb; then the client's
+    goes and the room's is the drone, on the same point of the same path.
+    The drone lifts off on the press frame, climbs a little slower than the
+    room's for its first `h + Δ`, and is never drawn twice
+    (`a_launch_is_drawn_on_the_press_and_handed_to_the_rooms_copy`). The
+    climb is the lock's business at no point (§1), so nothing the client
+    does not know enters it; a difference between the drawn hull and the
+    room's at the press is a pixel or two at the handover.
+  - *The halo*: the seat's halo and HUD count lose the drone on the press
+    frame - `Tank::fpv_lifting`, the launches drawn that the room's count
+    does not know of yet, set every frame.
   - *Claimed by input tick*: the room logs `Fired` then `DroneLaunched`
-    for the seat in one tick; `presses_drawn` (the hammer's §3.3) claims
-    the seat's next `DroneLaunched` for a drawn `Fired` - it is neither
-    drawn again (no second wash ring, no second module flash) nor handed to
-    `game.events` - and `round.rs` reads the claimed event's `id` to pair
-    the provisional with the room's drone (`Predictor::pair_drone`).
-  - *Refused*: a drawn launch nobody claims within the refusal wait
-    (`set_refusal_after`) settles back into its slot over 0.25 s - the
-    climb drawn backwards - and the owed drone is given back to the halo.
-    A room `Fired` the client never drew (its local gate refused, or
-    prediction is off) claims nothing: the room's drone and its launch
-    show are drawn, and `seed_gate` seeds the local gate.
+    for the seat in one tick; `confirm_presses` claims the drawn press for
+    the `Fired`, and `presses_drawn` leaves the seat's `DroneLaunched` out
+    of the replica's events.
+  - *Refused*: a drawn launch the room never makes is dropped after the
+    refusal wait (`Predictor::refusal_after`) plus `h`; the halo has its
+    drone back. A room `Fired` the client never drew (its local gate
+    refused, or prediction is off) claims nothing: the room's drone is
+    drawn as it comes, and `seed_gate` seeds the local gate.
 - **What is not predicted, and why**: everything after the climb - the
   cruise, the lock, the dive, the burst, being shot down - is drawn from the
   room's snapshots on the picture's timeline, the drone and what it dives
@@ -1109,12 +1150,12 @@ Protocol 18 (from the rail's 17), once in the PR.
   damage, shoves (`Shoved` to an owned hull), tile deaths, crown damage,
   every strike in the air (`DroneDowned`), the crash.
 - **This seat's bullets at drones**: a provisional bullet meets a drawn
-  enemy drone (`Contact::Air`) and plays its impact there at once; the room
-  judges the bullet against the drones rewound to this client's view
-  (`HitBoxFrame::air`), so the hit it drew is the room's hit too, and the
-  drone falls when the room's `DroneDowned` is handed over.
-- `delta.rs`: the new family's three lists; its random snapshots fill
-  them, and the size bounds are re-measured.
+  enemy drone (`PresentWorld::air_contact`) and plays its impact there at
+  once; the room judges the bullet against the drones rewound to this
+  client's view (`HitBoxFrame::air`), so the hit it drew is the room's hit
+  too, and the drone falls when the room's `DroneDowned` is handed over.
+- The rig: `a_seats_drone_reaches_the_replica_once` and
+  `an_enemys_drone_reaches_the_replica_locked_on_the_seat` (`rig::Lockstep`).
 
 ## 9. Determinism
 
@@ -1149,141 +1190,75 @@ Protocol 18 (from the rail's 17), once in the PR.
 
 ## 10. Tests
 
-`mechanics_tests` (headless, tiny inline maps):
+`simulation::fpv_tests` (headless, tiny inline maps; whole rounds):
 
-- `an_fpv_crate_arms_the_swarm_and_replaces_the_special_carried` - six
-  drones, another special emptied, a second crate refills to six.
-- `a_press_launches_one_drone_and_spends_one` - one per press, none while
-  held, `fpv_reload_seconds` before the next; `Fired` then `DroneLaunched`
-  in one tick; the drone at the top slot's ground point.
-- `the_drone_locks_the_nearest_enemy_in_the_seats_sight_box` - two enemies
-  in the box, the nearer locked; one nearer but outside the box not.
-- `a_tie_goes_to_the_lower_slot`.
-- `with_no_enemy_in_the_box_it_dives_on_the_aim_point`.
-- `the_drone_flies_over_walls_and_dives_on_its_target` - a brick wall
-  between: the enemy hurt by `fpv_damage`, the wall whole.
-- `the_dive_commits_and_a_tank_that_moves_slips_most_of_it` - the target
-  teleported off the point at the commit: the burst on the point, the
-  damage the falloff's.
-- `only_the_opposing_side_is_hurt_and_everyone_is_shoved` - two seats and an
-  enemy at the burst: the teammate shoved and whole.
-- `a_shield_soaks_the_burst`.
-- `a_tank_under_a_tree_is_never_locked`.
-- `a_drone_loses_its_lock_when_its_target_goes_under_a_tree` - and dives
-  where it was.
-- `a_dive_into_a_crown_hurts_only_the_tree` - the tree takes
-  `fpv_tree_damage`, the tank beside it nothing; three fell a broadleaf.
-- `a_burst_beside_a_tree_spares_the_hull_under_it`.
-- `grass_does_not_hide_a_tank_from_a_seats_drone`.
-- `a_teleporting_target_is_lost`.
-- `a_minigun_bullet_brings_an_opposing_drone_down` - `DroneDowned { by:
-  Bullet }`, the bullet stopped, the drone falls and crashes as a dud,
-  nobody hurt.
-- `a_bullet_passes_its_own_sides_drone`.
-- `shells_and_plasma_pass_under_a_drone` (and a laser beam).
-- `the_strike_box_runs_from_the_shadow_to_the_body` - a bullet across the
-  shadow, one across the body, one across the line between: each strikes;
-  one a block beside the column does not.
-- `a_tesla_arcs_a_drone_in_reach_without_charging` - and its charge on a
-  tank goes on; one arc a `tesla_air_gap_seconds`.
-- `a_gun_tower_turns_on_a_drone_before_a_tank_and_brings_it_down`.
-- `an_enemy_tower_engages_a_seats_drone_only_from_inside_the_seats_box`.
-- `an_offline_tower_shoots_no_drone`.
-- `the_drones_launcher_wrecked_mid_flight_still_scores`.
-- `battery_out_dives_where_it_is_going`.
-- `a_gust_carries_a_drone_off_its_point` (sandstorm).
-- `a_wrecked_tank_launches_nothing` and `a_disabled_tank_launches_nothing_and_keeps_its_drones`.
-- `the_drones_fly_out_on_the_end_screen_and_hurt_nobody`.
-- `a_round_with_drones_replays_bit_for_bit`.
-- `the_swarm_draws_no_rng` - the RNG state after a launch, a flight and a
-  burst on open ground with no fence, drum or portal is the state before.
-- `the_spawn_swap_hands_out_the_swarm_by_its_share_and_draws_nothing`.
-- `an_enemy_takes_the_crate_only_with_no_special`.
+- The weapon: `an_fpv_crate_arms_the_swarm_and_replaces_the_special_carried`,
+  `a_press_launches_one_drone_and_spends_one`,
+  `the_drone_locks_the_nearest_enemy_in_the_seats_sight_box`,
+  `with_no_enemy_in_the_box_it_dives_on_the_aim_point`,
+  `the_drone_flies_over_walls_and_dives_on_its_target`,
+  `only_the_opposing_side_is_hurt`, `a_shield_soaks_the_burst`,
+  `a_disabled_tank_launches_nothing_and_keeps_its_drones`,
+  `the_drones_fly_out_on_the_end_screen_and_hurt_nobody`.
+- Trees: `a_tank_under_a_tree_is_never_locked`,
+  `a_drone_loses_its_lock_when_its_target_goes_under_a_tree`,
+  `a_dive_into_a_crown_hurts_only_the_tree`.
+- Air targets: `a_minigun_bullet_brings_an_opposing_drone_down`,
+  `shells_pass_under_a_drone`, `a_tesla_arcs_a_drone_in_reach_without_charging`,
+  `an_offline_tesla_arcs_no_drone`, `a_gun_tower_brings_a_drone_down`,
+  `a_seats_own_towers_leave_its_drones_alone`, `strike_air_downs_a_drone_once`,
+  `a_seats_drawn_bullet_stops_at_an_enemy_drone_not_its_own`.
+- Determinism: `the_swarm_draws_no_rng`, `a_round_with_drones_replays_bit_for_bit`.
+- The AI: `the_swarm_launches_at_a_seat_in_its_box_without_line_of_sight`,
+  `an_enemy_never_launches_at_a_seat_from_outside_its_sight_box`,
+  `the_swarm_launches_one_at_a_time_with_its_gap`,
+  `a_hunter_sends_its_drones_at_the_frog`,
+  `the_swarm_never_launches_at_a_seat_hidden_in_grass`,
+  `a_training_dummy_never_launches`, `the_generic_tiers_never_launch_a_drone`,
+  `the_swarm_breaks_the_crown_over_a_hidden_seat`,
+  `an_enemy_that_cannot_reach_cover_launches_from_the_open`,
+  `an_enemy_with_a_minigun_shoots_down_the_drone_diving_at_it`,
+  `an_enemy_breaks_toward_the_nearest_tree` (under the crown before the
+  dive, nothing taken), `an_enemy_with_no_tree_breaks_across_the_drones_line`,
+  `an_enemy_drone_locked_on_the_seat_is_in_its_scene` (and its arrow).
 
-AI (`ai.rs` unit tests on a `Brain` with a made-up `FpvSense` or
-`AirThreat`, and `mechanics_tests` on a whole round):
-
-- `the_swarm_launches_at_a_seat_in_its_box_without_line_of_sight` -
-  behind a wall: `Launch` with the seat, `"cover"`.
-- `the_swarm_goes_to_cover_when_exposed_and_launches_from_there`.
-- `the_swarm_backs_off_a_seat_too_close`.
-- `the_swarm_launches_one_at_a_time_with_its_gap` - no launch while one of
-  its drones flies, none within `fpv_enemy_gap_seconds`.
-- `the_swarm_holds_to_watch_its_drone`.
-- `the_swarm_breaks_the_crown_over_a_hidden_seat`.
-- `a_hunter_sends_its_drones_at_the_frog`.
-- `the_swarm_never_launches_at_a_seat_hidden_in_grass`.
-- `a_training_dummy_never_launches`.
-- `the_generic_tiers_never_launch_a_drone`.
-- `an_enemy_never_launches_at_a_seat_from_outside_its_sight_box` (whole
-  round: `offbox-fire`'s two readings, `shot_at_seat` and the lock).
-- `an_enemy_with_a_minigun_shoots_down_the_drone_diving_at_it` (whole
-  round: the seat's drone downed by the enemy's bullets).
-- `an_enemy_breaks_toward_the_nearest_tree` - and is under canopy before
-  the dive, and takes nothing.
-- `an_enemy_with_no_tree_breaks_across_the_drones_line`.
-- `an_enemy_in_a_tell_or_a_charge_does_not_break_for_a_drone`.
-- `an_enemy_flaks_a_seats_drone_only_from_inside_the_seats_box`.
-- `fpv::tests`: `cover_spot_is_hidden_from_the_seat_and_nearest`,
-  `tree_spot_puts_the_hull_under_canopy`, `pick_lock_ties_on_slot`.
-
-Shared path and presentation:
+Headless halves:
 
 - `air::tests`: `the_strike_box_is_the_column`, `drawn_is_lifted_by_the_height`.
 - `fpv::tests`: `halo_slots_are_fixed_round_the_hull`,
   `the_launch_path_is_the_same_whatever_the_lock`,
   `a_drone_climbs_cruises_dives_and_arrives`,
   `the_turning_circle_is_inside_the_commit` (no orbit at the defaults),
-  `a_downed_drone_falls_and_lands`; the composers
-  `a_drone_is_on_the_grid_and_pure`, `the_lamp_blinks_at_its_rate`,
-  `the_rotors_turn`, `a_falling_drone_alternates_its_silhouettes`,
+  `a_downed_drone_falls_and_lands`, `a_gust_carries_a_dive_off_its_point`,
+  `pick_nearest_ties_on_the_lower_key`; the composers
+  `a_drone_is_on_the_grid_and_pure`, `a_drone_up_high_is_drawn_twice_the_size`,
+  `the_lamp_blinks_at_its_rate`, `the_rotors_turn`,
+  `a_falling_drone_alternates_its_silhouettes`,
   `the_halo_settles_when_disabled_and_falls_on_a_wreck`.
-- `hits`: `the_sweep_meets_an_opposing_air_target_only_when_asked`,
-  `an_air_target_is_rewound_for_a_seats_shot`,
-  `the_rank_renumbering_keeps_every_tie`.
-- `tank` (`weapon_inventory_tests`): the swarm in `take_weapon`,
-  `full_load`, `special`; its trigger; the module's cells.
-- `tower`: `a_tesla_arcs_drones_on_its_own_clock`.
-- `weather`: `a_drone_throws_its_lamps_light_when_it_is_on`.
-- `hud_tests`: the swarm's slot, colour and glyph.
-- `indicators`: `an_incoming_drone_off_screen_gets_an_arrow_the_cap_never_drops`,
-  `a_drone_at_the_frog_gets_one_too`, `own_drones_get_none`.
-- `fx` tests: `a_low_drone_throws_wash`, `a_crash_is_a_dud`.
-- `fish::tests`: `a_drone_burst_scares_the_fish`.
-- `pickup`: `name`/`parse`; `weapon`.
-- `devserver`: `set_tank_arms_the_swarm`, the snapshot's `drones`,
-  `spawn_pickup` with `fpv_swarm`, the PICKUP category's count (16 to 17).
-- `editor`/`chrome_tests`: the tool in `TOOLS`.
+- `indicators`: `a_drone_coming_at_the_seat_off_the_screen_has_an_arrow_whatever_the_cap`,
+  `a_drone_arrow_has_an_x_at_its_tail`.
+- `devserver`: the PICKUP category's count (16 to 17), the compact
+  snapshot's size (`fpv`, `fpv_out` and `drones` left out while empty).
 - `thumbnail`: the armory's pin. `maplint`: the armory as it lints.
-- `text_tests`: every budget.
 
 Wire:
 
 - `events.rs`: the samples gain the four drone events and
   `DroneLockLost` (not sent); the variant count.
-- `delta.rs`: `drones_round_trip_through_the_delta`, the random snapshots
-  and the size bounds.
-- `apply.rs`: `drones_reach_the_replica` (a seat armed through
-  `debug_set_tank`, pressing: every drone the room flies is on the replica
-  between its snapshots, the same picture after every apply),
-  `a_downed_drone_falls_on_the_replica`, `a_drone_burst_puts_on_the_same_show`,
-  `a_drone_launch_this_client_drew_is_not_drawn_again` (`OwnShotsDrawn`
-  with the press's bit: no wash ring, not handed on; without: drawn).
-- `interp.rs`: `drones_are_interpolated_and_carried_on`.
-- `predict.rs`: `a_drone_press_is_drawn_at_once_and_claims_the_rooms_launch_once`,
-  `a_drone_press_waits_for_the_reload`, `a_refused_drone_settles_back`.
-- `round.rs`: `the_eased_climb_meets_the_rooms_drone_at_the_handover` -
-  the provisional's drawn point and the room's copy's within a pixel at
-  `h + Δ` on a link of 80 ms, and no frame drawing both;
-  `the_shown_halo_loses_the_drone_on_the_press_frame`.
-- `rig.rs` (`Lockstep`): `a_seats_drone_is_drawn_once_on_the_replica`,
-  `an_enemys_drone_reaches_the_replica_and_bursts_on_the_seat` (an enemy
-  armed through `authority_mut`, a seat in its box: the replica shows the
-  drone locked on the seat and the burst), `a_drone_shot_down_falls_on_the_replica`.
-- `server/tests/round.rs`: `a_drone_launched_through_the_mailbox_is_drawn_once`
-  - through whole `OnlineRound`s over `NativeTransport`, a seat presses:
-  one `Fired`, one drone in the room, the replica's own launch drawn once.
-- The room server's `cargo test -p bongbong-server` as it stands.
+- `wire.rs`: `normalise_sorts_and_dedups_every_family` covers the drones.
+- `delta.rs`: the random snapshots carry drones through the round trip;
+  the size bounds re-measured.
+- `apply.rs`: `fpv_drones_reach_the_replica` - a seat and the enemies armed
+  through `debug_set_tank`: every drone the room flies, the seat's and the
+  enemies', in every stage, is on the replica the same picture after every
+  apply, and re-encoding the replica gives the room's bytes.
+- `round.rs`: `a_launch_is_drawn_on_the_press_and_handed_to_the_rooms_copy`
+  - on the press frame one drone up and one fewer in the halo, the room's
+  copy kept off the picture until the handover, never two drawn.
+- `rig.rs` (`Lockstep`): `a_seats_drone_reaches_the_replica_once`,
+  `an_enemys_drone_reaches_the_replica_locked_on_the_seat`.
+- The room server's `cargo test -p bongbong-server` as it stands: drones
+  are one more family in the snapshot it encodes once for everyone.
 
 ## 11. Probe
 
