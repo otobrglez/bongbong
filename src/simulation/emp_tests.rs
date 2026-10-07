@@ -872,3 +872,36 @@ fn a_tank_backing_out_walks_out_rather_than_through_a_portal() {
     let at = tank(&game, enemy, |tk| tk.position);
     assert!(out.is_some() && at.x < 9.0 * 32.0, "out of the ring on its own side: {at:?}");
 }
+
+/// An enemy holding its pulse for an ally that cannot leave its ring asks
+/// for `emp_ai_clear_patience_seconds` and no longer: its ring stops being
+/// a danger, so the ally is not kept backing out for ever, and it still
+/// never fires into the ally.
+#[test]
+fn an_emp_enemy_stops_asking_for_its_ring_after_its_patience() {
+    let mut game = round("");
+    let seat = game.player().unwrap();
+    with_tank_mut(&game.world, seat, |tk| tk.emp_charges = 0);
+    let clearer = emp_enemy(&mut game, Position::new(SEAT.x + 110.0, SEAT.y));
+    // Parked: it cannot drive out.
+    let ally = parked(&mut game, Position::new(SEAT.x + 110.0, SEAT.y + 90.0));
+    let slot = slot_of(&game, clearer);
+    let asking = |game: &Game| game.world.get::<&Ai>(clearer).unwrap().clearing().is_some();
+    let patience = tuning().emp_ai_clear_patience_seconds;
+    let mut asked = false;
+    let mut told = false;
+    for _ in 0..((patience * 0.5 / DT) as usize) {
+        told |= step(&mut game, false).iter().any(|e| matches!(e, Event::TellStarted { slot: s, .. } if *s == slot));
+        asked |= asking(&game);
+    }
+    assert!(asked, "it asks for its ring at first");
+    for _ in 0..((patience * 0.5 / DT) as usize + 30) {
+        told |= step(&mut game, false).iter().any(|e| matches!(e, Event::TellStarted { slot: s, .. } if *s == slot));
+    }
+    for _ in 0..120 {
+        told |= step(&mut game, false).iter().any(|e| matches!(e, Event::TellStarted { slot: s, .. } if *s == slot));
+        assert!(!asking(&game), "past its patience it asks no more");
+        assert_ne!(game.world.get::<&Ai>(ally).unwrap().snapshot().last_action, Some("dodge"), "and the ally is let be");
+    }
+    assert!(!told, "never into the ally");
+}

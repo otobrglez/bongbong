@@ -523,6 +523,10 @@ pub struct Ai {
     /// Waiting at the spot outside a danger its steering target was moved
     /// to (`act_attack`) this tick: a hold of its own choosing.
     kept_out: bool,
+    /// Seconds its EMP rule has held the pulse for allies in its ring
+    /// (`SpecialUse::Clear`), running while they stay in it and back to 0
+    /// once none is: past `emp_ai_clear_patience_seconds` it stops asking.
+    clear_waited: f32,
 }
 
 /// The memory a tank carries only on a field map
@@ -654,6 +658,7 @@ impl Default for Ai {
             dodging: false,
             dodge_exit: None,
             kept_out: false,
+            clear_waited: 0.0,
         }
     }
 }
@@ -860,6 +865,10 @@ impl Ai {
         let mut last_action = None;
         build().tick_traced(&mut bb, &mut last_action);
         let mut intent = bb.intent;
+        // The wait on allies in its ring ends with them.
+        if !matches!(sense, SpecialSense::Emp(s) if s.friends) {
+            self.clear_waited = 0.0;
+        }
 
         // Personal space, applied to whatever the tree decided: pull up
         // short of the tank in front instead of driving through it. One
@@ -2820,9 +2829,10 @@ fn special_rule(b: &Brain) -> Option<SpecialUse> {
 /// training dummy never pulses, and a seat in reach that would see it from
 /// outside its sight box holds the pulse whole; a pulse worth
 /// `emp_ai_fire_value` goes off - unless one of its own side's towers is in
-/// reach, or an ally is (then it holds facing and has the ring cleared,
-/// `Clear`: its allies keep out of it as of a crackle, and with the
-/// commander on they are nudged out too); then a closer
+/// reach, or an ally is (then it has the ring cleared, `Clear`: its allies
+/// keep out of it, and with the commander on they are nudged out too - for
+/// `emp_ai_clear_patience_seconds`, after which it asks no more until its
+/// ring is clear); then a closer
 /// whose seat is worth `emp_ai_approach_value` on its own, not crowded by
 /// an ally and not hidden from it, closes in to its spot of the seat's ring
 /// drawn in to well inside the ring's reach and waits there facing it. A fire arm that
@@ -2838,7 +2848,8 @@ fn emp_rule(b: &Brain, sense: &EmpSense) -> Option<SpecialUse> {
             return None;
         }
         if sense.friends {
-            return Some(SpecialUse::Clear { radius: t.emp_radius_px + t.emp_ai_friend_margin_px });
+            let waiting = b.ai.clear_waited < t.emp_ai_clear_patience_seconds;
+            return waiting.then_some(SpecialUse::Clear { radius: t.emp_radius_px + t.emp_ai_friend_margin_px });
         }
         return Some(SpecialUse::Fire { face: facing, at_seat: sense.at_seat, why: "pulse" });
     }
@@ -3013,6 +3024,7 @@ fn act_special(b: &mut Brain) -> Status {
         SpecialUse::Clear { radius } => {
             b.ai.special_why = Some("clear");
             b.ai.clearing = Some(radius);
+            b.ai.clear_waited += b.dt;
             return Status::Failure;
         }
         SpecialUse::Approach { to } => {

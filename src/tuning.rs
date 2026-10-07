@@ -1043,6 +1043,11 @@ tunables! {
         emp_ai_berth_px: f32 = 48.0 in 0.0 ..= 256.0;
         /// Seconds between an enemy's decisions to pulse.
         emp_ai_fire_interval: f32 = 3.5 in 0.1 ..= 20.0;
+        /// How long an enemy holds its pulse for allies in its ring - the
+        /// ring a danger they back out of - before it stops asking until
+        /// none is in it: allies that cannot get out are not kept backing
+        /// out for ever, nor the pack held on one tank's ring.
+        emp_ai_clear_patience_seconds: f32 = 3.0 in 0.0 ..= 30.0;
     }
 
     group flamethrower {
