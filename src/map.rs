@@ -1125,6 +1125,7 @@ pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("portals", include_str!("../maps/portals.toml")),
     ("towers", include_str!("../maps/towers.toml")),
     ("longwater", include_str!("../maps/longwater.toml")),
+    ("armory", include_str!("../maps/armory.toml")),
     ("lotus-lagoon", include_str!("../maps/lotus-lagoon.toml")),
     ("vulkan", include_str!("../maps/vulkan.toml")),
     ("hedge-maze", include_str!("../maps/hedge-maze.toml")),
@@ -1427,9 +1428,11 @@ mod toml_tests {
     fn every_shipped_map_is_a_field_map() {
         // Every level and free-play map is past 36 x 18 - the smallest are
         // 48 x 24 - so the follow camera frames each of them; an arena is a
-        // map of your own, or a fixture under maps/test/.
+        // map of your own, a fixture under maps/test/, or the armory, the
+        // weapons' test arena (docs/sonic-hammer.md), shown whole.
         for (name, text) in SHIPPED_MAPS {
-            assert_eq!(MapFile::from_toml_str(text).unwrap().class(), MapClass::Field, "{name}");
+            let class = if *name == "armory" { MapClass::Arena } else { MapClass::Field };
+            assert_eq!(MapFile::from_toml_str(text).unwrap().class(), class, "{name}");
         }
         let big = open_map("longwater").unwrap();
         assert_eq!((big.size, big.class()), (Some((112.0, 63.0)), MapClass::Field));
