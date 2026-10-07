@@ -400,6 +400,11 @@ in `HUD_EMP_COLOR`), the press show's claim by input tick (hammer §3.3),
       /// shies from it. `None` for one nobody owns (the rod's call
       /// circle), which every enemy keeps out of.
       pub owner: Option<usize>,
+      /// How deep its outer band runs in which a tank only stops rather
+      /// than backing out: the berth of a danger over in a moment (an
+      /// ally's crackle), where a turn round and back would spin it. 0
+      /// backs out from the edge.
+      pub slack: f32,
   }
 
   #[derive(Clone, Copy, Debug, PartialEq)]
@@ -636,7 +641,10 @@ makes a `Danger` of:
 - **every live enemy with an EMP tell running, or that held its pulse for
   an ally on its last think** (`Ai::clearing`): the same disc round it,
   owned by it - its allies back out of the ring once they see the
-  crackle, or the clearer waiting on them, and it does not. Two clearers
+  crackle, or the clearer waiting on them, and it does not. In a
+  crackle's berth (`slack`, `emp_ai_berth_px`) an ally only stops - the
+  crackle is over in half a second, and turning round and back there spun
+  tanks in the probe; a clearer's ring it backs out of whole. Two clearers
   in each other's ring each back out of the other, so a pack spreads
   until one has a clear ring. Built, a clearer that held still for its
   ring was the probe's worst: a pack of EMP tanks round a seat, each

@@ -146,6 +146,11 @@ pub struct Danger {
     /// The owner slot of the tank whose weapon it is: that tank never shies
     /// from it. `None` for one nobody owns, which every enemy keeps out of.
     pub owner: Option<usize>,
+    /// How deep its outer band runs (px) in which a tank only stops, going
+    /// no deeper, rather than backing out: the berth round a danger that is
+    /// over in a moment (an ally's crackle), where turning round and back
+    /// would only spin the tank. 0 backs out from the edge.
+    pub slack: f32,
 }
 
 /// A danger's ground (`Danger`).
@@ -2829,6 +2834,12 @@ fn emp_rule(b: &Brain, sense: &EmpSense) -> Option<SpecialUse> {
 fn act_dodge(b: &mut Brain) -> Status {
     let Some(danger) = b.danger_here() else { return Status::Failure };
     b.reset_aim();
+    if danger.slack > 0.0 && danger.depth(b.me.position) <= danger.slack {
+        // In its slack band (or out past it, latched): wait for it to
+        // pass, going no deeper.
+        b.intent.move_dir = None;
+        return Status::Success;
+    }
     let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
     let me = b.me.position;
     let out = b.way_out(&danger, me, tuning().enemy_danger_clear_px + OBSTACLE_GRID_SIZE, facing);
@@ -4048,7 +4059,7 @@ mod emp_rule_tests {
     #[test]
     fn a_tank_backs_out_of_a_danger_not_its_own() {
         let seat = Position::new(ME.x - 400.0, ME.y);
-        let disc = |owner| Danger { shape: DangerShape::Disc { at: Position::new(ME.x - 60.0, ME.y), radius: 200.0 }, owner };
+        let disc = |owner| Danger { shape: DangerShape::Disc { at: Position::new(ME.x - 60.0, ME.y), radius: 200.0 }, owner, slack: 0.0 };
         for (owner, out) in [(Some(0), true), (Some(2), false), (None, true)] {
             let mut ai = ready();
             ai.committed_dir = Some(Dir::Left);
@@ -4069,12 +4080,30 @@ mod emp_rule_tests {
         assert_eq!((ai.last_action, intent.move_dir), (Some("dodge"), Some(Dir::Right)));
     }
 
+    /// In the slack band of a danger that is over in a moment (an ally's
+    /// crackle) a tank stops rather than turning round; deeper, it backs
+    /// out.
+    #[test]
+    fn a_tank_in_a_crackles_slack_band_stops_and_deeper_backs_out() {
+        let seat = Position::new(ME.x - 400.0, ME.y);
+        let crackle = Danger { shape: DangerShape::Disc { at: Position::new(ME.x - 190.0, ME.y), radius: 208.0 }, owner: Some(5), slack: 48.0 };
+        let mut ai = ready();
+        ai.committed_dir = Some(Dir::Left);
+        let intent = think(&mut ai, &emp_tank(), SpecialSense::None, &[crackle], seat);
+        assert_eq!((ai.last_action, intent.move_dir), (Some("dodge"), None), "18 px in: it stops");
+        let deep = Danger { shape: DangerShape::Disc { at: Position::new(ME.x - 100.0, ME.y), radius: 208.0 }, ..crackle };
+        let mut ai = ready();
+        ai.committed_dir = Some(Dir::Left);
+        let intent = think(&mut ai, &emp_tank(), SpecialSense::None, &[deep], seat);
+        assert_eq!((ai.last_action, intent.move_dir), (Some("dodge"), Some(Dir::Right)), "108 px in: it backs out");
+    }
+
     /// A disc's exits: straight out first, turned further each way after,
     /// and from the tank's side when the point is the middle; its posts on
     /// the axes.
     #[test]
     fn a_discs_exits_and_posts() {
-        let d = Danger { shape: DangerShape::Disc { at: Position::new(0.0, 0.0), radius: 100.0 }, owner: None };
+        let d = Danger { shape: DangerShape::Disc { at: Position::new(0.0, 0.0), radius: 100.0 }, owner: None, slack: 0.0 };
         let exits = d.exits(Position::new(50.0, 0.0), 10.0, Position::new(0.0, 0.0), Dir::Up);
         assert!(exits[0].distance_to(Position::new(110.0, 0.0)) < 1e-3);
         assert!(exits.iter().all(|e| (e.length() - 110.0).abs() < 1e-3 && e.x > -60.0), "never back through the middle: {exits:?}");

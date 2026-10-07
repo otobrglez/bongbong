@@ -362,23 +362,25 @@ impl Game {
         let mut out: Vec<Danger> = seats
             .iter()
             .filter(|s| s.live && s.emp_armed && !s.concealed)
-            .map(|s| Danger { shape: DangerShape::Disc { at: s.pos, radius }, owner: Some(s.seat as usize) })
+            .map(|s| Danger { shape: DangerShape::Disc { at: s.pos, radius }, owner: Some(s.seat as usize), slack: 0.0 })
             .collect();
         // An enemy crackling, or holding its pulse until its allies are out
-        // of the ring (`Ai::clearing`, from its last think).
-        let mut tells: Vec<(usize, Position)> = self
+        // of the ring (`Ai::clearing`, from its last think). A crackle is
+        // over in a moment: an ally in its berth only stops (`slack`). A
+        // held pulse waits on the ring, so an ally backs out of it whole.
+        let mut tells: Vec<(usize, Position, f32)> = self
             .world
             .query::<(&Tank, &Ai)>()
             .iter()
-            .filter(|(tank, ai)| {
-                !tank.is_wreck()
-                    && !tank.is_disabled()
-                    && (tank.tell.is_some_and(|tell| tell.weapon == ActiveWeapon::Emp) || ai.clearing().is_some())
+            .filter(|(tank, _)| !tank.is_wreck() && !tank.is_disabled())
+            .filter_map(|(tank, ai)| {
+                let crackling = tank.tell.is_some_and(|tell| tell.weapon == ActiveWeapon::Emp);
+                let slack = if crackling { t.emp_ai_berth_px } else { 0.0 };
+                (crackling || ai.clearing().is_some()).then_some((tank.owner_slot(), tank.position, slack))
             })
-            .map(|(tank, _)| (tank.owner_slot(), tank.position))
             .collect();
-        tells.sort_by_key(|&(slot, _)| slot);
-        out.extend(tells.into_iter().map(|(slot, at)| Danger { shape: DangerShape::Disc { at, radius }, owner: Some(slot) }));
+        tells.sort_by_key(|&(slot, _, _)| slot);
+        out.extend(tells.into_iter().map(|(slot, at, slack)| Danger { shape: DangerShape::Disc { at, radius }, owner: Some(slot), slack }));
         out
     }
 
