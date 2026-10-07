@@ -700,6 +700,127 @@ fn a_burning_plank_in_reach_is_crushed() {
     assert!(!game.world.query::<&crate::obstacle::Obstacle>().iter().any(|o| o.cell() == (12, 6) && !o.destroyed), "the burning plank is down");
 }
 
+/// What lies on the ground within the break radius: a grenade goes off, a
+/// lantern breaks, the oil trail is lit and the tall grass hides nobody
+/// for `rod_grass_flat_seconds`; past it, nothing.
+#[test]
+fn the_impact_sets_off_grenades_breaks_lanterns_lights_oil_and_flattens_grass() {
+    let mut game = round(
+        "cells.\"14,8\" = { kind = \"oil\" }\n\
+         cells.\"12,9\" = { kind = \"tall_grass\" }\n\
+         cells.\"12,13\" = { kind = \"tall_grass\" }\n",
+    );
+    let c = crate::map::cell_to_world(12, 8);
+    let mut g = crate::grenade::Grenade::launch(Position::new(c.x + 40.0, c.y), crate::math::Vec2::new(1.0, 0.0), crate::math::Vec2::zero(), crate::shell::Owner::Player(0));
+    (g.height, g.climb, g.velocity, g.fuse) = (0.0, 0.0, crate::math::Vec2::zero(), 60.0);
+    g.id = game.take_shot_id();
+    game.world.spawn((g,));
+    game.lanterns.push(crate::lamp::Lantern { id: 1, position: Position::new(c.x - 40.0, c.y), seat: 0, lit_at: 0.0 });
+    game.debug_call_rod(c, false).expect("a call");
+    let events = idle(&mut game, countdown_ticks());
+    assert!(events.iter().any(|e| matches!(e, Event::GrenadeBlast { .. })), "the grenade went off: {events:?}");
+    assert!(events.iter().any(|e| matches!(e, Event::LanternBroken { .. })), "the lantern broke");
+    assert!(game.lanterns.is_empty());
+    assert!(game.fires.iter().any(|f| f.cell == (14, 8)), "the oil is alight");
+    assert!(game.grass_flat.get(&(12, 9)).is_some_and(|&s| s > 0.0), "the grass in reach is flat");
+    assert!(!game.grass_flat.contains_key(&(12, 13)), "the grass past it is not");
+}
+
+/// A frog in the shove ring, outside the circle, is stunned by the impact.
+#[test]
+fn a_frog_in_the_ring_is_stunned() {
+    let mut game = round_as("cells.\"20,12\" = { kind = \"frog\" }\n", Mission::Protect);
+    let frog = game.frog.expect("a frog");
+    let at = with_frog(&game.world, frog, |f| f.position);
+    // Four cells north: inside the shove ring, outside the call's danger.
+    game.debug_call_rod(Position::new(at.x, at.y - 128.0), true).expect("a call");
+    let mut stunned = false;
+    for _ in 0..countdown_ticks() {
+        let events = step(&mut game, false);
+        if events.iter().any(|e| matches!(e, Event::RodImpact { .. })) {
+            stunned = with_frog(&game.world, frog, |f| f.is_stunned() && !f.is_dead());
+        }
+    }
+    assert!(stunned, "stunned, not killed");
+}
+
+/// A tank holding a charge inside a call lets it go and leaves the circle:
+/// a wind-up yields to a call (docs/rod-from-god.md "Reacting to a call").
+#[test]
+fn a_charge_held_inside_a_call_is_dropped_and_its_tank_leaves() {
+    let mut game = round("");
+    let at = crate::map::cell_to_world(20, 10);
+    let slot = game.debug_spawn_enemy(at, Some(1), Some(Role::Player)).expect("spawns");
+    let enemy = game.tank_entity_by_slot(slot).expect("exists");
+    with_tank_mut(&game.world, enemy, |t| {
+        t.shells_ammo = 0;
+        t.disarm();
+        t.take_weapon(ActiveWeapon::GaussRail);
+        t.charge = Some(crate::tank::Charge::new(ActiveWeapon::GaussRail, 0.5));
+        t.trigger_held = true;
+    });
+    game.debug_call_rod(at, false).expect("a call");
+    let events = idle(&mut game, 10);
+    assert!(events.iter().any(|e| matches!(e, Event::ChargeEnded { slot: s, end: ChargeEnd::Lapsed, .. } if *s == slot)), "{events:?}");
+    idle(&mut game, countdown_ticks());
+    assert!(!with_tank(&game.world, enemy, |t| t.is_wreck()), "it left the circle");
+}
+
+/// A hammer enemy inside a call does not stand there to use its special:
+/// it leaves (its special tier yields to the dodge).
+#[test]
+fn a_hammer_enemy_inside_a_call_leaves_rather_than_shout() {
+    let mut game = round("");
+    let s = seat(&game);
+    with_tank_mut(&game.world, s, |t| t.disarm());
+    let at = Position::new(SEAT.x + 90.0, SEAT.y);
+    let slot = game.debug_spawn_enemy(at, Some(1), Some(Role::Player)).expect("spawns");
+    let enemy = game.tank_entity_by_slot(slot).expect("exists");
+    with_tank_mut(&game.world, enemy, |t| {
+        t.disarm();
+        t.shells_ammo = 0;
+        t.sonic_ammo = 3;
+    });
+    game.debug_call_rod(at, false).expect("a call");
+    let events = idle(&mut game, 20);
+    assert!(!events.iter().any(|e| matches!(e, Event::TellStarted { slot: s, .. } if *s == slot)), "no wind-up inside the circle: {events:?}");
+    assert_eq!(game.world.get::<&crate::ai::Ai>(enemy).expect("an enemy").snapshot().last_action, Some("dodge"));
+}
+
+/// A hammer enemy shoves a seat into a call standing beside it: a knock
+/// whose slide ends in the circle is "trouble" (`lands_in_trouble`).
+#[test]
+fn a_hammer_enemy_shoves_a_seat_into_a_call() {
+    let t = tuning();
+    let seat_at = Position::new(300.0, 192.0);
+    let slide = {
+        let game = round("");
+        let mass = with_tank(&game.world, seat(&game), |tk| tk.mass() / (tk.scale * tk.scale));
+        crate::sonic::slide(&t, crate::sonic::shove_speed(&t, mass, 70.0), 1.0)
+    };
+    for (call, want) in [(true, "trouble"), (false, "breaker")] {
+        let mut game = round("");
+        let s = seat(&game);
+        game.place_tank(s, seat_at, Some(270.0)).unwrap();
+        with_tank_mut(&game.world, s, |tk| tk.disarm());
+        let slot = game.debug_spawn_enemy(Position::new(seat_at.x - 90.0, seat_at.y), Some(1), Some(Role::Player)).expect("spawns");
+        let enemy = game.tank_entity_by_slot(slot).expect("exists");
+        with_tank_mut(&game.world, enemy, |tk| {
+            tk.speed_scale = 0.0;
+            tk.disarm();
+            tk.shells_ammo = 0;
+            tk.sonic_ammo = 3;
+        });
+        if call {
+            game.debug_call_rod(Position::new(seat_at.x + slide, seat_at.y), false).expect("a call");
+        }
+        step(&mut game, false);
+        step(&mut game, false);
+        let arm = game.world.get::<&crate::ai::Ai>(enemy).expect("an enemy").snapshot().special;
+        assert_eq!(arm, Some(want), "a call behind the seat {call}: slide {slide}");
+    }
+}
+
 /// A call on a player tower or the frog that would crush a seat standing by
 /// it is a call on that seat: never from outside that seat's sight box.
 #[test]

@@ -450,6 +450,36 @@ mod tests {
         }
     }
 
+    /// A herd (docs/rod-from-god.md "Herding"): the ring round a call's
+    /// middle puts its firing slots `herd` out on their axes, the lateral
+    /// offset as ever, with neither the sight-box clamp nor the ring's own
+    /// radius; the reserve slots keep theirs.
+    #[test]
+    fn a_herd_puts_the_firing_slots_at_its_distance_round_the_call() {
+        let (centre, w, h, margin) = open_field();
+        let yes = |_: Position, _: Position| true;
+        let herd = 128.0;
+        let ctx = EngageCtx { target_pos: centre, width: w, height: h, margin, sight_box: seat_box(), herd: Some(herd), reachable: &yes, line_of_sight: &yes };
+        let plain = EngageCtx { herd: None, ..ctx };
+        assert!((tuning().engage_ring_radius() - herd).abs() > 1.0, "the defaults this test is about: the herd is not the ring");
+        for i in 0..SLOT_COUNT {
+            let slot = EngageSlot::from_index(i);
+            if slot.rank != 0 {
+                assert_eq!(engage_point(&ctx, slot), engage_point(&plain, slot), "{slot:?}: a reserve slot is not herded");
+                continue;
+            }
+            let (dir, at) = (DIRS[slot.axis as usize], engage_point(&ctx, slot).expect("room on an open field"));
+            let forward = (at.x - centre.x) * dir.0 + (at.y - centre.y) * dir.1;
+            assert!((forward - herd).abs() < 1e-3, "{slot:?}: {forward}");
+            let lateral = perp_of(dir);
+            let side = (at.x - centre.x) * lateral.0 + (at.y - centre.y) * lateral.1;
+            assert!((side - slot.side as f32 * tuning().engage_lateral_offset).abs() < 1e-3, "{slot:?}");
+        }
+        // A herd slot that cannot stand inside the field is off.
+        let edge = EngageCtx { target_pos: Position::new(margin + herd * 0.5, 360.0), ..ctx };
+        assert_eq!(engage_point(&edge, EngageSlot { axis: 3, rank: 0, side: 1 }), None);
+    }
+
     #[test]
     fn a_held_slot_is_kept_while_it_stays_valid() {
         let (player, w, h, margin) = open_field();
