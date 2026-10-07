@@ -187,6 +187,18 @@ Categories and their tools, in list order:
 Each category remembers its current tool for the session; the initial tool
 is the first in each list, and the active brush at entry is `WALL / brick`.
 
+Every button on the bar - and on the select tool's strip, and the Save
+prompt's SAVE - is drawn alike (`editor::chrome::button_box`, `Face` in
+`editor/render.rs`): a box 32 pt tall with a mouse and 40 pt on a touch
+screen, its slot less 4 pt, inside a square 2 pt outline as play's corner
+buttons are framed; every word in it at 14 pt (`BAR_SMALL_TEXT` - the
+folded bar is full at 720 pt, so the words cannot take the corners' 18);
+its outline a quiet grey while it can act and fainter round a dim word
+while it cannot (UNDO with nothing to undo, FIT at FIT), the box washed
+while its popup is up, the outline amber while it holds the brush in
+force, and PLAY, PLAY HERE, PLACE and SAVE in the amber, outline and word,
+as play's corner draws BUILD.
+
 `FIT`, a 40 px button after `MAP ▾` (`SLOT_FIT`), puts the builder's
 camera back on the whole canvas; it is dim while the canvas is already at
 FIT. The camera itself - zoom, pan, the gestures, edge scroll - is

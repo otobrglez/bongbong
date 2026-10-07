@@ -931,12 +931,10 @@ mod text_tests {
             lobby_button(keys::LOBBY_REMATCH),
             lobby_button(keys::LOBBY_LEAVE),
             (keys::LOBBY_KICK, HUD_TEXT_SIZE, LOBBY_KICK_W as i32 - 8, vec![]),
-            // The build bar (`editor::Bar`): BUILD in its slot, FILE and
-            // MAP beside their carets; the small buttons' labels are
-            // measured below, in a mouse's bar and a touch screen's.
+            // The build bar (`editor::Bar`): BUILD in its slot; the
+            // buttons' words are measured below, in a mouse's bar and a
+            // touch screen's.
             (keys::EDITOR_BUILD, HUD_TEXT_SIZE, 64, vec![]),
-            (keys::EDITOR_FILE, HUD_TEXT_SIZE, 42, vec![]),
-            (keys::EDITOR_MAP, HUD_TEXT_SIZE, 42, vec![]),
             // The CHECK panel (`editor::chrome::LINT_PANEL_W`): its title,
             // 16 pt, left of the three counts; the line under it in the
             // small size across the panel; a clean map's line, 16 pt; FIX
@@ -962,7 +960,15 @@ mod text_tests {
             // SAVE button's label inside the button's drawn box.
             (keys::EDITOR_SAVE_HINT, UI_SMALL_TEXT, crate::editor::chrome::SAVE_PROMPT.0 as i32 - 24, vec![]),
             (keys::EDITOR_SAVE_HINT_TOUCH, UI_SMALL_TEXT, crate::editor::chrome::SAVE_PROMPT.0 as i32 - 24, vec![]),
-            (keys::FILE_SAVE, UI_SMALL_TEXT, (crate::editor::chrome::SAVE_BUTTON_W - crate::editor::chrome::SMALL_BOX_INSET) as i32 - 8, vec![]),
+            (
+                keys::FILE_SAVE,
+                crate::editor::chrome::BAR_SMALL_TEXT,
+                crate::editor::chrome::label_room(
+                    crate::editor::chrome::button_box(crate::math::Rectangle::new(0.0, 0.0, crate::editor::chrome::SAVE_BUTTON_W, 32.0), false),
+                    false,
+                ) as i32,
+                vec![],
+            ),
             (keys::FILE_LOAD, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE_AS, HUD_TEXT_SIZE, 168, vec![]),
@@ -1012,27 +1018,30 @@ mod text_tests {
                 vec![],
             ),
         ];
-        // The build bar's small buttons - UNDO, REDO, FIT, CHECK - inside
-        // their drawn boxes (an outline is drawn outside its box), at the
-        // bar's small size (`editor::chrome::BAR_SMALL_TEXT`), in a
-        // mouse's boxes and a touch screen's; PLAY HERE at PLAY's size;
-        // and the five categories' names beside their row of the palette a
-        // narrow bar folds them into.
+        // The build bar's buttons - every word inside its drawn box
+        // (`editor::chrome::label_room`), FILE and MAP before their carets,
+        // all at the bar's one size (`editor::chrome::BAR_SMALL_TEXT`), in
+        // a mouse's boxes and a touch screen's; and the five categories'
+        // names beside their row of the palette a narrow bar folds them
+        // into.
         for touch in [false, true] {
+            use crate::editor::chrome::{button_box, label_room};
             let ui = crate::hud::UiFrame::new((1600.0, 900.0), 1.0, 1.0, crate::hud::Insets::default(), touch);
             let bar = crate::editor::Bar::of(&ui);
             let size = crate::editor::chrome::BAR_SMALL_TEXT;
-            let room = |r: crate::math::Rectangle| (r.width - crate::editor::chrome::SMALL_BOX_INSET) as i32;
-            for (key, r) in [
-                (keys::EDITOR_UNDO, bar.undo),
-                (keys::EDITOR_REDO, bar.redo),
-                (keys::EDITOR_FIT, bar.fit),
-                (keys::EDITOR_CHECK, bar.check),
+            let room = |r: crate::math::Rectangle, caret: bool| label_room(button_box(r, touch), caret) as i32;
+            for (key, r, caret) in [
+                (keys::EDITOR_UNDO, bar.undo, false),
+                (keys::EDITOR_REDO, bar.redo, false),
+                (keys::EDITOR_FILE, bar.file, true),
+                (keys::EDITOR_MAP, bar.map, true),
+                (keys::EDITOR_FIT, bar.fit, false),
+                (keys::EDITOR_CHECK, bar.check, false),
+                (keys::EDITOR_PLAY_HERE, bar.here, false),
+                (keys::BUTTON_PLAY, bar.play, false),
             ] {
-                out.push((key, size, room(r), vec![]));
+                out.push((key, size, room(r, caret), vec![]));
             }
-            // PLAY HERE, drawn as PLAY is, 4 points clear a side.
-            out.push((keys::EDITOR_PLAY_HERE, HUD_TEXT_SIZE, bar.here.width as i32 - 8, vec![]));
         }
         for category in crate::editor::Category::ALL {
             out.push((category.label_key(), UI_SMALL_TEXT, crate::editor::chrome::PALETTE_LABEL_W as i32 - 12, vec![]));
@@ -1053,7 +1062,7 @@ mod text_tests {
         // at the bar's small size, with a mouse and on a touch screen.
         for touch in [false, true] {
             let w = if touch { crate::editor::chrome::STRIP_WORD_W.1 } else { crate::editor::chrome::STRIP_WORD_W.0 };
-            let room = (w - crate::editor::chrome::SMALL_BOX_INSET) as i32;
+            let room = crate::editor::chrome::label_room(crate::editor::chrome::button_box(crate::math::Rectangle::new(0.0, 0.0, w, 40.0), touch), false) as i32;
             let size = crate::editor::chrome::BAR_SMALL_TEXT;
             for button in crate::editor::StripButton::SELECTION.into_iter().chain(crate::editor::StripButton::GHOST) {
                 if let Some(key) = button.label_key() {

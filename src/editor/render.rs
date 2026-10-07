@@ -10,7 +10,10 @@ use sola_raylib::prelude::*;
 
 use super::*;
 use super::camera::{scene_plan, window_mapping};
-use super::chrome::{BarTools, BAR_SMALL_TEXT, CategoryButton, MENU_BOX_INSET, SMALL_BOX_INSET, STAMP_NAME_W, STAMP_PICTURE};
+use super::chrome::{
+    button_box, caret_at, icon_box, BarTools, BAR_SMALL_TEXT, BOX_EDGE, BOX_PAD, CARET_GAP, CategoryButton, STAMP_NAME_W,
+    STAMP_PICTURE,
+};
 use crate::text::{keys, text};
 use crate::canvas::Sheet;
 use crate::frog::FrogAnim;
@@ -21,15 +24,9 @@ use crate::portal::{draw_portal, portal_icon_source_rec};
 use crate::render::canvas::{BlockTexture, GpuCanvas, Sheets};
 use crate::EDITOR_DROPDOWN_ROW_H;
 
-/// The icons in the bar, the dropdown rows and the palette, the sheets'
-/// own 32 px drawn a point a pixel.
+/// The icons in the dropdown rows and the palette, the sheets' own 32 px
+/// drawn a point a pixel.
 const ICON_PX: f32 = 32.0;
-/// The gap a button's drawn box keeps from the slot after it, so two
-/// adjacent outlines never touch.
-const BUTTON_GAP: f32 = 8.0;
-/// A caret is 10 pt wide (`draw_caret`): a category button's sits at the
-/// right end of its drawn box.
-const CARET_W: i32 = 10;
 /// A dropdown row's name column, right of its 32 pt icon at 8 pt inset.
 const DROPDOWN_TEXT_X: i32 = 48;
 use super::chrome::{MAP_CHECK, MAP_HEADING_SIZE, MAP_LABEL_SIZE, MAP_SKY_SIZE, MAP_SWATCH, MAP_VALUE_SIZE};
@@ -351,7 +348,7 @@ impl MapEditor {
             self.draw_navigator(&mut d, frame, textures, camera);
             self.draw_bar(&mut d, &chrome.bar, textures);
             if let Some(strip) = &chrome.strip {
-                self.draw_strip(&mut d, strip);
+                self.draw_strip(&mut d, strip, chrome.bar.touch);
             }
             self.draw_popup(&mut d, chrome, textures, frame.ui.hints);
             if let Some((loupe, picture)) = magnified {
@@ -567,10 +564,11 @@ impl MapEditor {
     /// map's name with a `*` while edited where the bar has the room, the
     /// five category buttons or the TOOLS button they fold into, the
     /// eraser, UNDO, REDO, FILE, MAP, FIT, CHECK, the clear flag, PLAY HERE
-    /// and PLAY.
+    /// and PLAY - every button in one box (`chrome::button_box`) and by one
+    /// rule of colours (`Face`), its words at one size.
     fn draw_bar(&self, d: &mut impl RaylibDraw, bar: &Bar, textures: &EditorTextures) {
         d.draw_rectangle_rec(bar.strip, BAR_FILL);
-        let small = BAR_SMALL_TEXT;
+        let touch = bar.touch;
         let text_y = |r: Rectangle| (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
         if let Some(r) = bar.label {
             d.draw_text(&text().get(keys::EDITOR_BUILD), r.x as i32, text_y(r), HUD_TEXT_SIZE, BUILD_ACCENT);
@@ -581,72 +579,62 @@ impl MapEditor {
         match &bar.tools {
             BarTools::Categories(buttons) => {
                 for (category, button) in Category::ALL.into_iter().zip(buttons) {
-                    self.draw_category_button(d, button, textures, category, bar.touch);
+                    self.draw_category_button(d, button, textures, category, touch);
                 }
             }
-            BarTools::Folded(r) => self.draw_tools_button(d, *r, textures, bar.touch),
+            BarTools::Folded(r) => self.draw_tools_button(d, *r, textures, touch),
         }
         if let Some(r) = bar.brush {
-            self.draw_brush_button(d, r, bar.touch);
+            self.draw_brush_button(d, r, touch);
         }
 
-        let erase = icon_rect(bar.erase, bar.touch, 4.0);
-        draw_tool_icon(d, textures, self.map.theme, Tool::Eraser, erase);
-        if self.active_tool == Tool::Eraser {
-            active_outline(d, bar.erase.x as i32, bar.erase.y as i32, (bar.erase.width - SMALL_BOX_INSET) as i32, bar.erase.height as i32, BUILD_ACCENT);
-        }
+        let erase = button_box(bar.erase, touch);
+        draw_box(d, erase, Face::IDLE.in_force(self.active_tool == Tool::Eraser));
+        draw_tool_icon(d, textures, self.map.theme, Tool::Eraser, icon_box(erase, false));
 
-        let undo_color = if self.history.undo_depth() > 0 { TEXT } else { DIM };
-        draw_small_button(d, bar.undo, &text().get(keys::EDITOR_UNDO), undo_color, small);
-        let redo_color = if self.history.redo_depth() > 0 { TEXT } else { DIM };
-        draw_small_button(d, bar.redo, &text().get(keys::EDITOR_REDO), redo_color, small);
+        let undo = Face::able(self.history.undo_depth() > 0);
+        draw_word_button(d, bar.undo, touch, &text().get(keys::EDITOR_UNDO), undo);
+        let redo = Face::able(self.history.redo_depth() > 0);
+        draw_word_button(d, bar.redo, touch, &text().get(keys::EDITOR_REDO), redo);
 
         let file_open = matches!(self.popup, Some(Popup::File | Popup::Load { .. } | Popup::Save { .. }));
-        draw_menu_button(d, bar.file, &text().get(keys::EDITOR_FILE), file_open);
-        draw_menu_button(d, bar.map, &text().get(keys::EDITOR_MAP), matches!(self.popup, Some(Popup::Settings { .. })));
+        draw_menu_button(d, bar.file, touch, &text().get(keys::EDITOR_FILE), Face::IDLE.open(file_open));
+        let map_open = matches!(self.popup, Some(Popup::Settings { .. }));
+        draw_menu_button(d, bar.map, touch, &text().get(keys::EDITOR_MAP), Face::IDLE.open(map_open));
         // FIT, dim while the whole canvas is what is shown.
-        let fit_color = if self.camera.is_fit() { DIM } else { TEXT };
-        draw_small_button(d, bar.fit, &text().get(keys::EDITOR_FIT), fit_color, small);
-        // CHECK, in the accent while its panel is open.
-        let check_color = if matches!(self.popup, Some(Popup::Lint { .. })) { BUILD_ACCENT } else { TEXT };
-        draw_small_button(d, bar.check, &text().get(keys::EDITOR_CHECK), check_color, small);
-        draw_clear_readout(d, bar.clear, self.par(), small);
+        draw_word_button(d, bar.fit, touch, &text().get(keys::EDITOR_FIT), Face::able(!self.camera.is_fit()));
+        let check_open = matches!(self.popup, Some(Popup::Lint { .. }));
+        draw_word_button(d, bar.check, touch, &text().get(keys::EDITOR_CHECK), Face::IDLE.open(check_open));
+        draw_clear_readout(d, bar.clear, self.par(), BAR_SMALL_TEXT);
 
-        // PLAY HERE beside PLAY, drawn as PLAY is: its amber, its box and
-        // its text size.
-        crate::render::hud::draw_slot_button(d, bar.here, &text().get(keys::EDITOR_PLAY_HERE), BUILD_ACCENT);
-        crate::render::hud::draw_slot_button(d, bar.play, &text().get(keys::BUTTON_PLAY), BUILD_ACCENT);
+        draw_word_button(d, bar.here, touch, &text().get(keys::EDITOR_PLAY_HERE), Face::ACTION);
+        draw_word_button(d, bar.play, touch, &text().get(keys::BUTTON_PLAY), Face::ACTION);
     }
 
-    /// One category button: the current tool's icon in its icon half and
-    /// a caret at the right end of its drawn box, outlined in the accent
-    /// while the active brush is one of its tools. The tool's name is in
-    /// the status line.
+    /// One category button: its box, the current tool's icon at its left
+    /// end and a caret at its right, outlined in the amber while the
+    /// active brush is one of its tools and washed while its list is up.
+    /// The tool's name is in the status line.
     fn draw_category_button(&self, d: &mut impl RaylibDraw, button: &CategoryButton, textures: &EditorTextures, category: Category, touch: bool) {
-        let rect = button.rect;
+        let open = matches!(self.popup, Some(Popup::Dropdown(c)) if c == category);
+        let face = Face::IDLE.open(open).in_force(self.active_category() == Some(category));
+        let icon = draw_menu_box(d, button.rect, touch, face);
         let tool = self.current_tool(category);
-        let icon = icon_rect(button.icon, touch, 0.0);
         draw_tool_icon(d, textures, self.map.theme, tool, icon);
         if self.singleton_placed(tool) {
             draw_badge(d, icon.x + icon.width, icon.y);
-        }
-        let open = matches!(self.popup, Some(Popup::Dropdown(c)) if c == category);
-        let caret_color = if open { BUILD_ACCENT } else { DIM };
-        let caret_x = (rect.x + rect.width - BUTTON_GAP) as i32 - CARET_W;
-        draw_caret(d, caret_x, (rect.y + (rect.height - CARET_W as f32) / 2.0) as i32, caret_color);
-        if self.active_category() == Some(category) {
-            active_outline(d, rect.x as i32, rect.y as i32, (rect.width - BUTTON_GAP) as i32, rect.height as i32, BUILD_ACCENT);
         }
     }
 
     /// The TOOLS button the categories and BRUSH fold into: the brush's
     /// icon - the select tool's while it is the brush, or while the eraser
     /// is the brush the tool it came from - and a caret, outlined in the
-    /// accent while a tool from the palette is the brush.
+    /// amber while a tool from the palette is the brush.
     fn draw_tools_button(&self, d: &mut impl RaylibDraw, rect: Rectangle, textures: &EditorTextures, touch: bool) {
-        let zone = Rectangle::new(rect.x, rect.y, rect.height.min(rect.width - BUTTON_GAP - CARET_W as f32), rect.height);
-        let icon = icon_rect(zone, touch, 0.0);
         let selecting = self.active_tool == Tool::Select;
+        let open = matches!(self.popup, Some(Popup::Palette));
+        let face = Face::IDLE.open(open).in_force(self.active_category().is_some() || selecting);
+        let icon = draw_menu_box(d, rect, touch, face);
         if selecting {
             draw_brush_icon(d, BrushRow::Select, icon, TEXT);
         } else {
@@ -656,26 +644,16 @@ impl MapEditor {
                 draw_badge(d, icon.x + icon.width, icon.y);
             }
         }
-        let open = matches!(self.popup, Some(Popup::Palette));
-        let caret_x = (rect.x + rect.width - BUTTON_GAP) as i32 - CARET_W;
-        draw_caret(d, caret_x, (rect.y + (rect.height - CARET_W as f32) / 2.0) as i32, if open { BUILD_ACCENT } else { DIM });
-        if self.active_category().is_some() || selecting {
-            active_outline(d, rect.x as i32, rect.y as i32, (rect.width - BUTTON_GAP) as i32, rect.height as i32, BUILD_ACCENT);
-        }
     }
 
     /// BRUSH: the picture of what a press on the canvas does - the brush's
-    /// shape, or the select tool - and a caret, outlined in the accent while
+    /// shape, or the select tool - and a caret, outlined in the amber while
     /// the select tool is the brush.
     fn draw_brush_button(&self, d: &mut impl RaylibDraw, rect: Rectangle, touch: bool) {
-        let zone = Rectangle::new(rect.x, rect.y, rect.height.min(rect.width - BUTTON_GAP - CARET_W as f32), rect.height);
-        draw_brush_icon(d, self.brush_shown(), icon_rect(zone, touch, 0.0), TEXT);
         let open = matches!(self.popup, Some(Popup::Brush | Popup::Stamps { .. }));
-        let caret_x = (rect.x + rect.width - BUTTON_GAP) as i32 - CARET_W;
-        draw_caret(d, caret_x, (rect.y + (rect.height - CARET_W as f32) / 2.0) as i32, if open { BUILD_ACCENT } else { DIM });
-        if self.tool() == Tool::Select {
-            active_outline(d, rect.x as i32, rect.y as i32, (rect.width - BUTTON_GAP) as i32, rect.height as i32, BUILD_ACCENT);
-        }
+        let face = Face::IDLE.open(open).in_force(self.tool() == Tool::Select);
+        let icon = draw_menu_box(d, rect, touch, face);
+        draw_brush_icon(d, self.brush_shown(), icon, TEXT);
     }
 
     /// Whether a row of BRUSH's list is the one in force: the brush's
@@ -732,22 +710,21 @@ impl MapEditor {
         }
     }
 
-    /// The select tool's strip under the bar: its plate and its buttons -
-    /// a word's in the bar's small buttons' style, a flip's a picture - a
-    /// dim one where it cannot act, PLACE in the accent.
-    fn draw_strip(&self, d: &mut impl RaylibDraw, strip: &Strip) {
+    /// The select tool's strip under the bar: its plate and its buttons,
+    /// drawn as the bar's are - a word's, or a flip's picture -, a dim one
+    /// where it cannot act, PLACE in the amber.
+    fn draw_strip(&self, d: &mut impl RaylibDraw, strip: &Strip, touch: bool) {
         crate::render::hud::draw_plate(d, strip.panel, crate::render::hud::PLATE_EDGE, 1.0);
-        let small = BAR_SMALL_TEXT;
         for slot in &strip.slots {
-            let color = match (slot.enabled, slot.button) {
-                (false, _) => DIM,
-                (true, StripButton::Place) => BUILD_ACCENT,
-                (true, _) => TEXT,
+            let face = match (slot.enabled, slot.button) {
+                (false, _) => Face::DIM,
+                (true, StripButton::Place) => Face::ACTION,
+                (true, _) => Face::IDLE,
             };
             match slot.button {
-                StripButton::FlipH => draw_flip_button(d, slot.rect, Axis::Horizontal, color),
-                StripButton::FlipV => draw_flip_button(d, slot.rect, Axis::Vertical, color),
-                button => draw_small_button(d, slot.rect, &strip_label(button), color, small),
+                StripButton::FlipH => draw_flip_button(d, slot.rect, touch, Axis::Horizontal, face),
+                StripButton::FlipV => draw_flip_button(d, slot.rect, touch, Axis::Vertical, face),
+                button => draw_word_button(d, slot.rect, touch, &strip_label(button), face),
             }
         }
     }
@@ -771,8 +748,8 @@ impl MapEditor {
                 // The name's end, where it is being typed, stays in view.
                 let typed = tail_fit(&format!("{name}_"), chrome::SAVE_NAME_W, 18);
                 d.draw_text(&typed, (panel.x + 12.0) as i32, (panel.y + 34.0) as i32, 18, TEXT);
-                let color = if name.is_empty() { DIM } else { BUILD_ACCENT };
-                draw_small_button(d, chrome::save_button(panel, touch), &text().get(keys::FILE_SAVE), color, BAR_SMALL_TEXT);
+                let face = if name.is_empty() { Face::DIM } else { Face::ACTION };
+                draw_word_button(d, chrome::save_button(panel, touch), touch, &text().get(keys::FILE_SAVE), face);
                 let hint = text().get(hints.pick(keys::EDITOR_SAVE_HINT, keys::EDITOR_SAVE_HINT_TOUCH));
                 d.draw_text(&hint, (panel.x + 12.0) as i32, (panel.y + 58.0) as i32, UI_SMALL_TEXT, Color::GRAY);
             }
@@ -1338,16 +1315,6 @@ fn draw_pager(d: &mut impl RaylibDraw, row: Rectangle, hint: &str, back: bool, n
     d.draw_text(hint, hint_x as i32, (row.y + (row.height - UI_SMALL_TEXT as f32) / 2.0) as i32, UI_SMALL_TEXT, DIM);
 }
 
-/// Where a bar icon is drawn in `zone`, a button or a category button's
-/// icon half: with a mouse a 32 pt icon box, `x` in from the zone's left;
-/// on a touch screen a 40 pt one centred in it, so the sprite is drawn its
-/// own 32 pt (`draw_tool_icon` insets by 4).
-fn icon_rect(zone: Rectangle, touch: bool, x: f32) -> Rectangle {
-    let side = if touch { ICON_PX + 8.0 } else { ICON_PX };
-    let left = if touch { zone.x + (zone.width - side) / 2.0 } else { zone.x + x };
-    Rectangle::new(left, zone.y + ((zone.height - side) / 2.0).floor(), side, side)
-}
-
 /// Where a finding is, as its row says it: the map cell under its first
 /// cell's middle - what the cursor readout would name there - and how
 /// many more it covers. Numbers only, so no language has to say it.
@@ -1359,17 +1326,6 @@ fn place_text(cells: &[LintCell]) -> String {
         1 => format!("{col},{row}"),
         n => format!("{col},{row} +{}", n - 1),
     }
-}
-
-/// The outline marking the active category/eraser: 2 px, inset one
-/// block from the bar's top and bottom edges, like the play bar's live
-/// weapon slot.
-fn active_outline(d: &mut impl RaylibDraw, x: i32, y: i32, w: i32, h: i32, color: Color) {
-    d.draw_rectangle_lines_ex(
-        Rectangle::new((x - 2) as f32, (y + 2) as f32, (w + 4) as f32, (h - 6) as f32),
-        2.0,
-        color,
-    );
 }
 
 /// A down-pointing caret of 2 px blocks, 10 px wide, its top-left at
@@ -1385,29 +1341,98 @@ fn draw_badge(d: &mut impl RaylibDraw, right: f32, top: f32) {
     d.draw_circle((right - 5.0) as i32, (top + 5.0) as i32, 4.0, Color::LIME);
 }
 
-/// FILE / MAP: an outlined button with its label and a caret, the label
-/// in the accent while its menu is open.
-fn draw_menu_button(d: &mut impl RaylibDraw, rect: Rectangle, label: &str, open: bool) {
-    let color = if open { BUILD_ACCENT } else { TEXT };
-    d.draw_rectangle_rounded_lines_ex(
-        Rectangle::new(rect.x, rect.y + 4.0, rect.width - MENU_BOX_INSET, rect.height - 8.0),
-        0.2,
-        EDITOR_PANEL_SEGMENTS,
-        1.0,
-        Color::new(255, 255, 255, 60),
-    );
-    let text_y = (rect.y + (rect.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
-    d.draw_text(label, rect.x as i32 + 6, text_y, HUD_TEXT_SIZE, color);
-    draw_caret(d, rect.x as i32 + 48, (rect.y + (rect.height - 6.0) / 2.0) as i32, color);
+/// How a button of the bar, the select tool's strip or the Save prompt
+/// is drawn: one box for all of them (`chrome::button_box`, its outline
+/// `chrome::BOX_EDGE` of square corners, as play's corner buttons are
+/// framed) and one rule for its colours - the outline and the word or
+/// picture in it in one colour each, washed while its popup is up.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Face {
+    edge: Color,
+    ink: Color,
+    wash: bool,
 }
 
-/// An outlined bar button with its label centred in it in `size`: UNDO,
-/// REDO, FIT, CHECK (`chrome::BAR_SMALL_TEXT`).
-fn draw_small_button(d: &mut impl RaylibDraw, rect: Rectangle, text: &str, color: Color, size: i32) {
-    let inset = Rectangle::new(rect.x, rect.y + 4.0, rect.width - SMALL_BOX_INSET, rect.height - 8.0);
-    d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
-    let w = text_width(text, size);
-    d.draw_text(text, (inset.x + (inset.width - w) / 2.0) as i32, (rect.y + (rect.height - size as f32) / 2.0) as i32, size, color);
+/// A button that can act: a quiet outline round a word in the text colour.
+const EDGE: Color = Color::new(255, 255, 255, 70);
+/// A button that cannot act now: an outline fainter still round a dim word.
+const EDGE_DIM: Color = Color::new(255, 255, 255, 30);
+/// What a button is washed with while its popup is up, as a list's row in
+/// force is.
+const WASH: Color = Color::new(255, 255, 255, 40);
+
+impl Face {
+    /// A button that can act.
+    const IDLE: Face = Face { edge: EDGE, ink: TEXT, wash: false };
+    /// A button that cannot act now: UNDO with nothing to undo, FIT at FIT,
+    /// COPY with nothing selected, SAVE with no name.
+    const DIM: Face = Face { edge: EDGE_DIM, ink: DIM, wash: false };
+    /// What leaves the builder for a round, or settles what is held: PLAY,
+    /// PLAY HERE, PLACE, SAVE - outline and word in the builder's amber, as
+    /// play's corner draws BUILD.
+    const ACTION: Face = Face { edge: BUILD_ACCENT, ink: BUILD_ACCENT, wash: false };
+
+    /// `IDLE` where the button can act, else `DIM`.
+    fn able(can: bool) -> Face {
+        if can { Face::IDLE } else { Face::DIM }
+    }
+
+    /// Washed while the button's popup is up.
+    fn open(self, open: bool) -> Face {
+        Face { wash: self.wash || open, ..self }
+    }
+
+    /// Outlined in the amber while the brush the button holds is the one in
+    /// force: a category's tool, the eraser, the select tool.
+    fn in_force(self, on: bool) -> Face {
+        if on { Face { edge: BUILD_ACCENT, ..self } } else { self }
+    }
+}
+
+/// A button's box in `face`: washed while its popup is up, then outlined.
+fn draw_box(d: &mut impl RaylibDraw, bx: Rectangle, face: Face) {
+    if face.wash {
+        d.draw_rectangle_rec(bx, WASH);
+    }
+    d.draw_rectangle_lines_ex(bx, BOX_EDGE, face.edge);
+}
+
+/// Where a word stands in `bx`: centred between `left` and `right`, and
+/// top to bottom, at the bar's one size.
+fn word_at(bx: Rectangle, left: f32, right: f32, word: &str) -> (i32, i32) {
+    let w = text_width(word, BAR_SMALL_TEXT);
+    ((left + (right - left - w) / 2.0).round() as i32, (bx.y + (bx.height - BAR_SMALL_TEXT as f32) / 2.0) as i32)
+}
+
+/// A word's button in `slot`: UNDO, REDO, FIT, CHECK, PLAY HERE, PLAY, the
+/// strip's words and the Save prompt's SAVE.
+fn draw_word_button(d: &mut impl RaylibDraw, slot: Rectangle, touch: bool, word: &str, face: Face) {
+    let bx = button_box(slot, touch);
+    draw_box(d, bx, face);
+    let (x, y) = word_at(bx, bx.x, bx.x + bx.width, word);
+    d.draw_text(word, x, y, BAR_SMALL_TEXT, face.ink);
+}
+
+/// A button opening a popup in `slot`: its box and its caret at the right
+/// end; the icon box before the caret (`chrome::icon_box`) for the caller
+/// to draw into. The category buttons, BRUSH and TOOLS.
+fn draw_menu_box(d: &mut impl RaylibDraw, slot: Rectangle, touch: bool, face: Face) -> Rectangle {
+    let bx = button_box(slot, touch);
+    draw_box(d, bx, face);
+    let caret = caret_at(bx);
+    draw_caret(d, caret.x as i32, caret.y as i32, DIM);
+    icon_box(bx, true)
+}
+
+/// FILE / MAP: a word's button opening a menu, the word centred in the
+/// room before the caret.
+fn draw_menu_button(d: &mut impl RaylibDraw, slot: Rectangle, touch: bool, word: &str, face: Face) {
+    let bx = button_box(slot, touch);
+    draw_box(d, bx, face);
+    let caret = caret_at(bx);
+    let (x, y) = word_at(bx, bx.x + BOX_EDGE + BOX_PAD, caret.x - CARET_GAP, word);
+    d.draw_text(word, x, y, BAR_SMALL_TEXT, face.ink);
+    draw_caret(d, caret.x as i32, caret.y as i32, DIM);
 }
 
 /// Draw a rounded, bordered, drop-shadowed panel background - shared by
@@ -1851,20 +1876,19 @@ fn strip_label(button: StripButton) -> String {
     button.label_key().map(|key| text().get(key)).unwrap_or_default()
 }
 
-/// A flip's strip button: the small buttons' outline round a picture of
-/// whole 2 pt blocks - two arrowheads pointing away from a bar between
-/// them, left and right for `Axis::Horizontal`, up and down for
-/// `Axis::Vertical`.
-fn draw_flip_button(d: &mut impl RaylibDraw, rect: Rectangle, axis: Axis, color: Color) {
-    let inset = Rectangle::new(rect.x, rect.y + 4.0, rect.width - SMALL_BOX_INSET, rect.height - 8.0);
-    d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
-    let (cx, cy) = ((inset.x + inset.width / 2.0).round(), (inset.y + inset.height / 2.0).round());
+/// A flip's strip button: a button's box round a picture of whole 2 pt
+/// blocks - two arrowheads pointing away from a bar between them, left and
+/// right for `Axis::Horizontal`, up and down for `Axis::Vertical`.
+fn draw_flip_button(d: &mut impl RaylibDraw, slot: Rectangle, touch: bool, axis: Axis, face: Face) {
+    let bx = button_box(slot, touch);
+    draw_box(d, bx, face);
+    let (cx, cy) = ((bx.x + bx.width / 2.0).round(), (bx.y + bx.height / 2.0).round());
     let mut block = |along: f32, across: f32, w: f32, h: f32| {
         let r = match axis {
             Axis::Horizontal => Rectangle::new(cx + along, cy + across, w, h),
             Axis::Vertical => Rectangle::new(cx + across, cy + along, h, w),
         };
-        d.draw_rectangle_rec(r, color);
+        d.draw_rectangle_rec(r, face.ink);
     };
     // The bar, then each arrowhead's three columns, widest at the bar.
     block(-1.0, -8.0, 2.0, 16.0);
@@ -2140,25 +2164,52 @@ mod bar_tests {
     use super::*;
 
     /// A category button's icon and caret, with a mouse and on a touch
-    /// screen: the icon inside the icon half, the caret clear of it and
-    /// inside the button's drawn box, at the 38 pt a desktop's bar draws
-    /// it at with a mouse, the icon centred top to bottom in the bar.
+    /// screen: the icon inside the icon half and inside the button's drawn
+    /// box, the caret clear of it in the list half and inside the box, at
+    /// the 38 pt a desktop's bar draws it at with a mouse, the icon
+    /// centred top to bottom in the bar.
     #[test]
     fn a_category_buttons_icon_and_caret_stay_in_their_halves() {
         for touch in [false, true] {
             let ui = crate::hud::UiFrame::new((1600.0, 900.0), 1.0, 1.0, crate::hud::Insets::default(), touch);
             let bar = Bar::of(&ui);
             let button = bar.category(Category::Wall).expect("a wide bar has the five");
-            let icon = icon_rect(button.icon, touch, 0.0);
-            let caret_x = button.rect.x + button.rect.width - BUTTON_GAP - CARET_W as f32;
+            let bx = button_box(button.rect, touch);
+            let icon = icon_box(bx, true);
+            let caret = caret_at(bx);
             assert!(icon.x >= button.icon.x && icon.x + icon.width <= button.icon.x + button.icon.width, "touch={touch}: {icon:?}");
-            assert!(icon.y >= button.rect.y && icon.y + icon.height <= button.rect.y + button.rect.height, "touch={touch}: {icon:?}");
-            assert!(caret_x >= icon.x + icon.width, "touch={touch}: the caret overlaps the icon");
-            assert!(caret_x + CARET_W as f32 <= button.rect.x + button.rect.width - BUTTON_GAP, "touch={touch}: the caret leaves the button");
+            assert!(icon.y >= bx.y && icon.y + icon.height <= bx.y + bx.height, "touch={touch}: {icon:?}");
+            assert!(caret.x >= icon.x + icon.width && caret.x >= button.list.x, "touch={touch}: the caret overlaps the icon");
+            assert!(caret.x + chrome::CARET_W <= bx.x + bx.width - BOX_EDGE, "touch={touch}: the caret leaves the button");
             if !touch {
-                assert_eq!(caret_x - button.rect.x, 38.0);
+                assert_eq!(caret.x - button.rect.x, 38.0);
                 let y = button.rect.y + (crate::HUD_BAR_HEIGHT as f32 - ICON_PX) / 2.0;
                 assert_eq!(icon, Rectangle::new(button.rect.x, y, ICON_PX, ICON_PX));
+            }
+        }
+    }
+
+    /// Every button of the bar is drawn in one box: as tall as every
+    /// other, at the same height in the bar, its slot less the same gap -
+    /// with a mouse and on a touch screen, folded or not.
+    #[test]
+    fn every_bar_button_is_drawn_in_one_box() {
+        for touch in [false, true] {
+            for width in [1600.0, 720.0] {
+                let ui = crate::hud::UiFrame::new((width, 900.0), 1.0, 1.0, crate::hud::Insets::default(), touch);
+                let bar = Bar::of(&ui);
+                let mut slots = vec![bar.erase, bar.undo, bar.redo, bar.file, bar.map, bar.fit, bar.check, bar.here, bar.play];
+                match &bar.tools {
+                    BarTools::Categories(buttons) => slots.extend(buttons.iter().map(|b| b.rect)),
+                    BarTools::Folded(r) => slots.push(*r),
+                }
+                slots.extend(bar.brush);
+                let first = button_box(slots[0], touch);
+                for slot in slots {
+                    let bx = button_box(slot, touch);
+                    assert_eq!((bx.y, bx.height), (first.y, first.height), "touch={touch} width={width}: {slot:?}");
+                    assert_eq!(slot.width - bx.width, chrome::BOX_GAP);
+                }
             }
         }
     }

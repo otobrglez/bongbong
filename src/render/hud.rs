@@ -1,6 +1,5 @@
 //! Drawing the HUD - the two corner clusters and their buttons, the
-//! builder bar's mode button, the banners, the dialogs and the end screen,
-//! all in UI points - and the slot tables the clusters' rows are laid out
+//! banners, the dialogs and the end screen, all in UI points - and the slot tables the clusters' rows are laid out
 //! from (`hud.rs` owns the model, the shared colours and sizes, and every
 //! rect the hit tests read).
 
@@ -524,13 +523,6 @@ fn draw_level_button(d: &mut impl RaylibDraw, r: Rectangle, number: usize, open:
     d.draw_text(&number, x + word_w + LEVEL_BUTTON_WORD_GAP, number_y, HUD_TEXT_SIZE, amber);
 }
 
-/// An outlined bar slot with its label centred, in `color`: the builder
-/// bar's mode button, `PLAY` (`editor::Bar::play`).
-pub fn draw_slot_button(d: &mut impl RaylibDraw, r: Rectangle, label: &str, color: Color) {
-    d.draw_rectangle_lines_ex(Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0), 2.0, color);
-    let text_w = width(label, HUD_TEXT_SIZE);
-    d.draw_text(label, (r.x + (r.width - text_w as f32) / 2.0) as i32, (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, color);
-}
 
 /// The dialog panel both questions share: shadow, rounded fill, outline,
 /// a 28 px title and a 16 px line under it, both centred by `text::width`.
