@@ -1089,13 +1089,55 @@ offline branch).
   stands when it reboots (`TankTrack::rejoin`) - the coast is the pulse's
   doing, not the AI's. A tank waiting outside a danger (`kept out`,
   `TankSnapshot::kept_out`) is a deliberate hold in `HOLDS`.
-- **The bar**: every crate and armed run within the defaults' ceilings,
-  `offbox-fire` 0. An exceedance is read round by round from its `ANOMALY`
-  lines; one the EMP's own action causes - a tank stranded, spinning,
-  jittering on a danger's edge, piling up, or firing from off the box - is
-  fixed, not re-baselined. Recorded here in Phase 2: the totals at the
-  defaults, with the crate, armed by day, armed at night and with the
-  commander, and what moved.
+- **The bar**: `offbox-fire` 0 in every run; an exceedance is read round
+  by round from its `ANOMALY` lines, and one the EMP's own action causes
+  is fixed, not re-baselined.
+
+**Recorded 2026-10-07** (debug build, `--rounds 10 --seed 1000`; the
+fixtures at 1800 frames, the fields at 3600; totals over the 9 fixtures
+and the 7 field maps, with each kind per 10 minutes of round in brackets
+where the rounds ran longer than the defaults'):
+
+| Run | Fixtures | Fields |
+|---|---|---|
+| Defaults | border-stuck 4, jitter 32, spin 3, churn 34, clustering 10, pile-up 6 - every map's output byte for byte the base's (`238a0ec`) | border-stuck 11, jitter 108, spin 24, churn 83, clustering 12, wall-grind 1, pile-up 8 - byte for byte the base's |
+| `--crate emp_burst` | as the defaults (the fixtures have no weapon slot) | stall 3, border-stuck 11, jitter 124, spin 27, churn 100, clustering 35, wall-grind 1, low-progress 4, never-arrived 1, tank-grind 3, pile-up 17 over 24.9 min of round against 18.9 |
+| Mix: chance 0.5, EMP share 0.5 | low-progress 2, spin 7 (4.3), clustering 35 (21.3), pile-up 17 (10.4) over 16.4 min against 11.1 | never-arrived 1, tank-grind 1, spin 19 (8.1), clustering 24 (10.2), pile-up 15 (6.4) over 23.4 min |
+| Every enemy armed, by day | stall 2 (0.5), never-arrived 1 (0.2), tank-grind 1 (0.2), spin 13 (3.1), clustering 48 (11.3), pile-up 31 (7.3) over 42.5 min | stall 2 (0.3), never-arrived 12 (2.1), tank-grind 12 (2.1), spin 74 (12.7), clustering 116 (19.9), pile-up 78 (13.4) over 58.4 min |
+| Every enemy armed, night | never-arrived 2 (0.5), tank-grind 2 (0.5), spin 17 (4.4), pile-up 18 (4.7) | never-arrived 18 (3.5), tank-grind 1 (0.2), spin 64 (12.3), pile-up 36 (6.9) |
+| Every enemy armed, commander on | stall 1 (0.2), tank-grind 2 (0.5), spin 14 (3.3), pile-up 29 (6.9) | never-arrived 12 (2.1), tank-grind 7 (1.2), spin 46 (8.1), pile-up 78 (13.7) |
+| Control: every enemy on the hammer, by day | stall 1 (0.3), tank-grind 5 (1.3), spin 19 (5.0), pile-up 21 (5.5) | stall 11 (2.2), never-arrived 11 (2.2), tank-grind 21 (4.2), spin 61 (12.1), pile-up 77 (15.3) |
+| Control: the hammer at night | stall 4 (1.1), tank-grind 2 (0.5), spin 15 (4.0), pile-up 32 (8.4) | stall 9 (1.8), never-arrived 21 (4.2), tank-grind 6 (1.2), spin 70 (13.9), pile-up 45 (8.9) |
+
+What moved, and why:
+
+- **The armed runs' rounds run to the frame cap.** A tank whose special
+  its own rule fires is a tank the generic tiers never fire, so a pack
+  that carries nothing else cannot hurt an AFK seat it has no reason to
+  pulse - by day a bare seat outside every ring - nor the frog (a pulse
+  is nothing to a frog): the rounds last three to four times the
+  defaults', and a round that long gathers the pre-existing kinds - a
+  fleeing tank pressed into wrecks (tank-grind, low-progress), a guard on
+  its beat or a tank its alerts lost (never-arrived), a pack jostling.
+  Per minute of round, every kind is at or under the hammer's in the same
+  setting (the control rows, the weapon already merged), and spin under
+  the defaults on the fields. Read round by round, none of the stalls,
+  grinds or never-arriveds left is an EMP action: they are flee, guard,
+  seek and chase tiers.
+- **What the EMP's own AI did, and was fixed** (decisions 15 and 26): a
+  tank backing out of an armed seat's danger drove through it (the dodge
+  went through steering's commitment, which never turns back) and hunted
+  its edge (its way out swung with its facing at the seat it steered for,
+  and off the field by the field's edge); a pack of EMP tanks each holding
+  its pulse for the others pressed in and stalled (stall 5 and tank-grind
+  3 on the mix's fixtures, now 0 and 0); an ally turning round at a
+  crackle's edge and back spun (now it stops in the berth).
+- **Clustering and pile-up** rise with the EMP's design: an EMP carrier
+  with nothing in its ring holds its attack post lined up and does not
+  fire (by day a bare seat is not worth the approach), so the pack behind
+  it stacks up; with the commander on, the clearing nudges allies about
+  instead. Per minute they sit at the hammer's control.
+- `offbox-fire` 0 in every run, armed ones included.
 
 ## 12. Interactions, decisions, what is left out
 
@@ -1236,6 +1278,33 @@ offline branch).
     `OUT_OF_ITS_HANDS`, `Predictor::offline_left` read by the one gate in
     `pull_trigger`, and the strike walk's blocks - each a row or a variant
     a later weapon adds rather than a new code path.
+26. **A pulse held for allies clears its ring with or without the
+    commander, and the clearer fights on meanwhile**: its held pulse is a
+    danger its allies keep out of. Built as the doc first had it - with
+    the commander off, the tank simply held its fire; with it on, it held
+    still for the nudges - a pack of EMP tanks round a seat each held for
+    the others, pressed in and stalled, and two clearers in each other's
+    ring would never have moved. Rejected: firing into allies (decision 3
+    keeps the pulse blind; the AI is the one that avoids it).
+27. **An ally's crackle has a slack band** (`Danger::slack`, its berth): a
+    tank in it stops rather than turning round, since the crackle is over
+    in half a second.
+28. **The sag is 15 degrees, not 8**: at 8 the screenshots showed it only
+    under a close zoom.
+
+### Questions for Oto
+
+1. **An EMP enemy is quiet by day against a seat that keeps away.** With
+    the approach at 2, an EMP carrier holds its attack post outside a
+    bare seat's ring and fires nothing (its trigger is the EMP), so a
+    player who never comes within five cells by day meets a tank that
+    neither shoots nor closes. That is the rule as reviewed (fire at 1,
+    approach at 2); `emp_ai_approach_value` 1 makes every closer go
+    looking. Keep 2?
+2. Decisions 2, 3, 6, 7 and 18 (no Faraday cage, a blind pulse, duds,
+    the posts only at night, the cobalt crate - see
+    `09-crates-row.png`) stand as reviewed; the crate screenshot is the
+    one decision 18 asked for.
 
 ### Not in this PR
 
