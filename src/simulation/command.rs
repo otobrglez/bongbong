@@ -593,16 +593,24 @@ mod tests {
         assert!(nudge(7).is_none(), "one backing out of the ring on its own is left to it");
     }
 
-    /// A disabled unit is deaf: it never gives way and is never ordered to
-    /// (`Skipped::deaf`).
+    /// A disabled unit is deaf, and a unit holding a gauss rail's charge on
+    /// its lane keeps it (docs/gauss-rail.md "With the commander"): neither
+    /// gives way, and neither is nudged out of a clearer's ring.
     #[test]
-    fn a_disabled_unit_never_gives_way() {
-        let c = Commander::default();
-        let mut down = unit(1, 0.0, 0.0);
-        down.busy = Some(Busy::Disabled);
-        let other = unit(2, 30.0, 200.0);
-        assert!(!c.gives_way(&down, &other), "the disabled one does not yield");
-        assert!(c.gives_way(&other, &down), "the other does");
+    fn a_busy_unit_never_gives_way_nor_is_nudged() {
+        for busy in [Busy::Disabled, Busy::Charging] {
+            let mut c = Commander::default();
+            let mut held = unit(1, 0.0, 0.0);
+            held.busy = Some(busy);
+            let other = unit(2, 30.0, 200.0);
+            assert!(!c.gives_way(&held, &other), "{busy:?}: it does not yield");
+            assert!(c.gives_way(&other, &held), "{busy:?}: the other does");
+            let mut clearer = unit(3, 40.0, 0.0);
+            clearer.clearing = Some(176.0);
+            let ctx = CommandCtx { dt: 1.0 / 60.0, blocked: &|_, _| false };
+            c.clear_rings(&[clearer, held], &ctx);
+            assert!(!c.orders.contains_key(&1), "{busy:?}: never nudged");
+        }
     }
 
     #[test]

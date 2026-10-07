@@ -336,6 +336,23 @@ fn a_tower_in_the_lane_takes_the_slugs_damage_and_the_slug_flies_on() {
     assert!(damage(&game, behind) > 0.0);
 }
 
+/// A gun tower takes a seat's slug and stands - the one tile a slug may
+/// leave standing - and the slug flies on, a tower's keep off its damage.
+#[test]
+fn a_gun_tower_survives_a_seats_slug_and_the_slug_flies_on() {
+    let mut game = round("cells.\"8,6\" = { kind = \"gun_tower\", side = \"enemy\" }\n");
+    let behind = parked(&mut game, Position::new(700.0, 192.0));
+    let events = charge(&mut game, full_ticks());
+    let t = Tuning::DEFAULT;
+    let hit = events.iter().find_map(|e| match *e {
+        Event::Hit { target: HitTarget::Obstacle { material: Material::GunTower }, damage, killed, .. } => Some((damage, killed)),
+        _ => None,
+    });
+    assert_eq!(hit, Some((t.gauss_damage, false)), "the slug's damage, and it stands");
+    assert!(!events.iter().any(|e| matches!(e, Event::ObstacleDestroyed { material: Material::GunTower, .. })));
+    assert!((damage(&game, behind) - t.gauss_damage * t.gauss_pierce_keep).abs() < 0.5, "{}", damage(&game, behind));
+}
+
 /// Sandbags, fences, trees and lamp posts in the lane go down - no roll.
 #[test]
 fn sandbags_fences_trees_and_lamp_posts_in_the_lane_go_down() {
@@ -850,19 +867,6 @@ fn enemies_step_out_of_a_charging_seats_lane_and_do_not_step_back() {
     assert!(out_at.is_some_and(|i| i < 80), "out of the lane: {out_at:?}");
 }
 
-/// The commander never orders a charging tank.
-#[test]
-fn a_charging_tank_is_busy_to_the_commander() {
-    let mut tank = Tank { gauss_slugs: 2, owner: Owner::Enemy(4), ..Tank::default() };
-    assert_eq!(tank.step_charge(true, true, DT, true, None), crate::tank::ChargeEdge::Started);
-    assert!(tank.charge.is_some());
-    // `enemy_phase` hands it to the commander as `Busy::Charging`, whom
-    // `deconflict` and `clear_rings` never order (`command_tests`).
-    let _ = super::command::Busy::Charging;
-}
-
-
-
 /// An enemy charging a rail whose slug would go through the seat - through
 /// brick, further than any shot's range - is a lane threat to it; facing
 /// away, or with iron between, it is not.
@@ -924,6 +928,69 @@ fn a_door_stops_even_an_overcharged_slug() {
     let events = charge(&mut game, over);
     assert!(events.iter().any(|e| matches!(*e, Event::RailSlug { overcharged: true, .. })));
     assert_eq!(damage(&game, behind), 0.0);
+}
+
+/// A volcano's cone stops even an overcharged slug: the leg ends at the
+/// cone's first cell and nothing past it is touched.
+#[test]
+fn a_volcanos_cone_stops_even_an_overcharged_slug() {
+    let t = tuning();
+    // The crater at (12, 6): its cone reaches two cells either way along
+    // the row, its west face at cell 10.
+    let mut game = round("cells.\"12,6\" = { kind = \"volcano\" }\n");
+    let behind = parked(&mut game, Position::new(900.0, 192.0));
+    let over = crate::tank::ticks_of(t.gauss_charge_seconds + t.gauss_overcharge_seconds) + 1;
+    let events = charge(&mut game, over);
+    let (end, pierced) = rail_slugs(&events)
+        .iter()
+        .find_map(|e| match **e {
+            Event::RailSlug { x1, overcharged: true, ref pierced, .. } => Some((x1, pierced.len())),
+            _ => None,
+        })
+        .expect("an overcharged slug");
+    assert!(end <= 10.0 * 32.0 && end > 9.0 * 32.0, "at the cone's west face: {end}");
+    assert_eq!(pierced, 0, "nothing on open ground before it");
+    assert_eq!(damage(&game, behind), 0.0);
+}
+
+/// A seat's slug through a teammate in its lane hits it as any shot does:
+/// `friendly_fire_damage_factor` of it, through the teammate's armour.
+#[test]
+fn a_seats_slug_through_a_teammate_is_friendly_fire() {
+    let mut game = round_with("", 2);
+    let mate = game.seat(1).expect("a second seat");
+    game.place_tank(mate, Position::new(400.0, 192.0), Some(0.0)).unwrap();
+    let before = damage(&game, mate);
+    let events = charge(&mut game, full_ticks());
+    let t = Tuning::DEFAULT;
+    let want = (t.gauss_damage * t.friendly_fire_damage_factor * t.player_armor_factor).min(MAX_DAMAGE);
+    assert!((damage(&game, mate) - before - want).abs() < 0.5, "{} against {want}", damage(&game, mate) - before);
+    assert!(events.iter().any(|e| matches!(e, Event::Hit { target: HitTarget::Player { player: 1 }, cause: HitCause::Rail, .. })));
+}
+
+/// An enemy's slug is used on the seat whose sight box it stands in, and
+/// goes on through a second seat further down the lane whose box it stands
+/// outside (decision 2): both are hit, the shot is the first's.
+#[test]
+fn an_enemys_slug_used_on_one_seat_goes_on_through_the_next() {
+    let mut game = round_with("", 2);
+    let (near, far) = (seat(&game), game.seat(1).expect("a second seat"));
+    game.place_tank(near, Position::new(480.0, 192.0), Some(90.0)).unwrap();
+    game.place_tank(far, Position::new(96.0, 192.0), Some(90.0)).unwrap();
+    let enemy = rail_enemy(&mut game, Position::new(700.0, 192.0));
+    let (half_w, _) = tuning().sight_box_half_px();
+    assert!(700.0 - 96.0 > half_w && 700.0 - 480.0 < half_w, "outside the far seat's box, inside the near one's");
+    let slot = slot_of(&game, enemy);
+    let mut seen = Vec::new();
+    for _ in 0..400 {
+        seen.extend(step(&mut game, false));
+        if fired(&seen, slot) {
+            break;
+        }
+    }
+    assert!(fired(&seen, slot), "it fires at the near seat");
+    assert_eq!(game.world.get::<&Ai>(enemy).unwrap().shot_at_seat(), Some(0), "used on the near seat");
+    assert!(damage(&game, near) > 0.0 && damage(&game, far) > 0.0, "and the slug goes on through the far one");
 }
 
 /// A sonic hammer's shove mid-charge keeps the charge: the skid carries the

@@ -1183,6 +1183,9 @@ number read off the defaults):
   `the_recoil_slides_about_a_cell_and_a_heavy_chassis_less`,
   `a_drum_in_the_lane_goes_off_and_the_slug_flies_on`,
   `a_tower_in_the_lane_takes_the_slugs_damage_and_the_slug_flies_on`,
+  `a_gun_tower_survives_a_seats_slug_and_the_slug_flies_on`,
+  `a_volcanos_cone_stops_even_an_overcharged_slug`,
+  `a_seats_slug_through_a_teammate_is_friendly_fire`,
   `sandbags_fences_trees_and_lamp_posts_in_the_lane_go_down`,
   `a_rainbow_shield_soaks_one_slug_and_the_slug_flies_on`,
   `a_frog_in_the_lane_takes_frog_damage_and_does_not_hop`,
@@ -1213,8 +1216,10 @@ number read off the defaults):
   `a_hunter_rails_its_quarry`,
   `enemies_step_out_of_a_charging_seats_lane_and_do_not_step_back`,
   `enemies_wait_at_the_edge_of_a_lane_rather_than_cross_it`,
-  `a_charging_tank_is_busy_to_the_commander`,
-  `a_charging_rails_lane_through_cover_warns_the_seat`.
+  `a_charging_rails_lane_through_cover_warns_the_seat`,
+  `an_enemys_slug_used_on_one_seat_goes_on_through_the_next`; and
+  `command::tests::a_busy_unit_never_gives_way_nor_is_nudged` (a
+  charging unit as a disabled one).
 
 Shared path and presentation:
 
@@ -1247,6 +1252,9 @@ Wire:
   the authority's `update`, to a hundredth of a pixel every tick through a
   charge, a release and its recoil),
   `a_replay_carries_a_charge_from_the_rooms_count`.
+- `lagcomp_tests`: `a_slug_from_a_seat_drawing_the_past_goes_through_where_the_enemy_was`
+  and `the_same_slug_with_no_view_goes_past_the_enemy` (the rewound boxes),
+  `an_owned_seat_is_not_told_its_rail_recoil_but_is_allowed_it`.
 - `rig.rs`: `a_seats_slug_reaches_the_replica_once` and
   `an_enemys_rail_reaches_the_replica` (`Lockstep`),
   `an_own_slug_is_drawn_on_the_release_and_never_twice` (a threaded rig

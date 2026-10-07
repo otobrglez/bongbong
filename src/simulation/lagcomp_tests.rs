@@ -240,6 +240,53 @@ fn the_same_laser_with_no_view_goes_past_the_enemy() {
     assert!(beam_end > enemy_home().x + 64.0, "the beam runs on to the far wall: {beam_end}");
 }
 
+/// Hold the enemy on the line while the seat charges its gauss rail to
+/// full, then jump it off just before the release; the slug is judged
+/// with the seat drawing `behind` ticks back (0: no view at all). Where
+/// the enemy was hit, and the leg's end.
+fn slug_after_the_enemy_left(behind: u64) -> (Option<Position>, f32) {
+    let mut game = game();
+    game.debug_set_tank(0, &debug::TankPatch { gauss_slugs: Some(2), ..Default::default() }).expect("seat 0");
+    let home = enemy_home();
+    let full = crate::tank::ticks_of(tuning().gauss_charge_seconds) as usize;
+    for _ in 0..full.max(WARMUP_TICKS) {
+        place_enemy(&mut game, home);
+        step(&mut game, fire());
+    }
+    place_enemy(&mut game, Position::new(home.x, home.y + 96.0));
+    if behind > 0 {
+        view_behind(&mut game, behind);
+    }
+    step(&mut game, Input::default());
+    let end = game
+        .events()
+        .iter()
+        .find_map(|e| match e {
+            Event::RailSlug { x1, seat: 0, leg: 0, .. } => Some(*x1),
+            _ => None,
+        })
+        .expect("the seat fired its slug");
+    assert!(!line_crosses(&enemy_boxes(&game)), "the enemy stands off the line when the slug goes out");
+    (enemy_hit(&game), end)
+}
+
+/// A slug is judged against the enemies the seat's client drew, as a laser
+/// is (docs/gauss-rail.md "The pierce list"): the enemy it saw on the line
+/// is hit where it stood, and the slug goes on through to the far edge.
+#[test]
+fn a_slug_from_a_seat_drawing_the_past_goes_through_where_the_enemy_was() {
+    let (hit, end) = slug_after_the_enemy_left(BEHIND);
+    let hit = hit.expect("the slug goes through the enemy the client drew");
+    assert!((hit.y - line_y()).abs() < 1.0);
+    assert!(end > enemy_home().x + 64.0, "and on past it: {end}");
+}
+
+#[test]
+fn the_same_slug_with_no_view_goes_past_the_enemy() {
+    let (hit, _) = slug_after_the_enemy_left(0);
+    assert_eq!(hit, None);
+}
+
 #[test]
 fn a_shot_a_shield_turns_back_is_judged_in_the_present() {
     let mut game = game();
@@ -417,6 +464,29 @@ fn an_owned_seat_is_not_told_the_recoil_its_client_applies() {
         let (_, _, v) = game.seat_motion(0).expect("seat 0");
         assert!(v.x < 0.0, "{weapon:?}: the room's hull is kicked back along the barrel, which points east: {v:?}");
     }
+}
+
+/// A gauss rail's recoil is the client's to kick on the release
+/// (docs/gauss-rail.md "Online"): no `Shoved` for it, but the room's copy
+/// of the hull is knocked and the pose validator allows the owned hull the
+/// knock's speed.
+#[test]
+fn an_owned_seat_is_not_told_its_rail_recoil_but_is_allowed_it() {
+    let mut game = game();
+    park_enemy_far(&mut game);
+    game.debug_set_tank(0, &debug::TankPatch { gauss_slugs: Some(2), ..Default::default() }).expect("seat 0");
+    step(&mut game, Input::default());
+    for _ in 0..crate::tank::ticks_of(tuning().gauss_charge_seconds) {
+        own_seat(&mut game);
+        step(&mut game, fire());
+    }
+    own_seat(&mut game);
+    step(&mut game, Input::default());
+    assert!(seat_fired(&game, crate::tank::ActiveWeapon::GaussRail), "the rail fired: {:?}", game.events());
+    assert!(shoves(&game).is_empty(), "{:?}", shoves(&game));
+    let (_, _, v) = game.seat_motion(0).expect("seat 0");
+    assert!(v.x < 0.0, "the room's hull is knocked back along the barrel, which points east: {v:?}");
+    assert!(game.seat_knock[0].speed > 0.0, "and its knock allowed the owned hull: {:?}", game.seat_knock[0]);
 }
 
 #[test]
