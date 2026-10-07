@@ -1171,9 +1171,11 @@ Protocol 18 (from the rail's 17), once in the PR.
   `air_targets` by key; the towers' arcs and picks in cell order, targets
   by distance then key; the strike walks of the EMP, the hammer and the
   rail put air targets after everything they already strike, by key.
-- **The AI**: `fpv_rule` chooses by fixed priority; `pick_lock`,
-  `cover_spot` and `tree_spot` tie on slot or cell index; `act_air`'s break
-  ties in `Dir::ALL` order; `air_threats` is built in slot order.
+- **The AI**: `fpv_rule` chooses by fixed priority; `pick_lock` ties on
+  slot, the cover and tree searches (a breadth-first walk) on steps, then
+  distance, then cell index; `act_air`'s break ties in a fixed order;
+  `fpv_senses` and `air_threats` walk the world in hecs order but every
+  choice they make ties on slot or cell, and `BTreeMap`s key the results.
 - **The swap** is the hammer's hash; the new entry runs only with its share
   above 0.
 - **A round without the swarm replays byte for byte**: no crate kind is
@@ -1183,10 +1185,10 @@ Protocol 18 (from the rail's 17), once in the PR.
   history's air list are all empty), `air_threats` is empty (the `air` tier
   a `false` with no state touched), no sense is built, `side_blast` is
   `side_blast_sparing` with nothing spared, the shared id counter is drawn
-  only by what it always was. The rank renumbering in the sweep keeps every
-  existing tie's order. `determinism_tests`' pinned streams, the probe
-  fixtures' ceilings and every thumbnail pin but the armory's stay as they
-  are.
+  only by what it always was. The ground sweep is untouched (the air is a
+  sweep of its own). `determinism_tests`' pinned streams, the probe
+  fixtures' and fields' outputs (byte for byte the rail's reviewed head's,
+  §11) and every thumbnail pin but the armory's stay as they are.
 
 ## 10. Tests
 
@@ -1305,7 +1307,7 @@ Wire:
 | Rainbow shield | Soaks a burst's damage; does not stop the drone |
 | Heat shield, speed boost, ooze coat | Nothing; a boosted tank still does not outrun a drone in the cruise |
 | Portals | Flown over; a locked target that teleports is lost |
-| Water, ice | Flown over; a burst on water splashes and scorches nothing; wash is spray over water |
+| Water, ice | Flown over; a burst on water splashes and scorches nothing |
 | Night, storm, fog | The lamps throw light, so a drone reads in the dark; an enemy launches only at a seat within its sight under the sky |
 | Rain, snow | Nothing |
 | Sandstorm gusts | Carry drones in the cruise and the dive: dives land downwind |
@@ -1319,7 +1321,7 @@ Wire:
 | Shells, plasma, lasers, flames, missiles, grenades | Pass under; none touch a drone |
 | Wrecks | A wreck's halo falls; a drone locked on a tank that is wrecked dives where it was |
 | Field maps | The sight box binds every launch and every air defence decision; a far coasting tank launches nothing and does not react; a wave tank that spawned with drones carries its halo in |
-| The couch and its split | Each seat's drones lock in its own box and blink in its colour; drawn in both halves' worlds; incoming arrows shared |
+| The couch and its split | Each seat's drones lock in its own box and blink in its colour; drawn in both halves' worlds; the shared screen's incoming arrows are the first seat's |
 | Training | `drop = ["fpv_swarm"]` works by its name; a dummy never launches |
 | The C2 commander | Nothing: drones are not units; a tank holding to watch is an ordinary unit |
 | Online | §8 |
@@ -1344,7 +1346,7 @@ Wire:
 | An enemy EMP's value of a seat with drones | `emp_ai_special_value`, like any online special |
 | A disabled enemy targeted by a seat's drone | Does not react (it does not think) |
 | The predictor's `offline_left` | A press during it is not a launch |
-| The dangers | A cover spot and a tree spot are kept out of every danger |
+| The dangers | A cover spot and a back-off point are kept out of every danger the tank does not own |
 
 ### Interactions with the gauss rail (built here)
 
@@ -1353,7 +1355,7 @@ Wire:
 | A slug's lane crosses a drone's strike box | It is pierced and downed (`Pierced::Drone`, `by: Rail`), any side; the slug keeps its damage past it |
 | A drone's burst on a charging tank | Hurts it; the charge holds (a hit does not lapse it) |
 | The `air` tier and a charge | A charging tank does not break for a drone |
-| The client's drawn slug | Pierces the drawn drones (`rail_trace`); the room's `DroneDowned` is the drone's fate |
+| The client's drawn slug | Drawn through the drones; the room's `DroneDowned` is each one's fate |
 | A charging rail's lane and a cover spot | A cover spot inside a lane danger is not taken |
 
 ### Decisions taken
@@ -1433,9 +1435,11 @@ Wire:
 20. **A teleporting target is lost**: a portal is a way to shake a drone.
 21. **A gust carries drones**: the sandstorm's one effect on them.
 22. **The crate cooks off**: six charges.
-23. **Crate ink signal crimson** (`#FF2D5F`), the one non-green gap left.
-    *For Oto*, with a screenshot of the crate beside the other sixteen in
-    Phase 2; the two-tone stands by.
+23. **Crate ink: two-tone ivory and crimson** (§5, "The crate"): crimson
+    alone read as the health cross beside the sixteen crates as they now
+    stand, and every other loud hue left sits on a neighbour; a white X
+    with red lights is a pattern no other crate has. Settled on the
+    side-by-side render (`target/devshots/fpv-crate-row.png`). *For Oto.*
 24. **The module is a relay on the roof hardpoint**, which it shares with
     the missiles, the grenade launcher, the hammer and the EMP.
 25. **A disabled tank's halo settles and lifts again, its stock kept**: the
@@ -1445,6 +1449,26 @@ Wire:
 27. **A seat's press with nothing lockable dives on the aim point**, even
     with a tree-covered enemy in the box - BB-40 read literally; the
     seat aims at the tree itself to break it.
+28. **A drone up at cruise height is drawn in blocks twice the size**: an
+    8 px quad over a 40 px tank read as a speck on the screenshots, not a
+    threat; up high it is nearer the eye, as a missile grows with its
+    height, so it grows past 24 px on the climb and shrinks back in the
+    dive. *For Oto.*
+29. **Moving for a place to launch from has a patience**
+    (`fpv_ai_cover_seconds`, backing off and cover together), and the cover
+    and the tree spot are searched by walk, not by line: the probe found a
+    tank in a hedge maze, one in tight corridors and one on an archipelago
+    driving to a place it never reached, drones unflown (§11).
+30. **A drone launched at a seat or the players' frog counts as the
+    probe's arrival**: a swarm tank fights from inside the box, out of the
+    seat's face, which is further than the attack range the probe measures
+    arrival by.
+31. **A downed drone's event names its ground point**, whatever struck it,
+    and the cause's own hit is the cause's (a bullet's impact where it
+    crossed the column, the tesla's bolt to the drone as drawn).
+32. **A client's own bullets stop at drawn drones** of the other side, as
+    the room's sweep has them; whether the drone comes down is the room's
+    word.
 
 ### Not in this PR
 
@@ -1468,38 +1492,43 @@ Wire:
 - The gravity well's pull on drones - BB-42 adds its arm on the air
   targets (§3.3).
 - A probe scenario in which the seat fires its special.
+- A rail drawn on the press piercing the drawn drones: the room's
+  `DroneDowned` brings them down a round trip later.
+- A server-side test playing a launch through whole `OnlineRound`s over
+  `NativeTransport` (`server/tests/round.rs`); the client's path is held by
+  `round.rs`'s and the rig's tests, and the room server treats the drones
+  as one more family in the snapshot it encodes once.
+- The burst's damage: 8 at the centre (§1) - a moving tank takes about a
+  quarter of it, so six drones are harassment rather than a kill on their
+  own. As designed; a feel question for Oto (§11's rounds run long).
 
-### Needs from the shared path
+### What this PR added to the shared path
 
-What this design takes from the hammer's, the EMP's and the rail's
-implementations beyond what their docs give:
+The doc's "Needs" from the hammer's, the EMP's and the rail's
+implementations, as built here, general:
 
-1. **`SpecialUse` open to a `Launch` with a want**, `act_special` applying
-   it as `Fire` and recording `Ai::air_want`, and the one place in
-   `enemy_phase`'s collect pass where a trigger meets the simulation (the
-   rail's need 8) handing it to the tank before `dispatch_fire`.
-2. **`Ai::think` taking one more per-frame perception** (`threat`) beside
-   `sense` and `dangers`, kept on the `Brain`, and the tier list open to a
-   tier above `special` that defers to `Tank::windup`.
-3. **`Trigger::Press` for the swarm** (the rail's `Trigger`), and
-   `Tank::special_down` gating a launch the way it gates every special.
-4. **`presses_drawn` claiming per kind through `WireEvent::press_show`**
-   (the swarm's is `DroneLaunched` with a seat), and the round able to read
-   a claimed event's payload (the drone's id) - `presses_drawn` returning
-   the claimed events' indices with their kinds.
-5. **`PressShow` open to a show that lives past its frame** - the round
-   keeps a drawn launch until its handover - and `Game::draw_press_show(seat,
-   ..)` for the launch's one-frame part (the wash ring and the module's
-   flash).
-6. **The strike walks open to an air arm after their last**:
-   `tick_sonic_waves` (after the grenades), `tick_emp_pulses` (after the
-   missiles - the EMP's doc already keeps the place), the rail's pierce
-   walk (`Terrain::pierce_rewound`'s candidates and `Pierced`), and
-   `PresentWorld::rail_trace`.
-7. **`ArrowKind`'s never-dropped set** (the tell's) open to `Drone`.
-8. **The probe's holds and its off-box readings** open to the swarm's
-   holds and its lock (`TankSnapshot::special_why` among them).
-9. **The predictor's local offline** (the EMP's `offline_left`) read by
-   every arm's gate, so a press in an offline is not a launch.
-10. **The armory's reserved cell 7,10** for this crate, and the free cells
-    30,15, 3,6, 4,6, 29,2, 30,2 and 5,15 left free.
+1. **`SpecialUse::Launch { want, at_seat, why }`**, `act_special`
+   applying it as `Fire` and recording `Ai::air_want`, which `enemy_phase`
+   hands the tank (`Tank::fpv_want`) right before `enemy_trigger`.
+2. **A per-frame perception set on the `Ai` before it thinks**
+   (`Ai::air_threat`, as `Ai::grudge` is), and a tier above `special` that
+   defers to `Tank::windup`.
+3. **`Trigger::Press` for the swarm**; `Tank::special_down` gates a launch
+   as it gates every special (and the predictor's `seat_arms`, offline
+   included).
+4. **`Show::presses_drawn` readable by the round** (`pub(crate)`): the
+   claimed events' indices, from which the round reads the claimed
+   `DroneLaunched`'s id.
+5. **A press show that lives past its frame**: the round keeps its own
+   drawn launches (`OwnDrone`) and the replica's helpers to draw them
+   (`add_drone`, `remove_drones`, `set_seat_lifting`, `flash_seat_fpv`).
+6. **The strike walks' air arms**: the sonic wave's cone, the EMP's ring
+   (after the missiles) and the rail's lane (`Terrain::air_along`,
+   `Pierced::Drone`); `PresentWorld::air_contact`.
+7. **`ArrowKind::Drone`** in the never-dropped set.
+8. **The probe's `air` hold** (`TankSnapshot::air_hold`), its drone-lock
+   readings beside the missiles', and a launch as arrival.
+9. **`SpecialUse::Approach`'s `why`**, so the trace tells a closer from a
+   tank making for cover or backing off.
+10. **The armory's cell 7,10** taken; 30,15, 3,6, 4,6, 29,2, 30,2 and 5,15
+    used; 7,12 and 7,14 left for weapons 5 and 6.

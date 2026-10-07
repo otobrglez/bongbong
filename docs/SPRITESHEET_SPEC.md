@@ -9,8 +9,8 @@ change the design and export again (§9).
 |---|---|---|
 | `static/scifi_tanks_sheet.png` | 1320 × 2400 | the paint: 33 columns × 60 rows of 40 × 40 cells |
 | `static/scifi_tanks_glow.png` | 1320 × 2400 | the light layer, the same layout |
-| `static/tank_modules.png` | 1600 × 480 | the weapon modules: 40 columns × 12 rows |
-| `static/tank_modules_glow.png` | 1600 × 480 | their light layer |
+| `static/tank_modules.png` | 1760 × 480 | the weapon modules: 44 columns × 12 rows |
+| `static/tank_modules_glow.png` | 1760 × 480 | their light layer |
 | `src/tank_art.rs` | — | the anchors the engine reads: lamps, muzzles, tube mouths (§7) |
 
 Exact palette PNGs - every colour the art uses in the palette, alpha in
@@ -164,6 +164,7 @@ the shared pivot:
 | 24–27 | sonic hammer | idle, two wind-up cells (the tell), the blast; an acoustic dish on the roof hardpoint (docs/sonic-hammer.md) |
 | 28–32 | EMP burst | armed (the core's lamp dim), two crackle cells (the tell: the left, then the right half of the windings lit), the pulse (the whole ring lit), offline (the windings scorched, the core dark); a toroid coil of brass windings on a 7 x 6 plinth on the roof hardpoint (docs/emp-burst.md); its centre is `tank_art::EMP_COIL` |
 | 33–39 | gauss rail | idle (the charge cells dark), one to four cells lit (the charge filling), full (the cells white, the rails' inner edges lit), the shot (the rails white, the cells dark); a capacitor block with four cells and two rails with a bore between them on the laser's cheek, which it shares since a tank carries one special at a time (docs/gauss-rail.md); its bore is `tank_art::RAIL_MUZZLE` |
+| 40–43 | FPV swarm | armed (the screen dark, the link lamp dim), linked (the screen lit, the lamp white - alternating with armed at 4 Hz while one of its drones is up), the launch (the screen and the antenna white), offline (the screen dark, the antenna scorched, no lamp); a ground-control relay on the roof hardpoint - a squat gunmetal box with the FPV feed's screen on top and a panel antenna across its front (docs/fpv-swarm.md); the drones leave the halo, so it has no anchor |
 
 A module is hardware, not a firing-mode indicator: `module_cols` draws one
 for every special weapon the tank carries, in the order above, over the
