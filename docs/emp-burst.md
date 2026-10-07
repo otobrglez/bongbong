@@ -140,7 +140,8 @@ enemies by slot), towers (cell order), missiles (id order).
   that fuse's glow), shells, bullets, plasma bolts and laser beams already
   fired, flying drums, lava bombs and globs, drum fuses, ground fires,
   oil, ooze, the volcano and the lava, water and ice, trees, tall grass,
-  tiles of every kind, wrecks (their embers glow on), fish, tread marks.
+  tiles of every kind (a range board too), wrecks (their embers glow on),
+  fish, tread marks.
 
 ### An enemy struck: brain off
 
@@ -903,7 +904,7 @@ over every shipped language).
 
 ## 8. Wire
 
-Protocol 16 (from the hammer's 15), once in the PR.
+Protocol 17 (from the hammer's 16), once in the PR.
 
 - `WeaponKind::Emp`, appended to `ALL`; `drawn_on_press` true.
 - `WireEvent::EmpPulse { slot: u16, x: i16, y: i16 }` - the pivot in
@@ -1007,6 +1008,8 @@ field with the seat at (3, 6) facing east and enemies placed by hand):
   struck before a far one; a hull whose box's nearest point is past the
   reach is not.
 - `walls_do_not_stop_the_pulse` - an enemy behind iron struck.
+- `a_range_board_in_the_ring_is_left_alone` - an enemy behind a board
+  struck, the board whole.
 - `a_struck_enemy_coasts_on_its_last_intent_and_reboots` - the intent it
   had when the ring reached it, the trigger released, `AiSnapshot::down`,
   its fire timer frozen; after the outage it thinks again with no stuck
@@ -1232,6 +1235,7 @@ brain) - a scratch build, not in the tree:
 | Shells, bullets, plasma, the laser, the flamethrower's jet already out, grenades | Left alone; a held flame goes out on its tank |
 | Frogs (both sides) | Left alone: organic |
 | Crates, drums, fires, oil, ooze, glass, walls, trees, grass | Left alone |
+| Range boards (docs/range-target-prd.md) | Left alone: a board is wood and paint, nothing electric, and the ring passes it as it passes every tile |
 | Lava, the volcano | Crossed; a coasting enemy can drive into a lava ford or a hot bank and burn |
 | Field maps | The sight box binds the pulse whole; a disabled far tank coasts, is not woken and is not rerolled; the director feels a popped shield as a seat's loss |
 | Waves | A wave tank rolling in is not struck; a disabled wave tank still counts toward the wave |
@@ -1490,6 +1494,6 @@ gave - all of it done in this PR:
    ticks as the clearing takes.
 8. **The armory's reserved cell 7,4** for this crate, and the map's
    free cells 29,7, 31,16, 11,4 and 25,10 - now the EMP's.
-9. **`SPAWN_SWAPS`** gains its entry, and the protocol goes to 16.
+9. **`SPAWN_SWAPS`** gains its entry, and the protocol goes to 17.
 10. **The armory's north pieces a row or two lower** (decision 33), the
     hammer's doc and the thumbnail pin with them.

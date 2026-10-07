@@ -168,6 +168,20 @@ fn walls_do_not_stop_the_pulse() {
     assert!(tank(&game, behind, |tk| tk.is_disabled()));
 }
 
+/// A range board is nothing electric: the ring passes it and leaves it
+/// whole.
+#[test]
+fn a_range_board_in_the_ring_is_left_alone() {
+    let mut game = round("cells.\"5,6\" = { kind = \"target\" }\n");
+    let behind = parked(&mut game, Position::new(SEAT.x + 128.0, SEAT.y));
+    let events = pulse(&mut game, 20);
+    assert!(tank(&game, behind, |tk| tk.is_disabled()), "what stands behind a board is struck");
+    let mut boards = game.world.query::<&crate::obstacle::Obstacle>();
+    let board = boards.iter().find(|o| o.material == crate::obstacle::Material::Target).expect("the board stands");
+    assert!(!board.destroyed && !board.burning && board.health >= board.max_health, "the board takes nothing");
+    assert!(!events.iter().any(|e| matches!(e, Event::ObstacleDestroyed { .. })));
+}
+
 /// A struck enemy coasts on the intent it had - the trigger released, its
 /// brain off, its clocks frozen - and reboots when the outage ends, its
 /// stuck clock cleared.
