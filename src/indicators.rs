@@ -2062,6 +2062,27 @@ mod indicator_tests {
         assert!(!kinds(&ind).iter().any(|k| matches!(k, ArrowKind::Volcano { .. })));
     }
 
+    /// An enemy winding up a special off the screen gets an arrow of its
+    /// own whatever the cap - and one in grass is shown by its wind-up -
+    /// with the tell's progress on it; on the screen it gets none.
+    #[test]
+    fn a_tell_off_the_screen_has_an_arrow_whatever_the_cap() {
+        let mut t = Tuning::DEFAULT;
+        t.indicator_max_arrows = 1;
+        let mut telling = enemy(7, 200.0, 700.0);
+        telling.tell = Some((ActiveWeapon::SonicHammer, 0.4));
+        telling.in_grass = true;
+        let s = scene(1.0, vec![enemy(5, 900.0, 150.0), enemy(6, 950.0, 400.0), telling]);
+        let ind = Awareness::new().frame(&s, &screen(), &t);
+        let tell = ind.arrows.iter().find(|a| matches!(a.kind, ArrowKind::Tell { .. })).expect("a tell arrow");
+        assert_eq!(tell.kind, ArrowKind::Tell { weapon: ActiveWeapon::SonicHammer, progress: 0.4 });
+        assert_eq!(tell.place.edge, Edge::Bottom);
+        telling.pos = Position::new(250.0, 200.0);
+        let s = scene(1.0, vec![telling]);
+        let ind = Awareness::new().frame(&s, &screen(), &t);
+        assert!(!kinds(&ind).iter().any(|k| matches!(k, ArrowKind::Tell { .. })), "on the screen it is in sight");
+    }
+
     /// The arrow stops where the line from the tank leaves the inset
     /// rectangle, on the edge it leaves through.
     #[test]

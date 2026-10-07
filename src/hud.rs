@@ -1613,6 +1613,11 @@ mod hud_tests {
         assert_eq!(laser.color, HUD_LASER_COLOR, "no shells while a special is carried");
         tank.laser_charges = 0;
         assert_eq!(WeaponSlot::of(&tank).count, 7, "spent, back to the shells");
+        tank.take_weapon(ActiveWeapon::SonicHammer);
+        let sonic = WeaponSlot::of(&tank);
+        assert_eq!((sonic.weapon, sonic.count, sonic.full), (ActiveWeapon::SonicHammer, t.sonic_ammo_per_pickup, t.sonic_ammo_per_pickup));
+        assert_eq!(sonic.color, HUD_SONIC_COLOR);
+        assert_eq!(weapon_pickup(ActiveWeapon::SonicHammer), Some(crate::pickup::PickupKind::SonicHammer), "its crate's symbol");
     }
 
     /// The block is the local seat's, whichever seat that is, and the

@@ -2437,6 +2437,118 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
         assert_eq!(plain.muzzle_flashes.len(), 2, "a replica that predicts nothing ripples both");
     }
 
+    /// The seat's tank in `game`, armed with the hammer.
+    fn hammer_seat(game: &mut Game) {
+        let patch = crate::simulation::debug::TankPatch { sonic_ammo: Some(3), ..Default::default() };
+        game.debug_set_tank(0, &patch).expect("the seat's tank");
+    }
+
+    /// A seat's blast reaches the replica as its `SonicBlast`: the replica
+    /// casts the same cone from the same pivot and runs the wave out on
+    /// its own clock.
+    #[test]
+    fn a_sonic_blast_reaches_the_replica() {
+        let mut game = quiet_round(DEFAULT_MAP, 0xB0B5, 0);
+        hammer_seat(&mut game);
+        let mut replica = welcome_through_the_codec(&game);
+        let (w, h) = game.map.field_size();
+        game.update(Input::single(Intent { fire: true, ..Intent::default() }), PHYSICS_FIXED_DT, w, h);
+        let wire = enc::snapshot(&game, [0; MAX_SEATS]);
+        assert!(wire.events.iter().any(|e| matches!(e, WireEvent::SonicBlast { slot: 0, .. })), "the blast is on the wire");
+        let Msg::Snapshot(wire) = decode(&encode(&Msg::Snapshot(wire))).expect("decodes") else { panic!("kind") };
+        snapshot(&mut replica, &wire);
+        assert_eq!(replica.sonic_waves.len(), 1, "the replica draws the wave");
+        let (server, client) = (&game.sonic_waves[0].cone, &replica.sonic_waves[0].cone);
+        assert!(server.origin.distance_to(client.origin) <= 0.25 && server.facing == client.facing);
+        assert_eq!(server.rays, client.rays, "the same cone against the same tiles");
+        let life = tuning().sonic_reach_px / tuning().sonic_wave_speed + tuning().sonic_wave_seconds;
+        for _ in 0..((life / PHYSICS_FIXED_DT) as usize + 2) {
+            replica.tick_presentation(PHYSICS_FIXED_DT);
+        }
+        assert!(replica.sonic_waves.is_empty(), "the wave ran out");
+    }
+
+    /// A blast this client drew on the press is not drawn again when the
+    /// room's `SonicBlast` arrives; one it did not draw is.
+    #[test]
+    fn a_sonic_blast_this_client_drew_is_not_drawn_again() {
+        let game = quiet_round(DEFAULT_MAP, 0xB0B5, 2);
+        let enemy = game.first_enemy_slot() as u16;
+        let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
+        snap.events = vec![
+            WireEvent::Fired { slot: 0, weapon: WeaponKind::SonicHammer, input_tick: 3 },
+            WireEvent::SonicBlast { slot: 0, x: 400, y: 400, dir: 1 },
+            WireEvent::Fired { slot: enemy, weapon: WeaponKind::SonicHammer, input_tick: 0 },
+            WireEvent::SonicBlast { slot: enemy, x: 2400, y: 1200, dir: 3 },
+        ];
+        let mut drawn = welcome_through_the_codec(&game);
+        snapshot_with(&mut drawn, &snap, Show::OwnShotsDrawn { seat: 0, presses: 0b1 });
+        assert_eq!(drawn.sonic_waves.len(), 1, "the enemy's wave alone");
+        assert_eq!(drawn.sonic_waves[0].cone.origin, Position::new(600.0, 300.0));
+        let mut refused = welcome_through_the_codec(&game);
+        snapshot_with(&mut refused, &snap, Show::OwnShotsDrawn { seat: 0, presses: 0 });
+        assert_eq!(refused.sonic_waves.len(), 2, "a press the client did not draw is the room's to draw");
+    }
+
+    /// An enemy's wind-up travels: the replica's tank carries the tell,
+    /// runs it down between snapshots and drops it when the room does.
+    #[test]
+    fn an_enemys_tell_reaches_the_replica() {
+        let game = quiet_round(DEFAULT_MAP, 0xB0B5, 1);
+        let enemy = game.tank_entity_by_slot(game.first_enemy_slot()).expect("an enemy");
+        {
+            let mut tank = game.world.get::<&mut Tank>(enemy).unwrap();
+            tank.disarm();
+            tank.sonic_ammo = 3;
+            tank.tell = Some(crate::tank::Tell { weapon: ActiveWeapon::SonicHammer, left: 0.4, total: 0.55, facing: Dir::Left });
+        }
+        let mut replica = welcome_through_the_codec(&game);
+        snapshot(&mut replica, &enc::snapshot(&game, [0; MAX_SEATS]));
+        let slot = game.first_enemy_slot();
+        let tell = |g: &Game| g.world.query::<&Tank>().iter().find(|t| t.owner_slot() == slot).and_then(|t| t.tell);
+        let shown = tell(&replica).expect("the replica's tank winds up");
+        assert_eq!(shown.weapon, ActiveWeapon::SonicHammer);
+        assert!((shown.left - 0.4).abs() < 0.051, "{}", shown.left);
+        replica.tick_presentation(PHYSICS_FIXED_DT);
+        assert!(tell(&replica).expect("still").left < shown.left, "it runs down on the replica's clock");
+        game.world.get::<&mut Tank>(enemy).unwrap().tell = None;
+        snapshot(&mut replica, &enc::snapshot(&game, [0; MAX_SEATS]));
+        assert!(tell(&replica).is_none(), "and ends with the room's");
+    }
+
+    /// A stunned frog is stunned on the replica: no hop, no bite drawn.
+    #[test]
+    fn a_stunned_frog_reaches_the_replica() {
+        let game = quiet_round(DEFAULT_MAP, 0xB0B5, 0);
+        let frog = game.frog.expect("the default map has a frog");
+        game.world.get::<&mut crate::frog::Frog>(frog).unwrap().stun(1.5);
+        let mut replica = welcome_through_the_codec(&game);
+        snapshot(&mut replica, &enc::snapshot(&game, [0; MAX_SEATS]));
+        let stunned = |g: &Game| g.world.get::<&crate::frog::Frog>(g.frog.unwrap()).unwrap().is_stunned();
+        assert!(stunned(&replica));
+        game.world.get::<&mut crate::frog::Frog>(frog).unwrap().stun_timer = 0.0;
+        snapshot(&mut replica, &enc::snapshot(&game, [0; MAX_SEATS]));
+        assert!(!stunned(&replica), "and comes round with the room's");
+    }
+
+    /// A sonic hit is no shot: the replica puts up no impact flash for it.
+    #[test]
+    fn a_sonic_hit_flashes_no_impact_on_the_replica() {
+        let game = quiet_round(DEFAULT_MAP, 0xB0B5, 2);
+        let mut replica = welcome_through_the_codec(&game);
+        let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
+        snap.events = vec![WireEvent::Hit {
+            target: WireHitTarget::Enemy { slot: 1 },
+            damage: 3.0,
+            killed: false,
+            x: 1600,
+            y: 1600,
+            cause: crate::simulation::HitCause::Sonic,
+        }];
+        snapshot(&mut replica, &snap);
+        assert!(replica.impact_flashes.is_empty());
+    }
+
     #[test]
     fn cell_indices_round_trip() {
         for cols in [1u16, 34, 40, 200] {

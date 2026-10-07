@@ -3334,3 +3334,158 @@ mod separation_tests {
         assert!(pair <= 30, "enemies rammed each other {pair} times; measured 22 here");
     }
 }
+
+/// The sonic hammer's rule (docs/sonic-hammer.md "AI"), one arm at a time
+/// on an open field: what `enemy_phase` measured is handed in as a
+/// `HammerSense`, so the rule is tested without a world.
+#[cfg(test)]
+mod hammer_tests {
+    use super::*;
+    use rand::SeedableRng;
+
+    const ME: Position = Position::new(640.0, 360.0);
+    const SEAT: Position = Position::new(200.0, 360.0);
+
+    /// An enemy facing up with the hammer, its fire timer out.
+    fn hammer_tank() -> Tank {
+        let mut me = Tank { owner: crate::shell::Owner::Enemy(2), ..Tank::default() };
+        me.position = ME;
+        me.rotation = 0.0;
+        me.sonic_ammo = 3;
+        me
+    }
+
+    fn think(ai: &mut Ai, me: &Tank, sense: SpecialSense, walls: [Option<WallAhead>; 4], seat: Position) -> Intent {
+        let mut player = Tank::default();
+        player.position = seat;
+        let grid = Grid::build(1280.0, 720.0, 48.0, 0.0, std::iter::empty());
+        let movers = [
+            Mover { position: seat, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
+            Mover { position: me.position, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
+        ];
+        let mut rng = SmallRng::seed_from_u64(7);
+        ai.think(me, &player, seat, None, 1280.0, 720.0, 1.0 / 60.0, &movers, 1, &grid, &mut rng, None, None, &[], true, true, false, walls, tuning().enemy_view_range, &sense)
+    }
+
+    /// A fresh memory with its fire timer out.
+    fn ready() -> Ai {
+        Ai { fire_timer: 0.0, ..Ai::with_role(Role::Player) }
+    }
+
+    fn sense_left(aim: HammerAim) -> SpecialSense {
+        let mut aims = [HammerAim::default(); 4];
+        aims[Dir::Left.index()] = aim;
+        SpecialSense::Hammer(HammerSense { aims, brawler: false })
+    }
+
+    #[test]
+    fn every_arm_fires_the_way_it_names() {
+        let arms: [(&str, HammerAim); 5] = [
+            ("trouble", HammerAim { trouble: Some(0), ..HammerAim::default() }),
+            ("drum", HammerAim { drum: Some(0), ..HammerAim::default() }),
+            ("flush", HammerAim { flush: Some(0), ..HammerAim::default() }),
+            ("breaker", HammerAim { breaker: Some(0), ..HammerAim::default() }),
+            ("frog", HammerAim { frog: true, ..HammerAim::default() }),
+        ];
+        for (why, aim) in arms {
+            let mut ai = ready();
+            let intent = think(&mut ai, &hammer_tank(), sense_left(aim), [None; 4], SEAT);
+            assert!(intent.fire, "{why}: it pulls the trigger");
+            assert_eq!(intent.face, Some(Dir::Left), "{why}");
+            assert_eq!(ai.special_why, Some(why));
+            assert_eq!(ai.fire_timer, tuning().sonic_ai_fire_interval, "{why}: on the weapon's own interval");
+            // While the timer runs it holds facing the same way, trigger off.
+            let again = think(&mut ai, &hammer_tank(), sense_left(aim), [None; 4], SEAT);
+            assert!(!again.fire && again.face == Some(Dir::Left), "{why}: {again:?}");
+        }
+    }
+
+    #[test]
+    fn the_arms_go_in_order_and_its_own_facing_first() {
+        let mut aims = [HammerAim::default(); 4];
+        aims[Dir::Left.index()] = HammerAim { trouble: Some(0), ..HammerAim::default() };
+        aims[Dir::Up.index()] = HammerAim { breaker: Some(0), ..HammerAim::default() };
+        let mut ai = ready();
+        let intent = think(&mut ai, &hammer_tank(), SpecialSense::Hammer(HammerSense { aims, brawler: false }), [None; 4], SEAT);
+        assert_eq!((intent.face, ai.special_why), (Some(Dir::Left), Some("trouble")), "trouble outranks a breaker");
+        let mut aims = [HammerAim::default(); 4];
+        aims[Dir::Left.index()] = HammerAim { breaker: Some(0), ..HammerAim::default() };
+        aims[Dir::Up.index()] = HammerAim { breaker: Some(0), ..HammerAim::default() };
+        let mut ai = ready();
+        let intent = think(&mut ai, &hammer_tank(), SpecialSense::Hammer(HammerSense { aims, brawler: false }), [None; 4], SEAT);
+        assert_eq!(intent.face, Some(Dir::Up), "the same arm both ways: the way it already faces");
+    }
+
+    #[test]
+    fn it_never_fires_where_a_fellow_enemy_stands() {
+        let mut ai = ready();
+        let aim = HammerAim { trouble: Some(0), breaker: Some(0), friend: true, ..HammerAim::default() };
+        for _ in 0..120 {
+            let intent = think(&mut ai, &hammer_tank(), sense_left(aim), [None; 4], SEAT);
+            assert!(!intent.fire, "{intent:?}");
+        }
+    }
+
+    /// The generic tiers never pull the trigger on a weapon its rule owns:
+    /// lined up on a seat in range with nothing in the sense, it does not
+    /// fire, where the same tank on shells does.
+    #[test]
+    fn the_generic_tiers_never_fire_the_hammer() {
+        let seat = Position::new(ME.x - 200.0, ME.y);
+        let (mut hammer_fired, mut shell_fired) = (false, false);
+        let (mut a, mut b) = (ready(), ready());
+        let mut shells = hammer_tank();
+        shells.sonic_ammo = 0;
+        shells.rotation = 270.0;
+        let mut hammer = hammer_tank();
+        hammer.rotation = 270.0;
+        let none = SpecialSense::Hammer(HammerSense::default());
+        for _ in 0..240 {
+            hammer_fired |= think(&mut a, &hammer, none, [None; 4], seat).fire;
+            shell_fired |= think(&mut b, &shells, SpecialSense::None, [None; 4], seat).fire;
+        }
+        assert!(shell_fired, "the shells tank fires");
+        assert!(!hammer_fired, "the hammer tank does not");
+    }
+
+    #[test]
+    fn only_the_brawler_closes_in() {
+        let seat = Position::new(ME.x - 200.0, ME.y);
+        let mut ai = ready();
+        let brawler = SpecialSense::Hammer(HammerSense { brawler: true, ..HammerSense::default() });
+        let intent = think(&mut ai, &hammer_tank(), brawler, [None; 4], seat);
+        assert_eq!((ai.special_why, intent.move_dir), (Some("approach"), Some(Dir::Left)));
+        let mut ai = ready();
+        think(&mut ai, &hammer_tank(), SpecialSense::Hammer(HammerSense::default()), [None; 4], seat);
+        assert_eq!(ai.special_why, None, "the others fight by the tree");
+    }
+
+    #[test]
+    fn a_tell_holds_the_tank_facing_its_way() {
+        let mut me = hammer_tank();
+        me.tell = Some(crate::tank::Tell { weapon: ActiveWeapon::SonicHammer, left: 0.3, total: 0.55, facing: Dir::Right });
+        let mut ai = ready();
+        let intent = think(&mut ai, &me, sense_left(HammerAim { trouble: Some(0), ..HammerAim::default() }), [None; 4], SEAT);
+        assert_eq!((intent.face, intent.move_dir, intent.fire), (Some(Dir::Right), None, false));
+        assert_eq!(ai.special_why, Some("hold"));
+    }
+
+    #[test]
+    fn glass_in_its_way_is_shouted_down() {
+        let mut ai = ready();
+        // Driving at the seat to the west, a pane in the way.
+        ai.last_move_dir = Some(Dir::Left);
+        let mut walls = [None; 4];
+        walls[Dir::Left.index()] = Some(WallAhead { material: Material::Glass, burning: false });
+        let mut fired = false;
+        for _ in 0..30 {
+            let intent = think(&mut ai, &hammer_tank(), SpecialSense::Hammer(HammerSense::default()), walls, SEAT);
+            if intent.fire {
+                assert_eq!((intent.face, ai.special_why), (Some(Dir::Left), Some("glass")));
+                fired = true;
+                break;
+            }
+        }
+        assert!(fired, "it shouts the pane down");
+    }
+}

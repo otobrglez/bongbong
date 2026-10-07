@@ -1327,6 +1327,108 @@ mod tests {
         );
     }
 
+    /// The waves on `game` fired by owner slot `slot`.
+    fn waves_by(game: &Game, slot: usize) -> usize {
+        game.sonic_waves.iter().filter(|w| w.owner.slot() == slot).count()
+    }
+
+    /// A seat's hammer through the room: one wave on the replica for the
+    /// one press, never two, gone on the replica's clock.
+    #[test]
+    fn a_seats_blast_reaches_the_replica_once() {
+        let mut rig = Lockstep::start(options(LinkQuality::PERFECT));
+        let patch = crate::simulation::debug::TankPatch { sonic_ammo: Some(2), ..Default::default() };
+        rig.authority_mut().expect("a round").debug_set_tank(0, &patch).expect("the seat's tank");
+        rig.drive(Intent { fire: true, ..Intent::default() });
+        rig.step(1);
+        rig.drive(Intent::default());
+        let mut most = 0;
+        for _ in 0..30 {
+            rig.step(2);
+            most = most.max(waves_by(rig.replica().expect("a replica"), 0));
+        }
+        assert_eq!(most, 1, "the press is one wave on the replica");
+    }
+
+    /// An enemy's hammer reaches the replica: its tell first, on the
+    /// replica's tank, then its wave.
+    #[test]
+    fn an_enemys_hammer_reaches_the_replica() {
+        let mut rig = Lockstep::start(options(LinkQuality::PERFECT));
+        let game = rig.authority_mut().expect("a round");
+        let seat = game.tank_snapshots().into_iter().find(|t| t.slot == 0).expect("the seat");
+        let beside = crate::Position::new(seat.position.x + 90.0, seat.position.y);
+        let slot = game.debug_spawn_enemy(beside, Some(1), Some(crate::ai::Role::Player)).expect("spawns");
+        let entity = game.tank_entity_by_slot(slot).expect("the enemy");
+        {
+            let mut tank = game.world.get::<&mut crate::tank::Tank>(entity).expect("its tank");
+            tank.disarm();
+            tank.shells_ammo = 0;
+            tank.speed_scale = 0.0;
+            tank.sonic_ammo = 3;
+        }
+        let (mut told, mut blasted) = (None, None);
+        for step in 0..240 {
+            rig.step(1);
+            let replica = rig.replica().expect("a replica");
+            let tell = replica.world.query::<&crate::tank::Tank>().iter().find(|t| t.owner_slot() == slot).and_then(|t| t.tell);
+            if told.is_none() && tell.is_some_and(|t| t.weapon == crate::tank::ActiveWeapon::SonicHammer) {
+                told = Some(step);
+            }
+            if blasted.is_none() && waves_by(replica, slot) > 0 {
+                blasted = Some(step);
+            }
+        }
+        let (told, blasted) = (told.expect("the tell reached the replica"), blasted.expect("the wave reached the replica"));
+        assert!(blasted > told, "the tell before the wave: {told} vs {blasted}");
+    }
+
+    /// Online, the seat's own blast is on screen the frame of the press -
+    /// drawn from the predicted pivot - and the room's `SonicBlast` for it
+    /// is not drawn a second time.
+    #[test]
+    fn a_seats_blast_is_drawn_on_the_press_and_only_once() {
+        let map = "version = 1\ntanks = 0\nmission.kind = \"protect\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"5,6\" = { kind = \"pickup\", pickup = \"sonic_hammer\" }\ncells.\"2,14\" = { kind = \"frog\" }\n";
+        let options = RigOptions {
+            map: MapFile::from_toml_str(map).expect("the map parses"),
+            seed: Some(0xB0B5),
+            enemies: Some(1),
+            tank_row: Some(3),
+            quality: LinkQuality::new(60, 0, 0.0),
+            ..RigOptions::default()
+        };
+        let (_rig, link) = start(options);
+        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
+        let mut round = OnlineRound::new(client, "RIG");
+        let armed = |round: &OnlineRound<Loopback>| {
+            round.game().and_then(|g| g.world.query::<&crate::tank::Tank>().iter().find(|t| t.owner_slot() == 0).map(|t| t.sonic_ammo > 0)).unwrap_or(false)
+        };
+        // Drive onto the crate, then stop.
+        let right = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
+        for _ in 0..180 {
+            if armed(&round) {
+                break;
+            }
+            round.frame(&right, FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+        }
+        assert!(armed(&round), "the seat took the crate");
+        for _ in 0..20 {
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+        }
+        assert_eq!(waves_by(round.game().unwrap(), 0), 0);
+        round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
+        assert_eq!(waves_by(round.game().unwrap(), 0), 1, "the wave is on screen the frame of the press");
+        let mut most = 1;
+        for _ in 0..40 {
+            thread::sleep(FRAME);
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            most = most.max(waves_by(round.game().unwrap(), 0));
+        }
+        assert_eq!(most, 1, "the room's blast for it is not drawn again");
+    }
+
     /// The dial's whole point: a lossy link costs the picture nothing it
     /// cannot ride out.
     #[test]

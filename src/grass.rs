@@ -440,6 +440,28 @@ mod tests {
         (x, y)
     }
 
+    /// A tuft the sonic wave pinned lies flat until the pin runs out, then
+    /// recovers as a hull's trail does; a tuft in another cell is left be.
+    #[test]
+    fn a_pinned_tuft_lies_flat_until_the_pin_runs_out() {
+        let t = Tuning::DEFAULT;
+        let mut tufts = tufts_for_cell(&t, crate::map::cell_to_world(5, 5), |_| false);
+        tufts.extend(tufts_for_cell(&t, crate::map::cell_to_world(6, 5), |_| false));
+        let here = tufts.iter().filter(|g| crate::map::world_to_cell(g.base) == (5, 5)).count();
+        assert!(here > 0 && here < tufts.len());
+        pin(&mut tufts, (5, 5), 1.0);
+        let flat = |tufts: &[GrassTuft]| tufts.iter().filter(|g| g.crush >= 1.0).count();
+        assert_eq!(flat(&tufts), here);
+        for _ in 0..50 {
+            tick(&mut tufts, &[], 1.0 / 60.0);
+        }
+        assert_eq!(flat(&tufts), here, "still flat within the pin");
+        for _ in 0..20 {
+            tick(&mut tufts, &[], 1.0 / 60.0);
+        }
+        assert!(tufts.iter().all(|g| g.pinned == 0.0 && g.crush < 1.0), "up again once it runs out");
+    }
+
     #[test]
     fn a_gust_front_travels_with_the_wind() {
         let t = Tuning::DEFAULT;

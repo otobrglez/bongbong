@@ -4026,6 +4026,35 @@ mod tests {
         assert_eq!(tank["row"], 3);
     }
 
+    /// `set_tank {sonic_ammo}` arms the hammer, and `spawn_pickup` puts a
+    /// crate down at the cell nearest the point, refusing a kind it does
+    /// not know and a cell that holds one already.
+    #[test]
+    fn set_tank_arms_the_hammer_and_spawn_pickup_drops_its_crate() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = game(3);
+        let ask = |server: &mut DevServer, game: &mut Session, tool: &str, params: Value| {
+            let rx = call(&tx, tool, params);
+            server.before_frame(game, W, H);
+            rx.recv().unwrap()
+        };
+        let tank = ask(&mut server, &mut game, "set_tank", json!({ "slot": 0, "sonic_ammo": 4 })).unwrap();
+        assert_eq!((tank["weapon"].as_str(), tank["sonic"].as_i64()), (Some("sonic_hammer"), Some(4)), "{tank}");
+        // The first open cell along a row of the field, a point off its
+        // centre: the crate lands on the centre.
+        let (x, y, crate_at) = (2..30)
+            .find_map(|col| {
+                let (x, y) = (col as f64 * 32.0 + 5.0, 8.0 * 32.0 - 7.0);
+                ask(&mut server, &mut game, "spawn_pickup", json!({ "kind": "sonic_hammer", "x": x, "y": y })).ok().map(|r| (x, y, r))
+            })
+            .expect("an open cell");
+        assert_eq!(crate_at, json!({ "kind": "sonic_hammer", "x": x - 5.0, "y": y + 7.0 }));
+        let again = ask(&mut server, &mut game, "spawn_pickup", json!({ "kind": "sonic_hammer", "x": x, "y": y }));
+        assert!(again.is_err(), "{again:?}");
+        let unknown = ask(&mut server, &mut game, "spawn_pickup", json!({ "kind": "railgun", "x": 100.0, "y": 100.0 }));
+        assert!(unknown.unwrap_err().contains("railgun"));
+    }
+
     /// The two tank layers are independent flags: one on leaves the other
     /// where it was, and `status` reports the same values.
     #[test]

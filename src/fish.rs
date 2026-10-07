@@ -465,7 +465,8 @@ impl Shoal {
         for s in scares(game, &t) {
             self.scare(water, s);
         }
-        self.throw_onto_banks(game, water, &t);
+        let step = (game.time - self.clock).clamp(0.0, MAX_GAP);
+        self.throw_onto_banks(&game.sonic_waves, step, water, &t);
         self.advance(water, game.time, &t);
     }
 
@@ -474,14 +475,13 @@ impl Shoal {
     /// (`sonic_fish_throw_px`) lands on dry ground, is thrown onto the bank
     /// - at most `sonic_fish_throw_max` a wave, the ones nearest the pivot
     /// first, ties on their order. Hashed nowhere and drawn only: a replica
-    /// throws the same fish off the same wave.
-    fn throw_onto_banks(&mut self, game: &Game, water: &WaterLayout, t: &Tuning) {
-        let waves = &game.sonic_waves;
+    /// throws the same fish off the same wave. `step` is the round time
+    /// this step covers.
+    fn throw_onto_banks(&mut self, waves: &[crate::sonic::SonicWave], step: f32, water: &WaterLayout, t: &Tuning) {
         self.thrown.retain(|(seed, _)| waves.iter().any(|w| w.seed == *seed));
         if t.sonic_fish_throw_max <= 0 || t.sonic_fish_throw_px <= 0.0 {
             return;
         }
-        let step = (game.time - self.clock).clamp(0.0, MAX_GAP);
         for wave in waves {
             let front = wave.front(t);
             let before = (wave.age - step) * t.sonic_wave_speed;
@@ -875,6 +875,73 @@ mod tests {
         }
         // Another seed, other fish.
         assert_ne!(Shoal::new(&water, 99, &t).fish, Shoal::new(&water, 100, &t).fish);
+    }
+
+    /// A sonic wave scares fish all along its front as it runs out, and
+    /// none once it is spent.
+    #[test]
+    fn a_wave_scares_the_fish_it_passes() {
+        let t = quick();
+        let origin = Position::new(200.0, 128.0);
+        let cone = crate::sonic::SonicCone::cast(
+            origin,
+            crate::tank::Dir::Right,
+            t.sonic_reach_px,
+            t.sonic_half_angle_deg.to_radians(),
+            (W, H),
+            |_| crate::sonic::Block::Open,
+            |_| crate::sonic::Floor::Water,
+        );
+        let mut game = Game::default();
+        let mut wave = crate::sonic::SonicWave::new(cone, crate::shell::Owner::Player(0));
+        wave.age = 80.0 / t.sonic_wave_speed;
+        game.sonic_waves.push(wave.clone());
+        let along: Vec<Scare> = scares(&game, &t).into_iter().filter(|s| (s.at.distance_to(origin) - 80.0).abs() < 0.5).collect();
+        assert!(along.len() >= 3, "scares along the front: {along:?}");
+        assert!(along.iter().all(|s| s.at.x > origin.x), "ahead of the pivot");
+        wave.age = 10.0;
+        game.sonic_waves = vec![wave];
+        assert!(scares(&game, &t).is_empty(), "a spent wave scares nothing");
+    }
+
+    /// The hammer's "at 11": a fish the wave's front passes, whose throw
+    /// along the wave's line lands on dry ground, is thrown onto the bank,
+    /// flops there and hops back to where it was; one whose throw lands in
+    /// the water stays in it.
+    #[test]
+    fn a_shout_at_the_shore_throws_a_fish_onto_the_bank_and_back() {
+        let t = quick();
+        let water = pond();
+        let mut shoal = Shoal::new(&water, 5, &t);
+        assert!(shoal.fish.len() >= 2);
+        // One fish by the east shore, one in the middle of the lake.
+        shoal.fish[0].pos = Position::new(340.0, 128.0);
+        shoal.fish[1].pos = Position::new(200.0, 160.0);
+        let cone = crate::sonic::SonicCone::cast(
+            Position::new(200.0, 128.0),
+            crate::tank::Dir::Right,
+            t.sonic_reach_px,
+            t.sonic_half_angle_deg.to_radians(),
+            (W, H),
+            |_| crate::sonic::Block::Open,
+            |_| crate::sonic::Floor::Water,
+        );
+        let mut wave = crate::sonic::SonicWave::new(cone, crate::shell::Owner::Player(0));
+        let mut thrown = false;
+        for _ in 0..30 {
+            wave.age += PHYSICS_FIXED_DT;
+            shoal.throw_onto_banks(std::slice::from_ref(&wave), PHYSICS_FIXED_DT, &water, &t);
+            thrown |= shoal.fish[0].flop.is_some();
+        }
+        assert!(thrown, "the fish by the shore is thrown onto the bank");
+        assert!(shoal.fish[1].flop.is_none(), "the one in the middle stays in the water");
+        let flop = shoal.fish[0].flop.expect("on the bank");
+        assert_eq!(water.depth_at(flop.bank), Depth::Dry);
+        // It flops, then hops back.
+        let clock = shoal.clock;
+        swim(&mut shoal, &water, clock, clock + t.sonic_fish_flop_seconds + 1.0, &t);
+        assert!(shoal.fish[0].flop.is_none(), "back in the water");
+        assert!(water.depth_at(shoal.fish[0].pos).is_wet(), "{:?}", shoal.fish[0].pos);
     }
 
     #[test]

@@ -54,6 +54,8 @@ mod props_tests;
 #[cfg(test)]
 mod seat_tests;
 #[cfg(test)]
+mod sonic_tests;
+#[cfg(test)]
 mod tower_tests;
 mod waves;
 #[cfg(test)]
@@ -3587,11 +3589,10 @@ impl Game {
         // it was before the split; sorting here would look tidier and would
         // shift every existing replay.
         for p in &pending {
-            let intent = self.commander.apply(p.slot, p.intent);
             with_tank_mut(&self.world, p.entity, |tank| {
                 // The commander's order is never the last word on a tank
                 // in a tell: it holds its aim (docs/sonic-hammer.md).
-                let intent = hold_for_tell(intent, tank.tell);
+                let intent = commanded_intent(&self.commander, p.slot, p.intent, tank.tell);
                 let footing = Footing::at(&self.water, &self.lava, self.weather, tank.position, self.time);
                 drive_tank_with(&mut self.physics, tank, intent, f.dt, p.current, p.facing_before, footing);
             });
@@ -4978,6 +4979,13 @@ fn coast_enemy(physics: &mut Physics, f: &mut Frame, entity: Entity, tank: &mut 
     tick_queued_shots(physics, f, tank, owner);
     enemy_trigger(physics, f, tank, owner, Intent { fire: false, ..intent });
     Pending { entity, slot: tank.owner_slot(), intent, current, facing_before }
+}
+
+/// The intent the apply pass drives `slot` by: the commander's orders over
+/// the collect pass's `intent`, then a tell's hold over both - the last
+/// word on a tank winding up is its tell's (docs/sonic-hammer.md).
+fn commanded_intent(commander: &command::Commander, slot: usize, intent: Intent, tell: Option<crate::tank::Tell>) -> Intent {
+    hold_for_tell(commander.apply(slot, intent), tell)
 }
 
 /// `intent` for a tank in a tell (docs/sonic-hammer.md "The enemy tell"):

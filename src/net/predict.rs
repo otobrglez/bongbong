@@ -2069,6 +2069,54 @@ mod tests {
         assert!(predictor.owed_presses.is_empty(), "its Fired settles it");
     }
 
+    /// The sonic hammer is drawn on the press like the laser: its wave
+    /// from the predicted pivot, a blast owed until its `Fired`, the room's
+    /// `SonicBlast` for it claimed once.
+    #[test]
+    fn a_sonic_blast_is_drawn_on_the_press() {
+        let mut predictor = Predictor::new(round(), 0, 0);
+        let patch = TankPatch { sonic_ammo: Some(1), ..Default::default() };
+        predictor.sandbox.debug_set_tank(0, &patch).expect("the seat's tank");
+        let (pivot, rotation, _) = predictor.motion().expect("a hull");
+        let tick = predictor.step(press());
+        let shows = predictor.take_press_shows();
+        let [PressShow::Sonic(blast)] = shows.as_slice() else { panic!("one sonic show: {shows:?}") };
+        assert!(blast.origin.distance_to(pivot) < 4.0, "from the hull's pivot");
+        assert_eq!(Some(blast.facing), Dir::from_rotation(rotation));
+        let ticks = (tuning().sonic_reload_seconds / PHYSICS_FIXED_DT).ceil() as usize;
+        idle_ticks(&mut predictor, ticks + 1);
+        predictor.step(press());
+        assert!(predictor.take_press_shows().is_empty(), "the one blast is owed");
+        predictor.note_fired(WeaponKind::SonicHammer, tick);
+        assert!(predictor.owed_presses.is_empty(), "its Fired settles it");
+        assert!(predictor.confirm_press(WeaponKind::SonicHammer, tick), "the room's blast is the drawn one");
+        assert!(!predictor.confirm_press(WeaponKind::SonicHammer, tick), "claimed once");
+    }
+
+    /// A knock the room sends an owned hull (`Shoved` with a skid) takes
+    /// the sandbox's hull off its tracks: it slides on the shove and the
+    /// stick does not drive it until the skid is over.
+    #[test]
+    fn a_knock_skids_the_owned_hull() {
+        let mut predictor = Predictor::new(round(), 0, 0);
+        predictor.set_owned(true);
+        idle_ticks(&mut predictor, 5);
+        let (from, _, _) = predictor.motion().expect("a hull");
+        predictor.shove(crate::math::Vec2::new(300.0, 0.0), 0.4);
+        let drive = Intent { move_dir: Some(Dir::Up), ..Intent::default() };
+        for _ in 0..10 {
+            predictor.step(drive);
+        }
+        let (during, _, _) = predictor.motion().expect("a hull");
+        assert!(during.x - from.x > 20.0, "it slides on the shove: {from:?} -> {during:?}");
+        assert!((during.y - from.y).abs() < 1.0, "and the stick does not drive it: {from:?} -> {during:?}");
+        for _ in 0..40 {
+            predictor.step(drive);
+        }
+        let (after, _, _) = predictor.motion().expect("a hull");
+        assert!(after.y < during.y - 10.0, "it drives once the skid is over");
+    }
+
     /// Firing from an owned hull kicks it back on the press, as the room
     /// kicks a hull in a local round - not a round trip later.
     #[test]

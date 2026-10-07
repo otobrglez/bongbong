@@ -104,13 +104,17 @@ const SWAP_SALT: u32 = 0x5A_A9;
 /// (`Tank::take_weapon`) and ends the walk. A tank that drew no special
 /// keeps none. At the defaults (every share 0) nothing changes.
 pub(super) fn swap_spawn_special(enemy: &mut Tank, slot: usize, spawn: Position) {
+    swap_spawn_special_with(&tuning(), enemy, slot, spawn);
+}
+
+/// `swap_spawn_special` under the table `t`.
+pub(super) fn swap_spawn_special_with(t: &Tuning, enemy: &mut Tank, slot: usize, spawn: Position) {
     if enemy.special().is_none() {
         return;
     }
-    let t = tuning();
     let seed = crate::blast::seed_at(spawn, SWAP_SALT ^ slot as u32);
     for (i, (weapon, share)) in SPAWN_SWAPS.iter().enumerate() {
-        let share = share(&t);
+        let share = share(t);
         if share > 0.0 && crate::pyro::unit(seed, i as u32) < share {
             enemy.take_weapon(*weapon);
             return;
@@ -530,8 +534,9 @@ impl Game {
                     // A drum in the cone thrown onto this seat's cell.
                     if aim.drum.is_none() && !hidden {
                         for &(cell, at) in &drums {
-                            let Some(entry) = cone.entered(cell) else { continue };
-                            let _ = entry;
+                            if cone.entered(cell).is_none() {
+                                continue;
+                            }
                             let falloff = sonic::falloff(&t, me.distance_to(at));
                             let others: Vec<(usize, Position)> = all_tanks.iter().copied().filter(|&(s, _)| s != slot).collect();
                             let landing = sonic::drum_landing(&t, at, me, falloff, &others, field, |c| solid.contains(&c));
