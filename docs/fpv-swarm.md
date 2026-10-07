@@ -1246,6 +1246,9 @@ Protocol 18 (from the rail's 17), once in the PR.
   `the_generic_tiers_never_launch_a_drone`,
   `the_swarm_breaks_the_crown_over_a_hidden_seat`,
   `an_enemy_that_cannot_reach_cover_launches_from_the_open`,
+  `an_enemy_too_close_backs_off_before_it_launches`,
+  `an_exposed_enemy_moves_behind_a_wall_and_launches_from_cover`,
+  `an_enemy_watches_its_drone_work`,
   `an_enemy_with_a_minigun_shoots_down_the_drone_diving_at_it`,
   `an_enemy_breaks_toward_the_nearest_tree` (under the crown before the
   dive, nothing taken), `an_enemy_with_no_tree_breaks_across_the_drones_line`,
@@ -1395,7 +1398,19 @@ the AI tiers its tank ran over the frames before):
 - **Clustering and pile-up** rise on the fields with the crate (30 and 18
   against the defaults' 12 and 8) and at night (60 and 21): a swarm tank
   stands to launch and to watch, so the pack behind it bunches, as the
-  rail's did; per ten minutes they sit under the yardstick's.
+  rail's did. Per ten minutes the pile-ups sit under the yardstick's in
+  every run, and so does the clustering but at night (19.4 against 16.4).
+  Most of it is harbor-lights (armed by day 19 of 35, at night 35 of 60,
+  against the defaults' 3 in a quarter of the time): its packs come in
+  along one road and every swarm tank stops where it first knows the seat
+  - inside its box and within its sight under the sky - so three and four
+  stop together in a knot at that edge, launching and watching pressed
+  into each other (the review's screenshot `harbor-cluster-480.png`). A
+  spacing rule - the higher slot moving to a spot clear of the pack - was
+  tried in the review and left out: it cut the clustering by a quarter to
+  a third but not the pile-ups, raised the churn by a tenth, and a tank
+  spreading at the edge of what it knows walked out of it and wandered.
+  A follow-up (§12, "Not in this PR").
 
 ## 12. Interactions, decisions, what is left out
 
@@ -1569,6 +1584,17 @@ the AI tiers its tank ran over the frames before):
 32. **A client's own bullets stop at drawn drones** of the other side, as
     the room's sweep has them; whether the drone comes down is the room's
     word.
+33. **A danger comes before a drone**: the `air` tier gives way to a danger
+    the tank stands in, which it backs out of first (§4). Rejected: the
+    drone first - a tank in a charging rail's lane or a strike's circle
+    (BB-41) broke across a drone's line, taking 8 to risk a slug or a rod.
+34. **A launch is claimed by the input tick its `Fired` names**, the
+    drone's id the claim's payload, and a room's copy struck in its climb
+    takes over at once (§8). Rejected: pairing the room's copy with the
+    oldest drawn launch (after a refused press it took the refused one's
+    place) and keeping the room's copy hidden for the whole hand-over
+    whatever befell it (the client's drone climbed on while the room's
+    fell, then vanished).
 
 ### Not in this PR
 
@@ -1599,6 +1625,10 @@ the AI tiers its tank ran over the frames before):
   0x3f0, armed, commander on, §11) - the seek tiers' rule, not the
   swarm's, which a swarm tank out of the seat's box reaches more often
   than one with a gun to fight with. A follow-up.
+- **Swarm tanks knotting at the edge of the seat's box** (§11): launch
+  places handed out like the engage ring's slots, inside the box and the
+  sight the tank knows the seat by, ties by slot - with the special
+  carriers' stacking (BB-49). A follow-up.
 - The burst's damage: 8 at the centre (§1) - a moving tank takes about a
   quarter of it, so six drones are harassment rather than a kill on their
   own. As designed; a feel question for Oto (§11's rounds run long).
