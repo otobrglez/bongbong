@@ -65,6 +65,7 @@ The rules live in code in `src/pyro.rs`; everything else composes from it.
 | `CHAR` | `#252525` `#373737` `#4A2221` `#59341F` | soot and scorch |
 | `PLASMA_TEAL`, `PLASMA_PURPLE` | the orb shader's own five | off-palette energy |
 | `LASER_RED`, `LASER_BLUE`, `TESLA`, `SHIELD`, `OOZE` | their weapons' own | off-palette energy |
+| `sonic::STONE` | `#9E9E96` `#C1C1C1` `#DADADA` `#F0F0F0` | the palette's light greys: sound has no colour of its own |
 
 `FIRE_PALE` (`#FFE2A0`) is the one step the palette gained, so a flame
 cools white, pale gold, gold rather than jumping (`tools/punypalette.py`).
@@ -94,6 +95,7 @@ blows up - they throw none.
 | The flamethrower's jet, the plasma orb | `static/flame_jet.fs`, `static/plasma_orb.fs` | worked out per 2 px block, coloured in their ramps' flat steps, edges dithered |
 | A volcano's cone, smoke and eruption; a lava bomb | `volcano.rs` (docs/volcano.md) | the cone a baked picture of blocks in `ASH`/`SCORIA` with molten gullies; the plume shaded `SMOKE` puffs leaning with the wind; an eruption a flash with rays, a fountain of `pyro::tongues`, drops and a shock ring of marks; a bomb a rock with a glowing trail and a warning ring of marks where it lands |
 | Fish under the water | `fish.rs` (docs/water.md) | a silhouette rasterised onto blocks in sixteen headings, `BLUE_DEEP` at `fish_opacity` in eighths, a fainter tail fin swinging a block either way, a `BLUE_PALE` glint |
+| A sonic hammer's wave, a tell, a stunned frog | `sonic.rs`, `frog::stun_marks` (docs/sonic-hammer.md) | the wave `sonic_wave_rings` arcs of blocks (`pyro::block_arc`, `Shape::Arc`) in `STONE`, each split at the walls' faces so the shadow shows, unlit in the glowing pass; dust thrown up off every cell the front crosses in the lit pass (`wave_dust`); a tell three arcs contracting into the dish; a stunned frog three blocks circling its head. A sonic hit draws the hull's flash and dust, never fire (`HitCause::Sonic`) |
 | Lava | `lava.rs` (docs/volcano.md) | every 2 px block a `FIRE` step - flow bands running down the stream, crust plates on a lake, a toasted bank baked once into a `BlockImage`; a bomb's pool a metaball cooling down the ramp |
 
 A tank's damage, a step per tier of the tank sheet (`TANK_DAMAGE_TIERS`,

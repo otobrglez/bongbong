@@ -192,11 +192,12 @@ screen hurts nobody.
 
 | File | What |
 |---|---|
-| `src/sonic.rs` (new) | The weapon's headless half. `SonicCone` (`cast` over a `blocks: Fn((i32, i32)) -> bool` and the field size, `reaches(p) -> Option<f32>`, `cells() -> &[((i32, i32), f32)]` sorted by entry distance then cell), `SonicWave` (origin, facing, owner slot, cone, age, `swept` radius, `struck` hulls), `falloff`, `shove_speed(mass_factor, d)`, `slide(v, grip)` (the skid's slide, what the AI predicts with), `drum_landing`, `tree_push`, the composers `compose_wave` and `compose_tell` (pure, `pyro::Shape`s), `module_cell` |
-| `src/simulation/sonic.rs` (new) | The world half. `fire_sonic` (called from the dispatch arm), `resolve_sonic` (casts the frame's presses into waves), `tick_sonic_waves(f, live)` (the strike walk), `Game::knock` (the shove and skid any later weapon may use), `throw_drum`, `sonic_show` (the cosmetic half - the wave on the list, the ripple, the dish's flash - which a replica's `SonicBlast` and a client's press call too), `hammer_field` / `hammer_sense` (what the AI is handed, §4), `seat_sonic` |
+| `src/sonic.rs` (new) | The weapon's headless half. `SonicCone` (`cast` from a pivot and facing over a `Block` per cell - open, a wall, glass - and a `Floor` per cell, inside the field; `rays`, the `cells` it entered in entry order with their floor, the glass `panes` it struck; `reaches(p)`, `entered(cell)`, `nearest_reached(points)`, `longest`), `SonicWave` (cone, owner, age, `swept` radius, `struck` hulls, a seed), `falloff`, `shove_speed(mass_factor, d)`, `skid_friction`, `skid_seconds`, `slide(v, grip)` (the skid's slide, what the AI predicts with), `drum_landing`, `tree_push`, the composers `wave_arcs`, `wave_dust` and `tell_arcs` (pure, `pyro::Shape`s), the `STONE` ramp, `module_cell` |
+| `src/simulation/sonic.rs` (new) | The world half. `fire_sonic` (called from the dispatch arm), `resolve_sonic` (casts the frame's presses into waves), `tick_sonic_waves(f, live)` (the strike walk), `knock` (the shove and skid any later weapon may use), `throw_drum`, `sonic_show` (the cosmetic half - the wave on the list, the ripple, the dish's flash - which a replica's `SonicBlast` and a client's press call too), `tick_sonic_pictures` (a replica's waves and flattened grass), `Game::hammer_senses` with `lands_in_trouble` (what the AI is handed, §4), `seat_sonic`, `swap_spawn_special` (§3.4), `debug_spawn_pickup` |
+| `src/simulation/sonic_tests.rs` (new) | The scenario tests (§10) |
 | `src/simulation/weapons.rs` | The `ActiveWeapon::SonicHammer` dispatch arm |
 | `src/simulation/mod.rs` | `Frame::pending_sonic`; `Game::{sonic_waves, grass_flat, seat_knock}`, `cover_cells`; the phase calls (`resolve_sonic` and `tick_sonic_waves` after `resolve_flames`, before `step_world`, so the shoves land in this tick's solver step; `tick_sonic_waves(f, false)` on the end screen); the tell in `enemy_phase` (§3.2); the skid in `drive_tank_with`, `tick_timers` and `predict_seat`; `accept_seat_pose`'s knock allowance; the spawn swap in `roll_enemy_tank` (§3.4); the `pickup_phase` arm; `tick_presentation` (waves, tells, skids, frog stuns, flattened grass); `Event::{SonicBlast, TellStarted}`, `Event::Hit::cause` (`HitCause`), `Event::Shoved::skid`, `Event::DrumLaunched::drum` |
-| `src/tank.rs` | `sonic_ammo`, `ActiveWeapon::SonicHammer` (`name`, `full_load`, `tell_seconds`), `SPECIAL_WEAPONS`, `weapon_ammo`/`take_weapon`/`empty_stock`/`wants_pickup`, `Tell`/`tell`, `skid`/`skid_speed`, `sonic_flash`/`kick_sonic`, the module's cell in `module_cols` |
+| `src/tank.rs` | `sonic_ammo`, `ActiveWeapon::SonicHammer` (`name`, `full_load`, `tell_seconds`), `SPECIAL_WEAPONS`, `Tank::special` (§3.0), `Windup`/`Tank::windup` (§3.2), `weapon_ammo`/`take_weapon`/`empty_stock`/`wants_pickup`, `Tell`/`tell`, `skid`/`skid_speed`, `sonic_flash`/`kick_sonic`, the module's cell in `module_cols` |
 | `src/pickup.rs` | `PickupKind::SonicHammer` (`sonic_hammer`, row 13, its ink, spills rather than cooks off), `PickupKind::{name, parse, weapon}` |
 | `src/obstacle.rs` | `Material::blocks_sound`, `Material::breaks_by_sound` |
 | `src/ai.rs` | The special hook (§3.1): `SpecialSense`, `HammerSense`/`HammerAim`, `SpecialUse`, `special_rule` / `hammer_rule`, `act_special`, `generic_fire`, the `special` tier, the `seek_special` tier, the stuck and breach clocks paused under a skid, `AiSnapshot::special` |
@@ -204,8 +205,8 @@ screen hurts nobody.
 | `src/grass.rs` | `GrassTuft::pinned`, `pin` |
 | `src/fish.rs` | The waves among the scares; `Flop` (the fish on the bank) |
 | `src/pyro.rs` | `Shape::Arc`, `block_arc` (shared, §5) |
-| `src/indicators.rs` | `TankView::tell`, `ArrowKind::Tell`, the hit arc from a sonic blast |
-| `src/hud.rs` | `HUD_SONIC_COLOR`, the `weapon_color`/`weapon_pickup` arms |
+| `src/indicators.rs` | `TankView::windup`, `ArrowKind::Windup`, the hit arc from a sonic blast |
+| `src/hud.rs`, `src/render/hud.rs` | `HUD_SONIC_COLOR`, the `weapon_color`/`weapon_pickup` arms; the weapon slot's readout drawn by one function (`draw_weapon_readout`), which a weapon whose readout is a gauge or words replaces by its weapon |
 | `src/game.rs`, `src/render/game.rs` | Trees leaning, frog stun marks, the waves, dust and tells in their passes (§5), the dev stats arm |
 | `src/fx.rs` | Dust off a skidding hull; a sonic hit's flash and dust, no fire |
 | `src/net/wire.rs` | `WeaponKind::SonicHammer`, `WeaponKind::drawn_on_press`, `TankState::{tell, skid}`, `frog_flags::STUNNED` |
@@ -217,6 +218,7 @@ screen hurts nobody.
 | `src/simulation/debug.rs`, `src/devserver.rs` | `spawn_pickup`, `set_tank`'s `sonic_ammo`, the snapshot's `sonic`, `tell`, `skid`, `stun` and `sonic_waves` |
 | `src/bin/probe.rs` | `--crate`, the tank line's `sonic=`, the holds |
 | `src/editor/mod.rs` | `Tool::Pickup(PickupKind::SonicHammer)` (`sonic_hammer`) |
+| `src/editor/chrome.rs` | The folded TOOLS palette: a category with more tools than the room is wide for (PICKUP's fourteen on a phone) runs on into a second row, and where the rows would not fit the room's height the cells shrink, never under `UI_TOUCH_PT` |
 | `src/map.rs`, `maps/armory.toml` | The armory (§3.5) in `SHIPPED_MAPS` |
 | `src/tuning.rs` | The `sonic` group (§6), `enemy_special_weapon_sonic_share` |
 | `lang/en.ftl`, `lang/sl.ftl` | §7 |
@@ -241,7 +243,16 @@ BB-36 weapon does the same, in the same places:
 2. `ActiveWeapon::X` (`name`, `full_load`, `tell_seconds`), appended to
    `SPECIAL_WEAPONS`; the ammo field on `Tank` with its arms in
    `weapon_ammo`, `take_weapon`, `empty_stock`, `wants_pickup`
-   (`active_weapon() == Shell` for an enemy, the one rule), `module_cols`.
+   (`special().is_none()` for an enemy, the one rule), `module_cols`.
+   **Carries or fires**: `Tank::special()` is the special a tank carries
+   with ammo left, `None` on shells alone, and `active_weapon()` what its
+   trigger fires (`special()` or else shells). A reader asking what a tank
+   *carries* takes `special()` - its module (`module_cols`), the wire's
+   `TankState::weapon`, the HUD's slot (`hud::WeaponSlot`), whether it
+   takes a weapon crate, the spawn swap's "drew a special"; one asking what
+   it *fires* takes `active_weapon()` - the dispatch, the tell, the AI's
+   rule and `generic_fire`. The two agree today; a weapon carried that
+   cannot fire (a charge, a cooldown of its own) is where they part.
 3. The dispatch arm in `weapons::dispatch_fire_from`; the fire edge or hold
    in `drive_player`'s `should_fire`.
 4. `pickup_phase`: `PickupKind::weapon` gives `take_weapon` its weapon, so a
@@ -281,8 +292,8 @@ pub(crate) enum SpecialUse {
     /// tell first, §3.2). `at_seat` is the seat it is used on - what
     /// `Ai::shot_at_seat` records - and `why` the arm, for the trace.
     Fire { face: Dir, at_seat: Option<u8>, why: &'static str },
-    /// Hold still facing `face`.
-    Hold { face: Dir },
+    /// Hold still facing `face`; `why` for the trace.
+    Hold { face: Dir, why: &'static str },
     /// Close in on `to`, to bring a short-range weapon to bear.
     Approach { to: Position },
 }
@@ -325,7 +336,7 @@ fn generic_fire(weapon: ActiveWeapon) -> bool;
   with a sense, from a per-frame snapshot of the world built before the
   pass - only when some enemy carries one, so a round without costs
   nothing and a `Brain` never reaches into the world (the AI reasons over
-  snapshots). The hammer's is `hammer_field` + `hammer_sense` (§4).
+  snapshots). The hammer's is `Game::hammer_senses` (§4).
 - **The sight box binds by construction**: a sense names a seat only if
   this tank stands inside that seat's sight box
   (`ai::in_sight_box_of`, measured in the simulation against the seat's
@@ -354,6 +365,12 @@ lands. On `Tank`:
 pub struct Tell { pub weapon: ActiveWeapon, pub left: f32, pub total: f32, pub facing: Dir }
 
 pub tell: Option<Tell>,
+
+/// A wind-up in progress, whatever winds it up: what the AI's rule holds a
+/// tank to, the off-screen arrow and the drawing read. A tell is one; a
+/// later weapon's charge joins `Tank::windup` as another.
+pub struct Windup { pub weapon: ActiveWeapon, pub progress: f32, pub facing: Dir }
+pub fn windup(&self) -> Option<Windup>;
 ```
 
 - **Who sets it**: the simulation, on the AI's word. In `enemy_phase`'s
@@ -368,16 +385,22 @@ pub tell: Option<Tell>,
   tank holds its aim (and the rule's first arm holds it too). With the
   command layer on (`c2_enabled`), whose apply pass replays the commander's
   orders over the collect pass's intents, the override is applied again
-  after `Commander::apply`, so it is the last word on a tank in a tell. The far
-  tanks of a field map that coast between thinks count their tell down in
-  the coast branch the same way. A teleport cancels it (`portal_phase`);
+  after `Commander::apply` (`commanded_intent`: the orders, then the hold),
+  so it is the last word on a tank in a tell. The far tanks of a field map
+  that coast between thinks count their tell down the same way: a tank
+  that does not think this tick goes through `coast_enemy` - the tell's
+  hold, `control`, `tick_queued_shots`, `enemy_trigger` with the trigger
+  released, its `Pending` for the apply pass - and a later weapon that
+  takes a tank's thinking away (a stun) does so at the one spot in
+  `enemy_phase` before the field map's own choice (`field::mind`), through
+  the same helper. A teleport cancels it (`portal_phase`);
   `init` has none. A tell commits: a seat that steps out of the cone during
   it is the dodge the tell is for.
 - **A seat has no tell**: a seat's press fires on the press. A later
   weapon whose own mechanic is a charge (the Gauss rail) or a call-in (the
   rod) may give a seat a `Tell` of its own; that is its PR's to wire.
 - **How it is drawn**: per weapon, `render/game.rs` asks the weapon's
-  composer for every tank with a tell (`sonic::compose_tell` for the
+  composer for every tank with a tell (`sonic::tell_arcs` for the
   hammer, §5), in the glowing pass, so it reads at night; the module shows
   its wind-up cells (`module_cols`).
 - **How it travels**: `TankState::tell` - the seconds left in tenths, 0 for
@@ -386,9 +409,10 @@ pub tell: Option<Tell>,
   weapon's `tell_seconds`) and runs it down between snapshots
   (`tick_presentation`), as it runs a grenade's fuse. `TellStarted` is on
   `NOT_SENT`: the state is what draws.
-- **Off screen**: `indicators::TankView::tell` (the progress, 0..1) from
-  `Tank::tell`, so it works on a replica; an enemy with a tell, off the
-  screen and not concealed, gets an `ArrowKind::Tell { weapon, progress }`
+- **Off screen**: `indicators::TankView::windup` (the weapon and the
+  progress, 0..1) from `Tank::windup`, so it works on a replica and a later
+  weapon's charge feeds it too; an enemy winding up, off the screen and not
+  concealed, gets an `ArrowKind::Windup { weapon, progress }`
   arrow, put with the teammates, frogs and volcanoes - never merged, never
   left out past `indicator_max_arrows`. A tell also reveals its tank as
   firing does (`Awareness::fired`). The arrow is drawn in the weapon's HUD
@@ -436,7 +460,8 @@ the general case:
   `confirm_presses(frame) -> u8`: bit `k` for this seat's `k`th `Fired` of
   a drawn-on-press kind in the snapshot, set when `confirm_press` claims
   it. `fly_own_shots` draws each `PressShow` against the drawn world: a
-  beam as now, a sonic press through `Game::draw_press_show` - the same
+  beam as now, a sonic press through `Game::draw_press_show(seat, origin,
+  facing)` (the seat's tank is the wave's owner) - the same
   `sonic_show` a replica puts on for the room's `SonicBlast` (the wave
   cast against the replica's tiles, the dish's flash, the ripple).
 - **Replica claim side** (`net/apply.rs`): `Show::OwnShotsDrawn { seat,
@@ -506,7 +531,9 @@ the general case:
 - **`maps/armory.toml`**, appended to the free-play maps of `SHIPPED_MAPS`
   (after `longwater`), so the web preview's LOAD list and the lobby's map
   stepper reach it. An arena (36 x 18, shown whole), `mission.kind =
-  "protect"`, a band of four, clear sky. Each later weapon adds its crate
+  "protect"`, a band of four, clear sky - the one shipped map that is not
+  a field map, which `map::toml_tests::every_shipped_map_is_a_field_map`
+  names, since the BB-36 weapons' cells are laid out on its 36 x 18. Each later weapon adds its crate
   to the reserved column and whatever its interactions need; nothing here
   moves. Every level is untouched.
 
@@ -589,21 +616,20 @@ sandbox's seat. Online:
 ## 4. AI
 
 An enemy carrying the hammer uses it by `hammer_rule`, never through the
-generic tiers (`generic_fire(SonicHammer)` is false). `hammer_field` is
-built once per frame in `enemy_phase` when any enemy carries the hammer:
-the cells that stop sound (from `f.terrain`'s boxes), the cover cells, the
-drums, every live tank (slot, position, mass factor, side, weapon), the
-frogs (position, side, stunned), the seats (position, concealed, the
-alert), the trouble cells (below) and the footing's grip per cell.
-`hammer_sense` then gives each thinking hammer tank a `HammerSense`:
+generic tiers (`generic_fire(SonicHammer)` is false). `Game::hammer_senses`
+runs once per frame in `enemy_phase`, before the collect pass, when any
+live enemy carries the hammer; it gathers the cells that stop sound, the
+cover cells, the drums, every live tank, the enemy towers and their reach,
+the hunter's quarry and the seats (position, hull points, mass factor,
+concealed) once, and gives each hammer tank a `HammerSense`:
 
 ```rust
 pub struct HammerSense {
     /// One per facing, `Dir::index` order: what a blast that way would do.
     pub aims: [HammerAim; 4],
-    /// This tank is the nearest hammer-armed enemy to the seat it fights
-    /// (ties on slot): the one that may close in (`Approach`).
-    pub brawler: bool,
+    /// This tank is one of the `sonic_ai_closers` (2) hammer tanks nearest
+    /// the seat it fights (ties on slot): one that closes in.
+    pub closer: bool,
 }
 pub struct HammerAim {
     pub trouble: Option<u8>,  // a seat the shove would land in trouble
@@ -619,11 +645,16 @@ Each aim casts the cone (`SonicCone::cast`) from the tank as it stands,
 facing that way. A seat counts in any field only if it is in that cone, not
 a wreck, on the field, and this tank stands inside its sight box (§3.1); for
 `trouble`, `drum` and `breaker` it must also not be hidden from this tank
-(`concealed` and not hit-alerted - the attack tier's rule). `hammer_rule`,
-in priority order:
+(`concealed` and not hit-alerted - the attack tier's rule). A fellow enemy
+(`friend`) counts by its hull's centre and corners and by where its motion
+carries it by the time a blast started now would reach it (the tell and
+the wave's run out), so one driving into the cone is not shouted at either.
+`hammer_rule`, in priority order:
 
-1. **The tell holds** (`special_rule`'s first arm): `Hold { face:
-   tell.facing }`.
+1. **A wind-up holds** (`special_rule`'s first arm, `windup_rule`, on
+   `Tank::windup`): `Hold { face: windup.facing }` - every wind-up so far
+   is a tell; a later weapon's charge joins `Tank::windup` and gives
+   `windup_rule` its own arm.
 2. **Breach glass at once.** Commanding movement into glass
    (`walls_ahead[last_move_dir]` is glass) for `sonic_ai_glass_after_seconds`
    (0.1) - instead of `enemy_breach_after_seconds` - fires that way
@@ -646,7 +677,7 @@ in priority order:
       `enemy_fire_align_px`, inside `enemy_attack_range`, with the line of
       sight clear (`Terrain::line_of_sight`) and that enemy inside the
       landing point's sight box. The trouble cells (all but the lanes, which
-      depend on the shooter) are gathered into `hammer_field` once.
+      depend on the shooter) are gathered once per frame.
    2. **Throw a drum** (`"drum"`): a drum in the cone whose
       `sonic::drum_landing` - the simulation's own function - lands on a
       seat's cell.
@@ -665,17 +696,27 @@ in priority order:
       blasts, then shells.
 4. **Hold for the timer**: a fire arm that matched while `Ai::fire_timer`
    runs holds facing it instead (`act_special`).
-5. **Approach**: a brawler (`HammerSense::brawler`) under
-   `enemy_flee_damage`, not a guard that holds, whose target - the seat it
-   fights, or a hunter's quarry - is within `attack_range`, in its line of
-   sight and not hidden from it, and is not yet a breaker (or frog) in the
-   cone of `Dir::toward(target)`, closes in on it (`Approach { to: target
-   }`); the personal-space brake (`crowded_ahead`) stops it short of the
-   hull. One brawler per seat keeps a pack of hammer tanks from piling
-   onto one seat; the rest keep their ring slots and use the hammer only
-   when an arm above offers.
+5. **Close in**: a closer (`HammerSense::closer`) under
+   `enemy_flee_damage`, not a guard that holds, whose seat is alive,
+   within `attack_range` and in its line of sight (not hidden from it),
+   heads for its spot (`Brain::close_spot`): on the line from the seat out
+   to its slot of the seat's engagement ring, drawn in to
+   `sonic_ai_breaker_px` - or as near that as an open cell allows - and
+   holds there facing the seat (`Hold`, `why: "close"`), where the breaker
+   arm takes over. Two closers per seat surround it from their own slots
+   rather than pile onto it; the rest keep their ring slots by the attack
+   tier and use the hammer only when an arm above offers.
 6. Otherwise `None`: the tree goes on (attack still lines up and settles
-   but never fires the hammer; chase, patrol and the seek tiers as ever).
+   but never fires the hammer; no sniping - `can_snipe_player` is false
+   with a weapon its rule owns -; chase, patrol and the seek tiers as
+   ever).
+
+**A hunter carrying the hammer fights the seat** (`enemy_phase`'s
+`target_of`): the hammer cannot hurt a frog, and a frog hops away from a
+tank closing in on it, so a hunter chasing its quarry with it only drove
+round after a frog it could never kill. It takes the seat's ring like
+everyone else until its blasts are spent, and the frog arm still pins the
+frog when the frog stands in its cone.
 
 **The tell** (§3.2): every fire arm goes through it - `sonic_tell_seconds`
 (0.55) of the dish pulsing and arcs gathering into it (§5) before the
@@ -711,7 +752,7 @@ wave or the tank and its age, hashed, never rolled.
   angles, dissolving through the Bayer pattern to half at `cover` 0.5 and in
   eighths below (`dither_disc`'s rule). The EMP's ring and the well's
   spirals draw with it too.
-- **The wave** (`sonic::compose_wave`), in `render/game.rs`'s glowing pass
+- **The wave** (`sonic::wave_arcs`), in `render/game.rs`'s glowing pass
   (fast and bright, rule 7, and readable at night): `sonic_wave_rings` (3)
   arcs, the front at `sonic_wave_speed * age` and each one
   `sonic_ring_gap_px` (14) behind, none under 12 px; each arc split into
@@ -738,7 +779,7 @@ wave or the tank and its age, hashed, never rolled.
 - **The ripple**: `Shockwave::scaled(pivot, sonic_shock)` (0.35 of a tank
   dying) through `shockwave.rs` - a weak bend and shake, none under reduced
   motion.
-- **The tell** (`sonic::compose_tell`), glowing pass: three arcs within the
+- **The tell** (`sonic::tell_arcs`), glowing pass: three arcs within the
   cone's angles centred on the dish (`tank_art::SONIC_MUZZLE`), contracting
   from 40 px into the dish once every 0.2 s, `#C1C1C1` far to `#F0F0F0`
   near, dissolving in from `cover` 0.3 to 1 as the tell runs; the module
@@ -864,9 +905,11 @@ Protocol 15 (from 14), once in the PR.
   pivot in quarter pixels, the facing as `dir_index`; mirrors
   `Event::SonicBlast { slot, x, y, dir: &'static str }`.
 - `WireEvent::Shoved { seat, vx, vy, skid: u8 }` - the skid in tenths.
-- `WireEvent::Hit { .., cause: HitCause }` - `Shot` for every hit there was,
-  `Sonic` for the wave's (`Event::Hit::cause`, `#[serde(default)]` on the
-  simulation's event): what keeps a sonic hit from drawing as a shell's.
+- `WireEvent::Hit { .., cause: HitCause }` - what landed: `Shell`,
+  `Bullet`, `Plasma`, `Laser`, `Flame`, `Tesla` or `Sonic`
+  (`Event::Hit::cause`, set by `Projectile::hit_cause` and
+  `HitEffects::cause`), so a picture is chosen by its cause; every cause
+  but `Sonic` draws exactly what a hit drew before.
 - `WireEvent::DrumLaunched { x, y, to_x, to_y, drum: Drum }` - a thrown oil
   drum flies as an oil drum (the replica assumed fuel, the only drum a fuse
   ever launched).
@@ -912,130 +955,114 @@ Protocol 15 (from 14), once in the PR.
 
 ## 10. Tests
 
-`mechanics_tests` (headless, tiny inline maps):
+`simulation/sonic_tests.rs` (headless, the default 34 x 17 field, the
+seat at cell (3, 6) facing east, parked enemies placed by hand):
 
-- `a_sonic_crate_arms_the_hammer_and_replaces_the_special_carried` - a
-  crate gives six, empties another special, a second crate refills to six.
-- `the_hammer_fires_on_the_press_and_spends_one_blast` - one blast per
-  press, none while held, the reload holds the next; `Fired` then
-  `SonicBlast` in one tick.
-- `the_cone_shoves_an_enemy_ahead_and_not_one_beside` - ahead slides away,
-  at 90 degrees untouched.
-- `the_wave_reaches_far_things_later` - a near and a far enemy start moving
-  on the frames the front reaches them.
-- `the_shove_falls_off_with_distance` - the near one slides further.
-- `a_heavy_chassis_barely_slides` - a titan's slide under a quarter of a
-  scout's at the same distance.
-- `a_skidding_tank_cannot_drive_and_drives_again_when_it_stops` - a held
-  stick does not move it along the stick during the skid, does after.
-- `the_skid_slides_as_far_whichever_way_the_hull_faces` - the same shove
-  head-on and broadside, the same slide within a pixel.
-- `ice_lengthens_the_skid` - under snow, on a frozen lake, the slide is
-  `1 / sonic_skid_grip_floor` of the dry one.
-- `iron_brick_and_towers_shadow_the_cone` - an enemy behind each untouched,
-  one beside the shadow reached.
-- `glass_shatters_when_the_wave_reaches_it_and_shadows_what_stands_behind`.
-- `a_lantern_is_broken_and_a_lamp_post_left_standing`.
-- `grass_the_wave_crosses_stops_concealing_for_a_while` - `Terrain::conceals`
-  true, false after the front, true again after `sonic_grass_flat_seconds`;
-  the AI sees the seat in between.
-- `a_drum_is_thrown_onto_the_tank_behind_it` - `DrumLaunched` to the tank's
-  cell, the blast there.
-- `a_drum_with_no_tank_behind_it_is_thrown_along_the_wave` and
-  `a_fused_drum_is_thrown_too`.
-- `a_frog_the_wave_reaches_is_stunned_and_neither_hops_nor_bites`.
-- `the_hammer_hurts_only_the_other_side_and_shoves_everyone` - two seats:
-  the teammate shoved and whole, the enemy hurt by `sonic_damage` times the
-  falloff.
-- `a_shield_soaks_the_damage_not_the_shove`.
-- `a_grenade_in_the_cone_is_pushed_away`.
-- `a_wreck_shots_in_flight_and_crates_are_left_alone`.
-- `a_tank_shoved_into_a_portal_goes_through_and_stops_skidding`.
-- `the_wave_finishes_on_the_end_screen_and_moves_nothing`.
-- `an_owned_hull_is_allowed_its_skid` - `accept_seat_pose` takes a pose a
-  skid carried past the chassis's speed, within the grace.
-- `a_round_with_the_hammer_replays_bit_for_bit`.
-- `the_spawn_swap_is_off_at_zero_and_draws_nothing` - shares 0: every kit
-  and the RNG state after `init` as before; share 1: every enemy that drew
-  a special holds the hammer, and the RNG state is the same.
-- `an_enemy_collects_the_crate_only_on_shells`.
+- The weapon: `a_sonic_crate_arms_the_hammer_and_replaces_the_special_carried`
+  (six a crate, another special emptied, a refill to six, an enemy takes
+  one only on shells), `the_hammer_fires_on_the_press_and_spends_one_blast`
+  (`Fired` then `SonicBlast` in one tick, none while held).
+- The cone and the wave: `the_cone_shoves_an_enemy_ahead_and_not_one_beside`,
+  `the_wave_reaches_far_things_later`,
+  `the_shove_falls_off_with_distance_and_a_heavy_chassis_barely_slides`,
+  `walls_and_towers_shadow_the_cone_and_glass_shatters_as_it_does` (iron,
+  brick, a tower, glass: behind untouched, beside reached, only glass
+  gone).
+- The skid: `a_skidding_tank_cannot_drive_and_slides_as_far_whichever_way_it_faces`
+  (head-on and broadside within 3 px, a held stick ignored during it and
+  obeyed after), `the_predicted_slide_is_the_skid` (`sonic::slide`
+  against the stepped round), `ice_lengthens_the_skid` (`1 /
+  sonic_skid_grip_floor` within 0.3), `a_shoved_enemy_is_not_counted_stuck`,
+  `an_owned_hull_is_allowed_its_knock`.
+- What it meets: `a_lantern_is_broken_and_a_lamp_post_left_standing`,
+  `grass_the_wave_crosses_stops_concealing_for_a_while`,
+  `a_drum_is_thrown_onto_the_tank_behind_it`,
+  `a_drum_with_no_tank_behind_it_is_thrown_along_the_wave`,
+  `a_fused_drum_is_thrown_too`,
+  `a_frog_the_wave_reaches_is_stunned_and_neither_hops_nor_bites`,
+  `the_hammer_hurts_only_the_other_side_and_shoves_everyone` (a sonic `Hit`
+  says `HitCause::Sonic`), `a_shield_soaks_the_damage_not_the_shove`,
+  `a_grenade_in_the_cone_is_pushed_away`, `a_wreck_is_left_alone`,
+  `a_crate_in_the_cone_is_left_alone`,
+  `a_tank_shoved_into_a_portal_goes_through_and_stops_skidding`,
+  `the_wave_finishes_on_the_end_screen_and_moves_nothing`.
+- Determinism: `a_round_with_the_hammer_replays_bit_for_bit`,
+  `the_spawn_swap_is_off_at_zero` (a drawn special swapped at share 1, a
+  tank that drew none kept on shells; the swap is a hash, so the RNG
+  stream is the same either way).
+- The enemy: `an_enemys_tell_runs_before_its_blast` (`TellStarted`, then
+  the blast `sonic_tell_seconds` later, the aim held, facing the seat),
+  `a_wrecked_tanks_tell_never_goes_off`, `a_tell_holds_under_c2` (the
+  commander's nudge reaches a tank with no tell, not one in a tell -
+  `commanded_intent`), `the_rule_reads_where_the_knock_would_slide_the_seat`
+  (an enemy tower past the seat makes it "trouble", none leaves it
+  "breaker"), `hammer_tanks_close_in_round_the_seat_not_onto_it`.
 
-AI (`ai.rs` unit tests on a `Brain` with a made-up `HammerSense`, and
-`mechanics_tests` on a whole round):
+`ai::hammer_tests` (the rule on a made-up `HammerSense`):
+`every_arm_fires_the_way_it_names` (trouble, drum, flush, breaker, frog -
+each fires facing its way, then holds while `sonic_ai_fire_interval` runs),
+`the_arms_go_in_order_and_its_own_facing_first`,
+`it_never_fires_where_a_fellow_enemy_stands`,
+`the_generic_tiers_never_fire_the_hammer` (lined up at 200 px: the shells
+tank fires, the hammer tank never),
+`a_closer_closes_in_to_its_slot_drawn_in_and_waits_there`,
+`a_tell_holds_the_tank_facing_its_way`, `glass_in_its_way_is_shouted_down`.
 
-- `the_hammer_shoves_a_seat_into_trouble`, `..._throws_a_drum_onto_a_seat`,
-  `..._flushes_the_grass_at_the_alert`, `..._breaks_a_seat_in_its_face`,
-  `..._pins_the_hunters_frog` - each arm fires facing its way with its seat.
-- `the_hammer_never_fires_through_a_friend`.
-- `the_hammer_holds_while_its_tell_runs`.
-- `the_generic_tiers_never_fire_the_hammer` - lined up at 300 px: no fire.
-- `only_one_brawler_closes_in_on_a_seat`.
-- `the_predicted_slide_is_the_skid` (`sonic::slide` against a stepped
-  `Game` within 2 px).
-- `an_enemy_never_shouts_at_a_seat_from_outside_its_sight_box` (whole
-  round: a seat in the cone, the tank outside its box: no `TellStarted`).
-- `an_enemy_shouts_down_glass_in_its_way` - driving into glass: a tell
-  within `sonic_ai_glass_after_seconds` plus the tell, the pane gone.
-- `an_enemys_tell_runs_before_its_blast` - `TellStarted`, then `Fired` and
-  `SonicBlast` `sonic_tell_seconds` later, facing held, no movement.
-- `a_wrecked_tanks_tell_never_goes_off`.
-- `a_tell_holds_under_c2` - with `c2_enabled` on, a tank in a tell neither
-  moves nor turns until it goes off.
-- `a_shoved_enemy_does_not_count_as_stuck` - `stuck_timer` unchanged
-  through a skid it commanded against.
+The sight box: at the defaults the cone's 160 px lies inside every seat's
+box (+-368 x +-240 px) and a thrown drum lands at most about 205 px from
+the thrower, so no whole round can put a seat in the cone from outside its
+box; `Game::hammer_senses` checks it all the same, and the probe's
+`offbox-fire` (budget 0) counts a hammer used on a seat from outside it,
+since `act_special` records `Ai::shot_at_seat`.
 
 Shared path and presentation:
 
-- `sonic::tests`: `the_cone_reaches_its_reach_on_open_ground`,
+- `sonic::tests`: the cone (`the_cone_reaches_its_reach_on_open_ground`,
   `a_blocking_cell_cuts_the_rays_that_meet_it`,
-  `glass_is_entered_and_stops_its_rays`,
-  `the_cone_never_leaves_the_field`, `drum_landing_takes_the_nearest_tank_behind_then_the_slot`,
-  `drum_landing_walks_back_off_a_tile`; the composers
-  `the_wave_is_on_the_grid_in_its_ramp_and_gone_by_its_end`,
-  `the_wave_stops_at_a_walls_face`, `the_tell_is_on_the_grid_and_pure`.
-- `pyro`: `block_arc_stays_on_the_grid_and_within_its_angles`.
-- `tank` (`weapon_inventory_tests`): the hammer in `take_weapon`,
-  `full_load`, `active_weapon`, the module's cells.
-- `pickup`: `name`/`parse` round-trip every kind; `weapon`.
-- `hud_tests`: the hammer's slot, colour and glyph.
-- `frog`: `a_stunned_frog_cannot_hop_or_bite`.
-- `grass`: `a_pinned_tuft_stays_flat_then_recovers`.
-- `fx` tests: `a_sonic_hit_starts_no_fire` - a sonic `Hit` on a hull
-  flashes it and throws dust, and no spark, ember, impact or impact flash.
-- `fish::tests`: `a_wave_scares_the_fish_it_passes`,
-  `a_shout_at_the_shore_throws_a_fish_onto_the_bank_and_back`.
-- `indicator_tests`: `a_tell_off_screen_gets_an_arrow_the_cap_never_drops`,
-  `a_sonic_hit_points_the_arc_at_its_pivot`.
-- `devserver`: `spawn_pickup_puts_a_crate_down` (and its refusals: off the
-  field, on a tile, on a crate, online, in build), `set_tank_arms_the_sonic_hammer`,
-  the PICKUP category's count (13 to 14).
-- `editor`/`chrome_tests`: the tool in `TOOLS`.
-- `thumbnail`: the armory's pin. `maplint`: the armory in `SUPPORTED_MAPS`.
-- `text_tests`: every budget.
+  `glass_is_struck_and_stops_its_rays`, `the_cone_never_leaves_the_field`,
+  `cells_are_in_entry_order`), the drum's landing
+  (`drum_landing_takes_the_nearest_tank_behind_then_the_slot`,
+  `drum_landing_walks_back_off_a_tile`),
+  `the_skid_is_v_squared_over_twice_the_friction`, the composers
+  (`the_wave_is_on_the_grid_in_its_ramp_and_gone_by_its_end`,
+  `the_wave_stops_at_a_walls_face`, `the_tell_is_on_the_grid_and_pure`) and
+  `pyro::block_arc` (`block_arc_stays_on_the_grid_and_within_its_angles`,
+  `block_arc_draws_a_whole_turn_without_a_seam`).
+- `pickup::kind_tests::every_kind_is_named_as_serde_spells_it`;
+  `hud_tests::the_trigger_readout_is_the_special_carried_else_shells` (the
+  hammer's slot, colour and symbol); `fx_tests::a_sonic_hit_starts_no_fire`
+  (no spark, ember, smoke or impact burst; the flash and the dust);
+  `grass::tests::a_pinned_tuft_lies_flat_until_the_pin_runs_out`;
+  `fish::tests::{a_wave_scares_the_fish_it_passes,
+  a_shout_at_the_shore_throws_a_fish_onto_the_bank_and_back}`;
+  `indicator_tests::{a_tell_off_the_screen_has_an_arrow_whatever_the_cap,
+  through_the_round_a_sonic_hit_arcs_toward_the_blast}`;
+  `devserver::tests::set_tank_arms_the_hammer_and_spawn_pickup_drops_its_crate`
+  and the PICKUP category's count (14); `chrome_tests` with the wrapping
+  palette; the armory's thumbnail pin and its place in `SUPPORTED_MAPS`;
+  `text_tests`' budgets.
 
 Wire:
 
-- `events.rs`: the samples gain `SonicBlast`, `TellStarted` (not sent),
-  `Shoved` with a skid and `DrumLaunched` with a drum; the variant count.
-- `apply.rs`: `a_sonic_blast_reaches_the_replica` (a seat armed by
-  `debug_set_tank`, pressing: the replica gets one wave per blast and
-  draws the same picture after every apply), `an_enemys_tell_reaches_the_replica`,
-  `a_stunned_frog_reaches_the_replica`,
-  `a_sonic_hit_flashes_no_impact_on_the_replica`,
-  `a_sonic_blast_this_client_drew_is_not_drawn_again` (`OwnShotsDrawn`
-  with the press's bit: no wave, not handed on; without: a wave),
-  `the_beam_claim_still_holds` (the existing beam tests on `presses`).
-- `predict.rs`: `a_sonic_press_is_drawn_at_once_and_claims_the_rooms_show_once`,
-  `a_sonic_press_waits_for_the_reload`, `a_shove_with_a_skid_skids_the_sandbox`.
-- `round.rs`: `the_rooms_sonic_blast_is_left_out_only_for_a_press_this_client_drew`
-  (the beam test's twin), `an_owned_hull_skids_on_the_rooms_shove`.
-- `rig.rs` (`Lockstep`): `a_seats_sonic_blast_is_drawn_once_on_the_replica`
-  (one wave per press, never two) and
-  `an_enemys_sonic_blast_reaches_the_replica_after_its_tell` (an enemy
-  armed through `authority_mut`, a seat in its cone: the replica's tank
-  shows the tell, then the wave).
-- `delta.rs`: the random snapshots and the size bounds.
-- The room server's `cargo test -p bongbong-server` as it stands.
+- `events.rs`: the samples carry `SonicBlast`, a sonic `Hit`, `Shoved`
+  with a skid and `DrumLaunched` with a drum; `tell_started` on
+  `NOT_SENT`.
+- `apply.rs`: `a_sonic_blast_reaches_the_replica` (the same cone from the
+  same pivot, run out on the replica's clock),
+  `a_sonic_blast_this_client_drew_is_not_drawn_again`,
+  `an_enemys_tell_reaches_the_replica`, `a_stunned_frog_reaches_the_replica`,
+  `a_sonic_hit_flashes_no_impact_on_the_replica`, and the beam tests on
+  `presses`.
+- `predict.rs`: `a_sonic_blast_is_drawn_on_the_press` (from the predicted
+  pivot, owed until its `Fired`, claimed once), `a_knock_skids_the_owned_hull`.
+- `rig.rs`: `a_seats_blast_reaches_the_replica_once` and
+  `an_enemys_hammer_reaches_the_replica` (the tell, then the wave) through
+  `Lockstep`; `a_seats_blast_is_drawn_on_the_press_and_only_once` through
+  the threaded rig and a whole `OnlineRound` (the seat drives onto the
+  crate, presses: one wave on that frame, never two).
+- `delta.rs`: the random snapshots and the size bounds (a full snapshot
+  456 B, two bytes a tank more).
+- The room server's `cargo test -p bongbong-server`, its dev tools too.
 
 ## 11. Probe
 
@@ -1052,12 +1079,57 @@ Wire:
   ammo, so a blast is a trigger pull for `FIRED_RECENTLY_FRAMES`; a tank in
   a tell or a skid is a deliberate hold (`TankSnapshot::{tell, skidding}`),
   not a stall, low progress, jitter or grind.
-- **The bar**: every crate and armed run within the defaults' ceilings,
-  `offbox-fire` 0. An exceedance is read round by round from its
-  `ANOMALY` lines; one the hammer's own action causes - a tank stranded,
-  spinning, piling up or firing from off the box - is fixed, not
-  re-baselined. Recorded here in Phase 2: the totals at the defaults, with
-  the crate and armed, and what moved.
+- **The bar**: every crate run within the defaults' ceilings, `offbox-fire`
+  0. An exceedance is read round by round from its `ANOMALY` lines; one the
+  hammer's own action causes - a tank stranded, spinning, piling up or
+  firing from off the box - is fixed, not re-baselined.
+
+### Results (debug build, seed 1000, the recipes' budgets)
+
+Fixtures: the nine `maps/test/` maps, ten 30 s rounds each. Fields: the
+seven field maps, ten 60 s rounds each. Anomaly totals:
+
+| Sweep | Result | Totals |
+|---|---|---|
+| Fixtures, defaults | pass | border-stuck 4, churn 34, clustering 10, jitter 32, pile-up 6, spin 3 |
+| Fixtures, `--crate` | pass, the same | the fixtures carry no weapon crate, so `--crate` swaps nothing |
+| Fixtures, armed | over on all nine | border-stuck 13, churn 157, clustering 57, jitter 124, low-progress 4, never-arrived 1, pile-up 21, spin 19, stale-start 1, stall 1, tank-grind 5 |
+| Fields, defaults | pass | border-stuck 11, churn 83, clustering 12, jitter 108, pile-up 8, spin 24, wall-grind 1 |
+| Fields, `--crate` | over on two of seven | border-stuck 11, churn 98, clustering 31, jitter 125, never-arrived 1, pile-up 15, spin 26, stall 1, wall-grind 1 |
+| Fields, armed | over on five of seven | border-stuck 26, churn 188, clustering 108, jitter 211, low-progress 5, never-arrived 11, pile-up 77, spin 61, stall 11, tank-grind 21, wall-grind 3 |
+
+`offbox-fire` is 0 in every sweep. The defaults are the recipes' own,
+unchanged: a round without the hammer runs exactly as before.
+
+**With the crate** two maps go over by one: archipelago's `never-arrived`
+is a guard holding its beat (`guard_holds`, by design) in a round the
+hammer made longer - the AFK seat is shoved about rather than killed, and
+archipelago's rounds last 15.3 s on average against 8.6 s, past the
+guard's arrival budget - and harbor-lights' clustering is 12 against a
+ceiling of 11, a group of four at the enemies' side of the map of which one
+carried the hammer.
+
+**Armed** - every enemy spawning with the hammer - is a stress run that no
+shipped round reaches (`enemy_special_weapon_sonic_share` is 0 and the
+crates stand only in the armory). The rounds last two to three times as
+long (fields: 30 to 42 s against 8 to 26 s), since a pack that shoves
+rather than shoots keeps an AFK seat alive, and its tanks fight close by
+design, which the probe's clustering, pile-up and churn read as crowding.
+What moved on the way, on the armed fixtures:
+
+| AI | stall | never-arrived | churn | jitter | clustering | pile-up |
+|---|---|---|---|---|---|---|
+| One brawler per seat, the rest holding at range (the doc's first rule) | 40 | 9 | 105 | 89 | 47 | 22 |
+| Every hammer tank closing in, a hunter fighting the seat | 7 | 1 | 178 | 165 | 161 | 92 |
+| One closer per seat (`sonic_ai_closers` 1) | 3 | 4 | 144 | 99 | 74 | 39 |
+| **Two closers per seat** (shipped) | 1 | 1 | 157 | 124 | 57 | 21 |
+
+The first rule's statues (hammer tanks standing at range with a weapon
+they could not use, hunters aiming at a frog they could not hurt) are
+gone. What remains is a pack juggling a seat that never moves: two closers
+on its sides shoving it back and forth (churn, jitter) with the rest of the
+pack on the ring round it (clustering, pile-up). How such a pack should
+play is a question for Oto (§12).
 
 ## 12. Interactions, decisions, what is left out
 
@@ -1125,15 +1197,21 @@ Wire:
 7. **Only the opposing side is hurt, everyone is shoved**, frogs of both
    sides stunned - the side blast's rule (grenades, missiles).
 8. **The AI owns the trigger**: an enemy carrying the hammer never fires it
-   through the generic tiers; it fires by its rule, approaches as one
-   brawler per seat, and otherwise keeps its place. Rejected: letting the
+   through the generic tiers; it fires by its rule, two per seat close in,
+   and the rest keep their places on the seat's ring. The probe chose the
+   two: one brawler left the others standing at range with a weapon they
+   could not use (stalls, rounds where a tank never came within range);
+   every hammer tank closing in piled them round the seat (clustering and
+   pile-ups doubled); two closers at their own ring slots drawn in measured
+   best (§11). Rejected: letting the
    generic attack fire it at 340 px (wasted), and letting an enemy fire
    shells while it carries it (breaks the one-trigger rule). A visible
    change in how such an enemy plays: while it carries the hammer it is a
    close-range threat only - it never fires the hammer at range and fires
    no shells - until its six blasts are spent.
-9. **A hunter pins the frog** rather than doing nothing with it - six
-   blasts, then shells. *For Oto.*
+9. **A hunter carrying the hammer fights the seat**, pinning the frog only
+   when the frog stands in its cone - six blasts, then shells and the frog
+   again. *For Oto.*
 10. **The tell commits**: it goes off along its facing even if the seat
     stepped out, which is the dodge.
 11. **The special tier sits above flee**: a hurt tank's breaker is the
@@ -1158,6 +1236,26 @@ Wire:
     blast breaks too, break.
 19. **Crate ink sky blue** (`#46C3F2`). *For Oto*, with a screenshot of the
     crate beside the other twelve in Phase 2.
+20. **The builder's palette wraps**: the fourteenth pickup made the folded
+    TOOLS palette's PICKUP row wider than a phone's room (72 + 14 x 48 pt
+    against 704). A category longer than the room is wide runs on into a
+    second row, and the cells shrink to fit the room's height, never under
+    a finger's 44 pt. Rejected: paging the palette (a hidden page on a
+    touch screen) and a second PICKUP category (two names for one kind of
+    tool).
+21. **`Tank::special` beside `active_weapon`**: one question per reader -
+    what a tank carries or what its trigger fires (§3.0) - so the BB-36
+    weapons that carry without firing need no second rule.
+22. **A pack of hammer tanks juggles**: two closers a seat, the rest on
+    its ring, measured best of the four rules tried (§11), but a whole pack
+    armed with it still crowds a seat and keeps an AFK one alive two to
+    three times as long. Rejected for now: letting the tanks that are not
+    closing in fire shells (the one-trigger rule), and one closer (more
+    crowding on the ring, not less). *For Oto*: whether a pack should play
+    so, before the share knob goes above 0 anywhere.
+23. **The crate's blue sits between plasma's teal and the tower pack's
+    periwinkle** in the crate row (screenshot in the PR); *For Oto* if it
+    reads too close to either.
 
 ### Not in this PR
 

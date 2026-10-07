@@ -11,8 +11,8 @@ the drawing, the shows a crate puts on and the breakable crates behind
 
 | File | Size | Grid | Drawn at |
 |---|---|---|---|
-| `static/crates_sheet.png` | 280 × 520 | 7 cols × 13 rows of 40 px | 1:1, centred on the pickup's 32 px cell (`CRATE_CELL`) |
-| `static/pickup_glyphs.png` | 24 × 312 | 1 col × 13 rows of 24 px | 1:1 on the field; 24 pt in the HUD and the builder's bar |
+| `static/crates_sheet.png` | 280 × 560 | 7 cols × 14 rows of 40 px | 1:1, centred on the pickup's 32 px cell (`CRATE_CELL`) |
+| `static/pickup_glyphs.png` | 24 × 336 | 1 col × 14 rows of 24 px | 1:1 on the field; 24 pt in the HUD and the builder's bar |
 
 Both are written by `tools/spritegen/gen_crates.py` (raw PNG bytes, no
 Pillow, deterministic - every choice is a position hash):
@@ -25,7 +25,7 @@ just check-sheets
 Never edit them by hand. The rows are `PickupKind` in declaration order
 (`PickupKind::row`, the generator's `KINDS`): health, ammo, laser, minigun,
 plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack,
-heat_shield, grenades.
+heat_shield, grenades, sonic_hammer.
 
 ### Columns of `crates_sheet.png`
 
@@ -80,6 +80,7 @@ heat_shield, grenades.
 | tower_pack | a spanner | `#8FB0FF` |
 | heat_shield | a shield, molten red over black basalt (docs/volcano.md) | `#F0461E` |
 | grenades | four grenades, each with its lamp lit in the light ink (`#F4B6FF`; white on the symbol sheet) | `#D656F5` |
+| sonic_hammer | a speaker's cone and two arcs of sound (docs/sonic-hammer.md) | `#46C3F2` |
 
 The symbol sheet is each symbol on its own, lit along its top, shaded along
 its bottom and outlined: what rises out of an opened crate, what a broken
