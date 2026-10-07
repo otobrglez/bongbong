@@ -586,7 +586,8 @@ half height), and the flag keeps the rule true on any knobs.
    (`target_value >= emp_ai_approach_value`, 2) and not crowded
    (`!target_crowded` - it would only hold beside an ally there), closes
    in to its own spot on the line from the seat out to its engagement
-   slot, three fifths of the ring out (`Brain::close_spot`, the hammer's),
+   slot, `emp_ai_close_share` (three fifths) of the ring out
+   (`Brain::close_spot`; decision 32),
    and holds there facing the seat (`Hold { why: "close" }`). One closer
    per seat (`emp_ai_closers`) keeps a pack of EMP tanks from
    piling onto one seat; the rest keep their slots and use it when the
@@ -866,6 +867,7 @@ enemies' group:
 | `emp_hud_flicker_hz` | 3.5 | 0.5..=20 | How often `WPN OFFLINE` flickers. |
 | `emp_ai_fire_value: i32` | 1 | 1..=20 | What a pulse has to be worth before an enemy fires it: at 1, any seat or player tower in reach. |
 | `emp_ai_approach_value: i32` | 2 | 1..=20 | What the seat an enemy fights has to be worth alone before its closer closes in to pulse it: at 2, a seat with a shield or an online special, or any seat at night. |
+| `emp_ai_close_share` | 0.6 | 0.1..=1 | How far from the seat a closer waits to pulse it, as a share of the ring's reach. |
 | `emp_ai_seat_value: i32` | 1 | 0..=10 | A seat in reach, not already disabled. |
 | `emp_ai_shield_value: i32` | 1 | 0..=10 | More for a seat with a live shield. |
 | `emp_ai_special_value: i32` | 1 | 0..=10 | More for a seat carrying an online special. |

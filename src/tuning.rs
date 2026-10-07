@@ -1026,6 +1026,10 @@ tunables! {
         /// to it, ties on slot); the rest hold their slots of its ring and
         /// pulse it only when it comes into their reach.
         emp_ai_closers: i32 = 1 in 0 ..= 8;
+        /// How far from the seat a closer waits to pulse it, as a share of
+        /// the ring's reach (`emp_radius_px`): well inside it, so the seat
+        /// is in the ring before the closer gets there.
+        emp_ai_close_share: f32 = 0.6 in 0.1 ..= 1.0;
         /// A seat in reach, not already disabled.
         emp_ai_seat_value: i32 = 1 in 0 ..= 10;
         /// More for a seat with a live shield.

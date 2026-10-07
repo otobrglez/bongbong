@@ -2872,7 +2872,7 @@ fn emp_rule(b: &Brain, sense: &EmpSense) -> Option<SpecialUse> {
         && b.dist_to_player() <= b.attack_range()
     {
         let seat = b.player.position;
-        let spot = b.close_spot(seat, b.engage_target, t.emp_radius_px * 0.6);
+        let spot = b.close_spot(seat, b.engage_target, t.emp_radius_px * t.emp_ai_close_share);
         if b.me.position.distance_to(spot) <= OBSTACLE_GRID_SIZE * 0.5 {
             return Some(SpecialUse::Hold { face: Dir::toward(b.me.position, seat), why: "close" });
         }
