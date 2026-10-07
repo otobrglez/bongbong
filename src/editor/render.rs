@@ -32,22 +32,12 @@ const BUTTON_GAP: f32 = 8.0;
 const CARET_W: i32 = 10;
 /// A dropdown row's name column, right of its 32 pt icon at 8 pt inset.
 const DROPDOWN_TEXT_X: i32 = 48;
-const SETTINGS_VALUE_X: i32 = 180;
-const SETTINGS_LABEL_SIZE: i32 = 16;
+use super::chrome::{MAP_CHECK, MAP_HEADING_SIZE, MAP_LABEL_SIZE, MAP_SKY_SIZE, MAP_SWATCH, MAP_VALUE_SIZE};
 
 /// What the canvas area shows where the map is not: past its edges when
 /// the whole of a field map is shown, and under the field before the
 /// ground is drawn.
 const CANVAS_FILL: Color = Color::new(30, 30, 34, 255);
-
-/// Where a TANK row shows the chassis it has picked: a tank frame's 32 px
-/// (`TANK_FRAME_SIZE`, one sheet pixel each), centred on the row and
-/// right-aligned in the label column, one inset clear of the `<` button.
-/// The TANK labels' budget in `text::budgets` stops short of it.
-fn settings_icon_rect(row: Rectangle) -> Rectangle {
-    let size = crate::TANK_FRAME_SIZE;
-    Rectangle::new(row.x + SETTINGS_DEC_X - SETTINGS_INSET - size, row.y + (row.height - size) / 2.0, size, size)
-}
 
 /// The width the default font gives `text` at `size`: `text::width`,
 /// which is `MeasureText`'s answer with no handle.
@@ -766,7 +756,7 @@ impl MapEditor {
             (Some(Popup::Brush), Some(PopupLayout::Brush(rows))) => self.draw_brush_list(d, rows),
             (Some(Popup::Stamps { scroll }), Some(PopupLayout::Stamps(list))) => self.draw_stamps_list(d, list, *scroll, hints),
             (Some(Popup::Palette), Some(PopupLayout::Palette(palette))) => self.draw_palette(d, palette, textures),
-            (Some(Popup::Settings { page }), Some(PopupLayout::Settings(settings))) => self.draw_settings(d, settings, *page, textures, hints),
+            (Some(Popup::Settings { .. }), Some(PopupLayout::Settings(panel))) => self.draw_settings(d, panel, textures),
             (Some(Popup::Lint { page }), Some(PopupLayout::Lint(lint))) => self.draw_lint_panel(d, lint, *page, hints),
             (Some(Popup::File), Some(PopupLayout::File(rows))) => Self::draw_file_menu(d, rows, &self.file_rows()),
             (Some(Popup::Load { entries, scroll }), Some(PopupLayout::Load(load))) => self.draw_load_list(d, load, entries, *scroll, hints, textures),
@@ -909,59 +899,149 @@ impl MapEditor {
         }
     }
 
-    /// The MAP settings panel (docs/game-editor-fusion.md section 9): a
-    /// stepper per map key and the RESET MAP button, `page`'s rows where
-    /// the room under the bar pages it, and then its pager.
-    fn draw_settings(&self, d: &mut impl RaylibDraw, layout: &chrome::SettingsLayout, page: usize, textures: &EditorTextures, hints: Hints) {
-        draw_hanging_panel(d, layout.rows.panel);
-        let page = page.min(layout.pages - 1);
+    /// The MAP panel (docs/game-editor-fusion.md section 9) as
+    /// `chrome::MapPanel` lays it out: the rail's tabs or the groups'
+    /// headings, every control shown and RESET MAP.
+    fn draw_settings(&self, d: &mut impl RaylibDraw, layout: &chrome::MapPanel, textures: &EditorTextures) {
+        let t = text();
+        draw_hanging_panel(d, layout.panel);
         let settings = self.settings();
-        let waves_off = settings.spawn == SpawnKind::Band;
-        for (i, row) in SETTINGS_ROWS.iter().enumerate() {
-            let Some(rect) = layout.row(i, page) else { continue };
-            let text_y = rect.y as i32 + (EDITOR_DROPDOWN_ROW_H as i32 - HUD_TEXT_SIZE) / 2;
-            if *row == SettingsRow::Reset {
-                let button = Self::settings_reset_rect(rect);
-                let color = if self.dirty() { BUILD_ACCENT } else { DIM };
-                let inset = Rectangle::new(button.x, button.y + 4.0, button.width, button.height - 8.0);
-                d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 2.0, color);
-                let label = row.label();
-                let w = text_width(&label, HUD_TEXT_SIZE);
-                d.draw_text(&label, (button.x + (button.width - w) / 2.0) as i32, text_y, HUD_TEXT_SIZE, color);
-                continue;
+        let cli = self.cli_overrides;
+        let mark = t.get(keys::SETTINGS_CLI);
+        for (tab, rect) in &layout.tabs {
+            let on = *tab == layout.tab;
+            if on {
+                d.draw_rectangle_rec(*rect, Color::new(255, 255, 255, 24));
+                d.draw_rectangle_rec(Rectangle::new(rect.x, rect.y + 4.0, 4.0, rect.height - 8.0), BUILD_ACCENT);
             }
-            let dim = waves_off && row.is_wave_row();
-            let label_color = if dim { Color::new(70, 70, 76, 255) } else { DIM };
-            let value_color = if dim { DIM } else { TEXT };
-            d.draw_text(&row.label(), rect.x as i32 + SETTINGS_INSET as i32, text_y, SETTINGS_LABEL_SIZE, label_color);
-            if let Some((kind, player)) = row.chassis(&settings) {
-                let icon = settings_icon_rect(rect);
-                for src in crate::tank::chassis_icon_source_recs(kind, player) {
-                    d.draw_texture_pro(textures.tanks, src, icon, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-                }
-            }
-            for (button, glyph) in [(Self::settings_dec_rect(rect), "<"), (Self::settings_inc_rect(rect), ">")] {
-                let inset = Rectangle::new(button.x + 2.0, button.y + 4.0, button.width - 4.0, button.height - 8.0);
-                d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
-                let w = text_width(glyph, HUD_TEXT_SIZE);
-                d.draw_text(glyph, (button.x + (button.width - w) / 2.0) as i32, text_y, HUD_TEXT_SIZE, value_color);
-            }
-            let value = row.value(&settings, self.size_cells());
-            let value_x = rect.x as i32 + SETTINGS_VALUE_X;
-            if *row == SettingsRow::Anchor {
-                draw_anchor(d, Rectangle::new(value_x as f32, rect.y, 28.0, rect.height), self.resize_anchor, value_color);
-            }
-            d.draw_text(&value, value_x, text_y, HUD_TEXT_SIZE, value_color);
-            if row.cli_override(self.cli_overrides) {
-                let x = value_x + text_width(&value, HUD_TEXT_SIZE) as i32 + 4;
-                d.draw_text(&text().get(keys::SETTINGS_CLI), x, text_y + 4, UI_SMALL_TEXT, DIM);
+            let label = t.get(tab.key());
+            let w = text_width(&label, MAP_LABEL_SIZE);
+            let y = rect.y + (rect.height - MAP_LABEL_SIZE as f32) / 2.0;
+            d.draw_text(&label, (rect.x + (rect.width - w) / 2.0) as i32, y as i32, MAP_LABEL_SIZE, if on { BUILD_ACCENT } else { TEXT });
+            if tab.overridden(cli) {
+                let mw = text_width(&mark, UI_SMALL_TEXT);
+                d.draw_text(&mark, (rect.x + (rect.width - mw) / 2.0) as i32, (y + MAP_LABEL_SIZE as f32 + 2.0) as i32, UI_SMALL_TEXT, DIM);
             }
         }
-        if let Some(pager) = layout.pager {
-            let from = page * layout.per_page + 1;
-            let to = (from + layout.per_page - 1).min(SETTINGS_ROWS.len());
-            let hint = text().fmt(page_key(hints), &[("from", from.into()), ("to", to.into()), ("n", SETTINGS_ROWS.len().into())]);
-            draw_pager(d, pager.row, &hint, page > 0, page + 1 < layout.pages);
+        if let Some((_, first)) = layout.tabs.first() {
+            d.draw_rectangle_rec(Rectangle::new(first.x + first.width - 1.0, layout.panel.y, 1.0, layout.panel.height), PANEL_BORDER);
+        }
+        for (tab, rect) in &layout.headings {
+            let label = t.get(tab.key());
+            let y = rect.y + (rect.height - MAP_HEADING_SIZE as f32) / 2.0 - 2.0;
+            d.draw_text(&label, rect.x as i32 + 2, y as i32, MAP_HEADING_SIZE, BUILD_ACCENT);
+            let mut x = rect.x + 2.0 + text_width(&label, MAP_HEADING_SIZE) + 10.0;
+            if *tab == MapTab::Sky {
+                let hint = t.get(keys::SETTINGS_SKY_HINT);
+                d.draw_text(&hint, x as i32, (y + 3.0) as i32, UI_SMALL_TEXT, DIM);
+                x += text_width(&hint, UI_SMALL_TEXT) + 8.0;
+            }
+            if tab.overridden(cli) {
+                d.draw_text(&mark, x as i32, (y + 3.0) as i32, UI_SMALL_TEXT, DIM);
+            }
+            d.draw_rectangle_rec(Rectangle::new(rect.x, rect.y + rect.height - 3.0, rect.width, 1.0), Color::new(255, 255, 255, 40));
+        }
+        let reset = layout.reset;
+        let color = if self.dirty() { BUILD_ACCENT } else { DIM };
+        let inset = Rectangle::new(reset.x + 6.0, reset.y + 6.0, reset.width - 12.0, reset.height - 12.0);
+        d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 2.0, color);
+        let label = t.get(keys::SETTINGS_RESET);
+        let w = text_width(&label, MAP_LABEL_SIZE);
+        d.draw_text(&label, (reset.x + (reset.width - w) / 2.0) as i32, (reset.y + (reset.height - MAP_LABEL_SIZE as f32) / 2.0) as i32, MAP_LABEL_SIZE, color);
+        for placed in &layout.fields {
+            self.draw_field(d, placed, &settings, textures);
+        }
+    }
+
+    /// One control of the MAP panel and its label.
+    fn draw_field(&self, d: &mut impl RaylibDraw, placed: &chrome::PlacedField, s: &MapSettings, textures: &EditorTextures) {
+        let t = text();
+        let field = placed.field;
+        let rect = placed.rect;
+        let outline = Color::new(255, 255, 255, 60);
+        if let Some(label) = placed.label {
+            let words = field.label();
+            let beside = label.height >= rect.height;
+            let flagged = field.overridden(self.cli_overrides);
+            let mark = t.get(keys::SETTINGS_CLI);
+            if beside {
+                let lines = if flagged { MAP_LABEL_SIZE as f32 + 2.0 + UI_SMALL_TEXT as f32 } else { MAP_LABEL_SIZE as f32 };
+                let y = label.y + (label.height - lines) / 2.0;
+                d.draw_text(&words, (label.x + 4.0) as i32, y as i32, MAP_LABEL_SIZE, DIM);
+                if flagged {
+                    d.draw_text(&mark, (label.x + 4.0) as i32, (y + MAP_LABEL_SIZE as f32 + 2.0) as i32, UI_SMALL_TEXT, DIM);
+                }
+            } else {
+                d.draw_text(&words, (label.x + 2.0) as i32, label.y as i32, UI_SMALL_TEXT, DIM);
+                if flagged {
+                    let x = label.x + 2.0 + text_width(&words, UI_SMALL_TEXT) + 4.0;
+                    d.draw_text(&mark, x as i32, label.y as i32, UI_SMALL_TEXT, DIM);
+                }
+            }
+        }
+        let text_y = |r: Rectangle, size: i32| (r.y + (r.height - size as f32) / 2.0) as i32;
+        match field.kind() {
+            FieldKind::Choice(n) => {
+                let chosen = field.chosen(s);
+                for (i, option) in chrome::segments(rect, n).into_iter().enumerate() {
+                    let words = field.option_label(i);
+                    let w = text_width(&words, MAP_VALUE_SIZE);
+                    let x = (option.x + (option.width - w) / 2.0) as i32;
+                    if chosen == Some(i) {
+                        d.draw_rectangle_rounded(option, 0.2, EDITOR_PANEL_SEGMENTS, BUILD_ACCENT);
+                        d.draw_text(&words, x, text_y(option, MAP_VALUE_SIZE), MAP_VALUE_SIZE, BAR_FILL);
+                    } else {
+                        let inset = Rectangle::new(option.x + 1.0, option.y + 1.0, option.width - 2.0, option.height - 2.0);
+                        d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, outline);
+                        d.draw_text(&words, x, text_y(option, MAP_VALUE_SIZE), MAP_VALUE_SIZE, TEXT);
+                    }
+                }
+            }
+            FieldKind::Stepper | FieldKind::Chassis(_) => {
+                let inset = Rectangle::new(rect.x + 1.0, rect.y + 1.0, rect.width - 2.0, rect.height - 2.0);
+                d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, outline);
+                let glyphs = if field.is_number() { ["-", "+"] } else { ["<", ">"] };
+                for (button, glyph) in [(chrome::stepper_dec(rect), glyphs[0]), (chrome::stepper_inc(rect), glyphs[1])] {
+                    let w = text_width(glyph, HUD_TEXT_SIZE);
+                    d.draw_text(glyph, (button.x + (button.width - w) / 2.0) as i32, text_y(button, HUD_TEXT_SIZE), HUD_TEXT_SIZE, TEXT);
+                }
+                let middle = Rectangle::new(rect.x + chrome::MAP_STEP_W, rect.y, rect.width - 2.0 * chrome::MAP_STEP_W, rect.height);
+                if field == MapField::Anchor {
+                    const SPAN: f32 = 28.0;
+                    draw_anchor(d, Rectangle::new(middle.x + (middle.width - SPAN) / 2.0, middle.y, SPAN, middle.height), self.resize_anchor, TEXT);
+                    return;
+                }
+                let words = field.value(s, self.size_cells());
+                let w = text_width(&words, MAP_VALUE_SIZE);
+                match field.chassis(s) {
+                    Some((kind, seat)) => {
+                        let size = crate::TANK_FRAME_SIZE;
+                        let x = middle.x + (middle.width - size - 8.0 - w) / 2.0;
+                        let icon = Rectangle::new(x, middle.y + (middle.height - size) / 2.0, size, size);
+                        for src in crate::tank::chassis_icon_source_recs(kind, seat) {
+                            d.draw_texture_pro(textures.tanks, src, icon, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+                        }
+                        d.draw_text(&words, (x + size + 8.0) as i32, text_y(middle, MAP_VALUE_SIZE), MAP_VALUE_SIZE, TEXT);
+                    }
+                    None => d.draw_text(&words, (middle.x + (middle.width - w) / 2.0) as i32, text_y(middle, MAP_VALUE_SIZE), MAP_VALUE_SIZE, TEXT),
+                }
+            }
+            FieldKind::Sky(sky) => {
+                let on = s.weather.contains(sky);
+                let inset = Rectangle::new(rect.x + 1.0, rect.y + 1.0, rect.width - 2.0, rect.height - 2.0);
+                if on {
+                    d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 2.0, BUILD_ACCENT);
+                } else {
+                    d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, outline);
+                }
+                let swatch = Rectangle::new(rect.x + 8.0, rect.y + (rect.height - MAP_SWATCH) / 2.0, MAP_SWATCH, MAP_SWATCH);
+                let tint = if on { 255 } else { 110 };
+                d.draw_rectangle_rec(swatch, sky_swatch(sky).alpha(tint as f32 / 255.0));
+                d.draw_rectangle_lines_ex(swatch, 2.0, Color::new(0, 0, 0, 120));
+                let name = sky_label(sky);
+                d.draw_text(&name, (swatch.x + MAP_SWATCH + 8.0) as i32, text_y(rect, MAP_SKY_SIZE), MAP_SKY_SIZE, if on { TEXT } else { DIM });
+                draw_check(d, Rectangle::new(rect.x + rect.width - 8.0 - MAP_CHECK, rect.y, MAP_CHECK, rect.height), on);
+            }
         }
     }
 
@@ -1882,94 +1962,120 @@ impl FileRow {
     }
 }
 
-impl SettingsRow {
+impl MapTab {
+    /// Whether a CLI flag outranks a field of the group at PLAY.
+    fn overridden(self, o: CliOverrides) -> bool {
+        self.rows(true).iter().flatten().any(|f| f.overridden(o))
+    }
+}
+
+impl MapField {
+    /// The words a control's label shows.
     fn label(self) -> String {
-        text().get(match self {
-            SettingsRow::Tanks => keys::SETTINGS_TANKS,
-            SettingsRow::Tank => keys::SETTINGS_TANK,
-            SettingsRow::Tank2 => keys::SETTINGS_TANK2,
-            SettingsRow::Mission => keys::SETTINGS_MISSION,
-            SettingsRow::Spawn => keys::SETTINGS_SPAWN,
-            SettingsRow::Waves => keys::SETTINGS_WAVES,
-            SettingsRow::Size => keys::SETTINGS_SIZE,
-            SettingsRow::Growth => keys::SETTINGS_GROWTH,
-            SettingsRow::TierStart => keys::SETTINGS_TIER_START,
-            SettingsRow::TierEnd => keys::SETTINGS_TIER_END,
-            SettingsRow::Theme => keys::SETTINGS_THEME,
-            SettingsRow::Weather => keys::SETTINGS_WEATHER,
-            SettingsRow::Width => keys::SETTINGS_WIDTH,
-            SettingsRow::Height => keys::SETTINGS_HEIGHT,
-            SettingsRow::Anchor => keys::SETTINGS_ANCHOR,
-            SettingsRow::Reset => keys::SETTINGS_RESET,
-        })
+        match (self, self.label_key()) {
+            (MapField::Sky(sky), _) => sky_label(sky),
+            (_, Some(key)) => text().get(key),
+            (_, None) => String::new(),
+        }
     }
 
-    /// The chassis a TANK row has picked and the seat whose colours it
-    /// is drawn in; `None` on `auto` and on every other row.
+    /// A choice's `i`th option as its button shows it, in capitals.
+    fn option_label(self, i: usize) -> String {
+        self.option_text(&text(), i)
+    }
+
+    /// The steppers that count rather than choose: `-` and `+`, where a
+    /// choice's are `<` and `>`.
+    fn is_number(self) -> bool {
+        matches!(self, MapField::Tanks | MapField::Waves | MapField::Size | MapField::Growth | MapField::Width | MapField::Height)
+    }
+
+    /// The chassis a TANK stepper has picked and the seat whose colours it
+    /// is drawn in; `None` on `auto` and on every other field.
     fn chassis(self, s: &MapSettings) -> Option<(TankKind, u8)> {
         match self {
-            SettingsRow::Tank => s.tank.map(|kind| (kind, 0)),
-            SettingsRow::Tank2 => s.tank2.map(|kind| (kind, 1)),
+            MapField::Tank => s.tank.map(|kind| (kind, 0)),
+            MapField::Tank2 => s.tank2.map(|kind| (kind, 1)),
             _ => None,
         }
     }
 
-    /// One of the five rows that only matter to a Waves spawn plan.
-    fn is_wave_row(self) -> bool {
-        matches!(
-            self,
-            SettingsRow::Waves | SettingsRow::Size | SettingsRow::Growth | SettingsRow::TierStart | SettingsRow::TierEnd
-        )
-    }
-
-    /// The row's value as the panel shows it, in the language on screen:
-    /// a data name looked up by its family (`tank-scout`, `theme-desert`),
-    /// the word for `auto` where the map leaves it to the game, or the
-    /// map's size in cells (`size`, columns and rows). The ANCHOR row is a
-    /// picture (`draw_anchor`), no words.
+    /// A stepper's value, in the language on screen: a data name looked up
+    /// by its family (`tank-scout`, `tier-heavy`), the word for `auto` where
+    /// the map leaves it to the game - the short one in a row of three -
+    /// or the map's size in cells (`size`, columns and rows).
     fn value(self, s: &MapSettings, size: (f32, f32)) -> String {
         let t = text();
-        let auto_or = |v: Option<String>| v.unwrap_or_else(|| t.get(keys::SETTINGS_AUTO));
+        let auto = |v: Option<String>, short: bool| {
+            v.unwrap_or_else(|| t.get(if short { keys::SETTINGS_AUTO_SHORT } else { keys::SETTINGS_AUTO }))
+        };
         match self {
-            SettingsRow::Tanks => auto_or(s.tanks.map(|n| n.to_string())),
-            SettingsRow::Tank => auto_or(s.tank.map(|k| t.named("tank", k.name()))),
-            SettingsRow::Tank2 => auto_or(s.tank2.map(|k| t.named("tank", k.name()))),
-            SettingsRow::Mission => t.named("mission", s.mission.name()),
-            SettingsRow::Spawn => t.named("spawn", s.spawn.name()),
-            SettingsRow::Waves => auto_or(s.waves.map(|n| n.to_string())),
-            SettingsRow::Size => auto_or(s.size.map(|n| n.to_string())),
-            SettingsRow::Growth => auto_or(s.growth.map(|n| n.to_string())),
-            SettingsRow::TierStart => auto_or(s.tier_start.map(|tier| t.named("tier", tier.name()))),
-            SettingsRow::TierEnd => auto_or(s.tier_end.map(|tier| t.named("tier", tier.name()))),
-            SettingsRow::Theme => t.named("theme", s.theme.name()),
-            SettingsRow::Weather => t.named("weather", s.weather.name()),
-            SettingsRow::Width => cells_text(size.0),
-            SettingsRow::Height => cells_text(size.1),
-            SettingsRow::Anchor | SettingsRow::Reset => String::new(),
+            MapField::Tanks => auto(s.tanks.map(|n| n.to_string()), false),
+            MapField::Tank => auto(s.tank.map(|k| t.named("tank", k.name())), false),
+            MapField::Tank2 => auto(s.tank2.map(|k| t.named("tank", k.name())), false),
+            MapField::Waves => auto(s.waves.map(|n| n.to_string()), true),
+            MapField::Size => auto(s.size.map(|n| n.to_string()), true),
+            MapField::Growth => auto(s.growth.map(|n| n.to_string()), true),
+            MapField::TierStart => auto(s.tier_start.map(|tier| t.named("tier", tier.name())), false),
+            MapField::TierEnd => auto(s.tier_end.map(|tier| t.named("tier", tier.name())), false),
+            MapField::Width => cells_text(size.0),
+            MapField::Height => cells_text(size.1),
+            MapField::Mission | MapField::Spawn | MapField::Theme | MapField::Anchor | MapField::Sky(_) => String::new(),
         }
     }
 
-    /// Whether a CLI flag outranks this row's value at PLAY.
-    fn cli_override(self, o: CliOverrides) -> bool {
+    /// Whether a CLI flag outranks this field's value at PLAY.
+    fn overridden(self, o: CliOverrides) -> bool {
         match self {
-            SettingsRow::Tanks => o.tanks,
-            SettingsRow::Tank => o.tank,
-            SettingsRow::Tank2 => o.tank2,
-            SettingsRow::Mission => o.mission,
-            SettingsRow::Spawn => o.spawn,
-            SettingsRow::Waves => o.waves,
-            SettingsRow::Size => o.wave_size,
-            SettingsRow::Growth => o.wave_growth,
-            SettingsRow::TierStart => o.tier_start,
-            SettingsRow::TierEnd => o.tier_end,
+            MapField::Tanks => o.tanks,
+            MapField::Tank => o.tank,
+            MapField::Tank2 => o.tank2,
+            MapField::Mission => o.mission,
+            MapField::Spawn => o.spawn,
+            MapField::Waves => o.waves,
+            MapField::Size => o.wave_size,
+            MapField::Growth => o.wave_growth,
+            MapField::TierStart => o.tier_start,
+            MapField::TierEnd => o.tier_end,
             // No CLI flag names a theme: the map is the only source.
-            SettingsRow::Theme => false,
+            MapField::Theme => false,
             // `--weather` (and the web page's `?weather=`) is the
             // `weather_override` knob, which outranks every map's sky.
-            SettingsRow::Weather => crate::tuning::tuning().weather_override >= 0,
+            MapField::Sky(_) => crate::tuning::tuning().weather_override >= 0,
             // The size is the map's alone, and the anchor the panel's.
-            SettingsRow::Width | SettingsRow::Height | SettingsRow::Anchor | SettingsRow::Reset => false,
+            MapField::Width | MapField::Height | MapField::Anchor => false,
         }
+    }
+}
+
+/// A sky tile's name: the sky's in capitals (`sky_label_text`).
+fn sky_label(sky: Weather) -> String {
+    sky_label_text(&text(), sky)
+}
+
+/// A sky tile's swatch: a colour that reads as its sky at a glance.
+fn sky_swatch(sky: Weather) -> Color {
+    match sky {
+        Weather::Clear | Weather::Random => Color::new(122, 178, 78, 255),
+        Weather::Night => Color::new(28, 40, 72, 255),
+        Weather::Dusk => Color::new(176, 124, 64, 255),
+        Weather::Rain => Color::new(64, 104, 120, 255),
+        Weather::Storm => Color::new(40, 48, 64, 255),
+        Weather::Fog => Color::new(176, 188, 192, 255),
+        Weather::Sandstorm => Color::new(212, 168, 96, 255),
+        Weather::Snow => Color::new(232, 240, 244, 255),
+        Weather::HeatHaze => Color::new(232, 196, 120, 255),
+    }
+}
+
+/// A sky tile's check box in `rect`'s height, a filled square inside a
+/// frame while `on`.
+fn draw_check(d: &mut impl RaylibDraw, rect: Rectangle, on: bool) {
+    let side = MAP_CHECK;
+    let frame = Rectangle::new(rect.x, rect.y + (rect.height - side) / 2.0, side, side);
+    d.draw_rectangle_lines_ex(frame, 2.0, if on { TEXT } else { DIM });
+    if on {
+        d.draw_rectangle_rec(Rectangle::new(frame.x + 4.0, frame.y + 4.0, side - 8.0, side - 8.0), BUILD_ACCENT);
     }
 }
 
@@ -2023,7 +2129,6 @@ fn draw_anchor(d: &mut impl RaylibDraw, rect: Rectangle, anchor: Anchor, color: 
 #[cfg(test)]
 mod bar_tests {
     use super::*;
-    use crate::EDITOR_SETTINGS_W;
 
     /// A category button's icon and caret, with a mouse and on a touch
     /// screen: the icon inside the icon half, the caret clear of it and
@@ -2047,18 +2152,6 @@ mod bar_tests {
                 assert_eq!(icon, Rectangle::new(button.rect.x, y, ICON_PX, ICON_PX));
             }
         }
-    }
-
-    /// A TANK row's chassis icon sits inside its row, between the TANK
-    /// labels' budget (`text::budgets`: 80 px from the inset) and the `<`
-    /// button.
-    #[test]
-    fn the_chassis_icon_sits_between_the_label_and_the_stepper() {
-        let row = Rectangle::new(0.0, 0.0, EDITOR_SETTINGS_W, EDITOR_DROPDOWN_ROW_H);
-        let icon = settings_icon_rect(row);
-        assert!(icon.x >= SETTINGS_INSET + 80.0 + 4.0, "the icon runs into the TANK labels");
-        assert!(icon.x + icon.width + SETTINGS_INSET <= MapEditor::settings_dec_rect(row).x, "the icon runs into the < button");
-        assert!(icon.y >= row.y && icon.y + icon.height <= row.y + row.height, "the icon leaves its row");
     }
 
     /// The cursor readout spells a cell the way the dev server does.

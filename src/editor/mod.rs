@@ -105,8 +105,8 @@ use crate::pickup::PickupKind;
 use crate::frog::Side;
 use crate::tower::TowerKind;
 use crate::tank::TankKind;
-use crate::{EDITOR_STEPPER_SIZE, Layout, PATHFIND_CELL_SIZE, Position};
-use chrome::{LintLayout, LoadLayout, Palette, SettingsLayout, LINT_HEAD_ROWS};
+use crate::{Layout, PATHFIND_CELL_SIZE, Position};
+use chrome::{LintLayout, LoadLayout, MapPanel, Palette, LINT_HEAD_ROWS};
 pub use history::{CellChange, EditStep, MapDiff, MapSettings, UndoStack};
 pub use index::CellIndex;
 
@@ -141,7 +141,6 @@ const LOUPE_PT: f32 = 144.0;
 /// The settings panel's row layout: label at the left inset, the `<`
 /// button, the value, the `>` button at the right inset.
 const SETTINGS_INSET: f32 = 4.0;
-const SETTINGS_DEC_X: f32 = 124.0;
 /// One frame of raw builder input, in the **window's** own coordinates -
 /// what the mouse and the touch screen report. `app.rs` fills it from the
 /// mouse, the touch screen and the keyboard; the dev server fills it from
@@ -580,9 +579,9 @@ enum Popup {
     /// The STAMPS list under the bar: the shipped stamps then the ones
     /// saved this session, `scroll` rows in.
     Stamps { scroll: usize },
-    /// The MAP settings panel, below the MAP button, `page` pages in where
-    /// the room under the bar pages it.
-    Settings { page: usize },
+    /// The MAP panel, below the MAP button, showing `tab` where the room
+    /// under the bar puts its groups behind tabs.
+    Settings { tab: MapTab },
     /// The FILE menu, below the FILE button.
     File,
     /// The Load list under the bar: every map `map::available_maps`
@@ -2899,7 +2898,7 @@ impl MapEditor {
             Popup::Dropdown(category) => PopupLayout::Dropdown(*category, chrome::menu_list(bar.tools_anchor(*category), room, category.tools().count())),
             Popup::Brush => PopupLayout::Brush(chrome::menu_list(bar.brush.unwrap_or_else(|| bar.tools_anchor(Category::Wall)), room, BrushRow::ALL.len())),
             Popup::Palette => PopupLayout::Palette(Palette::of(bar.tools_anchor(Category::Wall), room)),
-            Popup::Settings { .. } => PopupLayout::Settings(SettingsLayout::of(bar.map, room, SETTINGS_ROWS.len())),
+            Popup::Settings { tab } => PopupLayout::Settings(MapPanel::of(bar.map, room, *tab, self.settings().spawn == SpawnKind::Waves)),
             Popup::File => PopupLayout::File(chrome::menu_list(bar.file, room, self.file_rows().len())),
             Popup::Load { entries, .. } => PopupLayout::Load(LoadLayout::of(room, entries.len())),
             Popup::Stamps { .. } => {
@@ -2921,8 +2920,10 @@ impl MapEditor {
     /// row's `shape_<name>`, `tool_select` and `brush_stamps`, the FILE
     /// menu's `load`, `save`, `save_as` and `clear_map`, the Save prompt's
     /// `save_confirm` (once it holds a name), the Load list's `map_<name>`,
-    /// the STAMPS list's `stamp_<key>`, the MAP panel's
-    /// `<row>_dec`/`<row>_inc` and `reset`, the CHECK panel's rows
+    /// the STAMPS list's `stamp_<key>`, the MAP panel's (`PanelButton::name`:
+    /// `tab_<group>` behind tabs, `reset`, a choice's `<field>_<option>`, a
+    /// stepper's `<field>_dec`/`<field>_inc`, a sky's `weather_<sky>`), the
+    /// CHECK panel's rows
     /// (`finding_N`, from 0 over the whole report) and their FIX buttons
     /// (`fix_N`) - and a pager's halves (`page_back`, `page_next`). A shape
     /// the brush cannot take (a singleton's brush takes the pen alone) is
@@ -2988,18 +2989,8 @@ impl MapEditor {
                 }
                 pager(&mut out, load.pager);
             }
-            (Some(Popup::Settings { page }), Some(PopupLayout::Settings(settings))) => {
-                let page = (*page).min(settings.pages - 1);
-                for (i, row) in SETTINGS_ROWS.iter().enumerate() {
-                    let Some(rect) = settings.row(i, page) else { continue };
-                    if *row == SettingsRow::Reset {
-                        out.push(("reset".to_string(), Self::settings_reset_rect(rect)));
-                    } else {
-                        out.push((format!("{}_dec", row.name()), Self::settings_dec_rect(rect)));
-                        out.push((format!("{}_inc", row.name()), Self::settings_inc_rect(rect)));
-                    }
-                }
-                pager(&mut out, settings.pager);
+            (Some(Popup::Settings { .. }), Some(PopupLayout::Settings(panel))) => {
+                out.extend(panel.buttons().into_iter().map(|(button, rect)| (button.name(), rect)));
             }
             (Some(Popup::Lint { page }), Some(PopupLayout::Lint(lint))) => {
                 if let Some(report) = &self.lint {
@@ -3017,21 +3008,6 @@ impl MapEditor {
             _ => {}
         }
         out
-    }
-
-    /// A settings row's `<` button.
-    fn settings_dec_rect(row: Rectangle) -> Rectangle {
-        Rectangle::new(row.x + SETTINGS_DEC_X, row.y, EDITOR_STEPPER_SIZE, EDITOR_STEPPER_SIZE)
-    }
-
-    /// A settings row's `>` button.
-    fn settings_inc_rect(row: Rectangle) -> Rectangle {
-        Rectangle::new(row.x + row.width - SETTINGS_INSET - EDITOR_STEPPER_SIZE, row.y, EDITOR_STEPPER_SIZE, EDITOR_STEPPER_SIZE)
-    }
-
-    /// The RESET MAP row's one full-width button.
-    fn settings_reset_rect(row: Rectangle) -> Rectangle {
-        Rectangle::new(row.x + SETTINGS_INSET, row.y, row.width - 2.0 * SETTINGS_INSET, row.height)
     }
 
     /// Whether a point in UI points lands on the builder's own chrome (the
@@ -3578,7 +3554,7 @@ impl MapEditor {
             BarButton::Redo => {
                 self.redo();
             }
-            BarButton::Map => self.popup = Some(Popup::Settings { page: 0 }),
+            BarButton::Map => self.popup = Some(Popup::Settings { tab: MapTab::Round }),
             BarButton::Fit => self.camera.fit(),
             BarButton::Check => self.open_lint(),
         }
@@ -3820,75 +3796,89 @@ impl MapEditor {
                 }
                 self.popup = Some(Popup::Stamps { scroll });
             }
-            (Popup::Settings { page }, Some(PopupLayout::Settings(settings))) => {
-                let last = settings.pages - 1;
-                let mut page = page.min(last);
-                if input.wheel != 0.0 {
-                    page = if input.wheel < 0.0 { (page + 1).min(last) } else { page.saturating_sub(1) };
+            (Popup::Settings { mut tab }, Some(PopupLayout::Settings(panel))) => {
+                // Behind tabs the wheel walks them.
+                if input.wheel != 0.0 && panel.shape == chrome::MapShape::Tabs {
+                    let at = MapTab::ALL.iter().position(|t| *t == tab).unwrap_or(0);
+                    let next = if input.wheel < 0.0 { (at + 1).min(MapTab::ALL.len() - 1) } else { at.saturating_sub(1) };
+                    tab = MapTab::ALL[next];
                 }
                 let Some(pointer) = pointer.filter(|_| pressed) else {
-                    self.popup = Some(Popup::Settings { page });
+                    self.popup = Some(Popup::Settings { tab });
                     return;
                 };
-                if !settings.rows.panel.contains(pointer) {
+                if !panel.panel.contains(pointer) {
                     return;
                 }
                 if input.pressed {
-                    if let Some(pager) = settings.pager.filter(|p| p.row.contains(pointer)) {
-                        page = if pager.back().contains(pointer) { page.saturating_sub(1) } else { (page + 1).min(last) };
-                    } else {
-                        for (i, row) in SETTINGS_ROWS.iter().enumerate() {
-                            let Some(rect) = settings.row(i, page).filter(|r| r.contains(pointer)) else { continue };
-                            if *row == SettingsRow::Reset {
-                                if Self::settings_reset_rect(rect).contains(pointer) {
-                                    self.reset();
-                                }
-                            } else if Self::settings_dec_rect(rect).contains(pointer) {
-                                self.step_setting(*row, false);
-                            } else if Self::settings_inc_rect(rect).contains(pointer) {
-                                self.step_setting(*row, true);
-                            }
-                        }
+                    let hit = panel.buttons().into_iter().find(|(_, rect)| rect.contains(pointer));
+                    if let Some((button, _)) = hit {
+                        self.press_panel(button, &mut tab);
                     }
                 }
-                self.popup = Some(Popup::Settings { page });
+                self.popup = Some(Popup::Settings { tab });
             }
             // A layout always comes with its popup; a mismatch closes it.
             _ => {}
         }
     }
 
-    /// Step one settings row's value and record it as an undo step:
-    /// numbers walk `auto`, then their range without wrapping; choices
-    /// cycle `auto` and their list.
-    fn step_setting(&mut self, row: SettingsRow, forward: bool) {
+    /// One press on the MAP panel: a tab shows its group, an option is
+    /// chosen, a stepper steps, a sky's tile puts it in or takes it out,
+    /// RESET MAP reverts - each change one undo step.
+    fn press_panel(&mut self, button: PanelButton, tab: &mut MapTab) {
+        match button {
+            PanelButton::Tab(t) => *tab = t,
+            PanelButton::Reset => self.reset(),
+            PanelButton::Option(field, i) => self.pick_option(field, i),
+            PanelButton::Dec(field) => self.step_setting(field, false),
+            PanelButton::Inc(field) => self.step_setting(field, true),
+            PanelButton::Toggle(sky) => self.step_setting(MapField::Sky(sky), true),
+        }
+    }
+
+    /// Choose a choice's `i`th option, an undo step where it changes it.
+    fn pick_option(&mut self, field: MapField, i: usize) {
+        let mut s = self.settings();
+        match field {
+            MapField::Mission => s.mission = MISSIONS[i],
+            MapField::Spawn => s.spawn = SPAWNS[i],
+            MapField::Theme => s.theme = Theme::ALL[i],
+            _ => return,
+        }
+        self.apply_settings(s);
+    }
+
+    /// Step one field's value and record it as an undo step: numbers walk
+    /// `auto`, then their range without wrapping; choices cycle `auto` and
+    /// their list; a sky goes in or out of the map's skies.
+    fn step_setting(&mut self, row: MapField, forward: bool) {
         let mut s = self.settings();
         let cap = crate::tuning::tuning().wave_max_alive as u32;
         match row {
-            SettingsRow::Tanks => s.tanks = step_option_number(s.tanks, forward, 0, cap),
-            SettingsRow::Tank => s.tank = step_option_choice(s.tank, &TankKind::ALL, forward),
-            SettingsRow::Tank2 => s.tank2 = step_option_choice(s.tank2, &TankKind::ALL, forward),
-            SettingsRow::Mission => s.mission = step_choice(s.mission, &MISSIONS, forward),
-            SettingsRow::Spawn => s.spawn = step_choice(s.spawn, &[SpawnKind::Band, SpawnKind::Waves], forward),
-            SettingsRow::Waves => s.waves = step_option_number(s.waves, forward, 1, 20),
-            SettingsRow::Size => s.size = step_option_number(s.size, forward, 1, 31),
-            SettingsRow::Growth => s.growth = step_option_number(s.growth, forward, 0, 10),
-            SettingsRow::TierStart => s.tier_start = step_option_choice(s.tier_start, &Tier::ALL, forward),
-            SettingsRow::TierEnd => s.tier_end = step_option_choice(s.tier_end, &Tier::ALL, forward),
-            SettingsRow::Theme => s.theme = step_choice(s.theme, &Theme::ALL, forward),
-            SettingsRow::Weather => s.weather = step_choice(s.weather, &Weather::ALL, forward),
-            SettingsRow::Width | SettingsRow::Height => {
+            MapField::Tanks => s.tanks = step_option_number(s.tanks, forward, 0, cap),
+            MapField::Tank => s.tank = step_option_choice(s.tank, &TankKind::ALL, forward),
+            MapField::Tank2 => s.tank2 = step_option_choice(s.tank2, &TankKind::ALL, forward),
+            MapField::Mission => s.mission = step_choice(s.mission, &MISSIONS, forward),
+            MapField::Spawn => s.spawn = step_choice(s.spawn, &[SpawnKind::Band, SpawnKind::Waves], forward),
+            MapField::Waves => s.waves = step_option_number(s.waves, forward, 1, 20),
+            MapField::Size => s.size = step_option_number(s.size, forward, 1, 31),
+            MapField::Growth => s.growth = step_option_number(s.growth, forward, 0, 10),
+            MapField::TierStart => s.tier_start = step_option_choice(s.tier_start, &Tier::ALL, forward),
+            MapField::TierEnd => s.tier_end = step_option_choice(s.tier_end, &Tier::ALL, forward),
+            MapField::Theme => s.theme = step_choice(s.theme, &Theme::ALL, forward),
+            MapField::Sky(sky) => s.weather = s.weather.toggled(sky),
+            MapField::Width | MapField::Height => {
                 let (cols, rows) = self.size_cells();
                 let (cols, rows) =
-                    if row == SettingsRow::Width { (step_size(cols, forward), rows) } else { (cols, step_size(rows, forward)) };
+                    if row == MapField::Width { (step_size(cols, forward), rows) } else { (cols, step_size(rows, forward)) };
                 self.resize_map(cols, rows, self.resize_anchor, true);
                 return;
             }
-            SettingsRow::Anchor => {
+            MapField::Anchor => {
                 self.resize_anchor = step_choice(self.resize_anchor, &Anchor::ALL, forward);
                 return;
             }
-            SettingsRow::Reset => return,
         }
         self.apply_settings(s);
     }
@@ -3910,78 +3900,234 @@ impl MapEditor {
 
 }
 
-/// The MAP panel's rows, top to bottom.
+/// A sky row's label in `t`'s words: the sky's name (`weather-<name>`)
+/// in capitals, as the panel's labels are written.
+pub fn sky_label_text(t: &crate::text::Catalogue, sky: Weather) -> String {
+    crate::text::fold(&t.named("weather", sky.name()).to_uppercase()).into_owned()
+}
+
+/// The MAP panel's groups (`chrome::MapPanel`): every one at once as
+/// sections where the room under the bar holds them, one at a time behind
+/// the rail's tabs where it does not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SettingsRow {
+pub enum MapTab {
+    /// How the round is fought: the mission and the enemies.
+    Round,
+    /// The players' chassis.
     Tanks,
-    Tank,
-    /// Player 2's chassis (`MapFile::tank2`), read only in a two-player round.
-    Tank2,
+    /// The look and the size.
+    Field,
+    /// The skies a round may take (`MapFile::weather`).
+    Sky,
+}
+
+impl MapTab {
+    pub const ALL: [MapTab; 4] = [MapTab::Round, MapTab::Tanks, MapTab::Field, MapTab::Sky];
+
+    /// The tab's and the heading's words.
+    pub fn key(self) -> crate::text::Key {
+        use crate::text::keys;
+        match self {
+            MapTab::Round => keys::SETTINGS_GROUP_ROUND,
+            MapTab::Tanks => keys::SETTINGS_GROUP_TANKS,
+            MapTab::Field => keys::SETTINGS_GROUP_FIELD,
+            MapTab::Sky => keys::SETTINGS_GROUP_SKY,
+        }
+    }
+
+    /// As `status.builder.buttons` names its tab (`tab_round`).
+    pub fn name(self) -> &'static str {
+        match self {
+            MapTab::Round => "round",
+            MapTab::Tanks => "tanks",
+            MapTab::Field => "field",
+            MapTab::Sky => "sky",
+        }
+    }
+
+    /// The group's rows, top to bottom, each its fields side by side: under
+    /// a `waves` spawn plan the waves, their size and growth and the tier
+    /// range, else the band's TANKS count.
+    pub fn rows(self, waves: bool) -> Vec<Vec<MapField>> {
+        use MapField::*;
+        match self {
+            MapTab::Round if waves => vec![vec![Mission], vec![Spawn], vec![Waves, Size, Growth], vec![TierStart, TierEnd]],
+            MapTab::Round => vec![vec![Mission], vec![Spawn], vec![Tanks]],
+            MapTab::Tanks => vec![vec![Tank], vec![Tank2]],
+            MapTab::Field => vec![vec![Theme], vec![Width, Height, Anchor]],
+            MapTab::Sky => Weather::SKIES.chunks(3).map(|row| row.iter().map(|w| Sky(*w)).collect()).collect(),
+        }
+    }
+}
+
+/// One control of the MAP panel: a key of the map file, or the resize
+/// anchor (the panel's own, kept for the session).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapField {
     Mission,
     Spawn,
+    /// The band's enemy count (`MapFile::tanks`).
+    Tanks,
     Waves,
     Size,
     Growth,
     TierStart,
     TierEnd,
+    /// Player 1's chassis.
+    Tank,
+    /// Player 2's chassis (`MapFile::tank2`), read only in a two-player round.
+    Tank2,
     /// The look (`MapFile::theme`): the canvas redraws in it at once.
     Theme,
-    /// The sky (`MapFile::weather`, docs/weather.md). The canvas stays
-    /// clear to edit on; the round draws the sky.
-    Weather,
-    /// The map's size in cells (`MapFile::size`): columns and rows, each
-    /// press one cell, the old map placed by the ANCHOR row
-    /// (`MapEditor::resize`).
+    /// The map's size in cells (`MapFile::size`), each press one cell, the
+    /// old map placed by ANCHOR (`MapEditor::resize`).
     Width,
     Height,
     /// Where the old map sits when the size changes: one of nine.
     Anchor,
-    Reset,
+    /// One sky of the map's (`MapFile::weather`, docs/weather.md), a tile
+    /// that puts it in or takes it out; with none in the map is clear, so
+    /// CLEAR shows in then. The canvas stays clear to edit on; the round
+    /// draws the sky.
+    Sky(Weather),
 }
 
-impl SettingsRow {
-    /// The row as `status.builder.buttons` names its steppers
-    /// (`tanks_dec`, `tanks_inc`).
-    fn name(self) -> &'static str {
+/// How a `MapField` is pressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldKind {
+    /// One of so many options side by side.
+    Choice(usize),
+    /// `-` and `+` round its value (`<` and `>` round a choice's).
+    Stepper,
+    /// A stepper through the chassis, drawn in the seat's colours.
+    Chassis(u8),
+    /// A tile that puts its sky in or takes it out.
+    Sky(Weather),
+}
+
+/// The options of the MAP panel's choices, in their order across the row.
+const SPAWNS: [SpawnKind; 2] = [SpawnKind::Band, SpawnKind::Waves];
+
+impl MapField {
+    pub fn kind(self) -> FieldKind {
         match self {
-            SettingsRow::Tanks => "tanks",
-            SettingsRow::Tank => "tank",
-            SettingsRow::Tank2 => "tank2",
-            SettingsRow::Mission => "mission",
-            SettingsRow::Spawn => "spawn",
-            SettingsRow::Waves => "waves",
-            SettingsRow::Size => "size",
-            SettingsRow::Growth => "growth",
-            SettingsRow::TierStart => "tier_start",
-            SettingsRow::TierEnd => "tier_end",
-            SettingsRow::Theme => "theme",
-            SettingsRow::Weather => "weather",
-            SettingsRow::Width => "width",
-            SettingsRow::Height => "height",
-            SettingsRow::Anchor => "anchor",
-            SettingsRow::Reset => "reset",
+            MapField::Mission => FieldKind::Choice(MISSIONS.len()),
+            MapField::Spawn => FieldKind::Choice(SPAWNS.len()),
+            MapField::Theme => FieldKind::Choice(Theme::ALL.len()),
+            MapField::Tank => FieldKind::Chassis(0),
+            MapField::Tank2 => FieldKind::Chassis(1),
+            MapField::Sky(sky) => FieldKind::Sky(sky),
+            _ => FieldKind::Stepper,
+        }
+    }
+
+    /// As `status.builder.buttons` names its buttons: `tanks_dec`,
+    /// `tanks_inc`; a choice's `mission_hunt`; a sky's `weather_night`.
+    pub fn name(self) -> &'static str {
+        match self {
+            MapField::Mission => "mission",
+            MapField::Spawn => "spawn",
+            MapField::Tanks => "tanks",
+            MapField::Waves => "waves",
+            MapField::Size => "size",
+            MapField::Growth => "growth",
+            MapField::TierStart => "tier_start",
+            MapField::TierEnd => "tier_end",
+            MapField::Tank => "tank",
+            MapField::Tank2 => "tank2",
+            MapField::Theme => "theme",
+            MapField::Width => "width",
+            MapField::Height => "height",
+            MapField::Anchor => "anchor",
+            MapField::Sky(_) => "weather",
+        }
+    }
+
+    /// The words a control's label shows; a sky's tile carries its own
+    /// name (`sky_label_text`).
+    pub fn label_key(self) -> Option<crate::text::Key> {
+        use crate::text::keys;
+        Some(match self {
+            MapField::Mission => keys::SETTINGS_MISSION,
+            MapField::Spawn => keys::SETTINGS_SPAWN,
+            MapField::Tanks => keys::SETTINGS_TANKS,
+            MapField::Waves => keys::SETTINGS_WAVES,
+            MapField::Size => keys::SETTINGS_SIZE,
+            MapField::Growth => keys::SETTINGS_GROWTH,
+            MapField::TierStart => keys::SETTINGS_TIER_START,
+            MapField::TierEnd => keys::SETTINGS_TIER_END,
+            MapField::Tank => keys::SETTINGS_TANK,
+            MapField::Tank2 => keys::SETTINGS_TANK2,
+            MapField::Theme => keys::SETTINGS_THEME,
+            MapField::Width => keys::SETTINGS_WIDTH,
+            MapField::Height => keys::SETTINGS_HEIGHT,
+            MapField::Anchor => keys::SETTINGS_ANCHOR,
+            MapField::Sky(_) => return None,
+        })
+    }
+
+    /// A choice's `i`th option as its button shows it in `t`'s words, in
+    /// capitals.
+    pub fn option_text(self, t: &crate::text::Catalogue, i: usize) -> String {
+        let words = match self {
+            MapField::Mission => t.named("mission", MISSIONS[i].name()),
+            MapField::Spawn => t.named("spawn", SPAWNS[i].name()),
+            MapField::Theme => t.named("theme", Theme::ALL[i].name()),
+            _ => String::new(),
+        };
+        crate::text::fold(&words.to_uppercase()).into_owned()
+    }
+
+    /// A choice's `i`th option, as its button is named (`hunt`).
+    pub fn option_name(self, i: usize) -> &'static str {
+        match self {
+            MapField::Mission => MISSIONS[i].name(),
+            MapField::Spawn => SPAWNS[i].name(),
+            MapField::Theme => Theme::ALL[i].name(),
+            _ => "",
+        }
+    }
+
+    /// The option a choice holds in `s`.
+    pub fn chosen(self, s: &MapSettings) -> Option<usize> {
+        match self {
+            MapField::Mission => MISSIONS.iter().position(|m| *m == s.mission),
+            MapField::Spawn => SPAWNS.iter().position(|k| *k == s.spawn),
+            MapField::Theme => Theme::ALL.iter().position(|t| *t == s.theme),
+            _ => None,
         }
     }
 }
 
-const SETTINGS_ROWS: [SettingsRow; 16] = [
-    SettingsRow::Tanks,
-    SettingsRow::Tank,
-    SettingsRow::Tank2,
-    SettingsRow::Mission,
-    SettingsRow::Spawn,
-    SettingsRow::Waves,
-    SettingsRow::Size,
-    SettingsRow::Growth,
-    SettingsRow::TierStart,
-    SettingsRow::TierEnd,
-    SettingsRow::Theme,
-    SettingsRow::Weather,
-    SettingsRow::Width,
-    SettingsRow::Height,
-    SettingsRow::Anchor,
-    SettingsRow::Reset,
-];
+/// A press the MAP panel takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanelButton {
+    /// A rail's tab: shows its group.
+    Tab(MapTab),
+    /// RESET MAP: the cells and settings back to the baseline.
+    Reset,
+    /// A choice's option.
+    Option(MapField, usize),
+    Dec(MapField),
+    Inc(MapField),
+    /// A sky's tile.
+    Toggle(Weather),
+}
+
+impl PanelButton {
+    /// Its name in `status.builder.buttons`: `tab_sky`, `reset`,
+    /// `mission_hunt`, `waves_dec`, `waves_inc`, `weather_night`.
+    pub fn name(self) -> String {
+        match self {
+            PanelButton::Tab(tab) => format!("tab_{}", tab.name()),
+            PanelButton::Reset => "reset".to_string(),
+            PanelButton::Option(field, i) => format!("{}_{}", field.name(), field.option_name(i)),
+            PanelButton::Dec(field) => format!("{}_dec", field.name()),
+            PanelButton::Inc(field) => format!("{}_inc", field.name()),
+            PanelButton::Toggle(sky) => format!("weather_{}", sky.name()),
+        }
+    }
+}
 
 const MISSIONS: [Mission; 3] = [Mission::Protect, Mission::Hunt, Mission::Destroy];
 
@@ -4762,9 +4908,9 @@ mod editor_tests {
         assert!(ed.map().cells.is_empty());
     }
 
-    /// Every category's rows and the MAP panel's steppers are a finger's
+    /// Every category's rows and the MAP panel's buttons are a finger's
     /// size and stand in the room under the bar on a phone and a desktop,
-    /// with and without touch, a stepper's `<` left of its `>`.
+    /// with and without touch.
     #[test]
     fn every_list_row_and_map_stepper_is_a_fingers_size_under_the_bar() {
         for window in [(568.0, 320.0), (852.0, 393.0), (1088.0, 576.0), (1920.0, 1080.0)] {
@@ -4783,15 +4929,9 @@ mod editor_tests {
                         assert!(row.height >= 48.0 && inside(row), "{window:?} touch={touch} {}: {row:?}", category.name());
                     }
                 }
-                let settings = SettingsLayout::of(bar.map, room, SETTINGS_ROWS.len());
-                for page in 0..settings.pages {
-                    for i in 0..SETTINGS_ROWS.len() {
-                        let Some(row) = settings.row(i, page) else { continue };
-                        let (dec, inc) = (MapEditor::settings_dec_rect(row), MapEditor::settings_inc_rect(row));
-                        assert!(dec.width >= 48.0 && dec.height >= 48.0 && inc.width >= 48.0 && inc.height >= 48.0);
-                        assert!(dec.x + dec.width <= inc.x && inside(dec) && inside(inc), "{window:?} touch={touch}: {dec:?} {inc:?}");
-                        let reset = MapEditor::settings_reset_rect(row);
-                        assert!(reset.height >= 48.0 && inside(reset));
+                for tab in MapTab::ALL {
+                    for (button, rect) in MapPanel::of(bar.map, room, tab, true).buttons() {
+                        assert!(rect.width >= 44.0 && rect.height >= 44.0 && inside(rect), "{window:?} touch={touch}: {} {rect:?}", button.name());
                     }
                 }
             }
@@ -4878,62 +5018,83 @@ mod editor_tests {
         let mut ed = MapEditor::new(MapFile::new());
         press_named(&mut ed, &frame, "map");
         assert_eq!(ed.open_menu(), Some("map"));
-        let inc = |r: SettingsRow| format!("{}_inc", r.name());
-        let dec = |r: SettingsRow| format!("{}_dec", r.name());
         // TANKS walks auto, 0, 1, .. and back to auto below 0.
         assert_eq!(ed.settings().tanks, None);
-        press_named(&mut ed, &frame, &inc(SettingsRow::Tanks));
+        press_named(&mut ed, &frame, "tanks_inc");
         assert_eq!(ed.settings().tanks, Some(0));
-        press_named(&mut ed, &frame, &inc(SettingsRow::Tanks));
+        press_named(&mut ed, &frame, "tanks_inc");
         assert_eq!(ed.settings().tanks, Some(1));
-        press_named(&mut ed, &frame, &dec(SettingsRow::Tanks));
-        press_named(&mut ed, &frame, &dec(SettingsRow::Tanks));
+        press_named(&mut ed, &frame, "tanks_dec");
+        press_named(&mut ed, &frame, "tanks_dec");
         assert_eq!(ed.settings().tanks, None);
-        press_named(&mut ed, &frame, &dec(SettingsRow::Tanks));
+        press_named(&mut ed, &frame, "tanks_dec");
         assert_eq!(ed.settings().tanks, None, "auto is the floor");
         assert_eq!(ed.history().undo_depth(), 4, "one undo step per press that changed something");
-        // TANK cycles auto and the chassis list; TIER START the tiers.
-        press_named(&mut ed, &frame, &inc(SettingsRow::Tank));
+        // TANK cycles auto and the chassis list.
+        press_named(&mut ed, &frame, "tank_inc");
         assert_eq!(ed.settings().tank, Some(TankKind::ALL[0]));
-        press_named(&mut ed, &frame, &dec(SettingsRow::Tank));
+        press_named(&mut ed, &frame, "tank_dec");
         assert_eq!(ed.settings().tank, None);
-        press_named(&mut ed, &frame, &dec(SettingsRow::Tank));
+        press_named(&mut ed, &frame, "tank_dec");
         assert_eq!(ed.settings().tank, Some(TankKind::ALL[TankKind::ALL.len() - 1]), "wraps");
-        press_named(&mut ed, &frame, &inc(SettingsRow::Tank2));
+        press_named(&mut ed, &frame, "tank2_inc");
         assert_eq!(ed.settings().tank2, Some(TankKind::ALL[0]));
-        press_named(&mut ed, &frame, &dec(SettingsRow::Tank2));
+        press_named(&mut ed, &frame, "tank2_dec");
         assert_eq!(ed.settings().tank2, None);
-        press_named(&mut ed, &frame, &inc(SettingsRow::TierStart));
-        assert_eq!(ed.settings().tier_start, Some(Tier::Light));
-        // THEME cycles the list; the ground is rebuilt in the new theme.
-        press_named(&mut ed, &frame, &inc(SettingsRow::Theme));
+        // THEME is a choice: a press picks its option, and picking the one
+        // in force changes nothing; the ground is rebuilt in the new theme.
+        press_named(&mut ed, &frame, "theme_desert");
         assert_eq!(ed.settings().theme, Theme::Desert);
         assert_eq!(ed.map().theme, Theme::Desert);
-        press_named(&mut ed, &frame, &inc(SettingsRow::Theme));
-        assert_eq!(ed.settings().theme, Theme::Grass, "wraps");
-        // WEATHER cycles every sky, backwards from clear to the last.
-        press_named(&mut ed, &frame, &inc(SettingsRow::Weather));
-        assert_eq!(ed.map().weather, Weather::Night);
-        press_named(&mut ed, &frame, &dec(SettingsRow::Weather));
-        press_named(&mut ed, &frame, &dec(SettingsRow::Weather));
-        assert_eq!(ed.settings().weather, Weather::ALL[Weather::ALL.len() - 1], "wraps");
+        let depth = ed.history().undo_depth();
+        press_named(&mut ed, &frame, "theme_desert");
+        assert_eq!(ed.history().undo_depth(), depth, "the option in force is no edit");
+        press_named(&mut ed, &frame, "theme_grass");
+        assert_eq!(ed.settings().theme, Theme::Grass);
+        // The SKY tiles: a tap puts a sky among the map's skies or takes
+        // it out, each tap one undo step; none is clear, and every sky is
+        // what `random` means.
+        let tile = |w: Weather| format!("weather_{}", w.name());
+        assert!(ed.settings().weather.contains(Weather::Clear), "none in is clear");
+        press_named(&mut ed, &frame, &tile(Weather::Night));
+        assert_eq!(ed.map().weather, Weather::Night.into());
+        assert!(!ed.settings().weather.contains(Weather::Clear), "a named sky is no longer clear");
+        press_named(&mut ed, &frame, &tile(Weather::Rain));
+        assert_eq!(ed.settings().weather.skies(), vec![Weather::Night, Weather::Rain]);
         let _ = ed.undo();
-        assert_eq!(ed.settings().weather, Weather::Clear, "a weather press is one undo step");
+        assert_eq!(ed.settings().weather, Weather::Night.into(), "a tap is one undo step");
         let _ = ed.redo();
-        press_named(&mut ed, &frame, &inc(SettingsRow::Weather));
-        assert_eq!(ed.settings().weather, Weather::Clear);
-        press_named(&mut ed, &frame, &inc(SettingsRow::Mission));
+        press_named(&mut ed, &frame, &tile(Weather::Clear));
+        assert_eq!(ed.settings().weather.skies(), vec![Weather::Clear, Weather::Night, Weather::Rain], "clear can be one of several");
+        for w in Weather::SKIES {
+            if !ed.settings().weather.contains(w) {
+                press_named(&mut ed, &frame, &tile(w));
+            }
+        }
+        assert_eq!(ed.settings().weather, map::Skies::ALL);
+        assert!(ed.map().to_toml_string().unwrap().contains("weather = \"random\""), "every sky is written as random");
+        for w in Weather::SKIES {
+            press_named(&mut ed, &frame, &tile(w));
+        }
+        assert_eq!(ed.settings().weather, map::Skies::CLEAR);
+        // MISSION and SPAWN are choices; the band's TANKS count gives way
+        // to the wave rows under WAVES.
+        press_named(&mut ed, &frame, "mission_hunt");
         assert_eq!(ed.settings().mission, Mission::Hunt);
-        press_named(&mut ed, &frame, &inc(SettingsRow::Spawn));
+        assert!(has_named(&ed, &frame, "tanks_inc") && !has_named(&ed, &frame, "waves_inc"));
+        press_named(&mut ed, &frame, "spawn_waves");
         assert_eq!(ed.settings().spawn, SpawnKind::Waves);
+        assert!(!has_named(&ed, &frame, "tanks_inc") && has_named(&ed, &frame, "waves_inc"));
         // WAVES: auto, then 1..=20 with a hard ceiling.
-        press_named(&mut ed, &frame, &inc(SettingsRow::Waves));
+        press_named(&mut ed, &frame, "waves_inc");
         assert_eq!(ed.settings().waves, Some(1));
         let mut s = ed.settings();
         s.waves = Some(20);
         ed.apply_settings(s);
-        press_named(&mut ed, &frame, &inc(SettingsRow::Waves));
+        press_named(&mut ed, &frame, "waves_inc");
         assert_eq!(ed.settings().waves, Some(20));
+        press_named(&mut ed, &frame, "tier_start_inc");
+        assert_eq!(ed.settings().tier_start, Some(Tier::Light));
         // Every press so far landed in the panel: it is still open and
         // nothing was painted under it.
         assert_eq!(ed.open_menu(), Some("map"));
@@ -4950,40 +5111,73 @@ mod editor_tests {
         assert!(ed.map().cells.is_empty());
     }
 
-    /// Where the room under the bar is short the MAP panel pages: every row
-    /// on one of its pages, the pager's halves and the wheel turning them,
-    /// and a press on the pager steps nothing.
+    /// Where the room under the bar is short - a phone in landscape - the
+    /// MAP panel puts its groups behind a rail of tabs: one group shown at
+    /// a time, every field's buttons on one of the tabs, a tab pressed or
+    /// the wheel walking them, and neither stepping anything; RESET MAP is
+    /// the rail's last slot. A desktop shows every group at once.
     #[test]
-    fn a_short_map_panel_pages_by_its_pager_and_the_wheel() {
-        let ui = UiFrame::new((667.0 * 2.0, 375.0 * 2.0), 2.0, 1.0, Insets::default(), true);
+    fn a_short_map_panel_puts_its_groups_behind_tabs() {
+        let ui = UiFrame::new((852.0 * 3.0, 393.0 * 3.0), 3.0, 1.0, Insets { left: 59.0 * 3.0, top: 0.0, right: 59.0 * 3.0, bottom: 21.0 * 3.0 }, true);
         let frame = BuilderFrame::new(ui, (W, H), MapClass::Arena, None);
         let mut ed = MapEditor::new(MapFile::new());
+        let mut s = ed.settings();
+        s.spawn = SpawnKind::Waves;
+        ed.apply_settings(s);
+        let depth = ed.history().undo_depth();
         press_named(&mut ed, &frame, "map");
-        let Some(PopupLayout::Settings(settings)) = ed.chrome(&frame).popup else { panic!("the MAP panel") };
-        assert!(settings.pages > 1 && settings.pager.is_some(), "{settings:?}");
+        let Some(PopupLayout::Settings(panel)) = ed.chrome(&frame).popup else { panic!("the MAP panel") };
+        assert_eq!(panel.shape, chrome::MapShape::Tabs, "{panel:?}");
+        assert!(has_named(&ed, &frame, "reset") && has_named(&ed, &frame, "mission_protect") && !has_named(&ed, &frame, "weather_snow"));
         let mut seen = std::collections::BTreeSet::new();
-        for page in 0..settings.pages {
+        for tab in MapTab::ALL {
+            press_named(&mut ed, &frame, &format!("tab_{}", tab.name()));
             for (name, _) in ed.named_buttons(&frame) {
                 seen.insert(name);
             }
-            if page + 1 < settings.pages {
-                press_named(&mut ed, &frame, "page_next");
+        }
+        for tab in MapTab::ALL {
+            for field in tab.rows(true).into_iter().flatten() {
+                let name = match field.kind() {
+                    FieldKind::Choice(_) => format!("{}_{}", field.name(), field.option_name(0)),
+                    FieldKind::Sky(sky) => format!("weather_{}", sky.name()),
+                    _ => format!("{}_inc", field.name()),
+                };
+                assert!(seen.contains(&name), "{name} on no tab");
             }
         }
-        for row in SETTINGS_ROWS {
-            let name = if row == SettingsRow::Reset { "reset".to_string() } else { format!("{}_inc", row.name()) };
-            assert!(seen.contains(&name), "{name} on no page");
-        }
-        assert_eq!(ed.history().undo_depth(), 0, "the pager steps nothing");
+        assert_eq!(ed.history().undo_depth(), depth, "the tabs step nothing");
         assert_eq!(ed.open_menu(), Some("map"));
-        // The wheel walks the pages back, and no further than the first.
-        let panel = center(frame.ui.rect_to_window(settings.rows.panel));
-        for _ in 0..settings.pages + 1 {
-            ed.update(&BuilderInput { pointer: Some(panel), wheel: 1.0, ..Default::default() }, &frame);
+        // The wheel walks the tabs back to the first, and no further.
+        let centre = center(frame.ui.rect_to_window(panel.panel));
+        for _ in 0..MapTab::ALL.len() + 1 {
+            ed.update(&BuilderInput { pointer: Some(centre), wheel: 1.0, ..Default::default() }, &frame);
         }
-        assert!(has_named(&ed, &frame, "tanks_inc"), "back on the first page");
-        ed.update(&BuilderInput { pointer: Some(panel), wheel: -1.0, ..Default::default() }, &frame);
-        assert!(!has_named(&ed, &frame, "tanks_inc"), "the wheel turned it on");
+        assert!(has_named(&ed, &frame, "mission_hunt"), "back on ROUND");
+        ed.update(&BuilderInput { pointer: Some(centre), wheel: -1.0, ..Default::default() }, &frame);
+        assert!(has_named(&ed, &frame, "tank_inc") && !has_named(&ed, &frame, "mission_hunt"), "the wheel turned to TANKS");
+        // A desktop's room holds every group at once.
+        let desk = arena();
+        let mut ed = MapEditor::new(MapFile::new());
+        press_named(&mut ed, &desk, "map");
+        let Some(PopupLayout::Settings(panel)) = ed.chrome(&desk).popup else { panic!("the MAP panel") };
+        assert_eq!(panel.shape, chrome::MapShape::Sections);
+        assert!(has_named(&ed, &desk, "mission_hunt") && has_named(&ed, &desk, "tank_inc") && has_named(&ed, &desk, "theme_desert") && has_named(&ed, &desk, "weather_snow"));
+        assert!(!has_named(&ed, &desk, "tab_sky"), "no tabs");
+    }
+
+    /// As sections, a spawn plan's change moves nothing but ROUND's own
+    /// rows under SPAWN: every other group keeps its place, so no button
+    /// slides under a finger.
+    #[test]
+    fn the_spawn_plan_moves_no_other_group() {
+        let frame = arena();
+        let (bar, room) = (frame.bar(), frame.under_bar());
+        let band = MapPanel::of(bar.map, room, MapTab::Round, false);
+        let waves = MapPanel::of(bar.map, room, MapTab::Round, true);
+        assert_eq!((band.panel, &band.headings, band.reset), (waves.panel, &waves.headings, waves.reset));
+        let others = |p: &MapPanel| p.fields.iter().filter(|f| !MapTab::Round.rows(true).concat().contains(&f.field) && f.field != MapField::Tanks).copied().collect::<Vec<_>>();
+        assert_eq!(others(&band), others(&waves));
     }
 
     #[test]
@@ -5675,7 +5869,9 @@ mod editor_tests {
         fingers(&mut ed, &frame, &[vec![(1, map.x, map.y)], vec![(1, x, y)], vec![(1, x + 60.0, y)]]);
         assert_eq!(ed.open_menu(), Some("map"));
         assert!(ed.map().cells.is_empty());
-        // With the popup open a finger on the canvas only closes it.
+        // With the popup open a finger on the canvas past it only closes
+        // it (the MAP panel hangs over the cells nearer the bar).
+        let Vec2 { x, y } = on_cell(&ed, &frame, 10, 15);
         fingers(&mut ed, &frame, &[vec![(2, x, y)], vec![(2, x + 60.0, y)]]);
         assert_eq!(ed.open_menu(), None);
         assert!(ed.map().cells.is_empty(), "the dismissing finger painted");
@@ -5898,31 +6094,31 @@ mod editor_tests {
         ed.stroke(&[(10, 5)], false);
         press_named(&mut ed, &frame, "map");
         assert_eq!(ed.open_menu(), Some("map"));
-        let inc = |r: SettingsRow| format!("{}_inc", r.name());
-        let dec = |r: SettingsRow| format!("{}_dec", r.name());
+        let inc = |r: MapField| format!("{}_inc", r.name());
+        let dec = |r: MapField| format!("{}_dec", r.name());
         // The anchor walks the nine, from the middle.
         assert_eq!(ed.resize_anchor(), Anchor::Center);
-        press_named(&mut ed, &frame, &inc(SettingsRow::Anchor));
+        press_named(&mut ed, &frame, &inc(MapField::Anchor));
         assert_eq!(ed.resize_anchor(), Anchor::Right);
-        press_named(&mut ed, &frame, &dec(SettingsRow::Anchor));
-        press_named(&mut ed, &frame, &dec(SettingsRow::Anchor));
+        press_named(&mut ed, &frame, &dec(MapField::Anchor));
+        press_named(&mut ed, &frame, &dec(MapField::Anchor));
         assert_eq!(ed.resize_anchor(), Anchor::Left);
         let depth = ed.history().undo_depth();
         for _ in 0..4 {
-            press_named(&mut ed, &frame, &inc(SettingsRow::Width));
+            press_named(&mut ed, &frame, &inc(MapField::Width));
         }
-        press_named(&mut ed, &frame, &dec(SettingsRow::Height));
+        press_named(&mut ed, &frame, &dec(MapField::Height));
         assert_eq!(ed.size_cells(), (38.0, 16.0));
         assert_eq!(ed.map().cell(10, 5), Some(&brick()), "left anchor: the map stays at the left, 17 to 16 rows round the same middle row");
-        press_named(&mut ed, &frame, &dec(SettingsRow::Height));
+        press_named(&mut ed, &frame, &dec(MapField::Height));
         assert_eq!(ed.map().cell(10, 4), Some(&brick()), "and the next row off moves it up one");
-        press_named(&mut ed, &frame, &inc(SettingsRow::Height));
+        press_named(&mut ed, &frame, &inc(MapField::Height));
         assert_eq!(ed.history().undo_depth(), depth + 1, "five presses, one step");
         // Closing the panel ends the run.
         ed.update(&BuilderInput { escape: true, ..Default::default() }, &frame);
         ed.update(&BuilderInput::default(), &frame);
         press_named(&mut ed, &frame, "map");
-        press_named(&mut ed, &frame, &inc(SettingsRow::Height));
+        press_named(&mut ed, &frame, &inc(MapField::Height));
         assert_eq!(ed.history().undo_depth(), depth + 2);
         ed.undo();
         ed.undo();
@@ -6366,7 +6562,7 @@ mod editor_tests {
         check(&ed, "erased again by the toggle");
         assert!(!ed.dirty());
         press_named(&mut ed, &frame, "map");
-        ed.step_setting(SettingsRow::Theme, true);
+        ed.step_setting(MapField::Theme, true);
         check(&ed, "a theme");
         assert!(ed.dirty());
         ed.undo();

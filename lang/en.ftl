@@ -333,7 +333,15 @@ file-save-as = SAVE AS...
 file-clear = CLEAR MAP
 file-revert = REVERT MAP
 
-# The MAP settings rows, 16 px labels in a 120 px column.
+# The MAP panel's groups: a heading over each, or a tab in a phone's rail.
+settings-group-round = ROUND
+settings-group-tanks = TANKS
+settings-group-field = FIELD
+settings-group-sky = SKY
+# Beside the SKY heading, 12 pt: a round takes one of the skies ticked.
+settings-sky-hint = EACH ROUND PICKS ONE · NONE IS CLEAR
+# The MAP panel's labels: 16 pt beside a control, 12 pt over one in a row
+# of several.
 settings-tanks = TANKS
 settings-tank = TANK
 settings-tank2 = TANK 2
@@ -345,14 +353,15 @@ settings-growth = GROWTH
 settings-tier-start = TIER START
 settings-tier-end = TIER END
 settings-theme = THEME
-settings-weather = WEATHER
 # The map's size in cells, and where the old map sits when it changes.
 settings-width = WIDTH
 settings-height = HEIGHT
 settings-anchor = ANCHOR
 settings-reset = RESET MAP
-# A settings value the map leaves to the game.
+# A settings value the map leaves to the game; the short one fits a
+# stepper in a row of three.
 settings-auto = auto
+settings-auto-short = auto
 # Beside a value a command-line flag outranks, 12 pt.
 settings-cli = (cli)
 

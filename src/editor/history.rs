@@ -6,7 +6,7 @@
 //! and the tests below run headlessly.
 
 use crate::level::{Mission, SpawnKind, Tier};
-use crate::map::{CellObject, MapFile, Theme, Weather};
+use crate::map::{CellObject, MapFile, Skies, Theme};
 use crate::tank::TankKind;
 
 /// How many steps the stack keeps. Past this the oldest step is dropped;
@@ -30,8 +30,8 @@ pub struct MapSettings {
     pub tier_end: Option<Tier>,
     /// The look (`MapFile::theme`).
     pub theme: Theme,
-    /// The sky (`MapFile::weather`).
-    pub weather: Weather,
+    /// The skies a round may take (`MapFile::weather`).
+    pub weather: Skies,
 }
 
 impl MapSettings {

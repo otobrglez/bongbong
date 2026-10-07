@@ -305,16 +305,15 @@ fn is_default_theme(t: &Theme) -> bool {
     *t == Theme::Grass
 }
 
-/// The sky over the battlefield (TOML: a top-level `weather = "night"`,
-/// the MAP panel's WEATHER row; docs/weather.md): drawn, and part of the
+/// The sky over the battlefield (TOML: the top-level `weather` key - one
+/// of a map's `Skies` -, docs/weather.md): drawn, and part of the
 /// rules - shorter enemy sight at night and in fog, less grip in the
 /// rain, the water frozen in the snow, gusts in a sandstorm
 /// (`weather::sight_factor` and its neighbours). `Game::init` settles the
 /// round's sky once; a clear one plays exactly as a map without the key.
-/// Absent means `Clear`, which is not written back, so every older file
-/// parses and re-saves unchanged. What each one looks like is
-/// `weather::Look::of`; `Random` is a sky picked by the round's seed
-/// (`weather::random_sky`); the `weather_override` knob (`--weather`, the
+/// What each one looks like is `weather::Look::of`; `Random` is a sky
+/// picked by the round's seed (`weather::random_sky`), on a map the set
+/// of every sky (`Skies::ALL`); the `weather_override` knob (`--weather`, the
 /// web page's `?weather=`) puts one sky over every local round without
 /// editing any map.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -352,8 +351,8 @@ impl Weather {
         Weather::HeatHaze,
     ];
 
-    /// Every weather, in the order the builder's WEATHER row cycles them;
-    /// a weather's index here is its `weather_override` value.
+    /// Every weather; a weather's index here is its `weather_override`
+    /// value.
     pub const ALL: [Weather; 10] = [
         Weather::Clear,
         Weather::Night,
@@ -395,8 +394,145 @@ impl Weather {
     }
 }
 
-fn is_default_weather(w: &Weather) -> bool {
-    *w == Weather::Clear
+/// The skies a map may be fought under (TOML: the top-level `weather`
+/// key, the MAP panel's WEATHER checklist; docs/weather.md): every round
+/// takes one of them, picked by its seed (`weather::pick_sky`). None at
+/// all is a clear sky, as is `clear` alone, and is not written back. One
+/// sky is written as its name (`weather = "night"`), every sky as
+/// `"random"`, any other set as a list in `Weather::SKIES` order
+/// (`weather = ["night", "rain"]`), so a map with one sky or none
+/// re-saves byte for byte - and keeps its clear stamp's `revision`.
+/// `clear` may be one of several (`["clear", "rain"]`: a dry round or a
+/// wet one).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Skies(u16);
+
+impl Skies {
+    /// No sky named: a clear one.
+    pub const CLEAR: Skies = Skies(0);
+
+    /// Every sky: what `random` means.
+    pub const ALL: Skies = Skies((1 << Weather::SKIES.len()) - 1);
+
+    /// The set from its bits over `Weather::SKIES`, `clear` alone folded
+    /// into none, so the two are one value.
+    const fn from_bits(bits: u16) -> Skies {
+        Skies(if bits == 1 { 0 } else { bits & Skies::ALL.0 })
+    }
+
+    fn bit(sky: Weather) -> Option<u16> {
+        Weather::SKIES.iter().position(|w| *w == sky).map(|i| 1 << i)
+    }
+
+    /// One weather as a set: `random` is every sky.
+    pub fn of(weather: Weather) -> Skies {
+        match Skies::bit(weather) {
+            Some(bit) => Skies::from_bits(bit),
+            None => Skies::ALL,
+        }
+    }
+
+    /// Whether `sky` is one a round may take: `clear` while none is
+    /// named. Never `random`.
+    pub fn contains(self, sky: Weather) -> bool {
+        match Skies::bit(sky) {
+            Some(1) => self.0 == 0 || self.0 & 1 != 0,
+            Some(bit) => self.0 & bit != 0,
+            None => false,
+        }
+    }
+
+    /// The set with `sky` in or out of it - the WEATHER checklist's tap.
+    /// Taking `clear` off a set holding nothing else leaves it clear;
+    /// `random` names no single sky and changes nothing.
+    pub fn toggled(self, sky: Weather) -> Skies {
+        let Some(bit) = Skies::bit(sky) else { return self };
+        Skies::from_bits(if self.contains(sky) { self.0 & !bit } else { self.0 | bit })
+    }
+
+    /// The skies a round may take, in `Weather::SKIES` order: `clear`
+    /// alone for none.
+    pub fn skies(self) -> Vec<Weather> {
+        if self.0 == 0 {
+            return vec![Weather::Clear];
+        }
+        Weather::SKIES.iter().enumerate().filter(|(i, _)| self.0 & (1 << i) != 0).map(|(_, w)| *w).collect()
+    }
+
+    /// The one weather this set is, where one name says it: a sky,
+    /// `clear` for none, `random` for every sky.
+    pub fn single(self) -> Option<Weather> {
+        if self == Skies::ALL {
+            return Some(Weather::Random);
+        }
+        match self.skies().as_slice() {
+            [sky] => Some(*sky),
+            _ => None,
+        }
+    }
+
+    pub fn is_clear(self) -> bool {
+        self.0 == 0
+    }
+
+    /// The names as the map file, the dev server and the tools spell
+    /// them: one name where `single` has one, else the list.
+    pub fn names(self) -> Vec<&'static str> {
+        match self.single() {
+            Some(w) => vec![w.name()],
+            None => self.skies().into_iter().map(Weather::name).collect(),
+        }
+    }
+
+    /// The set a list of names spells - `random` adds every sky, an
+    /// empty list is clear; `Err` names the first word that is no
+    /// weather.
+    pub fn parse<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<Skies, &'a str> {
+        let mut bits = 0;
+        for name in names {
+            let weather = Weather::parse(name).ok_or(name)?;
+            bits |= Skies::bit(weather).unwrap_or(Skies::ALL.0);
+        }
+        Ok(Skies::from_bits(bits))
+    }
+}
+
+impl From<Weather> for Skies {
+    fn from(weather: Weather) -> Skies {
+        Skies::of(weather)
+    }
+}
+
+impl Serialize for Skies {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self.single() {
+            Some(w) => s.serialize_str(w.name()),
+            None => self.names().serialize(s),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Skies {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Skies, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Spelling {
+            One(String),
+            Many(Vec<String>),
+        }
+        let names = match Spelling::deserialize(d)? {
+            Spelling::One(name) => vec![name],
+            Spelling::Many(names) => names,
+        };
+        Skies::parse(names.iter().map(String::as_str)).map_err(|bad| {
+            let known: Vec<&str> = Weather::ALL.iter().map(|w| w.name()).collect();
+            serde::de::Error::custom(format!("unknown weather `{bad}`, expected one of {}", known.join(", ")))
+        })
+    }
+}
+
+fn is_default_weather(w: &Skies) -> bool {
+    w.is_clear()
 }
 
 /// How the map asks to be shown (TOML: a top-level `view = "whole"` or
@@ -475,10 +611,11 @@ pub struct MapFile {
     /// back, so older files re-save unchanged.
     #[serde(default, skip_serializing_if = "is_default_theme")]
     pub theme: Theme,
-    /// The sky (TOML: a top-level `weather = "night"`, the MAP panel's
-    /// WEATHER row). Absent means clear, and clear is not written back.
+    /// The skies a round may take (TOML: a top-level `weather = "night"`
+    /// or `weather = ["night", "rain"]`, the MAP panel's WEATHER
+    /// checklist). Absent means clear, and clear is not written back.
     #[serde(default, skip_serializing_if = "is_default_weather")]
-    pub weather: Weather,
+    pub weather: Skies,
     /// How the map is shown (TOML: a top-level `view = "whole"|"follow"`).
     /// `None`, the key absent, leaves it to the map's size (`class`) and is
     /// not written back.
@@ -587,7 +724,7 @@ impl MapFile {
             tank: None,
             tank2: None,
             theme: Theme::default(),
-            weather: Weather::default(),
+            weather: Skies::CLEAR,
             view: None,
             nightfall: None,
             mission: MissionConfig::default(),
@@ -1157,29 +1294,86 @@ mod toml_tests {
     #[test]
     fn weather_round_trips_and_defaults_to_clear() {
         let map = MapFile::from_toml_str("version = 1\n").unwrap();
-        assert_eq!(map.weather, Weather::Clear);
+        assert_eq!(map.weather, Skies::CLEAR);
         assert!(!map.to_toml_string().unwrap().contains("weather"), "the default is not written back");
         let map = MapFile::from_toml_str("version = 1\nweather = \"heat_haze\"\ncells.\"1,1\" = { kind = \"road\" }\n").unwrap();
-        assert_eq!(map.weather, Weather::HeatHaze);
+        assert_eq!(map.weather, Weather::HeatHaze.into());
         let text = map.to_toml_string().unwrap();
         assert!(text.contains("weather = \"heat_haze\""), "{text}");
-        assert_eq!(MapFile::from_toml_str(&text).unwrap().weather, Weather::HeatHaze);
+        assert_eq!(MapFile::from_toml_str(&text).unwrap().weather, Weather::HeatHaze.into());
         assert!(MapFile::from_toml_str("version = 1\nweather = \"hail\"\n").is_err(), "an unknown weather is a parse error");
+        assert!(MapFile::from_toml_str("version = 1\nweather = [\"rain\", \"hail\"]\n").is_err(), "in a list too");
         for (i, w) in Weather::ALL.into_iter().enumerate() {
             assert_eq!(Weather::parse(w.name()), Some(w));
             assert_eq!(w.index(), i);
-            // The serde spelling is the name the builder and the tools use.
+            // The serde spelling is the name the builder and the tools use,
+            // and one sky is written back as it was read.
             let text = format!("version = 1\nweather = \"{}\"\n", w.name());
-            assert_eq!(MapFile::from_toml_str(&text).unwrap().weather, w, "{}", w.name());
+            let map = MapFile::from_toml_str(&text).unwrap();
+            assert_eq!(map.weather, Skies::of(w), "{}", w.name());
+            assert_eq!(map.weather.single(), Some(w), "{}", w.name());
+            if w != Weather::Clear {
+                assert!(map.to_toml_string().unwrap().contains(&format!("weather = \"{}\"", w.name())), "{}", w.name());
+            }
         }
         // `SKIES` is `ALL` without `Random`, in the same order, so a sky's
         // override index is the same in both.
         assert_eq!(Weather::ALL.iter().filter(|w| **w != Weather::Random).copied().collect::<Vec<_>>(), Weather::SKIES);
         let mut random = MapFile::new();
-        random.weather = Weather::Random;
+        random.weather = Weather::Random.into();
+        assert_eq!(random.weather, Skies::ALL);
         let text = random.to_toml_string().unwrap();
         assert!(text.contains("weather = \"random\""), "{text}");
-        assert_eq!(MapFile::from_toml_str(&text).unwrap().weather, Weather::Random, "a random sky stays random on disk");
+        assert_eq!(MapFile::from_toml_str(&text).unwrap().weather, Skies::ALL, "a random sky stays random on disk");
+    }
+
+    /// A map's `weather` may name several skies: a list, read in any
+    /// order and with repeats, written back once each in `SKIES` order -
+    /// and a list of every sky is `random`, of one sky its name, of none
+    /// clear, so every spelling has one canonical form.
+    #[test]
+    fn a_list_of_skies_round_trips() {
+        let map = MapFile::from_toml_str("version = 1\nweather = [\"snow\", \"night\", \"snow\"]\n").unwrap();
+        assert_eq!(map.weather.skies(), vec![Weather::Night, Weather::Snow]);
+        assert_eq!(map.weather.single(), None);
+        let text = map.to_toml_string().unwrap();
+        let at = |name: &str| text.find(&format!("\"{name}\"")).unwrap_or_else(|| panic!("{text}"));
+        assert!(text.contains("weather = [") && at("night") < at("snow") && text.matches("snow").count() == 1, "{text}");
+        assert_eq!(MapFile::from_toml_str(&text).unwrap().weather, map.weather);
+        let one = MapFile::from_toml_str("version = 1\nweather = [\"fog\"]\n").unwrap();
+        assert!(one.to_toml_string().unwrap().contains("weather = \"fog\""));
+        for none in ["weather = []", "weather = [\"clear\"]", "weather = \"clear\""] {
+            let map = MapFile::from_toml_str(&format!("version = 1\n{none}\n")).unwrap();
+            assert_eq!(map.weather, Skies::CLEAR, "{none}");
+            assert!(!map.to_toml_string().unwrap().contains("weather"), "{none} is not written back");
+        }
+        let every: Vec<String> = Weather::SKIES.iter().map(|w| format!("\"{}\"", w.name())).collect();
+        let all = MapFile::from_toml_str(&format!("version = 1\nweather = [{}]\n", every.join(", "))).unwrap();
+        assert_eq!(all.weather, Skies::ALL);
+        assert!(all.to_toml_string().unwrap().contains("weather = \"random\""));
+        // Clear may be one of several: a dry round or a wet one.
+        let either = MapFile::from_toml_str("version = 1\nweather = [\"rain\", \"clear\"]\n").unwrap();
+        assert_eq!(either.weather.skies(), vec![Weather::Clear, Weather::Rain]);
+        let text = either.to_toml_string().unwrap();
+        assert_eq!(MapFile::from_toml_str(&text).unwrap().weather, either.weather, "{text}");
+    }
+
+    /// The checklist's tap: in and out again, `clear` shown while nothing
+    /// is named and taken out only from among others.
+    #[test]
+    fn toggling_skies() {
+        let s = Skies::CLEAR;
+        assert!(s.contains(Weather::Clear) && !s.contains(Weather::Random));
+        assert_eq!(s.toggled(Weather::Clear), Skies::CLEAR, "clear alone stays clear");
+        let s = s.toggled(Weather::Night);
+        assert_eq!(s, Weather::Night.into());
+        assert!(!s.contains(Weather::Clear));
+        let s = s.toggled(Weather::Clear);
+        assert_eq!(s.skies(), vec![Weather::Clear, Weather::Night]);
+        assert_eq!(s.toggled(Weather::Night), Skies::CLEAR, "clear alone again is none");
+        assert_eq!(s.toggled(Weather::Random), s, "random names no one sky");
+        assert_eq!(Skies::parse(["random", "night"]), Ok(Skies::ALL));
+        assert_eq!(Skies::parse(["night", "hail"]), Err("hail"));
     }
 
     #[test]

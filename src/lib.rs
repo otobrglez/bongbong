@@ -899,14 +899,10 @@ pub const EDITOR_PANEL_BORDER_OPACITY: f32 = 0.6;
 pub const EDITOR_PANEL_FILL: (u8, u8, u8) = (20, 20, 24);
 pub const EDITOR_PANEL_FILL_OPACITY: f32 = 0.85;
 /// The build bar's popups (docs/game-editor-fusion.md sections 7 and 9),
-/// in UI points (`editor::chrome`): a dropdown row and a settings row are
-/// one finger-sized 48 pt tall, a category's list is 200 pt wide, a
-/// column of the MAP settings panel 340 pt.
+/// in UI points (`editor::chrome`): a dropdown row and a MAP panel row are
+/// one finger-sized 48 pt tall, a category's list is 200 pt wide.
 pub const EDITOR_DROPDOWN_ROW_H: f32 = 48.0;
 pub const EDITOR_DROPDOWN_W: f32 = 200.0;
-pub const EDITOR_SETTINGS_W: f32 = 340.0;
-/// The settings panel's `<`/`>` buttons, square and finger-sized.
-pub const EDITOR_STEPPER_SIZE: f32 = 48.0;
 /// How far a bar button's hit rect reaches above and below its drawn
 /// box, in UI points (docs/game-editor-fusion.md section 10), so a
 /// slightly low tap still lands.

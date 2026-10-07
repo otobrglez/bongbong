@@ -239,6 +239,11 @@ file-save-as = SHRANI KOT...
 file-clear = POČISTI
 file-revert = IZVIRNIK
 
+settings-group-round = BOJ
+settings-group-tanks = TANKI
+settings-group-field = POLJE
+settings-group-sky = NEBO
+settings-sky-hint = VSAK BOJ IZBERE ENO · BREZ = JASNO
 settings-tanks = TANKI
 settings-tank = TANK
 settings-tank2 = TANK 2
@@ -250,12 +255,12 @@ settings-growth = RAST
 settings-tier-start = RAZRED OD
 settings-tier-end = RAZRED DO
 settings-theme = TEMA
-settings-weather = VREME
 settings-width = ŠIRINA
 settings-height = VIŠINA
 settings-anchor = SIDRO
 settings-reset = PONASTAVI
 settings-auto = samodejno
+settings-auto-short = sam.
 settings-cli = (cli)
 
 editor-save-as = Shrani kot:
