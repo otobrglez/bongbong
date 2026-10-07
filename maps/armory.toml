@@ -1,182 +1,425 @@
-# armory - the free-play arena for the BB-36 weapons (docs/sonic-hammer.md
-# "The armory"). Hand-authored: re-saving from the map editor would drop
-# these comments. The level tables are dotted keys on purpose - a `[spawn]`
-# header would swallow every `cells.` line after it.
-#
-# Everything a new weapon meets in one screen. The start is on the west
-# with a sonic hammer crate three cells east of it; column 7 above and
-# below that crate is kept free for the crates of the weapons still to
-# come, one a cell (7,4 7,6 7,10 7,12 7,14). North: a glass house with a
-# shield inside it (the hammer shatters panes; an enemy wanting the shield
-# has to break in), an iron block and a brick stub (walls stop the wave).
-# Middle: a column of drums - oil, fuel, oil - with an oil trail running
-# east, for throwing at whoever stands behind them, and a lamp post the
-# wave leaves standing. South: a patch of tall grass with two trees to hide
-# in and be flushed out of, and a lake with fish to scatter and throw onto
-# its north bank. East: a lava ford running down from the top edge beside
-# an enemy tesla, an enemy gun tower in the south-east - the trouble an
-# enemy's hammer shoves a seat into, and a seat shoves enemies into - a
-# brick stub by the lake and a row of sandbags the wave passes over. A
-# second hammer crate on the east side is for the enemies: one firing
-# shells collects it. The player's frog sits by the start beside a player
-# tesla; the hunters come for it. A band of four, clear sky.
-#
-# The EMP burst (docs/emp-burst.md): its crate at 7,4, a second on the
-# east side at 29,7 for the enemies, a missiles crate at 31,16 whose
-# volleys a pulse kills in the air, and two more lamp posts (11,4 and
-# 25,10) so the lights going out at night read across the map (try
-# `--weather night`). The towers it puts offline are the ones above.
-#
-# Kept free for the later weapons' own pieces: 30,12, column 27 rows 8 to
-# 11 and the 2 x 2 at 33-34 x 8-9.
-#
-# The HUD's corner clusters stand over the field's top rows on a
-# whole-field view - rows 0 to 3 on the west and 0 to 2 on the east in a
-# 1152 x 576 window - so nothing a weapon needs stands there: the player
-# tesla, the iron block and the brick stub start a row or two lower.
-
 version = 1
-size = [36, 18]
 tanks = 4
-mission.kind = "protect"
-spawn.kind = "band"
+size = [
+    40.0,
+    22.0,
+]
 
+[cells."25,19"]
+kind = "water"
 
-# The start, the crates and the frog.
-cells."1,4" = { kind = "pickup", pickup = "health" }
-cells."14,3" = { kind = "pickup", pickup = "shield" }
-cells."4,8" = { kind = "start" }
-cells."7,8" = { kind = "pickup", pickup = "sonic_hammer" }
-cells."30,10" = { kind = "pickup", pickup = "sonic_hammer" }
-cells."7,4" = { kind = "pickup", pickup = "emp_burst" }
-cells."29,7" = { kind = "pickup", pickup = "emp_burst" }
-cells."31,16" = { kind = "pickup", pickup = "missiles" }
-cells."2,12" = { kind = "frog" }
-cells."1,16" = { kind = "pickup", pickup = "ammo" }
+[cells."5,6"]
+kind = "tesla"
 
-# The glass house.
-cells."12,1" = { kind = "wall", material = "glass" }
-cells."13,1" = { kind = "wall", material = "glass" }
-cells."14,1" = { kind = "wall", material = "glass" }
-cells."15,1" = { kind = "wall", material = "glass" }
-cells."16,1" = { kind = "wall", material = "glass" }
-cells."12,2" = { kind = "wall", material = "glass" }
-cells."16,2" = { kind = "wall", material = "glass" }
-cells."12,3" = { kind = "wall", material = "glass" }
-cells."16,3" = { kind = "wall", material = "glass" }
-cells."12,4" = { kind = "wall", material = "glass" }
-cells."16,4" = { kind = "wall", material = "glass" }
-cells."12,5" = { kind = "wall", material = "glass" }
-cells."13,5" = { kind = "wall", material = "glass" }
-cells."14,5" = { kind = "wall", material = "glass" }
-cells."15,5" = { kind = "wall", material = "glass" }
-cells."16,5" = { kind = "wall", material = "glass" }
+[cells."18,13"]
+kind = "tree"
 
-# Walls the wave stops at.
-cells."20,4" = { kind = "wall", material = "iron" }
-cells."21,4" = { kind = "wall", material = "iron" }
-cells."26,5" = { kind = "wall", material = "brick" }
-cells."20,3" = { kind = "wall", material = "iron" }
-cells."21,3" = { kind = "wall", material = "iron" }
-cells."26,3" = { kind = "wall", material = "brick" }
-cells."26,4" = { kind = "wall", material = "brick" }
-cells."28,13" = { kind = "wall", material = "brick" }
-cells."28,14" = { kind = "wall", material = "brick" }
+[cells."14,6"]
+kind = "wall"
+material = "glass"
 
-# The drums and their oil.
-cells."21,6" = { kind = "barrel", drum = "oil" }
-cells."21,8" = { kind = "barrel", drum = "fuel" }
-cells."22,8" = { kind = "oil" }
-cells."23,8" = { kind = "oil" }
-cells."24,8" = { kind = "oil" }
-cells."21,10" = { kind = "barrel", drum = "oil" }
+[cells."31,7"]
+kind = "sandbag"
 
-# Tall grass and trees.
-cells."11,11" = { kind = "tall_grass" }
-cells."12,11" = { kind = "tall_grass" }
-cells."13,11" = { kind = "tall_grass" }
-cells."14,11" = { kind = "tall_grass" }
-cells."15,11" = { kind = "tall_grass" }
-cells."16,11" = { kind = "tree" }
-cells."11,12" = { kind = "tall_grass" }
-cells."12,12" = { kind = "tall_grass" }
-cells."13,12" = { kind = "tall_grass" }
-cells."14,12" = { kind = "tall_grass" }
-cells."15,12" = { kind = "tall_grass" }
-cells."10,13" = { kind = "tree" }
-cells."11,13" = { kind = "tall_grass" }
-cells."12,13" = { kind = "tall_grass" }
-cells."13,13" = { kind = "tall_grass" }
-cells."14,13" = { kind = "tall_grass" }
-cells."15,13" = { kind = "tall_grass" }
-cells."11,14" = { kind = "tall_grass" }
-cells."12,14" = { kind = "tall_grass" }
-cells."13,14" = { kind = "tall_grass" }
-cells."14,14" = { kind = "tall_grass" }
-cells."15,14" = { kind = "tall_grass" }
-cells."11,15" = { kind = "tall_grass" }
-cells."12,15" = { kind = "tall_grass" }
-cells."13,15" = { kind = "tall_grass" }
-cells."14,15" = { kind = "tall_grass" }
-cells."15,15" = { kind = "tall_grass" }
+[cells."14,15"]
+kind = "tall_grass"
 
-# The lake.
-cells."19,13" = { kind = "water" }
-cells."20,13" = { kind = "water" }
-cells."21,13" = { kind = "water" }
-cells."22,13" = { kind = "water" }
-cells."23,13" = { kind = "water" }
-cells."24,13" = { kind = "water" }
-cells."25,13" = { kind = "water" }
-cells."26,13" = { kind = "water" }
-cells."19,14" = { kind = "water" }
-cells."20,14" = { kind = "water" }
-cells."21,14" = { kind = "water" }
-cells."22,14" = { kind = "water" }
-cells."23,14" = { kind = "water" }
-cells."24,14" = { kind = "water" }
-cells."25,14" = { kind = "water" }
-cells."26,14" = { kind = "water" }
-cells."19,15" = { kind = "water" }
-cells."20,15" = { kind = "water" }
-cells."21,15" = { kind = "water" }
-cells."22,15" = { kind = "water" }
-cells."23,15" = { kind = "water" }
-cells."24,15" = { kind = "water" }
-cells."25,15" = { kind = "water" }
-cells."26,15" = { kind = "water" }
-cells."19,16" = { kind = "water" }
-cells."20,16" = { kind = "water" }
-cells."21,16" = { kind = "water" }
-cells."22,16" = { kind = "water" }
-cells."23,16" = { kind = "water" }
-cells."24,16" = { kind = "water" }
-cells."25,16" = { kind = "water" }
-cells."26,16" = { kind = "water" }
-cells."19,17" = { kind = "water" }
-cells."20,17" = { kind = "water" }
-cells."21,17" = { kind = "water" }
-cells."22,17" = { kind = "water" }
-cells."23,17" = { kind = "water" }
-cells."24,17" = { kind = "water" }
-cells."25,17" = { kind = "water" }
-cells."26,17" = { kind = "water" }
+[cells."15,15"]
+kind = "tall_grass"
 
-# Lava, towers, sandbags and the lamp post.
-cells."32,0" = { kind = "lava" }
-cells."32,1" = { kind = "lava" }
-cells."32,2" = { kind = "lava" }
-cells."3,4" = { kind = "tesla" }
-cells."32,3" = { kind = "lava" }
-cells."34,3" = { kind = "tesla", side = "enemy" }
-cells."32,4" = { kind = "lava" }
-cells."28,5" = { kind = "sandbag" }
-cells."29,5" = { kind = "sandbag" }
-cells."30,5" = { kind = "sandbag" }
-cells."32,5" = { kind = "lava" }
-cells."32,6" = { kind = "lava" }
-cells."32,7" = { kind = "lava" }
-cells."17,8" = { kind = "lamp" }
-cells."11,4" = { kind = "lamp" }
-cells."25,10" = { kind = "lamp" }
-cells."34,14" = { kind = "gun_tower", side = "enemy" }
+[cells."24,17"]
+kind = "water"
+
+[cells."15,3"]
+kind = "wall"
+material = "glass"
+
+[cells."26,18"]
+kind = "water"
+
+[cells."16,14"]
+kind = "tall_grass"
+
+[cells."24,18"]
+kind = "water"
+
+[cells."27,18"]
+kind = "water"
+
+[cells."26,15"]
+kind = "water"
+
+[cells."14,7"]
+kind = "wall"
+material = "glass"
+
+[cells."30,7"]
+kind = "sandbag"
+
+[cells."24,16"]
+kind = "water"
+
+[cells."16,13"]
+kind = "tall_grass"
+
+[cells."18,4"]
+kind = "wall"
+material = "glass"
+
+[cells."19,10"]
+kind = "lamp"
+
+[cells."15,16"]
+kind = "tall_grass"
+
+[cells."26,19"]
+kind = "water"
+
+[cells."28,19"]
+kind = "water"
+
+[cells."23,19"]
+kind = "water"
+
+[cells."34,2"]
+kind = "lava"
+
+[cells."28,15"]
+kind = "water"
+
+[cells."23,10"]
+kind = "barrel"
+drum = "fuel"
+
+[cells."26,17"]
+kind = "water"
+
+[cells."6,10"]
+kind = "start"
+
+[cells."16,5"]
+kind = "pickup"
+pickup = "shield"
+
+[cells."16,3"]
+kind = "wall"
+material = "glass"
+
+[cells."28,17"]
+kind = "water"
+
+[cells."27,12"]
+kind = "lamp"
+
+[cells."16,16"]
+kind = "tall_grass"
+
+[cells."18,3"]
+kind = "wall"
+material = "glass"
+
+[cells."3,6"]
+kind = "pickup"
+pickup = "health"
+
+[cells."22,16"]
+kind = "water"
+
+[cells."22,19"]
+kind = "water"
+
+[cells."4,14"]
+kind = "frog"
+
+[cells."33,18"]
+kind = "pickup"
+pickup = "missiles"
+
+[cells."22,6"]
+kind = "wall"
+material = "iron"
+
+[cells."32,12"]
+kind = "pickup"
+pickup = "sonic_hammer"
+
+[cells."22,15"]
+kind = "water"
+
+[cells."22,17"]
+kind = "water"
+
+[cells."28,6"]
+kind = "wall"
+material = "brick"
+
+[cells."34,9"]
+kind = "lava"
+
+[cells."16,15"]
+kind = "tall_grass"
+
+[cells."14,17"]
+kind = "tall_grass"
+
+[cells."21,17"]
+kind = "water"
+
+[cells."34,7"]
+kind = "lava"
+
+[cells."9,10"]
+kind = "pickup"
+pickup = "sonic_hammer"
+
+[cells."13,15"]
+kind = "tall_grass"
+
+[cells."23,15"]
+kind = "water"
+
+[cells."36,16"]
+kind = "gun_tower"
+side = "enemy"
+
+[cells."32,7"]
+kind = "sandbag"
+
+[cells."28,16"]
+kind = "water"
+
+[cells."36,5"]
+kind = "tesla"
+side = "enemy"
+
+[cells."13,17"]
+kind = "tall_grass"
+
+[cells."26,10"]
+kind = "oil"
+
+[cells."15,7"]
+kind = "wall"
+material = "glass"
+
+[cells."13,16"]
+kind = "tall_grass"
+
+[cells."14,5"]
+kind = "wall"
+material = "glass"
+
+[cells."34,4"]
+kind = "lava"
+
+[cells."23,6"]
+kind = "wall"
+material = "iron"
+
+[cells."3,18"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."34,6"]
+kind = "lava"
+
+[cells."34,8"]
+kind = "lava"
+
+[cells."25,10"]
+kind = "oil"
+
+[cells."21,16"]
+kind = "water"
+
+[cells."17,3"]
+kind = "wall"
+material = "glass"
+
+[cells."27,19"]
+kind = "water"
+
+[cells."18,5"]
+kind = "wall"
+material = "glass"
+
+[cells."25,18"]
+kind = "water"
+
+[cells."17,7"]
+kind = "wall"
+material = "glass"
+
+[cells."27,17"]
+kind = "water"
+
+[cells."14,3"]
+kind = "wall"
+material = "glass"
+
+[cells."27,15"]
+kind = "water"
+
+[cells."17,14"]
+kind = "tall_grass"
+
+[cells."14,13"]
+kind = "tall_grass"
+
+[cells."30,15"]
+kind = "wall"
+material = "brick"
+
+[cells."31,9"]
+kind = "pickup"
+pickup = "emp_burst"
+
+[cells."9,6"]
+kind = "pickup"
+pickup = "emp_burst"
+
+[cells."13,13"]
+kind = "tall_grass"
+
+[cells."25,16"]
+kind = "water"
+
+[cells."18,6"]
+kind = "wall"
+material = "glass"
+
+[cells."16,17"]
+kind = "tall_grass"
+
+[cells."24,15"]
+kind = "water"
+
+[cells."21,19"]
+kind = "water"
+
+[cells."15,14"]
+kind = "tall_grass"
+
+[cells."25,15"]
+kind = "water"
+
+[cells."28,7"]
+kind = "wall"
+material = "brick"
+
+[cells."23,17"]
+kind = "water"
+
+[cells."25,17"]
+kind = "water"
+
+[cells."28,18"]
+kind = "water"
+
+[cells."23,18"]
+kind = "water"
+
+[cells."28,5"]
+kind = "wall"
+material = "brick"
+
+[cells."17,16"]
+kind = "tall_grass"
+
+[cells."23,5"]
+kind = "wall"
+material = "iron"
+
+[cells."23,8"]
+kind = "barrel"
+drum = "oil"
+
+[cells."21,18"]
+kind = "water"
+
+[cells."15,13"]
+kind = "tall_grass"
+
+[cells."26,16"]
+kind = "water"
+
+[cells."14,4"]
+kind = "wall"
+material = "glass"
+
+[cells."30,16"]
+kind = "wall"
+material = "brick"
+
+[cells."14,14"]
+kind = "tall_grass"
+
+[cells."24,19"]
+kind = "water"
+
+[cells."21,15"]
+kind = "water"
+
+[cells."17,13"]
+kind = "tall_grass"
+
+[cells."22,18"]
+kind = "water"
+
+[cells."16,7"]
+kind = "wall"
+material = "glass"
+
+[cells."13,6"]
+kind = "lamp"
+
+[cells."14,16"]
+kind = "tall_grass"
+
+[cells."34,3"]
+kind = "lava"
+
+[cells."22,5"]
+kind = "wall"
+material = "iron"
+
+[cells."23,12"]
+kind = "barrel"
+drum = "oil"
+
+[cells."27,16"]
+kind = "water"
+
+[cells."15,17"]
+kind = "tall_grass"
+
+[cells."17,17"]
+kind = "tall_grass"
+
+[cells."18,7"]
+kind = "wall"
+material = "glass"
+
+[cells."24,10"]
+kind = "oil"
+
+[cells."17,15"]
+kind = "tall_grass"
+
+[cells."23,16"]
+kind = "water"
+
+[cells."13,14"]
+kind = "tall_grass"
+
+[cells."34,5"]
+kind = "lava"
+
+[cells."12,15"]
+kind = "tree"
+
+[mission]
+kind = "protect"
+
+[spawn]
+kind = "band"
