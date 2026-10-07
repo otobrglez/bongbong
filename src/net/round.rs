@@ -1046,9 +1046,18 @@ impl<T: Transport> OnlineRound<T> {
             // room judges it (`Game::resolve_projectiles`).
             let portal = world.portal_entry(from, to, leaving);
             let to = portal.unwrap_or(to);
-            let world_hit = world
+            let mut world_hit = world
                 .shot_contact(Some(seat), from, to, shot_half_extent(kind))
                 .map(|(at, contact)| (at, matches!(contact, Contact::Tank { .. } | Contact::Frog)));
+            // A bullet stops at a drone of the other side's it crosses
+            // first, as the room's sweep has it; the drone stays up until
+            // the room says it is down.
+            if kind == crate::simulation::ProvisionalKind::Bullet
+                && let Some(at) = world.air_contact(Some(seat), from, to, shot_half_extent(kind))
+                && world_hit.is_none_or(|(hit, _)| from.distance_to(at) < from.distance_to(hit))
+            {
+                world_hit = Some((at, false));
+            }
             let opposing: &[IncomingShell] = if kind == crate::simulation::ProvisionalKind::Shell { shells } else { &[] };
             let Some((at, tank, shell)) = first_contact(from, to, world_hit, opposing, reach, &met) else {
                 return portal.map(|at| (at, ShotStop::Portal));
