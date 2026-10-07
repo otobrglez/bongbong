@@ -1632,3 +1632,132 @@ async fn a_charge_counts_the_clients_ticks_however_the_room_reads_them() {
     }
     assert!(fired, "let go at full, the room fired the slug");
 }
+
+/// What `the_whole_client_launches_a_drone_and_the_room_takes_it_over`
+/// saw, frame by frame.
+#[derive(Debug, Default)]
+struct LaunchSeen {
+    /// The seat's drones drawn on the press frame, and the most on any.
+    on_press: usize,
+    most: usize,
+    /// The HUD's drone count before the press, on its frame, and every
+    /// count after it.
+    before: i32,
+    counts: Vec<i32>,
+    /// The client's own drawn drone was on the picture, then the room's
+    /// copy took its place.
+    own: bool,
+    handed_over: bool,
+    /// The furthest the drawn drone moved in one frame past what it can fly
+    /// in that frame (px), and the drone burst.
+    worst_jump: f32,
+    burst: bool,
+    /// How far the drawn drone moved on the frame the room's copy took
+    /// over, and on the frame before (px).
+    handover_step: f32,
+    step_before: f32,
+}
+
+/// **An FPV launch through the whole client, against the real server**
+/// (docs/fpv-swarm.md "Wire"): the seat, armed by the crate beside its
+/// start, presses once. The client draws the drone on the press frame and
+/// the HUD loses it at once; the room's copy takes over a moment into the
+/// climb, and at no frame are two of the seat's drones drawn, the drone
+/// never jumps further than it can fly in a frame, and the count never has
+/// it back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_whole_client_launches_a_drone_and_the_room_takes_it_over() {
+    use bongbong::hud::HudModel;
+    use bongbong::net::round::OnlineRound;
+    use bongbong::shell::Owner;
+    use bongbong::simulation::Event;
+    use bongbong::tank::ActiveWeapon;
+
+    let (addr, _hub) = start_server().await;
+    let url = socket_url(&RoomsHost::overriding(&format!("ws://{addr}")));
+    let map = "version = 1\ntanks = 0\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"4,6\" = { kind = \"pickup\", pickup = \"fpv_swarm\" }\n";
+
+    let seen = tokio::task::spawn_blocking(move || {
+        let client = RoomClient::host(
+            NativeTransport::connect(&url),
+            Identity::new("host", "tok-host"),
+            RoomSetup { map: "custom".into(), map_toml: Some(map.into()), mission: Mission::Protect, seed: Some(0xB0B5) },
+        );
+        let mut round = OnlineRound::new(client, "TEST");
+        let frame = Duration::from_millis(16);
+        let slot = |round: &OnlineRound<NativeTransport>| round.game().map(|g| HudModel::gather(g, Some(0)).local.weapon);
+        let give_up = Instant::now() + WAIT * 4;
+        while slot(&round).is_none_or(|w| w.weapon != ActiveWeapon::FpvSwarm || w.count != 6) {
+            round.frame(&Intent::default(), frame.as_secs_f32());
+            round.start_round();
+            assert!(Instant::now() < give_up, "the seat never took the crate");
+            std::thread::sleep(frame);
+        }
+        // A beat more, so the sandbox stands where the room has the hull.
+        for _ in 0..30 {
+            round.frame(&Intent::default(), frame.as_secs_f32());
+            std::thread::sleep(frame);
+        }
+        let mut seen = LaunchSeen { before: slot(&round).expect("a slot").count, ..LaunchSeen::default() };
+        // The press frame covers a whole tick, so its packet goes out on it
+        // (a frame owing no packet carries the press into the next one).
+        let mut tick = Instant::now();
+        std::thread::sleep(frame);
+        let mut last: Option<bongbong::Position> = None;
+        for i in 0..300 {
+            let now = Instant::now();
+            let dt = now.duration_since(tick).as_secs_f32().max(0.001);
+            tick = now;
+            round.frame(&Intent { fire: i == 0, ..Intent::default() }, dt);
+            let game = round.game().expect("a replica");
+            let drones: Vec<_> = game.drones().into_iter().filter(|d| d.owner == Owner::Player(0)).collect();
+            seen.most = seen.most.max(drones.len());
+            if i == 0 {
+                seen.on_press = drones.len();
+            }
+            seen.counts.push(slot(&round).expect("a slot").count);
+            match drones.as_slice() {
+                [d] => {
+                    let at = d.drawn();
+                    let step = last.map_or(0.0, |was| was.distance_to(at));
+                    // Nothing a drone does - the dive with its height
+                    // falling - covers 450 px a second.
+                    seen.worst_jump = seen.worst_jump.max(step - 450.0 * dt);
+                    last = Some(at);
+                    if d.id >= 1 << 16 {
+                        seen.own = true;
+                        seen.step_before = step;
+                    } else if seen.own && !seen.handed_over {
+                        seen.handed_over = true;
+                        seen.handover_step = step;
+                    }
+                }
+                _ => last = None,
+            }
+            if round.game().expect("a replica").events().iter().any(|e| matches!(e, Event::DroneBurst { slot: 0, .. })) {
+                seen.burst = true;
+                break;
+            }
+            std::thread::sleep(frame);
+        }
+        seen
+    })
+    .await
+    .expect("the client's thread");
+
+    eprintln!("{seen:?}");
+    assert_eq!(seen.before, 6, "six in the halo before the press");
+    assert_eq!(seen.on_press, 1, "the drone is drawn on the press frame");
+    assert_eq!(seen.most, 1, "never two of the seat's drones drawn");
+    assert_eq!(seen.counts.first(), Some(&5), "the HUD loses it on the press frame");
+    assert!(seen.counts.iter().all(|&c| c == 5), "and never has it back: {:?}", seen.counts);
+    assert!(seen.own && seen.handed_over, "the client's drone, then the room's copy");
+    assert!(seen.worst_jump < 6.0, "the drawn drone jumped {} px past its flight", seen.worst_jump);
+    assert!(
+        seen.handover_step <= seen.step_before * 2.0 + 3.0,
+        "the hand-over moved the drone {} px against {} px the frame before",
+        seen.handover_step,
+        seen.step_before
+    );
+    assert!(seen.burst, "the room's drone burst on the picture");
+}
