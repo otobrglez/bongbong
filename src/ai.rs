@@ -1067,6 +1067,11 @@ impl Ai {
         self.clearing
     }
 
+    /// Whether it is backing out of a danger (`dodging`, the latch).
+    pub(crate) fn dodging(&self) -> bool {
+        self.dodging
+    }
+
     /// Whether it waited outside a danger this tick (`kept_out`).
     pub(crate) fn kept_out(&self) -> bool {
         self.kept_out

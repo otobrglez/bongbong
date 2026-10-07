@@ -3694,7 +3694,7 @@ impl Game {
             // is the weapon's own minimum (a burst in progress, say). A
             // weapon with a tell winds up first (`enemy_trigger`).
             enemy_trigger(&mut self.physics, f, tank, owner, intent);
-            pending.push(Pending { entity, slot: tank.owner_slot(), intent, current, facing_before, disabled: false, clearing: ai.clearing() });
+            pending.push(Pending { entity, slot: tank.owner_slot(), intent, current, facing_before, disabled: false, clearing: ai.clearing(), dodging: ai.dodging() });
         }
 
         // --- command pass: no world, no RNG (see `simulation::command`) ---
@@ -3725,6 +3725,7 @@ impl Game {
                     ring_rank: self.last_engage.slot_of(p.entity).map(|s| s.rank),
                     busy: p.disabled.then_some(command::Busy::Disabled),
                     clearing: p.clearing,
+                    dodging: p.dodging,
                 }
             })
             .collect();
@@ -5082,6 +5083,8 @@ struct Pending {
     disabled: bool,
     /// The ring its EMP rule asked the commander to clear (`Ai::clearing`).
     clearing: Option<f32>,
+    /// Backing out of a danger on its own (`Ai::dodging`).
+    dodging: bool,
 }
 
 /// What the ground and the sky do to a hull's drive this frame
@@ -5161,7 +5164,7 @@ fn coast_enemy(physics: &mut Physics, f: &mut Frame, entity: Entity, tank: &mut 
     let owner = tank.owner();
     tick_queued_shots(physics, f, tank, owner);
     enemy_trigger(physics, f, tank, owner, Intent { fire: false, ..intent });
-    Pending { entity, slot: tank.owner_slot(), intent, current, facing_before, disabled: tank.is_disabled(), clearing: None }
+    Pending { entity, slot: tank.owner_slot(), intent, current, facing_before, disabled: tank.is_disabled(), clearing: None, dodging: false }
 }
 
 /// The intent the apply pass drives `slot` by: the commander's orders over

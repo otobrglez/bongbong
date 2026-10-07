@@ -80,6 +80,9 @@ pub(crate) struct UnitView {
     /// The ring this tank's EMP wants cleared of its own side before it
     /// pulses (`ai::SpecialUse::Clear`), px: what `clear_rings` acts on.
     pub clearing: Option<f32>,
+    /// It is backing out of a danger on its own (`ai::Ai::dodging`), which
+    /// a clearer's ring is: `clear_rings` leaves it to that.
+    pub dodging: bool,
 }
 
 /// Why the commander leaves a tank alone (`UnitView::busy`). A weapon whose
@@ -312,7 +315,8 @@ impl Commander {
     /// Clear the rings the EMP tanks want clear before they pulse
     /// (docs/emp-burst.md "With the commander"): for each unit with
     /// `clearing`, in slot order, every other unit - not a wreck, not
-    /// beyond orders, not already ordered this frame - whose centre stands
+    /// beyond orders, not already backing out of a danger on its own, not
+    /// already ordered this frame - whose centre stands
     /// within the ring plus its own radius is nudged out
     /// (`Order::Nudge`): the cardinal away from the clearer along the larger
     /// of the two offsets, then the smaller, then the other two in
@@ -323,7 +327,7 @@ impl Commander {
         for clearer in units.iter().filter(|u| u.clearing.is_some() && !u.wreck && u.busy.is_none()) {
             let radius = clearer.clearing.unwrap_or(0.0);
             for u in units {
-                if u.slot == clearer.slot || u.wreck || u.busy.is_some() || matches!(u.unit, Unit::Player(_)) || self.orders.contains_key(&u.slot) {
+                if u.slot == clearer.slot || u.wreck || u.busy.is_some() || u.dodging || matches!(u.unit, Unit::Player(_)) || self.orders.contains_key(&u.slot) {
                     continue;
                 }
                 let (dx, dy) = (u.position.x - clearer.position.x, u.position.y - clearer.position.y);
@@ -492,6 +496,7 @@ mod tests {
             ring_rank: None,
             busy: None,
             clearing: None,
+            dodging: false,
         }
     }
 
@@ -550,7 +555,8 @@ mod tests {
 
     /// An EMP tank about to pulse into its own side has the commander
     /// nudge every ally in its ring out, along the larger offset first and
-    /// round a wall; a disabled ally, a wreck and a seat are left alone.
+    /// round a wall; a disabled ally, a wreck, a seat and an ally already
+    /// backing out of the ring on its own are left alone.
     #[test]
     fn a_clearer_nudges_its_allies_out_of_its_ring() {
         let mut c = Commander::default();
@@ -566,7 +572,9 @@ mod tests {
         wreck.wreck = true;
         let mut seat = unit(0, 80.0, 0.0);
         seat.unit = Unit::Player(0);
-        let units = [clearer, below, right, far, down, wreck, seat];
+        let mut backing = unit(7, -90.0, 0.0);
+        backing.dodging = true;
+        let units = [clearer, below, right, far, down, wreck, seat, backing];
         // A wall to the right of the unit at 120.
         let blocked = |p: Position, d: Dir| p.x > 100.0 && d == Dir::Right;
         let ctx = CommandCtx { dt: 1.0 / 60.0, blocked: &blocked };
@@ -579,6 +587,7 @@ mod tests {
         assert_eq!(nudge(2), Some(Dir::Down), "along the larger offset");
         assert_eq!(nudge(3), Some(Dir::Down), "round the wall: the smaller offset's way");
         assert!(nudge(4).is_none() && nudge(5).is_none() && nudge(6).is_none() && nudge(0).is_none());
+        assert!(nudge(7).is_none(), "one backing out of the ring on its own is left to it");
     }
 
     /// A disabled unit is deaf: it never gives way and is never ordered to
