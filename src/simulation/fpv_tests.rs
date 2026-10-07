@@ -660,3 +660,47 @@ fn an_enemy_drone_locked_on_the_seat_is_in_its_scene() {
     let ind = crate::indicators::Awareness::new().frame(&scene, &view, &t);
     assert!(ind.arrows.iter().any(|a| matches!(a.kind, crate::indicators::ArrowKind::Drone { .. })), "{:?}", ind.arrows);
 }
+
+/// Cover it cannot get to is no cover: an enemy in the open that makes for
+/// cover and does not arrive launches from where it stands once
+/// `fpv_ai_cover_seconds` have passed.
+#[test]
+fn an_enemy_that_cannot_reach_cover_launches_from_the_open() {
+    let wall = (4..9).map(|r| format!("cells.\"9,{r}\" = {{ kind = \"wall\", material = \"iron\" }}\n")).collect::<String>();
+    let mut game = round_as(&wall, Mission::Destroy);
+    // In the open below the wall's end, held where it stands.
+    let enemy = fpv_enemy(&mut game, cell(14, 12), Role::Player, false);
+    let slot = slot_of(&game, enemy);
+    let mut covered = 0;
+    let mut launched = None;
+    for frame in 0..600 {
+        let events = step(&mut game, false);
+        if game.world.get::<&crate::ai::Ai>(enemy).unwrap().snapshot().special == Some("to cover") {
+            covered += 1;
+        }
+        if !launches_by(&events, slot).is_empty() {
+            launched = Some(frame);
+            break;
+        }
+    }
+    assert!(covered > 0, "it made for cover first");
+    let launched = launched.expect("and launched from the open");
+    assert!(launched as f32 * DT >= Tuning::DEFAULT.fpv_ai_cover_seconds, "after the patience: {launched}");
+}
+
+/// The drawn world a client sweeps its own bullets against holds the air
+/// targets: a seat's bullet stops at an enemy's drone, never at its own.
+#[test]
+fn a_seats_drawn_bullet_stops_at_an_enemy_drone_not_its_own() {
+    let mut game = round("");
+    enemy_drone(&mut game, cell(14, 6));
+    launch(&mut game, 1);
+    let world = game.present_world();
+    let at = world.air_contact(Some(0), cell(10, 6), cell(18, 6), 2.0).expect("the enemy's drone");
+    let drone = game.drones().into_iter().find(|d| d.owner != Owner::Player(0)).expect("the enemy's drone");
+    let edge = drone.ground.x - Tuning::DEFAULT.fpv_hit_half_px - 2.0;
+    assert!((at.x - edge).abs() < 0.5, "at its column's near side: {at:?} vs {edge}");
+    let own = game.drones().into_iter().find(|d| d.owner == Owner::Player(0)).expect("the seat's drone");
+    let near = own.ground;
+    assert!(world.air_contact(Some(0), Position::new(near.x - 40.0, near.y), Position::new(near.x + 40.0, near.y), 2.0).is_none(), "its own");
+}

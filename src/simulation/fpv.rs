@@ -547,6 +547,15 @@ impl Game {
                     ai.cover_spot = spot;
                     spot.map(|(p, _)| p)
                 }
+                // In cover from the seat it would launch at: the patience
+                // starts over. With no seat it keeps what it had - a cover
+                // whose way out of the box loses the seat for a moment is
+                // still the cover it cannot get to.
+                (false, Some(_)) => {
+                    ai.cover_spot = None;
+                    ai.cover_waited = 0.0;
+                    None
+                }
                 _ => {
                     ai.cover_spot = None;
                     None

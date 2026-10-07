@@ -80,6 +80,9 @@ pub struct PresentWorld {
     height: f32,
     /// The portals a shot goes into (`Game::shot_portals`).
     portals: Vec<Position>,
+    /// The air targets as drawn (`Game::air_targets`): what a seat's own
+    /// bullets stop at (`air_contact`).
+    air: Vec<crate::air::AirTarget>,
 }
 
 impl Game {
@@ -107,7 +110,7 @@ impl Game {
             .flatten()
             .filter_map(|e| self.world.get::<&crate::frog::Frog>(e).ok().filter(|f| !f.is_dead()).map(|f| f.position))
             .collect();
-        PresentWorld { terrain, tanks, frogs, width, height, portals: self.shot_portals().to_vec() }
+        PresentWorld { terrain, tanks, frogs, width, height, portals: self.shot_portals().to_vec(), air: self.air_targets() }
     }
 
     /// Kick one seat's hull back from a shot it just fired along
@@ -502,6 +505,24 @@ impl PresentWorld {
         consider(self.terrain.first_solid_along(p0, p1), Contact::Tile);
         consider(self.edge_along(p0, p1), Contact::Edge);
         best.map(|(t, c)| (Position::new(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t), c))
+    }
+
+    /// Where a bullet `shooter` fired, `half` wide, flying `p0..p1` first
+    /// crosses an air target of the other side's (docs/fpv-swarm.md "Air
+    /// targets"): a drone's column from its shadow to its body, as the
+    /// room's hit test sweeps it. Only a bullet strikes the air; whether the
+    /// drone comes down is the room's word (`Event::DroneDowned`).
+    pub fn air_contact(&self, shooter: Option<u8>, p0: Position, p1: Position, half: f32) -> Option<Position> {
+        let side = shooter.map_or(Owner::Enemy(usize::MAX), Owner::Player);
+        self.air
+            .iter()
+            .filter(|a| !a.owner.same_side(side))
+            .filter_map(|a| {
+                let (c, h) = a.strike_box();
+                segment_box(p0, p1, c, h + Position::new(half, half))
+            })
+            .min_by(|a, b| a.total_cmp(b))
+            .map(|t| Position::new(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t))
     }
 
     /// Where a shot flying `p0..p1`, leaving the portal `leaving` if any,
