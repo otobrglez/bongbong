@@ -351,8 +351,10 @@ impl Game {
     /// The places every enemy keeps out of this frame because of an EMP
     /// (docs/emp-burst.md "Reacting to the EMP"): round every live seat on
     /// the field carrying an armed EMP that is not hidden in grass, and
-    /// round every enemy whose EMP crackle is running, `emp_radius_px +
-    /// emp_ai_berth_px` out - seats in index order, then enemies by slot.
+    /// round every enemy whose EMP crackle is running or that held its
+    /// pulse for its allies on its last think (`Ai::clearing`),
+    /// `emp_radius_px + emp_ai_berth_px` out - seats in index order, then
+    /// enemies by slot.
     /// Empty when no tank carries an EMP.
     pub(super) fn emp_dangers(&self, seats: &[EmpSeat]) -> Vec<Danger> {
         let t = tuning();
@@ -362,13 +364,18 @@ impl Game {
             .filter(|s| s.live && s.emp_armed && !s.concealed)
             .map(|s| Danger { shape: DangerShape::Disc { at: s.pos, radius }, owner: Some(s.seat as usize) })
             .collect();
+        // An enemy crackling, or holding its pulse until its allies are out
+        // of the ring (`Ai::clearing`, from its last think).
         let mut tells: Vec<(usize, Position)> = self
             .world
-            .query::<&Tank>()
-            .with::<&Ai>()
+            .query::<(&Tank, &Ai)>()
             .iter()
-            .filter(|tank| !tank.is_wreck() && tank.tell.is_some_and(|tell| tell.weapon == ActiveWeapon::Emp))
-            .map(|tank| (tank.owner_slot(), tank.position))
+            .filter(|(tank, ai)| {
+                !tank.is_wreck()
+                    && !tank.is_disabled()
+                    && (tank.tell.is_some_and(|tell| tell.weapon == ActiveWeapon::Emp) || ai.clearing().is_some())
+            })
+            .map(|(tank, _)| (tank.owner_slot(), tank.position))
             .collect();
         tells.sort_by_key(|&(slot, _)| slot);
         out.extend(tells.into_iter().map(|(slot, at)| Danger { shape: DangerShape::Disc { at, radius }, owner: Some(slot) }));

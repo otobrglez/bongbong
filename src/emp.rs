@@ -207,7 +207,7 @@ pub fn ring(pulse: &EmpPulse, t: &Tuning) -> Vec<Shape> {
     }
     if pulse.age < 0.3 {
         let k = 1.0 - pulse.age / 0.3;
-        out.push(Shape::Glow { pos: c, radius: 40.0 * k, color: EMP[3] });
+        out.push(Shape::Glow { pos: c, radius: 40.0 * k, color: pyro::alpha(EMP[3], 0.5 * k) });
     }
     out
 }
@@ -250,7 +250,7 @@ pub fn sparks(center: Position, half: Vec2, seed: u32, time: f32, left: f32) -> 
         let segments = 2 + (pyro::unit(seed, 90 + k) * 2.0) as u32;
         zigzag(&mut out, from, a, len, segments, seed, k);
     }
-    out.push(Shape::Glow { pos: center, radius: 20.0, color: EMP[2] });
+    out.push(Shape::Glow { pos: center, radius: 20.0, color: pyro::alpha(EMP[2], 0.3) });
     out
 }
 
@@ -270,7 +270,7 @@ pub fn tell(coil: Position, seed: u32, progress: f32, time: f32) -> Vec<Shape> {
         zigzag(&mut out, from, a, 4.0 + 8.0 * p, 2, seed, k);
     }
     let pulse = 0.5 + 0.5 * (time * (6.0 + 18.0 * p) * std::f32::consts::TAU).sin();
-    out.push(Shape::Glow { pos: coil, radius: 8.0 + 8.0 * p * pulse, color: EMP[3] });
+    out.push(Shape::Glow { pos: coil, radius: 8.0 + 8.0 * p * pulse, color: pyro::alpha(EMP[3], 0.45) });
     out
 }
 
@@ -379,7 +379,9 @@ mod tests {
             assert!(!shapes.is_empty(), "drawn at {age}");
             for s in &shapes {
                 match *s {
-                    Shape::Arc { color, .. } | Shape::Mark { color, .. } | Shape::Glow { color, .. } => assert!(EMP.contains(&color), "{color:?} in the ramp"),
+                    Shape::Arc { color, .. } | Shape::Mark { color, .. } => assert!(EMP.contains(&color), "{color:?} in the ramp"),
+                    // A glow is a ramp step at a fraction of its strength.
+                    Shape::Glow { color, .. } => assert!(EMP.iter().any(|e| (e.r, e.g, e.b) == (color.r, color.g, color.b)), "{color:?} in the ramp"),
                     Shape::Line { head, tail, .. } => assert!(EMP.contains(&head) && EMP.contains(&tail)),
                     Shape::Puff(_) => panic!("no puffs in a ring"),
                 }

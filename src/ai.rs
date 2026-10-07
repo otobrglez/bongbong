@@ -264,10 +264,11 @@ enum SpecialUse {
     Fire { face: Dir, at_seat: Option<u8>, why: &'static str },
     /// Hold still facing `face`; `why` for the trace.
     Hold { face: Dir, why: &'static str },
-    /// Hold still facing `face` and ask the commander to clear the tank's
-    /// ring of `radius` px of its own side before it fires
-    /// (`Ai::clearing`, `simulation::command`'s `clear_rings`).
-    Clear { face: Dir, radius: f32 },
+    /// Have the tank's ring of `radius` px cleared of its own side before
+    /// it fires (`Ai::clearing`: a danger its allies keep out of, and
+    /// `simulation::command`'s `clear_rings` with the commander on), the
+    /// tank fighting on meanwhile.
+    Clear { radius: f32 },
     /// Close in on `to`, to bring a short-range weapon to bear.
     Approach { to: Position },
 }
@@ -496,8 +497,10 @@ pub struct Ai {
     /// Its brain is off (an EMP, docs/emp-burst.md): `enemy_phase` coasts it
     /// and does not call `think`; the first tick it is back, `reboot`.
     pub(crate) down: bool,
-    /// The ring its EMP rule asked the commander to clear of its own side
-    /// this tick (`SpecialUse::Clear`), `None` the rest of the time.
+    /// The ring its EMP rule asked to have cleared of its own side this tick
+    /// (`SpecialUse::Clear`) - a danger its allies keep out of on the next
+    /// (`Game::emp_dangers`), and the commander's to clear when it is on -,
+    /// `None` the rest of the time.
     clearing: Option<f32>,
     /// Backing out of a danger (`Danger`, the `dodge` tier): latched until
     /// the tank stands `enemy_danger_clear_px` outside it, so the edge is
@@ -1033,7 +1036,8 @@ impl Ai {
     }
 
     /// The ring this tank's EMP rule asked to have cleared this tick, if
-    /// any (`SpecialUse::Clear`): what the collect pass hands the commander.
+    /// any (`SpecialUse::Clear`): what the collect pass hands the commander
+    /// and the next frame's dangers read.
     pub(crate) fn clearing(&self) -> Option<f32> {
         self.clearing
     }
@@ -2779,8 +2783,9 @@ fn special_rule(b: &Brain) -> Option<SpecialUse> {
 /// training dummy never pulses, and a seat in reach that would see it from
 /// outside its sight box holds the pulse whole; a pulse worth
 /// `emp_ai_fire_value` goes off - unless one of its own side's towers is in
-/// reach, or an ally is (then, with the commander on, it holds facing and
-/// has the ring cleared, `Clear`; without, the tree goes on); then a closer
+/// reach, or an ally is (then it holds facing and has the ring cleared,
+/// `Clear`: its allies keep out of it as of a crackle, and with the
+/// commander on they are nudged out too); then a closer
 /// whose seat is worth `emp_ai_approach_value` on its own, not crowded by
 /// an ally, closes in to its spot of the seat's ring drawn in to well
 /// inside the ring's reach and waits there facing it. A fire arm that
@@ -2796,7 +2801,7 @@ fn emp_rule(b: &Brain, sense: &EmpSense) -> Option<SpecialUse> {
             return None;
         }
         if sense.friends {
-            return t.c2_enabled.then_some(SpecialUse::Clear { face: facing, radius: t.emp_radius_px + t.emp_ai_friend_margin_px });
+            return Some(SpecialUse::Clear { radius: t.emp_radius_px + t.emp_ai_friend_margin_px });
         }
         return Some(SpecialUse::Fire { face: facing, at_seat: sense.at_seat, why: "pulse" });
     }
@@ -2905,7 +2910,10 @@ fn hammer_rule(b: &Brain, sense: &HammerSense) -> Option<SpecialUse> {
 /// Apply what the special's rule asked (`special_rule`): fire - face,
 /// commit and, with the fire timer out, pull the trigger, recording the
 /// seat it is used on and resetting the timer to the weapon's own interval;
-/// hold; or close in.
+/// hold; close in; or ask for its ring to be cleared, which only records
+/// the ring (`Ai::clearing`) and leaves the tick to the tiers below - a
+/// tank that held still for it would stand there for as long as an ally
+/// did not leave, and two clearing each other would never move.
 fn act_special(b: &mut Brain) -> Status {
     let Some(use_) = special_rule(b) else { return Status::Failure };
     b.reset_aim();
@@ -2925,11 +2933,10 @@ fn act_special(b: &mut Brain) -> Status {
             b.ai.commit(face);
             b.ai.special_why = Some(why);
         }
-        SpecialUse::Clear { face, radius } => {
-            b.intent.face = Some(face);
-            b.ai.commit(face);
+        SpecialUse::Clear { radius } => {
             b.ai.special_why = Some("clear");
             b.ai.clearing = Some(radius);
+            return Status::Failure;
         }
         SpecialUse::Approach { to } => {
             b.intent.move_dir = Some(b.steer(to));

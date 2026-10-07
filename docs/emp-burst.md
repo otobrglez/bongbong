@@ -547,9 +547,12 @@ half height), and the flag keeps the rule true on any knobs.
    a player tower, is enough; the weights pick `at_seat` and rank):
    1. a standing friendly tower in reach: `None` (it never puts its own
       side's tower out, and nothing can move a tower out of the way);
-   2. a friend in reach: with `c2_enabled`, `Clear { face: facing,
-      radius: emp_radius_px + emp_ai_friend_margin_px }`; without, `None`
-      - it holds its fire and fights on, never firing the EMP into an ally;
+   2. a friend in reach: `Clear { radius: emp_radius_px +
+      emp_ai_friend_margin_px }` - it never fires the EMP into an ally;
+      it records the ring (`Ai::clearing`) and fights on through the tiers
+      below, and on the next frame the ring is a danger its allies back out
+      of (below), and with `c2_enabled` the commander nudges them out too.
+      Once none is in reach, the pulse goes off;
    3. otherwise `Fire { face: facing, at_seat, why: "pulse" }` - the
       facing it has (a pulse is all round), through the tell.
 5. **Approach**: a `closer`, under `enemy_flee_damage`, not a guard that
@@ -588,8 +591,9 @@ commits: a seat that drives out of the ring during it has dodged.
 
 ### With the commander (`c2_enabled`)
 
-The friendly-fire hold becomes an order (docs/enemy-command-and-control-
-prd.md):
+The ring is cleared by the dangers without the commander (an ally keeps out
+of a clearer as of a crackle); with it, the clearing is also an order
+(docs/enemy-command-and-control-prd.md):
 
 - **`UnitView`** gains `clearing: Option<f32>` (the tank's `Ai::clearing`
   this tick, from its rule's `Clear`) and `busy: Option<command::Busy>`
@@ -605,16 +609,15 @@ prd.md):
   wall; none open, no order (`Skipped::no_free_lane`). `Nudge` already
   exists - reflex, applied to this frame's intent - so the tree is left
   alone (the commander speaks `Intent`, never `Ai`). The ring clears over
-  a few ticks; the clearer holds facing until it has, then pulses.
+  a few ticks; the clearer fights on until it has, then pulses.
 - **`deconflict`** skips a yielder that already holds an order this frame
   , so a cleared unit is not also slowed; and **a busy unit never gives
   way** - it cannot hear: `gives_way`'s first step, and it is never
   handed an order (`Skipped::deaf` counts the would-be yields).
-- **C2 off stays byte-identical**: `plan` returns before any producer, as
-  ever, the EMP rule never offers `Clear`, and no unit is ever
-  `clearing`. With C2 on and no EMP on the field, `clear_rings` finds no
-  clearer and `deconflict` sees an empty `orders` map before it runs -
-  exactly its old input.
+- **C2 off is untouched**: `plan` returns before any producer, as ever.
+  With C2 on and no EMP on the field, `clear_rings` finds no clearer and
+  `deconflict` sees an empty `orders` map before it runs - exactly its
+  old input.
 
 ### Reacting to the EMP: dangers
 
@@ -630,9 +633,14 @@ makes a `Danger` of:
   grass with an EMP is a trap the pack walks into. The moment its EMP is
   offline - it just pulsed, or an enemy pulsed it - the disc is gone and
   the pack may close in, which is the window the EMP's cost opens.
-- **every live enemy with an EMP tell running**: the same disc round it,
+- **every live enemy with an EMP tell running, or that held its pulse for
+  an ally on its last think** (`Ai::clearing`): the same disc round it,
   owned by it - its allies back out of the ring once they see the
-  crackle, and the crackler itself does not.
+  crackle, or the clearer waiting on them, and it does not. Two clearers
+  in each other's ring each back out of the other, so a pack spreads
+  until one has a clear ring. Built, a clearer that held still for its
+  ring was the probe's worst: a pack of EMP tanks round a seat, each
+  holding for the others, pressed in on one another and stalled.
 
 Every enemy keeps out (`dodge`, §3.3): one inside backs out to the clear
 margin, and its chase, attack reposition, alert and seeks aim outside, so
@@ -706,7 +714,7 @@ never rolled.
   overlay (`draw_tower`'s `glow` 0), and no light from the tesla's coil
   or the mortar's mouth.
 - **The sag.** A disabled **enemy's** turret and its modules are drawn
-  `emp_droop_deg` (8) off their aim, to the side `emp::droop_side(slot)`
+  `emp_droop_deg` (15; 8 read only under a close zoom) off their aim, to the side `emp::droop_side(slot)`
   hashes, eased in over `emp_droop_seconds` (0.4) and out over half that
   once it reboots (`Tank::droop`, eased with the turret's own angle in
   `ease_turret_visual_rotation`, so a replica sags the same). A seat's
@@ -722,7 +730,10 @@ never rolled.
   progress` Hz.
 - **A dead missile** (`render/missile.rs`): no exhaust flame, its nose
   easing toward the way it falls (`Missile::facing` follows the drawn path
-  as ever, and the path now drops), no smoke trail (`fx.rs` skips it). Its
+  as ever, and the path now drops), no smoke trail (`fx.rs` skips it), no
+  pool of light on the ground, and its sprite cut above the flame the
+  sheet bakes into every frame (`render/missile.rs`: the body's rows
+  alone, so it is drawn where a live one is). Its
   landing (`MissileDud`, `fx.rs`): particles, not a composed burst - a
   small puff of dust and a few sparks in `EMP`'s pale blue and white
   thrown up, and a splash where it lands in water. No scorch, no
@@ -813,7 +824,7 @@ enemies' group:
 | `emp_ring_seconds` | 0.4 | 0.05..=3 | How long the ring's picture lingers once its front is out. |
 | `emp_flash_seconds` | 0.25 | 0..=2 | The module's pulse cell. |
 | `emp_shock` | 0.25 | 0..=2 | The screen ripple and shake against a tank dying's. |
-| `emp_droop_deg` | 8 | 0..=45 | How far a disabled enemy's turret, and an offline tower's top, sags off its aim (drawn only). |
+| `emp_droop_deg` | 15 | 0..=45 | How far a disabled enemy's turret, and an offline tower's top, sags off its aim (drawn only). |
 | `emp_droop_seconds` | 0.4 | 0.05..=3 | How long the sag takes; it comes back in half that. |
 | `emp_dark_alpha` | 0.75 | 0..=1 | How dark a disabled tank's lamps and strips are drawn over its paint. |
 | `emp_spark_light` | 0.6 | 0..=2 | The light a disabled hull's sparks throw at night, against a headlight's. |
@@ -1172,9 +1183,9 @@ offline branch).
     tower" is the condition to fire, the weights its preference - they pick
     the seat a pulse is used on and gate the closer's approach, so by day
     a bare seat is pulsed where it stands but not hunted down, and at night
-    every seat is. Never beside its own tower, holding for allies (or, with
-    the commander, having them nudged out), never from off any box in
-    reach. Rejected: firing only at 2 (an EMP enemy would be a quiet tank
+    every seat is. Never beside its own tower, never into allies (it has
+    its ring cleared - they keep out of it, and the commander nudges them
+    out), never from off any box in reach. Rejected: firing only at 2 (an EMP enemy would be a quiet tank
     against a bare seat in daylight).
 15. **Dangers, with a light surcharge under them**, for the AI's
     reaction: an armed seat's disc and an ally's crackle are kept out of

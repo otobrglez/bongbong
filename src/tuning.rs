@@ -1000,7 +1000,7 @@ tunables! {
         emp_shock: f32 = 0.25 in 0.0 ..= 2.0;
         /// How far a disabled enemy's turret, and an offline tower's top,
         /// sags off its aim (degrees; drawn only).
-        emp_droop_deg: f32 = 8.0 in 0.0 ..= 45.0;
+        emp_droop_deg: f32 = 15.0 in 0.0 ..= 45.0;
         /// How long the sag takes; it comes back in half that.
         emp_droop_seconds: f32 = 0.4 in 0.05 ..= 3.0;
         /// How dark a disabled tank's lamps and strips are drawn over its

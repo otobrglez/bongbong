@@ -276,7 +276,8 @@ impl Game {
                 None => {}
             }
         }
-        for missile in self.world.query::<&Missile>().iter() {
+        // A dead missile (an EMP) has no motor to light the ground.
+        for missile in self.world.query::<&Missile>().iter().filter(|m| !m.is_dead()) {
             ground_light(d, missile.position, 26.0, warm, 0.3 * (1.0 - 0.6 * missile.lift()));
         }
         for jet in self.flames() {

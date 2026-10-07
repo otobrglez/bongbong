@@ -710,3 +710,53 @@ fn an_offline_player_tower_is_no_detour() {
     game.towers.get_mut(&(12, 8)).unwrap().disable(5.0);
     assert!(game.player_tower_reach(W, H).is_empty(), "offline, it is not");
 }
+
+/// A disabled enemy's turret sags `emp_droop_deg` to its hashed side over
+/// `emp_droop_seconds` and comes back after; a seat's never does.
+#[test]
+fn a_disabled_enemys_turret_sags_and_comes_back() {
+    let mut game = round("");
+    let enemy = parked(&mut game, Position::new(SEAT.x + 100.0, SEAT.y));
+    let seat = game.player().unwrap();
+    pulse(&mut game, 45);
+    let t = Tuning::DEFAULT;
+    let side = crate::emp::droop_side(slot_of(&game, enemy));
+    assert!((tank(&game, enemy, |tk| tk.droop) - t.emp_droop_deg * side).abs() < 0.01, "sagged: {}", tank(&game, enemy, |tk| tk.droop));
+    assert_eq!(tank(&game, seat, |tk| tk.droop), 0.0);
+    for _ in 0..((t.emp_disable_seconds / DT) as usize + 30) {
+        step(&mut game, false);
+    }
+    assert_eq!(tank(&game, enemy, |tk| tk.droop), 0.0, "back on its aim");
+}
+
+/// With the commander off, an EMP enemy holding its pulse for an ally is a
+/// danger that ally keeps out of: the ally backs out of the ring, and the
+/// pulse goes off with nobody of its own side in it.
+#[test]
+fn an_ally_backs_out_of_a_held_pulse_and_then_it_goes_off() {
+    let mut game = round("");
+    let seat = game.player().unwrap();
+    with_tank_mut(&game.world, seat, |tk| tk.emp_charges = 0);
+    let clearer = emp_enemy(&mut game, Position::new(SEAT.x + 110.0, SEAT.y));
+    let ally = parked(&mut game, Position::new(SEAT.x + 110.0, SEAT.y + 90.0));
+    with_tank_mut(&game.world, ally, |tk| {
+        tk.speed_scale = 1.0;
+        tk.shells_ammo = 10;
+    });
+    let slot = slot_of(&game, clearer);
+    let ally_slot = slot_of(&game, ally);
+    let mut pulsed = None;
+    for frame in 0..600 {
+        let events = step(&mut game, false);
+        if events.iter().any(|e| matches!(e, Event::EmpPulse { slot: s, .. } if *s == slot)) {
+            pulsed = Some(frame);
+            break;
+        }
+    }
+    let at = pulsed.expect("the pulse goes off once the ring is clear");
+    let gap = tank(&game, ally, |tk| tk.position).distance_to(tank(&game, clearer, |tk| tk.position));
+    assert!(gap > tuning().emp_radius_px, "the ally stood clear when it went off: {gap} at frame {at}");
+    for _ in 0..20 {
+        assert!(!step(&mut game, false).iter().any(|e| matches!(e, Event::Disabled { slot: s, .. } if *s == ally_slot)), "and it is not struck");
+    }
+}
