@@ -676,3 +676,26 @@ fn the_seat_still_record_counts_still_and_averages_speed() {
     r.step(None, DT, &t);
     assert_eq!(r, crate::rod::SeatStill::default());
 }
+
+/// A crush takes a burning plank too: it dies outright, its rubble charred,
+/// rather than standing in the circle until its fire is done.
+#[test]
+fn a_burning_plank_in_reach_is_crushed() {
+    let mut game = round("cells.\"12,6\" = { kind = \"wall\", material = \"wood\" }\n");
+    game.debug_call_rod(crate::map::cell_to_world(13, 6), false).expect("a call");
+    // Set alight a few ticks before the impact, well inside its burn.
+    let lit = crate::tank::ticks_of(tuning().rod_countdown_seconds) - 6;
+    assert!(6.0 * DT < tuning().wood_burn_seconds * 0.5, "the defaults this test is about");
+    idle(&mut game, lit);
+    for o in game.world.query_mut::<&mut crate::obstacle::Obstacle>() {
+        if o.cell() == (12, 6) {
+            o.burning = true;
+        }
+    }
+    let mut events = Vec::new();
+    while !events.iter().any(|e| matches!(e, Event::RodImpact { .. })) {
+        events = step(&mut game, false);
+    }
+    assert!(events.iter().any(|e| matches!(e, Event::ObstacleDestroyed { .. })), "crushed with the impact: {events:?}");
+    assert!(!game.world.query::<&crate::obstacle::Obstacle>().iter().any(|o| o.cell() == (12, 6) && !o.destroyed), "the burning plank is down");
+}
