@@ -1007,3 +1007,29 @@ fn a_charge_starts_only_inside_the_box_by_its_margin() {
         assert_eq!(charged(&events, slot_of(&game, enemy)), charges, "{inset} px inside the box");
     }
 }
+
+/// A lane's depth is its half width less the offset across it along the
+/// lane and nothing past its ends; its first exit is on the side a tank
+/// faces across to - a tank crossing goes on over rather than turning back -
+/// and on the near side for one facing along it.
+#[test]
+fn a_lane_danger_has_depth_across_it_and_exits_ahead_of_a_crossing_tank() {
+    use crate::ai::{Danger, DangerShape};
+    let lane = Danger {
+        shape: DangerShape::Lane { at: Position::new(100.0, 200.0), from: Position::new(126.0, 200.0), dir: Dir::Right, length: 600.0, half_width: 24.0 },
+        owner: Some(3),
+        slack: 0.0,
+    };
+    assert_eq!(lane.depth(Position::new(300.0, 200.0)), 24.0);
+    assert_eq!(lane.depth(Position::new(300.0, 210.0)), 14.0);
+    assert!(lane.depth(Position::new(300.0, 240.0)) < 0.0, "beside it");
+    assert!(lane.depth(Position::new(80.0, 200.0)) < 0.0, "behind the muzzle");
+    assert!(lane.depth(Position::new(800.0, 200.0)) < 0.0, "past its stop");
+    let p = Position::new(300.0, 195.0);
+    let down = lane.exits(p, 8.0, p, Dir::Down)[0];
+    let up = lane.exits(p, 8.0, p, Dir::Up)[0];
+    let along = lane.exits(p, 8.0, p, Dir::Right)[0];
+    assert!(down.y > 200.0 + 24.0 && up.y < 200.0 - 24.0, "ahead of the crossing: {down:?} {up:?}");
+    assert!(along.y < 200.0 - 24.0, "the near side for one facing along it: {along:?}");
+    assert!(lane.exits(p, 8.0, p, Dir::Down).iter().all(|&q| lane.depth(q) < 0.0), "every exit out of it");
+}

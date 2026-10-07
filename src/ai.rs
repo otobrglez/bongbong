@@ -295,25 +295,25 @@ impl Danger {
                 let reach = radius + clear;
                 TURNS.map(|(c, s)| Position::new(at.x + (d.x * c - d.y * s) * reach, at.y + (d.x * s + d.y * c) * reach))
             }
-            // Straight out of its side, the near one: at `p`'s distance
+            // Straight out of a side: the one `facing` points across to,
+            // so a tank crossing the lane goes on over rather than turning
+            // back (a reversal and back is a spin); for a tank facing along
+            // it, the near one - `p`'s side, else the side `from` stands
+            // on, else the one clockwise of the lane. At `p`'s distance
             // along it, then a cell and two either way along it, then the
-            // far side the same - on the line itself, the side `from`
-            // stands on, else the one `facing` turns to, else the one
-            // clockwise of the lane.
+            // far side the same.
             DangerShape::Lane { from: muzzle, dir, length, half_width, .. } => {
                 let (along, across) = lane_offsets(muzzle, dir, p);
                 let n = Vec2::new(-dir.vec().y, dir.vec().x);
-                let side = if across.abs() > 0.5 {
+                let f = facing.vec();
+                let turn = f.x * n.x + f.y * n.y;
+                let side = if turn.abs() > 0.5 {
+                    turn.signum()
+                } else if across.abs() > 0.5 {
                     across.signum()
                 } else {
                     let (_, a) = lane_offsets(muzzle, dir, from);
-                    if a.abs() > 0.5 {
-                        a.signum()
-                    } else {
-                        let f = facing.vec();
-                        let turn = f.x * n.x + f.y * n.y;
-                        if turn < 0.0 { -1.0 } else { 1.0 }
-                    }
+                    if a.abs() > 0.5 { a.signum() } else { 1.0 }
                 };
                 let at = along.clamp(0.0, length);
                 let cell = OBSTACLE_GRID_SIZE;
