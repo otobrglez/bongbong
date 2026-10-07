@@ -431,8 +431,8 @@ fn strike_air_downs_a_drone_once() {
     let id = drones(&game)[0].id;
     assert!(game.air_targets().iter().any(|a| a.key == AirKey::Drone(id)));
     let mut f = Frame::new(DT, W, H, game.rng.take().unwrap(), Terrain::build(&game.world, W, H, &game.grass_cells, &game.water));
-    assert!(game.strike_air(&mut f, AirKey::Drone(id), AirStrike::Emp, SEAT));
-    assert!(!game.strike_air(&mut f, AirKey::Drone(id), AirStrike::Emp, SEAT), "a falling drone is no target");
+    assert!(game.strike_air(&mut f, AirKey::Drone(id), AirStrike::Emp));
+    assert!(!game.strike_air(&mut f, AirKey::Drone(id), AirStrike::Emp), "a falling drone is no target");
     assert!(game.air_targets().is_empty());
     assert_eq!(drones(&game)[0].stage, DroneStage::Falling);
     let _ = DroneLock::None;
@@ -642,3 +642,21 @@ fn an_enemy_with_no_tree_breaks_across_the_drones_line() {
 }
 
 
+
+/// An enemy's drone locked on the seat is in that seat's off-screen
+/// picture (`indicators::Scene::drones`); the seat's own are not.
+#[test]
+fn an_enemy_drone_locked_on_the_seat_is_in_its_scene() {
+    let mut game = round("");
+    launch(&mut game, 1);
+    enemy_drone(&mut game, cell(14, 6));
+    let scene = crate::indicators::Scene::of(&game, 0);
+    assert_eq!(scene.drones.len(), 1, "the enemy's, not the seat's own: {:?}", scene.drones);
+    // A view of the seat's corner alone: the drone is off it, and has its
+    // arrow.
+    let r = crate::math::Rectangle::new(0.0, 0.0, 300.0, 300.0);
+    let t = Tuning::DEFAULT;
+    let view = crate::indicators::ViewFrame::new(r, 1.0, Vec2::zero(), r, &t);
+    let ind = crate::indicators::Awareness::new().frame(&scene, &view, &t);
+    assert!(ind.arrows.iter().any(|a| matches!(a.kind, crate::indicators::ArrowKind::Drone { .. })), "{:?}", ind.arrows);
+}

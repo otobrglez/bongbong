@@ -1520,6 +1520,9 @@ pub(crate) const WHITE: Color = Color::new(0xFF, 0xFF, 0xFF, 255);
 /// world (`pyro::BLOCK`), so an arrow is as chunky as the sprites under it.
 const B: i32 = 2;
 
+/// A drone's X, 3 x 3 blocks, at the tail of its arrow (`ArrowKind::Drone`).
+const DRONE_X: [(i32, i32); 5] = [(-1, -1), (1, -1), (0, 0), (-1, 1), (1, 1)];
+
 /// A diagonal arrow's square side, in its cardinal length: about the same
 /// area of blocks, so turning does not change how much an arrow weighs.
 const CORNER_SIDE: f32 = 0.85;
@@ -1717,12 +1720,15 @@ pub fn picture(seats: &[Indicators], view: &ViewFrame, time: f32, t: &Tuning, fo
                 (if erupting { HOSTILE } else { GATE_AMBER }, if throb >= 0.5 { crate::pyro::FIRE[6] } else { RIM })
             }
             // A drone blinks its lamp's red, rimmed as every hostile is,
-            // quicker in the dive.
+            // quicker in the dive, with a drone's X at its tail - white in
+            // the dive - so it is told from an enemy's arrow.
             ArrowKind::Drone { diving } => {
                 let hz = if diving { t.fpv_dive_lamp_hz } else { t.fpv_lamp_hz };
                 if !blink_on(time, hz) {
                     continue;
                 }
+                let tail = behind(arrow.place.at, arrow.place.dir, len + 3.0 * B as f32);
+                rimmed(&mut out.screen, tail, &DRONE_X, if diving { WHITE } else { HOSTILE }, RIM, alpha);
                 (HOSTILE, RIM)
             }
             // A wind-up blinks in its weapon's accent, quicker as it nears,
@@ -2997,6 +3003,20 @@ mod picture_tests {
         assert_eq!(body(ArrowKind::Gate { flash: 1.0 }), set(&[GATE_AMBER, RIM]));
         let windup = ArrowKind::Windup { weapon: ActiveWeapon::SonicHammer, progress: 0.0, lane: false };
         assert_eq!(body(windup), set(&[crate::hud::weapon_color(ActiveWeapon::SonicHammer), HOSTILE]), "the weapon's accent, rimmed hostile");
+    }
+
+    /// A drone's arrow carries a drone's X at its tail - more blocks behind
+    /// the tip than an enemy's arrow - white in the dive, and blinks.
+    #[test]
+    fn a_drone_arrow_has_an_x_at_its_tail() {
+        let at = Vec2::new(390.0, 150.0);
+        let plain = draw(&[shown(vec![enemy(at, Edge::Right, RIGHT)])], 0.0);
+        let drone = draw(&[shown(vec![arrow(ArrowKind::Drone { diving: false }, at, Edge::Right, RIGHT)])], 0.0);
+        assert!(extent(&drone.screen).0 < extent(&plain.screen).0, "the X stands behind the arrow");
+        let diving = draw(&[shown(vec![arrow(ArrowKind::Drone { diving: true }, at, Edge::Right, RIGHT)])], 0.0);
+        assert!(!in_color(&diving.screen, WHITE).is_empty(), "white in the dive");
+        let off = 0.75 / Tuning::DEFAULT.fpv_lamp_hz;
+        assert!(draw(&[shown(vec![arrow(ArrowKind::Drone { diving: false }, at, Edge::Right, RIGHT)])], off).screen.is_empty(), "it blinks");
     }
 
     /// A lined-up enemy's arrow gets a ring that pulses, dark red while

@@ -519,6 +519,17 @@ pub struct DroneLook {
     pub dive: Option<Vec2>,
     /// Falling: its silhouette turns between an X and a + at this rate.
     pub spin_hz: Option<f32>,
+    /// Its blocks' side (px): `pyro::BLOCK` in a halo and low, twice that
+    /// up at cruise height (`drone_block`), where it is nearer the eye.
+    pub block: f32,
+}
+
+/// The side (px) of an airborne drone's blocks at `height`: twice
+/// `pyro::BLOCK` above `FPV_WASH_HEIGHT_PX` - up where it cruises it is
+/// nearer the eye, as a missile's sprite grows with its height, and a
+/// drone must read as the threat it is - else `pyro::BLOCK`, a halo's.
+pub fn drone_block(height: f32) -> f32 {
+    if height > FPV_WASH_HEIGHT_PX { pyro::BLOCK * 2.0 } else { pyro::BLOCK }
 }
 
 const FRAME: Color = pyro::SMOKE[0];
@@ -536,10 +547,12 @@ const STREAK: Color = pyro::SMOKE[4];
 /// between that X and a + silhouette with its rotors still. Pure.
 pub fn compose_drone(look: &DroneLook) -> DronePicture {
     let mut pic = DronePicture::default();
-    let (bx, by) = pyro::block_of(look.at.x, look.at.y);
+    let block = look.block.max(pyro::BLOCK);
+    let (bx, by) = ((look.at.x / block).floor() as i32, (look.at.y / block).floor() as i32);
     let (x0, y0) = (bx - QUAD_BLOCKS / 2, by - QUAD_BLOCKS / 2);
-    let at = |i: i32, j: i32| Position::new(((x0 + i) as f32 + 0.5) * pyro::BLOCK, ((y0 + j) as f32 + 0.5) * pyro::BLOCK);
-    let mark = |pos: Position, color: Color| Shape::Mark { pos, size: 2, color };
+    let at = |i: i32, j: i32| Position::new(((x0 + i) as f32 + 0.5) * block, ((y0 + j) as f32 + 0.5) * block);
+    let size = block as i32;
+    let mark = |pos: Position, color: Color| Shape::Mark { pos, size, color };
     let plus = look.spin_hz.is_some_and(|hz| ((look.time * hz) as i32).rem_euclid(2) == 1);
     let arms: [(i32, i32); 4] = if plus { [(1, 0), (0, 2), (3, 1), (2, 3)] } else { [(0, 0), (3, 0), (0, 3), (3, 3)] };
     for (i, j) in arms {
@@ -567,8 +580,8 @@ pub fn compose_drone(look: &DroneLook) -> DronePicture {
         let len = dir.length();
         if len > 1e-3 {
             let d = dir * (1.0 / len);
-            pic.body.push(mark(look.at - d * 6.0, STREAK));
-            pic.body.push(mark(look.at - d * 10.0, STREAK));
+            pic.body.push(mark(look.at - d * (3.0 * block), STREAK));
+            pic.body.push(mark(look.at - d * (5.0 * block), STREAK));
         }
     }
     pic
@@ -636,6 +649,7 @@ pub fn compose_halo(look: &HaloLook, t: &Tuning) -> (Vec<Shape>, DronePicture) {
             rotors: live,
             dive: None,
             spin_hz: falling.then_some(t.fpv_fall_spin_hz),
+            block: pyro::BLOCK,
         });
         pic.body.extend(drone.body);
         pic.lamps.extend(drone.lamps);
@@ -656,6 +670,7 @@ pub fn look_of(drone: &Drone, time: f32, t: &Tuning) -> DroneLook {
         rotors: !falling,
         dive: (drone.stage == DroneStage::Dive).then(|| drone.velocity()),
         spin_hz: falling.then_some(t.fpv_fall_spin_hz),
+        block: drone_block(drone.height),
     }
 }
 
@@ -775,6 +790,22 @@ mod tests {
             rotors: true,
             dive: None,
             spin_hz: spin,
+            block: pyro::BLOCK,
+        }
+    }
+
+    /// Up at cruise height a drone is drawn in blocks twice the size, on
+    /// the grid of its own block; low it is a halo's.
+    #[test]
+    fn a_drone_up_high_is_drawn_twice_the_size() {
+        assert_eq!(drone_block(FPV_HALO_HEIGHT_PX), pyro::BLOCK);
+        assert_eq!(drone_block(36.0), pyro::BLOCK * 2.0);
+        let big = compose_drone(&DroneLook { block: 4.0, ..look(0.0, None) });
+        for shape in big.body.iter().chain(&big.lamps) {
+            let Shape::Mark { pos, size, .. } = *shape else { continue };
+            assert_eq!(size, 4);
+            let off = ((pos.x - 2.0) / 4.0).fract().abs() + ((pos.y - 2.0) / 4.0).fract().abs();
+            assert!(off < 1e-4, "on its own grid: {pos:?}");
         }
     }
 

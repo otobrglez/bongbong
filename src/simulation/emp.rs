@@ -244,7 +244,7 @@ impl Game {
         // Drones in the air, by key: they fall dead, whoever's.
         for target in self.air_targets() {
             if swept(origin.distance_to(target.ground)) {
-                self.strike_air(f, target.key, crate::air::AirStrike::Emp, target.drawn());
+                self.strike_air(f, target.key, crate::air::AirStrike::Emp);
             }
         }
     }

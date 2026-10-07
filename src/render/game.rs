@@ -1311,6 +1311,14 @@ impl Game {
         // under everything that burns, stands or flies over it.
         crate::render::fish::draw_fish(d, textures, self, fx.shoal(), cull);
 
+        // The FPV drones' shadows on the ground under them, under the
+        // tanks (docs/fpv-swarm.md "Drawing"); the drones themselves fly
+        // over everything that stands, below.
+        let drones = self.drones();
+        if self.shadows_enabled {
+            crate::game::paint_drone_shadows(&mut GpuCanvas::new(d, textures), &drones);
+        }
+
         // Burning ground cells: tongues of flame standing on each
         // (`pyro::tongues`), leaning with the wind, over the ground, under
         // the tiles beside them (a burning doorway's walls still stand
@@ -1408,8 +1416,7 @@ impl Game {
         // The FPV drones in the air over everything that stands, their
         // shadows on what is under them (docs/fpv-swarm.md "Drawing"):
         // lit with the field, their lamps in `paint_field_glowing`.
-        let drones = self.drones();
-        crate::game::paint_drones(&mut GpuCanvas::new(d, textures), &drones, self.time, self.shadows_enabled);
+        crate::game::paint_drones(&mut GpuCanvas::new(d, textures), &drones, self.time);
 
         // Over everything that stands: each volcano's plume, steam while
         // it sleeps and ash from the rumble on (docs/volcano.md). It is
@@ -2243,6 +2250,19 @@ impl Game {
                     (pos.y + vel.y * 0.1) as i32,
                     Color::new(255, 0, 255, 160),
                 );
+            }
+            // Every air target's strike box, and each drone's line to its
+            // aim with its lock's slot by it (docs/fpv-swarm.md "Drawing").
+            for target in self.air_targets() {
+                let (c, h) = target.strike_box();
+                d.draw_rectangle_lines((c.x - h.x).round() as i32, (c.y - h.y).round() as i32, (h.x * 2.0).round() as i32, (h.y * 2.0).round() as i32, Color::ORANGE);
+            }
+            for drone in self.drones() {
+                let at = drone.drawn();
+                d.draw_line(at.x as i32, at.y as i32, drone.aim.x as i32, drone.aim.y as i32, Color::new(255, 160, 0, 160));
+                if let Some(slot) = drone.lock.slot() {
+                    d.draw_text(&slot.to_string(), drone.aim.x as i32 + 4, drone.aim.y as i32 - 12, 10, Color::ORANGE);
+                }
             }
         }
         if ov.ai || ov.engage {

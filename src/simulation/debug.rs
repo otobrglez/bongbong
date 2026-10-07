@@ -80,6 +80,10 @@ pub struct DebugSnapshot {
     /// Seconds every lamp post stays dark (`Game::lamps_out`, an EMP at
     /// night).
     pub lamps_out: f32,
+    /// The FPV drones in the air, by id (docs/fpv-swarm.md); left out of
+    /// the reply while there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub drones: Vec<DroneDebug>,
     /// What the last enemy phase's engagement-slot assignment decided.
     /// Per-tank entries cover both rings (player and hunted frog); the slot
     /// table is the player ring's.
@@ -93,6 +97,26 @@ pub struct DebugSnapshot {
     /// is meaningful then.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) command: Option<CommandReport>,
+}
+
+/// An FPV drone in `DebugSnapshot::drones`.
+#[derive(Serialize, Debug)]
+pub struct DroneDebug {
+    pub id: u32,
+    /// Its launcher's owner slot.
+    pub owner: usize,
+    /// `DroneStage::name`.
+    pub stage: &'static str,
+    /// Its ground point and its height over it.
+    pub x: f32,
+    pub y: f32,
+    pub height: f32,
+    /// The owner slot of the tank it is locked on, `frog` for a frog,
+    /// `None` for nothing.
+    pub lock: Option<String>,
+    /// Where it is going.
+    pub aim_x: f32,
+    pub aim_y: f32,
 }
 
 /// A standing tower in `DebugSnapshot::towers`.
@@ -812,6 +836,25 @@ impl Game {
                 .map(|v| TowerDebug { kind: v.kind.name(), enemy: v.side == crate::frog::Side::Enemy, x: r1(v.position.x), y: r1(v.position.y), disabled: r1(v.disabled) })
                 .collect(),
             lamps_out: r1(self.lamps_out),
+            drones: self
+                .drones()
+                .iter()
+                .map(|d| DroneDebug {
+                    id: d.id,
+                    owner: d.owner.slot(),
+                    stage: d.stage.name(),
+                    x: r1(d.ground.x),
+                    y: r1(d.ground.y),
+                    height: r1(d.height),
+                    lock: match d.lock {
+                        crate::fpv::DroneLock::None => None,
+                        crate::fpv::DroneLock::Tank { slot, .. } => Some(slot.to_string()),
+                        crate::fpv::DroneLock::Frog { .. } => Some("frog".into()),
+                    },
+                    aim_x: r1(d.aim.x),
+                    aim_y: r1(d.aim.y),
+                })
+                .collect(),
             engage,
             clusters: clusters(&live_enemies, CLUSTER_RADIUS_PX),
             command: full.then(|| self.commander.report().clone()),
