@@ -147,8 +147,9 @@ solver step), in this order, all measured from the struck cell's centre `c`:
 - **The break radius** (`rod_break_radius_px`, 80, two and a half cells),
   measured to each cell's box, so the 5 x 5 block round the struck cell and
   the four cells three out along its axes:
-  - *every breakable tile* - brick, wood, glass, sandbags, fences, trees,
-    pines, lamp posts and the three towers, either side's - is **crushed**
+  - *every breakable tile* - brick, wood, glass, sandbags, fences, range
+    boards, trees, pines, lamp posts and the three towers, either side's -
+    is **crushed**
     through `damage_obstacle` with `DamageCause::Crush { from: c }`: it dies
     outright, no fence roll, no deflection, not left burning (a crushed
     plank or tree is rubble, not a fire; one already burning is crushed
@@ -345,7 +346,7 @@ eruption, as a blast on the end screen hurts nobody.
 | `src/fx.rs` | A rod `Hit` flashes the hull and bursts nothing |
 | `src/pyro.rs` | `digits` (block digits, §5) |
 | `src/lib.rs`, `src/tank_art.rs` | `TANK_MODULE_ROD_COL`; `ROD_LENS` |
-| `src/net/wire.rs` | `WeaponKind::RodFromGod`, `TankState::reticle`, `IntentMsg::reticle` (`with_reticle`), `ZoneState`, `CraterState`, `Snapshot::{zones, craters, volcano_shifts}`, `HitCause::Rod`, `AirStrike::Rod`; `PROTOCOL_VERSION` 19 (`net/mod.rs`) |
+| `src/net/wire.rs` | `WeaponKind::RodFromGod`, `TankState::reticle`, `IntentMsg::reticle` (`with_reticle`), `ZoneState`, `CraterState`, `Snapshot::{zones, craters, volcano_shifts}`, `HitCause::Rod`, `AirStrike::Rod`; `PROTOCOL_VERSION` 20 (`net/mod.rs`) |
 | `src/net/delta.rs` | `zones`, `zones_gone`, `craters`, `craters_gone`, `volcano_shifts` |
 | `src/net/events.rs` | `WireEvent::{RodCalled, RodImpact}` |
 | `src/net/encode.rs`, `src/net/apply.rs` | The families and the shifts (`zones`, `volcano_shifts`, `reticle_code`/`reticle_from_code`; `apply_zones`, `apply_craters`, `apply_volcano_shifts`), the impact's show |
@@ -627,17 +628,17 @@ docs/gauss-rail.md §3.4, docs/fpv-swarm.md §3.4); nothing placed by weapons
 
 | Mark | Cell | Why |
 |---|---|---|
-| `X` rod crate | 7,12 | The reserved column's fourth cell, four cells south-east of the start |
-| `X` rod crate | 32,11 | On the enemy side, so an enemy on shells collects it and calls on a seat that camps |
+| `X` rod crate | 9,14 | The reserved column's fourth cell, four cells south-east of the start |
+| `X` rod crate | 34,13 | On the enemy side, so an enemy on shells collects it and calls on a seat that camps |
 
 The rest it needs is there: the start to camp on (the probe's AFK seat camps
-there, the issue's standing target), the players' frog (2,12) and towers
-(the tesla at 3,3, the gun tower at 5,15) the enemies call on, the enemy
-towers (34,3 and 34,14) a seat calls on, brick, wood and glass to break and
-iron to stand (20..21 x 2..3, 33..34 x 8..9), the drums and their oil trail
-to set off, the grass to flatten, the trees to crush, the lake and its fish
-(19..26 x 13..17) to throw onto the bank, the lava ford (32,0..7) a shove
-throws a hull into. The crater's filling is seen with `--weather rain` (the
+there, the issue's standing target), the players' frog (4,14) and towers
+(the tesla at 5,6, the gun tower at 7,17) the enemies call on, the enemy
+towers (36,5 and 36,16) a seat calls on, brick, wood and glass to break and
+iron to stand (22..23 x 5..6, 35..36 x 10..11), the drums and their oil
+trail to set off, the grass to flatten, the trees to crush, the lake and its
+fish (21..28 x 15..19) to throw onto the bank, the lava ford (34,2..9) a
+shove throws a hull into. The crater's filling is seen with `--weather rain` (the
 map's sky stays clear, which every earlier weapon was tried under).
 
 No volcano: its 21-cell footprint has no room that keeps weapons 1-4's
@@ -649,25 +650,29 @@ PICKUP tool there and PLAY (§12, decision 18).
 
 ```
      0         1         2         3
-     012345678901234567890123456789012345
- 0   ................................L...
- 1   .+..........ggggg...............L...
- 2   ............g...g...II....b..pp.L...
- 3   ...P........g.s.g...II....b.....L.E.
- 4   .......e...*g...g.........b.....L...
- 5   ............ggggg...........zzz.L...
- 6   ...tp..R.............o..........L...
- 7   .............................e..L...
- 8   ....S..H.........*...f%%%..b.....II.
- 9   ...........................b.....II.
-10   .......D.............o...*.d..H.....
-11   ...........wwwwwT..........g....X...
-12   ..F....X...wwwww..............R.....
-13   ..........Twwwww...WWWWWWWW.b.......
-14   .......r...wwwww...WWWWWWWW.b.....G.
-15   .....Q.....wwwww...WWWWWWWW...D.....
-16   .a.................WWWWWWWW....m....
-17   ...................WWWWWWWW.........
+     0123456789012345678901234567890123456789
+ 0   ........................................
+ 1   ........................................
+ 2   ..................................L.....
+ 3   ..............ggggg...............L.....
+ 4   ..............g...g............pp.L.....
+ 5   ..............g.s.g...II....b.....L.E...
+ 6   ...+.P...e...*g...g...II....b.....L.....
+ 7   ..............ggggg.........b.zzz.L.....
+ 8   .....tp..R.............o..........L.....
+ 9   ...............................e..L.....
+10   ......S..H.........*...f%%%..b.....II...
+11   .............................b.....II...
+12   .........D.............o...*.d..H.......
+13   .............wwwwwT..........g....X.....
+14   ....F....X...wwwww..............R.......
+15   ............Twwwww...WWWWWWWW.b.........
+16   .........r...wwwww...WWWWWWWW.b.....G...
+17   .......Q.....wwwww...WWWWWWWW...D.......
+18   ...a.................WWWWWWWW....m......
+19   .....................WWWWWWWW...........
+20   ........................................
+21   ........................................
 ```
 
 (`r` the cell still reserved for weapon 6.) Checked again in Phase 2
@@ -1264,7 +1269,7 @@ digits, drawn as blocks: no key.
 
 ## 8. Wire
 
-Protocol 19 (from the swarm's 18).
+Protocol 20 (from the swarm's 19).
 
 - `WeaponKind::RodFromGod`, appended to `ALL`; `drawn_on_press` true (its
   show is the call, drawn on the release).
@@ -1473,6 +1478,7 @@ seat at cell (3, 6), enemies placed by hand):
   `an_enemy_leaves_a_call_before_it_lands`.
 - `the_seat_still_record_counts_still_and_averages_speed`.
 - Added in review: `a_burning_plank_in_reach_is_crushed`,
+  `a_range_board_in_reach_is_crushed_never_lit`,
   `the_impact_sets_off_grenades_breaks_lanterns_lights_oil_and_flattens_grass`,
   `a_frog_in_the_ring_is_stunned`,
   `a_charge_held_inside_a_call_is_dropped_and_its_tank_leaves` (a wind-up
@@ -1654,6 +1660,7 @@ rounds in the defaults comparison above match byte for byte).
 | Drums, oil, fires | A drum in the break radius goes off at once and chains; a fused one is left to its fuse; a trail in reach is lit |
 | Trees, grass | Trees crushed, not set alight; grass flat and hiding nobody for a while |
 | Glass, walls, sandbags, fences | Crushed; iron, a door and a cone stand |
+| Range boards (docs/range-target-prd.md) | Crushed in the break radius like any breakable tile: down at once as charred rubble if it was burning, as splinters if not, never set alight by the strike |
 | Lava, the volcano | No crater in lava; a cone struck sets its volcano off; a shove can throw a hull into a ford |
 | Shells, bullets, plasma, the laser, missiles, flying drums, lava bombs, globs | Untouched |
 | Grenades | Set off in the break radius |
@@ -1864,6 +1871,12 @@ rounds in the defaults comparison above match byte for byte).
     slowed on the drawn rim's dust, and one on a diagonal inside the drawn
     pit is not. Left for Oto: draw the plus, or measure the rules by the
     disc. *For Oto.*
+33. **A range board is crushed like a plank** (docs/range-target-prd.md):
+    it is a breakable wooden prop, so the break radius takes it whole - a
+    cold board splinters, a burning one goes down charred - and the strike
+    never lights one (a crush is not fire). *Alternative*: letting the
+    strike set boards alight, which would make the rod the one shot that
+    lights a board; only fire does.
 
 ### Not in this PR
 
@@ -1927,5 +1940,5 @@ docs give:
 17. **The probe's holds and off-box readings** (the charge, the edge hold,
     the swarm's lock count) open to the rod's call count.
 18. **`SPAWN_SWAPS` and `SEEK_SPECIALS`** as tables.
-19. **The armory**: the reserved cell 7,12 free, and 32,11 left free by
-    weapons 1-4.
+19. **The armory**: the reserved cell 9,14 free, and 34,13 left free by
+    weapons 1-4 (cells of the 40 x 22 armory).

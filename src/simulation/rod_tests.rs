@@ -700,6 +700,37 @@ fn a_burning_plank_in_reach_is_crushed() {
     assert!(!game.world.query::<&crate::obstacle::Obstacle>().iter().any(|o| o.cell() == (12, 6) && !o.destroyed), "the burning plank is down");
 }
 
+/// A range board in the break radius is crushed like a plank - a cold one
+/// splintered, a burning one charred - and never lit; one past the radius
+/// stands.
+#[test]
+fn a_range_board_in_reach_is_crushed_never_lit() {
+    let mut game = round(
+        "cells.\"12,6\" = { kind = \"target\" }\n\
+         cells.\"13,7\" = { kind = \"target\" }\n\
+         cells.\"12,10\" = { kind = \"target\" }\n",
+    );
+    game.debug_call_rod(crate::map::cell_to_world(12, 6), false).expect("a call");
+    // The board at 13,7 set alight a few ticks before the impact.
+    idle(&mut game, crate::tank::ticks_of(tuning().rod_countdown_seconds) - 6);
+    for o in game.world.query_mut::<&mut crate::obstacle::Obstacle>() {
+        if o.cell() == (13, 7) {
+            o.health = 0.0;
+            o.burning = true;
+        }
+    }
+    let mut events = Vec::new();
+    while !events.iter().any(|e| matches!(e, Event::RodImpact { .. })) {
+        events = step(&mut game, false);
+    }
+    let gone = events.iter().filter(|e| matches!(e, Event::ObstacleDestroyed { material: crate::obstacle::Material::Target, .. })).count();
+    assert_eq!(gone, 2, "both boards in reach go with the impact: {events:?}");
+    assert!(!events.iter().any(|e| matches!(e, Event::Ignited { .. })), "the strike lights nothing");
+    let standing = |c: (i32, i32)| game.world.query::<&crate::obstacle::Obstacle>().iter().any(|o| o.cell() == c && !o.destroyed);
+    assert!(!standing((12, 6)) && !standing((13, 7)), "both crushed");
+    assert!(standing((12, 10)), "past the break radius it stands");
+}
+
 /// What lies on the ground within the break radius: a grenade goes off, a
 /// lantern breaks, the oil trail is lit and the tall grass hides nobody
 /// for `rod_grass_flat_seconds`; past it, nothing.
