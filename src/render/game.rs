@@ -2385,6 +2385,18 @@ impl Game {
                 }
             }
         }
+        // A gravity well's reach, and round an enemy's the herd's ring the
+        // pack's firing slots stand on (docs/gravity-well.md).
+        if ov.engage {
+            let t = tuning();
+            for zone in self.zones.iter().filter(|z| z.well().is_some()) {
+                let (cx, cy) = (zone.centre.x as i32, zone.centre.y as i32);
+                d.draw_circle_lines(cx, cy, t.well_radius_px, Color::new(0x9A, 0x5C, 0xF0, 200));
+                if !zone.owner.is_player() {
+                    d.draw_circle_lines(cx, cy, t.well_ai_herd_px, Color::new(0xC9, 0x8C, 0xFF, 140));
+                }
+            }
+        }
         if ov.ai || ov.engage {
             for (entity, tank, ai) in self.world.query::<(hecs::Entity, &Tank, &Ai)>().iter() {
                 if tank.is_wreck() {

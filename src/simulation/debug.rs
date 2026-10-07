@@ -248,6 +248,14 @@ pub struct TankDebug {
     /// Its orb in flight (`Tank::orb`): the orb's id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orb: Option<u32>,
+    /// The gravity wells' pull on it this tick (`well::HullPull`): the
+    /// current (px/s) and the side pull (px/s^2), in the world's axes;
+    /// left out away from every well.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pull: Option<[f32; 4]>,
+    /// Braced broadside in a pull (`Ai::bracing`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub bracing: bool,
     /// The cell its rod's reticle stands on (`Tank::reticle`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reticle: Option<(i32, i32)>,
@@ -312,6 +320,10 @@ pub struct PickupDebug {
     pub kind: PickupKind,
     pub x: f32,
     pub y: f32,
+    /// How far a gravity well has drawn it off its slot (`Pickup::drift`);
+    /// left out while it lies on it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drift: Option<(f32, f32)>,
 }
 
 #[derive(Serialize, Debug)]
@@ -329,6 +341,8 @@ pub struct FrogDebug {
     pub facing: Facing,
     /// Seconds left stunned by a sonic wave (`Frog::stun_timer`).
     pub stun: f32,
+    /// Held in a gravity well's pull (`Frog::pulled`).
+    pub pulled: bool,
 }
 
 #[derive(Serialize, Debug)]
@@ -684,6 +698,11 @@ impl Game {
                     rods: tank.rods,
                     wells: tank.wells,
                     orb: tank.orb,
+                    pull: (!self.well_field.is_empty() && tank.body.is_some())
+                        .then(|| self.well_field.hull_pull(tank.position, tank.mass_factor(), &tuning()))
+                        .filter(|p| !p.is_zero())
+                        .map(|p| [r1(p.current.x), r1(p.current.y), r1(p.side.x), r1(p.side.y)]),
+                    bracing: ai.is_some_and(Ai::bracing),
                     reticle: tank.reticle.map(|r| r.cell),
                     charge: tank.charge.map(|c| (c.weapon.name(), r1(c.held), c.stage().name())),
                     tell: tank.tell.map(|t| (t.weapon.name(), r1(t.left))),
@@ -803,7 +822,12 @@ impl Game {
             .world
             .query::<&Pickup>()
             .iter()
-            .map(|p| PickupDebug { kind: p.kind, x: r1(p.position.x), y: r1(p.position.y) })
+            .map(|p| PickupDebug {
+                kind: p.kind,
+                x: r1(p.position.x),
+                y: r1(p.position.y),
+                drift: (p.drift.x != 0.0 || p.drift.y != 0.0).then(|| (r1(p.drift.x), r1(p.drift.y))),
+            })
             .collect();
         pickups.sort_by(|a, b| (a.x, a.y).partial_cmp(&(b.x, b.y)).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -821,6 +845,7 @@ impl Game {
                     hopping: fr.hop_timer > 0.0,
                     facing: fr.facing,
                     stun: r1(fr.stun_timer),
+                    pulled: fr.pulled,
                 })
             })
             .collect();

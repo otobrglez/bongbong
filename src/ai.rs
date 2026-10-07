@@ -891,6 +891,9 @@ pub struct Ai {
     /// How far its orb flies before its rule anchors it (px from the
     /// muzzle): its plan's, set at the launch (`SpecialUse::Orb`).
     well_anchor_px: f32,
+    /// The plan its well's senses handed it this tick (`WellSense::plan`).
+    /// Inspection only.
+    well_plan: Option<WellPlan>,
 }
 
 /// The memory a tank carries only on a field map
@@ -970,6 +973,9 @@ pub struct AiSnapshot {
     pub air: Option<&'static str>,
     /// The arm of the `pull` tier it ran this tick (docs/gravity-well.md).
     pub pull: Option<&'static str>,
+    /// Its well's plan this tick: the arm, the facing and the anchor's
+    /// distance from the muzzle (`WellSense::plan`).
+    pub well: Option<(&'static str, &'static str, f32)>,
     /// Its brain is off (`Ai::down`).
     pub down: bool,
     /// Backing out of a danger (`Ai::dodging`).
@@ -1040,6 +1046,7 @@ impl Default for Ai {
             pull_escape: None,
             pull_why: None,
             well_anchor_px: 0.0,
+            well_plan: None,
         }
     }
 }
@@ -1226,6 +1233,10 @@ impl Ai {
         self.air_want = None;
         self.air_why = None;
         self.pull_why = None;
+        self.well_plan = match sense {
+            SpecialSense::Well(s) => s.plan,
+            _ => None,
+        };
         let mut bb = Brain {
             me,
             player,
@@ -1349,6 +1360,7 @@ impl Ai {
             special: self.special_why,
             air: self.air_why,
             pull: self.pull_why,
+            well: self.well_plan.map(|p| (p.why, p.face.name(), p.anchor_px)),
             down: self.down,
             dodging: self.dodging,
             kept_out: self.kept_out,

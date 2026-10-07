@@ -411,8 +411,9 @@ impl Frog {
             let frame = (elapsed * FROG_HOP_FPS) as i32;
             return (FrogAnim::Hop, frame.clamp(0, FROG_HOP_FRAMES - 1));
         }
-        // Stunned: the hurt clip held on its first frame.
-        if self.is_stunned() {
+        // Stunned, or pinned in a gravity well's pull: the hurt clip held
+        // on its first frame.
+        if self.is_stunned() || self.pulled {
             return (FrogAnim::Hurt, 0);
         }
         if self.attack_timer > 0.0 {
