@@ -372,6 +372,24 @@ fn sandbags_fences_trees_and_lamp_posts_in_the_lane_go_down() {
     assert!(pine_hit, "the tree is hit: down, or alight");
 }
 
+/// A range board in the lane splinters - pierced like any wooden prop,
+/// never alight - and the slug flies on at the tile keep.
+#[test]
+fn a_range_board_in_the_lane_splinters_and_the_slug_flies_on() {
+    let mut game = round("cells.\"6,6\" = { kind = \"target\" }\n");
+    let behind = parked(&mut game, Position::new(480.0, 192.0));
+    let events = charge(&mut game, full_ticks());
+    assert!(
+        events.iter().any(|e| matches!(e, Event::ObstacleDestroyed { material: Material::Target, .. })),
+        "the board is gone: {events:?}"
+    );
+    let burning = game.world.query::<&crate::obstacle::Obstacle>().iter().any(|o| o.material == Material::Target && o.burning);
+    assert!(!burning, "splintered, not alight");
+    let t = Tuning::DEFAULT;
+    let left = (t.gauss_damage * t.gauss_tile_keep).min(100.0);
+    assert!(damage(&game, behind) >= left - 0.5, "the tank behind takes what is left: {}", damage(&game, behind));
+}
+
 /// A rainbow shield soaks one slug whole, and the slug flies on.
 #[test]
 fn a_rainbow_shield_soaks_one_slug_and_the_slug_flies_on() {

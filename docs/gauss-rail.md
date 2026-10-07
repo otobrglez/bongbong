@@ -137,10 +137,11 @@ reuses, and the **lane** among the dangers an enemy keeps out of.
     A tesla (120) dies to a seat's first slug; a bio slush (130) and a gun
     tower (150) survive it and die to the next (`tower_died`). Then `d *=
     gauss_pierce_keep`.
-  - *Brick, wood, glass, sandbags, fences, trees and lamp posts* die
-    outright, whatever `d` is left: `DamageCause::Pierce` puts the tile's
-    whole health on it through `Obstacle::damage`, which leaves a flammable
-    plank or tree burning rather than broken, as every killing blow does.
+  - *Brick, wood, glass, sandbags, fences, range boards, trees and lamp
+    posts* die outright, whatever `d` is left: `DamageCause::Pierce` puts
+    the tile's whole health on it through `Obstacle::damage`, which leaves a
+    flammable plank or tree burning rather than broken, as every killing
+    blow does - a range board, never rolled flammable, splinters.
     No fence one-shot roll, no sandbag pass-over roll. The ordinary death
     path: `ObstacleDestroyed`, the rubble thrown along the slug's line
     (`BlastShape::Shot { dir }`), the edge masks. A tile already burning,
@@ -1051,7 +1052,7 @@ the gauge; the weapon has no other words.
 
 ## 8. Wire
 
-Protocol 17 (from the EMP's 16), once in the PR.
+Protocol 18 (from the EMP's 17), once in the PR.
 
 - `WeaponKind::GaussRail`, appended to `ALL`; `drawn_on_press` true (its
   show is drawn on the *release*, which is its press show).
@@ -1196,6 +1197,7 @@ number read off the defaults):
   `a_volcanos_cone_stops_even_an_overcharged_slug`,
   `a_seats_slug_through_a_teammate_is_friendly_fire`,
   `sandbags_fences_trees_and_lamp_posts_in_the_lane_go_down`,
+  `a_range_board_in_the_lane_splinters_and_the_slug_flies_on`,
   `a_rainbow_shield_soaks_one_slug_and_the_slug_flies_on`,
   `a_frog_in_the_lane_takes_frog_damage_and_does_not_hop`,
   `crates_and_wrecks_are_left_alone`.
@@ -1394,6 +1396,7 @@ window at its seed, the AI tiers its tank ran over the 180 frames before):
 | Drums, oil, fires | A drum goes off where the slug finds it; a fused one is passed; oil and fires untouched, lit by a drum's blast as ever |
 | Trees, grass | Trees go down or catch fire; grass along the line lies flat for a moment, hiding whoever it hid |
 | Glass, walls, sandbags, fences, lamp posts | Gone; iron, a door and a cone stop it |
+| Range boards (docs/range-target-prd.md) | Pierced and splintered (never alight: a shot does not light a board), sawdust thrown along the line, the slug flying on at `gauss_tile_keep` - a board is a wooden prop, and only the permanent stop a slug |
 | Lava, the volcano | Crossed; the cone stops it |
 | Shells, bullets, plasma, missiles, grenades, globs, lava bombs | Untouched |
 | Wrecks | See-through |
@@ -1544,6 +1547,12 @@ window at its seed, the AI tiers its tank ran over the 180 frames before):
     charge on a seat's row starts within the attack range (336 of 340 px),
     where every other enemy engages - the probe's `never-arrived` measures
     arrival by that range.
+28. **A range board is pierced** (docs/range-target-prd.md): only what is
+    permanent stops a slug, and a board is a wooden prop shot to show what
+    a weapon does - so it splinters like a fence, `gauss_tile_keep` taken
+    off the slug, and never burns (a shot never lights one). *Alternative*:
+    stopping the slug like iron, which would make a board the one wooden
+    thing a rail cannot go through.
 
 ### Not in this PR
 
