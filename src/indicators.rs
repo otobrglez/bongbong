@@ -323,6 +323,9 @@ pub struct Scene {
     /// players' frog (docs/fpv-swarm.md "Drawing"): the point it is drawn
     /// at and whether it is diving.
     pub drones: Vec<(Position, bool)>,
+    /// Every rod's call standing (docs/rod-from-god.md) but this seat's own:
+    /// where it lands and the seconds left on the zones' clock.
+    pub zones: Vec<(Position, f32)>,
 }
 
 /// This seat's own tank.
@@ -449,6 +452,9 @@ pub enum ArrowKind {
     /// (`Scene::drones`): never merged, never left out, its lamp's red
     /// blinking, quicker once it dives.
     Drone { diving: bool },
+    /// A rod's call standing (`Scene::zones`): never merged, never left
+    /// out, in the designator's red, blinking quicker over its last second.
+    Zone { left: f32 },
     /// An enemy winding up a special (`TankView::windup`): never merged,
     /// never left out, drawn in the weapon's accent rimmed hostile red and
     /// blinking quicker as it nears going off. `lane`: this seat stands in
@@ -1100,6 +1106,11 @@ impl Awareness {
         for &(at, diving) in scene.drones.iter().filter(|(at, _)| !view.shows(*at)) {
             kept.extend(arrow(ArrowKind::Drone { diving }, at));
         }
+        // A rod's call off the screen: never merged, never left out - a
+        // seat heading that way has seconds to know.
+        for &(at, left) in scene.zones.iter().filter(|(at, _)| !view.shows(*at)) {
+            kept.extend(arrow(ArrowKind::Zone { left }, at));
+        }
         // An enemy winding up a special off the screen: never merged,
         // never left out - it is about to go off.
         for tv in windups {
@@ -1407,6 +1418,12 @@ impl Scene {
             })
             .map(|d| (d.drawn(), d.stage == crate::fpv::DroneStage::Dive))
             .collect();
+        let zones = game
+            .zones()
+            .iter()
+            .filter(|z| z.rod().is_some() && z.owner != Owner::Player(seat))
+            .map(|z| (z.centre, z.left(game.time + game.zone_lead)))
+            .collect();
         Scene {
             time: game.time,
             seat: me,
@@ -1415,6 +1432,7 @@ impl Scene {
             sight: shortened.then_some(sight),
             volcanoes,
             drones,
+            zones,
         }
     }
 }
@@ -1718,6 +1736,15 @@ pub fn picture(seats: &[Indicators], view: &ViewFrame, time: f32, t: &Tuning, fo
             ArrowKind::Volcano { erupting } => {
                 len *= 1.0 + t.indicator_pulse_swell * throb;
                 (if erupting { HOSTILE } else { GATE_AMBER }, if throb >= 0.5 { crate::pyro::FIRE[6] } else { RIM })
+            }
+            // A call blinks the designator's red, twice as fast in its
+            // last second.
+            ArrowKind::Zone { left } => {
+                let hz = if left <= 1.0 { t.indicator_gate_blink_hz * 2.0 } else { t.indicator_gate_blink_hz };
+                if !blink_on(time, hz) {
+                    continue;
+                }
+                (crate::pyro::LASER_RED[2], RIM)
             }
             // A drone blinks its lamp's red, rimmed as every hostile is,
             // quicker in the dive, with a drone's X at its tail - white in
@@ -2137,6 +2164,21 @@ mod indicator_tests {
         s.volcanoes = vec![(Position::new(200.0, 100.0), true)];
         let ind = Awareness::new().frame(&s, &screen(), &t);
         assert!(!kinds(&ind).iter().any(|k| matches!(k, ArrowKind::Volcano { .. })));
+    }
+
+    /// A rod's call off the screen has an arrow whatever the cap; on the
+    /// screen, none.
+    #[test]
+    fn a_call_off_the_screen_has_an_arrow_whatever_the_cap() {
+        let mut t = Tuning::DEFAULT;
+        t.indicator_max_arrows = 1;
+        let mut s = scene(1.0, vec![enemy(5, 900.0, 150.0), enemy(6, 950.0, 400.0)]);
+        s.zones = vec![(Position::new(-600.0, 200.0), 2.5)];
+        let ind = Awareness::new().frame(&s, &screen(), &t);
+        assert!(kinds(&ind).contains(&ArrowKind::Zone { left: 2.5 }), "{:?}", kinds(&ind));
+        s.zones = vec![(Position::new(300.0, 200.0), 2.5)];
+        let ind = Awareness::new().frame(&s, &screen(), &t);
+        assert!(!kinds(&ind).iter().any(|k| matches!(k, ArrowKind::Zone { .. })));
     }
 
     /// A drone coming at this seat off the screen has an arrow whatever the

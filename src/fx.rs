@@ -615,10 +615,11 @@ impl Fx {
                         }
                     }
                     Event::ObstacleDestroyed { material, x, y } => self.tile_death(material, Position::new(x, y)),
-                    // A gauss rail's slug through a hull or a tile: the
-                    // flash alone - its bursts, a frog's included, are the
-                    // slug's own (`gauss::compose_slug`).
-                    Event::Hit { target, cause: HitCause::Rail, x, y, .. } => match target {
+                    // A gauss rail's slug through a hull or a tile, or a
+                    // rod crushing one: the flash alone - the bursts are
+                    // the slug's own (`gauss::compose_slug`) and the rod's
+                    // impact (`rod::compose_impact`).
+                    Event::Hit { target, cause: HitCause::Rail | HitCause::Rod, x, y, .. } => match target {
                         HitTarget::Player { player } => self.flash(Flashed::Tank(player as usize)),
                         HitTarget::Enemy { slot } => self.flash(Flashed::Tank(slot)),
                         HitTarget::Obstacle { .. } => self.flash(Flashed::Tile(Position::new(x, y))),

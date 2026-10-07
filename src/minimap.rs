@@ -179,6 +179,9 @@ pub enum Class {
     Volcano,
     /// A lamp post: a bright point, the one tile that reads at night.
     Lamp,
+    /// A rod's dry crater (docs/rod-from-god.md): a filled one is the ford
+    /// its water is.
+    Crater,
 }
 
 impl Class {
@@ -234,7 +237,8 @@ impl Class {
     /// SAND_MD, WOOD_ASH and WOOD_DK; fords BLUE_LT, open water BLUE_DK,
     /// ice STONE_PALE, a gate the indicators' amber (GOLD_BRIGHT). A tower
     /// is TEAL_LT on the player's side and RED_MD on the enemy's; lava is
-    /// RED_DEEP, a volcano's cone STONE_DARKEST and a lamp post FIRE_PALE.
+    /// RED_DEEP, a volcano's cone STONE_DARKEST, a lamp post FIRE_PALE and a
+    /// rod's crater RUST_DK.
     pub fn color(self, theme: Theme) -> Color {
         let rgb = |r, g, b| Color::new(r, g, b, 255);
         let desert = theme == Theme::Desert;
@@ -260,6 +264,7 @@ impl Class {
             Class::Lava => rgb(0x9C, 0x35, 0x27),
             Class::Volcano => rgb(0x37, 0x37, 0x37),
             Class::Lamp => rgb(0xFF, 0xE2, 0xA0),
+            Class::Crater => rgb(0x59, 0x34, 0x1F),
         }
     }
 }
@@ -318,7 +323,13 @@ impl Minimap {
     pub fn of_round(game: &Game) -> Minimap {
         let field = game.map.field_size();
         let depth = |col: i32, row: i32| game.water.depth_at(crate::map::cell_to_world(col, row));
-        let (floor, _) = classes_of_map(&game.map, field, &depth);
+        let (mut floor, _) = classes_of_map(&game.map, field, &depth);
+        let (cols, rows) = cells_of(field);
+        for (col, row) in game.craters().cells() {
+            if col >= 0 && row >= 0 && (col as usize) < cols && (row as usize) < rows && depth(col, row) == Depth::Dry {
+                floor[row as usize * cols + col as usize] = Class::Crater;
+            }
+        }
         let solid = solids_of_world(game, cells_of(field));
         Minimap::of_classes(field, game.map.theme, floor, solid)
     }
@@ -485,6 +496,9 @@ pub struct RoundMinimap {
     key: Option<RoundKey>,
     frame: u64,
     tiles: usize,
+    /// The craters and the filled cells the image shows: a new crater, or
+    /// a sky that filled them, bakes it again.
+    craters: (usize, bool),
 }
 
 impl RoundMinimap {
@@ -493,7 +507,9 @@ impl RoundMinimap {
         let key = RoundKey::of(game);
         let frame = game.frame();
         let tiles = game.world.query::<&Obstacle>().iter().count();
-        if self.key.as_ref() != Some(&key) || frame < self.frame {
+        let craters = (game.craters().list().len(), game.craters().cells().any(|(c, r)| game.water.depth_of_cell(c, r) != Depth::Dry));
+        if self.key.as_ref() != Some(&key) || frame < self.frame || craters != self.craters {
+            self.craters = craters;
             self.minimap = Minimap::of_round(game);
             self.key = Some(key);
         } else if tiles != self.tiles {
@@ -585,6 +601,9 @@ pub struct Marks {
     /// Every volcano that is rumbling or erupting, and whether it is
     /// erupting yet (docs/volcano.md): a frame pulsing round its crater.
     pub volcanoes: Vec<(Position, bool)>,
+    /// Every rod's call standing (docs/rod-from-god.md): a ring pulsing
+    /// round where it lands, quicker over its last second.
+    pub zones: Vec<(Position, f32)>,
     /// The round clock the gates blink on.
     pub time: f32,
     /// Whether the seats carry their numbers: a round of two or more.
@@ -620,7 +639,8 @@ impl Marks {
                 phase.is_warning().then(|| (v.centre(), phase.stage == crate::volcano::Stage::Erupt))
             })
             .collect();
-        Marks { view: Some(view), seats, frogs, volcanoes, time: game.time, numbered: game.players.count() > 1, ..Marks::from_shown(shown) }
+        let zones = game.zones().iter().filter(|z| z.rod().is_some()).map(|z| (z.centre, z.left(game.time + game.zone_lead))).collect();
+        Marks { view: Some(view), seats, frogs, volcanoes, zones, time: game.time, numbered: game.players.count() > 1, ..Marks::from_shown(shown) }
     }
 
     /// The enemies and gates `shown` - one `Indicators` per seat the screen
@@ -713,6 +733,19 @@ pub fn picture(marks: &Marks, rect: Rectangle, field: (f32, f32), font: i32, t: 
         let color = if erupting { HOSTILE } else { GATE_AMBER };
         frame(&mut out.fills, x - half - RIM_PT, y - half - RIM_PT, side + 2 * RIM_PT, RIM_PT, RIM, inside);
         frame(&mut out.fills, x - half, y - half, side, RIM_PT, color, inside);
+    }
+    // A rod's call: a red frame round where it lands, blinking quicker over
+    // its last second.
+    for &(at_world, left) in &marks.zones {
+        let hz = if left <= 1.0 { t.indicator_pulse_hz * 2.0 } else { t.indicator_pulse_hz };
+        if !blink_on(marks.time, hz) {
+            continue;
+        }
+        let (x, y) = at(at_world);
+        let side = GATE_FRAME_PT + 4;
+        let half = side / 2;
+        frame(&mut out.fills, x - half - RIM_PT, y - half - RIM_PT, side + 2 * RIM_PT, RIM_PT, RIM, inside);
+        frame(&mut out.fills, x - half, y - half, side, RIM_PT, crate::pyro::LASER_RED[2], inside);
     }
     for view in [marks.view, marks.second_view].into_iter().flatten().filter_map(|v| rect_on(rect, field, v)) {
         let (x0, y0) = (view.x.round() as i32, view.y.round() as i32);
@@ -1088,6 +1121,7 @@ mod minimap_tests {
             enemies: vec![Position::new(50.0, 50.0), Position::new(-400.0, 3000.0)],
             gates: vec![GateMark { at: Position::new(1200.0, 0.0), flash: 1.0 }],
             volcanoes: vec![(Position::new(2560.0, 1440.0), true)],
+            zones: vec![(Position::new(2560.0, 0.0), 0.5)],
             time: 0.0,
             numbered: true,
         };

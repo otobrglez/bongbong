@@ -380,6 +380,43 @@ impl Craters {
     }
 }
 
+/// Where the uplink's designator lens is in the world: the line to the
+/// reticle is drawn from it.
+pub fn lens(tank: &Tank) -> Position {
+    tank.turret_point(crate::tank_art::ROD_LENS[tank.row.clamp(0, 11) as usize])
+}
+
+/// Every reticle up on the field as it is drawn (`compose_reticle` and
+/// `compose_designator`): a seat's in its team colour, an enemy's in the
+/// designator's red, the cancel's X while it stands on its tank's own cell.
+pub fn compose_reticles<'a>(out: &mut Vec<Shape>, tanks: impl Iterator<Item = &'a Tank>, t: &Tuning, time: f32) {
+    for tank in tanks {
+        let Some(r) = tank.reticle.filter(|_| !tank.is_wreck()) else { continue };
+        let color = match tank.owner() {
+            crate::shell::Owner::Player(seat) => crate::tank::team_color(seat),
+            _ => LASER_RED[2],
+        };
+        let cancel = r.cell == world_to_cell(tank.position);
+        compose_designator(out, lens(tank), r.centre(), color);
+        compose_reticle(out, &r, cancel, color, t, time);
+    }
+}
+
+/// Every call standing as it is drawn: its ring closing in on its first
+/// moments, then the circle, the beam and the count. `clock` is the time
+/// the countdowns are read on (the round's, plus a client's lead to its
+/// present).
+pub fn compose_calls(out: &mut Vec<Shape>, zones: &[crate::zone::Zone], clock: f32, view_top: f32, t: &Tuning, time: f32) {
+    for z in zones {
+        if z.rod().is_none() {
+            continue;
+        }
+        let left = z.left(clock);
+        compose_call_ring(out, z.centre, t.rod_countdown_seconds - left, t);
+        compose_call(out, z.centre, left, view_top, z.id, t, time);
+    }
+}
+
 /// The uplink module's cell (`tank::module_cols`): 3 a call's uplink while
 /// `Tank::rod_flash` runs, 4 offline (an EMP), 1 and 2 alternating at 6 Hz
 /// while a reticle is up, else 0.

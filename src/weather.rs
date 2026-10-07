@@ -1025,6 +1025,29 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
             out.push(Light::point(slug.end, 64.0, scale([0.45, 0.6, 1.0], s * stop)));
         }
     }
+    // The rod from god (docs/rod-from-god.md "Drawing"): every call's beam
+    // pools red light on its circle, steady over the last second; an
+    // impact's column floods the ground white for `rod_flash_seconds`;
+    // a reticle's designator lights its cell faintly. None is shadowed - a
+    // beam from straight overhead.
+    if t.rod_beam_light > 0.0 {
+        for z in game.zones.iter().filter(|z| z.rod().is_some()) {
+            let left = z.left(time + game.zone_lead);
+            let beat = if left <= 1.0 { 1.0 } else { 0.7 };
+            out.push(Light::point(z.centre, t.rod_kill_radius_px * 1.5, scale([1.0, 0.2, 0.15], s * t.rod_beam_light * beat)).unshadowed());
+        }
+        for tank in game.world.query::<&Tank>().iter().filter(|tank| !tank.is_wreck()) {
+            if let Some(r) = tank.reticle {
+                out.push(Light::point(r.centre(), 40.0, scale([1.0, 0.2, 0.15], s * t.rod_beam_light * 0.4)).unshadowed());
+            }
+        }
+    }
+    for fx in &game.rod_impacts {
+        let life = 1.0 - (fx.age / t.rod_flash_seconds.max(1e-3)).clamp(0.0, 1.0);
+        if life > 0.0 {
+            out.push(Light::point(fx.at, t.rod_shove_radius_px * 1.5, scale([1.0, 0.97, 0.92], s * 2.5 * life)).unshadowed());
+        }
+    }
     if t.gauss_charge_light > 0.0 {
         for tank in game.world.query::<&Tank>().iter().filter(|tank| !tank.is_wreck()) {
             if let Some(charge) = tank.charge.filter(|c| c.weapon == crate::tank::ActiveWeapon::GaussRail) {

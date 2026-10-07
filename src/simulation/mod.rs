@@ -5338,10 +5338,12 @@ impl Game {
                     gauss_slugs: tank.gauss_slugs,
                     fpv_drones: tank.fpv_drones,
                     fpv_out: tank.fpv_out,
+                    rods: tank.rods,
                     charging: tank.charge.is_some(),
                     disabled: tank.is_disabled(),
                     kept_out: ai.is_some_and(Ai::kept_out),
                     air_hold: ai.is_some_and(Ai::air_hold),
+                    rod_hold: ai.is_some_and(Ai::rod_hold),
                     tell: tank.tell.is_some(),
                     skidding: tank.skid > 0.0,
                     plasma_ammo: tank.plasma_ammo,
@@ -5407,8 +5409,10 @@ pub struct TankSnapshot {
     /// Drones left in its FPV halo, and its drones in the air.
     pub fpv_drones: i32,
     pub fpv_out: u8,
-    /// Holding a charge on its trigger (`Tank::charge`, a gauss rail):
-    /// crawling or standing on its lane on purpose.
+    /// Rods left to call (`Tank::rods`).
+    pub rods: i32,
+    /// Holding a charge on its trigger (`Tank::charge`, a gauss rail or a
+    /// rod's reticle): crawling or standing on purpose.
     pub charging: bool,
     /// Disabled by an EMP (`Tank::disabled`): an enemy coasting with its
     /// brain off, going where it did not ask to.
@@ -5419,6 +5423,10 @@ pub struct TankSnapshot {
     /// Standing for the FPV swarm (`Ai::air_hold`): watching its own drone
     /// work, or under a crown while a seat's drone comes at it.
     pub air_hold: bool,
+    /// Keeping its distance from a seat with the rod from god
+    /// (`Ai::rod_hold`): out of the circle a call on that seat would crush,
+    /// on purpose.
+    pub rod_hold: bool,
     /// Winding up a special (`Tank::tell`): holding still on purpose.
     pub tell: bool,
     /// Knocked off its tracks (`Tank::skid`): sliding where it did not ask

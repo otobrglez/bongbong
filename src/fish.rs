@@ -467,6 +467,11 @@ impl Shoal {
         }
         let step = (game.time - self.clock).clamp(0.0, MAX_GAP);
         self.throw_onto_banks(&game.sonic_waves, step, water, &t);
+        for e in game.events() {
+            if let Event::RodImpact { cell, .. } = *e {
+                self.throw_from(crate::map::cell_to_world(cell.0, cell.1), t.rod_fish_reach_px, t.rod_fish_throw_max, water, &t);
+            }
+        }
         self.advance(water, game.time, &t);
     }
 
@@ -515,6 +520,35 @@ impl Shoal {
         }
     }
 
+    /// A rod's impact at `at` (docs/rod-from-god.md "At 11"): every fish
+    /// within `reach` whose throw straight away from `at`
+    /// (`sonic_fish_throw_px`, the hammer's throw) lands on dry ground on
+    /// the map is thrown onto the bank - at most `max`, the nearest first,
+    /// ties on their order. Drawn only, and a replica throws the same fish
+    /// off the same impact.
+    pub fn throw_from(&mut self, at: Position, reach: f32, max: i32, water: &WaterLayout, t: &Tuning) {
+        if max <= 0 || reach <= 0.0 || t.sonic_fish_throw_px <= 0.0 {
+            return;
+        }
+        let mut hit: Vec<(f32, usize, Position)> = Vec::new();
+        for (i, f) in self.fish.iter().enumerate().filter(|(_, f)| f.flop.is_none()) {
+            let d = f.pos.distance_to(at);
+            if d > reach {
+                continue;
+            }
+            let Some(dir) = unit_of(f.pos - at) else { continue };
+            let bank = f.pos + dir * t.sonic_fish_throw_px;
+            if water.contains(bank) && water.depth_at(bank) == Depth::Dry {
+                hit.push((d, i, bank));
+            }
+        }
+        hit.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        for (_, i, bank) in hit.into_iter().take(max as usize) {
+            let f = &mut self.fish[i];
+            f.flop = Some(Flop { from: f.pos, bank, age: 0.0 });
+        }
+    }
+
     /// The fish to draw at the round's clock `time` (the lakes' from their
     /// state, the streams' from the clock), within `cull` where there is
     /// one. Nothing under ice.
@@ -553,7 +587,8 @@ impl Shoal {
 /// What a fish darts away from this step: every live hull
 /// (`fish_scatter_px`), every shell, bullet and plasma bolt in the air and
 /// every hit, ricochet and laser beam (`fish_shot_scatter_px`), every
-/// blast, missile burst and wreck (`fish_blast_scatter_px`).
+/// blast, missile burst and wreck (`fish_blast_scatter_px`), and a rod's
+/// impact (twice that).
 pub fn scares(game: &Game, t: &Tuning) -> Vec<Scare> {
     let mut out = Vec::new();
     let hull = t.fish_scatter_px;
@@ -591,6 +626,7 @@ pub fn scares(game: &Game, t: &Tuning) -> Vec<Scare> {
             Event::Blast { x, y, .. } | Event::MissileBlast { x, y, .. } | Event::Wreck { x, y, .. } => {
                 out.push(Scare { at: Position::new(x, y), radius: blast });
             }
+            Event::RodImpact { cell, .. } => out.push(Scare { at: crate::map::cell_to_world(cell.0, cell.1), radius: blast * 2.0 }),
             Event::Hit { x, y, .. } | Event::Ricochet { x, y, .. } => out.push(Scare { at: Position::new(x, y), radius: shot }),
             // A drone's burst and a downed one's crash: small as a shot's.
             Event::DroneBurst { x, y, .. } | Event::DroneCrashed { x, y, .. } => out.push(Scare { at: Position::new(x, y), radius: shot }),

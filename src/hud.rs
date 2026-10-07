@@ -798,7 +798,7 @@ impl CornerShape {
                 leave: chrome.leave_button,
                 pause: chrome.pause_button,
                 // The build stamp always; an online round's status over it.
-                lines: 1 + usize::from(chrome.status.is_some()),
+                lines: 1 + usize::from(chrome.status.is_some()) + usize::from(chrome.prompt.is_some()),
                 minimap: chrome.minimap,
                 lamp_row: chrome.lamp_row,
             }
@@ -1430,6 +1430,10 @@ pub struct PlayChrome {
     /// (`net::round::OnlineRound::status`). `None` in a local round -
     /// and everything before the round is the lobby's, not this line's.
     pub status: Option<String>,
+    /// What letting go of a rod's reticle does (docs/rod-from-god.md "The
+    /// reticle"), the first line under the left cluster while this
+    /// window's seat holds one (`rod_prompt`).
+    pub prompt: Option<crate::text::Key>,
     /// The lobby over a dimmed field (`lobby.rs`), in place of the round
     /// this window is not playing.
     pub lobby: Option<crate::lobby::LobbyView>,
@@ -1459,6 +1463,18 @@ pub struct PlayChrome {
     /// How dark the fade through black between rounds is, 0 to 1
     /// (`Session::curtain`), drawn over everything else.
     pub curtain: f32,
+}
+
+/// The rod's prompt (`PlayChrome::prompt`) for the first of `seats` - this
+/// window's - that holds a reticle: letting go calls the rod, or, with the
+/// reticle on its own tank's cell, cancels it.
+pub fn rod_prompt(game: &Game, seats: impl IntoIterator<Item = u8>) -> Option<crate::text::Key> {
+    seats.into_iter().find_map(|seat| {
+        let entity = game.seat(seat as usize)?;
+        let tank = game.world.get::<&crate::tank::Tank>(entity).ok()?;
+        let r = tank.reticle.filter(|_| !tank.is_wreck())?;
+        Some(if r.cell == crate::map::world_to_cell(tank.position) { crate::text::keys::HUD_ROD_CANCEL } else { crate::text::keys::HUD_ROD_AIM })
+    })
 }
 
 /// The online status line's text size: the first line under the left
