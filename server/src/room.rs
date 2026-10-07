@@ -1181,6 +1181,8 @@ impl Room {
         // of the client's driving the read covers (`pose_reach_ticks`).
         let mut poses: Vec<(usize, Option<SeatPose>, u32)> = Vec::new();
         let mut views: Vec<(usize, (u32, u8))> = Vec::new();
+        // Each seat's hold report: its client's ticks of trigger held.
+        let mut holds: Vec<(usize, Option<u32>)> = Vec::new();
         for (i, seat) in self.seats.iter().enumerate().take(MAX_SEATS) {
             if let Some(s) = seat
                 && s.connected()
@@ -1190,6 +1192,7 @@ impl Room {
                 input.seats[i] = read.map(|m| m.intent()).unwrap_or_default();
                 poses.push((i, read.and_then(|m| m.pose()), s.mailbox.pose_reach_ticks()));
                 views.push((i, read.map_or((0, 0), |m| (m.view_tick, m.view_frac))));
+                holds.push((i, s.mailbox.hold_ticks()));
                 // A starved tick is a packet that did not arrive in time:
                 // a server-driven seat's client is not stamping far
                 // enough ahead for the link (§4.12), an owned seat's hull
@@ -1208,6 +1211,11 @@ impl Room {
         // compensation of its shots (docs/online-coop-prd.md §4.16).
         for &(i, (tick, frac)) in &views {
             game.set_seat_view(i, tick, frac);
+        }
+        // A charge counts the client's ticks of trigger held, not the
+        // room's reads (docs/gauss-rail.md "The hold report").
+        for &(i, hold) in &holds {
+            authority::take_hold(game, i, hold);
         }
         // A client that owns its hull is put where it says before the
         // tick runs, and the seat is released to the room's own driving

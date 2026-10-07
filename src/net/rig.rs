@@ -515,6 +515,7 @@ impl Room {
         // The seat's own pose, the room server's rule (`net::authority`):
         // a client that owns its hull is put where it says before the
         // tick, and told if it is refused or moved.
+        authority::take_hold(game, 0, self.mailbox.hold_ticks());
         let applied = match authority::take_pose(game, 0, read.and_then(|m| m.pose()), self.mailbox.pose_reach_ticks()) {
             PoseOutcome::Applied(at) => Some(at),
             PoseOutcome::Refused(_, answer) => {
@@ -1092,6 +1093,62 @@ mod tests {
         assert_eq!((report.nudges, report.snaps), (0, 0), "an owned hull is never corrected: {report:?}");
     }
 
+    /// **The own slug is drawn on the release, and once** (docs/gauss-rail.md
+    /// "Online"): over a 40 ms link the client's charge is on its seat from
+    /// the press, its slug is on the picture the frame its packets let the
+    /// trigger up - a round trip before the room's could be - and the room's
+    /// `RailSlug` for it is claimed, so the picture never holds two.
+    #[test]
+    fn an_own_slug_is_drawn_on_the_release_and_never_twice() {
+        if !tuning().online_predict_own_tank || !tuning().online_predict_shots {
+            return;
+        }
+        let map = "version = 1\ntanks = 0\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"5,6\" = { kind = \"pickup\", pickup = \"gauss_rail\" }\n";
+        let options = RigOptions {
+            map: MapFile::from_toml_str(map).expect("the map parses"),
+            seed: Some(0xB0B5),
+            enemies: Some(0),
+            tank_row: Some(3),
+            quality: LinkQuality::new(40, 5, 0.0),
+            ..RigOptions::default()
+        };
+        let (_rig, link) = start(options);
+        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
+        let mut round = OnlineRound::new(client, "RIG");
+        round.set_client_hull(true);
+        let give_up = Instant::now() + Duration::from_secs(10);
+        let seat = |round: &OnlineRound<Loopback>| round.game().and_then(|g| g.drawable_state().tanks.into_iter().find(|t| t.slot == 0));
+        while seat(&round).is_none_or(|t| t.weapon != crate::tank::ActiveWeapon::GaussRail) {
+            round.frame(&Intent { move_dir: Some(Dir::Right), ..Intent::default() }, FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+            assert!(Instant::now() < give_up, "never armed");
+        }
+        for _ in 0..10 {
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+        }
+        round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
+        assert!(seat(&round).is_some_and(|t| t.charge > 0), "the charge is drawn from the press frame");
+        for _ in 0..crate::tank::ticks_of(tuning().gauss_charge_seconds) + 10 {
+            thread::sleep(FRAME);
+            round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
+        }
+        // The trigger comes up in the packet after the fire hold's
+        // (`client::FIRE_HOLD_TICKS`), the frame the slug is drawn on.
+        for _ in 0..crate::net::client::FIRE_HOLD_TICKS {
+            thread::sleep(FRAME);
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+        }
+        assert_eq!(round.game().map(|g| g.rail_slugs.len()), Some(1), "the slug is drawn on the release");
+        let mut most = 0;
+        for _ in 0..60 {
+            thread::sleep(FRAME);
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            most = most.max(round.game().map_or(0, |g| g.rail_slugs.len()));
+        }
+        assert_eq!(most, 1, "the room's slug for it is never drawn as well");
+    }
+
     /// **The own shot never jumps back** (docs/online-coop-prd.md §4.16):
     /// over a 40 ms link, a shell fired from a standing tank is drawn from
     /// the press to its impact moving only forward along its heading - the
@@ -1402,6 +1459,69 @@ mod tests {
         }
         assert_eq!(most, 1, "the press is one ring on the replica");
         assert!(offline, "the seat's special is offline on the replica");
+    }
+
+    /// A seat's gauss rail through the room: the charge on the replica's
+    /// seat while the trigger is held, then one slug on the replica for the
+    /// one release, never two, and one slug spent in the room.
+    #[test]
+    fn a_seats_slug_reaches_the_replica_once() {
+        let mut rig = Lockstep::start(options(LinkQuality::PERFECT));
+        let patch = crate::simulation::debug::TankPatch { gauss_slugs: Some(2), ..Default::default() };
+        rig.authority_mut().expect("a round").debug_set_tank(0, &patch).expect("the seat's tank");
+        rig.drive(Intent { fire: true, ..Intent::default() });
+        let mut charged = false;
+        for _ in 0..crate::tank::ticks_of(tuning().gauss_charge_seconds) + 4 {
+            rig.step(1);
+            charged |= rig.replica().expect("a replica").drawable_state().tanks.iter().any(|t| t.slot == 0 && t.charge > 0);
+        }
+        rig.drive(Intent::default());
+        let mut most = 0;
+        for _ in 0..30 {
+            rig.step(2);
+            most = most.max(rig.replica().expect("a replica").rail_slugs.len());
+        }
+        assert!(charged, "the charge is drawn on the replica's seat");
+        assert_eq!(most, 1, "the release is one slug on the replica");
+        let left = rig.authority_mut().expect("a round").tank_snapshots().into_iter().find(|t| t.slot == 0).map(|t| t.gauss_slugs);
+        assert_eq!(left, Some(1), "one slug spent");
+    }
+
+    /// An enemy's rail reaches the replica: its charge on the replica's
+    /// tank, then its slug, then the seat it went through hit.
+    #[test]
+    fn an_enemys_rail_reaches_the_replica() {
+        let mut rig = Lockstep::start(options(LinkQuality::PERFECT));
+        let game = rig.authority_mut().expect("a round");
+        let seat = game.tank_snapshots().into_iter().find(|t| t.slot == 0).expect("the seat");
+        let beside = crate::Position::new(seat.position.x + 200.0, seat.position.y);
+        let slot = game.debug_spawn_enemy(beside, Some(1), Some(crate::ai::Role::Player)).expect("spawns");
+        let entity = game.tank_entity_by_slot(slot).expect("the enemy");
+        {
+            let mut tank = game.world.get::<&mut crate::tank::Tank>(entity).expect("its tank");
+            tank.disarm();
+            tank.shells_ammo = 0;
+            tank.speed_scale = 0.0;
+            tank.gauss_slugs = 3;
+        }
+        let (mut charging, mut fired, mut hit) = (None, None, None);
+        for step in 0..400 {
+            rig.step(1);
+            let replica = rig.replica().expect("a replica");
+            if charging.is_none() && replica.drawable_state().tanks.iter().any(|t| t.slot == slot && t.charge > 0) {
+                charging = Some(step);
+            }
+            if fired.is_none() && !replica.rail_slugs.is_empty() {
+                fired = Some(step);
+            }
+            if hit.is_none() && replica.drawable_state().tanks.iter().any(|t| t.slot == 0 && t.hp < 100) {
+                hit = Some(step);
+            }
+        }
+        let charging = charging.expect("the charge reached the replica");
+        let fired = fired.expect("the slug reached the replica");
+        assert!(fired > charging, "the charge before the slug: {charging} vs {fired}");
+        assert!(hit.is_some_and(|h| h >= fired), "and the seat is hit with it: {hit:?}");
     }
 
     /// An enemy's EMP reaches the replica: its crackle on the replica's

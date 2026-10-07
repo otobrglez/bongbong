@@ -284,8 +284,8 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "set_tank",
-        description: "Overwrite a tank's damage (0 = pristine, 100 = wreck), ammo counts (setting a special weapon's stock above 0 also arms it in place of the one special the tank carries, like its pickup would), shield_hp (rainbow-shield absorption left in damage points, not seconds), the speed-boost timer and portal_cooldown (seconds before it may enter a portal again). Omitted fields are untouched.",
-        schema: r#"{"type":"object","properties":{"slot":{"type":"integer"},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"grenade_ammo":{"type":"integer"},"sonic_ammo":{"type":"integer"},"emp_charges":{"type":"integer"},"disabled":{"type":"number"},"special_offline":{"type":"number"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}},"required":["slot"]}"#,
+        description: "Overwrite a tank's damage (0 = pristine, 100 = wreck), ammo counts (setting a special weapon's stock above 0 also arms it in place of the one special the tank carries, like its pickup would), shield_hp (rainbow-shield absorption left in damage points, not seconds), the speed-boost timer, portal_cooldown (seconds before it may enter a portal again) and charge (seconds a gauss rail's trigger has been held - a charge put on a tank carrying the rail; 0 takes it off). Omitted fields are untouched.",
+        schema: r#"{"type":"object","properties":{"slot":{"type":"integer"},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"grenade_ammo":{"type":"integer"},"sonic_ammo":{"type":"integer"},"emp_charges":{"type":"integer"},"disabled":{"type":"number"},"special_offline":{"type":"number"},"gauss_slugs":{"type":"integer"},"charge":{"type":"number"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}},"required":["slot"]}"#,
         read_only: false,
         destructive: false,
     },
@@ -4053,6 +4053,26 @@ mod tests {
         assert!(again.is_err(), "{again:?}");
         let unknown = ask(&mut server, &mut game, "spawn_pickup", json!({ "kind": "railgun", "x": 100.0, "y": 100.0 }));
         assert!(unknown.unwrap_err().contains("railgun"));
+    }
+
+    /// `set_tank {gauss_slugs}` arms the rail and `charge` puts a charge on
+    /// it, which the tank's line reports with its stage.
+    #[test]
+    fn set_tank_arms_the_rail_and_charges_it() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = game(3);
+        let ask = |server: &mut DevServer, game: &mut Session, tool: &str, params: Value| {
+            let rx = call(&tx, tool, params);
+            server.before_frame(game, W, H);
+            rx.recv().unwrap()
+        };
+        let tank = ask(&mut server, &mut game, "set_tank", json!({ "slot": 0, "gauss_slugs": 3 })).unwrap();
+        assert_eq!((tank["weapon"].as_str(), tank["gauss"].as_i64()), (Some("gauss_rail"), Some(3)), "{tank}");
+        let tank = ask(&mut server, &mut game, "set_tank", json!({ "slot": 0, "charge": 1.6 })).unwrap();
+        assert_eq!((tank["charge"][0].as_str(), tank["charge"][2].as_str()), (Some("gauss_rail"), Some("full")), "{tank}");
+        assert!((tank["charge"][1].as_f64().unwrap() - 1.6).abs() < 1e-3, "{tank}");
+        let tank = ask(&mut server, &mut game, "set_tank", json!({ "slot": 0, "charge": 0.0 })).unwrap();
+        assert!(tank["charge"].is_null(), "{tank}");
     }
 
     /// `set_tank {emp_charges}` arms the EMP, `disabled` and

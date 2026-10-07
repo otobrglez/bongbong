@@ -360,14 +360,38 @@ pub struct EmpPress {
     pub origin: Position,
 }
 
+/// A gauss rail's release the client drew (docs/gauss-rail.md "Online"):
+/// where its slug is judged from on the gun line, the module's bore it is
+/// drawn from, which way, and whether it was overcharged - the sandbox's
+/// pose on the release tick. The round traces it through the drawn world
+/// (`PresentWorld::rail_trace`) and draws it (`Game::draw_rail_press`).
+#[derive(Clone, Copy, Debug)]
+pub struct RailPress {
+    pub start: Position,
+    pub muzzle: Position,
+    pub dir: crate::math::Vec2,
+    pub overcharged: bool,
+}
+
+/// A charge of this client's own that fizzled or vented, at the module's
+/// bore (`Game::charge_end_show`).
+#[derive(Clone, Copy, Debug)]
+pub struct ChargeEndPress {
+    pub at: Position,
+    pub end: crate::tank::ChargeEnd,
+}
+
 /// The show of a press this client drew itself, of a weapon drawn on the
 /// press (`WeaponKind::drawn_on_press`, docs/sonic-hammer.md "Online: the
-/// shooter's press is drawn at once"), for the round to draw.
+/// shooter's press is drawn at once") - for a charge weapon its release
+/// and the end of a charge it let go to waste - for the round to draw.
 #[derive(Clone, Copy, Debug)]
 pub enum PressShow {
     Beam(BeamPress),
     Sonic(SonicPress),
     Emp(EmpPress),
+    Rail(RailPress),
+    ChargeEnd(ChargeEndPress),
 }
 
 /// The room's copy of one of this seat's shots, as the frame drew it.
@@ -434,8 +458,11 @@ pub struct Predictor {
     seat: usize,
     /// The tick the next input will be stamped with.
     tick: u32,
-    /// The inputs since the last acknowledged tick, oldest first.
-    history: VecDeque<(u32, Intent)>,
+    /// The inputs since the last acknowledged tick, oldest first, each with
+    /// the trigger's press edge and whether the local gate let a press
+    /// start a charge then (`predict_seat_with`), so a replay steps a
+    /// charge as the tick did.
+    history: VecDeque<(u32, Intent, (bool, bool))>,
     /// Where the drawn hull sits relative to the predicted one, decaying
     /// to nothing. A correction moves the *prediction* at once - the
     /// physics has to be right or the next tick compounds the error -
@@ -594,8 +621,10 @@ impl Predictor {
         // or doubled frame cannot skew the gate against the room's.
         self.cooldown = (self.cooldown - PHYSICS_FIXED_DT).max(0.0);
         self.offline_left = (self.offline_left - PHYSICS_FIXED_DT).max(0.0);
-        self.sandbox.predict_seat(self.seat, intent, PHYSICS_FIXED_DT);
-        self.history.push_back((tick, intent));
+        let pressed = intent.fire && !self.trigger_held;
+        let trigger = (pressed, self.charge_gate_open());
+        let charged = self.sandbox.predict_seat_with(self.seat, intent, PHYSICS_FIXED_DT, Some(trigger));
+        self.history.push_back((tick, intent, trigger));
         while self.history.len() > HISTORY_TICKS {
             self.history.pop_front();
         }
@@ -606,9 +635,65 @@ impl Predictor {
             self.launch_due(press);
         }
         self.presses = presses;
-        let pressed = intent.fire && !self.trigger_held;
         self.trigger_held = intent.fire;
-        self.pull_trigger(tick, pressed, intent.fire);
+        match charged {
+            Some(charge) => self.charge_edge(tick, charge),
+            None => self.pull_trigger(tick, pressed, intent.fire),
+        }
+    }
+
+    /// Whether the local gate lets a press start a charge
+    /// (docs/gauss-rail.md "Online"): its cooldown out, no special offline
+    /// by this client's word, and a charge weapon in the sandbox's hands
+    /// with ammo left past the releases the room has not answered.
+    fn charge_gate_open(&self) -> bool {
+        if self.cooldown > 0.0 || self.offline_left > 0.0 {
+            return false;
+        }
+        match self.sandbox.seat_arms(self.seat, false) {
+            Some((weapon, ammo, _)) if weapon.trigger() == crate::tank::Trigger::Charge => {
+                ammo - self.owed_presses_of(WeaponKind::from(weapon)) > 0
+            }
+            _ => false,
+        }
+    }
+
+    /// What the charge did on this tick (`Game::predict_seat_with`): a
+    /// release fires - its reload on the local gate, its slug owed and, while
+    /// presses are drawn, drawn (`PressShow::Rail`) and waiting for its
+    /// `Fired` to claim the room's; a vent closes the gate for its cooldown;
+    /// a fizzle and a vent are drawn at the bore.
+    fn charge_edge(&mut self, tick: u32, charge: crate::simulation::SeatCharge) {
+        use crate::tank::{ChargeEdge, ChargeEnd, ChargeStage};
+        let t = tuning();
+        let drawn = self.shots_enabled;
+        match charge.edge {
+            ChargeEdge::Released(stage) => {
+                self.cooldown = t.gauss_reload_seconds;
+                self.owed_presses.push_back((WeaponKind::GaussRail, tick, 0.0));
+                if drawn {
+                    let overcharged = stage == ChargeStage::Overcharged;
+                    self.shows.push(PressShow::Rail(RailPress { start: charge.start, muzzle: charge.muzzle, dir: charge.dir, overcharged }));
+                    self.drawn_presses.push_back((WeaponKind::GaussRail, tick, 0.0));
+                    self.report.shots_drawn += 1;
+                }
+            }
+            ChargeEdge::Ended(end) => {
+                if end == ChargeEnd::Vented {
+                    self.cooldown = self.cooldown.max(t.gauss_vent_cooldown_seconds);
+                }
+                if drawn && end != ChargeEnd::Lapsed {
+                    self.shows.push(PressShow::ChargeEnd(ChargeEndPress { at: charge.muzzle, end }));
+                }
+            }
+            ChargeEdge::None | ChargeEdge::Started | ChargeEdge::Held => {}
+        }
+    }
+
+    /// The charge the sandbox's seat holds, for the round to draw on the
+    /// shown seat from the press frame on.
+    pub fn charge(&self) -> Option<crate::tank::Charge> {
+        self.sandbox.seat_charge(self.seat)
     }
 
     /// Where to draw the hull: its newest tick, as `app.rs` draws a local
@@ -1253,10 +1338,12 @@ impl Predictor {
             // trip ago and is put back where it was before the write.
             let keep = self.sandbox.seat_motion(self.seat);
             let skid = self.sandbox.seat_skid(self.seat);
+            let charge = self.sandbox.seat_charge(self.seat);
             apply::snapshot_with(&mut self.sandbox, snapshot, apply::Show::Quiet);
             if let Some((position, rotation, velocity)) = keep {
                 self.sandbox.place_seat(self.seat, position, rotation, velocity);
                 self.sandbox.set_seat_skid(self.seat, skid);
+                self.sandbox.set_seat_charge(self.seat, charge);
             }
             self.history.clear();
             self.report.in_flight = 0;
@@ -1265,13 +1352,16 @@ impl Predictor {
         let before = self.sandbox.seat_motion(self.seat).map(|(p, _, _)| p);
         apply::snapshot_with(&mut self.sandbox, snapshot, apply::Show::Quiet);
         // Anything the server has already accounted for is history.
-        while self.history.front().is_some_and(|(t, _)| *t <= acked) {
+        while self.history.front().is_some_and(|(t, _, _)| *t <= acked) {
             self.history.pop_front();
         }
         self.report.in_flight = self.history.len();
-        let replay: Vec<Intent> = self.history.iter().map(|(_, i)| *i).collect();
-        for intent in replay {
-            self.sandbox.predict_seat(self.seat, intent, PHYSICS_FIXED_DT);
+        // A charge steps through the replay as it did live, from the
+        // room's count at the acked tick; its edges were drawn when they
+        // happened.
+        let replay: Vec<(Intent, (bool, bool))> = self.history.iter().map(|&(_, i, trigger)| (i, trigger)).collect();
+        for (intent, trigger) in replay {
+            self.sandbox.predict_seat_with(self.seat, intent, PHYSICS_FIXED_DT, Some(trigger));
         }
         let Some(before) = before else { return };
         let Some((after, _, _)) = self.sandbox.seat_motion(self.seat) else { return };
@@ -2176,6 +2266,113 @@ mod tests {
         assert_eq!(predictor.offline_left(), 0.0);
         predictor.step(press());
         assert!(matches!(predictor.take_press_shows().as_slice(), [PressShow::Emp(_)]), "online again, it pulses");
+    }
+
+    /// A sandbox with the seat armed with the gauss rail.
+    fn rail_predictor(owned: bool) -> Predictor {
+        let mut predictor = Predictor::new(round(), 0, 0);
+        predictor.set_owned(owned);
+        let patch = TankPatch { gauss_slugs: Some(2), ..Default::default() };
+        predictor.sandbox.debug_set_tank(0, &patch).expect("the seat's tank");
+        predictor
+    }
+
+    fn full_ticks() -> u32 {
+        crate::tank::ticks_of(tuning().gauss_charge_seconds)
+    }
+
+    /// The rail is the charge-and-hold pattern on the client's own ticks
+    /// (docs/gauss-rail.md "Online"): the charge is the sandbox's from the
+    /// press, the slug is drawn on the release from the sandbox's pose -
+    /// owed, its reload on the local gate - and the room's `RailSlug` for
+    /// it claimed once.
+    #[test]
+    fn a_rail_charges_on_the_press_and_is_drawn_on_the_release() {
+        let mut predictor = rail_predictor(false);
+        predictor.step(press());
+        assert_eq!(predictor.charge().map(|c| c.ticks()), Some(1), "charging from the press tick");
+        for _ in 1..full_ticks() {
+            predictor.step(press());
+        }
+        assert!(predictor.take_press_shows().is_empty(), "nothing drawn while it charges");
+        let (pivot, _, _) = predictor.motion().expect("a hull");
+        let tick = predictor.step(release());
+        let shows = predictor.take_press_shows();
+        let [PressShow::Rail(slug)] = shows.as_slice() else { panic!("one rail show: {shows:?}") };
+        assert!(!slug.overcharged && slug.start.distance_to(pivot) < 40.0, "{slug:?}");
+        assert_eq!(predictor.charge(), None, "released");
+        assert!(predictor.cooldown > 0.0, "the reload holds the gate");
+        predictor.step(press());
+        assert_eq!(predictor.charge(), None, "no charge inside the reload");
+        predictor.note_fired(WeaponKind::GaussRail, tick);
+        assert!(predictor.owed_presses.is_empty(), "its Fired settles the slug");
+        assert!(predictor.confirm_press(WeaponKind::GaussRail, tick), "the room's slug is the drawn one");
+        assert!(!predictor.confirm_press(WeaponKind::GaussRail, tick), "claimed once");
+    }
+
+    /// Let go short of full, the charge fizzles: a fizzle drawn at the
+    /// bore, no slug and the gate open again at once.
+    #[test]
+    fn a_short_hold_draws_a_fizzle_and_no_slug() {
+        let mut predictor = rail_predictor(false);
+        for _ in 0..full_ticks() - 1 {
+            predictor.step(press());
+        }
+        predictor.step(release());
+        let shows = predictor.take_press_shows();
+        let [PressShow::ChargeEnd(end)] = shows.as_slice() else { panic!("one fizzle: {shows:?}") };
+        assert_eq!(end.end, crate::tank::ChargeEnd::Fizzled);
+        assert!(predictor.owed_presses.is_empty());
+        predictor.step(press());
+        assert!(predictor.charge().is_some(), "a fizzle costs no cooldown");
+    }
+
+    /// The owned hull charges, crawls, releases and recoils on the same
+    /// ticks the room's does from the same intents: the sandbox lands where
+    /// the authority's `update` does.
+    #[test]
+    fn an_owned_rail_crawls_and_recoils_as_the_room_does() {
+        let mut authority = round();
+        let patch = TankPatch { gauss_slugs: Some(2), ..Default::default() };
+        authority.debug_set_tank(0, &patch).expect("the seat");
+        let mut predictor = rail_predictor(true);
+        let (w, h) = authority.map.field_size();
+        let script = |tick: u32| Intent {
+            move_dir: Some(if tick < 40 { Dir::Up } else { Dir::Right }),
+            fire: (10..10 + full_ticks() + 5).contains(&tick),
+            ..Intent::default()
+        };
+        let mut released = false;
+        for tick in 0..full_ticks() + 60 {
+            authority.update(Input::single(script(tick)), PHYSICS_FIXED_DT, w, h);
+            predictor.step(script(tick));
+            released |= authority.events().iter().any(|e| matches!(e, crate::simulation::Event::RailSlug { .. }));
+            let (a, ar, _) = authority.seat_motion(0).expect("the authority's hull");
+            let (p, pr, _) = predictor.motion().expect("the predicted hull");
+            assert!(a.distance_to(p) < 0.01 && ar == pr, "tick {tick}: {a:?} {ar} vs {p:?} {pr}");
+            assert_eq!(authority.seat_charge(0).map(|c| c.ticks()), predictor.charge().map(|c| c.ticks()), "tick {tick}");
+        }
+        assert!(released, "the room fired");
+    }
+
+    /// A stage-2 reconciliation mid-charge replays the charge from the
+    /// room's count: the sandbox ends on the charge it had live.
+    #[test]
+    fn a_replay_carries_a_charge_from_the_rooms_count() {
+        let (mut authority, mut predictor) = (round(), rail_predictor(false));
+        let patch = TankPatch { gauss_slugs: Some(2), ..Default::default() };
+        authority.debug_set_tank(0, &patch).expect("the seat");
+        for _ in 0..30u32 {
+            predictor.step(press());
+        }
+        for _ in 0..20u32 {
+            authority.predict_seat_with(0, press(), PHYSICS_FIXED_DT, Some((false, true)));
+        }
+        // The room started its charge on the first press.
+        authority.set_seat_charge(0, Some(crate::tank::Charge { weapon: ActiveWeapon::GaussRail, held: 20.0 * PHYSICS_FIXED_DT }));
+        let live = predictor.charge().map(|c| c.ticks());
+        predictor.reconcile(&wire(&mut authority, 19), 19);
+        assert_eq!(predictor.charge().map(|c| c.ticks()), live, "replayed to where it was");
     }
 
     /// A pulse the room never fires (its `Fired` never comes) gives the

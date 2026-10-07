@@ -1565,3 +1565,70 @@ async fn a_client_that_goes_silent_is_let_go_and_a_quiet_one_is_not() {
     }
     assert!(closed, "a client that answered nothing for the limit was kept");
 }
+
+/// **A charge counts the client's ticks at the real room**
+/// (docs/gauss-rail.md "The hold report"). A client that owns its hull and
+/// holds the rail's trigger for six ticks, sent as one burst, is read in
+/// one tick - and the room's charge stands at six, the client's count, not
+/// at the one tick it read (a report is believed within
+/// `CHARGE_HOLD_SPARE_TICKS` of the room's own count); let go once full,
+/// the room fires.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_charge_counts_the_clients_ticks_however_the_room_reads_them() {
+    use bongbong::net::wire::WeaponKind;
+
+    let (addr, _hub) = start_server().await;
+    let mut ws = connect(addr).await;
+    let map = "version = 1\ntanks = 0\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"4,6\" = { kind = \"pickup\", pickup = \"gauss_rail\" }\n";
+    let Msg::Lobby(Lobby::Create { nick, device_token, mission, seed, client, .. }) = create(0xB0B5) else { unreachable!("a create") };
+    send(&mut ws, &Msg::Lobby(Lobby::Create { nick, device_token, map: "custom".into(), map_toml: Some(map.into()), mission, seed, client })).await;
+    let _ = expect_welcome(&mut ws).await;
+    send(&mut ws, &Msg::Lobby(Lobby::Start)).await;
+    let welcome = start_of_round(&mut ws).await;
+    let mut baseline = welcome.snapshot.clone();
+    let seat = welcome.seat as usize;
+    let mut me = *baseline.tanks.iter().find(|t| t.id as usize == seat).expect("the seat's tank");
+    for _ in 0..30 {
+        if me.weapon == WeaponKind::GaussRail {
+            break;
+        }
+        let s = next_state(&mut ws, &mut baseline).await;
+        me = *s.tanks.iter().find(|t| t.id as usize == seat).expect("the seat's tank");
+    }
+    assert_eq!(me.weapon, WeaponKind::GaussRail, "the crate beside the start armed the seat");
+    // Standing where the room has the hull, so every pose is taken.
+    let owned = |tick: u32, fire: bool| IntentMsg { tick, owned: true, fire, x: me.x, y: me.y, dir: me.dir, ..IntentMsg::default() };
+    let held = bongbong::tank::CHARGE_HOLD_SPARE_TICKS;
+    for tick in 1..=held {
+        send(&mut ws, &Msg::Intent(owned(tick, true))).await;
+    }
+    let mut charge = 0;
+    for _ in 0..60 {
+        let s = next_state(&mut ws, &mut baseline).await;
+        if s.acked[seat] >= held {
+            charge = s.tanks.iter().find(|t| t.id as usize == seat).map_or(0, |t| t.charge);
+            break;
+        }
+    }
+    assert!((held as u16..=held as u16 + 1).contains(&charge), "the room's charge is the client's {held} ticks, not its reads: {charge}");
+    // Hold on to full, a tick a packet, then let go.
+    let full = bongbong::tank::ticks_of(Tuning::DEFAULT.gauss_charge_seconds);
+    let mut tick = held;
+    while tick < full + 5 {
+        tick += 1;
+        send(&mut ws, &Msg::Intent(owned(tick, true))).await;
+        tokio::time::sleep(Duration::from_millis(16)).await;
+    }
+    send(&mut ws, &Msg::Intent(owned(tick + 1, false))).await;
+    let mut fired = false;
+    for _ in 0..400 {
+        let s = next_state(&mut ws, &mut baseline).await;
+        if s.events.iter().any(|e| matches!(e, WireEvent::Fired { weapon: WeaponKind::GaussRail, .. }))
+            && s.events.iter().any(|e| matches!(e, WireEvent::RailSlug { leg: 0, .. }))
+        {
+            fired = true;
+            break;
+        }
+    }
+    assert!(fired, "let go at full, the room fired the slug");
+}

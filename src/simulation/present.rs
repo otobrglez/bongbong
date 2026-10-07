@@ -361,6 +361,39 @@ impl Game {
         }
     }
 
+    /// Draw `seat`'s release of a gauss rail on this replica (presentation
+    /// only), on the release rather than a round trip later
+    /// (docs/gauss-rail.md "Online"): its slug from the module's bore
+    /// `muzzle` through what `trace` found it goes through - into a portal
+    /// where `portal` says it stopped at one - the same `rail_show` the
+    /// room's `RailSlug` puts on a replica, and the module's shot cell.
+    pub fn draw_rail_press(&mut self, seat: u8, muzzle: Position, trace: RailTrace, portal: bool, overcharged: bool) {
+        let pierces = trace.through.iter().map(|&(at, _, what)| crate::gauss::Pierce { at, what }).collect();
+        let mut show = crate::simulation::Spectacle::default();
+        self.rail_show(&mut show, crate::gauss::RailSlug::new(muzzle, trace.end, portal, overcharged, pierces), true);
+        self.show(show);
+        let Some(entity) = self.seats.get(seat as usize).copied().flatten() else { return };
+        if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {
+            tank.kick_rail();
+        }
+    }
+
+    /// One seat's charge (`Tank::charge`), if it holds one.
+    pub fn seat_charge(&self, seat: usize) -> Option<crate::tank::Charge> {
+        let entity = self.seats.get(seat).copied().flatten()?;
+        self.world.get::<&Tank>(entity).ok()?.charge
+    }
+
+    /// Set one seat's charge: a client's sandbox keeping its own across a
+    /// reconciliation, or the shown seat drawing the client's predicted
+    /// one (`net::round`).
+    pub fn set_seat_charge(&mut self, seat: usize, charge: Option<crate::tank::Charge>) {
+        let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
+        if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {
+            tank.charge = charge;
+        }
+    }
+
     /// Hold `seat`'s special offline for at least `seconds` on this replica
     /// (presentation only): the client's own word on its EMP's press,
     /// written each frame over the room's until the room's arrives, so its

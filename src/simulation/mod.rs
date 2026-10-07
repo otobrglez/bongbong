@@ -44,6 +44,7 @@ pub mod training;
 mod volcano;
 pub use props::{FlyingDrum, GroundFire};
 pub(crate) use props::tile_rubble;
+pub(crate) use gauss::SeatCharge;
 pub mod replica;
 #[cfg(test)]
 mod crate_tests;
@@ -2397,7 +2398,9 @@ impl Game {
     /// builds a replica - same map, same seed - so the walls, the
     /// obstacles and the deep-water boxes this steps against are the
     /// server's own, by construction rather than by a second
-    /// implementation that could disagree.
+    /// implementation that could disagree. The predictor itself steps
+    /// `predict_seat_with`, which adds the charge-and-hold trigger.
+    #[cfg(test)]
     pub(crate) fn predict_seat(&mut self, seat: usize, intent: Intent, dt: f32) {
         self.predict_seat_with(seat, intent, dt, None);
     }
@@ -2405,10 +2408,11 @@ impl Game {
     /// `predict_seat`, with the seat's charge-and-hold trigger stepped too
     /// (docs/gauss-rail.md) when `trigger` names its press edge and whether
     /// the client's gate would let a press start a charge: in the room's
-    /// order - the hull driven, then the trigger, a release's recoil (and an
-    /// overcharge's spin) kicked before the solver steps - so a client's
-    /// own hull crawls, recoils and spins on its own ticks. What the
-    /// trigger did, for a seat whose trigger is a charge.
+    /// order - the hull driven, then the trigger, then a release's recoil
+    /// (and an overcharge's spin), as `resolve_rails` kicks it before
+    /// `step_world`, then the solver's step - so a client's own hull crawls,
+    /// recoils and spins on the ticks the room's does. What the trigger
+    /// did, for a seat whose trigger is a charge.
     pub(crate) fn predict_seat_with(&mut self, seat: usize, intent: Intent, dt: f32, trigger: Option<(bool, bool)>) -> Option<gauss::SeatCharge> {
         let entity = self.seats.get(seat).copied().flatten()?;
         // Disjoint borrows: `drive_tank` wants the solver and the hull at
@@ -5101,6 +5105,8 @@ impl Game {
                     grenade_ammo: tank.grenade_ammo,
                     sonic_ammo: tank.sonic_ammo,
                     emp_charges: tank.emp_charges,
+                    gauss_slugs: tank.gauss_slugs,
+                    charging: tank.charge.is_some(),
                     disabled: tank.is_disabled(),
                     kept_out: ai.is_some_and(Ai::kept_out),
                     tell: tank.tell.is_some(),
@@ -5164,6 +5170,10 @@ pub struct TankSnapshot {
     pub grenade_ammo: i32,
     pub sonic_ammo: i32,
     pub emp_charges: i32,
+    pub gauss_slugs: i32,
+    /// Holding a charge on its trigger (`Tank::charge`, a gauss rail):
+    /// crawling or standing on its lane on purpose.
+    pub charging: bool,
     /// Disabled by an EMP (`Tank::disabled`): an enemy coasting with its
     /// brain off, going where it did not ask to.
     pub disabled: bool,

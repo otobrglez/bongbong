@@ -464,6 +464,17 @@ pub enum ChargeStage {
     Overcharged,
 }
 
+impl ChargeStage {
+    /// Lower-case name for tooling and JSON.
+    pub fn name(self) -> &'static str {
+        match self {
+            ChargeStage::Charging => "charging",
+            ChargeStage::Full => "full",
+            ChargeStage::Overcharged => "overcharged",
+        }
+    }
+}
+
 /// How a charge ended without firing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]

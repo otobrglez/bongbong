@@ -171,6 +171,11 @@ pub struct TankDebug {
     pub disabled: f32,
     /// Seconds its special stays offline on its own (`Tank::special_offline`).
     pub offline: f32,
+    /// Gauss rail slugs left (`Tank::gauss_slugs`).
+    pub gauss: i32,
+    /// A charge on the trigger (`Tank::charge`): the weapon, seconds held
+    /// and its stage.
+    pub charge: Option<(&'static str, f32, &'static str)>,
     /// An enemy's wind-up: the weapon and the seconds left (`Tank::tell`).
     pub tell: Option<(&'static str, f32)>,
     /// Seconds left knocked off its tracks (`Tank::skid`).
@@ -367,6 +372,11 @@ pub struct TankPatch {
     pub disabled: Option<f32>,
     /// Seconds its special stays offline on its own (`Tank::special_offline`).
     pub special_offline: Option<f32>,
+    pub gauss_slugs: Option<i32>,
+    /// Seconds the trigger of its charge weapon has been held: a charge put
+    /// on (the special it carries must be one, `Trigger::Charge`); 0 takes
+    /// one off.
+    pub charge: Option<f32>,
     pub plasma_ammo: Option<i32>,
     pub laser_charges: Option<i32>,
     /// Flamethrower fuel, in seconds.
@@ -583,6 +593,8 @@ impl Game {
                     emp: tank.emp_charges,
                     disabled: r1(tank.disabled),
                     offline: r1(tank.special_offline),
+                    gauss: tank.gauss_slugs,
+                    charge: tank.charge.map(|c| (c.weapon.name(), r1(c.held), c.stage().name())),
                     tell: tank.tell.map(|t| (t.weapon.name(), r1(t.left))),
                     skid: r1(tank.skid),
                     plasma: tank.plasma_ammo,
@@ -931,6 +943,17 @@ impl Game {
         }
         if let Some(seconds) = patch.special_offline {
             tank.special_offline = seconds.max(0.0);
+        }
+        if let Some(n) = patch.gauss_slugs {
+            if n > 0 {
+                tank.disarm();
+            }
+            tank.gauss_slugs = n.max(0);
+        }
+        if let Some(seconds) = patch.charge {
+            let weapon = tank.active_weapon();
+            tank.charge = (seconds > 0.0 && weapon.trigger() == crate::tank::Trigger::Charge)
+                .then(|| crate::tank::Charge { weapon, held: crate::tank::ticks_of(seconds).max(1) as f32 * crate::PHYSICS_FIXED_DT });
         }
         if let Some(n) = patch.plasma_ammo {
             if n > 0 {

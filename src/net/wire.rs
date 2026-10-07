@@ -504,6 +504,10 @@ pub struct TankState {
     /// while the special is offline, which a client's prediction gates a
     /// press against.
     pub shells: u8,
+    /// A charge running on `weapon` (`Tank::charge`, docs/gauss-rail.md):
+    /// the whole ticks its trigger has been held, at least 1; 0 for none.
+    /// Exact, so a replay starts from the room's count.
+    pub charge: u16,
 }
 
 /// One live projectile, keyed by a per-round id the server hands out.

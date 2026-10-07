@@ -2088,6 +2088,10 @@ fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
         // An EMP's outage: the electrics, and the special on its own.
         lines.push(format!("EMP OUT {:.1}s / {:.1}s", tank.disabled, tank.special_offline));
     }
+    if let Some(charge) = tank.charge {
+        // A charge on the trigger (a gauss rail): seconds held and stage.
+        lines.push(format!("CHARGE {:.2}s {}", charge.held, charge.stage().name().to_uppercase()));
+    }
     if let Some(ai) = ai {
         lines.push(format!(
             "RETREAT {}",

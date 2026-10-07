@@ -380,6 +380,7 @@ mod tests {
             disabled: rng.random_range(0..30),
             offline: rng.random_range(0..30),
             shells: rng.random_range(0..12),
+            charge: if rng.random_range(0..4) == 0 { rng.random_range(1..200) } else { 0 },
         }
     }
 
@@ -682,6 +683,7 @@ mod tests {
                 disabled: 0,
                 offline: 0,
                 shells: 10,
+                charge: 0,
             })
             .collect();
         let shots = (0..24u16)
@@ -764,8 +766,9 @@ mod tests {
         // included. A new shot costs one more byte for its owner
         // (protocol 8); every tank two for its tell and its skid
         // (protocol 16), and three for an EMP's two outages and its
-        // magazine, the round one for the lamps (protocol 17).
-        assert!(full <= 480, "full snapshot {full} B");
+        // magazine, the round one for the lamps (protocol 17); every tank
+        // one for its charge (protocol 18).
+        assert!(full <= 488, "full snapshot {full} B");
         assert!(moving <= 210, "moving delta {moving} B");
         assert!(busy <= 276, "busy delta {busy} B");
         assert!(idle <= 51, "idle delta {idle} B");
