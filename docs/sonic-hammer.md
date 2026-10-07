@@ -94,19 +94,22 @@ tool and the `armory` map.
     (`Owner::same_side`), `sonic_damage` (4) times the falloff, no roll,
     through `Tank::take_damage` (a rainbow shield soaks it), `mark_hit`,
     `credit` (the kill credit and `hit_by_seat`), an `Event::Hit` where it
-    landed, and `Ai::notify_hit` on a surviving enemy - it knows it was
-    hit. A teammate, a fellow enemy and the shooter's own side take none:
+    landed with `cause: HitCause::Sonic` (§5: a hull flash and dust, never
+    a shell's fire), and `Ai::notify_hit` on a surviving enemy - it knows
+    it was hit. A teammate, a fellow enemy and the shooter's own side take none:
     they are only shoved.
   - A wreck is not moved (as no blast moves one), a tank rolling in through
     a gate is not on the field, and the shooter is never reached.
-- **Glass and lamp posts** (`Material::breaks_by_sound`): a glass cell some
-  ray entered, and a lamp post on a cell some ray entered, die when the
-  front reaches the cell's entry distance (`damage_obstacle` with the
-  tile's whole health, `DamageCause::Shot` along the ray - the ordinary
-  death path: `ObstacleDestroyed`, the glass's rubble row, the edge masks).
-  Glass stops the rays that meet it as it shatters - the wave does not
-  pass through any wall - so what stood behind a pane is spared until the
-  next shout. A lamp post is a pole and stops nothing.
+- **Glass** (`Material::breaks_by_sound`, glass alone): a glass cell some
+  ray entered dies when the front reaches the cell's entry distance
+  (`damage_obstacle` with the tile's whole health, `DamageCause::Shot`
+  along the ray - the ordinary death path: `ObstacleDestroyed`, the
+  glass's rubble row, the edge masks). Glass stops the rays that meet it as
+  it shatters - the wave does not pass through any wall - so what stood
+  behind a pane is spared until the next shout.
+- **Lamp posts** are left standing: a pole stops nothing, and a lamp post
+  is a map fixture whose light is a rule (`lamp_reveal_px`) - putting the
+  lights out is the EMP's (BB-38).
 - **Lanterns** set down by a seat (`Game::lanterns`) in the cone are broken
   (`Event::LanternBroken`), as a blast breaks them.
 - **Drums** (`Material::is_explosive`) on a cell some ray entered are
@@ -154,13 +157,11 @@ tool and the `armory` map.
 - **Trees** stop nothing; their crowns lean away from the pivot for a moment
   as the front passes (cosmetic, `sonic::tree_push`, added to
   `obstacle::tree_lean` at draw time).
-- **Rubble** lying in the cone (landed decals) is picked up and thrown again
-  a little along the wave, as a blast rethrows it (cosmetic, hashed).
 - **What it leaves alone**: shots in flight (shells, bullets, plasma,
   missiles, flying drums, lava bombs, globs - a shell outruns sound), wrecks,
   crates (no damage, they do not break), towers (they stop it and take
-  nothing), sandbags and fences (it passes over them), oil, ground fires,
-  ooze, scorches, tread marks.
+  nothing), sandbags and fences (it passes over them), lamp posts, oil,
+  ground fires, ooze, scorches, rubble, tread marks.
 - **Portals** do not carry the wave (it is not a shot - `portal_shots`
   covers shells, bullets, plasma and the laser). A tank shoved into a
   portal's trigger radius goes through it as any tank does
@@ -194,7 +195,7 @@ screen hurts nobody.
 | `src/sonic.rs` (new) | The weapon's headless half. `SonicCone` (`cast` over a `blocks: Fn((i32, i32)) -> bool` and the field size, `reaches(p) -> Option<f32>`, `cells() -> &[((i32, i32), f32)]` sorted by entry distance then cell), `SonicWave` (origin, facing, owner slot, cone, age, `swept` radius, `struck` hulls), `falloff`, `shove_speed(mass_factor, d)`, `slide(v, grip)` (the skid's slide, what the AI predicts with), `drum_landing`, `tree_push`, the composers `compose_wave` and `compose_tell` (pure, `pyro::Shape`s), `module_cell` |
 | `src/simulation/sonic.rs` (new) | The world half. `fire_sonic` (called from the dispatch arm), `resolve_sonic` (casts the frame's presses into waves), `tick_sonic_waves(f, live)` (the strike walk), `Game::knock` (the shove and skid any later weapon may use), `throw_drum`, `sonic_show` (the cosmetic half - the wave on the list, the ripple, the dish's flash - which a replica's `SonicBlast` and a client's press call too), `hammer_field` / `hammer_sense` (what the AI is handed, §4), `seat_sonic` |
 | `src/simulation/weapons.rs` | The `ActiveWeapon::SonicHammer` dispatch arm |
-| `src/simulation/mod.rs` | `Frame::pending_sonic`; `Game::{sonic_waves, grass_flat, seat_knock}`, `cover_cells`; the phase calls (`resolve_sonic` and `tick_sonic_waves` after `resolve_flames`, before `step_world`, so the shoves land in this tick's solver step; `tick_sonic_waves(f, false)` on the end screen); the tell in `enemy_phase` (§3.2); the skid in `drive_tank_with`, `tick_timers` and `predict_seat`; `accept_seat_pose`'s knock allowance; the spawn swap in `roll_enemy_tank` (§3.4); the `pickup_phase` arm; `tick_presentation` (waves, tells, skids, frog stuns, flattened grass); `Event::{SonicBlast, TellStarted}`, `Event::Shoved::skid`, `Event::DrumLaunched::drum` |
+| `src/simulation/mod.rs` | `Frame::pending_sonic`; `Game::{sonic_waves, grass_flat, seat_knock}`, `cover_cells`; the phase calls (`resolve_sonic` and `tick_sonic_waves` after `resolve_flames`, before `step_world`, so the shoves land in this tick's solver step; `tick_sonic_waves(f, false)` on the end screen); the tell in `enemy_phase` (§3.2); the skid in `drive_tank_with`, `tick_timers` and `predict_seat`; `accept_seat_pose`'s knock allowance; the spawn swap in `roll_enemy_tank` (§3.4); the `pickup_phase` arm; `tick_presentation` (waves, tells, skids, frog stuns, flattened grass); `Event::{SonicBlast, TellStarted}`, `Event::Hit::cause` (`HitCause`), `Event::Shoved::skid`, `Event::DrumLaunched::drum` |
 | `src/tank.rs` | `sonic_ammo`, `ActiveWeapon::SonicHammer` (`name`, `full_load`, `tell_seconds`), `SPECIAL_WEAPONS`, `weapon_ammo`/`take_weapon`/`empty_stock`/`wants_pickup`, `Tell`/`tell`, `skid`/`skid_speed`, `sonic_flash`/`kick_sonic`, the module's cell in `module_cols` |
 | `src/pickup.rs` | `PickupKind::SonicHammer` (`sonic_hammer`, row 13, its ink, spills rather than cooks off), `PickupKind::{name, parse, weapon}` |
 | `src/obstacle.rs` | `Material::blocks_sound`, `Material::breaks_by_sound` |
@@ -206,7 +207,7 @@ screen hurts nobody.
 | `src/indicators.rs` | `TankView::tell`, `ArrowKind::Tell`, the hit arc from a sonic blast |
 | `src/hud.rs` | `HUD_SONIC_COLOR`, the `weapon_color`/`weapon_pickup` arms |
 | `src/game.rs`, `src/render/game.rs` | Trees leaning, frog stun marks, the waves, dust and tells in their passes (§5), the dev stats arm |
-| `src/fx.rs` | Dust off a skidding hull |
+| `src/fx.rs` | Dust off a skidding hull; a sonic hit's flash and dust, no fire |
 | `src/net/wire.rs` | `WeaponKind::SonicHammer`, `WeaponKind::drawn_on_press`, `TankState::{tell, skid}`, `frog_flags::STUNNED` |
 | `src/net/events.rs` | `WireEvent::SonicBlast`, `Shoved::skid`, `DrumLaunched::drum`, `WireEvent::press_show`, `tell_started` on `NOT_SENT` |
 | `src/net/encode.rs`, `src/net/apply.rs` | The new fields; `Show::OwnShotsDrawn { seat, presses }`, `presses_drawn`; `SonicBlast`'s spectacle |
@@ -364,7 +365,10 @@ pub tell: Option<Tell>,
   carries `tell.weapon` with ammo, and its cooldown is out; otherwise the
   tell lapses. While it runs the tank's intent is overridden before
   `tank.control`: no movement, `face = tell.facing`, no new trigger - the
-  tank holds its aim (and the rule's first arm holds it too). The far
+  tank holds its aim (and the rule's first arm holds it too). With the
+  command layer on (`c2_enabled`), whose apply pass replays the commander's
+  orders over the collect pass's intents, the override is applied again
+  after `Commander::apply`, so it is the last word on a tank in a tell. The far
   tanks of a field map that coast between thinks count their tell down in
   the coast branch the same way. A teleport cancels it (`portal_phase`);
   `init` has none. A tell commits: a seat that steps out of the cone during
@@ -541,7 +545,7 @@ the general case:
   | `F` the frog | 2,12 | The stun; the hunters (Protect) come for it, so the frog-pin arm shows |
   | `I` iron | 20..21 x 2..3 | The counter: cover the wave cannot pass |
   | `b` brick | 26,2..4 and 28,13..14 | Walls stop it too, not only iron |
-  | `*` lamp post | 17,8 | Put out by the wave (try `--weather night`) |
+  | `*` lamp post | 17,8 | One the wave leaves standing (the EMP's to put out, BB-38); try `--weather night` |
   | `o` `f` drums | oil 21,6 and 21,10, fuel 21,8 | Thrown at whoever stands east of them |
   | `%` oil trail | 22..24,8 | A thrown drum's blast lights it |
   | `w` tall grass | 11..15 x 11..15 | Hide in it; a shout flattens it and shows you |
@@ -721,10 +725,16 @@ wave or the tank and its age, hashed, never rolled.
   `pyro::dust_puff` in the `DUST` ramp off dry ground, rising and leaning
   with the wind (`pyro::smoke_lean`), gone in `sonic_dust_seconds` (0.5);
   over water `BLUE_PALE` and white chop marks; over lava `SMOKE` puffs.
-- **Shards**: a pane or a lamp the wave shatters throws eight marks,
+- **Shards**: a pane the wave shatters throws eight marks,
   `BLUE_PALE` and `#F0F0F0` alternating, hashed within 40 degrees of the
   wave's line, 16-40 px over `sonic_dust_seconds`, falling as they go; the
   ordinary rubble and collapse burst come from the tile's death.
+- **A hull the wave hurts** (`Event::Hit` with `HitCause::Sonic`): the
+  white hit flash over the hull (`fx::Flash`) and a few dust motes in the
+  `DUST` ramp and stone chips (`fx.rs`), never a shell's sparks, impact
+  flash, impact burst or pool of light - a replica pushes no impact flash
+  for it either (`apply_spectacle`). No `ImpactKind` of its own: the wave's
+  own dust is the rest of the picture.
 - **The ripple**: `Shockwave::scaled(pivot, sonic_shock)` (0.35 of a tank
   dying) through `shockwave.rs` - a weak bend and shake, none under reduced
   motion.
@@ -854,6 +864,9 @@ Protocol 15 (from 14), once in the PR.
   pivot in quarter pixels, the facing as `dir_index`; mirrors
   `Event::SonicBlast { slot, x, y, dir: &'static str }`.
 - `WireEvent::Shoved { seat, vx, vy, skid: u8 }` - the skid in tenths.
+- `WireEvent::Hit { .., cause: HitCause }` - `Shot` for every hit there was,
+  `Sonic` for the wave's (`Event::Hit::cause`, `#[serde(default)]` on the
+  simulation's event): what keeps a sonic hit from drawing as a shell's.
 - `WireEvent::DrumLaunched { x, y, to_x, to_y, drum: Drum }` - a thrown oil
   drum flies as an oil drum (the replica assumed fuel, the only drum a fuse
   ever launched).
@@ -922,7 +935,7 @@ Protocol 15 (from 14), once in the PR.
 - `iron_brick_and_towers_shadow_the_cone` - an enemy behind each untouched,
   one beside the shadow reached.
 - `glass_shatters_when_the_wave_reaches_it_and_shadows_what_stands_behind`.
-- `a_lamp_post_is_put_out_and_a_lantern_broken`.
+- `a_lantern_is_broken_and_a_lamp_post_left_standing`.
 - `grass_the_wave_crosses_stops_concealing_for_a_while` - `Terrain::conceals`
   true, false after the front, true again after `sonic_grass_flat_seconds`;
   the AI sees the seat in between.
@@ -966,6 +979,8 @@ AI (`ai.rs` unit tests on a `Brain` with a made-up `HammerSense`, and
 - `an_enemys_tell_runs_before_its_blast` - `TellStarted`, then `Fired` and
   `SonicBlast` `sonic_tell_seconds` later, facing held, no movement.
 - `a_wrecked_tanks_tell_never_goes_off`.
+- `a_tell_holds_under_c2` - with `c2_enabled` on, a tank in a tell neither
+  moves nor turns until it goes off.
 - `a_shoved_enemy_does_not_count_as_stuck` - `stuck_timer` unchanged
   through a skid it commanded against.
 
@@ -985,6 +1000,8 @@ Shared path and presentation:
 - `hud_tests`: the hammer's slot, colour and glyph.
 - `frog`: `a_stunned_frog_cannot_hop_or_bite`.
 - `grass`: `a_pinned_tuft_stays_flat_then_recovers`.
+- `fx` tests: `a_sonic_hit_starts_no_fire` - a sonic `Hit` on a hull
+  flashes it and throws dust, and no spark, ember, impact or impact flash.
 - `fish::tests`: `a_wave_scares_the_fish_it_passes`,
   `a_shout_at_the_shore_throws_a_fish_onto_the_bank_and_back`.
 - `indicator_tests`: `a_tell_off_screen_gets_an_arrow_the_cap_never_drops`,
@@ -1004,6 +1021,7 @@ Wire:
   `debug_set_tank`, pressing: the replica gets one wave per blast and
   draws the same picture after every apply), `an_enemys_tell_reaches_the_replica`,
   `a_stunned_frog_reaches_the_replica`,
+  `a_sonic_hit_flashes_no_impact_on_the_replica`,
   `a_sonic_blast_this_client_drew_is_not_drawn_again` (`OwnShotsDrawn`
   with the press's bit: no wave, not handed on; without: a wave),
   `the_beam_claim_still_holds` (the existing beam tests on `presses`).
@@ -1061,7 +1079,7 @@ Wire:
 | Crates | Untouched, not broken |
 | Drums, oil, ground fires | Drums thrown and going off where they land (fused or not); oil and fires untouched; a thrown oil drum leaves its pool |
 | Trees, grass | Trees sway and stop nothing; grass flattened and hides nobody for a while |
-| Glass, lamp posts, lanterns | Shattered, put out, broken |
+| Glass, lanterns, lamp posts | Shattered; broken; left standing |
 | Grenades | Pushed |
 | Missiles, shells, bullets, plasma, the laser, the flamethrower | Untouched |
 | Field maps | The sight box binds every use; a far coasting tank's tell still goes off; waves, the director, stragglers as ever |
@@ -1110,7 +1128,10 @@ Wire:
    through the generic tiers; it fires by its rule, approaches as one
    brawler per seat, and otherwise keeps its place. Rejected: letting the
    generic attack fire it at 340 px (wasted), and letting an enemy fire
-   shells while it carries it (breaks the one-trigger rule).
+   shells while it carries it (breaks the one-trigger rule). A visible
+   change in how such an enemy plays: while it carries the hammer it is a
+   close-range threat only - it never fires the hammer at range and fires
+   no shells - until its six blasts are spent.
 9. **A hunter pins the frog** rather than doing nothing with it - six
    blasts, then shells. *For Oto.*
 10. **The tell commits**: it goes off along its facing even if the seat
@@ -1128,7 +1149,14 @@ Wire:
     a stage-2 replay needs how long, and a replica counts both down.
 16. **The press show generalises the beam's claim** (`presses` for
     `beams`) rather than adding a second claim beside it.
-17. **Crate ink sky blue** (`#46C3F2`). *For Oto*, with a screenshot of the
+17. **A sonic hit says so** (`HitCause` on `Event::Hit` and the wire)
+    rather than being a new event: everything that reads a hit - the round's
+    stats, the hit arc, the hull flash, the fish - keeps reading it, and
+    only what would draw fire asks the cause.
+18. **Lamp posts stand**: a lamp post's light is a rule, and putting it out
+    is the EMP's. Only glass breaks by sound; a seat's lanterns, which a
+    blast breaks too, break.
+19. **Crate ink sky blue** (`#46C3F2`). *For Oto*, with a screenshot of the
     crate beside the other twelve in Phase 2.
 
 ### Not in this PR
@@ -1139,6 +1167,11 @@ Wire:
 - A tell's pulse on the minimap - the arrow is the warning; the minimap
   shows terrain and marks, a follow-up if play-tests want it.
 - Sound effects - the game has no audio yet.
+- Breaking lamp posts - a lamp post's light is a rule
+  (`lamp_reveal_px`), and putting the lights out is the EMP's (BB-38's "at
+  11"); the hammer leaves them standing.
+- Throwing the rubble in the cone again, as a blast does - unasked for, and
+  it would change round state (`Game::decals`) for a cosmetic.
 - Shoving wrecks, deflecting shots in flight, putting fires out, breaking
   crates, stunning towers (the EMP's) - each would be a mechanic of its own
   beyond the issue.
