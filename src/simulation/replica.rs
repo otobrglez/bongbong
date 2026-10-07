@@ -74,12 +74,6 @@ pub struct DrawableTank {
     pub charge: u32,
 }
 
-/// One seeker missile as it is drawn: where it is, how high, and the two
-/// angles the sprite and its shadow point along.
-///
-/// The exhaust flicker is deliberately absent. It cycles off `Missile::age`,
-/// which a replica runs itself, so holding the two sides to it would pin a
-/// cosmetic the wire does not carry on purpose.
 /// One FPV drone as the picture shows it (`fpv::Drone`): where it is, how
 /// high, which way, its stage, the halo slot it left and whose it is. Its
 /// clocks - the rotors', the lamp's - are the replica's own.
@@ -102,6 +96,12 @@ pub struct DrawableDrone {
     pub lock: u16,
 }
 
+/// One seeker missile as it is drawn: where it is, how high, and the two
+/// angles the sprite and its shadow point along.
+///
+/// The exhaust flicker is deliberately absent. It cycles off `Missile::age`,
+/// which a replica runs itself, so holding the two sides to it would pin a
+/// cosmetic the wire does not carry on purpose.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DrawableMissile {
     pub id: u32,
