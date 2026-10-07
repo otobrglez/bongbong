@@ -1271,32 +1271,91 @@ Wire:
   from cover where they find it.
 - **Armed enemies**: the same sweeps with `--tuning armed.json`,
   `{"enemy_special_weapon_chance": 1.0, "enemy_special_weapon_fpv_share":
-  1.0}` - every enemy that would carry a special spawns with drones.
+  1.0}` - every enemy that would carry a special spawns with drones; the
+  mix (`0.5`/`0.5`), and armed at night (`"weather_override": 1`) and with
+  the commander (`"c2_enabled": true`).
 - The probe's tank line gains `fpv=` (drones in the halo) and `out=` (in the
   air); its fire tuple counts the drones, so a launch is a trigger pull for
-  `FIRED_RECENTLY_FRAMES`. A tank holding to watch its drone (`"watch"`) or
-  under canopy from one (`"canopy"`) is a deliberate hold
-  (`TankSnapshot::special_why`, `TankSnapshot::air`), not a stall, a stale
-  start, low progress or jitter - beside the hammer's tell and skid, the
-  EMP's disabled state and the rail's charge and edge hold. Moving to cover
-  or backing off is driving it asked for.
-- **`offbox-fire` gains the drones' lock**, beside the missiles':
-  `drone_locks_offbox` counts every enemy `DroneLaunched` locked on a seat
-  whose launcher stood outside that seat's box that frame (`--json-out`
-  `fire`), and each is an `offbox-fire` anomaly; `shots_at_seats_offbox`
-  reads `shot_at_seat` at the decision as ever. `seat-hits-offbox` (a seat's
-  hit on an enemy outside the seat's box - informational) may move with the
-  crate: a seat's drone chases its lock out of the box, which is the seat's
-  own drone.
+  `FIRED_RECENTLY_FRAMES`. A tank standing to watch its drone (`"watch"`)
+  or under a crown from one (`"canopy"`) is a deliberate hold (`HOLDS`'
+  `air` row, `TankSnapshot::air_hold`). Moving to cover or backing off is
+  driving it asked for.
+- **`offbox-fire` reads the drones' locks**, beside the missiles':
+  `drone-locks-on-seats` counts every enemy `DroneLaunched` locked on a
+  seat and `drone-locks-offbox` the ones whose launcher stood outside that
+  seat's box (`--json-out` `fire`), each an `offbox-fire` anomaly;
+  `shots_at_seats_offbox` reads `shot_at_seat` at the decision as ever.
+- **Arrival**: a drone launched at a seat or at the players' frog counts as
+  the tank's arrival for `never-arrived`, as coming within the attack range
+  does - a swarm tank fights from inside the box, out of the seat's face.
 - The `air` tier is not exercised by the probe's scenarios (no scenario
-  fires the seat's special); it is held by its `mechanics_tests`.
-- **The bar**: every crate and armed run within the defaults' ceilings,
-  `offbox-fire` 0. An exceedance is read round by round from its `ANOMALY`
-  lines; one the swarm's own action causes - a tank stranded on its way to
-  cover, holding where it can never launch, spinning between back-off and
-  cover, piling up at a spot, launching from off the box - is fixed, not
-  re-baselined. Recorded here in Phase 2: the totals at the defaults, with
-  the crate and armed, and what moved.
+  fires the seat's special); it is held by its tests (§10).
+
+**Recorded 2026-10-07** (debug build, `--rounds 10 --seed 1000`; the 9
+fixtures at 1800 frames, the 7 field maps at 3600; minutes of round in
+brackets):
+
+| Run | Fixtures | Fields |
+|---|---|---|
+| Defaults | border-stuck 4, jitter 32, spin 3, churn 34, clustering 10, pile-up 6 (11.1) - every map's output byte for byte the rail's reviewed head's (`21c4a6b`), the two new zero counters aside | border-stuck 11, jitter 108, spin 24, churn 83, clustering 12, wall-grind 1, pile-up 8 (18.9) - byte for byte |
+| `--crate fpv_swarm` | as the defaults (no weapon slot) | spin 24, clustering 30, pile-up 18, wall-grind 1, never-arrived 1 (21.7) |
+| Mix: chance 0.5, swarm share 0.5 | spin 4, clustering 7, pile-up 3 (13.2) | spin 11, clustering 2, wall-grind 2, stall 1 (18.3) |
+| Every enemy armed, by day | spin 8, clustering 3 (26.6) | spin 22, clustering 35, pile-up 17, never-arrived 3 (28.6) |
+| Every enemy armed, night | spin 7, clustering 8, pile-up 3, wall-grind 1 (27.2) | spin 28, clustering 60, pile-up 21, tank-grind 1, wall-grind 1 (31.0) |
+| Every enemy armed, commander on | spin 6, clustering 4, pile-up 3, tank-grind 1 (26.8) | spin 17, clustering 35, pile-up 15, tank-grind 2, stall 2, low-progress 1 (28.3) |
+| Yardstick: the shells pack, `--mission destroy`, `player_armor_factor` 0.1 | spin 22, clustering 95, pile-up 65, tank-grind 12, never-arrived 7, low-progress 8 (44.1) | spin 44, clustering 109, pile-up 74, tank-grind 18, low-progress 8, never-arrived 1, stall 1 (66.6) |
+
+`offbox-fire` 0 in every run, `drone-locks-offbox` 0 of 1371 drone locks on
+seats (armed, fixtures) and of 658 (fields), and no shot or hit on a seat
+from off its box. The default map's 30-round sweep (pinned at seed 1000),
+`waves-basic`, the advance scenario on maze and hedge-maze and two seats on
+the default map and on archipelago are byte for byte the base's too. The
+perfect defence (`just probe-defend`) is a release build and was not run:
+no swarm is on a map it plays.
+
+**The armed rounds run long**: the swarm's burst is 8 at the centre, so an
+AFK seat's round averages 18 s on the fixtures and 25 s on the fields
+against the defaults' 7 and 16 (§12, "Not in this PR"), and the yardstick
+is the shells pack held to as long a round. Per ten minutes of
+round the armed swarm's spins (3.0 fixtures, 7.7 fields) sit by the
+yardstick's (5.0, 6.6) and the defaults' (2.7, 12.7); its clustering (1.1,
+12.2) and pile-ups (0, 5.9) under the yardstick's (21.5 and 14.7, 16.4 and
+11.1) - a swarm tank keeps its distance; and the earlier weapons' armed
+packs (their docs' §11) ran stall 2, tank-grind 1, spin 24 (EMP, fixtures,
+42.4 min) and spin 23, clustering 23, pile-up 12, never-arrived 3 (rail,
+fields, 17.2 min).
+
+**Read round by round** (every anomaly replayed on the window at its seed,
+the AI tiers its tank ran over the frames before):
+
+- **The swarm's own bugs, fixed** (decision 29): a tank in hedge-maze
+  0x3ec went back and forth between "to cover" and the chase at the edge
+  of the seat's box for twelve seconds with six drones unflown (the way to
+  its cover spot left the box), then ground into another tank in a corridor
+  (tank-grind 2, low-progress 2); one in tight-corridors 0x3ea did the same
+  between a cover spot nearest by line but a long walk away and the chase
+  (never-arrived); one on archipelago 0x3e8, commander on, backed off into
+  a shore for four seconds (low-progress); one on harbor-lights 0x3eb,
+  commander on, made for a cover cell another tank stood on (tank-grind).
+  Cover and the tree spot are searched by walk, moving for a place has a
+  patience, and a cover cell is never one another hull stands on.
+- **What remains**: hedge-maze 0x3eb's three never-arrived (two fleeing
+  from ram damage, one patrolling, the seat in a corner no enemy is
+  alerted to - the round the EMP's and the rail's armed packs leave the
+  same way); harbor-lights 0x3f0 with the commander on, two swarm tanks out
+  of the seat's box seeking the same shield crate, pressing into each other
+  and taking each other's ram damage until they flee (tank-grind 2, stall
+  2, low-progress 1 - the seek tiers' contention for one crate; a tank with
+  no seat in its box has nothing to fight with, so it takes the seek tiers
+  where a shells tank would be attacking - a follow-up for the seek tiers,
+  §12); and tanks on shells (a hunter's chase on harbor-lights 0x3ef with
+  the crate and at night, a plasma hunter's attack on archipelago 0x3ee in
+  the mix, a shells tank's flee on towers 0x3ed with the commander) - none
+  of them the swarm's.
+- **Clustering and pile-up** rise on the fields with the crate (30 and 18
+  against the defaults' 12 and 8) and at night (60 and 21): a swarm tank
+  stands to launch and to watch, so the pack behind it bunches, as the
+  rail's did; per ten minutes they sit under the yardstick's.
 
 ## 12. Interactions, decisions, what is left out
 
@@ -1498,6 +1557,11 @@ Wire:
   `NativeTransport` (`server/tests/round.rs`); the client's path is held by
   `round.rs`'s and the rig's tests, and the room server treats the drones
   as one more family in the snapshot it encodes once.
+- The seek tiers contending for one crate: two tanks wanting the same
+  shield press into each other and ram each other down (harbor-lights
+  0x3f0, armed, commander on, §11) - the seek tiers' rule, not the
+  swarm's, which a swarm tank out of the seat's box reaches more often
+  than one with a gun to fight with. A follow-up.
 - The burst's damage: 8 at the centre (§1) - a moving tank takes about a
   quarter of it, so six drones are harassment rather than a kill on their
   own. As designed; a feel question for Oto (§11's rounds run long).
