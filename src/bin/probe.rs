@@ -1268,11 +1268,14 @@ fn check_anomalies(
         // A drone launched at a seat or at the players' frog is
         // engagement too: the tank fights it from where it stands - inside
         // the seat's sight box, out of its face (docs/fpv-swarm.md
-        // "Probe").
+        // "Probe"); so is a rod called on anything, which a rod tank does
+        // from its stand-off or a hunter from round its quarry
+        // (docs/rod-from-god.md "Probe").
         let launched_at_seat = game.events().iter().any(|e| match *e {
             Event::DroneLaunched { slot, target, frog, .. } if slot == tank.slot => {
                 frog || target.is_some_and(|seat| seat < game.first_enemy_slot())
             }
+            Event::RodCalled { slot, .. } => slot == tank.slot,
             _ => false,
         });
         if track.time_to_engage.is_none()
