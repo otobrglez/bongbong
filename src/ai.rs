@@ -144,8 +144,8 @@ pub struct EmpSense {
 pub struct Danger {
     pub shape: DangerShape,
     /// The owner slot of the tank whose weapon it is: that tank never shies
-    /// from it.
-    pub owner: usize,
+    /// from it. `None` for one nobody owns, which every enemy keeps out of.
+    pub owner: Option<usize>,
 }
 
 /// A danger's ground (`Danger`).
@@ -164,18 +164,63 @@ impl Danger {
         }
     }
 
-    /// The nearest point `clear` px outside it from `p`: along the line
-    /// from its middle through `p`, or along `facing` from its middle when
-    /// `p` stands on it.
-    pub fn exit(&self, p: Position, clear: f32, facing: Dir) -> Position {
+    /// The points `clear` px outside it nearest `p`, best first: the
+    /// nearest, then ones turned further and further from it, for when the
+    /// nearest lies off the field or in a wall (`Brain::way_out` takes the
+    /// first it can reach). `from` is the tank asking and `facing` its
+    /// facing, read only where `p` gives no way.
+    pub fn exits(&self, p: Position, clear: f32, from: Position, facing: Dir) -> [Position; 9] {
         match self.shape {
+            // Along the line from its middle through `p` - through `from`
+            // when `p` stands on the middle (a seat steered at is the middle
+            // of its own danger), along `facing` when both do - then that
+            // line turned 30, 60, 90 and 120 degrees each way, never back
+            // through the middle.
             DangerShape::Disc { at, radius } => {
-                let away = Vec2::new(p.x - at.x, p.y - at.y);
-                let len = away.length();
-                let dir = if len > 1e-3 { Vec2::new(away.x / len, away.y / len) } else { facing.vec() };
-                Position::new(at.x + dir.x * (radius + clear), at.y + dir.y * (radius + clear))
+                const TURNS: [(f32, f32); 9] = [
+                    (1.0, 0.0),
+                    (0.866_025_4, 0.5),
+                    (0.866_025_4, -0.5),
+                    (0.5, 0.866_025_4),
+                    (0.5, -0.866_025_4),
+                    (0.0, 1.0),
+                    (0.0, -1.0),
+                    (-0.5, 0.866_025_4),
+                    (-0.5, -0.866_025_4),
+                ];
+                let unit = |q: Position| {
+                    let away = Vec2::new(q.x - at.x, q.y - at.y);
+                    let len = away.length();
+                    (len > 1.0).then(|| Vec2::new(away.x / len, away.y / len))
+                };
+                let d = unit(p).or_else(|| unit(from)).unwrap_or_else(|| facing.vec());
+                let reach = radius + clear;
+                TURNS.map(|(c, s)| Position::new(at.x + (d.x * c - d.y * s) * reach, at.y + (d.x * s + d.y * c) * reach))
             }
         }
+    }
+
+    /// The points `clear` px outside it on the axes through its middle, in
+    /// `Dir::ALL` order: where a tank fighting what stands at the middle
+    /// can wait lined up on it.
+    pub fn posts(&self, clear: f32) -> [Position; 4] {
+        match self.shape {
+            DangerShape::Disc { at, radius } => {
+                Dir::ALL.map(|d| Position::new(at.x + d.vec().x * (radius + clear), at.y + d.vec().y * (radius + clear)))
+            }
+        }
+    }
+
+    /// The point it is drawn round (a disc's middle).
+    pub fn middle(&self) -> Position {
+        match self.shape {
+            DangerShape::Disc { at, .. } => at,
+        }
+    }
+
+    /// The nearest point `clear` px outside it from `p` (`exits`' first).
+    pub fn exit(&self, p: Position, clear: f32, from: Position, facing: Dir) -> Position {
+        self.exits(p, clear, from, facing)[0]
     }
 }
 
@@ -458,6 +503,9 @@ pub struct Ai {
     /// the tank stands `enemy_danger_clear_px` outside it, so the edge is
     /// never a place to jitter.
     dodging: bool,
+    /// Waiting at the spot outside a danger its steering target was moved
+    /// to (`act_attack`) this tick: a hold of its own choosing.
+    kept_out: bool,
 }
 
 /// The memory a tank carries only on a field map
@@ -537,6 +585,8 @@ pub struct AiSnapshot {
     pub down: bool,
     /// Backing out of a danger (`Ai::dodging`).
     pub dodging: bool,
+    /// Waiting outside a danger (`Ai::kept_out`).
+    pub kept_out: bool,
     /// `Ai::target_player`.
     pub target_player: u8,
     /// The seat the last tick's trigger pull was aimed at (`Ai::shot_at_seat`).
@@ -585,6 +635,7 @@ impl Default for Ai {
             down: false,
             clearing: None,
             dodging: false,
+            kept_out: false,
         }
     }
 }
@@ -762,6 +813,7 @@ impl Ai {
 
         self.special_why = None;
         self.clearing = None;
+        self.kept_out = false;
         let mut bb = Brain {
             me,
             player,
@@ -868,6 +920,7 @@ impl Ai {
             special: self.special_why,
             down: self.down,
             dodging: self.dodging,
+            kept_out: self.kept_out,
             target_player: self.target_player,
             shot_at_seat: self.shot_at_seat,
             field_alert: self.field.alert.map(|p| (p.x, p.y)),
@@ -983,6 +1036,11 @@ impl Ai {
     /// any (`SpecialUse::Clear`): what the collect pass hands the commander.
     pub(crate) fn clearing(&self) -> Option<f32> {
         self.clearing
+    }
+
+    /// Whether it waited outside a danger this tick (`kept_out`).
+    pub(crate) fn kept_out(&self) -> bool {
+        self.kept_out
     }
 
     /// Choose a heading toward `target` - or, if pathfinding can't reach
@@ -1874,7 +1932,7 @@ impl Brain<'_> {
         let me = self.me.position;
         let clear = tuning().enemy_danger_clear_px;
         let mine = self.me.owner_slot();
-        let others = self.dangers.iter().filter(|d| d.owner != mine);
+        let others = self.dangers.iter().filter(|d| d.owner != Some(mine));
         if self.ai.dodging {
             return others.copied().find(|d| d.depth(me) > -clear);
         }
@@ -1891,16 +1949,41 @@ impl Brain<'_> {
     fn out_of_danger(&self, p: Position) -> Position {
         let mine = self.me.owner_slot();
         let facing = Dir::from_rotation(self.me.rotation).unwrap_or(Dir::Up);
-        match self.dangers.iter().find(|d| d.owner != mine && d.depth(p) > 0.0) {
-            Some(d) => d.exit(p, tuning().enemy_danger_clear_px, facing),
+        match self.dangers.iter().find(|d| d.owner != Some(mine) && d.depth(p) > 0.0) {
+            Some(d) => self.way_out(d, p, tuning().enemy_danger_clear_px + OBSTACLE_GRID_SIZE, facing),
             None => p,
         }
+    }
+
+    /// The first of `danger`'s exits from `p` this tank can drive to - on
+    /// the field, in a usable cell, joined to where it stands - else the
+    /// nearest. A disc round a seat by the field's edge has its nearest
+    /// exit off the field, and steering at that wanders.
+    fn way_out(&self, danger: &Danger, p: Position, clear: f32, facing: Dir) -> Position {
+        let on_field = |q: Position| q.x > 0.0 && q.y > 0.0 && q.x < self.width && q.y < self.height;
+        let reachable = |q: &Position| on_field(*q) && self.grid.usable(*q) && self.grid.connected(self.me.position, *q);
+        // A seat steered at stands at the middle of its own danger: wait
+        // lined up on it, inside its sight box where a post is (a shot is
+        // fired from there), then the nearest.
+        if p.distance_to(danger.middle()) < 1.0 {
+            let me = self.me.position;
+            let mut posts = danger.posts(clear);
+            posts.sort_by(|a, b| {
+                let key = |q: &Position| (!in_sight_box(p, *q), me.distance_to(*q));
+                key(a).partial_cmp(&key(b)).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            if let Some(post) = posts.iter().find(|q| reachable(q)) {
+                return *post;
+            }
+        }
+        let exits = danger.exits(p, clear, self.me.position, facing);
+        exits.iter().copied().find(reachable).unwrap_or(exits[0])
     }
 
     /// Whether `p` lies inside a danger this tank does not own.
     fn in_danger(&self, p: Position) -> bool {
         let mine = self.me.owner_slot();
-        self.dangers.iter().any(|d| d.owner != mine && d.depth(p) > 0.0)
+        self.dangers.iter().any(|d| d.owner != Some(mine) && d.depth(p) > 0.0)
     }
 
     /// Where an EMP closer closes in on `around` to: on the line from it
@@ -2742,8 +2825,15 @@ fn act_dodge(b: &mut Brain) -> Status {
     let Some(danger) = b.danger_here() else { return Status::Failure };
     b.reset_aim();
     let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
-    let out = danger.exit(b.me.position, tuning().enemy_danger_clear_px + OBSTACLE_GRID_SIZE, facing);
-    b.intent.move_dir = Some(b.steer(out));
+    let me = b.me.position;
+    let out = b.way_out(&danger, me, tuning().enemy_danger_clear_px + OBSTACLE_GRID_SIZE, facing);
+    // Straight onto the route out, whichever way it leaves: steering's
+    // heading commitment never takes a point behind the tank (see
+    // `steer_toward`), and a dodge is most often a reversal.
+    let step = b.grid.next_step(me, out).unwrap_or(out);
+    let dir = Dir::toward(me, step);
+    b.ai.commit(dir);
+    b.intent.move_dir = Some(dir);
     Status::Success
 }
 
@@ -2914,7 +3004,19 @@ fn act_attack(b: &mut Brain) -> Status {
         // group of attackers spreads out instead of piling onto the same
         // point - see `Brain::engage_point`.
         b.reset_aim();
-        b.intent.move_dir = Some(b.steer(b.engage_point()));
+        let raw = b.engage_target.unwrap_or(b.target);
+        let to = b.engage_point();
+        if to != raw && b.me.position.distance_to(to) <= OBSTACLE_GRID_SIZE * 0.5 {
+            // Kept out of a danger at the spot it was moved to: wait there
+            // facing the fight rather than driving on past it, which
+            // steering's commitment would (`steer_toward`), into the very
+            // danger.
+            b.ai.kept_out = true;
+            b.intent.move_dir = None;
+            b.intent.face = Some(Dir::toward(b.me.position, raw));
+        } else {
+            b.intent.move_dir = Some(b.steer(to));
+        }
     }
     Status::Success
 }
@@ -3160,7 +3262,7 @@ mod role_tests {
                 [None; 4],
                 tuning().enemy_view_range,
                 &SpecialSense::None,
-            &[],
+                &[],
             );
             ai.snapshot().last_action
         };
@@ -3814,5 +3916,163 @@ mod hammer_tests {
             }
         }
         assert!(fired, "it shouts the pane down");
+    }
+}
+
+/// The EMP's rule and the dangers (docs/emp-burst.md "AI"), on an open
+/// field: what `enemy_phase` measured is handed in as an `EmpSense` and a
+/// list of `Danger`s, so the rule is tested without a world.
+#[cfg(test)]
+mod emp_rule_tests {
+    use super::*;
+    use rand::SeedableRng;
+
+    const ME: Position = Position::new(640.0, 360.0);
+
+    /// An enemy facing up with the EMP, its fire timer out.
+    fn emp_tank() -> Tank {
+        let mut me = Tank { owner: crate::shell::Owner::Enemy(2), ..Tank::default() };
+        me.position = ME;
+        me.rotation = 0.0;
+        me.emp_charges = 3;
+        me
+    }
+
+    fn think(ai: &mut Ai, me: &Tank, sense: SpecialSense, dangers: &[Danger], seat: Position) -> Intent {
+        let mut player = Tank::default();
+        player.position = seat;
+        let grid = Grid::build(1280.0, 720.0, 48.0, 0.0, std::iter::empty());
+        let movers = [
+            Mover { position: seat, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
+            Mover { position: me.position, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
+        ];
+        let mut rng = SmallRng::seed_from_u64(7);
+        ai.think(me, &player, seat, None, 1280.0, 720.0, 1.0 / 60.0, &movers, 1, &grid, &mut rng, None, None, &[], true, true, false, [None; 4], tuning().enemy_view_range, &sense, dangers)
+    }
+
+    fn ready() -> Ai {
+        Ai { fire_timer: 0.0, ..Ai::with_role(Role::Player) }
+    }
+
+    fn sense(value: i32) -> SpecialSense {
+        SpecialSense::Emp(EmpSense { value, at_seat: (value > 0).then_some(0), ..EmpSense::default() })
+    }
+
+    /// A seat in its ring is worth a pulse at the default threshold: it
+    /// pulls the trigger facing the way it stands, on the weapon's own
+    /// interval, and names the seat.
+    #[test]
+    fn a_seat_in_the_ring_is_pulsed() {
+        let seat = Position::new(ME.x - 100.0, ME.y);
+        let mut ai = ready();
+        let intent = think(&mut ai, &emp_tank(), sense(tuning().emp_ai_fire_value), &[], seat);
+        assert!(intent.fire, "{intent:?}");
+        assert_eq!((intent.face, ai.special_why), (Some(Dir::Up), Some("pulse")));
+        assert_eq!(ai.fire_timer, tuning().emp_ai_fire_interval);
+        assert_eq!(ai.shot_at_seat(), Some(0));
+    }
+
+    /// Never from outside the seat's sight box, beside its own side's
+    /// tower, or into an ally with the commander off; never a dummy.
+    #[test]
+    fn it_holds_off_box_beside_its_tower_into_an_ally_and_as_a_dummy() {
+        let seat = Position::new(ME.x - 100.0, ME.y);
+        let v = tuning().emp_ai_fire_value;
+        let cases = [
+            ("off box", EmpSense { value: v, at_seat: Some(0), off_box: true, ..EmpSense::default() }, false),
+            ("tower", EmpSense { value: v, at_seat: Some(0), friendly_tower: true, ..EmpSense::default() }, false),
+            ("ally", EmpSense { value: v, at_seat: Some(0), friends: true, ..EmpSense::default() }, false),
+            ("dummy", EmpSense { value: v, at_seat: Some(0), ..EmpSense::default() }, true),
+        ];
+        for (why, s, dummy) in cases {
+            let mut ai = ready();
+            ai.frog_only = dummy;
+            for _ in 0..60 {
+                let intent = think(&mut ai, &emp_tank(), SpecialSense::Emp(s), &[], seat);
+                assert!(!intent.fire, "{why}: {intent:?}");
+            }
+        }
+    }
+
+    /// The generic tiers never pull the trigger on the EMP: lined up on a
+    /// seat in range with nothing in its ring, it does not fire, where the
+    /// same tank on shells does.
+    #[test]
+    fn the_generic_tiers_never_fire_the_emp() {
+        let seat = Position::new(ME.x - 260.0, ME.y);
+        let (mut emp_fired, mut shell_fired) = (false, false);
+        let (mut a, mut b) = (ready(), ready());
+        let mut shells = emp_tank();
+        shells.emp_charges = 0;
+        shells.rotation = 270.0;
+        let mut emp = emp_tank();
+        emp.rotation = 270.0;
+        for _ in 0..240 {
+            emp_fired |= think(&mut a, &emp, sense(0), &[], seat).fire;
+            shell_fired |= think(&mut b, &shells, SpecialSense::None, &[], seat).fire;
+        }
+        assert!(shell_fired, "the shells tank fires");
+        assert!(!emp_fired, "the EMP tank does not");
+    }
+
+    /// A closer goes looking only for a seat worth it - the approach
+    /// threshold - and a tank that is not one leaves it to the tree.
+    #[test]
+    fn a_closer_approaches_only_a_seat_worth_it() {
+        let seat = Position::new(ME.x - 300.0, ME.y);
+        let approach = tuning().emp_ai_approach_value;
+        let closer = |target_value| SpecialSense::Emp(EmpSense { target_value, closer: true, ..EmpSense::default() });
+        let mut ai = ready();
+        think(&mut ai, &emp_tank(), closer(approach - 1), &[], seat);
+        assert_eq!(ai.special_why, None, "a bare seat by day: the tree's");
+        let mut ai = ready();
+        let intent = think(&mut ai, &emp_tank(), closer(approach), &[], seat);
+        assert_eq!((ai.special_why, intent.move_dir), (Some("approach"), Some(Dir::Left)));
+        let crowded = SpecialSense::Emp(EmpSense { target_value: approach, closer: true, target_crowded: true, ..EmpSense::default() });
+        let mut ai = ready();
+        think(&mut ai, &emp_tank(), crowded, &[], seat);
+        assert_eq!(ai.special_why, None, "a seat already crowded by its own side");
+    }
+
+    /// Inside a danger that is not its own a tank backs out - away from its
+    /// middle, whichever way it was heading - and stays latched until it
+    /// is clear; its own danger it ignores; one nobody owns everybody
+    /// keeps out of.
+    #[test]
+    fn a_tank_backs_out_of_a_danger_not_its_own() {
+        let seat = Position::new(ME.x - 400.0, ME.y);
+        let disc = |owner| Danger { shape: DangerShape::Disc { at: Position::new(ME.x - 60.0, ME.y), radius: 200.0 }, owner };
+        for (owner, out) in [(Some(0), true), (Some(2), false), (None, true)] {
+            let mut ai = ready();
+            ai.committed_dir = Some(Dir::Left);
+            let intent = think(&mut ai, &emp_tank(), SpecialSense::None, &[disc(owner)], seat);
+            if out {
+                assert_eq!((ai.last_action, intent.move_dir), (Some("dodge"), Some(Dir::Right)), "{owner:?}");
+                assert!(ai.dodging);
+            } else {
+                assert_ne!(ai.last_action, Some("dodge"), "its own: {owner:?}");
+            }
+        }
+        // Latched: just outside the edge it is still backing out.
+        let mut ai = ready();
+        ai.dodging = true;
+        let mut me = emp_tank();
+        me.position = Position::new(ME.x - 60.0 + 200.0 + tuning().enemy_danger_clear_px * 0.5, ME.y);
+        let intent = think(&mut ai, &me, SpecialSense::None, &[disc(Some(0))], seat);
+        assert_eq!((ai.last_action, intent.move_dir), (Some("dodge"), Some(Dir::Right)));
+    }
+
+    /// A disc's exits: straight out first, turned further each way after,
+    /// and from the tank's side when the point is the middle; its posts on
+    /// the axes.
+    #[test]
+    fn a_discs_exits_and_posts() {
+        let d = Danger { shape: DangerShape::Disc { at: Position::new(0.0, 0.0), radius: 100.0 }, owner: None };
+        let exits = d.exits(Position::new(50.0, 0.0), 10.0, Position::new(0.0, 0.0), Dir::Up);
+        assert!(exits[0].distance_to(Position::new(110.0, 0.0)) < 1e-3);
+        assert!(exits.iter().all(|e| (e.length() - 110.0).abs() < 1e-3 && e.x > -60.0), "never back through the middle: {exits:?}");
+        let from_middle = d.exits(Position::new(0.0, 0.0), 10.0, Position::new(0.0, 40.0), Dir::Up);
+        assert!(from_middle[0].distance_to(Position::new(0.0, 110.0)) < 1e-3, "out on the tank's side");
+        assert_eq!(d.posts(10.0), Dir::ALL.map(|dir| Position::new(dir.vec().x * 110.0, dir.vec().y * 110.0)));
     }
 }

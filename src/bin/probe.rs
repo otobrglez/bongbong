@@ -1010,9 +1010,11 @@ impl TankTrack {
 /// The states a tank holds still or slides in on purpose, by name: a
 /// field map's enemy nothing has woken (`simulation::field`: far from every
 /// seat, it does not think), a special's wind-up and a knock off its tracks
-/// (docs/sonic-hammer.md). Not a stall or a stale start. A weapon that
+/// (docs/sonic-hammer.md), and a wait outside a danger it is kept out of
+/// (docs/emp-burst.md). Not a stall or a stale start. A weapon that
 /// holds a tank another way adds its row.
-const HOLDS: &[(&str, fn(&TankSnapshot) -> bool)] = &[("asleep", |t| t.asleep), ("tell", |t| t.tell), ("skid", |t| t.skidding)];
+const HOLDS: &[(&str, fn(&TankSnapshot) -> bool)] =
+    &[("asleep", |t| t.asleep), ("tell", |t| t.tell), ("skid", |t| t.skidding), ("kept out", |t| t.kept_out)];
 
 /// The states a tank's motion is not its own in, by name: an EMP has its
 /// brain off and it coasts on its last intent (docs/emp-burst.md). While

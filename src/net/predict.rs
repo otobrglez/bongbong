@@ -2147,6 +2147,50 @@ mod tests {
         assert!(!predictor.confirm_press(WeaponKind::SonicHammer, tick), "claimed once");
     }
 
+    /// The EMP is drawn on the press like the hammer - its ring from the
+    /// predicted pivot - and takes the seat's special offline on the press
+    /// (`offline_left`), so the next press is drawn as a shell; once the
+    /// offline is over a press pulses again.
+    #[test]
+    fn an_emp_pulse_is_drawn_on_the_press_and_takes_the_special_offline() {
+        let mut predictor = Predictor::new(round(), 0, 0);
+        predictor.set_shots_enabled(true);
+        let patch = TankPatch { emp_charges: Some(2), ..Default::default() };
+        predictor.sandbox.debug_set_tank(0, &patch).expect("the seat's tank");
+        let (pivot, _, _) = predictor.motion().expect("a hull");
+        let tick = predictor.step(press());
+        let shows = predictor.take_press_shows();
+        let [PressShow::Emp(pulse)] = shows.as_slice() else { panic!("one EMP show: {shows:?}") };
+        assert!(pulse.origin.distance_to(pivot) < 4.0, "from the hull's pivot");
+        assert!(predictor.offline_left() > 0.0, "its special offline on the press");
+        let ticks = (tuning().player_fire_interval / PHYSICS_FIXED_DT).ceil() as usize;
+        idle_ticks(&mut predictor, ticks + 1);
+        predictor.step(press());
+        assert!(predictor.take_press_shows().is_empty(), "no second pulse while offline");
+        assert_eq!(predictor.provisional_count(), 1, "the press is a shell");
+        predictor.note_fired(WeaponKind::Emp, tick);
+        assert!(predictor.confirm_press(WeaponKind::Emp, tick), "the room's ring is the drawn one");
+        assert!(!predictor.confirm_press(WeaponKind::Emp, tick), "claimed once");
+        idle_ticks(&mut predictor, (tuning().emp_disable_seconds / PHYSICS_FIXED_DT).ceil() as usize);
+        assert_eq!(predictor.offline_left(), 0.0);
+        predictor.step(press());
+        assert!(matches!(predictor.take_press_shows().as_slice(), [PressShow::Emp(_)]), "online again, it pulses");
+    }
+
+    /// A pulse the room never fires (its `Fired` never comes) gives the
+    /// special back when the press expires: the offline was the press's.
+    #[test]
+    fn a_refused_pulse_gives_the_special_back() {
+        let mut predictor = Predictor::new(round(), 0, 0);
+        predictor.set_refusal_after(PROVISIONAL_SECONDS);
+        let patch = TankPatch { emp_charges: Some(2), ..Default::default() };
+        predictor.sandbox.debug_set_tank(0, &patch).expect("the seat's tank");
+        predictor.step(press());
+        assert!(predictor.offline_left() > 0.0);
+        predictor.advance_shots(PROVISIONAL_SECONDS + 0.1, |_, _, _, _| None);
+        assert_eq!(predictor.offline_left(), 0.0, "the refused press's offline is lifted");
+    }
+
     /// A knock the room sends an owned hull (`Shoved` with a skid) takes
     /// the sandbox's hull off its tracks: it slides on the shove and the
     /// stick does not drive it until the skid is over.

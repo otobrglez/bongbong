@@ -2589,4 +2589,100 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
             }
         }
     }
+
+    /// The seat's tank in `game`, armed with the EMP.
+    fn emp_seat(game: &mut Game) {
+        let patch = crate::simulation::debug::TankPatch { emp_charges: Some(3), ..Default::default() };
+        game.debug_set_tank(0, &patch).expect("the seat's tank");
+    }
+
+    /// A seat's pulse reaches the replica as its `EmpPulse`: the replica
+    /// runs the same ring out from the same point on its own clock.
+    #[test]
+    fn an_emp_pulse_reaches_the_replica() {
+        let mut game = quiet_round(DEFAULT_MAP, 0xB0B5, 0);
+        emp_seat(&mut game);
+        let mut replica = welcome_through_the_codec(&game);
+        let (w, h) = game.map.field_size();
+        game.update(Input::single(Intent { fire: true, ..Intent::default() }), PHYSICS_FIXED_DT, w, h);
+        let wire = enc::snapshot(&game, [0; MAX_SEATS]);
+        assert!(wire.events.iter().any(|e| matches!(e, WireEvent::EmpPulse { slot: 0, .. })), "the pulse is on the wire");
+        let Msg::Snapshot(wire) = decode(&encode(&Msg::Snapshot(wire))).expect("decodes") else { panic!("kind") };
+        snapshot(&mut replica, &wire);
+        assert_eq!(replica.emp_pulses.len(), 1, "the replica draws the ring");
+        assert!(game.emp_pulses[0].origin.distance_to(replica.emp_pulses[0].origin) <= 0.25);
+        assert!(!replica.emp_pulses[0].live, "a replica's ring strikes nothing");
+        let life = tuning().emp_radius_px / tuning().emp_ring_speed + tuning().emp_ring_seconds;
+        for _ in 0..((life / PHYSICS_FIXED_DT) as usize + 2) {
+            replica.tick_presentation(PHYSICS_FIXED_DT);
+        }
+        assert!(replica.emp_pulses.is_empty(), "the ring ran out");
+    }
+
+    /// A pulse this client drew on the press is not drawn again when the
+    /// room's `EmpPulse` arrives; one it did not draw is.
+    #[test]
+    fn an_emp_pulse_this_client_drew_is_not_drawn_again() {
+        let game = quiet_round(DEFAULT_MAP, 0xB0B5, 2);
+        let enemy = game.first_enemy_slot() as u16;
+        let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
+        snap.events = vec![
+            WireEvent::Fired { slot: 0, weapon: WeaponKind::Emp, input_tick: 3 },
+            WireEvent::EmpPulse { slot: 0, x: 400, y: 400 },
+            WireEvent::Fired { slot: enemy, weapon: WeaponKind::Emp, input_tick: 0 },
+            WireEvent::EmpPulse { slot: enemy, x: 2400, y: 1200 },
+        ];
+        let mut drawn = welcome_through_the_codec(&game);
+        snapshot_with(&mut drawn, &snap, Show::OwnShotsDrawn { seat: 0, presses: 0b1 });
+        assert_eq!(drawn.emp_pulses.len(), 1, "the enemy's ring alone");
+        assert_eq!(drawn.emp_pulses[0].origin, Position::new(600.0, 300.0));
+        let mut refused = welcome_through_the_codec(&game);
+        snapshot_with(&mut refused, &snap, Show::OwnShotsDrawn { seat: 0, presses: 0 });
+        assert_eq!(refused.emp_pulses.len(), 2, "a press the client did not draw is the room's to draw");
+    }
+
+    /// What an EMP leaves behind travels in the state, so a client joining
+    /// late draws it too: a disabled enemy, a seat's special offline, an
+    /// offline tower, a dead missile and the lamp posts out; and it ends
+    /// with the room's.
+    #[test]
+    fn what_an_emp_leaves_reaches_the_replica_and_ends_with_the_rooms() {
+        let map = "version = 1\ntanks = 1\nweather = \"night\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"20,8\" = { kind = \"tesla\", side = \"enemy\" }\ncells.\"10,12\" = { kind = \"lamp\" }\n";
+        let mut game = quiet_round(map, 0xB0B5, 1);
+        let enemy = game.first_enemy_slot();
+        let disabled = crate::simulation::debug::TankPatch { disabled: Some(2.0), ..Default::default() };
+        game.debug_set_tank(enemy, &disabled).expect("the enemy");
+        let offline = crate::simulation::debug::TankPatch { emp_charges: Some(2), special_offline: Some(2.0), ..Default::default() };
+        game.debug_set_tank(0, &offline).expect("the seat");
+        game.towers.get_mut(&(20, 8)).expect("the tesla").disable(4.0);
+        game.lamps_out = 5.0;
+        let mut m = Missile::spawn(Position::new(500.0, 300.0), Vec2::new(1.0, 0.0), Owner::Enemy(enemy), 0, Position::new(700.0, 300.0));
+        m.height = 40.0;
+        m.set_id(77);
+        m.kill();
+        game.world.spawn((m,));
+        let mut replica = welcome_through_the_codec(&game);
+        snapshot(&mut replica, &enc::snapshot(&game, [0; MAX_SEATS]));
+        let (server, client) = (game.drawable_state(), replica.drawable_state());
+        let flags = |s: &crate::simulation::replica::DrawableState| {
+            (
+                s.tanks.iter().map(|t| (t.slot, t.disabled, t.offline)).collect::<Vec<_>>(),
+                s.tiles.iter().filter(|t| t.offline).map(|t| t.cell).collect::<Vec<_>>(),
+                s.missiles.iter().map(|m| (m.id, m.dead)).collect::<Vec<_>>(),
+                s.lamps_out,
+            )
+        };
+        assert_eq!(flags(&client), flags(&server));
+        let (tanks, towers, missiles, lamps) = flags(&client);
+        assert!(tanks.contains(&(enemy, true, false)) && tanks.contains(&(0, false, true)), "{tanks:?}");
+        assert_eq!((towers, missiles, lamps), (vec![(20, 8)], vec![(77, true)], true));
+        // The room's outages end; the replica's with them.
+        game.debug_set_tank(enemy, &crate::simulation::debug::TankPatch { disabled: Some(0.0), ..Default::default() }).unwrap();
+        game.debug_set_tank(0, &crate::simulation::debug::TankPatch { special_offline: Some(0.0), ..Default::default() }).unwrap();
+        game.towers.get_mut(&(20, 8)).unwrap().disabled = 0.0;
+        game.lamps_out = 0.0;
+        snapshot(&mut replica, &enc::snapshot(&game, [0; MAX_SEATS]));
+        let (tanks, towers, _, lamps) = flags(&replica.drawable_state());
+        assert!(tanks.iter().all(|&(_, d, o)| !d && !o) && towers.is_empty() && !lamps, "{tanks:?} {towers:?} {lamps}");
+    }
 }

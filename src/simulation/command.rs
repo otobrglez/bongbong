@@ -548,6 +548,51 @@ mod tests {
         assert!(c.gives_way(&now_fast, &fast), "the latch outranks the speed bucket");
     }
 
+    /// An EMP tank about to pulse into its own side has the commander
+    /// nudge every ally in its ring out, along the larger offset first and
+    /// round a wall; a disabled ally, a wreck and a seat are left alone.
+    #[test]
+    fn a_clearer_nudges_its_allies_out_of_its_ring() {
+        let mut c = Commander::default();
+        let mut clearer = unit(1, 0.0, 0.0);
+        clearer.clearing = Some(176.0);
+        let mut below = unit(2, 30.0, 0.0);
+        below.position = Position::new(30.0, 100.0);
+        let right = unit(3, 120.0, 0.0);
+        let far = unit(4, 400.0, 0.0);
+        let mut down = unit(5, -50.0, 0.0);
+        down.busy = Some(Busy::Disabled);
+        let mut wreck = unit(6, 60.0, 0.0);
+        wreck.wreck = true;
+        let mut seat = unit(0, 80.0, 0.0);
+        seat.unit = Unit::Player(0);
+        let units = [clearer, below, right, far, down, wreck, seat];
+        // A wall to the right of the unit at 120.
+        let blocked = |p: Position, d: Dir| p.x > 100.0 && d == Dir::Right;
+        let ctx = CommandCtx { dt: 1.0 / 60.0, blocked: &blocked };
+        c.clear_rings(&units, &ctx);
+        let nudge = |slot| match c.orders.get(&slot).map(|o| o.as_slice()) {
+            Some([Order::Nudge { dir }]) => Some(*dir),
+            None => None,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(nudge(2), Some(Dir::Down), "along the larger offset");
+        assert_eq!(nudge(3), Some(Dir::Down), "round the wall: the smaller offset's way");
+        assert!(nudge(4).is_none() && nudge(5).is_none() && nudge(6).is_none() && nudge(0).is_none());
+    }
+
+    /// A disabled unit is deaf: it never gives way and is never ordered to
+    /// (`Skipped::deaf`).
+    #[test]
+    fn a_disabled_unit_never_gives_way() {
+        let c = Commander::default();
+        let mut down = unit(1, 0.0, 0.0);
+        down.busy = Some(Busy::Disabled);
+        let other = unit(2, 30.0, 200.0);
+        assert!(!c.gives_way(&down, &other), "the disabled one does not yield");
+        assert!(c.gives_way(&other, &down), "the other does");
+    }
+
     #[test]
     fn the_switch_being_off_issues_nothing() {
         let mut c = Commander::default();

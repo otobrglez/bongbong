@@ -4055,6 +4055,34 @@ mod tests {
         assert!(unknown.unwrap_err().contains("railgun"));
     }
 
+    /// `set_tank {emp_charges}` arms the EMP, `disabled` and
+    /// `special_offline` put a tank's outages on and off by hand, and
+    /// `spawn_pickup` drops the EMP's crate.
+    #[test]
+    fn set_tank_arms_the_emp_and_takes_it_offline() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = game(3);
+        let ask = |server: &mut DevServer, game: &mut Session, tool: &str, params: Value| {
+            let rx = call(&tx, tool, params);
+            server.before_frame(game, W, H);
+            rx.recv().unwrap()
+        };
+        let tank = ask(&mut server, &mut game, "set_tank", json!({ "slot": 0, "emp_charges": 2 })).unwrap();
+        assert_eq!((tank["weapon"].as_str(), tank["emp"].as_i64()), (Some("emp_burst"), Some(2)), "{tank}");
+        let tank = ask(&mut server, &mut game, "set_tank", json!({ "slot": 0, "special_offline": 1.5 })).unwrap();
+        assert_eq!((tank["weapon"].as_str(), tank["offline"].as_f64()), (Some("shell"), Some(1.5)), "offline, it fires shells: {tank}");
+        let enemy = game.first_enemy_slot();
+        let tank = ask(&mut server, &mut game, "set_tank", json!({ "slot": enemy, "disabled": 2.0 })).unwrap();
+        assert_eq!(tank["disabled"].as_f64(), Some(2.0), "{tank}");
+        let tank = ask(&mut server, &mut game, "set_tank", json!({ "slot": enemy, "disabled": 0.0 })).unwrap();
+        assert_eq!(tank["disabled"].as_f64(), Some(0.0), "{tank}");
+        let dropped = (2..30).find_map(|col| {
+            let (x, y) = (col as f64 * 32.0, 8.0 * 32.0);
+            ask(&mut server, &mut game, "spawn_pickup", json!({ "kind": "emp_burst", "x": x, "y": y })).ok()
+        });
+        assert_eq!(dropped.expect("an open cell")["kind"], "emp_burst");
+    }
+
     /// The two tank layers are independent flags: one on leaves the other
     /// where it was, and `status` reports the same values.
     #[test]

@@ -1389,6 +1389,12 @@ tunables! {
         /// fight: the latch that keeps a danger's edge from being a place
         /// to jitter.
         enemy_danger_clear_px: f32 = 24.0 in 0.0 ..= 128.0;
+        /// Route surcharge on every cell inside a seat's danger (an armed
+        /// EMP's reach and its berth), so enemies go round it rather than
+        /// through it when there is another way; 0 turns it off. Low for
+        /// the tower reach's reason: a steep price on a whole disc sends
+        /// every enemy down the same seam.
+        enemy_danger_route_cost: usize = 2 in 0 ..= 64;
         /// Extra route cost on every cell a player's barrel points down
         /// (out to `route_lane_cells`, stopping at the first blocked cell),
         /// so the shared flow field brings enemies in from the flank

@@ -1383,6 +1383,44 @@ mod tests {
         assert!(blasted > told, "the tell before the wave: {told} vs {blasted}");
     }
 
+    /// An enemy's EMP reaches the replica: its crackle on the replica's
+    /// tank, then its ring, then the seat it struck drawn disabled.
+    #[test]
+    fn an_enemys_emp_reaches_the_replica() {
+        let mut rig = Lockstep::start(options(LinkQuality::PERFECT));
+        let game = rig.authority_mut().expect("a round");
+        let seat = game.tank_snapshots().into_iter().find(|t| t.slot == 0).expect("the seat");
+        let beside = crate::Position::new(seat.position.x + 90.0, seat.position.y);
+        let slot = game.debug_spawn_enemy(beside, Some(1), Some(crate::ai::Role::Player)).expect("spawns");
+        let entity = game.tank_entity_by_slot(slot).expect("the enemy");
+        {
+            let mut tank = game.world.get::<&mut crate::tank::Tank>(entity).expect("its tank");
+            tank.disarm();
+            tank.shells_ammo = 0;
+            tank.speed_scale = 0.0;
+            tank.emp_charges = 3;
+        }
+        let (mut told, mut pulsed, mut struck) = (None, None, None);
+        for step in 0..240 {
+            rig.step(1);
+            let replica = rig.replica().expect("a replica");
+            let tell = replica.world.query::<&crate::tank::Tank>().iter().find(|t| t.owner_slot() == slot).and_then(|t| t.tell);
+            if told.is_none() && tell.is_some_and(|t| t.weapon == crate::tank::ActiveWeapon::Emp) {
+                told = Some(step);
+            }
+            if pulsed.is_none() && replica.emp_pulses.iter().any(|p| p.owner.slot() == slot) {
+                pulsed = Some(step);
+            }
+            if struck.is_none() && replica.drawable_state().tanks.iter().any(|t| t.slot == 0 && t.disabled) {
+                struck = Some(step);
+            }
+        }
+        let told = told.expect("the crackle reached the replica");
+        let pulsed = pulsed.expect("the ring reached the replica");
+        let struck = struck.expect("the seat is drawn disabled");
+        assert!(told < pulsed && pulsed <= struck, "crackle, ring, outage: {told} {pulsed} {struck}");
+    }
+
     /// Online, the seat's own blast is on screen the frame of the press -
     /// drawn from the predicted pivot - and the room's `SonicBlast` for it
     /// is not drawn a second time.

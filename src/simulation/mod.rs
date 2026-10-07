@@ -55,6 +55,8 @@ mod props_tests;
 #[cfg(test)]
 mod seat_tests;
 #[cfg(test)]
+mod emp_tests;
+#[cfg(test)]
 mod sonic_tests;
 #[cfg(test)]
 mod tower_tests;
@@ -4931,6 +4933,7 @@ impl Game {
                     sonic_ammo: tank.sonic_ammo,
                     emp_charges: tank.emp_charges,
                     disabled: tank.is_disabled(),
+                    kept_out: ai.is_some_and(Ai::kept_out),
                     tell: tank.tell.is_some(),
                     skidding: tank.skid > 0.0,
                     plasma_ammo: tank.plasma_ammo,
@@ -4995,6 +4998,9 @@ pub struct TankSnapshot {
     /// Disabled by an EMP (`Tank::disabled`): an enemy coasting with its
     /// brain off, going where it did not ask to.
     pub disabled: bool,
+    /// Waiting outside a danger it is kept out of (`Ai::kept_out`):
+    /// holding still on purpose.
+    pub kept_out: bool,
     /// Winding up a special (`Tank::tell`): holding still on purpose.
     pub tell: bool,
     /// Knocked off its tracks (`Tank::skid`): sliding where it did not ask

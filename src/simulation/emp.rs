@@ -360,7 +360,7 @@ impl Game {
         let mut out: Vec<Danger> = seats
             .iter()
             .filter(|s| s.live && s.emp_armed && !s.concealed)
-            .map(|s| Danger { shape: DangerShape::Disc { at: s.pos, radius }, owner: s.seat as usize })
+            .map(|s| Danger { shape: DangerShape::Disc { at: s.pos, radius }, owner: Some(s.seat as usize) })
             .collect();
         let mut tells: Vec<(usize, Position)> = self
             .world
@@ -371,8 +371,39 @@ impl Game {
             .map(|tank| (tank.owner_slot(), tank.position))
             .collect();
         tells.sort_by_key(|&(slot, _)| slot);
-        out.extend(tells.into_iter().map(|(slot, at)| Danger { shape: DangerShape::Disc { at, radius }, owner: slot }));
+        out.extend(tells.into_iter().map(|(slot, at)| Danger { shape: DangerShape::Disc { at, radius }, owner: Some(slot) }));
         out
+    }
+
+    /// The centres of the nav cells inside the seats' dangers (the seat
+    /// half of `emp_dangers`, each seat's concealment read off the cover
+    /// itself): what the frame's route grid surcharges, so a route goes
+    /// round an armed seat's reach rather than through it.
+    pub(super) fn danger_route_cells(&self, grid: &crate::pathfind::Grid) -> Vec<Position> {
+        let cover = self.cover_cells();
+        let seats: Vec<EmpSeat> = self
+            .seats_on_field()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, e)| e.map(|e| (i, e)))
+            .map(|(i, e)| {
+                super::with_tank(&self.world, e, |t| EmpSeat::of(i as u8, t, !t.is_wreck(), crate::grass::conceals(&cover, t.position)))
+            })
+            .collect();
+        let (cols, rows, cell) = grid.dims();
+        let mut cells = Vec::new();
+        let seat_owned = |d: &&Danger| d.owner.is_some_and(|o| seats.iter().any(|s| s.seat as usize == o));
+        for danger in self.emp_dangers(&seats).iter().filter(seat_owned) {
+            for row in 0..rows {
+                for col in 0..cols {
+                    let at = Position::new((col as f32 + 0.5) * cell, (row as f32 + 0.5) * cell);
+                    if danger.depth(at) > 0.0 {
+                        cells.push(at);
+                    }
+                }
+            }
+        }
+        cells
     }
 
     /// Whether any tank on the field carries an EMP - what builds the
