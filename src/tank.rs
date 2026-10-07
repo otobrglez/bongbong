@@ -2251,7 +2251,10 @@ fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 10] {
     let sonic = (tank.sonic_ammo > 0 || tank.sonic_flash > 0.0).then(|| TANK_MODULE_SONIC_COL + crate::sonic::module_cell(tank, time));
     let emp = (tank.emp_charges > 0 || tank.emp_flash > 0.0).then(|| TANK_MODULE_EMP_COL + crate::emp::module_cell(tank, time));
     let gauss = (tank.gauss_slugs > 0 || tank.rail_flash > 0.0).then(|| TANK_MODULE_GAUSS_COL + crate::gauss::module_cell(tank, time));
-    let fpv = (tank.fpv_drones > 0 || tank.fpv_flash > 0.0 || tank.fpv_out > 0).then(|| TANK_MODULE_FPV_COL + crate::fpv::module_cell(tank, time));
+    // The relay stays linked to the drones still up after the last left
+    // the halo - unless another special's module has taken the roof.
+    let linked = (tank.fpv_flash > 0.0 || tank.fpv_out > 0) && tank.special().is_none();
+    let fpv = (tank.fpv_drones > 0 || linked).then(|| TANK_MODULE_FPV_COL + crate::fpv::module_cell(tank, time));
     [minigun, missiles, plasma, laser, flame, grenades, sonic, emp, gauss, fpv]
 }
 
