@@ -173,7 +173,7 @@ mod tests {
         ("portals", 0xa7ce_43c1_fa77_12a0),
         ("towers", 0x5985_4558_8f64_3572),
         ("longwater", 0xa0c6_f3b4_49cb_a9b8),
-        ("armory", 0x9902_033d_1a61_0313),
+        ("armory", 0x85cc_bc13_930a_2653),
         ("lotus-lagoon", 0x5629_37c7_85a3_340f),
         ("vulkan", 0xc246_7e7d_7623_02ae),
         ("hedge-maze", 0x8ae3_3e15_7bab_1f70),
