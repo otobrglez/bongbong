@@ -934,8 +934,7 @@ impl Game {
                 self.held_drums
                     .iter()
                     .map(|d| {
-                        let centre = self.zones.iter().find(|z| z.id == d.well).map_or_else(|| crate::map::cell_to_world(d.cell.0, d.cell.1), |z| z.centre);
-                        let (at, _) = crate::well::held_at(d, centre, self.time, &t);
+                        let (at, _) = crate::well::held_at(d, d.centre, self.time, &t);
                         (d.id, d.well, d.cell, r1(at.x), r1(at.y))
                     })
                     .collect()

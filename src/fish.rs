@@ -468,8 +468,14 @@ impl Shoal {
         let step = (game.time - self.clock).clamp(0.0, MAX_GAP);
         self.throw_onto_banks(&game.sonic_waves, step, water, &t);
         for e in game.events() {
-            if let Event::RodImpact { cell, .. } = *e {
-                self.throw_from(crate::map::cell_to_world(cell.0, cell.1), t.rod_fish_reach_px, t.rod_fish_throw_max, water, &t);
+            match *e {
+                Event::RodImpact { cell, .. } => {
+                    self.throw_from(crate::map::cell_to_world(cell.0, cell.1), t.rod_fish_reach_px, t.rod_fish_throw_max, water, &t);
+                }
+                // A gravity well's collapse throws the fish in its reach
+                // out onto the banks (docs/gravity-well.md "The collapse").
+                Event::WellCollapsed { x, y, .. } => self.throw_from(Position::new(x, y), t.well_radius_px, t.well_fish_throw_max, water, &t),
+                _ => {}
             }
         }
         self.advance(water, game.time, &t);
@@ -620,6 +626,10 @@ pub fn scares(game: &Game, t: &Tuning) -> Vec<Scare> {
     }
     for p in game.world.query::<&crate::plasma::Plasma>().iter() {
         out.push(Scare { at: p.position, radius: shot });
+    }
+    // A gravity well's orbs, as a shot scares them.
+    for o in game.orbs() {
+        out.push(Scare { at: o.position, radius: shot });
     }
     for e in game.events() {
         match *e {
@@ -982,6 +992,17 @@ mod tests {
         swim(&mut shoal, &water, clock, clock + t.sonic_fish_flop_seconds + 1.0, &t);
         assert!(shoal.fish[0].flop.is_none(), "back in the water");
         assert!(water.depth_at(shoal.fish[0].pos).is_wet(), "{:?}", shoal.fish[0].pos);
+    }
+
+    /// A gravity well's orb scares the fish it passes as a shot does
+    /// (docs/gravity-well.md).
+    #[test]
+    fn an_orb_scares_the_fish() {
+        let t = quick();
+        let mut game = Game::default();
+        let at = Position::new(200.0, 128.0);
+        game.orbs.push(crate::well::Orb::launch(at, Vec2::new(1.0, 0.0), crate::shell::Owner::Player(0), &t));
+        assert!(scares(&game, &t).iter().any(|s| s.at == at && s.radius == t.fish_shot_scatter_px));
     }
 
     /// A rod's impact throws the fish within its reach whose throw away

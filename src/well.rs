@@ -357,6 +357,9 @@ pub struct HeldDrum {
     pub fuse: Option<f32>,
     /// The round clock it was lifted at.
     pub lifted_at: f32,
+    /// Its well's centre, which it circles: kept with it, so it is where
+    /// it goes off at its well's collapse whatever stands then.
+    pub centre: Position,
 }
 
 /// Where a held drum is at round time `now` round its well's centre: from
@@ -501,7 +504,7 @@ pub fn compose_orb(out: &mut Vec<Shape>, at: Position, velocity: Vec2, age: f32,
         let a = phase + age * std::f32::consts::TAU * 2.0 + m as f32 * std::f32::consts::PI;
         out.push(Shape::Mark { pos: at + Vec2::new(a.cos(), a.sin()) * (r + 2.0), size: 2, color: VOID[3] });
     }
-    out.push(Shape::Glow { pos: at, radius: 20.0 * (0.5 + 0.5 * swell), color: VOID[2] });
+    out.push(Shape::Glow { pos: at, radius: 14.0 * (0.5 + 0.5 * swell), color: VOID[1] });
 }
 
 /// The snap at an anchor (glowing pass), `age` seconds after it: a ring of
@@ -541,7 +544,6 @@ pub fn compose_well(out: &mut Vec<Shape>, zone: &Zone, now: f32, t: &Tuning) {
     out.push(Shape::Arc { center: c, radius: RING_PX, width: pyro::BLOCK * 2.0, from: turn, to: turn + 4.6, color: VOID[2], cover });
     out.push(Shape::Arc { center: c, radius: RING_PX, width: pyro::BLOCK * 2.0, from: turn + 4.6, to: turn + std::f32::consts::TAU, color: VOID[1], cover });
     out.push(Shape::Disc { center: c, radius: core + 3.0, color: VOID[4], cover: 1.0 });
-    out.push(Shape::Disc { center: c, radius: core, color: SMOKE[0], cover: 1.0 });
     // The rim: a dot every 12 px of arc at the reach, turning a turn every
     // eight seconds.
     let r = t.well_radius_px;
@@ -549,9 +551,25 @@ pub fn compose_well(out: &mut Vec<Shape>, zone: &Zone, now: f32, t: &Tuning) {
     let spin = now * std::f32::consts::TAU / 8.0;
     for i in 0..dots {
         let a = spin + i as f32 * std::f32::consts::TAU / dots as f32;
-        out.push(Shape::Disc { center: c + Vec2::new(a.cos(), a.sin()) * r, radius: pyro::BLOCK * 0.6, color: VOID[1], cover: 0.4 * grow });
+        out.push(Shape::Disc { center: c + Vec2::new(a.cos(), a.sin()) * r, radius: pyro::BLOCK * 0.6, color: VOID[2], cover: 0.6 * grow });
     }
-    out.push(Shape::Glow { pos: c, radius: 40.0 * grow, color: VOID[2] });
+    out.push(Shape::Glow { pos: c, radius: 26.0 * grow, color: VOID[1] });
+}
+
+/// A well's core (`compose_well`'s hole), drawn after every light so no
+/// glow brightens it: black on any ground under any sky.
+pub fn compose_core(out: &mut Vec<Shape>, zone: &Zone, now: f32, t: &Tuning) {
+    let ZoneKind::Well(w) = zone.kind else { return };
+    let grow = match w.stage {
+        WellStage::Forming => {
+            let total = t.well_form_seconds.max(1e-3);
+            1.0 - (zone.until - now).clamp(0.0, total) / total
+        }
+        WellStage::Pulling => 1.0,
+    };
+    let warn = w.stage == WellStage::Pulling && zone.until - now < 1.0;
+    let beat = if warn && ((now * 12.0) as i32).rem_euclid(2) == 0 { 1.0 } else { 0.0 };
+    out.push(Shape::Disc { center: zone.centre, radius: (7.0 + beat) * grow.max(0.15), color: SMOKE[0], cover: 1.0 });
 }
 
 /// The swirl: `count` blocks spiralling clockwise into a well at `c` - each
@@ -780,7 +798,7 @@ mod tests {
     fn held_at_spirals_in_then_circles_on_the_ring() {
         let t = Tuning::DEFAULT;
         let centre = Position::new(320.0, 320.0);
-        let drum = HeldDrum { id: 4, well: 1, cell: crate::map::world_to_cell(Position::new(384.0, 320.0)), drum: Drum::Oil, fuse: None, lifted_at: 1.0 };
+        let drum = HeldDrum { id: 4, well: 1, cell: crate::map::world_to_cell(Position::new(384.0, 320.0)), drum: Drum::Oil, fuse: None, lifted_at: 1.0, centre };
         let (start, h0) = held_at(&drum, centre, 1.0, &t);
         assert!(start.distance_to(centre) > 50.0 && h0 == 0.0);
         let (later, _) = held_at(&drum, centre, 1.0 + t.well_capture_seconds + 0.5, &t);

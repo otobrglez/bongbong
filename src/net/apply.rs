@@ -1193,6 +1193,15 @@ fn apply_well_drums(game: &mut Game, s: &Snapshot, cols: u16) {
             drum: crate::obstacle::Drum::from_variant(d.drum as i32),
             fuse: d.fused.then(|| was.iter().find(|w| w.id == d.id as u32).and_then(|w| w.fuse).unwrap_or(1.0)),
             lifted_at: d.tick as f32 * PHYSICS_FIXED_DT,
+            // Its well's centre, from the zones family (applied first); one
+            // already held keeps the centre it had.
+            centre: game
+                .zones
+                .iter()
+                .find(|z| z.id == d.well as u32)
+                .map(|z| z.centre)
+                .or_else(|| was.iter().find(|w| w.id == d.id as u32).map(|w| w.centre))
+                .unwrap_or_else(|| map::cell_to_world(cell_from_index(cols, d.cell).0, cell_from_index(cols, d.cell).1)),
         })
         .collect();
 }

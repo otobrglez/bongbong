@@ -1101,10 +1101,12 @@ impl Game {
         }
 
         // The lines under the left cluster: first what letting go of a
-        // rod's reticle does, while one is up.
+        // rod's reticle does, while one is up, or what the next press does
+        // to an orb in flight - in its weapon's accent.
         let mut lines = Vec::new();
         if let Some(key) = chrome.prompt {
-            lines.push(Line { text: crate::text::text().get(key), size: HUD_STATUS_TEXT_SIZE, color: crate::hud::HUD_ROD_COLOR });
+            let color = if key == crate::text::keys::HUD_WELL_ANCHOR { crate::hud::HUD_WELL_COLOR } else { crate::hud::HUD_ROD_COLOR };
+            lines.push(Line { text: crate::text::text().get(key), size: HUD_STATUS_TEXT_SIZE, color });
         }
         // An online round says where it stands: the room, the seat and how
         // much of the snapshot stream is in hand.
@@ -1725,6 +1727,14 @@ impl Game {
                 let bands = t.glow_bands.max(0) as u32;
                 d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| pyro::draw_glows(&mut Rl(&mut bd), &shapes, bands));
             }
+            // The cores over every light: holes, black whatever shines.
+            let mut cores = Vec::new();
+            for zone in self.zones.iter().filter(|z| z.well().is_some() && !culled(cull, z.centre)) {
+                crate::well::compose_core(&mut cores, zone, now, &t);
+            }
+            if !cores.is_empty() {
+                pyro::draw(&mut GpuCanvas::new(d, textures), &cores);
+            }
         }
 
         // The rod from god (docs/rod-from-god.md "Drawing"): every reticle
@@ -2009,7 +2019,7 @@ impl Game {
             if !self.held_drums.is_empty() {
                 let t = tuning();
                 for held in &self.held_drums {
-                    let centre = self.zones.iter().find(|z| z.id == held.well).map_or_else(|| crate::map::cell_to_world(held.cell.0, held.cell.1), |z| z.centre);
+                    let centre = held.centre;
                     let (ground, height) = crate::well::held_at(held, centre, self.time, &t);
                     if !culled(cull, ground) {
                         let turn = (ground - centre).y.atan2((ground - centre).x);

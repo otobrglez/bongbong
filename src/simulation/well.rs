@@ -378,7 +378,7 @@ impl Game {
             }
             f.events.push(Event::ObstacleDestroyed { material: Material::Barrel, x: at.x, y: at.y });
             let id = self.take_shot_id();
-            self.held_drums.push(HeldDrum { id, well: zone.id, cell, drum: Drum::from_variant(variant), fuse, lifted_at: self.time });
+            self.held_drums.push(HeldDrum { id, well: zone.id, cell, drum: Drum::from_variant(variant), fuse, lifted_at: self.time, centre: zone.centre });
         }
     }
 
@@ -405,7 +405,7 @@ impl Game {
         let t = tuning();
         let Some(i) = self.held_drums.iter().position(|d| d.id == id) else { return };
         let drum = self.held_drums.remove(i);
-        let centre = self.zones.iter().find(|z| z.id == drum.well).map_or_else(|| crate::map::cell_to_world(drum.cell.0, drum.cell.1), |z| z.centre);
+        let centre = drum.centre;
         let (at, _) = well::held_at(&drum, centre, self.time, &t);
         f.events.push(Event::Blast { x: at.x, y: at.y, chained: true, drum: drum.drum });
         f.pending_blasts.push(PendingBlast { center: at, drum: drum.drum, shape: BlastShape::Chained { from: centre, smoulder: 1.0 } });
@@ -422,10 +422,7 @@ impl Game {
         let hit: Vec<u32> = self
             .held_drums
             .iter()
-            .filter(|d| {
-                let c = self.zones.iter().find(|z| z.id == d.well).map_or_else(|| crate::map::cell_to_world(d.cell.0, d.cell.1), |z| z.centre);
-                well::held_at(d, c, now, &t).0.distance_to(center) <= radius
-            })
+            .filter(|d| well::held_at(d, d.centre, now, &t).0.distance_to(center) <= radius)
             .map(|d| d.id)
             .collect();
         for id in hit {
@@ -987,11 +984,13 @@ impl Game {
             }
             let facing = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up);
             let faces: Vec<Dir> = std::iter::once(facing).chain(Dir::ALL.into_iter().filter(|&d| d != facing)).collect();
-            // The best so far: (arm, facing's place, distance), the plan
-            // and the seats it counts.
-            let mut best: Option<((u8, usize, f32), WellPlan, Vec<u8>)> = None;
-            let mut offer = |key: (u8, usize, f32), plan: WellPlan, seats: Vec<u8>| {
-                if best.as_ref().is_none_or(|(k, ..)| key.0 < k.0 || (key.0 == k.0 && (key.1 < k.1 || (key.1 == k.1 && key.2 < k.2)))) {
+            // The best so far: (arm, facing's place, the pull it puts on
+            // its seats - stronger first, in 64ths so float noise never
+            // decides -, distance), the plan and the seats it counts.
+            let mut best: Option<((u8, usize, i32, f32), WellPlan, Vec<u8>)> = None;
+            let mut offer = |key: (u8, usize, i32, f32), plan: WellPlan, seats: Vec<u8>| {
+                let better = |k: &(u8, usize, i32, f32)| (key.0, key.1, -key.2).cmp(&(k.0, k.1, -k.2)).then(key.3.total_cmp(&k.3)).is_lt();
+                if best.as_ref().is_none_or(|(k, ..)| better(k)) {
                     best = Some((key, plan, seats));
                 }
             };
@@ -1024,17 +1023,19 @@ impl Game {
                     let ids: Vec<u8> = seats_in.iter().map(|s| s.seat).collect();
                     let lowest = ids.iter().copied().min();
                     let plan = |why| WellPlan { face: dir, anchor_px: k, at_seat: lowest, why };
+                    let pull: f32 = seats_in.iter().map(|s| well::strength(crate::emp::box_reach(p, s.centre, s.half), &t)).sum();
+                    let pull = (pull * 64.0).round() as i32;
                     if n >= 2 && allies_in <= n {
-                        offer((0, fi, k), plan("clump"), ids.clone());
+                        offer((0, fi, pull, k), plan("clump"), ids.clone());
                     } else if n >= 1 && allies_in <= n && (drums.iter().any(|d| d.distance_to(p) <= r) || seats_in.iter().any(|s| crosses(s.pos, p))) {
-                        offer((1, fi, k), plan("trouble"), ids.clone());
+                        offer((1, fi, pull, k), plan("trouble"), ids.clone());
                     } else if n >= 1
                         && allies_in <= n
                         && let Some(frog) = quarry
                         && frog.distance_to(p) > r + margin
                         && seats_in.iter().any(|s| s.pos.distance_to(frog) <= t.well_ai_guard_px && p.distance_to(frog) > s.pos.distance_to(frog))
                     {
-                        offer((2, fi, k), plan("guard"), ids.clone());
+                        offer((2, fi, pull, k), plan("guard"), ids.clone());
                     }
                 }
                 // The shield: a seat lined up on this tank along this
@@ -1054,7 +1055,7 @@ impl Game {
                             && allies_at(p, t.well_ai_min_px / t.well_orb_speed.max(1.0) + t.well_form_seconds) == 0
                             && !wells.iter().any(|c| c.distance_to(p) <= 2.0 * r)
                         {
-                            offer((3, fi, t.well_ai_min_px), WellPlan { face: dir, anchor_px: t.well_ai_min_px, at_seat: Some(s.seat), why: "shield" }, vec![s.seat]);
+                            offer((3, fi, 0, t.well_ai_min_px), WellPlan { face: dir, anchor_px: t.well_ai_min_px, at_seat: Some(s.seat), why: "shield" }, vec![s.seat]);
                             break;
                         }
                     }
