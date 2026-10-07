@@ -615,18 +615,18 @@ impl Fx {
                         }
                     }
                     Event::ObstacleDestroyed { material, x, y } => self.tile_death(material, Position::new(x, y)),
-                    // A hit the tile *survived*. Without this, a wall only
-                    // ever throws anything on the shot that finishes it,
-                    // and every shot before that lands silently.
-                    // A gauss rail's slug through a tile, a hull or a frog:
-                    // the flash alone - its bursts are the slug's own
-                    // (`gauss::compose_slug`).
+                    // A gauss rail's slug through a hull or a tile: the
+                    // flash alone - its bursts, a frog's included, are the
+                    // slug's own (`gauss::compose_slug`).
                     Event::Hit { target, cause: HitCause::Rail, x, y, .. } => match target {
                         HitTarget::Player { player } => self.flash(Flashed::Tank(player as usize)),
                         HitTarget::Enemy { slot } => self.flash(Flashed::Tank(slot)),
                         HitTarget::Obstacle { .. } => self.flash(Flashed::Tile(Position::new(x, y))),
                         _ => {}
                     },
+                    // A hit the tile *survived*. Without this, a wall only
+                    // ever throws anything on the shot that finishes it,
+                    // and every shot before that lands silently.
                     Event::Hit { target: HitTarget::Obstacle { material }, killed: false, x, y, .. } => {
                         let at = Position::new(x, y);
                         self.flash(Flashed::Tile(at));

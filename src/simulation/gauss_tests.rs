@@ -577,7 +577,6 @@ fn the_spawn_swap_hands_out_the_rail_by_its_share() {
     assert_eq!(laser.special(), Some(ActiveWeapon::GaussRail));
 }
 
-
 // ---- the AI ---------------------------------------------------------------
 
 /// A rail-armed enemy of the player role at `at`, parked.

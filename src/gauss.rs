@@ -306,8 +306,12 @@ pub fn compose_slug(slug: &RailSlug, t: &Tuning) -> Vec<Shape> {
         let span = (t.gauss_trail_seconds - flash).max(1e-3);
         let a = (1.0 - (age - flash) / span).clamp(0.0, 1.0);
         if a > 0.0 {
-            let cover = if a >= 0.5 { 1.0 } else { a * 2.0 };
-            let color = if a > 0.6 { RAIL[3] } else { RAIL[1] };
+            // Whole until half its life, then dissolving through the Bayer
+            // pattern down to half its blocks, then those fading in eighths
+            // (docs/effects.md rule 3, `pyro::dither_disc`'s rule).
+            let thin = (a * 2.0).min(1.0);
+            let (cover, fade) = if thin >= 0.5 { (thin, 1.0) } else { (0.5, thin * 2.0) };
+            let color = pyro::alpha(if a > 0.6 { RAIL[3] } else { RAIL[1] }, fade);
             let phase = age * 6.0;
             let wobble = |along: f32| {
                 let w = (along * 0.3 + phase).sin() * TRAIL_WOBBLE_PX * (1.0 - a);
@@ -557,16 +561,30 @@ mod tests {
         let mut s = slug();
         s.pierces.clear();
         s.portal = true;
-        let count = |age: f32| {
-            let mut s = s.clone();
-            s.age = age;
-            compose_slug(&s, &t).iter().filter(|x| matches!(x, Shape::Mark { color, .. } if *color == RAIL[1] || *color == RAIL[3])).count()
-        };
+        // The trail's blocks at a life `a` (1 fresh, 0 gone): how many, and
+        // their alphas.
         let span = t.gauss_trail_seconds - t.gauss_flash_seconds;
-        let fresh = count(t.gauss_flash_seconds + 0.01);
-        let late = count(t.gauss_flash_seconds + span * 0.85);
-        assert!(late < fresh / 2, "thinned: {late} of {fresh}");
-        s.age = 0.0;
+        let blocks = |a: f32| {
+            let mut s = s.clone();
+            s.age = t.gauss_flash_seconds + span * (1.0 - a);
+            compose_slug(&s, &t)
+                .iter()
+                .filter_map(|x| match *x {
+                    Shape::Mark { color, .. } if [RAIL[1], RAIL[3]].iter().any(|c| (c.r, c.g, c.b) == (color.r, color.g, color.b)) => Some(color.a),
+                    _ => None,
+                })
+                .collect::<Vec<u8>>()
+        };
+        let fresh = blocks(0.95);
+        assert!(fresh.iter().all(|&a| a == 255), "whole while fresh");
+        let thinning = blocks(0.35);
+        assert!(thinning.len() < fresh.len() && thinning.len() > fresh.len() / 2, "dissolving: {} of {}", thinning.len(), fresh.len());
+        assert!(thinning.iter().all(|&a| a == 255), "the kept blocks whole");
+        let fading = blocks(0.1);
+        let half = fresh.len() as f32 / 2.0;
+        assert!((fading.len() as f32 - half).abs() < half * 0.2, "half the blocks kept: {} of {}", fading.len(), fresh.len());
+        let eighths: Vec<u8> = (1..8).map(|k| (k as f32 / 8.0 * 255.0) as u8).collect();
+        assert!(fading.iter().all(|a| eighths.contains(a)), "fading in eighths: {fading:?}");
     }
 
     #[test]

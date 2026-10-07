@@ -2577,6 +2577,20 @@ impl Brain<'_> {
     }
 }
 
+/// Whether `me`, outside every charging rail's lane it does not own, would
+/// step into one driving along `dir`: the point a hull's radius and
+/// `enemy_danger_clear_px` ahead lies inside it.
+fn enters_lane(me: &Tank, dir: Dir, dangers: &[Danger]) -> bool {
+    let mine = me.owner_slot();
+    let lanes = || dangers.iter().filter(|d| d.is_lane() && d.owner != Some(mine));
+    if lanes().any(|d| d.depth(me.position) > 0.0) {
+        return false;
+    }
+    let reach = me.avoidance_radius() + tuning().enemy_danger_clear_px;
+    let ahead = Position::new(me.position.x + dir.vec().x * reach, me.position.y + dir.vec().y * reach);
+    lanes().any(|d| d.depth(ahead) > 0.0)
+}
+
 /// Perpendicular and forward distance of `to` from `from` along the cardinal
 /// axis `dir` points along - shared by aim alignment (target: the player) and
 /// friendly-fire avoidance (target: another enemy), so both read the same way.
@@ -2602,20 +2616,6 @@ impl Brain<'_> {
 /// was for tanks to stop short of the player as well, and an enemy that
 /// noses up to the hull and holds reads far better than one that grinds
 /// into it.
-/// Whether `me`, outside every charging rail's lane it does not own, would
-/// step into one driving along `dir`: the point a hull's radius and
-/// `enemy_danger_clear_px` ahead lies inside it.
-fn enters_lane(me: &Tank, dir: Dir, dangers: &[Danger]) -> bool {
-    let mine = me.owner_slot();
-    let lanes = || dangers.iter().filter(|d| d.is_lane() && d.owner != Some(mine));
-    if lanes().any(|d| d.depth(me.position) > 0.0) {
-        return false;
-    }
-    let reach = me.avoidance_radius() + tuning().enemy_danger_clear_px;
-    let ahead = Position::new(me.position.x + dir.vec().x * reach, me.position.y + dir.vec().y * reach);
-    lanes().any(|d| d.depth(ahead) > 0.0)
-}
-
 fn crowded_ahead(from: Position, dir: Dir, movers: &[Mover], my_index: usize) -> bool {
     let gap_wanted = tuning().enemy_separation_px;
     let Some(me) = movers.get(my_index) else { return false };
@@ -3163,16 +3163,19 @@ fn act_dodge(b: &mut Brain) -> Status {
 
 /// What a wind-up asks of its tank, by its weapon: a tell holds the tank
 /// facing the way it goes off; a charge (`Tank::charge`) is its weapon's
-/// to hold or let go (`gauss_charge_rule`).
+/// to hold or let go - the rail's `gauss_charge_rule` - and a charge
+/// weapon adds its arm here.
 fn windup_rule(b: &Brain, windup: crate::tank::Windup) -> Option<SpecialUse> {
-    if b.me.charge.is_some() {
-        let sense = match b.sense {
-            SpecialSense::Gauss(sense) => Some(sense),
-            _ => None,
-        };
-        return Some(gauss_charge_rule(b, windup.facing, sense));
+    match b.me.charge.map(|c| c.weapon) {
+        Some(ActiveWeapon::GaussRail) => {
+            let sense = match b.sense {
+                SpecialSense::Gauss(sense) => Some(sense),
+                _ => None,
+            };
+            Some(gauss_charge_rule(b, windup.facing, sense))
+        }
+        _ => Some(SpecialUse::Hold { face: windup.facing, why: "hold" }),
     }
-    Some(SpecialUse::Hold { face: windup.facing, why: "hold" })
 }
 
 /// The sonic hammer's rule (docs/sonic-hammer.md "AI"), in priority order:
