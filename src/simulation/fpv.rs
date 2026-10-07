@@ -445,3 +445,250 @@ impl Game {
         Some((slot as u8, origin, out))
     }
 }
+
+/// A seat as an FPV-carrying enemy sees it this frame (`Game::fpv_senses`).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct FpvSeat {
+    pub seat: u8,
+    pub entity: Entity,
+    pub pos: Position,
+    /// On the field and not a wreck.
+    pub live: bool,
+    /// In tall grass that hides it (`Terrain::conceals`).
+    pub concealed: bool,
+    /// How far an enemy sees it (`Game::sight_on`).
+    pub sight: f32,
+}
+
+impl Game {
+    /// Whether some live enemy carries an online FPV swarm.
+    pub(super) fn any_fpv(&self) -> bool {
+        self.world.query::<&Tank>().with::<&Ai>().iter().any(|t| !t.is_wreck() && t.active_weapon() == crate::tank::ActiveWeapon::FpvSwarm)
+    }
+
+    /// What each enemy carrying an online FPV swarm measures for its rule
+    /// (`ai::FpvSense`, docs/fpv-swarm.md "AI"): the seat it would launch
+    /// at, the seat hiding under a crown, a hunter's quarry, whether it
+    /// stands in the open, where to back off to and its cover spot, kept on
+    /// its `Ai` (`Ai::cover_spot`). Built before the tanks think, only when
+    /// one carries the swarm. No RNG; ties on seat and cell.
+    pub(super) fn fpv_senses(
+        &mut self,
+        f: &Frame,
+        seats: &[FpvSeat],
+        grid: &crate::pathfind::Grid,
+        dangers: &[crate::ai::Danger],
+    ) -> std::collections::BTreeMap<Entity, crate::ai::FpvSense> {
+        let t = tuning();
+        let trees = self.standing_trees();
+        let field = (f.width, f.height);
+        let hulls: Vec<(Entity, (Position, Vec2))> =
+            seats.iter().map(|s| (s.entity, self.world.get::<&Tank>(s.entity).map(|tk| Self::hull_of(&tk)).unwrap_or((s.pos, Vec2::zero())))).collect();
+        let quarry = self.frog.and_then(|e| {
+            let fr = self.world.get::<&Frog>(e).ok()?;
+            let hidden = Self::canopy_over(&trees, Self::frog_box(&fr)).is_some() || Self::crown_at(&trees, fr.position).is_some();
+            (!fr.is_dead() && !hidden).then_some(fr.position)
+        });
+        let view = self.enemy_sight();
+        let mut out = std::collections::BTreeMap::new();
+        let mut q = self.world.query::<(Entity, &Tank, &mut Ai)>();
+        for (entity, tank, ai) in q.iter() {
+            if tank.is_wreck() || tank.active_weapon() != crate::tank::ActiveWeapon::FpvSwarm {
+                continue;
+            }
+            let me = tank.position;
+            let mine = tank.owner_slot();
+            let safe = |p: Position| !dangers.iter().any(|d| d.owner != Some(mine) && d.depth(p) > 0.0);
+            // The seats it knows of and whose sight box it stands in.
+            let known: Vec<(&FpvSeat, bool)> = seats
+                .iter()
+                .zip(&hulls)
+                .filter(|(s, _)| s.live && in_sight_box(s.pos, me) && me.distance_to(s.pos) <= s.sight && (!s.concealed || ai.is_hit_alerted()))
+                .map(|(s, (_, hull))| (s, Self::canopy_over(&trees, *hull).is_some()))
+                .collect();
+            let nearest = |covered: bool| {
+                known
+                    .iter()
+                    .filter(|(_, c)| *c == covered)
+                    .min_by(|a, b| me.distance_to(a.0.pos).total_cmp(&me.distance_to(b.0.pos)).then(a.0.seat.cmp(&b.0.seat)))
+                    .map(|(s, _)| **s)
+            };
+            let open_seat = nearest(false);
+            let covered_seat = nearest(true);
+            let canopy = covered_seat.and_then(|s| {
+                let (_, hull) = hulls[seats.iter().position(|x| x.seat == s.seat)?];
+                Self::canopy_over(&trees, hull).map(|(_, tree)| (s.seat, tree))
+            });
+            let target = open_seat.or(covered_seat);
+            let exposed = target.is_some_and(|s| f.terrain.line_of_sight(s.pos, me));
+            // Too close: the nearest it knows of that sees it.
+            let back_off = known
+                .iter()
+                .filter(|(s, _)| me.distance_to(s.pos) < t.fpv_ai_min_range_px && f.terrain.line_of_sight(s.pos, me))
+                .min_by(|a, b| me.distance_to(a.0.pos).total_cmp(&me.distance_to(b.0.pos)).then(a.0.seat.cmp(&b.0.seat)))
+                .map(|(s, _)| {
+                    let away = me - s.pos;
+                    let len = away.length();
+                    let dir = if len > 1e-3 { away * (1.0 / len) } else { crate::tank::Dir::from_rotation(tank.rotation).unwrap_or(crate::tank::Dir::Up).vec() };
+                    fpv::clamp_inside(s.pos + dir * (t.fpv_ai_min_range_px + OBSTACLE_GRID_SIZE), field, OBSTACLE_GRID_SIZE * 0.5)
+                })
+                .filter(|&p| safe(p));
+            // The cover spot, kept while it still hides it from the seat.
+            let cover = match (exposed, target) {
+                (true, Some(s)) => {
+                    let keeps = |p: Position| {
+                        in_sight_box(s.pos, p) && p.distance_to(s.pos) >= t.fpv_ai_min_range_px && safe(p) && !f.terrain.line_of_sight(s.pos, p)
+                    };
+                    let kept = ai.cover_spot.filter(|&(p, age)| age < t.fpv_ai_cover_seconds && keeps(p) && grid.connected(me, p));
+                    let spot = match kept {
+                        Some((p, age)) => Some((p, age + f.dt)),
+                        None => fpv_cover_spot(me, grid, &keeps).map(|p| (p, 0.0)),
+                    };
+                    ai.cover_spot = spot;
+                    spot.map(|(p, _)| p)
+                }
+                _ => {
+                    ai.cover_spot = None;
+                    None
+                }
+            };
+            let hunter = ai.role == crate::ai::Role::Hunter;
+            let quarry = quarry.filter(|&p| hunter && me.distance_to(p) <= view);
+            out.insert(
+                entity,
+                crate::ai::FpvSense {
+                    at_seat: open_seat.map(|s| (s.seat, s.pos)),
+                    canopy,
+                    quarry,
+                    exposed,
+                    cover,
+                    back_off,
+                    in_air: tank.fpv_out,
+                },
+            );
+        }
+        out
+    }
+
+    /// Every enemy a seat's drone is coming at - locked on it, or going for
+    /// a point whose blast would reach it - and what it can do about it
+    /// (`ai::AirThreat`, docs/fpv-swarm.md "Reacting to a seat's swarm"):
+    /// the nearest such drone past its climb within the tank's sight,
+    /// whether the tank stands inside that seat's box (it may fire at it),
+    /// whether its hull is under a crown already and the nearest tree it
+    /// can get under. Empty with no seat's drone in the air. No RNG; ties on
+    /// id and cell.
+    pub(super) fn air_threats(&self, grid: &crate::pathfind::Grid) -> std::collections::BTreeMap<Entity, crate::ai::AirThreat> {
+        let mut out = std::collections::BTreeMap::new();
+        let drones: Vec<Drone> = self
+            .drones()
+            .into_iter()
+            .filter(|d| d.owner.is_player() && matches!(d.stage, DroneStage::Cruise | DroneStage::Dive))
+            .collect();
+        if drones.is_empty() {
+            return out;
+        }
+        let t = tuning();
+        let trees = self.standing_trees();
+        let view = self.enemy_sight();
+        let seats = self.players();
+        let reach = t.fpv_blast_radius_px + OBSTACLE_GRID_SIZE * 0.5;
+        let enemies: Vec<(Entity, Position)> =
+            self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter().filter(|(_, tk)| !tk.is_wreck()).map(|(e, tk)| (e, tk.position)).collect();
+        let pairs = drones.iter().flat_map(|d| {
+            let locked = match d.lock {
+                DroneLock::Tank { entity, .. } => Some(entity),
+                _ => None,
+            };
+            enemies.iter().filter(move |&&(e, p)| locked == Some(e) || (locked.is_none() && p.distance_to(d.aim) <= reach)).map(move |&(e, _)| (d, e))
+        });
+        for (d, entity) in pairs {
+            let Ok(tank) = self.world.get::<&Tank>(entity) else { continue };
+            let me = tank.position;
+            let dist = me.distance_to(d.ground);
+            if dist > view {
+                continue;
+            }
+            let better = out.get(&entity).is_none_or(|old: &crate::ai::AirThreat| dist < me.distance_to(old.drone));
+            if !better {
+                continue;
+            }
+            let may_shoot = match d.owner {
+                Owner::Player(seat) => seats
+                    .get(seat as usize)
+                    .copied()
+                    .flatten()
+                    .and_then(|e| self.world.get::<&Tank>(e).ok().map(|s| in_sight_box(s.position, me)))
+                    .unwrap_or(true),
+                _ => false,
+            };
+            let speed = d.velocity().length().max(1.0);
+            let covered = Self::canopy_over(&trees, Self::hull_of(&tank)).is_some();
+            let tree = if trees.is_empty() || covered { None } else { fpv_tree_spot(me, grid, &trees, t.fpv_ai_tree_px) };
+            out.insert(entity, crate::ai::AirThreat { drone: d.ground, eta: dist / speed, may_shoot, covered, tree });
+        }
+        out
+    }
+}
+
+/// The nearest nav cell within `fpv_ai_cover_px` of `me` (its centre) that
+/// is open, joined to where it stands and `keeps` - hidden from the seat,
+/// inside its box, out of its face - ties to the lower cell index.
+fn fpv_cover_spot(me: Position, grid: &crate::pathfind::Grid, keeps: &dyn Fn(Position) -> bool) -> Option<Position> {
+    let reach = (tuning().fpv_ai_cover_px / OBSTACLE_GRID_SIZE).ceil() as i32;
+    nearest_cell(me, reach, grid, |p| grid.connected(me, p) && keeps(p))
+}
+
+/// The nearest tree within `reach_px` of `me` (ties to cell order) that has
+/// an open cell joined to where it stands within two cells of it: that cell
+/// - the one nearest the tree, then nearest `me`, then the lower cell index
+/// - and the tree's centre. The cells round a tree are mostly inside the
+/// nav grid's clearance, so the hull gets under the crown by driving at the
+/// tree from there.
+fn fpv_tree_spot(me: Position, grid: &crate::pathfind::Grid, trees: &[(Entity, Position)], reach_px: f32) -> Option<(Position, Position)> {
+    let mut near: Vec<&(Entity, Position)> = trees.iter().filter(|(_, p)| p.distance_to(me) <= reach_px).collect();
+    near.sort_by(|a, b| a.1.distance_to(me).total_cmp(&b.1.distance_to(me)));
+    near.into_iter().find_map(|&(_, tree)| {
+        let (cx, cy) = crate::map::world_to_cell(tree);
+        let mut best: Option<((f32, f32, (i32, i32)), Position)> = None;
+        for row in cy - 2..=cy + 2 {
+            for col in cx - 2..=cx + 2 {
+                if col < 0 || row < 0 {
+                    continue;
+                }
+                let p = crate::map::cell_to_world(col, row);
+                if !grid.usable(p) || !grid.connected(me, p) {
+                    continue;
+                }
+                let key = (p.distance_to(tree), p.distance_to(me), (row, col));
+                if best.is_none_or(|(k, _)| key < k) {
+                    best = Some((key, p));
+                }
+            }
+        }
+        best.map(|(_, spot)| (spot, tree))
+    })
+}
+
+/// The nearest usable cell centre within `reach` cells of `me` for which
+/// `ok` holds; ties to the lower cell index (row, then column).
+fn nearest_cell(me: Position, reach: i32, grid: &crate::pathfind::Grid, ok: impl Fn(Position) -> bool) -> Option<Position> {
+    let (cx, cy) = crate::map::world_to_cell(me);
+    let mut best: Option<(f32, (i32, i32), Position)> = None;
+    for row in cy - reach..=cy + reach {
+        for col in cx - reach..=cx + reach {
+            if col < 0 || row < 0 {
+                continue;
+            }
+            let p = crate::map::cell_to_world(col, row);
+            if !grid.usable(p) || !ok(p) {
+                continue;
+            }
+            let d = me.distance_to(p);
+            if best.is_none_or(|(bd, bc, _)| (d, (row, col)) < (bd, bc)) {
+                best = Some((d, (row, col), p));
+            }
+        }
+    }
+    best.map(|(_, _, p)| p)
+}

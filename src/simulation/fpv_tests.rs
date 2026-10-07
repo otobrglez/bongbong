@@ -25,10 +25,15 @@ fn cell(col: i32, row: i32) -> Position {
 /// at cell (3, 12)), nobody shielded, no banner, the first seat at `SEAT`
 /// facing east with a crate's worth of drones.
 fn round_with(extra: &str, players: usize) -> Game {
+    round_under(extra, players, Mission::Destroy)
+}
+
+/// `round_with` under `mission`.
+fn round_under(extra: &str, players: usize, mission: Mission) -> Game {
     let mut game = Game::default();
     game.seed_override = Some(7);
     game.show_intro = false;
-    game.level_overrides.mission = Some(Mission::Destroy);
+    game.level_overrides.mission = Some(mission);
     game.players = PlayerCount::from_count(players).expect("a seat count");
     let map = format!("version = 1\ntanks = 0\ncells.\"3,6\" = {{ kind = \"start\" }}\ncells.\"3,12\" = {{ kind = \"start2\" }}\n{extra}");
     game.map = MapFile::from_toml_str(&map).expect("test map parses");
@@ -431,5 +436,208 @@ fn strike_air_downs_a_drone_once() {
     assert!(game.air_targets().is_empty());
     assert_eq!(drones(&game)[0].stage, DroneStage::Falling);
     let _ = DroneLock::None;
+}
+
+
+// --- the AI ---------------------------------------------------------------
+
+/// A round as `round_with`, under `mission`, the seat unarmed (shells).
+fn round_as(extra: &str, mission: Mission) -> Game {
+    let game = round_under(extra, 1, mission);
+    let seat = game.player().unwrap();
+    with_tank_mut(&game.world, seat, |t| t.disarm());
+    game
+}
+
+/// A thinking enemy of `role` at `at` carrying a crate's worth of drones,
+/// held where it stands (`speed_scale` 0) so the test reads its decisions.
+fn fpv_enemy(game: &mut Game, at: Position, role: Role, moves: bool) -> Entity {
+    let slot = game.debug_spawn_enemy(at, Some(1), Some(role)).expect("spawns");
+    let entity = game.tank_entity_by_slot(slot).expect("exists");
+    with_tank_mut(&game.world, entity, |t| {
+        if !moves {
+            t.speed_scale = 0.0;
+        }
+        t.disarm();
+        t.fpv_drones = Tuning::DEFAULT.fpv_drones_per_pickup;
+        t.shield_hp = 0.0;
+        t.shield_timer = 0.0;
+    });
+    entity
+}
+
+/// Run `frames` ticks with the seat idle; every event.
+fn idle(game: &mut Game, frames: usize) -> Vec<Event> {
+    let mut seen = Vec::new();
+    for _ in 0..frames {
+        seen.extend(step(game, false));
+    }
+    seen
+}
+
+fn launches_by(events: &[Event], slot: usize) -> Vec<(u32, Option<usize>, bool)> {
+    events
+        .iter()
+        .filter_map(|e| match *e {
+            Event::DroneLaunched { id, slot: s, target, frog, .. } if s == slot => Some((id, target, frog)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// An enemy with drones launches at a seat whose box it stands in, with a
+/// wall between them - no line of sight needed.
+#[test]
+fn the_swarm_launches_at_a_seat_in_its_box_without_line_of_sight() {
+    let wall = (4..9).map(|r| format!("cells.\"9,{r}\" = {{ kind = \"wall\", material = \"iron\" }}\n")).collect::<String>();
+    let mut game = round_as(&wall, Mission::Destroy);
+    let enemy = fpv_enemy(&mut game, cell(14, 6), Role::Player, false);
+    let slot = slot_of(&game, enemy);
+    let events = idle(&mut game, 300);
+    let l = launches_by(&events, slot);
+    assert!(!l.is_empty(), "it launched");
+    assert_eq!(l[0].1, Some(0), "at the seat");
+    assert!(tank(&game, game.player().unwrap(), |t| t.damage) > 0.0, "and it landed");
+}
+
+/// Outside the seat's box it launches nothing at it.
+#[test]
+fn an_enemy_never_launches_at_a_seat_from_outside_its_sight_box() {
+    let mut game = round_as("", Mission::Destroy);
+    // 12.5 cells east: past the box's 11.5.
+    let enemy = fpv_enemy(&mut game, Position::new(SEAT.x + 400.0, SEAT.y), Role::Player, false);
+    let events = idle(&mut game, 300);
+    assert!(launches_by(&events, slot_of(&game, enemy)).is_empty());
+}
+
+/// One at a time: no second launch while its first drone is in the air,
+/// none within `fpv_enemy_gap_seconds` of the last.
+#[test]
+fn the_swarm_launches_one_at_a_time_with_its_gap() {
+    let mut game = round_as("", Mission::Destroy);
+    let enemy = fpv_enemy(&mut game, cell(14, 6), Role::Player, false);
+    let slot = slot_of(&game, enemy);
+    let mut frames: Vec<u64> = Vec::new();
+    let mut out_at_launch = Vec::new();
+    for _ in 0..900 {
+        let events = step(&mut game, false);
+        if !launches_by(&events, slot).is_empty() {
+            frames.push(game.frame());
+            out_at_launch.push(game.drones().iter().filter(|d| d.owner == Owner::Enemy(slot) && d.in_air()).count());
+        }
+    }
+    assert!(frames.len() >= 2, "{frames:?}");
+    let gap = (Tuning::DEFAULT.fpv_enemy_gap_seconds / DT) as u64;
+    assert!(frames.windows(2).all(|w| w[1] - w[0] >= gap), "{frames:?}");
+    assert!(out_at_launch.iter().all(|&n| n == 1), "only the one just launched in the air: {out_at_launch:?}");
+}
+
+/// A hunter sends its drones at the players' frog.
+#[test]
+fn a_hunter_sends_its_drones_at_the_frog() {
+    let mut game = round_as("cells.\"14,12\" = { kind = \"frog\" }\n", Mission::Protect);
+    let seat = game.player().unwrap();
+    game.place_tank(seat, cell(3, 1), Some(90.0)).unwrap();
+    let enemy = fpv_enemy(&mut game, cell(20, 12), Role::Hunter, false);
+    let events = idle(&mut game, 300);
+    let l = launches_by(&events, slot_of(&game, enemy));
+    assert!(l.iter().any(|&(_, _, frog)| frog), "{l:?}");
+}
+
+/// A seat hidden in tall grass is not launched at.
+#[test]
+fn the_swarm_never_launches_at_a_seat_hidden_in_grass() {
+    let grass = (6..9).flat_map(|c| (8..11).map(move |r| format!("cells.\"{c},{r}\" = {{ kind = \"tall_grass\" }}\n"))).collect::<String>();
+    let mut game = round_as(&grass, Mission::Destroy);
+    let seat = game.player().unwrap();
+    game.place_tank(seat, cell(7, 9), Some(90.0)).unwrap();
+    let enemy = fpv_enemy(&mut game, cell(14, 6), Role::Player, false);
+    let events = idle(&mut game, 300);
+    assert!(launches_by(&events, slot_of(&game, enemy)).is_empty());
+}
+
+#[test]
+fn a_training_dummy_never_launches() {
+    let mut game = round_as("", Mission::Destroy);
+    let enemy = fpv_enemy(&mut game, cell(14, 6), Role::Hunter, false);
+    game.world.get::<&mut crate::ai::Ai>(enemy).unwrap().frog_only = true;
+    let events = idle(&mut game, 300);
+    assert!(launches_by(&events, slot_of(&game, enemy)).is_empty());
+}
+
+/// The generic tiers never launch: lined up on the seat in range with no
+/// sense, an enemy with drones does not pull its trigger.
+#[test]
+fn the_generic_tiers_never_launch_a_drone() {
+    assert!(!crate::ai::generic_fire(ActiveWeapon::FpvSwarm));
+}
+
+/// A seat under a tree is launched at through the crown: the drone bursts
+/// in the leaves over it.
+#[test]
+fn the_swarm_breaks_the_crown_over_a_hidden_seat() {
+    let mut game = round_as("cells.\"3,5\" = { kind = \"tree\" }\n", Mission::Destroy);
+    let seat = game.player().unwrap();
+    game.place_tank(seat, Position::new(96.0, 186.0), Some(0.0)).unwrap();
+    let enemy = fpv_enemy(&mut game, cell(14, 6), Role::Player, false);
+    let events = idle(&mut game, 400);
+    let l = launches_by(&events, slot_of(&game, enemy));
+    assert!(!l.is_empty() && l[0].1.is_none(), "launched at the crown, no lock: {l:?}");
+    assert!(bursts(&events).iter().any(|&(_, crown)| crown), "in the leaves");
+    assert_eq!(tank(&game, seat, |t| t.damage), 0.0, "the seat under it untouched");
+}
+
+/// An enemy with a minigun shoots down the seat's drone diving at it.
+#[test]
+fn an_enemy_with_a_minigun_shoots_down_the_drone_diving_at_it() {
+    let mut game = round("");
+    let enemy = parked(&mut game, cell(14, 6));
+    with_tank_mut(&game.world, enemy, |t| t.minigun_ammo = 60);
+    let events = launch(&mut game, 300);
+    assert_eq!(downed(&events), vec![AirStrike::Bullet.name()], "{:?}", downed(&events));
+    assert_eq!(tank(&game, enemy, |t| t.damage), 0.0);
+}
+
+/// An enemy a seat's drone has locked breaks for the nearest tree and is
+/// under its crown before the dive: it takes nothing.
+#[test]
+fn an_enemy_breaks_toward_the_nearest_tree() {
+    let mut game = round("cells.\"13,3\" = { kind = \"tree\" }\n");
+    let slot = game.debug_spawn_enemy(cell(13, 6), Some(1), Some(Role::Player)).unwrap();
+    let enemy = game.tank_entity_by_slot(slot).unwrap();
+    with_tank_mut(&game.world, enemy, |t| {
+        t.disarm();
+        t.shield_hp = 0.0;
+        t.shield_timer = 0.0;
+    });
+    let events = launch(&mut game, 360);
+    assert!(events.iter().any(|e| matches!(e, Event::DroneLockLost { why: "canopy", .. })), "it got under the tree");
+    assert_eq!(tank(&game, enemy, |t| t.damage), 0.0);
+}
+
+/// With no tree and no minigun, it breaks across the drone's line.
+#[test]
+fn an_enemy_with_no_tree_breaks_across_the_drones_line() {
+    let mut game = round("");
+    let slot = game.debug_spawn_enemy(cell(14, 6), Some(1), Some(Role::Player)).unwrap();
+    let enemy = game.tank_entity_by_slot(slot).unwrap();
+    with_tank_mut(&game.world, enemy, |t| {
+        t.disarm();
+        t.shells_ammo = 0;
+    });
+    let start = tank(&game, enemy, |t| t.position);
+    step(&mut game, true);
+    let mut moved_across = false;
+    for _ in 0..200 {
+        step(&mut game, false);
+        let now = tank(&game, enemy, |t| t.position);
+        if (now.y - start.y).abs() > 8.0 {
+            moved_across = true;
+        }
+        if game.drones().is_empty() {
+            break;
+        }
+    }
+    assert!(moved_across, "it drove across the drone's line");
 }
 
