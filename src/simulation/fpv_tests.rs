@@ -958,3 +958,78 @@ fn an_enemy_holds_its_flak_outside_the_seats_sight_box() {
     );
     assert!(downed(&seen).is_empty(), "{:?}", downed(&seen));
 }
+
+/// What an enemy's FPV rule says this tick (`AiSnapshot::special`).
+fn special_why(game: &Game, entity: Entity) -> Option<&'static str> {
+    game.world.get::<&crate::ai::Ai>(entity).unwrap().snapshot().special
+}
+
+/// A seat that sees it from inside `fpv_ai_min_range_px` is backed off
+/// from before the enemy launches: drones do not need it close.
+#[test]
+fn an_enemy_too_close_backs_off_before_it_launches() {
+    let mut game = round_as("", Mission::Destroy);
+    let enemy = fpv_enemy(&mut game, Position::new(SEAT.x + 96.0, SEAT.y), Role::Player, true);
+    let slot = slot_of(&game, enemy);
+    let (mut backing, mut first) = (0, None);
+    for frame in 0..600 {
+        let events = step(&mut game, false);
+        if special_why(&game, enemy) == Some("back off") {
+            backing += 1;
+        }
+        if first.is_none() && !launches_by(&events, slot).is_empty() {
+            first = Some((frame, tank(&game, enemy, |t| t.position).distance_to(SEAT)));
+        }
+    }
+    assert!(backing > 0, "it backed off");
+    let (frame, away) = first.expect("and launched");
+    assert!(away >= Tuning::DEFAULT.fpv_ai_min_range_px * 0.9, "from out of the seat's face: {away} px at frame {frame}");
+}
+
+/// Exposed to the seat, an enemy with drones makes for the cover of a
+/// wall nearby and launches from behind it.
+#[test]
+fn an_exposed_enemy_moves_behind_a_wall_and_launches_from_cover() {
+    let wall = (5..9).map(|r| format!("cells.\"11,{r}\" = {{ kind = \"wall\", material = \"iron\" }}\n")).collect::<String>();
+    let mut game = round_as(&wall, Mission::Destroy);
+    // In the open south of the wall's end, seen by the seat.
+    let enemy = fpv_enemy(&mut game, cell(13, 10), Role::Player, true);
+    let slot = slot_of(&game, enemy);
+    let (mut covering, mut launched_from) = (0, None);
+    for _ in 0..600 {
+        let events = step(&mut game, false);
+        if special_why(&game, enemy) == Some("to cover") {
+            covering += 1;
+        }
+        if launched_from.is_none() && !launches_by(&events, slot).is_empty() {
+            launched_from = Some((special_why(&game, enemy), tank(&game, enemy, |t| t.position)));
+        }
+    }
+    assert!(covering > 0, "it made for cover");
+    let (why, at) = launched_from.expect("and launched");
+    assert_eq!(why, Some("cover"), "from behind the wall, at {at:?}");
+    assert!(!game.present_world().line_of_sight(SEAT, at), "the seat cannot see where it launched from");
+}
+
+/// With one of its drones in the air an enemy stands where it launched
+/// from and watches it work.
+#[test]
+fn an_enemy_watches_its_drone_work() {
+    let mut game = round_as("", Mission::Destroy);
+    let enemy = fpv_enemy(&mut game, cell(14, 6), Role::Player, true);
+    let slot = slot_of(&game, enemy);
+    let mut launched = false;
+    let (mut watching, mut moved) = (0, 0.0f32);
+    for _ in 0..600 {
+        let before = tank(&game, enemy, |t| t.position);
+        let events = step(&mut game, false);
+        launched |= !launches_by(&events, slot).is_empty();
+        let up = game.drones().iter().any(|d| d.owner == Owner::Enemy(slot) && d.in_air());
+        if launched && up && special_why(&game, enemy) == Some("watch") {
+            watching += 1;
+            moved = moved.max(tank(&game, enemy, |t| t.position).distance_to(before));
+        }
+    }
+    assert!(watching > 30, "it watched its drone: {watching} ticks");
+    assert!(moved < 1.0, "standing where it launched from: {moved} px in a tick");
+}
