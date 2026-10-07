@@ -3388,7 +3388,7 @@ impl Game {
                 .collect();
             let alerts: BTreeMap<Entity, Option<Position>> =
                 self.world.query::<(Entity, &Ai)>().iter().map(|(e, ai)| (e, if field { ai.field.alert } else { alert })).collect();
-            self.hammer_senses(f, &seats, &alerts)
+            self.hammer_senses(f, &seats, &alerts, grid)
         } else {
             BTreeMap::new()
         };

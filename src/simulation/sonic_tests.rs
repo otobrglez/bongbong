@@ -531,6 +531,45 @@ fn hammer_tanks_close_in_round_the_seat_not_onto_it() {
     assert!(apart > 64.0, "each on its own side: {apart}");
 }
 
+/// A seat's closers stand square on it, each where its blast reaches the
+/// seat and neither stands in the other's cone: in slot order each on the
+/// side nearest it that is clear of the ones before it - beside the first
+/// for a hull small enough, across the seat from it for one whose corners
+/// would stand in the first's cone there - and a third hammer tank gets no
+/// spot; with a wall on the only clear side, nor does the second.
+#[test]
+fn closer_spots_stand_square_on_the_seat_out_of_each_others_way() {
+    let t = tuning();
+    // Spots on cell centres: the seat on one, the breaker less half a cell
+    // is three cells.
+    let seat_at = Position::new(416.0, 288.0);
+    let seat_tank = Tank { position: seat_at, ..Tank::default() };
+    let seats = [sonic::HammerSeat::of(0, &seat_tank, true, false)];
+    let entity = |i: u32| Entity::from_bits((1u64 << 32) | u64::from(i)).expect("an entity");
+    let (a, b, c) = (entity(3), entity(4), entity(5));
+    let armed = [(a, 3, Position::new(700.0, 288.0), 0u8), (b, 4, Position::new(416.0, 500.0), 0u8), (c, 5, Position::new(130.0, 288.0), 0u8)];
+    let tanks: Vec<(usize, Position)> = armed.iter().map(|x| (x.1, x.2)).chain(std::iter::once((0, seat_at))).collect();
+    let corners = |p: Position| [p, p + Vec2::new(-16.0, -16.0), p + Vec2::new(16.0, -16.0), p + Vec2::new(-16.0, 16.0), p + Vec2::new(16.0, 16.0), p];
+    let friends: Vec<(usize, [Position; 6])> = armed.iter().map(|x| (x.1, corners(x.2))).collect();
+    let out = t.sonic_ai_breaker_px - OBSTACLE_GRID_SIZE * 0.5;
+    let spots_on = |map: &str, half: f32| {
+        let game = round(map);
+        let grid = game.nav_grid(W, H);
+        let wall = |cell: (i32, i32)| if game.map.solid_at(cell.0, cell.1) { crate::sonic::Block::Wall } else { crate::sonic::Block::Open };
+        sonic::closer_spots(&t, &armed, |_| Vec2::new(half, half), &seats, &grid, (W, H), &tanks, &friends, wall)
+    };
+    let east = Position::new(seat_at.x + out, seat_at.y);
+    let (south, west) = (Position::new(seat_at.x, seat_at.y + out), Position::new(seat_at.x - out, seat_at.y));
+    let small = spots_on("", 16.0);
+    assert_eq!((small.get(&a), small.get(&b)), (Some(&east), Some(&south)), "each on the side nearest it: {small:?}");
+    assert_eq!(small.get(&c), None, "two close in, no more");
+    let large = spots_on("", 24.0);
+    assert_eq!((large.get(&a), large.get(&b)), (Some(&east), Some(&west)), "across the seat from the first: {large:?}");
+    let (col, row) = crate::map::world_to_cell(west);
+    let walled = spots_on(&format!("cells.\"{col},{row}\" = {{ kind = \"wall\", material = \"iron\" }}\n"), 24.0);
+    assert_eq!((walled.get(&a), walled.get(&b)), (Some(&east), None), "no side clear of the first's cone: {walled:?}");
+}
+
 /// A skid is not being stuck: the stuck and breach clocks stand still
 /// while a knocked enemy slides.
 #[test]

@@ -75,6 +75,11 @@ pub(super) fn knock(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, dir: 
 /// reaches it by, the nearest first.
 fn hull_points(tank: &Tank) -> [Position; 5] {
     let (c, h) = tank.hull_bbox_world();
+    box_points(c, h)
+}
+
+/// The centre `c` and the four corners of a box `h` either way of it.
+fn box_points(c: Position, h: Vec2) -> [Position; 5] {
     [
         c,
         Position::new(c.x - h.x, c.y - h.y),
@@ -121,6 +126,93 @@ pub(super) fn swap_spawn_special_with(t: &Tuning, enemy: &mut Tank, slot: usize,
         }
     }
 }
+
+/// Where each closer stands to shout at the seat it fights
+/// (`HammerSense::spot`, docs/sonic-hammer.md "AI"). For every live seat,
+/// the `sonic_ai_closers` hammer tanks fighting it nearest it (ties on
+/// slot) are its closers; the seat's spots are the four on its row and
+/// column `sonic_ai_breaker_px` less half a cell out, and a spot holds
+/// where a hull can be routed (`Grid::usable`), a blast from it at the
+/// seat reaches the seat's hull within `sonic_ai_breaker_px`, no tank but
+/// a closer stands on it and no fellow enemy but a closer stands in that
+/// blast's cone. In slot order, each closer takes the spot that holds
+/// nearest it, reachable from where it stands, where neither its blast nor
+/// a blast of a closer before it would reach the other's hull - at the
+/// defaults the spot across the seat from the first - so the two never
+/// stand in each other's way; one that finds none is left to the tree.
+/// `armed` is every live hammer tank healthy enough to close in (entity,
+/// owner slot, position, the seat it fights), `half_of` a hammer tank's hull half extents, `tanks`
+/// every live tank with a body by slot and `friends` every live enemy by
+/// slot with its hull points. No RNG.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn closer_spots(
+    t: &Tuning,
+    armed: &[(Entity, usize, Position, u8)],
+    half_of: impl Fn(Entity) -> Vec2,
+    seats: &[HammerSeat],
+    grid: &crate::pathfind::Grid,
+    field: (f32, f32),
+    tanks: &[(usize, Position)],
+    friends: &[(usize, [Position; 6])],
+    block: impl Fn((i32, i32)) -> Block,
+) -> BTreeMap<Entity, Position> {
+    let mut out = BTreeMap::new();
+    if t.sonic_ai_closers <= 0 {
+        return out;
+    }
+    let out_by = (t.sonic_ai_breaker_px - OBSTACLE_GRID_SIZE * 0.5).max(CLOSER_SPOT_MIN_PX);
+    for seat in seats.iter().filter(|s| s.live) {
+        let mut closers: Vec<(Entity, usize, Position)> = armed.iter().filter(|a| a.3 == seat.seat).map(|a| (a.0, a.1, a.2)).collect();
+        closers.sort_by(|a, b| a.2.distance_to(seat.pos).total_cmp(&b.2.distance_to(seat.pos)).then(a.1.cmp(&b.1)));
+        closers.truncate(t.sonic_ai_closers as usize);
+        if closers.is_empty() {
+            continue;
+        }
+        closers.sort_by_key(|c| c.1);
+        let closing = |slot: usize| closers.iter().any(|c| c.1 == slot);
+        let spots: Vec<(Position, SonicCone)> = Dir::ALL
+            .into_iter()
+            .filter_map(|side| {
+                let at = seat.pos + side.vec() * out_by;
+                if !grid.usable(at) {
+                    return None;
+                }
+                let facing = Dir::toward(at, seat.pos);
+                let cone = SonicCone::cast(at, facing, t.sonic_reach_px, t.sonic_half_angle_deg.to_radians(), field, &block, |_| Floor::Dry);
+                let reaches = cone.nearest_reached(&seat.points).is_some_and(|d| d <= t.sonic_ai_breaker_px);
+                let stood_on = tanks.iter().any(|&(slot, p)| !closing(slot) && p.distance_to(at) < CLOSER_SPOT_CLEAR_PX);
+                let friend = friends.iter().any(|(slot, points)| !closing(*slot) && cone.nearest_reached(&points[..5]).is_some());
+                (reaches && !stood_on && !friend).then_some((at, cone))
+            })
+            .collect();
+        let mut taken: Vec<(Position, Vec2, &SonicCone)> = Vec::new();
+        for (entity, _, me) in closers {
+            let half = half_of(entity);
+            let clear = |at: Position, cone: &SonicCone| {
+                taken.iter().all(|&(other, other_half, other_cone)| {
+                    other != at && cone.nearest_reached(&box_points(other, other_half)).is_none() && other_cone.nearest_reached(&box_points(at, half)).is_none()
+                })
+            };
+            let pick = spots
+                .iter()
+                .filter(|(at, cone)| clear(*at, cone) && grid.connected(me, *at))
+                .min_by(|a, b| me.distance_to(a.0).total_cmp(&me.distance_to(b.0)));
+            if let Some((spot, cone)) = pick {
+                taken.push((*spot, half, cone));
+                out.insert(entity, *spot);
+            }
+        }
+    }
+    out
+}
+
+/// The least a closer's spot stands off its seat (px): a hull's width and
+/// a half, whatever `sonic_ai_breaker_px` says.
+const CLOSER_SPOT_MIN_PX: f32 = OBSTACLE_GRID_SIZE * 1.5;
+
+/// How near another tank may stand to a closer's spot before it no longer
+/// holds (px): about a hull's width.
+const CLOSER_SPOT_CLEAR_PX: f32 = OBSTACLE_GRID_SIZE * 1.25;
 
 impl Game {
     /// The cells `Terrain` and the indicators take as hiding a hull: the
@@ -441,8 +533,15 @@ impl Game {
     /// "AI"), for `Ai::think`: built in `enemy_phase` before the tanks
     /// think, only when one of them carries a hammer. `seats` is every seat
     /// as the enemies see it this frame, in index order; `alerts` each
-    /// enemy's alert point.
-    pub(super) fn hammer_senses(&self, f: &Frame, seats: &[HammerSeat], alerts: &BTreeMap<Entity, Option<Position>>) -> BTreeMap<Entity, HammerSense> {
+    /// enemy's alert point; `grid` the frame's nav grid, which a closer's
+    /// spot is routed on (`closer_spots`).
+    pub(super) fn hammer_senses(
+        &self,
+        f: &Frame,
+        seats: &[HammerSeat],
+        alerts: &BTreeMap<Entity, Option<Position>>,
+        grid: &crate::pathfind::Grid,
+    ) -> BTreeMap<Entity, HammerSense> {
         let t = tuning();
         let mut out = BTreeMap::new();
         let armed: Vec<(Entity, usize, Position, u8)> = self
@@ -506,19 +605,15 @@ impl Game {
             .map(|tank| (tank.owner_slot(), tank.position))
             .collect();
         let (half_w, half_h) = t.sight_box_half_px();
+        let half_of = |e: Entity| self.world.get::<&Tank>(e).map_or(Vec2::new(OBSTACLE_GRID_SIZE * 0.5, OBSTACLE_GRID_SIZE * 0.5), |t| t.hull_bbox_world().1);
+        // A tank hurt enough to flee closes in on nobody, so it takes no
+        // closer's place.
+        let fit: Vec<(Entity, usize, Position, u8)> =
+            armed.iter().copied().filter(|a| self.world.get::<&Tank>(a.0).is_ok_and(|tank| tank.damage < t.enemy_flee_damage)).collect();
+        let spots = closer_spots(&t, &fit, half_of, seats, grid, field, &all_tanks, &friends, |cell| blocks.get(&cell).copied().unwrap_or(Block::Open));
         for &(entity, slot, me, target) in &armed {
             let Ok(ai) = self.world.get::<&Ai>(entity) else { continue };
-            let mut sense = HammerSense::default();
-            // The `sonic_ai_closers` hammer tanks nearest the seat this one
-            // fights close in on it (ties on slot).
-            if let Some(seat) = seats.iter().find(|s| s.seat == target && s.live) {
-                let nearer = armed
-                    .iter()
-                    .filter(|a| a.3 == target && a.0 != entity)
-                    .filter(|a| a.2.distance_to(seat.pos).total_cmp(&me.distance_to(seat.pos)).then(a.1.cmp(&slot)).is_lt())
-                    .count();
-                sense.closer = (nearer as i32) < t.sonic_ai_closers;
-            }
+            let mut sense = HammerSense { spot: spots.get(&entity).copied(), ..HammerSense::default() };
             let alert = alerts.get(&entity).copied().flatten();
             for dir in Dir::ALL {
                 let cone = SonicCone::cast(
