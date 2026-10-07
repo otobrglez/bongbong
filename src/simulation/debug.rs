@@ -997,6 +997,7 @@ impl Game {
     /// would; of two stocks set at once the later field in this order wins.
     pub fn debug_set_tank(&mut self, slot: usize, patch: &TankPatch) -> Result<(), String> {
         let entity = self.tank_entity_by_slot(slot).ok_or_else(|| format!("no tank in slot {slot}"))?;
+        let field = self.map.field_size();
         let mut q = self.world.query_one::<&mut Tank>(entity);
         let tank = q.get().map_err(|e| e.to_string())?;
         if let Some(d) = patch.damage {
@@ -1067,6 +1068,13 @@ impl Game {
             let weapon = tank.active_weapon();
             tank.charge = (seconds > 0.0 && weapon.trigger() == crate::tank::Trigger::Charge)
                 .then(|| crate::tank::Charge::new(weapon, crate::tank::ticks_of(seconds).max(1) as f32 * crate::PHYSICS_FIXED_DT));
+            // A rod's charge is its reticle, put where a press puts it.
+            tank.reticle = tank.charge.filter(|c| c.weapon == crate::tank::ActiveWeapon::RodFromGod).map(|_| {
+                let t = tuning();
+                let range = crate::rod::Range::of(tank.position, field, &t);
+                let facing = crate::tank::Dir::from_rotation(tank.rotation).unwrap_or(crate::tank::Dir::Up);
+                crate::rod::Reticle::new(crate::rod::reticle_start(tank.position, facing, &range, &t))
+            });
         }
         if let Some(n) = patch.plasma_ammo {
             if n > 0 {

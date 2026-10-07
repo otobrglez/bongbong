@@ -432,8 +432,6 @@ impl Game {
         }
     }
 
-    /// Flash `seat`'s FPV relay module, as its launch does (a client
-    /// drawing its own launch on the press).
     /// One seat's rod reticle as a client's sandbox holds it, drawn on the
     /// shown seat from the press frame (`net::round`).
     pub fn show_seat_reticle(&mut self, seat: usize, reticle: Option<crate::rod::Reticle>) {
@@ -472,6 +470,8 @@ impl Game {
         self.zone_lead = lead.max(0.0);
     }
 
+    /// Flash `seat`'s FPV relay module, as its launch does (a client
+    /// drawing its own launch on the press).
     pub fn flash_seat_fpv(&mut self, seat: u8) {
         let Some(entity) = self.seats.get(seat as usize).copied().flatten() else { return };
         if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {

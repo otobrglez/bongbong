@@ -730,6 +730,19 @@ fn an_enemy_never_calls_on_a_tower_whose_circle_holds_a_seat_off_its_box() {
     assert!(!run(beside).contains(&tower), "with a seat by it, from off that seat's box, it is not");
 }
 
+/// `set_tank`'s charge on a tank carrying the rod puts its reticle up where
+/// a press would, and a charge of 0 takes both off.
+#[test]
+fn set_tank_charge_puts_a_rods_reticle_up() {
+    let mut game = round("");
+    let patch = crate::simulation::debug::TankPatch { charge: Some(0.5), ..Default::default() };
+    game.debug_set_tank(0, &patch).expect("the seat");
+    assert_eq!(reticle(&game), Some((3 + tuning().rod_reticle_start_cells, 6)));
+    let off = crate::simulation::debug::TankPatch { charge: Some(0.0), ..Default::default() };
+    game.debug_set_tank(0, &off).expect("the seat");
+    assert_eq!(reticle(&game), None);
+}
+
 /// A chaser whose seat stands in a call waits at the circle's edge on its
 /// own side - wherever in the call's cell the seat stands - rather than
 /// drive round the circle to the side the seat leans (`Brain::way_out`).
