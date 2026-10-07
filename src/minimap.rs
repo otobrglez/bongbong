@@ -210,7 +210,7 @@ impl Class {
             Material::Iron | Material::Door => Class::Iron,
             Material::Wood => Class::Wood,
             Material::Glass => Class::Glass,
-            Material::Sandbag | Material::Barrel | Material::Fence => Class::Prop,
+            Material::Sandbag | Material::Barrel | Material::Fence | Material::Target => Class::Prop,
             Material::Tree | Material::Pine => Class::Tree,
             Material::Tesla | Material::GunTower | Material::BioSlush => Class::Tower(side),
             Material::Volcano => Class::Volcano,

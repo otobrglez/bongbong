@@ -414,7 +414,7 @@ fn every_material_reports_a_sane_max_health() {
     use crate::obstacle::Sheet;
     for material in [
         Material::Brick, Material::Iron, Material::Wood, Material::Glass,
-        Material::Sandbag, Material::Barrel, Material::Fence,
+        Material::Sandbag, Material::Barrel, Material::Fence, Material::Target,
         Material::Tree, Material::Pine,
     ] {
         let hp = material.max_health();
@@ -1447,4 +1447,137 @@ fn a_blast_lights_the_oil_around_it_in_the_same_order_every_run() {
     for _ in 0..4 {
         assert_eq!(run(), first, "the same round lit its oil in another order");
     }
+}
+
+// The range board (docs/range-target-prd.md): one cell straight ahead of
+// the player at (20,15), facing up.
+const BOARD: (i32, i32) = (20, 11);
+
+fn board_map() -> String {
+    map_with(&format!("cells.\"{},{}\" = {{ kind = \"target\" }}\n", BOARD.0, BOARD.1))
+}
+
+fn board(game: &Game) -> Option<(f32, bool, i32, f32)> {
+    let at = cell_to_world(BOARD.0, BOARD.1);
+    game.world
+        .query::<&Obstacle>()
+        .iter()
+        .find(|o| o.material == Material::Target && o.position.distance_to(at) < 1.0)
+        .map(|o| (o.health, o.burning, o.damage_stage(), o.heat))
+}
+
+fn board_died(game: &Game) -> bool {
+    game.events().iter().any(|e| matches!(e, Event::ObstacleDestroyed { material: Material::Target, .. }))
+}
+
+#[test]
+fn shells_wear_a_range_board_through_its_stages_and_splinter_it() {
+    // A board takes several shells, shows each stage it passes on the
+    // way, and breaks into plain timber rubble - never alight: only fire
+    // burns a board, so a shot that finishes it splinters it.
+    for seed in 1..=6u64 {
+        let mut game = game_at(&board_map(), seed, (20, 15));
+        let (full, ..) = board(&game).expect("the board stands");
+        assert_eq!(full, tuning().target_max_health);
+        let mut stages = vec![0];
+        let mut shots = 0;
+        let mut died = false;
+        while shots < 20 && !died {
+            step(&mut game, fire());
+            shots += 1;
+            died |= board_died(&game);
+            for _ in 0..44 {
+                step(&mut game, Input::default());
+                died |= board_died(&game);
+                if let Some((_, burning, stage, _)) = board(&game) {
+                    assert!(!burning, "seed {seed}: a shell set the board alight");
+                    if stage != *stages.last().unwrap() {
+                        stages.push(stage);
+                    }
+                }
+            }
+        }
+        assert!(died, "seed {seed}: twenty shells never broke the board");
+        assert!(shots >= 2, "seed {seed}: one shell broke the board outright");
+        assert!(stages.windows(2).all(|w| w[0] < w[1]), "seed {seed}: the stages only go forward: {stages:?}");
+        assert!(stages.len() >= 2, "seed {seed}: the board showed its wear: {stages:?}");
+        assert_eq!(game.decals.len(), 1, "seed {seed}: one piece of rubble");
+        assert_eq!(Some((game.decals[0].sheet, game.decals[0].row)), Material::Target.rubble_row(false), "seed {seed}: plain timber rubble");
+    }
+}
+
+#[test]
+fn the_flamethrower_scorches_a_range_board_then_burns_it_out_charred() {
+    let map = map_with("cells.\"20,13\" = { kind = \"target\" }\n");
+    let mut game = game_at(&map, 3, (20, 15));
+    game.debug_set_tank(0, &super::debug::TankPatch { flame_fuel: Some(6.0), ..Default::default() }).unwrap();
+    let at = cell_to_world(20, 13);
+    let find = |game: &Game| {
+        game.world
+            .query::<&Obstacle>()
+            .iter()
+            .find(|o| o.material == Material::Target && o.position.distance_to(at) < 1.0)
+            .map(|o| (o.burning, o.heat, o.burn_elapsed))
+    };
+    let mut heated_cold = false;
+    let mut lit_on = None;
+    for frame in 0..120 {
+        step(&mut game, fire());
+        let (burning, heat, _) = find(&game).expect("the board stands while it heats");
+        heated_cold |= !burning && heat > 0.0;
+        if game.events().iter().any(|e| matches!(e, Event::Ignited { what: "target", .. })) {
+            lit_on = Some(frame);
+            assert!(burning);
+            break;
+        }
+    }
+    assert!(heated_cold, "the board heats - and scorches - before it catches");
+    let lit_on = lit_on.expect("the stream lit the board");
+    assert!(lit_on as f32 / 60.0 <= tuning().flame_ignite_seconds + 0.1, "it catches at the ignition time: frame {lit_on}");
+    // Burning, it is already lost: nothing more it takes changes it, and
+    // it chars out after its own burn time.
+    let mut burnt_out = None;
+    for frame in 0..600 {
+        step(&mut game, Input::default());
+        if board_died(&game) {
+            burnt_out = Some(frame + 1);
+            break;
+        }
+    }
+    let frames = burnt_out.expect("the board burnt out");
+    let expected = (tuning().target_burn_seconds * 60.0) as usize;
+    assert!(frames + 3 >= expected && frames <= expected + 3, "burnt for its own time: {frames} frames, {expected} expected");
+    assert!(game.decals.iter().any(|d| Some((d.sheet, d.row)) == Material::Target.rubble_row(true)), "charred rubble");
+}
+
+#[test]
+fn a_burning_ground_cell_beside_a_range_board_lights_it() {
+    // A drum pops, its fire runs down an oil trail, and the board standing
+    // beside the trail - well outside the drum's blast - catches as the
+    // fire passes, though no board is ever rolled flammable.
+    let mut extra = String::from("cells.\"12,6\" = { kind = \"barrel\", drum = \"oil\" }\n");
+    for c in 13..=22 {
+        extra.push_str(&format!("cells.\"{c},6\" = {{ kind = \"oil\" }}\n"));
+    }
+    extra.push_str("cells.\"21,5\" = { kind = \"target\" }\n");
+    let map = map_with(&extra);
+    let mut game = game_at(&map, 17, (12, 11));
+    let at = cell_to_world(21, 5);
+    let standing = |game: &Game| game.world.query::<&Obstacle>().iter().find(|o| o.position.distance_to(at) < 1.0).map(|o| (o.flammable, o.burning, o.health));
+    let (flammable, ..) = standing(&game).unwrap();
+    assert!(!flammable, "a board is never rolled flammable");
+    assert!(shoot_until_blast(&mut game, 300).is_some(), "the drum pops");
+    let mut lit = false;
+    for _ in 0..600 {
+        step(&mut game, Input::default());
+        match standing(&game) {
+            Some((_, true, _)) => {
+                lit = true;
+                break;
+            }
+            Some(_) => {}
+            None => break,
+        }
+    }
+    assert!(lit, "the fire passing along the trail lit the board");
 }

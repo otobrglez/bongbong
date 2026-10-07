@@ -326,6 +326,7 @@ tool-glass = steklo
 tool-sandbag = vreča peska
 tool-barrel = sod
 tool-fence = ograja
+tool-target = tarča
 tool-tree = drevo
 tool-pine = smreka
 tool-oil_drum = sod olja

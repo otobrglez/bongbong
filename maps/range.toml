@@ -1,0 +1,59 @@
+# Range: a weapons range for showing what each weapon does
+# (docs/range-target-prd.md). The player's tank alone, no enemies and no
+# frog - `tanks = 0` and the Destroy mission keep the round open until it
+# is restarted - facing lanes of range boards at 4, 8 and 12 cells, with a
+# crate of every weapon along the bottom row. On the left an oil drum
+# feeds a short oil trail into a board, so a shot at the drum shows a
+# board catching from a ground fire; on the right three boards stand
+# round a fuel drum. Not shipped: open it with `-m maps/range.toml`.
+# Hand-authored: an editor re-save would drop these comments.
+
+version = 1
+tanks = 0
+mission.kind = "destroy"
+spawn.kind = "band"
+
+cells."17,14" = { kind = "start" }
+
+# Four cells out.
+cells."13,10" = { kind = "target" }
+cells."15,10" = { kind = "target" }
+cells."17,10" = { kind = "target" }
+cells."19,10" = { kind = "target" }
+cells."21,10" = { kind = "target" }
+
+# Eight cells out.
+cells."11,6" = { kind = "target" }
+cells."14,6" = { kind = "target" }
+cells."17,6" = { kind = "target" }
+cells."20,6" = { kind = "target" }
+cells."23,6" = { kind = "target" }
+
+# Twelve cells out.
+cells."15,2" = { kind = "target" }
+cells."17,2" = { kind = "target" }
+cells."19,2" = { kind = "target" }
+
+# An oil drum, a trail of oil and a board at its end.
+cells."3,12" = { kind = "barrel", drum = "oil" }
+cells."4,12" = { kind = "oil" }
+cells."5,12" = { kind = "oil" }
+cells."6,12" = { kind = "oil" }
+cells."7,12" = { kind = "oil" }
+cells."8,12" = { kind = "target" }
+
+# Three boards round a fuel drum.
+cells."29,10" = { kind = "barrel", drum = "fuel" }
+cells."28,9" = { kind = "target" }
+cells."30,9" = { kind = "target" }
+cells."29,8" = { kind = "target" }
+
+# A crate of every weapon, and ammo and health, along the bottom.
+cells."10,16" = { kind = "pickup", pickup = "flamethrower" }
+cells."12,16" = { kind = "pickup", pickup = "minigun" }
+cells."14,16" = { kind = "pickup", pickup = "plasma" }
+cells."16,16" = { kind = "pickup", pickup = "laser" }
+cells."18,16" = { kind = "pickup", pickup = "missiles" }
+cells."20,16" = { kind = "pickup", pickup = "grenades" }
+cells."22,16" = { kind = "pickup", pickup = "ammo" }
+cells."24,16" = { kind = "pickup", pickup = "health" }

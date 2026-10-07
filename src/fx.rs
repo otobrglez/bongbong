@@ -486,7 +486,7 @@ impl Fx {
                 self.burst(at, ParticleKind::Chip, self.count(tuning().tile_burst_particles + 6), 150.0, &[GLASS_L, GLASS_M, WHITE_T]);
                 self.burst(at, ParticleKind::Spark, self.count(4), 120.0, &[WHITE_T]);
             }
-            Material::Wood | Material::Fence => {
+            Material::Wood | Material::Fence | Material::Target => {
                 self.burst(at, ParticleKind::Chip, n, 100.0, &[WOOD_L, WOOD_M, WOOD_D]);
                 self.burst(at, ParticleKind::Ember, self.count(4), 50.0, &[EMBER_T, FIRE_T]);
             }
@@ -531,7 +531,7 @@ impl Fx {
                 // Steel does not chip - it throws sparks.
                 self.burst(at, ParticleKind::Spark, n, 140.0, &[FIRE_T, WHITE_T]);
             }
-            Material::Wood | Material::Fence => {
+            Material::Wood | Material::Fence | Material::Target => {
                 self.burst(at, ParticleKind::Chip, n, 80.0, &[WOOD_L, WOOD_M, WOOD_D]);
             }
             Material::Sandbag => {

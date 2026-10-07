@@ -24,6 +24,9 @@ use crate::{
     PROPS_OIL_ROW,
     PROPS_OIL_VARIANTS,
     Position,
+    TARGET_BURN_COL,
+    TARGET_BURN_STAGES,
+    TARGET_TEXTURE_SIZE,
     TREE_BURN_COL,
     TREE_ROW_BROADLEAF,
     TREE_SHIMMER_FRAMES,
@@ -84,6 +87,12 @@ pub enum Material {
     /// it stands - it stops hulls, shots, sight and light and takes no
     /// damage. Drawn by `training::draw_door`, never by `draw_obstacle`.
     Door,
+    /// The range board (docs/range-target-prd.md): a bullseye on a stand,
+    /// placed to be shot at. A wooden prop on the props sheet that wears
+    /// through four stages and splinters on its last point, and the one
+    /// tile that is never rolled flammable yet always catches from fire
+    /// (`Material::catches_fire`): a shot breaks it, a flame burns it.
+    Target,
 }
 
 /// The four wall materials, in walls_sheet.png row order - `spawn_from_map`
@@ -98,11 +107,13 @@ pub use crate::canvas::Sheet;
 
 impl Sheet {
     /// Source cell size in this atlas. Walls and props share the obstacle
-    /// grid's own 32px; trees and towers are drawn from 48px cells so they
-    /// can overhang the cell they stand in (see `TREE_TEXTURE_SIZE`).
+    /// grid's own 32px; trees and towers are drawn from 48px cells and the
+    /// range board from 44px ones, so they can overhang the cell they stand
+    /// in (see `TREE_TEXTURE_SIZE`, `TARGET_TEXTURE_SIZE`).
     pub fn cell(self) -> f32 {
         match self {
             Sheet::Trees | Sheet::Towers => TREE_TEXTURE_SIZE,
+            Sheet::Target => TARGET_TEXTURE_SIZE,
             _ => OBSTACLE_TEXTURE_SIZE,
         }
     }
@@ -116,6 +127,7 @@ impl Material {
     pub fn sheet(self) -> Sheet {
         match self {
             Material::Sandbag | Material::Barrel | Material::Fence => Sheet::Props,
+            Material::Target => Sheet::Target,
             Material::Tree | Material::Pine => Sheet::Trees,
             Material::Tesla | Material::GunTower | Material::BioSlush => Sheet::Towers,
             _ => Sheet::Walls,
@@ -140,6 +152,7 @@ impl Material {
             Material::Sandbag => 0,
             Material::Barrel => 3,
             Material::Fence => 5,
+            Material::Target => 0,
             Material::Tree => TREE_ROW_BROADLEAF,
             Material::Pine => TREE_ROW_CONIFER,
             // A tower's rows depend on its side as well (`tower::base_row`).
@@ -159,7 +172,7 @@ impl Material {
             Material::Barrel | Material::Fence => 2,
             Material::Tree | Material::Pine => TREE_VARIANTS,
             Material::Tesla | Material::GunTower | Material::BioSlush => 1,
-            Material::Volcano | Material::Lamp | Material::Door => 1,
+            Material::Volcano | Material::Lamp | Material::Door | Material::Target => 1,
             _ => 4,
         }
     }
@@ -177,6 +190,7 @@ impl Material {
             Material::Sandbag => tuning().sandbag_max_health,
             Material::Barrel => tuning().barrel_max_health,
             Material::Fence => 2.0,
+            Material::Target => tuning().target_max_health,
             Material::Tree => tuning().tree_max_health,
             Material::Pine => tuning().pine_max_health,
             Material::Tesla => tuning().tesla_max_health,
@@ -205,6 +219,8 @@ impl Material {
             Material::Sandbag => 3,
             Material::Barrel => 3,
             Material::Fence => 2,
+            // Intact, holed, cracked, splintered.
+            Material::Target => 4,
             Material::Tree | Material::Pine => 3,
             // Intact, scuffed, damaged, critical; the ruin is a decal.
             Material::Tesla | Material::GunTower | Material::BioSlush => 4,
@@ -224,7 +240,8 @@ impl Material {
     pub fn rubble_row(self, charred: bool) -> Option<(Sheet, i32)> {
         match self {
             Material::Brick => Some((Sheet::Walls, RUBBLE_ROW_BRICK)),
-            Material::Wood => Some((
+            // A range board is planks on a stand: it leaves timber's rubble.
+            Material::Wood | Material::Target => Some((
                 Sheet::Walls,
                 if charred { RUBBLE_ROW_WOOD_CHARRED } else { RUBBLE_ROW_WOOD },
             )),
@@ -276,6 +293,26 @@ impl Material {
             Material::Wood => tuning().wood_flammable_chance,
             Material::Tree | Material::Pine => tuning().tree_flammable_chance,
             _ => 0.0,
+        }
+    }
+
+    /// Catches from fire whatever it rolled at spawn: a range board, which
+    /// is never `flammable` (a shot that finishes it splinters it) but
+    /// burns whenever fire reaches it - the flamethrower's stream, a
+    /// burning ground cell in or beside its cell, a lava bank's heat.
+    /// Wood and trees catch from the stream by their own rule
+    /// (`Game::resolve_flames`) and from the ground by their roll.
+    pub fn catches_fire(self) -> bool {
+        self == Material::Target
+    }
+
+    /// How long a tile of this material burns before it chars out:
+    /// `target_burn_seconds` for a range board, long enough for its fire to
+    /// read; one fire's `wood_burn_seconds` for planks and trees.
+    pub fn burn_seconds(self) -> f32 {
+        match self {
+            Material::Target => tuning().target_burn_seconds,
+            _ => tuning().wood_burn_seconds,
         }
     }
 
@@ -455,6 +492,11 @@ pub struct Obstacle {
     /// Trees share wood's burn timing: it is one fire, and splitting the
     /// knob would only be worth it if they were meant to burn differently.
     pub burn_elapsed: f32,
+    /// Seconds this tile's fire has been *drawn* burning: `burn_elapsed` on
+    /// the round that simulates it, the replica's own clock on a client
+    /// (`tick_burn_frame` runs on both), so a range board's char and
+    /// embers move on between snapshots. Presentation only.
+    pub burn_shown: f32,
     /// Barrel only: the lit fuse, armed when a neighbouring blast or a
     /// burning cell reached it (`Game::apply_blast`, `tick_fires`) so a
     /// chain reaction cascades visibly instead of going off all at once.
@@ -509,6 +551,7 @@ impl Obstacle {
             burn_frame: 0,
             burn_frame_timer: 0.0,
             burn_elapsed: 0.0,
+            burn_shown: 0.0,
             fuse: None,
             heat: 0.0,
             scorched: 0,
@@ -548,9 +591,11 @@ impl Obstacle {
     }
 
     /// Side length of the drawn sprite, which is `size()` for everything
-    /// but a tree: a tree's 48px cell overhangs its 32px footprint by 8px
-    /// on each side, so canopies interlock instead of tiling. Never use
-    /// this for physics or grid maths - that is what `size()` is for.
+    /// but a tree and a range board: a tree's 48px cell overhangs its 32px
+    /// footprint by 8px on each side, so canopies interlock instead of
+    /// tiling, and a board's 44px cell by 6px, the board drawn 30 % larger
+    /// than a prop. Never use this for physics or grid maths - that is what
+    /// `size()` is for.
     pub fn sprite_size(&self) -> f32 {
         self.material.sheet().cell() * OBSTACLE_SCALE
     }
@@ -583,6 +628,13 @@ impl Obstacle {
     /// `Material::visible_stages` for why the terminal
     /// destroyed/shattered/rubble stage never actually gets picked here.
     fn col(&self) -> i32 {
+        if self.burning && self.material == Material::Target {
+            // The board chars through its three burn columns in order
+            // rather than flickering between them; the flicker is its
+            // embers (`target::fire_shapes`).
+            let stage = (self.burn_progress() * TARGET_BURN_STAGES as f32) as i32;
+            return TARGET_BURN_COL + stage.clamp(0, TARGET_BURN_STAGES - 1);
+        }
         if self.burning {
             return 4 + self.burn_frame;
         }
@@ -590,6 +642,23 @@ impl Obstacle {
             return PROPS_BARREL_LIT_COL;
         }
         self.damage_stage()
+    }
+
+    /// How far a burning tile's fire has got as drawn, 0 when it caught to 1
+    /// as it chars out (`burn_shown` over `Material::burn_seconds`). 0 for a
+    /// tile that is not alight.
+    pub fn burn_progress(&self) -> f32 {
+        if !self.burning {
+            return 0.0;
+        }
+        (self.burn_shown / self.material.burn_seconds().max(0.01)).clamp(0.0, 1.0)
+    }
+
+    /// How far a burning range board has sunk, in px: one whole 2 px block
+    /// once its stand gives way in the last fifth of its burn. Zero for
+    /// anything else.
+    pub fn burn_sag(&self) -> f32 {
+        if self.material == Material::Target && self.burn_progress() >= 0.8 { FX_BLOCK } else { 0.0 }
     }
 
     /// Which of `Material::visible_stages` this obstacle's health puts it
@@ -644,6 +713,7 @@ impl Obstacle {
         if !self.burning {
             return;
         }
+        self.burn_shown += dt;
         self.burn_frame_timer += dt;
         if self.burn_frame_timer >= tuning().wood_burn_frame_seconds {
             self.burn_frame_timer -= tuning().wood_burn_frame_seconds;
@@ -653,7 +723,7 @@ impl Obstacle {
 
     /// Advance a burning tile's fire - a no-op for anything not alight:
     /// the flicker loop above, and once `burn_elapsed` passes
-    /// `wood_burn_seconds`, chars it out (`destroyed = true`) so it's
+    /// `Material::burn_seconds`, chars it out (`destroyed = true`) so it's
     /// removed the same instant-vanish way every other destroyed material
     /// already is.
     pub fn tick_burn(&mut self, dt: f32) {
@@ -662,7 +732,7 @@ impl Obstacle {
         }
         self.tick_burn_frame(dt);
         self.burn_elapsed += dt;
-        if self.burn_elapsed >= tuning().wood_burn_seconds {
+        if self.burn_elapsed >= self.material.burn_seconds() {
             self.destroyed = true;
         }
     }
@@ -756,7 +826,7 @@ pub fn draw_obstacle_tinted(c: &mut impl Canvas, obstacle: &Obstacle, axis: Fenc
     let sheet = obstacle.material.sheet();
     let src = source_rec(sheet, obstacle.row(axis), obstacle.col());
     let size = obstacle.sprite_size();
-    let dest = Rectangle::new(obstacle.position.x + obstacle.fuse_rock(time), obstacle.position.y, size, size);
+    let dest = Rectangle::new(obstacle.position.x + obstacle.fuse_rock(time), obstacle.position.y + obstacle.burn_sag(), size, size);
     let origin = Vec2::new(size / 2.0, size / 2.0);
     c.blit(sheet, src, dest, origin, 0.0, tint);
 }

@@ -1,9 +1,11 @@
 """Generate static/props_sheet.png - the three destructible props (sandbags,
 oil barrels, fences) that share the 32px obstacle grid with walls but are
-discrete objects rather than tiling wall tiles. See docs/PROPS_SPEC.md for
-the full sheet map and docs/sandbags-barrels-fences.md for the feature.
+discrete objects rather than tiling wall tiles - and static/target_sheet.png,
+the range board's. See docs/PROPS_SPEC.md for the full sheet maps and
+docs/sandbags-barrels-fences.md and docs/range-target-prd.md for the
+features.
 
-Layout: 128x320, 4 cols x 10 rows of 32x32 cells.
+props_sheet.png: 128x320, 4 cols x 10 rows of 32x32 cells.
     rows 0-2  Sandbag  cols 0-2: straight row / staggered wall / heaped pile
                                  x intact/torn/collapsed
     rows 3-4  Barrel   cols 0-3: two drum liveries x intact/dented/critical,
@@ -17,7 +19,14 @@ Layout: 128x320, 4 cols x 10 rows of 32x32 cells.
                                  by position hash (obstacle::draw_oil_cell)
 Cells outside those ranges are blank and never sampled.
 
-Every cell is drawn on a 16x16 "macro pixel" canvas and upscaled 2x with
+target_sheet.png: 308x44, 7 cols x 1 row of 44x44 cells - the range board
+(map `kind = "target"`) intact / holed / cracked / splintered, then cols 4-6
+its burn, scorching -> blackened -> charred frame, picked by how far the
+fire has got. Drawn on a 22x22 macro canvas, 30 % larger than a prop; it
+overhangs its 32px grid cell (see the target section below).
+
+Every prop cell is drawn on a 16x16 "macro pixel" canvas (the board's on a
+22x22 one) and upscaled 2x with
 NEAREST, which is pixel-for-pixel what gen_walls.py's pixelate() post-process
 does to the walls sheet (tanks draw their 32px tile at scale 2, obstacles at
 scale 1 - baking the 2x chunkiness in keeps every static thing on screen at
@@ -38,7 +47,8 @@ from punypalette import (BLACK, WHITE, STONE_PALE, STONE_LT, STONE_MD, STONE_DK,
                          STONE_DARKEST, SAND_PALE, SAND_LT, SAND_MD, SAND_DK,
                          WOOD_PALE, WOOD_LT, WOOD_MD, WOOD_DK, WOOD_DEEPER,
                          WOOD_DARKEST, RED_BRIGHT, RED_MD, RED_DEEP, RED_DK,
-                         RED_DARKEST, TEAL_MD, TEAL_DK, BLUE_DK, GOLD_BRIGHT, snap)
+                         RED_DARKEST, TEAL_MD, TEAL_DK, BLUE_DK, GOLD_BRIGHT,
+                         GOLD_MD, snap)
 
 S = 16            # macro canvas: one drawn pixel = a 2x2 block in the 32px cell
 CELL = 32
@@ -58,19 +68,23 @@ def mul(c, f):
                  c[3] if len(c) > 3 else 255))
 
 
-def blank():
-    return Image.new('RGBA', (S, S), (0, 0, 0, 0))
+def blank(n=S):
+    return Image.new('RGBA', (n, n), (0, 0, 0, 0))
+
+
+def inside(img, x, y):
+    return 0 <= x < img.width and 0 <= y < img.height
 
 
 def px(img, x, y, c):
     x, y = int(x), int(y)
-    if 0 <= x < S and 0 <= y < S and c is not None:
+    if inside(img, x, y) and c is not None:
         img.putpixel((x, y), c)
 
 
 def get(img, x, y):
     x, y = int(x), int(y)
-    if 0 <= x < S and 0 <= y < S:
+    if inside(img, x, y):
         return img.getpixel((x, y))
     return (0, 0, 0, 0)
 
@@ -84,7 +98,7 @@ def rect(img, x0, y0, x1, y1, c):
 def clear(img, x0, y0, x1, y1):
     for y in range(int(y0), int(y1) + 1):
         for x in range(int(x0), int(x1) + 1):
-            if 0 <= x < S and 0 <= y < S:
+            if inside(img, x, y):
                 img.putpixel((x, y), (0, 0, 0, 0))
 
 
@@ -99,13 +113,13 @@ def disc_clear(img, cx, cy, r):
     for y in range(int(cy - r) - 1, int(cy + r) + 2):
         for x in range(int(cx - r) - 1, int(cx + r) + 2):
             if (x - cx) ** 2 + (y - cy) ** 2 <= r * r:
-                if 0 <= x < S and 0 <= y < S:
+                if inside(img, x, y):
                     img.putpixel((x, y), (0, 0, 0, 0))
 
 
 def ellipse(img, cx, cy, rx, ry, c):
-    for y in range(S):
-        for x in range(S):
+    for y in range(img.height):
+        for x in range(img.width):
             dx, dy = (x - cx) / rx, (y - cy) / ry
             if dx * dx + dy * dy <= 1.0:
                 px(img, x, y, c)
@@ -113,8 +127,8 @@ def ellipse(img, cx, cy, rx, ry, c):
 
 def ellipse_rim(img, cx, cy, rx, ry, c, pick=None):
     """The 1px outer band of an ellipse; `pick(angle)` may swap the colour."""
-    for y in range(S):
-        for x in range(S):
+    for y in range(img.height):
+        for x in range(img.width):
             dx, dy = (x - cx) / rx, (y - cy) / ry
             d = dx * dx + dy * dy
             if 0.62 <= d <= 1.0:
@@ -139,9 +153,10 @@ def crack(img, x0, y0, x1, y1, c, rng, jitter=1):
 
 
 def declutter(img, min_size=3):
-    seen = [[False] * S for _ in range(S)]
-    for y in range(S):
-        for x in range(S):
+    w, h = img.width, img.height
+    seen = [[False] * w for _ in range(h)]
+    for y in range(h):
+        for x in range(w):
             if seen[y][x] or img.getpixel((x, y))[3] == 0:
                 continue
             stack, comp = [(x, y)], []
@@ -151,7 +166,7 @@ def declutter(img, min_size=3):
                 comp.append((cx, cy))
                 for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                     nx, ny = cx + dx, cy + dy
-                    if 0 <= nx < S and 0 <= ny < S and not seen[ny][nx] \
+                    if 0 <= nx < w and 0 <= ny < h and not seen[ny][nx] \
                             and img.getpixel((nx, ny))[3] != 0:
                         seen[ny][nx] = True
                         stack.append((nx, ny))
@@ -173,7 +188,7 @@ def front_strip(img, c):
 
 
 def up2(img):
-    return img.resize((CELL, CELL), Image.NEAREST)
+    return img.resize((img.width * 2, img.height * 2), Image.NEAREST)
 
 
 # ---------------------------------------------------------------- sandbags
@@ -387,6 +402,162 @@ def draw_oil(variant, rng):
     return img
 
 
+# ---------------------------------------------------------------- target
+# The range board (docs/range-target-prd.md), on its own sheet
+# (target_sheet.png): a round bullseye standing on an easel - two splayed
+# front legs, a back leg and a crossbar - gold centre in red and white
+# rings, a wooden rim lit from the upper left and a darker band under it
+# for the board's thickness. It is drawn 30 % larger than a 32 px prop, so
+# it has a 22 x 22 macro canvas (a 44 px cell) and overhangs its grid cell
+# the way a tree does: the face is the cell's full width, standing a block
+# above it, the feet a block below.
+T = 22                                  # macro canvas of the target's cells
+TARGET_CELL = T * 2
+TGT_CX, TGT_CY, TGT_R = 10.5, 9.5, 8.0  # the face; gen'd centre = cell centre - 1 block
+# Ring bands, outermost first: (outer radius, unburnt, scorched, blackened,
+# charred), and the unburnt colour on the shaded lower right (None: same).
+TGT_RINGS = [
+    (TGT_R, BLACK, BLACK, BLACK, BLACK, None),
+    (TGT_R - 1.0, WOOD_DK, STONE_DARKEST, BLACK, STONE_DARKEST, WOOD_DEEPER),
+    (TGT_R - 2.0, STONE_PALE, SAND_LT, WOOD_DEEPER, STONE_DARKEST, STONE_LT),
+    (TGT_R - 4.0, RED_MD, RED_DEEP, RED_DARKEST, BLACK, RED_DEEP),
+    (2.0, GOLD_BRIGHT, GOLD_MD, WOOD_DK, BLACK, None),
+]
+# Shot holes, in the order the damage stages add them (3, 6, then 9);
+# the sixth lands in the gold.
+TGT_HOLES = [(7, 6), (14, 12), (12, 4), (6, 13), (15, 7), (11, 11), (4, 9), (9, 15), (17, 10)]
+
+
+def target_ring(x, y):
+    """Which of `TGT_RINGS` pixel (x, y) of the face is in, or None off it."""
+    d = math.hypot(x - TGT_CX, y - TGT_CY)
+    band = None
+    for i, ring in enumerate(TGT_RINGS):
+        if d <= ring[0]:
+            band = i
+    return band
+
+
+def target_board(burn):
+    """The whole board; `burn` 0 (none) to 3 (charred) recolours it."""
+    img = blank(T)
+    leg, foot, back = C(WOOD_DK), C(WOOD_DEEPER), C(WOOD_DEEPER)
+    if burn >= 2:
+        leg, foot, back = C(WOOD_DARKEST), C(BLACK), C(BLACK)
+    # The easel, behind the board: front legs splayed out to the feet, a
+    # crossbar between them and the back leg's foot in the middle.
+    rect(img, 5, 18, 16, 18, back)
+    for (x, y) in [(6, 15), (6, 16), (5, 17), (5, 18)]:
+        px(img, x, y, leg)
+        px(img, T - 1 - x, y, leg)
+    px(img, 4, 19, foot)
+    px(img, 5, 19, foot)
+    px(img, T - 1 - 4, 19, foot)
+    px(img, T - 1 - 5, 19, foot)
+    rect(img, 10, 19, 11, 19, back)
+    if burn >= 3:
+        clear(img, 16, 18, 17, 19)      # a leg burnt short: the stand gives
+    # Thickness: the board's lower edge seen from slightly above.
+    ellipse(img, TGT_CX, TGT_CY + 1, TGT_R, TGT_R, C(WOOD_DEEPER if burn < 2 else BLACK))
+    for y in range(T):
+        for x in range(T):
+            band = target_ring(x, y)
+            if band is None:
+                continue
+            ring = TGT_RINGS[band]
+            colour = ring[1 + burn]
+            # Lit from the upper left: the lower right of each ring a step
+            # darker, the rim's upper left a step lighter.
+            if burn == 0 and ring[5] is not None and (x - TGT_CX) + (y - TGT_CY) > 1.5:
+                inner = TGT_RINGS[band + 1][0] if band + 1 < len(TGT_RINGS) else 0.0
+                if math.hypot(x - TGT_CX, y - TGT_CY) > (ring[0] + inner) / 2:
+                    colour = ring[5]
+            px(img, x, y, C(colour))
+    if burn == 0:
+        for (x, y) in [(5, 4), (4, 5), (6, 3), (3, 7)]:
+            px(img, x, y, C(WOOD_LT))
+        px(img, 10, 8, C(WHITE))        # the gold's glint
+    return img
+
+
+def splinter_edge(img, removed):
+    """Exposed fibres along a break: every board pixel beside a removed one
+    turns pale wood or a dark crack, alternating."""
+    for y in range(T):
+        for x in range(T):
+            if (x, y) in removed or get(img, x, y)[3] == 0 or target_ring(x, y) is None:
+                continue
+            if any((x + dx, y + dy) in removed for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))):
+                px(img, x, y, C(WOOD_PALE if (x + 2 * y) % 3 else WOOD_DARKEST))
+
+
+def draw_target(stage, rng):
+    """Cols 0-3: the damage stages. Shots land as dark holes with a pale
+    splinter lip; the third stage cracks the board from the rim and chips
+    it, the last loses its upper-right quarter to a splintered break."""
+    img = target_board(0)
+    for (x, y) in TGT_HOLES[:[0, 3, 6, 9][stage]]:
+        px(img, x, y, C(BLACK))
+        if get(img, x + 1, y - 1)[3]:
+            px(img, x + 1, y - 1, C(WOOD_PALE))
+    if stage >= 2:
+        crack(img, 4, 14, 8, 11, C(WOOD_DARKEST), rng, jitter=0)
+        crack(img, 8, 11, 9, 9, C(WOOD_DARKEST), rng, jitter=0)
+        removed = {(16, 3), (17, 3), (17, 4), (18, 5)}
+        for (x, y) in removed:
+            img.putpixel((x, y), (0, 0, 0, 0))
+        splinter_edge(img, removed)
+    if stage >= 3:
+        removed = set()
+        for y in range(T):
+            for x in range(T):
+                jag = 1 + (x * 7 + y * 3) % 3 // 2
+                if x >= 11 and y <= 10 and (x - 11) + (10 - y) > jag and target_ring(x, y) is not None:
+                    removed.add((x, y))
+        for (x, y) in removed:
+            img.putpixel((x, y), (0, 0, 0, 0))
+        splinter_edge(img, removed)
+        # A splinter still standing out of the break, and one on the ground.
+        px(img, 14, 6, C(WOOD_LT))
+        px(img, 15, 5, C(WOOD_PALE))
+        px(img, 19, 13, C(WOOD_LT))
+        px(img, 19, 14, C(WOOD_DK))
+    declutter(img, 2)
+    return img
+
+
+def draw_target_burn(step, rng):
+    """Cols 4-6: the board burning, picked by how far the fire has got
+    (`Obstacle::col`): the rings scorching with a lit rim, the board
+    blackened with the rings glowing through, the charred frame. The
+    flames and the pulsing embers are drawn over it at run time
+    (`target::fire_shapes`)."""
+    burn = step + 1
+    img = target_board(burn)
+    for (x, y) in TGT_HOLES[:3]:
+        px(img, x, y, C(BLACK))
+    # The fire's edge: lit blocks along the bottom of the board where the
+    # flames stand, fewer as the wood is spent.
+    lit = {
+        1: [(4, 12), (5, 14), (7, 16), (10, 17), (13, 16), (15, 15), (16, 13), (17, 11)],
+        2: [(5, 14), (9, 17), (14, 16), (3, 9), (17, 12)],
+        3: [(8, 17), (13, 17)],
+    }[burn]
+    for (x, y) in lit:
+        if get(img, x, y)[3]:
+            px(img, x, y, C(RED_BRIGHT if (x + y) % 2 else GOLD_BRIGHT))
+    if burn >= 2:
+        for (x, y) in [(8, 4), (14, 8), (6, 10), (12, 14), (9, 12)]:
+            px(img, x, y, C(RED_DK))
+    if burn >= 3:
+        # Burnt through: bites out of the rim and the middle.
+        for (x, y) in [(3, 6), (3, 7), (2, 8), (17, 13), (16, 15), (8, 2), (9, 2), (12, 12),
+                       (13, 12), (12, 13), (9, 7), (10, 7), (18, 7)]:
+            img.putpixel((x, y), (0, 0, 0, 0))
+    declutter(img, 2)
+    return img
+
+
 # ---------------------------------------------------------------- sheet
 def seed(row, col):
     return random.Random(500 + row * 31 + col * 7)
@@ -413,3 +584,11 @@ for row, draw in ROW_DRAWERS:
             sheet.paste(up2(cell), (col * CELL, row * CELL))   # no mask: no alpha drift
 sheet.save(f'{OUT}/props_sheet.png')
 print('props_sheet.png', sheet.size)
+
+TARGET_COLS = 7
+target = Image.new('RGBA', (TARGET_CELL * TARGET_COLS, TARGET_CELL), (0, 0, 0, 0))
+for col in range(TARGET_COLS):
+    cell = draw_target(col, seed(10, col)) if col < 4 else draw_target_burn(col - 4, seed(10, col))
+    target.paste(up2(cell), (col * TARGET_CELL, 0))
+target.save(f'{OUT}/target_sheet.png')
+print('target_sheet.png', target.size)

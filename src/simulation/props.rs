@@ -613,8 +613,9 @@ impl Game {
                     }
                 }
             }
-            // Flammable tiles beside the fire catch; drums sitting in it
-            // are put on a long fuse.
+            // Flammable tiles beside the fire catch, and a range board
+            // whatever it rolled; drums sitting in it are put on a long
+            // fuse.
             let mut fused = Vec::new();
             for o in self.world.query::<&mut Obstacle>().iter() {
                 if o.destroyed || o.burning || o.fuse.is_some() {
@@ -629,7 +630,7 @@ impl Game {
                 if o.material.is_explosive() {
                     fused.push(o.position);
                     arm_fuse(o, t.fire_fuse_factor, cell_to_world(source.0, source.1));
-                } else if o.flammable {
+                } else if o.flammable || o.material.catches_fire() {
                     o.health = 0.0;
                     o.burning = true;
                 }

@@ -569,9 +569,10 @@ pub const OBSTACLE_GRID_SIZE: f32 = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE;
 // type.
 pub const OBSTACLE_CLEAR: f32 = 90.0;
 
-// Props: the three discrete destructible items (obstacle::Material::{Sandbag,
-// Barrel, Fence}) share the obstacle grid, hull and draw path but draw from
-// props_sheet.png, a 128x320 sheet (4 cols x 10 rows of 32x32 cells) - see
+// Props: the discrete destructible items (obstacle::Material::{Sandbag,
+// Barrel, Fence, Target}) share the obstacle grid, hull and draw path but
+// draw from props_sheet.png, a 128x320 sheet (4 cols x 10 rows of 32x32
+// cells), and the range board from its own target_sheet.png (below) - see
 // docs/PROPS_SPEC.md:
 //   rows 0-2 Sandbag (cols 0-2): 3 bag arrangements x intact/torn/collapsed.
 //   rows 3-4 Barrel  (cols 0-3): 2 drum liveries x intact/dented/critical,
@@ -588,6 +589,19 @@ pub const PROPS_ROWS: i32 = 10;
 pub const PROPS_BARREL_LIT_COL: i32 = 3;
 pub const PROPS_OIL_ROW: i32 = 9;
 pub const PROPS_OIL_VARIANTS: i32 = 4;
+// target_sheet.png: the range board (docs/range-target-prd.md), one row of
+// seven 44x44 cells: intact/holed/cracked/splintered, then cols 4-6 its burn
+// - scorching, blackened, charred - picked by how far the fire has got
+// (`Obstacle::col`). Its own sheet because the board is drawn 30 % larger
+// than a 32px prop: the face is a whole cell wide and stands a 2px block
+// above its cell, the easel's feet a block below, while the board still
+// occupies exactly one grid cell (`Obstacle::size`: the collider, the nav
+// grid, the map). 44 keeps the 6px overhang on the field's 2px block grid.
+pub const TARGET_TEXTURE_SIZE: f32 = 44.0;
+pub const TARGET_COLUMNS: i32 = 7;
+pub const TARGET_BURN_COL: i32 = 4;
+/// How many burn columns the board has (`TARGET_BURN_COL`..).
+pub const TARGET_BURN_STAGES: i32 = 3;
 // barrel_explosion.png: 768x320, five rows of 64x64 cells, of which only
 // row 1 is drawn: SCORCH_VARIANTS burn marks a blast or a burnt-out fire
 // leaves on the ground, plus the directional streak at SCORCH_STREAK_COL.
@@ -997,6 +1011,7 @@ pub mod shockwave;
 pub mod simulation;
 pub mod tank;
 pub mod tank_art;
+pub mod target;
 pub mod text;
 pub mod thumbnail;
 pub mod touch;

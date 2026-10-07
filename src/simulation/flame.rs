@@ -302,13 +302,13 @@ impl Game {
                     arm_fuse(o, t.fire_fuse_factor, cone.origin);
                     ignited.push((o.position, "drum"));
                 }
-            } else if m.is_tree() || m == crate::obstacle::Material::Wood {
+            } else if m.is_tree() || m == crate::obstacle::Material::Wood || m.catches_fire() {
                 if o.heat >= t.flame_ignite_seconds {
                     // Whatever the tile rolled: the one thing that lights
-                    // a plank that was rolled to break.
+                    // a plank that was rolled to break, and a range board.
                     o.health = 0.0;
                     o.burning = true;
-                    ignited.push((o.position, if m.is_tree() { "tree" } else { "wood" }));
+                    ignited.push((o.position, if m.is_tree() { "tree" } else if m.catches_fire() { "target" } else { "wood" }));
                 }
             } else if m == crate::obstacle::Material::Sandbag {
                 if o.heat >= t.flame_sandbag_seconds {

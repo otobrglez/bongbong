@@ -85,6 +85,10 @@ pub enum CellObject {
         drum: Option<Drum>,
     },
     Fence,
+    /// A range board (docs/range-target-prd.md): a bullseye on a stand,
+    /// a solid wooden prop placed to be shot at - it wears through four
+    /// stages and splinters, or burns when fire reaches it.
+    Target,
     /// An oil trail: a ground cell that is *not* solid and has no nav
     /// effect until a blast or a burning neighbour lights it, after which
     /// the fire runs along it cell by cell (`oil_trail_cells_per_second`),
@@ -167,6 +171,7 @@ impl CellObject {
             CellObject::Sandbag => Some(Material::Sandbag),
             CellObject::Barrel { .. } => Some(Material::Barrel),
             CellObject::Fence => Some(Material::Fence),
+            CellObject::Target => Some(Material::Target),
             CellObject::Tree => Some(Material::Tree),
             CellObject::Pine => Some(Material::Pine),
             CellObject::Tesla { .. } => Some(Material::Tesla),
@@ -223,6 +228,7 @@ impl CellObject {
             Material::Sandbag => Some(CellObject::Sandbag),
             Material::Barrel => Some(CellObject::Barrel { drum: None }),
             Material::Fence => Some(CellObject::Fence),
+            Material::Target => Some(CellObject::Target),
             Material::Tree => Some(CellObject::Tree),
             Material::Pine => Some(CellObject::Pine),
             Material::Lamp => Some(CellObject::Lamp),
