@@ -151,7 +151,8 @@ solver step), in this order, all measured from the struck cell's centre `c`:
     pines, lamp posts and the three towers, either side's - is **crushed**
     through `damage_obstacle` with `DamageCause::Crush { from: c }`: it dies
     outright, no fence roll, no deflection, not left burning (a crushed
-    plank or tree is rubble, not a fire), its death the ordinary one
+    plank or tree is rubble, not a fire; one already burning is crushed
+    too, its rubble charred), its death the ordinary one
     (`obstacle_died`: `ObstacleDestroyed`, its rubble, the edge masks, a
     tower's ruin and discharge, cook-off or spill). Walked in cell order.
     **Iron, a volcano's cone and a training door stand**
@@ -161,8 +162,9 @@ solver step), in this order, all measured from the struck cell's centre `c`:
     direct hit's pop (`obstacle_died` queues its blast) - and a fuel drum's
     neighbours chain as ever. A drum with a fuse already burning is passed
     over (`damage_obstacle` leaves it to its fuse).
-  - *a grenade on the ground* goes off at once (`Grenade::fuse` to 0, burst
-    by `resolve_grenades` this frame), in id order.
+  - *a grenade*, on the ground or hopping, goes off at once
+    (`Grenade::fuse` to 0, burst by `resolve_grenades` this frame), in id
+    order.
   - *a seat's lantern* is broken (`Event::LanternBroken`), in id order.
   - *oil trail cells* not yet burning are lit (`light_cell`, sorted), as a
     drum's blast lights the trail in its reach.
@@ -349,7 +351,7 @@ eruption, as a blast on the end screen hurts nobody.
 | `src/net/encode.rs`, `src/net/apply.rs` | The families and the shifts (`zones`, `volcano_shifts`, `reticle_code`/`reticle_from_code`; `apply_zones`, `apply_craters`, `apply_volcano_shifts`), the impact's show |
 | `src/net/mailbox.rs`, `src/net/authority.rs`, `src/net/rig.rs`, `server/src/room.rs` | The reticle report (§8): `Mailbox::reticle`, `authority::take_reticle` |
 | `src/net/predict.rs`, `src/net/round.rs` | `PressShow::Rod(RodPress)`, `Predictor::{reticle, reticle_report}`; `OwnCall`, `claim_own_call`, `place_own_calls` - the client's own call drawn on the release and handed to the room's zone, every countdown on this client's present |
-| `src/simulation/debug.rs`, `src/devserver.rs` | `set_tank`'s `rods`; the snapshot's `rods`, `reticle`, `zones` (`ZoneDebug`), `craters`; `spawn_pickup {kind: "rod_from_god"}`; the `rod_call` tool (§3.4) |
+| `src/simulation/debug.rs`, `src/devserver.rs` | `set_tank`'s `rods` (and its `charge` on a rod tank, which puts the reticle up); the snapshot's `rods`, `reticle`, `zones` (`ZoneDebug`), `craters`; `spawn_pickup {kind: "rod_from_god"}`; the `rod_call` tool (§3.4) |
 | `src/bin/probe.rs` | The tank line's `rod=`, the fire tuple, `rod-calls-on-seats`/`rod-calls-offbox`, the stand-off hold in `HOLDS` |
 | `src/editor/mod.rs` | `Tool::Pickup(PickupKind::RodFromGod)` (`rod_from_god`) |
 | `maps/armory.toml` | Its crates (§3.4) |
@@ -674,7 +676,8 @@ the crates.
 
 **The dev server**: `spawn_pickup {kind: "rod_from_god", x, y}` (the
 hammer's tool), `set_tank`'s `rods` (above 0 arms it in place of the special
-carried), and one tool of the rod's own, `rod_call {x, y, enemy}` - a call
+carried; its `charge` on a tank carrying the rod puts the reticle up where
+a press would), and one tool of the rod's own, `rod_call {x, y, enemy}` - a call
 at the map cell nearest (`x`, `y`) at once, a seat's (player 1's, its
 kills credited to it) or with `enemy: true` an enemy's, its countdown from
 now
@@ -759,8 +762,13 @@ For every candidate:
   seat's sight box (`ai::in_sight_box_of`, against the seat's real
   centre), so the caller is on that seat's screen when it calls and the
   circle - the seat's own spot, or a led spot a few cells off - is too.
-  A tower's or the frog's pick needs no seat's box: its circle's arrow and
-  minimap mark warn the seats wherever they are (§5).
+  A tower's or the frog's pick needs no seat's box of its own: its
+  circle's arrow and minimap mark warn the seats wherever they are (§5).
+  But **a call whose circle holds a seat is a call on that seat**: no pick
+  - a tower, the frog, a camper with its couch partner beside it - whose
+  circle plus the friend margin reaches a live seat's hull while this tank
+  stands outside that seat's box, so the box binds every call that can
+  crush a seat, not only the ones aimed at one.
 - **It knows of it**: a seat not hidden from this tank (`concealed` and not
   hit-alerted - the attack tier's rule) and within its sight under the sky
   (`Game::sight_on` at it); a tower or the frog within `Game::enemy_sight`
@@ -774,7 +782,11 @@ For every candidate:
 - **Not called twice**: no live zone's centre within two kill radii of the
   cell.
 - **One caller per target**: a candidate a lower-slot rod tank already took
-  this frame is skipped.
+  this frame is skipped. A tank takes its pick only while it can call on
+  it - its reticle up, or its reload (`fire_cooldown`) and fire timer out
+  -, so one still waiting never keeps the tanks after it from calling (the
+  first armed sweeps' hedge-maze pile-ups: the lowest slot held the frog
+  for eight seconds at a time while the pack waited round its pond).
 
 A training dummy (`Ai::frog_only`) gets no pick. No RNG anywhere: fixed
 preference, then distance from this tank, then the lower seat, then cell
@@ -910,7 +922,14 @@ seats', from the call's first tick to its impact:
 - **Never paths in**: its chase, attack reposition, alert, seeks, cover
   spot and tree spot aim outside (`out_of_danger`), and the edge hold keeps
   a tank whose next step would enter the disc waiting at its edge until the
-  impact (docs/gauss-rail.md §3.2).
+  impact (docs/gauss-rail.md §3.2). Out of a call, `Brain::way_out` takes
+  the circle's edge nearest the tank itself (the exits from where it
+  stands), not the one on the side of the call's middle its target leans:
+  a camper stands within a few pixels of the middle of the cell a call on
+  it is centred on, and a chaser steered to that side drove round the
+  circle and back (`a_chaser_waits_for_a_call_on_its_own_side`: 540
+  degrees of turning against at most 270). The EMP's and the rail's
+  dangers keep their own exits.
 - **The router**: every nav cell whose centre lies inside the disc costs
   `rod_ai_circle_cost` (48) more, saturating, for the countdown
   (`route_grid_on`), so the shared flow fields and the searches go round.
@@ -1023,7 +1042,9 @@ fair); what lingers on the ground is shaded in the lit pass.
   - *the impact flash quad* (`impact_flashes`) and the fireball:
     `BlastFx::shaped(c, BlastKind::Fuel, BlastShape::Fire)` (the column
     form) at `rod_fireball_scale` (1.3) - the heat of the strike; a rod
-    carries no explosive, so it is short beside the dust;
+    carries no explosive, so it is short beside the dust. Not out of water,
+    whose spray is its show (below): a fireball there hid the spray and
+    its dust ring read as earth on the lake;
   - *the dust ring* (`rod::compose_impact`), lit pass: two rings racing out
     over 0.9 s - a two-block one in `DUST[4]` at 230 px/s and a one-block
     one in white at 180 px/s, squashed to 0.7 vertically (the ground's
@@ -1044,9 +1065,10 @@ fair); what lingers on the ground is shaded in the lit pass.
     `mark_caps`); none on water;
   - *the scorch*: `Scorch::with(c, rod_scorch_scale, None)` (2.5) on dry
     ground;
-  - *the splash* on water: a white column of spray blocks rising 40 px and
-    falling back over 0.6 s and three rings of chop in `BLUE_PALE`, in place
-    of the scorch and the rubble.
+  - *the splash* on water: a column of spray blocks, white with one in three
+    `BLUE_PALE`, rising `SPLASH_PX` (40) and falling back over
+    `SPLASH_SECONDS` (0.6), over the dust ring's two rings of chop in
+    `BLUE_PALE` and white, in place of the scorch and the rubble.
 - **The crater** (`rod::draw_crater(c, crater, look, t)`, generic over
   `canvas::Canvas`, so the CPU thumbnail draws it too), at the head of
   `paint_floor_marks` after the floor shade and before the tracks and
@@ -1216,7 +1238,8 @@ group:
 
 Constants (geometry and policy, not feel): in `rod.rs` `ROD_BEAM_HZ` (20),
 `ROD_FILL_SECONDS` (1), the reticle's eight arcs and 1.5 rad/s, the dust
-rings' 230 and 180 px/s, the countdown's place (38, -32); in `zone.rs` the
+rings' 230 and 180 px/s, the splash's 40 px and 0.6 s (`SPLASH_PX`,
+`SPLASH_SECONDS`), the countdown's place (38, -32); in `zone.rs` the
 provisional id band; `SEAT_MOTION_SECONDS` (1) and `SEAT_LEAD_MIN_SPEED` (4)
 beside `SeatStill`.
 
@@ -1336,13 +1359,22 @@ Protocol 19 (from the swarm's 18).
   within the refusal wait goes, and the owed call is given back.
 - **The reticle report**: the room cannot step a client-owned seat's
   reticle the way the client did (its mailbox merges intents), so it takes
-  the client's cell: `Mailbox::reticle()` is the newest applied intent's
-  `reticle` (a starved read repeats it), and
+  the client's cell: `Mailbox::reticle()` is the newest `reticle` any intent
+  the last read applied carried - a merged read keeps a release's cell
+  though the packet after it carries none, and while the round still has
+  the trigger down a read with none keeps the last (a press and its release
+  merged into one read deliver the release on the next) -, a starved read
+  repeating it; and
   `net::authority::take_reticle(game, seat, code)` hands it to the round
   before the tick (`Game::set_seat_reticle`, for that update alone) - in the
   room server's tick beside `take_hold`, and in the rig's. A report puts
   the reticle on its cell from the press on, held to the reticle's range of
-  the room's hull (`rod::step_reticle`). A local round has no report.
+  the room's hull (`rod::step_reticle`), and a reported cell is never
+  stepped by the stick. A local round has no report. What the report cannot
+  stretch: the range is the room's hull's sight box, so a modified client
+  calls nowhere a seat could not; the settle is the room's count of held
+  ticks (the rail's hold report, within its slack); only the walk's pace is
+  the client's word - a reported cell is taken at once, not walked to.
 - **What stays the room's**: the call itself (where and when it lands), the
   crush and its kills (`Hit`, `Wreck`), the shoves (`Shoved` to an owned
   hull), tile deaths (`ObstacleDestroyed`), drums (`Blast`), shields
@@ -1440,6 +1472,19 @@ seat at cell (3, 6), enemies placed by hand):
   `an_enemy_never_calls_on_a_circle_holding_an_ally`,
   `an_enemy_leaves_a_call_before_it_lands`.
 - `the_seat_still_record_counts_still_and_averages_speed`.
+- Added in review: `a_burning_plank_in_reach_is_crushed`,
+  `the_impact_sets_off_grenades_breaks_lanterns_lights_oil_and_flattens_grass`,
+  `a_frog_in_the_ring_is_stunned`,
+  `a_charge_held_inside_a_call_is_dropped_and_its_tank_leaves` (a wind-up
+  yields to a call), `a_hammer_enemy_inside_a_call_leaves_rather_than_shout`
+  (a special yields to the dodge), `a_hammer_enemy_shoves_a_seat_into_a_call`
+  (`lands_in_trouble`),
+  `an_enemy_never_calls_on_a_tower_whose_circle_holds_a_seat_off_its_box`,
+  `a_reloading_rod_tank_leaves_its_target_to_the_next`,
+  `a_rod_hunter_calls_on_its_quarry_from_outside_the_circle`,
+  `a_chaser_waits_for_a_call_on_its_own_side`,
+  `set_tank_charge_puts_a_rods_reticle_up`; `engage::tests`
+  (`a_herd_puts_the_firing_slots_at_its_distance_round_the_call`).
 
 Headless halves: `rod::tests` (`the_range_is_the_sight_box_less_half_a_cell_inside_the_field`,
 `reticle_start_is_ahead_and_in_range`, `the_stick_steps_once_then_repeats`,
@@ -1451,7 +1496,8 @@ Headless halves: `rod::tests` (`the_range_is_the_sight_box_less_half_a_cell_insi
 `the_reticle_is_on_the_grid_and_pure`,
 `the_call_draws_its_countdown_and_its_beam_holds_in_the_last_second`,
 `the_column_lasts_its_frames_and_the_impact_is_gone_by_its_end`,
-`a_crater_draws_the_same_on_any_canvas_and_a_filled_one_draws_water`),
+`a_crater_draws_the_same_on_any_canvas_and_a_filled_one_draws_water`,
+`a_strike_in_water_throws_up_spray_that_falls_back`),
 `zone::tests` (`a_rod_zones_danger_covers_its_circle_and_a_hull_beside_it`,
 `left_counts_down_on_the_round_clock`), `volcano::tests`
 (`set_off_shift_starts_the_eruption_on_the_next_tick_and_leaves_an_eruption_alone`),
@@ -1467,7 +1513,9 @@ frame), `net::predict` (`a_rods_reticle_and_call_are_drawn_on_the_clients_ticks`
 - the report, the call on the release, the claim, the cancel),
 `net::round` (`a_call_is_drawn_on_the_release_and_handed_to_the_rooms_zone`),
 `net::rig` (`an_enemys_call_reaches_the_replica`), `net::mailbox`
-(`the_reticle_report_is_the_newest_intents`), the codec's intent bytes and
+(`the_reticle_report_is_the_newest_intents` - a merged read, a release
+merged with the packet after it, a press and its release in one read), the
+codec's intent bytes and
 the delta's sizes.
 
 ## 11. Probe
@@ -1483,6 +1531,9 @@ stall, a stale start, low progress or jitter. **`offbox-fire`** reads
 `rod-calls-on-seats`/`rod-calls-offbox`: every enemy `RodCalled` with a
 seat pick whose caller stood outside that seat's box that tick is an
 `offbox-fire` anomaly. A call on a tower or the frog is not a shot at a
+seat. **A call is engagement** for `never-arrived`, as a drone launched at
+a seat or the frog is: a rod tank calls from its stand-off, a hunter from
+round its quarry, not necessarily from inside `enemy_attack_range` of the
 seat.
 
 **The runs**, all at seed 1000, ten rounds a map: the fixtures (`maps/test/*.toml`,
@@ -1490,81 +1541,97 @@ seat.
 recipes' budgets. `armed.json` is `{"enemy_special_weapon_chance": 1.0,
 "enemy_special_weapon_rod_share": 1.0}`; the mix is chance 0.5 and share
 0.5; night, rain and the commander add `weather_override` 1 or 3 or
-`c2_enabled` to the armed patch. Totals (minutes of round in brackets):
+`c2_enabled` to the armed patch.
 
-| Run | Fixtures | Fields |
-|---|---|---|
-| Defaults | border-stuck 4, jitter 32, spin 3, churn 34, clustering 10, pile-up 6 (11.1) - every map's output byte for byte the swarm's reviewed head's (`2c67491`), the two new zero counters aside | border-stuck 11, jitter 108, spin 24, churn 83, clustering 12, wall-grind 1, pile-up 8 (18.9) - byte for byte |
-| `--crate rod_from_god` | as the defaults (no weapon slot) | border-stuck 12, jitter 117, spin 21, churn 90, clustering 16, pile-up 7 (19.6); 20 calls on seats |
-| Mix: chance 0.5, rod share 0.5 | border-stuck 2, jitter 27, spin 6, churn 40, clustering 11, pile-up 2 (11.9); 35 calls | border-stuck 10, jitter 94, spin 14, churn 67, clustering 4, wall-grind 3 (16.9); 27 calls |
-| Every enemy armed, by day | jitter 18, spin 1, churn 31, clustering 11, pile-up 4 (12.9); 83 calls | stall 1, border-stuck 11, jitter 126, spin 21, churn 97, clustering 30, pile-up 22 (20.1); 62 calls |
-| Every enemy armed, night | jitter 12, spin 2, churn 36, clustering 9, pile-up 3 (13.4) | stall 1, border-stuck 9, jitter 112, spin 32, churn 109, clustering 30, tank-grind 2, pile-up 22 (24.3) |
-| Night alone (no rod) | border-stuck 2, jitter 34, spin 4, churn 38, clustering 17, tank-grind 1, pile-up 7 (11.6) | border-stuck 14, jitter 101, spin 19, churn 93, clustering 25, low-progress 1, tank-grind 2, pile-up 17 (22.3) |
-| Every enemy armed, rain | jitter 21, spin 3, churn 36, clustering 11, pile-up 3 (12.5) | border-stuck 3, jitter 138, spin 28, churn 91, clustering 14, pile-up 8 (19.6) |
-| Rain alone | border-stuck 2, jitter 47, spin 4, churn 60, clustering 10, pile-up 7 (11.1) | border-stuck 9, jitter 121, spin 15, churn 76, clustering 7, low-progress 1, tank-grind 2, pile-up 6 (19.0) |
-| Every enemy armed, commander on | jitter 19, spin 2, churn 30, clustering 7, pile-up 3 (12.3) | border-stuck 11, jitter 109, spin 16, churn 87, clustering 24, pile-up 14 (19.2) |
-| Commander alone | border-stuck 3, jitter 33, spin 3, churn 35, clustering 12, pile-up 4 (11.1) | border-stuck 12, jitter 117, spin 21, churn 89, clustering 25, pile-up 12 (18.7) |
-| Yardstick: the shells pack, `--mission destroy`, `player_armor_factor` 0.1 | spin 22, clustering 95, pile-up 65, tank-grind 12, never-arrived 7, low-progress 8 (44.1) | spin 44, clustering 109, pile-up 74, tank-grind 18, low-progress 8, never-arrived 1, stall 1 (66.6) |
-| Every enemy armed, the same | border-stuck 1, jitter 14, spin 6, churn 36, clustering 9, wall-grind 1, pile-up 4 (11.6) | border-stuck 13, jitter 76, spin 12, churn 44, clustering 13, wall-grind 4, pile-up 3 (21.8) |
+Defaults: every map's output byte for byte the swarm's reviewed head's
+(`2c67491`) - the fixtures, the fields, the 30-round default sweep,
+waves-basic, the advance scenario on the maze and hedge-maze, two seats on
+the default map and archipelago, and two seven-minute defend rounds on
+longwater - but for the two new zero counters on the fire line. Totals with
+the rod (minutes of round in brackets), as built and after the review's
+fixes (§12, decisions 30 and 31; the calls are calls on seats):
 
-`offbox-fire` 0 in every run: no call on a seat from off its box (145 calls
-on seats armed by day alone), and no shot, missile, drone lock or hit on a
-seat from off its box. The armour does not lengthen a rod pack's rounds -
-the circle crushes whatever the armour - so the long-round yardstick and
-the rod pack's own run are of about the same length as the defaults'; the
-armed rounds run 8.6 s on the fixtures and 16.0 s on the fields against the
-defaults' 7.2 and 16.2 (a rod tank fires nothing until its target stands
-still).
+| Run | Fixtures, as built | Fixtures, reviewed | Fields, as built | Fields, reviewed |
+|---|---|---|---|---|
+| Defaults | border-stuck 4, jitter 32, spin 3, churn 34, clustering 10, pile-up 6 (11.1) | the same | border-stuck 11, jitter 108, spin 24, churn 83, clustering 12, wall-grind 1, pile-up 8 (18.9) | the same |
+| `--crate rod_from_god` | as the defaults (no weapon slot) | the same | border-stuck 12, jitter 117, spin 21, churn 90, clustering 16, pile-up 7 (19.6); 20 calls | border-stuck 12, jitter 116, spin 20, churn 86, clustering 16, pile-up 7 (19.0); 24 calls |
+| Mix: chance 0.5, share 0.5 | border-stuck 2, jitter 27, spin 6, churn 40, clustering 11, pile-up 2 (11.9) | border-stuck 2, jitter 26, spin 4, churn 40, clustering 7, pile-up 1 (11.5) | border-stuck 10, jitter 94, spin 14, churn 67, clustering 4, wall-grind 3 (16.9) | border-stuck 10, jitter 99, spin 14, churn 61, clustering 3, wall-grind 3 (16.6) |
+| Every enemy armed, by day | jitter 18, spin 1, churn 31, clustering 11, pile-up 4 (12.9); 83 calls | jitter 17, spin 1, churn 30, clustering 3, pile-up 1 (11.2); 83 calls | stall 1, border-stuck 11, jitter 126, spin 21, churn 97, clustering 30, pile-up 22 (20.1); 62 calls | stall 2, border-stuck 11, jitter 107, spin 18, churn 79, clustering 19, never-arrived 1, pile-up 11 (18.2); 67 calls |
+| Every enemy armed, night | jitter 12, spin 2, churn 36, clustering 9, pile-up 3 (13.4) | jitter 13, spin 2, churn 37, clustering 1, pile-up 3 (11.8) | stall 1, border-stuck 9, jitter 112, spin 32, churn 109, clustering 30, tank-grind 2, pile-up 22 (24.3) | stall 2, border-stuck 11, jitter 108, spin 32, churn 102, clustering 29, wall-grind 1, low-progress 1, never-arrived 3, tank-grind 2, pile-up 24 (21.7) |
+| Every enemy armed, rain | jitter 21, spin 3, churn 36, clustering 11, pile-up 3 (12.5) | jitter 21, spin 2, churn 36, clustering 6, pile-up 6 (11.5) | border-stuck 3, jitter 138, spin 28, churn 91, clustering 14, pile-up 8 (19.7) | border-stuck 4, jitter 117, spin 27, churn 89, clustering 10, pile-up 10 (18.3) |
+| Every enemy armed, commander on | jitter 19, spin 2, churn 30, clustering 7, pile-up 3 (12.3) | jitter 17, spin 1, churn 29, clustering 4, pile-up 3 (11.0) | border-stuck 11, jitter 109, spin 16, churn 87, clustering 24, pile-up 14 (19.2) | border-stuck 11, jitter 108, spin 23, churn 73, clustering 28, pile-up 17 (18.3) |
+| Night alone (no rod) | border-stuck 2, jitter 34, spin 4, churn 38, clustering 17, tank-grind 1, pile-up 7 (11.6) | - | border-stuck 14, jitter 101, spin 19, churn 93, clustering 25, low-progress 1, tank-grind 2, pile-up 17 (22.3) | - |
+| Rain alone | border-stuck 2, jitter 47, spin 4, churn 60, clustering 10, pile-up 7 (11.1) | - | border-stuck 9, jitter 121, spin 15, churn 76, clustering 7, low-progress 1, tank-grind 2, pile-up 6 (19.0) | - |
+| Commander alone | border-stuck 3, jitter 33, spin 3, churn 35, clustering 12, pile-up 4 (11.1) | - | border-stuck 12, jitter 117, spin 21, churn 89, clustering 25, pile-up 12 (18.7) | - |
+| Yardstick: the shells pack, `--mission destroy`, `player_armor_factor` 0.1 | spin 22, clustering 95, pile-up 65, tank-grind 12, never-arrived 7, low-progress 8 (44.1) | - | spin 44, clustering 109, pile-up 74, tank-grind 18, low-progress 8, never-arrived 1, stall 1 (66.6) | - |
 
-**Within every fixture's ceiling** in every run but the mix's pockets
-(jitter 7 of 6, spin 2 of 1: one round, 0x3ed, ran to the cap because the
-seat lived, and both spins are shell tanks chasing). **Over a field ceiling**:
+`offbox-fire` 0 in every run: no call on a seat from off its box (150
+calls on seats armed by day alone, reviewed; 145 as built), and no shot, missile, drone
+lock or hit on a seat from off its box. The armour does not lengthen a rod
+pack's rounds - the circle crushes whatever the armour - so the long-round
+yardstick and the rod pack's own run are of about the same length as the
+defaults'.
 
-- hedge-maze, armed by day: jitter 52, churn 53, clustering 18, pile-up 15
-  against 30, 43, 11, 8 - over 3.9 minutes of round against the defaults'
-  2.3. Per minute, jitter (13.3 against 12.6) and churn (13.6 against
-  17.8) are the defaults'; clustering (4.6 against 2.2) and pile-ups (3.8
-  against 2.2) about double: the rod tanks stand off in the maze's
-  corridors four to six cells from the seat while the shell tanks of the
-  next wave drive past them. Every one of those anomalies' windows is the
-  patrol or the chase (below).
-- hedge-maze at night: spin 16 of 12 over 7.3 minutes (33 s rounds; the
-  night alone 14 s) - 2.2 a minute, the night alone's 2.1: the rod pack
-  finds an AFK seat late under the night's sight and fires no shell, so
-  its rounds run long, and its spins are the patrol's.
-- hedge-maze in rain: spin 18 of 12, 4.7 a minute against the rain
-  alone's 3.3 - all in the patrol tier.
-- harbor-lights at night: tank-grind 2 of 1, as the night alone (2).
-- harbor-lights with the commander: clustering 14 of 11 (the commander
-  alone 7 here, 25 over the fields).
-- harbor-lights in rain: jitter 31 of 30 (the rain alone 30).
-- harbor-lights in the mix: wall-grind 2 of 1, both shell tanks (attack,
-  patrol).
-- castle-moat with the crate: border-stuck 9 of 8 - shell tanks chasing
-  past the crates by the border.
+**What the review moved.** The armed sweeps' worst - hedge-maze by day,
+clustering 18 and pile-up 15 against ceilings of 11 and 8 - was the pack
+waiting round the frog's pond: one caller per target let the lowest slot
+take the frog while its eight-second fire timer ran, so nobody else
+called (`a_reloading_rod_tank_leaves_its_target_to_the_next`); with a
+target taken only by a tank that can call, hedge-maze armed reads
+clustering 5 and pile-up 5, the fixtures' armed clustering 11 to 3 and
+pile-ups 4 to 1, the fields' clustering 30 to 19 and pile-ups 22 to 11.
+The calls come sooner, so rounds go another way from the first call on:
+the commander's hedge-maze went from clustering 8 and pile-up 5 to 20 and
+11 (its harbor-lights from 14 and 8 to 7 and 5), and the night's hedge-maze
+and harbor-lights each run a round to the frame cap - an AFK seat in a
+corner the pack does not see at night, the towers grinding it down - in
+which a tank at 18 points fleeing (low-progress, wall-grind, a stall) and
+three that never reached the seat are flagged. Every remaining
+`never-arrived` is in a round that hit the 60 s cap with the seat still
+unfound; before the probe counted a call as engagement there were four
+times as many (hunters calling on the frog from round its pond).
 
-**Read round by round.** Every spin, stall, tank-grind, wall-grind,
-never-arrived and low-progress anomaly of the rod runs (156) was replayed
-with a scratch trace that lists the AI tiers its tank ran over the two
-seconds before it (not in the tree). 138 have no rod state in their window
-(patrol, chase, attack, the seeks, flee); 7 are the crate run's shell tanks
-seeking the rod's crate (`seek_special`); 11 hold a reticle's aim, the hull
-standing with its facing kept, and spin in the chase or patrol that
-follows - the route going round the circle just called (the router's
-surcharge and `out_of_danger`, which every enemy keeps). None is in the
-stand-off. The stand-off itself was built against these readings
-(decision 26): parked inside its own circle (archipelago, a seat that lost
-in 10 s at the defaults lasting 46), a pack crowding a camper against a
-wall (choke: border-stuck 2, pile-up 5), flip-flopping between two spots
-(the latch), grinding in a corridor (the give-up and wait), sliding on in
-the wet and sent out again (the hold's hysteresis), circling round a seat
-to its far side (the straight drive on its own side), routed the long way
-round a block or a seat's line of fire (giving up a move steered away from
-its spot), and turned about by the attack tier with nowhere to back off
-to (the hold).
+**Over a ceiling, reviewed** (as built in brackets): armed by day,
+hedge-maze jitter 45 and churn 46 against 30 and 43 (52, 53; clustering 18
+and pile-up 15 now under) and one never-arrived; at night, hedge-maze
+jitter 60, spin 14, churn 68, clustering 15, pile-up 14 (61, 16, 69, 15,
+15) over 6.7 minutes - 40 s rounds against the night alone's 14 s, the
+spins 2.1 a minute as the night alone's - and harbor-lights tank-grind 2
+(2; the night alone 2) and never-arrived 3 (0); in rain, hedge-maze jitter
+44, spin 18, churn 51 (51, 18, 47), and two fixtures by one each, props'
+pile-up 3 of 2 and towers' jitter 7 of 6 (none); with the commander,
+hedge-maze jitter 48, churn 47, clustering 20, pile-up 11 (47, 44, under,
+under; harbor-lights' clustering 14 now 7, under); the mix, harbor-lights'
+wall-grind 2 of 1 (2; pockets' jitter 7 and spin 2 now under); the crate,
+castle-moat's border-stuck 9 of 8 (9, shell tanks chasing past the crates
+by the border) and hedge-maze's jitter 31 of 30 (under).
+
+**Read round by round** (as built). Every spin, stall, tank-grind,
+wall-grind, never-arrived and low-progress anomaly of the rod runs (156)
+was replayed with a scratch trace that lists the AI tiers its tank ran
+over the two seconds before it (not in the tree). 138 have no rod state in
+their window (patrol, chase, attack, the seeks, flee); 7 are the crate
+run's shell tanks seeking the rod's crate (`seek_special`); 11 hold a
+reticle's aim and spin in the chase that follows. The review traced that
+chase: `out_of_danger` took a disc's exit along the line from its middle
+through the target, and a camper stands a few pixels off the middle of the
+cell a call on it is centred on, so a chaser was sent round the circle to
+the side the seat happened to lean and back (540 degrees of turning in
+`a_chaser_waits_for_a_call_on_its_own_side`, against at most 270 now: it
+waits at the edge on its own side). The stand-off itself was built against
+these readings (decision 26): parked inside its own circle (archipelago, a
+seat that lost in 10 s at the defaults lasting 46), a pack crowding a
+camper against a wall (choke: border-stuck 2, pile-up 5), flip-flopping
+between two spots (the latch), grinding in a corridor (the give-up and
+wait), sliding on in the wet and sent out again (the hold's hysteresis),
+circling round a seat to its far side (the straight drive on its own
+side), routed the long way round a block or a seat's line of fire (giving
+up a move steered away from its spot), and turned about by the attack tier
+with nowhere to back off to (the hold).
 
 **Not run**: `just probe-defend` (a release build; no rod crate stands on
-the maps it plays).
+the maps it plays, and the defend scenario's two seven-minute longwater
+rounds in the defaults comparison above match byte for byte).
 
 ## 12. Interactions, decisions, what is left out
 
@@ -1593,7 +1660,7 @@ the maps it plays).
 | Wrecks | Untouched |
 | Gates, waves | A tank rolling in is off the field; arriving, it keeps out of the circle |
 | Field maps | The sight box binds every call on a seat; a far coasting tank never calls; a call's arrow and minimap mark reach a seat wherever it is; a wrecked seat's return lane is not special |
-| The couch and its split | Each seat's reticle in its colour and its own prompt; a teammate in the circle is crushed; the beam is drawn in both halves' worlds, each to its own top |
+| The couch and its split | Each seat's reticle in its colour; the prompt is the first seat's that holds one (one line under the left cluster); a teammate in the circle is crushed; the beam is drawn in both halves' worlds, each to its own top |
 | Training | `drop = ["rod_from_god"]` works by its name; a dummy never calls; a door stands |
 | The C2 commander | A tank holding a reticle is never ordered |
 | Online | §8 |
@@ -1781,6 +1848,22 @@ the maps it plays).
     carries the zones and craters. A seat's motion record and an enemy's
     pick are read through the probe's trace rather than the snapshot - no
     `AiSnapshot` field for a rule that changes as it is tuned.
+30. **The sight box binds every call that can crush a seat** (review): a
+    call on a tower or the frog whose circle holds a seat is a call on that
+    seat, so it needs that seat's box, like a call aimed at the seat.
+    Rejected: leaving tower and frog calls unbound (an enemy off a seat's
+    screen could crush the seat defending its frog, warned only by the
+    arrow). *For Oto.*
+31. **Out of a call, a tank waits on its own side** (review): `way_out`
+    takes the circle's edge nearest the tank for a danger nobody owns. The
+    EMP's disc round a seat and the rail's lane keep their exits, so the
+    earlier weapons play as they did.
+32. **The crater's rules are its cells, its picture a disc** (as built):
+    the pit slows, and fills, by the plus of five cells, while it is drawn
+    as a ragged disc of about 36 px - so a hull a cell off on an axis is
+    slowed on the drawn rim's dust, and one on a diagonal inside the drawn
+    pit is not. Left for Oto: draw the plus, or measure the rules by the
+    disc. *For Oto.*
 
 ### Not in this PR
 
