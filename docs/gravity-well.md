@@ -352,10 +352,10 @@ on the end screen does.
 | File | What |
 |---|---|
 | `src/well.rs` (new) | The weapon's headless half. `Orb` (the shot: id, owner, position, prev, velocity, rotation, state, timer, flown, done - a `Projectile`), `OrbState` (`Launch`, `Flying`; `col`/`from_col`), `WellZone` (stage, the anchor's `AnchorBy`, the shooter's seat, `emp_collapse`), `WellStage` (`Forming`, `Pulling`), `AnchorBy`; **the field** (§3.3): `strength(d)`, `WellSource`, `WellField` (`at`, `pull`, `hull_pull`, `shot_accel`, `core_hit`), `bend(velocity, accel, dt)`, `HullPull` and its axis split; `HeldDrum` and `held_at`, `GrenadeOrbit` and `orbit_at`, `frog_fling_target`, `holds_broadside`, `escape_dir`, `curved_streak`; the composers `compose_orb`, `compose_snap`, `compose_well`, `compose_swirl`, `compose_collapse`, `compose_swallow`, `compose_held_drum_glow` (pure, `pyro::Shape`s); `module_cell` |
-| `src/simulation/well.rs` (new) | The world half. `fire_well` (the dispatch arm: launch or anchor), `anchor_orb`, `resolve_orbs` (contact, range, swallowed), `well_field` (the frame's field), `well_phase(f, live)` (stages, the drums' lift, the frog and the crates, the marks and the grass, every collapse), `collapse_well`, `well_anchor_show`, `well_collapse_show`, `swallow_show` (the cosmetic halves, which a replica's events and a client's own press call too), `tick_well_pictures` (a replica's stages, held drums, marks, grass), `Game::{held_drums, hull_footing, drain_marks, lean_grass}`, `well_senses` and `pull_senses` (§4), `seat_orb`, `debug_well` |
+| `src/simulation/well.rs` (new) | The world half. `fire_well` (the dispatch arm's launch), `take_anchor_press` (the press while an orb flies), `place_orbs`, `anchor_orb`, `advance_orbs`, `resolve_orbs` (contact, range, swallowed), `well_phase(f, live)` (stages, the drums' lift, the frogs and the crates, held fuses, the marks and the grass, every collapse), `collapse_well`, `pull_air` (missiles and drones), `chain_held_drums`, `fizzle_orb`, `well_anchor_show`, `well_collapse_show`, `swallow_show`, `show_well_anchor` and `flash_seat_well` (the cosmetic halves, which a replica's events and a client's own press call too), `drain_marks`, `lean_grass`, `present_wells`, `well_senses` and `pull_senses` (§4), `seat_orb`, `debug_well` |
 | `src/simulation/well_tests.rs` (new) | The scenario tests (§10) |
 | `src/simulation/weapons.rs` | The `ActiveWeapon::GravityWell` dispatch arm; `Projectile::bend` (a default for every shot kind: turn the velocity, keep the speed, set the rotation) and `Projectile::swallowed`; `advance_projectiles` taking the frame's field |
-| `src/simulation/mod.rs` | `Frame::{wells, pending_orbs}`; `Game::{held_drums, anchor_grace}`; `well_field` built after `tick_timers`; `well_phase` after `resolve_zones` (the rod's), before `step_world`, and `well_phase(f, false)` on the end screen; `resolve_orbs` after `shell_vs_shell`; `Footing::well` and the axis split in `drive_tank_with`, the skid branch in the whole current; `hull_footing` in `player_phase`, the enemy apply pass and `predict_seat`; the anchor press before the cooldown gate in `drive_player` and `enemy_trigger`; `resolve_projectiles`' swallow; `accept_seat_pose`'s well drift; `tick_presentation` (the wells' stages, held drums, marks, grass); `Event::{WellAnchored, WellCollapsed, Swallowed, OrbFizzled}`, `HitCause::Well`; the swap's table entry |
+| `src/simulation/mod.rs` | `Frame::{wells, pending_orbs}`; `Game::{held_drums, anchor_grace}`; `well_field` built after `tick_timers`; `well_phase` after `resolve_zones` (the rod's), before `step_world`, and `well_phase(f, false)` on the end screen; `resolve_orbs` after `shell_vs_shell`; `Footing::well` and the axis split in `drive_tank_with`, the skid branch in the whole current; `Footing::pulled` in `drive_player`, the enemy apply pass and `predict_seat_with`; the anchor press before the cooldown gate in `drive_player` and `enemy_trigger`; `resolve_projectiles`' swallow; `accept_seat_pose`'s well drift; `tick_presentation` (the wells' stages, held drums, marks, grass); `Event::{WellAnchored, WellCollapsed, Swallowed, OrbFizzled}`, `HitCause::Well`; the swap's table entry |
 | `src/simulation/missiles.rs`, `src/missile.rs` | `Missile::drag`, the swallow in `resolve_missiles` |
 | `src/simulation/fpv.rs`, `src/air.rs` | `Drone::drag`, `AirStrike::Well` |
 | `src/simulation/grenades.rs`, `src/grenade.rs` | The pull and the capture in `roll_grenades`, `Grenade::orbit` (`roll` skipped while set), the fling |
@@ -373,16 +373,16 @@ on the end screen does.
 | `src/grass.rs`, `src/track.rs` | The lean into the drain (`GrassTuft::drain`), a mark's swirl (`Track::drain`) |
 | `src/fish.rs` | The attractor (a well's core among the scares, reversed) |
 | `src/ai.rs` | `SpecialSense::Well(WellSense)`, `WellPlan`, `well_rule`, `SpecialUse::{Orb, Anchor}`, `generic_fire(GravityWell)`; `PullSense`, the `pull` tier, `act_pull`, `Ai::{well_plan, pull_escape, bracing}`; `special_rule` and the `air` tier yielding inside a pull; `Brain::seek` and `nearest_pickup` leaving a crate inside a pull alone; `SEEK_SPECIALS` gains the well; `AiSnapshot::{well, pull}` |
-| `src/indicators.rs` | `ArrowKind::Zone { kind: Well, .. }`'s arm |
+| `src/indicators.rs` | `ArrowKind::Well { left }`'s arm (`Scene::wells`) |
 | `src/minimap.rs` | A well's mark |
-| `src/hud.rs`, `src/render/hud.rs` | `HUD_WELL_COLOR`, the `weapon_color`/`weapon_pickup` arms; the anchor prompt (`hud::well_prompt`, the rod's `Corners::prompt` slot) |
+| `src/hud.rs`, `src/render/hud.rs` | `HUD_WELL_COLOR`, the `weapon_color`/`weapon_pickup` arms; the anchor prompt (`hud::special_prompt`, the rod's prompt slot, drawn in `HUD_WELL_COLOR`) |
 | `src/game.rs`, `src/render/game.rs` | Orbs, wells, held drums, swallows and the collapse in their passes (§5); bent shots' curved tracers; the dev stats arm |
 | `src/render/well.rs` (new) | The orb's and the core's drawing that takes a draw handle |
 | `src/shockwave.rs`, `src/render/shockwave.rs`, `static/shockwave.fs`, `static/web/shockwave.fs` | The inward ring (`Shockwave::inward`, the shader's `starts`/`signs` arrays) |
 | `src/weather.rs` | The ring's and the orb's light |
-| `src/fx.rs`, `src/burst.rs` | Particles within a pull spiralling in; a well `Hit` draws its flash and violet motes, no fire; the swallow's pop (`ImpactKind::Swallow`) |
+| `src/fx.rs`, `src/burst.rs` | Particles within a pull spiralling in; a well `Hit` draws its flash and violet motes, no fire; the swallow's pop (`WellFx`, `WellFxKind::Swallow`, on `Game::well_fx`) |
 | `src/pyro.rs` | The `VOID` ramp |
-| `src/net/wire.rs` | `WeaponKind::GravityWell`, `ShotKind::Orb`, `ZoneState`'s well kind and stages, `WellDrumState`, `Snapshot::well_drums`, `CrateState::{dx, dy}`, `frog_flags::PULLED`, `HitCause::Well`, `AirStrike::Well`, `SwallowedKind` |
+| `src/net/wire.rs` | `WeaponKind::GravityWell`, `ShotKind::Orb`, `ZoneState`'s well kind and stages, `WellDrumState`, `Snapshot::well_drums`, `CrateState::{dx, dy}`, `frog_flags::PULLED`, `HitCause::Well`, `AirStrike::Well`, `well::Swallow` |
 | `src/net/delta.rs` | `well_drums`, `well_drums_gone` |
 | `src/net/events.rs` | `WireEvent::{WellAnchored, WellCollapsed, Swallowed, OrbFizzled}` |
 | `src/net/encode.rs`, `src/net/apply.rs` | The family, the fields, the shows; `Show::OwnShotsDrawn`'s anchor claim by orb id |
@@ -485,7 +485,7 @@ path); `Tank::special`/`active_weapon`; `HitCause` on `Event::Hit`;
   to the collapse while pulling, none while forming.
 - **`Footing`** gains a per-hull term, `well: HullPull` (§3.3): the current
   and the side pull at the hull's centre, already scaled by its mass.
-  `Footing::at` stays position-only; `Game::hull_footing(tank)` is
+  `Footing::at` stays position-only; `Footing::pulled(wells, tank)` is
   `Footing::at(..)` with the frame's field's `hull_pull(pos, mass_factor)`,
   and is what `player_phase`, the enemy apply pass and `predict_seat` hand
   `drive_tank_with`. `drive_tank_with` splits it after `tank.control`
@@ -620,7 +620,7 @@ pub fn bend(velocity: Vec2, accel: Vec2, dt: f32) -> Vec2;
 - **Who reads it**, all from `Frame::wells` (built once a tick after
   `tick_timers` by `WellField::at(zones, frame)` - the stage by the clock,
   so a well whose pull starts on this tick pulls in it, and one whose
-  collapse falls on this tick does not: it flings): the drive (`hull_footing`), the
+  collapse falls on this tick does not: it flings): the drive (`Footing::pulled`), the
   fixed-step loop (`Projectile::bend` for shells, bullets, plasma and orbs;
   `Missile::drag`; `Drone::drag`), `roll_grenades`, `well_phase` (the
   frog, the crates, the marks, the grass), `fx.rs` (particles,
@@ -721,7 +721,7 @@ one tool of the well's own, `well_at {x, y, enemy}` - a well anchored at
 once at the point (forming), player 1's or with `enemy: true` an enemy's
 (`Game::debug_well`, no RNG; a `GAME_ONLY_TOOLS` and `ONLINE_REFUSED_TOOLS`
 member, refused off the field or inside a solid cell; replies `{id, x, y,
-until}`), so a pull, a capture and a collapse are tried in lockstep without
+pulls_at}`), so a pull, a capture and a collapse are tried in lockstep without
 steering an orb. `status`/`snapshot` carry each tank's `wells` and `orb`
 (its orb's id and how far it has flown), every zone's well stage, the held
 drums (id, well, position), each crate's `drift`, each frog's `pulled`, each
@@ -1022,8 +1022,8 @@ rim - is drawn in the glowing pass, unlit, so it reads at night and in fog
   the streak is as it ever was.
 - **The swallow** (`Swallowed`, `well::compose_swallow`): a ring of
   `VOID[3]` blocks closing onto the point over 0.15 s and one `VOID[4]`
-  block - a burst `burst.rs` composes (`ImpactKind::Swallow`), started by
-  `fx.rs` off the event: no fire, no sparks, no pool of light, no impact
+  block - a `WellFx` on `Game::well_fx` (`WellFxKind::Swallow`), staged by
+  the event on a replica as in the room: no fire, no sparks, no pool of light, no impact
   flash.
 - **Held drums** (`well::held_at`): each drum's sprite drawn lifted by its
   height over its shadow where the flying drum's is (the `FlyingDrum`
@@ -1131,12 +1131,11 @@ rim - is drawn in the glowing pass, unlit, so it reads at night and in fog
 - **The HUD**: `hud::WeaponSlot::of` gives the wells in `HUD_WELL_COLOR`
   (`#E6A8FF`, the ink's base) and the glyph; offline, `WPN OFFLINE`; the
   ring's ammo pips are the wells left against `full_load` (3). **The anchor
-  prompt** (`hud::well_prompt`): while a seat on this screen has an orb in
+  prompt** (`hud::special_prompt`): while a seat on this screen has an orb in
   flight, one line under that seat's block (the rod's `Corners::prompt`
   slot), centred, at `UI_SMALL_TEXT`, in the ink's light: `hud-well-anchor`
   (§7). A couch's second seat's under its own block.
-- **Off the screen** (`indicators.rs`): `ArrowKind::Zone { kind: Well, left
-  }` for every forming or pulling well off this screen and not owned by a
+- **Off the screen** (`indicators.rs`): `ArrowKind::Well { left }` for every forming or pulling well off this screen and not owned by a
   seat on this screen: a notched arrowhead in `VOID[3]`, rimmed near-black,
   the whole seconds to the collapse on its plate while it pulls, blinking
   at 2 Hz and at 6 Hz in its last second; never merged, never left out past
@@ -1215,13 +1214,13 @@ collapse's rings); `WELL_SIDE_REACH_SECONDS` (0.5) beside
 | Key | en | sl |
 |---|---|---|
 | `hud-well-anchor` (`keys::HUD_WELL_ANCHOR`) | FIRE AGAIN TO ANCHOR | ZNOVA SPROŽI ZA SIDRO |
-| `tool-gravity_well` | gravity well | gravitacijska jama |
+| `tool-gravity_well` | gravity well | težnostna jama |
 | `tool-short-gravity_well` | well | jama |
 
 `FIRE` names the trigger on a keyboard and the fire half on a touch screen
 alike, so the prompt needs no `-touch` twin (the rod's `LET GO`). `ZNOVA
 SPROŽI ZA SIDRO` ("fire again for the anchor") folds to `ZNOVA SPROZI ZA
-SIDRO`; `gravitacijska jama` ("gravity pit"). **The budget**:
+SIDRO`; `težnostna jama` ("gravity pit": `gravitacijska jama` overflowed the builder's list row and was taken back in Phase 2). **The budget**:
 `every_language_fits_every_budget` gains the prompt at `UI_SMALL_TEXT`
 within the block's width less 8 (`Corners::prompt`, the one-seat block on
 the smallest area) - the rod's measure; the tool names are measured by the
@@ -1289,14 +1288,14 @@ Protocol 20 (from the rod's 19), once in the PR.
   `WireEvent::WellAnchored { id: u16, slot: u16, seat: u8, x: i16, y: i16,
   by: u8 }` (`seat` `NO_SEAT` for an enemy's; `by` `AnchorBy`),
   `WellCollapsed { id: u16, x: i16, y: i16, early: bool }`, `Swallowed {
-  what: SwallowedKind, x: i16, y: i16 }` (`SwallowedKind`: shell, bullet,
+  what: Swallow, x: i16, y: i16 }` (`well::Swallow`: shell, bullet,
   plasma, orb, missile, drone) and `OrbFizzled { id: u16, x: i16, y: i16 }`.
   `HitCause::Well` and `AirStrike::Well`, appended.
 - **What a replica draws**: wells from the zones family (`apply_zones`:
   added, turned, dropped by id) - the core, the ring, the swirl and the rim
   by `compose_well` from the stage and `until`; its field
   (`WellField::at` on the replica's clock) for the cosmetic drain alone
-  (`tick_well_pictures`: the marks, the grass, the particles, the fish) -
+  (`Game::drain_marks`/`lean_grass` in `tick_presentation`, the particles in `fx.rs`) -
   a replica pulls no hull, shot or crate: those arrive in the snapshots;
   held drums from their family (`held_at`); orbs from the shots; on
   `WellAnchored`, `well_anchor_show` and the module's anchor cell; on
@@ -1343,7 +1342,7 @@ Protocol 20 (from the rod's 19), once in the PR.
     `well_anchor_grace_seconds` of an anchor of its own (§1) fires nothing
     there, so a late anchor press never costs a well.
   - *the pull on its own hull*: the sandbox's footing (`predict_seat`'s
-    `hull_footing`) reads the field built from the sandbox's zones - the
+    `Footing::pulled`) reads the field built from the sandbox's zones - the
     room's, taken with the snapshot by `apply::snapshot` - plus this seat's
     provisional well, on the round tick its input lands on (§3.3), so an
     owned hull is pulled from the tick the room pulls it and every pose
@@ -1690,6 +1689,7 @@ Wire:
 | The couch and its split | Both seats pulled (the pull is blind) - the clump arm's case; each half draws the wells of its world; the prompt under each seat's own block |
 | Training | `drop = ["gravity_well"]` works by its name; a dummy never fires one |
 | The C2 commander | Never orders a pulled or anchoring tank |
+| The range board (BB-44, on master) | A tile, so never lifted, pulled or flung, and its collapse does not touch it; it blocks sight like a wall, so an orb anchors on it; a shot aimed at a board past a well curves in its pull and is swallowed at a core - the range shows the curve; a held drum's blast wears it as any blast does, and the oil it lights burns it |
 | Online | §8 |
 
 ### Interactions with the sonic hammer (built here)
@@ -1945,3 +1945,63 @@ their docs give:
    the forming ring runs in and as the collapse's ring runs out.
 8. **The orb sticks to the first hull it meets** (decision 3), so it can be
    fired at an enemy as well as anchored in the open. Keep?
+
+## 13. As built (Phase 2)
+
+What the code does where it differs from the sections above, and what is
+left for later. The sections above are kept as the design; this is the
+record of the build.
+
+- **The anchor's place.** Within an arm and a facing, the rule takes the
+  candidate whose pull on the seats it counts is strongest (the sum of
+  `well::strength` at their hulls, in 64ths), then the nearest - not the
+  nearest alone (§4): the nearest qualifying point is at the edge of the
+  pull, where a clump well barely moved the seats it counted. Seen in a
+  screenshot of two seats, fixed with the test that holds the clump arm.
+- **A held drum keeps its well's centre** (`HeldDrum::centre`): the
+  collapse removes the zone before it sets the drums off, so the centre
+  read off the zones was gone and the drums went off at their old cells.
+  On the wire the replica takes it from the zones family, or keeps it.
+- **The core is drawn after every light** (`well::compose_core` on its own
+  pass): drawn with the ring, the glows brightened it to lilac.
+- **A client's own orb is the round's, not a provisional shot**
+  (`net::round`'s `OwnOrb`, `OwnAnchor`, `PressShow::Orb`,
+  `PressShow::Anchor`, `Predictor::orb_landed`/`orb_out`): the orb has no
+  impact frames and anchors rather than bursts, so it flies beside the
+  provisional shots rather than through `ProvisionalKind`. A room copy of
+  this seat's orb pairs with the oldest own orb waiting for one and is kept
+  off the picture while that orb or the anchor it made is drawn; the room's
+  `WellAnchored` for this seat claims the oldest own anchor (first in,
+  first out, where §8 claims by the orb's id), and one the client never
+  drew takes its flying orb and shows the snap where the room has it. The
+  own anchors are provisional zones beside the rod's own calls.
+- **The sandbox's tick** is set from the inputs stepped since the last
+  snapshot's `acked` (`Predictor::last_acked`, `Game::set_zone_lead`), so a
+  pulled own hull and its bent shots read the field on the room's tick of
+  their input.
+- **The grenade's stop.** `Grenade::roll_pulled` adds the pull after the
+  drag's stop rather than before it: a grenade lying still otherwise never
+  gathered the speed the stop snaps away and was never drawn in.
+- **The builder's lists** (`editor::chrome::hanging_list`) shorten their
+  rows toward a finger's 44 pt before their columns run off a narrow window:
+  nineteen crates did not fit an iPhone's room in 48 pt rows.
+- **The EMP's rule** values a seat carrying an online well through its
+  general special rule - nothing of the well's own.
+- **The probe** prints each enemy's tree leaf and arm (`act=`,
+  `Ai::action`) beside `well=`/`orb=` and `pulled=`; `OUT_OF_ITS_HANDS`
+  takes a pulled tank that does not brace, `HOLDS` a brace and a hold for
+  the orb.
+- **The dev tools**: `snapshot` carries each tank's `wells`, `orb`, `pull`
+  (`[current x, y, side x, y]`) and `bracing`, each zone's `kind` and
+  `stage`, the `orbs` and `held_drums`, each pickup's `drift` and each
+  frog's `pulled`, and an enemy's `AiSnapshot::pull` and `::well` (the
+  arm, the facing, the anchor's distance); the engage overlay draws a
+  well's reach and, round an enemy's, the herd's ring.
+- **Left for later**: the tracer drawn curved through a pull
+  (`curved_streak`) - a bent shell's sprite turns with its heading, its
+  streak stays straight -; the incoming carry stepping foreign shots
+  through the field (they are carried straight and corrected by the next
+  snapshot); the interpolator blending a crate's drift (it moves with each
+  snapshot); the fish drawn toward a well (the collapse throws them, an orb
+  scares them); the count on a well's off-screen arrow.
+
