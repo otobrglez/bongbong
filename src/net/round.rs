@@ -2286,6 +2286,85 @@ mod tests {
         assert!(swapped, "and its copy took over from the client's");
     }
 
+    /// **A rod's call is drawn on the release and handed to the room's**
+    /// (docs/rod-from-god.md "Wire"): the reticle is the sandbox's from the
+    /// press, every packet reports its cell, the release puts a provisional
+    /// zone on the picture at once on that cell, and the room's `RodCalled`
+    /// - claimed by its `Fired`'s input tick - hands the picture to the
+    /// room's zone on the same cell; never two calls of the seat drawn.
+    #[test]
+    fn a_call_is_drawn_on_the_release_and_handed_to_the_rooms_zone() {
+        if !tuning().online_predict_shots {
+            return;
+        }
+        let (mut room, mut round) = room_and_round();
+        round.predict_own_tank = Some(true);
+        let rods = crate::simulation::debug::TankPatch { rods: Some(2), ..Default::default() };
+        room.game.debug_set_tank(0, &rods).expect("the seat's tank");
+        room.welcome();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        for tick in 1..=20u32 {
+            let s = on_schedule(&room, tick);
+            room.say(Msg::Snapshot(s));
+        }
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        room.heard();
+        let seat_zones = |round: &OnlineRound<loopback::Loopback>| -> Vec<(u32, (i32, i32))> {
+            round.game().expect("a replica").zones().iter().filter_map(|z| z.rod().map(|c| (z.id, c.cell))).collect()
+        };
+        let held = crate::tank::ticks_of(tuning().rod_settle_seconds) + 4;
+        for _ in 0..held {
+            round.frame(&Intent { fire: true, ..Intent::default() }, 1.0 / 60.0);
+        }
+        let reticle = round.game().expect("a replica").seat_reticle(0).expect("the reticle drawn from the press").cell;
+        // The trigger goes up on the packets after `FIRE_HOLD_TICKS`: the
+        // call is drawn on the frame the release is stepped.
+        let mut drawn = Vec::new();
+        for _ in 0..=crate::net::client::FIRE_HOLD_TICKS {
+            round.frame(&Intent::default(), 1.0 / 60.0);
+            drawn = seat_zones(&round);
+            if !drawn.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(drawn.len(), 1, "one call drawn on the release: {drawn:?}");
+        assert!(drawn[0].0 >= crate::zone::PROVISIONAL_ZONE_BASE, "the client's own");
+        assert_eq!(drawn[0].1, reticle, "on the reticle's cell");
+        let intents: Vec<crate::net::wire::IntentMsg> = room.heard().into_iter().filter_map(|m| if let Msg::Intent(i) = m { Some(i) } else { None }).collect();
+        let cols = encode::field_cols(&room.game);
+        assert!(intents.iter().filter(|i| i.fire).all(|i| encode::reticle_from_code(cols, i.reticle) == Some(reticle)), "every held packet reports the cell");
+        let released = intents.iter().find(|i| !i.fire && i.reticle != 0).expect("the release reports it too");
+        assert_eq!(encode::reticle_from_code(cols, released.reticle), Some(reticle));
+
+        // The room calls on the same cell on its tick 21: the release.
+        let (w, h) = room.game.map.field_size();
+        let at = crate::map::cell_to_world(reticle.0, reticle.1);
+        let id = room.game.debug_call_rod(at, false).expect("a call");
+        room.game.events.insert(0, crate::simulation::Event::Fired { slot: 0, weapon: "rod_from_god" });
+        let mut called = on_schedule(&room, 21);
+        called.acked[0] = released.tick;
+        called.events = encode::wire_events(room.game.events())
+            .into_iter()
+            .map(|e| match e {
+                WireEvent::Fired { slot, weapon, .. } => WireEvent::Fired { slot, weapon, input_tick: released.tick },
+                other => other,
+            })
+            .collect();
+        let _ = (w, h);
+        assert_eq!(called.zones.len(), 1, "the room's zone in its snapshot");
+        room.say(Msg::Snapshot(called));
+        let deadline = Instant::now() + std::time::Duration::from_secs(3);
+        let mut swapped = false;
+        while !swapped && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(4));
+            round.frame(&Intent::default(), 0.004);
+            let zones = seat_zones(&round);
+            assert!(zones.len() <= 1, "two calls of the seat drawn: {zones:?}");
+            swapped = zones == vec![(id & 0xFFFF, reticle)];
+        }
+        assert!(swapped, "the room's zone took over from the client's");
+    }
+
     /// **A launch the room downs in its climb is handed over at once**:
     /// the room's copy, struck two ticks after its launch, is the drone the
     /// picture shows as soon as its fall reaches the picture - not the

@@ -824,6 +824,26 @@ mod tests {
         assert_eq!(mailbox.depth(), 0);
     }
 
+    /// The reticle report is the newest applied intent's cell, a merged
+    /// read's newest; a starved read repeats it (docs/rod-from-god.md).
+    #[test]
+    fn the_reticle_report_is_the_newest_intents() {
+        let now = Instant::now();
+        let mailbox = Mailbox::new();
+        assert_eq!(mailbox.reticle(), 0, "nothing read");
+        mailbox.post(IntentMsg { tick: 0, fire: true, ..IntentMsg::default() }.with_reticle(41), now);
+        mailbox.read(now);
+        assert_eq!(mailbox.reticle(), 41);
+        let merged = Mailbox::new();
+        for (tick, cell) in [(10, 50), (11, 51), (12, 52)] {
+            merged.post(owned(tick, 100.0, 0.0, true).with_reticle(cell), now);
+        }
+        merged.read(now);
+        assert_eq!(merged.reticle(), 52, "a merged read's newest");
+        merged.read(now + Duration::from_millis(20));
+        assert_eq!(merged.reticle(), 52, "a starved read repeats it");
+    }
+
     /// The hold report counts the client's ticks of trigger held, however
     /// the reads took them: one at a time, merged, the release's read
     /// reporting the hold it ended; a starved read reports nothing.

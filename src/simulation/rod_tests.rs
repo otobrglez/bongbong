@@ -441,3 +441,26 @@ fn a_call_is_a_danger_for_everyone_and_its_flash_is_the_strongest() {
     game.flash_screen();
     assert!((game.screen_flash_strength - t.rod_screen_flash).abs() < 1e-6, "a weaker one does not replace it");
 }
+
+/// A room's report puts the seat's reticle on the client's cell - from
+/// the press on, held to the reticle's range - and the release calls there
+/// (docs/rod-from-god.md "The reticle report").
+#[test]
+fn a_rooms_report_puts_the_reticle_where_the_client_has_it() {
+    let mut game = round("");
+    game.set_seat_reticle(0, Some((9, 8)));
+    step(&mut game, true);
+    assert_eq!(reticle(&game), Some((9, 8)), "on the reported cell from the press");
+    for _ in 0..settle_ticks() {
+        game.set_seat_reticle(0, Some((10, 8)));
+        step(&mut game, true);
+    }
+    assert_eq!(reticle(&game), Some((10, 8)));
+    game.set_seat_reticle(0, Some((40, 8)));
+    step(&mut game, true);
+    let half = (tuning().sight_box_half_cols - 0.5).floor() as i32;
+    assert_eq!(reticle(&game), Some((3 + half, 8)), "held to the range");
+    game.set_seat_reticle(0, Some((11, 7)));
+    let events = step(&mut game, false);
+    assert_eq!(called(&events), vec![(11, 7)], "the release calls on the reported cell");
+}

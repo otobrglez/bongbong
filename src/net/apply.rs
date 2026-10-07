@@ -1785,6 +1785,28 @@ mod tests {
         assert!(seen.grenades > 0, "{seen:?}: no grenade was ever on the ground, so nothing was checked");
     }
 
+    /// A rod's calls are a family of their own (`wire::ZoneState`) and its
+    /// craters another (`wire::CraterState`): every call stands on the
+    /// replica where and until the room has it, every crater is made on the
+    /// replica's own map as the room made it, and the enemies that carry
+    /// calls draw their reticles where the room's are. The checking is
+    /// `round_trip`'s, frame by frame.
+    #[test]
+    fn a_rods_calls_and_craters_reach_the_replica() {
+        round_trip(DEFAULT_MAP, 0xB0B5, 600, |game, frame| {
+            if frame == 30 {
+                let patch = crate::simulation::debug::TankPatch { rods: Some(2), ..Default::default() };
+                for slot in 1..=6 {
+                    game.debug_set_tank(slot, &patch).ok();
+                }
+            }
+            if frame == 90 || frame == 150 {
+                let at = map::cell_to_world(14 + (frame as i32 - 90) / 20, 8);
+                assert!(game.debug_call_rod(at, frame == 150).is_some(), "a call on the field");
+            }
+        });
+    }
+
     /// FPV drones are a keyed family of their own (`wire::DroneState`,
     /// docs/fpv-swarm.md "Wire"): the seat's and an enemy's stand where the
     /// room flies them on the replica in every stage, and go when they

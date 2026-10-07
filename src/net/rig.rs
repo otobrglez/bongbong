@@ -1574,6 +1574,46 @@ mod tests {
         assert!(hit.is_some_and(|h| h >= fired), "and the seat is hit with it: {hit:?}");
     }
 
+    /// An enemy's rod reaches the replica (docs/rod-from-god.md): its
+    /// reticle walking onto the seat that stands still, then the call on the
+    /// seat's cell, then the seat crushed and the crater left.
+    #[test]
+    fn an_enemys_call_reaches_the_replica() {
+        let mut rig = Lockstep::start(options(LinkQuality::PERFECT));
+        let game = rig.authority_mut().expect("a round");
+        let seat = game.tank_snapshots().into_iter().find(|t| t.slot == 0).expect("the seat");
+        let seat_cell = crate::map::world_to_cell(seat.position);
+        let beside = crate::Position::new(seat.position.x + 224.0, seat.position.y);
+        let slot = game.debug_spawn_enemy(beside, Some(1), Some(crate::ai::Role::Player)).expect("spawns");
+        let entity = game.tank_entity_by_slot(slot).expect("the enemy");
+        {
+            let mut tank = game.world.get::<&mut crate::tank::Tank>(entity).expect("its tank");
+            tank.disarm();
+            tank.shells_ammo = 0;
+            tank.speed_scale = 0.0;
+            tank.rods = 2;
+        }
+        let (mut aiming, mut called, mut crushed) = (None, None, None);
+        for step in 0..900 {
+            rig.step(1);
+            let picture = rig.replica().expect("a replica").drawable_state();
+            if aiming.is_none() && picture.tanks.iter().any(|t| t.slot == slot && t.reticle.is_some()) {
+                aiming = Some(step);
+            }
+            if called.is_none() && picture.zones.iter().any(|z| z.2 == seat_cell) {
+                called = Some(step);
+            }
+            if crushed.is_none() && picture.tanks.iter().any(|t| t.slot == 0 && t.wreck) {
+                crushed = Some(step);
+                assert!(!picture.craters.is_empty(), "the crater with it");
+            }
+        }
+        let aiming = aiming.expect("the reticle reached the replica");
+        let called = called.expect("the call reached the replica");
+        assert!(called > aiming, "the reticle before the call: {aiming} vs {called}");
+        assert!(crushed.is_some_and(|c| c > called), "and the seat crushed after it: {crushed:?}");
+    }
+
     /// An enemy's EMP reaches the replica: its crackle on the replica's
     /// tank, then its ring, then the seat it struck drawn disabled.
     #[test]
