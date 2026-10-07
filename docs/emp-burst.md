@@ -478,7 +478,7 @@ Into `maps/armory.toml` (hammer §3.5), nothing of the hammer's moved:
 | Missiles crate | 31,16 | An enemy on shells takes it and fires volleys the seat's pulse kills in the air |
 | Lamp posts | 11,4 and 25,10 | Beside the one at 17,8, so the at-11 reads across the map (`--weather night`) |
 
-The towers it acts on are there (the player's tesla at 3,3, the enemies'
+The towers it acts on are there (the player's tesla at 3,4, the enemies'
 tesla at 34,3 and gun tower at 34,14), and the shield inside the glass
 house is the shield it pops. The map lints clean (`supported_maps_no_new_errors`)
 and the armory's CPU thumbnail pin is re-baselined for the crates and
