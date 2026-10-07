@@ -67,11 +67,14 @@ reuses, and the **lane** among the dangers an enemy keeps out of.
   It never fires by itself - a charge that went off on its own would be a
   trap for a player walking into a teammate. The trigger, still held after
   a vent, does nothing: a new charge needs a new press.
-- **It lapses** (`ChargeEnd::Lapsed`) - no slug, none spent - when the tank
+- **It lapses** - no slug, none spent, nothing drawn - when the tank
   becomes a wreck, when the EMP disables it (docs/emp-burst.md, "its tell
   lapses"), when the trigger stops being the rail's (a crate of another
   weapon taken mid-charge, the special taken offline), and when the round
-  ends. A crate of the rail taken mid-charge refills and keeps the charge.
+  ends. The first three clear the charge where they happen with no event;
+  a trigger that is no longer the rail's ends it in `step_charge` with
+  `ChargeEnded { end: Lapsed }`. A crate of the rail taken mid-charge
+  refills and keeps the charge.
 - **It holds through** a teleport (the charge is the trigger's, held by
   whoever holds it, and nothing about it is tied to where the hull stands -
   a seat crawling into a portal comes out with its finger on the trigger),
@@ -82,8 +85,8 @@ reuses, and the **lane** among the dangers an enemy keeps out of.
 
 ### The slug
 
-- **One instant trace.** On the release tick (`fire_gauss`, queued like a
-  laser shot and resolved by `Game::resolve_rails` right after
+- **One instant trace.** On the release tick (`gauss::fire_charge`, queued
+  like a laser shot and resolved by `Game::resolve_rails` right after
   `resolve_lasers`, before `step_world`), the slug is judged from the gun
   line's muzzle (`Tank::gun_line_muzzle`) along the hull's facing - never
   off-aim: no misfire skew for an enemy, no spread - and drawn from the
@@ -107,7 +110,7 @@ reuses, and the **lane** among the dangers an enemy keeps out of.
   permanent, and the nav grid's layer and the linter's breach grid keep
   their meaning); the cone, a door and the edge still stop it.
 - **What it does to each thing, in order**, with the slug's damage `d`
-  starting at `gauss_damage` (110) for a seat's slug and
+  starting at `gauss_damage` (120) for a seat's slug and
   `gauss_enemy_damage` (60) for an enemy's:
   - *A tank* (any side but the shooter's own hull): `d`, no roll, through
     `Tank::take_damage` - so a player's hull armour applies, and a rainbow
@@ -121,17 +124,18 @@ reuses, and the **lane** among the dangers an enemy keeps out of.
     `cause: HitCause::Rail` at the entry point, a kill onto `f.kills`, and
     `Ai::notify_hit` on a surviving enemy. No knockback (the slug is
     through before it pushes) and no hop. Then `d *= gauss_pierce_keep`
-    (0.8). At the defaults a seat's slug wrecks any enemy at full health and
-    the one behind it (88), and leaves the third at 70 damage; an enemy's
-    slug takes 46 off a seat (60 through the 0.77 armour).
+    (0.8). At the defaults a seat's slug wrecks an enemy at full health even
+    through three tiles of cover (120 x 0.95^3 = 103), takes 96 off the
+    tank behind it and 77 off the third; an enemy's slug takes 46 off a seat
+    (60 through the 0.77 armour).
   - *A frog* (either side's): `gauss_frog_damage` (20) times the slug's
     keep so far, no roll, `Frog::damage`, `Event::Hit`; no evasive hop
     (an instant shot is not dodged - the laser's rule, and the hop would draw
     RNG). Then `d *= gauss_pierce_keep`. Two slugs kill a frog.
   - *A tower* (any side's): `d` through `damage_obstacle` with
     `DamageCause::Pierce { dir }` - no deflect roll, the slug is not turned.
-    A tesla (120) or a bio slush (130) survives a seat's first slug, a gun
-    tower (150) too; the next kills it (`tower_died`). Then `d *=
+    A tesla (120) dies to a seat's first slug; a bio slush (130) and a gun
+    tower (150) survive it and die to the next (`tower_died`). Then `d *=
     gauss_pierce_keep`.
   - *Brick, wood, glass, sandbags, fences, trees and lamp posts* die
     outright, whatever `d` is left: `DamageCause::Pierce` puts the tile's
@@ -165,8 +169,9 @@ reuses, and the **lane** among the dangers an enemy keeps out of.
   the same heading with the reach it has left, the damage `d` carried over,
   at most `portal_shot_max_passes` legs. Each leg pierces its own list.
 - **The recoil**: on the release, the shooter is knocked back along its
-  facing (`Game::knock`, the hammer's shove-and-skid, docs/sonic-hammer.md
-  §3.6) at
+  facing (`gauss::recoil_hull` in `resolve_rails`, before `step_world`,
+  through `sonic::knock_hull` - the hammer's shove-and-skid,
+  docs/sonic-hammer.md §3.6) at
   `v = sqrt(2 * skid_friction(1) * 32 * gauss_recoil_cells) / m^gauss_recoil_mass_exponent`,
   where `skid_friction(1)` is the skid's friction on dry ground
   (`sonic_skid_decel`) and `m` the chassis's mass factor - so on dry ground
@@ -176,8 +181,8 @@ reuses, and the **lane** among the dangers an enemy keeps out of.
   and ice slide it further (the skid's grip floor). The shooter's own
   recoil is **not** put on `Frame::shoves` (a client that owns its hull
   kicks it itself on the release, §8, as it does a shell's), but the room
-  still allows the owned hull the knock's speed (`Game::seat_knock`, the
-  hammer's validator allowance).
+  still allows the owned hull the knock's speed (`Shoves::allow_knock`, the
+  validator's `SeatKnock`).
 - **Overcharged** (the "at 11"): the slide is `gauss_overcharge_recoil_factor`
   (2) times as far (the speed times its square root) and the hull **spins
   round**: its facing turns half a turn (`Tank::rotation`), and for as long
@@ -186,7 +191,8 @@ reuses, and the **lane** among the dangers an enemy keeps out of.
   (`ease_visual_rotation`), so the spin is seen. After it the tank faces
   back the way the slug came from.
 - **Events**, all on the release tick: `Event::Fired { weapon: "gauss_rail" }`
-  (from the trigger, in `drive_player` or the enemy collect pass), then per
+  (from the trigger, `gauss::charge_trigger` in `drive_player` or the enemy
+  collect pass), then per
   leg `Event::RailSlug { slot, seat, leg, x0, y0, x1, y1, portal,
   overcharged, pierced }` (`resolve_rails`: drawn start, end, whether the
   leg ended in a portal, and every pierce point with what it was), and the
@@ -200,14 +206,14 @@ reuses, and the **lane** among the dangers an enemy keeps out of.
 
 | Mid-charge | What happens |
 |---|---|
-| The tank is wrecked | The charge lapses the frame it becomes a wreck (where `wreck_col` is rolled): no slug. A dead hand releases nothing |
-| The EMP's ring reaches it | `Tank::disable` lapses the charge; its special is offline for `emp_disable_seconds`, so no new charge starts until it is back |
+| The tank is wrecked | The charge is cleared the tick it is a wreck (`tick_timers`): no slug. A dead hand releases nothing |
+| The EMP's ring reaches it | `Tank::disable` clears the charge; its special is offline for `emp_disable_seconds`, so no new charge starts until it is back |
 | A sonic hammer's shove | The charge holds; the skid carries the hull, facing kept; the crawl resumes when the skid ends |
 | A teleport | The charge holds (a seat's and an enemy's); the lane is wherever it now faces |
-| Another weapon's crate | The charge lapses next tick (the trigger is no longer the rail's) |
+| Another weapon's crate | The charge lapses next tick (the trigger is no longer the rail's: `ChargeEnded { end: Lapsed }`) |
 | A rail crate | Refills the slugs; the charge holds |
 | A hit, a shield breaking | The charge holds |
-| The round ends | `end_round` lapses every charge; nothing fires on the end screen |
+| The round ends | `end_round` clears every charge; nothing fires on the end screen |
 
 ### On the end screen
 
@@ -219,44 +225,42 @@ their picture (`tick_effects`), and the bursts they started play out.
 
 | File | What |
 |---|---|
-| `src/gauss.rs` (new) | The weapon's headless half: `RailSlug` (a leg as drawn: start, end, portal, overcharged, pierces, age), `Pierce`/`Pierced`, `rule()` (the rail's `ChargeRule` from the `gauss` knobs), `recoil_speed(mass_factor, overcharged, friction)`, `damage(owner)`, `Lane` (a slug's line as plain values: from, dir, length, half width; `holds(centre, half)`), the composers `compose_charge`, `compose_slug`, `compose_end` (pure, `pyro::Shape`s), `module_cell` |
-| `src/simulation/gauss.rs` (new) | The world half: `Game::charge_trigger` (the pattern's room side, seats and enemies, §3.3), `fire_gauss`, `resolve_rails` (the legs, the pierce walk, the events), `pierce_hit`, `rail_show` and `charge_end_show` (the cosmetic halves, which a replica's events and a client's own release call too), `rail_lanes` (every charging rail's lane this frame), `rail_dangers`, `gauss_field`/`gauss_sense` (what the AI is handed, §4), `seat_rail`, `set_seat_hold` |
-| `src/simulation/hits.rs` | `Terrain::pierce_rewound` (every box entered, in order, to the first stopper), its cell lookup, `Terrain::rail_stop` |
-| `src/simulation/weapons.rs` | `PendingRail`, the `ActiveWeapon::GaussRail` dispatch arm (empty: a charge weapon fires through `fire_charge`), `fire_charge` |
+| `src/gauss.rs` (new) | The weapon's headless half: `RailSlug` (a leg as drawn: start, end, portal, overcharged, pierces, age, seed), `Pierce`/`Pierced`, `ChargeEndFx`, `muzzle` (the module's bore, `tank_art::RAIL_MUZZLE`), `damage(owner, t)`, `recoil_speed(t, mass_factor, overcharged, friction)`, `module_cell`, and the composers `compose_charge`, `compose_slug` (glowing), `compose_slug_lit` (the chips), `compose_end` (pure, `pyro::Shape`s) |
+| `src/simulation/gauss.rs` (new) | The world half: `charge_trigger` (the pattern's room side, seats and enemies, §3.3), `fire_charge`, `PendingRail`, `recoil_hull`, `Game::resolve_rails` (the legs, the pierce walk, the events, the recoil), `stops_slug`, `pierce_hit`, `rail_recoil`, `rail_show` and `charge_end_show` (the cosmetic halves, which a replica's events and a client's own release call too), `any_rail_charging`, `rail_lanes` (`RailLane`, every charging rail's lane this frame), `rail_dangers`, `gauss_senses` (`GaussSeat`; what the AI is handed, §4), `set_seat_hold`/`seat_hold_report`, `SeatCharge` |
+| `src/simulation/hits.rs` | `Terrain::pierce_rewound` (every box entered, in order, to the first stopper), `Terrain::rail_tiles` (the tiles a slug enters and its stop, for the drawn world) |
+| `src/simulation/weapons.rs` | The `ActiveWeapon::GaussRail` dispatch arm (empty: a charge weapon fires through `fire_charge`) |
 | `src/simulation/props.rs` | `DamageCause::Pierce { dir }` |
-| `src/simulation/mod.rs` | `Frame::pending_rails`; `Game::{rail_slugs, charge_ends, seat_hold}`; `resolve_rails` after `resolve_lasers`; `drive_player`'s trigger by `ActiveWeapon::trigger`; the enemy collect pass routing a charge weapon's trigger every tick; the far coast keeping a charging trigger down; the crawl and the spin lock in `drive_tank_with`/`Tank::control`; `tick_timers` (`spin`, `rail_flash`); `predict_seat` (the charge step and its recoil); `end_round` and the wreck's lapse; `tick_effects`/`tick_presentation` (slugs, charge ends, charges); `Event::{RailSlug, ChargeStarted, ChargeEnded}`, `HitCause::Rail`; the swap's table entry |
-| `src/simulation/nav.rs` | The rail lanes' surcharge in `route_grid_on` (§4) |
-| `src/simulation/field.rs` | `Mind::Coast` keeps a charging tank's trigger down |
-| `src/simulation/command.rs`, `comms.rs` | `UnitView::charging`: never ordered, keeps right of way |
-| `src/simulation/sonic.rs` | The hammer's trouble: a charging enemy's rail lane (§12) |
-| `src/simulation/present.rs` | `PresentWorld::rail_trace` (the drawn world's stop and pierce points), `Game::draw_press_show`'s rail and charge-end arms, `Game::seat_kick`'s rail arm |
+| `src/simulation/mod.rs` | `Frame::{pending_rails, charge_ends}`; `Game::{rail_slugs, charge_ends, seat_hold}`; `resolve_rails` after `resolve_lasers`; `drive_player`'s trigger by `ActiveWeapon::trigger`; `enemy_trigger` routing a charge weapon's trigger every tick (its press edge from `Tank::trigger_held`); `coast_enemy` keeping a charging trigger down; the crawl in `drive_tank_with`; `tick_timers` (`spin`, `rail_flash`, a wreck's charge); `predict_seat_with` (the charge step and its recoil); `end_round`; `tick_effects`/`tick_presentation` (slugs, charge ends, a replica's charges); `Event::{RailSlug, ChargeStarted, ChargeEnded}`, `HitCause::Rail`; `Pending::charging`; `TankSnapshot::{gauss_slugs, charging}` |
+| `src/simulation/command.rs` | `Busy::Charging`: never ordered, keeps right of way |
+| `src/simulation/sonic.rs` | The hammer's trouble: a charging enemy rail's lane (§12); `knock_hull`/`knock_with`; the swap's table entry |
+| `src/simulation/present.rs` | `PresentWorld::rail_trace` (`RailTrace`: the drawn world's stop and what a slug goes through), `Game::draw_rail_press`, `Game::{seat_charge, set_seat_charge}` |
 | `src/simulation/replica.rs` | `DrawableTank::charge` |
-| `src/tank.rs` | `gauss_slugs`, `charge`, `spin`, `rail_flash`; `Trigger`, `Charge`, `ChargeRule`, `ChargeStage`, `ChargeEdge`, `ChargeEnd`; `ActiveWeapon::GaussRail` (`name`, `full_load`, `tell_seconds` none, `trigger`, `charge_rule`), `SPECIAL_WEAPONS`; `step_charge`, `lapse_charge`, `charge_pace`, `windup`, `kick_rail`; `weapon_ammo`/`take_weapon`/`empty_stock`/`wants_pickup`; the module's cells in `module_cols` |
+| `src/tank.rs` | `gauss_slugs`, `charge`, `spin`, `rail_flash`, `trigger_held`; `Trigger`, `Charge`, `ChargeRule`, `ChargeStage` (`name`), `ChargeEdge`, `ChargeEnd`, `ticks_of`, `CHARGE_HOLD_SPARE_TICKS`; `ActiveWeapon::GaussRail` (`name`, `full_load`, `tell_seconds` none, `trigger`, `charge_rule`), `SPECIAL_WEAPONS`; `step_charge`, `lapse_charge`, `charge_pace`, `windup`, `kick_rail`; `weapon_ammo`/`take_weapon`/`empty_stock`/`wants_pickup`; the spin lock in `control`; the module's cells in `module_cols`; `Dir::opposite` |
 | `src/pickup.rs` | `PickupKind::GaussRail` (`gauss_rail`, row 15, its ink, cooks off) |
-| `src/ai.rs` | `SpecialSense::Gauss(GaussSense)`, `GaussLane`, `gauss_rule`, `SpecialUse::{Charge, Release}`, `generic_fire(GaussRail)`; `SEEK_SPECIALS` gains the rail; `DangerShape::Lane`; the edge hold (`Brain::enters_danger`, `Ai::edge_hold`); `Ai::trigger_held`; `AiSnapshot::{charging, edge_hold}` |
-| `src/indicators.rs` | `TankView::windup` (a charge's progress as a tell's), a charging rail's lane warning through cover, the hit arc down a slug |
-| `src/hud.rs` | `HUD_GAUSS_COLOR`, the `weapon_color`/`weapon_pickup` arms, `WeaponSlot::charge` (`ChargeGauge`) |
-| `src/render/hud.rs` | The charge gauge in the count's slot |
-| `src/render/game.rs` | Charges, slugs and charge ends in their passes (§5); the dev stats arm |
-| `src/weather.rs` | The charge's and the white frame's light |
-| `src/fx.rs`, `src/burst.rs` | Sparks off a fresh slug's pierces and stop; `ImpactKind::Pierce` (composed by the slug's picture); a rail `Hit` draws only its flash |
+| `src/ai.rs` | `SpecialSense::Gauss(GaussSense)`, `GaussLane` (`score`, `counts`, `target_along`), `gauss_rule`, `gauss_charge_rule`, `windup_rule`'s charge arm, `SpecialUse::{Charge, Release}`, `generic_fire(GaussRail)`; `SEEK_SPECIALS` gains the rail; `DangerShape::Lane` (`depth`, `exits`, `posts`, `middle`, `Danger::is_lane`, `lane_offsets`); the edge hold (`enters_lane`, `Ai::kept_out`) |
+| `src/indicators.rs` | A charging rail's lane through cover (`TankView::lane`), `ArrowKind::Windup { lane }` and its ring, the hit arc down a slug (`hit_from`) |
+| `src/hud.rs` | `HUD_GAUSS_COLOR`, the `weapon_color`/`weapon_pickup` arms, `WeaponSlot::charge` (`ChargeGauge`), `CHARGE_BLINK_HZ` |
+| `src/render/hud.rs` | The charge gauge in the count's place (`draw_weapon_readout`) |
+| `src/render/game.rs` | Charges, slugs and charge ends in their passes (§5); the dev stats lines |
+| `src/weather.rs` | The charge's, the white frame's and the stop's light |
+| `src/fx.rs` | Sparks out of the bore and off the stop of a slug; a rail `Hit` draws only its flash |
 | `src/grass.rs` | `flatten_along` |
 | `src/fish.rs` | The slug's legs among the scares |
-| `src/pyro.rs` | The `RAIL` ramp |
+| `src/pyro.rs` | The `RAIL` ramp, `RAIL_LIGHT` |
 | `src/net/wire.rs` | `WeaponKind::GaussRail` (`drawn_on_press`), `TankState::charge`, `RailPierce` |
-| `src/net/events.rs` | `WireEvent::{RailSlug, ChargeEnded}`, `HitCause::Rail`, the `press_show` arm, `charge_started` on `NOT_SENT` |
-| `src/net/encode.rs`, `src/net/apply.rs` | The new fields; `RailSlug`'s and `ChargeEnded`'s shows; this seat's `ChargeEnded` left out under `OwnShotsDrawn`; the `kick_turret`/`drawn_muzzle` arms |
-| `src/net/mailbox.rs`, `src/net/authority.rs`, `src/net/rig.rs`, `server/src/room.rs` | The hold report (§3.3): `Mailbox::hold_ticks`, `authority::take_hold`, `CHARGE_HOLD_SPARE_TICKS` |
-| `src/net/predict.rs`, `src/net/round.rs` | The release edge, `PressShow::{Rail, ChargeEnd}`, the shown seat's charge |
-| `src/simulation/debug.rs`, `src/devserver.rs` | `set_tank`'s `gauss_slugs` and `charge`; the snapshot's `gauss`, `charge`, `spin`, `edge_hold`, `rail_slugs`; `spawn_pickup {kind: "gauss_rail"}` |
-| `src/bin/probe.rs` | The tank line's `rail=`/`chg=`, the fire tuple, the holds |
+| `src/net/events.rs` | `WireEvent::{RailSlug, ChargeEnded}`, the `press_show` arm, `charge_started` on `NOT_SENT` |
+| `src/net/encode.rs`, `src/net/apply.rs` | The charge field; `RailSlug`'s and `ChargeEnded`'s shows; this seat's `ChargeEnded` left out under `OwnShotsDrawn`; a rail hit's impact flash left out; the `kick_turret`/`drawn_muzzle` arms |
+| `src/net/mailbox.rs`, `src/net/authority.rs`, `src/net/rig.rs`, `server/src/room.rs` | The hold report (§3.3): `Mailbox::hold_ticks`, `authority::take_hold` |
+| `src/net/predict.rs`, `src/net/round.rs` | The charge in the sandbox (`charge_gate_open`, `charge_edge`, the history's trigger edges), `PressShow::{Rail, ChargeEnd}` (`RailPress`, `ChargeEndPress`), the shown seat's charge |
+| `src/simulation/debug.rs`, `src/devserver.rs` | `set_tank`'s `gauss_slugs` and `charge`; the snapshot's `gauss` and `charge`; `spawn_pickup {kind: "gauss_rail"}` |
+| `src/bin/probe.rs` | The tank line's ` rail=`/` chg=true`, the fire tuple, the `charge` hold |
 | `src/editor/mod.rs` | `Tool::Pickup(PickupKind::GaussRail)` (`gauss_rail`) |
 | `maps/armory.toml` | Its crates, a screen of cover and an iron block (§3.4) |
 | `src/tuning.rs` | The `gauss` group (§6), one row in `enemies` |
 | `lang/en.ftl`, `lang/sl.ftl` | §7 |
 | `tools/punypalette.py`, `tools/spritegen/gen_crates.py`, `tools/spritegen/tankdesign/{kit,export,render,lines/vanguard}.py` | The art (§5); writes `static/crates_sheet.png`, `pickup_glyphs.png`, `tank_modules.png`, `tank_modules_glow.png`, `src/tank_art.rs` |
 | `src/thumbnail.rs`, `src/maplint.rs` | The armory's pin re-baselined; the armory as it lints |
-| `docs/` | This, `CRATES_SPEC.md`, `SPRITESHEET_SPEC.md`, `effects.md` (the `RAIL` ramp, who draws what); `CLAUDE.md` |
+| `docs/` | This, `CRATES_SPEC.md`, `SPRITESHEET_SPEC.md`, `effects.md` (the `RAIL` ramp); `CLAUDE.md` |
 
 ## 3. The shared path
 
@@ -289,7 +293,8 @@ in the same places:
    `drawn_on_press` true), `Predictor::seed_gate`'s arm
    (`gauss_reload_seconds`), `apply::write_tank`'s ammo arm,
    `kick_turret` (`Tank::kick_rail`, the module's fire cell) and
-   `drawn_muzzle` (`tank_art::RAIL_MUZZLE`).
+   `drawn_muzzle` (none: the slug's first leg puts on its own muzzle
+   ripple, `Game::rail_show`).
 10. `debug::{TankDebug, TankPatch}`, `set_tank`'s schema, `TankSnapshot`,
     the probe's tank line and fire tuple, `render::game::draw_tank_stats`.
 11. The armory's crates (§3.4); `SPAWN_SWAPS` gains
@@ -297,70 +302,76 @@ in the same places:
     after the EMP's; the tuning group; `PROTOCOL_VERSION`.
 
 And, as they are: the special hook's tier and `act_special` (extended
-below), the tell's off-screen arrow (`ArrowKind::Tell`, fed by a charge as
-by a tell, below), the press show's claim by input tick, `Game::knock` and
-the skid, `Tank::special`/`active_weapon`, `Tank::disable`, the dangers and
-the `dodge` tier, `spawn_pickup {kind: "gauss_rail"}`, the probe's
-`--crate gauss_rail`, `HitCause` on `Event::Hit`, `pyro::Shape::Arc` (the
-charge's ring).
+below), the wind-up's off-screen arrow (`ArrowKind::Windup`, fed by a
+charge as by a tell through `Tank::windup`, below), the press show's claim
+by input tick, the knock and its skid (`sonic::knock_hull`),
+`Tank::special`/`active_weapon`, `Tank::disable`, the dangers and the
+`dodge` tier (its held exit point and `Brain::steer_out`),
+`spawn_pickup {kind: "gauss_rail"}`, the probe's `--crate gauss_rail`,
+`HitCause` on `Event::Hit`, `pyro::Shape::Arc` (the charge's ring).
 
 ### 3.2 What this extends
 
-- **`SpecialUse::Charge { face, creep }` and `SpecialUse::Release { face,
+- **`SpecialUse::Charge { face, why }` and `SpecialUse::Release { face,
   at_seat, why }`** - the hook's two uses for a charge weapon.
   `act_special` applies `Charge` as: face `face`, commit the heading, hold
-  the trigger (`intent.fire = true`) and drive along `face` when `creep`
-  (else no movement); `Release` as: face `face`, let the trigger go
-  (`intent.fire = false` - the simulation fires the charge if it is ready),
-  record `at_seat` in `Ai::shot_at_seat` and `why` in `Ai::special_why`.
-  A `Charge` that would *start* a charge while `Ai::fire_timer` runs is
-  applied as `Hold { face }` (the hammer's pacing rule); one that starts it
-  sets `Ai::fire_timer` to the weapon's own interval
-  (`gauss_ai_fire_interval`). Once a charge runs, the timer is not
-  consulted.
+  the trigger (`intent.fire = true`), no movement - a charging enemy
+  stands its ground (§12, decision 23); `Release` as: face `face`, let the
+  trigger go (`intent.fire = false` - the simulation fires the charge if it
+  is ready), record `at_seat` in `Ai::shot_at_seat`; both record `why` in
+  `Ai::special_why`. A `Charge` that would *start* a charge while
+  `Ai::fire_timer` or the weapon's cooldown runs faces and holds with the
+  trigger up (the hammer's pacing rule); one that starts it sets
+  `Ai::fire_timer` to the weapon's own interval (`gauss_ai_fire_interval`).
+  Once a charge runs, the timer is not consulted.
 - **`special_rule`'s first arm** (the hammer's "the tell holds") becomes
   "a wind-up in progress belongs to its weapon's rule": a tank with a tell
   holds; a tank with a charge (`Tank::charge`) is answered by its weapon's
   arm, which never answers `None` while it runs. This is what keeps a
   charge from being released by accident: every other tier leaves
   `intent.fire` false, which the trigger would read as a release.
-- **`DangerShape::Lane { from, dir, length, half_width }`** - the EMP's
-  dangers gain the lane, as its doc anticipated (§4, "Reacting to a
-  rail"): everything within `half_width` of the line from `from` along the
-  cardinal `dir`, `0..=length` along it. `depth(p)` is `half_width - |p's
-  offset across the line|` for a point along it and minus its distance
-  past the nearer end otherwise; `exit(p, clear, facing)` is the point
-  `half_width + clear` from the line on `p`'s side, at the same distance
-  along - on the line itself, the side clockwise of `dir` unless `facing`
-  points the other way across it. The surcharge alone does not do: it
-  never moves a tank standing in the lane (the EMP's decision 15).
-- **The edge hold**, for every danger: in `Ai::think`, after the tree,
-  a step whose point `Tank::avoidance_radius + enemy_danger_clear_px` ahead
-  along `move_dir` lies in a danger this tank does not own, while its own
-  centre is in none, is not taken - `move_dir` is cleared and the hull keeps
-  its facing (`Ai::edge_hold`, reported in `AiSnapshot`). A route across a
-  lane that spans the field would otherwise walk a tank in, the dodge would
-  push it back to the nearer side, and it would walk in again until the
-  charge ended; this way it waits at the edge. The EMP's discs get it too.
-  The dodge tier's own steering out of a danger is never held.
+- **`DangerShape::Lane { at, from, dir, length, half_width }`** - the
+  EMP's dangers gain the lane, as its doc anticipated (§4, "Reacting to a
+  rail"): everything within `half_width` of the line from `from` (the
+  charging tank's gun-line muzzle; `at` is its hull) along the cardinal
+  `dir`, `0..=length` along it. `depth(p)` is `half_width - |p's offset
+  across the line|` for a point along it and minus its distance past the
+  nearer end otherwise (`lane_offsets`). `exits(p, clear, from, facing)`
+  are nine points `half_width + clear` off the line: on the side the tank
+  faces across to - a tank crossing the lane goes on over rather than
+  turning back - else, for one facing along it, the near side (`p`'s, else
+  `from`'s), at `p`'s distance along, a cell and two either way along it,
+  then the far side the same. The dodge walks to the first one it can
+  reach on foot out of every danger and holds it (`Ai::dodge_exit`,
+  `Brain::steer_out`, as for the EMP's discs). `posts` stand beside and
+  behind the charging hull, never ahead of it.
+- **The edge hold**, for a lane: in `Ai::think`, after the tree, a step
+  whose point `Tank::avoidance_radius + enemy_danger_clear_px` ahead along
+  `move_dir` lies in a lane this tank does not own, while its own centre
+  is in none, is not taken - `move_dir` is cleared, the hull keeps its
+  facing and `Ai::kept_out` is set (`TankSnapshot::kept_out`, a hold the
+  probe excuses) (`enters_lane`). A route across a lane that spans the
+  field would otherwise walk a tank in, the dodge would push it back to the
+  nearer side, and it would walk in again until the charge ended; this way
+  it waits at the edge. The EMP's discs keep their own slack band. The
+  dodge tier's own steering out of a danger is never held.
 - **`Event::Hit::cause`** gains `HitCause::Rail`: `fx` draws such a hit's
   flash (`fx::Flash`, hull or tile) and nothing else - the slug's own
   picture carries its bursts (§5), so a hit is never burst twice.
 - **`PressShow::Rail(RailPress)` and `PressShow::ChargeEnd(ChargeEndPress)`**,
-  the predictor's arms and `Game::draw_press_show`'s, and
-  `WireEvent::press_show`'s `RailSlug` arm (§8).
+  the predictor's arms, drawn by `Game::draw_rail_press` and
+  `Game::charge_end_show`, and `WireEvent::press_show`'s `RailSlug` arm
+  (§8).
 - **`Terrain::pierce_rewound(world, players, shooter, p0, p1, half, past,
   iron_stops) -> Vec<(ShellTarget, f32)>`** beside `sweep_rewound`: the
   same candidates, boxes, pads and rewind, but every one the segment
   enters, sorted by (entry `t`, rank, owner slot or cell), cut after the
   first stopper (a permanent tile - iron only while `iron_stops` - or a
-  wall). Tiles are looked up through the cells the slug's swept box crosses
-  (a cardinal slug crosses one row or column of cells, two where its box
-  straddles a cell edge), from a cell index the snapshot builds the first
-  time a trace asks, so a trace costs the cells along it on a 250-wide
-  field rather than every tile; a test holds it to the full scan.
-  `Terrain::rail_stop(p0, p1, half, iron_stops) -> f32` is the stopper's
-  entry alone (the AI's lanes and the dangers).
+  wall). Every box is first tested against the segment's bounding box
+  grown by the half width, so a cardinal slug pays the segment test only
+  for the boxes along its row or column. `Terrain::rail_tiles(p0, p1,
+  half, iron_stops)` is the tiles alone with the stop, which
+  `PresentWorld::rail_trace` builds the drawn world's trace from.
 
 ### 3.3 The charge-and-hold pattern
 
@@ -394,9 +405,10 @@ pub enum Trigger {
 ```
 
 `drive_player`'s `should_fire` match becomes `match weapon.trigger()`,
-the same answers for every weapon that ships (a pure rewrite), plus the
-`Charge` arm, which calls `Game::charge_trigger` every tick whatever the
-trigger is (its release is the trigger going *up*).
+the same answers for every weapon that ships (a pure rewrite), and a seat
+whose trigger is `Charge` - or whose tank holds a charge - calls
+`gauss::charge_trigger` every tick whatever the trigger is (its release is
+the trigger going *up*).
 
 **The state, on `Tank`:**
 
@@ -459,9 +471,9 @@ impl Tank {
     /// while one runs, else 1.
     pub fn charge_pace(&self) -> f32;
 
-    /// The wind-up it shows - a tell's or a charge's: the weapon and its
-    /// progress, 0..1.
-    pub fn windup(&self) -> Option<(ActiveWeapon, f32)>;
+    /// The wind-up it shows - a tell's or a charge's: the weapon, its
+    /// progress 0..1 and the facing it goes off along.
+    pub fn windup(&self) -> Option<Windup>;
 }
 ```
 
@@ -475,32 +487,33 @@ the trigger up (with a report, `held` set the same way first): before
 `full` it fizzles (`Ended(Fizzled)`), else `Released(stage)`. The charge is
 gone after every `Ended` and `Released`.
 
-**Who calls it** - `Game::charge_trigger(f, entity, owner, fire, pressed,
-report)`, the room side, one function for a seat and an enemy:
+**Who calls it** - `gauss::charge_trigger(f, entity, tank, owner, fire,
+pressed, report)`, the room side, one function for a seat and an enemy:
 
-- `drive_player`, for a seat whose trigger is `Charge`, with `pressed` its
-  `fire_pressed`, `open` = `fire_cooldown <= 0`, `report` this tick's hold
-  report for the seat (`Game::seat_hold`, below). A seat whose trigger is
-  anything else but whose tank holds a charge lapses it there.
-- `enemy_phase`'s collect pass, for an enemy whose trigger is `Charge`,
-  every tick it thinks or coasts (where a tell starts and `dispatch_fire`
-  is called for every other weapon), with `pressed` from `Ai::trigger_held`
-  (the trigger it handed the simulation last tick), no report. A tank with
-  a charge coasting far from every seat (`field::Mind::Coast`) coasts with
-  its trigger *down*, so a far tank's charge never goes off on a coast: it
-  vents at worst. A disabled tank's coast has nothing to release - the
-  EMP lapsed it.
-- `Game::predict_seat` for the sandbox's seat (§8), with the predictor's
-  local gate as `open`.
+- `drive_player`, for a seat whose trigger is `Charge` or whose tank holds
+  a charge (which lapses there if the trigger is no longer its weapon's),
+  with `pressed` its `fire_pressed`, `open` = `fire_cooldown <= 0`,
+  `report` this tick's hold report for the seat
+  (`Game::seat_hold_report`, below).
+- `enemy_trigger`, for an enemy whose trigger is `Charge` or which holds a
+  charge, every tick it thinks or coasts (where a tell starts and
+  `dispatch_fire` is called for every other weapon), with `pressed` from
+  `Tank::trigger_held` (the trigger it handed the simulation last tick),
+  no report. A tank with a charge coasting far from every seat
+  (`coast_enemy`) coasts with its trigger *down*, so a far tank's charge
+  never goes off on a coast: it vents at worst. A disabled tank's coast
+  has nothing to release - the EMP cleared it.
+- `Game::predict_seat_with` for the sandbox's seat (§8), with the
+  predictor's local gate as `open`.
 
 `charge_trigger` acts on the edge: `Started` logs `ChargeStarted`;
-`Released(stage)` calls `weapons::fire_charge` (the rail's `fire_gauss`:
-a slug spent, `PendingRail` queued, `fire_cooldown =
-gauss_reload_seconds`, the recoil, `kick_rail`, `Fired`); `Ended(Vented)`
-sets `fire_cooldown` to the rule's `vent_cooldown`; every `Ended` logs
-`ChargeEnded` and stages `charge_end_show`. The other lapses - a wreck,
-`disable`, `end_round` - call `lapse_charge` where they happen and log and
-show the same.
+`Released(stage)` calls `fire_charge` (a slug spent, `PendingRail` queued,
+`fire_cooldown = gauss_reload_seconds`, `kick_rail`, `Fired`), and
+`resolve_rails` traces it and recoils the shooter the same update;
+`Ended(Vented)` sets `fire_cooldown` to the rule's `vent_cooldown`; every
+`Ended` logs `ChargeEnded`, and a fizzle or a vent stages its picture
+(`ChargeEndFx`). The other lapses - a wreck, `disable`, `end_round` -
+clear the charge where they happen, with no event and nothing drawn.
 
 **The crawl**: `drive_tank_with` multiplies the commanded top speed by
 `tank.charge_pace()` where it applies `intent.slow` (the target only, not
@@ -518,21 +531,21 @@ on its own count (§8). So the room takes the client's count, which it can
 read off the intents' own ticks, the way it believes an owned pose for the
 driving its intents cover (`Mailbox::pose_reach_ticks`):
 
-- `Mailbox::hold_ticks() -> Option<u32>`: while the delivered trigger is
-  down, the ticks from the intent its press came on (`press_tick`'s) through
-  the newest intent applied, both counted; on the read that delivers the
-  release, the ticks from that press to the intent the trigger came up on
-  (`release - press`); `None` otherwise. For an owned read that merges
-  intents, the scan that finds the press finds the release too; a starved
-  read repeats the last count.
+- `Mailbox::hold_ticks() -> Option<u32>`: the client's own ticks of
+  trigger held, counted along every intent taken in tick order - dropped
+  ones folded in - from the tick a hold started on to the newest it was
+  still down on (`Inner::track_hold`). A read that delivers the trigger
+  down reports the hold running (for a tap merged into one read, the one
+  that just ended); one that delivers it up reports the hold that last
+  ended; a starved read reports nothing, and the round counts its own
+  tick.
 - `net::authority::take_hold(game, seat, ticks)` puts it on the seat before
   the tick (`Game::set_seat_hold`, valid for that update alone, as
   `seat_owned` is) - in the room server's tick beside `take_pose`, and in
   the rig's.
-- `step_charge` takes the report within `CHARGE_HOLD_SPARE_TICKS` (6, 100
-  ms; server policy beside `REACH_SPARE_TICKS`) of its own count, either
-  way: a client stamping its intents further apart than it held gains six
-  ticks at most.
+- `step_charge` takes the report within `tank::CHARGE_HOLD_SPARE_TICKS`
+  (6, 100 ms) of its own count, either way: a client stamping its intents
+  further apart than it held gains six ticks at most.
 
 A local round has no report; its count is its own, exact by construction.
 With the report the room's release decision is the client's to the tick,
@@ -544,8 +557,9 @@ in the glowing pass, so it reads at night; the module shows its charge
 cells (`module_cols`); the HUD's weapon slot shows the gauge
 (`WeaponSlot::charge`, §5).
 
-**How it travels**: `TankState::charge: u16` - 0 for none, else the ticks
-held plus one (exact, so a stage-2 replay starts from the room's count); the
+**How it travels**: `TankState::charge: u16` - 0 for none, else the whole
+ticks held, at least 1 (exact, so a stage-2 replay starts from the room's
+count); the
 weapon is `TankState::weapon`. A replica writes `Tank::charge` from it
 (`apply::write_tank`) and counts `held` up between snapshots
 (`tick_presentation`, never past the vent: a replica's charge ends only when
@@ -554,14 +568,14 @@ instead (§8). `ChargeStarted` is on `NOT_SENT`; `ChargeEnded` is sent, for
 the fizzle and the vent's picture.
 
 **How the AI drives it**: `SpecialUse::Charge`/`Release` and the first arm
-of `special_rule` (§3.2); `Ai::trigger_held` gives the collect pass the
-press edge; the coast holds a charging trigger down.
+of `special_rule` (`windup_rule`, §3.2); `Tank::trigger_held` gives
+`enemy_trigger` the press edge; the coast holds a charging trigger down.
 
-**Off screen**: `indicators::TankView::windup` (the hammer's `tell`
-generalised: weapon and progress from `Tank::windup`), so a charging enemy
-off the screen gets the tell's arrow (`ArrowKind::Tell { weapon,
-progress }`, never merged, never dropped past the cap) in its weapon's
-accent; for the rail it also carries the lane warning (§4).
+**Off screen**: `indicators::TankView::windup` (weapon and progress from
+`Tank::windup`), so a charging enemy off the screen gets the wind-up's
+arrow (`ArrowKind::Windup { weapon, progress, lane }`, never merged, never
+dropped past the cap) in its weapon's accent rimmed hostile red; for the
+rail it also carries the lane warning (§5).
 
 **For the rod (BB-41)**: it is `Trigger::Charge` with its own `ChargeRule`
 (`full` = the reticle settled, `overcharge` none, `vent` its own), the same
@@ -588,10 +602,10 @@ Into `maps/armory.toml` (docs/sonic-hammer.md §3.5, docs/emp-burst.md
      012345678901234567890123456789012345
  0   ................................L...
  1   .+..........ggggg...............L...
- 2   ............g...g...II....b.....L...
- 3   ...P........g.s.g...II....b.....L.E.
- 4   .......e...*g...g.........b.....L...
- 5   ............ggggg...........zzz.L...
+ 2   ............g...g...............L...
+ 3   ............g.s.g...II....b.....L.E.
+ 4   ...P...e...*g...g...II....b.....L...
+ 5   ............ggggg.........b.zzz.L...
  6   .......R.............o..........L...
  7   .............................e..L...
  8   ....S..H.........*...f%%%..b.....II.
@@ -613,9 +627,11 @@ oil trail), goes through the brick and stops at the iron; row 9 is the clean
 one, brick then iron; row 10 sets off the oil drum, fells the second lamp
 post and goes through the wood to the edge; row 11 lays the grass flat,
 fells or lights the tree and breaks the pane. The screen leaves rows 7 and
-12 open, so the field stays one piece. Checked again in Phase 2 against the
-linter (connectivity, the band's capacity), and the armory's CPU thumbnail
-pin is re-baselined for the crates and the walls.
+12 open, so the field stays one piece. The linter finds no new error or
+warning: two more `narrow-corridor` infos, at 26,6 and 27,6 - the pass
+between the brick stub (26,3..5, where the EMP's review moved it off the
+HUD's rows) and the screen. The armory's CPU thumbnail pin is re-baselined
+for the crates and the walls.
 
 ## 4. AI
 
@@ -628,15 +644,13 @@ rail - as with the hammer, until its four slugs are spent.
 
 ### What it is handed
 
-`gauss_field` is built once per frame in `enemy_phase`, only when some live
-enemy on the field carries an online rail: the frame's `Terrain` (its
-boxes, its cell index), every seat (hull and turret boxes, position, on the
-field, concealed, `Game::sight_on` at it), every live enemy (slot, boxes),
-the frogs (box, side), the standing towers (cell, side, offline), the
-hunters' quarry. `gauss_sense` then gives each thinking rail tank a
-`GaussSense`, one trace per facing, each from the gun-line muzzle that
-facing would have and with this tank's own stop rule (iron stops it - an
-enemy never overcharges):
+`Game::gauss_senses` runs once per frame in `enemy_phase`, only when some
+live enemy carries the rail, over every seat (`GaussSeat`: position, on
+the field, concealed, `Game::sight_on` at it). It gives each rail tank a
+`GaussSense`, one trace per facing through the frame's `Terrain` by the
+room's own `pierce_rewound`, each from the gun-line muzzle that facing
+would have, `laser_reach` long, with this tank's own stop rule (iron stops
+it - an enemy never overcharges):
 
 ```rust
 pub struct GaussSense {
@@ -653,8 +667,9 @@ pub struct GaussLane {
     pub seats: u8,
     /// Standing player towers it would go through.
     pub towers: u8,
-    /// A hunter's quarry - the players' frog - it would go through.
-    pub quarry: bool,
+    /// The players' frog it would go through, and how far along - read
+    /// only for a hunter, whose quarry it is.
+    pub quarry: Option<f32>,
     /// A live fellow enemy, a standing enemy tower or the enemies' own
     /// frog it would go through.
     pub friend: bool,
@@ -679,41 +694,46 @@ and the lane is tested against where it stands. A seat in tall grass is not
 known (its alert has gone stale), and a seat beyond the sky's range at night
 is not either.
 
-**The lane's score**: `2 * seats + 2 * quarry + towers` - the quarry only
-for a hunter. A lane that counts scores at least 2 and has no `friend`.
+**The lane's score** (`GaussLane::score`): `2 * seats + 2 * quarry +
+towers`. A lane counts (`counts`) when it scores at least 2, holds a seat
+or the quarry to fire at (`target_along`: how far along that seat, else
+the quarry, stands) and no `friend` before it - a friend beyond the target
+is the slug's to go on through (decision 24).
 
 ### The rule (`gauss_rule`), in priority order
 
 1. **A charge in progress** (`special_rule`'s first arm, §3.2) is answered
    here and nowhere else, never `None`:
-   1. charging, not full yet: `Charge { face: the facing, creep }`;
+   1. charging, not full yet: `Charge { face: the facing }`;
    2. full, not overcharged: the lane along its facing counts and its
       `at_seat` is still a seat that counts (or, for a hunter whose lane
       holds its quarry, the quarry) - **`Release { face, at_seat, why }`**
       (`why`: `"rail"`, `"rail-two"` with two seats, `"rail-tower"` with a
-      tower, `"rail-quarry"`); otherwise `Charge { face, creep: false }` -
+      tower, `"rail-quarry"`); otherwise `Charge { face }` (`"rail-wait"`) -
       it waits, holding, for a seat to step back into the lane;
-   3. overcharged: `Charge { face, creep: false }`, to the vent. It never
+   3. overcharged: `Charge { face }` (`"rail-vent"`), to the vent. It never
       releases overcharged, so it never cuts iron and iron stays the cover
       that holds against enemies. A seat that stepped out of the lane and
       stays out has wasted the charge.
 2. **A training dummy** (`Ai::frog_only`): `None`.
 3. **The rail is cooling** (`fire_cooldown > 0`: its reload or a vent):
    `None` - the tree goes on, the trigger released.
-4. **Charge the best lane**: of the four lanes that count, the highest
+4. **Charge the best lane**: of the four lanes that count whose seat is
+   settled - inside its sight box and this tank's sight by
+   `gauss_ai_box_margin_px` (32) besides (`GaussLane::settled`, decision
+   27) - the highest
    score - two seats beat a seat and a player tower beat a seat alone - ties
-   to the facing it has, then `Dir::ALL` order: `Charge { face, creep }`.
-   With `Ai::fire_timer` running, `act_special` holds facing it instead.
+   to the facing it has, then `Dir::ALL` order: `Charge { face }`. With
+   `Ai::fire_timer` running, `act_special` holds facing it instead.
 5. Otherwise `None`: the tree goes on (attack lines up and settles but
    never fires the rail; chase, patrol, the seeks as ever).
 
-**The creep** - "a charging enemy also crawls": `creep` is true while the
-counted seat (or the quarry) is further along the lane than
-`gauss_ai_creep_min_px` (96), the cell ahead along `face` is open (no tile
-within a cell, `walls_ahead`) and nothing crowds ahead (`crowded_ahead`).
-It drives along its own lane, so the lane does not move; at the crawl's
-pace (32 px/s at the defaults) it is the visible slowness the issue lists
-among the tells. Held at full it stands.
+**It stands its ground.** A charging enemy commands no movement: the
+issue's "a charging enemy also crawls" is the crawl a seat gets, and an
+enemy that crept along its lane while it charged and was thrown back a
+cell by each release kept moving the cell it stood in - which, with the
+probe's armed sweeps, swung a tank chasing a seat behind it to and fro for
+the whole round (§12, decision 23). The charge's glow is the tell.
 
 **The tell**: the charge itself - the ring, the motes and the glow, its
 1.5 s before the slug at the earliest - and off the screen the tell's arrow
@@ -731,10 +751,9 @@ arrow and the lane ring point at the tank while it charges.
 **Pacing**: `gauss_ai_fire_interval` (2.0) between an enemy's decisions to
 charge, on top of the reload.
 
-**The hold-still clocks**: a charging tank either commands no movement (the
-stuck clock resets, as any deliberate hold) or creeps at the crawl's pace,
-above `stuck_speed_eps` - its own commanded speed, so the stuck clock
-measures it against what it asked for.
+**The hold-still clocks**: a charging tank commands no movement, so the
+stuck clock resets, as for any deliberate hold, and the probe reads it as
+one (`TankSnapshot::charging` in `HOLDS`).
 
 ### Reacting to a rail: the lanes
 
@@ -742,8 +761,8 @@ measures it against what it asked for.
 charging seat counts - `route_lane_cost` (3) on `route_lane_cells` (8)
 cells ahead of every live seat - but that lane stops at the first blocked
 cell, is a nudge, and never moves a tank standing in it. A charging rail's
-lane goes through cover to the far side of the field. Three things answer
-it, all built only while some tank on the field charges a rail
+lane goes through cover to the far side of the field. Two things answer
+it, both built only while some tank on the field charges a rail
 (`Game::rail_lanes`: each charging tank's lane - from its gun-line muzzle
 along its facing to its slug's stop with its current stage's rule, half
 width `battlefield::max_tank_clearance_half_extent() + gauss_half_width`,
@@ -752,17 +771,18 @@ so any hull centred inside it could be pierced):
 1. **A danger** (`rail_dangers`, beside the EMP's `emp_dangers`): a
    `DangerShape::Lane` per charging tank, owned by it, seats in index order
    then enemies by slot. Every enemy inside one it does not own backs out
-   to the nearer side (the `dodge` tier, its latch, `enemy_danger_clear_px`),
-   and its chase, attack reposition, alert and seeks aim outside
-   (`out_of_danger`). So enemies step out of a charging seat's lane, and a
-   charging enemy's allies step out of its lane - the slug would go through
-   them too.
+   on foot to the nearest of its exits it can reach (the `dodge` tier, its
+   latch, its held exit point, `enemy_danger_clear_px`), and its chase,
+   attack reposition, alert and seeks aim outside (`out_of_danger`). So
+   enemies step out of a charging seat's lane, and a charging enemy's
+   allies step out of its lane - the slug would go through them too.
 2. **The edge hold** (§3.2): a tank whose next step enters a lane waits at
    its edge until the charge ends.
-3. **A surcharge** (`route_grid_on`): `gauss_ai_lane_cost` (16) on every
-   nav cell whose centre lies within the lane's half width, from the muzzle
-   to the stop, so the routes - the shared flow field included - go round
-   the end of a lane that has one rather than up it or across it.
+
+No route surcharge: a lane runs to a permanent tile or the field's edge
+and lives a second or two, so pricing its cells only flipped the flow field
+between a detour and the straight route as charges came and went (§12,
+decision 22).
 
 A charging seat hidden in tall grass still makes its lane: the glow is
 drawn over the tufts and lights its lane (§12, decision 7); the seat itself
@@ -777,11 +797,10 @@ coasts or sleeps does not dodge either.
 
 ### With the commander (`c2_enabled`)
 
-`UnitView::charging` (from `Tank::charge`): a charging unit is never given
-an order - a `Nudge` would turn its hull off its lane - and keeps right of
-way in `deconflict`, as the EMP's disabled unit does (`Skipped::charging`
-counts the would-be yields). C2 off is untouched; with C2 on and no rail
-charging, nothing is.
+`Busy::Charging` (`UnitView::busy`, from `Tank::charge`): a charging unit
+is never given an order - a `Nudge` would turn its hull off its lane - and
+keeps right of way in `deconflict`, as the EMP's disabled unit does. C2
+off is untouched; with C2 on and no rail charging, nothing is.
 
 ### Off the field and asleep
 
@@ -801,8 +820,12 @@ positions, never rolled.
   - the palette's own blues, the Armory scene's colours; effects.md's ramp
   table gains its row. Paler at its bright end and greener at its dark end
   than the EMP's ramp, so a slug's trail and an EMP's ring do not read as
-  one weapon.
-- **The charge** (`gauss::compose_charge(tank, charge, t)`), glowing pass:
+  one weapon. Its glows - added light - are `pyro::RAIL_LIGHT`, a cold blue
+  `#4C7EFF` off the palette: the ramp's teal added over the grass read as
+  the grass's own green in the screenshots (an object is never the
+  ground's colour, docs/PALETTE.md), so the light is bluer than the blocks.
+- **The charge** (`gauss::compose_charge(centre, muzzle, charge, seed,
+  time)`), glowing pass:
   - a ring round the hull, `pyro::Shape::Arc` a whole turn, one block wide,
     in `BLUE_PALE`, its radius falling from `CHARGE_RING_PX` (34) to 22 px
     as the charge fills and its `cover` rising with the progress (dissolving
@@ -811,14 +834,13 @@ positions, never rolled.
     (`tank_art::RAIL_MUZZLE`): each a block on a hashed angle, from 40 px
     out to the muzzle over half a second and round again, phased per mote,
     `BLUE_PALE` with a `WHITE` block for its last 8 px;
-  - a glow on the muzzle (`pyro::glow`, `BLUE_BRIGHT`), `10 + 16 *
-    progress` px, its strength the progress;
+  - a glow on the muzzle in `RAIL_LIGHT`, `8 + 12 * progress` px, its
+    strength the progress;
   - at full the ring holds at 22 px and beats at 6 Hz (`cover` 1 and 0.6),
     the glow's core `WHITE`;
   - overcharged the ring is `WHITE` and jumps a block either way on a hash
-    every 1/20 s, and two zigzags crackle off the rails every 1/15 s
-    (`pyro::block_line`, two segments of 4-8 px, `BLUE_PALE` with a `WHITE`
-    head);
+    every 1/20 s, and two zigzags crackle off the bore every 1/15 s (two
+    runs, 4-8 px in all, `BLUE_PALE` with a `WHITE` head);
   - over the last `VENT_WARN_SECONDS` (0.6) before the vent the ring
     flickers (`cover` stepping 1 and 0.5 at 10 Hz) and wisps of white steam
     begin off the module (`pyro::Puff` in `SMOKE`'s two lightest steps).
@@ -834,22 +856,23 @@ positions, never rolled.
     0) is over 0.6, then `BLUE_LT`, wobbling across the line by
     `round_to_block(sin(along * 0.3 + age * 6) * 2 * (1 - a))` and
     dissolving through the Bayer pattern to half, then in eighths (rule 3);
-    beside it a sparse row of `#F0F0F0` ions a block off the line, every
-    third block, kept where the Bayer value is under `a`. Glowing pass: the
+    beside it a sparse row of `#F0F0F0` ions two blocks off the line, every
+    third block, kept where the Bayer value is under `0.8 a`. Glowing pass: the
     trail is ionised air, its own light, and it throws none on the ground;
-  - **the pierce bursts**: at each pierce point, `burst.rs`'s
-    `ImpactKind::Pierce(Pierced)`, composed with the slug from its age so a
-    replica and a client draw it alike: a tile - its material's dust
-    (`pyro::dust_of`) as chips thrown out of its far side along the slug's
-    line, 8-24 px, falling as they go (lit pass; the tile's own collapse
-    cloud comes from its death, `ObstacleDestroyed`); a hull - a white
-    ring of blocks and a spray of `RAIL` sparks out of the far side, with two
-    dark armour flecks (`STONE_DK`); a shield - the spray in `SHIELD`'s
-    steps; a frog - four `BLUE_PALE` sparks; a tower - the hull's spray with
-    the towers' armour dust; iron cut by an overcharge - white and
-    `STONE_LT` sparks out of both faces;
+  - **the pierce bursts**, composed with the slug from its age over
+    `PIERCE_SECONDS` (0.5), so a replica and a client draw them alike: a
+    spray of sparks out of each pierce's far side along the slug's line
+    (glowing pass) - six `WHITE`-and-`BLUE_PALE` off a hull with a white
+    ring of blocks opening round the entry, six in `SHIELD`'s steps with the
+    ring off a shield, four `BLUE_PALE` off a frog, six white-and-grey off
+    iron an overcharge cuts, three off any other tile; and in the lit pass
+    (`compose_slug_lit`) a tile's chips - its material's dust
+    (`pyro::dust_of`), glass's pale shards - thrown 8-24 px out of its far
+    side and falling as they go, and two dark flecks of armour off a hull.
+    The tile's own collapse cloud comes from its death (`ObstacleDestroyed`,
+    `fx.rs`);
   - **the stop**: a spark star of `WHITE` and `BLUE_PALE` thrown back along
-    the line and a `BLUE_BRIGHT` glow fading over 0.3 s; nothing at a leg's
+    the line and a `RAIL_LIGHT` glow fading over 0.3 s; nothing at a leg's
     end in a portal (the portal's own flare, `ShotTeleported`, marks it);
   - **the ripple**: `Shockwave::scaled(muzzle, gauss_shock)` (0.4 of a tank
     dying) through `shockwave.rs` - the bend and the shake, none under
@@ -860,24 +883,28 @@ positions, never rolled.
     cosmetic, concealment untouched;
   - **the fish** dart away from every leg (`fish::scares`, a scare every
     cell along it, as from a laser beam).
-- **The sparks** (`fx.rs`): for each slug the frame just put on
-  `Game::rail_slugs` (age 0, as `muzzle_sparks` reads fresh flashes), a
-  spit of `RAIL` sparks down the line off each hull and tile pierce and a
-  star off the stop. Particles, so `rand::rng()`, never the round's.
+- **The sparks** (`fx.rs`, off `Event::RailSlug`): a spit of `BLUE_PALE`
+  and white sparks out of the bore down the line on a first leg, and a
+  cone splashing back off the stop (and a splash where it is wet).
+  Particles, so `rand::rng()`, never the round's. A rail `Hit` puts on
+  only its flash (`fx::Flash`), never a shot's impact burst - the slug's
+  own picture carries them.
 - **A charge's end** (`gauss::compose_end`, from `Game::charge_ends`):
-  fizzled - the ring falls into the muzzle in 0.15 s and four `BLUE_LT`
-  blocks drop off the rails; vented - a plume of white steam (`SMOKE`'s two
-  lightest steps, shaded puffs rising and leaning with the wind,
-  `pyro::smoke_lean`) off the module for 0.8 s and three `WHITE` sparks;
-  lapsed - nothing (the wreck or the EMP has its own show).
+  fizzled - four `BLUE_LT` blocks dropping off the bore over 0.15 s;
+  vented - five shaded puffs of white steam (`SMOKE`'s lightest steps)
+  rising off the module and leaning with the wind (`pyro::smoke_lean`) for
+  0.8 s, and three `WHITE` sparks; lapsed - nothing (the wreck or the EMP
+  has its own show).
 - **The recoil**: dust off the skidding hull (the hammer's `fx.rs`); the
   overcharged spin is the hull's and the turret's eased swing.
-- **The light** (`weather::lights_in`): a charging tank's muzzle throws an
-  unshadowed point light in `BLUE_PALE`, 40 px, at `gauss_charge_light *
-  progress`, so an enemy's charge reads at night - the tell is fair in the
-  dark; a slug's white frame throws, for its three frames, an unshadowed
-  `WHITE` light every `FRAME_LIGHT_SPACING_PX` (96) along each leg, 48 px,
-  at `gauss_frame_light`. The trail throws none.
+- **The light** (`weather::lights_in`), in the blue of the glows: a
+  charging tank's bore throws an unshadowed point light, `24 + 40 *
+  progress` px, at `gauss_charge_light * progress`, so an enemy's charge
+  reads at night - the tell is fair in the dark; a slug's white frame
+  throws, fading over three times `gauss_flash_seconds`, an unshadowed
+  light every `FRAME_LIGHT_SPACING_PX` (96) along each leg, 72 px, at
+  `gauss_frame_light`; the stop a shadowed one fading over 0.3 s. The trail
+  throws none.
 - **The module** (`tankdesign`, `lines/vanguard.py`, `module_fn('gauss')`):
   a coil gun on the left cheek - the laser's hardpoint, shared, since a tank
   carries one special at a time (`hp.get('gauss', hp['laser'])`): a
@@ -896,8 +923,9 @@ positions, never rolled.
   release); 5 at full; 5 and 6 alternating at 10 Hz overcharged; `1 +
   floor(progress * 4)` (at most 4) while charging; else 0. A disabled tank
   carrying it shows cell 0 (the EMP's rule). `render.SHOWN_TOGETHER` leaves
-  it out with the laser it shares a cheek with. Three chassis in a
-  screenshot before it is settled (§12).
+  it out with the laser it shares a cheek with. Read on the scout, the
+  warden and the leviathan: a slim pair of rails with a teal light bar,
+  apart from the laser's lens on every one.
 - **The crate**: row 15 of `gen_crates.py`'s sheets (`crates_sheet.png`
   280 x 640, `pickup_glyphs.png` 24 x 384). Its symbol, 10 x 10 design
   px: two rails, the slug's trail between them and its white-hot head (`o`,
@@ -917,35 +945,36 @@ positions, never rolled.
   ```
 
   Ink (`punypalette.PICKUP_INK['gauss_rail']`, admitted on the crate sheets
-  alone like the others): jade - shade `#168A3E`, base `#36E07A`, light
-  `#B4FFD0` - in the widest gap the inks leave on the hue wheel, between
-  the frog pack's yellow-green (103 degrees) and the plasma's teal (172),
-  some 35 degrees from each, and far from the hammer's sky blue `#46C3F2`
-  and the EMP's cobalt `#4F6BFF`. To be shown beside the other fifteen in a
-  screenshot before it is settled (§12); hot magenta `#FF3DD8` stands by.
+  alone like the others): hot magenta - shade `#B01E92`, base `#FF3DD8`,
+  light `#FFB0F0`. Jade (`#36E07A`, in the hue wheel's widest gap) was
+  rendered beside all fifteen shipping crates and the grass and read as
+  both: a green object on green ground, which the art direction keeps off.
+  Magenta was the most distinct of the candidates rendered (rose sat next
+  to the health crate's red, an ice blue next to the minigun's and the
+  hammer's) and nothing on the field is that colour.
 - **The HUD**: `hud::WeaponSlot::of` gives the slugs in `HUD_GAUSS_COLOR`
-  (`#36E07A`, the ink's base) and the glyph, and while a charge runs
-  `WeaponSlot::charge: Option<ChargeGauge>` (`progress`, `stage`,
-  `vent_in`), which `render::hud::draw_vitals` draws **in the count's
-  place** - `V_WEAPON_COUNT`, `V_COUNT_W` (30) wide, `GAUGE_H` (8) tall,
-  centred on the row, through `draw_gauge` (whole 2 px blocks, 13 of them):
-  charging, filled to the progress in `HUD_GAUSS_COLOR`; full, filled
-  `WHITE`; overcharged, filled and alternating `WHITE` and
-  `HUD_GAUSS_COLOR` at 8 Hz; its outline `RED_BRIGHT` over the last
-  `VENT_WARN_SECONDS` before the vent, `DIM` otherwise. The count comes back
-  the frame the charge ends. The ring's ammo pips are the slugs left against
-  `full_load` (4). A replica's seat and a client's own read the same slot
-  (the client's from its predicted charge, §8).
-- **The off-screen tell**: the hammer's arrow (`ArrowKind::Tell`) in
-  `HUD_GAUSS_COLOR`, blinking quicker as the charge fills, for a charging
-  enemy off the screen and not concealed - a charge reveals its tank, as
-  firing does (`Awareness::fired`). When this seat is in its lane
-  (`PresentWorld::rail_trace` from its muzzle along its facing reaches this
-  seat's hull before a stopper - through cover, whatever the range) the
-  arrow carries the lane warning ring, its `settle` the charge's progress to
-  full, its `flash` on the slug's `Fired`. A seat hit by a slug points its
-  hit arc back down the slug's line (`Note::Hit`, from the `RailSlug` leg
-  through the hit point).
+  (`#FF3DD8`, the ink's base) and the glyph, and while a charge runs
+  `WeaponSlot::charge: Option<ChargeGauge>` (`progress`, `stage`, `warn`,
+  `blink`), which `render::hud::draw_weapon_readout` draws **in the
+  count's place** - `V_WEAPON_COUNT`, `V_COUNT_W` (30) wide, `GAUGE_H` tall,
+  centred on the count's line, through `draw_gauge`: charging, filled to
+  the progress in `HUD_GAUSS_COLOR`; full, filled white; overcharged,
+  white and `HUD_GAUSS_COLOR` in turn at `CHARGE_BLINK_HZ` (8); its outline
+  the HUD's red within `VENT_WARN_SECONDS` of the vent, `DIM` otherwise.
+  The count comes back the frame the charge ends; an offline special
+  (`WPN OFFLINE`) shows no gauge. The ring's ammo pips are the slugs left
+  against `full_load` (4). A replica's seat and a client's own read the
+  same slot (the client's from its predicted charge, §8).
+- **The off-screen warning**: the wind-up's arrow (`ArrowKind::Windup`) in
+  `HUD_GAUSS_COLOR` rimmed hostile red, blinking quicker as the charge
+  fills, for a charging enemy off the screen - a wind-up reveals its tank
+  as firing does. When this seat is in its lane (`TankView::lane`, from
+  `PresentWorld::rail_trace` from its gun-line muzzle along its facing,
+  `laser_reach` long, reaching this seat's hull before a stopper - through
+  cover, whatever the range) the arrow carries the lane warning's pulsing
+  ring, dark red to half charged and bright after. A seat hit by a slug
+  points its hit arc back down the slug's line (`hit_from`: a `RailSlug`
+  whose pierce list holds the hit point).
 
 ## 6. Tuning
 
@@ -961,7 +990,7 @@ enemies' group:
 | `gauss_reload_seconds` | 0.6 | 0..=10 | After a slug, seconds before a charge may start again. |
 | `gauss_vent_cooldown_seconds` | 1.2 | 0..=10 | After a vent, seconds before a charge may start again. |
 | `gauss_crawl_pace` | 0.2 | 0..=1 | The share of its top speed a charging hull keeps. |
-| `gauss_damage` | 110 | 0..=500 | A seat's slug's damage to the first tank or tower it goes through; no roll. |
+| `gauss_damage` | 120 | 0..=500 | A seat's slug's damage to the first tank or tower it goes through; no roll. |
 | `gauss_enemy_damage` | 60 | 0..=500 | An enemy's slug's, the same way. |
 | `gauss_pierce_keep` | 0.8 | 0..=1 | The share of its damage a slug keeps past each tank, frog or tower it goes through. |
 | `gauss_tile_keep` | 0.95 | 0..=1 | The share it keeps past each wall, prop or tree. |
@@ -977,15 +1006,15 @@ enemies' group:
 | `gauss_charge_light` | 0.6 | 0..=2 | The light a full charge throws at night, against a headlight's. |
 | `gauss_frame_light` | 1.0 | 0..=2 | The light the white frame throws along the line at night. |
 | `gauss_ai_fire_interval` | 2.0 | 0.1..=20 | Seconds between an enemy's decisions to charge. |
-| `gauss_ai_lane_cost: usize` | 16 | 0..=64 | Extra route cost on every cell of a charging rail's lane; 0 switches it off. |
-| `gauss_ai_creep_min_px` | 96 | 0..=1000 | A charging enemy creeps along its lane toward the seat it charges at while that seat is further than this. |
+| `gauss_ai_box_margin_px` | 32 | 0..=128 | How far inside a seat's sight box (and its own sight) an enemy must stand to start a charge at it; the release needs only the box. |
 | `enemy_special_weapon_gauss_share` (`enemies`, `@ Restart`) | 0 | 0..=1 | The share of special-carrying enemies that spawn with the gauss rail instead, decided by a hash of the spawn point and the slot - never the round's RNG - so at 0 nothing changes. |
 
 Constants (geometry and policy, not feel): `CHARGE_HOLD_SPARE_TICKS` (6)
-in `net::mailbox` beside `REACH_SPARE_TICKS`; in `gauss.rs`
-`CHARGE_RING_PX` (34, falling to 22), `CHARGE_MOTES` (10),
-`VENT_WARN_SECONDS` (0.6), `FRAME_LIGHT_SPACING_PX` (96), the trail's
-wobble (2 px) and the grass's reach (12 px).
+in `tank.rs` beside the pattern it bounds; in `gauss.rs` `CHARGE_RING_PX`
+(34, falling to 22), `CHARGE_MOTES` (10), `VENT_WARN_SECONDS` (0.6),
+`FRAME_LIGHT_SPACING_PX` (96), `TRAIL_WOBBLE_PX` (2), `GRASS_REACH_PX`
+(12), `PIERCE_SECONDS` (0.5), `STOP_SECONDS` (0.3), `END_SECONDS` (0.15,
+0.8); `hud::CHARGE_BLINK_HZ` (8).
 
 ## 7. Text
 
@@ -997,9 +1026,9 @@ Data names by family (`named("tool", ..)`), so no `text::keys` constant.
 | `tool-short-gauss_rail` | rail | tir |
 
 `gaussov top` ("Gauss cannon") because the literal `gaussova tirnica`
-runs past the tool list's 144 pt at the font's own widths; both are
-measured in Phase 2 by `every_language_fits_every_budget`. The HUD shows the
-glyph, a count and the gauge; the weapon has no other words.
+runs past the tool list's 144 pt at the font's own widths; both pass
+`every_language_fits_every_budget`. The HUD shows the glyph, a count and
+the gauge; the weapon has no other words.
 
 ## 8. Wire
 
@@ -1007,7 +1036,7 @@ Protocol 17 (from the EMP's 16), once in the PR.
 
 - `WeaponKind::GaussRail`, appended to `ALL`; `drawn_on_press` true (its
   show is drawn on the *release*, which is its press show).
-- `TankState::charge: u16` - 0 none, else the ticks held plus one.
+- `TankState::charge: u16` - 0 none, else the whole ticks held, at least 1.
   `TankState::weapon` is the special carried (the EMP's rule), `ammo` its
   slugs.
 - `WireEvent::RailSlug { slot: u16, seat: u8, leg: u8, x0: i16, y0: i16,
@@ -1020,7 +1049,8 @@ Protocol 17 (from the EMP's 16), once in the PR.
 - `WireEvent::ChargeEnded { slot: u16, weapon: WeaponKind, end:
   ChargeEnd }`; mirrors `Event::ChargeEnded`. `Event::ChargeStarted` is on
   `NOT_SENT` (the state is what draws).
-- `HitCause::Rail`, appended (`WireEvent::Hit::cause`).
+- `HitCause::Rail`, appended (`WireEvent::Hit::cause`): a replica puts on
+  no impact flash for it, as for a sonic hit.
 - `WireEvent::press_show`: a `RailSlug` with `leg: 0` and a seat is
   `(seat, WeaponKind::GaussRail)`. Legs past a portal stay the room's.
 - **What a replica draws**: on a `RailSlug`, `rail_show` - the leg on
@@ -1034,33 +1064,38 @@ Protocol 17 (from the EMP's 16), once in the PR.
   hull's pose and facing.
 - **What is drawn at once** (decision 3 of BB-36, hammer §3.3), on the
   shooter's client:
-  - *the charge, from the press*: the sandbox's seat runs the charge machine
-    in `Game::predict_seat` (§3.3, the predictor's local gate as `open`:
-    its cooldown out, slugs less the owed ones above 0, no local offline),
-    and `OnlineRound` writes the sandbox's `Tank::charge` into the shown
-    seat where it writes the drawn pose, every frame - so the glow, the
-    module's cells and the HUD gauge start on the press frame and end on the
-    release frame. An owned hull crawls on its own prediction (the sandbox's
-    `drive_tank`).
-  - *the slug, on the release*: `Predictor::pull_trigger` takes the release
-    edge `predict_seat` reported. On `Released(stage)` with slugs left less
-    the owed, it takes the sandbox's muzzles (`Game::seat_rail(seat) ->
-    (start, muzzle, dir)`), sets the local gate to `gauss_reload_seconds`,
+  - *the charge, from the press*: every tick the sandbox's seat runs the
+    charge machine in `Game::predict_seat_with` (§3.3), handed the press
+    edge and the predictor's local gate as `open`
+    (`Predictor::charge_gate_open`: its cooldown out, no local offline, a
+    charge weapon with slugs left less the owed ones), and `OnlineRound`
+    writes the sandbox's `Tank::charge` into the shown seat where it writes
+    the drawn pose, every frame (`Game::set_seat_charge`) - so the glow, the
+    module's cells and the HUD gauge start on the press frame and end on
+    the release frame. An owned hull crawls on its own prediction.
+  - *the slug, on the release*: `Predictor::charge_edge` takes the edge
+    `predict_seat_with` reported (`SeatCharge`, with the gun-line muzzle,
+    the bore and the facing from before the tick's step). On
+    `Released(stage)` it sets the local gate to `gauss_reload_seconds`,
     owes the slug, and, while presses are drawn, queues
     `PressShow::Rail(RailPress { start, muzzle, dir, overcharged })` and the
     drawn press `(GaussRail, input tick of the release)`. `fly_own_shots`
-    traces it through the drawn world - `PresentWorld::rail_trace`: the stop
-    (the first stopper, iron only while not overcharged, or the field's edge
-    at `laser_reach`) or the first portal entry, and the pierce points of the
-    tiles, hulls (never its own), frogs and towers before it - and puts it on
-    through `Game::draw_press_show`: the same `rail_show` a replica puts on
+    traces it through the drawn world - into the first portal on its way if
+    it meets one, else `PresentWorld::rail_trace` to the stop (the first
+    stopper, iron only while not overcharged, or the field's edge at
+    `laser_reach`), with what it goes through on the way - and puts it on
+    through `Game::draw_rail_press`: the same `rail_show` a replica puts on
     for the room's `RailSlug`, plus the module's shot cell (`kick_rail`).
+    The release reaches both on the packet after the fire hold's
+    (`client::FIRE_HOLD_TICKS`), a tick after the key comes up.
   - *the recoil and the spin*: the charge machine's own, so
-    `predict_seat` applies the knock (and an overcharged release's spin) to
-    the sandbox's seat on the release tick wherever it steps one - live in
-    owned mode, and again in a stage-2 replay of a release after the acked
-    tick, as the room did.
-  - *a fizzle or a vent*: `PressShow::ChargeEnd(ChargeEndPress { end })`
+    `predict_seat_with` applies the knock (and an overcharged release's
+    spin) to the sandbox's seat on the release tick before the solver steps,
+    as `resolve_rails` does before `step_world` - live in owned mode, and
+    again in a stage-2 replay of a release after the acked tick (the
+    history keeps each tick's press edge and gate), as the room did. An
+    owned reconciliation keeps the sandbox's own charge over the room's.
+  - *a fizzle or a vent*: `PressShow::ChargeEnd(ChargeEndPress { at, end })`
     → `charge_end_show`.
 - **What is claimed**: the room's leg-0 `RailSlug` for this seat, by the
   input tick its `Fired` names (`presses_drawn`, one pending claim per
@@ -1082,14 +1117,15 @@ Protocol 17 (from the EMP's 16), once in the PR.
   (`ObstacleDestroyed`), drums (`Blast`), shields (`ShieldBroken`), the
   legs past a portal, the recoil of a hull the client does not own. The
   room's own copy of an owned hull is knocked too (overwritten by the next
-  pose) and allowed the knock's speed (`seat_knock`).
+  pose) and allowed the knock's speed (`Shoves::allow_knock`, the
+  validator's `SeatKnock`).
 - **Incoming slugs**: an enemy's slug is drawn where the room fired it,
   when the interpolator hands its tick over, against the replica's world.
   A seat that stepped out of the lane within a round trip of the release is
   hit as the room had it; the charge's second and a half is the warning.
 - `delta.rs` needs nothing new (the field is inside `TankState`; events go
-  whole); its random snapshots fill them, and the size bounds are
-  re-measured.
+  whole); its random snapshots fill the field, and the full snapshot's bound
+  grows by a byte a tank to 488 B (486 measured).
 
 ## 9. Determinism
 
@@ -1104,14 +1140,14 @@ Protocol 17 (from the EMP's 16), once in the PR.
 - **The AI**: `gauss_rule` chooses by fixed priority and integer scores,
   ties to the facing it has, then `Dir::ALL` order, the nearest seat along
   a lane by distance then seat index; `rail_lanes` and `rail_dangers` are
-  built in seat then slot order; the edge hold and the surcharge are
-  functions of positions.
+  built in seat then slot order; the edge hold is a function of
+  positions.
 - **The swap** is the hammer's hash; the new entry runs only with its share
   above 0.
 - **A round without the rail replays byte for byte**: no crate kind is
   rolled anywhere, every share defaults to 0, no enemy carries one, so no
   trigger is `Charge`, `step_charge` never runs, `rail_lanes` is empty (no
-  danger, no surcharge, no edge hold from a lane), `charge_pace()` is
+  danger, no edge hold from a lane), `charge_pace()` is
   exactly 1 and `throttle` what it was; `drive_player`'s trigger match
   answers every shipped weapon as before; a local round sets no hold report,
   and a room's report is read only by a charge. `determinism_tests`' pinned
@@ -1120,172 +1156,97 @@ Protocol 17 (from the EMP's 16), once in the PR.
 
 ## 10. Tests
 
-`mechanics_tests` (headless, tiny inline maps):
+`simulation::gauss_tests` (headless rounds on the default 34 x 17 field,
+the seat at cell 3,6 facing east, parked enemies placed by hand; every
+number read off the defaults):
 
-- `a_gauss_crate_arms_the_rail_and_replaces_the_special_carried` - four
-  slugs, another special emptied, a second crate refills to four.
-- `the_rail_charges_while_held_and_fires_on_release_at_full` -
-  `ChargeStarted` on the press, `Fired` and `RailSlug` on the release tick
-  after `gauss_charge_seconds`, one slug spent.
-- `a_release_one_tick_short_of_full_fizzles` and `..._at_full_fires` - the
-  threshold to the tick.
-- `a_release_before_full_fires_nothing_and_spends_nothing` - `ChargeEnded
-  { Fizzled }`, the slugs as they were.
-- `a_charge_held_past_its_hold_vents_and_the_rail_cools` - `ChargeEnded {
-  Vented }`, no `Fired`; a press within `gauss_vent_cooldown_seconds`
-  starts nothing, one after it does.
-- `a_held_trigger_after_a_vent_needs_a_new_press`.
-- `a_charging_hull_crawls` - top speed about `gauss_crawl_pace` of its own,
-  `throttle` saying so; full speed again after the release.
-- `the_slug_crosses_the_field_to_its_edge` - on an arena and on a 250-wide
-  field (`laser_reach`).
-- `the_slug_goes_through_brick_wood_glass_and_every_tank_in_order` - three
-  tiles and three enemies in a row: every tile dead, every tank hit, the
-  `Hit`s in order along the line, the damage falling by the keep factors.
-- `iron_stops_the_slug` - the enemy behind it untouched, the leg's end on
-  the iron's face.
-- `the_volcano_cone_and_a_door_stop_even_an_overcharged_slug`.
-- `an_overcharged_slug_cuts_iron_and_spins_the_shooter` - the enemy behind
-  the iron hit, the iron whole, the shooter facing back, `spin` running,
-  its slide twice a full release's.
-- `the_recoil_slides_about_a_cell_and_a_heavy_chassis_less` - standard,
-  scout and titan within 3 px of 32, 41 and 17 on dry ground, the same
-  whichever way the hull faces.
-- `ice_lengthens_the_recoil`.
-- `a_drum_in_the_lane_goes_off_and_the_slug_flies_on`.
-- `a_tower_in_the_lane_takes_the_slugs_damage_and_the_slug_flies_on`.
-- `sandbags_fences_trees_and_lamp_posts_in_the_lane_go_down`.
-- `a_burning_plank_and_a_fused_drum_are_passed_through`.
-- `crates_wrecks_lanterns_and_shots_in_flight_are_left_alone`.
-- `a_frog_in_the_lane_takes_frog_damage_and_does_not_hop`.
-- `a_rainbow_shield_soaks_one_slug_and_the_slug_flies_on`.
-- `the_slug_goes_through_a_portal_leg_by_leg` - leg 0 ending in the
-  portal, `ShotTeleported`, leg 1 from the exit hitting the enemy past it,
-  the damage carried over.
-- `a_seats_slug_is_judged_against_the_rewound_enemies` (the laser's lag
-  compensation test, on the rail).
-- `friendly_fire_scales_a_teammates_hit_and_a_fellow_enemy_takes_it_whole`.
-- `the_shooter_is_never_in_its_own_slug` (a portal leg back through it).
-- `a_wreck_mid_charge_fires_nothing`, `an_emp_mid_charge_lapses_it`,
-  `a_sonic_shove_mid_charge_keeps_it`, `a_teleport_mid_charge_keeps_it`,
-  `another_weapons_crate_mid_charge_lapses_it`,
-  `a_rail_crate_mid_charge_refills_and_keeps_it`,
-  `the_round_ending_mid_charge_lapses_it_and_nothing_fires_on_the_end_screen`.
-- `the_rail_draws_no_rng` - the RNG's state after a slug through tiles and
-  tanks with no drum and no portal is the state before.
-- `the_hold_report_decides_the_release_within_its_spare` - a room count one
-  tick short of full with a report at full fires; a report past the spare is
-  held to it.
-- `an_owned_hull_is_allowed_its_recoil` - `accept_seat_pose` takes the
-  recoil's pose on a damaged chassis.
-- `a_round_with_the_rail_replays_bit_for_bit`.
-- `the_spawn_swap_hands_out_the_rail_by_its_share_and_draws_nothing`.
-- `an_enemy_takes_the_crate_only_on_shells`.
-
-AI (`ai.rs` unit tests on a `Brain` with a made-up `GaussSense` and
-dangers, and `mechanics_tests` on a whole round):
-
-- `the_rail_charges_at_a_seat_in_its_lane_inside_the_sight_box`.
-- `the_rail_fires_through_brick_at_a_seat_it_knows_is_behind_it`.
-- `the_rail_never_charges_through_iron`.
-- `the_rail_does_not_fire_at_a_seat_hidden_in_grass_or_beyond_its_sight`.
-- `the_rail_waits_at_full_and_wastes_the_charge_when_the_seat_steps_aside` -
-  the seat steps out before full: no `Fired`, a vent.
-- `the_rail_fires_when_the_seat_steps_back_in_before_the_overcharge`.
-- `the_rail_never_releases_overcharged`.
-- `the_rail_prefers_two_seats_then_a_seat_and_a_tower_then_one_seat`.
-- `the_rail_never_fires_through_a_friend_its_own_tower_or_its_own_frog`.
-- `a_hunter_rails_its_quarry`.
-- `a_training_dummy_never_charges`.
-- `the_generic_tiers_never_fire_the_rail`.
-- `a_charge_in_progress_is_never_released_by_another_tier` - hurt past
-  `enemy_flee_damage` mid-charge, it holds.
-- `a_charging_enemy_creeps_along_its_lane`.
-- `a_far_coasting_tank_keeps_its_trigger_down_while_charging`.
-- `an_enemy_never_rails_a_seat_from_outside_its_sight_box` (whole round:
-  `offbox-fire`'s reading).
-- `enemies_step_out_of_a_charging_seats_lane_and_do_not_step_back` (the
-  dodge and its latch).
-- `enemies_wait_at_the_edge_of_a_lane_rather_than_cross_it` (the edge hold).
-- `routes_go_round_the_end_of_a_short_lane` (the surcharge).
-- `allies_step_out_of_a_charging_enemys_lane`.
-- `a_charging_seat_in_grass_still_clears_its_lane`.
-- `a_charging_enemy_in_a_seats_lane_keeps_charging`.
-- `the_commander_never_orders_a_charging_tank`.
-- `the_hammer_shoves_a_seat_into_a_charging_rails_lane`.
-- `the_emp_brawler_keeps_out_of_a_charging_seats_lane`.
+- The charge: `a_gauss_crate_arms_the_rail_and_replaces_the_special_carried`,
+  `the_rail_charges_while_held_and_fires_on_release_at_full`,
+  `a_release_one_tick_short_of_full_fizzles_and_at_full_fires`,
+  `a_charge_held_past_its_hold_vents_and_the_rail_cools`,
+  `a_charging_hull_crawls`.
+- The slug: `the_slug_goes_through_brick_wood_glass_and_every_tank_in_order`,
+  `iron_stops_the_slug`, `the_slug_crosses_the_field_to_its_edge`,
+  `an_overcharged_slug_cuts_iron_and_spins_the_shooter`,
+  `a_door_stops_even_an_overcharged_slug`,
+  `the_slug_goes_through_a_portal_leg_by_leg`,
+  `the_recoil_slides_about_a_cell_and_a_heavy_chassis_less`,
+  `a_drum_in_the_lane_goes_off_and_the_slug_flies_on`,
+  `a_tower_in_the_lane_takes_the_slugs_damage_and_the_slug_flies_on`,
+  `sandbags_fences_trees_and_lamp_posts_in_the_lane_go_down`,
+  `a_rainbow_shield_soaks_one_slug_and_the_slug_flies_on`,
+  `a_frog_in_the_lane_takes_frog_damage_and_does_not_hop`,
+  `crates_and_wrecks_are_left_alone`.
+- Mid-charge: `a_wreck_mid_charge_fires_nothing`, `an_emp_mid_charge_lapses_it`,
+  `another_weapons_crate_lapses_a_charge_and_a_rail_crate_keeps_it`,
+  `a_teleport_mid_charge_keeps_it`, `a_sonic_shove_mid_charge_keeps_it`,
+  `the_round_ending_mid_charge_clears_it_and_nothing_fires_on_the_end_screen`.
+- Determinism and the room: `the_rail_draws_no_rng`,
+  `the_hold_report_decides_the_release_within_its_spare`,
+  `a_round_with_the_rail_replays_bit_for_bit`,
+  `the_spawn_swap_hands_out_the_rail_by_its_share`.
+- The AI: `the_rail_charges_at_a_seat_in_its_lane_inside_the_sight_box`,
+  `the_rail_fires_through_brick_at_a_seat_it_knows_is_behind_it`,
+  `the_rail_never_charges_through_iron`,
+  `the_rail_does_not_fire_at_a_seat_hidden_in_grass`,
+  `the_rail_waits_at_full_and_wastes_the_charge_when_the_seat_steps_aside`,
+  `the_rail_fires_when_the_seat_steps_back_in_before_the_overcharge`,
+  `the_rail_never_releases_overcharged`,
+  `the_rail_never_fires_through_a_friend`,
+  `a_friend_beyond_the_seat_does_not_hold_the_rail`,
+  `the_rail_never_fires_through_its_own_tower`,
+  `the_rail_prefers_a_lane_with_two_seats`,
+  `a_training_dummy_never_charges`, `the_generic_tiers_never_fire_the_rail`,
+  `a_charge_in_progress_is_never_released_by_another_tier`,
+  `an_enemy_never_rails_a_seat_from_outside_its_sight_box`,
+  `a_hunter_rails_its_quarry`,
+  `enemies_step_out_of_a_charging_seats_lane_and_do_not_step_back`,
+  `enemies_wait_at_the_edge_of_a_lane_rather_than_cross_it`,
+  `a_charging_tank_is_busy_to_the_commander`,
+  `a_charging_rails_lane_through_cover_warns_the_seat`.
 
 Shared path and presentation:
 
-- `tank` (`weapon_inventory_tests`): the rail in `take_weapon`, `full_load`,
-  `special`; every `Trigger`; `step_charge`'s edges - started on a press
-  with the gate open and not without, held, full, overcharged, released at
-  each stage, fizzled, vented, lapsed on a weapon change, the report's clamp
-  both ways; `charge_pace`; `windup`; the module's cells at every stage.
-- `gauss::tests`: `the_trace_pierces_in_order_and_stops_at_the_first_stopper`,
-  `ties_break_on_rank_then_slot_then_cell`,
-  `the_cell_lookup_finds_what_the_full_scan_finds`,
-  `the_recoil_speed_slides_the_cells_asked`,
-  `a_lane_holds_what_a_slug_would_pierce`; the composers
-  `the_charge_is_on_the_grid_in_its_ramp_and_pure`,
-  `the_slug_is_on_the_grid_in_its_ramp_and_gone_by_its_end`,
+- `gauss::tests`: the composers on the 2 px grid and in their ramps
+  (`the_charge_is_in_its_ramp_and_pure`,
+  `the_slug_is_in_its_ramp_and_gone_by_its_end`,
   `the_white_frame_lasts_its_frames`,
   `the_trail_dissolves_through_the_bayer_pattern`,
-  `a_charge_end_is_gone_by_its_end`.
-- `ai` (dangers): `a_lane_danger_has_depth_across_it_and_none_past_its_ends`,
-  `a_lane_exit_is_on_the_near_side`, `the_edge_hold_keeps_a_tank_out`.
-- `pyro`: `the_rail_ramp_is_on_the_palette`.
-- `burst`: `a_pierce_burst_throws_out_of_the_far_side`.
-- `grass`: `flatten_along_lays_the_tufts_by_the_line`.
-- `fish::tests`: `a_slug_scares_the_fish_along_its_line`.
-- `fx` tests: `a_rail_hit_flashes_and_bursts_nothing`.
-- `weather`: `a_charge_throws_light_as_it_fills`,
-  `the_white_frame_lights_its_line_for_its_frames`.
-- `hud_tests`: the rail's slot, colour and glyph;
-  `a_charging_rail_shows_its_gauge_in_the_counts_place`.
-- `render::hud::corner_tests`: the gauge inside the count's slot.
-- `indicators`: `a_charging_enemy_off_screen_gets_the_tell_arrow`,
-  `a_charging_rail_with_this_seat_in_its_lane_rings_through_cover`,
-  `a_rail_hit_points_the_arc_back_down_the_slug`.
-- `pickup`: `name`/`parse`; `weapon`.
-- `devserver`: `set_tank_arms_the_rail_and_starts_a_charge`, the
-  snapshot's new fields, `spawn_pickup` with `gauss_rail`, the PICKUP
-  category's count (15 to 16).
-- `editor`/`chrome_tests`: the tool in `TOOLS`.
+  `a_pierce_burst_throws_out_of_the_far_side`,
+  `a_charge_end_is_gone_by_its_end`), `the_recoil_speed_slides_the_cells_asked`,
+  `the_module_shows_the_charge`.
+- `hud_tests`: `a_charging_rail_shows_its_gauge_in_the_counts_place`.
+- `devserver`: `set_tank_arms_the_rail_and_charges_it`; the PICKUP
+  category's count (16).
 - `thumbnail`: the armory's pin. `maplint`: the armory as it lints.
-- `text_tests`: every budget.
 
 Wire:
 
-- `events.rs`: the samples gain `RailSlug` (with pierces), `ChargeEnded`,
-  `ChargeStarted` (not sent) and a rail `Hit`; the variant count.
-- `mailbox`: `hold_ticks_counts_the_intents_from_press_to_release` - the
-  ordered path, an owned read one a tick, an owned read merging a release,
-  a release and a press in one read, a stalled read.
-- `authority`: `take_hold_puts_the_report_on_the_seat_for_one_update`.
-- `apply.rs`: `a_rail_slug_reaches_the_replica` (legs, pierces, the same
-  picture after every apply), `a_charge_reaches_the_replica_and_counts_up_between_snapshots`,
-  `a_rail_slug_this_client_drew_is_not_drawn_again` (`OwnShotsDrawn` with
-  the release's bit: no slug, not handed on; without: a slug),
-  `this_seats_charge_end_is_not_drawn_twice`.
-- `predict.rs`: `a_charge_glows_on_the_press_and_its_slug_draws_on_release`,
-  `a_release_before_full_draws_a_fizzle_not_a_slug`,
-  `the_slug_claims_the_rooms_slug_once`,
-  `an_owned_hull_recoils_and_spins_on_release`,
-  `a_stage_two_replay_releases_on_the_same_tick`.
-- `round.rs`: `the_rooms_slug_is_left_out_only_for_a_release_this_client_drew`,
-  `the_shown_seat_charges_from_the_prediction`.
-- `rig.rs` (`Lockstep`): `a_seats_slug_is_drawn_once_on_the_replica`,
-  `an_enemys_charge_and_slug_reach_the_replica` (an enemy armed through
-  `authority_mut`, a seat in its lane: the replica's tank charges, then the
-  slug), `the_room_releases_on_the_clients_count` (a release on exactly the
-  full tick fires on both ends).
-- `server/tests/round.rs`: `a_rail_held_through_the_mailbox_fires_once` -
-  through whole `OnlineRound`s over `NativeTransport`, a seat holds the
-  trigger past full and lets go: one `Fired`, one slug on the room, the
-  replica's own slug drawn once.
-- `delta.rs`: the random snapshots and the size bounds.
-- The room server's `cargo test -p bongbong-server` as it stands.
+- `mailbox`: `the_hold_report_counts_the_clients_ticks_not_the_reads` - one
+  read a tick, a merged read, the release's read, a tap, a starved read.
+- `apply.rs`: `a_charge_and_a_slug_reach_the_replica` (the charge's ticks,
+  the drawable state equal, counted up between snapshots; the slug's leg
+  and pierces through the codec), `a_slug_this_client_drew_is_not_drawn_again`
+  (the first leg and this seat's charge end left out under `OwnShotsDrawn`
+  with the release's bit, a leg past a portal and an enemy's drawn),
+  `a_sonic_or_rail_hit_flashes_no_impact_on_the_replica`.
+- `predict.rs`: `a_rail_charges_on_the_press_and_is_drawn_on_the_release`,
+  `a_short_hold_draws_a_fizzle_and_no_slug`,
+  `an_owned_rail_crawls_and_recoils_as_the_room_does` (the sandbox against
+  the authority's `update`, to a hundredth of a pixel every tick through a
+  charge, a release and its recoil),
+  `a_replay_carries_a_charge_from_the_rooms_count`.
+- `rig.rs`: `a_seats_slug_reaches_the_replica_once` and
+  `an_enemys_rail_reaches_the_replica` (`Lockstep`),
+  `an_own_slug_is_drawn_on_the_release_and_never_twice` (a threaded rig
+  over a 40 ms link, through a whole `OnlineRound`: the charge drawn from
+  the press frame, the slug on the release, the room's never drawn as
+  well).
+- `server/tests/round.rs`:
+  `a_charge_counts_the_clients_ticks_however_the_room_reads_them` - an
+  owned burst of held ticks read in one room tick leaves the room's charge
+  at the client's count, and the release at full fires.
+- `delta.rs`: the random snapshots and the size bound.
 
 ## 11. Probe
 
@@ -1297,18 +1258,77 @@ Wire:
 - **Armed enemies**: the same sweeps with `--tuning armed.json`,
   `{"enemy_special_weapon_chance": 1.0, "enemy_special_weapon_gauss_share":
   1.0}` - every enemy that would carry a special spawns with the rail.
-- The probe's tank line gains `rail=` (slugs) and `chg=` (seconds held); its
+- **The mix and the night**: `{"enemy_special_weapon_chance": 0.5,
+  "enemy_special_weapon_gauss_share": 0.5}`, and `armed` at night
+  (`"weather_override": 1`) and with the commander (`"c2_enabled": true`).
+- The probe's tank line gains ` rail=N` (slugs, only while it carries
+  some, so a round without the rail prints as before) and ` chg=true`; its
   fire tuple counts the slugs, so a slug is a trigger pull for
-  `FIRED_RECENTLY_FRAMES`; a charging tank (`TankSnapshot::charging`) and
-  one held at a danger's edge (`TankSnapshot::edge_hold`) are deliberate
-  holds, not a stall, stale start, low progress, jitter or grind - beside the
-  hammer's tell and skid and the EMP's disabled state.
-- **The bar**: every crate and armed run within the defaults' ceilings,
-  `offbox-fire` 0. An exceedance is read round by round from its `ANOMALY`
-  lines; one the rail's own action causes - a tank stranded at a lane's
-  edge, spinning, jittering on a lane, piling up behind one, or firing from
-  off the box - is fixed, not re-baselined. Recorded here in Phase 2: the
-  totals at the defaults, with the crate and armed, and what moved.
+  `FIRED_RECENTLY_FRAMES`; a charging tank (`TankSnapshot::charging`) is a
+  deliberate hold in `HOLDS`, beside the tell, the skid and a wait at a
+  danger's edge (`kept out`, which the edge hold sets).
+- **The bar**: `offbox-fire` 0 in every run; every stall, strand,
+  never-arrived, tank-grind or spin read round by round from its `ANOMALY`
+  lines, and one the rail's own action causes fixed, not re-baselined.
+
+**Recorded 2026-10-07** (release build - the same answers as a debug one,
+checked byte for byte on a round -, `--rounds 10 --seed 1000`; the 9
+fixtures at 1800 frames, the 7 field maps at 3600; minutes of round in
+brackets):
+
+| Run | Fixtures | Fields |
+|---|---|---|
+| Defaults | border-stuck 4, jitter 32, spin 3, churn 34, clustering 10, pile-up 6 (11.1) - every map's output byte for byte the EMP's reviewed head (`7a85ed5`) | border-stuck 11, jitter 108, spin 24, churn 83, clustering 12, wall-grind 1, pile-up 8 (18.9) - byte for byte |
+| `--crate gauss_rail` | as the defaults (no weapon slot) | spin 28, clustering 29, pile-up 10, wall-grind 1 (19.1) |
+| Mix: chance 0.5, rail share 0.5 | spin 4, clustering 8, pile-up 4 (11.6) | spin 12, clustering 3, pile-up 1, wall-grind 2 (16.8) |
+| Every enemy armed, by day | spin 4, clustering 14, pile-up 7 (12.5) | spin 23, clustering 23, pile-up 12, never-arrived 3 (17.2) |
+| Every enemy armed, night | clustering 9, pile-up 6, never-arrived 1 (12.3) | spin 31, clustering 20, pile-up 9 (19.2) |
+| Every enemy armed, commander on | spin 3, clustering 12, pile-up 7 (11.5) | spin 23, clustering 19, pile-up 8, wall-grind 1 (17.2) |
+
+No stall, stale start, low progress or tank-grind in any run; `offbox-fire`
+0 in every run, and no shot or hit on a seat from off its box. The default
+map's 30-round sweep, `waves-basic`, the advance scenario on maze and
+hedge-maze, two seats on the default map and on archipelago, and the perfect
+defence on longwater are byte for byte the base's too.
+
+**Against the earlier weapons** (their docs' §11, the same settings): the
+EMP armed by day ran stall 2, tank-grind 1, spin 24 on the fixtures (42.4
+min) and stall 2, low-progress 5, never-arrived 5, tank-grind 9, spin 79
+on the fields (60.6). The rail's rounds are the defaults' length - a rail
+pack kills an AFK seat as a shells pack does, where an EMP pack fires
+nothing at a bare seat and its rounds run to the frame cap - and per ten
+minutes of round its spins (3.2 and 13.4) sit by the defaults' (2.7 and
+12.7) and the EMP's (5.7 and 13.0).
+
+**Read round by round** (`classify.py`: every anomaly replayed on the
+window at its seed, the AI tiers its tank ran over the 180 frames before):
+
+- **The rail's own bugs, fixed** (decisions 22 to 24, 27): a tank chasing
+  a seat in a charging ally's lane swung north and south the whole round as
+  the ally crept and recoiled (never-arrived, frontier 0x3e9); two rail
+  tanks either side of a seat each held fire for the other with a third
+  pushing into them from behind (tank-grind and low-progress, frog-block
+  0x3eb); a tank at the sight box's edge charged and vented for 60 s
+  (never-arrived, frontier 0x3eb); a tank charging from 350 px, past the
+  attack range the probe measures arrival by (never-arrived, maze 0x3f1).
+- **What remains**: the never-arriveds are hedge-maze 0x3eb (a seat in the
+  north-west corner no enemy is alerted to; three tanks fleeing from ram
+  damage or patrolling) and portals 0x3ef at night (a chase round the
+  portal) - the same tanks never arrive with every enemy on the EMP
+  instead, so they are the armed pack's, not the rail's. Of the spins, 1 to
+  4 a run have a lane's dodge in their window (4 of 27 armed, 3 of 31 at
+  night, 2 of 26 with the commander, 2 of 16 in the mix, 1 of 31 with the
+  crate): a tank stepping out of an ally's charging lane walks round a
+  hedge or a tank to its exit and comes back; the rest are the tree's
+  tiers - patrol, chase, attack, guard and the seeks.
+- **Clustering and pile-up** rise with the crate (29 and 10 against 12
+  and 8 on the fields) and with the armed pack (23 and 12): a rail tank
+  with a lane stands its ground to charge and to wait out its interval, so
+  the pack behind it bunches - 9 of the armed run's 37 clusterings and 3 of
+  its 19 pile-ups have the rail's rule in their window, the rest the attack
+  and chase tiers converging as they do on shells. Per ten minutes they sit
+  under the EMP's armed pack (clustering 13.4 against 20.8, pile-up 7.0
+  against 13.7 on the fields).
 
 ## 12. Interactions, decisions, what is left out
 
@@ -1343,7 +1363,7 @@ Wire:
 | Hammer | Rail |
 |---|---|
 | A shove on a charging tank | The charge holds; the skid carries it, facing kept |
-| The hammer's trouble cells (`hammer_field`) | A charging enemy's rail lane is trouble: a hammer enemy shoves a seat into it, through cover, whatever the range |
+| The hammer's trouble (`lands_in_trouble`) | A charging enemy rail's lane is trouble where the shove leaves the seat at rest: a hammer enemy shoves a seat into it, through cover, whatever the range |
 | A hammer tell in a rail lane | The tell holds (the special tier is above the dodge); the slug goes through the tank |
 | The skid, the knock | The rail's recoil is a knock: one skid model, one validator allowance |
 | The wave and the slug | Independent: neither stops nor triggers the other |
@@ -1354,10 +1374,10 @@ Wire:
 
 | EMP | Rail |
 |---|---|
-| The ring reaches a charging tank | The charge lapses (`disable` calls `lapse_charge`); the special is offline, so no charge starts for `emp_disable_seconds` |
+| The ring reaches a charging tank | The charge is cleared (`Tank::disable`); the special is offline, so no charge starts for `emp_disable_seconds` |
 | A disabled tank carrying the rail | Its module shows the idle cell; its slugs are kept |
 | A seat charging a rail within an EMP enemy's ring | Worth `emp_ai_special_value` as any seat carrying an online special: the pulse kills the charge |
-| The dangers and the dodge | One tier, one latch: the EMP's disc and the rail's lane; the edge hold serves both |
+| The dangers and the dodge | One tier, one latch, one held exit walked to on foot: the EMP's disc and the rail's lane; the edge hold is the lane's (the disc keeps its slack band) |
 | The EMP brawler's approach | Keeps out of a charging rail's lane (`out_of_danger`) |
 | `WPN OFFLINE` and the charge gauge | Never at once: an offline special cannot charge |
 | The online claim | The rail's and the EMP's presses claim their own events |
@@ -1381,9 +1401,10 @@ Wire:
    would otherwise kill a frog outright, and a hunter with a rail would end
    a Protect round from across the field in one charge. Two slugs kill a
    frog. *For Oto.*
-4. **An enemy's slug is lighter than a seat's** (60 against 110): the
+4. **An enemy's slug is lighter than a seat's** (60 against 120): the
    shells' split, so a seat survives one slug at full health and an enemy
-   does not.
+   does not - even through three tiles of cover (120 x 0.95^3 = 103), the
+   shot the armory's screen is built for; at 110 it fell short (94).
 5. **A rainbow shield soaks one slug whole** (and shatters), through the
    ordinary `take_damage` seam, and the slug flies on: the shield is the
    counter to a slug aimed at you, not to one aimed past you. Rejected:
@@ -1428,19 +1449,56 @@ Wire:
 16. **The AI counts a seat it can see by the sky's range, through cover,
     not hidden** - the alert's own rule made exact - rather than reading
     the alert point, which is the same position whenever it is fresh.
-17. **Lanes are dangers, an edge hold and a surcharge** together: the
-    surcharge routes round a short lane, the danger empties the lane, the
-    edge hold keeps it empty without the dodge's back-and-forth.
+17. **Lanes are dangers and an edge hold** together: the danger empties
+    the lane, the edge hold keeps it empty without the dodge's
+    back-and-forth.
 18. **The pierce bursts are part of the slug's picture**, composed from its
     age, so a replica and the shooter's own client draw them alike from the
     leg; `Hit` adds only the flash.
 19. **The crate cooks off**, as the laser's and the plasma's do: slugs and
     charged capacitors.
-20. **Crate ink jade** (`#36E07A`). *For Oto*, with a screenshot of the
-    crate beside the other fifteen in Phase 2.
+20. **Crate ink hot magenta** (`#FF3DD8`): jade, the designed ink, was
+    rendered beside the other fifteen crates and the grass and read as
+    green on green; magenta is the most distinct of the candidates and
+    nothing on the field shares it (§5). *For Oto*, with the comparison.
 21. **The module on the laser's cheek**, not the roof: a rail reads as a gun
     along the turret, and the roof hardpoint already holds the missiles,
     grenades, hammer and EMP.
+22. **No route surcharge on a lane**, though the design had one
+    (`gauss_ai_lane_cost`): a lane runs to a permanent tile or the field's
+    edge and lives a second or two, so a surcharge only flipped the flow
+    field between a detour and the straight route each time a charge
+    started and ended. The armed sweeps read the same with it at 16 and at
+    0; the edge hold and the danger do the work.
+23. **A charging enemy stands its ground**, though the design had it creep
+    along its lane (`gauss_ai_creep_min_px`): creeping in and being thrown
+    back a cell by each release kept moving the cell it stood in, and on
+    the study map a tank chasing a seat behind it swung north and south
+    the whole round and never arrived (`never-arrived` on frontier 0x3e9;
+    gone without the creep, as the low-progress and tank-grind on
+    frog-block 0x3eb were). The seat's crawl is unchanged.
+24. **A friend beyond the target does not hold the rail**: only one between
+    the shooter and its seat (or quarry) does, as a friend in the line holds
+    a shell. Holding fire for any friend down the lane left two rail tanks
+    either side of a seat on its row each waiting on the other, the rest
+    queued behind them (frog-block 0x3eb: tank-grind and low-progress); the
+    slug flies on into the far one, as a shell that misses would. A lane
+    that scores on player towers alone is no target either: the rule waits
+    for a seat or the quarry to release at.
+25. **The rail's light is a cold blue off the palette** (`RAIL_LIGHT`): the
+    ramp's teal, added over the grass, read as green in the screenshots;
+    the blocks keep the ramp.
+26. **A release reaches the room a tick after the key comes up**, on the
+    packet after the fire hold's (`client::FIRE_HOLD_TICKS`, which keeps a
+    tap from being lost between two samples): the client's sandbox steps
+    the same packets, so its slug and the room's leave on the same tick.
+27. **A charge starts a cell inside the box; it is released anywhere in
+    it** (`gauss_ai_box_margin_px`): a tank at the box's very edge charged,
+    drifted a pixel out while it held and vented, over and over (frontier
+    0x3eb, the whole round). The margin is the hysteresis, and at a cell a
+    charge on a seat's row starts within the attack range (336 of 340 px),
+    where every other enemy engages - the probe's `never-arrived` measures
+    arrival by that range.
 
 ### Not in this PR
 
@@ -1448,8 +1506,8 @@ Wire:
 - An aim line for a charging seat, and a warning to a teammate standing in
   its lane - HUD design of their own; the glow and friendly fire are the
   warning for now.
-- The danger, surcharge and lane warning following a charging slug's legs
-  past a portal - the exit is the room's draw at the release.
+- The danger and the lane warning following a charging slug's legs past a
+  portal - the exit is the room's draw at the release.
 - The prediction report's crossing counts for slugs (`crossings_hit`,
   `crossings_missed`, docs/online-coop-prd.md decision 9) - the room's
   `Hit`s already say what a slug went through.
@@ -1460,47 +1518,36 @@ Wire:
 - Breaking crates, shooting down missiles or shells, or putting fires out
   with the slug - each a mechanic of its own beyond the issue.
 
-### Needs from the shared path
+### What this PR adds to the shared path
 
-What this design takes from the hammer's and the EMP's implementation
-beyond what their docs give:
+The hammer's and the EMP's hooks as they shipped took the rail with these
+additions, kept general for the rod (BB-41) and whatever charges after it:
 
-1. **`special_rule`'s first arm generalised** to "a wind-up in progress
-   belongs to its weapon's rule", and **`act_special` open to two more
-   uses** (`SpecialUse::Charge`, `Release`) that hold or let go of the
-   trigger, the fire timer consulted only to start one.
-2. **The tell's arrow built from a general wind-up** - `TankView::windup`
-   (weapon, progress) rather than a tell alone - with room on
-   `ArrowKind::Tell` for a `LaneWarning`.
-3. **`Game::knock` with an echo switch**: the shooter's own recoil is not
-   put on `Frame::shoves`, but still sets `seat_knock`; and the skid's
-   friction on dry ground public (`sonic::skid_friction(grip)`), so the rail
-   sizes its recoil in cells.
-4. **`presses_drawn` claiming per kind through `WireEvent::press_show`**
-   (the rail's is `RailSlug { leg: 0 }`), and `Show::OwnShotsDrawn` able to
-   leave out other events of the seat's own (its `ChargeEnded`).
-5. **`Predictor::pull_trigger` given the release edge** and the edge
-   `predict_seat` reports; `predict_seat` taking the local gate (and its
-   history replaying the gate it had live); `PressShow` and
-   `Game::draw_press_show(seat, ..)` open to the rail's and the charge
-   end's arms; `seed_gate`'s arm.
-6. **`DangerShape` an open enum** with `depth`/`exit` per shape, and the
-   `dodge` tier's latch and `out_of_danger` shape-blind, so `Lane` is one
-   arm; the edge hold sits beside them.
-7. **The EMP's `Tank::disable` calling `lapse_charge`** (the field is this
-   PR's; the call is the line this PR adds to it), and `special()` /
-   `active_weapon()` as the EMP splits them.
-8. **One place in `enemy_phase`'s collect pass** where an enemy's trigger
-   meets the simulation (where a tell starts), so a charge weapon's trigger
-   is routed there every tick, pressed or not; and the far coast's intent
-   built in one place (`field::mind`), so a charging trigger stays down.
-9. **`HitCause` on `Event::Hit`** and its wire mirror, to add `Rail`.
-10. **The C2 `UnitView`'s skip list** (the EMP's `disabled`), to add
-    `charging`.
-11. **The probe's deliberate holds** (the tell, the skid, disabled) as one
-    list, to add a charge and the edge hold.
-12. **`SPAWN_SWAPS` and `SEEK_SPECIALS`** as tables (as both docs have them).
-13. **The armory**: the reserved cell 7,6 free, and 30,12, 27,8..11 and
-    33..34 x 8..9 left free by weapons 1 and 2.
-14. **The weapon slot's drawing** (the EMP's `WPN OFFLINE`, `WEAPON_SLOT_W`)
-    leaving the count's slot to be replaced by a gauge.
+1. **The charge-and-hold pattern** on `Tank`: `Trigger`/`ActiveWeapon::trigger`,
+   `ChargeRule`/`charge_rule`, `Charge`, `ChargeStage`, `ChargeEdge`,
+   `ChargeEnd`, `step_charge` with the hold report's clamp, `charge_pace`,
+   `Tank::windup` answering a charge; `drive_player` and `enemy_trigger`
+   routing a charge weapon's trigger every tick; `coast_enemy` holding a
+   charging trigger down.
+2. **The AI hook**: `windup_rule`'s charge arm (a charge is its weapon's to
+   hold or let go, never `None`), `SpecialUse::{Charge, Release}` in
+   `act_special`, `DangerShape::Lane` beside the EMP's disc (its `depth`,
+   `exits` the dodge walks to and holds, `posts`, `middle`), the edge hold
+   (`enters_lane`, `Ai::kept_out`), `command::Busy::Charging`.
+3. **The knock**: `sonic::knock_hull` (the hull's half alone, for the
+   prediction sandbox) and `knock_with`'s echo switch; `Shoves::allow_knock`
+   for a knock the room puts on no `Shoved`.
+4. **The prediction**: `Game::predict_seat_with` (the trigger stepped in the
+   room's order, its edge reported), the predictor's history keeping each
+   tick's press edge and gate, `PressShow::{Rail, ChargeEnd}`,
+   `Game::draw_rail_press`, `Game::{seat_charge, set_seat_charge}`,
+   `PresentWorld::rail_trace`.
+5. **The hold report**: `Mailbox::hold_ticks`, `authority::take_hold`,
+   `Game::set_seat_hold` - in the room server's tick and the rig's.
+6. **The wind-up arrow's lane**: `ArrowKind::Windup { lane }`, set from
+   `TankView::lane` for a charging rail.
+7. **The weapon slot's gauge**: `WeaponSlot::charge` drawn in the count's
+   place by `draw_weapon_readout`.
+8. **The probe's holds**: a charge (`TankSnapshot::charging`) beside the
+   tell, the skid and a wait at a danger's edge.
+9. Small: `Dir::opposite`, `ChargeStage::name`, `grass::flatten_along`.
