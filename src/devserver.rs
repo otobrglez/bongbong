@@ -312,7 +312,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "rod_call",
-        description: "Call a rod from god onto the map cell nearest (x, y) at once (docs/rod-from-god.md): player 1's call, the kills credited to it, or with enemy=true an enemy's. It stands for rod_countdown_seconds and lands like any other. Refused outside the field. Draws no RNG. Returns the call's id and cell.",
+        description: "Call a rod from god onto the map cell nearest (x, y) at once (docs/rod-from-god.md): player 1's call, the kills credited to it, or with enemy=true an enemy's. It stands for rod_countdown_seconds and lands like any other. Refused outside the field. Draws no RNG. Returns the call's id, its cell and the round time it lands at.",
         schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"enemy":{"type":"boolean","default":false}},"required":["x","y"]}"#,
         read_only: false,
         destructive: false,
@@ -1714,7 +1714,8 @@ impl DevServer {
                     match game.debug_call_rod(at, enemy) {
                         Some(id) => {
                             let cell = crate::map::world_to_cell(at);
-                            Ok(json!({ "id": id, "cell": [cell.0, cell.1] }))
+                            let land = game.zones().iter().find(|z| z.id == id).map_or(0.0, |z| z.until);
+                            Ok(json!({ "id": id, "cell": [cell.0, cell.1], "land": land }))
                         }
                         None => Err("(x, y) is off the field".to_string()),
                     }

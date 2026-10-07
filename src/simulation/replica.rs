@@ -72,6 +72,8 @@ pub struct DrawableTank {
     pub offline: bool,
     /// The whole ticks a charge has been held (`Charge::ticks`), 0 for none.
     pub charge: u32,
+    /// The cell its rod's reticle stands on (`Tank::reticle`).
+    pub reticle: Option<(i32, i32)>,
 }
 
 /// One FPV drone as the picture shows it (`fpv::Drone`): where it is, how
@@ -214,6 +216,15 @@ pub struct DrawableState {
     /// Every lantern on the ground: its id, where it stands in quarter
     /// pixels and its seat.
     pub lamps: Vec<(u16, i32, i32, u8)>,
+    /// Every zone standing (docs/rod-from-god.md), the room's alone - a
+    /// client's provisional ones are its own drawing: its id's low sixteen
+    /// bits (the wire's key), its wire kind, its cell and when it ends, in
+    /// ticks.
+    pub zones: Vec<(u16, u8, (i32, i32), u32)>,
+    /// Every crater cell, sorted.
+    pub craters: Vec<(i32, i32)>,
+    /// Each volcano's shift (`Volcano::shift`).
+    pub volcano_shifts: Vec<i32>,
     /// The wave (0 under the band plan), live enemies, tanks still to
     /// roll in, the intro banner's and the end screen's time left in
     /// tenths, and the outcome.
@@ -397,6 +408,7 @@ impl Game {
                 disabled: t.disabled > 0.0,
                 offline: t.special_offline > 0.0,
                 charge: t.charge.map_or(0, |c| c.ticks()),
+                reticle: t.reticle.map(|r| r.cell),
             })
             .collect();
         tanks.sort_by_key(|t| t.slot);
@@ -553,6 +565,14 @@ impl Game {
             tiles,
             fires,
             lamps,
+            zones: self
+                .zones
+                .iter()
+                .filter(|z| !z.provisional())
+                .map(|z| ((z.id & 0xFFFF) as u16, z.wire_kind(), z.rod().map_or((0, 0), |c| c.cell), (z.until / crate::PHYSICS_FIXED_DT).round() as u32))
+                .collect(),
+            craters: self.craters.cells().collect(),
+            volcano_shifts: self.volcanoes.iter().map(|v| v.shift).collect(),
             wave: wave.map_or(0, |w| w.index),
             alive: wave.map_or(0, |w| w.alive),
             pending: wave.map_or(0, |w| w.pending),
