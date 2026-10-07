@@ -109,6 +109,52 @@ pub enum SpecialSense {
     Gauss(GaussSense),
     Fpv(FpvSense),
     Rod(RodSense),
+    Well(WellSense),
+}
+
+/// What an enemy carrying the gravity well is handed this frame
+/// (`Game::well_senses`, docs/gravity-well.md "What it is handed"): every
+/// seat in its plan already held to the sight-box rule and to what the
+/// tank knows.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WellSense {
+    /// What a launch now would be for, `None` when nothing qualifies.
+    pub plan: Option<WellPlan>,
+    /// Its orb in flight: how far it has flown and whether, where it
+    /// stands now, anchoring would drag more allies than seats.
+    pub orb: Option<(f32, bool)>,
+}
+
+/// A well tank's launch (`WellSense::plan`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WellPlan {
+    /// The facing to launch along and how far along it to anchor (px from
+    /// the gun line's muzzle).
+    pub face: Dir,
+    pub anchor_px: f32,
+    /// The seat the well is used on - the lowest seat it counts - what
+    /// `Ai::shot_at_seat` records at the launch.
+    pub at_seat: Option<u8>,
+    /// "clump", "trouble", "guard" or "shield": the trace's word.
+    pub why: &'static str,
+}
+
+/// A gravity well's pull on an enemy this frame (`Game::pull_senses`,
+/// docs/gravity-well.md "The `pull` tier"), set before it thinks: handed
+/// to every enemy whose centre lies within a forming or pulling well's
+/// reach, or within `enemy_danger_clear_px` past it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PullSense {
+    /// The centre of the well whose pull is strongest on it (the lower id
+    /// on a tie) and the field's pull there - at the pull's start for a
+    /// forming well.
+    pub core: Position,
+    pub pull: Vec2,
+    /// It is heavy (`tank_mass_factor` at or over `well_ai_heavy_mass`) and
+    /// its tracks hold broadside where it stands (`well::holds_broadside`).
+    pub brace: bool,
+    /// Its centre stands inside a reach, not only within the clear margin.
+    pub inside: bool,
 }
 
 /// What an enemy carrying the rod from god is handed this frame
@@ -533,6 +579,13 @@ enum SpecialUse {
     /// as `Fire` along the facing it has, the want handed to the launch
     /// (`Ai::air_want`). `at_seat` is the seat it is used on.
     Launch { want: crate::fpv::AirWant, at_seat: Option<u8>, why: &'static str },
+    /// Launch a gravity well's orb facing `face` (docs/gravity-well.md): as
+    /// `Fire`, with the distance its rule anchors it at remembered
+    /// (`Ai::well_anchor_px`).
+    Orb { face: Dir, anchor_px: f32, at_seat: Option<u8>, why: &'static str },
+    /// Press the trigger to anchor the orb in flight, facing `face`: an
+    /// edge that touches neither the fire timer nor `shot_at_seat`.
+    Anchor { face: Dir },
 }
 
 /// The BB-36 weapons' crates an enemy detours for, in the order it wants
@@ -826,6 +879,18 @@ pub struct Ai {
     /// The arm of the `air` tier it ran this tick ("flak", "tree",
     /// "canopy", "break"), `None` when it ran none. Inspection only.
     air_why: Option<&'static str>,
+    /// A gravity well's pull on it this frame (`Game::pull_senses`), set
+    /// before it thinks; what the `pull` tier answers.
+    pub(crate) pull: Option<PullSense>,
+    /// The way it escapes a pull along (`act_pull`), latched until it
+    /// stands `enemy_danger_clear_px` outside every reach.
+    pub(crate) pull_escape: Option<Dir>,
+    /// The arm of the `pull` tier it ran this tick ("brace", "across"),
+    /// `None` when it ran none. Inspection only.
+    pull_why: Option<&'static str>,
+    /// How far its orb flies before its rule anchors it (px from the
+    /// muzzle): its plan's, set at the launch (`SpecialUse::Orb`).
+    well_anchor_px: f32,
 }
 
 /// The memory a tank carries only on a field map
@@ -903,6 +968,8 @@ pub struct AiSnapshot {
     pub special: Option<&'static str>,
     /// The `air` tier's last arm (`Ai::air_why`).
     pub air: Option<&'static str>,
+    /// The arm of the `pull` tier it ran this tick (docs/gravity-well.md).
+    pub pull: Option<&'static str>,
     /// Its brain is off (`Ai::down`).
     pub down: bool,
     /// Backing out of a danger (`Ai::dodging`).
@@ -969,6 +1036,10 @@ impl Default for Ai {
             place_waited: 0.0,
             air_threat: None,
             air_why: None,
+            pull: None,
+            pull_escape: None,
+            pull_why: None,
+            well_anchor_px: 0.0,
         }
     }
 }
@@ -1154,6 +1225,7 @@ impl Ai {
         self.kept_out = false;
         self.air_want = None;
         self.air_why = None;
+        self.pull_why = None;
         let mut bb = Brain {
             me,
             player,
@@ -1276,6 +1348,7 @@ impl Ai {
             escapes: self.escapes,
             special: self.special_why,
             air: self.air_why,
+            pull: self.pull_why,
             down: self.down,
             dodging: self.dodging,
             kept_out: self.kept_out,
@@ -1401,6 +1474,24 @@ impl Ai {
     /// Whether it is backing out of a danger (`dodging`, the latch).
     pub(crate) fn dodging(&self) -> bool {
         self.dodging
+    }
+
+    /// Whether its `pull` tier ran this tick: bracing or driving across a
+    /// gravity well's pull.
+    pub(crate) fn pulled(&self) -> bool {
+        self.pull_why.is_some()
+    }
+
+    /// Whether it braced broadside in a pull this tick (the `pull` tier's
+    /// "brace").
+    pub fn bracing(&self) -> bool {
+        self.pull_why == Some("brace")
+    }
+
+    /// Whether it held still for its orb in flight this tick (the well's
+    /// rule's `Hold "orb"` or its anchor press).
+    pub fn anchoring(&self) -> bool {
+        matches!(self.special_why, Some("orb") | Some("anchor"))
     }
 
     /// Whether it waited outside a danger this tick (`kept_out`).
@@ -2378,6 +2469,13 @@ impl Brain<'_> {
         q.x > 0.0 && q.y > 0.0 && q.x < self.width && q.y < self.height && self.grid.usable(q) && self.grid.connected(self.me.position, q)
     }
 
+    /// Whether it stands inside a gravity well's pull it does not brace
+    /// against (docs/gravity-well.md): its special's use yields to the
+    /// `pull` tier.
+    fn yields_to_pull(&self) -> bool {
+        self.ai.pull.is_some_and(|p| p.inside && !p.brace)
+    }
+
     /// Whether this tank's centre stands inside a call's circle: a danger
     /// nobody owns (`Zone::danger`, docs/rod-from-god.md).
     fn in_call(&self) -> bool {
@@ -2893,7 +2991,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         // danger, which it backs out of first (1.6) - a drone's burst is a
         // scratch beside what a danger holds.
         sequence(vec![
-            condition(|b: &mut Brain| b.ai.air_threat.is_some() && b.me.windup().is_none() && b.danger_here().is_none()),
+            condition(|b: &mut Brain| b.ai.air_threat.is_some() && b.me.windup().is_none() && b.danger_here().is_none() && !b.yields_to_pull()),
             action("air", act_air),
         ]),
         // 1.5. The special carried has a use of its own this tick
@@ -2921,6 +3019,20 @@ fn build<'a>() -> Node<Brain<'a>> {
                 here
             }),
             action("dodge", act_dodge),
+        ]),
+        // 1.65. In a gravity well's pull (docs/gravity-well.md "The `pull`
+        // tier"): a heavy chassis whose tracks hold braces broadside, any
+        // other drives across the pull on its own side of the core -
+        // latched until clear of every reach by `enemy_danger_clear_px`.
+        // Not under a tell, which commits.
+        sequence(vec![
+            condition(|b: &mut Brain| {
+                if b.ai.pull.is_none() {
+                    b.ai.pull_escape = None;
+                }
+                b.me.tell.is_none() && b.ai.pull.is_some_and(|p| p.inside || b.ai.pull_escape.is_some())
+            }),
+            action("pull", act_pull),
         ]),
         // 2. Flee when badly damaged and the player is still a threat.
         // Takes priority over the ammo-based retreat below: survival first.
@@ -3209,11 +3321,18 @@ fn act_seek_special(b: &mut Brain) -> Status {
 /// use this tick - the tree goes on.
 fn special_rule(b: &Brain) -> Option<SpecialUse> {
     if let Some(windup) = b.me.windup() {
+        // A charge is let go in a pull it does not brace against
+        // (docs/gravity-well.md); a tell, half a second long, commits.
+        if b.me.charge.is_some() && b.yields_to_pull() {
+            return Some(SpecialUse::Drop { why: "pull" });
+        }
         return windup_rule(b, windup);
     }
     // A call stands over it (docs/rod-from-god.md "Reacting to a call"): no
-    // special is used from inside the circle; the dodge takes it out.
-    if b.in_call() {
+    // special is used from inside the circle; the dodge takes it out. Nor
+    // from inside a pull it does not brace against: the `pull` tier takes
+    // it out.
+    if b.in_call() || b.yields_to_pull() {
         return None;
     }
     match (b.me.active_weapon(), b.sense) {
@@ -3222,8 +3341,68 @@ fn special_rule(b: &Brain) -> Option<SpecialUse> {
         (ActiveWeapon::GaussRail, SpecialSense::Gauss(sense)) => gauss_rule(b, sense),
         (ActiveWeapon::FpvSwarm, SpecialSense::Fpv(sense)) => fpv_rule(b, sense),
         (ActiveWeapon::RodFromGod, SpecialSense::Rod(sense)) => rod_rule(b, sense),
+        (ActiveWeapon::GravityWell, SpecialSense::Well(sense)) => well_rule(b, sense),
         _ => None,
     }
+}
+
+/// The gravity well's rule (docs/gravity-well.md "The rule"): its orb in
+/// flight owns the trigger - a press the tick it has flown its plan's
+/// distance and anchoring there drags no more allies than seats, the
+/// trigger released before -; a training dummy never launches, nor does a
+/// tank still cooling; a plan launches.
+fn well_rule(b: &Brain, sense: &WellSense) -> Option<SpecialUse> {
+    let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+    if b.me.orb.is_some() {
+        return Some(match sense.orb {
+            Some((flown, drags)) if flown >= b.ai.well_anchor_px && !drags => SpecialUse::Anchor { face: facing },
+            _ => SpecialUse::Hold { face: facing, why: "orb" },
+        });
+    }
+    if b.ai.frog_only || b.me.fire_cooldown > 0.0 || b.ai.fire_timer > 0.0 {
+        return None;
+    }
+    let plan = sense.plan?;
+    Some(SpecialUse::Orb { face: plan.face, anchor_px: plan.anchor_px, at_seat: plan.at_seat, why: plan.why })
+}
+
+/// The `pull` tier (docs/gravity-well.md): a heavy chassis whose tracks
+/// hold turns broadside - the cardinal across the pull nearer its bearing
+/// to the seat it fights - and stands, firing on a seat lined up along
+/// that facing as the attack tier fires; any other drives across the pull
+/// on its own side of the core (`well::escape_dir`), the way latched while
+/// it stays open (`Ai::pull_escape`). No RNG but the attack's own shot.
+fn act_pull(b: &mut Brain) -> Status {
+    let Some(pull) = b.ai.pull else { return Status::Failure };
+    b.reset_aim();
+    let me = b.me.position;
+    let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+    if pull.brace && pull.inside {
+        let face = crate::well::brace_dir(me, pull.core, Some(b.player.position), facing);
+        b.ai.pull_why = Some("brace");
+        b.ai.pull_escape = None;
+        let (fire_dir, off_axis, in_front) = b.aim_alignment();
+        let at_seat = !b.hunting_frog();
+        if fire_dir == face && off_axis <= tuning().enemy_fire_align_px && in_front && b.line_of_sight && (!at_seat || b.may_fire_at_seat()) {
+            let range = b.dist_to_target();
+            b.hold_and_fire(face, range, at_seat.then_some(b.ai.target_player));
+        } else {
+            b.intent.face = Some(face);
+            b.ai.commit(face);
+        }
+        return Status::Success;
+    }
+    let open = |d: Dir| b.walls_ahead[d.index()].is_none() && !b.grid.blocked_ahead(me, d.vec());
+    let way = b.ai.pull_escape.filter(|&d| open(d)).or_else(|| crate::well::escape_dir(me, pull.core, open));
+    let Some(way) = way else {
+        b.ai.pull_escape = None;
+        return Status::Failure;
+    };
+    b.ai.pull_escape = Some(way);
+    b.ai.pull_why = Some("across");
+    b.ai.commit(way);
+    b.intent.move_dir = Some(way);
+    Status::Success
 }
 
 /// The rod from god's rule with no reticle up (docs/rod-from-god.md "The
@@ -3849,11 +4028,29 @@ fn act_special(b: &mut Brain) -> Status {
             b.ai.special_why = Some(why);
             b.intent.fire = false;
             b.intent.drop_charge = true;
-            // Under a call the tree goes on, to the dodge; a target lost
-            // only ends the tick standing as it was.
-            if b.in_call() {
+            // Under a call or in a pull the tree goes on, to the dodge or
+            // the `pull` tier; a target lost only ends the tick standing as
+            // it was.
+            if b.in_call() || b.yields_to_pull() {
                 return Status::Failure;
             }
+        }
+        SpecialUse::Orb { face, anchor_px, at_seat, why } => {
+            b.intent.face = Some(face);
+            b.ai.commit(face);
+            b.ai.special_why = Some(why);
+            if b.ai.fire_timer <= 0.0 && b.me.fire_cooldown <= 0.0 {
+                b.intent.fire = true;
+                b.ai.fire_timer = special_fire_interval(b.me.active_weapon());
+                b.ai.shot_at_seat = at_seat;
+                b.ai.well_anchor_px = anchor_px;
+            }
+        }
+        SpecialUse::Anchor { face } => {
+            b.intent.face = Some(face);
+            b.ai.commit(face);
+            b.ai.special_why = Some("anchor");
+            b.intent.fire = true;
         }
     }
     Status::Success
@@ -3868,6 +4065,7 @@ fn special_fire_interval(weapon: ActiveWeapon) -> f32 {
         ActiveWeapon::GaussRail => tuning().gauss_ai_fire_interval,
         ActiveWeapon::FpvSwarm => tuning().fpv_enemy_gap_seconds,
         ActiveWeapon::RodFromGod => tuning().rod_ai_fire_interval,
+        ActiveWeapon::GravityWell => tuning().well_ai_fire_interval,
         _ => tuning().enemy_fire_interval,
     }
 }

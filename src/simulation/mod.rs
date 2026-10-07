@@ -3715,11 +3715,18 @@ impl Game {
         // A seat a rod's call holds is herded (docs/rod-from-god.md
         // "Herding"): its ring stands round the call's middle, the firing
         // slots out past the call's danger.
+        // A seat a pulling enemy well holds is herded the same way round
+        // its core, the firing slots outside the pull (docs/gravity-well.md
+        // "The group fires into the clump").
+        let zones = &self.zones;
         let herd_of = |pos: Position| -> (Position, Option<f32>) {
             let t = tuning();
-            match self.zones.iter().find(|z| z.rod().is_some() && z.holds(pos, &t)) {
+            match zones.iter().find(|z| z.rod().is_some() && z.holds(pos, &t)) {
                 Some(z) => (z.centre, Some(t.rod_ai_herd_px.max(z.danger_radius(&t) + t.enemy_danger_clear_px + crate::pyro::BLOCK))),
-                None => (pos, None),
+                None => match well::enemy_well_holding(zones, pos) {
+                    Some(core) => (core, Some(t.well_ai_herd_px)),
+                    None => (pos, None),
+                },
             }
         };
         if engaged[0].len() >= 2 {
@@ -3823,11 +3830,15 @@ impl Game {
             }
         }
 
+        // Where each crate lies - a well's drift taken in - less one inside
+        // a pull, which the seeks leave alone (docs/gravity-well.md).
+        let pulling = self.zones.iter().any(|z| z.well().is_some());
         let pickups: Vec<(PickupKind, Position)> = self
             .world
             .query::<&Pickup>()
             .iter()
-            .map(|p| (p.kind, p.position))
+            .map(|p| (p.kind, p.at()))
+            .filter(|&(_, at)| !pulling || !self.in_a_pull(at))
             .collect();
 
         // Breach perception: what a shell fired each way would hit within
@@ -3936,6 +3947,21 @@ impl Game {
         } else {
             BTreeMap::new()
         };
+        // What each well-carrying enemy would launch for (docs/gravity-
+        // well.md "AI"): only when one carries an online well or has an orb
+        // out. And the pull on every enemy near a well, for its `pull`
+        // tier: only with a well standing.
+        let well_senses = if self.any_well() {
+            let seats: Vec<well::WellSeat> = players
+                .iter()
+                .enumerate()
+                .map(|(i, p)| well::WellSeat { seat: i as u8, entity: p.entity, pos: p.pos, live: !p.wreck && !p.entering, concealed: p.concealed, sight: p.sight })
+                .collect();
+            self.well_senses(f, &seats)
+        } else {
+            BTreeMap::new()
+        };
+        let pull_senses = if pulling { self.pull_senses() } else { BTreeMap::new() };
         let air_threats = self.air_threats(grid);
 
         // --- collect pass: perception, `think`, aim and fire, exactly as
@@ -4001,6 +4027,7 @@ impl Game {
                 ai.set_grudge_sight(sight);
             }
             ai.air_threat = air_threats.get(&entity).copied();
+            ai.pull = pull_senses.get(&entity).copied();
             let (mut target, mut hunting) = target_of(ai, tank);
             // A hunter that cannot route to the frog and holds no slot on
             // its ring (every slot rejected: off the map, unreachable from
@@ -4095,6 +4122,7 @@ impl Game {
                         .or_else(|| gauss_senses.get(&entity).map(|s| SpecialSense::Gauss(*s)))
                         .or_else(|| fpv_senses.get(&entity).map(|s| SpecialSense::Fpv(*s)))
                         .or_else(|| rod_senses.get(&entity).map(|s| SpecialSense::Rod(*s)))
+                        .or_else(|| well_senses.get(&entity).map(|s| SpecialSense::Well(*s)))
                         .unwrap_or(SpecialSense::None),
                     &dangers,
                 )
@@ -4126,6 +4154,8 @@ impl Game {
                 charging: tank.charge.is_some(),
                 clearing: ai.clearing(),
                 dodging: ai.dodging(),
+                pulled: ai.pulled(),
+                anchoring: ai.anchoring(),
             });
         }
 
@@ -4159,6 +4189,10 @@ impl Game {
                         Some(command::Busy::Disabled)
                     } else if p.charging {
                         Some(command::Busy::Charging)
+                    } else if p.pulled {
+                        Some(command::Busy::Pulled)
+                    } else if p.anchoring {
+                        Some(command::Busy::Anchoring)
                     } else {
                         None
                     },
@@ -5452,6 +5486,11 @@ impl Game {
                     fpv_drones: tank.fpv_drones,
                     fpv_out: tank.fpv_out,
                     rods: tank.rods,
+                    wells: tank.wells,
+                    orb_out: tank.orb.is_some(),
+                    pulled: tank.body.is_some() && self.well_field.strongest(tank.position, &tuning()).is_some(),
+                    bracing: ai.is_some_and(Ai::bracing),
+                    anchoring: ai.is_some_and(Ai::anchoring),
                     charging: tank.charge.is_some(),
                     disabled: tank.is_disabled(),
                     kept_out: ai.is_some_and(Ai::kept_out),
@@ -5524,6 +5563,17 @@ pub struct TankSnapshot {
     pub fpv_out: u8,
     /// Rods left to call (`Tank::rods`).
     pub rods: i32,
+    /// Wells left in its projector (`Tank::wells`) and whether its orb is
+    /// in flight (`Tank::orb`).
+    pub wells: i32,
+    pub orb_out: bool,
+    /// Standing in a gravity well's pull this tick (docs/gravity-well.md):
+    /// dragged where it did not ask to go.
+    pub pulled: bool,
+    /// Braced broadside in a pull (`Ai::bracing`): standing on purpose.
+    pub bracing: bool,
+    /// Holding still for its orb in flight (`Ai::anchoring`): on purpose.
+    pub anchoring: bool,
     /// Holding a charge on its trigger (`Tank::charge`, a gauss rail or a
     /// rod's reticle): crawling or standing on purpose.
     pub charging: bool,
@@ -5626,6 +5676,10 @@ struct Pending {
     clearing: Option<f32>,
     /// Backing out of a danger on its own (`Ai::dodging`).
     dodging: bool,
+    /// In a gravity well's pull (`Ai::pulled`) or holding for its orb
+    /// (`Ai::anchoring`): the commander leaves it alone.
+    pulled: bool,
+    anchoring: bool,
 }
 
 /// What the ground and the sky do to a hull's drive this frame
@@ -5742,6 +5796,8 @@ fn coast_enemy(physics: &mut Physics, f: &mut Frame, entity: Entity, tank: &mut 
         charging: tank.charge.is_some(),
         clearing: None,
         dodging: false,
+        pulled: false,
+        anchoring: false,
     }
 }
 

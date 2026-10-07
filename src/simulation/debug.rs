@@ -230,6 +230,12 @@ pub struct TankDebug {
     /// Rods left to call (`Tank::rods`); left out while 0.
     #[serde(skip_serializing_if = "is_zero_i32")]
     pub rods: i32,
+    /// Wells left in its projector (`Tank::wells`); left out while 0.
+    #[serde(skip_serializing_if = "is_zero_i32")]
+    pub wells: i32,
+    /// Its orb in flight (`Tank::orb`): the orb's id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orb: Option<u32>,
     /// The cell its rod's reticle stands on (`Tank::reticle`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reticle: Option<(i32, i32)>,
@@ -661,6 +667,8 @@ impl Game {
                     fpv: tank.fpv_drones,
                     fpv_out: tank.fpv_out,
                     rods: tank.rods,
+                    wells: tank.wells,
+                    orb: tank.orb,
                     reticle: tank.reticle.map(|r| r.cell),
                     charge: tank.charge.map(|c| (c.weapon.name(), r1(c.held), c.stage().name())),
                     tell: tank.tell.map(|t| (t.weapon.name(), r1(t.left))),

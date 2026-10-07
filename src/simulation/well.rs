@@ -13,7 +13,7 @@
 //! through the fixed-step loop (`Projectile::bend`), on grenades, missiles
 //! and drones where they move. The well draws no RNG of its own.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hecs::Entity;
 
@@ -31,7 +31,7 @@ use crate::zone::{Zone, ZoneKind};
 use crate::{MAX_DAMAGE, OBSTACLE_GRID_SIZE, Position};
 
 use super::props::{BlastShape, PendingBlast};
-use super::{Event, Frame, Game, HitCause, HitTarget, Spectacle};
+use super::{Event, Footing, Frame, Game, HitCause, HitTarget, Spectacle};
 
 /// An orb launched this frame, waiting for `place_orbs` to put it in the
 /// world.
@@ -811,6 +811,297 @@ impl Game {
         self.show(show);
         Some((id, until))
     }
+}
+
+/// A seat as the well's senses read it (`Game::well_senses`).
+pub(super) struct WellSeat {
+    pub seat: u8,
+    pub entity: Entity,
+    pub pos: Position,
+    pub live: bool,
+    pub concealed: bool,
+    /// How far an enemy sees it (`Game::sight_on`).
+    pub sight: f32,
+}
+
+/// The step between two anchor points the senses weigh along a line
+/// (docs/gravity-well.md "The candidates").
+const WELL_AI_STEP_PX: f32 = 16.0;
+
+/// The step a seat's line to an anchor is sampled at for trouble: the
+/// hammer's.
+const TROUBLE_STEP_PX: f32 = 8.0;
+
+impl Game {
+    /// Whether some live enemy on the field carries an online well or has
+    /// an orb out: what the senses are built for.
+    pub(super) fn any_well(&self) -> bool {
+        self.world
+            .query::<&Tank>()
+            .with::<&crate::ai::Ai>()
+            .iter()
+            .any(|t| !t.is_wreck() && t.body.is_some() && ((t.active_weapon() == ActiveWeapon::GravityWell && !t.special_down()) || t.orb.is_some()))
+    }
+
+    /// What each well-carrying enemy would launch for, and its orb in
+    /// flight (docs/gravity-well.md "What it is handed"), in owner-slot
+    /// order: along its facing and then `Dir::ALL`, the anchor points
+    /// `WELL_AI_STEP_PX` apart from `well_ai_min_px` out of the muzzle to
+    /// the orb's range or its stopper, each weighed by its arms - two seats
+    /// pulled together, a seat pulled into trouble, a seat pulled off the
+    /// frog it guards, a well across the line a seat shoots it along - and
+    /// held to dragging no more allies than seats, to no other well within
+    /// twice the reach, and to one well a seat. A seat counts only from
+    /// inside its sight box, within the tank's sight of it and not hidden
+    /// from it. No RNG: the arm, then the facing, then the distance.
+    pub(super) fn well_senses(&self, f: &Frame, seats: &[WellSeat]) -> BTreeMap<Entity, crate::ai::WellSense> {
+        use crate::ai::{Ai, WellPlan, WellSense};
+        let t = tuning();
+        let mut out = BTreeMap::new();
+        let mut armed: Vec<(usize, Entity)> = self
+            .world
+            .query::<(Entity, &Tank)>()
+            .with::<&Ai>()
+            .iter()
+            .filter(|(_, tank)| !tank.is_wreck() && tank.body.is_some())
+            .filter(|(_, tank)| (tank.active_weapon() == ActiveWeapon::GravityWell && !tank.special_down()) || tank.orb.is_some())
+            .map(|(e, tank)| (tank.owner_slot(), e))
+            .collect();
+        if armed.is_empty() {
+            return out;
+        }
+        armed.sort_by_key(|a| a.0);
+        let (r, margin) = (t.well_radius_px, t.well_ai_friend_margin_px);
+        let (half_w, half_h) = t.sight_box_half_px();
+        // The seats with their boxes and facings.
+        struct Seat {
+            seat: u8,
+            pos: Position,
+            centre: Position,
+            half: Vec2,
+            facing: Dir,
+            sight: f32,
+            concealed: bool,
+        }
+        let seat_boxes: Vec<Seat> = seats
+            .iter()
+            .filter(|s| s.live)
+            .filter_map(|s| {
+                let tank = self.world.get::<&Tank>(s.entity).ok()?;
+                let (centre, half) = tank.hull_bbox_world();
+                let facing = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up);
+                Some(Seat { seat: s.seat, pos: s.pos, centre, half: Vec2::new(half.x, half.y), facing, sight: s.sight, concealed: s.concealed })
+            })
+            .collect();
+        // Every live enemy, any role, disabled or not: its box and motion.
+        let allies: Vec<(Position, Vec2, Vec2)> = self
+            .world
+            .query::<&Tank>()
+            .with::<&Ai>()
+            .iter()
+            .filter(|tank| !tank.is_wreck() && tank.body.is_some())
+            .map(|tank| {
+                let (centre, half) = tank.hull_bbox_world();
+                (centre, Vec2::new(half.x, half.y), tank.body.map_or(Vec2::zero(), |h| self.physics.velocity(h)))
+            })
+            .collect();
+        let alive = |e: Option<Entity>| e.and_then(|e| self.world.get::<&Frog>(e).ok().filter(|f| !f.is_dead()).map(|f| f.position));
+        let (enemy_frog, quarry) = (alive(self.enemy_frog), alive(self.frog));
+        let drums: Vec<Position> =
+            self.world.query::<&Obstacle>().iter().filter(|o| !o.destroyed && o.material.is_explosive()).map(|o| o.position).collect();
+        let burning: BTreeSet<(i32, i32)> = self.fires.iter().filter(|fire| fire.left > 0.0).map(|fire| fire.cell).collect();
+        let trouble = |p: Position| {
+            let cell = world_to_cell(p);
+            self.heat_at(p) >= t.heat_hurt_from
+                || burning.contains(&cell)
+                || self.ooze.contains_key(&cell)
+                || matches!(self.water.depth_at(p), crate::ground::Depth::Shallow | crate::ground::Depth::Deep)
+                || self.zones.iter().any(|z| z.rod().is_some() && p.distance_to(z.centre) <= z.radius(&t))
+        };
+        let crosses = |from: Position, to: Position| {
+            let len = from.distance_to(to);
+            let steps = (len / TROUBLE_STEP_PX).ceil().max(1.0) as i32;
+            (0..=steps).any(|i| trouble(from + (to - from) * (i as f32 / steps as f32)))
+        };
+        let wells: Vec<Position> = self.zones.iter().filter(|z| z.well().is_some()).map(|z| z.centre).collect();
+        // The tiles an orb floats over.
+        let low: Vec<Entity> = self
+            .world
+            .query::<(Entity, &Obstacle)>()
+            .iter()
+            .filter(|(_, o)| !o.destroyed && !o.material.blocks_sight())
+            .map(|(e, _)| e)
+            .collect();
+        let players = self.seats_on_field();
+        let allies_at = |p: Position, lead: f32| {
+            allies.iter().filter(|&&(c, half, v)| crate::emp::box_reach(p, c, half) <= r + margin || crate::emp::box_reach(p, c + v * lead, half) <= r + margin).count()
+                + usize::from(enemy_frog.is_some_and(|fp| fp.distance_to(p) <= r + margin))
+        };
+        let mut planned: Vec<u8> = Vec::new();
+        for (_, entity) in armed {
+            let Ok(tank) = self.world.get::<&Tank>(entity) else { continue };
+            let Ok(ai) = self.world.get::<&Ai>(entity) else { continue };
+            let me = tank.position;
+            let mut sense = WellSense::default();
+            let counted: Vec<&Seat> = seat_boxes
+                .iter()
+                .filter(|s| !(s.concealed && !ai.is_hit_alerted()))
+                .filter(|s| me.distance_to(s.pos) <= s.sight && crate::ai::in_sight_box_of((half_w, half_h), s.pos, me))
+                .filter(|s| !planned.contains(&s.seat))
+                .collect();
+            if let Some(id) = tank.orb
+                && let Some(o) = self.orbs.iter().find(|o| o.id == id)
+            {
+                let seats_in = counted.iter().filter(|s| crate::emp::box_reach(o.position, s.centre, s.half) <= r).count();
+                sense.orb = Some((o.flown, allies_at(o.position, t.well_form_seconds) > seats_in));
+            }
+            if ai.frog_only || tank.orb.is_some() || tank.special_down() || counted.is_empty() {
+                out.insert(entity, sense);
+                continue;
+            }
+            let facing = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up);
+            let faces: Vec<Dir> = std::iter::once(facing).chain(Dir::ALL.into_iter().filter(|&d| d != facing)).collect();
+            // The best so far: (arm, facing's place, distance), the plan
+            // and the seats it counts.
+            let mut best: Option<((u8, usize, f32), WellPlan, Vec<u8>)> = None;
+            let mut offer = |key: (u8, usize, f32), plan: WellPlan, seats: Vec<u8>| {
+                if best.as_ref().is_none_or(|(k, ..)| key.0 < k.0 || (key.0 == k.0 && (key.1 < k.1 || (key.1 == k.1 && key.2 < k.2)))) {
+                    best = Some((key, plan, seats));
+                }
+            };
+            for (fi, &dir) in faces.iter().enumerate() {
+                let muzzle = tank.gun_line_muzzle(dir.vec());
+                let end = muzzle + dir.vec() * t.well_orb_range_px;
+                let stop = f
+                    .terrain
+                    .sweep_rewound(&self.world, players, tank.owner(), muzzle, end, t.well_orb_half_px, &low, None)
+                    .map_or(t.well_orb_range_px, |(_, k)| (k * t.well_orb_range_px - t.well_orb_half_px - 2.0).max(0.0));
+                if stop < t.well_ai_min_px {
+                    continue;
+                }
+                let mut ks: Vec<f32> = Vec::new();
+                let mut k = t.well_ai_min_px;
+                while k < stop {
+                    ks.push(k);
+                    k += WELL_AI_STEP_PX;
+                }
+                ks.push(stop);
+                for &k in &ks {
+                    let p = muzzle + dir.vec() * k;
+                    if wells.iter().any(|c| c.distance_to(p) <= 2.0 * r) {
+                        continue;
+                    }
+                    let lead = k / t.well_orb_speed.max(1.0) + t.well_form_seconds;
+                    let allies_in = allies_at(p, lead);
+                    let seats_in: Vec<&&Seat> = counted.iter().filter(|s| crate::emp::box_reach(p, s.centre, s.half) <= r).collect();
+                    let n = seats_in.len();
+                    let ids: Vec<u8> = seats_in.iter().map(|s| s.seat).collect();
+                    let lowest = ids.iter().copied().min();
+                    let plan = |why| WellPlan { face: dir, anchor_px: k, at_seat: lowest, why };
+                    if n >= 2 && allies_in <= n {
+                        offer((0, fi, k), plan("clump"), ids.clone());
+                    } else if n >= 1 && allies_in <= n && (drums.iter().any(|d| d.distance_to(p) <= r) || seats_in.iter().any(|s| crosses(s.pos, p))) {
+                        offer((1, fi, k), plan("trouble"), ids.clone());
+                    } else if n >= 1
+                        && allies_in <= n
+                        && let Some(frog) = quarry
+                        && frog.distance_to(p) > r + margin
+                        && seats_in.iter().any(|s| s.pos.distance_to(frog) <= t.well_ai_guard_px && p.distance_to(frog) > s.pos.distance_to(frog))
+                    {
+                        offer((2, fi, k), plan("guard"), ids.clone());
+                    }
+                }
+                // The shield: a seat lined up on this tank along this
+                // facing, shooting it, the well across its line.
+                if ai.is_hit_alerted() {
+                    let p = muzzle + dir.vec() * t.well_ai_min_px;
+                    for s in &counted {
+                        let (off, ahead) = crate::ai::axis_offsets(me, s.pos, dir);
+                        let lined = Dir::toward(me, s.pos) == dir
+                            && off <= t.enemy_fire_align_px
+                            && ahead > t.well_ai_min_px
+                            && s.facing == Dir::toward(s.pos, me)
+                            && f.terrain.line_of_sight(me, s.pos);
+                        if lined
+                            && t.well_ai_min_px <= stop
+                            && s.pos.distance_to(p) > r + margin
+                            && allies_at(p, t.well_ai_min_px / t.well_orb_speed.max(1.0) + t.well_form_seconds) == 0
+                            && !wells.iter().any(|c| c.distance_to(p) <= 2.0 * r)
+                        {
+                            offer((3, fi, t.well_ai_min_px), WellPlan { face: dir, anchor_px: t.well_ai_min_px, at_seat: Some(s.seat), why: "shield" }, vec![s.seat]);
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some((_, plan, ids)) = best {
+                planned.extend(ids);
+                sense.plan = Some(plan);
+            }
+            out.insert(entity, sense);
+        }
+        out
+    }
+
+    /// The pull on every enemy within a forming or pulling well's reach, or
+    /// within `enemy_danger_clear_px` past it (docs/gravity-well.md "The
+    /// `pull` tier"): the strongest well's centre, the field's pull - every
+    /// well as if it pulled, so a forming one is read at its start - and
+    /// whether it braces. Empty with no well.
+    pub(super) fn pull_senses(&self) -> BTreeMap<Entity, crate::ai::PullSense> {
+        let t = tuning();
+        let mut out = BTreeMap::new();
+        let sources: Vec<(u32, Position)> = self.zones.iter().filter(|z| z.well().is_some()).map(|z| (z.id, z.centre)).collect();
+        if sources.is_empty() {
+            return out;
+        }
+        let field = WellField { sources };
+        let reach = t.well_radius_px;
+        for (entity, tank) in self.world.query::<(Entity, &Tank)>().with::<&crate::ai::Ai>().iter() {
+            if tank.is_wreck() || tank.body.is_none() {
+                continue;
+            }
+            let at = tank.position;
+            let Some(&(_, nearest)) = field.sources.iter().min_by(|a, b| a.1.distance_to(at).total_cmp(&b.1.distance_to(at)).then(a.0.cmp(&b.0))) else {
+                continue;
+            };
+            let d = nearest.distance_to(at);
+            if d > reach + t.enemy_danger_clear_px {
+                continue;
+            }
+            let core = field.strongest(at, &t).map_or(nearest, |(_, c, _)| c);
+            let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, at, self.time);
+            let grip = t.tank_turn_grip_force * footing.grip / tank.mass();
+            let heavy = tank.mass_factor() >= t.well_ai_heavy_mass;
+            let brace = heavy && well::holds_broadside(&field, at, tank.mass_factor(), grip, &t);
+            out.insert(entity, crate::ai::PullSense { core, pull: field.pull(at, &t), brace, inside: d <= reach });
+        }
+        out
+    }
+
+    /// Whether `p` stands inside a forming or pulling well's reach: a crate
+    /// there is left alone by the seeks.
+    pub(super) fn in_a_pull(&self, p: Position) -> bool {
+        let r = tuning().well_radius_px;
+        self.zones.iter().any(|z| z.well().is_some() && z.centre.distance_to(p) <= r)
+    }
+
+    /// The pulling enemy well a seat at `p` stands in (`enemy_well_holding`).
+    pub(super) fn enemy_well_holding(&self, p: Position) -> Option<Position> {
+        enemy_well_holding(&self.zones, p)
+    }
+}
+
+/// The centre of the pulling enemy well among `zones` that `p` stands in,
+/// if any: what the pack's ring is herded round (docs/gravity-well.md "The
+/// group fires into the clump").
+pub(super) fn enemy_well_holding(zones: &[Zone], p: Position) -> Option<Position> {
+    let r = tuning().well_radius_px;
+    zones
+        .iter()
+        .filter(|z| z.well().is_some_and(|w| w.stage == WellStage::Pulling) && !z.owner.is_player())
+        .find(|z| z.centre.distance_to(p) <= r)
+        .map(|z| z.centre)
 }
 
 /// Every orb the room holds, for the wire and the tooling: `(id, owner,

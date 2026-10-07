@@ -677,3 +677,151 @@ fn a_round_with_the_well_replays_bit_for_bit() {
     };
     assert_eq!(run(), run());
 }
+
+// --- the AI ---------------------------------------------------------------
+
+/// A round with two seats, both assaults with nothing special, seat 0 at
+/// `a` and seat 1 at `b`, facing north.
+fn two_seats(a: Position, b: Position) -> Game {
+    let mut game = Game::default();
+    game.seed_override = Some(7);
+    game.show_intro = false;
+    game.level_overrides.mission = Some(Mission::Destroy);
+    game.players = PlayerCount::from_count(2).expect("two seats");
+    let map = "version = 1\ntanks = 0\ntank = \"assault\"\ntank2 = \"assault\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"3,12\" = { kind = \"start2\" }\n";
+    game.map = MapFile::from_toml_str(map).expect("test map parses");
+    game.init(W, H);
+    for (i, at) in [a, b].into_iter().enumerate() {
+        let e = game.seat(i).expect("a seat");
+        game.place_tank(e, at, Some(0.0)).expect("placed");
+        with_tank_mut(&game.world, e, |t| {
+            t.disarm();
+            t.shells_ammo = 0;
+            t.shield_hp = 0.0;
+            t.shield_timer = 0.0;
+        });
+    }
+    game
+}
+
+/// An enemy of chassis `row` carrying wells at `at` facing `rotation`,
+/// thinking, unshielded.
+fn well_enemy(game: &mut Game, at: Position, row: i32, rotation: f32) -> Entity {
+    let slot = game.debug_spawn_enemy(at, Some(row), Some(Role::Player)).expect("spawns");
+    let entity = game.tank_entity_by_slot(slot).expect("exists");
+    game.place_tank(entity, at, Some(rotation)).expect("placed");
+    with_tank_mut(&game.world, entity, |t| {
+        t.disarm();
+        t.take_weapon(ActiveWeapon::GravityWell);
+        t.shield_hp = 0.0;
+        t.shield_timer = 0.0;
+    });
+    entity
+}
+
+/// An enemy of chassis `row` at `at` facing `rotation`, thinking, with
+/// nothing to fire.
+fn bare_enemy(game: &mut Game, at: Position, row: i32, rotation: f32) -> Entity {
+    let slot = game.debug_spawn_enemy(at, Some(row), Some(Role::Player)).expect("spawns");
+    let entity = game.tank_entity_by_slot(slot).expect("exists");
+    game.place_tank(entity, at, Some(rotation)).expect("placed");
+    with_tank_mut(&game.world, entity, |t| {
+        t.disarm();
+        t.shells_ammo = 0;
+        t.shield_hp = 0.0;
+        t.shield_timer = 0.0;
+    });
+    entity
+}
+
+fn slot_of(game: &Game, e: Entity) -> usize {
+    with_tank(&game.world, e, |t| t.owner_slot())
+}
+
+fn snapshot(game: &Game, e: Entity) -> crate::ai::AiSnapshot {
+    game.world.get::<&Ai>(e).expect("an enemy").snapshot()
+}
+
+#[test]
+fn an_enemy_anchors_where_two_seats_are_pulled_together() {
+    let mut game = two_seats(MID + Vec2::new(0.0, -40.0), MID + Vec2::new(0.0, 40.0));
+    let enemy = well_enemy(&mut game, MID - Vec2::new(300.0, 0.0), 1, 90.0);
+    let slot = slot_of(&game, enemy);
+    let seen = idle(&mut game, ticks(4.0));
+    let launched = seen.iter().any(|e| matches!(e, Event::Fired { slot: s, weapon: "gravity_well" } if *s == slot));
+    assert!(launched, "the enemy launches");
+    let mine: Vec<(Position, AnchorBy)> =
+        seen.iter().filter_map(|e| if let Event::WellAnchored { slot: s, x, y, by, .. } = *e { (s == slot).then_some((Position::new(x, y), by)) } else { None }).collect();
+    assert_eq!(mine.len(), 1, "{seen:?}");
+    assert_eq!(mine[0].1, AnchorBy::Press, "its rule anchors it");
+    let r = tuning().well_radius_px;
+    for i in 0..2 {
+        let at = pos(&game, game.seat(i).unwrap());
+        assert!(at.distance_to(mine[0].0) <= r + 32.0, "seat {i} in the pull: {at:?} from {:?}", mine[0].0);
+    }
+}
+
+#[test]
+fn the_generic_tiers_never_fire_the_well() {
+    let mut game = round_with("", Mission::Destroy, None);
+    game.place_tank(seat(&game), MID, Some(0.0)).expect("placed");
+    let enemy = well_enemy(&mut game, MID - Vec2::new(200.0, 0.0), 1, 90.0);
+    let slot = slot_of(&game, enemy);
+    let seen = idle(&mut game, ticks(4.0));
+    assert!(!seen.iter().any(|e| matches!(e, Event::Fired { slot: s, .. } if *s == slot)), "a lone seat in the open is no use for a well, and no shell is fired");
+    assert_eq!(with_tank(&game.world, enemy, |t| t.wells), tuning().well_per_pickup);
+}
+
+#[test]
+fn a_training_dummy_never_fires_a_well() {
+    let mut game = two_seats(MID + Vec2::new(0.0, -40.0), MID + Vec2::new(0.0, 40.0));
+    let enemy = well_enemy(&mut game, MID - Vec2::new(300.0, 0.0), 1, 90.0);
+    game.world.get::<&mut Ai>(enemy).unwrap().frog_only = true;
+    let slot = slot_of(&game, enemy);
+    let seen = idle(&mut game, ticks(4.0));
+    assert!(!seen.iter().any(|e| matches!(e, Event::Fired { slot: s, .. } if *s == slot)));
+}
+
+#[test]
+fn an_enemy_never_anchors_where_its_pull_drags_more_allies_than_seats() {
+    let mut game = two_seats(MID + Vec2::new(0.0, -40.0), MID + Vec2::new(0.0, 40.0));
+    let enemy = well_enemy(&mut game, MID - Vec2::new(300.0, 0.0), 1, 90.0);
+    // Three allies standing with the seats, between them and the well tank,
+    // brains off.
+    for dy in [-90.0, 0.0, 90.0] {
+        still_enemy(&mut game, MID + Vec2::new(-50.0, dy), 1, 0.0);
+    }
+    let slot = slot_of(&game, enemy);
+    let seen = idle(&mut game, ticks(3.0));
+    assert!(!seen.iter().any(|e| matches!(e, Event::WellAnchored { slot: s, .. } if *s == slot)), "{seen:?}");
+}
+
+#[test]
+fn an_enemy_in_a_pull_drives_across_on_its_own_side() {
+    let mut game = round_with("", Mission::Destroy, None);
+    pulling_well(&mut game, MID);
+    // East of the core and a little south: across is south, its own side.
+    let enemy = bare_enemy(&mut game, MID + Vec2::new(60.0, 10.0), 1, 270.0);
+    step(&mut game, false);
+    step(&mut game, false);
+    let snap = snapshot(&game, enemy);
+    assert_eq!(snap.pull, Some("across"), "{snap:?}");
+    assert_eq!(snap.intent_move, Some("down"));
+    idle(&mut game, ticks(2.0));
+    assert!(pos(&game, enemy).distance_to(MID) > 40.0, "not drawn into the core: {:?}", pos(&game, enemy));
+}
+
+#[test]
+fn a_heavy_enemy_braces_broadside() {
+    let mut game = round_with("", Mission::Destroy, None);
+    pulling_well(&mut game, MID);
+    let titan = bare_enemy(&mut game, MID + Vec2::new(60.0, 0.0), TankKind::Titan.row(), 270.0);
+    idle(&mut game, 20);
+    let snap = snapshot(&game, titan);
+    assert_eq!(snap.pull, Some("brace"), "{snap:?}");
+    let facing = with_tank(&game.world, titan, |t| Dir::from_rotation(t.rotation));
+    assert!(matches!(facing, Some(Dir::Up) | Some(Dir::Down)), "broadside: {facing:?}");
+    let a = pos(&game, titan);
+    idle(&mut game, 30);
+    assert!(pos(&game, titan).distance_to(a) < 2.0, "it holds: {:?} from {a:?}", pos(&game, titan));
+}

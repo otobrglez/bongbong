@@ -821,10 +821,14 @@ impl Game {
         // A rod's call standing (docs/rod-from-god.md): its circle, which
         // crushes whoever is in it when it lands.
         let in_call = |p: Position| self.zones.iter().any(|z| z.rod().is_some() && p.distance_to(z.centre) <= z.radius(t));
+        // A pulling enemy well (docs/gravity-well.md): a seat shoved into
+        // one is held for the pack.
+        let in_well = |p: Position| self.enemy_well_holding(p).is_some();
         (in_reach(rest) && !in_reach(seat.pos))
             || (in_lane(rest) && !in_lane(seat.pos))
             || (in_rail(rest) && !in_rail(seat.pos))
             || (in_call(rest) && !in_call(seat.pos))
+            || (in_well(rest) && !in_well(seat.pos))
     }
 
     /// Put a crate of `kind` down at the map cell nearest `at`, in its air

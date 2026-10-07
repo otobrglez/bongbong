@@ -598,7 +598,7 @@ fn log_frame(game: &Game, frame: u32) {
         // be read off the out-of-bounds position.
         let entering = if tank.entering { " entering=true" } else { "" };
         println!(
-            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} missiles={:2} grenades={:2} sonic={:2} emp={:2} laser={:2} fuel={:4.1} burn={:3.1} shield={:5.1} wreck={}{entering}{}{}{}{}{}{}{}",
+            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} missiles={:2} grenades={:2} sonic={:2} emp={:2} laser={:2} fuel={:4.1} burn={:3.1} shield={:5.1} wreck={}{entering}{}{}{}{}{}{}{}{}{}",
             tank.position.x, tank.position.y, tank.velocity.x, tank.velocity.y, speed, tank.rotation, tank.damage, tank.shells_ammo, tank.plasma_ammo, tank.minigun_ammo, tank.missile_ammo, tank.grenade_ammo, tank.sonic_ammo, tank.emp_charges, tank.laser_charges, tank.flame_fuel, tank.burn_timer, tank.shield_hp, tank.is_wreck,
             if tank.tell { " tell=true" } else { "" },
             if tank.skidding { " skid=true" } else { "" },
@@ -607,6 +607,8 @@ fn log_frame(game: &Game, frame: u32) {
             if tank.charging { " chg=true" } else { "" },
             if tank.fpv_drones > 0 || tank.fpv_out > 0 { format!(" fpv={} out={}", tank.fpv_drones, tank.fpv_out) } else { String::new() },
             if tank.rods > 0 { format!(" rod={}", tank.rods) } else { String::new() },
+            if tank.wells > 0 || tank.orb_out { format!(" well={}{}", tank.wells, if tank.orb_out { " orb=true" } else { "" }) } else { String::new() },
+            if tank.pulled { if tank.bracing { " pulled=brace" } else { " pulled=true" } } else { "" },
         );
     }
 }
@@ -840,7 +842,7 @@ struct TankTrack {
     // Last frame's (shells, minigun, plasma, laser, missiles, sonic, emp,
     // gauss, fpv, rod) ammo, to spot a trigger pull as any pool decreasing; None
     // until the first frame.
-    prev_ammo: Option<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>,
+    prev_ammo: Option<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>,
     // Frame of the most recent detected shot, if any.
     last_fire_frame: Option<u32>,
     // Frame of the most recent deliberate hold (`deliberate_hold`), if any.
@@ -1036,8 +1038,10 @@ impl TankTrack {
 /// (docs/emp-burst.md), a charge held on its lane (docs/gauss-rail.md) and a
 /// stand for the FPV swarm - watching its drone, or under a crown while a
 /// seat's comes at it (docs/fpv-swarm.md) - and a rod tank's stand-off from
-/// the seat it knows of (docs/rod-from-god.md). Not a stall or a stale start. A
-/// weapon that holds a tank another way adds its row.
+/// the seat it knows of (docs/rod-from-god.md), and a heavy chassis braced
+/// broadside in a gravity well's pull or a well tank holding still for its
+/// orb (docs/gravity-well.md). Not a stall or a stale start. A weapon that
+/// holds a tank another way adds its row.
 const HOLDS: &[(&str, fn(&TankSnapshot) -> bool)] = &[
     ("asleep", |t| t.asleep),
     ("tell", |t| t.tell),
@@ -1046,15 +1050,19 @@ const HOLDS: &[(&str, fn(&TankSnapshot) -> bool)] = &[
     ("charge", |t| t.charging),
     ("air", |t| t.air_hold),
     ("stand-off", |t| t.rod_hold),
+    ("bracing", |t| t.bracing),
+    ("orb", |t| t.anchoring),
 ];
 
 /// The states a tank's motion is not its own in, by name: an EMP has its
-/// brain off and it coasts on its last intent (docs/emp-burst.md). While
+/// brain off and it coasts on its last intent (docs/emp-burst.md), and a
+/// gravity well's pull drags it - unless it braces, which holds it on
+/// purpose (docs/gravity-well.md). While
 /// one holds, no anomaly reads the tank and every window over its motion
 /// starts over where it stands (`TankTrack::rejoin`), so the coast is
 /// never judged as the AI driving. A weapon that takes a tank's driving
 /// away adds its row.
-const OUT_OF_ITS_HANDS: &[(&str, fn(&TankSnapshot) -> bool)] = &[("disabled", |t| t.disabled)];
+const OUT_OF_ITS_HANDS: &[(&str, fn(&TankSnapshot) -> bool)] = &[("disabled", |t| t.disabled), ("pulled", |t| t.pulled && !t.bracing)];
 
 /// Prints an `ANOMALY` line; the caller tallies the kind into
 /// `AnomalyTotals`. `seed` is the round's own effective seed
@@ -1298,6 +1306,7 @@ fn check_anomalies(
             tank.gauss_slugs,
             tank.fpv_drones,
             tank.rods,
+            tank.wells,
         );
         if let Some(prev) = track.prev_ammo
             && (ammo.0 < prev.0
@@ -1309,7 +1318,8 @@ fn check_anomalies(
                 || ammo.6 < prev.6
                 || ammo.7 < prev.7
                 || ammo.8 < prev.8
-                || ammo.9 < prev.9)
+                || ammo.9 < prev.9
+                || ammo.10 < prev.10)
         {
             track.last_fire_frame = Some(frame);
         }

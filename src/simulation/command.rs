@@ -95,6 +95,11 @@ pub(crate) enum Busy {
     /// It holds a gauss rail's charge on a lane (`Tank::charge`): a nudge
     /// would turn its hull off it.
     Charging,
+    /// It is in a gravity well's pull, bracing or driving across it
+    /// (docs/gravity-well.md "With the commander").
+    Pulled,
+    /// It holds still for its orb in flight, to anchor it.
+    Anchoring,
 }
 
 /// The world queries the commander needs, injected as closures so the module
@@ -598,7 +603,7 @@ mod tests {
     /// gives way, and neither is nudged out of a clearer's ring.
     #[test]
     fn a_busy_unit_never_gives_way_nor_is_nudged() {
-        for busy in [Busy::Disabled, Busy::Charging] {
+        for busy in [Busy::Disabled, Busy::Charging, Busy::Pulled, Busy::Anchoring] {
             let mut c = Commander::default();
             let mut held = unit(1, 0.0, 0.0);
             held.busy = Some(busy);

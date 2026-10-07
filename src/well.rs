@@ -391,6 +391,14 @@ pub fn orbit_at(orbit: &GrenadeOrbit, centre: Position, now: f32, t: &Tuning) ->
     Position::new(centre.x + a.cos() * t.well_ring_px, centre.y + a.sin() * t.well_ring_px)
 }
 
+/// Whether a hull of mass factor `mass_factor` standing broadside to the
+/// pull at `p` holds there: the field's side pull on it (`hull_pull`) is no
+/// more than its tracks' grip, `grip` px/s² - `tank_turn_grip_force` times
+/// the ground's grip over its mass, the drive's own numbers.
+pub fn holds_broadside(field: &WellField, p: Position, mass_factor: f32, grip: f32, t: &Tuning) -> bool {
+    field.hull_pull(p, mass_factor, t).side.length() <= grip
+}
+
 /// The cardinal an enemy escapes a well along (docs/gravity-well.md "The
 /// `pull` tier"): perpendicular to its bearing from the core - the larger
 /// offset's axis turned a quarter - on its own side of the core (the
