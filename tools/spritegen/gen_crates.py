@@ -298,9 +298,9 @@ HEAT_TOP = 5
 # and the token keeps the lamps in that colour.
 LAMP_TONE = {'fpv_swarm', 'rod_from_god'}
 
-# Two-tone kinds whose body is lit along its top in a step of its own
-# rather than in the lamps' colour: the rod's tungsten.
-BODY_LIGHT = {'rod_from_god': pp.STONE_LT}
+# Two-tone kinds whose body is lit along its top in white rather than in
+# the lamps' colour: the rod's tungsten, shining.
+BODY_LIGHT = {'rod_from_god': pp.WHITE}
 
 # The crate, 20 x 20 design pixels: three planks between two battens, nailed
 # at the corners. Lid rows 2-15 inside the outline, the front face rows
