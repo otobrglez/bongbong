@@ -418,7 +418,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "builder_files",
-        description: "What FILE > LOAD offers: every map the builder can load by name - the files under maps/ on native (`on_disk`) plus the maps shipped inside the binary (default, hunt-basic, waves-basic; all the web build has) - and `can_save`, whether this build writes maps to disk (native yes, web no: web edits live in memory for the session).",
+        description: "What FILE > LOAD offers: every map the builder can load by name - the files under maps/ on native (`on_disk`) plus the maps shipped inside the binary (default, hunt-basic, waves-basic; all the web build has) - and `can_save`, whether this build keeps maps (with map modding on, every build, in the player's store; off, native only). With modding on, a shipped map the player changed is marked `modified` and opens as their copy.",
         schema: r#"{"type":"object","properties":{}}"#,
         read_only: true,
         destructive: false,
