@@ -2939,7 +2939,7 @@ mod picture_tests {
         assert_eq!(body(ArrowKind::Frog { side: Side::Player }), set(&[FROG_GREEN, RIM]));
         assert_eq!(body(ArrowKind::Frog { side: Side::Enemy }), set(&[FROG_GREEN, HOSTILE]));
         assert_eq!(body(ArrowKind::Gate { flash: 1.0 }), set(&[GATE_AMBER, RIM]));
-        let windup = ArrowKind::Windup { weapon: ActiveWeapon::SonicHammer, progress: 0.0 };
+        let windup = ArrowKind::Windup { weapon: ActiveWeapon::SonicHammer, progress: 0.0, lane: false };
         assert_eq!(body(windup), set(&[crate::hud::weapon_color(ActiveWeapon::SonicHammer), HOSTILE]), "the weapon's accent, rimmed hostile");
     }
 
