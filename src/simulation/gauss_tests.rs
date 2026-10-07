@@ -495,9 +495,39 @@ fn the_hold_report_decides_the_release_within_its_spare() {
     assert_eq!(tank.charge.map(|c| c.ticks()), Some(full - 1));
     let edge = tank.step_charge(false, false, dt, true, Some(full));
     assert!(matches!(edge, crate::tank::ChargeEdge::Released(_)), "the client's count: {edge:?}");
-    let mut tank = Tank { gauss_slugs: 2, charge: Some(Charge { weapon: ActiveWeapon::GaussRail, held: 10.0 * dt }), ..Tank::default() };
+    let mut tank = Tank { gauss_slugs: 2, charge: Some(Charge::new(ActiveWeapon::GaussRail, 10.0 * dt)), ..Tank::default() };
     let edge = tank.step_charge(false, false, dt, true, Some(full));
     assert_eq!(edge, crate::tank::ChargeEdge::Ended(ChargeEnd::Fizzled), "a report far past its own count is held to the spare");
+}
+
+/// The spare is a press's, never a tick's: a client reporting all it may
+/// every tick - past the round's own count - is full `CHARGE_HOLD_SPARE_TICKS`
+/// early and no earlier, and one reporting the least holds a charge that
+/// many ticks past its vent and no longer.
+#[test]
+fn the_hold_reports_spare_is_a_presss_never_a_ticks() {
+    use crate::tank::{ChargeEdge, ChargeStage};
+    let rule = ActiveWeapon::GaussRail.charge_rule().expect("a charge weapon");
+    let spare = crate::tank::CHARGE_HOLD_SPARE_TICKS;
+    let dt = PHYSICS_FIXED_DT;
+    // Held `ticks` ticks with every read reporting `report`, then let go:
+    // the edge it ended on.
+    let hold = |ticks: u32, report: u32| {
+        let mut tank = Tank { gauss_slugs: 2, ..Tank::default() };
+        let mut edge = tank.step_charge(true, true, dt, true, Some(report));
+        for _ in 1..ticks {
+            edge = tank.step_charge(true, false, dt, true, Some(report));
+        }
+        if tank.charge.is_none() {
+            return edge;
+        }
+        tank.step_charge(false, false, dt, true, Some(report))
+    };
+    let (full, vent) = (rule.full_ticks(), rule.vent_ticks());
+    assert_eq!(hold(full - spare - 1, u32::MAX), ChargeEdge::Ended(ChargeEnd::Fizzled), "no fuller than the spare");
+    assert_eq!(hold(full - spare, u32::MAX), ChargeEdge::Released(ChargeStage::Full), "the spare");
+    assert!(matches!(hold(vent + spare, 1), ChargeEdge::Released(_)), "held the spare past its vent");
+    assert_eq!(hold(vent + spare + 1, 1), ChargeEdge::Ended(ChargeEnd::Vented), "and no longer");
 }
 
 /// A round with the rail in it replays bit for bit.
@@ -846,7 +876,7 @@ fn a_charging_rails_lane_through_cover_warns_the_seat() {
         with_tank_mut(&game.world, enemy, |t| {
             t.rotation = rotation;
             t.gauss_slugs = 4;
-            t.charge = Some(Charge { weapon: ActiveWeapon::GaussRail, held: 0.6 });
+            t.charge = Some(Charge::new(ActiveWeapon::GaussRail, 0.6));
         });
         let scene = crate::indicators::Scene::of(game, 0);
         let tv = *scene.tanks.iter().find(|tv| tv.slot == slot).expect("the enemy");

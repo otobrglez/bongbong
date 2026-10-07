@@ -421,7 +421,11 @@ pub struct Charge {
     pub weapon: ActiveWeapon,
     /// Seconds the trigger has been down, the press tick included: one
     /// `PHYSICS_FIXED_DT` a tick in a round, the frame's time on a replica.
+    /// A room's is the client's count (the hold report, below).
     pub held: f32,
+    /// The ticks the round has stepped the charge itself, whatever a
+    /// report said: what a report is held to.
+    pub stepped: u32,
 }
 
 /// A charge weapon's timings in seconds held (`ActiveWeapon::charge_rule`).
@@ -480,12 +484,12 @@ impl Tank {
 In order: a charge whose weapon is no longer `active_weapon()` lapses
 (`Ended(Lapsed)`). With no charge, a press on an open gate of a charge
 weapon starts one at `held = dt` (`Started`); anything else is `None`.
-With a charge and the trigger down, `held += dt` - with a report, set to
-it, held within `CHARGE_HOLD_SPARE_TICKS` of the count it would have been -
-and past `vent` it vents (`Ended(Vented)`), else `Held`. With a charge and
-the trigger up (with a report, `held` set the same way first): before
-`full` it fizzles (`Ended(Fizzled)`), else `Released(stage)`. The charge is
-gone after every `Ended` and `Released`.
+With a charge and the trigger down, `held += dt` and `stepped += 1` - with
+a report, `held` set to it, held within `CHARGE_HOLD_SPARE_TICKS` of
+`stepped` - and past `vent` it vents (`Ended(Vented)`), else `Held`. With a
+charge and the trigger up (with a report, the count taken the same way):
+before `full` it fizzles (`Ended(Fizzled)`), else `Released(stage)`. The
+charge is gone after every `Ended` and `Released`.
 
 **Who calls it** - `gauss::charge_trigger(f, entity, tank, owner, fire,
 pressed, report)`, the room side, one function for a seat and an enemy:
@@ -544,8 +548,14 @@ driving its intents cover (`Mailbox::pose_reach_ticks`):
   `seat_owned` is) - in the room server's tick beside `take_pose`, and in
   the rig's.
 - `step_charge` takes the report within `tank::CHARGE_HOLD_SPARE_TICKS`
-  (6, 100 ms) of its own count, either way: a client stamping its intents
-  further apart than it held gains six ticks at most.
+  (6, 100 ms) of the ticks the round has stepped the charge itself
+  (`Charge::stepped`), either way: a client stamping its intents further
+  apart than it held gains six ticks a press at most - full six ticks
+  early, or held six ticks past the vent. The spare is measured against
+  the round's own count, never against the last report, which would let
+  it compound a tick at a time into a full charge in a fraction of a
+  second or one that never vents
+  (`the_hold_reports_spare_is_a_presss_never_a_ticks`).
 
 A local round has no report; its count is its own, exact by construction.
 With the report the room's release decision is the client's to the tick,
@@ -1183,6 +1193,7 @@ number read off the defaults):
   `the_round_ending_mid_charge_clears_it_and_nothing_fires_on_the_end_screen`.
 - Determinism and the room: `the_rail_draws_no_rng`,
   `the_hold_report_decides_the_release_within_its_spare`,
+  `the_hold_reports_spare_is_a_presss_never_a_ticks`,
   `a_round_with_the_rail_replays_bit_for_bit`,
   `the_spawn_swap_hands_out_the_rail_by_its_share`.
 - The AI: `the_rail_charges_at_a_seat_in_its_lane_inside_the_sight_box`,

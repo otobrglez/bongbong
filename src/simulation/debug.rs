@@ -953,7 +953,7 @@ impl Game {
         if let Some(seconds) = patch.charge {
             let weapon = tank.active_weapon();
             tank.charge = (seconds > 0.0 && weapon.trigger() == crate::tank::Trigger::Charge)
-                .then(|| crate::tank::Charge { weapon, held: crate::tank::ticks_of(seconds).max(1) as f32 * crate::PHYSICS_FIXED_DT });
+                .then(|| crate::tank::Charge::new(weapon, crate::tank::ticks_of(seconds).max(1) as f32 * crate::PHYSICS_FIXED_DT));
         }
         if let Some(n) = patch.plasma_ammo {
             if n > 0 {

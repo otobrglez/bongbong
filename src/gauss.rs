@@ -515,7 +515,7 @@ mod tests {
 
     #[test]
     fn the_charge_is_in_its_ramp_and_pure() {
-        let charge = Charge { weapon: ActiveWeapon::GaussRail, held: 0.5 };
+        let charge = Charge::new(ActiveWeapon::GaussRail, 0.5);
         let a = compose_charge(Position::new(200.0, 200.0), Position::new(190.0, 180.0), &charge, 7, 1.25);
         let b = compose_charge(Position::new(200.0, 200.0), Position::new(190.0, 180.0), &charge, 7, 1.25);
         assert_eq!(a, b, "the same inputs, the same picture");
@@ -603,11 +603,11 @@ mod tests {
     fn the_module_shows_the_charge() {
         let mut tank = Tank { gauss_slugs: 2, ..Default::default() };
         assert_eq!(module_cell(&tank, 0.0), 0);
-        tank.charge = Some(Charge { weapon: ActiveWeapon::GaussRail, held: 0.0 });
+        tank.charge = Some(Charge::new(ActiveWeapon::GaussRail, 0.0));
         assert_eq!(module_cell(&tank, 0.0), 1);
-        tank.charge = Some(Charge { weapon: ActiveWeapon::GaussRail, held: 1.2 });
+        tank.charge = Some(Charge::new(ActiveWeapon::GaussRail, 1.2));
         assert_eq!(module_cell(&tank, 0.0), 4);
-        tank.charge = Some(Charge { weapon: ActiveWeapon::GaussRail, held: 1.5 });
+        tank.charge = Some(Charge::new(ActiveWeapon::GaussRail, 1.5));
         assert_eq!(module_cell(&tank, 0.0), 5);
         tank.rail_flash = 0.1;
         assert_eq!(module_cell(&tank, 0.0), 6);

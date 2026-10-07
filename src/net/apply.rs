@@ -749,7 +749,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
         tank.skid = dequantise_seconds(t.skid);
         // A charge, at the room's count of ticks; the replica counts it up
         // between snapshots (`Game::tick_presentation`).
-        tank.charge = (t.charge > 0).then(|| crate::tank::Charge { weapon, held: t.charge as f32 * PHYSICS_FIXED_DT });
+        tank.charge = (t.charge > 0).then(|| crate::tank::Charge::new(weapon, t.charge as f32 * PHYSICS_FIXED_DT));
         (tank.body, tank.move_half_extents(tank.facing_along_x()), turned)
     };
     let tracked = game.world.get::<&mut WireTrack>(entity).map(|mut w| w.0 = position).is_ok();

@@ -2369,7 +2369,7 @@ mod tests {
             authority.predict_seat_with(0, press(), PHYSICS_FIXED_DT, Some((false, true)));
         }
         // The room started its charge on the first press.
-        authority.set_seat_charge(0, Some(crate::tank::Charge { weapon: ActiveWeapon::GaussRail, held: 20.0 * PHYSICS_FIXED_DT }));
+        authority.set_seat_charge(0, Some(crate::tank::Charge::new(ActiveWeapon::GaussRail, 20.0 * PHYSICS_FIXED_DT)));
         let live = predictor.charge().map(|c| c.ticks());
         predictor.reconcile(&wire(&mut authority, 19), 19);
         assert_eq!(predictor.charge().map(|c| c.ticks()), live, "replayed to where it was");

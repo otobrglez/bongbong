@@ -520,11 +520,22 @@ pub struct Charge {
     /// trigger's lapses.
     pub weapon: ActiveWeapon,
     /// Seconds the trigger has been down, the press tick included: one
-    /// fixed step a tick in a round, the frame's time on a replica.
+    /// fixed step a tick in a round, the frame's time on a replica. A
+    /// room's is the client's count (the hold report), within
+    /// `CHARGE_HOLD_SPARE_TICKS` of `stepped`.
     pub held: f32,
+    /// The ticks this round has stepped the charge itself, the press tick
+    /// included, whatever a hold report said (`Tank::step_charge`): what a
+    /// report is held to, so the spare is a press's, never a tick's.
+    pub stepped: u32,
 }
 
 impl Charge {
+    /// A charge of `weapon` held `held` seconds, stepped as many ticks.
+    pub fn new(weapon: ActiveWeapon, held: f32) -> Charge {
+        Charge { weapon, held, stepped: ticks_of(held) }
+    }
+
     /// Whole ticks held, rounded: what the rule counts.
     pub fn ticks(&self) -> u32 {
         ticks_of(self.held)
@@ -1532,9 +1543,11 @@ impl Tank {
     /// `pressed` its press edge, `open` whether a press may start a charge
     /// now (the caller's gate: the room's `fire_cooldown`, a client's
     /// local gate), `report` a room's count of the ticks the client held
-    /// the trigger (the hold report), taken within
-    /// `CHARGE_HOLD_SPARE_TICKS` of this count. Pure state: no world, no
-    /// RNG.
+    /// the trigger (the hold report), believed within
+    /// `CHARGE_HOLD_SPARE_TICKS` of the ticks this round has stepped the
+    /// charge itself (`Charge::stepped`) - a press's spare, never one a
+    /// tick, which would compound into a charge full in a fraction of its
+    /// time or held for ever. Pure state: no world, no RNG.
     ///
     /// A charge whose weapon is no longer the trigger's lapses. With none, a
     /// press on an open gate of a charge weapon starts one, the press tick
@@ -1549,13 +1562,15 @@ impl Tank {
             return ChargeEdge::Ended(ChargeEnd::Lapsed);
         }
         let Some(rule) = weapon.charge_rule() else { return ChargeEdge::None };
-        let reported = |own: u32| {
-            report.map_or(own, |r| r.clamp(own.saturating_sub(CHARGE_HOLD_SPARE_TICKS), own + CHARGE_HOLD_SPARE_TICKS))
-        };
+        // The client's count, held to the round's own: the trigger has
+        // been down a tick at least.
+        let believed = |stepped: u32, r: u32| r.clamp(stepped.saturating_sub(CHARGE_HOLD_SPARE_TICKS).max(1), stepped + CHARGE_HOLD_SPARE_TICKS);
         let Some(mut charge) = self.charge else {
             if fire && pressed && open {
-                let mut charge = Charge { weapon, held: dt };
-                charge.held = reported(charge.ticks()) as f32 * crate::PHYSICS_FIXED_DT;
+                let mut charge = Charge::new(weapon, dt);
+                if let Some(r) = report {
+                    charge.held = believed(charge.stepped, r) as f32 * crate::PHYSICS_FIXED_DT;
+                }
                 self.charge = Some(charge);
                 return ChargeEdge::Started;
             }
@@ -1563,8 +1578,9 @@ impl Tank {
         };
         if fire {
             charge.held += dt;
-            if report.is_some() {
-                charge.held = reported(charge.ticks()) as f32 * crate::PHYSICS_FIXED_DT;
+            charge.stepped += 1;
+            if let Some(r) = report {
+                charge.held = believed(charge.stepped, r) as f32 * crate::PHYSICS_FIXED_DT;
             }
             if charge.ticks() > rule.vent_ticks() {
                 self.charge = None;
@@ -1573,7 +1589,7 @@ impl Tank {
             self.charge = Some(charge);
             return ChargeEdge::Held;
         }
-        let ticks = reported(charge.ticks());
+        let ticks = report.map_or(charge.ticks(), |r| believed(charge.stepped, r));
         self.charge = None;
         match rule.stage(ticks) {
             ChargeStage::Charging => ChargeEdge::Ended(ChargeEnd::Fizzled),
