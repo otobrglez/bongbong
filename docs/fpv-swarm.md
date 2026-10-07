@@ -321,7 +321,7 @@ no damage (§12, decision 8). A falling drone is no longer an air target.
 | `src/fx.rs` | Rotor wash, buzz and a falling drone's smoke; a launch's ring of dust, a burst's sparks (leaves in a crown), a downed drone's sparks, a crash's dud |
 | `src/weather.rs` | A drone's lamp light |
 | `src/fish.rs` | `DroneBurst` and `DroneCrashed` among the scares |
-| `src/net/wire.rs`, `src/net/mod.rs` | `WeaponKind::FpvSwarm` (`drawn_on_press`), `DroneState`, `Snapshot::drones`; `PROTOCOL_VERSION` 18 and the measured sizes |
+| `src/net/wire.rs`, `src/net/mod.rs` | `WeaponKind::FpvSwarm` (`drawn_on_press`), `DroneState`, `Snapshot::drones`; `PROTOCOL_VERSION` 19 and the measured sizes |
 | `src/net/delta.rs` | `drones`, `drones_moved`, `drones_gone` |
 | `src/net/events.rs` | `WireEvent::{DroneLaunched, DroneBurst, DroneDowned, DroneCrashed}` (`NO_TARGET`), the `press_show` arm, `drone_lock_lost` on `NOT_SENT` |
 | `src/net/encode.rs`, `src/net/apply.rs` | `drones(game)`, `apply_drones`; the burst's show; the `kick_turret` arm; `Show::presses_drawn` read by the round |
@@ -1042,7 +1042,7 @@ HUD shows the glyph and a count; the weapon has no other words.
 
 ## 8. Wire
 
-Protocol 18 (from the rail's 17), once in the PR.
+Protocol 19 (from the rail's 18), once in the PR.
 
 - `WeaponKind::FpvSwarm`, appended to `ALL`; `drawn_on_press` true.
 - **A new family, `Snapshot::drones`**, keyed by the drone's id:
@@ -1223,7 +1223,8 @@ Protocol 18 (from the rail's 17), once in the PR.
 - Trees: `a_tank_under_a_tree_is_never_locked`,
   `a_drone_loses_its_lock_when_its_target_goes_under_a_tree`,
   `a_ground_burst_spares_a_hull_under_a_crown`,
-  `a_dive_into_a_crown_hurts_only_the_tree`.
+  `a_dive_into_a_crown_hurts_only_the_tree`,
+  `a_ground_burst_wears_a_range_board_and_never_lights_it`.
 - Air targets: `a_minigun_bullet_brings_an_opposing_drone_down`,
   `shells_pass_under_a_drone`, `a_tesla_arcs_a_drone_in_reach_without_charging`,
   `an_offline_tesla_arcs_no_drone`, `a_gun_tower_brings_a_drone_down`,
@@ -1433,6 +1434,7 @@ the AI tiers its tank ran over the frames before):
 | Drums, oil, fires | A burst sets drums off by their rules; oil and fires untouched |
 | Trees, grass | Trees hide what is under them and take crown bursts; grass hides nothing from the air and is flattened round a burst |
 | Glass, walls, lamp posts | Flown over; a burst cracks tiles in reach |
+| Range boards (docs/range-target-prd.md) | Flown over; a burst in reach wears a board by its falloff like any tile (`fpv_damage`, 8, at the centre: thirteen dives on a board), never lighting it - only fire lights a board; a board is no crown and hides nothing from the air |
 | Lava, the volcano | Flown over; bombs and eruptions do nothing to drones |
 | Shells, plasma, lasers, flames, missiles, grenades | Pass under; none touch a drone |
 | Wrecks | A wreck's halo falls; a drone locked on a tank that is wrecked dives where it was |
@@ -1597,6 +1599,12 @@ the AI tiers its tank ran over the frames before):
     place) and keeping the room's copy hidden for the whole hand-over
     whatever befell it (the client's drone climbed on while the room's
     fell, then vanished).
+35. **A range board takes a burst as any tile does** (docs/range-target-prd.md):
+    the ground burst's falloff through `damage_obstacle`, no roll, so a
+    board wears through its stages a few points a dive and splinters; a
+    burst is no fire and never lights it. It is no crown: a board hides
+    nothing from a drone. Rejected: treating it as cover from the air like
+    a tree - a board is a plank on an easel, not a canopy.
 
 ### Not in this PR
 

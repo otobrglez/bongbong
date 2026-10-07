@@ -295,6 +295,30 @@ fn a_dive_into_a_crown_hurts_only_the_tree() {
     assert!((before - after - Tuning::DEFAULT.fpv_tree_damage).abs() < 1e-3, "{before} -> {after}");
 }
 
+/// A board on the aim point is worn by the burst's full damage, like any
+/// tile in reach, and never lit - a burst is no fire.
+#[test]
+fn a_ground_burst_wears_a_range_board_and_never_lights_it() {
+    // The aim point six cells east of the seat, (9, 6), holds the board.
+    let mut game = round("cells.\"9,6\" = { kind = \"target\" }\n");
+    let board = |g: &Game| {
+        g.world
+            .query::<&Obstacle>()
+            .iter()
+            .find(|o| o.material == crate::obstacle::Material::Target)
+            .map(|o| (o.health, o.burning, o.destroyed))
+            .expect("the board stands")
+    };
+    let (before, _, _) = board(&game);
+    let events = launch(&mut game, 300);
+    let b = bursts(&events);
+    assert_eq!(b.len(), 1);
+    assert!(!b[0].1, "on the ground: a board is no crown");
+    let (after, burning, destroyed) = board(&game);
+    assert!((before - after - Tuning::DEFAULT.fpv_damage).abs() < 1e-3, "{before} -> {after}");
+    assert!(!burning && !destroyed, "worn, not lit");
+}
+
 /// An enemy's drone put straight into the air at `at`, cruising, locked on
 /// the first seat.
 fn enemy_drone(game: &mut Game, at: Position) -> u32 {
