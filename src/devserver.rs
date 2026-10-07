@@ -3504,7 +3504,7 @@ fn parse_intent(params: &Value, prefix: &str) -> Result<Option<Intent>, String> 
     if move_dir.is_none() && face.is_none() && fire.is_none() && lamp.is_none() {
         return Ok(None);
     }
-    Ok(Some(Intent { move_dir, face, fire: fire.unwrap_or(false), fire_aim_offset: 0.0, slow: 0.0, lamp: lamp.unwrap_or(false) }))
+    Ok(Some(Intent { move_dir, face, fire: fire.unwrap_or(false), lamp: lamp.unwrap_or(false), ..Intent::default() }))
 }
 
 /// Standard base64 (RFC 4648, padded) - the one encoder this crate needs,
@@ -4886,7 +4886,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(cats.len(), 5);
         assert_eq!(cats[0]["name"], "wall");
         assert_eq!(cats[0]["current"], "iron");
-        assert_eq!(cats[4]["tools"].as_array().unwrap().len(), 17, "{}", cats[4]);
+        assert_eq!(cats[4]["tools"].as_array().unwrap().len(), 18, "{}", cats[4]);
         let err = ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "granite" })).unwrap_err();
         assert!(err.contains("brick") && err.contains("eraser"), "{err}");
 

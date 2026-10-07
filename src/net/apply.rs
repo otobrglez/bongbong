@@ -444,6 +444,7 @@ fn kick_turret(game: &mut Game, slot: usize, weapon: WeaponKind) {
             WeaponKind::Emp => tank.kick_emp(),
             WeaponKind::GaussRail => tank.kick_rail(),
             WeaponKind::FpvSwarm => tank.kick_fpv(),
+            WeaponKind::RodFromGod => tank.kick_rod(),
             WeaponKind::Minigun | WeaponKind::Missiles | WeaponKind::Flamethrower | WeaponKind::Grenades => {}
         }
         break;
@@ -482,6 +483,8 @@ fn drawn_muzzle(game: &mut Game, slot: usize, weapon: WeaponKind) -> Option<Posi
         // A drone leaves the halo, not a barrel: its launch's wash is its
         // show.
         WeaponKind::FpvSwarm => None,
+        // A call is a beam from the sky, not a shot: its zone is its show.
+        WeaponKind::RodFromGod => None,
     };
     tank.rotation = facing;
     muzzle
@@ -732,6 +735,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
         tank.emp_charges = 0;
         tank.gauss_slugs = 0;
         tank.fpv_drones = 0;
+        tank.rods = 0;
         let ammo = t.ammo as i32;
         match weapon {
             ActiveWeapon::Shell => tank.shells_ammo = ammo,
@@ -745,6 +749,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
             ActiveWeapon::Emp => tank.emp_charges = ammo,
             ActiveWeapon::GaussRail => tank.gauss_slugs = ammo,
             ActiveWeapon::FpvSwarm => tank.fpv_drones = ammo,
+            ActiveWeapon::RodFromGod => tank.rods = ammo,
         }
         // The magazine, which the trigger fires while a special is
         // offline; and an EMP's outages, run down between snapshots.

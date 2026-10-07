@@ -69,6 +69,13 @@ pub struct Intent {
     /// simulation finds the edge and an online packet that repeats a held
     /// key never drops two. The AI never sets it.
     pub lamp: bool,
+    /// The map cell an enemy's rod reticle is to walk to (`rod::Steer::aim`,
+    /// docs/rod-from-god.md): the AI's stick for it. AI-only, like
+    /// `fire_aim_offset`; never on the wire, and a seat's is always `None`.
+    pub aim_cell: Option<(i32, i32)>,
+    /// Let a charge in progress go without firing it (`SpecialUse::Drop`):
+    /// the collect pass lapses it. AI-only, like `aim_cell`.
+    pub drop_charge: bool,
 }
 
 impl Intent {
@@ -101,6 +108,32 @@ pub enum SpecialSense {
     Emp(EmpSense),
     Gauss(GaussSense),
     Fpv(FpvSense),
+    Rod(RodSense),
+}
+
+/// What an enemy carrying the rod from god is handed this frame
+/// (`Game::rod_senses`, docs/rod-from-god.md "What it is handed"): every
+/// seat in its pick already held to the sight-box rule and to what the
+/// tank knows.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RodSense {
+    /// What it would call now; `None` when nothing qualifies.
+    pub pick: Option<RodPick>,
+    /// Its centre stands inside a call's danger: a reticle it holds is
+    /// dropped and the dodge takes it out.
+    pub under_call: bool,
+}
+
+/// A rod tank's target (`RodSense::pick`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RodPick {
+    /// The cell its reticle goes to and the call lands on.
+    pub cell: (i32, i32),
+    /// The seat the call is used on, for a seat's pick: what
+    /// `Ai::shot_at_seat` records at the release.
+    pub at_seat: Option<u8>,
+    /// "camper", "lead", "tower" or "frog": the trace's word.
+    pub why: &'static str,
 }
 
 /// What an enemy carrying the FPV swarm measured this frame
@@ -478,8 +511,13 @@ enum SpecialUse {
     Approach { to: Position, why: &'static str },
     /// Hold the trigger of a charge weapon facing `face` (the charge-and-hold
     /// pattern, docs/gauss-rail.md): a press starts a charge, holding keeps
-    /// it, and the tank stands its ground meanwhile.
-    Charge { face: Dir, why: &'static str },
+    /// it, and the tank stands its ground meanwhile. `aim` is the cell a
+    /// rod's reticle walks to (`Intent::aim_cell`); `None` for the rail.
+    Charge { face: Dir, aim: Option<(i32, i32)>, why: &'static str },
+    /// Let a charge in progress go without firing it (`Intent::drop_charge`):
+    /// a rod tank whose target no longer holds, any charging tank a call
+    /// stands over. The tree goes on below, to the dodge.
+    Drop { why: &'static str },
     /// Let a charge weapon's trigger go facing `face`: the simulation fires
     /// the charge if it is ready. `at_seat` is the seat it is used on.
     Release { face: Dir, at_seat: Option<u8>, why: &'static str },
@@ -491,13 +529,13 @@ enum SpecialUse {
 
 /// The BB-36 weapons' crates an enemy detours for, in the order it wants
 /// them (`build`'s `seek_special` tier, after the minigun's).
-pub const SEEK_SPECIALS: [PickupKind; 4] = [PickupKind::SonicHammer, PickupKind::Emp, PickupKind::GaussRail, PickupKind::FpvSwarm];
+pub const SEEK_SPECIALS: [PickupKind; 5] = [PickupKind::SonicHammer, PickupKind::Emp, PickupKind::GaussRail, PickupKind::FpvSwarm, PickupKind::RodFromGod];
 
 /// Whether the tree's generic tiers - attack, snipe, grudge, breach - may
 /// pull the trigger on `weapon`: false for a special whose own rule owns
 /// it (`special_rule`).
 pub fn generic_fire(weapon: ActiveWeapon) -> bool {
-    !matches!(weapon, ActiveWeapon::SonicHammer | ActiveWeapon::Emp | ActiveWeapon::GaussRail | ActiveWeapon::FpvSwarm)
+    !matches!(weapon, ActiveWeapon::SonicHammer | ActiveWeapon::Emp | ActiveWeapon::GaussRail | ActiveWeapon::FpvSwarm | ActiveWeapon::RodFromGod)
 }
 
 /// A latched decision to shoot through the tile in `dir` (see
@@ -2281,6 +2319,12 @@ impl Brain<'_> {
         q.x > 0.0 && q.y > 0.0 && q.x < self.width && q.y < self.height && self.grid.usable(q) && self.grid.connected(self.me.position, q)
     }
 
+    /// Whether this tank's centre stands inside a call's circle: a danger
+    /// nobody owns (`Zone::danger`, docs/rod-from-god.md).
+    fn in_call(&self) -> bool {
+        self.dangers.iter().any(|d| d.owner.is_none() && d.depth(self.me.position) > 0.0)
+    }
+
     /// Whether `p` lies inside a danger this tank does not own.
     fn in_danger(&self, p: Position) -> bool {
         let mine = self.me.owner_slot();
@@ -3108,12 +3152,52 @@ fn special_rule(b: &Brain) -> Option<SpecialUse> {
     if let Some(windup) = b.me.windup() {
         return windup_rule(b, windup);
     }
+    // A call stands over it (docs/rod-from-god.md "Reacting to a call"): no
+    // special is used from inside the circle; the dodge takes it out.
+    if b.in_call() {
+        return None;
+    }
     match (b.me.active_weapon(), b.sense) {
         (ActiveWeapon::SonicHammer, SpecialSense::Hammer(sense)) => hammer_rule(b, sense),
         (ActiveWeapon::Emp, SpecialSense::Emp(sense)) => emp_rule(b, sense),
         (ActiveWeapon::GaussRail, SpecialSense::Gauss(sense)) => gauss_rule(b, sense),
         (ActiveWeapon::FpvSwarm, SpecialSense::Fpv(sense)) => fpv_rule(b, sense),
+        (ActiveWeapon::RodFromGod, SpecialSense::Rod(sense)) => rod_rule(b, sense),
         _ => None,
+    }
+}
+
+/// The rod from god's rule with no reticle up (docs/rod-from-god.md "The
+/// rule"): a training dummy never calls, nor does a rod still reloading or
+/// a tank whose fire timer runs; a pick starts the reticle toward its cell.
+/// Draws no RNG.
+fn rod_rule(b: &Brain, sense: &RodSense) -> Option<SpecialUse> {
+    if b.ai.frog_only || b.me.fire_cooldown > 0.0 || b.ai.fire_timer > 0.0 {
+        return None;
+    }
+    let pick = sense.pick?;
+    let face = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+    Some(SpecialUse::Charge { face, aim: Some(pick.cell), why: pick.why })
+}
+
+/// A rod tank's rule while its reticle is up (`windup_rule`): standing
+/// under a call, or with no pick left, it drops the reticle; short of the
+/// pick's cell it walks the reticle on; on it, rested
+/// `rod_ai_aim_hold_seconds` with the charge full, it lets go - the call.
+/// Never `None`.
+fn rod_aim_rule(b: &Brain, face: Dir) -> SpecialUse {
+    let sense = match b.sense {
+        SpecialSense::Rod(sense) => *sense,
+        _ => RodSense::default(),
+    };
+    if sense.under_call {
+        return SpecialUse::Drop { why: "rod-under-call" };
+    }
+    let Some(pick) = sense.pick else { return SpecialUse::Drop { why: "rod-lost" } };
+    let full = b.me.charge.is_some_and(|c| c.stage() == crate::tank::ChargeStage::Full);
+    match b.me.reticle {
+        Some(r) if full && r.cell == pick.cell && r.rest >= tuning().rod_ai_aim_hold_seconds => SpecialUse::Release { face, at_seat: pick.at_seat, why: pick.why },
+        _ => SpecialUse::Charge { face, aim: Some(pick.cell), why: "rod-aim" },
     }
 }
 
@@ -3270,7 +3354,7 @@ fn gauss_rule(b: &Brain, sense: &GaussSense) -> Option<SpecialUse> {
         }
     }
     let (face, lane) = best?;
-    Some(SpecialUse::Charge { face, why: lane.why() })
+    Some(SpecialUse::Charge { face, aim: None, why: lane.why() })
 }
 
 /// A charging gauss rail's rule (`windup_rule`): charging, it holds the
@@ -3285,10 +3369,10 @@ fn gauss_charge_rule(b: &Brain, face: Dir, sense: Option<&GaussSense>) -> Specia
     match b.me.charge.map(|c| c.stage()) {
         Some(crate::tank::ChargeStage::Full) => match lane.filter(|l| l.counts() && l.target_along().is_some()) {
             Some(lane) => SpecialUse::Release { face, at_seat: lane.at_seat.map(|(s, _)| s), why: lane.why() },
-            None => SpecialUse::Charge { face, why: "rail-wait" },
+            None => SpecialUse::Charge { face, aim: None, why: "rail-wait" },
         },
-        Some(crate::tank::ChargeStage::Overcharged) => SpecialUse::Charge { face, why: "rail-vent" },
-        _ => SpecialUse::Charge { face, why: "rail-charge" },
+        Some(crate::tank::ChargeStage::Overcharged) => SpecialUse::Charge { face, aim: None, why: "rail-vent" },
+        _ => SpecialUse::Charge { face, aim: None, why: "rail-charge" },
     }
 }
 
@@ -3402,7 +3486,13 @@ fn act_dodge(b: &mut Brain) -> Status {
 /// to hold or let go - the rail's `gauss_charge_rule` - and a charge
 /// weapon adds its arm here.
 fn windup_rule(b: &Brain, windup: crate::tank::Windup) -> Option<SpecialUse> {
+    // A charge is let go under a call (docs/rod-from-god.md "Reacting to a
+    // call"); a tell, half a second long, commits.
+    if b.me.charge.is_some() && b.in_call() {
+        return Some(SpecialUse::Drop { why: "under-call" });
+    }
     match b.me.charge.map(|c| c.weapon) {
+        Some(ActiveWeapon::RodFromGod) => Some(rod_aim_rule(b, windup.facing)),
         Some(ActiveWeapon::GaussRail) => {
             let sense = match b.sense {
                 SpecialSense::Gauss(sense) => Some(sense),
@@ -3522,10 +3612,11 @@ fn act_special(b: &mut Brain) -> Status {
                 b.ai.place_waited += b.dt;
             }
         }
-        SpecialUse::Charge { face, why } => {
+        SpecialUse::Charge { face, aim, why } => {
             b.intent.face = Some(face);
             b.ai.commit(face);
             b.ai.special_why = Some(why);
+            b.intent.aim_cell = aim;
             // A charge running is held whatever the timer says; a new one
             // waits for it (and for the weapon's own cooldown).
             let running = b.me.charge.is_some();
@@ -3543,6 +3634,12 @@ fn act_special(b: &mut Brain) -> Status {
             b.intent.fire = false;
             b.ai.shot_at_seat = at_seat;
         }
+        SpecialUse::Drop { why } => {
+            b.ai.special_why = Some(why);
+            b.intent.fire = false;
+            b.intent.drop_charge = true;
+            return Status::Failure;
+        }
     }
     Status::Success
 }
@@ -3555,6 +3652,7 @@ fn special_fire_interval(weapon: ActiveWeapon) -> f32 {
         ActiveWeapon::Emp => tuning().emp_ai_fire_interval,
         ActiveWeapon::GaussRail => tuning().gauss_ai_fire_interval,
         ActiveWeapon::FpvSwarm => tuning().fpv_enemy_gap_seconds,
+        ActiveWeapon::RodFromGod => tuning().rod_ai_fire_interval,
         _ => tuning().enemy_fire_interval,
     }
 }

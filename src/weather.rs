@@ -280,6 +280,12 @@ pub fn grip_factor(sky: Weather, t: &Tuning) -> f32 {
     if t.weather_rules && matches!(sky, Weather::Rain | Weather::Storm) { t.rain_grip_factor } else { 1.0 }
 }
 
+/// Whether a rod's crater under `sky` fills with water (docs/rod-from-god.md
+/// "The crater"): a rainy sky's or a storm's.
+pub fn fills_craters(sky: Weather, t: &Tuning) -> bool {
+    t.weather_rules && matches!(sky, Weather::Rain | Weather::Storm)
+}
+
 /// Whether a round under `sky` has its water frozen over: a snowy sky's,
 /// read once by `Game::init` (`ground::WaterLayout::freeze`).
 pub fn freezes(sky: Weather, t: &Tuning) -> bool {

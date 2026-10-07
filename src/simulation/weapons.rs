@@ -468,7 +468,7 @@ pub(super) fn dispatch_fire_from(
         }
         // A charge weapon fires on its release (`Game::charge_trigger`,
         // `fire_charge`), never on a trigger pull.
-        ActiveWeapon::GaussRail => {}
+        ActiveWeapon::GaussRail | ActiveWeapon::RodFromGod => {}
         ActiveWeapon::FpvSwarm => {
             if tank.fpv_drones > 0 {
                 f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::FpvSwarm.name() });

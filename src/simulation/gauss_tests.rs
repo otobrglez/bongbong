@@ -1065,8 +1065,8 @@ fn a_sonic_shove_mid_charge_keeps_it() {
     }
     let s = seat(&game);
     {
-        let Game { world, physics, water, lava, weather, time, .. } = &mut game;
-        let footing = Footing::at(water, lava, *weather, Position::new(96.0, 192.0), *time);
+        let Game { world, physics, water, lava, craters, weather, time, .. } = &mut game;
+        let footing = Footing::at(water, lava, craters, *weather, Position::new(96.0, 192.0), *time);
         let mut tank = world.get::<&mut Tank>(s).unwrap();
         super::sonic::knock_hull(physics, &mut tank, Vec2::new(0.0, 1.0), 300.0, footing);
     }

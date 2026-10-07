@@ -976,9 +976,12 @@ impl Game {
         // would otherwise punch darker squares through it.
         d.draw_mode2D(w.area_camera, |mut d, _| {
             if let Some(age) = self.screen_flash {
-                let seconds = tuning().blast_screen_flash_seconds;
+                // A rod's flash is stronger and longer than a drum's
+                // (`Game::flash_screen_with`).
+                let strength = self.screen_flash_strength.max(1.0);
+                let seconds = tuning().blast_screen_flash_seconds * strength;
                 if seconds > 0.0 && age < seconds {
-                    let peak = tuning().blast_screen_flash_alpha * tuning().screen_fx_intensity;
+                    let peak = (tuning().blast_screen_flash_alpha * strength).min(0.9) * tuning().screen_fx_intensity;
                     let a = (255.0 * peak.clamp(0.0, 1.0) * (1.0 - age / seconds)) as u8;
                     d.draw_rectangle(0, 0, w.area.0, w.area.1, Color::new(255, 240, 200, a));
                 }
@@ -2112,6 +2115,7 @@ fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
         ActiveWeapon::Emp => ("EMP", tank.emp_charges),
         ActiveWeapon::GaussRail => ("RAIL", tank.gauss_slugs),
         ActiveWeapon::FpvSwarm => ("FPV", tank.fpv_drones),
+        ActiveWeapon::RodFromGod => ("ROD", tank.rods),
         ActiveWeapon::Shell => ("SHELL", tank.shells_ammo),
     };
     let mut lines = vec![

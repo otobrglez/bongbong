@@ -155,12 +155,20 @@ pub enum PickupKind {
     /// enemies both use it.
     #[serde(rename = "fpv_swarm")]
     FpvSwarm,
+    /// The rod from god (docs/rod-from-god.md): loads `rod_per_pickup`
+    /// calls into an uplink (one weapon at a time, as above). Held, the
+    /// trigger puts up a reticle the stick steers while the hull stands;
+    /// let go, a rod is called on its cell and lands `rod_countdown_seconds`
+    /// later, crushing every hull in its circle and leaving a crater
+    /// (`rod.rs`). Players and enemies both use it.
+    #[serde(rename = "rod_from_god")]
+    RodFromGod,
 }
 
 impl PickupKind {
     /// Every kind in declaration order: the crate and symbol sheets' row
     /// order (`row`).
-    pub const ALL: [PickupKind; 17] = [
+    pub const ALL: [PickupKind; 18] = [
         PickupKind::Health,
         PickupKind::Ammo,
         PickupKind::Laser,
@@ -178,6 +186,7 @@ impl PickupKind {
         PickupKind::Emp,
         PickupKind::GaussRail,
         PickupKind::FpvSwarm,
+        PickupKind::RodFromGod,
     ];
 
     /// This kind's row on static/crates_sheet.png and
@@ -201,6 +210,7 @@ impl PickupKind {
             PickupKind::Emp => 14,
             PickupKind::GaussRail => 15,
             PickupKind::FpvSwarm => 16,
+            PickupKind::RodFromGod => 17,
         }
     }
 
@@ -225,6 +235,7 @@ impl PickupKind {
             PickupKind::Emp => "emp_burst",
             PickupKind::GaussRail => "gauss_rail",
             PickupKind::FpvSwarm => "fpv_swarm",
+            PickupKind::RodFromGod => "rod_from_god",
         }
     }
 
@@ -248,6 +259,7 @@ impl PickupKind {
             PickupKind::Emp => Some(ActiveWeapon::Emp),
             PickupKind::GaussRail => Some(ActiveWeapon::GaussRail),
             PickupKind::FpvSwarm => Some(ActiveWeapon::FpvSwarm),
+            PickupKind::RodFromGod => Some(ActiveWeapon::RodFromGod),
             PickupKind::Health
             | PickupKind::Ammo
             | PickupKind::SpeedUp
@@ -285,6 +297,9 @@ impl PickupKind {
             // Two-tone: a warm ivory quadcopter, its light the crimson of its
             // lamps (the HUD's accent).
             PickupKind::FpvSwarm => [0xBFA77A, 0xFFF0C8, 0xFF2D5F],
+            // Two-tone: a tungsten rod in dark steel grey, its light the
+            // designator's red of the reticle's brackets (the HUD's accent).
+            PickupKind::RodFromGod => [0x4E545C, 0x8A9099, 0xFF3228],
         };
         [rgb(shade), rgb(base), rgb(light)]
     }
@@ -310,7 +325,9 @@ impl PickupKind {
             // A speaker, not ordnance: it spills.
             | PickupKind::SonicHammer
             // A bank of coils, not ordnance: it spills too.
-            | PickupKind::Emp => false,
+            | PickupKind::Emp
+            // A radio uplink: the rod is in orbit, not in the crate.
+            | PickupKind::RodFromGod => false,
         }
     }
 }

@@ -24,6 +24,7 @@ use crate::{
     TANK_MODULE_EMP_COL,
     TANK_MODULE_GAUSS_COL,
     TANK_MODULE_FPV_COL,
+    TANK_MODULE_ROD_COL,
     TANK_MODULE_LASER_COL,
     TANK_MODULE_MINIGUN_COL,
     TANK_MODULE_MISSILES_COL,
@@ -277,6 +278,7 @@ pub enum ActiveWeapon {
     Emp,
     GaussRail,
     FpvSwarm,
+    RodFromGod,
     Shell,
 }
 
@@ -294,6 +296,7 @@ impl ActiveWeapon {
             ActiveWeapon::Emp => "emp_burst",
             ActiveWeapon::GaussRail => "gauss_rail",
             ActiveWeapon::FpvSwarm => "fpv_swarm",
+            ActiveWeapon::RodFromGod => "rod_from_god",
             ActiveWeapon::Shell => "shell",
         }
     }
@@ -307,9 +310,11 @@ impl ActiveWeapon {
             ActiveWeapon::SonicHammer => Some(tuning().sonic_tell_seconds).filter(|&s| s > 0.0),
             ActiveWeapon::Emp => Some(tuning().emp_tell_seconds).filter(|&s| s > 0.0),
             // Its charge is its tell (`Tank::charge`); a drone's flight
-            // is the swarm's (docs/fpv-swarm.md "The tell").
+            // is the swarm's (docs/fpv-swarm.md "The tell"); the rod's
+            // reticle and its call are its own (docs/rod-from-god.md).
             ActiveWeapon::GaussRail
             | ActiveWeapon::FpvSwarm
+            | ActiveWeapon::RodFromGod
             | ActiveWeapon::Laser
             | ActiveWeapon::Plasma
             | ActiveWeapon::Minigun
@@ -331,7 +336,7 @@ impl ActiveWeapon {
             | ActiveWeapon::FpvSwarm => Trigger::Press,
             ActiveWeapon::Laser | ActiveWeapon::Minigun | ActiveWeapon::Missiles => Trigger::Auto,
             ActiveWeapon::Flamethrower => Trigger::Stream,
-            ActiveWeapon::GaussRail => Trigger::Charge,
+            ActiveWeapon::GaussRail | ActiveWeapon::RodFromGod => Trigger::Charge,
         }
     }
 
@@ -350,8 +355,10 @@ impl ActiveWeapon {
                     vent,
                     crawl: t.gauss_crawl_pace,
                     vent_cooldown: t.gauss_vent_cooldown_seconds,
+                    stick: Stick::Drive,
                 })
             }
+            ActiveWeapon::RodFromGod => Some(crate::rod::rule(&t)),
             _ => None,
         }
     }
@@ -375,6 +382,7 @@ impl ActiveWeapon {
             ActiveWeapon::Emp => t.emp_charges_per_pickup,
             ActiveWeapon::GaussRail => t.gauss_slugs_per_pickup,
             ActiveWeapon::FpvSwarm => t.fpv_drones_per_pickup,
+            ActiveWeapon::RodFromGod => t.rod_per_pickup,
             ActiveWeapon::Shell => t.max_shells,
         }
     }
@@ -383,7 +391,7 @@ impl ActiveWeapon {
 /// The special weapons, each the cargo of its own crate. A tank carries at
 /// most one of them at a time (`Tank::take_weapon`); with none, or once it
 /// runs dry, the trigger fires shells.
-pub const SPECIAL_WEAPONS: [ActiveWeapon; 10] = [
+pub const SPECIAL_WEAPONS: [ActiveWeapon; 11] = [
     ActiveWeapon::Laser,
     ActiveWeapon::Plasma,
     ActiveWeapon::Minigun,
@@ -394,6 +402,7 @@ pub const SPECIAL_WEAPONS: [ActiveWeapon; 10] = [
     ActiveWeapon::Emp,
     ActiveWeapon::GaussRail,
     ActiveWeapon::FpvSwarm,
+    ActiveWeapon::RodFromGod,
 ];
 
 /// How a weapon's trigger fires it (`ActiveWeapon::trigger`,
@@ -407,8 +416,19 @@ pub enum Trigger {
     Auto,
     /// A stream while held: the flamethrower.
     Stream,
-    /// Built while held and fired on the release (`Charge`): the gauss rail.
+    /// Built while held and fired on the release (`Charge`): the gauss
+    /// rail, the rod from god's reticle.
     Charge,
+}
+
+/// What the stick does while a charge runs (`ChargeRule::stick`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stick {
+    /// It drives the hull, at the rule's crawl: the gauss rail.
+    Drive,
+    /// It is the weapon's: the hull stands and the stick steers the rod's
+    /// reticle (`Tank::step_trigger`, docs/rod-from-god.md).
+    Aim,
 }
 
 /// A charge weapon's timings, in seconds the trigger is held
@@ -427,6 +447,8 @@ pub struct ChargeRule {
     pub crawl: f32,
     /// After a vent, how long before a charge may start again.
     pub vent_cooldown: f32,
+    /// What the stick does while it runs.
+    pub stick: Stick,
 }
 
 /// How many ticks a room's count of a client's held trigger may differ from
@@ -840,6 +862,16 @@ pub struct Tank {
     /// halo and the HUD are drawn without them. Presentation only, 0
     /// everywhere else.
     pub fpv_lifting: u8,
+    /// Calls left in the rod from god's uplink (`pickup::PickupKind::RodFromGod`,
+    /// `rod.rs`). Pickup-only, one per call.
+    pub rods: i32,
+    /// The rod's reticle while its trigger is held (`rod::Reticle`): set
+    /// when the charge starts, steered by the stick or an enemy's aim, gone
+    /// with the charge (`step_trigger`).
+    pub reticle: Option<crate::rod::Reticle>,
+    /// Seconds the rod's module shows its uplink cell (`kick_rod`).
+    /// Presentation only.
+    pub rod_flash: f32,
     /// An enemy's trigger as the simulation last read it
     /// (`simulation::enemy_trigger`): the press edge a charge starts on. A
     /// seat's is `Game::player_fire_held_last_frame`.
@@ -1065,6 +1097,9 @@ impl Default for Tank {
             fpv_want: None,
             fpv_flash: 0.0,
             fpv_lifting: 0,
+            rods: 0,
+            reticle: None,
+            rod_flash: 0.0,
             trigger_held: false,
             droop: 0.0,
             speed_boost_timer: 0.0,
@@ -1190,6 +1225,7 @@ impl Tank {
             PickupKind::Emp => self.special().is_none(),
             PickupKind::GaussRail => self.special().is_none(),
             PickupKind::FpvSwarm => self.special().is_none(),
+            PickupKind::RodFromGod => self.special().is_none(),
         }
     }
 
@@ -1460,6 +1496,12 @@ impl Tank {
         self.fpv_flash = tuning().fpv_flash_seconds;
     }
 
+    /// A rod was called: the uplink shows its uplink cell for
+    /// `rod_flash_seconds`.
+    pub fn kick_rod(&mut self) {
+        self.rod_flash = tuning().rod_flash_seconds;
+    }
+
     /// Step the recoil cells `kick` set, and the laser's and the dish's
     /// flashes.
     pub fn tick_recoil(&mut self, dt: f32) {
@@ -1468,6 +1510,7 @@ impl Tank {
         self.emp_flash = (self.emp_flash - dt).max(0.0);
         self.rail_flash = (self.rail_flash - dt).max(0.0);
         self.fpv_flash = (self.fpv_flash - dt).max(0.0);
+        self.rod_flash = (self.rod_flash - dt).max(0.0);
         if let Some(left) = self.recoil_second_in {
             let left = left - dt;
             if left <= 0.0 {
@@ -1543,6 +1586,7 @@ impl Tank {
         }
         self.tell = None;
         self.charge = None;
+        self.reticle = None;
         self.minigun_burst = None;
         self.missile_volley = None;
         self.pending_plasma_shot = None;
@@ -1641,9 +1685,45 @@ impl Tank {
     }
 
     /// Lose a charge without firing (a wreck, the round's end); true if
-    /// there was one.
+    /// there was one. A rod's reticle goes with it.
     pub fn lapse_charge(&mut self) -> bool {
+        self.reticle = None;
         self.charge.take().is_some()
+    }
+
+    /// `step_charge`, with a rod's reticle carried along it
+    /// (docs/rod-from-god.md): a reticle already up is steered first
+    /// (`rod::step_reticle` - `steer`'s stick, an enemy's aim, or a room's
+    /// report of where the client has it), held in range of the hull in a
+    /// field of `field` px; then the charge is stepped. A rod charge that
+    /// starts puts its reticle on the cell `rod_reticle_start_cells` ahead
+    /// of the hull. The cell the reticle stood on at a release, for the
+    /// call; the reticle is gone with the charge. For every other weapon
+    /// exactly `step_charge`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn step_trigger(&mut self, fire: bool, pressed: bool, dt: f32, open: bool, report: Option<u32>, steer: crate::rod::Steer, field: (f32, f32)) -> (ChargeEdge, Option<(i32, i32)>) {
+        let t = tuning();
+        let range = crate::rod::Range::of(self.position, field, &t);
+        if self.charge.is_some_and(|c| c.weapon == ActiveWeapon::RodFromGod)
+            && let Some(reticle) = self.reticle.as_mut()
+        {
+            crate::rod::step_reticle(reticle, steer, &range, dt, &t);
+        }
+        let held = self.reticle.map(|r| r.cell);
+        let edge = self.step_charge(fire, pressed, dt, open, report);
+        match edge {
+            ChargeEdge::Started if self.charge.is_some_and(|c| c.weapon == ActiveWeapon::RodFromGod) => {
+                let facing = Dir::from_rotation(self.rotation).unwrap_or(Dir::Up);
+                let mut reticle = crate::rod::Reticle::new(crate::rod::reticle_start(self.position, facing, &range, &t));
+                if let Some(cell) = steer.report {
+                    reticle.cell = range.hold(cell);
+                }
+                self.reticle = Some(reticle);
+            }
+            _ if self.charge.is_none() => self.reticle = None,
+            _ => {}
+        }
+        (edge, held)
     }
 
     /// The share of its top speed this hull keeps: its charge's crawl while
@@ -1680,6 +1760,7 @@ impl Tank {
             ActiveWeapon::Emp => self.emp_charges,
             ActiveWeapon::GaussRail => self.gauss_slugs,
             ActiveWeapon::FpvSwarm => self.fpv_drones,
+            ActiveWeapon::RodFromGod => self.rods,
             ActiveWeapon::Shell => self.shells_ammo,
         }
     }
@@ -1714,6 +1795,7 @@ impl Tank {
             ActiveWeapon::Emp => self.emp_charges = self.emp_charges.max(t.emp_charges_per_pickup),
             ActiveWeapon::GaussRail => self.gauss_slugs = self.gauss_slugs.max(t.gauss_slugs_per_pickup),
             ActiveWeapon::FpvSwarm => self.fpv_drones = self.fpv_drones.max(t.fpv_drones_per_pickup),
+            ActiveWeapon::RodFromGod => self.rods = self.rods.max(t.rod_per_pickup),
             ActiveWeapon::Shell => {}
         }
     }
@@ -1740,6 +1822,7 @@ impl Tank {
             ActiveWeapon::Emp => self.emp_charges = 0,
             ActiveWeapon::GaussRail => self.gauss_slugs = 0,
             ActiveWeapon::FpvSwarm => self.fpv_drones = 0,
+            ActiveWeapon::RodFromGod => self.rods = 0,
             ActiveWeapon::Shell => {}
         }
     }
@@ -2201,9 +2284,9 @@ fn blit_layers(c: &mut impl Canvas, tank: &Tank, layers: &[Layer], tint: Color) 
 /// / firing, the flamethrower's pilot flickering or its jet while held. A
 /// module is hardware, not a firing-mode indicator: it shows whenever the
 /// weapon is carried, and a wreck carries none.
-fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 10] {
+fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 11] {
     if tank.is_wreck() {
-        return [None; 10];
+        return [None; 11];
     }
     // A module's armed cell needs its weapon live: one whose special is
     // offline (an EMP) shows its idle cell, its lights out.
@@ -2255,7 +2338,11 @@ fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 10] {
     // the halo - unless another special's module has taken the roof.
     let linked = (tank.fpv_flash > 0.0 || tank.fpv_out > 0) && tank.special().is_none();
     let fpv = (tank.fpv_drones > 0 || linked).then(|| TANK_MODULE_FPV_COL + crate::fpv::module_cell(tank, time));
-    [minigun, missiles, plasma, laser, flame, grenades, sonic, emp, gauss, fpv]
+    // The uplink's last call still shows on it - unless another special's
+    // module has taken the roof.
+    let calling = tank.rod_flash > 0.0 && tank.special().is_none();
+    let rod = (tank.rods > 0 || calling).then(|| TANK_MODULE_ROD_COL + crate::rod::module_cell(tank, time));
+    [minigun, missiles, plasma, laser, flame, grenades, sonic, emp, gauss, fpv, rod]
 }
 
 /// Draw a tank: hull, turret and the weapon modules it carries, each at its

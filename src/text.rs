@@ -76,6 +76,8 @@ keys! {
     BUTTON_LEAVE = "button-leave";
     BUTTON_ONLINE = "button-online";
     HUD_WEAPON_OFFLINE = "hud-weapon-offline";
+    HUD_ROD_AIM = "hud-rod-aim";
+    HUD_ROD_CANCEL = "hud-rod-cancel";
     PLAYERS_TITLE = "players-title";
     PLAYERS_KEYS = "players-keys";
     PLAYERS_TOUCH = "players-touch";

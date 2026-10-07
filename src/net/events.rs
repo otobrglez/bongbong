@@ -258,6 +258,13 @@ pub enum WireEvent {
     /// A downed drone `id` reached the ground at (`x`, `y`);
     /// `Event::DroneCrashed`.
     DroneCrashed { id: u16, x: i16, y: i16 },
+    /// `slot` called a rod `id` onto map cell (`col`, `row`), landing on
+    /// round tick `land`; `seat` is `wire::NO_SEAT` for an enemy's;
+    /// `Event::RodCalled`.
+    RodCalled { id: u16, slot: u16, seat: u8, col: u8, row: u8, land: u32 },
+    /// The rod `id` landed on map cell (`col`, `row`), leaving a crater
+    /// (`crater`) and setting a volcano off (`erupted`); `Event::RodImpact`.
+    RodImpact { id: u16, col: u8, row: u8, crater: bool, erupted: bool },
 }
 
 /// `WireEvent::DroneLaunched::target` for a drone locked on no tank.
@@ -275,7 +282,8 @@ impl WireEvent {
     /// The seat and weapon of a press's show - the event a client that drew
     /// the press itself claims (`WeaponKind::drawn_on_press`,
     /// `apply::Show::OwnShotsDrawn`): a laser's first leg, a sonic hammer's
-    /// wave, an EMP's ring, a gauss rail slug's first leg, a drone's launch.
+    /// wave, an EMP's ring, a gauss rail slug's first leg, a drone's launch,
+    /// a rod's call.
     /// `None` for every other event, and for an enemy's.
     pub fn press_show(&self) -> Option<(u8, WeaponKind)> {
         match *self {
@@ -284,6 +292,7 @@ impl WireEvent {
             WireEvent::EmpPulse { slot, .. } if (slot as usize) < crate::net::MAX_SEATS => Some((slot as u8, WeaponKind::Emp)),
             WireEvent::RailSlug { seat, leg: 0, .. } if seat != crate::net::wire::NO_SEAT => Some((seat, WeaponKind::GaussRail)),
             WireEvent::DroneLaunched { slot, .. } if (slot as usize) < crate::net::MAX_SEATS => Some((slot as u8, WeaponKind::FpvSwarm)),
+            WireEvent::RodCalled { seat, .. } if seat != crate::net::wire::NO_SEAT => Some((seat, WeaponKind::RodFromGod)),
             _ => None,
         }
     }
@@ -354,6 +363,21 @@ impl WireEvent {
             | Event::TowerDisabled { .. }
             | Event::ChargeStarted { .. }
             | Event::DroneLockLost { .. } => return None,
+            Event::RodCalled { id, slot, seat, cell, land } => WireEvent::RodCalled {
+                id: (id & 0xFFFF) as u16,
+                slot: slot_u16(slot),
+                seat,
+                col: cell.0.clamp(0, u8::MAX as i32) as u8,
+                row: cell.1.clamp(0, u8::MAX as i32) as u8,
+                land: (land / crate::PHYSICS_FIXED_DT).round().max(0.0) as u32,
+            },
+            Event::RodImpact { id, cell, crater, erupted } => WireEvent::RodImpact {
+                id: (id & 0xFFFF) as u16,
+                col: cell.0.clamp(0, u8::MAX as i32) as u8,
+                row: cell.1.clamp(0, u8::MAX as i32) as u8,
+                crater,
+                erupted,
+            },
             Event::DroneLaunched { id, slot, x, y, target, frog } => WireEvent::DroneLaunched {
                 id: (id & 0xFFFF) as u16,
                 slot: slot_u16(slot),
@@ -539,6 +563,14 @@ impl WireEvent {
                 pierced: pierced.iter().map(|p| (d(p.x), d(p.y), p.what)).collect(),
             },
             WireEvent::ChargeEnded { slot, weapon, end } => Event::ChargeEnded { slot: slot as usize, weapon: weapon.name(), end },
+            WireEvent::RodCalled { id, slot, seat, col, row, land } => Event::RodCalled {
+                id: id as u32,
+                slot: slot as usize,
+                seat,
+                cell: (col as i32, row as i32),
+                land: land as f32 * crate::PHYSICS_FIXED_DT,
+            },
+            WireEvent::RodImpact { id, col, row, crater, erupted } => Event::RodImpact { id: id as u32, cell: (col as i32, row as i32), crater, erupted },
             WireEvent::DroneLaunched { id, slot, x, y, target, frog } => Event::DroneLaunched {
                 id: id as u32,
                 slot: slot as usize,

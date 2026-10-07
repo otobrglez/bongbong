@@ -488,7 +488,7 @@ impl Game {
     /// kill is knocked along the line from the pivot (`knock`) and, an
     /// enemy, told it was hit.
     fn strike_hull(&mut self, f: &mut Frame, entity: Entity, d: f32, origin: Position, shooter: Owner, t: &Tuning) {
-        let footing = super::with_tank(&self.world, entity, |tank| Footing::at(&self.water, &self.lava, self.weather, tank.position, self.time));
+        let footing = super::with_tank(&self.world, entity, |tank| Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time));
         let survived = {
             let Ok(mut tank) = self.world.get::<&mut Tank>(entity) else { return };
             let falloff = sonic::falloff(t, d);
@@ -758,7 +758,7 @@ impl Game {
         rails: &[super::gauss::RailLane],
         t: &Tuning,
     ) -> bool {
-        let footing = Footing::at(&self.water, &self.lava, self.weather, seat.pos, self.time);
+        let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, seat.pos, self.time);
         let speed = sonic::shove_speed(t, seat.mass_factor, d);
         let reach = sonic::slide(t, speed, footing.grip);
         let line = seat.pos - origin;

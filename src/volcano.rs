@@ -108,7 +108,15 @@ pub fn bomb_launch(start: f32, k: i32, count: i32, t: &Tuning) -> f32 {
 #[derive(Clone, Debug)]
 pub struct Volcano {
     pub cell: (i32, i32),
+    /// The clock offset its cycle runs on: `base` moved by `shift` ticks.
     pub offset: f32,
+    /// The offset hashed from its crater, which the cycle runs on until a
+    /// rod sets it off.
+    pub base: f32,
+    /// Ticks a rod from god moved its cycle by (`set_off_shift`,
+    /// docs/rod-from-god.md), 0 until one does: the round state carries it,
+    /// so a replica's cycle runs on the room's.
+    pub shift: i32,
     /// The directions (radians, 0 east, clockwise as the field's y runs
     /// down) the lava leaves the cone in: where its gullies run.
     pub outlets: Vec<f32>,
@@ -118,7 +126,34 @@ impl Volcano {
     /// The volcano on crater `cell`, its gullies cut toward `outlets`.
     pub fn new(cell: (i32, i32), outlets: Vec<f32>, t: &Tuning) -> Volcano {
         let h = crate::lava::hash3(cell.0, cell.1, 71);
-        Volcano { cell, offset: h * 0.25 * t.volcano_period_seconds.max(1.0), outlets }
+        let base = h * 0.25 * t.volcano_period_seconds.max(1.0);
+        Volcano { cell, offset: base, base, shift: 0, outlets }
+    }
+
+    /// Move its cycle by `shift` ticks from its hashed offset.
+    pub fn set_shift(&mut self, shift: i32) {
+        self.shift = shift;
+        self.offset = self.base + shift as f32 * crate::PHYSICS_FIXED_DT;
+    }
+
+    /// The shift (whole ticks) that starts this volcano's next eruption on
+    /// the tick after round time `now` (docs/rod-from-god.md "A volcano"),
+    /// and that eruption's number: from asleep or cooling the one after the
+    /// last, from a rumble that rumble's own. `None` while it erupts. The
+    /// cycle runs on from there a period at a time - still a pure function
+    /// of the round clock and the shift.
+    pub fn set_off_shift(&self, now: f32, t: &Tuning) -> Option<(i32, i64)> {
+        let p = self.phase(now, t);
+        let n = match p.stage {
+            Stage::Erupt => return None,
+            Stage::Rumble => p.eruption,
+            Stage::Asleep | Stage::Cool => p.eruption + 1,
+        };
+        let (period, rumble, _, _) = stage_lengths(t);
+        let dt = crate::PHYSICS_FIXED_DT;
+        let want = now + dt - t.volcano_first_rumble_seconds - n as f32 * period - rumble;
+        let shift = ((want - self.base) / dt).floor() as i32;
+        Some((shift, n))
     }
 
     /// The crater's centre on the field.
@@ -224,6 +259,27 @@ mod tests {
         assert_eq!(phase(start + t.volcano_period_seconds - 0.5, 0.0, &t).stage, Stage::Asleep);
         let second = phase(start + t.volcano_period_seconds + 0.5, 0.0, &t);
         assert_eq!((second.stage, second.eruption), (Stage::Rumble, 1));
+    }
+
+    #[test]
+    fn set_off_shift_starts_the_eruption_on_the_next_tick_and_leaves_an_eruption_alone() {
+        let t = Tuning::DEFAULT;
+        let dt = crate::PHYSICS_FIXED_DT;
+        for now in [3.0_f32, 14.5, 17.0, 26.0, 40.0] {
+            let mut v = Volcano::new((10, 10), Vec::new(), &t);
+            let before = v.phase(now, &t);
+            let Some((shift, n)) = v.set_off_shift(now, &t) else {
+                assert_eq!(before.stage, Stage::Erupt, "{now}");
+                continue;
+            };
+            v.set_shift(shift);
+            let next = v.phase(now + dt, &t);
+            assert_eq!((next.stage, next.eruption), (Stage::Erupt, n), "{now}: erupting on the next tick");
+            assert!(v.phase(now, &t).stage != Stage::Erupt, "{now}: not yet on this one");
+            assert!(n >= before.eruption.max(0), "{now}: the count never goes back");
+            let again = v.phase(now + dt + t.volcano_period_seconds, &t);
+            assert_eq!((again.stage, again.eruption), (Stage::Erupt, n + 1), "{now}: the next a period later");
+        }
     }
 
     #[test]

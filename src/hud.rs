@@ -83,6 +83,11 @@ pub const HUD_GAUSS_COLOR: Color = Color::new(0xFF, 0x3D, 0xD8, 255);
 /// its ivory base, which would read as the shells' white.
 pub const HUD_FPV_COLOR: Color = Color::new(0xFF, 0x2D, 0x5F, 255);
 
+/// The rod from god's accent (docs/rod-from-god.md): the designator's red
+/// the reticle is drawn in on the field (`pyro::LASER_RED`'s base), its
+/// crate's light.
+pub const HUD_ROD_COLOR: Color = Color::new(0xFF, 0x32, 0x28, 255);
+
 /// The builder bar's fill - the same `#151515` the web page is set in, so
 /// the bar and the page read as one surface around the field - and the
 /// margins round a letterboxed field. The corners' plates are its dark too.
@@ -411,6 +416,7 @@ pub fn weapon_color(weapon: ActiveWeapon) -> Color {
         ActiveWeapon::Emp => HUD_EMP_COLOR,
         ActiveWeapon::GaussRail => HUD_GAUSS_COLOR,
         ActiveWeapon::FpvSwarm => HUD_FPV_COLOR,
+        ActiveWeapon::RodFromGod => HUD_ROD_COLOR,
         ActiveWeapon::Shell => TEXT,
     }
 }
@@ -430,6 +436,7 @@ pub fn weapon_pickup(weapon: ActiveWeapon) -> Option<crate::pickup::PickupKind> 
         ActiveWeapon::Emp => Some(PickupKind::Emp),
         ActiveWeapon::GaussRail => Some(PickupKind::GaussRail),
         ActiveWeapon::FpvSwarm => Some(PickupKind::FpvSwarm),
+        ActiveWeapon::RodFromGod => Some(PickupKind::RodFromGod),
         ActiveWeapon::Shell => None,
     }
 }

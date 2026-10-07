@@ -189,11 +189,12 @@ pub enum WeaponKind {
     Emp,
     GaussRail,
     FpvSwarm,
+    RodFromGod,
 }
 
 impl WeaponKind {
     /// Every kind, in wire order.
-    pub const ALL: [WeaponKind; 11] = [
+    pub const ALL: [WeaponKind; 12] = [
         WeaponKind::Shell,
         WeaponKind::Laser,
         WeaponKind::Plasma,
@@ -205,6 +206,7 @@ impl WeaponKind {
         WeaponKind::Emp,
         WeaponKind::GaussRail,
         WeaponKind::FpvSwarm,
+        WeaponKind::RodFromGod,
     ];
 
     /// The name `ActiveWeapon::name` gives, which is what `Event::Fired`
@@ -222,10 +224,10 @@ impl WeaponKind {
     /// its predicted pose, and claims the room's show of it
     /// (docs/sonic-hammer.md "Online: the shooter's press is drawn at
     /// once"): the laser's beam, the sonic hammer's wave, the EMP's ring,
-    /// the gauss rail's slug, drawn on its release, and an FPV drone's
-    /// launch (`events::WireEvent::press_show`).
+    /// the gauss rail's slug, drawn on its release, an FPV drone's launch
+    /// and a rod's call, drawn on its release (`events::WireEvent::press_show`).
     pub fn drawn_on_press(self) -> bool {
-        matches!(self, WeaponKind::Laser | WeaponKind::SonicHammer | WeaponKind::Emp | WeaponKind::GaussRail | WeaponKind::FpvSwarm)
+        matches!(self, WeaponKind::Laser | WeaponKind::SonicHammer | WeaponKind::Emp | WeaponKind::GaussRail | WeaponKind::FpvSwarm | WeaponKind::RodFromGod)
     }
 }
 
@@ -243,6 +245,7 @@ impl From<ActiveWeapon> for WeaponKind {
             ActiveWeapon::Emp => WeaponKind::Emp,
             ActiveWeapon::GaussRail => WeaponKind::GaussRail,
             ActiveWeapon::FpvSwarm => WeaponKind::FpvSwarm,
+            ActiveWeapon::RodFromGod => WeaponKind::RodFromGod,
         }
     }
 }
@@ -261,6 +264,7 @@ impl From<WeaponKind> for ActiveWeapon {
             WeaponKind::Emp => ActiveWeapon::Emp,
             WeaponKind::GaussRail => ActiveWeapon::GaussRail,
             WeaponKind::FpvSwarm => ActiveWeapon::FpvSwarm,
+            WeaponKind::RodFromGod => ActiveWeapon::RodFromGod,
         }
     }
 }
@@ -1258,7 +1262,7 @@ mod tests {
         for &move_dir in &dirs {
             for &face in &dirs {
                 for (fire, lamp) in [(false, false), (true, false), (false, true), (true, true)] {
-                    let intent = Intent { move_dir, face, fire, fire_aim_offset: 12.5, slow: 0.5, lamp };
+                    let intent = Intent { move_dir, face, fire, fire_aim_offset: 12.5, slow: 0.5, lamp, aim_cell: Some((3, 4)), drop_charge: true };
                     let msg = IntentMsg::new(7, &intent);
                     let back: Intent = (&msg).into();
                     assert_eq!(back.move_dir, move_dir);
