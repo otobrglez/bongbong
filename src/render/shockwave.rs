@@ -27,6 +27,12 @@ pub struct RippleFx {
     pub centers_loc: i32,
     pub times_loc: i32,
     pub gains_loc: i32,
+    /// Where each ring starts and how fast it runs as a multiple of the
+    /// speed (`static/shockwave.fs`): 0 and 1 for an outward ring, the
+    /// reach and a negative pace for a gravity well's inward one.
+    pub starts_loc: i32,
+    pub signs_loc: i32,
+    speed: f32,
     speed_loc: i32,
     width_loc: i32,
     strength_loc: i32,
@@ -58,6 +64,19 @@ impl RippleFx {
     /// own `RippleFx`, and each may point at its own fragment shader file as
     /// well as its own tuning, so a new effect can look genuinely different
     /// rather than just differently timed.
+    /// A ripple's start (ripple units) and pace as a multiple of this
+    /// effect's speed (`static/shockwave.fs`): 0 and 1 for an outward ring;
+    /// an inward one starts at its reach and closes on its centre over
+    /// `well_form_seconds` (docs/gravity-well.md "The snap").
+    pub fn start_and_sign(&self, shock: &crate::shockwave::Shockwave) -> (f32, f32) {
+        if !shock.inward {
+            return (0.0, 1.0);
+        }
+        let start = shock.start / RIPPLE_FRAME.1;
+        let seconds = crate::tuning::tuning().well_form_seconds.max(0.05);
+        (start, -start / (seconds * self.speed.max(1e-3)))
+    }
+
     pub fn load(
         rl: &mut RaylibHandle,
         thread: &RaylibThread,
@@ -92,6 +111,8 @@ impl RippleFx {
         let centers_loc = shader.get_shader_location("centers[0]");
         let times_loc = shader.get_shader_location("times[0]");
         let gains_loc = shader.get_shader_location("gains[0]");
+        let starts_loc = shader.get_shader_location("starts[0]");
+        let signs_loc = shader.get_shader_location("signs[0]");
         let resolution_loc = shader.get_shader_location("resolution");
         let speed_loc = shader.get_shader_location("speed");
         let width_loc = shader.get_shader_location("width");
@@ -110,6 +131,11 @@ impl RippleFx {
         // at the origin.
         shader.set_shader_value(view_uv_loc, Vector2::new(0.0, 0.0));
         shader.set_shader_value(view_uv_size_loc, Vector2::new(1.0, 1.0));
+        // Every ring outward until a frame says otherwise.
+        if starts_loc >= 0 && signs_loc >= 0 {
+            shader.set_shader_value_v(starts_loc, &[0.0f32; crate::SHOCK_MAX]);
+            shader.set_shader_value_v(signs_loc, &[1.0f32; crate::SHOCK_MAX]);
+        }
 
         RippleFx {
             shader,
@@ -118,6 +144,9 @@ impl RippleFx {
             centers_loc,
             times_loc,
             gains_loc,
+            starts_loc,
+            signs_loc,
+            speed: tuning.speed,
             speed_loc,
             width_loc,
             strength_loc,
@@ -149,6 +178,7 @@ impl RippleFx {
     /// live tuning table changes (`tuning::apply_pending`), so the `fx`
     /// knobs are live like everything else instead of fixed at load.
     pub fn set_tuning(&mut self, tuning: RippleTuning) {
+        self.speed = tuning.speed;
         self.shader.set_shader_value(self.speed_loc, tuning.speed);
         self.shader.set_shader_value(self.width_loc, tuning.width);
         self.shader.set_shader_value(self.strength_loc, tuning.strength);

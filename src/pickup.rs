@@ -431,7 +431,7 @@ pub fn glyph_src(kind: PickupKind) -> Rectangle {
 /// with (`crate_fx::glint_col`). `shadows` is `Game::shadows_enabled`.
 pub fn draw_pickup(c: &mut impl Canvas, pickup: &Pickup, time: f32, shadows: bool) {
     let t = crate::tuning::tuning();
-    let at = pickup.position;
+    let at = pickup.at();
     if let Some(left) = pickup.loose {
         // Spilled: the bare symbol on the ground, blinking out over its
         // last second and a half.

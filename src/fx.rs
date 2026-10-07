@@ -232,7 +232,15 @@ pub struct Fx {
     /// and stepped on the round's clock rather than this layer's, so a
     /// lockstep replays them; a new round makes them again by itself.
     shoal: crate::fish::Shoal,
+    /// The gravity wells pulling at the last `observe`
+    /// (docs/gravity-well.md): particles in their reach spiral in.
+    wells: crate::well::WellField,
 }
+
+/// How fast a particle in a gravity well's pull is drawn toward the core
+/// and as fast again round it, clockwise, at the strongest (px/s;
+/// docs/gravity-well.md "The drain").
+const WELL_FX_PULL: f32 = 90.0;
 
 impl Fx {
     pub fn live(&self) -> usize {
@@ -957,6 +965,7 @@ impl Fx {
 
     fn sample_world(&mut self, game: &Game, dt: f32) {
         self.clock = game.time;
+        self.wells = if game.zones().is_empty() { crate::well::WellField::default() } else { crate::well::WellField::at(game.zones(), game.time) };
         self.watch_impacts(game);
         // Spray off a wading hull (docs/water.md): a splash the frame it
         // wades in, then droplets at a rate that follows its speed.
@@ -1334,10 +1343,20 @@ impl Fx {
         let (gravity, drag, bounce) = (t.debris_gravity, t.debris_air_drag, t.debris_bounce);
         let (rise, growth) = (t.smoke_rise_speed, t.smoke_growth);
         let clock = self.clock;
+        let wells = &self.wells;
         self.particles.retain_mut(|p| {
             p.age += dt;
             if p.age >= p.life {
                 return false;
+            }
+            // A well draws it in and round, and spends it at the core.
+            if !wells.is_empty() {
+                if wells.sources.iter().any(|&(_, c)| p.pos.distance_to(c) <= t.well_core_px) {
+                    return false;
+                }
+                let pull = wells.pull(p.pos, &t);
+                p.pos.x += (pull.x + pull.y) * WELL_FX_PULL * dt;
+                p.pos.y += (pull.y - pull.x) * WELL_FX_PULL * dt;
             }
             match p.kind {
                 ParticleKind::Chip => {

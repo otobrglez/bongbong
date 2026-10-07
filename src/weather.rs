@@ -1042,6 +1042,21 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
             }
         }
     }
+    // The gravity well (docs/gravity-well.md "The light"): its ring throws
+    // violet light as it forms, an orb a little; the core none.
+    if t.well_light > 0.0 {
+        let violet = [0.6, 0.36, 0.94];
+        for z in game.zones.iter().filter(|z| z.well().is_some()) {
+            let grown = match z.well().map(|w| w.stage) {
+                Some(crate::well::WellStage::Forming) => 1.0 - (z.left(time + game.zone_lead) / t.well_form_seconds.max(1e-3)).clamp(0.0, 1.0),
+                _ => 1.0,
+            };
+            out.push(Light::point(z.centre, 48.0, scale(violet, s * t.well_light * grown)).unshadowed());
+        }
+        for orb in &game.orbs {
+            out.push(Light::point(orb.position, 20.0, scale(violet, s * t.well_light * 0.6)).unshadowed());
+        }
+    }
     for fx in &game.rod_impacts {
         let life = 1.0 - (fx.age / t.rod_flash_seconds.max(1e-3)).clamp(0.0, 1.0);
         if life > 0.0 {

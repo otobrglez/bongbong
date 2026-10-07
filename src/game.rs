@@ -505,7 +505,7 @@ impl Game {
         // What the canvas culls (`Canvas::cull`) stands out of the walk.
         let cull = c.cull();
         for pickup in self.world.query::<&Pickup>().iter() {
-            if !culled(cull, pickup.position) {
+            if !culled(cull, pickup.at()) {
                 draw_pickup(c, pickup, self.time, self.shadows_enabled);
             }
         }

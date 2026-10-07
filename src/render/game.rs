@@ -724,14 +724,21 @@ impl Game {
             let mut centers = [Vector2::new(0.0, 0.0); SHOCK_MAX];
             let mut times = [0.0f32; SHOCK_MAX];
             let mut gains = [0.0f32; SHOCK_MAX];
+            let mut starts = [0.0f32; SHOCK_MAX];
+            let mut signs = [1.0f32; SHOCK_MAX];
             for (i, shock) in self.shocks.iter().take(SHOCK_MAX).enumerate() {
                 centers[i] = effects.shock.uv_of(shock.center);
                 times[i] = shock.time;
                 gains[i] = shock.strength;
+                (starts[i], signs[i]) = effects.shock.start_and_sign(shock);
             }
             effects.shock.shader.set_shader_value_v(effects.shock.centers_loc, &centers);
             effects.shock.shader.set_shader_value_v(effects.shock.times_loc, &times);
             effects.shock.shader.set_shader_value_v(effects.shock.gains_loc, &gains);
+            if effects.shock.starts_loc >= 0 && effects.shock.signs_loc >= 0 {
+                effects.shock.shader.set_shader_value_v(effects.shock.starts_loc, &starts);
+                effects.shock.shader.set_shader_value_v(effects.shock.signs_loc, &signs);
+            }
         }
 
         // The render texture is stored upside-down relative to the screen; a
@@ -1420,6 +1427,17 @@ impl Game {
             pyro::draw(&mut GpuCanvas::new(d, textures), &chips);
         }
 
+        // A gravity well's collapse: its dust thrown out (docs/gravity-
+        // well.md "The collapse"), matter, so lit with the field.
+        if self.well_fx.iter().any(|fx| fx.kind == crate::well::WellFxKind::Collapse) {
+            let t = tuning();
+            let mut dust = Vec::new();
+            for fx in self.well_fx.iter().filter(|fx| fx.kind == crate::well::WellFxKind::Collapse && !culled(cull, fx.at)) {
+                crate::well::compose_collapse_dust(&mut dust, fx.at, fx.age, pyro::smoke_lean(&t, fx.at, self.time), &t);
+            }
+            pyro::draw(&mut GpuCanvas::new(d, textures), &dust);
+        }
+
         // A rod's impact - its dust rings and puffs and the debris it
         // throws - and the smoke off a fresh crater (docs/rod-from-god.md
         // "Drawing"): matter, so lit with the field; the column shines in
@@ -1671,6 +1689,36 @@ impl Game {
             }
             for end in &self.charge_ends {
                 shapes.extend(crate::gauss::compose_end(end, pyro::smoke_lean(&t, end.at, self.time)));
+            }
+            if !shapes.is_empty() {
+                pyro::draw(&mut GpuCanvas::new(d, textures), &shapes);
+                let bands = t.glow_bands.max(0) as u32;
+                d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| pyro::draw_glows(&mut Rl(&mut bd), &shapes, bands));
+            }
+        }
+
+        // The gravity well (docs/gravity-well.md "Drawing"): every well
+        // standing - its core, its ring, the swirl and the rim, read on the
+        // zones' clock -, every orb in flight, and the snaps, collapses and
+        // swallows. Light, drawn unlit, their glows in one additive block.
+        if !self.orbs.is_empty() || !self.well_fx.is_empty() || self.zones.iter().any(|z| z.well().is_some()) {
+            let t = tuning();
+            let now = self.time + self.zone_lead;
+            let mut shapes = Vec::new();
+            for zone in self.zones.iter().filter(|z| z.well().is_some()) {
+                if cull.is_none_or(|r| crate::math::Rectangle::new(r.x - t.well_radius_px, r.y - t.well_radius_px, r.width + 2.0 * t.well_radius_px, r.height + 2.0 * t.well_radius_px).contains(zone.centre)) {
+                    crate::well::compose_well(&mut shapes, zone, now, &t);
+                }
+            }
+            for orb in self.orbs.iter().filter(|o| !culled(cull, o.position)) {
+                crate::well::compose_orb(&mut shapes, orb.position, orb.velocity, orb.age, orb.id);
+            }
+            for fx in self.well_fx.iter().filter(|fx| !culled(cull, fx.at)) {
+                match fx.kind {
+                    crate::well::WellFxKind::Snap => crate::well::compose_snap(&mut shapes, fx.at, fx.age),
+                    crate::well::WellFxKind::Collapse => crate::well::compose_collapse(&mut shapes, fx.at, fx.age),
+                    crate::well::WellFxKind::Swallow => crate::well::compose_swallow(&mut shapes, fx.at, fx.age),
+                }
             }
             if !shapes.is_empty() {
                 pyro::draw(&mut GpuCanvas::new(d, textures), &shapes);
@@ -1955,6 +2003,19 @@ impl Game {
             // where they go off.
             for drum in &self.flying_drums {
                 draw_flying_drum(&mut c, drum, self.shadows_enabled);
+            }
+            // The drums a gravity well holds, circling its ring lifted over
+            // their shadows (docs/gravity-well.md "Held drums").
+            if !self.held_drums.is_empty() {
+                let t = tuning();
+                for held in &self.held_drums {
+                    let centre = self.zones.iter().find(|z| z.id == held.well).map_or_else(|| crate::map::cell_to_world(held.cell.0, held.cell.1), |z| z.centre);
+                    let (ground, height) = crate::well::held_at(held, centre, self.time, &t);
+                    if !culled(cull, ground) {
+                        let turn = (ground - centre).y.atan2((ground - centre).x);
+                        crate::obstacle::draw_held_drum(&mut c, ground, height, held.drum, turn, self.shadows_enabled);
+                    }
+                }
             }
         }
 

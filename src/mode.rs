@@ -1222,7 +1222,7 @@ impl Session {
                 // The vitals are this seat's, whichever seat the room
                 // gave it; the others are the compact strip's.
                 seat: self.online.as_ref().and_then(AnyRound::seat),
-                prompt: crate::hud::rod_prompt(self.shown(), self.online.as_ref().and_then(AnyRound::seat)),
+                prompt: crate::hud::special_prompt(self.shown(), self.online.as_ref().and_then(AnyRound::seat)),
                 // A room's round does not restart where it stands: the
                 // end screen counts down to the lobby it came from.
                 countdown_label: Some(crate::text::keys::ROUND_BACK_TO_LOBBY),
@@ -1254,7 +1254,7 @@ impl Session {
                 players_dialog: self.players_dialog,
                 question: self.question.clone(),
                 status: None,
-                prompt: crate::hud::rod_prompt(&self.game, 0..self.game.players.count().min(2) as u8),
+                prompt: crate::hud::special_prompt(&self.game, 0..self.game.players.count().min(2) as u8),
                 lobby: None,
                 countdown_label: None,
                 level: self.level().zip(self.campaign.as_ref()).and_then(|(i, campaign)| {

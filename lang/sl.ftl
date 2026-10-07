@@ -12,6 +12,7 @@ button-online = SPLET
 hud-weapon-offline = IZPAD OROŽJA
 hud-rod-aim = NAMERI, NATO SPUSTI ZA UDAR
 hud-rod-cancel = SPUSTI TUKAJ ZA PREKLIC
+hud-well-anchor = ZNOVA SPROŽI ZA SIDRO
 
 players-title = Koliko igralcev?
 players-keys = P1 puščice + preslednica    P2 WASD + levi Shift

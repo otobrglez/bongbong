@@ -594,6 +594,27 @@ pub fn compose_collapse(out: &mut Vec<Shape>, at: Position, age: f32) {
     }
 }
 
+/// How long the collapse's dust hangs (s).
+const COLLAPSE_DUST_SECONDS: f32 = 0.8;
+
+/// The collapse's dust (lit pass), `age` seconds after it: ten shaded
+/// puffs thrown out from half the reach to the reach, leaning `lean` with
+/// the wind, thinning out; hashed from the point. Gone after
+/// `COLLAPSE_DUST_SECONDS`.
+pub fn compose_collapse_dust(out: &mut Vec<Shape>, at: Position, age: f32, lean: f32, t: &Tuning) {
+    if !(0.0..COLLAPSE_DUST_SECONDS).contains(&age) {
+        return;
+    }
+    let k = age / COLLAPSE_DUST_SECONDS;
+    let seed = crate::blast::seed_at(at, 0x9E11);
+    for i in 0..10u32 {
+        let a = (i as f32 + pyro::unit(seed, i)) * std::f32::consts::TAU / 10.0;
+        let reach = t.well_radius_px * (0.5 + 0.5 * pyro::ease_out(k)) * (0.8 + 0.2 * pyro::unit(seed, 20 + i));
+        let pos = Position::new(at.x + a.cos() * reach + lean * age * 20.0, at.y + a.sin() * reach * 0.8 - age * 6.0);
+        out.push(Shape::Puff(pyro::dust_puff(pos, 6.0 + 4.0 * k, k, 1.0 - k)));
+    }
+}
+
 /// How long the collapse's picture runs (s).
 pub fn collapse_seconds() -> f32 {
     COLLAPSE_SECONDS
@@ -665,7 +686,7 @@ impl WellFx {
         self.age
             > match self.kind {
                 WellFxKind::Snap => 0.2,
-                WellFxKind::Collapse => collapse_seconds(),
+                WellFxKind::Collapse => collapse_seconds().max(COLLAPSE_DUST_SECONDS),
                 WellFxKind::Swallow => SWALLOW_SECONDS,
             }
     }

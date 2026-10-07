@@ -1437,7 +1437,7 @@ pub struct PlayChrome {
     pub status: Option<String>,
     /// What letting go of a rod's reticle does (docs/rod-from-god.md "The
     /// reticle"), the first line under the left cluster while this
-    /// window's seat holds one (`rod_prompt`).
+    /// window's seat holds one (`special_prompt`).
     pub prompt: Option<crate::text::Key>,
     /// The lobby over a dimmed field (`lobby.rs`), in place of the round
     /// this window is not playing.
@@ -1470,14 +1470,22 @@ pub struct PlayChrome {
     pub curtain: f32,
 }
 
-/// The rod's prompt (`PlayChrome::prompt`) for the first of `seats` - this
-/// window's - that holds a reticle: letting go calls the rod, or, with the
-/// reticle on its own tank's cell, cancels it.
-pub fn rod_prompt(game: &Game, seats: impl IntoIterator<Item = u8>) -> Option<crate::text::Key> {
+/// A special's prompt (`PlayChrome::prompt`) for the first of `seats` -
+/// this window's - that has one: a rod's reticle up (letting go calls the
+/// rod, or, with the reticle on its own tank's cell, cancels it), or a
+/// gravity well's orb in flight (firing again anchors it,
+/// docs/gravity-well.md).
+pub fn special_prompt(game: &Game, seats: impl IntoIterator<Item = u8>) -> Option<crate::text::Key> {
     seats.into_iter().find_map(|seat| {
         let entity = game.seat(seat as usize)?;
         let tank = game.world.get::<&crate::tank::Tank>(entity).ok()?;
-        let r = tank.reticle.filter(|_| !tank.is_wreck())?;
+        if tank.is_wreck() {
+            return None;
+        }
+        if tank.orb.is_some() {
+            return Some(crate::text::keys::HUD_WELL_ANCHOR);
+        }
+        let r = tank.reticle?;
         Some(if r.cell == crate::map::world_to_cell(tank.position) { crate::text::keys::HUD_ROD_CANCEL } else { crate::text::keys::HUD_ROD_AIM })
     })
 }

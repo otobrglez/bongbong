@@ -38,6 +38,7 @@ hud-weapon-offline = WPN OFFLINE
 # caller's own cell.
 hud-rod-aim = AIM, THEN LET GO TO CALL
 hud-rod-cancel = LET GO HERE TO CANCEL
+hud-well-anchor = FIRE AGAIN TO ANCHOR
 
 # The players dialog: a 28 px title and a 16 px line across a 440 px
 # panel, then two 176 px buttons in 18 px text (about 14 letters each).

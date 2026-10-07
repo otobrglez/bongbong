@@ -604,6 +604,10 @@ pub struct Marks {
     /// Every rod's call standing (docs/rod-from-god.md): a ring pulsing
     /// round where it lands, quicker over its last second.
     pub zones: Vec<(Position, f32)>,
+    /// Every gravity well standing (docs/gravity-well.md) and whether it
+    /// pulls yet: a violet frame pulsing round its centre, dim while it
+    /// forms.
+    pub wells: Vec<(Position, bool)>,
     /// The round clock the gates blink on.
     pub time: f32,
     /// Whether the seats carry their numbers: a round of two or more.
@@ -640,7 +644,8 @@ impl Marks {
             })
             .collect();
         let zones = game.zones().iter().filter(|z| z.rod().is_some()).map(|z| (z.centre, z.left(game.time + game.zone_lead))).collect();
-        Marks { view: Some(view), seats, frogs, volcanoes, zones, time: game.time, numbered: game.players.count() > 1, ..Marks::from_shown(shown) }
+        let wells = game.zones().iter().filter_map(|z| z.well().map(|w| (z.centre, w.stage == crate::well::WellStage::Pulling))).collect();
+        Marks { view: Some(view), seats, frogs, volcanoes, zones, wells, time: game.time, numbered: game.players.count() > 1, ..Marks::from_shown(shown) }
     }
 
     /// The enemies and gates `shown` - one `Indicators` per seat the screen
@@ -746,6 +751,17 @@ pub fn picture(marks: &Marks, rect: Rectangle, field: (f32, f32), font: i32, t: 
         let half = side / 2;
         frame(&mut out.fills, x - half - RIM_PT, y - half - RIM_PT, side + 2 * RIM_PT, RIM_PT, RIM, inside);
         frame(&mut out.fills, x - half, y - half, side, RIM_PT, crate::pyro::LASER_RED[2], inside);
+    }
+    // A gravity well: a violet frame round its centre pulsing, dim while it
+    // forms.
+    for &(at_world, pulling) in &marks.wells {
+        let (x, y) = at(at_world);
+        let swell = if blink_on(marks.time, t.indicator_pulse_hz) { 2 } else { 0 };
+        let side = GATE_FRAME_PT + 2 + 2 * swell;
+        let half = side / 2;
+        let color = if pulling { crate::pyro::VOID[3] } else { crate::pyro::VOID[1] };
+        frame(&mut out.fills, x - half - RIM_PT, y - half - RIM_PT, side + 2 * RIM_PT, RIM_PT, RIM, inside);
+        frame(&mut out.fills, x - half, y - half, side, RIM_PT, color, inside);
     }
     for view in [marks.view, marks.second_view].into_iter().flatten().filter_map(|v| rect_on(rect, field, v)) {
         let (x0, y0) = (view.x.round() as i32, view.y.round() as i32);
@@ -1122,6 +1138,7 @@ mod minimap_tests {
             gates: vec![GateMark { at: Position::new(1200.0, 0.0), flash: 1.0 }],
             volcanoes: vec![(Position::new(2560.0, 1440.0), true)],
             zones: vec![(Position::new(2560.0, 0.0), 0.5)],
+            wells: vec![(Position::new(0.0, 0.0), true), (Position::new(2560.0, 720.0), false)],
             time: 0.0,
             numbered: true,
         };
