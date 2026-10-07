@@ -354,6 +354,18 @@ impl Tell {
     }
 }
 
+/// A wind-up in progress, whatever winds it up (`Tank::windup`): what the
+/// AI's rule holds a tank to, the off-screen arrow and the drawing read. A
+/// tell is one; a later weapon's charge joins `Tank::windup` as another.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Windup {
+    pub weapon: ActiveWeapon,
+    /// How far through, 0..1.
+    pub progress: f32,
+    /// The way it goes off.
+    pub facing: Dir,
+}
+
 pub struct Tank {
     /// Which of the 12 tank archetypes in scifi_tanks_sheet.png this tank
     /// draws (see TANK_VARIANTS/TANK_SPRITE_ORDER in simulation.rs). The hull
@@ -1158,6 +1170,11 @@ impl Tank {
     /// `ActiveWeapon::Shell`/`Plasma` while short of the 2 it needs).
     pub fn active_weapon(&self) -> ActiveWeapon {
         self.special().unwrap_or(ActiveWeapon::Shell)
+    }
+
+    /// The wind-up this tank is in, if any (`Windup`): its tell.
+    pub fn windup(&self) -> Option<Windup> {
+        self.tell.map(|t| Windup { weapon: t.weapon, progress: t.progress(), facing: t.facing })
     }
 
     /// The special weapon this tank carries with ammo left

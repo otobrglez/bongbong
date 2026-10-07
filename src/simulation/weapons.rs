@@ -518,6 +518,8 @@ pub(super) trait Projectile: hecs::Component {
     fn knockback_speed() -> Option<f32>;
     /// Whether a surviving frog tries to hop away from this hit.
     fn frog_hops() -> bool;
+    /// What its `Event::Hit` says landed.
+    fn hit_cause() -> super::HitCause;
     /// Bounce off `hit` instead of detonating, if this projectile can by
     /// its own rules (shells off Iron). A barrel's chance deflection goes
     /// through `can_bounce`/`reflect_off` instead.
@@ -639,6 +641,7 @@ impl Projectile for Shell {
     fn damage_range(&self) -> (f32, f32) { side_damage(self.owner, self.shooter_row) }
     fn knockback_speed() -> Option<f32> { Some(tuning().shell_impact_knockback_speed) }
     fn frog_hops() -> bool { true }
+    fn hit_cause() -> super::HitCause { super::HitCause::Shell }
     deflect_impl!();
 
     /// Shells ricochet off indestructible Iron while `bounces_left` lasts:
@@ -684,6 +687,7 @@ impl Projectile for Bullet {
     /// No hop per bullet: several rounds in a third of a second would make
     /// the frog flail rather than dodge.
     fn frog_hops() -> bool { false }
+    fn hit_cause() -> super::HitCause { super::HitCause::Bullet }
     fn can_bounce() -> bool { true }
     deflect_impl!();
 }
@@ -710,6 +714,7 @@ impl Projectile for Plasma {
     }
     fn knockback_speed() -> Option<f32> { Some(tuning().plasma_impact_knockback_speed) }
     fn frog_hops() -> bool { true }
+    fn hit_cause() -> super::HitCause { super::HitCause::Plasma }
     /// A bolt never ricochets (see docs/PLASMA_SPEC.md).
     fn can_bounce() -> bool { false }
     deflect_impl!();

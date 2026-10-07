@@ -2183,8 +2183,8 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
         let mut replica = welcome_through_the_codec(&game);
         let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
         snap.events = vec![
-            WireEvent::Hit { target: WireHitTarget::Wall, damage: 0.0, killed: false, x: 400, y: 800, cause: crate::simulation::HitCause::Shot },
-            WireEvent::Hit { target: WireHitTarget::Enemy { slot: 1 }, damage: 0.0, killed: false, x: 1600, y: 1600, cause: crate::simulation::HitCause::Shot },
+            WireEvent::Hit { target: WireHitTarget::Wall, damage: 0.0, killed: false, x: 400, y: 800, cause: crate::simulation::HitCause::Shell },
+            WireEvent::Hit { target: WireHitTarget::Enemy { slot: 1 }, damage: 0.0, killed: false, x: 1600, y: 1600, cause: crate::simulation::HitCause::Shell },
         ];
         snapshot(&mut replica, &snap);
         let at: Vec<Position> = replica.impact_flashes.iter().map(|s| s.center).collect();
@@ -2324,8 +2324,8 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
         snap.events = vec![
             WireEvent::Fired { slot: 0, weapon: WeaponKind::Laser, input_tick: 1 },
             WireEvent::LaserBeam { x0: 400, y0: 400, x1: 1600, y1: 400, variant: 0, seat: 0, leg: 0, portal: false },
-            WireEvent::Hit { target: WireHitTarget::Enemy { slot: 1 }, damage: 0.0, killed: false, x: 1600, y: 400, cause: crate::simulation::HitCause::Shot },
-            WireEvent::Hit { target: WireHitTarget::Enemy { slot: 2 }, damage: 0.0, killed: false, x: 2000, y: 800, cause: crate::simulation::HitCause::Shot },
+            WireEvent::Hit { target: WireHitTarget::Enemy { slot: 1 }, damage: 0.0, killed: false, x: 1600, y: 400, cause: crate::simulation::HitCause::Shell },
+            WireEvent::Hit { target: WireHitTarget::Enemy { slot: 2 }, damage: 0.0, killed: false, x: 2000, y: 800, cause: crate::simulation::HitCause::Shell },
         ];
         let flashes = |g: &Game| g.impact_flashes.iter().map(|s| s.center).collect::<Vec<_>>();
 

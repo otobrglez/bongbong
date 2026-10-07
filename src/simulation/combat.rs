@@ -95,14 +95,18 @@ pub(super) struct HitEffects {
     /// it pops leans its fire this way (`BlastShape::Shot`). `None` for a
     /// beam, which has no travel to speak of.
     pub travel: Option<Vec2>,
+    /// What landed, for the `Event::Hit`.
+    pub cause: HitCause,
 }
 
 impl HitEffects {
-    pub fn none() -> Self {
+    /// A hit by `cause` that shoves nothing and has no travel.
+    pub fn none(cause: HitCause) -> Self {
         HitEffects {
             knockback: None,
             frog_hop: None,
             travel: None,
+            cause,
         }
     }
 }
@@ -156,7 +160,7 @@ impl Game {
                             Owner::Enemy(slot) => HitTarget::Enemy { slot },
                             Owner::Tower { .. } => unreachable!("no tank is owned by a tower"),
                         };
-                        f.events.push(Event::Hit { target: hit_target, damage: landed, killed, x: at.x, y: at.y, cause: HitCause::Shot });
+                        f.events.push(Event::Hit { target: hit_target, damage: landed, killed, x: at.x, y: at.y, cause: effects.cause });
                         if killed {
                             f.kills.push((tank.position, tank.owner()));
                             false
@@ -191,7 +195,7 @@ impl Game {
                         let d = f.rng.random_range(dmg.0..dmg.1);
                         frog.damage(d);
                         let target = HitTarget::Frog { side: frog.side };
-                        f.events.push(Event::Hit { target, damage: d, killed: frog.is_dead(), x: at.x, y: at.y, cause: HitCause::Shot });
+                        f.events.push(Event::Hit { target, damage: d, killed: frog.is_dead(), x: at.x, y: at.y, cause: effects.cause });
                         (frog.is_dead(), frog.position, frog.can_hop(), frog.hop_distance())
                     }
                 };
@@ -216,10 +220,10 @@ impl Game {
                 // (a destroyed tile, a blast), since it happened first.
                 let mark = f.events.len();
                 let killed = self.damage_obstacle(f, entity, d, DamageCause::Shot { dir: effects.travel });
-                f.events.insert(mark, Event::Hit { target: HitTarget::Obstacle { material }, damage: d, killed, x: at.x, y: at.y, cause: HitCause::Shot });
+                f.events.insert(mark, Event::Hit { target: HitTarget::Obstacle { material }, damage: d, killed, x: at.x, y: at.y, cause: effects.cause });
             }
             ShellTarget::Wall => {
-                f.events.push(Event::Hit { target: HitTarget::Wall, damage: 0.0, killed: false, x: at.x, y: at.y, cause: HitCause::Shot });
+                f.events.push(Event::Hit { target: HitTarget::Wall, damage: 0.0, killed: false, x: at.x, y: at.y, cause: effects.cause });
             }
         }
     }

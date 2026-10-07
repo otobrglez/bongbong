@@ -948,8 +948,13 @@ tunables! {
         sonic_fish_throw_max: i32 = 3 in 0 ..= 16;
         sonic_fish_flop_seconds: f32 = 2.5 in 0.0 ..= 20.0;
         /// An enemy shouts at a seat this close in its cone, whatever lies
-        /// behind it (px).
+        /// behind it, and a hammer tank closing in stops this far from the
+        /// seat (px).
         sonic_ai_breaker_px: f32 = 112.0 in 0.0 ..= 480.0;
+        /// How many hammer tanks close in on one seat, the nearest first;
+        /// the rest hold their slots of its ring until one is spent or
+        /// wrecked.
+        sonic_ai_closers: i32 = 2 in 0 ..= 8;
         /// How long an enemy drives into glass before it shouts it down -
         /// the breach's `enemy_breach_after_seconds` for every other tile.
         sonic_ai_glass_after_seconds: f32 = 0.1 in 0.0 ..= 5.0;

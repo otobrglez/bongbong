@@ -357,9 +357,9 @@ pub struct TankView {
     /// (`lined_up` and `PresentWorld::line_of_sight`): its aim is settling.
     /// Only ever set on an enemy.
     pub lane: bool,
-    /// An enemy winding up a special (`Tank::tell`, docs/sonic-hammer.md
+    /// An enemy winding up a special (`Tank::windup`, docs/sonic-hammer.md
     /// "The enemy tell"): the weapon and how far through, 0..1.
-    pub tell: Option<(ActiveWeapon, f32)>,
+    pub windup: Option<(ActiveWeapon, f32)>,
 }
 
 impl TankView {
@@ -439,10 +439,10 @@ pub enum ArrowKind {
     /// A volcano that is rumbling or erupting (docs/volcano.md): the
     /// warning that bombs are coming, `erupting` once they are.
     Volcano { erupting: bool },
-    /// An enemy winding up a special (`TankView::tell`): never merged,
+    /// An enemy winding up a special (`TankView::windup`): never merged,
     /// never left out, drawn in the weapon's accent and blinking quicker as
     /// it nears going off.
-    Tell { weapon: ActiveWeapon, progress: f32 },
+    Windup { weapon: ActiveWeapon, progress: f32 },
 }
 
 /// One arrow at the edge of the screen.
@@ -1004,7 +1004,7 @@ impl Awareness {
             }
             let distance = anchor.distance_to(tv.pos);
             // A wind-up gives a tank away as firing does.
-            let since_fired = if tv.tell.is_some() { Some(0.0) } else { self.fired.get(&tv.slot).map(|&at| now - at) };
+            let since_fired = if tv.windup.is_some() { Some(0.0) } else { self.fired.get(&tv.slot).map(|&at| now - at) };
             let hidden = concealed(tv.in_grass, since_fired, distance, t) || scene.sight.is_some_and(|s| distance > s);
             if hidden {
                 if let Some(at) = self.seen.remove(&tv.slot) {
@@ -1041,10 +1041,10 @@ impl Awareness {
         let in_sight = visible.iter().map(|tv| tv.pos).collect();
         let mut threats: Vec<(LaneWarning, f32, &TankView)> = Vec::new();
         let mut plain: Vec<(f32, &TankView)> = Vec::new();
-        let mut tells: Vec<&TankView> = Vec::new();
+        let mut windups: Vec<&TankView> = Vec::new();
         for tv in visible.into_iter().filter(|tv| !view.shows(tv.pos)) {
-            if tv.tell.is_some() {
-                tells.push(tv);
+            if tv.windup.is_some() {
+                windups.push(tv);
                 continue;
             }
             let distance = anchor.distance_to(tv.pos);
@@ -1085,9 +1085,9 @@ impl Awareness {
         }
         // An enemy winding up a special off the screen: never merged,
         // never left out - it is about to go off.
-        for tv in tells {
-            if let Some((weapon, progress)) = tv.tell {
-                kept.extend(arrow(ArrowKind::Tell { weapon, progress }, tv.pos));
+        for tv in windups {
+            if let Some((weapon, progress)) = tv.windup {
+                kept.extend(arrow(ArrowKind::Windup { weapon, progress }, tv.pos));
             }
         }
 
@@ -1332,7 +1332,7 @@ impl Scene {
                 gate,
                 in_grass: crate::grass::conceals(&cover, tank.position),
                 lane: false,
-                tell: tank.tell.filter(|_| !tank.is_wreck()).map(|tell| (tell.weapon, tell.progress())),
+                windup: tank.windup().filter(|_| !tank.is_wreck()).map(|w| (w.weapon, w.progress)),
             };
             tanks.push((view, facing_of(tank.rotation)));
         }
@@ -1665,7 +1665,7 @@ pub fn picture(seats: &[Indicators], view: &ViewFrame, time: f32, t: &Tuning, fo
                 (if erupting { HOSTILE } else { GATE_AMBER }, if throb >= 0.5 { crate::pyro::FIRE[6] } else { RIM })
             }
             // A wind-up blinks in its weapon's accent, quicker as it nears.
-            ArrowKind::Tell { weapon, progress } => {
+            ArrowKind::Windup { weapon, progress } => {
                 if !blink_on(time, t.indicator_pulse_hz * (1.0 + 2.0 * progress)) {
                     continue;
                 }
@@ -2021,7 +2021,7 @@ mod indicator_tests {
     }
 
     fn enemy(slot: usize, x: f32, y: f32) -> TankView {
-        TankView { slot, seat: None, pos: Position::new(x, y), wreck: false, gate: None, in_grass: false, lane: false, tell: None }
+        TankView { slot, seat: None, pos: Position::new(x, y), wreck: false, gate: None, in_grass: false, lane: false, windup: None }
     }
 
     fn scene(time: f32, tanks: Vec<TankView>) -> Scene {
@@ -2070,17 +2070,17 @@ mod indicator_tests {
         let mut t = Tuning::DEFAULT;
         t.indicator_max_arrows = 1;
         let mut telling = enemy(7, 200.0, 700.0);
-        telling.tell = Some((ActiveWeapon::SonicHammer, 0.4));
+        telling.windup = Some((ActiveWeapon::SonicHammer, 0.4));
         telling.in_grass = true;
         let s = scene(1.0, vec![enemy(5, 900.0, 150.0), enemy(6, 950.0, 400.0), telling]);
         let ind = Awareness::new().frame(&s, &screen(), &t);
-        let tell = ind.arrows.iter().find(|a| matches!(a.kind, ArrowKind::Tell { .. })).expect("a tell arrow");
-        assert_eq!(tell.kind, ArrowKind::Tell { weapon: ActiveWeapon::SonicHammer, progress: 0.4 });
+        let tell = ind.arrows.iter().find(|a| matches!(a.kind, ArrowKind::Windup { .. })).expect("a tell arrow");
+        assert_eq!(tell.kind, ArrowKind::Windup { weapon: ActiveWeapon::SonicHammer, progress: 0.4 });
         assert_eq!(tell.place.edge, Edge::Bottom);
         telling.pos = Position::new(250.0, 200.0);
         let s = scene(1.0, vec![telling]);
         let ind = Awareness::new().frame(&s, &screen(), &t);
-        assert!(!kinds(&ind).iter().any(|k| matches!(k, ArrowKind::Tell { .. })), "on the screen it is in sight");
+        assert!(!kinds(&ind).iter().any(|k| matches!(k, ArrowKind::Windup { .. })), "on the screen it is in sight");
     }
 
     /// The arrow stops where the line from the tank leaves the inset
@@ -3165,7 +3165,7 @@ mod picture_tests {
         let lost = Position::new(far_x, seat.y + (pad_y - seat.y) * (seat.x - far_x) / (seat.x - side_x));
         let scene = Scene {
             seat: Some(SeatView { slot: 0, pos: seat, wreck: false, gate: None }),
-            tanks: vec![TankView { slot: 5, seat: None, pos: lost, wreck: false, gate: None, in_grass: false, lane: false, tell: None }],
+            tanks: vec![TankView { slot: 5, seat: None, pos: lost, wreck: false, gate: None, in_grass: false, lane: false, windup: None }],
             ..Scene::default()
         };
         let free = Awareness::new().frame(&scene, &view, &t);

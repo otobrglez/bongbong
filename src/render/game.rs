@@ -1517,9 +1517,10 @@ impl Game {
                 shapes.extend(crate::sonic::wave_arcs(wave, &t));
             }
             for tank in self.world.query::<&Tank>().iter().filter(|tank| !culled(cull, tank.position)) {
-                if let Some(tell) = tank.tell.filter(|tell| tell.weapon == crate::tank::ActiveWeapon::SonicHammer) {
+                // Each weapon's wind-up by its own composer.
+                if let Some(w) = tank.windup().filter(|w| w.weapon == crate::tank::ActiveWeapon::SonicHammer) {
                     let dish = tank.turret_point(crate::tank_art::SONIC_MUZZLE[tank.row as usize]);
-                    shapes.extend(crate::sonic::tell_arcs(dish, tell.facing, tell.progress(), self.time, &t));
+                    shapes.extend(crate::sonic::tell_arcs(dish, w.facing, w.progress, self.time, &t));
                 }
             }
             for frog in self.world.query::<&crate::frog::Frog>().iter().filter(|f| !culled(cull, f.position)) {

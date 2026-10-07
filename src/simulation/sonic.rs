@@ -463,6 +463,23 @@ impl Game {
             .filter(|tank| !tank.is_wreck() && tank.body.is_some())
             .map(|tank| (tank.owner_slot(), tank.position))
             .collect();
+        // Each fellow enemy as the points a wave would strike it by, now
+        // and where its motion carries it by the time a blast started now
+        // would reach it (the tell and the wave's run out), so a friend
+        // driving into the cone is not shouted at either.
+        let lead = ActiveWeapon::SonicHammer.tell_seconds().unwrap_or(0.0) + t.sonic_reach_px / t.sonic_wave_speed.max(1.0);
+        let friends: Vec<(usize, [Position; 6])> = self
+            .world
+            .query::<&Tank>()
+            .with::<&Ai>()
+            .iter()
+            .filter_map(|tank| {
+                let body = tank.body.filter(|_| !tank.is_wreck())?;
+                let v = self.physics.velocity(body);
+                let [c, a, b, d, e] = hull_points(tank);
+                Some((tank.owner_slot(), [c, a, b, d, e, Position::new(c.x + v.x * lead, c.y + v.y * lead)]))
+            })
+            .collect();
         let blocks = self.sound_blocks();
         let field = self.map.field_size();
         let solid: BTreeSet<(i32, i32)> =
@@ -492,13 +509,15 @@ impl Game {
         for &(entity, slot, me, target) in &armed {
             let Ok(ai) = self.world.get::<&Ai>(entity) else { continue };
             let mut sense = HammerSense::default();
-            // The one hammer tank nearest the seat it fights may close in.
+            // The `sonic_ai_closers` hammer tanks nearest the seat this one
+            // fights close in on it (ties on slot).
             if let Some(seat) = seats.iter().find(|s| s.seat == target && s.live) {
-                let nearest = armed
+                let nearer = armed
                     .iter()
-                    .filter(|a| a.3 == target)
-                    .min_by(|a, b| a.2.distance_to(seat.pos).total_cmp(&b.2.distance_to(seat.pos)).then(a.1.cmp(&b.1)));
-                sense.brawler = nearest.is_some_and(|a| a.0 == entity);
+                    .filter(|a| a.3 == target && a.0 != entity)
+                    .filter(|a| a.2.distance_to(seat.pos).total_cmp(&me.distance_to(seat.pos)).then(a.1.cmp(&slot)).is_lt())
+                    .count();
+                sense.closer = (nearer as i32) < t.sonic_ai_closers;
             }
             let alert = alerts.get(&entity).copied().flatten();
             for dir in Dir::ALL {
@@ -512,7 +531,7 @@ impl Game {
                     |_| Floor::Dry,
                 );
                 let mut aim = HammerAim {
-                    friend: enemies.iter().any(|&(s, p)| s != slot && cone.reaches(p).is_some()),
+                    friend: friends.iter().any(|(s, points)| *s != slot && cone.nearest_reached(points).is_some()),
                     ..HammerAim::default()
                 };
                 for seat in seats.iter().filter(|s| s.live) {

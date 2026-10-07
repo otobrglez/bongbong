@@ -575,14 +575,20 @@ pub enum Event {
     Retarget { slot: usize, player: u8 },
 }
 
-/// What kind of thing an `Event::Hit` was: everything that flies, burns or
-/// beams is a `Shot`; a sonic hammer's wave is `Sonic`, which draws a flash
-/// and dust rather than a shell's fire (docs/sonic-hammer.md).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// What landed in an `Event::Hit`, so a picture can be chosen by its cause
+/// (docs/sonic-hammer.md): every shot, beam and stream draws the burst it
+/// always has, and a sonic hammer's wave a flash and dust rather than
+/// fire. A weapon that lands its own kind of hit adds its cause here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HitCause {
-    #[default]
-    Shot,
+    Shell,
+    Bullet,
+    Plasma,
+    Laser,
+    Flame,
+    /// A tesla tower's strike.
+    Tesla,
     Sonic,
 }
 
@@ -3203,8 +3209,11 @@ impl Game {
         };
         let quarry = live_frog(self.frog);
         let home = live_frog(self.enemy_frog).map(|(_, p)| p);
-        let target_of = |ai: &Ai| match (ai.role, quarry) {
-            (Role::Hunter, Some((frog, pos))) => (pos, Some(frog)),
+        // A hunter carrying a weapon its own rule fires (`ai::generic_fire`
+        // false: the sonic hammer, which cannot hurt a frog) fights the
+        // seat like everyone else until it is spent.
+        let target_of = |ai: &Ai, tank: &Tank| match (ai.role, quarry) {
+            (Role::Hunter, Some((frog, pos))) if crate::ai::generic_fire(tank.active_weapon()) => (pos, Some(frog)),
             _ => (target_pos_of(ai), None),
         };
         let guard_holds = |ai: &Ai| {
@@ -3224,7 +3233,7 @@ impl Game {
         let mut engaged: Vec<Vec<(Entity, Position)>> = vec![Vec::new(); players.len()];
         let mut engaged_frog: Vec<(Entity, Position)> = Vec::new();
         for (entity, tank, ai) in self.world.query::<(Entity, &Tank, &Ai)>().iter() {
-            let (target, hunting) = target_of(ai);
+            let (target, hunting) = target_of(ai, tank);
             // A seat in the light is seen from further; a frog by the sky.
             let sight = if hunting.is_some() { view_range } else { players[(ai.target_player() as usize).min(players.len() - 1)].sight };
             let status = if guard_holds(ai) { EngageStatus::OutOfRange } else { engage_status(tank, ai, target, sight) };
@@ -3434,7 +3443,7 @@ impl Game {
                     .map(|&(_, tile)| f.terrain.line_of_sight_from(tile, tank.position, at));
                 ai.set_grudge_sight(sight);
             }
-            let (mut target, mut hunting) = target_of(ai);
+            let (mut target, mut hunting) = target_of(ai, tank);
             // A hunter that cannot route to the frog and holds no slot on
             // its ring (every slot rejected: off the map, unreachable from
             // its half of the field, or iron in the way) has no way at the
@@ -3716,7 +3725,7 @@ impl Game {
                 f.impact_flashes.push(Shockwave::new(hit_pos));
                 // No knockback and no frog hop: an instant beam isn't
                 // something to be shoved by or to dodge.
-                self.apply_hit(f, target, hit_pos, laser_damage_range(&shot), HitEffects::none(), shot.owner);
+                self.apply_hit(f, target, hit_pos, laser_damage_range(&shot), HitEffects::none(HitCause::Laser), shot.owner);
                 break;
             }
         }
@@ -4087,6 +4096,7 @@ impl Game {
                 knockback: P::knockback_speed().map(|speed| (dir, speed)),
                 frog_hop: P::frog_hops().then_some(vel),
                 travel: Some(dir),
+                cause: P::hit_cause(),
             };
             self.apply_hit(f, target, hit_pos, dmg, effects, owner);
         }

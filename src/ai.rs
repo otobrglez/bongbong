@@ -105,9 +105,9 @@ pub enum SpecialSense {
 pub struct HammerSense {
     /// One per facing, `Dir::index` order.
     pub aims: [HammerAim; 4],
-    /// This tank is the hammer-armed enemy nearest the seat it fights
-    /// (ties on slot): the one that may close in with it.
-    pub brawler: bool,
+    /// This tank is one of the `sonic_ai_closers` hammer tanks nearest the
+    /// seat it fights (ties on slot): it closes in.
+    pub closer: bool,
 }
 
 /// A blast one way (`HammerSense::aims`). A seat is named only if this
@@ -136,8 +136,8 @@ enum SpecialUse {
     /// Face `face` and pull the trigger (the simulation runs the weapon's
     /// tell first); `at_seat` is the seat it is used on, `why` the arm.
     Fire { face: Dir, at_seat: Option<u8>, why: &'static str },
-    /// Hold still facing `face`.
-    Hold { face: Dir },
+    /// Hold still facing `face`; `why` for the trace.
+    Hold { face: Dir, why: &'static str },
     /// Close in on `to`, to bring a short-range weapon to bear.
     Approach { to: Position },
 }
@@ -1720,6 +1720,31 @@ impl Brain<'_> {
         self.engage_target.unwrap_or(self.target)
     }
 
+    /// Where a short-range weapon closes in on `around` to: on the line
+    /// from it out to `slot` (this tank's engagement slot, else its own
+    /// position), `radius` out - or as near that as an open cell allows,
+    /// half a cell at a time back out toward the slot - so the tanks holding
+    /// the ring's slots surround a seat at the weapon's reach. The tank's
+    /// own place when it already stands nearer than `radius`.
+    fn close_spot(&self, around: Position, slot: Option<Position>, radius: f32) -> Position {
+        let toward = slot.unwrap_or(self.me.position);
+        let away = Vec2::new(toward.x - around.x, toward.y - around.y);
+        let len = away.length();
+        if len <= radius {
+            return toward;
+        }
+        let dir = Vec2::new(away.x / len, away.y / len);
+        let mut r = radius;
+        while r < len {
+            let at = Position::new(around.x + dir.x * r, around.y + dir.y * r);
+            if self.grid.usable(at) {
+                return at;
+            }
+            r += OBSTACLE_GRID_SIZE * 0.5;
+        }
+        toward
+    }
+
     fn player_alive(&self) -> bool {
         !self.player.is_wreck()
     }
@@ -1801,6 +1826,11 @@ impl Brain<'_> {
     /// last snipe's `hunter_snipe_cooldown_seconds` have passed.
     fn can_snipe_player(&self) -> bool {
         if !self.hunting_frog() || !self.player_alive() || !self.player_line_of_sight || self.ai.snipe_cooldown > 0.0 {
+            return false;
+        }
+        // A weapon its own rule fires is no sniper's: holding for a shot
+        // it never takes would only park the tank.
+        if !generic_fire(self.me.active_weapon()) {
             return false;
         }
         if self.dist_to_player() > self.attack_range() || !self.may_fire_at_seat() {
@@ -1951,7 +1981,9 @@ impl Brain<'_> {
     /// `enemy_fire_align_px`.
     fn grudge_shot(&self) -> Option<(Dir, f32)> {
         let grudge = self.ai.grudge?;
-        if !grudge.in_sight {
+        // A weapon its own rule fires has no shot to send back: holding
+        // for one would only park the tank in the tower's reach.
+        if !grudge.in_sight || !generic_fire(self.me.active_weapon()) {
             return None;
         }
         let t = tuning();
@@ -2449,13 +2481,13 @@ fn act_seek_special(b: &mut Brain) -> Status {
 }
 
 /// What the special `b`'s tank carries asks of it this tick
-/// (docs/sonic-hammer.md "The AI hook for special weapons"): first, for
-/// every weapon, a tell in progress holds it facing the way it goes off;
-/// then one arm per weapon with a rule. `None` for no use this tick - the
-/// tree goes on.
+/// (docs/sonic-hammer.md "The AI hook for special weapons"): first a
+/// wind-up in progress (`Tank::windup`), which belongs to its weapon's
+/// rule (`windup_rule`); then one arm per weapon with a rule. `None` for no
+/// use this tick - the tree goes on.
 fn special_rule(b: &Brain) -> Option<SpecialUse> {
-    if let Some(tell) = b.me.tell {
-        return Some(SpecialUse::Hold { face: tell.facing });
+    if let Some(windup) = b.me.windup() {
+        return windup_rule(b, windup);
     }
     match (b.me.active_weapon(), b.sense) {
         (ActiveWeapon::SonicHammer, SpecialSense::Hammer(sense)) => hammer_rule(b, sense),
@@ -2463,13 +2495,22 @@ fn special_rule(b: &Brain) -> Option<SpecialUse> {
     }
 }
 
+/// What a wind-up asks of its tank, by its weapon. Every wind-up so far is
+/// a tell, which holds the tank facing the way it goes off; a weapon whose
+/// wind-up asks something else (a charge that keeps tracking) matches on
+/// `windup.weapon` here for its own arm.
+fn windup_rule(_b: &Brain, windup: crate::tank::Windup) -> Option<SpecialUse> {
+    Some(SpecialUse::Hold { face: windup.facing, why: "hold" })
+}
+
 /// The sonic hammer's rule (docs/sonic-hammer.md "AI"), in priority order:
 /// shout down glass in its way at once; then, each way it could face - its
 /// own facing first, then `Dir::ALL`, never a way a fellow enemy stands -
 /// shove a seat into trouble, throw a drum onto one, flush the grass round
 /// a hidden seat's alert, break a seat in its face, pin a hunter's frog;
-/// then a brawler closes in. A fire arm that matched while the fire timer
-/// runs holds facing it (`act_special`). Draws no RNG.
+/// then a closer closes in (`close_spot`) and waits there facing the seat.
+/// A fire arm that matched while the fire timer runs holds facing it
+/// (`act_special`). Draws no RNG.
 fn hammer_rule(b: &Brain, sense: &HammerSense) -> Option<SpecialUse> {
     let t = tuning();
     // Glass in the way it is driving: down at once.
@@ -2495,11 +2536,22 @@ fn hammer_rule(b: &Brain, sense: &HammerSense) -> Option<SpecialUse> {
             return Some(SpecialUse::Fire { face, at_seat, why });
         }
     }
-    // A brawler, healthy and free to roam, closes in on what it fights.
+    // With nothing to shout at, one of the closers (`HammerSense::closer`),
+    // healthy and free to roam, closes in on the seat it fights - it has
+    // no shot at range - to its own spot of the seat's engagement ring
+    // drawn in to the breaker's distance, so two surround a seat rather
+    // than pile onto it, and waits there facing it. The others hold their
+    // slots of the ring by the tree's attack tier, which never fires the
+    // hammer.
     let free = b.me.damage < t.enemy_flee_damage && !b.guard_holds();
-    let target_ok = b.target_alive() && b.line_of_sight && (b.hunting_frog() || !b.target_concealed || b.ai.is_hit_alerted());
-    if sense.brawler && free && target_ok && b.dist_to_target() <= b.attack_range() {
-        return Some(SpecialUse::Approach { to: b.target });
+    if sense.closer && free && b.player_alive() && b.player_line_of_sight && b.dist_to_player() <= b.attack_range() {
+        let seat = b.player.position;
+        let slot = if b.hunting_frog() { None } else { b.engage_target };
+        let spot = b.close_spot(seat, slot, t.sonic_ai_breaker_px);
+        if b.me.position.distance_to(spot) <= OBSTACLE_GRID_SIZE * 0.5 {
+            return Some(SpecialUse::Hold { face: Dir::toward(b.me.position, seat), why: "close" });
+        }
+        return Some(SpecialUse::Approach { to: spot });
     }
     None
 }
@@ -2522,10 +2574,10 @@ fn act_special(b: &mut Brain) -> Status {
                 b.ai.shot_at_seat = at_seat;
             }
         }
-        SpecialUse::Hold { face } => {
+        SpecialUse::Hold { face, why } => {
             b.intent.face = Some(face);
             b.ai.commit(face);
-            b.ai.special_why = Some("hold");
+            b.ai.special_why = Some(why);
         }
         SpecialUse::Approach { to } => {
             b.intent.move_dir = Some(b.steer(to));
@@ -3375,7 +3427,7 @@ mod hammer_tests {
     fn sense_left(aim: HammerAim) -> SpecialSense {
         let mut aims = [HammerAim::default(); 4];
         aims[Dir::Left.index()] = aim;
-        SpecialSense::Hammer(HammerSense { aims, brawler: false })
+        SpecialSense::Hammer(HammerSense { aims, closer: false })
     }
 
     #[test]
@@ -3406,13 +3458,13 @@ mod hammer_tests {
         aims[Dir::Left.index()] = HammerAim { trouble: Some(0), ..HammerAim::default() };
         aims[Dir::Up.index()] = HammerAim { breaker: Some(0), ..HammerAim::default() };
         let mut ai = ready();
-        let intent = think(&mut ai, &hammer_tank(), SpecialSense::Hammer(HammerSense { aims, brawler: false }), [None; 4], SEAT);
+        let intent = think(&mut ai, &hammer_tank(), SpecialSense::Hammer(HammerSense { aims, closer: false }), [None; 4], SEAT);
         assert_eq!((intent.face, ai.special_why), (Some(Dir::Left), Some("trouble")), "trouble outranks a breaker");
         let mut aims = [HammerAim::default(); 4];
         aims[Dir::Left.index()] = HammerAim { breaker: Some(0), ..HammerAim::default() };
         aims[Dir::Up.index()] = HammerAim { breaker: Some(0), ..HammerAim::default() };
         let mut ai = ready();
-        let intent = think(&mut ai, &hammer_tank(), SpecialSense::Hammer(HammerSense { aims, brawler: false }), [None; 4], SEAT);
+        let intent = think(&mut ai, &hammer_tank(), SpecialSense::Hammer(HammerSense { aims, closer: false }), [None; 4], SEAT);
         assert_eq!(intent.face, Some(Dir::Up), "the same arm both ways: the way it already faces");
     }
 
@@ -3448,16 +3500,27 @@ mod hammer_tests {
         assert!(!hammer_fired, "the hammer tank does not");
     }
 
+    /// With nothing to shout at, a closer closes in - straight at the seat
+    /// with no slot, to its slot drawn in to the breaker's distance with
+    /// one - and waits there facing it; a tank that is not one leaves it
+    /// to the tree.
     #[test]
-    fn only_the_brawler_closes_in() {
+    fn a_closer_closes_in_to_its_slot_drawn_in_and_waits_there() {
         let seat = Position::new(ME.x - 200.0, ME.y);
         let mut ai = ready();
-        let brawler = SpecialSense::Hammer(HammerSense { brawler: true, ..HammerSense::default() });
-        let intent = think(&mut ai, &hammer_tank(), brawler, [None; 4], seat);
-        assert_eq!((ai.special_why, intent.move_dir), (Some("approach"), Some(Dir::Left)));
-        let mut ai = ready();
         think(&mut ai, &hammer_tank(), SpecialSense::Hammer(HammerSense::default()), [None; 4], seat);
-        assert_eq!(ai.special_why, None, "the others fight by the tree");
+        assert_eq!(ai.special_why, None, "not a closer: the tree's");
+        let none = SpecialSense::Hammer(HammerSense { closer: true, ..HammerSense::default() });
+        let mut ai = ready();
+        let intent = think(&mut ai, &hammer_tank(), none, [None; 4], seat);
+        assert_eq!((ai.special_why, intent.move_dir), (Some("approach"), Some(Dir::Left)));
+        // At its spot, the breaker's distance out on its own side: it holds
+        // facing the seat.
+        let mut there = hammer_tank();
+        there.position = Position::new(seat.x + tuning().sonic_ai_breaker_px, seat.y);
+        let mut ai = ready();
+        let intent = think(&mut ai, &there, none, [None; 4], seat);
+        assert_eq!((ai.special_why, intent.move_dir, intent.face), (Some("close"), None, Some(Dir::Left)));
     }
 
     #[test]

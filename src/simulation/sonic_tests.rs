@@ -500,20 +500,35 @@ fn the_rule_reads_where_the_knock_would_slide_the_seat() {
     }
 }
 
-/// Of two hammer tanks fighting the same seat, only the nearer closes in.
+/// Two hammer tanks fighting the same seat close in to their own spots,
+/// each on its own side, rather than onto one point.
 #[test]
-fn only_the_nearest_hammer_tank_brawls() {
+fn hammer_tanks_close_in_round_the_seat_not_onto_it() {
     let mut game = round("");
-    let near = hammer_enemy(&mut game, Position::new(96.0, 192.0 + 200.0));
-    let far = hammer_enemy(&mut game, Position::new(96.0 + 260.0, 192.0));
-    let (mut near_approached, mut far_approached) = (false, false);
-    for _ in 0..30 {
-        step(&mut game, false);
-        near_approached |= arm(&game, near) == Some("approach");
-        far_approached |= arm(&game, far) == Some("approach");
+    let seat_at = Position::new(400.0, 272.0);
+    let seat = game.player().unwrap();
+    game.place_tank(seat, seat_at, Some(0.0)).unwrap();
+    with_tank_mut(&game.world, seat, |t| t.sonic_ammo = 0);
+    let a = hammer_enemy(&mut game, Position::new(seat_at.x + 300.0, seat_at.y));
+    let b = hammer_enemy(&mut game, Position::new(seat_at.x, seat_at.y + 230.0));
+    for e in [a, b] {
+        with_tank_mut(&game.world, e, |t| t.speed_scale = 1.0);
     }
-    assert!(near_approached, "the nearer closes in");
-    assert!(!far_approached, "the other fights by the tree");
+    let mut closed = [false, false];
+    let mut nearest = [f32::MAX; 2];
+    let mut apart = f32::MAX;
+    for _ in 0..360 {
+        step(&mut game, false);
+        let at = pos(&game, seat);
+        for (i, e) in [a, b].into_iter().enumerate() {
+            closed[i] |= matches!(arm(&game, e), Some("approach" | "close"));
+            nearest[i] = nearest[i].min(pos(&game, e).distance_to(at));
+        }
+        apart = apart.min(pos(&game, a).distance_to(pos(&game, b)));
+    }
+    assert_eq!(closed, [true, true], "both close in");
+    assert!(nearest.iter().all(|&d| d < 150.0), "to the hammer's reach: {nearest:?}");
+    assert!(apart > 64.0, "each on its own side: {apart}");
 }
 
 /// A skid is not being stuck: the stuck and breach clocks stand still
