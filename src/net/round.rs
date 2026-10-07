@@ -2269,6 +2269,48 @@ mod tests {
         );
     }
 
+    /// **A launch the room refuses goes**: drawn on the press, never
+    /// claimed - the room's snapshots go on with six in the halo and no
+    /// `Fired` - it is taken off the picture after the refusal wait and the
+    /// hand-over, and the halo and the HUD have the drone back.
+    #[test]
+    fn a_refused_launch_goes_and_the_halo_has_its_drone_back() {
+        if !tuning().online_predict_shots {
+            return;
+        }
+        let (mut room, mut round) = room_and_round();
+        round.predict_own_tank = Some(true);
+        let swarm = crate::simulation::debug::TankPatch { fpv_drones: Some(6), ..Default::default() };
+        room.game.debug_set_tank(0, &swarm).expect("the seat's tank");
+        room.welcome();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        for tick in 1..=20u32 {
+            let s = on_schedule(&room, tick);
+            room.say(Msg::Snapshot(s));
+        }
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        let count = |round: &OnlineRound<loopback::Loopback>| {
+            crate::hud::HudModel::gather(round.game().expect("a replica"), Some(0)).local.weapon.count
+        };
+        let seat_drones = |round: &OnlineRound<loopback::Loopback>| {
+            round.game().expect("a replica").drones().iter().filter(|d| d.owner == crate::shell::Owner::Player(0)).count()
+        };
+        round.frame(&Intent { fire: true, ..Intent::default() }, 1.0 / 60.0);
+        assert_eq!((seat_drones(&round), count(&round)), (1, 5), "drawn on the press, the count one down");
+        // The room never launches it: its snapshots go on as they were.
+        let deadline = Instant::now() + std::time::Duration::from_secs(4);
+        let mut tick = 21u32;
+        while seat_drones(&round) > 0 && Instant::now() < deadline {
+            let s = on_schedule(&room, tick);
+            room.say(Msg::Snapshot(s));
+            tick += 1;
+            std::thread::sleep(std::time::Duration::from_millis(4));
+            round.frame(&Intent::default(), 1.0 / 60.0);
+        }
+        assert_eq!(seat_drones(&round), 0, "the refused launch left the picture");
+        assert_eq!(count(&round), 6, "and the halo has its drone back");
+    }
+
     /// A drone the room launched is the drawn launch of the press its
     /// `Fired` names - the last one waiting at or before that input tick -
     /// and any drawn launch before that one still waiting was refused.
