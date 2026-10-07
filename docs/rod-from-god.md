@@ -315,49 +315,48 @@ eruption, as a blast on the end screen hurts nobody.
 
 | File | What |
 |---|---|
-| `src/zone.rs` (new) | Zones (§3.3): `Zone` (id, kind, owner, centre, radius, `until` on the round clock), `ZoneKind` (`Rod(RodCall)` here; the well adds its own), `Zone::{left, danger, route_cells}`, `ZONE_*` wire tags; the rules every reader keeps, in its doc |
-| `src/rod.rs` (new) | The weapon's headless half. `RodCall` (struck cell, the caller's seat), `Reticle` (cell, the stick held and its repeat, seconds at rest) and `step_reticle` (pure: a stick or an aim cell, the range, the step clock), `reticle_start`, `reticle_range`, `rule()` (the rod's `ChargeRule` from the `rod` knobs), `in_kill`, `shove_speed`, `falloff`, `break_cells`, `crater_cells`, `Craters`, the composers `compose_reticle`, `compose_designator`, `compose_call`, `compose_column`, `compose_impact`, `compose_crater_smoke` (pure, `pyro::Shape`s), `draw_crater` (generic over `canvas::Canvas`), `module_cell` |
-| `src/simulation/rod.rs` (new) | The world half. `fire_rod` (a release: the call, or the cancel), `step_reticle` per tick through `charge_trigger` (seats, enemies, the sandbox), `resolve_zones(f, live)`, `rod_impact` (the walk of §1), `make_crater`, `set_off_volcanoes`, `rod_call_show` and `rod_show` (the cosmetic halves, which a replica's events and a client's own release call too), `Game::{zones, craters, seat_still, seat_reticle, set_seat_reticle}`, `tick_seat_still`, `rod_senses` and `zone_dangers` (§4), `debug_call_rod` |
+| `src/zone.rs` (new) | Zones (§3.3): `Zone` (id, kind, owner, centre, `until` on the round clock - the radius is its kind's knob), `ZoneKind` (`Rod(RodCall)` here; the well adds its own), `Zone::{left, radius, danger_radius, danger, holds, route, wire_kind, rod, provisional}`, `ZONE_ROD`, `PROVISIONAL_ZONE_BASE`; the rules every reader keeps, in its doc |
+| `src/rod.rs` (new) | The weapon's headless half. `RodCall` (struck cell, the caller's seat), `SeatStill` (`step`, `speed`), `Steer`, `Range` (`of`, `hold`, `holds`), `Reticle`, `reticle_start`, `step_reticle` (pure: a stick or an aim cell, the range, the step clock), `rule()` (the rod's `ChargeRule` from the `rod` knobs), `cell_reach`, `falloff`, `shove_speed`, `crater_cells`, `Crater`/`Craters`, `lens`, the composers `compose_reticles`, `compose_calls`, `compose_reticle`, `compose_designator`, `compose_call`, `compose_call_ring`, `compose_column`, `compose_impact`, `compose_crater_smoke` (pure, `pyro::Shape`s), `RodImpactFx`, `Ground`, `CraterWater`, `draw_crater` (generic over `canvas::Canvas`), `module_cell` |
+| `src/simulation/rod.rs` (new) | The world half. `fire_rod` (a release: the call, or the cancel), `place_calls`, `resolve_zones`, `rod_impact` (the walk of §1: `rod_hulls`, `hulls_in_order`, `knock_from`, `rod_frogs`, `rod_tiles`, `rod_ground`), `crater_cells_at`, `make_crater`, `fill_craters`, `struck_volcanoes`, `set_off_volcanoes`, `shift_volcano`, `ground_struck`, `rod_show` (the cosmetic half, which a replica's event takes too), `Game::{zones, craters, seat_still}`, `tick_seat_still`, `set_seat_reticle`/`seat_reticle_report` (a room's report, §8), `any_rod`, `zone_dangers`, `zone_route_cells`, `rod_senses` (§4), `standing_towers_of`, `debug_call_rod`, `Tank::crush` |
 | `src/simulation/rod_tests.rs` (new) | The scenario tests (§10) |
-| `src/simulation/weapons.rs` | The `ActiveWeapon::RodFromGod` arm of `fire_charge` (`fire_rod`); the dispatch arm empty (a charge weapon fires through `fire_charge`) |
-| `src/simulation/mod.rs` | `Frame::pending_calls`; `Game::{zones, craters, seat_still}`; `resolve_zones` in both branches; `drive_player`'s stick handed to an `Aim` charge; `Footing::at` with the craters; `frog_reflexes`' shy from a zone; `change_weather` filling craters; `tick_presentation` (zones' ages, crater smoke, reticles); `Event::{RodCalled, RodImpact}`, `HitCause::Rod`; the swap's table entry |
-| `src/simulation/nav.rs` | Crater cells weighed in `nav_finish`; `Setting::crater_cost`; every zone's danger surcharged in `route_grid_on` |
+| `src/simulation/gauss.rs` | The charge trigger generalised by weapon: `SeatCharge::{weapon, reticle, hull_cell}`, `charge_trigger`'s aim arm, `fire_charge` handing a rod's release to `fire_rod` |
+| `src/simulation/weapons.rs` | The rod in the special-weapon dispatch's exclusions |
+| `src/simulation/mod.rs` | `Game::{zones, zone_lead, craters, rod_impacts, seat_still, seat_reticle, screen_flash_strength}`; `Frame::pending_calls`; `resolve_zones` in both branches; `tick_seat_still` before `enemy_phase`; `rod_senses` handed to the special tier; the AI's `drop_charge`; `Footing::at` with the craters; the frog's shy hop from a zone; `change_weather` filling craters; `flash_screen_with`; `tick_presentation` (the impacts' ages); `Event::{RodCalled, RodImpact}`; `TankSnapshot::{rods, rod_hold}` |
+| `src/simulation/nav.rs` | Crater cells weighed `rod_crater_path_cost`; every zone's cells surcharged in `route_grid_on` |
 | `src/simulation/engage.rs` | `EngageCtx::herd` (§4) |
-| `src/simulation/props.rs` | `DamageCause::Crush`; the rod's params in `blast_crates` |
-| `src/simulation/volcano.rs`, `src/volcano.rs` | `Volcano::{base, shift}`, `set_off_shift`, `Game::set_off_volcano`; `eruptions_shown` marked on a set-off |
-| `src/simulation/sonic.rs` | The hammer's trouble: inside a live call's circle (§12) |
-| `src/simulation/fpv.rs`, `src/air.rs` | `AirStrike::Rod`; the rod's arm in the impact |
-| `src/simulation/grenades.rs` | A grenade set off by an impact |
-| `src/simulation/command.rs` | Nothing new: a unit holding a reticle is `charging` (the rail's skip) |
-| `src/simulation/present.rs` | `Game::draw_press_show`'s rod arm; `Game::{add_provisional_zone, hide_zones}`; `Game::seat_reticle` |
-| `src/simulation/replica.rs` | `DrawableZone`, `DrawableCrater`, `DrawableTank::reticle`, `DrawableRound::volcano_shifts` |
+| `src/simulation/props.rs` | `DamageCause::Crush` |
+| `src/volcano.rs` | `Volcano::{base, shift}`, `set_off_shift`, `set_shift` |
+| `src/simulation/sonic.rs` | `SPAWN_SWAPS`' rod row; the hammer's trouble inside a live call's circle (§12) |
+| `src/air.rs` | `AirStrike::Rod` |
+| `src/simulation/present.rs` | `Game::{show_seat_reticle, seat_reticle, flash_seat_rod, set_provisional_zones, set_zone_lead}` |
+| `src/simulation/replica.rs` | `DrawableState::{zones, craters, volcano_shifts}`, `DrawableTank::reticle` |
 | `src/ground.rs` | `WaterLayout::fill` |
-| `src/weather.rs` | `fills_craters`; the beam's and the column's light |
-| `src/tank.rs` | `rods`, `reticle`, `rod_flash`; `ActiveWeapon::RodFromGod` (`name`, `full_load`, `tell_seconds` none, `trigger` `Charge`, `charge_rule`), `SPECIAL_WEAPONS`; `crush`, `kick_rod`; `weapon_ammo`/`take_weapon`/`empty_stock`/`wants_pickup`; the module's cells in `module_cols` |
-| `src/pickup.rs` | `PickupKind::RodFromGod` (`rod_from_god`, row 17, its ink, spills) |
-| `src/frog.rs` | The shy hop's threat point |
+| `src/weather.rs` | `fills_craters`; the calls' and the impact's light |
+| `src/tank.rs` | `Stick`, `Tank::{rods, reticle, stick, rod_flash}`, `step_trigger`, `kick_rod`; `ActiveWeapon::RodFromGod` (`name`, `full_load`, the charge trigger), `SPECIAL_WEAPONS`; `weapon_ammo`/`take_weapon`/`empty_stock`/`wants_pickup`; the module's cells in `module_cols` |
+| `src/pickup.rs` | `PickupKind::RodFromGod` (`rod_from_god`, row 17, its ink) |
 | `src/fish.rs` | `throw_from` (the rod's throw onto the bank) |
-| `src/ai.rs` | `SpecialSense::Rod(RodSense)`, `RodPick`, `rod_rule`, `SpecialUse::Drop`, `SpecialUse::Charge::aim`, `Intent::aim_cell`, `generic_fire(RodFromGod)`; the windup arm yielding to a zone; `SEEK_SPECIALS` gains the rod; `AiSnapshot::rod` |
+| `src/ai.rs` | `SpecialSense::Rod(RodSense)`, `RodPick`, `rod_rule`, `rod_aim_rule`, the stand-off (`rod_stand_off_px`, `rod_stand_off`, `rod_free_spot`, `rod_spot_open`, `way_open`, `rod_crowded`, `Ai::{rod_spot, rod_spot_best, rod_wait, rod_held}`), `SpecialUse::{Charge::aim, Drop}`, `Intent::{aim_cell, drop_charge}`, `Brain::in_call`, `generic_fire(RodFromGod)`; the special and air tiers yielding to a call; `SEEK_SPECIALS` gains the rod |
 | `src/indicators.rs` | `ArrowKind::Zone`, `Scene::zones` |
-| `src/minimap.rs` | `Class::Crater`, a zone's mark, `RoundKey::craters` |
-| `src/hud.rs`, `src/render/hud.rs` | `HUD_ROD_COLOR`, the `weapon_color`/`weapon_pickup` arms, the call-in prompt (`hud::rod_prompt`, `RodPrompt`) |
-| `src/game.rs`, `src/render/game.rs` | Craters in `paint_floor_marks`; reticles, designator lines, calls and the column in the glowing pass; the impact's dust, debris and crater smoke in the lit pass; the dev stats arm |
-| `src/fx.rs`, `src/burst.rs` | A rod `Hit` flashes and bursts nothing; sparks off the column's foot |
+| `src/minimap.rs` | `Class::Crater`, `Marks::zones`, `RoundMinimap`'s crater count in its key |
+| `src/hud.rs`, `src/mode.rs`, `src/render/game.rs` | `HUD_ROD_COLOR`, the readout's arms, the call-in prompt (`hud::rod_prompt`, `PlayChrome::prompt`) |
+| `src/game.rs`, `src/render/game.rs` | Craters in `paint_floor_marks`; reticles, designator lines, calls and the column in the glowing pass; the impact's dust and crater smoke in the lit pass; the screen flash's strength |
+| `src/fx.rs` | A rod `Hit` flashes the hull and bursts nothing |
 | `src/pyro.rs` | `digits` (block digits, §5) |
-| `src/net/wire.rs` | `WeaponKind::RodFromGod`, `TankState::reticle`, `IntentMsg::reticle`, `ZoneState`, `CraterState`, `Snapshot::{zones, craters}`, `RoundState::volcano_shifts`, `HitCause::Rod`, `AirStrike::Rod` |
-| `src/net/delta.rs` | `zones`, `zones_gone`, `craters`, `craters_gone` |
-| `src/net/events.rs` | `WireEvent::{RodCalled, RodImpact}`, the `press_show` arm |
-| `src/net/encode.rs`, `src/net/apply.rs` | The families, the shifts, the shows (`apply_zones`, `apply_craters`) |
+| `src/lib.rs`, `src/tank_art.rs` | `TANK_MODULE_ROD_COL`; `ROD_LENS` |
+| `src/net/wire.rs` | `WeaponKind::RodFromGod`, `TankState::reticle`, `IntentMsg::reticle` (`with_reticle`), `ZoneState`, `CraterState`, `Snapshot::{zones, craters, volcano_shifts}`, `HitCause::Rod`, `AirStrike::Rod`; `PROTOCOL_VERSION` 19 (`net/mod.rs`) |
+| `src/net/delta.rs` | `zones`, `zones_gone`, `craters`, `craters_gone`, `volcano_shifts` |
+| `src/net/events.rs` | `WireEvent::{RodCalled, RodImpact}` |
+| `src/net/encode.rs`, `src/net/apply.rs` | The families and the shifts (`zones`, `volcano_shifts`, `reticle_code`/`reticle_from_code`; `apply_zones`, `apply_craters`, `apply_volcano_shifts`), the impact's show |
 | `src/net/mailbox.rs`, `src/net/authority.rs`, `src/net/rig.rs`, `server/src/room.rs` | The reticle report (§8): `Mailbox::reticle`, `authority::take_reticle` |
-| `src/net/predict.rs`, `src/net/round.rs` | `PressShow::Rod`, the provisional zone paired by id, every countdown on this client's present, the shown seat's reticle |
-| `src/simulation/debug.rs`, `src/devserver.rs` | `set_tank`'s `rods`; the snapshot's `rods`, `reticle`, `zones`, `craters`, `still`, `speed`, `rod`; `spawn_pickup {kind: "rod_from_god"}`; the `rod_call` tool (§3.4) |
-| `src/bin/probe.rs` | The tank line's `rod=`, the fire tuple, the calls' off-box reading |
+| `src/net/predict.rs`, `src/net/round.rs` | `PressShow::Rod(RodPress)`, `Predictor::{reticle, reticle_report}`; `OwnCall`, `claim_own_call`, `place_own_calls` - the client's own call drawn on the release and handed to the room's zone, every countdown on this client's present |
+| `src/simulation/debug.rs`, `src/devserver.rs` | `set_tank`'s `rods`; the snapshot's `rods`, `reticle`, `zones` (`ZoneDebug`), `craters`; `spawn_pickup {kind: "rod_from_god"}`; the `rod_call` tool (§3.4) |
+| `src/bin/probe.rs` | The tank line's `rod=`, the fire tuple, `rod-calls-on-seats`/`rod-calls-offbox`, the stand-off hold in `HOLDS` |
 | `src/editor/mod.rs` | `Tool::Pickup(PickupKind::RodFromGod)` (`rod_from_god`) |
 | `maps/armory.toml` | Its crates (§3.4) |
 | `src/tuning.rs` | The `rod` group (§6), one row in `enemies` |
 | `lang/en.ftl`, `lang/sl.ftl`, `src/text.rs` | §7 |
 | `tools/punypalette.py`, `tools/spritegen/gen_crates.py`, `tools/spritegen/tankdesign/{kit,export,render,lines/vanguard}.py` | The art (§5); writes `static/crates_sheet.png`, `pickup_glyphs.png`, `tank_modules.png`, `tank_modules_glow.png`, `src/tank_art.rs` |
-| `src/thumbnail.rs`, `src/maplint.rs` | The armory's pin re-baselined; the armory as it lints |
+| `src/thumbnail.rs` | The armory's pin re-baselined (its two crates) |
 | `docs/` | This, `CRATES_SPEC.md`, `SPRITESHEET_SPEC.md`, `effects.md` (who draws what), `volcano.md` (set off by a rod), `water.md` (a filled crater); `CLAUDE.md` |
 
 ## 3. The shared path
@@ -491,10 +490,12 @@ press show's claim by input tick; `HitCause` on `Event::Hit`;
   weaker one still on screen and is not held back by
   `blast_screen_flash_min_gap_seconds`. `flash_screen()` is
   `flash_screen_with(1.0)`, as it was.
-- **`Game::knock_from(f, center, inner, outer, speed, max)`** - every live
-  hull on the field with its box's nearest point between `inner` and
-  `outer` of `center`, knocked along the line out from it, falling off
-  linearly; the hammer's `knock` per hull. The well's collapse throws with
+- **`Game::knock_from(f, center, inner, outer, speed)`** - every live
+  hull on the field (`hulls_in_order`) with its box's nearest point more
+  than `inner` and at most `outer` from `center`, knocked along the line
+  out from it at `speed(mass factor, distance)` px/s (the rod's is
+  `rod::shove_speed`, falling off linearly); the hammer's `knock` per
+  hull, the footing it stands on taken in. The well's collapse throws with
   it too.
 - **`frog_reflexes`** shies from a zone: a frog that can hop and whose
   centre is inside a live zone's danger hops away from the zone's centre
@@ -535,8 +536,6 @@ pub struct Zone {
     /// of its own.
     pub owner: Owner,
     pub centre: Position,
-    /// The area it acts on (px): the rod's circle.
-    pub radius: f32,
     /// When it ends, on the round clock (`Game::time`).
     pub until: f32,
 }
@@ -551,13 +550,17 @@ pub enum ZoneKind {
 impl Zone {
     /// Seconds left at round time `now`.
     pub fn left(&self, now: f32) -> f32;
+    /// The area it acts on (px): its kind's knob - the rod's circle,
+    /// `rod_kill_radius_px` - so the wire carries no radius.
+    pub fn radius(&self, t: &Tuning) -> f32;
     /// What an enemy keeps out of while it stands: the rod's circle grown
-    /// by a hull's half extent and `rod_ai_berth_px`, owned by nobody.
-    /// `None` for a kind the AI meets some other way.
+    /// by a hull's half extent and `rod_ai_berth_px` (`danger_radius`),
+    /// owned by nobody. `None` for a kind the AI meets some other way.
     pub fn danger(&self, t: &Tuning) -> Option<Danger>;
-    /// The nav cells the router surcharges while it stands, with their
-    /// extra cost: the rod's danger's cells at `rod_ai_circle_cost`.
-    pub fn route_cells(&self, t: &Tuning) -> Option<(f32, u32)>;
+    /// The radius of the disc whose nav cells the router surcharges while
+    /// it stands, and the surcharge: the rod's danger at
+    /// `rod_ai_circle_cost`.
+    pub fn route(&self, t: &Tuning) -> Option<(f32, u32)>;
 }
 ```
 
@@ -568,9 +571,9 @@ impl Zone {
 - **The AI**: `zone_dangers` puts every zone's `danger()` on the frame's
   dangers, beside the EMP's discs and the rail's lanes, in id order -
   the `dodge` tier, `out_of_danger` and the edge hold do the rest.
-- **The router**: `route_grid_on` surcharges every zone's `route_cells()`
-  (nav cells whose centre lies inside the circle), saturating, before the
-  first field.
+- **The router**: `route_grid_on` surcharges every zone's `route()`
+  (`zone_route_cells`: the nav cells whose centre lies inside its disc),
+  saturating, before the first field.
 - **Off the screen**: `indicators::Scene::zones`; a zone off this screen and
   not owned by a seat on this screen gets `ArrowKind::Zone { kind, left }`,
   never merged and never left out past the cap (§5).
@@ -579,14 +582,14 @@ impl Zone {
   a replica's zones are the family's (`apply_zones`), so a joiner sees every
   zone standing and a skipped delta loses none.
 - **The press show**: a seat's own zone is drawn at once as a provisional
-  one (`Game::add_provisional_zone`, an id in the provisional band), and
-  the room's copy is kept off the picture (`Game::hide_zones`) until the
-  claim pairs them (§8).
+  one (`Game::set_provisional_zones`, an id in the provisional band), and
+  the room's copy is kept off the picture until the claim pairs them by
+  the `Fired`'s input tick (`claim_own_call`, §8).
 - **For the gravity well (BB-42)**: `ZoneKind::Well` with its stage; its
   centre moves while the orb flies (the family's `Moved`); its `danger()`
   is `None` (the AI drives across the pull, not out of it - its own
-  reaction) and its `route_cells` its own; the arrow and the minimap mark
-  its look. That arm is its PR's.
+  reaction) and its `route` its own; the arrow and the minimap mark its
+  look. That arm is its PR's.
 
 **The seat motion record** (`Game::seat_still: [rod::SeatStill; MAX_SEATS]`),
 which the rod's AI reads (§4) and the well's may:
@@ -679,9 +682,9 @@ now
 `ONLINE_REFUSED_TOOLS` member, refused off the field; replies `{id, cell,
 land}`), so an impact, a crater, a set-off volcano or the pack's herd is
 tried in lockstep without steering a reticle. `status`/`snapshot` carry
-`zones` (id, kind, centre, seconds left, owner), `craters` (cells, filled),
-each tank's `rods` and `reticle`, each seat's `still` and `speed`
-(`SeatStill`), and an enemy's `rod` pick (`AiSnapshot::rod`).
+`zones` (id, kind, centre, seconds left, owner) and `craters` (cells), and
+each tank its `rods` and `reticle`. The seats' motion record and an
+enemy's pick are not in the snapshot (§12): the probe's trace reads them.
 
 ## 4. AI
 
@@ -711,6 +714,12 @@ pub struct RodSense {
     /// Its centre stands inside a live zone's danger: a reticle it holds
     /// is dropped (`windup_rule`) and the dodge takes it out.
     pub under_call: bool,
+    /// The nearest seat it knows of from inside that seat's sight box:
+    /// what it stands off from (the rule's arm 4).
+    pub keep_from: Option<Position>,
+    /// No pick, but a seat it would call on were its own hull not in the
+    /// circle: what backs it off even from where it holds.
+    pub self_blocks: bool,
 }
 
 pub struct RodPick {
@@ -793,16 +802,36 @@ order.
    the fire timer is set to `rod_ai_fire_interval` (8). A release waits for
    the charge to be full (`rod_settle_seconds`) as well as the rest.
 4. **The stand-off** (found in Phase 2, below), while it is healthy enough
-   not to flee: from the nearest seat it knows of from inside that seat's
-   sight box (`RodSense::keep_from`), nearer than `rod_stand_off_px` (the
-   circle, the friend margin, the widest hull's half and a cell, 124 px)
-   it backs off to a spot a cell past that - on the line out through
-   itself, else on the seat's row or column, the nearest it can drive to
-   out of every danger (`Approach`, `why` "stand-off"); within two cells
-   past it, it holds facing the seat (`Hold`), unless an ally crowds it
-   (`enemy_separation_px`, hull to hull), when it moves to the nearest free
-   spot of the eight round the seat at that distance. A spot it chose is
-   latched (`Ai::rod_spot`) until it gets there. Further out: `None`.
+   not to flee, from the nearest seat it knows of from inside that seat's
+   sight box (`RodSense::keep_from`):
+   - nearer than `rod_stand_off_px` (the circle, the friend margin, the
+     widest hull's half and a cell, 124 px) it backs off to a spot a cell
+     past that - on the line out through itself, else on the seat's row or
+     column (`Approach`, `why` "stand-off"); with none open it stands where
+     it is (`Hold`) - the attack tier would only turn it about. A tank that
+     held its spot last tick backs off only from a cell nearer
+     (`Ai::rod_held`), so one
+     sliding on after it stopped on wet ground is not sent out again -
+     unless its own hull is all that keeps it from calling
+     (`RodSense::self_blocks`);
+   - within `rod_ai_band_px` (64) past it, it holds where it stands,
+     keeping the facing it has (`Hold`) - the reticle aims, not the hull -
+     unless an ally crowds it (`enemy_separation_px`, hull to hull), when
+     it moves to the nearest free spot of the eight round the seat at
+     that distance;
+   - a spot is one it can drive to straight - along a row then a column,
+     or a column then a row, every cell open and out of every danger
+     (`way_open`) -, uncrowded, with no tank in its way as it sets off and
+     never nearer the seat on the way (`rod_spot_open`). A spot it chose is
+     latched (`Ai::rod_spot`) until it gets there, a tank stands in its way
+     or that way is shut; a move stopped against a tank or a wall for
+     `rod_ai_give_up_seconds` (0.3), or one the router steers away from
+     its spot - more than half a cell back, or a cell further than it has
+     come (`Ai::rod_spot_best`): the router's way round something, a seat's
+     line of fire or a crowd -, is given up, and it stands
+     `rod_ai_wait_seconds` (2) where it is before it moves again
+     (`Ai::rod_wait`), rather than grind or circle;
+   - further out: `None`.
 5. Otherwise `None`: the tree goes on (chase, attack's repositioning, patrol
    and the seeks; never a shot).
 
@@ -862,7 +891,9 @@ moment the seat's centre is out of the danger its ring is built round the
 seat again and the chase goes on. Eight slots four cells out stand 36 px
 apart on an axis and more than 150 px across axes, so a herd is never three
 tanks within `CLUSTER_RADIUS_PX`, nor a pile-up. Hunters' frog rings are not herded (the
-frog leaves a circle on its own).
+frog leaves a circle on its own). The herders are the pack's attack tier -
+the tanks that shoot; a rod tank with a call left stands off (arm 4) and
+takes no slot.
 
 ### Reacting to a call (every enemy)
 
@@ -973,10 +1004,11 @@ fair); what lingers on the ground is shaded in the lit pass.
     beside the circle's upper right (38 px right, 32 px up of the centre,
     the scene's place), white in the last second. Online every zone's
     seconds are this client's present's (§8).
-- **The call's first frame** (`rod_call_show`): a ring of `LASER_RED[3]`
-  blocks closing from 32 px onto the circle over 0.15 s, and the module's
-  uplink cell (`Tank::kick_rod`) - the room's for its tank, a replica's off
-  `RodCalled`, a client's own on its release.
+- **The call's first frames** (`rod::compose_call_ring`, from the zone's
+  age): a ring of `LASER_RED[3]` blocks closing from 32 px onto the circle
+  over 0.15 s, and the module's uplink cell (`Tank::kick_rod`) - the
+  room's for its tank, a replica's off the `Fired`, a client's own on its
+  release (`flash_seat_rod`).
 - **The impact** (`rod_show`, staged through `Game::show` like every
   blast's):
   - *the column* (`rod::compose_column`), glowing pass, for
@@ -1177,6 +1209,9 @@ group:
 | `rod_ai_berth_px` | 24 | 0..=128 | How far past the circle (and a hull's half) an enemy keeps from a call. |
 | `rod_ai_circle_cost: usize` | 48 | 0..=255 | Extra route cost on every cell of a call's danger; 0 switches it off. |
 | `rod_ai_herd_px` | 128 | 0..=400 | How far from a call's centre the pack's firing slots stand while the seat they fight is inside it. |
+| `rod_ai_band_px` | 64 | 0..=256 | How far past its stand-off distance an enemy carrying calls holds where it stands. |
+| `rod_ai_give_up_seconds` | 0.3 | 0.05..=5 | A stand-off move stopped against a tank or a wall this long is given up... |
+| `rod_ai_wait_seconds` | 2.0 | 0..=10 | ...and the tank stands this long before it moves again. |
 | `enemy_special_weapon_rod_share` (`enemies`, `@ Restart`) | 0 | 0..=1 | The share of special-carrying enemies that spawn with the rod from god instead, decided by a hash of the spawn point and the slot - never the round's RNG - so at 0 nothing changes. |
 
 Constants (geometry and policy, not feel): in `rod.rs` `ROD_BEAM_HZ` (20),
@@ -1355,215 +1390,181 @@ Protocol 19 (from the swarm's 18).
 
 ## 10. Tests
 
-`simulation/rod_tests.rs` (headless, tiny inline maps or the default field,
-parked enemies placed by hand):
+As built. `simulation/rod_tests.rs` (headless, the default field with the
+seat at cell (3, 6), enemies placed by hand):
 
-- `a_rod_crate_arms_the_rod_and_replaces_the_special_carried` - two calls,
-  another special emptied, a second crate refills to two.
-- `a_press_shows_a_reticle_ahead_of_the_hull_and_the_hull_stands` - the
-  reticle on the cell four ahead, the held stick moving it and not the hull,
-  `throttle` 0.
-- `the_stick_steps_the_reticle_once_then_repeats` - a tap one cell, a hold
-  one at once, the next after the delay, then every repeat.
+- `a_rod_crate_arms_two_calls_and_replaces_the_special` - two calls,
+  another special emptied, a charge trigger whose stick aims.
+- `the_reticle_starts_ahead_and_the_stick_steps_it_while_the_hull_stands` -
+  the cell four ahead, a tap a cell, a hold one at once and one after the
+  delay, the hull standing, the reticle gone with the charge.
 - `the_reticle_stays_inside_the_sight_box_and_the_field`.
-- `a_release_calls_on_the_reticles_cell` - `Fired` then `RodCalled` in one
-  tick, one call spent, the zone's end `rod_countdown_seconds` on.
-- `a_tap_calls_nothing` - released before settled: `ChargeEnded { Fizzled }`,
-  nothing spent.
-- `letting_go_on_your_own_cell_cancels` - a fizzle, nothing spent, no
-  cooldown.
-- `holding_past_the_hold_times_the_uplink_out` - `Vented`, the cooldown,
-  a new press needed.
-- `a_wreck_an_emp_or_another_crate_mid_reticle_lapses_it`,
-  `a_shove_or_a_teleport_mid_reticle_keeps_it_in_range`,
-  `a_rod_crate_mid_reticle_refills_and_keeps_it`.
-- `a_call_lands_after_its_countdown_whatever_becomes_of_the_caller` -
-  wrecked, disabled and teleported callers: the impact on time, the kills
-  credited to the caller.
-- `the_circle_crushes_every_hull_with_any_part_inside_it` - either side, a
-  teammate, the caller; one a pixel outside shoved, not crushed.
-- `a_rainbow_shield_does_not_save_a_hull_in_the_circle` - `ShieldBroken`
-  and a wreck.
-- `the_ring_shoves_and_hurts_nobody` - the slide falls off with distance,
-  no damage, a skid; a heavy chassis slides less.
-- `every_breakable_tile_in_the_break_radius_comes_down_and_iron_stands` -
-  brick, wood, glass, sandbag, fence, tree, lamp post: dead, no roll, not
-  burning; iron, a cone and a door standing.
-- `a_tower_in_the_break_radius_dies_either_side`.
-- `a_drum_in_the_break_radius_goes_off_at_once` and
-  `a_fused_drum_is_left_to_its_fuse`.
-- `a_grenade_in_the_break_radius_goes_off`, `a_lantern_is_broken`,
-  `an_oil_trail_in_reach_is_lit`.
-- `crates_are_left_unless_breakable` - and broken with `crate_breakable`.
-- `a_frog_in_the_circle_dies_and_one_in_the_ring_is_stunned`.
-- `a_frog_under_a_call_hops_out_of_it` and
-  `a_stunned_frog_under_a_call_stays_and_dies` (the hammer's stun).
-- `a_drone_over_the_circle_is_downed` - `DroneDowned { by: Rod }`.
-- `grass_in_the_break_radius_hides_nobody_for_a_while`.
-- `a_crater_is_a_plus_of_dry_cells` - none on water, lava, ice or a cone's
-  footprint; none past the field.
-- `a_hull_in_a_dry_crater_drives_slower` - `rod_crater_pace`.
-- `the_router_prices_a_crater` - a route round it where that is no longer;
-  the kept nav base equals `nav_grid` from scratch after a crater
-  (`Grid::same_as`).
-- `a_crater_made_in_rain_is_a_ford` - `Depth::Shallow`, the ford's pace,
-  wet tracks, a burning hull put out; one made under a clear sky is not.
-- `rain_falling_later_fills_every_crater_and_snow_freezes_them`
-  (`change_weather`).
-- `a_rod_on_a_volcano_sets_it_off` - the eruption on the next tick from
-  asleep, from cooling and from a rumble; the next one a period later;
-  nothing while it erupts; the shift in whole ticks; no tremor for the
-  skipped rumble.
-- `a_rod_on_a_lake_makes_no_crater_and_no_scorch`.
+- `a_release_calls_the_rod_and_it_lands_after_the_countdown` - `Fired` and
+  `RodCalled`, a call spent, nothing before the countdown is out; then a
+  shielded hull in the circle crushed, one in the ring knocked, one past it
+  untouched, the zone gone.
+- `a_release_on_its_own_cell_or_unsettled_spends_nothing` - the cancel and
+  a tap: `Fizzled`, nothing spent.
+- `the_circle_crushes_every_hull_with_any_part_inside_it` - a hull with a
+  corner in, the caller in its own circle; one a few pixels out only
+  shoved.
+- `the_impact_breaks_the_tiles_in_reach_and_iron_stands` - brick, a
+  sandbag, a drum going off; iron and a cell past the break radius
+  standing.
+- `a_crater_slows_a_hull_and_fills_under_rain` - the plus of cells, the
+  pit's pace, a sky turned to rain making it a ford.
+- `no_crater_in_water`.
+- `a_frog_under_a_call_hops_out_and_a_stunned_one_dies`.
+- `a_rod_on_a_volcano_sets_it_off` - `RodImpact { erupted }`, the eruption
+  on the next tick, no crater on the cone.
+- `a_rod_on_vulkans_crater_sets_it_off` - the same on the shipped
+  `vulkan` level, from asleep, the eruption its usual length.
+- `a_drone_over_the_circle_is_downed` - `DroneDowned { by: "rod" }`.
 - `several_calls_land_in_id_order`.
 - `a_call_lands_harmlessly_on_the_end_screen` - the show, no crush, no
-  shove, no tile, no crater, no eruption.
-- `the_rod_draws_no_rng` - the RNG's state after a call, an impact on
-  tanks and plain tiles, with no drum, frog or grenade: unchanged.
-- `a_round_with_the_rod_replays_bit_for_bit`.
-- `the_spawn_swap_hands_out_the_rod_by_its_share_and_draws_nothing`.
-- `an_enemy_takes_the_crate_only_with_no_special`.
-- `an_owned_hull_is_allowed_its_shove` - `accept_seat_pose` takes the
-  skid's pose within the grace.
+  tile, no crater.
+- `the_rod_draws_no_rng` - a call, its shove and a crushed tile leave the
+  round's stream where the round without them leaves it.
+- `a_call_replays_byte_for_byte`.
+- `the_router_prices_a_crater_and_the_kept_grid_follows` - a route
+  through the crater costs more, and the kept nav grid is the one built
+  from scratch (`Grid::same_as`).
+- `a_call_is_a_danger_for_everyone_and_its_flash_is_the_strongest`.
+- `a_rooms_report_puts_the_reticle_where_the_client_has_it` - from the
+  press, held to the range, the release calling there.
+- `the_spawn_swap_hands_out_the_rod_by_its_share`,
+  `an_enemy_takes_the_crate_only_with_no_special`.
+- AI on whole rounds: `an_enemy_calls_a_rod_on_a_seat_standing_still`
+  (once, on the seat's cell, from inside its sight box, the seat crushed),
+  `an_enemy_too_near_its_target_backs_off_and_calls`,
+  `an_enemy_never_calls_on_a_circle_holding_an_ally`,
+  `an_enemy_leaves_a_call_before_it_lands`.
+- `the_seat_still_record_counts_still_and_averages_speed`.
 
-AI (`ai.rs` unit tests on a `Brain` with a made-up `RodSense` and dangers,
-and scenario tests on a whole round):
+Headless halves: `rod::tests` (`the_range_is_the_sight_box_less_half_a_cell_inside_the_field`,
+`reticle_start_is_ahead_and_in_range`, `the_stick_steps_once_then_repeats`,
+`an_aim_walks_the_reticle_larger_offset_first`,
+`a_report_puts_it_on_the_reported_cell_held_in_range`,
+`crater_cells_are_a_plus_of_dry_cells_in_the_field`,
+`the_shove_falls_off_to_nothing_at_its_radius`,
+`cell_reach_is_the_distance_to_the_cells_box`,
+`the_reticle_is_on_the_grid_and_pure`,
+`the_call_draws_its_countdown_and_its_beam_holds_in_the_last_second`,
+`the_column_lasts_its_frames_and_the_impact_is_gone_by_its_end`,
+`a_crater_draws_the_same_on_any_canvas_and_a_filled_one_draws_water`),
+`zone::tests` (`a_rod_zones_danger_covers_its_circle_and_a_hull_beside_it`,
+`left_counts_down_on_the_round_clock`), `volcano::tests`
+(`set_off_shift_starts_the_eruption_on_the_next_tick_and_leaves_an_eruption_alone`),
+`ground::tests` (`fill_makes_dry_cells_fords_and_freeze_ices_them`),
+`fish::tests` (`a_rods_impact_throws_the_fish_by_the_shore_onto_the_bank`),
+`indicators` (`a_call_off_the_screen_has_an_arrow_whatever_the_cap`), the
+minimap's picture test with a call's mark, and the text budgets.
 
-- `a_seat_standing_still_two_seconds_is_called_on` and
-  `a_moving_seat_is_never_called_on_where_it_stands`.
-- `a_slow_seat_is_called_on_where_it_will_be` - the led cell, the reticle
-  following it.
-- `a_player_tower_and_the_frog_are_called_on` - and a hunter's frog first.
-- `the_reticle_walks_to_its_cell_and_rests_before_the_call`.
-- `an_enemy_never_calls_on_a_seat_from_outside_its_sight_box` (whole round:
-  `offbox-fire`'s reading).
-- `an_enemy_never_calls_on_a_circle_holding_an_ally` - itself, a fellow
-  enemy, one driving in, its own tower, its own frog.
-- `one_enemy_calls_on_a_target_and_none_calls_twice`.
-- `a_reticle_is_dropped_when_its_target_moves_off`.
-- `a_seat_hidden_in_grass_is_not_called_on`.
-- `a_training_dummy_never_calls`.
-- `the_generic_tiers_never_press_the_rod`.
-- `every_enemy_leaves_a_call_and_never_paths_into_it` - the dodge, the
-  latch, the edge hold, and a route round the circle.
-- `an_enemy_holding_a_reticle_or_a_rail_in_a_circle_drops_it_and_leaves`.
-- `the_pack_herds_a_seat_inside_a_call` - the ring round the zone's centre
-  at `rod_ai_herd_px`, every herder outside the danger, and back round the
-  seat once it leaves.
-- `a_herd_is_never_a_cluster` - three herders never within
-  `CLUSTER_RADIUS_PX`.
-- `a_disabled_enemy_under_a_call_dies` (the EMP).
-- `the_hammer_shoves_a_seat_into_a_call`.
-- `the_seat_still_record_counts_still_and_averages_speed` (and resets on
-  a wreck).
-
-Shared path and presentation:
-
-- `zone::tests`: `a_rod_zone_s_danger_and_route_cells_cover_its_circle`,
-  `left_counts_down_on_the_round_clock`.
-- `rod::tests`: `step_reticle_holds_its_range`,
-  `step_reticle_walks_to_an_aim_larger_offset_first`,
-  `reticle_start_is_ahead_and_in_range`, `crater_cells_skip_water_and_lava`,
-  `break_cells_are_the_block_and_its_tips`, `shove_speed_falls_to_nothing`;
-  the composers `the_reticle_is_on_the_grid_and_pure`,
-  `the_call_beam_flickers_then_holds`, `the_countdown_digits_are_blocks`,
-  `the_column_lasts_its_frames`, `the_impact_is_gone_by_its_end`,
-  `the_crater_is_drawn_the_same_on_any_canvas` (CPU against the drawn
-  shapes), `a_filled_crater_draws_water`.
-- `volcano::tests`: `set_off_shift_starts_the_eruption_on_the_next_tick`,
-  `set_off_leaves_an_eruption_alone`.
-- `pyro`: `digits_are_on_the_grid`.
-- `tank` (`weapon_inventory_tests`): the rod in `take_weapon`, `full_load`,
-  `special`, its trigger and rule; `crush`; the module's cells.
-- `ground`: `fill_makes_dry_cells_fords_and_freeze_ices_them`.
-- `frog`: `the_shy_hop_leaves_the_zone`.
-- `fish::tests`: `an_impact_throws_the_nearest_fish_onto_the_bank`.
-- `weather`: `a_call_throws_red_light_at_its_foot`.
-- `hud_tests`: the rod's slot, colour and glyph; `the_prompt_shows_while_a_reticle_is_held`
-  and `..._reads_cancel_on_the_seats_own_cell`.
-- `render::hud::corner_tests`: the prompt's rect under the block.
-- `indicators`: `a_call_off_screen_gets_an_arrow_the_cap_never_drops`,
-  `a_seats_own_call_gets_none`, `a_call_at_the_frog_gets_one`.
-- `minimap_tests`: `a_crater_is_terrain_and_a_call_a_mark`.
-- `engage`: `a_herded_ring_stands_round_the_zone_outside_its_danger`.
-- `pickup`: `name`/`parse`; `weapon`.
-- `devserver`: `set_tank_arms_the_rod`, `rod_call_calls_a_rod`, the
-  snapshot's new fields, `spawn_pickup` with `rod_from_god`, the PICKUP
-  category's count (17 to 18).
-- `editor`/`chrome_tests`: the tool in `TOOLS`.
-- `thumbnail`: the armory's pin. `maplint`: the armory as it lints.
-- `text_tests`: every budget.
-
-Wire:
-
-- `events.rs`: the samples gain `RodCalled`, `RodImpact`, a rod `Hit`; the
-  variant count.
-- `delta.rs`: `zones_round_trip_through_the_delta`,
-  `craters_round_trip_through_the_delta`, the random snapshots and the size
-  bounds.
-- `mailbox`: `the_reticle_is_the_newest_applied_intents`.
-- `authority`: `take_reticle_puts_a_cell_in_range_on_the_seat_for_one_update`
-  and `..._ignores_one_out_of_range`.
-- `apply.rs`: `a_call_reaches_the_replica_and_lands_with_its_show`,
-  `a_crater_reaches_the_replica_and_a_joiner`,
-  `a_volcano_set_off_reaches_the_replica_on_the_rooms_tick`,
-  `an_enemys_reticle_reaches_the_replica`,
-  `a_call_this_client_drew_is_not_drawn_again` (`OwnShotsDrawn` with the
-  release's bit: no ring, not handed on; without: drawn).
-- `predict.rs`: `a_reticle_moves_with_the_stick_on_the_press_frame`,
-  `a_release_draws_the_call_at_once_and_claims_the_rooms_once`,
-  `a_release_on_the_own_cell_draws_a_fizzle`,
-  `a_refused_call_is_dropped_and_its_rod_given_back`.
-- `round.rs`: `the_rooms_call_is_left_out_only_for_a_release_this_client_drew`,
-  `every_countdown_is_drawn_on_this_clients_present`,
-  `the_shown_seat_holds_the_predicted_reticle`.
-- `rig.rs` (`Lockstep`): `a_seats_call_is_drawn_once_on_the_replica`,
-  `an_enemys_reticle_call_and_impact_reach_the_replica`,
-  `the_room_calls_on_the_clients_cell`.
-- `server/tests/round.rs`: `a_rod_called_through_the_mailbox_lands_once` -
-  through whole `OnlineRound`s over `NativeTransport`, a seat holds, steers
-  and lets go: one `Fired`, one zone in the room on the client's cell, the
-  replica's own call drawn once.
-- The room server's `cargo test -p bongbong-server` as it stands.
+Online: `net::apply` (`a_rods_call_reticle_impact_and_crater_reach_the_replica`,
+`a_volcanos_shift_reaches_the_replica`,
+`a_rods_calls_and_craters_reach_the_replica` - the round trip frame by
+frame), `net::predict` (`a_rods_reticle_and_call_are_drawn_on_the_clients_ticks`
+- the report, the call on the release, the claim, the cancel),
+`net::round` (`a_call_is_drawn_on_the_release_and_handed_to_the_rooms_zone`),
+`net::rig` (`an_enemys_call_reaches_the_replica`), `net::mailbox`
+(`the_reticle_report_is_the_newest_intents`), the codec's intent bytes and
+the delta's sizes.
 
 ## 11. Probe
 
-- **Defaults first**: `just probe-fixtures` and `just probe-fields`
-  unchanged, passing their recorded ceilings untouched.
-- **With the crate**: the same two sweeps with `--crate rod_from_god`. AFK:
-  enemies on shells collect the crate and call on the AFK seat, which
-  camps from frame 0 - a call lands on it about seven seconds after a rod
-  enemy first sees it, so AFK rounds are lost sooner; the outcomes line says
-  so, and every anomaly budget is read per run as ever.
-- **Armed enemies**: the same sweeps with `--tuning armed.json`,
-  `{"enemy_special_weapon_chance": 1.0, "enemy_special_weapon_rod_share":
-  1.0}` - every enemy that would carry a special spawns with calls.
-- The probe's tank line gains `rod=` (calls left; the rail's `chg=` shows a
-  held reticle's seconds); its fire tuple counts the calls, so a call is a
-  trigger pull for `FIRED_RECENTLY_FRAMES`. A tank holding a reticle
-  (`TankSnapshot::charging`) and one held at a danger's edge
-  (`TankSnapshot::edge_hold`) are deliberate holds - the rail's -, not a
-  stall, a stale start, low progress or jitter; a herder driving to its slot
-  is driving where it asked.
-- **`offbox-fire`** reads `shot_at_seat` at the release, as ever, and gains
-  the calls: `rod_calls_offbox` counts every enemy `RodCalled` made with a
-  seat pick whose caller stood outside that seat's box that tick
-  (`--json-out` `fire`); each is an `offbox-fire` anomaly. A call on a tower
-  or the frog is not a shot at a seat. `seat-hits-offbox` may move with the
-  crate (a seat's call crushes what walks into it).
-- **What to watch** in the armed and crate runs: `pile-up` and
-  `clustering` round a call (the herd), `stall`, `low-progress` and
-  `border-stuck` from the edge hold (a call over a chokepoint holds tanks at
-  its edge for up to four seconds - a deliberate hold, so not counted, but
-  a tank held there long after the impact is a bug), `jitter` on a danger's
-  edge, `never-arrived` on field maps (a wave held at a gate's mouth by a
-  call).
-- **The bar**: every crate and armed run within the defaults' ceilings,
-  `offbox-fire` 0. An exceedance is read round by round from its `ANOMALY`
-  lines; one the rod's own action causes - a tank stranded at a circle's
-  edge, a herd piling up, a tank jittering on a danger, a call from off the
-  box - is fixed, not re-baselined. Recorded here in Phase 2: the totals at
-  the defaults, with the crate and armed, and what moved.
+**How it is read.** The probe's tank line gains `rod=` (calls left; a held
+reticle shows as the rail's `chg=`); its fire tuple counts the calls, so a
+call is a trigger pull for `FIRED_RECENTLY_FRAMES`. A tank holding a reticle
+(`TankSnapshot::charging`), one held at a danger's edge
+(`TankSnapshot::edge_hold`) and one holding its stand-off
+(`TankSnapshot::rod_hold`, `HOLDS`' "stand-off") are deliberate holds, not a
+stall, a stale start, low progress or jitter. **`offbox-fire`** reads
+`shot_at_seat` at the release, and the fire line gains
+`rod-calls-on-seats`/`rod-calls-offbox`: every enemy `RodCalled` with a
+seat pick whose caller stood outside that seat's box that tick is an
+`offbox-fire` anomaly. A call on a tower or the frog is not a shot at a
+seat.
+
+**The runs**, all at seed 1000, ten rounds a map: the fixtures (`maps/test/*.toml`,
+1800 frames) and the seven field maps of `just probe-fields` (3600), with the
+recipes' budgets. `armed.json` is `{"enemy_special_weapon_chance": 1.0,
+"enemy_special_weapon_rod_share": 1.0}`; the mix is chance 0.5 and share
+0.5; night, rain and the commander add `weather_override` 1 or 3 or
+`c2_enabled` to the armed patch. Totals (minutes of round in brackets):
+
+| Run | Fixtures | Fields |
+|---|---|---|
+| Defaults | border-stuck 4, jitter 32, spin 3, churn 34, clustering 10, pile-up 6 (11.1) - every map's output byte for byte the swarm's reviewed head's (`2c67491`), the two new zero counters aside | border-stuck 11, jitter 108, spin 24, churn 83, clustering 12, wall-grind 1, pile-up 8 (18.9) - byte for byte |
+| `--crate rod_from_god` | as the defaults (no weapon slot) | border-stuck 12, jitter 117, spin 21, churn 90, clustering 16, pile-up 7 (19.6); 20 calls on seats |
+| Mix: chance 0.5, rod share 0.5 | border-stuck 2, jitter 27, spin 6, churn 40, clustering 11, pile-up 2 (11.9); 35 calls | border-stuck 10, jitter 94, spin 14, churn 67, clustering 4, wall-grind 3 (16.9); 27 calls |
+| Every enemy armed, by day | jitter 18, spin 1, churn 31, clustering 11, pile-up 4 (12.9); 83 calls | stall 1, border-stuck 11, jitter 126, spin 21, churn 97, clustering 30, pile-up 22 (20.1); 62 calls |
+| Every enemy armed, night | jitter 12, spin 2, churn 36, clustering 9, pile-up 3 (13.4) | stall 1, border-stuck 9, jitter 112, spin 32, churn 109, clustering 30, tank-grind 2, pile-up 22 (24.3) |
+| Night alone (no rod) | border-stuck 2, jitter 34, spin 4, churn 38, clustering 17, tank-grind 1, pile-up 7 (11.6) | border-stuck 14, jitter 101, spin 19, churn 93, clustering 25, low-progress 1, tank-grind 2, pile-up 17 (22.3) |
+| Every enemy armed, rain | jitter 21, spin 3, churn 36, clustering 11, pile-up 3 (12.5) | border-stuck 3, jitter 138, spin 28, churn 91, clustering 14, pile-up 8 (19.6) |
+| Rain alone | border-stuck 2, jitter 47, spin 4, churn 60, clustering 10, pile-up 7 (11.1) | border-stuck 9, jitter 121, spin 15, churn 76, clustering 7, low-progress 1, tank-grind 2, pile-up 6 (19.0) |
+| Every enemy armed, commander on | jitter 19, spin 2, churn 30, clustering 7, pile-up 3 (12.3) | border-stuck 11, jitter 109, spin 16, churn 87, clustering 24, pile-up 14 (19.2) |
+| Commander alone | border-stuck 3, jitter 33, spin 3, churn 35, clustering 12, pile-up 4 (11.1) | border-stuck 12, jitter 117, spin 21, churn 89, clustering 25, pile-up 12 (18.7) |
+| Yardstick: the shells pack, `--mission destroy`, `player_armor_factor` 0.1 | spin 22, clustering 95, pile-up 65, tank-grind 12, never-arrived 7, low-progress 8 (44.1) | spin 44, clustering 109, pile-up 74, tank-grind 18, low-progress 8, never-arrived 1, stall 1 (66.6) |
+| Every enemy armed, the same | border-stuck 1, jitter 14, spin 6, churn 36, clustering 9, wall-grind 1, pile-up 4 (11.6) | border-stuck 13, jitter 76, spin 12, churn 44, clustering 13, wall-grind 4, pile-up 3 (21.8) |
+
+`offbox-fire` 0 in every run: no call on a seat from off its box (145 calls
+on seats armed by day alone), and no shot, missile, drone lock or hit on a
+seat from off its box. The armour does not lengthen a rod pack's rounds -
+the circle crushes whatever the armour - so the long-round yardstick and
+the rod pack's own run are of about the same length as the defaults'; the
+armed rounds run 8.6 s on the fixtures and 16.0 s on the fields against the
+defaults' 7.2 and 16.2 (a rod tank fires nothing until its target stands
+still).
+
+**Within every fixture's ceiling** in every run but the mix's pockets
+(jitter 7 of 6, spin 2 of 1: one round, 0x3ed, ran to the cap because the
+seat lived, and both spins are shell tanks chasing). **Over a field ceiling**:
+
+- hedge-maze, armed by day: jitter 52, churn 53, clustering 18, pile-up 15
+  against 30, 43, 11, 8 - over 3.9 minutes of round against the defaults'
+  2.3. Per minute, jitter (13.3 against 12.6) and churn (13.6 against
+  17.8) are the defaults'; clustering (4.6 against 2.2) and pile-ups (3.8
+  against 2.2) about double: the rod tanks stand off in the maze's
+  corridors four to six cells from the seat while the shell tanks of the
+  next wave drive past them. Every one of those anomalies' windows is the
+  patrol or the chase (below).
+- hedge-maze at night: spin 16 of 12 over 7.3 minutes (33 s rounds; the
+  night alone 14 s) - 2.2 a minute, the night alone's 2.1: the rod pack
+  finds an AFK seat late under the night's sight and fires no shell, so
+  its rounds run long, and its spins are the patrol's.
+- hedge-maze in rain: spin 18 of 12, 4.7 a minute against the rain
+  alone's 3.3 - all in the patrol tier.
+- harbor-lights at night: tank-grind 2 of 1, as the night alone (2).
+- harbor-lights with the commander: clustering 14 of 11 (the commander
+  alone 7 here, 25 over the fields).
+- harbor-lights in rain: jitter 31 of 30 (the rain alone 30).
+- harbor-lights in the mix: wall-grind 2 of 1, both shell tanks (attack,
+  patrol).
+- castle-moat with the crate: border-stuck 9 of 8 - shell tanks chasing
+  past the crates by the border.
+
+**Read round by round.** Every spin, stall, tank-grind, wall-grind,
+never-arrived and low-progress anomaly of the rod runs (156) was replayed
+with a scratch trace that lists the AI tiers its tank ran over the two
+seconds before it (not in the tree). 138 have no rod state in their window
+(patrol, chase, attack, the seeks, flee); 7 are the crate run's shell tanks
+seeking the rod's crate (`seek_special`); 11 hold a reticle's aim, the hull
+standing with its facing kept, and spin in the chase or patrol that
+follows - the route going round the circle just called (the router's
+surcharge and `out_of_danger`, which every enemy keeps). None is in the
+stand-off. The stand-off itself was built against these readings
+(decision 26): parked inside its own circle (archipelago, a seat that lost
+in 10 s at the defaults lasting 46), a pack crowding a camper against a
+wall (choke: border-stuck 2, pile-up 5), flip-flopping between two spots
+(the latch), grinding in a corridor (the give-up and wait), sliding on in
+the wet and sent out again (the hold's hysteresis), circling round a seat
+to its far side (the straight drive on its own side), routed the long way
+round a block or a seat's line of fire (giving up a move steered away from
+its spot), and turned about by the attack tier with nowhere to back off
+to (the hold).
+
+**Not run**: `just probe-defend` (a release build; no rod crate stands on
+the maps it plays).
 
 ## 12. Interactions, decisions, what is left out
 
@@ -1730,10 +1731,12 @@ Wire:
 18. **No volcano in the armory**: no room for its footprint without moving
     weapons 1-4's cells, and it would erupt on its own; the set-off is
     tried on `vulkan`. *For Oto.*
-19. **Crate ink ultramarine** (`#5A3CFF`), coral (`#FF9A8A`) standing by -
-    no hue is free that is not green, so the pick is by colour distance.
-    *For Oto*, with a screenshot of the crate beside the other seventeen in
-    Phase 2.
+19. **Crate ink two-tone, tungsten and red** (`#4E545C`/`#8A9099` with
+    `#FF3228`): a grey rod with red brackets, a pattern no other crate has.
+    Ultramarine was turned down beside the EMP's cobalt, coral read as a
+    pink health crate (11.5 from its cross's light), teal sat by the plasma
+    and the hammer and near the grass - the distances in §5. *For Oto*,
+    with the crate beside the other seventeen.
 20. **The crate spills** rather than cooks off: an uplink and a rod, no
     explosive.
 21. **The prompt is a HUD line under the seat's block**, in UI points, so
@@ -1749,6 +1752,35 @@ Wire:
     reticle stood when it let go; the report is held to the range.
 25. **The screen flash takes a strength**, and the rod's is not held back
     by a drum's that just went off: an orbital strike always flashes.
+26. **An enemy carrying calls stands off** (§4, arm 4) rather than taking
+    a firing slot: with no shells to fire, a slot only parked it inside the
+    circle a call on its target would crush, so it never called (the first
+    sweeps: a pack crowding a camper against a wall, pile-ups and grinds).
+    It holds four to six cells out keeping its facing, moves round that
+    band only by a straight drive on its own side of the seat, gives up a blocked move after a third of a second (and one
+    the router takes the long way round) and waits two, and backs off
+    from a cell nearer once it holds. Each part answered an anomaly
+    read round by round (§11). Rejected: the attack tier's ring with a
+    larger radius (the ring's slots are firing lines, not stand-off spots,
+    and its clamp to the sight box pulls them back in), and closing in to
+    the band from further out on its own rather than through the attack
+    tier (tried: the fields' clustering went from 27 to 38 and pile-ups
+    from 19 to 26 armed, and three fixtures went over their ceilings - a
+    rod tank driving straight for its band met the shell tanks on their
+    way to theirs).
+27. **The client's call is claimed by its `Fired`'s input tick** (the
+    swarm's rule), not by the `RodCalled`'s id: the provisional zone's id
+    is the client's own, and two releases in flight are told apart only by
+    the ticks they were made on.
+28. **A reticle the AI no longer wants is dropped** (`Intent::drop_charge`,
+    `ChargeEnded { Lapsed }`), never released on its own cell: a release
+    there would fizzle by the cancel rule, which is the seat's gesture and
+    reads in the trace as a call that failed.
+29. **No dev overlay of its own**: the circle, the countdown, the arrow and
+    the minimap mark already show every zone; the dev server's snapshot
+    carries the zones and craters. A seat's motion record and an enemy's
+    pick are read through the probe's trace rather than the snapshot - no
+    `AiSnapshot` field for a rule that changes as it is tuned.
 
 ### Not in this PR
 
@@ -1790,9 +1822,10 @@ docs give:
 6. **The rail's hold report beside a reticle report**: `IntentMsg` open to
    one more field, `Mailbox` exposing the newest applied intent's, an
    `authority::take_*` sibling, and the rig and room calling it.
-7. **`presses_drawn` returning the claimed events' payload** and
-   **`PressShow` living past its frame** (the swarm's needs 4 and 5): the
-   rod pairs its provisional zone by the claimed `RodCalled`'s id.
+7. **`PressShow` living past its frame** and **a claim by the `Fired`'s
+   input tick** (the swarm's `claim_own_drone`): the room's `RodCalled` for
+   this seat claims the drawn call whose release is the last waiting at or
+   before the input tick the `Fired` before it names (`claim_own_call`).
 8. **`Game::knock` callable for a shove out from a point** (`knock_from`),
    the echo to an owned hull with its skid and `seat_knock`'s allowance.
 9. **The hammer's `Frog::stun`, `Game::grass_flat` (per-cell seconds) and
