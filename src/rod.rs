@@ -55,6 +55,11 @@ const RING_SECONDS: f32 = 0.9;
 /// The ground's tilt the rings and the dust are squashed by.
 const SQUASH: f32 = 0.7;
 
+/// How high the spray a rod throws up out of water rises (px), and how long
+/// it takes to fall back (s).
+const SPLASH_PX: f32 = 40.0;
+const SPLASH_SECONDS: f32 = 0.6;
+
 /// A rod's call (`zone::ZoneKind::Rod`): the cell it lands on and the seat
 /// that called it, if a seat did - the kill credit's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -588,8 +593,9 @@ pub fn compose_column(out: &mut Vec<Shape>, fx: &RodImpactFx, view_top: f32, t: 
 /// the ground's pale step and a one-block white echo - dissolving over
 /// `RING_SECONDS`; ten shaded puffs running out from 30 to 150 px, growing,
 /// leaning with the wind (`lean`, px per second), gone in
-/// `rod_dust_seconds`; twelve debris blocks thrown out on hashed bearings
-/// in arcs, gone where they land.
+/// `rod_dust_seconds`; out of water a column of spray rising `SPLASH_PX`
+/// and falling back over `SPLASH_SECONDS`; twelve debris blocks thrown out
+/// on hashed bearings in arcs, gone where they land.
 pub fn compose_impact(out: &mut Vec<Shape>, fx: &RodImpactFx, lean: f32, t: &Tuning) {
     let k = fx.age;
     let at = fx.at;
@@ -614,6 +620,18 @@ pub fn compose_impact(out: &mut Vec<Shape>, fx: &RodImpactFx, lean: f32, t: &Tun
             let radius = 8.0 + 8.0 * p;
             let cover = (1.0 - p).clamp(0.0, 1.0);
             out.push(Shape::Puff(pyro::Puff { pos, radius, body: mid, shadow: Some(dark), lit: Some(pale), core: None, cover }));
+        }
+    }
+    // Out of water, a column of spray thrown up over the strike and falling
+    // back: white blocks with a pale blue one in three.
+    if fx.ground == Ground::Water && k < SPLASH_SECONDS {
+        let p = k / SPLASH_SECONDS;
+        let height = SPLASH_PX * 4.0 * p * (1.0 - p);
+        for i in 0..12u32 {
+            let x = at.x + (pyro::unit(fx.seed, 120 + i) - 0.5) * 20.0;
+            let y = at.y - height * (0.3 + 0.7 * pyro::unit(fx.seed, 140 + i));
+            let color = if i % 3 == 0 { WATER[2] } else { Color::WHITE };
+            out.push(Shape::Mark { pos: Position::new(x, y), size: 2, color });
         }
     }
     if k < 1.0 {
@@ -923,6 +941,22 @@ mod tests {
         out.clear();
         compose_impact(&mut out, &fx, 0.0, &t);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_strike_in_water_throws_up_spray_that_falls_back() {
+        let t = t();
+        let marks_above = |ground: Ground, age: f32| {
+            let mut fx = RodImpactFx::new(cell_to_world(10, 8), ground);
+            fx.age = age;
+            let mut out = Vec::new();
+            compose_impact(&mut out, &fx, 0.0, &t);
+            out.iter().filter(|s| matches!(s, Shape::Mark { pos, .. } if pos.y < fx.at.y - 12.0 && (pos.x - fx.at.x).abs() <= 10.0)).count()
+        };
+        assert!(marks_above(Ground::Water, SPLASH_SECONDS * 0.5) >= 6, "a column of spray at its height");
+        assert!(marks_above(Ground::Water, SPLASH_SECONDS * 0.5) > marks_above(Ground::Dry, SPLASH_SECONDS * 0.5), "only out of water");
+        let end = SPLASH_SECONDS + 0.01;
+        assert_eq!(marks_above(Ground::Water, end), marks_above(Ground::Dry, end), "fallen back by its end");
     }
 
     #[test]
