@@ -598,13 +598,14 @@ fn log_frame(game: &Game, frame: u32) {
         // be read off the out-of-bounds position.
         let entering = if tank.entering { " entering=true" } else { "" };
         println!(
-            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} missiles={:2} grenades={:2} sonic={:2} emp={:2} laser={:2} fuel={:4.1} burn={:3.1} shield={:5.1} wreck={}{entering}{}{}{}{}{}",
+            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} missiles={:2} grenades={:2} sonic={:2} emp={:2} laser={:2} fuel={:4.1} burn={:3.1} shield={:5.1} wreck={}{entering}{}{}{}{}{}{}",
             tank.position.x, tank.position.y, tank.velocity.x, tank.velocity.y, speed, tank.rotation, tank.damage, tank.shells_ammo, tank.plasma_ammo, tank.minigun_ammo, tank.missile_ammo, tank.grenade_ammo, tank.sonic_ammo, tank.emp_charges, tank.laser_charges, tank.flame_fuel, tank.burn_timer, tank.shield_hp, tank.is_wreck,
             if tank.tell { " tell=true" } else { "" },
             if tank.skidding { " skid=true" } else { "" },
             if tank.disabled { " dis=true" } else { "" },
             if tank.gauss_slugs > 0 { format!(" rail={}", tank.gauss_slugs) } else { String::new() },
             if tank.charging { " chg=true" } else { "" },
+            if tank.fpv_drones > 0 || tank.fpv_out > 0 { format!(" fpv={} out={}", tank.fpv_drones, tank.fpv_out) } else { String::new() },
         );
     }
 }
@@ -818,9 +819,9 @@ struct TankTrack {
     trail_path_len: f32,
     // --- deliberate-hold detection (see FIRED_RECENTLY_FRAMES) ---
     // Last frame's (shells, minigun, plasma, laser, missiles, sonic, emp,
-    // gauss) ammo, to spot a trigger pull as any pool decreasing; None until
-    // the first frame.
-    prev_ammo: Option<(i32, i32, i32, i32, i32, i32, i32, i32)>,
+    // gauss, fpv) ammo, to spot a trigger pull as any pool decreasing; None
+    // until the first frame.
+    prev_ammo: Option<(i32, i32, i32, i32, i32, i32, i32, i32, i32)>,
     // Frame of the most recent detected shot, if any.
     last_fire_frame: Option<u32>,
     // Frame of the most recent deliberate hold (`deliberate_hold`), if any.
@@ -1254,6 +1255,7 @@ fn check_anomalies(
             tank.sonic_ammo,
             tank.emp_charges,
             tank.gauss_slugs,
+            tank.fpv_drones,
         );
         if let Some(prev) = track.prev_ammo
             && (ammo.0 < prev.0
@@ -1263,7 +1265,8 @@ fn check_anomalies(
                 || ammo.4 < prev.4
                 || ammo.5 < prev.5
                 || ammo.6 < prev.6
-                || ammo.7 < prev.7)
+                || ammo.7 < prev.7
+                || ammo.8 < prev.8)
         {
             track.last_fire_frame = Some(frame);
         }

@@ -33,7 +33,7 @@ use crate::simulation::{Event, HitCause, HitTarget};
 
 /// The serde tags (`Event`'s `event` field) of the variants
 /// `WireEvent::from_event` never sends.
-pub const NOT_SENT: [&str; 17] = [
+pub const NOT_SENT: [&str; 18] = [
     "physics_quarantine",
     "beat_done",
     "door_opened",
@@ -51,6 +51,7 @@ pub const NOT_SENT: [&str; 17] = [
     "disabled",
     "tower_disabled",
     "charge_started",
+    "drone_lock_lost",
 ];
 
 /// What the flamethrower lit (`Event::Ignited`'s `what`), in wire order.
@@ -244,7 +245,23 @@ pub enum WireEvent {
     /// The charge of `weapon` on `slot` ended without firing;
     /// `Event::ChargeEnded`.
     ChargeEnded { slot: u16, weapon: WeaponKind, end: crate::tank::ChargeEnd },
+    /// A drone `id` left `slot`'s halo from (`x`, `y`), locked on the tank
+    /// in owner slot `target` (`NO_TARGET` for none) or the players' frog
+    /// (`frog`); `Event::DroneLaunched`.
+    DroneLaunched { id: u16, slot: u16, x: i16, y: i16, target: u16, frog: bool },
+    /// The drone `id` of `slot` burst at (`x`, `y`), in a crown or on the
+    /// ground; `Event::DroneBurst`.
+    DroneBurst { id: u16, slot: u16, x: i16, y: i16, crown: bool },
+    /// The drone `id` was struck at (`x`, `y`), `height` up, by `by`;
+    /// `Event::DroneDowned`.
+    DroneDowned { id: u16, x: i16, y: i16, height: i16, by: crate::air::AirStrike },
+    /// A downed drone `id` reached the ground at (`x`, `y`);
+    /// `Event::DroneCrashed`.
+    DroneCrashed { id: u16, x: i16, y: i16 },
 }
+
+/// `WireEvent::DroneLaunched::target` for a drone locked on no tank.
+pub const NO_TARGET: u16 = u16::MAX;
 
 fn slot_u16(slot: usize) -> u16 {
     slot.min(u16::MAX as usize) as u16
@@ -258,14 +275,15 @@ impl WireEvent {
     /// The seat and weapon of a press's show - the event a client that drew
     /// the press itself claims (`WeaponKind::drawn_on_press`,
     /// `apply::Show::OwnShotsDrawn`): a laser's first leg, a sonic hammer's
-    /// wave, an EMP's ring, a gauss rail slug's first leg. `None` for every
-    /// other event, and for an enemy's.
+    /// wave, an EMP's ring, a gauss rail slug's first leg, a drone's launch.
+    /// `None` for every other event, and for an enemy's.
     pub fn press_show(&self) -> Option<(u8, WeaponKind)> {
         match *self {
             WireEvent::LaserBeam { seat, leg: 0, .. } if seat != crate::net::wire::NO_SEAT => Some((seat, WeaponKind::Laser)),
             WireEvent::SonicBlast { slot, .. } if (slot as usize) < crate::net::MAX_SEATS => Some((slot as u8, WeaponKind::SonicHammer)),
             WireEvent::EmpPulse { slot, .. } if (slot as usize) < crate::net::MAX_SEATS => Some((slot as u8, WeaponKind::Emp)),
             WireEvent::RailSlug { seat, leg: 0, .. } if seat != crate::net::wire::NO_SEAT => Some((seat, WeaponKind::GaussRail)),
+            WireEvent::DroneLaunched { slot, .. } if (slot as usize) < crate::net::MAX_SEATS => Some((slot as u8, WeaponKind::FpvSwarm)),
             _ => None,
         }
     }
@@ -331,7 +349,30 @@ impl WireEvent {
                 });
                 WireEvent::SonicBlast { slot: slot_u16(slot), x: q(x), y: q(y), dir: dir_index(dir) }
             }
-            Event::TellStarted { .. } | Event::Disabled { .. } | Event::TowerDisabled { .. } | Event::ChargeStarted { .. } => return None,
+            Event::TellStarted { .. }
+            | Event::Disabled { .. }
+            | Event::TowerDisabled { .. }
+            | Event::ChargeStarted { .. }
+            | Event::DroneLockLost { .. } => return None,
+            Event::DroneLaunched { id, slot, x, y, target, frog } => WireEvent::DroneLaunched {
+                id: (id & 0xFFFF) as u16,
+                slot: slot_u16(slot),
+                x: q(x),
+                y: q(y),
+                target: target.map_or(NO_TARGET, slot_u16),
+                frog,
+            },
+            Event::DroneBurst { id, slot, x, y, crown } => {
+                WireEvent::DroneBurst { id: (id & 0xFFFF) as u16, slot: slot_u16(slot), x: q(x), y: q(y), crown }
+            }
+            Event::DroneDowned { id, x, y, height, by } => {
+                let Some(by) = crate::air::AirStrike::parse(by) else {
+                    debug_assert!(false, "unknown air strike {by:?} in Event::DroneDowned");
+                    return None;
+                };
+                WireEvent::DroneDowned { id: (id & 0xFFFF) as u16, x: q(x), y: q(y), height: q(height), by }
+            }
+            Event::DroneCrashed { id, x, y } => WireEvent::DroneCrashed { id: (id & 0xFFFF) as u16, x: q(x), y: q(y) },
             Event::EmpPulse { slot, x, y } => WireEvent::EmpPulse { slot: slot_u16(slot), x: q(x), y: q(y) },
             Event::MissileDud { x, y } => WireEvent::MissileDud { x: q(x), y: q(y) },
             Event::RailSlug { slot, seat, leg, x0, y0, x1, y1, portal, overcharged, ref pierced } => WireEvent::RailSlug {
@@ -498,6 +539,21 @@ impl WireEvent {
                 pierced: pierced.iter().map(|p| (d(p.x), d(p.y), p.what)).collect(),
             },
             WireEvent::ChargeEnded { slot, weapon, end } => Event::ChargeEnded { slot: slot as usize, weapon: weapon.name(), end },
+            WireEvent::DroneLaunched { id, slot, x, y, target, frog } => Event::DroneLaunched {
+                id: id as u32,
+                slot: slot as usize,
+                x: d(x),
+                y: d(y),
+                target: (target != NO_TARGET).then_some(target as usize),
+                frog,
+            },
+            WireEvent::DroneBurst { id, slot, x, y, crown } => {
+                Event::DroneBurst { id: id as u32, slot: slot as usize, x: d(x), y: d(y), crown }
+            }
+            WireEvent::DroneDowned { id, x, y, height, by } => {
+                Event::DroneDowned { id: id as u32, x: d(x), y: d(y), height: d(height), by: by.name() }
+            }
+            WireEvent::DroneCrashed { id, x, y } => Event::DroneCrashed { id: id as u32, x: d(x), y: d(y) },
             WireEvent::DrumLaunched { x, y, to_x, to_y, drum } => {
                 Event::DrumLaunched { x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y), drum }
             }
@@ -634,6 +690,11 @@ mod tests {
             },
             Event::ChargeStarted { slot: 5, weapon: "gauss_rail" },
             Event::ChargeEnded { slot: 5, weapon: "gauss_rail", end: crate::tank::ChargeEnd::Vented },
+            Event::DroneLaunched { id: 17, slot: 0, x: 140.0, y: 96.0, target: Some(4), frog: false },
+            Event::DroneBurst { id: 17, slot: 0, x: 400.0, y: 210.0, crown: true },
+            Event::DroneDowned { id: 18, x: 300.0, y: 180.0, height: 36.0, by: "tesla" },
+            Event::DroneCrashed { id: 18, x: 310.0, y: 184.0 },
+            Event::DroneLockLost { id: 19, why: "canopy" },
             Event::Disabled { slot: 4, x: 128.0, y: 160.0 },
             Event::TowerDisabled { x: 112.0, y: 80.0 },
             Event::LavaBombLaunched { x: 640.0, y: 352.0, to_x: 800.0, to_y: 416.0 },
@@ -686,7 +747,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 61, "one sample per Event variant");
+        assert_eq!(seen.len(), 66, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

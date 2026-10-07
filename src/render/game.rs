@@ -2070,6 +2070,7 @@ fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
         ActiveWeapon::SonicHammer => ("SONIC", tank.sonic_ammo),
         ActiveWeapon::Emp => ("EMP", tank.emp_charges),
         ActiveWeapon::GaussRail => ("RAIL", tank.gauss_slugs),
+        ActiveWeapon::FpvSwarm => ("FPV", tank.fpv_drones),
         ActiveWeapon::Shell => ("SHELL", tank.shells_ammo),
     };
     let mut lines = vec![

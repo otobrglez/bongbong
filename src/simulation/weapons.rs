@@ -469,6 +469,15 @@ pub(super) fn dispatch_fire_from(
         // A charge weapon fires on its release (`Game::charge_trigger`,
         // `fire_charge`), never on a trigger pull.
         ActiveWeapon::GaussRail => {}
+        ActiveWeapon::FpvSwarm => {
+            if tank.fpv_drones > 0 {
+                f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::FpvSwarm.name() });
+                // The top slot leaves before the count drops (`fire_fpv`).
+                super::fpv::fire_fpv(f, tank, owner);
+                tank.fpv_drones -= 1;
+                tank.fire_cooldown = tuning().fpv_reload_seconds;
+            }
+        }
         ActiveWeapon::Plasma => {
             if tank.plasma_ammo >= ammo_cost {
                 f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::Plasma.name() });
@@ -531,6 +540,11 @@ pub(super) trait Projectile: hecs::Component {
     fn knockback_speed() -> Option<f32>;
     /// Whether a surviving frog tries to hop away from this hit.
     fn frog_hops() -> bool;
+    /// Whether it strikes what is in the air (`air.rs`): bullets do;
+    /// shells and plasma pass under.
+    fn strikes_air() -> bool {
+        false
+    }
     /// What its `Event::Hit` says landed.
     fn hit_cause() -> super::HitCause;
     /// Bounce off `hit` instead of detonating, if this projectile can by
@@ -701,6 +715,7 @@ impl Projectile for Bullet {
     /// the frog flail rather than dodge.
     fn frog_hops() -> bool { false }
     fn hit_cause() -> super::HitCause { super::HitCause::Bullet }
+    fn strikes_air() -> bool { true }
     fn can_bounce() -> bool { true }
     deflect_impl!();
 }

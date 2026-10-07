@@ -188,11 +188,12 @@ pub enum WeaponKind {
     SonicHammer,
     Emp,
     GaussRail,
+    FpvSwarm,
 }
 
 impl WeaponKind {
     /// Every kind, in wire order.
-    pub const ALL: [WeaponKind; 10] = [
+    pub const ALL: [WeaponKind; 11] = [
         WeaponKind::Shell,
         WeaponKind::Laser,
         WeaponKind::Plasma,
@@ -203,6 +204,7 @@ impl WeaponKind {
         WeaponKind::SonicHammer,
         WeaponKind::Emp,
         WeaponKind::GaussRail,
+        WeaponKind::FpvSwarm,
     ];
 
     /// The name `ActiveWeapon::name` gives, which is what `Event::Fired`
@@ -219,11 +221,11 @@ impl WeaponKind {
     /// Whether the shooter's client draws this weapon's press itself, from
     /// its predicted pose, and claims the room's show of it
     /// (docs/sonic-hammer.md "Online: the shooter's press is drawn at
-    /// once"): the laser's beam, the sonic hammer's wave, the EMP's ring
-    /// and the gauss rail's slug, drawn on its release
-    /// (`events::WireEvent::press_show`).
+    /// once"): the laser's beam, the sonic hammer's wave, the EMP's ring,
+    /// the gauss rail's slug, drawn on its release, and an FPV drone's
+    /// launch (`events::WireEvent::press_show`).
     pub fn drawn_on_press(self) -> bool {
-        matches!(self, WeaponKind::Laser | WeaponKind::SonicHammer | WeaponKind::Emp | WeaponKind::GaussRail)
+        matches!(self, WeaponKind::Laser | WeaponKind::SonicHammer | WeaponKind::Emp | WeaponKind::GaussRail | WeaponKind::FpvSwarm)
     }
 }
 
@@ -240,6 +242,7 @@ impl From<ActiveWeapon> for WeaponKind {
             ActiveWeapon::SonicHammer => WeaponKind::SonicHammer,
             ActiveWeapon::Emp => WeaponKind::Emp,
             ActiveWeapon::GaussRail => WeaponKind::GaussRail,
+            ActiveWeapon::FpvSwarm => WeaponKind::FpvSwarm,
         }
     }
 }
@@ -257,6 +260,7 @@ impl From<WeaponKind> for ActiveWeapon {
             WeaponKind::SonicHammer => ActiveWeapon::SonicHammer,
             WeaponKind::Emp => ActiveWeapon::Emp,
             WeaponKind::GaussRail => ActiveWeapon::GaussRail,
+            WeaponKind::FpvSwarm => ActiveWeapon::FpvSwarm,
         }
     }
 }

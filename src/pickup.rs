@@ -148,12 +148,19 @@ pub enum PickupKind {
     /// iron stops it (`gauss.rs`). Players and enemies both use it.
     #[serde(rename = "gauss_rail")]
     GaussRail,
+    /// The FPV swarm (docs/fpv-swarm.md): loads `fpv_drones_per_pickup`
+    /// drones into a halo over the tank (one weapon at a time, as above).
+    /// Each press sends one up and over the walls to dive on the nearest
+    /// enemy in the seat's sight box and burst (`fpv.rs`). Players and
+    /// enemies both use it.
+    #[serde(rename = "fpv_swarm")]
+    FpvSwarm,
 }
 
 impl PickupKind {
     /// Every kind in declaration order: the crate and symbol sheets' row
     /// order (`row`).
-    pub const ALL: [PickupKind; 16] = [
+    pub const ALL: [PickupKind; 17] = [
         PickupKind::Health,
         PickupKind::Ammo,
         PickupKind::Laser,
@@ -170,6 +177,7 @@ impl PickupKind {
         PickupKind::SonicHammer,
         PickupKind::Emp,
         PickupKind::GaussRail,
+        PickupKind::FpvSwarm,
     ];
 
     /// This kind's row on static/crates_sheet.png and
@@ -192,6 +200,7 @@ impl PickupKind {
             PickupKind::SonicHammer => 13,
             PickupKind::Emp => 14,
             PickupKind::GaussRail => 15,
+            PickupKind::FpvSwarm => 16,
         }
     }
 
@@ -215,6 +224,7 @@ impl PickupKind {
             PickupKind::SonicHammer => "sonic_hammer",
             PickupKind::Emp => "emp_burst",
             PickupKind::GaussRail => "gauss_rail",
+            PickupKind::FpvSwarm => "fpv_swarm",
         }
     }
 
@@ -237,6 +247,7 @@ impl PickupKind {
             PickupKind::SonicHammer => Some(ActiveWeapon::SonicHammer),
             PickupKind::Emp => Some(ActiveWeapon::Emp),
             PickupKind::GaussRail => Some(ActiveWeapon::GaussRail),
+            PickupKind::FpvSwarm => Some(ActiveWeapon::FpvSwarm),
             PickupKind::Health
             | PickupKind::Ammo
             | PickupKind::SpeedUp
@@ -271,6 +282,9 @@ impl PickupKind {
             PickupKind::SonicHammer => [0x1E7FB8, 0x46C3F2, 0xA8E6FF],
             PickupKind::Emp => [0x2433A6, 0x4F6BFF, 0xB3C2FF],
             PickupKind::GaussRail => [0xB01E92, 0xFF3DD8, 0xFFB0F0],
+            // Two-tone: a warm ivory quadcopter, its light the crimson of its
+            // lamps (the HUD's accent).
+            PickupKind::FpvSwarm => [0xBFA77A, 0xFFF0C8, 0xFF2D5F],
         };
         [rgb(shade), rgb(base), rgb(light)]
     }
@@ -285,6 +299,8 @@ impl PickupKind {
             // Slugs and charged capacitors, like the laser's and the
             // plasma's: it goes up.
             PickupKind::GaussRail => true,
+            // Six charges on rotors: it goes up.
+            PickupKind::FpvSwarm => true,
             PickupKind::Health
             | PickupKind::SpeedUp
             | PickupKind::Shield
