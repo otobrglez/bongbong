@@ -843,3 +843,32 @@ fn a_disabled_enemy_keeps_its_target_until_it_reboots() {
     }
     assert_eq!(game.world.get::<&Ai>(enemy).unwrap().target_player(), 1, "back, it fights the nearer seat");
 }
+
+/// A tank backing out of a danger walks out: the exit straight away lies
+/// past a wall, in a room it could reach only through a portal it cannot
+/// hop yet, so it takes one on its own side and keeps to it as its bearing
+/// from the danger turns, leaving the ring on foot rather than turning back
+/// and forth along the wall.
+#[test]
+fn a_tank_backing_out_walks_out_rather_than_through_a_portal() {
+    let mut extra = String::from("cells.\"7,8\" = { kind = \"portal\" }\ncells.\"11,8\" = { kind = \"portal\" }\n");
+    for row in 0..17 {
+        extra.push_str(&format!("cells.\"9,{row}\" = {{ kind = \"wall\", material = \"iron\" }}\n"));
+    }
+    let mut game = round(&extra);
+    let seat = game.player().unwrap();
+    game.place_tank(seat, Position::new(80.0, 272.0), Some(90.0)).unwrap();
+    let enemy = parked(&mut game, Position::new(176.0, 272.0));
+    with_tank_mut(&game.world, enemy, |tk| {
+        tk.speed_scale = 1.0;
+        tk.shells_ammo = 10;
+        tk.portal_cooldown = 30.0;
+    });
+    let berth = tuning().emp_radius_px + tuning().emp_ai_berth_px;
+    let out = (0..600).position(|_| {
+        step(&mut game, false);
+        tank(&game, enemy, |tk| tk.position).distance_to(tank(&game, seat, |tk| tk.position)) > berth
+    });
+    let at = tank(&game, enemy, |tk| tk.position);
+    assert!(out.is_some() && at.x < 9.0 * 32.0, "out of the ring on its own side: {at:?}");
+}
