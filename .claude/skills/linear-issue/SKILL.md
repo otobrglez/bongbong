@@ -1,6 +1,6 @@
 ---
 name: linear-issue
-description: Work on a Linear issue of the BongBong team end to end - read it, claim it, branch, implement, verify, and (when asked) open the PR that closes it. Use when the user names an issue (BB-21, "bb 21", a linear.app/bongbong/issue/... link) or says "work on", "pick up", "fix", "do" an issue, or "ship BB-N" - and before any other change to the repo, since every change needs an issue.
+description: Work on a Linear issue of the BongBong team end to end - read it, claim it, branch, implement, verify, and (when asked) open the PR that closes it and set the issue In Review once its CI is green. Use when the user names an issue (BB-21, "bb 21", a linear.app/bongbong/issue/... link) or says "work on", "pick up", "fix", "do" an issue, or "ship BB-N" - and before any other change to the repo, since every change needs an issue.
 ---
 
 # Working a Linear issue
@@ -22,6 +22,9 @@ request changes something: find the issue it belongs to
    comment saying exactly what is needed, ending with the resume line, *then*
    ask. When the answer comes,
    back to **In Progress** before continuing.
+4. A PR open with every check green: the session sets the issue to
+   **In Review** itself (step 6) - the GitHub integration does not. A red
+   check keeps it In Progress until fixed.
 
 A rule that cannot be kept (Linear unreachable, a one-line fix Oto wants done
 now): ask Oto to bypass it and wait; never skip it on your own.
@@ -107,7 +110,22 @@ pre-existing failure, a follow-up): file it with `linear-file`, don't fold it in
     advances. Then what a player or tester sees, how it was verified, and
     anything re-baselined on purpose - the release notes are written from PR
     bodies, so lead with the player's view.
-- The GitHub integration moves the issue to In Review when the PR opens and to
-  Done when it merges; don't set those by hand.
-- `save_comment` on the issue: the PR link, plus anything its reader should
-  know that the PR doesn't say (a follow-up filed, a reading of a vague issue).
+- Wait for CI (rule 4): `sleep 30; gh pr checks <N> --watch --interval 30`
+  as one `run_in_background` command (you are woken when it exits) - the
+  sleep because, until the workflows register, it reports no checks and
+  exits 1. Every PR runs `ci.yml`'s `test`, the web preview, the room
+  server and the Claude review; a `skipping` check (a label-gated build, a
+  close-only job) counts as green.
+  - Exit 0, everything `pass` or `skipping`: `save_issue` state
+    **In Review**, then `save_comment` the PR link, plus anything its reader
+    should know that the PR doesn't say (a follow-up filed, a reading of a
+    vague issue).
+  - A check fails: read its log (`gh run view <run> --log-failed`), fix,
+    push, wait again; the issue stays In Progress. A failure that is not this
+    change's (a known flake such as BB-43, an outage): `gh run rerun <run>
+    --failed` once; still red, file it with `linear-file` and set
+    **AI Blocked** asking Oto whether it may go to review as it is.
+- Review feedback reopens the work: **In Progress** while you change it, and
+  **In Review** again once the new push is green.
+- The GitHub integration moves the issue to **Done** when the PR merges;
+  don't set Done by hand.
