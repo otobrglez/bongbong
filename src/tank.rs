@@ -64,6 +64,16 @@ impl Dir {
         }
     }
 
+    /// The way back.
+    pub fn opposite(self) -> Dir {
+        match self {
+            Dir::Up => Dir::Down,
+            Dir::Down => Dir::Up,
+            Dir::Left => Dir::Right,
+            Dir::Right => Dir::Left,
+        }
+    }
+
     /// Hull rotation in degrees for this direction.
     pub fn rotation(self) -> f32 {
         match self {

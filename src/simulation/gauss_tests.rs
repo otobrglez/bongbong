@@ -530,3 +530,305 @@ fn the_spawn_swap_hands_out_the_rail_by_its_share() {
     assert_eq!(laser.special(), Some(ActiveWeapon::GaussRail));
 }
 
+
+// ---- the AI ---------------------------------------------------------------
+
+/// A rail-armed enemy of the player role at `at`, parked.
+fn rail_enemy(game: &mut Game, at: Position) -> Entity {
+    let entity = parked(game, at);
+    with_tank_mut(&game.world, entity, |tk| tk.gauss_slugs = 4);
+    entity
+}
+
+/// Run the round, the seat idle, until `enemy` starts a charge - its
+/// trigger timer runs down first - or 300 ticks pass; then a full charge
+/// and half a second more. Every event.
+fn watch(game: &mut Game, enemy: Entity) -> Vec<Event> {
+    let slot = slot_of(game, enemy);
+    let mut seen = Vec::new();
+    for _ in 0..300 {
+        seen.extend(step(game, false));
+        if charged(&seen, slot) {
+            seen.extend(idle(game, full_ticks() + 30));
+            break;
+        }
+    }
+    seen
+}
+
+fn slot_of(game: &Game, entity: Entity) -> usize {
+    with_tank(&game.world, entity, |t| t.owner_slot())
+}
+
+/// Run the round `ticks` ticks with the seat idle; every event.
+fn idle(game: &mut Game, ticks: u32) -> Vec<Event> {
+    let mut seen = Vec::new();
+    for _ in 0..ticks {
+        seen.extend(step(game, false));
+    }
+    seen
+}
+
+fn charged(events: &[Event], slot: usize) -> bool {
+    events.iter().any(|e| matches!(*e, Event::ChargeStarted { slot: s, .. } if s == slot))
+}
+
+fn fired(events: &[Event], slot: usize) -> bool {
+    events.iter().any(|e| matches!(*e, Event::Fired { slot: s, weapon: "gauss_rail" } if s == slot))
+}
+
+/// An enemy with the rail lines up on a seat in its lane, inside the
+/// seat's sight box, charges and fires at full; the seat is hit.
+#[test]
+fn the_rail_charges_at_a_seat_in_its_lane_inside_the_sight_box() {
+    let mut game = round("");
+    let enemy = rail_enemy(&mut game, Position::new(400.0, 192.0));
+    let slot = slot_of(&game, enemy);
+    let events = watch(&mut game, enemy);
+    assert!(charged(&events, slot), "it charges");
+    assert!(fired(&events, slot), "and fires at full");
+    assert!(damage(&game, seat(&game)) > 0.0, "the seat is hit");
+}
+
+/// It fires through brick at a seat it knows is behind it.
+#[test]
+fn the_rail_fires_through_brick_at_a_seat_it_knows_is_behind_it() {
+    let mut game = round("cells.\"7,6\" = { kind = \"wall\", material = \"brick\" }\ncells.\"7,5\" = { kind = \"wall\", material = \"brick\" }\ncells.\"7,7\" = { kind = \"wall\", material = \"brick\" }\n");
+    let enemy = rail_enemy(&mut game, Position::new(400.0, 192.0));
+    let events = watch(&mut game, enemy);
+    assert!(fired(&events, slot_of(&game, enemy)));
+    assert!(damage(&game, seat(&game)) > 0.0);
+}
+
+/// Iron between: it never charges that way.
+#[test]
+fn the_rail_never_charges_through_iron() {
+    let mut game = round("cells.\"7,6\" = { kind = \"wall\", material = \"iron\" }\n");
+    let enemy = rail_enemy(&mut game, Position::new(400.0, 192.0));
+    let events = watch(&mut game, enemy);
+    assert!(!charged(&events, slot_of(&game, enemy)), "{events:?}");
+}
+
+/// A seat hidden in tall grass is not charged at.
+#[test]
+fn the_rail_does_not_fire_at_a_seat_hidden_in_grass() {
+    let mut game = round("cells.\"5,6\" = { kind = \"tall_grass\" }\ncells.\"6,6\" = { kind = \"tall_grass\" }\ncells.\"4,6\" = { kind = \"tall_grass\" }\n");
+    let s = seat(&game);
+    game.place_tank(s, Position::new(160.0, 192.0), Some(90.0)).unwrap();
+    let enemy = rail_enemy(&mut game, Position::new(400.0, 192.0));
+    let events = watch(&mut game, enemy);
+    assert!(!charged(&events, slot_of(&game, enemy)));
+}
+
+/// A seat that steps out of the lane before full wastes the charge: the
+/// enemy waits holding it, then vents; one that steps back in before the
+/// overcharge is fired at.
+#[test]
+fn the_rail_waits_at_full_and_wastes_the_charge_when_the_seat_steps_aside() {
+    let t = tuning();
+    let mut game = round("");
+    let enemy = rail_enemy(&mut game, Position::new(400.0, 192.0));
+    let slot = slot_of(&game, enemy);
+    let mut seen = Vec::new();
+    while !charged(&seen, slot) {
+        seen.extend(step(&mut game, false));
+        assert!(seen.len() < 10_000);
+    }
+    let s = seat(&game);
+    game.place_tank(s, Position::new(96.0, 400.0), Some(90.0)).unwrap();
+    let rest = idle(&mut game, crate::tank::ticks_of(t.gauss_charge_seconds + t.gauss_hold_seconds) + 10);
+    assert!(!fired(&rest, slot), "never fires at an empty lane");
+    assert!(rest.iter().any(|e| matches!(*e, Event::ChargeEnded { slot: s, end: ChargeEnd::Vented, .. } if s == slot)), "it vents");
+}
+
+#[test]
+fn the_rail_fires_when_the_seat_steps_back_in_before_the_overcharge() {
+    let mut game = round("");
+    let enemy = rail_enemy(&mut game, Position::new(400.0, 192.0));
+    let slot = slot_of(&game, enemy);
+    let mut seen = Vec::new();
+    while !charged(&seen, slot) {
+        seen.extend(step(&mut game, false));
+    }
+    let s = seat(&game);
+    game.place_tank(s, Position::new(96.0, 400.0), Some(90.0)).unwrap();
+    let held = idle(&mut game, full_ticks() + 10);
+    assert!(!fired(&held, slot), "full, the lane empty: it holds");
+    game.place_tank(s, SEAT, Some(90.0)).unwrap();
+    let back = idle(&mut game, 10);
+    assert!(fired(&back, slot), "back in the lane: fired");
+}
+
+/// It never releases overcharged: a seat stepping back in after the
+/// overcharge threshold is not fired at.
+#[test]
+fn the_rail_never_releases_overcharged() {
+    let t = tuning();
+    let mut game = round("");
+    let enemy = rail_enemy(&mut game, Position::new(400.0, 192.0));
+    let slot = slot_of(&game, enemy);
+    let mut seen = Vec::new();
+    while !charged(&seen, slot) {
+        seen.extend(step(&mut game, false));
+    }
+    let s = seat(&game);
+    game.place_tank(s, Position::new(96.0, 400.0), Some(90.0)).unwrap();
+    idle(&mut game, crate::tank::ticks_of(t.gauss_charge_seconds + t.gauss_overcharge_seconds) + 2);
+    game.place_tank(s, SEAT, Some(90.0)).unwrap();
+    let back = idle(&mut game, crate::tank::ticks_of(t.gauss_hold_seconds - t.gauss_overcharge_seconds) + 5);
+    assert!(!fired(&back, slot), "overcharged, it holds to the vent");
+}
+
+/// A fellow enemy in the lane holds the rail.
+#[test]
+fn the_rail_never_fires_through_a_friend() {
+    let mut game = round("");
+    let enemy = rail_enemy(&mut game, Position::new(500.0, 192.0));
+    let _friend = parked(&mut game, Position::new(300.0, 192.0));
+    let events = watch(&mut game, enemy);
+    assert!(!charged(&events, slot_of(&game, enemy)));
+}
+
+/// Its own side's tower in the lane holds it too; a player's tower adds to
+/// a lane's worth.
+#[test]
+fn the_rail_never_fires_through_its_own_tower() {
+    let mut game = round("cells.\"8,6\" = { kind = \"tesla\", side = \"enemy\" }\n");
+    let enemy = rail_enemy(&mut game, Position::new(400.0, 192.0));
+    let events = watch(&mut game, enemy);
+    assert!(!charged(&events, slot_of(&game, enemy)));
+}
+
+/// Two seats in one lane outrank one seat in another: from a corner where
+/// one seat stands west and two north, it faces north.
+#[test]
+fn the_rail_prefers_a_lane_with_two_seats() {
+    let mut game = round_with("", 2);
+    let s1 = seat(&game);
+    let s2 = game.seat(1).expect("a second seat");
+    // The enemy at (480, 320): seat 1 west of it, seat 2 and a player
+    // tower... seat 2 north of it and seat 1 moved north too.
+    let enemy = rail_enemy(&mut game, Position::new(480.0, 320.0));
+    game.place_tank(s1, Position::new(480.0, 160.0), Some(180.0)).unwrap();
+    game.place_tank(s2, Position::new(480.0, 112.0), Some(180.0)).unwrap();
+    let lone = parked(&mut game, Position::new(900.0, 320.0));
+    with_tank_mut(&game.world, lone, |t| t.damage = MAX_DAMAGE);
+    let slot = slot_of(&game, enemy);
+    let mut events = Vec::new();
+    while !charged(&events, slot) {
+        events.extend(step(&mut game, false));
+        assert!(events.len() < 100_000, "it charges");
+    }
+    let facing = with_tank(&game.world, enemy, |t| Dir::from_rotation(t.rotation));
+    assert_eq!(facing, Some(Dir::Up), "the lane with both seats");
+    let lane = crate::ai::GaussLane { seats: 2, ..Default::default() };
+    let one = crate::ai::GaussLane { seats: 1, towers: 1, ..Default::default() };
+    assert!(lane.score() > one.score() && one.score() > crate::ai::GaussLane { seats: 1, ..Default::default() }.score());
+}
+
+/// A training dummy never charges.
+#[test]
+fn a_training_dummy_never_charges() {
+    let mut game = round("");
+    let enemy = rail_enemy(&mut game, Position::new(400.0, 192.0));
+    game.world.get::<&mut Ai>(enemy).unwrap().frog_only = true;
+    let events = watch(&mut game, enemy);
+    assert!(!charged(&events, slot_of(&game, enemy)));
+}
+
+/// The generic tiers never fire the rail.
+#[test]
+fn the_generic_tiers_never_fire_the_rail() {
+    assert!(!crate::ai::generic_fire(ActiveWeapon::GaussRail));
+}
+
+/// Hurt past fleeing mid-charge, it still holds the trigger - no other
+/// tier lets it go - and fires at full.
+#[test]
+fn a_charge_in_progress_is_never_released_by_another_tier() {
+    let mut game = round("");
+    let enemy = rail_enemy(&mut game, Position::new(400.0, 192.0));
+    let slot = slot_of(&game, enemy);
+    let mut seen = Vec::new();
+    while !charged(&seen, slot) {
+        seen.extend(step(&mut game, false));
+    }
+    with_tank_mut(&game.world, enemy, |t| t.damage = tuning().enemy_flee_damage + 5.0);
+    let rest = idle(&mut game, full_ticks() + 5);
+    assert!(!rest.iter().any(|e| matches!(*e, Event::ChargeEnded { slot: s, .. } if s == slot)), "{rest:?}");
+    assert!(fired(&rest, slot));
+}
+
+/// From outside a seat's sight box it never charges at it - lined up on
+/// the seat's column further out than the box reaches.
+#[test]
+fn an_enemy_never_rails_a_seat_from_outside_its_sight_box() {
+    let mut game = round("");
+    let s = seat(&game);
+    game.place_tank(s, Position::new(480.0, 32.0 * 2.0), Some(180.0)).unwrap();
+    let enemy = rail_enemy(&mut game, Position::new(480.0, 64.0 + 300.0));
+    let events = watch(&mut game, enemy);
+    assert!(!charged(&events, slot_of(&game, enemy)), "300 px down a column, past the box's 240");
+}
+
+/// A hunter rails its quarry, the players' frog.
+#[test]
+fn a_hunter_rails_its_quarry() {
+    let mut game = round_as("cells.\"20,12\" = { kind = \"frog\" }\n", 1, Mission::Protect, None);
+    let s = seat(&game);
+    game.place_tank(s, Position::new(96.0, 448.0), Some(90.0)).unwrap();
+    let slot = game.debug_spawn_enemy(Position::new(640.0, 192.0), Some(1), Some(Role::Hunter)).unwrap();
+    let enemy = game.tank_entity_by_slot(slot).unwrap();
+    with_tank_mut(&game.world, enemy, |t| {
+        t.speed_scale = 0.0;
+        t.disarm();
+        t.gauss_slugs = 4;
+    });
+    let frog = game.frog.unwrap();
+    let before = game.world.get::<&crate::frog::Frog>(frog).unwrap().health;
+    let events = watch(&mut game, enemy);
+    assert!(fired(&events, slot), "the frog in its column");
+    assert!(game.world.get::<&crate::frog::Frog>(frog).unwrap().health < before);
+}
+
+/// Enemies step out of a charging seat's lane and do not step back while
+/// it charges.
+#[test]
+fn enemies_step_out_of_a_charging_seats_lane_and_do_not_step_back() {
+    let mut game = round("");
+    let slot = game.debug_spawn_enemy(Position::new(480.0, 192.0), Some(1), Some(Role::Player)).unwrap();
+    let enemy = game.tank_entity_by_slot(slot).unwrap();
+    with_tank_mut(&game.world, enemy, |t| {
+        t.shells_ammo = 0;
+        t.disarm();
+    });
+    let half = crate::battlefield::max_tank_clearance_half_extent() + tuning().gauss_half_width;
+    let in_lane = |game: &Game| (with_tank(&game.world, enemy, |t| t.position).y - 192.0).abs() < half;
+    let mut out_at = None;
+    for i in 0..full_ticks() + 60 {
+        step(&mut game, true);
+        if out_at.is_none() && !in_lane(&game) {
+            out_at = Some(i);
+        }
+        if out_at.is_some() {
+            assert!(!in_lane(&game), "back in the lane at tick {i}");
+        }
+        if with_tank(&game.world, seat(&game), |t| t.charge.is_none()) {
+            break;
+        }
+    }
+    assert!(out_at.is_some_and(|i| i < 80), "out of the lane: {out_at:?}");
+}
+
+/// The commander never orders a charging tank.
+#[test]
+fn a_charging_tank_is_busy_to_the_commander() {
+    let mut tank = Tank { gauss_slugs: 2, owner: Owner::Enemy(4), ..Tank::default() };
+    assert_eq!(tank.step_charge(true, true, DT, true, None), crate::tank::ChargeEdge::Started);
+    assert!(tank.charge.is_some());
+    // `enemy_phase` hands it to the commander as `Busy::Charging`, whom
+    // `deconflict` and `clear_rings` never order (`command_tests`).
+    let _ = super::command::Busy::Charging;
+}
+
+

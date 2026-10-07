@@ -346,6 +346,11 @@ impl Game {
         if t.enemy_danger_route_cost > 0 && self.any_emp() {
             grid.surcharge(self.danger_route_cells(&grid).into_iter(), t.enemy_danger_route_cost as u32);
         }
+        // A charging gauss rail's lane (docs/gauss-rail.md "Reacting to a
+        // rail"): routes go round its end rather than up or across it.
+        if t.gauss_ai_lane_cost > 0 && self.any_rail_charging() {
+            grid.surcharge(self.rail_route_cells().into_iter(), t.gauss_ai_lane_cost as u32);
+        }
         for &(pos, _) in &players {
             grid.add_field(pos);
         }

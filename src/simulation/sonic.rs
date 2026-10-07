@@ -639,6 +639,10 @@ impl Game {
             .filter(|tank| !tank.is_wreck() && tank.body.is_some())
             .map(|tank| (tank.owner_slot(), tank.position))
             .collect();
+        // A charging enemy rail's lane is trouble too, through cover and
+        // whatever the range (docs/gauss-rail.md).
+        let rails: Vec<super::gauss::RailLane> =
+            if self.any_rail_charging() { self.rail_lanes().into_iter().filter(|l| l.seat.is_none()).collect() } else { Vec::new() };
         let (half_w, half_h) = t.sight_box_half_px();
         let half_of = |e: Entity| self.world.get::<&Tank>(e).map_or(Vec2::new(OBSTACLE_GRID_SIZE * 0.5, OBSTACLE_GRID_SIZE * 0.5), |t| t.hull_bbox_world().1);
         // A tank hurt enough to flee closes in on nobody, so it takes no
@@ -676,7 +680,7 @@ impl Game {
                         if aim.breaker.is_none() && d <= t.sonic_ai_breaker_px {
                             aim.breaker = Some(seat.seat);
                         }
-                        if aim.trouble.is_none() && self.lands_in_trouble(f, seat, me, d, slot, &enemies, &solid, &towers, &t) {
+                        if aim.trouble.is_none() && self.lands_in_trouble(f, seat, me, d, slot, &enemies, &solid, &towers, &rails, &t) {
                             aim.trouble = Some(seat.seat);
                         }
                     }
@@ -723,12 +727,12 @@ impl Game {
     /// that stops a hull or the field's edge, any sample hot enough to hurt
     /// (lava and its banks, unless it carries a heat shield), on a burning
     /// cell or a puddle of ooze; or where it comes to rest, inside a
-    /// standing enemy tower's reach or lined up for another live enemy - on
+    /// standing enemy tower's reach, lined up for another live enemy - on
     /// its row or column within `enemy_fire_align_px`, inside its attack
     /// range, its sight clear and standing inside the resting point's sight
-    /// box - when it does not stand so already, since a slide across a lane
-    /// leaves the seat in none and a seat already in one is not shoved into
-    /// it.
+    /// box - or in another enemy's charging rail's lane, when it does not
+    /// stand so already, since a slide across a lane leaves the seat in
+    /// none and a seat already in one is not shoved into it.
     #[allow(clippy::too_many_arguments)]
     fn lands_in_trouble(
         &self,
@@ -740,6 +744,7 @@ impl Game {
         enemies: &[(usize, Position)],
         solid: &BTreeSet<(i32, i32)>,
         towers: &[(Position, f32)],
+        rails: &[super::gauss::RailLane],
         t: &Tuning,
     ) -> bool {
         let footing = Footing::at(&self.water, &self.lava, self.weather, seat.pos, self.time);
@@ -780,7 +785,10 @@ impl Game {
                 off <= t.enemy_fire_align_px && forward > 0.0 && forward <= t.enemy_attack_range && f.terrain.line_of_sight(at, p)
             })
         };
-        (in_reach(rest) && !in_reach(seat.pos)) || (in_lane(rest) && !in_lane(seat.pos))
+        // A charging enemy rail's lane, through cover and whatever the range
+        // (docs/gauss-rail.md).
+        let in_rail = |p: Position| rails.iter().any(|l| l.slot != shooter && l.depth(p) > 0.0);
+        (in_reach(rest) && !in_reach(seat.pos)) || (in_lane(rest) && !in_lane(seat.pos)) || (in_rail(rest) && !in_rail(seat.pos))
     }
 
     /// Put a crate of `kind` down at the map cell nearest `at`, in its air

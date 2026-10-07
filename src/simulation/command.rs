@@ -92,6 +92,9 @@ pub(crate) struct UnitView {
 pub(crate) enum Busy {
     /// Its brain and its radio are off (an EMP, `Tank::disabled`).
     Disabled,
+    /// It holds a gauss rail's charge on a lane (`Tank::charge`): a nudge
+    /// would turn its hull off it.
+    Charging,
 }
 
 /// The world queries the commander needs, injected as closures so the module

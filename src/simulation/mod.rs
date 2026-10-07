@@ -3641,7 +3641,7 @@ impl Game {
         // the places every enemy keeps out of because of an EMP
         // (docs/emp-burst.md "AI"): only when a tank on the field carries
         // one, so a round without hands every `Brain` none.
-        let (emp_senses, dangers) = if self.any_emp() {
+        let (emp_senses, mut dangers) = if self.any_emp() {
             let seats: Vec<emp::EmpSeat> = players
                 .iter()
                 .enumerate()
@@ -3651,6 +3651,23 @@ impl Game {
         } else {
             (BTreeMap::new(), Vec::new())
         };
+        // What a slug of each rail-carrying enemy's own would go through
+        // each way it could face, and the lanes of every charging rail -
+        // places every enemy keeps out of (docs/gauss-rail.md "AI"): only
+        // when a tank carries or charges one.
+        let gauss_senses = if self.world.query::<&Tank>().with::<&Ai>().iter().any(|t| t.active_weapon() == ActiveWeapon::GaussRail) {
+            let seats: Vec<gauss::GaussSeat> = players
+                .iter()
+                .enumerate()
+                .map(|(i, p)| gauss::GaussSeat { seat: i as u8, entity: p.entity, pos: p.pos, live: !p.wreck && !p.entering, concealed: p.concealed, sight: p.sight })
+                .collect();
+            self.gauss_senses(f, &seats)
+        } else {
+            BTreeMap::new()
+        };
+        if self.any_rail_charging() {
+            dangers.extend(self.rail_dangers());
+        }
 
         // --- collect pass: perception, `think`, aim and fire, exactly as
         // before. Only the impulse is deferred. ---
@@ -3805,6 +3822,7 @@ impl Game {
                         .get(&entity)
                         .map(|s| SpecialSense::Hammer(*s))
                         .or_else(|| emp_senses.get(&entity).map(|s| SpecialSense::Emp(*s)))
+                        .or_else(|| gauss_senses.get(&entity).map(|s| SpecialSense::Gauss(*s)))
                         .unwrap_or(SpecialSense::None),
                     &dangers,
                 )
@@ -3824,7 +3842,17 @@ impl Game {
             // is the weapon's own minimum (a burst in progress, say). A
             // weapon with a tell winds up first (`enemy_trigger`).
             enemy_trigger(&mut self.physics, f, entity, tank, owner, intent);
-            pending.push(Pending { entity, slot: tank.owner_slot(), intent, current, facing_before, disabled: false, clearing: ai.clearing(), dodging: ai.dodging() });
+            pending.push(Pending {
+                entity,
+                slot: tank.owner_slot(),
+                intent,
+                current,
+                facing_before,
+                disabled: false,
+                charging: tank.charge.is_some(),
+                clearing: ai.clearing(),
+                dodging: ai.dodging(),
+            });
         }
 
         // --- command pass: no world, no RNG (see `simulation::command`) ---
@@ -3853,7 +3881,13 @@ impl Game {
                     intent: p.intent,
                     wreck,
                     ring_rank: self.last_engage.slot_of(p.entity).map(|s| s.rank),
-                    busy: p.disabled.then_some(command::Busy::Disabled),
+                    busy: if p.disabled {
+                        Some(command::Busy::Disabled)
+                    } else if p.charging {
+                        Some(command::Busy::Charging)
+                    } else {
+                        None
+                    },
                     clearing: p.clearing,
                     dodging: p.dodging,
                 }
@@ -5215,6 +5249,9 @@ struct Pending {
     facing_before: f32,
     /// Its brain is off (an EMP): the commander cannot reach it.
     disabled: bool,
+    /// It holds a rail's charge (docs/gauss-rail.md): the commander leaves
+    /// it on its lane.
+    charging: bool,
     /// The ring its EMP rule asked the commander to clear (`Ai::clearing`).
     clearing: Option<f32>,
     /// Backing out of a danger on its own (`Ai::dodging`).
@@ -5301,7 +5338,17 @@ fn coast_enemy(physics: &mut Physics, f: &mut Frame, entity: Entity, tank: &mut 
     // lets one go: a far tank's charge vents at worst.
     let fire = tank.charge.is_some();
     enemy_trigger(physics, f, entity, tank, owner, Intent { fire, ..intent });
-    Pending { entity, slot: tank.owner_slot(), intent, current, facing_before, disabled: tank.is_disabled(), clearing: None, dodging: false }
+    Pending {
+        entity,
+        slot: tank.owner_slot(),
+        intent,
+        current,
+        facing_before,
+        disabled: tank.is_disabled(),
+        charging: tank.charge.is_some(),
+        clearing: None,
+        dodging: false,
+    }
 }
 
 /// The intent the apply pass drives `slot` by: the commander's orders over

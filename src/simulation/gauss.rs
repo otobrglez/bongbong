@@ -47,6 +47,8 @@ pub(super) struct PendingRail {
 pub(crate) struct RailLane {
     /// The charging tank's owner slot.
     pub slot: usize,
+    /// The charging hull.
+    pub at: Position,
     pub from: Position,
     pub dir: Dir,
     pub length: f32,
@@ -71,6 +73,20 @@ impl RailLane {
         }
         self.half_width - across
     }
+}
+
+/// A seat as a rail-carrying enemy sees it this frame (`Game::gauss_senses`).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct GaussSeat {
+    pub seat: u8,
+    pub entity: Entity,
+    pub pos: Position,
+    /// On the field and not a wreck.
+    pub live: bool,
+    /// In tall grass that hides it.
+    pub concealed: bool,
+    /// How far an enemy sees it under the sky (`Game::sight_on`).
+    pub sight: f32,
 }
 
 /// The room side of a charge-and-hold trigger (docs/gauss-rail.md "The
@@ -399,15 +415,29 @@ impl Game {
         }
     }
 
+    /// Whether some live tank charges a gauss rail: what the lanes, their
+    /// dangers and their surcharge are built for.
+    pub(crate) fn any_rail_charging(&self) -> bool {
+        self.world.query::<&Tank>().iter().any(|t| !t.is_wreck() && t.charge.is_some_and(|c| c.weapon == ActiveWeapon::GaussRail))
+    }
+
     /// The lane of every live tank on the field charging a rail, seats in
     /// index order then enemies by slot: from its gun line's muzzle along
-    /// its facing to where its slug would stop with the stage it has now
-    /// (`Terrain::rail_stop`), as wide as any hull centred in it could be
-    /// pierced. Empty when nothing charges.
-    pub(crate) fn rail_lanes(&self, terrain: &super::hits::Terrain) -> Vec<RailLane> {
+    /// its facing to where its slug would stop with the stage it has now -
+    /// the first cell holding a permanent tile (iron only while it is not
+    /// overcharged) or the field's edge - as wide as any hull centred in
+    /// it could be pierced. Empty when nothing charges.
+    pub(crate) fn rail_lanes(&self) -> Vec<RailLane> {
         let t = tuning();
-        let reach = laser_reach(self.map.field_size());
+        let (width, height) = self.map.field_size();
         let half_width = crate::battlefield::max_tank_clearance_half_extent() + t.gauss_half_width;
+        let permanent: std::collections::BTreeMap<(i32, i32), Material> = self
+            .world
+            .query::<&Obstacle>()
+            .iter()
+            .filter(|o| !o.destroyed && o.material.is_permanent())
+            .map(|o| (o.cell(), o.material))
+            .collect();
         let mut lanes: Vec<RailLane> = self
             .world
             .query::<&Tank>()
@@ -417,13 +447,138 @@ impl Game {
                 let dir = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up);
                 let from = tank.gun_line_muzzle(dir.vec());
                 let overcharged = tank.charge.is_some_and(|c| c.stage() == ChargeStage::Overcharged);
-                let to = from + dir.vec() * reach;
-                let length = terrain.rail_stop(from, to, t.gauss_half_width, !overcharged) * reach;
-                RailLane { slot: tank.owner_slot(), from, dir, length, half_width, seat: tank.player_index() }
+                let step = crate::OBSTACLE_GRID_SIZE * 0.25;
+                let mut length = 0.0;
+                loop {
+                    let p = from + dir.vec() * length;
+                    if p.x < 0.0 || p.y < 0.0 || p.x > width || p.y > height {
+                        break;
+                    }
+                    if permanent.get(&crate::map::world_to_cell(p)).is_some_and(|&m| !overcharged || m != Material::Iron) {
+                        break;
+                    }
+                    length += step;
+                }
+                RailLane { slot: tank.owner_slot(), at: tank.position, from, dir, length, half_width, seat: tank.player_index() }
             })
             .collect();
         lanes.sort_by_key(|l| (l.seat.is_none(), l.slot));
         lanes
+    }
+
+    /// The dangers every enemy keeps out of because a rail charges
+    /// (docs/gauss-rail.md "Reacting to a rail"): a lane each, owned by the
+    /// charging tank - a seat's every enemy steps out of, an enemy's its
+    /// allies do.
+    pub(super) fn rail_dangers(&self) -> Vec<crate::ai::Danger> {
+        self.rail_lanes()
+            .into_iter()
+            .map(|l| crate::ai::Danger {
+                shape: crate::ai::DangerShape::Lane { at: l.at, from: l.from, dir: l.dir, length: l.length, half_width: l.half_width },
+                owner: Some(l.slot),
+                slack: 0.0,
+            })
+            .collect()
+    }
+
+    /// The nav cells inside every charging rail's lane, each once: what
+    /// the route grid surcharges (`gauss_ai_lane_cost`).
+    pub(super) fn rail_route_cells(&self) -> Vec<Position> {
+        let cell = crate::OBSTACLE_GRID_SIZE;
+        let mut cells = std::collections::BTreeSet::new();
+        for lane in self.rail_lanes() {
+            let d = lane.dir.vec();
+            let n = Vec2::new(-d.y, d.x);
+            let across = (lane.half_width / cell).ceil() as i32;
+            let mut along = 0.0;
+            while along <= lane.length {
+                for k in -across..=across {
+                    let p = lane.from + d * along + n * (k as f32 * cell);
+                    if lane.depth(p) > 0.0 {
+                        cells.insert(crate::map::world_to_cell(p));
+                    }
+                }
+                along += cell;
+            }
+        }
+        cells.into_iter().map(|(c, r)| crate::map::cell_to_world(c, r)).collect()
+    }
+
+    /// What a slug of each rail-carrying enemy's own would go through each
+    /// way it could face (docs/gauss-rail.md "What it is handed"), from the
+    /// gun line's muzzle that facing gives, by the room's own trace
+    /// (`Terrain::pierce_rewound`, iron stopping it). A seat counts only
+    /// where this tank stands in its sight box, it is within this tank's
+    /// sight under the sky and not hidden from it.
+    pub(super) fn gauss_senses(&self, f: &Frame, seats: &[GaussSeat]) -> std::collections::BTreeMap<Entity, crate::ai::GaussSense> {
+        use crate::ai::{Ai, GaussLane, GaussSense};
+        let t = tuning();
+        let mut out = std::collections::BTreeMap::new();
+        let reach = laser_reach(self.map.field_size());
+        let players = self.seats_on_field();
+        let (half_w, half_h) = t.sight_box_half_px();
+        let armed: Vec<(Entity, Owner, Position, i32)> = self
+            .world
+            .query::<(Entity, &Tank, &Ai)>()
+            .iter()
+            .filter(|(_, tank, _)| !tank.is_wreck() && tank.body.is_some() && tank.active_weapon() == ActiveWeapon::GaussRail)
+            .map(|(e, tank, _)| (e, tank.owner(), tank.position, tank.row))
+            .collect();
+        for (entity, owner, me, _) in armed {
+            let Ok(ai) = self.world.get::<&Ai>(entity) else { continue };
+            let hunter = ai.role == crate::ai::Role::Hunter;
+            let Ok(tank) = self.world.get::<&Tank>(entity) else { continue };
+            let mut sense = GaussSense::default();
+            for dir in Dir::ALL {
+                let from = tank.gun_line_muzzle(dir.vec());
+                let to = from + dir.vec() * reach;
+                let mut lane = GaussLane::default();
+                for (target, tt) in f.terrain.pierce_rewound(&self.world, players, owner, from, to, t.gauss_half_width, None, true) {
+                    let along = tt * reach;
+                    match target {
+                        ShellTarget::Tank(e) => match seats.iter().find(|s| s.entity == e) {
+                            Some(seat) => {
+                                let counts = seat.live
+                                    && !ai.frog_only
+                                    && crate::ai::in_sight_box_of((half_w, half_h), seat.pos, me)
+                                    && me.distance_to(seat.pos) <= seat.sight
+                                    && !(seat.concealed && !ai.is_hit_alerted());
+                                if counts {
+                                    lane.seats += 1;
+                                    if lane.at_seat.is_none() {
+                                        lane.at_seat = Some((seat.seat, along));
+                                    }
+                                }
+                            }
+                            None => lane.friend = true,
+                        },
+                        ShellTarget::Frog(e) => {
+                            if Some(e) == self.enemy_frog {
+                                lane.friend = true;
+                            } else if hunter && Some(e) == self.frog && lane.quarry.is_none() {
+                                lane.quarry = Some(along);
+                            }
+                        }
+                        ShellTarget::Obstacle(e) => {
+                            if let Ok(o) = self.world.get::<&Obstacle>(e)
+                                && o.material.is_tower()
+                                && !o.destroyed
+                            {
+                                if crate::tower::side_of_variant(o.variant) == crate::frog::Side::Player {
+                                    lane.towers += 1;
+                                } else {
+                                    lane.friend = true;
+                                }
+                            }
+                        }
+                        ShellTarget::Wall => {}
+                    }
+                }
+                sense.lanes[dir.index()] = lane;
+            }
+            out.insert(entity, sense);
+        }
+        out
     }
 
     /// Where one seat's slug would be judged from right now (its gun
