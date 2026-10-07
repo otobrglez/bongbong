@@ -317,10 +317,10 @@ eruption, as a blast on the end screen hurts nobody.
 |---|---|
 | `src/zone.rs` (new) | Zones (§3.3): `Zone` (id, kind, owner, centre, radius, `until` on the round clock), `ZoneKind` (`Rod(RodCall)` here; the well adds its own), `Zone::{left, danger, route_cells}`, `ZONE_*` wire tags; the rules every reader keeps, in its doc |
 | `src/rod.rs` (new) | The weapon's headless half. `RodCall` (struck cell, the caller's seat), `Reticle` (cell, the stick held and its repeat, seconds at rest) and `step_reticle` (pure: a stick or an aim cell, the range, the step clock), `reticle_start`, `reticle_range`, `rule()` (the rod's `ChargeRule` from the `rod` knobs), `in_kill`, `shove_speed`, `falloff`, `break_cells`, `crater_cells`, `Craters`, the composers `compose_reticle`, `compose_designator`, `compose_call`, `compose_column`, `compose_impact`, `compose_crater_smoke` (pure, `pyro::Shape`s), `draw_crater` (generic over `canvas::Canvas`), `module_cell` |
-| `src/simulation/rod.rs` (new) | The world half. `fire_rod` (a release: the call, or the cancel), `step_reticle` per tick through `charge_trigger` (seats, enemies, the sandbox), `resolve_zones(f, live)`, `rod_impact` (the walk of §1), `make_crater`, `set_off_volcanoes`, `rod_call_show` and `rod_show` (the cosmetic halves, which a replica's events and a client's own release call too), `Game::{zones, craters, seat_motion, seat_reticle, set_seat_reticle}`, `tick_seat_motion`, `rod_senses` and `zone_dangers` (§4), `debug_call_rod` |
+| `src/simulation/rod.rs` (new) | The world half. `fire_rod` (a release: the call, or the cancel), `step_reticle` per tick through `charge_trigger` (seats, enemies, the sandbox), `resolve_zones(f, live)`, `rod_impact` (the walk of §1), `make_crater`, `set_off_volcanoes`, `rod_call_show` and `rod_show` (the cosmetic halves, which a replica's events and a client's own release call too), `Game::{zones, craters, seat_still, seat_reticle, set_seat_reticle}`, `tick_seat_still`, `rod_senses` and `zone_dangers` (§4), `debug_call_rod` |
 | `src/simulation/rod_tests.rs` (new) | The scenario tests (§10) |
 | `src/simulation/weapons.rs` | The `ActiveWeapon::RodFromGod` arm of `fire_charge` (`fire_rod`); the dispatch arm empty (a charge weapon fires through `fire_charge`) |
-| `src/simulation/mod.rs` | `Frame::pending_calls`; `Game::{zones, craters, seat_motion}`; `resolve_zones` in both branches; `drive_player`'s stick handed to an `Aim` charge; `Footing::at` with the craters; `frog_reflexes`' shy from a zone; `change_weather` filling craters; `tick_presentation` (zones' ages, crater smoke, reticles); `Event::{RodCalled, RodImpact}`, `HitCause::Rod`; the swap's table entry |
+| `src/simulation/mod.rs` | `Frame::pending_calls`; `Game::{zones, craters, seat_still}`; `resolve_zones` in both branches; `drive_player`'s stick handed to an `Aim` charge; `Footing::at` with the craters; `frog_reflexes`' shy from a zone; `change_weather` filling craters; `tick_presentation` (zones' ages, crater smoke, reticles); `Event::{RodCalled, RodImpact}`, `HitCause::Rod`; the swap's table entry |
 | `src/simulation/nav.rs` | Crater cells weighed in `nav_finish`; `Setting::crater_cost`; every zone's danger surcharged in `route_grid_on` |
 | `src/simulation/engage.rs` | `EngageCtx::herd` (§4) |
 | `src/simulation/props.rs` | `DamageCause::Crush`; the rod's params in `blast_crates` |
@@ -464,7 +464,7 @@ press show's claim by input tick; `HitCause` on `Event::Hit`;
   cell (an enemy's) it steps toward it at the repeat's pace, along the axis
   with the larger offset first (ties: across); every step is held to the
   range and the field, and resets `rest`.
-- **`SpecialUse::Charge { face, creep, aim: Option<(i32, i32)> }`** - the
+- **`SpecialUse::Charge { face, aim: Option<(i32, i32)>, why }`** - the
   aim an enemy's reticle steps toward (`Intent::aim_cell`, AI-only, never
   on the wire, like `fire_aim_offset`); `None` for the rail.
 - **`SpecialUse::Drop`** - let go of a charge without firing it:
@@ -588,13 +588,13 @@ impl Zone {
   reaction) and its `route_cells` its own; the arrow and the minimap mark
   its look. That arm is its PR's.
 
-**The seat motion record** (`Game::seat_motion: [SeatMotion; MAX_SEATS]`),
+**The seat motion record** (`Game::seat_still: [rod::SeatStill; MAX_SEATS]`),
 which the rod's AI reads (§4) and the well's may:
 
 ```rust
 /// How a seat has been moving, measured each live tick at the top of
 /// `enemy_phase` from its hull's centre. No RNG.
-pub struct SeatMotion {
+pub struct SeatStill {
     /// Where it last moved off from: reset to its centre whenever the
     /// centre is more than `rod_ai_still_px` from it.
     pub anchor: Position,
@@ -603,15 +603,16 @@ pub struct SeatMotion {
     /// Its velocity (px/s) averaged over about `SEAT_MOTION_SECONDS` (1):
     /// each tick's step over `dt`, eased in by `dt / SEAT_MOTION_SECONDS`.
     pub velocity: Vec2,
-    /// Its centre last tick.
-    pub last: Position,
+    /// Its centre last tick; `None` for a seat not on the field.
+    pub last: Option<Position>,
 }
 ```
 
 A wreck, a seat off the field or in a gate lane reads `still` 0 and
-`velocity` zero, its anchor and last moved to where it is. Measured in every
-round (a few additions a seat), read only by the senses that want it, so a
-round without the rod decides exactly what it did.
+`velocity` zero, its record starting again where it comes back. Stepped
+every live tick before `enemy_phase` (`Game::tick_seat_still`, a few
+additions a seat), read only by the senses that want it, so a round without
+the rod decides exactly what it did.
 
 ### 3.4 The armory's rod
 
@@ -680,7 +681,7 @@ land}`), so an impact, a crater, a set-off volcano or the pack's herd is
 tried in lockstep without steering a reticle. `status`/`snapshot` carry
 `zones` (id, kind, centre, seconds left, owner), `craters` (cells, filled),
 each tank's `rods` and `reticle`, each seat's `still` and `speed`
-(`SeatMotion`), and an enemy's `rod` pick (`AiSnapshot::rod`).
+(`SeatStill`), and an enemy's `rod` pick (`AiSnapshot::rod`).
 
 ## 4. AI
 
@@ -696,7 +697,7 @@ every call's circle (below, "Reacting to a call").
 `Game::rod_senses` runs once per frame in `enemy_phase`, before the collect
 pass, only when some live enemy on the field carries an online rod or holds
 a rod charge. It gathers once: every seat on the field (position, hull box,
-`SeatMotion`, concealed, hit-alerted for each enemy, `Game::sight_on` at it),
+`SeatStill`, concealed, hit-alerted for each enemy, `Game::sight_on` at it),
 the standing player towers (cell), the players' frog (position, alive), the
 live enemies (slot, hull box, velocity, whether it hunts the frog), the standing
 enemy towers (cell), the enemies' frog (position), the live zones, and the
@@ -726,7 +727,7 @@ pub struct RodPick {
 **A target qualifies** - each check against the target as it stands this
 tick - in this order of preference:
 
-1. **A camper**: a seat whose `SeatMotion::still` is at least
+1. **A camper**: a seat whose `SeatStill::still` is at least
    `rod_ai_still_seconds` (2.0) - stood within `rod_ai_still_px` (12) of one
    spot that long: camping, sniping, holding a rail at full, holding a
    reticle of its own. Its cell is `world_to_cell` of its centre.
@@ -779,7 +780,7 @@ order.
    2. no pick (the target moved off, an ally walked in, a call already
       covers it): `Drop`.
    3. the reticle not yet on the pick's cell: `Charge { face: the facing
-      it has, creep: false, aim: Some(cell) }` - the reticle steps toward
+      it has, aim: Some(cell), why }` - the reticle steps toward
       it at a seat's pace, seen by everyone (§5).
    4. on the cell, resting there under `rod_ai_aim_hold_seconds` (0.4):
       `Charge` (it holds).
@@ -787,12 +788,37 @@ order.
       call. A led pick's cell moves with its seat; the reticle follows it
       and rests again before the release.
 2. **A training dummy**: `None`.
-3. **Cooling** (`fire_cooldown > 0` or `Ai::fire_timer` running): `None` -
-   the tree goes on.
-4. **A pick**: `Charge { face, creep: false, aim: Some(pick.cell) }` - the
-   reticle starts and the fire timer is set to `rod_ai_fire_interval` (8).
+3. **A pick**, not cooling (`fire_cooldown` and `Ai::fire_timer` out):
+   `Charge { face, aim: Some(pick.cell), why }` - the reticle starts and
+   the fire timer is set to `rod_ai_fire_interval` (8). A release waits for
+   the charge to be full (`rod_settle_seconds`) as well as the rest.
+4. **The stand-off** (found in Phase 2, below), while it is healthy enough
+   not to flee: from the nearest seat it knows of from inside that seat's
+   sight box (`RodSense::keep_from`), nearer than `rod_stand_off_px` (the
+   circle, the friend margin, the widest hull's half and a cell, 124 px)
+   it backs off to a spot a cell past that - on the line out through
+   itself, else on the seat's row or column, the nearest it can drive to
+   out of every danger (`Approach`, `why` "stand-off"); within two cells
+   past it, it holds facing the seat (`Hold`), unless an ally crowds it
+   (`enemy_separation_px`, hull to hull), when it moves to the nearest free
+   spot of the eight round the seat at that distance. A spot it chose is
+   latched (`Ai::rod_spot`) until it gets there. Further out: `None`.
 5. Otherwise `None`: the tree goes on (chase, attack's repositioning, patrol
    and the seeks; never a shot).
+
+**Why the stand-off**: a tank carrying calls fires no shells
+(`generic_fire` is false), and the attack tier brings it to a firing slot of
+the seat's ring - a few cells off, inside the circle a call on the seat
+would crush, where the "never on its own" check keeps it from calling. So in
+the first sweeps a rod tank parked beside a camping seat and did nothing at
+all, and in an armed round a whole pack of them crowded the seat against a
+wall (choke: border-stuck 2 against 1, pile-up 5 against 2; archipelago:
+a seat that lost in 10 s at the defaults lasting 46). Artillery keeps its
+distance: from four to six cells out it is out of its own circle and out of
+the way of the tanks that shoot. The band's hold is a deliberate hold for
+the probe (`TankSnapshot::rod_hold`, `HOLDS`'s "stand-off"); the crowding
+move took pockets' mixed-round pile-ups from 5 to 1, and the latch the
+flip-flops it brought from a moving ally.
 
 **The tell**: the reticle stepping from the tank to its target and resting
 there (a fraction of a second to about a second, then
@@ -807,7 +833,10 @@ made, which is what the probe's `offbox-fire` reads.
 
 **The hold-still clocks**: a tank holding a reticle commands no movement
 (the stuck clock resets, as any deliberate hold), and the C2 commander never
-orders it (`UnitView::charging`, the rail's).
+orders it (`UnitView::charging`, the rail's). A charge it lets go of without
+calling (`SpecialUse::Drop`: under a call, or no pick left) goes through
+`Intent::drop_charge`, AI-only, which the collect pass lapses
+(`ChargeEnded { Lapsed }`).
 
 ### Herding
 
@@ -1008,91 +1037,97 @@ fair); what lingers on the ground is shaded in the lit pass.
     in rain, every 0.4 s a hashed one-block ring of `BLUE_PALE` opening from
     2 to 6 px; under ice (filled, then frozen) `SMOKE[6]` and white with
     `BLUE_PALE` cracks.
-- **The light** (`weather::lights_in`): a call's foot throws an unshadowed
-  point light of `LASER_RED[2]`, 32 px, at `rod_beam_light * pulse`, so the
-  circle reads at night; the column throws an unshadowed white light of
-  96 px for its frames; the fireball throws its blast's light.
-- **The module** (`tankdesign`, `lines/vanguard.py`, `module_fn('rod')`): a
-  satellite uplink on the roof - the missiles' hardpoint, shared, since a
-  tank carries one special at a time (`hp.get('rod', hp['missiles'])`): a
-  gunmetal mount (4 x 3, chamfered), on it a round dish 5 design px across
-  seen from above - a steel rim, a darker bowl and a feed horn dot at its
-  centre - and a designator lens (one pixel, light role `'laser'`) on the
-  mount's front. Five cells, `TANK_MODULE_ROD_COL` = 44..48
-  (`tank_modules.png` grows from the swarm's 44 to 49 columns, 1960 x 480):
-  0 armed, the lens dim (`DIM_LASER`, `RED_DK`); 1 and 2 tracking, the lens
-  lit `'laser'` and the feed horn alternately `'white'` and dark; 3 uplink,
-  the dish's rim and feed `'white'`, the lens `'laser'`; 4 offline, the dish
-  scorched (`RUST_DK` for steel's light steps), no lens. `module_cols` (now
-  eleven entries): 3 while `Tank::rod_flash` (`rod_flash_seconds`, set by
-  `kick_rod` on every call - the room's, a replica's `Fired`, a client's
-  release), 4 while `special_down()`, 1 and 2 alternating at 6 Hz while a
-  reticle is held, else 0. Anchor: `tank_art::ROD_LENS` (the lens, turret
-  frame), written by `export.py` from the module's `meta['lens']`.
-  `render.SHOWN_TOGETHER` leaves it out with the other roof modules. Three
-  chassis in a screenshot before it is settled (§12).
+- **The light** (`weather::lights_in`): a call throws an unshadowed red
+  point light over its circle (1.5 kill radii, `rod_beam_light`, 0.7 of it
+  until its last second), so the circle reads at night; a reticle a faint
+  one on its cell; an impact floods the ground white out to 1.5 shove radii
+  for `rod_flash_seconds`, fading; the fireball throws its blast's light.
+- **The module** (`tankdesign`, `lines/vanguard.py`, `module_fn('rod')`): an
+  uplink on the roof - the missiles' hardpoint, shared, since a tank carries
+  one special at a time (`hp.get('rod', hp['missiles'])`): a squat gunmetal
+  base (5 x 4, chamfered) carrying a steel phased-array panel (3 x 3, a
+  vertical grille) and, forward of it on a one-pixel steel housing, the
+  designator's lens (dark, lit by state). Five cells, `TANK_MODULE_ROD_COL`
+  = 44..48 (`tank_modules.png` grows from 44 to 49 columns, 1960 x 480;
+  the 44 before it unchanged, byte for byte): 0 armed, the lens dim
+  (`DIM_LENS`, `RED_DK`); 1 and 2 tracking a reticle, the lens lit red
+  (`'warn'`) and the array's left and then its right column lit red; 3 a
+  call, the array and the lens white; 4 offline, the array scorched (`RUST`)
+  and the lens dark. `module_cols` (eleven entries): 3 while
+  `Tank::rod_flash` (`rod_flash_seconds`, set by `kick_rod` on every call -
+  the room's, a replica's `Fired`, a client's release), 4 while
+  `special_down()`, 1 and 2 alternating at 6 Hz while a reticle is held,
+  else 0. Anchor: `tank_art::ROD_LENS` (the lens, turret frame), written by
+  `export.py` from the module's `meta['lens']`, where the designator's
+  line starts (`rod::lens`). `render.SHOWN_TOGETHER` leaves it out with the
+  other roof modules. `just check-sheets` passes.
 - **The crate**: row 17 of `gen_crates.py`'s sheets (`crates_sheet.png` 280
-  x 720, `pickup_glyphs.png` 24 x 432). Its symbol, 10 x 10 design px: the
-  rod (`o`, the ink's light) coming straight down onto a target on the
-  ground, drawn as an ellipse - the field's top-down tilt - with a bullseye:
+  x 720, `pickup_glyphs.png` 24 x 432; the seventeen rows before it
+  unchanged, byte for byte). Its symbol, 10 x 10 design px: a tungsten rod
+  falling point first into a reticle's four corner brackets - the brackets
+  a player steers - its hot tip and the brackets (`o`) in the ink's light:
 
   ```
+  '....XX....',
+  '...XXXX...',
+  '...XXXX...',
+  '...XXXX...',
+  '...XXXX...',
+  'oo.XXXX.oo',
+  'o..XXXX..o',
   '....oo....',
-  '....oo....',
-  '..oooooo..',
-  '.X.oooo.X.',
-  'X...oo...X',
-  'X........X',
-  'X...XX...X',
-  'X........X',
-  '.X......X.',
-  '..XXXXXX..',
+  'o...oo...o',
+  'oo......oo',
   ```
 
   Ink (`punypalette.PICKUP_INK['rod_from_god']`, admitted on the crate
-  sheets alone like the others): ultramarine - shade `#2A1A9E`, base
-  `#5A3CFF`, light `#B9AEFF`. Every hue that is not green is within a few
-  degrees of an ink already, so the pick was made by distance (CIELAB) to
-  the sixteen inks and both of the rail's candidates: ultramarine is 32
-  from its nearest (the EMP's cobalt) - wider than the health/heat-shield
-  pair (16) that ships and the shield/EMP pair (21) the EMP took - and
-  reads as orbit.
-  Stand-by: coral (`#FF9A8A`, 36 from its nearest, the health cross), which
-  echoes the beam but sits closer to the reds in a count. To be shown
-  beside the other seventeen in a screenshot before it is settled (§12).
+  sheets alone like the others): **two-tone, tungsten and red** - shade
+  `#4E545C`, base `#8A9099` (a dark steel grey), light `#FF3228`
+  (`pyro::LASER_RED[2]`, the designator's red); `LAMP_TONE` like the
+  swarm's, so a glint whitens the rod and leaves the brackets, and the
+  glyph's rod is lit along its top in white (`BODY_LIGHT`) rather than in
+  the brackets' red. Ultramarine was turned down (it sits beside the EMP's
+  cobalt). Candidates were rendered beside all seventeen crates on grass
+  and measured (CIELAB, base and light against every crate's base and
+  light, and against the grass): coral `#FF9A8A` is 11.5 from the health
+  cross's light and reads as a pink health crate; salmon 8.3; amber 21.8
+  from the heat shield; teal 34 but beside the plasma and the sonic hammer
+  and only 39 from the grass; steel blue 31.5 from the hammer; bronze 23.4
+  from the flamethrower. The dark tungsten is 25 from the minigun's pale
+  grey-blue, the nearest single tone, and the pair - a grey body with red
+  corners - is a pattern no other crate has: the swarm is ivory with
+  crimson dots, the heat shield red over black, the health cross red
+  alone. No green anywhere.
 - **The HUD**: `hud::WeaponSlot::of` gives the calls in `HUD_ROD_COLOR`
-  (`#5A3CFF`, the ink's base) and the glyph; while a reticle is held the
-  rail's charge gauge stands in the count's place (`WeaponSlot::charge`:
-  filling over the settle, white once a release calls, its outline
-  `RED_BRIGHT` over the last `VENT_WARN_SECONDS` before the uplink times
-  out); offline, the EMP's `WPN OFFLINE`. The ring's ammo pips are the
-  calls left against `full_load` (2).
-- **The call-in prompt** (`hud::rod_prompt`, `RodPrompt`): while a seat on
-  this screen holds a reticle, one line under that seat's block in the left
-  cluster (above the status line), centred on the block, at
-  `UI_SMALL_TEXT`, in `HUD_ROD_COLOR`'s light: `hud-rod-aim` while the
-  reticle is anywhere else, `hud-rod-cancel` while it is on the seat's own
-  cell (§7). Laid out by `hud::corners` with the block (`Corners::prompt`),
-  so the painter and the budgets read one rect. A couch's second seat's
-  line stands under its own block.
-- **Off the screen** (`indicators.rs`): `ArrowKind::Zone { kind: Rod, left
-  }` for every rod zone whose circle is off this screen and not owned by a
-  seat on this screen (`Scene::zones`, from the zones, so a replica draws
-  them): a notched arrowhead in `LASER_RED[2]`, rimmed near-black, the
-  whole seconds left on its plate (`label_font`), blinking at 2 Hz and at
-  6 Hz in the last second; never merged, never left out past
-  `indicator_max_arrows` (the tells', teammates', frogs', volcanoes' and
-  drones' rule). A couch shares them (`shared_arrows`). A seat's frog under
-  an enemy's call is the case it is there for. An enemy holding a reticle
-  off the screen gets the wind-up's arrow (`ArrowKind::Windup`) in
-  `HUD_ROD_COLOR`.
-- **The minimap** (`minimap.rs`): a crater cell is `Class::Crater` (a dark
-  earth step) while dry and `Class::Shallow` once filled; `RoundKey` counts
-  the craters, so a new one patches its texels (`RoundMinimap::sync`). A
-  rod zone is a mark: a ring of `LASER_RED[2]` texels round its cell,
-  blinking at 2 Hz (the volcano's pulse frame).
-- **The dev overlay** (`Overlays::engage`): a zone's danger disc, a herded
-  ring's centre and radius.
+  (`#FF3228`, the designator's red - the reticle's colour on the field, the
+  crate's light) and the glyph; while a reticle is held the rail's charge
+  gauge stands in the count's place (filling over the settle, white once a
+  release calls); offline, the EMP's `WPN OFFLINE`. The ring's ammo pips are
+  the calls left against `full_load` (2).
+- **The call-in prompt** (`PlayChrome::prompt`, `hud::rod_prompt`): while
+  this window's seat - a couch's first that holds one - holds a reticle,
+  the first line under the left cluster, at `HUD_STATUS_TEXT_SIZE`, in
+  `HUD_ROD_COLOR`: `hud-rod-aim` while the reticle is anywhere else,
+  `hud-rod-cancel` while it is on the seat's own cell (§7).
+  `CornerShape::lines` counts it, so the lines' box and the keep-outs read
+  one rect; `every_language_fits_every_budget` holds both lines inside the
+  vitals block's plate less 8.
+- **Off the screen** (`indicators.rs`): `ArrowKind::Zone { left }` for
+  every rod's call whose circle is off this screen and not this seat's own
+  (`Scene::zones`, from the zones, so a replica draws them, the countdown
+  read on the zones' clock): a notched arrowhead in `LASER_RED[2]`, rimmed
+  near-black, blinking at `indicator_gate_blink_hz` and twice that in the
+  last second; never merged, never left out past `indicator_max_arrows`
+  (the tells', teammates', frogs', volcanoes' and drones' rule). An enemy
+  holding a reticle off the screen gets the wind-up's arrow
+  (`ArrowKind::Windup`, from the charge) in `HUD_ROD_COLOR`.
+- **The minimap** (`minimap.rs`): a crater cell is `Class::Crater` (RUST_DK)
+  while dry and the ford's colour once filled; `RoundMinimap::sync` bakes
+  the image again when the count of craters or of filled cells changes. A
+  call is a mark: a frame of `LASER_RED[2]` round its cell, blinking at
+  `indicator_pulse_hz` and twice that in its last second.
+- **No dev overlay** of its own: the zones are in `snapshot` (below), and
+  the dangers in the engage overlay's report already.
 
 ## 6. Tuning
 
@@ -1148,7 +1183,7 @@ Constants (geometry and policy, not feel): in `rod.rs` `ROD_BEAM_HZ` (20),
 `ROD_FILL_SECONDS` (1), the reticle's eight arcs and 1.5 rad/s, the dust
 rings' 230 and 180 px/s, the countdown's place (38, -32); in `zone.rs` the
 provisional id band; `SEAT_MOTION_SECONDS` (1) and `SEAT_LEAD_MIN_SPEED` (4)
-beside `SeatMotion`.
+beside `SeatStill`.
 
 ## 7. Text
 
@@ -1436,7 +1471,7 @@ and scenario tests on a whole round):
   `CLUSTER_RADIUS_PX`.
 - `a_disabled_enemy_under_a_call_dies` (the EMP).
 - `the_hammer_shoves_a_seat_into_a_call`.
-- `the_seat_motion_record_counts_still_and_averages_speed` (and resets on
+- `the_seat_still_record_counts_still_and_averages_speed` (and resets on
   a wreck).
 
 Shared path and presentation:
