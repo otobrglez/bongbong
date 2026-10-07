@@ -375,14 +375,16 @@ pub struct RailPress {
 
 /// An FPV drone the client launched on its press (docs/fpv-swarm.md
 /// "Wire"): the halo slot it leaves, that slot's ground point and outward
-/// bearing from the sandbox's pose on the press tick. Its climb is the
-/// same whatever it goes after (`fpv::launch_path`), so the round draws it
-/// at once and hands it to the room's copy a moment into the climb.
+/// bearing from the sandbox's pose on the press tick, and that tick - the
+/// input tick the room's `Fired` for it names. Its climb is the same
+/// whatever it goes after (`fpv::launch_path`), so the round draws it at
+/// once and hands it to the room's copy a moment into the climb.
 #[derive(Clone, Copy, Debug)]
 pub struct DronePress {
     pub slot: u8,
     pub origin: Position,
     pub out: crate::math::Vec2,
+    pub tick: u32,
 }
 
 /// A charge of this client's own that fizzled or vented, at the module's
@@ -864,7 +866,7 @@ impl Predictor {
                     self.cooldown = t.fpv_reload_seconds;
                     self.owed_presses.push_back((WeaponKind::FpvSwarm, tick, 0.0));
                     if drawn {
-                        self.shows.push(PressShow::Drone(DronePress { slot, origin, out }));
+                        self.shows.push(PressShow::Drone(DronePress { slot, origin, out, tick }));
                         self.drawn_presses.push_back((WeaponKind::FpvSwarm, tick, 0.0));
                         self.report.shots_drawn += 1;
                     }
@@ -1303,15 +1305,15 @@ impl Predictor {
             .map(|l| (PROVISIONAL_ID_BASE + (l.id & PROVISIONAL_ID_MASK), l.shot))
     }
 
-    /// How long a press may wait for the room's `Fired` on this link: the
-    /// round trip plus the picture's delay plus a margin, never less than
-    /// `PROVISIONAL_SECONDS` - a shot in flight is not taken away because
-    /// the link is slow, only because the room did not fire it.
     /// How long a press waits for its `Fired` (`set_refusal_after`).
     pub fn refusal_after(&self) -> f32 {
         self.refusal_after
     }
 
+    /// How long a press may wait for the room's `Fired` on this link: the
+    /// round trip plus the picture's delay plus a margin, never less than
+    /// `PROVISIONAL_SECONDS` - a shot in flight is not taken away because
+    /// the link is slow, only because the room did not fire it.
     pub fn set_refusal_after(&mut self, seconds: f32) {
         self.refusal_after = seconds.max(PROVISIONAL_SECONDS);
     }
