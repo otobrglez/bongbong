@@ -884,6 +884,10 @@ positions, never rolled.
   - **the stop**: a spark star of `WHITE` and `BLUE_PALE` thrown back along
     the line and a `RAIL_LIGHT` glow fading over 0.3 s; nothing at a leg's
     end in a portal (the portal's own flare, `ShotTeleported`, marks it);
+  - **the muzzle**: on the first leg the game's own muzzle flash at the
+    bore (`burst::muzzle`, white-hot to red down the fire ramp - a
+    railgun's muzzle burns - with its heat-haze ripple and its warm pool
+    of light);
   - **the ripple**: `Shockwave::scaled(muzzle, gauss_shock)` (0.4 of a tank
     dying) through `shockwave.rs` - the bend and the shake, none under
     reduced motion;
@@ -1330,16 +1334,33 @@ window at its seed, the AI tiers its tank ran over the 180 frames before):
   0x3eb); a tank at the sight box's edge charged and vented for 60 s
   (never-arrived, frontier 0x3eb); a tank charging from 350 px, past the
   attack range the probe measures arrival by (never-arrived, maze 0x3f1).
-- **What remains**: the never-arriveds are hedge-maze 0x3eb (a seat in the
-  north-west corner no enemy is alerted to; three tanks fleeing from ram
-  damage or patrolling) and portals 0x3ef at night (a chase round the
-  portal) - the same tanks never arrive with every enemy on the EMP
-  instead, so they are the armed pack's, not the rail's. Of the spins, 1 to
-  4 a run have a lane's dodge in their window (4 of 27 armed, 3 of 31 at
-  night, 2 of 26 with the commander, 2 of 16 in the mix, 1 of 31 with the
-  crate): a tank stepping out of an ally's charging lane walks round a
-  hedge or a tank to its exit and comes back; the rest are the tree's
-  tiers - patrol, chase, attack, guard and the seeks.
+- **What remains**, read round by round:
+  - hedge-maze 0x3eb (armed, fields): ENEMY#0, #3 and #6 never arrive (a
+    seat in the north-west corner no enemy is alerted to; tanks fleeing
+    from ram damage or patrolling). With the original specials alone
+    (`enemy_special_weapon_chance` 1, no share), with every enemy on the
+    hammer and with every enemy on the EMP the same three never arrive,
+    #0 and #6 ending on the same pixel in every one: the armed pack's, not
+    the rail's.
+  - portals 0x3ef at night (armed, fixtures): ENEMY#1 never fires its
+    rail; it spends the last twenty seconds in `chase` under a hit alert,
+    running north and south along the iron column toward a seat it can
+    reach only through the portal. With every enemy on the EMP the same
+    tank is stuck the same way; with the original specials it arrives. The
+    chase tier's, set off by an ally hurting it.
+  - Of the spins, 1 to 4 a run have a lane's dodge in their window (4 of
+    27 armed, 3 of 31 at night, 2 of 26 with the commander, 2 of 16 in the
+    mix, 1 of 31 with the crate); the rest are the tree's tiers - patrol,
+    chase, attack, guard and the seeks. Two read on the window: hedge-maze
+    0x3ef ENEMY#3 grazed an ally's lane by 0.3 px of its 29.2 px half
+    width - its hull, 29 px off the line and facing along it, out of the
+    slug's reach on any chassis - in a corridor whose hedge's margin holds every exit on
+    its side, so the only ones it could walk to were across the lane or
+    round the hedge, and that walk was the spin; pockets 0x3ec ENEMY#4's
+    exit was straight out, but it waited behind the charging ally standing
+    its ground, stepped out and turned back to the attack. Choosing the
+    cheapest walk among the exits would change neither; a lane measured by
+    each tank's own reach would change the first ("Not in this PR").
 - **Clustering and pile-up** rise with the crate (29 and 10 against 12
   and 8 on the fields) and with the armed pack (23 and 12): a rail tank
   with a lane stands its ground to charge and to wait out its interval, so
@@ -1522,6 +1543,15 @@ window at its seed, the AI tiers its tank ran over the 180 frames before):
 ### Not in this PR
 
 - Placing the rail in the shipped levels - level design, a follow-up.
+- A lane measured by each tank's own reach. Its half width is the widest
+  chassis's movement box (25.2 px) and the slug's 4 for every tank, where
+  the pierce test grows a tank's hull box at its facing by 4 and, for a
+  seat's slug, by the player's 8 px pad: a scout facing along an ally's
+  lane is out of reach 21 px off the line, a leviathan facing across a
+  seat's lane is in reach 40 px off it. Measured per tank, the grazing
+  dodges (§11) would stop and the near misses would be stepped out of, at
+  the cost of a danger that changes with the tank's facing - to be tuned
+  against the armed sweeps.
 - An aim line for a charging seat, and a warning to a teammate standing in
   its lane - HUD design of their own; the glow and friendly fire are the
   warning for now.
