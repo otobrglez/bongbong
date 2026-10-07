@@ -742,9 +742,10 @@ impl Game {
     /// standing enemy tower's reach, lined up for another live enemy - on
     /// its row or column within `enemy_fire_align_px`, inside its attack
     /// range, its sight clear and standing inside the resting point's sight
-    /// box - or in another enemy's charging rail's lane, when it does not
-    /// stand so already, since a slide across a lane leaves the seat in
-    /// none and a seat already in one is not shoved into it.
+    /// box - or in another enemy's charging rail's lane, or in a rod's call's
+    /// circle, when it does not stand so already, since a slide across a
+    /// lane leaves the seat in none and a seat already in one is not shoved
+    /// into it.
     #[allow(clippy::too_many_arguments)]
     fn lands_in_trouble(
         &self,
@@ -800,7 +801,13 @@ impl Game {
         // A charging enemy rail's lane, through cover and whatever the range
         // (docs/gauss-rail.md).
         let in_rail = |p: Position| rails.iter().any(|l| l.slot != shooter && l.depth(p) > 0.0);
-        (in_reach(rest) && !in_reach(seat.pos)) || (in_lane(rest) && !in_lane(seat.pos)) || (in_rail(rest) && !in_rail(seat.pos))
+        // A rod's call standing (docs/rod-from-god.md): its circle, which
+        // crushes whoever is in it when it lands.
+        let in_call = |p: Position| self.zones.iter().any(|z| z.rod().is_some() && p.distance_to(z.centre) <= z.radius(t));
+        (in_reach(rest) && !in_reach(seat.pos))
+            || (in_lane(rest) && !in_lane(seat.pos))
+            || (in_rail(rest) && !in_rail(seat.pos))
+            || (in_call(rest) && !in_call(seat.pos))
     }
 
     /// Put a crate of `kind` down at the map cell nearest `at`, in its air

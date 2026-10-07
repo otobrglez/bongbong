@@ -753,6 +753,11 @@ pub struct Ai {
     /// (`SpecialUse::Fire`'s `why`, "hold", "approach"), `None` when it ran
     /// none. Inspection only, like `last_action`.
     special_why: Option<&'static str>,
+    /// Where a rod tank is moving to in its stand-off (`rod_rule`), held
+    /// until it gets there so a band shared with a moving ally is not a
+    /// choice made again every tick; dropped the tick after it stands off
+    /// no more.
+    rod_spot: Option<Position>,
     /// Its brain is off (an EMP, docs/emp-burst.md): `enemy_phase` coasts it
     /// and does not call `think`; the first tick it is back, `reboot`.
     pub(crate) down: bool,
@@ -928,6 +933,7 @@ impl Default for Ai {
             grudge: None,
             escapes: 0,
             special_why: None,
+            rod_spot: None,
             target_player: 0,
             field: FieldMind::default(),
             down: false,
@@ -1116,6 +1122,9 @@ impl Ai {
             breach.timer -= dt;
         }
 
+        if self.special_why != Some("stand-off") {
+            self.rod_spot = None;
+        }
         self.special_why = None;
         self.clearing = None;
         self.kept_out = false;
@@ -3201,13 +3210,48 @@ fn rod_rule(b: &Brain, sense: &RodSense) -> Option<SpecialUse> {
     let seat = sense.keep_from.filter(|_| b.me.damage < tuning().enemy_flee_damage)?;
     let reach = rod_stand_off_px();
     let d = b.me.position.distance_to(seat);
+    // On its way to a spot it chose: on until it is there, or a tank stands
+    // in its way.
+    let me = b.me.position;
+    if let Some(to) = b.ai.rod_spot.filter(|&q| {
+        me.distance_to(q) > OBSTACLE_GRID_SIZE * 0.5 && q.distance_to(seat) >= reach && b.can_reach(q) && !b.in_danger(q) && !crowded_ahead(me, Dir::toward(me, q), b.movers, b.my_index)
+    }) {
+        return Some(SpecialUse::Approach { to, why: "stand-off" });
+    }
     if d < reach {
         return rod_stand_off(b, seat, reach + OBSTACLE_GRID_SIZE).map(|to| SpecialUse::Approach { to, why: "stand-off" });
     }
     if d <= reach + 2.0 * OBSTACLE_GRID_SIZE && !b.in_danger(b.me.position) {
+        // A spot an ally crowds is no place to stand: one driving to its
+        // own slot would grind against a hull that never gives way. It
+        // moves round the seat to a free spot of the band instead.
+        if rod_crowded(b, b.me.position)
+            && let Some(to) = rod_free_spot(b, seat, reach + OBSTACLE_GRID_SIZE)
+        {
+            return Some(SpecialUse::Approach { to, why: "stand-off" });
+        }
         return Some(SpecialUse::Hold { face: Dir::toward(b.me.position, seat), why: "stand-off" });
     }
     None
+}
+
+/// Whether another tank stands within `enemy_separation_px` of a hull at
+/// `p`, hull to hull.
+fn rod_crowded(b: &Brain, p: Position) -> bool {
+    let gap = tuning().enemy_separation_px;
+    let Some(me) = b.movers.get(b.my_index) else { return false };
+    b.movers.iter().enumerate().any(|(i, other)| i != b.my_index && p.distance_to(other.position) - me.radius - other.radius <= gap)
+}
+
+/// The nearest of the eight spots `reach` out round `seat` - its row, its
+/// column and the diagonals - that this tank can make for (`rod_spot_open`).
+fn rod_free_spot(b: &Brain, seat: Position, reach: f32) -> Option<Position> {
+    let d = std::f32::consts::FRAC_1_SQRT_2;
+    let dirs = [(0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (d, -d), (d, d), (-d, d), (-d, -d)];
+    let me = b.me.position;
+    let mut spots: Vec<Position> = dirs.iter().map(|&(x, y)| seat + Vec2::new(x, y) * reach).collect();
+    spots.sort_by(|a, c| me.distance_to(*a).total_cmp(&me.distance_to(*c)));
+    spots.into_iter().find(|&q| rod_spot_open(b, q))
 }
 
 /// How far a rod tank keeps from the seat it knows of: a call on that
@@ -3220,8 +3264,8 @@ fn rod_stand_off_px() -> f32 {
 
 /// Where a rod tank too near `seat` backs off to: `reach` out from the
 /// seat along the line through the tank, else on the seat's row or column
-/// - the nearest of those it can drive to, out of every danger. `None`
-/// where it can reach none.
+/// - the nearest of those it can make for (`rod_spot_open`). `None` where
+/// it can make for none.
 fn rod_stand_off(b: &Brain, seat: Position, reach: f32) -> Option<Position> {
     let me = b.me.position;
     let away = me - seat;
@@ -3233,7 +3277,16 @@ fn rod_stand_off(b: &Brain, seat: Position, reach: f32) -> Option<Position> {
     let mut axes: Vec<Position> = Dir::ALL.iter().map(|d| seat + d.vec() * reach).collect();
     axes.sort_by(|a, c| me.distance_to(*a).total_cmp(&me.distance_to(*c)));
     spots.extend(axes);
-    spots.into_iter().find(|&q| b.can_reach(q) && !b.in_danger(q))
+    spots.into_iter().find(|&q| rod_spot_open(b, q))
+}
+
+/// Whether a rod tank can make for `q`: on the field and joined to where it
+/// stands, out of every danger, no tank crowding it there and none in its
+/// way as it sets off - two backing off past each other on one line would
+/// only push.
+fn rod_spot_open(b: &Brain, q: Position) -> bool {
+    let me = b.me.position;
+    b.can_reach(q) && !b.in_danger(q) && !rod_crowded(b, q) && !crowded_ahead(me, Dir::toward(me, q), b.movers, b.my_index)
 }
 
 /// A rod tank's rule while its reticle is up (`windup_rule`): standing
@@ -3642,6 +3695,7 @@ fn act_special(b: &mut Brain) -> Status {
             b.intent.face = Some(face);
             b.ai.commit(face);
             b.ai.special_why = Some(why);
+            b.ai.rod_spot = None;
         }
         SpecialUse::Clear { radius } => {
             b.ai.special_why = Some("clear");
@@ -3664,6 +3718,9 @@ fn act_special(b: &mut Brain) -> Status {
         SpecialUse::Approach { to, why } => {
             b.intent.move_dir = Some(b.steer(to));
             b.ai.special_why = Some(why);
+            if why == "stand-off" {
+                b.ai.rod_spot = Some(to);
+            }
             if why == "to cover" || why == "back off" {
                 b.ai.place_waited += b.dt;
             }
