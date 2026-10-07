@@ -198,6 +198,7 @@ DIM_LENS = (0x81, 0x2F, 0x27)     # RED_DK: an unlit laser lens
 DIM_PLASMA = (0x03, 0x8A, 0xAB)   # BLUE_DK: plasma coils at rest
 PILOT = (0x27, 0xD8, 0xC5)        # BLUE_BRIGHT: the flamer's pilot flame
 DIM_RAIL = (0x0E, 0x8B, 0x96)     # BLUE_DARKEST: a gauss rail's charge cells at rest
+DIM_WELL = STONE_MD               # a gravity well's lamps at rest
 
 
 @LINE.module_fn('minigun')
@@ -470,6 +471,38 @@ def rod(d, b, st, hp):
         b.lamp({(col, y) for y in range(hy - 1, hy + 2)}, 'warn', z=5.6, name='rg_track')
     elif st == 3:
         b.lamp(array | lens, 'white', z=5.7, name='rg_call')
+
+@LINE.module_fn('well')
+def well(d, b, st, hp):
+    """A gravity well's singularity projector on the roof
+    (docs/gravity-well.md): a squat gunmetal gimbal ring cradling a dark
+    sphere, a small lamp at either side of the ring and a steel collar
+    forward. The orb itself leaves the gun line and is drawn there, not
+    here. `st` 0 armed, the lamps dim and the sphere seated; 1 a launch, the
+    cradle empty and its ring lit white; 2 an anchor, both lamps white and
+    the sphere back; 3 offline, the ring scorched and no lamps. It shares
+    the missiles' hardpoint unless the design gives it its own - a tank
+    carries one special weapon at a time."""
+    hx, hy = hp.get('well', hp['missiles'])
+    ring = chamfer(hx - 4, hy - 3, hx + 4, hy + 3, tl=2, tr=2, br=2, bl=2)
+    sphere = chamfer(hx - 2, hy - 2, hx + 2, hy + 2, tl=1, tr=1, br=1, bl=1)
+    gimbal = ring - sphere
+    b.part(gimbal, RUST if st == 3 else GUNMETAL, 'map', 5.2, step=0,
+           stepmap=rim_shade(gimbal, hx + 0.5, hy + 0.5, lit=1, shade=-1), name='gw_ring')
+    b.part(rect(hx, hy - 5, hx, hy - 4), STEEL, 'flat', 5.2, step=1, name='gw_collar')
+    if st == 1:
+        # The cradle empty: its floor, a step darker than the sphere.
+        b.part(sphere, DARK, 'flat', 5.3, step=-1, name='gw_cradle')
+        b.lamp(gimbal, 'white', z=5.7, name='gw_launch')
+        return
+    b.part(sphere, DARK, 'flat', 5.4, step=-1, name='gw_sphere')
+    b.part({(hx - 1, hy - 1)}, STEEL, 'flat', 5.5, step=-1, name='gw_glint')
+    lamps = {(hx - 4, hy), (hx + 4, hy)}
+    if st == 0:
+        b.lamp(lamps, DIM_WELL, z=5.7, name='gw_lamps')
+    elif st == 2:
+        b.lamp(lamps, 'white', z=5.7, name='gw_anchor')
+
 
 # ---------------------------------------------------------------------------
 # Scout - fast recon. Silhouette: an arrowhead nose ahead of short narrow

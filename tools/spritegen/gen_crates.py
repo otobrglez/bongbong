@@ -13,19 +13,19 @@ are the Puny palette; the symbols are the loud, off-palette inks of
 sheets alone - the pickups' old exemption, kept for the one part that has
 to be spotted at a glance.
 
-crates_sheet.png, 7 columns x 18 rows of 40 px:
+crates_sheet.png, 7 columns x 19 rows of 40 px:
 
     row = PickupKind in declaration order (health, ammo, laser, minigun,
           plasma, missiles, speedup, shield, flamethrower, frog_health,
           tower_pack, heat_shield, grenades, sonic_hammer, emp_burst,
-          gauss_rail, fpv_swarm, rod_from_god)
+          gauss_rail, fpv_swarm, rod_from_god, gravity_well)
     col 0    the crate
     col 1-4  a glint sweeping the lid from top left to bottom right, a band
              of design pixels one ramp step lighter (the idle)
     col 5    damaged: a split plank, a cracked batten, paint chipped
     col 6    charred: what a fire leaves before the crate breaks
 
-pickup_glyphs.png, 1 column x 18 rows of 24 px, the same row order: the
+pickup_glyphs.png, 1 column x 19 rows of 24 px, the same row order: the
 10 x 10 symbol on its own - its ink, lit along the top, shaded along the bottom,
 with the outline - for what rises out of an opened crate, a spilled one,
 the HUD's weapon queue and the builder's brushes.
@@ -54,7 +54,7 @@ TOKEN = SIDE + 2    # design pixels per symbol cell side (the symbol and its out
 # PickupKind's declaration order: the sheets' row order.
 KINDS = ['health', 'ammo', 'laser', 'minigun', 'plasma', 'missiles', 'speedup', 'shield', 'flamethrower',
          'frog_health', 'tower_pack', 'heat_shield', 'grenades', 'sonic_hammer', 'emp_burst', 'gauss_rail',
-         'fpv_swarm', 'rod_from_god']
+         'fpv_swarm', 'rod_from_god', 'gravity_well']
 
 # The symbols, 10 x 10 design pixels each.
 GLYPHS = {
@@ -275,6 +275,20 @@ GLYPHS = {
         'XXXXXXX...',
         '..........',
     ],
+    # A black hole: its void (`v`, in the ink's shade) ringed (`X`), crossed
+    # by its accretion disc (`o`) in the ink's light.
+    'gravity_well': [
+        '...XXXX...',
+        '.XXvvvvXX.',
+        '.XvvvvvvX.',
+        'XvvvvvvvvX',
+        'oooooooooo',
+        'XvvvvvvvvX',
+        '.XvvvvvvX.',
+        '.XXvvvvXX.',
+        '...XXXX...',
+        '..........',
+    ],
     'heat_shield': [
         'XXXXXXXXXX',
         'XXXXXXXXXX',
@@ -360,7 +374,13 @@ def h32(x, y, s):
 
 
 def on(kind, x, y):
-    return 0 <= x < SIDE and 0 <= y < SIDE and GLYPHS[kind][y][x] in 'Xo'
+    return 0 <= x < SIDE and 0 <= y < SIDE and GLYPHS[kind][y][x] in 'Xov'
+
+
+def void(kind, x, y):
+    """A glyph's void pixel (`v`): painted in its ink's shade, flat - the
+    gravity well's black hole."""
+    return 0 <= x < SIDE and 0 <= y < SIDE and GLYPHS[kind][y][x] == 'v'
 
 
 def lamp(kind, x, y):
@@ -412,6 +432,8 @@ def crate(kind, row):
                 px[(X, Y)] = rainbow(x, y)
             elif kind == 'heat_shield':
                 px[(X, Y)] = ink(kind)[1] if y < HEAT_TOP else ink(kind)[0]
+            elif void(kind, x, y):
+                px[(X, Y)] = ink(kind)[0]
             elif lamp(kind, x, y):
                 px[(X, Y)] = ink(kind)[2]
             else:
@@ -474,6 +496,8 @@ def token(kind):
                 elif kind == 'heat_shield':
                     # Lit red over shaded basalt, the seam between in light.
                     c = ink(kind)[2] if y in (0, HEAT_TOP - 1) else ink(kind)[1] if y < HEAT_TOP else ink(kind)[0]
+                elif void(kind, x, y):
+                    c = ink(kind)[0]
                 elif lamp(kind, x, y):
                     c = ink(kind)[2] if kind in LAMP_TONE else pp.WHITE
                 elif not on(kind, x, y - 1):
