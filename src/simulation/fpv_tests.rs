@@ -789,3 +789,158 @@ fn an_offline_tesla_arcs_no_drone() {
     let events = launch(&mut game, 300);
     assert!(downed(&events).is_empty(), "{events:?}");
 }
+
+// --- the earlier weapons on drones ----------------------------------------
+
+/// A drone of `owner`'s cruising at `at`, heading east along its row from
+/// a standstill: its id.
+fn cruising(game: &mut Game, owner: Owner, at: Position) -> u32 {
+    let mut d = Drone::launch(at, Vec2::new(1.0, 0.0), 0, owner, DroneLock::None, Position::new(W - 16.0, at.y));
+    d.stage = DroneStage::Cruise;
+    d.height = Tuning::DEFAULT.fpv_cruise_height;
+    d.speed = 0.0;
+    d.id = game.take_shot_id();
+    let id = d.id;
+    game.world.spawn((d,));
+    id
+}
+
+/// What downed which drone in `events`, by id.
+fn downed_by(events: &[Event]) -> Vec<(u32, &'static str)> {
+    events
+        .iter()
+        .filter_map(|e| match *e {
+            Event::DroneDowned { id, by, .. } => Some((id, by)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The EMP's ring is blind: every drone its front reaches falls, the
+/// seat's own among them; one past its reach flies on.
+#[test]
+fn the_emp_ring_downs_every_drone_in_reach_whichever_side() {
+    let mut game = round("");
+    let seat = game.player().unwrap();
+    with_tank_mut(&game.world, seat, |t| {
+        t.disarm();
+        t.emp_charges = Tuning::DEFAULT.emp_charges_per_pickup;
+    });
+    let own = cruising(&mut game, Owner::Player(0), Position::new(SEAT.x + 80.0, SEAT.y));
+    let theirs = cruising(&mut game, Owner::Enemy(9), Position::new(SEAT.x, SEAT.y + 90.0));
+    let far = cruising(&mut game, Owner::Enemy(9), Position::new(SEAT.x + 400.0, SEAT.y));
+    let events = launch(&mut game, 60);
+    let downed = downed_by(&events);
+    assert!(downed.contains(&(own, "emp")) && downed.contains(&(theirs, "emp")), "{downed:?}");
+    assert!(!downed.iter().any(|&(id, _)| id == far), "past the ring: {downed:?}");
+}
+
+/// The sonic hammer's wave knocks down the other side's drones in its cone
+/// and leaves its own side's - and anything out of the cone - flying.
+#[test]
+fn the_sonic_wave_downs_only_the_other_sides_drones_in_its_cone() {
+    let mut game = round("");
+    let seat = game.player().unwrap();
+    with_tank_mut(&game.world, seat, |t| {
+        t.disarm();
+        t.sonic_ammo = Tuning::DEFAULT.sonic_ammo_per_pickup;
+    });
+    let own = cruising(&mut game, Owner::Player(0), Position::new(SEAT.x + 100.0, SEAT.y));
+    let theirs = cruising(&mut game, Owner::Enemy(9), Position::new(SEAT.x + 100.0, SEAT.y + 16.0));
+    let behind = cruising(&mut game, Owner::Enemy(9), Position::new(SEAT.x - 80.0, SEAT.y + 160.0));
+    let events = launch(&mut game, 60);
+    let downed = downed_by(&events);
+    assert!(downed.contains(&(theirs, "sonic")), "the other side's, in the cone: {downed:?}");
+    assert!(!downed.iter().any(|&(id, _)| id == own), "its own side's rides it out: {downed:?}");
+    assert!(!downed.iter().any(|&(id, _)| id == behind), "out of the cone: {downed:?}");
+}
+
+/// The gauss rail's slug pierces every drone in its lane, whoever's, and
+/// keeps its damage past them: the second tank down the lane takes what
+/// is left after one tank, as with no drone in the way.
+#[test]
+fn the_rail_slug_pierces_every_drone_in_its_lane_and_keeps_its_damage() {
+    let mut game = round("");
+    let seat = game.player().unwrap();
+    with_tank_mut(&game.world, seat, |t| {
+        t.disarm();
+        t.gauss_slugs = Tuning::DEFAULT.gauss_slugs_per_pickup;
+    });
+    let a = parked(&mut game, Position::new(560.0, SEAT.y));
+    let b = parked(&mut game, Position::new(720.0, SEAT.y));
+    let full = crate::tank::ticks_of(Tuning::DEFAULT.gauss_charge_seconds);
+    for _ in 0..full {
+        step(&mut game, true);
+    }
+    // Into the lane only now, so they stand in it when the slug flies.
+    let own = cruising(&mut game, Owner::Player(0), Position::new(SEAT.x + 160.0, SEAT.y));
+    let theirs = cruising(&mut game, Owner::Enemy(9), Position::new(SEAT.x + 260.0, SEAT.y));
+    let events = step(&mut game, false);
+    let downed = downed_by(&events);
+    assert!(downed.contains(&(own, "rail")) && downed.contains(&(theirs, "rail")), "{downed:?}");
+    let drones: usize = events
+        .iter()
+        .map(|e| match e {
+            Event::RailSlug { pierced, .. } => pierced.iter().filter(|p| p.2 == crate::gauss::Pierced::Drone).count(),
+            _ => 0,
+        })
+        .sum();
+    assert_eq!(drones, 2, "both in the slug's pierce list");
+    let t = Tuning::DEFAULT;
+    assert!(tank(&game, a, |t| t.damage) > 0.0, "the first tank is hit");
+    let second = (t.gauss_damage * t.gauss_pierce_keep).min(100.0);
+    let got = tank(&game, b, |t| t.damage);
+    assert!((got - second).abs() < 0.5, "the second takes one tank's keep, none for the drones: {got} against {second}");
+}
+
+/// The other side's towers engage a seat's drone only from inside that
+/// seat's sight box: a tesla and a gun tower past the box leave a drone of
+/// the seat's flying beside them alone; with the seat moved up so they
+/// stand in its box, both go for it.
+#[test]
+fn a_tower_engages_a_seats_drone_only_from_inside_the_seats_sight_box() {
+    let towers = "cells.\"22,4\" = { kind = \"tesla\", side = \"enemy\" }\ncells.\"22,9\" = { kind = \"gun_tower\", side = \"enemy\" }\n";
+    let downs = |seat_at: Position| {
+        let mut game = round(towers);
+        let seat = game.player().unwrap();
+        game.place_tank(seat, seat_at, Some(0.0)).expect("placed");
+        with_tank_mut(&game.world, seat, |t| t.disarm());
+        // Beside the tesla, in the gun tower's reach, heading off east.
+        let drone = cruising(&mut game, Owner::Player(0), Position::new(cell(22, 6).x, cell(22, 6).y));
+        let mut seen = Vec::new();
+        for _ in 0..90 {
+            seen.extend(step(&mut game, false));
+        }
+        downed_by(&seen).into_iter().filter(|&(id, _)| id == drone).count()
+    };
+    let t = Tuning::DEFAULT;
+    // 22 cells east of the seat's column: twelve and a half past its box.
+    assert!(cell(22, 6).x - SEAT.x > t.sight_box_half_cols * crate::OBSTACLE_GRID_SIZE + 64.0);
+    assert_eq!(downs(SEAT), 0, "from outside the seat's box neither tower engages");
+    assert_eq!(downs(cell(14, 6)), 1, "with the towers in its box they bring it down");
+}
+
+/// An enemy turns its minigun on a seat's drone only from inside that
+/// seat's sight box: the seat launches at it and backs off past the box's
+/// edge, and the enemy holds its fire at the drone coming at it.
+#[test]
+fn an_enemy_holds_its_flak_outside_the_seats_sight_box() {
+    let mut game = round("");
+    let enemy = parked(&mut game, cell(13, 6));
+    with_tank_mut(&game.world, enemy, |t| t.minigun_ammo = 60);
+    let slot = slot_of(&game, enemy);
+    let first = step(&mut game, true);
+    assert_eq!(launched(&first)[0].1, Some(slot), "locked from inside the box");
+    let seat = game.player().unwrap();
+    game.place_tank(seat, cell(1, 6), Some(90.0)).expect("moved back");
+    assert!(cell(13, 6).x - cell(1, 6).x > Tuning::DEFAULT.sight_box_half_cols * crate::OBSTACLE_GRID_SIZE, "now past its box");
+    let mut seen = Vec::new();
+    for _ in 0..240 {
+        seen.extend(step(&mut game, false));
+    }
+    assert!(
+        !seen.iter().any(|e| matches!(e, Event::Fired { slot: s, weapon: "minigun" } if *s == slot)),
+        "no flak from outside the box"
+    );
+    assert!(downed(&seen).is_empty(), "{:?}", downed(&seen));
+}

@@ -1226,6 +1226,11 @@ Protocol 18 (from the rail's 17), once in the PR.
   `an_offline_tesla_arcs_no_drone`, `a_gun_tower_brings_a_drone_down`,
   `a_seats_own_towers_leave_its_drones_alone`, `strike_air_downs_a_drone_once`,
   `a_seats_drawn_bullet_stops_at_an_enemy_drone_not_its_own`;
+  `a_tower_engages_a_seats_drone_only_from_inside_the_seats_sight_box`,
+  `an_enemy_holds_its_flak_outside_the_seats_sight_box`;
+  the earlier weapons: `the_emp_ring_downs_every_drone_in_reach_whichever_side`,
+  `the_sonic_wave_downs_only_the_other_sides_drones_in_its_cone`,
+  `the_rail_slug_pierces_every_drone_in_its_lane_and_keeps_its_damage`;
   lag compensation, in `lagcomp_tests`:
   `a_seats_bullet_meets_an_enemy_drone_where_its_client_drew_it` (a drone
   that left the line of fire is met where the client drew it six ticks
