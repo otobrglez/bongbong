@@ -77,6 +77,8 @@ pub const HUD_GRENADES_COLOR: Color = Color::new(0xD6, 0x56, 0xF5, 255);
 pub const HUD_SONIC_COLOR: Color = Color::new(0x46, 0xC3, 0xF2, 255);
 /// The EMP burst's accent: the crate's cobalt ink.
 pub const HUD_EMP_COLOR: Color = Color::new(0x4F, 0x6B, 0xFF, 255);
+/// The gauss rail's accent: its crate ink's base, hot magenta.
+pub const HUD_GAUSS_COLOR: Color = Color::new(0xFF, 0x3D, 0xD8, 255);
 
 /// The builder bar's fill - the same `#151515` the web page is set in, so
 /// the bar and the page read as one surface around the field - and the
@@ -369,6 +371,7 @@ pub fn weapon_color(weapon: ActiveWeapon) -> Color {
         ActiveWeapon::Grenades => HUD_GRENADES_COLOR,
         ActiveWeapon::SonicHammer => HUD_SONIC_COLOR,
         ActiveWeapon::Emp => HUD_EMP_COLOR,
+        ActiveWeapon::GaussRail => HUD_GAUSS_COLOR,
         ActiveWeapon::Shell => TEXT,
     }
 }
@@ -386,6 +389,7 @@ pub fn weapon_pickup(weapon: ActiveWeapon) -> Option<crate::pickup::PickupKind> 
         ActiveWeapon::Grenades => Some(PickupKind::Grenades),
         ActiveWeapon::SonicHammer => Some(PickupKind::SonicHammer),
         ActiveWeapon::Emp => Some(PickupKind::Emp),
+        ActiveWeapon::GaussRail => Some(PickupKind::GaussRail),
         ActiveWeapon::Shell => None,
     }
 }

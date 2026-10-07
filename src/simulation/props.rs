@@ -57,6 +57,11 @@ pub(super) enum DamageCause {
     /// Sustained flame exposure (`flame.rs`): a sandbag or fence that
     /// took its full heat collapses outright, no roll.
     Fire,
+    /// A gauss rail's slug going through, along `dir` (docs/gauss-rail.md):
+    /// every tile but a tower dies outright - its whole health through
+    /// `Obstacle::damage`, so a flammable plank or tree is left burning -
+    /// with no fence or pass-over roll; a tower takes the slug's damage.
+    Pierce { dir: Vec2 },
 }
 
 /// A barrel detonation waiting for `explosions` to resolve it this frame.
@@ -180,10 +185,14 @@ impl Game {
             let died = match o.material {
                 // Heat is not a blow: a bag or a fence that has taken its
                 // whole exposure simply goes, no one-shot roll.
-                Material::Sandbag | Material::Fence if cause == DamageCause::Fire => {
+                Material::Sandbag | Material::Fence if matches!(cause, DamageCause::Fire | DamageCause::Pierce { .. }) => {
                     o.health = 0.0;
                     o.destroyed = true;
                     true
+                }
+                m if matches!(cause, DamageCause::Pierce { .. }) && !m.is_tower() => {
+                    let whole = o.health.max(amount);
+                    o.damage(whole)
                 }
                 Material::Fence => {
                     let pristine = o.health >= o.max_health;
@@ -223,6 +232,7 @@ impl Game {
                 DamageCause::Ram => BlastShape::Ram,
                 DamageCause::Blast { .. } => BlastShape::Plain,
                 DamageCause::Fire => BlastShape::Fire,
+                DamageCause::Pierce { dir } => BlastShape::Shot { dir: Lean { x: dir.x, y: dir.y } },
             };
             self.obstacle_died(f, DeadTile { material, variant, position: pos, chained: false, charred: false, shape });
         }

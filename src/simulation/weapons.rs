@@ -466,6 +466,9 @@ pub(super) fn dispatch_fire_from(
                 super::emp::fire_emp(f, tank, owner);
             }
         }
+        // A charge weapon fires on its release (`Game::charge_trigger`,
+        // `fire_charge`), never on a trigger pull.
+        ActiveWeapon::GaussRail => {}
         ActiveWeapon::Plasma => {
             if tank.plasma_ammo >= ammo_cost {
                 f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::Plasma.name() });

@@ -469,6 +469,123 @@ impl Terrain {
     }
 }
 
+impl Terrain {
+    /// Every box a gauss rail's slug (docs/gauss-rail.md) along `p0..p1`,
+    /// `half_extent` either side, enters - with `sweep_rewound`'s
+    /// candidates, boxes, pads and rewind - in order along it, cut after
+    /// the first **stopper**: the field's edge, or a permanent tile (iron,
+    /// a volcano's cone, a training door), iron only while `iron_stops`
+    /// (an overcharged slug cuts it). Each tank and frog appears once, at
+    /// the first of its boxes the segment enters; the shooter never does.
+    /// Order: entry `t`, then the sweep's rank (seats, enemies, frogs,
+    /// tiles, the edge), then owner slot, frog or the tile's cell. Every
+    /// box is first held to the segment's own swept box, so a trace costs
+    /// a comparison a tile.
+    #[allow(clippy::too_many_arguments)]
+    pub fn pierce_rewound(
+        &self,
+        world: &hecs::World,
+        players: [Option<Entity>; crate::MAX_SEATS],
+        shooter: Owner,
+        p0: Position,
+        p1: Position,
+        half_extent: f32,
+        past: Option<&HitBoxFrame>,
+        iron_stops: bool,
+    ) -> Vec<(ShellTarget, f32)> {
+        let pad = Position::new(half_extent, half_extent);
+        let enemy_pad = match shooter {
+            Owner::Player(_) => pad + Position::new(self.player_shot_pad, self.player_shot_pad),
+            Owner::Enemy(_) | Owner::Tower { .. } => pad,
+        };
+        let (lo, hi) = (
+            Position::new(p0.x.min(p1.x) - half_extent, p0.y.min(p1.y) - half_extent),
+            Position::new(p0.x.max(p1.x) + half_extent, p0.y.max(p1.y) + half_extent),
+        );
+        let near = |c: Position, h: Position| c.x + h.x >= lo.x && c.x - h.x <= hi.x && c.y + h.y >= lo.y && c.y - h.y <= hi.y;
+        let first = |boxes: &[(Position, Position)]| {
+            boxes.iter().filter(|(c, h)| near(*c, *h)).filter_map(|&(c, h)| segment_hits_aabb(p0, p1, c, h)).min_by(f32::total_cmp)
+        };
+        // (t, rank, tie key, target)
+        let mut hits: Vec<(f32, u8, i64, ShellTarget)> = Vec::new();
+        for player in players.into_iter().flatten() {
+            let (owner, wrecked, hull, turret) = with_tank(world, player, |t| (t.owner(), t.is_wreck(), t.hull_bbox_world(), t.turret_bbox_world()));
+            if owner == shooter || wrecked {
+                continue;
+            }
+            if let Some(t) = first(&[(hull.0, hull.1 + pad), (turret.0, turret.1 + pad)]) {
+                hits.push((t, 0, owner.slot() as i64, ShellTarget::Tank(player)));
+            }
+        }
+        for (entity, tank) in world.query::<(Entity, &Tank)>().with::<&Ai>().iter() {
+            if tank.owner() == shooter || tank.is_wreck() {
+                continue;
+            }
+            let ((hc, hh), (tc, th)) = match past.and_then(|p| p.tank(entity)) {
+                Some(then) => (then.hull, then.turret),
+                None => (tank.hull_bbox_world(), tank.turret_bbox_world()),
+            };
+            if let Some(t) = first(&[(hc, hh + enemy_pad), (tc, th + enemy_pad)]) {
+                hits.push((t, 1, tank.owner_slot() as i64, ShellTarget::Tank(entity)));
+            }
+        }
+        for (i, &(entity, now)) in self.frogs.iter().enumerate() {
+            let pos = past.and_then(|p| p.frog(entity)).unwrap_or(now);
+            if let Some(t) = first(&[(pos, frog_half() + pad)]) {
+                hits.push((t, 2, i as i64, ShellTarget::Frog(entity)));
+            }
+        }
+        let cell_key = |c: Position| ((c.y / crate::OBSTACLE_GRID_SIZE).floor() as i64) * 65_536 + (c.x / crate::OBSTACLE_GRID_SIZE).floor() as i64;
+        let mut stoppers: Vec<f32> = Vec::new();
+        for b in &self.obstacles {
+            if let Some(t) = first(&[(b.center, b.half + pad)]) {
+                hits.push((t, 3, cell_key(b.center), ShellTarget::Obstacle(b.entity)));
+                if b.material.is_permanent() && (iron_stops || b.material != Material::Iron) {
+                    stoppers.push(t);
+                }
+            }
+        }
+        for &(center, half) in &self.walls {
+            if let Some(t) = segment_hits_aabb(p0, p1, center, half + pad) {
+                hits.push((t, 4, 0, ShellTarget::Wall));
+                stoppers.push(t);
+            }
+        }
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+        let stop = stoppers.into_iter().min_by(f32::total_cmp);
+        let mut out = Vec::with_capacity(hits.len());
+        for (t, _, _, target) in hits {
+            if stop.is_some_and(|s| t > s) {
+                break;
+            }
+            let stopper = match target {
+                ShellTarget::Wall => true,
+                ShellTarget::Obstacle(e) => self.obstacle(e).is_some_and(|b| b.material.is_permanent() && (iron_stops || b.material != Material::Iron)),
+                _ => false,
+            };
+            out.push((target, t));
+            if stopper {
+                break;
+            }
+        }
+        out
+    }
+
+    /// Where a slug along `p0..p1` stops, as a fraction of it: its first
+    /// stopper's entry (`pierce_rewound`'s rule), 1 with none.
+    pub fn rail_stop(&self, p0: Position, p1: Position, half_extent: f32, iron_stops: bool) -> f32 {
+        let pad = Position::new(half_extent, half_extent);
+        self.obstacles
+            .iter()
+            .filter(|b| b.material.is_permanent() && (iron_stops || b.material != Material::Iron))
+            .map(|b| (b.center, b.half + pad))
+            .chain(self.walls.iter().map(|&(c, h)| (c, h + pad)))
+            .filter_map(|(c, h)| segment_hits_aabb(p0, p1, c, h))
+            .min_by(f32::total_cmp)
+            .unwrap_or(1.0)
+    }
+}
+
 /// Keep `*best` as the candidate with the smallest entry time so far, ties
 /// broken by `rank` ascending. `hit` is `segment_hits_aabb`'s result.
 fn consider_hit(best: &mut Option<(f32, u8, ShellTarget)>, hit: Option<f32>, rank: u8, target: ShellTarget) {

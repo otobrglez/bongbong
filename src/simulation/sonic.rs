@@ -58,7 +58,29 @@ pub(super) fn fire_sonic(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, 
 /// its skid. Returns the velocity change. Any weapon that throws hulls
 /// about knocks them through here.
 pub(super) fn knock(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, dir: Vec2, speed: f32, footing: Footing) -> Vec2 {
-    let Some(handle) = tank.body else { return Vec2::zero() };
+    knock_with(physics, f, tank, dir, speed, footing, true)
+}
+
+/// `knock`, saying whether a client-owned seat hears of it (`echo`): a
+/// knock its client puts on itself - a gauss rail's recoil, kicked on the
+/// release - is not sent, but the pose validator still allows its speed
+/// (`Shoves::allow_knock`).
+pub(super) fn knock_with(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, dir: Vec2, speed: f32, footing: Footing, echo: bool) -> Vec2 {
+    let Some((dv, skid)) = knock_hull(physics, tank, dir, speed, footing) else { return Vec2::zero() };
+    if echo {
+        f.shoves.push_knock(tank.owner(), dv, skid);
+    } else {
+        f.shoves.allow_knock(tank.owner(), dv, skid);
+    }
+    dv
+}
+
+/// The knock itself, with nobody told (`knock`): the impulse sized by the
+/// hull's own mass, then its skid and the speed it was left at. The
+/// velocity change and the skid; `None` for a hull with no body. What a
+/// client's sandbox kicks its own hull with too (`Game::predict_seat_with`).
+pub(super) fn knock_hull(physics: &mut Physics, tank: &mut Tank, dir: Vec2, speed: f32, footing: Footing) -> Option<(Vec2, f32)> {
+    let handle = tank.body?;
     let t = tuning();
     let dv = dir * speed;
     physics.apply_impulse(handle, Position::new(dv.x * tank.mass(), dv.y * tank.mass()));
@@ -67,8 +89,7 @@ pub(super) fn knock(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, dir: 
     let skid = sonic::skid_seconds(&t, rel, footing.grip);
     tank.skid = tank.skid.max(skid);
     tank.skid_speed = rel;
-    f.shoves.push_knock(tank.owner(), dv, skid);
-    dv
+    Some((dv, skid))
 }
 
 /// The centre and the four corners of a hull's box: the points a wave
@@ -97,9 +118,10 @@ const FRONT_SLACK_PX: f32 = 8.0;
 /// "The probe's `--crate` and the spawn swap"): each weapon and the knob
 /// that is its share, in order.
 type ShareOf = fn(&Tuning) -> f32;
-const SPAWN_SWAPS: [(ActiveWeapon, ShareOf); 2] = [
+const SPAWN_SWAPS: [(ActiveWeapon, ShareOf); 3] = [
     (ActiveWeapon::SonicHammer, |t| t.enemy_special_weapon_sonic_share),
     (ActiveWeapon::Emp, |t| t.enemy_special_weapon_emp_share),
+    (ActiveWeapon::GaussRail, |t| t.enemy_special_weapon_gauss_share),
 ];
 
 /// The salt of the spawn swap's hash.

@@ -420,6 +420,7 @@ fn kick_turret(game: &mut Game, slot: usize, weapon: WeaponKind) {
             WeaponKind::Laser => tank.kick_laser(),
             WeaponKind::SonicHammer => tank.kick_sonic(),
             WeaponKind::Emp => tank.kick_emp(),
+            WeaponKind::GaussRail => tank.kick_rail(),
             WeaponKind::Minigun | WeaponKind::Missiles | WeaponKind::Flamethrower | WeaponKind::Grenades => {}
         }
         break;
@@ -452,6 +453,9 @@ fn drawn_muzzle(game: &mut Game, slot: usize, weapon: WeaponKind) -> Option<Posi
         // A pulse has no muzzle: the coil's pulse cell and the ring are its
         // show.
         WeaponKind::Emp => None,
+        // The slug's own first leg starts at the module's bore mouth and
+        // puts on its muzzle ripple (`Game::rail_show`).
+        WeaponKind::GaussRail => None,
     };
     tank.rotation = facing;
     muzzle
@@ -700,6 +704,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
         tank.grenade_ammo = 0;
         tank.sonic_ammo = 0;
         tank.emp_charges = 0;
+        tank.gauss_slugs = 0;
         let ammo = t.ammo as i32;
         match weapon {
             ActiveWeapon::Shell => tank.shells_ammo = ammo,
@@ -711,6 +716,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
             ActiveWeapon::Grenades => tank.grenade_ammo = ammo,
             ActiveWeapon::SonicHammer => tank.sonic_ammo = ammo,
             ActiveWeapon::Emp => tank.emp_charges = ammo,
+            ActiveWeapon::GaussRail => tank.gauss_slugs = ammo,
         }
         // The magazine, which the trigger fires while a special is
         // offline; and an EMP's outages, run down between snapshots.

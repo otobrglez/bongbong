@@ -364,6 +364,25 @@ pub fn flatten(tufts: &mut [GrassTuft], center: Position, radius: f32) {
     }
 }
 
+/// Flatten every tuft whose root lies within `reach` of the segment
+/// `from..to` at once - a gauss rail's slug passing over it (the same
+/// `crush` a hull drives, recovering like a tank's trail). Pure, no RNG.
+pub fn flatten_along(tufts: &mut [GrassTuft], from: Position, to: Position, reach: f32) {
+    let d = Position::new(to.x - from.x, to.y - from.y);
+    let len2 = d.x * d.x + d.y * d.y;
+    if reach <= 0.0 {
+        return;
+    }
+    for tuft in tufts.iter_mut() {
+        let rel = Position::new(tuft.base.x - from.x, tuft.base.y - from.y);
+        let k = if len2 > 0.0 { ((rel.x * d.x + rel.y * d.y) / len2).clamp(0.0, 1.0) } else { 0.0 };
+        let near = Position::new(from.x + d.x * k, from.y + d.y * k);
+        if tuft.base.distance_to(near) <= reach {
+            tuft.crush = 1.0;
+        }
+    }
+}
+
 /// The wind's lean at `base` at `time`, in px of travel at a tuft's tip:
 /// a steady lean along the wind (`grass_wind_px`) plus gusts
 /// (`grass_gust_px`) - a wave of bending grass riding a slower envelope,
