@@ -519,14 +519,19 @@ impl Game {
                                     lane.seats += 1;
                                     if lane.at_seat.is_none() {
                                         lane.at_seat = Some((seat.seat, along));
+                                        let m = t.gauss_ai_box_margin_px;
+                                        lane.settled = crate::ai::in_sight_box_of((half_w - m, half_h - m), seat.pos, me)
+                                            && me.distance_to(seat.pos) <= seat.sight - m;
                                     }
                                 }
                             }
-                            None => lane.friend = true,
+                            None => {
+                                lane.friend.get_or_insert(along);
+                            }
                         },
                         ShellTarget::Frog(e) => {
                             if Some(e) == self.enemy_frog {
-                                lane.friend = true;
+                                lane.friend.get_or_insert(along);
                             } else if hunter && Some(e) == self.frog && lane.quarry.is_none() {
                                 lane.quarry = Some(along);
                             }
@@ -539,7 +544,7 @@ impl Game {
                                 if crate::tower::side_of_variant(o.variant) == crate::frog::Side::Player {
                                     lane.towers += 1;
                                 } else {
-                                    lane.friend = true;
+                                    lane.friend.get_or_insert(along);
                                 }
                             }
                         }
@@ -551,16 +556,6 @@ impl Game {
             out.insert(entity, sense);
         }
         out
-    }
-
-    /// Where one seat's slug would be judged from right now (its gun
-    /// line's muzzle), drawn from (its rail module's muzzle) and which way:
-    /// for a client drawing its own slug on the release (`net::predict`).
-    pub fn seat_rail(&self, seat: usize) -> Option<(Position, Position, Vec2)> {
-        let entity = self.seats.get(seat).copied().flatten()?;
-        let tank = self.world.get::<&Tank>(entity).ok()?;
-        let dir = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up).vec();
-        Some((tank.gun_line_muzzle(dir), crate::gauss::muzzle(&tank), dir))
     }
 
     /// A room's count of the ticks a seat's client has held its trigger

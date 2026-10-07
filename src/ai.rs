@@ -128,22 +128,31 @@ pub struct GaussLane {
     /// The players' frog it would go through, and how far along - read
     /// only for a hunter, whose quarry it is.
     pub quarry: Option<f32>,
-    /// A live fellow enemy, a standing enemy tower or the enemies' own frog
-    /// it would go through: nothing fires this way.
-    pub friend: bool,
+    /// The nearest live fellow enemy, standing enemy tower or the enemies'
+    /// own frog it would go through, and how far along: nothing fires this
+    /// way at a target beyond it.
+    pub friend: Option<f32>,
+    /// `at_seat` stands inside its sight box and this tank's sight by
+    /// `gauss_ai_box_margin_px` as well: a charge starts only on such a
+    /// lane, so a tank at the box's edge, where a pixel of drift takes the
+    /// seat out of it, does not charge only to lose it at full.
+    pub settled: bool,
 }
 
 impl GaussLane {
     /// What the lane is worth: two a seat, two the quarry, one a player
-    /// tower. A lane worth a slug is worth at least two and holds no
-    /// friend.
+    /// tower.
     pub fn score(&self) -> i32 {
         2 * self.seats as i32 + if self.quarry.is_some() { 2 } else { 0 } + self.towers as i32
     }
 
-    /// Whether a slug down this lane is worth firing.
+    /// Whether a slug down this lane is worth firing: worth at least two,
+    /// with a seat or the quarry to fire at, and no friend before it. A
+    /// friend beyond the target is the slug's to go on through, as a shell
+    /// that misses goes on: holding fire for it left two rail tanks either
+    /// side of a seat each waiting on the other.
     pub fn counts(&self) -> bool {
-        !self.friend && self.score() >= 2
+        self.score() >= 2 && self.target_along().is_some_and(|t| self.friend.is_none_or(|f| t < f))
     }
 
     /// How far along its first target stands: the seat, else the quarry.
@@ -3005,10 +3014,11 @@ fn special_rule(b: &Brain) -> Option<SpecialUse> {
 
 /// The gauss rail's rule with no charge running (docs/gauss-rail.md "AI"):
 /// a training dummy never charges, nor does a rail still cooling (its
-/// reload, a vent); otherwise the best lane it could face that counts - two
-/// seats, then a seat and a player tower, then a seat (or a hunter's
-/// quarry), ties to the facing it has and then `Dir::ALL` order - starts a
-/// charge. Draws no RNG.
+/// reload, a vent); otherwise the best lane it could face that counts with
+/// its seat settled in the box (`GaussLane::settled`) - two seats, then a
+/// seat and a player tower, then a seat (or a hunter's quarry), ties to the
+/// facing it has and then `Dir::ALL` order - starts a charge. Draws no
+/// RNG.
 fn gauss_rule(b: &Brain, sense: &GaussSense) -> Option<SpecialUse> {
     if b.ai.frog_only || b.me.fire_cooldown > 0.0 {
         return None;
@@ -3018,7 +3028,8 @@ fn gauss_rule(b: &Brain, sense: &GaussSense) -> Option<SpecialUse> {
     let mut best: Option<(Dir, GaussLane)> = None;
     for d in order {
         let lane = sense.lanes[d.index()];
-        if lane.counts() && best.is_none_or(|(_, b)| lane.score() > b.score()) {
+        let settled = lane.settled || lane.at_seat.is_none();
+        if lane.counts() && settled && best.is_none_or(|(_, b)| lane.score() > b.score()) {
             best = Some((d, lane));
         }
     }

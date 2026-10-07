@@ -859,3 +859,151 @@ fn a_charging_rails_lane_through_cover_warns_the_seat() {
     game.place_tank(enemy, Position::new(1000.0, 384.0), Some(270.0)).unwrap();
     assert!(!charging(&mut game, 270.0), "iron between");
 }
+
+/// Through a portal the slug goes leg by leg: the first leg ends going
+/// into the portal (`ShotTeleported` logged), the next leaves the other
+/// portal on the same heading, and the enemy past it is hit by the damage
+/// the slug has kept.
+#[test]
+fn the_slug_goes_through_a_portal_leg_by_leg() {
+    let mut game = round("cells.\"8,6\" = { kind = \"portal\" }\ncells.\"20,12\" = { kind = \"portal\" }\n");
+    let past = parked(&mut game, Position::new(900.0, 400.0));
+    let events = charge(&mut game, full_ticks());
+    let legs: Vec<(u8, bool, f32)> = events
+        .iter()
+        .filter_map(|e| match *e {
+            Event::RailSlug { leg, portal, x0, .. } => Some((leg, portal, x0)),
+            _ => None,
+        })
+        .collect();
+    assert!(legs.len() >= 2, "{legs:?}");
+    assert_eq!((legs[0].0, legs[0].1), (0, true), "the first leg ends in the portal");
+    assert_eq!(legs[1].0, 1);
+    assert!((legs[1].2 - 656.0).abs() < 40.0, "the second leaves the other portal: {legs:?}");
+    assert!(events.iter().any(|e| matches!(e, Event::ShotTeleported { .. })));
+    assert!(damage(&game, past) > 0.0, "the enemy past the exit is hit");
+}
+
+/// A training door stops even an overcharged slug, as iron does a full one.
+#[test]
+fn a_door_stops_even_an_overcharged_slug() {
+    let t = tuning();
+    let mut game = round("cells.\"8,6\" = { kind = \"door\", beat = 1 }\n");
+    let behind = parked(&mut game, Position::new(500.0, 192.0));
+    let over = crate::tank::ticks_of(t.gauss_charge_seconds + t.gauss_overcharge_seconds) + 1;
+    let events = charge(&mut game, over);
+    assert!(events.iter().any(|e| matches!(*e, Event::RailSlug { overcharged: true, .. })));
+    assert_eq!(damage(&game, behind), 0.0);
+}
+
+/// A sonic hammer's shove mid-charge keeps the charge: the skid carries the
+/// hull and the trigger, still down, fires at full.
+#[test]
+fn a_sonic_shove_mid_charge_keeps_it() {
+    let mut game = round("");
+    for _ in 0..10 {
+        step(&mut game, true);
+    }
+    let s = seat(&game);
+    {
+        let Game { world, physics, water, lava, weather, time, .. } = &mut game;
+        let footing = Footing::at(water, lava, *weather, Position::new(96.0, 192.0), *time);
+        let mut tank = world.get::<&mut Tank>(s).unwrap();
+        super::sonic::knock_hull(physics, &mut tank, Vec2::new(0.0, 1.0), 300.0, footing);
+    }
+    assert!(with_tank(&game.world, s, |t| t.skid > 0.0 && t.charge.is_some()), "skidding, still charging");
+    let rest = charge(&mut game, full_ticks());
+    assert_eq!(rail_slugs(&rest).len(), 1, "fired at full after the shove");
+}
+
+/// The round ending mid-charge clears it, and nothing fires on the end
+/// screen.
+#[test]
+fn the_round_ending_mid_charge_clears_it_and_nothing_fires_on_the_end_screen() {
+    let mut game = Game::default();
+    game.seed_override = Some(7);
+    game.show_intro = false;
+    game.level_overrides.mission = Some(Mission::Destroy);
+    game.map = MapFile::from_toml_str("version = 1\ntanks = 1\ncells.\"3,6\" = { kind = \"start\" }\n").expect("parses");
+    game.init(W, H);
+    let s = seat(&game);
+    with_tank_mut(&game.world, s, |t| {
+        t.disarm();
+        t.gauss_slugs = 4;
+    });
+    for _ in 0..full_ticks() {
+        step(&mut game, true);
+    }
+    assert!(with_tank(&game.world, s, |t| t.charge.is_some()));
+    game.debug_kill(game.first_enemy_slot()).expect("the one enemy");
+    let mut seen = Vec::new();
+    for _ in 0..5 {
+        seen.extend(step(&mut game, true));
+    }
+    assert_eq!(game.outcome(), Outcome::Won, "the round ended");
+    assert!(with_tank(&game.world, s, |t| t.charge.is_none()));
+    seen.extend(step(&mut game, false));
+    assert!(rail_slugs(&seen).is_empty(), "{seen:?}");
+}
+
+/// An enemy whose way runs across a charging seat's lane waits at the edge
+/// (`Ai::kept_out`) rather than walk in: seat 1 charges east along its row,
+/// a lane across the field, and the enemy north of it wants seat 2 south
+/// of it.
+#[test]
+fn enemies_wait_at_the_edge_of_a_lane_rather_than_cross_it() {
+    let mut game = round_with("", 2);
+    let s2 = game.seat(1).expect("a second seat");
+    game.place_tank(s2, Position::new(640.0, 448.0), Some(0.0)).unwrap();
+    let slot = game.debug_spawn_enemy(Position::new(640.0, 64.0), Some(1), Some(Role::Player)).unwrap();
+    let enemy = game.tank_entity_by_slot(slot).unwrap();
+    with_tank_mut(&game.world, enemy, |t| {
+        t.shells_ammo = 0;
+        t.disarm();
+    });
+    let half = crate::battlefield::max_tank_clearance_half_extent() + tuning().gauss_half_width;
+    let mut held = false;
+    for _ in 0..full_ticks() + 30 {
+        step(&mut game, true);
+        let y = with_tank(&game.world, enemy, |t| t.position.y);
+        assert!((y - 192.0).abs() >= half - 2.0, "it walked into the lane: {y}");
+        held |= game.world.get::<&Ai>(enemy).unwrap().kept_out();
+    }
+    assert!(held, "it waited at the edge");
+}
+
+/// A friend beyond the seat does not hold the rail: two rail tanks either
+/// side of a seat on its row each fire at it rather than wait on the other,
+/// and the slug flies on into the far one.
+#[test]
+fn a_friend_beyond_the_seat_does_not_hold_the_rail() {
+    let mut game = round("");
+    let s = seat(&game);
+    game.place_tank(s, Position::new(480.0, 192.0), Some(0.0)).unwrap();
+    let east = rail_enemy(&mut game, Position::new(760.0, 192.0));
+    let west = rail_enemy(&mut game, Position::new(200.0, 192.0));
+    let mut seen = Vec::new();
+    for _ in 0..400 {
+        seen.extend(step(&mut game, false));
+    }
+    assert!(fired(&seen, slot_of(&game, east)) || fired(&seen, slot_of(&game, west)), "one of them fires");
+    let lane = crate::ai::GaussLane { at_seat: Some((0, 100.0)), seats: 1, friend: Some(300.0), ..Default::default() };
+    assert!(lane.counts(), "a friend beyond the seat");
+    assert!(!crate::ai::GaussLane { friend: Some(50.0), ..lane }.counts(), "a friend before it");
+    assert!(!crate::ai::GaussLane { at_seat: None, seats: 0, towers: 2, ..Default::default() }.counts(), "towers alone are no target");
+}
+
+/// A charge starts only on a seat inside its sight box by
+/// `gauss_ai_box_margin_px`: at the box's very edge an enemy does not
+/// charge, a little further in it does.
+#[test]
+fn a_charge_starts_only_inside_the_box_by_its_margin() {
+    let t = tuning();
+    let (half_w, _) = t.sight_box_half_px();
+    for (inset, charges) in [(t.gauss_ai_box_margin_px * 0.5, false), (t.gauss_ai_box_margin_px * 2.0, true)] {
+        let mut game = round("");
+        let enemy = rail_enemy(&mut game, Position::new(SEAT.x + half_w - inset, SEAT.y));
+        let events = watch(&mut game, enemy);
+        assert_eq!(charged(&events, slot_of(&game, enemy)), charges, "{inset} px inside the box");
+    }
+}
