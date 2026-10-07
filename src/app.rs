@@ -552,6 +552,94 @@ fn cli_identity(args: &Args) -> Identity {
     }
 }
 
+/// Open the player's map store (`mapstore`) for this run, unless
+/// `--map-modding false` turned it off: the page's `localStorage` on the
+/// web, else a `maps` directory beside the level progress - `BONGBONG_MAPS`
+/// names one outright, Android's is the activity's own. With no such
+/// directory the run keeps no maps, as it would with modding off.
+fn enable_map_store(args: &Args) {
+    if !args.map_modding {
+        eprintln!("[mapstore] map modding off: SAVE writes under {}", crate::map::maps_dir().display());
+        return;
+    }
+    #[cfg(target_os = "emscripten")]
+    {
+        crate::mapstore::enable(Box::new(PageMaps));
+        eprintln!("[mapstore] maps kept in the page's localStorage");
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        #[cfg(target_os = "android")]
+        let data = android::data_dir();
+        #[cfg(not(target_os = "android"))]
+        let data = crate::levels::data_dir();
+        let dir = std::env::var_os("BONGBONG_MAPS").filter(|d| !d.is_empty()).map(std::path::PathBuf::from).or_else(|| data.map(|d| d.join("maps")));
+        match dir {
+            Some(dir) => {
+                eprintln!("[mapstore] maps kept in {}", dir.display());
+                crate::mapstore::enable(Box::new(crate::mapstore::Dir(dir)));
+            }
+            None => eprintln!("[mapstore] no data directory: maps are not kept"),
+        }
+    }
+}
+
+/// The web build's map store: the page's `localStorage`, a map's text
+/// under `bongbong.map.<key>`. Every script catches its own exceptions, so
+/// a storage that throws (a private window, a full quota) only forgets -
+/// a write answers whether it took.
+#[cfg(target_os = "emscripten")]
+struct PageMaps;
+
+#[cfg(target_os = "emscripten")]
+impl PageMaps {
+    /// `key` as a JavaScript string literal naming its storage slot.
+    fn slot(key: &str) -> String {
+        serde_json::to_string(&format!("bongbong.map.{key}")).unwrap_or_default()
+    }
+
+    /// The page's answer to `script` (`page_string`), which must catch its
+    /// own exceptions.
+    fn ask(script: String) -> Option<String> {
+        let script = std::ffi::CString::new(script).ok()?;
+        Some(page_string(&script))
+    }
+}
+
+#[cfg(target_os = "emscripten")]
+impl crate::mapstore::Backend for PageMaps {
+    fn read(&self, key: &str) -> Option<String> {
+        // A leading mark tells a kept empty text from nothing kept.
+        let slot = Self::slot(key);
+        let answer = Self::ask(format!("(function(){{try{{var t=localStorage.getItem({slot});return t===null?'':'='+t}}catch(e){{return ''}}}})()"))?;
+        answer.strip_prefix('=').map(str::to_string)
+    }
+
+    fn contains(&self, key: &str) -> bool {
+        let slot = Self::slot(key);
+        Self::ask(format!("(function(){{try{{return localStorage.getItem({slot})===null?'':'1'}}catch(e){{return ''}}}})()")).as_deref() == Some("1")
+    }
+
+    fn write(&self, key: &str, text: &str) -> Result<(), String> {
+        let (slot, text) = (Self::slot(key), serde_json::to_string(text).map_err(|e| e.to_string())?);
+        match Self::ask(format!("(function(){{try{{localStorage.setItem({slot},{text});return '1'}}catch(e){{return ''}}}})()")).as_deref() {
+            Some("1") => Ok(()),
+            _ => Err(format!("the browser would not keep {key}")),
+        }
+    }
+
+    fn remove(&self, key: &str) -> Result<(), String> {
+        let slot = Self::slot(key);
+        Self::ask(format!("(function(){{try{{localStorage.removeItem({slot})}}catch(e){{}}return ''}})()"));
+        Ok(())
+    }
+
+    fn keys(&self) -> Vec<String> {
+        let script = "(function(){try{var k=[];for(var i=0;i<localStorage.length;i++){var n=localStorage.key(i);if(n&&n.indexOf('bongbong.map.')===0)k.push(n.slice(13))}return k.join('\\n')}catch(e){return ''}})()";
+        Self::ask(script.to_string()).map(|keys| keys.lines().filter(|k| !k.is_empty()).map(str::to_string).collect()).unwrap_or_default()
+    }
+}
+
 /// The level progress the page kept in `localStorage`: the map name of
 /// the furthest level reached (docs/levels.md).
 #[cfg(target_os = "emscripten")]
@@ -890,6 +978,17 @@ pub struct Args {
     /// The web build reads `?weather=` off its page instead.
     #[arg(long = "weather", value_name = "SKY", value_parser = parse_weather)]
     weather: Option<crate::map::Weather>,
+
+    /// Keep the player's maps between sessions (`mapstore`, BB-33): the
+    /// builder saves on its own, a shipped map as its modified copy
+    /// (`<name>-modd`) in the user's data directory - `BONGBONG_MAPS` names
+    /// another - and that copy opens in the original's place until FILE >
+    /// REVERT MAP. On by default; `--map-modding false` keeps the
+    /// development path, where SAVE writes `maps/<name>.toml` and a file
+    /// there shadows the shipped map of its name. The web, iOS and Android
+    /// builds always keep them.
+    #[arg(long = "map-modding", value_name = "BOOL", default_value_t = true, action = clap::ArgAction::Set, num_args = 0..=1, default_missing_value = "true")]
+    map_modding: bool,
 }
 
 /// The online round the command line asks for, with the rig's handle if
@@ -1142,6 +1241,8 @@ pub fn run(args: Args) {
     // Resources and saves maps under the user's data directory.
     #[cfg(target_os = "macos")]
     macos::enter_bundle();
+    // The player's maps (BB-33), before anything opens one.
+    enable_map_store(&args);
 
     // The language every string is drawn in (docs/localization-prd.md
     // section 4.5): an explicit `--lang` - or the page's `?lang=` on the
@@ -1838,6 +1939,8 @@ pub fn run(args: Args) {
             last_press = Some(crate::capi::Press { count, at: window_pointer, touch: touch_pressed });
         }
         let tab = rl.is_key_pressed(KeyboardKey::KEY_TAB);
+        // A modified map whose original this build changed asks first.
+        session.watch_originals();
         let ctrl = rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL)
             || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL)
             || rl.is_key_down(KeyboardKey::KEY_LEFT_SUPER)
@@ -1852,7 +1955,18 @@ pub fn run(args: Args) {
                 // on any of them is never a tank order. Nothing here
                 // touches the simulation - a frozen round is one whose
                 // `update` is not called (see `Session::playing`).
-                if session.level_select.is_some() {
+                if session.question.is_some() {
+                    // A question about a kept map takes every press, and
+                    // its press is nobody's shot.
+                    if pressed {
+                        touch.claim(&ui_touch_points);
+                        session.press_question(ui_pointer, ui.area);
+                    } else if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
+                        session.answer_question(true);
+                    } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab {
+                        session.answer_question(false);
+                    }
+                } else if session.level_select.is_some() {
                     // The level select takes every press and key while it
                     // is up, and a press on it is nobody's shot - neither
                     // the round's it closes back onto nor the next level's.
@@ -2043,7 +2157,9 @@ pub fn run(args: Args) {
                     Some(held) => BuilderInput { pointer: held.first().map(|t| t.pos), pressed: false, held: true, touches: held.to_vec(), ..input },
                     None => input,
                 };
-                if tab {
+                if tab && session.question.is_some() {
+                    session.answer_question(false);
+                } else if tab {
                     session.toggle();
                 } else {
                     session.update_builder(&input, &plan.builder_frame(&ui));
@@ -2114,6 +2230,7 @@ pub fn run(args: Args) {
                     minimap,
                     thumbnails: Some(&builder_thumbnails),
                 },
+                session.question.as_ref(),
             );
             // The presented frame is the builder; a pending `screenshot`
             // reads it from the screen here, or the client waits forever.

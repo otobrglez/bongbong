@@ -145,7 +145,7 @@ mod tests {
     use std::cell::RefCell;
 
     fn entry(name: &str) -> MapEntry {
-        MapEntry { name: name.to_string(), on_disk: true }
+        MapEntry { name: name.to_string(), on_disk: true, modified: false }
     }
 
     const SMALL: &str = "version = 1\nsize = [20, 10]\ncells.\"3,3\" = { kind = \"water\" }\n";

@@ -217,6 +217,7 @@ keys! {
     FILE_SAVE = "file-save";
     FILE_SAVE_AS = "file-save-as";
     FILE_CLEAR = "file-clear";
+    FILE_REVERT = "file-revert";
     SETTINGS_TANKS = "settings-tanks";
     SETTINGS_TANK = "settings-tank";
     SETTINGS_TANK2 = "settings-tank2";
@@ -245,10 +246,23 @@ keys! {
     EDITOR_SAVE_HINT_TOUCH = "editor-save-hint-touch";
     EDITOR_NO_MAPS = "editor-no-maps";
     EDITOR_SHIPPED = "editor-shipped";
+    EDITOR_MODIFIED = "editor-modified";
     EDITOR_PAGE = "editor-page";
     EDITOR_PAGE_TOUCH = "editor-page-touch";
     EDITOR_UNTITLED = "editor-untitled";
     EDITOR_SAVED = "editor-saved";
+    EDITOR_KEPT = "editor-kept";
+    EDITOR_KEPT_MODIFIED = "editor-kept-modified";
+    EDITOR_KEPT_ORIGINAL = "editor-kept-original";
+    EDITOR_REVERTED = "editor-reverted";
+    QUESTION_REVERT_TITLE = "question-revert-title";
+    QUESTION_REVERT_SUB = "question-revert-sub";
+    QUESTION_REVERT_YES = "question-revert-yes";
+    QUESTION_REVERT_NO = "question-revert-no";
+    QUESTION_CHANGED_TITLE = "question-changed-title";
+    QUESTION_CHANGED_SUB = "question-changed-sub";
+    QUESTION_CHANGED_YES = "question-changed-yes";
+    QUESTION_CHANGED_NO = "question-changed-no";
     EDITOR_LOADED = "editor-loaded";
     EDITOR_SAVING_UNAVAILABLE = "editor-saving-unavailable";
     EDITOR_NO_NAME = "editor-no-name";
@@ -689,7 +703,7 @@ pub fn fit_size(text: &str, size: i32, max_px: i32) -> i32 {
 mod text_tests {
     use super::*;
     use crate::hud::{
-        BANNER_MIN_SIZE, BANNER_SIZE, BANNER_SUB_SIZE, DIALOG_BUTTON_W, DIALOG_W, HUD_LABEL_SIZE,
+        BANNER_MIN_SIZE, BANNER_SIZE, BANNER_SUB_SIZE, DIALOG_BUTTON_W, DIALOG_W, HUD_LABEL_SIZE, QUESTION_W,
         HUD_TEXT_SIZE, INFO_TITLE_W, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP, LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE,
         MODE_BUTTON_W, ONLINE_BUTTON_W, RESULT_BUTTON_W, RESULT_LEVELS_W, RESULT_LINE_SIZE, RESULT_STATS_GAP,
         RESULT_TEXT_PX, RESULT_TITLE_SIZE, UI_SMALL_TEXT, WAVE_BANNER_SIZE,
@@ -836,7 +850,7 @@ mod text_tests {
             let catalogue = Catalogue::new(tag);
             for id in message_ids(source) {
                 let text = catalogue.message(&id, &args).unwrap_or_else(|| panic!("{tag}: {id} does not resolve"));
-                assert!(!text.contains('?') || id.contains("title") || id.contains("error") || id.contains("bad-name"), "{tag}: {id} folds to {text:?} - a letter is missing from the fold table");
+                assert!(!text.contains('?') || id.contains("title") || id.contains("error") || id.contains("bad-name") || id.starts_with("question-"), "{tag}: {id} folds to {text:?} - a letter is missing from the fold table");
                 assert!(text.chars().all(drawable), "{tag}: {id} resolves to an undrawable {text:?}");
                 assert!(!text.contains('{'), "{tag}: {id} has an unfilled placeholder: {text:?}");
             }
@@ -952,6 +966,17 @@ mod text_tests {
             (keys::FILE_SAVE, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE_AS, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_CLEAR, HUD_TEXT_SIZE, 168, vec![]),
+            (keys::FILE_REVERT, HUD_TEXT_SIZE, 168, vec![]),
+            // A map question's lines carry the map's name - the longest
+            // shipped one stands in - in the wider panel.
+            (keys::QUESTION_REVERT_TITLE, 28, QUESTION_W as i32 - 32, vec![("name", "grand-campaign".into())]),
+            (keys::QUESTION_REVERT_SUB, 16, QUESTION_W as i32 - 32, vec![("name", "grand-campaign".into())]),
+            (keys::QUESTION_CHANGED_TITLE, 28, QUESTION_W as i32 - 32, vec![("name", "grand-campaign".into())]),
+            (keys::QUESTION_CHANGED_SUB, 16, QUESTION_W as i32 - 32, vec![("name", "grand-campaign".into())]),
+            dialog_button(keys::QUESTION_REVERT_YES),
+            dialog_button(keys::QUESTION_REVERT_NO),
+            dialog_button(keys::QUESTION_CHANGED_YES),
+            dialog_button(keys::QUESTION_CHANGED_NO),
             // The level's lines and the end screen: across the smallest
             // area the chrome is laid out in less a margin, the end
             // screen's two numbers side by side with a gap, and the
@@ -1041,6 +1066,7 @@ mod text_tests {
         // for a map that ships with the game.
         let size = width("250 x 250   ", UI_SMALL_TEXT);
         out.push((keys::EDITOR_SHIPPED, UI_SMALL_TEXT, crate::editor::chrome::LOAD_TEXT_W as i32 - size, vec![]));
+        out.push((keys::EDITOR_MODIFIED, UI_SMALL_TEXT, crate::editor::chrome::LOAD_TEXT_W as i32 - size, vec![]));
         out
     }
 

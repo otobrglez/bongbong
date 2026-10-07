@@ -1087,6 +1087,34 @@ fn two_button_dialog(area: Rect) -> (Rectangle, Rectangle, Rectangle) {
     )
 }
 
+/// A question about a kept map (`mapstore::Question`): wider than the
+/// other dialogs, its lines carrying the map's name.
+pub const QUESTION_W: f32 = 600.0;
+
+/// The map question's geometry (UI points): the panel and its two buttons,
+/// the one the question is asking for on the left.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct QuestionRects {
+    pub panel: Rectangle,
+    pub yes: Rectangle,
+    pub no: Rectangle,
+}
+
+/// The map question centred in the chrome's `area` (UI points): the one
+/// geometry its painter and every hit test read, in play and in the
+/// builder alike.
+pub fn question_rects(area: Rect) -> QuestionRects {
+    let panel = centred_in(area, QUESTION_W, DIALOG_H);
+    let by = panel.y + DIALOG_H - 16.0 - DIALOG_BUTTON_H;
+    let gap = 16.0;
+    let bx = panel.x + (QUESTION_W - 2.0 * DIALOG_BUTTON_W - gap) / 2.0;
+    QuestionRects {
+        panel,
+        yes: Rectangle::new(bx, by, DIALOG_BUTTON_W, DIALOG_BUTTON_H),
+        no: Rectangle::new(bx + DIALOG_BUTTON_W + gap, by, DIALOG_BUTTON_W, DIALOG_BUTTON_H),
+    }
+}
+
 /// The leave dialog centred in the chrome's `area` (UI points): the one
 /// geometry its painter and every hit test read.
 pub fn leave_dialog_rects(area: Rect) -> LeaveDialogRects {
@@ -1311,6 +1339,9 @@ pub struct PlayChrome {
     pub seat: Option<u8>,
     pub leave_dialog: bool,
     pub players_dialog: bool,
+    /// A question about a kept map, over everything but the level select
+    /// (`mode::Session::question`).
+    pub question: Option<crate::mapstore::Question>,
     /// One line under the left cluster while an online round runs: the
     /// room code, this seat and the snapshot buffer
     /// (`net::round::OnlineRound::status`). `None` in a local round -

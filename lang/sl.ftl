@@ -20,6 +20,15 @@ leave-sub = Napredek bo izgubljen. Zemljevid ostane.
 leave-confirm = ZAPUSTI IGRO
 leave-stay = IGRAJ NAPREJ
 
+question-revert-title = Povrnem { $name }?
+question-revert-sub = Tvoje spremembe bodo izbrisane, vrne se izvirnik.
+question-revert-yes = POVRNI
+question-revert-no = OBDRŽI
+question-changed-title = Izvirnik { $name } je nov
+question-changed-sub = Preklopim na izvirnik in zavržem tvoje spremembe?
+question-changed-yes = PREKLOPI
+question-changed-no = OBDRŽI MOJO
+
 ## Igra
 
 round-won = ZMAGA
@@ -228,6 +237,7 @@ file-load = NALOŽI...
 file-save = SHRANI
 file-save-as = SHRANI KOT...
 file-clear = POČISTI
+file-revert = IZVIRNIK
 
 settings-group-round = BOJ
 settings-group-tanks = TANKI
@@ -258,6 +268,7 @@ editor-save-hint = Enter shrani, Esc prekliče
 editor-save-hint-touch = Tapni SHRANI, zunaj za preklic
 editor-no-maps = ni zemljevidov
 editor-shipped = vgrajen
+editor-modified = spremenjen
 editor-page = { $from }-{ $to } od { $n }  (kolešček)
 editor-page-touch = { $from }-{ $to } od { $n }  (tapni < ali >)
 editor-untitled = neimenovan
@@ -267,6 +278,10 @@ editor-loaded = naloženo: { $name }
 editor-saving-unavailable = shranjevanje v tej izdaji ni na voljo: spremembe ostanejo v pomnilniku do konca seje
 editor-no-name = zemljevid še nima imena: uporabi SHRANI KOT
 editor-bad-name = ime "{ $name }" sme imeti le črke, števke, - in _
+editor-kept = shranjeno: { $name }
+editor-kept-modified = spremembe shranjene: { $name }
+editor-kept-original = { $name } je spet izvirnik
+editor-reverted = { $name } je spet izvirnik
 editor-copied = { $n ->
     [one] kopirana { $n } celica
     [two] kopirani { $n } celici

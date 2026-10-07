@@ -1212,6 +1212,10 @@ impl Game {
             if let Some(levels) = &chrome.levels {
                 draw_level_select(&mut d, ui, levels);
             }
+            // A question about a kept map (BB-33), over everything.
+            if let Some(question) = &chrome.question {
+                crate::render::hud::draw_question(&mut d, ui.screen, area, question);
+            }
         });
 
         // The touch scheme's stick, ripples and hint over everything,

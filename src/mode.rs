@@ -35,6 +35,7 @@ use crate::level_select::{LevelSelect, SelectAction, SelectInput};
 use crate::levels::Campaign;
 use crate::lobby::{Lobby, LobbyAction, LobbyInput, RoomPhase, RoomView};
 use crate::map::MapFile;
+use crate::mapstore::Question;
 use crate::net::client::{RoomSetup, Target};
 use crate::net::round::AnyRound;
 use crate::net::rooms::{RoomCode, RoomsHost, SiteBase};
@@ -154,6 +155,15 @@ pub struct Session {
     /// level starts or it is closed: play mode only, never together with
     /// a dialog, and the round behind it frozen the dialogs' way.
     pub level_select: Option<LevelSelect>,
+    /// A question about a kept map (`mapstore`, BB-33), over the round or
+    /// the builder: FILE's REVERT TO ORIGINAL, or a modified copy whose
+    /// original this build ships changed (`watch_originals`). While it is
+    /// up nothing else takes a press and the round is frozen the dialogs'
+    /// way.
+    pub question: Option<Question>,
+    /// The maps `watch_originals` has looked at this session: each is
+    /// asked about once.
+    originals_checked: std::collections::BTreeSet<String>,
     /// The world rectangle the local round was last drawn showing - the
     /// whole field for an arena, the followed view on a field map - which
     /// `app.rs` notes every frame of play. BUILD opens the builder's
@@ -249,6 +259,8 @@ impl Session {
             token: anonymous.device_token,
             campaign: None,
             level_select: None,
+            question: None,
+            originals_checked: std::collections::BTreeSet::new(),
             play_view: None,
             minimap_on: false,
             clear_attempt: None,
@@ -675,7 +687,7 @@ impl Session {
     /// Whether `Game::update` should run this frame: play mode with no
     /// question pending.
     pub fn playing(&self) -> bool {
-        self.driver == Driver::Play && !self.dialog && !self.players_dialog && self.level_select.is_none()
+        self.driver == Driver::Play && !self.dialog && !self.players_dialog && self.level_select.is_none() && self.question.is_none()
     }
 
     /// A round the player could still lose by leaving: anything but the
@@ -1068,6 +1080,19 @@ impl Session {
         if self.driver != Driver::Build {
             return;
         }
+        // A question takes every press, Enter and Esc while it is up.
+        if self.question.is_some() {
+            if input.pressed
+                && let Some(p) = input.pointer
+            {
+                self.press_question(frame.to_ui(p), frame.ui.area);
+            } else if input.enter {
+                self.answer_question(true);
+            } else if input.escape {
+                self.answer_question(false);
+            }
+            return;
+        }
         // The CHECK panel lints the canvas the way PLAY would set it up.
         self.builder.lint_setup = crate::maplint::LintSetup::of(&self.game);
         match self.builder.update(input, frame) {
@@ -1077,6 +1102,95 @@ impl Session {
             }
             EditorAction::PlayHere => {
                 self.play_here();
+            }
+        }
+        if let Some(question) = self.builder.take_question() {
+            self.question = Some(question);
+        }
+    }
+
+    /// Ask about a modified copy whose original this build ships changed
+    /// (`mapstore::Store::stale`), once per map a session plays or builds
+    /// on: the round's map and the builder's canvas, in play or build
+    /// mode. `app.rs` calls it every frame; nothing with map modding off.
+    pub fn watch_originals(&mut self) {
+        let Some(store) = self.builder.store() else { return };
+        if self.question.is_some() || !matches!(self.driver, Driver::Play | Driver::Build) {
+            return;
+        }
+        for name in [self.game.map.name.clone(), self.builder.map().name.clone()].into_iter().flatten() {
+            if self.originals_checked.insert(name.clone()) && store.stale(&name) {
+                self.dialog = false;
+                self.players_dialog = false;
+                self.level_select = None;
+                self.question = Some(Question::OriginalChanged { name });
+                return;
+            }
+        }
+    }
+
+    /// A press on the question, in UI points over the chrome's `area`:
+    /// its first button answers yes, its second or anywhere off the panel
+    /// no. Answers whether there was a question to take it.
+    pub fn press_question(&mut self, at: crate::math::Vec2, area: Rect) -> bool {
+        if self.question.is_none() {
+            return false;
+        }
+        let r = crate::hud::question_rects(area);
+        if r.yes.contains(at) {
+            self.answer_question(true);
+        } else if r.no.contains(at) || !r.panel.contains(at) {
+            self.answer_question(false);
+        }
+        true
+    }
+
+    /// Answer the question. Yes forgets the map's modified copy and puts
+    /// the original in its place - on the builder's canvas as a new
+    /// document, and in a round on that map, which starts over on it. No
+    /// to a changed original keeps the copy and asks no more about it. A
+    /// no-op when nothing is asked.
+    pub fn answer_question(&mut self, yes: bool) {
+        let Some(question) = self.question.take() else { return };
+        let Some(store) = self.builder.store() else { return };
+        let name = question.name().to_string();
+        if !yes {
+            if let Question::OriginalChanged { .. } = question
+                && let Err(e) = store.keep(&name)
+            {
+                eprintln!("[mapstore] {name}: {e}");
+            }
+            return;
+        }
+        if let Err(e) = store.revert(&name) {
+            eprintln!("[mapstore] {name}: {e}");
+            self.builder.set_status(e);
+            return;
+        }
+        if let Some(campaign) = &mut self.campaign {
+            campaign.forget_edit(&name);
+        }
+        let Some(mut original) = crate::mapstore::original(&name).and_then(|text| MapFile::from_toml_str(text).ok()) else { return };
+        original.name = Some(name.clone());
+        if self.builder.map().name.as_deref() == Some(name.as_str()) {
+            self.builder.open(original.clone());
+            self.builder.set_status(crate::text::text().fmt(crate::text::keys::EDITOR_REVERTED, &[("name", name.as_str().into())]));
+        }
+        if self.driver == Driver::Play && self.game.map.name.as_deref() == Some(name.as_str()) {
+            match self.level() {
+                Some(i) => {
+                    if let Err(e) = self.start_level(i) {
+                        eprintln!("[levels] {e}");
+                    }
+                }
+                None => {
+                    self.game.map = original;
+                    self.game.start_override = None;
+                    self.clear_attempt = None;
+                    self.sync_level();
+                    let (width, height) = self.game.map.field_size();
+                    self.game.init(width, height);
+                }
             }
         }
     }
@@ -1137,6 +1251,7 @@ impl Session {
                 seat: None,
                 leave_dialog: self.dialog,
                 players_dialog: self.players_dialog,
+                question: self.question.clone(),
                 status: None,
                 lobby: None,
                 countdown_label: None,
@@ -1171,7 +1286,10 @@ impl Session {
         use crate::level_select::{back_rect, tile_rect, TileState};
         let chrome = self.play_chrome();
         let mut out = Vec::new();
-        if let Some(levels) = &chrome.levels {
+        if chrome.question.is_some() {
+            let r = crate::hud::question_rects(ui.area);
+            out.extend([("yes".to_string(), r.yes), ("no".to_string(), r.no)]);
+        } else if let Some(levels) = &chrome.levels {
             for (i, tile) in levels.tiles.iter().enumerate().filter(|(_, t)| t.state != TileState::Locked) {
                 out.push((format!("level_{}", tile.number), tile_rect(ui.area, i)));
             }
@@ -1216,6 +1334,88 @@ mod session_tests {
         game.map = MapFile::from_toml_str(include_str!("../maps/default.toml")).expect("default map parses");
         game.init(W, H);
         Session::new(game)
+    }
+
+    /// `session` on the shipped `default` map, named as a level opens it,
+    /// keeping its maps in a store of its own (`mapstore::Memory`) in which
+    /// `default` has a modified copy - a wall at (1, 1) - made from another
+    /// original than this build's, when `stale`.
+    fn modded_session(stale: bool) -> (Session, crate::mapstore::Store<'static>) {
+        use crate::mapstore::{Backend, Memory, Store};
+        let memory: &'static Memory = Box::leak(Box::new(Memory::default()));
+        let store = Store(memory);
+        let mut edited = MapFile::from_toml_str(crate::mapstore::original("default").expect("shipped")).expect("parses");
+        edited.set_cell(1, 1, CellObject::Wall { material: Material::Iron });
+        store.save("default", &edited).expect("kept");
+        if stale {
+            let text = memory.read("default-modd").expect("kept");
+            let body = text.split_once('\n').expect("a header").1;
+            memory.write("default-modd", &format!("# modified from 0000000000000000\n{body}")).expect("writes");
+        }
+        let mut s = session();
+        let mut map = MapFile::from_toml_str(&store.source("default").expect("opens")).expect("parses");
+        map.name = Some("default".to_string());
+        s.game.map = map.clone();
+        s.game.init(W, H);
+        s.builder.open(map);
+        s.builder.use_store(Some(store));
+        (s, store)
+    }
+
+    /// A modified copy made from the original this build ships asks
+    /// nothing; one made from another asks once, freezing the round, and
+    /// SWITCH forgets the copy and starts the round over on the original,
+    /// in the builder too.
+    #[test]
+    fn a_changed_original_asks_and_switch_takes_it() {
+        let (mut s, _) = modded_session(false);
+        s.watch_originals();
+        assert_eq!(s.question, None, "made from this build's original");
+
+        let (mut s, store) = modded_session(true);
+        s.watch_originals();
+        assert_eq!(s.question, Some(Question::OriginalChanged { name: "default".to_string() }));
+        assert!(!s.playing(), "the round stands still behind the question");
+        let r = crate::hud::question_rects(Rect::new(0.0, 0.0, 800.0, 400.0));
+        assert!(s.press_question(crate::math::Vec2::new(r.yes.x + 4.0, r.yes.y + 4.0), Rect::new(0.0, 0.0, 800.0, 400.0)));
+        assert_eq!(s.question, None);
+        assert!(!store.is_modified("default"), "the copy is gone");
+        let original = MapFile::from_toml_str(crate::mapstore::original("default").expect("shipped")).expect("parses");
+        assert_eq!(s.game.map.cell(1, 1), original.cell(1, 1), "the round is on the original");
+        assert_eq!(s.builder.map().cell(1, 1), original.cell(1, 1), "and so is the builder");
+        assert!(s.playing());
+        s.watch_originals();
+        assert_eq!(s.question, None, "asked once");
+    }
+
+    /// KEEP MINE keeps the modified copy, now as made from this build's
+    /// original, so it is not asked about again.
+    #[test]
+    fn keep_mine_keeps_the_copy_and_asks_no_more() {
+        let (mut s, store) = modded_session(true);
+        s.watch_originals();
+        assert!(s.question.is_some());
+        s.answer_question(false);
+        assert_eq!(s.question, None);
+        assert!(store.is_modified("default") && !store.stale("default"));
+        assert_eq!(s.game.map.cell(1, 1), Some(&CellObject::Wall { material: Material::Iron }), "the round stays on the copy");
+    }
+
+    /// FILE > REVERT MAP in the builder asks; REVERT forgets the copy and
+    /// opens the original on the canvas, KEEP changes nothing.
+    #[test]
+    fn revert_in_the_builder_asks_first() {
+        let (mut s, store) = modded_session(false);
+        s.driver = Driver::Build;
+        s.question = Some(Question::Revert { name: "default".to_string() });
+        s.answer_question(false);
+        assert!(store.is_modified("default"), "KEEP changes nothing");
+        s.question = Some(Question::Revert { name: "default".to_string() });
+        s.answer_question(true);
+        assert!(!store.is_modified("default"));
+        let original = MapFile::from_toml_str(crate::mapstore::original("default").expect("shipped")).expect("parses");
+        assert_eq!(s.builder.map().cell(1, 1), original.cell(1, 1), "the canvas is the original");
+        assert!(!s.builder.dirty(), "as a new document");
     }
 
     /// `session` on a map shown whole: a 34 x 17 arena with a start and a

@@ -977,6 +977,7 @@ pub mod mushroom;
 pub mod mode;
 pub mod net;
 pub mod maplint;
+pub mod mapstore;
 pub mod math;
 pub mod minimap;
 pub mod missile;
