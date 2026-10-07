@@ -153,6 +153,22 @@ pub const EMP_COIL: [(f32, f32); 12] = [
     (0.5, 3.5), // leviathan
 ];
 
+/// The gauss rail module's bore mouth, where its slug is drawn from (turret frame).
+pub const RAIL_MUZZLE: [(f32, f32); 12] = [
+    (-5.5, -5.0), // scout
+    (-6.5, -7.0), // assault
+    (-5.5, -8.0), // breaker
+    (-5.5, -10.0), // longbow
+    (-6.5, -9.0), // flak
+    (-5.5, -7.0), // wraith
+    (-5.5, -8.0), // warden
+    (-5.5, -8.0), // ravager
+    (-6.5, -7.0), // glacier
+    (-7.5, -8.0), // obelisk
+    (-7.5, -7.0), // titan
+    (-8.5, -9.0), // leviathan
+];
+
 /// The missile launcher's four tube mouths, in firing order (turret frame).
 pub const MISSILE_TUBES: [[(f32, f32); 4]; 12] = [
     [(-1.0, 1.0), (1.0, 1.0), (-1.0, 3.0), (1.0, 3.0)], // scout

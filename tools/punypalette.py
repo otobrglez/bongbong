@@ -242,6 +242,11 @@ PICKUP_INK = {
     # inks above leave free between the hammer's sky blue and the tower
     # pack's periwinkle; the light is the bar of its power sign.
     'emp_burst': ((0x24, 0x33, 0xA6), (0x4F, 0x6B, 0xFF), (0xB3, 0xC2, 0xFF)),
+    # The gauss rail (docs/gauss-rail.md): hot magenta, between the
+    # grenades' orchid and the laser's pink - the one loud hue left that is
+    # not green (objects stay off the grass's colour) and does not sit on a
+    # neighbour; the light is the slug's head leaving the rails.
+    'gauss_rail': ((0xB0, 0x1E, 0x92), (0xFF, 0x3D, 0xD8), (0xFF, 0xB0, 0xF0)),
 }
 # The rainbow shield's symbol, swept corner to corner like the old icon.
 PICKUP_RAINBOW = ((0xE8, 0x4A, 0x3C), (0xFF, 0x8A, 0x2B), (0xFF, 0xD9, 0x3D), (0x7E, 0xDB, 0x5A),
