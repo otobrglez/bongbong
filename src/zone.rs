@@ -8,9 +8,10 @@
 //!
 //! 1. `Game::zones` holds them sorted by id - the walk order - and only the
 //!    weapon that made one removes it, when it ends.
-//! 2. The AI reads `Zone::danger` (a `Danger` like any other, so the dodge,
-//!    `out_of_danger` and the edge hold need nothing of their own) and the
-//!    router `Zone::route_radius` and its cost.
+//! 2. The AI reads `Zone::danger` (a `Danger` like any other, owned by
+//!    nobody: the dodge and the edge hold need nothing of their own, and
+//!    `out_of_danger` takes a nobody's disc's exit on the tank's own side)
+//!    and the router `Zone::route` (the disc and its cost).
 //! 3. A zone's radius is its kind's knob, not its own state: the wire
 //!    carries the kind, the centre and the end.
 //! 4. A round with none - every round without the rod - reads nothing.
@@ -25,7 +26,7 @@ use crate::Position;
 pub const ZONE_ROD: u8 = 0;
 
 /// The ids a client's own zones drawn ahead of the room's take
-/// (`Game::add_provisional_zone`): past every id the wire's `u16` can name,
+/// (`Game::set_provisional_zones`): past every id the wire's `u16` can name,
 /// so one never collides with the room's.
 pub const PROVISIONAL_ZONE_BASE: u32 = 0x0001_0000;
 

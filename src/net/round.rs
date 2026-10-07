@@ -258,6 +258,8 @@ pub struct OnlineRound<T: Transport> {
     /// This seat's rods called on its own release, drawn until the room's
     /// zone claims them (`OwnCall`).
     own_calls: Vec<OwnCall>,
+    /// The next own call's number (`OwnCall::id`), from 0 each round.
+    next_own_call: u32,
     /// How many ticks ahead of the picture this seat's latest input lands
     /// in the room (`incoming_lead_ticks`), as last measured: how long a
     /// press waits to be seen in the room's picture.
@@ -319,6 +321,7 @@ impl<T: Transport> OnlineRound<T> {
             own_drones: Vec::new(),
             next_own_drone: 0,
             own_calls: Vec::new(),
+            next_own_call: 0,
             lead_ticks: 0.0,
             note: None,
             ended: None,
@@ -715,6 +718,8 @@ impl<T: Transport> OnlineRound<T> {
     fn welcomed(&mut self, welcome: &Welcome, arrived: i64) {
         self.own_drones.clear();
         self.next_own_drone = 0;
+        self.own_calls.clear();
+        self.next_own_call = 0;
         let patch = welcome.tuning_json.trim();
         if !patch.is_empty() && patch != "{}" {
             if self.tuning_before.is_none() {
@@ -997,11 +1002,10 @@ impl<T: Transport> OnlineRound<T> {
         let zones: Vec<crate::zone::Zone> = self
             .own_calls
             .iter_mut()
-            .enumerate()
-            .map(|(k, own)| {
+            .map(|own| {
                 let until = *own.until.get_or_insert(now + countdown - own.since);
                 crate::zone::Zone {
-                    id: crate::zone::PROVISIONAL_ZONE_BASE + k as u32,
+                    id: crate::zone::PROVISIONAL_ZONE_BASE + own.id,
                     kind: crate::zone::ZoneKind::Rod(crate::rod::RodCall { cell: own.press.cell, seat: Some(seat) }),
                     owner: crate::shell::Owner::Player(seat),
                     centre: crate::map::cell_to_world(own.press.cell.0, own.press.cell.1),
@@ -1175,7 +1179,9 @@ impl<T: Transport> OnlineRound<T> {
                 // uplink lit now.
                 crate::net::predict::PressShow::Rod(press) => {
                     game.flash_seat_rod(seat);
-                    self.own_calls.push(OwnCall { press, since: 0.0, until: None, claimed: false });
+                    let id = self.next_own_call;
+                    self.next_own_call = self.next_own_call.wrapping_add(1) & OWN_CALL_ID_MASK;
+                    self.own_calls.push(OwnCall { id, press, since: 0.0, until: None, claimed: false });
                 }
             }
         }
@@ -1433,6 +1439,10 @@ struct OwnDrone {
 /// is the call from then on.
 #[derive(Clone, Copy, Debug)]
 struct OwnCall {
+    /// Its number this round (`OnlineRound::next_own_call`): its provisional
+    /// zone's id past `zone::PROVISIONAL_ZONE_BASE`, the same every frame it
+    /// is drawn.
+    id: u32,
     press: crate::net::predict::RodPress,
     /// Seconds since the release.
     since: f32,
@@ -1451,6 +1461,10 @@ const OWN_DRONE_ID_BASE: u32 = 1 << 20;
 /// `OwnDrone::id` wraps within this, so `OWN_DRONE_ID_BASE` plus it stays
 /// past every id the wire can name.
 const OWN_DRONE_ID_MASK: u32 = (1 << 20) - 1;
+
+/// The numbers an own call's provisional zone id takes past
+/// `zone::PROVISIONAL_ZONE_BASE`.
+const OWN_CALL_ID_MASK: u32 = (1 << 20) - 1;
 
 /// The room's `RodCalled` at `events[called]` is the show of a release this
 /// client drew: it claims the call that release drew - the last one waiting
