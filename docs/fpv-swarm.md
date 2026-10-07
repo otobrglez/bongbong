@@ -1117,15 +1117,20 @@ Protocol 18 (from the rail's 17), once in the PR.
     incoming fire's lead, `incoming_lead_ticks` as last measured
     (docs/online-coop-prd.md §4.16). τ seconds after the press it draws
     the drone in the replica (`add_drone`, an id past the wire's,
-    `OWN_DRONE_ID_BASE`) at `fpv::launch_path(origin, out, a(τ))` with
+    `OWN_DRONE_ID_BASE` past the launch's own number, the same every
+    frame) at `fpv::launch_path(origin, out, a(τ))` with
     `a(τ) = min(τ * h / (h + Δ), h)` (`h` = `FPV_LAUNCH_HANDOVER_SECONDS`,
     0.25, held to at most `fpv_launch_seconds` so the handover always falls
     in the climb). The room's copy appears in the picture when render time
     reaches its launch tick - τ = Δ - and the round, reading the replica's
     claim (`Show::presses_drawn` on the seat's `DroneLaunched`), pairs it
-    with the oldest launch waiting and keeps it off the picture
-    (`remove_drones`) until it is `h` into its own climb; then the client's
-    goes and the room's is the drone, on the same point of the same path.
+    with the launch of the press its `Fired` names (below) and keeps it
+    off the picture (`remove_drones`) until it is `h` into its own climb;
+    then the client's goes and the room's is the drone, on the same point
+    of the same path. A room's copy struck down in its climb - an arc, a
+    burst of flak at the halo - or gone from a snapshot takes over at once:
+    the fall is the room's, and the client's drone does not climb on past
+    it (`a_launch_downed_in_its_climb_is_handed_to_the_rooms_fall_at_once`).
     The drone lifts off on the press frame, climbs a little slower than the
     room's for its first `h + Δ`, and is never drawn twice
     (`a_launch_is_drawn_on_the_press_and_handed_to_the_rooms_copy`). The
@@ -1138,7 +1143,12 @@ Protocol 18 (from the rail's 17), once in the PR.
   - *Claimed by input tick*: the room logs `Fired` then `DroneLaunched`
     for the seat in one tick; `confirm_presses` claims the drawn press for
     the `Fired`, and `presses_drawn` leaves the seat's `DroneLaunched` out
-    of the replica's events.
+    of the replica's events. The drone's id is the claim's payload: the
+    round gives the room's copy to the drawn launch of the last press
+    waiting at or before the `Fired`'s input tick, as
+    `Predictor::confirm_press` claims the press, and drops the drawn
+    launches before it still waiting, refused (`claim_own_drone`,
+    `the_rooms_launch_claims_the_drawn_launch_of_its_input_tick`).
   - *Refused*: a drawn launch the room never makes is dropped after the
     refusal wait (`Predictor::refusal_after`) plus `h`; the halo has its
     drone back. A room `Fired` the client never drew (its local gate
@@ -1209,12 +1219,17 @@ Protocol 18 (from the rail's 17), once in the PR.
   `the_drones_fly_out_on_the_end_screen_and_hurt_nobody`.
 - Trees: `a_tank_under_a_tree_is_never_locked`,
   `a_drone_loses_its_lock_when_its_target_goes_under_a_tree`,
+  `a_ground_burst_spares_a_hull_under_a_crown`,
   `a_dive_into_a_crown_hurts_only_the_tree`.
 - Air targets: `a_minigun_bullet_brings_an_opposing_drone_down`,
   `shells_pass_under_a_drone`, `a_tesla_arcs_a_drone_in_reach_without_charging`,
   `an_offline_tesla_arcs_no_drone`, `a_gun_tower_brings_a_drone_down`,
   `a_seats_own_towers_leave_its_drones_alone`, `strike_air_downs_a_drone_once`,
-  `a_seats_drawn_bullet_stops_at_an_enemy_drone_not_its_own`.
+  `a_seats_drawn_bullet_stops_at_an_enemy_drone_not_its_own`;
+  lag compensation, in `lagcomp_tests`:
+  `a_seats_bullet_meets_an_enemy_drone_where_its_client_drew_it` (a drone
+  that left the line of fire is met where the client drew it six ticks
+  back, and missed in the present).
 - Determinism: `the_swarm_draws_no_rng`, `a_round_with_drones_replays_bit_for_bit`.
 - The AI: `the_swarm_launches_at_a_seat_in_its_box_without_line_of_sight`,
   `an_enemy_never_launches_at_a_seat_from_outside_its_sight_box`,
@@ -1227,6 +1242,7 @@ Protocol 18 (from the rail's 17), once in the PR.
   `an_enemy_with_a_minigun_shoots_down_the_drone_diving_at_it`,
   `an_enemy_breaks_toward_the_nearest_tree` (under the crown before the
   dive, nothing taken), `an_enemy_with_no_tree_breaks_across_the_drones_line`,
+  `an_enemy_inside_a_danger_backs_out_before_it_answers_a_drone`,
   `an_enemy_drone_locked_on_the_seat_is_in_its_scene` (and its arrow).
 
 Headless halves:
@@ -1261,11 +1277,22 @@ Wire:
   apply, and re-encoding the replica gives the room's bytes.
 - `round.rs`: `a_launch_is_drawn_on_the_press_and_handed_to_the_rooms_copy`
   - on the press frame one drone up and one fewer in the halo, the room's
-  copy kept off the picture until the handover, never two drawn.
+  copy kept off the picture until the handover, never two drawn;
+  `a_launch_downed_in_its_climb_is_handed_to_the_rooms_fall_at_once`;
+  `the_rooms_launch_claims_the_drawn_launch_of_its_input_tick`.
+- `apply.rs`: `a_drones_burst_leans_alike_on_the_replica` - the burst's
+  fireball leans down the dive on the replica as in the room (the drone
+  heads the way it dives from its commit, `Drone::commit`).
 - `rig.rs` (`Lockstep`): `a_seats_drone_reaches_the_replica_once`,
   `an_enemys_drone_reaches_the_replica_locked_on_the_seat`.
-- The room server's `cargo test -p bongbong-server` as it stands: drones
-  are one more family in the snapshot it encodes once for everyone.
+- `server/tests/round.rs`:
+  `the_whole_client_launches_a_drone_and_the_room_takes_it_over` - a seat
+  armed by the crate beside its start in a real room presses once through
+  a whole `OnlineRound` over `NativeTransport`: drawn on the press frame,
+  the HUD's count one down at once and never back, never two of the
+  seat's drones drawn, the room's copy taking over with no jump (about
+  2 px on the hand-over frame against 1.6 px the frame before), and the
+  burst on the picture.
 
 ## 11. Probe
 
@@ -1559,10 +1586,6 @@ the AI tiers its tank ran over the frames before):
 - A probe scenario in which the seat fires its special.
 - A rail drawn on the press piercing the drawn drones: the room's
   `DroneDowned` brings them down a round trip later.
-- A server-side test playing a launch through whole `OnlineRound`s over
-  `NativeTransport` (`server/tests/round.rs`); the client's path is held by
-  `round.rs`'s and the rig's tests, and the room server treats the drones
-  as one more family in the snapshot it encodes once.
 - The seek tiers contending for one crate: two tanks wanting the same
   shield press into each other and ram each other down (harbor-lights
   0x3f0, armed, commander on, §11) - the seek tiers' rule, not the
