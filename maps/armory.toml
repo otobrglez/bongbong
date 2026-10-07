@@ -482,6 +482,14 @@ kind = "pine"
 [cells."7,17"]
 kind = "gun_tower"
 
+[cells."9,14"]
+kind = "pickup"
+pickup = "rod_from_god"
+
+[cells."34,13"]
+kind = "pickup"
+pickup = "rod_from_god"
+
 [mission]
 kind = "protect"
 
