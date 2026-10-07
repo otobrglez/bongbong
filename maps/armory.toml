@@ -490,6 +490,18 @@ pickup = "rod_from_god"
 kind = "pickup"
 pickup = "rod_from_god"
 
+[cells."9,16"]
+kind = "pickup"
+pickup = "gravity_well"
+
+[cells."34,15"]
+kind = "pickup"
+pickup = "gravity_well"
+
+[cells."11,16"]
+kind = "pickup"
+pickup = "grenades"
+
 [mission]
 kind = "protect"
 
