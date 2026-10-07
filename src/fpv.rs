@@ -274,9 +274,16 @@ impl Drone {
     }
 
     /// Stop tracking and come down on `at`: the dive takes the distance
-    /// over `fpv_dive_speed`, at least a tick, its height falling to 0.
+    /// over `fpv_dive_speed`, at least a tick, its height falling to 0, and
+    /// it heads the way it dives - what its streaks trail along and its
+    /// burst leans down, on the room and on a replica alike.
     pub fn commit(&mut self, at: Position) {
         let t = tuning();
+        let to = at - self.ground;
+        let len = to.length();
+        if len > 1e-3 {
+            self.heading = to * (1.0 / len);
+        }
         self.aim = at;
         self.dive_from = self.ground;
         self.dive_seconds = (self.ground.distance_to(at) / t.fpv_dive_speed.max(1.0)).max(PHYSICS_FIXED_DT);

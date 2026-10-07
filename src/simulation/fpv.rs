@@ -287,7 +287,7 @@ impl Game {
             .query::<(Entity, &Drone)>()
             .iter()
             .filter(|(_, d)| d.landed)
-            .map(|(e, d)| (d.id, e, d.ground, d.owner, d.velocity(), d.stage == DroneStage::Falling))
+            .map(|(e, d)| (d.id, e, d.ground, d.owner, d.heading, d.stage == DroneStage::Falling))
             .collect();
         if landed.is_empty() {
             return;
