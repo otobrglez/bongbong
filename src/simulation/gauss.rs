@@ -476,29 +476,6 @@ impl Game {
             .collect()
     }
 
-    /// The nav cells inside every charging rail's lane, each once: what
-    /// the route grid surcharges (`gauss_ai_lane_cost`).
-    pub(super) fn rail_route_cells(&self) -> Vec<Position> {
-        let cell = crate::OBSTACLE_GRID_SIZE;
-        let mut cells = std::collections::BTreeSet::new();
-        for lane in self.rail_lanes() {
-            let d = lane.dir.vec();
-            let n = Vec2::new(-d.y, d.x);
-            let across = (lane.half_width / cell).ceil() as i32;
-            let mut along = 0.0;
-            while along <= lane.length {
-                for k in -across..=across {
-                    let p = lane.from + d * along + n * (k as f32 * cell);
-                    if lane.depth(p) > 0.0 {
-                        cells.insert(crate::map::world_to_cell(p));
-                    }
-                }
-                along += cell;
-            }
-        }
-        cells.into_iter().map(|(c, r)| crate::map::cell_to_world(c, r)).collect()
-    }
-
     /// What a slug of each rail-carrying enemy's own would go through each
     /// way it could face (docs/gauss-rail.md "What it is handed"), from the
     /// gun line's muzzle that facing gives, by the room's own trace

@@ -5380,12 +5380,11 @@ fn hold_for_tell(intent: Intent, tell: Option<crate::tank::Tell>) -> Intent {
 
 /// An enemy's trigger for this frame: a charge weapon's stepped
 /// (`gauss::charge_trigger`, its press edge from `Tank::trigger_held`); a
-/// tell running is counted down and,
-/// at its end, the weapon fires along the facing it held (if the tank is
-/// whole, still carries it and its cooldown is out; otherwise the tell
-/// lapses); else a pull with the cooldown out starts the weapon's tell
-/// (`ActiveWeapon::tell_seconds`, `Event::TellStarted`) or, for a weapon
-/// with none, fires it as ever.
+/// tell running is counted down and, at its end, the weapon fires along the
+/// facing it held (if the tank is whole, still carries it and its cooldown
+/// is out; otherwise the tell lapses); else a pull with the cooldown out
+/// starts the weapon's tell (`ActiveWeapon::tell_seconds`,
+/// `Event::TellStarted`) or, for a weapon with none, fires it as ever.
 fn enemy_trigger(physics: &mut Physics, f: &mut Frame, entity: Entity, tank: &mut Tank, owner: Owner, intent: Intent) {
     let pressed = intent.fire && !tank.trigger_held;
     tank.trigger_held = intent.fire;

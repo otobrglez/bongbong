@@ -1118,13 +1118,6 @@ tunables! {
         gauss_frame_light: f32 = 1.0 in 0.0 ..= 2.0;
         /// Seconds between an enemy's decisions to charge.
         gauss_ai_fire_interval: f32 = 2.0 in 0.1 ..= 20.0;
-        /// Extra route cost on every cell of a charging rail's lane, so
-        /// routes go round the end of a lane rather than up or across it;
-        /// 0 switches it off.
-        gauss_ai_lane_cost: usize = 16 in 0 ..= 64;
-        /// A charging enemy creeps along its lane toward the seat it
-        /// charges at while that seat is further than this (px).
-        gauss_ai_creep_min_px: f32 = 96.0 in 0.0 ..= 1000.0;
     }
 
     group flamethrower {

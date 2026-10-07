@@ -416,8 +416,8 @@ enum SpecialUse {
     Approach { to: Position },
     /// Hold the trigger of a charge weapon facing `face` (the charge-and-hold
     /// pattern, docs/gauss-rail.md): a press starts a charge, holding keeps
-    /// it; `creep` drives along `face` meanwhile, at the charge's crawl.
-    Charge { face: Dir, creep: bool, why: &'static str },
+    /// it, and the tank stands its ground meanwhile.
+    Charge { face: Dir, why: &'static str },
     /// Let a charge weapon's trigger go facing `face`: the simulation fires
     /// the charge if it is ready. `at_seat` is the seat it is used on.
     Release { face: Dir, at_seat: Option<u8>, why: &'static str },
@@ -3023,11 +3023,11 @@ fn gauss_rule(b: &Brain, sense: &GaussSense) -> Option<SpecialUse> {
         }
     }
     let (face, lane) = best?;
-    Some(SpecialUse::Charge { face, creep: gauss_creep(b, face, &lane), why: lane.why() })
+    Some(SpecialUse::Charge { face, why: lane.why() })
 }
 
 /// A charging gauss rail's rule (`windup_rule`): charging, it holds the
-/// trigger and creeps along its lane; full, it lets go if the lane still
+/// trigger and stands its ground; full, it lets go if the lane still
 /// holds a seat that counts (or a hunter's quarry), else it holds and
 /// waits for one to step back in; overcharged it holds on to the vent -
 /// it never releases overcharged, so iron stays the cover that holds
@@ -3038,20 +3038,11 @@ fn gauss_charge_rule(b: &Brain, face: Dir, sense: Option<&GaussSense>) -> Specia
     match b.me.charge.map(|c| c.stage()) {
         Some(crate::tank::ChargeStage::Full) => match lane.filter(|l| l.counts() && l.target_along().is_some()) {
             Some(lane) => SpecialUse::Release { face, at_seat: lane.at_seat.map(|(s, _)| s), why: lane.why() },
-            None => SpecialUse::Charge { face, creep: false, why: "rail-wait" },
+            None => SpecialUse::Charge { face, why: "rail-wait" },
         },
-        Some(crate::tank::ChargeStage::Overcharged) => SpecialUse::Charge { face, creep: false, why: "rail-vent" },
-        _ => SpecialUse::Charge { face, creep: lane.is_some_and(|l| gauss_creep(b, face, &l)), why: "rail-charge" },
+        Some(crate::tank::ChargeStage::Overcharged) => SpecialUse::Charge { face, why: "rail-vent" },
+        _ => SpecialUse::Charge { face, why: "rail-charge" },
     }
-}
-
-/// Whether a charging rail creeps along `face`: its target further along
-/// the lane than `gauss_ai_creep_min_px`, the cell ahead open and nothing
-/// crowding ahead. It drives along its own lane, so the lane stays put.
-fn gauss_creep(b: &Brain, face: Dir, lane: &GaussLane) -> bool {
-    lane.target_along().is_some_and(|d| d > tuning().gauss_ai_creep_min_px)
-        && b.walls_ahead[face.index()].is_none()
-        && !crowded_ahead(b.me.position, face, b.movers, b.my_index)
 }
 
 /// The EMP burst's rule (docs/emp-burst.md "AI"), in priority order: a
@@ -3266,7 +3257,7 @@ fn act_special(b: &mut Brain) -> Status {
             b.intent.move_dir = Some(b.steer(to));
             b.ai.special_why = Some("approach");
         }
-        SpecialUse::Charge { face, creep, why } => {
+        SpecialUse::Charge { face, why } => {
             b.intent.face = Some(face);
             b.ai.commit(face);
             b.ai.special_why = Some(why);
@@ -3278,9 +3269,6 @@ fn act_special(b: &mut Brain) -> Status {
                     b.ai.fire_timer = special_fire_interval(b.me.active_weapon());
                 }
                 b.intent.fire = true;
-                if creep {
-                    b.intent.move_dir = Some(face);
-                }
             }
         }
         SpecialUse::Release { face, at_seat, why } => {
