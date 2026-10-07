@@ -333,6 +333,10 @@ fn a_missile_in_the_ring_falls_dead_and_lands_a_dud() {
     });
     assert!(!events.iter().any(|e| matches!(e, Event::MissileBlast { x, .. } if dud.is_some_and(|d| (d.x - x).abs() < 1.0))), "no blast where it fell");
     assert!(game.world.query::<&Missile>().iter().all(|m| m.id != 900), "gone");
+    assert!(
+        game.world.query::<&Missile>().iter().any(|m| m.id == 901 && !m.is_dead()) || events.iter().any(|e| matches!(e, Event::MissileBlast { .. })),
+        "the one outside the ring flies on"
+    );
 }
 
 /// At night the pulse puts every lamp post on the map out for
@@ -671,4 +675,38 @@ fn the_weapon_slot_flickers_offline_while_the_special_is_down() {
     assert_eq!(a.weapon, ActiveWeapon::Laser, "the special it carries");
     let (top, bottom) = crate::hud::offline_lines("WPN OFFLINE");
     assert_eq!((top, bottom), ("WPN", Some("OFFLINE")));
+}
+
+/// The hammer's trouble reads the outage: a seat its knock would slide
+/// into an enemy tower's reach is "trouble" while the tower fights, and
+/// only "breaker" while an EMP has it offline.
+#[test]
+fn an_offline_tower_is_no_trouble_for_the_hammer() {
+    let seat_at = Position::new(300.0, 192.0);
+    let reach = tuning().tesla_range;
+    let tower = (((seat_at.x + reach + 40.0) / 32.0).round() as i32, 6);
+    for (offline, want) in [(false, "trouble"), (true, "breaker")] {
+        let mut game = round(&format!("cells.\"{},{}\" = {{ kind = \"tesla\", side = \"enemy\" }}\n", tower.0, tower.1));
+        let seat = game.player().unwrap();
+        game.place_tank(seat, seat_at, Some(270.0)).unwrap();
+        with_tank_mut(&game.world, seat, |tk| tk.emp_charges = 0);
+        let enemy = parked(&mut game, Position::new(seat_at.x - 90.0, 192.0));
+        with_tank_mut(&game.world, enemy, |tk| tk.sonic_ammo = 3);
+        if offline {
+            game.towers.get_mut(&tower).unwrap().disable(10.0);
+        }
+        step(&mut game, false);
+        step(&mut game, false);
+        assert_eq!(arm(&game, enemy), Some(want), "offline {offline}");
+    }
+}
+
+/// A player tower offline is no detour for the enemies: its reach leaves
+/// the route grid's surcharge while it is out.
+#[test]
+fn an_offline_player_tower_is_no_detour() {
+    let mut game = round("cells.\"12,8\" = { kind = \"tesla\", side = \"player\" }\n");
+    assert!(!game.player_tower_reach(W, H).is_empty(), "online, its reach is priced");
+    game.towers.get_mut(&(12, 8)).unwrap().disable(5.0);
+    assert!(game.player_tower_reach(W, H).is_empty(), "offline, it is not");
 }

@@ -238,37 +238,38 @@ down.
 
 | File | What |
 |---|---|
-| `src/emp.rs` (new) | The weapon's headless half. `EmpPulse` (origin, owner slot, age, `swept` radius, `live`), `box_reach(origin, centre, half) -> f32`, `seat_value` (the AI's pure scoring, §4), the composers `compose_ring`, `compose_sparks`, `compose_tell` and `lamp_sparks` (pure, `pyro::Shape`s), `droop_side(slot) -> f32`, `module_cell` |
-| `src/simulation/emp.rs` (new) | The world half. `fire_emp` (the dispatch arm's body), `resolve_emp` (the frame's presses into pulses, the lamps at night), `tick_emp_pulses(f, live)` (the strike walk), `strike_tank`/`strike_tower`/`strike_missile`, `emp_show` (the cosmetic half - the ring on the list, the ripple, the module's flash - which a replica's `EmpPulse` and a client's press call too), `emp_field`/`emp_sense` (what the AI is handed, §4), `emp_dangers` (§4), `seat_emp`, `Game::{is_night, lit_lamp_posts, lamps_out}` |
+| `src/emp.rs` (new) | The weapon's headless half. `EmpPulse` (origin, owner, age, `swept` radius, `live`, the slots `struck`), `box_reach(origin, centre, half) -> f32`, `seat_value` (the AI's pure scoring, §4), the composers `ring`, `sparks`, `tell` and `lamp_sparks` (pure, `pyro::Shape`s) with `sparking`/`spark_seed` (when a hull's sparks fly, the light `weather.rs` gives them) and `lamp_lit` (a post's flicker back), `droop_side(slot) -> f32`, `module_cell` |
+| `src/simulation/emp.rs` (new) | The world half. `fire_emp` (the dispatch arm's body), `resolve_emp` (the frame's presses into pulses, the lamps at night), `tick_emp_pulses(f, live)` and its one strike walk `strike_emp` (tanks, towers, missiles, in that order), `tick_emp_pictures` (a replica's rings), `emp_show` (the cosmetic half - the ring on the list, the ripple, the module's flash - which a replica's `EmpPulse` and a client's press call too), `EmpSeat` and `emp_senses` (what the AI is handed, §4), `emp_dangers` and `danger_route_cells` (§4), `seat_emp`, `any_emp`, `Game::{is_night, lit_lamp_posts, lamps_out}` |
 | `src/simulation/weapons.rs` | The `ActiveWeapon::Emp` dispatch arm |
 | `src/simulation/mod.rs` | `Frame::pending_emp`; `Game::{emp_pulses, lamps_out}`; the phase calls (`resolve_emp` and `tick_emp_pulses(f, true)` after the hammer's, before `step_world`; `tick_emp_pulses(f, false)` on the end screen); the disabled coast branch, the reboot, the spotters and the retarget pass in `enemy_phase`, and the dangers it builds; `Pending::{disabled, clearing}`; `tick_timers` (`disabled`, `special_offline`, `emp_flash`, `lamps_out`); `tick_presentation` (the cosmetic pulses, the tanks' and towers' timers, `lamps_out`); `Event::{EmpPulse, MissileDud, Disabled, TowerDisabled}`; the swap's table entry (hammer §3.4) |
 | `src/simulation/field.rs` | `field_alerts`: a disabled tank neither sees nor relays nor receives |
 | `src/simulation/waves.rs` | `reroll_stragglers` skips a disabled tank |
 | `src/simulation/towers.rs` | `tower_phase`'s offline branch; `tower_views`' `disabled` and `droop`; `player_tower_reach` leaves offline towers out |
 | `src/simulation/missiles.rs`, `src/missile.rs` | `MissileStage::Dead`, `Missile::{kill, dud}`, the fall; `guide_missiles` skips the dead; `resolve_missiles`' dud; `Game::missiles` carries `dead` |
-| `src/simulation/sonic.rs` | The hammer's interactions (§12): `hammer_field`'s trouble leaves offline towers and disabled enemies out; `hammer_rule`'s approach keeps out of dangers |
-| `src/simulation/command.rs`, `src/simulation/comms.rs` | `UnitView::{disabled, clearing}`, the `clear_rings` producer (issues the existing `Order::Nudge`), `deconflict`'s two rules for the disabled and the already ordered, `Skipped::deaf` |
+| `src/simulation/sonic.rs` | The swap's table entry; the hammer's interactions (§12): `hammer_senses`' trouble leaves offline towers and disabled enemies out |
+| `src/simulation/nav.rs` | `route_grid_on` surcharges the cells inside a seat's danger (`enemy_danger_route_cost`) |
+| `src/simulation/command.rs`, `src/simulation/comms.rs` | `UnitView::{busy, clearing}` with `command::Busy` (`Disabled`; the later weapons add their states), the `clear_rings` producer (issues the existing `Order::Nudge`), `deconflict`'s two rules for a busy unit and the already ordered, `gives_way`'s first step (a busy unit never gives way), `Skipped::deaf` |
 | `src/tank.rs` | `emp_charges`, `disabled`, `special_offline`, `emp_flash`, `droop`; `ActiveWeapon::Emp` (`name`, `full_load`, `tell_seconds`), `SPECIAL_WEAPONS`; `special`, `active_weapon`, `special_down`, `disable`, `kick_emp`, `ease_droop`; `weapon_ammo`/`take_weapon`/`empty_stock`/`wants_pickup`; the module's cells in `module_cols`, the sag in `turret_placement`, `draw_tank_dark`, `draw_tank_glow`'s skip |
 | `src/tower.rs` | `Tower::{disabled, droop, disable}`, `TowerView::{disabled, droop}`, `draw_tower`'s glow off and sag |
 | `src/pickup.rs` | `PickupKind::Emp` (`emp_burst`, row 14, its ink, spills) |
-| `src/ai.rs` | `SpecialSense::Emp(EmpSense)`, `emp_rule`, `generic_fire(Emp)`, `SpecialUse::Clear`; `Danger`, `DangerShape`, the `dodge` tier, `Brain::{danger_here, out_of_danger}`; `Ai::{down, clearing, dodging, reboot}`; `SEEK_SPECIALS` gains the EMP; `AiSnapshot::{down, dodging}` |
+| `src/ai.rs` | `SpecialSense::Emp(EmpSense)`, `emp_rule`, `generic_fire(Emp)`, `SpecialUse::Clear`; `Danger`, `DangerShape`, the `dodge` tier, `Brain::{danger_here, out_of_danger, way_out, in_danger}`, `act_attack`'s wait outside a danger; `Ai::{down, clearing, dodging, kept_out, reboot}`; `SEEK_SPECIALS` gains the EMP; `hammer_rule`'s closer keeps out of dangers; `AiSnapshot::{down, dodging, kept_out}` |
 | `src/lamp.rs` | `draw_post`'s dark glass and its flicker back; `lamp_sparks` |
 | `src/weather.rs` | `lights_in`: a disabled hull's spark light for its headlights and glow, an offline tower's lights out, dark posts, a dead missile's exhaust out; `Game::is_lit` reads the lit posts |
 | `src/hud.rs` | `HUD_EMP_COLOR`, the `weapon_color`/`weapon_pickup` arms, `WeaponSlot::offline`, `WEAPON_SLOT_W`, `offline_lines` |
 | `src/render/hud.rs` | The offline readout; `corner_tests` pins `WEAPON_SLOT_W` to the slot table |
 | `src/render/game.rs` | The rings, sparks, tells and lamp sparks in the glowing pass; the dark lamps over a disabled hull in the lit pass; the light layer skipped; the dev stats arm |
 | `src/render/missile.rs` | A dead missile's sprite with no exhaust, nose tipping into the fall |
-| `src/fx.rs`, `src/burst.rs` | `ImpactKind::Dud` and its burst off `MissileDud`; no trail off a dead missile |
-| `src/indicators.rs` | `TankView::disabled`: no lane warning from a disabled enemy |
+| `src/fx.rs` | A dud's dust and cobalt sparks off `MissileDud` (particle bursts, no `ImpactKind` of its own), a splash where it lands wet |
+| `src/indicators.rs` | `Scene::of` reads each tank's outage beside its facing: no lane warning from a disabled enemy |
 | `src/pyro.rs` | The `EMP` ramp |
 | `src/net/wire.rs` | `WeaponKind::Emp` (`drawn_on_press`), `TankState::{disabled, offline, shells}`, `MissileState::dead`, `tile_flags::DISABLED`, `RoundState::lamps_out` |
 | `src/net/events.rs` | `WireEvent::{EmpPulse, MissileDud}`, the `press_show` arm, `Disabled` and `TowerDisabled` on `NOT_SENT` |
 | `src/net/encode.rs`, `src/net/apply.rs` | The new fields; `EmpPulse`'s show; the `kick_turret` arm |
 | `src/net/predict.rs`, `src/net/round.rs` | `PressShow::Emp`, `Predictor::offline_left`, the shown seat's offline |
-| `src/simulation/present.rs` | `draw_press_show`'s EMP arm |
-| `src/simulation/replica.rs` | `DrawableTank::{disabled, offline, shells}`, `DrawableMissile::dead`, the towers' `disabled`, `DrawableRound::lamps_out` |
-| `src/simulation/debug.rs`, `src/devserver.rs` | `set_tank`'s `emp_charges`, `disabled`, `special_offline`; the snapshot's `emp`, `disabled`, `offline`, `down`, `dodging`, `towers`, `lamps_out`, `emp_pulses` |
-| `src/bin/probe.rs` | The tank line's `emp=`/`dis=`, the fire tuple, the holds |
+| `src/simulation/present.rs` | `draw_press_show(seat, weapon, origin, facing)`, the press shows by weapon (the hammer's wave, the EMP's ring) with the seat's module kicked; `hold_seat_offline(seat, seconds)`, the predicted offline on the drawn seat |
+| `src/simulation/replica.rs` | `DrawableTank::{disabled, offline}`, `DrawableMissile::dead`, `DrawableTile::offline`, `DrawableState::lamps_out` - booleans, so the room and a replica that runs its timers down agree |
+| `src/simulation/debug.rs`, `src/devserver.rs` | `set_tank`'s `emp_charges`, `disabled`, `special_offline`; the snapshot's `emp`, `disabled`, `offline`, `down`, `dodging`, `towers` (`TowerDebug`), `lamps_out`, the rings as `emp_pulse` projectiles |
+| `src/bin/probe.rs` | The tank line's `emp=`/`dis=true`, the fire tuple; `HOLDS` gains `kept out`, and `OUT_OF_ITS_HANDS` (new) holds `disabled` |
 | `src/editor/mod.rs` | `Tool::Pickup(PickupKind::Emp)` (`emp_burst`) |
 | `maps/armory.toml` | Its crates and lamp posts (§3.4) |
 | `src/tuning.rs` | The `emp` group (§6), two rows in `enemies` |
@@ -372,9 +373,19 @@ in `HUD_EMP_COLOR`), the press show's claim by input tick (hammer §3.3),
   special is offline still carries it, and does not trade it for a crate),
   `module_cols`, `hud::WeaponSlot`, the wire's `TankState::weapon`, the
   spawn swap ("a tank that drew a special").
-- **The pulse's strike walk** (`tick_emp_pulses`): tanks, towers,
-  missiles; the drones (BB-40) and the well (BB-42) add their arms after
-  the missiles, on the same front.
+- **The pulse's strike walk** (`strike_emp`, called by
+  `tick_emp_pulses` with the band the front swept this tick): tanks,
+  towers, missiles, each its own block; the drones (BB-40) and the well
+  (BB-42) add their blocks after the missiles, on the same band.
+- **The disabled state's readers are open lists**: the commander's
+  `UnitView::busy` is an `Option<command::Busy>` (`Disabled` here; a
+  weapon that takes a tank out of the commander's hands adds a variant),
+  and the probe has two tables - `HOLDS` (a hold the AI chose: asleep, a
+  tell, a skid, kept out of a danger) and `OUT_OF_ITS_HANDS` (a state the
+  tank's motion is not its own in: disabled), each a row per state.
+- **`Predictor::offline_left`**, read by `pull_trigger`'s one gate
+  (`Game::seat_arms(seat, offline)`), so any weapon that takes the seat's
+  special offline on the press sets it and every weapon's arm sees it.
 - **Dangers** (`ai.rs`): the places an enemy keeps out of, built once a
   frame by `enemy_phase` and read by every enemy's `think`:
 
@@ -385,8 +396,10 @@ in `HUD_EMP_COLOR`), the press show's claim by input tick (hammer §3.3),
   #[derive(Clone, Copy, Debug, PartialEq)]
   pub struct Danger {
       pub shape: DangerShape,
-      /// The tank whose weapon it is: that tank never shies from it.
-      pub owner: usize,
+      /// The owner slot of the tank whose weapon it is: that tank never
+      /// shies from it. `None` for one nobody owns (the rod's call
+      /// circle), which every enemy keeps out of.
+      pub owner: Option<usize>,
   }
 
   #[derive(Clone, Copy, Debug, PartialEq)]
@@ -399,29 +412,52 @@ in `HUD_EMP_COLOR`), the press show's claim by input tick (hammer §3.3),
   impl Danger {
       /// How far `p` stands inside (negative: outside).
       pub fn depth(&self, p: Position) -> f32;
-      /// The nearest point `clear` px outside it from `p`, along the line
-      /// from its middle through `p` (from its middle along `facing` when
-      /// `p` is the middle).
-      pub fn exit(&self, p: Position, clear: f32, facing: Dir) -> Position;
+      /// The points `clear` px outside it nearest `p`, best first: the
+      /// nearest, then ones turned further and further from it (a disc:
+      /// 30, 60, 90 and 120 degrees each way, never back through the
+      /// middle), along the line through `from` when `p` is the middle.
+      pub fn exits(&self, p: Position, clear: f32, from: Position, facing: Dir) -> [Position; 9];
+      /// `exits`' first.
+      pub fn exit(&self, p: Position, clear: f32, from: Position, facing: Dir) -> Position;
+      /// The points `clear` px outside it on the axes through its middle:
+      /// where a tank fighting what stands there waits lined up on it.
+      pub fn posts(&self, clear: f32) -> [Position; 4];
+      /// The point it is drawn round.
+      pub fn middle(&self) -> Position;
   }
   ```
+
+  A new shape adds its arm to those four; nothing else matches on it.
 
   The `dodge` tier (1.6, after `special`, before `flee`):
   `condition(b.danger_here().is_some())`, `action("dodge", act_dodge)`.
   `danger_here` is the deepest danger this tank is inside and does not
   own, ties to the earlier in the list - latched by `Ai::dodging` until
   the tank stands `enemy_danger_clear_px` (24) outside it, so the edge is
-  never a place to jitter. `act_dodge` resets the aim and steers
-  (`Brain::steer`) at `danger.exit(me, enemy_danger_clear_px + a cell,
-  facing)`. And so the rest of the tree never steers back in, the points
-  it steers at are kept out of every danger the tank does not own
-  (`Brain::out_of_danger(p)`: the point itself, or its `exit` from the
-  first danger holding it): the engagement point (`engage_point`, which
-  chase and attack's reposition read), patrol's alert point, and a seek's
-  pickup (one inside a danger is not sought). Aim and fire still read the
-  real target: a tank keeps shooting shells at the seat from outside the
-  disc. The rod (BB-41) adds its circle as a `Disc`; the rail (BB-39)
-  adds `DangerShape::Lane` if its surcharge alone does not do.
+  never a place to jitter. `act_dodge` resets the aim and drives
+  straight onto the route to its way out (`Brain::way_out`: the first of
+  `exits(me, enemy_danger_clear_px + a cell)` on the field, in a usable
+  cell and joined to where it stands - a seat by the field's edge has its
+  nearest exit off the field), committing to that heading at once:
+  steering's commitment never takes a point behind the tank, and a dodge
+  is most often a reversal. And so the rest of the tree never steers back
+  in, the points it steers at are kept out of every danger the tank does
+  not own (`Brain::out_of_danger(p)`: the point itself, or its
+  `way_out` from the first danger holding it, at the dodge's own
+  distance): the engagement point (`engage_point`, which chase and
+  attack's reposition read), patrol's alert point, and a seek's pickup
+  (one inside a danger is not sought). The seat itself, steered at with
+  no slot, is its own danger's middle, so its way out is a `post`, inside
+  the seat's sight box first (a shot is fired from there). Attack's
+  reposition that has reached a point moved out of a danger waits there
+  facing the fight (`Ai::kept_out`, a probe hold) instead of driving on
+  past it, which the commitment would, into the danger. The frame's route
+  grid surcharges the cells inside a seat's danger
+  (`enemy_danger_route_cost`, 2), so a route goes round it rather than
+  through it. Aim and fire still read the real target: a tank keeps
+  shooting shells at the seat from outside the disc. The rod (BB-41)
+  adds its circle as a `Disc` with no owner; the rail (BB-39) adds
+  `DangerShape::Lane` if its surcharge alone does not do.
 - **`TankState::{disabled, offline, shells}`**, `tile_flags::DISABLED`
   and `WeaponSlot::offline` (§5, §8) - any later weapon that takes a
   special offline reads and writes the same fields.
@@ -439,9 +475,9 @@ Into `maps/armory.toml` (hammer §3.5), nothing of the hammer's moved:
 
 The towers it acts on are there (the player's tesla at 3,3, the enemies'
 tesla at 34,3 and gun tower at 34,14), and the shield inside the glass
-house is the shield it pops. The cells are checked again in Phase 2
-against the linter, and the armory's CPU thumbnail pin is re-baselined
-for the crates and posts.
+house is the shield it pops. The map lints clean (`supported_maps_no_new_errors`)
+and the armory's CPU thumbnail pin is re-baselined for the crates and
+posts.
 
 ## 4. AI
 
@@ -488,9 +524,10 @@ pub struct EmpSense {
     /// `emp_radius_px` of it - what the approach weighs.
     pub target_value: i32,
     pub target_crowded: bool,
-    /// The nearest live enemy with an online EMP to the seat this tank
-    /// fights (ties on slot): the one that may close in.
-    pub brawler: bool,
+    /// One of the `emp_ai_closers` live enemies with an online EMP
+    /// nearest the seat this tank fights (ties on slot): the ones that may
+    /// close in.
+    pub closer: bool,
 }
 ```
 
@@ -515,13 +552,15 @@ half height), and the flag keeps the rule true on any knobs.
       - it holds its fire and fights on, never firing the EMP into an ally;
    3. otherwise `Fire { face: facing, at_seat, why: "pulse" }` - the
       facing it has (a pulse is all round), through the tell.
-5. **Approach**: a `brawler`, under `enemy_flee_damage`, not a guard that
+5. **Approach**: a `closer`, under `enemy_flee_damage`, not a guard that
    holds, not hunting the frog, whose seat is within `attack_range`, in
    its line of sight, not hidden from it, worth a detour alone
    (`target_value >= emp_ai_approach_value`, 2) and not crowded
    (`!target_crowded` - it would only hold beside an ally there), closes
-   in (`Approach { to: seat }`); the personal-space brake stops it short
-   of the hull. One brawler per seat keeps a pack of EMP tanks from
+   in to its own spot on the line from the seat out to its engagement
+   slot, three fifths of the ring out (`Brain::close_spot`, the hammer's),
+   and holds there facing the seat (`Hold { why: "close" }`). One closer
+   per seat (`emp_ai_closers`) keeps a pack of EMP tanks from
    piling onto one seat; the rest keep their slots and use it when the
    seat comes into their ring.
 6. Otherwise `None`: the tree goes on (attack lines up and settles but
@@ -531,7 +570,7 @@ half height), and the flag keeps the rule true on any knobs.
 pulsed, by day a bare one too (worth 1) - the issue's "fires when it pays:
 at least one seat, or a player tower, inside the ring" - and so is a player
 tower alone. The weights are preference: they pick the seat the pulse is
-used on (`at_seat`) and decide what is worth going after. A brawler closes
+used on (`at_seat`) and decide what is worth going after. A closer closes
 in only on a seat worth `emp_ai_approach_value` (2): one with a live shield
 or an online special - or any seat at night (the night's +1), when killing
 its headlights is worth the charge and the EMP tank goes looking for it, the
@@ -553,10 +592,12 @@ The friendly-fire hold becomes an order (docs/enemy-command-and-control-
 prd.md):
 
 - **`UnitView`** gains `clearing: Option<f32>` (the tank's `Ai::clearing`
-  this tick, from its rule's `Clear`) and `disabled: bool`.
+  this tick, from its rule's `Clear`) and `busy: Option<command::Busy>`
+  (`Busy::Disabled` here - an open list the later weapons add their
+  states to).
 - **`clear_rings`**, a producer `plan` runs **before** `deconflict`: for
   each unit with `clearing = Some(radius)`, in slot order, every other
-  unit - not a wreck, not disabled, not already ordered this frame - whose
+  unit - not a wreck, not busy, not a seat, not already ordered this frame - whose
   centre stands within `radius` plus its own avoidance radius of the
   clearer is given `Order::Nudge { dir }`: the cardinal away from the
   clearer along the larger of the two offsets, then along the smaller,
@@ -566,10 +607,9 @@ prd.md):
   alone (the commander speaks `Intent`, never `Ai`). The ring clears over
   a few ticks; the clearer holds facing until it has, then pulses.
 - **`deconflict`** skips a yielder that already holds an order this frame
-  (counted in `already_ordered`), so a cleared unit is not also slowed;
-  and **a disabled unit never gives way** - it cannot hear: `gives_way`
-  treats it as it treats a player, and it is never handed an order
-  (`Skipped::deaf` counts the would-be yields).
+  , so a cleared unit is not also slowed; and **a busy unit never gives
+  way** - it cannot hear: `gives_way`'s first step, and it is never
+  handed an order (`Skipped::deaf` counts the would-be yields).
 - **C2 off stays byte-identical**: `plan` returns before any producer, as
   ever, the EMP rule never offers `Clear`, and no unit is ever
   `clearing`. With C2 on and no EMP on the field, `clear_rings` finds no
@@ -607,7 +647,7 @@ wins the duel. The danger reads no RNG, and its exits break ties in
 ### What changes for enemies that carry something else
 
 - A disabled enemy coasts (§1); its tell, of any weapon, has lapsed.
-- The hammer's rule (§12): its brawler does not approach a seat inside a
+- The hammer's rule (§12): its closer does not approach a seat inside a
   danger; an offline enemy tower and a disabled enemy are no trouble to
   shove a seat into.
 - `wants_pickup` reads `special()`: a disabled enemy coasting over a
@@ -630,7 +670,7 @@ never rolled.
   water step), `#038AAB` (`BLUE_DK`), `#27D8C5` (`BLUE_BRIGHT`), `#93ECE2`
   (`BLUE_PALE`), `#FFFFFF` - the palette's own blues, the Armory scene's
   colours, on the palette (effects.md's ramp table gains its row).
-- **The ring** (`emp::compose_ring`), in `render/game.rs`'s glowing pass
+- **The ring** (`emp::ring`), in `render/game.rs`'s glowing pass
   (fast and bright, rule 7; read at night): three full circles of
   `pyro::Shape::Arc` - the front at `emp_ring_speed * age`, two blocks
   thick in `BLUE_PALE`; a one-block `WHITE` circle 6 px inside it; a
@@ -645,7 +685,7 @@ never rolled.
 - **The ripple**: `Shockwave::scaled(pivot, emp_shock)` (0.25 of a tank
   dying) through `shockwave.rs` - a soft bend and shake, none under
   reduced motion.
-- **Sparks on a disabled hull** (`emp::compose_sparks`), glowing pass, for
+- **Sparks on a disabled hull** (`emp::sparks`), glowing pass, for
   the whole time it is disabled: bursts of 0.2 s twice a second, phased
   by slot (the Armory scene's rhythm); in a burst, every 1/12 s a fresh
   hashed set of four zigzags from points on the hull box's edge outward
@@ -653,7 +693,8 @@ never rolled.
   and one `BLUE_BRIGHT` glow of 20 px over the hull; over the last second
   of the timer, one zigzag fewer every quarter second. At night a
   burst throws a little light (`weather::lights_in`, an unshadowed point
-  of 28 px in `EMP`'s pale blue at `emp_spark_light`).
+  of 28 px in `EMP`'s pale blue at `emp_spark_light`, on the frames
+  `emp::sparking` says a burst is on - the drawing's own rhythm).
 - **Lights out.** A disabled tank throws no headlight, spotlight or hull
   glow (`lights_in`), and its light layer is not drawn at night
   (`draw_tank_glow` skipped). By day, where the paint already carries the
@@ -672,7 +713,7 @@ never rolled.
   turret does not sag. An offline gun tower's and bio slush's top layer
   sags the same way (`Tower::droop`, eased in `tick_tower_effects`). Drawn
   only: no shot reads it.
-- **The tell** (`emp::compose_tell`), glowing pass: arcs jumping round the
+- **The tell** (`emp::tell`), glowing pass: arcs jumping round the
   module's coil (`tank_art::EMP_COIL`): every 1/15 s a hashed set of two
   to four zigzags from the coil's rim outward, 4 px growing to 12 px with
   the tell's progress, `BLUE_PALE` with `WHITE` heads, dissolving in from
@@ -682,13 +723,13 @@ never rolled.
 - **A dead missile** (`render/missile.rs`): no exhaust flame, its nose
   easing toward the way it falls (`Missile::facing` follows the drawn path
   as ever, and the path now drops), no smoke trail (`fx.rs` skips it). Its
-  landing (`MissileDud`, `fx.rs`): `ImpactKind::Dud`, composed in
-  `burst.rs` - a small `DUST` puff by the ground's dust (`pyro::dust_of`)
-  and three `WHITE` spark blocks thrown up, gone in 0.4 s. No scorch, no
+  landing (`MissileDud`, `fx.rs`): particles, not a composed burst - a
+  small puff of dust and a few sparks in `EMP`'s pale blue and white
+  thrown up, and a splash where it lands in water. No scorch, no
   fireball.
-- **Lamp posts going out** (`lamp::draw_post`, which takes the seconds
-  `lamps_out` has left): dark - the glass `SMOKE[1]`, no flame - while it
-  runs; in its first 0.25 s a little burst of `WHITE` and `BLUE_PALE`
+- **Lamp posts going out** (`lamp::draw_post(.., lit)`, `lit` from
+  `emp::lamp_lit(at, lamps_out)`): dark - the glass `SMOKE[1]`, no
+  flame - while it runs; in its first 0.25 s a little burst of `WHITE` and `BLUE_PALE`
   blocks off each lantern (`emp::lamp_sparks`, glowing pass); in its last
   0.6 s each post flickers back in two hashed blinks before it steadies.
   `lights_in` follows the drawing (a post throws light on the frames it
@@ -697,15 +738,17 @@ never rolled.
 - **The module** (`tankdesign`, `lines/vanguard.py`, `module_fn('emp')`):
   an EMP projector on the roof - the missiles' hardpoint, shared, since a
   tank carries one special at a time (`hp.get('emp', hp['missiles'])`): a
-  squat gunmetal plinth (5 x 5, chamfered), on it a toroid coil - a ring of
-  brass windings (`'cylv'`) round a dark core - with a steel emitter stub
-  forward. Five cells, `TANK_MODULE_EMP_COL` = 28..32 (`tank_modules.png`
+  squat gunmetal plinth (7 x 6, chamfered - 5 x 5 left no room for the
+  coil's rim on the light chassis), on it a toroid coil - a ring of brass
+  windings shaded by `rim_shade` (the kit's round-rim shading; `'cylv'`
+  shades a cylinder side-on and read as a barrel) round a dark core - with
+  a steel emitter stub forward. Five cells, `TANK_MODULE_EMP_COL` = 28..32 (`tank_modules.png`
   grows from 28 to 33 columns, 1320 x 480): 0 armed, the core's lamp dim
   (`DIM_ION`, `BLUE_DK`); 1 and 2 the crackle, the left and then the
   right half of the windings lit in the light layer (`'ion'`: `BLUE_PALE`
   over `BLUE_BRIGHT`); 3 the pulse, the whole ring lit `'white'` and the
-  core `'ion'`; 4 offline, the windings scorched (`RUST_DK` for brass) and
-  the core dark, no lamp. `module_cols` (now eight entries): cell 3 while
+  core `'ion'`; 4 offline, the windings scorched (`RUST` step 0 for
+  brass) and the core dark, no lamp. `module_cols` (now eight entries): cell 3 while
   `Tank::emp_flash` (`emp_flash_seconds`, set by `kick_emp` on every pulse
   - the room's, a replica's `Fired`, a client's press), 1 and 2 through a
   tell, 4 while `special_down()`, else 0. A disabled tank carrying any
@@ -748,14 +791,14 @@ never rolled.
   `HUD_LABEL_SIZE`, in `RED_BRIGHT` (`#FF421A`); the readout the
   special's symbol unlit and its count in `DIM`. The pips under a seat's
   ring are drawn in `DIM` while offline.
-- **The off-screen tell** is the hammer's arrow (`ArrowKind::Tell`) in
-  `HUD_EMP_COLOR`. A disabled enemy raises no lane warning
-  (`TankView::disabled`: it cannot fire), so an off-screen arrow never
-  warns of a tank that is coasting.
+- **The off-screen tell** is the hammer's arrow (`ArrowKind::Windup`) in
+  `HUD_EMP_COLOR`. A disabled enemy raises no lane warning (`Scene::of`
+  reads each tank's outage beside its facing: it cannot fire), so an
+  off-screen arrow never warns of a tank that is coasting.
 
 ## 6. Tuning
 
-New group `emp` (every row live unless marked), plus two rows in the
+New group `emp` (every row live unless marked), plus three rows in the
 enemies' group:
 
 | Row | Default | Range | Doc |
@@ -778,7 +821,7 @@ enemies' group:
 | `emp_missile_drag` | 2.5 | 0..=20 | How fast a dead missile loses its ground speed (per second). |
 | `emp_hud_flicker_hz` | 3.5 | 0.5..=20 | How often `WPN OFFLINE` flickers. |
 | `emp_ai_fire_value: i32` | 1 | 1..=20 | What a pulse has to be worth before an enemy fires it: at 1, any seat or player tower in reach. |
-| `emp_ai_approach_value: i32` | 2 | 1..=20 | What the seat an enemy fights has to be worth alone before its brawler closes in to pulse it: at 2, a seat with a shield or an online special, or any seat at night. |
+| `emp_ai_approach_value: i32` | 2 | 1..=20 | What the seat an enemy fights has to be worth alone before its closer closes in to pulse it: at 2, a seat with a shield or an online special, or any seat at night. |
 | `emp_ai_seat_value: i32` | 1 | 0..=10 | A seat in reach, not already disabled. |
 | `emp_ai_shield_value: i32` | 1 | 0..=10 | More for a seat with a live shield. |
 | `emp_ai_special_value: i32` | 1 | 0..=10 | More for a seat carrying an online special. |
@@ -788,6 +831,7 @@ enemies' group:
 | `emp_ai_berth_px` | 48 | 0..=256 | How far past the ring an enemy keeps from a seat carrying an armed EMP, or from an ally's crackle. |
 | `emp_ai_fire_interval` | 3.5 | 0.1..=20 | Seconds between an enemy's decisions to pulse. |
 | `enemy_danger_clear_px` (`enemies`) | 24 | 0..=128 | How far outside a danger an enemy backs before it turns back to the fight. |
+| `enemy_danger_route_cost: usize` (`enemies`) | 2 | 0..=64 | Route surcharge on every cell inside a seat's danger, so enemies go round an armed EMP rather than through it; 0 turns it off. Low for the tower reach's reason (`route_tower_cost`). |
 | `enemy_special_weapon_emp_share` (`enemies`, `@ Restart`) | 0 | 0..=1 | The share of special-carrying enemies that spawn with the EMP instead, decided by a hash of the spawn point and the slot - never the round's RNG - so at 0 nothing changes. |
 
 Constants (geometry, not feel) in `emp.rs`: `RING_INNER_PX` (6, 12),
@@ -807,8 +851,8 @@ Constants (geometry, not feel) in `emp.rs`: `RING_INNER_PX` (6, 12),
 first space (`hud::offline_lines`), each line within `WEAPON_SLOT_W - 4`
 (60) at `HUD_LABEL_SIZE` - `WPN` 21, `OFFLINE` 44, `IZPAD` 31, `OROZJA`
 40 at the font's own widths. The tool names are measured by the existing
-tool budgets (144 and 48). Measured again in Phase 2; `BREZ OROŽJA`
-("no weapon", 27 and 40) stands by for Slovene if a line runs over.
+tool budgets (144 and 48). Both languages fit (the budget test runs
+over every shipped language).
 
 ## 8. Wire
 
@@ -883,7 +927,7 @@ Protocol 16 (from the hammer's 15), once in the PR.
   pulse in the order fired, the seats in index order then the enemies by
   slot, then towers by cell, then missiles by id.
 - **The AI**: `emp_rule` chooses by fixed priority and integer values,
-  ties to the lower seat; the brawler ties on slot; `emp_dangers` is built
+  ties to the lower seat; the closer ties on slot; `emp_dangers` is built
   in seat then slot order, `danger_here` picks the deepest then the
   earliest, exits break ties in `Dir::ALL` order; `clear_rings` walks
   clearers and units in slot order. The coast replays the last intent;
@@ -903,154 +947,106 @@ Protocol 16 (from the hammer's 15), once in the PR.
 
 ## 10. Tests
 
-`mechanics_tests` (headless, tiny inline maps):
+**Scenarios** (`simulation/emp_tests.rs`, headless, on the default 34 x 17
+field with the seat at (3, 6) facing east and enemies placed by hand):
 
 - `an_emp_crate_arms_the_burst_and_replaces_the_special_carried` - three
-  charges, empties another special, a second crate refills to three.
+  charges, another special emptied, a second crate refills to three.
 - `the_emp_fires_on_the_press_and_takes_its_own_special_offline` - one
   pulse per press; `Fired` then `EmpPulse` in one tick; `special_offline`
-  is `emp_disable_seconds`, `active_weapon` the shell; a press within it
-  fires a shell; after it the next press pulses.
-- `the_ring_reaches_far_things_later` - a near and a far enemy disabled on
-  the frames the front reaches them.
-- `the_ring_reaches_a_hull_by_its_nearest_point_and_no_further` - a hull
-  whose box crosses the radius struck, one a pixel past it not.
+  running, `active_weapon` the shell while `special` stays the EMP; a
+  press within it fires a shell; after it the next press pulses.
+- `the_ring_reaches_far_things_later_and_stops_at_its_reach` - a near hull
+  struck before a far one; a hull whose box's nearest point is past the
+  reach is not.
 - `walls_do_not_stop_the_pulse` - an enemy behind iron struck.
-- `a_struck_enemy_coasts_on_its_last_intent_with_the_trigger_released` -
-  it drives its last heading, fires nothing, its `Ai` clocks frozen,
-  `AiSnapshot::down`.
-- `a_struck_enemy_reboots_and_thinks_again` - after the timer: thinks,
-  `stuck_timer` 0 though it coasted into a wall, no breach latched.
-- `a_disabled_enemy_spots_nobody_and_keeps_its_target` - the arena's
-  shared alert and the retarget pass skip it.
-- `a_disabled_enemy_relays_no_alert_on_a_field_map`.
-- `a_disabled_far_tank_coasts_and_is_not_rerolled` (field).
-- `a_live_shield_pops_with_shield_broken` - and a shield crate after works.
-- `an_enemys_tell_lapses_when_it_is_struck` - a hammer tell: no `Fired`,
-  no `SonicBlast`.
-- `a_burst_and_a_volley_stop_short_and_keep_their_rounds`.
-- `a_held_flame_goes_out_and_the_next_press_is_a_shell`.
+- `a_struck_enemy_coasts_on_its_last_intent_and_reboots` - the intent it
+  had when the ring reached it, the trigger released, `AiSnapshot::down`,
+  its fire timer frozen; after the outage it thinks again with no stuck
+  evidence from the coast.
+- `a_disabled_enemy_spots_nobody` - the arena's shared alert skips it.
+- `a_live_shield_pops_with_shield_broken`.
+- `an_enemys_tell_lapses_when_it_is_struck` - a hammer tell: no
+  `SonicBlast`.
+- `a_burst_and_a_volley_stop_short_and_keep_their_rounds` - and a held
+  flame goes out, a twin's second shell still leaves, a second strike
+  never shortens the outage.
 - `a_struck_seat_drives_and_fires_shells_with_its_special_offline`.
-- `towers_in_the_ring_go_offline_and_come_back` - a tesla's charge lost and
-  no strike, a gun tower no burst, a bio slush no lob, for
-  `emp_tower_seconds`; then each fights again.
-- `a_burning_tower_burns_on_while_offline`.
-- `an_offline_player_tower_is_no_detour` - `player_tower_reach` without it.
-- `a_missile_in_the_ring_falls_dead_and_lands_a_dud` - no
-  `MissileBlast`, a `MissileDud`, nothing hurt or shoved.
-- `a_missile_outside_the_ring_flies_on`.
-- `at_night_the_lamp_posts_go_out_and_come_back` - `is_lit` false by
-  them for `emp_lamp_seconds`, `sight_on` at night's range, then lit.
+- `towers_in_the_ring_go_offline_and_come_back` - a tesla's charge lost
+  and no strike for `emp_tower_seconds`, then it strikes again.
+- `an_offline_player_tower_is_no_detour` - `player_tower_reach` leaves it
+  out.
+- `a_missile_in_the_ring_falls_dead_and_lands_a_dud` - a `MissileDud` and
+  no blast where it fell; one outside the ring flies on.
+- `at_night_the_lamp_posts_go_out_and_come_back` - `is_lit` false and
+  `sight_on` short by a post for `emp_lamp_seconds`, then lit.
 - `by_day_the_lamp_posts_are_left_alone`.
-- `frogs_lanterns_crates_grenades_and_shells_in_flight_are_left_alone`.
 - `the_shooter_keeps_its_lights_and_its_shield`.
-- `the_pulse_disables_a_teammate_and_its_own_sides_towers`.
-- `an_enemys_pulse_disables_fellow_enemies`.
-- `a_rolling_in_tank_and_a_wreck_are_not_struck`.
+- `the_pulse_disables_a_teammate_and_fellow_enemies` - a seat's pulse a
+  teammate, an enemy's pulse the enemy beside it, never the shooter.
+- `a_wreck_is_not_struck`.
 - `the_ring_finishes_on_the_end_screen_and_strikes_nothing`.
-- `a_round_with_the_emp_replays_bit_for_bit`.
-- `the_spawn_swap_hands_out_the_emp_by_its_share_and_draws_nothing`.
-- `an_enemy_takes_the_crate_only_on_shells_and_not_while_its_special_is_offline`.
+- `a_round_with_the_emp_replays_bit_for_bit` - at night, with a tower and
+  enemies, the drawable state frame by frame.
+- `the_spawn_swap_hands_out_the_emp_by_its_share`.
+- `an_enemy_takes_a_crate_only_on_shells_and_not_while_its_special_is_offline`.
+- AI on a whole round: `an_emp_enemy_pulses_a_seat_in_its_ring_after_its_crackle`
+  (the crackle `emp_tell_seconds` before the pulse, used on the seat),
+  `the_emp_holds_for_an_ally_and_for_its_own_tower`,
+  `a_training_dummy_never_pulses`,
+  `the_closer_leaves_a_bare_seat_by_day_and_closes_in_at_night`,
+  `enemies_keep_out_of_an_armed_seats_ring` (one inside backs out and
+  never comes back within the ring's reach, crossing back over the berth
+  at most once), `a_seats_emp_is_a_danger_only_while_armed`.
+- The rest: `a_disabled_enemy_has_no_lane_warning` (the indicators),
+  `the_weapon_slot_flickers_offline_while_the_special_is_down` (the HUD's
+  slot and `offline_lines`), `an_offline_tower_is_no_trouble_for_the_hammer`.
 
-AI (`ai.rs` unit tests on a `Brain` with a made-up `EmpSense` and dangers,
-and `mechanics_tests` on a whole round):
+**The rule and the dangers** (`ai::emp_rule_tests`, a made-up `EmpSense`
+and dangers on an open field): `a_seat_in_the_ring_is_pulsed`,
+`it_holds_off_box_beside_its_tower_into_an_ally_and_as_a_dummy`,
+`the_generic_tiers_never_fire_the_emp`,
+`a_closer_approaches_only_a_seat_worth_it` (and not a crowded one),
+`a_tank_backs_out_of_a_danger_not_its_own` (its own ignored, one nobody
+owns kept out of, the latch), `a_discs_exits_and_posts`.
 
-- `the_emp_pulses_a_shielded_seat_in_its_ring` and
-  `..._a_seat_carrying_a_special`.
-- `the_emp_pulses_a_bare_seat_in_its_ring_by_day`.
-- `a_player_tower_alone_in_the_ring_is_pulsed`.
-- `the_brawler_leaves_a_bare_seat_by_day_and_closes_in_at_night`.
-- `at_seat_is_the_most_valuable_seat_in_reach`.
-- `the_emp_holds_while_a_friend_is_in_the_ring`.
-- `the_emp_never_pulses_beside_its_own_tower`.
-- `the_emp_never_pulses_a_seat_that_sees_it_from_off_its_box` (radius
-  knob past the box).
-- `only_one_brawler_closes_in_and_only_on_a_seat_worth_it`.
-- `the_brawler_does_not_close_in_on_a_crowded_seat`.
-- `the_emp_tell_runs_before_its_pulse` - `TellStarted`, then `Fired` and
-  `EmpPulse` `emp_tell_seconds` later, facing held, no movement.
-- `the_generic_tiers_never_fire_the_emp`.
-- `an_enemy_whose_emp_is_offline_fights_with_shells`.
-- `a_training_dummy_never_pulses`.
-- `an_enemy_never_pulses_a_seat_from_outside_its_sight_box` (whole round:
-  `offbox-fire`'s reading).
-- `enemies_keep_out_of_an_armed_seats_ring` - none inside after the
-  dodge, and none crossing its edge back and forth (the latch).
-- `enemies_back_out_of_an_allys_crackle`.
-- `enemies_close_in_while_the_seats_emp_is_offline`.
-- `a_seat_hidden_in_grass_with_an_emp_is_no_danger`.
-- `a_seek_inside_a_danger_is_not_taken`.
-- `the_hammer_brawler_does_not_walk_into_an_armed_seat` and
-  `an_offline_tower_and_a_disabled_enemy_are_no_trouble`.
+**The commander** (`simulation::command`): `a_clearer_nudges_its_allies_out_of_its_ring`
+(the larger offset, round a wall; a busy unit, a wreck and a seat left
+alone), `a_disabled_unit_never_gives_way`.
 
-Commander (`command.rs`):
+**Pure parts**: `emp.rs` - `box_reach_is_the_distance_to_the_nearest_point`,
+`seat_value_adds_its_parts`, `a_pulse_runs_out_to_its_reach_and_is_gone_after_its_linger`,
+`the_ring_is_on_the_grid_in_its_ramp_and_gone_by_its_end`,
+`the_ring_never_draws_past_its_reach`, `the_sparks_are_hashed_and_thin_at_the_end`,
+`the_tell_is_on_the_grid_and_pure`, `lamp_sparks_are_gone_in_their_time_and_the_post_comes_back`,
+`the_droop_side_is_hashed_and_both_sides_come_up`; `missile.rs` -
+`a_dead_missile_falls_and_arrives_a_dud`; `lamp.rs` - `a_dark_post_draws_no_flame`.
 
-- `clear_rings_nudges_friends_out_away_from_the_clearer` (and around a
-  wall, and none with every way walled).
-- `a_cleared_unit_is_not_also_slowed`.
-- `a_disabled_unit_is_never_ordered_and_keeps_right_of_way`.
-- `nothing_is_ordered_while_c2_is_off` (with a clearer in the input).
-- `with_c2_the_ring_clears_and_then_the_pulse_goes_off` (`mechanics_tests`,
-  whole round).
+**Online**: `net::apply` - `an_emp_pulse_reaches_the_replica`,
+`an_emp_pulse_this_client_drew_is_not_drawn_again`,
+`what_an_emp_leaves_reaches_the_replica_and_ends_with_the_rooms` (a
+disabled enemy, an offline special, an offline tower, a dead missile and
+the posts out, compared on the drawable state, and their end);
+`net::predict` - `an_emp_pulse_is_drawn_on_the_press_and_takes_the_special_offline`,
+`a_refused_pulse_gives_the_special_back`; `net::rig` -
+`an_enemys_emp_reaches_the_replica` (crackle, ring, the seat drawn
+disabled); `net::events` - every new variant sent or on `NOT_SENT`, and
+round-tripped; `net::delta` - the new fields in the random snapshots, the
+size bound re-measured (a full snapshot 478 B from 456: three bytes a
+tank and one for the round).
 
-Shared path and presentation:
+**Tools and text**: `devserver::set_tank_arms_the_emp_and_takes_it_offline`;
+the editor's PICKUP category counts fifteen; `every_language_fits_every_budget`
+measures each line of the offline words; `corner_tests` pins
+`WEAPON_SLOT_W`; the armory's thumbnail pin is re-baselined.
 
-- `emp::tests`: `box_reach_is_the_distance_to_the_nearest_point`,
-  `seat_value_adds_its_parts`; the composers
-  `the_ring_is_on_the_grid_in_its_ramp_and_gone_by_its_end`,
-  `the_ring_never_draws_past_its_radius`,
-  `the_sparks_are_hashed_and_thin_at_the_end`,
-  `the_tell_is_on_the_grid_and_pure`, `lamp_sparks_are_gone_in_their_time`.
-- `pyro`: `the_emp_ramp_is_on_the_palette`.
-- `tank` (`weapon_inventory_tests`): the EMP in `take_weapon`,
-  `full_load`; `special` against `active_weapon` while offline; `disable`'s
-  effects; the module's cells (offline 4, pulse 3, crackle 1/2); the sag
-  on an enemy only, easing in and out.
-- `tower`: `a_disabled_tower_draws_no_glow`.
-- `missile`: `a_dead_missile_falls_and_arrives_a_dud`.
-- `lamp`: `a_dark_post_draws_no_flame_and_comes_back`.
-- `weather`: `a_disabled_tank_throws_only_its_sparks`,
-  `dark_posts_throw_no_light`, `an_offline_tesla_throws_no_light`.
-- `hud_tests`: the EMP's slot, colour and glyph;
-  `an_offline_slot_reads_wpn_offline`; `offline_lines` splits at the first
-  space.
-- `render::hud::corner_tests`: `WEAPON_SLOT_W` is `V_SPEED - V_WEAPON`.
-- `indicators`: `a_disabled_enemy_raises_no_lane_warning`; the EMP's tell
-  arrow in its colour.
-- `pickup`: `name`/`parse` round-trip; `weapon`.
-- `devserver`: `set_tank_arms_the_emp_and_disables_a_tank`, the snapshot's
-  new fields, `spawn_pickup` with `emp_burst`, the PICKUP category's count
-  (14 to 15).
-- `editor`/`chrome_tests`: the tool in `TOOLS`.
-- `thumbnail`: the armory's pin. `maplint`: the armory as it lints.
-- `text_tests`: every budget.
-
-Wire:
-
-- `events.rs`: the samples gain `EmpPulse`, `MissileDud`, `Disabled` and
-  `TowerDisabled` (not sent); the variant count.
-- `apply.rs`: `an_emp_pulse_reaches_the_replica` (a seat armed through
-  `debug_set_tank`, pressing: one cosmetic pulse per press, the struck
-  enemies `disabled` on the replica, the same picture after every apply),
-  `a_disabled_tank_counts_down_on_the_replica`,
-  `an_offline_tower_reaches_the_replica`,
-  `a_dead_missile_and_its_dud_reach_the_replica`,
-  `the_lamps_out_reach_the_replica`,
-  `a_special_offline_reaches_the_replicas_hud`,
-  `an_emp_pulse_this_client_drew_is_not_drawn_again` (`OwnShotsDrawn`
-  with the press's bit: no pulse, not handed on; without: a pulse).
-- `predict.rs`: `an_emp_press_is_drawn_at_once_and_claims_the_rooms_pulse_once`,
-  `a_press_in_the_offline_is_predicted_as_a_shell`,
-  `a_refused_emp_press_clears_the_local_offline`.
-- `round.rs`: `the_rooms_emp_pulse_is_left_out_only_for_a_press_this_client_drew`,
-  `the_shown_seat_reads_wpn_offline_on_the_press_frame`.
-- `rig.rs` (`Lockstep`): `a_seats_emp_pulse_is_drawn_once_on_the_replica`
-  and `an_enemys_emp_reaches_the_replica_after_its_tell` (an enemy armed
-  through `authority_mut`, a shielded seat in its ring: the replica's tank
-  shows the tell, then the ring, the seat's shield gone and its special
-  offline).
-- `delta.rs`: the random snapshots and the size bounds.
-- The room server's `cargo test -p bongbong-server` as it stands.
+Not written as tests, and read off the code and the probe instead: a
+disabled enemy relaying no alert on a field map and not being rerolled
+(`field_alerts` and `reroll_stragglers` filter it), a rolling-in tank not
+struck (`strike_emp` skips a `RollIn`), frogs, lanterns, crates, grenades
+and shots left alone (nothing in the strike walk reaches them), a
+burning tower burning on while offline (`tower_upkeep` runs before the
+offline branch).
 
 ## 11. Probe
 
@@ -1058,21 +1054,22 @@ Wire:
   unchanged, passing their recorded ceilings untouched.
 - **With the crate**: the same two sweeps with `--crate emp_burst`. AFK:
   enemies on shells collect it and pulse the AFK seat when it comes into
-  their ring; by day their brawlers do not close in on the bare seat
+  their ring; by day their closers do not close in on the bare seat
   (worth 1, under the approach's 2), which is the rule.
 - **Armed enemies**: the same sweeps with `--tuning armed.json`,
   `{"enemy_special_weapon_chance": 1.0,
   "enemy_special_weapon_emp_share": 1.0}`; then again at night (`armed`
-  plus `"weather_override": 1`), where every brawler closes in on the bare
+  plus `"weather_override": 1`), where every closer closes in on the bare
   seat to pulse it, and with the commander (`armed`, night, `"c2_enabled": true`),
   where the clearing runs.
-- The probe's tank line gains `emp=` (charges) and `dis=` (seconds
+- The probe's tank line gains `emp=` (charges) and ` dis=true` (while
   disabled); its fire tuple counts the charges, so a pulse is a trigger
-  pull for `FIRED_RECENTLY_FRAMES`; a disabled tank is a deliberate hold
-  (`TankSnapshot::disabled`) and is not counted for stall, stale-start,
-  low-progress, jitter, spin, churn, wall-grind, tank-grind or
-  border-stuck while it is - the coast is the pulse's doing, not the AI's;
-  clustering and pile-up, measures of the pack, count it as ever.
+  pull for `FIRED_RECENTLY_FRAMES`. A disabled tank is out of its own
+  hands (`OUT_OF_ITS_HANDS`, `TankSnapshot::disabled`): no anomaly reads
+  it while it is, and every window over its motion starts over where it
+  stands when it reboots (`TankTrack::rejoin`) - the coast is the pulse's
+  doing, not the AI's. A tank waiting outside a danger (`kept out`,
+  `TankSnapshot::kept_out`) is a deliberate hold in `HOLDS`.
 - **The bar**: every crate and armed run within the defaults' ceilings,
   `offbox-fire` 0. An exceedance is read round by round from its `ANOMALY`
   lines; one the EMP's own action causes - a tank stranded, spinning,
@@ -1115,12 +1112,12 @@ Wire:
 | An enemy's hammer tell | Lapses when the ring reaches it: no blast |
 | A seat's or an enemy's hammer | Offline for `emp_disable_seconds`: the trigger fires shells, `WPN OFFLINE`; the dish's module shows its idle cell |
 | A hammer's shove on a disabled enemy | Skids as any hull; once the skid ends it goes on coasting on its last intent |
-| The hammer's trouble cells (`hammer_field`) | An offline enemy tower's reach and a disabled enemy's lane are no trouble |
-| The hammer's brawler (`Approach`) | Does not close in on a seat inside a danger (one carrying an armed EMP) |
+| The hammer's trouble (`hammer_senses`, `lands_in_trouble`) | An offline enemy tower's reach and a disabled enemy's lane are no trouble |
+| The hammer's closer (`Approach`) | Does not close in on a seat inside a danger (one carrying an armed EMP) |
 | A hammer enemy near an EMP enemy's crackle | Backs out like any ally |
 | The wave and the ring | Independent: neither stops, shadows nor triggers the other |
 | The online claim | One pending claim per kind: a seat's hammer and EMP presses claim their own events |
-| The probe's holds | A tell, a skid and the disabled state are each a deliberate hold |
+| The probe's holds | A tell, a skid and a wait outside a danger are deliberate holds (`HOLDS`); the disabled state is out of the tank's hands (`OUT_OF_ITS_HANDS`) |
 
 ### Decisions taken
 
@@ -1173,17 +1170,29 @@ Wire:
     it** (integers: a seat 1, a shield, a special, night and a player tower
     1 each; fire at 1, approach at 2): "at least one seat, or a player
     tower" is the condition to fire, the weights its preference - they pick
-    the seat a pulse is used on and gate the brawler's approach, so by day
+    the seat a pulse is used on and gate the closer's approach, so by day
     a bare seat is pulsed where it stands but not hunted down, and at night
     every seat is. Never beside its own tower, holding for allies (or, with
     the commander, having them nudged out), never from off any box in
     reach. Rejected: firing only at 2 (an EMP enemy would be a quiet tank
     against a bare seat in daylight).
-15. **Dangers rather than a nav surcharge** for the AI's reaction: an
-    armed seat's disc and an ally's crackle are kept out of by a tier and
-    by keeping every steering target outside, which also pushes out a
-    tank already inside; the rod and the rail add their shapes. Rejected:
-    a route surcharge (it never moves a tank standing inside).
+15. **Dangers, with a light surcharge under them**, for the AI's
+    reaction: an armed seat's disc and an ally's crackle are kept out of
+    by a tier and by keeping every steering target outside, which also
+    pushes out a tank already inside; the rod and the rail add their
+    shapes. Built, that alone hunted the edge: a route to a point outside
+    still cut across the disc, the dodge (a reversal) never turned the
+    tank round under steering's commitment, and the seat steered at with
+    no slot - the disc's own middle - had its way out swing with the
+    tank's facing. So the dodge drives straight onto its route out, a
+    way out is the first reachable exit (never one off the field), the
+    seat's is a post on its axes inside its sight box, a tank that
+    reached its moved point waits there (`kept_out`), and the cells
+    inside a seat's disc cost `enemy_danger_route_cost` (2) more to the
+    router. In the test that found it, an enemy that crossed back over the
+    berth four times, once to 32 px from the seat, now never comes back
+    within the ring's reach. Rejected: a surcharge alone (it never moves a
+    tank standing inside).
 16. **A seat's EMP is a danger only while armed and seen**: offline, it
     is none - the window its cost opens; hidden in grass, it is a trap.
 17. **The crate spills** rather than cooks off.
@@ -1200,6 +1209,14 @@ Wire:
     the hammer is `sonic_hammer`.
 23. **A disabled tank keeps its engagement slot**: an outage of three
     seconds is not worth reshuffling the pack's ring.
+24. **`Danger::owner` is an `Option`**: `Some(slot)` is a danger its own
+    tank ignores (a seat's EMP, an ally's crackle), `None` one every enemy
+    keeps out of, the caller included (the rod's call circle, BB-41).
+25. **The disabled state's readers are open lists**: the commander's
+    `UnitView::busy` (`command::Busy::Disabled`), the probe's `HOLDS` and
+    `OUT_OF_ITS_HANDS`, `Predictor::offline_left` read by the one gate in
+    `pull_trigger`, and the strike walk's blocks - each a row or a variant
+    a later weapon adds rather than a new code path.
 
 ### Not in this PR
 
@@ -1216,10 +1233,10 @@ Wire:
 - The drones' fall and the well's early collapse - BB-40 and BB-42 add
   their arms to the strike walk.
 
-### Needs from the shared path
+### What this changed in the shared path
 
-What this design takes from the hammer's implementation beyond what its doc
-gives:
+What this design took from the hammer's implementation beyond what its doc
+gave - all of it done in this PR:
 
 1. **The tell goes off only on a live trigger**: the tell's go-off check
    reads `tank.active_weapon() == tell.weapon` (with the EMP: the weapon
@@ -1234,8 +1251,10 @@ gives:
    offline lands in one place.
 3. **`pyro::Shape::Arc` draws a whole turn** without a seam (`to - from >=
    TAU`), for the ring.
-4. **`Game::draw_press_show` knows the seat**, so a press show can flash
-   its own tank's module (the EMP's pulse cell).
+4. **`Game::draw_press_show(seat, weapon, origin, facing)`**: a press
+   show knows its seat and weapon, so the EMP's flashes its own tank's
+   module (the pulse cell), and `Game::hold_seat_offline` writes the
+   predicted offline into the drawn seat.
 5. **`Predictor::pull_trigger` picks its arm after a per-weapon gate**, so
    the EMP's arm can read the weapon as the shell while `offline_left`
    runs - the top of the function reads the sandbox's arms through one
@@ -1248,4 +1267,5 @@ gives:
    `Clear` (a `Hold` that also records `Ai::clearing`) holds for as many
    ticks as the clearing takes.
 8. **The armory's reserved cell 7,4** for this crate, and the map's
-   free cells 29,7, 31,16, 11,4 and 25,10 left free.
+   free cells 29,7, 31,16, 11,4 and 25,10 - now the EMP's.
+9. **`SPAWN_SWAPS`** gains its entry, and the protocol goes to 16.
