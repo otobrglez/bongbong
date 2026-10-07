@@ -9593,11 +9593,12 @@ cells."30,20" = { kind = "frog" }
     }
 
     /// The straggler's exemptions: a guard while the frog it keeps lives,
-    /// and a hull still burning, are never taken off - though each is lost,
-    /// a long walk from the fight and on no screen, as a straggler is.
+    /// a hull still burning, and one an EMP has coasting with its brain off
+    /// (docs/emp-burst.md), are never taken off - though each is lost, a
+    /// long walk from the fight and on no screen, as a straggler is.
     #[test]
-    fn a_guard_keeping_its_frog_and_a_burning_hull_are_never_rolled_in_again() {
-        for exempt in ["guard", "burning"] {
+    fn a_guard_keeping_its_frog_a_burning_hull_and_a_disabled_one_are_never_rolled_in_again() {
+        for exempt in ["guard", "burning", "disabled"] {
             let mut game = Game::default();
             game.seed_override = Some(7);
             game.player_row_override = Some(0);
@@ -9622,13 +9623,19 @@ cells."30,20" = { kind = "frog" }
                 m.home = Some(far);
                 m.called = false;
                 m.alert = None;
-                m.lost = t.field_reroll_after_seconds - 1.0;
+                // A disabled tank's mind is frozen (`field::mind` is not
+                // called), so it is lost long enough already.
+                m.lost = t.field_reroll_after_seconds + if exempt == "disabled" { 1.0 } else { -1.0 };
             });
             let entity = game.tank_entity_by_slot(straggler).expect("the straggler");
             if exempt == "guard" {
                 let frog = game.enemy_frog.expect("a Hunt round keeps an enemy frog");
                 assert!(with_frog(&game.world, frog, |fr| !fr.is_dead()), "its frog lives");
                 game.world.get::<&mut Ai>(entity).expect("an enemy").role = Role::Guard;
+            } else if exempt == "disabled" {
+                with_tank_mut(&game.world, entity, |tank| {
+                    tank.disable(10.0);
+                });
             } else {
                 with_tank_mut(&game.world, entity, |tank| {
                     tank.burn_timer = 10.0;

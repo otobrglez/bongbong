@@ -503,12 +503,13 @@ fn an_emp_enemy_pulses_a_seat_in_its_ring_after_its_crackle() {
     with_tank_mut(&game.world, seat, |tk| tk.emp_charges = 0);
     let enemy = emp_enemy(&mut game, Position::new(SEAT.x + 110.0, SEAT.y));
     let slot = slot_of(&game, enemy);
-    let (mut told, mut pulsed, mut aimed) = (None, None, None);
+    let (mut told, mut pulsed, mut aimed, mut struck) = (None, None, None, false);
     for frame in 0..300 {
         for e in step(&mut game, false) {
             match e {
                 Event::TellStarted { slot: s, weapon: "emp_burst" } if s == slot && told.is_none() => told = Some(frame),
                 Event::EmpPulse { slot: s, .. } if s == slot && pulsed.is_none() => pulsed = Some(frame),
+                Event::Disabled { slot: 0, .. } => struck = true,
                 _ => {}
             }
         }
@@ -520,7 +521,7 @@ fn an_emp_enemy_pulses_a_seat_in_its_ring_after_its_crackle() {
     let ticks = (tuning().emp_tell_seconds / DT).round() as i32;
     assert!(((pulsed - told) as i32 - ticks).abs() <= 1, "told {told}, pulsed {pulsed}");
     assert_eq!(aimed, Some(Some(0)), "used on the seat");
-    assert!(tank(&game, seat, |tk| tk.is_disabled()) || tank(&game, seat, |tk| tk.disabled == 0.0), "the seat was in its ring");
+    assert!(struck, "the seat in its ring was struck");
 }
 
 /// An ally in its ring holds the pulse (with the commander off, the
@@ -780,4 +781,65 @@ fn a_hurt_enemy_does_not_flee_for_a_crate_inside_an_armed_seats_ring() {
         let d = tank(&game, enemy, |tk| tk.position).distance_to(tank(&game, seat, |tk| tk.position));
         assert!(d > berth, "into the ring at frame {frame}: {d}");
     }
+}
+
+/// On a field map a disabled enemy is as deaf and blind as a wreck: it
+/// spots no seat, and passes no alert down the chain of its neighbours.
+#[test]
+fn a_disabled_enemy_neither_spots_nor_relays_on_a_field_map() {
+    let strip = "version = 1\nsize = [110, 20]\ntanks = 0\ncells.\"3,10\" = { kind = \"start\" }\n";
+    // A sees the seat, B stands in A's chain reach out of the seat's sight,
+    // C in B's and out of A's: which of them holds an alert, with nobody
+    // disabled, A, or B.
+    for (off, want) in [(None, [true, true, true]), (Some(0), [false, false, false]), (Some(1), [true, false, false])] {
+        let mut game = Game::default();
+        game.seed_override = Some(7);
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.map = MapFile::from_toml_str(strip).expect("test map parses");
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        assert!(game.field_map());
+        let seat = tank(&game, game.player().unwrap(), |tk| tk.position);
+        let (view, chain) = (game.enemy_sight(), tuning().enemy_alert_chain_px);
+        let a = Position::new(seat.x + view - 100.0, seat.y);
+        let b = Position::new(a.x + chain - 80.0, seat.y);
+        let c = Position::new(b.x + chain - 80.0, seat.y);
+        assert!(c.distance_to(a) > chain && b.distance_to(seat) > view);
+        let slots: Vec<usize> = [a, b, c].iter().map(|&p| game.debug_spawn_enemy(p, Some(1), None).expect("spawns")).collect();
+        if let Some(i) = off {
+            let entity = game.tank_entity_by_slot(slots[i]).unwrap();
+            with_tank_mut(&game.world, entity, |tk| {
+                tk.disable(5.0);
+            });
+        }
+        game.update(Input::default(), DT, w, h);
+        let alerted: Vec<bool> = slots
+            .iter()
+            .map(|&s| game.world.get::<&Ai>(game.tank_entity_by_slot(s).unwrap()).unwrap().field.alert.is_some())
+            .collect();
+        assert_eq!(alerted, want, "disabled: {off:?}");
+    }
+}
+
+/// A disabled enemy keeps the seat it fights - the retarget pass is its
+/// brain's, and its brain is off - and turns to the nearer seat once it
+/// reboots.
+#[test]
+fn a_disabled_enemy_keeps_its_target_until_it_reboots() {
+    let mut game = round_with("", 2);
+    let second = game.seat(1).unwrap();
+    let near_second = tank(&game, second, |tk| tk.position) + Vec2::new(150.0, 100.0);
+    let enemy = parked(&mut game, near_second);
+    assert_eq!(game.world.get::<&Ai>(enemy).unwrap().target_player(), 0, "it starts on the first seat");
+    with_tank_mut(&game.world, enemy, |tk| {
+        tk.disable(1.0);
+    });
+    for _ in 0..30 {
+        step(&mut game, false);
+        assert_eq!(game.world.get::<&Ai>(enemy).unwrap().target_player(), 0, "held while its brain is off");
+    }
+    for _ in 0..60 {
+        step(&mut game, false);
+    }
+    assert_eq!(game.world.get::<&Ai>(enemy).unwrap().target_player(), 1, "back, it fights the nearer seat");
 }
