@@ -2201,8 +2201,6 @@ fn scenario_str(scenario: Scenario) -> &'static str {
     }
 }
 
-/// The battlefield's display name: the `--map` path, or the embedded
-/// default's marker - shared by the header, `--json-out`, and `--heatmap`.
 /// `--crate`: every special-weapon pickup slot of `map` made a `kind` crate,
 /// in place.
 fn swap_weapon_crates(map: &mut MapFile, kind: PickupKind) {
@@ -2220,6 +2218,8 @@ fn parse_crate(s: &str) -> Result<PickupKind, String> {
     PickupKind::parse(s).ok_or_else(|| format!("no pickup is called {s:?}"))
 }
 
+/// The battlefield's display name: the `--map` path, or the embedded
+/// default's marker - shared by the header, `--json-out`, and `--heatmap`.
 fn map_display(args: &Args) -> &str {
     args.map
         .as_ref()

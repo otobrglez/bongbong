@@ -547,8 +547,9 @@ pub struct Tank {
     /// counted down in `Game::tick_timers`, ended early once the hull is
     /// all but still.
     pub skid: f32,
-    /// The speed the knock that started the skid left the hull at (px/s):
-    /// what the pose validator allows a client-owned hull while it skids.
+    /// The speed the knock that started the skid left the hull at against
+    /// the ground's flow (px/s): what the skid's length was worked out from
+    /// (`sonic::skid_seconds`).
     pub skid_speed: f32,
     /// Seconds the sonic hammer's dish shows its firing cell (`kick_sonic`).
     /// Presentation only.

@@ -5545,8 +5545,7 @@ fn with_two_tanks_mut<R>(world: &mut hecs::World, a: Entity, b: Entity, f: impl 
 /// spread (`enemy_speed_variance`), damage variant, a possible special
 /// weapon (`enemy_special_weapon_chance`, one pickup's worth, swapped by a
 /// hash for a BB-36 weapon at its share - `sonic::swap_spawn_special`), a
-/// possible
-/// starting shield (`spawn_shield_chance`, the player's roll too) and
+/// possible starting shield (`spawn_shield_chance`, the player's roll too) and
 /// track wobble. Shared by the band placement in `init` and the wave
 /// scheduler, so a wave tank is kitted exactly like a band tank. No
 /// physics body: the caller spawns one when the tank is on the field.

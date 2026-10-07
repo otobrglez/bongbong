@@ -228,10 +228,6 @@ fn count_u16(n: u32) -> u16 {
 }
 
 impl WireEvent {
-    /// The wire form of `event`, or `None` for a variant that never
-    /// travels (`NOT_SENT`). A name the vocabulary does not know is a
-    /// simulation change this module has not caught up with: it trips a
-    /// debug assertion and falls back to the first kind.
     /// The seat and weapon of a press's show - the event a client that drew
     /// the press itself claims (`WeaponKind::drawn_on_press`,
     /// `apply::Show::OwnShotsDrawn`): a laser's first leg, a sonic hammer's
@@ -244,6 +240,10 @@ impl WireEvent {
         }
     }
 
+    /// The wire form of `event`, or `None` for a variant that never
+    /// travels (`NOT_SENT`). A name the vocabulary does not know is a
+    /// simulation change this module has not caught up with: it trips a
+    /// debug assertion and falls back to the first kind.
     pub fn from_event(event: &Event) -> Option<WireEvent> {
         let q = quantise_pos;
         Some(match *event {
