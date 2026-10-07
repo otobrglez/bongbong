@@ -282,6 +282,12 @@ struct Inner {
     held_finished: Option<u32>,
     /// The last read's hold report (`Mailbox::hold_ticks`).
     hold: Option<u32>,
+    /// The last read's reticle report (`Mailbox::reticle`).
+    reticle: u16,
+    /// The newest rod reticle among the owned intents dropped over
+    /// `BUFFER_MAX` since the last read, 0 for none: a release's cell is
+    /// not lost with its pose.
+    folded_reticle: u16,
 }
 
 impl Inner {
@@ -386,8 +392,18 @@ impl Inner {
         self.last = Some(newest_taken);
         self.last_starved = false;
         self.starved_run = 0;
+        let held_before = self.delivered;
         let fire = self.deliver(scan.press, newest_taken.fire);
         self.report_hold(fire);
+        // The reticle report is the newest one any intent taken carried: a
+        // release's packet names the cell it calls on, and a packet after
+        // it in the same read - no reticle any more - must not hide it.
+        // With none, a trigger the round still had down keeps the last: a
+        // press and its release merged into one read deliver the release
+        // on the next, which calls where the reticle stood.
+        let folded_reticle = std::mem::take(&mut self.folded_reticle);
+        let carried = taken.values().rev().map(|m| m.reticle).find(|&r| r != 0);
+        self.reticle = carried.unwrap_or(if folded_reticle != 0 { folded_reticle } else if held_before { self.reticle } else { 0 });
         // The lamp key is read as held if any intent taken held it, so a
         // press inside a merge still reaches the round; its edge is the
         // round's to find (docs/volcano.md).
@@ -523,6 +539,9 @@ impl Mailbox {
                 let down = inner.own_down();
                 inner.folded.get_or_insert_with(|| Scan::from(down)).step(&oldest);
                 inner.track_hold(&oldest);
+                if oldest.reticle != 0 {
+                    inner.folded_reticle = oldest.reticle;
+                }
             }
         }
     }
@@ -563,6 +582,8 @@ impl Mailbox {
             inner.delivered = msg.fire;
             inner.track_hold(&msg);
             inner.report_hold(msg.fire);
+            inner.reticle = msg.reticle;
+            inner.folded_reticle = 0;
             return Some(msg);
         }
         inner.starvations += 1;
@@ -620,11 +641,12 @@ impl Mailbox {
     }
 
     /// The reticle report (docs/rod-from-god.md "The reticle report"): the
-    /// newest applied intent's `IntentMsg::reticle` - a starved read
-    /// repeats the last - which a room hands the round
-    /// (`net::authority::take_reticle`). 0 for none.
+    /// newest `IntentMsg::reticle` among the intents the last read applied -
+    /// a merged read's release keeps its cell though a packet after it
+    /// carries none; a starved read repeats the last - which a room hands
+    /// the round (`net::authority::take_reticle`). 0 for none.
     pub fn reticle(&self) -> u16 {
-        self.inner.lock().expect("mailbox poisoned").last.map_or(0, |m| m.reticle)
+        self.inner.lock().expect("mailbox poisoned").reticle
     }
 
     /// How many ticks have found this seat's buffer empty. `/metrics`
@@ -842,6 +864,36 @@ mod tests {
         assert_eq!(merged.reticle(), 52, "a merged read's newest");
         merged.read(now + Duration::from_millis(20));
         assert_eq!(merged.reticle(), 52, "a starved read repeats it");
+        // A release and the packet after it in one read: the release's
+        // packet names the cell it calls on, the next carries none.
+        // The packets of three ticks arriving late, together, after two
+        // starved reads, are merged into the next.
+        let late = |mailbox: &Mailbox, first: u32, packets: [(bool, u16); 3]| {
+            mailbox.read(now);
+            mailbox.read(now);
+            for (i, (fire, reticle)) in packets.into_iter().enumerate() {
+                mailbox.post(owned(first + i as u32, 100.0, 0.0, fire).with_reticle(reticle), now);
+            }
+            mailbox.read(now).expect("an intent").fire
+        };
+        let released = Mailbox::new();
+        released.post(owned(30, 100.0, 0.0, true).with_reticle(59), now);
+        released.read(now);
+        assert!(!late(&released, 31, [(true, 60), (false, 60), (false, 0)]), "the release is delivered");
+        assert_eq!(released.reticle(), 60, "with the cell it calls on");
+        released.post(owned(34, 100.0, 0.0, false), now);
+        released.read(now);
+        assert_eq!(released.reticle(), 0, "and none once no packet carries one");
+        // A press and its release in one read: the round sees the press now
+        // and the release on the next read, which still reports the cell.
+        let tapped = Mailbox::new();
+        tapped.post(owned(40, 100.0, 0.0, false), now);
+        tapped.read(now);
+        assert!(late(&tapped, 41, [(true, 70), (false, 70), (false, 0)]), "the press first");
+        assert_eq!(tapped.reticle(), 70);
+        tapped.post(owned(44, 100.0, 0.0, false), now);
+        assert!(!tapped.read(now).expect("an intent").fire, "then the release");
+        assert_eq!(tapped.reticle(), 70, "still on the cell it calls on");
     }
 
     /// The hold report counts the client's ticks of trigger held, however
