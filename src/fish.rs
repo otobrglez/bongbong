@@ -592,6 +592,8 @@ pub fn scares(game: &Game, t: &Tuning) -> Vec<Scare> {
                 out.push(Scare { at: Position::new(x, y), radius: blast });
             }
             Event::Hit { x, y, .. } | Event::Ricochet { x, y, .. } => out.push(Scare { at: Position::new(x, y), radius: shot }),
+            // A drone's burst and a downed one's crash: small as a shot's.
+            Event::DroneBurst { x, y, .. } | Event::DroneCrashed { x, y, .. } => out.push(Scare { at: Position::new(x, y), radius: shot }),
             Event::LaserBeam { x0, y0, x1, y1, .. } | Event::RailSlug { x0, y0, x1, y1, .. } => {
                 // Along the beam or the slug, a scare every cell, its end
                 // included.

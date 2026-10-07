@@ -553,7 +553,7 @@ impl Game {
                 // still the cover it cannot get to.
                 (false, Some(_)) => {
                     ai.cover_spot = None;
-                    ai.cover_waited = 0.0;
+                    ai.place_waited = 0.0;
                     None
                 }
                 _ => {
@@ -640,64 +640,77 @@ impl Game {
     }
 }
 
-/// The nearest nav cell within `fpv_ai_cover_px` of `me` (its centre) that
-/// is open, joined to where it stands and `keeps` - hidden from the seat,
-/// inside its box, out of its face - ties to the lower cell index.
+/// The nav cell nearest `me` by walk within `fpv_ai_cover_px` of walking
+/// (`walk_cells`) that is usable and `keeps` - hidden from the seat, inside
+/// its box, out of its face -, its centre; ties to the nearer by straight
+/// line, then the lower cell index. By walk, not by line: in a maze the cell
+/// nearest by line can be a long walk away, out of the seat's box.
 fn fpv_cover_spot(me: Position, grid: &crate::pathfind::Grid, keeps: &dyn Fn(Position) -> bool) -> Option<Position> {
-    let reach = (tuning().fpv_ai_cover_px / OBSTACLE_GRID_SIZE).ceil() as i32;
-    nearest_cell(me, reach, grid, |p| grid.connected(me, p) && keeps(p))
+    let reach = (tuning().fpv_ai_cover_px / OBSTACLE_GRID_SIZE).ceil() as u32;
+    walk_cells(grid, me, reach)
+        .into_iter()
+        .filter(|&(p, _, _)| grid.usable(p) && keeps(p))
+        .min_by(|a, b| (a.1, me.distance_to(a.0)).partial_cmp(&(b.1, me.distance_to(b.0))).unwrap_or(std::cmp::Ordering::Equal).then(a.2.cmp(&b.2)))
+        .map(|(p, _, _)| p)
 }
 
-/// The nearest tree within `reach_px` of `me` (ties to cell order) that has
-/// an open cell joined to where it stands within two cells of it: that cell
-/// - the one nearest the tree, then nearest `me`, then the lower cell index
-/// - and the tree's centre. The cells round a tree are mostly inside the
-/// nav grid's clearance, so the hull gets under the crown by driving at the
-/// tree from there.
+/// The nearest tree within `reach_px` of `me` (ties to cell order) with a
+/// usable cell within two cells of it that `me` can walk to within
+/// `reach_px` of walking (`walk_cells`): that cell - the one nearest the
+/// tree, then the shorter walk, then the lower cell index - and the tree's
+/// centre. The cells round a tree are mostly inside the nav grid's
+/// clearance, so the hull gets under the crown by driving at the tree from
+/// there.
 fn fpv_tree_spot(me: Position, grid: &crate::pathfind::Grid, trees: &[(Entity, Position)], reach_px: f32) -> Option<(Position, Position)> {
     let mut near: Vec<&(Entity, Position)> = trees.iter().filter(|(_, p)| p.distance_to(me) <= reach_px).collect();
+    if near.is_empty() {
+        return None;
+    }
     near.sort_by(|a, b| a.1.distance_to(me).total_cmp(&b.1.distance_to(me)));
+    let walk = walk_cells(grid, me, (reach_px / OBSTACLE_GRID_SIZE).ceil() as u32);
     near.into_iter().find_map(|&(_, tree)| {
-        let (cx, cy) = crate::map::world_to_cell(tree);
-        let mut best: Option<((f32, f32, (i32, i32)), Position)> = None;
-        for row in cy - 2..=cy + 2 {
-            for col in cx - 2..=cx + 2 {
-                if col < 0 || row < 0 {
-                    continue;
-                }
-                let p = crate::map::cell_to_world(col, row);
-                if !grid.usable(p) || !grid.connected(me, p) {
-                    continue;
-                }
-                let key = (p.distance_to(tree), p.distance_to(me), (row, col));
-                if best.is_none_or(|(k, _)| key < k) {
-                    best = Some((key, p));
-                }
-            }
-        }
-        best.map(|(_, spot)| (spot, tree))
+        walk.iter()
+            .filter(|&&(p, _, _)| grid.usable(p) && p.distance_to(tree) <= OBSTACLE_GRID_SIZE * 2.5)
+            .min_by(|a, b| {
+                (a.0.distance_to(tree), a.1).partial_cmp(&(b.0.distance_to(tree), b.1)).unwrap_or(std::cmp::Ordering::Equal).then(a.2.cmp(&b.2))
+            })
+            .map(|&(spot, _, _)| (spot, tree))
     })
 }
 
-/// The nearest usable cell centre within `reach` cells of `me` for which
-/// `ok` holds; ties to the lower cell index (row, then column).
-fn nearest_cell(me: Position, reach: i32, grid: &crate::pathfind::Grid, ok: impl Fn(Position) -> bool) -> Option<Position> {
-    let (cx, cy) = crate::map::world_to_cell(me);
-    let mut best: Option<(f32, (i32, i32), Position)> = None;
-    for row in cy - reach..=cy + reach {
-        for col in cx - reach..=cx + reach {
-            if col < 0 || row < 0 {
+/// The nav cells `me` can walk to in at most `reach` steps (four-way, open
+/// cells; the cell it stands in counts whatever it holds): each cell's
+/// centre, its steps and its index (row, column). Breadth first, so no
+/// search costs more than the cells within `reach`.
+fn walk_cells(grid: &crate::pathfind::Grid, me: Position, reach: u32) -> Vec<(Position, u32, (usize, usize))> {
+    let (cols, rows, size) = grid.dims();
+    if cols == 0 || rows == 0 {
+        return Vec::new();
+    }
+    let at = |p: f32, n: usize| ((p / size).floor().max(0.0) as usize).min(n - 1);
+    let start = (at(me.x, cols), at(me.y, rows));
+    let mut seen = vec![false; cols * rows];
+    let mut out = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    seen[start.1 * cols + start.0] = true;
+    queue.push_back((start, 0u32));
+    while let Some(((col, row), steps)) = queue.pop_front() {
+        out.push((Position::new((col as f32 + 0.5) * size, (row as f32 + 0.5) * size), steps, (row, col)));
+        if steps == reach {
+            continue;
+        }
+        for (dc, dr) in [(0i32, -1i32), (1, 0), (0, 1), (-1, 0)] {
+            let (c, r) = (col as i32 + dc, row as i32 + dr);
+            if c < 0 || r < 0 || c as usize >= cols || r as usize >= rows {
                 continue;
             }
-            let p = crate::map::cell_to_world(col, row);
-            if !grid.usable(p) || !ok(p) {
+            let (c, r) = (c as usize, r as usize);
+            if seen[r * cols + c] || grid.is_blocked(c, r) {
                 continue;
             }
-            let d = me.distance_to(p);
-            if best.is_none_or(|(bd, bc, _)| (d, (row, col)) < (bd, bc)) {
-                best = Some((d, (row, col), p));
-            }
+            seen[r * cols + c] = true;
+            queue.push_back(((c, r), steps + 1));
         }
     }
-    best.map(|(_, _, p)| p)
+    out
 }
