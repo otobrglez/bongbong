@@ -490,6 +490,10 @@ impl Game {
             (!fr.is_dead() && !hidden).then_some(fr.position)
         });
         let view = self.enemy_sight();
+        // Where every live tank stands: a cover cell another hull is on is
+        // no cover (the tank would press into it).
+        let hulls_at: Vec<(Entity, Position)> =
+            self.world.query::<(Entity, &Tank)>().iter().filter(|(_, tk)| !tk.is_wreck()).map(|(e, tk)| (e, tk.position)).collect();
         let mut out = std::collections::BTreeMap::new();
         let mut q = self.world.query::<(Entity, &Tank, &mut Ai)>();
         for (entity, tank, ai) in q.iter() {
@@ -537,7 +541,11 @@ impl Game {
             let cover = match (exposed, target) {
                 (true, Some(s)) => {
                     let keeps = |p: Position| {
-                        in_sight_box(s.pos, p) && p.distance_to(s.pos) >= t.fpv_ai_min_range_px && safe(p) && !f.terrain.line_of_sight(s.pos, p)
+                        in_sight_box(s.pos, p)
+                            && p.distance_to(s.pos) >= t.fpv_ai_min_range_px
+                            && safe(p)
+                            && hulls_at.iter().all(|&(e, q)| e == entity || q.distance_to(p) > OBSTACLE_GRID_SIZE)
+                            && !f.terrain.line_of_sight(s.pos, p)
                     };
                     let kept = ai.cover_spot.filter(|&(p, age)| age < t.fpv_ai_cover_seconds && keeps(p) && grid.connected(me, p));
                     let spot = match kept {
