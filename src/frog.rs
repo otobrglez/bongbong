@@ -195,6 +195,10 @@ pub struct Frog {
     /// forever rather than looping or disappearing, once
     /// FROG_EXPLOSION_FRAMES/FROG_EXPLOSION_FPS worth of it has played.
     pub death_elapsed: Option<f32>,
+    /// Seconds left stunned by a sonic hammer's wave (docs/sonic-hammer.md):
+    /// while positive the frog neither hops (`can_hop`) nor bites
+    /// (`can_attack`). Set by `stun`, ticked down by `tick`.
+    pub stun_timer: f32,
 }
 
 /// Which of the five filmstrips (see docs/FROG_SPEC.md) `anim` picked for
@@ -262,13 +266,25 @@ impl Frog {
     /// job, checked separately since it needs world/obstacle data this
     /// type deliberately has no access to.
     pub fn can_hop(&self) -> bool {
-        !self.is_dead() && self.hop_cooldown <= 0.0
+        !self.is_dead() && self.hop_cooldown <= 0.0 && !self.is_stunned()
+    }
+
+    /// Stunned for `seconds`, or as long as it already was, if longer.
+    pub fn stun(&mut self, seconds: f32) {
+        if !self.is_dead() {
+            self.stun_timer = self.stun_timer.max(seconds);
+        }
+    }
+
+    /// Whether a stun still holds it.
+    pub fn is_stunned(&self) -> bool {
+        self.stun_timer > 0.0
     }
 
     /// Whether the frog can bite right now - alive, and not still cooling
     /// down from the last bite.
     pub fn can_attack(&self) -> bool {
-        !self.is_dead() && self.attack_cooldown <= 0.0
+        !self.is_dead() && self.attack_cooldown <= 0.0 && !self.is_stunned()
     }
 
     /// Apply shell damage. A no-op once already dead, so callers don't need
@@ -359,6 +375,7 @@ impl Frog {
     /// authored in game code, not by rapier's own integration.
     pub fn tick(&mut self, dt: f32) {
         self.hurt_timer = (self.hurt_timer - dt).max(0.0);
+        self.stun_timer = (self.stun_timer - dt).max(0.0);
         if self.hop_timer > 0.0 {
             self.hop_timer = (self.hop_timer - dt).max(0.0);
             let frac = (1.0 - self.hop_timer / FROG_HOP_SECONDS).clamp(0.0, 1.0);
@@ -391,6 +408,10 @@ impl Frog {
             let frame = (elapsed * FROG_HOP_FPS) as i32;
             return (FrogAnim::Hop, frame.clamp(0, FROG_HOP_FRAMES - 1));
         }
+        // Stunned: the hurt clip held on its first frame.
+        if self.is_stunned() {
+            return (FrogAnim::Hurt, 0);
+        }
         if self.attack_timer > 0.0 {
             let elapsed = (FROG_ATTACK_SECONDS - self.attack_timer).max(0.0);
             let frame = (elapsed * FROG_ATTACK_FPS) as i32;
@@ -422,6 +443,24 @@ pub const FROG_VARIANT_DIRS: [&str; 6] = [
     "green_brown",
     "purple_blue",
 ];
+
+/// The marks a stunned frog wears (docs/sonic-hammer.md): three pale blocks
+/// with a shade under each, circling over its head on the clock `t`.
+/// Empty while it is not stunned or is dead.
+pub fn stun_marks(frog: &Frog, t: f32) -> Vec<crate::pyro::Shape> {
+    let mut out = Vec::new();
+    if !frog.is_stunned() || frog.is_dead() {
+        return out;
+    }
+    let head = Position::new(frog.position.x, frog.position.y - frog.size() * 0.32);
+    for i in 0..3 {
+        let a = t * 6.0 + i as f32 * std::f32::consts::TAU / 3.0;
+        let at = Position::new(head.x + a.cos() * 10.0, head.y + a.sin() * 3.0);
+        out.push(crate::pyro::Shape::Mark { pos: Position::new(at.x, at.y + 2.0), size: 2, color: crate::sonic::STONE[1] });
+        out.push(crate::pyro::Shape::Mark { pos: at, size: 2, color: crate::sonic::STONE[3] });
+    }
+    out
+}
 
 /// Draw the frog's side marker as its health gauge: the shared ground ring
 /// (`tank::draw_ground_ring_at`, the player tank's own ring in the same
@@ -487,6 +526,7 @@ mod facing_tests {
             attack_cooldown: 0.0,
             facing: Facing::Right,
             death_elapsed: None,
+            stun_timer: 0.0,
         }
     }
 

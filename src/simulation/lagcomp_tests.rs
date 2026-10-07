@@ -322,7 +322,7 @@ fn shoves(game: &Game) -> Vec<(usize, Vec2)> {
     game.events()
         .iter()
         .filter_map(|e| match e {
-            Event::Shoved { seat, vx, vy } => Some((*seat, Vec2::new(*vx, *vy))),
+            Event::Shoved { seat, vx, vy, .. } => Some((*seat, Vec2::new(*vx, *vy))),
             _ => None,
         })
         .collect()

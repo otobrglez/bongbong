@@ -91,6 +91,48 @@ pub struct Fish {
     seed: u32,
     /// Its school (`Shoal::schools`).
     school: usize,
+    /// Thrown onto the bank by a sonic hammer's wave (the hammer's "at 11",
+    /// docs/sonic-hammer.md): where it lay in the water, the spot on the
+    /// bank and the seconds since. `None` in the water.
+    pub flop: Option<Flop>,
+}
+
+/// A fish on the bank (`Fish::flop`): it hops out of the water to `bank`,
+/// flops there `sonic_fish_flop_seconds`, and hops back to `from`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Flop {
+    pub from: Position,
+    pub bank: Position,
+    pub age: f32,
+}
+
+/// Seconds a fish's hop onto the bank, or back, takes.
+const FLOP_HOP_SECONDS: f32 = 0.3;
+
+/// Seconds a fish on the bank holds one heading before it flips over.
+const FLOP_FLIP_SECONDS: f32 = 0.15;
+
+impl Flop {
+    /// Where the flopping fish is drawn at its age, and how high off the
+    /// ground (px): hopping out, lying on the bank flipping a block up and
+    /// down, hopping back.
+    fn place(&self, seconds: f32) -> (Position, f32) {
+        let hop = |from: Position, to: Position, k: f32| (from + (to - from) * k, 10.0 * (std::f32::consts::PI * k).sin());
+        if self.age < FLOP_HOP_SECONDS {
+            return hop(self.from, self.bank, self.age / FLOP_HOP_SECONDS);
+        }
+        let back = FLOP_HOP_SECONDS + seconds;
+        if self.age >= back {
+            return hop(self.bank, self.from, ((self.age - back) / FLOP_HOP_SECONDS).min(1.0));
+        }
+        let up = ((self.age / FLOP_FLIP_SECONDS) as i32).rem_euclid(2) == 0;
+        (self.bank, if up { 2.0 } else { 0.0 })
+    }
+
+    /// Whether it is back in the water.
+    fn done(&self, seconds: f32) -> bool {
+        self.age >= 2.0 * FLOP_HOP_SECONDS + seconds
+    }
 }
 
 /// A school: a lake and the seed its fish and its wandering hash from.
@@ -127,6 +169,10 @@ pub struct Shoal {
     clock: f32,
     /// The round's seed, salting the streams' fish.
     salt: u32,
+    /// The fish each sonic wave on the field has thrown onto the bank so
+    /// far, by the wave's seed (`SonicWave::seed`): at most
+    /// `sonic_fish_throw_max` a wave.
+    thrown: Vec<(u32, u32)>,
 }
 
 fn centre((col, row): (i32, i32)) -> Position {
@@ -320,6 +366,7 @@ impl Shoal {
                         idle: false,
                         seed: fseed,
                         school,
+                        flop: None,
                     });
                 }
             }
@@ -375,6 +422,16 @@ impl Shoal {
             self.clock += dt;
             let targets: Vec<(i32, i32)> = (0..self.schools.len()).map(|s| self.target(s, t)).collect();
             for f in &mut self.fish {
+                // A fish on the bank flops there and swims on once it is
+                // back where it was thrown from.
+                if let Some(flop) = f.flop.as_mut() {
+                    flop.age += dt;
+                    if flop.done(t.sonic_fish_flop_seconds) {
+                        f.pos = flop.from;
+                        f.flop = None;
+                    }
+                    continue;
+                }
                 f.step(water, targets[f.school], dt, t);
             }
         }
@@ -408,7 +465,53 @@ impl Shoal {
         for s in scares(game, &t) {
             self.scare(water, s);
         }
+        self.throw_onto_banks(game, water, &t);
         self.advance(water, game.time, &t);
+    }
+
+    /// The hammer's "at 11" (docs/sonic-hammer.md): a fish a sonic wave's
+    /// front passes this step, whose throw along the wave's line
+    /// (`sonic_fish_throw_px`) lands on dry ground, is thrown onto the bank
+    /// - at most `sonic_fish_throw_max` a wave, the ones nearest the pivot
+    /// first, ties on their order. Hashed nowhere and drawn only: a replica
+    /// throws the same fish off the same wave.
+    fn throw_onto_banks(&mut self, game: &Game, water: &WaterLayout, t: &Tuning) {
+        let waves = &game.sonic_waves;
+        self.thrown.retain(|(seed, _)| waves.iter().any(|w| w.seed == *seed));
+        if t.sonic_fish_throw_max <= 0 || t.sonic_fish_throw_px <= 0.0 {
+            return;
+        }
+        let step = (game.time - self.clock).clamp(0.0, MAX_GAP);
+        for wave in waves {
+            let front = wave.front(t);
+            let before = (wave.age - step) * t.sonic_wave_speed;
+            let mut hit: Vec<(f32, usize, Position)> = Vec::new();
+            for (i, f) in self.fish.iter().enumerate().filter(|(_, f)| f.flop.is_none()) {
+                let Some(d) = wave.cone.reaches(f.pos).filter(|&d| d > before && d <= front) else { continue };
+                let away = f.pos - wave.cone.origin;
+                let Some(dir) = unit_of(away) else { continue };
+                let bank = f.pos + dir * t.sonic_fish_throw_px;
+                if water.depth_at(bank) == Depth::Dry {
+                    hit.push((d, i, bank));
+                }
+            }
+            hit.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            let count = match self.thrown.iter_mut().find(|(s, _)| *s == wave.seed) {
+                Some(entry) => entry,
+                None => {
+                    self.thrown.push((wave.seed, 0));
+                    self.thrown.last_mut().expect("just pushed")
+                }
+            };
+            for (_, i, bank) in hit {
+                if count.1 >= t.sonic_fish_throw_max as u32 {
+                    break;
+                }
+                count.1 += 1;
+                let f = &mut self.fish[i];
+                f.flop = Some(Flop { from: f.pos, bank, age: 0.0 });
+            }
+        }
     }
 
     /// The fish to draw at the round's clock `time` (the lakes' from their
@@ -432,6 +535,14 @@ impl Shoal {
     fn lake_shapes(&self, out: &mut Vec<Shape>, time: f32, t: &Tuning, cull: Option<Rectangle>) {
         let window = (time / GLINT_SECONDS).floor() as i32 as u32;
         for f in self.fish.iter().filter(|f| !crate::view::culled(cull, f.pos)) {
+            if let Some(flop) = f.flop {
+                // Out of the water: drawn whole, flipping over on the bank.
+                let (at, lift) = flop.place(t.sonic_fish_flop_seconds);
+                let flip = ((flop.age / FLOP_FLIP_SECONDS) as i32).rem_euclid(2) == 0;
+                let heading = if flip { Vec2::new(1.0, 0.0) } else { Vec2::new(-1.0, 0.0) };
+                compose(out, Position::new(at.x, at.y - lift), heading, flop.age * 4.0, true, f.seed, 1.0);
+                continue;
+            }
             let glint = f.fright > 0.4 || pyro::unit(f.seed ^ window.wrapping_mul(0x9E37_79B9), 8) < 0.18;
             compose(out, f.pos, f.heading, f.tail, glint, f.seed, t.fish_opacity);
         }
@@ -447,6 +558,21 @@ pub fn scares(game: &Game, t: &Tuning) -> Vec<Scare> {
     let hull = t.fish_scatter_px;
     let shot = t.fish_shot_scatter_px;
     let blast = t.fish_blast_scatter_px;
+    // A sonic wave's front, while it runs out: a scare every cell along it.
+    for w in &game.sonic_waves {
+        if w.spent(t) {
+            continue;
+        }
+        let front = w.front(t);
+        let rays = &w.cone.rays;
+        let every = ((OBSTACLE_GRID_SIZE / crate::sonic::SONIC_RAY_ARC_PX) as usize).max(1);
+        for (i, &reach) in rays.iter().enumerate().step_by(every) {
+            let offset = -w.cone.half_angle + 2.0 * w.cone.half_angle * i as f32 / (rays.len().max(2) - 1) as f32;
+            let rot = w.cone.facing.rotation().to_radians() + offset;
+            let r = front.min(reach);
+            out.push(Scare { at: w.cone.origin + Vec2::new(rot.sin(), -rot.cos()) * r, radius: blast });
+        }
+    }
     for tank in game.world.query::<&crate::tank::Tank>().iter().filter(|tank| !tank.is_dead()) {
         out.push(Scare { at: tank.position, radius: hull });
     }

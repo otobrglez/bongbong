@@ -92,6 +92,10 @@ pub struct GrassTuft {
     /// leaves `Game::grass_cells` at the same moment, so it no longer
     /// conceals.
     pub burnt: bool,
+    /// Seconds a sonic hammer's wave holds this tuft flat for
+    /// (docs/sonic-hammer.md): `crush` stays at 1 while it runs, then the
+    /// tuft stands back up over the ordinary recovery. Set by `pin`.
+    pub pinned: f32,
     /// How far the tip may lean left and right (`bend`'s units, px of
     /// travel at the sprite's top), both positive: the room left before
     /// the art crosses into a solid tile beside its cell. Unbounded on a
@@ -150,6 +154,7 @@ pub fn tufts_for_cell(t: &Tuning, center: Position, solid: impl Fn((i32, i32)) -
                 crush: 0.0,
                 push: 0.0,
                 burnt: false,
+                pinned: 0.0,
                 lean: [f32::INFINITY; 2],
             };
             keep_off(t, tuft, center, &solid)
@@ -323,9 +328,24 @@ pub fn tick(tufts: &mut [GrassTuft], movers: &[Mover], dt: f32) {
             }
         }
         // Flattening is immediate - a hull does not ease grass down - but
-        // standing back up takes the whole recovery, which is the trail.
+        // standing back up takes the whole recovery, which is the trail. A
+        // tuft a wave pinned lies flat until the pin runs out.
+        if tuft.pinned > 0.0 {
+            tuft.pinned = (tuft.pinned - dt).max(0.0);
+            target = 1.0;
+        }
         tuft.crush = if target > tuft.crush { target } else { (tuft.crush - dt / recover).max(0.0) };
         tuft.push = push;
+    }
+}
+
+/// Hold every tuft rooted in map cell `cell` flat for `seconds` - a sonic
+/// hammer's wave passing over it (docs/sonic-hammer.md), as long as the
+/// cell hides nobody. Pure in its inputs, no RNG.
+pub fn pin(tufts: &mut [GrassTuft], cell: (i32, i32), seconds: f32) {
+    for tuft in tufts.iter_mut().filter(|t| crate::map::world_to_cell(t.base) == cell) {
+        tuft.pinned = tuft.pinned.max(seconds);
+        tuft.crush = 1.0;
     }
 }
 

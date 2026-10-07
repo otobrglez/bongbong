@@ -145,6 +145,11 @@ pub struct TankDebug {
     pub minigun: i32,
     pub missiles: i32,
     pub grenades: i32,
+    pub sonic: i32,
+    /// An enemy's wind-up: the weapon and the seconds left (`Tank::tell`).
+    pub tell: Option<(&'static str, f32)>,
+    /// Seconds left knocked off its tracks (`Tank::skid`).
+    pub skid: f32,
     pub plasma: i32,
     pub laser: i32,
     /// Flamethrower fuel, seconds.
@@ -214,6 +219,8 @@ pub struct FrogDebug {
     /// facing right and mirrored for the other way, so this is the one
     /// readout that says whether a hop or a bite reads correctly.
     pub facing: Facing,
+    /// Seconds left stunned by a sonic wave (`Frog::stun_timer`).
+    pub stun: f32,
 }
 
 #[derive(Serialize, Debug)]
@@ -328,6 +335,7 @@ pub struct TankPatch {
     pub minigun_ammo: Option<i32>,
     pub missile_ammo: Option<i32>,
     pub grenade_ammo: Option<i32>,
+    pub sonic_ammo: Option<i32>,
     pub plasma_ammo: Option<i32>,
     pub laser_charges: Option<i32>,
     /// Flamethrower fuel, in seconds.
@@ -540,6 +548,9 @@ impl Game {
                     minigun: tank.minigun_ammo,
                     missiles: tank.missile_ammo,
                     grenades: tank.grenade_ammo,
+                    sonic: tank.sonic_ammo,
+                    tell: tank.tell.map(|t| (t.weapon.name(), r1(t.left))),
+                    skid: r1(tank.skid),
                     plasma: tank.plasma_ammo,
                     laser: tank.laser_charges,
                     flame_fuel: r1(tank.flame_fuel),
@@ -610,6 +621,20 @@ impl Game {
                 state: m.stage.name(),
             });
         }
+        // A sonic wave: where it was fired from, its facing as its state and
+        // its front's speed along that facing.
+        for w in &self.sonic_waves {
+            let along = w.cone.facing.vec() * crate::tuning::tuning().sonic_wave_speed;
+            projectiles.push(ProjectileDebug {
+                kind: "sonic_wave",
+                owner: w.owner.slot(),
+                x: r1(w.cone.origin.x),
+                y: r1(w.cone.origin.y),
+                vx: r1(along.x),
+                vy: r1(along.y),
+                state: w.cone.facing.name(),
+            });
+        }
         for g in self.world.query::<&crate::grenade::Grenade>().iter() {
             projectiles.push(ProjectileDebug {
                 kind: "grenade",
@@ -645,6 +670,7 @@ impl Game {
                     dead: fr.is_dead(),
                     hopping: fr.hop_timer > 0.0,
                     facing: fr.facing,
+                    stun: r1(fr.stun_timer),
                 })
             })
             .collect();
@@ -784,6 +810,7 @@ impl Game {
             let tank = q.get().map_err(|e| e.to_string())?;
             tank.position = pos;
             tank.velocity = Vec2::new(0.0, 0.0);
+            tank.skid = 0.0;
             if let Some(rot) = rotation {
                 tank.rotation = rot;
                 tank.visual_rotation = rot;
@@ -829,6 +856,12 @@ impl Game {
                 tank.disarm();
             }
             tank.grenade_ammo = n.max(0);
+        }
+        if let Some(n) = patch.sonic_ammo {
+            if n > 0 {
+                tank.disarm();
+            }
+            tank.sonic_ammo = n.max(0);
         }
         if let Some(n) = patch.plasma_ammo {
             if n > 0 {

@@ -1,5 +1,6 @@
 //! Firing. Spawning shells, plasma bolts, bullets, seeker missiles,
-//! grenades and laser beams from a tank's muzzle (with recoil), ticking a twin-barrel
+//! grenades and laser beams from a tank's muzzle (with recoil), queuing a
+//! sonic hammer's blast (`simulation::sonic`), ticking a twin-barrel
 //! chassis's queued second shot, a minigun burst and a missile volley, the
 //! per-weapon trigger dispatch the
 //! player and every enemy share, and the `Projectile` view of the three
@@ -159,7 +160,7 @@ fn laser_shot(tank: &Tank, owner: Owner, aim_offset: f32, variant: LaserVariant)
 /// bullet it launches (`net::predict`, `Game::seat_recoil`), so an
 /// `Event::Shoved` for those would kick it twice; it draws no missile or
 /// grenade, so those kicks are the room's to tell it about.
-fn apply_recoil(physics: &mut Physics, tank: &Tank, velocity: Vec2, speed: f32, max_speed: f32) -> Option<Vec2> {
+pub(super) fn apply_recoil(physics: &mut Physics, tank: &Tank, velocity: Vec2, speed: f32, max_speed: f32) -> Option<Vec2> {
     let len = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
     let handle = tank.body?;
     if len <= f32::EPSILON {
@@ -445,6 +446,14 @@ pub(super) fn dispatch_fire_from(
                 tank.grenade_ammo -= 1;
                 tank.fire_cooldown = tuning().grenade_reload_seconds;
                 fire_grenade(physics, f, tank, owner, aim_offset);
+            }
+        }
+        ActiveWeapon::SonicHammer => {
+            if tank.sonic_ammo > 0 {
+                f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::SonicHammer.name() });
+                tank.sonic_ammo -= 1;
+                tank.fire_cooldown = tuning().sonic_reload_seconds;
+                super::sonic::fire_sonic(physics, f, tank, owner);
             }
         }
         ActiveWeapon::Plasma => {

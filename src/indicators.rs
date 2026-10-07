@@ -103,7 +103,7 @@ use crate::math::{Color, Rectangle, Vec2};
 use crate::plasma::Plasma;
 use crate::shell::{Owner, Shell};
 use crate::simulation::{Event, Game, HitTarget, RollIn, with_tank};
-use crate::tank::{Dir, Tank};
+use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::tuning::{Tuning, tuning};
 use crate::view::Camera;
 use crate::{OBSTACLE_GRID_SIZE, Position};
@@ -357,6 +357,9 @@ pub struct TankView {
     /// (`lined_up` and `PresentWorld::line_of_sight`): its aim is settling.
     /// Only ever set on an enemy.
     pub lane: bool,
+    /// An enemy winding up a special (`Tank::tell`, docs/sonic-hammer.md
+    /// "The enemy tell"): the weapon and how far through, 0..1.
+    pub tell: Option<(ActiveWeapon, f32)>,
 }
 
 impl TankView {
@@ -436,6 +439,10 @@ pub enum ArrowKind {
     /// A volcano that is rumbling or erupting (docs/volcano.md): the
     /// warning that bombs are coming, `erupting` once they are.
     Volcano { erupting: bool },
+    /// An enemy winding up a special (`TankView::tell`): never merged,
+    /// never left out, drawn in the weapon's accent and blinking quicker as
+    /// it nears going off.
+    Tell { weapon: ActiveWeapon, progress: f32 },
 }
 
 /// One arrow at the edge of the screen.
@@ -895,6 +902,17 @@ impl Awareness {
                         });
                     Some(Note::Fired { slot, at_seat })
                 }
+                // A sonic wave has no shot to read back: the arc points at
+                // the pivot of the newest wave that could have reached the
+                // hull (its reach and a hull's half more).
+                Event::Hit { target: HitTarget::Player { player }, x, y, cause: crate::simulation::HitCause::Sonic, .. } if player == seat => me
+                    .and_then(|(_, pos, hull, _)| {
+                        let at = Position::new(x, y);
+                        let reach = t.sonic_reach_px + hull.1.x.max(hull.1.y);
+                        let wave = game.sonic_waves.iter().rev().find(|w| w.cone.origin.distance_to(at) <= reach)?;
+                        unit(wave.cone.origin - pos)
+                    })
+                    .map(|from| Note::Hit { from }),
                 Event::Hit { target: HitTarget::Player { player }, x, y, .. } if player == seat => me
                     .and_then(|(entity, pos, hull, _)| hit_from(game, entity, pos, hull, Position::new(x, y)))
                     .map(|from| Note::Hit { from }),
@@ -985,7 +1003,8 @@ impl Awareness {
                 self.lined.remove(&tv.slot);
             }
             let distance = anchor.distance_to(tv.pos);
-            let since_fired = self.fired.get(&tv.slot).map(|&at| now - at);
+            // A wind-up gives a tank away as firing does.
+            let since_fired = if tv.tell.is_some() { Some(0.0) } else { self.fired.get(&tv.slot).map(|&at| now - at) };
             let hidden = concealed(tv.in_grass, since_fired, distance, t) || scene.sight.is_some_and(|s| distance > s);
             if hidden {
                 if let Some(at) = self.seen.remove(&tv.slot) {
@@ -1022,7 +1041,12 @@ impl Awareness {
         let in_sight = visible.iter().map(|tv| tv.pos).collect();
         let mut threats: Vec<(LaneWarning, f32, &TankView)> = Vec::new();
         let mut plain: Vec<(f32, &TankView)> = Vec::new();
+        let mut tells: Vec<&TankView> = Vec::new();
         for tv in visible.into_iter().filter(|tv| !view.shows(tv.pos)) {
+            if tv.tell.is_some() {
+                tells.push(tv);
+                continue;
+            }
             let distance = anchor.distance_to(tv.pos);
             match self.warning(tv.slot, now, t) {
                 Some(w) => threats.push((w, distance, tv)),
@@ -1058,6 +1082,13 @@ impl Awareness {
         // its bombs are on their way.
         for &(at, erupting) in scene.volcanoes.iter().filter(|(at, _)| !view.shows(*at)) {
             kept.extend(arrow(ArrowKind::Volcano { erupting }, at));
+        }
+        // An enemy winding up a special off the screen: never merged,
+        // never left out - it is about to go off.
+        for tv in tells {
+            if let Some((weapon, progress)) = tv.tell {
+                kept.extend(arrow(ArrowKind::Tell { weapon, progress }, tv.pos));
+            }
         }
 
         // Gates off the screen, the most recent first.
@@ -1286,6 +1317,7 @@ impl Scene {
         };
         let mut me = None;
         let mut tanks: Vec<(TankView, Dir)> = Vec::new();
+        let cover = game.cover_cells();
         for (entity, tank) in game.world.query::<(Entity, &Tank)>().iter() {
             let gate = gate_of(entity, tank.position);
             if Some(entity) == seat_entity {
@@ -1298,8 +1330,9 @@ impl Scene {
                 pos: tank.position,
                 wreck: tank.is_wreck(),
                 gate,
-                in_grass: crate::grass::conceals(&game.grass_cells, tank.position),
+                in_grass: crate::grass::conceals(&cover, tank.position),
                 lane: false,
+                tell: tank.tell.filter(|_| !tank.is_wreck()).map(|tell| (tell.weapon, tell.progress())),
             };
             tanks.push((view, facing_of(tank.rotation)));
         }
@@ -1630,6 +1663,13 @@ pub fn picture(seats: &[Indicators], view: &ViewFrame, time: f32, t: &Tuning, fo
             ArrowKind::Volcano { erupting } => {
                 len *= 1.0 + t.indicator_pulse_swell * throb;
                 (if erupting { HOSTILE } else { GATE_AMBER }, if throb >= 0.5 { crate::pyro::FIRE[6] } else { RIM })
+            }
+            // A wind-up blinks in its weapon's accent, quicker as it nears.
+            ArrowKind::Tell { weapon, progress } => {
+                if !blink_on(time, t.indicator_pulse_hz * (1.0 + 2.0 * progress)) {
+                    continue;
+                }
+                (crate::hud::weapon_color(weapon), RIM)
             }
         };
         let middle = behind(arrow.place.at, arrow.place.dir, len * 0.5);
@@ -1981,7 +2021,7 @@ mod indicator_tests {
     }
 
     fn enemy(slot: usize, x: f32, y: f32) -> TankView {
-        TankView { slot, seat: None, pos: Position::new(x, y), wreck: false, gate: None, in_grass: false, lane: false }
+        TankView { slot, seat: None, pos: Position::new(x, y), wreck: false, gate: None, in_grass: false, lane: false, tell: None }
     }
 
     fn scene(time: f32, tanks: Vec<TankView>) -> Scene {
@@ -3104,7 +3144,7 @@ mod picture_tests {
         let lost = Position::new(far_x, seat.y + (pad_y - seat.y) * (seat.x - far_x) / (seat.x - side_x));
         let scene = Scene {
             seat: Some(SeatView { slot: 0, pos: seat, wreck: false, gate: None }),
-            tanks: vec![TankView { slot: 5, seat: None, pos: lost, wreck: false, gate: None, in_grass: false, lane: false }],
+            tanks: vec![TankView { slot: 5, seat: None, pos: lost, wreck: false, gate: None, in_grass: false, lane: false, tell: None }],
             ..Scene::default()
         };
         let free = Awareness::new().frame(&scene, &view, &t);

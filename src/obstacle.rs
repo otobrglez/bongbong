@@ -339,6 +339,21 @@ impl Material {
         (self.is_wall() && self != Material::Glass) || self.is_tower() || matches!(self, Material::Volcano | Material::Door)
     }
 
+    /// Whether this tile stops a sonic hammer's wave (docs/sonic-hammer.md):
+    /// every wall material - glass too, which shatters as it does - the
+    /// towers, a volcano's cone and a training door. Props, drums, trees
+    /// and lamp posts let it through.
+    pub fn blocks_sound(self) -> bool {
+        self.is_wall() || self.is_tower() || matches!(self, Material::Volcano | Material::Door)
+    }
+
+    /// Whether a sonic hammer's wave breaks this tile: glass alone. A lamp
+    /// post's light is a rule (`lamp_reveal_px`), and putting it out is
+    /// not the hammer's.
+    pub fn breaks_by_sound(self) -> bool {
+        self == Material::Glass
+    }
+
     /// Odds a projectile sails over this tile instead of hitting it, rolled
     /// per projectile per tile (`Game::resolve_projectiles`). Zero means
     /// "never", and no RNG is drawn for it.

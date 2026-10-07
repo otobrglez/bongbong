@@ -379,6 +379,48 @@ pub fn ellipse_marks(b: &mut impl Blocks, center: Position, rx: f32, squash: f32
     }
 }
 
+/// An arc of blocks: every block whose centre lies within `width / 2` px of
+/// `radius` round `center` and between the angles `from` and `to` (radians
+/// from +x, clockwise on the y-down field, `from <= to`), dissolved like
+/// `dither_disc` at `cover` - through the Bayer pattern down to half, then
+/// the kept blocks in eighths. Anchored to the field's grid, so an arc that
+/// grows does not crawl. A wave's front, a ring of energy.
+#[allow(clippy::too_many_arguments)]
+pub fn block_arc(b: &mut impl Blocks, center: Position, radius: f32, width: f32, from: f32, to: f32, color: Color, cover: f32) {
+    if cover <= 0.0 || color.a == 0 || radius <= 0.0 || to < from {
+        return;
+    }
+    let (cover, color) = if cover < 0.5 { (0.5, alpha(color, cover * 2.0)) } else { (cover.min(1.0), color) };
+    if color.a == 0 {
+        return;
+    }
+    let half = (width * 0.5).max(BLOCK * 0.5);
+    let outer = radius + half;
+    let (bx0, by0) = block_of(center.x - outer, center.y - outer);
+    let (bx1, by1) = block_of(center.x + outer, center.y + outer);
+    let span = to - from;
+    let tau = std::f32::consts::TAU;
+    for by in by0..=by1 {
+        let mut run: Option<i32> = None;
+        for bx in bx0..=bx1 + 1 {
+            let keep = bx <= bx1 && {
+                let (dx, dy) = ((bx * B) as f32 + BLOCK * 0.5 - center.x, (by * B) as f32 + BLOCK * 0.5 - center.y);
+                let d = (dx * dx + dy * dy).sqrt();
+                let a = (dy.atan2(dx) - from).rem_euclid(tau);
+                (d - radius).abs() <= half && (a <= span || span >= tau) && (cover >= 0.999 || bayer(bx, by) < cover)
+            };
+            match (keep, run) {
+                (true, None) => run = Some(bx),
+                (false, Some(start)) => {
+                    b.fill_rect(start * B, by * B, (bx - start) * B, B, color);
+                    run = None;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// One shaded puff: `body`, then `shadow` - a disc down and right in a
 /// darker step, under the body - then `lit`, a smaller disc up and left in
 /// a lighter step, then `core`, fire still burning inside, as a colour and
@@ -416,6 +458,8 @@ pub enum Shape {
     /// `from` narrowing to one, stepping from `head` to `tail`: rays,
     /// debris, the tongues of a flame.
     Line { from: Position, to: Position, width: f32, head: Color, tail: Color },
+    /// An arc of blocks (`block_arc`): a wave's front, a ring.
+    Arc { center: Position, radius: f32, width: f32, from: f32, to: f32, color: Color, cover: f32 },
 }
 
 /// Paint `shapes` in order: puffs and marks alpha-blended. Glows are left
@@ -426,6 +470,7 @@ pub fn draw(b: &mut impl Blocks, shapes: &[Shape]) {
             Shape::Puff(p) => draw_puff(b, &p),
             Shape::Mark { pos, size, color } => mark(b, pos, size, color),
             Shape::Line { from, to, width, head, tail } => block_taper(b, from, to, width, 1.0, |t| between(head, tail, t, 3)),
+            Shape::Arc { center, radius, width, from, to, color, cover } => block_arc(b, center, radius, width, from, to, color, cover),
             Shape::Glow { .. } => {}
         }
     }

@@ -319,6 +319,12 @@ tunables! {
         /// than a minigun. 0.5 means the two split the non-laser half evenly
         /// (laser 50%, plasma 25%, minigun 25% overall).
         enemy_special_weapon_plasma_share: f32 = 0.5 in 0.0 ..= 1.0 @ Restart;
+        /// Of an enemy that rolled a special weapon above, the share that
+        /// spawns with the sonic hammer instead (docs/sonic-hammer.md "The
+        /// probe's `--crate` and the spawn swap"): decided by a hash of the
+        /// spawn point and the owner slot, never the round's RNG, so at 0
+        /// every round's kit and stream are what they were.
+        enemy_special_weapon_sonic_share: f32 = 0.0 in 0.0 ..= 1.0 @ Restart;
         /// Which chassis the player spawns in, as a row index into
         /// `scifi_tanks_sheet.png`: 0 scout, 1 assault, 2 breaker,
         /// 3 longbow, 4 flak, 5 wraith, 6 warden, 7 ravager, 8 glacier,
@@ -865,6 +871,90 @@ tunables! {
         /// Launch kick.
         grenade_recoil_speed: f32 = 10.0 in 0.0 ..= 200.0;
         grenade_recoil_max_speed: f32 = 20.0 in 0.0 ..= 400.0;
+    }
+
+    group sonic {
+        /// Blasts one sonic hammer crate loads (`pickup::PickupKind::
+        /// SonicHammer`, docs/sonic-hammer.md). One per press.
+        sonic_ammo_per_pickup: i32 = 6 in 1 ..= 40;
+        /// Seconds between two blasts.
+        sonic_reload_seconds: f32 = 1.2 in 0.0 ..= 10.0;
+        /// How far the cone reaches from the turret's pivot (px; five
+        /// cells), and its half angle either side of the facing (degrees).
+        sonic_reach_px: f32 = 160.0 in 32.0 ..= 480.0;
+        sonic_half_angle_deg: f32 = 35.0 in 5.0 ..= 90.0;
+        /// The share of the shove and the damage left at the rim, falling
+        /// linearly from 1 at the pivot.
+        sonic_edge_falloff: f32 = 0.35 in 0.0 ..= 1.0;
+        /// How fast the wave's front runs out (px/s): what the cone
+        /// reaches, the wave reaches when its front gets there.
+        sonic_wave_speed: f32 = 640.0 in 60.0 ..= 5000.0;
+        /// The shove at the pivot (px/s) against the chassis-free mass,
+        /// and the most any shove gives (the wire's shove reaches 508).
+        sonic_shove_speed: f32 = 380.0 in 0.0 ..= 500.0;
+        sonic_shove_max_speed: f32 = 420.0 in 0.0 ..= 500.0;
+        /// How hard a heavy chassis resists: the shove over the chassis's
+        /// mass factor to this power.
+        sonic_mass_exponent: f32 = 1.5 in 0.0 ..= 4.0;
+        /// A skidding hull's friction on dry ground (px/s^2): its slide is
+        /// `v^2 / (2 * this * grip)`.
+        sonic_skid_decel: f32 = 650.0 in 50.0 ..= 5000.0;
+        /// The least of the ground's grip a skid keeps: ice, a ford and wet
+        /// ground slide further, at most `1 / this` times as far.
+        sonic_skid_grip_floor: f32 = 0.4 in 0.05 ..= 1.0;
+        /// The longest a hull is knocked off its tracks (seconds).
+        sonic_skid_max_seconds: f32 = 1.2 in 0.0 ..= 5.0;
+        /// Damage at the pivot to the side opposing the shooter, falling
+        /// off like the shove; no roll.
+        sonic_damage: f32 = 4.0 in 0.0 ..= 50.0;
+        /// The shooter's kick back along its facing.
+        sonic_recoil_speed: f32 = 30.0 in 0.0 ..= 200.0;
+        sonic_recoil_max_speed: f32 = 40.0 in 0.0 ..= 400.0;
+        /// How long a cell of tall grass the wave flattened hides nobody
+        /// before it stands back up (seconds).
+        sonic_grass_flat_seconds: f32 = 6.0 in 0.0 ..= 60.0;
+        /// Cells a drum at the pivot is thrown, scaled by the falloff, at
+        /// least one; and how near a thrown drum's line (degrees) a tank
+        /// beyond it has to stand to draw the drum onto its cell.
+        sonic_drum_throw_cells: f32 = 4.0 in 1.0 ..= 12.0;
+        sonic_drum_aim_deg: f32 = 25.0 in 0.0 ..= 90.0;
+        /// How long a frog the wave reaches neither hops nor bites.
+        sonic_frog_stun_seconds: f32 = 1.5 in 0.0 ..= 10.0;
+        /// A grenade's push at the pivot (px/s), falling off like the shove.
+        sonic_grenade_push_speed: f32 = 260.0 in 0.0 ..= 1000.0;
+        /// An enemy's wind-up before its blast (`tank::Tell`); 0 fires on
+        /// the decision.
+        sonic_tell_seconds: f32 = 0.55 in 0.0 ..= 3.0;
+        /// How long the wave's picture lingers after its front is out.
+        sonic_wave_seconds: f32 = 0.6 in 0.05 ..= 3.0;
+        /// Arcs in the wave - the front and those behind it - and the px
+        /// between two.
+        sonic_wave_rings: i32 = 3 in 1 ..= 6;
+        sonic_ring_gap_px: f32 = 14.0 in 2.0 ..= 64.0;
+        /// Dust along the front: one puff every this many px (0 turns it
+        /// off), each gone in `sonic_dust_seconds`.
+        sonic_dust_spacing_px: f32 = 10.0 in 0.0 ..= 64.0;
+        sonic_dust_seconds: f32 = 0.5 in 0.05 ..= 3.0;
+        /// The screen ripple and shake against a tank dying's.
+        sonic_shock: f32 = 0.35 in 0.0 ..= 2.0;
+        /// Seconds the dish shows its firing cell.
+        sonic_flash_seconds: f32 = 0.2 in 0.0 ..= 2.0;
+        /// How far a tree's crown leans as the front passes (px).
+        sonic_tree_lean_px: f32 = 4.0 in 0.0 ..= 16.0;
+        /// A fish this close to dry ground along the wave's line is thrown
+        /// onto the bank (px), at most `sonic_fish_throw_max` a wave,
+        /// flopping there `sonic_fish_flop_seconds` before it hops back.
+        sonic_fish_throw_px: f32 = 40.0 in 0.0 ..= 200.0;
+        sonic_fish_throw_max: i32 = 3 in 0 ..= 16;
+        sonic_fish_flop_seconds: f32 = 2.5 in 0.0 ..= 20.0;
+        /// An enemy shouts at a seat this close in its cone, whatever lies
+        /// behind it (px).
+        sonic_ai_breaker_px: f32 = 112.0 in 0.0 ..= 480.0;
+        /// How long an enemy drives into glass before it shouts it down -
+        /// the breach's `enemy_breach_after_seconds` for every other tile.
+        sonic_ai_glass_after_seconds: f32 = 0.1 in 0.0 ..= 5.0;
+        /// Seconds between an enemy's decisions to shout.
+        sonic_ai_fire_interval: f32 = 2.5 in 0.1 ..= 10.0;
     }
 
     group flamethrower {

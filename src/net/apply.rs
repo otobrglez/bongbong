@@ -57,7 +57,7 @@ use crate::net::wire::{
     GrenadeState, MissileState, ShotKind, ShotState, Snapshot, TankState, WeaponKind, Welcome, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, crate_flags, dequantise_health, frog_flags, tank_flags, tile_flags,
 };
 use crate::laser::{LaserBeam, LaserVariant};
-use crate::obstacle::{Drum, Fuse, Obstacle};
+use crate::obstacle::{Fuse, Obstacle};
 use crate::pickup::{Pickup, PickupKind};
 use crate::missile::Missile;
 use crate::grenade::Grenade;
@@ -102,14 +102,17 @@ pub enum Show {
     /// replica's picture.
     All,
     /// `All`, less what `seat`'s client drew itself on the press
-    /// (docs/online-coop-prd.md section 4.16): the muzzle ripple and the
+    /// (docs/online-coop-prd.md section 4.16, docs/sonic-hammer.md "Online:
+    /// the shooter's press is drawn at once"): the muzzle ripple and the
     /// turret's kick of its shots, which `net::round` puts on as a
-    /// provisional shot leaves, and the laser beams it drew from the predicted muzzle and claimed by
-    /// their `Fired` (`net::predict::Predictor::confirm_beam`) - bit `k` of
-    /// `beams` for the seat's `k`th laser `Fired` in the snapshot. A beam
-    /// whose `Fired` the client did not claim is one it never drew, and is
-    /// drawn as the room's.
-    OwnShotsDrawn { seat: u8, beams: u8 },
+    /// provisional shot leaves, and the press shows - a laser's beam, a
+    /// sonic hammer's wave - it drew from its predicted pose and claimed by
+    /// their `Fired` (`net::predict::Predictor::confirm_press`): bit `k` of
+    /// `presses` for the seat's `k`th `Fired` of a weapon drawn on the
+    /// press (`WeaponKind::drawn_on_press`) in the snapshot. A show whose
+    /// `Fired` the client did not claim is one it never drew, and is drawn
+    /// as the room's.
+    OwnShotsDrawn { seat: u8, presses: u8 },
     /// The state and nothing of the moment: a welcome, whose joiner has
     /// missed it, and a prediction sandbox (`net::predict`), which nobody
     /// draws and nothing ages - a fireball or a beam put on it would stay
@@ -129,27 +132,34 @@ impl Show {
         matches!(self, Show::OwnShotsDrawn { seat, .. } if seat as usize == slot)
     }
 
-    /// Which of `s`'s events are beams the client drew itself, by index:
-    /// for each of its seat's laser `Fired`s whose bit is set in `beams`,
-    /// the seat's first `LaserBeam` after it and before the seat's next
-    /// laser `Fired` - the beam that shot put up, which the room logs after
-    /// its `Fired` in the same tick. A `Fired` whose beam is missing (kept
-    /// from a snapshot handed over too late to draw) drops nothing.
-    fn beams_drawn(self, s: &Snapshot) -> BTreeSet<usize> {
-        let Show::OwnShotsDrawn { seat, beams } = self else { return BTreeSet::new() };
+    /// Which of `s`'s events are press shows the client drew itself, by
+    /// index: for each of its seat's `Fired`s of a weapon drawn on the
+    /// press whose bit is set in `presses`, the seat's first show of that
+    /// weapon after it (`WireEvent::press_show`) and before the seat's next
+    /// `Fired` of it - the show that press put up, which the room logs
+    /// after its `Fired` in the same tick. A `Fired` whose show is missing
+    /// (kept from a snapshot handed over too late to draw) drops nothing.
+    fn presses_drawn(self, s: &Snapshot) -> BTreeSet<usize> {
+        let Show::OwnShotsDrawn { seat, presses } = self else { return BTreeSet::new() };
         let mut out = BTreeSet::new();
-        let (mut fired, mut claimed) = (0u32, false);
+        let mut fired = 0u32;
+        let mut claimed: BTreeSet<u8> = BTreeSet::new();
         for (i, event) in s.events.iter().enumerate() {
-            match *event {
-                WireEvent::Fired { slot, weapon: WeaponKind::Laser, .. } if slot == seat as u16 => {
-                    claimed = fired < u8::BITS && beams & (1 << fired) != 0;
-                    fired += 1;
+            if let WireEvent::Fired { slot, weapon, .. } = *event
+                && slot == seat as u16
+                && weapon.drawn_on_press()
+            {
+                let kind = weapon as u8;
+                claimed.remove(&kind);
+                if fired < u8::BITS && presses & (1 << fired) != 0 {
+                    claimed.insert(kind);
                 }
-                WireEvent::LaserBeam { seat: by, .. } if by == seat && claimed => {
-                    out.insert(i);
-                    claimed = false;
-                }
-                _ => {}
+                fired += 1;
+            } else if let Some((by, weapon)) = event.press_show()
+                && by == seat
+                && claimed.remove(&(weapon as u8))
+            {
+                out.insert(i);
             }
         }
         out
@@ -254,15 +264,15 @@ pub fn snapshot_with(game: &mut Game, s: &Snapshot, show: Show) {
 
 fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     let cols = field_cols(game);
-    let own_beams = show.beams_drawn(s);
-    let dead_tiles = apply_events(game, s, cols, show, &own_beams);
+    let own_presses = show.presses_drawn(s);
+    let dead_tiles = apply_events(game, s, cols, show, &own_presses);
     let mut spectacle = Spectacle::default();
     let drawn = show.drawn();
     if drawn {
         // Before the families move anything: a dying tile is still
         // standing, a bursting missile still in the air and a firing
         // hull where it is drawn.
-        apply_spectacle(game, s, show, &own_beams, &mut spectacle);
+        apply_spectacle(game, s, show, &own_presses, &mut spectacle);
     }
     apply_tiles(game, s, cols, dead_tiles);
     apply_tanks(game, s);
@@ -297,12 +307,12 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
 ///
 /// What the client drew itself (`Show::OwnShotsDrawn`) is left out: its
 /// shots' muzzle ripples, and the muzzle flash of each beam it drew
-/// (`own_beams`, indices into `s.events`). A beam's end still counts for
+/// (`own_presses`, indices into `s.events`). A beam's end still counts for
 /// the hit it stopped on.
 ///
 /// What the wire does not carry is taken plain: a drum's blast has no
 /// cause on the wire, so its fireball is the hashed pick without a lean.
-fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_beams: &BTreeSet<usize>, show: &mut Spectacle) {
+fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTreeSet<usize>, show: &mut Spectacle) {
     let field = game.map.field_size();
     let at = |x: i16, y: i16| Position::new(dequantise_pos(x), dequantise_pos(y));
     let beam_ends: BTreeSet<(i16, i16)> = s
@@ -323,8 +333,18 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_beams: &BTreeS
                 game.missile_show(show, center, dir);
             }
             WireEvent::GrenadeBlast { x, y, .. } => game.grenade_show(show, at(x, y)),
+            // A sonic hammer's wave, cast against this replica's tiles -
+            // unless it is this seat's own press, drawn on the press.
+            WireEvent::SonicBlast { slot, x, y, dir } if !own_presses.contains(&i) => {
+                let facing = dir_from_index(dir).unwrap_or(Dir::Up);
+                let owner = game.world.query::<&Tank>().iter().find(|t| t.owner_slot() == slot as usize).map_or(REPLICA_OWNER, |t| t.owner());
+                game.sonic_show(show, at(x, y), facing, owner);
+            }
             WireEvent::CookOff { x, y } => Game::cookoff_show(show, at(x, y)),
             WireEvent::CrateBroken { x, y, cooked: true, .. } => game.crate_cookoff_show(show, at(x, y)),
+            // A sonic hit flashes the hull and throws dust (`fx`), never a
+            // shell's impact flash.
+            WireEvent::Hit { cause: crate::simulation::HitCause::Sonic, .. } => {}
             WireEvent::Hit { target, damage, x, y, .. } => {
                 let contact = damage == 0.0
                     && matches!(target, WireHitTarget::Player { .. } | WireHitTarget::Enemy { .. } | WireHitTarget::Frog { .. })
@@ -338,7 +358,7 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_beams: &BTreeS
             }
             // A beam's lens flashes; a later leg of one bent by a portal
             // starts at the portal it came out of, which has no lens.
-            WireEvent::LaserBeam { x0, y0, leg: 0, .. } if !own_beams.contains(&i) => {
+            WireEvent::LaserBeam { x0, y0, leg: 0, .. } if !own_presses.contains(&i) => {
                 show.muzzle_flashes.push(Shockwave::new(at(x0, y0)));
             }
 
@@ -392,6 +412,7 @@ fn kick_turret(game: &mut Game, slot: usize, weapon: WeaponKind) {
             WeaponKind::Shell => tank.kick(false),
             WeaponKind::Plasma => tank.kick(true),
             WeaponKind::Laser => tank.kick_laser(),
+            WeaponKind::SonicHammer => tank.kick_sonic(),
             WeaponKind::Minigun | WeaponKind::Missiles | WeaponKind::Flamethrower | WeaponKind::Grenades => {}
         }
         break;
@@ -419,6 +440,8 @@ fn drawn_muzzle(game: &mut Game, slot: usize, weapon: WeaponKind) -> Option<Posi
         WeaponKind::Minigun => Some(Bullet::spawn(tank, owner, 0.0).position),
         WeaponKind::Laser | WeaponKind::Missiles | WeaponKind::Flamethrower => None,
         WeaponKind::Grenades => Some(tank.turret_point(crate::tank_art::GRENADE_MUZZLE[tank.row as usize])),
+        // Sound has no muzzle flash: the dish's firing cell is its show.
+        WeaponKind::SonicHammer => None,
     };
     tank.rotation = facing;
     muzzle
@@ -439,9 +462,9 @@ fn drawn_muzzle(game: &mut Game, slot: usize, weapon: WeaponKind) -> Option<Posi
 /// sets off when it lands arrives as the server's own `Blast`. A
 /// `LavaBombLaunched` puts a volcano's bomb in the air the same way. A
 /// `LaserBeam` is drawn likewise. Both are the moment's, so a quiet
-/// apply puts neither up, and a beam the client drew itself (`own_beams`,
+/// apply puts neither up, and a beam the client drew itself (`own_presses`,
 /// indices into `s.events`) is neither drawn nor handed on.
-fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_beams: &BTreeSet<usize>) -> BTreeSet<u16> {
+fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_presses: &BTreeSet<usize>) -> BTreeSet<u16> {
     let restarted = s.events.iter().rev().find_map(|e| match *e {
         WireEvent::RoundStarted { seed, .. } => Some(seed),
         _ => None,
@@ -461,11 +484,10 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_beams:
                 let at = Position::new(dequantise_pos(x), dequantise_pos(y));
                 dead.insert(cell_index(cols, map::world_to_cell(at)));
             }
-            WireEvent::DrumLaunched { x, y, to_x, to_y } if show.drawn() => {
+            WireEvent::DrumLaunched { x, y, to_x, to_y, drum } if show.drawn() => {
                 let from = Position::new(dequantise_pos(x), dequantise_pos(y));
                 let to = Position::new(dequantise_pos(to_x), dequantise_pos(to_y));
-                // Only a fuel drum ever launches (`props::tick_fuses`).
-                game.drum_in_flight(from, to, Drum::Fuel as i32);
+                game.drum_in_flight(from, to, drum as i32);
             }
             // A seat's lantern is spent the moment it is set down, however
             // late the news: the HUD counts what is left.
@@ -483,7 +505,7 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_beams:
             }
             // An instant hit: the beam is the only trace, and the replica's
             // `tick_effects` fades it as a local round's does.
-            WireEvent::LaserBeam { x0, y0, x1, y1, variant, .. } if show.drawn() && !own_beams.contains(&i) => {
+            WireEvent::LaserBeam { x0, y0, x1, y1, variant, .. } if show.drawn() && !own_presses.contains(&i) => {
                 let start = Position::new(dequantise_pos(x0), dequantise_pos(y0));
                 let end = Position::new(dequantise_pos(x1), dequantise_pos(y1));
                 let variant = LaserVariant::ALL.get(variant as usize).copied().unwrap_or(LaserVariant::Red);
@@ -496,7 +518,7 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_beams:
         .events
         .iter()
         .enumerate()
-        .filter(|(i, _)| !own_beams.contains(i))
+        .filter(|(i, _)| !own_presses.contains(i))
         .filter_map(|(_, e)| WireEvent::to_event(e))
         .collect();
     dead
@@ -659,6 +681,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
         tank.missile_ammo = 0;
         tank.flame_fuel = 0.0;
         tank.grenade_ammo = 0;
+        tank.sonic_ammo = 0;
         let ammo = t.ammo as i32;
         match weapon {
             ActiveWeapon::Shell => tank.shells_ammo = ammo,
@@ -668,7 +691,17 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
             ActiveWeapon::Missiles => tank.missile_ammo = ammo,
             ActiveWeapon::Flamethrower => tank.flame_fuel = ammo as f32,
             ActiveWeapon::Grenades => tank.grenade_ammo = ammo,
+            ActiveWeapon::SonicHammer => tank.sonic_ammo = ammo,
         }
+        // An enemy's wind-up and a knocked hull's skid, which the replica
+        // runs down between snapshots (`Game::tick_presentation`).
+        tank.tell = (t.tell > 0).then(|| crate::tank::Tell {
+            weapon,
+            left: dequantise_seconds(t.tell),
+            total: tank.tell.map_or_else(|| weapon.tell_seconds().unwrap_or(dequantise_seconds(t.tell)), |old| old.total),
+            facing: dir_from_index(t.dir).unwrap_or(Dir::Up),
+        });
+        tank.skid = dequantise_seconds(t.skid);
         (tank.body, tank.move_half_extents(tank.facing_along_x()), turned)
     };
     let tracked = game.world.get::<&mut WireTrack>(entity).map(|mut w| w.0 = position).is_ok();
@@ -991,6 +1024,13 @@ fn apply_frogs(game: &mut Game, s: &Snapshot, mut show: Option<&mut Spectacle>) 
                 }
             }
             frog.set_clips(dead, hopping, on(frog_flags::BITING), on(frog_flags::HURT), f.phase);
+            // Stunned until the room says it is not; a fresh stun is drawn
+            // for its full length (`Game::tick_presentation` runs it down).
+            frog.stun_timer = match (on(frog_flags::STUNNED), frog.stun_timer > 0.0) {
+                (true, true) => frog.stun_timer,
+                (true, false) => tuning().sonic_frog_stun_seconds.max(f32::EPSILON),
+                (false, _) => 0.0,
+            };
             frog.body
         };
         game.physics_mut().set_position(body, position);
@@ -1830,7 +1870,7 @@ mod tests {
             step(&mut game, frame);
             snapshot(&mut replica, &enc::snapshot(&game, [0; MAX_SEATS]));
             launched.extend(game.events().iter().filter_map(|e| match *e {
-                crate::simulation::Event::DrumLaunched { x, y, to_x, to_y } => Some((x, y, to_x, to_y)),
+                crate::simulation::Event::DrumLaunched { x, y, to_x, to_y, .. } => Some((x, y, to_x, to_y)),
                 _ => None,
             }));
             if !launched.is_empty() {
@@ -2073,7 +2113,7 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
         assert!(game.events().iter().any(|e| matches!(e, crate::simulation::Event::Fired { slot: 0, .. })), "the seat fired");
         let snap = enc::snapshot(&game, [0; MAX_SEATS]);
         snapshot(&mut replica, &snap);
-        snapshot_with(&mut drew_own, &snap, Show::OwnShotsDrawn { seat: 0, beams: 0 });
+        snapshot_with(&mut drew_own, &snap, Show::OwnShotsDrawn { seat: 0, presses: 0 });
         let pose = |g: &Game| g.world.get::<&Tank>(g.seat(0).expect("seat 0")).expect("a tank").recoil_pose;
         assert_eq!(pose(&game), 1, "the room's turret kicked");
         assert_eq!(pose(&replica), 1, "and the replica's");
@@ -2143,8 +2183,8 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
         let mut replica = welcome_through_the_codec(&game);
         let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
         snap.events = vec![
-            WireEvent::Hit { target: WireHitTarget::Wall, damage: 0.0, killed: false, x: 400, y: 800 },
-            WireEvent::Hit { target: WireHitTarget::Enemy { slot: 1 }, damage: 0.0, killed: false, x: 1600, y: 1600 },
+            WireEvent::Hit { target: WireHitTarget::Wall, damage: 0.0, killed: false, x: 400, y: 800, cause: crate::simulation::HitCause::Shot },
+            WireEvent::Hit { target: WireHitTarget::Enemy { slot: 1 }, damage: 0.0, killed: false, x: 1600, y: 1600, cause: crate::simulation::HitCause::Shot },
         ];
         snapshot(&mut replica, &snap);
         let at: Vec<Position> = replica.impact_flashes.iter().map(|s| s.center).collect();
@@ -2284,8 +2324,8 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
         snap.events = vec![
             WireEvent::Fired { slot: 0, weapon: WeaponKind::Laser, input_tick: 1 },
             WireEvent::LaserBeam { x0: 400, y0: 400, x1: 1600, y1: 400, variant: 0, seat: 0, leg: 0, portal: false },
-            WireEvent::Hit { target: WireHitTarget::Enemy { slot: 1 }, damage: 0.0, killed: false, x: 1600, y: 400 },
-            WireEvent::Hit { target: WireHitTarget::Enemy { slot: 2 }, damage: 0.0, killed: false, x: 2000, y: 800 },
+            WireEvent::Hit { target: WireHitTarget::Enemy { slot: 1 }, damage: 0.0, killed: false, x: 1600, y: 400, cause: crate::simulation::HitCause::Shot },
+            WireEvent::Hit { target: WireHitTarget::Enemy { slot: 2 }, damage: 0.0, killed: false, x: 2000, y: 800, cause: crate::simulation::HitCause::Shot },
         ];
         let flashes = |g: &Game| g.impact_flashes.iter().map(|s| s.center).collect::<Vec<_>>();
 
@@ -2296,7 +2336,7 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
         assert_eq!(replica.muzzle_flashes.len(), 1, "the beam's muzzle");
 
         let mut own = welcome_through_the_codec(&game);
-        snapshot_with(&mut own, &snap, Show::OwnShotsDrawn { seat: 0, beams: 1 });
+        snapshot_with(&mut own, &snap, Show::OwnShotsDrawn { seat: 0, presses: 1 });
         assert_eq!(flashes(&own), vec![Position::new(400.0, 100.0)], "the client's own beam still flashes its hit");
         assert!(own.laser_beams.is_empty() && own.muzzle_flashes.is_empty(), "the client drew its own beam and muzzle");
         assert!(
@@ -2325,7 +2365,7 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
         let beams = |g: &Game| g.events().iter().filter(|e| matches!(e, crate::simulation::Event::LaserBeam { .. })).count();
 
         let mut second = welcome_through_the_codec(&game);
-        snapshot_with(&mut second, &snap, Show::OwnShotsDrawn { seat: 0, beams: 0b10 });
+        snapshot_with(&mut second, &snap, Show::OwnShotsDrawn { seat: 0, presses: 0b10 });
         assert_eq!(second.laser_beams.len(), 1, "the beam the client did not draw is drawn");
         let drawn = second.laser_beams[0].start;
         assert_eq!((drawn.x, drawn.y), (100.0, 100.0), "and it is the first `Fired`'s");
@@ -2333,7 +2373,7 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
         assert_eq!(second.muzzle_flashes.len(), 2, "its muzzle flashes, and the enemy's `Fired` ripples");
 
         let mut none = welcome_through_the_codec(&game);
-        snapshot_with(&mut none, &snap, Show::OwnShotsDrawn { seat: 0, beams: 0 });
+        snapshot_with(&mut none, &snap, Show::OwnShotsDrawn { seat: 0, presses: 0 });
         assert_eq!((none.laser_beams.len(), beams(&none)), (2, 2), "a client that drew no beam draws both of the room's");
     }
 
@@ -2387,7 +2427,7 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
             WireEvent::Fired { slot: enemy, weapon: WeaponKind::Shell, input_tick: 0 },
         ];
         let mut replica = welcome_through_the_codec(&game);
-        snapshot_with(&mut replica, &snap, Show::OwnShotsDrawn { seat: 0, beams: 0 });
+        snapshot_with(&mut replica, &snap, Show::OwnShotsDrawn { seat: 0, presses: 0 });
         assert_eq!(replica.muzzle_flashes.len(), 1, "the enemy's ripple and not the seat's");
         let fired = replica.events().iter().filter(|e| matches!(e, crate::simulation::Event::Fired { .. })).count();
         assert_eq!(fired, 2, "both `Fired` are handed on");

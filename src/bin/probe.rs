@@ -35,6 +35,7 @@ use std::process::ExitCode;
 use bongbong::Position;
 use bongbong::ai::{Intent, in_sight_box};
 use bongbong::map::MapFile;
+use bongbong::pickup::PickupKind;
 use bongbong::level::SpawnKind;
 use bongbong::simulation::debug::{JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, signed_quarter_turn};
 use bongbong::simulation::{Event, Game, HitTarget, Input, Outcome, TankSnapshot};
@@ -478,6 +479,15 @@ struct Args {
     #[arg(short = 'm', long = "map", value_parser = parse_map)]
     map: Option<NamedMap>,
 
+    /// Turn every special-weapon pickup slot of the map (a laser, plasma,
+    /// minigun, missiles, flamethrower, grenades or sonic hammer crate)
+    /// into this kind for the run - its map spelling, e.g. `sonic_hammer`.
+    /// The slots and their order stay, so the respawn draws are what they
+    /// were and only what is taken differs (docs/sonic-hammer.md "The
+    /// probe's `--crate`").
+    #[arg(long = "crate", value_parser = parse_crate)]
+    crate_kind: Option<PickupKind>,
+
     /// Write one JSON object per round (JSON Lines) to this file,
     /// overwriting it - the machine-readable counterpart of the human
     /// stdout (which is unchanged), for scripts that rank worst seeds,
@@ -585,8 +595,10 @@ fn log_frame(game: &Game, frame: u32) {
         // be read off the out-of-bounds position.
         let entering = if tank.entering { " entering=true" } else { "" };
         println!(
-            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} missiles={:2} grenades={:2} laser={:2} fuel={:4.1} burn={:3.1} shield={:5.1} wreck={}{entering}",
-            tank.position.x, tank.position.y, tank.velocity.x, tank.velocity.y, speed, tank.rotation, tank.damage, tank.shells_ammo, tank.plasma_ammo, tank.minigun_ammo, tank.missile_ammo, tank.grenade_ammo, tank.laser_charges, tank.flame_fuel, tank.burn_timer, tank.shield_hp, tank.is_wreck,
+            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} missiles={:2} grenades={:2} sonic={:2} laser={:2} fuel={:4.1} burn={:3.1} shield={:5.1} wreck={}{entering}{}{}",
+            tank.position.x, tank.position.y, tank.velocity.x, tank.velocity.y, speed, tank.rotation, tank.damage, tank.shells_ammo, tank.plasma_ammo, tank.minigun_ammo, tank.missile_ammo, tank.grenade_ammo, tank.sonic_ammo, tank.laser_charges, tank.flame_fuel, tank.burn_timer, tank.shield_hp, tank.is_wreck,
+            if tank.tell { " tell=true" } else { "" },
+            if tank.skidding { " skid=true" } else { "" },
         );
     }
 }
@@ -801,7 +813,7 @@ struct TankTrack {
     // --- deliberate-hold detection (see FIRED_RECENTLY_FRAMES) ---
     // Last frame's (shells, minigun, plasma, laser, missiles) ammo, to spot
     // a trigger pull as any pool decreasing; None until the first frame.
-    prev_ammo: Option<(i32, i32, i32, i32, i32)>,
+    prev_ammo: Option<(i32, i32, i32, i32, i32, i32)>,
     // Frame of the most recent detected shot, if any.
     last_fire_frame: Option<u32>,
     // --- contact metrics (wall-grind / bump-rate / low-progress) ---
@@ -876,6 +888,12 @@ impl TankTrack {
         // A field map's enemy nothing has woken yet holds still by design
         // (`simulation::field`): far from every seat, it does not think.
         if tank.asleep {
+            return true;
+        }
+        // Winding up a special, or knocked off its tracks by one: holding
+        // or sliding where it did not ask to go, on purpose either way
+        // (docs/sonic-hammer.md).
+        if tank.tell || tank.skidding {
             return true;
         }
         if self
@@ -1213,9 +1231,10 @@ fn check_anomalies(
             tank.plasma_ammo,
             tank.laser_charges,
             tank.missile_ammo,
+            tank.sonic_ammo,
         );
         if let Some(prev) = track.prev_ammo
-            && (ammo.0 < prev.0 || ammo.1 < prev.1 || ammo.2 < prev.2 || ammo.3 < prev.3 || ammo.4 < prev.4)
+            && (ammo.0 < prev.0 || ammo.1 < prev.1 || ammo.2 < prev.2 || ammo.3 < prev.3 || ammo.4 < prev.4 || ammo.5 < prev.5)
         {
             track.last_fire_frame = Some(frame);
         }
@@ -1883,6 +1902,9 @@ fn run_round(
         Some(named) => named.map.clone(),
         None => default_map(),
     };
+    if let Some(kind) = args.crate_kind {
+        swap_weapon_crates(&mut game.map, kind);
+    }
     let _ = FIELD.set(game.map.field_size());
     game.init(field_width(), field_height());
     if trace {
@@ -2164,6 +2186,23 @@ fn scenario_str(scenario: Scenario) -> &'static str {
 
 /// The battlefield's display name: the `--map` path, or the embedded
 /// default's marker - shared by the header, `--json-out`, and `--heatmap`.
+/// `--crate`: every special-weapon pickup slot of `map` made a `kind` crate,
+/// in place.
+fn swap_weapon_crates(map: &mut MapFile, kind: PickupKind) {
+    for cell in map.cells.values_mut() {
+        if let bongbong::map::CellObject::Pickup { pickup } = cell
+            && pickup.weapon().is_some()
+        {
+            *pickup = kind;
+        }
+    }
+}
+
+/// `--crate`'s value: a pickup kind by its map spelling.
+fn parse_crate(s: &str) -> Result<PickupKind, String> {
+    PickupKind::parse(s).ok_or_else(|| format!("no pickup is called {s:?}"))
+}
+
 fn map_display(args: &Args) -> &str {
     args.map
         .as_ref()
@@ -2229,7 +2268,8 @@ fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult, tun
     let ms_per_tick = result.update_seconds * 1000.0 / result.frames_run.max(1) as f64;
     let lulls = result.lulls.iter().map(|l| format!("{l:.2}")).collect::<Vec<_>>().join(",");
     format!(
-        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"players\":{},\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"ms_per_tick\":{ms_per_tick:.4},\"first_contact\":{{{contact}}},\"lulls\":[{lulls}],\"rerolls\":{},\"anomalies\":{{{anomalies}}},\"rams\":{{\"pair\":{},\"into_player\":{},\"rolled_damage\":{:.1}}},\"fire\":{{{fire}}},\"tanks\":[{tanks}]}}",
+        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"crate\":\"{}\",\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"players\":{},\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"ms_per_tick\":{ms_per_tick:.4},\"first_contact\":{{{contact}}},\"lulls\":[{lulls}],\"rerolls\":{},\"anomalies\":{{{anomalies}}},\"rams\":{{\"pair\":{},\"into_player\":{},\"rolled_damage\":{:.1}}},\"fire\":{{{fire}}},\"tanks\":[{tanks}]}}",
+        args.crate_kind.map_or("", PickupKind::name),
         json_escape(map_display(args)),
         result.mission.name(),
         result.spawn.name(),
@@ -2365,7 +2405,7 @@ fn main() -> ExitCode {
     });
 
     println!(
-        "probe: scenario={} enemies={} tank={} mission={} spawn={} frames={} rounds={} seed=0x{base_seed:016x} map={} tuning={}",
+        "probe: scenario={} enemies={} tank={} mission={} spawn={} frames={} rounds={} seed=0x{base_seed:016x} map={}{} tuning={}",
         scenario_str(args.scenario),
         match (args.enemies, spawn_kind(&args)) {
             (_, SpawnKind::Waves) => "waves".to_string(),
@@ -2380,6 +2420,7 @@ fn main() -> ExitCode {
         args.frames,
         args.rounds,
         map_display(&args),
+        args.crate_kind.map_or(String::new(), |k| format!(" crate={}", k.name())),
         if tuning_diff == "{}" { "default".to_string() } else { tuning_diff.clone() },
     );
 

@@ -92,7 +92,7 @@ const CLICK_DRAG_STEP_PX: f32 = 8.0;
 /// the builder has frozen.
 pub const GAME_ONLY_TOOLS: &[&str] = &[
     "snapshot", "events", "step", "input", "pause", "resume", "history", "nav_grid", "field", "terrain", "teleport",
-    "set_tank", "kill", "spawn_enemy", "players", "weather",
+    "set_tank", "kill", "spawn_enemy", "spawn_pickup", "players", "weather",
 ];
 
 /// The tools that drive the *local* round or the builder, refused while
@@ -106,7 +106,7 @@ pub const GAME_ONLY_TOOLS: &[&str] = &[
 /// `key {escape}` gives the seat up, as does a `click` on the corners'
 /// `LEAVE` button - the one thing a click has to press in this mode.
 pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
-    "step", "input", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "players", "play",
+    "step", "input", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "spawn_pickup", "players", "play",
     "build", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings",
     "builder_map", "builder_save", "builder_touch", "builder_select", "builder_stamp",
 ];
@@ -285,7 +285,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "set_tank",
         description: "Overwrite a tank's damage (0 = pristine, 100 = wreck), ammo counts (setting a special weapon's stock above 0 also arms it in place of the one special the tank carries, like its pickup would), shield_hp (rainbow-shield absorption left in damage points, not seconds), the speed-boost timer and portal_cooldown (seconds before it may enter a portal again). Omitted fields are untouched.",
-        schema: r#"{"type":"object","properties":{"slot":{"type":"integer"},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"grenade_ammo":{"type":"integer"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}},"required":["slot"]}"#,
+        schema: r#"{"type":"object","properties":{"slot":{"type":"integer"},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"grenade_ammo":{"type":"integer"},"sonic_ammo":{"type":"integer"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}},"required":["slot"]}"#,
         read_only: false,
         destructive: false,
     },
@@ -300,6 +300,13 @@ pub const TOOLS: &[ToolSpec] = &[
         name: "spawn_enemy",
         description: "Add an enemy at (x, y) with an optional chassis row (0-11) and AI role (player - fights the player, the default; hunter - drives at and shoots the player's frog; guard - stays leashed to the enemy frog). Draws from the round RNG, so the round stops being the seeded replay afterwards. Returns the new slot.",
         schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"row":{"type":"integer","minimum":0,"maximum":11},"role":{"type":"string","enum":["player","hunter","guard"]}},"required":["x","y"]}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "spawn_pickup",
+        description: "Put a crate of `kind` (a map's pickup spelling: health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack, heat_shield, grenades, sonic_hammer) down at the map cell nearest (x, y), in its air drop. Not a slot: it never respawns. Refused outside the field, on a solid tile and where a pickup already stands. Draws no RNG. Returns the crate's position.",
+        schema: r#"{"type":"object","properties":{"kind":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}},"required":["kind","x","y"]}"#,
         read_only: false,
         destructive: false,
     },
@@ -1683,6 +1690,16 @@ impl DevServer {
                 }
                 _ => Err("x and y are required".to_string()),
             },
+            "spawn_pickup" => {
+                let kind = params.get("kind").and_then(Value::as_str).unwrap_or("");
+                match (crate::pickup::PickupKind::parse(kind), f32_param(&params, "x"), f32_param(&params, "y")) {
+                    (None, _, _) => Err(format!("kind: no pickup is called {kind:?}")),
+                    (Some(kind), Some(x), Some(y)) => {
+                        game.debug_spawn_pickup(kind, Position::new(x, y)).map(|at| json!({ "kind": kind.name(), "x": at.x, "y": at.y }))
+                    }
+                    _ => Err("x and y are required".to_string()),
+                }
+            }
             "tuning_get" => {
                 let diff_only = params.get("diff_only").and_then(Value::as_bool).unwrap_or(false);
                 let text = if diff_only { tuning::diff_json() } else { tuning::current_json() };
@@ -4792,7 +4809,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(cats.len(), 5);
         assert_eq!(cats[0]["name"], "wall");
         assert_eq!(cats[0]["current"], "iron");
-        assert_eq!(cats[4]["tools"].as_array().unwrap().len(), 13, "{}", cats[4]);
+        assert_eq!(cats[4]["tools"].as_array().unwrap().len(), 14, "{}", cats[4]);
         let err = ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "granite" })).unwrap_err();
         assert!(err.contains("brick") && err.contains("eraser"), "{err}");
 

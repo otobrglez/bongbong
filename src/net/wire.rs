@@ -185,11 +185,12 @@ pub enum WeaponKind {
     Missiles,
     Flamethrower,
     Grenades,
+    SonicHammer,
 }
 
 impl WeaponKind {
     /// Every kind, in wire order.
-    pub const ALL: [WeaponKind; 7] = [
+    pub const ALL: [WeaponKind; 8] = [
         WeaponKind::Shell,
         WeaponKind::Laser,
         WeaponKind::Plasma,
@@ -197,6 +198,7 @@ impl WeaponKind {
         WeaponKind::Missiles,
         WeaponKind::Flamethrower,
         WeaponKind::Grenades,
+        WeaponKind::SonicHammer,
     ];
 
     /// The name `ActiveWeapon::name` gives, which is what `Event::Fired`
@@ -208,6 +210,15 @@ impl WeaponKind {
     /// Inverse of `name`; `None` for anything else.
     pub fn parse(name: &str) -> Option<WeaponKind> {
         WeaponKind::ALL.into_iter().find(|k| k.name() == name)
+    }
+
+    /// Whether the shooter's client draws this weapon's press itself, from
+    /// its predicted pose, and claims the room's show of it
+    /// (docs/sonic-hammer.md "Online: the shooter's press is drawn at
+    /// once"): the laser's beam and the sonic hammer's wave
+    /// (`events::WireEvent::press_show`).
+    pub fn drawn_on_press(self) -> bool {
+        matches!(self, WeaponKind::Laser | WeaponKind::SonicHammer)
     }
 }
 
@@ -221,6 +232,7 @@ impl From<ActiveWeapon> for WeaponKind {
             ActiveWeapon::Missiles => WeaponKind::Missiles,
             ActiveWeapon::Flamethrower => WeaponKind::Flamethrower,
             ActiveWeapon::Grenades => WeaponKind::Grenades,
+            ActiveWeapon::SonicHammer => WeaponKind::SonicHammer,
         }
     }
 }
@@ -235,6 +247,7 @@ impl From<WeaponKind> for ActiveWeapon {
             WeaponKind::Missiles => ActiveWeapon::Missiles,
             WeaponKind::Flamethrower => ActiveWeapon::Flamethrower,
             WeaponKind::Grenades => ActiveWeapon::Grenades,
+            WeaponKind::SonicHammer => ActiveWeapon::SonicHammer,
         }
     }
 }
@@ -466,6 +479,11 @@ pub struct TankState {
     pub weapon: WeaponKind,
     /// Rounds left for `weapon`, saturated at 255.
     pub ammo: u8,
+    /// An enemy's wind-up for `weapon` (`Tank::tell`): the seconds left in
+    /// tenths (`quantise_seconds`), 0 for none.
+    pub tell: u8,
+    /// The seconds left knocked off its tracks (`Tank::skid`), in tenths.
+    pub skid: u8,
 }
 
 /// One live projectile, keyed by a per-round id the server hands out.
@@ -570,6 +588,8 @@ pub mod frog_flags {
     pub const HURT: u8 = 1 << 2;
     /// The frog is biting.
     pub const BITING: u8 = 1 << 3;
+    /// A sonic hammer's wave stunned it (`Frog::stun_timer`).
+    pub const STUNNED: u8 = 1 << 4;
 }
 
 /// One of the round's frogs (the player's, and the Hunt mission's enemy

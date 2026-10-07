@@ -154,7 +154,7 @@ impl Game {
                         crate::shell::Owner::Enemy(slot) => HitTarget::Enemy { slot },
                         crate::shell::Owner::Tower { .. } => unreachable!("no tank is owned by a tower"),
                     };
-                    f.events.push(Event::Hit { target, damage: 0.0, killed, x: pos.x, y: pos.y });
+                    f.events.push(Event::Hit { target, damage: 0.0, killed, x: pos.x, y: pos.y, cause: super::HitCause::Shot });
                 }
                 if killed {
                     f.kills.push((pos, owner));
@@ -176,7 +176,7 @@ impl Game {
                     touched.push(entity);
                     if entered || frog.is_dead() {
                         let target = HitTarget::Frog { side: frog.side };
-                        f.events.push(Event::Hit { target, damage: 0.0, killed: frog.is_dead(), x: frog.position.x, y: frog.position.y });
+                        f.events.push(Event::Hit { target, damage: 0.0, killed: frog.is_dead(), x: frog.position.x, y: frog.position.y, cause: super::HitCause::Shot });
                     }
                     if frog.is_dead() {
                         dead_at.push(frog.position);

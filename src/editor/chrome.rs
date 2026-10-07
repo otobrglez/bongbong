@@ -720,48 +720,71 @@ pub fn hanging_list(anchor: Rectangle, room: Rectangle, n: usize, w: f32) -> Row
 
 /// The palette the folded TOOLS button opens: a row per category - its
 /// name, then a cell per tool - and under them the brush's row, a cell per
-/// `BrushRow`, hanging from the button. Six rows, which the room under the
-/// bar holds on the smallest screen.
+/// `BrushRow`, hanging from the button. A category with more tools than the
+/// room is wide for runs on into a second row under its first, so the
+/// palette never leaves the room's width; where its rows would not fit the
+/// room's height the cells shrink to fit, never under a finger's
+/// `UI_TOUCH_PT`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
     pub panel: Rectangle,
+    /// Tool cells a row holds.
+    per_row: usize,
+    /// A cell's side: `PALETTE_CELL`, less where the room is short.
+    cell: f32,
 }
 
 impl Palette {
     /// The palette hanging from `anchor` in `room`, as wide as its longest
-    /// row needs.
+    /// row needs and the room allows.
     pub fn of(anchor: Rectangle, room: Rectangle) -> Palette {
         let most = Category::ALL.iter().map(|c| c.tools().count()).max().unwrap_or(1).max(BrushRow::ALL.len());
-        let w = PALETTE_LABEL_W + most as f32 * PALETTE_CELL;
-        let h = (Category::ALL.len() + 1) as f32 * PALETTE_CELL;
-        Palette { panel: Rectangle::new(slide(anchor.x, w, room), room.y, w, h) }
+        let fits = (((room.width - PALETTE_LABEL_W) / PALETTE_CELL).floor().max(1.0) as usize).max(BrushRow::ALL.len());
+        let per_row = most.min(fits);
+        let rows: usize = Category::ALL.iter().map(|&c| Self::rows_of(c, per_row)).sum::<usize>() + 1;
+        let cell = PALETTE_CELL.min((room.height / rows as f32).floor()).max(crate::hud::UI_TOUCH_PT);
+        let w = PALETTE_LABEL_W + per_row as f32 * cell;
+        let h = rows as f32 * cell;
+        Palette { panel: Rectangle::new(slide(anchor.x, w, room), room.y, w, h), per_row, cell }
+    }
+
+    /// Rows `category` takes at `per_row` cells a row.
+    fn rows_of(category: Category, per_row: usize) -> usize {
+        category.tools().count().div_ceil(per_row.max(1)).max(1)
     }
 
     /// Row `index`: the categories', then the brush's.
     fn row_at(&self, index: usize) -> Rectangle {
-        Rectangle::new(self.panel.x, self.panel.y + index as f32 * PALETTE_CELL, self.panel.width, PALETTE_CELL)
+        Rectangle::new(self.panel.x, self.panel.y + index as f32 * self.cell, self.panel.width, self.cell)
     }
 
-    /// The category's row.
+    /// The index of `category`'s first row.
+    fn first_row(&self, category: Category) -> usize {
+        Category::ALL.iter().take_while(|&&c| c != category).map(|&c| Self::rows_of(c, self.per_row)).sum()
+    }
+
+    /// The category's first row.
     pub fn row(&self, category: Category) -> Rectangle {
-        self.row_at(category.index())
+        self.row_at(self.first_row(category))
     }
 
-    /// The category's name, at its row's left.
+    /// The category's name, at its first row's left.
     pub fn label(&self, category: Category) -> Rectangle {
         let row = self.row(category);
         Rectangle::new(row.x, row.y, PALETTE_LABEL_W, row.height)
     }
 
-    /// The category's `i`th tool's cell.
+    /// The category's `i`th tool's cell, running on into the category's
+    /// next row past the room's width.
     pub fn cell(&self, category: Category, i: usize) -> Rectangle {
-        let row = self.row(category);
-        Rectangle::new(row.x + PALETTE_LABEL_W + i as f32 * PALETTE_CELL, row.y, PALETTE_CELL, PALETTE_CELL)
+        let per_row = self.per_row.max(1);
+        let row = self.row_at(self.first_row(category) + i / per_row);
+        Rectangle::new(row.x + PALETTE_LABEL_W + (i % per_row) as f32 * self.cell, row.y, self.cell, self.cell)
     }
 
     /// The brush's row, under the categories'.
     pub fn brush_row(&self) -> Rectangle {
-        self.row_at(Category::ALL.len())
+        self.row_at(Category::ALL.iter().map(|&c| Self::rows_of(c, self.per_row)).sum())
     }
 
     /// The brush row's name, at its left.
@@ -773,7 +796,7 @@ impl Palette {
     /// The brush row's `i`th cell (`BrushRow::ALL`).
     pub fn brush_cell(&self, i: usize) -> Rectangle {
         let row = self.brush_row();
-        Rectangle::new(row.x + PALETTE_LABEL_W + i as f32 * PALETTE_CELL, row.y, PALETTE_CELL, PALETTE_CELL)
+        Rectangle::new(row.x + PALETTE_LABEL_W + i as f32 * self.cell, row.y, self.cell, self.cell)
     }
 }
 
