@@ -379,15 +379,17 @@ impl Game {
         // Drums are thrown.
         let cells: Vec<((i32, i32), f32)> = wave.cone.cells.iter().filter(|c| band(c.at)).map(|c| (c.cell, c.at)).collect();
         if !cells.is_empty() {
-            let drums: Vec<(Entity, (i32, i32), Position, i32)> = self
+            // In the order the cone entered their cells (entry distance,
+            // then cell), whatever order the world keeps them in.
+            let mut drums: Vec<(f32, (i32, i32), Entity, Position, i32)> = self
                 .world
                 .query::<(Entity, &Obstacle)>()
                 .iter()
                 .filter(|(_, o)| !o.destroyed && o.material.is_explosive())
-                .map(|(e, o)| (e, o.cell(), o.position, o.variant))
-                .filter(|d| cells.iter().any(|c| c.0 == d.1))
+                .filter_map(|(e, o)| cells.iter().find(|c| c.0 == o.cell()).map(|c| (c.1, o.cell(), e, o.position, o.variant)))
                 .collect();
-            for (entity, _, at, variant) in drums {
+            drums.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            for (_, _, entity, at, variant) in drums {
                 self.throw_drum(f, wave, entity, at, variant, t);
             }
         }
@@ -687,10 +689,13 @@ impl Game {
     /// model says (`sonic::slide` on its ground), cut at the first cell
     /// that stops a hull or the field's edge, any sample hot enough to hurt
     /// (lava and its banks, unless it carries a heat shield), on a burning
-    /// cell or a puddle of ooze, inside a standing enemy tower's reach, or
-    /// lined up for another live enemy - on its row or column within
-    /// `enemy_fire_align_px`, inside its attack range, its sight clear and
-    /// standing inside the landing point's sight box.
+    /// cell or a puddle of ooze; or where it comes to rest, inside a
+    /// standing enemy tower's reach or lined up for another live enemy - on
+    /// its row or column within `enemy_fire_align_px`, inside its attack
+    /// range, its sight clear and standing inside the resting point's sight
+    /// box - when it does not stand so already, since a slide across a lane
+    /// leaves the seat in none and a seat already in one is not shoved into
+    /// it.
     #[allow(clippy::too_many_arguments)]
     fn lands_in_trouble(
         &self,
@@ -716,6 +721,7 @@ impl Game {
         let (width, height) = self.map.field_size();
         let burning: BTreeSet<(i32, i32)> = self.fires.iter().filter(|fire| fire.left > 0.0).map(|fire| fire.cell).collect();
         let steps = (reach / sonic::SONIC_TROUBLE_STEP_PX).ceil().max(1.0) as i32;
+        let mut rest = seat.pos;
         for i in 1..=steps {
             let p = seat.pos + dir * (reach * i as f32 / steps as f32);
             let cell = crate::map::world_to_cell(p);
@@ -729,21 +735,19 @@ impl Game {
             if burning.contains(&cell) || self.ooze.contains_key(&cell) {
                 return true;
             }
-            if towers.iter().any(|&(at, range)| at.distance_to(p) <= range) {
-                return true;
-            }
-            for &(slot, at) in enemies {
-                if slot == shooter || !crate::ai::in_sight_box(p, at) {
-                    continue;
-                }
-                let lane = Dir::toward(at, p);
-                let (off, forward) = crate::ai::axis_offsets(at, p, lane);
-                if off <= t.enemy_fire_align_px && forward > 0.0 && forward <= t.enemy_attack_range && f.terrain.line_of_sight(at, p) {
-                    return true;
-                }
-            }
+            rest = p;
         }
-        false
+        let in_reach = |p: Position| towers.iter().any(|&(at, range)| at.distance_to(p) <= range);
+        let in_lane = |p: Position| {
+            enemies.iter().any(|&(slot, at)| {
+                if slot == shooter || !crate::ai::in_sight_box(p, at) {
+                    return false;
+                }
+                let (off, forward) = crate::ai::axis_offsets(at, p, Dir::toward(at, p));
+                off <= t.enemy_fire_align_px && forward > 0.0 && forward <= t.enemy_attack_range && f.terrain.line_of_sight(at, p)
+            })
+        };
+        (in_reach(rest) && !in_reach(seat.pos)) || (in_lane(rest) && !in_lane(seat.pos))
     }
 
     /// Put a crate of `kind` down at the map cell nearest `at`, in its air

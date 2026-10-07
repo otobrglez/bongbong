@@ -500,6 +500,24 @@ fn the_rule_reads_where_the_knock_would_slide_the_seat() {
     }
 }
 
+/// A seat already lined up for another enemy is no seat to shove "into"
+/// that lane: a knock that leaves it in the lane it stood in is a breaker's,
+/// not trouble.
+#[test]
+fn a_seat_already_in_a_lane_is_not_shoved_into_it() {
+    let seat_at = Position::new(300.0, 192.0);
+    let mut game = round("");
+    let seat = game.player().unwrap();
+    game.place_tank(seat, seat_at, Some(270.0)).unwrap();
+    // A shells tank down the row, with the seat in its lane.
+    let lane = parked(&mut game, Position::new(600.0, 192.0));
+    with_tank_mut(&game.world, lane, |t| t.rotation = 270.0);
+    let enemy = hammer_enemy(&mut game, Position::new(seat_at.x - 90.0, 192.0));
+    step(&mut game, false);
+    step(&mut game, false);
+    assert_eq!(arm(&game, enemy), Some("breaker"));
+}
+
 /// Two hammer tanks fighting the same seat close in to their own spots,
 /// each on its own side, rather than onto one point.
 #[test]
