@@ -597,3 +597,65 @@ cells."5,10" = { kind = "start" }
     }
     assert!(fired > 10, "the round saw real fire: {fired}");
 }
+
+/// One minigun burst from seat 0 down its row at an enemy's drone hovering
+/// over the line at the boresight, scripted by hand each tick: it leaves the
+/// line - eighty pixels north, its whole column off it - once the first
+/// bullet is three ticks short of it. The seat's client draws `behind`
+/// ticks back (0: the present). Whether the drone came down.
+fn burst_at_a_drone_that_leaves_the_line(behind: u64) -> bool {
+    use crate::fpv::{Drone, DroneLock, DroneStage};
+    let mut game = game();
+    // The enemy tank far off the line, so nothing else stops a bullet.
+    place_enemy(&mut game, cell_to_world(15, 20));
+    game.debug_set_tank(0, &debug::TankPatch { minigun_ammo: Some(60), ..Default::default() }).expect("seat 0");
+    let t = tuning();
+    // Its ground point a little south of the line, so the column from its
+    // shadow up to its body spans the line and the burst's spread.
+    let on_line = Position::new(cell_to_world(5, 10).x + t.minigun_boresight_px, line_y() + 18.0);
+    let off_line = Position::new(on_line.x, on_line.y - 80.0);
+    let slot = enemy_slot(&game);
+    let mut drone = Drone::launch(on_line, Vec2::new(0.0, -1.0), 0, Owner::Enemy(slot), DroneLock::None, Position::new(W - 16.0, 16.0));
+    drone.id = game.take_shot_id();
+    drone.stage = DroneStage::Cruise;
+    drone.height = t.fpv_cruise_height;
+    game.world.spawn((drone,));
+    let mut at = on_line;
+    for tick in 0..(WARMUP_TICKS + 90) {
+        // Where the script has it: no speed to fly on, no age to run out.
+        for d in game.world.query_mut::<&mut Drone>() {
+            d.ground = at;
+            d.speed = -t.fpv_accel * PHYSICS_FIXED_DT;
+            d.age = 0.0;
+        }
+        if behind > 0 && tick >= WARMUP_TICKS {
+            view_behind(&mut game, behind);
+        }
+        step(&mut game, if tick < WARMUP_TICKS { Input::default() } else { fire() });
+        if game.events().iter().any(|e| matches!(e, Event::DroneDowned { by: "bullet", .. })) {
+            return true;
+        }
+        let lead = game
+            .world
+            .query::<&Bullet>()
+            .iter()
+            .filter(|b| b.owner == Owner::Player(0) && b.is_flying())
+            .map(|b| b.position.x)
+            .fold(f32::MIN, f32::max);
+        if lead >= on_line.x - 3.0 * t.minigun_bullet_speed * PHYSICS_FIXED_DT {
+            at = off_line;
+        }
+    }
+    false
+}
+
+/// **A seat's bullets meet an enemy's drone where its client drew it**
+/// (`HitBoxFrame::air`, docs/fpv-swarm.md "Air targets"): the drone the
+/// room has already moved off the line of fire is still on it in the
+/// picture six ticks back, and that is where the bullet is judged - while
+/// the same burst from a client drawing the present goes past it.
+#[test]
+fn a_seats_bullet_meets_an_enemy_drone_where_its_client_drew_it() {
+    assert!(burst_at_a_drone_that_leaves_the_line(BEHIND), "rewound, the burst meets the drone on the line");
+    assert!(!burst_at_a_drone_that_leaves_the_line(0), "in the present the drone has left the line");
+}
