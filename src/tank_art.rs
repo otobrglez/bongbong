@@ -137,6 +137,22 @@ pub const SONIC_MUZZLE: [(f32, f32); 12] = [
     (0.5, -1.0), // leviathan
 ];
 
+/// The EMP module's coil centre, where its crackle is drawn (turret frame).
+pub const EMP_COIL: [(f32, f32); 12] = [
+    (0.5, 2.5), // scout
+    (0.5, 3.5), // assault
+    (0.5, 1.5), // breaker
+    (0.5, 3.5), // longbow
+    (0.5, 1.5), // flak
+    (0.5, 1.5), // wraith
+    (0.5, 1.5), // warden
+    (0.5, 1.5), // ravager
+    (0.5, 2.5), // glacier
+    (0.5, -0.5), // obelisk
+    (0.5, 2.5), // titan
+    (0.5, 3.5), // leviathan
+];
+
 /// The missile launcher's four tube mouths, in firing order (turret frame).
 pub const MISSILE_TUBES: [[(f32, f32); 4]; 12] = [
     [(-1.0, 1.0), (1.0, 1.0), (-1.0, 3.0), (1.0, 3.0)], // scout
