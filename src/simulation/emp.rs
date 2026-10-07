@@ -185,8 +185,9 @@ impl Game {
     /// `to`, struck once, in a fixed order (docs/emp-burst.md "What
     /// everything electric means"): the tanks (the seats in index order,
     /// then the enemies by slot), the towers (cell order), the missiles (id
-    /// order). The FPV drones and the gravity well add their arms after the
-    /// missiles, on the same front.
+    /// order), the drones in the air (by key, any side - the ring is blind,
+    /// docs/fpv-swarm.md). The gravity well adds its arm after them, on the
+    /// same front.
     fn strike_emp(&mut self, f: &mut Frame, pulse: &mut EmpPulse, from: f32, to: f32, t: &Tuning) {
         let origin = pulse.origin;
         let swept = |d: f32| d <= to && d > from - FRONT_SLACK_PX;
@@ -238,6 +239,12 @@ impl Game {
                 && swept(origin.distance_to(m.position))
             {
                 m.kill();
+            }
+        }
+        // Drones in the air, by key: they fall dead, whoever's.
+        for target in self.air_targets() {
+            if swept(origin.distance_to(target.ground)) {
+                self.strike_air(f, target.key, crate::air::AirStrike::Emp, target.drawn());
             }
         }
     }

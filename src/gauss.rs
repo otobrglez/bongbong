@@ -60,6 +60,8 @@ pub enum Pierced {
     /// A tile - a wall, a prop, a tree, a tower, a lamp post, the iron an
     /// overcharged slug cuts.
     Tile(Material),
+    /// An FPV drone in the air, struck down (docs/fpv-swarm.md).
+    Drone,
 }
 
 /// One thing a slug went through and where it went in.
@@ -360,6 +362,8 @@ fn pierce_sparks(out: &mut Vec<Shape>, pierce: &Pierce, dir: Vec2, age: f32, see
         Pierced::Frog => (4, [RAIL[3], RAIL[3]]),
         Pierced::Tile(Material::Iron) => (6, [RAIL[4], Color::new(0xC1, 0xC1, 0xC1, 255)]),
         Pierced::Tile(_) => (3, [RAIL[4], RAIL[3]]),
+        // A drone torn apart in the air: white sparks and its grey shards.
+        Pierced::Drone => (5, [RAIL[4], Color::new(0xC1, 0xC1, 0xC1, 255)]),
     };
     let heading = dir.y.atan2(dir.x);
     for i in 0..count {
@@ -405,7 +409,7 @@ pub fn compose_slug_lit(slug: &RailSlug) -> Vec<Shape> {
                 None => continue,
             },
             Pierced::Tank => (2, [SMOKE[1], SMOKE[2], SMOKE[3]]),
-            Pierced::Shield | Pierced::Frog => continue,
+            Pierced::Shield | Pierced::Frog | Pierced::Drone => continue,
         };
         for i in 0..count {
             let a = heading + (pyro::unit(seed, i) - 0.5) * 1.2;

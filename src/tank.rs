@@ -23,6 +23,7 @@ use crate::{
     TANK_MODULE_SONIC_COL,
     TANK_MODULE_EMP_COL,
     TANK_MODULE_GAUSS_COL,
+    TANK_MODULE_FPV_COL,
     TANK_MODULE_LASER_COL,
     TANK_MODULE_MINIGUN_COL,
     TANK_MODULE_MISSILES_COL,
@@ -275,6 +276,7 @@ pub enum ActiveWeapon {
     SonicHammer,
     Emp,
     GaussRail,
+    FpvSwarm,
     Shell,
 }
 
@@ -291,6 +293,7 @@ impl ActiveWeapon {
             ActiveWeapon::SonicHammer => "sonic_hammer",
             ActiveWeapon::Emp => "emp_burst",
             ActiveWeapon::GaussRail => "gauss_rail",
+            ActiveWeapon::FpvSwarm => "fpv_swarm",
             ActiveWeapon::Shell => "shell",
         }
     }
@@ -303,8 +306,10 @@ impl ActiveWeapon {
         match self {
             ActiveWeapon::SonicHammer => Some(tuning().sonic_tell_seconds).filter(|&s| s > 0.0),
             ActiveWeapon::Emp => Some(tuning().emp_tell_seconds).filter(|&s| s > 0.0),
-            // Its charge is its tell (`Tank::charge`).
+            // Its charge is its tell (`Tank::charge`); a drone's flight
+            // is the swarm's (docs/fpv-swarm.md "The tell").
             ActiveWeapon::GaussRail
+            | ActiveWeapon::FpvSwarm
             | ActiveWeapon::Laser
             | ActiveWeapon::Plasma
             | ActiveWeapon::Minigun
@@ -318,9 +323,12 @@ impl ActiveWeapon {
     /// How this weapon's trigger fires it (`Trigger`).
     pub fn trigger(self) -> Trigger {
         match self {
-            ActiveWeapon::Shell | ActiveWeapon::Plasma | ActiveWeapon::Grenades | ActiveWeapon::SonicHammer | ActiveWeapon::Emp => {
-                Trigger::Press
-            }
+            ActiveWeapon::Shell
+            | ActiveWeapon::Plasma
+            | ActiveWeapon::Grenades
+            | ActiveWeapon::SonicHammer
+            | ActiveWeapon::Emp
+            | ActiveWeapon::FpvSwarm => Trigger::Press,
             ActiveWeapon::Laser | ActiveWeapon::Minigun | ActiveWeapon::Missiles => Trigger::Auto,
             ActiveWeapon::Flamethrower => Trigger::Stream,
             ActiveWeapon::GaussRail => Trigger::Charge,
@@ -366,6 +374,7 @@ impl ActiveWeapon {
             ActiveWeapon::SonicHammer => t.sonic_ammo_per_pickup,
             ActiveWeapon::Emp => t.emp_charges_per_pickup,
             ActiveWeapon::GaussRail => t.gauss_slugs_per_pickup,
+            ActiveWeapon::FpvSwarm => t.fpv_drones_per_pickup,
             ActiveWeapon::Shell => t.max_shells,
         }
     }
@@ -374,7 +383,7 @@ impl ActiveWeapon {
 /// The special weapons, each the cargo of its own crate. A tank carries at
 /// most one of them at a time (`Tank::take_weapon`); with none, or once it
 /// runs dry, the trigger fires shells.
-pub const SPECIAL_WEAPONS: [ActiveWeapon; 9] = [
+pub const SPECIAL_WEAPONS: [ActiveWeapon; 10] = [
     ActiveWeapon::Laser,
     ActiveWeapon::Plasma,
     ActiveWeapon::Minigun,
@@ -384,6 +393,7 @@ pub const SPECIAL_WEAPONS: [ActiveWeapon; 9] = [
     ActiveWeapon::SonicHammer,
     ActiveWeapon::Emp,
     ActiveWeapon::GaussRail,
+    ActiveWeapon::FpvSwarm,
 ];
 
 /// How a weapon's trigger fires it (`ActiveWeapon::trigger`,
@@ -810,6 +820,21 @@ pub struct Tank {
     /// Seconds the gauss rail's module shows its shot cell (`kick_rail`).
     /// Presentation only.
     pub rail_flash: f32,
+    /// Drones left in the FPV swarm's halo (`pickup::PickupKind::FpvSwarm`,
+    /// `fpv.rs`): the halo is this count, drawn. Pickup-only, one per press.
+    pub fpv_drones: i32,
+    /// This tank's drones in the air, counted from the world once a frame
+    /// (`Game::count_drones_out`, and a replica's from its snapshot): the
+    /// module's link cell and the enemy rule's one-at-a-time read it.
+    pub fpv_out: u8,
+    /// What the next drone this tank launches is to lock (`fpv::AirWant`):
+    /// an enemy's rule sets it right before the trigger reaches the
+    /// simulation (`enemy_trigger`), the launch takes it. `None` reads as
+    /// `AirWant::Nearest`, a seat's press.
+    pub fpv_want: Option<crate::fpv::AirWant>,
+    /// Seconds the FPV module shows its launch cell (`kick_fpv`).
+    /// Presentation only.
+    pub fpv_flash: f32,
     /// An enemy's trigger as the simulation last read it
     /// (`simulation::enemy_trigger`): the press edge a charge starts on. A
     /// seat's is `Game::player_fire_held_last_frame`.
@@ -1030,6 +1055,10 @@ impl Default for Tank {
             charge: None,
             spin: 0.0,
             rail_flash: 0.0,
+            fpv_drones: 0,
+            fpv_out: 0,
+            fpv_want: None,
+            fpv_flash: 0.0,
             trigger_held: false,
             droop: 0.0,
             speed_boost_timer: 0.0,
@@ -1154,6 +1183,7 @@ impl Tank {
             // it, and does not trade it for a crate.
             PickupKind::Emp => self.special().is_none(),
             PickupKind::GaussRail => self.special().is_none(),
+            PickupKind::FpvSwarm => self.special().is_none(),
         }
     }
 
@@ -1418,6 +1448,12 @@ impl Tank {
         self.rail_flash = tuning().gauss_module_flash_seconds;
     }
 
+    /// A drone left the halo: the FPV module shows its launch cell for
+    /// `fpv_flash_seconds`.
+    pub fn kick_fpv(&mut self) {
+        self.fpv_flash = tuning().fpv_flash_seconds;
+    }
+
     /// Step the recoil cells `kick` set, and the laser's and the dish's
     /// flashes.
     pub fn tick_recoil(&mut self, dt: f32) {
@@ -1425,6 +1461,7 @@ impl Tank {
         self.sonic_flash = (self.sonic_flash - dt).max(0.0);
         self.emp_flash = (self.emp_flash - dt).max(0.0);
         self.rail_flash = (self.rail_flash - dt).max(0.0);
+        self.fpv_flash = (self.fpv_flash - dt).max(0.0);
         if let Some(left) = self.recoil_second_in {
             let left = left - dt;
             if left <= 0.0 {
@@ -1636,6 +1673,7 @@ impl Tank {
             ActiveWeapon::SonicHammer => self.sonic_ammo,
             ActiveWeapon::Emp => self.emp_charges,
             ActiveWeapon::GaussRail => self.gauss_slugs,
+            ActiveWeapon::FpvSwarm => self.fpv_drones,
             ActiveWeapon::Shell => self.shells_ammo,
         }
     }
@@ -1669,6 +1707,7 @@ impl Tank {
             ActiveWeapon::SonicHammer => self.sonic_ammo = self.sonic_ammo.max(t.sonic_ammo_per_pickup),
             ActiveWeapon::Emp => self.emp_charges = self.emp_charges.max(t.emp_charges_per_pickup),
             ActiveWeapon::GaussRail => self.gauss_slugs = self.gauss_slugs.max(t.gauss_slugs_per_pickup),
+            ActiveWeapon::FpvSwarm => self.fpv_drones = self.fpv_drones.max(t.fpv_drones_per_pickup),
             ActiveWeapon::Shell => {}
         }
     }
@@ -1694,6 +1733,7 @@ impl Tank {
             ActiveWeapon::SonicHammer => self.sonic_ammo = 0,
             ActiveWeapon::Emp => self.emp_charges = 0,
             ActiveWeapon::GaussRail => self.gauss_slugs = 0,
+            ActiveWeapon::FpvSwarm => self.fpv_drones = 0,
             ActiveWeapon::Shell => {}
         }
     }
@@ -2155,9 +2195,9 @@ fn blit_layers(c: &mut impl Canvas, tank: &Tank, layers: &[Layer], tint: Color) 
 /// / firing, the flamethrower's pilot flickering or its jet while held. A
 /// module is hardware, not a firing-mode indicator: it shows whenever the
 /// weapon is carried, and a wreck carries none.
-fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 9] {
+fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 10] {
     if tank.is_wreck() {
-        return [None; 9];
+        return [None; 10];
     }
     // A module's armed cell needs its weapon live: one whose special is
     // offline (an EMP) shows its idle cell, its lights out.
@@ -2205,7 +2245,8 @@ fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 9] {
     let sonic = (tank.sonic_ammo > 0 || tank.sonic_flash > 0.0).then(|| TANK_MODULE_SONIC_COL + crate::sonic::module_cell(tank, time));
     let emp = (tank.emp_charges > 0 || tank.emp_flash > 0.0).then(|| TANK_MODULE_EMP_COL + crate::emp::module_cell(tank, time));
     let gauss = (tank.gauss_slugs > 0 || tank.rail_flash > 0.0).then(|| TANK_MODULE_GAUSS_COL + crate::gauss::module_cell(tank, time));
-    [minigun, missiles, plasma, laser, flame, grenades, sonic, emp, gauss]
+    let fpv = (tank.fpv_drones > 0 || tank.fpv_flash > 0.0 || tank.fpv_out > 0).then(|| TANK_MODULE_FPV_COL + crate::fpv::module_cell(tank, time));
+    [minigun, missiles, plasma, laser, flame, grenades, sonic, emp, gauss, fpv]
 }
 
 /// Draw a tank: hull, turret and the weapon modules it carries, each at its

@@ -1019,6 +1019,7 @@ impl Predictor {
             WeaponKind::SonicHammer => t.sonic_reload_seconds,
             WeaponKind::Emp => t.player_fire_interval,
             WeaponKind::GaussRail => t.gauss_reload_seconds,
+            WeaponKind::FpvSwarm => t.fpv_reload_seconds,
             WeaponKind::Flamethrower => 0.0,
         };
         let ago = self.tick.wrapping_sub(input_tick) as f32 * PHYSICS_FIXED_DT;

@@ -130,6 +130,13 @@ pub struct Tower {
     /// eased toward `emp_droop_deg` while it is offline and back after.
     /// Presentation only.
     pub droop: f32,
+    /// A tesla coil's own clock for its arcs at drones (docs/fpv-swarm.md
+    /// "Air defence by the towers"): seconds until it may arc at one again,
+    /// beside its charge on a tank.
+    pub air_cooldown: f32,
+    /// The drone a gun tower is fighting, kept as a tank target is
+    /// (`tower_switch_margin_px`).
+    pub air_target: Option<crate::air::AirKey>,
 }
 
 impl Tower {
@@ -149,6 +156,8 @@ impl Tower {
             heat: 0.0,
             disabled: 0.0,
             droop: 0.0,
+            air_cooldown: 0.0,
+            air_target: None,
         }
     }
 

@@ -173,6 +173,12 @@ pub struct TankDebug {
     pub offline: f32,
     /// Gauss rail slugs left (`Tank::gauss_slugs`).
     pub gauss: i32,
+    /// Drones left in the FPV swarm's halo (`Tank::fpv_drones`), and its
+    /// drones in the air (`Tank::fpv_out`); left out while both are 0.
+    #[serde(skip_serializing_if = "is_zero_i32")]
+    pub fpv: i32,
+    #[serde(skip_serializing_if = "is_zero_u8")]
+    pub fpv_out: u8,
     /// A charge on the trigger (`Tank::charge`): the weapon, seconds held
     /// and its stage.
     pub charge: Option<(&'static str, f32, &'static str)>,
@@ -373,6 +379,7 @@ pub struct TankPatch {
     /// Seconds its special stays offline on its own (`Tank::special_offline`).
     pub special_offline: Option<f32>,
     pub gauss_slugs: Option<i32>,
+    pub fpv_drones: Option<i32>,
     /// Seconds the trigger of its charge weapon has been held: a charge put
     /// on (the special it carries must be one, `Trigger::Charge`); 0 takes
     /// one off.
@@ -594,6 +601,8 @@ impl Game {
                     disabled: r1(tank.disabled),
                     offline: r1(tank.special_offline),
                     gauss: tank.gauss_slugs,
+                    fpv: tank.fpv_drones,
+                    fpv_out: tank.fpv_out,
                     charge: tank.charge.map(|c| (c.weapon.name(), r1(c.held), c.stage().name())),
                     tell: tank.tell.map(|t| (t.weapon.name(), r1(t.left))),
                     skid: r1(tank.skid),
@@ -950,6 +959,12 @@ impl Game {
             }
             tank.gauss_slugs = n.max(0);
         }
+        if let Some(n) = patch.fpv_drones {
+            if n > 0 {
+                tank.disarm();
+            }
+            tank.fpv_drones = n.max(0);
+        }
         if let Some(seconds) = patch.charge {
             let weapon = tank.active_weapon();
             tank.charge = (seconds > 0.0 && weapon.trigger() == crate::tank::Trigger::Charge)
@@ -1152,4 +1167,12 @@ impl Game {
         out.push_str(&format!("{cols}x{rows} cells of {cell}px; # blocked . open P player 1 Q player 2 1-9/E enemy x wreck F frog G enemy frog * pickup\n"));
         out
     }
+}
+
+fn is_zero_i32(n: &i32) -> bool {
+    *n == 0
+}
+
+fn is_zero_u8(n: &u8) -> bool {
+    *n == 0
 }
