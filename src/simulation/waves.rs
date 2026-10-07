@@ -335,6 +335,8 @@ impl Game {
                     && ai.field.lost >= t.field_reroll_after_seconds
                     && !tank.is_wreck()
                     && tank.burn_timer <= 0.0
+                    // An EMP's coast is not lost: it is never rerolled.
+                    && !tank.is_disabled()
                     && !(ai.role == Role::Guard && guarding)
                     && screens.iter().all(|&s| field::beyond_every_screen(s, tank.position, &t))
             })

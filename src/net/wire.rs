@@ -186,11 +186,12 @@ pub enum WeaponKind {
     Flamethrower,
     Grenades,
     SonicHammer,
+    Emp,
 }
 
 impl WeaponKind {
     /// Every kind, in wire order.
-    pub const ALL: [WeaponKind; 8] = [
+    pub const ALL: [WeaponKind; 9] = [
         WeaponKind::Shell,
         WeaponKind::Laser,
         WeaponKind::Plasma,
@@ -199,6 +200,7 @@ impl WeaponKind {
         WeaponKind::Flamethrower,
         WeaponKind::Grenades,
         WeaponKind::SonicHammer,
+        WeaponKind::Emp,
     ];
 
     /// The name `ActiveWeapon::name` gives, which is what `Event::Fired`
@@ -218,7 +220,7 @@ impl WeaponKind {
     /// once"): the laser's beam and the sonic hammer's wave
     /// (`events::WireEvent::press_show`).
     pub fn drawn_on_press(self) -> bool {
-        matches!(self, WeaponKind::Laser | WeaponKind::SonicHammer)
+        matches!(self, WeaponKind::Laser | WeaponKind::SonicHammer | WeaponKind::Emp)
     }
 }
 
@@ -233,6 +235,7 @@ impl From<ActiveWeapon> for WeaponKind {
             ActiveWeapon::Flamethrower => WeaponKind::Flamethrower,
             ActiveWeapon::Grenades => WeaponKind::Grenades,
             ActiveWeapon::SonicHammer => WeaponKind::SonicHammer,
+            ActiveWeapon::Emp => WeaponKind::Emp,
         }
     }
 }
@@ -248,6 +251,7 @@ impl From<WeaponKind> for ActiveWeapon {
             WeaponKind::Flamethrower => ActiveWeapon::Flamethrower,
             WeaponKind::Grenades => ActiveWeapon::Grenades,
             WeaponKind::SonicHammer => ActiveWeapon::SonicHammer,
+            WeaponKind::Emp => ActiveWeapon::Emp,
         }
     }
 }
@@ -484,6 +488,17 @@ pub struct TankState {
     pub tell: u8,
     /// The seconds left knocked off its tracks (`Tank::skid`), in tenths.
     pub skid: u8,
+    /// The seconds its electrics stay out (`Tank::disabled`, an EMP), in
+    /// tenths: what draws its dead lights, its sparks and its sagging
+    /// turret.
+    pub disabled: u8,
+    /// The seconds its special stays offline on its own
+    /// (`Tank::special_offline`, an EMP's cost to its shooter), in tenths.
+    pub offline: u8,
+    /// Its magazine of shells whatever it carries: what the trigger fires
+    /// while the special is offline, which a client's prediction gates a
+    /// press against.
+    pub shells: u8,
 }
 
 /// One live projectile, keyed by a per-round id the server hands out.
@@ -553,6 +568,9 @@ pub struct MissileState {
     /// the drawing asks whose missile it is. Whose volley *hit* travels as
     /// the `MissileBlast` event, which is the part anything reads.
     pub tube: u8,
+    /// An EMP killed it (`MissileStage::Dead`): no exhaust, no trail, and
+    /// it comes down a dud.
+    pub dead: bool,
 }
 
 /// One grenade on the ground (`grenade.rs`).
@@ -636,6 +654,9 @@ pub mod tile_flags {
     /// gone from the next snapshot; the event itself is the reliable
     /// channel, the entry lets a client that reads only state see it too.
     pub const DESTROYED: u8 = 1 << 2;
+    /// A tower that is offline (`Tower::disabled`, an EMP): listed at full
+    /// health too while it is.
+    pub const DISABLED: u8 = 1 << 3;
     /// Shift of the ram-lean nibble: the leaning direction in its low two
     /// bits (`dir_index`) and the lean's strength in the high two.
     pub const LEAN_SHIFT: u8 = 4;
@@ -726,6 +747,9 @@ pub struct RoundState {
     /// the end screen counts down. Zero while the round is playing.
     pub restart: u8,
     pub outcome: RoundOutcome,
+    /// Time left with every lamp post dark (`Game::lamps_out`, an EMP at
+    /// night), tenths of a second.
+    pub lamps_out: u8,
 }
 
 /// The state of the round at one tick, complete: what a client needs to

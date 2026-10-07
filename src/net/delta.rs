@@ -377,6 +377,9 @@ mod tests {
             ammo: rng.random(),
             tell: rng.random_range(0..8),
             skid: rng.random_range(0..12),
+            disabled: rng.random_range(0..30),
+            offline: rng.random_range(0..30),
+            shells: rng.random_range(0..12),
         }
     }
 
@@ -444,6 +447,7 @@ mod tests {
                 facing: rng.random(),
                 heading: rng.random(),
                 tube: rng.random_range(0..4),
+                dead: rng.random(),
             })
             .collect();
         let grenades: Vec<GrenadeState> = random_keys(rng, 6, 400)
@@ -497,6 +501,7 @@ mod tests {
                 next_wave: rng.random_range(0..30),
                 restart: rng.random_range(0..30),
                 outcome: [RoundOutcome::Playing, RoundOutcome::Won, RoundOutcome::Lost][rng.random_range(0..3)],
+                lamps_out: rng.random_range(0..100),
             },
             events: random_events(rng),
         };
@@ -674,6 +679,9 @@ mod tests {
                 ammo: rng.random_range(5..30),
                 tell: 0,
                 skid: 0,
+                disabled: 0,
+                offline: 0,
+                shells: 10,
             })
             .collect();
         let shots = (0..24u16)
@@ -698,7 +706,7 @@ mod tests {
             shots,
             frogs,
             pickups: 0b1011,
-            round: RoundState { wave: 2, alive: 7, pending: 4, intro: 0, next_wave: 0, restart: 0, outcome: RoundOutcome::Playing },
+            round: RoundState { wave: 2, alive: 7, pending: 4, intro: 0, next_wave: 0, restart: 0, outcome: RoundOutcome::Playing, lamps_out: 0 },
             ..Default::default()
         };
         s.normalise();
@@ -755,8 +763,9 @@ mod tests {
         // length byte for each keyed family's lists, the grenades' three
         // included. A new shot costs one more byte for its owner
         // (protocol 8); every tank two for its tell and its skid
-        // (protocol 16).
-        assert!(full <= 456, "full snapshot {full} B");
+        // (protocol 16), and three for an EMP's two outages and its
+        // magazine, the round one for the lamps (protocol 17).
+        assert!(full <= 480, "full snapshot {full} B");
         assert!(moving <= 210, "moving delta {moving} B");
         assert!(busy <= 276, "busy delta {busy} B");
         assert!(idle <= 51, "idle delta {idle} B");

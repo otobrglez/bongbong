@@ -354,7 +354,8 @@ impl Game {
     /// `enemy_alert_chain_px` of one another shares the best alert any of
     /// them holds (the freshest, then the nearest sighting, then the
     /// lower slot), which is how a sighting travels down the chain and no
-    /// further. A wreck neither sees nor passes anything on. A called
+    /// further. A wreck, and a tank an EMP disabled, neither sees nor passes
+    /// anything on. A called
     /// wave tank's call ends here too, the first frame it is within
     /// `view_range` of one of the `live` seats or has been hit.
     pub(super) fn field_alerts(&mut self, seen: &[(Position, f32)], live: &[Position], view_range: f32, f: &mut Frame) {
@@ -367,7 +368,9 @@ impl Game {
             .query::<(Entity, &Tank)>()
             .with::<&Ai>()
             .iter()
-            .map(|(e, t)| (e, t.owner_slot(), t.position, t.is_wreck()))
+            // A disabled tank (an EMP) is as deaf and blind as a wreck: it
+            // neither sees, relays nor receives, its own alert ageing on.
+            .map(|(e, t)| (e, t.owner_slot(), t.position, t.is_wreck() || t.is_disabled()))
             .collect();
         tanks.sort_by_key(|&(_, slot, _, _)| slot);
         let alerted = |world: &hecs::World| -> Option<Position> {

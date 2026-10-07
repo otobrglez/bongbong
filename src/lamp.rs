@@ -33,8 +33,10 @@ pub fn flicker(at: Position, time: f32) -> f32 {
 }
 
 /// A lamp post standing on cell centre `at`: a dark pole and its shadow,
-/// a cross-arm and a glass lantern with its flame, lit from the top left.
-pub fn draw_post(c: &mut impl Canvas, at: Position, time: f32, shadow_dir: (f32, f32), shadows: bool) {
+/// a cross-arm and a glass lantern with its flame, lit from the top left -
+/// or, not `lit` (an EMP put it out, docs/emp-burst.md), its glass dark and
+/// no flame.
+pub fn draw_post(c: &mut impl Canvas, at: Position, time: f32, shadow_dir: (f32, f32), shadows: bool, lit: bool) {
     let (x, y) = (crate::pyro::snap(at.x), crate::pyro::snap(at.y));
     if shadows {
         let (sx, sy) = ((shadow_dir.0 * 8.0 / 2.0).round() as i32 * 2, (shadow_dir.1 * 8.0 / 2.0).round() as i32 * 2);
@@ -52,10 +54,15 @@ pub fn draw_post(c: &mut impl Canvas, at: Position, time: f32, shadow_dir: (f32,
     c.fill_rect(x - 4, y - 22, 8, 2, SMOKE[1]);
     c.fill_rect(x - 6, y - 18, 2, 8, SMOKE[0]);
     c.fill_rect(x + 4, y - 18, 2, 8, SMOKE[0]);
-    c.fill_rect(x - 4, y - 18, 8, 8, FLAME[0]);
-    let k = flicker(at, time);
-    c.fill_rect(x - 2, y - 16, 4, if k > 0.9 { 6 } else { 4 }, FLAME[1]);
-    c.fill_rect(x - 2, y - 14, 2, 2, FLAME[2]);
+    if lit {
+        c.fill_rect(x - 4, y - 18, 8, 8, FLAME[0]);
+        let k = flicker(at, time);
+        c.fill_rect(x - 2, y - 16, 4, if k > 0.9 { 6 } else { 4 }, FLAME[1]);
+        c.fill_rect(x - 2, y - 14, 2, 2, FLAME[2]);
+    } else {
+        c.fill_rect(x - 4, y - 18, 8, 8, SMOKE[1]);
+        c.fill_rect(x - 2, y - 16, 2, 2, SMOKE[2]);
+    }
     c.fill_rect(x - 6, y - 10, 12, 2, SMOKE[1]);
 }
 
@@ -84,9 +91,16 @@ mod tests {
     #[test]
     fn a_post_and_a_lantern_draw_on_the_block_grid() {
         let mut canvas = crate::canvas::CpuCanvas::blank(96, 96);
-        draw_post(&mut canvas, Position::new(32.0, 48.0), 1.0, (0.6, 0.5), true);
+        draw_post(&mut canvas, Position::new(32.0, 48.0), 1.0, (0.6, 0.5), true, true);
         draw_lantern(&mut canvas, &Lantern { id: 0, position: Position::new(70.0, 60.0), seat: 0, lit_at: 0.0 }, 2.0);
         assert!(canvas.pixels().iter().any(|p| *p == FLAME[0]));
+    }
+
+    #[test]
+    fn a_dark_post_draws_no_flame() {
+        let mut canvas = crate::canvas::CpuCanvas::blank(64, 64);
+        draw_post(&mut canvas, Position::new(32.0, 48.0), 1.0, (0.6, 0.5), true, false);
+        assert!(canvas.pixels().iter().all(|p| !FLAME.contains(p)), "no flame on a dark post");
     }
 
     #[test]

@@ -340,6 +340,12 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTre
                 let owner = game.world.query::<&Tank>().iter().find(|t| t.owner_slot() == slot as usize).map_or(REPLICA_OWNER, |t| t.owner());
                 game.sonic_show(show, at(x, y), facing, owner);
             }
+            // An EMP's ring - unless it is this seat's own press, drawn on
+            // the press.
+            WireEvent::EmpPulse { slot, x, y } if !own_presses.contains(&i) => {
+                let owner = game.world.query::<&Tank>().iter().find(|t| t.owner_slot() == slot as usize).map_or(REPLICA_OWNER, |t| t.owner());
+                game.emp_show(show, at(x, y), owner, false);
+            }
             WireEvent::CookOff { x, y } => Game::cookoff_show(show, at(x, y)),
             WireEvent::CrateBroken { x, y, cooked: true, .. } => game.crate_cookoff_show(show, at(x, y)),
             // A sonic hit flashes the hull and throws dust (`fx`), never a
@@ -413,6 +419,7 @@ fn kick_turret(game: &mut Game, slot: usize, weapon: WeaponKind) {
             WeaponKind::Plasma => tank.kick(true),
             WeaponKind::Laser => tank.kick_laser(),
             WeaponKind::SonicHammer => tank.kick_sonic(),
+            WeaponKind::Emp => tank.kick_emp(),
             WeaponKind::Minigun | WeaponKind::Missiles | WeaponKind::Flamethrower | WeaponKind::Grenades => {}
         }
         break;
@@ -442,6 +449,9 @@ fn drawn_muzzle(game: &mut Game, slot: usize, weapon: WeaponKind) -> Option<Posi
         WeaponKind::Grenades => Some(tank.turret_point(crate::tank_art::GRENADE_MUZZLE[tank.row as usize])),
         // Sound has no muzzle flash: the dish's firing cell is its show.
         WeaponKind::SonicHammer => None,
+        // A pulse has no muzzle: the coil's pulse cell and the ring are its
+        // show.
+        WeaponKind::Emp => None,
     };
     tank.rotation = facing;
     muzzle
@@ -537,6 +547,13 @@ fn apply_tiles(game: &mut Game, s: &Snapshot, cols: u16, mut dead: BTreeSet<u16>
         .map(|t| (t.cell, *t))
         .collect();
     remove_tiles(game, &dead, cols);
+    // A tower offline (an EMP) while its tile carries the flag: held from
+    // the room's word, run down between snapshots, off with the flag.
+    let full = tuning().emp_tower_seconds;
+    for (&cell, tower) in game.towers.iter_mut() {
+        let offline = listed.get(&cell_index(cols, cell)).is_some_and(|t| t.flags & tile_flags::DISABLED != 0);
+        set_timer(&mut tower.disabled, offline, full);
+    }
     let live: Vec<(Entity, u16)> = game
         .world
         .query::<(Entity, &Obstacle)>()
@@ -682,6 +699,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
         tank.flame_fuel = 0.0;
         tank.grenade_ammo = 0;
         tank.sonic_ammo = 0;
+        tank.emp_charges = 0;
         let ammo = t.ammo as i32;
         match weapon {
             ActiveWeapon::Shell => tank.shells_ammo = ammo,
@@ -692,7 +710,13 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
             ActiveWeapon::Flamethrower => tank.flame_fuel = ammo as f32,
             ActiveWeapon::Grenades => tank.grenade_ammo = ammo,
             ActiveWeapon::SonicHammer => tank.sonic_ammo = ammo,
+            ActiveWeapon::Emp => tank.emp_charges = ammo,
         }
+        // The magazine, which the trigger fires while a special is
+        // offline; and an EMP's outages, run down between snapshots.
+        tank.shells_ammo = t.shells as i32;
+        tank.disabled = dequantise_seconds(t.disabled);
+        tank.special_offline = dequantise_seconds(t.offline);
         // An enemy's wind-up and a knocked hull's skid, which the replica
         // runs down between snapshots (`Game::tick_presentation`).
         tank.tell = (t.tell > 0).then(|| crate::tank::Tell {
@@ -765,6 +789,9 @@ fn apply_missiles(game: &mut Game, s: &Snapshot, mut show: Option<&mut Spectacle
                     m.height = height;
                     m.facing = facing;
                     m.dir = dir;
+                    if ms.dead && !m.is_dead() {
+                        m.kill();
+                    }
                 }
             }
             None => {
@@ -776,6 +803,9 @@ fn apply_missiles(game: &mut Game, s: &Snapshot, mut show: Option<&mut Spectacle
                 m.height = height;
                 m.facing = facing;
                 m.dir = dir;
+                if ms.dead {
+                    m.kill();
+                }
                 game.world.spawn((m,));
                 if let Some(show) = show.as_deref_mut() {
                     show.muzzle_flashes.push(Shockwave::new(ground));
@@ -1132,6 +1162,7 @@ fn apply_round(game: &mut Game, s: &Snapshot) {
     // it is not, and a last twentieth of a second of it changes nothing.
     let next_in = (s.round.next_wave > 0).then(|| dequantise_seconds(s.round.next_wave));
     game.set_wave_progress(s.round.wave as u32, s.round.pending as usize, next_in);
+    game.lamps_out = dequantise_seconds(s.round.lamps_out);
 }
 
 #[cfg(test)]

@@ -237,8 +237,20 @@ fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, row_h: f32, hud: &Play
 
     let slot = hud.weapon;
     let symbol = weapon_pickup(slot.weapon).unwrap_or(PickupKind::Ammo);
-    draw_symbol(d, textures, symbol, x + V_WEAPON, y, row, slot.count > 0, a);
-    draw_weapon_readout(d, slot, x + V_WEAPON_COUNT, text_y, a);
+    match slot.offline {
+        // The special offline (an EMP): `WPN OFFLINE` on its beats, across
+        // the whole slot.
+        Some(true) => draw_offline_words(d, x + V_WEAPON, y, row, a),
+        // Between them, its symbol and count unlit.
+        Some(false) => {
+            draw_symbol(d, textures, symbol, x + V_WEAPON, y, row, false, a);
+            draw_weapon_readout(d, crate::hud::WeaponSlot { color: DIM, ..slot }, x + V_WEAPON_COUNT, text_y, a);
+        }
+        None => {
+            draw_symbol(d, textures, symbol, x + V_WEAPON, y, row, slot.count > 0, a);
+            draw_weapon_readout(d, slot, x + V_WEAPON_COUNT, text_y, a);
+        }
+    }
 
     draw_symbol_gauge(d, textures, PickupKind::SpeedUp, x + V_SPEED, y, row, hud.speed, SPEED_COLOR, true, a);
     draw_symbol_gauge(d, textures, PickupKind::Shield, x + V_SHIELD, y, row, hud.shield, SHIELD_COLOR, true, a);
@@ -251,6 +263,28 @@ fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, row_h: f32, hud: &Play
 fn draw_weapon_readout(d: &mut impl RaylibDraw, slot: crate::hud::WeaponSlot, x: i32, text_y: i32, a: f32) {
     d.draw_text(&slot.count.to_string(), x, text_y, HUD_TEXT_SIZE, faded(slot.color, a));
 }
+
+/// The words a special offline puts in the weapon slot (docs/emp-burst.md):
+/// `WPN OFFLINE`, split at its first space into two lines
+/// (`hud::offline_lines`), each centred in the slot (`hud::WEAPON_SLOT_W`
+/// from `x`) at the font's own size, in the HUD's red, the pair centred on
+/// the row from `y`, `row` tall.
+fn draw_offline_words(d: &mut impl RaylibDraw, x: i32, y: i32, row: i32, a: f32) {
+    let words = text().get(keys::HUD_WEAPON_OFFLINE);
+    let (first, rest) = crate::hud::offline_lines(&words);
+    let lines: Vec<&str> = std::iter::once(first).chain(rest).collect();
+    let gap = 2;
+    let h = lines.len() as i32 * crate::hud::HUD_LABEL_SIZE + (lines.len() as i32 - 1) * gap;
+    let mut ly = y + (row - h) / 2;
+    for line in lines {
+        let w = width(line, crate::hud::HUD_LABEL_SIZE);
+        d.draw_text(line, x + (crate::hud::WEAPON_SLOT_W - w) / 2, ly, crate::hud::HUD_LABEL_SIZE, faded(OFFLINE_RED, a));
+        ly += crate::hud::HUD_LABEL_SIZE + gap;
+    }
+}
+
+/// `WPN OFFLINE`'s colour: the palette's bright red (`RED_BRIGHT`).
+const OFFLINE_RED: Color = Color::new(0xFF, 0x42, 0x1A, 255);
 
 /// A block's lamp row, `row` (`hud::CornerShape::lamp_row`): the
 /// lantern with how many are left to set down - the lamp key's button on
@@ -682,6 +716,7 @@ mod corner_tests {
         assert!(V_WEAPON + SYMBOL + SYMBOL_GAP <= V_WEAPON_COUNT, "the weapon's symbol runs into its count");
         assert!(three_digits <= V_COUNT_W && V_WEAPON_COUNT + V_COUNT_W <= V_SPEED, "the count runs into the speed gauge");
         assert!(V_SPEED + GAUGE_SLOT_W <= V_SHIELD);
+        assert_eq!(V_SPEED - V_WEAPON, crate::hud::WEAPON_SLOT_W, "WPN OFFLINE is laid out in the weapon slot");
         assert_eq!(V_SHIELD + GAUGE_SLOT_W, VITALS_W as i32, "the first row is the block's width");
         assert!(GAUGE_W >= 4 + 2 * 10, "a bar needs its outline and room to drain in steps");
         // A symbol and a bar, both inside a row.

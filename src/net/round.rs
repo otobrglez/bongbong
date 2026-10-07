@@ -974,6 +974,12 @@ impl<T: Transport> OnlineRound<T> {
         if self.trigger_down && tuning().online_predict_shots {
             game.hold_flame(seat as usize);
         }
+        // An EMP press this client drew takes its special offline here at
+        // once, as the room's will a round trip later: the HUD says so on
+        // the press frame.
+        if predictor.offline_left() > 0.0 {
+            game.hold_seat_offline(seat, predictor.offline_left());
+        }
         true
     }
 
@@ -1050,7 +1056,13 @@ impl<T: Transport> OnlineRound<T> {
                 }
                 // The wave, cast against the replica's own tiles from the
                 // predicted pose; the dish fires with it.
-                crate::net::predict::PressShow::Sonic(press) => game.draw_press_show(seat, press.origin, press.facing),
+                crate::net::predict::PressShow::Sonic(press) => {
+                    game.draw_press_show(seat, crate::tank::ActiveWeapon::SonicHammer, press.origin, press.facing)
+                }
+                // The ring, from the predicted pivot; the coil fires with it.
+                crate::net::predict::PressShow::Emp(press) => {
+                    game.draw_press_show(seat, crate::tank::ActiveWeapon::Emp, press.origin, crate::tank::Dir::Up)
+                }
             }
         }
         for at in predictor.take_impacts() {

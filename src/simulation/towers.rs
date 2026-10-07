@@ -167,6 +167,11 @@ impl Game {
             if !self.tower_upkeep(f, &mut tower) || !self.towers.contains_key(&cell) {
                 continue;
             }
+            // Offline (an EMP): its fire burns on, its weapon does nothing.
+            if tower.disabled > 0.0 {
+                self.towers.insert(cell, tower);
+                continue;
+            }
             match tower.kind {
                 TowerKind::Tesla => self.tick_tesla(f, cell, &mut tower, &cands),
                 TowerKind::Gun => self.tick_gun(f, cell, &mut tower, &cands),
@@ -677,6 +682,9 @@ impl Game {
     /// a replica too.
     pub(super) fn tick_tower_effects(&mut self, dt: f32) {
         self.tesla_bolts.retain_mut(|b| !b.tick(dt));
+        for tower in self.towers.values_mut() {
+            tower.ease_droop(dt);
+        }
         for ruin in &mut self.tower_ruins {
             ruin.age += dt;
         }
@@ -701,6 +709,10 @@ impl Game {
         let mut cells = Vec::new();
         for (at, _) in self.standing_towers() {
             let Some(tower) = self.towers.values().find(|t| t.position == at && t.side == Side::Player) else { continue };
+            // An offline tower (an EMP) fires at nobody: no detour for it.
+            if tower.disabled > 0.0 {
+                continue;
+            }
             let range = tower.kind.range();
             let c0 = (((at.x - range) / size).floor() as i32).max(0);
             let c1 = (((at.x + range) / size).floor() as i32).min(cols - 1);
@@ -778,6 +790,8 @@ impl Game {
                     heading: tower.heading,
                     charge: tower.charge,
                     burning: tower.burning,
+                    disabled: tower.disabled,
+                    droop: tower.droop,
                 })
             })
             .collect()

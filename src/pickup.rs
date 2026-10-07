@@ -131,12 +131,21 @@ pub enum PickupKind {
     /// (`sonic.rs`). Players and enemies both use it.
     #[serde(rename = "sonic_hammer")]
     SonicHammer,
+    /// The EMP burst (docs/emp-burst.md): loads `emp_charges_per_pickup`
+    /// pulses (one weapon at a time, as above). While stocked, each press
+    /// sends a ring five cells out from the hull that disables everything
+    /// electric it crosses - an enemy's brain, any tank's special, shield
+    /// and lights, the towers, missiles in the air - and takes the
+    /// shooter's own special offline as long (`emp.rs`). Players and
+    /// enemies both use it.
+    #[serde(rename = "emp_burst")]
+    Emp,
 }
 
 impl PickupKind {
     /// Every kind in declaration order: the crate and symbol sheets' row
     /// order (`row`).
-    pub const ALL: [PickupKind; 14] = [
+    pub const ALL: [PickupKind; 15] = [
         PickupKind::Health,
         PickupKind::Ammo,
         PickupKind::Laser,
@@ -151,6 +160,7 @@ impl PickupKind {
         PickupKind::HeatShield,
         PickupKind::Grenades,
         PickupKind::SonicHammer,
+        PickupKind::Emp,
     ];
 
     /// This kind's row on static/crates_sheet.png and
@@ -171,6 +181,7 @@ impl PickupKind {
             PickupKind::HeatShield => 11,
             PickupKind::Grenades => 12,
             PickupKind::SonicHammer => 13,
+            PickupKind::Emp => 14,
         }
     }
 
@@ -192,6 +203,7 @@ impl PickupKind {
             PickupKind::HeatShield => "heat_shield",
             PickupKind::Grenades => "grenades",
             PickupKind::SonicHammer => "sonic_hammer",
+            PickupKind::Emp => "emp_burst",
         }
     }
 
@@ -212,6 +224,7 @@ impl PickupKind {
             PickupKind::Flamethrower => Some(ActiveWeapon::Flamethrower),
             PickupKind::Grenades => Some(ActiveWeapon::Grenades),
             PickupKind::SonicHammer => Some(ActiveWeapon::SonicHammer),
+            PickupKind::Emp => Some(ActiveWeapon::Emp),
             PickupKind::Health
             | PickupKind::Ammo
             | PickupKind::SpeedUp
@@ -244,6 +257,7 @@ impl PickupKind {
             PickupKind::HeatShield => [0x3A3030, 0xF0461E, 0xFFA84A],
             PickupKind::Grenades => [0x8C2CB0, 0xD656F5, 0xF4B6FF],
             PickupKind::SonicHammer => [0x1E7FB8, 0x46C3F2, 0xA8E6FF],
+            PickupKind::Emp => [0x2433A6, 0x4F6BFF, 0xB3C2FF],
         };
         [rgb(shade), rgb(base), rgb(light)]
     }
@@ -262,7 +276,9 @@ impl PickupKind {
             | PickupKind::TowerPack
             | PickupKind::HeatShield
             // A speaker, not ordnance: it spills.
-            | PickupKind::SonicHammer => false,
+            | PickupKind::SonicHammer
+            // A bank of coils, not ordnance: it spills too.
+            | PickupKind::Emp => false,
         }
     }
 }

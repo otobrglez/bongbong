@@ -132,8 +132,8 @@ pub(crate) enum Order {
     /// Stop driving this frame; keep the facing, so the tank still aims and
     /// shoots.
     Hold,
-    /// Drive this cardinal instead of the one the tree picked.
-    #[allow(dead_code)] // applied by `Commander::apply`, issued by no producer yet
+    /// Drive this cardinal instead of the one the tree picked (an EMP
+    /// tank's ring being cleared, `Commander::clear_rings`).
     Nudge { dir: Dir },
     /// Contact damage against `victim` is authorised - and the deconflictor
     /// leaves this pair alone rather than preventing the very ram that was

@@ -21,8 +21,14 @@
 # shells collects it. The player's frog sits by the start beside a player
 # tesla; the hunters come for it. A band of four, clear sky.
 #
-# Kept free for the later weapons' own pieces: 29,7 31,16 11,4 25,10,
-# 30,12, column 27 rows 8 to 11 and the 2 x 2 at 33-34 x 8-9.
+# The EMP burst (docs/emp-burst.md): its crate at 7,4, a second on the
+# east side at 29,7 for the enemies, a missiles crate at 31,16 whose
+# volleys a pulse kills in the air, and two more lamp posts (11,4 and
+# 25,10) so the lights going out at night read across the map (try
+# `--weather night`). The towers it puts offline are the ones above.
+#
+# Kept free for the later weapons' own pieces: 30,12, column 27 rows 8 to
+# 11 and the 2 x 2 at 33-34 x 8-9.
 
 version = 1
 size = [36, 18]
@@ -37,6 +43,9 @@ cells."14,3" = { kind = "pickup", pickup = "shield" }
 cells."4,8" = { kind = "start" }
 cells."7,8" = { kind = "pickup", pickup = "sonic_hammer" }
 cells."30,10" = { kind = "pickup", pickup = "sonic_hammer" }
+cells."7,4" = { kind = "pickup", pickup = "emp_burst" }
+cells."29,7" = { kind = "pickup", pickup = "emp_burst" }
+cells."31,16" = { kind = "pickup", pickup = "missiles" }
 cells."2,12" = { kind = "frog" }
 cells."1,16" = { kind = "pickup", pickup = "ammo" }
 
@@ -163,4 +172,6 @@ cells."32,5" = { kind = "lava" }
 cells."32,6" = { kind = "lava" }
 cells."32,7" = { kind = "lava" }
 cells."17,8" = { kind = "lamp" }
+cells."11,4" = { kind = "lamp" }
+cells."25,10" = { kind = "lamp" }
 cells."34,14" = { kind = "gun_tower", side = "enemy" }

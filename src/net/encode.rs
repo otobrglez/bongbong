@@ -193,6 +193,9 @@ fn tanks(game: &Game) -> Vec<TankState> {
                 ammo: t.active_ammo(),
                 tell: t.tell.map_or(0, |tell| quantise_seconds(tell.left).max(1)),
                 skid: if t.skid > 0.0 { quantise_seconds(t.skid).max(1) } else { 0 },
+                disabled: if t.disabled > 0.0 { quantise_seconds(t.disabled).max(1) } else { 0 },
+                offline: if t.special_offline > 0.0 { quantise_seconds(t.special_offline).max(1) } else { 0 },
+                shells: t.shells_ammo.clamp(0, u8::MAX as i32) as u8,
             }
         })
         .collect()
@@ -259,6 +262,7 @@ fn missiles(game: &Game) -> Vec<MissileState> {
             facing: quantise_heading(m.rotation()),
             heading: quantise_heading(m.ground_rotation()),
             tube: m.tube,
+            dead: m.is_dead(),
         })
         .collect();
     out.sort_by_key(|m| m.id);
@@ -361,6 +365,8 @@ fn crates(game: &Game, cols: u16) -> Vec<CrateState> {
 fn tiles(game: &Game, cols: u16) -> Vec<TileState> {
     let movers: Vec<Position> =
         game.world.query::<&Tank>().iter().filter(|t| !t.is_wreck()).map(|t| t.position).collect();
+    // The towers offline (an EMP), by cell.
+    let offline: std::collections::BTreeSet<(i32, i32)> = game.towers.iter().filter(|(_, tw)| tw.disabled > 0.0).map(|(&cell, _)| cell).collect();
     let mut out: Vec<TileState> = game
         .world
         .query::<&Obstacle>()
@@ -374,9 +380,13 @@ fn tiles(game: &Game, cols: u16) -> Vec<TileState> {
                 || o.fuse.is_some()
                 || o.scorched != 0
                 || o.ram_timer > 0.0
+                || offline.contains(&o.cell())
         })
         .map(|o| {
             let mut flags = 0;
+            if offline.contains(&o.cell()) {
+                flags |= tile_flags::DISABLED;
+            }
             if o.burning {
                 flags |= tile_flags::BURNING;
             }
@@ -427,5 +437,6 @@ fn round(game: &Game) -> RoundState {
         next_wave: wave.and_then(|w| w.next_in).map_or(0, quantise_seconds),
         restart: quantise_seconds(game.restart_timer),
         outcome: game.outcome().into(),
+        lamps_out: if game.lamps_out > 0.0 { quantise_seconds(game.lamps_out).max(1) } else { 0 },
     }
 }

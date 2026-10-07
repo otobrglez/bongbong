@@ -79,6 +79,8 @@ fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, sh
     // adds its flames over everything on the tank, leaning with the wind
     // (`damage_stage.rs`). Their light is the glowing pass's.
     draw_tank(c, tank, time);
+    // An EMP's lights out: the lamps and strips drawn dark (docs/emp-burst.md).
+    crate::tank::draw_tank_dark(c, tank, time);
     crate::tank::draw_tank_slime(c, tank, time);
     if role != TankRole::RollIn {
         let lean = crate::pyro::smoke_lean(&crate::tuning::tuning(), tank.position, time);
@@ -492,15 +494,18 @@ impl Game {
                 Standing::Tower(view) => {
                     // The tesla's lens lights with its charge; the mortar's
                     // mouth glows as the next glob comes up.
+                    // Offline (an EMP), both are dark and the top sags.
                     let glow = match view.kind {
+                        _ if view.disabled > 0.0 => 0.0,
                         crate::tower::TowerKind::Bio => view.charge * view.charge,
                         _ => view.charge,
                     };
-                    crate::tower::draw_tower(c, view.kind, view.side, view.position, view.stage, view.heading, glow);
+                    crate::tower::draw_tower(c, view.kind, view.side, view.position, view.stage, view.heading + view.droop, glow);
                 }
                 Standing::Lamp(at) => {
                     let t = crate::tuning::tuning();
-                    crate::lamp::draw_post(c, *at, self.time, (t.shadow_dir_x, t.shadow_dir_y), self.shadows_enabled);
+                    let lit = crate::emp::lamp_lit(*at, self.lamps_out);
+                    crate::lamp::draw_post(c, *at, self.time, (t.shadow_dir_x, t.shadow_dir_y), self.shadows_enabled, lit);
                 }
                 Standing::Grenade(grenade) => crate::grenade::draw_grenade(c, grenade),
             }

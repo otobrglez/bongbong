@@ -134,7 +134,9 @@ pub fn draw_tesla_bolt(d: &mut impl RaylibDraw, bolt: &TeslaBolt) {
 pub fn draw_tower_glow(d: &mut impl RaylibDraw, view: &TowerView, time: f32) {
     let strength = tuning().shot_glow_strength;
     let at = view.position;
+    // Offline (an EMP): its lens and its mouth are out; a fire burns on.
     match view.kind {
+        _ if view.disabled > 0.0 => {}
         TowerKind::Tesla if view.charge > 0.05 => {
             let k = view.charge * view.charge * strength;
             glow(d, Position::new(at.x, at.y - 1.0), 12.0 + 20.0 * k, fade(BOLT_GLOW, 0.5 * k));
@@ -198,6 +200,8 @@ impl Game {
         let ground_light = |d: &mut _, at: Position, radius: f32, color: Color, strength: f32| ground_light(d, at, radius, color, strength * pools);
         for view in self.tower_views() {
             match view.kind {
+                // Offline (an EMP): no light but a fire's.
+                _ if view.disabled > 0.0 => {}
                 TowerKind::Tesla if view.charge > 0.05 => {
                     let k = view.charge * view.charge;
                     ground_light(d, view.position, 40.0 + 30.0 * k, BOLT_GLOW, 0.35 * k);

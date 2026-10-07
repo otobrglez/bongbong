@@ -98,6 +98,85 @@ pub enum SpecialSense {
     #[default]
     None,
     Hammer(HammerSense),
+    Emp(EmpSense),
+}
+
+/// What a pulse of an EMP tank's own would get it where it stands
+/// (`Game::emp_senses`, docs/emp-burst.md "AI"). A seat counts only from
+/// inside its sight box and not hidden from this tank; `off_box` flags one
+/// in reach that would see the tank from outside it, which holds the
+/// pulse whole.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct EmpSense {
+    /// What a pulse from here is worth: each seat in reach by
+    /// `emp::seat_value`, each standing, online player tower in reach
+    /// `emp_ai_tower_value`.
+    pub value: i32,
+    /// The seat the pulse is used on: the most valuable in reach, ties to
+    /// the lower seat. What `Ai::shot_at_seat` records.
+    pub at_seat: Option<u8>,
+    /// A seat in reach would see this tank from outside its sight box.
+    pub off_box: bool,
+    /// A fellow enemy - live, not disabled, not this one - whose hull is,
+    /// or by the time a pulse decided now lands will be, within
+    /// `emp_radius_px + emp_ai_friend_margin_px`.
+    pub friends: bool,
+    /// A standing, online enemy tower within reach.
+    pub friendly_tower: bool,
+    /// The seat this tank fights, valued alone whatever the range, and
+    /// whether a fellow enemy's hull stands within `emp_radius_px` of it:
+    /// what the approach weighs.
+    pub target_value: i32,
+    pub target_crowded: bool,
+    /// This tank is one of the `emp_ai_closers` EMP tanks nearest the seat
+    /// it fights (ties on slot): it may close in.
+    pub closer: bool,
+}
+
+/// A place an enemy keeps out of this tick, because a weapon could go off
+/// on it there (docs/emp-burst.md "Reacting to the EMP"): built once a frame
+/// by `enemy_phase` - empty unless a weapon makes one, so a round without
+/// decides exactly what it did - and kept out of by the `dodge` tier and by
+/// every point the tree steers at (`Brain::out_of_danger`). The latch and
+/// the steering read only `depth` and `exit`, so a weapon adds a shape (the
+/// rail's lane, the rod's circle) with its own arm of those two.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Danger {
+    pub shape: DangerShape,
+    /// The owner slot of the tank whose weapon it is: that tank never shies
+    /// from it.
+    pub owner: usize,
+}
+
+/// A danger's ground (`Danger`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DangerShape {
+    /// Everything within `radius` of `at`: an armed EMP's reach, an ally's
+    /// crackle.
+    Disc { at: Position, radius: f32 },
+}
+
+impl Danger {
+    /// How far `p` stands inside it, px (negative outside).
+    pub fn depth(&self, p: Position) -> f32 {
+        match self.shape {
+            DangerShape::Disc { at, radius } => radius - p.distance_to(at),
+        }
+    }
+
+    /// The nearest point `clear` px outside it from `p`: along the line
+    /// from its middle through `p`, or along `facing` from its middle when
+    /// `p` stands on it.
+    pub fn exit(&self, p: Position, clear: f32, facing: Dir) -> Position {
+        match self.shape {
+            DangerShape::Disc { at, radius } => {
+                let away = Vec2::new(p.x - at.x, p.y - at.y);
+                let len = away.length();
+                let dir = if len > 1e-3 { Vec2::new(away.x / len, away.y / len) } else { facing.vec() };
+                Position::new(at.x + dir.x * (radius + clear), at.y + dir.y * (radius + clear))
+            }
+        }
+    }
 }
 
 /// What a sonic hammer's blast each way would do (`Game::hammer_senses`).
@@ -140,19 +219,23 @@ enum SpecialUse {
     Fire { face: Dir, at_seat: Option<u8>, why: &'static str },
     /// Hold still facing `face`; `why` for the trace.
     Hold { face: Dir, why: &'static str },
+    /// Hold still facing `face` and ask the commander to clear the tank's
+    /// ring of `radius` px of its own side before it fires
+    /// (`Ai::clearing`, `simulation::command`'s `clear_rings`).
+    Clear { face: Dir, radius: f32 },
     /// Close in on `to`, to bring a short-range weapon to bear.
     Approach { to: Position },
 }
 
 /// The BB-36 weapons' crates an enemy detours for, in the order it wants
 /// them (`build`'s `seek_special` tier, after the minigun's).
-pub const SEEK_SPECIALS: [PickupKind; 1] = [PickupKind::SonicHammer];
+pub const SEEK_SPECIALS: [PickupKind; 2] = [PickupKind::SonicHammer, PickupKind::Emp];
 
 /// Whether the tree's generic tiers - attack, snipe, grudge, breach - may
 /// pull the trigger on `weapon`: false for a special whose own rule owns
 /// it (`special_rule`).
 pub fn generic_fire(weapon: ActiveWeapon) -> bool {
-    weapon != ActiveWeapon::SonicHammer
+    !matches!(weapon, ActiveWeapon::SonicHammer | ActiveWeapon::Emp)
 }
 
 /// A latched decision to shoot through the tile in `dir` (see
@@ -365,6 +448,16 @@ pub struct Ai {
     /// (`SpecialUse::Fire`'s `why`, "hold", "approach"), `None` when it ran
     /// none. Inspection only, like `last_action`.
     special_why: Option<&'static str>,
+    /// Its brain is off (an EMP, docs/emp-burst.md): `enemy_phase` coasts it
+    /// and does not call `think`; the first tick it is back, `reboot`.
+    pub(crate) down: bool,
+    /// The ring its EMP rule asked the commander to clear of its own side
+    /// this tick (`SpecialUse::Clear`), `None` the rest of the time.
+    clearing: Option<f32>,
+    /// Backing out of a danger (`Danger`, the `dodge` tier): latched until
+    /// the tank stands `enemy_danger_clear_px` outside it, so the edge is
+    /// never a place to jitter.
+    dodging: bool,
 }
 
 /// The memory a tank carries only on a field map
@@ -440,6 +533,10 @@ pub struct AiSnapshot {
     pub escapes: u32,
     /// The special's rule's last arm (`Ai::special_why`).
     pub special: Option<&'static str>,
+    /// Its brain is off (`Ai::down`).
+    pub down: bool,
+    /// Backing out of a danger (`Ai::dodging`).
+    pub dodging: bool,
     /// `Ai::target_player`.
     pub target_player: u8,
     /// The seat the last tick's trigger pull was aimed at (`Ai::shot_at_seat`).
@@ -485,6 +582,9 @@ impl Default for Ai {
             special_why: None,
             target_player: 0,
             field: FieldMind::default(),
+            down: false,
+            clearing: None,
+            dodging: false,
         }
     }
 }
@@ -586,6 +686,7 @@ impl Ai {
         walls_ahead: [Option<WallAhead>; 4],
         sight: f32,
         sense: &SpecialSense,
+        dangers: &[Danger],
     ) -> Intent {
         self.fire_timer = (self.fire_timer - dt).max(0.0);
         self.retarget_timer = (self.retarget_timer - dt).max(0.0);
@@ -660,6 +761,7 @@ impl Ai {
         }
 
         self.special_why = None;
+        self.clearing = None;
         let mut bb = Brain {
             me,
             player,
@@ -683,6 +785,7 @@ impl Ai {
             walls_ahead,
             sight,
             sense,
+            dangers,
         };
         let mut last_action = None;
         build().tick_traced(&mut bb, &mut last_action);
@@ -763,6 +866,8 @@ impl Ai {
             breach_timer: self.breach.map(|b| b.timer),
             escapes: self.escapes,
             special: self.special_why,
+            down: self.down,
+            dodging: self.dodging,
             target_player: self.target_player,
             shot_at_seat: self.shot_at_seat,
             field_alert: self.field.alert.map(|p| (p.x, p.y)),
@@ -848,6 +953,36 @@ impl Ai {
         self.wander_pocketed = false;
         self.wall_ahead_timer = 0.0;
         self.breach = None;
+    }
+
+    /// The brain is back after an EMP (docs/emp-burst.md "An enemy struck:
+    /// brain off"): what the coast made a lie of is cleared - the stuck
+    /// clock's baseline, the heading commitment, the dodge, the yield, the
+    /// breach evidence and a latched breach, the aim - and what is about
+    /// the fight (role, alerts, target, fire timer, retreat, escapes) is
+    /// kept. Its clocks were frozen meanwhile, not paid back.
+    pub(crate) fn reboot(&mut self) {
+        self.down = false;
+        self.committed_dir = None;
+        self.dir_hold = 0.0;
+        self.dodge_dir = None;
+        self.dodge_timer = 0.0;
+        self.yield_timer = 0.0;
+        self.last_move_dir = None;
+        self.last_position = None;
+        self.motion = Vec2::new(0.0, 0.0);
+        self.progress_avg = None;
+        self.stuck_timer = 0.0;
+        self.wall_ahead_timer = 0.0;
+        self.breach = None;
+        self.aim_settle = 0.0;
+        self.dodging = false;
+    }
+
+    /// The ring this tank's EMP rule asked to have cleared this tick, if
+    /// any (`SpecialUse::Clear`): what the collect pass hands the commander.
+    pub(crate) fn clearing(&self) -> Option<f32> {
+        self.clearing
     }
 
     /// Choose a heading toward `target` - or, if pathfinding can't reach
@@ -1681,6 +1816,9 @@ struct Brain<'a> {
     /// What the simulation measured for its special - see `think`'s
     /// `sense` parameter.
     sense: &'a SpecialSense,
+    /// The places it keeps out of this tick - see `think`'s `dangers`
+    /// parameter.
+    dangers: &'a [Danger],
 }
 
 impl<'a> Brain<'a> {
@@ -1725,7 +1863,70 @@ impl Brain<'_> {
     /// real target regardless, so spreading out changes where a tank walks,
     /// never what it shoots at.
     fn engage_point(&self) -> Position {
-        self.engage_target.unwrap_or(self.target)
+        self.out_of_danger(self.engage_target.unwrap_or(self.target))
+    }
+
+    /// The danger this tank stands inside and does not own, the deepest
+    /// (ties to the earlier), while `dodging` is not latched; latched, the
+    /// first it is not yet `enemy_danger_clear_px` clear of. `None` when it
+    /// stands clear of every one.
+    fn danger_here(&self) -> Option<Danger> {
+        let me = self.me.position;
+        let clear = tuning().enemy_danger_clear_px;
+        let mine = self.me.owner_slot();
+        let others = self.dangers.iter().filter(|d| d.owner != mine);
+        if self.ai.dodging {
+            return others.copied().find(|d| d.depth(me) > -clear);
+        }
+        others.fold(None, |best: Option<Danger>, d| {
+            let depth = d.depth(me);
+            if depth > 0.0 && best.is_none_or(|b| depth > b.depth(me)) { Some(*d) } else { best }
+        })
+    }
+
+    /// `p`, or - where it lies inside a danger this tank does not own - its
+    /// way out of the first that holds it (`Danger::exit`, the clear margin
+    /// past the edge): what the tree steers at, so a tank kept out of a
+    /// danger is never sent back into it. Aim and fire read the real point.
+    fn out_of_danger(&self, p: Position) -> Position {
+        let mine = self.me.owner_slot();
+        let facing = Dir::from_rotation(self.me.rotation).unwrap_or(Dir::Up);
+        match self.dangers.iter().find(|d| d.owner != mine && d.depth(p) > 0.0) {
+            Some(d) => d.exit(p, tuning().enemy_danger_clear_px, facing),
+            None => p,
+        }
+    }
+
+    /// Whether `p` lies inside a danger this tank does not own.
+    fn in_danger(&self, p: Position) -> bool {
+        let mine = self.me.owner_slot();
+        self.dangers.iter().any(|d| d.owner != mine && d.depth(p) > 0.0)
+    }
+
+    /// Where an EMP closer closes in on `around` to: on the line from it
+    /// out to `slot` (this tank's engagement slot, else its own position),
+    /// `radius` out - or as near that as an open cell allows, half a cell
+    /// at a time back out toward the slot. The tank's own place when it
+    /// already stands nearer than `radius`. The pulse is a disc, so any
+    /// side of the seat serves, and one closer (`emp_ai_closers`) has no
+    /// other to keep out of the way of.
+    fn close_spot(&self, around: Position, slot: Option<Position>, radius: f32) -> Position {
+        let toward = slot.unwrap_or(self.me.position);
+        let away = Vec2::new(toward.x - around.x, toward.y - around.y);
+        let len = away.length();
+        if len <= radius {
+            return toward;
+        }
+        let dir = Vec2::new(away.x / len, away.y / len);
+        let mut r = radius;
+        while r < len {
+            let at = Position::new(around.x + dir.x * r, around.y + dir.y * r);
+            if self.grid.usable(at) {
+                return at;
+            }
+            r += OBSTACLE_GRID_SIZE * 0.5;
+        }
+        toward
     }
 
     fn player_alive(&self) -> bool {
@@ -1774,16 +1975,14 @@ impl Brain<'_> {
     /// only those inside the home leash on a field map
     /// (`home_leash`), so a tank with nothing to fight never crosses the
     /// map for one.
+    /// A pickup inside a danger (`Danger`) is not worth it.
     fn seek(&self, kind: PickupKind) -> Option<Position> {
-        match self.home_leash() {
-            None => self.nearest_pickup(kind),
-            Some(leash) => self
-                .pickups
-                .iter()
-                .filter(|&&(k, at)| k == kind && at.distance_to(leash.anchor) <= leash.radius)
-                .map(|&(_, at)| at)
-                .min_by(|&a, &b| self.me.position.distance_to(a).total_cmp(&self.me.position.distance_to(b))),
-        }
+        let leash = self.home_leash();
+        self.pickups
+            .iter()
+            .filter(|&&(k, at)| k == kind && leash.is_none_or(|l| at.distance_to(l.anchor) <= l.radius) && !self.in_danger(at))
+            .map(|&(_, at)| at)
+            .min_by(|&a, &b| self.me.position.distance_to(a).total_cmp(&self.me.position.distance_to(b)))
     }
 
     /// The nearest BB-36 weapon crate worth the detour: the first kind of
@@ -2183,6 +2382,20 @@ fn build<'a>() -> Node<Brain<'a>> {
             condition(|b: &mut Brain| special_rule(b).is_some()),
             action("special", act_special),
         ]),
+        // 1.6. Inside a danger (`Danger`: a seat's armed EMP, an ally's
+        // crackle): back out past its edge - latched until clear of it by
+        // `enemy_danger_clear_px`, so the edge is not a place to jitter.
+        // Below the special tier, so an EMP tank's own approach still walks
+        // in on a seat armed with one; above flee, since a hurt tank is no
+        // safer inside.
+        sequence(vec![
+            condition(|b: &mut Brain| {
+                let here = b.danger_here().is_some();
+                b.ai.dodging = here;
+                here
+            }),
+            action("dodge", act_dodge),
+        ]),
         // 2. Flee when badly damaged and the player is still a threat.
         // Takes priority over the ammo-based retreat below: survival first.
         sequence(vec![
@@ -2474,8 +2687,64 @@ fn special_rule(b: &Brain) -> Option<SpecialUse> {
     }
     match (b.me.active_weapon(), b.sense) {
         (ActiveWeapon::SonicHammer, SpecialSense::Hammer(sense)) => hammer_rule(b, sense),
+        (ActiveWeapon::Emp, SpecialSense::Emp(sense)) => emp_rule(b, sense),
         _ => None,
     }
+}
+
+/// The EMP burst's rule (docs/emp-burst.md "AI"), in priority order: a
+/// training dummy never pulses, and a seat in reach that would see it from
+/// outside its sight box holds the pulse whole; a pulse worth
+/// `emp_ai_fire_value` goes off - unless one of its own side's towers is in
+/// reach, or an ally is (then, with the commander on, it holds facing and
+/// has the ring cleared, `Clear`; without, the tree goes on); then a closer
+/// whose seat is worth `emp_ai_approach_value` on its own, not crowded by
+/// an ally, closes in to its spot of the seat's ring drawn in to well
+/// inside the ring's reach and waits there facing it. A fire arm that
+/// matched while the fire timer runs holds (`act_special`). Draws no RNG.
+fn emp_rule(b: &Brain, sense: &EmpSense) -> Option<SpecialUse> {
+    let t = tuning();
+    if b.ai.frog_only || sense.off_box {
+        return None;
+    }
+    let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+    if sense.value >= t.emp_ai_fire_value {
+        if sense.friendly_tower {
+            return None;
+        }
+        if sense.friends {
+            return t.c2_enabled.then_some(SpecialUse::Clear { face: facing, radius: t.emp_radius_px + t.emp_ai_friend_margin_px });
+        }
+        return Some(SpecialUse::Fire { face: facing, at_seat: sense.at_seat, why: "pulse" });
+    }
+    let free = b.me.damage < t.enemy_flee_damage && !b.guard_holds() && !b.hunting_frog();
+    if sense.closer
+        && free
+        && !sense.target_crowded
+        && sense.target_value >= t.emp_ai_approach_value
+        && b.player_alive()
+        && b.player_line_of_sight
+        && b.dist_to_player() <= b.attack_range()
+    {
+        let seat = b.player.position;
+        let spot = b.close_spot(seat, b.engage_target, t.emp_radius_px * 0.6);
+        if b.me.position.distance_to(spot) <= OBSTACLE_GRID_SIZE * 0.5 {
+            return Some(SpecialUse::Hold { face: Dir::toward(b.me.position, seat), why: "close" });
+        }
+        return Some(SpecialUse::Approach { to: spot });
+    }
+    None
+}
+
+/// Back out of the danger this tank stands inside (`Brain::danger_here`):
+/// steer for its way out (`Danger::exit`) a cell past the clear margin.
+fn act_dodge(b: &mut Brain) -> Status {
+    let Some(danger) = b.danger_here() else { return Status::Failure };
+    b.reset_aim();
+    let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+    let out = danger.exit(b.me.position, tuning().enemy_danger_clear_px + OBSTACLE_GRID_SIZE, facing);
+    b.intent.move_dir = Some(b.steer(out));
+    Status::Success
 }
 
 /// What a wind-up asks of its tank, by its weapon. Every wind-up so far is
@@ -2526,11 +2795,14 @@ fn hammer_rule(b: &Brain, sense: &HammerSense) -> Option<SpecialUse> {
     // distance, and waits there facing it. The others hold their slots of
     // the ring by the tree's attack tier, which never fires the hammer.
     let free = b.me.damage < t.enemy_flee_damage && !b.guard_holds();
+    // A seat carrying an armed EMP (a `Danger` round it) is not closed in
+    // on: the hammer's reach is inside the EMP's.
     if let Some(spot) = sense.spot
         && free
         && b.player_alive()
         && b.player_line_of_sight
         && b.dist_to_player() <= b.attack_range()
+        && !b.in_danger(b.player.position)
     {
         if b.me.position.distance_to(spot) <= OBSTACLE_GRID_SIZE * 0.5 {
             return Some(SpecialUse::Hold { face: Dir::toward(b.me.position, b.player.position), why: "close" });
@@ -2563,6 +2835,12 @@ fn act_special(b: &mut Brain) -> Status {
             b.ai.commit(face);
             b.ai.special_why = Some(why);
         }
+        SpecialUse::Clear { face, radius } => {
+            b.intent.face = Some(face);
+            b.ai.commit(face);
+            b.ai.special_why = Some("clear");
+            b.ai.clearing = Some(radius);
+        }
         SpecialUse::Approach { to } => {
             b.intent.move_dir = Some(b.steer(to));
             b.ai.special_why = Some("approach");
@@ -2576,6 +2854,7 @@ fn act_special(b: &mut Brain) -> Status {
 fn special_fire_interval(weapon: ActiveWeapon) -> f32 {
     match weapon {
         ActiveWeapon::SonicHammer => tuning().sonic_ai_fire_interval,
+        ActiveWeapon::Emp => tuning().emp_ai_fire_interval,
         _ => tuning().enemy_fire_interval,
     }
 }
@@ -2730,7 +3009,7 @@ fn act_chase(b: &mut Brain) -> Status {
 /// it wanders within it.
 fn act_patrol(b: &mut Brain) -> Status {
     if let Some(target) = b.alert {
-        b.intent.move_dir = Some(b.steer(b.engage_target.unwrap_or(target)));
+        b.intent.move_dir = Some(b.steer(b.out_of_danger(b.engage_target.unwrap_or(target))));
     } else if let Some(leash) = b.home_leash() {
         let me = b.me.position;
         if me.distance_to(leash.anchor) > leash.radius {
@@ -2827,6 +3106,7 @@ mod role_tests {
             [None; 4],
             tuning().enemy_view_range,
             &SpecialSense::None,
+            &[],
         )
     }
 
@@ -2880,6 +3160,7 @@ mod role_tests {
                 [None; 4],
                 tuning().enemy_view_range,
                 &SpecialSense::None,
+            &[],
             );
             ai.snapshot().last_action
         };
@@ -3173,6 +3454,7 @@ mod stuck_tests {
             [None; 4],
             tuning().enemy_view_range,
             &SpecialSense::None,
+            &[],
         )
     }
 
@@ -3400,7 +3682,7 @@ mod hammer_tests {
             Mover { position: me.position, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
         let mut rng = SmallRng::seed_from_u64(7);
-        ai.think(me, &player, seat, None, 1280.0, 720.0, 1.0 / 60.0, &movers, 1, &grid, &mut rng, None, None, &[], true, true, false, walls, tuning().enemy_view_range, &sense)
+        ai.think(me, &player, seat, None, 1280.0, 720.0, 1.0 / 60.0, &movers, 1, &grid, &mut rng, None, None, &[], true, true, false, walls, tuning().enemy_view_range, &sense, &[])
     }
 
     /// A fresh memory with its fire timer out.

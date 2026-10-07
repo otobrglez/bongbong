@@ -456,6 +456,16 @@ pub(super) fn dispatch_fire_from(
                 super::sonic::fire_sonic(physics, f, tank, owner);
             }
         }
+        ActiveWeapon::Emp => {
+            if tank.emp_charges > 0 {
+                f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::Emp.name() });
+                tank.emp_charges -= 1;
+                // The pulse's own reload is its offline (`fire_emp`); the
+                // shell's pace keeps the press from a shell on the next frame.
+                tank.fire_cooldown = tuning().player_fire_interval;
+                super::emp::fire_emp(f, tank, owner);
+            }
+        }
         ActiveWeapon::Plasma => {
             if tank.plasma_ammo >= ammo_cost {
                 f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::Plasma.name() });

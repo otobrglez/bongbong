@@ -74,6 +74,21 @@ pub(crate) struct UnitView {
     /// firing line, 1 the reserve. `None` for a tank steering at its target
     /// directly. Right of way prefers the tank that is doing the work.
     pub ring_rank: Option<u8>,
+    /// Why the commander must leave this tank alone this frame, if it must
+    /// (`Busy`): it is given no order and keeps right of way.
+    pub busy: Option<Busy>,
+    /// The ring this tank's EMP wants cleared of its own side before it
+    /// pulses (`ai::SpecialUse::Clear`), px: what `clear_rings` acts on.
+    pub clearing: Option<f32>,
+}
+
+/// Why the commander leaves a tank alone (`UnitView::busy`). A weapon whose
+/// state puts a tank beyond orders adds its reason here (the rail's charge
+/// holding a lane), and nothing else in the commander changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Busy {
+    /// Its brain and its radio are off (an EMP, `Tank::disabled`).
+    Disabled,
 }
 
 /// The world queries the commander needs, injected as closures so the module
@@ -104,6 +119,8 @@ pub(crate) struct Skipped {
     pub authorised: u32,
     /// This unit held right of way; the other one gave.
     pub had_right_of_way: u32,
+    /// Would have given way, but cannot be ordered (`UnitView::busy`).
+    pub deaf: u32,
 }
 
 /// What the commander decided, for tooling and the debug overlay.
@@ -172,6 +189,7 @@ impl Commander {
             "Commander::plan expects units sorted by owner slot"
         );
         self.board.begin_frame(ctx.dt);
+        self.clear_rings(units, ctx);
         self.deconflict(units, ctx);
         // Pickup deconfliction and coordination land here next.
         self.report.board = self.board.clone();
@@ -253,7 +271,13 @@ impl Commander {
                 self.report.skipped.had_right_of_way += 1;
                 continue;
             }
-            if ordered.contains(&yielder.slot) {
+            if yielder.busy.is_some() {
+                // Both are beyond orders (a busy unit keeps right of way
+                // against any other): nobody gives way.
+                self.report.skipped.deaf += 1;
+                continue;
+            }
+            if ordered.contains(&yielder.slot) || self.orders.contains_key(&yielder.slot) {
                 // One mitigation per tank per frame. Being told to ease off
                 // for one neighbour and stop for another in the same frame is
                 // how a commander produces the jitter it exists to prevent.
@@ -285,6 +309,39 @@ impl Commander {
         self.yielding.retain(|slot, _| ordered.contains(slot));
     }
 
+    /// Clear the rings the EMP tanks want clear before they pulse
+    /// (docs/emp-burst.md "With the commander"): for each unit with
+    /// `clearing`, in slot order, every other unit - not a wreck, not
+    /// beyond orders, not already ordered this frame - whose centre stands
+    /// within the ring plus its own radius is nudged out
+    /// (`Order::Nudge`): the cardinal away from the clearer along the larger
+    /// of the two offsets, then the smaller, then the other two in
+    /// `Dir::ALL` order, the first `ctx.blocked` does not wall; none open,
+    /// no order (`Skipped::no_free_lane`). Runs before `deconflict`, which
+    /// leaves a nudged unit alone.
+    fn clear_rings(&mut self, units: &[UnitView], ctx: &CommandCtx) {
+        for clearer in units.iter().filter(|u| u.clearing.is_some() && !u.wreck && u.busy.is_none()) {
+            let radius = clearer.clearing.unwrap_or(0.0);
+            for u in units {
+                if u.slot == clearer.slot || u.wreck || u.busy.is_some() || matches!(u.unit, Unit::Player(_)) || self.orders.contains_key(&u.slot) {
+                    continue;
+                }
+                let (dx, dy) = (u.position.x - clearer.position.x, u.position.y - clearer.position.y);
+                if (dx * dx + dy * dy).sqrt() > radius + u.radius {
+                    continue;
+                }
+                let along_x = if dx >= 0.0 { Dir::Right } else { Dir::Left };
+                let along_y = if dy >= 0.0 { Dir::Down } else { Dir::Up };
+                let (first, second) = if dx.abs() >= dy.abs() { (along_x, along_y) } else { (along_y, along_x) };
+                let order = [first, second].into_iter().chain(Dir::ALL.into_iter().filter(|&d| d != first && d != second));
+                match order.into_iter().find(|&d| !(ctx.blocked)(u.position, d)) {
+                    Some(dir) => self.orders.entry(u.slot).or_default().push(Order::Nudge { dir }),
+                    None => self.report.skipped.no_free_lane += 1,
+                }
+            }
+        }
+    }
+
     /// Whether `a` is the one that should give way. A **total** order, so of
     /// any pair exactly one yields - which is the whole point, and the thing
     /// `ai.rs`'s two `is_multiple_of(2)` parity tie-breaks cannot provide:
@@ -304,6 +361,10 @@ impl Commander {
     ///    slower one costs fewer tank-seconds.
     /// 5. Lower owner slot. Arbitrary, and the reason this is total.
     fn gives_way(&self, a: &UnitView, b: &UnitView) -> bool {
+        // 0. A unit beyond orders (`UnitView::busy`) never gives way.
+        if a.busy.is_some() != b.busy.is_some() {
+            return b.busy.is_some();
+        }
         if self.yielding.get(&a.slot).is_some_and(|&(to, _)| to == b.slot) {
             return true;
         }
@@ -429,6 +490,8 @@ mod tests {
             intent: intent(Some(Dir::Right)),
             wreck: false,
             ring_rank: None,
+            busy: None,
+            clearing: None,
         }
     }
 

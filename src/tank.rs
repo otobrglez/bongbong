@@ -21,6 +21,7 @@ use crate::{
     TANK_MODULE_FLAME_COL,
     TANK_MODULE_GRENADE_COL,
     TANK_MODULE_SONIC_COL,
+    TANK_MODULE_EMP_COL,
     TANK_MODULE_LASER_COL,
     TANK_MODULE_MINIGUN_COL,
     TANK_MODULE_MISSILES_COL,
@@ -261,6 +262,7 @@ pub enum ActiveWeapon {
     Flamethrower,
     Grenades,
     SonicHammer,
+    Emp,
     Shell,
 }
 
@@ -275,6 +277,7 @@ impl ActiveWeapon {
             ActiveWeapon::Flamethrower => "flamethrower",
             ActiveWeapon::Grenades => "grenades",
             ActiveWeapon::SonicHammer => "sonic_hammer",
+            ActiveWeapon::Emp => "emp_burst",
             ActiveWeapon::Shell => "shell",
         }
     }
@@ -286,6 +289,7 @@ impl ActiveWeapon {
     pub fn tell_seconds(self) -> Option<f32> {
         match self {
             ActiveWeapon::SonicHammer => Some(tuning().sonic_tell_seconds).filter(|&s| s > 0.0),
+            ActiveWeapon::Emp => Some(tuning().emp_tell_seconds).filter(|&s| s > 0.0),
             ActiveWeapon::Laser
             | ActiveWeapon::Plasma
             | ActiveWeapon::Minigun
@@ -312,6 +316,7 @@ impl ActiveWeapon {
             ActiveWeapon::Flamethrower => t.flame_fuel_per_pickup.ceil() as i32,
             ActiveWeapon::Grenades => t.grenade_ammo_per_pickup,
             ActiveWeapon::SonicHammer => t.sonic_ammo_per_pickup,
+            ActiveWeapon::Emp => t.emp_charges_per_pickup,
             ActiveWeapon::Shell => t.max_shells,
         }
     }
@@ -320,7 +325,7 @@ impl ActiveWeapon {
 /// The special weapons, each the cargo of its own crate. A tank carries at
 /// most one of them at a time (`Tank::take_weapon`); with none, or once it
 /// runs dry, the trigger fires shells.
-pub const SPECIAL_WEAPONS: [ActiveWeapon; 7] = [
+pub const SPECIAL_WEAPONS: [ActiveWeapon; 8] = [
     ActiveWeapon::Laser,
     ActiveWeapon::Plasma,
     ActiveWeapon::Minigun,
@@ -328,6 +333,7 @@ pub const SPECIAL_WEAPONS: [ActiveWeapon; 7] = [
     ActiveWeapon::Flamethrower,
     ActiveWeapon::Grenades,
     ActiveWeapon::SonicHammer,
+    ActiveWeapon::Emp,
 ];
 
 /// The wind-up an enemy shows before a special with one goes off
@@ -554,6 +560,26 @@ pub struct Tank {
     /// Seconds the sonic hammer's dish shows its firing cell (`kick_sonic`).
     /// Presentation only.
     pub sonic_flash: f32,
+    /// Pulses left in the EMP burst (`pickup::PickupKind::Emp`, `emp.rs`).
+    /// Pickup-only, one per press.
+    pub emp_charges: i32,
+    /// Seconds this hull's electrics stay out (docs/emp-burst.md "The
+    /// disabled state"): its special offline (`active_weapon` is the shell
+    /// cannon), its lights out, its hull sparking, and an enemy's brain off
+    /// (`enemy_phase` coasts it). Set by `disable`, never shortened; counted
+    /// down in `Game::tick_timers`.
+    pub disabled: f32,
+    /// Seconds its special stays offline on its own - the EMP's cost to the
+    /// tank that fired it - while its lights and its drive stay on. Counted
+    /// down beside `disabled`.
+    pub special_offline: f32,
+    /// Seconds the EMP module shows its pulse cell (`kick_emp`).
+    /// Presentation only.
+    pub emp_flash: f32,
+    /// How far (degrees) a disabled enemy's turret is drawn sagged off its
+    /// aim, eased toward `emp_droop_deg` while it is out and back to 0 once
+    /// it reboots (`ease_droop`). Presentation only.
+    pub droop: f32,
     /// True while the trigger has been held on the flamethrower since the
     /// last frame it was not: `Event::Fired` is recorded once per hold.
     pub flame_held: bool,
@@ -758,6 +784,11 @@ impl Default for Tank {
             skid: 0.0,
             skid_speed: 0.0,
             sonic_flash: 0.0,
+            emp_charges: 0,
+            disabled: 0.0,
+            special_offline: 0.0,
+            emp_flash: 0.0,
+            droop: 0.0,
             speed_boost_timer: 0.0,
             heat_shield_timer: 0.0,
             throttle: 1.0,
@@ -876,6 +907,9 @@ impl Tank {
             // Its own rule fires it (`ai::special_rule`), so an enemy takes
             // one the way it takes any weapon: only while on shells.
             PickupKind::SonicHammer => self.special().is_none(),
+            // The same rule: a tank whose special is offline still carries
+            // it, and does not trade it for a crate.
+            PickupKind::Emp => self.special().is_none(),
         }
     }
 
@@ -1128,11 +1162,18 @@ impl Tank {
         self.sonic_flash = tuning().sonic_flash_seconds;
     }
 
+    /// The EMP fired: its module shows its pulse cell for
+    /// `emp_flash_seconds`.
+    pub fn kick_emp(&mut self) {
+        self.emp_flash = tuning().emp_flash_seconds;
+    }
+
     /// Step the recoil cells `kick` set, and the laser's and the dish's
     /// flashes.
     pub fn tick_recoil(&mut self, dt: f32) {
         self.laser_flash_timer = (self.laser_flash_timer - dt).max(0.0);
         self.sonic_flash = (self.sonic_flash - dt).max(0.0);
+        self.emp_flash = (self.emp_flash - dt).max(0.0);
         if let Some(left) = self.recoil_second_in {
             let left = left - dt;
             if left <= 0.0 {
@@ -1170,7 +1211,70 @@ impl Tank {
     /// twin-barrel chassis needing 2 shells/bolts per shot can be
     /// `ActiveWeapon::Shell`/`Plasma` while short of the 2 it needs).
     pub fn active_weapon(&self) -> ActiveWeapon {
-        self.special().unwrap_or(ActiveWeapon::Shell)
+        match self.special() {
+            Some(special) if !self.special_down() => special,
+            _ => ActiveWeapon::Shell,
+        }
+    }
+
+    /// Whether this tank's special does not fire now: its electrics are out
+    /// (`disabled`) or the special is offline on its own
+    /// (`special_offline`). The trigger fires shells meanwhile and the
+    /// stock is kept.
+    pub fn special_down(&self) -> bool {
+        self.disabled > 0.0 || self.special_offline > 0.0
+    }
+
+    /// Whether this tank's electrics are out (`disabled`).
+    pub fn is_disabled(&self) -> bool {
+        self.disabled > 0.0
+    }
+
+    /// Put this tank's electrics out for at least `seconds` - an EMP's
+    /// pulse (docs/emp-burst.md): never shortened. On the way out its live
+    /// rainbow shield pops (`shield_broke`, so `drain_shield_breaks` logs
+    /// it), a wind-up of any weapon lapses, and what its special had in
+    /// hand stops: a minigun burst and a missile volley short, keeping the
+    /// rounds they had not fired, a twin plasma gun's paid second bolt,
+    /// a held flame. A twin gun's second shell still leaves - shells are
+    /// not electric. True when it was not disabled before.
+    pub fn disable(&mut self, seconds: f32) -> bool {
+        let fresh = self.disabled <= 0.0;
+        self.disabled = self.disabled.max(seconds);
+        if self.is_shielded() {
+            self.shield_hp = 0.0;
+            self.shield_timer = 0.0;
+            self.shield_recharge_delay = 0.0;
+            self.shield_broke = true;
+        }
+        self.tell = None;
+        self.minigun_burst = None;
+        self.missile_volley = None;
+        self.pending_plasma_shot = None;
+        self.flame_held = false;
+        fresh
+    }
+
+    /// Run the disabled state and the special's own offline down by `dt`.
+    pub fn tick_disabled(&mut self, dt: f32) {
+        self.disabled = (self.disabled - dt).max(0.0);
+        self.special_offline = (self.special_offline - dt).max(0.0);
+    }
+
+    /// Ease the drawn sag of the turret (`droop`): toward `emp_droop_deg`
+    /// to its hashed side while a disabled enemy's brain is off, back to 0
+    /// in half the time once it is not. A seat's turret never sags - its
+    /// gun still fires. Presentation only.
+    pub fn ease_droop(&mut self, dt: f32) {
+        let t = tuning();
+        let target = if self.is_disabled() && !self.is_wreck() && !self.is_player() {
+            t.emp_droop_deg * crate::emp::droop_side(self.owner_slot())
+        } else {
+            0.0
+        };
+        let rate = t.emp_droop_deg.abs() / t.emp_droop_seconds.max(1e-3) * if target == 0.0 { 2.0 } else { 1.0 };
+        let step = rate * dt;
+        self.droop += (target - self.droop).clamp(-step, step);
     }
 
     /// The wind-up this tank is in, if any (`Windup`): its tell.
@@ -1200,6 +1304,7 @@ impl Tank {
             ActiveWeapon::Flamethrower => self.flame_fuel.ceil().max(0.0) as i32,
             ActiveWeapon::Grenades => self.grenade_ammo,
             ActiveWeapon::SonicHammer => self.sonic_ammo,
+            ActiveWeapon::Emp => self.emp_charges,
             ActiveWeapon::Shell => self.shells_ammo,
         }
     }
@@ -1231,6 +1336,7 @@ impl Tank {
             ActiveWeapon::Flamethrower => self.flame_fuel = self.flame_fuel.max(t.flame_fuel_per_pickup),
             ActiveWeapon::Grenades => self.grenade_ammo = self.grenade_ammo.max(t.grenade_ammo_per_pickup),
             ActiveWeapon::SonicHammer => self.sonic_ammo = self.sonic_ammo.max(t.sonic_ammo_per_pickup),
+            ActiveWeapon::Emp => self.emp_charges = self.emp_charges.max(t.emp_charges_per_pickup),
             ActiveWeapon::Shell => {}
         }
     }
@@ -1254,6 +1360,7 @@ impl Tank {
             }
             ActiveWeapon::Grenades => self.grenade_ammo = 0,
             ActiveWeapon::SonicHammer => self.sonic_ammo = 0,
+            ActiveWeapon::Emp => self.emp_charges = 0,
             ActiveWeapon::Shell => {}
         }
     }
@@ -1567,6 +1674,7 @@ impl Tank {
         let max_step = tuning().tank_turret_visual_turn_speed_deg * dt;
         self.turret_visual_rotation =
             (self.turret_visual_rotation + diff.clamp(-max_step, max_step)) % 360.0;
+        self.ease_droop(dt);
     }
 }
 
@@ -1650,7 +1758,7 @@ fn turret_placement(tank: &Tank) -> (Position, f32) {
         let off = Vec2::new(dx * r.cos() - dy * r.sin(), dx * r.sin() + dy * r.cos());
         (tank.position + off, tank.visual_rotation + 150.0)
     } else {
-        (tank.position, tank.turret_visual_rotation)
+        (tank.position, tank.turret_visual_rotation + tank.droop)
     }
 }
 
@@ -1679,7 +1787,7 @@ fn turret_layers(tank: &Tank, time: f32, glow: bool) -> Vec<Layer> {
     let (at, rot) = turret_placement(tank);
     let mut out = vec![(tanks, source_rec(tank.sheet_row(), tank.turret_col()), at, rot)];
     for col in module_cols(tank, time).into_iter().flatten() {
-        out.push((modules, module_rec(tank.row, col), tank.position, tank.turret_visual_rotation));
+        out.push((modules, module_rec(tank.row, col), tank.position, tank.turret_visual_rotation + tank.droop));
     }
     out
 }
@@ -1708,11 +1816,13 @@ fn blit_layers(c: &mut impl Canvas, tank: &Tank, layers: &[Layer], tint: Color) 
 /// / firing, the flamethrower's pilot flickering or its jet while held. A
 /// module is hardware, not a firing-mode indicator: it shows whenever the
 /// weapon is carried, and a wreck carries none.
-fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 7] {
+fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 8] {
     if tank.is_wreck() {
-        return [None; 7];
+        return [None; 8];
     }
-    let live = tank.special().unwrap_or(ActiveWeapon::Shell);
+    // A module's armed cell needs its weapon live: one whose special is
+    // offline (an EMP) shows its idle cell, its lights out.
+    let live = tank.active_weapon();
     let minigun = (tank.minigun_ammo > 0 || tank.minigun_burst.is_some()).then(|| {
         TANK_MODULE_MINIGUN_COL + if tank.minigun_burst.is_some() { 1 + tank.minigun_cycle_frame() } else { 0 }
     });
@@ -1754,7 +1864,8 @@ fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 7] {
         TANK_MODULE_GRENADE_COL + (4 - loaded).clamp(0, 4)
     });
     let sonic = (tank.sonic_ammo > 0 || tank.sonic_flash > 0.0).then(|| TANK_MODULE_SONIC_COL + crate::sonic::module_cell(tank, time));
-    [minigun, missiles, plasma, laser, flame, grenades, sonic]
+    let emp = (tank.emp_charges > 0 || tank.emp_flash > 0.0).then(|| TANK_MODULE_EMP_COL + crate::emp::module_cell(tank, time));
+    [minigun, missiles, plasma, laser, flame, grenades, sonic, emp]
 }
 
 /// Draw a tank: hull, turret and the weapon modules it carries, each at its
@@ -1784,9 +1895,10 @@ pub fn draw_tank_turret(c: &mut impl Canvas, tank: &Tank, time: f32, tint: Color
 /// level. Drawn additively over the field the sky has multiplied down, so
 /// every lamp shines at night; the paint already carries the same pixels
 /// at their daylight colours, which is why a clear day draws none of this.
-/// A burning wreck's embers breathe.
+/// A burning wreck's embers breathe. A disabled tank's lights are out
+/// (docs/emp-burst.md): none of it is drawn.
 pub fn draw_tank_glow(c: &mut impl Canvas, tank: &Tank, time: f32, strength: f32) {
-    if strength <= 0.0 {
+    if strength <= 0.0 || (tank.is_disabled() && !tank.is_wreck()) {
         return;
     }
     let mut k = strength.clamp(0.0, 1.0) * tank.alpha();
@@ -1796,6 +1908,19 @@ pub fn draw_tank_glow(c: &mut impl Canvas, tank: &Tank, time: f32, strength: f32
     }
     let tint = Color::new(255, 255, 255, (255.0 * k).round().clamp(0.0, 255.0) as u8);
     blit_layers(c, tank, &layers(tank, time, true), tint);
+}
+
+/// A disabled tank's lights out (docs/emp-burst.md "Drawing"): the light
+/// layer's cells drawn again over the paint in black at `emp_dark_alpha` -
+/// the shadows' convention - so the lamps, the accent strips and the
+/// sensor eye, which the paint carries at their daylight colours, read
+/// dark by day and do not glow through the night's ambient.
+pub fn draw_tank_dark(c: &mut impl Canvas, tank: &Tank, time: f32) {
+    if !tank.is_disabled() || tank.is_wreck() {
+        return;
+    }
+    let a = (255.0 * tuning().emp_dark_alpha.clamp(0.0, 1.0) * tank.alpha()).round() as u8;
+    blit_layers(c, tank, &layers(tank, time, true), Color::new(0, 0, 0, a));
 }
 
 /// A tank coated in ooze from a bio slush tower

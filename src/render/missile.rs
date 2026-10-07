@@ -41,10 +41,10 @@ pub fn draw_missile(d: &mut impl RaylibDraw, texture: &Texture2D, missile: &Miss
 /// The rocket motor's light (additive, drawn before the sprite): a
 /// flickering white-to-orange flame jetting out of the tail and a glow
 /// around it, sized with the missile as it climbs. Phased per missile so a
-/// salvo does not flicker in step.
+/// salvo does not flicker in step. A dead missile (an EMP) has no motor.
 pub fn draw_missile_exhaust(d: &mut impl RaylibDraw, missile: &Missile, time: f32) {
     let strength = tuning().shot_glow_strength;
-    if strength <= 0.0 {
+    if strength <= 0.0 || missile.is_dead() {
         return;
     }
     let tail = missile.tail();

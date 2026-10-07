@@ -74,6 +74,12 @@ pub struct DebugSnapshot {
     pub portals: Vec<PortalDebug>,
     pub portals_active: bool,
     pub obstacles_alive: usize,
+    /// The towers, cell order: kind, side and the seconds each stays offline
+    /// (`Tower::disabled`, an EMP).
+    pub towers: Vec<TowerDebug>,
+    /// Seconds every lamp post stays dark (`Game::lamps_out`, an EMP at
+    /// night).
+    pub lamps_out: f32,
     /// What the last enemy phase's engagement-slot assignment decided.
     /// Per-tank entries cover both rings (player and hunted frog); the slot
     /// table is the player ring's.
@@ -87,6 +93,19 @@ pub struct DebugSnapshot {
     /// is meaningful then.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) command: Option<CommandReport>,
+}
+
+/// A standing tower in `DebugSnapshot::towers`.
+#[derive(Serialize, Debug)]
+pub struct TowerDebug {
+    /// `TowerKind::name`.
+    pub kind: &'static str,
+    /// It fights for the enemies.
+    pub enemy: bool,
+    pub x: f32,
+    pub y: f32,
+    /// Seconds it stays offline (`Tower::disabled`).
+    pub disabled: f32,
 }
 
 #[derive(Serialize, Debug)]
@@ -146,6 +165,12 @@ pub struct TankDebug {
     pub missiles: i32,
     pub grenades: i32,
     pub sonic: i32,
+    /// EMP pulses left (`Tank::emp_charges`).
+    pub emp: i32,
+    /// Seconds its electrics stay out (`Tank::disabled`, an EMP).
+    pub disabled: f32,
+    /// Seconds its special stays offline on its own (`Tank::special_offline`).
+    pub offline: f32,
     /// An enemy's wind-up: the weapon and the seconds left (`Tank::tell`).
     pub tell: Option<(&'static str, f32)>,
     /// Seconds left knocked off its tracks (`Tank::skid`).
@@ -336,6 +361,12 @@ pub struct TankPatch {
     pub missile_ammo: Option<i32>,
     pub grenade_ammo: Option<i32>,
     pub sonic_ammo: Option<i32>,
+    pub emp_charges: Option<i32>,
+    /// Seconds its electrics are out (`Tank::disable`: an EMP's strike, the
+    /// shield popped and the tell dropped with it); 0 brings them back.
+    pub disabled: Option<f32>,
+    /// Seconds its special stays offline on its own (`Tank::special_offline`).
+    pub special_offline: Option<f32>,
     pub plasma_ammo: Option<i32>,
     pub laser_charges: Option<i32>,
     /// Flamethrower fuel, in seconds.
@@ -549,6 +580,9 @@ impl Game {
                     missiles: tank.missile_ammo,
                     grenades: tank.grenade_ammo,
                     sonic: tank.sonic_ammo,
+                    emp: tank.emp_charges,
+                    disabled: r1(tank.disabled),
+                    offline: r1(tank.special_offline),
                     tell: tank.tell.map(|t| (t.weapon.name(), r1(t.left))),
                     skid: r1(tank.skid),
                     plasma: tank.plasma_ammo,
@@ -619,6 +653,19 @@ impl Game {
                 vx: r1(m.dir.x * m.speed),
                 vy: r1(m.dir.y * m.speed),
                 state: m.stage.name(),
+            });
+        }
+        // An EMP pulse: where it was fired from, its front's radius as its
+        // state's number.
+        for p in &self.emp_pulses {
+            projectiles.push(ProjectileDebug {
+                kind: "emp_pulse",
+                owner: p.owner.slot(),
+                x: r1(p.origin.x),
+                y: r1(p.origin.y),
+                vx: 0.0,
+                vy: 0.0,
+                state: if p.spent(&crate::tuning::tuning()) { "out" } else { "running" },
             });
         }
         // A sonic wave: where it was fired from, its facing as its state and
@@ -738,6 +785,12 @@ impl Game {
                 .collect(),
             portals_active: self.portals_active(),
             obstacles_alive: self.world.query::<&Obstacle>().iter().filter(|o| !o.destroyed).count(),
+            towers: self
+                .tower_views()
+                .into_iter()
+                .map(|v| TowerDebug { kind: v.kind.name(), enemy: v.side == crate::frog::Side::Enemy, x: r1(v.position.x), y: r1(v.position.y), disabled: r1(v.disabled) })
+                .collect(),
+            lamps_out: r1(self.lamps_out),
             engage,
             clusters: clusters(&live_enemies, CLUSTER_RADIUS_PX),
             command: full.then(|| self.commander.report().clone()),
@@ -862,6 +915,22 @@ impl Game {
                 tank.disarm();
             }
             tank.sonic_ammo = n.max(0);
+        }
+        if let Some(n) = patch.emp_charges {
+            if n > 0 {
+                tank.disarm();
+            }
+            tank.emp_charges = n.max(0);
+        }
+        if let Some(seconds) = patch.disabled {
+            if seconds > 0.0 {
+                tank.disable(seconds);
+            } else {
+                tank.disabled = 0.0;
+            }
+        }
+        if let Some(seconds) = patch.special_offline {
+            tank.special_offline = seconds.max(0.0);
         }
         if let Some(n) = patch.plasma_ammo {
             if n > 0 {

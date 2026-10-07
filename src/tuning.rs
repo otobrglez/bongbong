@@ -325,6 +325,11 @@ tunables! {
         /// spawn point and the owner slot, never the round's RNG, so at 0
         /// every round's kit and stream are what they were.
         enemy_special_weapon_sonic_share: f32 = 0.0 in 0.0 ..= 1.0 @ Restart;
+        /// Of an enemy that rolled a special weapon above, the share that
+        /// spawns with the EMP burst instead (docs/emp-burst.md), after the
+        /// sonic hammer's: a hash of the spawn point and the owner slot,
+        /// never the round's RNG, so at 0 nothing changes.
+        enemy_special_weapon_emp_share: f32 = 0.0 in 0.0 ..= 1.0 @ Restart;
         /// Which chassis the player spawns in, as a row index into
         /// `scifi_tanks_sheet.png`: 0 scout, 1 assault, 2 breaker,
         /// 3 longbow, 4 flak, 5 wraith, 6 warden, 7 ravager, 8 glacier,
@@ -965,6 +970,81 @@ tunables! {
         sonic_ai_fire_interval: f32 = 2.5 in 0.1 ..= 10.0;
     }
 
+    group emp {
+        /// Pulses one EMP crate loads (`pickup::PickupKind::Emp`,
+        /// docs/emp-burst.md). One per press.
+        emp_charges_per_pickup: i32 = 3 in 1 ..= 20;
+        /// How far the ring reaches from the hull's centre (px; five
+        /// cells), measured to the nearest point of what it strikes: a
+        /// hull's box, a tower's cell, a missile's ground point.
+        emp_radius_px: f32 = 160.0 in 32.0 ..= 480.0;
+        /// How fast the ring runs out (px/s): what it reaches it strikes
+        /// when the front gets there.
+        emp_ring_speed: f32 = 800.0 in 60.0 ..= 5000.0;
+        /// How long a tank the ring reaches stays disabled - an enemy's
+        /// brain off, its special offline, its lights out - and how long
+        /// the shooter's own special stays offline.
+        emp_disable_seconds: f32 = 3.0 in 0.0 ..= 20.0;
+        /// How long a tower the ring reaches stays offline.
+        emp_tower_seconds: f32 = 6.0 in 0.0 ..= 30.0;
+        /// At night, how long every lamp post on the map stays dark after a
+        /// pulse.
+        emp_lamp_seconds: f32 = 10.0 in 0.0 ..= 60.0;
+        /// An enemy's crackle before its pulse; 0 pulses on the decision.
+        emp_tell_seconds: f32 = 0.5 in 0.0 ..= 3.0;
+        /// How long the ring's picture lingers once its front is out.
+        emp_ring_seconds: f32 = 0.4 in 0.05 ..= 3.0;
+        /// The module's pulse cell.
+        emp_flash_seconds: f32 = 0.25 in 0.0 ..= 2.0;
+        /// The screen ripple and shake of a pulse, against a tank dying's.
+        emp_shock: f32 = 0.25 in 0.0 ..= 2.0;
+        /// How far a disabled enemy's turret, and an offline tower's top,
+        /// sags off its aim (degrees; drawn only).
+        emp_droop_deg: f32 = 8.0 in 0.0 ..= 45.0;
+        /// How long the sag takes; it comes back in half that.
+        emp_droop_seconds: f32 = 0.4 in 0.05 ..= 3.0;
+        /// How dark a disabled tank's lamps and strips are drawn over its
+        /// paint.
+        emp_dark_alpha: f32 = 0.75 in 0.0 ..= 1.0;
+        /// The light a disabled hull's sparks throw at night, against a
+        /// headlight's.
+        emp_spark_light: f32 = 0.6 in 0.0 ..= 2.0;
+        /// How fast a dead missile falls (px/s^2).
+        emp_missile_gravity: f32 = 600.0 in 50.0 ..= 5000.0;
+        /// How fast a dead missile loses its ground speed (per second).
+        emp_missile_drag: f32 = 2.5 in 0.0 ..= 20.0;
+        /// How often `WPN OFFLINE` flickers on the weapon readout (Hz).
+        emp_hud_flicker_hz: f32 = 3.5 in 0.5 ..= 20.0;
+        /// What a pulse has to be worth before an enemy fires it (the
+        /// values below): at 1, any seat or player tower in reach.
+        emp_ai_fire_value: i32 = 1 in 1 ..= 20;
+        /// What the seat an enemy fights has to be worth on its own before
+        /// it closes in to pulse it: at 2, a seat with a live shield or an
+        /// online special, or any seat at night.
+        emp_ai_approach_value: i32 = 2 in 1 ..= 20;
+        /// How many EMP tanks close in on one seat worth it (the nearest
+        /// to it, ties on slot); the rest hold their slots of its ring and
+        /// pulse it only when it comes into their reach.
+        emp_ai_closers: i32 = 1 in 0 ..= 8;
+        /// A seat in reach, not already disabled.
+        emp_ai_seat_value: i32 = 1 in 0 ..= 10;
+        /// More for a seat with a live shield.
+        emp_ai_shield_value: i32 = 1 in 0 ..= 10;
+        /// More for a seat carrying an online special.
+        emp_ai_special_value: i32 = 1 in 0 ..= 10;
+        /// More for each seat at night, when its headlights matter.
+        emp_ai_night_value: i32 = 1 in 0 ..= 10;
+        /// A standing, online player tower in reach.
+        emp_ai_tower_value: i32 = 1 in 0 ..= 10;
+        /// How far past the ring an ally still holds an enemy's pulse (px).
+        emp_ai_friend_margin_px: f32 = 16.0 in 0.0 ..= 128.0;
+        /// How far past the ring an enemy keeps from a seat carrying an
+        /// armed EMP, or from an ally's crackle (px).
+        emp_ai_berth_px: f32 = 48.0 in 0.0 ..= 256.0;
+        /// Seconds between an enemy's decisions to pulse.
+        emp_ai_fire_interval: f32 = 3.5 in 0.1 ..= 20.0;
+    }
+
     group flamethrower {
         /// Seconds of burn one flamethrower pickup grants; a second pickup
         /// stacks. The weapon is stocked while any fuel is left, and the
@@ -1304,6 +1384,11 @@ tunables! {
         /// - hysteresis, so two players at equal range do not flip the pack
         /// between them every frame.
         enemy_target_switch_margin_px: f32 = 96.0 in 0.0 ..= 400.0;
+        /// How far outside a danger (`ai::Danger` - a seat's armed EMP, an
+        /// ally's crackle) an enemy backs before it turns back to the
+        /// fight: the latch that keeps a danger's edge from being a place
+        /// to jitter.
+        enemy_danger_clear_px: f32 = 24.0 in 0.0 ..= 128.0;
         /// Extra route cost on every cell a player's barrel points down
         /// (out to `route_lane_cells`, stopping at the first blocked cell),
         /// so the shared flow field brings enemies in from the flank

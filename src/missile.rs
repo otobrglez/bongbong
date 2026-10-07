@@ -41,6 +41,11 @@ pub enum MissileStage {
     /// Committed: flying straight down onto `Missile::aim`, no longer
     /// following anything.
     Dive,
+    /// Dead (an EMP, docs/emp-burst.md): no lock, no tracking, no exhaust.
+    /// It keeps its ground heading losing speed (`emp_missile_drag`) and
+    /// falls from the height it had (`emp_missile_gravity`); where it
+    /// reaches the ground it is a dud (`Missile::dud`).
+    Dead,
 }
 
 impl MissileStage {
@@ -51,6 +56,7 @@ impl MissileStage {
             MissileStage::Seek => "seek",
             MissileStage::Chase => "chase",
             MissileStage::Dive => "dive",
+            MissileStage::Dead => "dead",
         }
     }
 }
@@ -105,6 +111,10 @@ pub struct Missile {
     /// place in the fan and across the landing, and a salt for the
     /// cosmetic flame flicker so a volley does not flicker in step.
     pub tube: u8,
+    /// A dead missile's speed down (px/s), from rest at `kill`.
+    pub fall: f32,
+    /// It came down dead: `resolve_missiles` lands it with no blast.
+    pub dud: bool,
 }
 
 impl Missile {
@@ -136,7 +146,23 @@ impl Missile {
             aim_offset: Vec2::new(0.0, 0.0),
             arrived: false,
             tube,
+            fall: 0.0,
+            dud: false,
         }
+    }
+
+    /// Kill it where it is (an EMP): `MissileStage::Dead`, its target and
+    /// its lock gone, falling from rest.
+    pub fn kill(&mut self) {
+        self.enter(MissileStage::Dead);
+        self.target = None;
+        self.locked = true;
+        self.fall = 0.0;
+    }
+
+    /// Whether it is dead (`MissileStage::Dead`).
+    pub fn is_dead(&self) -> bool {
+        self.stage == MissileStage::Dead
     }
 
     /// The seek stage has had its hang time and wants a target: what
@@ -243,6 +269,17 @@ impl Missile {
             MissileStage::Dive => {
                 self.speed = (self.speed + t.missile_accel * dt).min(t.missile_speed);
                 self.fly_down(dt);
+            }
+            MissileStage::Dead => {
+                self.speed *= (-t.emp_missile_drag * dt).exp();
+                self.fall += t.emp_missile_gravity * dt;
+                self.step(dt);
+                self.height -= self.fall * dt;
+                if self.height <= 0.0 {
+                    self.height = 0.0;
+                    self.arrived = true;
+                    self.dud = true;
+                }
             }
         }
     }
@@ -359,6 +396,27 @@ impl Missile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_dead_missile_falls_and_arrives_a_dud() {
+        let mut m = Missile::spawn(Position::new(100.0, 100.0), Vec2::new(1.0, 0.0), Owner::Player(0), 0, Position::new(500.0, 100.0));
+        for _ in 0..30 {
+            m.advance(crate::PHYSICS_FIXED_DT);
+        }
+        let (at, height) = (m.position, m.height);
+        assert!(height > 0.0, "up in its climb");
+        m.kill();
+        assert!(m.is_dead() && !m.wants_lock() && !m.tracking());
+        let mut steps = 0;
+        while !m.arrived {
+            m.advance(crate::PHYSICS_FIXED_DT);
+            steps += 1;
+            assert!(steps < 600, "it comes down");
+        }
+        assert!(m.dud && m.height == 0.0);
+        assert!(m.position.x > at.x, "it kept its heading a while");
+        assert!(m.position.distance_to(at) < 120.0, "and lost its speed");
+    }
 
     fn fly_until_arrived(m: &mut Missile, max_steps: usize) -> usize {
         for i in 0..max_steps {
