@@ -239,7 +239,7 @@ impl Game {
                     let stop_t = stopped.map_or(1.0, |at| (at - from).length() / span);
                     for (key, tt) in super::hits::Terrain::air_along(&air, from, stop, half, stop_t) {
                         let at = from + (stop - from) * tt;
-                        self.strike_air(f, key, crate::air::AirStrike::Rail, at);
+                        self.strike_air(f, key, crate::air::AirStrike::Rail);
                         pierced.push(Pierce { at, what: Pierced::Drone });
                     }
                     pierced.sort_by(|a, b| (a.at - from).length().total_cmp(&(b.at - from).length()));

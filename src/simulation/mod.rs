@@ -510,8 +510,8 @@ pub enum Event {
     /// The drone `id`, launched by `slot`, burst at (`x`, `y`) - `crown` in
     /// a tree's leaves.
     DroneBurst { id: u32, slot: usize, x: f32, y: f32, crown: bool },
-    /// The drone `id` was struck in the air at (`x`, `y`), `height` px up,
-    /// by `by` (`air::AirStrike::name`), and falls.
+    /// The drone `id` was struck in the air over (`x`, `y`), `height` px
+    /// up, by `by` (`air::AirStrike::name`), and falls.
     DroneDowned { id: u32, x: f32, y: f32, height: f32, by: &'static str },
     /// A downed drone `id` reached the ground at (`x`, `y`): a dud.
     DroneCrashed { id: u32, x: f32, y: f32 },
@@ -4424,7 +4424,7 @@ impl Game {
                     p.set_position(at);
                     p.detonate();
                 }
-                if self.strike_air(f, key, crate::air::AirStrike::Bullet, at) {
+                if self.strike_air(f, key, crate::air::AirStrike::Bullet) {
                     air.retain(|a| a.key != key);
                 }
                 continue;

@@ -477,7 +477,7 @@ impl Game {
                 continue;
             }
             if wave.cone.reaches(target.ground).is_some_and(|d| d <= to && d >= from - FRONT_SLACK_PX) {
-                self.strike_air(f, target.key, crate::air::AirStrike::Sonic, target.drawn());
+                self.strike_air(f, target.key, crate::air::AirStrike::Sonic);
             }
         }
     }

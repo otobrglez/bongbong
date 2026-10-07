@@ -97,43 +97,51 @@ fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, sh
     }
 }
 
+/// Seconds an EMP takes to drop a halo to the ground (`halo_of`).
+const HALO_SETTLE_SECONDS: f32 = 0.25;
+
 /// How `tank`'s FPV halo is drawn at `time` (docs/fpv-swarm.md "Drawing"):
 /// the drones it holds, less the ones a client is drawing off it on its
 /// own press (`Tank::fpv_lifting`); settled on the ground while an EMP has
 /// it, tumbling down and dark on a wreck. `None` with none to draw.
 pub fn halo_of(tank: &Tank, time: f32) -> Option<crate::fpv::HaloLook> {
+    let t = crate::tuning::tuning();
     let drones = (tank.fpv_drones - tank.fpv_lifting as i32).max(0) as usize;
-    if drones == 0 {
+    // A wreck's halo lies beside it until its fire is out.
+    if drones == 0 || (tank.is_wreck() && tank.wreck_timer >= t.wreck_burn_seconds) {
         return None;
     }
+    // An EMP drops the halo over `HALO_SETTLE_SECONDS` from its start.
+    let settle = if tank.is_disabled() { ((t.emp_disable_seconds - tank.disabled) / HALO_SETTLE_SECONDS).clamp(0.0, 1.0) } else { 0.0 };
     Some(crate::fpv::HaloLook {
         centre: tank.position,
         sprite_size: tank.sprite_size(),
         drones,
-        slots: crate::tuning::tuning().fpv_drones_per_pickup.max(1) as usize,
+        slots: t.fpv_drones_per_pickup.max(1) as usize,
         time,
         lamp: crate::fpv::lamp_color(tank.owner()),
-        settle: if tank.is_disabled() { 1.0 } else { 0.0 },
+        settle,
         wreck_age: tank.is_wreck().then_some(tank.wreck_timer),
         seed: tank.owner_slot() as u32,
     })
 }
 
-/// The FPV drones in the air and their shadows (docs/fpv-swarm.md
-/// "Drawing"), over everything standing: the shadows on the ground first,
-/// then each drone's body - its lamp is the glowing pass's
-/// (`drone_lamps`). `drones` in id order.
-pub fn paint_drones(c: &mut impl Canvas, drones: &[crate::fpv::Drone], time: f32, shadows: bool) {
-    if drones.is_empty() {
-        return;
-    }
+/// The FPV drones' shadows on the ground under them (docs/fpv-swarm.md
+/// "Drawing"), drawn after the floor and under the tanks. `drones` in id
+/// order.
+pub fn paint_drone_shadows(c: &mut impl Canvas, drones: &[crate::fpv::Drone]) {
     let t = crate::tuning::tuning();
-    if shadows {
-        let dir = crate::math::Vec2::new(t.shadow_dir_x, t.shadow_dir_y);
-        for d in drones {
-            crate::pyro::draw(c, &crate::fpv::compose_shadow(d.ground, d.height, t.fpv_shadow_opacity, dir));
-        }
+    let dir = crate::math::Vec2::new(t.shadow_dir_x, t.shadow_dir_y);
+    for d in drones {
+        crate::pyro::draw(c, &crate::fpv::compose_shadow(d.ground, d.height, t.fpv_shadow_opacity, dir));
     }
+}
+
+/// The FPV drones in the air (docs/fpv-swarm.md "Drawing"), over
+/// everything standing - trees too: each drone's body; its lamp is the
+/// glowing pass's (`drone_lamps`). `drones` in id order.
+pub fn paint_drones(c: &mut impl Canvas, drones: &[crate::fpv::Drone], time: f32) {
+    let t = crate::tuning::tuning();
     for d in drones {
         crate::pyro::draw(c, &crate::fpv::compose_drone(&crate::fpv::look_of(d, time, &t)).body);
     }

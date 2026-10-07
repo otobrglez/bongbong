@@ -184,7 +184,7 @@ impl Game {
         let to = a.target.drawn();
         self.tesla_bolts.push(TeslaBolt::new(tower.position, to, cell_frame_hash(cell, self.frame, 200)));
         f.events.push(Event::TeslaStrike { x0: tower.position.x, y0: tower.position.y, x1: to.x, y1: to.y, chained: false });
-        self.strike_air(f, a.target.key, crate::air::AirStrike::Tesla, to);
+        self.strike_air(f, a.target.key, crate::air::AirStrike::Tesla);
         tower.air_cooldown = t.tesla_air_gap_seconds / tower.fire_factor().max(0.05);
     }
 

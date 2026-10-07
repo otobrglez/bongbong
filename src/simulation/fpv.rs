@@ -402,12 +402,12 @@ impl Game {
         out
     }
 
-    /// Strike the air target `key` at `at` with `by` (docs/fpv-swarm.md
+    /// Strike the air target `key` with `by` (docs/fpv-swarm.md
     /// "Shot down"): a bullet counts a hit, `fpv_drone_hits` of them bring
     /// a drone down; anything else downs it at once. `Event::DroneDowned`
     /// when it goes down. True when it did. The one thing that changes an
     /// air target.
-    pub(super) fn strike_air(&mut self, f: &mut Frame, key: AirKey, by: AirStrike, at: Position) -> bool {
+    pub(super) fn strike_air(&mut self, f: &mut Frame, key: AirKey, by: AirStrike) -> bool {
         let AirKey::Drone(id) = key;
         let entity = self.world.query::<(Entity, &Drone)>().iter().find(|(_, d)| d.id == id).map(|(e, _)| e);
         let Some(entity) = entity else { return false };
@@ -422,9 +422,9 @@ impl Game {
             }
         }
         d.down(by);
-        let height = d.height;
+        let (ground, height) = (d.ground, d.height);
         drop(d);
-        f.events.push(Event::DroneDowned { id, x: at.x, y: at.y, height, by: by.name() });
+        f.events.push(Event::DroneDowned { id, x: ground.x, y: ground.y, height, by: by.name() });
         self.count_drones_out();
         true
     }

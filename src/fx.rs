@@ -701,6 +701,44 @@ impl Fx {
                         self.burst(Position::new(x, y), ParticleKind::Smoke, self.count(4), 30.0, &[SMOKE_T]);
                         self.splash_if_wet(game, Position::new(x, y), 8);
                     }
+                    // An FPV drone off its halo: a ring of rotor wash round
+                    // the slot it left (docs/fpv-swarm.md "Drawing").
+                    Event::DroneLaunched { x, y, .. } => {
+                        self.burst(Position::new(x, y), ParticleKind::Dust, self.count(6), 40.0, &[DUST_T]);
+                    }
+                    // A drone's burst: the missile's sparks and puff,
+                    // fewer; in a crown, the leaves it shreds.
+                    Event::DroneBurst { x, y, crown, .. } => {
+                        let at = Position::new(x, y);
+                        self.burst(at, ParticleKind::Spark, self.count(6), 120.0, &[FIRE_T, EMBER_T, WHITE_T]);
+                        self.burst(at, ParticleKind::Smoke, self.count(2), 26.0, &[SMOKE_T]);
+                        if crown {
+                            self.burst(at, ParticleKind::Chip, self.count(8), 70.0, &[LEAF_L, LEAF_M, LEAF_D]);
+                        } else {
+                            self.splash_if_wet(game, at, 5);
+                        }
+                    }
+                    // A drone struck in the air, at the drone as it is
+                    // drawn: sparks in the cause's colour (the bullet's and
+                    // the arc's own hits are theirs), then its fall's
+                    // smoke (`sample_world`).
+                    Event::DroneDowned { x, y, height, by, .. } => {
+                        let at = Position::new(x, y - height);
+                        let tint = match by {
+                            "emp" => EMP_T,
+                            "tesla" => TESLA_T,
+                            _ => WHITE_T,
+                        };
+                        self.burst(at, ParticleKind::Spark, self.count(6), 90.0, &[tint, WHITE_T]);
+                    }
+                    // A downed drone hitting the ground a dud: a puff of dust
+                    // and a few pale sparks, no fire.
+                    Event::DroneCrashed { x, y, .. } => {
+                        let at = Position::new(x, y);
+                        self.burst(at, ParticleKind::Dust, self.count(4), 40.0, &[DUST_T]);
+                        self.burst(at, ParticleKind::Spark, self.count(3), 60.0, &[WHITE_T]);
+                        self.splash_if_wet(game, at, 4);
+                    }
                     Event::CookOff { x, y } => {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(8), 120.0, &[FIRE_T, EMBER_T]);
                     }
@@ -936,6 +974,33 @@ impl Fx {
             }
         }
         self.wading = wading_now;
+
+        // FPV drones (docs/fpv-swarm.md "Drawing"): rotor wash off the
+        // ground under one flying low - the climb, the dive -, the buzz's
+        // pale specks off one cruising, and smoke off one falling.
+        let wash = tuning().fpv_wash_rate * tuning().fx_density;
+        for d in game.drones() {
+            let key = 0xD20_0000 ^ d.id;
+            let drawn = d.drawn();
+            match d.stage {
+                crate::fpv::DroneStage::Falling => {
+                    if self.due(key, 12.5 * tuning().fx_density, dt) {
+                        self.burst(drawn, ParticleKind::Smoke, 1, 10.0, &[SMOKE_T]);
+                    }
+                }
+                _ if d.height < crate::fpv::FPV_WASH_HEIGHT_PX => {
+                    if wash > 0.0 && self.due(key, wash, dt) {
+                        self.burst(d.ground, ParticleKind::Dust, 1, 34.0, &[DUST_T]);
+                    }
+                }
+                crate::fpv::DroneStage::Cruise => {
+                    if self.due(key, 10.0 * tuning().fx_density, dt) {
+                        self.burst(drawn, ParticleKind::Chip, 1, 8.0, &[ROTOR_T]);
+                    }
+                }
+                _ => {}
+            }
+        }
 
         // A hull knocked off its tracks scrapes up dust as it slides
         // (`Tank::skid`, docs/sonic-hammer.md), at a rate that follows its
@@ -1440,6 +1505,8 @@ const TESLA_T: Color = Color::new(0xCA, 0xA6, 0xFF, 255);
 const RAIL_T: Color = crate::pyro::RAIL[3];
 /// An EMP's sparks: its ramp's pale blue (`pyro::EMP`).
 const EMP_T: Color = crate::pyro::EMP[3];
+/// The specks of a cruising drone's buzz: its rotors' grey.
+const ROTOR_T: Color = crate::pyro::SMOKE[5];
 const TESLA_DEEP_T: Color = Color::new(0x9A, 0x66, 0xFF, 255);
 /// The bio slush's ooze, the sheet's acid lime (`tower::OOZE_*`).
 const OOZE_TINTS: [Color; 3] = [crate::tower::OOZE_HI, crate::tower::OOZE_LT, crate::tower::OOZE_MD];
