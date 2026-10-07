@@ -699,3 +699,33 @@ fn a_burning_plank_in_reach_is_crushed() {
     assert!(events.iter().any(|e| matches!(e, Event::ObstacleDestroyed { .. })), "crushed with the impact: {events:?}");
     assert!(!game.world.query::<&crate::obstacle::Obstacle>().iter().any(|o| o.cell() == (12, 6) && !o.destroyed), "the burning plank is down");
 }
+
+/// A call on a player tower or the frog that would crush a seat standing by
+/// it is a call on that seat: never from outside that seat's sight box.
+#[test]
+fn an_enemy_never_calls_on_a_tower_whose_circle_holds_a_seat_off_its_box() {
+    let tower = (14, 6);
+    let tower_at = crate::map::cell_to_world(tower.0, tower.1);
+    let run = |seat_at: Position| {
+        let mut game = round(&format!("cells.\"{},{}\" = {{ kind = \"tesla\" }}\n", tower.0, tower.1));
+        let s = seat(&game);
+        with_tank_mut(&game.world, s, |tk| tk.disarm());
+        game.place_tank(s, seat_at, Some(90.0)).unwrap();
+        // The caller eleven cells west of the tower: the tower at its
+        // reticle's reach, a seat beside the tower's east side just past
+        // its sight box.
+        let slot = game.debug_spawn_enemy(Position::new(tower_at.x - 352.0, tower_at.y), Some(1), Some(Role::Player)).expect("spawns");
+        let enemy = game.tank_entity_by_slot(slot).expect("exists");
+        with_tank_mut(&game.world, enemy, |tk| {
+            tk.shells_ammo = 0;
+            tk.disarm();
+            tk.take_weapon(ActiveWeapon::RodFromGod);
+            tk.speed_scale = 0.0;
+        });
+        called(&idle(&mut game, 60 * 6))
+    };
+    assert!(run(crate::map::cell_to_world(31, 15)).contains(&tower), "with no seat by it the tower is called on");
+    let beside = Position::new(tower_at.x + 40.0, tower_at.y);
+    assert!(beside.x - (tower_at.x - 352.0) > tuning().sight_box_half_px().0, "the seat off the caller's box");
+    assert!(!run(beside).contains(&tower), "with a seat by it, from off that seat's box, it is not");
+}

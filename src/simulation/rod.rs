@@ -582,6 +582,15 @@ impl Game {
             let at = cell_to_world(cell.0, cell.1);
             self.zones.iter().any(|z| z.centre.distance_to(at) <= 2.0 * t.rod_kill_radius_px)
         };
+        // Whether a call on `cell` from `me` would crush a seat standing by
+        // it - a tower's or the frog's neighbour, a couch partner beside a
+        // camper - from outside that seat's sight box: a call that holds a
+        // seat is a call on that seat, and the box binds it.
+        let seat_half = Vec2::new(crate::battlefield::max_tank_clearance_half_extent(), crate::battlefield::max_tank_clearance_half_extent());
+        let holds_seat_offbox = |cell: (i32, i32), me: Position| {
+            let at = cell_to_world(cell.0, cell.1);
+            seats.iter().any(|s| s.live && crate::emp::box_reach(at, s.pos, seat_half) <= margin && !crate::ai::in_sight_box_of((half_w, half_h), s.pos, me))
+        };
         let mut taken: Vec<(i32, i32)> = Vec::new();
         for (_, entity, me, hunter, frog_only) in armed {
             let under_call = self.zones.iter().any(|z| z.holds(me, &t));
@@ -630,7 +639,7 @@ impl Game {
                 candidates.push((frog_rank, me.distance_to(frog), u8::MAX, cell, RodPick { cell, at_seat: None, why: "frog" }));
             }
             candidates.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)));
-            let open = |p: &RodPick| range.holds(p.cell) && p.cell != world_to_cell(me) && !covered(p.cell) && !taken.contains(&p.cell);
+            let open = |p: &RodPick| range.holds(p.cell) && p.cell != world_to_cell(me) && !covered(p.cell) && !taken.contains(&p.cell) && !holds_seat_offbox(p.cell, me);
             sense.pick = candidates.iter().map(|c| c.4).find(|p| open(p) && !holds_ally(p.cell, None));
             // With none: a seat it would call on but for its own hull.
             sense.self_blocks = sense.pick.is_none()
