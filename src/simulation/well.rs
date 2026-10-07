@@ -761,6 +761,25 @@ impl Game {
         self.flash_screen_with(t.well_screen_flash);
     }
 
+    /// The projector's launch or anchor cell on `seat`'s tank, for a
+    /// client drawing its own press (`net::round`).
+    pub(crate) fn flash_seat_well(&mut self, seat: u8, anchor: bool) {
+        let Some(entity) = self.seats.get(seat as usize).copied().flatten() else { return };
+        if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {
+            if anchor { tank.kick_well_anchor() } else { tank.kick_well() }
+        }
+    }
+
+    /// An anchor drawn by a client ahead of the room's - its own press or
+    /// its own orb's contact - or the room's one it did not draw: the snap
+    /// and the anchor cell on `seat`'s projector.
+    pub(crate) fn show_well_anchor(&mut self, seat: u8, at: Position) {
+        self.flash_seat_well(seat, true);
+        let mut show = Spectacle::default();
+        self.well_anchor_show(&mut show, at);
+        self.show(show);
+    }
+
     /// A swallow's pop on the list.
     pub(crate) fn swallow_show(&mut self, at: Position) {
         self.well_fx.push(WellFx { kind: WellFxKind::Swallow, at, age: 0.0 });
@@ -772,6 +791,13 @@ impl Game {
             fx.age += dt;
         }
         self.well_fx.retain(|fx| !fx.done());
+    }
+
+    /// The wells pulling at this game's present - its clock plus the zones'
+    /// lead (`set_zone_lead`): what a client's sandbox bends its own shots
+    /// by and a replica's cosmetics read. Empty with no well.
+    pub(crate) fn present_wells(&self) -> WellField {
+        if self.zones.is_empty() { WellField::default() } else { WellField::at(&self.zones, self.time + self.zone_lead) }
     }
 
     /// Where one seat's orb would leave from right now and which way: the
@@ -1104,8 +1130,3 @@ pub(super) fn enemy_well_holding(zones: &[Zone], p: Position) -> Option<Position
         .map(|z| z.centre)
 }
 
-/// Every orb the room holds, for the wire and the tooling: `(id, owner,
-/// position, rotation)`.
-pub(crate) fn orb_rows(game: &Game) -> Vec<(u32, Owner, Position, f32)> {
-    game.orbs.iter().map(|o| (o.id, o.owner, o.position, o.rotation)).collect()
-}

@@ -240,9 +240,15 @@ fn apply_zones(game: &mut Game, s: &Snapshot, cols: u16) {
             Owner::Player(seat) => Some(seat),
             _ => None,
         };
+        let kind = if z.kind == crate::zone::ZONE_WELL {
+            let stage = if z.stage == 1 { crate::well::WellStage::Pulling } else { crate::well::WellStage::Forming };
+            crate::zone::ZoneKind::Well(crate::well::WellZone { stage, by: crate::well::AnchorBy::Press, seat, emp_collapse: false })
+        } else {
+            crate::zone::ZoneKind::Rod(crate::rod::RodCall { cell: cell_from_index(cols, z.cell), seat })
+        };
         crate::zone::Zone {
             id: z.id as u32,
-            kind: crate::zone::ZoneKind::Rod(crate::rod::RodCall { cell: cell_from_index(cols, z.cell), seat }),
+            kind,
             owner,
             centre: Position::new(dequantise_pos(z.x), dequantise_pos(z.y)),
             until: z.until as f32 * PHYSICS_FIXED_DT,
@@ -323,6 +329,7 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_tiles(game, s, cols, dead_tiles);
     apply_tanks(game, s);
     apply_shots(game, s);
+    apply_orbs(game, s);
     apply_missiles(game, s, drawn.then_some(&mut spectacle));
     apply_grenades(game, s);
     apply_drones(game, s);
@@ -331,6 +338,7 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_fires(game, s, cols);
     apply_lamps(game, s);
     apply_zones(game, s, cols);
+    apply_well_drums(game, s, cols);
     apply_craters(game, s, cols);
     apply_volcano_shifts(game, s);
     apply_round(game, s);
@@ -410,6 +418,22 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTre
                 game.emp_show(show, at(x, y), owner, false);
             }
             WireEvent::CookOff { x, y } => Game::cookoff_show(show, at(x, y)),
+            // A gravity well's anchor (its snap, the ripple pinched inward,
+            // the module's anchor cell), its collapse, and a swallow's or
+            // a fizzle's pop (docs/gravity-well.md "Wire").
+            // This seat's own anchor, drawn by the client on its press or its
+            // orb's contact (`net::round`'s `OwnAnchor`): not drawn twice.
+            WireEvent::WellAnchored { seat, .. } if seat != crate::net::wire::NO_SEAT && mode.client_drew(seat as usize) => {}
+            WireEvent::WellAnchored { slot, x, y, .. } => {
+                for tank in game.world.query_mut::<&mut Tank>() {
+                    if tank.owner_slot() == slot as usize {
+                        tank.kick_well_anchor();
+                    }
+                }
+                game.well_anchor_show(show, at(x, y));
+            }
+            WireEvent::WellCollapsed { x, y, .. } => game.well_collapse_show(show, at(x, y)),
+            WireEvent::Swallowed { x, y, .. } | WireEvent::OrbFizzled { x, y, .. } => game.swallow_show(at(x, y)),
             WireEvent::CrateBroken { x, y, cooked: true, .. } => game.crate_cookoff_show(show, at(x, y)),
             // A sonic hit flashes the hull and throws dust (`fx`), never a
             // shell's impact flash; a slug's hits are its own picture's
@@ -796,6 +820,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
         tank.gauss_slugs = 0;
         tank.fpv_drones = 0;
         tank.rods = 0;
+        tank.wells = 0;
         let ammo = t.ammo as i32;
         match weapon {
             ActiveWeapon::Shell => tank.shells_ammo = ammo,
@@ -1051,7 +1076,7 @@ fn apply_shots(game: &mut Game, s: &Snapshot) {
     for (e, p) in game.world.query::<(Entity, &Plasma)>().iter() {
         existing.insert((p.id & 0xFFFF) as u16, (ShotKind::Plasma, e));
     }
-    let wanted: BTreeMap<u16, &ShotState> = s.shots.iter().map(|sh| (sh.id, sh)).collect();
+    let wanted: BTreeMap<u16, &ShotState> = s.shots.iter().filter(|sh| sh.kind != ShotKind::Orb).map(|sh| (sh.id, sh)).collect();
     for (id, (kind, entity)) in &existing {
         if wanted.get(id).is_none_or(|sh| sh.kind != *kind) {
             game.world.despawn(*entity).ok();
@@ -1093,6 +1118,8 @@ fn apply_shots(game: &mut Game, s: &Snapshot) {
                         }
                     }
                 }
+                // Orbs are `apply_orbs`'.
+                ShotKind::Orb => {}
                 ShotKind::Plasma => {
                     let mut q = game.world.query_one::<&mut Plasma>(entity);
                     if let Ok(plasma) = q.get() {
@@ -1111,6 +1138,63 @@ fn apply_shots(game: &mut Game, s: &Snapshot) {
             _ => spawn_shot(game, sh, position, rotation, dir),
         }
     }
+}
+
+/// The gravity well's orbs as the snapshot has them (`ShotKind::Orb`), by
+/// id; a client's own drawn ahead (`PROVISIONAL_ID_BASE` and up) kept. One
+/// the replica already flies keeps its age and how far it has flown.
+fn apply_orbs(game: &mut Game, s: &Snapshot) {
+    let speed = tuning().well_orb_speed;
+    let base = crate::net::predict::PROVISIONAL_ID_BASE;
+    let mut orbs: Vec<crate::well::Orb> = game.orbs.iter().copied().filter(|o| o.id >= base).collect();
+    for sh in s.shots.iter().filter(|sh| sh.kind == ShotKind::Orb) {
+        let position = Position::new(dequantise_pos(sh.x), dequantise_pos(sh.y));
+        let rotation = dequantise_heading(sh.heading);
+        let rad = rotation.to_radians();
+        let velocity = Vec2::new(rad.sin(), -rad.cos()) * speed;
+        let was = game.orbs.iter().find(|o| o.id == sh.id as u32);
+        // Its age only matters for the swell, which the state says is over
+        // or not: kept, but on the right side of it.
+        let swell = crate::well::ORB_SWELL_SECONDS;
+        let age = match (was.map(|o| o.age), sh.state) {
+            (Some(age), 0) => age.min(swell * 0.5),
+            (Some(age), _) => age.max(swell),
+            (None, 0) => 0.0,
+            (None, _) => swell,
+        };
+        orbs.push(crate::well::Orb {
+            id: sh.id as u32,
+            owner: shot_owner(sh),
+            position,
+            prev_position: was.map_or(position, |o| o.position),
+            velocity,
+            rotation,
+            flown: was.map_or(0.0, |o| o.flown + o.position.distance_to(position)),
+            age,
+            rewind: 0,
+        });
+    }
+    orbs.sort_by_key(|o| o.id);
+    game.orbs = orbs;
+}
+
+/// The drums the wells hold as the snapshot has them: where each is is
+/// `well::held_at` of its well and the round clock, so the three numbers
+/// are all of it. A fused one keeps the fuse the replica runs down.
+fn apply_well_drums(game: &mut Game, s: &Snapshot, cols: u16) {
+    let was = std::mem::take(&mut game.held_drums);
+    game.held_drums = s
+        .well_drums
+        .iter()
+        .map(|d| crate::well::HeldDrum {
+            id: d.id as u32,
+            well: d.well as u32,
+            cell: cell_from_index(cols, d.cell),
+            drum: crate::obstacle::Drum::from_variant(d.drum as i32),
+            fuse: d.fused.then(|| was.iter().find(|w| w.id == d.id as u32).and_then(|w| w.fuse).unwrap_or(1.0)),
+            lifted_at: d.tick as f32 * PHYSICS_FIXED_DT,
+        })
+        .collect();
 }
 
 /// A shot's shadow height, hashed from its id between the kind's knobs:
@@ -1169,6 +1253,7 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
                 id,
             },));
         }
+        ShotKind::Orb => {}
         ShotKind::Plasma => {
             game.world.spawn((Plasma {
                 state: PlasmaState::from_col(sh.state as i32).unwrap_or(PlasmaState::Flying),
@@ -1233,6 +1318,7 @@ fn apply_frogs(game: &mut Game, s: &Snapshot, mut show: Option<&mut Spectacle>) 
             frog.set_clips(dead, hopping, on(frog_flags::BITING), on(frog_flags::HURT), f.phase);
             // Stunned until the room says it is not; a fresh stun is drawn
             // for its full length (`Game::tick_presentation` runs it down).
+            frog.pulled = on(frog_flags::PULLED);
             frog.stun_timer = match (on(frog_flags::STUNNED), frog.stun_timer > 0.0) {
                 (true, true) => frog.stun_timer,
                 (true, false) => tuning().sonic_frog_stun_seconds.max(f32::EPSILON),
@@ -1282,6 +1368,7 @@ fn apply_pickups(game: &mut Game, s: &Snapshot, cols: u16) {
                 let left = dequantise_seconds(state.left);
                 pickup.burn = (state.flags & crate_flags::BURNING != 0).then_some(left);
                 pickup.loose = (state.flags & crate_flags::LOOSE != 0).then_some(left);
+                pickup.drift = Vec2::new(dequantise_pos(state.dx), dequantise_pos(state.dy));
             }
         }
     }
@@ -1807,6 +1894,32 @@ mod tests {
             if frame == 90 || frame == 150 {
                 let at = map::cell_to_world(14 + (frame as i32 - 90) / 20, 8);
                 assert!(game.debug_call_rod(at, frame == 150).is_some(), "a call on the field");
+            }
+        });
+    }
+
+    /// The gravity well reaches the replica (docs/gravity-well.md "Wire"):
+    /// the wells from the zones family by their stage, the drums they hold
+    /// from theirs, the orbs as shots, a crate drawn off its cell and a
+    /// frog held in a pull - the picture the room's, frame by frame, and
+    /// the bytes again on re-encoding (`round_trip`'s checking).
+    #[test]
+    fn a_well_and_what_it_holds_reach_the_replica() {
+        round_trip(DEFAULT_MAP, 0xB0B5, 600, |game, frame| {
+            if frame == 30 {
+                let patch = crate::simulation::debug::TankPatch { wells: Some(3), ..Default::default() };
+                game.debug_set_tank(0, &patch).expect("the seat's tank");
+                for slot in 1..=6 {
+                    game.debug_set_tank(slot, &patch).ok();
+                }
+            }
+            // Over the fuel drums on the top edge, and beside the frog and
+            // its pack.
+            if frame == 70 {
+                assert!(game.debug_well(map::cell_to_world(19, 2), false).is_some(), "a well on the field");
+            }
+            if frame == 140 {
+                assert!(game.debug_well(map::cell_to_world(28, 21), true).is_some(), "an enemy's well on the field");
             }
         });
     }

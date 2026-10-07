@@ -118,6 +118,12 @@ pub const POSE_REACH_TICKS: f32 = 4.0;
 /// solver's own nudge on the room's copy.
 pub const POSE_REACH_SLACK_PX: f32 = 8.0;
 
+/// How long a gravity well's side pull is allowed to have built a hull's
+/// slide for, in the pose validator's drift (`accept_seat_pose`): server
+/// policy, not tuning - long enough for a hull whose grip a well beats to
+/// slide on between two poses (docs/gravity-well.md "Online").
+pub const WELL_SIDE_REACH_SECONDS: f32 = 0.5;
+
 /// Ticks past a knock's skid (`sonic::knock`) the pose validator still
 /// allows a client-owned hull the knock's slide: the client hears of the
 /// knock a link's delay after the room put it on, and its skid runs that
@@ -2680,7 +2686,15 @@ impl Game {
             // The ground's own drift - a current, a gust - carries a hull
             // past its top speed, and the rules put it there.
             let flow = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).flow;
-            let drift = (flow.x * flow.x + flow.y * flow.y).sqrt();
+            let mut drift = (flow.x * flow.x + flow.y * flow.y).sqrt();
+            // A gravity well's pull too (docs/gravity-well.md "Online"):
+            // its current at the room's copy of the hull, and what its side
+            // pull builds over `WELL_SIDE_REACH_SECONDS`.
+            if self.zones.iter().any(|z| z.well().is_some()) {
+                let field = crate::well::WellField::at(&self.zones, self.time);
+                let pull = field.hull_pull(tank.position, tank.mass_factor(), &tuning());
+                drift += pull.current.length() + pull.side.length() * WELL_SIDE_REACH_SECONDS;
+            }
             let reach = (tank.effective_speed() + drift) * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX;
             // A knock carries it past that too, by no more than the knock
             // could slide it in all (`SeatKnock`).
@@ -2935,6 +2949,10 @@ impl Game {
 
     pub fn tick_presentation(&mut self, dt: f32) {
         self.tick_effects(dt);
+        // An orb's motes turn on its own clock; the interpolator places it.
+        for orb in &mut self.orbs {
+            orb.age += dt;
+        }
         let frozen = self.intro_timer > 0.0;
         self.tick_intro_banner(dt, false);
         if !frozen {
@@ -5491,6 +5509,7 @@ impl Game {
                     pulled: tank.body.is_some() && self.well_field.strongest(tank.position, &tuning()).is_some(),
                     bracing: ai.is_some_and(Ai::bracing),
                     anchoring: ai.is_some_and(Ai::anchoring),
+                    action: ai.map_or((None, None), Ai::action),
                     charging: tank.charge.is_some(),
                     disabled: tank.is_disabled(),
                     kept_out: ai.is_some_and(Ai::kept_out),
@@ -5574,6 +5593,9 @@ pub struct TankSnapshot {
     pub bracing: bool,
     /// Holding still for its orb in flight (`Ai::anchoring`): on purpose.
     pub anchoring: bool,
+    /// An enemy's behaviour-tree leaf and the arm of its special or pull
+    /// tier this tick (`Ai::action`), for the probe's trace.
+    pub action: (Option<&'static str>, Option<&'static str>),
     /// Holding a charge on its trigger (`Tank::charge`, a gauss rail or a
     /// rod's reticle): crawling or standing on purpose.
     pub charging: bool,

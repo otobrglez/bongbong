@@ -1495,6 +1495,12 @@ impl Ai {
     }
 
     /// Whether it waited outside a danger this tick (`kept_out`).
+    /// The behaviour tree's last leaf and its special's arm, for the
+    /// probe's trace (`TankSnapshot::action`).
+    pub fn action(&self) -> (Option<&'static str>, Option<&'static str>) {
+        (self.last_action, self.special_why.or(self.pull_why))
+    }
+
     pub(crate) fn kept_out(&self) -> bool {
         self.kept_out
     }

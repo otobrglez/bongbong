@@ -236,6 +236,8 @@ fn in_flight(kind: ShotKind, state: i32) -> bool {
         ShotKind::Shell => ShellState::from_col(state) == Some(ShellState::Flying),
         ShotKind::Bullet => BulletState::from_col(state) == Some(BulletState::Flying),
         ShotKind::Plasma => PlasmaState::from_col(state) == Some(PlasmaState::Flying),
+        // A gravity well's orb: 0 while it swells at the muzzle, 1 flying.
+        ShotKind::Orb => state == 1,
     }
 }
 
@@ -246,6 +248,7 @@ fn stage(kind: ShotKind, state: i32) -> u8 {
         ShotKind::Shell => ShellState::from_col(state).and_then(|s| ShellState::ALL.iter().position(|&a| a == s)),
         ShotKind::Bullet => BulletState::from_col(state).and_then(|s| BulletState::ALL.iter().position(|&a| a == s)),
         ShotKind::Plasma => PlasmaState::from_col(state).and_then(|s| PlasmaState::ALL.iter().position(|&a| a == s)),
+        ShotKind::Orb => Some(state.clamp(0, 1) as usize),
     };
     at.unwrap_or(0) as u8
 }
@@ -257,6 +260,8 @@ fn bursting(kind: ShotKind, state: i32) -> bool {
         ShotKind::Shell => matches!(ShellState::from_col(state), Some(ShellState::Hit0 | ShellState::Hit1 | ShellState::Hit2)),
         ShotKind::Bullet => BulletState::from_col(state) == Some(BulletState::Hit),
         ShotKind::Plasma => matches!(PlasmaState::from_col(state), Some(PlasmaState::Hit0 | PlasmaState::Hit1 | PlasmaState::Hit2)),
+        // An orb anchors rather than bursts.
+        ShotKind::Orb => false,
     }
 }
 
@@ -300,6 +305,7 @@ pub fn read_picture(game: &Game, local_seat: Option<u8>, sample: &mut FrameSampl
                     ShotKind::Shell => 0,
                     ShotKind::Bullet => 1,
                     ShotKind::Plasma => 2,
+                    ShotKind::Orb => 3,
                 },
                 x: s.x as f32 / 4.0,
                 y: s.y as f32 / 4.0,

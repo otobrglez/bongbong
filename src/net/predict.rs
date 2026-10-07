@@ -408,6 +408,21 @@ pub enum PressShow {
     ChargeEnd(ChargeEndPress),
     Drone(DronePress),
     Rod(RodPress),
+    /// A gravity well's orb off the gun line (docs/gravity-well.md "Wire").
+    Orb(OrbPress),
+    /// The press that anchors this seat's orb in flight where it stands.
+    Anchor { tick: u32 },
+}
+
+/// A gravity well's orb this client launched on its press: the gun line's
+/// muzzle off the sandbox's pose and its facing, for the round to fly as
+/// its own until it anchors (`net::round`'s `OwnOrb`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OrbPress {
+    pub muzzle: Position,
+    pub dir: crate::math::Vec2,
+    /// The input tick of the press: what the room's `Fired` names back.
+    pub tick: u32,
 }
 
 /// A rod this client called on its own release (docs/rod-from-god.md
@@ -558,6 +573,19 @@ pub struct Predictor {
     /// nothing is replayed - the room follows this hull, not the other
     /// way round.
     owned: bool,
+    /// This seat's orb is in flight by this client's word
+    /// (docs/gravity-well.md): its next press anchors it, whatever the
+    /// gate. Set by the launch, cleared by the anchor press or by the round
+    /// when the orb anchored itself (`orb_landed`).
+    orb_out: bool,
+    /// Seconds a press is still swallowed after this seat's orb anchored by
+    /// itself (`well_anchor_grace_seconds`), as the room swallows it.
+    orb_grace: f32,
+    /// The input tick the last snapshot's `acked` named: the sandbox's
+    /// clock stands at that snapshot, and an input stepped since lands on
+    /// the room's clock that many ticks on - what a well's pull on the hull
+    /// is read at (`Game::set_zone_lead`).
+    last_acked: u32,
     report: PredictionReport,
 }
 
@@ -589,6 +617,9 @@ impl Predictor {
             cooldown: 0.0,
             offline_left: 0.0,
             owned: false,
+            orb_out: false,
+            orb_grace: 0.0,
+            last_acked: first_tick,
             report: PredictionReport::default(),
         }
     }
@@ -651,8 +682,11 @@ impl Predictor {
         // or doubled frame cannot skew the gate against the room's.
         self.cooldown = (self.cooldown - PHYSICS_FIXED_DT).max(0.0);
         self.offline_left = (self.offline_left - PHYSICS_FIXED_DT).max(0.0);
+        self.orb_grace = (self.orb_grace - PHYSICS_FIXED_DT).max(0.0);
         let pressed = intent.fire && !self.trigger_held;
         let trigger = (pressed, self.charge_gate_open());
+        // The round tick this input lands on, for a well's pull.
+        self.sandbox.set_zone_lead(tick.wrapping_sub(self.last_acked).min(HISTORY_TICKS as u32) as f32 * PHYSICS_FIXED_DT);
         let charged = self.sandbox.predict_seat_with(self.seat, intent, PHYSICS_FIXED_DT, Some(trigger));
         self.history.push_back((tick, intent, trigger));
         while self.history.len() > HISTORY_TICKS {
@@ -812,7 +846,23 @@ impl Predictor {
     fn pull_trigger(&mut self, tick: u32, pressed: bool, held: bool) {
         // An owned hull presses with the shots off too, for its recoil.
         let drawn = self.shots_enabled;
-        if !(drawn || self.owned) || self.cooldown > 0.0 {
+        if !(drawn || self.owned) {
+            return;
+        }
+        // A press while this seat's orb flies anchors it, whatever the gate;
+        // one just after it anchored itself does nothing (docs/gravity-
+        // well.md), as the room has it.
+        if pressed && self.orb_out && self.offline_left <= 0.0 {
+            self.orb_out = false;
+            if drawn {
+                self.shows.push(PressShow::Anchor { tick });
+            }
+            return;
+        }
+        if pressed && self.orb_grace > 0.0 {
+            return;
+        }
+        if self.cooldown > 0.0 {
             return;
         }
         // A special this client took offline itself (an EMP's press) fires
@@ -922,6 +972,23 @@ impl Predictor {
                     if drawn {
                         self.shows.push(PressShow::Drone(DronePress { slot, origin, out, tick }));
                         self.drawn_presses.push_back((WeaponKind::FpvSwarm, tick, 0.0));
+                        self.report.shots_drawn += 1;
+                    }
+                }
+                return;
+            }
+            // A gravity well's orb leaves the gun line's muzzle on the press,
+            // flown by the round as its own until it anchors.
+            ActiveWeapon::GravityWell if pressed => {
+                if ammo - self.owed_presses_of(WeaponKind::GravityWell) <= 0 {
+                    return;
+                }
+                if let Some((muzzle, dir)) = self.sandbox.seat_orb(self.seat) {
+                    self.cooldown = t.well_reload_seconds;
+                    self.owed_presses.push_back((WeaponKind::GravityWell, tick, 0.0));
+                    self.orb_out = true;
+                    if drawn {
+                        self.shows.push(PressShow::Orb(OrbPress { muzzle, dir, tick }));
                         self.report.shots_drawn += 1;
                     }
                 }
@@ -1288,6 +1355,8 @@ impl Predictor {
         mut contact: impl FnMut(ProvisionalKind, Position, Position, Option<usize>) -> Option<(Position, ShotStop)>,
     ) {
         let portal_radius = tuning().portal_shot_radius;
+        let t = tuning();
+        let wells = self.sandbox.present_wells();
         self.clock += dt;
         for press in self.drawn_presses.iter_mut().chain(self.owed_presses.iter_mut()) {
             press.2 += dt;
@@ -1307,7 +1376,26 @@ impl Predictor {
                 live.age += dt;
                 let from = live.shot.position;
                 let flying = live.shot.is_flying();
+                // A gravity well bends it on the room's clock of this
+                // client's present (docs/gravity-well.md "Wire").
+                if flying && !wells.is_empty() {
+                    let accel = wells.shot_accel(live.shot.position, &t);
+                    live.shot.velocity = crate::well::bend(live.shot.velocity, accel, dt);
+                    live.shot.rotation = crate::well::heading_deg(live.shot.velocity);
+                }
                 live.shot.advance(dt);
+                // Swallowed at a core: off the picture, no impact; its room
+                // copy goes the same way.
+                if flying
+                    && live.local_hit.is_none()
+                    && let Some((_, k)) = wells.core_hit(from, live.shot.position, &t)
+                {
+                    let at = from + (live.shot.position - from) * k;
+                    live.shot.position = at;
+                    live.shot.done = true;
+                    live.local_hit = Some((at, false));
+                    continue;
+                }
                 if let Some(i) = live.leaving
                     && self.sandbox.shot_portals().get(i).is_none_or(|&anchor| live.shot.position.distance_to(anchor) > portal_radius)
                 {
@@ -1349,6 +1437,21 @@ impl Predictor {
             true
         });
         self.presses = presses;
+    }
+
+    /// This seat's orb anchored by itself in the drawn world - on what it
+    /// met, or at its range (`net::round`): no orb is out, and a press in
+    /// the grace that follows does nothing, as the room has it.
+    pub fn orb_landed(&mut self) {
+        if self.orb_out {
+            self.orb_out = false;
+            self.orb_grace = tuning().well_anchor_grace_seconds;
+        }
+    }
+
+    /// Whether this seat's orb is in flight by this client's word.
+    pub fn orb_out(&self) -> bool {
+        self.orb_out
     }
 
     /// The shots to draw beside the room's, with the ids they are held
@@ -1429,6 +1532,7 @@ impl Predictor {
     /// of steps, the same `dt`, the same statics, which is why the answer
     /// lands rather than drifts.
     pub fn reconcile(&mut self, snapshot: &Snapshot, acked: u32) {
+        self.last_acked = acked;
         if self.owned {
             // The world around the hull is the room's; the hull is ours.
             // The snapshot's copy of it is where the room had it a round
@@ -2363,6 +2467,61 @@ mod tests {
         assert_eq!(predictor.offline_left(), 0.0);
         predictor.step(press());
         assert!(matches!(predictor.take_press_shows().as_slice(), [PressShow::Emp(_)]), "online again, it pulses");
+    }
+
+    /// The gravity well on the client's own ticks (docs/gravity-well.md
+    /// "Wire"): the press draws the orb off the gun line (`PressShow::Orb`),
+    /// owed and gated; the next press anchors it whatever the gate
+    /// (`PressShow::Anchor`) and spends nothing; once the round says the orb
+    /// anchored itself, a press in the grace does nothing at all.
+    #[test]
+    fn a_wells_orb_is_drawn_on_the_press_and_anchored_on_the_next() {
+        let mut predictor = Predictor::new(round(), 0, 0);
+        predictor.set_shots_enabled(true);
+        let patch = TankPatch { wells: Some(3), ..Default::default() };
+        predictor.sandbox.debug_set_tank(0, &patch).expect("the seat's tank");
+        let (pivot, _, _) = predictor.motion().expect("a hull");
+        predictor.step(press());
+        let shows = predictor.take_press_shows();
+        let [PressShow::Orb(orb)] = shows.as_slice() else { panic!("one orb: {shows:?}") };
+        assert!(orb.muzzle.distance_to(pivot) < 48.0, "off the gun line's muzzle");
+        assert!(predictor.orb_out());
+        assert_eq!(predictor.owed_presses_of(WeaponKind::GravityWell), 1);
+        predictor.step(release());
+        predictor.step(press());
+        assert!(matches!(predictor.take_press_shows().as_slice(), [PressShow::Anchor { .. }]), "the anchor, through the reload");
+        assert!(!predictor.orb_out());
+        assert_eq!(predictor.owed_presses_of(WeaponKind::GravityWell), 1, "and no second well owed");
+        // A launch the round reports anchored by itself: the next press in
+        // the grace draws nothing.
+        idle_ticks(&mut predictor, (tuning().well_reload_seconds / PHYSICS_FIXED_DT).ceil() as usize + 1);
+        predictor.step(press());
+        assert!(matches!(predictor.take_press_shows().as_slice(), [PressShow::Orb(_)]));
+        predictor.orb_landed();
+        predictor.step(release());
+        predictor.step(press());
+        assert!(predictor.take_press_shows().is_empty(), "the grace swallows the press");
+        assert_eq!(predictor.provisional_count(), 0, "not even a shell");
+    }
+
+    /// An owned hull is pulled by a well in its sandbox on the round tick
+    /// its input lands on (docs/gravity-well.md "Wire").
+    #[test]
+    fn an_owned_hull_is_pulled_by_a_well_in_its_sandbox() {
+        let mut predictor = Predictor::new(round(), 0, 0);
+        predictor.set_owned(true);
+        let (pivot, rotation, _) = predictor.motion().expect("a hull");
+        // Along its tracks, so its grip does not hold it.
+        let ahead = Dir::from_rotation(rotation).unwrap_or(Dir::Up).vec();
+        let core = pivot + ahead * 70.0;
+        // Pulling at once: anchored its forming time ago.
+        let (id, _) = predictor.sandbox.debug_well(core, false).expect("a well");
+        for z in predictor.sandbox.zones.iter_mut().filter(|z| z.id == id) {
+            z.until = predictor.sandbox.time - 0.001;
+        }
+        idle_ticks(&mut predictor, 30);
+        let (after, _, _) = predictor.motion().expect("a hull");
+        assert!(after.distance_to(core) < pivot.distance_to(core) - 4.0, "drawn toward the core: {after:?} from {pivot:?}");
     }
 
     /// The rod from god on the client's own ticks (docs/rod-from-god.md

@@ -111,7 +111,7 @@ pub mod wire;
 /// variant index), a change to a `codec::kind` tag or to a quantisation
 /// scale. A new optional field in a `Lobby` message (JSON, `serde(default)`)
 /// needs no bump.
-pub const PROTOCOL_VERSION: u16 = 20;
+pub const PROTOCOL_VERSION: u16 = 21;
 
 /// This build's version, the `bongbong` crate's: what a client reports
 /// about itself in `wire::ClientInfo` and the room server labels its

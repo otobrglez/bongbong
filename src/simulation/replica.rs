@@ -30,6 +30,7 @@ pub enum ShotKind {
     Shell,
     Bullet,
     Plasma,
+    Orb,
 }
 
 /// One hull as the picture needs it: the slot that keys it, its chassis,
@@ -192,6 +193,8 @@ pub struct DrawablePickup {
     pub loose: bool,
     /// The burning crate's or the loose contents' time left, tenths.
     pub left: u8,
+    /// How far a gravity well has drawn it, quarter pixels.
+    pub drift: (i32, i32),
 }
 
 /// The whole picture at one tick, every family sorted by its key so two
@@ -221,6 +224,9 @@ pub struct DrawableState {
     /// bits (the wire's key), its wire kind, its cell and when it ends, in
     /// ticks.
     pub zones: Vec<(u16, u8, (i32, i32), u32)>,
+    /// Every drum a gravity well holds: its id, its well, the cell it was
+    /// lifted from, whether its fuse burns and the tick it was lifted.
+    pub well_drums: Vec<(u16, u16, (i32, i32), bool, u32)>,
     /// Every crater cell, sorted.
     pub craters: Vec<(i32, i32)>,
     /// Each volcano's shift (`Volcano::shift`).
@@ -447,6 +453,19 @@ impl Game {
                 variant: plasma_variant_index(p.variant),
             });
         }
+        // A gravity well's orbs (`ShotKind::Orb`), a client's own drawn ahead
+        // left out as every provisional shot is.
+        for o in self.orbs.iter().filter(|o| o.id < crate::net::predict::PROVISIONAL_ID_BASE) {
+            shots.push(DrawableShot {
+                id: o.id,
+                kind: ShotKind::Orb,
+                x: quarter_px(o.position.x),
+                y: quarter_px(o.position.y),
+                heading: heading_step(o.rotation),
+                state: i32::from(o.age >= crate::well::ORB_SWELL_SECONDS),
+                variant: 0,
+            });
+        }
         shots.sort_by_key(|s| s.id);
 
         let mut missiles: Vec<DrawableMissile> = self
@@ -524,6 +543,7 @@ impl Game {
                 burning: p.burn.is_some(),
                 loose: p.loose.is_some(),
                 left: tenths(p.burn.or(p.loose).unwrap_or(0.0)),
+                drift: (quarter_px(p.drift.x), quarter_px(p.drift.y)),
             })
             .collect();
         pickups.sort();
@@ -569,7 +589,12 @@ impl Game {
                 .zones
                 .iter()
                 .filter(|z| !z.provisional())
-                .map(|z| ((z.id & 0xFFFF) as u16, z.wire_kind(), z.rod().map_or((0, 0), |c| c.cell), (z.until / crate::PHYSICS_FIXED_DT).round() as u32))
+                .map(|z| ((z.id & 0xFFFF) as u16, z.wire_kind() | (z.wire_stage() << 4), z.rod().map_or((0, 0), |c| c.cell), (z.until / crate::PHYSICS_FIXED_DT).round() as u32))
+                .collect(),
+            well_drums: self
+                .held_drums
+                .iter()
+                .map(|d| ((d.id & 0xFFFF) as u16, (d.well & 0xFFFF) as u16, d.cell, d.fuse.is_some(), (d.lifted_at / crate::PHYSICS_FIXED_DT).round() as u32))
                 .collect(),
             craters: self.craters.cells().collect(),
             volcano_shifts: self.volcanoes.iter().map(|v| v.shift).collect(),

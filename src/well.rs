@@ -26,7 +26,7 @@ use crate::{PHYSICS_FIXED_DT, Position};
 const ORB_PX: f32 = 6.0;
 
 /// How long a fresh orb takes to swell to its size at the muzzle (s).
-const ORB_SWELL_SECONDS: f32 = 0.1;
+pub const ORB_SWELL_SECONDS: f32 = 0.1;
 
 /// The accretion ring's radius round the core (px) and how fast it turns
 /// (rad/s, clockwise as drawn).

@@ -92,6 +92,15 @@ pub struct DebugSnapshot {
     /// there are none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub craters: Vec<(i32, i32)>,
+    /// The gravity wells' orbs in flight (docs/gravity-well.md) by id: the
+    /// owner's slot, where and how far it has flown; left out while there
+    /// are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub orbs: Vec<(u32, usize, f32, f32, f32)>,
+    /// The drums the wells hold by id: the well, the cell it was lifted
+    /// from and where it circles now; left out while there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub held_drums: Vec<(u32, u32, (i32, i32), f32, f32)>,
     /// What the last enemy phase's engagement-slot assignment decided.
     /// Per-tank entries cover both rings (player and hunted frog); the slot
     /// table is the player ring's.
@@ -111,8 +120,11 @@ pub struct DebugSnapshot {
 #[derive(Clone, Debug, Serialize)]
 pub struct ZoneDebug {
     pub id: u32,
-    /// `rod` for a rod's call.
+    /// `rod` for a rod's call, `well` for a gravity well.
     pub kind: &'static str,
+    /// A well's stage, `forming` or `pulling`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<&'static str>,
     /// Its owner's slot.
     pub owner: usize,
     pub x: f32,
@@ -443,6 +455,9 @@ pub struct TankPatch {
     /// Rods to call (`Tank::rods`): a count above 0 takes the special
     /// carried away.
     pub rods: Option<i32>,
+    /// Wells in its projector (`Tank::wells`): a count above 0 takes the
+    /// special carried away (docs/gravity-well.md).
+    pub wells: Option<i32>,
     /// Seconds the trigger of its charge weapon has been held: a charge put
     /// on (the special it carries must be one, `Trigger::Charge`); 0 takes
     /// one off.
@@ -903,7 +918,8 @@ impl Game {
                 .iter()
                 .map(|z| ZoneDebug {
                     id: z.id,
-                    kind: "rod",
+                    kind: if z.well().is_some() { "well" } else { "rod" },
+                    stage: z.well().map(|w| if w.stage == crate::well::WellStage::Pulling { "pulling" } else { "forming" }),
                     owner: z.owner.slot(),
                     x: r1(z.centre.x),
                     y: r1(z.centre.y),
@@ -912,6 +928,18 @@ impl Game {
                 })
                 .collect(),
             craters: self.craters.list().iter().map(|c| c.cell).collect(),
+            orbs: self.orbs.iter().map(|o| (o.id, o.owner.slot(), r1(o.position.x), r1(o.position.y), r1(o.flown))).collect(),
+            held_drums: {
+                let t = tuning();
+                self.held_drums
+                    .iter()
+                    .map(|d| {
+                        let centre = self.zones.iter().find(|z| z.id == d.well).map_or_else(|| crate::map::cell_to_world(d.cell.0, d.cell.1), |z| z.centre);
+                        let (at, _) = crate::well::held_at(d, centre, self.time, &t);
+                        (d.id, d.well, d.cell, r1(at.x), r1(at.y))
+                    })
+                    .collect()
+            },
             engage,
             clusters: clusters(&live_enemies, CLUSTER_RADIUS_PX),
             command: full.then(|| self.commander.report().clone()),
@@ -1071,6 +1099,12 @@ impl Game {
                 tank.disarm();
             }
             tank.rods = n.max(0);
+        }
+        if let Some(n) = patch.wells {
+            if n > 0 {
+                tank.disarm();
+            }
+            tank.wells = n.max(0);
         }
         if let Some(seconds) = patch.charge {
             let weapon = tank.active_weapon();

@@ -281,6 +281,10 @@ pub enum ShotKind {
     Shell,
     Bullet,
     Plasma,
+    /// A gravity well's orb (`well::Orb`, docs/gravity-well.md): `state` 0
+    /// while it swells at the muzzle, 1 flying; its velocity its heading
+    /// times `well_orb_speed`.
+    Orb,
 }
 
 /// `simulation::Outcome` on the wire (the simulation's own enum only
@@ -684,6 +688,8 @@ pub mod frog_flags {
     pub const BITING: u8 = 1 << 3;
     /// A sonic hammer's wave stunned it (`Frog::stun_timer`).
     pub const STUNNED: u8 = 1 << 4;
+    /// A gravity well holds it in its pull (`Frog::pulled`).
+    pub const PULLED: u8 = 1 << 5;
 }
 
 /// One of the round's frogs (the player's, and the Hunt mission's enemy
@@ -770,6 +776,10 @@ pub struct CrateState {
     /// The burning crate's or the loose contents' time left, tenths of a
     /// second (`quantise_seconds`).
     pub left: u8,
+    /// How far a gravity well has drawn it from its cell
+    /// (`Pickup::drift`), quarter pixels.
+    pub dx: i16,
+    pub dy: i16,
 }
 
 /// `CrateState::flags`.
@@ -821,6 +831,26 @@ pub struct ZoneState {
     pub owner: u16,
     /// The cell a call lands on, `encode::cell_index`.
     pub cell: u16,
+    /// A well's stage (`Zone::wire_stage`): 0 forming, 1 pulling; 0 for a
+    /// call. `until` is that stage's end.
+    pub stage: u8,
+}
+
+/// A drum a gravity well holds (`well::HeldDrum`), by its id. Never moves:
+/// where it is is `well::held_at` of its well's centre and the round clock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WellDrumState {
+    pub id: u16,
+    /// The well's zone id.
+    pub well: u16,
+    /// The cell it was lifted from, `encode::cell_index`.
+    pub cell: u16,
+    /// Its `Drum`: 0 oil, 1 fuel.
+    pub drum: u8,
+    /// Its fuse is burning (the replica runs it down).
+    pub fused: bool,
+    /// The tick it was lifted, round clock.
+    pub tick: u32,
 }
 
 /// A rod's crater (`rod::Crater`), by the cell struck: its cells are worked
@@ -897,6 +927,8 @@ pub struct Snapshot {
     pub zones: Vec<ZoneState>,
     /// The rods' craters (`CraterState`), by cell.
     pub craters: Vec<CraterState>,
+    /// The drums the gravity wells hold (`WellDrumState`), by id.
+    pub well_drums: Vec<WellDrumState>,
     /// Each volcano's cycle shift in ticks (`volcano::Volcano::shift`, a
     /// rod's set-off), in `Game::volcanoes` order; empty while every shift
     /// is 0.
@@ -933,6 +965,8 @@ impl Snapshot {
         self.zones.dedup_by_key(|z| z.id);
         self.craters.sort_by_key(|c| c.cell);
         self.craters.dedup_by_key(|c| c.cell);
+        self.well_drums.sort_by_key(|d| d.id);
+        self.well_drums.dedup_by_key(|d| d.id);
     }
 }
 

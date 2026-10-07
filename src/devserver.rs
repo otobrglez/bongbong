@@ -92,7 +92,7 @@ const CLICK_DRAG_STEP_PX: f32 = 8.0;
 /// the builder has frozen.
 pub const GAME_ONLY_TOOLS: &[&str] = &[
     "snapshot", "events", "step", "input", "pause", "resume", "history", "nav_grid", "field", "terrain", "teleport",
-    "set_tank", "kill", "spawn_enemy", "spawn_pickup", "rod_call", "players", "weather",
+    "set_tank", "kill", "spawn_enemy", "spawn_pickup", "rod_call", "well_at", "players", "weather",
 ];
 
 /// The tools that drive the *local* round or the builder, refused while
@@ -106,7 +106,7 @@ pub const GAME_ONLY_TOOLS: &[&str] = &[
 /// `key {escape}` gives the seat up, as does a `click` on the corners'
 /// `LEAVE` button - the one thing a click has to press in this mode.
 pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
-    "step", "input", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "spawn_pickup", "rod_call", "players", "play",
+    "step", "input", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "spawn_pickup", "rod_call", "well_at", "players", "play",
     "build", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings",
     "builder_map", "builder_save", "builder_touch", "builder_select", "builder_stamp",
 ];
@@ -285,7 +285,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "set_tank",
         description: "Overwrite a tank's damage (0 = pristine, 100 = wreck), ammo counts (setting a special weapon's stock above 0 also arms it in place of the one special the tank carries, like its pickup would), shield_hp (rainbow-shield absorption left in damage points, not seconds), the speed-boost timer, portal_cooldown (seconds before it may enter a portal again) and charge (seconds a charge weapon's trigger has been held - a gauss rail's charge or a rod's reticle put on a tank carrying it; 0 takes it off). Omitted fields are untouched.",
-        schema: r#"{"type":"object","properties":{"slot":{"type":"integer"},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"grenade_ammo":{"type":"integer"},"sonic_ammo":{"type":"integer"},"emp_charges":{"type":"integer"},"disabled":{"type":"number"},"special_offline":{"type":"number"},"gauss_slugs":{"type":"integer"},"fpv_drones":{"type":"integer"},"rods":{"type":"integer"},"charge":{"type":"number"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}},"required":["slot"]}"#,
+        schema: r#"{"type":"object","properties":{"slot":{"type":"integer"},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"grenade_ammo":{"type":"integer"},"sonic_ammo":{"type":"integer"},"emp_charges":{"type":"integer"},"disabled":{"type":"number"},"special_offline":{"type":"number"},"gauss_slugs":{"type":"integer"},"fpv_drones":{"type":"integer"},"rods":{"type":"integer"},"wells":{"type":"integer"},"charge":{"type":"number"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}},"required":["slot"]}"#,
         read_only: false,
         destructive: false,
     },
@@ -313,6 +313,13 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "rod_call",
         description: "Call a rod from god onto the map cell nearest (x, y) at once (docs/rod-from-god.md): player 1's call, the kills credited to it, or with enemy=true an enemy's. It stands for rod_countdown_seconds and lands like any other. Refused outside the field. Draws no RNG. Returns the call's id, its cell and the round time it lands at.",
+        schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"enemy":{"type":"boolean","default":false}},"required":["x","y"]}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "well_at",
+        description: "Anchor a gravity well at (x, y) at once (docs/gravity-well.md): player 1's, or with enemy=true an enemy's; it forms for well_form_seconds, pulls for well_pull_seconds and collapses like any other. Refused off the field or inside a solid cell. Draws no RNG. Returns the well's id, its centre and the round time its pull starts.",
         schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"enemy":{"type":"boolean","default":false}},"required":["x","y"]}"#,
         read_only: false,
         destructive: false,
@@ -1718,6 +1725,16 @@ impl DevServer {
                             Ok(json!({ "id": id, "cell": [cell.0, cell.1], "land": land }))
                         }
                         None => Err("(x, y) is off the field".to_string()),
+                    }
+                }
+                _ => Err("x and y are required".to_string()),
+            },
+            "well_at" => match (f32_param(&params, "x"), f32_param(&params, "y")) {
+                (Some(x), Some(y)) => {
+                    let enemy = params.get("enemy").and_then(Value::as_bool).unwrap_or(false);
+                    match game.debug_well(Position::new(x, y), enemy) {
+                        Some((id, until)) => Ok(json!({ "id": id, "x": x, "y": y, "pulls_at": until })),
+                        None => Err("(x, y) is off the field or inside a solid cell".to_string()),
                     }
                 }
                 _ => Err("x and y are required".to_string()),

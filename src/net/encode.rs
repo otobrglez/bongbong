@@ -17,7 +17,7 @@ use crate::net::MAX_SEATS;
 use crate::net::PROTOCOL_VERSION;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    BonusPickup, CraterState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, ZoneState, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
+    BonusPickup, CraterState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, WellDrumState, ZoneState, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
 };
 use crate::bullet::Bullet;
 use crate::frog::Frog;
@@ -103,6 +103,7 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
         crates: crates(game, cols),
         zones: zones(game, cols),
         craters: game.craters().list().iter().map(|c| CraterState { cell: cell_index(cols, c.cell), tick: ticks_of(c.at) }).collect(),
+        well_drums: well_drums(game, cols),
         volcano_shifts: volcano_shifts(game),
         round: round(game),
         events: wire_events_acked(game.events(), &acked),
@@ -248,7 +249,26 @@ fn shots(game: &Game) -> Vec<ShotState> {
     for p in game.world.query::<&Plasma>().iter() {
         out.push(shot(p.id, ShotKind::Plasma, p.position, p.rotation, p.state.col(), plasma_variant_index(p.variant), p.owner));
     }
+    // A gravity well's orbs: 0 while one swells at the muzzle, 1 flying.
+    for o in game.orbs() {
+        out.push(shot(o.id, ShotKind::Orb, o.position, o.rotation, i32::from(o.age >= crate::well::ORB_SWELL_SECONDS), 0, o.owner));
+    }
     out
+}
+
+/// The drums the gravity wells hold (docs/gravity-well.md "Wire").
+fn well_drums(game: &Game, cols: u16) -> Vec<WellDrumState> {
+    game.held_drums()
+        .iter()
+        .map(|d| WellDrumState {
+            id: shot_wire_id(d.id),
+            well: shot_wire_id(d.well),
+            cell: cell_index(cols, d.cell),
+            drum: u8::from(d.drum == crate::obstacle::Drum::Fuel),
+            fused: d.fuse.is_some(),
+            tick: ticks_of(d.lifted_at),
+        })
+        .collect()
 }
 
 /// The seeker missiles in flight, by id. Sorted like every other keyed
@@ -325,6 +345,7 @@ fn frogs(game: &Game) -> Vec<FrogState> {
                 (f.hurt_timer > 0.0, frog_flags::HURT),
                 (f.attack_timer > 0.0, frog_flags::BITING),
                 (f.is_stunned(), frog_flags::STUNNED),
+                (f.pulled, frog_flags::PULLED),
             ] {
                 if on {
                     state |= bit;
@@ -361,8 +382,9 @@ fn pickups(game: &Game, cols: u16) -> (u64, Vec<BonusPickup>) {
 }
 
 /// Every crate that is not whole (`CrateState`): hurt, burning, or broken
-/// with its contents lying loose. Whole crates travel as the slot bitmask
-/// and `bonus_pickups` alone.
+/// with its contents lying loose - or drawn off its cell by a gravity well.
+/// Whole crates where they lie travel as the slot bitmask and
+/// `bonus_pickups` alone.
 fn crates(game: &Game, cols: u16) -> Vec<CrateState> {
     let whole = quantise_health(tuning().crate_hp);
     game.world
@@ -380,7 +402,9 @@ fn crates(game: &Game, cols: u16) -> Vec<CrateState> {
                 flags |= crate_flags::LOOSE;
                 left = loose;
             }
-            (flags != 0 || hp != whole).then(|| CrateState { cell: cell_index(cols, map::world_to_cell(p.position)), hp, flags, left: quantise_seconds(left) })
+            let (dx, dy) = (quantise_pos(p.drift.x), quantise_pos(p.drift.y));
+            (flags != 0 || hp != whole || dx != 0 || dy != 0)
+                .then(|| CrateState { cell: cell_index(cols, map::world_to_cell(p.position)), hp, flags, left: quantise_seconds(left), dx, dy })
         })
         .collect()
 }
@@ -479,6 +503,7 @@ fn zones(game: &Game, cols: u16) -> Vec<ZoneState> {
             until: ticks_of(z.until),
             owner: z.owner.slot().min(u16::MAX as usize) as u16,
             cell: z.rod().map_or(0, |c| cell_index(cols, c.cell)),
+            stage: z.wire_stage(),
         })
         .collect()
 }

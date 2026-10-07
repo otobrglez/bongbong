@@ -545,6 +545,33 @@ impl PresentWorld {
         best.map(|(t, c)| (Position::new(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t), c))
     }
 
+    /// Where a gravity well's orb `shooter` launched, `half` wide, first
+    /// meets something along `p0..p1` - a tank that is not the shooter's, a
+    /// frog, a tile that blocks sight or the field's edge: where it anchors
+    /// (`Game::resolve_orbs`'s rule, drawn ahead).
+    pub fn orb_contact(&self, shooter: u8, p0: Position, p1: Position, half: f32) -> Option<Position> {
+        let pad = Position::new(half, half);
+        let mut best: Option<f32> = None;
+        let mut consider = |t: Option<f32>| {
+            if let Some(t) = t
+                && best.is_none_or(|b| t < b)
+            {
+                best = Some(t);
+            }
+        };
+        for tank in self.tanks.iter().filter(|tank| tank.seat != Some(shooter)) {
+            consider(segment_box(p0, p1, tank.hull.0, tank.hull.1 + pad));
+            consider(segment_box(p0, p1, tank.turret.0, tank.turret.1 + pad));
+        }
+        let frog_half = Position::new(crate::FROG_COLLIDER_HALF_EXTENT.0, crate::FROG_COLLIDER_HALF_EXTENT.1);
+        for &frog in &self.frogs {
+            consider(segment_box(p0, p1, frog, frog_half + pad));
+        }
+        consider(self.terrain.first_tall_along(p0, p1, half));
+        consider(self.edge_along(p0, p1));
+        best.map(|t| Position::new(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t))
+    }
+
     /// Where a bullet `shooter` fired, `half` wide, flying `p0..p1` first
     /// crosses an air target of the other side's (docs/fpv-swarm.md "Air
     /// targets"): a drone's column from its shadow to its body, as the

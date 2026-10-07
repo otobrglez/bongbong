@@ -768,6 +768,12 @@ mod tests {
             Event::GlobSplashed { x: 300.0, y: 180.0 },
             Event::Slimed { slot: 4 },
             Event::SlimeWashed { slot: 4 },
+            Event::RodCalled { id: 40, slot: 0, seat: 0, cell: (20, 9), land: 750.0 * crate::PHYSICS_FIXED_DT },
+            Event::RodImpact { id: 40, cell: (20, 9), crater: true, erupted: false },
+            Event::WellAnchored { id: 41, slot: 3, seat: crate::net::wire::NO_SEAT, x: 320.25, y: 160.5, by: crate::well::AnchorBy::Contact },
+            Event::WellCollapsed { id: 41, x: 320.25, y: 160.5, early: true },
+            Event::Swallowed { what: crate::well::Swallow::Drone, x: 330.0, y: 162.0 },
+            Event::OrbFizzled { id: 42, x: 96.0, y: 64.0 },
             Event::TowerRepaired { side: Side::Enemy, x: 176.0, y: 80.0 },
             Event::PhysicsQuarantine { bodies: 1, colliders: 2 },
             Event::BeatDone { beat: 2 },
@@ -799,7 +805,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 66, "one sample per Event variant");
+        assert_eq!(seen.len(), 72, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

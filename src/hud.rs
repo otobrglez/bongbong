@@ -1482,7 +1482,9 @@ pub fn special_prompt(game: &Game, seats: impl IntoIterator<Item = u8>) -> Optio
         if tank.is_wreck() {
             return None;
         }
-        if tank.orb.is_some() {
+        // Its orb in flight: the tank's word in a local round, the orbs
+        // drawn as this seat's on a client's replica.
+        if tank.orb.is_some() || game.orbs().iter().any(|o| o.owner == crate::shell::Owner::Player(seat)) {
             return Some(crate::text::keys::HUD_WELL_ANCHOR);
         }
         let r = tank.reticle?;

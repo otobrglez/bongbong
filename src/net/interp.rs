@@ -1392,6 +1392,7 @@ fn flying(shot: &ShotState) -> bool {
         ShotKind::Shell => ShellState::from_col(col) == Some(ShellState::Flying),
         ShotKind::Bullet => BulletState::from_col(col) == Some(BulletState::Flying),
         ShotKind::Plasma => PlasmaState::from_col(col) == Some(PlasmaState::Flying),
+        ShotKind::Orb => col == 1,
     }
 }
 
@@ -1402,6 +1403,7 @@ fn shot_speed(kind: ShotKind) -> f32 {
         ShotKind::Shell => t.shell_speed,
         ShotKind::Bullet => t.minigun_bullet_speed,
         ShotKind::Plasma => t.plasma_speed,
+        ShotKind::Orb => t.well_orb_speed,
     }
 }
 
