@@ -1286,7 +1286,8 @@ Wire:
   - on the press frame one drone up and one fewer in the halo, the room's
   copy kept off the picture until the handover, never two drawn;
   `a_launch_downed_in_its_climb_is_handed_to_the_rooms_fall_at_once`;
-  `the_rooms_launch_claims_the_drawn_launch_of_its_input_tick`.
+  `the_rooms_launch_claims_the_drawn_launch_of_its_input_tick`;
+  `a_refused_launch_goes_and_the_halo_has_its_drone_back`.
 - `apply.rs`: `a_drones_burst_leans_alike_on_the_replica` - the burst's
   fireball leans down the dive on the replica as in the room (the drone
   heads the way it dives from its commit, `Drone::commit`).
