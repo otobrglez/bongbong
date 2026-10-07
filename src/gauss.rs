@@ -132,6 +132,11 @@ impl ChargeEndFx {
     }
 }
 
+/// Where `tank`'s rail module's bore mouth is (`tank_art::RAIL_MUZZLE`).
+pub fn muzzle(tank: &Tank) -> Position {
+    tank.turret_point(crate::tank_art::RAIL_MUZZLE[tank.row.clamp(0, 11) as usize])
+}
+
 /// A slug's damage to the first tank or tower it goes through: a seat's
 /// `gauss_damage`, an enemy's `gauss_enemy_damage`.
 pub fn damage(owner: Owner, t: &Tuning) -> f32 {

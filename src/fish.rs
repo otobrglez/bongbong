@@ -592,8 +592,9 @@ pub fn scares(game: &Game, t: &Tuning) -> Vec<Scare> {
                 out.push(Scare { at: Position::new(x, y), radius: blast });
             }
             Event::Hit { x, y, .. } | Event::Ricochet { x, y, .. } => out.push(Scare { at: Position::new(x, y), radius: shot }),
-            Event::LaserBeam { x0, y0, x1, y1, .. } => {
-                // Along the beam, a scare every cell, its end included.
+            Event::LaserBeam { x0, y0, x1, y1, .. } | Event::RailSlug { x0, y0, x1, y1, .. } => {
+                // Along the beam or the slug, a scare every cell, its end
+                // included.
                 let (a, b) = (Position::new(x0, y0), Position::new(x1, y1));
                 let n = (a.distance_to(b) / OBSTACLE_GRID_SIZE).ceil().max(1.0) as u32;
                 for i in 1..=n {

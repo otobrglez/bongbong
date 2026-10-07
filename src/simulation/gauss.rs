@@ -110,15 +110,10 @@ pub(super) fn charge_trigger(f: &mut Frame, entity: Entity, tank: &mut Tank, own
             }
             f.events.push(Event::ChargeEnded { slot: tank.owner_slot(), weapon: weapon.name(), end });
             if end != ChargeEnd::Lapsed {
-                f.charge_ends.push(ChargeEndFx::new(rail_muzzle(tank), end));
+                f.charge_ends.push(ChargeEndFx::new(crate::gauss::muzzle(tank), end));
             }
         }
     }
-}
-
-/// Where `tank`'s rail module's bore mouth is (`tank_art::RAIL_MUZZLE`).
-pub(crate) fn rail_muzzle(tank: &Tank) -> Position {
-    tank.turret_point(crate::tank_art::RAIL_MUZZLE[tank.row.clamp(0, 11) as usize])
 }
 
 /// Fire a released charge of `weapon` at `stage`: for the gauss rail one
@@ -138,7 +133,7 @@ pub(super) fn fire_charge(f: &mut Frame, entity: Entity, tank: &mut Tank, owner:
         shooter: entity,
         owner,
         start: tank.gun_line_muzzle(dir),
-        muzzle: rail_muzzle(tank),
+        muzzle: crate::gauss::muzzle(tank),
         dir,
         overcharged: stage == ChargeStage::Overcharged,
     });
@@ -588,7 +583,7 @@ impl Game {
         let entity = self.seats.get(seat).copied().flatten()?;
         let tank = self.world.get::<&Tank>(entity).ok()?;
         let dir = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up).vec();
-        Some((tank.gun_line_muzzle(dir), rail_muzzle(&tank), dir))
+        Some((tank.gun_line_muzzle(dir), crate::gauss::muzzle(&tank), dir))
     }
 
     /// A room's count of the ticks a seat's client has held its trigger

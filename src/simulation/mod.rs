@@ -2431,7 +2431,7 @@ impl Game {
             && (tank.active_weapon().trigger() == Trigger::Charge || tank.charge.is_some())
         {
             let dir = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up).vec();
-            let (start, muzzle) = (tank.gun_line_muzzle(dir), gauss::rail_muzzle(&tank));
+            let (start, muzzle) = (tank.gun_line_muzzle(dir), crate::gauss::muzzle(&tank));
             let edge = tank.step_charge(intent.fire, pressed, dt, open, None);
             if let crate::tank::ChargeEdge::Released(stage) = edge {
                 gauss::recoil_hull(physics, &mut tank, dir, stage == crate::tank::ChargeStage::Overcharged, footing);

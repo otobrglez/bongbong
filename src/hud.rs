@@ -106,7 +106,26 @@ pub struct WeaponSlot {
     /// its symbol and count unlit - flickering at `emp_hud_flicker_hz` on
     /// the round's clock. `None` while it fires.
     pub offline: Option<bool>,
+    /// A charge running on the special (`Tank::charge`, docs/gauss-rail.md
+    /// "HUD"): drawn in the count's place until it ends.
+    pub charge: Option<ChargeGauge>,
 }
+
+/// A charge as the weapon slot's gauge draws it (`WeaponSlot::charge`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ChargeGauge {
+    /// How far to full, 0..1.
+    pub progress: f32,
+    pub stage: crate::tank::ChargeStage,
+    /// Within `gauss::VENT_WARN_SECONDS` of the vent: the outline turns red.
+    pub warn: bool,
+    /// Overcharged, the beats the fill is white rather than the accent
+    /// (`CHARGE_BLINK_HZ` on the round's clock).
+    pub blink: bool,
+}
+
+/// How fast an overcharged gauge alternates white and the accent (Hz).
+pub const CHARGE_BLINK_HZ: f32 = 8.0;
 
 impl WeaponSlot {
     /// `tank`'s trigger as the vitals and the ring's pips show it, at round
@@ -120,7 +139,13 @@ impl WeaponSlot {
         };
         let offline = (weapon != ActiveWeapon::Shell && tank.special_down())
             .then(|| ((time * tuning().emp_hud_flicker_hz * 2.0).floor() as i64).rem_euclid(2) == 0);
-        WeaponSlot { weapon, count, full, color, offline }
+        let charge = tank.charge.filter(|c| c.weapon == weapon && offline.is_none()).map(|c| ChargeGauge {
+            progress: c.progress(),
+            stage: c.stage(),
+            warn: c.vent_in() <= crate::gauss::VENT_WARN_SECONDS,
+            blink: ((time * CHARGE_BLINK_HZ * 2.0).floor() as i64).rem_euclid(2) == 0,
+        });
+        WeaponSlot { weapon, count, full, color, offline, charge }
     }
 }
 
@@ -163,7 +188,14 @@ impl PlayerHud {
         PlayerHud {
             hp: 0,
             hp_color: hud_number_color(0.0, MAX_DAMAGE),
-            weapon: WeaponSlot { weapon: ActiveWeapon::Shell, count: 0, full: tuning().max_shells, color: hud_number_color(0.0, 1.0), offline: None },
+            weapon: WeaponSlot {
+                weapon: ActiveWeapon::Shell,
+                count: 0,
+                full: tuning().max_shells,
+                color: hud_number_color(0.0, 1.0),
+                offline: None,
+                charge: None,
+            },
             speed: 0.0,
             shield: 0.0,
             lamps: None,
@@ -1650,6 +1682,39 @@ mod hud_tests {
         assert_eq!((sonic.weapon, sonic.count, sonic.full), (ActiveWeapon::SonicHammer, t.sonic_ammo_per_pickup, t.sonic_ammo_per_pickup));
         assert_eq!(sonic.color, HUD_SONIC_COLOR);
         assert_eq!(weapon_pickup(ActiveWeapon::SonicHammer), Some(crate::pickup::PickupKind::SonicHammer), "its crate's symbol");
+    }
+
+    /// The rail's slot is its slugs in its accent under its crate's symbol;
+    /// a charge running puts its gauge in the count's place - its stage,
+    /// the red outline near the vent - and the count is back the frame it
+    /// ends (docs/gauss-rail.md "HUD").
+    #[test]
+    fn a_charging_rail_shows_its_gauge_in_the_counts_place() {
+        use crate::tank::{ChargeEdge, ChargeStage};
+        let t = tuning();
+        let dt = crate::PHYSICS_FIXED_DT;
+        let mut tank = Tank::default();
+        tank.take_weapon(ActiveWeapon::GaussRail);
+        let idle = WeaponSlot::of(&tank, 0.0);
+        assert_eq!((idle.weapon, idle.count, idle.full, idle.color), (ActiveWeapon::GaussRail, t.gauss_slugs_per_pickup, t.gauss_slugs_per_pickup, HUD_GAUSS_COLOR));
+        assert_eq!(weapon_pickup(ActiveWeapon::GaussRail), Some(crate::pickup::PickupKind::GaussRail));
+        assert_eq!(idle.charge, None);
+        assert_eq!(tank.step_charge(true, true, dt, true, None), ChargeEdge::Started);
+        let g = WeaponSlot::of(&tank, 0.0).charge.expect("the gauge");
+        assert_eq!(g.stage, ChargeStage::Charging);
+        assert!(g.progress > 0.0 && g.progress < 0.1 && !g.warn);
+        while tank.charge.is_some_and(|c| c.stage() != ChargeStage::Overcharged) {
+            tank.step_charge(true, false, dt, true, None);
+        }
+        let g = WeaponSlot::of(&tank, 0.0).charge.expect("the gauge");
+        assert_eq!((g.stage, g.progress), (ChargeStage::Overcharged, 1.0));
+        assert_ne!(WeaponSlot::of(&tank, 0.0).charge.unwrap().blink, WeaponSlot::of(&tank, 0.5 / CHARGE_BLINK_HZ).charge.unwrap().blink, "it blinks");
+        while tank.charge.is_some_and(|c| c.vent_in() > crate::gauss::VENT_WARN_SECONDS) {
+            tank.step_charge(true, false, dt, true, None);
+        }
+        assert!(WeaponSlot::of(&tank, 0.0).charge.unwrap().warn, "red near the vent");
+        tank.step_charge(false, false, dt, true, None);
+        assert_eq!(WeaponSlot::of(&tank, 0.0).charge, None, "the count is back");
     }
 
     /// The block is the local seat's, whichever seat that is, and the

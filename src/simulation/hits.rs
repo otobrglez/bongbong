@@ -571,18 +571,21 @@ impl Terrain {
         out
     }
 
-    /// Where a slug along `p0..p1` stops, as a fraction of it: its first
-    /// stopper's entry (`pierce_rewound`'s rule), 1 with none.
-    pub fn rail_stop(&self, p0: Position, p1: Position, half_extent: f32, iron_stops: bool) -> f32 {
+    /// The tiles a slug along `p0..p1`, `half_extent` wide, goes into, in
+    /// order, and where it stops as a fraction of it - its first stopper's
+    /// entry (`pierce_rewound`'s rule: a permanent tile, iron only where
+    /// `iron_stops`, or a field wall), 1 with none. The stopper is the
+    /// last tile listed when it is a tile.
+    pub fn rail_tiles(&self, p0: Position, p1: Position, half_extent: f32, iron_stops: bool) -> (f32, Vec<(f32, Position, Material)>) {
         let pad = Position::new(half_extent, half_extent);
-        self.obstacles
-            .iter()
-            .filter(|b| b.material.is_permanent() && (iron_stops || b.material != Material::Iron))
-            .map(|b| (b.center, b.half + pad))
-            .chain(self.walls.iter().map(|&(c, h)| (c, h + pad)))
-            .filter_map(|(c, h)| segment_hits_aabb(p0, p1, c, h))
-            .min_by(f32::total_cmp)
-            .unwrap_or(1.0)
+        let stops = |m: Material| m.is_permanent() && (iron_stops || m != Material::Iron);
+        let mut tiles: Vec<(f32, Position, Material)> =
+            self.obstacles.iter().filter_map(|b| segment_hits_aabb(p0, p1, b.center, b.half + pad).map(|t| (t, b.center, b.material))).collect();
+        tiles.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.y.total_cmp(&b.1.y)).then(a.1.x.total_cmp(&b.1.x)));
+        let wall = self.walls.iter().filter_map(|&(c, h)| segment_hits_aabb(p0, p1, c, h + pad)).min_by(f32::total_cmp).unwrap_or(1.0);
+        let stop = tiles.iter().find(|&&(_, _, m)| stops(m)).map_or(wall, |&(t, _, _)| t.min(wall));
+        tiles.retain(|&(t, _, _)| t <= stop);
+        (stop, tiles)
     }
 }
 

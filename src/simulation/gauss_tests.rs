@@ -832,3 +832,30 @@ fn a_charging_tank_is_busy_to_the_commander() {
 }
 
 
+
+/// An enemy charging a rail whose slug would go through the seat - through
+/// brick, further than any shot's range - is a lane threat to it; facing
+/// away, or with iron between, it is not.
+#[test]
+fn a_charging_rails_lane_through_cover_warns_the_seat() {
+    let mut game = round("cells.\"20,6\" = { kind = \"wall\", material = \"brick\" }\ncells.\"20,12\" = { kind = \"wall\", material = \"iron\" }\n");
+    let s = seat(&game);
+    let enemy = parked(&mut game, Position::new(1000.0, 192.0));
+    let slot = slot_of(&game, enemy);
+    let charging = |game: &mut Game, rotation: f32| {
+        with_tank_mut(&game.world, enemy, |t| {
+            t.rotation = rotation;
+            t.gauss_slugs = 4;
+            t.charge = Some(Charge { weapon: ActiveWeapon::GaussRail, held: 0.6 });
+        });
+        let scene = crate::indicators::Scene::of(game, 0);
+        let tv = *scene.tanks.iter().find(|tv| tv.slot == slot).expect("the enemy");
+        assert_eq!(tv.windup.map(|(w, _)| w), Some(ActiveWeapon::GaussRail));
+        tv.lane
+    };
+    assert!(charging(&mut game, 270.0), "through the brick, 900 px away");
+    assert!(!charging(&mut game, 90.0), "facing away");
+    game.place_tank(s, Position::new(96.0, 384.0), Some(90.0)).unwrap();
+    game.place_tank(enemy, Position::new(1000.0, 384.0), Some(270.0)).unwrap();
+    assert!(!charging(&mut game, 270.0), "iron between");
+}
