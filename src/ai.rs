@@ -2869,15 +2869,15 @@ fn emp_rule(b: &Brain, sense: &EmpSense) -> Option<SpecialUse> {
 /// walk for its way out a cell past the clear margin - the exit it chose
 /// (`Ai::dodge_exit`) while it stays out of every danger and the tank can
 /// still walk there, else the first of `Danger::exits` that does (the
-/// first it can walk to, failing that) - or, in a passing danger's slack
-/// band, stop.
+/// first it can walk to, failing that; with none, the tree goes on) - or,
+/// in a passing danger's slack band, stop.
 /// On foot, never through a portal: a route that hops one hands out the
 /// far portal as its first step from the near one's edge, which a tank
 /// that cannot hop yet would turn back and forth on. Steering drives it
 /// (`Brain::steer_out`), so it sidesteps a tank in its way and its stuck
-/// escape runs; the one turn steering never takes, straight back
-/// (`steer_toward`), is put on its heading here, a dodge being most often
-/// that.
+/// escape runs; the one turn steering never takes, round from a heading
+/// that leads away from the way out (`steer_toward`), is put on its heading
+/// here, a dodge being most often that.
 fn act_dodge(b: &mut Brain) -> Status {
     let Some(danger) = b.danger_here() else { return Status::Failure };
     b.reset_aim();
@@ -2904,9 +2904,15 @@ fn act_dodge(b: &mut Brain) -> Status {
     let held = b.ai.dodge_exit.and_then(|q| open(b, q));
     let pick = held.or_else(|| exits.iter().find_map(|&q| open(b, q))).or_else(|| exits.iter().find_map(|&q| walk(b, q).map(|step| (q, step))));
     b.ai.dodge_exit = pick.map(|(q, _)| q);
-    let (out, step) = pick.unwrap_or((exits[0], exits[0]));
+    // Walled in with no way out on foot: the rest of the tree has the tick.
+    let Some((out, step)) = pick else { return Status::Failure };
+    // A heading held that leads away from the way out - the reversal
+    // steering never takes - gives way to the route's first step.
     let way = Dir::toward(me, step);
-    if b.ai.committed_dir.is_none_or(|held| held == opposite(way)) {
+    let to_out = Vec2::new(out.x - me.x, out.y - me.y);
+    let len = to_out.length().max(1.0);
+    let leads_away = |d: Dir| (d.vec().x * to_out.x + d.vec().y * to_out.y) / len < -0.5;
+    if b.ai.committed_dir.is_none_or(leads_away) {
         b.ai.commit(way);
     }
     b.intent.move_dir = Some(b.steer_out(out));
