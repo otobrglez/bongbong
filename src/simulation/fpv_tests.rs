@@ -260,6 +260,25 @@ fn a_drone_loses_its_lock_when_its_target_goes_under_a_tree() {
     assert_eq!(tank(&game, enemy, |t| t.damage), 0.0, "the leaves took it");
 }
 
+/// A burst on the open ground leaves a hull under a tree's crown out
+/// whole, well inside the blast's reach: the seat's drone, with the tank
+/// under the tree not locked, dives on the aim point beside it.
+#[test]
+fn a_ground_burst_spares_a_hull_under_a_crown() {
+    // The aim point six cells east of the seat, (9, 6); the tree two cells
+    // north of it, the tank between, its hull under the crown.
+    let mut game = round("cells.\"9,4\" = { kind = \"tree\" }\n");
+    let hidden = parked(&mut game, Position::new(cell(9, 6).x + 12.0, cell(9, 4).y + 36.0));
+    let at = tank(&game, hidden, |t| t.position);
+    let events = launch(&mut game, 300);
+    assert_eq!(launched(&events)[0].1, None, "under canopy: nothing to lock");
+    let b = bursts(&events);
+    assert_eq!(b.len(), 1);
+    assert!(!b[0].1, "on the ground, not in the leaves");
+    assert!(b[0].0.distance_to(at) < Tuning::DEFAULT.fpv_blast_radius_px * 0.8, "well inside the blast: {:?} vs {at:?}", b[0].0);
+    assert_eq!(tank(&game, hidden, |t| t.damage), 0.0, "the hull under the crown is left out");
+}
+
 /// A dive whose point is in a crown bursts in the leaves: the tree takes
 /// `fpv_tree_damage`, nothing else anything.
 #[test]
@@ -613,6 +632,41 @@ fn an_enemy_breaks_toward_the_nearest_tree() {
     let events = launch(&mut game, 360);
     assert!(events.iter().any(|e| matches!(e, Event::DroneLockLost { why: "canopy", .. })), "it got under the tree");
     assert_eq!(tank(&game, enemy, |t| t.damage), 0.0);
+}
+
+/// An enemy inside a danger backs out of it before it answers a seat's
+/// drone: here the second seat's armed EMP, the enemy beside it, the first
+/// seat's drone locked on it. While it is in the danger the `air` tier
+/// gives way to `dodge`.
+#[test]
+fn an_enemy_inside_a_danger_backs_out_before_it_answers_a_drone() {
+    let mut game = round_with("", 2);
+    let second = game.players()[1].expect("the second seat");
+    with_tank_mut(&game.world, second, |t| t.emp_charges = tuning().emp_charges_per_pickup);
+    let slot = game.debug_spawn_enemy(cell(6, 12), Some(1), Some(Role::Player)).expect("spawns");
+    let enemy = game.tank_entity_by_slot(slot).expect("exists");
+    with_tank_mut(&game.world, enemy, |t| {
+        t.disarm();
+        t.shells_ammo = 0;
+        t.shield_hp = 0.0;
+        t.shield_timer = 0.0;
+    });
+    let launched_at = launched(&step(&mut game, true));
+    assert_eq!(launched_at[0].1, Some(slot), "the drone is locked on the enemy");
+    let (mut dodged_a_drone, mut answered_inside) = (0, 0);
+    for _ in 0..90 {
+        step(&mut game, false);
+        let ai = game.world.get::<&crate::ai::Ai>(enemy).expect("its brain");
+        let snap = ai.snapshot();
+        if ai.air_threat.is_some() && snap.dodging {
+            dodged_a_drone += 1;
+            if snap.air.is_some() {
+                answered_inside += 1;
+            }
+        }
+    }
+    assert!(dodged_a_drone > 0, "the drone came at it while it stood in the danger");
+    assert_eq!(answered_inside, 0, "inside the danger it backs out first");
 }
 
 /// With no tree and no minigun, it breaks across the drone's line.
