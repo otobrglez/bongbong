@@ -472,7 +472,8 @@ impl Shoal {
 
     /// The hammer's "at 11" (docs/sonic-hammer.md): a fish a sonic wave's
     /// front passes this step, whose throw along the wave's line
-    /// (`sonic_fish_throw_px`) lands on dry ground, is thrown onto the bank
+    /// (`sonic_fish_throw_px`) lands on dry ground on the map - never past
+    /// its edge, where a lake painted to it runs on - is thrown onto the bank
     /// - at most `sonic_fish_throw_max` a wave, the ones nearest the pivot
     /// first, ties on their order. Hashed nowhere and drawn only: a replica
     /// throws the same fish off the same wave. `step` is the round time
@@ -491,7 +492,7 @@ impl Shoal {
                 let away = f.pos - wave.cone.origin;
                 let Some(dir) = unit_of(away) else { continue };
                 let bank = f.pos + dir * t.sonic_fish_throw_px;
-                if water.depth_at(bank) == Depth::Dry {
+                if water.contains(bank) && water.depth_at(bank) == Depth::Dry {
                     hit.push((d, i, bank));
                 }
             }
@@ -942,6 +943,39 @@ mod tests {
         swim(&mut shoal, &water, clock, clock + t.sonic_fish_flop_seconds + 1.0, &t);
         assert!(shoal.fish[0].flop.is_none(), "back in the water");
         assert!(water.depth_at(shoal.fish[0].pos).is_wet(), "{:?}", shoal.fish[0].pos);
+    }
+
+    /// A lake painted to the map's edge runs on past it, so a fish the
+    /// wave would throw past the edge stays in the water: no fish lands off
+    /// the map.
+    #[test]
+    fn no_fish_is_thrown_off_the_map() {
+        let t = quick();
+        let mut cells = Vec::new();
+        for c in 4..=12 {
+            for r in 9..=14 {
+                cells.push((c, r));
+            }
+        }
+        let water = WaterLayout::build(W, H, &[], &world(&cells));
+        let mut shoal = Shoal::new(&water, 5, &t);
+        assert!(!shoal.fish.is_empty());
+        shoal.fish[0].pos = Position::new(256.0, H - 12.0);
+        let cone = crate::sonic::SonicCone::cast(
+            Position::new(256.0, H - 140.0),
+            crate::tank::Dir::Down,
+            t.sonic_reach_px,
+            t.sonic_half_angle_deg.to_radians(),
+            (W, H),
+            |_| crate::sonic::Block::Open,
+            |_| crate::sonic::Floor::Water,
+        );
+        let mut wave = crate::sonic::SonicWave::new(cone, crate::shell::Owner::Player(0));
+        for _ in 0..30 {
+            wave.age += PHYSICS_FIXED_DT;
+            shoal.throw_onto_banks(std::slice::from_ref(&wave), PHYSICS_FIXED_DT, &water, &t);
+        }
+        assert!(shoal.fish[0].flop.is_none(), "the fish by the edge stays in the water");
     }
 
     #[test]

@@ -440,8 +440,8 @@ pub enum ArrowKind {
     /// warning that bombs are coming, `erupting` once they are.
     Volcano { erupting: bool },
     /// An enemy winding up a special (`TankView::windup`): never merged,
-    /// never left out, drawn in the weapon's accent and blinking quicker as
-    /// it nears going off.
+    /// never left out, drawn in the weapon's accent rimmed hostile red and
+    /// blinking quicker as it nears going off.
     Windup { weapon: ActiveWeapon, progress: f32 },
 }
 
@@ -1664,12 +1664,15 @@ pub fn picture(seats: &[Indicators], view: &ViewFrame, time: f32, t: &Tuning, fo
                 len *= 1.0 + t.indicator_pulse_swell * throb;
                 (if erupting { HOSTILE } else { GATE_AMBER }, if throb >= 0.5 { crate::pyro::FIRE[6] } else { RIM })
             }
-            // A wind-up blinks in its weapon's accent, quicker as it nears.
+            // A wind-up blinks in its weapon's accent, quicker as it nears,
+            // rimmed hostile red as the enemy frog is: an accent can be a
+            // seat's own colour (the sonic hammer's sky blue is player 1's),
+            // and this is no teammate.
             ArrowKind::Windup { weapon, progress } => {
                 if !blink_on(time, t.indicator_pulse_hz * (1.0 + 2.0 * progress)) {
                     continue;
                 }
-                (crate::hud::weapon_color(weapon), RIM)
+                (crate::hud::weapon_color(weapon), HOSTILE)
             }
         };
         let middle = behind(arrow.place.at, arrow.place.dir, len * 0.5);
@@ -2904,6 +2907,8 @@ mod picture_tests {
         assert_eq!(body(ArrowKind::Frog { side: Side::Player }), set(&[FROG_GREEN, RIM]));
         assert_eq!(body(ArrowKind::Frog { side: Side::Enemy }), set(&[FROG_GREEN, HOSTILE]));
         assert_eq!(body(ArrowKind::Gate { flash: 1.0 }), set(&[GATE_AMBER, RIM]));
+        let windup = ArrowKind::Windup { weapon: ActiveWeapon::SonicHammer, progress: 0.0 };
+        assert_eq!(body(windup), set(&[crate::hud::weapon_color(ActiveWeapon::SonicHammer), HOSTILE]), "the weapon's accent, rimmed hostile");
     }
 
     /// A lined-up enemy's arrow gets a ring that pulses, dark red while

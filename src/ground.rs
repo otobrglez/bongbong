@@ -1052,6 +1052,11 @@ impl WaterLayout {
         }
     }
 
+    /// Whether a world position lies on the map's grid.
+    pub fn contains(&self, pos: Position) -> bool {
+        self.idx(pos).is_some()
+    }
+
     /// The water under a world position (a hull's centre); off the grid
     /// is dry.
     pub fn depth_at(&self, pos: Position) -> Depth {
