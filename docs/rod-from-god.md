@@ -1206,133 +1206,116 @@ digits, drawn as blocks: no key.
 
 ## 8. Wire
 
-Protocol 19 (from the swarm's 18), once in the PR.
+Protocol 19 (from the swarm's 18).
 
 - `WeaponKind::RodFromGod`, appended to `ALL`; `drawn_on_press` true (its
   show is the call, drawn on the release).
-- **`TankState::reticle: u16`** - 0 for none, else the reticle's cell index
-  plus one (`row * cols + col + 1`, the welcome's cell encoding; a 250 x 250
-  map fits). A replica draws an enemy's reticle and a teammate's from it.
-- **`IntentMsg::reticle: u16`** - the client's own reticle, the same
-  encoding, on every intent while its rod charge runs, the release's
-  included (the sandbox steps the release on that tick with the reticle
-  still on it). The reticle report (below).
-- **A new family, `Snapshot::zones`**, keyed by id:
+- **`TankState::reticle: u16`** - 0 for none, else the reticle's cell as
+  `encode::cell_index` plus one (`encode::reticle_code`,
+  `reticle_from_code`; a 250 x 250 map fits). A replica draws an enemy's
+  reticle and a teammate's from it, keeping the rest it counted while the
+  cell stays.
+- **`IntentMsg::reticle: u16`** - the client's own reticle in the same
+  encoding (`IntentMsg::with_reticle`), on every packet while its rod's
+  charge runs, the release's included: the cell the sandbox stepped the
+  release on (`Predictor::reticle_report`). The reticle report (below).
+- **`Snapshot::zones`**, keyed by id:
 
   ```rust
-  /// One zone standing on the field (`zone.rs`), by `Zone::id`.
   pub struct ZoneState {
-      pub id: u16,
-      /// `zone_kind`: 0 a rod's call (the well adds its own).
-      pub kind: u8,
-      /// Its centre, quarter pixels (`quantise_pos`).
-      pub x: i16,
+      pub id: u16,          // the zone's id, low sixteen bits
+      pub kind: u8,         // `zone::ZONE_ROD` for a call
+      pub x: i16,           // its centre, quarter pixels
       pub y: i16,
-      /// When it ends, the round clock in ticks.
-      pub until: u32,
-      /// Its owner's slot: the kill credit's, and who a screen does not
-      /// warn of its own.
-      pub owner: u16,
-      /// A kind's own stage (the well's); 0 for a call.
-      pub stage: u8,
+      pub until: u32,       // when it ends, round-clock ticks
+      pub owner: u16,       // its owner's slot
+      pub cell: u16,        // the struck cell, `cell_index`
   }
   ```
 
-  The radius is the kind's knob, not the wire's. `delta.rs` treats it as a
-  positioned family (`zones`, `zones_moved`, `zones_gone`); a call never
-  moves, so it travels once and goes once.
-- **A new family, `Snapshot::craters`**, keyed by cell:
-  `CraterState { cell: u16, tick: u32 }` (the struck cell and the impact's
-  round-clock tick, for its smoke's age). A replica works the crater's
-  cells out from the struck cell as the room did (`rod::crater_cells`
-  reads the map's water and lava, which a replica has), and fills them by
-  the sky it shares with the room. `delta.rs`: `craters`, `craters_gone`
-  (only `init` empties it).
-- **`RoundState::volcano_shifts: Vec<i32>`** - each volcano's shift in ticks
-  (`Game::volcanoes` order), empty on a map with none. Sent whole when the
-  round state differs, as the rest of it.
-- **Events**: `WireEvent::RodCalled { id: u16, slot: u16, seat: u8, cell:
-  u16, land: u32 }` (the struck cell in the reticle's encoding less one,
-  the end in round-clock ticks; `seat` `NO_SEAT` for an enemy's) and
-  `WireEvent::RodImpact { id: u16, cell: u16, crater: bool, erupted: bool
-  }`, mirrors of the simulation's. `HitCause::Rod` and
-  `AirStrike::Rod`, appended. The rail's `ChargeEnded` carries the rod's
-  fizzles, cancels and vents.
-- **What a replica draws**: zones from the family (`apply_zones`: added,
-  dropped by id) - the circle, the beam and the countdown from `until`;
-  craters from the family (`apply_craters`: `Game::make_crater` for a new
-  cell, which fills it under a wet sky and clears the replica's nav cache,
-  as on the room); the volcanoes' shifts from the round state
-  (`Volcano::set_shift`, marking a set-off's rumble shown); the reticles
-  from `TankState::reticle`; on `RodCalled`, `rod_call_show` (the ring
-  closing onto the circle) and the module's uplink cell through `Fired`'s
-  `kick_turret`; on `RodImpact`, `rod_show` and the fish thrown
-  (`fish::throw_from`). The kills, shoves, tile deaths, blasts and downed
-  drones come from their own events, as from every blast.
-- **What is drawn at once** (decision 3 of BB-36, the hammer's §3.3):
+  The radius is the kind's knob, not the wire's; a call never changes, so
+  `delta.rs` sends it whole once and its key once more when it goes
+  (`zones`, `zones_gone`).
+- **`Snapshot::craters`**: `CraterState { cell: u16, tick: u32 }` (the
+  struck cell and the impact's tick, for its smoke's age). A replica works
+  the crater's cells out from its own map (`Game::crater_cells_at`) and
+  fills them by the sky it shares with the room (`Game::make_crater`).
+  `delta.rs`: `craters`, `craters_gone`.
+- **`Snapshot::volcano_shifts: Vec<i32>`** - each volcano's shift in ticks
+  (`Game::volcanoes` order), empty while every one is 0, sent whole when it
+  changes (the delta's `Option`). It is beside `RoundState`, not in it,
+  which keeps `RoundState` `Copy`.
+- **Events**: `WireEvent::RodCalled { id: u16, slot: u16, seat: u8, col:
+  u8, row: u8, land: u32 }` (`seat` `NO_SEAT` for an enemy's, `land` in
+  round-clock ticks) and `WireEvent::RodImpact { id: u16, col: u8, row:
+  u8, crater: bool, erupted: bool }` - a map's side is at most 250 cells, so
+  a column and a row are a byte each. `HitCause::Rod` and `AirStrike::Rod`,
+  appended. The rail's `ChargeEnded` carries a rod's cancels and time-outs.
+- **What a replica draws**: zones from the family (`apply_zones`: the
+  room's replaced whole, a client's own provisional ones kept), craters from
+  theirs (`apply_craters`), the volcanoes' shifts (`apply_volcano_shifts`:
+  `Game::shift_volcano`, which marks a set-off's rumble shown), the
+  reticles from `TankState::reticle`; on `RodImpact`, `rod_show` (what it
+  struck read before the crater is made, as the room reads it) and, in
+  `fx`, the fish thrown (`Shoal::throw_from`). The ring closing on a call is
+  drawn from the zone's own age (`compose_call_ring`), so it needs no event
+  of its own. The kills, shoves, tile deaths, blasts and downed drones come
+  from their own events, as from every blast. The picture the round-trip
+  tests hold equal (`DrawableState`) carries the room's zones, the crater
+  cells, the shifts and every tank's reticle.
+- **What is drawn at once** (decision 3 of BB-36):
   - *the reticle, from the press*: the sandbox's seat runs the charge and
-    the reticle in `Game::predict_seat` (the stick handed to the reticle,
-    §3.2), and `OnlineRound` writes the sandbox's `Tank::charge` and
-    `Tank::reticle` into the shown seat where it writes the drawn pose, every
-    frame - so the reticle, the designator, the module's tracking cells, the
-    HUD gauge and the prompt start on the press frame and move with the
-    stick at once.
-  - *the call, on the release*: `Predictor::pull_trigger` takes the release
-    edge `predict_seat` reported. On `Released(Full)` with a call left less
-    the owed, the gate open and the reticle not on the seat's own cell, it
-    sets the gate to `rod_reload_seconds`, owes the call and, while presses
-    are drawn, queues `PressShow::Rod(RodPress { cell, land_in })` and the
-    drawn press `(RodFromGod, input tick of the release)`. `round.rs` puts it
-    on as a provisional zone (`Game::add_provisional_zone`) with
-    `rod_call_show` and the module's uplink cell - the beam, the circle and
-    the countdown on the release frame, from the predicted reticle. On the
-    reticle on its own cell, `PressShow::ChargeEnd(Fizzled)` →
-    `charge_end_show`.
-  - *the countdown, on this client's present*: every zone's seconds left -
-    a provisional's, the room's, an enemy's - are drawn on the round clock
-    of the tick this client's latest input lands on
-    (`incoming_lead_ticks`, docs/online-coop-prd.md §4.16): the time a seat
-    has left to get its own hull out, which is the time the room will judge
-    it by (it places an owned hull where the client's poses put it). So the
-    shooter's own call counts exactly four seconds from its release, and an
-    incoming call appears with what the seat really has left. The impact
-    itself is the room's, drawn when its snapshot is handed over - for the
-    lead's fraction of a second after the number reaches 1 the circle
-    holds, beating.
-- **What is claimed**: the room's `RodCalled` for this seat, by the input
-  tick its `Fired` names (`presses_drawn`, one pending claim per kind,
-  returning the claimed event's id - the swarm's need): not drawn again,
-  not handed on to `game.events`, and `Predictor::pair_zone` pairs the
-  provisional with the room's zone by that id - the provisional goes, the
-  family's zone is shown (same cell; its countdown on the present is the
-  provisional's). Until then the family's zones of this seat that no
-  claim has paired are kept off the picture (`Game::hide_zones`). A drawn
-  call nobody claims within the refusal wait is dropped (the beam goes, the
-  owed call is given back) and a family zone of this seat still unpaired
-  is shown; a room `Fired` the client never drew seeds the local gate
-  (`seed_gate`) and its zone is drawn from the family.
-- **The reticle report** - the room calls on the client's cell. A
-  client-owned seat's mailbox merges intents (pose and stick from the
-  newest), so the room cannot step the reticle the way the client did. So
-  the room takes the client's cell: `Mailbox::reticle()` is the newest
-  applied intent's `reticle` (a starved read repeats the last), and
-  `net::authority::take_reticle(game, seat, cell)` puts it on the seat
-  before the tick (`Game::set_seat_reticle`, for that update alone, as
-  `seat_hold` is) - in the room server's tick beside `take_hold` and
-  `take_pose`, and in the rig's. `charge_trigger` sets the seat's
-  `Tank::reticle` cell to it when it is inside the field and within the
-  reticle's range of the room's copy of the hull grown by a cell; else the
-  room keeps the reticle it stepped itself. A local round has no report. A
-  client that sends none (prediction off) is stepped by the room from the
-  sticks it applies.
+    the reticle in `Game::predict_seat_with` (the stick handed to the
+    reticle, `Stick::Aim`), and `OnlineRound::write_predicted` writes the
+    sandbox's charge and reticle into the shown seat every frame
+    (`Game::show_seat_reticle`) - so the reticle, the designator, the
+    module's tracking cells, the HUD gauge and the prompt start on the press
+    frame and move with the stick at once.
+  - *the call, on the release*: `Predictor::charge_edge`, now by weapon
+    (`SeatCharge::weapon`, and `SeatCharge::hull_cell`, the cell the hull
+    stood on as the trigger was stepped): on a rod's `Released` with the
+    reticle off the hull's own cell it sets the gate to
+    `rod_reload_seconds`, owes the call and, while presses are drawn, queues
+    `PressShow::Rod(RodPress { cell, tick })` and the drawn press
+    `(RodFromGod, the release's input tick)`. `round.rs` keeps it as an
+    `OwnCall` and puts it on the picture as a provisional zone
+    (`Game::set_provisional_zones`, id past `PROVISIONAL_ZONE_BASE`) with
+    the module's uplink cell (`Game::flash_seat_rod`) - the beam, the circle
+    and the count on the release frame. A release on its own cell is the
+    cancel: no show, nothing owed.
+  - *the countdown, on this client's present*: `Game::zone_lead` (set each
+    frame from `incoming_lead_ticks`, 0 in a local round) is added to the
+    picture's clock wherever a zone's seconds are read - the count, the
+    beam's last second, the arrow, the minimap, the light - so every call
+    counts down to the moment the room will judge this client's hull, and
+    the shooter's own counts exactly four seconds from its release. The
+    count never reads under 1: for the lead's fraction of a second at the
+    end the circle holds, beating, until the room's impact is handed over.
+- **What is claimed**: the room's `RodCalled` for this seat, through
+  `Show::OwnShotsDrawn` (`presses_drawn`), claims the call drawn by the
+  release whose input tick the seat's `Fired` before it names
+  (`claim_own_call`, the swarm's `claim_own_drone` rule: the last waiting at
+  or before that tick; any drawn before it still waiting was refused and
+  goes). A claimed call's provisional zone goes and the room's zone - same
+  cell, same landing - is the call from then on. A drawn call nobody claims
+  within the refusal wait goes, and the owed call is given back.
+- **The reticle report**: the room cannot step a client-owned seat's
+  reticle the way the client did (its mailbox merges intents), so it takes
+  the client's cell: `Mailbox::reticle()` is the newest applied intent's
+  `reticle` (a starved read repeats it), and
+  `net::authority::take_reticle(game, seat, code)` hands it to the round
+  before the tick (`Game::set_seat_reticle`, for that update alone) - in the
+  room server's tick beside `take_hold`, and in the rig's. A report puts
+  the reticle on its cell from the press on, held to the reticle's range of
+  the room's hull (`rod::step_reticle`). A local round has no report.
 - **What stays the room's**: the call itself (where and when it lands), the
   crush and its kills (`Hit`, `Wreck`), the shoves (`Shoved` to an owned
-  hull, with its skid), tile deaths (`ObstacleDestroyed`), drums (`Blast`),
-  shields (`ShieldBroken`), drones (`DroneDowned`), frogs (`FrogState`),
-  craters and the volcanoes' shifts. The validator allows a shoved hull its
-  speed (`seat_knock`, the hammer's).
-- `delta.rs`: the two families' lists; its random snapshots fill them, and
-  the size bounds are re-measured.
+  hull), tile deaths (`ObstacleDestroyed`), drums (`Blast`), shields
+  (`ShieldBroken`), drones (`DroneDowned`), frogs (`FrogState`), craters
+  and the volcanoes' shifts.
+- Sizes (`delta::tests::sizes_of_the_prd_snapshot`): the full snapshot 498
+  B (from 489), the idle delta 57 B (from 54); a moving and a busy delta
+  unchanged in their bounds.
 
 ## 9. Determinism
 

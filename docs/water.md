@@ -67,6 +67,12 @@ rule draws RNG, so every existing seed replays unchanged.
   segments, bends and lake shores are still water with no current; the
   marks in the picture draw where the push is.
 - **A speed-up ends** the moment its hull wades in.
+- **A rod's crater fills** (docs/rod-from-god.md): dry, its cells are a pit
+  (`rod_crater_pace` of the pace, priced `rod_crater_path_cost` by the
+  router); under rain or a storm - at once, or the moment the sky turns -
+  `WaterLayout::fill` makes them fords like any other (no current), and
+  under snow ice. Their picture is the crater's own (`rod::draw_crater`),
+  water rising in it over a second.
 - **The AI's router prices a ford.** `pathfind::Grid::weigh` makes a step
   into a shallow cell cost `water_ford_path_cost` (3) dry steps. Occupancy
   is untouched - a ford is open to `usable`, `blocked_ahead` and the flood
