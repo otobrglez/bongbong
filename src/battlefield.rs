@@ -494,6 +494,7 @@ pub fn spawn_from_map(
             CellObject::Sandbag
             | CellObject::Barrel { .. }
             | CellObject::Fence
+            | CellObject::Target
             | CellObject::Tree
             | CellObject::Pine => {
                 let material = obj.material().expect("prop and tree cells spawn a material");

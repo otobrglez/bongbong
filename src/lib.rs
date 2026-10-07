@@ -569,10 +569,10 @@ pub const OBSTACLE_GRID_SIZE: f32 = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE;
 // type.
 pub const OBSTACLE_CLEAR: f32 = 90.0;
 
-// Props: the three discrete destructible items (obstacle::Material::{Sandbag,
-// Barrel, Fence}) share the obstacle grid, hull and draw path but draw from
-// props_sheet.png, a 128x320 sheet (4 cols x 10 rows of 32x32 cells) - see
-// docs/PROPS_SPEC.md:
+// Props: the discrete destructible items (obstacle::Material::{Sandbag,
+// Barrel, Fence, Target}) share the obstacle grid, hull and draw path but
+// draw from props_sheet.png, a 224x352 sheet (7 cols x 11 rows of 32x32
+// cells) - see docs/PROPS_SPEC.md:
 //   rows 0-2 Sandbag (cols 0-2): 3 bag arrangements x intact/torn/collapsed.
 //   rows 3-4 Barrel  (cols 0-3): 2 drum liveries x intact/dented/critical,
 //            col 3 = lit fuse (drawn while Obstacle::fuse is armed).
@@ -583,11 +583,19 @@ pub const OBSTACLE_CLEAR: f32 = 90.0;
 //   row 9    Oil trail (cols 0-3): four puddle variants of the ground cell
 //            a fire runs along (map `kind = "oil"`, not an obstacle - drawn
 //            by `obstacle::draw_oil_cell` straight from the sheet).
-pub const PROPS_COLUMNS: i32 = 4;
-pub const PROPS_ROWS: i32 = 10;
+//   row 10   Target  (cols 0-6): the range board (docs/range-target-prd.md),
+//            intact/holed/cracked/splintered, then cols 4-6 its burn -
+//            scorching, blackened, charred - picked by how far the fire has
+//            got (`Obstacle::col`). The only row past column 3.
+pub const PROPS_COLUMNS: i32 = 7;
+pub const PROPS_ROWS: i32 = 11;
 pub const PROPS_BARREL_LIT_COL: i32 = 3;
 pub const PROPS_OIL_ROW: i32 = 9;
 pub const PROPS_OIL_VARIANTS: i32 = 4;
+pub const PROPS_TARGET_ROW: i32 = 10;
+pub const PROPS_TARGET_BURN_COL: i32 = 4;
+/// How many burn columns the target's row has (`PROPS_TARGET_BURN_COL`..).
+pub const PROPS_TARGET_BURN_STAGES: i32 = 3;
 // barrel_explosion.png: 768x320, five rows of 64x64 cells, of which only
 // row 1 is drawn: SCORCH_VARIANTS burn marks a blast or a burnt-out fire
 // leaves on the ground, plus the directional streak at SCORCH_STREAK_COL.
@@ -997,6 +1005,7 @@ pub mod shockwave;
 pub mod simulation;
 pub mod tank;
 pub mod tank_art;
+pub mod target;
 pub mod text;
 pub mod thumbnail;
 pub mod touch;

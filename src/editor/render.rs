@@ -1687,7 +1687,7 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             let src = obstacle::drum_source_rec(drum);
             d.draw_texture_pro(textures.props, src, dest, origin, 0.0, tint);
         }
-        CellObject::Wall { .. } | CellObject::Sandbag | CellObject::Barrel { .. } | CellObject::Fence => {
+        CellObject::Wall { .. } | CellObject::Sandbag | CellObject::Barrel { .. } | CellObject::Fence | CellObject::Target => {
             let material = obj.material().expect("solid cells have a material");
             let (sheet, src) = obstacle::icon_source_rec(material);
             d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, origin, 0.0, tint);

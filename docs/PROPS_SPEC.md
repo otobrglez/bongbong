@@ -1,7 +1,8 @@
 # Props sheet spec — `static/props_sheet.png` and `static/barrel_explosion.png`
 
-The three destructible props (sandbags, oil barrels, fences —
-docs/sandbags-barrels-fences.md) share the walls' 32px obstacle grid, hull
+The destructible props (sandbags, oil barrels, fences —
+docs/sandbags-barrels-fences.md - and the range board,
+docs/range-target-prd.md) share the walls' 32px obstacle grid, hull
 and draw path (`obstacle.rs`) but are discrete objects rather than tiling
 wall tiles, so they live on their own sheet. Both files are generated
 (`tools/spritegen/gen_props.py`, `tools/spritegen/gen_barrel_explosion.py`),
@@ -17,7 +18,7 @@ nix-shell -p "python3.withPackages (ps: [ps.pillow])" \
 
 | File | Size | Grid | Drawn at |
 |---|---|---|---|
-| `props_sheet.png` | 128x320 | 4 cols x 10 rows of 32x32 | `OBSTACLE_SCALE` (1:1, like walls) |
+| `props_sheet.png` | 224x352 | 7 cols x 11 rows of 32x32 | `OBSTACLE_SCALE` (1:1, like walls) |
 | `barrel_explosion.png` | 768x320 | 12 cols x 5 rows of 64x64 | `scorch_scale` (2.0 default); only row 1 is drawn |
 
 RGBA, no padding, nearest-neighbour sampling. Slice `x = col*cell, y =
@@ -44,8 +45,19 @@ variant`, except fences: `row_base + variant*2 + axis`.
 | 5–6 | Fence, wooden | 5 | horizontal (row 5), vertical (row 6) | 0–1 | intact, damaged (two pickets gone, one leaning, broken rail, splinters) |
 | 7–8 | Fence, wire | 5 | horizontal (row 7), vertical (row 8) | 0–1 | intact, damaged (a hole torn in the mesh, loose wire ends) |
 | 9 | Oil trail (`PROPS_OIL_ROW`) | – | four puddle variants, picked by position hash | 0–3 | not an obstacle: the `kind = "oil"` ground cell a fire runs along (`obstacle::draw_oil_cell`), drawn under everything that stands |
+| 10 | Range board (`PROPS_TARGET_ROW`) | 10 | one | 0–6 | intact, holed (three shot holes with a pale splinter lip), cracked (more holes, a crack, a chipped rim), splintered (the upper-right quarter gone); **cols 4–6 = its burn** (`PROPS_TARGET_BURN_COL`): rings scorching under a lit rim, the board blackened with the rings glowing through, the charred frame with a leg burnt short |
 
-14 of 40 cells are blank; never sample them.
+The sheet is seven columns wide for the range board's burn; every other
+row keeps to columns 0–3. 41 of 77 cells are blank; never sample them.
+
+**The range board** (docs/range-target-prd.md) is a bullseye on two legs
+and a crossbar: `GOLD_BRIGHT` centre, `RED_MD` and `STONE_PALE` rings, a
+`WOOD_DK` rim inside a `BLACK` outline, `WOOD_DEEPER` for the board's
+thickness and the crossbar. Its burn columns are not a flicker loop like
+wood's: `Obstacle::col` steps through them in order by how far the fire
+has got, and the embers, the soot before it catches and the flames are
+drawn over the cell at run time (`target::fire_shapes`,
+`game::tile_flames`).
 
 **The two barrel liveries are the two drum kinds** (`obstacle::Drum`,
 docs/barrel-explosion-variety.md section B): row 3, the red drum, is oil
@@ -117,12 +129,13 @@ drawn, not sampled: tongues of fire leaning with the wind
 
 ```rust
 // obstacle.rs
-Material::sheet()            // Sheet::Props for Sandbag | Barrel | Fence
-Material::row_base()         // Sandbag 0, Barrel 3, Fence 5 (rows within props_sheet.png)
-Material::variants()         // 3, 2, 2
-Material::visible_stages()   // 3, 3, 2
+Material::sheet()            // Sheet::Props for Sandbag | Barrel | Fence | Target
+Material::row_base()         // Sandbag 0, Barrel 3, Fence 5, Target 10 (rows within props_sheet.png)
+Material::variants()         // 3, 2, 2, 1
+Material::visible_stages()   // 3, 3, 2, 4
 Obstacle::row(axis)          // fences: base + variant*2 + axis
-Obstacle::col()              // burning → burn loop; fuse armed → PROPS_BARREL_LIT_COL; else the stage
+Obstacle::col()              // burning board → its burn by progress; burning → burn loop;
+                             // fuse armed → PROPS_BARREL_LIT_COL; else the stage
 draw_obstacle(d, &ObstacleTextures { walls, props }, obstacle, fence_axis(obstacle, &fence_cells))
 
 // blast.rs
@@ -135,7 +148,8 @@ Obstacle::drum() / Obstacle::fuse_rock(time) / draw_oil_cell / draw_flying_drum
 
 Layout constants live in `lib.rs` next to the obstacle block
 (`PROPS_COLUMNS`, `PROPS_ROWS`, `PROPS_BARREL_LIT_COL`, `PROPS_OIL_ROW`,
-`PROPS_OIL_VARIANTS`, `BARREL_EXPLOSION_TEXTURE_SIZE`,
+`PROPS_OIL_VARIANTS`, `PROPS_TARGET_ROW`, `PROPS_TARGET_BURN_COL`,
+`PROPS_TARGET_BURN_STAGES`, `BARREL_EXPLOSION_TEXTURE_SIZE`,
 `BLAST_SHAPE_ROWS`, `SCORCH_ROW`, `SCORCH_VARIANTS`, `SCORCH_STREAK_COL`,
 `SCORCH_MAX`); the feel numbers (the fireball's size and pace, jitter,
 glow, flash, scorch opacity, the pool, the launch, the fuel blast) are
@@ -150,6 +164,7 @@ glow, flash, scorch opacity, the pool, the launch, the fuel blast) are
 | Barrel 1 | `STONE_DK` side, `STONE_MD` lid, `STONE_LT` highlight, `STONE_DARKEST` rim with `GOLD_BRIGHT`/`BLACK` hazard segments, `TEAL_DK`/`TEAL_MD` band |
 | Puddle | `BLACK` a210, `STONE_DARKEST` specks, one `BLUE_DK` a120 sheen pixel |
 | Wooden fence | `WOOD_DEEPER` posts, `WOOD_PALE` caps/tips, `WOOD_MD` rails, `WOOD_LT` pickets, `WOOD_DK` bases, `WOOD_DARKEST` strip |
+| Range board | `GOLD_BRIGHT` centre, `RED_MD`/`STONE_PALE` rings, `WOOD_DK` rim, `BLACK` outline, `WOOD_DEEPER` thickness and crossbar, `WOOD_DK` legs, `WOOD_LT` highlight; burning: `GOLD_MD`/`RED_DEEP`/`SAND_LT`, then `RED_DARKEST`/`WOOD_DEEPER`/`BLACK`, `STONE_DARKEST` char, `RED_BRIGHT`/`GOLD_BRIGHT` lit rim, `RED_DK` glowing cracks |
 | Wire fence | `STONE_DK` posts, `STONE_PALE` caps, `STONE_LT` top wire, `STONE_MD` mesh, `STONE_DARKEST` strip |
 | Blast | `RED_DEEP` → `RED_MD` → `RED_BRIGHT` → `GOLD_BRIGHT` → `WHITE`; smoke `STONE_MD`/`STONE_DK`/`STONE_DARKEST`/`BLACK` at reduced alpha; debris `STONE_DARKEST`/`WOOD_DEEPER`/`BLACK`; embers `GOLD_BRIGHT`/`RED_BRIGHT`/`RED_DK` |
 

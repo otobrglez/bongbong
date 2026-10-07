@@ -1798,6 +1798,15 @@ tunables! {
         /// driving into it, as a multiple of the ordinary knockback: the
         /// hull is sitting on the drum, so it should visibly lurch.
         barrel_ram_kick_factor: f32 = 2.2 in 1.0 ..= 6.0;
+        /// Range board toughness (docs/range-target-prd.md): hp absorbed over
+        /// its four visible stages (intact, holed, cracked, splintered)
+        /// before it breaks - three or four player shells, so a hit or two
+        /// shows on it before it goes. Baked in at spawn.
+        target_max_health: f32 = 100.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Seconds a range board burns once fire has caught it before it
+        /// chars out - longer than a plank's `wood_burn_seconds`, so its
+        /// char and embers read.
+        target_burn_seconds: f32 = 3.0 in 0.1 ..= 30.0;
         /// Per-blast pace jitter on the fireball (`blast_fireball_seconds`),
         /// as a fraction either way, hashed from the blast position: two
         /// adjacent blasts then never burn and cool in lockstep, which is

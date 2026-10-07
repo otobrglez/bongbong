@@ -266,8 +266,10 @@ pub enum Tool {
 /// Every tool, in bar order: the categories one after another, then the
 /// eraser and the select tool, which no category holds. The trees, the
 /// volcano and the lamp post sit with the ground, which leaves PROP room
-/// for the six tower tools inside the eleven rows a dropdown fits.
-pub const TOOLS: [Tool; 45] = [
+/// for the six tower tools inside the eleven rows a dropdown fits, and the
+/// range board stands with the actors, the thing on the field there to be
+/// shot at.
+pub const TOOLS: [Tool; 46] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -298,6 +300,7 @@ pub const TOOLS: [Tool; 45] = [
     Tool::Start2,
     Tool::Frog,
     Tool::EnemyFrog,
+    Tool::Prop(Material::Target),
     Tool::Pickup(PickupKind::Health),
     Tool::Pickup(PickupKind::Ammo),
     Tool::Pickup(PickupKind::Laser),
@@ -327,6 +330,7 @@ impl Tool {
             Tool::Prop(Material::Sandbag) => "sandbag",
             Tool::Prop(Material::Barrel) => "barrel",
             Tool::Prop(Material::Fence) => "fence",
+            Tool::Prop(Material::Target) => "target",
             Tool::Prop(Material::Tree) => "tree",
             Tool::Prop(Material::Pine) => "pine",
             Tool::Prop(Material::Lamp) => "lamp",
@@ -381,6 +385,7 @@ impl Tool {
         match self {
             Tool::Wall(_) => Some(Category::Wall),
             Tool::Prop(Material::Tree | Material::Pine | Material::Lamp) => Some(Category::Ground),
+            Tool::Prop(Material::Target) => Some(Category::Actor),
             Tool::Prop(_) | Tool::Drum(_) | Tool::Tower(..) => Some(Category::Prop),
             Tool::Road | Tool::Water | Tool::Lava | Tool::Volcano | Tool::TallGrass | Tool::OilTrail | Tool::Gate | Tool::Portal => {
                 Some(Category::Ground)

@@ -61,11 +61,13 @@ pub enum IgnitedWhat {
     Fence,
     /// A defence tower caught fire (docs/defence-towers-prd.md section 7).
     Tower,
+    /// A range board caught fire (docs/range-target-prd.md).
+    Target,
 }
 
 impl IgnitedWhat {
     /// Every kind, in wire order.
-    pub const ALL: [IgnitedWhat; 8] = [
+    pub const ALL: [IgnitedWhat; 9] = [
         IgnitedWhat::Ground,
         IgnitedWhat::Oil,
         IgnitedWhat::Wood,
@@ -74,6 +76,7 @@ impl IgnitedWhat {
         IgnitedWhat::Sandbag,
         IgnitedWhat::Fence,
         IgnitedWhat::Tower,
+        IgnitedWhat::Target,
     ];
 
     /// The name `flame.rs` puts in the event.
@@ -87,6 +90,7 @@ impl IgnitedWhat {
             IgnitedWhat::Sandbag => "sandbag",
             IgnitedWhat::Fence => "fence",
             IgnitedWhat::Tower => "tower",
+            IgnitedWhat::Target => "target",
         }
     }
 

@@ -155,18 +155,19 @@ impl Game {
         }
         // The surge an eruption sends down the rivers sets what grows on
         // their banks alight: a flammable tile on ground at least a bank's
-        // heat catches at even odds, hashed by its cell and the eruption.
+        // heat catches at even odds, hashed by its cell and the eruption -
+        // a range board too, which catches from any fire.
         for n in surged {
             let bank = t.lava_heat_falloff;
             for o in self.world.query::<&mut crate::obstacle::Obstacle>().iter() {
-                if o.destroyed || o.burning || !o.flammable {
+                if o.destroyed || o.burning || !(o.flammable || o.material.catches_fire()) {
                     continue;
                 }
                 let (c, r) = crate::map::world_to_cell(o.position);
                 if self.lava.heat(c, r) >= bank && crate::lava::hash3(c * 131 + r, n as i32, 17) < 0.5 {
                     o.health = 0.0;
                     o.burning = true;
-                    f.events.push(Event::Ignited { x: o.position.x, y: o.position.y, what: if o.material.is_tree() { "tree" } else { "wood" } });
+                    f.events.push(Event::Ignited { x: o.position.x, y: o.position.y, what: if o.material.is_tree() { "tree" } else if o.material.catches_fire() { "target" } else { "wood" } });
                 }
             }
         }

@@ -109,7 +109,7 @@ pub fn dust_of(material: crate::obstacle::Material) -> Option<[Color; 3]> {
     match material {
         Material::Brick | Material::Tesla | Material::GunTower | Material::BioSlush => Some([SMOKE[3], SMOKE[4], SMOKE[5]]),
         Material::Sandbag => Some([DUST[2], DUST[3], DUST[4]]),
-        Material::Wood | Material::Fence => Some([DUST[0], DUST[1], rgb(0x99, 0x65, 0x24)]),
+        Material::Wood | Material::Fence | Material::Target => Some([DUST[0], DUST[1], rgb(0x99, 0x65, 0x24)]),
         Material::Tree | Material::Pine => Some([rgb(0x1C, 0x4C, 0x33), rgb(0x5F, 0x91, 0x4B), rgb(0x7C, 0x98, 0x3C)]),
         Material::Volcano => Some([SMOKE[0], SMOKE[1], SMOKE[2]]),
         Material::Iron | Material::Glass | Material::Barrel | Material::Lamp | Material::Door => None,

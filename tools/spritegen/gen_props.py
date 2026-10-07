@@ -3,7 +3,7 @@ oil barrels, fences) that share the 32px obstacle grid with walls but are
 discrete objects rather than tiling wall tiles. See docs/PROPS_SPEC.md for
 the full sheet map and docs/sandbags-barrels-fences.md for the feature.
 
-Layout: 128x320, 4 cols x 10 rows of 32x32 cells.
+Layout: 224x352, 7 cols x 11 rows of 32x32 cells.
     rows 0-2  Sandbag  cols 0-2: straight row / staggered wall / heaped pile
                                  x intact/torn/collapsed
     rows 3-4  Barrel   cols 0-3: two drum liveries x intact/dented/critical,
@@ -15,7 +15,13 @@ Layout: 128x320, 4 cols x 10 rows of 32x32 cells.
                                  ground cell (map `kind = "oil"`) - not an
                                  obstacle, drawn under everything, picked
                                  by position hash (obstacle::draw_oil_cell)
-Cells outside those ranges are blank and never sampled.
+    row 10    Target   cols 0-3: the range board (map `kind = "target"`,
+                                 docs/range-target-prd.md) intact / holed /
+                                 cracked / splintered; cols 4-6 its burn,
+                                 scorching -> blackened -> charred frame,
+                                 picked by how far the fire has got
+Cells outside those ranges are blank and never sampled. The sheet is seven
+columns wide for the target's burn; every other row keeps to its first four.
 
 Every cell is drawn on a 16x16 "macro pixel" canvas and upscaled 2x with
 NEAREST, which is pixel-for-pixel what gen_walls.py's pixelate() post-process
@@ -38,11 +44,12 @@ from punypalette import (BLACK, WHITE, STONE_PALE, STONE_LT, STONE_MD, STONE_DK,
                          STONE_DARKEST, SAND_PALE, SAND_LT, SAND_MD, SAND_DK,
                          WOOD_PALE, WOOD_LT, WOOD_MD, WOOD_DK, WOOD_DEEPER,
                          WOOD_DARKEST, RED_BRIGHT, RED_MD, RED_DEEP, RED_DK,
-                         RED_DARKEST, TEAL_MD, TEAL_DK, BLUE_DK, GOLD_BRIGHT, snap)
+                         RED_DARKEST, TEAL_MD, TEAL_DK, BLUE_DK, GOLD_BRIGHT,
+                         GOLD_MD, snap)
 
 S = 16            # macro canvas: one drawn pixel = a 2x2 block in the 32px cell
 CELL = 32
-COLS, ROWS = 4, 10
+COLS, ROWS = 7, 11
 OUT = os.environ.get('SPRITE_OUT', 'assets/sprites')
 os.makedirs(OUT, exist_ok=True)
 
@@ -387,6 +394,97 @@ def draw_oil(variant, rng):
     return img
 
 
+# ---------------------------------------------------------------- target
+# The range board (docs/range-target-prd.md): a round bullseye standing on
+# two legs and a crossbar, gold centre, red and white rings, a wooden rim
+# and a darker band under it for the board's thickness - the drum's round
+# silhouette, read apart from it by the rings and the stand.
+TGT_CX, TGT_CY, TGT_R = 7.5, 7.0, 6.4
+TGT_HOLES = [(5, 5), (10, 9), (9, 4), (5, 10), (11, 5), (8, 8)]
+
+
+def target_board(burn):
+    """The intact board; `burn` 0 (none) to 3 (charred) recolours it."""
+    img = blank()
+    leg, bar = C(WOOD_DK), C(WOOD_DEEPER)
+    if burn >= 2:
+        leg, bar = C(WOOD_DARKEST), C(BLACK)
+    for x in (3, 12):
+        rect(img, x, 11, x, 14, leg)
+    if burn >= 3:
+        clear(img, 12, 14, 12, 14)  # a leg burnt short: the stand gives
+    rect(img, 3, 13, 12, 13, bar)
+    # Thickness: the board's lower edge seen from slightly above.
+    ellipse(img, TGT_CX, TGT_CY + 1, TGT_R, TGT_R, C(WOOD_DEEPER if burn < 2 else BLACK))
+    rings = [  # (radius, unburnt, scorched, blackened, charred)
+        (TGT_R, BLACK, BLACK, BLACK, BLACK),
+        (TGT_R - 0.9, WOOD_DK, STONE_DARKEST, BLACK, STONE_DARKEST),
+        (TGT_R - 1.8, RED_MD, RED_DEEP, RED_DARKEST, BLACK),
+        (TGT_R - 3.0, STONE_PALE, SAND_LT, WOOD_DEEPER, STONE_DARKEST),
+        (TGT_R - 4.2, RED_MD, RED_DEEP, RED_DARKEST, RED_DARKEST),
+        (1.3, GOLD_BRIGHT, GOLD_MD, WOOD_DK, BLACK),
+    ]
+    for r, *cols in rings:
+        ellipse(img, TGT_CX, TGT_CY, r, r, C(cols[burn]))
+    if burn == 0:
+        px(img, 4, 3, C(WOOD_LT))
+        px(img, 3, 4, C(WOOD_LT))
+    return img
+
+
+def draw_target(stage, rng):
+    """Cols 0-3: the damage stages. Shots land as dark holes with a pale
+    splinter lip; the third stage cracks the board, the last loses its
+    upper-right quarter to a splintered break."""
+    img = target_board(0)
+    holes = TGT_HOLES[:[0, 3, 5, 6][stage]]
+    for (x, y) in holes:
+        px(img, x, y, C(BLACK))
+        px(img, x + 1, y - 1, C(WOOD_PALE) if get(img, x + 1, y - 1)[3] else None)
+    if stage >= 2:
+        crack(img, 3, 9, 7, 12, C(WOOD_DARKEST), rng, jitter=0)
+        clear(img, 12, 2, 13, 3)
+        px(img, 14, 4, C(BLACK))
+    if stage >= 3:
+        for y in range(S):
+            for x in range(S):
+                if x >= 8 and y <= 7 and (x - 8) + (7 - y) > 1 and y < 11:
+                    img.putpixel((x, y), (0, 0, 0, 0))
+        for (x, y) in [(8, 1), (8, 2), (9, 3), (9, 4), (10, 5), (11, 6), (12, 7), (13, 7)]:
+            if get(img, x, y)[3] == 0 or True:
+                px(img, x, y, C(WOOD_PALE if (x + y) % 3 else WOOD_DARKEST))
+        px(img, 14, 9, C(WOOD_LT))
+    declutter(img, 2)
+    return img
+
+
+def draw_target_burn(step, rng):
+    """Cols 4-6: the board burning, picked by how far the fire has got
+    (`Obstacle::col`): the rings scorching with a lit rim, the board
+    blackened with the rings glowing through, the charred frame. The
+    flames and the pulsing embers are drawn over it at run time
+    (`target::fire_shapes`)."""
+    burn = step + 1
+    img = target_board(burn)
+    for (x, y) in TGT_HOLES[:3]:
+        px(img, x, y, C(BLACK))
+    # The fire's edge: lit rim blocks along the bottom of the board where
+    # the flames stand, fewer as the wood is spent.
+    lit = {1: [(4, 11), (6, 12), (9, 12), (11, 11), (12, 9)], 2: [(5, 12), (10, 12), (3, 8)], 3: [(7, 12)]}[burn]
+    for (x, y) in lit:
+        if get(img, x, y)[3]:
+            px(img, x, y, C(RED_BRIGHT if (x + y) % 2 else GOLD_BRIGHT))
+    if burn >= 2:
+        for (x, y) in [(6, 3), (10, 6), (4, 8)]:
+            px(img, x, y, C(RED_DK))
+    if burn >= 3:
+        # Burnt through: bites out of the rim and the middle.
+        for (x, y) in [(2, 4), (2, 5), (13, 9), (12, 11), (6, 1), (7, 1), (9, 9), (10, 9), (7, 5)]:
+            img.putpixel((x, y), (0, 0, 0, 0))
+    declutter(img, 2)
+    return img
+
+
 # ---------------------------------------------------------------- sheet
 def seed(row, col):
     return random.Random(500 + row * 31 + col * 7)
@@ -403,11 +501,13 @@ ROW_DRAWERS = [
     (7, lambda c: draw_wire_fence(c, seed(7, c)) if c < 2 else None),
     (8, lambda c: transpose(draw_wire_fence(c, seed(7, c))) if c < 2 else None),
     (9, lambda c: draw_oil(c, seed(9, c))),
+    (10, lambda c: draw_target(c, seed(10, c)) if c < 4 else draw_target_burn(c - 4, seed(10, c))),
 ]
 
 sheet = Image.new('RGBA', (CELL * COLS, CELL * ROWS), (0, 0, 0, 0))
 for row, draw in ROW_DRAWERS:
-    for col in range(COLS):
+    # Only the target's row reaches past the first four columns.
+    for col in range(COLS if row == 10 else 4):
         cell = draw(col)
         if cell is not None:
             sheet.paste(up2(cell), (col * CELL, row * CELL))   # no mask: no alpha drift

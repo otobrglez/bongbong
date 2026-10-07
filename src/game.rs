@@ -88,7 +88,8 @@ fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, sh
 
 /// The flames on a burning tile (`Obstacle::burning`: timber and trees
 /// charring out), in the effects language (`pyro::tongues`): catching over
-/// its first moments and dying down over the end of `wood_burn_seconds`,
+/// its first moments and dying down over the end of its burn
+/// (`Material::burn_seconds`, on the clock it is drawn by, `burn_shown`),
 /// leaning with the wind; a tree burns in its crown. The last shape is
 /// their light, which the glowing pass draws.
 pub fn tile_flames(obstacle: &Obstacle, time: f32) -> Vec<crate::pyro::Shape> {
@@ -97,9 +98,10 @@ pub fn tile_flames(obstacle: &Obstacle, time: f32) -> Vec<crate::pyro::Shape> {
     if !obstacle.burning {
         return out;
     }
-    let catching = (obstacle.burn_elapsed / 0.3).clamp(0.0, 1.0);
-    let left = t.wood_burn_seconds - obstacle.burn_elapsed;
-    let dying = (left / (t.wood_burn_seconds * 0.3).max(0.01)).clamp(0.0, 1.0);
+    let burn = obstacle.material.burn_seconds();
+    let catching = (obstacle.burn_shown / 0.3).clamp(0.0, 1.0);
+    let left = burn - obstacle.burn_shown;
+    let dying = (left / (burn * 0.3).max(0.01)).clamp(0.0, 1.0);
     let strength = catching.min(dying).max(0.35);
     let at = obstacle.position;
     let lean = crate::pyro::smoke_lean(&t, at, time);
@@ -366,6 +368,15 @@ impl Game {
         for flag in self.training_flags() {
             if !c.culls(flag.at) {
                 crate::training::draw_flag(c, flag.at, crate::tank::team_color(0), flag.taken, self.time);
+            }
+        }
+        // A range board's own fire (`target.rs`): the soot creeping in
+        // under the stream, the embers pulsing over its char once it
+        // burns - under the flames that stand on it.
+        let ignite = t.flame_ignite_seconds;
+        for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| o.material == Material::Target) {
+            if !c.culls(obstacle.position) {
+                crate::pyro::draw(c, &crate::target::fire_shapes(obstacle, ignite));
             }
         }
         // Burning timber: flames standing on each plank, over the tiles
