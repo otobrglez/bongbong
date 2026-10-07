@@ -627,9 +627,9 @@ pub fn compose_impact(out: &mut Vec<Shape>, fx: &RodImpactFx, lean: f32, t: &Tun
     if fx.ground == Ground::Water && k < SPLASH_SECONDS {
         let p = k / SPLASH_SECONDS;
         let height = SPLASH_PX * 4.0 * p * (1.0 - p);
-        for i in 0..12u32 {
+        for i in 0..24u32 {
             let x = at.x + (pyro::unit(fx.seed, 120 + i) - 0.5) * 20.0;
-            let y = at.y - height * (0.3 + 0.7 * pyro::unit(fx.seed, 140 + i));
+            let y = at.y - height * (0.15 + 0.85 * pyro::unit(fx.seed, 150 + i));
             let color = if i % 3 == 0 { WATER[2] } else { Color::WHITE };
             out.push(Shape::Mark { pos: Position::new(x, y), size: 2, color });
         }

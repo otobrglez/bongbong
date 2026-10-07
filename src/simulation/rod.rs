@@ -425,8 +425,9 @@ impl Game {
     /// A rod's impact as it is drawn at `c` - the round's, a replica's off
     /// `Event::RodImpact`: the column, the dust and the debris
     /// (`rod_impacts`), the screen flash, the ripple and the impact flash,
-    /// the fireball; on dry ground a scorch and a ring of rubble thrown out
-    /// round the crater; the grass laid flat. Hashed, no RNG.
+    /// the fireball but out of water; on dry ground a scorch and a ring of
+    /// rubble thrown out round the crater; the grass laid flat. Hashed, no
+    /// RNG.
     pub(crate) fn rod_show(&mut self, show: &mut Spectacle, c: Position, ground: Ground) {
         let t = tuning();
         self.rod_impacts.push(RodImpactFx::new(c, ground));
@@ -435,9 +436,14 @@ impl Game {
             show.shocks.push(Shockwave::scaled(c, t.rod_shock));
         }
         show.impact_flashes.push(Shockwave::new(c));
-        let mut fx = crate::blast::BlastFx::shaped(c, crate::blast::BlastKind::Fuel, crate::blast::BlastShape::Fire);
-        fx.scale *= t.rod_fireball_scale;
-        show.blast_fx.push(fx);
+        // The heat of the strike, but not out of water, which throws up its
+        // spray instead (`rod::compose_impact`): a fireball's dust ring
+        // would read as earth on the lake and hide the spray.
+        if ground != Ground::Water {
+            let mut fx = crate::blast::BlastFx::shaped(c, crate::blast::BlastKind::Fuel, crate::blast::BlastShape::Fire);
+            fx.scale *= t.rod_fireball_scale;
+            show.blast_fx.push(fx);
+        }
         crate::grass::flatten(&mut self.grass, c, t.rod_shove_radius_px);
         if ground == Ground::Dry {
             show.scorches.push(crate::blast::Scorch::with(c, t.rod_scorch_scale, None));
