@@ -246,6 +246,7 @@ fn main() {
                             minimap: None,
                             thumbnails: None,
                         },
+                        session.question.as_ref(),
                     );
                     return;
                 }
