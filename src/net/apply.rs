@@ -335,9 +335,9 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTre
             }
             WireEvent::GrenadeBlast { x, y, .. } => game.grenade_show(show, at(x, y)),
             // A drone's burst, leaning down the dive the replica's copy of
-            // it was flying.
+            // it was heading along (`fpv::Drone::commit` turns it that way).
             WireEvent::DroneBurst { id, x, y, crown, .. } => {
-                let dir = game.world.query::<&crate::fpv::Drone>().iter().find(|d| (d.id & 0xFFFF) as u16 == id).map_or(Vec2::new(0.0, 0.0), |d| d.velocity());
+                let dir = game.world.query::<&crate::fpv::Drone>().iter().find(|d| d.id == id as u32).map_or(Vec2::new(0.0, 0.0), |d| d.heading);
                 game.drone_show(show, at(x, y), dir, crown);
             }
             // A sonic hammer's wave, cast against this replica's tiles -
@@ -1735,6 +1735,36 @@ mod tests {
         assert!(seen.seat_drones > 0, "{seen:?}: no seat's drone was ever in the air");
         assert!(seen.enemy_drones > 0, "{seen:?}: no enemy's drone was ever in the air");
         assert!(seen.drone_stages[..3].iter().all(|&n| n > 0), "{seen:?}: a stage never reached the replica");
+    }
+
+    /// A drone's burst leans down its dive on a replica as it does in the
+    /// room: the replica flies no dive, so the lean is read off the heading
+    /// the room turned the drone to at its commit, which the wire carries.
+    #[test]
+    fn a_drones_burst_leans_alike_on_the_replica() {
+        let mut game = authoritative(DEFAULT_MAP, 0xB0B5, 2);
+        let patch = crate::simulation::debug::TankPatch { fpv_drones: Some(6), ..Default::default() };
+        game.debug_set_tank(0, &patch).expect("the seat's tank");
+        let mut replica = welcome_through_the_codec(&game);
+        let (width, height) = game.map.field_size();
+        for frame in 1..=400u32 {
+            game.update(Input::single(Intent { fire: frame == 2, ..Intent::default() }), PHYSICS_FIXED_DT, width, height);
+            let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
+            snap.events = enc::wire_events(game.events());
+            snapshot(&mut replica, &snap);
+            if game.events().iter().any(|e| matches!(e, crate::simulation::Event::DroneBurst { .. })) {
+                let room = game.blast_fx.last().expect("the room's burst");
+                let copy = replica.blast_fx.last().expect("the replica's burst");
+                assert!(room.offset.x != 0.0 || room.offset.y != 0.0, "the room's burst leans down the dive");
+                assert_eq!(
+                    (copy.offset.x, copy.offset.y, copy.row, copy.turn),
+                    (room.offset.x, room.offset.y, room.row, room.turn),
+                    "the replica's burst is the room's"
+                );
+                return;
+            }
+        }
+        panic!("the drone never burst");
     }
 
     #[test]
