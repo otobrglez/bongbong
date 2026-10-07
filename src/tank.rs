@@ -835,6 +835,11 @@ pub struct Tank {
     /// Seconds the FPV module shows its launch cell (`kick_fpv`).
     /// Presentation only.
     pub fpv_flash: f32,
+    /// Drones a client drew off this seat's halo on its own press that the
+    /// room's count (`fpv_drones`) does not know of yet (`net::round`): the
+    /// halo and the HUD are drawn without them. Presentation only, 0
+    /// everywhere else.
+    pub fpv_lifting: u8,
     /// An enemy's trigger as the simulation last read it
     /// (`simulation::enemy_trigger`): the press edge a charge starts on. A
     /// seat's is `Game::player_fire_held_last_frame`.
@@ -1059,6 +1064,7 @@ impl Default for Tank {
             fpv_out: 0,
             fpv_want: None,
             fpv_flash: 0.0,
+            fpv_lifting: 0,
             trigger_held: false,
             droop: 0.0,
             speed_boost_timer: 0.0,

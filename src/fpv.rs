@@ -94,12 +94,31 @@ pub enum DroneLock {
     Frog { entity: hecs::Entity, side: crate::frog::Side },
 }
 
+/// `DroneLock::code` of a drone locked on nothing.
+pub const LOCK_NONE: u16 = u16::MAX;
+/// `DroneLock::code` of a drone locked on the players' frog.
+pub const LOCK_FROG: u16 = u16::MAX - 1;
+/// `DroneLock::code` of a drone locked on the Hunt mission's enemy frog.
+pub const LOCK_ENEMY_FROG: u16 = u16::MAX - 2;
+
 impl DroneLock {
     /// The owner slot of a locked tank.
     pub fn slot(self) -> Option<usize> {
         match self {
             DroneLock::Tank { slot, .. } => Some(slot),
             _ => None,
+        }
+    }
+
+    /// What it is locked on as one number, the wire's
+    /// (`net::wire::DroneState::lock`): a tank's owner slot, `LOCK_FROG`,
+    /// `LOCK_ENEMY_FROG` or `LOCK_NONE`.
+    pub fn code(self) -> u16 {
+        match self {
+            DroneLock::None => LOCK_NONE,
+            DroneLock::Tank { slot, .. } => slot.min(LOCK_ENEMY_FROG as usize - 1) as u16,
+            DroneLock::Frog { side: crate::frog::Side::Player, .. } => LOCK_FROG,
+            DroneLock::Frog { side: crate::frog::Side::Enemy, .. } => LOCK_ENEMY_FROG,
         }
     }
 }
@@ -194,6 +213,26 @@ impl Drone {
             downed_by: None,
             landed: false,
         }
+    }
+
+    /// Its heading over the ground as degrees clockwise from up (0 = up):
+    /// the wire's spelling.
+    pub fn heading_degrees(&self) -> f32 {
+        self.heading.x.atan2(-self.heading.y).to_degrees()
+    }
+
+    /// The unit heading `heading_degrees` names.
+    pub fn heading_of(degrees: f32) -> Vec2 {
+        let rad = degrees.to_radians();
+        Vec2::new(rad.sin(), -rad.cos())
+    }
+
+    /// Run a replica's copy's clocks on by `dt` (`Game::tick_presentation`):
+    /// its rotors and its lamp turn on them. The room's snapshot is what
+    /// moves it.
+    pub fn age_by(&mut self, dt: f32) {
+        self.age += dt;
+        self.stage_time += dt;
     }
 
     /// In the air and strikable: launching, cruising or diving.
@@ -364,6 +403,11 @@ pub fn halo_slot(centre: Position, sprite_size: f32, k: usize, n: usize) -> (Pos
     let out = bearing_dir(FPV_HALO_START_DEG + k as f32 * 360.0 / n as f32);
     (centre + out * (sprite_size * FPV_HALO_RADIUS_FRACTION), out)
 }
+
+/// How far into its climb (s) a drone a client drew on its own press is
+/// handed to the room's copy (docs/fpv-swarm.md "Wire"): never past
+/// `fpv_launch_seconds`, so the two meet on the climb's one path.
+pub const FPV_LAUNCH_HANDOVER_SECONDS: f32 = 0.25;
 
 /// Where a drone `age` seconds into its climb stands: out from its slot's
 /// ground point `origin` along `out` at `fpv_launch_speed`, its height

@@ -1253,8 +1253,14 @@ fn check_anomalies(
         // player's *current* position - the "arrived" instant for the
         // path-stretch metric (see NAV_GRACE_SECONDS's comment). Recorded
         // here, judged once at round end by `run_round`.
+        // A drone launched at a seat is engagement too: the tank stands
+        // inside that seat's sight box and fights it from there, out of
+        // its face (docs/fpv-swarm.md "Probe").
+        let launched_at_seat = game.events().iter().any(|e| {
+            matches!(*e, Event::DroneLaunched { slot, target: Some(seat), .. } if slot == tank.slot && seat < game.first_enemy_slot())
+        });
         if track.time_to_engage.is_none()
-            && pos.distance_to(player_snap.position) <= tuning().enemy_attack_range
+            && (pos.distance_to(player_snap.position) <= tuning().enemy_attack_range || launched_at_seat)
         {
             track.time_to_engage = Some(frame as f32 * DT);
         }

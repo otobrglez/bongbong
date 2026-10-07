@@ -135,7 +135,10 @@ impl WeaponSlot {
     /// time `time` (an offline special's flicker).
     pub fn of(tank: &Tank, time: f32) -> WeaponSlot {
         let weapon = tank.special().unwrap_or(ActiveWeapon::Shell);
-        let (count, full) = (tank.weapon_ammo(weapon), weapon.full_load());
+        // Drones a client drew off the halo on its own press are spent
+        // here at once, as the halo shows (`Tank::fpv_lifting`).
+        let lifting = if weapon == ActiveWeapon::FpvSwarm { tank.fpv_lifting as i32 } else { 0 };
+        let (count, full) = ((tank.weapon_ammo(weapon) - lifting).max(0), weapon.full_load());
         let color = match weapon {
             ActiveWeapon::Shell => hud_number_color(count as f32, full as f32),
             special => weapon_color(special),

@@ -1405,6 +1405,12 @@ impl Game {
             pyro::draw(&mut GpuCanvas::new(d, textures), &chips);
         }
 
+        // The FPV drones in the air over everything that stands, their
+        // shadows on what is under them (docs/fpv-swarm.md "Drawing"):
+        // lit with the field, their lamps in `paint_field_glowing`.
+        let drones = self.drones();
+        crate::game::paint_drones(&mut GpuCanvas::new(d, textures), &drones, self.time, self.shadows_enabled);
+
         // Over everything that stands: each volcano's plume, steam while
         // it sleeps and ash from the rumble on (docs/volcano.md). It is
         // smoke, so the night darkens it with the rest.
@@ -1467,6 +1473,34 @@ impl Game {
                     crate::tank::draw_tank_glow(&mut c, tank, self.time, tank_glow);
                 }
             });
+        }
+
+        // Every FPV drone's lamp - in the air and in the halos - over the
+        // lit field, so a swarm reads at night; with its small light
+        // (`fpv_lamp_light`) where the sky is dark.
+        {
+            let drones = self.drones();
+            let halos: Vec<crate::fpv::HaloLook> = self
+                .world
+                .query::<&Tank>()
+                .iter()
+                .filter(|t| !(self.hide_players && t.is_player()) && !culled(cull, t.position))
+                .filter_map(|t| crate::game::halo_of(t, self.time))
+                .collect();
+            if !drones.is_empty() || !halos.is_empty() {
+                let lamps = crate::game::drone_lamps(&drones, &halos, self.time);
+                pyro::draw(&mut GpuCanvas::new(d, textures), &lamps);
+                let light = tuning().fpv_lamp_light * tank_glow;
+                if light > 0.0 {
+                    d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                        for shape in &lamps {
+                            if let pyro::Shape::Mark { pos, color, .. } = *shape {
+                                ground_light(&mut bd, pos, 10.0, color, light);
+                            }
+                        }
+                    });
+                }
+            }
         }
 
         // Lava shines by itself: under any sky that darkens the field its

@@ -54,7 +54,7 @@ use crate::net::encode::{cell_from_index, cell_index, field_cols};
 use crate::net::events::WireEvent;
 use crate::net::events::WireHitTarget;
 use crate::net::wire::{
-    GrenadeState, MissileState, ShotKind, ShotState, Snapshot, TankState, WeaponKind, Welcome, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, crate_flags, dequantise_health, frog_flags, tank_flags, tile_flags,
+    DroneState, GrenadeState, MissileState, ShotKind, ShotState, Snapshot, TankState, WeaponKind, Welcome, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, crate_flags, dequantise_health, frog_flags, tank_flags, tile_flags,
 };
 use crate::laser::{LaserBeam, LaserVariant};
 use crate::obstacle::{Fuse, Obstacle};
@@ -139,7 +139,7 @@ impl Show {
     /// `Fired` of it - the show that press put up, which the room logs
     /// after its `Fired` in the same tick. A `Fired` whose show is missing
     /// (kept from a snapshot handed over too late to draw) drops nothing.
-    fn presses_drawn(self, s: &Snapshot) -> BTreeSet<usize> {
+    pub(crate) fn presses_drawn(self, s: &Snapshot) -> BTreeSet<usize> {
         let Show::OwnShotsDrawn { seat, presses } = self else { return BTreeSet::new() };
         let mut out = BTreeSet::new();
         let mut fired = 0u32;
@@ -279,6 +279,7 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_shots(game, s);
     apply_missiles(game, s, drawn.then_some(&mut spectacle));
     apply_grenades(game, s);
+    apply_drones(game, s);
     apply_frogs(game, s, drawn.then_some(&mut spectacle));
     apply_pickups(game, s, cols);
     apply_fires(game, s, cols);
@@ -333,6 +334,12 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTre
                 game.missile_show(show, center, dir);
             }
             WireEvent::GrenadeBlast { x, y, .. } => game.grenade_show(show, at(x, y)),
+            // A drone's burst, leaning down the dive the replica's copy of
+            // it was flying.
+            WireEvent::DroneBurst { id, x, y, crown, .. } => {
+                let dir = game.world.query::<&crate::fpv::Drone>().iter().find(|d| (d.id & 0xFFFF) as u16 == id).map_or(Vec2::new(0.0, 0.0), |d| d.velocity());
+                game.drone_show(show, at(x, y), dir, crown);
+            }
             // A sonic hammer's wave, cast against this replica's tiles -
             // unless it is this seat's own press, drawn on the press.
             WireEvent::SonicBlast { slot, x, y, dir } if !own_presses.contains(&i) => {
@@ -845,6 +852,74 @@ fn apply_missiles(game: &mut Game, s: &Snapshot, mut show: Option<&mut Spectacle
     }
 }
 
+/// The FPV drones the snapshot lists, spawned, moved or dropped
+/// (docs/fpv-swarm.md "Wire"). A replica never flies one: no lock, no
+/// turn, no dive, no burst. It holds where the room had it - ground point,
+/// height, heading, stage - and runs its rotors and lamp on its own clock
+/// (`Game::tick_presentation`); a stage it newly reaches starts that
+/// stage's clock over. What the wire leaves out - the lock, the aim, the
+/// dive's plan - stays at its spawn value, since nothing here reads it.
+fn apply_drones(game: &mut Game, s: &Snapshot) {
+    use crate::fpv::{Drone, DroneLock, DroneStage};
+    let first_enemy = game.first_enemy_slot();
+    // The room's drones, by their wire id; a drone a client drew on its
+    // own press carries an id past the wire's and is the round's to keep
+    // (`net::round`'s own drones).
+    let mut existing: BTreeMap<u16, Entity> = BTreeMap::new();
+    for (e, d) in game.world.query::<(Entity, &Drone)>().iter() {
+        if let Ok(id) = u16::try_from(d.id) {
+            existing.insert(id, e);
+        }
+    }
+    let wanted: BTreeMap<u16, &DroneState> = s.drones.iter().map(|d| (d.id, d)).collect();
+    for (id, entity) in &existing {
+        if !wanted.contains_key(id) {
+            game.world.despawn(*entity).ok();
+        }
+    }
+    for (id, ds) in wanted {
+        let ground = Position::new(dequantise_pos(ds.x), dequantise_pos(ds.y));
+        let height = dequantise_pos(ds.height);
+        let heading = Drone::heading_of(dequantise_heading(ds.heading));
+        let stage = DroneStage::from_code(ds.stage).unwrap_or(DroneStage::Cruise);
+        let lock = match ds.lock {
+            crate::fpv::LOCK_NONE => DroneLock::None,
+            crate::fpv::LOCK_FROG => game.frog.map_or(DroneLock::None, |entity| DroneLock::Frog { entity, side: crate::frog::Side::Player }),
+            crate::fpv::LOCK_ENEMY_FROG => {
+                game.enemy_frog.map_or(DroneLock::None, |entity| DroneLock::Frog { entity, side: crate::frog::Side::Enemy })
+            }
+            slot => game.tank_entity_by_slot(slot as usize).map_or(DroneLock::None, |entity| DroneLock::Tank { entity, slot: slot as usize }),
+        };
+        let place = |d: &mut Drone| {
+            if d.stage != stage {
+                d.stage = stage;
+                d.stage_time = 0.0;
+            }
+            d.ground = ground;
+            d.height = height;
+            d.heading = heading;
+            d.lock = lock;
+        };
+        match existing.get(&id) {
+            Some(&entity) => {
+                if let Ok(mut d) = game.world.get::<&mut Drone>(entity) {
+                    place(&mut d);
+                }
+            }
+            None => {
+                let slot = ds.owner as usize;
+                let owner = if slot < first_enemy { Owner::Player(slot as u8) } else { Owner::Enemy(slot) };
+                let mut d = Drone::launch(ground, heading, ds.halo, owner, DroneLock::None, ground);
+                d.id = id as u32;
+                d.stage = stage;
+                place(&mut d);
+                game.world.spawn((d,));
+            }
+        }
+    }
+    game.count_drones_out();
+}
+
 /// The grenades the snapshot lists, spawned, moved or dropped. A replica
 /// never rolls one; it holds the position, height and fuse the room sent,
 /// turns the lamp by how far that moved it, and runs the fuse down between
@@ -1310,6 +1385,12 @@ mod tests {
         shots: usize,
         missiles: usize,
         grenades: usize,
+        /// Drones in the air, a seat's and an enemy's, and the ones in
+        /// each stage.
+        drones: usize,
+        seat_drones: usize,
+        enemy_drones: usize,
+        drone_stages: [usize; 4],
         changed_tiles: usize,
         fires: usize,
         pickups_taken: usize,
@@ -1332,6 +1413,12 @@ mod tests {
             self.shots += state.shots.len();
             self.missiles += state.missiles.len();
             self.grenades += state.grenades.len();
+            self.drones += state.drones.len();
+            self.seat_drones += state.drones.iter().filter(|d| d.owner == 0).count();
+            self.enemy_drones += state.drones.iter().filter(|d| d.owner != 0).count();
+            for d in &state.drones {
+                self.drone_stages[(d.stage as usize).min(3)] += 1;
+            }
             self.changed_tiles += state
                 .tiles
                 .iter()
@@ -1628,6 +1715,26 @@ mod tests {
             }
         });
         assert!(seen.grenades > 0, "{seen:?}: no grenade was ever on the ground, so nothing was checked");
+    }
+
+    /// FPV drones are a keyed family of their own (`wire::DroneState`,
+    /// docs/fpv-swarm.md "Wire"): the seat's and an enemy's stand where the
+    /// room flies them on the replica in every stage, and go when they
+    /// burst or crash. The checking is `round_trip`'s, frame by frame.
+    #[test]
+    fn fpv_drones_reach_the_replica() {
+        let seen = round_trip(DEFAULT_MAP, 0xB0B5, 600, |game, frame| {
+            if frame == 30 {
+                let patch = crate::simulation::debug::TankPatch { fpv_drones: Some(6), ..Default::default() };
+                game.debug_set_tank(0, &patch).expect("the seat's tank");
+                for slot in 1..=6 {
+                    game.debug_set_tank(slot, &patch).ok();
+                }
+            }
+        });
+        assert!(seen.seat_drones > 0, "{seen:?}: no seat's drone was ever in the air");
+        assert!(seen.enemy_drones > 0, "{seen:?}: no enemy's drone was ever in the air");
+        assert!(seen.drone_stages[..3].iter().all(|&n| n > 0), "{seen:?}: a stage never reached the replica");
     }
 
     #[test]

@@ -373,6 +373,18 @@ pub struct RailPress {
     pub overcharged: bool,
 }
 
+/// An FPV drone the client launched on its press (docs/fpv-swarm.md
+/// "Wire"): the halo slot it leaves, that slot's ground point and outward
+/// bearing from the sandbox's pose on the press tick. Its climb is the
+/// same whatever it goes after (`fpv::launch_path`), so the round draws it
+/// at once and hands it to the room's copy a moment into the climb.
+#[derive(Clone, Copy, Debug)]
+pub struct DronePress {
+    pub slot: u8,
+    pub origin: Position,
+    pub out: crate::math::Vec2,
+}
+
 /// A charge of this client's own that fizzled or vented, at the module's
 /// bore (`Game::charge_end_show`).
 #[derive(Clone, Copy, Debug)]
@@ -392,6 +404,7 @@ pub enum PressShow {
     Emp(EmpPress),
     Rail(RailPress),
     ChargeEnd(ChargeEndPress),
+    Drone(DronePress),
 }
 
 /// The room's copy of one of this seat's shots, as the frame drew it.
@@ -838,6 +851,26 @@ impl Predictor {
                 }
                 return;
             }
+            // The FPV swarm launches on the press: the drone leaves its halo
+            // slot from the predicted pose, its climb drawn at once (the
+            // same whatever it is after) and handed to the room's copy a
+            // moment in (`OnlineRound`'s own drones).
+            ActiveWeapon::FpvSwarm if pressed => {
+                let owed = self.owed_presses_of(WeaponKind::FpvSwarm);
+                if ammo - owed <= 0 {
+                    return;
+                }
+                if let Some((slot, origin, out)) = self.sandbox.seat_drone_slot(self.seat, owed) {
+                    self.cooldown = t.fpv_reload_seconds;
+                    self.owed_presses.push_back((WeaponKind::FpvSwarm, tick, 0.0));
+                    if drawn {
+                        self.shows.push(PressShow::Drone(DronePress { slot, origin, out }));
+                        self.drawn_presses.push_back((WeaponKind::FpvSwarm, tick, 0.0));
+                        self.report.shots_drawn += 1;
+                    }
+                }
+                return;
+            }
             // The pod's volley is a seeker's, a grenade rolls the room's
             // world and the flamethrower's cone is the room's (§4.16);
             // nothing here.
@@ -1274,6 +1307,11 @@ impl Predictor {
     /// round trip plus the picture's delay plus a margin, never less than
     /// `PROVISIONAL_SECONDS` - a shot in flight is not taken away because
     /// the link is slow, only because the room did not fire it.
+    /// How long a press waits for its `Fired` (`set_refusal_after`).
+    pub fn refusal_after(&self) -> f32 {
+        self.refusal_after
+    }
+
     pub fn set_refusal_after(&mut self, seconds: f32) {
         self.refusal_after = seconds.max(PROVISIONAL_SECONDS);
     }

@@ -428,6 +428,40 @@ impl Game {
             tank.kick_laser();
         }
     }
+
+    /// Flash `seat`'s FPV relay module, as its launch does (a client
+    /// drawing its own launch on the press).
+    pub fn flash_seat_fpv(&mut self, seat: u8) {
+        let Some(entity) = self.seats.get(seat as usize).copied().flatten() else { return };
+        if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {
+            tank.kick_fpv();
+        }
+    }
+
+    /// Take the drones whose id `gone` names off the picture (a client's
+    /// own launches, and the room's copies of them it keeps hidden).
+    pub fn remove_drones(&mut self, gone: impl Fn(u32) -> bool) {
+        let doomed: Vec<hecs::Entity> =
+            self.world.query::<(hecs::Entity, &crate::fpv::Drone)>().iter().filter(|(_, d)| gone(d.id)).map(|(e, _)| e).collect();
+        for e in doomed {
+            self.world.despawn(e).ok();
+        }
+    }
+
+    /// Put a drone a client drew on its own press on the picture.
+    pub fn add_drone(&mut self, drone: crate::fpv::Drone) {
+        self.world.spawn((drone,));
+    }
+
+    /// How many of `seat`'s drones this client is drawing off the halo that
+    /// the room's count does not know of yet (`Tank::fpv_lifting`): the
+    /// halo is drawn without them.
+    pub fn set_seat_lifting(&mut self, seat: u8, lifting: u8) {
+        let Some(entity) = self.seats.get(seat as usize).copied().flatten() else { return };
+        if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {
+            tank.fpv_lifting = lifting;
+        }
+    }
 }
 
 impl PresentWorld {
