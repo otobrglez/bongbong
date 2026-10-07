@@ -347,19 +347,61 @@ fn a_wreck_is_left_alone() {
     assert!(moved(&game, enemy, at) < 0.5);
 }
 
-/// The pose validator allows a client-owned hull a knock's speed while it
-/// may still be skidding, and no longer.
+/// The pose validator allows a client-owned hull the knock the room put
+/// on it: the room logs the knock for the owned seat, and the slide the
+/// client reports is taken where a hull with no knock is refused.
 #[test]
 fn an_owned_hull_is_allowed_its_knock() {
     let mut game = round_with("", 2, Mission::Destroy);
     let mate = game.seat(1).unwrap();
-    let from = Position::new(300.0, 300.0);
-    game.place_tank(mate, from, Some(90.0)).unwrap();
-    let pose = SeatPose { position: Position::new(from.x + 25.0, from.y), rotation: 90.0, velocity: Vec2::new(400.0, 0.0) };
-    assert!(game.accept_seat_pose(1, pose, 4).is_err(), "past the chassis's reach");
-    game.seat_knock[1] = (400.0, game.frame + 10);
-    game.place_tank(mate, from, Some(90.0)).unwrap();
-    assert!(game.accept_seat_pose(1, pose, 4).is_ok(), "within a knock's");
+    game.place_tank(mate, Position::new(196.0, 192.0), Some(90.0)).unwrap();
+    let ahead = |game: &Game, by: f32| {
+        let at = pos(game, mate);
+        SeatPose { position: Position::new(at.x + by, at.y), rotation: 90.0, velocity: Vec2::new(300.0, 0.0) }
+    };
+    // Past four ticks of a medium chassis's top speed and the slack, within
+    // the knock's speed over them.
+    let past_reach = 28.0;
+    assert!(game.accept_seat_pose(1, ahead(&game, past_reach), 4).is_err(), "past the chassis's reach");
+    // The seat's client owns its hull, standing still, while seat 0 shouts.
+    let mut fire = true;
+    for _ in 0..30 {
+        game.accept_seat_pose(1, ahead(&game, 0.0), 1).expect("standing still");
+        let mut input = Input::default();
+        input.seats[0].fire = std::mem::take(&mut fire);
+        game.update(input, DT, W, H);
+        if game.events().iter().any(|e| matches!(e, Event::Shoved { seat: 1, skid, .. } if *skid > 0.0)) {
+            break;
+        }
+    }
+    assert!(game.seat_knock[1].budget > past_reach, "the room logged the knock: {:?}", game.seat_knock[1]);
+    assert!(game.accept_seat_pose(1, ahead(&game, past_reach), 4).is_ok(), "the knock's slide is allowed");
+}
+
+/// A knock allows its own slide and no more: each pose its speed past the
+/// reach, all of them together the slide on the slipperiest ground, and
+/// nothing once the grace has run out; a knock that lapsed adds nothing to
+/// the next.
+#[test]
+fn a_knock_allows_its_slide_and_no_more() {
+    let t = tuning();
+    let k = SeatKnock::default().with(400.0, 0.6, 100);
+    let slide = crate::sonic::slide(&t, 400.0, t.sonic_skid_grip_floor) + POSE_REACH_SLACK_PX;
+    assert!((k.budget - slide).abs() < 1e-3);
+    assert!((k.extra(100, 4.0) - 400.0 * 4.0 * PHYSICS_FIXED_DT).abs() < 1e-3, "a pose its speed past the reach");
+    assert_eq!(k.extra(k.until + 1, 4.0), 0.0, "nothing past the grace");
+    let mut spent = k;
+    let mut total = 0.0;
+    while spent.extra(100, 4.0) > 0.0 {
+        let step = spent.extra(100, 4.0);
+        spent.spend(step);
+        total += step;
+    }
+    assert!((total - slide).abs() < 1e-2, "the poses together go no further than the slide: {total} vs {slide}");
+    let next = k.with(100.0, 0.2, k.until + 5);
+    assert_eq!(next.speed, 100.0, "a lapsed knock adds nothing");
+    let both = k.with(100.0, 0.2, 110);
+    assert!(both.speed == 400.0 && both.budget > k.budget && both.until >= k.until, "two knocks in a row add up");
 }
 
 #[test]

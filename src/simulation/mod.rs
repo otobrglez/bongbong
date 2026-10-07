@@ -103,10 +103,54 @@ pub const POSE_REACH_TICKS: f32 = 4.0;
 pub const POSE_REACH_SLACK_PX: f32 = 8.0;
 
 /// Ticks past a knock's skid (`sonic::knock`) the pose validator still
-/// allows a client-owned hull the speed the knock left it at: the client
-/// hears of the knock a link's delay after the room put it on, and its
-/// skid runs that much later.
+/// allows a client-owned hull the knock's slide: the client hears of the
+/// knock a link's delay after the room put it on, and its skid runs that
+/// much later.
 pub const POSE_KNOCK_GRACE_TICKS: u64 = 60;
+
+/// What the pose validator allows a client-owned seat past its chassis's
+/// reach for the knocks the room put on it (`sonic::knock`,
+/// `Game::accept_seat_pose`): each pose may go `speed` px/s further, and
+/// all of them together no further than `budget` px - the longest slide
+/// the knocks could give, on the slipperiest ground - until frame `until`,
+/// the last skid's end and `POSE_KNOCK_GRACE_TICKS` past it. A client can
+/// claim no knock the room did not put on it, nor more than one gives.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct SeatKnock {
+    speed: f32,
+    budget: f32,
+    until: u64,
+}
+
+impl SeatKnock {
+    /// This allowance and a knock of `speed` px/s for `skid` seconds put on
+    /// at frame `frame`: the faster of the two speeds while either holds,
+    /// the two slides together, until the later end.
+    fn with(self, speed: f32, skid: f32, frame: u64) -> SeatKnock {
+        let t = tuning();
+        let live = if frame <= self.until { self } else { SeatKnock::default() };
+        let slide = crate::sonic::slide(&t, speed, t.sonic_skid_grip_floor) + POSE_REACH_SLACK_PX;
+        let until = frame + (skid / PHYSICS_FIXED_DT).ceil() as u64 + POSE_KNOCK_GRACE_TICKS;
+        SeatKnock { speed: live.speed.max(speed), budget: live.budget + slide, until: until.max(live.until) }
+    }
+
+    /// How much further than its reach a pose covering `ticks` ticks may go
+    /// at frame `frame` (px).
+    fn extra(&self, frame: u64, ticks: f32) -> f32 {
+        if frame > self.until {
+            return 0.0;
+        }
+        (self.speed * PHYSICS_FIXED_DT * ticks).min(self.budget)
+    }
+
+    /// A pose went `past` px further than its reach: that much of the
+    /// budget is spent.
+    fn spend(&mut self, past: f32) {
+        if past > 0.0 {
+            self.budget = (self.budget - past).max(0.0);
+        }
+    }
+}
 
 /// A client's own shot before the server has confirmed it: the pose and
 /// nothing else, since it is drawn and never simulated (`net::predict`).
@@ -758,12 +802,9 @@ pub struct Game {
     /// dropped, one that went back to stage 2 - is the room's to drive
     /// again on the next tick without anybody having to release it.
     seat_owned: [u64; MAX_SEATS],
-    /// A knock the room put on a client-owned seat (`sonic::knock`): the
-    /// speed it left the hull at and the frame until which
-    /// `accept_seat_pose` allows the hull that speed - the skid and
-    /// `POSE_KNOCK_GRACE_TICKS` past it, since the client's skid starts a
-    /// link's delay after the room's.
-    seat_knock: [(f32, u64); MAX_SEATS],
+    /// The knocks the room put on each client-owned seat (`sonic::knock`)
+    /// that `accept_seat_pose` still allows for (`SeatKnock`).
+    seat_knock: [SeatKnock; MAX_SEATS],
     /// The sonic hammer's waves running out over the field
     /// (docs/sonic-hammer.md), in the order they were fired: struck by the
     /// rules on the round that simulates them (`tick_sonic_waves`), only
@@ -1387,7 +1428,7 @@ impl Game {
         // `frame` starts over, so an update number held from the last
         // round would name one of this round's.
         self.seat_owned = [0; MAX_SEATS];
-        self.seat_knock = [(0.0, 0); MAX_SEATS];
+        self.seat_knock = [SeatKnock::default(); MAX_SEATS];
         self.sonic_waves.clear();
         self.grass_flat.clear();
         self.next_shot_id = 0;
@@ -2000,8 +2041,7 @@ impl Game {
         let Frame { blast_fx, scorches, decals, muzzle_flashes, impact_flashes, shocks, events, shoves, rng, .. } = f;
         for &(seat, dv, skid) in &shoves.log {
             if skid > 0.0 && seat < MAX_SEATS {
-                let ticks = (skid / PHYSICS_FIXED_DT).ceil() as u64 + POSE_KNOCK_GRACE_TICKS;
-                self.seat_knock[seat] = (dv.length().max(self.seat_knock[seat].0), self.frame + ticks);
+                self.seat_knock[seat] = self.seat_knock[seat].with(dv.length(), skid, self.frame);
             }
         }
         self.show(Spectacle { blast_fx, scorches, decals, muzzle_flashes, impact_flashes, shocks });
@@ -2309,7 +2349,7 @@ impl Game {
     /// `Placed` so the client comes back to it.
     pub fn accept_seat_pose(&mut self, seat: usize, pose: SeatPose, reach_ticks: u32) -> Result<(), &'static str> {
         let Some(entity) = self.seats.get(seat).copied().flatten() else { return Err("no such seat") };
-        let (from, reach) = {
+        let (from, reach, knock) = {
             let Ok(tank) = self.world.get::<&Tank>(entity) else { return Err("no tank") };
             if tank.is_wreck() {
                 return Err("a wreck");
@@ -2322,14 +2362,14 @@ impl Game {
             // past its top speed, and the rules put it there.
             let flow = Footing::at(&self.water, &self.lava, self.weather, tank.position, self.time).flow;
             let drift = (flow.x * flow.x + flow.y * flow.y).sqrt();
-            // A knock carries it past its top speed too, for as long as
-            // the client may still be skidding (`seat_knock`).
-            let (knock, until) = self.seat_knock[seat];
-            let speed = if self.frame <= until { tank.effective_speed().max(knock) } else { tank.effective_speed() };
-            (tank.position, (speed + drift) * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX)
+            let reach = (tank.effective_speed() + drift) * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX;
+            // A knock carries it past that too, by no more than the knock
+            // could slide it in all (`SeatKnock`).
+            (tank.position, reach, self.seat_knock[seat].extra(self.frame, ticks))
         };
         let (dx, dy) = (pose.position.x - from.x, pose.position.y - from.y);
-        if (dx * dx + dy * dy).sqrt() > reach {
+        let step = (dx * dx + dy * dy).sqrt();
+        if step > reach + knock {
             return Err("further than the hull could have gone");
         }
         let (width, height) = self.map.field_size();
@@ -2356,6 +2396,7 @@ impl Game {
             pose.position.x - pose.velocity.x * PHYSICS_FIXED_DT,
             pose.position.y - pose.velocity.y * PHYSICS_FIXED_DT,
         );
+        self.seat_knock[seat].spend(step - reach);
         self.place_seat(seat, back, pose.rotation, pose.velocity);
         self.seat_owned[seat] = self.frame + 1;
         Ok(())
