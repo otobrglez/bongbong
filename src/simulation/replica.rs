@@ -60,6 +60,8 @@ pub struct DrawableTank {
     pub flame: bool,
     /// A heat shield is on.
     pub heat_shield: bool,
+    /// The special it carries (`Tank::special`), the shell with none -
+    /// what the wire's `TankState::weapon` names, offline or not.
     pub weapon: ActiveWeapon,
     /// Rounds left for `weapon`, saturated at 255.
     pub ammo: u8,
@@ -229,7 +231,8 @@ impl Tank {
         self.shield_hp.round().clamp(1.0, 255.0) as u8
     }
 
-    /// Rounds left for the live weapon (`active_weapon`), saturated at 255.
+    /// Rounds left for the special it carries (`special`), else for the
+    /// shells, saturated at 255: what the wire's `TankState::ammo` carries.
     pub fn active_ammo(&self) -> u8 {
         self.weapon_ammo(self.special().unwrap_or(crate::tank::ActiveWeapon::Shell)).clamp(0, 255) as u8
     }
@@ -364,7 +367,7 @@ impl Game {
                 hit: t.hit_flash_timer > 0.0,
                 flame: t.flame_held,
                 heat_shield: t.heat_shield_timer > 0.0,
-                weapon: t.active_weapon(),
+                weapon: t.special().unwrap_or(crate::tank::ActiveWeapon::Shell),
                 ammo: t.active_ammo(),
                 disabled: t.disabled > 0.0,
                 offline: t.special_offline > 0.0,
