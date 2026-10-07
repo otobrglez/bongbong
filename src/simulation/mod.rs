@@ -3712,6 +3712,21 @@ impl Game {
         if self.any_rail_charging() {
             dangers.extend(self.rail_dangers());
         }
+        // What each drone-carrying enemy would launch at and from where,
+        // and every enemy a seat's drone has locked (docs/fpv-swarm.md
+        // "AI"): only when a tank carries the swarm, or a seat's drone is
+        // in the air.
+        let fpv_senses = if self.any_fpv() {
+            let seats: Vec<fpv::FpvSeat> = players
+                .iter()
+                .enumerate()
+                .map(|(i, p)| fpv::FpvSeat { seat: i as u8, entity: p.entity, pos: p.pos, live: !p.wreck && !p.entering, concealed: p.concealed, sight: p.sight })
+                .collect();
+            self.fpv_senses(f, &seats, grid, &dangers)
+        } else {
+            BTreeMap::new()
+        };
+        let air_threats = self.air_threats(grid);
 
         // --- collect pass: perception, `think`, aim and fire, exactly as
         // before. Only the impulse is deferred. ---
@@ -3775,6 +3790,7 @@ impl Game {
                     .map(|&(_, tile)| f.terrain.line_of_sight_from(tile, tank.position, at));
                 ai.set_grudge_sight(sight);
             }
+            ai.air_threat = air_threats.get(&entity).copied();
             let (mut target, mut hunting) = target_of(ai, tank);
             // A hunter that cannot route to the frog and holds no slot on
             // its ring (every slot rejected: off the map, unreachable from
@@ -3867,6 +3883,7 @@ impl Game {
                         .map(|s| SpecialSense::Hammer(*s))
                         .or_else(|| emp_senses.get(&entity).map(|s| SpecialSense::Emp(*s)))
                         .or_else(|| gauss_senses.get(&entity).map(|s| SpecialSense::Gauss(*s)))
+                        .or_else(|| fpv_senses.get(&entity).map(|s| SpecialSense::Fpv(*s)))
                         .unwrap_or(SpecialSense::None),
                     &dangers,
                 )
@@ -3885,6 +3902,8 @@ impl Game {
             // The AI paces itself with its own fire timer; `fire_cooldown`
             // is the weapon's own minimum (a burst in progress, say). A
             // weapon with a tell winds up first (`enemy_trigger`).
+            // What a drone launched now is to lock (`SpecialUse::Launch`).
+            tank.fpv_want = ai.air_want;
             enemy_trigger(&mut self.physics, f, entity, tank, owner, intent);
             pending.push(Pending {
                 entity,
@@ -5179,6 +5198,7 @@ impl Game {
                     charging: tank.charge.is_some(),
                     disabled: tank.is_disabled(),
                     kept_out: ai.is_some_and(Ai::kept_out),
+                    air_hold: ai.is_some_and(Ai::air_hold),
                     tell: tank.tell.is_some(),
                     skidding: tank.skid > 0.0,
                     plasma_ammo: tank.plasma_ammo,
@@ -5253,6 +5273,9 @@ pub struct TankSnapshot {
     /// Waiting outside a danger it is kept out of (`Ai::kept_out`):
     /// holding still on purpose.
     pub kept_out: bool,
+    /// Standing for the FPV swarm (`Ai::air_hold`): watching its own drone
+    /// work, or under a crown while a seat's drone comes at it.
+    pub air_hold: bool,
     /// Winding up a special (`Tank::tell`): holding still on purpose.
     pub tell: bool,
     /// Knocked off its tracks (`Tank::skid`): sliding where it did not ask

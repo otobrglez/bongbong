@@ -100,6 +100,56 @@ pub enum SpecialSense {
     Hammer(HammerSense),
     Emp(EmpSense),
     Gauss(GaussSense),
+    Fpv(FpvSense),
+}
+
+/// What an enemy carrying the FPV swarm measured this frame
+/// (`Game::fpv_senses`, docs/fpv-swarm.md "AI"): every seat in it already
+/// held to the sight-box rule - it stands inside that seat's box - and to
+/// what the tank knows (within its sight under the sky, not hidden from it
+/// in tall grass).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FpvSense {
+    /// The seat a drone launched now would go for, not under a tree's
+    /// crown, nearest first (ties to the lower seat), and where it stands.
+    pub at_seat: Option<(u8, Position)>,
+    /// The nearest seat it knows of that *is* under a tree's crown, and the
+    /// centre of that tree: a drone dived into the crown breaks the cover.
+    pub canopy: Option<(u8, Position)>,
+    /// A hunter's quarry - the players' frog, alive, within its sight, not
+    /// under a crown.
+    pub quarry: Option<Position>,
+    /// The seat it would launch at has a line of sight to it.
+    pub exposed: bool,
+    /// Where to launch from instead while exposed: a spot nearby that the
+    /// seat cannot see, still inside its box and out of its face
+    /// (`fpv_cover_spot`, latched on the `Ai`).
+    pub cover: Option<Position>,
+    /// A seat it knows of is within `fpv_ai_min_range_px` and sees it: the
+    /// point it backs off to.
+    pub back_off: Option<Position>,
+    /// Its own drones in the air (`Tank::fpv_out`).
+    pub in_air: u8,
+}
+
+/// A seat's drone coming at this tank (`Game::air_threats`,
+/// docs/fpv-swarm.md "Reacting to a seat's swarm") - locked on it, or
+/// going for a point its blast would reach it at - set on the `Ai` before it
+/// thinks: what its `air` tier answers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AirThreat {
+    /// The drone's ground point, and its seconds to arrive at its speed.
+    pub drone: Position,
+    pub eta: f32,
+    /// This tank stands inside the sight box of the seat that sent it: it
+    /// may fire at the drone.
+    pub may_shoot: bool,
+    /// Its hull is under a tree's crown already: it stands.
+    pub covered: bool,
+    /// The nearest tree within `fpv_ai_tree_px` it can get under: the open
+    /// cell nearest that tree it can drive to, and the tree's centre, which
+    /// it drives at from there until its hull is under the crown.
+    pub tree: Option<(Position, Position)>,
 }
 
 /// What a gauss rail's slug from where a tank stands would go through, each
@@ -430,6 +480,10 @@ enum SpecialUse {
     /// Let a charge weapon's trigger go facing `face`: the simulation fires
     /// the charge if it is ready. `at_seat` is the seat it is used on.
     Release { face: Dir, at_seat: Option<u8>, why: &'static str },
+    /// Send something after `want` (`fpv::AirWant`, the FPV swarm): applied
+    /// as `Fire` along the facing it has, the want handed to the launch
+    /// (`Ai::air_want`). `at_seat` is the seat it is used on.
+    Launch { want: crate::fpv::AirWant, at_seat: Option<u8>, why: &'static str },
 }
 
 /// The BB-36 weapons' crates an enemy detours for, in the order it wants
@@ -681,6 +735,21 @@ pub struct Ai {
     /// (`SpecialUse::Clear`), running while they stay in it and back to 0
     /// once none is: past `emp_ai_clear_patience_seconds` it stops asking.
     clear_waited: f32,
+    /// What its FPV rule's launch this tick asked a drone to lock
+    /// (`SpecialUse::Launch`): handed to the tank before its trigger
+    /// reaches the simulation (`Tank::fpv_want`), `None` the rest of the
+    /// time.
+    pub(crate) air_want: Option<crate::fpv::AirWant>,
+    /// The cover spot its FPV rule is making for and the seconds since it
+    /// was chosen (`Game::fpv_senses` keeps it, searching again only when
+    /// it no longer hides it or `fpv_ai_cover_seconds` have passed).
+    pub(crate) cover_spot: Option<(Position, f32)>,
+    /// A seat's drone locked on it this frame (`Game::air_threats`), set
+    /// before it thinks; what the `air` tier answers.
+    pub(crate) air_threat: Option<AirThreat>,
+    /// The arm of the `air` tier it ran this tick ("flak", "tree",
+    /// "canopy", "break"), `None` when it ran none. Inspection only.
+    air_why: Option<&'static str>,
 }
 
 /// The memory a tank carries only on a field map
@@ -756,6 +825,8 @@ pub struct AiSnapshot {
     pub escapes: u32,
     /// The special's rule's last arm (`Ai::special_why`).
     pub special: Option<&'static str>,
+    /// The `air` tier's last arm (`Ai::air_why`).
+    pub air: Option<&'static str>,
     /// Its brain is off (`Ai::down`).
     pub down: bool,
     /// Backing out of a danger (`Ai::dodging`).
@@ -813,6 +884,10 @@ impl Default for Ai {
             dodge_exit: None,
             kept_out: false,
             clear_waited: 0.0,
+            air_want: None,
+            cover_spot: None,
+            air_threat: None,
+            air_why: None,
         }
     }
 }
@@ -991,6 +1066,8 @@ impl Ai {
         self.special_why = None;
         self.clearing = None;
         self.kept_out = false;
+        self.air_want = None;
+        self.air_why = None;
         let mut bb = Brain {
             me,
             player,
@@ -1112,6 +1189,7 @@ impl Ai {
             breach_timer: self.breach.map(|b| b.timer),
             escapes: self.escapes,
             special: self.special_why,
+            air: self.air_why,
             down: self.down,
             dodging: self.dodging,
             kept_out: self.kept_out,
@@ -1242,6 +1320,13 @@ impl Ai {
     /// Whether it waited outside a danger this tick (`kept_out`).
     pub(crate) fn kept_out(&self) -> bool {
         self.kept_out
+    }
+
+    /// Whether it stood this tick on purpose for the FPV swarm
+    /// (docs/fpv-swarm.md "AI"): watching its own drone work, or under a
+    /// tree's crown while a seat's drone comes at it.
+    pub(crate) fn air_hold(&self) -> bool {
+        self.special_why == Some("watch") || self.air_why == Some("canopy")
     }
 
     /// Choose a heading toward `target` - or, if pathfinding can't reach
@@ -2694,6 +2779,13 @@ fn build<'a>() -> Node<Brain<'a>> {
         // weapon to bring to bear. Above flee: a hurt tank shoving away the
         // seat in its face is the use (the rule offers a healthy tank alone
         // the approach).
+        // 1.45. A seat's drone locked on it (`AirThreat`): flak, a tree's
+        // crown, or a break across its line (`act_air`). Under a tell or a
+        // charge in progress, which commit, as everywhere.
+        sequence(vec![
+            condition(|b: &mut Brain| b.ai.air_threat.is_some() && b.me.windup().is_none()),
+            action("air", act_air),
+        ]),
         sequence(vec![
             condition(|b: &mut Brain| special_rule(b).is_some()),
             action("special", act_special),
@@ -3008,8 +3100,127 @@ fn special_rule(b: &Brain) -> Option<SpecialUse> {
         (ActiveWeapon::SonicHammer, SpecialSense::Hammer(sense)) => hammer_rule(b, sense),
         (ActiveWeapon::Emp, SpecialSense::Emp(sense)) => emp_rule(b, sense),
         (ActiveWeapon::GaussRail, SpecialSense::Gauss(sense)) => gauss_rule(b, sense),
+        (ActiveWeapon::FpvSwarm, SpecialSense::Fpv(sense)) => fpv_rule(b, sense),
         _ => None,
     }
+}
+
+/// The FPV swarm's rule (docs/fpv-swarm.md "AI"), in priority order: a
+/// training dummy never launches; a healthy tank a seat it knows sees from
+/// inside `fpv_ai_min_range_px` backs off; with none of its drones in the
+/// air, one exposed to the seat it would launch at moves to cover first,
+/// then it launches - at that seat, else into the crown over a seat hiding
+/// under a tree, else (a hunter) at the players' frog (`FpvSense::quarry`,
+/// set for a hunter alone) - one at a time, the
+/// fire timer (`fpv_enemy_gap_seconds`) spacing them; with one in the air
+/// it holds where it stands while it works. Draws no RNG.
+fn fpv_rule(b: &Brain, sense: &FpvSense) -> Option<SpecialUse> {
+    let t = tuning();
+    if b.ai.frog_only {
+        return None;
+    }
+    let free = b.me.damage < t.enemy_flee_damage && !b.guard_holds();
+    if let Some(spot) = sense.back_off
+        && free
+        && b.can_reach(spot)
+    {
+        return Some(SpecialUse::Approach { to: spot });
+    }
+    // A hunter with drones fights the seat like everyone else
+    // (`generic_fire` is false), and sends them at its quarry when no seat
+    // is to be had.
+    let quarry = sense.quarry;
+    if sense.in_air == 0 {
+        if let Some(spot) = sense.cover
+            && sense.exposed
+            && free
+            && b.me.position.distance_to(spot) > OBSTACLE_GRID_SIZE * 0.5
+        {
+            return Some(SpecialUse::Approach { to: spot });
+        }
+        if let Some((seat, _)) = sense.at_seat {
+            let why = if sense.exposed { "open" } else { "cover" };
+            return Some(SpecialUse::Launch { want: crate::fpv::AirWant::Seat(seat), at_seat: Some(seat), why });
+        }
+        if let Some((seat, crown)) = sense.canopy {
+            return Some(SpecialUse::Launch { want: crate::fpv::AirWant::Point(crown), at_seat: Some(seat), why: "canopy" });
+        }
+        if quarry.is_some() {
+            return Some(SpecialUse::Launch { want: crate::fpv::AirWant::Frog, at_seat: None, why: "frog" });
+        }
+        return None;
+    }
+    let watching = sense.at_seat.or(sense.canopy).map(|(_, p)| p).or(quarry);
+    match watching {
+        Some(at) if free => Some(SpecialUse::Hold { face: Dir::toward(b.me.position, at), why: "watch" }),
+        _ => None,
+    }
+}
+
+/// React to a seat's drone locked on this tank (`AirThreat`,
+/// docs/fpv-swarm.md "Reacting to a seat's swarm"), in order: with an
+/// online minigun and the seat's box round it, face the drone, stand and
+/// fire while it is in reach and on the facing's line; else make for the
+/// nearest spot under a tree's crown and stand there; else, once the drone
+/// is within `fpv_ai_break_px`, drive across its line - the clockwise
+/// perpendicular first, then the other, whichever is open. Draws no RNG.
+fn act_air(b: &mut Brain) -> Status {
+    let Some(threat) = b.ai.air_threat else { return Status::Failure };
+    let t = tuning();
+    let me = b.me.position;
+    b.reset_aim();
+    let face = Dir::toward(me, threat.drone);
+    if b.me.active_weapon() == ActiveWeapon::Minigun && threat.may_shoot {
+        b.intent.face = Some(face);
+        b.ai.commit(face);
+        b.intent.move_dir = None;
+        let to = threat.drone - me;
+        let line = face.vec();
+        let along = to.x * line.x + to.y * line.y;
+        let across = Position::new(to.x - line.x * along, to.y - line.y * along).length();
+        b.intent.fire = along > 0.0 && to.length() <= t.fpv_ai_flak_range_px && across <= t.fpv_ai_flak_align_px;
+        b.ai.air_why = Some("flak");
+        return Status::Success;
+    }
+    if threat.covered {
+        b.intent.move_dir = None;
+        b.ai.air_why = Some("canopy");
+        return Status::Success;
+    }
+    if let Some((spot, tree)) = threat.tree {
+        let dir = if me.distance_to(spot) <= OBSTACLE_GRID_SIZE * 0.5 {
+            Dir::toward(me, tree)
+        } else {
+            // A heading held from the fight that does not lead toward the
+            // tree gives way, as `act_dodge`'s does: steering keeps a held
+            // heading through a quarter turn.
+            let to = spot - me;
+            let toward = |d: Dir| d.vec().x * to.x + d.vec().y * to.y > 0.0;
+            if b.ai.committed_dir.is_none_or(|d| !toward(d)) {
+                b.ai.commit(Dir::toward(me, spot));
+            }
+            b.steer_out(spot)
+        };
+        b.intent.move_dir = Some(dir);
+        b.ai.air_why = Some("tree");
+        return Status::Success;
+    }
+    if me.distance_to(threat.drone) <= t.fpv_ai_break_px {
+        let clockwise = match face {
+            Dir::Up => [Dir::Right, Dir::Left],
+            Dir::Right => [Dir::Down, Dir::Up],
+            Dir::Down => [Dir::Left, Dir::Right],
+            Dir::Left => [Dir::Up, Dir::Down],
+        };
+        let open = clockwise.into_iter().find(|d| b.walls_ahead[d.index()].is_none() && !b.grid.blocked_ahead(me, d.vec()));
+        if let Some(dir) = open {
+            b.intent.move_dir = Some(dir);
+            b.intent.face = Some(dir);
+            b.ai.air_why = Some("break");
+            return Status::Success;
+        }
+    }
+    Status::Failure
 }
 
 /// The gauss rail's rule with no charge running (docs/gauss-rail.md "AI"):
@@ -3267,6 +3478,17 @@ fn act_special(b: &mut Brain) -> Status {
             b.ai.clear_waited += b.dt;
             return Status::Failure;
         }
+        SpecialUse::Launch { want, at_seat, why } => {
+            let face = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+            b.intent.face = Some(face);
+            b.ai.special_why = Some(why);
+            if b.ai.fire_timer <= 0.0 && b.me.fire_cooldown <= 0.0 {
+                b.intent.fire = true;
+                b.ai.fire_timer = special_fire_interval(b.me.active_weapon());
+                b.ai.shot_at_seat = at_seat;
+                b.ai.air_want = Some(want);
+            }
+        }
         SpecialUse::Approach { to } => {
             b.intent.move_dir = Some(b.steer(to));
             b.ai.special_why = Some("approach");
@@ -3303,6 +3525,7 @@ fn special_fire_interval(weapon: ActiveWeapon) -> f32 {
         ActiveWeapon::SonicHammer => tuning().sonic_ai_fire_interval,
         ActiveWeapon::Emp => tuning().emp_ai_fire_interval,
         ActiveWeapon::GaussRail => tuning().gauss_ai_fire_interval,
+        ActiveWeapon::FpvSwarm => tuning().fpv_enemy_gap_seconds,
         _ => tuning().enemy_fire_interval,
     }
 }
