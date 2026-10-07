@@ -92,7 +92,7 @@ const CLICK_DRAG_STEP_PX: f32 = 8.0;
 /// the builder has frozen.
 pub const GAME_ONLY_TOOLS: &[&str] = &[
     "snapshot", "events", "step", "input", "pause", "resume", "history", "nav_grid", "field", "terrain", "teleport",
-    "set_tank", "kill", "spawn_enemy", "spawn_pickup", "players", "weather",
+    "set_tank", "kill", "spawn_enemy", "spawn_pickup", "rod_call", "players", "weather",
 ];
 
 /// The tools that drive the *local* round or the builder, refused while
@@ -106,7 +106,7 @@ pub const GAME_ONLY_TOOLS: &[&str] = &[
 /// `key {escape}` gives the seat up, as does a `click` on the corners'
 /// `LEAVE` button - the one thing a click has to press in this mode.
 pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
-    "step", "input", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "spawn_pickup", "players", "play",
+    "step", "input", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "spawn_pickup", "rod_call", "players", "play",
     "build", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings",
     "builder_map", "builder_save", "builder_touch", "builder_select", "builder_stamp",
 ];
@@ -284,8 +284,8 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "set_tank",
-        description: "Overwrite a tank's damage (0 = pristine, 100 = wreck), ammo counts (setting a special weapon's stock above 0 also arms it in place of the one special the tank carries, like its pickup would), shield_hp (rainbow-shield absorption left in damage points, not seconds), the speed-boost timer, portal_cooldown (seconds before it may enter a portal again) and charge (seconds a gauss rail's trigger has been held - a charge put on a tank carrying the rail; 0 takes it off). Omitted fields are untouched.",
-        schema: r#"{"type":"object","properties":{"slot":{"type":"integer"},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"grenade_ammo":{"type":"integer"},"sonic_ammo":{"type":"integer"},"emp_charges":{"type":"integer"},"disabled":{"type":"number"},"special_offline":{"type":"number"},"gauss_slugs":{"type":"integer"},"fpv_drones":{"type":"integer"},"charge":{"type":"number"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}},"required":["slot"]}"#,
+        description: "Overwrite a tank's damage (0 = pristine, 100 = wreck), ammo counts (setting a special weapon's stock above 0 also arms it in place of the one special the tank carries, like its pickup would), shield_hp (rainbow-shield absorption left in damage points, not seconds), the speed-boost timer, portal_cooldown (seconds before it may enter a portal again) and charge (seconds a charge weapon's trigger has been held - a gauss rail's charge or a rod's reticle put on a tank carrying it; 0 takes it off). Omitted fields are untouched.",
+        schema: r#"{"type":"object","properties":{"slot":{"type":"integer"},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"grenade_ammo":{"type":"integer"},"sonic_ammo":{"type":"integer"},"emp_charges":{"type":"integer"},"disabled":{"type":"number"},"special_offline":{"type":"number"},"gauss_slugs":{"type":"integer"},"fpv_drones":{"type":"integer"},"rods":{"type":"integer"},"charge":{"type":"number"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}},"required":["slot"]}"#,
         read_only: false,
         destructive: false,
     },
@@ -305,8 +305,15 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "spawn_pickup",
-        description: "Put a crate of `kind` (a map's pickup spelling: health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack, heat_shield, grenades, sonic_hammer, emp_burst, gauss_rail, fpv_swarm) down at the map cell nearest (x, y), in its air drop. Not a slot: it never respawns. Refused outside the field, on a solid tile and where a pickup already stands. Draws no RNG. Returns the crate's position.",
+        description: "Put a crate of `kind` (a map's pickup spelling: health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack, heat_shield, grenades, sonic_hammer, emp_burst, gauss_rail, fpv_swarm, rod_from_god) down at the map cell nearest (x, y), in its air drop. Not a slot: it never respawns. Refused outside the field, on a solid tile and where a pickup already stands. Draws no RNG. Returns the crate's position.",
         schema: r#"{"type":"object","properties":{"kind":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}},"required":["kind","x","y"]}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "rod_call",
+        description: "Call a rod from god onto the map cell nearest (x, y) at once (docs/rod-from-god.md): player 1's call, the kills credited to it, or with enemy=true an enemy's. It stands for rod_countdown_seconds and lands like any other. Refused outside the field. Draws no RNG. Returns the call's id and cell.",
+        schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"enemy":{"type":"boolean","default":false}},"required":["x","y"]}"#,
         read_only: false,
         destructive: false,
     },
@@ -1700,6 +1707,20 @@ impl DevServer {
                     _ => Err("x and y are required".to_string()),
                 }
             }
+            "rod_call" => match (f32_param(&params, "x"), f32_param(&params, "y")) {
+                (Some(x), Some(y)) => {
+                    let enemy = params.get("enemy").and_then(Value::as_bool).unwrap_or(false);
+                    let at = Position::new(x, y);
+                    match game.debug_call_rod(at, enemy) {
+                        Some(id) => {
+                            let cell = crate::map::world_to_cell(at);
+                            Ok(json!({ "id": id, "cell": [cell.0, cell.1] }))
+                        }
+                        None => Err("(x, y) is off the field".to_string()),
+                    }
+                }
+                _ => Err("x and y are required".to_string()),
+            },
             "tuning_get" => {
                 let diff_only = params.get("diff_only").and_then(Value::as_bool).unwrap_or(false);
                 let text = if diff_only { tuning::diff_json() } else { tuning::current_json() };

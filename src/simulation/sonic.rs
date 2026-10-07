@@ -118,11 +118,12 @@ const FRONT_SLACK_PX: f32 = 8.0;
 /// "The probe's `--crate` and the spawn swap"): each weapon and the knob
 /// that is its share, in order.
 type ShareOf = fn(&Tuning) -> f32;
-const SPAWN_SWAPS: [(ActiveWeapon, ShareOf); 4] = [
+const SPAWN_SWAPS: [(ActiveWeapon, ShareOf); 5] = [
     (ActiveWeapon::SonicHammer, |t| t.enemy_special_weapon_sonic_share),
     (ActiveWeapon::Emp, |t| t.enemy_special_weapon_emp_share),
     (ActiveWeapon::GaussRail, |t| t.enemy_special_weapon_gauss_share),
     (ActiveWeapon::FpvSwarm, |t| t.enemy_special_weapon_fpv_share),
+    (ActiveWeapon::RodFromGod, |t| t.enemy_special_weapon_rod_share),
 ];
 
 /// The salt of the spawn swap's hash.

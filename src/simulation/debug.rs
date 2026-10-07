@@ -84,6 +84,14 @@ pub struct DebugSnapshot {
     /// the reply while there are none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub drones: Vec<DroneDebug>,
+    /// The zones standing - the rods called (docs/rod-from-god.md) - by id;
+    /// left out while there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub zones: Vec<ZoneDebug>,
+    /// The cells the rods struck and left a crater round; left out while
+    /// there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub craters: Vec<(i32, i32)>,
     /// What the last enemy phase's engagement-slot assignment decided.
     /// Per-tank entries cover both rings (player and hunted frog); the slot
     /// table is the player ring's.
@@ -97,6 +105,22 @@ pub struct DebugSnapshot {
     /// is meaningful then.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) command: Option<CommandReport>,
+}
+
+/// A zone in `DebugSnapshot::zones`.
+#[derive(Clone, Debug, Serialize)]
+pub struct ZoneDebug {
+    pub id: u32,
+    /// `rod` for a rod's call.
+    pub kind: &'static str,
+    /// Its owner's slot.
+    pub owner: usize,
+    pub x: f32,
+    pub y: f32,
+    /// The map cell a call lands on.
+    pub cell: Option<(i32, i32)>,
+    /// Seconds left.
+    pub left: f32,
 }
 
 /// An FPV drone in `DebugSnapshot::drones`.
@@ -203,6 +227,12 @@ pub struct TankDebug {
     pub fpv: i32,
     #[serde(skip_serializing_if = "is_zero_u8")]
     pub fpv_out: u8,
+    /// Rods left to call (`Tank::rods`); left out while 0.
+    #[serde(skip_serializing_if = "is_zero_i32")]
+    pub rods: i32,
+    /// The cell its rod's reticle stands on (`Tank::reticle`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reticle: Option<(i32, i32)>,
     /// A charge on the trigger (`Tank::charge`): the weapon, seconds held
     /// and its stage.
     pub charge: Option<(&'static str, f32, &'static str)>,
@@ -404,6 +434,9 @@ pub struct TankPatch {
     pub special_offline: Option<f32>,
     pub gauss_slugs: Option<i32>,
     pub fpv_drones: Option<i32>,
+    /// Rods to call (`Tank::rods`): a count above 0 takes the special
+    /// carried away.
+    pub rods: Option<i32>,
     /// Seconds the trigger of its charge weapon has been held: a charge put
     /// on (the special it carries must be one, `Trigger::Charge`); 0 takes
     /// one off.
@@ -627,6 +660,8 @@ impl Game {
                     gauss: tank.gauss_slugs,
                     fpv: tank.fpv_drones,
                     fpv_out: tank.fpv_out,
+                    rods: tank.rods,
+                    reticle: tank.reticle.map(|r| r.cell),
                     charge: tank.charge.map(|c| (c.weapon.name(), r1(c.held), c.stage().name())),
                     tell: tank.tell.map(|t| (t.weapon.name(), r1(t.left))),
                     skid: r1(tank.skid),
@@ -855,6 +890,20 @@ impl Game {
                     aim_y: r1(d.aim.y),
                 })
                 .collect(),
+            zones: self
+                .zones
+                .iter()
+                .map(|z| ZoneDebug {
+                    id: z.id,
+                    kind: "rod",
+                    owner: z.owner.slot(),
+                    x: r1(z.centre.x),
+                    y: r1(z.centre.y),
+                    cell: z.rod().map(|c| c.cell),
+                    left: r1(z.left(self.time)),
+                })
+                .collect(),
+            craters: self.craters.list().iter().map(|c| c.cell).collect(),
             engage,
             clusters: clusters(&live_enemies, CLUSTER_RADIUS_PX),
             command: full.then(|| self.commander.report().clone()),
@@ -1007,6 +1056,12 @@ impl Game {
                 tank.disarm();
             }
             tank.fpv_drones = n.max(0);
+        }
+        if let Some(n) = patch.rods {
+            if n > 0 {
+                tank.disarm();
+            }
+            tank.rods = n.max(0);
         }
         if let Some(seconds) = patch.charge {
             let weapon = tank.active_weapon();

@@ -147,7 +147,9 @@ impl Game {
         let Some(call) = zone.rod() else { return };
         let c = zone.centre;
         let cells = if live { self.crater_cells_at(call.cell) } else { Vec::new() };
-        let erupted = live && self.struck_volcanoes(c, &t).iter().any(|_| true);
+        let erupted = live && !self.struck_volcanoes(c, &t).is_empty();
+        // What it struck, read before the crater is made (and filled).
+        let ground = self.ground_struck(c);
         f.events.push(Event::RodImpact { id: zone.id, cell: call.cell, crater: !cells.is_empty(), erupted });
         if live {
             self.rod_hulls(f, c, zone.owner, &t);
@@ -166,7 +168,6 @@ impl Game {
                 self.set_off_volcanoes(c, &t);
             }
         }
-        let ground = self.ground_struck(c);
         let mut show = Spectacle::default();
         self.rod_show(&mut show, c, ground);
         f.stage(show);
@@ -566,9 +567,14 @@ impl Game {
         let quarry = self.frog.and_then(|e| self.world.get::<&Frog>(e).ok().filter(|f| !f.is_dead()).map(|f| f.position));
         let sight = self.enemy_sight();
         let margin = t.rod_kill_radius_px + t.rod_ai_friend_margin_px;
+        let near = |at: Position, &(centre, half, ahead): &(Position, Vec2, Position)| {
+            crate::emp::box_reach(at, centre, half) <= margin || crate::emp::box_reach(at, ahead, half) <= margin
+        };
+        // Whether an ally - the caller too - stands in the circle a call on
+        // `cell` would crush, now or a second on.
         let holds_ally = |cell: (i32, i32)| {
             let at = cell_to_world(cell.0, cell.1);
-            allies.iter().any(|&(centre, half, ahead)| crate::emp::box_reach(at, centre, half) <= margin || crate::emp::box_reach(at, ahead, half) <= margin)
+            allies.iter().any(|a| near(at, a))
                 || enemy_towers.iter().any(|&tower| rod::cell_reach(at, tower) <= t.rod_break_radius_px)
                 || enemy_frog.is_some_and(|f| f.distance_to(at) <= margin + crate::FROG_COLLIDER_HALF_EXTENT.0)
         };
@@ -579,7 +585,7 @@ impl Game {
         let mut taken: Vec<(i32, i32)> = Vec::new();
         for (_, entity, me, hunter, frog_only) in armed {
             let under_call = self.zones.iter().any(|z| z.holds(me, &t));
-            let mut sense = RodSense { pick: None, under_call };
+            let mut sense = RodSense { pick: None, under_call, keep_from: None };
             if frog_only {
                 out.insert(entity, sense);
                 continue;
@@ -593,6 +599,9 @@ impl Game {
                 }
                 if s.concealed && !ai.is_hit_alerted() {
                     continue;
+                }
+                if sense.keep_from.is_none_or(|k| me.distance_to(s.pos) < me.distance_to(k)) {
+                    sense.keep_from = Some(s.pos);
                 }
                 let still = self.seat_still(s.seat as usize);
                 let (rank, cell, why) = if still.still >= t.rod_ai_still_seconds {

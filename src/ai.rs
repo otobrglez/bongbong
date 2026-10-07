@@ -122,6 +122,11 @@ pub struct RodSense {
     /// Its centre stands inside a call's danger: a reticle it holds is
     /// dropped and the dodge takes it out.
     pub under_call: bool,
+    /// The nearest seat it knows of from inside that seat's sight box: the
+    /// one it keeps its distance from (`rod_rule`'s stand-off). A tank that
+    /// carries calls fires no shells, so one parked beside a seat - in the
+    /// circle a call on it would crush - does nothing at all.
+    pub keep_from: Option<Position>,
 }
 
 /// A rod tank's target (`RodSense::pick`).
@@ -1375,6 +1380,14 @@ impl Ai {
     /// tree's crown while a seat's drone comes at it.
     pub(crate) fn air_hold(&self) -> bool {
         self.special_why == Some("watch") || self.air_why == Some("canopy")
+    }
+
+    /// Whether it kept its distance from a seat this tick on purpose, the
+    /// rod from god's stand-off (docs/rod-from-god.md "AI"): a tank that
+    /// carries calls holds a band out of the circle a call on that seat
+    /// would crush.
+    pub(crate) fn rod_hold(&self) -> bool {
+        self.special_why == Some("stand-off")
     }
 
     /// Choose a heading toward `target` - or, if pathfinding can't reach
@@ -3172,12 +3185,55 @@ fn special_rule(b: &Brain) -> Option<SpecialUse> {
 /// a tank whose fire timer runs; a pick starts the reticle toward its cell.
 /// Draws no RNG.
 fn rod_rule(b: &Brain, sense: &RodSense) -> Option<SpecialUse> {
-    if b.ai.frog_only || b.me.fire_cooldown > 0.0 || b.ai.fire_timer > 0.0 {
+    if b.ai.frog_only {
         return None;
     }
-    let pick = sense.pick?;
-    let face = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
-    Some(SpecialUse::Charge { face, aim: Some(pick.cell), why: pick.why })
+    let cooling = b.me.fire_cooldown > 0.0 || b.ai.fire_timer > 0.0;
+    if let Some(pick) = sense.pick.filter(|_| !cooling) {
+        let face = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+        return Some(SpecialUse::Charge { face, aim: Some(pick.cell), why: pick.why });
+    }
+    // Its distance from the seat it knows of (`RodSense::keep_from`), while
+    // it is healthy enough not to flee: backed off out of the circle a call
+    // on that seat would crush, held a band past it facing the seat, and
+    // left to the tree further out - which brings it back in, never closer
+    // than the band.
+    let seat = sense.keep_from.filter(|_| b.me.damage < tuning().enemy_flee_damage)?;
+    let reach = rod_stand_off_px();
+    let d = b.me.position.distance_to(seat);
+    if d < reach {
+        return rod_stand_off(b, seat, reach + OBSTACLE_GRID_SIZE).map(|to| SpecialUse::Approach { to, why: "stand-off" });
+    }
+    if d <= reach + 2.0 * OBSTACLE_GRID_SIZE && !b.in_danger(b.me.position) {
+        return Some(SpecialUse::Hold { face: Dir::toward(b.me.position, seat), why: "stand-off" });
+    }
+    None
+}
+
+/// How far a rod tank keeps from the seat it knows of: a call on that
+/// seat's cell must not hold the tank itself - the circle, the friend
+/// margin, the widest hull's half - and a cell more.
+fn rod_stand_off_px() -> f32 {
+    let t = tuning();
+    t.rod_kill_radius_px + t.rod_ai_friend_margin_px + crate::battlefield::max_tank_clearance_half_extent() + OBSTACLE_GRID_SIZE
+}
+
+/// Where a rod tank too near `seat` backs off to: `reach` out from the
+/// seat along the line through the tank, else on the seat's row or column
+/// - the nearest of those it can drive to, out of every danger. `None`
+/// where it can reach none.
+fn rod_stand_off(b: &Brain, seat: Position, reach: f32) -> Option<Position> {
+    let me = b.me.position;
+    let away = me - seat;
+    let len = away.length();
+    let mut spots: Vec<Position> = Vec::new();
+    if len > 1.0 {
+        spots.push(seat + away * (reach / len));
+    }
+    let mut axes: Vec<Position> = Dir::ALL.iter().map(|d| seat + d.vec() * reach).collect();
+    axes.sort_by(|a, c| me.distance_to(*a).total_cmp(&me.distance_to(*c)));
+    spots.extend(axes);
+    spots.into_iter().find(|&q| b.can_reach(q) && !b.in_danger(q))
 }
 
 /// A rod tank's rule while its reticle is up (`windup_rule`): standing

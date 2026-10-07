@@ -381,6 +381,34 @@ fn an_enemy_calls_a_rod_on_a_seat_standing_still() {
     assert!(seen.iter().any(|e| matches!(e, Event::Hit { target: HitTarget::Player { player: 0 }, cause: HitCause::Rod, killed: true, .. })), "the seat stood and was crushed");
 }
 
+/// An enemy with the rod beside a seat standing still backs off until its
+/// own hull is out of the circle, then calls on it.
+#[test]
+fn an_enemy_too_near_its_target_backs_off_and_calls() {
+    let mut game = round("");
+    with_tank_mut(&game.world, seat(&game), |t| t.disarm());
+    let slot = game.debug_spawn_enemy(crate::map::cell_to_world(5, 6), Some(1), Some(Role::Player)).expect("spawns");
+    let enemy = game.tank_entity_by_slot(slot).expect("exists");
+    with_tank_mut(&game.world, enemy, |t| {
+        t.shells_ammo = 0;
+        t.disarm();
+        t.take_weapon(ActiveWeapon::RodFromGod);
+    });
+    let mut seen = Vec::new();
+    for _ in 0..60 * 20 {
+        seen.extend(step(&mut game, false));
+        if !called(&seen).is_empty() {
+            break;
+        }
+    }
+    let seat_at = with_tank(&game.world, seat(&game), |t| t.position);
+    let cells = called(&seen);
+    assert_eq!(cells.len(), 1, "it called");
+    assert!(crate::map::cell_to_world(cells[0].0, cells[0].1).distance_to(seat_at) <= 64.0, "on the seat: {cells:?} {seat_at:?}");
+    let caller = with_tank(&game.world, enemy, |t| t.position);
+    assert!(caller.distance_to(seat_at) > tuning().rod_kill_radius_px + 32.0, "from outside the circle: {caller:?}");
+}
+
 /// A seat's call on a field nobody stands in never costs the round a
 /// replay: two rounds from one seed with one call agree to the event.
 #[test]
