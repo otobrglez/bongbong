@@ -2824,8 +2824,8 @@ fn special_rule(b: &Brain) -> Option<SpecialUse> {
 /// `Clear`: its allies keep out of it as of a crackle, and with the
 /// commander on they are nudged out too); then a closer
 /// whose seat is worth `emp_ai_approach_value` on its own, not crowded by
-/// an ally, closes in to its spot of the seat's ring drawn in to well
-/// inside the ring's reach and waits there facing it. A fire arm that
+/// an ally and not hidden from it, closes in to its spot of the seat's ring
+/// drawn in to well inside the ring's reach and waits there facing it. A fire arm that
 /// matched while the fire timer runs holds (`act_special`). Draws no RNG.
 fn emp_rule(b: &Brain, sense: &EmpSense) -> Option<SpecialUse> {
     let t = tuning();
@@ -2843,8 +2843,12 @@ fn emp_rule(b: &Brain, sense: &EmpSense) -> Option<SpecialUse> {
         return Some(SpecialUse::Fire { face: facing, at_seat: sense.at_seat, why: "pulse" });
     }
     let free = b.me.damage < t.enemy_flee_damage && !b.guard_holds() && !b.hunting_frog();
+    // A seat hidden from it in tall grass is none to go after, unless it
+    // was just shot by it (the attack tier's rule).
+    let seen = !b.target_concealed || b.ai.hit_alert_timer > 0.0;
     if sense.closer
         && free
+        && seen
         && !sense.target_crowded
         && sense.target_value >= t.emp_ai_approach_value
         && b.player_alive()
@@ -4013,6 +4017,11 @@ mod emp_rule_tests {
     }
 
     fn think(ai: &mut Ai, me: &Tank, sense: SpecialSense, dangers: &[Danger], seat: Position) -> Intent {
+        think_hidden(ai, me, sense, dangers, seat, false)
+    }
+
+    /// `think`, with the seat hidden from the tank in tall grass or not.
+    fn think_hidden(ai: &mut Ai, me: &Tank, sense: SpecialSense, dangers: &[Danger], seat: Position, hidden: bool) -> Intent {
         let mut player = Tank::default();
         player.position = seat;
         let grid = Grid::build(1280.0, 720.0, 48.0, 0.0, std::iter::empty());
@@ -4021,7 +4030,7 @@ mod emp_rule_tests {
             Mover { position: me.position, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
         let mut rng = SmallRng::seed_from_u64(7);
-        ai.think(me, &player, seat, None, 1280.0, 720.0, 1.0 / 60.0, &movers, 1, &grid, &mut rng, None, None, &[], true, true, false, [None; 4], tuning().enemy_view_range, &sense, dangers)
+        ai.think(me, &player, seat, None, 1280.0, 720.0, 1.0 / 60.0, &movers, 1, &grid, &mut rng, None, None, &[], true, true, hidden, [None; 4], tuning().enemy_view_range, &sense, dangers)
     }
 
     fn ready() -> Ai {
@@ -4090,7 +4099,9 @@ mod emp_rule_tests {
     }
 
     /// A closer goes looking only for a seat worth it - the approach
-    /// threshold - and a tank that is not one leaves it to the tree.
+    /// threshold - that is not crowded by its own side and not hidden from
+    /// it, unless it just shot the closer; a tank that is not one leaves it
+    /// to the tree.
     #[test]
     fn a_closer_approaches_only_a_seat_worth_it() {
         let seat = Position::new(ME.x - 300.0, ME.y);
@@ -4106,6 +4117,12 @@ mod emp_rule_tests {
         let mut ai = ready();
         think(&mut ai, &emp_tank(), crowded, &[], seat);
         assert_eq!(ai.special_why, None, "a seat already crowded by its own side");
+        let mut ai = ready();
+        think_hidden(&mut ai, &emp_tank(), closer(approach), &[], seat, true);
+        assert_eq!(ai.special_why, None, "a seat hidden from it in the grass");
+        let mut ai = Ai { hit_alert_timer: 1.0, ..ready() };
+        think_hidden(&mut ai, &emp_tank(), closer(approach), &[], seat, true);
+        assert_eq!(ai.special_why, Some("approach"), "hidden, but it was just shot by it");
     }
 
     /// Inside a danger that is not its own a tank backs out - away from its
