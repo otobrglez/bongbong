@@ -506,7 +506,8 @@ half height), and the flag keeps the rule true on any knobs.
 2. **A training dummy** (`Ai::frog_only`) never uses it: `None`. Every
    pulse reaches whatever seat stands in the ring.
 3. **`off_box`**: `None`. The sight box binds the pulse whole.
-4. **It pays** - `value >= emp_ai_fire_value` (2):
+4. **It pays** - `value >= emp_ai_fire_value` (1: any seat in reach, or
+   a player tower, is enough; the weights pick `at_seat` and rank):
    1. a standing friendly tower in reach: `None` (it never puts its own
       side's tower out, and nothing can move a tower out of the way);
    2. a friend in reach: with `c2_enabled`, `Clear { face: facing,
@@ -516,8 +517,8 @@ half height), and the flag keeps the rule true on any knobs.
       facing it has (a pulse is all round), through the tell.
 5. **Approach**: a `brawler`, under `enemy_flee_damage`, not a guard that
    holds, not hunting the frog, whose seat is within `attack_range`, in
-   its line of sight, not hidden from it, worth it alone
-   (`target_value >= emp_ai_fire_value`) and not crowded
+   its line of sight, not hidden from it, worth a detour alone
+   (`target_value >= emp_ai_approach_value`, 2) and not crowded
    (`!target_crowded` - it would only hold beside an ally there), closes
    in (`Approach { to: seat }`); the personal-space brake stops it short
    of the hull. One brawler per seat keeps a pack of EMP tanks from
@@ -526,11 +527,16 @@ half height), and the flag keeps the rule true on any knobs.
 6. Otherwise `None`: the tree goes on (attack lines up and settles but
    never fires the EMP; chase, patrol and the seek tiers as ever).
 
-**What it means at the defaults.** By day a bare seat alone (worth 1) is
-neither pulsed nor approached; a seat with a live shield or an online
-special (2), two seats, or a seat beside one of its towers are. At night
-every seat is (the night's +1): killing a seat's headlights is worth the
-charge, and the EMP tank goes looking for it - the issue's "prefers night".
+**What it means at the defaults.** Any seat that comes into the ring is
+pulsed, by day a bare one too (worth 1) - the issue's "fires when it pays:
+at least one seat, or a player tower, inside the ring" - and so is a player
+tower alone. The weights are preference: they pick the seat the pulse is
+used on (`at_seat`) and decide what is worth going after. A brawler closes
+in only on a seat worth `emp_ai_approach_value` (2): one with a live shield
+or an online special - or any seat at night (the night's +1), when killing
+its headlights is worth the charge and the EMP tank goes looking for it, the
+issue's "prefers night". By day a bare seat is pulsed where it stands in an
+EMP tank's ring, never hunted down for it.
 
 **Pacing**: `emp_ai_fire_interval` (3.5) between an enemy's decisions, on
 top of the offline it costs itself (`act_special`'s fire timer). With the
@@ -771,7 +777,8 @@ enemies' group:
 | `emp_missile_gravity` | 600 | 50..=5000 | How fast a dead missile falls (px/s²). |
 | `emp_missile_drag` | 2.5 | 0..=20 | How fast a dead missile loses its ground speed (per second). |
 | `emp_hud_flicker_hz` | 3.5 | 0.5..=20 | How often `WPN OFFLINE` flickers. |
-| `emp_ai_fire_value: i32` | 2 | 1..=20 | What a pulse has to be worth before an enemy fires it, or approaches a seat to. |
+| `emp_ai_fire_value: i32` | 1 | 1..=20 | What a pulse has to be worth before an enemy fires it: at 1, any seat or player tower in reach. |
+| `emp_ai_approach_value: i32` | 2 | 1..=20 | What the seat an enemy fights has to be worth alone before its brawler closes in to pulse it: at 2, a seat with a shield or an online special, or any seat at night. |
 | `emp_ai_seat_value: i32` | 1 | 0..=10 | A seat in reach, not already disabled. |
 | `emp_ai_shield_value: i32` | 1 | 0..=10 | More for a seat with a live shield. |
 | `emp_ai_special_value: i32` | 1 | 0..=10 | More for a seat carrying an online special. |
@@ -950,8 +957,10 @@ and `mechanics_tests` on a whole round):
 
 - `the_emp_pulses_a_shielded_seat_in_its_ring` and
   `..._a_seat_carrying_a_special`.
-- `the_emp_leaves_a_bare_seat_alone_by_day_and_pulses_it_at_night`.
-- `a_tower_in_the_ring_makes_a_bare_seat_worth_a_pulse`.
+- `the_emp_pulses_a_bare_seat_in_its_ring_by_day`.
+- `a_player_tower_alone_in_the_ring_is_pulsed`.
+- `the_brawler_leaves_a_bare_seat_by_day_and_closes_in_at_night`.
+- `at_seat_is_the_most_valuable_seat_in_reach`.
 - `the_emp_holds_while_a_friend_is_in_the_ring`.
 - `the_emp_never_pulses_beside_its_own_tower`.
 - `the_emp_never_pulses_a_seat_that_sees_it_from_off_its_box` (radius
@@ -1048,13 +1057,14 @@ Wire:
 - **Defaults first**: `just probe-fixtures` and `just probe-fields`
   unchanged, passing their recorded ceilings untouched.
 - **With the crate**: the same two sweeps with `--crate emp_burst`. AFK:
-  enemies on shells collect it and carry it - by day mostly unused on the
-  bare AFK seat (worth 1), which is the rule.
+  enemies on shells collect it and pulse the AFK seat when it comes into
+  their ring; by day their brawlers do not close in on the bare seat
+  (worth 1, under the approach's 2), which is the rule.
 - **Armed enemies**: the same sweeps with `--tuning armed.json`,
   `{"enemy_special_weapon_chance": 1.0,
   "enemy_special_weapon_emp_share": 1.0}`; then again at night (`armed`
-  plus `"weather_override": 1`), where every enemy pulses the seat it
-  reaches, and with the commander (`armed`, night, `"c2_enabled": true`),
+  plus `"weather_override": 1`), where every brawler closes in on the bare
+  seat to pulse it, and with the commander (`armed`, night, `"c2_enabled": true`),
   where the clearing runs.
 - The probe's tank line gains `emp=` (charges) and `dis=` (seconds
   disabled); its fire tuple counts the charges, so a pulse is a trigger
@@ -1159,13 +1169,16 @@ Wire:
 12. **The sag is an enemy's** - a seat's gun still fires; drawn only.
 13. **Lights out is drawn by day too** (the lamps darkened in black, the
     shadow convention), so the state reads without night.
-14. **The AI values a pulse** (integers: a seat 1, a shield, a special,
-    night and a player tower 1 each, fire at 2): it pulses only what a
-    pulse takes something from, approaches only a seat worth it, never
-    beside its own tower, holds for allies (or, with the commander, has
-    them nudged out), and never from off any box in reach. By day a bare
-    seat is not worth a charge. *For Oto*: that makes an EMP enemy a quiet
-    tank against a bare seat in daylight.
+14. **The AI fires on any seat in the ring and goes after the ones worth
+    it** (integers: a seat 1, a shield, a special, night and a player tower
+    1 each; fire at 1, approach at 2): "at least one seat, or a player
+    tower" is the condition to fire, the weights its preference - they pick
+    the seat a pulse is used on and gate the brawler's approach, so by day
+    a bare seat is pulsed where it stands but not hunted down, and at night
+    every seat is. Never beside its own tower, holding for allies (or, with
+    the commander, having them nudged out), never from off any box in
+    reach. Rejected: firing only at 2 (an EMP enemy would be a quiet tank
+    against a bare seat in daylight).
 15. **Dangers rather than a nav surcharge** for the AI's reaction: an
     armed seat's disc and an ally's crackle are kept out of by a tier and
     by keeping every steering target outside, which also pushes out a
