@@ -162,6 +162,7 @@ the shared pivot:
 | 15–18 | flamethrower | pilot flame (two frames), firing (two frames) |
 | 19–23 | grenade launcher | 0–4 rounds fired from its drum, front pair first; it sits on the missiles' roof hardpoint, since a tank carries one special at a time |
 | 24–27 | sonic hammer | idle, two wind-up cells (the tell), the blast; an acoustic dish on the roof hardpoint (docs/sonic-hammer.md) |
+| 28–32 | EMP burst | armed (the core's lamp dim), two crackle cells (the tell: the left, then the right half of the windings lit), the pulse (the whole ring lit), offline (the windings scorched, the core dark); a toroid coil of brass windings on a 7 x 6 plinth on the roof hardpoint (docs/emp-burst.md); its centre is `tank_art::EMP_COIL` |
 
 A module is hardware, not a firing-mode indicator: `module_cols` draws one
 for every special weapon the tank carries, in the order above, over the

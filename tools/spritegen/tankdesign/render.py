@@ -51,10 +51,10 @@ C_TURRET = 20
 C_BROKEN = 32
 N_COLS = 33
 MODULE_COLS = sum(WEAPON_STATES[w] for w in WEAPONS)
-# The modules a preview draws on one tank at once: the grenade launcher and
-# the sonic hammer share the missiles' roof, and a tank carries one special
-# at a time.
-SHOWN_TOGETHER = [w for w in WEAPONS if w not in ('grenade', 'sonic')]
+# The modules a preview draws on one tank at once: the grenade launcher, the
+# sonic hammer and the EMP projector share the missiles' roof, and a tank
+# carries one special at a time.
+SHOWN_TOGETHER = [w for w in WEAPONS if w not in ('grenade', 'sonic', 'emp')]
 
 
 def load_line(key):
@@ -322,8 +322,7 @@ def preview_design(r, scale=2, theme='grass'):
         if w != 'blown':
             layers.append((e['broken'][0], e['broken'][1], 'turret'))
         tiles.append(tile(layers, w, turret_rot=20 if w == 'gutted' else -15))
-    # Every module at once, but the grenade launcher, which shares the
-    # missiles' roof.
+    # Every module at once, but the ones that share the missiles' roof.
     mods = [H(0), T(0)]
     for w in SHOWN_TOGETHER:
         mb, me = r.modules[w, 0]

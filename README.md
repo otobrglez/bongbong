@@ -58,6 +58,5 @@ Please feel free to reach out or interact with me if you have any ideas or anyth
 
 \- Oto Brglez
 
-
 [sola-raylib]: https://github.com/brettchalupa/sola-raylib
 [raylib]: https://www.raylib.com/

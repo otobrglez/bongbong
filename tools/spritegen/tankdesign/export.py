@@ -9,7 +9,7 @@ Writes, under the repo (docs/SPRITESHEET_SPEC.md has the layout):
   static/scifi_tanks_sheet.png   the paint: 33 columns x 60 rows of 40 px cells,
                                  five team blocks of the twelve chassis
   static/scifi_tanks_glow.png    the light layer, the same layout
-  static/tank_modules.png        the weapon modules: 28 columns x 12 rows
+  static/tank_modules.png        the weapon modules: 33 columns x 12 rows
   static/tank_modules_glow.png   their light layer
   src/tank_art.rs                the anchors the engine reads (lamps, muzzles,
                                  missile tubes), generated - never edited by hand
@@ -104,7 +104,7 @@ def main(argv):
         # as its own function drew it.
         hp = r.hardpoints
         mm = {}
-        for w in ('minigun', 'laser', 'flame', 'missiles', 'grenade', 'sonic'):
+        for w in ('minigun', 'laser', 'flame', 'missiles', 'grenade', 'sonic', 'emp'):
             b = Builder(Ctx(ch, 'enemy'), 'module', 0, 0)
             design.module(b, w, 0, hp)
             mm[w] = b.meta
@@ -113,7 +113,7 @@ def main(argv):
         muzzles = [tuple(m) for m in r.turret_meta.get('muzzles', [])]
         art.append(dict(chassis=ch, codename=design.codename, heads=heads, spots=spots, muzzles=muzzles,
                         minigun=mm['minigun']['muzzle'], laser=mm['laser']['muzzle'], flame=mm['flame']['muzzle'],
-                        grenade=mm['grenade']['muzzle'], sonic=mm['sonic']['muzzle'],
+                        grenade=mm['grenade']['muzzle'], sonic=mm['sonic']['muzzle'], emp=mm['emp']['coil'],
                         tubes=mm['missiles']['tubes']))
         print('exported', ch, design.codename)
     static = os.path.join(repo, 'static')
@@ -157,13 +157,16 @@ def write_rust(path, line_key, art):
         L.append('    &[%s], // %s' % (', '.join(pair(p) for p in a['muzzles']), a['chassis']))
     L.append('];')
     L.append('')
-    for key, doc in (('minigun', 'The minigun module\'s muzzle, where its bullets leave (turret frame).'),
-                     ('laser', 'The laser module\'s lens, where its beam starts (turret frame).'),
-                     ('flame', 'The flamethrower module\'s nozzle, where its jet starts (turret frame).'),
-                     ('grenade', 'The grenade launcher module\'s barrel mouth, where its grenades leave (turret frame).'),
-                     ('sonic', 'The sonic hammer module\'s dish, where its wind-up is drawn (turret frame).')):
+    for key, name, doc in (
+            ('minigun', 'MINIGUN_MUZZLE', 'The minigun module\'s muzzle, where its bullets leave (turret frame).'),
+            ('laser', 'LASER_MUZZLE', 'The laser module\'s lens, where its beam starts (turret frame).'),
+            ('flame', 'FLAME_MUZZLE', 'The flamethrower module\'s nozzle, where its jet starts (turret frame).'),
+            ('grenade', 'GRENADE_MUZZLE',
+             'The grenade launcher module\'s barrel mouth, where its grenades leave (turret frame).'),
+            ('sonic', 'SONIC_MUZZLE', 'The sonic hammer module\'s dish, where its wind-up is drawn (turret frame).'),
+            ('emp', 'EMP_COIL', 'The EMP module\'s coil centre, where its crackle is drawn (turret frame).')):
         L.append('/// %s' % doc)
-        L.append('pub const %s_MUZZLE: [(f32, f32); 12] = [' % key.upper())
+        L.append('pub const %s: [(f32, f32); 12] = [' % name)
         for a in art:
             L.append('    %s, // %s' % (pair(a[key]), a['chassis']))
         L.append('];')

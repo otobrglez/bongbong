@@ -238,6 +238,10 @@ PICKUP_INK = {
     # above leave free between the plasma's teal and the tower pack's
     # periwinkle; the light is the arcs of sound off its speaker.
     'sonic_hammer': ((0x1E, 0x7F, 0xB8), (0x46, 0xC3, 0xF2), (0xA8, 0xE6, 0xFF)),
+    # The EMP burst (docs/emp-burst.md): cobalt, the deep electric blue the
+    # inks above leave free between the hammer's sky blue and the tower
+    # pack's periwinkle; the light is the bar of its power sign.
+    'emp_burst': ((0x24, 0x33, 0xA6), (0x4F, 0x6B, 0xFF), (0xB3, 0xC2, 0xFF)),
 }
 # The rainbow shield's symbol, swept corner to corner like the old icon.
 PICKUP_RAINBOW = ((0xE8, 0x4A, 0x3C), (0xFF, 0x8A, 0x2B), (0xFF, 0xD9, 0x3D), (0x7E, 0xDB, 0x5A),

@@ -598,10 +598,11 @@ fn log_frame(game: &Game, frame: u32) {
         // be read off the out-of-bounds position.
         let entering = if tank.entering { " entering=true" } else { "" };
         println!(
-            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} missiles={:2} grenades={:2} sonic={:2} laser={:2} fuel={:4.1} burn={:3.1} shield={:5.1} wreck={}{entering}{}{}",
-            tank.position.x, tank.position.y, tank.velocity.x, tank.velocity.y, speed, tank.rotation, tank.damage, tank.shells_ammo, tank.plasma_ammo, tank.minigun_ammo, tank.missile_ammo, tank.grenade_ammo, tank.sonic_ammo, tank.laser_charges, tank.flame_fuel, tank.burn_timer, tank.shield_hp, tank.is_wreck,
+            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} missiles={:2} grenades={:2} sonic={:2} emp={:2} laser={:2} fuel={:4.1} burn={:3.1} shield={:5.1} wreck={}{entering}{}{}{}",
+            tank.position.x, tank.position.y, tank.velocity.x, tank.velocity.y, speed, tank.rotation, tank.damage, tank.shells_ammo, tank.plasma_ammo, tank.minigun_ammo, tank.missile_ammo, tank.grenade_ammo, tank.sonic_ammo, tank.emp_charges, tank.laser_charges, tank.flame_fuel, tank.burn_timer, tank.shield_hp, tank.is_wreck,
             if tank.tell { " tell=true" } else { "" },
             if tank.skidding { " skid=true" } else { "" },
+            if tank.disabled { " dis=true" } else { "" },
         );
     }
 }
@@ -814,10 +815,10 @@ struct TankTrack {
     trail: VecDeque<(u32, Position)>,
     trail_path_len: f32,
     // --- deliberate-hold detection (see FIRED_RECENTLY_FRAMES) ---
-    // Last frame's (shells, minigun, plasma, laser, missiles, sonic) ammo,
-    // to spot a trigger pull as any pool decreasing; None until the first
-    // frame.
-    prev_ammo: Option<(i32, i32, i32, i32, i32, i32)>,
+    // Last frame's (shells, minigun, plasma, laser, missiles, sonic, emp)
+    // ammo, to spot a trigger pull as any pool decreasing; None until the
+    // first frame.
+    prev_ammo: Option<(i32, i32, i32, i32, i32, i32, i32)>,
     // Frame of the most recent detected shot, if any.
     last_fire_frame: Option<u32>,
     // Frame of the most recent deliberate hold (`deliberate_hold`), if any.
@@ -891,15 +892,7 @@ impl TankTrack {
     /// ENEMY_RETREAT_RANGE with shells still below ENEMY_AMMO_RESUME
     /// (`act_retreat`'s wait-out-the-recharge hold).
     fn deliberate_hold(&self, frame: u32, tank: &TankSnapshot, player: &TankSnapshot) -> bool {
-        // A field map's enemy nothing has woken yet holds still by design
-        // (`simulation::field`): far from every seat, it does not think.
-        if tank.asleep {
-            return true;
-        }
-        // Winding up a special, or knocked off its tracks by one: holding
-        // or sliding where it did not ask to go, on purpose either way
-        // (docs/sonic-hammer.md).
-        if tank.tell || tank.skidding {
+        if HOLDS.iter().any(|(_, held)| held(tank)) {
             return true;
         }
         if self
@@ -1013,6 +1006,23 @@ impl TankTrack {
         self.pileup_frames = 0;
     }
 }
+
+/// The states a tank holds still or slides in on purpose, by name: a
+/// field map's enemy nothing has woken (`simulation::field`: far from every
+/// seat, it does not think), a special's wind-up and a knock off its tracks
+/// (docs/sonic-hammer.md), and a wait outside a danger it is kept out of
+/// (docs/emp-burst.md). Not a stall or a stale start. A weapon that
+/// holds a tank another way adds its row.
+const HOLDS: &[(&str, fn(&TankSnapshot) -> bool)] =
+    &[("asleep", |t| t.asleep), ("tell", |t| t.tell), ("skid", |t| t.skidding), ("kept out", |t| t.kept_out)];
+
+/// The states a tank's motion is not its own in, by name: an EMP has its
+/// brain off and it coasts on its last intent (docs/emp-burst.md). While
+/// one holds, no anomaly reads the tank and every window over its motion
+/// starts over where it stands (`TankTrack::rejoin`), so the coast is
+/// never judged as the AI driving. A weapon that takes a tank's driving
+/// away adds its row.
+const OUT_OF_ITS_HANDS: &[(&str, fn(&TankSnapshot) -> bool)] = &[("disabled", |t| t.disabled)];
 
 /// Prints an `ANOMALY` line; the caller tallies the kind into
 /// `AnomalyTotals`. `seed` is the round's own effective seed
@@ -1239,13 +1249,18 @@ fn check_anomalies(
             tank.laser_charges,
             tank.missile_ammo,
             tank.sonic_ammo,
+            tank.emp_charges,
         );
         if let Some(prev) = track.prev_ammo
-            && (ammo.0 < prev.0 || ammo.1 < prev.1 || ammo.2 < prev.2 || ammo.3 < prev.3 || ammo.4 < prev.4 || ammo.5 < prev.5)
+            && (ammo.0 < prev.0 || ammo.1 < prev.1 || ammo.2 < prev.2 || ammo.3 < prev.3 || ammo.4 < prev.4 || ammo.5 < prev.5 || ammo.6 < prev.6)
         {
             track.last_fire_frame = Some(frame);
         }
         track.prev_ammo = Some(ammo);
+        if OUT_OF_ITS_HANDS.iter().any(|(_, out)| out(tank)) {
+            track.rejoin(tank, frame);
+            continue;
+        }
         let holding = track.deliberate_hold(frame, tank, player_snap);
         if holding {
             track.last_hold_frame = Some(frame);

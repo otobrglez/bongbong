@@ -378,7 +378,8 @@ impl Game {
     /// How far an enemy sees a tank standing at `pos` (px): `enemy_sight`,
     /// except that under a sky that shortens it a tank in the light is
     /// seen at the full `enemy_view_range` - within `lamp_reveal_px` of a
-    /// lamp post still standing or a lantern set down, or on ground the
+    /// lamp post still standing and lit (an EMP at night puts them out,
+    /// `lit_lamp_posts`) or a lantern set down, or on ground the
     /// lava makes at least `lava_reveal_heat` hot (docs/volcano.md). Light
     /// cuts both ways. Under a clear sky, or on a map with nothing that
     /// shines, it is `enemy_sight` exactly.
@@ -399,7 +400,7 @@ impl Game {
             if self.lanterns.iter().any(|l| l.position.distance_to(pos) <= reach) {
                 return true;
             }
-            if self.lamp_posts().iter().any(|p| p.distance_to(pos) <= reach) {
+            if self.lit_lamp_posts().iter().any(|p| p.distance_to(pos) <= reach) {
                 return true;
             }
         }
@@ -756,6 +757,14 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
             }
             continue;
         }
+        // A disabled hull's lights are out (docs/emp-burst.md): no beam, no
+        // spotlight, no glow - only its sparks, in their bursts.
+        if tank.is_disabled() {
+            if t.emp_spark_light > 0.0 && crate::emp::sparking(crate::emp::spark_seed(tank.owner_slot()), time) {
+                out.push(Light::point(tank.position, 28.0, scale([0.58, 0.93, 0.89], k * t.emp_spark_light)).unshadowed());
+            }
+            continue;
+        }
         // A cone from each of the hull's headlamps (`tank_art::HEADLIGHTS`),
         // each at the beam's strength over the root of the lamps lit, so a
         // pair or a four throws about one beam's light; damage puts them
@@ -867,7 +876,9 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
         }
     }
     let lamp = scale([1.0, 0.82, 0.52], k * 1.15);
-    for at in game.lamp_posts() {
+    // A post an EMP put out throws nothing, flickering back as it is drawn
+    // (`emp::lamp_lit`).
+    for at in game.lamp_posts().into_iter().filter(|&at| crate::emp::lamp_lit(at, game.lamps_out())) {
         out.push(Light::point(at, t.lamp_light_px, scale(lamp, flicker(time, at))).still());
     }
     for lantern in &game.lanterns {
@@ -877,6 +888,14 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
     // The towers: a tesla's coil as it charges and every bolt along its
     // path, a mortar's ooze and the globs it lobs, a tower on fire.
     for view in game.tower_views() {
+        // Offline (an EMP): its coil and its mortar's mouth are dark; a
+        // fire on it still burns.
+        if view.disabled > 0.0 {
+            if view.burning {
+                out.push(fire(view.position, t.fire_light_radius_px * 0.9, 1.0));
+            }
+            continue;
+        }
         match view.kind {
             TowerKind::Tesla if view.charge > 0.05 => {
                 let charge = view.charge * view.charge;
@@ -942,7 +961,7 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
             None => {}
         }
     }
-    for missile in game.world.query::<&Missile>().iter() {
+    for missile in game.world.query::<&Missile>().iter().filter(|m| !m.is_dead()) {
         out.push(Light::point(missile.position, 48.0, scale([1.0, 0.6, 0.3], s * 0.85 * (1.0 - 0.5 * missile.lift()))).unshadowed());
     }
     // A grenade, on the beat it flashes.

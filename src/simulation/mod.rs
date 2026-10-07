@@ -33,6 +33,7 @@ mod hits;
 mod missiles;
 mod grenades;
 mod sonic;
+mod emp;
 mod nav;
 pub mod portals;
 pub mod present;
@@ -53,6 +54,8 @@ mod lagcomp_tests;
 mod props_tests;
 #[cfg(test)]
 mod seat_tests;
+#[cfg(test)]
+mod emp_tests;
 #[cfg(test)]
 mod sonic_tests;
 #[cfg(test)]
@@ -184,7 +187,7 @@ use waves::WaveState;
 use crate::blast::{BlastFx, Scorch};
 use crate::decal::Decal;
 use crate::tuning::tuning;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use hecs::Entity;
 use rand::rngs::SmallRng;
@@ -454,6 +457,20 @@ pub enum Event {
     /// (`ActiveWeapon::name`, `tank::Tell`). Not sent: the tell's state
     /// travels in `TankState::tell`.
     TellStarted { slot: usize, weapon: &'static str },
+    /// An EMP fired by `slot` from the pivot (`x`, `y`) (docs/emp-burst.md):
+    /// the ring a replica draws. Logged right after its `Fired`, in the
+    /// same tick.
+    EmpPulse { slot: usize, x: f32, y: f32 },
+    /// The tank in owner slot `slot`, at (`x`, `y`), was disabled by an
+    /// EMP's ring (`Tank::disable`). Not sent: `TankState::disabled` is
+    /// what draws.
+    Disabled { slot: usize, x: f32, y: f32 },
+    /// The tower at (`x`, `y`) went offline under an EMP's ring
+    /// (`Tower::disable`). Not sent: the tile's `DISABLED` flag is what
+    /// draws.
+    TowerDisabled { x: f32, y: f32 },
+    /// A missile an EMP killed came down at (`x`, `y`) a dud: no blast.
+    MissileDud { x: f32, y: f32 },
     /// A tank became a wreck (any cause) at (`x`, `y`).
     Wreck { slot: usize, x: f32, y: f32 },
     /// Ram contact between the tanks in `slot` and `other_slot`: an enemy and
@@ -810,6 +827,14 @@ pub struct Game {
     /// rules on the round that simulates them (`tick_sonic_waves`), only
     /// drawn on a replica. Cleared by `init`.
     pub(crate) sonic_waves: Vec<crate::sonic::SonicWave>,
+    /// The EMP pulses running out over the field (docs/emp-burst.md), in
+    /// the order they were fired: striking on the round that simulates
+    /// them (`tick_emp_pulses`), only drawn on a replica. Cleared by `init`.
+    pub(crate) emp_pulses: Vec<crate::emp::EmpPulse>,
+    /// Seconds every lamp post on the map stays dark after an EMP at night
+    /// (docs/emp-burst.md "At 11"), 0 while they are lit
+    /// (`lit_lamp_posts`). Counted down in `tick_timers`.
+    pub(crate) lamps_out: f32,
     /// Tall-grass cells a sonic wave flattened, with the seconds they hide
     /// nobody for yet: taken out of the cover `Terrain` reads
     /// (`cover_cells`). Ordered, ticked down in `tick_timers`.
@@ -1179,6 +1204,9 @@ struct Frame {
     /// Sonic hammer blasts fired this frame, cast into waves by
     /// `resolve_sonic` once the tank loops are done.
     pending_sonic: Vec<sonic::PendingSonic>,
+    /// EMP pulses fired this frame, put on the field by `resolve_emp` once
+    /// the tank loops are done.
+    pending_emp: Vec<emp::PendingEmp>,
     /// Flame jets emitted this frame, one per firing nozzle
     /// (`resolve_flames` takes them).
     flame_jets: Vec<FlameJet>,
@@ -1256,6 +1284,7 @@ impl Frame {
             pending_grenades: Vec::new(),
             pending_lasers: Vec::new(),
             pending_sonic: Vec::new(),
+            pending_emp: Vec::new(),
             flame_jets: Vec::new(),
             muzzle_flashes: Vec::new(),
             impact_flashes: Vec::new(),
@@ -1431,6 +1460,8 @@ impl Game {
         self.seat_knock = [SeatKnock::default(); MAX_SEATS];
         self.sonic_waves.clear();
         self.grass_flat.clear();
+        self.emp_pulses.clear();
+        self.lamps_out = 0.0;
         self.next_shot_id = 0;
         self.last_engage.clear();
         self.debug_kills.clear();
@@ -1969,6 +2000,8 @@ impl Game {
             self.resolve_flames(&mut f);
             self.resolve_sonic(&mut f);
             self.tick_sonic_waves(&mut f, true);
+            self.resolve_emp(&mut f);
+            self.tick_emp_pulses(&mut f, true);
             self.step_world(&mut f, true);
             self.sync_tanks_and_ram(&mut f);
             self.ram_props(&mut f);
@@ -2003,6 +2036,7 @@ impl Game {
             // Physics doesn't step, so nothing drifts.
             self.guide_missiles(&mut f);
             self.tick_sonic_waves(&mut f, false);
+            self.tick_emp_pulses(&mut f, false);
             self.step_world(&mut f, false);
             self.roll_grenades(&mut f);
             self.resolve_projectiles::<Shell>(&mut f, false);
@@ -2158,9 +2192,12 @@ impl Game {
             tank.tick_missile_pod();
             tank.tick_recoil(dt);
             tank.skid = (tank.skid - dt).max(0.0);
+            tank.tick_disabled(dt);
             if tank.is_wreck() {
                 tank.tell = None;
                 tank.skid = 0.0;
+                tank.disabled = 0.0;
+                tank.special_offline = 0.0;
             }
             if roll_wreck_col(tank, rng) {
                 // The frame a tank becomes a wreck: stop it behaving like
@@ -2175,6 +2212,12 @@ impl Game {
             *left -= dt;
             *left > 0.0
         });
+        // An EMP's outages run out: the towers come back online, the lamp
+        // posts light again.
+        for tower in self.towers.values_mut() {
+            tower.disabled = (tower.disabled - dt).max(0.0);
+        }
+        self.lamps_out = (self.lamps_out - dt).max(0.0);
         for frog in self.world.query::<&mut Frog>().iter() {
             frog.tick(dt);
             self.physics.set_position(frog.body, frog.position);
@@ -2499,14 +2542,17 @@ impl Game {
     /// the ammo behind it, and the twin barrel's lateral offset (zero on
     /// a single-barrel chassis). What a client gates its own provisional
     /// shot on (`net::predict`); on a sandbox these are the server's, as
-    /// of the last snapshot. `None` for a wreck or an empty seat.
-    pub(crate) fn seat_arms(&self, seat: usize) -> Option<(ActiveWeapon, i32, f32)> {
+    /// of the last snapshot. `offline` is the client's own word that its
+    /// special is offline (an EMP's press the room has not answered yet):
+    /// the shell cannon fires, as the room's offline will have it. `None`
+    /// for a wreck or an empty seat.
+    pub(crate) fn seat_arms(&self, seat: usize, offline: bool) -> Option<(ActiveWeapon, i32, f32)> {
         let entity = self.seats.get(seat).copied().flatten()?;
         let tank = self.world.get::<&Tank>(entity).ok()?;
         if tank.is_wreck() {
             return None;
         }
-        let weapon = tank.active_weapon();
+        let weapon = if offline { ActiveWeapon::Shell } else { tank.active_weapon() };
         let lateral = tuning().tank_barrel_lateral_offset[tank.row as usize];
         Some((weapon, tank.weapon_ammo(weapon), lateral))
     }
@@ -2644,6 +2690,23 @@ impl Game {
             if tank.skid > 0.0 {
                 tank.skid = (tank.skid - dt).max(f32::EPSILON);
             }
+            // An EMP's outages, likewise (`TankState::{disabled, offline}`).
+            if tank.disabled > 0.0 {
+                tank.disabled = (tank.disabled - dt).max(f32::EPSILON);
+            }
+            if tank.special_offline > 0.0 {
+                tank.special_offline = (tank.special_offline - dt).max(f32::EPSILON);
+            }
+        }
+        // An offline tower and the dark lamp posts too, until the room's
+        // flag and `RoundState::lamps_out` end them.
+        for tower in self.towers.values_mut() {
+            if tower.disabled > 0.0 {
+                tower.disabled = (tower.disabled - dt).max(f32::EPSILON);
+            }
+        }
+        if self.lamps_out > 0.0 {
+            self.lamps_out = (self.lamps_out - dt).max(f32::EPSILON);
         }
         // A stunned frog stays stunned until the room says it is not.
         for frog in self.world.query_mut::<&mut Frog>() {
@@ -2658,6 +2721,7 @@ impl Game {
             *left > 0.0
         });
         self.tick_sonic_pictures(dt);
+        self.tick_emp_pictures(dt);
         // A drum that lands blasts where the server says it did, so the
         // landed ones are dropped here and the `Blast` event carries the
         // rest. A lava bomb the same.
@@ -3089,7 +3153,7 @@ impl Game {
         let weapon = tank.active_weapon();
         let should_fire = match weapon {
             ActiveWeapon::Laser | ActiveWeapon::Minigun | ActiveWeapon::Missiles | ActiveWeapon::Flamethrower => intent.fire,
-            ActiveWeapon::Plasma | ActiveWeapon::Grenades | ActiveWeapon::SonicHammer | ActiveWeapon::Shell => fire_pressed,
+            ActiveWeapon::Plasma | ActiveWeapon::Grenades | ActiveWeapon::SonicHammer | ActiveWeapon::Emp | ActiveWeapon::Shell => fire_pressed,
         };
         if weapon == ActiveWeapon::Flamethrower {
             if should_fire {
@@ -3166,6 +3230,10 @@ impl Game {
         if players.len() >= 2 {
             let margin = tuning().enemy_target_switch_margin_px;
             for (tank, ai) in self.world.query::<(&Tank, &mut Ai)>().iter() {
+                // A disabled tank's brain is off: it keeps the seat it had.
+                if tank.is_disabled() {
+                    continue;
+                }
                 let eligible = |p: &PlayerView| !p.wreck && !p.entering && (!p.concealed || ai.is_hit_alerted());
                 let current = (ai.target_player() as usize).min(players.len() - 1);
                 let mut best: Option<(usize, f32)> = None;
@@ -3216,8 +3284,14 @@ impl Game {
             // un-shootable.
             let alert_before = self.alert_position.filter(|_| self.alert_timer > 0.0);
             let mut seen: Option<(f32, Position)> = None;
+            // A disabled enemy's senses are dead: it spots nobody.
+            let blind: BTreeSet<usize> =
+                self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter().filter(|(_, t)| t.is_disabled()).map(|(e, _)| enemy_indices[&e]).collect();
             for p in players.iter().filter(|p| !p.concealed && !p.wreck && !p.entering) {
-                for m in &movers[players.len()..] {
+                for (i, m) in movers.iter().enumerate().skip(players.len()) {
+                    if blind.contains(&i) {
+                        continue;
+                    }
                     let d = m.position.distance_to(p.pos);
                     if d <= p.sight && seen.is_none_or(|(best, _)| d < best) {
                         seen = Some((d, p.pos));
@@ -3433,12 +3507,39 @@ impl Game {
         } else {
             BTreeMap::new()
         };
+        // What a pulse of each EMP-carrying enemy's own would get it, and
+        // the places every enemy keeps out of because of an EMP
+        // (docs/emp-burst.md "AI"): only when a tank on the field carries
+        // one, so a round without hands every `Brain` none.
+        let (emp_senses, dangers) = if self.any_emp() {
+            let seats: Vec<emp::EmpSeat> = players
+                .iter()
+                .enumerate()
+                .map(|(i, p)| with_tank(&self.world, p.entity, |t| emp::EmpSeat::of(i as u8, t, !p.wreck && !p.entering, p.concealed)))
+                .collect();
+            (self.emp_senses(&seats), self.emp_dangers(&seats))
+        } else {
+            (BTreeMap::new(), Vec::new())
+        };
 
         // --- collect pass: perception, `think`, aim and fire, exactly as
         // before. Only the impulse is deferred. ---
         let mut pending: Vec<Pending> = Vec::new();
         for (entity, tank, ai) in self.world.query::<(Entity, &mut Tank, &mut Ai)>().iter() {
             let my_index = enemy_indices[&entity];
+            // An EMP has its brain off (docs/emp-burst.md): it coasts on
+            // its last intent, the trigger released, and does not think -
+            // no field map's choice either. The first tick it is back, it
+            // reboots.
+            if tank.is_disabled() {
+                ai.down = true;
+                let intent = Intent { fire: false, fire_aim_offset: 0.0, ..ai.last_intent() };
+                pending.push(coast_enemy(&mut self.physics, f, entity, tank, intent));
+                continue;
+            }
+            if ai.down {
+                ai.reboot();
+            }
             // A field map first decides whether this tank thinks this tick
             // (`field::mind`): a far one coasts on its last intent between
             // thinks, its trigger released, and one nothing has woken
@@ -3570,7 +3671,12 @@ impl Game {
                     player_hidden,
                     walls_ahead,
                     fighting_sight,
-                    &hammer_senses.get(&entity).map_or(SpecialSense::None, |s| SpecialSense::Hammer(*s)),
+                    &hammer_senses
+                        .get(&entity)
+                        .map(|s| SpecialSense::Hammer(*s))
+                        .or_else(|| emp_senses.get(&entity).map(|s| SpecialSense::Emp(*s)))
+                        .unwrap_or(SpecialSense::None),
+                    &dangers,
                 )
             });
             if let Some(before) = before {
@@ -3588,7 +3694,7 @@ impl Game {
             // is the weapon's own minimum (a burst in progress, say). A
             // weapon with a tell winds up first (`enemy_trigger`).
             enemy_trigger(&mut self.physics, f, tank, owner, intent);
-            pending.push(Pending { entity, slot: tank.owner_slot(), intent, current, facing_before });
+            pending.push(Pending { entity, slot: tank.owner_slot(), intent, current, facing_before, disabled: false, clearing: ai.clearing(), dodging: ai.dodging() });
         }
 
         // --- command pass: no world, no RNG (see `simulation::command`) ---
@@ -3617,6 +3723,9 @@ impl Game {
                     intent: p.intent,
                     wreck,
                     ring_rank: self.last_engage.slot_of(p.entity).map(|s| s.rank),
+                    busy: p.disabled.then_some(command::Busy::Disabled),
+                    clearing: p.clearing,
+                    dodging: p.dodging,
                 }
             })
             .collect();
@@ -4823,6 +4932,9 @@ impl Game {
                     missile_ammo: tank.missile_ammo,
                     grenade_ammo: tank.grenade_ammo,
                     sonic_ammo: tank.sonic_ammo,
+                    emp_charges: tank.emp_charges,
+                    disabled: tank.is_disabled(),
+                    kept_out: ai.is_some_and(Ai::kept_out),
                     tell: tank.tell.is_some(),
                     skidding: tank.skid > 0.0,
                     plasma_ammo: tank.plasma_ammo,
@@ -4883,6 +4995,13 @@ pub struct TankSnapshot {
     pub missile_ammo: i32,
     pub grenade_ammo: i32,
     pub sonic_ammo: i32,
+    pub emp_charges: i32,
+    /// Disabled by an EMP (`Tank::disabled`): an enemy coasting with its
+    /// brain off, going where it did not ask to.
+    pub disabled: bool,
+    /// Waiting outside a danger it is kept out of (`Ai::kept_out`):
+    /// holding still on purpose.
+    pub kept_out: bool,
     /// Winding up a special (`Tank::tell`): holding still on purpose.
     pub tell: bool,
     /// Knocked off its tracks (`Tank::skid`): sliding where it did not ask
@@ -4960,6 +5079,12 @@ struct Pending {
     intent: Intent,
     current: Position,
     facing_before: f32,
+    /// Its brain is off (an EMP): the commander cannot reach it.
+    disabled: bool,
+    /// The ring its EMP rule asked the commander to clear (`Ai::clearing`).
+    clearing: Option<f32>,
+    /// Backing out of a danger on its own (`Ai::dodging`).
+    dodging: bool,
 }
 
 /// What the ground and the sky do to a hull's drive this frame
@@ -5026,7 +5151,8 @@ impl Footing {
 }
 
 /// One enemy that does not think this tick: a field map's far tank on its
-/// last intent, one nothing has woken on none. It holds a tell's aim, ticks
+/// last intent, one nothing has woken on none, one an EMP disabled on its
+/// last intent (docs/emp-burst.md). It holds a tell's aim, ticks
 /// its queued shots and its tell, its trigger released, and is handed back
 /// as the `Pending` the apply pass drives.
 fn coast_enemy(physics: &mut Physics, f: &mut Frame, entity: Entity, tank: &mut Tank, intent: Intent) -> Pending {
@@ -5038,7 +5164,7 @@ fn coast_enemy(physics: &mut Physics, f: &mut Frame, entity: Entity, tank: &mut 
     let owner = tank.owner();
     tick_queued_shots(physics, f, tank, owner);
     enemy_trigger(physics, f, tank, owner, Intent { fire: false, ..intent });
-    Pending { entity, slot: tank.owner_slot(), intent, current, facing_before }
+    Pending { entity, slot: tank.owner_slot(), intent, current, facing_before, disabled: tank.is_disabled(), clearing: None, dodging: false }
 }
 
 /// The intent the apply pass drives `slot` by: the commander's orders over
@@ -9470,11 +9596,12 @@ cells."30,20" = { kind = "frog" }
     }
 
     /// The straggler's exemptions: a guard while the frog it keeps lives,
-    /// and a hull still burning, are never taken off - though each is lost,
-    /// a long walk from the fight and on no screen, as a straggler is.
+    /// a hull still burning, and one an EMP has coasting with its brain off
+    /// (docs/emp-burst.md), are never taken off - though each is lost, a
+    /// long walk from the fight and on no screen, as a straggler is.
     #[test]
-    fn a_guard_keeping_its_frog_and_a_burning_hull_are_never_rolled_in_again() {
-        for exempt in ["guard", "burning"] {
+    fn a_guard_keeping_its_frog_a_burning_hull_and_a_disabled_one_are_never_rolled_in_again() {
+        for exempt in ["guard", "burning", "disabled"] {
             let mut game = Game::default();
             game.seed_override = Some(7);
             game.player_row_override = Some(0);
@@ -9499,13 +9626,19 @@ cells."30,20" = { kind = "frog" }
                 m.home = Some(far);
                 m.called = false;
                 m.alert = None;
-                m.lost = t.field_reroll_after_seconds - 1.0;
+                // A disabled tank's mind is frozen (`field::mind` is not
+                // called), so it is lost long enough already.
+                m.lost = t.field_reroll_after_seconds + if exempt == "disabled" { 1.0 } else { -1.0 };
             });
             let entity = game.tank_entity_by_slot(straggler).expect("the straggler");
             if exempt == "guard" {
                 let frog = game.enemy_frog.expect("a Hunt round keeps an enemy frog");
                 assert!(with_frog(&game.world, frog, |fr| !fr.is_dead()), "its frog lives");
                 game.world.get::<&mut Ai>(entity).expect("an enemy").role = Role::Guard;
+            } else if exempt == "disabled" {
+                with_tank_mut(&game.world, entity, |tank| {
+                    tank.disable(10.0);
+                });
             } else {
                 with_tank_mut(&game.world, entity, |tank| {
                     tank.burn_timer = 10.0;

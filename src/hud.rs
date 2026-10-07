@@ -75,6 +75,8 @@ pub const HUD_FLAME_COLOR: Color = Color::new(255, 140, 40, 255);
 pub const HUD_GRENADES_COLOR: Color = Color::new(0xD6, 0x56, 0xF5, 255);
 /// The sonic hammer's accent: the crate's sky-blue ink.
 pub const HUD_SONIC_COLOR: Color = Color::new(0x46, 0xC3, 0xF2, 255);
+/// The EMP burst's accent: the crate's cobalt ink.
+pub const HUD_EMP_COLOR: Color = Color::new(0x4F, 0x6B, 0xFF, 255);
 
 /// The builder bar's fill - the same `#151515` the web page is set in, so
 /// the bar and the page read as one surface around the field - and the
@@ -96,18 +98,42 @@ pub struct WeaponSlot {
     /// The count's colour: shells by how full the magazine is
     /// (`hud_number_color`), a special in its accent (`weapon_color`).
     pub color: Color,
+    /// The special carried is offline (`Tank::special_down`, an EMP,
+    /// docs/emp-burst.md): `Some(true)` on the beats the slot reads
+    /// `WPN OFFLINE`, `Some(false)` on the beats between, when it shows
+    /// its symbol and count unlit - flickering at `emp_hud_flicker_hz` on
+    /// the round's clock. `None` while it fires.
+    pub offline: Option<bool>,
 }
 
 impl WeaponSlot {
-    /// `tank`'s trigger as the vitals and the ring's pips show it.
-    pub fn of(tank: &Tank) -> WeaponSlot {
+    /// `tank`'s trigger as the vitals and the ring's pips show it, at round
+    /// time `time` (an offline special's flicker).
+    pub fn of(tank: &Tank, time: f32) -> WeaponSlot {
         let weapon = tank.special().unwrap_or(ActiveWeapon::Shell);
         let (count, full) = (tank.weapon_ammo(weapon), weapon.full_load());
         let color = match weapon {
             ActiveWeapon::Shell => hud_number_color(count as f32, full as f32),
             special => weapon_color(special),
         };
-        WeaponSlot { weapon, count, full, color }
+        let offline = (weapon != ActiveWeapon::Shell && tank.special_down())
+            .then(|| ((time * tuning().emp_hud_flicker_hz * 2.0).floor() as i64).rem_euclid(2) == 0);
+        WeaponSlot { weapon, count, full, color, offline }
+    }
+}
+
+/// The width of the vitals' weapon slot, its symbol and its count (UI
+/// points): what `WPN OFFLINE` is laid out in (`render::hud`'s slot table
+/// pins it).
+pub const WEAPON_SLOT_W: i32 = 64;
+
+/// `text` - the `WPN OFFLINE` words - as the weapon slot draws it: split at
+/// its first space into two lines, the first word over the rest, or one
+/// line where it has none.
+pub fn offline_lines(text: &str) -> (&str, Option<&str>) {
+    match text.split_once(' ') {
+        Some((first, rest)) => (first, Some(rest)),
+        None => (text, None),
     }
 }
 
@@ -135,7 +161,7 @@ impl PlayerHud {
         PlayerHud {
             hp: 0,
             hp_color: hud_number_color(0.0, MAX_DAMAGE),
-            weapon: WeaponSlot { weapon: ActiveWeapon::Shell, count: 0, full: tuning().max_shells, color: hud_number_color(0.0, 1.0) },
+            weapon: WeaponSlot { weapon: ActiveWeapon::Shell, count: 0, full: tuning().max_shells, color: hud_number_color(0.0, 1.0), offline: None },
             speed: 0.0,
             shield: 0.0,
             lamps: None,
@@ -158,7 +184,7 @@ impl PlayerHud {
             PlayerHud {
                 hp,
                 hp_color: hud_number_color(hp as f32, MAX_DAMAGE),
-                weapon: WeaponSlot::of(tank),
+                weapon: WeaponSlot::of(tank, game.time),
                 speed: boost,
                 shield: tank.shield_charge(),
                 lamps: game.lamps_in_play().then(|| game.player_index(entity).map_or(0, |seat| game.lamps_left(seat as usize))),
@@ -342,6 +368,7 @@ pub fn weapon_color(weapon: ActiveWeapon) -> Color {
         ActiveWeapon::Flamethrower => HUD_FLAME_COLOR,
         ActiveWeapon::Grenades => HUD_GRENADES_COLOR,
         ActiveWeapon::SonicHammer => HUD_SONIC_COLOR,
+        ActiveWeapon::Emp => HUD_EMP_COLOR,
         ActiveWeapon::Shell => TEXT,
     }
 }
@@ -358,6 +385,7 @@ pub fn weapon_pickup(weapon: ActiveWeapon) -> Option<crate::pickup::PickupKind> 
         ActiveWeapon::Flamethrower => Some(PickupKind::Flamethrower),
         ActiveWeapon::Grenades => Some(PickupKind::Grenades),
         ActiveWeapon::SonicHammer => Some(PickupKind::SonicHammer),
+        ActiveWeapon::Emp => Some(PickupKind::Emp),
         ActiveWeapon::Shell => None,
     }
 }
@@ -1603,18 +1631,18 @@ mod hud_tests {
     fn the_trigger_readout_is_the_special_carried_else_shells() {
         let t = tuning();
         let mut tank = Tank { shells_ammo: 7, ..Tank::default() };
-        let shells = WeaponSlot::of(&tank);
+        let shells = WeaponSlot::of(&tank, 0.0);
         assert_eq!((shells.weapon, shells.count, shells.full), (ActiveWeapon::Shell, 7, t.max_shells));
         assert_eq!(shells.color, hud_number_color(7.0, t.max_shells as f32));
         tank.take_weapon(ActiveWeapon::Laser);
         tank.laser_charges -= 2;
-        let laser = WeaponSlot::of(&tank);
+        let laser = WeaponSlot::of(&tank, 0.0);
         assert_eq!((laser.weapon, laser.count, laser.full), (ActiveWeapon::Laser, t.laser_charges_per_pickup - 2, t.laser_charges_per_pickup));
         assert_eq!(laser.color, HUD_LASER_COLOR, "no shells while a special is carried");
         tank.laser_charges = 0;
-        assert_eq!(WeaponSlot::of(&tank).count, 7, "spent, back to the shells");
+        assert_eq!(WeaponSlot::of(&tank, 0.0).count, 7, "spent, back to the shells");
         tank.take_weapon(ActiveWeapon::SonicHammer);
-        let sonic = WeaponSlot::of(&tank);
+        let sonic = WeaponSlot::of(&tank, 0.0);
         assert_eq!((sonic.weapon, sonic.count, sonic.full), (ActiveWeapon::SonicHammer, t.sonic_ammo_per_pickup, t.sonic_ammo_per_pickup));
         assert_eq!(sonic.color, HUD_SONIC_COLOR);
         assert_eq!(weapon_pickup(ActiveWeapon::SonicHammer), Some(crate::pickup::PickupKind::SonicHammer), "its crate's symbol");

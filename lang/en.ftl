@@ -29,6 +29,11 @@ button-play = PLAY
 button-leave = LEAVE
 button-online = ONLINE
 
+# The vitals' weapon slot while the special carried is offline (an EMP,
+# docs/emp-burst.md): the words split at their first space into two lines
+# of 10 px text, each within the slot's 60 px.
+hud-weapon-offline = WPN OFFLINE
+
 # The players dialog: a 28 px title and a 16 px line across a 440 px
 # panel, then two 176 px buttons in 18 px text (about 14 letters each).
 # The line names the controls in the hands that last pressed something:
@@ -474,6 +479,7 @@ tool-tower_pack = tower pack
 tool-heat_shield = heat shield
 tool-grenades = grenades
 tool-sonic_hammer = sonic hammer
+tool-emp_burst = emp burst
 tool-tesla = tesla coil
 tool-tesla_enemy = enemy tesla
 tool-gun_tower = gun tower
@@ -499,6 +505,7 @@ tool-short-tower_pack = tower+
 tool-short-heat_shield = heat
 tool-short-grenades = nades
 tool-short-sonic_hammer = sonic
+tool-short-emp_burst = emp
 tool-short-lamp = lamp
 tool-short-target = target
 tool-short-volcano = volc

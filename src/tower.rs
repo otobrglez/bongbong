@@ -122,6 +122,14 @@ pub struct Tower {
     pub burning: bool,
     /// Seconds of flamethrower exposure, like `Obstacle::heat`.
     pub heat: f32,
+    /// Seconds it stays offline (an EMP, docs/emp-burst.md): no charge, no
+    /// turn, no fire, its lights out. Set by `disable`, counted down in
+    /// `Game::tick_timers`; its own fire burns on meanwhile.
+    pub disabled: f32,
+    /// How far (degrees) its top layer is drawn sagged off its heading,
+    /// eased toward `emp_droop_deg` while it is offline and back after.
+    /// Presentation only.
+    pub droop: f32,
 }
 
 impl Tower {
@@ -139,7 +147,29 @@ impl Tower {
             burst_timer: 0.0,
             burning: false,
             heat: 0.0,
+            disabled: 0.0,
+            droop: 0.0,
         }
+    }
+
+    /// Offline for at least `seconds` (never shortened): the tesla's
+    /// charge is lost and its target dropped, the gun's burst stops.
+    pub fn disable(&mut self, seconds: f32) {
+        self.disabled = self.disabled.max(seconds);
+        self.charge = if self.kind == TowerKind::Bio { self.charge } else { 0.0 };
+        self.target = None;
+        self.burst_left = 0;
+    }
+
+    /// Ease the drawn sag of its top (`droop`), as a disabled tank's turret
+    /// sags (`Tank::ease_droop`). The tesla has no turning top.
+    pub fn ease_droop(&mut self, dt: f32) {
+        let t = tuning();
+        let side = if (self.position.x as i32 / 32 + self.position.y as i32 / 32) % 2 == 0 { 1.0 } else { -1.0 };
+        let target = if self.disabled > 0.0 && self.kind.turns() { t.emp_droop_deg * side } else { 0.0 };
+        let rate = t.emp_droop_deg.abs() / t.emp_droop_seconds.max(1e-3) * if target == 0.0 { 2.0 } else { 1.0 };
+        let step = rate * dt;
+        self.droop += (target - self.droop).clamp(-step, step);
     }
 
     /// Who the tower's shots belong to.
@@ -173,6 +203,11 @@ pub struct TowerView {
     /// The tesla's charge, the mortar's reload: 0..=1.
     pub charge: f32,
     pub burning: bool,
+    /// Seconds it stays offline (`Tower::disabled`, an EMP): drawn with its
+    /// lights out and sparking while above 0.
+    pub disabled: f32,
+    /// Its top's drawn sag (`Tower::droop`), degrees.
+    pub droop: f32,
 }
 
 /// A glob of ooze in the air (the bio slush's shot): a ground point moving

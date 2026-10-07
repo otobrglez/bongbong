@@ -1316,7 +1316,8 @@ impl Scene {
             }
         };
         let mut me = None;
-        let mut tanks: Vec<(TankView, Dir)> = Vec::new();
+        // Each tank with its facing and whether an EMP has it disabled.
+        let mut tanks: Vec<(TankView, Dir, bool)> = Vec::new();
         let cover = game.cover_cells();
         for (entity, tank) in game.world.query::<(Entity, &Tank)>().iter() {
             let gate = gate_of(entity, tank.position);
@@ -1334,14 +1335,15 @@ impl Scene {
                 lane: false,
                 windup: tank.windup().filter(|_| !tank.is_wreck()).map(|w| (w.weapon, w.progress)),
             };
-            tanks.push((view, facing_of(tank.rotation)));
+            tanks.push((view, facing_of(tank.rotation), tank.is_disabled()));
         }
-        tanks.sort_by_key(|(tv, _)| tv.slot);
+        tanks.sort_by_key(|(tv, _, _)| tv.slot);
         // The lane: the AI's fire rule first, then its line of sight, the
-        // world built for that only when an enemy is lined up at all.
+        // world built for that only when an enemy is lined up at all. A
+        // disabled enemy (an EMP) fires nothing: no warning for it.
         if let Some(me) = me.filter(SeatView::active) {
             let mut world = None;
-            for (tv, facing) in tanks.iter_mut().filter(|(tv, _)| tv.is_enemy()) {
+            for (tv, facing, _) in tanks.iter_mut().filter(|(tv, _, disabled)| tv.is_enemy() && !disabled) {
                 if lined_up(tv.pos, *facing, me.pos, sight, &t) {
                     let world = world.get_or_insert_with(|| game.present_world());
                     tv.lane = world.line_of_sight(tv.pos, me.pos);
@@ -1365,7 +1367,7 @@ impl Scene {
         Scene {
             time: game.time,
             seat: me,
-            tanks: tanks.into_iter().map(|(tv, _)| tv).collect(),
+            tanks: tanks.into_iter().map(|(tv, _, _)| tv).collect(),
             frogs,
             sight: shortened.then_some(sight),
             volcanoes,

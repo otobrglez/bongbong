@@ -276,7 +276,8 @@ impl Game {
                 None => {}
             }
         }
-        for missile in self.world.query::<&Missile>().iter() {
+        // A dead missile (an EMP) has no motor to light the ground.
+        for missile in self.world.query::<&Missile>().iter().filter(|m| !m.is_dead()) {
             ground_light(d, missile.position, 26.0, warm, 0.3 * (1.0 - 0.6 * missile.lift()));
         }
         for jet in self.flames() {
@@ -1500,8 +1501,11 @@ impl Game {
                 let Some(entity) = self.seat(seat as usize) else { continue };
                 crate::simulation::with_tank(&self.world, entity, |tank| {
                     if !culled(cull, tank.position) {
-                        let slot = crate::hud::WeaponSlot::of(tank);
-                        crate::tank::draw_ammo_pips(&mut GpuCanvas::new(d, textures), tank, slot.count, slot.full, slot.color);
+                        // An offline special's pips are drawn unlit
+                        // (docs/emp-burst.md).
+                        let slot = crate::hud::WeaponSlot::of(tank, self.time);
+                        let color = if slot.offline.is_some() { crate::hud::DIM } else { slot.color };
+                        crate::tank::draw_ammo_pips(&mut GpuCanvas::new(d, textures), tank, slot.count, slot.full, color);
                     }
                 });
             }
@@ -1528,6 +1532,45 @@ impl Game {
             }
             if !shapes.is_empty() {
                 pyro::draw(&mut GpuCanvas::new(d, textures), &shapes);
+            }
+        }
+
+        // An EMP's rings, the sparks on every hull and tower it put out,
+        // an enemy's crackle before its pulse and the lamp posts going out
+        // (docs/emp-burst.md): bright and brief, drawn unlit so they read
+        // at night; their glows in one additive block.
+        {
+            let t = tuning();
+            let mut shapes = Vec::new();
+            for pulse in &self.emp_pulses {
+                shapes.extend(crate::emp::ring(pulse, &t));
+            }
+            for tank in self.world.query::<&Tank>().iter().filter(|tank| !tank.is_wreck() && !culled(cull, tank.position)) {
+                let seed = crate::emp::spark_seed(tank.owner_slot());
+                if tank.is_disabled() {
+                    let (c, h) = tank.hull_bbox_world();
+                    shapes.extend(crate::emp::sparks(c, crate::math::Vec2::new(h.x, h.y), seed, self.time, tank.disabled));
+                }
+                if let Some(w) = tank.windup().filter(|w| w.weapon == crate::tank::ActiveWeapon::Emp) {
+                    let coil = tank.turret_point(crate::tank_art::EMP_COIL[tank.row as usize]);
+                    shapes.extend(crate::emp::tell(coil, seed, w.progress, self.time));
+                }
+            }
+            for view in self.tower_views().iter().filter(|v| v.disabled > 0.0 && !culled(cull, v.position)) {
+                let half = crate::OBSTACLE_GRID_SIZE * 0.45;
+                let seed = crate::blast::seed_at(view.position, 0x5C);
+                shapes.extend(crate::emp::sparks(view.position, crate::math::Vec2::new(half, half), seed, self.time, view.disabled));
+            }
+            if self.lamps_out > 0.0 {
+                let age = t.emp_lamp_seconds - self.lamps_out;
+                for at in self.lamp_posts().into_iter().filter(|at| !culled(cull, *at)) {
+                    shapes.extend(crate::emp::lamp_sparks(at, age));
+                }
+            }
+            if !shapes.is_empty() {
+                pyro::draw(&mut GpuCanvas::new(d, textures), &shapes);
+                let bands = t.glow_bands.max(0) as u32;
+                d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| pyro::draw_glows(&mut Rl(&mut bd), &shapes, bands));
             }
         }
 
@@ -1987,6 +2030,7 @@ fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
         ActiveWeapon::Flamethrower => ("FLAME", tank.flame_fuel_seconds()),
         ActiveWeapon::Grenades => ("GRENADES", tank.grenade_ammo),
         ActiveWeapon::SonicHammer => ("SONIC", tank.sonic_ammo),
+        ActiveWeapon::Emp => ("EMP", tank.emp_charges),
         ActiveWeapon::Shell => ("SHELL", tank.shells_ammo),
     };
     let mut lines = vec![
@@ -2001,6 +2045,10 @@ fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
         format!("VEL ({:.0},{:.0})", tank.velocity.x, tank.velocity.y),
         format!("MOVE {:.0}x{:.0} r{corner:.0}", mx * 2.0, my * 2.0),
     ];
+    if tank.special_down() {
+        // An EMP's outage: the electrics, and the special on its own.
+        lines.push(format!("EMP OUT {:.1}s / {:.1}s", tank.disabled, tank.special_offline));
+    }
     if let Some(ai) = ai {
         lines.push(format!(
             "RETREAT {}",

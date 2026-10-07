@@ -353,6 +353,13 @@ pub struct SonicPress {
     pub facing: crate::tank::Dir,
 }
 
+/// An EMP pulse the client drew on its press: the pivot it runs out from,
+/// the sandbox's pose (`Game::draw_press_show`).
+#[derive(Clone, Copy, Debug)]
+pub struct EmpPress {
+    pub origin: Position,
+}
+
 /// The show of a press this client drew itself, of a weapon drawn on the
 /// press (`WeaponKind::drawn_on_press`, docs/sonic-hammer.md "Online: the
 /// shooter's press is drawn at once"), for the round to draw.
@@ -360,6 +367,7 @@ pub struct SonicPress {
 pub enum PressShow {
     Beam(BeamPress),
     Sonic(SonicPress),
+    Emp(EmpPress),
 }
 
 /// The room's copy of one of this seat's shots, as the frame drew it.
@@ -482,6 +490,13 @@ pub struct Predictor {
     /// down here rather than read off the sandbox, because
     /// `predict_seat` deliberately does not fire - it only drives.
     cooldown: f32,
+    /// Seconds this client's own special stays offline after a press that
+    /// takes it offline (an EMP's, docs/emp-burst.md), counted here on the
+    /// tick grid: every weapon's gate reads the trigger as the shell's
+    /// while it runs, so a press in the round trip before the room's
+    /// offline arrives is predicted as the shell it will be. A refused
+    /// press clears it.
+    offline_left: f32,
     /// The client owns the hull (docs/online-coop-prd.md §4.14): the
     /// sandbox's seat is the truth, a snapshot never moves it, and
     /// nothing is replayed - the room follows this hull, not the other
@@ -515,6 +530,7 @@ impl Predictor {
             clock: 0.0,
             refusal_after: PROVISIONAL_SECONDS,
             cooldown: 0.0,
+            offline_left: 0.0,
             owned: false,
             report: PredictionReport::default(),
         }
@@ -577,6 +593,7 @@ impl Predictor {
         // shots leave, then the trigger - on the tick grid, so a skipped
         // or doubled frame cannot skew the gate against the room's.
         self.cooldown = (self.cooldown - PHYSICS_FIXED_DT).max(0.0);
+        self.offline_left = (self.offline_left - PHYSICS_FIXED_DT).max(0.0);
         self.sandbox.predict_seat(self.seat, intent, PHYSICS_FIXED_DT);
         self.history.push_back((tick, intent));
         while self.history.len() > HISTORY_TICKS {
@@ -618,6 +635,12 @@ impl Predictor {
         }
     }
 
+    /// Seconds this client's own special stays offline by its own word
+    /// (`offline_left`).
+    pub fn offline_left(&self) -> f32 {
+        self.offline_left
+    }
+
     /// Ammo owed by drawn-on-press presses of `kind` not yet answered.
     fn owed_presses_of(&self, kind: WeaponKind) -> i32 {
         self.owed_presses.iter().filter(|p| p.0 == kind).count() as i32
@@ -638,7 +661,10 @@ impl Predictor {
         if !(drawn || self.owned) || self.cooldown > 0.0 {
             return;
         }
-        let Some((weapon, ammo, lateral)) = self.sandbox.seat_arms(self.seat) else { return };
+        // A special this client took offline itself (an EMP's press) fires
+        // the shell until the room's offline arrives: every arm below reads
+        // the trigger through here.
+        let Some((weapon, ammo, lateral)) = self.sandbox.seat_arms(self.seat, self.offline_left > 0.0) else { return };
         let t = tuning();
         let grid = |seconds: f32| (seconds / PHYSICS_FIXED_DT).ceil().max(1.0) as u32;
         let (kind, cost, cooldown, pending) = match weapon {
@@ -703,6 +729,25 @@ impl Predictor {
                     if drawn {
                         self.shows.push(PressShow::Sonic(SonicPress { origin, facing }));
                         self.drawn_presses.push_back((WeaponKind::SonicHammer, tick, 0.0));
+                        self.report.shots_drawn += 1;
+                    }
+                }
+                return;
+            }
+            // The EMP pulses on the press, its ring drawn from the
+            // predicted pivot; the press takes the special offline here as
+            // it does in the room (`offline_left`).
+            ActiveWeapon::Emp if pressed => {
+                if ammo - self.owed_presses_of(WeaponKind::Emp) <= 0 {
+                    return;
+                }
+                if let Some(origin) = self.sandbox.seat_emp(self.seat) {
+                    self.cooldown = t.player_fire_interval;
+                    self.offline_left = t.emp_disable_seconds;
+                    self.owed_presses.push_back((WeaponKind::Emp, tick, 0.0));
+                    if drawn {
+                        self.shows.push(PressShow::Emp(EmpPress { origin }));
+                        self.drawn_presses.push_back((WeaponKind::Emp, tick, 0.0));
                         self.report.shots_drawn += 1;
                     }
                 }
@@ -887,10 +932,14 @@ impl Predictor {
             WeaponKind::Missiles => t.missile_volley_cooldown_seconds(),
             WeaponKind::Grenades => t.grenade_reload_seconds,
             WeaponKind::SonicHammer => t.sonic_reload_seconds,
+            WeaponKind::Emp => t.player_fire_interval,
             WeaponKind::Flamethrower => 0.0,
         };
         let ago = self.tick.wrapping_sub(input_tick) as f32 * PHYSICS_FIXED_DT;
         self.cooldown = self.cooldown.max(interval - ago);
+        if weapon == WeaponKind::Emp {
+            self.offline_left = self.offline_left.max(t.emp_disable_seconds - ago);
+        }
     }
 
     /// This frame's room copies of this seat's shots, drawn at the
@@ -1066,6 +1115,11 @@ impl Predictor {
             press.2 += dt;
         }
         let refusal = self.refusal_after;
+        // An EMP press the room never answered was refused: its offline was
+        // this client's guess, and goes with it.
+        if self.owed_presses.iter().any(|&(kind, _, age)| kind == WeaponKind::Emp && age > refusal) {
+            self.offline_left = 0.0;
+        }
         self.drawn_presses.retain(|&(_, _, age)| age <= refusal);
         self.owed_presses.retain(|&(_, _, age)| age <= refusal);
         let mut presses = std::mem::take(&mut self.presses);
@@ -2091,6 +2145,50 @@ mod tests {
         assert!(predictor.owed_presses.is_empty(), "its Fired settles it");
         assert!(predictor.confirm_press(WeaponKind::SonicHammer, tick), "the room's blast is the drawn one");
         assert!(!predictor.confirm_press(WeaponKind::SonicHammer, tick), "claimed once");
+    }
+
+    /// The EMP is drawn on the press like the hammer - its ring from the
+    /// predicted pivot - and takes the seat's special offline on the press
+    /// (`offline_left`), so the next press is drawn as a shell; once the
+    /// offline is over a press pulses again.
+    #[test]
+    fn an_emp_pulse_is_drawn_on_the_press_and_takes_the_special_offline() {
+        let mut predictor = Predictor::new(round(), 0, 0);
+        predictor.set_shots_enabled(true);
+        let patch = TankPatch { emp_charges: Some(2), ..Default::default() };
+        predictor.sandbox.debug_set_tank(0, &patch).expect("the seat's tank");
+        let (pivot, _, _) = predictor.motion().expect("a hull");
+        let tick = predictor.step(press());
+        let shows = predictor.take_press_shows();
+        let [PressShow::Emp(pulse)] = shows.as_slice() else { panic!("one EMP show: {shows:?}") };
+        assert!(pulse.origin.distance_to(pivot) < 4.0, "from the hull's pivot");
+        assert!(predictor.offline_left() > 0.0, "its special offline on the press");
+        let ticks = (tuning().player_fire_interval / PHYSICS_FIXED_DT).ceil() as usize;
+        idle_ticks(&mut predictor, ticks + 1);
+        predictor.step(press());
+        assert!(predictor.take_press_shows().is_empty(), "no second pulse while offline");
+        assert_eq!(predictor.provisional_count(), 1, "the press is a shell");
+        predictor.note_fired(WeaponKind::Emp, tick);
+        assert!(predictor.confirm_press(WeaponKind::Emp, tick), "the room's ring is the drawn one");
+        assert!(!predictor.confirm_press(WeaponKind::Emp, tick), "claimed once");
+        idle_ticks(&mut predictor, (tuning().emp_disable_seconds / PHYSICS_FIXED_DT).ceil() as usize);
+        assert_eq!(predictor.offline_left(), 0.0);
+        predictor.step(press());
+        assert!(matches!(predictor.take_press_shows().as_slice(), [PressShow::Emp(_)]), "online again, it pulses");
+    }
+
+    /// A pulse the room never fires (its `Fired` never comes) gives the
+    /// special back when the press expires: the offline was the press's.
+    #[test]
+    fn a_refused_pulse_gives_the_special_back() {
+        let mut predictor = Predictor::new(round(), 0, 0);
+        predictor.set_refusal_after(PROVISIONAL_SECONDS);
+        let patch = TankPatch { emp_charges: Some(2), ..Default::default() };
+        predictor.sandbox.debug_set_tank(0, &patch).expect("the seat's tank");
+        predictor.step(press());
+        assert!(predictor.offline_left() > 0.0);
+        predictor.advance_shots(PROVISIONAL_SECONDS + 0.1, |_, _, _, _| None);
+        assert_eq!(predictor.offline_left(), 0.0, "the refused press's offline is lifted");
     }
 
     /// A knock the room sends an owned hull (`Shoved` with a skid) takes

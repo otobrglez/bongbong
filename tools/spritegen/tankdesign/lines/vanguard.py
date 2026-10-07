@@ -345,6 +345,37 @@ def sonic(d, b, st, hp):
         b.lamp(inner | outer, 'white', z=5.7, name='sd_blast')
 
 
+@LINE.module_fn('emp')
+def emp(d, b, st, hp):
+    """An EMP projector on the roof (docs/emp-burst.md): a squat gunmetal
+    plinth carrying a toroid coil - a ring of brass windings round a dark
+    core, lit on its top left rim and shaded on the far one so it reads round
+    - and a steel emitter stub forward. `st` 0 armed, the core's lamp dim; 1
+    and 2 the crackle before an enemy's pulse, the left and then the right
+    half of the windings lit; 3 the pulse, the whole ring lit and the core;
+    4 offline, the windings scorched and the core dark. It shares the
+    missiles' hardpoint unless the design gives it its own."""
+    hx, hy = hp.get('emp', hp['missiles'])
+    b.meta['coil'] = (hx + 0.5, hy + 0.5)
+    b.part(chamfer(hx - 3, hy - 2, hx + 3, hy + 3, tl=1, tr=1, br=1, bl=1), GUNMETAL, 'plate', 5, step=0,
+           corner=False, name='em_plinth')
+    core = rect(hx - 1, hy - 1, hx + 1, hy + 1)
+    windings = chamfer(hx - 2, hy - 2, hx + 2, hy + 2, tl=1, tr=1, br=1, bl=1) - core
+    b.part(windings, RUST if st == 4 else BRASS, 'map', 5.4, step=0,
+           stepmap=rim_shade(windings, hx + 0.5, hy + 0.5, lit=1, shade=-1), name='em_windings')
+    b.part(core, DARK, 'flat', 5.4, step=-1 if st == 4 else 0, name='em_core')
+    b.part(rect(hx, hy - 4, hx, hy - 3), STEEL, 'flat', 5.2, step=1, name='em_stub')
+    if st == 0:
+        b.lamp({(hx, hy)}, DIM_PLASMA, z=5.7, name='em_core_lamp')
+    elif st == 1:
+        b.lamp({(x, y) for (x, y) in windings if x <= hx}, 'ion', z=5.7, name='em_crackle_l')
+    elif st == 2:
+        b.lamp({(x, y) for (x, y) in windings if x >= hx}, 'ion', z=5.7, name='em_crackle_r')
+    elif st == 3:
+        b.lamp(windings, 'white', z=5.7, name='em_pulse')
+        b.lamp({(hx, hy)}, 'ion', z=5.7, name='em_pulse_core')
+
+
 # ---------------------------------------------------------------------------
 # Scout - fast recon. Silhouette: an arrowhead nose ahead of short narrow
 # runs, a small round turret with the optic pod bulging off its left cheek

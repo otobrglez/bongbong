@@ -317,19 +317,40 @@ impl Game {
         }
     }
 
-    /// Draw a sonic hammer's press on this replica from `origin` along
-    /// `facing` (presentation only): the same show the room's `SonicBlast`
-    /// puts on - the wave cast against the replica's tiles, the ripple -
-    /// and the seat's dish firing, on the press rather than a round trip
+    /// Draw `seat`'s press of `weapon` on this replica from `origin` along
+    /// `facing` (presentation only), on the press rather than a round trip
     /// later (docs/sonic-hammer.md "Online: the shooter's press is drawn at
-    /// once").
-    pub fn draw_press_show(&mut self, seat: u8, origin: Position, facing: crate::tank::Dir) {
+    /// once"): the same show the room's event puts on - a sonic hammer's
+    /// wave cast against the replica's tiles, an EMP's ring - with its
+    /// ripple, and the seat's module firing. A weapon drawn on the press
+    /// adds its arm here.
+    pub fn draw_press_show(&mut self, seat: u8, weapon: crate::tank::ActiveWeapon, origin: Position, facing: crate::tank::Dir) {
+        use crate::tank::ActiveWeapon;
         let mut show = crate::simulation::Spectacle::default();
-        self.sonic_show(&mut show, origin, facing, Owner::Player(seat));
+        match weapon {
+            ActiveWeapon::SonicHammer => self.sonic_show(&mut show, origin, facing, Owner::Player(seat)),
+            ActiveWeapon::Emp => self.emp_show(&mut show, origin, Owner::Player(seat), false),
+            _ => return,
+        }
         self.show(show);
         let Some(entity) = self.seats.get(seat as usize).copied().flatten() else { return };
         if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {
-            tank.kick_sonic();
+            match weapon {
+                ActiveWeapon::SonicHammer => tank.kick_sonic(),
+                ActiveWeapon::Emp => tank.kick_emp(),
+                _ => {}
+            }
+        }
+    }
+
+    /// Hold `seat`'s special offline for at least `seconds` on this replica
+    /// (presentation only): the client's own word on its EMP's press,
+    /// written each frame over the room's until the room's arrives, so its
+    /// HUD says `WPN OFFLINE` on the press frame.
+    pub fn hold_seat_offline(&mut self, seat: u8, seconds: f32) {
+        let Some(entity) = self.seats.get(seat as usize).copied().flatten() else { return };
+        if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {
+            tank.special_offline = tank.special_offline.max(seconds);
         }
     }
 

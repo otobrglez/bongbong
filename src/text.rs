@@ -75,6 +75,7 @@ keys! {
     BUTTON_PLAY = "button-play";
     BUTTON_LEAVE = "button-leave";
     BUTTON_ONLINE = "button-online";
+    HUD_WEAPON_OFFLINE = "hud-weapon-offline";
     PLAYERS_TITLE = "players-title";
     PLAYERS_KEYS = "players-keys";
     PLAYERS_TOUCH = "players-touch";
@@ -1134,6 +1135,16 @@ mod text_tests {
                 let short = catalogue.message(&format!("tool-short-{}", tool.name()), &[]).unwrap_or(long);
                 if width(&short, HUD_LABEL_SIZE) > 48 {
                     over.push(format!("{tag}: short tool name {short:?} is longer than a word or two"));
+                }
+            }
+            // The weapon slot's `WPN OFFLINE` (docs/emp-burst.md), split at
+            // its first space, each line inside the slot at the font's own
+            // size.
+            let words = catalogue.get(keys::HUD_WEAPON_OFFLINE);
+            let (first, rest) = crate::hud::offline_lines(&words);
+            for line in std::iter::once(first).chain(rest) {
+                if width(line, HUD_LABEL_SIZE) > crate::hud::WEAPON_SLOT_W - 4 {
+                    over.push(format!("{tag}: offline line {line:?} runs out of the weapon slot"));
                 }
             }
             // The shipped stamps' names in their STAMPS rows.

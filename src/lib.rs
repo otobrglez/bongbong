@@ -55,14 +55,14 @@ pub const TANK_WRECK_COLS: [i32; 4] = [16, 17, 18, 19];
 pub const TANK_TURRET_COL: i32 = 20;
 pub const TANK_TURRET_POSES: i32 = 3;
 pub const TANK_BROKEN_TURRET_COL: i32 = 32;
-// tank_modules.png (+ tank_modules_glow.png): 28 columns x 12 rows of 40 px
+// tank_modules.png (+ tank_modules_glow.png): 33 columns x 12 rows of 40 px
 // cells, a row per chassis, each weapon module drawn where that chassis's
 // turret carries it (same pivot and rotation as the turret), in its states:
 // minigun 0 idle / 1-3 a hot barrel, missiles 0-4 tubes empty, plasma and
 // laser 0 idle / 1 armed / 2 firing, flamethrower 0-1 the pilot flickering /
 // 2-3 the jet, grenade launcher 0-4 rounds spent from its drum, sonic
-// hammer 0 idle / 1-2 its wind-up / 3 a blast. `tank::module_cols` picks the
-// cells.
+// hammer 0 idle / 1-2 its wind-up / 3 a blast, EMP 0 armed / 1-2 its crackle /
+// 3 a pulse / 4 offline. `tank::module_cols` picks the cells.
 pub const TANK_MODULE_MINIGUN_COL: i32 = 0;
 pub const TANK_MODULE_MISSILES_COL: i32 = 4;
 pub const TANK_MODULE_PLASMA_COL: i32 = 9;
@@ -70,6 +70,7 @@ pub const TANK_MODULE_LASER_COL: i32 = 12;
 pub const TANK_MODULE_FLAME_COL: i32 = 15;
 pub const TANK_MODULE_GRENADE_COL: i32 = 19;
 pub const TANK_MODULE_SONIC_COL: i32 = 24;
+pub const TANK_MODULE_EMP_COL: i32 = 28;
 // World px of travel between hull tread-animation frame advances (see
 // `simulation::lay_tracks`, which already tracks per-frame distance moved for
 // the separate ground-decal system in track.rs - this reuses that same
@@ -977,6 +978,7 @@ pub mod fx;
 pub mod grass;
 pub mod grenade;
 pub mod sonic;
+pub mod emp;
 pub mod game;
 pub mod ground;
 pub mod hud;

@@ -537,18 +537,18 @@ the general case:
   "protect"`, a band of four, clear sky - the one shipped map that is not
   a field map, which `map::toml_tests::every_shipped_map_is_a_field_map`
   names, since the BB-36 weapons' cells are laid out on its 36 x 18. Each later weapon adds its crate
-  to the reserved column and whatever its interactions need; nothing here
-  moves. Every level is untouched.
+  to the reserved column and whatever its interactions need. Every level
+  is untouched.
 
   ```
        0         1         2         3
        012345678901234567890123456789012345
    0   ................................L...
    1   ............ggggg...............L...
-   2   ............g...g...II....b.....L...
-   3   ...P........g.s.g...II....b.....L.E.
-   4   .+.....r....g...g.........b.....L...
-   5   ............ggggg...........zzz.L...
+   2   ............g...g...............L...
+   3   ............g.s.g...II....b.....L.E.
+   4   .+.P...r....g...g...II....b.....L...
+   5   ............ggggg.........b.zzz.L...
    6   .......r.............o..........L...
    7   ................................L...
    8   ....S..H.........*...f%%%...........
@@ -571,10 +571,10 @@ the general case:
   | `+` `a` | 1,4 and 1,16 | Health and ammo, out of the way (not 1,1, which the HUD's vitals cover on a whole-field view) |
   | `g` glass house | the ring 12..16 x 1..5 | Shatters; it stops the wave as it does; the AI's glass breach |
   | `s` shield | 14,3 | Inside the glass, what an enemy seeks (tier 5.9) and has to break in for |
-  | `P` player tesla | 3,3 | A player tower the wave stops at |
+  | `P` player tesla | 3,4 | A player tower the wave stops at |
   | `F` the frog | 2,12 | The stun; the hunters (Protect) come for it, so the frog-pin arm shows |
-  | `I` iron | 20..21 x 2..3 | The counter: cover the wave cannot pass |
-  | `b` brick | 26,2..4 and 28,13..14 | Walls stop it too, not only iron |
+  | `I` iron | 20..21 x 3..4 | The counter: cover the wave cannot pass |
+  | `b` brick | 26,3..5 and 28,13..14 | Walls stop it too, not only iron |
   | `*` lamp post | 17,8 | One the wave leaves standing (the EMP's to put out, BB-38); try `--weather night` |
   | `o` `f` drums | oil 21,6 and 21,10, fuel 21,8 | Thrown at whoever stands east of them |
   | `%` oil trail | 22..24,8 | A thrown drum's blast lights it |
@@ -585,6 +585,10 @@ the general case:
   | `E` enemy tesla | 34,3 | An enemy tower's reach beside the lava: more trouble |
   | `G` enemy gun tower | 34,14 | Trouble on the south-east |
   | `z` sandbags | 28..30,5 | The wave passes over them |
+
+  The HUD's corner clusters stand over the top rows on a whole-field view
+  (rows 0 to 3 on the west and 0 to 2 on the east in a 1152 x 576 window),
+  so nothing a weapon needs stands there but the lava ford's head.
 
   It lints with no error (`maplint`, added to `SUPPORTED_MAPS`; the shield
   inside the glass is a `gated-pickup` warning), its CPU thumbnail is

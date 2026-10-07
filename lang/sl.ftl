@@ -9,6 +9,8 @@ button-play = IGRAJ
 button-leave = VEN
 button-online = SPLET
 
+hud-weapon-offline = IZPAD OROŽJA
+
 players-title = Koliko igralcev?
 players-keys = P1 puščice + preslednica    P2 WASD + levi Shift
 players-touch = P1 vleci + tapni    P2 WASD + levi Shift
@@ -358,6 +360,7 @@ tool-tower_pack = popravilo
 tool-heat_shield = toplotni ščit
 tool-grenades = granate
 tool-sonic_hammer = zvočno kladivo
+tool-emp_burst = emp sunek
 tool-tesla = tesla stolp
 tool-tesla_enemy = sovr. tesla
 tool-gun_tower = strojnica
@@ -378,6 +381,7 @@ tool-short-tower_pack = stolp+
 tool-short-heat_shield = ščit+
 tool-short-grenades = granat
 tool-short-sonic_hammer = zvok
+tool-short-emp_burst = emp
 tool-short-volcano = vulkan
 tool-short-tesla = tesla
 tool-short-tesla_enemy = s.tsl

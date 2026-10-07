@@ -1781,6 +1781,7 @@ mod tests {
             facing,
             heading,
             tube: 1,
+            dead: false,
         };
         let mut a = snapshot(0);
         a.missiles = vec![missile(1_000, 40, 250, 64)];

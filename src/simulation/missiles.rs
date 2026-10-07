@@ -120,17 +120,23 @@ impl Game {
 
     /// Burst every missile that reached the ground this frame
     /// (`Missile::arrived`) and remove it. `live` is false on the end
-    /// screen, where the blast plays out without touching anything.
+    /// screen, where the blast plays out without touching anything. A dead
+    /// one (an EMP killed it, `Missile::dud`) bursts nothing: it lands a dud
+    /// (`Event::MissileDud`).
     pub(super) fn resolve_missiles(&mut self, f: &mut Frame, live: bool) {
-        let landed: Vec<(Entity, Position, Owner, Vec2)> = self
+        let landed: Vec<(Entity, Position, Owner, Vec2, bool)> = self
             .world
             .query::<(Entity, &Missile)>()
             .iter()
             .filter(|(_, m)| m.arrived)
-            .map(|(e, m)| (e, m.position, m.owner, m.dir))
+            .map(|(e, m)| (e, m.position, m.owner, m.dir, m.dud))
             .collect();
-        for (entity, center, owner, dir) in landed {
+        for (entity, center, owner, dir, dud) in landed {
             self.world.despawn(entity).ok();
+            if dud {
+                f.events.push(Event::MissileDud { x: center.x, y: center.y });
+                continue;
+            }
             self.missile_blast(f, center, owner, dir, live);
         }
     }
@@ -230,10 +236,11 @@ impl Game {
         crate::grass::flatten(&mut self.grass, center, tuning().missile_blast_radius * tuning().blast_grass_flatten);
     }
 
-    /// The missiles in the air, for the presentation: (a stable per-missile
-    /// key, where its exhaust is, how high it is 0..=1).
+    /// The missiles in the air under power, for the presentation: (a
+    /// stable per-missile key, where its exhaust is, how high it is 0..=1).
+    /// A dead one (an EMP) has no exhaust and leaves no trail.
     pub fn missiles(&self) -> Vec<(u32, Position, f32)> {
-        self.world.query::<(Entity, &Missile)>().iter().map(|(e, m)| (e.id(), m.tail(), m.lift())).collect()
+        self.world.query::<(Entity, &Missile)>().iter().filter(|(_, m)| !m.is_dead()).map(|(e, m)| (e.id(), m.tail(), m.lift())).collect()
     }
 }
 

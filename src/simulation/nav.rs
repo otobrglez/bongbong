@@ -341,6 +341,11 @@ impl Game {
         if !self.ooze.is_empty() {
             grid.surcharge(self.ooze_route_cells().into_iter(), t.bio_puddle_path_cost as u32);
         }
+        // The seats' dangers (an armed EMP, docs/emp-burst.md "AI"): cells
+        // an enemy would rather go round than cross.
+        if t.enemy_danger_route_cost > 0 && self.any_emp() {
+            grid.surcharge(self.danger_route_cells(&grid).into_iter(), t.enemy_danger_route_cost as u32);
+        }
         for &(pos, _) in &players {
             grid.add_field(pos);
         }

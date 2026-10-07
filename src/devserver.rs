@@ -285,7 +285,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "set_tank",
         description: "Overwrite a tank's damage (0 = pristine, 100 = wreck), ammo counts (setting a special weapon's stock above 0 also arms it in place of the one special the tank carries, like its pickup would), shield_hp (rainbow-shield absorption left in damage points, not seconds), the speed-boost timer and portal_cooldown (seconds before it may enter a portal again). Omitted fields are untouched.",
-        schema: r#"{"type":"object","properties":{"slot":{"type":"integer"},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"grenade_ammo":{"type":"integer"},"sonic_ammo":{"type":"integer"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}},"required":["slot"]}"#,
+        schema: r#"{"type":"object","properties":{"slot":{"type":"integer"},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"grenade_ammo":{"type":"integer"},"sonic_ammo":{"type":"integer"},"emp_charges":{"type":"integer"},"disabled":{"type":"number"},"special_offline":{"type":"number"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}},"required":["slot"]}"#,
         read_only: false,
         destructive: false,
     },
@@ -305,7 +305,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "spawn_pickup",
-        description: "Put a crate of `kind` (a map's pickup spelling: health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack, heat_shield, grenades, sonic_hammer) down at the map cell nearest (x, y), in its air drop. Not a slot: it never respawns. Refused outside the field, on a solid tile and where a pickup already stands. Draws no RNG. Returns the crate's position.",
+        description: "Put a crate of `kind` (a map's pickup spelling: health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack, heat_shield, grenades, sonic_hammer, emp_burst) down at the map cell nearest (x, y), in its air drop. Not a slot: it never respawns. Refused outside the field, on a solid tile and where a pickup already stands. Draws no RNG. Returns the crate's position.",
         schema: r#"{"type":"object","properties":{"kind":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}},"required":["kind","x","y"]}"#,
         read_only: false,
         destructive: false,
@@ -4055,6 +4055,34 @@ mod tests {
         assert!(unknown.unwrap_err().contains("railgun"));
     }
 
+    /// `set_tank {emp_charges}` arms the EMP, `disabled` and
+    /// `special_offline` put a tank's outages on and off by hand, and
+    /// `spawn_pickup` drops the EMP's crate.
+    #[test]
+    fn set_tank_arms_the_emp_and_takes_it_offline() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = game(3);
+        let ask = |server: &mut DevServer, game: &mut Session, tool: &str, params: Value| {
+            let rx = call(&tx, tool, params);
+            server.before_frame(game, W, H);
+            rx.recv().unwrap()
+        };
+        let tank = ask(&mut server, &mut game, "set_tank", json!({ "slot": 0, "emp_charges": 2 })).unwrap();
+        assert_eq!((tank["weapon"].as_str(), tank["emp"].as_i64()), (Some("emp_burst"), Some(2)), "{tank}");
+        let tank = ask(&mut server, &mut game, "set_tank", json!({ "slot": 0, "special_offline": 1.5 })).unwrap();
+        assert_eq!((tank["weapon"].as_str(), tank["offline"].as_f64()), (Some("shell"), Some(1.5)), "offline, it fires shells: {tank}");
+        let enemy = game.first_enemy_slot();
+        let tank = ask(&mut server, &mut game, "set_tank", json!({ "slot": enemy, "disabled": 2.0 })).unwrap();
+        assert_eq!(tank["disabled"].as_f64(), Some(2.0), "{tank}");
+        let tank = ask(&mut server, &mut game, "set_tank", json!({ "slot": enemy, "disabled": 0.0 })).unwrap();
+        assert_eq!(tank["disabled"].as_f64(), Some(0.0), "{tank}");
+        let dropped = (2..30).find_map(|col| {
+            let (x, y) = (col as f64 * 32.0, 8.0 * 32.0);
+            ask(&mut server, &mut game, "spawn_pickup", json!({ "kind": "emp_burst", "x": x, "y": y })).ok()
+        });
+        assert_eq!(dropped.expect("an open cell")["kind"], "emp_burst");
+    }
+
     /// The two tank layers are independent flags: one on leaves the other
     /// where it was, and `status` reports the same values.
     #[test]
@@ -4838,7 +4866,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(cats.len(), 5);
         assert_eq!(cats[0]["name"], "wall");
         assert_eq!(cats[0]["current"], "iron");
-        assert_eq!(cats[4]["tools"].as_array().unwrap().len(), 14, "{}", cats[4]);
+        assert_eq!(cats[4]["tools"].as_array().unwrap().len(), 15, "{}", cats[4]);
         let err = ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "granite" })).unwrap_err();
         assert!(err.contains("brick") && err.contains("eraser"), "{err}");
 

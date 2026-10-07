@@ -695,6 +695,14 @@ impl Fx {
                     Event::CookOff { x, y } => {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(8), 120.0, &[FIRE_T, EMBER_T]);
                     }
+                    // A missile an EMP killed hitting the ground a dud
+                    // (docs/emp-burst.md): a puff of dust and a few pale
+                    // sparks off its dead circuits - no fire.
+                    Event::MissileDud { x, y } => {
+                        self.burst(Position::new(x, y), ParticleKind::Dust, self.count(5), 40.0, &[DUST_T]);
+                        self.burst(Position::new(x, y), ParticleKind::Spark, self.count(4), 70.0, &[EMP_T, WHITE_T]);
+                        self.splash_if_wet(game, Position::new(x, y), 6);
+                    }
                     // A shot turned away by a rainbow shield: a small, cold
                     // scatter at the point of contact. Deliberately slight -
                     // this fires on every deflected shot, and the impact
@@ -1402,6 +1410,8 @@ const SHIELD_T: Color = Color::new(0xAA, 0x78, 0xFF, 255);
 /// The tesla bolt's violets (`render::tower`'s strands), off the palette
 /// like the shield's.
 const TESLA_T: Color = Color::new(0xCA, 0xA6, 0xFF, 255);
+/// An EMP's sparks: its ramp's pale blue (`pyro::EMP`).
+const EMP_T: Color = crate::pyro::EMP[3];
 const TESLA_DEEP_T: Color = Color::new(0x9A, 0x66, 0xFF, 255);
 /// The bio slush's ooze, the sheet's acid lime (`tower::OOZE_*`).
 const OOZE_TINTS: [Color; 3] = [crate::tower::OOZE_HI, crate::tower::OOZE_LT, crate::tower::OOZE_MD];

@@ -1749,7 +1749,7 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
         }
         CellObject::Lamp => {
             let t = crate::tuning::tuning();
-            crate::lamp::draw_post(&mut GpuCanvas::new(&mut *d, textures), pos, time, (t.shadow_dir_x, t.shadow_dir_y), true);
+            crate::lamp::draw_post(&mut GpuCanvas::new(&mut *d, textures), pos, time, (t.shadow_dir_x, t.shadow_dir_y), true, true);
         }
         CellObject::Portal => draw_portal(&mut GpuCanvas::new(&mut *d, textures), pos, time, tint),
         CellObject::Door { .. } => crate::training::draw_door(&mut GpuCanvas::new(&mut *d, textures), pos),

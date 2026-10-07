@@ -1383,6 +1383,65 @@ mod tests {
         assert!(blasted > told, "the tell before the wave: {told} vs {blasted}");
     }
 
+    /// A seat's EMP through the room: one ring on the replica for the one
+    /// press, never two, and the seat's special offline on the replica.
+    #[test]
+    fn a_seats_pulse_reaches_the_replica_once() {
+        let mut rig = Lockstep::start(options(LinkQuality::PERFECT));
+        let patch = crate::simulation::debug::TankPatch { emp_charges: Some(2), ..Default::default() };
+        rig.authority_mut().expect("a round").debug_set_tank(0, &patch).expect("the seat's tank");
+        rig.drive(Intent { fire: true, ..Intent::default() });
+        rig.step(1);
+        rig.drive(Intent::default());
+        let (mut most, mut offline) = (0, false);
+        for _ in 0..30 {
+            rig.step(2);
+            let replica = rig.replica().expect("a replica");
+            most = most.max(replica.emp_pulses.iter().filter(|p| p.owner.slot() == 0).count());
+            offline |= replica.drawable_state().tanks.iter().any(|t| t.slot == 0 && t.offline);
+        }
+        assert_eq!(most, 1, "the press is one ring on the replica");
+        assert!(offline, "the seat's special is offline on the replica");
+    }
+
+    /// An enemy's EMP reaches the replica: its crackle on the replica's
+    /// tank, then its ring, then the seat it struck drawn disabled.
+    #[test]
+    fn an_enemys_emp_reaches_the_replica() {
+        let mut rig = Lockstep::start(options(LinkQuality::PERFECT));
+        let game = rig.authority_mut().expect("a round");
+        let seat = game.tank_snapshots().into_iter().find(|t| t.slot == 0).expect("the seat");
+        let beside = crate::Position::new(seat.position.x + 90.0, seat.position.y);
+        let slot = game.debug_spawn_enemy(beside, Some(1), Some(crate::ai::Role::Player)).expect("spawns");
+        let entity = game.tank_entity_by_slot(slot).expect("the enemy");
+        {
+            let mut tank = game.world.get::<&mut crate::tank::Tank>(entity).expect("its tank");
+            tank.disarm();
+            tank.shells_ammo = 0;
+            tank.speed_scale = 0.0;
+            tank.emp_charges = 3;
+        }
+        let (mut told, mut pulsed, mut struck) = (None, None, None);
+        for step in 0..240 {
+            rig.step(1);
+            let replica = rig.replica().expect("a replica");
+            let tell = replica.world.query::<&crate::tank::Tank>().iter().find(|t| t.owner_slot() == slot).and_then(|t| t.tell);
+            if told.is_none() && tell.is_some_and(|t| t.weapon == crate::tank::ActiveWeapon::Emp) {
+                told = Some(step);
+            }
+            if pulsed.is_none() && replica.emp_pulses.iter().any(|p| p.owner.slot() == slot) {
+                pulsed = Some(step);
+            }
+            if struck.is_none() && replica.drawable_state().tanks.iter().any(|t| t.slot == 0 && t.disabled) {
+                struck = Some(step);
+            }
+        }
+        let told = told.expect("the crackle reached the replica");
+        let pulsed = pulsed.expect("the ring reached the replica");
+        let struck = struck.expect("the seat is drawn disabled");
+        assert!(told < pulsed && pulsed <= struck, "crackle, ring, outage: {told} {pulsed} {struck}");
+    }
+
     /// Online, the seat's own blast is on screen the frame of the press -
     /// drawn from the predicted pivot - and the room's `SonicBlast` for it
     /// is not drawn a second time.
@@ -1427,6 +1486,55 @@ mod tests {
             most = most.max(waves_by(round.game().unwrap(), 0));
         }
         assert_eq!(most, 1, "the room's blast for it is not drawn again");
+    }
+
+    /// Online, the seat's own EMP is on screen the frame of the press - its
+    /// ring from the predicted pivot, its special offline on the shown seat
+    /// so the HUD says `WPN OFFLINE` - and the room's `EmpPulse` for it is
+    /// not drawn a second time.
+    #[test]
+    fn a_seats_pulse_is_drawn_on_the_press_and_only_once() {
+        let map = "version = 1\ntanks = 0\nmission.kind = \"protect\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"5,6\" = { kind = \"pickup\", pickup = \"emp_burst\" }\ncells.\"2,14\" = { kind = \"frog\" }\n";
+        let options = RigOptions {
+            map: MapFile::from_toml_str(map).expect("the map parses"),
+            seed: Some(0xB0B5),
+            enemies: Some(1),
+            tank_row: Some(3),
+            quality: LinkQuality::new(60, 0, 0.0),
+            ..RigOptions::default()
+        };
+        let (_rig, link) = start(options);
+        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
+        let mut round = OnlineRound::new(client, "RIG");
+        let seat = |round: &OnlineRound<Loopback>| {
+            round.game().and_then(|g| g.world.query::<&crate::tank::Tank>().iter().find(|t| t.owner_slot() == 0).map(|t| (t.emp_charges, t.special_offline)))
+        };
+        let rings = |game: &Game| game.emp_pulses.iter().filter(|p| p.owner.slot() == 0).count();
+        // Drive onto the crate, then stop.
+        let right = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
+        for _ in 0..180 {
+            if seat(&round).is_some_and(|(charges, _)| charges > 0) {
+                break;
+            }
+            round.frame(&right, FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+        }
+        assert!(seat(&round).is_some_and(|(charges, _)| charges > 0), "the seat took the crate");
+        for _ in 0..20 {
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+        }
+        assert_eq!(rings(round.game().unwrap()), 0);
+        round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
+        assert_eq!(rings(round.game().unwrap()), 1, "the ring is on screen the frame of the press");
+        assert!(seat(&round).is_some_and(|(_, offline)| offline > 0.0), "the special offline on the press frame");
+        let mut most = 1;
+        for _ in 0..40 {
+            thread::sleep(FRAME);
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            most = most.max(rings(round.game().unwrap()));
+        }
+        assert_eq!(most, 1, "the room's pulse for it is not drawn again");
     }
 
     /// The dial's whole point: a lossy link costs the picture nothing it

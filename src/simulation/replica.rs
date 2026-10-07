@@ -60,9 +60,16 @@ pub struct DrawableTank {
     pub flame: bool,
     /// A heat shield is on.
     pub heat_shield: bool,
+    /// The special it carries (`Tank::special`), the shell with none -
+    /// what the wire's `TankState::weapon` names, offline or not.
     pub weapon: ActiveWeapon,
     /// Rounds left for `weapon`, saturated at 255.
     pub ammo: u8,
+    /// Its electrics out (`Tank::disabled`, an EMP): dark lights, sparks, an
+    /// enemy's turret sagging.
+    pub disabled: bool,
+    /// Its special offline on its own (`Tank::special_offline`).
+    pub offline: bool,
 }
 
 /// One seeker missile as it is drawn: where it is, how high, and the two
@@ -85,6 +92,8 @@ pub struct DrawableMissile {
     /// The shadow's ground heading in 256 steps.
     pub heading: u8,
     pub tube: u8,
+    /// An EMP killed it (`MissileStage::Dead`).
+    pub dead: bool,
 }
 
 /// One projectile in flight or in its muzzle/impact frames.
@@ -141,6 +150,8 @@ pub struct DrawableTile {
     pub scorched: u8,
     /// `Obstacle::lean_strength`.
     pub lean: u8,
+    /// A tower offline (`Tower::disabled`, an EMP).
+    pub offline: bool,
 }
 
 /// A pickup as it is drawn: its crate whole, hurt, burning, or broken with
@@ -186,6 +197,8 @@ pub struct DrawableState {
     pub pending: usize,
     pub intro_tenths: u8,
     pub restart_tenths: u8,
+    /// Every lamp post dark (`Game::lamps_out`, an EMP at night).
+    pub lamps_out: bool,
     pub outcome: Outcome,
 }
 
@@ -218,7 +231,8 @@ impl Tank {
         self.shield_hp.round().clamp(1.0, 255.0) as u8
     }
 
-    /// Rounds left for the live weapon (`active_weapon`), saturated at 255.
+    /// Rounds left for the special it carries (`special`), else for the
+    /// shells, saturated at 255: what the wire's `TankState::ammo` carries.
     pub fn active_ammo(&self) -> u8 {
         self.weapon_ammo(self.special().unwrap_or(crate::tank::ActiveWeapon::Shell)).clamp(0, 255) as u8
     }
@@ -353,8 +367,10 @@ impl Game {
                 hit: t.hit_flash_timer > 0.0,
                 flame: t.flame_held,
                 heat_shield: t.heat_shield_timer > 0.0,
-                weapon: t.active_weapon(),
+                weapon: t.special().unwrap_or(crate::tank::ActiveWeapon::Shell),
                 ammo: t.active_ammo(),
+                disabled: t.disabled > 0.0,
+                offline: t.special_offline > 0.0,
             })
             .collect();
         tanks.sort_by_key(|t| t.slot);
@@ -407,6 +423,7 @@ impl Game {
                 facing: heading_step(m.rotation()),
                 heading: heading_step(m.ground_rotation()),
                 tube: m.tube,
+                dead: m.is_dead(),
             })
             .collect();
         missiles.sort_by_key(|m| m.id);
@@ -471,6 +488,7 @@ impl Game {
                 fused: o.fuse.is_some(),
                 scorched: o.scorched,
                 lean: o.lean_strength(),
+                offline: self.towers.get(&o.cell()).is_some_and(|tw| tw.disabled > 0.0),
             })
             .collect();
         tiles.sort_by_key(|t| (t.cell.1, t.cell.0));
@@ -497,6 +515,7 @@ impl Game {
             pending: wave.map_or(0, |w| w.pending),
             intro_tenths: tenths(self.intro_timer),
             restart_tenths: tenths(self.restart_timer),
+            lamps_out: self.lamps_out > 0.0,
             outcome: self.outcome,
         }
     }

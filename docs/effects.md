@@ -66,6 +66,7 @@ The rules live in code in `src/pyro.rs`; everything else composes from it.
 | `PLASMA_TEAL`, `PLASMA_PURPLE` | the orb shader's own five | off-palette energy |
 | `LASER_RED`, `LASER_BLUE`, `TESLA`, `SHIELD`, `OOZE` | their weapons' own | off-palette energy |
 | `sonic::STONE` | `#9E9E96` `#C1C1C1` `#DADADA` `#F0F0F0` | the palette's light greys: sound has no colour of its own |
+| `EMP` | `#1D6071` `#038AAB` `#27D8C5` `#93ECE2` `#FFFFFF` | the palette's own blues and white (the tank kit's deep water step, `BLUE_DK`, `BLUE_BRIGHT`, `BLUE_PALE`) |
 
 `FIRE_PALE` (`#FFE2A0`) is the one step the palette gained, so a flame
 cools white, pale gold, gold rather than jumping (`tools/punypalette.py`).
@@ -96,6 +97,7 @@ blows up - they throw none.
 | A volcano's cone, smoke and eruption; a lava bomb | `volcano.rs` (docs/volcano.md) | the cone a baked picture of blocks in `ASH`/`SCORIA` with molten gullies; the plume shaded `SMOKE` puffs leaning with the wind; an eruption a flash with rays, a fountain of `pyro::tongues`, drops and a shock ring of marks; a bomb a rock with a glowing trail and a warning ring of marks where it lands |
 | Fish under the water | `fish.rs` (docs/water.md) | a silhouette rasterised onto blocks in sixteen headings, `BLUE_DEEP` at `fish_opacity` in eighths, a fainter tail fin swinging a block either way, a `BLUE_PALE` glint |
 | A sonic hammer's wave, a tell, a stunned frog | `sonic.rs`, `frog::stun_marks` (docs/sonic-hammer.md) | the wave `sonic_wave_rings` arcs of blocks (`pyro::block_arc`, `Shape::Arc`) in `STONE`, each split at the walls' faces so the shadow shows, unlit in the glowing pass; dust thrown up off every cell the front crosses in the lit pass (`wave_dust`); a tell three arcs contracting into the dish; a stunned frog three blocks circling its head. A sonic hit draws the hull's flash and dust, never fire (`HitCause::Sonic`) |
+| An EMP's ring, a disabled hull's sparks, the crackle, the posts going out | `emp.rs` (docs/emp-burst.md) | the ring three whole circles of blocks (`Shape::Arc`) in `EMP` - the front two blocks thick - with a hashed crackle of zigzags (`Shape::Line`) along it and a glow over the pivot that is gone in 0.3 s, in the glowing pass, throwing no light; a disabled hull's sparks zigzags off its box in bursts twice a second and a third-strength glow, thinning over its last second, their light (`weather.rs`) on the same beat; an enemy's crackle zigzags off its coil growing with the wind-up; a post going out a little burst of blocks off its lantern. A dud's landing is particles (`fx.rs`), a dead missile its body with no flame or light |
 | Lava | `lava.rs` (docs/volcano.md) | every 2 px block a `FIRE` step - flow bands running down the stream, crust plates on a lake, a toasted bank baked once into a `BlockImage`; a bomb's pool a metaball cooling down the ramp |
 
 A tank's damage, a step per tier of the tank sheet (`TANK_DAMAGE_TIERS`,

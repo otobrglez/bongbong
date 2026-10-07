@@ -97,7 +97,10 @@ const FRONT_SLACK_PX: f32 = 8.0;
 /// "The probe's `--crate` and the spawn swap"): each weapon and the knob
 /// that is its share, in order.
 type ShareOf = fn(&Tuning) -> f32;
-const SPAWN_SWAPS: [(ActiveWeapon, ShareOf); 1] = [(ActiveWeapon::SonicHammer, |t| t.enemy_special_weapon_sonic_share)];
+const SPAWN_SWAPS: [(ActiveWeapon, ShareOf); 2] = [
+    (ActiveWeapon::SonicHammer, |t| t.enemy_special_weapon_sonic_share),
+    (ActiveWeapon::Emp, |t| t.enemy_special_weapon_emp_share),
+];
 
 /// The salt of the spawn swap's hash.
 const SWAP_SALT: u32 = 0x5A_A9;
@@ -556,12 +559,14 @@ impl Game {
         if armed.is_empty() {
             return out;
         }
+        // The enemies whose lanes are trouble: not one an EMP has
+        // disabled, which fires nothing.
         let enemies: Vec<(usize, Position)> = self
             .world
             .query::<&Tank>()
             .with::<&Ai>()
             .iter()
-            .filter(|tank| !tank.is_wreck() && tank.body.is_some())
+            .filter(|tank| !tank.is_wreck() && tank.body.is_some() && !tank.is_disabled())
             .map(|tank| (tank.owner_slot(), tank.position))
             .collect();
         // Each fellow enemy as the points a wave would strike it by, now
@@ -596,7 +601,13 @@ impl Game {
         let towers: Vec<(Position, f32)> = self
             .standing_towers()
             .into_iter()
-            .filter_map(|(at, _)| self.towers.values().find(|tw| tw.position == at && tw.side == crate::frog::Side::Enemy).map(|tw| (at, tw.kind.range())))
+            .filter_map(|(at, _)| {
+                // An offline tower (an EMP) is no trouble while it is out.
+                self.towers
+                    .values()
+                    .find(|tw| tw.position == at && tw.side == crate::frog::Side::Enemy && tw.disabled <= 0.0)
+                    .map(|tw| (at, tw.kind.range()))
+            })
             .collect();
         let quarry = self.frog.and_then(|e| self.world.get::<&Frog>(e).ok().filter(|fr| !fr.is_dead()).map(|fr| (fr.position, fr.is_stunned())));
         let all_tanks: Vec<(usize, Position)> = self
