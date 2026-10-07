@@ -916,7 +916,9 @@ drone, the tank and their age, hashed from ids and slots, never rolled.
   (`fpv_flash_seconds`, set by `kick_fpv` on every launch - the room's, a
   replica's `Fired`, a client's press), 3 while `special_down()`, 0 and 1
   alternating at 4 Hz while one of its drones is in the air (the owner slot
-  on `DroneState`, so a replica knows), else 0. `render.SHOWN_TOGETHER`
+  on `DroneState`, so a replica knows), else 0. With its halo spent the
+  relay stays on the roof, linked, while its drones are up - unless another
+  special's crate has put that special's module there. `render.SHOWN_TOGETHER`
   leaves it out with the grenade launcher, the hammer and the EMP, which
   share the roof. Three chassis in a screenshot before it is settled (§12).
 - **The crate**: row 16 of `gen_crates.py`'s sheets (`crates_sheet.png` 280
