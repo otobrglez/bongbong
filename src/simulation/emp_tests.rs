@@ -760,3 +760,24 @@ fn an_ally_backs_out_of_a_held_pulse_and_then_it_goes_off() {
         assert!(!step(&mut game, false).iter().any(|e| matches!(e, Event::Disabled { slot: s, .. } if *s == ally_slot)), "and it is not struck");
     }
 }
+
+/// A hurt enemy does not flee for a health crate inside the ring of a seat
+/// carrying an armed EMP: it keeps out of the ring rather than driving in,
+/// being turned back out by the dodge and coming round again.
+#[test]
+fn a_hurt_enemy_does_not_flee_for_a_crate_inside_an_armed_seats_ring() {
+    let mut game = round("cells.\"7,7\" = { kind = \"pickup\", pickup = \"health\" }\n");
+    let seat = game.player().unwrap();
+    let enemy = parked(&mut game, Position::new(SEAT.x + 400.0, SEAT.y + 32.0));
+    with_tank_mut(&game.world, enemy, |tk| {
+        tk.speed_scale = 1.0;
+        tk.shells_ammo = 10;
+        tk.damage = tuning().enemy_flee_damage + 10.0;
+    });
+    let berth = tuning().emp_radius_px + tuning().emp_ai_berth_px;
+    for frame in 0..600 {
+        step(&mut game, false);
+        let d = tank(&game, enemy, |tk| tk.position).distance_to(tank(&game, seat, |tk| tk.position));
+        assert!(d > berth, "into the ring at frame {frame}: {d}");
+    }
+}

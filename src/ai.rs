@@ -2148,11 +2148,13 @@ impl Brain<'_> {
     /// running blind. `None` when no pickup of that kind is on the field
     /// this frame (already collected and still respawning - see
     /// PICKUP_RESPAWN_SECONDS), in which case those callers fall back to
-    /// their old player-relative behavior.
+    /// their old player-relative behavior. A pickup inside a danger
+    /// (`Danger`) is none: the dodge tier would only drive the tank back
+    /// out of it, its heading committed away, to come round again.
     fn nearest_pickup(&self, kind: PickupKind) -> Option<Position> {
         self.pickups
             .iter()
-            .filter(|(k, _)| *k == kind)
+            .filter(|(k, at)| *k == kind && !self.in_danger(*at))
             .map(|&(_, pos)| pos)
             .min_by(|&a, &b| {
                 self.me
