@@ -1335,6 +1335,14 @@ tunables! {
         /// How far from a call's centre the pack's firing slots stand while
         /// the seat they fight is inside it.
         rod_ai_herd_px: f32 = 128.0 in 0.0 ..= 400.0;
+        /// How wide the band past the circle a rod tank holds its distance
+        /// from the seat it knows of in, px (`ai::rod_rule`'s stand-off).
+        rod_ai_band_px: f32 = 64.0 in 0.0 ..= 256.0;
+        /// Seconds a rod tank's move round its band may make no headway
+        /// before it is given up.
+        rod_ai_give_up_seconds: f32 = 0.3 in 0.05 ..= 5.0;
+        /// Seconds a rod tank that gave a move up stands where it is.
+        rod_ai_wait_seconds: f32 = 2.0 in 0.0 ..= 10.0;
     }
 
     group flamethrower {

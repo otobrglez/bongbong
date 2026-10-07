@@ -521,7 +521,7 @@ enum SpecialUse {
     Charge { face: Dir, aim: Option<(i32, i32)>, why: &'static str },
     /// Let a charge in progress go without firing it (`Intent::drop_charge`):
     /// a rod tank whose target no longer holds, any charging tank a call
-    /// stands over. The tree goes on below, to the dodge.
+    /// stands over - where the tree goes on below, to the dodge.
     Drop { why: &'static str },
     /// Let a charge weapon's trigger go facing `face`: the simulation fires
     /// the charge if it is ready. `at_seat` is the seat it is used on.
@@ -758,6 +758,10 @@ pub struct Ai {
     /// choice made again every tick; dropped the tick after it stands off
     /// no more.
     rod_spot: Option<Position>,
+    /// Seconds a rod tank stands where it is in its stand-off rather than
+    /// make for a spot (`rod_rule`): set when a move to one stopped
+    /// against a tank or a wall, so a narrow place is not ground against.
+    rod_wait: f32,
     /// Its brain is off (an EMP, docs/emp-burst.md): `enemy_phase` coasts it
     /// and does not call `think`; the first tick it is back, `reboot`.
     pub(crate) down: bool,
@@ -934,6 +938,7 @@ impl Default for Ai {
             escapes: 0,
             special_why: None,
             rod_spot: None,
+            rod_wait: 0.0,
             target_player: 0,
             field: FieldMind::default(),
             down: false,
@@ -1125,6 +1130,7 @@ impl Ai {
         if self.special_why != Some("stand-off") {
             self.rod_spot = None;
         }
+        self.rod_wait = (self.rod_wait - dt).max(0.0);
         self.special_why = None;
         self.clearing = None;
         self.kept_out = false;
@@ -3210,6 +3216,13 @@ fn rod_rule(b: &Brain, sense: &RodSense) -> Option<SpecialUse> {
     let seat = sense.keep_from.filter(|_| b.me.damage < tuning().enemy_flee_damage)?;
     let reach = rod_stand_off_px();
     let d = b.me.position.distance_to(seat);
+    // A move that stopped against a tank or a wall: it stands where it is
+    // a while rather than grind (`Ai::rod_wait`). Its facing is kept - the
+    // reticle aims, not the hull.
+    let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+    if b.ai.rod_wait > 0.0 && d <= reach + tuning().rod_ai_band_px && !b.in_danger(b.me.position) {
+        return Some(SpecialUse::Hold { face: facing, why: "stand-off" });
+    }
     // On its way to a spot it chose: on until it is there, or a tank stands
     // in its way.
     let me = b.me.position;
@@ -3221,7 +3234,7 @@ fn rod_rule(b: &Brain, sense: &RodSense) -> Option<SpecialUse> {
     if d < reach {
         return rod_stand_off(b, seat, reach + OBSTACLE_GRID_SIZE).map(|to| SpecialUse::Approach { to, why: "stand-off" });
     }
-    if d <= reach + 2.0 * OBSTACLE_GRID_SIZE && !b.in_danger(b.me.position) {
+    if d <= reach + tuning().rod_ai_band_px && !b.in_danger(b.me.position) {
         // A spot an ally crowds is no place to stand: one driving to its
         // own slot would grind against a hull that never gives way. It
         // moves round the seat to a free spot of the band instead.
@@ -3230,7 +3243,7 @@ fn rod_rule(b: &Brain, sense: &RodSense) -> Option<SpecialUse> {
         {
             return Some(SpecialUse::Approach { to, why: "stand-off" });
         }
-        return Some(SpecialUse::Hold { face: Dir::toward(b.me.position, seat), why: "stand-off" });
+        return Some(SpecialUse::Hold { face: facing, why: "stand-off" });
     }
     None
 }
@@ -3716,6 +3729,15 @@ fn act_special(b: &mut Brain) -> Status {
             }
         }
         SpecialUse::Approach { to, why } => {
+            // A stand-off's move that has stopped against a tank or a wall
+            // (`rod_ai_give_up_seconds` of no headway) is given up for
+            // `rod_ai_wait_seconds`: it stands.
+            if why == "stand-off" && b.ai.stuck_timer >= tuning().rod_ai_give_up_seconds {
+                b.ai.special_why = Some(why);
+                b.ai.rod_spot = None;
+                b.ai.rod_wait = tuning().rod_ai_wait_seconds;
+                return Status::Success;
+            }
             b.intent.move_dir = Some(b.steer(to));
             b.ai.special_why = Some(why);
             if why == "stand-off" {
@@ -3751,7 +3773,11 @@ fn act_special(b: &mut Brain) -> Status {
             b.ai.special_why = Some(why);
             b.intent.fire = false;
             b.intent.drop_charge = true;
-            return Status::Failure;
+            // Under a call the tree goes on, to the dodge; a target lost
+            // only ends the tick standing as it was.
+            if b.in_call() {
+                return Status::Failure;
+            }
         }
     }
     Status::Success
