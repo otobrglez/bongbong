@@ -559,7 +559,12 @@ driving its intents cover (`Mailbox::pose_reach_ticks`):
 
 A local round has no report; its count is its own, exact by construction.
 With the report the room's release decision is the client's to the tick,
-in owned mode and in stage 2's ordered mailbox alike.
+in owned mode and in stage 2's ordered mailbox alike, while the two counts
+stay within the spare: a stage-2 seat whose reads starve more than six
+times inside one hold - each starved tick counted by the round, not by the
+client - leaves the room's count that many ticks past the client's, which
+only matters within a tick or two of a threshold. Owned, a late intent is
+taken with the next on the room's clock, so the counts do not drift.
 
 **How it is drawn**: per weapon, from the state - `render/game.rs` asks the
 weapon's composer for every tank with a charge (`gauss::compose_charge`),
