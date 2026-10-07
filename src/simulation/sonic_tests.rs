@@ -594,14 +594,18 @@ fn hammer_tanks_close_in_round_the_seat_not_onto_it() {
 /// A seat's closers stand square on it, each where its blast reaches the
 /// seat and neither stands in the other's cone: in slot order each on the
 /// side nearest it that is clear of the ones before it - beside the first
-/// for a hull small enough, across the seat from it for one whose corners
-/// would stand in the first's cone there - and a third hammer tank gets no
-/// spot; with a wall on the only clear side, nor does the second.
+/// for a hull small enough under a cone narrow enough, across the seat
+/// from it for one whose corners would stand in the first's cone there -
+/// and a third hammer tank gets no spot; with a wall on the only clear
+/// side, nor does the second. The default cone takes in the side spot, 45
+/// degrees off the first's facing, for any hull.
 #[test]
 fn closer_spots_stand_square_on_the_seat_out_of_each_others_way() {
-    let t = tuning();
+    let defaults = *tuning();
+    assert!(defaults.sonic_half_angle_deg > 45.0, "the default cone takes in the side spot");
+    let t = Tuning { sonic_half_angle_deg: 35.0, ..defaults };
     // Spots on cell centres: the seat on one, the breaker less half a cell
-    // is three cells.
+    // is four cells.
     let seat_at = Position::new(416.0, 288.0);
     let seat_tank = Tank { position: seat_at, ..Tank::default() };
     let seats = [sonic::HammerSeat::of(0, &seat_tank, true, false)];
@@ -612,21 +616,23 @@ fn closer_spots_stand_square_on_the_seat_out_of_each_others_way() {
     let corners = |p: Position| [p, p + Vec2::new(-16.0, -16.0), p + Vec2::new(16.0, -16.0), p + Vec2::new(-16.0, 16.0), p + Vec2::new(16.0, 16.0), p];
     let friends: Vec<(usize, [Position; 6])> = armed.iter().map(|x| (x.1, corners(x.2))).collect();
     let out = t.sonic_ai_breaker_px - OBSTACLE_GRID_SIZE * 0.5;
-    let spots_on = |map: &str, half: f32| {
+    let spots_on = |t: &Tuning, map: &str, half: f32| {
         let game = round(map);
         let grid = game.nav_grid(W, H);
         let wall = |cell: (i32, i32)| if game.map.solid_at(cell.0, cell.1) { crate::sonic::Block::Wall } else { crate::sonic::Block::Open };
-        sonic::closer_spots(&t, &armed, |_| Vec2::new(half, half), &seats, &grid, (W, H), &tanks, &friends, wall)
+        sonic::closer_spots(t, &armed, |_| Vec2::new(half, half), &seats, &grid, (W, H), &tanks, &friends, wall)
     };
     let east = Position::new(seat_at.x + out, seat_at.y);
     let (south, west) = (Position::new(seat_at.x, seat_at.y + out), Position::new(seat_at.x - out, seat_at.y));
-    let small = spots_on("", 16.0);
+    let small = spots_on(&t, "", 16.0);
     assert_eq!((small.get(&a), small.get(&b)), (Some(&east), Some(&south)), "each on the side nearest it: {small:?}");
     assert_eq!(small.get(&c), None, "two close in, no more");
-    let large = spots_on("", 24.0);
+    let wide = spots_on(&defaults, "", 16.0);
+    assert_eq!((wide.get(&a), wide.get(&b)), (Some(&east), Some(&west)), "across the seat under the default cone: {wide:?}");
+    let large = spots_on(&t, "", 24.0);
     assert_eq!((large.get(&a), large.get(&b)), (Some(&east), Some(&west)), "across the seat from the first: {large:?}");
     let (col, row) = crate::map::world_to_cell(west);
-    let walled = spots_on(&format!("cells.\"{col},{row}\" = {{ kind = \"wall\", material = \"iron\" }}\n"), 24.0);
+    let walled = spots_on(&t, &format!("cells.\"{col},{row}\" = {{ kind = \"wall\", material = \"iron\" }}\n"), 24.0);
     assert_eq!((walled.get(&a), walled.get(&b)), (Some(&east), None), "no side clear of the first's cone: {walled:?}");
 }
 

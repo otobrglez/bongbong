@@ -597,17 +597,19 @@ mod tests {
     #[test]
     fn the_cone_reaches_its_reach_on_open_ground() {
         let t = Tuning::DEFAULT;
+        let (reach, half) = (t.sonic_reach_px, t.sonic_half_angle_deg);
         let c = cone_at(Position::new(320.0, 288.0), Dir::Right, open);
-        assert!(c.rays.iter().all(|&r| (r - t.sonic_reach_px).abs() < 1e-3), "{:?}", c.rays);
-        assert!(c.reaches(Position::new(320.0 + 150.0, 288.0)).is_some(), "straight ahead");
-        assert!(c.reaches(Position::new(320.0 + 170.0, 288.0)).is_none(), "past the reach");
+        assert!(c.rays.iter().all(|&r| (r - reach).abs() < 1e-3), "{:?}", c.rays);
+        assert!(c.reaches(Position::new(320.0 + reach - 10.0, 288.0)).is_some(), "straight ahead");
+        assert!(c.reaches(Position::new(320.0 + reach + 10.0, 288.0)).is_none(), "past the reach");
         assert!(c.reaches(Position::new(320.0, 288.0 + 100.0)).is_none(), "beside it");
         assert!(c.reaches(Position::new(320.0 - 60.0, 288.0)).is_none(), "behind it");
-        // The edge of the cone: 35 degrees in, 40 out.
+        // The edge of the cone: a degree inside the half angle in, five past it out.
         let at = |deg: f32| Position::new(320.0 + 100.0 * deg.to_radians().cos(), 288.0 + 100.0 * deg.to_radians().sin());
-        assert!(c.reaches(at(34.0)).is_some() && c.reaches(at(-34.0)).is_some());
-        assert!(c.reaches(at(40.0)).is_none() && c.reaches(at(-40.0)).is_none());
-        assert!(c.rays.len() >= 50, "{} rays", c.rays.len());
+        assert!(c.reaches(at(half - 1.0)).is_some() && c.reaches(at(1.0 - half)).is_some());
+        assert!(c.reaches(at(half + 5.0)).is_none() && c.reaches(at(-half - 5.0)).is_none());
+        let arc = 2.0 * half.to_radians() * reach;
+        assert!(c.rays.len() as f32 >= arc / SONIC_RAY_ARC_PX, "{} rays", c.rays.len());
     }
 
     #[test]
@@ -636,8 +638,9 @@ mod tests {
 
     #[test]
     fn the_cone_never_leaves_the_field() {
+        let half = Tuning::DEFAULT.sonic_half_angle_deg;
         let c = cone_at(Position::new(64.0, 288.0), Dir::Left, open);
-        assert!(c.rays.iter().all(|&r| r <= 64.0 / (35f32.to_radians().cos()) + 1e-3), "{:?}", c.rays);
+        assert!(c.rays.iter().all(|&r| r <= 64.0 / half.to_radians().cos() + 1e-3), "{:?}", c.rays);
         assert!(c.cells.iter().all(|cell| cell.cell.0 >= 0));
     }
 
@@ -714,9 +717,12 @@ mod tests {
         let t = Tuning::DEFAULT;
         let wall = |c: (i32, i32)| if c.0 == 13 { Block::Wall } else { Block::Open };
         let mut wave = SonicWave::new(cone_at(Position::new(320.0, 288.0), Dir::Right, wall), Owner::Player(0));
-        // The face is 80 px ahead, 98 px at the cone's edge: every arc of
-        // a front at 140 px lies past it.
-        wave.age = 140.0 / t.sonic_wave_speed;
+        // The face is 80 px ahead, further at the cone's edge: every arc of
+        // a front its rings' spacing past that lies past it.
+        let edge = 80.0 / t.sonic_half_angle_deg.to_radians().cos();
+        let front = edge + t.sonic_ring_gap_px * t.sonic_wave_rings as f32 + 2.0;
+        assert!(front < t.sonic_reach_px, "the front still runs out: {front}");
+        wave.age = front / t.sonic_wave_speed;
         assert!(wave_arcs(&wave, &t).is_empty(), "no arc past the wall's face");
         wave.age = 60.0 / t.sonic_wave_speed;
         assert!(!wave_arcs(&wave, &t).is_empty());

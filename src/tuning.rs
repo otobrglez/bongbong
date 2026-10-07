@@ -876,13 +876,14 @@ tunables! {
     group sonic {
         /// Blasts one sonic hammer crate loads (`pickup::PickupKind::
         /// SonicHammer`, docs/sonic-hammer.md). One per press.
-        sonic_ammo_per_pickup: i32 = 6 in 1 ..= 40;
+        sonic_ammo_per_pickup: i32 = 7 in 1 ..= 40;
         /// Seconds between two blasts.
-        sonic_reload_seconds: f32 = 1.2 in 0.0 ..= 10.0;
-        /// How far the cone reaches from the turret's pivot (px; five
-        /// cells), and its half angle either side of the facing (degrees).
-        sonic_reach_px: f32 = 160.0 in 32.0 ..= 480.0;
-        sonic_half_angle_deg: f32 = 35.0 in 5.0 ..= 90.0;
+        sonic_reload_seconds: f32 = 0.8 in 0.0 ..= 10.0;
+        /// How far the cone reaches from the turret's pivot (px; six and a
+        /// half cells), and its half angle either side of the facing
+        /// (degrees).
+        sonic_reach_px: f32 = 208.0 in 32.0 ..= 480.0;
+        sonic_half_angle_deg: f32 = 46.0 in 5.0 ..= 90.0;
         /// The share of the shove and the damage left at the rim, falling
         /// linearly from 1 at the pivot.
         sonic_edge_falloff: f32 = 0.35 in 0.0 ..= 1.0;
@@ -949,8 +950,10 @@ tunables! {
         sonic_fish_flop_seconds: f32 = 2.5 in 0.0 ..= 20.0;
         /// An enemy shouts at a seat this close in its cone, whatever lies
         /// behind it, and a hammer tank closing in stops this far from the
-        /// seat (px).
-        sonic_ai_breaker_px: f32 = 112.0 in 0.0 ..= 480.0;
+        /// seat (px). About seven tenths of `sonic_reach_px`: two closers
+        /// across a seat stand twice this less a cell apart, which has to
+        /// clear the reach.
+        sonic_ai_breaker_px: f32 = 144.0 in 0.0 ..= 480.0;
         /// How many hammer tanks close in on one seat, the nearest first;
         /// the rest hold their slots of its ring until one is spent or
         /// wrecked.

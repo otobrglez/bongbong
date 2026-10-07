@@ -2,8 +2,8 @@
 
 BB-37, the first of the six weapons of BB-36. A special weapon from its own
 crate (`pickup = "sonic_hammer"`), one at a time like every other
-(`Tank::take_weapon`): a crate loads `sonic_ammo_per_pickup` (6) blasts, a
-re-pick refills to six, another weapon's crate replaces it. Seats and
+(`Tank::take_weapon`): a crate loads `sonic_ammo_per_pickup` (7) blasts, a
+re-pick refills to seven, another weapon's crate replaces it. Seats and
 enemies alike: an enemy takes the crate while it fires shells
 (`Tank::wants_pickup`) and uses it by its own rule (§4).
 
@@ -23,19 +23,19 @@ tool and the `armory` map.
 ### The blast
 
 - **One per press.** The trigger fires on the press edge, like a shell
-  (`drive_player`'s `fire_pressed`); `sonic_reload_seconds` (1.2) between
+  (`drive_player`'s `fire_pressed`); `sonic_reload_seconds` (0.8) between
   blasts (`Tank::fire_cooldown`). A seat's press goes off at once - no
   wind-up. An enemy's goes off after its tell (§3.2).
 - **The cone.** From the hull's centre (`Tank::position`, the turret's
   pivot), along the hull's cardinal facing (`Dir::from_rotation`), out to
-  `sonic_reach_px` (160, five cells), `sonic_half_angle_deg` (35) either
-  side of the facing. No misfire skew: the hammer is never fired off-aim.
+  `sonic_reach_px` (208, six and a half cells), `sonic_half_angle_deg` (46)
+  either side of the facing. No misfire skew: the hammer is never fired off-aim.
   It is judged from the pivot so a tank pressed against a pane still
   shatters it; it is drawn from there too, the arcs leaving the dish on the
   roof (the dish is a few pixels ahead of the pivot, inside the first arc).
 - **What shadows it: a ray cast on the map-cell grid.** At the press the
   cone is cast once as a fan of rays (`sonic::SonicCone::cast`), one every
-  `SONIC_RAY_ARC_PX` (4) px of arc at full reach (50 rays at the
+  `SONIC_RAY_ARC_PX` (4) px of arc at full reach (85 rays at the
   defaults), each walked cell by cell (Amanatides-Woo, the
   `weather::Occluders` walk) over the map's cells (`map::world_to_cell`: centres on multiples of
   32). A ray stops on entering the first cell holding a tile that
@@ -53,7 +53,7 @@ tool and the `armory` map.
   drives behind a wall mid-wave is shadowed by the rays already cast.
 - **The wave travels.** What the cone reaches, the wave reaches when its
   front gets there: the front leaves the pivot at the press and runs out at
-  `sonic_wave_speed` (640 px/s - the full reach in a quarter second). Each
+  `sonic_wave_speed` (640 px/s - the full reach in about a third of a second). Each
   frame (`Game::tick_sonic_waves`) everything whose distance falls between
   the front's last radius and its new one is struck, once. A wave is done
   with when its front is past the longest ray; its picture lingers
@@ -703,10 +703,11 @@ the wave's run out), so one driving into the cone is not shouted at either.
       believes - never at where the seat really is; the sight box is
       checked against the seat's real position, like every other use.
    4. **Breaker** (`"breaker"`): a seat in the cone within
-      `sonic_ai_breaker_px` (112).
+      `sonic_ai_breaker_px` (144, about seven tenths of the reach, so the
+      shove there is about half the shove at the pivot).
    5. **Pin the frog** (`"frog"`): a hunter (`Brain::hunting_frog`) with
       its quarry in the cone, not stunned. A hammer cannot hurt a frog; a
-      stunned one cannot hop away from the pack's shells. Bounded: six
+      stunned one cannot hop away from the pack's shells. Bounded: seven
       blasts, then shells.
 4. **Hold for the timer**: a fire arm that matched while `Ai::fire_timer`
    runs holds facing it instead (`act_special`).
@@ -725,8 +726,11 @@ the wave's run out), so one driving into the cone is not shouted at either.
    blast's cone. In slot order each closer takes the spot that holds
    nearest it, reachable from where it stands (`Grid::connected`), where
    neither its blast nor that of a closer before it would reach the
-   other's hull: beside the first where the hulls are small enough, across
-   the seat from it otherwise. So two close in square on the seat - its
+   other's hull: across the seat from the first at the defaults - the spot
+   beside it stands 45 degrees off the first's facing, inside a cone of
+   46 either side, and the one across is 256 px off, past the reach - and
+   beside the first under a cone narrow enough for the hulls. So two close
+   in square on the seat - its
    centre in the middle of their cones - never in each other's way, and a
    closer finds a spot or is left to the tree. The rest keep their ring
    slots by the attack tier and use the hammer only when an arm above
@@ -862,7 +866,7 @@ wave or the tank and its age, hashed, never rolled.
 - **The HUD**: nothing new to lay out. `hud::WeaponSlot::of` gives the
   count in `HUD_SONIC_COLOR` (`#46C3F2`, the ink's base) and
   `hud::weapon_pickup` the glyph; the ring's ammo pips measure against
-  `full_load` (6).
+  `full_load` (7).
 
 ## 6. Tuning
 
@@ -871,10 +875,10 @@ enemies' group:
 
 | Row | Default | Range | Doc |
 |---|---|---|---|
-| `sonic_ammo_per_pickup: i32` | 6 | 1..=40 | Blasts one sonic hammer crate loads. One per press. |
-| `sonic_reload_seconds` | 1.2 | 0..=10 | Seconds between two blasts. |
-| `sonic_reach_px` | 160 | 32..=480 | How far the cone reaches from the pivot (px; five cells). |
-| `sonic_half_angle_deg` | 35 | 5..=90 | The cone's half angle either side of the facing. |
+| `sonic_ammo_per_pickup: i32` | 7 | 1..=40 | Blasts one sonic hammer crate loads. One per press. |
+| `sonic_reload_seconds` | 0.8 | 0..=10 | Seconds between two blasts. |
+| `sonic_reach_px` | 208 | 32..=480 | How far the cone reaches from the pivot (px; six and a half cells). |
+| `sonic_half_angle_deg` | 46 | 5..=90 | The cone's half angle either side of the facing. |
 | `sonic_edge_falloff` | 0.35 | 0..=1 | The share of the shove and the damage left at the rim, falling linearly from 1 at the pivot. |
 | `sonic_wave_speed` | 640 | 60..=5000 | How fast the front runs out (px/s): what it reaches, it reaches when the front gets there. |
 | `sonic_shove_speed` | 380 | 0..=500 | The shove at the pivot (px/s) against the chassis-free mass. |
@@ -899,7 +903,7 @@ enemies' group:
 | `sonic_flash_seconds` | 0.2 | 0..=2 | The dish's firing cell. |
 | `sonic_tree_lean_px` | 4 | 0..=16 | How far a crown leans as the front passes. |
 | `sonic_fish_throw_px`, `sonic_fish_throw_max`, `sonic_fish_flop_seconds` | 40, 3, 2.5 | 0..=200, 0..=16, 0..=20 | A fish this close to dry ground along the wave's line is thrown onto the bank, at most this many a wave, flopping this long. |
-| `sonic_ai_breaker_px` | 112 | 0..=480 | An enemy shouts at a seat this close in its cone, whatever lies behind it; a closer's spot stands this less half a cell off the seat. |
+| `sonic_ai_breaker_px` | 144 | 0..=480 | An enemy shouts at a seat this close in its cone, whatever lies behind it; a closer's spot stands this less half a cell off the seat. About seven tenths of `sonic_reach_px`: two closers across a seat stand twice this less a cell apart, which has to clear the reach. |
 | `sonic_ai_closers: i32` | 2 | 0..=8 | How many hammer tanks close in on one seat, the nearest first; the rest hold their slots of its ring. |
 | `sonic_ai_glass_after_seconds` | 0.1 | 0..=5 | How long an enemy drives into glass before it shouts it down (the breach's `enemy_breach_after_seconds` for every other tile). |
 | `sonic_ai_fire_interval` | 2.5 | 0.1..=10 | Seconds between an enemy's decisions to shout. |
@@ -985,7 +989,7 @@ Protocol 15 (from 14), once in the PR.
 seat at cell (3, 6) facing east, parked enemies placed by hand):
 
 - The weapon: `a_sonic_crate_arms_the_hammer_and_replaces_the_special_carried`
-  (six a crate, another special emptied, a refill to six, an enemy takes
+  (seven a crate, another special emptied, a refill to seven, an enemy takes
   one only on shells), `the_hammer_fires_on_the_press_and_spends_one_blast`
   (`Fired` then `SonicBlast` in one tick, none while held).
 - The cone and the wave: `the_cone_shoves_an_enemy_ahead_and_not_one_beside`,
@@ -1029,9 +1033,10 @@ seat at cell (3, 6) facing east, parked enemies placed by hand):
   "breaker"), `a_seat_already_in_a_lane_is_not_shoved_into_it`,
   `hammer_tanks_close_in_round_the_seat_not_onto_it`,
   `closer_spots_stand_square_on_the_seat_out_of_each_others_way` (each on
-  the side nearest it clear of the first's cone - beside it for a small
-  hull, across the seat for a large one -, a third left out, a wall on the
-  only clear side leaving the second none).
+  the side nearest it clear of the first's cone - under a cone narrowed to
+  35 degrees beside it for a small hull, across the seat for a large one;
+  across for a small one under the default cone -, a third left out, a wall
+  on the only clear side leaving the second none).
 
 `ai::hammer_tests` (the rule on a made-up `HammerSense`):
 `every_arm_fires_the_way_it_names` (trouble, drum, flush, breaker, frog -
@@ -1043,12 +1048,13 @@ tank fires, the hammer tank never),
 `a_closer_closes_in_to_its_spot_and_waits_there`,
 `a_tell_holds_the_tank_facing_its_way`, `glass_in_its_way_is_shouted_down`.
 
-The sight box: at the defaults the cone's 160 px lies inside every seat's
-box (+-368 x +-240 px) and a thrown drum lands at most about 205 px from
-the thrower, so no whole round can put a seat in the cone from outside its
-box; `Game::hammer_senses` checks it all the same, and the probe's
-`offbox-fire` (budget 0) counts a hammer used on a seat from outside it,
-since `act_special` records `Ai::shot_at_seat`.
+The sight box: at the defaults the cone's 208 px lies inside every seat's
+box (+-368 x +-240 px), so no blast reaches a seat from outside its box. A
+thrown drum can land past it - a drum six cells up a column goes two more,
+256 px from the thrower - so `Game::hammer_senses` checks the box for every
+seat on every arm, and the probe's `offbox-fire` (budget 0) counts a hammer
+used on a seat from outside it, since `act_special` records
+`Ai::shot_at_seat`.
 
 Shared path and presentation:
 
@@ -1134,6 +1140,10 @@ Wire:
   firing from off the box - is fixed, not re-baselined.
 
 ### Results (debug build, seed 1000, the recipes' budgets)
+
+Measured at the hammer's first numbers (six blasts a crate, 1.2 s
+between them, a 160 px reach, 35 degrees either side), not re-run at the
+current ones; the defaults' rows do not depend on them.
 
 Fixtures: the nine `maps/test/` maps, ten 30 s rounds each. Fields: the
 seven field maps, ten 60 s rounds each. Anomaly totals (kinds at 0 left
@@ -1263,8 +1273,8 @@ events on the two maps). How such a pack should play is a question for Oto (§12
    lifted (the anisotropy above).
 2. **The wave travels**, striking things as its front reaches them, rather
    than everything on the press. Things happen as the arcs pass - panes
-   shatter and grass falls in a sweep - and a far target has a quarter
-   second to see it coming. Rejected: instant (cheaper, but the picture
+   shatter and grass falls in a sweep - and a far target has about a third
+   of a second to see it coming. Rejected: instant (cheaper, but the picture
    arrives after what it shows).
 3. **Glass stops the wave as it shatters**: "it does not pass through any
    wall" read strictly - a pane is a one-shout shield. Rejected: the wave
@@ -1296,9 +1306,9 @@ events on the two maps). How such a pack should play is a question for Oto (§12
    shells while it carries it (breaks the one-trigger rule). A visible
    change in how such an enemy plays: while it carries the hammer it is a
    close-range threat only - it never fires the hammer at range and fires
-   no shells - until its six blasts are spent.
+   no shells - until its seven blasts are spent.
 9. **A hunter carrying the hammer fights the seat**, pinning the frog only
-   when the frog stands in its cone - six blasts, then shells and the frog
+   when the frog stands in its cone - seven blasts, then shells and the frog
    again. *For Oto.*
 10. **The tell commits**: it goes off along its facing even if the seat
     stepped out, which is the dodge.
@@ -1351,8 +1361,12 @@ events on the two maps). How such a pack should play is a question for Oto (§12
     "close" where it could never fire), grinds and most of its extra spins.
     `closer_spots` sees the whole world: it offers only spots from which a
     blast reaches the seat, with nobody on them or in their cone, and keeps
-    the two closers out of each other's cones (beside each other for small
-    hulls, across the seat for large ones). A seat square in the cone is
+    the two closers out of each other's cones (across the seat from each
+    other at the default cone; beside each other for small hulls under a
+    narrower one). `sonic_ai_breaker_px` moves with `sonic_reach_px`, at
+    seven tenths of it: the spots stand that less half a cell out, and two
+    across the seat stay out of each other's reach only while twice that
+    clears the reach. A seat square in the cone is
     also the shove a player reads best: straight along a row or a column.
     Rejected: keeping the ring-slot spot and checking it (it still crosses
     the other closer's path), and a spot behind the tank on its own bearing
@@ -1361,7 +1375,7 @@ events on the two maps). How such a pack should play is a question for Oto (§12
     reach (review): a slide across a lane leaves the seat in none, and a
     seat already in one is not shoved into it - before, a seat lined up for
     any enemy was "trouble" from the cone's rim, so hammer tanks shouted
-    from 160 px at seats they were only breaking off.
+    from the rim at seats they were only breaking off.
 26. **A knock's allowance is a distance, not a window** (review): the
     validator gives each pose the knock's speed past the chassis's reach,
     but all of them together only the knock's slide on the slipperiest
