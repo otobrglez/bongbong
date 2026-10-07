@@ -256,6 +256,16 @@ PICKUP_INK = {
     # silver, so it stays off the minigun's grey-blue. The light is the
     # lamps' crimson, which is also the HUD's accent.
     'fpv_swarm': ((0xBF, 0xA7, 0x7A), (0xFF, 0xF0, 0xC8), (0xFF, 0x2D, 0x5F)),
+    # The rod from god (docs/rod-from-god.md): two-tone, like the swarm - a
+    # tungsten rod in a dark steel grey, falling into the designator's red
+    # corner brackets (the reticle a player steers, `pyro::LASER_RED`'s
+    # base). No single loud hue is left that sits off a neighbour: coral and
+    # salmon read as the health cross's light, ultramarine as the EMP's
+    # cobalt, teal as the plasma, and green is the grass's. A grey body with
+    # red corners is a pattern no other crate has; the grey is darker than
+    # the minigun's pale grey-blue, so the two never read alike. The light
+    # is the brackets' red, which is also the HUD's accent.
+    'rod_from_god': ((0x4E, 0x54, 0x5C), (0x8A, 0x90, 0x99), (0xFF, 0x32, 0x28)),
 }
 # The rainbow shield's symbol, swept corner to corner like the old icon.
 PICKUP_RAINBOW = ((0xE8, 0x4A, 0x3C), (0xFF, 0x8A, 0x2B), (0xFF, 0xD9, 0x3D), (0x7E, 0xDB, 0x5A),
