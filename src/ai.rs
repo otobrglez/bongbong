@@ -3186,7 +3186,9 @@ fn act_air(b: &mut Brain) -> Status {
     let me = b.me.position;
     b.reset_aim();
     let face = Dir::toward(me, threat.drone);
-    if b.me.active_weapon() == ActiveWeapon::Minigun && threat.may_shoot {
+    // A training dummy never fires toward a seat, and flak at a drone is
+    // fire toward the seat that sent it (`Brain::may_fire_at_seat`).
+    if b.me.active_weapon() == ActiveWeapon::Minigun && threat.may_shoot && !b.ai.frog_only {
         b.intent.face = Some(face);
         b.ai.commit(face);
         b.intent.move_dir = None;
