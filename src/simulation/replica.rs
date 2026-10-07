@@ -80,6 +80,28 @@ pub struct DrawableTank {
 /// The exhaust flicker is deliberately absent. It cycles off `Missile::age`,
 /// which a replica runs itself, so holding the two sides to it would pin a
 /// cosmetic the wire does not carry on purpose.
+/// One FPV drone as the picture shows it (`fpv::Drone`): where it is, how
+/// high, which way, its stage, the halo slot it left and whose it is. Its
+/// clocks - the rotors', the lamp's - are the replica's own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DrawableDrone {
+    pub id: u32,
+    /// Quarter pixels: the ground point under it.
+    pub x: i32,
+    pub y: i32,
+    /// Quarter pixels above the ground.
+    pub height: i32,
+    /// Its ground heading in 256 steps.
+    pub heading: u8,
+    /// `fpv::DroneStage::code`.
+    pub stage: u8,
+    pub halo: u8,
+    /// `Owner::slot` of its launcher.
+    pub owner: usize,
+    /// `fpv::DroneLock::code`.
+    pub lock: u16,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DrawableMissile {
     pub id: u32,
@@ -181,6 +203,7 @@ pub struct DrawableState {
     /// pixels. Its fuse is left out: a replica runs it down on its own
     /// clock between snapshots (`Game::tick_presentation`).
     pub grenades: Vec<(u32, i32, i32, i32)>,
+    pub drones: Vec<DrawableDrone>,
     pub frogs: Vec<DrawableFrog>,
     /// Every pickup on the field, by cell.
     pub pickups: Vec<DrawablePickup>,
@@ -439,6 +462,22 @@ impl Game {
             .collect();
         grenades.sort();
 
+        let drones: Vec<DrawableDrone> = self
+            .drones()
+            .iter()
+            .map(|d| DrawableDrone {
+                id: d.id,
+                x: quarter_px(d.ground.x),
+                y: quarter_px(d.ground.y),
+                height: quarter_px(d.height),
+                heading: heading_step(d.heading_degrees()),
+                stage: d.stage.code(),
+                halo: d.slot,
+                owner: d.owner.slot(),
+                lock: d.lock.code(),
+            })
+            .collect();
+
         let mut frogs: Vec<DrawableFrog> = self
             .world
             .query::<&Frog>()
@@ -508,6 +547,7 @@ impl Game {
             shots,
             missiles,
             grenades,
+            drones,
             frogs,
             pickups,
             tiles,

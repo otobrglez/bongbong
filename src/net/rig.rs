@@ -1407,6 +1407,55 @@ mod tests {
         assert_eq!(most, 1, "the press is one wave on the replica");
     }
 
+    /// A seat's FPV drone through the room: one drone on the replica for
+    /// the one press, never two, its halo one fewer, and one spent in the
+    /// room.
+    #[test]
+    fn a_seats_drone_reaches_the_replica_once() {
+        let mut rig = Lockstep::start(options(LinkQuality::PERFECT));
+        let patch = crate::simulation::debug::TankPatch { fpv_drones: Some(6), ..Default::default() };
+        rig.authority_mut().expect("a round").debug_set_tank(0, &patch).expect("the seat's tank");
+        rig.drive(Intent { fire: true, ..Intent::default() });
+        rig.step(1);
+        rig.drive(Intent::default());
+        let mut most = 0;
+        for _ in 0..30 {
+            rig.step(2);
+            let replica = rig.replica().expect("a replica");
+            most = most.max(replica.drawable_state().drones.iter().filter(|d| d.owner == 0).count());
+        }
+        assert_eq!(most, 1, "the press is one drone on the replica");
+        let left = rig.authority_mut().expect("a round").tank_snapshots().into_iter().find(|t| t.slot == 0).map(|t| t.fpv_drones);
+        assert_eq!(left, Some(5), "one drone spent");
+    }
+
+    /// An enemy's drone reaches the replica locked on the seat: what the
+    /// off-screen arrow is drawn from.
+    #[test]
+    fn an_enemys_drone_reaches_the_replica_locked_on_the_seat() {
+        let mut rig = Lockstep::start(options(LinkQuality::PERFECT));
+        let game = rig.authority_mut().expect("a round");
+        let seat = game.tank_snapshots().into_iter().find(|t| t.slot == 0).expect("the seat");
+        let beside = crate::Position::new(seat.position.x + 200.0, seat.position.y);
+        let slot = game.debug_spawn_enemy(beside, Some(1), Some(crate::ai::Role::Player)).expect("spawns");
+        let entity = game.tank_entity_by_slot(slot).expect("the enemy");
+        {
+            let mut tank = game.world.get::<&mut crate::tank::Tank>(entity).expect("its tank");
+            // It drives: out in the open in front of the seat, it makes
+            // for cover before it launches.
+            tank.disarm();
+            tank.shells_ammo = 0;
+            tank.fpv_drones = 6;
+        }
+        let mut locked = false;
+        for _ in 0..480 {
+            rig.step(1);
+            let replica = rig.replica().expect("a replica");
+            locked |= replica.drawable_state().drones.iter().any(|d| d.owner == slot && d.lock == 0);
+        }
+        assert!(locked, "the enemy's drone on the replica, locked on the seat");
+    }
+
     /// An enemy's hammer reaches the replica: its tell first, on the
     /// replica's tank, then its wave.
     #[test]

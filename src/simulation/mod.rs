@@ -2852,6 +2852,10 @@ impl Game {
         if self.lamps_out > 0.0 {
             self.lamps_out = (self.lamps_out - dt).max(f32::EPSILON);
         }
+        // A drone's rotors and lamp turn on the replica's own clock.
+        for drone in self.world.query_mut::<&mut crate::fpv::Drone>() {
+            drone.age_by(dt);
+        }
         // A stunned frog stays stunned until the room says it is not.
         for frog in self.world.query_mut::<&mut Frog>() {
             if frog.stun_timer > 0.0 {

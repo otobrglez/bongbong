@@ -471,8 +471,9 @@ enum SpecialUse {
     /// `simulation::command`'s `clear_rings` with the commander on), the
     /// tank fighting on meanwhile.
     Clear { radius: f32 },
-    /// Close in on `to`, to bring a short-range weapon to bear.
-    Approach { to: Position },
+    /// Drive to `to`: to bring a short-range weapon to bear, or to a spot
+    /// a weapon is used from. `why` for the trace.
+    Approach { to: Position, why: &'static str },
     /// Hold the trigger of a charge weapon facing `face` (the charge-and-hold
     /// pattern, docs/gauss-rail.md): a press starts a charge, holding keeps
     /// it, and the tank stands its ground meanwhile.
@@ -3124,7 +3125,7 @@ fn fpv_rule(b: &Brain, sense: &FpvSense) -> Option<SpecialUse> {
         && free
         && b.can_reach(spot)
     {
-        return Some(SpecialUse::Approach { to: spot });
+        return Some(SpecialUse::Approach { to: spot, why: "back off" });
     }
     // A hunter with drones fights the seat like everyone else
     // (`generic_fire` is false), and sends them at its quarry when no seat
@@ -3136,7 +3137,7 @@ fn fpv_rule(b: &Brain, sense: &FpvSense) -> Option<SpecialUse> {
             && free
             && b.me.position.distance_to(spot) > OBSTACLE_GRID_SIZE * 0.5
         {
-            return Some(SpecialUse::Approach { to: spot });
+            return Some(SpecialUse::Approach { to: spot, why: "to cover" });
         }
         if let Some((seat, _)) = sense.at_seat {
             let why = if sense.exposed { "open" } else { "cover" };
@@ -3313,7 +3314,7 @@ fn emp_rule(b: &Brain, sense: &EmpSense) -> Option<SpecialUse> {
         if b.me.position.distance_to(spot) <= OBSTACLE_GRID_SIZE * 0.5 {
             return Some(SpecialUse::Hold { face: Dir::toward(b.me.position, seat), why: "close" });
         }
-        return Some(SpecialUse::Approach { to: spot });
+        return Some(SpecialUse::Approach { to: spot, why: "approach" });
     }
     None
 }
@@ -3441,7 +3442,7 @@ fn hammer_rule(b: &Brain, sense: &HammerSense) -> Option<SpecialUse> {
         if b.me.position.distance_to(spot) <= OBSTACLE_GRID_SIZE * 0.5 {
             return Some(SpecialUse::Hold { face: Dir::toward(b.me.position, b.player.position), why: "close" });
         }
-        return Some(SpecialUse::Approach { to: spot });
+        return Some(SpecialUse::Approach { to: spot, why: "approach" });
     }
     None
 }
@@ -3489,9 +3490,9 @@ fn act_special(b: &mut Brain) -> Status {
                 b.ai.air_want = Some(want);
             }
         }
-        SpecialUse::Approach { to } => {
+        SpecialUse::Approach { to, why } => {
             b.intent.move_dir = Some(b.steer(to));
-            b.ai.special_why = Some("approach");
+            b.ai.special_why = Some(why);
         }
         SpecialUse::Charge { face, why } => {
             b.intent.face = Some(face);
