@@ -284,9 +284,10 @@ impl Game {
     /// `gauss_frog_damage` times what the slug has kept, and the same;
     /// a tower takes it (`DamageCause::Pierce`), and the same; every other
     /// tile dies outright and the slug keeps `gauss_tile_keep` (iron an
-    /// overcharged slug cuts is untouched). No knockback, no hop, no roll.
-    /// What it was, for the picture; `None` for a wreck, a tile already
-    /// gone, burning or fused.
+    /// overcharged slug cuts is untouched; a tile already burning or with
+    /// a fuse lit is passed through untouched). No knockback, no hop, no
+    /// roll. What it was, for the picture; `None` for a wreck, a dead frog
+    /// and a tile already gone.
     #[allow(clippy::too_many_arguments)]
     fn pierce_hit(&mut self, f: &mut Frame, target: ShellTarget, at: Position, damage: &mut f32, full: f32, shooter: Owner, dir: Vec2) -> Option<Pierced> {
         let t = tuning();
@@ -346,7 +347,10 @@ impl Game {
             ShellTarget::Obstacle(entity) => {
                 let (material, standing) = {
                     let o = self.world.get::<&Obstacle>(entity).ok()?;
-                    (o.material, !o.destroyed && !o.burning && o.fuse.is_none())
+                    if o.destroyed {
+                        return None;
+                    }
+                    (o.material, !o.burning && o.fuse.is_none())
                 };
                 if material == Material::Iron {
                     f.events.push(Event::Hit { target: HitTarget::Obstacle { material }, damage: 0.0, killed: false, x: at.x, y: at.y, cause: HitCause::Rail });
