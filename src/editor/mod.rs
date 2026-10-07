@@ -1139,12 +1139,23 @@ impl MapEditor {
     /// from the top -, sized like play's minimap (`MinimapRules::size_pt`)
     /// and never more than half that room either way; its plate is
     /// `Corners::plate` round it. `None` at FIT on an arena, where it would
-    /// show just what the canvas shows.
+    /// show just what the canvas shows, and while an open popup's panel
+    /// reaches its plate - a phone's MAP panel does -: it steps aside
+    /// rather than show through the translucent panel or cover its corner,
+    /// and it could not be pressed then anyway, since a press outside a
+    /// popup only closes it.
     pub fn navigator_rect(&self, frame: &BuilderFrame) -> Option<Rectangle> {
         if self.camera.is_fit() && self.map.class() == crate::framing::MapClass::Arena {
             return None;
         }
-        chrome::navigator(frame.under_bar(), MinimapRules::current().size_pt(self.map.field_size()))
+        let rect = chrome::navigator(frame.under_bar(), MinimapRules::current().size_pt(self.map.field_size()))?;
+        if self.popup.is_some() {
+            let plate = Corners::plate(rect);
+            if self.chrome(frame).popup.is_some_and(|popup| overlaps(popup.panel(), plate)) {
+                return None;
+            }
+        }
+        Some(rect)
     }
 
     /// The navigator: a press on it puts the middle of the view on the
@@ -4110,6 +4121,12 @@ fn step_choice<T: Copy + PartialEq>(value: T, list: &[T], forward: bool) -> T {
     list[if forward { (at + 1) % len } else { (at + len - 1) % len }]
 }
 
+/// Whether two rectangles share any area (touching edges do not).
+fn overlaps(a: Rectangle, b: Rectangle) -> bool {
+    let i = intersect(a, b);
+    i.width > 0.0 && i.height > 0.0
+}
+
 /// The overlap of two rectangles; where they do not overlap, an empty
 /// rectangle at the nearest corner of `a`.
 fn intersect(a: Rectangle, b: Rectangle) -> Rectangle {
@@ -5372,6 +5389,36 @@ mod editor_tests {
         ed.update(&BuilderInput { zoom_out: true, ..Default::default() }, &frame);
         assert!(ed.camera().is_fit());
         assert_eq!(ed.navigator_rect(&frame), None);
+    }
+
+    /// On a phone the MAP panel reaches down over the navigator's corner:
+    /// while it is open the navigator steps aside - not drawn, not in
+    /// `status.builder.navigator` - and comes back when it closes. A popup
+    /// that stays clear of the corner leaves it be.
+    #[test]
+    fn the_navigator_steps_aside_for_a_popup_over_its_corner() {
+        let ui = UiFrame::new((734.0, 372.0), 1.0, 1.0, Insets::default(), true);
+        let mut map = MapFile::new();
+        map.size = Some((60.0, 30.0));
+        let frame = BuilderFrame::new(ui, map.field_size(), MapClass::Field, None);
+        let mut ed = MapEditor::new(map);
+        let nav = ed.navigator_rect(&frame).expect("a field map's navigator at FIT");
+        press_named(&mut ed, &frame, "map");
+        assert_eq!(ed.open_menu(), Some("map"));
+        let Some(PopupLayout::Settings(panel)) = ed.chrome(&frame).popup else { panic!("the MAP panel") };
+        assert!(overlaps(panel.panel, Corners::plate(nav)), "the phone's panel reaches the corner: {:?} {nav:?}", panel.panel);
+        assert_eq!(ed.navigator_rect(&frame), None, "stepped aside");
+        // The panel's corner buttons are the panel's to press.
+        let corner = ed.named_buttons(&frame).into_iter().find(|(name, _)| name == "tier_end_inc" || name == "tanks_inc").expect("a stepper");
+        assert!(corner.1.x + corner.1.width > nav.x, "a button over where the navigator was: {corner:?}");
+        ed.update(&BuilderInput { escape: true, ..Default::default() }, &frame);
+        ed.update(&BuilderInput::default(), &frame);
+        assert_eq!(ed.open_menu(), None);
+        assert_eq!(ed.navigator_rect(&frame), Some(nav), "back once it closes");
+        // FILE's short list hangs well clear of the corner.
+        press_named(&mut ed, &frame, "file");
+        assert_eq!(ed.open_menu(), Some("file"));
+        assert_eq!(ed.navigator_rect(&frame), Some(nav));
     }
 
     /// Run frames of fingers - `(id, x, y)` in window coordinates - through
