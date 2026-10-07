@@ -756,11 +756,19 @@ fn rows_in(room: Rectangle, row_h: f32) -> usize {
 
 /// A list of `n` rows of `w` x `EDITOR_DROPDOWN_ROW_H` hanging from
 /// `anchor` under the bar: one column where the room holds it, else as
-/// many columns as it takes, the rows shared out evenly; slid to stay in
-/// the room.
+/// many columns as it takes, the rows shared out evenly; where those
+/// columns would leave the room's width, the rows shorten - never under a
+/// finger's `UI_TOUCH_PT` - until the columns the room is wide for hold
+/// them. Slid to stay in the room.
 pub fn hanging_list(anchor: Rectangle, room: Rectangle, n: usize, w: f32) -> Rows {
-    let h = EDITOR_DROPDOWN_ROW_H;
-    let max = rows_in(room, h);
+    let wide = ((room.width / w).floor() as usize).max(1);
+    let (h, max) = if n.max(1).div_ceil(rows_in(room, EDITOR_DROPDOWN_ROW_H)) > wide {
+        let rows = n.max(1).div_ceil(wide);
+        let h = (room.height / rows as f32).clamp(crate::hud::UI_TOUCH_PT, EDITOR_DROPDOWN_ROW_H);
+        (h, if h * rows as f32 <= room.height + 1e-3 { rows } else { rows_in(room, h) })
+    } else {
+        (EDITOR_DROPDOWN_ROW_H, rows_in(room, EDITOR_DROPDOWN_ROW_H))
+    };
     let columns = n.max(1).div_ceil(max);
     let per_column = n.max(1).div_ceil(columns);
     let width = columns as f32 * w;
