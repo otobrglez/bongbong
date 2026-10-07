@@ -1383,6 +1383,27 @@ mod tests {
         assert!(blasted > told, "the tell before the wave: {told} vs {blasted}");
     }
 
+    /// A seat's EMP through the room: one ring on the replica for the one
+    /// press, never two, and the seat's special offline on the replica.
+    #[test]
+    fn a_seats_pulse_reaches_the_replica_once() {
+        let mut rig = Lockstep::start(options(LinkQuality::PERFECT));
+        let patch = crate::simulation::debug::TankPatch { emp_charges: Some(2), ..Default::default() };
+        rig.authority_mut().expect("a round").debug_set_tank(0, &patch).expect("the seat's tank");
+        rig.drive(Intent { fire: true, ..Intent::default() });
+        rig.step(1);
+        rig.drive(Intent::default());
+        let (mut most, mut offline) = (0, false);
+        for _ in 0..30 {
+            rig.step(2);
+            let replica = rig.replica().expect("a replica");
+            most = most.max(replica.emp_pulses.iter().filter(|p| p.owner.slot() == 0).count());
+            offline |= replica.drawable_state().tanks.iter().any(|t| t.slot == 0 && t.offline);
+        }
+        assert_eq!(most, 1, "the press is one ring on the replica");
+        assert!(offline, "the seat's special is offline on the replica");
+    }
+
     /// An enemy's EMP reaches the replica: its crackle on the replica's
     /// tank, then its ring, then the seat it struck drawn disabled.
     #[test]
