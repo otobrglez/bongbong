@@ -148,12 +148,13 @@ tool and the `armory` map.
   the falloff (their velocity, the ball's own physics after).
 - **Fish** in a lake the wave crosses dart away from the front
   (`fish::scares`, read from the waves on the field), and the "at 11": a
-  fish the front passes within `sonic_fish_throw_px` (40) of dry ground,
-  along the line from the pivot, is thrown onto the bank and flops there for
-  `sonic_fish_flop_seconds` (2.5) before hopping back into the nearest deep
-  cell - at most `sonic_fish_throw_max` (3) a wave, nearest the shore
-  first. Presentation only (`fish.rs`), hashed, nothing on the wire: a
-  replica throws the same fish off the same wave.
+  fish the front passes within `sonic_fish_throw_px` (40) of dry ground on
+  the map, along the line from the pivot, is thrown onto the bank and flops
+  there for `sonic_fish_flop_seconds` (2.5) before hopping back to where it
+  was - at most `sonic_fish_throw_max` (3) a wave, nearest the pivot first.
+  Never past the map's edge: a lake painted to it runs on, and the margin
+  past an arena's field is no bank. Presentation only (`fish.rs`), hashed,
+  nothing on the wire: a replica throws the same fish off the same wave.
 - **Trees** stop nothing; their crowns lean away from the pivot for a moment
   as the front passes (cosmetic, `sonic::tree_push`, added to
   `obstacle::tree_lean` at draw time).
@@ -193,17 +194,17 @@ screen hurts nobody.
 | File | What |
 |---|---|
 | `src/sonic.rs` (new) | The weapon's headless half. `SonicCone` (`cast` from a pivot and facing over a `Block` per cell - open, a wall, glass - and a `Floor` per cell, inside the field; `rays`, the `cells` it entered in entry order with their floor, the glass `panes` it struck; `reaches(p)`, `entered(cell)`, `nearest_reached(points)`, `longest`), `SonicWave` (cone, owner, age, `swept` radius, `struck` hulls, a seed), `falloff`, `shove_speed(mass_factor, d)`, `skid_friction`, `skid_seconds`, `slide(v, grip)` (the skid's slide, what the AI predicts with), `drum_landing`, `tree_push`, the composers `wave_arcs`, `wave_dust` and `tell_arcs` (pure, `pyro::Shape`s), the `STONE` ramp, `module_cell` |
-| `src/simulation/sonic.rs` (new) | The world half. `fire_sonic` (called from the dispatch arm), `resolve_sonic` (casts the frame's presses into waves), `tick_sonic_waves(f, live)` (the strike walk), `knock` (the shove and skid any later weapon may use), `throw_drum`, `sonic_show` (the cosmetic half - the wave on the list, the ripple, the dish's flash - which a replica's `SonicBlast` and a client's press call too), `tick_sonic_pictures` (a replica's waves and flattened grass), `Game::hammer_senses` with `lands_in_trouble` (what the AI is handed, §4), `seat_sonic`, `swap_spawn_special` (§3.4), `debug_spawn_pickup` |
+| `src/simulation/sonic.rs` (new) | The world half. `fire_sonic` (called from the dispatch arm), `resolve_sonic` (casts the frame's presses into waves), `tick_sonic_waves(f, live)` (the strike walk), `knock` (the shove and skid any later weapon may use), `throw_drum`, `sonic_show` (the cosmetic half - the wave on the list, the ripple, the dish's flash - which a replica's `SonicBlast` and a client's press call too), `tick_sonic_pictures` (a replica's waves and flattened grass), `Game::hammer_senses` with `lands_in_trouble` and `closer_spots` (what the AI is handed, §4), `seat_sonic`, `swap_spawn_special` (§3.4), `debug_spawn_pickup` |
 | `src/simulation/sonic_tests.rs` (new) | The scenario tests (§10) |
 | `src/simulation/weapons.rs` | The `ActiveWeapon::SonicHammer` dispatch arm |
-| `src/simulation/mod.rs` | `Frame::pending_sonic`; `Game::{sonic_waves, grass_flat, seat_knock}`, `cover_cells`; the phase calls (`resolve_sonic` and `tick_sonic_waves` after `resolve_flames`, before `step_world`, so the shoves land in this tick's solver step; `tick_sonic_waves(f, false)` on the end screen); the tell in `enemy_phase` (§3.2); the skid in `drive_tank_with`, `tick_timers` and `predict_seat`; `accept_seat_pose`'s knock allowance; the spawn swap in `roll_enemy_tank` (§3.4); the `pickup_phase` arm; `tick_presentation` (waves, tells, skids, frog stuns, flattened grass); `Event::{SonicBlast, TellStarted}`, `Event::Hit::cause` (`HitCause`), `Event::Shoved::skid`, `Event::DrumLaunched::drum` |
+| `src/simulation/mod.rs` | `Frame::pending_sonic`; `Game::{sonic_waves, grass_flat, seat_knock}` (`SeatKnock`, §3.6), `cover_cells`; the phase calls (`resolve_sonic` and `tick_sonic_waves` after `resolve_flames`, before `step_world`, so the shoves land in this tick's solver step; `tick_sonic_waves(f, false)` on the end screen); the tell in `enemy_phase` (§3.2); the skid in `drive_tank_with`, `tick_timers` and `predict_seat`; `accept_seat_pose`'s knock allowance; the spawn swap in `roll_enemy_tank` (§3.4); a hammer hunter woken and leashed as any tank (`field::mind`'s `hunting`, `TankSnapshot::leashed`), `TankSnapshot::guarding`; the `pickup_phase` arm; `tick_presentation` (waves, tells, skids, frog stuns, flattened grass); `Event::{SonicBlast, TellStarted}`, `Event::Hit::cause` (`HitCause`), `Event::Shoved::skid`, `Event::DrumLaunched::drum` |
 | `src/tank.rs` | `sonic_ammo`, `ActiveWeapon::SonicHammer` (`name`, `full_load`, `tell_seconds`), `SPECIAL_WEAPONS`, `Tank::special` (§3.0), `Windup`/`Tank::windup` (§3.2), `weapon_ammo`/`take_weapon`/`empty_stock`/`wants_pickup`, `Tell`/`tell`, `skid`/`skid_speed`, `sonic_flash`/`kick_sonic`, the module's cell in `module_cols` |
 | `src/pickup.rs` | `PickupKind::SonicHammer` (`sonic_hammer`, row 13, its ink, spills rather than cooks off), `PickupKind::{name, parse, weapon}` |
 | `src/obstacle.rs` | `Material::blocks_sound`, `Material::breaks_by_sound` |
-| `src/ai.rs` | The special hook (§3.1): `SpecialSense`, `HammerSense`/`HammerAim`, `SpecialUse`, `special_rule` / `hammer_rule`, `act_special`, `generic_fire`, the `special` tier, the `seek_special` tier, the stuck and breach clocks paused under a skid, `AiSnapshot::special` |
+| `src/ai.rs` | The special hook (§3.1): `SpecialSense`, `HammerSense`/`HammerAim`, `SpecialUse`, `special_rule` / `hammer_rule`, `act_special`, `generic_fire`, the `special` tier, the `seek_special` tier, the stuck and breach clocks paused under a skid, `AiSnapshot::special`, `Ai::holds_beat` |
 | `src/frog.rs` | `stun_timer`, `stun`, `is_stunned`, the gates in `can_hop`/`can_attack`, `stun_marks` |
 | `src/grass.rs` | `GrassTuft::pinned`, `pin` |
-| `src/fish.rs` | The waves among the scares; `Flop` (the fish on the bank) |
+| `src/fish.rs`, `src/ground.rs` | The waves among the scares; `Flop` (the fish on the bank), never off the map (`WaterLayout::contains`) |
 | `src/pyro.rs` | `Shape::Arc`, `block_arc` (shared, §5) |
 | `src/indicators.rs` | `TankView::windup`, `ArrowKind::Windup`, the hit arc from a sonic blast |
 | `src/hud.rs`, `src/render/hud.rs` | `HUD_SONIC_COLOR`, the `weapon_color`/`weapon_pickup` arms; the weapon slot's readout drawn by one function (`draw_weapon_readout`), which a weapon whose readout is a gauge or words replaces by its weapon |
@@ -216,7 +217,7 @@ screen hurts nobody.
 | `src/simulation/present.rs` | `Game::{draw_press_show, seat_kick}` |
 | `src/simulation/replica.rs` | `DrawableTank::{tell, skid}`, `DrawableFrog::stunned` |
 | `src/simulation/debug.rs`, `src/devserver.rs` | `spawn_pickup`, `set_tank`'s `sonic_ammo`, the snapshot's `sonic`, `tell`, `skid`, `stun` and `sonic_waves` |
-| `src/bin/probe.rs` | `--crate`, the tank line's `sonic=`, the holds |
+| `src/bin/probe.rs` | `--crate`, the tank line's `sonic=`, the holds, a guard on its beat no never-arrived, a hold just ended no stale-start (§11) |
 | `src/editor/mod.rs` | `Tool::Pickup(PickupKind::SonicHammer)` (`sonic_hammer`) |
 | `src/editor/chrome.rs` | The folded TOOLS palette: a category with more tools than the room is wide for (PICKUP's fourteen on a phone) runs on into a second row, and where the rows would not fit the room's height the cells shrink, never under `UI_TOUCH_PT` |
 | `src/map.rs`, `maps/armory.toml` | The armory (§3.5) in `SHIPPED_MAPS` |
@@ -416,7 +417,9 @@ pub fn windup(&self) -> Option<Windup>;
   arrow, put with the teammates, frogs and volcanoes - never merged, never
   left out past `indicator_max_arrows`. A tell also reveals its tank as
   firing does (`Awareness::fired`). The arrow is drawn in the weapon's HUD
-  accent (`hud::weapon_color`), rimmed near-black, blinking at
+  accent (`hud::weapon_color`), rimmed hostile red as the enemy frog's is -
+  an accent can be a seat's own colour (the hammer's sky blue is player
+  1's), and this is no teammate - blinking at
   `indicator_pulse_hz * (1 + 2 * progress)`.
 
 ### 3.3 Online: the shooter's press is drawn at once
@@ -577,7 +580,7 @@ the general case:
   | `%` oil trail | 22..24,8 | A thrown drum's blast lights it |
   | `w` tall grass | 11..15 x 11..15 | Hide in it; a shout flattens it and shows you |
   | `T` trees | 16,11 and 10,13 | Crowns that sway as the wave passes; stop nothing |
-  | `W` lake | 19..26 x 13..17 | Fish to scatter and throw onto its north bank (row 12) |
+  | `W` lake | 19..26 x 13..17 | Fish to scatter; a shout from the north bank (row 12) by a corner throws the fish by the west or east shore onto that bank (it runs to the map's south edge, past which nothing lands) |
   | `L` lava ford | 32,0..7 | Trouble: what the AI shoves a seat into, and where a seat shoves enemies |
   | `E` enemy tesla | 34,3 | An enemy tower's reach beside the lava: more trouble |
   | `G` enemy gun tower | 34,14 | Trouble on the south-east |
@@ -593,8 +596,9 @@ the general case:
 `knock(physics, f, tank, dir, speed)` (`simulation/sonic.rs`) is the shove
 any later weapon that throws tanks about uses (the gravity well):
 an impulse of `speed` along `dir` scaled by the mass as above, then
-`Tank::skid` and `Tank::skid_speed` (the hull's speed after it, for the
-pose validator). `drive_tank_with` reads `skid` (the skid model of §1);
+`Tank::skid` and `Tank::skid_speed` (the hull's speed after it against
+the ground's flow, which the skid's length is worked out from).
+`drive_tank_with` reads `skid` (the skid model of §1);
 `tick_timers` counts it down for every tank, and `predict_seat` for the
 sandbox's seat. Online:
 
@@ -606,12 +610,17 @@ sandbox's seat. Online:
 - `TankState::skid` (tenths) carries every hull's skid, so a stage-2
   replay skids where the room does and a replica's `fx` puts dust off a
   skidding hull.
-- The validator (`accept_seat_pose`) allows a shoved hull its speed: a
-  shove logged for an owned seat sets `Game::seat_knock[seat]` to its speed
-  and the frame `POSE_KNOCK_GRACE_TICKS` (60, server policy beside
-  `POSE_REACH_SLACK_PX`) past the skid's end, and the reach uses
-  `max(effective_speed, knock speed)` until then - the client's skid starts
-  a link's delay after the room's.
+- The validator (`accept_seat_pose`) allows a knocked hull the knock and
+  no more (`SeatKnock`): a knock logged for an owned seat lets each pose
+  go the knock's speed further than the chassis's reach, and all of them
+  together no further than the knock's slide on the slipperiest ground
+  (`sonic::slide` at `sonic_skid_grip_floor`, plus `POSE_REACH_SLACK_PX`),
+  until `POSE_KNOCK_GRACE_TICKS` (60, server policy) past the skid's end -
+  the client's skid starts a link's delay after the room's. Two knocks add
+  their slides; one that lapsed adds nothing. The allowance is set only by
+  a knock the room itself logged for that seat, so a client cannot claim
+  one, and spending it is what a modified client could do with it: one
+  slide's worth of extra ground, never a window of free speed.
 
 ## 4. AI
 
@@ -621,15 +630,17 @@ runs once per frame in `enemy_phase`, before the collect pass, when any
 live enemy carries the hammer; it gathers the cells that stop sound, the
 cover cells, the drums, every live tank, the enemy towers and their reach,
 the hunter's quarry and the seats (position, hull points, mass factor,
-concealed) once, and gives each hammer tank a `HammerSense`:
+concealed) once, hands out the closers' spots (`closer_spots`), and gives
+each hammer tank a `HammerSense`:
 
 ```rust
 pub struct HammerSense {
     /// One per facing, `Dir::index` order: what a blast that way would do.
     pub aims: [HammerAim; 4],
-    /// This tank is one of the `sonic_ai_closers` (2) hammer tanks nearest
-    /// the seat it fights (ties on slot): one that closes in.
-    pub closer: bool,
+    /// Where this tank closes in to, one of the `sonic_ai_closers` (2)
+    /// hammer tanks nearest the seat it fights (`closer_spots`, below);
+    /// `None` for every other tank.
+    pub spot: Option<Position>,
 }
 pub struct HammerAim {
     pub trouble: Option<u8>,  // a seat the shove would land in trouble
@@ -669,15 +680,18 @@ the wave's run out), so one driving into the cone is not shouted at either.
       skid_friction)` at the seat's footing (`sonic::slide`), along the line
       from this tank through the seat, sampled every `SONIC_TROUBLE_STEP_PX`
       (8) and cut at the first cell that stops a hull (a tile, deep water,
-      deep lava) or the field's edge. Trouble at a sample: heat at or over
-      `heat_hurt_from` (`Game::heat_at` - lava and its banks); a burning
-      ground cell (`Game::fires`); an ooze puddle (`Game::ooze`); inside a
-      standing enemy tower's reach (`TowerKind::range`); or lined up for
-      another live enemy (not this one): on its row or column within
-      `enemy_fire_align_px`, inside `enemy_attack_range`, with the line of
-      sight clear (`Terrain::line_of_sight`) and that enemy inside the
-      landing point's sight box. The trouble cells (all but the lanes, which
-      depend on the shooter) are gathered once per frame.
+      deep lava) or the field's edge. Trouble on the way, at any sample:
+      heat at or over `heat_hurt_from` (`Game::heat_at` - lava and its
+      banks), a burning ground cell (`Game::fires`), an ooze puddle
+      (`Game::ooze`). Trouble where the slide comes to rest, when the seat
+      does not stand in it already: inside a standing enemy tower's reach
+      (`TowerKind::range`), or lined up for another live enemy (not this
+      one) - on its row or column within `enemy_fire_align_px`, inside
+      `enemy_attack_range`, with the line of sight clear
+      (`Terrain::line_of_sight`) and that enemy inside the resting point's
+      sight box. A slide across a lane leaves the seat in none, and a seat
+      already in one is not shoved "into" it - that is the breaker's arm,
+      at the breaker's range, not a reason to shout from the rim.
    2. **Throw a drum** (`"drum"`): a drum in the cone whose
       `sonic::drum_landing` - the simulation's own function - lands on a
       seat's cell.
@@ -696,16 +710,27 @@ the wave's run out), so one driving into the cone is not shouted at either.
       blasts, then shells.
 4. **Hold for the timer**: a fire arm that matched while `Ai::fire_timer`
    runs holds facing it instead (`act_special`).
-5. **Close in**: a closer (`HammerSense::closer`) under
+5. **Close in**: a closer (`HammerSense::spot` set) under
    `enemy_flee_damage`, not a guard that holds, whose seat is alive,
    within `attack_range` and in its line of sight (not hidden from it),
-   heads for its spot (`Brain::close_spot`): on the line from the seat out
-   to its slot of the seat's engagement ring, drawn in to
-   `sonic_ai_breaker_px` - or as near that as an open cell allows - and
-   holds there facing the seat (`Hold`, `why: "close"`), where the breaker
-   arm takes over. Two closers per seat surround it from their own slots
-   rather than pile onto it; the rest keep their ring slots by the attack
-   tier and use the hammer only when an arm above offers.
+   heads for its spot and holds there facing the seat (`Hold`, `why:
+   "close"`), where the breaker arm takes over. The spots are the
+   simulation's (`sonic::closer_spots`): the `sonic_ai_closers` (2) hammer
+   tanks fighting a seat nearest it, healthy enough to close in (ties on
+   slot), are its closers; the seat's spots are the four on its row and
+   column `sonic_ai_breaker_px` less half a cell out, and a spot holds
+   where a hull can be routed (`Grid::usable`), a blast from it at the
+   seat reaches the seat's hull within `sonic_ai_breaker_px`, no tank but a
+   closer stands on it and no fellow enemy but a closer stands in that
+   blast's cone. In slot order each closer takes the spot that holds
+   nearest it, reachable from where it stands (`Grid::connected`), where
+   neither its blast nor that of a closer before it would reach the
+   other's hull: beside the first where the hulls are small enough, across
+   the seat from it otherwise. So two close in square on the seat - its
+   centre in the middle of their cones - never in each other's way, and a
+   closer finds a spot or is left to the tree. The rest keep their ring
+   slots by the attack tier and use the hammer only when an arm above
+   offers.
 6. Otherwise `None`: the tree goes on (attack still lines up and settles
    but never fires the hammer; no sniping - `can_snipe_player` is false
    with a weapon its rule owns -; chase, patrol and the seek tiers as
@@ -874,7 +899,8 @@ enemies' group:
 | `sonic_flash_seconds` | 0.2 | 0..=2 | The dish's firing cell. |
 | `sonic_tree_lean_px` | 4 | 0..=16 | How far a crown leans as the front passes. |
 | `sonic_fish_throw_px`, `sonic_fish_throw_max`, `sonic_fish_flop_seconds` | 40, 3, 2.5 | 0..=200, 0..=16, 0..=20 | A fish this close to dry ground along the wave's line is thrown onto the bank, at most this many a wave, flopping this long. |
-| `sonic_ai_breaker_px` | 112 | 0..=480 | An enemy shouts at a seat this close in its cone, whatever lies behind it. |
+| `sonic_ai_breaker_px` | 112 | 0..=480 | An enemy shouts at a seat this close in its cone, whatever lies behind it; a closer's spot stands this less half a cell off the seat. |
+| `sonic_ai_closers: i32` | 2 | 0..=8 | How many hammer tanks close in on one seat, the nearest first; the rest hold their slots of its ring. |
 | `sonic_ai_glass_after_seconds` | 0.1 | 0..=5 | How long an enemy drives into glass before it shouts it down (the breach's `enemy_breach_after_seconds` for every other tile). |
 | `sonic_ai_fire_interval` | 2.5 | 0.1..=10 | Seconds between an enemy's decisions to shout. |
 | `enemy_special_weapon_sonic_share` (`enemies`, `@ Restart`) | 0 | 0..=1 | The share of special-carrying enemies that spawn with the sonic hammer instead, decided by a hash of the spawn point and the slot - never the round's RNG - so at 0 nothing changes. |
@@ -973,7 +999,11 @@ seat at cell (3, 6) facing east, parked enemies placed by hand):
   obeyed after), `the_predicted_slide_is_the_skid` (`sonic::slide`
   against the stepped round), `ice_lengthens_the_skid` (`1 /
   sonic_skid_grip_floor` within 0.3), `a_shoved_enemy_is_not_counted_stuck`,
-  `an_owned_hull_is_allowed_its_knock`.
+  `an_owned_hull_is_allowed_its_knock` (the room logs the knock for an
+  owned seat, and the slide past the chassis's reach is taken),
+  `a_knock_allows_its_slide_and_no_more` (`SeatKnock`: a pose its speed
+  past the reach, the poses together the slide and no more, nothing past
+  the grace, a lapsed knock adding nothing).
 - What it meets: `a_lantern_is_broken_and_a_lamp_post_left_standing`,
   `grass_the_wave_crosses_stops_concealing_for_a_while`,
   `a_drum_is_thrown_onto_the_tank_behind_it`,
@@ -996,7 +1026,12 @@ seat at cell (3, 6) facing east, parked enemies placed by hand):
   commander's nudge reaches a tank with no tell, not one in a tell -
   `commanded_intent`), `the_rule_reads_where_the_knock_would_slide_the_seat`
   (an enemy tower past the seat makes it "trouble", none leaves it
-  "breaker"), `hammer_tanks_close_in_round_the_seat_not_onto_it`.
+  "breaker"), `a_seat_already_in_a_lane_is_not_shoved_into_it`,
+  `hammer_tanks_close_in_round_the_seat_not_onto_it`,
+  `closer_spots_stand_square_on_the_seat_out_of_each_others_way` (each on
+  the side nearest it clear of the first's cone - beside it for a small
+  hull, across the seat for a large one -, a third left out, a wall on the
+  only clear side leaving the second none).
 
 `ai::hammer_tests` (the rule on a made-up `HammerSense`):
 `every_arm_fires_the_way_it_names` (trouble, drum, flush, breaker, frog -
@@ -1005,7 +1040,7 @@ each fires facing its way, then holds while `sonic_ai_fire_interval` runs),
 `it_never_fires_where_a_fellow_enemy_stands`,
 `the_generic_tiers_never_fire_the_hammer` (lined up at 200 px: the shells
 tank fires, the hammer tank never),
-`a_closer_closes_in_to_its_slot_drawn_in_and_waits_there`,
+`a_closer_closes_in_to_its_spot_and_waits_there`,
 `a_tell_holds_the_tank_facing_its_way`, `glass_in_its_way_is_shouted_down`.
 
 The sight box: at the defaults the cone's 160 px lies inside every seat's
@@ -1034,9 +1069,12 @@ Shared path and presentation:
   (no spark, ember, smoke or impact burst; the flash and the dust);
   `grass::tests::a_pinned_tuft_lies_flat_until_the_pin_runs_out`;
   `fish::tests::{a_wave_scares_the_fish_it_passes,
-  a_shout_at_the_shore_throws_a_fish_onto_the_bank_and_back}`;
+  a_shout_at_the_shore_throws_a_fish_onto_the_bank_and_back,
+  no_fish_is_thrown_off_the_map}`;
   `indicator_tests::{a_tell_off_the_screen_has_an_arrow_whatever_the_cap,
-  through_the_round_a_sonic_hit_arcs_toward_the_blast}`;
+  through_the_round_a_sonic_hit_arcs_toward_the_blast}` and
+  `picture_tests::every_kind_of_arrow_wears_its_colour` (the wind-up's
+  accent rimmed hostile);
   `devserver::tests::set_tank_arms_the_hammer_and_spawn_pickup_drops_its_crate`
   and the PICKUP category's count (14); `chrome_tests` with the wrapping
   palette; the armory's thumbnail pin and its place in `SUPPORTED_MAPS`;
@@ -1079,6 +1117,17 @@ Wire:
   ammo, so a blast is a trigger pull for `FIRED_RECENTLY_FRAMES`; a tank in
   a tell or a skid is a deliberate hold (`TankSnapshot::{tell, skidding}`),
   not a stall, low progress, jitter or grind.
+- Three more deliberate states, which a pack that shoves an AFK seat about
+  rather than killing it shows only because its rounds outlast the
+  budgets: a guard keeping its beat while the seat is far from its frog
+  (`TankSnapshot::guarding`) is no never-arrived, as a leashed or sleeping
+  tank is not; a hunter carrying the hammer, which fights the seat rather
+  than the frog, is leashed and woken as any tank (`leashed`,
+  `field::mind`); and a hold within the last half second
+  (`HOLD_REACTION_FRAMES`) vetoes stale-start, since a tank that held a
+  firing solution at its spawn until its seat was knocked off the line is
+  reacting, not stale. Each only exempts, and the defaults' recorded counts
+  of both kinds are 0.
 - **The bar**: every crate run within the defaults' ceilings, `offbox-fire`
   0. An exceedance is read round by round from its `ANOMALY` lines; one the
   hammer's own action causes - a tank stranded, spinning, piling up or
@@ -1087,49 +1136,88 @@ Wire:
 ### Results (debug build, seed 1000, the recipes' budgets)
 
 Fixtures: the nine `maps/test/` maps, ten 30 s rounds each. Fields: the
-seven field maps, ten 60 s rounds each. Anomaly totals:
+seven field maps, ten 60 s rounds each. Anomaly totals (kinds at 0 left
+out); mixed is `enemy_special_weapon_chance` 0.5 with
+`enemy_special_weapon_sonic_share` 0.5:
 
 | Sweep | Result | Totals |
 |---|---|---|
 | Fixtures, defaults | pass | border-stuck 4, churn 34, clustering 10, jitter 32, pile-up 6, spin 3 |
 | Fixtures, `--crate` | pass, the same | the fixtures carry no weapon crate, so `--crate` swaps nothing |
-| Fixtures, armed | over on all nine | border-stuck 13, churn 157, clustering 57, jitter 124, low-progress 4, never-arrived 1, pile-up 21, spin 19, stale-start 1, stall 1, tank-grind 5 |
+| Fixtures, mixed | over on four of nine | border-stuck 1, churn 61, clustering 15, jitter 38, pile-up 12, spin 5, tank-grind 1 |
+| Fixtures, armed | over on all nine | border-stuck 16, churn 200, clustering 69, jitter 138, never-arrived 2, pile-up 30, spin 15, tank-grind 1 |
 | Fields, defaults | pass | border-stuck 11, churn 83, clustering 12, jitter 108, pile-up 8, spin 24, wall-grind 1 |
-| Fields, `--crate` | over on two of seven | border-stuck 11, churn 98, clustering 31, jitter 125, never-arrived 1, pile-up 15, spin 26, stall 1, wall-grind 1 |
-| Fields, armed | over on five of seven | border-stuck 26, churn 188, clustering 108, jitter 211, low-progress 5, never-arrived 11, pile-up 77, spin 61, stall 11, tank-grind 21, wall-grind 3 |
+| Fields, `--crate` | over on two of seven | border-stuck 12, churn 96, clustering 30, jitter 137, never-arrived 1, pile-up 17, spin 25, wall-grind 2 |
+| Fields, mixed | pass | border-stuck 15, churn 83, clustering 7, jitter 102, pile-up 6, spin 16, wall-grind 2 |
+| Fields, armed | over on four of seven | border-stuck 21, churn 196, clustering 95, jitter 213, low-progress 5, never-arrived 5, pile-up 69, spin 58, tank-grind 8, wall-grind 4 |
 
 `offbox-fire` is 0 in every sweep. The defaults are the recipes' own,
 unchanged: a round without the hammer runs exactly as before.
 
-**With the crate** two maps go over by one: archipelago's `never-arrived`
-is a guard holding its beat (`guard_holds`, by design) in a round the
-hammer made longer - the AFK seat is shoved about rather than killed, and
-archipelago's rounds last 15.3 s on average against 8.6 s, past the
-guard's arrival budget - and harbor-lights' clustering is 12 against a
-ceiling of 11, a group of four at the enemies' side of the map of which one
-carried the hammer.
+**Why the ceilings are the wrong yardstick for an armed pack.** The
+recipes' ceilings were measured on rounds an AFK seat loses in 4 to 26 s.
+A pack that shoves the seat about rather than killing it keeps the round
+going to the frame cap, and every kind but `invariant` is counted per
+tank per stretch of time, so the same AI over three times the time trips
+them. The fair yardstick is a shells pack over as long: the same sweeps
+with `--mission destroy` (no frog to lose the round by) and
+`player_armor_factor` 0.1 (a seat that outlives the cap), with and
+without the hammer. Totals over the same minutes of play (fixtures 44,
+fields 67 and 70):
 
-**Armed** - every enemy spawning with the hammer - is a stress run that no
-shipped round reaches (`enemy_special_weapon_sonic_share` is 0 and the
-crates stand only in the armory). The rounds last two to three times as
-long (fields: 30 to 42 s against 8 to 26 s), since a pack that shoves
-rather than shoots keeps an AFK seat alive, and its tanks fight close by
-design, which the probe's clustering, pile-up and churn read as crowding.
-What moved on the way, on the armed fixtures:
-
-| AI | stall | never-arrived | churn | jitter | clustering | pile-up |
+| Sweep | spin | stall | stale-start | never-arrived | tank-grind | low-progress |
 |---|---|---|---|---|---|---|
-| One brawler per seat, the rest holding at range (the doc's first rule) | 40 | 9 | 105 | 89 | 47 | 22 |
-| Every hammer tank closing in, a hunter fighting the seat | 7 | 1 | 178 | 165 | 161 | 92 |
-| One closer per seat (`sonic_ai_closers` 1) | 3 | 4 | 144 | 99 | 74 | 39 |
-| **Two closers per seat** (shipped) | 1 | 1 | 157 | 124 | 57 | 21 |
+| Fixtures, shells pack, long | 22 | 0 | 0 | 7 | 12 | 8 |
+| Fixtures, hammer pack, long (as built) | 16 | 5 | 0 | 4 | 9 | 10 |
+| Fixtures, hammer pack, long (review) | 24 | 0 | 0 | 3 | 7 | 8 |
+| Fields, shells pack, long | 44 | 1 | 0 | 1 | 18 | 8 |
+| Fields, hammer pack, long (as built) | 45 | 18 | 0 | 7 | 9 | 4 |
+| Fields, hammer pack, long (review) | 57 | 1 | 0 | 2 | 18 | 9 |
 
-The first rule's statues (hammer tanks standing at range with a weapon
-they could not use, hunters aiming at a frog they could not hurt) are
-gone. What remains is a pack juggling a seat that never moves: two closers
-on its sides shoving it back and forth (churn, jitter) with the rest of the
-pack on the ring round it (clustering, pile-up). How such a pack should
-play is a question for Oto (§12).
+So a pack carrying the hammer strands, stalls and grinds no more than a
+pack of shells over the same time; spins on the field maps run a fifth
+higher (0.81 a minute against 0.66), the closers chasing a seat their
+partner keeps shoving to a new spot. Read round by round (`--log-every
+1` and the AI's tier and arm each frame):
+
+- **The hammer's own bugs, fixed in review.** Every armed stall was a
+  closer holding "close" where it could never fire: at a spot drawn in
+  from its ring slot that stood in a wall's shadow, past a fellow enemy
+  or in the other closer's cone, or that another tank held. Most grinds,
+  low progress and a third of the spins were closers dithering round a
+  spot another tank stood on, backing away from a seat they already stood
+  next to, or crossing the other closer's path. The closers' spots are
+  the simulation's now (§4, `closer_spots`). Armed, before -> after:
+  fixtures spin 19 -> 15, stall 1 -> 0, tank-grind 5 -> 1, low-progress
+  4 -> 0; fields stall 11 -> 0, tank-grind 21 -> 8, spin 61 -> 58.
+- **The probe misreading a deliberate state** (§11 above): never-arrived
+  were guards keeping their beat by the enemy frog (archipelago) and
+  hammer hunters, which fight the seat, read as never leashed (hedge-maze);
+  the one stale-start was a tank holding a firing solution at its spawn
+  until its seat was knocked off the line two frames before the check.
+  Armed fields never-arrived 11 -> 5, the five left the field AI's own
+  in a long round (below).
+- **The tree's own tiers in a long round**, the same in the shells
+  pack's long rounds: chase, flee and patrol loops (flee spins in a dead
+  end, a chaser running north and south beside choke's wall, patrollers
+  on hedge-maze's far side), the attack tier's ring repositioning. About
+  three in four of the remaining spins and nearly every grind and
+  never-arrived are these; the rest are closers following a seat their
+  partner just shoved.
+- **The skid** strands nothing: the stuck and breach clocks stand still
+  while a hull slides, a slide ends at the first wall, and no anomaly
+  read was a hull mid-skid.
+
+What stays over the ceilings with the hammer in play is crowding and
+weaving - churn, jitter, clustering, pile-up - from a pack that fights
+at 100 px rather than 300: two closers on a seat shove it to and fro and
+follow it, the rest stand on its ring. **With the crate** two field maps
+go over as they did as built: archipelago's jitter by one (31) and
+harbor-lights' jitter (34), clustering (12) and one never-arrived, a
+shells tank fighting on the far side through a 48 s round; one or two
+hammer tanks keep the AFK seat alive longer, and the jitter is mostly the
+guard and chase tiers' (the hammer's tier is in six of the 65 jitter
+events on the two maps). How such a pack should play is a question for Oto (§12).
 
 ## 12. Interactions, decisions, what is left out
 
@@ -1202,8 +1290,8 @@ play is a question for Oto (§12).
    two: one brawler left the others standing at range with a weapon they
    could not use (stalls, rounds where a tank never came within range);
    every hammer tank closing in piled them round the seat (clustering and
-   pile-ups doubled); two closers at their own ring slots drawn in measured
-   best (§11). Rejected: letting the
+   pile-ups doubled); two closers measured best (§11), at spots the
+   simulation hands them square on the seat (decision 24). Rejected: letting the
    generic attack fire it at 340 px (wasted), and letting an enemy fire
    shells while it carries it (breaks the one-trigger rule). A visible
    change in how such an enemy plays: while it carries the hammer it is a
@@ -1256,6 +1344,35 @@ play is a question for Oto (§12).
 23. **The crate's blue sits between plasma's teal and the tower pack's
     periwinkle** in the crate row (screenshot in the PR); *For Oto* if it
     reads too close to either.
+24. **A closer's spot is the simulation's, square on the seat** (review):
+    the Brain drew its spot in from its ring slot, which put it on a cell
+    another tank held, behind a wall's shadow, past a fellow enemy or across
+    the other closer's path - the armed runs' stalls (a closer holding
+    "close" where it could never fire), grinds and most of its extra spins.
+    `closer_spots` sees the whole world: it offers only spots from which a
+    blast reaches the seat, with nobody on them or in their cone, and keeps
+    the two closers out of each other's cones (beside each other for small
+    hulls, across the seat for large ones). A seat square in the cone is
+    also the shove a player reads best: straight along a row or a column.
+    Rejected: keeping the ring-slot spot and checking it (it still crosses
+    the other closer's path), and a spot behind the tank on its own bearing
+    (two closers on one side end in each other's cones).
+25. **"Trouble" is where the slide comes to rest** for a lane or a tower's
+    reach (review): a slide across a lane leaves the seat in none, and a
+    seat already in one is not shoved into it - before, a seat lined up for
+    any enemy was "trouble" from the cone's rim, so hammer tanks shouted
+    from 160 px at seats they were only breaking off.
+26. **A knock's allowance is a distance, not a window** (review): the
+    validator gives each pose the knock's speed past the chassis's reach,
+    but all of them together only the knock's slide on the slipperiest
+    ground - a modified client gains one slide's worth of ground per knock
+    the room gave it, never two seconds of free speed - and adds the
+    chassis's own motion to the knock's rather than taking the larger, so a
+    seat knocked while fleeing the shooter is not snapped back.
+27. **The wind-up arrow is the weapon's accent rimmed hostile red**
+    (review): the accent names the weapon, and the red rim, the enemy
+    frog's, says it is no teammate - the hammer's sky blue is player 1's
+    own colour.
 
 ### Not in this PR
 
