@@ -642,7 +642,7 @@ impl Game {
             let speed = d.velocity().length().max(1.0);
             let covered = Self::canopy_over(&trees, Self::hull_of(&tank)).is_some();
             let tree = if trees.is_empty() || covered { None } else { fpv_tree_spot(me, grid, &trees, t.fpv_ai_tree_px) };
-            out.insert(entity, crate::ai::AirThreat { drone: d.ground, eta: dist / speed, may_shoot, covered, tree });
+            out.insert(entity, crate::ai::AirThreat { drone: d.ground, height: d.height, eta: dist / speed, may_shoot, covered, tree });
         }
         out
     }

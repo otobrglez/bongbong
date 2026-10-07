@@ -138,8 +138,10 @@ pub struct FpvSense {
 /// thinks: what its `air` tier answers.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AirThreat {
-    /// The drone's ground point, and its seconds to arrive at its speed.
+    /// The drone's ground point, its height over it, and its seconds to
+    /// arrive at its speed.
     pub drone: Position,
+    pub height: f32,
     pub eta: f32,
     /// This tank stands inside the sight box of the seat that sent it: it
     /// may fire at the drone.
@@ -2782,18 +2784,20 @@ fn build<'a>() -> Node<Brain<'a>> {
             condition(|b: &mut Brain| b.me.is_wreck()),
             action("wreck", |_b: &mut Brain| Status::Success),
         ]),
+        // 1.45. A seat's drone locked on it (`AirThreat`): flak, a tree's
+        // crown, or a break across its line (`act_air`). Not under a tell
+        // or a charge in progress, which commit, as everywhere; nor inside a
+        // danger, which it backs out of first (1.6) - a drone's burst is a
+        // scratch beside what a danger holds.
+        sequence(vec![
+            condition(|b: &mut Brain| b.ai.air_threat.is_some() && b.me.windup().is_none() && b.danger_here().is_none()),
+            action("air", act_air),
+        ]),
         // 1.5. The special carried has a use of its own this tick
         // (`special_rule`): a tell holding, a blast to fire, a close-range
         // weapon to bring to bear. Above flee: a hurt tank shoving away the
         // seat in its face is the use (the rule offers a healthy tank alone
         // the approach).
-        // 1.45. A seat's drone locked on it (`AirThreat`): flak, a tree's
-        // crown, or a break across its line (`act_air`). Under a tell or a
-        // charge in progress, which commit, as everywhere.
-        sequence(vec![
-            condition(|b: &mut Brain| b.ai.air_threat.is_some() && b.me.windup().is_none()),
-            action("air", act_air),
-        ]),
         sequence(vec![
             condition(|b: &mut Brain| special_rule(b).is_some()),
             action("special", act_special),
@@ -3186,11 +3190,18 @@ fn act_air(b: &mut Brain) -> Status {
         b.intent.face = Some(face);
         b.ai.commit(face);
         b.intent.move_dir = None;
+        // The bullets strike the drone's column, from its shadow up to its
+        // body (`air::AirTarget::strike_box`): on the line is the gun line
+        // crossing that column, or passing within the tolerance of it.
         let to = threat.drone - me;
+        let top = Position::new(to.x, to.y - threat.height);
         let line = face.vec();
-        let along = to.x * line.x + to.y * line.y;
-        let across = Position::new(to.x - line.x * along, to.y - line.y * along).length();
-        b.intent.fire = along > 0.0 && to.length() <= t.fpv_ai_flak_range_px && across <= t.fpv_ai_flak_align_px;
+        let along = |p: Position| p.x * line.x + p.y * line.y;
+        let side = |p: Position| p.x * line.y - p.y * line.x;
+        let (low, high) = (side(to), side(top));
+        let across = if low * high <= 0.0 { 0.0 } else { low.abs().min(high.abs()) };
+        let ahead = along(to).max(along(top)) > 0.0;
+        b.intent.fire = ahead && to.length() <= t.fpv_ai_flak_range_px && across <= t.fpv_ai_flak_align_px;
         b.ai.air_why = Some("flak");
         return Status::Success;
     }

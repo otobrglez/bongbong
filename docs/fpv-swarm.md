@@ -740,16 +740,21 @@ nearest the tree and from there straight at the tree's centre until its
 hull is under the crown, against the trunk if need be.
 
 The `air` tier (1.45, after the wreck check, before `special`):
-`condition(b.ai.air_threat.is_some() && b.me.windup().is_none())`,
-`action("air", act_air)` - a tell or a charge in progress commits, as
-everywhere; anything else is dropped for the drone. `act_air`, in order:
+`condition(b.ai.air_threat.is_some() && b.me.windup().is_none() &&
+b.danger_here().is_none())`, `action("air", act_air)` - a tell or a charge
+in progress commits, as everywhere, and a tank inside a danger backs out of
+it first (the `dodge` tier): a drone's burst is a scratch beside a charging
+rail's lane or a strike's circle. Anything else is dropped for the drone. `act_air`, in order:
 
 1. **Flak**: it carries an online minigun and `may_shoot` - it faces the
    drone (`Dir::toward` its ground point), holds still and holds the
    trigger while the drone is ahead, within `fpv_ai_flak_range_px` (192)
-   and its ground point within `fpv_ai_flak_align_px` (20) of the facing's
-   line (`"flak"`). The minigun's own bursts and cooldown pace it. No
-   `shot_at_seat`: a drone is not a seat.
+   and its column - from its shadow up to its body, what a bullet strikes
+   (§3.3) - within `fpv_ai_flak_align_px` (20) of the facing's line
+   (`"flak"`): a drone crossing the line north of the hull is still in the
+   bullets' way, one whose shadow is on the line but whose body is not is
+   not. The minigun's own bursts and cooldown pace it. No `shot_at_seat`:
+   a drone is not a seat.
 2. **Under the crown**: `covered` - stand (`"canopy"`). The drone loses its
    lock the tick the hull gets there.
 3. **Into the trees**: a `tree` - steer to its cell on foot
@@ -1005,7 +1010,7 @@ in `enemies`:
 | `fpv_ai_cover_px` | 160 | 0..=480 | How far it looks for cover to launch from. |
 | `fpv_ai_cover_seconds` | 4 | 0.5..=20 | How long it keeps a cover spot before looking again. |
 | `fpv_ai_flak_range_px` | 192 | 0..=600 | How near a drone diving at an enemy with a minigun has to be before it fires at it. |
-| `fpv_ai_flak_align_px` | 20 | 0..=64 | How far off its facing's line the drone may be. |
+| `fpv_ai_flak_align_px` | 20 | 0..=64 | How far off its facing's line the drone's column may be. |
 | `fpv_ai_tree_px` | 160 | 0..=480 | How far an enemy looks for a tree to hide under from a drone. |
 | `fpv_ai_break_px` | 112 | 0..=480 | With no tree and no minigun, how near the drone is before it breaks across its line. |
 | `tesla_air_gap_seconds` (`towers`) | 0.5 | 0..=10 | Seconds between two of a tesla coil's arcs at drones. |
@@ -1472,7 +1477,8 @@ the AI tiers its tank ran over the frames before):
     carries drones.
 14. **The reaction is flak, then a tree, then a break across the line**, in
     a tier of its own above the special tier that gives way to a tell or a
-    charge in progress (those commit).
+    charge in progress (those commit) and to a danger the tank stands in
+    (it backs out of that first).
 15. **The press is drawn at once and eased onto the room's timeline;
     everything after the climb is the room's.** The climb runs a little slow
     for the lead plus a quarter second and hands over at equal age, so no

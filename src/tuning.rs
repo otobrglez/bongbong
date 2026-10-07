@@ -1218,7 +1218,8 @@ tunables! {
         /// How near a drone diving at an enemy with a minigun has to be
         /// before it fires at it.
         fpv_ai_flak_range_px: f32 = 192.0 in 0.0 ..= 600.0;
-        /// How far off its facing's line the drone may be.
+        /// How far off its facing's line the drone's column - from its
+        /// shadow up to its body, what a bullet strikes - may be.
         fpv_ai_flak_align_px: f32 = 20.0 in 0.0 ..= 64.0;
         /// How far an enemy looks for a tree to hide under from a drone.
         fpv_ai_tree_px: f32 = 160.0 in 0.0 ..= 480.0;
