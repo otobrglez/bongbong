@@ -1479,6 +1479,12 @@ impl Ai {
         self.retreating
     }
 
+    /// Whether its last think kept a guard's beat (`Role::Guard`'s tier):
+    /// the seat it would fight is far from the frog it guards.
+    pub(crate) fn holds_beat(&self) -> bool {
+        self.last_action == Some("guard")
+    }
+
     /// True while this tank is still reacting to a recent hit (see
     /// `notify_hit`/`ENEMY_HIT_ALERT_SECONDS`) - used by `Game::update`'s
     /// engagement-slot assignment so a hit-alerted tank outside normal view

@@ -128,6 +128,9 @@ const BRAKE_HOLD_FRAMES: u32 = 18;
 // window closes: a tank that drove off and wandered back is not stale.
 const STALE_START_FRAMES: u32 = 120; // 2s
 const STALE_START_EPS: f32 = 5.0; // px
+// A deliberate hold this recent still vetoes stale-start: the frames a tank
+// takes to react once its firing solution is gone.
+const HOLD_REACTION_FRAMES: u32 = 30; // 0.5s
 // After the stale-start window, a tank sitting near-zero speed for this many
 // consecutive frames (while the round is still Playing and it isn't a
 // wreck) is flagged as stalled out mid-round.
@@ -811,11 +814,14 @@ struct TankTrack {
     trail: VecDeque<(u32, Position)>,
     trail_path_len: f32,
     // --- deliberate-hold detection (see FIRED_RECENTLY_FRAMES) ---
-    // Last frame's (shells, minigun, plasma, laser, missiles) ammo, to spot
-    // a trigger pull as any pool decreasing; None until the first frame.
+    // Last frame's (shells, minigun, plasma, laser, missiles, sonic) ammo,
+    // to spot a trigger pull as any pool decreasing; None until the first
+    // frame.
     prev_ammo: Option<(i32, i32, i32, i32, i32, i32)>,
     // Frame of the most recent detected shot, if any.
     last_fire_frame: Option<u32>,
+    // Frame of the most recent deliberate hold (`deliberate_hold`), if any.
+    last_hold_frame: Option<u32>,
     // --- contact metrics (wall-grind / bump-rate / low-progress) ---
     grind_frames: u32,
     grind_flagged: bool,
@@ -957,6 +963,7 @@ impl TankTrack {
             trail_path_len: 0.0,
             prev_ammo: None,
             last_fire_frame: None,
+            last_hold_frame: None,
             grind_frames: 0,
             grind_flagged: false,
             tank_grind_frames: 0,
@@ -1240,13 +1247,20 @@ fn check_anomalies(
         }
         track.prev_ammo = Some(ammo);
         let holding = track.deliberate_hold(frame, tank, player_snap);
+        if holding {
+            track.last_hold_frame = Some(frame);
+        }
 
         // Stale-start: never got clear of spawn within STALE_START_FRAMES
         // of coming onto the field.
         if age <= STALE_START_FRAMES {
             track.max_spawn_dist = track.max_spawn_dist.max(pos.distance_to(track.spawn_pos));
         }
-        if !track.stale_flagged && age == STALE_START_FRAMES && !holding {
+        // A tank that held a firing solution at its spawn until a moment
+        // ago - the seat it held on was knocked off its line, say
+        // (docs/sonic-hammer.md "Probe") - is reacting, not stale.
+        let held_lately = track.last_hold_frame.is_some_and(|f| frame - f <= HOLD_REACTION_FRAMES);
+        if !track.stale_flagged && age == STALE_START_FRAMES && !holding && !held_lately {
             if track.max_spawn_dist < STALE_START_EPS {
                 report(
                     heat,
@@ -2083,8 +2097,11 @@ fn run_round(
         // On a field map an enemy that nothing has called to the fight -
         // asleep, or keeping to its home leash with no alert - is not
         // headed for the player at all, so not arriving is no routing
-        // failure (docs/large-maps-follow-camera.md section 12).
-        if tank.asleep || tank.leashed {
+        // failure (docs/large-maps-follow-camera.md section 12); nor is a
+        // guard keeping its beat while the seat is far from its frog, which
+        // a round outlasting the budget shows (an AFK seat a sonic hammer
+        // pack shoves rather than kills, docs/sonic-hammer.md "Probe").
+        if tank.asleep || tank.leashed || tank.guarding {
             continue;
         }
         let budget = NAV_GRACE_SECONDS + NAV_STRETCH_MAX * track.ideal_seconds;

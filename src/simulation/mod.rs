@@ -3447,7 +3447,10 @@ impl Game {
             // a branch that takes a tank's thinking away does it here,
             // before the field map's own choice.
             let think_dt = if field {
-                let hunting = ai.role == Role::Hunter && quarry.is_some();
+                // A hunter carrying a weapon its own rule fires fights the
+                // seat rather than the frog (`target_of`), so it is woken
+                // and leashed as any other tank is.
+                let hunting = ai.role == Role::Hunter && quarry.is_some() && crate::ai::generic_fire(tank.active_weapon());
                 match field::mind(ai, tank.position, tank.owner_slot(), &anchors, view_range, hunting, frame, f.dt) {
                     field::Mind::Think(dt) => dt,
                     idle => {
@@ -4840,8 +4843,9 @@ impl Game {
                             ai.field.alert.is_none()
                                 && !ai.field.called
                                 && !ai.is_hit_alerted()
-                                && !(ai.role == Role::Hunter && quarry)
+                                && !(ai.role == Role::Hunter && quarry && crate::ai::generic_fire(tank.active_weapon()))
                         }),
+                    guarding: ai.is_some_and(Ai::holds_beat),
                 }
             })
             .collect()
@@ -4926,9 +4930,14 @@ pub struct TankSnapshot {
     /// holds still and thinks nothing, by design. Always false on an arena.
     pub asleep: bool,
     /// A field map's enemy with nothing calling it to the fight - no
-    /// alert, no call, no recent hit - so it keeps to its home leash
-    /// rather than heading for a seat. Always false on an arena.
+    /// alert, no call, no recent hit, no frog it hunts - so it keeps to
+    /// its home leash rather than heading for a seat. Always false on an
+    /// arena.
     pub leashed: bool,
+    /// A guard keeping its beat by its frog while the seat it would fight
+    /// is far from it (`Role::Guard`, `Ai::holds_beat`): staying put, by
+    /// design.
+    pub guarding: bool,
 }
 
 /// Turn an intent into hull rotation plus a mass-aware impulse nudging the
