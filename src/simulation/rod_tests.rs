@@ -729,3 +729,77 @@ fn an_enemy_never_calls_on_a_tower_whose_circle_holds_a_seat_off_its_box() {
     assert!(beside.x - (tower_at.x - 352.0) > tuning().sight_box_half_px().0, "the seat off the caller's box");
     assert!(!run(beside).contains(&tower), "with a seat by it, from off that seat's box, it is not");
 }
+
+/// One caller per target, but only a caller that can call: a lower slot
+/// still reloading leaves the camper to the rod tank after it rather than
+/// keep it from calling (`Game::rod_senses`).
+#[test]
+fn a_reloading_rod_tank_leaves_its_target_to_the_next() {
+    let mut game = round("");
+    with_tank_mut(&game.world, seat(&game), |t| t.disarm());
+    let mut armed = Vec::new();
+    for at in [crate::map::cell_to_world(11, 6), crate::map::cell_to_world(11, 10)] {
+        let slot = game.debug_spawn_enemy(at, Some(1), Some(Role::Player)).expect("spawns");
+        let enemy = game.tank_entity_by_slot(slot).expect("exists");
+        with_tank_mut(&game.world, enemy, |t| {
+            t.shells_ammo = 0;
+            t.disarm();
+            t.take_weapon(ActiveWeapon::RodFromGod);
+            t.speed_scale = 0.0;
+        });
+        armed.push((slot, enemy));
+    }
+    // The first still reloading for half a minute.
+    with_tank_mut(&game.world, armed[0].1, |t| t.fire_cooldown = 30.0);
+    let mut callers = Vec::new();
+    for _ in 0..60 * 6 {
+        for e in step(&mut game, false) {
+            if let Event::RodCalled { slot, cell, .. } = e {
+                callers.push((slot, cell));
+            }
+        }
+        if !callers.is_empty() {
+            break;
+        }
+    }
+    assert_eq!(callers, vec![(armed[1].0, (3, 6))], "the second calls on the camper");
+}
+
+/// A rod hunter calls on its quarry, the frog standing still beside it,
+/// only from outside the circle: never on its own (`Game::rod_senses`).
+#[test]
+fn a_rod_hunter_calls_on_its_quarry_from_outside_the_circle() {
+    let mut game = round_as("cells.\"16,12\" = { kind = \"frog\" }\n", Mission::Protect);
+    let s = seat(&game);
+    with_tank_mut(&game.world, s, |t| t.disarm());
+    // The seat far off, out of every box: the frog is the hunter's pick.
+    game.place_tank(s, crate::map::cell_to_world(32, 1), Some(0.0)).unwrap();
+    let frog = game.frog.expect("a frog");
+    let at = with_frog(&game.world, frog, |f| f.position);
+    // Stunned, so it does not hop away from the hunter beside it.
+    with_frog_mut(&game.world, frog, |f| f.stun(60.0));
+    let slot = game.debug_spawn_enemy(Position::new(at.x + 56.0, at.y), Some(1), Some(Role::Hunter)).expect("spawns");
+    let hunter = game.tank_entity_by_slot(slot).expect("exists");
+    with_tank_mut(&game.world, hunter, |t| {
+        t.shells_ammo = 0;
+        t.disarm();
+        t.take_weapon(ActiveWeapon::RodFromGod);
+    });
+    let t = tuning();
+    let mut called = None;
+    for _ in 0..60 * 12 {
+        for e in step(&mut game, false) {
+            if let Event::RodCalled { slot: by, cell, .. } = e
+                && by == slot
+            {
+                called = Some((cell, with_tank(&game.world, hunter, |tk| tk.position)));
+            }
+        }
+        if called.is_some() {
+            break;
+        }
+    }
+    let (cell, from) = called.expect("the hunter called on its quarry");
+    let c = crate::map::cell_to_world(cell.0, cell.1);
+    assert!(from.distance_to(c) > t.rod_kill_radius_px + t.rod_ai_friend_margin_px, "from outside the circle: {from:?} -> {c:?}");
+}

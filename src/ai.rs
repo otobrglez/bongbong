@@ -1419,6 +1419,12 @@ impl Ai {
         self.special_why == Some("stand-off")
     }
 
+    /// Whether its fire timer has run out: a rod tank still waiting on it
+    /// takes no target from the tanks after it (`Game::rod_senses`).
+    pub(crate) fn fire_ready(&self) -> bool {
+        self.fire_timer <= 0.0
+    }
+
     /// Choose a heading toward `target` - or, if pathfinding can't reach
     /// `target` at all, toward a local fallback waypoint instead (see
     /// `wander`), so this always returns a real heading. `margin` is how

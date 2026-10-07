@@ -535,13 +535,19 @@ impl Game {
         let (half_w, half_h) = t.sight_box_half_px();
         let field = self.map.field_size();
         let mut out = std::collections::BTreeMap::new();
-        let mut armed: Vec<(usize, Entity, Position, bool, bool)> = self
+        // Each rod tank: its slot, where it stands, whether it hunts, is a
+        // training dummy, holds a rod's reticle up, and its weapon's
+        // cooldown.
+        let mut armed: Vec<(usize, Entity, Position, bool, bool, bool, f32)> = self
             .world
             .query::<(Entity, &Tank, &Ai)>()
             .iter()
             .filter(|(_, tank, _)| !tank.is_wreck() && tank.body.is_some())
             .filter(|(_, tank, _)| tank.active_weapon() == ActiveWeapon::RodFromGod || tank.charge.is_some_and(|c| c.weapon == ActiveWeapon::RodFromGod))
-            .map(|(e, tank, ai)| (tank.owner_slot(), e, tank.position, ai.role == Role::Hunter, ai.frog_only))
+            .map(|(e, tank, ai)| {
+                let aiming = tank.charge.is_some_and(|c| c.weapon == ActiveWeapon::RodFromGod);
+                (tank.owner_slot(), e, tank.position, ai.role == Role::Hunter, ai.frog_only, aiming, tank.fire_cooldown)
+            })
             .collect();
         if armed.is_empty() {
             return out;
@@ -592,7 +598,7 @@ impl Game {
             seats.iter().any(|s| s.live && crate::emp::box_reach(at, s.pos, seat_half) <= margin && !crate::ai::in_sight_box_of((half_w, half_h), s.pos, me))
         };
         let mut taken: Vec<(i32, i32)> = Vec::new();
-        for (_, entity, me, hunter, frog_only) in armed {
+        for (_, entity, me, hunter, frog_only, aiming, cooldown) in armed {
             let under_call = self.zones.iter().any(|z| z.holds(me, &t));
             let mut sense = RodSense { pick: None, under_call, keep_from: None, self_blocks: false };
             if frog_only {
@@ -644,7 +650,13 @@ impl Game {
             // With none: a seat it would call on but for its own hull.
             sense.self_blocks = sense.pick.is_none()
                 && candidates.iter().map(|c| c.4).any(|p| p.at_seat.is_some() && open(&p) && !holds_ally(p.cell, Some(entity)));
-            if let Some(p) = sense.pick {
+            // The target is this tank's only while it can call on it: its
+            // reticle up, or its trigger free to put one up. One still
+            // reloading or waiting on its fire timer leaves it to the tanks
+            // after it, so a lower slot never keeps the rest from calling.
+            if let Some(p) = sense.pick
+                && (aiming || (cooldown <= 0.0 && ai.fire_ready()))
+            {
                 taken.push(p.cell);
             }
             out.insert(entity, sense);
