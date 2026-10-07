@@ -746,7 +746,8 @@ in progress commits, as everywhere, and a tank inside a danger backs out of
 it first (the `dodge` tier): a drone's burst is a scratch beside a charging
 rail's lane or a strike's circle. Anything else is dropped for the drone. `act_air`, in order:
 
-1. **Flak**: it carries an online minigun and `may_shoot` - it faces the
+1. **Flak**: it carries an online minigun and `may_shoot`, and is no
+   training dummy (`Ai::frog_only`, which never fires toward a seat) - it faces the
    drone (`Dir::toward` its ground point), holds still and holds the
    trigger while the drone is ahead, within `fpv_ai_flak_range_px` (192)
    and its column - from its shadow up to its body, what a bullet strikes
@@ -1241,7 +1242,8 @@ Protocol 18 (from the rail's 17), once in the PR.
   `the_swarm_launches_one_at_a_time_with_its_gap`,
   `a_hunter_sends_its_drones_at_the_frog`,
   `the_swarm_never_launches_at_a_seat_hidden_in_grass`,
-  `a_training_dummy_never_launches`, `the_generic_tiers_never_launch_a_drone`,
+  `a_training_dummy_never_launches`, `a_training_dummy_fires_no_flak`,
+  `the_generic_tiers_never_launch_a_drone`,
   `the_swarm_breaks_the_crown_over_a_hidden_seat`,
   `an_enemy_that_cannot_reach_cover_launches_from_the_open`,
   `an_enemy_with_a_minigun_shoots_down_the_drone_diving_at_it`,

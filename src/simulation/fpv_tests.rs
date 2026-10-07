@@ -584,6 +584,20 @@ fn a_training_dummy_never_launches() {
     assert!(launches_by(&events, slot_of(&game, enemy)).is_empty());
 }
 
+/// A training dummy with a minigun fires no flak at a seat's drone: it
+/// never fires toward a seat, and the drone is the seat's.
+#[test]
+fn a_training_dummy_fires_no_flak() {
+    let mut game = round("");
+    let enemy = parked(&mut game, cell(14, 6));
+    with_tank_mut(&game.world, enemy, |t| t.minigun_ammo = 60);
+    game.world.get::<&mut crate::ai::Ai>(enemy).unwrap().frog_only = true;
+    let slot = slot_of(&game, enemy);
+    let events = launch(&mut game, 300);
+    assert!(!events.iter().any(|e| matches!(e, Event::Fired { slot: s, weapon: "minigun" } if *s == slot)));
+    assert!(downed(&events).is_empty());
+}
+
 /// The generic tiers never launch: lined up on the seat in range with no
 /// sense, an enemy with drones does not pull its trigger.
 #[test]
