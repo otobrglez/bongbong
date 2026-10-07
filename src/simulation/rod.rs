@@ -549,16 +549,16 @@ impl Game {
         armed.sort_by_key(|a| a.0);
         // The allies a call must not hold: every live enemy's hull, and where
         // its motion carries it in a second.
-        let allies: Vec<(Position, Vec2, Position)> = self
+        let allies: Vec<(Entity, Position, Vec2, Position)> = self
             .world
-            .query::<&Tank>()
+            .query::<(Entity, &Tank)>()
             .with::<&Ai>()
             .iter()
-            .filter(|tank| !tank.is_wreck() && tank.body.is_some())
-            .map(|tank| {
+            .filter(|(_, tank)| !tank.is_wreck() && tank.body.is_some())
+            .map(|(e, tank)| {
                 let (centre, half) = tank.hull_bbox_world();
                 let v = tank.body.map_or(Vec2::zero(), |h| self.physics.velocity(h));
-                (centre, half, centre + v)
+                (e, centre, half, centre + v)
             })
             .collect();
         let enemy_towers: Vec<(i32, i32)> = self.standing_towers_of(Side::Enemy);
@@ -567,14 +567,14 @@ impl Game {
         let quarry = self.frog.and_then(|e| self.world.get::<&Frog>(e).ok().filter(|f| !f.is_dead()).map(|f| f.position));
         let sight = self.enemy_sight();
         let margin = t.rod_kill_radius_px + t.rod_ai_friend_margin_px;
-        let near = |at: Position, &(centre, half, ahead): &(Position, Vec2, Position)| {
+        let near = |at: Position, &(_, centre, half, ahead): &(Entity, Position, Vec2, Position)| {
             crate::emp::box_reach(at, centre, half) <= margin || crate::emp::box_reach(at, ahead, half) <= margin
         };
-        // Whether an ally - the caller too - stands in the circle a call on
-        // `cell` would crush, now or a second on.
-        let holds_ally = |cell: (i32, i32)| {
+        // Whether an ally - the caller too, unless it is `but` - stands in
+        // the circle a call on `cell` would crush, now or a second on.
+        let holds_ally = |cell: (i32, i32), but: Option<Entity>| {
             let at = cell_to_world(cell.0, cell.1);
-            allies.iter().any(|a| near(at, a))
+            allies.iter().filter(|a| Some(a.0) != but).any(|a| near(at, a))
                 || enemy_towers.iter().any(|&tower| rod::cell_reach(at, tower) <= t.rod_break_radius_px)
                 || enemy_frog.is_some_and(|f| f.distance_to(at) <= margin + crate::FROG_COLLIDER_HALF_EXTENT.0)
         };
@@ -585,7 +585,7 @@ impl Game {
         let mut taken: Vec<(i32, i32)> = Vec::new();
         for (_, entity, me, hunter, frog_only) in armed {
             let under_call = self.zones.iter().any(|z| z.holds(me, &t));
-            let mut sense = RodSense { pick: None, under_call, keep_from: None };
+            let mut sense = RodSense { pick: None, under_call, keep_from: None, self_blocks: false };
             if frog_only {
                 out.insert(entity, sense);
                 continue;
@@ -630,10 +630,11 @@ impl Game {
                 candidates.push((frog_rank, me.distance_to(frog), u8::MAX, cell, RodPick { cell, at_seat: None, why: "frog" }));
             }
             candidates.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)));
-            sense.pick = candidates
-                .into_iter()
-                .map(|c| c.4)
-                .find(|p| range.holds(p.cell) && p.cell != world_to_cell(me) && !holds_ally(p.cell) && !covered(p.cell) && !taken.contains(&p.cell));
+            let open = |p: &RodPick| range.holds(p.cell) && p.cell != world_to_cell(me) && !covered(p.cell) && !taken.contains(&p.cell);
+            sense.pick = candidates.iter().map(|c| c.4).find(|p| open(p) && !holds_ally(p.cell, None));
+            // With none: a seat it would call on but for its own hull.
+            sense.self_blocks = sense.pick.is_none()
+                && candidates.iter().map(|c| c.4).any(|p| p.at_seat.is_some() && open(&p) && !holds_ally(p.cell, Some(entity)));
             if let Some(p) = sense.pick {
                 taken.push(p.cell);
             }
