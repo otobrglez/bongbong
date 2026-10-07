@@ -163,12 +163,20 @@ pub enum PickupKind {
     /// (`rod.rs`). Players and enemies both use it.
     #[serde(rename = "rod_from_god")]
     RodFromGod,
+    /// The gravity well (docs/gravity-well.md): loads `well_per_pickup`
+    /// wells into a projector (one weapon at a time, as above). A press
+    /// fires a slow orb; a second press anchors it where it is, and for a
+    /// few seconds it pulls everything within its reach toward its core,
+    /// then collapses and flings it all out (`well.rs`). Players and
+    /// enemies both use it.
+    #[serde(rename = "gravity_well")]
+    GravityWell,
 }
 
 impl PickupKind {
     /// Every kind in declaration order: the crate and symbol sheets' row
     /// order (`row`).
-    pub const ALL: [PickupKind; 18] = [
+    pub const ALL: [PickupKind; 19] = [
         PickupKind::Health,
         PickupKind::Ammo,
         PickupKind::Laser,
@@ -187,6 +195,7 @@ impl PickupKind {
         PickupKind::GaussRail,
         PickupKind::FpvSwarm,
         PickupKind::RodFromGod,
+        PickupKind::GravityWell,
     ];
 
     /// This kind's row on static/crates_sheet.png and
@@ -211,6 +220,7 @@ impl PickupKind {
             PickupKind::GaussRail => 15,
             PickupKind::FpvSwarm => 16,
             PickupKind::RodFromGod => 17,
+            PickupKind::GravityWell => 18,
         }
     }
 
@@ -236,6 +246,7 @@ impl PickupKind {
             PickupKind::GaussRail => "gauss_rail",
             PickupKind::FpvSwarm => "fpv_swarm",
             PickupKind::RodFromGod => "rod_from_god",
+            PickupKind::GravityWell => "gravity_well",
         }
     }
 
@@ -260,6 +271,7 @@ impl PickupKind {
             PickupKind::GaussRail => Some(ActiveWeapon::GaussRail),
             PickupKind::FpvSwarm => Some(ActiveWeapon::FpvSwarm),
             PickupKind::RodFromGod => Some(ActiveWeapon::RodFromGod),
+            PickupKind::GravityWell => Some(ActiveWeapon::GravityWell),
             PickupKind::Health
             | PickupKind::Ammo
             | PickupKind::SpeedUp
@@ -300,6 +312,9 @@ impl PickupKind {
             // Two-tone: a tungsten rod in dark steel grey, its light the
             // designator's red of the reticle's brackets (the HUD's accent).
             PickupKind::RodFromGod => [0x4E545C, 0x8A9099, 0xFF3228],
+            // Two-tone: a black hole's deep violet void, ringed in a pale
+            // ultraviolet lilac (the HUD's accent).
+            PickupKind::GravityWell => [0x3A1A6E, 0xE6A8FF, 0xFFF0FF],
         };
         [rgb(shade), rgb(base), rgb(light)]
     }
@@ -327,7 +342,9 @@ impl PickupKind {
             // A bank of coils, not ordnance: it spills too.
             | PickupKind::Emp
             // A radio uplink: the rod is in orbit, not in the crate.
-            | PickupKind::RodFromGod => false,
+            | PickupKind::RodFromGod
+            // A projector and a field coil, no explosive.
+            | PickupKind::GravityWell => false,
         }
     }
 }
@@ -351,6 +368,12 @@ pub struct Pickup {
     /// cell; `None` for a crate. Loose contents are drawn as the bare
     /// symbol and taken like any pickup.
     pub loose: Option<f32>,
+    /// How far a gravity well has drawn it from where it lay
+    /// (docs/gravity-well.md): its slot stays `position`, it is taken and
+    /// drawn at `at()`. Zero for every pickup no well has touched.
+    pub drift: Vec2,
+    /// The collapse's slide out (px/s), braking to rest; zero otherwise.
+    pub slide: Vec2,
 }
 
 impl Pickup {
@@ -362,7 +385,7 @@ impl Pickup {
     /// A crate that came down at `dropped_at` on the round clock (`None`
     /// for one that stood there from the start), whole.
     pub fn dropped(kind: PickupKind, position: Position, dropped_at: Option<f32>) -> Self {
-        Pickup { kind, position, dropped_at, health: crate::tuning::tuning().crate_hp, burn: None, loose: None }
+        Pickup { kind, position, dropped_at, health: crate::tuning::tuning().crate_hp, burn: None, loose: None, drift: Vec2::zero(), slide: Vec2::zero() }
     }
 
     /// Side length of this pickup's square: one cell, what a hull touches
@@ -380,8 +403,13 @@ impl Pickup {
     /// short side and falls short on its long one.
     pub fn in_reach(&self, hull_center: Position, hull_half: Position, pad: f32) -> bool {
         let half = self.size() * 0.5 + pad;
-        (hull_center.x - self.position.x).abs() <= hull_half.x + half
-            && (hull_center.y - self.position.y).abs() <= hull_half.y + half
+        let at = self.at();
+        (hull_center.x - at.x).abs() <= hull_half.x + half && (hull_center.y - at.y).abs() <= hull_half.y + half
+    }
+
+    /// Where it stands now: its slot's position and a well's drift.
+    pub fn at(&self) -> Position {
+        if self.drift.x == 0.0 && self.drift.y == 0.0 { self.position } else { self.position + self.drift }
     }
 }
 

@@ -371,7 +371,7 @@ mod tests {
                     Shape::Mark { pos, .. } | Shape::Glow { pos, .. } => assert!(finite(pos)),
                     Shape::Puff(p) => assert!(finite(p.pos) && p.radius >= 0.0),
                     Shape::Line { from, to, .. } => assert!(finite(from) && finite(to)),
-                    Shape::Arc { center, .. } => assert!(finite(center)),
+                    Shape::Arc { center, .. } | Shape::Disc { center, .. } => assert!(finite(center)),
                 }
             }
         }

@@ -59,13 +59,52 @@ impl Game {
         for tank in self.world.query::<&Tank>().with::<&Ai>().iter() {
             add(tank, &self.physics);
         }
+        let t = crate::tuning::tuning();
+        let (wells, now) = (&f.wells, self.time);
+        let zones = &self.zones;
         for grenade in self.world.query::<&mut Grenade>().iter() {
+            // On a well's ring (docs/gravity-well.md "Grenades"): placed by
+            // the clock, its fuse burning on; a ring whose well is gone
+            // lets it go where it is.
+            if let Some(orbit) = grenade.orbit {
+                if let Some(zone) = zones.iter().find(|z| z.id == orbit.well) {
+                    let to = crate::well::orbit_at(&orbit, zone.centre, now, &t);
+                    let moved = to - grenade.position;
+                    let distance = moved.length();
+                    if distance > 0.01 {
+                        grenade.heading = moved * (1.0 / distance);
+                        grenade.roll += distance / t.grenade_radius;
+                    }
+                    grenade.position = to;
+                    grenade.velocity = Vec2::zero();
+                    grenade.height = 0.0;
+                    grenade.climb = 0.0;
+                    grenade.fuse -= f.dt;
+                    continue;
+                }
+                grenade.orbit = None;
+            }
+            if !wells.is_empty() {
+                if let Some((id, centre, _)) = wells.strongest(grenade.position, &t)
+                    && grenade.position.distance_to(centre) <= t.well_ring_px
+                {
+                    let off = grenade.position - centre;
+                    let bearing = off.y.atan2(off.x);
+                    grenade.orbit = Some(crate::well::GrenadeOrbit { well: id, bearing, since: now });
+                    grenade.velocity = Vec2::zero();
+                    grenade.height = 0.0;
+                    grenade.climb = 0.0;
+                    grenade.fuse -= f.dt;
+                    continue;
+                }
+            }
+            let pull = if wells.is_empty() { Vec2::zero() } else { wells.pull(grenade.position, &t) * t.well_grenade_pull };
             let ground = match self.water.depth_at(grenade.position) {
                 Depth::Dry => Ground::Dry,
                 Depth::Ice => Ground::Ice,
                 Depth::Shallow | Depth::Deep => Ground::Water,
             };
-            grenade.roll(f.dt, &around, ground);
+            grenade.roll_pulled(f.dt, &around, ground, pull);
         }
     }
 

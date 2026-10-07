@@ -2,7 +2,7 @@
 //! centre and an end on the round clock - something a weapon left standing
 //! on the field that the enemies keep out of, the router prices, a seat is
 //! warned of when it is off its screen and the wire carries whole. A rod's
-//! call is one; the gravity well (BB-42) adds its kind.
+//! call is one; a gravity well (docs/gravity-well.md) is the other.
 //!
 //! The rules every reader keeps:
 //!
@@ -11,19 +11,26 @@
 //! 2. The AI reads `Zone::danger` (a `Danger` like any other, owned by
 //!    nobody: the dodge and the edge hold need nothing of their own, and
 //!    `out_of_danger` takes a nobody's disc's exit on the tank's own side)
-//!    and the router `Zone::route` (the disc and its cost).
+//!    and the router `Zone::route` (the disc and its cost). A kind the AI
+//!    meets some other way - a well, which an enemy drives across rather
+//!    than backs out of - has no danger.
 //! 3. A zone's radius is its kind's knob, not its own state: the wire
 //!    carries the kind, the centre and the end.
-//! 4. A round with none - every round without the rod - reads nothing.
+//! 4. A round with none - every round without the rod or the well - reads
+//!    nothing.
 
 use crate::ai::{Danger, DangerShape};
 use crate::rod::RodCall;
 use crate::shell::Owner;
 use crate::tuning::Tuning;
+use crate::well::{WellStage, WellZone};
 use crate::Position;
 
 /// The wire's tag for a rod's call (`net::wire::ZoneState::kind`).
 pub const ZONE_ROD: u8 = 0;
+
+/// The wire's tag for a gravity well.
+pub const ZONE_WELL: u8 = 1;
 
 /// The ids a client's own zones drawn ahead of the room's take
 /// (`Game::set_provisional_zones`): past every id the wire's `u16` can name,
@@ -50,6 +57,9 @@ pub struct Zone {
 pub enum ZoneKind {
     /// A rod's call: lands at `until`.
     Rod(RodCall),
+    /// A gravity well: `until` is the end of its stage - its pull's start
+    /// while forming, its collapse while pulling.
+    Well(WellZone),
 }
 
 impl Zone {
@@ -58,10 +68,11 @@ impl Zone {
         (self.until - now).max(0.0)
     }
 
-    /// The area it acts on (px): a rod's circle.
+    /// The area it acts on (px): a rod's circle, a well's reach.
     pub fn radius(&self, t: &Tuning) -> f32 {
         match self.kind {
             ZoneKind::Rod(_) => t.rod_kill_radius_px,
+            ZoneKind::Well(_) => t.well_radius_px,
         }
     }
 
@@ -72,20 +83,24 @@ impl Zone {
     pub fn danger_radius(&self, t: &Tuning) -> f32 {
         match self.kind {
             ZoneKind::Rod(_) => t.rod_kill_radius_px + crate::battlefield::max_tank_clearance_half_extent() + t.rod_ai_berth_px,
+            ZoneKind::Well(_) => t.well_radius_px,
         }
     }
 
     /// What an enemy keeps out of while it stands, owned by nobody - a
-    /// rod's caller dies in its circle as surely as anyone.
+    /// rod's caller dies in its circle as surely as anyone. A well is none:
+    /// the dodge's way out of a disc is radial, the wrong way out of a pull
+    /// (the AI's `pull` tier drives across it instead).
     pub fn danger(&self, t: &Tuning) -> Option<Danger> {
         match self.kind {
             ZoneKind::Rod(_) => Some(Danger { shape: DangerShape::Disc { at: self.centre, radius: self.danger_radius(t) }, owner: None, slack: 0.0 }),
+            ZoneKind::Well(_) => None,
         }
     }
 
-    /// Whether `p` stands inside its danger.
+    /// Whether `p` stands inside its danger - none for a well.
     pub fn holds(&self, p: Position, t: &Tuning) -> bool {
-        p.distance_to(self.centre) <= self.danger_radius(t)
+        self.danger(t).is_some() && p.distance_to(self.centre) <= self.danger_radius(t)
     }
 
     /// The radius of the disc whose nav cells the router surcharges while it
@@ -93,6 +108,7 @@ impl Zone {
     pub fn route(&self, t: &Tuning) -> Option<(f32, u32)> {
         match self.kind {
             ZoneKind::Rod(_) => (t.rod_ai_circle_cost > 0).then(|| (self.danger_radius(t), t.rod_ai_circle_cost as u32)),
+            ZoneKind::Well(_) => (t.well_ai_route_cost > 0).then(|| (t.well_radius_px, t.well_ai_route_cost as u32)),
         }
     }
 
@@ -100,6 +116,16 @@ impl Zone {
     pub fn wire_kind(&self) -> u8 {
         match self.kind {
             ZoneKind::Rod(_) => ZONE_ROD,
+            ZoneKind::Well(_) => ZONE_WELL,
+        }
+    }
+
+    /// The wire's stage byte: a well's stage (0 forming, 1 pulling), 0 for
+    /// a call.
+    pub fn wire_stage(&self) -> u8 {
+        match self.kind {
+            ZoneKind::Well(w) if w.stage == WellStage::Pulling => 1,
+            _ => 0,
         }
     }
 
@@ -107,6 +133,15 @@ impl Zone {
     pub fn rod(&self) -> Option<RodCall> {
         match self.kind {
             ZoneKind::Rod(call) => Some(call),
+            ZoneKind::Well(_) => None,
+        }
+    }
+
+    /// The well, if it is one.
+    pub fn well(&self) -> Option<WellZone> {
+        match self.kind {
+            ZoneKind::Well(w) => Some(w),
+            ZoneKind::Rod(_) => None,
         }
     }
 

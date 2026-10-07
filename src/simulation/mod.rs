@@ -37,6 +37,7 @@ mod emp;
 mod gauss;
 mod fpv;
 mod rod;
+mod well;
 mod nav;
 pub mod portals;
 pub mod present;
@@ -66,6 +67,8 @@ mod fpv_tests;
 mod gauss_tests;
 #[cfg(test)]
 mod rod_tests;
+#[cfg(test)]
+mod well_tests;
 #[cfg(test)]
 mod sonic_tests;
 #[cfg(test)]
@@ -531,6 +534,21 @@ pub enum Event {
     /// and set a volcano off (`erupted`). What it crushed, shoved and broke
     /// follows as the ordinary events.
     RodImpact { id: u32, cell: (i32, i32), crater: bool, erupted: bool },
+    /// The orb `id` of the tank in owner slot `slot` anchored at (`x`,
+    /// `y`) - by its shooter's press, on what it met, or at its range
+    /// (docs/gravity-well.md): a forming well stands there with its id.
+    /// `seat` is `net::wire::NO_SEAT` for an enemy's.
+    WellAnchored { id: u32, slot: usize, seat: u8, x: f32, y: f32, by: crate::well::AnchorBy },
+    /// The well `id` collapsed at (`x`, `y`) - `early` when an EMP's ring
+    /// called it. What it flung, hurt and set off follows as the ordinary
+    /// events.
+    WellCollapsed { id: u32, x: f32, y: f32, early: bool },
+    /// A shot, an orb, a missile or a drone reached a well's core at (`x`,
+    /// `y`) and was swallowed: no hit, no burst.
+    Swallowed { what: crate::well::Swallow, x: f32, y: f32 },
+    /// The orb `id` was put out in flight by an EMP's ring at (`x`, `y`):
+    /// no well.
+    OrbFizzled { id: u32, x: f32, y: f32 },
     /// A tank became a wreck (any cause) at (`x`, `y`).
     Wreck { slot: usize, x: f32, y: f32 },
     /// Ram contact between the tanks in `slot` and `other_slot`: an enemy and
@@ -715,6 +733,8 @@ pub enum HitCause {
     Rail,
     /// A rod from god crushing a hull in its circle.
     Rod,
+    /// A gravity well's collapse.
+    Well,
 }
 
 /// What an `Event::Hit` landed on.
@@ -925,6 +945,21 @@ pub struct Game {
     /// local round; a client's lead to its own present online
     /// (`set_zone_lead`). Presentation only.
     pub(crate) zone_lead: f32,
+    /// The gravity wells' orbs in flight (`well::Orb`), sorted by id: shots
+    /// on the wire (`ShotKind::Orb`). Cleared by `init`.
+    pub(crate) orbs: Vec<crate::well::Orb>,
+    /// The drums the wells hold (`well::HeldDrum`), sorted by id. Cleared
+    /// by `init`.
+    pub(crate) held_drums: Vec<crate::well::HeldDrum>,
+    /// The wells' moments being drawn - snaps, collapses, swallows
+    /// (`well::WellFx`) - aged in `tick_effects`. Cleared by `init`.
+    pub(crate) well_fx: Vec<crate::well::WellFx>,
+    /// The field this tick (`Frame::wells`), kept for the drive's footing
+    /// and the cosmetic drain: empty with no well pulling.
+    pub(crate) well_field: crate::well::WellField,
+    /// The slots of the pickups still sliding from a collapse: empty with
+    /// none, so a round without a well skips the walk.
+    pub(crate) pickups_drifting: Vec<Position>,
     /// The craters the rods left this round (`rod::Craters`): pits the
     /// footing slows and the router prices, fords while it rains. Cleared by
     /// `init`.
@@ -1319,6 +1354,15 @@ struct Frame {
     /// Rods called this frame, put on the field as zones by `place_calls`
     /// once the tank loops are done.
     pending_calls: Vec<rod::PendingCall>,
+    /// Gravity well orbs launched this frame, put in the world by
+    /// `place_orbs` once the tank loops are done.
+    pending_orbs: Vec<well::PendingOrb>,
+    /// Orbs a press anchored this frame (by id), anchored by `place_orbs`.
+    pending_anchors: Vec<u32>,
+    /// The wells pulling this tick (`well::WellField`, built by `update`
+    /// from the zones): what the drive, the fixed-step loop, the grenades,
+    /// the frogs and the crates read.
+    wells: crate::well::WellField,
     /// Charges that ended this frame without firing, put on the field by
     /// `resolve_rails`.
     charge_ends: Vec<crate::gauss::ChargeEndFx>,
@@ -1416,6 +1460,9 @@ impl Frame {
             pending_rails: Vec::new(),
             pending_drones: Vec::new(),
             pending_calls: Vec::new(),
+            pending_orbs: Vec::new(),
+            pending_anchors: Vec::new(),
+            wells: crate::well::WellField::default(),
             charge_ends: Vec::new(),
             flame_jets: Vec::new(),
             muzzle_flashes: Vec::new(),
@@ -1603,6 +1650,11 @@ impl Game {
         self.charge_ends.clear();
         self.seat_hold = [None; MAX_SEATS];
         self.zones.clear();
+        self.orbs.clear();
+        self.held_drums.clear();
+        self.well_fx.clear();
+        self.well_field = crate::well::WellField::default();
+        self.pickups_drifting.clear();
         self.craters.clear();
         self.rod_impacts.clear();
         self.seat_still = [crate::rod::SeatStill::default(); MAX_SEATS];
@@ -2068,6 +2120,7 @@ impl Game {
             facing: Facing::Right,
             death_elapsed: None,
             stun_timer: 0.0,
+            pulled: false,
         },))
     }
 
@@ -2122,6 +2175,9 @@ impl Game {
         #[cfg(test)]
         let grid = if self.scratch_nav { self.route_grid(width, height) } else { grid };
         let mut f = Frame::new(dt, width, height, rng, terrain);
+        // The wells pulling this tick, their stages read off the clock.
+        self.well_field = if self.zones.is_empty() { crate::well::WellField::default() } else { crate::well::WellField::at(&self.zones, self.time) };
+        f.wells = self.well_field.clone();
         for (owned, &frame) in f.shoves.owned.iter_mut().zip(&self.seat_owned) {
             *owned = frame != 0 && frame == self.frame;
         }
@@ -2152,6 +2208,7 @@ impl Game {
             self.resolve_emp(&mut f);
             self.tick_emp_pulses(&mut f, true);
             self.resolve_zones(&mut f, true);
+            self.well_phase(&mut f, true);
             self.step_world(&mut f, true);
             self.sync_tanks_and_ram(&mut f);
             self.ram_props(&mut f);
@@ -2160,6 +2217,7 @@ impl Game {
             self.resolve_projectiles::<Shell>(&mut f, true);
             self.resolve_projectiles::<Bullet>(&mut f, true);
             self.resolve_projectiles::<Plasma>(&mut f, true);
+            self.resolve_orbs(&mut f);
             self.resolve_missiles(&mut f, true);
             self.resolve_drones(&mut f, true);
             self.resolve_grenades(&mut f, true);
@@ -2189,11 +2247,13 @@ impl Game {
             self.tick_sonic_waves(&mut f, false);
             self.tick_emp_pulses(&mut f, false);
             self.resolve_zones(&mut f, false);
+            self.well_phase(&mut f, false);
             self.step_world(&mut f, false);
             self.roll_grenades(&mut f);
             self.resolve_projectiles::<Shell>(&mut f, false);
             self.resolve_projectiles::<Bullet>(&mut f, false);
             self.resolve_projectiles::<Plasma>(&mut f, false);
+            self.resolve_orbs(&mut f);
             self.resolve_missiles(&mut f, false);
             self.resolve_drones(&mut f, false);
             self.resolve_grenades(&mut f, false);
@@ -2278,6 +2338,7 @@ impl Game {
     /// Age the shader effects (shockwave, muzzle/impact flashes, laser
     /// beams) - runs even on the end screen so nothing freezes mid-fade.
     fn tick_effects(&mut self, dt: f32) {
+        self.tick_well_fx(dt);
         self.shocks.retain_mut(|shock| {
             shock.time += dt;
             shock.time < tuning().shockwave_duration
@@ -2343,6 +2404,9 @@ impl Game {
                 tank.tick_recharge(dt);
             }
             tank.fire_cooldown = (tank.fire_cooldown - dt).max(0.0);
+            if tank.well_grace > 0.0 {
+                tank.well_grace = (tank.well_grace - dt).max(0.0);
+            }
             tank.ram_cooldown = (tank.ram_cooldown - dt).max(0.0);
             if tank.portal_cooldown > 0.0 && !portals.iter().any(|p| p.distance_to(tank.position) <= trigger_radius) {
                 tank.portal_cooldown = (tank.portal_cooldown - dt).max(0.0);
@@ -2506,14 +2570,18 @@ impl Game {
         let entity = self.seats.get(seat).copied().flatten()?;
         // Disjoint borrows: `drive_tank` wants the solver and the hull at
         // once, and they are two fields of the same struct.
-        let Game { world, physics, water, lava, craters, weather, time, map, .. } = self;
+        let Game { world, physics, water, lava, craters, weather, time, map, zones, zone_lead, .. } = self;
         let Ok(mut tank) = world.get::<&mut Tank>(entity) else { return None };
         if tank.body.is_none() || tank.is_wreck() {
             return None;
         }
         // The sandbox's clock stands at the last snapshot's tick, so a
         // gust reaches the predicted hull when the drawn sand front does.
-        let footing = Footing::at(water, lava, craters, *weather, tank.position, *time);
+        // A well's pull at the present tick (`zone_lead` past the sandbox's
+        // clock), the room's when this pose lands (docs/gravity-well.md
+        // "Online").
+        let wells = if zones.is_empty() { crate::well::WellField::default() } else { crate::well::WellField::at(zones, *time + *zone_lead) };
+        let footing = Footing::at(water, lava, craters, *weather, tank.position, *time).pulled(&wells, &*tank);
         // The seat's own skid and spin run on the client's ticks, as the
         // room's do in `tick_timers` (`Predictor::shove` starts a skid).
         tank.skid = (tank.skid - dt).max(0.0);
@@ -2878,6 +2946,13 @@ impl Game {
         self.ease_hulls(dt);
         self.fade_tracks(dt);
         self.tick_grass(dt);
+        // The wells' drain on the marks and the grass, off the zones' clock
+        // as the room's runs it.
+        if !self.zones.is_empty() {
+            let field = crate::well::WellField::at(&self.zones, self.time);
+            self.drain_marks(dt, &field);
+            self.lean_grass(&field);
+        }
         self.tick_burn_frames(dt);
         self.fade_fires(dt);
         self.fade_wrecks(dt);
@@ -3378,7 +3453,7 @@ impl Game {
         // A seat whose client owns the hull was put where it is by
         // `accept_seat_pose` before this tick; the stick only fires.
         if self.seat_owned[index] != self.frame {
-            let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time);
+            let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).pulled(&f.wells, tank);
             drive_tank(&mut self.physics, tank, drive, f.dt, footing);
         }
         tick_queued_shots(&mut self.physics, f, tank, owner);
@@ -3401,7 +3476,12 @@ impl Game {
             let steer = crate::rod::Steer { stick: if aiming { intent.move_dir } else { None }, aim: None, report: self.seat_reticle_report(index) };
             gauss::charge_trigger(f, entity, tank, owner, intent.fire, fire_pressed, report, steer);
         }
+        // A press while this tank's orb flies anchors it, whatever the
+        // reload (docs/gravity-well.md "The orb"); one just after it
+        // anchored itself does nothing.
+        let anchored = fire_pressed && well::take_anchor_press(f, tank);
         let should_fire = match weapon.trigger() {
+            _ if anchored => false,
             Trigger::Auto | Trigger::Stream => intent.fire,
             Trigger::Press => fire_pressed,
             Trigger::Charge => false,
@@ -4113,7 +4193,7 @@ impl Game {
                 // The commander's order is never the last word on a tank
                 // in a tell: it holds its aim (docs/sonic-hammer.md).
                 let intent = commanded_intent(&self.commander, p.slot, p.intent, tank.tell);
-                let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time);
+                let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).pulled(&f.wells, tank);
                 drive_tank_with(&mut self.physics, tank, intent, f.dt, p.current, p.facing_before, footing);
             });
         }
@@ -4153,6 +4233,7 @@ impl Game {
         }
         self.launch_drones(f);
         self.place_calls(f);
+        self.place_orbs(f);
     }
 
     /// Put one projectile in the world, with its `Rewind` only when it has
@@ -4255,13 +4336,15 @@ impl Game {
         self.begin_projectile_frame::<Plasma>();
         self.physics_accumulator = (self.physics_accumulator + f.dt).min(PHYSICS_MAX_CATCHUP_SECONDS);
         while self.physics_accumulator >= PHYSICS_FIXED_DT {
-            self.advance_projectiles::<Shell>(PHYSICS_FIXED_DT);
-            self.advance_projectiles::<Bullet>(PHYSICS_FIXED_DT);
-            self.advance_projectiles::<Plasma>(PHYSICS_FIXED_DT);
+            self.advance_projectiles::<Shell>(PHYSICS_FIXED_DT, &f.wells);
+            self.advance_projectiles::<Bullet>(PHYSICS_FIXED_DT, &f.wells);
+            self.advance_projectiles::<Plasma>(PHYSICS_FIXED_DT, &f.wells);
+            self.advance_orbs(PHYSICS_FIXED_DT, &f.wells);
             for missile in self.world.query::<&mut Missile>().iter() {
                 missile.advance(PHYSICS_FIXED_DT);
             }
             self.advance_drones(PHYSICS_FIXED_DT, (f.width, f.height));
+            self.pull_air(f, PHYSICS_FIXED_DT);
             if step_physics {
                 for tank in self.world.query::<&Tank>().iter() {
                     sonic::skid_look_ahead(&mut self.physics, tank);
@@ -4283,8 +4366,24 @@ impl Game {
         }
     }
 
-    fn advance_projectiles<P: Projectile>(&mut self, dt: f32) {
+    /// One fixed step of every projectile of a kind, each bent first by the
+    /// wells pulling (`Projectile::bend`, docs/gravity-well.md) - none with
+    /// the field empty.
+    fn advance_projectiles<P: Projectile>(&mut self, dt: f32, wells: &crate::well::WellField) {
+        if wells.is_empty() {
+            for p in self.world.query::<&mut P>().iter() {
+                p.advance(dt);
+            }
+            return;
+        }
+        let t = tuning();
         for p in self.world.query::<&mut P>().iter() {
+            if p.is_flying() {
+                let accel = wells.shot_accel(p.position(), &t);
+                if accel.x != 0.0 || accel.y != 0.0 {
+                    p.bend(accel, dt);
+                }
+            }
             p.advance(dt);
         }
     }
@@ -4511,6 +4610,12 @@ impl Game {
                 self.note_left_portal(entity, pos);
             }
             let pos = entry.map_or(pos, |(_, at)| at);
+            // Into a gravity well's core on the way: judged only up to
+            // where it falls in, and swallowed there if nothing met it
+            // first (docs/gravity-well.md).
+            let core = if f.wells.is_empty() { None } else { f.wells.core_hit(prev, pos, &tuning()).map(|(_, k)| prev + (pos - prev) * k) };
+            let entry = if core.is_some() { None } else { entry };
+            let pos = core.unwrap_or(pos);
             // Lag compensation: a seat's shot meets the enemies and frogs
             // where its client drew them (`Rewind`); 0 is the present.
             let past = self.rewound_boxes(rewind);
@@ -4561,7 +4666,11 @@ impl Game {
                 continue;
             }
             let Some((target, t)) = hit else {
-                if let Some((entrance, at)) = entry {
+                if let Some(at) = core {
+                    self.world.despawn(entity).ok();
+                    f.events.push(Event::Swallowed { what: P::swallowed_as(), x: at.x, y: at.y });
+                    self.swallow_show(at);
+                } else if let Some((entrance, at)) = entry {
                     self.shot_through::<P>(f, entity, entrance, at, vel);
                 }
                 continue;
@@ -5540,11 +5649,32 @@ pub(crate) struct Footing {
     flow: Position,
     /// In water at all - drops a speed boost and wets the tracks.
     wading: bool,
+    /// The gravity wells' pull on this hull (docs/gravity-well.md "The
+    /// pull"), already scaled by its mass: the drive takes the current's
+    /// part along the tracks as a frame and the side pull's across them
+    /// against the grip. Zero away from every well.
+    well: crate::well::HullPull,
 }
 
 impl Footing {
-    pub(crate) const DRY: Footing =
-        Footing { pace: 1.0, grip: 1.0, traction: 1.0, brake: 1.0, flow: Position::new(0.0, 0.0), wading: false };
+    pub(crate) const DRY: Footing = Footing {
+        pace: 1.0,
+        grip: 1.0,
+        traction: 1.0,
+        brake: 1.0,
+        flow: Position::new(0.0, 0.0),
+        wading: false,
+        well: crate::well::HullPull { current: Position::new(0.0, 0.0), side: Position::new(0.0, 0.0) },
+    };
+
+    /// This footing with the wells' pull on `tank` from `wells` (none with
+    /// the field empty).
+    pub(crate) fn pulled(self, wells: &crate::well::WellField, tank: &Tank) -> Footing {
+        if wells.is_empty() {
+            return self;
+        }
+        Footing { well: wells.hull_pull(tank.position, tank.mass_factor(), &tuning()), ..self }
+    }
 
     /// The footing at `pos` at round time `time` under the round's `sky`:
     /// the water's (a ford slows and loosens, ice slides), the lava's (a
@@ -5659,6 +5789,11 @@ fn enemy_trigger(physics: &mut Physics, f: &mut Frame, entity: Entity, tank: &mu
         gauss::charge_trigger(f, entity, tank, owner, intent.fire, pressed, None, steer);
         return;
     }
+    // A press while its orb flies anchors it, whatever the reload
+    // (docs/gravity-well.md).
+    if pressed && well::take_anchor_press(f, tank) {
+        return;
+    }
     if let Some(mut tell) = tank.tell {
         tell.left -= f.dt;
         if tell.left > 0.0 {
@@ -5725,6 +5860,7 @@ fn drive_tank_with(
 ) {
     let handle = tank.body.expect("tank should always have a physics body once spawned");
     let current = Position::new(current.x - footing.flow.x, current.y - footing.flow.y);
+    let pulled = !footing.well.is_zero();
     if footing.wading {
         // Water takes the boost: a speed-up ends the moment its hull
         // wades in, and the marks it leaves on the far bank are wet.
@@ -5748,6 +5884,8 @@ fn drive_tank_with(
     // but still, it drives again at once.
     if tank.skid > 0.0 {
         let t = tuning();
+        // Off its tracks the whole of a well's pull is a current.
+        let current = if pulled { current - footing.well.current } else { current };
         let speed = current.length();
         if speed < t.tank_decel_snap_px {
             tank.skid = 0.0;
@@ -5782,6 +5920,16 @@ fn drive_tank_with(
     } else {
         (current.y, target.y * scale, current.x)
     };
+    // A well (docs/gravity-well.md "The pull"): along the tracks its
+    // current is the frame the drive runs in; across them its side pull
+    // builds on the hull's slide before the grip holds it.
+    let (current_on, side_off) = if !pulled {
+        (current_on, 0.0)
+    } else if along_x {
+        (current_on - footing.well.current.x, footing.well.side.y * dt)
+    } else {
+        (current_on - footing.well.current.y, footing.well.side.x * dt)
+    };
 
     let want_on = target_on - current_on;
     let speeding_up = want_on * current_on >= 0.0;
@@ -5798,7 +5946,7 @@ fn drive_tank_with(
     };
 
     let max_off = tuning().tank_turn_grip_force * footing.grip / tank.mass() * dt;
-    let delta_off = (-current_off).clamp(-max_off, max_off);
+    let delta_off = if pulled { side_off + (-(current_off + side_off)).clamp(-max_off, max_off) } else { (-current_off).clamp(-max_off, max_off) };
 
     let delta = if along_x {
         Position::new(delta_on, delta_off)

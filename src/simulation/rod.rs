@@ -124,7 +124,8 @@ impl Game {
             return;
         }
         let now = self.time + f.dt * 0.5;
-        let (due, standing): (Vec<Zone>, Vec<Zone>) = std::mem::take(&mut self.zones).into_iter().partition(|z| z.until <= now);
+        // A well's stages and collapse are `well_phase`'s.
+        let (due, standing): (Vec<Zone>, Vec<Zone>) = std::mem::take(&mut self.zones).into_iter().partition(|z| z.rod().is_some() && z.until <= now);
         self.zones = standing;
         for zone in due {
             self.rod_impact(f, zone, live);
@@ -152,6 +153,7 @@ impl Game {
         let ground = self.ground_struck(c);
         f.events.push(Event::RodImpact { id: zone.id, cell: call.cell, crater: !cells.is_empty(), erupted });
         if live {
+            self.chain_held_drums(f, c, t.rod_shove_radius_px);
             self.rod_hulls(f, c, zone.owner, &t);
             self.rod_frogs(f, c, &t);
             for target in self.air_targets() {

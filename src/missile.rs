@@ -118,6 +118,26 @@ pub struct Missile {
 }
 
 impl Missile {
+    /// A gravity well's pull on its ground motion (docs/gravity-well.md):
+    /// its heading turned by `accel` over `dt`, its speed kept - its
+    /// guidance steers it back after.
+    pub fn drag(&mut self, accel: Vec2, dt: f32) {
+        let v = crate::well::bend(self.dir * self.speed.max(1.0), accel, dt);
+        let len = v.length();
+        if len > 1e-6 {
+            self.dir = v / len;
+        }
+    }
+
+    /// A well's collapse turns it straight out from `centre`.
+    pub fn turn_out_from(&mut self, centre: Position) {
+        let off = self.position - centre;
+        let len = off.length();
+        if len > 1e-3 {
+            self.dir = off / len;
+        }
+    }
+
     /// A missile leaving tube `tube` at `origin` (the tube mouth), heading
     /// `dir` (unit, already fanned), aiming by default at `fallback_aim` -
     /// the ground point it dives on if the seek finds nothing.

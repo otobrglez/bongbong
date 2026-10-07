@@ -190,11 +190,12 @@ pub enum WeaponKind {
     GaussRail,
     FpvSwarm,
     RodFromGod,
+    GravityWell,
 }
 
 impl WeaponKind {
     /// Every kind, in wire order.
-    pub const ALL: [WeaponKind; 12] = [
+    pub const ALL: [WeaponKind; 13] = [
         WeaponKind::Shell,
         WeaponKind::Laser,
         WeaponKind::Plasma,
@@ -207,6 +208,7 @@ impl WeaponKind {
         WeaponKind::GaussRail,
         WeaponKind::FpvSwarm,
         WeaponKind::RodFromGod,
+        WeaponKind::GravityWell,
     ];
 
     /// The name `ActiveWeapon::name` gives, which is what `Event::Fired`
@@ -246,6 +248,7 @@ impl From<ActiveWeapon> for WeaponKind {
             ActiveWeapon::GaussRail => WeaponKind::GaussRail,
             ActiveWeapon::FpvSwarm => WeaponKind::FpvSwarm,
             ActiveWeapon::RodFromGod => WeaponKind::RodFromGod,
+            ActiveWeapon::GravityWell => WeaponKind::GravityWell,
         }
     }
 }
@@ -265,6 +268,7 @@ impl From<WeaponKind> for ActiveWeapon {
             WeaponKind::GaussRail => ActiveWeapon::GaussRail,
             WeaponKind::FpvSwarm => ActiveWeapon::FpvSwarm,
             WeaponKind::RodFromGod => ActiveWeapon::RodFromGod,
+            WeaponKind::GravityWell => ActiveWeapon::GravityWell,
         }
     }
 }

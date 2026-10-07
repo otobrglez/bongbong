@@ -537,13 +537,17 @@ enum SpecialUse {
 
 /// The BB-36 weapons' crates an enemy detours for, in the order it wants
 /// them (`build`'s `seek_special` tier, after the minigun's).
-pub const SEEK_SPECIALS: [PickupKind; 5] = [PickupKind::SonicHammer, PickupKind::Emp, PickupKind::GaussRail, PickupKind::FpvSwarm, PickupKind::RodFromGod];
+pub const SEEK_SPECIALS: [PickupKind; 6] =
+    [PickupKind::SonicHammer, PickupKind::Emp, PickupKind::GaussRail, PickupKind::FpvSwarm, PickupKind::RodFromGod, PickupKind::GravityWell];
 
 /// Whether the tree's generic tiers - attack, snipe, grudge, breach - may
 /// pull the trigger on `weapon`: false for a special whose own rule owns
 /// it (`special_rule`).
 pub fn generic_fire(weapon: ActiveWeapon) -> bool {
-    !matches!(weapon, ActiveWeapon::SonicHammer | ActiveWeapon::Emp | ActiveWeapon::GaussRail | ActiveWeapon::FpvSwarm | ActiveWeapon::RodFromGod)
+    !matches!(
+        weapon,
+        ActiveWeapon::SonicHammer | ActiveWeapon::Emp | ActiveWeapon::GaussRail | ActiveWeapon::FpvSwarm | ActiveWeapon::RodFromGod | ActiveWeapon::GravityWell
+    )
 }
 
 /// A latched decision to shoot through the tile in `dir` (see

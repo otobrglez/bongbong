@@ -501,6 +501,7 @@ fn kick_turret(game: &mut Game, slot: usize, weapon: WeaponKind) {
             WeaponKind::GaussRail => tank.kick_rail(),
             WeaponKind::FpvSwarm => tank.kick_fpv(),
             WeaponKind::RodFromGod => tank.kick_rod(),
+            WeaponKind::GravityWell => tank.kick_well(),
             WeaponKind::Minigun | WeaponKind::Missiles | WeaponKind::Flamethrower | WeaponKind::Grenades => {}
         }
         break;
@@ -541,6 +542,8 @@ fn drawn_muzzle(game: &mut Game, slot: usize, weapon: WeaponKind) -> Option<Posi
         WeaponKind::FpvSwarm => None,
         // A call is a beam from the sky, not a shot: its zone is its show.
         WeaponKind::RodFromGod => None,
+        // The orb swelling at the muzzle is its own show.
+        WeaponKind::GravityWell => None,
     };
     tank.rotation = facing;
     muzzle
@@ -807,6 +810,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
             ActiveWeapon::GaussRail => tank.gauss_slugs = ammo,
             ActiveWeapon::FpvSwarm => tank.fpv_drones = ammo,
             ActiveWeapon::RodFromGod => tank.rods = ammo,
+            ActiveWeapon::GravityWell => tank.wells = ammo,
         }
         // The magazine, which the trigger fires while a special is
         // offline; and an EMP's outages, run down between snapshots.

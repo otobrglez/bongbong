@@ -41,17 +41,28 @@ pub struct Shockwave {
     /// `camera_shake_magnitude`. 1.0 is a tank dying; a fence collapsing
     /// has no business shaking the screen as hard as that.
     pub strength: f32,
+    /// Where its ring starts (px) and whether it runs inward from there to
+    /// the centre - a gravity well's snap, the ripple pinched inward
+    /// (docs/gravity-well.md) - rather than outward from the centre, as
+    /// every other ripple does (0 and false).
+    pub start: f32,
+    pub inward: bool,
 }
 
 impl Shockwave {
     /// A ripple at full strength.
     pub fn new(center: Position) -> Self {
-        Shockwave { center, time: 0.0, strength: 1.0 }
+        Shockwave { center, time: 0.0, strength: 1.0, start: 0.0, inward: false }
     }
 
     /// A ripple scaled against a tank kill, which is the 1.0 reference.
     pub fn scaled(center: Position, strength: f32) -> Self {
-        Shockwave { center, time: 0.0, strength }
+        Shockwave { center, time: 0.0, strength, start: 0.0, inward: false }
+    }
+
+    /// A ring of `strength` running in from `start` px to the centre.
+    pub fn inward(center: Position, strength: f32, start: f32) -> Self {
+        Shockwave { center, time: 0.0, strength, start, inward: true }
     }
 
     /// Punch left in it: strength faded by how much of its life is gone.
@@ -167,7 +178,7 @@ mod shake_tests {
     }
 
     fn shock(x: f32, y: f32, time: f32, strength: f32) -> Shockwave {
-        Shockwave { center: Position::new(x, y), time, strength }
+        Shockwave { center: Position::new(x, y), time, strength, start: 0.0, inward: false }
     }
 
     /// Kills at many moments of their shake, alone and stacked, so the

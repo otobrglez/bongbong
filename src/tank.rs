@@ -25,6 +25,7 @@ use crate::{
     TANK_MODULE_GAUSS_COL,
     TANK_MODULE_FPV_COL,
     TANK_MODULE_ROD_COL,
+    TANK_MODULE_WELL_COL,
     TANK_MODULE_LASER_COL,
     TANK_MODULE_MINIGUN_COL,
     TANK_MODULE_MISSILES_COL,
@@ -279,6 +280,7 @@ pub enum ActiveWeapon {
     GaussRail,
     FpvSwarm,
     RodFromGod,
+    GravityWell,
     Shell,
 }
 
@@ -297,6 +299,7 @@ impl ActiveWeapon {
             ActiveWeapon::GaussRail => "gauss_rail",
             ActiveWeapon::FpvSwarm => "fpv_swarm",
             ActiveWeapon::RodFromGod => "rod_from_god",
+            ActiveWeapon::GravityWell => "gravity_well",
             ActiveWeapon::Shell => "shell",
         }
     }
@@ -311,10 +314,12 @@ impl ActiveWeapon {
             ActiveWeapon::Emp => Some(tuning().emp_tell_seconds).filter(|&s| s > 0.0),
             // Its charge is its tell (`Tank::charge`); a drone's flight
             // is the swarm's (docs/fpv-swarm.md "The tell"); the rod's
-            // reticle and its call are its own (docs/rod-from-god.md).
+            // reticle and its call are its own (docs/rod-from-god.md); the
+            // well's slow orb and its forming ring (docs/gravity-well.md).
             ActiveWeapon::GaussRail
             | ActiveWeapon::FpvSwarm
             | ActiveWeapon::RodFromGod
+            | ActiveWeapon::GravityWell
             | ActiveWeapon::Laser
             | ActiveWeapon::Plasma
             | ActiveWeapon::Minigun
@@ -333,7 +338,8 @@ impl ActiveWeapon {
             | ActiveWeapon::Grenades
             | ActiveWeapon::SonicHammer
             | ActiveWeapon::Emp
-            | ActiveWeapon::FpvSwarm => Trigger::Press,
+            | ActiveWeapon::FpvSwarm
+            | ActiveWeapon::GravityWell => Trigger::Press,
             ActiveWeapon::Laser | ActiveWeapon::Minigun | ActiveWeapon::Missiles => Trigger::Auto,
             ActiveWeapon::Flamethrower => Trigger::Stream,
             ActiveWeapon::GaussRail | ActiveWeapon::RodFromGod => Trigger::Charge,
@@ -383,6 +389,7 @@ impl ActiveWeapon {
             ActiveWeapon::GaussRail => t.gauss_slugs_per_pickup,
             ActiveWeapon::FpvSwarm => t.fpv_drones_per_pickup,
             ActiveWeapon::RodFromGod => t.rod_per_pickup,
+            ActiveWeapon::GravityWell => t.well_per_pickup,
             ActiveWeapon::Shell => t.max_shells,
         }
     }
@@ -391,7 +398,7 @@ impl ActiveWeapon {
 /// The special weapons, each the cargo of its own crate. A tank carries at
 /// most one of them at a time (`Tank::take_weapon`); with none, or once it
 /// runs dry, the trigger fires shells.
-pub const SPECIAL_WEAPONS: [ActiveWeapon; 11] = [
+pub const SPECIAL_WEAPONS: [ActiveWeapon; 12] = [
     ActiveWeapon::Laser,
     ActiveWeapon::Plasma,
     ActiveWeapon::Minigun,
@@ -403,6 +410,7 @@ pub const SPECIAL_WEAPONS: [ActiveWeapon; 11] = [
     ActiveWeapon::GaussRail,
     ActiveWeapon::FpvSwarm,
     ActiveWeapon::RodFromGod,
+    ActiveWeapon::GravityWell,
 ];
 
 /// How a weapon's trigger fires it (`ActiveWeapon::trigger`,
@@ -872,6 +880,24 @@ pub struct Tank {
     /// Seconds the rod's module shows its uplink cell (`kick_rod`).
     /// Presentation only.
     pub rod_flash: f32,
+    /// Wells left in the gravity well's projector
+    /// (`pickup::PickupKind::GravityWell`, `well.rs`). Pickup-only, one
+    /// per launch.
+    pub wells: i32,
+    /// The id of this tank's orb in flight (`well::Orb`): while it flies,
+    /// the trigger's next press anchors it (`well::anchor_press`). The
+    /// orb is the world's: set when it is spawned, cleared when it
+    /// anchors, fizzles or is swallowed.
+    pub orb: Option<u32>,
+    /// Seconds a press is still swallowed after this tank's orb anchored
+    /// by itself (`well_anchor_grace_seconds`): a press meant for it.
+    pub well_grace: f32,
+    /// Seconds the well's module shows its launch or anchor cell
+    /// (`kick_well`, `kick_well_anchor`). Presentation only.
+    pub well_flash: f32,
+    /// Whether `well_flash` shows an anchor rather than a launch.
+    /// Presentation only.
+    pub well_anchor_flash: bool,
     /// An enemy's trigger as the simulation last read it
     /// (`simulation::enemy_trigger`): the press edge a charge starts on. A
     /// seat's is `Game::player_fire_held_last_frame`.
@@ -1100,6 +1126,11 @@ impl Default for Tank {
             rods: 0,
             reticle: None,
             rod_flash: 0.0,
+            wells: 0,
+            orb: None,
+            well_grace: 0.0,
+            well_flash: 0.0,
+            well_anchor_flash: false,
             trigger_held: false,
             droop: 0.0,
             speed_boost_timer: 0.0,
@@ -1226,6 +1257,7 @@ impl Tank {
             PickupKind::GaussRail => self.special().is_none(),
             PickupKind::FpvSwarm => self.special().is_none(),
             PickupKind::RodFromGod => self.special().is_none(),
+            PickupKind::GravityWell => self.special().is_none(),
         }
     }
 
@@ -1502,6 +1534,19 @@ impl Tank {
         self.rod_flash = tuning().rod_flash_seconds;
     }
 
+    /// An orb left the projector: the well's module shows its launch cell
+    /// for `well_flash_seconds`.
+    pub fn kick_well(&mut self) {
+        self.well_flash = tuning().well_flash_seconds;
+        self.well_anchor_flash = false;
+    }
+
+    /// An orb was anchored: the module shows its anchor cell for as long.
+    pub fn kick_well_anchor(&mut self) {
+        self.well_flash = tuning().well_flash_seconds;
+        self.well_anchor_flash = true;
+    }
+
     /// Step the recoil cells `kick` set, and the laser's and the dish's
     /// flashes.
     pub fn tick_recoil(&mut self, dt: f32) {
@@ -1511,6 +1556,7 @@ impl Tank {
         self.rail_flash = (self.rail_flash - dt).max(0.0);
         self.fpv_flash = (self.fpv_flash - dt).max(0.0);
         self.rod_flash = (self.rod_flash - dt).max(0.0);
+        self.well_flash = (self.well_flash - dt).max(0.0);
         if let Some(left) = self.recoil_second_in {
             let left = left - dt;
             if left <= 0.0 {
@@ -1761,6 +1807,7 @@ impl Tank {
             ActiveWeapon::GaussRail => self.gauss_slugs,
             ActiveWeapon::FpvSwarm => self.fpv_drones,
             ActiveWeapon::RodFromGod => self.rods,
+            ActiveWeapon::GravityWell => self.wells,
             ActiveWeapon::Shell => self.shells_ammo,
         }
     }
@@ -1796,6 +1843,7 @@ impl Tank {
             ActiveWeapon::GaussRail => self.gauss_slugs = self.gauss_slugs.max(t.gauss_slugs_per_pickup),
             ActiveWeapon::FpvSwarm => self.fpv_drones = self.fpv_drones.max(t.fpv_drones_per_pickup),
             ActiveWeapon::RodFromGod => self.rods = self.rods.max(t.rod_per_pickup),
+            ActiveWeapon::GravityWell => self.wells = self.wells.max(t.well_per_pickup),
             ActiveWeapon::Shell => {}
         }
     }
@@ -1823,6 +1871,7 @@ impl Tank {
             ActiveWeapon::GaussRail => self.gauss_slugs = 0,
             ActiveWeapon::FpvSwarm => self.fpv_drones = 0,
             ActiveWeapon::RodFromGod => self.rods = 0,
+            ActiveWeapon::GravityWell => self.wells = 0,
             ActiveWeapon::Shell => {}
         }
     }
@@ -1995,6 +2044,13 @@ impl Tank {
     /// tanks further than they get shoved back).
     pub fn mass(&self) -> f32 {
         self.scale * self.scale * tuning().tank_mass_factor[self.row as usize]
+    }
+
+    /// Its chassis's mass factor (`tank_mass_factor`, 1 for the standard
+    /// chassis): what a gravity well's pull is divided by
+    /// (docs/gravity-well.md).
+    pub fn mass_factor(&self) -> f32 {
+        tuning().tank_mass_factor[self.row as usize]
     }
 
     /// Advance a live shield: run down the post-hit delay, then refill
@@ -2284,9 +2340,9 @@ fn blit_layers(c: &mut impl Canvas, tank: &Tank, layers: &[Layer], tint: Color) 
 /// / firing, the flamethrower's pilot flickering or its jet while held. A
 /// module is hardware, not a firing-mode indicator: it shows whenever the
 /// weapon is carried, and a wreck carries none.
-fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 11] {
+fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 12] {
     if tank.is_wreck() {
-        return [None; 11];
+        return [None; 12];
     }
     // A module's armed cell needs its weapon live: one whose special is
     // offline (an EMP) shows its idle cell, its lights out.
@@ -2342,7 +2398,11 @@ fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 11] {
     // module has taken the roof.
     let calling = tank.rod_flash > 0.0 && tank.special().is_none();
     let rod = (tank.rods > 0 || calling).then(|| TANK_MODULE_ROD_COL + crate::rod::module_cell(tank, time));
-    [minigun, missiles, plasma, laser, flame, grenades, sonic, emp, gauss, fpv, rod]
+    // The projector shows its last launch or anchor - unless another
+    // special's module has taken the roof.
+    let pressing = (tank.well_flash > 0.0 || tank.orb.is_some()) && tank.special().is_none();
+    let well = (tank.wells > 0 || pressing).then(|| TANK_MODULE_WELL_COL + crate::well::module_cell(tank));
+    [minigun, missiles, plasma, laser, flame, grenades, sonic, emp, gauss, fpv, rod, well]
 }
 
 /// Draw a tank: hull, turret and the weapon modules it carries, each at its

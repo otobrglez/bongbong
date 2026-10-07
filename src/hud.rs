@@ -87,6 +87,9 @@ pub const HUD_FPV_COLOR: Color = Color::new(0xFF, 0x2D, 0x5F, 255);
 /// the reticle is drawn in on the field (`pyro::LASER_RED`'s base), its
 /// crate's light.
 pub const HUD_ROD_COLOR: Color = Color::new(0xFF, 0x32, 0x28, 255);
+/// The gravity well's accent (docs/gravity-well.md): the pale ultraviolet
+/// lilac its crate's void is ringed in, the ink's base.
+pub const HUD_WELL_COLOR: Color = Color::new(0xE6, 0xA8, 0xFF, 255);
 
 /// The builder bar's fill - the same `#151515` the web page is set in, so
 /// the bar and the page read as one surface around the field - and the
@@ -417,6 +420,7 @@ pub fn weapon_color(weapon: ActiveWeapon) -> Color {
         ActiveWeapon::GaussRail => HUD_GAUSS_COLOR,
         ActiveWeapon::FpvSwarm => HUD_FPV_COLOR,
         ActiveWeapon::RodFromGod => HUD_ROD_COLOR,
+        ActiveWeapon::GravityWell => HUD_WELL_COLOR,
         ActiveWeapon::Shell => TEXT,
     }
 }
@@ -437,6 +441,7 @@ pub fn weapon_pickup(weapon: ActiveWeapon) -> Option<crate::pickup::PickupKind> 
         ActiveWeapon::GaussRail => Some(PickupKind::GaussRail),
         ActiveWeapon::FpvSwarm => Some(PickupKind::FpvSwarm),
         ActiveWeapon::RodFromGod => Some(PickupKind::RodFromGod),
+        ActiveWeapon::GravityWell => Some(PickupKind::GravityWell),
         ActiveWeapon::Shell => None,
     }
 }

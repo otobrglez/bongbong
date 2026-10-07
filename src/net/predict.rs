@@ -1110,6 +1110,7 @@ impl Predictor {
             WeaponKind::GaussRail => t.gauss_reload_seconds,
             WeaponKind::FpvSwarm => t.fpv_reload_seconds,
             WeaponKind::RodFromGod => t.rod_reload_seconds,
+            WeaponKind::GravityWell => t.well_reload_seconds,
             WeaponKind::Flamethrower => 0.0,
         };
         let ago = self.tick.wrapping_sub(input_tick) as f32 * PHYSICS_FIXED_DT;

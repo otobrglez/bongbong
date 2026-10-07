@@ -30,6 +30,7 @@ use crate::Position;
 
 
 /// One grenade on the ground.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Grenade {
     /// Per-round id from `Game::spawn_pending`'s one projectile counter,
     /// the key it travels under (`net::wire::GrenadeState`).
@@ -52,6 +53,9 @@ pub struct Grenade {
     pub roll: f32,
     /// Unit direction it last rolled in. Presentation only.
     pub heading: Vec2,
+    /// The well whose ring it circles (docs/gravity-well.md): while set it
+    /// does not roll - `well::orbit_at` places it - and its fuse burns on.
+    pub orbit: Option<crate::well::GrenadeOrbit>,
 }
 
 /// What a grenade rolls among this tick: the boxes it bounces off.
@@ -96,6 +100,7 @@ impl Grenade {
             fuse: t.grenade_fuse_seconds,
             roll: 0.0,
             heading: dir,
+            orbit: None,
         }
     }
 
@@ -125,9 +130,20 @@ impl Grenade {
     /// moves with a sweep against the tiles and edges, reflecting off the
     /// face it strikes. No RNG; walks the boxes in the order given.
     pub fn roll(&mut self, dt: f32, around: &Surroundings, ground: Ground) {
+        self.roll_pulled(dt, around, ground, Vec2::zero());
+    }
+
+    /// `roll` with a gravity well's `pull` (px/s², docs/gravity-well.md)
+    /// on its ground motion: in the air, and on the ground past the drag's
+    /// stop, so one lying still is drawn in too. A zero pull is `roll`.
+    pub fn roll_pulled(&mut self, dt: f32, around: &Surroundings, ground: Ground, pull: Vec2) {
         let t = tuning();
         self.fuse -= dt;
         let r = t.grenade_radius;
+        let pulled = pull.x != 0.0 || pull.y != 0.0;
+        if pulled && self.airborne() {
+            self.velocity = self.velocity + pull * dt;
+        }
         if self.airborne() {
             self.climb -= t.grenade_gravity * dt;
             self.height += self.climb * dt;
@@ -154,7 +170,9 @@ impl Grenade {
         };
         let keep = (1.0 - t.grenade_roll_drag * factor * dt).max(0.0);
         self.velocity = self.velocity * keep;
-        if self.velocity.length() < t.grenade_stop_speed {
+        if pulled {
+            self.velocity = self.velocity + pull * dt;
+        } else if self.velocity.length() < t.grenade_stop_speed {
             self.velocity = Vec2::zero();
         }
         for &(center, half, moving) in &around.hulls {
@@ -447,6 +465,7 @@ mod tests {
             fuse: 6.0,
             roll: 0.0,
             heading: Vec2::new(0.0, -1.0),
+            orbit: None,
         }
     }
 

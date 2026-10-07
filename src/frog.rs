@@ -199,6 +199,9 @@ pub struct Frog {
     /// while positive the frog neither hops (`can_hop`) nor bites
     /// (`can_attack`). Set by `stun`, ticked down by `tick`.
     pub stun_timer: f32,
+    /// In a gravity well's pull this tick (docs/gravity-well.md): pinned,
+    /// it slides toward the core and does not hop.
+    pub pulled: bool,
 }
 
 /// Which of the five filmstrips (see docs/FROG_SPEC.md) `anim` picked for
@@ -266,7 +269,7 @@ impl Frog {
     /// job, checked separately since it needs world/obstacle data this
     /// type deliberately has no access to.
     pub fn can_hop(&self) -> bool {
-        !self.is_dead() && self.hop_cooldown <= 0.0 && !self.is_stunned()
+        !self.is_dead() && self.hop_cooldown <= 0.0 && !self.is_stunned() && !self.pulled
     }
 
     /// Stunned for `seconds`, or as long as it already was, if longer.
@@ -527,6 +530,7 @@ mod facing_tests {
             facing: Facing::Right,
             death_elapsed: None,
             stun_timer: 0.0,
+            pulled: false,
         }
     }
 

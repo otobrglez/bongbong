@@ -304,6 +304,8 @@ impl Game {
             params.knockback *= t.barrel_ram_kick_factor;
         }
         if live {
+            // The drums a gravity well holds in its reach go off too.
+            self.chain_held_drums(f, center, params.radius);
             // Players first, in index order, then the enemies - the same
             // draw order as a wreck's blast (`Game::apply_explosion`).
             for player in self.seats_on_field().into_iter().flatten() {

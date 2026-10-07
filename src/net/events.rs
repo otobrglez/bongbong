@@ -265,6 +265,16 @@ pub enum WireEvent {
     /// The rod `id` landed on map cell (`col`, `row`), leaving a crater
     /// (`crater`) and setting a volcano off (`erupted`); `Event::RodImpact`.
     RodImpact { id: u16, col: u8, row: u8, crater: bool, erupted: bool },
+    /// The orb `id` of `slot` anchored at (`x`, `y`) by `by`; `seat` is
+    /// `wire::NO_SEAT` for an enemy's; `Event::WellAnchored`.
+    WellAnchored { id: u16, slot: u16, seat: u8, x: i16, y: i16, by: crate::well::AnchorBy },
+    /// The well `id` collapsed at (`x`, `y`), `early` under an EMP;
+    /// `Event::WellCollapsed`.
+    WellCollapsed { id: u16, x: i16, y: i16, early: bool },
+    /// `what` was swallowed by a core at (`x`, `y`); `Event::Swallowed`.
+    Swallowed { what: crate::well::Swallow, x: i16, y: i16 },
+    /// The orb `id` was put out at (`x`, `y`); `Event::OrbFizzled`.
+    OrbFizzled { id: u16, x: i16, y: i16 },
 }
 
 /// `WireEvent::DroneLaunched::target` for a drone locked on no tank.
@@ -378,6 +388,12 @@ impl WireEvent {
                 crater,
                 erupted,
             },
+            Event::WellAnchored { id, slot, seat, x, y, by } => {
+                WireEvent::WellAnchored { id: (id & 0xFFFF) as u16, slot: slot_u16(slot), seat, x: q(x), y: q(y), by }
+            }
+            Event::WellCollapsed { id, x, y, early } => WireEvent::WellCollapsed { id: (id & 0xFFFF) as u16, x: q(x), y: q(y), early },
+            Event::Swallowed { what, x, y } => WireEvent::Swallowed { what, x: q(x), y: q(y) },
+            Event::OrbFizzled { id, x, y } => WireEvent::OrbFizzled { id: (id & 0xFFFF) as u16, x: q(x), y: q(y) },
             Event::DroneLaunched { id, slot, x, y, target, frog } => WireEvent::DroneLaunched {
                 id: (id & 0xFFFF) as u16,
                 slot: slot_u16(slot),
@@ -571,6 +587,10 @@ impl WireEvent {
                 land: land as f32 * crate::PHYSICS_FIXED_DT,
             },
             WireEvent::RodImpact { id, col, row, crater, erupted } => Event::RodImpact { id: id as u32, cell: (col as i32, row as i32), crater, erupted },
+            WireEvent::WellAnchored { id, slot, seat, x, y, by } => Event::WellAnchored { id: id as u32, slot: slot as usize, seat, x: d(x), y: d(y), by },
+            WireEvent::WellCollapsed { id, x, y, early } => Event::WellCollapsed { id: id as u32, x: d(x), y: d(y), early },
+            WireEvent::Swallowed { what, x, y } => Event::Swallowed { what, x: d(x), y: d(y) },
+            WireEvent::OrbFizzled { id, x, y } => Event::OrbFizzled { id: id as u32, x: d(x), y: d(y) },
             WireEvent::DroneLaunched { id, slot, x, y, target, frog } => Event::DroneLaunched {
                 id: id as u32,
                 slot: slot as usize,

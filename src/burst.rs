@@ -425,7 +425,7 @@ mod tests {
                 Shape::Puff(p) => Some(p.body),
                 Shape::Mark { color, .. } => Some(color),
                 Shape::Line { head, .. } => Some(head),
-                Shape::Arc { color, .. } => Some(color),
+                Shape::Arc { color, .. } | Shape::Disc { color, .. } => Some(color),
                 Shape::Glow { .. } => None,
             })
             .collect()
