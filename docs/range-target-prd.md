@@ -16,11 +16,16 @@ shows how hard a weapon hits (how many shots it takes), how wide it spreads
 
 ## 2. What a player sees
 
-One cell: a round board on two legs and a crossbar, a gold centre, red and
-white rings, a dark wooden rim and the board's thickness under it - the
-drum's round silhouette, told apart from it by the rings and the stand.
-On the Puny palette, drawn on the 16 px macro grid and doubled like every
-prop (`gen_props.py`), with the obstacle drop shadow.
+One cell: a round board on an easel - two splayed legs, a back leg and a
+crossbar - a gold centre in a red and a white ring, a dark wooden rim lit
+from the upper left and the board's thickness under it. On the Puny
+palette, in the props' 2 px blocks (`gen_props.py`), with the obstacle
+drop shadow. It is drawn 30 % larger than a prop so it reads across the
+field: the face is a whole cell (32 px) wide and the sprite 36 px tall,
+from its own sheet's 44 px cells (`target_sheet.png`), standing a block
+above its cell with its feet a block below it the way a tree's canopy
+overhangs - while the board still occupies exactly one cell (its
+collider, the nav grid, the map).
 
 - **Shot** - by a shell, a bullet, a plasma bolt, the laser, a grenade's
   or a missile's blast, or a ram - it takes the hit like any tile (the hit
@@ -80,8 +85,8 @@ whole 2 px blocks, ramp steps, no RNG.
 ## 4. Rules
 
 - `Material::Target`, appended to the enum (the wall block's indices are
-  untouched). A prop on `props_sheet.png` (row 10; docs/PROPS_SPEC.md),
-  one variant, four visible stages, seam-closed like a prop, blocks sight
+  untouched). A prop drawn from its own `target_sheet.png` (44 px cells;
+  docs/PROPS_SPEC.md), one variant, four visible stages, seam-closed like a prop, blocks sight
   like a wall, not permanent, no pass-over or deflection chance, no ram
   collapse - a tank stops against it and its ram damage wears it down.
 - `CellObject::Target`, `kind = "target"` in a map.

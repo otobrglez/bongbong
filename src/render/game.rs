@@ -105,6 +105,8 @@ pub struct Textures<'a> {
     pub grass: &'a Texture2D,
     /// static/trees_sheet.png - the two tree species (docs/TREES_SPEC.md).
     pub trees: &'a Texture2D,
+    /// static/target_sheet.png - the range board (docs/PROPS_SPEC.md).
+    pub target: &'a Texture2D,
     /// static/towers_sheet.png - the defence towers (docs/TOWERS_SPEC.md).
     pub towers: &'a Texture2D,
     /// static/portal_sheet.png - the turning spiral (portal.rs).
@@ -136,6 +138,7 @@ impl Sheets for Textures<'_> {
             Sheet::Walls => self.obstacles,
             Sheet::Props => self.props,
             Sheet::Trees => self.trees,
+            Sheet::Target => self.target,
             Sheet::Towers => self.towers,
             Sheet::Grass(_) => self.grass,
             Sheet::Tracks => self.tracks,

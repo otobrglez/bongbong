@@ -23,10 +23,10 @@ use crate::{
     PROPS_BARREL_LIT_COL,
     PROPS_OIL_ROW,
     PROPS_OIL_VARIANTS,
-    PROPS_TARGET_BURN_COL,
-    PROPS_TARGET_BURN_STAGES,
-    PROPS_TARGET_ROW,
     Position,
+    TARGET_BURN_COL,
+    TARGET_BURN_STAGES,
+    TARGET_TEXTURE_SIZE,
     TREE_BURN_COL,
     TREE_ROW_BROADLEAF,
     TREE_SHIMMER_FRAMES,
@@ -107,11 +107,13 @@ pub use crate::canvas::Sheet;
 
 impl Sheet {
     /// Source cell size in this atlas. Walls and props share the obstacle
-    /// grid's own 32px; trees and towers are drawn from 48px cells so they
-    /// can overhang the cell they stand in (see `TREE_TEXTURE_SIZE`).
+    /// grid's own 32px; trees and towers are drawn from 48px cells and the
+    /// range board from 44px ones, so they can overhang the cell they stand
+    /// in (see `TREE_TEXTURE_SIZE`, `TARGET_TEXTURE_SIZE`).
     pub fn cell(self) -> f32 {
         match self {
             Sheet::Trees | Sheet::Towers => TREE_TEXTURE_SIZE,
+            Sheet::Target => TARGET_TEXTURE_SIZE,
             _ => OBSTACLE_TEXTURE_SIZE,
         }
     }
@@ -124,7 +126,8 @@ impl Material {
     /// them from it.
     pub fn sheet(self) -> Sheet {
         match self {
-            Material::Sandbag | Material::Barrel | Material::Fence | Material::Target => Sheet::Props,
+            Material::Sandbag | Material::Barrel | Material::Fence => Sheet::Props,
+            Material::Target => Sheet::Target,
             Material::Tree | Material::Pine => Sheet::Trees,
             Material::Tesla | Material::GunTower | Material::BioSlush => Sheet::Towers,
             _ => Sheet::Walls,
@@ -149,7 +152,7 @@ impl Material {
             Material::Sandbag => 0,
             Material::Barrel => 3,
             Material::Fence => 5,
-            Material::Target => PROPS_TARGET_ROW,
+            Material::Target => 0,
             Material::Tree => TREE_ROW_BROADLEAF,
             Material::Pine => TREE_ROW_CONIFER,
             // A tower's rows depend on its side as well (`tower::base_row`).
@@ -588,9 +591,11 @@ impl Obstacle {
     }
 
     /// Side length of the drawn sprite, which is `size()` for everything
-    /// but a tree: a tree's 48px cell overhangs its 32px footprint by 8px
-    /// on each side, so canopies interlock instead of tiling. Never use
-    /// this for physics or grid maths - that is what `size()` is for.
+    /// but a tree and a range board: a tree's 48px cell overhangs its 32px
+    /// footprint by 8px on each side, so canopies interlock instead of
+    /// tiling, and a board's 44px cell by 6px, the board drawn 30 % larger
+    /// than a prop. Never use this for physics or grid maths - that is what
+    /// `size()` is for.
     pub fn sprite_size(&self) -> f32 {
         self.material.sheet().cell() * OBSTACLE_SCALE
     }
@@ -627,8 +632,8 @@ impl Obstacle {
             // The board chars through its three burn columns in order
             // rather than flickering between them; the flicker is its
             // embers (`target::fire_shapes`).
-            let stage = (self.burn_progress() * PROPS_TARGET_BURN_STAGES as f32) as i32;
-            return PROPS_TARGET_BURN_COL + stage.clamp(0, PROPS_TARGET_BURN_STAGES - 1);
+            let stage = (self.burn_progress() * TARGET_BURN_STAGES as f32) as i32;
+            return TARGET_BURN_COL + stage.clamp(0, TARGET_BURN_STAGES - 1);
         }
         if self.burning {
             return 4 + self.burn_frame;

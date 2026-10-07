@@ -1469,6 +1469,9 @@ pub fn run(args: Args) {
     let props_texture = rl
         .load_texture(&thread, "static/props_sheet.png")
         .expect("failed loading props texture");
+    let target_texture = rl
+        .load_texture(&thread, "static/target_sheet.png")
+        .expect("failed loading target texture");
     let barrel_explosion_texture = rl
         .load_texture(&thread, "static/barrel_explosion.png")
         .expect("failed loading barrel explosion texture");
@@ -2216,6 +2219,7 @@ pub fn run(args: Args) {
                     ground: &ground_textures[theme_index(session.builder.map().theme)],
                     grass: &grass_textures[theme_index(session.builder.map().theme)],
                     trees: &trees_texture,
+                    target: &target_texture,
                     towers: &towers_texture,
                     crates: &crates_texture,
                     pickup_glyphs: &pickup_glyphs_texture,
@@ -2724,6 +2728,7 @@ pub fn run(args: Args) {
                 frog_variants: &frog_textures,
                 grass: &grass_textures[theme_index(game.map.theme)],
                 trees: &trees_texture,
+                target: &target_texture,
                 towers: &towers_texture,
                 crates: &crates_texture,
                 pickup_glyphs: &pickup_glyphs_texture,

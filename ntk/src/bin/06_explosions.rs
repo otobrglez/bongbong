@@ -79,6 +79,7 @@ fn main() {
     let tracks = load(&mut rl, "static/tracks.png");
     let obstacles = load(&mut rl, "static/walls_sheet.png");
     let props = load(&mut rl, "static/props_sheet.png");
+    let target = load(&mut rl, "static/target_sheet.png");
     let barrel_explosion = load(&mut rl, "static/barrel_explosion.png");
     let ground = load(&mut rl, "static/punyworld/punyworld-overworld-tileset.png");
     let frog_idle = load(&mut rl, &format!("static/toxic_frog/{}/idle.png", bongbong::frog::FROG_VARIANT_DIRS[0]));
@@ -171,6 +172,7 @@ fn main() {
             missile: &missile,
             grass: &grass,
             trees: &trees,
+            target: &target,
             towers: &towers,
             crates: &crates,
             pickup_glyphs: &pickup_glyphs,
@@ -232,6 +234,7 @@ fn main() {
                             ground: &ground,
                             grass: &grass,
                             trees: &trees,
+                            target: &target,
                             towers: &towers,
                             crates: &crates,
                             pickup_glyphs: &pickup_glyphs,

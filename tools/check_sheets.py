@@ -82,6 +82,7 @@ ON_PALETTE = [
     'nature_sheet_desert.png',
     'trees_sheet.png',
     'props_sheet.png',
+    'target_sheet.png',
     'barrel_explosion.png',
     'scifi_tanks_sheet.png',
     'scifi_tanks_glow.png',
@@ -99,7 +100,7 @@ ON_PALETTE = [
 
 # The subset that is drawn over the ground layer and so must carry no green.
 NO_GREEN = [
-    'walls_sheet.png', 'props_sheet.png', 'barrel_explosion.png', 'portal_sheet.png', 'missile.png', 'towers_sheet.png',
+    'walls_sheet.png', 'props_sheet.png', 'target_sheet.png', 'barrel_explosion.png', 'portal_sheet.png', 'missile.png', 'towers_sheet.png',
     'crates_sheet.png',
 ]
 

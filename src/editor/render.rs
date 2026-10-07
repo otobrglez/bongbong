@@ -112,6 +112,8 @@ pub struct EditorTextures<'a> {
     pub portal: &'a Texture2D,
     pub tanks: &'a Texture2D,
     pub trees: &'a Texture2D,
+    /// static/target_sheet.png - the range board.
+    pub target: &'a Texture2D,
     /// static/towers_sheet.png - the defence towers' bases and tops.
     pub towers: &'a Texture2D,
     /// The canvas's floor shade as `app.rs` uploaded it before the frame,
@@ -208,6 +210,7 @@ impl Sheets for EditorTextures<'_> {
             Sheet::Walls => self.obstacles,
             Sheet::Props => self.props,
             Sheet::Trees => self.trees,
+            Sheet::Target => self.target,
             Sheet::Towers => self.towers,
             Sheet::Grass(_) => self.grass,
             Sheet::Portal => self.portal,
@@ -1688,8 +1691,13 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             d.draw_texture_pro(textures.props, src, dest, origin, 0.0, tint);
         }
         CellObject::Wall { .. } | CellObject::Sandbag | CellObject::Barrel { .. } | CellObject::Fence | CellObject::Target => {
+            // At the sheet's own cell size: the cell for a wall or a prop,
+            // a range board's 44px, so its overhang matches a round.
             let material = obj.material().expect("solid cells have a material");
             let (sheet, src) = obstacle::icon_source_rec(material);
+            let drawn = sheet.cell();
+            let dest = Rectangle::new(pos.x, pos.y, drawn, drawn);
+            let origin = Vector2::new(drawn / 2.0, drawn / 2.0);
             d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, origin, 0.0, tint);
         }
         CellObject::Oil => {
@@ -1902,6 +1910,7 @@ fn sheet_texture<'a>(textures: &EditorTextures<'a>, sheet: obstacle::Sheet) -> &
         obstacle::Sheet::Walls => textures.obstacles,
         obstacle::Sheet::Props => textures.props,
         obstacle::Sheet::Trees => textures.trees,
+        obstacle::Sheet::Target => textures.target,
         obstacle::Sheet::Towers => textures.towers,
         other => panic!("a map cell never draws from {other:?}"),
     }

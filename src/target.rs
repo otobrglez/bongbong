@@ -24,13 +24,15 @@ use crate::pyro::{self, Shape, BLOCK, CHAR, FIRE};
 use crate::Position;
 
 /// Where the board's face sits on its cell, in px from the cell's centre:
-/// the generator's disc (`gen_props.py`'s `TGT_CX`/`TGT_CY`) one pixel
-/// above the middle, its radius `TGT_R` macro pixels at two px each.
-const FACE_DY: f32 = -1.0;
-const FACE_RADIUS: f32 = 12.8;
+/// the generator's disc (`gen_props.py`'s `TGT_CX`/`TGT_CY` on the 44px
+/// cell of `target_sheet.png`) one 2px block above the middle, its radius
+/// `TGT_R` macro pixels at two px each - the cell's half width.
+const FACE_DY: f32 = -2.0;
+const FACE_RADIUS: f32 = 16.0;
 
-/// Most embers a board shows at the height of its fire.
-const MAX_EMBERS: u32 = 9;
+/// Most embers a board shows at the height of its fire: as many to the
+/// face's area as on a 32px prop.
+const MAX_EMBERS: u32 = 14;
 
 /// Everything drawn over a range board this frame for its fire: scorch
 /// marks while it heats, ember marks while it burns. Empty for anything
@@ -147,7 +149,7 @@ mod tests {
         b.heat = 0.34;
         let late = marks(&fire_shapes(&b, 0.35));
         assert!(!early.is_empty() && late.len() > early.len(), "{} then {}", early.len(), late.len());
-        let centre = Position::new(160.0, 95.0);
+        let centre = Position::new(160.0, 94.0);
         let nearest = |m: &[(Position, Color)]| m.iter().map(|(p, _)| p.distance_to(centre)).fold(f32::MAX, f32::min);
         assert!(nearest(&late) < nearest(&early), "the soot reaches further in");
         // Never the middle: the gold still shows as it catches.
@@ -167,7 +169,7 @@ mod tests {
             b.burn_shown = i as f32 * 0.05;
             let m = marks(&fire_shapes(&b, 0.35));
             for (p, c) in &m {
-                assert!(p.distance_to(Position::new(160.0, 95.0)) <= FACE_RADIUS + BLOCK, "on the face");
+                assert!(p.distance_to(Position::new(160.0, 94.0)) <= FACE_RADIUS + BLOCK, "on the face");
                 assert!(FIRE.iter().any(|k| k == c), "fire steps only");
             }
             seen.insert(m.len());
