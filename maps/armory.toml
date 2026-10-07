@@ -32,7 +32,7 @@ spawn.kind = "band"
 
 
 # The start, the crates and the frog.
-cells."1,1" = { kind = "pickup", pickup = "health" }
+cells."1,4" = { kind = "pickup", pickup = "health" }
 cells."14,3" = { kind = "pickup", pickup = "shield" }
 cells."4,8" = { kind = "start" }
 cells."7,8" = { kind = "pickup", pickup = "sonic_hammer" }
