@@ -511,6 +511,13 @@ pub struct Ai {
     /// the tank stands `enemy_danger_clear_px` outside it, so the edge is
     /// never a place to jitter.
     dodging: bool,
+    /// The way out it is backing out by while `dodging`: an index into the
+    /// danger's `Danger::exits`, kept while that exit stays one it can
+    /// reach and chosen again only when it does not - so a tank whose
+    /// nearer exit sits on the edge of a cell it can reach (a shore, a
+    /// wall's margin), in and out of reach as the tank moves, does not
+    /// turn back and forth between it and the next one round.
+    dodge_exit: Option<u8>,
     /// Waiting at the spot outside a danger its steering target was moved
     /// to (`act_attack`) this tick: a hold of its own choosing.
     kept_out: bool,
@@ -643,6 +650,7 @@ impl Default for Ai {
             down: false,
             clearing: None,
             dodging: false,
+            dodge_exit: None,
             kept_out: false,
         }
     }
@@ -1038,6 +1046,7 @@ impl Ai {
         self.breach = None;
         self.aim_settle = 0.0;
         self.dodging = false;
+        self.dodge_exit = None;
     }
 
     /// The ring this tank's EMP rule asked to have cleared this tick, if
@@ -1969,8 +1978,7 @@ impl Brain<'_> {
     /// nearest. A disc round a seat by the field's edge has its nearest
     /// exit off the field, and steering at that wanders.
     fn way_out(&self, danger: &Danger, p: Position, clear: f32, facing: Dir) -> Position {
-        let on_field = |q: Position| q.x > 0.0 && q.y > 0.0 && q.x < self.width && q.y < self.height;
-        let reachable = |q: &Position| on_field(*q) && self.grid.usable(*q) && self.grid.connected(self.me.position, *q);
+        let reachable = |q: &Position| self.can_reach(*q);
         // A seat steered at stands at the middle of its own danger: wait
         // lined up on it, inside its sight box where a post is (a shot is
         // fired from there), then the nearest.
@@ -1987,6 +1995,12 @@ impl Brain<'_> {
         }
         let exits = danger.exits(p, clear, self.me.position, facing);
         exits.iter().copied().find(reachable).unwrap_or(exits[0])
+    }
+
+    /// Whether this tank can drive to `q`: on the field, in a usable cell,
+    /// joined to where it stands (`way_out`'s test).
+    fn can_reach(&self, q: Position) -> bool {
+        q.x > 0.0 && q.y > 0.0 && q.x < self.width && q.y < self.height && self.grid.usable(q) && self.grid.connected(self.me.position, q)
     }
 
     /// Whether `p` lies inside a danger this tank does not own.
@@ -2484,6 +2498,9 @@ fn build<'a>() -> Node<Brain<'a>> {
             condition(|b: &mut Brain| {
                 let here = b.danger_here().is_some();
                 b.ai.dodging = here;
+                if !here {
+                    b.ai.dodge_exit = None;
+                }
                 here
             }),
             action("dodge", act_dodge),
@@ -2830,7 +2847,9 @@ fn emp_rule(b: &Brain, sense: &EmpSense) -> Option<SpecialUse> {
 }
 
 /// Back out of the danger this tank stands inside (`Brain::danger_here`):
-/// steer for its way out (`Danger::exit`) a cell past the clear margin.
+/// drive for its way out a cell past the clear margin - the exit it chose
+/// (`Ai::dodge_exit`) while it can still reach it, else the first of
+/// `Danger::exits` it can - or, in a passing danger's slack band, stop.
 fn act_dodge(b: &mut Brain) -> Status {
     let Some(danger) = b.danger_here() else { return Status::Failure };
     b.reset_aim();
@@ -2842,7 +2861,14 @@ fn act_dodge(b: &mut Brain) -> Status {
     }
     let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
     let me = b.me.position;
-    let out = b.way_out(&danger, me, tuning().enemy_danger_clear_px + OBSTACLE_GRID_SIZE, facing);
+    // The exit it chose, while it can still reach it (`Ai::dodge_exit`);
+    // else the first it can, as `Brain::way_out` takes them; else the
+    // nearest.
+    let exits = danger.exits(me, tuning().enemy_danger_clear_px + OBSTACLE_GRID_SIZE, me, facing);
+    let held = b.ai.dodge_exit.map(usize::from).filter(|&i| i < exits.len() && b.can_reach(exits[i]));
+    let pick = held.or_else(|| exits.iter().position(|&q| b.can_reach(q)));
+    b.ai.dodge_exit = pick.map(|i| i as u8);
+    let out = exits[pick.unwrap_or(0)];
     // Straight onto the route out, whichever way it leaves: steering's
     // heading commitment never takes a point behind the tank (see
     // `steer_toward`), and a dodge is most often a reversal.
@@ -4078,6 +4104,36 @@ mod emp_rule_tests {
         me.position = Position::new(ME.x - 60.0 + 200.0 + tuning().enemy_danger_clear_px * 0.5, ME.y);
         let intent = think(&mut ai, &me, SpecialSense::None, &[disc(Some(0))], seat);
         assert_eq!((ai.last_action, intent.move_dir), (Some("dodge"), Some(Dir::Right)));
+    }
+
+    /// A tank backing out keeps the exit it chose while it can reach it,
+    /// though an exit nearer the line out comes back into reach - so one
+    /// on a shore's edge, flickering in and out of reach as the tank
+    /// moves, does not turn it back and forth on the spot - and chooses
+    /// again only once the one it holds is out of reach.
+    #[test]
+    fn a_tank_backing_out_keeps_the_exit_it_chose() {
+        let seat = Position::new(ME.x - 400.0, ME.y);
+        let disc = |radius| Danger { shape: DangerShape::Disc { at: Position::new(ME.x - 60.0, ME.y), radius }, owner: Some(0), slack: 0.0 };
+        // Straight out is to the right; the exit turned a quarter round,
+        // below, is held.
+        let mut ai = ready();
+        let intent = think(&mut ai, &emp_tank(), SpecialSense::None, &[disc(200.0)], seat);
+        assert_eq!((intent.move_dir, ai.dodge_exit), (Some(Dir::Right), Some(0)), "the nearest first");
+        let mut ai = ready();
+        ai.dodge_exit = Some(5);
+        let intent = think(&mut ai, &emp_tank(), SpecialSense::None, &[disc(200.0)], seat);
+        assert_eq!((intent.move_dir, ai.dodge_exit), (Some(Dir::Down), Some(5)), "the one it holds");
+        // Held past the field's bottom edge: out of reach, chosen again.
+        let mut ai = ready();
+        ai.dodge_exit = Some(5);
+        let intent = think(&mut ai, &emp_tank(), SpecialSense::None, &[disc(400.0)], seat);
+        assert_eq!((intent.move_dir, ai.dodge_exit), (Some(Dir::Right), Some(0)), "out of reach: the first it can reach");
+        // Clear of every danger, it lets go.
+        let mut ai = ready();
+        ai.dodge_exit = Some(5);
+        think(&mut ai, &emp_tank(), SpecialSense::None, &[], seat);
+        assert_eq!((ai.dodging, ai.dodge_exit), (false, None));
     }
 
     /// In the slack band of a danger that is over in a moment (an ally's
