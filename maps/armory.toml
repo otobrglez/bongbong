@@ -1,5 +1,6 @@
 version = 1
 tanks = 4
+view = "whole"
 size = [
     40.0,
     22.0,
