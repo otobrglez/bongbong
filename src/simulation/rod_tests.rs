@@ -978,3 +978,43 @@ fn a_rod_hunter_calls_on_its_quarry_from_outside_the_circle() {
     let c = crate::map::cell_to_world(cell.0, cell.1);
     assert!(from.distance_to(c) > t.rod_kill_radius_px + t.rod_ai_friend_margin_px, "from outside the circle: {from:?} -> {c:?}");
 }
+
+/// A seat creeping along slowly is called on where it will be when the rod
+/// lands, never where it stands (the lead).
+#[test]
+fn an_enemy_leads_a_slow_seat() {
+    let mut game = round("");
+    let s = seat(&game);
+    // A quarter of its pace passes the slow speed once it is up to it; a
+    // fifth stays under it.
+    with_tank_mut(&game.world, s, |t| {
+        t.disarm();
+        t.speed_scale = 0.2;
+    });
+    let slot = game.debug_spawn_enemy(crate::map::cell_to_world(9, 12), Some(1), Some(Role::Player)).expect("spawns");
+    let enemy = game.tank_entity_by_slot(slot).expect("exists");
+    with_tank_mut(&game.world, enemy, |t| {
+        t.shells_ammo = 0;
+        t.disarm();
+        t.take_weapon(ActiveWeapon::RodFromGod);
+        t.speed_scale = 0.0;
+    });
+    let t = tuning();
+    let mut call = None;
+    for _ in 0..60 * 6 {
+        for e in step_with(&mut game, Intent { move_dir: Some(Dir::Right), ..Intent::default() }) {
+            if let Event::RodCalled { cell, .. } = e {
+                call = Some((cell, with_tank(&game.world, s, |tk| tk.position), game.seat_still(0)));
+            }
+        }
+        if call.is_some() {
+            break;
+        }
+    }
+    let (cell, at, still) = call.expect("a call on the creeping seat");
+    let speed = still.speed();
+    assert!(speed >= crate::rod::SEAT_LEAD_MIN_SPEED && speed <= t.rod_ai_slow_speed, "a slow seat: {speed}");
+    let landed = crate::map::cell_to_world(cell.0, cell.1);
+    assert!(landed.x - at.x >= OBSTACLE_GRID_SIZE * 2.0, "led along its way: {at:?} -> {landed:?}");
+    assert!((landed.x - (at.x + speed * t.rod_countdown_seconds)).abs() <= OBSTACLE_GRID_SIZE * 1.5, "where the countdown carries it: {at:?} -> {landed:?} at {speed}");
+}
