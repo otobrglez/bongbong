@@ -984,6 +984,36 @@ mod tests {
         assert!(water.depth_at(shoal.fish[0].pos).is_wet(), "{:?}", shoal.fish[0].pos);
     }
 
+    /// A rod's impact throws the fish within its reach whose throw away
+    /// from it lands on dry ground onto the bank - at most its count,
+    /// nearest first - and leaves the rest in the water
+    /// (docs/rod-from-god.md).
+    #[test]
+    fn a_rods_impact_throws_the_fish_by_the_shore_onto_the_bank() {
+        let t = quick();
+        let water = pond();
+        let mut shoal = Shoal::new(&water, 5, &t);
+        assert!(shoal.fish.len() >= 3);
+        // By the east shore, by the west shore, and in the middle.
+        shoal.fish[0].pos = Position::new(340.0, 128.0);
+        shoal.fish[1].pos = Position::new(76.0, 128.0);
+        shoal.fish[2].pos = Position::new(240.0, 150.0);
+        for f in shoal.fish.iter_mut().skip(3) {
+            f.pos = Position::new(240.0, 128.0);
+        }
+        shoal.throw_from(Position::new(240.0, 128.0), 200.0, 8, &water, &t);
+        for i in [0, 1] {
+            let flop = shoal.fish[i].flop.unwrap_or_else(|| panic!("fish {i} by the shore is thrown"));
+            assert_eq!(water.depth_at(flop.bank), Depth::Dry);
+        }
+        assert!(shoal.fish[2].flop.is_none(), "the one in the middle stays in the water");
+        let mut capped = Shoal::new(&water, 5, &t);
+        capped.fish[0].pos = Position::new(340.0, 128.0);
+        capped.fish[1].pos = Position::new(76.0, 128.0);
+        capped.throw_from(Position::new(240.0, 128.0), 200.0, 1, &water, &t);
+        assert_eq!(capped.fish.iter().filter(|f| f.flop.is_some()).count(), 1, "at most its count");
+    }
+
     /// A lake painted to the map's edge runs on past it, so a fish the
     /// wave would throw past the edge stays in the water: no fish lands off
     /// the map.

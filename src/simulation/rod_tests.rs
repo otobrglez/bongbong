@@ -326,6 +326,42 @@ fn a_rod_on_a_volcano_sets_it_off() {
     assert!(!game.craters().holds((20, 8)), "no crater on the cone");
 }
 
+/// The same on the shipped `vulkan` level: a call on its crater cell
+/// erupts the volcano on the next tick, whatever its phase, and the next
+/// eruption comes a period after that one.
+#[test]
+fn a_rod_on_vulkans_crater_sets_it_off() {
+    let text = crate::map::SHIPPED_MAPS.iter().find(|(n, _)| *n == "vulkan").expect("shipped").1;
+    let mut game = Game::default();
+    game.seed_override = Some(7);
+    game.show_intro = false;
+    game.map = MapFile::from_toml_str(text).expect("parses");
+    let (w, h) = game.map.field_size();
+    game.init(w, h);
+    let t = tuning();
+    assert_eq!(game.volcanoes.len(), 1);
+    let crater = crate::map::cell_to_world(26, 15);
+    let stage = |game: &Game| game.volcanoes[0].phase(game.time, &t).stage;
+    // Wait until it is asleep, so the eruption is the rod's.
+    while stage(&game) != crate::volcano::Stage::Asleep {
+        step(&mut game, false);
+    }
+    game.debug_call_rod(crater, false).expect("a call");
+    let mut events = Vec::new();
+    while !events.iter().any(|e| matches!(e, Event::RodImpact { .. })) {
+        events = step(&mut game, false);
+    }
+    assert!(events.iter().any(|e| matches!(e, Event::RodImpact { erupted: true, .. })), "{events:?}");
+    step(&mut game, false);
+    assert_eq!(stage(&game), crate::volcano::Stage::Erupt, "erupting on the tick after");
+    let from = game.time;
+    while stage(&game) == crate::volcano::Stage::Erupt {
+        step(&mut game, false);
+    }
+    assert!(game.time - from < t.volcano_erupt_seconds + 0.1, "an eruption's length");
+    assert!(!game.craters().holds((26, 15)));
+}
+
 /// Every enemy keeps out of a call: one standing in the circle drives out
 /// before it lands.
 #[test]
@@ -463,4 +499,180 @@ fn a_rooms_report_puts_the_reticle_where_the_client_has_it() {
     game.set_seat_reticle(0, Some((11, 7)));
     let events = step(&mut game, false);
     assert_eq!(called(&events), vec![(11, 7)], "the release calls on the reported cell");
+}
+
+/// Every hull with any part of its box in the circle is crushed, either
+/// side - the caller and a teammate too -, and one whose box stays a
+/// pixel outside it is only shoved.
+#[test]
+fn the_circle_crushes_every_hull_with_any_part_inside_it() {
+    let mut game = round("");
+    let t = tuning();
+    let c = crate::map::cell_to_world(15, 8);
+    let inside = parked(&mut game, Position::new(c.x + t.rod_kill_radius_px + 10.0, c.y));
+    let (half, _) = with_tank(&game.world, inside, |tk| {
+        let (_, half) = tk.hull_bbox_world();
+        (half, ())
+    });
+    let outside = parked(&mut game, Position::new(c.x, c.y - t.rod_kill_radius_px - half.y - 4.0));
+    game.place_tank(seat(&game), Position::new(c.x - 30.0, c.y), Some(90.0)).expect("placed");
+    game.debug_call_rod(c, false).expect("a call");
+    let events = idle(&mut game, countdown_ticks() + 30);
+    assert_eq!(rod_kills(&events), 2, "{events:?}");
+    assert!(with_tank(&game.world, inside, |tk| tk.is_wreck()), "a part inside is enough");
+    assert!(with_tank(&game.world, seat(&game), |tk| tk.is_wreck()), "the caller dies in its own circle");
+    assert!(!with_tank(&game.world, outside, |tk| tk.is_wreck()), "a pixel out is not crushed");
+}
+
+/// Calls land in the order they were made, each on its own tick.
+#[test]
+fn several_calls_land_in_id_order() {
+    let mut game = round("");
+    let a = game.debug_call_rod(crate::map::cell_to_world(20, 4), false).expect("a call");
+    idle(&mut game, 10);
+    let b = game.debug_call_rod(crate::map::cell_to_world(20, 12), false).expect("a call");
+    let events = idle(&mut game, countdown_ticks() + 20);
+    let landed: Vec<u32> = events.iter().filter_map(|e| if let Event::RodImpact { id, .. } = e { Some(*id) } else { None }).collect();
+    assert_eq!(landed, vec![a, b]);
+}
+
+/// On the end screen a call lands as a show and nothing else: no crush,
+/// no tile, no crater.
+#[test]
+fn a_call_lands_harmlessly_on_the_end_screen() {
+    let mut game = round("cells.\"20,8\" = { kind = \"wall\", material = \"brick\" }\n");
+    let enemy = parked(&mut game, crate::map::cell_to_world(20, 9));
+    game.debug_call_rod(crate::map::cell_to_world(20, 8), false).expect("a call");
+    game.outcome = Outcome::Won;
+    game.hold_end_screen = true;
+    let events = idle(&mut game, countdown_ticks() + 10);
+    assert!(impacts(&events).len() == 1, "the show plays: {events:?}");
+    assert_eq!(rod_kills(&events), 0);
+    assert!(!with_tank(&game.world, enemy, |tk| tk.is_wreck()));
+    assert!(game.world.query::<&crate::obstacle::Obstacle>().iter().any(|o| o.cell() == (20, 8) && !o.destroyed), "the brick stands");
+    assert!(game.craters().is_empty());
+}
+
+/// The rod draws nothing from the round's RNG: a call, its impact, a
+/// shove and a plain tile crushed leave the stream where the same round
+/// without them leaves it (what a crushed hull's wreck sets off rolls as
+/// any wreck's does).
+#[test]
+fn the_rod_draws_no_rng() {
+    let run = |call: bool| {
+        let mut game = round("cells.\"20,8\" = { kind = \"wall\", material = \"brick\" }\n");
+        parked(&mut game, crate::map::cell_to_world(20, 13));
+        if call {
+            game.debug_call_rod(crate::map::cell_to_world(20, 9), false).expect("a call");
+        }
+        let events = idle(&mut game, countdown_ticks() + 30);
+        let mut rng = game.rng.clone().expect("seeded");
+        (impacts(&events).len(), rand::RngExt::random::<u64>(&mut rng))
+    };
+    let (landed, with) = run(true);
+    assert_eq!(landed, 1);
+    let (_, without) = run(false);
+    assert_eq!(with, without);
+}
+
+/// A drone over the circle is downed by the impact (`AirStrike::Rod`).
+#[test]
+fn a_drone_over_the_circle_is_downed() {
+    let mut game = round("");
+    let at = crate::map::cell_to_world(16, 8);
+    let slot = game.debug_spawn_enemy(crate::map::cell_to_world(30, 8), Some(1), Some(Role::Player)).expect("spawns");
+    game.debug_call_rod(at, false).expect("a call");
+    idle(&mut game, crate::tank::ticks_of(tuning().rod_countdown_seconds) - 2);
+    // A drone of the enemy's cruising over the circle as it lands.
+    let mut d = crate::fpv::Drone::launch(at, crate::math::Vec2::new(-1.0, 0.0), 0, crate::shell::Owner::Enemy(slot), crate::fpv::DroneLock::None, crate::map::cell_to_world(2, 8));
+    d.stage = crate::fpv::DroneStage::Cruise;
+    d.height = tuning().fpv_cruise_height;
+    d.id = game.take_shot_id();
+    game.world.spawn((d,));
+    let events = idle(&mut game, 6);
+    assert!(events.iter().any(|e| matches!(e, Event::DroneDowned { by: "rod", .. })), "{events:?}");
+}
+
+/// The router prices a crater, and the kept nav grid after one is the one
+/// built from scratch.
+#[test]
+fn the_router_prices_a_crater_and_the_kept_grid_follows() {
+    let mut game = round("");
+    game.debug_call_rod(crate::map::cell_to_world(16, 8), false).expect("a call");
+    idle(&mut game, countdown_ticks());
+    assert!(!game.craters().is_empty());
+    let (w, h) = game.map.field_size();
+    game.refresh_nav(w, h);
+    let mut scratch = game.nav_grid(w, h);
+    scratch.label();
+    assert!(game.nav.base().same_as(&scratch), "the kept grid is the one built from scratch");
+    let (a, b) = (crate::map::cell_to_world(16, 5), crate::map::cell_to_world(16, 11));
+    let plain = round("").nav_grid(w, h).path_cost(a, b).expect("a way");
+    let priced = scratch.path_cost(a, b).expect("a way");
+    assert!(priced > plain, "the crater on the line costs more: {priced} vs {plain}");
+}
+
+/// The spawn swap hands the rod out by its share, a hash of the spawn and
+/// never a draw; a tank that drew no special keeps none.
+#[test]
+fn the_spawn_swap_hands_out_the_rod_by_its_share() {
+    let at = Position::new(400.0, 200.0);
+    let mut t = crate::tuning::Tuning::DEFAULT;
+    let mut laser = Tank::default();
+    laser.take_weapon(ActiveWeapon::Laser);
+    super::sonic::swap_spawn_special_with(&t, &mut laser, 5, at);
+    assert_eq!(laser.special(), Some(ActiveWeapon::Laser), "nothing at the default share");
+    t.enemy_special_weapon_rod_share = 1.0;
+    super::sonic::swap_spawn_special_with(&t, &mut laser, 5, at);
+    assert_eq!(laser.special(), Some(ActiveWeapon::RodFromGod));
+    let mut shells = Tank::default();
+    super::sonic::swap_spawn_special_with(&t, &mut shells, 5, at);
+    assert_eq!(shells.special(), None);
+}
+
+/// An enemy takes the rod's crate only while it carries no special.
+#[test]
+fn an_enemy_takes_the_crate_only_with_no_special() {
+    let mut tk = Tank { owner: crate::shell::Owner::Enemy(4), ..Tank::default() };
+    assert!(tk.wants_pickup(PickupKind::RodFromGod));
+    tk.take_weapon(ActiveWeapon::Plasma);
+    assert!(!tk.wants_pickup(PickupKind::RodFromGod));
+}
+
+/// An enemy never calls on a seat whose circle holds an ally - one parked
+/// beside the seat keeps the camper safe from the call.
+#[test]
+fn an_enemy_never_calls_on_a_circle_holding_an_ally() {
+    let mut game = round("");
+    with_tank_mut(&game.world, seat(&game), |t| t.disarm());
+    parked(&mut game, Position::new(SEAT.x + 40.0, SEAT.y + 48.0));
+    let slot = game.debug_spawn_enemy(crate::map::cell_to_world(11, 6), Some(1), Some(Role::Player)).expect("spawns");
+    let enemy = game.tank_entity_by_slot(slot).expect("exists");
+    with_tank_mut(&game.world, enemy, |t| {
+        t.shells_ammo = 0;
+        t.disarm();
+        t.take_weapon(ActiveWeapon::RodFromGod);
+        t.speed_scale = 0.0;
+    });
+    let events = idle(&mut game, 60 * 10);
+    assert!(called(&events).iter().all(|&c| c != (3, 6)), "no call on the seat with an ally beside it: {:?}", called(&events));
+}
+
+/// The seat's motion record counts how long it stood within
+/// `rod_ai_still_px` and averages its speed, and starts again on a wreck.
+#[test]
+fn the_seat_still_record_counts_still_and_averages_speed() {
+    let t = crate::tuning::Tuning::DEFAULT;
+    let mut r = crate::rod::SeatStill::default();
+    for _ in 0..120 {
+        r.step(Some(Position::new(100.0, 100.0)), DT, &t);
+    }
+    assert!((r.still - 119.0 * DT).abs() < 1e-3, "{}", r.still);
+    for i in 0..60 {
+        r.step(Some(Position::new(100.0 + i as f32 * 2.0, 100.0)), DT, &t);
+    }
+    assert!(r.still < 1.0, "{}", r.still);
+    assert!(r.speed() > 30.0, "{}", r.speed());
+    r.step(None, DT, &t);
+    assert_eq!(r, crate::rod::SeatStill::default());
 }
