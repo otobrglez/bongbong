@@ -730,6 +730,47 @@ fn an_enemy_never_calls_on_a_tower_whose_circle_holds_a_seat_off_its_box() {
     assert!(!run(beside).contains(&tower), "with a seat by it, from off that seat's box, it is not");
 }
 
+/// A chaser whose seat stands in a call waits at the circle's edge on its
+/// own side - wherever in the call's cell the seat stands - rather than
+/// drive round the circle to the side the seat leans (`Brain::way_out`).
+#[test]
+fn a_chaser_waits_for_a_call_on_its_own_side() {
+    let t = tuning();
+    for (dx, dy, ex, ey) in [(-10.0, 0.0, 150.0, 200.0), (0.0, 10.0, 150.0, -200.0), (10.0, 0.0, -150.0, 200.0), (-8.0, -8.0, 200.0, 150.0), (0.0, -10.0, 100.0, 200.0)] {
+        let mut game = round("");
+        let s = seat(&game);
+        let mid = crate::map::cell_to_world(16, 8);
+        game.place_tank(s, Position::new(mid.x + dx, mid.y + dy), Some(0.0)).unwrap();
+        with_tank_mut(&game.world, s, |tk| tk.disarm());
+        let start = Position::new(mid.x + ex, mid.y + ey);
+        let slot = game.debug_spawn_enemy(start, Some(1), Some(Role::Player)).expect("spawns");
+        let enemy = game.tank_entity_by_slot(slot).expect("exists");
+        with_tank_mut(&game.world, enemy, |tk| tk.disarm());
+        game.debug_call_rod(mid, true).expect("a call");
+        let danger = game.zones()[0].danger_radius(&t);
+        let mut last = with_tank(&game.world, enemy, |tk| tk.rotation);
+        let mut turned = 0.0;
+        for _ in 0..crate::tank::ticks_of(t.rod_countdown_seconds) - 2 {
+            step(&mut game, false);
+            let (p, r) = with_tank(&game.world, enemy, |tk| (tk.position, tk.rotation));
+            assert!(p.distance_to(mid) > danger - 8.0, "kept out of the call: {p:?}");
+            let mut d = r - last;
+            while d > 180.0 {
+                d -= 360.0;
+            }
+            while d < -180.0 {
+                d += 360.0;
+            }
+            turned += d.abs();
+            last = r;
+        }
+        let end = with_tank(&game.world, enemy, |tk| tk.position);
+        let side = (end.x - mid.x) * (start.x - mid.x) + (end.y - mid.y) * (start.y - mid.y);
+        assert!(side > 0.0, "seat ({dx}, {dy}), from ({ex}, {ey}): it waits on its own side, at {end:?}");
+        assert!(turned <= 270.0, "seat ({dx}, {dy}), from ({ex}, {ey}): {turned} degrees of turning");
+    }
+}
+
 /// One caller per target, but only a caller that can call: a lower slot
 /// still reloading leaves the camper to the rod tank after it rather than
 /// keep it from calling (`Game::rod_senses`).

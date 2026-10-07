@@ -2337,7 +2337,8 @@ impl Brain<'_> {
         }
     }
 
-    /// The first of `danger`'s exits from `p` this tank can drive to - on
+    /// The first of `danger`'s exits from `p` - from where this tank stands,
+    /// for a rod's call it stands outside - this tank can drive to - on
     /// the field, in a usable cell, joined to where it stands - else the
     /// nearest. A disc round a seat by the field's edge has its nearest
     /// exit off the field, and steering at that wanders.
@@ -2357,7 +2358,13 @@ impl Brain<'_> {
                 return *post;
             }
         }
-        let exits = danger.exits(p, clear, self.me.position, facing);
+        // Out of a rod's call (a danger nobody owns), from where this tank
+        // stands outside it: the nearest of the circle's edge to it. The
+        // side of the call's middle a seat stands on in its cell is a few
+        // pixels' difference, and a chaser steered there would drive round
+        // the circle; it waits on its own side for the impact.
+        let zone = danger.owner.is_none() && matches!(danger.shape, DangerShape::Disc { .. }) && danger.depth(self.me.position) <= 0.0;
+        let exits = danger.exits(if zone { self.me.position } else { p }, clear, self.me.position, facing);
         exits.iter().copied().find(reachable).unwrap_or(exits[0])
     }
 
