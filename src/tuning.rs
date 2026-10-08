@@ -3828,13 +3828,51 @@ static TUNING: LazyLock<RwLock<Arc<Tuning>>> = LazyLock::new(|| RwLock::new(Arc:
 static STAGED: Mutex<Option<Tuning>> = Mutex::new(None);
 static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-/// The live table, as a snapshot: cheap (a read lock held for one `Arc`
-/// clone), and safe to hold for as long as the caller likes - across other
-/// `tuning()` calls and across a write on another thread, which the
+#[cfg(feature = "dev-tools")]
+thread_local! {
+    /// The table `in_force` has put in force on this thread, read by
+    /// `tuning()` in place of the live one while it is set.
+    static IN_FORCE: std::cell::RefCell<Option<Arc<Tuning>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The table in force, as a snapshot: cheap (a read lock held for one
+/// `Arc` clone), and safe to hold for as long as the caller likes - across
+/// other `tuning()` calls and across a write on another thread, which the
 /// snapshot simply does not see. Bind once per function in hot code.
+///
+/// That is the live table, except on a thread `in_force` has given one of
+/// its own (dev tools only).
 #[inline]
 pub fn tuning() -> Arc<Tuning> {
+    #[cfg(feature = "dev-tools")]
+    if let Some(table) = IN_FORCE.with(|t| t.borrow().clone()) {
+        return table;
+    }
     Arc::clone(&TUNING.read().unwrap_or_else(PoisonError::into_inner))
+}
+
+/// Run `f` with `table` as what every `tuning()` on this thread reads -
+/// `None` the live table, whatever an outer call put in force - and the
+/// thread's own again after it, a panic included.
+///
+/// The room server's dev tools fight one room under rows of its own
+/// (`room_tuning`) while every room beside it reads the server's table:
+/// the table is the process's and the process holds every room, so a
+/// room's rows can only be the thread's, for the synchronous stretch -
+/// a tick, a tool's call - in which that room alone runs on it. Never
+/// held across an `.await`. Writes (`submit_*`, `replace_now`) and
+/// `current()` are the live table's whatever is in force.
+#[cfg(feature = "dev-tools")]
+pub fn in_force<R>(table: Option<&Arc<Tuning>>, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<Arc<Tuning>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let outer = self.0.take();
+            IN_FORCE.with(|t| *t.borrow_mut() = outer);
+        }
+    }
+    let _restore = Restore(IN_FORCE.with(|t| t.replace(table.cloned())));
+    f()
 }
 
 /// Swap `next` in as the live table.
@@ -3842,9 +3880,11 @@ fn set_live(next: Tuning) {
     *TUNING.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(next);
 }
 
-/// A copy of the live table.
+/// A copy of the live table - never a table `in_force` put on this
+/// thread, so what is staged and what is put back is always the live
+/// table's.
 pub fn current() -> Tuning {
-    *tuning()
+    **TUNING.read().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Stage a JSON patch (see [`Tuning::apply_patch`]) on top of whatever is
@@ -4074,5 +4114,31 @@ mod tests {
         assert!(speed["doc"].as_str().unwrap().contains("Player top speed"));
         let walls = rows.iter().find(|r| r["name"] == "wall_max_health").unwrap();
         assert_eq!(walls["labels"], serde_json::json!(["brick", "iron", "wood", "glass"]));
+    }
+
+    /// A table put in force is what this thread reads, and only for as
+    /// long as `in_force` runs - nested, cleared with `None`, put back
+    /// after a panic - while the live table, `current()` and every other
+    /// thread never see it. The global is only read here.
+    #[cfg(feature = "dev-tools")]
+    #[test]
+    fn a_table_in_force_is_this_threads_alone() {
+        let live = || TUNING.read().unwrap_or_else(PoisonError::into_inner).tank_speed;
+        let room = |speed: f32| Arc::new(Tuning { tank_speed: speed, ..Tuning::DEFAULT });
+        let (a, b) = (room(777.0), room(555.0));
+        assert_eq!(tuning().tank_speed, live());
+        in_force(Some(&a), || {
+            assert_eq!(tuning().tank_speed, 777.0);
+            assert_eq!(current().tank_speed, live(), "current() is the live table's");
+            let elsewhere = std::thread::spawn(|| tuning().tank_speed).join().unwrap();
+            assert_eq!(elsewhere, live(), "another thread read this one's table");
+            in_force(Some(&b), || assert_eq!(tuning().tank_speed, 555.0));
+            in_force(None, || assert_eq!(tuning().tank_speed, live(), "None is the live table"));
+            assert_eq!(tuning().tank_speed, 777.0, "the outer table is back after a nested one");
+            let panicked = std::panic::catch_unwind(|| in_force(Some(&b), || panic!("mid-tick")));
+            assert!(panicked.is_err());
+            assert_eq!(tuning().tank_speed, 777.0, "a panic left the inner table in force");
+        });
+        assert_eq!(tuning().tank_speed, live(), "the table outlived its call");
     }
 }

@@ -105,11 +105,20 @@ pub const GAME_ONLY_TOOLS: &[&str] = &[
 /// tools - describes the online round instead (`Session::shown`), and
 /// `key {escape}` gives the seat up, as does a `click` on the corners'
 /// `LEAVE` button - the one thing a click has to press in this mode.
+/// `input` is not here: it stands in for the keyboard, and the keyboard
+/// drives this window's seat in the room (`ONLINE_INPUT_REFUSED` is the
+/// part of it that would reach nobody).
 pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
-    "step", "input", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "spawn_pickup", "players", "play",
+    "step", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "spawn_pickup", "players", "play",
     "build", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings",
     "builder_map", "builder_save", "builder_touch", "builder_select", "builder_stamp",
 ];
+
+/// The `input` fields an online round refuses: a window holds one seat in
+/// a room, which the frame's first intent drives, so player 2's keys
+/// steer nobody, and the I key's overlay cycle is the local round's (the
+/// replica is never `update`d - `overlays` sets its flags).
+const ONLINE_INPUT_REFUSED: &[&str] = &["p2_move_dir", "p2_face", "p2_fire", "p2_lamp", "cycle_overlays"];
 
 /// Tiles one `terrain` reply lists at most (the standard 34 x 17 field
 /// has 578 cells; a size-study map can have more).
@@ -186,7 +195,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "input",
-        description: "Override a player's input for the next `frames` real-time frames (keyboard is ignored meanwhile): `move_dir`/`face`/`fire`/`lamp` for player 1, `p2_move_dir`/`p2_face`/`p2_fire`/`p2_lamp` for player 2 in a two-player round. Works while the game runs; in lockstep prefer step's own input fields. `cycle_overlays: true` presses the I key once: cycles the overlay presets off -> inspect -> all -> off (with no move_dir/face/fire it leaves the keyboard alone).",
+        description: "Override a player's input for the next `frames` real-time frames (keyboard is ignored meanwhile): `move_dir`/`face`/`fire`/`lamp` for player 1, `p2_move_dir`/`p2_face`/`p2_fire`/`p2_lamp` for player 2 in a two-player round. Works while the game runs; in lockstep prefer step's own input fields. `cycle_overlays: true` presses the I key once: cycles the overlay presets off -> inspect -> all -> off (with no move_dir/face/fire it leaves the keyboard alone). **In an online round** it drives this window's seat in the room the way the keyboard does - sent at the tick rate, predicted and drawn as a player's press is - so a weapon can be fired as the rig's or a room's seat and the picture screenshotted; the player-2 fields and `cycle_overlays` are refused there, since they would reach nobody (`overlays` sets the replica's overlays). A shell fires once per press, so to fire again send `fire: false` for a frame, then `fire: true`.",
         schema: r#"{"type":"object","properties":{"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"lamp":{"type":"boolean"},"p2_move_dir":{"type":"string","enum":["up","down","left","right"]},"p2_face":{"type":"string","enum":["up","down","left","right"]},"p2_fire":{"type":"boolean"},"p2_lamp":{"type":"boolean"},"frames":{"type":"integer","default":1},"cycle_overlays":{"type":"boolean","default":false}}}"#,
         read_only: false,
         destructive: false,
@@ -515,15 +524,15 @@ pub const ROOM_TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "room",
-        description: "One room in full: its lifecycle and how long until the TTL that would end it, the map, seed, mission and resolved spawn plan, the round's tick and outcome, the `tuning_patch` it is being fought under (a room of two or more scales the waves; a room of one is the empty patch), and a row per seat - nick, whether it holds the room, ready, connected, its chassis, and its mailbox. `owns_hull` and `pose_refusals` say whether the seat's client owns its hull (stage 3) and how many of its poses the validator refused. **The mailbox row is the one to read when inputs feel lost**: a `depth` pinned at `BUFFER_MAX` means the client is running ahead and the oldest intents are being dropped, while a climbing `starvations` means it is not stamping far enough ahead and the tick is repeating its last intent.",
+        description: "One room in full: its lifecycle and how long until the TTL that would end it, the map, seed, mission and resolved spawn plan, the round's tick and outcome, the `tuning_patch` it is being fought under and every `Welcome` carries (a room of two or more scales the waves, a room of one is the empty patch, and `room_tuning`'s rows - `dev_tuning` - go on top), and a row per seat - nick, whether it holds the room, ready, connected, its chassis, and its mailbox. `owns_hull` and `pose_refusals` say whether the seat's client owns its hull (stage 3) and how many of its poses the validator refused. **The mailbox row is the one to read when inputs feel lost**: a `depth` pinned at `BUFFER_MAX` means the client is running ahead and the oldest intents are being dropped, while a climbing `starvations` means it is not stamping far enough ahead and the tick is repeating its last intent.",
         schema: CODE_ONLY,
         read_only: true,
         destructive: false,
     },
     ToolSpec {
         name: "room_open",
-        description: "Open a room with no client at all and start its round, so a scenario needs no window and no socket: `seats` bot seats are taken (1..=8, each with a mailbox `seat_intent` drives), and the round begins at once rather than waiting for a host to press START. Takes the setup a hosting client takes - a shipped map by name or `map_toml` whole, the mission, and a pinned `seed` so the round replays. Replies with the code. It is a real room: a player can join it by code and play alongside the bots.",
-        schema: r#"{"type":"object","properties":{"map":{"type":"string","default":"default"},"map_toml":{"type":"string","description":"A whole map, instead of a shipped one by name"},"mission":{"type":"string","enum":["protect","hunt","destroy"]},"seed":{"type":"integer"},"seats":{"type":"integer","default":1,"minimum":1,"maximum":8}}}"#,
+        description: "Open a room with no client at all and start its round, so a scenario needs no window and no socket: `seats` bot seats are taken (1..=8, each with a mailbox `seat_intent` drives), and the round begins at once rather than waiting for a host to press START. Takes the setup a hosting client takes - a shipped map by name or `map_toml` whole, the mission, and a pinned `seed` so the round replays - plus `tuning`, rows of this room's own (`room_tuning`) the round is set up and fought under from its first tick, `Restart` rows included: `{\"enemy_special_weapon_chance\": 1, \"enemy_special_weapon_emp_share\": 1}` starts it with every enemy carrying an EMP. A bad row refuses the whole call. Replies with the code.",
+        schema: r#"{"type":"object","properties":{"map":{"type":"string","default":"default"},"map_toml":{"type":"string","description":"A whole map, instead of a shipped one by name"},"mission":{"type":"string","enum":["protect","hunt","destroy"]},"seed":{"type":"integer"},"seats":{"type":"integer","default":1,"minimum":1,"maximum":8},"tuning":{"type":"object","additionalProperties":{"type":["number","boolean","array"]},"description":"This room's own tuning rows {knob: value}, as `room_tuning` takes them"}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -545,6 +554,27 @@ pub const ROOM_TOOLS: &[ToolSpec] = &[
         name: "seat_intent",
         description: "Post an intent into one seat's mailbox for the next `ticks` ticks, exactly as that seat's client would - so a bot seat can be driven, or a real seat's input stood in for. `move_dir`/`face`/`fire` are the human-settable fields the wire carries; nothing else travels. A shell fires once per press and a held trigger can never re-arm it, so set `fire_every=N` to tap every N ticks rather than holding. Posted at the client tick that seat's mailbox is expecting, so the server's `acked` and a client's own replay stay in step.",
         schema: r#"{"type":"object","required":["code","seat"],"properties":{"code":{"type":"string"},"seat":{"type":"integer","minimum":0,"maximum":7},"ticks":{"type":"integer","default":1,"minimum":1,"maximum":100000},"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"fire_every":{"type":"integer","minimum":1,"description":"With fire=true: press on ticks 0, N, 2N... and release in between"}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "room_set_tank",
+        description: "The game's `set_tank` on the room's authoritative round: overwrite a tank's damage (0 = pristine, 100 = wreck), ammo counts (a special weapon's stock above 0 arms it in place of the one special the tank carries, as its crate would - `sonic_ammo`, `emp_charges`, `gauss_slugs`, `fpv_drones`, `grenade_ammo`, `missile_ammo`, `plasma_ammo`, `laser_charges`, `minigun_ammo`, `flame_fuel` in seconds), `disabled`/`special_offline` seconds, `charge` (seconds a gauss rail's trigger has been held), `shield_hp`, the speed-boost timer and `portal_cooldown`. `slot` is an owner slot: the seats first (0..seats-1), enemies after, so it arms a seat's hands or an enemy's. Omitted fields are untouched. It reaches every client in the next snapshot - the seat's own window predicts and draws its presses with the weapon from then on. Replies with the tank's row of `room_snapshot`.",
+        schema: r#"{"type":"object","required":["code","slot"],"properties":{"code":{"type":"string"},"slot":{"type":"integer","minimum":0},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"grenade_ammo":{"type":"integer"},"sonic_ammo":{"type":"integer"},"emp_charges":{"type":"integer"},"disabled":{"type":"number"},"special_offline":{"type":"number"},"gauss_slugs":{"type":"integer"},"fpv_drones":{"type":"integer"},"charge":{"type":"number"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "room_spawn_pickup",
+        description: "The game's `spawn_pickup` on the room's authoritative round: a crate of `kind` (a map's pickup spelling: health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack, heat_shield, grenades, sonic_hammer, emp_burst, gauss_rail, fpv_swarm) down at the map cell nearest (x, y), in its air drop, for a seat or an enemy to drive over. Not a slot: it never respawns. Refused outside the field, on a solid tile and where a pickup already stands. Draws no RNG. Returns the crate's position.",
+        schema: r#"{"type":"object","required":["code","kind","x","y"],"properties":{"code":{"type":"string"},"kind":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "room_tuning",
+        description: "This room's own tuning rows, which no other room on the server sees: the room is set up and ticked under the server's table, its seat-count patch and these on top, and every `Welcome` carries them, so a window seated in it predicts and draws with the same numbers. Without `patch` or `reset` it reports `rows` (this room's) and `tuning_patch` (the whole patch its round is fought under). `patch` ({knob: value}, array knobs as `name.label` or the whole array; range-checked, refused whole on any bad row) adds rows, `reset: true` drops them all first. A change in a round is in force from the next tick, each row where the game next reads it - a `live` row at once, a tank's kit (the enemies' special weapons) when the next tank spawns, the wave plan at the next round, so a round's setup goes through `room_open {tuning}` - and every connected window is welcomed again on the live world to take it, its seat and mailbox kept.",
+        schema: r#"{"type":"object","required":["code"],"properties":{"code":{"type":"string"},"patch":{"type":"object","additionalProperties":{"type":["number","boolean","array"]}},"reset":{"type":"boolean","default":false}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -1543,6 +1573,10 @@ impl DevServer {
             let _ = reply.send(result);
             return;
         }
+        // The `input` fields that would reach nobody in an online round.
+        let online_refused = (session.mode() == Driver::Online)
+            .then(|| ONLINE_INPUT_REFUSED.iter().copied().find(|f| params.get(*f).is_some()))
+            .flatten();
         // The round on screen: the room's replica in an online round, the
         // session's own otherwise. Only `screenshot`/`overlays` write
         // through it, and only drawing flags.
@@ -1583,6 +1617,11 @@ impl DevServer {
                     }
                 }
             }
+            "input" if online_refused.is_some() => Err(format!(
+                "input's {} needs a local round: this window holds one seat in a room, which move_dir, face, fire and \
+                 lamp drive - give the seat up with `key {{\"key\": \"escape\"}}` to drive the local round",
+                online_refused.unwrap_or_default()
+            )),
             "input" => match (parse_intent(&params, ""), parse_intent(&params, "p2_"), frames_param(&params, 1)) {
                 (Ok(intent), Ok(intent2), Ok(frames)) => {
                     if let Some(intent) = intent {
@@ -4853,6 +4892,38 @@ cells."1,1" = { kind = "wall" }"#;
         server.before_frame(&mut s, W, H);
         server.advance(&mut s.game, Input::default(), 1, W, H, &mut |_| {});
         assert_eq!(rx.recv().unwrap().unwrap()["frame"], 1);
+    }
+
+    /// **`input` drives this window's seat in a room** (BB-58): it
+    /// stands in for the keyboard, which the seat's intent is read from,
+    /// so a direction and a press put through it go to the room as that
+    /// seat's packets - `app.rs`'s frame, shaped here and handed to the
+    /// round - and the keys again once its frames run out. The player-2
+    /// fields and the overlay cycle reach nobody there and are refused by
+    /// name.
+    #[test]
+    fn input_drives_the_seat_in_an_online_round() {
+        let (mut s, mut room) = online(54);
+        let (mut server, tx) = DevServer::headless();
+        for field in ["p2_fire", "cycle_overlays"] {
+            let err = ask(&mut server, &tx, &mut s, "input", json!({ field: true })).unwrap_err();
+            assert!(err.contains(field) && err.contains("escape"), "{err}");
+        }
+        let r = ask(&mut server, &tx, &mut s, "input", json!({ "move_dir": "right", "fire": true, "frames": 3 })).unwrap();
+        assert_eq!(r["frames"], 3, "{r}");
+        let mut heard = Vec::new();
+        for _ in 0..5 {
+            server.before_frame(&mut s, W, H);
+            let intent = server.shape_input(Input::default()).seat(0);
+            s.update_online(&intent, PHYSICS_FIXED_DT);
+        }
+        room.link.drain(&mut heard);
+        let sent: Vec<Intent> = heard.iter().filter_map(|m| if let Msg::Intent(i) = m { Some(i.intent()) } else { None }).collect();
+        let driven = sent.iter().filter(|i| i.fire && i.move_dir == Some(Dir::Right)).count();
+        assert_eq!(driven, 3, "the room heard {sent:?}");
+        assert_eq!(sent.last().map(|i| (i.fire, i.move_dir)), Some((false, None)), "the keys again after: {sent:?}");
+        assert_eq!(s.mode(), Driver::Online);
+        assert_eq!(s.game.frame(), 0, "the local round took a step");
     }
 
     /// The corners' own way out of a room: a `click` on `LEAVE` lands on
