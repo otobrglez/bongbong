@@ -22,7 +22,7 @@ use crate::tank::{ActiveWeapon, ChargeEdge, ChargeEnd, ChargeStage, Dir, Tank};
 use crate::tuning::tuning;
 use crate::{MAX_DAMAGE, Position};
 
-use super::hits::ShellTarget;
+use super::hits::{self, ShellTarget};
 use super::props::DamageCause;
 use super::{Event, Footing, Frame, Game, HitCause, HitTarget, SHOCK_FROG, Spectacle, laser_reach, portals};
 
@@ -483,43 +483,79 @@ impl Game {
     /// What a slug of each rail-carrying enemy's own would go through each
     /// way it could face (docs/gauss-rail.md "What it is handed"), from the
     /// gun line's muzzle that facing gives, by the room's own trace
-    /// (`Terrain::pierce_rewound`, iron stopping it). A seat counts only
-    /// where this tank stands in its sight box, it is within this tank's
-    /// sight under the sky and not hidden from it.
-    pub(super) fn gauss_senses(&self, f: &Frame, seats: &[GaussSeat]) -> std::collections::BTreeMap<Entity, crate::ai::GaussSense> {
+    /// (`Terrain::pierce_rewound`, iron stopping it), for the tanks that
+    /// think this tick (`thinks`) - no other reads its sense. A seat counts
+    /// only where this tank stands in its sight box, it is within this
+    /// tank's sight under the sky and not hidden from it.
+    ///
+    /// A lane is traced only where a target could be on it: one holding
+    /// neither a seat that counts nor, for a hunter, the players' frog is
+    /// worth nothing whatever else it would go through (`GaussLane::counts`),
+    /// so it is left `GaussLane::default` unless the box of one of those
+    /// reaches its band (`SlugBand`, the test the trace itself holds every
+    /// box to first), and a tank with none of them anywhere traces nothing.
+    pub(super) fn gauss_senses(
+        &self,
+        terrain: &hits::Terrain,
+        seats: &[GaussSeat],
+        thinks: impl Fn(&Tank, &crate::ai::Ai) -> bool,
+    ) -> std::collections::BTreeMap<Entity, crate::ai::GaussSense> {
         use crate::ai::{Ai, GaussLane, GaussSense};
         let t = tuning();
         let mut out = std::collections::BTreeMap::new();
         let reach = laser_reach(self.map.field_size());
         let players = self.seats_on_field();
         let (half_w, half_h) = t.sight_box_half_px();
-        let armed: Vec<(Entity, Owner, Position, i32)> = self
+        let pad = Position::new(t.gauss_half_width, t.gauss_half_width);
+        // Each seat's boxes as a trace grows them, read once for every tank.
+        let seat_boxes: Vec<[(Position, Position); 2]> =
+            seats.iter().map(|s| super::with_tank(&self.world, s.entity, |tank| hits::slug_boxes(tank, pad))).collect();
+        let quarry_box = self.frog.and_then(|frog| terrain.frog_box(frog, t.gauss_half_width));
+        let armed: Vec<(Entity, Owner, Position)> = self
             .world
             .query::<(Entity, &Tank, &Ai)>()
             .iter()
-            .filter(|(_, tank, _)| !tank.is_wreck() && tank.body.is_some() && tank.active_weapon() == ActiveWeapon::GaussRail)
-            .map(|(e, tank, _)| (e, tank.owner(), tank.position, tank.row))
+            .filter(|(_, tank, ai)| !tank.is_wreck() && tank.body.is_some() && tank.active_weapon() == ActiveWeapon::GaussRail && thinks(tank, ai))
+            .map(|(e, tank, _)| (e, tank.owner(), tank.position))
             .collect();
-        for (entity, owner, me, _) in armed {
+        for (entity, owner, me) in armed {
             let Ok(ai) = self.world.get::<&Ai>(entity) else { continue };
             let hunter = ai.role == crate::ai::Role::Hunter;
             let Ok(tank) = self.world.get::<&Tank>(entity) else { continue };
+            // Whether a seat counts for this tank does not hang on the lane.
+            let counts = |seat: &GaussSeat| {
+                seat.live
+                    && !ai.frog_only
+                    && crate::ai::in_sight_box_of((half_w, half_h), seat.pos, me)
+                    && me.distance_to(seat.pos) <= seat.sight
+                    && !(seat.concealed && !ai.is_hit_alerted())
+            };
+            let targets: Vec<(Position, Position)> = seats
+                .iter()
+                .zip(&seat_boxes)
+                .filter(|(seat, _)| counts(seat))
+                .flat_map(|(_, boxes)| boxes.iter().copied())
+                .chain(quarry_box.filter(|_| hunter))
+                .collect();
             let mut sense = GaussSense::default();
+            if targets.is_empty() {
+                out.insert(entity, sense);
+                continue;
+            }
             for dir in Dir::ALL {
                 let from = tank.gun_line_muzzle(dir.vec());
                 let to = from + dir.vec() * reach;
+                let band = hits::SlugBand::of(from, to, t.gauss_half_width);
+                if !targets.iter().any(|&(c, h)| band.reaches(c, h)) {
+                    continue;
+                }
                 let mut lane = GaussLane::default();
-                for (target, tt) in f.terrain.pierce_rewound(&self.world, players, owner, from, to, t.gauss_half_width, None, true) {
+                for (target, tt) in terrain.pierce_rewound(&self.world, players, owner, from, to, t.gauss_half_width, None, true) {
                     let along = tt * reach;
                     match target {
                         ShellTarget::Tank(e) => match seats.iter().find(|s| s.entity == e) {
                             Some(seat) => {
-                                let counts = seat.live
-                                    && !ai.frog_only
-                                    && crate::ai::in_sight_box_of((half_w, half_h), seat.pos, me)
-                                    && me.distance_to(seat.pos) <= seat.sight
-                                    && !(seat.concealed && !ai.is_hit_alerted());
-                                if counts {
+                                if counts(seat) {
                                     lane.seats += 1;
                                     if lane.at_seat.is_none() {
                                         lane.at_seat = Some((seat.seat, along));

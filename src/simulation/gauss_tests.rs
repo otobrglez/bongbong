@@ -673,6 +673,51 @@ fn the_rail_never_charges_through_iron() {
     assert!(!charged(&events, slot_of(&game, enemy)), "{events:?}");
 }
 
+/// The senses trace a lane only where a target could be on it, and never
+/// miss one: a seat walked over a grid round a rail tank, inside its sight
+/// box, is named by exactly the lanes whose slug the room's own trace finds
+/// it on; a seat outside the box leaves every lane untraced.
+#[test]
+fn a_rail_tanks_lane_names_a_seat_wherever_its_slug_would_go_through_it() {
+    let mut game = round("cells.\"14,4\" = { kind = \"wall\", material = \"brick\" }\ncells.\"10,6\" = { kind = \"wall\", material = \"iron\" }\n");
+    let at = Position::new(400.0, 192.0);
+    let enemy = rail_enemy(&mut game, at);
+    let owner = with_tank(&game.world, enemy, |t| t.owner());
+    let s = seat(&game);
+    let half = tuning().gauss_half_width;
+    let reach = laser_reach(game.map.field_size());
+    let sense_at = |game: &mut Game, pos: Position| {
+        game.place_tank(s, pos, Some(90.0)).expect("placed");
+        let terrain = hits::Terrain::build(&game.world, W, H, &[], &game.water);
+        let seats = [gauss::GaussSeat { seat: 0, entity: s, pos, live: true, concealed: false, sight: f32::MAX }];
+        let sense = game.gauss_senses(&terrain, &seats, |_, _| true)[&enemy];
+        (terrain, sense)
+    };
+    let mut named = 0;
+    for dy in (-200..=200).step_by(8) {
+        for dx in (-320..=320).step_by(8) {
+            let pos = Position::new(at.x + dx as f32, at.y + dy as f32);
+            if pos.x < 24.0 || pos.x > W - 24.0 || pos.y < 24.0 || pos.y > H - 24.0 {
+                continue;
+            }
+            let (terrain, sense) = sense_at(&mut game, pos);
+            for dir in Dir::ALL {
+                let from = with_tank(&game.world, enemy, |t| t.gun_line_muzzle(dir.vec()));
+                let on = terrain
+                    .pierce_rewound(&game.world, game.seats_on_field(), owner, from, from + dir.vec() * reach, half, None, true)
+                    .iter()
+                    .any(|&(target, _)| target == hits::ShellTarget::Tank(s));
+                let lane = sense.lanes[dir.index()];
+                assert_eq!(lane.at_seat.is_some(), on, "the seat at {pos:?}, the lane {dir:?}");
+                named += usize::from(on);
+            }
+        }
+    }
+    assert!(named > 100, "the walk crosses the lanes ({named})");
+    let (_, sense) = sense_at(&mut game, Position::new(at.x + 600.0, at.y));
+    assert_eq!(sense, crate::ai::GaussSense::default(), "a seat outside the box: nothing traced");
+}
+
 /// A seat hidden in tall grass is not charged at.
 #[test]
 fn the_rail_does_not_fire_at_a_seat_hidden_in_grass() {

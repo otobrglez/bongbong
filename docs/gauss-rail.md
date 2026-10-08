@@ -228,7 +228,8 @@ their picture (`tick_effects`), and the bursts they started play out.
 |---|---|
 | `src/gauss.rs` (new) | The weapon's headless half: `RailSlug` (a leg as drawn: start, end, portal, overcharged, pierces, age, seed), `Pierce`/`Pierced`, `ChargeEndFx`, `muzzle` (the module's bore, `tank_art::RAIL_MUZZLE`), `damage(owner, t)`, `recoil_speed(t, mass_factor, overcharged, friction)`, `module_cell`, and the composers `compose_charge`, `compose_slug` (glowing), `compose_slug_lit` (the chips), `compose_end` (pure, `pyro::Shape`s) |
 | `src/simulation/gauss.rs` (new) | The world half: `charge_trigger` (the pattern's room side, seats and enemies, §3.3), `fire_charge`, `PendingRail`, `recoil_hull`, `Game::resolve_rails` (the legs, the pierce walk, the events, the recoil), `stops_slug`, `pierce_hit`, `rail_recoil`, `rail_show` and `charge_end_show` (the cosmetic halves, which a replica's events and a client's own release call too), `any_rail_charging`, `rail_lanes` (`RailLane`, every charging rail's lane this frame), `rail_dangers`, `gauss_senses` (`GaussSeat`; what the AI is handed, §4), `set_seat_hold`/`seat_hold_report`, `SeatCharge` |
-| `src/simulation/hits.rs` | `Terrain::pierce_rewound` (every box entered, in order, to the first stopper), `Terrain::rail_tiles` (the tiles a slug enters and its stop, for the drawn world) |
+| `src/simulation/hits.rs` | `Terrain::pierce_rewound` (every box entered, in order, to the first stopper), `SlugBand` and `slug_boxes` (the box test it holds every candidate to first, which the senses gate their lanes on), `Terrain::frog_box`, `Terrain::rail_tiles` (the tiles a slug enters and its stop, for the drawn world) |
+| `src/simulation/field.rs` | `field::thinks`: `field::mind`'s rule with none of its bookkeeping, so the senses are measured only for the tanks that think this tick |
 | `src/simulation/weapons.rs` | The `ActiveWeapon::GaussRail` dispatch arm (empty: a charge weapon fires through `fire_charge`) |
 | `src/simulation/props.rs` | `DamageCause::Pierce { dir }` |
 | `src/simulation/mod.rs` | `Frame::{pending_rails, charge_ends}`; `Game::{rail_slugs, charge_ends, seat_hold}`; `resolve_rails` after `resolve_lasers`; `drive_player`'s trigger by `ActiveWeapon::trigger`; `enemy_trigger` routing a charge weapon's trigger every tick (its press edge from `Tank::trigger_held`); `coast_enemy` keeping a charging trigger down; the crawl in `drive_tank_with`; `tick_timers` (`spin`, `rail_flash`, a wreck's charge); `predict_seat_with` (the charge step and its recoil); `end_round`; `tick_effects`/`tick_presentation` (slugs, charge ends, a replica's charges); `Event::{RailSlug, ChargeStarted, ChargeEnded}`, `HitCause::Rail`; `Pending::charging`; `TankSnapshot::{gauss_slugs, charging}` |
@@ -664,13 +665,16 @@ rail - as with the hammer, until its four slugs are spent.
 
 ### What it is handed
 
-`Game::gauss_senses` runs once per frame in `enemy_phase`, only when some
-live enemy carries the rail, over every seat (`GaussSeat`: position, on
-the field, concealed, `Game::sight_on` at it). It gives each rail tank a
-`GaussSense`, one trace per facing through the frame's `Terrain` by the
-room's own `pierce_rewound`, each from the gun-line muzzle that facing
-would have, `laser_reach` long, with this tank's own stop rule (iron stops
-it - an enemy never overcharges):
+`Game::gauss_senses` runs once per frame in `enemy_phase`, before the
+collect pass, only when some live enemy carries the rail, over every seat
+(`GaussSeat`: position, on the field, concealed, `Game::sight_on` at it).
+It gives each rail tank that thinks this tick a `GaussSense` - its brain
+on (no EMP) and, on a field map, `field::thinks`, the very rule
+`field::mind` applies, asked ahead of the tank's turn: a far tank coasting
+or asleep reads no sense, so it is handed none. A lane is one trace
+through the frame's `Terrain` by the room's own `pierce_rewound`, from the
+gun-line muzzle that facing would have, `laser_reach` long, with this
+tank's own stop rule (iron stops it - an enemy never overcharges):
 
 ```rust
 pub struct GaussSense {
@@ -719,6 +723,20 @@ towers`. A lane counts (`counts`) when it scores at least 2, holds a seat
 or the quarry to fire at (`target_along`: how far along that seat, else
 the quarry, stands) and no `friend` before it - a friend beyond the target
 is the slug's to go on through (decision 24).
+
+**Only a lane a target could be on is traced.** Whether a seat counts
+does not hang on the lane, so it is worked out once per tank; a lane with
+no counting seat and no quarry is worth nothing whatever towers or friends
+it would go through, so it is left `GaussLane::default` unless one of
+those seats' boxes - or, for a hunter, the players' frog's - reaches the
+lane's band (`hits::SlugBand`, the row or column a slug runs along from
+its muzzle: the very test `pierce_rewound` holds every box to before it
+traces it, so a box it rejects could never be on the list). A tank with
+no counting seat and no quarry anywhere traces nothing. Most ticks a rail
+tank stands outside every seat's sight box, or beside the lanes, and
+traces no lane at all; the seats' boxes are read once a frame for every
+tank. What a tank decides is what it would decide with every lane
+traced (§11, "The senses' cost").
 
 ### The rule (`gauss_rule`), in priority order
 
@@ -1232,7 +1250,9 @@ number read off the defaults):
   `enemies_step_out_of_a_charging_seats_lane_and_do_not_step_back`,
   `enemies_wait_at_the_edge_of_a_lane_rather_than_cross_it`,
   `a_charging_rails_lane_through_cover_warns_the_seat`,
-  `an_enemys_slug_used_on_one_seat_goes_on_through_the_next`; and
+  `an_enemys_slug_used_on_one_seat_goes_on_through_the_next`,
+  `a_rail_tanks_lane_names_a_seat_wherever_its_slug_would_go_through_it`
+  (the senses' cut never drops a lane a seat is on); and
   `command::tests::a_busy_unit_never_gives_way_nor_is_nudged` (a
   charging unit as a disabled one).
 
@@ -1380,6 +1400,19 @@ window at its seed, the AI tiers its tank ran over the 180 frames before):
   and chase tiers converging as they do on shells. Per ten minutes they sit
   under the EMP's armed pack (clustering 13.4 against 20.8, pile-up 7.0
   against 13.7 on the fields).
+
+**The senses' cost** (recorded 2026-10-08, debug build): every enemy
+armed (`enemy_special_weapon_chance` and `enemy_special_weapon_gauss_share`
+at 1), `gauss_senses` tracing all four lanes of every rail tank every tick
+took about half of `Game::update`: 13.3 to 17.4 ms a tick on longwater with
+24 enemies in a band (destroy, 400 frames, seed 1000) and 0.29 on
+`maps/test/choke.toml` with 4 (destroy, 3 rounds), against 7.3 and 0.25
+for the original specials alone. Tracing only the lanes a target could be
+on, for the tanks that think (§4, "What it is handed"), brings them to 6.2
+and 0.26, the senses about 1 % of a tick's samples. Every armed and
+`--crate gauss_rail` round of the fixtures and the field maps (ten from
+seed 1000 each) is the same, line for line of `--json-out` but the timing,
+as with every lane traced, and so are the defaults'.
 
 ## 12. Interactions, decisions, what is left out
 

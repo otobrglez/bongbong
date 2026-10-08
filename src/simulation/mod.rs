@@ -3655,17 +3655,30 @@ impl Game {
         } else {
             (BTreeMap::new(), Vec::new())
         };
+        // A hunter carrying a weapon its own rule fires fights the seat
+        // rather than the frog (`target_of`), so on a field map it is woken
+        // and leashed as any other tank is (`field::mind`).
+        let field_hunting = |ai: &Ai, tank: &Tank| ai.role == Role::Hunter && quarry.is_some() && crate::ai::generic_fire(tank.active_weapon());
+        // Whether a tank thinks this tick, as the collect pass below will
+        // find: its brain is on and, on a field map, `field::mind` has it
+        // think (`field::thinks`, the same rule with none of its
+        // bookkeeping).
+        let thinks = |tank: &Tank, ai: &Ai| {
+            !tank.is_disabled()
+                && (!field || field::thinks(ai, tank.position, tank.owner_slot(), &anchors, field_hunting(ai, tank), frame))
+        };
         // What a slug of each rail-carrying enemy's own would go through
-        // each way it could face, and the lanes of every charging rail -
-        // places every enemy keeps out of (docs/gauss-rail.md "AI"): only
-        // when a tank carries or charges one.
+        // each way it could face, for those that think this tick, and the
+        // lanes of every charging rail - places every enemy keeps out of
+        // (docs/gauss-rail.md "AI"): only when a tank carries or charges
+        // one.
         let gauss_senses = if self.world.query::<&Tank>().with::<&Ai>().iter().any(|t| t.active_weapon() == ActiveWeapon::GaussRail) {
             let seats: Vec<gauss::GaussSeat> = players
                 .iter()
                 .enumerate()
                 .map(|(i, p)| gauss::GaussSeat { seat: i as u8, entity: p.entity, pos: p.pos, live: !p.wreck && !p.entering, concealed: p.concealed, sight: p.sight })
                 .collect();
-            self.gauss_senses(f, &seats)
+            self.gauss_senses(&f.terrain, &seats, thinks)
         } else {
             BTreeMap::new()
         };
@@ -3699,11 +3712,7 @@ impl Game {
             // a branch that takes a tank's thinking away does it here,
             // before the field map's own choice.
             let think_dt = if field {
-                // A hunter carrying a weapon its own rule fires fights the
-                // seat rather than the frog (`target_of`), so it is woken
-                // and leashed as any other tank is.
-                let hunting = ai.role == Role::Hunter && quarry.is_some() && crate::ai::generic_fire(tank.active_weapon());
-                match field::mind(ai, tank.position, tank.owner_slot(), &anchors, view_range, hunting, frame, f.dt) {
+                match field::mind(ai, tank.position, tank.owner_slot(), &anchors, view_range, field_hunting(ai, tank), frame, f.dt) {
                     field::Mind::Think(dt) => dt,
                     idle => {
                         let intent = match idle {
@@ -3798,6 +3807,10 @@ impl Game {
             let current = self.physics.velocity(handle);
             let facing_before = tank.rotation;
             let before = self.trace_ai.then(|| ai.snapshot());
+            debug_assert!(
+                tank.active_weapon() != ActiveWeapon::GaussRail || tank.is_wreck() || gauss_senses.contains_key(&entity),
+                "a rail tank thinks on a tick `thinks` said it would not"
+            );
             // A player lives in a different archetype (no `Ai`), so this
             // shared read never aliases the exclusive borrow above. `think`
             // is handed the player this tank is fighting as "the player".

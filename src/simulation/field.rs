@@ -85,9 +85,7 @@ pub(super) fn mind(
     frame: u64,
     dt: f32,
 ) -> Mind {
-    let t = tuning();
-    let near = anchors.iter().any(|a| a.distance_to(position) <= t.enemy_far_px);
-    let hit = ai.is_hit_alerted();
+    let (think, wakes) = choice(ai, position, slot, anchors, hunting, frame);
     let mind = &mut ai.field;
     if mind.home.is_none() {
         mind.home = Some(position);
@@ -96,10 +94,9 @@ pub(super) fn mind(
         let in_sight = anchors.iter().any(|a| a.distance_to(position) <= sight);
         mind.lost = if in_sight { 0.0 } else { mind.lost + dt };
     }
-    if near || hunting || hit || mind.called || mind.alert.is_some() {
+    if wakes {
         mind.awake = true;
     }
-    let think = near || (mind.awake && (frame + slot as u64).is_multiple_of(t.enemy_far_think_ticks.max(1) as u64));
     if think {
         let covered = dt + mind.think_debt;
         mind.think_debt = 0.0;
@@ -110,6 +107,27 @@ pub(super) fn mind(
     }
     mind.think_debt += dt;
     Mind::Coast(Intent { fire: false, fire_aim_offset: 0.0, ..ai.last_intent() })
+}
+
+/// Whether `mind` has the tank think this tick, with none of its
+/// bookkeeping. Pure, so a reader that must know before the tank's turn
+/// whether it will think (the gauss rail's senses, `Game::gauss_senses`)
+/// asks the very rule `mind` applies.
+pub(super) fn thinks(ai: &Ai, position: Position, slot: usize, anchors: &[Position], hunting: bool, frame: u64) -> bool {
+    choice(ai, position, slot, anchors, hunting, frame).0
+}
+
+/// `mind`'s rule: whether the tank thinks this tick - near one of
+/// `anchors`, or awake (already, or woken now) on its slot's tick of
+/// `enemy_far_think_ticks` - and whether something wakes it: a seat or the
+/// players' frog within `enemy_far_px`, a frog to hunt, a hit, a call to
+/// the fight or an alert.
+fn choice(ai: &Ai, position: Position, slot: usize, anchors: &[Position], hunting: bool, frame: u64) -> (bool, bool) {
+    let t = tuning();
+    let near = anchors.iter().any(|a| a.distance_to(position) <= t.enemy_far_px);
+    let wakes = near || hunting || ai.is_hit_alerted() || ai.field.called || ai.field.alert.is_some();
+    let on_tick = (frame + slot as u64).is_multiple_of(t.enemy_far_think_ticks.max(1) as u64);
+    (near || ((ai.field.awake || wakes) && on_tick), wakes)
 }
 
 /// The point a called wave tank at `position` routes at: the nearest of

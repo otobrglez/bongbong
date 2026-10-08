@@ -479,8 +479,8 @@ impl Terrain {
     /// the first of its boxes the segment enters; the shooter never does.
     /// Order: entry `t`, then the sweep's rank (seats, enemies, frogs,
     /// tiles, the edge), then owner slot, frog or the tile's cell. Every
-    /// box is first held to the segment's own swept box, so a trace costs
-    /// a comparison a tile.
+    /// box is first held to the segment's own swept box (`SlugBand`), so a
+    /// trace costs a comparison a tile.
     #[allow(clippy::too_many_arguments)]
     pub fn pierce_rewound(
         &self,
@@ -498,22 +498,18 @@ impl Terrain {
             Owner::Player(_) => pad + Position::new(self.player_shot_pad, self.player_shot_pad),
             Owner::Enemy(_) | Owner::Tower { .. } => pad,
         };
-        let (lo, hi) = (
-            Position::new(p0.x.min(p1.x) - half_extent, p0.y.min(p1.y) - half_extent),
-            Position::new(p0.x.max(p1.x) + half_extent, p0.y.max(p1.y) + half_extent),
-        );
-        let near = |c: Position, h: Position| c.x + h.x >= lo.x && c.x - h.x <= hi.x && c.y + h.y >= lo.y && c.y - h.y <= hi.y;
+        let band = SlugBand::of(p0, p1, half_extent);
         let first = |boxes: &[(Position, Position)]| {
-            boxes.iter().filter(|(c, h)| near(*c, *h)).filter_map(|&(c, h)| segment_hits_aabb(p0, p1, c, h)).min_by(f32::total_cmp)
+            boxes.iter().filter(|(c, h)| band.reaches(*c, *h)).filter_map(|&(c, h)| segment_hits_aabb(p0, p1, c, h)).min_by(f32::total_cmp)
         };
         // (t, rank, tie key, target)
         let mut hits: Vec<(f32, u8, i64, ShellTarget)> = Vec::new();
         for player in players.into_iter().flatten() {
-            let (owner, wrecked, hull, turret) = with_tank(world, player, |t| (t.owner(), t.is_wreck(), t.hull_bbox_world(), t.turret_bbox_world()));
+            let (owner, wrecked, boxes) = with_tank(world, player, |t| (t.owner(), t.is_wreck(), slug_boxes(t, pad)));
             if owner == shooter || wrecked {
                 continue;
             }
-            if let Some(t) = first(&[(hull.0, hull.1 + pad), (turret.0, turret.1 + pad)]) {
+            if let Some(t) = first(&boxes) {
                 hits.push((t, 0, owner.slot() as i64, ShellTarget::Tank(player)));
             }
         }
@@ -571,6 +567,12 @@ impl Terrain {
         out
     }
 
+    /// The frog `entity`'s box where it stands now, grown by a slug's
+    /// `half_extent` as `pierce_rewound` grows it. `None` for no such frog.
+    pub fn frog_box(&self, entity: Entity, half_extent: f32) -> Option<(Position, Position)> {
+        self.frogs.iter().find(|&&(e, _)| e == entity).map(|&(_, p)| (p, frog_half() + Position::new(half_extent, half_extent)))
+    }
+
     /// The tiles a slug along `p0..p1`, `half_extent` wide, goes into, in
     /// order, and where it stops as a fraction of it - its first stopper's
     /// entry (`pierce_rewound`'s rule: a permanent tile, iron only where
@@ -587,6 +589,39 @@ impl Terrain {
         tiles.retain(|&(t, _, _)| t <= stop);
         (stop, tiles)
     }
+}
+
+/// The box test `Terrain::pierce_rewound` holds every candidate to before
+/// it traces it: the slug's own swept box, the segment's bounds grown by
+/// its half width - the row or column band a cardinal slug runs along from
+/// its muzzle. A box (already grown by the half width) that does not reach
+/// it is never on that slug's pierce list.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SlugBand {
+    lo: Position,
+    hi: Position,
+}
+
+impl SlugBand {
+    pub fn of(p0: Position, p1: Position, half_extent: f32) -> Self {
+        SlugBand {
+            lo: Position::new(p0.x.min(p1.x) - half_extent, p0.y.min(p1.y) - half_extent),
+            hi: Position::new(p0.x.max(p1.x) + half_extent, p0.y.max(p1.y) + half_extent),
+        }
+    }
+
+    /// Whether the box at `c`, half extents `h`, reaches the band.
+    pub fn reaches(&self, c: Position, h: Position) -> bool {
+        c.x + h.x >= self.lo.x && c.x - h.x <= self.hi.x && c.y + h.y >= self.lo.y && c.y - h.y <= self.hi.y
+    }
+}
+
+/// A tank's hull and turret boxes grown by `pad`, as a slug's trace tests
+/// them (`Terrain::pierce_rewound`, a seat's always by the slug's half
+/// width).
+pub(crate) fn slug_boxes(tank: &Tank, pad: Position) -> [(Position, Position); 2] {
+    let (hull, turret) = (tank.hull_bbox_world(), tank.turret_bbox_world());
+    [(hull.0, hull.1 + pad), (turret.0, turret.1 + pad)]
 }
 
 /// Keep `*best` as the candidate with the smallest entry time so far, ties
