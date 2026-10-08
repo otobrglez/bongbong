@@ -34,6 +34,7 @@ mod missiles;
 mod grenades;
 mod sonic;
 mod emp;
+mod gauss;
 mod nav;
 pub mod portals;
 pub mod present;
@@ -43,6 +44,7 @@ pub mod training;
 mod volcano;
 pub use props::{FlyingDrum, GroundFire};
 pub(crate) use props::tile_rubble;
+pub(crate) use gauss::SeatCharge;
 pub mod replica;
 #[cfg(test)]
 mod crate_tests;
@@ -56,6 +58,8 @@ mod props_tests;
 mod seat_tests;
 #[cfg(test)]
 mod emp_tests;
+#[cfg(test)]
+mod gauss_tests;
 #[cfg(test)]
 mod sonic_tests;
 #[cfg(test)]
@@ -211,7 +215,7 @@ use crate::pickup::{Pickup, PickupKind};
 use crate::plasma::{Plasma, PlasmaVariant};
 use crate::shell::{Owner, Shell, ShellState};
 use crate::shockwave::Shockwave;
-use crate::tank::{ActiveWeapon, Dir, Tank, TankKind};
+use crate::tank::{ActiveWeapon, Dir, Tank, TankKind, Trigger};
 use crate::track::Track;
 use crate::{
     DAMAGE_VARIANTS,
@@ -471,6 +475,30 @@ pub enum Event {
     TowerDisabled { x: f32, y: f32 },
     /// A missile an EMP killed came down at (`x`, `y`) a dud: no blast.
     MissileDud { x: f32, y: f32 },
+    /// One leg of a gauss rail's slug fired by `slot` (docs/gauss-rail.md):
+    /// drawn from (`x0`, `y0`) to where it stopped or went into a portal
+    /// (`portal`), `leg` 0 first, and every thing it went through, in
+    /// order, where it went in. `seat` is `net::wire::NO_SEAT` for an
+    /// enemy's. Leg 0 is logged right after its `Fired`, in the same tick.
+    RailSlug {
+        slot: usize,
+        seat: u8,
+        leg: u8,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        portal: bool,
+        overcharged: bool,
+        pierced: Vec<(f32, f32, crate::gauss::Pierced)>,
+    },
+    /// The tank in owner slot `slot` started a charge of `weapon`
+    /// (`ActiveWeapon::name`, `Tank::charge`). Not sent: the charge's state
+    /// travels in `TankState::charge`.
+    ChargeStarted { slot: usize, weapon: &'static str },
+    /// The charge of `weapon` on the tank in owner slot `slot` ended
+    /// without firing: let go early, held past its vent, or lost.
+    ChargeEnded { slot: usize, weapon: &'static str, end: crate::tank::ChargeEnd },
     /// A tank became a wreck (any cause) at (`x`, `y`).
     Wreck { slot: usize, x: f32, y: f32 },
     /// Ram contact between the tanks in `slot` and `other_slot`: an enemy and
@@ -651,6 +679,8 @@ pub enum HitCause {
     /// A tesla tower's strike.
     Tesla,
     Sonic,
+    /// A gauss rail's slug going through.
+    Rail,
 }
 
 /// What an `Event::Hit` landed on.
@@ -831,6 +861,19 @@ pub struct Game {
     /// the order they were fired: striking on the round that simulates
     /// them (`tick_emp_pulses`), only drawn on a replica. Cleared by `init`.
     pub(crate) emp_pulses: Vec<crate::emp::EmpPulse>,
+    /// The gauss rail's slugs as they are drawn (docs/gauss-rail.md), a leg
+    /// each, aged in `tick_effects` until their trail has thinned: put on
+    /// by `rail_show`. Cleared by `init`.
+    pub(crate) rail_slugs: Vec<crate::gauss::RailSlug>,
+    /// Charges that ended without firing, as they are drawn - a fizzle, a
+    /// vent (`charge_end_show`). Cleared by `init`.
+    pub(crate) charge_ends: Vec<crate::gauss::ChargeEndFx>,
+    /// A room's count of the ticks each seat's client has held its trigger,
+    /// by the update it is for (`set_seat_hold`, docs/gauss-rail.md "The
+    /// hold report"): what a charge counts instead of its own, held to it
+    /// within `CHARGE_HOLD_SPARE_TICKS`. One update only, like
+    /// `seat_owned`.
+    seat_hold: [Option<(u64, u32)>; MAX_SEATS],
     /// Seconds every lamp post on the map stays dark after an EMP at night
     /// (docs/emp-burst.md "At 11"), 0 while they are lit
     /// (`lit_lamp_posts`). Counted down in `tick_timers`.
@@ -1207,6 +1250,12 @@ struct Frame {
     /// EMP pulses fired this frame, put on the field by `resolve_emp` once
     /// the tank loops are done.
     pending_emp: Vec<emp::PendingEmp>,
+    /// Gauss rail slugs released this frame, traced by `resolve_rails` once
+    /// the tank loops are done.
+    pending_rails: Vec<gauss::PendingRail>,
+    /// Charges that ended this frame without firing, put on the field by
+    /// `resolve_rails`.
+    charge_ends: Vec<crate::gauss::ChargeEndFx>,
     /// Flame jets emitted this frame, one per firing nozzle
     /// (`resolve_flames` takes them).
     flame_jets: Vec<FlameJet>,
@@ -1239,6 +1288,8 @@ struct Frame {
 pub(super) struct Shoves {
     owned: [bool; MAX_SEATS],
     log: Vec<(usize, Vec2, f32)>,
+    /// The knocks `allow_knock` keeps: the validator's allowance, no event.
+    quiet: Vec<(usize, Vec2, f32)>,
 }
 
 impl Shoves {
@@ -1255,6 +1306,17 @@ impl Shoves {
             && self.owned.get(seat as usize).copied().unwrap_or(false)
         {
             self.log.push((seat as usize, dv, skid));
+        }
+    }
+
+    /// A knock on an owned seat its client puts on itself - a gauss rail's
+    /// recoil, kicked on the release (`net::predict`): not sent, but the
+    /// pose validator still allows the hull its speed (`Game::seat_knock`).
+    pub(super) fn allow_knock(&mut self, owner: Owner, dv: Vec2, skid: f32) {
+        if let Owner::Player(seat) = owner
+            && self.owned.get(seat as usize).copied().unwrap_or(false)
+        {
+            self.quiet.push((seat as usize, dv, skid));
         }
     }
 
@@ -1285,6 +1347,8 @@ impl Frame {
             pending_lasers: Vec::new(),
             pending_sonic: Vec::new(),
             pending_emp: Vec::new(),
+            pending_rails: Vec::new(),
+            charge_ends: Vec::new(),
             flame_jets: Vec::new(),
             muzzle_flashes: Vec::new(),
             impact_flashes: Vec::new(),
@@ -1461,6 +1525,9 @@ impl Game {
         self.sonic_waves.clear();
         self.grass_flat.clear();
         self.emp_pulses.clear();
+        self.rail_slugs.clear();
+        self.charge_ends.clear();
+        self.seat_hold = [None; MAX_SEATS];
         self.lamps_out = 0.0;
         self.next_shot_id = 0;
         self.last_engage.clear();
@@ -1997,6 +2064,7 @@ impl Game {
             self.spawn_pending(&mut f);
             self.guide_missiles(&mut f);
             self.resolve_lasers(&mut f);
+            self.resolve_rails(&mut f);
             self.resolve_flames(&mut f);
             self.resolve_sonic(&mut f);
             self.tick_sonic_waves(&mut f, true);
@@ -2073,7 +2141,7 @@ impl Game {
     /// Append the frame's effects and events and put the RNG back.
     fn finish_frame(&mut self, f: Frame) {
         let Frame { blast_fx, scorches, decals, muzzle_flashes, impact_flashes, shocks, events, shoves, rng, .. } = f;
-        for &(seat, dv, skid) in &shoves.log {
+        for &(seat, dv, skid) in shoves.log.iter().chain(&shoves.quiet) {
             if skid > 0.0 && seat < MAX_SEATS {
                 self.seat_knock[seat] = self.seat_knock[seat].with(dv.length(), skid, self.frame);
             }
@@ -2155,6 +2223,15 @@ impl Game {
             scorch.age += dt;
         }
         self.laser_beams.retain_mut(|beam| !beam.tick(dt));
+        let t = tuning();
+        for slug in &mut self.rail_slugs {
+            slug.age += dt;
+        }
+        self.rail_slugs.retain(|slug| !slug.done(&t));
+        for end in &mut self.charge_ends {
+            end.age += dt;
+        }
+        self.charge_ends.retain(|end| !end.done());
         self.tick_tower_effects(dt);
     }
 
@@ -2192,9 +2269,13 @@ impl Game {
             tank.tick_missile_pod();
             tank.tick_recoil(dt);
             tank.skid = (tank.skid - dt).max(0.0);
+            tank.spin = (tank.spin - dt).max(0.0);
             tank.tick_disabled(dt);
             if tank.is_wreck() {
                 tank.tell = None;
+                // A dead hand releases nothing: the charge is lost.
+                tank.charge = None;
+                tank.spin = 0.0;
                 tank.skid = 0.0;
                 tank.disabled = 0.0;
                 tank.special_offline = 0.0;
@@ -2317,29 +2398,57 @@ impl Game {
     /// builds a replica - same map, same seed - so the walls, the
     /// obstacles and the deep-water boxes this steps against are the
     /// server's own, by construction rather than by a second
-    /// implementation that could disagree.
+    /// implementation that could disagree. The predictor itself steps
+    /// `predict_seat_with`, which adds the charge-and-hold trigger.
+    #[cfg(test)]
     pub(crate) fn predict_seat(&mut self, seat: usize, intent: Intent, dt: f32) {
-        let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
+        self.predict_seat_with(seat, intent, dt, None);
+    }
+
+    /// `predict_seat`, with the seat's charge-and-hold trigger stepped too
+    /// (docs/gauss-rail.md) when `trigger` names its press edge and whether
+    /// the client's gate would let a press start a charge: in the room's
+    /// order - the hull driven, then the trigger, then a release's recoil
+    /// (and an overcharge's spin), as `resolve_rails` kicks it before
+    /// `step_world`, then the solver's step - so a client's own hull crawls,
+    /// recoils and spins on the ticks the room's does. What the trigger
+    /// did, for a seat whose trigger is a charge.
+    pub(crate) fn predict_seat_with(&mut self, seat: usize, intent: Intent, dt: f32, trigger: Option<(bool, bool)>) -> Option<gauss::SeatCharge> {
+        let entity = self.seats.get(seat).copied().flatten()?;
         // Disjoint borrows: `drive_tank` wants the solver and the hull at
         // once, and they are two fields of the same struct.
         let Game { world, physics, water, lava, weather, time, .. } = self;
-        let Ok(mut tank) = world.get::<&mut Tank>(entity) else { return };
+        let Ok(mut tank) = world.get::<&mut Tank>(entity) else { return None };
         if tank.body.is_none() || tank.is_wreck() {
-            return;
+            return None;
         }
         // The sandbox's clock stands at the last snapshot's tick, so a
         // gust reaches the predicted hull when the drawn sand front does.
         let footing = Footing::at(water, lava, *weather, tank.position, *time);
-        // The seat's own skid runs on the client's ticks, as the room's
-        // does in `tick_timers` (`Predictor::shove` starts it).
+        // The seat's own skid and spin run on the client's ticks, as the
+        // room's do in `tick_timers` (`Predictor::shove` starts a skid).
         tank.skid = (tank.skid - dt).max(0.0);
+        tank.spin = (tank.spin - dt).max(0.0);
         drive_tank(physics, &mut tank, intent, dt, footing);
+        let mut charged = None;
+        if let Some((pressed, open)) = trigger
+            && (tank.active_weapon().trigger() == Trigger::Charge || tank.charge.is_some())
+        {
+            let dir = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up).vec();
+            let (start, muzzle) = (tank.gun_line_muzzle(dir), crate::gauss::muzzle(&tank));
+            let edge = tank.step_charge(intent.fire, pressed, dt, open, None);
+            if let crate::tank::ChargeEdge::Released(stage) = edge {
+                gauss::recoil_hull(physics, &mut tank, dir, stage == crate::tank::ChargeStage::Overcharged, footing);
+            }
+            charged = Some(gauss::SeatCharge { edge, start, muzzle, dir });
+        }
         physics.step();
         // The solver moved the body; the tank's own position is what
         // every reader (and the next tick's `Footing`) goes by.
         if let Some(handle) = tank.body {
             tank.position = physics.position(handle);
         }
+        charged
     }
 
     /// Put one seat's hull where an authority says it is, for the reset a
@@ -2697,6 +2806,14 @@ impl Game {
             if tank.special_offline > 0.0 {
                 tank.special_offline = (tank.special_offline - dt).max(f32::EPSILON);
             }
+            // A charge counts up between snapshots, never past its vent:
+            // the room's snapshot is what ends it (`TankState::charge`).
+            if let Some(charge) = tank.charge.as_mut()
+                && let Some(rule) = charge.weapon.charge_rule()
+            {
+                charge.held = (charge.held + dt).min(rule.vent);
+            }
+            tank.spin = (tank.spin - dt).max(0.0);
         }
         // An offline tower and the dark lamp posts too, until the room's
         // flag and `RoundState::lamps_out` end them.
@@ -3142,20 +3259,29 @@ impl Game {
         }
         tick_queued_shots(&mut self.physics, f, tank, owner);
 
-        // A laser, minigun or missile pod is full-auto while the key is
+        // How the trigger fires is the weapon's (`ActiveWeapon::trigger`):
+        // a laser, minigun or missile pod is full-auto while the key is
         // held (still paced by `fire_cooldown` - for the pod, its reload);
-        // shells, plasma and grenades fire once per physical press, so a held key can
-        // never re-arm them. The
+        // shells, plasma, grenades, the hammer and the EMP fire once per
+        // physical press, so a held key can never re-arm them; the
         // flamethrower is a stream: every held frame emits, with no
-        // cooldown between frames at all.
+        // cooldown between frames at all. A charge weapon's trigger is
+        // stepped every tick, pressed or not - its release is the trigger
+        // going up - and a charge whose weapon is gone is stepped once
+        // more, to lapse it.
         let fire_pressed = intent.fire && !self.player_fire_held_last_frame[index];
         self.player_fire_held_last_frame[index] = intent.fire;
         let weapon = tank.active_weapon();
-        let should_fire = match weapon {
-            ActiveWeapon::Laser | ActiveWeapon::Minigun | ActiveWeapon::Missiles | ActiveWeapon::Flamethrower => intent.fire,
-            ActiveWeapon::Plasma | ActiveWeapon::Grenades | ActiveWeapon::SonicHammer | ActiveWeapon::Emp | ActiveWeapon::Shell => fire_pressed,
+        if weapon.trigger() == Trigger::Charge || tank.charge.is_some() {
+            let report = self.seat_hold_report(index);
+            gauss::charge_trigger(f, entity, tank, owner, intent.fire, fire_pressed, report);
+        }
+        let should_fire = match weapon.trigger() {
+            Trigger::Auto | Trigger::Stream => intent.fire,
+            Trigger::Press => fire_pressed,
+            Trigger::Charge => false,
         };
-        if weapon == ActiveWeapon::Flamethrower {
+        if weapon.trigger() == Trigger::Stream {
             if should_fire {
                 dispatch_fire_from(&mut self.physics, f, tank, owner, 0.0, Some(entity));
             } else {
@@ -3165,8 +3291,16 @@ impl Game {
             tank.flame_held = false;
             dispatch_fire(&mut self.physics, f, tank, owner, 0.0);
         }
+        drop(q);
+        self.lamp_key(f, index, entity, intent);
+    }
 
-        // The lamp key sets a lantern down behind the hull, on the press.
+    /// One seat's lamp key for one frame: on the press, a lantern set down
+    /// behind the hull while it has any left.
+    fn lamp_key(&mut self, f: &mut Frame, index: usize, entity: Entity, intent: Intent) {
+        let mut q = self.world.query_one::<&mut Tank>(entity);
+        let Ok(tank) = q.get() else { return };
+
         let lamp_pressed = intent.lamp && !self.player_lamp_held_last_frame[index];
         self.player_lamp_held_last_frame[index] = intent.lamp;
         if lamp_pressed && self.lamps_left[index] > 0 {
@@ -3511,7 +3645,7 @@ impl Game {
         // the places every enemy keeps out of because of an EMP
         // (docs/emp-burst.md "AI"): only when a tank on the field carries
         // one, so a round without hands every `Brain` none.
-        let (emp_senses, dangers) = if self.any_emp() {
+        let (emp_senses, mut dangers) = if self.any_emp() {
             let seats: Vec<emp::EmpSeat> = players
                 .iter()
                 .enumerate()
@@ -3521,6 +3655,36 @@ impl Game {
         } else {
             (BTreeMap::new(), Vec::new())
         };
+        // A hunter carrying a weapon its own rule fires fights the seat
+        // rather than the frog (`target_of`), so on a field map it is woken
+        // and leashed as any other tank is (`field::mind`).
+        let field_hunting = |ai: &Ai, tank: &Tank| ai.role == Role::Hunter && quarry.is_some() && crate::ai::generic_fire(tank.active_weapon());
+        // Whether a tank thinks this tick, as the collect pass below will
+        // find: its brain is on and, on a field map, `field::mind` has it
+        // think (`field::thinks`, the same rule with none of its
+        // bookkeeping).
+        let thinks = |tank: &Tank, ai: &Ai| {
+            !tank.is_disabled()
+                && (!field || field::thinks(ai, tank.position, tank.owner_slot(), &anchors, field_hunting(ai, tank), frame))
+        };
+        // What a slug of each rail-carrying enemy's own would go through
+        // each way it could face, for those that think this tick, and the
+        // lanes of every charging rail - places every enemy keeps out of
+        // (docs/gauss-rail.md "AI"): only when a tank carries or charges
+        // one.
+        let gauss_senses = if self.world.query::<&Tank>().with::<&Ai>().iter().any(|t| t.active_weapon() == ActiveWeapon::GaussRail) {
+            let seats: Vec<gauss::GaussSeat> = players
+                .iter()
+                .enumerate()
+                .map(|(i, p)| gauss::GaussSeat { seat: i as u8, entity: p.entity, pos: p.pos, live: !p.wreck && !p.entering, concealed: p.concealed, sight: p.sight })
+                .collect();
+            self.gauss_senses(&f.terrain, &seats, thinks)
+        } else {
+            BTreeMap::new()
+        };
+        if self.any_rail_charging() {
+            dangers.extend(self.rail_dangers());
+        }
 
         // --- collect pass: perception, `think`, aim and fire, exactly as
         // before. Only the impulse is deferred. ---
@@ -3548,11 +3712,7 @@ impl Game {
             // a branch that takes a tank's thinking away does it here,
             // before the field map's own choice.
             let think_dt = if field {
-                // A hunter carrying a weapon its own rule fires fights the
-                // seat rather than the frog (`target_of`), so it is woken
-                // and leashed as any other tank is.
-                let hunting = ai.role == Role::Hunter && quarry.is_some() && crate::ai::generic_fire(tank.active_weapon());
-                match field::mind(ai, tank.position, tank.owner_slot(), &anchors, view_range, hunting, frame, f.dt) {
+                match field::mind(ai, tank.position, tank.owner_slot(), &anchors, view_range, field_hunting(ai, tank), frame, f.dt) {
                     field::Mind::Think(dt) => dt,
                     idle => {
                         let intent = match idle {
@@ -3647,6 +3807,10 @@ impl Game {
             let current = self.physics.velocity(handle);
             let facing_before = tank.rotation;
             let before = self.trace_ai.then(|| ai.snapshot());
+            debug_assert!(
+                tank.active_weapon() != ActiveWeapon::GaussRail || tank.is_wreck() || gauss_senses.contains_key(&entity),
+                "a rail tank thinks on a tick `thinks` said it would not"
+            );
             // A player lives in a different archetype (no `Ai`), so this
             // shared read never aliases the exclusive borrow above. `think`
             // is handed the player this tank is fighting as "the player".
@@ -3675,6 +3839,7 @@ impl Game {
                         .get(&entity)
                         .map(|s| SpecialSense::Hammer(*s))
                         .or_else(|| emp_senses.get(&entity).map(|s| SpecialSense::Emp(*s)))
+                        .or_else(|| gauss_senses.get(&entity).map(|s| SpecialSense::Gauss(*s)))
                         .unwrap_or(SpecialSense::None),
                     &dangers,
                 )
@@ -3693,8 +3858,18 @@ impl Game {
             // The AI paces itself with its own fire timer; `fire_cooldown`
             // is the weapon's own minimum (a burst in progress, say). A
             // weapon with a tell winds up first (`enemy_trigger`).
-            enemy_trigger(&mut self.physics, f, tank, owner, intent);
-            pending.push(Pending { entity, slot: tank.owner_slot(), intent, current, facing_before, disabled: false, clearing: ai.clearing(), dodging: ai.dodging() });
+            enemy_trigger(&mut self.physics, f, entity, tank, owner, intent);
+            pending.push(Pending {
+                entity,
+                slot: tank.owner_slot(),
+                intent,
+                current,
+                facing_before,
+                disabled: false,
+                charging: tank.charge.is_some(),
+                clearing: ai.clearing(),
+                dodging: ai.dodging(),
+            });
         }
 
         // --- command pass: no world, no RNG (see `simulation::command`) ---
@@ -3723,7 +3898,13 @@ impl Game {
                     intent: p.intent,
                     wreck,
                     ring_rank: self.last_engage.slot_of(p.entity).map(|s| s.rank),
-                    busy: p.disabled.then_some(command::Busy::Disabled),
+                    busy: if p.disabled {
+                        Some(command::Busy::Disabled)
+                    } else if p.charging {
+                        Some(command::Busy::Charging)
+                    } else {
+                        None
+                    },
                     clearing: p.clearing,
                     dodging: p.dodging,
                 }
@@ -4546,6 +4727,10 @@ impl Game {
 
     fn end_round(&mut self, f: &mut Frame, outcome: Outcome) {
         self.outcome = outcome;
+        // Nothing charges or fires on the end screen: every charge is lost.
+        for tank in self.world.query_mut::<&mut Tank>() {
+            tank.lapse_charge();
+        }
         self.ended_at = Some(self.time);
         self.restart_timer = self.end_beats().total();
         f.events.push(Event::RoundEnded { outcome });
@@ -4933,6 +5118,8 @@ impl Game {
                     grenade_ammo: tank.grenade_ammo,
                     sonic_ammo: tank.sonic_ammo,
                     emp_charges: tank.emp_charges,
+                    gauss_slugs: tank.gauss_slugs,
+                    charging: tank.charge.is_some(),
                     disabled: tank.is_disabled(),
                     kept_out: ai.is_some_and(Ai::kept_out),
                     tell: tank.tell.is_some(),
@@ -4996,6 +5183,10 @@ pub struct TankSnapshot {
     pub grenade_ammo: i32,
     pub sonic_ammo: i32,
     pub emp_charges: i32,
+    pub gauss_slugs: i32,
+    /// Holding a charge on its trigger (`Tank::charge`, a gauss rail):
+    /// crawling or standing on its lane on purpose.
+    pub charging: bool,
     /// Disabled by an EMP (`Tank::disabled`): an enemy coasting with its
     /// brain off, going where it did not ask to.
     pub disabled: bool,
@@ -5081,6 +5272,9 @@ struct Pending {
     facing_before: f32,
     /// Its brain is off (an EMP): the commander cannot reach it.
     disabled: bool,
+    /// It holds a rail's charge (docs/gauss-rail.md): the commander leaves
+    /// it on its lane.
+    charging: bool,
     /// The ring its EMP rule asked the commander to clear (`Ai::clearing`).
     clearing: Option<f32>,
     /// Backing out of a danger on its own (`Ai::dodging`).
@@ -5163,8 +5357,21 @@ fn coast_enemy(physics: &mut Physics, f: &mut Frame, entity: Entity, tank: &mut 
     tank.control(intent.move_dir, intent.face);
     let owner = tank.owner();
     tick_queued_shots(physics, f, tank, owner);
-    enemy_trigger(physics, f, tank, owner, Intent { fire: false, ..intent });
-    Pending { entity, slot: tank.owner_slot(), intent, current, facing_before, disabled: tank.is_disabled(), clearing: None, dodging: false }
+    // The trigger released - but held while a charge runs, so a coast never
+    // lets one go: a far tank's charge vents at worst.
+    let fire = tank.charge.is_some();
+    enemy_trigger(physics, f, entity, tank, owner, Intent { fire, ..intent });
+    Pending {
+        entity,
+        slot: tank.owner_slot(),
+        intent,
+        current,
+        facing_before,
+        disabled: tank.is_disabled(),
+        charging: tank.charge.is_some(),
+        clearing: None,
+        dodging: false,
+    }
 }
 
 /// The intent the apply pass drives `slot` by: the commander's orders over
@@ -5184,13 +5391,23 @@ fn hold_for_tell(intent: Intent, tell: Option<crate::tank::Tell>) -> Intent {
     }
 }
 
-/// An enemy's trigger for this frame: a tell running is counted down and,
-/// at its end, the weapon fires along the facing it held (if the tank is
-/// whole, still carries it and its cooldown is out; otherwise the tell
-/// lapses); else a pull with the cooldown out starts the weapon's tell
-/// (`ActiveWeapon::tell_seconds`, `Event::TellStarted`) or, for a weapon
-/// with none, fires it as ever.
-fn enemy_trigger(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, owner: Owner, intent: Intent) {
+/// An enemy's trigger for this frame: a charge weapon's stepped
+/// (`gauss::charge_trigger`, its press edge from `Tank::trigger_held`); a
+/// tell running is counted down and, at its end, the weapon fires along the
+/// facing it held (if the tank is whole, still carries it and its cooldown
+/// is out; otherwise the tell lapses); else a pull with the cooldown out
+/// starts the weapon's tell (`ActiveWeapon::tell_seconds`,
+/// `Event::TellStarted`) or, for a weapon with none, fires it as ever.
+fn enemy_trigger(physics: &mut Physics, f: &mut Frame, entity: Entity, tank: &mut Tank, owner: Owner, intent: Intent) {
+    let pressed = intent.fire && !tank.trigger_held;
+    tank.trigger_held = intent.fire;
+    // A charge weapon's trigger is stepped every tick (its release is the
+    // trigger going up), and a charge whose weapon is gone once more, to
+    // lapse it (docs/gauss-rail.md).
+    if tank.active_weapon().trigger() == Trigger::Charge || tank.charge.is_some() {
+        gauss::charge_trigger(f, entity, tank, owner, intent.fire, pressed, None);
+        return;
+    }
     if let Some(mut tell) = tank.tell {
         tell.left -= f.dt;
         if tell.left > 0.0 {
@@ -5303,8 +5520,12 @@ fn drive_tank_with(
     // Ooze slows a hull like a ford does (docs/defence-towers-prd.md
     // section 6): the top speed and the drive together.
     let pace = footing.pace * tank.slime_pace();
-    let scale = intent.speed_scale() * pace;
-    tank.throttle = intent.speed_scale();
+    // A charging rail crawls (docs/gauss-rail.md): a lower top speed, as
+    // `intent.slow` is, not a lazier drive - and the throttle says so, so
+    // what was asked of the hull reads as asked. Exactly 1 with no charge.
+    let crawl = tank.charge_pace();
+    let scale = intent.speed_scale() * crawl * pace;
+    tank.throttle = intent.speed_scale() * crawl;
     let (current_on, target_on, current_off) = if along_x {
         (current.x, target.x * scale, current.y)
     } else {

@@ -349,8 +349,23 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTre
             WireEvent::CookOff { x, y } => Game::cookoff_show(show, at(x, y)),
             WireEvent::CrateBroken { x, y, cooked: true, .. } => game.crate_cookoff_show(show, at(x, y)),
             // A sonic hit flashes the hull and throws dust (`fx`), never a
-            // shell's impact flash.
-            WireEvent::Hit { cause: crate::simulation::HitCause::Sonic, .. } => {}
+            // shell's impact flash; a slug's hits are its own picture's
+            // (`gauss::compose_slug`).
+            WireEvent::Hit { cause: crate::simulation::HitCause::Sonic | crate::simulation::HitCause::Rail, .. } => {}
+            // A gauss rail's slug, leg by leg, with what it went through -
+            // unless it is this seat's own release, drawn on the release.
+            WireEvent::RailSlug { leg, x0, y0, x1, y1, portal, overcharged, ref pierced, .. } if !own_presses.contains(&i) => {
+                let pierces = pierced.iter().map(|p| crate::gauss::Pierce { at: at(p.x, p.y), what: p.what }).collect();
+                game.rail_show(show, crate::gauss::RailSlug::new(at(x0, y0), at(x1, y1), portal, overcharged, pierces), leg == 0);
+            }
+            // A charge fizzling or venting at the module's bore - unless it
+            // is this seat's own, drawn when it ended there.
+            WireEvent::ChargeEnded { slot, end, .. } if !mode.client_drew(slot as usize) => {
+                let bore = game.world.query::<&Tank>().iter().find(|t| t.owner_slot() == slot as usize).map(crate::gauss::muzzle);
+                if let Some(bore) = bore {
+                    game.charge_end_show(bore, end);
+                }
+            }
             WireEvent::Hit { target, damage, x, y, .. } => {
                 let contact = damage == 0.0
                     && matches!(target, WireHitTarget::Player { .. } | WireHitTarget::Enemy { .. } | WireHitTarget::Frog { .. })
@@ -420,6 +435,7 @@ fn kick_turret(game: &mut Game, slot: usize, weapon: WeaponKind) {
             WeaponKind::Laser => tank.kick_laser(),
             WeaponKind::SonicHammer => tank.kick_sonic(),
             WeaponKind::Emp => tank.kick_emp(),
+            WeaponKind::GaussRail => tank.kick_rail(),
             WeaponKind::Minigun | WeaponKind::Missiles | WeaponKind::Flamethrower | WeaponKind::Grenades => {}
         }
         break;
@@ -452,6 +468,9 @@ fn drawn_muzzle(game: &mut Game, slot: usize, weapon: WeaponKind) -> Option<Posi
         // A pulse has no muzzle: the coil's pulse cell and the ring are its
         // show.
         WeaponKind::Emp => None,
+        // The slug's own first leg starts at the module's bore mouth and
+        // puts on its muzzle ripple (`Game::rail_show`).
+        WeaponKind::GaussRail => None,
     };
     tank.rotation = facing;
     muzzle
@@ -700,6 +719,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
         tank.grenade_ammo = 0;
         tank.sonic_ammo = 0;
         tank.emp_charges = 0;
+        tank.gauss_slugs = 0;
         let ammo = t.ammo as i32;
         match weapon {
             ActiveWeapon::Shell => tank.shells_ammo = ammo,
@@ -711,6 +731,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
             ActiveWeapon::Grenades => tank.grenade_ammo = ammo,
             ActiveWeapon::SonicHammer => tank.sonic_ammo = ammo,
             ActiveWeapon::Emp => tank.emp_charges = ammo,
+            ActiveWeapon::GaussRail => tank.gauss_slugs = ammo,
         }
         // The magazine, which the trigger fires while a special is
         // offline; and an EMP's outages, run down between snapshots.
@@ -726,6 +747,9 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
             facing: dir_from_index(t.dir).unwrap_or(Dir::Up),
         });
         tank.skid = dequantise_seconds(t.skid);
+        // A charge, at the room's count of ticks; the replica counts it up
+        // between snapshots (`Game::tick_presentation`).
+        tank.charge = (t.charge > 0).then(|| crate::tank::Charge::new(weapon, t.charge as f32 * PHYSICS_FIXED_DT));
         (tank.body, tank.move_half_extents(tank.facing_along_x()), turned)
     };
     let tracked = game.world.get::<&mut WireTrack>(entity).map(|mut w| w.0 = position).is_ok();
@@ -2562,22 +2586,18 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
         assert!(!stunned(&replica), "and comes round with the room's");
     }
 
-    /// A sonic hit is no shot: the replica puts up no impact flash for it.
+    /// A sonic hit is no shot, and a slug's hits are its own picture's:
+    /// the replica puts up no impact flash for either.
     #[test]
-    fn a_sonic_hit_flashes_no_impact_on_the_replica() {
-        let game = quiet_round(DEFAULT_MAP, 0xB0B5, 2);
-        let mut replica = welcome_through_the_codec(&game);
-        let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
-        snap.events = vec![WireEvent::Hit {
-            target: WireHitTarget::Enemy { slot: 1 },
-            damage: 3.0,
-            killed: false,
-            x: 1600,
-            y: 1600,
-            cause: crate::simulation::HitCause::Sonic,
-        }];
-        snapshot(&mut replica, &snap);
-        assert!(replica.impact_flashes.is_empty());
+    fn a_sonic_or_rail_hit_flashes_no_impact_on_the_replica() {
+        for cause in [crate::simulation::HitCause::Sonic, crate::simulation::HitCause::Rail] {
+            let game = quiet_round(DEFAULT_MAP, 0xB0B5, 2);
+            let mut replica = welcome_through_the_codec(&game);
+            let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
+            snap.events = vec![WireEvent::Hit { target: WireHitTarget::Enemy { slot: 1 }, damage: 3.0, killed: false, x: 1600, y: 1600, cause }];
+            snapshot(&mut replica, &snap);
+            assert!(replica.impact_flashes.is_empty(), "{cause:?}");
+        }
     }
 
     #[test]
@@ -2588,6 +2608,85 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
                 assert_eq!(cell_from_index(cols, i), (col.min(cols as i32 - 1), row));
             }
         }
+    }
+
+    /// The seat's tank in `game`, armed with the gauss rail.
+    fn rail_seat(game: &mut Game) {
+        let patch = crate::simulation::debug::TankPatch { gauss_slugs: Some(4), ..Default::default() };
+        game.debug_set_tank(0, &patch).expect("the seat's tank");
+    }
+
+    /// A seat's charge travels in its tank's state, at the room's count of
+    /// ticks, and its slug as its `RailSlug`: the replica draws the same
+    /// leg from the same bore to the same stop, with what it went through.
+    #[test]
+    fn a_charge_and_a_slug_reach_the_replica() {
+        let mut game = quiet_round(DEFAULT_MAP, 0xB0B5, 1);
+        rail_seat(&mut game);
+        let mut replica = welcome_through_the_codec(&game);
+        let (w, h) = game.map.field_size();
+        let full = crate::tank::ticks_of(tuning().gauss_charge_seconds);
+        for _ in 0..full {
+            game.update(Input::single(Intent { fire: true, ..Intent::default() }), PHYSICS_FIXED_DT, w, h);
+        }
+        let wire = enc::snapshot(&game, [0; MAX_SEATS]);
+        assert_eq!(wire.tanks.iter().find(|t| t.id == 0).map(|t| t.charge), Some(full as u16), "the charge's ticks");
+        snapshot(&mut replica, &wire);
+        let charge = |g: &Game| g.seat_charge(0);
+        assert_eq!(charge(&replica).map(|c| c.ticks()), charge(&game).map(|c| c.ticks()), "the replica holds the room's charge");
+        assert_eq!(replica.drawable_state(), game.drawable_state());
+        replica.tick_presentation(PHYSICS_FIXED_DT);
+        assert_eq!(charge(&replica).map(|c| c.ticks()), Some(full + 1), "and counts it up between snapshots");
+        game.update(Input::single(Intent::default()), PHYSICS_FIXED_DT, w, h);
+        let wire = enc::snapshot(&game, [0; MAX_SEATS]);
+        assert!(wire.events.iter().any(|e| matches!(e, WireEvent::RailSlug { slot: 0, seat: 0, leg: 0, .. })), "the slug is on the wire");
+        let Msg::Snapshot(wire) = decode(&encode(&Msg::Snapshot(wire))).expect("decodes") else { panic!("kind") };
+        snapshot(&mut replica, &wire);
+        assert_eq!(charge(&replica), None, "released");
+        assert_eq!(replica.rail_slugs.len(), 1, "the replica draws the slug");
+        let (server, client) = (&game.rail_slugs[0], &replica.rail_slugs[0]);
+        assert!(server.start.distance_to(client.start) <= 0.25 && server.end.distance_to(client.end) <= 0.25);
+        assert_eq!(server.pierces.len(), client.pierces.len(), "what it went through");
+    }
+
+    /// A release this client drew is not drawn again when the room's
+    /// `RailSlug` arrives - its first leg; a leg past a portal is the
+    /// room's - nor is its own charge's end; an enemy's slug and fizzle are.
+    #[test]
+    fn a_slug_this_client_drew_is_not_drawn_again() {
+        use crate::net::wire::NO_SEAT;
+        let game = quiet_round(DEFAULT_MAP, 0xB0B5, 2);
+        let enemy = game.first_enemy_slot() as u16;
+        let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
+        let leg = |slot: u16, seat: u8, leg: u8, x0: i16| WireEvent::RailSlug {
+            slot,
+            seat,
+            leg,
+            x0,
+            y0: 400,
+            x1: x0 + 2000,
+            y1: 400,
+            portal: false,
+            overcharged: false,
+            pierced: Vec::new(),
+        };
+        snap.events = vec![
+            WireEvent::Fired { slot: 0, weapon: WeaponKind::GaussRail, input_tick: 3 },
+            leg(0, 0, 0, 400),
+            leg(0, 0, 1, 1200),
+            WireEvent::ChargeEnded { slot: 0, weapon: WeaponKind::GaussRail, end: crate::tank::ChargeEnd::Fizzled },
+            WireEvent::Fired { slot: enemy, weapon: WeaponKind::GaussRail, input_tick: 0 },
+            leg(enemy, NO_SEAT, 0, 2400),
+            WireEvent::ChargeEnded { slot: enemy, weapon: WeaponKind::GaussRail, end: crate::tank::ChargeEnd::Vented },
+        ];
+        let mut drawn = welcome_through_the_codec(&game);
+        snapshot_with(&mut drawn, &snap, Show::OwnShotsDrawn { seat: 0, presses: 0b1 });
+        let starts: Vec<f32> = drawn.rail_slugs.iter().map(|s| s.start.x).collect();
+        assert_eq!(starts, vec![300.0, 600.0], "the leg past the portal and the enemy's");
+        assert_eq!(drawn.charge_ends.len(), 1, "the enemy's vent alone");
+        let mut refused = welcome_through_the_codec(&game);
+        snapshot_with(&mut refused, &snap, Show::OwnShotsDrawn { seat: 0, presses: 0 });
+        assert_eq!(refused.rail_slugs.len(), 3, "a release the client did not draw is the room's to draw");
     }
 
     /// The seat's tank in `game`, armed with the EMP.

@@ -99,6 +99,79 @@ pub enum SpecialSense {
     None,
     Hammer(HammerSense),
     Emp(EmpSense),
+    Gauss(GaussSense),
+}
+
+/// What a gauss rail's slug from where a tank stands would go through, each
+/// way it could face (`Game::gauss_senses`, docs/gauss-rail.md "AI"): its
+/// own stop rule (iron stops it - an enemy never overcharges).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GaussSense {
+    /// One per facing, `Dir::index` order.
+    pub lanes: [GaussLane; 4],
+}
+
+/// One way a gauss rail could face (`GaussSense::lanes`). A seat counts
+/// only where the slug would go through it, this tank stands in its sight
+/// box, it is within this tank's sight under the sky (`Game::sight_on`)
+/// and it is not hidden from it (concealed and not hit-alerted) - cover in
+/// between does not hide it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GaussLane {
+    /// The nearest seat along the lane that counts, and how far along it
+    /// stands: the seat the slug is used on (`Ai::shot_at_seat`).
+    pub at_seat: Option<(u8, f32)>,
+    /// Seats that count.
+    pub seats: u8,
+    /// Standing player towers it would go through.
+    pub towers: u8,
+    /// The players' frog it would go through, and how far along - read
+    /// only for a hunter, whose quarry it is.
+    pub quarry: Option<f32>,
+    /// The nearest live fellow enemy, standing enemy tower or the enemies'
+    /// own frog it would go through, and how far along: nothing fires this
+    /// way at a target beyond it.
+    pub friend: Option<f32>,
+    /// `at_seat` stands inside its sight box and this tank's sight by
+    /// `gauss_ai_box_margin_px` as well: a charge starts only on such a
+    /// lane, so a tank at the box's edge, where a pixel of drift takes the
+    /// seat out of it, does not charge only to lose it at full.
+    pub settled: bool,
+}
+
+impl GaussLane {
+    /// What the lane is worth: two a seat, two the quarry, one a player
+    /// tower.
+    pub fn score(&self) -> i32 {
+        2 * self.seats as i32 + if self.quarry.is_some() { 2 } else { 0 } + self.towers as i32
+    }
+
+    /// Whether a slug down this lane is worth firing: worth at least two,
+    /// with a seat or the quarry to fire at, and no friend before it. A
+    /// friend beyond the target is the slug's to go on through, as a shell
+    /// that misses goes on: holding fire for it left two rail tanks either
+    /// side of a seat each waiting on the other.
+    pub fn counts(&self) -> bool {
+        self.score() >= 2 && self.target_along().is_some_and(|t| self.friend.is_none_or(|f| t < f))
+    }
+
+    /// How far along its first target stands: the seat, else the quarry.
+    pub fn target_along(&self) -> Option<f32> {
+        self.at_seat.map(|(_, d)| d).or(self.quarry)
+    }
+
+    /// The arm's name, for the trace.
+    fn why(&self) -> &'static str {
+        if self.seats >= 2 {
+            "rail-two"
+        } else if self.seats == 1 && self.towers > 0 {
+            "rail-tower"
+        } else if self.seats == 1 {
+            "rail"
+        } else {
+            "rail-quarry"
+        }
+    }
 }
 
 /// What a pulse of an EMP tank's own would get it where it stands
@@ -159,6 +232,11 @@ pub enum DangerShape {
     /// Everything within `radius` of `at`: an armed EMP's reach, an ally's
     /// crackle.
     Disc { at: Position, radius: f32 },
+    /// A charging gauss rail's lane (docs/gauss-rail.md): everything within
+    /// `half_width` of the line from `from` (its gun line's muzzle) along
+    /// `dir`, `length` px out - where its slug would go through a hull.
+    /// `at` is the charging hull.
+    Lane { at: Position, from: Position, dir: Dir, length: f32, half_width: f32 },
 }
 
 impl Danger {
@@ -166,7 +244,22 @@ impl Danger {
     pub fn depth(&self, p: Position) -> f32 {
         match self.shape {
             DangerShape::Disc { at, radius } => radius - p.distance_to(at),
+            DangerShape::Lane { from, dir, length, half_width, .. } => {
+                let (along, across) = lane_offsets(from, dir, p);
+                if along < 0.0 {
+                    along
+                } else if along > length {
+                    length - along
+                } else {
+                    half_width - across.abs()
+                }
+            }
         }
+    }
+
+    /// Whether it is a charging rail's lane.
+    pub fn is_lane(&self) -> bool {
+        matches!(self.shape, DangerShape::Lane { .. })
     }
 
     /// The points `clear` px outside it nearest `p`, best first: the
@@ -202,6 +295,45 @@ impl Danger {
                 let reach = radius + clear;
                 TURNS.map(|(c, s)| Position::new(at.x + (d.x * c - d.y * s) * reach, at.y + (d.x * s + d.y * c) * reach))
             }
+            // Straight out of a side: the one `facing` points across to,
+            // so a tank crossing the lane goes on over rather than turning
+            // back (a reversal and back is a spin); for a tank facing along
+            // it, the near one - `p`'s side, else the side `from` stands
+            // on, else the one clockwise of the lane. At `p`'s distance
+            // along it, then a cell and two either way along it, then the
+            // far side the same.
+            DangerShape::Lane { from: muzzle, dir, length, half_width, .. } => {
+                let (along, across) = lane_offsets(muzzle, dir, p);
+                let n = Vec2::new(-dir.vec().y, dir.vec().x);
+                let f = facing.vec();
+                let turn = f.x * n.x + f.y * n.y;
+                let side = if turn.abs() > 0.5 {
+                    turn.signum()
+                } else if across.abs() > 0.5 {
+                    across.signum()
+                } else {
+                    let (_, a) = lane_offsets(muzzle, dir, from);
+                    if a.abs() > 0.5 { a.signum() } else { 1.0 }
+                };
+                let at = along.clamp(0.0, length);
+                let cell = OBSTACLE_GRID_SIZE;
+                let reach = half_width + clear;
+                let point = |s: f32, k: f32| {
+                    let a = (at + k * cell).clamp(0.0, length);
+                    Position::new(muzzle.x + dir.vec().x * a + n.x * s * reach, muzzle.y + dir.vec().y * a + n.y * s * reach)
+                };
+                [
+                    point(side, 0.0),
+                    point(side, 1.0),
+                    point(side, -1.0),
+                    point(side, 2.0),
+                    point(side, -2.0),
+                    point(-side, 0.0),
+                    point(-side, 1.0),
+                    point(-side, -1.0),
+                    point(-side, 2.0),
+                ]
+            }
         }
     }
 
@@ -213,13 +345,20 @@ impl Danger {
             DangerShape::Disc { at, radius } => {
                 Dir::ALL.map(|d| Position::new(at.x + d.vec().x * (radius + clear), at.y + d.vec().y * (radius + clear)))
             }
+            // Beside the charging hull and behind it - never ahead, which is
+            // the lane.
+            DangerShape::Lane { at, dir, half_width, .. } => Dir::ALL.map(|d| {
+                let d = if d == dir { dir.opposite() } else { d };
+                Position::new(at.x + d.vec().x * (half_width + clear), at.y + d.vec().y * (half_width + clear))
+            }),
         }
     }
 
-    /// The point it is drawn round (a disc's middle).
+    /// The point it is drawn round: a disc's middle, a lane's charging
+    /// hull.
     pub fn middle(&self) -> Position {
         match self.shape {
-            DangerShape::Disc { at, .. } => at,
+            DangerShape::Disc { at, .. } | DangerShape::Lane { at, .. } => at,
         }
     }
 
@@ -261,6 +400,14 @@ pub struct HammerAim {
     pub friend: bool,
 }
 
+/// How far `p` stands along a lane from `from` along `dir`, and across it
+/// (positive on the side clockwise of `dir`).
+fn lane_offsets(from: Position, dir: Dir, p: Position) -> (f32, f32) {
+    let d = dir.vec();
+    let rel = Vec2::new(p.x - from.x, p.y - from.y);
+    (rel.x * d.x + rel.y * d.y, rel.x * -d.y + rel.y * d.x)
+}
+
 /// What a special's rule asks of the tank this tick (`special_rule`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum SpecialUse {
@@ -276,17 +423,24 @@ enum SpecialUse {
     Clear { radius: f32 },
     /// Close in on `to`, to bring a short-range weapon to bear.
     Approach { to: Position },
+    /// Hold the trigger of a charge weapon facing `face` (the charge-and-hold
+    /// pattern, docs/gauss-rail.md): a press starts a charge, holding keeps
+    /// it, and the tank stands its ground meanwhile.
+    Charge { face: Dir, why: &'static str },
+    /// Let a charge weapon's trigger go facing `face`: the simulation fires
+    /// the charge if it is ready. `at_seat` is the seat it is used on.
+    Release { face: Dir, at_seat: Option<u8>, why: &'static str },
 }
 
 /// The BB-36 weapons' crates an enemy detours for, in the order it wants
 /// them (`build`'s `seek_special` tier, after the minigun's).
-pub const SEEK_SPECIALS: [PickupKind; 2] = [PickupKind::SonicHammer, PickupKind::Emp];
+pub const SEEK_SPECIALS: [PickupKind; 3] = [PickupKind::SonicHammer, PickupKind::Emp, PickupKind::GaussRail];
 
 /// Whether the tree's generic tiers - attack, snipe, grudge, breach - may
 /// pull the trigger on `weapon`: false for a special whose own rule owns
 /// it (`special_rule`).
 pub fn generic_fire(weapon: ActiveWeapon) -> bool {
-    !matches!(weapon, ActiveWeapon::SonicHammer | ActiveWeapon::Emp)
+    !matches!(weapon, ActiveWeapon::SonicHammer | ActiveWeapon::Emp | ActiveWeapon::GaussRail)
 }
 
 /// A latched decision to shoot through the tile in `dir` (see
@@ -868,6 +1022,19 @@ impl Ai {
         // The wait on allies in its ring ends with them.
         if !matches!(sense, SpecialSense::Emp(s) if s.friends) {
             self.clear_waited = 0.0;
+        }
+
+        // A charging rail's lane (docs/gauss-rail.md "Reacting to a rail"):
+        // a step into one this tank does not own, from outside every one,
+        // is not taken - it waits at the edge, facing as it is, rather than
+        // walk in for the dodge to push it back out again, until the
+        // charge ends. The dodge's own way out is never held.
+        if let Some(dir) = intent.move_dir
+            && last_action != Some("dodge")
+            && enters_lane(me, dir, dangers)
+        {
+            intent.move_dir = None;
+            self.kept_out = true;
         }
 
         // Personal space, applied to whatever the tree decided: pull up
@@ -2410,6 +2577,20 @@ impl Brain<'_> {
     }
 }
 
+/// Whether `me`, outside every charging rail's lane it does not own, would
+/// step into one driving along `dir`: the point a hull's radius and
+/// `enemy_danger_clear_px` ahead lies inside it.
+fn enters_lane(me: &Tank, dir: Dir, dangers: &[Danger]) -> bool {
+    let mine = me.owner_slot();
+    let lanes = || dangers.iter().filter(|d| d.is_lane() && d.owner != Some(mine));
+    if lanes().any(|d| d.depth(me.position) > 0.0) {
+        return false;
+    }
+    let reach = me.avoidance_radius() + tuning().enemy_danger_clear_px;
+    let ahead = Position::new(me.position.x + dir.vec().x * reach, me.position.y + dir.vec().y * reach);
+    lanes().any(|d| d.depth(ahead) > 0.0)
+}
+
 /// Perpendicular and forward distance of `to` from `from` along the cardinal
 /// axis `dir` points along - shared by aim alignment (target: the player) and
 /// friendly-fire avoidance (target: another enemy), so both read the same way.
@@ -2826,7 +3007,52 @@ fn special_rule(b: &Brain) -> Option<SpecialUse> {
     match (b.me.active_weapon(), b.sense) {
         (ActiveWeapon::SonicHammer, SpecialSense::Hammer(sense)) => hammer_rule(b, sense),
         (ActiveWeapon::Emp, SpecialSense::Emp(sense)) => emp_rule(b, sense),
+        (ActiveWeapon::GaussRail, SpecialSense::Gauss(sense)) => gauss_rule(b, sense),
         _ => None,
+    }
+}
+
+/// The gauss rail's rule with no charge running (docs/gauss-rail.md "AI"):
+/// a training dummy never charges, nor does a rail still cooling (its
+/// reload, a vent); otherwise the best lane it could face that counts with
+/// its seat settled in the box (`GaussLane::settled`) - two seats, then a
+/// seat and a player tower, then a seat (or a hunter's quarry), ties to the
+/// facing it has and then `Dir::ALL` order - starts a charge. Draws no
+/// RNG.
+fn gauss_rule(b: &Brain, sense: &GaussSense) -> Option<SpecialUse> {
+    if b.ai.frog_only || b.me.fire_cooldown > 0.0 {
+        return None;
+    }
+    let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+    let order = std::iter::once(facing).chain(Dir::ALL.into_iter().filter(|&d| d != facing));
+    let mut best: Option<(Dir, GaussLane)> = None;
+    for d in order {
+        let lane = sense.lanes[d.index()];
+        let settled = lane.settled || lane.at_seat.is_none();
+        if lane.counts() && settled && best.is_none_or(|(_, b)| lane.score() > b.score()) {
+            best = Some((d, lane));
+        }
+    }
+    let (face, lane) = best?;
+    Some(SpecialUse::Charge { face, why: lane.why() })
+}
+
+/// A charging gauss rail's rule (`windup_rule`): charging, it holds the
+/// trigger and stands its ground; full, it lets go if the lane still
+/// holds a seat that counts (or a hunter's quarry), else it holds and
+/// waits for one to step back in; overcharged it holds on to the vent -
+/// it never releases overcharged, so iron stays the cover that holds
+/// against it. Never `None` while the charge runs: every other tier
+/// leaves the trigger up, which would be a release.
+fn gauss_charge_rule(b: &Brain, face: Dir, sense: Option<&GaussSense>) -> SpecialUse {
+    let lane = sense.map(|s| s.lanes[face.index()]);
+    match b.me.charge.map(|c| c.stage()) {
+        Some(crate::tank::ChargeStage::Full) => match lane.filter(|l| l.counts() && l.target_along().is_some()) {
+            Some(lane) => SpecialUse::Release { face, at_seat: lane.at_seat.map(|(s, _)| s), why: lane.why() },
+            None => SpecialUse::Charge { face, why: "rail-wait" },
+        },
+        Some(crate::tank::ChargeStage::Overcharged) => SpecialUse::Charge { face, why: "rail-vent" },
+        _ => SpecialUse::Charge { face, why: "rail-charge" },
     }
 }
 
@@ -2935,12 +3161,21 @@ fn act_dodge(b: &mut Brain) -> Status {
     Status::Success
 }
 
-/// What a wind-up asks of its tank, by its weapon. Every wind-up so far is
-/// a tell, which holds the tank facing the way it goes off; a weapon whose
-/// wind-up asks something else (a charge that keeps tracking) matches on
-/// `windup.weapon` here for its own arm.
-fn windup_rule(_b: &Brain, windup: crate::tank::Windup) -> Option<SpecialUse> {
-    Some(SpecialUse::Hold { face: windup.facing, why: "hold" })
+/// What a wind-up asks of its tank, by its weapon: a tell holds the tank
+/// facing the way it goes off; a charge (`Tank::charge`) is its weapon's
+/// to hold or let go - the rail's `gauss_charge_rule` - and a charge
+/// weapon adds its arm here.
+fn windup_rule(b: &Brain, windup: crate::tank::Windup) -> Option<SpecialUse> {
+    match b.me.charge.map(|c| c.weapon) {
+        Some(ActiveWeapon::GaussRail) => {
+            let sense = match b.sense {
+                SpecialSense::Gauss(sense) => Some(sense),
+                _ => None,
+            };
+            Some(gauss_charge_rule(b, windup.facing, sense))
+        }
+        _ => Some(SpecialUse::Hold { face: windup.facing, why: "hold" }),
+    }
 }
 
 /// The sonic hammer's rule (docs/sonic-hammer.md "AI"), in priority order:
@@ -3036,6 +3271,27 @@ fn act_special(b: &mut Brain) -> Status {
             b.intent.move_dir = Some(b.steer(to));
             b.ai.special_why = Some("approach");
         }
+        SpecialUse::Charge { face, why } => {
+            b.intent.face = Some(face);
+            b.ai.commit(face);
+            b.ai.special_why = Some(why);
+            // A charge running is held whatever the timer says; a new one
+            // waits for it (and for the weapon's own cooldown).
+            let running = b.me.charge.is_some();
+            if running || (b.ai.fire_timer <= 0.0 && b.me.fire_cooldown <= 0.0) {
+                if !running {
+                    b.ai.fire_timer = special_fire_interval(b.me.active_weapon());
+                }
+                b.intent.fire = true;
+            }
+        }
+        SpecialUse::Release { face, at_seat, why } => {
+            b.intent.face = Some(face);
+            b.ai.commit(face);
+            b.ai.special_why = Some(why);
+            b.intent.fire = false;
+            b.ai.shot_at_seat = at_seat;
+        }
     }
     Status::Success
 }
@@ -3046,6 +3302,7 @@ fn special_fire_interval(weapon: ActiveWeapon) -> f32 {
     match weapon {
         ActiveWeapon::SonicHammer => tuning().sonic_ai_fire_interval,
         ActiveWeapon::Emp => tuning().emp_ai_fire_interval,
+        ActiveWeapon::GaussRail => tuning().gauss_ai_fire_interval,
         _ => tuning().enemy_fire_interval,
     }
 }

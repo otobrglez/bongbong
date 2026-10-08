@@ -980,6 +980,10 @@ impl<T: Transport> OnlineRound<T> {
         if predictor.offline_left() > 0.0 {
             game.hold_seat_offline(seat, predictor.offline_left());
         }
+        // A charge is drawn as the sandbox holds it - its glow, the
+        // module's cells and the HUD's gauge from the press frame to the
+        // release frame (docs/gauss-rail.md "Online").
+        game.set_seat_charge(seat as usize, predictor.charge());
         true
     }
 
@@ -1063,6 +1067,17 @@ impl<T: Transport> OnlineRound<T> {
                 crate::net::predict::PressShow::Emp(press) => {
                     game.draw_press_show(seat, crate::tank::ActiveWeapon::Emp, press.origin, crate::tank::Dir::Up)
                 }
+                // A rail's slug, traced as the room traces it through the
+                // drawn world - or into the first portal on its way, the
+                // legs past it the room's own `RailSlug`s - from the bore.
+                crate::net::predict::PressShow::Rail(press) => {
+                    let far = crate::math::Vec2::new(press.start.x + press.dir.x * beam_reach, press.start.y + press.dir.y * beam_reach);
+                    let entry = world.portal_entry(press.start, far, world.portal_inside(press.start));
+                    let trace = world.rail_trace(Some(seat), press.start, entry.unwrap_or(far), tuning().gauss_half_width, press.overcharged);
+                    let portal = entry.is_some_and(|at| at.distance_to(trace.end) < 0.5);
+                    game.draw_rail_press(seat, press.muzzle, trace, portal, press.overcharged);
+                }
+                crate::net::predict::PressShow::ChargeEnd(end) => game.charge_end_show(end.at, end.end),
             }
         }
         for at in predictor.take_impacts() {

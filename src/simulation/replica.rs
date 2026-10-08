@@ -70,6 +70,8 @@ pub struct DrawableTank {
     pub disabled: bool,
     /// Its special offline on its own (`Tank::special_offline`).
     pub offline: bool,
+    /// The whole ticks a charge has been held (`Charge::ticks`), 0 for none.
+    pub charge: u32,
 }
 
 /// One seeker missile as it is drawn: where it is, how high, and the two
@@ -371,6 +373,7 @@ impl Game {
                 ammo: t.active_ammo(),
                 disabled: t.disabled > 0.0,
                 offline: t.special_offline > 0.0,
+                charge: t.charge.map_or(0, |c| c.ticks()),
             })
             .collect();
         tanks.sort_by_key(|t| t.slot);

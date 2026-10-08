@@ -33,7 +33,7 @@ use crate::simulation::{Event, HitCause, HitTarget};
 
 /// The serde tags (`Event`'s `event` field) of the variants
 /// `WireEvent::from_event` never sends.
-pub const NOT_SENT: [&str; 16] = [
+pub const NOT_SENT: [&str; 17] = [
     "physics_quarantine",
     "beat_done",
     "door_opened",
@@ -50,6 +50,7 @@ pub const NOT_SENT: [&str; 16] = [
     "tell_started",
     "disabled",
     "tower_disabled",
+    "charge_started",
 ];
 
 /// What the flamethrower lit (`Event::Ignited`'s `what`), in wire order.
@@ -224,6 +225,25 @@ pub enum WireEvent {
     /// A missile an EMP killed came down a dud at (`x`, `y`);
     /// `Event::MissileDud`.
     MissileDud { x: i16, y: i16 },
+    /// One leg of `slot`'s gauss rail slug, from (`x0`, `y0`) to (`x1`,
+    /// `y1`), and everything it went through; `Event::RailSlug`. `seat` is
+    /// `wire::NO_SEAT` for an enemy's: the shooter draws its own first leg
+    /// on the release and skips this one.
+    RailSlug {
+        slot: u16,
+        seat: u8,
+        leg: u8,
+        x0: i16,
+        y0: i16,
+        x1: i16,
+        y1: i16,
+        portal: bool,
+        overcharged: bool,
+        pierced: Vec<crate::net::wire::RailPierce>,
+    },
+    /// The charge of `weapon` on `slot` ended without firing;
+    /// `Event::ChargeEnded`.
+    ChargeEnded { slot: u16, weapon: WeaponKind, end: crate::tank::ChargeEnd },
 }
 
 fn slot_u16(slot: usize) -> u16 {
@@ -238,13 +258,14 @@ impl WireEvent {
     /// The seat and weapon of a press's show - the event a client that drew
     /// the press itself claims (`WeaponKind::drawn_on_press`,
     /// `apply::Show::OwnShotsDrawn`): a laser's first leg, a sonic hammer's
-    /// wave, an EMP's ring. `None` for every other event, and for an
-    /// enemy's.
+    /// wave, an EMP's ring, a gauss rail slug's first leg. `None` for every
+    /// other event, and for an enemy's.
     pub fn press_show(&self) -> Option<(u8, WeaponKind)> {
         match *self {
             WireEvent::LaserBeam { seat, leg: 0, .. } if seat != crate::net::wire::NO_SEAT => Some((seat, WeaponKind::Laser)),
             WireEvent::SonicBlast { slot, .. } if (slot as usize) < crate::net::MAX_SEATS => Some((slot as u8, WeaponKind::SonicHammer)),
             WireEvent::EmpPulse { slot, .. } if (slot as usize) < crate::net::MAX_SEATS => Some((slot as u8, WeaponKind::Emp)),
+            WireEvent::RailSlug { seat, leg: 0, .. } if seat != crate::net::wire::NO_SEAT => Some((seat, WeaponKind::GaussRail)),
             _ => None,
         }
     }
@@ -310,9 +331,28 @@ impl WireEvent {
                 });
                 WireEvent::SonicBlast { slot: slot_u16(slot), x: q(x), y: q(y), dir: dir_index(dir) }
             }
-            Event::TellStarted { .. } | Event::Disabled { .. } | Event::TowerDisabled { .. } => return None,
+            Event::TellStarted { .. } | Event::Disabled { .. } | Event::TowerDisabled { .. } | Event::ChargeStarted { .. } => return None,
             Event::EmpPulse { slot, x, y } => WireEvent::EmpPulse { slot: slot_u16(slot), x: q(x), y: q(y) },
             Event::MissileDud { x, y } => WireEvent::MissileDud { x: q(x), y: q(y) },
+            Event::RailSlug { slot, seat, leg, x0, y0, x1, y1, portal, overcharged, ref pierced } => WireEvent::RailSlug {
+                slot: slot_u16(slot),
+                seat,
+                leg,
+                x0: q(x0),
+                y0: q(y0),
+                x1: q(x1),
+                y1: q(y1),
+                portal,
+                overcharged,
+                pierced: pierced.iter().map(|&(x, y, what)| crate::net::wire::RailPierce { x: q(x), y: q(y), what }).collect(),
+            },
+            Event::ChargeEnded { slot, weapon, end } => {
+                let weapon = WeaponKind::parse(weapon).unwrap_or_else(|| {
+                    debug_assert!(false, "unknown weapon name {weapon:?} in Event::ChargeEnded");
+                    WeaponKind::Shell
+                });
+                WireEvent::ChargeEnded { slot: slot_u16(slot), weapon, end }
+            }
             Event::DrumLaunched { x, y, to_x, to_y, drum } => {
                 WireEvent::DrumLaunched { x: q(x), y: q(y), to_x: q(to_x), to_y: q(to_y), drum }
             }
@@ -445,6 +485,19 @@ impl WireEvent {
             }
             WireEvent::EmpPulse { slot, x, y } => Event::EmpPulse { slot: slot as usize, x: d(x), y: d(y) },
             WireEvent::MissileDud { x, y } => Event::MissileDud { x: d(x), y: d(y) },
+            WireEvent::RailSlug { slot, seat, leg, x0, y0, x1, y1, portal, overcharged, ref pierced } => Event::RailSlug {
+                slot: slot as usize,
+                seat,
+                leg,
+                x0: d(x0),
+                y0: d(y0),
+                x1: d(x1),
+                y1: d(y1),
+                portal,
+                overcharged,
+                pierced: pierced.iter().map(|p| (d(p.x), d(p.y), p.what)).collect(),
+            },
+            WireEvent::ChargeEnded { slot, weapon, end } => Event::ChargeEnded { slot: slot as usize, weapon: weapon.name(), end },
             WireEvent::DrumLaunched { x, y, to_x, to_y, drum } => {
                 Event::DrumLaunched { x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y), drum }
             }
@@ -567,6 +620,20 @@ mod tests {
             Event::TellStarted { slot: 3, weapon: "sonic_hammer" },
             Event::EmpPulse { slot: 1, x: 128.0, y: 160.0 },
             Event::MissileDud { x: 300.0, y: 210.0 },
+            Event::RailSlug {
+                slot: 0,
+                seat: 0,
+                leg: 1,
+                x0: 100.0,
+                y0: 200.0,
+                x1: 900.0,
+                y1: 200.0,
+                portal: false,
+                overcharged: true,
+                pierced: vec![(300.0, 200.0, crate::gauss::Pierced::Tile(Material::Brick)), (500.0, 200.0, crate::gauss::Pierced::Shield)],
+            },
+            Event::ChargeStarted { slot: 5, weapon: "gauss_rail" },
+            Event::ChargeEnded { slot: 5, weapon: "gauss_rail", end: crate::tank::ChargeEnd::Vented },
             Event::Disabled { slot: 4, x: 128.0, y: 160.0 },
             Event::TowerDisabled { x: 112.0, y: 80.0 },
             Event::LavaBombLaunched { x: 640.0, y: 352.0, to_x: 800.0, to_y: 416.0 },
@@ -619,7 +686,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 58, "one sample per Event variant");
+        assert_eq!(seen.len(), 61, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

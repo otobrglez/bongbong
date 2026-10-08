@@ -140,12 +140,20 @@ pub enum PickupKind {
     /// enemies both use it.
     #[serde(rename = "emp_burst")]
     Emp,
+    /// The gauss rail (docs/gauss-rail.md): loads `gauss_slugs_per_pickup`
+    /// slugs (one weapon at a time, as above). While stocked the trigger
+    /// charges while held - the hull crawling, the charge glowing - and a
+    /// release at full sends a slug down the gun line across the whole
+    /// field, through brick, wood, glass and every tank in the lane until
+    /// iron stops it (`gauss.rs`). Players and enemies both use it.
+    #[serde(rename = "gauss_rail")]
+    GaussRail,
 }
 
 impl PickupKind {
     /// Every kind in declaration order: the crate and symbol sheets' row
     /// order (`row`).
-    pub const ALL: [PickupKind; 15] = [
+    pub const ALL: [PickupKind; 16] = [
         PickupKind::Health,
         PickupKind::Ammo,
         PickupKind::Laser,
@@ -161,6 +169,7 @@ impl PickupKind {
         PickupKind::Grenades,
         PickupKind::SonicHammer,
         PickupKind::Emp,
+        PickupKind::GaussRail,
     ];
 
     /// This kind's row on static/crates_sheet.png and
@@ -182,6 +191,7 @@ impl PickupKind {
             PickupKind::Grenades => 12,
             PickupKind::SonicHammer => 13,
             PickupKind::Emp => 14,
+            PickupKind::GaussRail => 15,
         }
     }
 
@@ -204,6 +214,7 @@ impl PickupKind {
             PickupKind::Grenades => "grenades",
             PickupKind::SonicHammer => "sonic_hammer",
             PickupKind::Emp => "emp_burst",
+            PickupKind::GaussRail => "gauss_rail",
         }
     }
 
@@ -225,6 +236,7 @@ impl PickupKind {
             PickupKind::Grenades => Some(ActiveWeapon::Grenades),
             PickupKind::SonicHammer => Some(ActiveWeapon::SonicHammer),
             PickupKind::Emp => Some(ActiveWeapon::Emp),
+            PickupKind::GaussRail => Some(ActiveWeapon::GaussRail),
             PickupKind::Health
             | PickupKind::Ammo
             | PickupKind::SpeedUp
@@ -258,6 +270,7 @@ impl PickupKind {
             PickupKind::Grenades => [0x8C2CB0, 0xD656F5, 0xF4B6FF],
             PickupKind::SonicHammer => [0x1E7FB8, 0x46C3F2, 0xA8E6FF],
             PickupKind::Emp => [0x2433A6, 0x4F6BFF, 0xB3C2FF],
+            PickupKind::GaussRail => [0xB01E92, 0xFF3DD8, 0xFFB0F0],
         };
         [rgb(shade), rgb(base), rgb(light)]
     }
@@ -269,6 +282,9 @@ impl PickupKind {
         match self {
             PickupKind::Ammo | PickupKind::Minigun | PickupKind::Missiles | PickupKind::Flamethrower | PickupKind::Grenades => true,
             PickupKind::Laser | PickupKind::Plasma => true,
+            // Slugs and charged capacitors, like the laser's and the
+            // plasma's: it goes up.
+            PickupKind::GaussRail => true,
             PickupKind::Health
             | PickupKind::SpeedUp
             | PickupKind::Shield

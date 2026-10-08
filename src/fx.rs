@@ -615,6 +615,15 @@ impl Fx {
                         }
                     }
                     Event::ObstacleDestroyed { material, x, y } => self.tile_death(material, Position::new(x, y)),
+                    // A gauss rail's slug through a hull or a tile: the
+                    // flash alone - its bursts, a frog's included, are the
+                    // slug's own (`gauss::compose_slug`).
+                    Event::Hit { target, cause: HitCause::Rail, x, y, .. } => match target {
+                        HitTarget::Player { player } => self.flash(Flashed::Tank(player as usize)),
+                        HitTarget::Enemy { slot } => self.flash(Flashed::Tank(slot)),
+                        HitTarget::Obstacle { .. } => self.flash(Flashed::Tile(Position::new(x, y))),
+                        _ => {}
+                    },
                     // A hit the tile *survived*. Without this, a wall only
                     // ever throws anything on the shot that finishes it,
                     // and every shot before that lands silently.
@@ -798,6 +807,23 @@ impl Fx {
                     Event::TowerRepaired { x, y, .. } => {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(18), 110.0, &RAINBOW_TINTS);
                         self.burst(Position::new(x, y), ParticleKind::Ember, self.count(6), 36.0, &RAINBOW_TINTS);
+                    }
+                    // A gauss rail's slug: sparks spat out of the bore down
+                    // the line, and off whatever stopped it, splashing back
+                    // (docs/gauss-rail.md "Look").
+                    Event::RailSlug { leg, x0, y0, x1, y1, portal, .. } => {
+                        let (dx, dy) = (x1 - x0, y1 - y0);
+                        let len = (dx * dx + dy * dy).sqrt();
+                        if len > 0.5 {
+                            let dir = Vec2::new(dx / len, dy / len);
+                            if leg == 0 {
+                                self.cone_burst(Position::new(x0, y0), dir, 0.35, ParticleKind::Spark, self.count(6), 220.0, &[RAIL_T, WHITE_T]);
+                            }
+                            if !portal {
+                                self.cone_burst(Position::new(x1, y1), dir * -1.0, 1.0, ParticleKind::Spark, self.count(tuning().shot_hit_sparks), 170.0, &[RAIL_T, WHITE_T]);
+                                self.splash_if_wet(game, Position::new(x1, y1), 6);
+                            }
+                        }
                     }
                     // A laser's burn: sparks in the beam's colour splashing
                     // back off whatever stopped it. A leg that ends going
@@ -1410,6 +1436,8 @@ const SHIELD_T: Color = Color::new(0xAA, 0x78, 0xFF, 255);
 /// The tesla bolt's violets (`render::tower`'s strands), off the palette
 /// like the shield's.
 const TESLA_T: Color = Color::new(0xCA, 0xA6, 0xFF, 255);
+/// A gauss rail's sparks: its ramp's pale step (`pyro::RAIL`).
+const RAIL_T: Color = crate::pyro::RAIL[3];
 /// An EMP's sparks: its ramp's pale blue (`pyro::EMP`).
 const EMP_T: Color = crate::pyro::EMP[3];
 const TESLA_DEEP_T: Color = Color::new(0x9A, 0x66, 0xFF, 255);

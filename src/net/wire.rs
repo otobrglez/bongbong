@@ -187,11 +187,12 @@ pub enum WeaponKind {
     Grenades,
     SonicHammer,
     Emp,
+    GaussRail,
 }
 
 impl WeaponKind {
     /// Every kind, in wire order.
-    pub const ALL: [WeaponKind; 9] = [
+    pub const ALL: [WeaponKind; 10] = [
         WeaponKind::Shell,
         WeaponKind::Laser,
         WeaponKind::Plasma,
@@ -201,6 +202,7 @@ impl WeaponKind {
         WeaponKind::Grenades,
         WeaponKind::SonicHammer,
         WeaponKind::Emp,
+        WeaponKind::GaussRail,
     ];
 
     /// The name `ActiveWeapon::name` gives, which is what `Event::Fired`
@@ -217,10 +219,11 @@ impl WeaponKind {
     /// Whether the shooter's client draws this weapon's press itself, from
     /// its predicted pose, and claims the room's show of it
     /// (docs/sonic-hammer.md "Online: the shooter's press is drawn at
-    /// once"): the laser's beam and the sonic hammer's wave
+    /// once"): the laser's beam, the sonic hammer's wave, the EMP's ring
+    /// and the gauss rail's slug, drawn on its release
     /// (`events::WireEvent::press_show`).
     pub fn drawn_on_press(self) -> bool {
-        matches!(self, WeaponKind::Laser | WeaponKind::SonicHammer | WeaponKind::Emp)
+        matches!(self, WeaponKind::Laser | WeaponKind::SonicHammer | WeaponKind::Emp | WeaponKind::GaussRail)
     }
 }
 
@@ -236,6 +239,7 @@ impl From<ActiveWeapon> for WeaponKind {
             ActiveWeapon::Grenades => WeaponKind::Grenades,
             ActiveWeapon::SonicHammer => WeaponKind::SonicHammer,
             ActiveWeapon::Emp => WeaponKind::Emp,
+            ActiveWeapon::GaussRail => WeaponKind::GaussRail,
         }
     }
 }
@@ -252,6 +256,7 @@ impl From<WeaponKind> for ActiveWeapon {
             WeaponKind::Grenades => ActiveWeapon::Grenades,
             WeaponKind::SonicHammer => ActiveWeapon::SonicHammer,
             WeaponKind::Emp => ActiveWeapon::Emp,
+            WeaponKind::GaussRail => ActiveWeapon::GaussRail,
         }
     }
 }
@@ -499,6 +504,10 @@ pub struct TankState {
     /// while the special is offline, which a client's prediction gates a
     /// press against.
     pub shells: u8,
+    /// A charge running on `weapon` (`Tank::charge`, docs/gauss-rail.md):
+    /// the whole ticks its trigger has been held, at least 1; 0 for none.
+    /// Exact, so a replay starts from the room's count.
+    pub charge: u16,
 }
 
 /// One live projectile, keyed by a per-round id the server hands out.
@@ -525,6 +534,15 @@ pub struct ShotState {
     /// knows which shots are its own to draw on its own timeline
     /// (docs/online-coop-prd.md §4.16). Never changes.
     pub owner: u8,
+}
+
+/// One thing a gauss rail's slug went through, where it went in (quarter
+/// pixels): `events::WireEvent::RailSlug`'s list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RailPierce {
+    pub x: i16,
+    pub y: i16,
+    pub what: crate::gauss::Pierced,
 }
 
 /// `ShotState::owner` and `WireEvent::LaserBeam::seat` for a shot no seat

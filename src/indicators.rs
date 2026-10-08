@@ -355,7 +355,9 @@ pub struct TankView {
     pub in_grass: bool,
     /// Lined up to fire on this seat with its line of sight clear
     /// (`lined_up` and `PresentWorld::line_of_sight`): its aim is settling.
-    /// Only ever set on an enemy.
+    /// For an enemy charging a gauss rail, its slug would go through this
+    /// seat's tank (`PresentWorld::rail_trace` - through cover, whatever
+    /// the range). Only ever set on an enemy.
     pub lane: bool,
     /// An enemy winding up a special (`Tank::windup`, docs/sonic-hammer.md
     /// "The enemy tell"): the weapon and how far through, 0..1.
@@ -441,8 +443,10 @@ pub enum ArrowKind {
     Volcano { erupting: bool },
     /// An enemy winding up a special (`TankView::windup`): never merged,
     /// never left out, drawn in the weapon's accent rimmed hostile red and
-    /// blinking quicker as it nears going off.
-    Windup { weapon: ActiveWeapon, progress: f32 },
+    /// blinking quicker as it nears going off. `lane`: this seat stands in
+    /// its lane (`TankView::lane`), and the arrow carries the lane warning's
+    /// ring, settled as far as the wind-up.
+    Windup { weapon: ActiveWeapon, progress: f32, lane: bool },
 }
 
 /// One arrow at the edge of the screen.
@@ -1087,7 +1091,7 @@ impl Awareness {
         // never left out - it is about to go off.
         for tv in windups {
             if let Some((weapon, progress)) = tv.windup {
-                kept.extend(arrow(ArrowKind::Windup { weapon, progress }, tv.pos));
+                kept.extend(arrow(ArrowKind::Windup { weapon, progress, lane: tv.lane }, tv.pos));
             }
         }
 
@@ -1316,8 +1320,11 @@ impl Scene {
             }
         };
         let mut me = None;
-        // Each tank with its facing and whether an EMP has it disabled.
-        let mut tanks: Vec<(TankView, Dir, bool)> = Vec::new();
+        // Each tank with its facing, whether an EMP has it disabled and, for
+        // one charging a gauss rail, its slug's line and whether it is
+        // overcharged.
+        let mut tanks: Vec<(TankView, Dir, bool, Option<(Position, Position, bool)>)> = Vec::new();
+        let reach = crate::simulation::laser_reach(field);
         let cover = game.cover_cells();
         for (entity, tank) in game.world.query::<(Entity, &Tank)>().iter() {
             let gate = gate_of(entity, tank.position);
@@ -1335,15 +1342,25 @@ impl Scene {
                 lane: false,
                 windup: tank.windup().filter(|_| !tank.is_wreck()).map(|w| (w.weapon, w.progress)),
             };
-            tanks.push((view, facing_of(tank.rotation), tank.is_disabled()));
+            let rail = tank.charge.filter(|c| c.weapon == ActiveWeapon::GaussRail && !tank.is_wreck()).map(|c| {
+                let dir = facing_of(tank.rotation).vec();
+                let from = tank.gun_line_muzzle(dir);
+                (from, from + dir * reach, c.stage() == crate::tank::ChargeStage::Overcharged)
+            });
+            tanks.push((view, facing_of(tank.rotation), tank.is_disabled(), rail));
         }
-        tanks.sort_by_key(|(tv, _, _)| tv.slot);
+        tanks.sort_by_key(|(tv, _, _, _)| tv.slot);
         // The lane: the AI's fire rule first, then its line of sight, the
         // world built for that only when an enemy is lined up at all. A
         // disabled enemy (an EMP) fires nothing: no warning for it.
         if let Some(me) = me.filter(SeatView::active) {
             let mut world = None;
-            for (tv, facing, _) in tanks.iter_mut().filter(|(tv, _, disabled)| tv.is_enemy() && !disabled) {
+            for (tv, facing, _, rail) in tanks.iter_mut().filter(|(tv, _, disabled, _)| tv.is_enemy() && !disabled) {
+                if let Some((from, to, overcharged)) = *rail {
+                    let world = world.get_or_insert_with(|| game.present_world());
+                    tv.lane = world.rail_trace(None, from, to, t.gauss_half_width, overcharged).reaches_seat(seat);
+                    continue;
+                }
                 if lined_up(tv.pos, *facing, me.pos, sight, &t) {
                     let world = world.get_or_insert_with(|| game.present_world());
                     tv.lane = world.line_of_sight(tv.pos, me.pos);
@@ -1367,7 +1384,7 @@ impl Scene {
         Scene {
             time: game.time,
             seat: me,
-            tanks: tanks.into_iter().map(|(tv, _, _)| tv).collect(),
+            tanks: tanks.into_iter().map(|(tv, _, _, _)| tv).collect(),
             frogs,
             sight: shortened.then_some(sight),
             volcanoes,
@@ -1389,8 +1406,8 @@ fn onto_field(p: Position, field: (f32, f32)) -> Position {
 
 /// Which way the hit on the seat whose tank is `me` (entity `entity`,
 /// hull box `hull`), landing at `at`, came from - a unit vector from the
-/// tank. A beam or a tesla bolt that stopped there points back at its
-/// source; a shot standing there - the hit test leaves it in its impact
+/// tank. A beam or a tesla bolt that stopped there, or a rail's slug that
+/// went through there, points back at its source; a shot standing there - the hit test leaves it in its impact
 /// frames where it struck - back up the line it flew; a flame's contact,
 /// which lands on the hull's centre, at the nearest nozzle of another's
 /// jet; anything else at the face of the hull it landed on, since every
@@ -1399,6 +1416,12 @@ fn hit_from(game: &Game, entity: Entity, me: Position, hull: (Position, Position
     for event in game.events() {
         if let Event::LaserBeam { x0, y0, x1, y1, .. } | Event::TeslaStrike { x0, y0, x1, y1, .. } = *event
             && Position::new(x1, y1).distance_to(at) <= HIT_MATCH_PX
+        {
+            return unit(Position::new(x0 - x1, y0 - y1));
+        }
+        // A gauss rail's slug went through it: back up the slug's line.
+        if let Event::RailSlug { x0, y0, x1, y1, ref pierced, .. } = *event
+            && pierced.iter().any(|&(x, y, _)| Position::new(x, y).distance_to(at) <= HIT_MATCH_PX)
         {
             return unit(Position::new(x0 - x1, y0 - y1));
         }
@@ -1669,8 +1692,15 @@ pub fn picture(seats: &[Indicators], view: &ViewFrame, time: f32, t: &Tuning, fo
             // A wind-up blinks in its weapon's accent, quicker as it nears,
             // rimmed hostile red as the enemy frog is: an accent can be a
             // seat's own colour (the sonic hammer's sky blue is player 1's),
-            // and this is no teammate.
-            ArrowKind::Windup { weapon, progress } => {
+            // and this is no teammate. In its lane, the lane warning's ring.
+            ArrowKind::Windup { weapon, progress, lane } => {
+                if lane {
+                    len *= 1.0 + t.indicator_pulse_swell * progress * throb;
+                    let middle = behind(arrow.place.at, arrow.place.dir, len * 0.5);
+                    let radius = len * (RING_SMALL + (RING_LARGE - RING_SMALL) * throb);
+                    let ring = if progress >= 0.5 { HOSTILE } else { HOSTILE_DEEP };
+                    rimmed(&mut out.screen, middle, &ring_cells(radius), ring, RIM, alpha);
+                }
                 if !blink_on(time, t.indicator_pulse_hz * (1.0 + 2.0 * progress)) {
                     continue;
                 }
@@ -2080,7 +2110,7 @@ mod indicator_tests {
         let s = scene(1.0, vec![enemy(5, 900.0, 150.0), enemy(6, 950.0, 400.0), telling]);
         let ind = Awareness::new().frame(&s, &screen(), &t);
         let tell = ind.arrows.iter().find(|a| matches!(a.kind, ArrowKind::Windup { .. })).expect("a tell arrow");
-        assert_eq!(tell.kind, ArrowKind::Windup { weapon: ActiveWeapon::SonicHammer, progress: 0.4 });
+        assert_eq!(tell.kind, ArrowKind::Windup { weapon: ActiveWeapon::SonicHammer, progress: 0.4, lane: false });
         assert_eq!(tell.place.edge, Edge::Bottom);
         telling.pos = Position::new(250.0, 200.0);
         let s = scene(1.0, vec![telling]);
@@ -2909,7 +2939,7 @@ mod picture_tests {
         assert_eq!(body(ArrowKind::Frog { side: Side::Player }), set(&[FROG_GREEN, RIM]));
         assert_eq!(body(ArrowKind::Frog { side: Side::Enemy }), set(&[FROG_GREEN, HOSTILE]));
         assert_eq!(body(ArrowKind::Gate { flash: 1.0 }), set(&[GATE_AMBER, RIM]));
-        let windup = ArrowKind::Windup { weapon: ActiveWeapon::SonicHammer, progress: 0.0 };
+        let windup = ArrowKind::Windup { weapon: ActiveWeapon::SonicHammer, progress: 0.0, lane: false };
         assert_eq!(body(windup), set(&[crate::hud::weapon_color(ActiveWeapon::SonicHammer), HOSTILE]), "the weapon's accent, rimmed hostile");
     }
 

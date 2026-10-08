@@ -197,6 +197,7 @@ def brake2(b, xc2, width, y_tip, recoil, z=2.8, mat=None):
 DIM_LENS = (0x81, 0x2F, 0x27)     # RED_DK: an unlit laser lens
 DIM_PLASMA = (0x03, 0x8A, 0xAB)   # BLUE_DK: plasma coils at rest
 PILOT = (0x27, 0xD8, 0xC5)        # BLUE_BRIGHT: the flamer's pilot flame
+DIM_RAIL = (0x0E, 0x8B, 0x96)     # BLUE_DARKEST: a gauss rail's charge cells at rest
 
 
 @LINE.module_fn('minigun')
@@ -374,6 +375,40 @@ def emp(d, b, st, hp):
     elif st == 3:
         b.lamp(windings, 'white', z=5.7, name='em_pulse')
         b.lamp({(hx, hy)}, 'ion', z=5.7, name='em_pulse_core')
+
+
+@LINE.module_fn('gauss')
+def gauss(d, b, st, hp):
+    """A gauss rail on the left cheek (docs/gauss-rail.md): a gunmetal
+    capacitor block at the root with a column of four charge cells down its
+    middle, and two steel rails running forward of it with a dark bore
+    between them, their tips a step brighter. `st` 0 idle, the cells dark; 1
+    to 4 the charge, that many cells lit from the rear; 5 full, every cell
+    white and the slug glowing in the bore; 6 the shot, the rails and the
+    bore white and the cells spent. It shares the laser's cheek unless the
+    design gives it its own - a tank carries one special at a time."""
+    hx, hy = hp.get('gauss', hp['laser'])
+    b.meta['muzzle'] = (hx + 0.5, hy - 6.0)
+    b.part(rect(hx - 1, hy - 1, hx + 1, hy + 2), GUNMETAL, 'plate', 3, step=-1, corner=False, name='gr_block')
+    for x in (hx - 1, hx + 1):
+        b.part(rect(x, hy - 5, x, hy - 2), STEEL, 'flat', 3.2, step=0, name='gr_rail')
+        b.part({(x, hy - 6)}, STEEL, 'flat', 3.2, step=1, name='gr_rail_tip')
+    bore = rect(hx, hy - 6, hx, hy - 2)
+    b.part(bore, DARK, 'flat', 3.1, step=-1, name='gr_bore')
+    cells = [(hx, hy + 2 - i) for i in range(4)]
+    if st == 6:
+        b.lamp(rect(hx - 1, hy - 6, hx + 1, hy - 2), 'white', z=3.5, name='gr_shot')
+        b.part(set(cells), DARK, 'flat', 3.3, step=-1, name='gr_spent')
+        return
+    for i, c in enumerate(cells):
+        if st == 5:
+            b.lamp({c}, 'white', z=3.5, name='gr_cell_full')
+        elif i < st:
+            b.lamp({c}, 'ion', z=3.5, name='gr_cell_lit')
+        else:
+            b.lamp({c}, DIM_RAIL, z=3.5, name='gr_cell')
+    if st == 5:
+        b.lamp(bore, 'ion', z=3.5, name='gr_slug')
 
 
 # ---------------------------------------------------------------------------

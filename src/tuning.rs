@@ -330,6 +330,11 @@ tunables! {
         /// sonic hammer's: a hash of the spawn point and the owner slot,
         /// never the round's RNG, so at 0 nothing changes.
         enemy_special_weapon_emp_share: f32 = 0.0 in 0.0 ..= 1.0 @ Restart;
+        /// Of an enemy that rolled a special weapon above, the share that
+        /// spawns with the gauss rail instead (docs/gauss-rail.md), after
+        /// the EMP's: a hash of the spawn point and the owner slot, never
+        /// the round's RNG, so at 0 nothing changes.
+        enemy_special_weapon_gauss_share: f32 = 0.0 in 0.0 ..= 1.0 @ Restart;
         /// Which chassis the player spawns in, as a row index into
         /// `scifi_tanks_sheet.png`: 0 scout, 1 assault, 2 breaker,
         /// 3 longbow, 4 flak, 5 wraith, 6 warden, 7 ravager, 8 glacier,
@@ -1052,6 +1057,74 @@ tunables! {
         /// none is in it: allies that cannot get out are not kept backing
         /// out for ever, nor the pack held on one tank's ring.
         emp_ai_clear_patience_seconds: f32 = 3.0 in 0.0 ..= 30.0;
+    }
+    group gauss {
+        /// Slugs one gauss rail crate loads (`pickup::PickupKind::GaussRail`,
+        /// docs/gauss-rail.md). One per full release.
+        gauss_slugs_per_pickup: i32 = 4 in 1 ..= 20;
+        /// Seconds the trigger is held before the rail is full and a
+        /// release fires; released sooner, the charge fizzles and spends
+        /// nothing.
+        gauss_charge_seconds: f32 = 1.5 in 0.1 ..= 10.0;
+        /// Seconds past full before a release fires overcharged - it cuts
+        /// iron, throws the shooter twice as far and spins it round; at or
+        /// past `gauss_hold_seconds`, never.
+        gauss_overcharge_seconds: f32 = 1.0 in 0.0 ..= 10.0;
+        /// Seconds a full charge may be held before it vents, firing
+        /// nothing.
+        gauss_hold_seconds: f32 = 2.0 in 0.0 ..= 20.0;
+        /// After a slug, seconds before a charge may start again.
+        gauss_reload_seconds: f32 = 0.6 in 0.0 ..= 10.0;
+        /// After a vent, seconds before a charge may start again.
+        gauss_vent_cooldown_seconds: f32 = 1.2 in 0.0 ..= 10.0;
+        /// The share of its top speed a charging hull keeps.
+        gauss_crawl_pace: f32 = 0.2 in 0.0 ..= 1.0;
+        /// A seat's slug's damage to the first tank or tower it goes
+        /// through; no roll. At 120 it wrecks a whole enemy through three
+        /// walls.
+        gauss_damage: f32 = 120.0 in 0.0 ..= 500.0;
+        /// An enemy's slug's, the same way.
+        gauss_enemy_damage: f32 = 60.0 in 0.0 ..= 500.0;
+        /// The share of its damage a slug keeps past each tank, frog or
+        /// tower it goes through.
+        gauss_pierce_keep: f32 = 0.8 in 0.0 ..= 1.0;
+        /// The share it keeps past each wall, prop or tree.
+        gauss_tile_keep: f32 = 0.95 in 0.0 ..= 1.0;
+        /// A frog's hit from a slug, times what the slug has kept.
+        gauss_frog_damage: f32 = 20.0 in 0.0 ..= 200.0;
+        /// The slug's half width (px): what it grows every box it is traced
+        /// against by.
+        gauss_half_width: f32 = 4.0 in 0.5 ..= 16.0;
+        /// How far the recoil slides a chassis of mass factor 1 on dry
+        /// ground, in cells.
+        gauss_recoil_cells: f32 = 1.0 in 0.0 ..= 6.0;
+        /// How much a heavy chassis resists the recoil: its speed over the
+        /// mass factor to this power.
+        gauss_recoil_mass_exponent: f32 = 0.5 in 0.0 ..= 4.0;
+        /// An overcharged slug's slide against a full one's.
+        gauss_overcharge_recoil_factor: f32 = 2.0 in 1.0 ..= 6.0;
+        /// The white frame along the line (s).
+        gauss_flash_seconds: f32 = 0.05 in 0.01 ..= 0.5;
+        /// How long the ionised trail takes to thin out (s).
+        gauss_trail_seconds: f32 = 1.6 in 0.1 ..= 5.0;
+        /// The module's shot cell (s).
+        gauss_module_flash_seconds: f32 = 0.25 in 0.0 ..= 2.0;
+        /// The screen ripple and shake a slug sets off at the muzzle,
+        /// against a tank dying's.
+        gauss_shock: f32 = 0.4 in 0.0 ..= 2.0;
+        /// The light a full charge throws at night, against a headlight's.
+        gauss_charge_light: f32 = 0.6 in 0.0 ..= 2.0;
+        /// The light the white frame throws along the line at night.
+        gauss_frame_light: f32 = 1.0 in 0.0 ..= 2.0;
+        /// Seconds between an enemy's decisions to charge.
+        gauss_ai_fire_interval: f32 = 2.0 in 0.1 ..= 20.0;
+        /// How far inside a seat's sight box (and its own sight) an enemy
+        /// must stand to start a charge at it (px); the release needs only
+        /// the box. A tank at the box's very edge otherwise charged, drifted
+        /// a pixel out while it charged and vented, over and over; at a
+        /// cell, a charge on a row starts within the attack range, where
+        /// every other enemy engages.
+        gauss_ai_box_margin_px: f32 = 32.0 in 0.0 ..= 128.0;
     }
 
     group flamethrower {

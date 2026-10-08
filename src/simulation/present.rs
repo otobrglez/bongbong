@@ -24,6 +24,7 @@
 
 use crate::Position;
 use crate::bullet::{Bullet, BulletState};
+use crate::gauss::Pierced;
 use crate::laser::LaserVariant;
 use crate::math::Vec2;
 use crate::plasma::{Plasma, PlasmaState};
@@ -42,6 +43,23 @@ pub enum Contact {
     Tile,
     /// The field's edge.
     Edge,
+}
+
+/// A gauss rail's slug through the drawn world (`PresentWorld::rail_trace`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RailTrace {
+    /// Where it stops.
+    pub end: Position,
+    /// What it goes through on the way, in order: where it went in, what it
+    /// is, and how a slug's picture names it.
+    pub through: Vec<(Position, Contact, Pierced)>,
+}
+
+impl RailTrace {
+    /// Whether it goes through seat `seat`'s tank.
+    pub fn reaches_seat(&self, seat: u8) -> bool {
+        self.through.iter().any(|(_, c, _)| *c == Contact::Tank { seat: Some(seat) })
+    }
 }
 
 /// One tank's boxes as drawn this frame.
@@ -343,6 +361,39 @@ impl Game {
         }
     }
 
+    /// Draw `seat`'s release of a gauss rail on this replica (presentation
+    /// only), on the release rather than a round trip later
+    /// (docs/gauss-rail.md "Online"): its slug from the module's bore
+    /// `muzzle` through what `trace` found it goes through - into a portal
+    /// where `portal` says it stopped at one - the same `rail_show` the
+    /// room's `RailSlug` puts on a replica, and the module's shot cell.
+    pub fn draw_rail_press(&mut self, seat: u8, muzzle: Position, trace: RailTrace, portal: bool, overcharged: bool) {
+        let pierces = trace.through.iter().map(|&(at, _, what)| crate::gauss::Pierce { at, what }).collect();
+        let mut show = crate::simulation::Spectacle::default();
+        self.rail_show(&mut show, crate::gauss::RailSlug::new(muzzle, trace.end, portal, overcharged, pierces), true);
+        self.show(show);
+        let Some(entity) = self.seats.get(seat as usize).copied().flatten() else { return };
+        if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {
+            tank.kick_rail();
+        }
+    }
+
+    /// One seat's charge (`Tank::charge`), if it holds one.
+    pub fn seat_charge(&self, seat: usize) -> Option<crate::tank::Charge> {
+        let entity = self.seats.get(seat).copied().flatten()?;
+        self.world.get::<&Tank>(entity).ok()?.charge
+    }
+
+    /// Set one seat's charge: a client's sandbox keeping its own across a
+    /// reconciliation, or the shown seat drawing the client's predicted
+    /// one (`net::round`).
+    pub fn set_seat_charge(&mut self, seat: usize, charge: Option<crate::tank::Charge>) {
+        let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
+        if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {
+            tank.charge = charge;
+        }
+    }
+
     /// Hold `seat`'s special offline for at least `seconds` on this replica
     /// (presentation only): the client's own word on its EMP's press,
     /// written each frame over the room's until the room's arrives, so its
@@ -450,6 +501,50 @@ impl PresentWorld {
     /// (`indicators.rs`).
     pub fn line_of_sight(&self, from: Position, to: Position) -> bool {
         self.terrain.line_of_sight(from, to)
+    }
+
+    /// A gauss rail's slug `shooter` fires from `p0` toward `p1`, `half`
+    /// wide, through the world as drawn this frame (docs/gauss-rail.md
+    /// "Online"): where it stops - a permanent tile (iron unless
+    /// `overcharged`) or the field's edge - and everything it goes through
+    /// on the way, in order: every tank that is not `shooter`'s (grown as
+    /// `shot_contact` grows them), the frogs and the tiles, each with where
+    /// it went in. The room's `Terrain::pierce_rewound` on the drawn world:
+    /// what a client draws its own slug with, and how an enemy's charging
+    /// lane is known to reach a seat.
+    pub fn rail_trace(&self, shooter: Option<u8>, p0: Position, p1: Position, half: f32, overcharged: bool) -> RailTrace {
+        let at = |t: f32| Position::new(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t);
+        let (stop, tiles) = self.terrain.rail_tiles(p0, p1, half, !overcharged);
+        let stop = self.edge_along(p0, p1).map_or(stop, |e| e.min(stop));
+        let pad = Position::new(half, half);
+        let enemy_pad = if shooter.is_some() {
+            let p = tuning().player_shot_hit_pad_px;
+            pad + Position::new(p, p)
+        } else {
+            pad
+        };
+        let mut through: Vec<(f32, Position, Contact, Pierced)> = Vec::new();
+        for tank in self.tanks.iter().filter(|tank| tank.seat.is_none() || tank.seat != shooter) {
+            let grow = if tank.seat.is_none() { enemy_pad } else { pad };
+            let entry = [segment_box(p0, p1, tank.hull.0, tank.hull.1 + grow), segment_box(p0, p1, tank.turret.0, tank.turret.1 + grow)]
+                .into_iter()
+                .flatten()
+                .min_by(f32::total_cmp);
+            if let Some(t) = entry.filter(|&t| t <= stop) {
+                through.push((t, at(t), Contact::Tank { seat: tank.seat }, Pierced::Tank));
+            }
+        }
+        let frog_half = Position::new(crate::FROG_COLLIDER_HALF_EXTENT.0, crate::FROG_COLLIDER_HALF_EXTENT.1);
+        for &frog in &self.frogs {
+            if let Some(t) = segment_box(p0, p1, frog, frog_half + pad).filter(|&t| t <= stop) {
+                through.push((t, at(t), Contact::Frog, Pierced::Frog));
+            }
+        }
+        for (t, _, material) in tiles {
+            through.push((t, at(t), Contact::Tile, Pierced::Tile(material)));
+        }
+        through.sort_by(|a, b| a.0.total_cmp(&b.0));
+        RailTrace { end: at(stop), through: through.into_iter().map(|(_, p, c, w)| (p, c, w)).collect() }
     }
 
     /// One seat's hull box as drawn this frame, if it has a live tank.

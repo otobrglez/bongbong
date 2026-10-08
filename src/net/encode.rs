@@ -196,6 +196,7 @@ fn tanks(game: &Game) -> Vec<TankState> {
                 disabled: if t.disabled > 0.0 { quantise_seconds(t.disabled).max(1) } else { 0 },
                 offline: if t.special_offline > 0.0 { quantise_seconds(t.special_offline).max(1) } else { 0 },
                 shells: t.shells_ammo.clamp(0, u8::MAX as i32) as u8,
+                charge: t.charge.map_or(0, |c| c.ticks().clamp(1, u16::MAX as u32) as u16),
             }
         })
         .collect()

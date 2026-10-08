@@ -59,13 +59,13 @@
 //!
 //! Measured on the snapshot the PRD sizes (eight tanks, twenty-four
 //! shells, both frogs, a fresh field; `delta::tests::sizes_of_the_prd_snapshot`
-//! prints them under `--nocapture`): a full snapshot is 401 B (about 14 B
-//! per tank and 10 B per shell); the delta for an interval in which every
-//! hull and shell moved is 151 B, one in which two hulls were also hit,
-//! four shells landed and four were fired is 220 B, and an idle interval
-//! costs the 31 B header. On the default map 240 frames into a seven-tank
+//! prints them under `--nocapture`): a full snapshot is 486 B (about 20 B
+//! per tank and 11 B per shell); the delta for an interval in which every
+//! hull and shell moved is 169 B, one in which two hulls were also hit,
+//! four shells landed and four were fired is 256 B, and an idle interval
+//! costs the 49 B header. On the default map 240 frames into a seven-tank
 //! band round (`apply::tests::encoding_the_same_round_twice_gives_identical_bytes`)
-//! a full snapshot is 241 B and the welcome 17.2 KB, nearly all of it the
+//! a full snapshot is 261 B and the welcome 23.2 KB, nearly all of it the
 //! map's TOML. The PRD's estimates were 300 B and 80 to 120 B; the
 //! projectiles are the gap, and the PRD's next step - shots as events,
 //! which `Ricochet` makes possible - is what closes it.
@@ -111,7 +111,7 @@ pub mod wire;
 /// variant index), a change to a `codec::kind` tag or to a quantisation
 /// scale. A new optional field in a `Lobby` message (JSON, `serde(default)`)
 /// needs no bump.
-pub const PROTOCOL_VERSION: u16 = 17;
+pub const PROTOCOL_VERSION: u16 = 18;
 
 /// This build's version, the `bongbong` crate's: what a client reports
 /// about itself in `wire::ClientInfo` and the room server labels its

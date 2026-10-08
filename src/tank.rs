@@ -22,6 +22,7 @@ use crate::{
     TANK_MODULE_GRENADE_COL,
     TANK_MODULE_SONIC_COL,
     TANK_MODULE_EMP_COL,
+    TANK_MODULE_GAUSS_COL,
     TANK_MODULE_LASER_COL,
     TANK_MODULE_MINIGUN_COL,
     TANK_MODULE_MISSILES_COL,
@@ -60,6 +61,16 @@ impl Dir {
             Dir::Down => 1,
             Dir::Left => 2,
             Dir::Right => 3,
+        }
+    }
+
+    /// The way back.
+    pub fn opposite(self) -> Dir {
+        match self {
+            Dir::Up => Dir::Down,
+            Dir::Down => Dir::Up,
+            Dir::Left => Dir::Right,
+            Dir::Right => Dir::Left,
         }
     }
 
@@ -263,6 +274,7 @@ pub enum ActiveWeapon {
     Grenades,
     SonicHammer,
     Emp,
+    GaussRail,
     Shell,
 }
 
@@ -278,6 +290,7 @@ impl ActiveWeapon {
             ActiveWeapon::Grenades => "grenades",
             ActiveWeapon::SonicHammer => "sonic_hammer",
             ActiveWeapon::Emp => "emp_burst",
+            ActiveWeapon::GaussRail => "gauss_rail",
             ActiveWeapon::Shell => "shell",
         }
     }
@@ -290,13 +303,48 @@ impl ActiveWeapon {
         match self {
             ActiveWeapon::SonicHammer => Some(tuning().sonic_tell_seconds).filter(|&s| s > 0.0),
             ActiveWeapon::Emp => Some(tuning().emp_tell_seconds).filter(|&s| s > 0.0),
-            ActiveWeapon::Laser
+            // Its charge is its tell (`Tank::charge`).
+            ActiveWeapon::GaussRail
+            | ActiveWeapon::Laser
             | ActiveWeapon::Plasma
             | ActiveWeapon::Minigun
             | ActiveWeapon::Missiles
             | ActiveWeapon::Flamethrower
             | ActiveWeapon::Grenades
             | ActiveWeapon::Shell => None,
+        }
+    }
+
+    /// How this weapon's trigger fires it (`Trigger`).
+    pub fn trigger(self) -> Trigger {
+        match self {
+            ActiveWeapon::Shell | ActiveWeapon::Plasma | ActiveWeapon::Grenades | ActiveWeapon::SonicHammer | ActiveWeapon::Emp => {
+                Trigger::Press
+            }
+            ActiveWeapon::Laser | ActiveWeapon::Minigun | ActiveWeapon::Missiles => Trigger::Auto,
+            ActiveWeapon::Flamethrower => Trigger::Stream,
+            ActiveWeapon::GaussRail => Trigger::Charge,
+        }
+    }
+
+    /// A charge weapon's timings (`ChargeRule`); `None` for every weapon
+    /// whose trigger is not `Trigger::Charge`.
+    pub fn charge_rule(self) -> Option<ChargeRule> {
+        let t = tuning();
+        match self {
+            ActiveWeapon::GaussRail => {
+                let full = t.gauss_charge_seconds;
+                let vent = full + t.gauss_hold_seconds;
+                let over = full + t.gauss_overcharge_seconds;
+                Some(ChargeRule {
+                    full,
+                    overcharge: (over < vent).then_some(over),
+                    vent,
+                    crawl: t.gauss_crawl_pace,
+                    vent_cooldown: t.gauss_vent_cooldown_seconds,
+                })
+            }
+            _ => None,
         }
     }
 
@@ -317,6 +365,7 @@ impl ActiveWeapon {
             ActiveWeapon::Grenades => t.grenade_ammo_per_pickup,
             ActiveWeapon::SonicHammer => t.sonic_ammo_per_pickup,
             ActiveWeapon::Emp => t.emp_charges_per_pickup,
+            ActiveWeapon::GaussRail => t.gauss_slugs_per_pickup,
             ActiveWeapon::Shell => t.max_shells,
         }
     }
@@ -325,7 +374,7 @@ impl ActiveWeapon {
 /// The special weapons, each the cargo of its own crate. A tank carries at
 /// most one of them at a time (`Tank::take_weapon`); with none, or once it
 /// runs dry, the trigger fires shells.
-pub const SPECIAL_WEAPONS: [ActiveWeapon; 8] = [
+pub const SPECIAL_WEAPONS: [ActiveWeapon; 9] = [
     ActiveWeapon::Laser,
     ActiveWeapon::Plasma,
     ActiveWeapon::Minigun,
@@ -334,7 +383,179 @@ pub const SPECIAL_WEAPONS: [ActiveWeapon; 8] = [
     ActiveWeapon::Grenades,
     ActiveWeapon::SonicHammer,
     ActiveWeapon::Emp,
+    ActiveWeapon::GaussRail,
 ];
+
+/// How a weapon's trigger fires it (`ActiveWeapon::trigger`,
+/// docs/gauss-rail.md "The charge-and-hold pattern").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trigger {
+    /// Once on the press edge: shells, plasma, grenades, the hammer, the EMP.
+    Press,
+    /// Every tick it is held, paced by the cooldown: the laser, the minigun,
+    /// the missile pod.
+    Auto,
+    /// A stream while held: the flamethrower.
+    Stream,
+    /// Built while held and fired on the release (`Charge`): the gauss rail.
+    Charge,
+}
+
+/// A charge weapon's timings, in seconds the trigger is held
+/// (`ActiveWeapon::charge_rule`). Every threshold is compared in whole
+/// ticks (`*_ticks`), so float drift never costs a tick and a room and a
+/// client agree to the tick.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ChargeRule {
+    /// Ready: a release fires.
+    pub full: f32,
+    /// Past this a release fires overcharged; `None`, never.
+    pub overcharge: Option<f32>,
+    /// Past this the charge is lost (`ChargeEnd::Vented`).
+    pub vent: f32,
+    /// The share of its top speed a charging hull keeps.
+    pub crawl: f32,
+    /// After a vent, how long before a charge may start again.
+    pub vent_cooldown: f32,
+}
+
+/// How many ticks a room's count of a client's held trigger may differ from
+/// its own before it is held to it (`Tank::step_charge`'s report,
+/// docs/gauss-rail.md "The hold report"): a client stamping its intents
+/// further apart than it held gains this many at most. Server policy, like
+/// `net::mailbox::REACH_SPARE_TICKS`.
+pub const CHARGE_HOLD_SPARE_TICKS: u32 = 6;
+
+/// Seconds as whole ticks of the fixed step, rounded.
+pub fn ticks_of(seconds: f32) -> u32 {
+    (seconds.max(0.0) / crate::PHYSICS_FIXED_DT).round() as u32
+}
+
+impl ChargeRule {
+    pub fn full_ticks(&self) -> u32 {
+        ticks_of(self.full).max(1)
+    }
+
+    pub fn overcharge_ticks(&self) -> Option<u32> {
+        self.overcharge.map(ticks_of)
+    }
+
+    pub fn vent_ticks(&self) -> u32 {
+        ticks_of(self.vent).max(self.full_ticks())
+    }
+
+    /// Where a charge held `ticks` stands.
+    pub fn stage(&self, ticks: u32) -> ChargeStage {
+        if self.overcharge_ticks().is_some_and(|o| ticks >= o) {
+            ChargeStage::Overcharged
+        } else if ticks >= self.full_ticks() {
+            ChargeStage::Full
+        } else {
+            ChargeStage::Charging
+        }
+    }
+}
+
+/// How far a charge has gone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChargeStage {
+    Charging,
+    Full,
+    Overcharged,
+}
+
+impl ChargeStage {
+    /// Lower-case name for tooling and JSON.
+    pub fn name(self) -> &'static str {
+        match self {
+            ChargeStage::Charging => "charging",
+            ChargeStage::Full => "full",
+            ChargeStage::Overcharged => "overcharged",
+        }
+    }
+}
+
+/// How a charge ended without firing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChargeEnd {
+    /// Let go before it was full.
+    Fizzled,
+    /// Held past its `vent`.
+    Vented,
+    /// Lost to something else: the trigger stopped being its weapon's.
+    Lapsed,
+}
+
+impl ChargeEnd {
+    pub fn name(self) -> &'static str {
+        match self {
+            ChargeEnd::Fizzled => "fizzled",
+            ChargeEnd::Vented => "vented",
+            ChargeEnd::Lapsed => "lapsed",
+        }
+    }
+}
+
+/// What one tick of a charge-and-hold trigger did (`Tank::step_charge`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChargeEdge {
+    /// No charge, none started.
+    None,
+    /// A press started one.
+    Started,
+    /// Still held.
+    Held,
+    /// Let go at full or overcharged: the caller fires it.
+    Released(ChargeStage),
+    /// Over without firing.
+    Ended(ChargeEnd),
+}
+
+/// A charge built on a held trigger (the charge-and-hold pattern,
+/// docs/gauss-rail.md).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Charge {
+    /// The weapon it is for: a charge whose weapon is no longer the
+    /// trigger's lapses.
+    pub weapon: ActiveWeapon,
+    /// Seconds the trigger has been down, the press tick included: one
+    /// fixed step a tick in a round, the frame's time on a replica. A
+    /// room's is the client's count (the hold report), within
+    /// `CHARGE_HOLD_SPARE_TICKS` of `stepped`.
+    pub held: f32,
+    /// The ticks this round has stepped the charge itself, the press tick
+    /// included, whatever a hold report said (`Tank::step_charge`): what a
+    /// report is held to, so the spare is a press's, never a tick's.
+    pub stepped: u32,
+}
+
+impl Charge {
+    /// A charge of `weapon` held `held` seconds, stepped as many ticks.
+    pub fn new(weapon: ActiveWeapon, held: f32) -> Charge {
+        Charge { weapon, held, stepped: ticks_of(held) }
+    }
+
+    /// Whole ticks held, rounded: what the rule counts.
+    pub fn ticks(&self) -> u32 {
+        ticks_of(self.held)
+    }
+
+    /// Its stage under its weapon's rule.
+    pub fn stage(&self) -> ChargeStage {
+        self.weapon.charge_rule().map_or(ChargeStage::Charging, |r| r.stage(self.ticks()))
+    }
+
+    /// How far to full, 0..1.
+    pub fn progress(&self) -> f32 {
+        self.weapon.charge_rule().map_or(0.0, |r| (self.held / r.full.max(1e-3)).clamp(0.0, 1.0))
+    }
+
+    /// Seconds until it vents, 0 once it would.
+    pub fn vent_in(&self) -> f32 {
+        self.weapon.charge_rule().map_or(0.0, |r| (r.vent - self.held).max(0.0))
+    }
+}
 
 /// The wind-up an enemy shows before a special with one goes off
 /// (`ActiveWeapon::tell_seconds`, docs/sonic-hammer.md "The enemy tell"):
@@ -576,6 +797,23 @@ pub struct Tank {
     /// Seconds the EMP module shows its pulse cell (`kick_emp`).
     /// Presentation only.
     pub emp_flash: f32,
+    /// Slugs left in the gauss rail (`pickup::PickupKind::GaussRail`,
+    /// `gauss.rs`). Pickup-only, one per full release.
+    pub gauss_slugs: i32,
+    /// A charge built on the held trigger of a charge weapon (`Charge`,
+    /// `step_charge`); `None` the rest of the time.
+    pub charge: Option<Charge>,
+    /// Seconds an overcharged slug's recoil keeps this hull spun round:
+    /// while positive the stick neither turns nor drives it
+    /// (`Tank::control`). Counted down in `Game::tick_timers`.
+    pub spin: f32,
+    /// Seconds the gauss rail's module shows its shot cell (`kick_rail`).
+    /// Presentation only.
+    pub rail_flash: f32,
+    /// An enemy's trigger as the simulation last read it
+    /// (`simulation::enemy_trigger`): the press edge a charge starts on. A
+    /// seat's is `Game::player_fire_held_last_frame`.
+    pub trigger_held: bool,
     /// How far (degrees) a disabled enemy's turret is drawn sagged off its
     /// aim, eased toward `emp_droop_deg` while it is out and back to 0 once
     /// it reboots (`ease_droop`). Presentation only.
@@ -788,6 +1026,11 @@ impl Default for Tank {
             disabled: 0.0,
             special_offline: 0.0,
             emp_flash: 0.0,
+            gauss_slugs: 0,
+            charge: None,
+            spin: 0.0,
+            rail_flash: 0.0,
+            trigger_held: false,
             droop: 0.0,
             speed_boost_timer: 0.0,
             heat_shield_timer: 0.0,
@@ -910,6 +1153,7 @@ impl Tank {
             // The same rule: a tank whose special is offline still carries
             // it, and does not trade it for a crate.
             PickupKind::Emp => self.special().is_none(),
+            PickupKind::GaussRail => self.special().is_none(),
         }
     }
 
@@ -1168,12 +1412,19 @@ impl Tank {
         self.emp_flash = tuning().emp_flash_seconds;
     }
 
+    /// The gauss rail fired: its module shows its shot cell for
+    /// `gauss_module_flash_seconds`.
+    pub fn kick_rail(&mut self) {
+        self.rail_flash = tuning().gauss_module_flash_seconds;
+    }
+
     /// Step the recoil cells `kick` set, and the laser's and the dish's
     /// flashes.
     pub fn tick_recoil(&mut self, dt: f32) {
         self.laser_flash_timer = (self.laser_flash_timer - dt).max(0.0);
         self.sonic_flash = (self.sonic_flash - dt).max(0.0);
         self.emp_flash = (self.emp_flash - dt).max(0.0);
+        self.rail_flash = (self.rail_flash - dt).max(0.0);
         if let Some(left) = self.recoil_second_in {
             let left = left - dt;
             if left <= 0.0 {
@@ -1248,6 +1499,7 @@ impl Tank {
             self.shield_broke = true;
         }
         self.tell = None;
+        self.charge = None;
         self.minigun_burst = None;
         self.missile_volley = None;
         self.pending_plasma_shot = None;
@@ -1277,9 +1529,87 @@ impl Tank {
         self.droop += (target - self.droop).clamp(-step, step);
     }
 
-    /// The wind-up this tank is in, if any (`Windup`): its tell.
+    /// The wind-up this tank is in, if any (`Windup`): its tell, or the
+    /// charge on its trigger (its progress to full).
     pub fn windup(&self) -> Option<Windup> {
-        self.tell.map(|t| Windup { weapon: t.weapon, progress: t.progress(), facing: t.facing })
+        if let Some(t) = self.tell {
+            return Some(Windup { weapon: t.weapon, progress: t.progress(), facing: t.facing });
+        }
+        self.charge.map(|c| Windup { weapon: c.weapon, progress: c.progress(), facing: Dir::from_rotation(self.rotation).unwrap_or(Dir::Up) })
+    }
+
+    /// One tick of a charge-and-hold trigger (docs/gauss-rail.md "The
+    /// charge-and-hold pattern"). `fire` is the trigger this tick,
+    /// `pressed` its press edge, `open` whether a press may start a charge
+    /// now (the caller's gate: the room's `fire_cooldown`, a client's
+    /// local gate), `report` a room's count of the ticks the client held
+    /// the trigger (the hold report), believed within
+    /// `CHARGE_HOLD_SPARE_TICKS` of the ticks this round has stepped the
+    /// charge itself (`Charge::stepped`) - a press's spare, never one a
+    /// tick, which would compound into a charge full in a fraction of its
+    /// time or held for ever. Pure state: no world, no RNG.
+    ///
+    /// A charge whose weapon is no longer the trigger's lapses. With none, a
+    /// press on an open gate of a charge weapon starts one, the press tick
+    /// counted. Held, it counts a tick and vents past its rule's `vent`.
+    /// Let go, it fizzles before `full` and is released at or after it.
+    pub fn step_charge(&mut self, fire: bool, pressed: bool, dt: f32, open: bool, report: Option<u32>) -> ChargeEdge {
+        let weapon = self.active_weapon();
+        if let Some(c) = self.charge
+            && c.weapon != weapon
+        {
+            self.charge = None;
+            return ChargeEdge::Ended(ChargeEnd::Lapsed);
+        }
+        let Some(rule) = weapon.charge_rule() else { return ChargeEdge::None };
+        // The client's count, held to the round's own: the trigger has
+        // been down a tick at least.
+        let believed = |stepped: u32, r: u32| r.clamp(stepped.saturating_sub(CHARGE_HOLD_SPARE_TICKS).max(1), stepped + CHARGE_HOLD_SPARE_TICKS);
+        let Some(mut charge) = self.charge else {
+            if fire && pressed && open {
+                let mut charge = Charge::new(weapon, dt);
+                if let Some(r) = report {
+                    charge.held = believed(charge.stepped, r) as f32 * crate::PHYSICS_FIXED_DT;
+                }
+                self.charge = Some(charge);
+                return ChargeEdge::Started;
+            }
+            return ChargeEdge::None;
+        };
+        if fire {
+            charge.held += dt;
+            charge.stepped += 1;
+            if let Some(r) = report {
+                charge.held = believed(charge.stepped, r) as f32 * crate::PHYSICS_FIXED_DT;
+            }
+            if charge.ticks() > rule.vent_ticks() {
+                self.charge = None;
+                return ChargeEdge::Ended(ChargeEnd::Vented);
+            }
+            self.charge = Some(charge);
+            return ChargeEdge::Held;
+        }
+        let ticks = report.map_or(charge.ticks(), |r| believed(charge.stepped, r));
+        self.charge = None;
+        match rule.stage(ticks) {
+            ChargeStage::Charging => ChargeEdge::Ended(ChargeEnd::Fizzled),
+            stage => ChargeEdge::Released(stage),
+        }
+    }
+
+    /// Lose a charge without firing (a wreck, the round's end); true if
+    /// there was one.
+    pub fn lapse_charge(&mut self) -> bool {
+        self.charge.take().is_some()
+    }
+
+    /// The share of its top speed this hull keeps: its charge's crawl while
+    /// one runs, else exactly 1.
+    pub fn charge_pace(&self) -> f32 {
+        match self.charge.and_then(|c| c.weapon.charge_rule()) {
+            Some(rule) => rule.crawl,
+            None => 1.0,
+        }
     }
 
     /// The special weapon this tank carries with ammo left
@@ -1305,6 +1635,7 @@ impl Tank {
             ActiveWeapon::Grenades => self.grenade_ammo,
             ActiveWeapon::SonicHammer => self.sonic_ammo,
             ActiveWeapon::Emp => self.emp_charges,
+            ActiveWeapon::GaussRail => self.gauss_slugs,
             ActiveWeapon::Shell => self.shells_ammo,
         }
     }
@@ -1337,6 +1668,7 @@ impl Tank {
             ActiveWeapon::Grenades => self.grenade_ammo = self.grenade_ammo.max(t.grenade_ammo_per_pickup),
             ActiveWeapon::SonicHammer => self.sonic_ammo = self.sonic_ammo.max(t.sonic_ammo_per_pickup),
             ActiveWeapon::Emp => self.emp_charges = self.emp_charges.max(t.emp_charges_per_pickup),
+            ActiveWeapon::GaussRail => self.gauss_slugs = self.gauss_slugs.max(t.gauss_slugs_per_pickup),
             ActiveWeapon::Shell => {}
         }
     }
@@ -1361,6 +1693,7 @@ impl Tank {
             ActiveWeapon::Grenades => self.grenade_ammo = 0,
             ActiveWeapon::SonicHammer => self.sonic_ammo = 0,
             ActiveWeapon::Emp => self.emp_charges = 0,
+            ActiveWeapon::GaussRail => self.gauss_slugs = 0,
             ActiveWeapon::Shell => {}
         }
     }
@@ -1628,6 +1961,12 @@ impl Tank {
     /// `position` - that's the physics body's job once `velocity` is handed
     /// to it; see `Game::drive_tank`.
     pub fn control(&mut self, move_dir: Option<Dir>, face: Option<Dir>) {
+        if self.spin > 0.0 {
+            // Spun round by an overcharged slug's recoil: the stick
+            // neither turns nor drives it until the spin is over.
+            self.velocity = Vec2::new(0.0, 0.0);
+            return;
+        }
         if let Some(dir) = move_dir {
             self.rotation = dir.rotation();
             let step = dir.vec();
@@ -1816,9 +2155,9 @@ fn blit_layers(c: &mut impl Canvas, tank: &Tank, layers: &[Layer], tint: Color) 
 /// / firing, the flamethrower's pilot flickering or its jet while held. A
 /// module is hardware, not a firing-mode indicator: it shows whenever the
 /// weapon is carried, and a wreck carries none.
-fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 8] {
+fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 9] {
     if tank.is_wreck() {
-        return [None; 8];
+        return [None; 9];
     }
     // A module's armed cell needs its weapon live: one whose special is
     // offline (an EMP) shows its idle cell, its lights out.
@@ -1865,7 +2204,8 @@ fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 8] {
     });
     let sonic = (tank.sonic_ammo > 0 || tank.sonic_flash > 0.0).then(|| TANK_MODULE_SONIC_COL + crate::sonic::module_cell(tank, time));
     let emp = (tank.emp_charges > 0 || tank.emp_flash > 0.0).then(|| TANK_MODULE_EMP_COL + crate::emp::module_cell(tank, time));
-    [minigun, missiles, plasma, laser, flame, grenades, sonic, emp]
+    let gauss = (tank.gauss_slugs > 0 || tank.rail_flash > 0.0).then(|| TANK_MODULE_GAUSS_COL + crate::gauss::module_cell(tank, time));
+    [minigun, missiles, plasma, laser, flame, grenades, sonic, emp, gauss]
 }
 
 /// Draw a tank: hull, turret and the weapon modules it carries, each at its

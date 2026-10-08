@@ -1394,6 +1394,17 @@ impl Game {
             pyro::draw(&mut GpuCanvas::new(d, textures), &dust);
         }
 
+        // The chips a gauss rail's slug throws out of the far side of what
+        // it went through (docs/gauss-rail.md "Look"): matter, so lit with
+        // the field; the slug itself shines in `paint_field_glowing`.
+        if !self.rail_slugs.is_empty() {
+            let mut chips = Vec::new();
+            for slug in &self.rail_slugs {
+                chips.extend(crate::gauss::compose_slug_lit(slug));
+            }
+            pyro::draw(&mut GpuCanvas::new(d, textures), &chips);
+        }
+
         // Over everything that stands: each volcano's plume, steam while
         // it sleeps and ash from the rumble on (docs/volcano.md). It is
         // smoke, so the night darkens it with the rest.
@@ -1566,6 +1577,33 @@ impl Game {
                 for at in self.lamp_posts().into_iter().filter(|at| !culled(cull, *at)) {
                     shapes.extend(crate::emp::lamp_sparks(at, age));
                 }
+            }
+            if !shapes.is_empty() {
+                pyro::draw(&mut GpuCanvas::new(d, textures), &shapes);
+                let bands = t.glow_bands.max(0) as u32;
+                d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| pyro::draw_glows(&mut Rl(&mut bd), &shapes, bands));
+            }
+        }
+
+        // A gauss rail's charge round the hull and at the module's bore,
+        // its slugs - the white frame, the ion trail, the bursts where they
+        // went through things - and the fizzles and vents
+        // (docs/gauss-rail.md "Look"): light, drawn unlit, their glows in
+        // one additive block.
+        {
+            let t = tuning();
+            let mut shapes = Vec::new();
+            for tank in self.world.query::<&Tank>().iter().filter(|tank| !tank.is_wreck() && !culled(cull, tank.position)) {
+                if let Some(charge) = tank.charge.filter(|c| c.weapon == crate::tank::ActiveWeapon::GaussRail) {
+                    let seed = (tank.owner_slot() as u32).wrapping_mul(0x9E37_79B9) ^ 0x6A55;
+                    shapes.extend(crate::gauss::compose_charge(tank.position, crate::gauss::muzzle(tank), &charge, seed, self.time));
+                }
+            }
+            for slug in &self.rail_slugs {
+                shapes.extend(crate::gauss::compose_slug(slug, &t));
+            }
+            for end in &self.charge_ends {
+                shapes.extend(crate::gauss::compose_end(end, pyro::smoke_lean(&t, end.at, self.time)));
             }
             if !shapes.is_empty() {
                 pyro::draw(&mut GpuCanvas::new(d, textures), &shapes);
@@ -2031,6 +2069,7 @@ fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
         ActiveWeapon::Grenades => ("GRENADES", tank.grenade_ammo),
         ActiveWeapon::SonicHammer => ("SONIC", tank.sonic_ammo),
         ActiveWeapon::Emp => ("EMP", tank.emp_charges),
+        ActiveWeapon::GaussRail => ("RAIL", tank.gauss_slugs),
         ActiveWeapon::Shell => ("SHELL", tank.shells_ammo),
     };
     let mut lines = vec![
@@ -2048,6 +2087,10 @@ fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
     if tank.special_down() {
         // An EMP's outage: the electrics, and the special on its own.
         lines.push(format!("EMP OUT {:.1}s / {:.1}s", tank.disabled, tank.special_offline));
+    }
+    if let Some(charge) = tank.charge {
+        // A charge on the trigger (a gauss rail): seconds held and stage.
+        lines.push(format!("CHARGE {:.2}s {}", charge.held, charge.stage().name().to_uppercase()));
     }
     if let Some(ai) = ai {
         lines.push(format!(

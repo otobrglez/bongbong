@@ -419,6 +419,46 @@ kind = "lava"
 [cells."12,15"]
 kind = "tree"
 
+[cells."9,8"]
+kind = "pickup"
+pickup = "gauss_rail"
+
+[cells."32,14"]
+kind = "pickup"
+pickup = "gauss_rail"
+
+[cells."29,10"]
+kind = "wall"
+material = "brick"
+
+[cells."29,11"]
+kind = "wall"
+material = "brick"
+
+[cells."29,12"]
+kind = "wall"
+material = "wood"
+
+[cells."29,13"]
+kind = "wall"
+material = "glass"
+
+[cells."35,10"]
+kind = "wall"
+material = "iron"
+
+[cells."36,10"]
+kind = "wall"
+material = "iron"
+
+[cells."35,11"]
+kind = "wall"
+material = "iron"
+
+[cells."36,11"]
+kind = "wall"
+material = "iron"
+
 [mission]
 kind = "protect"
 

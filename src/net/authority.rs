@@ -145,6 +145,14 @@ pub fn take_pose(game: &mut Game, seat: usize, pose: Option<SeatPose>, reach_tic
     }
 }
 
+/// Hand the round one seat's hold report for this tick
+/// (`net::mailbox::Mailbox::hold_ticks`, docs/gauss-rail.md "The hold
+/// report"), before the tick runs: a charge-and-hold trigger counts the
+/// client's ticks, within `tank::CHARGE_HOLD_SPARE_TICKS` of its own.
+pub fn take_hold(game: &mut Game, seat: usize, hold: Option<u32>) {
+    game.set_seat_hold(seat, hold);
+}
+
 /// After the tick: a `Placed` if the tick carried the hull further than
 /// `PLACED_PX` from where its pose put it.
 pub fn moved_since(game: &Game, seat: usize, applied: Position) -> Option<WireEvent> {

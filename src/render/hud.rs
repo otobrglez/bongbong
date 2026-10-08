@@ -256,11 +256,28 @@ fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, row_h: f32, hud: &Play
 }
 
 /// The weapon slot's readout beside its symbol (`hud::WeaponSlot`): the
-/// count in the slot's colour, its left edge at `x`. The one place it is
-/// drawn, so a weapon whose readout is a gauge (a charge) or words (a
-/// weapon knocked out) matches on `slot.weapon` here.
+/// count in the slot's colour, its left edge at `x`, or while a charge
+/// runs its gauge in the count's place. The one place it is drawn.
 fn draw_weapon_readout(d: &mut impl RaylibDraw, slot: crate::hud::WeaponSlot, x: i32, text_y: i32, a: f32) {
-    d.draw_text(&slot.count.to_string(), x, text_y, HUD_TEXT_SIZE, faded(slot.color, a));
+    match slot.charge {
+        // A charge (docs/gauss-rail.md "HUD"): the gauge in the count's
+        // place, centred on the row - filling in the accent, white at full,
+        // white and the accent in turn overcharged; its outline red near
+        // the vent.
+        Some(g) => {
+            use crate::tank::ChargeStage;
+            let fill = match g.stage {
+                ChargeStage::Charging => slot.color,
+                ChargeStage::Full => Color::WHITE,
+                ChargeStage::Overcharged if g.blink => Color::WHITE,
+                ChargeStage::Overcharged => slot.color,
+            };
+            let outline = if g.warn { OFFLINE_RED } else { DIM };
+            let y = text_y + (HUD_TEXT_SIZE - GAUGE_H) / 2;
+            draw_gauge(d, x, y, V_COUNT_W, GAUGE_H, g.progress, faded(fill, a), faded(outline, a));
+        }
+        None => d.draw_text(&slot.count.to_string(), x, text_y, HUD_TEXT_SIZE, faded(slot.color, a)),
+    }
 }
 
 /// The words a special offline puts in the weapon slot (docs/emp-burst.md):

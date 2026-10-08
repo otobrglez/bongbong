@@ -119,6 +119,16 @@
 //! `wire_state` keeps one meaning for both: the depth left after the
 //! tick's read and whether that read starved, carried in
 //! `Snapshot::mailbox`.
+//!
+//! **The hold report** (`Mailbox::hold_ticks`, docs/gauss-rail.md "The hold
+//! report"): how many of the client's own ticks its trigger has been held,
+//! counted along every intent taken in tick order - dropped ones folded in
+//! - so a charge-and-hold trigger counts the client's ticks rather than the
+//! room's reads, which a merge, a starved tick or a held play point make
+//! differ. A read that delivers the trigger down reports the hold running
+//! (or, for a tap merged into one read, the one that just ended); one that
+//! delivers it up reports the hold that last ended. A starved read reports
+//! nothing, and the round counts its own tick.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -264,12 +274,39 @@ struct Inner {
     /// room's own time a pose may vouch for.
     reads_since_apply: u32,
     applied_at: Option<Instant>,
+    /// The client tick the trigger hold running started on, and the newest
+    /// tick it was still held on (`Inner::track_hold`).
+    held_since: Option<u32>,
+    held_through: u32,
+    /// The length in client ticks of the hold that last ended.
+    held_finished: Option<u32>,
+    /// The last read's hold report (`Mailbox::hold_ticks`).
+    hold: Option<u32>,
 }
 
 impl Inner {
     /// The client's own trigger as of the last intent applied.
     fn own_down(&self) -> bool {
         self.last.is_some_and(|m| m.fire)
+    }
+
+    /// One intent's trigger into the hold count, in tick order.
+    fn track_hold(&mut self, msg: &IntentMsg) {
+        if msg.fire {
+            self.held_since.get_or_insert(msg.tick);
+            self.held_through = msg.tick;
+        } else if let Some(since) = self.held_since.take() {
+            self.held_finished = Some(self.held_through.saturating_sub(since) + 1);
+        }
+    }
+
+    /// The hold report for a read that delivered the trigger `fire`: the
+    /// hold running while it is down, else the one that last ended.
+    fn report_hold(&mut self, fire: bool) {
+        self.hold = match self.held_since {
+            Some(since) if fire => Some(self.held_through.saturating_sub(since) + 1),
+            _ => self.held_finished,
+        };
     }
 
     /// An owned seat's read: the play point moved on a tick (or as the
@@ -319,6 +356,7 @@ impl Inner {
         let mut scan = self.folded.take().unwrap_or_else(|| Scan::from(self.own_down()));
         for msg in taken.values() {
             scan.step(msg);
+            self.track_hold(msg);
         }
         let oldest = *taken.values().next()?;
         let newest_taken = *taken.values().next_back()?;
@@ -349,6 +387,7 @@ impl Inner {
         self.last_starved = false;
         self.starved_run = 0;
         let fire = self.deliver(scan.press, newest_taken.fire);
+        self.report_hold(fire);
         // The lamp key is read as held if any intent taken held it, so a
         // press inside a merge still reaches the round; its edge is the
         // round's to find (docs/volcano.md).
@@ -361,6 +400,7 @@ impl Inner {
     fn starve(&mut self) -> Option<IntentMsg> {
         self.starvations += 1;
         self.last_starved = true;
+        self.hold = None;
         self.starved_run = self.starved_run.saturating_add(1);
         let last = self.last?;
         Some(self.reckon(last))
@@ -482,6 +522,7 @@ impl Mailbox {
             if oldest.owned {
                 let down = inner.own_down();
                 inner.folded.get_or_insert_with(|| Scan::from(down)).step(&oldest);
+                inner.track_hold(&oldest);
             }
         }
     }
@@ -520,6 +561,8 @@ impl Mailbox {
             inner.play = None;
             inner.press = (msg.fire && !inner.delivered).then_some(tick);
             inner.delivered = msg.fire;
+            inner.track_hold(&msg);
+            inner.report_hold(msg.fire);
             return Some(msg);
         }
         inner.starvations += 1;
@@ -527,6 +570,7 @@ impl Mailbox {
         inner.starved_run = inner.starved_run.saturating_add(1);
         inner.press = None;
         inner.reach = 1;
+        inner.hold = None;
         inner.last
     }
 
@@ -563,6 +607,16 @@ impl Mailbox {
     /// most. 0 before any read.
     pub fn pose_reach_ticks(&self) -> u32 {
         self.inner.lock().expect("mailbox poisoned").reach
+    }
+
+    /// The last read's hold report (docs/gauss-rail.md "The hold report"):
+    /// how many of the client's own ticks the trigger the read delivered
+    /// has been held - while it is down the hold running, once it is up the
+    /// hold that last ended - which a room hands the round
+    /// (`net::authority::take_hold`) for a charge to count by. `None` for a
+    /// starved read, before any read, and before any hold.
+    pub fn hold_ticks(&self) -> Option<u32> {
+        self.inner.lock().expect("mailbox poisoned").hold
     }
 
     /// How many ticks have found this seat's buffer empty. `/metrics`
@@ -760,6 +814,46 @@ mod tests {
         assert_eq!(mailbox.acked_tick(), 12, "acked at the newest intent taken");
         assert_eq!(unpack(mailbox.wire_state()), (0, false), "nothing left waiting");
         assert_eq!(mailbox.depth(), 0);
+    }
+
+    /// The hold report counts the client's ticks of trigger held, however
+    /// the reads took them: one at a time, merged, the release's read
+    /// reporting the hold it ended; a starved read reports nothing.
+    #[test]
+    fn the_hold_report_counts_the_clients_ticks_not_the_reads() {
+        let now = Instant::now();
+        let ordered = Mailbox::new();
+        let fire = |tick: u32, fire: bool| IntentMsg { tick, fire, ..IntentMsg::default() };
+        assert_eq!(ordered.hold_ticks(), None, "nothing read");
+        for tick in 0..5 {
+            ordered.post(fire(tick, true), now);
+            ordered.read(now);
+            assert_eq!(ordered.hold_ticks(), Some(tick + 1));
+        }
+        ordered.read(now + Duration::from_millis(20));
+        assert_eq!(ordered.hold_ticks(), None, "a starved read reports nothing");
+        ordered.post(fire(5, false), now);
+        ordered.read(now);
+        assert_eq!(ordered.hold_ticks(), Some(5), "the release reports the hold it ended");
+
+        let merged = Mailbox::new();
+        for tick in 10..13 {
+            merged.post(owned(tick, 100.0, 0.0, true), now);
+        }
+        merged.read(now);
+        assert_eq!(merged.hold_ticks(), Some(3), "three ticks held in one read");
+        merged.post(owned(13, 100.0, 0.0, true), now);
+        merged.read(now);
+        assert_eq!(merged.hold_ticks(), Some(4));
+        merged.post(owned(14, 100.0, 0.0, false), now);
+        merged.read(now);
+        assert_eq!(merged.hold_ticks(), Some(4), "released after four");
+
+        let tap = Mailbox::new();
+        tap.post(owned(1, 100.0, 0.0, true), now);
+        tap.post(owned(2, 100.0, 0.0, false), now);
+        assert!(tap.read(now).unwrap().fire, "the tap is delivered");
+        assert_eq!(tap.hold_ticks(), Some(1), "a tick's hold");
     }
 
     /// A tap that went down and up between two ticks still fires: the

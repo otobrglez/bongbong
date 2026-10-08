@@ -598,11 +598,13 @@ fn log_frame(game: &Game, frame: u32) {
         // be read off the out-of-bounds position.
         let entering = if tank.entering { " entering=true" } else { "" };
         println!(
-            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} missiles={:2} grenades={:2} sonic={:2} emp={:2} laser={:2} fuel={:4.1} burn={:3.1} shield={:5.1} wreck={}{entering}{}{}{}",
+            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} missiles={:2} grenades={:2} sonic={:2} emp={:2} laser={:2} fuel={:4.1} burn={:3.1} shield={:5.1} wreck={}{entering}{}{}{}{}{}",
             tank.position.x, tank.position.y, tank.velocity.x, tank.velocity.y, speed, tank.rotation, tank.damage, tank.shells_ammo, tank.plasma_ammo, tank.minigun_ammo, tank.missile_ammo, tank.grenade_ammo, tank.sonic_ammo, tank.emp_charges, tank.laser_charges, tank.flame_fuel, tank.burn_timer, tank.shield_hp, tank.is_wreck,
             if tank.tell { " tell=true" } else { "" },
             if tank.skidding { " skid=true" } else { "" },
             if tank.disabled { " dis=true" } else { "" },
+            if tank.gauss_slugs > 0 { format!(" rail={}", tank.gauss_slugs) } else { String::new() },
+            if tank.charging { " chg=true" } else { "" },
         );
     }
 }
@@ -815,10 +817,10 @@ struct TankTrack {
     trail: VecDeque<(u32, Position)>,
     trail_path_len: f32,
     // --- deliberate-hold detection (see FIRED_RECENTLY_FRAMES) ---
-    // Last frame's (shells, minigun, plasma, laser, missiles, sonic, emp)
-    // ammo, to spot a trigger pull as any pool decreasing; None until the
-    // first frame.
-    prev_ammo: Option<(i32, i32, i32, i32, i32, i32, i32)>,
+    // Last frame's (shells, minigun, plasma, laser, missiles, sonic, emp,
+    // gauss) ammo, to spot a trigger pull as any pool decreasing; None until
+    // the first frame.
+    prev_ammo: Option<(i32, i32, i32, i32, i32, i32, i32, i32)>,
     // Frame of the most recent detected shot, if any.
     last_fire_frame: Option<u32>,
     // Frame of the most recent deliberate hold (`deliberate_hold`), if any.
@@ -1010,11 +1012,12 @@ impl TankTrack {
 /// The states a tank holds still or slides in on purpose, by name: a
 /// field map's enemy nothing has woken (`simulation::field`: far from every
 /// seat, it does not think), a special's wind-up and a knock off its tracks
-/// (docs/sonic-hammer.md), and a wait outside a danger it is kept out of
-/// (docs/emp-burst.md). Not a stall or a stale start. A weapon that
-/// holds a tank another way adds its row.
+/// (docs/sonic-hammer.md), a wait outside a danger it is kept out of
+/// (docs/emp-burst.md) and a charge held on its lane (docs/gauss-rail.md).
+/// Not a stall or a stale start. A weapon that holds a tank another way
+/// adds its row.
 const HOLDS: &[(&str, fn(&TankSnapshot) -> bool)] =
-    &[("asleep", |t| t.asleep), ("tell", |t| t.tell), ("skid", |t| t.skidding), ("kept out", |t| t.kept_out)];
+    &[("asleep", |t| t.asleep), ("tell", |t| t.tell), ("skid", |t| t.skidding), ("kept out", |t| t.kept_out), ("charge", |t| t.charging)];
 
 /// The states a tank's motion is not its own in, by name: an EMP has its
 /// brain off and it coasts on its last intent (docs/emp-burst.md). While
@@ -1250,9 +1253,17 @@ fn check_anomalies(
             tank.missile_ammo,
             tank.sonic_ammo,
             tank.emp_charges,
+            tank.gauss_slugs,
         );
         if let Some(prev) = track.prev_ammo
-            && (ammo.0 < prev.0 || ammo.1 < prev.1 || ammo.2 < prev.2 || ammo.3 < prev.3 || ammo.4 < prev.4 || ammo.5 < prev.5 || ammo.6 < prev.6)
+            && (ammo.0 < prev.0
+                || ammo.1 < prev.1
+                || ammo.2 < prev.2
+                || ammo.3 < prev.3
+                || ammo.4 < prev.4
+                || ammo.5 < prev.5
+                || ammo.6 < prev.6
+                || ammo.7 < prev.7)
         {
             track.last_fire_frame = Some(frame);
         }

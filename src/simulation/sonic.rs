@@ -58,7 +58,29 @@ pub(super) fn fire_sonic(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, 
 /// its skid. Returns the velocity change. Any weapon that throws hulls
 /// about knocks them through here.
 pub(super) fn knock(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, dir: Vec2, speed: f32, footing: Footing) -> Vec2 {
-    let Some(handle) = tank.body else { return Vec2::zero() };
+    knock_with(physics, f, tank, dir, speed, footing, true)
+}
+
+/// `knock`, saying whether a client-owned seat hears of it (`echo`): a
+/// knock its client puts on itself - a gauss rail's recoil, kicked on the
+/// release - is not sent, but the pose validator still allows its speed
+/// (`Shoves::allow_knock`).
+pub(super) fn knock_with(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, dir: Vec2, speed: f32, footing: Footing, echo: bool) -> Vec2 {
+    let Some((dv, skid)) = knock_hull(physics, tank, dir, speed, footing) else { return Vec2::zero() };
+    if echo {
+        f.shoves.push_knock(tank.owner(), dv, skid);
+    } else {
+        f.shoves.allow_knock(tank.owner(), dv, skid);
+    }
+    dv
+}
+
+/// The knock itself, with nobody told (`knock`): the impulse sized by the
+/// hull's own mass, then its skid and the speed it was left at. The
+/// velocity change and the skid; `None` for a hull with no body. What a
+/// client's sandbox kicks its own hull with too (`Game::predict_seat_with`).
+pub(super) fn knock_hull(physics: &mut Physics, tank: &mut Tank, dir: Vec2, speed: f32, footing: Footing) -> Option<(Vec2, f32)> {
+    let handle = tank.body?;
     let t = tuning();
     let dv = dir * speed;
     physics.apply_impulse(handle, Position::new(dv.x * tank.mass(), dv.y * tank.mass()));
@@ -67,8 +89,7 @@ pub(super) fn knock(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, dir: 
     let skid = sonic::skid_seconds(&t, rel, footing.grip);
     tank.skid = tank.skid.max(skid);
     tank.skid_speed = rel;
-    f.shoves.push_knock(tank.owner(), dv, skid);
-    dv
+    Some((dv, skid))
 }
 
 /// The centre and the four corners of a hull's box: the points a wave
@@ -97,9 +118,10 @@ const FRONT_SLACK_PX: f32 = 8.0;
 /// "The probe's `--crate` and the spawn swap"): each weapon and the knob
 /// that is its share, in order.
 type ShareOf = fn(&Tuning) -> f32;
-const SPAWN_SWAPS: [(ActiveWeapon, ShareOf); 2] = [
+const SPAWN_SWAPS: [(ActiveWeapon, ShareOf); 3] = [
     (ActiveWeapon::SonicHammer, |t| t.enemy_special_weapon_sonic_share),
     (ActiveWeapon::Emp, |t| t.enemy_special_weapon_emp_share),
+    (ActiveWeapon::GaussRail, |t| t.enemy_special_weapon_gauss_share),
 ];
 
 /// The salt of the spawn swap's hash.
@@ -617,6 +639,10 @@ impl Game {
             .filter(|tank| !tank.is_wreck() && tank.body.is_some())
             .map(|tank| (tank.owner_slot(), tank.position))
             .collect();
+        // A charging enemy rail's lane is trouble too, through cover and
+        // whatever the range (docs/gauss-rail.md).
+        let rails: Vec<super::gauss::RailLane> =
+            if self.any_rail_charging() { self.rail_lanes().into_iter().filter(|l| l.seat.is_none()).collect() } else { Vec::new() };
         let (half_w, half_h) = t.sight_box_half_px();
         let half_of = |e: Entity| self.world.get::<&Tank>(e).map_or(Vec2::new(OBSTACLE_GRID_SIZE * 0.5, OBSTACLE_GRID_SIZE * 0.5), |t| t.hull_bbox_world().1);
         // A tank hurt enough to flee closes in on nobody, so it takes no
@@ -654,7 +680,7 @@ impl Game {
                         if aim.breaker.is_none() && d <= t.sonic_ai_breaker_px {
                             aim.breaker = Some(seat.seat);
                         }
-                        if aim.trouble.is_none() && self.lands_in_trouble(f, seat, me, d, slot, &enemies, &solid, &towers, &t) {
+                        if aim.trouble.is_none() && self.lands_in_trouble(f, seat, me, d, slot, &enemies, &solid, &towers, &rails, &t) {
                             aim.trouble = Some(seat.seat);
                         }
                     }
@@ -701,12 +727,12 @@ impl Game {
     /// that stops a hull or the field's edge, any sample hot enough to hurt
     /// (lava and its banks, unless it carries a heat shield), on a burning
     /// cell or a puddle of ooze; or where it comes to rest, inside a
-    /// standing enemy tower's reach or lined up for another live enemy - on
+    /// standing enemy tower's reach, lined up for another live enemy - on
     /// its row or column within `enemy_fire_align_px`, inside its attack
     /// range, its sight clear and standing inside the resting point's sight
-    /// box - when it does not stand so already, since a slide across a lane
-    /// leaves the seat in none and a seat already in one is not shoved into
-    /// it.
+    /// box - or in another enemy's charging rail's lane, when it does not
+    /// stand so already, since a slide across a lane leaves the seat in
+    /// none and a seat already in one is not shoved into it.
     #[allow(clippy::too_many_arguments)]
     fn lands_in_trouble(
         &self,
@@ -718,6 +744,7 @@ impl Game {
         enemies: &[(usize, Position)],
         solid: &BTreeSet<(i32, i32)>,
         towers: &[(Position, f32)],
+        rails: &[super::gauss::RailLane],
         t: &Tuning,
     ) -> bool {
         let footing = Footing::at(&self.water, &self.lava, self.weather, seat.pos, self.time);
@@ -758,7 +785,10 @@ impl Game {
                 off <= t.enemy_fire_align_px && forward > 0.0 && forward <= t.enemy_attack_range && f.terrain.line_of_sight(at, p)
             })
         };
-        (in_reach(rest) && !in_reach(seat.pos)) || (in_lane(rest) && !in_lane(seat.pos))
+        // A charging enemy rail's lane, through cover and whatever the range
+        // (docs/gauss-rail.md).
+        let in_rail = |p: Position| rails.iter().any(|l| l.slot != shooter && l.depth(p) > 0.0);
+        (in_reach(rest) && !in_reach(seat.pos)) || (in_lane(rest) && !in_lane(seat.pos)) || (in_rail(rest) && !in_rail(seat.pos))
     }
 
     /// Put a crate of `kind` down at the map cell nearest `at`, in its air
