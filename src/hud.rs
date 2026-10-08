@@ -1629,6 +1629,20 @@ mod hud_tests {
         game
     }
 
+    /// The gravity well's anchor prompt stands under the seat's block while
+    /// its orb flies, and goes once it is down (docs/gravity-well.md).
+    #[test]
+    fn the_anchor_prompt_shows_while_the_orb_flies() {
+        let mut game = round(1);
+        let seat = game.seat(0).expect("a seat");
+        assert_eq!(special_prompt(&game, [0]), None);
+        game.world.get::<&mut crate::tank::Tank>(seat).expect("the seat's tank").orb = Some(7);
+        assert_eq!(special_prompt(&game, [0]), Some(crate::text::keys::HUD_WELL_ANCHOR), "the orb in flight");
+        assert_eq!(special_prompt(&game, [1]), None, "another seat's prompt is its own");
+        game.world.get::<&mut crate::tank::Tank>(seat).expect("the seat's tank").orb = None;
+        assert_eq!(special_prompt(&game, [0]), None, "anchored");
+    }
+
     fn wreck(game: &mut Game, seat: usize) {
         let entity = game.seat(seat).expect("the seat has a tank");
         game.world.get::<&mut Tank>(entity).expect("a tank").damage = MAX_DAMAGE;

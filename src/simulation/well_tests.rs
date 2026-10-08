@@ -1561,20 +1561,6 @@ fn each_chassis_class_escapes_a_pull_as_the_doc_says() {
 
 // --- what a seat is told --------------------------------------------------
 
-/// The anchor prompt stands under the seat's block while its orb flies,
-/// and goes once it is down.
-#[test]
-fn the_anchor_prompt_shows_while_the_orb_flies() {
-    let mut game = round("");
-    assert_eq!(crate::hud::special_prompt(&game, [0]), None);
-    step(&mut game, true);
-    assert_eq!(crate::hud::special_prompt(&game, [0]), Some(crate::text::keys::HUD_WELL_ANCHOR), "the orb in flight");
-    step(&mut game, false);
-    step(&mut game, true);
-    assert!(with_tank(&game.world, seat(&game), |t| t.orb.is_none()), "anchored");
-    assert_eq!(crate::hud::special_prompt(&game, [0]), None);
-}
-
 /// Off the screen a seat is shown every well but its own: an enemy's with
 /// its seconds once it pulls.
 #[test]
