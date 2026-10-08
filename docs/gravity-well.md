@@ -1551,7 +1551,7 @@ Shared path and presentation:
 - `tank` (`weapon_inventory_tests`): the well in `take_weapon`, `full_load`,
   `special`, its trigger; `anchor_press`; the module's cells.
 - `frog`: `a_pulled_frog_cannot_hop`. `fish::tests`:
-  `a_well_draws_the_fish_and_the_collapse_throws_them`.
+  `a_well_draws_the_fish_in_its_reach_to_its_core`, `an_orb_scares_the_fish`.
 - `weather`: `the_ring_throws_violet_light_and_the_core_none`.
 - `hud_tests`: the well's slot, colour and glyph;
   `the_anchor_prompt_shows_while_the_orb_flies`.
@@ -2011,6 +2011,11 @@ record of the build.
 - **The incoming carry** steps every other shot through the wells on the
   client's present, a tick at a time, and keeps one swallowed on its way
   off the picture as a shot into a portal is.
-- **Left for later**: the fish drawn toward a well (the collapse throws
-  them, an orb scares them).
+- **The fish** are drawn by the wells the shoal last saw
+  (`Shoal::wells`, `drawn_toward`): a fish in a pull's reach takes its core's
+  cell as its goal every leg and never rests, rather than a scare reversed;
+  the collapse throws them (the rod's `throw_from`) and an orb scares them.
+  Tests `a_well_draws_the_fish_in_its_reach_to_its_core` and
+  `an_orb_scares_the_fish`.
+- **Left for later**: nothing of §1-§10.
 
