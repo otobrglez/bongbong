@@ -394,6 +394,39 @@ pub fn orbit_at(orbit: &GrenadeOrbit, centre: Position, now: f32, t: &Tuning) ->
     Position::new(centre.x + a.cos() * t.well_ring_px, centre.y + a.sin() * t.well_ring_px)
 }
 
+/// How many stretches a tracer is drawn curved in through a pull
+/// (`curved_streak`).
+pub const STREAK_STEPS: usize = 4;
+
+/// The path a shot at `position` flying `velocity` came by over its last
+/// `length` px, stepped back through `field` in `STREAK_STEPS` stretches -
+/// the curve its tracer is drawn along inside a pull (docs/gravity-well.md
+/// "Bent shots"). `None` where the field does not bend it, so the tracer
+/// stays the straight one. Head first.
+pub fn curved_streak(position: Position, velocity: Vec2, length: f32, field: &WellField, t: &Tuning) -> Option<[Position; STREAK_STEPS + 1]> {
+    if field.is_empty() {
+        return None;
+    }
+    let speed = velocity.length();
+    if speed <= 1e-3 {
+        return None;
+    }
+    let dt = length / STREAK_STEPS as f32 / speed;
+    let mut points = [position; STREAK_STEPS + 1];
+    let (mut p, mut v) = (position, velocity);
+    let mut bent = false;
+    for point in points.iter_mut().skip(1) {
+        p = p - v * dt;
+        let accel = field.shot_accel(p, t);
+        if accel.x != 0.0 || accel.y != 0.0 {
+            bent = true;
+            v = bend(v, accel * -1.0, dt);
+        }
+        *point = p;
+    }
+    bent.then_some(points)
+}
+
 /// Whether a hull of mass factor `mass_factor` standing broadside to the
 /// pull at `p` holds there: the field's side pull on it (`hull_pull`) is no
 /// more than its tracks' grip, `grip` px/s² - `tank_turn_grip_force` times
@@ -792,6 +825,22 @@ mod tests {
         assert_eq!(escape_dir(Position::new(40.0, 10.0), core, |d| d != Dir::Down), Some(Dir::Up));
         assert_eq!(escape_dir(Position::new(40.0, 10.0), core, |d| d == Dir::Right), Some(Dir::Right));
         assert_eq!(escape_dir(Position::new(40.0, 10.0), core, |_| false), None);
+    }
+
+    #[test]
+    fn curved_streak_follows_the_bend() {
+        let t = Tuning::DEFAULT;
+        let empty = WellField::default();
+        let at = Position::new(300.0, 300.0);
+        let v = Vec2::new(500.0, 0.0);
+        assert!(curved_streak(at, v, 40.0, &empty, &t).is_none(), "no well, the straight tracer");
+        let field = WellField { sources: vec![(1, Position::new(300.0, 340.0))] };
+        let path = curved_streak(at, v, 40.0, &field, &t).expect("bent in the pull");
+        assert_eq!(path[0], at, "head first");
+        assert!(path[STREAK_STEPS].x < at.x - 30.0, "it came from behind");
+        assert!(path.iter().skip(1).any(|p| (p.y - at.y).abs() > 0.01), "off the straight line");
+        let far = WellField { sources: vec![(1, Position::new(900.0, 900.0))] };
+        assert!(curved_streak(at, v, 40.0, &far, &t).is_none(), "out of the reach, straight");
     }
 
     #[test]

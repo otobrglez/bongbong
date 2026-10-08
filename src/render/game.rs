@@ -1769,16 +1769,19 @@ impl Game {
         if glow {
             self.draw_lava_ground_light(d, textures, day_pools, cull);
         }
+        // The wells pulling on the picture's present: tracers through one
+        // are drawn curved.
+        let wells = self.present_wells();
         if glow {
             d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
                 // Light on the floor first: every shot, burn and flash
                 // lights the ground around it in its own colour.
                 self.draw_ground_light(&mut bd, day_pools, cull);
                 for shell in self.world.query::<&Shell>().iter().filter(|s| !culled(cull, s.position)) {
-                    draw_shell_light(&mut bd, shell);
+                    draw_shell_light(&mut bd, shell, &wells);
                 }
                 for bullet in self.world.query::<&Bullet>().iter().filter(|b| !culled(cull, b.position)) {
-                    draw_bullet_light(&mut bd, bullet);
+                    draw_bullet_light(&mut bd, bullet, &wells);
                 }
                 for beam in &self.laser_beams {
                     draw_laser_bloom(&mut bd, beam);

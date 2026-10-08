@@ -1997,9 +1997,10 @@ record of the build.
   frog's `pulled`, and an enemy's `AiSnapshot::pull` and `::well` (the
   arm, the facing, the anchor's distance); the engage overlay draws a
   well's reach and, round an enemy's, the herd's ring.
-- **Left for later**: the tracer drawn curved through a pull
-  (`curved_streak`) - a bent shell's sprite turns with its heading, its
-  streak stays straight -; the incoming carry stepping foreign shots
+- **The curved tracer** is a shell's and a bullet's (`well::curved_streak`,
+  `render::shot_fx::curved_streak`, read off `Game::present_wells`); the
+  plasma bolt's comet tail stays straight.
+- **Left for later**: the incoming carry stepping foreign shots
   through the field (they are carried straight and corrected by the next
   snapshot); the interpolator blending a crate's drift (it moves with each
   snapshot); the fish drawn toward a well (the collapse throws them, an orb
