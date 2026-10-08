@@ -1049,3 +1049,58 @@ fn an_enemy_leads_a_slow_seat() {
     assert!(landed.x - at.x >= OBSTACLE_GRID_SIZE * 2.0, "led along its way: {at:?} -> {landed:?}");
     assert!((landed.x - (at.x + speed * t.rod_countdown_seconds)).abs() <= OBSTACLE_GRID_SIZE * 1.5, "where the countdown carries it: {at:?} -> {landed:?} at {speed}");
 }
+
+/// How far the hull `entity`'s movement box reaches into the field's
+/// boundary or a standing tile's box (`hits::Terrain`'s, the tile's
+/// collider): 0 where it is clear of all of them.
+fn wall_overlap(game: &Game, entity: Entity) -> f32 {
+    let (pos, (hx, hy)) = with_tank(&game.world, entity, |t| (t.position, t.move_half_extents(t.facing_along_x())));
+    let overlap = |c: Position, h: Position| {
+        let dx = h.x + hx - (pos.x - c.x).abs();
+        let dy = h.y + hy - (pos.y - c.y).abs();
+        if dx > 0.0 && dy > 0.0 { dx.min(dy) } else { 0.0 }
+    };
+    let terrain = hits::Terrain::build(&game.world, W, H, &[], &game.water);
+    let tiles: Vec<(Position, Position)> = game
+        .world
+        .query::<(Entity, &Obstacle)>()
+        .iter()
+        .filter_map(|(e, _)| terrain.obstacle(e).map(|b| (b.center, b.half)))
+        .collect();
+    battlefield::wall_rects(W, H).into_iter().chain(tiles).map(|(c, h)| overlap(c, h)).fold(0.0, f32::max)
+}
+
+/// A shove never drives a hull into a wall or past the field's edge: a
+/// seat thrown north by an impact, from every phase of a tick's travel -
+/// a hair short of the field's top edge or of an iron wall to a few steps'
+/// travel off -, stops against it and never inside it, every tick of the
+/// skid and after.
+#[test]
+fn a_shove_stops_a_hull_at_a_wall_and_the_fields_edge_never_inside() {
+    let iron: String = (14..=20).map(|c| format!("cells.\"{c},2\" = {{ kind = \"wall\", material = \"iron\" }}\n")).collect();
+    for extra in [String::new(), iron] {
+        let game = round(&extra);
+        // Where the seat's movement box first touches what is north of it.
+        let up = with_tank(&game.world, seat(&game), |t| t.move_half_extents(t.facing_along_x()).1);
+        let face = hits::Terrain::build(&game.world, W, H, &[], &game.water)
+            .obstacle(game.world.query::<(Entity, &Obstacle)>().iter().next().map_or(Entity::DANGLING, |(e, _)| e))
+            .map_or(0.0, |b| b.center.y + b.half.y);
+        for gap in 0..28 {
+            let mut game = round(&extra);
+            let s = seat(&game);
+            let at = Position::new(544.0, face + up + 0.5 + gap as f32);
+            game.place_tank(s, at, Some(90.0)).expect("placed");
+            game.debug_call_rod(Position::new(at.x, at.y + 80.0), true).expect("a call");
+            let mut shoved = false;
+            for _ in 0..countdown_ticks() + 120 {
+                step(&mut game, false);
+                shoved |= with_tank(&game.world, s, |t| t.skid > 0.0);
+                let overlap = wall_overlap(&game, s);
+                let p = with_tank(&game.world, s, |t| t.position);
+                assert!(overlap <= 0.25, "{} the hull {overlap} px into a wall at {p:?}, from {at:?}", if extra.is_empty() { "the edge:" } else { "iron:" });
+            }
+            assert!(shoved, "the impact shoves the seat from {at:?}");
+            assert!(!with_tank(&game.world, s, |t| t.is_wreck()), "shoved, not crushed");
+        }
+    }
+}

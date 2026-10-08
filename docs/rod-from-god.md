@@ -186,7 +186,9 @@ solver step), in this order, all measured from the struck cell's centre `c`:
     and `m` its chassis's mass factor. Either side, the caller too. At the
     defaults a standard chassis at the circle's edge slides about four
     cells, one halfway out about a cell. It is a skid: the hull drives
-    again when it stops, a wall stops it, ice and a ford slide it further.
+    again when it stops, a wall or the field's edge stops it flush against
+    its face (the knock's look-ahead, docs/sonic-hammer.md §3.6; §12,
+    decision 34), ice and a ford slide it further.
     A seat's shove on `Frame::shoves` (`Event::Shoved` with its skid, for a
     client that owns its hull). **No damage** outside the circle: the
     circle is the danger, the ring is a push (§12, decision 7) - though a
@@ -1445,6 +1447,10 @@ seat at cell (3, 6), enemies placed by hand):
 - `the_circle_crushes_every_hull_with_any_part_inside_it` - a hull with a
   corner in, the caller in its own circle; one a few pixels out only
   shoved.
+- `a_shove_stops_a_hull_at_a_wall_and_the_fields_edge_never_inside` - a
+  seat thrown at the field's top edge and at an iron wall, from every
+  phase of a step's travel, never more than a quarter pixel into either,
+  every tick of the skid and after.
 - `the_impact_breaks_the_tiles_in_reach_and_iron_stands` - brick, a
   sandbag, a drum going off; iron and a cell past the break radius
   standing.
@@ -1877,6 +1883,30 @@ rounds in the defaults comparison above match byte for byte).
     never lights one (a crush is not fire). *Alternative*: letting the
     strike set boards alight, which would make the rod the one shot that
     lights a board; only fire does.
+
+34. **A shove stops at a wall's face** (QA): the shove ring threw a hull
+    at the field's top edge 5.5 px into the boundary in one step, and it
+    sat part-way off the field for two seconds. Rapier is set up in metres
+    while the world is in pixels, so its contacts look 0.02 px ahead and it
+    pushes a body out of an overlap at 3 px/s: a hull crossing more than
+    that in a step lands inside what it meets, the solver stops it there,
+    the skid ends on the stop, and nothing pushes it out faster. A
+    skidding hull now looks a step's travel ahead (rapier's soft
+    continuous collision detection, `sonic::skid_look_ahead`), at the
+    shared knock so the hammer, the rail's recoil and every later knock
+    stop the same way, in the room and in a client's sandbox alike
+    (`a_shove_stops_a_hull_at_a_wall_and_the_fields_edge_never_inside`).
+    Rejected: rapier's own CCD (it engages only for a body crossing half
+    its thinnest half extent in a step, about 6 px for a standard hull -
+    a knock's whole travel at rapier's 400 px/s cap - so it misses most
+    knocks); clamping the
+    knock's travel against the static boxes by hand (a second collision
+    model beside rapier's, for tiles, deep water, lava and the frogs);
+    a faster push out (`IntegrationParameters` are the whole world's, so
+    every round would step differently); a lower speed cap (the shove's
+    reach is a tuning decision). Ram and blast knockback, which can throw
+    a hull as fast, are left as they are so a round with no knock replays
+    byte for byte (a follow-up).
 
 ### Not in this PR
 

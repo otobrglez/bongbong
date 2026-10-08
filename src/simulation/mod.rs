@@ -2540,6 +2540,7 @@ impl Game {
             let hull_cell = crate::map::world_to_cell(tank.position);
             charged = Some(gauss::SeatCharge { edge, weapon, start, muzzle, dir, reticle, hull_cell });
         }
+        sonic::skid_look_ahead(physics, &tank);
         physics.step();
         // The solver moved the body; the tank's own position is what
         // every reader (and the next tick's `Footing`) goes by.
@@ -4262,6 +4263,9 @@ impl Game {
             }
             self.advance_drones(PHYSICS_FIXED_DT, (f.width, f.height));
             if step_physics {
+                for tank in self.world.query::<&Tank>().iter() {
+                    sonic::skid_look_ahead(&mut self.physics, tank);
+                }
                 self.physics.step();
                 let (bodies, colliders) = self.physics.quarantined();
                 if bodies > 0 || colliders > 0 {
