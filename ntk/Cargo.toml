@@ -18,6 +18,10 @@ name = "01_hello"
 path = "src/bin/01_hello.rs"
 
 [[bin]]
+name = "01_rug_hello"
+path = "src/bin/01_rug_hello.rs"
+
+[[bin]]
 name = "02_move"
 path = "src/bin/02_move.rs"
 
@@ -36,3 +40,7 @@ path = "src/bin/05_astar.rs"
 [[bin]]
 name = "06_explosions"
 path = "src/bin/06_explosions.rs"
+
+[[bin]]
+name = "06_rug_explosions"
+path = "src/bin/06_rug_explosions.rs"
