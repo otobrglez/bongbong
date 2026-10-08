@@ -598,7 +598,7 @@ fn log_frame(game: &Game, frame: u32) {
         // be read off the out-of-bounds position.
         let entering = if tank.entering { " entering=true" } else { "" };
         println!(
-            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} missiles={:2} grenades={:2} sonic={:2} emp={:2} laser={:2} fuel={:4.1} burn={:3.1} shield={:5.1} wreck={}{entering}{}{}{}{}{}{}",
+            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} missiles={:2} grenades={:2} sonic={:2} emp={:2} laser={:2} fuel={:4.1} burn={:3.1} shield={:5.1} wreck={}{entering}{}{}{}{}{}{}{}",
             tank.position.x, tank.position.y, tank.velocity.x, tank.velocity.y, speed, tank.rotation, tank.damage, tank.shells_ammo, tank.plasma_ammo, tank.minigun_ammo, tank.missile_ammo, tank.grenade_ammo, tank.sonic_ammo, tank.emp_charges, tank.laser_charges, tank.flame_fuel, tank.burn_timer, tank.shield_hp, tank.is_wreck,
             if tank.tell { " tell=true" } else { "" },
             if tank.skidding { " skid=true" } else { "" },
@@ -606,6 +606,7 @@ fn log_frame(game: &Game, frame: u32) {
             if tank.gauss_slugs > 0 { format!(" rail={}", tank.gauss_slugs) } else { String::new() },
             if tank.charging { " chg=true" } else { "" },
             if tank.fpv_drones > 0 || tank.fpv_out > 0 { format!(" fpv={} out={}", tank.fpv_drones, tank.fpv_out) } else { String::new() },
+            if tank.rods > 0 { format!(" rod={}", tank.rods) } else { String::new() },
         );
     }
 }
@@ -731,6 +732,11 @@ struct FireTally {
     /// that seat's box.
     drone_locks_on_seats: u32,
     drone_locks_offbox: u32,
+    /// Enemy rods called with a seat as the pick (`Event::RodCalled`,
+    /// docs/rod-from-god.md), and the ones whose caller stood outside that
+    /// seat's box.
+    rod_calls_on_seats: u32,
+    rod_calls_offbox: u32,
     /// Shots, beams and flames that landed on a seat (`Event::Hit`), from
     /// anyone.
     hits_on_seats: u32,
@@ -751,6 +757,8 @@ impl FireTally {
         self.missile_locks_offbox += other.missile_locks_offbox;
         self.drone_locks_on_seats += other.drone_locks_on_seats;
         self.drone_locks_offbox += other.drone_locks_offbox;
+        self.rod_calls_on_seats += other.rod_calls_on_seats;
+        self.rod_calls_offbox += other.rod_calls_offbox;
         self.hits_on_seats += other.hits_on_seats;
         self.seat_hits += other.seat_hits;
         self.seat_hits_offbox += other.seat_hits_offbox;
@@ -758,7 +766,7 @@ impl FireTally {
 
     /// `(name, value)` in reporting order - the summary line and the
     /// `--json-out` `fire` object read the same list.
-    fn fields(&self) -> [(&'static str, u32); 10] {
+    fn fields(&self) -> [(&'static str, u32); 12] {
         [
             ("enemy_shots", self.enemy_shots),
             ("shots_at_seats", self.shots_at_seats),
@@ -770,6 +778,8 @@ impl FireTally {
             ("hits_on_seats", self.hits_on_seats),
             ("seat_hits", self.seat_hits),
             ("seat_hits_offbox", self.seat_hits_offbox),
+            ("rod_calls_on_seats", self.rod_calls_on_seats),
+            ("rod_calls_offbox", self.rod_calls_offbox),
         ]
     }
 }
@@ -828,9 +838,9 @@ struct TankTrack {
     trail_path_len: f32,
     // --- deliberate-hold detection (see FIRED_RECENTLY_FRAMES) ---
     // Last frame's (shells, minigun, plasma, laser, missiles, sonic, emp,
-    // gauss, fpv) ammo, to spot a trigger pull as any pool decreasing; None
+    // gauss, fpv, rod) ammo, to spot a trigger pull as any pool decreasing; None
     // until the first frame.
-    prev_ammo: Option<(i32, i32, i32, i32, i32, i32, i32, i32, i32)>,
+    prev_ammo: Option<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>,
     // Frame of the most recent detected shot, if any.
     last_fire_frame: Option<u32>,
     // Frame of the most recent deliberate hold (`deliberate_hold`), if any.
@@ -1025,7 +1035,8 @@ impl TankTrack {
 /// (docs/sonic-hammer.md), a wait outside a danger it is kept out of
 /// (docs/emp-burst.md), a charge held on its lane (docs/gauss-rail.md) and a
 /// stand for the FPV swarm - watching its drone, or under a crown while a
-/// seat's comes at it (docs/fpv-swarm.md). Not a stall or a stale start. A
+/// seat's comes at it (docs/fpv-swarm.md) - and a rod tank's stand-off from
+/// the seat it knows of (docs/rod-from-god.md). Not a stall or a stale start. A
 /// weapon that holds a tank another way adds its row.
 const HOLDS: &[(&str, fn(&TankSnapshot) -> bool)] = &[
     ("asleep", |t| t.asleep),
@@ -1034,6 +1045,7 @@ const HOLDS: &[(&str, fn(&TankSnapshot) -> bool)] = &[
     ("kept out", |t| t.kept_out),
     ("charge", |t| t.charging),
     ("air", |t| t.air_hold),
+    ("stand-off", |t| t.rod_hold),
 ];
 
 /// The states a tank's motion is not its own in, by name: an EMP has its
@@ -1256,11 +1268,14 @@ fn check_anomalies(
         // A drone launched at a seat or at the players' frog is
         // engagement too: the tank fights it from where it stands - inside
         // the seat's sight box, out of its face (docs/fpv-swarm.md
-        // "Probe").
+        // "Probe"); so is a rod called on anything, which a rod tank does
+        // from its stand-off or a hunter from round its quarry
+        // (docs/rod-from-god.md "Probe").
         let launched_at_seat = game.events().iter().any(|e| match *e {
             Event::DroneLaunched { slot, target, frog, .. } if slot == tank.slot => {
                 frog || target.is_some_and(|seat| seat < game.first_enemy_slot())
             }
+            Event::RodCalled { slot, .. } => slot == tank.slot,
             _ => false,
         });
         if track.time_to_engage.is_none()
@@ -1282,6 +1297,7 @@ fn check_anomalies(
             tank.emp_charges,
             tank.gauss_slugs,
             tank.fpv_drones,
+            tank.rods,
         );
         if let Some(prev) = track.prev_ammo
             && (ammo.0 < prev.0
@@ -1292,7 +1308,8 @@ fn check_anomalies(
                 || ammo.5 < prev.5
                 || ammo.6 < prev.6
                 || ammo.7 < prev.7
-                || ammo.8 < prev.8)
+                || ammo.8 < prev.8
+                || ammo.9 < prev.9)
         {
             track.last_fire_frame = Some(frame);
         }
@@ -1795,6 +1812,15 @@ fn check_fire(
                 fire.drone_locks_on_seats += 1;
                 if offbox(slot, target, "drone locked onto") {
                     fire.drone_locks_offbox += 1;
+                }
+            }
+            Event::RodCalled { slot, .. } if slot >= first_enemy => {
+                let Some(seat) = snapshots.iter().find(|t| t.slot == slot).and_then(|t| t.shot_at_seat) else {
+                    continue;
+                };
+                fire.rod_calls_on_seats += 1;
+                if offbox(slot, seat as usize, "called a rod on") {
+                    fire.rod_calls_offbox += 1;
                 }
             }
             Event::Hit { target: HitTarget::Player { .. }, .. } => fire.hits_on_seats += 1,

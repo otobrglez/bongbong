@@ -340,6 +340,11 @@ tunables! {
         /// rail's: a hash of the spawn point and the owner slot, never the
         /// round's RNG, so at 0 nothing changes.
         enemy_special_weapon_fpv_share: f32 = 0.0 in 0.0 ..= 1.0 @ Restart;
+        /// Of an enemy that rolled a special weapon above, the share that
+        /// spawns with the rod from god instead (docs/rod-from-god.md),
+        /// after the swarm's: a hash of the spawn point and the owner slot,
+        /// never the round's RNG, so at 0 nothing changes.
+        enemy_special_weapon_rod_share: f32 = 0.0 in 0.0 ..= 1.0 @ Restart;
         /// Which chassis the player spawns in, as a row index into
         /// `scifi_tanks_sheet.png`: 0 scout, 1 assault, 2 breaker,
         /// 3 longbow, 4 flak, 5 wraith, 6 warden, 7 ravager, 8 glacier,
@@ -1226,6 +1231,118 @@ tunables! {
         /// With no tree and no minigun, how near the drone is before it
         /// breaks across its line.
         fpv_ai_break_px: f32 = 112.0 in 0.0 ..= 480.0;
+    }
+
+    group rod {
+        /// Calls one rod from god crate loads into the uplink
+        /// (`pickup::PickupKind::RodFromGod`, docs/rod-from-god.md). One per
+        /// call.
+        rod_per_pickup: i32 = 2 in 1 ..= 10;
+        /// How long the trigger is held before a release calls; a shorter
+        /// tap calls nothing.
+        rod_settle_seconds: f32 = 0.25 in 0.0 ..= 2.0;
+        /// How long past that a reticle may be held before the uplink times
+        /// out, calling nothing.
+        rod_hold_seconds: f32 = 10.0 in 1.0 ..= 60.0;
+        /// After a call, seconds before the next reticle.
+        rod_reload_seconds: f32 = 1.0 in 0.0 ..= 10.0;
+        /// After the uplink times out, seconds before a reticle may start
+        /// again.
+        rod_vent_cooldown_seconds: f32 = 0.5 in 0.0 ..= 10.0;
+        /// Where a reticle appears: this many cells ahead of the hull along
+        /// its facing, held in range.
+        rod_reticle_start_cells: i32 = 4 in 0 ..= 20;
+        /// A held stick steps the reticle a cell at once, then again after
+        /// this.
+        rod_reticle_delay_seconds: f32 = 0.18 in 0.0 ..= 1.0;
+        /// Then one cell every this long. An enemy's reticle steps at this
+        /// pace too.
+        rod_reticle_repeat_seconds: f32 = 0.06 in 0.01 ..= 1.0;
+        /// From the call to the impact.
+        rod_countdown_seconds: f32 = 4.0 in 0.5 ..= 15.0;
+        /// The circle: a hull with any part inside it is crushed, a frog
+        /// killed, a drone downed.
+        rod_kill_radius_px: f32 = 48.0 in 8.0 ..= 160.0;
+        /// Every breakable tile whose cell reaches inside this goes down;
+        /// iron, a cone and a door stand.
+        rod_break_radius_px: f32 = 80.0 in 0.0 ..= 256.0;
+        /// How far out the impact shoves hulls, falling from the circle's
+        /// edge to nothing here.
+        rod_shove_radius_px: f32 = 160.0 in 0.0 ..= 480.0;
+        /// The shove at the circle's edge (px/s) against the chassis-free
+        /// mass.
+        rod_shove_speed: f32 = 420.0 in 0.0 ..= 508.0;
+        /// The most any shove gives; the wire's shove reaches 508.
+        rod_shove_max_speed: f32 = 480.0 in 0.0 ..= 508.0;
+        /// How hard a heavy chassis resists the shove: the speed over its
+        /// mass factor to this power.
+        rod_mass_exponent: f32 = 1.0 in 0.0 ..= 4.0;
+        /// A frog in the shove ring neither hops nor bites this long.
+        rod_frog_stun_seconds: f32 = 1.0 in 0.0 ..= 10.0;
+        /// Tall grass within the break radius hides nobody this long.
+        rod_grass_flat_seconds: f32 = 8.0 in 0.0 ..= 60.0;
+        /// Fish within this of an impact are thrown onto the bank...
+        rod_fish_reach_px: f32 = 160.0 in 0.0 ..= 480.0;
+        /// ...at most this many, nearest first.
+        rod_fish_throw_max: i32 = 8 in 0 ..= 32;
+        /// A crater's cells: those within this many steps of the struck cell
+        /// (1, a plus of five).
+        rod_crater_reach: i32 = 1 in 0 ..= 3;
+        /// A dry crater's share of a hull's top speed and push.
+        rod_crater_pace: f32 = 0.6 in 0.1 ..= 1.0;
+        /// What a dry crater cell costs the router a step (a ford's
+        /// `water_ford_path_cost`).
+        rod_crater_path_cost: i32 = 2 in 1 ..= 20;
+        /// The white column, seconds.
+        rod_column_seconds: f32 = 0.05 in 0.01 ..= 0.5;
+        /// The screen flash against a drum's.
+        rod_screen_flash: f32 = 2.5 in 0.0 ..= 8.0;
+        /// The ripple and shake against a tank dying's.
+        rod_shock: f32 = 1.5 in 0.0 ..= 3.0;
+        /// The impact's fireball against a drum's.
+        rod_fireball_scale: f32 = 1.3 in 0.1 ..= 3.0;
+        /// Its scorch, against a drum's.
+        rod_scorch_scale: f32 = 2.5 in 0.5 ..= 5.0;
+        /// Rubble thrown into a ring round the crater.
+        rod_rubble_pieces: i32 = 14 in 0 ..= 40;
+        /// How long the dust ring's puffs last.
+        rod_dust_seconds: f32 = 1.6 in 0.1 ..= 5.0;
+        /// How long a fresh crater smokes.
+        rod_crater_smoke_seconds: f32 = 6.0 in 0.0 ..= 30.0;
+        /// The light a call's foot throws at night, against a headlight's.
+        rod_beam_light: f32 = 0.5 in 0.0 ..= 2.0;
+        /// The module's uplink cell, seconds.
+        rod_flash_seconds: f32 = 0.3 in 0.0 ..= 2.0;
+        /// A seat that has stood still this long is an enemy's target.
+        rod_ai_still_seconds: f32 = 2.0 in 0.0 ..= 20.0;
+        /// How far a seat's centre may wander and still be standing still.
+        rod_ai_still_px: f32 = 12.0 in 0.0 ..= 64.0;
+        /// A seat moving no faster than this (px/s, over the last second)
+        /// is called on where it will be.
+        rod_ai_slow_speed: f32 = 48.0 in 0.0 ..= 400.0;
+        /// Seconds between an enemy's decisions to call.
+        rod_ai_fire_interval: f32 = 8.0 in 0.1 ..= 60.0;
+        /// How long an enemy's reticle rests on its cell before it calls.
+        rod_ai_aim_hold_seconds: f32 = 0.4 in 0.0 ..= 3.0;
+        /// An ally whose hull is within the circle plus this holds the call.
+        rod_ai_friend_margin_px: f32 = 24.0 in 0.0 ..= 128.0;
+        /// How far past the circle (and a hull's half) an enemy keeps from
+        /// a call.
+        rod_ai_berth_px: f32 = 24.0 in 0.0 ..= 128.0;
+        /// Extra route cost on every cell of a call's danger; 0 switches it
+        /// off.
+        rod_ai_circle_cost: usize = 48 in 0 ..= 255;
+        /// How far from a call's centre the pack's firing slots stand while
+        /// the seat they fight is inside it.
+        rod_ai_herd_px: f32 = 128.0 in 0.0 ..= 400.0;
+        /// How wide the band past the circle a rod tank holds its distance
+        /// from the seat it knows of in, px (`ai::rod_rule`'s stand-off).
+        rod_ai_band_px: f32 = 64.0 in 0.0 ..= 256.0;
+        /// Seconds a rod tank's move round its band may make no headway
+        /// before it is given up.
+        rod_ai_give_up_seconds: f32 = 0.3 in 0.05 ..= 5.0;
+        /// Seconds a rod tank that gave a move up stands where it is.
+        rod_ai_wait_seconds: f32 = 2.0 in 0.0 ..= 10.0;
     }
 
     group flamethrower {

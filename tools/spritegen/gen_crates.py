@@ -13,19 +13,19 @@ are the Puny palette; the symbols are the loud, off-palette inks of
 sheets alone - the pickups' old exemption, kept for the one part that has
 to be spotted at a glance.
 
-crates_sheet.png, 7 columns x 17 rows of 40 px:
+crates_sheet.png, 7 columns x 18 rows of 40 px:
 
     row = PickupKind in declaration order (health, ammo, laser, minigun,
           plasma, missiles, speedup, shield, flamethrower, frog_health,
           tower_pack, heat_shield, grenades, sonic_hammer, emp_burst,
-          gauss_rail, fpv_swarm)
+          gauss_rail, fpv_swarm, rod_from_god)
     col 0    the crate
     col 1-4  a glint sweeping the lid from top left to bottom right, a band
              of design pixels one ramp step lighter (the idle)
     col 5    damaged: a split plank, a cracked batten, paint chipped
     col 6    charred: what a fire leaves before the crate breaks
 
-pickup_glyphs.png, 1 column x 17 rows of 24 px, the same row order: the
+pickup_glyphs.png, 1 column x 18 rows of 24 px, the same row order: the
 10 x 10 symbol on its own - its ink, lit along the top, shaded along the bottom,
 with the outline - for what rises out of an opened crate, a spilled one,
 the HUD's weapon queue and the builder's brushes.
@@ -54,7 +54,7 @@ TOKEN = SIDE + 2    # design pixels per symbol cell side (the symbol and its out
 # PickupKind's declaration order: the sheets' row order.
 KINDS = ['health', 'ammo', 'laser', 'minigun', 'plasma', 'missiles', 'speedup', 'shield', 'flamethrower',
          'frog_health', 'tower_pack', 'heat_shield', 'grenades', 'sonic_hammer', 'emp_burst', 'gauss_rail',
-         'fpv_swarm']
+         'fpv_swarm', 'rod_from_god']
 
 # The symbols, 10 x 10 design pixels each.
 GLYPHS = {
@@ -246,6 +246,21 @@ GLYPHS = {
         'XoX....XoX',
         '.X......X.',
     ],
+    # A tungsten rod falling point first into a reticle's four corner
+    # brackets, its hot tip and the brackets (`o`) in the ink's light - the
+    # designator's red.
+    'rod_from_god': [
+        '....XX....',
+        '...XXXX...',
+        '...XXXX...',
+        '...XXXX...',
+        '...XXXX...',
+        'oo.XXXX.oo',
+        'o..XXXX..o',
+        '....oo....',
+        'o...oo...o',
+        'oo......oo',
+    ],
     # Two rails, and the slug leaving their mouth: its trail between them
     # and its white-hot head (`o`) in the ink's light.
     'gauss_rail': [
@@ -281,7 +296,11 @@ HEAT_TOP = 5
 # Kinds whose ink's light is a second colour of the symbol - its lamps -
 # rather than a highlight: a glint whitens the body and leaves the lamps,
 # and the token keeps the lamps in that colour.
-LAMP_TONE = {'fpv_swarm'}
+LAMP_TONE = {'fpv_swarm', 'rod_from_god'}
+
+# Two-tone kinds whose body is lit along its top in white rather than in
+# the lamps' colour: the rod's tungsten, shining.
+BODY_LIGHT = {'rod_from_god': pp.WHITE}
 
 # The crate, 20 x 20 design pixels: three planks between two battens, nailed
 # at the corners. Lid rows 2-15 inside the outline, the front face rows
@@ -458,7 +477,7 @@ def token(kind):
                 elif lamp(kind, x, y):
                     c = ink(kind)[2] if kind in LAMP_TONE else pp.WHITE
                 elif not on(kind, x, y - 1):
-                    c = ink(kind)[2]
+                    c = BODY_LIGHT.get(kind, ink(kind)[2])
                 elif not on(kind, x, y + 1):
                     c = ink(kind)[0]
                 else:

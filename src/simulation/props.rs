@@ -62,6 +62,10 @@ pub(super) enum DamageCause {
     /// `Obstacle::damage`, so a flammable plank or tree is left burning -
     /// with no fence or pass-over roll; a tower takes the slug's damage.
     Pierce { dir: Vec2 },
+    /// A rod from god's impact at `from` (docs/rod-from-god.md): every
+    /// tile it reaches but a permanent one dies outright - no fence roll,
+    /// no fuse, not left burning - a drum going off where it stands.
+    Crush { from: Position },
 }
 
 /// A barrel detonation waiting for `explosions` to resolve it this frame.
@@ -173,16 +177,26 @@ impl Game {
     /// going off all at once, while a direct hit or a ram pops it right
     /// away through the plain health path; a tree pushed over by a tank
     /// dies outright instead of taking its flammable fork, since a hull is
-    /// not something that sets a tree alight; everything else is
+    /// not something that sets a tree alight; a rod's crush kills whatever
+    /// it reaches outright, a burning plank or tree too (its rubble
+    /// charred), and leaves a drum on a fuse to it; everything else is
     /// `Obstacle::damage`. Returns `true` the frame the obstacle dies.
     pub(super) fn damage_obstacle(&mut self, f: &mut Frame, entity: Entity, amount: f32, cause: DamageCause) -> bool {
-        let (material, variant, pos, died) = {
+        let crush = matches!(cause, DamageCause::Crush { .. });
+        let (material, variant, pos, died, charred) = {
             let mut q = self.world.query_one::<&mut Obstacle>(entity);
             let Ok(o) = q.get() else { return false };
-            if o.destroyed || o.burning || o.fuse.is_some() {
+            if o.destroyed || (o.burning && !crush) || o.fuse.is_some() {
                 return false;
             }
+            let charred = o.burning;
             let died = match o.material {
+                _ if crush => {
+                    o.health = 0.0;
+                    o.burning = false;
+                    o.destroyed = true;
+                    true
+                }
                 // Heat is not a blow: a bag or a fence that has taken its
                 // whole exposure simply goes, no one-shot roll.
                 Material::Sandbag | Material::Fence if matches!(cause, DamageCause::Fire | DamageCause::Pierce { .. }) => {
@@ -223,7 +237,7 @@ impl Game {
                 }
                 _ => o.damage(amount),
             };
-            (o.material, o.variant, o.position, died)
+            (o.material, o.variant, o.position, died, charred)
         };
         if died {
             let shape = match cause {
@@ -233,8 +247,9 @@ impl Game {
                 DamageCause::Blast { .. } => BlastShape::Plain,
                 DamageCause::Fire => BlastShape::Fire,
                 DamageCause::Pierce { dir } => BlastShape::Shot { dir: Lean { x: dir.x, y: dir.y } },
+                DamageCause::Crush { .. } => BlastShape::Plain,
             };
-            self.obstacle_died(f, DeadTile { material, variant, position: pos, chained: false, charred: false, shape });
+            self.obstacle_died(f, DeadTile { material, variant, position: pos, chained: false, charred, shape });
         }
         died
     }

@@ -84,6 +84,14 @@ pub struct DebugSnapshot {
     /// the reply while there are none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub drones: Vec<DroneDebug>,
+    /// The zones standing - the rods called (docs/rod-from-god.md) - by id;
+    /// left out while there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub zones: Vec<ZoneDebug>,
+    /// The cells the rods struck and left a crater round; left out while
+    /// there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub craters: Vec<(i32, i32)>,
     /// What the last enemy phase's engagement-slot assignment decided.
     /// Per-tank entries cover both rings (player and hunted frog); the slot
     /// table is the player ring's.
@@ -97,6 +105,22 @@ pub struct DebugSnapshot {
     /// is meaningful then.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) command: Option<CommandReport>,
+}
+
+/// A zone in `DebugSnapshot::zones`.
+#[derive(Clone, Debug, Serialize)]
+pub struct ZoneDebug {
+    pub id: u32,
+    /// `rod` for a rod's call.
+    pub kind: &'static str,
+    /// Its owner's slot.
+    pub owner: usize,
+    pub x: f32,
+    pub y: f32,
+    /// The map cell a call lands on.
+    pub cell: Option<(i32, i32)>,
+    /// Seconds left.
+    pub left: f32,
 }
 
 /// An FPV drone in `DebugSnapshot::drones`.
@@ -203,6 +227,12 @@ pub struct TankDebug {
     pub fpv: i32,
     #[serde(skip_serializing_if = "is_zero_u8")]
     pub fpv_out: u8,
+    /// Rods left to call (`Tank::rods`); left out while 0.
+    #[serde(skip_serializing_if = "is_zero_i32")]
+    pub rods: i32,
+    /// The cell its rod's reticle stands on (`Tank::reticle`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reticle: Option<(i32, i32)>,
     /// A charge on the trigger (`Tank::charge`): the weapon, seconds held
     /// and its stage.
     pub charge: Option<(&'static str, f32, &'static str)>,
@@ -404,6 +434,9 @@ pub struct TankPatch {
     pub special_offline: Option<f32>,
     pub gauss_slugs: Option<i32>,
     pub fpv_drones: Option<i32>,
+    /// Rods to call (`Tank::rods`): a count above 0 takes the special
+    /// carried away.
+    pub rods: Option<i32>,
     /// Seconds the trigger of its charge weapon has been held: a charge put
     /// on (the special it carries must be one, `Trigger::Charge`); 0 takes
     /// one off.
@@ -627,6 +660,8 @@ impl Game {
                     gauss: tank.gauss_slugs,
                     fpv: tank.fpv_drones,
                     fpv_out: tank.fpv_out,
+                    rods: tank.rods,
+                    reticle: tank.reticle.map(|r| r.cell),
                     charge: tank.charge.map(|c| (c.weapon.name(), r1(c.held), c.stage().name())),
                     tell: tank.tell.map(|t| (t.weapon.name(), r1(t.left))),
                     skid: r1(tank.skid),
@@ -855,6 +890,20 @@ impl Game {
                     aim_y: r1(d.aim.y),
                 })
                 .collect(),
+            zones: self
+                .zones
+                .iter()
+                .map(|z| ZoneDebug {
+                    id: z.id,
+                    kind: "rod",
+                    owner: z.owner.slot(),
+                    x: r1(z.centre.x),
+                    y: r1(z.centre.y),
+                    cell: z.rod().map(|c| c.cell),
+                    left: r1(z.left(self.time)),
+                })
+                .collect(),
+            craters: self.craters.list().iter().map(|c| c.cell).collect(),
             engage,
             clusters: clusters(&live_enemies, CLUSTER_RADIUS_PX),
             command: full.then(|| self.commander.report().clone()),
@@ -948,6 +997,7 @@ impl Game {
     /// would; of two stocks set at once the later field in this order wins.
     pub fn debug_set_tank(&mut self, slot: usize, patch: &TankPatch) -> Result<(), String> {
         let entity = self.tank_entity_by_slot(slot).ok_or_else(|| format!("no tank in slot {slot}"))?;
+        let field = self.map.field_size();
         let mut q = self.world.query_one::<&mut Tank>(entity);
         let tank = q.get().map_err(|e| e.to_string())?;
         if let Some(d) = patch.damage {
@@ -1008,10 +1058,23 @@ impl Game {
             }
             tank.fpv_drones = n.max(0);
         }
+        if let Some(n) = patch.rods {
+            if n > 0 {
+                tank.disarm();
+            }
+            tank.rods = n.max(0);
+        }
         if let Some(seconds) = patch.charge {
             let weapon = tank.active_weapon();
             tank.charge = (seconds > 0.0 && weapon.trigger() == crate::tank::Trigger::Charge)
                 .then(|| crate::tank::Charge::new(weapon, crate::tank::ticks_of(seconds).max(1) as f32 * crate::PHYSICS_FIXED_DT));
+            // A rod's charge is its reticle, put where a press puts it.
+            tank.reticle = tank.charge.filter(|c| c.weapon == crate::tank::ActiveWeapon::RodFromGod).map(|_| {
+                let t = tuning();
+                let range = crate::rod::Range::of(tank.position, field, &t);
+                let facing = crate::tank::Dir::from_rotation(tank.rotation).unwrap_or(crate::tank::Dir::Up);
+                crate::rod::Reticle::new(crate::rod::reticle_start(tank.position, facing, &range, &t))
+            });
         }
         if let Some(n) = patch.plasma_ammo {
             if n > 0 {

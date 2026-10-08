@@ -1037,6 +1037,26 @@ impl WaterLayout {
         self.current.iter_mut().for_each(|c| *c = false);
     }
 
+    /// Make the dry cells among `cells` fords: a rod's crater filled by the
+    /// rain (docs/rod-from-god.md "The crater"), `Depth::Shallow` with no
+    /// current, or ice where the water is frozen over. A cell already water,
+    /// and one past the grid, is left. True if any changed.
+    pub fn fill(&mut self, cells: impl IntoIterator<Item = (i32, i32)>) -> bool {
+        let frozen = self.is_frozen();
+        let mut changed = false;
+        for (c, r) in cells {
+            if c < 0 || r < 0 || c as usize >= self.cols || r as usize >= self.rows {
+                continue;
+            }
+            let i = r as usize * self.cols + c as usize;
+            if self.depth[i] == Depth::Dry {
+                self.depth[i] = if frozen { Depth::Ice } else { Depth::Shallow };
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// True once `freeze` has iced the water over.
     pub fn is_frozen(&self) -> bool {
         self.depth.contains(&Depth::Ice)
@@ -1782,6 +1802,21 @@ fn draw_current(c: &mut impl Canvas, grid: &GroundGrid, time: f32, speed: f32, l
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fill_makes_dry_cells_fords_and_freeze_ices_them() {
+        let pond: Vec<Position> = vec![crate::map::cell_to_world(2, 2)];
+        let mut w = WaterLayout::build(320.0, 320.0, &[], &pond);
+        assert!(w.fill([(5, 5), (5, 6), (2, 2), (-1, 0)]));
+        assert_eq!(w.depth_of_cell(5, 5), Depth::Shallow);
+        assert_eq!(w.depth_of_cell(5, 6), Depth::Shallow);
+        assert!(!w.pushes_south(crate::map::cell_to_world(5, 6)));
+        assert!(!w.fill([(5, 5)]), "already water");
+        w.freeze();
+        assert_eq!(w.depth_of_cell(5, 5), Depth::Ice);
+        assert!(w.fill([(7, 7)]));
+        assert_eq!(w.depth_of_cell(7, 7), Depth::Ice, "filled under ice, it is ice");
+    }
+
     use super::*;
 
     const W: f32 = 320.0;

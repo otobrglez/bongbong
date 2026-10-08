@@ -407,6 +407,17 @@ pub enum PressShow {
     Rail(RailPress),
     ChargeEnd(ChargeEndPress),
     Drone(DronePress),
+    Rod(RodPress),
+}
+
+/// A rod this client called on its own release (docs/rod-from-god.md
+/// "Wire"): the cell it lands on, for the round to draw as a provisional
+/// zone until the room's claims it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RodPress {
+    pub cell: (i32, i32),
+    /// The input tick of the release: what the room's `Fired` names back.
+    pub tick: u32,
 }
 
 /// The room's copy of one of this seat's shots, as the frame drew it.
@@ -504,6 +515,9 @@ pub struct Predictor {
     drawn_presses: VecDeque<(WeaponKind, u32, f32)>,
     /// Shows pressed this tick, for the round to finish and draw.
     shows: Vec<PressShow>,
+    /// The cell the last stepped packet's rod reticle stood on
+    /// (`reticle_report`).
+    reticle: Option<(i32, i32)>,
     /// Where this frame's provisional shots met something, for the round's
     /// impact flashes.
     impacts: Vec<Position>,
@@ -564,6 +578,7 @@ impl Predictor {
             owed_presses: VecDeque::new(),
             drawn_presses: VecDeque::new(),
             shows: Vec::new(),
+            reticle: None,
             impacts: Vec::new(),
             muzzles: Vec::new(),
             unpaired: std::collections::BTreeMap::new(),
@@ -651,10 +666,30 @@ impl Predictor {
         }
         self.presses = presses;
         self.trigger_held = intent.fire;
+        // The reticle this packet reports: where a release calls, else
+        // where the step left it (a press puts one up).
+        self.reticle = charged.and_then(|c| c.reticle).or_else(|| self.sandbox.seat_reticle(self.seat).map(|r| r.cell));
         match charged {
             Some(charge) => self.charge_edge(tick, charge),
             None => self.pull_trigger(tick, pressed, intent.fire),
         }
+    }
+
+    /// The cell this client's rod reticle stood on for the packet just
+    /// stepped, which the packet reports (`IntentMsg::reticle`).
+    pub fn reticle_report(&self) -> Option<(i32, i32)> {
+        self.reticle
+    }
+
+    /// The sandbox's rod reticle, for the round to draw on the shown seat
+    /// from the press frame.
+    pub fn reticle(&self) -> Option<crate::rod::Reticle> {
+        self.sandbox.seat_reticle(self.seat)
+    }
+
+    /// The map's width in cells, for the reticle's wire code.
+    pub fn field_cols(&self) -> u16 {
+        crate::net::encode::field_cols(&self.sandbox)
     }
 
     /// Whether the local gate lets a press start a charge
@@ -674,14 +709,33 @@ impl Predictor {
     }
 
     /// What the charge did on this tick (`Game::predict_seat_with`): a
-    /// release fires - its reload on the local gate, its slug owed and, while
-    /// presses are drawn, drawn (`PressShow::Rail`) and waiting for its
-    /// `Fired` to claim the room's; a vent closes the gate for its cooldown;
-    /// a fizzle and a vent are drawn at the bore.
+    /// release fires - its reload on the local gate, its slug or call owed
+    /// and, while presses are drawn, drawn (`PressShow::Rail`,
+    /// `PressShow::Rod`) and waiting for its `Fired` to claim the room's -
+    /// unless it is a rod's cancel, its reticle on the hull's own cell; a
+    /// vent closes the gate for its cooldown; a rail's fizzle and vent are
+    /// drawn at the bore (a rod's reticle simply goes).
     fn charge_edge(&mut self, tick: u32, charge: crate::simulation::SeatCharge) {
-        use crate::tank::{ChargeEdge, ChargeEnd, ChargeStage};
+        use crate::tank::{ActiveWeapon, ChargeEdge, ChargeEnd, ChargeStage};
         let t = tuning();
         let drawn = self.shots_enabled;
+        if charge.weapon == ActiveWeapon::RodFromGod {
+            match charge.edge {
+                ChargeEdge::Released(_) => {
+                    let Some(cell) = charge.reticle.filter(|&c| c != charge.hull_cell) else { return };
+                    self.cooldown = t.rod_reload_seconds;
+                    self.owed_presses.push_back((WeaponKind::RodFromGod, tick, 0.0));
+                    if drawn {
+                        self.shows.push(PressShow::Rod(RodPress { cell, tick }));
+                        self.drawn_presses.push_back((WeaponKind::RodFromGod, tick, 0.0));
+                        self.report.shots_drawn += 1;
+                    }
+                }
+                ChargeEdge::Ended(ChargeEnd::Vented) => self.cooldown = self.cooldown.max(t.rod_vent_cooldown_seconds),
+                _ => {}
+            }
+            return;
+        }
         match charge.edge {
             ChargeEdge::Released(stage) => {
                 self.cooldown = t.gauss_reload_seconds;
@@ -1055,6 +1109,7 @@ impl Predictor {
             WeaponKind::Emp => t.player_fire_interval,
             WeaponKind::GaussRail => t.gauss_reload_seconds,
             WeaponKind::FpvSwarm => t.fpv_reload_seconds,
+            WeaponKind::RodFromGod => t.rod_reload_seconds,
             WeaponKind::Flamethrower => 0.0,
         };
         let ago = self.tick.wrapping_sub(input_tick) as f32 * PHYSICS_FIXED_DT;
@@ -2307,6 +2362,63 @@ mod tests {
         assert_eq!(predictor.offline_left(), 0.0);
         predictor.step(press());
         assert!(matches!(predictor.take_press_shows().as_slice(), [PressShow::Emp(_)]), "online again, it pulses");
+    }
+
+    /// The rod from god on the client's own ticks (docs/rod-from-god.md
+    /// "Wire"): the press puts the reticle up in the sandbox, the stick
+    /// walks it and the packet reports it; the release draws the call on
+    /// its cell (`PressShow::Rod`), owed and gated; a release on the hull's
+    /// own cell is the cancel, which draws nothing and owes nothing; the
+    /// room's `RodCalled` is claimed once.
+    #[test]
+    fn a_rods_reticle_and_call_are_drawn_on_the_clients_ticks() {
+        let mut predictor = Predictor::new(round(), 0, 0);
+        predictor.set_shots_enabled(true);
+        let patch = TankPatch { rods: Some(2), ..Default::default() };
+        predictor.sandbox.debug_set_tank(0, &patch).expect("the seat's tank");
+        let (pivot, _, _) = predictor.motion().expect("a hull");
+        let own = crate::map::world_to_cell(pivot);
+        predictor.step(press());
+        let start = predictor.reticle().expect("a reticle on the press").cell;
+        assert_eq!(predictor.reticle_report(), Some(start), "the packet reports it");
+        predictor.step(Intent { fire: true, move_dir: Some(Dir::Down), ..Intent::default() });
+        let stepped = predictor.reticle().expect("still up").cell;
+        assert_eq!(stepped, (start.0, start.1 + 1), "a tap steps it a cell");
+        for _ in 0..crate::tank::ticks_of(tuning().rod_settle_seconds) + 1 {
+            predictor.step(press());
+        }
+        let tick = predictor.step(release());
+        assert_eq!(predictor.reticle_report(), Some(stepped), "the release reports the cell it calls on");
+        let shows = predictor.take_press_shows();
+        let [PressShow::Rod(call)] = shows.as_slice() else { panic!("one call: {shows:?}") };
+        assert_eq!(call.cell, stepped);
+        assert_eq!(predictor.owed_presses_of(WeaponKind::RodFromGod), 1);
+        assert!(predictor.reticle().is_none());
+        predictor.note_fired(WeaponKind::RodFromGod, tick);
+        assert!(predictor.confirm_press(WeaponKind::RodFromGod, tick), "the room's call is the drawn one");
+        assert!(!predictor.confirm_press(WeaponKind::RodFromGod, tick), "claimed once");
+        // The cancel: the reticle walked back onto the hull's own cell.
+        idle_ticks(&mut predictor, crate::tank::ticks_of(tuning().rod_reload_seconds) as usize + 2);
+        predictor.step(press());
+        for _ in 0..40 {
+            let at = predictor.reticle().expect("a reticle").cell;
+            let back = match (at.0.cmp(&own.0), at.1.cmp(&own.1)) {
+                (std::cmp::Ordering::Greater, _) => Dir::Left,
+                (std::cmp::Ordering::Less, _) => Dir::Right,
+                (_, std::cmp::Ordering::Greater) => Dir::Up,
+                (_, std::cmp::Ordering::Less) => Dir::Down,
+                _ => break,
+            };
+            predictor.step(Intent { fire: true, move_dir: Some(back), ..Intent::default() });
+            predictor.step(press());
+        }
+        assert_eq!(predictor.reticle().map(|r| r.cell), Some(own));
+        for _ in 0..crate::tank::ticks_of(tuning().rod_settle_seconds) + 1 {
+            predictor.step(press());
+        }
+        predictor.step(release());
+        assert!(predictor.take_press_shows().is_empty(), "the cancel draws nothing");
+        assert_eq!(predictor.owed_presses_of(WeaponKind::RodFromGod), 0, "and owes nothing");
     }
 
     /// A sandbox with the seat armed with the gauss rail.

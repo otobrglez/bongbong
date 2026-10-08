@@ -104,7 +104,7 @@ def main(argv):
         # as its own function drew it.
         hp = r.hardpoints
         mm = {}
-        for w in ('minigun', 'laser', 'flame', 'missiles', 'grenade', 'sonic', 'emp', 'gauss'):
+        for w in ('minigun', 'laser', 'flame', 'missiles', 'grenade', 'sonic', 'emp', 'gauss', 'rod'):
             b = Builder(Ctx(ch, 'enemy'), 'module', 0, 0)
             design.module(b, w, 0, hp)
             mm[w] = b.meta
@@ -114,7 +114,7 @@ def main(argv):
         art.append(dict(chassis=ch, codename=design.codename, heads=heads, spots=spots, muzzles=muzzles,
                         minigun=mm['minigun']['muzzle'], laser=mm['laser']['muzzle'], flame=mm['flame']['muzzle'],
                         grenade=mm['grenade']['muzzle'], sonic=mm['sonic']['muzzle'], emp=mm['emp']['coil'],
-                        gauss=mm['gauss']['muzzle'],
+                        gauss=mm['gauss']['muzzle'], rod=mm['rod']['lens'],
                         tubes=mm['missiles']['tubes']))
         print('exported', ch, design.codename)
     static = os.path.join(repo, 'static')
@@ -166,7 +166,9 @@ def write_rust(path, line_key, art):
              'The grenade launcher module\'s barrel mouth, where its grenades leave (turret frame).'),
             ('sonic', 'SONIC_MUZZLE', 'The sonic hammer module\'s dish, where its wind-up is drawn (turret frame).'),
             ('emp', 'EMP_COIL', 'The EMP module\'s coil centre, where its crackle is drawn (turret frame).'),
-            ('gauss', 'RAIL_MUZZLE', 'The gauss rail module\'s bore mouth, where its slug is drawn from (turret frame).')):
+            ('gauss', 'RAIL_MUZZLE', 'The gauss rail module\'s bore mouth, where its slug is drawn from (turret frame).'),
+            ('rod', 'ROD_LENS',
+             'The rod uplink\'s designator lens, where its line to the reticle is drawn from (turret frame).')):
         L.append('/// %s' % doc)
         L.append('pub const %s: [(f32, f32); 12] = [' % name)
         for a in art:

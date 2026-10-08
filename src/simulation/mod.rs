@@ -36,6 +36,7 @@ mod sonic;
 mod emp;
 mod gauss;
 mod fpv;
+mod rod;
 mod nav;
 pub mod portals;
 pub mod present;
@@ -63,6 +64,8 @@ mod emp_tests;
 mod fpv_tests;
 #[cfg(test)]
 mod gauss_tests;
+#[cfg(test)]
+mod rod_tests;
 #[cfg(test)]
 mod sonic_tests;
 #[cfg(test)]
@@ -519,6 +522,15 @@ pub enum Event {
     /// "teleport") and dives where its target last was. Not sent: the
     /// drone's `lock` is the state.
     DroneLockLost { id: u32, why: &'static str },
+    /// The tank in owner slot `slot` called a rod (docs/rod-from-god.md) on
+    /// map cell `cell`, landing at round time `land`; `seat` is
+    /// `net::wire::NO_SEAT` for an enemy's. Logged after its `Fired`, in the
+    /// same tick.
+    RodCalled { id: u32, slot: usize, seat: u8, cell: (i32, i32), land: f32 },
+    /// The rod `id` landed on map cell `cell`: it left a crater (`crater`)
+    /// and set a volcano off (`erupted`). What it crushed, shoved and broke
+    /// follows as the ordinary events.
+    RodImpact { id: u32, cell: (i32, i32), crater: bool, erupted: bool },
     /// A tank became a wreck (any cause) at (`x`, `y`).
     Wreck { slot: usize, x: f32, y: f32 },
     /// Ram contact between the tanks in `slot` and `other_slot`: an enemy and
@@ -701,6 +713,8 @@ pub enum HitCause {
     Sonic,
     /// A gauss rail's slug going through.
     Rail,
+    /// A rod from god crushing a hull in its circle.
+    Rod,
 }
 
 /// What an `Event::Hit` landed on.
@@ -902,6 +916,29 @@ pub struct Game {
     /// nobody for yet: taken out of the cover `Terrain` reads
     /// (`cover_cells`). Ordered, ticked down in `tick_timers`.
     pub(crate) grass_flat: BTreeMap<(i32, i32), f32>,
+    /// What stands on the field and ends on the round clock - a rod's call
+    /// (`zone.rs`, docs/rod-from-god.md) - sorted by id: what the dangers,
+    /// the router, the off-screen arrows, the minimap and the wire read. A
+    /// replica's are the room's, from the wire. Cleared by `init`.
+    pub(crate) zones: Vec<crate::zone::Zone>,
+    /// Seconds ahead of `time` the zones' countdowns are drawn on: 0 in a
+    /// local round; a client's lead to its own present online
+    /// (`set_zone_lead`). Presentation only.
+    pub(crate) zone_lead: f32,
+    /// The craters the rods left this round (`rod::Craters`): pits the
+    /// footing slows and the router prices, fords while it rains. Cleared by
+    /// `init`.
+    pub(crate) craters: crate::rod::Craters,
+    /// The rods' impacts as they are drawn - the column, the dust, the
+    /// debris - aged in `tick_effects` (`rod_show`). Cleared by `init`.
+    pub(crate) rod_impacts: Vec<crate::rod::RodImpactFx>,
+    /// How each seat has been moving (`SeatStill`, `tick_seat_still`): what
+    /// an enemy with a rod calls on a standing seat by.
+    seat_still: [crate::rod::SeatStill; MAX_SEATS],
+    /// A room's report of the cell each seat's client has its reticle on, by
+    /// the update it is for (`set_seat_reticle`, docs/rod-from-god.md "The
+    /// reticle report"), one update only, like `seat_hold`.
+    seat_reticle: [Option<(u64, (i32, i32))>; MAX_SEATS],
     /// The enemy and frog hit boxes of the last `REWIND_MAX_TICKS` ticks,
     /// recorded at the end of each update: what a seat's shot is swept
     /// against when its client was drawing the past (`seat_rewind`).
@@ -1082,6 +1119,9 @@ pub struct Game {
     /// from `blast_fx`, so a cook-off never drives it and `flash_screen`
     /// can space flashes out.
     pub(crate) screen_flash: Option<f32>,
+    /// How strong the flash playing is against a drum's (`flash_screen_with`):
+    /// its peak and its length are this many times a drum's.
+    pub(crate) screen_flash_strength: f32,
     /// Seconds until the next whole-screen flash is allowed
     /// (`blast_screen_flash_min_gap_seconds`).
     pub(crate) screen_flash_cooldown: f32,
@@ -1276,6 +1316,9 @@ struct Frame {
     /// FPV drones launched this frame, put in the world by `launch_drones`
     /// once the tank loops are done.
     pending_drones: Vec<fpv::PendingDrone>,
+    /// Rods called this frame, put on the field as zones by `place_calls`
+    /// once the tank loops are done.
+    pending_calls: Vec<rod::PendingCall>,
     /// Charges that ended this frame without firing, put on the field by
     /// `resolve_rails`.
     charge_ends: Vec<crate::gauss::ChargeEndFx>,
@@ -1372,6 +1415,7 @@ impl Frame {
             pending_emp: Vec::new(),
             pending_rails: Vec::new(),
             pending_drones: Vec::new(),
+            pending_calls: Vec::new(),
             charge_ends: Vec::new(),
             flame_jets: Vec::new(),
             muzzle_flashes: Vec::new(),
@@ -1457,6 +1501,11 @@ impl Game {
             }
             self.nav.clear();
         }
+        // A sky that rains fills every crater a rod has left
+        // (docs/rod-from-god.md); one turned to snow froze them above.
+        if crate::weather::fills_craters(self.weather, &t) {
+            self.fill_craters();
+        }
     }
 
     /// Set up a fresh round: player, map terrain, enemies, frog, pickups,
@@ -1524,6 +1573,7 @@ impl Game {
         self.player_lamp_held_last_frame = [false; MAX_SEATS];
         self.night_fallen = false;
         self.screen_flash = None;
+        self.screen_flash_strength = 1.0;
         self.screen_flash_cooldown = 0.0;
         self.grass_cells.clear();
         self.grass.clear();
@@ -1552,6 +1602,11 @@ impl Game {
         self.rail_slugs.clear();
         self.charge_ends.clear();
         self.seat_hold = [None; MAX_SEATS];
+        self.zones.clear();
+        self.craters.clear();
+        self.rod_impacts.clear();
+        self.seat_still = [crate::rod::SeatStill::default(); MAX_SEATS];
+        self.seat_reticle = [None; MAX_SEATS];
         self.lamps_out = 0.0;
         self.next_shot_id = 0;
         self.last_engage.clear();
@@ -2081,6 +2136,7 @@ impl Game {
             self.portal_phase(&mut f, &grid);
             self.player_phase(input, &mut f);
             self.rollin_phase(&mut f);
+            self.tick_seat_still(f.dt);
             self.enemy_phase(&mut f, &grid);
             self.wave_phase(&mut f);
             self.tower_phase(&mut f);
@@ -2095,6 +2151,7 @@ impl Game {
             self.tick_sonic_waves(&mut f, true);
             self.resolve_emp(&mut f);
             self.tick_emp_pulses(&mut f, true);
+            self.resolve_zones(&mut f, true);
             self.step_world(&mut f, true);
             self.sync_tanks_and_ram(&mut f);
             self.ram_props(&mut f);
@@ -2131,6 +2188,7 @@ impl Game {
             self.guide_missiles(&mut f);
             self.tick_sonic_waves(&mut f, false);
             self.tick_emp_pulses(&mut f, false);
+            self.resolve_zones(&mut f, false);
             self.step_world(&mut f, false);
             self.roll_grenades(&mut f);
             self.resolve_projectiles::<Shell>(&mut f, false);
@@ -2238,7 +2296,7 @@ impl Game {
         });
         if let Some(age) = &mut self.screen_flash {
             *age += dt;
-            if *age >= tuning().blast_screen_flash_seconds {
+            if *age >= tuning().blast_screen_flash_seconds * self.screen_flash_strength.max(1.0) {
                 self.screen_flash = None;
             }
         }
@@ -2259,6 +2317,10 @@ impl Game {
             end.age += dt;
         }
         self.charge_ends.retain(|end| !end.done());
+        for fx in &mut self.rod_impacts {
+            fx.age += dt;
+        }
+        self.rod_impacts.retain(|fx| !fx.done(&t));
         self.tick_tower_effects(dt);
     }
 
@@ -2444,31 +2506,41 @@ impl Game {
         let entity = self.seats.get(seat).copied().flatten()?;
         // Disjoint borrows: `drive_tank` wants the solver and the hull at
         // once, and they are two fields of the same struct.
-        let Game { world, physics, water, lava, weather, time, .. } = self;
+        let Game { world, physics, water, lava, craters, weather, time, map, .. } = self;
         let Ok(mut tank) = world.get::<&mut Tank>(entity) else { return None };
         if tank.body.is_none() || tank.is_wreck() {
             return None;
         }
         // The sandbox's clock stands at the last snapshot's tick, so a
         // gust reaches the predicted hull when the drawn sand front does.
-        let footing = Footing::at(water, lava, *weather, tank.position, *time);
+        let footing = Footing::at(water, lava, craters, *weather, tank.position, *time);
         // The seat's own skid and spin run on the client's ticks, as the
         // room's do in `tick_timers` (`Predictor::shove` starts a skid).
         tank.skid = (tank.skid - dt).max(0.0);
         tank.spin = (tank.spin - dt).max(0.0);
-        drive_tank(physics, &mut tank, intent, dt, footing);
+        // The room's order (`drive_player`): a rod's reticle up takes the
+        // stick and the hull stands.
+        let aiming = tank.charge.and_then(|c| c.weapon.charge_rule()).is_some_and(|r| r.stick == crate::tank::Stick::Aim);
+        let drive = if aiming { Intent { move_dir: None, face: None, ..intent } } else { intent };
+        drive_tank(physics, &mut tank, drive, dt, footing);
         let mut charged = None;
         if let Some((pressed, open)) = trigger
             && (tank.active_weapon().trigger() == Trigger::Charge || tank.charge.is_some())
         {
+            let weapon = tank.charge.map_or_else(|| tank.active_weapon(), |c| c.weapon);
             let dir = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up).vec();
             let (start, muzzle) = (tank.gun_line_muzzle(dir), crate::gauss::muzzle(&tank));
-            let edge = tank.step_charge(intent.fire, pressed, dt, open, None);
-            if let crate::tank::ChargeEdge::Released(stage) = edge {
+            let steer = crate::rod::Steer { stick: if aiming { intent.move_dir } else { None }, ..crate::rod::Steer::default() };
+            let (edge, reticle) = tank.step_trigger(intent.fire, pressed, dt, open, None, steer, map.field_size());
+            if let crate::tank::ChargeEdge::Released(stage) = edge
+                && weapon == ActiveWeapon::GaussRail
+            {
                 gauss::recoil_hull(physics, &mut tank, dir, stage == crate::tank::ChargeStage::Overcharged, footing);
             }
-            charged = Some(gauss::SeatCharge { edge, start, muzzle, dir });
+            let hull_cell = crate::map::world_to_cell(tank.position);
+            charged = Some(gauss::SeatCharge { edge, weapon, start, muzzle, dir, reticle, hull_cell });
         }
+        sonic::skid_look_ahead(physics, &tank);
         physics.step();
         // The solver moved the body; the tank's own position is what
         // every reader (and the next tick's `Footing`) goes by.
@@ -2539,7 +2611,7 @@ impl Game {
             let ticks = (reach_ticks as f32).max(POSE_REACH_TICKS);
             // The ground's own drift - a current, a gust - carries a hull
             // past its top speed, and the rules put it there.
-            let flow = Footing::at(&self.water, &self.lava, self.weather, tank.position, self.time).flow;
+            let flow = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).flow;
             let drift = (flow.x * flow.x + flow.y * flow.y).sqrt();
             let reach = (tank.effective_speed() + drift) * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX;
             // A knock carries it past that too, by no more than the knock
@@ -2951,8 +3023,24 @@ impl Game {
 
         // A training frog on its way to its next beat's cell keeps walking
         // rather than shy from the tank it is leading (`training.rs`).
+        let walking = Some(frog_entity) == self.frog && self.frog_walking();
+        // A frog under a rod's call hops out of it, away from its middle,
+        // before it shies from any tank (docs/rod-from-god.md): a stunned
+        // or penned one cannot.
+        let t = tuning();
         if can_hop
-            && !(Some(frog_entity) == self.frog && self.frog_walking())
+            && !walking
+            && let Some(zone) = self.zones.iter().find(|z| z.holds(frog_pos, &t))
+        {
+            let away = frog_pos - zone.centre;
+            let away = if away.length() > 1.0 { away } else { Vec2::new(1.0, 0.0) };
+            if let Some(new_pos) = frog_hop_target(&mut f.rng, frog_pos, away, hop_distance, &f.terrain, f.width, f.height) {
+                with_frog_mut(&self.world, frog_entity, |fr| fr.start_hop(new_pos));
+                return;
+            }
+        }
+        if can_hop
+            && !walking
             && let Some((_, tank_pos, dist, _)) = nearest_any
             && dist <= avoid_range
         {
@@ -3282,11 +3370,16 @@ impl Game {
             return;
         }
 
+        // A charge whose stick is the weapon's - the rod's reticle
+        // (`Stick::Aim`, docs/rod-from-god.md) - takes the stick from the
+        // tick after the press: the hull stands, its facing kept.
+        let aiming = tank.charge.and_then(|c| c.weapon.charge_rule()).is_some_and(|r| r.stick == crate::tank::Stick::Aim);
+        let drive = if aiming { Intent { move_dir: None, face: None, ..intent } } else { intent };
         // A seat whose client owns the hull was put where it is by
         // `accept_seat_pose` before this tick; the stick only fires.
         if self.seat_owned[index] != self.frame {
-            let footing = Footing::at(&self.water, &self.lava, self.weather, tank.position, self.time);
-            drive_tank(&mut self.physics, tank, intent, f.dt, footing);
+            let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time);
+            drive_tank(&mut self.physics, tank, drive, f.dt, footing);
         }
         tick_queued_shots(&mut self.physics, f, tank, owner);
 
@@ -3305,7 +3398,8 @@ impl Game {
         let weapon = tank.active_weapon();
         if weapon.trigger() == Trigger::Charge || tank.charge.is_some() {
             let report = self.seat_hold_report(index);
-            gauss::charge_trigger(f, entity, tank, owner, intent.fire, fire_pressed, report);
+            let steer = crate::rod::Steer { stick: if aiming { intent.move_dir } else { None }, aim: None, report: self.seat_reticle_report(index) };
+            gauss::charge_trigger(f, entity, tank, owner, intent.fire, fire_pressed, report, steer);
         }
         let should_fire = match weapon.trigger() {
             Trigger::Auto | Trigger::Stream => intent.fire,
@@ -3538,15 +3632,27 @@ impl Game {
         let line_of_sight = |a: Position, b: Position| f.terrain.line_of_sight(a, b);
         // A seat's ring keeps its firing slots inside the seat's sight box.
         let sight_box = Some(tuning().sight_box_half_px());
+        // A seat a rod's call holds is herded (docs/rod-from-god.md
+        // "Herding"): its ring stands round the call's middle, the firing
+        // slots out past the call's danger.
+        let herd_of = |pos: Position| -> (Position, Option<f32>) {
+            let t = tuning();
+            match self.zones.iter().find(|z| z.rod().is_some() && z.holds(pos, &t)) {
+                Some(z) => (z.centre, Some(t.rod_ai_herd_px.max(z.danger_radius(&t) + t.enemy_danger_clear_px + crate::pyro::BLOCK))),
+                None => (pos, None),
+            }
+        };
         if engaged[0].len() >= 2 {
+            let (target_pos, herd) = herd_of(players[0].pos);
             self.engage[0].assign(
                 &engaged[0],
                 &EngageCtx {
-                    target_pos: players[0].pos,
+                    target_pos,
                     width: f.width,
                     height: f.height,
                     margin,
                     sight_box,
+                    herd,
                     reachable: &reachable,
                     line_of_sight: &line_of_sight,
                 },
@@ -3564,14 +3670,16 @@ impl Game {
                 tanks: report.tanks.iter().filter(|t| engaged[seat].iter().any(|(e, _)| *e == t.entity)).copied().collect(),
                 ..Default::default()
             };
+            let (target_pos, herd) = herd_of(players[seat].pos);
             self.engage[seat].assign(
                 &engaged[seat],
                 &EngageCtx {
-                    target_pos: players[seat].pos,
+                    target_pos,
                     width: f.width,
                     height: f.height,
                     margin,
                     sight_box,
+                    herd,
                     reachable: &reachable,
                     line_of_sight: &line_of_sight,
                 },
@@ -3612,6 +3720,7 @@ impl Game {
                     height: f.height,
                     margin,
                     sight_box: None,
+                    herd: None,
                     reachable: &reachable,
                     line_of_sight: &line_of_sight,
                 },
@@ -3716,6 +3825,23 @@ impl Game {
         if self.any_rail_charging() {
             dangers.extend(self.rail_dangers());
         }
+        // A rod's call: its circle, which every enemy keeps out of until it
+        // lands (docs/rod-from-god.md "Reacting to a call").
+        if !self.zones.is_empty() {
+            dangers.extend(self.zone_dangers());
+        }
+        // What each rod-carrying enemy would call (docs/rod-from-god.md
+        // "AI"): only when one carries or aims one.
+        let rod_senses = if self.any_rod() {
+            let seats: Vec<rod::RodSeat> = players
+                .iter()
+                .enumerate()
+                .map(|(i, p)| rod::RodSeat { seat: i as u8, pos: p.pos, live: !p.wreck && !p.entering, concealed: p.concealed, sight: p.sight })
+                .collect();
+            self.rod_senses(&seats)
+        } else {
+            BTreeMap::new()
+        };
         // What each drone-carrying enemy would launch at and from where,
         // and every enemy a seat's drone has locked (docs/fpv-swarm.md
         // "AI"): only when a tank carries the swarm, or a seat's drone is
@@ -3888,6 +4014,7 @@ impl Game {
                         .or_else(|| emp_senses.get(&entity).map(|s| SpecialSense::Emp(*s)))
                         .or_else(|| gauss_senses.get(&entity).map(|s| SpecialSense::Gauss(*s)))
                         .or_else(|| fpv_senses.get(&entity).map(|s| SpecialSense::Fpv(*s)))
+                        .or_else(|| rod_senses.get(&entity).map(|s| SpecialSense::Rod(*s)))
                         .unwrap_or(SpecialSense::None),
                     &dangers,
                 )
@@ -3986,7 +4113,7 @@ impl Game {
                 // The commander's order is never the last word on a tank
                 // in a tell: it holds its aim (docs/sonic-hammer.md).
                 let intent = commanded_intent(&self.commander, p.slot, p.intent, tank.tell);
-                let footing = Footing::at(&self.water, &self.lava, self.weather, tank.position, self.time);
+                let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time);
                 drive_tank_with(&mut self.physics, tank, intent, f.dt, p.current, p.facing_before, footing);
             });
         }
@@ -4025,6 +4152,7 @@ impl Game {
             self.world.spawn((grenade,));
         }
         self.launch_drones(f);
+        self.place_calls(f);
     }
 
     /// Put one projectile in the world, with its `Rewind` only when it has
@@ -4135,6 +4263,9 @@ impl Game {
             }
             self.advance_drones(PHYSICS_FIXED_DT, (f.width, f.height));
             if step_physics {
+                for tank in self.world.query::<&Tank>().iter() {
+                    sonic::skid_look_ahead(&mut self.physics, tank);
+                }
                 self.physics.step();
                 let (bodies, colliders) = self.physics.quarantined();
                 if bodies > 0 || colliders > 0 {
@@ -4596,10 +4727,22 @@ impl Game {
     /// chain or a multi-kill reads as one flash rather than a strobe.
     /// Cook-offs never call this.
     pub(crate) fn flash_screen(&mut self) {
-        if self.screen_flash_cooldown > 0.0 {
+        self.flash_screen_with(1.0);
+    }
+
+    /// `flash_screen` at `strength` times a drum's (its peak and its
+    /// length, `screen_flash_strength`): a flash stronger than a drum's -
+    /// a rod's impact - is not held back by the gap, and none weaker
+    /// replaces a stronger one still fading.
+    pub(crate) fn flash_screen_with(&mut self, strength: f32) {
+        if self.screen_flash_cooldown > 0.0 && strength <= 1.0 {
+            return;
+        }
+        if self.screen_flash.is_some() && strength < self.screen_flash_strength {
             return;
         }
         self.screen_flash = Some(0.0);
+        self.screen_flash_strength = strength;
         self.screen_flash_cooldown = tuning().blast_screen_flash_min_gap_seconds;
     }
 
@@ -5199,10 +5342,12 @@ impl Game {
                     gauss_slugs: tank.gauss_slugs,
                     fpv_drones: tank.fpv_drones,
                     fpv_out: tank.fpv_out,
+                    rods: tank.rods,
                     charging: tank.charge.is_some(),
                     disabled: tank.is_disabled(),
                     kept_out: ai.is_some_and(Ai::kept_out),
                     air_hold: ai.is_some_and(Ai::air_hold),
+                    rod_hold: ai.is_some_and(Ai::rod_hold),
                     tell: tank.tell.is_some(),
                     skidding: tank.skid > 0.0,
                     plasma_ammo: tank.plasma_ammo,
@@ -5268,8 +5413,10 @@ pub struct TankSnapshot {
     /// Drones left in its FPV halo, and its drones in the air.
     pub fpv_drones: i32,
     pub fpv_out: u8,
-    /// Holding a charge on its trigger (`Tank::charge`, a gauss rail):
-    /// crawling or standing on its lane on purpose.
+    /// Rods left to call (`Tank::rods`).
+    pub rods: i32,
+    /// Holding a charge on its trigger (`Tank::charge`, a gauss rail or a
+    /// rod's reticle): crawling or standing on purpose.
     pub charging: bool,
     /// Disabled by an EMP (`Tank::disabled`): an enemy coasting with its
     /// brain off, going where it did not ask to.
@@ -5280,6 +5427,10 @@ pub struct TankSnapshot {
     /// Standing for the FPV swarm (`Ai::air_hold`): watching its own drone
     /// work, or under a crown while a seat's drone comes at it.
     pub air_hold: bool,
+    /// Keeping its distance from a seat with the rod from god
+    /// (`Ai::rod_hold`): out of the circle a call on that seat would crush,
+    /// on purpose.
+    pub rod_hold: bool,
     /// Winding up a special (`Tank::tell`): holding still on purpose.
     pub tell: bool,
     /// Knocked off its tracks (`Tank::skid`): sliding where it did not ask
@@ -5398,11 +5549,14 @@ impl Footing {
     /// The footing at `pos` at round time `time` under the round's `sky`:
     /// the water's (a ford slows and loosens, ice slides), the lava's (a
     /// burning ford slows and loosens too, with no current and no wet
-    /// tracks) and then the sky's on top (wet ground loosens every hull, a
-    /// gust carries it).
-    pub(crate) fn at(water: &crate::ground::WaterLayout, lava: &crate::lava::LavaLayout, sky: crate::map::Weather, pos: Position, time: f32) -> Footing {
+    /// tracks), a rod's crater's (a dry pit slows), and then the sky's on
+    /// top (wet ground loosens every hull, a gust carries it).
+    pub(crate) fn at(water: &crate::ground::WaterLayout, lava: &crate::lava::LavaLayout, craters: &crate::rod::Craters, sky: crate::map::Weather, pos: Position, time: f32) -> Footing {
         let t = tuning();
         let mut footing = match water.depth_at(pos) {
+            // A dry crater's pit (docs/rod-from-god.md "The crater"); a
+            // filled one is a ford, read above as one.
+            crate::ground::Depth::Dry if craters.under(pos) => Footing { pace: t.rod_crater_pace, ..Footing::DRY },
             crate::ground::Depth::Dry => Footing::DRY,
             crate::ground::Depth::Ice => Footing {
                 grip: t.ice_grip_factor,
@@ -5488,11 +5642,21 @@ fn hold_for_tell(intent: Intent, tell: Option<crate::tank::Tell>) -> Intent {
 fn enemy_trigger(physics: &mut Physics, f: &mut Frame, entity: Entity, tank: &mut Tank, owner: Owner, intent: Intent) {
     let pressed = intent.fire && !tank.trigger_held;
     tank.trigger_held = intent.fire;
+    // A charge the AI lets go of without firing (`SpecialUse::Drop`): a
+    // rod's target gone, a call standing over it.
+    if intent.drop_charge
+        && let Some(charge) = tank.charge
+        && tank.lapse_charge()
+    {
+        f.events.push(Event::ChargeEnded { slot: tank.owner_slot(), weapon: charge.weapon.name(), end: crate::tank::ChargeEnd::Lapsed });
+        return;
+    }
     // A charge weapon's trigger is stepped every tick (its release is the
     // trigger going up), and a charge whose weapon is gone once more, to
     // lapse it (docs/gauss-rail.md).
     if tank.active_weapon().trigger() == Trigger::Charge || tank.charge.is_some() {
-        gauss::charge_trigger(f, entity, tank, owner, intent.fire, pressed, None);
+        let steer = crate::rod::Steer { aim: intent.aim_cell, ..crate::rod::Steer::default() };
+        gauss::charge_trigger(f, entity, tank, owner, intent.fire, pressed, None, steer);
         return;
     }
     if let Some(mut tell) = tank.tell {

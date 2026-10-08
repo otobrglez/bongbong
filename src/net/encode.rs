@@ -17,7 +17,7 @@ use crate::net::MAX_SEATS;
 use crate::net::PROTOCOL_VERSION;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    BonusPickup, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
+    BonusPickup, CraterState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, ZoneState, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
 };
 use crate::bullet::Bullet;
 use crate::frog::Frog;
@@ -101,6 +101,9 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
             .map(|l| LampState { id: l.id, x: quantise_pos(l.position.x), y: quantise_pos(l.position.y), seat: l.seat })
             .collect(),
         crates: crates(game, cols),
+        zones: zones(game, cols),
+        craters: game.craters().list().iter().map(|c| CraterState { cell: cell_index(cols, c.cell), tick: ticks_of(c.at) }).collect(),
+        volcano_shifts: volcano_shifts(game),
         round: round(game),
         events: wire_events_acked(game.events(), &acked),
     };
@@ -160,6 +163,7 @@ pub fn welcome(
 }
 
 fn tanks(game: &Game) -> Vec<TankState> {
+    let cols = field_cols(game);
     game.world
         .query::<&Tank>()
         .iter()
@@ -198,6 +202,7 @@ fn tanks(game: &Game) -> Vec<TankState> {
                 offline: if t.special_offline > 0.0 { quantise_seconds(t.special_offline).max(1) } else { 0 },
                 shells: t.shells_ammo.clamp(0, u8::MAX as i32) as u8,
                 charge: t.charge.map_or(0, |c| c.ticks().clamp(1, u16::MAX as u32) as u16),
+                reticle: t.reticle.map_or(0, |r| reticle_code(cols, r.cell)),
             }
         })
         .collect()
@@ -444,6 +449,46 @@ fn tiles(game: &Game, cols: u16) -> Vec<TileState> {
 /// the change test above reads the same as the value sent.
 fn tile_points(health: f32) -> u8 {
     quantise_health(health)
+}
+
+/// A rod reticle's cell as `TankState::reticle` and `IntentMsg::reticle`
+/// carry it: `cell_index` plus one, so 0 is none.
+pub fn reticle_code(cols: u16, cell: (i32, i32)) -> u16 {
+    cell_index(cols, cell).saturating_add(1)
+}
+
+/// Inverse of `reticle_code`.
+pub fn reticle_from_code(cols: u16, code: u16) -> Option<(i32, i32)> {
+    (code != 0).then(|| cell_from_index(cols, code - 1))
+}
+
+/// A round time as whole ticks of the round clock.
+fn ticks_of(seconds: f32) -> u32 {
+    (seconds / crate::PHYSICS_FIXED_DT).round().max(0.0) as u32
+}
+
+/// The zones standing (`Game::zones`, already in id order).
+fn zones(game: &Game, cols: u16) -> Vec<ZoneState> {
+    game.zones()
+        .iter()
+        .map(|z| ZoneState {
+            id: shot_wire_id(z.id),
+            kind: z.wire_kind(),
+            x: quantise_pos(z.centre.x),
+            y: quantise_pos(z.centre.y),
+            until: ticks_of(z.until),
+            owner: z.owner.slot().min(u16::MAX as usize) as u16,
+            cell: z.rod().map_or(0, |c| cell_index(cols, c.cell)),
+        })
+        .collect()
+}
+
+/// Each volcano's shift, empty while every one is 0.
+fn volcano_shifts(game: &Game) -> Vec<i32> {
+    if game.volcanoes.iter().all(|v| v.shift == 0) {
+        return Vec::new();
+    }
+    game.volcanoes.iter().map(|v| v.shift).collect()
 }
 
 fn round(game: &Game) -> RoundState {

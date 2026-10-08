@@ -153,6 +153,12 @@ pub(super) struct EngageCtx<'a> {
     /// seat from nowhere else, `ai::in_sight_box`). `None` for a hunted
     /// frog's ring, which no such rule bounds.
     pub sight_box: Option<(f32, f32)>,
+    /// A rod's call holds the seat (docs/rod-from-god.md "Herding"): the
+    /// ring is built round the call's middle (`target_pos`) and its firing
+    /// slots stand this far out on their axes - no sight-box or
+    /// `engage_min_radius` clamp, the herd closing in on purpose - so the
+    /// seat leaves the circle into one. `None` for an ordinary ring.
+    pub herd: Option<f32>,
     /// Whether a route exists between two points on this frame's nav grid.
     pub reachable: &'a dyn Fn(Position, Position) -> bool,
     /// Whether a shot from the first point reaches the second unobstructed.
@@ -305,6 +311,21 @@ fn engage_point(ctx: &EngageCtx, slot: EngageSlot) -> Option<Position> {
     if lat_x < m || lat_x > ctx.width - m || lat_y < m || lat_y > ctx.height - m {
         return None;
     }
+    if let (0, Some(herd)) = (slot.rank, ctx.herd) {
+        let room = if dir.0 > 0.0 {
+            ctx.width - m - px
+        } else if dir.0 < 0.0 {
+            px - m
+        } else if dir.1 > 0.0 {
+            ctx.height - m - py
+        } else {
+            py - m
+        };
+        if herd > room {
+            return None;
+        }
+        return Some(Position::new(px + dir.0 * herd + perp.0 * lateral, py + dir.1 * herd + perp.1 * lateral));
+    }
     let mut forward = if slot.rank == 0 { tuning().engage_ring_radius() } else { tuning().engage_reserve_radius() };
     if let (0, Some((half_w, half_h))) = (slot.rank, ctx.sight_box) {
         let half = if dir.0 != 0.0 { half_w } else { half_h };
@@ -374,7 +395,7 @@ mod tests {
     fn opposite_tanks_get_distinct_slots_on_their_own_axes() {
         let (player, w, h, margin) = open_field();
         let yes = |_: Position, _: Position| true;
-        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), reachable: &yes, line_of_sight: &yes };
+        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), herd: None, reachable: &yes, line_of_sight: &yes };
         let mut ring = EngageRing::default();
         let west = (entity(1), Position::new(200.0, 360.0));
         let east = (entity(2), Position::new(1100.0, 360.0));
@@ -406,7 +427,7 @@ mod tests {
         let (half_w, half_h) = tuning().sight_box_half_px();
         let ring = tuning().engage_ring_radius();
         assert!(ring > half_h - OBSTACLE_GRID_SIZE * 0.5, "the defaults this test is about: the ring reaches past the box's half height");
-        let seat = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), reachable: &yes, line_of_sight: &yes };
+        let seat = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), herd: None, reachable: &yes, line_of_sight: &yes };
         let frog = EngageCtx { sight_box: None, ..seat };
         for i in 0..SLOT_COUNT {
             let slot = EngageSlot::from_index(i);
@@ -429,11 +450,41 @@ mod tests {
         }
     }
 
+    /// A herd (docs/rod-from-god.md "Herding"): the ring round a call's
+    /// middle puts its firing slots `herd` out on their axes, the lateral
+    /// offset as ever, with neither the sight-box clamp nor the ring's own
+    /// radius; the reserve slots keep theirs.
+    #[test]
+    fn a_herd_puts_the_firing_slots_at_its_distance_round_the_call() {
+        let (centre, w, h, margin) = open_field();
+        let yes = |_: Position, _: Position| true;
+        let herd = 128.0;
+        let ctx = EngageCtx { target_pos: centre, width: w, height: h, margin, sight_box: seat_box(), herd: Some(herd), reachable: &yes, line_of_sight: &yes };
+        let plain = EngageCtx { herd: None, ..ctx };
+        assert!((tuning().engage_ring_radius() - herd).abs() > 1.0, "the defaults this test is about: the herd is not the ring");
+        for i in 0..SLOT_COUNT {
+            let slot = EngageSlot::from_index(i);
+            if slot.rank != 0 {
+                assert_eq!(engage_point(&ctx, slot), engage_point(&plain, slot), "{slot:?}: a reserve slot is not herded");
+                continue;
+            }
+            let (dir, at) = (DIRS[slot.axis as usize], engage_point(&ctx, slot).expect("room on an open field"));
+            let forward = (at.x - centre.x) * dir.0 + (at.y - centre.y) * dir.1;
+            assert!((forward - herd).abs() < 1e-3, "{slot:?}: {forward}");
+            let lateral = perp_of(dir);
+            let side = (at.x - centre.x) * lateral.0 + (at.y - centre.y) * lateral.1;
+            assert!((side - slot.side as f32 * tuning().engage_lateral_offset).abs() < 1e-3, "{slot:?}");
+        }
+        // A herd slot that cannot stand inside the field is off.
+        let edge = EngageCtx { target_pos: Position::new(margin + herd * 0.5, 360.0), ..ctx };
+        assert_eq!(engage_point(&edge, EngageSlot { axis: 3, rank: 0, side: 1 }), None);
+    }
+
     #[test]
     fn a_held_slot_is_kept_while_it_stays_valid() {
         let (player, w, h, margin) = open_field();
         let yes = |_: Position, _: Position| true;
-        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), reachable: &yes, line_of_sight: &yes };
+        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), herd: None, reachable: &yes, line_of_sight: &yes };
         let mut ring = EngageRing::default();
         let tank = entity(7);
         let first = assign(&mut ring, &[(tank, Position::new(200.0, 300.0))], &ctx);
@@ -450,7 +501,7 @@ mod tests {
         let (player, w, h, margin) = open_field();
         let yes = |_: Position, _: Position| true;
         let no = |_: Position, _: Position| false;
-        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), reachable: &no, line_of_sight: &yes };
+        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), herd: None, reachable: &no, line_of_sight: &yes };
         let mut ring = EngageRing::default();
         let report = assign(&mut ring, &[(entity(1), Position::new(200.0, 360.0))], &ctx);
         assert!(report.target(entity(1)).is_none());
@@ -466,7 +517,7 @@ mod tests {
         let (_, w, h, margin) = open_field();
         let yes = |_: Position, _: Position| true;
         let player = Position::new(60.0, 60.0);
-        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), reachable: &yes, line_of_sight: &yes };
+        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), herd: None, reachable: &yes, line_of_sight: &yes };
         let mut ring = EngageRing::default();
         // From the north-west the tank tries the up and left axes first -
         // both fall outside the battlefield here.

@@ -976,9 +976,12 @@ impl Game {
         // would otherwise punch darker squares through it.
         d.draw_mode2D(w.area_camera, |mut d, _| {
             if let Some(age) = self.screen_flash {
-                let seconds = tuning().blast_screen_flash_seconds;
+                // A rod's flash is stronger and longer than a drum's
+                // (`Game::flash_screen_with`).
+                let strength = self.screen_flash_strength.max(1.0);
+                let seconds = tuning().blast_screen_flash_seconds * strength;
                 if seconds > 0.0 && age < seconds {
-                    let peak = tuning().blast_screen_flash_alpha * tuning().screen_fx_intensity;
+                    let peak = (tuning().blast_screen_flash_alpha * strength).min(0.9) * tuning().screen_fx_intensity;
                     let a = (255.0 * peak.clamp(0.0, 1.0) * (1.0 - age / seconds)) as u8;
                     d.draw_rectangle(0, 0, w.area.0, w.area.1, Color::new(255, 240, 200, a));
                 }
@@ -1090,8 +1093,12 @@ impl Game {
             crate::render::bubble::draw_bubble(d, bubble, base);
         }
 
-        // The lines under the left cluster.
+        // The lines under the left cluster: first what letting go of a
+        // rod's reticle does, while one is up.
         let mut lines = Vec::new();
+        if let Some(key) = chrome.prompt {
+            lines.push(Line { text: crate::text::text().get(key), size: HUD_STATUS_TEXT_SIZE, color: crate::hud::HUD_ROD_COLOR });
+        }
         // An online round says where it stands: the room, the seat and how
         // much of the snapshot stream is in hand.
         if let Some(status) = &chrome.status {
@@ -1413,6 +1420,25 @@ impl Game {
             pyro::draw(&mut GpuCanvas::new(d, textures), &chips);
         }
 
+        // A rod's impact - its dust rings and puffs and the debris it
+        // throws - and the smoke off a fresh crater (docs/rod-from-god.md
+        // "Drawing"): matter, so lit with the field; the column shines in
+        // `paint_field_glowing`.
+        if !self.rod_impacts.is_empty() || !self.craters.is_empty() {
+            let t = tuning();
+            let mut dust = Vec::new();
+            for crater in self.craters.list() {
+                let at = crate::map::cell_to_world(crater.cell.0, crater.cell.1);
+                if !culled(cull, at) {
+                    crate::rod::compose_crater_smoke(&mut dust, at, self.time - crater.at, pyro::smoke_lean(&t, at, self.time), &t);
+                }
+            }
+            for fx in self.rod_impacts.iter().filter(|fx| !culled(cull, fx.at)) {
+                crate::rod::compose_impact(&mut dust, fx, pyro::smoke_lean(&t, fx.at, self.time), &t);
+            }
+            pyro::draw(&mut GpuCanvas::new(d, textures), &dust);
+        }
+
         // The FPV drones in the air over everything that stands, their
         // shadows on what is under them (docs/fpv-swarm.md "Drawing"):
         // lit with the field, their lamps in `paint_field_glowing`.
@@ -1645,6 +1671,27 @@ impl Game {
             }
             for end in &self.charge_ends {
                 shapes.extend(crate::gauss::compose_end(end, pyro::smoke_lean(&t, end.at, self.time)));
+            }
+            if !shapes.is_empty() {
+                pyro::draw(&mut GpuCanvas::new(d, textures), &shapes);
+                let bands = t.glow_bands.max(0) as u32;
+                d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| pyro::draw_glows(&mut Rl(&mut bd), &shapes, bands));
+            }
+        }
+
+        // The rod from god (docs/rod-from-god.md "Drawing"): every reticle
+        // up and its designator's line, every call standing - its circle,
+        // its beam from the sky and its count, read on the zones' clock -
+        // and the white column of an impact. Light, drawn unlit, their
+        // glows in one additive block.
+        {
+            let t = tuning();
+            let view_top = camera.rect().y;
+            let mut shapes = Vec::new();
+            crate::rod::compose_reticles(&mut shapes, self.world.query::<&Tank>().iter().filter(|tank| tank.reticle.is_some()), &t, self.time);
+            crate::rod::compose_calls(&mut shapes, &self.zones, self.time + self.zone_lead, view_top, &t, self.time);
+            for fx in &self.rod_impacts {
+                crate::rod::compose_column(&mut shapes, fx, view_top, &t);
             }
             if !shapes.is_empty() {
                 pyro::draw(&mut GpuCanvas::new(d, textures), &shapes);
@@ -2112,6 +2159,7 @@ fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
         ActiveWeapon::Emp => ("EMP", tank.emp_charges),
         ActiveWeapon::GaussRail => ("RAIL", tank.gauss_slugs),
         ActiveWeapon::FpvSwarm => ("FPV", tank.fpv_drones),
+        ActiveWeapon::RodFromGod => ("ROD", tank.rods),
         ActiveWeapon::Shell => ("SHELL", tank.shells_ammo),
     };
     let mut lines = vec![

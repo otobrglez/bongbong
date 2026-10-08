@@ -153,6 +153,15 @@ pub fn take_hold(game: &mut Game, seat: usize, hold: Option<u32>) {
     game.set_seat_hold(seat, hold);
 }
 
+/// Hand the round one seat's reticle report for this tick
+/// (`net::mailbox::Mailbox::reticle`, docs/rod-from-god.md "The reticle
+/// report"), before the tick runs: a rod's reticle stands on the cell the
+/// client has it on, held to the reticle's range of the room's hull.
+pub fn take_reticle(game: &mut Game, seat: usize, reticle: u16) {
+    let cols = crate::net::encode::field_cols(game);
+    game.set_seat_reticle(seat, crate::net::encode::reticle_from_code(cols, reticle));
+}
+
 /// After the tick: a `Placed` if the tick carried the hull further than
 /// `PLACED_PX` from where its pose put it.
 pub fn moved_since(game: &Game, seat: usize, applied: Position) -> Option<WireEvent> {

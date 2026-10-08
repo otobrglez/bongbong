@@ -1232,6 +1232,9 @@ impl Room {
         let mut views: Vec<(usize, (u32, u8))> = Vec::new();
         // Each seat's hold report: its client's ticks of trigger held.
         let mut holds: Vec<(usize, Option<u32>)> = Vec::new();
+        // Each seat's reticle report: the cell its client has a rod's
+        // reticle on.
+        let mut reticles: Vec<(usize, u16)> = Vec::new();
         for (i, seat) in self.seats.iter().enumerate().take(MAX_SEATS) {
             if let Some(s) = seat
                 && s.connected()
@@ -1242,6 +1245,7 @@ impl Room {
                 poses.push((i, read.and_then(|m| m.pose()), s.mailbox.pose_reach_ticks()));
                 views.push((i, read.map_or((0, 0), |m| (m.view_tick, m.view_frac))));
                 holds.push((i, s.mailbox.hold_ticks()));
+                reticles.push((i, s.mailbox.reticle()));
                 // A starved tick is a packet that did not arrive in time:
                 // a server-driven seat's client is not stamping far
                 // enough ahead for the link (§4.12), an owned seat's hull
@@ -1265,6 +1269,11 @@ impl Room {
         // room's reads (docs/gauss-rail.md "The hold report").
         for &(i, hold) in &holds {
             authority::take_hold(game, i, hold);
+        }
+        // A rod's reticle stands where its client has it
+        // (docs/rod-from-god.md "The reticle report").
+        for &(i, reticle) in &reticles {
+            authority::take_reticle(game, i, reticle);
         }
         // A client that owns its hull is put where it says before the
         // tick runs, and the seat is released to the room's own driving

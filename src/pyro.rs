@@ -488,6 +488,50 @@ pub fn draw(b: &mut impl Blocks, shapes: &[Shape]) {
     }
 }
 
+/// The glyphs of `digits`: 3 x 5 font pixels each, row by row, a set bit
+/// a pixel.
+const DIGIT_FONT: [[u8; 5]; 10] = [
+    [0b111, 0b101, 0b101, 0b101, 0b111],
+    [0b010, 0b110, 0b010, 0b010, 0b111],
+    [0b111, 0b001, 0b111, 0b100, 0b111],
+    [0b111, 0b001, 0b011, 0b001, 0b111],
+    [0b101, 0b101, 0b111, 0b001, 0b001],
+    [0b111, 0b100, 0b111, 0b001, 0b111],
+    [0b111, 0b100, 0b111, 0b101, 0b111],
+    [0b111, 0b001, 0b010, 0b010, 0b010],
+    [0b111, 0b101, 0b111, 0b101, 0b111],
+    [0b111, 0b101, 0b111, 0b001, 0b111],
+];
+
+/// A whole number in block digits (the one text the field draws in the
+/// effects language: a rod's countdown, docs/rod-from-god.md): a 3 x 5 font,
+/// each font pixel `scale` blocks, the number's top-left at `at`, a block
+/// of `shadow` down and right of every pixel under it.
+pub fn digits(out: &mut Vec<Shape>, n: u32, at: Position, scale: i32, color: Color, shadow: Color) {
+    let px = scale.max(1) as f32 * BLOCK;
+    let text = n.to_string();
+    let mut x = at.x;
+    let mut pixels = Vec::new();
+    for ch in text.bytes() {
+        let glyph = DIGIT_FONT[(ch - b'0') as usize];
+        for (row, bits) in glyph.iter().enumerate() {
+            for col in 0..3 {
+                if bits & (0b100 >> col) != 0 {
+                    pixels.push(Position::new(x + col as f32 * px + px * 0.5, at.y + row as f32 * px + px * 0.5));
+                }
+            }
+        }
+        x += 4.0 * px;
+    }
+    let size = (px as i32).max(2);
+    for &p in &pixels {
+        out.push(Shape::Mark { pos: Position::new(p.x + BLOCK, p.y + BLOCK), size, color: shadow });
+    }
+    for &p in &pixels {
+        out.push(Shape::Mark { pos: p, size, color });
+    }
+}
+
 /// The glows among `shapes`, in `bands` steps (inside an additive blend).
 pub fn draw_glows(b: &mut impl Blocks, shapes: &[Shape], bands: u32) {
     for shape in shapes {

@@ -33,6 +33,11 @@ button-online = ONLINE
 # docs/emp-burst.md): the words split at their first space into two lines
 # of 10 px text, each within the slot's 60 px.
 hud-weapon-offline = WPN OFFLINE
+# The rod from god's reticle (docs/rod-from-god.md): what letting go does,
+# under the vitals while it is up; the second while it stands on the
+# caller's own cell.
+hud-rod-aim = AIM, THEN LET GO TO CALL
+hud-rod-cancel = LET GO HERE TO CANCEL
 
 # The players dialog: a 28 px title and a 16 px line across a 440 px
 # panel, then two 176 px buttons in 18 px text (about 14 letters each).
@@ -482,6 +487,7 @@ tool-sonic_hammer = sonic hammer
 tool-emp_burst = emp burst
 tool-gauss_rail = gauss rail
 tool-fpv_swarm = fpv swarm
+tool-rod_from_god = rod from god
 tool-tesla = tesla coil
 tool-tesla_enemy = enemy tesla
 tool-gun_tower = gun tower
@@ -510,6 +516,7 @@ tool-short-sonic_hammer = sonic
 tool-short-emp_burst = emp
 tool-short-gauss_rail = rail
 tool-short-fpv_swarm = fpv
+tool-short-rod_from_god = rod
 tool-short-lamp = lamp
 tool-short-target = target
 tool-short-volcano = volc

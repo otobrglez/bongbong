@@ -69,6 +69,13 @@ pub struct Intent {
     /// simulation finds the edge and an online packet that repeats a held
     /// key never drops two. The AI never sets it.
     pub lamp: bool,
+    /// The map cell an enemy's rod reticle is to walk to (`rod::Steer::aim`,
+    /// docs/rod-from-god.md): the AI's stick for it. AI-only, like
+    /// `fire_aim_offset`; never on the wire, and a seat's is always `None`.
+    pub aim_cell: Option<(i32, i32)>,
+    /// Let a charge in progress go without firing it (`SpecialUse::Drop`):
+    /// the collect pass lapses it. AI-only, like `aim_cell`.
+    pub drop_charge: bool,
 }
 
 impl Intent {
@@ -101,6 +108,40 @@ pub enum SpecialSense {
     Emp(EmpSense),
     Gauss(GaussSense),
     Fpv(FpvSense),
+    Rod(RodSense),
+}
+
+/// What an enemy carrying the rod from god is handed this frame
+/// (`Game::rod_senses`, docs/rod-from-god.md "What it is handed"): every
+/// seat in its pick already held to the sight-box rule and to what the
+/// tank knows.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RodSense {
+    /// What it would call now; `None` when nothing qualifies.
+    pub pick: Option<RodPick>,
+    /// Its centre stands inside a call's danger: a reticle it holds is
+    /// dropped and the dodge takes it out.
+    pub under_call: bool,
+    /// The nearest seat it knows of from inside that seat's sight box: the
+    /// one it keeps its distance from (`rod_rule`'s stand-off). A tank that
+    /// carries calls fires no shells, so one parked beside a seat - in the
+    /// circle a call on it would crush - does nothing at all.
+    pub keep_from: Option<Position>,
+    /// A seat it would call on but for its own hull in the circle: what
+    /// backs it off even from where it holds (`rod_rule`).
+    pub self_blocks: bool,
+}
+
+/// A rod tank's target (`RodSense::pick`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RodPick {
+    /// The cell its reticle goes to and the call lands on.
+    pub cell: (i32, i32),
+    /// The seat the call is used on, for a seat's pick: what
+    /// `Ai::shot_at_seat` records at the release.
+    pub at_seat: Option<u8>,
+    /// "camper", "lead", "tower" or "frog": the trace's word.
+    pub why: &'static str,
 }
 
 /// What an enemy carrying the FPV swarm measured this frame
@@ -478,8 +519,13 @@ enum SpecialUse {
     Approach { to: Position, why: &'static str },
     /// Hold the trigger of a charge weapon facing `face` (the charge-and-hold
     /// pattern, docs/gauss-rail.md): a press starts a charge, holding keeps
-    /// it, and the tank stands its ground meanwhile.
-    Charge { face: Dir, why: &'static str },
+    /// it, and the tank stands its ground meanwhile. `aim` is the cell a
+    /// rod's reticle walks to (`Intent::aim_cell`); `None` for the rail.
+    Charge { face: Dir, aim: Option<(i32, i32)>, why: &'static str },
+    /// Let a charge in progress go without firing it (`Intent::drop_charge`):
+    /// a rod tank whose target no longer holds, any charging tank a call
+    /// stands over - where the tree goes on below, to the dodge.
+    Drop { why: &'static str },
     /// Let a charge weapon's trigger go facing `face`: the simulation fires
     /// the charge if it is ready. `at_seat` is the seat it is used on.
     Release { face: Dir, at_seat: Option<u8>, why: &'static str },
@@ -491,13 +537,13 @@ enum SpecialUse {
 
 /// The BB-36 weapons' crates an enemy detours for, in the order it wants
 /// them (`build`'s `seek_special` tier, after the minigun's).
-pub const SEEK_SPECIALS: [PickupKind; 4] = [PickupKind::SonicHammer, PickupKind::Emp, PickupKind::GaussRail, PickupKind::FpvSwarm];
+pub const SEEK_SPECIALS: [PickupKind; 5] = [PickupKind::SonicHammer, PickupKind::Emp, PickupKind::GaussRail, PickupKind::FpvSwarm, PickupKind::RodFromGod];
 
 /// Whether the tree's generic tiers - attack, snipe, grudge, breach - may
 /// pull the trigger on `weapon`: false for a special whose own rule owns
 /// it (`special_rule`).
 pub fn generic_fire(weapon: ActiveWeapon) -> bool {
-    !matches!(weapon, ActiveWeapon::SonicHammer | ActiveWeapon::Emp | ActiveWeapon::GaussRail | ActiveWeapon::FpvSwarm)
+    !matches!(weapon, ActiveWeapon::SonicHammer | ActiveWeapon::Emp | ActiveWeapon::GaussRail | ActiveWeapon::FpvSwarm | ActiveWeapon::RodFromGod)
 }
 
 /// A latched decision to shoot through the tile in `dir` (see
@@ -710,6 +756,23 @@ pub struct Ai {
     /// (`SpecialUse::Fire`'s `why`, "hold", "approach"), `None` when it ran
     /// none. Inspection only, like `last_action`.
     special_why: Option<&'static str>,
+    /// Where a rod tank is moving to in its stand-off (`rod_rule`), held
+    /// until it gets there so a band shared with a moving ally is not a
+    /// choice made again every tick; dropped the tick after it stands off
+    /// no more.
+    rod_spot: Option<Position>,
+    /// Seconds a rod tank stands where it is in its stand-off rather than
+    /// make for a spot (`rod_rule`): set when a move to one stopped
+    /// against a tank or a wall, so a narrow place is not ground against.
+    rod_wait: f32,
+    /// It held its stand-off last tick: it backs off only from a cell
+    /// nearer, so a hull sliding on after it stopped - wet ground, ice - is
+    /// not sent back out again (`rod_rule`).
+    rod_held: bool,
+    /// The nearest it has come to `rod_spot` since it chose it (px): a
+    /// move that has drifted a cell further than that is making no
+    /// headway, and is given up as a blocked one is.
+    rod_spot_best: f32,
     /// Its brain is off (an EMP, docs/emp-burst.md): `enemy_phase` coasts it
     /// and does not call `think`; the first tick it is back, `reboot`.
     pub(crate) down: bool,
@@ -885,6 +948,10 @@ impl Default for Ai {
             grudge: None,
             escapes: 0,
             special_why: None,
+            rod_spot: None,
+            rod_wait: 0.0,
+            rod_held: false,
+            rod_spot_best: 0.0,
             target_player: 0,
             field: FieldMind::default(),
             down: false,
@@ -1073,6 +1140,11 @@ impl Ai {
             breach.timer -= dt;
         }
 
+        if self.special_why != Some("stand-off") {
+            self.rod_spot = None;
+            self.rod_held = false;
+        }
+        self.rod_wait = (self.rod_wait - dt).max(0.0);
         self.special_why = None;
         self.clearing = None;
         self.kept_out = false;
@@ -1337,6 +1409,20 @@ impl Ai {
     /// tree's crown while a seat's drone comes at it.
     pub(crate) fn air_hold(&self) -> bool {
         self.special_why == Some("watch") || self.air_why == Some("canopy")
+    }
+
+    /// Whether it kept its distance from a seat this tick on purpose, the
+    /// rod from god's stand-off (docs/rod-from-god.md "AI"): a tank that
+    /// carries calls holds a band out of the circle a call on that seat
+    /// would crush.
+    pub(crate) fn rod_hold(&self) -> bool {
+        self.special_why == Some("stand-off")
+    }
+
+    /// Whether its fire timer has run out: a rod tank still waiting on it
+    /// takes no target from the tanks after it (`Game::rod_senses`).
+    pub(crate) fn fire_ready(&self) -> bool {
+        self.fire_timer <= 0.0
     }
 
     /// Choose a heading toward `target` - or, if pathfinding can't reach
@@ -2251,7 +2337,8 @@ impl Brain<'_> {
         }
     }
 
-    /// The first of `danger`'s exits from `p` this tank can drive to - on
+    /// The first of `danger`'s exits from `p` - from where this tank stands,
+    /// for a rod's call it stands outside - this tank can drive to - on
     /// the field, in a usable cell, joined to where it stands - else the
     /// nearest. A disc round a seat by the field's edge has its nearest
     /// exit off the field, and steering at that wanders.
@@ -2271,7 +2358,13 @@ impl Brain<'_> {
                 return *post;
             }
         }
-        let exits = danger.exits(p, clear, self.me.position, facing);
+        // Out of a rod's call (a danger nobody owns), from where this tank
+        // stands outside it: the nearest of the circle's edge to it. The
+        // side of the call's middle a seat stands on in its cell is a few
+        // pixels' difference, and a chaser steered there would drive round
+        // the circle; it waits on its own side for the impact.
+        let zone = danger.owner.is_none() && matches!(danger.shape, DangerShape::Disc { .. }) && danger.depth(self.me.position) <= 0.0;
+        let exits = danger.exits(if zone { self.me.position } else { p }, clear, self.me.position, facing);
         exits.iter().copied().find(reachable).unwrap_or(exits[0])
     }
 
@@ -2279,6 +2372,12 @@ impl Brain<'_> {
     /// joined to where it stands (`way_out`'s test).
     fn can_reach(&self, q: Position) -> bool {
         q.x > 0.0 && q.y > 0.0 && q.x < self.width && q.y < self.height && self.grid.usable(q) && self.grid.connected(self.me.position, q)
+    }
+
+    /// Whether this tank's centre stands inside a call's circle: a danger
+    /// nobody owns (`Zone::danger`, docs/rod-from-god.md).
+    fn in_call(&self) -> bool {
+        self.dangers.iter().any(|d| d.owner.is_none() && d.depth(self.me.position) > 0.0)
     }
 
     /// Whether `p` lies inside a danger this tank does not own.
@@ -3108,12 +3207,180 @@ fn special_rule(b: &Brain) -> Option<SpecialUse> {
     if let Some(windup) = b.me.windup() {
         return windup_rule(b, windup);
     }
+    // A call stands over it (docs/rod-from-god.md "Reacting to a call"): no
+    // special is used from inside the circle; the dodge takes it out.
+    if b.in_call() {
+        return None;
+    }
     match (b.me.active_weapon(), b.sense) {
         (ActiveWeapon::SonicHammer, SpecialSense::Hammer(sense)) => hammer_rule(b, sense),
         (ActiveWeapon::Emp, SpecialSense::Emp(sense)) => emp_rule(b, sense),
         (ActiveWeapon::GaussRail, SpecialSense::Gauss(sense)) => gauss_rule(b, sense),
         (ActiveWeapon::FpvSwarm, SpecialSense::Fpv(sense)) => fpv_rule(b, sense),
+        (ActiveWeapon::RodFromGod, SpecialSense::Rod(sense)) => rod_rule(b, sense),
         _ => None,
+    }
+}
+
+/// The rod from god's rule with no reticle up (docs/rod-from-god.md "The
+/// rule"): a training dummy never calls, nor does a rod still reloading or
+/// a tank whose fire timer runs; a pick starts the reticle toward its cell.
+/// Draws no RNG.
+fn rod_rule(b: &Brain, sense: &RodSense) -> Option<SpecialUse> {
+    if b.ai.frog_only {
+        return None;
+    }
+    let cooling = b.me.fire_cooldown > 0.0 || b.ai.fire_timer > 0.0;
+    if let Some(pick) = sense.pick.filter(|_| !cooling) {
+        let face = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+        return Some(SpecialUse::Charge { face, aim: Some(pick.cell), why: pick.why });
+    }
+    // Its distance from the seat it knows of (`RodSense::keep_from`), while
+    // it is healthy enough not to flee: backed off out of the circle a call
+    // on that seat would crush, held a band past it facing the seat, and
+    // left to the tree further out - which brings it back in, never closer
+    // than the band.
+    let seat = sense.keep_from.filter(|_| b.me.damage < tuning().enemy_flee_damage)?;
+    let reach = rod_stand_off_px();
+    let d = b.me.position.distance_to(seat);
+    // A move that stopped against a tank or a wall: it stands where it is
+    // a while rather than grind (`Ai::rod_wait`). Its facing is kept - the
+    // reticle aims, not the hull.
+    let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+    if b.ai.rod_wait > 0.0 && d <= reach + tuning().rod_ai_band_px && !b.in_danger(b.me.position) {
+        return Some(SpecialUse::Hold { face: facing, why: "stand-off" });
+    }
+    // On its way to a spot it chose: on until it is there, a tank stands in
+    // its way or the way there is no longer open from where it is.
+    let me = b.me.position;
+    if let Some(to) = b.ai.rod_spot.filter(|&q| {
+        me.distance_to(q) > OBSTACLE_GRID_SIZE * 0.5 && q.distance_to(seat) >= reach && way_open(b, me, q) && !crowded_ahead(me, Dir::toward(me, q), b.movers, b.my_index)
+    }) {
+        return Some(SpecialUse::Approach { to, why: "stand-off" });
+    }
+    // Backed off from inside `reach` - from a cell nearer while it holds,
+    // unless its own hull is what keeps it from calling.
+    // With nowhere open to back off to it stands where it is, keeping its
+    // facing - the attack tier would only turn it about.
+    let inner = if b.ai.rod_held && !sense.self_blocks { reach - OBSTACLE_GRID_SIZE } else { reach };
+    if d < inner {
+        return match rod_stand_off(b, seat, reach + OBSTACLE_GRID_SIZE) {
+            Some(to) => Some(SpecialUse::Approach { to, why: "stand-off" }),
+            None => (!b.in_danger(b.me.position)).then_some(SpecialUse::Hold { face: facing, why: "stand-off" }),
+        };
+    }
+    if d <= reach + tuning().rod_ai_band_px && !b.in_danger(b.me.position) {
+        // A spot an ally crowds is no place to stand: one driving to its
+        // own slot would grind against a hull that never gives way. It
+        // moves round the seat to a free spot of the band instead.
+        if rod_crowded(b, b.me.position)
+            && let Some(to) = rod_free_spot(b, seat, reach + OBSTACLE_GRID_SIZE)
+        {
+            return Some(SpecialUse::Approach { to, why: "stand-off" });
+        }
+        return Some(SpecialUse::Hold { face: facing, why: "stand-off" });
+    }
+    None
+}
+
+/// Whether another tank stands within `enemy_separation_px` of a hull at
+/// `p`, hull to hull.
+fn rod_crowded(b: &Brain, p: Position) -> bool {
+    let gap = tuning().enemy_separation_px;
+    let Some(me) = b.movers.get(b.my_index) else { return false };
+    b.movers.iter().enumerate().any(|(i, other)| i != b.my_index && p.distance_to(other.position) - me.radius - other.radius <= gap)
+}
+
+/// The nearest of the eight spots `reach` out round `seat` - its row, its
+/// column and the diagonals - that this tank can make for (`rod_spot_open`).
+fn rod_free_spot(b: &Brain, seat: Position, reach: f32) -> Option<Position> {
+    let d = std::f32::consts::FRAC_1_SQRT_2;
+    let dirs = [(0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (d, -d), (d, d), (-d, d), (-d, -d)];
+    let me = b.me.position;
+    let mut spots: Vec<Position> = dirs.iter().map(|&(x, y)| seat + Vec2::new(x, y) * reach).collect();
+    spots.sort_by(|a, c| me.distance_to(*a).total_cmp(&me.distance_to(*c)));
+    spots.into_iter().find(|&q| rod_spot_open(b, q, seat, reach))
+}
+
+/// How far a rod tank keeps from the seat it knows of: a call on that
+/// seat's cell must not hold the tank itself - the circle, the friend
+/// margin, the widest hull's half - and a cell more.
+fn rod_stand_off_px() -> f32 {
+    let t = tuning();
+    t.rod_kill_radius_px + t.rod_ai_friend_margin_px + crate::battlefield::max_tank_clearance_half_extent() + OBSTACLE_GRID_SIZE
+}
+
+/// Where a rod tank too near `seat` backs off to: `reach` out from the
+/// seat along the line through the tank, else on the seat's row or column
+/// - the nearest of those it can make for (`rod_spot_open`). `None` where
+/// it can make for none.
+fn rod_stand_off(b: &Brain, seat: Position, reach: f32) -> Option<Position> {
+    let me = b.me.position;
+    let away = me - seat;
+    let len = away.length();
+    let mut spots: Vec<Position> = Vec::new();
+    if len > 1.0 {
+        spots.push(seat + away * (reach / len));
+    }
+    let mut axes: Vec<Position> = Dir::ALL.iter().map(|d| seat + d.vec() * reach).collect();
+    axes.sort_by(|a, c| me.distance_to(*a).total_cmp(&me.distance_to(*c)));
+    spots.extend(axes);
+    spots.into_iter().find(|&q| rod_spot_open(b, q, seat, reach))
+}
+
+/// Whether a rod tank can make for `q` round `seat`: on the field and
+/// joined to where it stands by a way a four-way hull drives straight - a
+/// leg along a row and one along a column, clear of every danger
+/// (`way_open`: no route round a block, which in a maze can lead anywhere,
+/// nor across a call) -, no tank crowding it there, none in its way as it
+/// sets off - two backing off past each other on one line would only push
+/// - and on its own side of the seat: the line stays `reach` less a cell
+/// clear of the seat (or no nearer than the tank is, backing off), so it
+/// never drives round the seat to the far side.
+fn rod_spot_open(b: &Brain, q: Position, seat: Position, reach: f32) -> bool {
+    let me = b.me.position;
+    let along = q - me;
+    let len2 = along.length_sqr().max(1e-6);
+    let k = ((seat - me).dot(along) / len2).clamp(0.0, 1.0);
+    let nearest = me + along * k;
+    // Never nearer the seat than it already is, inside the band.
+    let own_side = nearest.distance_to(seat) >= (reach - OBSTACLE_GRID_SIZE).min(me.distance_to(seat) - 1.0);
+    own_side && b.can_reach(q) && way_open(b, me, q) && !rod_crowded(b, q) && !crowded_ahead(me, Dir::toward(me, q), b.movers, b.my_index)
+}
+
+/// Whether a hull at `from` can drive to `to` along a row then a column,
+/// or a column then a row, every point half a cell apart in a usable nav
+/// cell outside every danger this tank does not own.
+fn way_open(b: &Brain, from: Position, to: Position) -> bool {
+    let leg = |a: Position, z: Position| {
+        let steps = (a.distance_to(z) / (OBSTACLE_GRID_SIZE * 0.5)).ceil() as usize;
+        (1..=steps).all(|i| {
+            let p = a + (z - a) * (i as f32 / steps as f32);
+            b.grid.usable(p) && !b.in_danger(p)
+        })
+    };
+    let (across, down) = (Position::new(to.x, from.y), Position::new(from.x, to.y));
+    (leg(from, across) && leg(across, to)) || (leg(from, down) && leg(down, to))
+}
+
+/// A rod tank's rule while its reticle is up (`windup_rule`): standing
+/// under a call, or with no pick left, it drops the reticle; short of the
+/// pick's cell it walks the reticle on; on it, rested
+/// `rod_ai_aim_hold_seconds` with the charge full, it lets go - the call.
+/// Never `None`.
+fn rod_aim_rule(b: &Brain, face: Dir) -> SpecialUse {
+    let sense = match b.sense {
+        SpecialSense::Rod(sense) => *sense,
+        _ => RodSense::default(),
+    };
+    if sense.under_call {
+        return SpecialUse::Drop { why: "rod-under-call" };
+    }
+    let Some(pick) = sense.pick else { return SpecialUse::Drop { why: "rod-lost" } };
+    let full = b.me.charge.is_some_and(|c| c.stage() == crate::tank::ChargeStage::Full);
+    match b.me.reticle {
+        Some(r) if full && r.cell == pick.cell && r.rest >= tuning().rod_ai_aim_hold_seconds => SpecialUse::Release { face, at_seat: pick.at_seat, why: pick.why },
+        _ => SpecialUse::Charge { face, aim: Some(pick.cell), why: "rod-aim" },
     }
 }
 
@@ -3270,7 +3537,7 @@ fn gauss_rule(b: &Brain, sense: &GaussSense) -> Option<SpecialUse> {
         }
     }
     let (face, lane) = best?;
-    Some(SpecialUse::Charge { face, why: lane.why() })
+    Some(SpecialUse::Charge { face, aim: None, why: lane.why() })
 }
 
 /// A charging gauss rail's rule (`windup_rule`): charging, it holds the
@@ -3285,10 +3552,10 @@ fn gauss_charge_rule(b: &Brain, face: Dir, sense: Option<&GaussSense>) -> Specia
     match b.me.charge.map(|c| c.stage()) {
         Some(crate::tank::ChargeStage::Full) => match lane.filter(|l| l.counts() && l.target_along().is_some()) {
             Some(lane) => SpecialUse::Release { face, at_seat: lane.at_seat.map(|(s, _)| s), why: lane.why() },
-            None => SpecialUse::Charge { face, why: "rail-wait" },
+            None => SpecialUse::Charge { face, aim: None, why: "rail-wait" },
         },
-        Some(crate::tank::ChargeStage::Overcharged) => SpecialUse::Charge { face, why: "rail-vent" },
-        _ => SpecialUse::Charge { face, why: "rail-charge" },
+        Some(crate::tank::ChargeStage::Overcharged) => SpecialUse::Charge { face, aim: None, why: "rail-vent" },
+        _ => SpecialUse::Charge { face, aim: None, why: "rail-charge" },
     }
 }
 
@@ -3402,7 +3669,13 @@ fn act_dodge(b: &mut Brain) -> Status {
 /// to hold or let go - the rail's `gauss_charge_rule` - and a charge
 /// weapon adds its arm here.
 fn windup_rule(b: &Brain, windup: crate::tank::Windup) -> Option<SpecialUse> {
+    // A charge is let go under a call (docs/rod-from-god.md "Reacting to a
+    // call"); a tell, half a second long, commits.
+    if b.me.charge.is_some() && b.in_call() {
+        return Some(SpecialUse::Drop { why: "under-call" });
+    }
     match b.me.charge.map(|c| c.weapon) {
+        Some(ActiveWeapon::RodFromGod) => Some(rod_aim_rule(b, windup.facing)),
         Some(ActiveWeapon::GaussRail) => {
             let sense = match b.sense {
                 SpecialSense::Gauss(sense) => Some(sense),
@@ -3496,6 +3769,8 @@ fn act_special(b: &mut Brain) -> Status {
             b.intent.face = Some(face);
             b.ai.commit(face);
             b.ai.special_why = Some(why);
+            b.ai.rod_spot = None;
+            b.ai.rod_held = why == "stand-off";
         }
         SpecialUse::Clear { radius } => {
             b.ai.special_why = Some("clear");
@@ -3516,16 +3791,39 @@ fn act_special(b: &mut Brain) -> Status {
             }
         }
         SpecialUse::Approach { to, why } => {
-            b.intent.move_dir = Some(b.steer(to));
+            // A stand-off's move that has stopped against a tank or a wall
+            // (`rod_ai_give_up_seconds` of no headway), or whose way leads
+            // away from its spot - the router going round something, which
+            // ends in a loop: steered off by more than half a cell, or a
+            // cell further than it has been -, is given up for
+            // `rod_ai_wait_seconds`: it stands.
+            let away = b.me.position.distance_to(to);
+            let dir = b.steer(to);
+            let lost = why == "stand-off"
+                && ((to - b.me.position).dot(dir.vec()) < -OBSTACLE_GRID_SIZE * 0.5
+                    || (b.ai.rod_spot == Some(to) && away > b.ai.rod_spot_best + OBSTACLE_GRID_SIZE));
+            if why == "stand-off" && (b.ai.stuck_timer >= tuning().rod_ai_give_up_seconds || lost) {
+                b.ai.special_why = Some(why);
+                b.ai.rod_spot = None;
+                b.ai.rod_wait = tuning().rod_ai_wait_seconds;
+                return Status::Success;
+            }
+            b.intent.move_dir = Some(dir);
             b.ai.special_why = Some(why);
+            if why == "stand-off" {
+                b.ai.rod_spot_best = if b.ai.rod_spot == Some(to) { b.ai.rod_spot_best.min(away) } else { away };
+                b.ai.rod_spot = Some(to);
+                b.ai.rod_held = false;
+            }
             if why == "to cover" || why == "back off" {
                 b.ai.place_waited += b.dt;
             }
         }
-        SpecialUse::Charge { face, why } => {
+        SpecialUse::Charge { face, aim, why } => {
             b.intent.face = Some(face);
             b.ai.commit(face);
             b.ai.special_why = Some(why);
+            b.intent.aim_cell = aim;
             // A charge running is held whatever the timer says; a new one
             // waits for it (and for the weapon's own cooldown).
             let running = b.me.charge.is_some();
@@ -3543,6 +3841,16 @@ fn act_special(b: &mut Brain) -> Status {
             b.intent.fire = false;
             b.ai.shot_at_seat = at_seat;
         }
+        SpecialUse::Drop { why } => {
+            b.ai.special_why = Some(why);
+            b.intent.fire = false;
+            b.intent.drop_charge = true;
+            // Under a call the tree goes on, to the dodge; a target lost
+            // only ends the tick standing as it was.
+            if b.in_call() {
+                return Status::Failure;
+            }
+        }
     }
     Status::Success
 }
@@ -3555,6 +3863,7 @@ fn special_fire_interval(weapon: ActiveWeapon) -> f32 {
         ActiveWeapon::Emp => tuning().emp_ai_fire_interval,
         ActiveWeapon::GaussRail => tuning().gauss_ai_fire_interval,
         ActiveWeapon::FpvSwarm => tuning().fpv_enemy_gap_seconds,
+        ActiveWeapon::RodFromGod => tuning().rod_ai_fire_interval,
         _ => tuning().enemy_fire_interval,
     }
 }

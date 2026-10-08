@@ -54,6 +54,7 @@ struct Setting {
     portal_hop_cost: u32,
     ford_cost: i32,
     lava_cost: i32,
+    crater_cost: i32,
 }
 
 impl Setting {
@@ -66,6 +67,7 @@ impl Setting {
             portal_hop_cost: t.portal_hop_cost.to_bits(),
             ford_cost: t.water_ford_path_cost,
             lava_cost: t.lava_ford_path_cost,
+            crater_cost: t.rod_crater_path_cost,
         }
     }
 }
@@ -223,6 +225,18 @@ impl Game {
         // A lava ford burns: the router crosses one only when the way round
         // is far longer (docs/volcano.md).
         grid.weigh(self.lava.ford_cells(), t.lava_ford_path_cost.max(1) as u32);
+        // A rod's dry crater is a pit (docs/rod-from-god.md): dear too, a
+        // filled one priced above as the ford it is. Making a crater empties
+        // the kept grid, so the base is priced again.
+        if !self.craters.is_empty() {
+            let dry: Vec<Position> = self
+                .craters
+                .cells()
+                .filter(|&(c, r)| self.water.depth_of_cell(c, r) == crate::ground::Depth::Dry)
+                .map(|(c, r)| crate::map::cell_to_world(c, r))
+                .collect();
+            grid.weigh(dry.into_iter(), t.rod_crater_path_cost.max(1) as u32);
+        }
         grid
     }
 
@@ -345,6 +359,13 @@ impl Game {
         // an enemy would rather go round than cross.
         if t.enemy_danger_route_cost > 0 && self.any_emp() {
             grid.surcharge(self.danger_route_cells(&grid).into_iter(), t.enemy_danger_route_cost as u32);
+        }
+        // A rod's call (docs/rod-from-god.md "Reacting to a call"): its
+        // circle is dear for the countdown, so the fields go round it.
+        if !self.zones.is_empty() {
+            for (at, cost) in self.zone_route_cells(&grid) {
+                grid.surcharge(std::iter::once(at), cost);
+            }
         }
         for &(pos, _) in &players {
             grid.add_field(pos);

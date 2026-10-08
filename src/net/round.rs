@@ -255,6 +255,11 @@ pub struct OnlineRound<T: Transport> {
     own_drones: Vec<OwnDrone>,
     /// The next own launch's number (`OwnDrone::id`), from 0 each round.
     next_own_drone: u32,
+    /// This seat's rods called on its own release, drawn until the room's
+    /// zone claims them (`OwnCall`).
+    own_calls: Vec<OwnCall>,
+    /// The next own call's number (`OwnCall::id`), from 0 each round.
+    next_own_call: u32,
     /// How many ticks ahead of the picture this seat's latest input lands
     /// in the room (`incoming_lead_ticks`), as last measured: how long a
     /// press waits to be seen in the room's picture.
@@ -315,6 +320,8 @@ impl<T: Transport> OnlineRound<T> {
             incoming_drawn: std::collections::BTreeMap::new(),
             own_drones: Vec::new(),
             next_own_drone: 0,
+            own_calls: Vec::new(),
+            next_own_call: 0,
             lead_ticks: 0.0,
             note: None,
             ended: None,
@@ -714,6 +721,8 @@ impl<T: Transport> OnlineRound<T> {
     fn welcomed(&mut self, welcome: &Welcome, arrived: i64) {
         self.own_drones.clear();
         self.next_own_drone = 0;
+        self.own_calls.clear();
+        self.next_own_call = 0;
         if let Some(before) = self.tuning_before.take() {
             tuning::replace_now(before);
         }
@@ -826,6 +835,11 @@ impl<T: Transport> OnlineRound<T> {
             if self.client_hull && let Some(pose) = predictor.pose() {
                 msg = msg.with_pose(pose);
             }
+            // A rod's reticle stands where this client has it, on the
+            // room's copy too (docs/rod-from-god.md "The reticle report").
+            if let Some(cell) = predictor.reticle_report() {
+                msg = msg.with_reticle(crate::net::encode::reticle_code(predictor.field_cols(), cell));
+            }
         }
         self.client.send_prepared(&msg);
     }
@@ -890,10 +904,12 @@ impl<T: Transport> OnlineRound<T> {
                 Some(seat) if predicting_shots => apply::Show::OwnShotsDrawn { seat, presses },
                 _ => apply::Show::All,
             };
-            // A launch it drew claims the room's copy of that drone.
+            // A launch it drew claims the room's copy of that drone, and a
+            // call it drew the room's zone.
             if let Some(seat) = self.client.seat() {
                 for i in show.presses_drawn(&frame.snapshot) {
                     claim_own_drone(&mut self.own_drones, &frame.snapshot.events, i, seat);
+                    claim_own_call(&mut self.own_calls, &frame.snapshot.events, i, seat);
                 }
             }
             if let Some(game) = self.replica.as_mut() {
@@ -962,6 +978,46 @@ impl<T: Transport> OnlineRound<T> {
         if let Some(predictor) = self.predictor.as_mut() {
             predictor.decay(dt);
         }
+        self.place_own_calls(dt);
+    }
+
+    /// One frame of this seat's own calls (`OwnCall`) and every zone's
+    /// countdown: the countdowns run on this client's present - the
+    /// picture's clock plus the lead its own inputs are ahead of it in
+    /// the room, the time the seat has to get its hull out - and each call
+    /// it drew is a provisional zone from its release until the room's
+    /// zone claims it, or until the refusal wait passes with none.
+    fn place_own_calls(&mut self, dt: f32) {
+        let lead = self.lead_ticks * PHYSICS_FIXED_DT;
+        let refusal = self.predictor.as_ref().map_or(1.0, |p| p.refusal_after());
+        let seat = self.client.seat();
+        let Some(game) = self.replica.as_mut() else { return };
+        game.set_zone_lead(lead);
+        for own in &mut self.own_calls {
+            own.since += dt;
+        }
+        self.own_calls.retain(|own| !own.claimed && own.since < refusal);
+        let Some(seat) = seat else {
+            game.set_provisional_zones(&[]);
+            return;
+        };
+        let countdown = tuning().rod_countdown_seconds;
+        let now = game.time + lead;
+        let zones: Vec<crate::zone::Zone> = self
+            .own_calls
+            .iter_mut()
+            .map(|own| {
+                let until = *own.until.get_or_insert(now + countdown - own.since);
+                crate::zone::Zone {
+                    id: crate::zone::PROVISIONAL_ZONE_BASE + own.id,
+                    kind: crate::zone::ZoneKind::Rod(crate::rod::RodCall { cell: own.press.cell, seat: Some(seat) }),
+                    owner: crate::shell::Owner::Player(seat),
+                    centre: crate::map::cell_to_world(own.press.cell.0, own.press.cell.1),
+                    until,
+                }
+            })
+            .collect();
+        game.set_provisional_zones(&zones);
     }
 
     /// Put the predicted hull where the local seat is drawn.
@@ -1009,6 +1065,8 @@ impl<T: Transport> OnlineRound<T> {
         // module's cells and the HUD's gauge from the press frame to the
         // release frame (docs/gauss-rail.md "Online").
         game.set_seat_charge(seat as usize, predictor.charge());
+        // A rod's reticle likewise, stepping with the stick at once.
+        game.show_seat_reticle(seat as usize, predictor.reticle());
         true
     }
 
@@ -1120,6 +1178,14 @@ impl<T: Transport> OnlineRound<T> {
                     let id = self.next_own_drone;
                     self.next_own_drone = self.next_own_drone.wrapping_add(1) & OWN_DRONE_ID_MASK;
                     self.own_drones.push(OwnDrone { id, press, since: 0.0, lead, room: None });
+                }
+                // A call: its beam and circle from the release frame, its
+                // uplink lit now.
+                crate::net::predict::PressShow::Rod(press) => {
+                    game.flash_seat_rod(seat);
+                    let id = self.next_own_call;
+                    self.next_own_call = self.next_own_call.wrapping_add(1) & OWN_CALL_ID_MASK;
+                    self.own_calls.push(OwnCall { id, press, since: 0.0, until: None, claimed: false });
                 }
             }
         }
@@ -1371,6 +1437,26 @@ struct OwnDrone {
     room: Option<(u16, f32)>,
 }
 
+/// A rod this seat called on its own release (docs/rod-from-god.md
+/// "Wire"), drawn by this client as a provisional zone until the room's
+/// `RodCalled` for it is handed over - the room's zone, on the same cell,
+/// is the call from then on.
+#[derive(Clone, Copy, Debug)]
+struct OwnCall {
+    /// Its number this round (`OnlineRound::next_own_call`): its provisional
+    /// zone's id past `zone::PROVISIONAL_ZONE_BASE`, the same every frame it
+    /// is drawn.
+    id: u32,
+    press: crate::net::predict::RodPress,
+    /// Seconds since the release.
+    since: f32,
+    /// When it lands on the replica's clock, set the first frame it is
+    /// drawn: the countdown's full length from the present.
+    until: Option<f32>,
+    /// The room's `RodCalled` for it has been handed over.
+    claimed: bool,
+}
+
 /// The id a drone drawn by this client carries in the replica: past every
 /// id the wire can name (`u16`), so `apply` never takes one for the room's
 /// copy of a drone.
@@ -1379,6 +1465,36 @@ const OWN_DRONE_ID_BASE: u32 = 1 << 20;
 /// `OwnDrone::id` wraps within this, so `OWN_DRONE_ID_BASE` plus it stays
 /// past every id the wire can name.
 const OWN_DRONE_ID_MASK: u32 = (1 << 20) - 1;
+
+/// The numbers an own call's provisional zone id takes past
+/// `zone::PROVISIONAL_ZONE_BASE`.
+const OWN_CALL_ID_MASK: u32 = (1 << 20) - 1;
+
+/// The room's `RodCalled` at `events[called]` is the show of a release this
+/// client drew: it claims the call that release drew - the last one waiting
+/// at or before the input tick the seat's `Fired` before it names - and any
+/// drawn call before that one still waiting was refused, and goes
+/// (`claim_own_drone`'s rule).
+fn claim_own_call(own: &mut Vec<OwnCall>, events: &[WireEvent], called: usize, seat: u8) {
+    let Some(&WireEvent::RodCalled { .. }) = events.get(called) else { return };
+    let input_tick = events[..called].iter().rev().find_map(|e| match *e {
+        WireEvent::Fired { slot, weapon: crate::net::wire::WeaponKind::RodFromGod, input_tick } if slot == seat as u16 => Some(input_tick),
+        _ => None,
+    });
+    let waiting = |c: &OwnCall| !c.claimed;
+    let claimed = match input_tick {
+        Some(tick) => own.iter().rposition(|c| waiting(c) && c.press.tick <= tick),
+        None => own.iter().position(waiting),
+    };
+    let Some(i) = claimed else { return };
+    own[i].claimed = true;
+    let mut k = 0;
+    own.retain(|c| {
+        let refused = k < i && waiting(c);
+        k += 1;
+        !refused
+    });
+}
 
 /// The room's `DroneLaunched` at `events[launched]` is the show of a press
 /// this client drew (`apply::Show::presses_drawn`): its copy goes to the
@@ -2186,6 +2302,85 @@ mod tests {
         }
         assert!(handed_over, "the room's launch reached the picture");
         assert!(swapped, "and its copy took over from the client's");
+    }
+
+    /// **A rod's call is drawn on the release and handed to the room's**
+    /// (docs/rod-from-god.md "Wire"): the reticle is the sandbox's from the
+    /// press, every packet reports its cell, the release puts a provisional
+    /// zone on the picture at once on that cell, and the room's `RodCalled`
+    /// - claimed by its `Fired`'s input tick - hands the picture to the
+    /// room's zone on the same cell; never two calls of the seat drawn.
+    #[test]
+    fn a_call_is_drawn_on_the_release_and_handed_to_the_rooms_zone() {
+        if !tuning().online_predict_shots {
+            return;
+        }
+        let (mut room, mut round) = room_and_round();
+        round.predict_own_tank = Some(true);
+        let rods = crate::simulation::debug::TankPatch { rods: Some(2), ..Default::default() };
+        room.game.debug_set_tank(0, &rods).expect("the seat's tank");
+        room.welcome();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        for tick in 1..=20u32 {
+            let s = on_schedule(&room, tick);
+            room.say(Msg::Snapshot(s));
+        }
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        room.heard();
+        let seat_zones = |round: &OnlineRound<loopback::Loopback>| -> Vec<(u32, (i32, i32))> {
+            round.game().expect("a replica").zones().iter().filter_map(|z| z.rod().map(|c| (z.id, c.cell))).collect()
+        };
+        let held = crate::tank::ticks_of(tuning().rod_settle_seconds) + 4;
+        for _ in 0..held {
+            round.frame(&Intent { fire: true, ..Intent::default() }, 1.0 / 60.0);
+        }
+        let reticle = round.game().expect("a replica").seat_reticle(0).expect("the reticle drawn from the press").cell;
+        // The trigger goes up on the packets after `FIRE_HOLD_TICKS`: the
+        // call is drawn on the frame the release is stepped.
+        let mut drawn = Vec::new();
+        for _ in 0..=crate::net::client::FIRE_HOLD_TICKS {
+            round.frame(&Intent::default(), 1.0 / 60.0);
+            drawn = seat_zones(&round);
+            if !drawn.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(drawn.len(), 1, "one call drawn on the release: {drawn:?}");
+        assert!(drawn[0].0 >= crate::zone::PROVISIONAL_ZONE_BASE, "the client's own");
+        assert_eq!(drawn[0].1, reticle, "on the reticle's cell");
+        let intents: Vec<crate::net::wire::IntentMsg> = room.heard().into_iter().filter_map(|m| if let Msg::Intent(i) = m { Some(i) } else { None }).collect();
+        let cols = encode::field_cols(&room.game);
+        assert!(intents.iter().filter(|i| i.fire).all(|i| encode::reticle_from_code(cols, i.reticle) == Some(reticle)), "every held packet reports the cell");
+        let released = intents.iter().find(|i| !i.fire && i.reticle != 0).expect("the release reports it too");
+        assert_eq!(encode::reticle_from_code(cols, released.reticle), Some(reticle));
+
+        // The room calls on the same cell on its tick 21: the release.
+        let (w, h) = room.game.map.field_size();
+        let at = crate::map::cell_to_world(reticle.0, reticle.1);
+        let id = room.game.debug_call_rod(at, false).expect("a call");
+        room.game.events.insert(0, crate::simulation::Event::Fired { slot: 0, weapon: "rod_from_god" });
+        let mut called = on_schedule(&room, 21);
+        called.acked[0] = released.tick;
+        called.events = encode::wire_events(room.game.events())
+            .into_iter()
+            .map(|e| match e {
+                WireEvent::Fired { slot, weapon, .. } => WireEvent::Fired { slot, weapon, input_tick: released.tick },
+                other => other,
+            })
+            .collect();
+        let _ = (w, h);
+        assert_eq!(called.zones.len(), 1, "the room's zone in its snapshot");
+        room.say(Msg::Snapshot(called));
+        let deadline = Instant::now() + std::time::Duration::from_secs(3);
+        let mut swapped = false;
+        while !swapped && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(4));
+            round.frame(&Intent::default(), 0.004);
+            let zones = seat_zones(&round);
+            assert!(zones.len() <= 1, "two calls of the seat drawn: {zones:?}");
+            swapped = zones == vec![(id & 0xFFFF, reticle)];
+        }
+        assert!(swapped, "the room's zone took over from the client's");
     }
 
     /// **A launch the room downs in its climb is handed over at once**:

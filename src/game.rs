@@ -303,6 +303,25 @@ impl Game {
             }
         }
 
+        // The rods' craters (docs/rod-from-god.md): over the burn mark the
+        // impact left, under the rubble it threw; filled with water under a
+        // wet sky, iced under snow.
+        if !self.craters.is_empty() {
+            let rain = crate::weather::fills_craters(self.weather, &crate::tuning::tuning());
+            for crater in self.craters.list() {
+                let at = crate::map::cell_to_world(crater.cell.0, crater.cell.1);
+                if c.culls(at) {
+                    continue;
+                }
+                let water = match self.water.depth_of_cell(crater.cell.0, crater.cell.1) {
+                    crate::ground::Depth::Shallow | crate::ground::Depth::Deep => crate::rod::CraterWater::Filled,
+                    crate::ground::Depth::Ice => crate::rod::CraterWater::Frozen,
+                    crate::ground::Depth::Dry => crate::rod::CraterWater::Dry,
+                };
+                crate::rod::draw_crater(c, crater, self.time - crater.at, water, if rain { 1.0 } else { 0.0 }, self.time);
+            }
+        }
+
         // Rubble from tiles that died this round: above the burn marks
         // (a barrel that took a wall with it scorched the ground first)
         // but under everything that still stands, so a wall built over

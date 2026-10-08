@@ -76,6 +76,8 @@ keys! {
     BUTTON_LEAVE = "button-leave";
     BUTTON_ONLINE = "button-online";
     HUD_WEAPON_OFFLINE = "hud-weapon-offline";
+    HUD_ROD_AIM = "hud-rod-aim";
+    HUD_ROD_CANCEL = "hud-rod-cancel";
     PLAYERS_TITLE = "players-title";
     PLAYERS_KEYS = "players-keys";
     PLAYERS_TOUCH = "players-touch";
@@ -1154,6 +1156,14 @@ mod text_tests {
             for line in std::iter::once(first).chain(rest) {
                 if width(line, HUD_LABEL_SIZE) > crate::hud::WEAPON_SLOT_W - 4 {
                     over.push(format!("{tag}: offline line {line:?} runs out of the weapon slot"));
+                }
+            }
+            // The rod's prompt, the first line under the left cluster, on
+            // its plate inside the vitals block's (docs/rod-from-god.md).
+            for key in [keys::HUD_ROD_AIM, keys::HUD_ROD_CANCEL] {
+                let words = catalogue.get(key);
+                if width(&words, crate::hud::HUD_STATUS_TEXT_SIZE) as f32 > crate::hud::VITALS_W + 2.0 * crate::hud::PLATE_PAD - 8.0 {
+                    over.push(format!("{tag}: rod prompt {words:?} runs out of the block"));
                 }
             }
             // The shipped stamps' names in their STAMPS rows.

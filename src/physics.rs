@@ -208,6 +208,29 @@ impl Physics {
         body.set_linvel(to_vector(velocity), true);
     }
 
+    /// Have a body's contacts look `distance` px ahead along its motion -
+    /// rapier's soft continuous collision detection: predictive contacts
+    /// against whatever lies within that much of its path, so the solver
+    /// stops it at a collider rather than a step past its face - and 0
+    /// for none. The world is in pixels with rapier's lengths in metres
+    /// (`IntegrationParameters::length_unit` 1), so its own look-ahead is
+    /// 0.02 px and its push out of an overlap 3 px/s: a body crossing more
+    /// than that in a step lands inside what it meets and creeps out over
+    /// seconds. Touches the body only when the setting changes.
+    pub fn set_look_ahead(&mut self, handle: RigidBodyHandle, distance: f32) {
+        let changes = self.world.bodies.get(handle).is_some_and(|body| body.soft_ccd_prediction() != distance);
+        if changes && let Some(body) = self.world.bodies.get_mut(handle) {
+            body.set_soft_ccd_prediction(distance);
+        }
+    }
+
+    /// The farthest any body travels in one step: rapier's speed cap
+    /// (`IntegrationParameters::max_linear_velocity`) over the step.
+    pub fn max_step_travel(&self) -> f32 {
+        let params = &self.world.integration_parameters;
+        params.max_linear_velocity() * params.dt
+    }
+
     /// Settle a tank that has just become a wreck: heavy linear and
     /// angular damping, and more surface friction.
     ///

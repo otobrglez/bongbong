@@ -432,6 +432,44 @@ impl Game {
         }
     }
 
+    /// One seat's rod reticle as a client's sandbox holds it, drawn on the
+    /// shown seat from the press frame (`net::round`).
+    pub fn show_seat_reticle(&mut self, seat: usize, reticle: Option<crate::rod::Reticle>) {
+        let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
+        if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {
+            tank.reticle = reticle;
+        }
+    }
+
+    /// One seat's rod reticle (`Tank::reticle`).
+    pub fn seat_reticle(&self, seat: usize) -> Option<crate::rod::Reticle> {
+        let entity = self.seats.get(seat).copied().flatten()?;
+        self.world.get::<&Tank>(entity).ok()?.reticle
+    }
+
+    /// The seat's rod uplink lights on a call this client drew itself.
+    pub fn flash_seat_rod(&mut self, seat: u8) {
+        let Some(entity) = self.seats.get(seat as usize).copied().flatten() else { return };
+        if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {
+            tank.kick_rod();
+        }
+    }
+
+    /// Put a zone a client drew ahead of the room's on the picture
+    /// (`Zone::provisional`), or take every such one off with `None`.
+    pub fn set_provisional_zones(&mut self, zones: &[crate::zone::Zone]) {
+        self.zones.retain(|z| !z.provisional());
+        self.zones.extend_from_slice(zones);
+        self.zones.sort_by_key(|z| z.id);
+    }
+
+    /// Seconds ahead of the picture's clock the zones' countdowns are
+    /// drawn on (`Game::zone_lead`): a client's present, where its own
+    /// hull is (docs/rod-from-god.md "Wire").
+    pub fn set_zone_lead(&mut self, lead: f32) {
+        self.zone_lead = lead.max(0.0);
+    }
+
     /// Flash `seat`'s FPV relay module, as its launch does (a client
     /// drawing its own launch on the press).
     pub fn flash_seat_fpv(&mut self, seat: u8) {

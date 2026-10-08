@@ -440,6 +440,37 @@ def fpv(d, b, st, hp):
         b.lamp(screen, 'white', z=5.6, name='fp_feed')
         b.lamp(link, 'white', z=5.7, name='fp_link')
 
+
+@LINE.module_fn('rod')
+def rod(d, b, st, hp):
+    """A rod from god's uplink on the roof (docs/rod-from-god.md): a squat
+    gunmetal base carrying a steel phased-array panel that talks to the
+    orbit, and a laser designator's lens on a short housing forward of it -
+    the red line to the reticle is drawn from that lens. `st` 0 armed, the
+    lens dim; 1 and 2 tracking a reticle, the lens red and the array's left
+    and then its right column lit red; 3 a call, the array and the lens
+    white; 4 offline, the array scorched and the lens dark. It shares the
+    missiles' hardpoint unless the design gives it its own - a tank carries
+    one special weapon at a time."""
+    hx, hy = hp.get('rod', hp['missiles'])
+    b.meta['lens'] = (hx + 0.5, hy - 2.5)
+    b.part(chamfer(hx - 2, hy - 1, hx + 2, hy + 2, tl=1, tr=1, br=1, bl=1), GUNMETAL, 'plate', 5, step=0,
+           corner=False, name='rg_base')
+    array = rect(hx - 1, hy - 1, hx + 1, hy + 1)
+    b.part(array, RUST if st == 4 else STEEL, 'grille', 5.3, step=0 if st == 4 else 1,
+           pattern=dict(period=2, dir='v'), name='rg_array')
+    b.part({(hx, hy - 2)}, STEEL, 'flat', 5.2, step=1, name='rg_housing')
+    lens = {(hx, hy - 3)}
+    b.part(lens, DARK, 'flat', 5.4, step=-1, name='rg_lens')
+    if st == 0:
+        b.lamp(lens, DIM_LENS, z=5.7, name='rg_lens_lamp')
+    elif st in (1, 2):
+        col = hx - 1 if st == 1 else hx + 1
+        b.lamp(lens, 'warn', z=5.7, name='rg_designator')
+        b.lamp({(col, y) for y in range(hy - 1, hy + 2)}, 'warn', z=5.6, name='rg_track')
+    elif st == 3:
+        b.lamp(array | lens, 'white', z=5.7, name='rg_call')
+
 # ---------------------------------------------------------------------------
 # Scout - fast recon. Silhouette: an arrowhead nose ahead of short narrow
 # runs, a small round turret with the optic pod bulging off its left cheek

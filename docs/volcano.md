@@ -104,6 +104,17 @@ rumbles and erupts on the same tick with nothing on the wire.
 Every target is a hash of the eruption and the bomb's number, never a roll:
 the only RNG the volcano draws is a blast's damage roll, as a drum's.
 
+**A rod from god sets it off** (docs/rod-from-god.md): a rod whose circle
+reaches a cell of the cone moves the volcano's cycle so the eruption it
+leads up to - from asleep or cooling the next one, from a rumble that
+rumble's own - begins on the tick after the impact (`Volcano::set_off_shift`,
+a whole number of ticks added to its hashed offset, `Volcano::set_shift`).
+The cycle runs on from there a period at a time, still a pure function of
+the clock and the shift; a set-off rumble cut short plays no tremor. An
+erupting volcano is left as it is. The shifts travel in the snapshot
+(`Snapshot::volcano_shifts`), so a replica erupts on the room's tick. No
+crater is left on the cone.
+
 ## Lamps and the night
 
 `weather = "dusk"` with `nightfall = 90.0` is dusk, the light easing into

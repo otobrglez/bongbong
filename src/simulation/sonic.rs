@@ -92,6 +92,22 @@ pub(super) fn knock_hull(physics: &mut Physics, tank: &mut Tank, dir: Vec2, spee
     Some((dv, skid))
 }
 
+/// A knocked hull's contacts look a step's travel ahead while it skids,
+/// and no further once it is back on its tracks (`Physics::set_look_ahead`):
+/// a knock's speed would otherwise carry it a step into a wall, a tile or
+/// past the field's edge - a skid ends the moment the solver stops it, and
+/// rapier pushes a body out of an overlap at 3 px/s - where now the solver
+/// stops it against the face. Run for every hull before every solver step,
+/// the room's and a client's sandbox's alike, so a hammer's, a rail's
+/// recoil, a rod's and every later knock stop the same way. A hull that is
+/// not skidding is never touched.
+pub(super) fn skid_look_ahead(physics: &mut Physics, tank: &Tank) {
+    if let Some(handle) = tank.body {
+        let ahead = if tank.skid > 0.0 && !tank.is_wreck() { physics.max_step_travel() } else { 0.0 };
+        physics.set_look_ahead(handle, ahead);
+    }
+}
+
 /// The centre and the four corners of a hull's box: the points a wave
 /// reaches it by, the nearest first.
 fn hull_points(tank: &Tank) -> [Position; 5] {
@@ -118,11 +134,12 @@ const FRONT_SLACK_PX: f32 = 8.0;
 /// "The probe's `--crate` and the spawn swap"): each weapon and the knob
 /// that is its share, in order.
 type ShareOf = fn(&Tuning) -> f32;
-const SPAWN_SWAPS: [(ActiveWeapon, ShareOf); 4] = [
+const SPAWN_SWAPS: [(ActiveWeapon, ShareOf); 5] = [
     (ActiveWeapon::SonicHammer, |t| t.enemy_special_weapon_sonic_share),
     (ActiveWeapon::Emp, |t| t.enemy_special_weapon_emp_share),
     (ActiveWeapon::GaussRail, |t| t.enemy_special_weapon_gauss_share),
     (ActiveWeapon::FpvSwarm, |t| t.enemy_special_weapon_fpv_share),
+    (ActiveWeapon::RodFromGod, |t| t.enemy_special_weapon_rod_share),
 ];
 
 /// The salt of the spawn swap's hash.
@@ -488,7 +505,7 @@ impl Game {
     /// kill is knocked along the line from the pivot (`knock`) and, an
     /// enemy, told it was hit.
     fn strike_hull(&mut self, f: &mut Frame, entity: Entity, d: f32, origin: Position, shooter: Owner, t: &Tuning) {
-        let footing = super::with_tank(&self.world, entity, |tank| Footing::at(&self.water, &self.lava, self.weather, tank.position, self.time));
+        let footing = super::with_tank(&self.world, entity, |tank| Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time));
         let survived = {
             let Ok(mut tank) = self.world.get::<&mut Tank>(entity) else { return };
             let falloff = sonic::falloff(t, d);
@@ -741,9 +758,10 @@ impl Game {
     /// standing enemy tower's reach, lined up for another live enemy - on
     /// its row or column within `enemy_fire_align_px`, inside its attack
     /// range, its sight clear and standing inside the resting point's sight
-    /// box - or in another enemy's charging rail's lane, when it does not
-    /// stand so already, since a slide across a lane leaves the seat in
-    /// none and a seat already in one is not shoved into it.
+    /// box - or in another enemy's charging rail's lane, or in a rod's call's
+    /// circle, when it does not stand so already, since a slide across a
+    /// lane leaves the seat in none and a seat already in one is not shoved
+    /// into it.
     #[allow(clippy::too_many_arguments)]
     fn lands_in_trouble(
         &self,
@@ -758,7 +776,7 @@ impl Game {
         rails: &[super::gauss::RailLane],
         t: &Tuning,
     ) -> bool {
-        let footing = Footing::at(&self.water, &self.lava, self.weather, seat.pos, self.time);
+        let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, seat.pos, self.time);
         let speed = sonic::shove_speed(t, seat.mass_factor, d);
         let reach = sonic::slide(t, speed, footing.grip);
         let line = seat.pos - origin;
@@ -799,7 +817,13 @@ impl Game {
         // A charging enemy rail's lane, through cover and whatever the range
         // (docs/gauss-rail.md).
         let in_rail = |p: Position| rails.iter().any(|l| l.slot != shooter && l.depth(p) > 0.0);
-        (in_reach(rest) && !in_reach(seat.pos)) || (in_lane(rest) && !in_lane(seat.pos)) || (in_rail(rest) && !in_rail(seat.pos))
+        // A rod's call standing (docs/rod-from-god.md): its circle, which
+        // crushes whoever is in it when it lands.
+        let in_call = |p: Position| self.zones.iter().any(|z| z.rod().is_some() && p.distance_to(z.centre) <= z.radius(t));
+        (in_reach(rest) && !in_reach(seat.pos))
+            || (in_lane(rest) && !in_lane(seat.pos))
+            || (in_rail(rest) && !in_rail(seat.pos))
+            || (in_call(rest) && !in_call(seat.pos))
     }
 
     /// Put a crate of `kind` down at the map cell nearest `at`, in its air

@@ -91,17 +91,23 @@ pub(super) struct GaussSeat {
 
 /// The room side of a charge-and-hold trigger (docs/gauss-rail.md "The
 /// charge-and-hold pattern"), one tick of it for the tank `entity`: the
-/// charge stepped (`Tank::step_charge`, the gate its `fire_cooldown`), and
-/// what the step did acted on - a start logged, a release fired
-/// (`fire_charge`), a vent cooling the weapon, an end logged and drawn.
+/// charge stepped (`Tank::step_trigger` - `step_charge`, the gate its
+/// `fire_cooldown`, a rod's reticle steered by `steer`), and what the step
+/// did acted on - a start logged, a release fired (`fire_charge`), a
+/// release the weapon turns down (a rod let go on its own tank) and a vent
+/// ending it, a vent cooling the weapon, an end logged and drawn.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn charge_trigger(f: &mut Frame, entity: Entity, tank: &mut Tank, owner: Owner, fire: bool, pressed: bool, report: Option<u32>) {
+pub(super) fn charge_trigger(f: &mut Frame, entity: Entity, tank: &mut Tank, owner: Owner, fire: bool, pressed: bool, report: Option<u32>, steer: crate::rod::Steer) {
     let weapon = tank.charge.map_or_else(|| tank.active_weapon(), |c| c.weapon);
     let open = tank.fire_cooldown <= 0.0;
-    match tank.step_charge(fire, pressed, f.dt, open, report) {
-        ChargeEdge::None | ChargeEdge::Held => {}
+    let (edge, reticle) = tank.step_trigger(fire, pressed, f.dt, open, report, steer, (f.width, f.height));
+    let edge = match edge {
+        ChargeEdge::Released(stage) if !fire_charge(f, entity, tank, owner, weapon, stage, reticle) => ChargeEdge::Ended(ChargeEnd::Fizzled),
+        edge => edge,
+    };
+    match edge {
+        ChargeEdge::None | ChargeEdge::Held | ChargeEdge::Released(_) => {}
         ChargeEdge::Started => f.events.push(Event::ChargeStarted { slot: tank.owner_slot(), weapon: weapon.name() }),
-        ChargeEdge::Released(stage) => fire_charge(f, entity, tank, owner, weapon, stage),
         ChargeEdge::Ended(end) => {
             if end == ChargeEnd::Vented
                 && let Some(rule) = weapon.charge_rule()
@@ -109,20 +115,28 @@ pub(super) fn charge_trigger(f: &mut Frame, entity: Entity, tank: &mut Tank, own
                 tank.fire_cooldown = tank.fire_cooldown.max(rule.vent_cooldown);
             }
             f.events.push(Event::ChargeEnded { slot: tank.owner_slot(), weapon: weapon.name(), end });
-            if end != ChargeEnd::Lapsed {
+            // The rail's fizzle and vent have their picture; a rod's reticle
+            // simply goes.
+            if end != ChargeEnd::Lapsed && weapon == ActiveWeapon::GaussRail {
                 f.charge_ends.push(ChargeEndFx::new(crate::gauss::muzzle(tank), end));
             }
         }
     }
 }
 
-/// Fire a released charge of `weapon` at `stage`: for the gauss rail one
-/// slug spent, `gauss_reload_seconds` before the next charge, the module's
-/// shot cell, `Event::Fired` and the slug queued for `resolve_rails` along
-/// the hull's facing - never off-aim. No RNG.
-pub(super) fn fire_charge(f: &mut Frame, entity: Entity, tank: &mut Tank, owner: Owner, weapon: ActiveWeapon, stage: ChargeStage) {
+/// Fire a released charge of `weapon` at `stage`, its reticle on `reticle`
+/// for a rod: false where the weapon turns the release down (nothing
+/// spent). For the gauss rail one slug spent, `gauss_reload_seconds` before
+/// the next charge, the module's shot cell, `Event::Fired` and the slug
+/// queued for `resolve_rails` along the hull's facing - never off-aim; for
+/// the rod a call (`rod::fire_rod`). No RNG.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn fire_charge(f: &mut Frame, entity: Entity, tank: &mut Tank, owner: Owner, weapon: ActiveWeapon, stage: ChargeStage, reticle: Option<(i32, i32)>) -> bool {
+    if weapon == ActiveWeapon::RodFromGod {
+        return super::rod::fire_rod(f, tank, owner, reticle);
+    }
     if weapon != ActiveWeapon::GaussRail || tank.gauss_slugs <= 0 {
-        return;
+        return false;
     }
     tank.gauss_slugs -= 1;
     tank.fire_cooldown = tuning().gauss_reload_seconds;
@@ -137,6 +151,7 @@ pub(super) fn fire_charge(f: &mut Frame, entity: Entity, tank: &mut Tank, owner:
         dir,
         overcharged: stage == ChargeStage::Overcharged,
     });
+    true
 }
 
 /// A slug's recoil on the hull that fired it along `dir`
@@ -163,12 +178,21 @@ pub(super) fn recoil_hull(physics: &mut crate::physics::Physics, tank: &mut Tank
 }
 
 /// What one predicted tick of a seat's charge did
-/// (`Game::predict_seat_with`): the step's edge, and where the slug would
-/// leave from as the hull stood before its recoil - judged from (`start`),
-/// drawn from (`muzzle`), along `dir`.
+/// (`Game::predict_seat_with`): the step's edge and its weapon, and for the
+/// rail where the slug would leave from as the hull stood before its
+/// recoil - judged from (`start`), drawn from (`muzzle`), along `dir` - for
+/// the rod the cell its reticle stood on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SeatCharge {
     pub edge: ChargeEdge,
+    /// The weapon the charge is for: the gauss rail's slug, the rod's call.
+    pub weapon: ActiveWeapon,
+    /// A rod's reticle cell as it stood when the step began: where a
+    /// release calls.
+    pub reticle: Option<(i32, i32)>,
+    /// The cell the hull stood on as the trigger was stepped: a release
+    /// with the reticle there is the cancel (`rod::fire_rod`).
+    pub hull_cell: (i32, i32),
     pub start: Position,
     pub muzzle: Position,
     pub dir: Vec2,
@@ -391,12 +415,12 @@ impl Game {
     /// recoil is not sent as a `Shoved` - its client kicks it on the
     /// release - but the pose validator still allows the knock's speed.
     fn rail_recoil(&mut self, f: &mut Frame, shooter: Entity, dir: Vec2, overcharged: bool) {
-        let (water, lava, weather, time) = (&self.water, &self.lava, self.weather, self.time);
+        let (water, lava, craters, weather, time) = (&self.water, &self.lava, &self.craters, self.weather, self.time);
         let Ok(mut tank) = self.world.get::<&mut Tank>(shooter) else { return };
         if tank.is_wreck() {
             return;
         }
-        let footing = Footing::at(water, lava, weather, tank.position, time);
+        let footing = Footing::at(water, lava, craters, weather, tank.position, time);
         if let Some((dv, skid)) = recoil_hull(&mut self.physics, &mut tank, dir, overcharged, footing) {
             f.shoves.allow_knock(tank.owner(), dv, skid);
         }

@@ -10,6 +10,8 @@ button-leave = VEN
 button-online = SPLET
 
 hud-weapon-offline = IZPAD OROŽJA
+hud-rod-aim = NAMERI, NATO SPUSTI ZA UDAR
+hud-rod-cancel = SPUSTI TUKAJ ZA PREKLIC
 
 players-title = Koliko igralcev?
 players-keys = P1 puščice + preslednica    P2 WASD + levi Shift
@@ -363,6 +365,7 @@ tool-sonic_hammer = zvočno kladivo
 tool-emp_burst = emp sunek
 tool-gauss_rail = gaussov top
 tool-fpv_swarm = roj dronov
+tool-rod_from_god = božja palica
 tool-tesla = tesla stolp
 tool-tesla_enemy = sovr. tesla
 tool-gun_tower = strojnica
@@ -386,6 +389,7 @@ tool-short-sonic_hammer = zvok
 tool-short-emp_burst = emp
 tool-short-gauss_rail = tir
 tool-short-fpv_swarm = dron
+tool-short-rod_from_god = palica
 tool-short-volcano = vulkan
 tool-short-tesla = tesla
 tool-short-tesla_enemy = s.tsl
