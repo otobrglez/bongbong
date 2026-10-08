@@ -57,6 +57,12 @@ pub struct RippleTuning {
 }
 
 impl RippleFx {
+    /// A ripple's start (ripple units) and pace as a multiple of this
+    /// effect's speed, for `static/shockwave.fs` (`Shockwave::ring`).
+    pub fn start_and_sign(&self, shock: &crate::shockwave::Shockwave) -> (f32, f32) {
+        shock.ring(self.speed, crate::tuning::tuning().well_form_seconds)
+    }
+
     /// Compile `shader_path` and set up the uniforms that never change after
     /// startup: the ripple frame (`shockwave::RIPPLE_FRAME`) and this
     /// instance's `tuning`. Every
@@ -64,19 +70,6 @@ impl RippleFx {
     /// own `RippleFx`, and each may point at its own fragment shader file as
     /// well as its own tuning, so a new effect can look genuinely different
     /// rather than just differently timed.
-    /// A ripple's start (ripple units) and pace as a multiple of this
-    /// effect's speed (`static/shockwave.fs`): 0 and 1 for an outward ring;
-    /// an inward one starts at its reach and closes on its centre over
-    /// `well_form_seconds` (docs/gravity-well.md "The snap").
-    pub fn start_and_sign(&self, shock: &crate::shockwave::Shockwave) -> (f32, f32) {
-        if !shock.inward {
-            return (0.0, 1.0);
-        }
-        let start = shock.start / RIPPLE_FRAME.1;
-        let seconds = crate::tuning::tuning().well_form_seconds.max(0.05);
-        (start, -start / (seconds * self.speed.max(1e-3)))
-    }
-
     pub fn load(
         rl: &mut RaylibHandle,
         thread: &RaylibThread,

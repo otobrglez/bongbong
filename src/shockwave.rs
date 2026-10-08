@@ -65,6 +65,20 @@ impl Shockwave {
         Shockwave { center, time: 0.0, strength, start, inward: true }
     }
 
+    /// Where its ring starts, in `RIPPLE_FRAME` heights, and how fast it
+    /// runs as a multiple of the ripple's `speed` (the shader's `starts`
+    /// and `signs`, `static/shockwave.fs`): 0 and 1 for an outward ring,
+    /// every ripple but a gravity well's snap, so those draw as they
+    /// always did; an inward one starts at its reach and closes on its
+    /// centre over `close_seconds` (docs/gravity-well.md "The snap").
+    pub fn ring(&self, speed: f32, close_seconds: f32) -> (f32, f32) {
+        if !self.inward {
+            return (0.0, 1.0);
+        }
+        let start = self.start / RIPPLE_FRAME.1;
+        (start, -start / (close_seconds.max(0.05) * speed.max(1e-3)))
+    }
+
     /// Punch left in it: strength faded by how much of its life is gone.
     /// `Game::finish_frame` evicts by this rather than by age, so a barrel
     /// cascade's little fuse pops cannot shove out the tank explosion that
@@ -144,6 +158,28 @@ pub fn shake_reach(at: Position, view: Rectangle, t: &Tuning) -> f32 {
     }
     let screens = ((dx / view.width.max(1.0)).powi(2) + (dy / view.height.max(1.0)).powi(2)).sqrt();
     (1.0 - screens / fade).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod ring_tests {
+    use super::*;
+
+    /// An outward ripple is start 0 and sign 1 - the shader's ring
+    /// `times * speed`, as it always was - and an inward one starts at its
+    /// reach and stands on its centre when its close time is up.
+    #[test]
+    fn an_inward_ripple_contracts_and_an_outward_one_is_unchanged() {
+        let at = Position::new(300.0, 200.0);
+        assert_eq!(Shockwave::new(at).ring(1.3, 0.4), (0.0, 1.0));
+        assert_eq!(Shockwave::scaled(at, 0.6).ring(1.3, 0.4), (0.0, 1.0));
+        let snap = Shockwave::inward(at, 0.35, 128.0);
+        let (speed, close) = (1.3, 0.4);
+        let (start, sign) = snap.ring(speed, close);
+        assert!((start - 128.0 / RIPPLE_FRAME.1).abs() < 1e-6, "from its reach");
+        let radius = |t: f32| (start + sign * t * speed).max(0.0);
+        assert!(radius(close * 0.5) < start && radius(close * 0.5) > 0.0, "running in");
+        assert!(radius(close).abs() < 1e-5, "on its centre at the close");
+    }
 }
 
 #[cfg(test)]
