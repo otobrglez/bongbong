@@ -906,6 +906,25 @@ struct TankTrack {
     away: bool,
     // How many times the round rolled this tank in again.
     rerolls: u32,
+    // The last frame a gravity well's pull held it (`TankSnapshot::pulled`):
+    // an anomaly within `AFTER_PULL_FRAMES` of it is tagged on its tank
+    // (`shown_label`), so what a pull or a collapse leaves is told apart.
+    last_pulled: Option<u32>,
+}
+
+/// How long after a gravity well's pull an anomaly is tagged as the well's
+/// (`TankTrack::shown_label`, docs/gravity-well.md "Probe"): three seconds.
+const AFTER_PULL_FRAMES: u32 = 180;
+
+impl TankTrack {
+    /// The tank's label for an `ANOMALY` line: `/after-pull` added within
+    /// `AFTER_PULL_FRAMES` of a well's pull on it.
+    fn shown_label(&self, frame: u32) -> String {
+        match self.last_pulled {
+            Some(f) if frame.saturating_sub(f) <= AFTER_PULL_FRAMES => format!("{}/after-pull", self.label),
+            _ => self.label.clone(),
+        }
+    }
 }
 
 impl TankTrack {
@@ -1006,6 +1025,7 @@ impl TankTrack {
             time_to_engage: None,
             away: false,
             rerolls: 0,
+            last_pulled: None,
         }
     }
 
@@ -1329,6 +1349,9 @@ fn check_anomalies(
             track.last_fire_frame = Some(frame);
         }
         track.prev_ammo = Some(ammo);
+        if tank.pulled {
+            track.last_pulled = Some(frame);
+        }
         if OUT_OF_ITS_HANDS.iter().any(|(_, out)| out(tank)) {
             track.rejoin(tank, frame);
             continue;
@@ -1354,7 +1377,7 @@ fn check_anomalies(
                     round,
                     seed,
                     frame,
-                    &track.label,
+                    &track.shown_label(frame),
                     "stale-start",
                     &format!("hasn't left spawn in {STALE_START_FRAMES} frames"),
                     pos,
@@ -1379,7 +1402,7 @@ fn check_anomalies(
                     round,
                     seed,
                     frame,
-                    &track.label,
+                    &track.shown_label(frame),
                     "stall",
                     &format!("speed <{STALL_SPEED_EPS:.0}px/s for {STALL_FRAMES_THRESHOLD} frames"),
                     pos,
@@ -1402,7 +1425,7 @@ fn check_anomalies(
                 round,
                 seed,
                 frame,
-                &track.label,
+                &track.shown_label(frame),
                 "border-stuck",
                 &format!("within {BORDER_MARGIN:.0}px of a wall for {BORDER_FRAMES_THRESHOLD} frames"),
                 pos,
@@ -1434,7 +1457,7 @@ fn check_anomalies(
                         round,
                         seed,
                         frame,
-                        &track.label,
+                        &track.shown_label(frame),
                         "jitter",
                         &format!(
                             "{JITTER_THRESHOLD}+ heading flip-flops within {JITTER_WINDOW_FRAMES} frames"
@@ -1476,7 +1499,7 @@ fn check_anomalies(
                             round,
                             seed,
                             frame,
-                            &track.label,
+                            &track.shown_label(frame),
                             "spin",
                             &format!(
                                 "{:.0}-degree same-direction heading rotation within {} frames (net drift {net_drift:.0}px)",
@@ -1540,7 +1563,7 @@ fn check_anomalies(
                     round,
                     seed,
                     frame,
-                    &track.label,
+                    &track.shown_label(frame),
                     "churn",
                     &format!(
                         "traveled {:.0}px but net displacement only {net:.0}px over {CHURN_WINDOW_FRAMES} frames",
@@ -1569,7 +1592,7 @@ fn check_anomalies(
                 round,
                 seed,
                 frame,
-                &track.label,
+                &track.shown_label(frame),
                 "wall-grind",
                 &format!(
                     "driving into static terrain for {GRIND_FRAMES} frames (speed {speed:.0} of commanded {cmd_speed:.0}px/s, impulse {:.0})",
@@ -1603,7 +1626,7 @@ fn check_anomalies(
                 round,
                 seed,
                 frame,
-                &track.label,
+                &track.shown_label(frame),
                 "bump-rate",
                 &format!(
                     "{} static-terrain bumps within {BUMP_WINDOW_FRAMES} frames (cap {BUMP_RATE_MAX})",
@@ -1630,7 +1653,7 @@ fn check_anomalies(
                 round,
                 seed,
                 frame,
-                &track.label,
+                &track.shown_label(frame),
                 "low-progress",
                 &format!(
                     "achieving {speed:.0}px/s of a commanded {cmd_speed:.0}px/s for {PROGRESS_FRAMES} frames"
@@ -1659,7 +1682,7 @@ fn check_anomalies(
                 round,
                 seed,
                 frame,
-                &track.label,
+                &track.shown_label(frame),
                 "tank-grind",
                 &format!(
                     "pressed against another tank for {GRIND_FRAMES} frames (speed {speed:.0} of commanded {cmd_speed:.0}px/s, impulse {:.0})",
@@ -1689,7 +1712,7 @@ fn check_anomalies(
                 round,
                 seed,
                 frame,
-                &track.label,
+                &track.shown_label(frame),
                 "pile-up",
                 &format!("touching, with {piled} other live enemies inside {PILEUP_RADIUS:.0}px, for {PILEUP_FRAMES} frames"),
                 pos,
@@ -1715,7 +1738,7 @@ fn check_anomalies(
                 round,
                 seed,
                 frame,
-                &track.label,
+                &track.shown_label(frame),
                 "clustering",
                 &format!(
                     "{CLUSTER_MIN_GROUP}+ enemies mutually within {CLUSTER_RADIUS:.0}px for {CLUSTER_FRAMES_THRESHOLD} frames"
@@ -2213,7 +2236,7 @@ fn run_round(
                 round,
                 game.round_seed(),
                 frames_run,
-                &track.label,
+                &track.shown_label(frames_run),
                 "never-arrived",
                 &format!(
                     "alive, route existed ({cells} cells, ideal {:.1}s) but no engagement in {elapsed:.1}s (budget {budget:.1}s)",
