@@ -187,7 +187,8 @@ pub(super) fn swap_spawn_special_with(t: &Tuning, enemy: &mut Tank, slot: usize,
 /// `armed` is every live hammer tank healthy enough to close in (entity,
 /// owner slot, position, the seat it fights), `half_of` a hammer tank's hull half extents, `tanks`
 /// every live tank with a body by slot and `friends` every live enemy by
-/// slot with its hull points. No RNG.
+/// slot with its hull points; `pulled` says a point stands in a gravity
+/// well's pull, where no spot is taken (docs/gravity-well.md). No RNG.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn closer_spots(
     t: &Tuning,
@@ -199,6 +200,7 @@ pub(super) fn closer_spots(
     tanks: &[(usize, Position)],
     friends: &[(usize, [Position; 6])],
     block: impl Fn((i32, i32)) -> Block,
+    pulled: impl Fn(Position) -> bool,
 ) -> BTreeMap<Entity, Position> {
     let mut out = BTreeMap::new();
     if t.sonic_ai_closers <= 0 {
@@ -218,7 +220,7 @@ pub(super) fn closer_spots(
             .into_iter()
             .filter_map(|side| {
                 let at = seat.pos + side.vec() * out_by;
-                if !grid.usable(at) {
+                if !grid.usable(at) || pulled(at) {
                     return None;
                 }
                 let facing = Dir::toward(at, seat.pos);
@@ -678,7 +680,10 @@ impl Game {
         // closer's place.
         let fit: Vec<(Entity, usize, Position, u8)> =
             armed.iter().copied().filter(|a| self.world.get::<&Tank>(a.0).is_ok_and(|tank| tank.damage < t.enemy_flee_damage)).collect();
-        let spots = closer_spots(&t, &fit, half_of, seats, grid, field, &all_tanks, &friends, |cell| blocks.get(&cell).copied().unwrap_or(Block::Open));
+        let pulling = self.zones.iter().any(|z| z.well().is_some());
+        let spots = closer_spots(&t, &fit, half_of, seats, grid, field, &all_tanks, &friends, |cell| blocks.get(&cell).copied().unwrap_or(Block::Open), |p| {
+            pulling && self.in_a_pull(p)
+        });
         for &(entity, slot, me, target) in &armed {
             let Ok(ai) = self.world.get::<&Ai>(entity) else { continue };
             let mut sense = HammerSense { spot: spots.get(&entity).copied(), ..HammerSense::default() };

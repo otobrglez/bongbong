@@ -891,11 +891,13 @@ commits. `act_pull`:
 
 1. **Brace** (`brace`): it turns broadside - of the two cardinals across
    the pull, the one nearer its bearing to the seat it fights (ties to the
-   one nearer its facing) - and holds still (`Ai::bracing`, `why:
-   "brace"`): its tracks hold, and the current along them is nothing. A
-   seat lined up along that facing is fired on as the attack tier fires
-   (`hold_and_fire`, by `generic_fire`'s rule for what it carries), so a
-   braced titan is still a gun. A heavy chassis stands its ground until the
+   one nearer its facing) - and commands no movement (`Ai::bracing`, `why:
+   "brace"`): its tracks hold the side pull. On the core's row or column
+   nothing runs along them and it stands; off it, the current's share along
+   its tracks rolls it onto that line, where it stands. A seat lined up
+   along that facing is fired on as the attack tier fires (`hold_and_fire`,
+   its aim settling over the ticks it stays lined up, by `generic_fire`'s
+   rule for what it carries), so a braced titan is still a gun. A heavy chassis stands its ground until the
    collapse or until the pull on it grows past its grip (it is dragged in,
    or a second well sums onto it), when it escapes as below.
 2. **Across** (`"across"`): it drives the cardinal **perpendicular** to its
@@ -906,8 +908,9 @@ commits. `act_pull`:
    perpendicular; else straight away; else `Failure`. The way is latched
    (`Ai::pull_escape`) until the tank stands `enemy_danger_clear_px`
    outside every pull, and chosen again only when it is blocked. Steering
-   holds the heading (`Ai::commit`); a perpendicular is never a turn round,
-   so it never spins.
+   holds the heading (`Ai::commit`), and the latched way turns the hull at
+   most once - a perpendicular can be its facing turned round, never a
+   spin.
 
 No RNG, ties on `Dir::ALL` order. `AiSnapshot::pull` names the arm. A
 disabled enemy (the EMP) does not think and so does not react: it coasts on
@@ -1626,7 +1629,7 @@ Wire:
   catches beyond the one it was used on (collateral) is not a shot at it.
   Budget 0.
 - **What to watch** in the armed and crate runs: `spin` from the escape
-  (a perpendicular is never a turn round, so a spin there is a bug),
+  (the latched way turns a hull at most once, so a spin there is a bug),
   `jitter` at a pull's edge (the escape's latch), `pile-up`/`clustering`
   round a herd (the herd's slots stand 176 px out), `never-arrived` on the
   field maps (a wave's route round a well), `border-stuck` (a pull dragging
@@ -1731,12 +1734,12 @@ Fields (the seven of `just probe-fields`, 3600 frames):
   on the fields, against 76 and 203 with one seat). They found two things,
   both fixed here: an enemy that launched its last well kept the well's
   eight-second fire timer and stood lined up on its shells for the rest of
-  it (`Brain::cap_fire_timer`, test
-  `an_enemy_that_spent_its_last_well_fires_its_shells_at_once`); and the
-  probe read an attacker settled on the seat it targets as a stall when
+  it (the launch that spends the last well now leaves the generic pace,
+  test `an_enemy_that_spent_its_last_well_fires_its_shells_at_once`); and
+  the probe read an attacker settled on the seat it targets as a stall when
   the other seat was nearer (fixture stalls 58 to 0,
-  `TankTrack::deliberate_hold` now reads a firing solution on any live
-  seat). Against the two-seat yardstick, in `destroy` like for like, the
+  `TankTrack::deliberate_hold` now reads a firing solution on the seat the
+  enemy fights, `TankSnapshot::target_seat`). Against the two-seat yardstick, in `destroy` like for like, the
   armed pack is under it in every kind but never-arrived on the fields (6
   lines against 3).
 - **Never-arrived that is not the well's.** The two-seat field lines are
@@ -1917,7 +1920,7 @@ Fields (the seven of `just probe-fields`, 3600 frames):
     nothing).
 18. **The reaction is across, and heavies brace** - decided by the drive's
     own numbers (`holds_broadside`) above a mass threshold, latched, never a
-    turn round. A well is no danger (the dodge's way out is radial) and no
+    spin. A well is no danger (the dodge's way out is radial) and no
     edge hold: a route surcharge.
 19. **The dodge comes before the pull**: a rod's circle kills, a well
     drags.

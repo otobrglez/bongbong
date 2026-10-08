@@ -1513,13 +1513,19 @@ impl Ai {
         matches!(self.special_why, Some("orb") | Some("anchor"))
     }
 
-    /// Whether it waited outside a danger this tick (`kept_out`).
+    /// How far along its flight its orb is to anchor (px from the gun
+    /// line's muzzle), the plan it launched it on.
+    pub(crate) fn well_anchor_px(&self) -> f32 {
+        self.well_anchor_px
+    }
+
     /// The behaviour tree's last leaf and its special's arm, for the
     /// probe's trace (`TankSnapshot::action`).
     pub fn action(&self) -> (Option<&'static str>, Option<&'static str>) {
         (self.last_action, self.special_why.or(self.pull_why))
     }
 
+    /// Whether it waited outside a danger this tick (`kept_out`).
     pub(crate) fn kept_out(&self) -> bool {
         self.kept_out
     }
@@ -2679,18 +2685,6 @@ impl Brain<'_> {
     /// never actually hits the slow end in practice - it's the "more
     /// resources, more aggressive" half; wants_retreat/act_flee are the
     /// "running low, fall back" half.
-    /// A special's pacing (`special_fire_interval`, up to several seconds)
-    /// does not carry over to the weapon it falls back on once it is spent:
-    /// the timer it left is cut to the longest a generic shot waits
-    /// (`enemy_fire_interval`), or a tank that launched its last well would
-    /// stand lined up on its shells for the rest of the well's interval.
-    /// A timer only a generic shot or a breach set is never longer, so this
-    /// changes nothing for a tank that never carried a special.
-    fn cap_fire_timer(&mut self) {
-        let longest = tuning().enemy_fire_interval.max(tuning().enemy_fire_interval_aggressive);
-        self.ai.fire_timer = self.ai.fire_timer.min(longest);
-    }
-
     fn fire_interval(&self) -> f32 {
         // A held laser charge or minigun ammo costs no shells, so either one
         // counts as full ammo confidence for pacing purposes - same
@@ -2829,7 +2823,6 @@ impl Brain<'_> {
         if !generic_fire(self.me.active_weapon()) {
             return;
         }
-        self.cap_fire_timer();
 
         if self.ai.aim_settle >= tuning().enemy_aim_settle && self.ai.fire_timer <= 0.0 {
             let blocked = self.friendly_blocks_shot(fire_dir, range);
@@ -3373,6 +3366,13 @@ fn special_rule(b: &Brain) -> Option<SpecialUse> {
     if b.in_call() || b.yields_to_pull() {
         return None;
     }
+    // Its orb in flight owns the trigger until it anchors - its last orb
+    // too, when the trigger would fire shells next (`well::anchor_press`).
+    if crate::well::anchor_press(b.me)
+        && let SpecialSense::Well(sense) = b.sense
+    {
+        return well_rule(b, sense);
+    }
     match (b.me.active_weapon(), b.sense) {
         (ActiveWeapon::SonicHammer, SpecialSense::Hammer(sense)) => hammer_rule(b, sense),
         (ActiveWeapon::Emp, SpecialSense::Emp(sense)) => emp_rule(b, sense),
@@ -3406,13 +3406,15 @@ fn well_rule(b: &Brain, sense: &WellSense) -> Option<SpecialUse> {
 
 /// The `pull` tier (docs/gravity-well.md): a heavy chassis whose tracks
 /// hold turns broadside - the cardinal across the pull nearer its bearing
-/// to the seat it fights - and stands, firing on a seat lined up along
-/// that facing as the attack tier fires; any other drives across the pull
-/// on its own side of the core (`well::escape_dir`), the way latched while
-/// it stays open (`Ai::pull_escape`). No RNG but the attack's own shot.
+/// to the seat it fights - and commands no movement (off the core's row or
+/// column the current along its tracks rolls it onto that line, where it
+/// stands), firing on a seat lined up along that facing as the attack tier
+/// fires, its aim settling over the ticks it stays lined up; any other
+/// drives across the pull on its own side of the core
+/// (`well::escape_dir`), the way latched while it stays open
+/// (`Ai::pull_escape`). No RNG but the attack's own shot.
 fn act_pull(b: &mut Brain) -> Status {
     let Some(pull) = b.ai.pull else { return Status::Failure };
-    b.reset_aim();
     let me = b.me.position;
     let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
     if pull.brace && pull.inside {
@@ -3423,13 +3425,17 @@ fn act_pull(b: &mut Brain) -> Status {
         let at_seat = !b.hunting_frog();
         if fire_dir == face && off_axis <= tuning().enemy_fire_align_px && in_front && b.line_of_sight && (!at_seat || b.may_fire_at_seat()) {
             let range = b.dist_to_target();
+            // Its aim settles across the ticks it stays lined up, as the
+            // attack tier's does.
             b.hold_and_fire(face, range, at_seat.then_some(b.ai.target_player));
         } else {
+            b.reset_aim();
             b.intent.face = Some(face);
             b.ai.commit(face);
         }
         return Status::Success;
     }
+    b.reset_aim();
     let open = |d: Dir| b.walls_ahead[d.index()].is_none() && !b.grid.blocked_ahead(me, d.vec());
     let way = b.ai.pull_escape.filter(|&d| open(d)).or_else(|| crate::well::escape_dir(me, pull.core, open));
     let Some(way) = way else {
@@ -4079,7 +4085,9 @@ fn act_special(b: &mut Brain) -> Status {
             b.ai.special_why = Some(why);
             if b.ai.fire_timer <= 0.0 && b.me.fire_cooldown <= 0.0 {
                 b.intent.fire = true;
-                b.ai.fire_timer = special_fire_interval(b.me.active_weapon());
+                // The launch that spends its last well leaves the shells it
+                // falls back on their own pace, not the well's.
+                b.ai.fire_timer = if b.me.wells <= 1 { b.fire_interval() } else { special_fire_interval(b.me.active_weapon()) };
                 b.ai.shot_at_seat = at_seat;
                 b.ai.well_anchor_px = anchor_px;
             }
@@ -4231,7 +4239,6 @@ fn act_breach(b: &mut Brain) -> Status {
     b.ai.commit(breach.dir);
     let burning = b.walls_ahead[breach.dir.index()].is_some_and(|w| w.burning);
     let reach = b.me.hull_size() * 0.5 + tuning().enemy_breach_reach_px;
-    b.cap_fire_timer();
     if !burning && b.ai.fire_timer <= 0.0 && !b.friendly_blocks_shot(breach.dir, reach) {
         b.ai.fire_timer = tuning().enemy_breach_fire_interval;
         b.intent.fire = true;

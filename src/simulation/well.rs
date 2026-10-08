@@ -971,7 +971,22 @@ impl Game {
             let steps = (len / TROUBLE_STEP_PX).ceil().max(1.0) as i32;
             (0..=steps).any(|i| trouble(from + (to - from) * (i as f32 / steps as f32)))
         };
-        let wells: Vec<Position> = self.zones.iter().filter(|z| z.well().is_some()).map(|z| z.centre).collect();
+        // A well on its way stands as one: every orb in flight where it
+        // will anchor - an enemy's at its planned distance, a seat's at its
+        // range - for "not twice", and an enemy's seats in its pull are
+        // spoken for ("one well a seat").
+        let coming: Vec<(Position, bool)> = self
+            .orbs
+            .iter()
+            .map(|o| {
+                let enemy = matches!(o.owner, Owner::Enemy(_));
+                let plan = if enemy { self.tank_of(o.owner).and_then(|e| self.world.get::<&Ai>(e).ok().map(|ai| ai.well_anchor_px())) } else { None };
+                let left = (plan.unwrap_or(t.well_orb_range_px).min(t.well_orb_range_px) - o.flown).max(0.0);
+                let speed = o.velocity.length();
+                (if speed > 1e-3 { o.position + o.velocity * (left / speed) } else { o.position }, enemy)
+            })
+            .collect();
+        let wells: Vec<Position> = self.zones.iter().filter(|z| z.well().is_some()).map(|z| z.centre).chain(coming.iter().map(|c| c.0)).collect();
         // The tiles an orb floats over.
         let low: Vec<Entity> = self
             .world
@@ -985,22 +1000,28 @@ impl Game {
             allies.iter().filter(|&&(c, half, v)| crate::emp::box_reach(p, c, half) <= r + margin || crate::emp::box_reach(p, c + v * lead, half) <= r + margin).count()
                 + usize::from(enemy_frog.is_some_and(|fp| fp.distance_to(p) <= r + margin))
         };
-        let mut planned: Vec<u8> = Vec::new();
+        let mut planned: Vec<u8> = seat_boxes
+            .iter()
+            .filter(|s| coming.iter().any(|&(c, enemy)| enemy && crate::emp::box_reach(c, s.centre, s.half) <= r))
+            .map(|s| s.seat)
+            .collect();
         for (_, entity) in armed {
             let Ok(tank) = self.world.get::<&Tank>(entity) else { continue };
             let Ok(ai) = self.world.get::<&Ai>(entity) else { continue };
             let me = tank.position;
             let mut sense = WellSense::default();
-            let counted: Vec<&Seat> = seat_boxes
+            let seen: Vec<&Seat> = seat_boxes
                 .iter()
                 .filter(|s| !(s.concealed && !ai.is_hit_alerted()))
                 .filter(|s| me.distance_to(s.pos) <= s.sight && crate::ai::in_sight_box_of((half_w, half_h), s.pos, me))
-                .filter(|s| !planned.contains(&s.seat))
                 .collect();
+            let counted: Vec<&Seat> = seen.iter().copied().filter(|s| !planned.contains(&s.seat)).collect();
+            // Its own orb in flight weighs every seat it sees, spoken for or
+            // not.
             if let Some(id) = tank.orb
                 && let Some(o) = self.orbs.iter().find(|o| o.id == id)
             {
-                let seats_in = counted.iter().filter(|s| crate::emp::box_reach(o.position, s.centre, s.half) <= r).count();
+                let seats_in = seen.iter().filter(|s| crate::emp::box_reach(o.position, s.centre, s.half) <= r).count();
                 sense.orb = Some((o.flown, allies_at(o.position, t.well_form_seconds) > seats_in));
             }
             if ai.frog_only || tank.orb.is_some() || tank.special_down() || counted.is_empty() {

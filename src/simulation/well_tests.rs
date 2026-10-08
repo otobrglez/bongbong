@@ -725,13 +725,18 @@ fn a_round_with_the_well_replays_bit_for_bit() {
 /// A round with two seats, both assaults with nothing special, seat 0 at
 /// `a` and seat 1 at `b`, facing north.
 fn two_seats(a: Position, b: Position) -> Game {
+    two_seats_on("", a, b)
+}
+
+/// `two_seats` on an open field plus `extra` cells.
+fn two_seats_on(extra: &str, a: Position, b: Position) -> Game {
     let mut game = Game::default();
     game.seed_override = Some(7);
     game.show_intro = false;
     game.level_overrides.mission = Some(Mission::Destroy);
     game.players = PlayerCount::from_count(2).expect("two seats");
-    let map = "version = 1\ntanks = 0\ntank = \"assault\"\ntank2 = \"assault\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"3,12\" = { kind = \"start2\" }\n";
-    game.map = MapFile::from_toml_str(map).expect("test map parses");
+    let map = format!("version = 1\ntanks = 0\ntank = \"assault\"\ntank2 = \"assault\"\ncells.\"3,6\" = {{ kind = \"start\" }}\ncells.\"3,12\" = {{ kind = \"start2\" }}\n{extra}");
+    game.map = MapFile::from_toml_str(&map).expect("test map parses");
     game.init(W, H);
     for (i, at) in [a, b].into_iter().enumerate() {
         let e = game.seat(i).expect("a seat");
@@ -815,23 +820,27 @@ fn the_generic_tiers_never_fire_the_well() {
 }
 
 /// A tank that launched its last well fires its shells at the generic
-/// pace, not after the rest of the well's `well_ai_fire_interval`.
+/// pace once the orb is down, not after the rest of the well's
+/// `well_ai_fire_interval`.
 #[test]
 fn an_enemy_that_spent_its_last_well_fires_its_shells_at_once() {
-    let mut game = round_with("", Mission::Destroy, None);
+    let t = tuning();
+    let mut game = round_with("cells.\"19,8\" = { kind = \"barrel\", drum = \"oil\" }\n", Mission::Destroy, None);
     game.place_tank(seat(&game), MID, Some(0.0)).expect("placed");
-    let enemy = well_enemy(&mut game, MID - Vec2::new(200.0, 0.0), 1, 90.0);
-    with_tank_mut(&game.world, enemy, |t| {
-        t.wells = 0;
-        t.shells_ammo = tuning().max_shells;
+    let enemy = well_enemy(&mut game, MID - Vec2::new(250.0, 0.0), 1, 90.0);
+    with_tank_mut(&game.world, enemy, |tank| {
+        tank.wells = 1;
+        tank.shells_ammo = t.max_shells;
     });
-    game.world.get::<&mut Ai>(enemy).unwrap().set_fire_timer(tuning().well_ai_fire_interval);
     let slot = slot_of(&game, enemy);
-    let seen = idle(&mut game, ticks(tuning().enemy_fire_interval + tuning().enemy_aim_settle + 1.0));
+    let (why, _) = launch(&mut game, enemy, 1.0);
+    assert!(why.is_some(), "it launches its last well");
+    let seen = idle(&mut game, ticks(t.enemy_fire_interval + t.enemy_aim_settle + 2.0));
+    assert!(anchors_of(&seen, slot).len() == 1, "its orb anchors: {seen:?}");
     assert!(
         seen.iter().any(|e| matches!(e, Event::Fired { slot: s, weapon: "shell" } if *s == slot)),
         "lined up on the seat, it fires a shell well inside the well's {} s",
-        tuning().well_ai_fire_interval
+        t.well_ai_fire_interval
     );
 }
 
@@ -989,3 +998,251 @@ fn an_owned_hull_is_allowed_the_pull_and_no_more() {
     let far = MID + Vec2::new(t.well_radius_px + 80.0, 0.0);
     assert!(pose(&mut game, far, toward).is_err(), "no pull, no allowance");
 }
+
+// --- the AI's arms and its pull -------------------------------------------
+
+/// Steps `game` up to `seconds` until `enemy` launches an orb, its fire
+/// timer run out first so it may launch on its first think: the arm its
+/// rule launched it for (`AiSnapshot::special` on that tick), and every
+/// event seen.
+fn launch(game: &mut Game, enemy: Entity, seconds: f32) -> (Option<&'static str>, Vec<Event>) {
+    game.world.get::<&mut Ai>(enemy).unwrap().set_fire_timer(0.0);
+    let slot = slot_of(game, enemy);
+    let mut seen = Vec::new();
+    for _ in 0..ticks(seconds) {
+        let events = step(game, false);
+        let fired = events.iter().any(|e| matches!(e, Event::Fired { slot: s, weapon: "gravity_well" } if *s == slot));
+        seen.extend(events);
+        if fired {
+            return (snapshot(game, enemy).special, seen);
+        }
+    }
+    (None, seen)
+}
+
+fn anchors_of(seen: &[Event], slot: usize) -> Vec<(Position, AnchorBy)> {
+    seen.iter().filter_map(|e| if let Event::WellAnchored { slot: s, x, y, by, .. } = *e { (s == slot).then_some((Position::new(x, y), by)) } else { None }).collect()
+}
+
+/// Its last orb is still its rule's to anchor: with its wells spent the
+/// trigger would fire shells, yet the rule holds it released until the orb
+/// has flown its plan and presses then - no shell in between.
+#[test]
+fn an_enemy_anchors_its_last_orb_by_its_rule() {
+    let mut game = two_seats(MID + Vec2::new(0.0, -40.0), MID + Vec2::new(0.0, 40.0));
+    let enemy = well_enemy(&mut game, MID - Vec2::new(300.0, 0.0), 1, 90.0);
+    with_tank_mut(&game.world, enemy, |t| {
+        t.wells = 1;
+        t.shells_ammo = tuning().max_shells;
+    });
+    let slot = slot_of(&game, enemy);
+    let (why, mut seen) = launch(&mut game, enemy, 2.0);
+    assert_eq!(why, Some("clump"));
+    assert_eq!(with_tank(&game.world, enemy, |t| t.wells), 0, "its last");
+    let launched = seen.len();
+    let mut pressed_by = None;
+    for _ in 0..ticks(3.0) {
+        let events = step(&mut game, false);
+        if events.iter().any(|e| matches!(e, Event::WellAnchored { slot: s, .. } if *s == slot)) {
+            pressed_by = Some(snapshot(&game, enemy).special);
+        }
+        seen.extend(events);
+    }
+    let mine = anchors_of(&seen, slot);
+    assert_eq!(mine.len(), 1, "{seen:?}");
+    assert_eq!(mine[0].1, AnchorBy::Press);
+    assert_eq!(pressed_by, Some(Some("anchor")), "its rule's press, not a shell's");
+    let anchored_at = seen.iter().position(|e| matches!(e, Event::WellAnchored { slot: s, .. } if *s == slot)).unwrap();
+    assert!(
+        !seen[launched..anchored_at].iter().any(|e| matches!(e, Event::Fired { slot: s, .. } if *s == slot)),
+        "no shell between the launch and the anchor"
+    );
+    let r = tuning().well_radius_px;
+    for i in 0..2 {
+        let at = pos(&game, game.seat(i).unwrap());
+        assert!(at.distance_to(mine[0].0) <= r + 32.0, "seat {i} in the pull: {at:?} from {:?}", mine[0].0);
+    }
+}
+
+/// A seat pulled into drums is trouble: one seat in the open, a drum beside
+/// it, an enemy carrying wells across the field - it launches for it.
+#[test]
+fn an_enemy_anchors_to_pull_a_seat_into_drums() {
+    let mut game = round_with("cells.\"19,8\" = { kind = \"barrel\", drum = \"oil\" }\n", Mission::Destroy, None);
+    game.place_tank(seat(&game), MID, Some(0.0)).expect("placed");
+    let enemy = well_enemy(&mut game, MID - Vec2::new(300.0, 0.0), 1, 90.0);
+    let (why, _) = launch(&mut game, enemy, 2.0);
+    assert_eq!(why, Some("trouble"));
+}
+
+/// A seat pulled off the frog it guards: the frog west of the seat, the
+/// enemy east of it - it anchors past the seat, away from the frog, the
+/// frog itself out of the pull.
+#[test]
+fn an_enemy_anchors_to_pull_a_guard_off_its_frog() {
+    let mut game = round_with("cells.\"8,8\" = { kind = \"frog\" }\n", Mission::Protect, None);
+    let frog = crate::map::cell_to_world(8, 8);
+    let guard = frog + Vec2::new(96.0, 0.0);
+    game.place_tank(seat(&game), guard, Some(0.0)).expect("placed");
+    let enemy = well_enemy(&mut game, guard + Vec2::new(300.0, 0.0), 1, 270.0);
+    let slot = slot_of(&game, enemy);
+    let (why, mut seen) = launch(&mut game, enemy, 2.0);
+    assert_eq!(why, Some("guard"));
+    seen.extend(idle(&mut game, ticks(2.5)));
+    let mine = anchors_of(&seen, slot);
+    assert_eq!(mine.len(), 1, "{seen:?}");
+    assert!(mine[0].0.distance_to(frog) > tuning().well_radius_px + tuning().well_ai_friend_margin_px, "the frog out of the pull");
+    assert!(mine[0].0.distance_to(frog) > guard.distance_to(frog), "past the guard");
+}
+
+/// Under fire, an enemy puts a well across the line a seat shoots it along,
+/// and the seat's next shell falls into its core.
+#[test]
+fn an_enemy_under_fire_shields_itself_on_the_seats_line() {
+    let mut game = round_with("", Mission::Destroy, None);
+    // The seat at (3, 6) faces east, lined up on the enemy.
+    let enemy = well_enemy(&mut game, SEAT + Vec2::new(340.0, 0.0), 1, 270.0);
+    game.world.get::<&mut Ai>(enemy).unwrap().notify_hit();
+    let (why, _) = launch(&mut game, enemy, 1.0);
+    assert_eq!(why, Some("shield"));
+    let slot = slot_of(&game, enemy);
+    let mut seen = idle(&mut game, ticks(2.0));
+    assert_eq!(anchors_of(&seen, slot).len(), 1, "{seen:?}");
+    with_tank_mut(&game.world, seat(&game), |t| {
+        t.shells_ammo = tuning().max_shells;
+        t.fire_cooldown = 0.0;
+    });
+    seen.extend(step(&mut game, true));
+    seen.extend(idle(&mut game, ticks(1.5)));
+    assert!(swallowed(&seen).contains(&Swallow::Shell), "the seat's shell is swallowed: {seen:?}");
+    assert!(!seen.iter().any(|e| matches!(e, Event::Hit { target: HitTarget::Enemy { .. }, .. })), "and never reaches it");
+}
+
+/// No well is used on a seat from outside its sight box: the clump the
+/// rule would take stands in range of the orb, the enemy a little past the
+/// seats' boxes.
+#[test]
+fn an_enemy_never_uses_a_well_on_a_seat_from_outside_its_sight_box() {
+    let (half_w, _) = tuning().sight_box_half_px();
+    let mut game = two_seats(MID + Vec2::new(0.0, -40.0), MID + Vec2::new(0.0, 40.0));
+    let enemy = well_enemy(&mut game, MID - Vec2::new(half_w + 24.0, 0.0), 1, 90.0);
+    let slot = slot_of(&game, enemy);
+    idle(&mut game, 2);
+    assert_eq!(snapshot(&game, enemy).well, None, "no plan from off the box");
+    let (why, seen) = launch(&mut game, enemy, 0.5);
+    assert!(why.is_none() && !seen.iter().any(|e| matches!(e, Event::Fired { slot: s, weapon: "gravity_well" } if *s == slot)), "{seen:?}");
+}
+
+/// A seat hidden in tall grass is not counted while the enemy has not been
+/// shot at.
+#[test]
+fn a_seat_hidden_in_grass_is_not_counted() {
+    let grass = "cells.\"17,7\" = { kind = \"tall_grass\" }\ncells.\"17,9\" = { kind = \"tall_grass\" }\n";
+    let mut game = two_seats_on(grass, MID + Vec2::new(0.0, -40.0), MID + Vec2::new(0.0, 40.0));
+    let enemy = well_enemy(&mut game, MID - Vec2::new(300.0, 0.0), 1, 90.0);
+    let (why, _) = launch(&mut game, enemy, 1.0);
+    assert_eq!(why, None, "both seats hidden: nothing to pull together");
+    game.world.get::<&mut Ai>(enemy).unwrap().notify_hit();
+    let (why, _) = launch(&mut game, enemy, 1.0);
+    assert_eq!(why, Some("clump"), "shot at, it counts them");
+}
+
+/// One well a seat: two enemies carrying wells on the same two seats - the
+/// second leaves them to the first's orb in flight, never stacking a well.
+#[test]
+fn two_well_tanks_never_stack_on_one_seat() {
+    let mut game = two_seats(MID + Vec2::new(0.0, -40.0), MID + Vec2::new(0.0, 40.0));
+    let a = well_enemy(&mut game, MID - Vec2::new(300.0, 0.0), 1, 90.0);
+    let b = well_enemy(&mut game, MID - Vec2::new(300.0, 60.0), 1, 90.0);
+    let seen = idle(&mut game, ticks(4.0));
+    let launches = |e: Entity| {
+        let slot = slot_of(&game, e);
+        seen.iter().filter(|ev| matches!(ev, Event::Fired { slot: s, weapon: "gravity_well" } if *s == slot)).count()
+    };
+    assert_eq!(launches(a) + launches(b), 1, "one well on the pair: {seen:?}");
+}
+
+/// A braced heavy is still a gun: broadside in a pull, a seat lined up
+/// along its facing, it fires on it as the attack tier would.
+#[test]
+fn a_braced_heavy_still_fires_on_a_seat_lined_up() {
+    let mut game = round_with("", Mission::Destroy, None);
+    pulling_well(&mut game, MID);
+    // The seat south of the titan, outside the pull, facing it.
+    game.place_tank(seat(&game), MID + Vec2::new(60.0, 200.0), Some(0.0)).expect("placed");
+    let titan = bare_enemy(&mut game, MID + Vec2::new(60.0, 0.0), TankKind::Titan.row(), 180.0);
+    with_tank_mut(&game.world, titan, |t| t.shells_ammo = tuning().max_shells);
+    let slot = slot_of(&game, titan);
+    let mut braced = false;
+    let mut seen = Vec::new();
+    for _ in 0..ticks(1.5) {
+        seen.extend(step(&mut game, false));
+        braced |= snapshot(&game, titan).pull == Some("brace");
+    }
+    assert!(braced, "it braces");
+    assert!(seen.iter().any(|e| matches!(e, Event::Fired { slot: s, weapon: "shell" } if *s == slot)), "and fires: {seen:?}");
+}
+
+/// A heavy chassis braces only while its tracks hold: deep enough in that
+/// the side pull beats its grip, it drives across like any other.
+#[test]
+fn a_heavy_enemy_escapes_once_its_tracks_cannot_hold() {
+    let t = tuning();
+    let breaker = TankKind::Breaker.row();
+    let mut game = round_with("", Mission::Destroy, None);
+    pulling_well(&mut game, MID);
+    let enemy = bare_enemy(&mut game, MID + Vec2::new(90.0, 0.0), breaker, 0.0);
+    let (mass_factor, grip) = with_tank(&game.world, enemy, |tank| (tank.mass_factor(), t.tank_turn_grip_force / tank.mass()));
+    assert!(mass_factor >= t.well_ai_heavy_mass, "a heavy chassis");
+    let field = game.well_field.clone();
+    let deep = (t.well_core_px as i32..t.well_radius_px as i32)
+        .map(|d| d as f32)
+        .find(|&d| !crate::well::holds_broadside(&field, MID + Vec2::new(d, 0.0), mass_factor, grip, &t))
+        .expect("somewhere its tracks do not hold");
+    let shallow = (deep + 30.0).min(t.well_radius_px - 8.0);
+    game.place_tank(enemy, MID + Vec2::new(shallow, 0.0), Some(0.0)).expect("placed");
+    step(&mut game, false);
+    step(&mut game, false);
+    assert_eq!(snapshot(&game, enemy).pull, Some("brace"), "where they hold, it braces");
+    game.place_tank(enemy, MID + Vec2::new(deep, 0.0), Some(0.0)).expect("placed");
+    step(&mut game, false);
+    step(&mut game, false);
+    assert_eq!(snapshot(&game, enemy).pull, Some("across"), "deeper in, it escapes");
+}
+
+/// A special that is only down keeps its pacing: an EMP enemy just after
+/// its pulse, its emitter offline and its rule's interval running, holds
+/// its shells through the outage though it stands lined up on a seat.
+#[test]
+fn an_offline_emp_enemy_holds_its_shells_through_the_outage() {
+    let t = tuning();
+    let mut game = round_with("", Mission::Destroy, None);
+    game.place_tank(seat(&game), MID, Some(0.0)).expect("placed");
+    let enemy = bare_enemy(&mut game, MID - Vec2::new(200.0, 0.0), 1, 90.0);
+    with_tank_mut(&game.world, enemy, |tank| {
+        tank.take_weapon(ActiveWeapon::Emp);
+        tank.shells_ammo = t.max_shells;
+        tank.special_offline = t.emp_disable_seconds;
+    });
+    assert!(t.emp_ai_fire_interval > t.emp_disable_seconds, "the case holds at the defaults");
+    game.world.get::<&mut Ai>(enemy).unwrap().set_fire_timer(t.emp_ai_fire_interval);
+    let slot = slot_of(&game, enemy);
+    let seen = idle(&mut game, ticks(t.emp_disable_seconds - 0.1));
+    assert!(!seen.iter().any(|e| matches!(e, Event::Fired { slot: s, .. } if *s == slot)), "{seen:?}");
+}
+
+/// Routes go round a well: every nav cell inside a forming or pulling
+/// well's reach costs `well_ai_route_cost` more, none outside it.
+#[test]
+fn routes_go_round_a_well() {
+    let t = tuning();
+    let mut game = round_with("", Mission::Destroy, None);
+    let cell = |p: Position| ((p.x / crate::PATHFIND_CELL_SIZE) as usize, (p.y / crate::PATHFIND_CELL_SIZE) as usize);
+    let (inside, outside) = (cell(MID + Vec2::new(40.0, 0.0)), cell(MID + Vec2::new(t.well_radius_px + 48.0, 0.0)));
+    let before = game.route_grid(W, H);
+    game.debug_well(MID, false).expect("a well");
+    let after = game.route_grid(W, H);
+    assert_eq!(after.cost_at(inside.0, inside.1), before.cost_at(inside.0, inside.1) + t.well_ai_route_cost as u32);
+    assert_eq!(after.cost_at(outside.0, outside.1), before.cost_at(outside.0, outside.1));
+}
+
