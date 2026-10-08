@@ -4,6 +4,44 @@ What changed in each release of bongbong, newest first. Each entry is also
 that release's notes on GitHub, above the downloads. The 0.0.x builds before
 0.1.0 are in the git history.
 
+## 0.2.8 - 2026-10-08
+
+Six new special weapons, and a new arena called the armory to try them in.
+Your map edits are now kept between sessions, and the Mac version is a
+proper app.
+
+### New
+- The sonic hammer: a cone of sound that knocks tanks off their tracks, shatters glass, flattens tall grass and throws drums. Iron, brick, wood and towers block it (#109)
+- The EMP burst: a pulse that goes through walls and switches off every tank's lights, shield and special weapon for three seconds, stops enemies thinking, darkens towers and drops missiles. Your own special goes offline too (#110)
+- The gauss rail: hold fire to charge it, release at full and a slug crosses the whole field through walls and every tank in line. Overcharge it to cut iron, but hold it too long and it vents (#111)
+- The FPV swarm: six drones hover round your tank, and each press sends one diving at the nearest enemy over walls and water. A minigun, a tesla or a gun tower can shoot them down, and a tree hides you from them (#112)
+- The rod from god: steer a reticle, let go, and after a four-second countdown a strike from orbit crushes everything in its circle, shields and teammates included, and leaves a crater (#115)
+- The gravity well: fire an orb and press again to anchor it. It pulls tanks, shots, drums and grenades in for four seconds, then collapses and throws everything out. To escape, drive across the pull, not away from it (#117)
+- The armory: a new free-play arena with crates of every new weapon, some for the enemies too, plus glass, grass, drums, water, lava and towers to use them on. Open it from BUILD > FILE > LOAD, or host it online (#109, #110, #111, #112, #115, #117)
+- The range board: a bullseye on an easel, placed with the builder's ACTOR tools. Shells splinter it in stages and fire burns it to the ground (#108)
+- A map can have several skies, and each round is played under one of them. Pick them on the MAP panel's new SKY tiles (#105)
+- Your map edits are kept between sessions on desktop, web, iPhone, iPad and Android, saved automatically as you edit. A shipped map you change keeps its original, and FILE > REVERT MAP brings it back (#107)
+
+### Changed
+- The builder's MAP panel is grouped into ROUND, TANKS, FIELD and SKY, and its buttons show your choices and the tank's sprite. On a phone it shows one group at a time behind tabs, and the navigator moves out of its way (#105, #106)
+- Every button on the builder's bar now looks the same: one box, one text size and one colour rule, with PLAY and PLAY HERE in amber (#116)
+
+### Fixed
+- In Boot Camp, the frog's speech bubbles stay up about twice as long, so you have time to read them (#98)
+- The HUD's top corners no longer have an empty dark row on lava levels. The row appears only while it shows lanterns or a heat shield's gauge (#119)
+
+### Online
+- Every new weapon works in co-op rooms. Your own blast, pulse, charge, drone, strike or orb appears the moment you press (#109, #110, #111, #112, #115, #117)
+- Burning planks and range boards catch fire, char and burn out the same way in every player's window (#108)
+- A rematch with fewer players no longer keeps the larger team's wave sizes (#118)
+
+### Platforms
+- macOS: the download is now BongBong.app in a signed, notarized dmg, one app for Apple Silicon and Intel. It replaces the bare binary that macOS refused to open, and Mac testers can also get it through TestFlight (#99)
+- Web: the browser tab's icon is now the game's tank (#101)
+
+### Behind the scenes
+- Testers' dev tools can now give a player or an enemy a weapon, drop crates and change one room's tuning during an online round (#118)
+
 ## 0.2.7 - 2026-10-06
 
 Bigger maps with a camera that follows your tank, a training level, a
