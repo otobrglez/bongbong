@@ -1898,6 +1898,70 @@ mod tests {
         assert_eq!(most_wells, 1, "nor its well beside the drawn one");
     }
 
+    /// A client-owned hull in its own well's pull is never refused: the
+    /// room's validator allows the drift its sandbox puts on the hull -
+    /// standing in the pull, driving into the core, across the pull and out
+    /// against it - and the room follows the hull where the client drives
+    /// it.
+    #[test]
+    fn an_owned_hull_in_a_well_is_placed_where_its_client_says() {
+        let map = "version = 1\ntanks = 0\nmission.kind = \"protect\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"5,6\" = { kind = \"pickup\", pickup = \"gravity_well\" }\ncells.\"2,14\" = { kind = \"frog\" }\n";
+        let options = RigOptions {
+            map: MapFile::from_toml_str(map).expect("the map parses"),
+            seed: Some(0xB0B5),
+            enemies: Some(0),
+            tank_row: Some(0),
+            quality: LinkQuality::PERFECT,
+            ..RigOptions::default()
+        };
+        let (rig, link) = start(options);
+        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
+        let mut round = OnlineRound::new(client, "RIG");
+        round.set_client_hull(true);
+        let armed = |round: &OnlineRound<Loopback>| {
+            round.game().and_then(|g| g.world.query::<&crate::tank::Tank>().iter().find(|t| t.owner_slot() == 0).map(|t| t.wells > 0)).unwrap_or(false)
+        };
+        let wells = |round: &OnlineRound<Loopback>| round.game().map_or(0, |g| g.zones().iter().filter(|z| z.well().is_some()).count());
+        let frame = |round: &mut OnlineRound<Loopback>, intent: Intent| {
+            round.frame(&intent, FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+        };
+        let give_up = Instant::now() + Duration::from_secs(10);
+        while !armed(&round) {
+            frame(&mut round, Intent { move_dir: Some(Dir::Right), ..Intent::default() });
+            assert!(Instant::now() < give_up, "never armed");
+        }
+        for _ in 0..10 {
+            frame(&mut round, Intent::default());
+        }
+        // An orb off the gun line, anchored a few frames out: its well
+        // pulls the seat that fired it.
+        frame(&mut round, Intent { fire: true, ..Intent::default() });
+        for _ in 0..16 {
+            frame(&mut round, Intent::default());
+        }
+        frame(&mut round, Intent { fire: true, ..Intent::default() });
+        assert_eq!(wells(&round), 1, "anchored");
+        let start = round.own_hull_at().expect("a hull");
+        let drive = |dir| Intent { move_dir: Some(dir), ..Intent::default() };
+        for (intent, frames) in [(Intent::default(), 20), (drive(Dir::Right), 20), (drive(Dir::Up), 30), (drive(Dir::Left), 40)] {
+            for _ in 0..frames {
+                frame(&mut round, intent);
+            }
+        }
+        for _ in 0..12 {
+            frame(&mut round, Intent::default());
+        }
+        let mine = round.own_hull_at().expect("a hull");
+        assert!((mine.0 - start.0).abs() + (mine.1 - start.1).abs() > 20.0, "the hull moved: {start:?} -> {mine:?}");
+        let truth = rig.authority().expect("a snapshot");
+        let room = truth.tanks.iter().find(|t| t.id == 0).expect("the seat");
+        let (rx, ry) = (crate::net::wire::dequantise_pos(room.x), crate::net::wire::dequantise_pos(room.y));
+        assert!((rx - mine.0).abs() < 1.0 && (ry - mine.1).abs() < 1.0, "the room followed: ({rx}, {ry}) vs {mine:?}");
+        let report = round.prediction().expect("a report");
+        assert_eq!((report.nudges, report.snaps), (0, 0), "an owned hull in a pull is never corrected: {report:?}");
+    }
+
     /// Online, the seat's own EMP is on screen the frame of the press - its
     /// ring from the predicted pivot, its special offline on the shown seat
     /// so the HUD says `WPN OFFLINE` - and the room's `EmpPulse` for it is
