@@ -118,10 +118,12 @@ pub const POSE_REACH_TICKS: f32 = 4.0;
 /// solver's own nudge on the room's copy.
 pub const POSE_REACH_SLACK_PX: f32 = 8.0;
 
-/// How long a gravity well's side pull is allowed to have built a hull's
-/// slide for, in the pose validator's drift (`accept_seat_pose`): server
-/// policy, not tuning - long enough for a hull whose grip a well beats to
-/// slide on between two poses (docs/gravity-well.md "Online").
+/// How long a gravity well's side pull, past what a hull's grip holds, is
+/// allowed to have built its slide for, in the pose validator's drift
+/// (`accept_seat_pose`): server policy, not tuning - long enough for a hull
+/// whose grip a well beats to slide on between two poses, and capped with
+/// the rest of the pull at the solver's speed cap (docs/gravity-well.md
+/// "Online").
 pub const WELL_SIDE_REACH_SECONDS: f32 = 0.5;
 
 /// Ticks past a knock's skid (`sonic::knock`) the pose validator still
@@ -2686,15 +2688,25 @@ impl Game {
             let ticks = (reach_ticks as f32).max(POSE_REACH_TICKS);
             // The ground's own drift - a current, a gust - carries a hull
             // past its top speed, and the rules put it there.
-            let flow = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).flow;
+            let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time);
+            let flow = footing.flow;
             let mut drift = (flow.x * flow.x + flow.y * flow.y).sqrt();
-            // A gravity well's pull too (docs/gravity-well.md "Online"):
-            // its current at the room's copy of the hull, and what its side
-            // pull builds over `WELL_SIDE_REACH_SECONDS`.
+            // A gravity well's pull too (docs/gravity-well.md "Online"), at
+            // the room's copy of the hull on the tick the pose is for: its
+            // current along the tracks, and the slide its side pull builds
+            // past the tracks' grip over `WELL_SIDE_REACH_SECONDS` - a hull
+            // whose grip holds it slides not at all - never past the
+            // solver's speed cap, which no pull carries a hull beyond.
             if self.zones.iter().any(|z| z.well().is_some()) {
-                let field = crate::well::WellField::at(&self.zones, self.time);
-                let pull = field.hull_pull(tank.position, tank.mass_factor(), &tuning());
-                drift += pull.current.length() + pull.side.length() * WELL_SIDE_REACH_SECONDS;
+                let t = tuning();
+                let field = crate::well::WellField::at(&self.zones, self.time + PHYSICS_FIXED_DT);
+                let pull = field.hull_pull(tank.position, tank.mass_factor(), &t);
+                if !pull.is_zero() {
+                    let grip = t.tank_turn_grip_force * footing.grip / tank.mass();
+                    let slide = (pull.side.length() - grip).max(0.0) * WELL_SIDE_REACH_SECONDS;
+                    let room = (self.physics.max_speed() - tank.effective_speed() - drift).max(0.0);
+                    drift += (pull.current.length() + slide).min(room);
+                }
             }
             let reach = (tank.effective_speed() + drift) * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX;
             // A knock carries it past that too, by no more than the knock

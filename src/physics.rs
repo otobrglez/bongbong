@@ -231,6 +231,12 @@ impl Physics {
         params.max_linear_velocity() * params.dt
     }
 
+    /// The fastest any body moves (px/s): rapier's speed cap
+    /// (`IntegrationParameters::max_linear_velocity`).
+    pub fn max_speed(&self) -> f32 {
+        self.world.integration_parameters.max_linear_velocity()
+    }
+
     /// Settle a tank that has just become a wreck: heavy linear and
     /// angular damping, and more surface friction.
     ///
