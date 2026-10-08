@@ -940,9 +940,9 @@ impl TankTrack {
     /// tank standing still there is a stall); or it's parked outside
     /// ENEMY_RETREAT_RANGE with shells still below ENEMY_AMMO_RESUME
     /// (`act_retreat`'s wait-out-the-recharge hold). The firing solution is
-    /// on any live seat in `seats`, the one the AI targets not always
-    /// being the nearest (`Ai::target_player`'s hysteresis); the retreat is
-    /// measured from the nearest, `player`.
+    /// on the live seat in `seats` the AI fights (`TankSnapshot::target_seat`,
+    /// `Ai::target_player`'s hysteresis), not always the nearest; the
+    /// retreat is measured from the nearest, `player`.
     fn deliberate_hold(&self, frame: u32, tank: &TankSnapshot, player: &TankSnapshot, seats: &[&TankSnapshot]) -> bool {
         if HOLDS.iter().any(|(_, held)| held(tank)) {
             return true;
@@ -956,7 +956,7 @@ impl TankTrack {
         if player.is_wreck {
             return false;
         }
-        let aligned_in_range = seats.iter().filter(|s| !s.is_wreck).any(|s| {
+        let aligned_in_range = seats.iter().filter(|s| !s.is_wreck && tank.target_seat.is_none_or(|t| s.player == Some(t))).any(|s| {
             let dx = (s.position.x - tank.position.x).abs();
             let dy = (s.position.y - tank.position.y).abs();
             dx.min(dy) <= tuning().enemy_fire_align_px
@@ -1041,10 +1041,6 @@ impl TankTrack {
     /// it has done - its arrival at the fight, its totals, its walk's
     /// budget from the first arrival - stands.
     fn rejoin(&mut self, snapshot: &TankSnapshot, frame: u32) {
-        self.away = false;
-        self.stall_frames = 0;
-        self.border_frames = 0;
-        self.cluster_frames = 0;
         self.heading_history.clear();
         self.heading_history.push_back(snapshot.rotation);
         self.recent_flips.clear();
@@ -1052,6 +1048,16 @@ impl TankTrack {
         self.spin_sum = 0.0;
         self.spin_start_frame = frame;
         self.spin_start_pos = snapshot.position;
+        self.rejoin_motion();
+    }
+
+    /// `rejoin` for the windows over where it goes alone - the ones a
+    /// well's drag moves - its heading's kept (`STEERED_IN`).
+    fn rejoin_motion(&mut self) {
+        self.away = false;
+        self.stall_frames = 0;
+        self.border_frames = 0;
+        self.cluster_frames = 0;
         self.trail.clear();
         self.trail_path_len = 0.0;
         self.grind_frames = 0;
@@ -1059,6 +1065,103 @@ impl TankTrack {
         self.progress_frames = 0;
         self.tank_grind_frames = 0;
         self.pileup_frames = 0;
+    }
+}
+
+impl TankTrack {
+    /// The checks on which way the tank faces - facing jitter and spin -
+    /// for `tank` at `frame` standing at `pos`: run every frame the tank
+    /// steers, a gravity well's drag included (`STEERED_IN`).
+    fn check_heading(&mut self, tank: &TankSnapshot, frame: u32, pos: Position, at: (&mut Vec<(String, Position)>, u32, u64), totals: &mut AnomalyTotals) {
+        let (heat, round, seed) = at;
+        let track = self;
+        // Facing jitter: A,B,A heading flip-flops within a trailing window.
+        if track.heading_history.back() != Some(&tank.rotation) {
+            track.heading_history.push_back(tank.rotation);
+            if track.heading_history.len() > 3 {
+                track.heading_history.pop_front();
+            }
+            if track.heading_history.len() == 3
+                && track.heading_history[0] == track.heading_history[2]
+            {
+                track.recent_flips.push_back(frame);
+                while let Some(&oldest) = track.recent_flips.front() {
+                    if frame - oldest > JITTER_WINDOW_FRAMES {
+                        track.recent_flips.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+                if !track.jitter_flagged && track.recent_flips.len() as u32 >= JITTER_THRESHOLD {
+                    report(
+                        heat,
+                        round,
+                        seed,
+                        frame,
+                        &track.shown_label(frame),
+                        "jitter",
+                        &format!(
+                            "{JITTER_THRESHOLD}+ heading flip-flops within {JITTER_WINDOW_FRAMES} frames"
+                        ),
+                        pos,
+                    );
+                    track.jitter_flagged = true;
+                    totals.jitter += 1;
+                }
+            }
+        }
+
+        // Spin: chain up consecutive same-direction quarter-turns; a full
+        // circle inside SPIN_WINDOW_FRAMES that ends near where it started
+        // is a tank rotating in place, not navigating (see the SPIN_*
+        // consts' comment for why legit routing can't complete one).
+        if tank.rotation != track.last_heading {
+            let turn = signed_quarter_turn(track.last_heading, tank.rotation);
+            track.last_heading = tank.rotation;
+            match turn {
+                Some(delta) => {
+                    let same_dir =
+                        track.spin_sum != 0.0 && (track.spin_sum > 0.0) == (delta > 0.0);
+                    let in_window = frame - track.spin_start_frame <= SPIN_WINDOW_FRAMES;
+                    if same_dir && in_window {
+                        track.spin_sum += delta;
+                    } else {
+                        track.spin_sum = delta;
+                        track.spin_start_frame = frame;
+                        track.spin_start_pos = pos;
+                    }
+                    let net_drift = pos.distance_to(track.spin_start_pos);
+                    if !track.spin_flagged
+                        && track.spin_sum.abs() >= SPIN_FULL_CIRCLE_DEG
+                        && net_drift <= SPIN_NET_MAX
+                    {
+                        report(
+                            heat,
+                            round,
+                            seed,
+                            frame,
+                            &track.shown_label(frame),
+                            "spin",
+                            &format!(
+                                "{:.0}-degree same-direction heading rotation within {} frames (net drift {net_drift:.0}px)",
+                                track.spin_sum.abs(),
+                                frame - track.spin_start_frame,
+                            ),
+                            pos,
+                        );
+                        track.spin_flagged = true;
+                        totals.spin += 1;
+                        track.spin_sum = 0.0;
+                    }
+                }
+                // A 180 reversal: not a rotation - break the chain.
+                None => {
+                    track.spin_sum = 0.0;
+                    track.spin_start_frame = frame;
+                    track.spin_start_pos = pos;
+                }
+            }
+        }
     }
 }
 
@@ -1094,6 +1197,13 @@ const HOLDS: &[(&str, fn(&TankSnapshot) -> bool)] = &[
 /// never judged as the AI driving. A weapon that takes a tank's driving
 /// away adds its row.
 const OUT_OF_ITS_HANDS: &[(&str, fn(&TankSnapshot) -> bool)] = &[("disabled", |t| t.disabled), ("pulled", |t| t.pulled && !t.bracing)];
+
+/// The rows of `OUT_OF_ITS_HANDS` under which the tank still steers: a
+/// gravity well's pull moves a hull and never turns it, so while it drags
+/// one the heading checks (`TankTrack::check_heading`) run on and only the
+/// windows over where it goes start over (`TankTrack::rejoin_motion`) -
+/// the escape across a pull is judged for jitter and spin.
+const STEERED_IN: &[&str] = &["pulled"];
 
 /// Prints an `ANOMALY` line; the caller tallies the kind into
 /// `AnomalyTotals`. `seed` is the round's own effective seed
@@ -1358,8 +1468,14 @@ fn check_anomalies(
         if tank.pulled {
             track.last_pulled = Some(frame);
         }
-        if OUT_OF_ITS_HANDS.iter().any(|(_, out)| out(tank)) {
-            track.rejoin(tank, frame);
+        let out: Vec<&str> = OUT_OF_ITS_HANDS.iter().filter(|(_, out)| out(tank)).map(|(name, _)| *name).collect();
+        if !out.is_empty() {
+            if out.iter().all(|name| STEERED_IN.contains(name)) {
+                track.rejoin_motion();
+                track.check_heading(tank, frame, pos, (&mut *heat, round, seed), totals);
+            } else {
+                track.rejoin(tank, frame);
+            }
             continue;
         }
         let holding = track.deliberate_hold(frame, tank, player_snap, &players);
@@ -1440,93 +1556,7 @@ fn check_anomalies(
             totals.border_stuck += 1;
         }
 
-        // Facing jitter: A,B,A heading flip-flops within a trailing window.
-        if track.heading_history.back() != Some(&tank.rotation) {
-            track.heading_history.push_back(tank.rotation);
-            if track.heading_history.len() > 3 {
-                track.heading_history.pop_front();
-            }
-            if track.heading_history.len() == 3
-                && track.heading_history[0] == track.heading_history[2]
-            {
-                track.recent_flips.push_back(frame);
-                while let Some(&oldest) = track.recent_flips.front() {
-                    if frame - oldest > JITTER_WINDOW_FRAMES {
-                        track.recent_flips.pop_front();
-                    } else {
-                        break;
-                    }
-                }
-                if !track.jitter_flagged && track.recent_flips.len() as u32 >= JITTER_THRESHOLD {
-                    report(
-                        heat,
-                        round,
-                        seed,
-                        frame,
-                        &track.shown_label(frame),
-                        "jitter",
-                        &format!(
-                            "{JITTER_THRESHOLD}+ heading flip-flops within {JITTER_WINDOW_FRAMES} frames"
-                        ),
-                        pos,
-                    );
-                    track.jitter_flagged = true;
-                    totals.jitter += 1;
-                }
-            }
-        }
-
-        // Spin: chain up consecutive same-direction quarter-turns; a full
-        // circle inside SPIN_WINDOW_FRAMES that ends near where it started
-        // is a tank rotating in place, not navigating (see the SPIN_*
-        // consts' comment for why legit routing can't complete one).
-        if tank.rotation != track.last_heading {
-            let turn = signed_quarter_turn(track.last_heading, tank.rotation);
-            track.last_heading = tank.rotation;
-            match turn {
-                Some(delta) => {
-                    let same_dir =
-                        track.spin_sum != 0.0 && (track.spin_sum > 0.0) == (delta > 0.0);
-                    let in_window = frame - track.spin_start_frame <= SPIN_WINDOW_FRAMES;
-                    if same_dir && in_window {
-                        track.spin_sum += delta;
-                    } else {
-                        track.spin_sum = delta;
-                        track.spin_start_frame = frame;
-                        track.spin_start_pos = pos;
-                    }
-                    let net_drift = pos.distance_to(track.spin_start_pos);
-                    if !track.spin_flagged
-                        && track.spin_sum.abs() >= SPIN_FULL_CIRCLE_DEG
-                        && net_drift <= SPIN_NET_MAX
-                    {
-                        report(
-                            heat,
-                            round,
-                            seed,
-                            frame,
-                            &track.shown_label(frame),
-                            "spin",
-                            &format!(
-                                "{:.0}-degree same-direction heading rotation within {} frames (net drift {net_drift:.0}px)",
-                                track.spin_sum.abs(),
-                                frame - track.spin_start_frame,
-                            ),
-                            pos,
-                        );
-                        track.spin_flagged = true;
-                        totals.spin += 1;
-                        track.spin_sum = 0.0;
-                    }
-                }
-                // A 180 reversal: not a rotation - break the chain.
-                None => {
-                    track.spin_sum = 0.0;
-                    track.spin_start_frame = frame;
-                    track.spin_start_pos = pos;
-                }
-            }
-        }
+        track.check_heading(tank, frame, pos, (&mut *heat, round, seed), totals);
 
         // A portal jump is not travel: the frame a tank came through one
         // (`Event::Teleported`) the trail restarts at the arrival, so the

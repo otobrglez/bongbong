@@ -5529,6 +5529,7 @@ impl Game {
                     bracing: ai.is_some_and(Ai::bracing),
                     anchoring: ai.is_some_and(Ai::anchoring),
                     action: ai.map_or((None, None), Ai::action),
+                    target_seat: ai.map(Ai::target_player),
                     charging: tank.charge.is_some(),
                     disabled: tank.is_disabled(),
                     kept_out: ai.is_some_and(Ai::kept_out),
@@ -5615,6 +5616,8 @@ pub struct TankSnapshot {
     /// An enemy's behaviour-tree leaf and the arm of its special or pull
     /// tier this tick (`Ai::action`), for the probe's trace.
     pub action: (Option<&'static str>, Option<&'static str>),
+    /// The seat an enemy fights (`Ai::target_player`); `None` for a seat.
+    pub target_seat: Option<u8>,
     /// Holding a charge on its trigger (`Tank::charge`, a gauss rail or a
     /// rod's reticle): crawling or standing on purpose.
     pub charging: bool,
