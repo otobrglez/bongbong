@@ -38,6 +38,15 @@ struct Candidate {
     concealed: bool,
 }
 
+/// A drone a tower might fight this frame (`air.rs`): the air target and,
+/// for a seat's, where that seat's tank stands - a tower engages a seat's
+/// drone only from inside the seat's sight box, as it engages the seat.
+#[derive(Clone, Copy, Debug)]
+struct AirCandidate {
+    target: crate::air::AirTarget,
+    seat_pos: Option<Position>,
+}
+
 /// The number a tower's shots carry as their owner's `cell`: its row in
 /// the high byte, its column in the low one.
 pub(crate) fn tower_cell_id(cell: (i32, i32)) -> u16 {
@@ -96,7 +105,89 @@ fn cell_frame_hash(cell: (i32, i32), frame: u64, salt: u32) -> u32 {
     h
 }
 
+/// Whether `tower` may engage the drone `a` under the sight-box rule: a
+/// seat's only from inside that seat's box, an enemy's from anywhere.
+fn air_box_allows(tower: &Tower, a: &AirCandidate) -> bool {
+    !a.target.owner.is_player() || a.seat_pos.is_none_or(|seat| in_sight_box(seat, tower.position))
+}
+
 impl Game {
+    /// Every drone in the air as a tower sees it, by key; empty in a round
+    /// with none, which costs the towers nothing.
+    fn air_candidates(&self) -> Vec<AirCandidate> {
+        let targets = self.air_targets();
+        if targets.is_empty() {
+            return Vec::new();
+        }
+        let seats = self.players();
+        targets
+            .into_iter()
+            .map(|target| {
+                let seat_pos = match target.owner {
+                    Owner::Player(seat) => seats
+                        .get(seat as usize)
+                        .copied()
+                        .flatten()
+                        .and_then(|e| self.world.get::<&Tank>(e).ok().map(|t| t.position)),
+                    _ => None,
+                };
+                AirCandidate { target, seat_pos }
+            })
+            .collect()
+    }
+
+    /// The drone a gun tower fights: the nearest opposing one in `range`
+    /// (to its ground point) that its level bullets can reach - a line of
+    /// sight to the ground point - under the sight-box rule, kept until
+    /// another is `tower_switch_margin_px` nearer, ties to the lower key.
+    fn pick_air(&self, f: &Frame, tower: &Tower, air: &[AirCandidate], range: f32) -> Option<AirCandidate> {
+        if air.is_empty() {
+            return None;
+        }
+        let dist = |a: &AirCandidate| a.target.ground.distance_to(tower.position);
+        let valid = |a: &AirCandidate| {
+            tower.opposes(a.target.owner)
+                && dist(a) <= range
+                && air_box_allows(tower, a)
+                && f.terrain.line_of_sight_from(tower.entity, tower.position, a.target.ground)
+        };
+        let best = air.iter().filter(|a| valid(a)).min_by(|a, b| dist(a).total_cmp(&dist(b)).then(a.target.key.cmp(&b.target.key))).copied();
+        let current = tower.air_target.and_then(|k| air.iter().find(|a| a.target.key == k)).filter(|a| valid(a)).copied();
+        match (current, best) {
+            (Some(cur), Some(b)) if b.target.key != cur.target.key && dist(&b) + tuning().tower_switch_margin_px < dist(&cur) => Some(b),
+            (Some(cur), _) => Some(cur),
+            (None, b) => b,
+        }
+    }
+
+    /// A tesla coil's arc at a drone (docs/fpv-swarm.md): on its own clock,
+    /// every `tesla_air_gap_seconds` (slower while it burns), the nearest
+    /// opposing drone within `tesla_range` of its ground point - under the
+    /// sight-box rule, no line of sight needed, it is in the air - is struck
+    /// and falls. No charge spent, no chain, no roll: its charge on a tank
+    /// runs on beside it.
+    fn tesla_air(&mut self, f: &mut Frame, cell: (i32, i32), tower: &mut Tower, air: &[AirCandidate]) {
+        let t = tuning();
+        tower.air_cooldown = (tower.air_cooldown - f.dt).max(0.0);
+        if tower.air_cooldown > 0.0 || air.is_empty() {
+            return;
+        }
+        let dist = |a: &AirCandidate| a.target.ground.distance_to(tower.position);
+        let Some(a) = air
+            .iter()
+            .filter(|a| tower.opposes(a.target.owner) && dist(a) <= t.tesla_range && air_box_allows(tower, a))
+            .min_by(|a, b| dist(a).total_cmp(&dist(b)).then(a.target.key.cmp(&b.target.key)))
+            .copied()
+        else {
+            return;
+        };
+        let to = a.target.drawn();
+        self.tesla_bolts.push(TeslaBolt::new(tower.position, to, cell_frame_hash(cell, self.frame, 200)));
+        f.events.push(Event::TeslaStrike { x0: tower.position.x, y0: tower.position.y, x1: to.x, y1: to.y, chained: false });
+        self.strike_air(f, a.target.key, crate::air::AirStrike::Tesla);
+        tower.air_cooldown = t.tesla_air_gap_seconds / tower.fire_factor().max(0.05);
+    }
+
     /// One `Tower` per tower tile `spawn_from_map` placed, keyed by its
     /// cell; the tile's variant is its side. No RNG.
     /// A turning tower starts aimed at the middle of the field, where the
@@ -161,6 +252,7 @@ impl Game {
             return;
         }
         let cands = self.tower_candidates(f);
+        let air = self.air_candidates();
         let cells: Vec<(i32, i32)> = self.towers.keys().copied().collect();
         for cell in cells {
             let Some(mut tower) = self.towers.get(&cell).cloned() else { continue };
@@ -173,8 +265,11 @@ impl Game {
                 continue;
             }
             match tower.kind {
-                TowerKind::Tesla => self.tick_tesla(f, cell, &mut tower, &cands),
-                TowerKind::Gun => self.tick_gun(f, cell, &mut tower, &cands),
+                TowerKind::Tesla => {
+                    self.tesla_air(f, cell, &mut tower, &air);
+                    self.tick_tesla(f, cell, &mut tower, &cands)
+                }
+                TowerKind::Gun => self.tick_gun(f, cell, &mut tower, &cands, &air),
                 TowerKind::Bio => self.tick_bio(f, cell, &mut tower, &cands),
             }
             if self.towers.contains_key(&cell) {
@@ -322,18 +417,27 @@ impl Game {
 
     /// The gun tower: tracks, leads its target, and fires bursts when its
     /// turret is on the aim and no friend is in the line.
-    fn tick_gun(&mut self, f: &mut Frame, cell: (i32, i32), tower: &mut Tower, cands: &[Candidate]) {
+    fn tick_gun(&mut self, f: &mut Frame, cell: (i32, i32), tower: &mut Tower, cands: &[Candidate], air: &[AirCandidate]) {
         let t = tuning();
         tower.cooldown = (tower.cooldown - f.dt).max(0.0);
-        let target = self.pick_target(f, tower, cands, 0.0, t.gun_tower_range, true);
+        // A drone in reach comes before any tank: the gun tower is
+        // anti-air (docs/fpv-swarm.md).
+        let drone = self.pick_air(f, tower, air, t.gun_tower_range);
+        let target = if drone.is_some() { None } else { self.pick_target(f, tower, cands, 0.0, t.gun_tower_range, true) };
         tower.target = target.map(|c| c.entity);
-        if let Some(c) = target {
-            let flight = c.pos.distance_to(tower.position) / t.minigun_bullet_speed.max(1.0);
-            let aim = c.pos + c.vel * (flight * t.gun_tower_lead);
+        tower.air_target = drone.map(|a| a.target.key);
+        let aimed = match (drone, target) {
+            (Some(a), _) => Some((a.target.ground, a.target.velocity, t.gun_tower_air_lead)),
+            (None, Some(c)) => Some((c.pos, c.vel, t.gun_tower_lead)),
+            (None, None) => None,
+        };
+        if let Some((pos, vel, lead)) = aimed {
+            let flight = pos.distance_to(tower.position) / t.minigun_bullet_speed.max(1.0);
+            let aim = pos + vel * (flight * lead);
             let want = heading_to(tower.position, aim);
             tower.heading = turn_toward(tower.heading, want, t.gun_tower_turn_deg_per_second * f.dt);
             let on_aim = angle_diff(tower.heading, want).abs() <= t.gun_tower_fire_cone_deg;
-            if tower.burst_left == 0 && tower.cooldown <= 0.0 && on_aim && !friend_in_line(tower, c.pos, cands) {
+            if tower.burst_left == 0 && tower.cooldown <= 0.0 && on_aim && !friend_in_line(tower, pos, cands) {
                 tower.burst_left = t.gun_tower_burst_size.max(1) as u32;
                 tower.burst_timer = 0.0;
                 let muzzle = tower.position + unit(tower.heading) * GUN_MUZZLE_PX;

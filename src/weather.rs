@@ -964,6 +964,17 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
     for missile in game.world.query::<&Missile>().iter().filter(|m| !m.is_dead()) {
         out.push(Light::point(missile.position, 48.0, scale([1.0, 0.6, 0.3], s * 0.85 * (1.0 - 0.5 * missile.lift()))).unshadowed());
     }
+    // An FPV drone in the air, on the frames its lamp is on, in the lamp's
+    // colour: an incoming drone reads in the dark (docs/fpv-swarm.md
+    // "Drawing"). The halo throws none; the hull's own lamps already do.
+    for d in game.world.query::<&crate::fpv::Drone>().iter().filter(|d| d.in_air()) {
+        let look = crate::fpv::look_of(d, game.time, t);
+        if let Some(color) = look.lamp
+            && crate::fpv::lamp_on(game.time, look.lamp_hz, crate::pyro::unit(look.seed, 2))
+        {
+            out.push(Light::point(d.drawn(), 18.0, scale(rgb(color), t.fpv_lamp_light)).unshadowed());
+        }
+    }
     // A grenade, on the beat it flashes.
     for grenade in game.world.query::<&crate::grenade::Grenade>().iter() {
         if grenade.lamp_lit() {

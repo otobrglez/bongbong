@@ -411,6 +411,35 @@ def gauss(d, b, st, hp):
         b.lamp(bore, 'ion', z=3.5, name='gr_slug')
 
 
+@LINE.module_fn('fpv')
+def fpv(d, b, st, hp):
+    """An FPV swarm's ground-control relay on the roof (docs/fpv-swarm.md):
+    a squat gunmetal box with a dark screen on its top - the drones' feed -
+    a steel panel antenna across its front on a short mast, and a link lamp
+    at the antenna's middle. The drones themselves hover in a halo round the
+    tank and are drawn there, not here. `st` 0 armed, the lamp dim; 1
+    linked, one of its drones in the air - the screen lit and the lamp red;
+    2 a launch, the screen and the lamp white; 3 offline, the screen dark
+    and the antenna scorched. It shares the missiles' hardpoint unless the
+    design gives it its own - a tank carries one special weapon at a time."""
+    hx, hy = hp.get('fpv', hp['missiles'])
+    b.part(chamfer(hx - 2, hy - 1, hx + 2, hy + 2, tl=1, tr=1, br=1, bl=1), GUNMETAL, 'plate', 5, step=0,
+           corner=False, name='fp_box')
+    screen = rect(hx - 1, hy, hx + 1, hy + 1)
+    b.part(screen, DARK, 'flat', 5.3, step=-1 if st == 3 else 0, name='fp_screen')
+    b.part({(hx, hy - 2)}, STEEL, 'flat', 5.2, step=1, name='fp_mast')
+    bar = rect(hx - 2, hy - 3, hx + 2, hy - 3)
+    b.part(bar, RUST if st == 3 else STEEL, 'cylv', 5.4, step=0, bevel=0, name='fp_antenna')
+    link = {(hx, hy - 3)}
+    if st == 0:
+        b.lamp(link, DIM_LENS, z=5.7, name='fp_link')
+    elif st == 1:
+        b.lamp(screen, 'ion', z=5.6, name='fp_feed')
+        b.lamp(link, 'warn', z=5.7, name='fp_link')
+    elif st == 2:
+        b.lamp(screen, 'white', z=5.6, name='fp_feed')
+        b.lamp(link, 'white', z=5.7, name='fp_link')
+
 # ---------------------------------------------------------------------------
 # Scout - fast recon. Silhouette: an arrowhead nose ahead of short narrow
 # runs, a small round turret with the optic pod bulging off its left cheek

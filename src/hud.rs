@@ -79,6 +79,9 @@ pub const HUD_SONIC_COLOR: Color = Color::new(0x46, 0xC3, 0xF2, 255);
 pub const HUD_EMP_COLOR: Color = Color::new(0x4F, 0x6B, 0xFF, 255);
 /// The gauss rail's accent: its crate ink's base, hot magenta.
 pub const HUD_GAUSS_COLOR: Color = Color::new(0xFF, 0x3D, 0xD8, 255);
+/// The FPV swarm's accent: its crate's lamp crimson - the ink's light, not
+/// its ivory base, which would read as the shells' white.
+pub const HUD_FPV_COLOR: Color = Color::new(0xFF, 0x2D, 0x5F, 255);
 
 /// The builder bar's fill - the same `#151515` the web page is set in, so
 /// the bar and the page read as one surface around the field - and the
@@ -132,7 +135,10 @@ impl WeaponSlot {
     /// time `time` (an offline special's flicker).
     pub fn of(tank: &Tank, time: f32) -> WeaponSlot {
         let weapon = tank.special().unwrap_or(ActiveWeapon::Shell);
-        let (count, full) = (tank.weapon_ammo(weapon), weapon.full_load());
+        // Drones a client drew off the halo on its own press are spent
+        // here at once, as the halo shows (`Tank::fpv_lifting`).
+        let lifting = if weapon == ActiveWeapon::FpvSwarm { tank.fpv_lifting as i32 } else { 0 };
+        let (count, full) = ((tank.weapon_ammo(weapon) - lifting).max(0), weapon.full_load());
         let color = match weapon {
             ActiveWeapon::Shell => hud_number_color(count as f32, full as f32),
             special => weapon_color(special),
@@ -404,6 +410,7 @@ pub fn weapon_color(weapon: ActiveWeapon) -> Color {
         ActiveWeapon::SonicHammer => HUD_SONIC_COLOR,
         ActiveWeapon::Emp => HUD_EMP_COLOR,
         ActiveWeapon::GaussRail => HUD_GAUSS_COLOR,
+        ActiveWeapon::FpvSwarm => HUD_FPV_COLOR,
         ActiveWeapon::Shell => TEXT,
     }
 }
@@ -422,6 +429,7 @@ pub fn weapon_pickup(weapon: ActiveWeapon) -> Option<crate::pickup::PickupKind> 
         ActiveWeapon::SonicHammer => Some(PickupKind::SonicHammer),
         ActiveWeapon::Emp => Some(PickupKind::Emp),
         ActiveWeapon::GaussRail => Some(PickupKind::GaussRail),
+        ActiveWeapon::FpvSwarm => Some(PickupKind::FpvSwarm),
         ActiveWeapon::Shell => None,
     }
 }

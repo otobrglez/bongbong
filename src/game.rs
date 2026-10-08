@@ -86,6 +86,79 @@ fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, sh
         let lean = crate::pyro::smoke_lean(&crate::tuning::tuning(), tank.position, time);
         crate::pyro::draw(c, &crate::damage_stage::flames(tank, time, lean));
     }
+    // The FPV halo round the hull, over it: its shadows and drones; the
+    // lamps are the glowing pass's (`halo_of`).
+    if let Some(look) = halo_of(tank, time) {
+        let (halo_shadows, pic) = crate::fpv::compose_halo(&look, &crate::tuning::tuning());
+        if shadows {
+            crate::pyro::draw(c, &halo_shadows);
+        }
+        crate::pyro::draw(c, &pic.body);
+    }
+}
+
+/// Seconds an EMP takes to drop a halo to the ground (`halo_of`).
+const HALO_SETTLE_SECONDS: f32 = 0.25;
+
+/// How `tank`'s FPV halo is drawn at `time` (docs/fpv-swarm.md "Drawing"):
+/// the drones it holds, less the ones a client is drawing off it on its
+/// own press (`Tank::fpv_lifting`); settled on the ground while an EMP has
+/// it, tumbling down and dark on a wreck. `None` with none to draw.
+pub fn halo_of(tank: &Tank, time: f32) -> Option<crate::fpv::HaloLook> {
+    let t = crate::tuning::tuning();
+    let drones = (tank.fpv_drones - tank.fpv_lifting as i32).max(0) as usize;
+    // A wreck's halo lies beside it until its fire is out.
+    if drones == 0 || (tank.is_wreck() && tank.wreck_timer >= t.wreck_burn_seconds) {
+        return None;
+    }
+    // An EMP drops the halo over `HALO_SETTLE_SECONDS` from its start.
+    let settle = if tank.is_disabled() { ((t.emp_disable_seconds - tank.disabled) / HALO_SETTLE_SECONDS).clamp(0.0, 1.0) } else { 0.0 };
+    Some(crate::fpv::HaloLook {
+        centre: tank.position,
+        sprite_size: tank.sprite_size(),
+        drones,
+        slots: t.fpv_drones_per_pickup.max(1) as usize,
+        time,
+        lamp: crate::fpv::lamp_color(tank.owner()),
+        settle,
+        wreck_age: tank.is_wreck().then_some(tank.wreck_timer),
+        seed: tank.owner_slot() as u32,
+    })
+}
+
+/// The FPV drones' shadows on the ground under them (docs/fpv-swarm.md
+/// "Drawing"), drawn after the floor and under the tanks. `drones` in id
+/// order.
+pub fn paint_drone_shadows(c: &mut impl Canvas, drones: &[crate::fpv::Drone]) {
+    let t = crate::tuning::tuning();
+    let dir = crate::math::Vec2::new(t.shadow_dir_x, t.shadow_dir_y);
+    for d in drones {
+        crate::pyro::draw(c, &crate::fpv::compose_shadow(d.ground, d.height, t.fpv_shadow_opacity, dir));
+    }
+}
+
+/// The FPV drones in the air (docs/fpv-swarm.md "Drawing"), over
+/// everything standing - trees too: each drone's body; its lamp is the
+/// glowing pass's (`drone_lamps`). `drones` in id order.
+pub fn paint_drones(c: &mut impl Canvas, drones: &[crate::fpv::Drone], time: f32) {
+    let t = crate::tuning::tuning();
+    for d in drones {
+        crate::pyro::draw(c, &crate::fpv::compose_drone(&crate::fpv::look_of(d, time, &t)).body);
+    }
+}
+
+/// The lamps of every FPV drone - in the air and in every halo - as
+/// blocks for the glowing pass, so they read at night.
+pub fn drone_lamps(drones: &[crate::fpv::Drone], halos: &[crate::fpv::HaloLook], time: f32) -> Vec<crate::pyro::Shape> {
+    let t = crate::tuning::tuning();
+    let mut out = Vec::new();
+    for d in drones {
+        out.extend(crate::fpv::compose_drone(&crate::fpv::look_of(d, time, &t)).lamps);
+    }
+    for look in halos {
+        out.extend(crate::fpv::compose_halo(look, &t).1.lamps);
+    }
+    out
 }
 
 /// The flames on a burning tile (`Obstacle::burning`: timber and trees

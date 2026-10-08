@@ -118,10 +118,11 @@ const FRONT_SLACK_PX: f32 = 8.0;
 /// "The probe's `--crate` and the spawn swap"): each weapon and the knob
 /// that is its share, in order.
 type ShareOf = fn(&Tuning) -> f32;
-const SPAWN_SWAPS: [(ActiveWeapon, ShareOf); 3] = [
+const SPAWN_SWAPS: [(ActiveWeapon, ShareOf); 4] = [
     (ActiveWeapon::SonicHammer, |t| t.enemy_special_weapon_sonic_share),
     (ActiveWeapon::Emp, |t| t.enemy_special_weapon_emp_share),
     (ActiveWeapon::GaussRail, |t| t.enemy_special_weapon_gauss_share),
+    (ActiveWeapon::FpvSwarm, |t| t.enemy_special_weapon_fpv_share),
 ];
 
 /// The salt of the spawn swap's hash.
@@ -379,7 +380,7 @@ impl Game {
     /// Everything `wave` reaches between the front's radii `from` and `to`,
     /// struck once, in a fixed order: panes, drums, the hulls (the seats in
     /// index order, then the enemies by slot), the frogs, the lanterns, the
-    /// grenades.
+    /// grenades, the drones in the air of the side opposing the shooter.
     fn strike(&mut self, f: &mut Frame, wave: &mut SonicWave, from: f32, to: f32, t: &Tuning) {
         let band = |d: f32| d >= from && d <= to;
         let shooter = wave.owner;
@@ -468,6 +469,16 @@ impl Game {
             let Some(d) = wave.cone.reaches(g.position).filter(|&d| band(d)) else { continue };
             let dir = (g.position - origin) / d.max(1e-3);
             g.velocity += dir * (t.sonic_grenade_push_speed * sonic::falloff(t, d));
+        }
+        // Drones of the side opposing the shooter are knocked out of the
+        // air (docs/fpv-swarm.md), by key; its own side's ride it out.
+        for target in self.air_targets() {
+            if target.owner.same_side(shooter) {
+                continue;
+            }
+            if wave.cone.reaches(target.ground).is_some_and(|d| d <= to && d >= from - FRONT_SLACK_PX) {
+                self.strike_air(f, target.key, crate::air::AirStrike::Sonic);
+            }
         }
     }
 

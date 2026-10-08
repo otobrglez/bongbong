@@ -35,6 +35,7 @@ mod grenades;
 mod sonic;
 mod emp;
 mod gauss;
+mod fpv;
 mod nav;
 pub mod portals;
 pub mod present;
@@ -58,6 +59,8 @@ mod props_tests;
 mod seat_tests;
 #[cfg(test)]
 mod emp_tests;
+#[cfg(test)]
+mod fpv_tests;
 #[cfg(test)]
 mod gauss_tests;
 #[cfg(test)]
@@ -499,6 +502,23 @@ pub enum Event {
     /// The charge of `weapon` on the tank in owner slot `slot` ended
     /// without firing: let go early, held past its vent, or lost.
     ChargeEnded { slot: usize, weapon: &'static str, end: crate::tank::ChargeEnd },
+    /// A drone `id` left the halo of the tank in owner slot `slot` from its
+    /// slot's ground point (`x`, `y`) (docs/fpv-swarm.md), locked on the
+    /// tank in owner slot `target`, on the players' frog (`frog`), or on
+    /// nothing. Logged after its `Fired`, in the same tick.
+    DroneLaunched { id: u32, slot: usize, x: f32, y: f32, target: Option<usize>, frog: bool },
+    /// The drone `id`, launched by `slot`, burst at (`x`, `y`) - `crown` in
+    /// a tree's leaves.
+    DroneBurst { id: u32, slot: usize, x: f32, y: f32, crown: bool },
+    /// The drone `id` was struck in the air over (`x`, `y`), `height` px
+    /// up, by `by` (`air::AirStrike::name`), and falls.
+    DroneDowned { id: u32, x: f32, y: f32, height: f32, by: &'static str },
+    /// A downed drone `id` reached the ground at (`x`, `y`): a dud.
+    DroneCrashed { id: u32, x: f32, y: f32 },
+    /// The drone `id` lost its lock (`why`: "wreck", "gone", "canopy",
+    /// "teleport") and dives where its target last was. Not sent: the
+    /// drone's `lock` is the state.
+    DroneLockLost { id: u32, why: &'static str },
     /// A tank became a wreck (any cause) at (`x`, `y`).
     Wreck { slot: usize, x: f32, y: f32 },
     /// Ram contact between the tanks in `slot` and `other_slot`: an enemy and
@@ -1253,6 +1273,9 @@ struct Frame {
     /// Gauss rail slugs released this frame, traced by `resolve_rails` once
     /// the tank loops are done.
     pending_rails: Vec<gauss::PendingRail>,
+    /// FPV drones launched this frame, put in the world by `launch_drones`
+    /// once the tank loops are done.
+    pending_drones: Vec<fpv::PendingDrone>,
     /// Charges that ended this frame without firing, put on the field by
     /// `resolve_rails`.
     charge_ends: Vec<crate::gauss::ChargeEndFx>,
@@ -1348,6 +1371,7 @@ impl Frame {
             pending_sonic: Vec::new(),
             pending_emp: Vec::new(),
             pending_rails: Vec::new(),
+            pending_drones: Vec::new(),
             charge_ends: Vec::new(),
             flame_jets: Vec::new(),
             muzzle_flashes: Vec::new(),
@@ -2063,6 +2087,7 @@ impl Game {
             self.volcano_phase(&mut f);
             self.spawn_pending(&mut f);
             self.guide_missiles(&mut f);
+            self.guide_drones(&mut f);
             self.resolve_lasers(&mut f);
             self.resolve_rails(&mut f);
             self.resolve_flames(&mut f);
@@ -2079,6 +2104,7 @@ impl Game {
             self.resolve_projectiles::<Bullet>(&mut f, true);
             self.resolve_projectiles::<Plasma>(&mut f, true);
             self.resolve_missiles(&mut f, true);
+            self.resolve_drones(&mut f, true);
             self.resolve_grenades(&mut f, true);
             self.resolve_globs(&mut f, true);
             self.tick_cookoffs(&mut f);
@@ -2111,6 +2137,7 @@ impl Game {
             self.resolve_projectiles::<Bullet>(&mut f, false);
             self.resolve_projectiles::<Plasma>(&mut f, false);
             self.resolve_missiles(&mut f, false);
+            self.resolve_drones(&mut f, false);
             self.resolve_grenades(&mut f, false);
             self.resolve_globs(&mut f, false);
             self.tick_cookoffs(&mut f);
@@ -2824,6 +2851,10 @@ impl Game {
         }
         if self.lamps_out > 0.0 {
             self.lamps_out = (self.lamps_out - dt).max(f32::EPSILON);
+        }
+        // A drone's rotors and lamp turn on the replica's own clock.
+        for drone in self.world.query_mut::<&mut crate::fpv::Drone>() {
+            drone.age_by(dt);
         }
         // A stunned frog stays stunned until the room says it is not.
         for frog in self.world.query_mut::<&mut Frog>() {
@@ -3685,6 +3716,21 @@ impl Game {
         if self.any_rail_charging() {
             dangers.extend(self.rail_dangers());
         }
+        // What each drone-carrying enemy would launch at and from where,
+        // and every enemy a seat's drone has locked (docs/fpv-swarm.md
+        // "AI"): only when a tank carries the swarm, or a seat's drone is
+        // in the air.
+        let fpv_senses = if self.any_fpv() {
+            let seats: Vec<fpv::FpvSeat> = players
+                .iter()
+                .enumerate()
+                .map(|(i, p)| fpv::FpvSeat { seat: i as u8, entity: p.entity, pos: p.pos, live: !p.wreck && !p.entering, concealed: p.concealed, sight: p.sight })
+                .collect();
+            self.fpv_senses(f, &seats, grid, &dangers)
+        } else {
+            BTreeMap::new()
+        };
+        let air_threats = self.air_threats(grid);
 
         // --- collect pass: perception, `think`, aim and fire, exactly as
         // before. Only the impulse is deferred. ---
@@ -3748,6 +3794,7 @@ impl Game {
                     .map(|&(_, tile)| f.terrain.line_of_sight_from(tile, tank.position, at));
                 ai.set_grudge_sight(sight);
             }
+            ai.air_threat = air_threats.get(&entity).copied();
             let (mut target, mut hunting) = target_of(ai, tank);
             // A hunter that cannot route to the frog and holds no slot on
             // its ring (every slot rejected: off the map, unreachable from
@@ -3840,6 +3887,7 @@ impl Game {
                         .map(|s| SpecialSense::Hammer(*s))
                         .or_else(|| emp_senses.get(&entity).map(|s| SpecialSense::Emp(*s)))
                         .or_else(|| gauss_senses.get(&entity).map(|s| SpecialSense::Gauss(*s)))
+                        .or_else(|| fpv_senses.get(&entity).map(|s| SpecialSense::Fpv(*s)))
                         .unwrap_or(SpecialSense::None),
                     &dangers,
                 )
@@ -3858,6 +3906,8 @@ impl Game {
             // The AI paces itself with its own fire timer; `fire_cooldown`
             // is the weapon's own minimum (a burst in progress, say). A
             // weapon with a tell winds up first (`enemy_trigger`).
+            // What a drone launched now is to lock (`SpecialUse::Launch`).
+            tank.fpv_want = ai.air_want;
             enemy_trigger(&mut self.physics, f, entity, tank, owner, intent);
             pending.push(Pending {
                 entity,
@@ -3974,6 +4024,7 @@ impl Game {
             grenade.id = self.take_shot_id();
             self.world.spawn((grenade,));
         }
+        self.launch_drones(f);
     }
 
     /// Put one projectile in the world, with its `Rewind` only when it has
@@ -4082,6 +4133,7 @@ impl Game {
             for missile in self.world.query::<&mut Missile>().iter() {
                 missile.advance(PHYSICS_FIXED_DT);
             }
+            self.advance_drones(PHYSICS_FIXED_DT, (f.width, f.height));
             if step_physics {
                 self.physics.step();
                 let (bodies, colliders) = self.physics.quarantined();
@@ -4314,6 +4366,9 @@ impl Game {
             })
             .collect();
         let (portal_radius, max_passes) = (tuning().portal_shot_radius, tuning().portal_shot_max_passes.max(0) as u8);
+        // What is in the air for a shot that strikes it (`air.rs`): none on
+        // the end screen, where a bullet passes a drone by.
+        let mut air = if live && P::strikes_air() { self.air_targets() } else { Vec::new() };
         for Flight { entity, prev, pos, vel, owner, dmg, rewind, portals: through } in flying {
             // Into a portal on the way: judged only up to where it goes in.
             let entry = if through.passes < max_passes {
@@ -4351,6 +4406,29 @@ impl Game {
                 }
                 break Some((target, t));
             };
+            // An air target met first - or as the ground's hit is met, but
+            // for a tank's - stops the shot there and counts a hit on it.
+            let in_air = if air.is_empty() { None } else { f.terrain.sweep_air(&air, owner, prev, pos, P::hit_half_extent(), past) };
+            let air_first = match (in_air, hit) {
+                (Some((_, ta)), Some((ShellTarget::Tank(_), tg))) => ta < tg,
+                (Some((_, ta)), Some((_, tg))) => ta <= tg,
+                (Some(_), None) => true,
+                (None, _) => false,
+            };
+            if let (true, Some((key, ta))) = (air_first, in_air) {
+                let at = prev + (pos - prev) * ta;
+                f.impact_flashes.push(Shockwave::new(at));
+                {
+                    let mut q = self.world.query_one::<&mut P>(entity);
+                    let p = q.get().expect("projectile collected this frame still exists");
+                    p.set_position(at);
+                    p.detonate();
+                }
+                if self.strike_air(f, key, crate::air::AirStrike::Bullet) {
+                    air.retain(|a| a.key != key);
+                }
+                continue;
+            }
             let Some((target, t)) = hit else {
                 if let Some((entrance, at)) = entry {
                     self.shot_through::<P>(f, entity, entrance, at, vel);
@@ -5119,9 +5197,12 @@ impl Game {
                     sonic_ammo: tank.sonic_ammo,
                     emp_charges: tank.emp_charges,
                     gauss_slugs: tank.gauss_slugs,
+                    fpv_drones: tank.fpv_drones,
+                    fpv_out: tank.fpv_out,
                     charging: tank.charge.is_some(),
                     disabled: tank.is_disabled(),
                     kept_out: ai.is_some_and(Ai::kept_out),
+                    air_hold: ai.is_some_and(Ai::air_hold),
                     tell: tank.tell.is_some(),
                     skidding: tank.skid > 0.0,
                     plasma_ammo: tank.plasma_ammo,
@@ -5184,6 +5265,9 @@ pub struct TankSnapshot {
     pub sonic_ammo: i32,
     pub emp_charges: i32,
     pub gauss_slugs: i32,
+    /// Drones left in its FPV halo, and its drones in the air.
+    pub fpv_drones: i32,
+    pub fpv_out: u8,
     /// Holding a charge on its trigger (`Tank::charge`, a gauss rail):
     /// crawling or standing on its lane on purpose.
     pub charging: bool,
@@ -5193,6 +5277,9 @@ pub struct TankSnapshot {
     /// Waiting outside a danger it is kept out of (`Ai::kept_out`):
     /// holding still on purpose.
     pub kept_out: bool,
+    /// Standing for the FPV swarm (`Ai::air_hold`): watching its own drone
+    /// work, or under a crown while a seat's drone comes at it.
+    pub air_hold: bool,
     /// Winding up a special (`Tank::tell`): holding still on purpose.
     pub tell: bool,
     /// Knocked off its tracks (`Tank::skid`): sliding where it did not ask

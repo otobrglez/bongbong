@@ -164,7 +164,18 @@ impl Game {
     /// the opposing side take damage; tiles crack and barrels go off
     /// (`damage_obstacle`, as any blast), and crates break.
     pub(super) fn side_blast(&mut self, f: &mut Frame, center: Position, owner: Owner, params: &BlastParams) {
+        self.side_blast_sparing(f, center, owner, params, &[]);
+    }
+
+    /// `side_blast` with the tanks and frogs in `spared` left out whole -
+    /// neither hurt nor shoved: an FPV drone's burst spares what stands
+    /// under a tree's crown (docs/fpv-swarm.md "Trees"). With nothing
+    /// spared it is `side_blast`, draw for draw.
+    pub(super) fn side_blast_sparing(&mut self, f: &mut Frame, center: Position, owner: Owner, params: &BlastParams, spared: &[Entity]) {
         for player in self.players().into_iter().flatten() {
+            if spared.contains(&player) {
+                continue;
+            }
             let mut q = self.world.query_one::<&mut Tank>(player);
             let tank = q.get().expect("player entity always has a Tank");
             let hurts = !owner.same_side(tank.owner());
@@ -172,14 +183,17 @@ impl Game {
                 f.shoves.push(tank.owner(), dv);
             }
         }
-        for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
+        for (entity, tank) in self.world.query::<(Entity, &mut Tank)>().with::<&Ai>().iter() {
+            if spared.contains(&entity) {
+                continue;
+            }
             let hurts = !owner.same_side(tank.owner());
             explosion_hit(tank, center, hurts, &mut self.physics, &mut f.rng, &mut f.kills, params);
         }
         let own_side = if owner.is_player() { Side::Player } else { Side::Enemy };
         let mut dead_frogs = Vec::new();
-        for frog in self.world.query::<&mut Frog>().iter() {
-            if frog.is_dead() || frog.side == own_side {
+        for (entity, frog) in self.world.query::<(Entity, &mut Frog)>().iter() {
+            if frog.is_dead() || frog.side == own_side || spared.contains(&entity) {
                 continue;
             }
             let dist = frog.position.distance_to(center);

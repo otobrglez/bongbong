@@ -230,6 +230,20 @@ impl Game {
                         pierced.push(Pierce { at, what });
                     }
                 }
+                // Drones in the air in the lane, up to where it stopped, any
+                // side's: struck down, and the slug keeps its damage past
+                // them (docs/fpv-swarm.md).
+                let air = self.air_targets();
+                if !air.is_empty() {
+                    let span = (stop - from).length().max(f32::EPSILON);
+                    let stop_t = stopped.map_or(1.0, |at| (at - from).length() / span);
+                    for (key, tt) in super::hits::Terrain::air_along(&air, from, stop, half, stop_t) {
+                        let at = from + (stop - from) * tt;
+                        self.strike_air(f, key, crate::air::AirStrike::Rail);
+                        pierced.push(Pierce { at, what: Pierced::Drone });
+                    }
+                    pierced.sort_by(|a, b| (a.at - from).length().total_cmp(&(b.at - from).length()));
+                }
                 let through = stopped.is_none() && entry.is_some();
                 let leg_end = stopped.unwrap_or(stop);
                 f.events.push(Event::RailSlug {

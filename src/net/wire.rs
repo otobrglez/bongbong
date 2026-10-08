@@ -188,11 +188,12 @@ pub enum WeaponKind {
     SonicHammer,
     Emp,
     GaussRail,
+    FpvSwarm,
 }
 
 impl WeaponKind {
     /// Every kind, in wire order.
-    pub const ALL: [WeaponKind; 10] = [
+    pub const ALL: [WeaponKind; 11] = [
         WeaponKind::Shell,
         WeaponKind::Laser,
         WeaponKind::Plasma,
@@ -203,6 +204,7 @@ impl WeaponKind {
         WeaponKind::SonicHammer,
         WeaponKind::Emp,
         WeaponKind::GaussRail,
+        WeaponKind::FpvSwarm,
     ];
 
     /// The name `ActiveWeapon::name` gives, which is what `Event::Fired`
@@ -219,11 +221,11 @@ impl WeaponKind {
     /// Whether the shooter's client draws this weapon's press itself, from
     /// its predicted pose, and claims the room's show of it
     /// (docs/sonic-hammer.md "Online: the shooter's press is drawn at
-    /// once"): the laser's beam, the sonic hammer's wave, the EMP's ring
-    /// and the gauss rail's slug, drawn on its release
-    /// (`events::WireEvent::press_show`).
+    /// once"): the laser's beam, the sonic hammer's wave, the EMP's ring,
+    /// the gauss rail's slug, drawn on its release, and an FPV drone's
+    /// launch (`events::WireEvent::press_show`).
     pub fn drawn_on_press(self) -> bool {
-        matches!(self, WeaponKind::Laser | WeaponKind::SonicHammer | WeaponKind::Emp | WeaponKind::GaussRail)
+        matches!(self, WeaponKind::Laser | WeaponKind::SonicHammer | WeaponKind::Emp | WeaponKind::GaussRail | WeaponKind::FpvSwarm)
     }
 }
 
@@ -240,6 +242,7 @@ impl From<ActiveWeapon> for WeaponKind {
             ActiveWeapon::SonicHammer => WeaponKind::SonicHammer,
             ActiveWeapon::Emp => WeaponKind::Emp,
             ActiveWeapon::GaussRail => WeaponKind::GaussRail,
+            ActiveWeapon::FpvSwarm => WeaponKind::FpvSwarm,
         }
     }
 }
@@ -257,6 +260,7 @@ impl From<WeaponKind> for ActiveWeapon {
             WeaponKind::SonicHammer => ActiveWeapon::SonicHammer,
             WeaponKind::Emp => ActiveWeapon::Emp,
             WeaponKind::GaussRail => ActiveWeapon::GaussRail,
+            WeaponKind::FpvSwarm => ActiveWeapon::FpvSwarm,
         }
     }
 }
@@ -591,6 +595,36 @@ pub struct MissileState {
     pub dead: bool,
 }
 
+/// One FPV drone in the air (`fpv::Drone`, docs/fpv-swarm.md "Wire").
+///
+/// A replica never flies one - the lock, the turns, the dive and the
+/// burst are the room's - so where it is, how high, which way and in what
+/// stage travel, with the halo slot it left (its rotors' and lamp's salt)
+/// and whose it is: its lamp is that seat's team colour, an enemy's red,
+/// and its launcher's relay module blinks while it is up.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DroneState {
+    pub id: u16,
+    /// Quarter pixels (`quantise_pos`): the point on the ground under it.
+    pub x: i16,
+    /// Quarter pixels (`quantise_pos`).
+    pub y: i16,
+    /// Height above the ground in quarter pixels (`quantise_pos`).
+    pub height: i16,
+    /// `quantise_heading` of its heading over the ground.
+    pub heading: u8,
+    /// `fpv::DroneStage::code`.
+    pub stage: u8,
+    /// The halo slot it left.
+    pub halo: u8,
+    /// The owner slot of the tank that launched it (`Owner::slot`): a seat
+    /// below the room's first enemy slot.
+    pub owner: u16,
+    /// What it is locked on (`fpv::DroneLock::code`): what the off-screen
+    /// arrows warn of.
+    pub lock: u16,
+}
+
 /// One grenade on the ground (`grenade.rs`).
 ///
 /// A replica never rolls one - the arc, the bounces and the blast are the
@@ -794,6 +828,8 @@ pub struct Snapshot {
     pub missiles: Vec<MissileState>,
     /// Grenades on the ground, by `Grenade::id`.
     pub grenades: Vec<GrenadeState>,
+    /// FPV drones in the air, by `Drone::id`.
+    pub drones: Vec<DroneState>,
     pub frogs: Vec<FrogState>,
     /// One bit per map pickup slot, set while its pickup is on the field.
     pub pickups: u64,
@@ -818,6 +854,8 @@ impl Snapshot {
         self.tanks.dedup_by_key(|t| t.id);
         self.shots.sort_by_key(|s| s.id);
         self.shots.dedup_by_key(|s| s.id);
+        self.drones.sort_by_key(|d| d.id);
+        self.drones.dedup_by_key(|d| d.id);
         self.frogs.sort_by_key(|f| side_code(f.side));
         self.frogs.dedup_by_key(|f| side_code(f.side));
         self.bonus_pickups.sort();
@@ -1287,9 +1325,11 @@ mod tests {
                 TankState { id: 1, hp: 2, ..Default::default() },
             ],
             fires: vec![FireState { cell: 9, left: 1, lava: false }, FireState { cell: 2, left: 1, lava: true }],
+            drones: vec![DroneState { id: 7, ..Default::default() }, DroneState { id: 2, ..Default::default() }, DroneState { id: 7, halo: 3, ..Default::default() }],
             ..Default::default()
         };
         s.normalise();
+        assert_eq!(s.drones.iter().map(|d| (d.id, d.halo)).collect::<Vec<_>>(), vec![(2, 0), (7, 0)]);
         assert_eq!(s.tanks.iter().map(|t| t.id).collect::<Vec<_>>(), vec![1, 3]);
         assert_eq!(s.tanks[0].hp, 9, "the first entry wins");
         assert_eq!(s.fires.iter().map(|f| f.cell).collect::<Vec<_>>(), vec![2, 9]);

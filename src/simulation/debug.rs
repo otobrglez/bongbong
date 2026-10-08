@@ -80,6 +80,10 @@ pub struct DebugSnapshot {
     /// Seconds every lamp post stays dark (`Game::lamps_out`, an EMP at
     /// night).
     pub lamps_out: f32,
+    /// The FPV drones in the air, by id (docs/fpv-swarm.md); left out of
+    /// the reply while there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub drones: Vec<DroneDebug>,
     /// What the last enemy phase's engagement-slot assignment decided.
     /// Per-tank entries cover both rings (player and hunted frog); the slot
     /// table is the player ring's.
@@ -93,6 +97,26 @@ pub struct DebugSnapshot {
     /// is meaningful then.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) command: Option<CommandReport>,
+}
+
+/// An FPV drone in `DebugSnapshot::drones`.
+#[derive(Serialize, Debug)]
+pub struct DroneDebug {
+    pub id: u32,
+    /// Its launcher's owner slot.
+    pub owner: usize,
+    /// `DroneStage::name`.
+    pub stage: &'static str,
+    /// Its ground point and its height over it.
+    pub x: f32,
+    pub y: f32,
+    pub height: f32,
+    /// The owner slot of the tank it is locked on, `frog` for a frog,
+    /// `None` for nothing.
+    pub lock: Option<String>,
+    /// Where it is going.
+    pub aim_x: f32,
+    pub aim_y: f32,
 }
 
 /// A standing tower in `DebugSnapshot::towers`.
@@ -173,6 +197,12 @@ pub struct TankDebug {
     pub offline: f32,
     /// Gauss rail slugs left (`Tank::gauss_slugs`).
     pub gauss: i32,
+    /// Drones left in the FPV swarm's halo (`Tank::fpv_drones`), and its
+    /// drones in the air (`Tank::fpv_out`); left out while both are 0.
+    #[serde(skip_serializing_if = "is_zero_i32")]
+    pub fpv: i32,
+    #[serde(skip_serializing_if = "is_zero_u8")]
+    pub fpv_out: u8,
     /// A charge on the trigger (`Tank::charge`): the weapon, seconds held
     /// and its stage.
     pub charge: Option<(&'static str, f32, &'static str)>,
@@ -373,6 +403,7 @@ pub struct TankPatch {
     /// Seconds its special stays offline on its own (`Tank::special_offline`).
     pub special_offline: Option<f32>,
     pub gauss_slugs: Option<i32>,
+    pub fpv_drones: Option<i32>,
     /// Seconds the trigger of its charge weapon has been held: a charge put
     /// on (the special it carries must be one, `Trigger::Charge`); 0 takes
     /// one off.
@@ -594,6 +625,8 @@ impl Game {
                     disabled: r1(tank.disabled),
                     offline: r1(tank.special_offline),
                     gauss: tank.gauss_slugs,
+                    fpv: tank.fpv_drones,
+                    fpv_out: tank.fpv_out,
                     charge: tank.charge.map(|c| (c.weapon.name(), r1(c.held), c.stage().name())),
                     tell: tank.tell.map(|t| (t.weapon.name(), r1(t.left))),
                     skid: r1(tank.skid),
@@ -803,6 +836,25 @@ impl Game {
                 .map(|v| TowerDebug { kind: v.kind.name(), enemy: v.side == crate::frog::Side::Enemy, x: r1(v.position.x), y: r1(v.position.y), disabled: r1(v.disabled) })
                 .collect(),
             lamps_out: r1(self.lamps_out),
+            drones: self
+                .drones()
+                .iter()
+                .map(|d| DroneDebug {
+                    id: d.id,
+                    owner: d.owner.slot(),
+                    stage: d.stage.name(),
+                    x: r1(d.ground.x),
+                    y: r1(d.ground.y),
+                    height: r1(d.height),
+                    lock: match d.lock {
+                        crate::fpv::DroneLock::None => None,
+                        crate::fpv::DroneLock::Tank { slot, .. } => Some(slot.to_string()),
+                        crate::fpv::DroneLock::Frog { .. } => Some("frog".into()),
+                    },
+                    aim_x: r1(d.aim.x),
+                    aim_y: r1(d.aim.y),
+                })
+                .collect(),
             engage,
             clusters: clusters(&live_enemies, CLUSTER_RADIUS_PX),
             command: full.then(|| self.commander.report().clone()),
@@ -949,6 +1001,12 @@ impl Game {
                 tank.disarm();
             }
             tank.gauss_slugs = n.max(0);
+        }
+        if let Some(n) = patch.fpv_drones {
+            if n > 0 {
+                tank.disarm();
+            }
+            tank.fpv_drones = n.max(0);
         }
         if let Some(seconds) = patch.charge {
             let weapon = tank.active_weapon();
@@ -1152,4 +1210,12 @@ impl Game {
         out.push_str(&format!("{cols}x{rows} cells of {cell}px; # blocked . open P player 1 Q player 2 1-9/E enemy x wreck F frog G enemy frog * pickup\n"));
         out
     }
+}
+
+fn is_zero_i32(n: &i32) -> bool {
+    *n == 0
+}
+
+fn is_zero_u8(n: &u8) -> bool {
+    *n == 0
 }

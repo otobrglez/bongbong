@@ -247,6 +247,15 @@ PICKUP_INK = {
     # not green (objects stay off the grass's colour) and does not sit on a
     # neighbour; the light is the slug's head leaving the rails.
     'gauss_rail': ((0xB0, 0x1E, 0x92), (0xFF, 0x3D, 0xD8), (0xFF, 0xB0, 0xF0)),
+    # The FPV swarm (docs/fpv-swarm.md): two-tone, like the heat shield - a
+    # warm ivory quadcopter with crimson lamps on its rotor hubs and body.
+    # Every single loud hue left sits on a neighbour (crimson on the health
+    # cross, violet on the grenades and the shield, azure on the hammer,
+    # vermilion on the flamethrower); a white X with red lights is a pattern
+    # no other crate has and reads as a drone with its lamps on. Ivory, not
+    # silver, so it stays off the minigun's grey-blue. The light is the
+    # lamps' crimson, which is also the HUD's accent.
+    'fpv_swarm': ((0xBF, 0xA7, 0x7A), (0xFF, 0xF0, 0xC8), (0xFF, 0x2D, 0x5F)),
 }
 # The rainbow shield's symbol, swept corner to corner like the old icon.
 PICKUP_RAINBOW = ((0xE8, 0x4A, 0x3C), (0xFF, 0x8A, 0x2B), (0xFF, 0xD9, 0x3D), (0x7E, 0xDB, 0x5A),

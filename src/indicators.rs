@@ -319,6 +319,10 @@ pub struct Scene {
     /// Every volcano that is rumbling or erupting: its crater and whether
     /// it is erupting yet.
     pub volcanoes: Vec<(Position, bool)>,
+    /// Every opposing FPV drone in the air locked on this seat or on the
+    /// players' frog (docs/fpv-swarm.md "Drawing"): the point it is drawn
+    /// at and whether it is diving.
+    pub drones: Vec<(Position, bool)>,
 }
 
 /// This seat's own tank.
@@ -441,6 +445,10 @@ pub enum ArrowKind {
     /// A volcano that is rumbling or erupting (docs/volcano.md): the
     /// warning that bombs are coming, `erupting` once they are.
     Volcano { erupting: bool },
+    /// An opposing FPV drone locked on this seat or on the players' frog
+    /// (`Scene::drones`): never merged, never left out, its lamp's red
+    /// blinking, quicker once it dives.
+    Drone { diving: bool },
     /// An enemy winding up a special (`TankView::windup`): never merged,
     /// never left out, drawn in the weapon's accent rimmed hostile red and
     /// blinking quicker as it nears going off. `lane`: this seat stands in
@@ -1087,6 +1095,11 @@ impl Awareness {
         for &(at, erupting) in scene.volcanoes.iter().filter(|(at, _)| !view.shows(*at)) {
             kept.extend(arrow(ArrowKind::Volcano { erupting }, at));
         }
+        // A drone coming at this seat or its frog off the screen: never
+        // merged, never left out - it flies over every wall.
+        for &(at, diving) in scene.drones.iter().filter(|(at, _)| !view.shows(*at)) {
+            kept.extend(arrow(ArrowKind::Drone { diving }, at));
+        }
         // An enemy winding up a special off the screen: never merged,
         // never left out - it is about to go off.
         for tv in windups {
@@ -1381,6 +1394,19 @@ impl Scene {
                 phase.is_warning().then(|| (v.centre(), phase.stage == crate::volcano::Stage::Erupt))
             })
             .collect();
+        // Opposing drones locked on this seat or the players' frog.
+        let seat_slot = seat as usize;
+        let drones = game
+            .drones()
+            .iter()
+            .filter(|d| d.in_air() && !d.owner.same_side(Owner::Player(seat)))
+            .filter(|d| match d.lock {
+                crate::fpv::DroneLock::Tank { slot, .. } => slot == seat_slot,
+                crate::fpv::DroneLock::Frog { side, .. } => side == Side::Player,
+                crate::fpv::DroneLock::None => false,
+            })
+            .map(|d| (d.drawn(), d.stage == crate::fpv::DroneStage::Dive))
+            .collect();
         Scene {
             time: game.time,
             seat: me,
@@ -1388,6 +1414,7 @@ impl Scene {
             frogs,
             sight: shortened.then_some(sight),
             volcanoes,
+            drones,
         }
     }
 }
@@ -1492,6 +1519,9 @@ pub(crate) const WHITE: Color = Color::new(0xFF, 0xFF, 0xFF, 255);
 /// A block: the 2 px every mark is built from, on the screen as in the
 /// world (`pyro::BLOCK`), so an arrow is as chunky as the sprites under it.
 const B: i32 = 2;
+
+/// A drone's X, 3 x 3 blocks, at the tail of its arrow (`ArrowKind::Drone`).
+const DRONE_X: [(i32, i32); 5] = [(-1, -1), (1, -1), (0, 0), (-1, 1), (1, 1)];
 
 /// A diagonal arrow's square side, in its cardinal length: about the same
 /// area of blocks, so turning does not change how much an arrow weighs.
@@ -1688,6 +1718,18 @@ pub fn picture(seats: &[Indicators], view: &ViewFrame, time: f32, t: &Tuning, fo
             ArrowKind::Volcano { erupting } => {
                 len *= 1.0 + t.indicator_pulse_swell * throb;
                 (if erupting { HOSTILE } else { GATE_AMBER }, if throb >= 0.5 { crate::pyro::FIRE[6] } else { RIM })
+            }
+            // A drone blinks its lamp's red, rimmed as every hostile is,
+            // quicker in the dive, with a drone's X at its tail - white in
+            // the dive - so it is told from an enemy's arrow.
+            ArrowKind::Drone { diving } => {
+                let hz = if diving { t.fpv_dive_lamp_hz } else { t.fpv_lamp_hz };
+                if !blink_on(time, hz) {
+                    continue;
+                }
+                let tail = behind(arrow.place.at, arrow.place.dir, len + 3.0 * B as f32);
+                rimmed(&mut out.screen, tail, &DRONE_X, if diving { WHITE } else { HOSTILE }, RIM, alpha);
+                (HOSTILE, RIM)
             }
             // A wind-up blinks in its weapon's accent, quicker as it nears,
             // rimmed hostile red as the enemy frog is: an accent can be a
@@ -2095,6 +2137,26 @@ mod indicator_tests {
         s.volcanoes = vec![(Position::new(200.0, 100.0), true)];
         let ind = Awareness::new().frame(&s, &screen(), &t);
         assert!(!kinds(&ind).iter().any(|k| matches!(k, ArrowKind::Volcano { .. })));
+    }
+
+    /// A drone coming at this seat off the screen has an arrow whatever the
+    /// cap; on the screen, none.
+    #[test]
+    fn a_drone_coming_at_the_seat_off_the_screen_has_an_arrow_whatever_the_cap() {
+        let mut t = Tuning::DEFAULT;
+        t.indicator_max_arrows = 1;
+        let mut s = scene(1.0, vec![enemy(5, 900.0, 150.0), enemy(6, 950.0, 400.0)]);
+        s.drones = vec![(Position::new(-300.0, 200.0), true)];
+        let mut aw = Awareness::new();
+        // Its blink: some frame within a second shows it.
+        let seen = (0..60).any(|k| {
+            s.time = 1.0 + k as f32 / 60.0;
+            kinds(&aw.frame(&s, &screen(), &t)).contains(&ArrowKind::Drone { diving: true })
+        });
+        assert!(seen);
+        s.drones = vec![(Position::new(300.0, 200.0), false)];
+        let ind = Awareness::new().frame(&s, &screen(), &t);
+        assert!(!kinds(&ind).iter().any(|k| matches!(k, ArrowKind::Drone { .. })), "in sight on the screen");
     }
 
     /// An enemy winding up a special off the screen gets an arrow of its
@@ -2941,6 +3003,20 @@ mod picture_tests {
         assert_eq!(body(ArrowKind::Gate { flash: 1.0 }), set(&[GATE_AMBER, RIM]));
         let windup = ArrowKind::Windup { weapon: ActiveWeapon::SonicHammer, progress: 0.0, lane: false };
         assert_eq!(body(windup), set(&[crate::hud::weapon_color(ActiveWeapon::SonicHammer), HOSTILE]), "the weapon's accent, rimmed hostile");
+    }
+
+    /// A drone's arrow carries a drone's X at its tail - more blocks behind
+    /// the tip than an enemy's arrow - white in the dive, and blinks.
+    #[test]
+    fn a_drone_arrow_has_an_x_at_its_tail() {
+        let at = Vec2::new(390.0, 150.0);
+        let plain = draw(&[shown(vec![enemy(at, Edge::Right, RIGHT)])], 0.0);
+        let drone = draw(&[shown(vec![arrow(ArrowKind::Drone { diving: false }, at, Edge::Right, RIGHT)])], 0.0);
+        assert!(extent(&drone.screen).0 < extent(&plain.screen).0, "the X stands behind the arrow");
+        let diving = draw(&[shown(vec![arrow(ArrowKind::Drone { diving: true }, at, Edge::Right, RIGHT)])], 0.0);
+        assert!(!in_color(&diving.screen, WHITE).is_empty(), "white in the dive");
+        let off = 0.75 / Tuning::DEFAULT.fpv_lamp_hz;
+        assert!(draw(&[shown(vec![arrow(ArrowKind::Drone { diving: false }, at, Edge::Right, RIGHT)])], off).screen.is_empty(), "it blinks");
     }
 
     /// A lined-up enemy's arrow gets a ring that pulses, dark red while

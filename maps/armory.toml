@@ -459,6 +459,29 @@ material = "iron"
 kind = "wall"
 material = "iron"
 
+[cells."9,12"]
+kind = "pickup"
+pickup = "fpv_swarm"
+
+[cells."32,17"]
+kind = "pickup"
+pickup = "fpv_swarm"
+
+[cells."5,8"]
+kind = "tree"
+
+[cells."6,8"]
+kind = "pine"
+
+[cells."31,4"]
+kind = "pine"
+
+[cells."32,4"]
+kind = "pine"
+
+[cells."7,17"]
+kind = "gun_tower"
+
 [mission]
 kind = "protect"
 

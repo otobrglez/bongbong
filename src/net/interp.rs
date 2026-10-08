@@ -1496,6 +1496,16 @@ from: &Snapshot, to: &Snapshot, alpha: f32) -> Snapshot {
             grenade.height = lerp(grenade.height, next.height, alpha);
         }
     }
+    // A drone glides like a missile; its stage is the near end's, a fact
+    // about the tick.
+    for drone in &mut out.drones {
+        if let Some(next) = to.drones.iter().find(|d| d.id == drone.id) {
+            drone.x = lerp(drone.x, next.x, alpha);
+            drone.y = lerp(drone.y, next.y, alpha);
+            drone.height = lerp(drone.height, next.height, alpha);
+            drone.heading = lerp_heading(drone.heading, next.heading, alpha);
+        }
+    }
     for frog in &mut out.frogs {
         if let Some(next) = to.frogs.iter().find(|f| f.side == frog.side) {
             frog.x = lerp(frog.x, next.x, alpha);
@@ -1517,8 +1527,8 @@ fn blend_missile(missile: &mut MissileState, next: &MissileState, alpha: f32) {
 
 /// `from` carried `ahead_ms` past its tick: hulls on their last velocity
 /// and then dead-blended to a stop, flying shots along their heading at
-/// their kind's speed, missiles along their ground heading at the speed
-/// `before` -> `from` shows. Frogs and everything else hold.
+/// their kind's speed, missiles and drones along their ground heading at
+/// the speed `before` -> `from` shows. Frogs and everything else hold.
 fn extrapolate(from: &Snapshot, before: Option<&Snapshot>, ahead_ms: f64) -> Snapshot {
     let mut out = from.clone();
     if ahead_ms <= 0.0 {
@@ -1547,6 +1557,14 @@ fn extrapolate(from: &Snapshot, before: Option<&Snapshot>, ahead_ms: f64) -> Sna
                 let travel = covered / span_s * shot_s;
                 missile.x = offset(missile.x, dx * travel);
                 missile.y = offset(missile.y, dy * travel);
+            }
+            for drone in &mut out.drones {
+                let Some(prior) = before.drones.iter().find(|d| d.id == drone.id) else { continue };
+                let covered = ((drone.x as f32 - prior.x as f32) / steps).hypot((drone.y as f32 - prior.y as f32) / steps);
+                let (dx, dy) = heading_vector(drone.heading);
+                let travel = covered / span_s * shot_s;
+                drone.x = offset(drone.x, dx * travel);
+                drone.y = offset(drone.y, dy * travel);
             }
         }
     }

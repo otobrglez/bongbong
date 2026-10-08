@@ -57,6 +57,11 @@ top with its charge as alpha, turned with it. The top layer faces **up**
   top is the mortar tube, mouth 12 px from the centre (`BIO_MUZZLE_PX`
   leads the glob a pixel past it).
 
+Anti-air (docs/fpv-swarm.md "Air defence by the towers") needs nothing on
+the sheet: the gun tower's top turns on a drone as on a tank, and the
+tesla's arc at a drone is the bolt it draws at a tank, ending at the drone
+as it is drawn - lifted by its height over its shadow.
+
 ## Palette
 
 The Puny palette with its extended steel greys (`PUNY_PALETTE_ALL`), plus

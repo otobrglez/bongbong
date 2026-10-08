@@ -250,6 +250,15 @@ pub struct OnlineRound<T: Transport> {
     /// Where each foreign shot was drawn last frame, for the stretch it
     /// crossed this one.
     incoming_drawn: std::collections::BTreeMap<u16, crate::math::Vec2>,
+    /// This seat's drones launched on the press and still drawn by this
+    /// client, oldest first (`OwnDrone`, docs/fpv-swarm.md "Wire").
+    own_drones: Vec<OwnDrone>,
+    /// The next own launch's number (`OwnDrone::id`), from 0 each round.
+    next_own_drone: u32,
+    /// How many ticks ahead of the picture this seat's latest input lands
+    /// in the room (`incoming_lead_ticks`), as last measured: how long a
+    /// press waits to be seen in the room's picture.
+    lead_ticks: f32,
     /// The local seat's own hull, run ahead of the room and pulled back
     /// by each snapshot (stage 2, docs/online-coop-prd.md §4.12). Built
     /// beside the replica from the same `Welcome`, so the two step
@@ -304,6 +313,9 @@ impl<T: Transport> OnlineRound<T> {
             flying_since: std::collections::BTreeMap::new(),
             struck: std::collections::BTreeMap::new(),
             incoming_drawn: std::collections::BTreeMap::new(),
+            own_drones: Vec::new(),
+            next_own_drone: 0,
+            lead_ticks: 0.0,
             note: None,
             ended: None,
             scratch: Vec::new(),
@@ -700,6 +712,8 @@ impl<T: Transport> OnlineRound<T> {
     /// `arrived` is when the welcome came off the socket, on `local_ms`'s
     /// clock.
     fn welcomed(&mut self, welcome: &Welcome, arrived: i64) {
+        self.own_drones.clear();
+        self.next_own_drone = 0;
         if let Some(before) = self.tuning_before.take() {
             tuning::replace_now(before);
         }
@@ -876,6 +890,12 @@ impl<T: Transport> OnlineRound<T> {
                 Some(seat) if predicting_shots => apply::Show::OwnShotsDrawn { seat, presses },
                 _ => apply::Show::All,
             };
+            // A launch it drew claims the room's copy of that drone.
+            if let Some(seat) = self.client.seat() {
+                for i in show.presses_drawn(&frame.snapshot) {
+                    claim_own_drone(&mut self.own_drones, &frame.snapshot.events, i, seat);
+                }
+            }
             if let Some(game) = self.replica.as_mut() {
                 apply::snapshot_with(game, &frame.snapshot, show);
             }
@@ -913,6 +933,7 @@ impl<T: Transport> OnlineRound<T> {
                 None => Vec::new(),
             };
             self.fly_own_shots(dt, world, seat, &shells);
+            self.fly_own_drones(dt, seat, sampled.is_some());
         }
         let seat = self.client.seat();
         let Some(game) = self.replica.as_mut() else { return };
@@ -1031,9 +1052,18 @@ impl<T: Transport> OnlineRound<T> {
             // room judges it (`Game::resolve_projectiles`).
             let portal = world.portal_entry(from, to, leaving);
             let to = portal.unwrap_or(to);
-            let world_hit = world
+            let mut world_hit = world
                 .shot_contact(Some(seat), from, to, shot_half_extent(kind))
                 .map(|(at, contact)| (at, matches!(contact, Contact::Tank { .. } | Contact::Frog)));
+            // A bullet stops at a drone of the other side's it crosses
+            // first, as the room's sweep has it; the drone stays up until
+            // the room says it is down.
+            if kind == crate::simulation::ProvisionalKind::Bullet
+                && let Some(at) = world.air_contact(Some(seat), from, to, shot_half_extent(kind))
+                && world_hit.is_none_or(|(hit, _)| from.distance_to(at) < from.distance_to(hit))
+            {
+                world_hit = Some((at, false));
+            }
             let opposing: &[IncomingShell] = if kind == crate::simulation::ProvisionalKind::Shell { shells } else { &[] };
             let Some((at, tank, shell)) = first_contact(from, to, world_hit, opposing, reach, &met) else {
                 return portal.map(|at| (at, ShotStop::Portal));
@@ -1082,6 +1112,15 @@ impl<T: Transport> OnlineRound<T> {
                     game.draw_rail_press(seat, press.muzzle, trace, portal, press.overcharged);
                 }
                 crate::net::predict::PressShow::ChargeEnd(end) => game.charge_end_show(end.at, end.end),
+                // A drone off the halo: drawn from here on by
+                // `fly_own_drones`, its module's relay flashing now.
+                crate::net::predict::PressShow::Drone(press) => {
+                    game.flash_seat_fpv(seat);
+                    let lead = self.lead_ticks * PHYSICS_FIXED_DT;
+                    let id = self.next_own_drone;
+                    self.next_own_drone = self.next_own_drone.wrapping_add(1) & OWN_DRONE_ID_MASK;
+                    self.own_drones.push(OwnDrone { id, press, since: 0.0, lead, room: None });
+                }
             }
         }
         for at in predictor.take_impacts() {
@@ -1129,6 +1168,7 @@ impl<T: Transport> OnlineRound<T> {
         }
         let render = frame.snapshot.tick as f64 + (frame.ahead / PHYSICS_FIXED_DT) as f64;
         let lead_ticks = incoming_lead_ticks(newest.tick, acked, predictor.tick().wrapping_sub(1), render);
+        self.lead_ticks = lead_ticks;
         let hull = world.seat_hull(seat);
         let Some(game) = self.replica.as_mut() else { return Vec::new() };
         let foreign = game.foreign_flying_shots(seat);
@@ -1300,6 +1340,121 @@ impl<T: Transport> OnlineRound<T> {
             }
         }
         claimed
+    }
+}
+
+/// A drone this seat launched on its press (docs/fpv-swarm.md "Wire"),
+/// drawn by this client from the press until the room's copy takes over.
+///
+/// The room launches it `lead` seconds after the press, as the picture
+/// runs, so its copy would appear that late, out of a halo slot the client
+/// already emptied. Its climb is the same whatever it goes after
+/// (`fpv::launch_path`), so the client draws it at once - slowed, its age
+/// `since * h / (h + lead)`, so that it is `h` into the climb at `h + lead`
+/// - and the room's copy, kept off the picture until it is `h` into the
+/// climb too, takes over there, on the same point of the same path.
+/// `h` is `FPV_LAUNCH_HANDOVER_SECONDS`. A room's copy struck down in its
+/// climb, or gone, takes over at once: the fall is the room's.
+#[derive(Clone, Copy, Debug)]
+struct OwnDrone {
+    /// Its number this round (`OnlineRound::next_own_drone`): its id in the
+    /// replica is `OWN_DRONE_ID_BASE` past it, the same every frame, so its
+    /// rotors, lamp and particles keep their phase.
+    id: u32,
+    press: crate::net::predict::DronePress,
+    /// Seconds since the press.
+    since: f32,
+    /// `incoming_lead_ticks` at the press, in seconds.
+    lead: f32,
+    /// The room's copy - its id and its seconds in the picture - once its
+    /// `DroneLaunched` has been handed over and claimed this press.
+    room: Option<(u16, f32)>,
+}
+
+/// The id a drone drawn by this client carries in the replica: past every
+/// id the wire can name (`u16`), so `apply` never takes one for the room's
+/// copy of a drone.
+const OWN_DRONE_ID_BASE: u32 = 1 << 20;
+
+/// `OwnDrone::id` wraps within this, so `OWN_DRONE_ID_BASE` plus it stays
+/// past every id the wire can name.
+const OWN_DRONE_ID_MASK: u32 = (1 << 20) - 1;
+
+/// The room's `DroneLaunched` at `events[launched]` is the show of a press
+/// this client drew (`apply::Show::presses_drawn`): its copy goes to the
+/// launch that press drew - the last one waiting at or before the input
+/// tick the seat's `Fired` before it names, as `Predictor::confirm_press`
+/// claims the press. Any drawn launch before that one still waiting was
+/// refused, and goes.
+fn claim_own_drone(own: &mut Vec<OwnDrone>, events: &[WireEvent], launched: usize, seat: u8) {
+    let Some(&WireEvent::DroneLaunched { id, .. }) = events.get(launched) else { return };
+    let input_tick = events[..launched].iter().rev().find_map(|e| match *e {
+        WireEvent::Fired { slot, weapon: crate::net::wire::WeaponKind::FpvSwarm, input_tick } if slot == seat as u16 => Some(input_tick),
+        _ => None,
+    });
+    let waiting = |d: &OwnDrone| d.room.is_none();
+    let claimed = match input_tick {
+        Some(tick) => own.iter().rposition(|d| waiting(d) && d.press.tick <= tick),
+        None => own.iter().position(waiting),
+    };
+    let Some(i) = claimed else { return };
+    own[i].room = Some((id, 0.0));
+    let mut k = 0;
+    own.retain(|d| {
+        let refused = k < i && waiting(d);
+        k += 1;
+        !refused
+    });
+}
+
+impl<T: Transport> OnlineRound<T> {
+    /// One frame of this seat's own launches (`OwnDrone`): each drawn on its
+    /// slowed climb, the room's copy it claimed kept off the picture until
+    /// it is `FPV_LAUNCH_HANDOVER_SECONDS` into its own - or at once, if the
+    /// room's copy is struck down in its climb or gone from a snapshot
+    /// `applied` this frame; then the room's copy is the drone. One the room
+    /// never launched - a press it refused - is dropped after the refusal
+    /// wait. The seat's halo is drawn without the drones still in flight
+    /// here and not yet in the room's count.
+    fn fly_own_drones(&mut self, dt: f32, seat: u8, applied: bool) {
+        let Some(game) = self.replica.as_mut() else { return };
+        let handover = crate::fpv::FPV_LAUNCH_HANDOVER_SECONDS.min(tuning().fpv_launch_seconds);
+        let refusal = self.predictor.as_ref().map_or(1.0, |p| p.refusal_after());
+        // The room's copies as this frame's snapshot left them: still
+        // climbing, or not.
+        let room_copies: Vec<(u32, crate::fpv::DroneStage)> = game.drones().iter().map(|d| (d.id, d.stage)).collect();
+        for own in &mut self.own_drones {
+            own.since += dt;
+            if let Some((id, age)) = own.room.as_mut() {
+                *age += dt;
+                let stage = room_copies.iter().find(|&&(k, _)| k == *id as u32).map(|&(_, stage)| stage);
+                let fell = stage.is_some_and(|s| s == crate::fpv::DroneStage::Falling);
+                if fell || (applied && stage.is_none()) {
+                    *age = handover;
+                }
+            }
+        }
+        self.own_drones.retain(|own| match own.room {
+            Some((_, age)) => age < handover,
+            None => own.since < refusal + handover,
+        });
+        let hidden: Vec<u32> = self.own_drones.iter().filter_map(|own| own.room.map(|(id, _)| id as u32)).collect();
+        game.remove_drones(|id| id >= OWN_DRONE_ID_BASE || hidden.contains(&id));
+        let owner = crate::shell::Owner::Player(seat);
+        for own in &self.own_drones {
+            let age = (own.since * handover / (handover + own.lead.max(0.0))).min(handover);
+            let (ground, height) = crate::fpv::launch_path(own.press.origin, own.press.out, age);
+            let mut d = crate::fpv::Drone::launch(own.press.origin, own.press.out, own.press.slot, owner, crate::fpv::DroneLock::None, ground);
+            d.id = OWN_DRONE_ID_BASE + own.id;
+            d.ground = ground;
+            d.height = height;
+            d.age = own.since;
+            d.stage_time = own.since;
+            game.add_drone(d);
+        }
+        let lifting = self.own_drones.iter().filter(|own| own.room.is_none()).count() as u8;
+        game.set_seat_lifting(seat, lifting);
+        game.count_drones_out();
     }
 }
 
@@ -1950,6 +2105,244 @@ mod tests {
         assert_eq!(beams, vec![refused_x], "only the beam this client never drew is the room's");
         let drawn = round.game().expect("a replica").laser_beams.iter().any(|b| b.start.x == refused_x);
         assert!(drawn, "and it is drawn");
+    }
+
+    /// **A launch is drawn on the press and handed to the room's copy**
+    /// (docs/fpv-swarm.md "Wire"): the drone leaves the halo on the press
+    /// frame - one fewer in the halo at once -, the room's copy of it is
+    /// kept off the picture once its `DroneLaunched` is handed over until
+    /// it is as far into the climb, and at no frame are two drones of this
+    /// seat drawn.
+    #[test]
+    fn a_launch_is_drawn_on_the_press_and_handed_to_the_rooms_copy() {
+        use crate::net::wire::WeaponKind;
+        if !tuning().online_predict_shots {
+            return;
+        }
+        let (mut room, mut round) = room_and_round();
+        round.predict_own_tank = Some(true);
+        let swarm = crate::simulation::debug::TankPatch { fpv_drones: Some(6), ..Default::default() };
+        room.game.debug_set_tank(0, &swarm).expect("the seat's tank");
+        room.welcome();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        for tick in 1..=20u32 {
+            let s = on_schedule(&room, tick);
+            room.say(Msg::Snapshot(s));
+        }
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        room.heard();
+        let seat_drones = |round: &OnlineRound<loopback::Loopback>| -> Vec<u32> {
+            round.game().expect("a replica").drones().iter().filter(|d| d.owner == crate::shell::Owner::Player(0)).map(|d| d.id).collect()
+        };
+        let halo = |round: &OnlineRound<loopback::Loopback>| -> usize {
+            let game = round.game().expect("a replica");
+            let entity = game.seat(0).expect("the seat");
+            crate::simulation::with_tank(&game.world, entity, |t| crate::game::halo_of(t, game.time).map_or(0, |h| h.drones))
+        };
+        assert_eq!((seat_drones(&round).len(), halo(&round)), (0, 6), "six in the halo, none up");
+
+        round.frame(&Intent { fire: true, ..Intent::default() }, 1.0 / 60.0);
+        let own = seat_drones(&round);
+        assert_eq!(own.len(), 1, "one drone up on the press frame: {own:?}");
+        assert!(own[0] >= OWN_DRONE_ID_BASE, "the client's own");
+        assert_eq!(halo(&round), 5, "and one fewer in the halo at once");
+        let pressed = room
+            .heard()
+            .iter()
+            .find_map(|m| if let Msg::Intent(i) = m { i.fire.then_some(i.tick) } else { None })
+            .expect("the press went out");
+
+        // The room launches it on its tick 21.
+        let (w, h) = room.game.map.field_size();
+        room.game.update(Input::single(Intent { fire: true, ..Intent::default() }), PHYSICS_FIXED_DT, w, h);
+        let mut launched = on_schedule(&room, 21);
+        launched.acked[0] = pressed;
+        launched.events = encode::wire_events(room.game.events())
+            .into_iter()
+            .map(|e| match e {
+                WireEvent::Fired { slot, weapon, .. } => WireEvent::Fired { slot, weapon, input_tick: pressed },
+                other => other,
+            })
+            .collect();
+        assert!(launched.events.iter().any(|e| matches!(e, WireEvent::Fired { weapon: WeaponKind::FpvSwarm, .. })));
+        assert_eq!(launched.drones.len(), 1, "the room's copy in its snapshot");
+        let room_id = launched.drones[0].id as u32;
+        room.say(Msg::Snapshot(launched));
+        let deadline = Instant::now() + std::time::Duration::from_secs(3);
+        let (mut handed_over, mut swapped) = (false, false);
+        while !swapped && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(4));
+            // The drone's climb runs on the frame's time.
+            round.frame(&Intent::default(), 0.004);
+            let drones = seat_drones(&round);
+            assert!(drones.len() <= 1, "two drones of the seat drawn: {drones:?}");
+            // The claimed `DroneLaunched` is the client's own and left out
+            // of the replica's events; its `Fired` is not.
+            handed_over |= round.game().expect("a replica").events().iter().any(|e| matches!(e, crate::simulation::Event::Fired { slot: 0, .. }));
+            if handed_over {
+                assert_eq!(halo(&round), 5, "the room's count has it");
+            }
+            swapped = drones == vec![room_id];
+        }
+        assert!(handed_over, "the room's launch reached the picture");
+        assert!(swapped, "and its copy took over from the client's");
+    }
+
+    /// **A launch the room downs in its climb is handed over at once**:
+    /// the room's copy, struck two ticks after its launch, is the drone the
+    /// picture shows as soon as its fall reaches the picture - not the
+    /// client's still climbing for the rest of the hand-over - and at no
+    /// frame are two drones of the seat drawn.
+    #[test]
+    fn a_launch_downed_in_its_climb_is_handed_to_the_rooms_fall_at_once() {
+        use crate::net::wire::WeaponKind;
+        if !tuning().online_predict_shots {
+            return;
+        }
+        let (mut room, mut round) = room_and_round();
+        round.predict_own_tank = Some(true);
+        let swarm = crate::simulation::debug::TankPatch { fpv_drones: Some(6), ..Default::default() };
+        room.game.debug_set_tank(0, &swarm).expect("the seat's tank");
+        room.welcome();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        for tick in 1..=20u32 {
+            let s = on_schedule(&room, tick);
+            room.say(Msg::Snapshot(s));
+        }
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        room.heard();
+        round.frame(&Intent { fire: true, ..Intent::default() }, 1.0 / 60.0);
+        let pressed = room
+            .heard()
+            .iter()
+            .find_map(|m| if let Msg::Intent(i) = m { i.fire.then_some(i.tick) } else { None })
+            .expect("the press went out");
+        let (w, h) = room.game.map.field_size();
+        room.game.update(Input::single(Intent { fire: true, ..Intent::default() }), PHYSICS_FIXED_DT, w, h);
+        let mut launched = on_schedule(&room, 21);
+        launched.acked[0] = pressed;
+        launched.events = encode::wire_events(room.game.events())
+            .into_iter()
+            .map(|e| match e {
+                WireEvent::Fired { slot, weapon, .. } => WireEvent::Fired { slot, weapon, input_tick: pressed },
+                other => other,
+            })
+            .collect();
+        assert!(launched.events.iter().any(|e| matches!(e, WireEvent::Fired { weapon: WeaponKind::FpvSwarm, .. })));
+        let room_id = launched.drones[0].id as u32;
+        room.say(Msg::Snapshot(launched));
+        // A tesla's arc takes it on the room's next tick.
+        for d in room.game.world.query_mut::<&mut crate::fpv::Drone>() {
+            d.down(crate::air::AirStrike::Tesla);
+        }
+        room.game.update(Input::single(Intent::default()), PHYSICS_FIXED_DT, w, h);
+        let downed = on_schedule(&room, 22);
+        assert_eq!(downed.drones.first().map(|d| d.stage), Some(crate::fpv::DroneStage::Falling.code()), "falling in the room");
+        room.say(Msg::Snapshot(downed));
+        let seat_drones = |round: &OnlineRound<loopback::Loopback>| -> Vec<(u32, crate::fpv::DroneStage)> {
+            round
+                .game()
+                .expect("a replica")
+                .drones()
+                .iter()
+                .filter(|d| d.owner == crate::shell::Owner::Player(0))
+                .map(|d| (d.id, d.stage))
+                .collect()
+        };
+        let deadline = Instant::now() + std::time::Duration::from_secs(3);
+        let mut claimed_at: Option<Instant> = None;
+        let mut fall_shown = None;
+        while fall_shown.is_none() && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(4));
+            round.frame(&Intent::default(), 0.004);
+            let drones = seat_drones(&round);
+            assert!(drones.len() <= 1, "two drones of the seat drawn: {drones:?}");
+            if claimed_at.is_none()
+                && round.game().expect("a replica").events().iter().any(|e| matches!(e, crate::simulation::Event::Fired { slot: 0, .. }))
+            {
+                claimed_at = Some(Instant::now());
+            }
+            if drones == vec![(room_id, crate::fpv::DroneStage::Falling)] {
+                fall_shown = claimed_at.map(|at| at.elapsed());
+            }
+        }
+        let fall_shown = fall_shown.expect("the room's falling copy took over");
+        assert!(
+            fall_shown.as_secs_f32() < crate::fpv::FPV_LAUNCH_HANDOVER_SECONDS * 0.6,
+            "the fall is shown once it reaches the picture, not at the end of the hand-over: {fall_shown:?}"
+        );
+    }
+
+    /// **A launch the room refuses goes**: drawn on the press, never
+    /// claimed - the room's snapshots go on with six in the halo and no
+    /// `Fired` - it is taken off the picture after the refusal wait and the
+    /// hand-over, and the halo and the HUD have the drone back.
+    #[test]
+    fn a_refused_launch_goes_and_the_halo_has_its_drone_back() {
+        if !tuning().online_predict_shots {
+            return;
+        }
+        let (mut room, mut round) = room_and_round();
+        round.predict_own_tank = Some(true);
+        let swarm = crate::simulation::debug::TankPatch { fpv_drones: Some(6), ..Default::default() };
+        room.game.debug_set_tank(0, &swarm).expect("the seat's tank");
+        room.welcome();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        for tick in 1..=20u32 {
+            let s = on_schedule(&room, tick);
+            room.say(Msg::Snapshot(s));
+        }
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        let count = |round: &OnlineRound<loopback::Loopback>| {
+            crate::hud::HudModel::gather(round.game().expect("a replica"), Some(0)).local.weapon.count
+        };
+        let seat_drones = |round: &OnlineRound<loopback::Loopback>| {
+            round.game().expect("a replica").drones().iter().filter(|d| d.owner == crate::shell::Owner::Player(0)).count()
+        };
+        round.frame(&Intent { fire: true, ..Intent::default() }, 1.0 / 60.0);
+        assert_eq!((seat_drones(&round), count(&round)), (1, 5), "drawn on the press, the count one down");
+        // The room never launches it: its snapshots go on as they were.
+        let deadline = Instant::now() + std::time::Duration::from_secs(4);
+        let mut tick = 21u32;
+        while seat_drones(&round) > 0 && Instant::now() < deadline {
+            let s = on_schedule(&room, tick);
+            room.say(Msg::Snapshot(s));
+            tick += 1;
+            std::thread::sleep(std::time::Duration::from_millis(4));
+            round.frame(&Intent::default(), 1.0 / 60.0);
+        }
+        assert_eq!(seat_drones(&round), 0, "the refused launch left the picture");
+        assert_eq!(count(&round), 6, "and the halo has its drone back");
+    }
+
+    /// A drone the room launched is the drawn launch of the press its
+    /// `Fired` names - the last one waiting at or before that input tick -
+    /// and any drawn launch before that one still waiting was refused.
+    #[test]
+    fn the_rooms_launch_claims_the_drawn_launch_of_its_input_tick() {
+        use crate::net::wire::WeaponKind;
+        let press = |tick: u32| crate::net::predict::DronePress { slot: 5, origin: crate::math::Vec2::zero(), out: crate::math::Vec2::new(0.0, -1.0), tick };
+        let own = |id: u32, tick: u32| OwnDrone { id, press: press(tick), since: 0.0, lead: 0.1, room: None };
+        let launch = |input_tick: u32, id: u16| {
+            vec![
+                WireEvent::Fired { slot: 0, weapon: WeaponKind::FpvSwarm, input_tick },
+                WireEvent::DroneLaunched { id, slot: 0, x: 0, y: 0, target: crate::net::events::NO_TARGET, frog: false },
+            ]
+        };
+        // The room fired the second press: the first was refused.
+        let mut drawn = vec![own(0, 10), own(1, 20)];
+        claim_own_drone(&mut drawn, &launch(21, 7), 1, 0);
+        assert_eq!(drawn.iter().map(|d| (d.id, d.room.map(|r| r.0))).collect::<Vec<_>>(), vec![(1, Some(7))]);
+        // The room fired the first: the second still waits for its own.
+        let mut drawn = vec![own(0, 10), own(1, 20)];
+        claim_own_drone(&mut drawn, &launch(12, 8), 1, 0);
+        assert_eq!(drawn.iter().map(|d| (d.id, d.room.map(|r| r.0))).collect::<Vec<_>>(), vec![(0, Some(8)), (1, None)]);
+        // Another seat's `Fired` in between names nothing of this seat's.
+        let mut drawn = vec![own(0, 10), own(1, 20)];
+        let mut events = launch(21, 9);
+        events.insert(1, WireEvent::Fired { slot: 1, weapon: WeaponKind::FpvSwarm, input_tick: 12 });
+        claim_own_drone(&mut drawn, &events, 2, 0);
+        assert_eq!(drawn.iter().map(|d| (d.id, d.room.map(|r| r.0))).collect::<Vec<_>>(), vec![(1, Some(9))]);
     }
 
     /// **An owned hull's sandbox follows the room with the prediction's

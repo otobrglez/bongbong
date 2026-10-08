@@ -335,6 +335,11 @@ tunables! {
         /// the EMP's: a hash of the spawn point and the owner slot, never
         /// the round's RNG, so at 0 nothing changes.
         enemy_special_weapon_gauss_share: f32 = 0.0 in 0.0 ..= 1.0 @ Restart;
+        /// Of an enemy that rolled a special weapon above, the share that
+        /// spawns with the FPV swarm instead (docs/fpv-swarm.md), after the
+        /// rail's: a hash of the spawn point and the owner slot, never the
+        /// round's RNG, so at 0 nothing changes.
+        enemy_special_weapon_fpv_share: f32 = 0.0 in 0.0 ..= 1.0 @ Restart;
         /// Which chassis the player spawns in, as a row index into
         /// `scifi_tanks_sheet.png`: 0 scout, 1 assault, 2 breaker,
         /// 3 longbow, 4 flak, 5 wraith, 6 warden, 7 ravager, 8 glacier,
@@ -1127,6 +1132,102 @@ tunables! {
         gauss_ai_box_margin_px: f32 = 32.0 in 0.0 ..= 128.0;
     }
 
+    group fpv {
+        /// Drones one FPV swarm crate loads into the halo
+        /// (`pickup::PickupKind::FpvSwarm`, docs/fpv-swarm.md). One per
+        /// press.
+        fpv_drones_per_pickup: i32 = 6 in 1 ..= 12;
+        /// Seconds between two launches.
+        fpv_reload_seconds: f32 = 0.4 in 0.0 ..= 10.0;
+        /// How long a drone climbs out of the halo before it turns for its
+        /// aim.
+        fpv_launch_seconds: f32 = 0.35 in 0.05 ..= 2.0;
+        /// How fast it drifts outward from its slot while it climbs (px/s).
+        fpv_launch_speed: f32 = 70.0 in 0.0 ..= 400.0;
+        /// How high it flies (px): what lifts it over its shadow and how
+        /// tall its strike box is.
+        fpv_cruise_height: f32 = 36.0 in 8.0 ..= 120.0;
+        /// Its top ground speed (px/s), faster than any tank on its own
+        /// engine.
+        fpv_speed: f32 = 230.0 in 20.0 ..= 1000.0;
+        /// How fast it reaches it (px/s^2).
+        fpv_accel: f32 = 700.0 in 1.0 ..= 10000.0;
+        /// How fast it turns toward its aim (degrees a second).
+        fpv_turn_rate_deg: f32 = 300.0 in 1.0 ..= 3600.0;
+        /// How near its aim it commits to the dive, which then follows
+        /// nothing.
+        fpv_commit_px: f32 = 64.0 in 0.0 ..= 400.0;
+        /// How fast it comes down from the commit to the point (px/s).
+        fpv_dive_speed: f32 = 320.0 in 20.0 ..= 2000.0;
+        /// How long after its launch a cruising drone dives where it is
+        /// going, battery out.
+        fpv_max_flight_seconds: f32 = 6.0 in 0.5 ..= 30.0;
+        /// With nothing to lock, how far ahead of the launcher it dives.
+        fpv_aim_px: f32 = 192.0 in 16.0 ..= 1000.0;
+        /// Its burst's damage at the centre to the side opposing the
+        /// launcher, falling to nothing at the radius; no roll.
+        fpv_damage: f32 = 8.0 in 0.0 ..= 100.0;
+        /// Its burst's reach (px).
+        fpv_blast_radius_px: f32 = 44.0 in 0.0 ..= 200.0;
+        /// Its burst's shove at the centre (px/s).
+        fpv_knockback_speed: f32 = 30.0 in 0.0 ..= 400.0;
+        /// What a burst in a tree's crown takes off the tree.
+        fpv_tree_damage: f32 = 4.0 in 0.0 ..= 100.0;
+        /// How far past its cell a tree's crown shelters (px): a hull
+        /// overlapping it is under canopy, a dive landing in it bursts in
+        /// the leaves.
+        fpv_canopy_px: f32 = 12.0 in 0.0 ..= 32.0;
+        /// Bullets that bring a drone down; every other strike downs it at
+        /// once.
+        fpv_drone_hits: i32 = 1 in 1 ..= 10;
+        /// Half a drone's width (px), its strike box's.
+        fpv_hit_half_px: f32 = 6.0 in 1.0 ..= 24.0;
+        /// How fast a downed drone falls (px/s^2).
+        fpv_fall_gravity: f32 = 500.0 in 50.0 ..= 5000.0;
+        /// How fast a downed drone loses its ground speed (per second).
+        fpv_fall_drag: f32 = 3.0 in 0.0 ..= 20.0;
+        /// How often a falling drone's silhouette turns (a second).
+        fpv_fall_spin_hz: f32 = 6.0 in 0.0 ..= 30.0;
+        /// How much of a sandstorm's gust carries a drone in the air.
+        fpv_gust_factor: f32 = 0.5 in 0.0 ..= 2.0;
+        /// Seconds the module shows its launch cell.
+        fpv_flash_seconds: f32 = 0.2 in 0.0 ..= 2.0;
+        /// How fast a drone's lamp blinks, and in the dive.
+        fpv_lamp_hz: f32 = 3.0 in 0.5 ..= 20.0;
+        fpv_dive_lamp_hz: f32 = 10.0 in 0.5 ..= 30.0;
+        /// The light a drone's lamp throws at night, against a headlight's.
+        fpv_lamp_light: f32 = 0.35 in 0.0 ..= 2.0;
+        /// Its burst's fireball against a missile's.
+        fpv_blast_fx_scale: f32 = 0.35 in 0.1 ..= 2.0;
+        /// Its burst's ripple and shake against a tank dying's.
+        fpv_shock: f32 = 0.15 in 0.0 ..= 2.0;
+        /// Its shadow's opacity.
+        fpv_shadow_opacity: f32 = 0.3 in 0.0 ..= 1.0;
+        /// Dust blocks a second off the ground under a low drone (cosmetic).
+        fpv_wash_rate: f32 = 30.0 in 0.0 ..= 200.0;
+        /// Seconds between an enemy's launches; it also waits for its last
+        /// drone to come down.
+        fpv_enemy_gap_seconds: f32 = 3.0 in 0.1 ..= 20.0;
+        /// How close an enemy with drones lets a seat it can see come
+        /// before it backs off.
+        fpv_ai_min_range_px: f32 = 160.0 in 0.0 ..= 600.0;
+        /// How far it looks for cover to launch from.
+        fpv_ai_cover_px: f32 = 160.0 in 0.0 ..= 480.0;
+        /// How long it keeps a cover spot before looking again.
+        fpv_ai_cover_seconds: f32 = 4.0 in 0.5 ..= 20.0;
+        /// How near a drone diving at an enemy with a minigun has to be
+        /// before it fires at it.
+        fpv_ai_flak_range_px: f32 = 192.0 in 0.0 ..= 600.0;
+        /// How far off its facing's line the drone's column - from its
+        /// shadow up to its body, what a bullet strikes - may be.
+        fpv_ai_flak_align_px: f32 = 20.0 in 0.0 ..= 64.0;
+        /// How far an enemy looks for a tree to hide under from a drone.
+        fpv_ai_tree_px: f32 = 160.0 in 0.0 ..= 480.0;
+        /// With no tree and no minigun, how near the drone is before it
+        /// breaks across its line.
+        fpv_ai_break_px: f32 = 112.0 in 0.0 ..= 480.0;
+    }
+
     group flamethrower {
         /// Seconds of burn one flamethrower pickup grants; a second pickup
         /// stacks. The weapon is stocked while any fuel is left, and the
@@ -1177,6 +1278,9 @@ tunables! {
         tesla_drain_per_second: f32 = 1.0 in 0.0 ..= 10.0;
         /// Pause after a strike before the coil charges again.
         tesla_cooldown_seconds: f32 = 0.35 in 0.0 ..= 10.0;
+        /// Seconds between two of a coil's arcs at drones in its reach
+        /// (docs/fpv-swarm.md): its own clock, beside the charge on a tank.
+        tesla_air_gap_seconds: f32 = 0.5 in 0.0 ..= 10.0;
         /// Strike damage, rolled per strike.
         tesla_damage_min: f32 = 18.0 in 0.0 ..= 100.0;
         tesla_damage_max: f32 = 26.0 in 0.0 ..= 100.0;
@@ -1204,6 +1308,9 @@ tunables! {
         /// How far the gun aims ahead of a moving target: 0 aims where the
         /// tank is, 1 where it will be when the bullet gets there.
         gun_tower_lead: f32 = 0.5 in 0.0 ..= 1.0;
+        /// How much a gun tower leads a drone (docs/fpv-swarm.md), which it
+        /// fights before any tank.
+        gun_tower_air_lead: f32 = 1.0 in 0.0 ..= 2.0;
         /// Aim error (degrees) the gun opens fire within.
         gun_tower_fire_cone_deg: f32 = 6.0 in 0.0 ..= 45.0;
         /// Bullets per burst, the gap between them and the pause after.

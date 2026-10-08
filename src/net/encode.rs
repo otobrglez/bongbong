@@ -17,7 +17,7 @@ use crate::net::MAX_SEATS;
 use crate::net::PROTOCOL_VERSION;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    BonusPickup, CrateState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
+    BonusPickup, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
 };
 use crate::bullet::Bullet;
 use crate::frog::Frog;
@@ -89,6 +89,7 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
         shots: shots(game),
         missiles: missiles(game),
         grenades: grenades(game),
+        drones: drones(game),
         frogs: frogs(game),
         pickups: 0,
         bonus_pickups: Vec::new(),
@@ -286,6 +287,24 @@ fn grenades(game: &Game) -> Vec<GrenadeState> {
         .collect();
     out.sort_by_key(|g| g.id);
     out
+}
+
+/// The FPV drones in the air, by id (`Game::drones`, already in id order).
+fn drones(game: &Game) -> Vec<DroneState> {
+    game.drones()
+        .iter()
+        .map(|d| DroneState {
+            id: (d.id & 0xFFFF) as u16,
+            x: quantise_pos(d.ground.x),
+            y: quantise_pos(d.ground.y),
+            height: quantise_pos(d.height),
+            heading: quantise_heading(d.heading_degrees()),
+            stage: d.stage.code(),
+            halo: d.slot,
+            owner: d.owner.slot().min(u16::MAX as usize) as u16,
+            lock: d.lock.code(),
+        })
+        .collect()
 }
 
 fn frogs(game: &Game) -> Vec<FrogState> {

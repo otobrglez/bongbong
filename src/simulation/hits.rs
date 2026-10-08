@@ -97,6 +97,9 @@ pub(crate) struct HitBoxFrame {
     pub frame: u64,
     pub tanks: Vec<TankBoxes>,
     pub frogs: Vec<(Entity, Position)>,
+    /// Every air target's strike box (`air::AirTarget::strike_box`), by
+    /// key: a seat's bullet meets an enemy drone where its client drew it.
+    pub air: Vec<(crate::air::AirKey, (Position, Position))>,
 }
 
 impl HitBoxFrame {
@@ -105,6 +108,10 @@ impl HitBoxFrame {
             .binary_search_by_key(&entity.to_bits(), |t| t.entity.to_bits())
             .ok()
             .map(|i| &self.tanks[i])
+    }
+
+    pub fn air(&self, key: crate::air::AirKey) -> Option<(Position, Position)> {
+        self.air.binary_search_by_key(&key, |&(k, _)| k).ok().map(|i| self.air[i].1)
     }
 
     pub fn frog(&self, entity: Entity) -> Option<Position> {
@@ -140,6 +147,7 @@ impl HitBoxHistory {
         entry.frame = frame;
         entry.tanks.clear();
         entry.frogs.clear();
+        entry.air.clear();
         entry.tanks.extend(
             world
                 .query::<(Entity, &Tank)>()
@@ -151,6 +159,14 @@ impl HitBoxHistory {
         entry.tanks.sort_by_key(|t| t.entity.to_bits());
         entry.frogs.extend(world.query::<(Entity, &Frog)>().iter().map(|(e, f)| (e, f.position)));
         entry.frogs.sort_by_key(|&(e, _)| e.to_bits());
+        entry.air.extend(
+            world
+                .query::<&crate::fpv::Drone>()
+                .iter()
+                .filter(|d| d.in_air())
+                .map(|d| { let a = d.as_target(); (a.key, a.strike_box()) }),
+        );
+        entry.air.sort_by_key(|&(k, _)| k);
         self.frames.push_back(entry);
     }
 
@@ -622,6 +638,55 @@ impl SlugBand {
 pub(crate) fn slug_boxes(tank: &Tank, pad: Position) -> [(Position, Position); 2] {
     let (hull, turret) = (tank.hull_bbox_world(), tank.turret_bbox_world());
     [(hull.0, hull.1 + pad), (turret.0, turret.1 + pad)]
+}
+
+impl Terrain {
+    /// The first air target (`air.rs`) not of `shooter`'s side the segment
+    /// `p0..p1`, `half_extent` either side, enters - its strike box grown by
+    /// the shot's half extent, and by `player_shot_hit_pad_px` for a seat's
+    /// shot as every enemy box is - and the entry `t` along it, ties to the
+    /// lower key. A seat's shot meets them where `past` had them (lag
+    /// compensation); one with no entry there is met where it is. What a
+    /// bullet meets in the air beside what `sweep_rewound` gives it on the
+    /// ground (docs/fpv-swarm.md "Air targets").
+    pub fn sweep_air(
+        &self,
+        targets: &[crate::air::AirTarget],
+        shooter: Owner,
+        p0: Position,
+        p1: Position,
+        half_extent: f32,
+        past: Option<&HitBoxFrame>,
+    ) -> Option<(crate::air::AirKey, f32)> {
+        let mut pad = Position::new(half_extent, half_extent);
+        if shooter.is_player() {
+            pad = pad + Position::new(self.player_shot_pad, self.player_shot_pad);
+        }
+        targets
+            .iter()
+            .filter(|a| !a.owner.same_side(shooter))
+            .filter_map(|a| {
+                let (c, h) = past.and_then(|p| p.air(a.key)).unwrap_or_else(|| a.strike_box());
+                segment_hits_aabb(p0, p1, c, h + pad).map(|t| (a.key, t))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)))
+    }
+
+    /// Every air target the segment `p0..p1`, `half_extent` either side,
+    /// enters within `t <= stop`, whoever's, in order along it then by key:
+    /// what a gauss rail's slug pierces in the air.
+    pub fn air_along(targets: &[crate::air::AirTarget], p0: Position, p1: Position, half_extent: f32, stop: f32) -> Vec<(crate::air::AirKey, f32)> {
+        let pad = Position::new(half_extent, half_extent);
+        let mut out: Vec<(crate::air::AirKey, f32)> = targets
+            .iter()
+            .filter_map(|a| {
+                let (c, h) = a.strike_box();
+                segment_hits_aabb(p0, p1, c, h + pad).filter(|&t| t <= stop).map(|t| (a.key, t))
+            })
+            .collect();
+        out.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+        out
+    }
 }
 
 /// Keep `*best` as the candidate with the smallest entry time so far, ties

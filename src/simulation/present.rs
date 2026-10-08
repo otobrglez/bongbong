@@ -80,6 +80,9 @@ pub struct PresentWorld {
     height: f32,
     /// The portals a shot goes into (`Game::shot_portals`).
     portals: Vec<Position>,
+    /// The air targets as drawn (`Game::air_targets`): what a seat's own
+    /// bullets stop at (`air_contact`).
+    air: Vec<crate::air::AirTarget>,
 }
 
 impl Game {
@@ -107,7 +110,7 @@ impl Game {
             .flatten()
             .filter_map(|e| self.world.get::<&crate::frog::Frog>(e).ok().filter(|f| !f.is_dead()).map(|f| f.position))
             .collect();
-        PresentWorld { terrain, tanks, frogs, width, height, portals: self.shot_portals().to_vec() }
+        PresentWorld { terrain, tanks, frogs, width, height, portals: self.shot_portals().to_vec(), air: self.air_targets() }
     }
 
     /// Kick one seat's hull back from a shot it just fired along
@@ -428,6 +431,40 @@ impl Game {
             tank.kick_laser();
         }
     }
+
+    /// Flash `seat`'s FPV relay module, as its launch does (a client
+    /// drawing its own launch on the press).
+    pub fn flash_seat_fpv(&mut self, seat: u8) {
+        let Some(entity) = self.seats.get(seat as usize).copied().flatten() else { return };
+        if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {
+            tank.kick_fpv();
+        }
+    }
+
+    /// Take the drones whose id `gone` names off the picture (a client's
+    /// own launches, and the room's copies of them it keeps hidden).
+    pub fn remove_drones(&mut self, gone: impl Fn(u32) -> bool) {
+        let doomed: Vec<hecs::Entity> =
+            self.world.query::<(hecs::Entity, &crate::fpv::Drone)>().iter().filter(|(_, d)| gone(d.id)).map(|(e, _)| e).collect();
+        for e in doomed {
+            self.world.despawn(e).ok();
+        }
+    }
+
+    /// Put a drone a client drew on its own press on the picture.
+    pub fn add_drone(&mut self, drone: crate::fpv::Drone) {
+        self.world.spawn((drone,));
+    }
+
+    /// How many of `seat`'s drones this client is drawing off the halo that
+    /// the room's count does not know of yet (`Tank::fpv_lifting`): the
+    /// halo is drawn without them.
+    pub fn set_seat_lifting(&mut self, seat: u8, lifting: u8) {
+        let Some(entity) = self.seats.get(seat as usize).copied().flatten() else { return };
+        if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {
+            tank.fpv_lifting = lifting;
+        }
+    }
 }
 
 impl PresentWorld {
@@ -468,6 +505,24 @@ impl PresentWorld {
         consider(self.terrain.first_solid_along(p0, p1), Contact::Tile);
         consider(self.edge_along(p0, p1), Contact::Edge);
         best.map(|(t, c)| (Position::new(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t), c))
+    }
+
+    /// Where a bullet `shooter` fired, `half` wide, flying `p0..p1` first
+    /// crosses an air target of the other side's (docs/fpv-swarm.md "Air
+    /// targets"): a drone's column from its shadow to its body, as the
+    /// room's hit test sweeps it. Only a bullet strikes the air; whether the
+    /// drone comes down is the room's word (`Event::DroneDowned`).
+    pub fn air_contact(&self, shooter: Option<u8>, p0: Position, p1: Position, half: f32) -> Option<Position> {
+        let side = shooter.map_or(Owner::Enemy(usize::MAX), Owner::Player);
+        self.air
+            .iter()
+            .filter(|a| !a.owner.same_side(side))
+            .filter_map(|a| {
+                let (c, h) = a.strike_box();
+                segment_box(p0, p1, c, h + Position::new(half, half))
+            })
+            .min_by(|a, b| a.total_cmp(b))
+            .map(|t| Position::new(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t))
     }
 
     /// Where a shot flying `p0..p1`, leaving the portal `leaving` if any,

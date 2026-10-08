@@ -9,7 +9,7 @@ Writes, under the repo (docs/SPRITESHEET_SPEC.md has the layout):
   static/scifi_tanks_sheet.png   the paint: 33 columns x 60 rows of 40 px cells,
                                  five team blocks of the twelve chassis
   static/scifi_tanks_glow.png    the light layer, the same layout
-  static/tank_modules.png        the weapon modules: 40 columns x 12 rows
+  static/tank_modules.png        the weapon modules: 44 columns x 12 rows
   static/tank_modules_glow.png   their light layer
   src/tank_art.rs                the anchors the engine reads (lamps, muzzles,
                                  missile tubes), generated - never edited by hand
