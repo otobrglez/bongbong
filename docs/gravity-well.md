@@ -2000,6 +2000,14 @@ record of the build.
 - **The curved tracer** is a shell's and a bullet's (`well::curved_streak`,
   `render::shot_fx::curved_streak`, read off `Game::present_wells`); the
   plasma bolt's comet tail stays straight.
+- **A well's off-screen arrow** carries its seconds to the collapse while
+  it pulls (none while it forms).
+- **A replica slides a drawn-off crate** between snapshots (the
+  interpolator blends `CrateState::dx`/`dy` by cell).
+- **The probe's `/after-pull` tag**: an `ANOMALY` line within
+  `AFTER_PULL_FRAMES` (three seconds) of a pull on its tank names it
+  `<tank>/after-pull`, which is how §11 tells what a pull or a collapse
+  leaves behind from the AI's own.
 - **The incoming carry** steps every other shot through the wells on the
   client's present, a tick at a time, and keeps one swallowed on its way
   off the picture as a shot into a portal is.
