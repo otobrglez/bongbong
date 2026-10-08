@@ -2002,7 +2002,6 @@ record of the build.
   plasma bolt's comet tail stays straight.
 - **Left for later**: the incoming carry stepping foreign shots
   through the field (they are carried straight and corrected by the next
-  snapshot); the interpolator blending a crate's drift (it moves with each
   snapshot); the fish drawn toward a well (the collapse throws them, an orb
   scares them).
 

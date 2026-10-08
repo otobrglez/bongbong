@@ -1514,6 +1514,14 @@ from: &Snapshot, to: &Snapshot, alpha: f32) -> Snapshot {
             frog.y = lerp(frog.y, next.y, alpha);
         }
     }
+    // A crate a gravity well draws off its cell slides between the two
+    // ends (docs/gravity-well.md), keyed by its cell.
+    for c in &mut out.crates {
+        if let Ok(i) = to.crates.binary_search_by_key(&c.cell, |n| n.cell) {
+            c.dx = lerp(c.dx, to.crates[i].dx, alpha);
+            c.dy = lerp(c.dy, to.crates[i].dy, alpha);
+        }
+    }
     out
 }
 
