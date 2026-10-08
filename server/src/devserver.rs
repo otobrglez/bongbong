@@ -11,8 +11,10 @@
 //! authoritative round lives here, one per room task, and until now
 //! nothing could look at it: a co-op bug had to be chased through two
 //! real clients and a guess. These tools open a room with no client at
-//! all, post a seat's intents the way that seat would, step the round
-//! deterministically and read what the server actually did.
+//! all, post a seat's intents the way that seat would, put a weapon in a
+//! tank's hands or a crate on the field, give one room tuning rows no
+//! other room sees, step the round deterministically and read what the
+//! server actually did.
 //!
 //! **Dev-only by construction.** The whole module is behind the
 //! `dev-tools` feature, which the release image does not build, and the
@@ -121,8 +123,8 @@ pub async fn dispatch(hub: &Arc<Hub>, method: &str, params: &Value) -> Result<Va
         "rooms" => Ok(rooms(hub)),
         "room_open" => room_open(hub, params).await,
         // Everything else is a room's own business.
-        "room" | "room_step" | "room_resume" | "seat_intent" | "room_snapshot" | "room_events"
-        | "room_close" => forward(hub, method, params).await,
+        "room" | "room_step" | "room_resume" | "seat_intent" | "room_set_tank" | "room_spawn_pickup"
+        | "room_tuning" | "room_snapshot" | "room_events" | "room_close" => forward(hub, method, params).await,
         other => Err(format!("unknown tool {other:?} - `tools/list` has the set")),
     }
 }
@@ -174,10 +176,14 @@ async fn room_open(hub: &Arc<Hub>, params: &Value) -> Result<Value, String> {
     let map_toml = params.get("map_toml").and_then(Value::as_str);
     let mission = params.get("mission").and_then(Value::as_str);
     let seed = params.get("seed").and_then(Value::as_u64);
+    // The room's own rows are checked before there is a room, so a bad
+    // one leaves nothing behind waiting out its TTL.
+    let tuning = params.get("tuning").cloned().unwrap_or_else(|| json!({}));
+    tuning_rows(&tuning)?;
     let params = RoomParams::for_dev(map, map_toml, mission, seed)?;
     let handle = hub.create_room(params).map_err(|r| r.to_string())?;
     let code = handle.code.clone();
-    let result = ask(&handle.commands, "room_open", &json!({ "seats": seats })).await;
+    let result = ask(&handle.commands, "room_open", &json!({ "seats": seats, "tuning": tuning })).await;
     match result {
         Ok(mut value) => {
             if let Some(obj) = value.as_object_mut() {
@@ -187,6 +193,22 @@ async fn room_open(hub: &Arc<Hub>, params: &Value) -> Result<Value, String> {
         }
         Err(e) => Err(e),
     }
+}
+
+/// A tool's tuning rows as the patch object they are, refused whole on a
+/// row the build has not got or a value out of its range - what
+/// `room_open {tuning}` and `room_tuning {patch}` take.
+pub fn tuning_rows(rows: &Value) -> Result<serde_json::Map<String, Value>, String> {
+    let Value::Object(rows) = rows else {
+        return Err("tuning rows are an object of {knob: value}".into());
+    };
+    bongbong::tuning::Tuning::DEFAULT.with_json_patch(&rows_json(rows))?;
+    Ok(rows.clone())
+}
+
+/// Rows as the JSON patch text the tuning table takes.
+pub fn rows_json(rows: &serde_json::Map<String, Value>) -> String {
+    Value::Object(rows.clone()).to_string()
 }
 
 async fn forward(hub: &Arc<Hub>, method: &str, params: &Value) -> Result<Value, String> {

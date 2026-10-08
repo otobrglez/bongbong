@@ -194,6 +194,14 @@ fn init_under(patch: &str, game: &mut Game, width: f32, height: f32) {
     game.init(width, height);
 }
 
+/// The table the server started with, the one a room's own table
+/// (`room_tuning`) is made on top of.
+#[cfg(feature = "dev-tools")]
+fn server_table() -> Tuning {
+    let _held = ROUND_TUNING.lock().unwrap_or_else(PoisonError::into_inner);
+    *BASE_TUNING.get_or_init(tuning::current)
+}
+
 /// Where a room stands. The discriminants are what `RoomStats` stores.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -539,6 +547,20 @@ struct Room {
     /// when a dev tool says so, until `room_resume`.
     #[cfg(feature = "dev-tools")]
     frozen: bool,
+    /// This room's own tuning rows (`room_tuning`, `room_open {tuning}`),
+    /// on top of the server's table and the seat-count patch; empty for
+    /// every room a client opened.
+    #[cfg(feature = "dev-tools")]
+    dev_rows: serde_json::Map<String, serde_json::Value>,
+    /// The seat-count patch alone (`tuning_patch`), which `tuning_json`
+    /// is with `dev_rows` on top.
+    #[cfg(feature = "dev-tools")]
+    seat_patch: String,
+    /// The table everything this room does runs under while `dev_rows`
+    /// holds any (`under_own_table`): the server's own with `tuning_json`
+    /// on it. `None` reads the process's table, as every other room does.
+    #[cfg(feature = "dev-tools")]
+    own_table: Option<Arc<Tuning>>,
     /// The events of the round, for `room_events`: a ring of the last
     /// `DEV_EVENT_RING`, each with the seq and frame it happened on.
     #[cfg(feature = "dev-tools")]
@@ -636,6 +658,12 @@ impl Room {
             #[cfg(feature = "dev-tools")]
             frozen: false,
             #[cfg(feature = "dev-tools")]
+            dev_rows: serde_json::Map::new(),
+            #[cfg(feature = "dev-tools")]
+            seat_patch: ROOM_TUNING_JSON.to_string(),
+            #[cfg(feature = "dev-tools")]
+            own_table: None,
+            #[cfg(feature = "dev-tools")]
             dev_events: std::collections::VecDeque::new(),
             #[cfg(feature = "dev-tools")]
             dev_seq: 0,
@@ -646,6 +674,10 @@ impl Room {
     // Seats and the lobby
 
     fn handle(&mut self, cmd: Command) {
+        self.under_own_table(|room| room.handle_now(cmd));
+    }
+
+    fn handle_now(&mut self, cmd: Command) {
         match cmd {
             Command::Join { nick, device_token, conn, reply } => {
                 let _ = reply.send(self.join(nick, device_token, conn));
@@ -886,7 +918,16 @@ impl Room {
         // The wave plan this team's size asks for, on the table for the
         // one call that reads it and in every `Welcome` behind it.
         self.tuning_json = tuning_patch(players);
-        init_under(&self.tuning_json, &mut game, w, h);
+        #[cfg(feature = "dev-tools")]
+        {
+            self.seat_patch = self.tuning_json.clone();
+            if let Err(e) = self.fold_dev_rows() {
+                warn!(code = self.code, error = e, "the room's own tuning rows were refused; the round runs without them");
+                self.dev_rows.clear();
+                self.fold_dev_rows().expect("no rows is the seat patch alone");
+            }
+        }
+        self.init_round(&mut game, w, h);
         self.round_seed = game.round_seed();
         // `init`'s own events (the round start) travel in the welcome's
         // snapshot, which is frame 0's.
@@ -942,6 +983,10 @@ impl Room {
 
     /// A deadline came due; `true` when the room is to be dropped.
     fn on_deadline(&mut self) -> bool {
+        self.under_own_table(Room::on_deadline_now)
+    }
+
+    fn on_deadline_now(&mut self) -> bool {
         let now = Instant::now();
         match self.life.expired(now) {
             Some(Expiry::Reap) => return true,
@@ -1162,6 +1207,10 @@ impl Room {
     }
 
     fn tick(&mut self) {
+        self.under_own_table(Room::tick_now);
+    }
+
+    fn tick_now(&mut self) {
         if self.restart_is_due() {
             // The ticks since the last snapshot banked events nobody has
             // been sent; they go out with the state they happened in
@@ -1365,6 +1414,46 @@ fn distinct_nick<'a>(nick: &str, taken: impl Iterator<Item = &'a str> + Clone) -
         .expect("a room has fewer seats than numbers")
 }
 
+/// The table a room runs under. Every room reads the process's, except
+/// one a dev tool gave rows of its own (`room_tuning`), whose ticks, lobby
+/// and tools read its own table and nothing else's.
+impl Room {
+    /// Run `f` under this room's own table where it has one, else the
+    /// process's - never a table an outer call left in force.
+    #[cfg(feature = "dev-tools")]
+    fn under_own_table<R>(&mut self, f: impl FnOnce(&mut Room) -> R) -> R {
+        let table = self.own_table.clone();
+        tuning::in_force(table.as_ref(), || f(self))
+    }
+
+    #[cfg(not(feature = "dev-tools"))]
+    fn under_own_table<R>(&mut self, f: impl FnOnce(&mut Room) -> R) -> R {
+        f(self)
+    }
+
+    /// `game.init` under the round's patch: on this room's own table
+    /// where it has one, else through `init_under`.
+    fn init_round(&mut self, game: &mut Game, width: f32, height: f32) {
+        self.under_own_table(|room| {
+            if room.has_own_table() {
+                game.init(width, height);
+            } else {
+                init_under(&room.tuning_json, game, width, height);
+            }
+        });
+    }
+
+    #[cfg(feature = "dev-tools")]
+    fn has_own_table(&self) -> bool {
+        self.own_table.is_some()
+    }
+
+    #[cfg(not(feature = "dev-tools"))]
+    fn has_own_table(&self) -> bool {
+        false
+    }
+}
+
 /// Whether a dev tool has taken this room off real time (`room_step`).
 /// Always false in a build without the tools, so the tick guard reads
 /// the same either way.
@@ -1388,7 +1477,8 @@ mod dev {
     use super::*;
     use bongbong::ai::Intent;
     use bongbong::net::wire::IntentMsg;
-    use bongbong::simulation::debug::Detail;
+    use bongbong::pickup::PickupKind;
+    use bongbong::simulation::debug::{Detail, TankPatch};
     use bongbong::tank::Dir;
     use serde_json::{Value, json};
 
@@ -1407,9 +1497,14 @@ mod dev {
     }
 
     impl Room {
-        /// One dev call. The single dispatch table: every arm is a row of
-        /// `bongbong::devserver::ROOM_TOOLS` and every row is an arm.
+        /// One dev call, under the room's own table.
         pub(super) fn dev(&mut self, method: &str, params: &Value) -> Result<Value, String> {
+            self.under_own_table(|room| room.dev_now(method, params))
+        }
+
+        /// The single dispatch table: every arm is a row of
+        /// `bongbong::devserver::ROOM_TOOLS` and every row is an arm.
+        fn dev_now(&mut self, method: &str, params: &Value) -> Result<Value, String> {
             match method {
                 "room" => Ok(self.dev_room()),
                 "room_open" => self.dev_open(params),
@@ -1419,6 +1514,9 @@ mod dev {
                     Ok(json!({ "frozen": false, "tick": self.dev_tick() }))
                 }
                 "seat_intent" => self.dev_seat_intent(params),
+                "room_set_tank" => self.dev_set_tank(params),
+                "room_spawn_pickup" => self.dev_spawn_pickup(params),
+                "room_tuning" => self.dev_tuning(params),
                 "room_snapshot" => self.dev_snapshot(params),
                 "room_events" => Ok(self.dev_events_since(params)),
                 "room_close" => {
@@ -1470,6 +1568,7 @@ mod dev {
                 "outcome": self.game.as_ref().map(|g| format!("{:?}", g.outcome())),
                 "players": self.game.as_ref().map(|g| g.players.count()),
                 "tuning_patch": serde_json::from_str::<Value>(&self.tuning_json).unwrap_or(Value::Null),
+                "dev_tuning": self.dev_rows,
                 "seats": seats,
             })
         }
@@ -1480,6 +1579,11 @@ mod dev {
             let seats = params.get("seats").and_then(Value::as_u64).unwrap_or(1) as usize;
             if self.life.phase() != Phase::Waiting {
                 return Err("this room has already started".into());
+            }
+            // The room's own rows go in before the round is set up, so
+            // `start` makes the round on them.
+            if let Some(rows) = params.get("tuning") {
+                self.dev_rows = crate::devserver::tuning_rows(rows)?;
             }
             let now = Instant::now();
             for i in 0..seats {
@@ -1586,6 +1690,104 @@ mod dev {
                 script.sent += 1;
                 script.remaining -= 1;
             }
+        }
+
+        /// The game's `set_tank` on the authoritative round: a weapon put
+        /// in a seat's or an enemy's hands, damage, a shield, timers.
+        fn dev_set_tank(&mut self, params: &Value) -> Result<Value, String> {
+            let slot = params.get("slot").and_then(Value::as_u64).ok_or("slot is required")? as usize;
+            // `TankPatch` is `serde(default)`: an unknown key parses and
+            // does nothing, so the one renamed field is caught by name.
+            if params.get("shield_timer").is_some() {
+                return Err("shield_timer is not settable: a pickup sets the shield's clock - use shield_hp".into());
+            }
+            let patch: TankPatch = serde_json::from_value(params.clone()).map_err(|e| e.to_string())?;
+            let (w, h) = self.map.field_size();
+            let game = self.game.as_mut().ok_or("this room has no round yet")?;
+            game.debug_set_tank(slot, &patch)?;
+            let tank = game.debug_snapshot(w, h, Detail::Compact).tanks.into_iter().find(|t| t.slot == slot);
+            serde_json::to_value(tank).map_err(|e| e.to_string())
+        }
+
+        /// The game's `spawn_pickup` on the authoritative round.
+        fn dev_spawn_pickup(&mut self, params: &Value) -> Result<Value, String> {
+            let name = params.get("kind").and_then(Value::as_str).unwrap_or("");
+            let kind = PickupKind::parse(name).ok_or_else(|| format!("kind: no pickup is called {name:?}"))?;
+            let at = |key: &str| params.get(key).and_then(Value::as_f64).map(|v| v as f32);
+            let (Some(x), Some(y)) = (at("x"), at("y")) else {
+                return Err("x and y are required".into());
+            };
+            let game = self.game.as_mut().ok_or("this room has no round yet")?;
+            let at = game.debug_spawn_pickup(kind, Position::new(x, y))?;
+            Ok(json!({ "kind": kind.name(), "x": at.x, "y": at.y }))
+        }
+
+        /// This room's own rows: reported, added to (`patch`) or dropped
+        /// (`reset`). A change in a round goes to every connected window
+        /// in a fresh welcome, so its replica and its predictions run on
+        /// the numbers the room does.
+        fn dev_tuning(&mut self, params: &Value) -> Result<Value, String> {
+            let reset = params.get("reset").and_then(Value::as_bool).unwrap_or(false);
+            let patch = params.get("patch").map(crate::devserver::tuning_rows).transpose()?;
+            let mut welcomed = 0;
+            if reset || patch.is_some() {
+                let mut rows = if reset { serde_json::Map::new() } else { self.dev_rows.clone() };
+                for (key, value) in patch.into_iter().flatten() {
+                    // A whole array row replaces what its labels set.
+                    let labelled = format!("{key}.");
+                    rows.retain(|old, _| *old != key && !old.starts_with(&labelled));
+                    rows.insert(key, value);
+                }
+                let before = std::mem::replace(&mut self.dev_rows, rows);
+                if let Err(e) = self.fold_dev_rows() {
+                    self.dev_rows = before;
+                    self.fold_dev_rows().expect("the rows in force folded before");
+                    return Err(e);
+                }
+                if matches!(self.life.phase(), Phase::Playing | Phase::Paused) {
+                    welcomed = self.under_own_table(Room::welcome_again);
+                }
+            }
+            Ok(json!({
+                "rows": self.dev_rows,
+                "tuning_patch": serde_json::from_str::<Value>(&self.tuning_json).unwrap_or(Value::Null),
+                "welcomed": welcomed,
+            }))
+        }
+
+        /// `tuning_json` as the seat-count patch with this room's rows on
+        /// top, and `own_table` the server's table under it - or none, and
+        /// the seat patch alone, where the room has no rows.
+        pub(super) fn fold_dev_rows(&mut self) -> Result<(), String> {
+            if self.dev_rows.is_empty() {
+                self.tuning_json = self.seat_patch.clone();
+                self.own_table = None;
+                return Ok(());
+            }
+            let mut patch: serde_json::Map<String, Value> = serde_json::from_str(&self.seat_patch).unwrap_or_default();
+            patch.extend(self.dev_rows.clone());
+            let json = crate::devserver::rows_json(&patch);
+            let table = server_table().with_json_patch(&json)?;
+            self.tuning_json = json;
+            self.own_table = Some(Arc::new(table));
+            Ok(())
+        }
+
+        /// A fresh `Welcome` on the live world for every connected seat -
+        /// a reconnect's, with the seat, its mailbox and the round left as
+        /// they are - and how many went out.
+        fn welcome_again(&mut self) -> usize {
+            let mut sent = 0;
+            for i in 0..self.seats.len() {
+                let Some(seat) = self.seats[i].as_mut().filter(|s| s.conn.is_some()) else { continue };
+                // The welcome is the seat's baseline now, not the last
+                // snapshot every other seat has: the next goes in full.
+                seat.needs_full = true;
+                let welcome = self.welcome(i as u8);
+                self.send_to(i as u8, Msg::Welcome(welcome));
+                sent += 1;
+            }
+            sent
         }
 
         fn dev_snapshot_value(&self, detail: Detail) -> Option<Value> {
@@ -1919,6 +2121,61 @@ cells."11,4" = { kind = "start2" }
             room.tick();
             assert_eq!(placed(&room), [], "tick {tick}: a seat with nobody at it was placed");
         }
+    }
+
+    /// **A room's own rows reach its windows** (BB-58): the round a
+    /// window starts is welcomed with them, and a change in the round - a
+    /// row added, every row taken back - welcomes it again on the live
+    /// world, its seat kept and its next snapshot whole, so the replica
+    /// and its predictions run on the numbers the room does.
+    #[cfg(feature = "dev-tools")]
+    #[tokio::test]
+    async fn a_rooms_own_rows_reach_its_window_in_a_welcome() {
+        use crate::conn::Outbox;
+        use crate::metrics::Metrics;
+        use serde_json::{Value, json};
+
+        let params = RoomParams::for_dev("default", None, None, Some(7)).expect("the room's setup");
+        let (_commands, rx) = mpsc::channel(1);
+        let hub = Hub::new(8, Arc::new(Metrics::new()));
+        let stats = Arc::new(RoomStats::new(params.map_label.clone(), params.mission));
+        let mut room = Room::new(hub, "TESTS".into(), params, rx, stats);
+        let (outbox, mut out, _close) = Outbox::pair();
+        room.join("oto".into(), "tok-oto".into(), ConnLink { id: 1, outbox }).expect("seated");
+        let mut welcomes = move || {
+            let mut patches = Vec::new();
+            while let Ok(bytes) = out.try_recv() {
+                if let Ok(Msg::Welcome(welcome)) = codec::decode(&bytes) {
+                    patches.push(serde_json::from_str::<Value>(&welcome.tuning_json).expect("a patch"));
+                }
+            }
+            patches
+        };
+        assert_eq!(welcomes(), [json!({})], "the waiting room's welcome");
+
+        // Rows staged while the room waits are what its round is set up on.
+        let staged = room.dev("room_tuning", &json!({ "patch": { "tank_speed": 400 } })).expect("a row");
+        assert_eq!(staged["welcomed"], 0, "a waiting room has no round to welcome anyone into: {staged}");
+        room.start(0).expect("the host starts");
+        assert_eq!(welcomes(), [json!({ "tank_speed": 400 })]);
+        room.tick();
+        welcomes();
+
+        // A row added in the round: the window is welcomed again.
+        let more = room.dev("room_tuning", &json!({ "patch": { "shell_speed": 300 } })).expect("a row");
+        assert_eq!(more["welcomed"], 1, "{more}");
+        assert_eq!(welcomes(), [json!({ "tank_speed": 400, "shell_speed": 300 })]);
+        assert!(room.seats[0].as_ref().is_some_and(|s| s.needs_full && s.conn.is_some()), "the seat was let go");
+        // Every row taken back: the welcome is the seat patch alone.
+        let reset = room.dev("room_tuning", &json!({ "reset": true })).expect("a reset");
+        assert_eq!(reset["rows"], json!({}), "{reset}");
+        assert_eq!(welcomes(), [json!({})]);
+        assert!(room.own_table.is_none(), "a room with no rows of its own reads the server's table");
+        // A bad row is refused whole and leaves the rows as they were.
+        room.dev("room_tuning", &json!({ "patch": { "tank_speed": 300 } })).expect("a row");
+        let refused = room.dev("room_tuning", &json!({ "patch": { "tank_speed": 350, "no_such_row": 1 } }));
+        assert!(refused.unwrap_err().contains("no_such_row"));
+        assert_eq!(room.dev("room_tuning", &json!({})).expect("a report")["rows"], json!({ "tank_speed": 300 }));
     }
 
     /// Every shipped map - what the lobby's stepper offers - is a room's
