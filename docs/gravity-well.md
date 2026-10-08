@@ -1634,7 +1634,7 @@ Wire:
 ### Results (Phase 2)
 
 Every run is ten rounds a map at seed 1000, the recipes' frames, the AFK
-seat, at the PR's head. A count is followed by its rate per ten minutes of
+seat, at the PR's head on the rod's final head (5e80097). A count is followed by its rate per ten minutes of
 play in brackets: a well pack ends almost no AFK round, so its rounds run
 to the frame limit while a shells pack ends most in under a minute, and
 only rates compare. `/pull` counts the lines tagged as in a pull or within
@@ -1652,63 +1652,63 @@ Fixtures (`maps/test/*.toml`, 1800 frames):
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | defaults | 11 | 0 | 4 (3.6) | 32 (28.8) | 3 (2.7) | 34 (30.6) | 10 (9.0) | 0 | 0 | 0 | 0 | 6 (5.4) | 0 | 0 |
 | crate | 11 | 0 | 4 (3.6) | 32 (28.8) | 3 (2.7) | 34 (30.6) | 10 (9.0) | 0 | 0 | 0 | 0 | 6 (5.4) | 0 | 0 |
-| mixed | 15 | 0 | 1 (0.7) | 31 (21.1) | 3 (2.0) | 46 (31.4) | 26 (17.7) | 0 | 1 (0.7) | 0 | 2 (1.4) | 11 (7.5) | 0 | 0 |
+| mixed | 15 | 0 | 1 (0.7) | 31 (21.1) | 3 (2.0) | 46 (31.3) | 26 (17.7) | 0 | 1 (0.7) | 0 | 2 (1.4) | 11 (7.5) | 0 | 0 |
 | yardstick | 44 | 0 | 20 (4.5) | 76 (17.2) | 22 (5.0) | 136 (30.8) | 95 (21.5) | 3 (0.7) | 8 (1.8) | 7 (1.6) | 12 (2.7) | 65 (14.7) | 0 | 0 |
-| armed | 45 | 3 (0.7) | 18 (4.0) | 49 (11.0) | 22 (4.9) | 88 (19.7) | 59 (13.2) | 8 (1.8) | 3 (0.7) | 3 (0.7) | 3 (0.7) | 33 (7.4) | 0 | 2 |
+| armed | 45 | 3 (0.7) | 17 (3.8) | 47 (10.4) | 22 (4.9) | 89 (19.8) | 58 (12.9) | 7 (1.6) | 2 (0.4) | 4 (0.9) | 2 (0.4) | 32 (7.1) | 0 | 0 |
 | armed, destroy | 45 | 0 | 18 (4.0) | 44 (9.9) | 24 (5.4) | 101 (22.6) | 79 (17.7) | 5 (1.1) | 2 (0.4) | 7 (1.6) | 4 (0.9) | 40 (9.0) | 0 | 0 |
-| armed, night | 45 | 2 (0.4) | 15 (3.4) | 43 (9.6) | 25 (5.6) | 99 (22.1) | 46 (10.3) | 5 (1.1) | 1 (0.2) | 3 (0.7) | 6 (1.3) | 29 (6.5) | 0 | 1 |
-| armed, rain | 43 | 0 | 6 (1.4) | 44 (10.2) | 18 (4.2) | 109 (25.2) | 86 (19.9) | 4 (0.9) | 8 (1.9) | 4 (0.9) | 9 (2.1) | 50 (11.6) | 0 | 2 |
-| armed, C2 | 44 | 0 | 11 (2.5) | 51 (11.5) | 15 (3.4) | 86 (19.4) | 48 (10.8) | 6 (1.4) | 4 (0.9) | 4 (0.9) | 5 (1.1) | 27 (6.1) | 0 | 2 |
+| armed, night | 45 | 2 (0.4) | 15 (3.3) | 43 (9.6) | 25 (5.6) | 95 (21.2) | 50 (11.1) | 5 (1.1) | 1 (0.2) | 3 (0.7) | 6 (1.3) | 31 (6.9) | 0 | 3 |
+| armed, rain | 43 | 0 | 6 (1.4) | 42 (9.7) | 18 (4.2) | 104 (24.0) | 90 (20.8) | 4 (0.9) | 8 (1.8) | 4 (0.9) | 9 (2.1) | 52 (12.0) | 0 | 1 |
+| armed, C2 | 45 | 0 | 11 (2.5) | 50 (11.2) | 15 (3.3) | 86 (19.2) | 47 (10.5) | 6 (1.3) | 3 (0.7) | 5 (1.1) | 4 (0.9) | 25 (5.6) | 0 | 1 |
 | yardstick, 2 seats | 45 | 1 (0.2) | 29 (6.4) | 83 (18.4) | 25 (5.6) | 159 (35.3) | 70 (15.6) | 2 (0.4) | 10 (2.2) | 4 (0.9) | 17 (3.8) | 46 (10.2) | 0 | 0 |
-| armed, 2 seats | 45 | 0 | 10 (2.2) | 69 (15.4) | 11 (2.4) | 131 (29.1) | 51 (11.3) | 0 | 2 (0.4) | 5 (1.1) | 3 (0.7) | 22 (4.9) | 0 | 15 |
-| armed, 2 seats, destroy | 45 | 0 | 4 (0.9) | 66 (14.7) | 16 (3.6) | 124 (27.6) | 58 (12.9) | 1 (0.2) | 4 (0.9) | 3 (0.7) | 5 (1.1) | 32 (7.1) | 0 | 10 |
+| armed, 2 seats | 45 | 0 | 10 (2.2) | 65 (14.5) | 10 (2.2) | 127 (28.3) | 49 (10.9) | 0 | 2 (0.4) | 7 (1.6) | 1 (0.2) | 19 (4.2) | 0 | 11 |
+| armed, 2 seats, destroy | 45 | 0 | 4 (0.9) | 65 (14.4) | 19 (4.2) | 127 (28.2) | 65 (14.4) | 1 (0.2) | 5 (1.1) | 2 (0.4) | 5 (1.1) | 37 (8.2) | 0 | 3 |
 
 Fields (the seven of `just probe-fields`, 3600 frames):
 
 | run | min | stall | border | jitter | spin | churn | cluster | wall-gr | low-prog | never-arr | tank-gr | pile-up | offbox | /pull |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | defaults | 19 | 0 | 11 (5.8) | 108 (57.1) | 24 (12.7) | 83 (43.9) | 12 (6.3) | 1 (0.5) | 0 | 0 | 0 | 8 (4.2) | 0 | 0 |
-| crate | 25 | 0 | 11 (4.3) | 129 (50.6) | 30 (11.8) | 99 (38.8) | 29 (11.4) | 2 (0.8) | 0 | 0 | 3 (1.2) | 19 (7.5) | 0 | 0 |
-| mixed | 23 | 0 | 11 (4.8) | 101 (44.2) | 15 (6.6) | 78 (34.1) | 10 (4.4) | 2 (0.9) | 0 | 0 | 0 | 6 (2.6) | 0 | 0 |
+| crate | 26 | 0 | 11 (4.2) | 129 (49.6) | 31 (11.9) | 99 (38.1) | 29 (11.2) | 2 (0.8) | 0 | 0 | 3 (1.2) | 19 (7.3) | 0 | 0 |
+| mixed | 23 | 0 | 11 (4.8) | 100 (43.8) | 15 (6.6) | 78 (34.1) | 10 (4.4) | 2 (0.9) | 0 | 0 | 0 | 6 (2.6) | 0 | 0 |
 | yardstick | 67 | 1 (0.2) | 12 (1.8) | 169 (25.4) | 44 (6.6) | 145 (21.8) | 109 (16.4) | 4 (0.6) | 8 (1.2) | 1 (0.2) | 18 (2.7) | 74 (11.1) | 0 | 0 |
-| armed | 68 | 3 (0.4) | 13 (1.9) | 190 (27.9) | 80 (11.7) | 176 (25.8) | 140 (20.5) | 2 (0.3) | 5 (0.7) | 4 (0.6) | 11 (1.6) | 101 (14.8) | 0 | 11 |
-| armed, destroy | 69 | 1 (0.1) | 14 (2.0) | 126 (18.4) | 48 (7.0) | 103 (15.0) | 112 (16.3) | 5 (0.7) | 5 (0.7) | 4 (0.6) | 7 (1.0) | 73 (10.6) | 0 | 1 |
-| armed, night | 69 | 0 | 10 (1.5) | 185 (27.0) | 75 (10.9) | 188 (27.4) | 100 (14.6) | 3 (0.4) | 1 (0.1) | 6 (0.9) | 3 (0.4) | 72 (10.5) | 0 | 15 |
-| armed, rain | 68 | 1 (0.1) | 5 (0.7) | 209 (30.6) | 73 (10.7) | 193 (28.2) | 147 (21.5) | 4 (0.6) | 7 (1.0) | 7 (1.0) | 10 (1.5) | 99 (14.5) | 0 | 4 |
-| armed, C2 | 69 | 1 (0.1) | 12 (1.7) | 176 (25.4) | 66 (9.5) | 174 (25.1) | 131 (18.9) | 4 (0.6) | 2 (0.3) | 5 (0.7) | 7 (1.0) | 92 (13.3) | 0 | 9 |
+| armed | 68 | 3 (0.4) | 13 (1.9) | 193 (28.3) | 79 (11.6) | 178 (26.1) | 140 (20.5) | 2 (0.3) | 5 (0.7) | 4 (0.6) | 13 (1.9) | 103 (15.1) | 0 | 7 |
+| armed, destroy | 68 | 1 (0.1) | 14 (2.0) | 127 (18.6) | 50 (7.3) | 103 (15.1) | 112 (16.4) | 5 (0.7) | 5 (0.7) | 4 (0.6) | 8 (1.2) | 74 (10.8) | 0 | 0 |
+| armed, night | 69 | 0 | 10 (1.5) | 181 (26.3) | 74 (10.7) | 188 (27.3) | 94 (13.6) | 2 (0.3) | 2 (0.3) | 7 (1.0) | 3 (0.4) | 65 (9.4) | 0 | 15 |
+| armed, rain | 70 | 1 (0.1) | 5 (0.7) | 210 (30.2) | 74 (10.6) | 189 (27.2) | 147 (21.1) | 5 (0.7) | 7 (1.0) | 7 (1.0) | 10 (1.4) | 107 (15.4) | 0 | 9 |
+| armed, C2 | 70 | 1 (0.1) | 12 (1.7) | 177 (25.5) | 65 (9.3) | 175 (25.2) | 137 (19.7) | 4 (0.6) | 2 (0.3) | 7 (1.0) | 8 (1.2) | 97 (13.9) | 0 | 5 |
 | yardstick, 2 seats | 70 | 3 (0.4) | 23 (3.3) | 174 (24.9) | 36 (5.2) | 189 (27.1) | 90 (12.9) | 3 (0.4) | 13 (1.9) | 3 (0.4) | 23 (3.3) | 55 (7.9) | 0 | 0 |
-| armed, 2 seats | 68 | 1 (0.1) | 10 (1.5) | 120 (17.7) | 39 (5.7) | 124 (18.3) | 65 (9.6) | 3 (0.4) | 4 (0.6) | 7 (1.0) | 8 (1.2) | 46 (6.8) | 0 | 8 |
-| armed, 2 seats, destroy | 69 | 0 | 10 (1.5) | 115 (16.8) | 23 (3.4) | 102 (14.9) | 69 (10.1) | 1 (0.1) | 2 (0.3) | 6 (0.9) | 6 (0.9) | 39 (5.7) | 0 | 8 |
+| armed, 2 seats | 67 | 1 (0.1) | 10 (1.5) | 119 (17.8) | 30 (4.5) | 127 (19.0) | 69 (10.3) | 3 (0.4) | 4 (0.6) | 6 (0.9) | 9 (1.3) | 42 (6.3) | 0 | 10 |
+| armed, 2 seats, destroy | 69 | 0 | 10 (1.4) | 116 (16.8) | 27 (3.9) | 104 (15.0) | 74 (10.7) | 1 (0.1) | 2 (0.3) | 6 (0.9) | 5 (0.7) | 42 (6.1) | 0 | 11 |
 
 - **Defaults.** `just probe-fixtures` and `just probe-fields` pass, and
   every line of all sixteen fixture and field runs, the 30-round default
   sweep, `waves-basic`, the advance runs on `maze` and `hedge-maze`, the
   two-seat runs on the default map and `archipelago` and two seven-minute
-  defend rounds on `longwater` is the base's (d0a19af), the timing line
-  aside: a round without the well replays byte for byte.
+  defend rounds on `longwater` is the rod's final head's (5e80097), the
+  timing line aside: a round without the well replays byte for byte.
 - **With the crate.** The fixtures carry no special slot, so their runs are
   the defaults' to the byte. On the fields an enemy that takes the crate
   fires no shells while it holds wells, so the rounds run a third longer
-  (25 minutes against 19) and the rates stay at or under the defaults'
-  but clustering and pile-up, which rise with the enemies a longer round
-  keeps alive (the yardstick's are higher still). No anomaly followed a
-  pull.
+  (26 minutes against 19) and the rates stay at or under the defaults'
+  but clustering, pile-up, tank-grind and wall-grind (2 lines against 1),
+  which rise with the enemies a longer round keeps alive. No anomaly
+  followed a pull.
 - **Armed against the yardstick.** In `destroy`, like for like, an armed
   pack is under the shells pack in most kinds - jitter, churn, low
   progress, tank-grind and pile-up well under - and the few above it are
   within half a point per ten minutes: spin (5.4 against 5.0 on the
-  fixtures, 7.0 against 6.6 on the fields), wall-grind (1.1 against 0.7,
+  fixtures, 7.3 against 6.6 on the fields), wall-grind (1.1 against 0.7,
   0.7 against 0.6), border-stuck on the fields (2.0 against 1.8) and
   never-arrived on the fields (4 lines against 1). In the maps' own missions the
-  armed pack's clustering (20.5 against 16.4) and pile-up (14.8 against
+  armed pack's clustering (20.5 against 16.4) and pile-up (15.1 against
   11.1) are higher on the fields: a pack that never fires keeps every
   enemy alive and closing on the seat and its frog for the whole ten
   minutes, `harbor-lights` and `hedge-maze` carrying most of it, and
   `destroy` - the same pack against a seat with no frog to close on -
-  brings both back to the yardstick's. Only 11 of 725 field lines and 2
-  of 289 fixture lines follow a pull.
+  brings both back to the yardstick's. Only 7 of 733 field lines and none
+  of 283 fixture lines follow a pull.
 - **What a pull leaves.** Across every armed run the tagged lines are
-  jitter, clustering, pile-up, a few spins, border-stucks and one churn -
+  jitter, clustering, pile-up, a few spins, border-stucks and churns -
   never a stall, low-progress, tank-grind or never-arrived. Read round by round: the clustering
   and pile-up are hulls the pull drew together still within 90 px of one
   another when their windows close after it ends; the jitter is the escape
@@ -1717,8 +1717,8 @@ Fields (the seven of `just probe-fields`, 3600 frames):
   heavies pressed together by a pull take the ram's contact damage every
   `ram_damage_cooldown`, as any two touching hulls do.
 - **Two seats.** The clump arm needs two seats, so the two-seat runs are
-  where the well is used most (444 trigger pulls on the fixtures and 543
-  on the fields, against 77 and 196 with one seat). They found two things,
+  where the well is used most (426 trigger pulls on the fixtures and 537
+  on the fields, against 76 and 203 with one seat). They found two things,
   both fixed here: an enemy that launched its last well kept the well's
   eight-second fire timer and stood lined up on its shells for the rest of
   it (`Brain::cap_fire_timer`, test
