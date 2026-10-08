@@ -158,10 +158,22 @@ tracked hull does: **along its tracks it rolls, across them it bites.**
   is next to nothing and its grip holds most of the side pull, so it keeps
   its speed and leaves along a chord: the same enemy is out in under two
   seconds, the seat in a second and a quarter. A scout seat driving away is
-  carried in from anywhere within 70 px; across, it is out from 50 px.
+  carried in from anywhere within 80 px; across, it is out from 55 px.
   Nearer the edge, where the current is weak, either way out works and away
   is the shorter; the deeper in, the more only across does - and right at
-  the core nothing does but a heavy chassis. Stopping broadside is how a
+  the core nothing does but a heavy chassis. Measured at the defaults, a
+  seat flooring it from a point east of the core (the review's table,
+  held by `each_chassis_class_escapes_a_pull_as_the_doc_says`):
+
+  | Chassis (mass) | Trapped either way | Only across | Both, away the shorter |
+  |---|---|---|---|
+  | scout, wraith (0.77), flak, glacier (0.80) | within 50 px | 55-80 px | past 85 px |
+  | assault, warden (1.00) | within 20 px | 25-50 px | past 55 px |
+  | longbow, obelisk (1.20), breaker, ravager (1.26) | never | under 25 px | past 40 px |
+  | titan, leviathan (1.86-1.89) | never | never | everywhere |
+
+  So the counter is the light and the standard chassis'; a heavy one is
+  never caught, and stands (the AI's brace) by choice. Stopping broadside is how a
   heavy chassis stands its ground: a breaker or a titan stopped across the
   pull holds, one stopped facing the core rolls in.
 - **Knocked off its tracks** (a skid - the hammer's knock, the rail's

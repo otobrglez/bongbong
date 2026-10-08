@@ -1246,3 +1246,315 @@ fn routes_go_round_a_well() {
     assert_eq!(after.cost_at(outside.0, outside.1), before.cost_at(outside.0, outside.1));
 }
 
+
+// --- what it bends, swallows, lifts and leaves ----------------------------
+
+fn shell_positions(game: &Game) -> Vec<Position> {
+    game.world.query::<&Shell>().iter().filter(|s| s.is_flying()).map(|s| s.position).collect()
+}
+
+/// A shell a well bends into a tank hits it: each tick's stretch of the
+/// curve is swept. The tank stands on the curve the same shot flies with
+/// nobody there, past the well's reach and off the straight line.
+#[test]
+fn a_shot_bent_into_a_tank_hits_it() {
+    let t = tuning();
+    let core = Position::new(352.0, SEAT.y + 96.0);
+    let fly = |enemy_at: Option<Position>| {
+        let mut game = round_with("", Mission::Destroy, None);
+        pulling_well(&mut game, core);
+        if let Some(at) = enemy_at {
+            still_enemy(&mut game, at, 1, 0.0);
+        }
+        with_tank_mut(&game.world, seat(&game), |tank| tank.fire_cooldown = 0.0);
+        let mut seen = step(&mut game, true);
+        let mut trail = Vec::new();
+        for _ in 0..90 {
+            seen.extend(step(&mut game, false));
+            trail.extend(shell_positions(&game));
+        }
+        (trail, seen)
+    };
+    let (trail, seen) = fly(None);
+    assert!(swallowed(&seen).is_empty(), "the shot passes the core");
+    let entered = trail.iter().position(|p| p.distance_to(core) < t.well_radius_px).expect("the shot crosses the pull");
+    let target = *trail[entered..].iter().find(|p| p.distance_to(core) > t.well_radius_px + 48.0).expect("and leaves it");
+    assert!((target.y - SEAT.y).abs() > 20.0, "off the straight line: {target:?}");
+    let (_, seen) = fly(Some(target));
+    assert!(seen.iter().any(|e| matches!(e, Event::Hit { target: HitTarget::Enemy { .. }, .. })), "the bent shot hits it: {seen:?}");
+}
+
+/// A hull a well holds at its core is hit by a shot aimed into the clump:
+/// the sweep meets the hull before the core swallows the shot.
+#[test]
+fn a_clump_at_the_core_is_hit_before_the_core_swallows() {
+    let mut game = round_with("", Mission::Destroy, None);
+    let core = Position::new(352.0, SEAT.y);
+    still_enemy(&mut game, core, 1, 0.0);
+    pulling_well(&mut game, core);
+    with_tank_mut(&game.world, seat(&game), |tank| tank.fire_cooldown = 0.0);
+    let mut seen = step(&mut game, true);
+    seen.extend(idle(&mut game, 40));
+    assert!(seen.iter().any(|e| matches!(e, Event::Hit { target: HitTarget::Enemy { .. }, .. })), "{seen:?}");
+    assert!(swallowed(&seen).is_empty(), "nothing swallowed");
+}
+
+/// The laser is an instant trace: a beam past a well runs straight.
+#[test]
+fn the_laser_is_not_bent() {
+    let mut game = round_with("", Mission::Destroy, Some(ActiveWeapon::Laser));
+    pulling_well(&mut game, Position::new(352.0, SEAT.y + 40.0));
+    let mut seen = Vec::new();
+    for _ in 0..30 {
+        seen.extend(step(&mut game, true));
+    }
+    // Drawn from the module's lens, judged along the gun line: its end
+    // stands on the gun line's row, far past the well.
+    let (y1, x1) = seen.iter().find_map(|e| if let Event::LaserBeam { y1, x1, .. } = *e { Some((y1, x1)) } else { None }).expect("a beam");
+    assert!((y1 - SEAT.y).abs() < 1.0, "straight down the gun line: ends at y {y1}");
+    assert!(x1 > 352.0 + tuning().well_radius_px, "past the well: {x1}");
+}
+
+/// A missile in a pull is dragged toward the core, and one whose ground
+/// point reaches the core is swallowed with no blast.
+#[test]
+fn a_missile_is_dragged_and_one_reaching_the_core_is_swallowed_without_a_blast() {
+    let mut game = round_with("", Mission::Destroy, None);
+    pulling_well(&mut game, MID);
+    let missile = |game: &mut Game, from: Position| {
+        let mut m = crate::missile::Missile::spawn(from, Vec2::new(1.0, 0.0), Owner::Enemy(MAX_SEATS), 0, from + Vec2::new(400.0, 0.0));
+        m.id = game.take_shot_id();
+        game.world.spawn((m,))
+    };
+    let past = missile(&mut game, MID + Vec2::new(-80.0, 70.0));
+    let into = missile(&mut game, MID - Vec2::new(40.0, 0.0));
+    step(&mut game, false);
+    step(&mut game, false);
+    let dir = game.world.get::<&crate::missile::Missile>(past).unwrap().dir;
+    assert!(dir.y < 0.0, "turned toward the core: {dir:?}");
+    let seen = idle(&mut game, 40);
+    assert!(swallowed(&seen).contains(&Swallow::Missile), "{seen:?}");
+    assert!(!seen.iter().any(|e| matches!(e, Event::MissileBlast { x, .. } if (*x - MID.x).abs() < 40.0)), "no blast at the core");
+    assert!(game.world.get::<&crate::missile::Missile>(into).is_err(), "gone");
+}
+
+/// A drone in a pull whose ground point reaches the core is downed there
+/// (`AirStrike::Well`), and swallowed.
+#[test]
+fn a_drone_is_downed_at_the_core() {
+    let mut game = round_with("", Mission::Destroy, None);
+    pulling_well(&mut game, MID);
+    let mut drone = crate::fpv::Drone::launch(MID + Vec2::new(4.0, 0.0), Vec2::new(1.0, 0.0), 0, Owner::Enemy(MAX_SEATS), crate::fpv::DroneLock::None, MID + Vec2::new(300.0, 0.0));
+    drone.id = game.take_shot_id();
+    let id = drone.id;
+    game.world.spawn((drone,));
+    let seen = idle(&mut game, 3);
+    assert!(seen.iter().any(|e| matches!(e, Event::DroneDowned { id: d, by: "well", .. } if *d == id)), "{seen:?}");
+    assert!(swallowed(&seen).contains(&Swallow::Drone));
+}
+
+/// A drum already burning is lifted with its fuse, which burns on in the
+/// air: it goes off when the fuse ends, before the collapse. Its cell opens
+/// to the router.
+#[test]
+fn a_fused_drum_is_lifted_with_its_fuse_and_its_cell_opens() {
+    let mut game = round("cells.\"15,8\" = { kind = \"barrel\", drum = \"fuel\" }\n");
+    let drum_at = crate::map::cell_to_world(15, 8);
+    let fuse = 1.0;
+    for o in game.world.query_mut::<&mut Obstacle>() {
+        if o.material.is_explosive() {
+            o.fuse = Some(crate::obstacle::Fuse { left: fuse, total: fuse, from: None });
+        }
+    }
+    assert!(!game.nav_grid(W, H).usable(drum_at), "the drum blocks its cell");
+    let centre = crate::map::cell_to_world(17, 8);
+    game.debug_well(centre, false).expect("a well");
+    let mut seen = idle(&mut game, ticks(tuning().well_form_seconds) + 2);
+    let held = game.held_drums().first().copied().expect("lifted");
+    assert!(held.fuse.is_some_and(|left| left > 0.0 && left < fuse), "with its fuse: {held:?}");
+    assert!(game.nav_grid(W, H).usable(drum_at), "its cell open");
+    seen.extend(idle(&mut game, ticks(fuse)));
+    assert!(seen.iter().any(|e| matches!(e, Event::Blast { chained: true, .. })), "it went off in the air");
+    assert!(game.held_drums().is_empty());
+    assert!(collapsed(&seen).is_empty(), "before the collapse");
+}
+
+/// A crate drawn toward the core stops where its centre would enter a
+/// wall's cell, and is taken where it lies.
+#[test]
+fn a_crate_stops_at_a_wall_and_is_taken_where_it_lies() {
+    let mut game = round("cells.\"20,8\" = { kind = \"pickup\", pickup = \"health\" }\ncells.\"18,8\" = { kind = \"wall\", material = \"iron\" }\n");
+    let slot = crate::map::cell_to_world(20, 8);
+    pulling_well(&mut game, crate::map::cell_to_world(17, 8));
+    idle(&mut game, ticks(2.0));
+    let at = game.world.query::<&Pickup>().iter().next().map(|p| p.at()).expect("the crate");
+    assert!(at.x < slot.x - 8.0, "drawn in: {at:?}");
+    let wall_edge = crate::map::cell_to_world(18, 8).x + 16.0;
+    assert!(at.x >= wall_edge, "and stopped short of the wall: {at:?}");
+    // The seat driven onto where it lies now - not its slot - takes it.
+    with_tank_mut(&game.world, seat(&game), |tank| tank.damage = 40.0);
+    game.place_tank(seat(&game), at + Vec2::new(0.0, 30.0), Some(0.0)).expect("placed");
+    let seen = idle(&mut game, 2);
+    assert!(seen.iter().any(|e| matches!(e, Event::PickupCollected { .. })), "taken where it lies: {seen:?}");
+}
+
+/// A rainbow shield soaks the collapse's damage; the fling lands whole.
+#[test]
+fn a_shield_soaks_the_collapse_not_the_fling() {
+    let mut game = round("");
+    let enemy = still_enemy(&mut game, MID + Vec2::new(40.0, 0.0), 1, 0.0);
+    with_tank_mut(&game.world, enemy, |tank| tank.raise_shield());
+    pulling_well(&mut game, MID);
+    let (damage, shield) = with_tank(&game.world, enemy, |tank| (tank.damage, tank.shield_hp));
+    let mut seen = Vec::new();
+    for _ in 0..ticks(tuning().well_pull_seconds) + 4 {
+        seen = step(&mut game, false);
+        if !collapsed(&seen).is_empty() {
+            break;
+        }
+    }
+    assert_eq!(collapsed(&seen).len(), 1);
+    let (after, left, skid) = with_tank(&game.world, enemy, |tank| (tank.damage, tank.shield_hp, tank.skid));
+    assert_eq!(after, damage, "the hull unhurt");
+    assert!(left < shield, "the shield took it: {left} from {shield}");
+    assert!(skid > 0.0, "and the fling landed");
+}
+
+/// What flies in a well's reach when it collapses is turned straight out
+/// from its centre at its own speed.
+#[test]
+fn what_flies_in_the_reach_is_turned_out() {
+    let mut game = round("");
+    let id = pulling_well(&mut game, MID);
+    let until = game.zones.iter().find(|z| z.id == id).unwrap().until;
+    while game.time + 3.0 * DT < until {
+        step(&mut game, false);
+    }
+    let from = MID + Vec2::new(60.0, 0.0);
+    let velocity = Vec2::new(0.0, -tuning().shell_speed);
+    let shot_id = game.take_shot_id();
+    let shell = Shell::at(shot_id, from, from, velocity, 0.0, 0, 1, Owner::Enemy(MAX_SEATS));
+    let entity = game.world.spawn((shell,));
+    let mut seen = Vec::new();
+    for _ in 0..6 {
+        seen.extend(step(&mut game, false));
+    }
+    assert_eq!(collapsed(&seen).len(), 1);
+    let (position, velocity) = game.world.get::<&Shell>(entity).map(|s| (s.position, s.velocity)).expect("still flying");
+    let out = position - MID;
+    assert!(velocity.x * out.x + velocity.y * out.y > 0.9 * velocity.length() * out.length(), "straight out: {velocity:?} at {position:?}");
+    assert!((velocity.length() - tuning().shell_speed).abs() < 0.5, "at its own speed");
+}
+
+/// Two wells: a drum in reach of both when their pulls start goes to the
+/// lower id, and stays that well's.
+#[test]
+fn two_wells_pull_together_and_each_keeps_what_it_captured() {
+    let mut game = round("cells.\"17,8\" = { kind = \"barrel\", drum = \"oil\" }\n");
+    let (a, _) = game.debug_well(crate::map::cell_to_world(15, 8), false).expect("a well");
+    let (b, _) = game.debug_well(crate::map::cell_to_world(19, 8), false).expect("another");
+    assert!(a < b);
+    idle(&mut game, ticks(tuning().well_form_seconds) + 2);
+    let held = game.held_drums().first().copied().expect("lifted");
+    assert_eq!(held.well, a, "the lower id's");
+    idle(&mut game, 30);
+    assert_eq!(game.held_drums().first().map(|d| d.well), Some(a), "and kept");
+}
+
+/// Knocked off its tracks, a hull in a pull is carried by the whole
+/// current: one broadside that holds on its tracks slides in on a skid.
+#[test]
+fn a_skidding_hull_is_carried_by_the_whole_current() {
+    let t = tuning();
+    let run = |skid: f32| {
+        let mut game = round_with("", Mission::Destroy, None);
+        pulling_well(&mut game, MID);
+        let s = seat(&game);
+        game.place_tank(s, MID + Vec2::new(100.0, 0.0), Some(0.0)).expect("placed");
+        let wells = game.well_field.clone();
+        let x0 = pos(&game, s).x;
+        for _ in 0..20 {
+            let Game { world, physics, .. } = &mut game;
+            let mut tank = world.get::<&mut Tank>(s).unwrap();
+            tank.skid = skid;
+            let fp = Footing::DRY.pulled(&wells, &tank);
+            drive_tank(physics, &mut tank, Intent::default(), DT, fp);
+            physics.step();
+            tank.position = physics.position(tank.body.unwrap());
+        }
+        x0 - pos(&game, s).x
+    };
+    assert!(run(0.0).abs() < 0.5, "on its tracks it holds");
+    assert!(run(1.0) > 2.0 * t.well_current_speed * crate::well::strength(100.0, &t) * DT, "skidding it is carried in");
+}
+
+/// The spawn swap hands the well out by its share, by a hash, never at
+/// the default.
+#[test]
+fn the_spawn_swap_hands_out_the_well_by_its_share() {
+    let at = Position::new(400.0, 200.0);
+    let mut t = crate::tuning::Tuning::DEFAULT;
+    let mut laser = Tank::default();
+    laser.take_weapon(ActiveWeapon::Laser);
+    super::sonic::swap_spawn_special_with(&t, &mut laser, 5, at);
+    assert_eq!(laser.special(), Some(ActiveWeapon::Laser), "nothing at the default share");
+    t.enemy_special_weapon_well_share = 1.0;
+    super::sonic::swap_spawn_special_with(&t, &mut laser, 5, at);
+    assert_eq!(laser.special(), Some(ActiveWeapon::GravityWell));
+    assert_eq!(laser.wells, t.well_per_pickup);
+    let mut shells = Tank::default();
+    super::sonic::swap_spawn_special_with(&t, &mut shells, 5, at);
+    assert_eq!(shells.special(), None, "a tank with no special gets none");
+}
+
+/// A well crate loads three wells and replaces the special carried; a
+/// second refills to three; an enemy takes it only while it carries none.
+#[test]
+fn a_well_crate_arms_the_well_and_replaces_the_special_carried() {
+    let mut tank = Tank::default();
+    tank.take_weapon(ActiveWeapon::Missiles);
+    tank.take_weapon(ActiveWeapon::GravityWell);
+    assert_eq!((tank.special(), tank.wells, tank.missile_ammo), (Some(ActiveWeapon::GravityWell), tuning().well_per_pickup, 0));
+    tank.wells = 1;
+    tank.take_weapon(ActiveWeapon::GravityWell);
+    assert_eq!(tank.wells, tuning().well_per_pickup, "refilled");
+    let mut enemy = Tank { owner: Owner::Enemy(4), ..Tank::default() };
+    assert!(enemy.wants_pickup(PickupKind::GravityWell));
+    enemy.take_weapon(ActiveWeapon::Plasma);
+    assert!(!enemy.wants_pickup(PickupKind::GravityWell));
+}
+
+/// Whether a seat of chassis `kind` standing `d` px east of a pulling
+/// well's core, flooring it along `dir`, is out of the reach within
+/// `seconds`.
+fn seat_escapes(kind: TankKind, d: f32, dir: Dir, seconds: f32) -> bool {
+    let mut game = Game::default();
+    game.seed_override = Some(7);
+    game.show_intro = false;
+    game.level_overrides.mission = Some(Mission::Destroy);
+    let map = format!("version = 1\ntanks = 0\ntank = \"{}\"\ncells.\"3,6\" = {{ kind = \"start\" }}\n", kind.name());
+    game.map = MapFile::from_toml_str(&map).expect("test map parses");
+    game.init(W, H);
+    pulling_well(&mut game, MID);
+    let s = seat(&game);
+    game.place_tank(s, MID + Vec2::new(d, 0.0), Some(if dir == Dir::Right { 90.0 } else { 0.0 })).expect("placed");
+    (0..ticks(seconds)).any(|_| {
+        step_with(&mut game, Intent { move_dir: Some(dir), ..Intent::default() });
+        pos(&game, s).distance_to(MID) > tuning().well_radius_px
+    })
+}
+
+/// "Drive across the pull, not away from it" by chassis class at the
+/// defaults (docs/gravity-well.md "What it pulls"): a light chassis deep
+/// in is carried in driving away and out driving across; a standard one
+/// likewise further in; a heavy one is never caught - it drives out either
+/// way, the brace being the AI's choice to stand.
+#[test]
+fn each_chassis_class_escapes_a_pull_as_the_doc_says() {
+    assert!(!seat_escapes(TankKind::Scout, 65.0, Dir::Right, 3.0), "a scout driving away is carried in");
+    assert!(seat_escapes(TankKind::Scout, 65.0, Dir::Up, 1.5), "a scout driving across is out");
+    assert!(!seat_escapes(TankKind::Scout, 40.0, Dir::Up, 3.0), "deep in, not even across");
+    assert!(!seat_escapes(TankKind::Assault, 30.0, Dir::Right, 3.0), "a standard chassis driving away is carried in");
+    assert!(seat_escapes(TankKind::Assault, 30.0, Dir::Up, 2.0), "and out driving across");
+    assert!(seat_escapes(TankKind::Titan, 15.0, Dir::Right, 1.0) && seat_escapes(TankKind::Titan, 15.0, Dir::Up, 1.0), "a titan drives out either way");
+}
