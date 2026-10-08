@@ -1422,6 +1422,10 @@ impl<T: Transport> OnlineRound<T> {
         let mut struck_now = Vec::new();
         let mut in_portal = Vec::new();
         let mut shells = Vec::new();
+        // The wells on this client's present: a carried shot is stepped
+        // through them rather than carried straight (docs/gravity-well.md).
+        let wells = game.present_wells();
+        let knobs = tuning();
         for shot in foreign {
             if let Some(&at) = self.struck.get(&shot.id) {
                 // The room's copy itself - where the room has it, not
@@ -1438,6 +1442,29 @@ impl<T: Transport> OnlineRound<T> {
             let catch = smoothstep(((now - since) as f32 / CATCH_UP_MS).clamp(0.0, 1.0));
             let ahead = lead_ticks * PHYSICS_FIXED_DT * catch;
             let mut to = crate::math::Vec2::new(shot.position.x + shot.velocity.x * ahead, shot.position.y + shot.velocity.y * ahead);
+            if !wells.is_empty() && ahead > 0.0 {
+                let steps = (ahead / PHYSICS_FIXED_DT).ceil().max(1.0) as usize;
+                let dt = ahead / steps as f32;
+                let (mut p, mut v) = (shot.position, shot.velocity);
+                let mut swallowed = false;
+                for _ in 0..steps {
+                    v = crate::well::bend(v, wells.shot_accel(p, &knobs), dt);
+                    let q = p + v * dt;
+                    if wells.core_hit(p, q, &knobs).is_some() {
+                        swallowed = true;
+                        break;
+                    }
+                    p = q;
+                }
+                // Swallowed on its way to the present: off the picture,
+                // as a shot into a portal is, until the room's copy goes.
+                if swallowed {
+                    in_portal.push(shot.id);
+                    self.incoming_drawn.remove(&shot.id);
+                    continue;
+                }
+                to = p;
+            }
             if let Some(stop) = world.static_contact(shot.position, to) {
                 to = stop;
             }

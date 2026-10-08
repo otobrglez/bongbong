@@ -2000,8 +2000,9 @@ record of the build.
 - **The curved tracer** is a shell's and a bullet's (`well::curved_streak`,
   `render::shot_fx::curved_streak`, read off `Game::present_wells`); the
   plasma bolt's comet tail stays straight.
-- **Left for later**: the incoming carry stepping foreign shots
-  through the field (they are carried straight and corrected by the next
-  snapshot); the fish drawn toward a well (the collapse throws them, an orb
-  scares them).
+- **The incoming carry** steps every other shot through the wells on the
+  client's present, a tick at a time, and keeps one swallowed on its way
+  off the picture as a shot into a portal is.
+- **Left for later**: the fish drawn toward a well (the collapse throws
+  them, an orb scares them).
 
