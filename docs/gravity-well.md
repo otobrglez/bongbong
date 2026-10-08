@@ -2164,5 +2164,20 @@ record of the build.
   it, under a pixel on the step it first meets the face, flush after
   (`the_pull_presses_a_hull_against_a_wall_and_the_fields_edge_never_into_it`).
   The collapse's fling is a knock and stops flush by the knock's own.
-- **Left for later**: nothing of §1-§10.
+- **Tests as built.** §10's list is the design's; the tests carry their
+  own names - `simulation/well_tests.rs` (the orb, the stages, hulls and
+  the escape by chassis, shots, the air, what a well gathers, the collapse,
+  the end screen, determinism, the AI's arms and its pull, the validator,
+  the prompt and the arrow), `well::tests`, `shockwave::ring_tests` and the
+  well's cases in `net::{apply, delta, events, interp, predict, rig,
+  round}`. Not written, resting on the shared paths they run through: a
+  hull dragged into a portal, a wrecked shooter's well, tiles and lanterns
+  left alone, flying drums, lava bombs and globs left alone, a tell or a
+  rail's charge in a pull, the pack's herd round a well, the hammer
+  shoving a seat into one, the ring's light at night, the minimap's mark,
+  the grass's lean, the drive's impulse order (the bit-for-bit replay
+  stands for it), a bent room shot's pairing and a swallowed provisional's
+  hiding (pairing by `Fired` is the provisional shots' own, unchanged), and
+  the room server's round test through the mailbox.
+- **Left for later**: the tests above.
 

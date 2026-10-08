@@ -1558,3 +1558,36 @@ fn each_chassis_class_escapes_a_pull_as_the_doc_says() {
     assert!(seat_escapes(TankKind::Assault, 30.0, Dir::Up, 2.0), "and out driving across");
     assert!(seat_escapes(TankKind::Titan, 15.0, Dir::Right, 1.0) && seat_escapes(TankKind::Titan, 15.0, Dir::Up, 1.0), "a titan drives out either way");
 }
+
+// --- what a seat is told --------------------------------------------------
+
+/// The anchor prompt stands under the seat's block while its orb flies,
+/// and goes once it is down.
+#[test]
+fn the_anchor_prompt_shows_while_the_orb_flies() {
+    let mut game = round("");
+    assert_eq!(crate::hud::special_prompt(&game, [0]), None);
+    step(&mut game, true);
+    assert_eq!(crate::hud::special_prompt(&game, [0]), Some(crate::text::keys::HUD_WELL_ANCHOR), "the orb in flight");
+    step(&mut game, false);
+    step(&mut game, true);
+    assert!(with_tank(&game.world, seat(&game), |t| t.orb.is_none()), "anchored");
+    assert_eq!(crate::hud::special_prompt(&game, [0]), None);
+}
+
+/// Off the screen a seat is shown every well but its own: an enemy's with
+/// its seconds once it pulls.
+#[test]
+fn a_seat_is_shown_every_well_but_its_own() {
+    let mut game = round("");
+    game.debug_well(MID, false).expect("the seat's own");
+    let (enemy, _) = game.debug_well(MID + Vec2::new(300.0, 0.0), true).expect("an enemy's");
+    let scene = crate::indicators::Scene::of(&game, 0);
+    assert_eq!(scene.wells.len(), 1, "{:?}", scene.wells);
+    assert!(scene.wells[0].1.is_none(), "forming: no seconds yet");
+    idle(&mut game, ticks(tuning().well_form_seconds) + 2);
+    let scene = crate::indicators::Scene::of(&game, 0);
+    let centre = game.zones.iter().find(|z| z.id == enemy).unwrap().centre;
+    assert_eq!(scene.wells.first().map(|w| w.0), Some(centre));
+    assert!(scene.wells[0].1.is_some_and(|left| left > 0.0 && left < tuning().well_pull_seconds), "pulling: its seconds left");
+}
