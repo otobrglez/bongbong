@@ -933,14 +933,17 @@ impl TankTrack {
     /// mirrors the three ai.rs behaviors that hold position on purpose:
     /// it fired within the trailing FIRED_RECENTLY_FRAMES window
     /// (`act_attack`'s fire/cooldown rhythm); it currently holds an
-    /// aligned, in-range firing solution on the live player
+    /// aligned, in-range firing solution on a live seat
     /// (`act_attack`'s aim-settle hold - within ENEMY_FIRE_ALIGN_PX of a
     /// cardinal axis, inside ENEMY_ATTACK_RANGE and inside the player's
     /// sight box, outside which the AI closes in rather than holds, so a
     /// tank standing still there is a stall); or it's parked outside
     /// ENEMY_RETREAT_RANGE with shells still below ENEMY_AMMO_RESUME
-    /// (`act_retreat`'s wait-out-the-recharge hold).
-    fn deliberate_hold(&self, frame: u32, tank: &TankSnapshot, player: &TankSnapshot) -> bool {
+    /// (`act_retreat`'s wait-out-the-recharge hold). The firing solution is
+    /// on any live seat in `seats`, the one the AI targets not always
+    /// being the nearest (`Ai::target_player`'s hysteresis); the retreat is
+    /// measured from the nearest, `player`.
+    fn deliberate_hold(&self, frame: u32, tank: &TankSnapshot, player: &TankSnapshot, seats: &[&TankSnapshot]) -> bool {
         if HOLDS.iter().any(|(_, held)| held(tank)) {
             return true;
         }
@@ -953,12 +956,14 @@ impl TankTrack {
         if player.is_wreck {
             return false;
         }
-        let dx = (player.position.x - tank.position.x).abs();
-        let dy = (player.position.y - tank.position.y).abs();
+        let aligned_in_range = seats.iter().filter(|s| !s.is_wreck).any(|s| {
+            let dx = (s.position.x - tank.position.x).abs();
+            let dy = (s.position.y - tank.position.y).abs();
+            dx.min(dy) <= tuning().enemy_fire_align_px
+                && tank.position.distance_to(s.position) <= tuning().enemy_attack_range
+                && in_sight_box(s.position, tank.position)
+        });
         let dist = tank.position.distance_to(player.position);
-        let aligned_in_range = dx.min(dy) <= tuning().enemy_fire_align_px
-            && dist <= tuning().enemy_attack_range
-            && in_sight_box(player.position, tank.position);
         let retreat_wait = dist >= tuning().enemy_retreat_range() && tank.shells_ammo < tuning().enemy_ammo_resume;
         aligned_in_range || retreat_wait
     }
@@ -1357,7 +1362,7 @@ fn check_anomalies(
             track.rejoin(tank, frame);
             continue;
         }
-        let holding = track.deliberate_hold(frame, tank, player_snap);
+        let holding = track.deliberate_hold(frame, tank, player_snap, &players);
         if holding {
             track.last_hold_frame = Some(frame);
         }
