@@ -1842,6 +1842,62 @@ mod tests {
         assert_eq!(most, 1, "the room's well for it is not drawn beside it");
     }
 
+    /// An orb anchored before its room copy can reach the picture - a press
+    /// and its anchor a few frames apart - leaves no ghost: the room's copy
+    /// of it, when it comes, is kept off the picture as the well's.
+    #[test]
+    fn a_quick_anchor_draws_no_second_orb() {
+        let map = "version = 1\ntanks = 0\nmission.kind = \"protect\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"5,6\" = { kind = \"pickup\", pickup = \"gravity_well\" }\ncells.\"2,14\" = { kind = \"frog\" }\n";
+        let options = RigOptions {
+            map: MapFile::from_toml_str(map).expect("the map parses"),
+            seed: Some(0xB0B5),
+            enemies: Some(1),
+            tank_row: Some(3),
+            quality: LinkQuality::new(60, 0, 0.0),
+            ..RigOptions::default()
+        };
+        let (_rig, link) = start(options);
+        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
+        let mut round = OnlineRound::new(client, "RIG");
+        let armed = |round: &OnlineRound<Loopback>| {
+            round.game().and_then(|g| g.world.query::<&crate::tank::Tank>().iter().find(|t| t.owner_slot() == 0).map(|t| t.wells > 0)).unwrap_or(false)
+        };
+        let orbs = |round: &OnlineRound<Loopback>| round.game().map_or(0, |g| g.orbs().iter().filter(|o| o.owner == crate::shell::Owner::Player(0)).count());
+        let wells = |round: &OnlineRound<Loopback>| round.game().map_or(0, |g| g.zones().iter().filter(|z| z.well().is_some()).count());
+        let right = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
+        for _ in 0..180 {
+            if armed(&round) {
+                break;
+            }
+            round.frame(&right, FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+        }
+        assert!(armed(&round), "the seat took the crate");
+        for _ in 0..20 {
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+        }
+        let fire = Intent { fire: true, ..Intent::default() };
+        round.frame(&fire, FRAME.as_secs_f32());
+        assert_eq!(orbs(&round), 1, "the orb on the frame of the press");
+        for _ in 0..3 {
+            thread::sleep(FRAME);
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+        }
+        thread::sleep(FRAME);
+        round.frame(&fire, FRAME.as_secs_f32());
+        assert_eq!((orbs(&round), wells(&round)), (0, 1), "anchored on the frame of the second press");
+        let (mut most_orbs, mut most_wells) = (0, 1);
+        for _ in 0..40 {
+            thread::sleep(FRAME);
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            most_orbs = most_orbs.max(orbs(&round));
+            most_wells = most_wells.max(wells(&round));
+        }
+        assert_eq!(most_orbs, 0, "the room's orb for it is never drawn");
+        assert_eq!(most_wells, 1, "nor its well beside the drawn one");
+    }
+
     /// Online, the seat's own EMP is on screen the frame of the press - its
     /// ring from the predicted pivot, its special offline on the shown seat
     /// so the HUD says `WPN OFFLINE` - and the room's `EmpPulse` for it is

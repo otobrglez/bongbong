@@ -161,6 +161,8 @@ pub struct DrawableFrog {
     /// The hop's landing spot, quarter pixels; zero unless hopping.
     pub hop_x: i32,
     pub hop_y: i32,
+    /// Held in a gravity well's pull (`Frog::pulled`): drawn pinned.
+    pub pulled: bool,
 }
 
 /// One solid tile as it stands now: the fields a hit, a fire, a fuse, a
@@ -527,6 +529,7 @@ impl Game {
                     phase: f.clip_phase(),
                     hop_x: if hopping { quarter_px(f.hop_end.x) } else { 0 },
                     hop_y: if hopping { quarter_px(f.hop_end.y) } else { 0 },
+                    pulled: f.pulled,
                 }
             })
             .collect();

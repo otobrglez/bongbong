@@ -1349,9 +1349,10 @@ fn hand_over(snapshot: &Snapshot, cutoff: Option<f64>, seat: Option<u8>, out: &m
 /// tile's death (the tile family says nothing of a tile that is gone); a
 /// fuel drum's launch (its flight is no snapshot family); a hull moved by
 /// the room - `Placed`, `Teleported`, `TankEntered` - and a `Shoved`, which
-/// the own hull takes as state; and this seat's `Fired`, which confirms a
+/// the own hull takes as state; this seat's `Fired`, which confirms a
 /// press the client is holding a provisional shot for - dropping it would
-/// strand the press. Everything else - blasts, wrecks, hits, flashes,
+/// strand the press - and this seat's `WellAnchored`, which claims the well
+/// it drew. Everything else - blasts, wrecks, hits, flashes,
 /// other seats' and enemies' muzzles, beams - is how something looked at
 /// the moment, and the moment is gone. With no seat known, every `Fired`
 /// is kept.
@@ -1367,6 +1368,9 @@ pub fn carries_state(event: &WireEvent, seat: Option<u8>) -> bool {
         | WireEvent::TankEntered { .. }
         | WireEvent::Shoved { .. } => true,
         WireEvent::Fired { slot, .. } => seat.is_none_or(|seat| slot == seat as u16),
+        // This seat's anchor: the only claim its drawn well has on the
+        // room's (docs/gravity-well.md).
+        WireEvent::WellAnchored { seat: s, .. } => seat.is_some_and(|seat| s == seat),
         _ => false,
     }
 }
@@ -2699,5 +2703,15 @@ mod tests {
             }
         }
         assert!(settled.is_empty(), "settled with no stall behind it at {:?}", &settled[..settled.len().min(8)]);
+    }
+
+    /// A snapshot handed over late keeps this seat's `WellAnchored` - the
+    /// only claim its drawn well has on the room's - and no other seat's.
+    #[test]
+    fn a_late_snapshot_keeps_the_seats_own_anchor() {
+        let anchor = |seat| WireEvent::WellAnchored { id: 9, slot: 1, seat, x: 0, y: 0, by: crate::well::AnchorBy::Press };
+        assert!(carries_state(&anchor(0), Some(0)));
+        assert!(!carries_state(&anchor(1), Some(0)));
+        assert!(!carries_state(&anchor(crate::net::wire::NO_SEAT), Some(0)));
     }
 }

@@ -1564,6 +1564,12 @@ mod tests {
         pickups_taken: usize,
         frog_clips: usize,
         tiles_gone: usize,
+        /// Wells standing, drums held, crates drawn off their cells and
+        /// frogs held in a pull (docs/gravity-well.md "Wire").
+        wells: usize,
+        held_drums: usize,
+        drifted: usize,
+        pulled_frogs: usize,
         /// Frames on the end screen.
         ended: usize,
         /// Frames between snapshots on which the replica's own tick moved
@@ -1596,6 +1602,10 @@ mod tests {
             self.pickups_taken += first.pickups.len().saturating_sub(state.pickups.len());
             self.frog_clips += state.frogs.iter().filter(|f| f.hopping || f.hurt || f.biting).count();
             self.tiles_gone += first.tiles.len().saturating_sub(state.tiles.len());
+            self.wells += state.zones.iter().filter(|z| z.1 == crate::zone::ZONE_WELL).count();
+            self.held_drums += state.well_drums.len();
+            self.drifted += state.pickups.iter().filter(|p| p.drift != (0, 0)).count();
+            self.pulled_frogs += state.frogs.iter().filter(|f| f.pulled).count();
             self.ended += usize::from(state.outcome != crate::simulation::Outcome::Playing);
         }
 
@@ -1914,7 +1924,7 @@ mod tests {
     /// the bytes again on re-encoding (`round_trip`'s checking).
     #[test]
     fn a_well_and_what_it_holds_reach_the_replica() {
-        round_trip(DEFAULT_MAP, 0xB0B5, 600, |game, frame| {
+        let seen = round_trip(DEFAULT_MAP, 0xB0B5, 600, |game, frame| {
             if frame == 30 {
                 let patch = crate::simulation::debug::TankPatch { wells: Some(3), ..Default::default() };
                 game.debug_set_tank(0, &patch).expect("the seat's tank");
@@ -1931,6 +1941,24 @@ mod tests {
                 assert!(game.debug_well(map::cell_to_world(28, 21), true).is_some(), "an enemy's well on the field");
             }
         });
+        assert!(seen.wells > 0, "{seen:?}: no well reached the replica");
+        assert!(seen.held_drums > 0, "{seen:?}: no held drum reached the replica");
+        assert!(seen.drifted > 0 || seen.pulled_frogs > 0, "{seen:?}: nothing the pull moves on the ground reached the replica");
+    }
+
+    /// A client that joins while a well holds its drums is welcomed with
+    /// them: the welcome's replica holds what the room holds.
+    #[test]
+    fn a_joiner_is_welcomed_with_the_drums_a_well_holds() {
+        let mut game = authoritative(DEFAULT_MAP, 0xB0B5, 0);
+        game.debug_well(map::cell_to_world(19, 2), false).expect("a well over the fuel drums");
+        for frame in 1..=40u32 {
+            step(&mut game, frame);
+        }
+        assert!(!game.held_drums().is_empty(), "the well holds its drums");
+        let replica = welcome_through_the_codec(&game);
+        assert_eq!(replica.held_drums().len(), game.held_drums().len());
+        assert_eq!(replica.drawable_state(), game.drawable_state(), "the joiner draws the room's picture");
     }
 
     /// FPV drones are a keyed family of their own (`wire::DroneState`,

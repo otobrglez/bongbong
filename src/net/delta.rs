@@ -685,6 +685,17 @@ mod tests {
         for id in random_keys(rng, 1, 400) {
             next.zones.push(ZoneState { id, kind: 0, x: rng.random(), y: rng.random(), until: rng.random_range(0..200_000), owner: 3, cell: rng.random_range(0..600), stage: 0 });
         }
+        // A gravity well's zone, its stage turning, and the drums it holds.
+        for zone in next.zones.iter_mut() {
+            if rng.random_ratio(1, 4) {
+                zone.kind = crate::zone::ZONE_WELL;
+                zone.stage = rng.random_range(0..2);
+            }
+        }
+        next.well_drums.retain(|_| !rng.random_ratio(1, 3));
+        for id in random_keys(rng, 1, 400) {
+            next.well_drums.push(WellDrumState { id, well: rng.random(), cell: rng.random_range(0..600), drum: rng.random_range(0..2), fused: rng.random(), tick: rng.random_range(0..200_000) });
+        }
         for cell in random_keys(rng, 1, 600) {
             next.craters.push(CraterState { cell, tick: next.tick });
         }
@@ -700,6 +711,7 @@ mod tests {
         next.fires.reverse();
         next.lamps.reverse();
         next.crates.reverse();
+        next.well_drums.reverse();
         next.normalise();
         next
     }

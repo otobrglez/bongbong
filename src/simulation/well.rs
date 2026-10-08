@@ -811,10 +811,18 @@ impl Game {
         Some((tank.gun_line_muzzle(dir), dir))
     }
 
-    /// A well anchored at once at the cell centre nearest `at` (the dev
-    /// server's `well_at`): player 1's, or with `enemy` the first enemy
-    /// slot's; forming. `None` off the field or inside a solid cell. No
-    /// RNG.
+    /// Whether one seat's trigger would anchor an orb of its in flight
+    /// right now (`well::anchor_press` less the orb, which a client's
+    /// sandbox does not carry): its special up and still the well's, or
+    /// none left at all.
+    pub(crate) fn seat_can_anchor(&self, seat: usize) -> bool {
+        let Some(entity) = self.seats.get(seat).copied().flatten() else { return false };
+        self.world.get::<&Tank>(entity).is_ok_and(|tank| !tank.special_down() && matches!(tank.special(), None | Some(ActiveWeapon::GravityWell)))
+    }
+
+    /// A well anchored at once at `at` (the dev server's `well_at`):
+    /// player 1's, or with `enemy` the first enemy slot's; forming. `None`
+    /// off the field or inside a solid cell. No RNG.
     pub fn debug_well(&mut self, at: Position, enemy: bool) -> Option<(u32, f32)> {
         let (w, h) = self.map.field_size();
         if !(0.0..w).contains(&at.x) || !(0.0..h).contains(&at.y) {

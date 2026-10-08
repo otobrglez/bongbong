@@ -823,6 +823,20 @@ mod tests {
         }
     }
 
+    /// A well's collapse hit and a drone downed at a core travel and come
+    /// back as themselves (`HitCause::Well`, `AirStrike::Well`).
+    #[test]
+    fn the_wells_causes_survive_the_wire() {
+        let hit = Event::Hit { target: HitTarget::Enemy { slot: 4 }, damage: 6.5, killed: false, x: 320.25, y: 160.5, cause: HitCause::Well };
+        let downed = Event::DroneDowned { id: 21, x: 300.0, y: 180.0, height: 36.0, by: "well" };
+        for event in [hit, downed] {
+            let wire = WireEvent::from_event(&event).expect("sent");
+            let back: WireEvent = postcard::from_bytes(&postcard::to_stdvec(&wire).unwrap()).unwrap();
+            let sim = back.to_event().expect("a simulation form");
+            assert_eq!(serde_json::to_value(&sim).unwrap(), serde_json::to_value(&event).unwrap());
+        }
+    }
+
     #[test]
     fn ricochet_carries_its_heading_both_ways() {
         let wire = WireEvent::Ricochet { slot: 1, x: 4, y: 8, heading: 64 };

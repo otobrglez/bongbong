@@ -551,6 +551,9 @@ impl PresentWorld {
     /// (`Game::resolve_orbs`'s rule, drawn ahead).
     pub fn orb_contact(&self, shooter: u8, p0: Position, p1: Position, half: f32) -> Option<Position> {
         let pad = Position::new(half, half);
+        // An enemy's boxes grown by the player shot's pad, as the room's
+        // sweep of a seat's orb grows them.
+        let enemy_pad = pad + Position::new(tuning().player_shot_hit_pad_px, tuning().player_shot_hit_pad_px);
         let mut best: Option<f32> = None;
         let mut consider = |t: Option<f32>| {
             if let Some(t) = t
@@ -560,6 +563,7 @@ impl PresentWorld {
             }
         };
         for tank in self.tanks.iter().filter(|tank| tank.seat != Some(shooter)) {
+            let pad = if tank.seat.is_none() { enemy_pad } else { pad };
             consider(segment_box(p0, p1, tank.hull.0, tank.hull.1 + pad));
             consider(segment_box(p0, p1, tank.turret.0, tank.turret.1 + pad));
         }

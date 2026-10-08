@@ -2073,12 +2073,26 @@ record of the build.
   `PressShow::Anchor`, `Predictor::orb_landed`/`orb_out`): the orb has no
   impact frames and anchors rather than bursts, so it flies beside the
   provisional shots rather than through `ProvisionalKind`. A room copy of
-  this seat's orb pairs with the oldest own orb waiting for one and is kept
-  off the picture while that orb or the anchor it made is drawn; the room's
-  `WellAnchored` for this seat claims the oldest own anchor (first in,
-  first out, where §8 claims by the orb's id), and one the client never
-  drew takes its flying orb and shows the snap where the room has it. The
-  own anchors are provisional zones beside the rod's own calls.
+  this seat's orb pairs with the oldest own anchor or orb waiting for one -
+  anchors first, so an orb anchored before its copy reached the picture
+  still has that copy kept off it - and is kept off the picture while that
+  orb or the anchor it made is drawn; the room's `WellAnchored` for this
+  seat claims the oldest own anchor (first in, first out, where §8 claims
+  by the orb's id; `Predictor::drawn_anchors`, `pair_zone` and
+  `hide_zones` take no part - the claim is all of it, and a late
+  snapshot keeps the event, `interp::carries_state`), one the client
+  never drew takes its flying orb and shows the snap where the room has
+  it, and one with neither shows the snap. An own orb the room fizzles
+  (`OrbFizzled`), a swallowed one and a launch the room never made free
+  the next press with no grace (`Predictor::orb_gone`); the anchor press
+  is drawn only where the room would take it (`Game::seat_can_anchor`:
+  the special up and still the well's). Own orbs and provisional shots
+  step on the room's tick grid - a whole tick's bend at each tick's edge
+  a frame crosses - and a provisional shot meets what it reaches before a
+  core swallows it, as the room's does. The own anchors are provisional
+  zones beside the rod's own calls, on the replica alone: the sandbox
+  pulls by the room's zones, so on a link slower than `well_form_seconds`
+  the own hull and its shots miss the first pulled ticks.
 - **The sandbox's tick** is set from the inputs stepped since the last
   snapshot's `acked` (`Predictor::last_acked`, `Game::set_zone_lead`), so a
   pulled own hull and its bent shots read the field on the room's tick of
@@ -2116,8 +2130,10 @@ record of the build.
   among the hulls it drew (a heavy is braced, not dragged, so it is not out
   of its hands).
 - **The incoming carry** steps every other shot through the wells on the
-  client's present, a tick at a time, and keeps one swallowed on its way
-  off the picture as a shot into a portal is.
+  client's present, a tick at a time (`round::carry`), each stretch judged
+  as the room judges a tick - this seat's hull and the walls first, nearest
+  first, a core only where nothing met it sooner - and keeps one swallowed
+  on its way off the picture as a shot into a portal is.
 - **The fish** are drawn by the wells the shoal last saw
   (`Shoal::wells`, `drawn_toward`): a fish in a pull's reach takes its core's
   cell as its goal every leg and never rests, rather than a scare reversed;
