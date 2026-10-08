@@ -1698,6 +1698,150 @@ mod tests {
         assert_eq!(most, 1, "the room's blast for it is not drawn again");
     }
 
+    /// A seat's gravity well through the room: one orb on the replica for
+    /// the press, never two, one well spent in the room; the second press
+    /// anchors it, and the replica draws one well, forming then pulling
+    /// (docs/gravity-well.md "Wire").
+    #[test]
+    fn a_seats_well_reaches_the_replica_once() {
+        let mut rig = Lockstep::start(options(LinkQuality::PERFECT));
+        let patch = crate::simulation::debug::TankPatch { wells: Some(3), ..Default::default() };
+        rig.authority_mut().expect("a round").debug_set_tank(0, &patch).expect("the seat's tank");
+        rig.drive(Intent { fire: true, ..Intent::default() });
+        rig.step(1);
+        rig.drive(Intent::default());
+        let orbs = |rig: &Lockstep| rig.replica().expect("a replica").orbs().iter().filter(|o| o.owner == crate::shell::Owner::Player(0)).count();
+        let mut most = 0;
+        for _ in 0..10 {
+            rig.step(2);
+            most = most.max(orbs(&rig));
+        }
+        assert_eq!(most, 1, "the press is one orb on the replica");
+        let left = rig.authority_mut().expect("a round").tank_snapshots().into_iter().find(|t| t.slot == 0).map(|t| t.wells);
+        assert_eq!(left, Some(2), "one well spent");
+        rig.drive(Intent { fire: true, ..Intent::default() });
+        rig.step(1);
+        rig.drive(Intent::default());
+        let wells = |rig: &Lockstep| rig.replica().expect("a replica").drawable_state().zones.iter().filter(|z| z.1 & 0x0F == crate::zone::ZONE_WELL).map(|z| z.1 >> 4).collect::<Vec<_>>();
+        let (mut forming, mut pulling) = (false, false);
+        for _ in 0..30 {
+            rig.step(2);
+            let now = wells(&rig);
+            assert!(now.len() <= 1, "one well: {now:?}");
+            forming |= now.contains(&0);
+            pulling |= now.contains(&1);
+        }
+        assert!(forming && pulling, "it forms, then pulls on the replica");
+        assert_eq!(orbs(&rig), 0, "the orb is gone into it");
+    }
+
+    /// An enemy's gravity well reaches the replica: its orb as a shot, the
+    /// well it anchors by the drum the seat stands beside, forming then
+    /// pulling, and its collapse.
+    #[test]
+    fn an_enemys_well_reaches_the_replica() {
+        let map = "version = 1\ntanks = 0\nmission.kind = \"destroy\"\ncells.\"6,6\" = { kind = \"start\" }\ncells.\"6,8\" = { kind = \"barrel\", drum = \"oil\" }\n";
+        let mut rig = Lockstep::start(RigOptions {
+            map: MapFile::from_toml_str(map).expect("the map parses"),
+            seed: Some(0xB0B5),
+            enemies: Some(0),
+            tank_row: Some(3),
+            quality: LinkQuality::PERFECT,
+            ..RigOptions::default()
+        });
+        let game = rig.authority_mut().expect("a round");
+        let seat = game.tank_snapshots().into_iter().find(|t| t.slot == 0).expect("the seat");
+        let beside = crate::Position::new(seat.position.x + 288.0, seat.position.y);
+        let slot = game.debug_spawn_enemy(beside, Some(1), Some(crate::ai::Role::Player)).expect("spawns");
+        let entity = game.tank_entity_by_slot(slot).expect("the enemy");
+        game.place_tank(entity, beside, Some(270.0)).expect("placed");
+        {
+            let mut tank = game.world.get::<&mut crate::tank::Tank>(entity).expect("its tank");
+            tank.disarm();
+            tank.take_weapon(crate::tank::ActiveWeapon::GravityWell);
+            tank.speed_scale = 0.0;
+        }
+        let (mut orb, mut forming, mut pulling) = (None, None, None);
+        for step in 0..600 {
+            rig.step(1);
+            let replica = rig.replica().expect("a replica");
+            if orb.is_none() && replica.orbs().iter().any(|o| o.owner != crate::shell::Owner::Player(0)) {
+                orb = Some(step);
+            }
+            let zones = replica.drawable_state().zones;
+            for z in zones.iter().filter(|z| z.1 & 0x0F == crate::zone::ZONE_WELL) {
+                if z.1 >> 4 == 0 {
+                    forming.get_or_insert(step);
+                } else {
+                    pulling.get_or_insert(step);
+                }
+            }
+            if pulling.is_some() && zones.is_empty() {
+                break;
+            }
+        }
+        let orb = orb.expect("the enemy's orb reached the replica");
+        let forming = forming.expect("its well reached the replica forming");
+        let pulling = pulling.expect("and pulling");
+        assert!(orb < forming && forming < pulling, "orb {orb}, forming {forming}, pulling {pulling}");
+    }
+
+    /// Online, the seat's own orb is on screen the frame of the press, its
+    /// anchor's well the frame of the second, and the room's copies of
+    /// either are never drawn beside them (docs/gravity-well.md "Wire").
+    #[test]
+    fn a_seats_orb_and_anchor_are_drawn_on_the_press_and_only_once() {
+        let map = "version = 1\ntanks = 0\nmission.kind = \"protect\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"5,6\" = { kind = \"pickup\", pickup = \"gravity_well\" }\ncells.\"2,14\" = { kind = \"frog\" }\n";
+        let options = RigOptions {
+            map: MapFile::from_toml_str(map).expect("the map parses"),
+            seed: Some(0xB0B5),
+            enemies: Some(1),
+            tank_row: Some(3),
+            quality: LinkQuality::new(60, 0, 0.0),
+            ..RigOptions::default()
+        };
+        let (_rig, link) = start(options);
+        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
+        let mut round = OnlineRound::new(client, "RIG");
+        let armed = |round: &OnlineRound<Loopback>| {
+            round.game().and_then(|g| g.world.query::<&crate::tank::Tank>().iter().find(|t| t.owner_slot() == 0).map(|t| t.wells > 0)).unwrap_or(false)
+        };
+        let orbs = |round: &OnlineRound<Loopback>| round.game().map_or(0, |g| g.orbs().iter().filter(|o| o.owner == crate::shell::Owner::Player(0)).count());
+        let wells = |round: &OnlineRound<Loopback>| round.game().map_or(0, |g| g.zones().iter().filter(|z| z.well().is_some()).count());
+        let right = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
+        for _ in 0..180 {
+            if armed(&round) {
+                break;
+            }
+            round.frame(&right, FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+        }
+        assert!(armed(&round), "the seat took the crate");
+        for _ in 0..20 {
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+        }
+        round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
+        assert_eq!(orbs(&round), 1, "the orb is on screen the frame of the press");
+        let mut most = 1;
+        for _ in 0..30 {
+            thread::sleep(FRAME);
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            most = most.max(orbs(&round));
+        }
+        assert_eq!(most, 1, "the room's orb for it is not drawn beside it");
+        round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
+        assert_eq!(wells(&round), 1, "the well is on screen the frame of the anchor");
+        assert_eq!(orbs(&round), 0, "and the orb gone into it");
+        let mut most = 1;
+        for _ in 0..40 {
+            thread::sleep(FRAME);
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            most = most.max(wells(&round));
+        }
+        assert_eq!(most, 1, "the room's well for it is not drawn beside it");
+    }
+
     /// Online, the seat's own EMP is on screen the frame of the press - its
     /// ring from the predicted pivot, its special offline on the shown seat
     /// so the HUD says `WPN OFFLINE` - and the room's `EmpPulse` for it is
