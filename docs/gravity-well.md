@@ -1119,7 +1119,7 @@ rim - is drawn in the glowing pass, unlit, so it reads at night and in fog
   token alike (the token's top-lit and bottom-shaded steps apply to `X`
   and `o` only), so the void stays black. Ink
   (`punypalette.PICKUP_INK['gravity_well']`, admitted on the crate sheets
-  alone like the others): shade `#1C1033` (the void), base `#E6A8FF` (a
+  alone like the others): shade `#3A1A6E` (the void, a deep violet), base `#E6A8FF` (a
   pale ultraviolet lilac), light `#FFF0FF`. No hue that is not green is
   free (the rod's doc measured it), so the pick is by colour distance and by
   the void: the base is 30 in CIELAB from its nearest ink (the tower pack's
@@ -1949,7 +1949,7 @@ Fields (the seven of `just probe-fields`, 3600 frames):
     scene). *For Oto.*
 23. **The `VOID` ramp is the Armory scene's violets**; the module stays on
     the palette (its light is `'white'`).
-24. **Crate ink two-tone, a void and a lilac** (`#1C1033` / `#E6A8FF`): no
+24. **Crate ink two-tone, a void and a lilac** (`#3A1A6E` / `#E6A8FF`): no
     free hue is left that is not green, so the pick is by distance (30 from
     the nearest ink) and by the one black symbol among the crates. *For
     Oto*, with a screenshot of the crate beside the other eighteen in

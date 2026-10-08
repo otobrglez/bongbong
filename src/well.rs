@@ -515,6 +515,17 @@ pub fn module_cell(tank: &Tank) -> i32 {
     0
 }
 
+/// One block at `pos`, kept where the field's Bayer pattern shows `cover`
+/// of such blocks (docs/effects.md's dissolve): the dots of a well's rim
+/// and of an orb's trail, each a single block - a disc that small rounds to
+/// no block at all.
+fn dotted(out: &mut Vec<Shape>, pos: Position, color: Color, cover: f32) {
+    let (bx, by) = pyro::block_of(pos.x, pos.y);
+    if cover >= 0.999 || pyro::bayer(bx, by) < cover {
+        out.push(Shape::Mark { pos, size: 2, color });
+    }
+}
+
 /// The orb as it is drawn (glowing pass): a disc of `VOID[1]` with a
 /// `VOID[3]` disc inside and a `VOID[4]` glint, two motes circling it, a
 /// trail of four blocks behind it dissolving, one glow; swelling from the
@@ -527,7 +538,7 @@ pub fn compose_orb(out: &mut Vec<Shape>, at: Position, velocity: Vec2, age: f32,
     for k in 0..4 {
         let d = r + 3.0 + k as f32 * 3.0;
         let cover = [1.0, 0.8, 0.5, 0.3][k];
-        out.push(Shape::Disc { center: at + back * d, radius: pyro::BLOCK * 0.6, color: VOID[(2usize).saturating_sub(k / 2)], cover });
+        dotted(out, at + back * d, VOID[(2usize).saturating_sub(k / 2)], cover);
     }
     out.push(Shape::Disc { center: at, radius: r, color: VOID[1], cover: 1.0 });
     out.push(Shape::Disc { center: at, radius: r * 0.66, color: VOID[3], cover: 1.0 });
@@ -584,7 +595,7 @@ pub fn compose_well(out: &mut Vec<Shape>, zone: &Zone, now: f32, t: &Tuning) {
     let spin = now * std::f32::consts::TAU / 8.0;
     for i in 0..dots {
         let a = spin + i as f32 * std::f32::consts::TAU / dots as f32;
-        out.push(Shape::Disc { center: c + Vec2::new(a.cos(), a.sin()) * r, radius: pyro::BLOCK * 0.6, color: VOID[2], cover: 0.6 * grow });
+        dotted(out, c + Vec2::new(a.cos(), a.sin()) * r, VOID[2], 0.6 * grow);
     }
     out.push(Shape::Glow { pos: c, radius: 26.0 * grow, color: VOID[1] });
 }
@@ -887,5 +898,13 @@ mod tests {
                 assert!(VOID.contains(color), "{color:?} is a VOID step");
             }
         }
+        // Every dot is a block that draws: the trail behind the orb and the
+        // rim at the reach are single blocks, never discs too small to
+        // round to one.
+        assert!(orb.iter().any(|s| matches!(s, Shape::Mark { pos, .. } if pos.x < 50.0 - ORB_PX)), "a trail behind it");
+        let rim = shapes.iter().filter(|s| matches!(s, Shape::Mark { pos, .. } if (pos.distance_to(zone.centre) - t.well_radius_px).abs() < 2.0)).count();
+        assert!(rim > 20, "a dotted rim at the reach: {rim}");
+        let tiny = |s: &&Shape| matches!(s, Shape::Disc { radius, .. } if *radius < pyro::BLOCK * 0.75);
+        assert!(!shapes.iter().chain(&orb).any(|s| tiny(&s)), "no disc too small to draw");
     }
 }
