@@ -1819,6 +1819,8 @@ pub fn picture(seats: &[Indicators], view: &ViewFrame, time: f32, t: &Tuning, fo
                 (name, crate::tank::team_color(seat))
             }
             ArrowKind::Frog { .. } => ((arrow.cells.round() as i64).to_string(), FROG_GREEN),
+            // A pulling well's whole seconds to its collapse.
+            ArrowKind::Well { left: Some(left) } => ((left.ceil().max(0.0) as i64).to_string(), crate::pyro::VOID[3]),
             _ => continue,
         };
         let alpha = arrow.alpha.max(LABEL_ALPHA_MIN);
@@ -2210,6 +2212,23 @@ mod indicator_tests {
         s.zones = vec![(Position::new(300.0, 200.0), 2.5)];
         let ind = Awareness::new().frame(&s, &screen(), &t);
         assert!(!kinds(&ind).iter().any(|k| matches!(k, ArrowKind::Zone { .. })));
+    }
+
+    /// A gravity well off the screen has an arrow whatever the cap, its
+    /// seconds left while it pulls; on the screen, none (docs/gravity-
+    /// well.md). A seat's own is left out of `Scene::wells` by `of`.
+    #[test]
+    fn a_well_off_the_screen_has_an_arrow_whatever_the_cap() {
+        let mut t = Tuning::DEFAULT;
+        t.indicator_max_arrows = 1;
+        let mut s = scene(1.0, vec![enemy(5, 900.0, 150.0), enemy(6, 950.0, 400.0)]);
+        s.wells = vec![(Position::new(-600.0, 200.0), Some(2.5)), (Position::new(200.0, -500.0), None)];
+        let ind = Awareness::new().frame(&s, &screen(), &t);
+        assert!(kinds(&ind).contains(&ArrowKind::Well { left: Some(2.5) }), "{:?}", kinds(&ind));
+        assert!(kinds(&ind).contains(&ArrowKind::Well { left: None }), "a forming one too");
+        s.wells = vec![(Position::new(300.0, 200.0), Some(2.5))];
+        let ind = Awareness::new().frame(&s, &screen(), &t);
+        assert!(!kinds(&ind).iter().any(|k| matches!(k, ArrowKind::Well { .. })));
     }
 
     /// A drone coming at this seat off the screen has an arrow whatever the

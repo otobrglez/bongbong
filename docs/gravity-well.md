@@ -2004,5 +2004,5 @@ record of the build.
   through the field (they are carried straight and corrected by the next
   snapshot); the interpolator blending a crate's drift (it moves with each
   snapshot); the fish drawn toward a well (the collapse throws them, an orb
-  scares them); the count on a well's off-screen arrow.
+  scares them).
 
