@@ -341,11 +341,15 @@ a pulling well bends, and is swallowed if it falls in.
 ### On the end screen
 
 `player_phase` and `enemy_phase` do not run, the physics does not step and
-nothing is driven. Orbs in flight fly on and anchor as a show; wells form,
-swirl and collapse as shows (`Game::well_phase(f, false)`): nothing is
-pulled, captured, flung, hurt or swallowed; held drums go off at the
-collapse as blasts that hurt nobody (`explosions(f, false)`), as every blast
-on the end screen does.
+nothing is driven, so no hull moves. Orbs in flight fly on and anchor as a
+show; wells form, swirl and collapse as shows (`Game::well_phase(f, false)`):
+no drum is lifted, no frog or crate pulled, nobody flung or hurt; the drums
+a well already holds go off at its collapse - or where a fuse runs out - as
+blasts that hurt nobody (`explosions(f, false)`), as every blast on the end
+screen does. What still flies keeps the projectiles' damage-free end-screen
+flight, and that flight curves: shots, missiles and drones bend and a core
+swallows them, grenades roll in and circle a ring and the collapse throws
+them out with whatever flies in its reach.
 
 ## 2. Where it lives
 

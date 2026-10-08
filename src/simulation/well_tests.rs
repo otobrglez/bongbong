@@ -623,17 +623,40 @@ fn an_emp_collapses_an_anchored_well_and_fizzles_an_orb() {
     assert!(game.orbs().is_empty());
 }
 
+/// On the end screen a well forms, swirls and collapses as a show: it pulls
+/// no hull, lifts no drum and hurts nobody, and the drums it held when the
+/// round ended go off at its collapse as blasts that hurt nobody - they do
+/// not vanish.
 #[test]
 fn the_well_on_the_end_screen_pulls_nothing_and_its_drums_hurt_nobody() {
-    let mut game = round("");
-    let enemy = still_enemy(&mut game, MID + Vec2::new(80.0, 0.0), 1, 270.0);
-    game.debug_well(MID, false).expect("a well");
+    let drums = "cells.\"15,8\" = { kind = \"barrel\", drum = \"oil\" }\ncells.\"19,8\" = { kind = \"barrel\", drum = \"oil\" }\n";
+    let centre = crate::map::cell_to_world(17, 8);
+    // A well that forms on the end screen lifts nothing.
+    let mut game = round(drums);
+    let enemy = still_enemy(&mut game, centre + Vec2::new(0.0, 80.0), 1, 270.0);
+    game.debug_well(centre, false).expect("a well");
     game.outcome = Outcome::Won;
     game.hold_end_screen = true;
     let before = pos(&game, enemy);
     let seen = idle(&mut game, ticks(tuning().well_form_seconds + 1.0));
     assert!(pos(&game, enemy).distance_to(before) < 0.5, "nothing pulled");
+    assert!(game.held_drums().is_empty() && barrels(&game) == 2, "nothing lifted");
     assert!(!seen.iter().any(|e| matches!(e, Event::Hit { .. })));
+    // One that held its drums when the round ended sets them off.
+    let mut game = round(drums);
+    let enemy = still_enemy(&mut game, centre + Vec2::new(0.0, 80.0), 1, 270.0);
+    pulling_well(&mut game, centre);
+    assert_eq!(game.held_drums().len(), 2, "both lifted while the round ran");
+    game.outcome = Outcome::Won;
+    game.hold_end_screen = true;
+    let (before, damage) = (pos(&game, enemy), with_tank(&game.world, enemy, |t| t.damage));
+    let seen = idle(&mut game, ticks(tuning().well_pull_seconds) + 4);
+    assert_eq!(collapsed(&seen).len(), 1, "it collapses as a show");
+    assert_eq!(seen.iter().filter(|e| matches!(e, Event::Blast { chained: true, .. })).count(), 2, "its drums go off: {seen:?}");
+    assert!(game.held_drums().is_empty());
+    assert!(!seen.iter().any(|e| matches!(e, Event::Hit { .. })), "and hurt nobody");
+    assert_eq!(with_tank(&game.world, enemy, |t| t.damage), damage);
+    assert!(pos(&game, enemy).distance_to(before) < 0.5, "nobody flung");
 }
 
 // --- the drain ------------------------------------------------------------

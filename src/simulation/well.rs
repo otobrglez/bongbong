@@ -306,10 +306,11 @@ impl Game {
     /// collapse first; a forming well whose time has come starts pulling -
     /// its `until` now the collapse - and lifts the drums in its reach; a
     /// pulling well whose time has come collapses. Then, with `live`, the
-    /// frogs and the crates are pulled and a held drum's fuse burns; and
-    /// either way the tread marks swirl and the grass bows. On the end
-    /// screen (`live` false) a well forms and collapses as a show and
-    /// touches nothing.
+    /// frogs and the crates are pulled; and either way a held drum's fuse
+    /// burns, the tread marks swirl and the grass bows. On the end screen
+    /// (`live` false) a well forms and collapses as a show: it lifts, pulls,
+    /// flings and hurts nothing, and the drums it already holds go off as
+    /// blasts that hurt nobody.
     pub(super) fn well_phase(&mut self, f: &mut Frame, live: bool) {
         let t = tuning();
         if !self.zones.iter().any(|z| z.well().is_some()) && self.held_drums.is_empty() && self.pickups_drifting.is_empty() {
@@ -348,8 +349,10 @@ impl Game {
         if live {
             self.pull_frogs(f, &t);
             self.slide_pickups(f, &t);
-            self.burn_held_fuses(f);
         }
+        // A held drum's fuse burns on, on the end screen too, as a tile's
+        // does (`tick_fuses`).
+        self.burn_held_fuses(f);
         let field = std::mem::take(&mut f.wells);
         self.drain_marks(f.dt, &field);
         self.lean_grass(&field);
@@ -430,37 +433,41 @@ impl Game {
         }
     }
 
-    /// A well collapses (docs/gravity-well.md "The collapse"): with `live`,
-    /// in this order - the drums it holds go off together where they
-    /// circle; every live hull in its reach is flung out (`knock_from`) and
-    /// the side opposing its owner hurt; frogs hop out, the opposing side's
-    /// hurt; grenades it holds thrown out in a ring; what flies in its reach
-    /// turned straight out; crates slid out. `Event::WellCollapsed` and the
-    /// show either way.
+    /// A well collapses (docs/gravity-well.md "The collapse"), in this
+    /// order: the drums it holds go off together where they circle; with
+    /// `live`, every live hull in its reach is flung out (`knock_from`) and
+    /// the side opposing its owner hurt, and frogs hop out, the opposing
+    /// side's hurt; grenades it holds are thrown out in a ring; what flies
+    /// in its reach is turned straight out; with `live`, crates slide out.
+    /// On the end screen (`live` false) the drums' blasts hurt nobody
+    /// (`explosions(f, false)`) and nothing on the ground is moved.
+    /// `Event::WellCollapsed` and the show either way.
     fn collapse_well(&mut self, f: &mut Frame, zone: Zone, live: bool, early: bool) {
         let t = tuning();
         let c = zone.centre;
         let r = t.well_radius_px;
         f.events.push(Event::WellCollapsed { id: zone.id, x: c.x, y: c.y, early });
+        let held: Vec<u32> = self.held_drums.iter().filter(|d| d.well == zone.id).map(|d| d.id).collect();
+        for id in held {
+            self.set_off_held(f, id);
+        }
         if live {
-            let held: Vec<u32> = self.held_drums.iter().filter(|d| d.well == zone.id).map(|d| d.id).collect();
-            for id in held {
-                self.set_off_held(f, id);
-            }
             self.collapse_hulls(f, c, zone.owner, &t);
             self.collapse_frogs(f, c, zone.owner, &t);
-            // Grenades on the ring: out along their own radials, lobbed.
-            for g in self.world.query_mut::<&mut crate::grenade::Grenade>() {
-                if g.orbit.is_some_and(|o| o.well == zone.id) {
-                    g.orbit = None;
-                    let off = g.position - c;
-                    let len = off.length();
-                    let dir = if len > 1e-3 { off / len } else { Vec2::new(0.0, -1.0) };
-                    g.velocity = dir * t.well_fling_grenade_speed;
-                    g.climb = t.well_fling_grenade_climb;
-                }
+        }
+        // Grenades on the ring: out along their own radials, lobbed.
+        for g in self.world.query_mut::<&mut crate::grenade::Grenade>() {
+            if g.orbit.is_some_and(|o| o.well == zone.id) {
+                g.orbit = None;
+                let off = g.position - c;
+                let len = off.length();
+                let dir = if len > 1e-3 { off / len } else { Vec2::new(0.0, -1.0) };
+                g.velocity = dir * t.well_fling_grenade_speed;
+                g.climb = t.well_fling_grenade_climb;
             }
-            self.turn_out_flying(c, r);
+        }
+        self.turn_out_flying(c, r);
+        if live {
             for p in self.world.query_mut::<&mut crate::pickup::Pickup>() {
                 let at = p.at();
                 let d = at.distance_to(c);
@@ -471,9 +478,6 @@ impl Game {
                 }
             }
             self.refresh_drifting();
-        } else {
-            // On the end screen the drums it held simply go with it.
-            self.held_drums.retain(|d| d.well != zone.id);
         }
         let mut show = Spectacle::default();
         self.well_collapse_show(&mut show, c);
