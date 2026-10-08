@@ -721,7 +721,10 @@ impl<T: Transport> OnlineRound<T> {
     /// the wave plan it sized to its team (docs/online-coop-prd.md
     /// section 4.11), so the table is the window's own again the moment
     /// the seat is given up - the local round behind the room is played
-    /// with the build's numbers, never the room's.
+    /// with the build's numbers, never the room's. Each welcome's patch is
+    /// the room's whole difference from that table, so the last one's rows
+    /// come off first: a rematch of fewer seats, or rows a dev tool took
+    /// back (`room_tuning`), leave nothing behind.
     ///
     /// `arrived` is when the welcome came off the socket, on `local_ms`'s
     /// clock.
@@ -732,11 +735,12 @@ impl<T: Transport> OnlineRound<T> {
         self.next_own_drone = 0;
         self.own_calls.clear();
         self.next_own_call = 0;
+        if let Some(before) = self.tuning_before.take() {
+            tuning::replace_now(before);
+        }
         let patch = welcome.tuning_json.trim();
         if !patch.is_empty() && patch != "{}" {
-            if self.tuning_before.is_none() {
-                self.tuning_before = Some(tuning::current());
-            }
+            self.tuning_before = Some(tuning::current());
             match tuning::submit_json(patch) {
                 Ok(_) => {
                     tuning::apply_pending();
