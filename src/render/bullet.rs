@@ -60,14 +60,20 @@ pub fn draw_bullet_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, bullet: 
 /// blocks, white-hot at the round and cooling down the fire ramp behind
 /// it, and a small glow on the round, so a burst draws bright dashed
 /// lines across the field.
-pub fn draw_bullet_light(d: &mut impl RaylibDraw, bullet: &Bullet) {
+pub fn draw_bullet_light(d: &mut impl RaylibDraw, bullet: &Bullet, wells: &crate::well::WellField) {
     let strength = tuning().shot_glow_strength;
     if bullet.state != BulletState::Flying || strength <= 0.0 {
         return;
     }
     let dir = heading(bullet.rotation);
     let length = tuning().bullet_tracer_length;
-    streak(d, bullet.position, dir, length, 2.0, fade(crate::pyro::alpha(FIRE[5], 0.66), strength), crate::pyro::alpha(FIRE[3], 0.0));
+    // In a gravity well's pull the tracer follows the curve it came by.
+    let t = tuning();
+    if let Some(path) = crate::well::curved_streak(bullet.position, bullet.velocity, length, wells, &t) {
+        crate::render::shot_fx::curved_streak(d, &path, 2.0, fade(crate::pyro::alpha(FIRE[5], 0.66), strength), crate::pyro::alpha(FIRE[3], 0.0));
+    } else {
+        streak(d, bullet.position, dir, length, 2.0, fade(crate::pyro::alpha(FIRE[5], 0.66), strength), crate::pyro::alpha(FIRE[3], 0.0));
+    }
     streak(d, bullet.position, dir, length * 0.5, 2.0, fade(FIRE[7], strength), fade(crate::pyro::alpha(FIRE[6], 0.4), strength));
     glow(d, bullet.position, 5.0, fade(crate::pyro::alpha(FIRE[6], 0.78), strength));
 }

@@ -724,14 +724,21 @@ impl Game {
             let mut centers = [Vector2::new(0.0, 0.0); SHOCK_MAX];
             let mut times = [0.0f32; SHOCK_MAX];
             let mut gains = [0.0f32; SHOCK_MAX];
+            let mut starts = [0.0f32; SHOCK_MAX];
+            let mut signs = [1.0f32; SHOCK_MAX];
             for (i, shock) in self.shocks.iter().take(SHOCK_MAX).enumerate() {
                 centers[i] = effects.shock.uv_of(shock.center);
                 times[i] = shock.time;
                 gains[i] = shock.strength;
+                (starts[i], signs[i]) = effects.shock.start_and_sign(shock);
             }
             effects.shock.shader.set_shader_value_v(effects.shock.centers_loc, &centers);
             effects.shock.shader.set_shader_value_v(effects.shock.times_loc, &times);
             effects.shock.shader.set_shader_value_v(effects.shock.gains_loc, &gains);
+            if effects.shock.starts_loc >= 0 && effects.shock.signs_loc >= 0 {
+                effects.shock.shader.set_shader_value_v(effects.shock.starts_loc, &starts);
+                effects.shock.shader.set_shader_value_v(effects.shock.signs_loc, &signs);
+            }
         }
 
         // The render texture is stored upside-down relative to the screen; a
@@ -1094,10 +1101,12 @@ impl Game {
         }
 
         // The lines under the left cluster: first what letting go of a
-        // rod's reticle does, while one is up.
+        // rod's reticle does, while one is up, or what the next press does
+        // to an orb in flight - in its weapon's accent.
         let mut lines = Vec::new();
         if let Some(key) = chrome.prompt {
-            lines.push(Line { text: crate::text::text().get(key), size: HUD_STATUS_TEXT_SIZE, color: crate::hud::HUD_ROD_COLOR });
+            let color = if key == crate::text::keys::HUD_WELL_ANCHOR { crate::hud::HUD_WELL_COLOR } else { crate::hud::HUD_ROD_COLOR };
+            lines.push(Line { text: crate::text::text().get(key), size: HUD_STATUS_TEXT_SIZE, color });
         }
         // An online round says where it stands: the room, the seat and how
         // much of the snapshot stream is in hand.
@@ -1420,6 +1429,17 @@ impl Game {
             pyro::draw(&mut GpuCanvas::new(d, textures), &chips);
         }
 
+        // A gravity well's collapse: its dust thrown out (docs/gravity-
+        // well.md "The collapse"), matter, so lit with the field.
+        if self.well_fx.iter().any(|fx| fx.kind == crate::well::WellFxKind::Collapse) {
+            let t = tuning();
+            let mut dust = Vec::new();
+            for fx in self.well_fx.iter().filter(|fx| fx.kind == crate::well::WellFxKind::Collapse && !culled(cull, fx.at)) {
+                crate::well::compose_collapse_dust(&mut dust, fx.at, fx.age, pyro::smoke_lean(&t, fx.at, self.time), &t);
+            }
+            pyro::draw(&mut GpuCanvas::new(d, textures), &dust);
+        }
+
         // A rod's impact - its dust rings and puffs and the debris it
         // throws - and the smoke off a fresh crater (docs/rod-from-god.md
         // "Drawing"): matter, so lit with the field; the column shines in
@@ -1679,6 +1699,44 @@ impl Game {
             }
         }
 
+        // The gravity well (docs/gravity-well.md "Drawing"): every well
+        // standing - its core, its ring, the swirl and the rim, read on the
+        // zones' clock -, every orb in flight, and the snaps, collapses and
+        // swallows. Light, drawn unlit, their glows in one additive block.
+        if !self.orbs.is_empty() || !self.well_fx.is_empty() || self.zones.iter().any(|z| z.well().is_some()) {
+            let t = tuning();
+            let now = self.time + self.zone_lead;
+            let mut shapes = Vec::new();
+            for zone in self.zones.iter().filter(|z| z.well().is_some()) {
+                if cull.is_none_or(|r| crate::math::Rectangle::new(r.x - t.well_radius_px, r.y - t.well_radius_px, r.width + 2.0 * t.well_radius_px, r.height + 2.0 * t.well_radius_px).contains(zone.centre)) {
+                    crate::well::compose_well(&mut shapes, zone, now, &t);
+                }
+            }
+            for orb in self.orbs.iter().filter(|o| !culled(cull, o.position)) {
+                crate::well::compose_orb(&mut shapes, orb.position, orb.velocity, orb.age, orb.id);
+            }
+            for fx in self.well_fx.iter().filter(|fx| !culled(cull, fx.at)) {
+                match fx.kind {
+                    crate::well::WellFxKind::Snap => crate::well::compose_snap(&mut shapes, fx.at, fx.age),
+                    crate::well::WellFxKind::Collapse => crate::well::compose_collapse(&mut shapes, fx.at, fx.age),
+                    crate::well::WellFxKind::Swallow => crate::well::compose_swallow(&mut shapes, fx.at, fx.age),
+                }
+            }
+            if !shapes.is_empty() {
+                pyro::draw(&mut GpuCanvas::new(d, textures), &shapes);
+                let bands = t.glow_bands.max(0) as u32;
+                d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| pyro::draw_glows(&mut Rl(&mut bd), &shapes, bands));
+            }
+            // The cores over every light: holes, black whatever shines.
+            let mut cores = Vec::new();
+            for zone in self.zones.iter().filter(|z| z.well().is_some() && !culled(cull, z.centre)) {
+                crate::well::compose_core(&mut cores, zone, now, &t);
+            }
+            if !cores.is_empty() {
+                pyro::draw(&mut GpuCanvas::new(d, textures), &cores);
+            }
+        }
+
         // The rod from god (docs/rod-from-god.md "Drawing"): every reticle
         // up and its designator's line, every call standing - its circle,
         // its beam from the sky and its count, read on the zones' clock -
@@ -1711,16 +1769,19 @@ impl Game {
         if glow {
             self.draw_lava_ground_light(d, textures, day_pools, cull);
         }
+        // The wells pulling on the picture's present: tracers through one
+        // are drawn curved.
+        let wells = self.present_wells();
         if glow {
             d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
                 // Light on the floor first: every shot, burn and flash
                 // lights the ground around it in its own colour.
                 self.draw_ground_light(&mut bd, day_pools, cull);
                 for shell in self.world.query::<&Shell>().iter().filter(|s| !culled(cull, s.position)) {
-                    draw_shell_light(&mut bd, shell);
+                    draw_shell_light(&mut bd, shell, &wells);
                 }
                 for bullet in self.world.query::<&Bullet>().iter().filter(|b| !culled(cull, b.position)) {
-                    draw_bullet_light(&mut bd, bullet);
+                    draw_bullet_light(&mut bd, bullet, &wells);
                 }
                 for beam in &self.laser_beams {
                     draw_laser_bloom(&mut bd, beam);
@@ -1956,6 +2017,19 @@ impl Game {
             for drum in &self.flying_drums {
                 draw_flying_drum(&mut c, drum, self.shadows_enabled);
             }
+            // The drums a gravity well holds, circling its ring lifted over
+            // their shadows (docs/gravity-well.md "Held drums").
+            if !self.held_drums.is_empty() {
+                let t = tuning();
+                for held in &self.held_drums {
+                    let centre = held.centre;
+                    let (ground, height) = crate::well::held_at(held, centre, self.time, &t);
+                    if !culled(cull, ground) {
+                        let turn = (ground - centre).y.atan2((ground - centre).x);
+                        crate::obstacle::draw_held_drum(&mut c, ground, height, held.drum, turn, self.shadows_enabled);
+                    }
+                }
+            }
         }
 
         // The volcanoes: where each bomb in the air will land, the bombs
@@ -2160,6 +2234,7 @@ fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
         ActiveWeapon::GaussRail => ("RAIL", tank.gauss_slugs),
         ActiveWeapon::FpvSwarm => ("FPV", tank.fpv_drones),
         ActiveWeapon::RodFromGod => ("ROD", tank.rods),
+        ActiveWeapon::GravityWell => ("WELL", tank.wells),
         ActiveWeapon::Shell => ("SHELL", tank.shells_ammo),
     };
     let mut lines = vec![
@@ -2310,6 +2385,18 @@ impl Game {
                 d.draw_line(at.x as i32, at.y as i32, drone.aim.x as i32, drone.aim.y as i32, Color::new(255, 160, 0, 160));
                 if let Some(slot) = drone.lock.slot() {
                     d.draw_text(&slot.to_string(), drone.aim.x as i32 + 4, drone.aim.y as i32 - 12, 10, Color::ORANGE);
+                }
+            }
+        }
+        // A gravity well's reach, and round an enemy's the herd's ring the
+        // pack's firing slots stand on (docs/gravity-well.md).
+        if ov.engage {
+            let t = tuning();
+            for zone in self.zones.iter().filter(|z| z.well().is_some()) {
+                let (cx, cy) = (zone.centre.x as i32, zone.centre.y as i32);
+                d.draw_circle_lines(cx, cy, t.well_radius_px, Color::new(0x9A, 0x5C, 0xF0, 200));
+                if !zone.owner.is_player() {
+                    d.draw_circle_lines(cx, cy, t.well_ai_herd_px, Color::new(0xC9, 0x8C, 0xFF, 140));
                 }
             }
         }

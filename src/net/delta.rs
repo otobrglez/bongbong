@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 use crate::net::MAX_SEATS;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    BonusPickup, CraterState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, ShotState, Snapshot, TankState, ZoneState,
-    TileState, side_code,
+    BonusPickup, CraterState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, ShotState, Snapshot, TankState, WellDrumState,
+    ZoneState, TileState, side_code,
 };
 
 /// An entry that kept every field but its position, which moved by
@@ -90,6 +90,9 @@ pub struct SnapshotDelta {
     /// New craters, in full.
     pub craters: Vec<CraterState>,
     pub craters_gone: Vec<u16>,
+    /// New or changed held drums, in full.
+    pub well_drums: Vec<WellDrumState>,
+    pub well_drums_gone: Vec<u16>,
     /// The volcanoes' shifts, whole, when they changed.
     pub volcano_shifts: Option<Vec<i32>>,
     pub round: Option<RoundState>,
@@ -234,6 +237,12 @@ impl Keyed for ZoneState {
     }
 }
 
+impl Keyed for WellDrumState {
+    fn key(&self) -> u16 {
+        self.id
+    }
+}
+
 impl Keyed for CraterState {
     fn key(&self) -> u16 {
         self.cell
@@ -321,6 +330,7 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
     let (crates, crates_gone) = diff_keyed(&prev.crates, &next.crates);
     let (zones, zones_gone) = diff_keyed(&prev.zones, &next.zones);
     let (craters, craters_gone) = diff_keyed(&prev.craters, &next.craters);
+    let (well_drums, well_drums_gone) = diff_keyed(&prev.well_drums, &next.well_drums);
     let mut bonus_pickups = next.bonus_pickups.clone();
     bonus_pickups.sort();
     bonus_pickups.dedup();
@@ -364,6 +374,8 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
         zones_gone,
         craters,
         craters_gone,
+        well_drums,
+        well_drums_gone,
         volcano_shifts: (next.volcano_shifts != prev.volcano_shifts).then(|| next.volcano_shifts.clone()),
         round: (next.round != prev.round).then_some(next.round),
         events: next.events.clone(),
@@ -399,6 +411,7 @@ pub fn apply_delta(prev: &Snapshot, delta: &SnapshotDelta) -> Snapshot {
         crates: apply_keyed(&prev.crates, &delta.crates, &delta.crates_gone),
         zones: apply_keyed(&prev.zones, &delta.zones, &delta.zones_gone),
         craters: apply_keyed(&prev.craters, &delta.craters, &delta.craters_gone),
+        well_drums: apply_keyed(&prev.well_drums, &delta.well_drums, &delta.well_drums_gone),
         volcano_shifts: delta.volcano_shifts.clone().unwrap_or_else(|| prev.volcano_shifts.clone()),
         round: delta.round.unwrap_or(prev.round),
         events: delta.events.clone(),
@@ -443,7 +456,7 @@ mod tests {
     fn random_shot(rng: &mut SmallRng, id: u16) -> ShotState {
         ShotState {
             id,
-            kind: [ShotKind::Shell, ShotKind::Bullet, ShotKind::Plasma][rng.random_range(0..3)],
+            kind: [ShotKind::Shell, ShotKind::Bullet, ShotKind::Plasma, ShotKind::Orb][rng.random_range(0..4)],
             x: rng.random_range(-4000..4000),
             y: rng.random_range(-4000..4000),
             heading: rng.random(),
@@ -546,13 +559,17 @@ mod tests {
             .collect();
         let crates = random_keys(rng, 4, 600)
             .into_iter()
-            .map(|cell| CrateState { cell, hp: rng.random(), flags: rng.random_range(0..4), left: rng.random() })
+            .map(|cell| CrateState { cell, hp: rng.random(), flags: rng.random_range(0..4), left: rng.random(), dx: rng.random_range(-400..400), dy: rng.random_range(-400..400) })
             .collect();
         let zones = random_keys(rng, 3, 400)
             .into_iter()
-            .map(|id| ZoneState { id, kind: 0, x: rng.random(), y: rng.random(), until: rng.random_range(0..200_000), owner: rng.random_range(0..40), cell: rng.random_range(0..600) })
+            .map(|id| ZoneState { id, kind: rng.random_range(0..2), x: rng.random(), y: rng.random(), until: rng.random_range(0..200_000), owner: rng.random_range(0..40), cell: rng.random_range(0..600), stage: rng.random_range(0..2) })
             .collect();
         let craters = random_keys(rng, 3, 600).into_iter().map(|cell| CraterState { cell, tick: rng.random_range(0..200_000) }).collect();
+        let well_drums = random_keys(rng, 3, 400)
+            .into_iter()
+            .map(|id| WellDrumState { id, well: rng.random_range(0..400), cell: rng.random_range(0..600), drum: rng.random_range(0..2), fused: rng.random(), tick: rng.random_range(0..200_000) })
+            .collect();
         let volcano_shifts = if rng.random() { vec![rng.random_range(-4000..4000)] } else { Vec::new() };
         let mut s = Snapshot {
             tick: rng.random_range(0..200_000),
@@ -573,6 +590,7 @@ mod tests {
             crates,
             zones,
             craters,
+            well_drums,
             volcano_shifts,
             round: RoundState {
                 wave: rng.random_range(0..10),
@@ -652,7 +670,7 @@ mod tests {
         }
         next.crates.retain(|_| !rng.random_ratio(1, 3));
         for cell in random_keys(rng, 1, 600) {
-            next.crates.push(CrateState { cell, hp: rng.random(), flags: rng.random_range(0..4), left: rng.random() });
+            next.crates.push(CrateState { cell, hp: rng.random(), flags: rng.random_range(0..4), left: rng.random(), dx: rng.random_range(-400..400), dy: rng.random_range(-400..400) });
         }
         if rng.random_ratio(1, 5) {
             next.pickups ^= 1 << rng.random_range(0..64);
@@ -665,7 +683,18 @@ mod tests {
         }
         next.zones.retain(|_| !rng.random_ratio(1, 3));
         for id in random_keys(rng, 1, 400) {
-            next.zones.push(ZoneState { id, kind: 0, x: rng.random(), y: rng.random(), until: rng.random_range(0..200_000), owner: 3, cell: rng.random_range(0..600) });
+            next.zones.push(ZoneState { id, kind: 0, x: rng.random(), y: rng.random(), until: rng.random_range(0..200_000), owner: 3, cell: rng.random_range(0..600), stage: 0 });
+        }
+        // A gravity well's zone, its stage turning, and the drums it holds.
+        for zone in next.zones.iter_mut() {
+            if rng.random_ratio(1, 4) {
+                zone.kind = crate::zone::ZONE_WELL;
+                zone.stage = rng.random_range(0..2);
+            }
+        }
+        next.well_drums.retain(|_| !rng.random_ratio(1, 3));
+        for id in random_keys(rng, 1, 400) {
+            next.well_drums.push(WellDrumState { id, well: rng.random(), cell: rng.random_range(0..600), drum: rng.random_range(0..2), fused: rng.random(), tick: rng.random_range(0..200_000) });
         }
         for cell in random_keys(rng, 1, 600) {
             next.craters.push(CraterState { cell, tick: next.tick });
@@ -682,6 +711,7 @@ mod tests {
         next.fires.reverse();
         next.lamps.reverse();
         next.crates.reverse();
+        next.well_drums.reverse();
         next.normalise();
         next
     }
@@ -862,10 +892,11 @@ mod tests {
         // (protocol 19); every tank one for its reticle and the zones', the
         // craters' and the volcanoes' shifts' lists one each, the delta two
         // for the zones and two for the craters and one for the shifts
-        // (protocol 20).
-        assert!(full <= 498, "full snapshot {full} B");
-        assert!(moving <= 213, "moving delta {moving} B");
-        assert!(busy <= 279, "busy delta {busy} B");
-        assert!(idle <= 59, "idle delta {idle} B");
+        // (protocol 20); the held drums' list one, the delta two for them
+        // (protocol 21).
+        assert!(full <= 499, "full snapshot {full} B");
+        assert!(moving <= 215, "moving delta {moving} B");
+        assert!(busy <= 281, "busy delta {busy} B");
+        assert!(idle <= 61, "idle delta {idle} B");
     }
 }

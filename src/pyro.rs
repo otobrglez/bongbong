@@ -106,6 +106,11 @@ pub const RAIL: [Color; 5] = [rgb(0x04, 0xA0, 0xB4), rgb(0x1E, 0xB3, 0xAE), rgb(
 /// since the ramp's teal added over the grass reads as the grass's own
 /// green (an object's colour is never the ground's, docs/PALETTE.md).
 pub const RAIL_LIGHT: Color = rgb(0x4C, 0x7E, 0xFF);
+/// The gravity well's violets (docs/gravity-well.md), dark to bright: the
+/// orb, the accretion ring, the swirl and the collapse. The plasma purple's
+/// family on purpose, a step deeper at the dark end, so the ring round the
+/// core reads as the rim of a hole.
+pub const VOID: [Color; 5] = [rgb(0x2C, 0x1A, 0x5C), rgb(0x6B, 0x3C, 0xC9), rgb(0x9A, 0x5C, 0xF0), rgb(0xC9, 0x8C, 0xFF), rgb(0xF3, 0xDC, 0xFF)];
 pub const LASER_RED: [Color; 5] = [rgb(0x6A, 0x14, 0x10), rgb(0xC8, 0x28, 0x1E), rgb(0xFF, 0x32, 0x28), rgb(0xFF, 0xAA, 0x96), rgb(0xFF, 0xFF, 0xFF)];
 pub const LASER_BLUE: [Color; 5] = [rgb(0x10, 0x30, 0x6A), rgb(0x28, 0x60, 0xD0), rgb(0x28, 0x70, 0xFF), rgb(0x96, 0xC8, 0xFF), rgb(0xFF, 0xFF, 0xFF)];
 
@@ -472,6 +477,9 @@ pub enum Shape {
     Line { from: Position, to: Position, width: f32, head: Color, tail: Color },
     /// An arc of blocks (`block_arc`): a wave's front, a ring.
     Arc { center: Position, radius: f32, width: f32, from: f32, to: f32, color: Color, cover: f32 },
+    /// A disc of blocks only `cover` of which are drawn (`dither_disc`): a
+    /// well's core, an orb.
+    Disc { center: Position, radius: f32, color: Color, cover: f32 },
 }
 
 /// Paint `shapes` in order: puffs and marks alpha-blended. Glows are left
@@ -483,6 +491,7 @@ pub fn draw(b: &mut impl Blocks, shapes: &[Shape]) {
             Shape::Mark { pos, size, color } => mark(b, pos, size, color),
             Shape::Line { from, to, width, head, tail } => block_taper(b, from, to, width, 1.0, |t| between(head, tail, t, 3)),
             Shape::Arc { center, radius, width, from, to, color, cover } => block_arc(b, center, radius, width, from, to, color, cover),
+            Shape::Disc { center, radius, color, cover } => dither_disc(b, center, radius, color, cover),
             Shape::Glow { .. } => {}
         }
     }
@@ -692,7 +701,7 @@ mod tests {
     #[test]
     fn every_ramp_runs_dark_to_bright() {
         let lum = |c: Color| 0.2126 * c.r as f32 + 0.7152 * c.g as f32 + 0.0722 * c.b as f32;
-        for ramp in [&FIRE[..], &SMOKE[..], &DUST[..], &PLASMA_TEAL[..], &PLASMA_PURPLE[..], &TESLA[..], &LASER_RED[..], &LASER_BLUE[..], &OOZE[..]] {
+        for ramp in [&FIRE[..], &SMOKE[..], &DUST[..], &PLASMA_TEAL[..], &PLASMA_PURPLE[..], &TESLA[..], &LASER_RED[..], &LASER_BLUE[..], &OOZE[..], &VOID[..]] {
             for w in ramp.windows(2) {
                 assert!(lum(w[1]) > lum(w[0]), "{:?} then {:?}", w[0], w[1]);
             }

@@ -265,6 +265,16 @@ pub enum WireEvent {
     /// The rod `id` landed on map cell (`col`, `row`), leaving a crater
     /// (`crater`) and setting a volcano off (`erupted`); `Event::RodImpact`.
     RodImpact { id: u16, col: u8, row: u8, crater: bool, erupted: bool },
+    /// The orb `id` of `slot` anchored at (`x`, `y`) by `by`; `seat` is
+    /// `wire::NO_SEAT` for an enemy's; `Event::WellAnchored`.
+    WellAnchored { id: u16, slot: u16, seat: u8, x: i16, y: i16, by: crate::well::AnchorBy },
+    /// The well `id` collapsed at (`x`, `y`), `early` under an EMP;
+    /// `Event::WellCollapsed`.
+    WellCollapsed { id: u16, x: i16, y: i16, early: bool },
+    /// `what` was swallowed by a core at (`x`, `y`); `Event::Swallowed`.
+    Swallowed { what: crate::well::Swallow, x: i16, y: i16 },
+    /// The orb `id` was put out at (`x`, `y`); `Event::OrbFizzled`.
+    OrbFizzled { id: u16, x: i16, y: i16 },
 }
 
 /// `WireEvent::DroneLaunched::target` for a drone locked on no tank.
@@ -378,6 +388,12 @@ impl WireEvent {
                 crater,
                 erupted,
             },
+            Event::WellAnchored { id, slot, seat, x, y, by } => {
+                WireEvent::WellAnchored { id: (id & 0xFFFF) as u16, slot: slot_u16(slot), seat, x: q(x), y: q(y), by }
+            }
+            Event::WellCollapsed { id, x, y, early } => WireEvent::WellCollapsed { id: (id & 0xFFFF) as u16, x: q(x), y: q(y), early },
+            Event::Swallowed { what, x, y } => WireEvent::Swallowed { what, x: q(x), y: q(y) },
+            Event::OrbFizzled { id, x, y } => WireEvent::OrbFizzled { id: (id & 0xFFFF) as u16, x: q(x), y: q(y) },
             Event::DroneLaunched { id, slot, x, y, target, frog } => WireEvent::DroneLaunched {
                 id: (id & 0xFFFF) as u16,
                 slot: slot_u16(slot),
@@ -571,6 +587,10 @@ impl WireEvent {
                 land: land as f32 * crate::PHYSICS_FIXED_DT,
             },
             WireEvent::RodImpact { id, col, row, crater, erupted } => Event::RodImpact { id: id as u32, cell: (col as i32, row as i32), crater, erupted },
+            WireEvent::WellAnchored { id, slot, seat, x, y, by } => Event::WellAnchored { id: id as u32, slot: slot as usize, seat, x: d(x), y: d(y), by },
+            WireEvent::WellCollapsed { id, x, y, early } => Event::WellCollapsed { id: id as u32, x: d(x), y: d(y), early },
+            WireEvent::Swallowed { what, x, y } => Event::Swallowed { what, x: d(x), y: d(y) },
+            WireEvent::OrbFizzled { id, x, y } => Event::OrbFizzled { id: id as u32, x: d(x), y: d(y) },
             WireEvent::DroneLaunched { id, slot, x, y, target, frog } => Event::DroneLaunched {
                 id: id as u32,
                 slot: slot as usize,
@@ -748,6 +768,12 @@ mod tests {
             Event::GlobSplashed { x: 300.0, y: 180.0 },
             Event::Slimed { slot: 4 },
             Event::SlimeWashed { slot: 4 },
+            Event::RodCalled { id: 40, slot: 0, seat: 0, cell: (20, 9), land: 750.0 * crate::PHYSICS_FIXED_DT },
+            Event::RodImpact { id: 40, cell: (20, 9), crater: true, erupted: false },
+            Event::WellAnchored { id: 41, slot: 3, seat: crate::net::wire::NO_SEAT, x: 320.25, y: 160.5, by: crate::well::AnchorBy::Contact },
+            Event::WellCollapsed { id: 41, x: 320.25, y: 160.5, early: true },
+            Event::Swallowed { what: crate::well::Swallow::Drone, x: 330.0, y: 162.0 },
+            Event::OrbFizzled { id: 42, x: 96.0, y: 64.0 },
             Event::TowerRepaired { side: Side::Enemy, x: 176.0, y: 80.0 },
             Event::PhysicsQuarantine { bodies: 1, colliders: 2 },
             Event::BeatDone { beat: 2 },
@@ -779,7 +805,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 66, "one sample per Event variant");
+        assert_eq!(seen.len(), 72, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }
@@ -793,6 +819,20 @@ mod tests {
             let back: WireEvent = postcard::from_bytes(&bytes).unwrap();
             assert_eq!(back, wire);
             let sim = back.to_event().expect("a sent event has a simulation form");
+            assert_eq!(serde_json::to_value(&sim).unwrap(), serde_json::to_value(&event).unwrap());
+        }
+    }
+
+    /// A well's collapse hit and a drone downed at a core travel and come
+    /// back as themselves (`HitCause::Well`, `AirStrike::Well`).
+    #[test]
+    fn the_wells_causes_survive_the_wire() {
+        let hit = Event::Hit { target: HitTarget::Enemy { slot: 4 }, damage: 6.5, killed: false, x: 320.25, y: 160.5, cause: HitCause::Well };
+        let downed = Event::DroneDowned { id: 21, x: 300.0, y: 180.0, height: 36.0, by: "well" };
+        for event in [hit, downed] {
+            let wire = WireEvent::from_event(&event).expect("sent");
+            let back: WireEvent = postcard::from_bytes(&postcard::to_stdvec(&wire).unwrap()).unwrap();
+            let sim = back.to_event().expect("a simulation form");
             assert_eq!(serde_json::to_value(&sim).unwrap(), serde_json::to_value(&event).unwrap());
         }
     }

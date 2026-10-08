@@ -240,9 +240,15 @@ fn apply_zones(game: &mut Game, s: &Snapshot, cols: u16) {
             Owner::Player(seat) => Some(seat),
             _ => None,
         };
+        let kind = if z.kind == crate::zone::ZONE_WELL {
+            let stage = if z.stage == 1 { crate::well::WellStage::Pulling } else { crate::well::WellStage::Forming };
+            crate::zone::ZoneKind::Well(crate::well::WellZone { stage, by: crate::well::AnchorBy::Press, seat, emp_collapse: false })
+        } else {
+            crate::zone::ZoneKind::Rod(crate::rod::RodCall { cell: cell_from_index(cols, z.cell), seat })
+        };
         crate::zone::Zone {
             id: z.id as u32,
-            kind: crate::zone::ZoneKind::Rod(crate::rod::RodCall { cell: cell_from_index(cols, z.cell), seat }),
+            kind,
             owner,
             centre: Position::new(dequantise_pos(z.x), dequantise_pos(z.y)),
             until: z.until as f32 * PHYSICS_FIXED_DT,
@@ -323,6 +329,7 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_tiles(game, s, cols, dead_tiles);
     apply_tanks(game, s);
     apply_shots(game, s);
+    apply_orbs(game, s);
     apply_missiles(game, s, drawn.then_some(&mut spectacle));
     apply_grenades(game, s);
     apply_drones(game, s);
@@ -331,6 +338,7 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_fires(game, s, cols);
     apply_lamps(game, s);
     apply_zones(game, s, cols);
+    apply_well_drums(game, s, cols);
     apply_craters(game, s, cols);
     apply_volcano_shifts(game, s);
     apply_round(game, s);
@@ -410,6 +418,22 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTre
                 game.emp_show(show, at(x, y), owner, false);
             }
             WireEvent::CookOff { x, y } => Game::cookoff_show(show, at(x, y)),
+            // A gravity well's anchor (its snap, the ripple pinched inward,
+            // the module's anchor cell), its collapse, and a swallow's or
+            // a fizzle's pop (docs/gravity-well.md "Wire").
+            // This seat's own anchor, drawn by the client on its press or its
+            // orb's contact (`net::round`'s `OwnAnchor`): not drawn twice.
+            WireEvent::WellAnchored { seat, .. } if seat != crate::net::wire::NO_SEAT && mode.client_drew(seat as usize) => {}
+            WireEvent::WellAnchored { slot, x, y, .. } => {
+                for tank in game.world.query_mut::<&mut Tank>() {
+                    if tank.owner_slot() == slot as usize {
+                        tank.kick_well_anchor();
+                    }
+                }
+                game.well_anchor_show(show, at(x, y));
+            }
+            WireEvent::WellCollapsed { x, y, .. } => game.well_collapse_show(show, at(x, y)),
+            WireEvent::Swallowed { x, y, .. } | WireEvent::OrbFizzled { x, y, .. } => game.swallow_show(at(x, y)),
             WireEvent::CrateBroken { x, y, cooked: true, .. } => game.crate_cookoff_show(show, at(x, y)),
             // A sonic hit flashes the hull and throws dust (`fx`), never a
             // shell's impact flash; a slug's hits are its own picture's
@@ -501,6 +525,7 @@ fn kick_turret(game: &mut Game, slot: usize, weapon: WeaponKind) {
             WeaponKind::GaussRail => tank.kick_rail(),
             WeaponKind::FpvSwarm => tank.kick_fpv(),
             WeaponKind::RodFromGod => tank.kick_rod(),
+            WeaponKind::GravityWell => tank.kick_well(),
             WeaponKind::Minigun | WeaponKind::Missiles | WeaponKind::Flamethrower | WeaponKind::Grenades => {}
         }
         break;
@@ -541,6 +566,8 @@ fn drawn_muzzle(game: &mut Game, slot: usize, weapon: WeaponKind) -> Option<Posi
         WeaponKind::FpvSwarm => None,
         // A call is a beam from the sky, not a shot: its zone is its show.
         WeaponKind::RodFromGod => None,
+        // The orb swelling at the muzzle is its own show.
+        WeaponKind::GravityWell => None,
     };
     tank.rotation = facing;
     muzzle
@@ -793,6 +820,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
         tank.gauss_slugs = 0;
         tank.fpv_drones = 0;
         tank.rods = 0;
+        tank.wells = 0;
         let ammo = t.ammo as i32;
         match weapon {
             ActiveWeapon::Shell => tank.shells_ammo = ammo,
@@ -807,6 +835,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
             ActiveWeapon::GaussRail => tank.gauss_slugs = ammo,
             ActiveWeapon::FpvSwarm => tank.fpv_drones = ammo,
             ActiveWeapon::RodFromGod => tank.rods = ammo,
+            ActiveWeapon::GravityWell => tank.wells = ammo,
         }
         // The magazine, which the trigger fires while a special is
         // offline; and an EMP's outages, run down between snapshots.
@@ -1047,7 +1076,7 @@ fn apply_shots(game: &mut Game, s: &Snapshot) {
     for (e, p) in game.world.query::<(Entity, &Plasma)>().iter() {
         existing.insert((p.id & 0xFFFF) as u16, (ShotKind::Plasma, e));
     }
-    let wanted: BTreeMap<u16, &ShotState> = s.shots.iter().map(|sh| (sh.id, sh)).collect();
+    let wanted: BTreeMap<u16, &ShotState> = s.shots.iter().filter(|sh| sh.kind != ShotKind::Orb).map(|sh| (sh.id, sh)).collect();
     for (id, (kind, entity)) in &existing {
         if wanted.get(id).is_none_or(|sh| sh.kind != *kind) {
             game.world.despawn(*entity).ok();
@@ -1089,6 +1118,8 @@ fn apply_shots(game: &mut Game, s: &Snapshot) {
                         }
                     }
                 }
+                // Orbs are `apply_orbs`'.
+                ShotKind::Orb => {}
                 ShotKind::Plasma => {
                     let mut q = game.world.query_one::<&mut Plasma>(entity);
                     if let Ok(plasma) = q.get() {
@@ -1107,6 +1138,72 @@ fn apply_shots(game: &mut Game, s: &Snapshot) {
             _ => spawn_shot(game, sh, position, rotation, dir),
         }
     }
+}
+
+/// The gravity well's orbs as the snapshot has them (`ShotKind::Orb`), by
+/// id; a client's own drawn ahead (`PROVISIONAL_ID_BASE` and up) kept. One
+/// the replica already flies keeps its age and how far it has flown.
+fn apply_orbs(game: &mut Game, s: &Snapshot) {
+    let speed = tuning().well_orb_speed;
+    let base = crate::net::predict::PROVISIONAL_ID_BASE;
+    let mut orbs: Vec<crate::well::Orb> = game.orbs.iter().copied().filter(|o| o.id >= base).collect();
+    for sh in s.shots.iter().filter(|sh| sh.kind == ShotKind::Orb) {
+        let position = Position::new(dequantise_pos(sh.x), dequantise_pos(sh.y));
+        let rotation = dequantise_heading(sh.heading);
+        let rad = rotation.to_radians();
+        let velocity = Vec2::new(rad.sin(), -rad.cos()) * speed;
+        let was = game.orbs.iter().find(|o| o.id == sh.id as u32);
+        // Its age only matters for the swell, which the state says is over
+        // or not: kept, but on the right side of it.
+        let swell = crate::well::ORB_SWELL_SECONDS;
+        let age = match (was.map(|o| o.age), sh.state) {
+            (Some(age), 0) => age.min(swell * 0.5),
+            (Some(age), _) => age.max(swell),
+            (None, 0) => 0.0,
+            (None, _) => swell,
+        };
+        orbs.push(crate::well::Orb {
+            id: sh.id as u32,
+            owner: shot_owner(sh),
+            position,
+            prev_position: was.map_or(position, |o| o.position),
+            velocity,
+            rotation,
+            flown: was.map_or(0.0, |o| o.flown + o.position.distance_to(position)),
+            age,
+            rewind: 0,
+        });
+    }
+    orbs.sort_by_key(|o| o.id);
+    game.orbs = orbs;
+}
+
+/// The drums the wells hold as the snapshot has them: where each is is
+/// `well::held_at` of its well and the round clock, so the three numbers
+/// are all of it. A fused one keeps the fuse the replica runs down.
+fn apply_well_drums(game: &mut Game, s: &Snapshot, cols: u16) {
+    let was = std::mem::take(&mut game.held_drums);
+    game.held_drums = s
+        .well_drums
+        .iter()
+        .map(|d| crate::well::HeldDrum {
+            id: d.id as u32,
+            well: d.well as u32,
+            cell: cell_from_index(cols, d.cell),
+            drum: crate::obstacle::Drum::from_variant(d.drum as i32),
+            fuse: d.fused.then(|| was.iter().find(|w| w.id == d.id as u32).and_then(|w| w.fuse).unwrap_or(1.0)),
+            lifted_at: d.tick as f32 * PHYSICS_FIXED_DT,
+            // Its well's centre, from the zones family (applied first); one
+            // already held keeps the centre it had.
+            centre: game
+                .zones
+                .iter()
+                .find(|z| z.id == d.well as u32)
+                .map(|z| z.centre)
+                .or_else(|| was.iter().find(|w| w.id == d.id as u32).map(|w| w.centre))
+                .unwrap_or_else(|| map::cell_to_world(cell_from_index(cols, d.cell).0, cell_from_index(cols, d.cell).1)),
+        })
+        .collect();
 }
 
 /// A shot's shadow height, hashed from its id between the kind's knobs:
@@ -1165,6 +1262,7 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
                 id,
             },));
         }
+        ShotKind::Orb => {}
         ShotKind::Plasma => {
             game.world.spawn((Plasma {
                 state: PlasmaState::from_col(sh.state as i32).unwrap_or(PlasmaState::Flying),
@@ -1229,6 +1327,7 @@ fn apply_frogs(game: &mut Game, s: &Snapshot, mut show: Option<&mut Spectacle>) 
             frog.set_clips(dead, hopping, on(frog_flags::BITING), on(frog_flags::HURT), f.phase);
             // Stunned until the room says it is not; a fresh stun is drawn
             // for its full length (`Game::tick_presentation` runs it down).
+            frog.pulled = on(frog_flags::PULLED);
             frog.stun_timer = match (on(frog_flags::STUNNED), frog.stun_timer > 0.0) {
                 (true, true) => frog.stun_timer,
                 (true, false) => tuning().sonic_frog_stun_seconds.max(f32::EPSILON),
@@ -1278,6 +1377,7 @@ fn apply_pickups(game: &mut Game, s: &Snapshot, cols: u16) {
                 let left = dequantise_seconds(state.left);
                 pickup.burn = (state.flags & crate_flags::BURNING != 0).then_some(left);
                 pickup.loose = (state.flags & crate_flags::LOOSE != 0).then_some(left);
+                pickup.drift = Vec2::new(dequantise_pos(state.dx), dequantise_pos(state.dy));
             }
         }
     }
@@ -1464,6 +1564,12 @@ mod tests {
         pickups_taken: usize,
         frog_clips: usize,
         tiles_gone: usize,
+        /// Wells standing, drums held, crates drawn off their cells and
+        /// frogs held in a pull (docs/gravity-well.md "Wire").
+        wells: usize,
+        held_drums: usize,
+        drifted: usize,
+        pulled_frogs: usize,
         /// Frames on the end screen.
         ended: usize,
         /// Frames between snapshots on which the replica's own tick moved
@@ -1496,6 +1602,10 @@ mod tests {
             self.pickups_taken += first.pickups.len().saturating_sub(state.pickups.len());
             self.frog_clips += state.frogs.iter().filter(|f| f.hopping || f.hurt || f.biting).count();
             self.tiles_gone += first.tiles.len().saturating_sub(state.tiles.len());
+            self.wells += state.zones.iter().filter(|z| z.1 == crate::zone::ZONE_WELL).count();
+            self.held_drums += state.well_drums.len();
+            self.drifted += state.pickups.iter().filter(|p| p.drift != (0, 0)).count();
+            self.pulled_frogs += state.frogs.iter().filter(|f| f.pulled).count();
             self.ended += usize::from(state.outcome != crate::simulation::Outcome::Playing);
         }
 
@@ -1805,6 +1915,50 @@ mod tests {
                 assert!(game.debug_call_rod(at, frame == 150).is_some(), "a call on the field");
             }
         });
+    }
+
+    /// The gravity well reaches the replica (docs/gravity-well.md "Wire"):
+    /// the wells from the zones family by their stage, the drums they hold
+    /// from theirs, the orbs as shots, a crate drawn off its cell and a
+    /// frog held in a pull - the picture the room's, frame by frame, and
+    /// the bytes again on re-encoding (`round_trip`'s checking).
+    #[test]
+    fn a_well_and_what_it_holds_reach_the_replica() {
+        let seen = round_trip(DEFAULT_MAP, 0xB0B5, 600, |game, frame| {
+            if frame == 30 {
+                let patch = crate::simulation::debug::TankPatch { wells: Some(3), ..Default::default() };
+                game.debug_set_tank(0, &patch).expect("the seat's tank");
+                for slot in 1..=6 {
+                    game.debug_set_tank(slot, &patch).ok();
+                }
+            }
+            // Over the fuel drums on the top edge, and beside the frog and
+            // its pack.
+            if frame == 70 {
+                assert!(game.debug_well(map::cell_to_world(19, 2), false).is_some(), "a well on the field");
+            }
+            if frame == 140 {
+                assert!(game.debug_well(map::cell_to_world(28, 21), true).is_some(), "an enemy's well on the field");
+            }
+        });
+        assert!(seen.wells > 0, "{seen:?}: no well reached the replica");
+        assert!(seen.held_drums > 0, "{seen:?}: no held drum reached the replica");
+        assert!(seen.drifted > 0 || seen.pulled_frogs > 0, "{seen:?}: nothing the pull moves on the ground reached the replica");
+    }
+
+    /// A client that joins while a well holds its drums is welcomed with
+    /// them: the welcome's replica holds what the room holds.
+    #[test]
+    fn a_joiner_is_welcomed_with_the_drums_a_well_holds() {
+        let mut game = authoritative(DEFAULT_MAP, 0xB0B5, 0);
+        game.debug_well(map::cell_to_world(19, 2), false).expect("a well over the fuel drums");
+        for frame in 1..=40u32 {
+            step(&mut game, frame);
+        }
+        assert!(!game.held_drums().is_empty(), "the well holds its drums");
+        let replica = welcome_through_the_codec(&game);
+        assert_eq!(replica.held_drums().len(), game.held_drums().len());
+        assert_eq!(replica.drawable_state(), game.drawable_state(), "the joiner draws the room's picture");
     }
 
     /// FPV drones are a keyed family of their own (`wire::DroneState`,

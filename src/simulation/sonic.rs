@@ -134,12 +134,13 @@ const FRONT_SLACK_PX: f32 = 8.0;
 /// "The probe's `--crate` and the spawn swap"): each weapon and the knob
 /// that is its share, in order.
 type ShareOf = fn(&Tuning) -> f32;
-const SPAWN_SWAPS: [(ActiveWeapon, ShareOf); 5] = [
+const SPAWN_SWAPS: [(ActiveWeapon, ShareOf); 6] = [
     (ActiveWeapon::SonicHammer, |t| t.enemy_special_weapon_sonic_share),
     (ActiveWeapon::Emp, |t| t.enemy_special_weapon_emp_share),
     (ActiveWeapon::GaussRail, |t| t.enemy_special_weapon_gauss_share),
     (ActiveWeapon::FpvSwarm, |t| t.enemy_special_weapon_fpv_share),
     (ActiveWeapon::RodFromGod, |t| t.enemy_special_weapon_rod_share),
+    (ActiveWeapon::GravityWell, |t| t.enemy_special_weapon_well_share),
 ];
 
 /// The salt of the spawn swap's hash.
@@ -186,7 +187,8 @@ pub(super) fn swap_spawn_special_with(t: &Tuning, enemy: &mut Tank, slot: usize,
 /// `armed` is every live hammer tank healthy enough to close in (entity,
 /// owner slot, position, the seat it fights), `half_of` a hammer tank's hull half extents, `tanks`
 /// every live tank with a body by slot and `friends` every live enemy by
-/// slot with its hull points. No RNG.
+/// slot with its hull points; `pulled` says a point stands in a gravity
+/// well's pull, where no spot is taken (docs/gravity-well.md). No RNG.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn closer_spots(
     t: &Tuning,
@@ -198,6 +200,7 @@ pub(super) fn closer_spots(
     tanks: &[(usize, Position)],
     friends: &[(usize, [Position; 6])],
     block: impl Fn((i32, i32)) -> Block,
+    pulled: impl Fn(Position) -> bool,
 ) -> BTreeMap<Entity, Position> {
     let mut out = BTreeMap::new();
     if t.sonic_ai_closers <= 0 {
@@ -217,7 +220,7 @@ pub(super) fn closer_spots(
             .into_iter()
             .filter_map(|side| {
                 let at = seat.pos + side.vec() * out_by;
-                if !grid.usable(at) {
+                if !grid.usable(at) || pulled(at) {
                     return None;
                 }
                 let facing = Dir::toward(at, seat.pos);
@@ -677,7 +680,10 @@ impl Game {
         // closer's place.
         let fit: Vec<(Entity, usize, Position, u8)> =
             armed.iter().copied().filter(|a| self.world.get::<&Tank>(a.0).is_ok_and(|tank| tank.damage < t.enemy_flee_damage)).collect();
-        let spots = closer_spots(&t, &fit, half_of, seats, grid, field, &all_tanks, &friends, |cell| blocks.get(&cell).copied().unwrap_or(Block::Open));
+        let pulling = self.zones.iter().any(|z| z.well().is_some());
+        let spots = closer_spots(&t, &fit, half_of, seats, grid, field, &all_tanks, &friends, |cell| blocks.get(&cell).copied().unwrap_or(Block::Open), |p| {
+            pulling && self.in_a_pull(p)
+        });
         for &(entity, slot, me, target) in &armed {
             let Ok(ai) = self.world.get::<&Ai>(entity) else { continue };
             let mut sense = HammerSense { spot: spots.get(&entity).copied(), ..HammerSense::default() };
@@ -820,10 +826,14 @@ impl Game {
         // A rod's call standing (docs/rod-from-god.md): its circle, which
         // crushes whoever is in it when it lands.
         let in_call = |p: Position| self.zones.iter().any(|z| z.rod().is_some() && p.distance_to(z.centre) <= z.radius(t));
+        // A pulling enemy well (docs/gravity-well.md): a seat shoved into
+        // one is held for the pack.
+        let in_well = |p: Position| self.enemy_well_holding(p).is_some();
         (in_reach(rest) && !in_reach(seat.pos))
             || (in_lane(rest) && !in_lane(seat.pos))
             || (in_rail(rest) && !in_rail(seat.pos))
             || (in_call(rest) && !in_call(seat.pos))
+            || (in_well(rest) && !in_well(seat.pos))
     }
 
     /// Put a crate of `kind` down at the map cell nearest `at`, in its air

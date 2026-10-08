@@ -345,6 +345,11 @@ tunables! {
         /// after the swarm's: a hash of the spawn point and the owner slot,
         /// never the round's RNG, so at 0 nothing changes.
         enemy_special_weapon_rod_share: f32 = 0.0 in 0.0 ..= 1.0 @ Restart;
+        /// Of an enemy that rolled a special weapon above, the share that
+        /// spawns with the gravity well instead (docs/gravity-well.md),
+        /// after the rod's: a hash of the spawn point and the owner slot,
+        /// never the round's RNG, so at 0 nothing changes.
+        enemy_special_weapon_well_share: f32 = 0.0 in 0.0 ..= 1.0 @ Restart;
         /// Which chassis the player spawns in, as a row index into
         /// `scifi_tanks_sheet.png`: 0 scout, 1 assault, 2 breaker,
         /// 3 longbow, 4 flak, 5 wraith, 6 warden, 7 ravager, 8 glacier,
@@ -1343,6 +1348,130 @@ tunables! {
         rod_ai_give_up_seconds: f32 = 0.3 in 0.05 ..= 5.0;
         /// Seconds a rod tank that gave a move up stands where it is.
         rod_ai_wait_seconds: f32 = 2.0 in 0.0 ..= 10.0;
+    }
+
+    group well {
+        /// Wells one gravity well crate loads (`pickup::PickupKind::GravityWell`,
+        /// docs/gravity-well.md). One per launch; the anchor costs nothing.
+        well_per_pickup: i32 = 3 in 1 ..= 10;
+        /// After a launch, seconds before the next launch. The anchor
+        /// press is never held back by it.
+        well_reload_seconds: f32 = 1.5 in 0.0 ..= 10.0;
+        /// How fast the orb flies (px/s): slower than a seat drives, about
+        /// an enemy's pace.
+        well_orb_speed: f32 = 150.0 in 20.0 ..= 1000.0;
+        /// How far the orb flies before it anchors itself (px).
+        well_orb_range_px: f32 = 320.0 in 32.0 ..= 1000.0;
+        /// Half the orb's width: what its sweep meets things by (px).
+        well_orb_half_px: f32 = 6.0 in 1.0 ..= 16.0;
+        /// A press this soon after an orb anchored by itself (on what it
+        /// met, or at its range) fires nothing: it was meant for the orb.
+        well_anchor_grace_seconds: f32 = 0.4 in 0.0 ..= 2.0;
+        /// From the anchor to the pull: the snap and the ring forming,
+        /// nothing pulled.
+        well_form_seconds: f32 = 0.4 in 0.0 ..= 3.0;
+        /// How long a well pulls before it collapses.
+        well_pull_seconds: f32 = 4.0 in 0.5 ..= 15.0;
+        /// How far a well reaches (px; four cells).
+        well_radius_px: f32 = 128.0 in 32.0 ..= 480.0;
+        /// The core (px): the pull is strongest at its rim and fades to
+        /// nothing at the centre; a shot, missile, drone or orb that passes
+        /// inside it is swallowed.
+        well_core_px: f32 = 12.0 in 2.0 ..= 48.0;
+        /// Along a hull's tracks, the current at the strongest point for
+        /// the chassis-free mass (px/s): the drive runs in its frame, so a
+        /// hull driving straight away nets its speed less this.
+        well_current_speed: f32 = 320.0 in 0.0 ..= 1000.0;
+        /// Across a hull's tracks, the pull at the strongest point
+        /// (px/s²) the tracks' grip holds up to its limit.
+        well_side_pull: f32 = 650.0 in 0.0 ..= 5000.0;
+        /// How hard a heavy chassis resists: the current and the side pull
+        /// over its mass factor to this power.
+        well_mass_exponent: f32 = 2.0 in 0.0 ..= 4.0;
+        /// The pull on shells, bullets, plasma bolts and orbs at the
+        /// strongest point (px/s²): it turns their heading, never their
+        /// speed.
+        well_shot_pull: f32 = 3600.0 in 0.0 ..= 20000.0;
+        /// The pull on a missile's or a drone's ground motion (px/s²).
+        well_air_pull: f32 = 1800.0 in 0.0 ..= 20000.0;
+        /// The pull on a grenade's ground motion (px/s²).
+        well_grenade_pull: f32 = 600.0 in 0.0 ..= 5000.0;
+        /// The ring captured grenades and held drums circle on (px).
+        well_ring_px: f32 = 24.0 in 8.0 ..= 64.0;
+        /// How fast they circle it (rad/s, clockwise as drawn).
+        well_orbit_speed: f32 = 3.0 in 0.0 ..= 20.0;
+        /// How long a lifted drum takes to spiral from its cell to the
+        /// ring.
+        well_capture_seconds: f32 = 0.8 in 0.05 ..= 4.0;
+        /// How fast a crate slides in at the strongest point (px/s).
+        well_crate_speed: f32 = 60.0 in 0.0 ..= 400.0;
+        /// How fast a frog slides in at the strongest point (px/s).
+        well_frog_speed: f32 = 50.0 in 0.0 ..= 400.0;
+        /// The collapse's shove at the centre (px/s, chassis-free mass),
+        /// falling to nothing at the reach.
+        well_fling_speed: f32 = 400.0 in 0.0 ..= 508.0;
+        /// The most any fling gives (px/s); the wire's shove reaches 508.
+        well_fling_max_speed: f32 = 480.0 in 0.0 ..= 508.0;
+        /// How hard a heavy chassis resists the fling.
+        well_fling_mass_exponent: f32 = 1.5 in 0.0 ..= 4.0;
+        /// The collapse's damage at the centre to the side opposing its
+        /// owner, falling to nothing at the reach; no roll.
+        well_collapse_damage: f32 = 10.0 in 0.0 ..= 100.0;
+        /// How fast the collapse throws a grenade off the ring (px/s).
+        well_fling_grenade_speed: f32 = 220.0 in 0.0 ..= 1000.0;
+        /// And how high it lobs it (the grenade's climb, px/s).
+        well_fling_grenade_climb: f32 = 160.0 in 0.0 ..= 2000.0;
+        /// How fast the collapse slides a crate out at the centre (px/s).
+        well_fling_crate_speed: f32 = 240.0 in 0.0 ..= 1000.0;
+        /// How hard a sliding crate brakes (px/s²).
+        well_crate_friction: f32 = 600.0 in 1.0 ..= 5000.0;
+        /// How far the collapse hops a frog out from the centre (cells),
+        /// falling off with distance, at least one.
+        well_fling_frog_cells: i32 = 3 in 1 ..= 8;
+        /// Fish within a well's reach thrown onto the bank at its
+        /// collapse, nearest first.
+        well_fish_throw_max: i32 = 6 in 0 ..= 32;
+        /// Tread marks within a well's reach creep toward its core at this
+        /// at the strongest point (px/s; cosmetic).
+        well_mark_speed: f32 = 30.0 in 0.0 ..= 400.0;
+        /// And turn about it at this (rad/s; cosmetic).
+        well_mark_twist: f32 = 1.2 in 0.0 ..= 10.0;
+        /// Tall grass within a well's reach leans into it by this at the
+        /// strongest point (px at the tip; cosmetic).
+        well_grass_lean_px: f32 = 6.0 in 0.0 ..= 16.0;
+        /// Blocks in a well's swirl.
+        well_particles: i32 = 48 in 0 ..= 200;
+        /// The inward ripple at an anchor, against a tank dying's.
+        well_snap_shock: f32 = 0.35 in 0.0 ..= 2.0;
+        /// The collapse's ripple and shake, against a tank dying's.
+        well_shock: f32 = 0.6 in 0.0 ..= 2.0;
+        /// The collapse's screen flash, against a drum's.
+        well_screen_flash: f32 = 0.6 in 0.0 ..= 8.0;
+        /// The module's launch and anchor cells (s).
+        well_flash_seconds: f32 = 0.25 in 0.0 ..= 2.0;
+        /// The light a well's ring throws at night, against a headlight's.
+        well_light: f32 = 0.6 in 0.0 ..= 2.0;
+        /// Seconds between an enemy's decisions to launch.
+        well_ai_fire_interval: f32 = 8.0 in 0.1 ..= 60.0;
+        /// The nearest an enemy anchors a well, from its gun line's muzzle
+        /// - past its own pull and the friend margin - and where its shield
+        /// stands (px).
+        well_ai_min_px: f32 = 160.0 in 64.0 ..= 1000.0;
+        /// A seat this close to the players' frog is its guard, which an
+        /// enemy pulls off it (px).
+        well_ai_guard_px: f32 = 160.0 in 0.0 ..= 480.0;
+        /// Added to the reach when an enemy counts the allies a pull would
+        /// drag (px).
+        well_ai_friend_margin_px: f32 = 16.0 in 0.0 ..= 128.0;
+        /// A chassis at least this heavy (mass factor) braces broadside in
+        /// a pull while its tracks hold.
+        well_ai_heavy_mass: f32 = 1.2 in 0.1 ..= 5.0;
+        /// Extra route cost on every nav cell of a forming or pulling well;
+        /// 0 switches it off.
+        well_ai_route_cost: usize = 24 in 0 ..= 255;
+        /// How far from a well's centre the pack's firing slots stand while
+        /// the seat they fight is in its pull (px).
+        well_ai_herd_px: f32 = 176.0 in 0.0 ..= 480.0;
     }
 
     group flamethrower {

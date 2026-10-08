@@ -633,7 +633,7 @@ fn closer_spots_stand_square_on_the_seat_out_of_each_others_way() {
         let game = round(map);
         let grid = game.nav_grid(W, H);
         let wall = |cell: (i32, i32)| if game.map.solid_at(cell.0, cell.1) { crate::sonic::Block::Wall } else { crate::sonic::Block::Open };
-        sonic::closer_spots(t, &armed, |_| Vec2::new(half, half), &seats, &grid, (W, H), &tanks, &friends, wall)
+        sonic::closer_spots(t, &armed, |_| Vec2::new(half, half), &seats, &grid, (W, H), &tanks, &friends, wall, |_| false)
     };
     let east = Position::new(seat_at.x + out, seat_at.y);
     let (south, west) = (Position::new(seat_at.x, seat_at.y + out), Position::new(seat_at.x - out, seat_at.y));
@@ -647,6 +647,13 @@ fn closer_spots_stand_square_on_the_seat_out_of_each_others_way() {
     let (col, row) = crate::map::world_to_cell(west);
     let walled = spots_on(&t, &format!("cells.\"{col},{row}\" = {{ kind = \"wall\", material = \"iron\" }}\n"), 24.0);
     assert_eq!((walled.get(&a), walled.get(&b)), (Some(&east), None), "no side clear of the first's cone: {walled:?}");
+    // No spot inside a gravity well's pull (docs/gravity-well.md): with one
+    // over the east side, the first closer takes the next side clear.
+    let game = round("");
+    let grid = game.nav_grid(W, H);
+    let open = |_: (i32, i32)| crate::sonic::Block::Open;
+    let pulled = sonic::closer_spots(&t, &armed, |_| Vec2::new(16.0, 16.0), &seats, &grid, (W, H), &tanks, &friends, open, |p| p.distance_to(east) < 1.0);
+    assert!(pulled.get(&a).is_some_and(|&p| p != east) && !pulled.values().any(|&p| p == east), "none in the pull: {pulled:?}");
 }
 
 /// A skid is not being stuck: the stuck and breach clocks stand still

@@ -469,6 +469,11 @@ pub(super) fn dispatch_fire_from(
         // A charge weapon fires on its release (`Game::charge_trigger`,
         // `fire_charge`), never on a trigger pull.
         ActiveWeapon::GaussRail | ActiveWeapon::RodFromGod => {}
+        // An orb off the gun line; the press that anchors it never reaches
+        // here (`well::take_anchor_press`).
+        ActiveWeapon::GravityWell => {
+            super::well::fire_well(f, tank, owner);
+        }
         ActiveWeapon::FpvSwarm => {
             if tank.fpv_drones > 0 {
                 f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::FpvSwarm.name() });
@@ -571,6 +576,12 @@ pub(super) trait Projectile: hecs::Component {
     /// projectile kind does this - unlike `try_ricochet`, which only
     /// shells get.
     fn deflect(&mut self, center: Position, new_owner: Owner);
+    /// Turn its velocity by `accel` (px/s²) over `dt`, keeping its speed,
+    /// and its heading with it: a gravity well's pull
+    /// (docs/gravity-well.md, `well::bend`).
+    fn bend(&mut self, accel: Vec2, dt: f32);
+    /// What it is when a well's core swallows it (`Event::Swallowed`).
+    fn swallowed_as() -> crate::well::Swallow;
 }
 
 /// How many ticks into the past stand the enemies and frogs a seat's
@@ -683,6 +694,13 @@ impl Projectile for Shell {
         true
     }
     fn can_bounce() -> bool { true }
+    fn bend(&mut self, accel: Vec2, dt: f32) {
+        self.velocity = crate::well::bend(self.velocity, accel, dt);
+        self.rotation = crate::well::heading_deg(self.velocity);
+    }
+    fn swallowed_as() -> crate::well::Swallow {
+        crate::well::Swallow::Shell
+    }
 }
 
 impl Projectile for Bullet {
@@ -718,6 +736,13 @@ impl Projectile for Bullet {
     fn strikes_air() -> bool { true }
     fn can_bounce() -> bool { true }
     deflect_impl!();
+    fn bend(&mut self, accel: Vec2, dt: f32) {
+        self.velocity = crate::well::bend(self.velocity, accel, dt);
+        self.rotation = crate::well::heading_deg(self.velocity);
+    }
+    fn swallowed_as() -> crate::well::Swallow {
+        crate::well::Swallow::Bullet
+    }
 }
 
 impl Projectile for Plasma {
@@ -746,6 +771,13 @@ impl Projectile for Plasma {
     /// A bolt never ricochets (see docs/PLASMA_SPEC.md).
     fn can_bounce() -> bool { false }
     deflect_impl!();
+    fn bend(&mut self, accel: Vec2, dt: f32) {
+        self.velocity = crate::well::bend(self.velocity, accel, dt);
+        self.rotation = crate::well::heading_deg(self.velocity);
+    }
+    fn swallowed_as() -> crate::well::Swallow {
+        crate::well::Swallow::Plasma
+    }
 }
 
 #[cfg(test)]

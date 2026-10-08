@@ -69,6 +69,19 @@ pub fn streak(d: &mut impl RaylibDraw, head: Position, dir: Vec2, length: f32, w
     taper(d, head, width, head_color, tail, 0.0, fade(tail_color, 0.5));
 }
 
+/// `streak` drawn along a curved `path` (head first): each stretch a taper
+/// whose width and colour step from the head's to nothing at the tail - a
+/// tracer bent by a gravity well (`well::curved_streak`).
+pub fn curved_streak(d: &mut impl RaylibDraw, path: &[Position], width: f32, head_color: Color, tail_color: Color) {
+    let n = path.len().saturating_sub(1).max(1) as f32;
+    let tail = fade(tail_color, 0.5);
+    for (i, pair) in path.windows(2).enumerate() {
+        let (k0, k1) = (i as f32 / n, (i + 1) as f32 / n);
+        let at = |k: f32| pyro::between(head_color, tail, k, 3);
+        taper(d, pair[0], width * (1.0 - k0), at(k0), pair[1], width * (1.0 - k1), at(k1));
+    }
+}
+
 /// Four rays out of `center` along `dir` and its three quarter turns,
 /// `reach` px long, stepping out to nothing at their tips.
 pub(crate) fn star(d: &mut impl RaylibDraw, center: Position, dir: Vec2, reach: f32, width: f32, color: Color) {

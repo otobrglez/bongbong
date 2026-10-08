@@ -269,7 +269,7 @@ pub enum Tool {
 /// for the six tower tools inside the eleven rows a dropdown fits, and the
 /// range board stands with the actors, the thing on the field there to be
 /// shot at.
-pub const TOOLS: [Tool; 51] = [
+pub const TOOLS: [Tool; 52] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -319,6 +319,7 @@ pub const TOOLS: [Tool; 51] = [
     Tool::Pickup(PickupKind::GaussRail),
     Tool::Pickup(PickupKind::FpvSwarm),
     Tool::Pickup(PickupKind::RodFromGod),
+    Tool::Pickup(PickupKind::GravityWell),
     Tool::Eraser,
     Tool::Select,
 ];
@@ -374,6 +375,7 @@ impl Tool {
             Tool::Pickup(PickupKind::GaussRail) => "gauss_rail",
             Tool::Pickup(PickupKind::FpvSwarm) => "fpv_swarm",
             Tool::Pickup(PickupKind::RodFromGod) => "rod_from_god",
+            Tool::Pickup(PickupKind::GravityWell) => "gravity_well",
             Tool::Tower(TowerKind::Tesla, Side::Player) => "tesla",
             Tool::Tower(TowerKind::Tesla, Side::Enemy) => "tesla_enemy",
             Tool::Tower(TowerKind::Gun, Side::Player) => "gun_tower",

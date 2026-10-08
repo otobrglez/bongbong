@@ -326,6 +326,9 @@ pub struct Scene {
     /// Every rod's call standing (docs/rod-from-god.md) but this seat's own:
     /// where it lands and the seconds left on the zones' clock.
     pub zones: Vec<(Position, f32)>,
+    /// Every gravity well standing (docs/gravity-well.md) but this seat's
+    /// own: its centre and, while it pulls, the seconds to its collapse.
+    pub wells: Vec<(Position, Option<f32>)>,
 }
 
 /// This seat's own tank.
@@ -455,6 +458,10 @@ pub enum ArrowKind {
     /// A rod's call standing (`Scene::zones`): never merged, never left
     /// out, in the designator's red, blinking quicker over its last second.
     Zone { left: f32 },
+    /// A gravity well standing (`Scene::wells`): never merged, never left
+    /// out, in the well's violet, blinking quicker over its last second;
+    /// `left` the seconds to its collapse while it pulls.
+    Well { left: Option<f32> },
     /// An enemy winding up a special (`TankView::windup`): never merged,
     /// never left out, drawn in the weapon's accent rimmed hostile red and
     /// blinking quicker as it nears going off. `lane`: this seat stands in
@@ -1111,6 +1118,11 @@ impl Awareness {
         for &(at, left) in scene.zones.iter().filter(|(at, _)| !view.shows(*at)) {
             kept.extend(arrow(ArrowKind::Zone { left }, at));
         }
+        // A gravity well off the screen: never merged, never left out - a
+        // seat driving that way is driving into its pull.
+        for &(at, left) in scene.wells.iter().filter(|(at, _)| !view.shows(*at)) {
+            kept.extend(arrow(ArrowKind::Well { left }, at));
+        }
         // An enemy winding up a special off the screen: never merged,
         // never left out - it is about to go off.
         for tv in windups {
@@ -1424,6 +1436,15 @@ impl Scene {
             .filter(|z| z.rod().is_some() && z.owner != Owner::Player(seat))
             .map(|z| (z.centre, z.left(game.time + game.zone_lead)))
             .collect();
+        let wells = game
+            .zones()
+            .iter()
+            .filter(|z| z.owner != Owner::Player(seat))
+            .filter_map(|z| {
+                let w = z.well()?;
+                Some((z.centre, (w.stage == crate::well::WellStage::Pulling).then(|| z.left(game.time + game.zone_lead))))
+            })
+            .collect();
         Scene {
             time: game.time,
             seat: me,
@@ -1433,6 +1454,7 @@ impl Scene {
             volcanoes,
             drones,
             zones,
+            wells,
         }
     }
 }
@@ -1746,6 +1768,15 @@ pub fn picture(seats: &[Indicators], view: &ViewFrame, time: f32, t: &Tuning, fo
                 }
                 (crate::pyro::LASER_RED[2], RIM)
             }
+            // A well blinks its violet, three times as fast in its last
+            // second.
+            ArrowKind::Well { left } => {
+                let hz = if left.is_some_and(|l| l <= 1.0) { t.indicator_gate_blink_hz * 3.0 } else { t.indicator_gate_blink_hz };
+                if !blink_on(time, hz) {
+                    continue;
+                }
+                (crate::pyro::VOID[3], RIM)
+            }
             // A drone blinks its lamp's red, rimmed as every hostile is,
             // quicker in the dive, with a drone's X at its tail - white in
             // the dive - so it is told from an enemy's arrow.
@@ -1788,6 +1819,8 @@ pub fn picture(seats: &[Indicators], view: &ViewFrame, time: f32, t: &Tuning, fo
                 (name, crate::tank::team_color(seat))
             }
             ArrowKind::Frog { .. } => ((arrow.cells.round() as i64).to_string(), FROG_GREEN),
+            // A pulling well's whole seconds to its collapse.
+            ArrowKind::Well { left: Some(left) } => ((left.ceil().max(0.0) as i64).to_string(), crate::pyro::VOID[3]),
             _ => continue,
         };
         let alpha = arrow.alpha.max(LABEL_ALPHA_MIN);
@@ -2179,6 +2212,23 @@ mod indicator_tests {
         s.zones = vec![(Position::new(300.0, 200.0), 2.5)];
         let ind = Awareness::new().frame(&s, &screen(), &t);
         assert!(!kinds(&ind).iter().any(|k| matches!(k, ArrowKind::Zone { .. })));
+    }
+
+    /// A gravity well off the screen has an arrow whatever the cap, its
+    /// seconds left while it pulls; on the screen, none (docs/gravity-
+    /// well.md). A seat's own is left out of `Scene::wells` by `of`.
+    #[test]
+    fn a_well_off_the_screen_has_an_arrow_whatever_the_cap() {
+        let mut t = Tuning::DEFAULT;
+        t.indicator_max_arrows = 1;
+        let mut s = scene(1.0, vec![enemy(5, 900.0, 150.0), enemy(6, 950.0, 400.0)]);
+        s.wells = vec![(Position::new(-600.0, 200.0), Some(2.5)), (Position::new(200.0, -500.0), None)];
+        let ind = Awareness::new().frame(&s, &screen(), &t);
+        assert!(kinds(&ind).contains(&ArrowKind::Well { left: Some(2.5) }), "{:?}", kinds(&ind));
+        assert!(kinds(&ind).contains(&ArrowKind::Well { left: None }), "a forming one too");
+        s.wells = vec![(Position::new(300.0, 200.0), Some(2.5))];
+        let ind = Awareness::new().frame(&s, &screen(), &t);
+        assert!(!kinds(&ind).iter().any(|k| matches!(k, ArrowKind::Well { .. })));
     }
 
     /// A drone coming at this seat off the screen has an arrow whatever the

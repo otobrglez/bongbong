@@ -41,17 +41,42 @@ pub struct Shockwave {
     /// `camera_shake_magnitude`. 1.0 is a tank dying; a fence collapsing
     /// has no business shaking the screen as hard as that.
     pub strength: f32,
+    /// Where its ring starts (px) and whether it runs inward from there to
+    /// the centre - a gravity well's snap, the ripple pinched inward
+    /// (docs/gravity-well.md) - rather than outward from the centre, as
+    /// every other ripple does (0 and false).
+    pub start: f32,
+    pub inward: bool,
 }
 
 impl Shockwave {
     /// A ripple at full strength.
     pub fn new(center: Position) -> Self {
-        Shockwave { center, time: 0.0, strength: 1.0 }
+        Shockwave { center, time: 0.0, strength: 1.0, start: 0.0, inward: false }
     }
 
     /// A ripple scaled against a tank kill, which is the 1.0 reference.
     pub fn scaled(center: Position, strength: f32) -> Self {
-        Shockwave { center, time: 0.0, strength }
+        Shockwave { center, time: 0.0, strength, start: 0.0, inward: false }
+    }
+
+    /// A ring of `strength` running in from `start` px to the centre.
+    pub fn inward(center: Position, strength: f32, start: f32) -> Self {
+        Shockwave { center, time: 0.0, strength, start, inward: true }
+    }
+
+    /// Where its ring starts, in `RIPPLE_FRAME` heights, and how fast it
+    /// runs as a multiple of the ripple's `speed` (the shader's `starts`
+    /// and `signs`, `static/shockwave.fs`): 0 and 1 for an outward ring,
+    /// every ripple but a gravity well's snap, so those draw as they
+    /// always did; an inward one starts at its reach and closes on its
+    /// centre over `close_seconds` (docs/gravity-well.md "The snap").
+    pub fn ring(&self, speed: f32, close_seconds: f32) -> (f32, f32) {
+        if !self.inward {
+            return (0.0, 1.0);
+        }
+        let start = self.start / RIPPLE_FRAME.1;
+        (start, -start / (close_seconds.max(0.05) * speed.max(1e-3)))
     }
 
     /// Punch left in it: strength faded by how much of its life is gone.
@@ -136,6 +161,28 @@ pub fn shake_reach(at: Position, view: Rectangle, t: &Tuning) -> f32 {
 }
 
 #[cfg(test)]
+mod ring_tests {
+    use super::*;
+
+    /// An outward ripple is start 0 and sign 1 - the shader's ring
+    /// `times * speed`, as it always was - and an inward one starts at its
+    /// reach and stands on its centre when its close time is up.
+    #[test]
+    fn an_inward_ripple_contracts_and_an_outward_one_is_unchanged() {
+        let at = Position::new(300.0, 200.0);
+        assert_eq!(Shockwave::new(at).ring(1.3, 0.4), (0.0, 1.0));
+        assert_eq!(Shockwave::scaled(at, 0.6).ring(1.3, 0.4), (0.0, 1.0));
+        let snap = Shockwave::inward(at, 0.35, 128.0);
+        let (speed, close) = (1.3, 0.4);
+        let (start, sign) = snap.ring(speed, close);
+        assert!((start - 128.0 / RIPPLE_FRAME.1).abs() < 1e-6, "from its reach");
+        let radius = |t: f32| (start + sign * t * speed).max(0.0);
+        assert!(radius(close * 0.5) < start && radius(close * 0.5) > 0.0, "running in");
+        assert!(radius(close).abs() < 1e-5, "on its centre at the close");
+    }
+}
+
+#[cfg(test)]
 mod shake_tests {
     use super::*;
 
@@ -167,7 +214,7 @@ mod shake_tests {
     }
 
     fn shock(x: f32, y: f32, time: f32, strength: f32) -> Shockwave {
-        Shockwave { center: Position::new(x, y), time, strength }
+        Shockwave { center: Position::new(x, y), time, strength, start: 0.0, inward: false }
     }
 
     /// Kills at many moments of their shake, alone and stacked, so the

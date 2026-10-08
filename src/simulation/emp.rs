@@ -247,6 +247,20 @@ impl Game {
                 self.strike_air(f, target.key, crate::air::AirStrike::Emp);
             }
         }
+        // The gravity well (docs/gravity-well.md "The EMP"), whoever's: an
+        // orb the front reaches fizzles, a well whose centre it reaches
+        // collapses at once (`well_phase`, this tick).
+        let fizzled: Vec<u32> = self.orbs.iter().filter(|o| swept(origin.distance_to(o.position))).map(|o| o.id).collect();
+        for id in fizzled {
+            self.fizzle_orb(f, id);
+        }
+        for zone in &mut self.zones {
+            if let crate::zone::ZoneKind::Well(w) = &mut zone.kind
+                && swept(origin.distance_to(zone.centre))
+            {
+                w.emp_collapse = true;
+            }
+        }
     }
 
     /// Where one seat's EMP would pulse from right now: the sandbox's pose,

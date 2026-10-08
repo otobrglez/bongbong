@@ -19,6 +19,11 @@ uniform float time;           // seconds since the shockwave started (unused her
 uniform vec2 centers[4];
 uniform float times[4];
 uniform float gains[4];       // per-ripple strength; 0 = slot unused
+// Where each ring starts (ripple units) and how fast it runs, as a
+// multiple of `speed`: 0 and 1 for every ripple that runs outward from its
+// centre; a gravity well's snap starts at its reach and runs inward.
+uniform float starts[4];
+uniform float signs[4];
 uniform vec2 resolution;      // the ripple frame (the standard field), to keep the ring round
 
 // The scene target in the ripple frame (`Camera::ripple_view`, the
@@ -52,7 +57,7 @@ void main() {
         corrected.x *= resolution.x / resolution.y;
         float dist = length(corrected);
 
-        float radius = times[i] * speed;
+        float radius = max(starts[i] + signs[i] * times[i] * speed, 0.0);
         float diff = dist - radius;      // where am I relative to the ring?
 
         // strength peaks at the ring, fades on both sides

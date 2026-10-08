@@ -57,11 +57,13 @@ pub enum AirStrike {
     Rail,
     /// A rod from god's impact.
     Rod,
+    /// A gravity well's core, which swallows it.
+    Well,
 }
 
 impl AirStrike {
     /// Every cause, in wire order.
-    pub const ALL: [AirStrike; 6] = [AirStrike::Bullet, AirStrike::Tesla, AirStrike::Emp, AirStrike::Sonic, AirStrike::Rail, AirStrike::Rod];
+    pub const ALL: [AirStrike; 7] = [AirStrike::Bullet, AirStrike::Tesla, AirStrike::Emp, AirStrike::Sonic, AirStrike::Rail, AirStrike::Rod, AirStrike::Well];
 
     /// Inverse of `name`.
     pub fn parse(name: &str) -> Option<AirStrike> {
@@ -77,6 +79,7 @@ impl AirStrike {
             AirStrike::Sonic => "sonic",
             AirStrike::Rail => "rail",
             AirStrike::Rod => "rod",
+            AirStrike::Well => "well",
         }
     }
 }

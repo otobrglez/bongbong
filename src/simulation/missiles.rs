@@ -172,6 +172,7 @@ impl Game {
     /// under a tree's crown (docs/fpv-swarm.md "Trees"). With nothing
     /// spared it is `side_blast`, draw for draw.
     pub(super) fn side_blast_sparing(&mut self, f: &mut Frame, center: Position, owner: Owner, params: &BlastParams, spared: &[Entity]) {
+        self.chain_held_drums(f, center, params.radius);
         for player in self.players().into_iter().flatten() {
             if spared.contains(&player) {
                 continue;

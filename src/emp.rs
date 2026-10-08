@@ -383,7 +383,7 @@ mod tests {
                     // A glow is a ramp step at a fraction of its strength.
                     Shape::Glow { color, .. } => assert!(EMP.iter().any(|e| (e.r, e.g, e.b) == (color.r, color.g, color.b)), "{color:?} in the ramp"),
                     Shape::Line { head, tail, .. } => assert!(EMP.contains(&head) && EMP.contains(&tail)),
-                    Shape::Puff(_) => panic!("no puffs in a ring"),
+                    Shape::Puff(_) | Shape::Disc { .. } => panic!("no puffs in a ring"),
                 }
             }
             on_the_grid(&painted(&shapes, 400), 400);

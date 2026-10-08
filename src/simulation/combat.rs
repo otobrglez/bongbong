@@ -238,6 +238,7 @@ impl Game {
     /// tank pushes it onto `f.kills`, so it gets its own blast in turn.
     pub(super) fn apply_explosion(&mut self, f: &mut Frame, center: Position, victim: Owner) {
         let params = BlastParams::tank_wreck();
+        self.chain_held_drums(f, center, params.radius);
         // Players first, in index order, then the enemies: each tank's
         // damage roll is one RNG draw, so this order is part of the replay.
         for player in self.seats_on_field().into_iter().flatten() {

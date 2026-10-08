@@ -171,6 +171,9 @@ pub struct Drone {
     pub dive_seconds: f32,
     pub dive_height: f32,
     pub drift: Vec2,
+    /// The velocity a gravity well's pull has built on its dive
+    /// (`drag`), carried into `drift` each step; zero otherwise.
+    pub pulled: Vec2,
     /// Bullets it has taken (`fpv_drone_hits` bring it down).
     pub hits: i32,
     /// A falling drone's ground velocity and its fall speed.
@@ -184,6 +187,40 @@ pub struct Drone {
 }
 
 impl Drone {
+    /// A gravity well's pull (docs/gravity-well.md), `accel` px/s² over
+    /// `dt`: in the cruise its heading turns, its speed kept, and its
+    /// guidance steers it back; in the dive it is dragged off its point;
+    /// the climb is left alone (the press's drawing stays exact).
+    pub fn drag(&mut self, accel: Vec2, dt: f32) {
+        match self.stage {
+            DroneStage::Cruise => {
+                let v = crate::well::bend(self.heading * self.speed.max(1.0), accel, dt);
+                let len = v.length();
+                if len > 1e-6 {
+                    self.heading = v / len;
+                }
+            }
+            DroneStage::Dive => {
+                self.pulled = self.pulled + accel * dt;
+                self.drift = self.drift + self.pulled * dt;
+            }
+            _ => {}
+        }
+    }
+
+    /// A well's collapse turns it straight out from `centre` (in the
+    /// cruise; a dive is committed).
+    pub fn turn_out_from(&mut self, centre: Position) {
+        if self.stage != DroneStage::Cruise {
+            return;
+        }
+        let off = self.ground - centre;
+        let len = off.length();
+        if len > 1e-3 {
+            self.heading = off / len;
+        }
+    }
+
     /// A drone leaving halo slot `slot` (its ground point `origin`, its
     /// outward bearing `out`), locked on `lock` with `aim` its first aim.
     pub fn launch(origin: Position, out: Vec2, slot: u8, owner: Owner, lock: DroneLock, aim: Position) -> Drone {
@@ -207,6 +244,7 @@ impl Drone {
             dive_seconds: 0.0,
             dive_height: 0.0,
             drift: Vec2::zero(),
+            pulled: Vec2::zero(),
             hits: 0,
             fall_velocity: Vec2::zero(),
             fall_speed: 0.0,
@@ -289,6 +327,7 @@ impl Drone {
         self.dive_seconds = (self.ground.distance_to(at) / t.fpv_dive_speed.max(1.0)).max(PHYSICS_FIXED_DT);
         self.dive_height = self.height;
         self.drift = Vec2::zero();
+        self.pulled = Vec2::zero();
         self.enter(DroneStage::Dive);
     }
 

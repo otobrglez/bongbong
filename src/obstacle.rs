@@ -829,6 +829,22 @@ pub fn draw_flying_drum(
     c.blit(Sheet::Props, src, dest, Vec2::new(size / 2.0, size / 2.0), rotation, Color::WHITE);
 }
 
+/// Draw a drum a gravity well holds (docs/gravity-well.md "Held drums"):
+/// the flying drum's sprite of its kind, `height` px over its shadow at
+/// `ground`, turned a quarter at a time by `turn` (radians round the well).
+pub fn draw_held_drum(c: &mut impl Canvas, ground: Position, height: f32, drum: Drum, turn: f32, shadows: bool) {
+    let size = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE;
+    if shadows {
+        let a = (255.0 * tuning().obstacle_shadow_opacity * 0.7) as u8;
+        c.disc(ground, size * 0.24, Color::new(0, 0, 0, a));
+    }
+    let variant = if drum == Drum::Fuel { 1 } else { 0 };
+    let src = source_rec(Sheet::Props, Material::Barrel.row_base() + variant, 0);
+    let dest = Rectangle::new(ground.x, ground.y - height, size, size);
+    let rotation = ((turn * 2.0 / std::f32::consts::PI).floor() as i32).rem_euclid(4) as f32 * 90.0;
+    c.blit(Sheet::Props, src, dest, Vec2::new(size / 2.0, size / 2.0), rotation, Color::WHITE);
+}
+
 /// Draw a single obstacle sprite from its atlas at its center position.
 /// Obstacles never rotate (unlike tanks/shells), so this skips the
 /// rotation param `draw_tank` needs; `axis` only matters for fences.

@@ -22,7 +22,6 @@ use crate::math::{Color, Rectangle};
 use crate::obstacle;
 use crate::portal::{draw_portal, portal_icon_source_rec};
 use crate::render::canvas::{BlockTexture, GpuCanvas, Sheets};
-use crate::EDITOR_DROPDOWN_ROW_H;
 
 /// The icons in the dropdown rows and the palette, the sheets' own 32 px
 /// drawn a point a pixel.
@@ -678,8 +677,11 @@ impl MapEditor {
                 d.draw_rectangle_rounded(inset, 0.2, EDITOR_PANEL_SEGMENTS, Color::new(255, 255, 255, 40));
             }
             let color = if self.brush_row_live(row) { TEXT } else { DIM };
-            draw_brush_icon(d, row, Rectangle::new(r.x + 4.0, r.y + 4.0, ICON_PX + 8.0, ICON_PX + 8.0), color);
-            let text_y = r.y as i32 + (EDITOR_DROPDOWN_ROW_H as i32 - HUD_TEXT_SIZE) / 2;
+            // Centred in the row, which a narrow window shortens
+            // (`chrome::hanging_list`).
+            let icon_y = r.y + (r.height - (ICON_PX + 8.0)) / 2.0;
+            draw_brush_icon(d, row, Rectangle::new(r.x + 4.0, icon_y, ICON_PX + 8.0, ICON_PX + 8.0), color);
+            let text_y = r.y as i32 + (r.height as i32 - HUD_TEXT_SIZE) / 2;
             d.draw_text(&brush_label(row), r.x as i32 + DROPDOWN_TEXT_X, text_y, HUD_TEXT_SIZE, color);
         }
     }
@@ -823,13 +825,15 @@ impl MapEditor {
                 let inset = Rectangle::new(row.x + 4.0, row.y + 2.0, row.width - 8.0, row.height - 4.0);
                 d.draw_rectangle_rounded(inset, 0.2, EDITOR_PANEL_SEGMENTS, Color::new(255, 255, 255, 40));
             }
-            // A 40 pt rect: the icon's own 4 pt inset makes it 32 at 8.
-            let icon = Rectangle::new(row.x + 4.0, row.y + 4.0, ICON_PX + 8.0, ICON_PX + 8.0);
+            // A 40 pt rect: the icon's own 4 pt inset makes it 32 at 8;
+            // centred in the row, which a narrow window shortens
+            // (`chrome::hanging_list`).
+            let icon = Rectangle::new(row.x + 4.0, row.y + (row.height - (ICON_PX + 8.0)) / 2.0, ICON_PX + 8.0, ICON_PX + 8.0);
             draw_tool_icon(d, textures, self.map.theme, tool, icon);
             if self.singleton_placed(tool) {
                 draw_badge(d, icon.x + icon.width - 4.0, icon.y + 4.0);
             }
-            let text_y = row.y as i32 + (EDITOR_DROPDOWN_ROW_H as i32 - HUD_TEXT_SIZE) / 2;
+            let text_y = row.y as i32 + (row.height as i32 - HUD_TEXT_SIZE) / 2;
             d.draw_text(&label(tool), row.x as i32 + DROPDOWN_TEXT_X, text_y, HUD_TEXT_SIZE, TEXT);
         }
     }

@@ -173,6 +173,10 @@ pub struct Shoal {
     /// far, by the wave's seed (`SonicWave::seed`): at most
     /// `sonic_fish_throw_max` a wave.
     thrown: Vec<(u32, u32)>,
+    /// The gravity wells pulling at the last step observed, as the round
+    /// draws them (`Game::present_wells`): a fish in one's reach swims for
+    /// its core (`drawn_toward`).
+    wells: crate::well::WellField,
 }
 
 fn centre((col, row): (i32, i32)) -> Position {
@@ -214,8 +218,9 @@ impl Fish {
 
     /// Pick where to swim next: away from what scared it while it is
     /// frightened, else toward `target` (its school's spot) most of the
-    /// time, a wander or a rest otherwise.
-    fn next_leg(&mut self, water: &WaterLayout, target: Option<(i32, i32)>) {
+    /// time, a wander or a rest otherwise - every time, and never a rest,
+    /// while a gravity well `drawn` it (`target` its core's cell).
+    fn next_leg(&mut self, water: &WaterLayout, target: Option<(i32, i32)>, drawn: bool) {
         self.leg = self.leg.wrapping_add(1);
         let here = cell_of(self.pos);
         let options = neighbours(water, here);
@@ -232,13 +237,13 @@ impl Fish {
                 }
             }
             best
-        } else if options.is_empty() || (here_ok && self.roll(1) < 0.2) {
+        } else if options.is_empty() || (here_ok && !drawn && self.roll(1) < 0.2) {
             self.idle = true;
             here_ok.then_some(here)
         } else {
             self.idle = false;
             match target {
-                Some(goal) if self.roll(2) < 0.7 => {
+                Some(goal) if drawn || self.roll(2) < 0.7 => {
                     let near = |c: (i32, i32)| (c.0 - goal.0).pow(2) + (c.1 - goal.1).pow(2);
                     let mut best = if here_ok { here } else { options[0] };
                     for &c in &options {
@@ -268,7 +273,7 @@ impl Fish {
     /// Swim `dt` seconds: settle, pick up or lose speed, cover the
     /// distance (onto the next leg if it reaches this one's end), turn
     /// toward the way it goes and beat the tail.
-    fn step(&mut self, water: &WaterLayout, target: (i32, i32), dt: f32, t: &Tuning) {
+    fn step(&mut self, water: &WaterLayout, target: (i32, i32), drawn: bool, dt: f32, t: &Tuning) {
         self.fright = (self.fright - dt / t.fish_calm_seconds.max(0.1)).max(0.0);
         let cruise = t.fish_speed * (0.75 + 0.5 * pyro::unit(self.seed, 7)) * if self.idle { 0.4 } else { 1.0 };
         let want = cruise + (t.fish_dart_speed - cruise).max(0.0) * self.fright;
@@ -283,7 +288,7 @@ impl Fish {
             }
             self.pos = self.to;
             left -= dist;
-            self.next_leg(water, Some(target));
+            self.next_leg(water, Some(target), drawn);
             if left <= 0.0 {
                 break;
             }
@@ -402,7 +407,7 @@ impl Shoal {
             f.fright = 1.0;
             f.flee = s.at;
             if fresh || toward {
-                f.next_leg(water, None);
+                f.next_leg(water, None, false);
             }
         }
     }
@@ -432,7 +437,10 @@ impl Shoal {
                     }
                     continue;
                 }
-                f.step(water, targets[f.school], dt, t);
+                match drawn_toward(&self.wells, f.pos, t) {
+                    Some(core) => f.step(water, core, true, dt, t),
+                    None => f.step(water, targets[f.school], false, dt, t),
+                }
             }
         }
         self.clock = clock;
@@ -465,11 +473,18 @@ impl Shoal {
         for s in scares(game, &t) {
             self.scare(water, s);
         }
+        self.wells = game.present_wells();
         let step = (game.time - self.clock).clamp(0.0, MAX_GAP);
         self.throw_onto_banks(&game.sonic_waves, step, water, &t);
         for e in game.events() {
-            if let Event::RodImpact { cell, .. } = *e {
-                self.throw_from(crate::map::cell_to_world(cell.0, cell.1), t.rod_fish_reach_px, t.rod_fish_throw_max, water, &t);
+            match *e {
+                Event::RodImpact { cell, .. } => {
+                    self.throw_from(crate::map::cell_to_world(cell.0, cell.1), t.rod_fish_reach_px, t.rod_fish_throw_max, water, &t);
+                }
+                // A gravity well's collapse throws the fish in its reach
+                // out onto the banks (docs/gravity-well.md "The collapse").
+                Event::WellCollapsed { x, y, .. } => self.throw_from(Position::new(x, y), t.well_radius_px, t.well_fish_throw_max, water, &t),
+                _ => {}
             }
         }
         self.advance(water, game.time, &t);
@@ -589,6 +604,20 @@ impl Shoal {
 /// every hit, ricochet and laser beam (`fish_shot_scatter_px`), every
 /// blast, missile burst and wreck (`fish_blast_scatter_px`), and a rod's
 /// impact (twice that).
+/// The cell of the core a fish at `p` swims for: the strongest pull among
+/// `wells` on it, `None` outside every well's reach (docs/gravity-well.md
+/// "What it pulls"). Ties on the first in id order.
+fn drawn_toward(wells: &crate::well::WellField, p: Position, t: &Tuning) -> Option<(i32, i32)> {
+    let mut best: Option<(f32, Position)> = None;
+    for &(_, c) in &wells.sources {
+        let s = crate::well::strength(p.distance_to(c), t);
+        if s > 0.0 && best.is_none_or(|(b, _)| s > b) {
+            best = Some((s, c));
+        }
+    }
+    best.map(|(_, c)| cell_of(c))
+}
+
 pub fn scares(game: &Game, t: &Tuning) -> Vec<Scare> {
     let mut out = Vec::new();
     let hull = t.fish_scatter_px;
@@ -620,6 +649,10 @@ pub fn scares(game: &Game, t: &Tuning) -> Vec<Scare> {
     }
     for p in game.world.query::<&crate::plasma::Plasma>().iter() {
         out.push(Scare { at: p.position, radius: shot });
+    }
+    // A gravity well's orbs, as a shot scares them.
+    for o in game.orbs() {
+        out.push(Scare { at: o.position, radius: shot });
     }
     for e in game.events() {
         match *e {
@@ -984,6 +1017,17 @@ mod tests {
         assert!(water.depth_at(shoal.fish[0].pos).is_wet(), "{:?}", shoal.fish[0].pos);
     }
 
+    /// A gravity well's orb scares the fish it passes as a shot does
+    /// (docs/gravity-well.md).
+    #[test]
+    fn an_orb_scares_the_fish() {
+        let t = quick();
+        let mut game = Game::default();
+        let at = Position::new(200.0, 128.0);
+        game.orbs.push(crate::well::Orb::launch(at, Vec2::new(1.0, 0.0), crate::shell::Owner::Player(0), &t));
+        assert!(scares(&game, &t).iter().any(|s| s.at == at && s.radius == t.fish_shot_scatter_px));
+    }
+
     /// A rod's impact throws the fish within its reach whose throw away
     /// from it lands on dry ground onto the bank - at most its count,
     /// nearest first - and leaves the rest in the water
@@ -1074,6 +1118,32 @@ mod tests {
         // And it settles: the fright runs out over the calm time.
         swim(&mut shoal, &water, 2.6, 2.6 + t.fish_calm_seconds + 0.1, &t);
         assert_eq!(shoal.fish[0].fright, 0.0);
+    }
+
+    /// A pulling well over a lake draws the fish in its reach to its core
+    /// (docs/gravity-well.md "What it pulls"); the same shoal with none
+    /// keeps to its schools.
+    #[test]
+    fn a_well_draws_the_fish_in_its_reach_to_its_core() {
+        let t = quick();
+        let water = pond();
+        let core = centre((7, 5));
+        let mean = |shoal: &Shoal| {
+            let near: Vec<f32> = shoal.fish.iter().map(|f| f.pos.distance_to(core)).filter(|&d| d < t.well_radius_px).collect();
+            near.iter().sum::<f32>() / near.len().max(1) as f32
+        };
+        let mut free = Shoal::new(&water, 5, &t);
+        let mut drawn = free.clone();
+        drawn.wells = crate::well::WellField { sources: vec![(1, core)] };
+        swim(&mut free, &water, 0.0, 6.0, &t);
+        swim(&mut drawn, &water, 0.0, 6.0, &t);
+        assert!(drawn.fish.iter().any(|f| f.pos.distance_to(core) < t.well_radius_px), "a fish in its reach");
+        let close = |shoal: &Shoal| shoal.fish.iter().filter(|f| f.pos.distance_to(core) < 48.0).count();
+        assert!(mean(&drawn) + 10.0 < mean(&free), "gathered at the core: {} vs {}", mean(&drawn), mean(&free));
+        assert!(close(&drawn) > close(&free), "more of them by it: {} vs {}", close(&drawn), close(&free));
+        assert!(drawn.fish.iter().all(|f| deep(&water, cell_of(f.pos)) || f.pos.distance_to(f.to) <= ROAM_PX * 2.0), "and still in the water");
+        let shapes = drawn.shapes(&water, 6.0, &t, None);
+        assert_in_water(&water, &shapes);
     }
 
     #[test]

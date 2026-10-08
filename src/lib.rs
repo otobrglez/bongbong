@@ -77,6 +77,7 @@ pub const TANK_MODULE_EMP_COL: i32 = 28;
 pub const TANK_MODULE_GAUSS_COL: i32 = 33;
 pub const TANK_MODULE_FPV_COL: i32 = 40;
 pub const TANK_MODULE_ROD_COL: i32 = 44;
+pub const TANK_MODULE_WELL_COL: i32 = 49;
 // World px of travel between hull tread-animation frame advances (see
 // `simulation::lay_tracks`, which already tracks per-frame distance moved for
 // the separate ground-decal system in track.rs - this reuses that same
@@ -990,6 +991,7 @@ pub mod fpv;
 pub mod air;
 pub mod rod;
 pub mod zone;
+pub mod well;
 pub mod game;
 pub mod ground;
 pub mod hud;

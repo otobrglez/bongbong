@@ -92,6 +92,15 @@ pub struct DebugSnapshot {
     /// there are none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub craters: Vec<(i32, i32)>,
+    /// The gravity wells' orbs in flight (docs/gravity-well.md) by id: the
+    /// owner's slot, where and how far it has flown; left out while there
+    /// are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub orbs: Vec<(u32, usize, f32, f32, f32)>,
+    /// The drums the wells hold by id: the well, the cell it was lifted
+    /// from and where it circles now; left out while there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub held_drums: Vec<(u32, u32, (i32, i32), f32, f32)>,
     /// What the last enemy phase's engagement-slot assignment decided.
     /// Per-tank entries cover both rings (player and hunted frog); the slot
     /// table is the player ring's.
@@ -111,8 +120,11 @@ pub struct DebugSnapshot {
 #[derive(Clone, Debug, Serialize)]
 pub struct ZoneDebug {
     pub id: u32,
-    /// `rod` for a rod's call.
+    /// `rod` for a rod's call, `well` for a gravity well.
     pub kind: &'static str,
+    /// A well's stage, `forming` or `pulling`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<&'static str>,
     /// Its owner's slot.
     pub owner: usize,
     pub x: f32,
@@ -230,6 +242,20 @@ pub struct TankDebug {
     /// Rods left to call (`Tank::rods`); left out while 0.
     #[serde(skip_serializing_if = "is_zero_i32")]
     pub rods: i32,
+    /// Wells left in its projector (`Tank::wells`); left out while 0.
+    #[serde(skip_serializing_if = "is_zero_i32")]
+    pub wells: i32,
+    /// Its orb in flight (`Tank::orb`): the orb's id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orb: Option<u32>,
+    /// The gravity wells' pull on it this tick (`well::HullPull`): the
+    /// current (px/s) and the side pull (px/s^2), in the world's axes;
+    /// left out away from every well.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pull: Option<[f32; 4]>,
+    /// Braced broadside in a pull (`Ai::bracing`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub bracing: bool,
     /// The cell its rod's reticle stands on (`Tank::reticle`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reticle: Option<(i32, i32)>,
@@ -294,6 +320,10 @@ pub struct PickupDebug {
     pub kind: PickupKind,
     pub x: f32,
     pub y: f32,
+    /// How far a gravity well has drawn it off its slot (`Pickup::drift`);
+    /// left out while it lies on it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drift: Option<(f32, f32)>,
 }
 
 #[derive(Serialize, Debug)]
@@ -311,6 +341,8 @@ pub struct FrogDebug {
     pub facing: Facing,
     /// Seconds left stunned by a sonic wave (`Frog::stun_timer`).
     pub stun: f32,
+    /// Held in a gravity well's pull (`Frog::pulled`).
+    pub pulled: bool,
 }
 
 #[derive(Serialize, Debug)]
@@ -437,6 +469,9 @@ pub struct TankPatch {
     /// Rods to call (`Tank::rods`): a count above 0 takes the special
     /// carried away.
     pub rods: Option<i32>,
+    /// Wells in its projector (`Tank::wells`): a count above 0 takes the
+    /// special carried away (docs/gravity-well.md).
+    pub wells: Option<i32>,
     /// Seconds the trigger of its charge weapon has been held: a charge put
     /// on (the special it carries must be one, `Trigger::Charge`); 0 takes
     /// one off.
@@ -661,6 +696,13 @@ impl Game {
                     fpv: tank.fpv_drones,
                     fpv_out: tank.fpv_out,
                     rods: tank.rods,
+                    wells: tank.wells,
+                    orb: tank.orb,
+                    pull: (!self.well_field.is_empty() && tank.body.is_some())
+                        .then(|| self.well_field.hull_pull(tank.position, tank.mass_factor(), &tuning()))
+                        .filter(|p| !p.is_zero())
+                        .map(|p| [r1(p.current.x), r1(p.current.y), r1(p.side.x), r1(p.side.y)]),
+                    bracing: ai.is_some_and(Ai::bracing),
                     reticle: tank.reticle.map(|r| r.cell),
                     charge: tank.charge.map(|c| (c.weapon.name(), r1(c.held), c.stage().name())),
                     tell: tank.tell.map(|t| (t.weapon.name(), r1(t.left))),
@@ -780,7 +822,12 @@ impl Game {
             .world
             .query::<&Pickup>()
             .iter()
-            .map(|p| PickupDebug { kind: p.kind, x: r1(p.position.x), y: r1(p.position.y) })
+            .map(|p| PickupDebug {
+                kind: p.kind,
+                x: r1(p.position.x),
+                y: r1(p.position.y),
+                drift: (p.drift.x != 0.0 || p.drift.y != 0.0).then(|| (r1(p.drift.x), r1(p.drift.y))),
+            })
             .collect();
         pickups.sort_by(|a, b| (a.x, a.y).partial_cmp(&(b.x, b.y)).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -798,6 +845,7 @@ impl Game {
                     hopping: fr.hop_timer > 0.0,
                     facing: fr.facing,
                     stun: r1(fr.stun_timer),
+                    pulled: fr.pulled,
                 })
             })
             .collect();
@@ -895,7 +943,8 @@ impl Game {
                 .iter()
                 .map(|z| ZoneDebug {
                     id: z.id,
-                    kind: "rod",
+                    kind: if z.well().is_some() { "well" } else { "rod" },
+                    stage: z.well().map(|w| if w.stage == crate::well::WellStage::Pulling { "pulling" } else { "forming" }),
                     owner: z.owner.slot(),
                     x: r1(z.centre.x),
                     y: r1(z.centre.y),
@@ -904,6 +953,17 @@ impl Game {
                 })
                 .collect(),
             craters: self.craters.list().iter().map(|c| c.cell).collect(),
+            orbs: self.orbs.iter().map(|o| (o.id, o.owner.slot(), r1(o.position.x), r1(o.position.y), r1(o.flown))).collect(),
+            held_drums: {
+                let t = tuning();
+                self.held_drums
+                    .iter()
+                    .map(|d| {
+                        let (at, _) = crate::well::held_at(d, d.centre, self.time, &t);
+                        (d.id, d.well, d.cell, r1(at.x), r1(at.y))
+                    })
+                    .collect()
+            },
             engage,
             clusters: clusters(&live_enemies, CLUSTER_RADIUS_PX),
             command: full.then(|| self.commander.report().clone()),
@@ -1063,6 +1123,12 @@ impl Game {
                 tank.disarm();
             }
             tank.rods = n.max(0);
+        }
+        if let Some(n) = patch.wells {
+            if n > 0 {
+                tank.disarm();
+            }
+            tank.wells = n.max(0);
         }
         if let Some(seconds) = patch.charge {
             let weapon = tank.active_weapon();

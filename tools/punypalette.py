@@ -266,6 +266,11 @@ PICKUP_INK = {
     # the minigun's pale grey-blue, so the two never read alike. The light
     # is the brackets' red, which is also the HUD's accent.
     'rod_from_god': ((0x4E, 0x54, 0x5C), (0x8A, 0x90, 0x99), (0xFF, 0x32, 0x28)),
+    # The gravity well (docs/gravity-well.md): two-tone - a black hole's
+    # void, its shade, a deep violet so it reads off the stained wood,
+    # ringed in a pale ultraviolet lilac with its accretion disc across it
+    # in the light. The only crate whose symbol is a filled dark disc.
+    'gravity_well': ((0x3A, 0x1A, 0x6E), (0xE6, 0xA8, 0xFF), (0xFF, 0xF0, 0xFF)),
 }
 # The rainbow shield's symbol, swept corner to corner like the old icon.
 PICKUP_RAINBOW = ((0xE8, 0x4A, 0x3C), (0xFF, 0x8A, 0x2B), (0xFF, 0xD9, 0x3D), (0x7E, 0xDB, 0x5A),

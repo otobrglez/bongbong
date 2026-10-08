@@ -28,6 +28,7 @@
 //! `mode::Session` is untouched: online is a third driver beside Play and
 //! Build, never a replacement for the in-process round.
 
+use crate::Position;
 use std::collections::BTreeSet;
 use std::time::Instant;
 
@@ -260,6 +261,12 @@ pub struct OnlineRound<T: Transport> {
     own_calls: Vec<OwnCall>,
     /// The next own call's number (`OwnCall::id`), from 0 each round.
     next_own_call: u32,
+    /// This seat's gravity well orbs launched on its own press, flown here
+    /// until they anchor (`OwnOrb`), and the anchors it drew until the
+    /// room's `WellAnchored` claims them (`OwnAnchor`).
+    own_orbs: Vec<OwnOrb>,
+    own_anchors: Vec<OwnAnchor>,
+    next_own_orb: u32,
     /// How many ticks ahead of the picture this seat's latest input lands
     /// in the room (`incoming_lead_ticks`), as last measured: how long a
     /// press waits to be seen in the room's picture.
@@ -322,6 +329,9 @@ impl<T: Transport> OnlineRound<T> {
             next_own_drone: 0,
             own_calls: Vec::new(),
             next_own_call: 0,
+            own_orbs: Vec::new(),
+            own_anchors: Vec::new(),
+            next_own_orb: 0,
             lead_ticks: 0.0,
             note: None,
             ended: None,
@@ -720,6 +730,8 @@ impl<T: Transport> OnlineRound<T> {
     /// clock.
     fn welcomed(&mut self, welcome: &Welcome, arrived: i64) {
         self.own_drones.clear();
+        self.own_orbs.clear();
+        self.own_anchors.clear();
         self.next_own_drone = 0;
         self.own_calls.clear();
         self.next_own_call = 0;
@@ -911,6 +923,7 @@ impl<T: Transport> OnlineRound<T> {
                     claim_own_drone(&mut self.own_drones, &frame.snapshot.events, i, seat);
                     claim_own_call(&mut self.own_calls, &frame.snapshot.events, i, seat);
                 }
+                self.claim_own_anchors(&frame.snapshot.events, seat);
             }
             if let Some(game) = self.replica.as_mut() {
                 apply::snapshot_with(game, &frame.snapshot, show);
@@ -949,6 +962,7 @@ impl<T: Transport> OnlineRound<T> {
                 None => Vec::new(),
             };
             self.fly_own_shots(dt, world, seat, &shells);
+            self.fly_own_orbs(dt, world, seat);
             self.fly_own_drones(dt, seat, sampled.is_some());
         }
         let seat = self.client.seat();
@@ -981,6 +995,156 @@ impl<T: Transport> OnlineRound<T> {
         self.place_own_calls(dt);
     }
 
+    /// One frame of this seat's own orbs (`OwnOrb`, docs/gravity-well.md
+    /// "Wire"): each room copy of this seat's orbs pairs with the oldest
+    /// own orb waiting for one and is kept off the picture while that orb,
+    /// or the anchor it made, is drawn; each own orb flies one frame - bent
+    /// by the wells on this client's present, swallowed at a core, anchored
+    /// on the first thing it meets in the drawn world or at its range - and
+    /// goes back on the picture under its own id.
+    fn fly_own_orbs(&mut self, dt: f32, world: &crate::simulation::present::PresentWorld, seat: u8) {
+        let refusal = self.predictor.as_ref().map_or(1.0, |p| p.refusal_after());
+        let Some(game) = self.replica.as_mut() else { return };
+        let t = tuning();
+        let owner = crate::shell::Owner::Player(seat);
+        let base = crate::net::predict::PROVISIONAL_ID_BASE;
+        let mut room: Vec<u16> = game.orbs.iter().filter(|o| o.id < base && o.owner == owner).map(|o| o.id as u16).collect();
+        room.sort_unstable();
+        let mut taken: BTreeSet<u16> = self.own_orbs.iter().filter_map(|o| o.room).chain(self.own_anchors.iter().filter_map(|a| a.room)).collect();
+        // The room's copies pair oldest first, the anchors' before the
+        // flying orbs': an orb anchored here before its room copy reached
+        // the picture still has that copy kept off it.
+        let slots = self.own_anchors.iter_mut().map(|a| &mut a.room).chain(self.own_orbs.iter_mut().map(|o| &mut o.room));
+        for slot in slots.filter(|r| r.is_none()) {
+            if let Some(&id) = room.iter().find(|id| !taken.contains(id)) {
+                *slot = Some(id);
+                taken.insert(id);
+            }
+        }
+        let wells = game.present_wells();
+        let mut landed: Vec<(Position, Option<u16>)> = Vec::new();
+        let mut gone = false;
+        self.own_orbs.retain_mut(|own| {
+            own.age += dt;
+            // The frame in stretches ending on the room's tick edges, each
+            // bent at its edge by a whole tick and judged as the room's
+            // `resolve_orbs` judges a tick: a core, then what it meets,
+            // then its range.
+            let mut left = dt;
+            while left > 0.0 {
+                if own.phase <= 0.0 && !wells.is_empty() {
+                    own.velocity = crate::well::bend(own.velocity, wells.shot_accel(own.at, &t), PHYSICS_FIXED_DT);
+                }
+                let stretch = left.min(PHYSICS_FIXED_DT - own.phase);
+                left -= stretch;
+                own.phase += stretch;
+                if own.phase >= PHYSICS_FIXED_DT - 1e-5 {
+                    own.phase = 0.0;
+                }
+                if left <= 1e-5 {
+                    left = 0.0;
+                }
+                let from = own.at;
+                let to = own.at + own.velocity * stretch;
+                // Swallowed: gone with no well and no pop of its own - the
+                // room's `Swallowed` draws that.
+                if wells.core_hit(from, to, &t).is_some() {
+                    gone = true;
+                    return false;
+                }
+                if let Some(at) = world.orb_contact(seat, from, to, t.well_orb_half_px) {
+                    let travel = to - from;
+                    let len = travel.length();
+                    let back = if len > 1e-4 { travel * ((t.well_orb_half_px + 2.0) / len) } else { crate::math::Vec2::zero() };
+                    landed.push((at - back, own.room));
+                    return false;
+                }
+                own.flown += from.distance_to(to);
+                own.at = to;
+                if own.flown >= t.well_orb_range_px {
+                    landed.push((own.at, own.room));
+                    return false;
+                }
+            }
+            // An orb the room never launched is refused.
+            let kept = own.room.is_some() || own.age < refusal;
+            gone |= !kept;
+            kept
+        });
+        if let Some(predictor) = self.predictor.as_mut() {
+            if !landed.is_empty() {
+                predictor.orb_landed();
+            } else if gone {
+                predictor.orb_gone();
+            }
+        }
+        for (at, room_id) in landed {
+            anchor_own(game, &mut self.own_anchors, seat, at, room_id);
+        }
+        // The room's copies drawn by this client stay off the picture; the
+        // own orbs go on under their own ids.
+        let hidden: BTreeSet<u32> =
+            self.own_orbs.iter().filter_map(|o| o.room).chain(self.own_anchors.iter().filter_map(|a| a.room)).map(u32::from).collect();
+        game.orbs.retain(|o| o.id < base && !hidden.contains(&o.id));
+        for own in &self.own_orbs {
+            let mut orb = crate::well::Orb::launch(own.at, crate::math::Vec2::new(0.0, -1.0), owner, &t);
+            orb.id = own.id;
+            orb.velocity = own.velocity;
+            orb.rotation = crate::well::heading_deg(own.velocity);
+            orb.flown = own.flown;
+            orb.age = own.age;
+            game.orbs.push(orb);
+        }
+        game.orbs.sort_by_key(|o| o.id);
+    }
+
+    /// The room's `WellAnchored` for this seat in `events` claims this
+    /// client's anchors oldest first: the drawn anchor goes, the room's well
+    /// standing where it has it from then on. One the client never drew -
+    /// its orb still flying here, the room's met something first - takes
+    /// that orb and shows the snap where the room has it.
+    fn claim_own_anchors(&mut self, events: &[WireEvent], seat: u8) {
+        // An EMP put this seat's orb out in the room: it goes here too,
+        // with no well.
+        for event in events {
+            if let WireEvent::OrbFizzled { id, .. } = *event
+                && let Some(i) = self.own_orbs.iter().position(|o| o.room == Some(id))
+            {
+                self.own_orbs.remove(i);
+                if let Some(predictor) = self.predictor.as_mut() {
+                    predictor.orb_gone();
+                }
+            }
+        }
+        let anchors: Vec<Position> = events
+            .iter()
+            .filter_map(|e| match *e {
+                WireEvent::WellAnchored { seat: s, x, y, .. } if s == seat => {
+                    Some(Position::new(crate::net::wire::dequantise_pos(x), crate::net::wire::dequantise_pos(y)))
+                }
+                _ => None,
+            })
+            .collect();
+        for at in anchors {
+            if let Some(i) = self.own_anchors.iter().position(|a| !a.claimed) {
+                self.own_anchors[i].claimed = true;
+            } else if !self.own_orbs.is_empty() {
+                self.own_orbs.remove(0);
+                if let Some(predictor) = self.predictor.as_mut() {
+                    predictor.orb_landed();
+                }
+                if let Some(game) = self.replica.as_mut() {
+                    game.show_well_anchor(seat, at);
+                }
+            } else if let Some(game) = self.replica.as_mut() {
+                // One this client drew nothing of - a launch it refused and
+                // the room took: the snap where the room has it.
+                game.show_well_anchor(seat, at);
+            }
+        }
+        self.own_anchors.retain(|a| !a.claimed);
+    }
+
     /// One frame of this seat's own calls (`OwnCall`) and every zone's
     /// countdown: the countdowns run on this client's present - the
     /// picture's clock plus the lead its own inputs are ahead of it in
@@ -997,12 +1161,38 @@ impl<T: Transport> OnlineRound<T> {
             own.since += dt;
         }
         self.own_calls.retain(|own| !own.claimed && own.since < refusal);
+        for own in &mut self.own_anchors {
+            own.since += dt;
+        }
+        self.own_anchors.retain(|own| !own.claimed && own.since < refusal);
         let Some(seat) = seat else {
             game.set_provisional_zones(&[]);
             return;
         };
         let countdown = tuning().rod_countdown_seconds;
+        let form = tuning().well_form_seconds;
         let now = game.time + lead;
+        // A well this seat anchored itself: forming from its anchor frame.
+        let wells: Vec<crate::zone::Zone> = self
+            .own_anchors
+            .iter_mut()
+            .enumerate()
+            .map(|(k, own)| {
+                let until = *own.until.get_or_insert(now + form - own.since);
+                crate::zone::Zone {
+                    id: crate::zone::PROVISIONAL_ZONE_BASE + OWN_WELL_ZONE_OFFSET + k as u32,
+                    kind: crate::zone::ZoneKind::Well(crate::well::WellZone {
+                        stage: if until <= now { crate::well::WellStage::Pulling } else { crate::well::WellStage::Forming },
+                        by: crate::well::AnchorBy::Press,
+                        seat: Some(seat),
+                        emp_collapse: false,
+                    }),
+                    owner: crate::shell::Owner::Player(seat),
+                    centre: own.at,
+                    until: if until <= now { until + tuning().well_pull_seconds } else { until },
+                }
+            })
+            .collect();
         let zones: Vec<crate::zone::Zone> = self
             .own_calls
             .iter_mut()
@@ -1016,6 +1206,7 @@ impl<T: Transport> OnlineRound<T> {
                     until,
                 }
             })
+            .chain(wells)
             .collect();
         game.set_provisional_zones(&zones);
     }
@@ -1187,6 +1378,23 @@ impl<T: Transport> OnlineRound<T> {
                     self.next_own_call = self.next_own_call.wrapping_add(1) & OWN_CALL_ID_MASK;
                     self.own_calls.push(OwnCall { id, press, since: 0.0, until: None, claimed: false });
                 }
+                // An orb off the gun line, flown from here on by
+                // `fly_own_orbs`; its projector lit now.
+                crate::net::predict::PressShow::Orb(press) => {
+                    game.flash_seat_well(seat, false);
+                    let id = crate::net::predict::PROVISIONAL_ID_BASE + OWN_ORB_ID_OFFSET + (self.next_own_orb & OWN_ORB_ID_MASK);
+                    self.next_own_orb = self.next_own_orb.wrapping_add(1);
+                    let velocity = press.dir * tuning().well_orb_speed;
+                    self.own_orbs.push(OwnOrb { id, at: press.muzzle, velocity, flown: 0.0, age: 0.0, room: None, phase: 0.0 });
+                }
+                // The anchor press: the oldest orb in flight anchors where
+                // it stands this frame.
+                crate::net::predict::PressShow::Anchor { .. } => {
+                    if !self.own_orbs.is_empty() {
+                        let orb = self.own_orbs.remove(0);
+                        anchor_own(game, &mut self.own_anchors, seat, orb.at, orb.room);
+                    }
+                }
             }
         }
         for at in predictor.take_impacts() {
@@ -1254,6 +1462,10 @@ impl<T: Transport> OnlineRound<T> {
         let mut struck_now = Vec::new();
         let mut in_portal = Vec::new();
         let mut shells = Vec::new();
+        // The wells on this client's present: a carried shot is stepped
+        // through them rather than carried straight (docs/gravity-well.md).
+        let wells = game.present_wells();
+        let knobs = tuning();
         for shot in foreign {
             if let Some(&at) = self.struck.get(&shot.id) {
                 // The room's copy itself - where the room has it, not
@@ -1270,7 +1482,27 @@ impl<T: Transport> OnlineRound<T> {
             let catch = smoothstep(((now - since) as f32 / CATCH_UP_MS).clamp(0.0, 1.0));
             let ahead = lead_ticks * PHYSICS_FIXED_DT * catch;
             let mut to = crate::math::Vec2::new(shot.position.x + shot.velocity.x * ahead, shot.position.y + shot.velocity.y * ahead);
-            if let Some(stop) = world.static_contact(shot.position, to) {
+            let grow = crate::math::Vec2::new(shot.half_extent, shot.half_extent);
+            let stepped = !wells.is_empty() && ahead > 0.0;
+            if stepped {
+                let hull_box = hull.map(|(centre, half)| (centre, half + grow));
+                match carry(shot.position, shot.velocity, ahead, &wells, hull_box, |p, q| world.static_contact(p, q), &knobs) {
+                    // Swallowed on its way to the present: off the picture,
+                    // as a shot into a portal is, until the room's copy
+                    // goes.
+                    Carried::Swallowed => {
+                        in_portal.push(shot.id);
+                        self.incoming_drawn.remove(&shot.id);
+                        continue;
+                    }
+                    Carried::Struck(at) => {
+                        game.draw_impact(at);
+                        struck_now.push((shot.id, at));
+                        continue;
+                    }
+                    Carried::Walled(at) | Carried::Free(at) => to = at,
+                }
+            } else if let Some(stop) = world.static_contact(shot.position, to) {
                 to = stop;
             }
             // Carried into a portal: it is in there until the room's copy
@@ -1281,8 +1513,7 @@ impl<T: Transport> OnlineRound<T> {
                 self.incoming_drawn.remove(&shot.id);
                 continue;
             }
-            if let Some((centre, half)) = hull {
-                let grow = crate::math::Vec2::new(shot.half_extent, shot.half_extent);
+            if let Some((centre, half)) = hull.filter(|_| !stepped) {
                 if let Some(t) = segment_box(shot.position, to, centre, half + grow) {
                     let at = crate::math::Vec2::new(
                         shot.position.x + (to.x - shot.position.x) * t,
@@ -1409,6 +1640,58 @@ impl<T: Transport> OnlineRound<T> {
     }
 }
 
+/// Where a shot carried through the wells to this client's present ended
+/// (`OnlineRound::draw_incoming_in_present`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Carried {
+    /// Nowhere: it flew the whole way, to there.
+    Free(Position),
+    /// On this seat's hull, there.
+    Struck(Position),
+    /// On a wall or the field's edge, there.
+    Walled(Position),
+    /// In a core.
+    Swallowed,
+}
+
+/// A shot at `position` flying `velocity` carried `ahead` seconds through
+/// `wells` (docs/gravity-well.md "Online"): a stretch a tick, each bent at
+/// its start and judged as the room judges a tick - the hull box `hull`
+/// (this seat's, grown by the shot's half) and the walls `wall` finds
+/// first, nearest first, and a core only where nothing met it sooner.
+fn carry(
+    position: Position,
+    velocity: crate::math::Vec2,
+    ahead: f32,
+    wells: &crate::well::WellField,
+    hull: Option<(Position, Position)>,
+    wall: impl Fn(Position, Position) -> Option<Position>,
+    t: &crate::tuning::Tuning,
+) -> Carried {
+    use crate::simulation::present::segment_box;
+    let steps = (ahead / PHYSICS_FIXED_DT).ceil().max(1.0) as usize;
+    let dt = ahead / steps as f32;
+    let (mut p, mut v) = (position, velocity);
+    for _ in 0..steps {
+        v = crate::well::bend(v, wells.shot_accel(p, t), dt);
+        let q = p + v * dt;
+        let span = p.distance_to(q).max(f32::EPSILON);
+        let struck = hull.and_then(|(centre, half)| segment_box(p, q, centre, half));
+        let walled = wall(p, q).map(|stop| p.distance_to(stop) / span);
+        let core = wells.core_hit(p, q, t).map(|(_, k)| k);
+        let met = struck.map(|k| (k, true)).into_iter().chain(walled.map(|k| (k, false))).min_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(&a.1)));
+        match (met, core) {
+            (Some((k, hit)), core) if core.is_none_or(|c| k <= c) => {
+                let at = p + (q - p) * k;
+                return if hit { Carried::Struck(at) } else { Carried::Walled(at) };
+            }
+            (_, Some(_)) => return Carried::Swallowed,
+            _ => p = q,
+        }
+    }
+    Carried::Free(p)
+}
+
 /// A drone this seat launched on its press (docs/fpv-swarm.md "Wire"),
 /// drawn by this client from the press until the room's copy takes over.
 ///
@@ -1455,6 +1738,58 @@ struct OwnCall {
     until: Option<f32>,
     /// The room's `RodCalled` for it has been handed over.
     claimed: bool,
+}
+
+/// A gravity well orb this seat launched on its own press (docs/gravity-
+/// well.md "Wire"), flown by this client until it anchors: from the gun
+/// line's muzzle at `well_orb_speed`, bent by the wells on the client's
+/// present, meeting the drawn world. `room` is the room's copy it paired
+/// with, kept off the picture while this is drawn.
+#[derive(Clone, Copy, Debug)]
+struct OwnOrb {
+    id: u32,
+    at: Position,
+    velocity: crate::math::Vec2,
+    flown: f32,
+    age: f32,
+    room: Option<u16>,
+    /// Seconds into the room's tick its flight stands on: a well bends it
+    /// at each tick's edge, as the room's fixed step does.
+    phase: f32,
+}
+
+/// A well this seat anchored on its own press or its own orb's contact,
+/// drawn as a provisional zone from then until the room's `WellAnchored`
+/// claims it - the room's well standing within a tick's flight of it.
+#[derive(Clone, Copy, Debug)]
+struct OwnAnchor {
+    at: Position,
+    /// Seconds since it anchored.
+    since: f32,
+    /// When it starts to pull on the replica's present, set the first
+    /// frame it is drawn.
+    until: Option<f32>,
+    /// The room's copy of the orb that made it, kept off the picture.
+    room: Option<u16>,
+    claimed: bool,
+}
+
+/// Where this client's own orbs' ids start past `PROVISIONAL_ID_BASE`, clear
+/// of the provisional shots' (`PROVISIONAL_ID_MASK`).
+const OWN_ORB_ID_OFFSET: u32 = 0x0800;
+
+/// `OwnOrb::id` wraps within this past the offset.
+const OWN_ORB_ID_MASK: u32 = 0x00FF;
+
+/// Where this client's own wells' zone ids start past
+/// `PROVISIONAL_ZONE_BASE`, clear of its rod calls'.
+const OWN_WELL_ZONE_OFFSET: u32 = 0x100;
+
+/// An own orb anchors at `at`: the snap and the projector's anchor cell,
+/// and a provisional well forming there (`OwnAnchor`).
+fn anchor_own(game: &mut Game, anchors: &mut Vec<OwnAnchor>, seat: u8, at: Position, room: Option<u16>) {
+    game.show_well_anchor(seat, at);
+    anchors.push(OwnAnchor { at, since: 0.0, until: None, room, claimed: false });
 }
 
 /// The id a drone drawn by this client carries in the replica: past every
@@ -2775,5 +3110,27 @@ mod tests {
             assert!(interp.get(key).is_some_and(|v| v.is_number()), "{key} is missing from {stats}");
         }
         assert_eq!(interp.len(), readings.len(), "{stats}");
+    }
+
+    /// A shell carried to this client's present through a well that holds
+    /// this seat's hull at its core meets the hull, not the core - the room
+    /// hits a hull it reaches before a core - and with no hull there it is
+    /// swallowed; a wall on the way stops it first.
+    #[test]
+    fn the_carry_meets_a_hull_held_at_a_core_before_the_core() {
+        let t = tuning();
+        let core = Position::new(300.0, 200.0);
+        let wells = crate::well::WellField { sources: vec![(1, core)] };
+        let (from, velocity) = (Position::new(160.0, 200.0), crate::math::Vec2::new(t.shell_speed, 0.0));
+        let hull = Some((core + crate::math::Vec2::new(4.0, 0.0), Position::new(16.0, 14.0)));
+        let ahead = 20.0 * PHYSICS_FIXED_DT;
+        let open = |_: Position, _: Position| None;
+        match carry(from, velocity, ahead, &wells, hull, open, &t) {
+            Carried::Struck(at) => assert!(at.x < core.x - t.well_core_px + 1.0, "on the hull's face: {at:?}"),
+            other => panic!("the hull held at the core is met: {other:?}"),
+        }
+        assert_eq!(carry(from, velocity, ahead, &wells, None, open, &t), Carried::Swallowed);
+        let wall = |p: Position, q: Position| (p.x < 220.0 && q.x >= 220.0).then_some(Position::new(220.0, p.y));
+        assert_eq!(carry(from, velocity, ahead, &wells, hull, wall, &t), Carried::Walled(Position::new(220.0, 200.0)));
     }
 }

@@ -87,6 +87,9 @@ pub const HUD_FPV_COLOR: Color = Color::new(0xFF, 0x2D, 0x5F, 255);
 /// the reticle is drawn in on the field (`pyro::LASER_RED`'s base), its
 /// crate's light.
 pub const HUD_ROD_COLOR: Color = Color::new(0xFF, 0x32, 0x28, 255);
+/// The gravity well's accent (docs/gravity-well.md): the pale ultraviolet
+/// lilac its crate's void is ringed in, the ink's base.
+pub const HUD_WELL_COLOR: Color = Color::new(0xE6, 0xA8, 0xFF, 255);
 
 /// The builder bar's fill - the same `#151515` the web page is set in, so
 /// the bar and the page read as one surface around the field - and the
@@ -417,6 +420,7 @@ pub fn weapon_color(weapon: ActiveWeapon) -> Color {
         ActiveWeapon::GaussRail => HUD_GAUSS_COLOR,
         ActiveWeapon::FpvSwarm => HUD_FPV_COLOR,
         ActiveWeapon::RodFromGod => HUD_ROD_COLOR,
+        ActiveWeapon::GravityWell => HUD_WELL_COLOR,
         ActiveWeapon::Shell => TEXT,
     }
 }
@@ -437,6 +441,7 @@ pub fn weapon_pickup(weapon: ActiveWeapon) -> Option<crate::pickup::PickupKind> 
         ActiveWeapon::GaussRail => Some(PickupKind::GaussRail),
         ActiveWeapon::FpvSwarm => Some(PickupKind::FpvSwarm),
         ActiveWeapon::RodFromGod => Some(PickupKind::RodFromGod),
+        ActiveWeapon::GravityWell => Some(PickupKind::GravityWell),
         ActiveWeapon::Shell => None,
     }
 }
@@ -1432,7 +1437,7 @@ pub struct PlayChrome {
     pub status: Option<String>,
     /// What letting go of a rod's reticle does (docs/rod-from-god.md "The
     /// reticle"), the first line under the left cluster while this
-    /// window's seat holds one (`rod_prompt`).
+    /// window's seat holds one (`special_prompt`).
     pub prompt: Option<crate::text::Key>,
     /// The lobby over a dimmed field (`lobby.rs`), in place of the round
     /// this window is not playing.
@@ -1465,14 +1470,24 @@ pub struct PlayChrome {
     pub curtain: f32,
 }
 
-/// The rod's prompt (`PlayChrome::prompt`) for the first of `seats` - this
-/// window's - that holds a reticle: letting go calls the rod, or, with the
-/// reticle on its own tank's cell, cancels it.
-pub fn rod_prompt(game: &Game, seats: impl IntoIterator<Item = u8>) -> Option<crate::text::Key> {
+/// A special's prompt (`PlayChrome::prompt`) for the first of `seats` -
+/// this window's - that has one: a rod's reticle up (letting go calls the
+/// rod, or, with the reticle on its own tank's cell, cancels it), or a
+/// gravity well's orb in flight (firing again anchors it,
+/// docs/gravity-well.md).
+pub fn special_prompt(game: &Game, seats: impl IntoIterator<Item = u8>) -> Option<crate::text::Key> {
     seats.into_iter().find_map(|seat| {
         let entity = game.seat(seat as usize)?;
         let tank = game.world.get::<&crate::tank::Tank>(entity).ok()?;
-        let r = tank.reticle.filter(|_| !tank.is_wreck())?;
+        if tank.is_wreck() {
+            return None;
+        }
+        // Its orb in flight: the tank's word in a local round, the orbs
+        // drawn as this seat's on a client's replica.
+        if tank.orb.is_some() || game.orbs().iter().any(|o| o.owner == crate::shell::Owner::Player(seat)) {
+            return Some(crate::text::keys::HUD_WELL_ANCHOR);
+        }
+        let r = tank.reticle?;
         Some(if r.cell == crate::map::world_to_cell(tank.position) { crate::text::keys::HUD_ROD_CANCEL } else { crate::text::keys::HUD_ROD_AIM })
     })
 }
@@ -1612,6 +1627,20 @@ mod hud_tests {
         game.map = MapFile::from_toml_str(include_str!("../maps/default.toml")).expect("the default map parses");
         game.init(W, H);
         game
+    }
+
+    /// The gravity well's anchor prompt stands under the seat's block while
+    /// its orb flies, and goes once it is down (docs/gravity-well.md).
+    #[test]
+    fn the_anchor_prompt_shows_while_the_orb_flies() {
+        let mut game = round(1);
+        let seat = game.seat(0).expect("a seat");
+        assert_eq!(special_prompt(&game, [0]), None);
+        game.world.get::<&mut crate::tank::Tank>(seat).expect("the seat's tank").orb = Some(7);
+        assert_eq!(special_prompt(&game, [0]), Some(crate::text::keys::HUD_WELL_ANCHOR), "the orb in flight");
+        assert_eq!(special_prompt(&game, [1]), None, "another seat's prompt is its own");
+        game.world.get::<&mut crate::tank::Tank>(seat).expect("the seat's tank").orb = None;
+        assert_eq!(special_prompt(&game, [0]), None, "anchored");
     }
 
     fn wreck(game: &mut Game, seat: usize) {

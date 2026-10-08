@@ -92,7 +92,7 @@ const CLICK_DRAG_STEP_PX: f32 = 8.0;
 /// the builder has frozen.
 pub const GAME_ONLY_TOOLS: &[&str] = &[
     "snapshot", "events", "step", "input", "pause", "resume", "history", "nav_grid", "field", "terrain", "teleport",
-    "set_tank", "kill", "spawn_enemy", "spawn_pickup", "rod_call", "players", "weather",
+    "set_tank", "kill", "spawn_enemy", "spawn_pickup", "rod_call", "well_at", "players", "weather",
 ];
 
 /// The tools that drive the *local* round or the builder, refused while
@@ -109,7 +109,7 @@ pub const GAME_ONLY_TOOLS: &[&str] = &[
 /// drives this window's seat in the room (`ONLINE_INPUT_REFUSED` is the
 /// part of it that would reach nobody).
 pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
-    "step", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "spawn_pickup", "rod_call", "players", "play",
+    "step", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "spawn_pickup", "rod_call", "well_at", "players", "play",
     "build", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings",
     "builder_map", "builder_save", "builder_touch", "builder_select", "builder_stamp",
 ];
@@ -294,7 +294,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "set_tank",
         description: "Overwrite a tank's damage (0 = pristine, 100 = wreck), ammo counts (setting a special weapon's stock above 0 also arms it in place of the one special the tank carries, like its pickup would), shield_hp (rainbow-shield absorption left in damage points, not seconds), the speed-boost timer, portal_cooldown (seconds before it may enter a portal again) and charge (seconds a charge weapon's trigger has been held - a gauss rail's charge or a rod's reticle put on a tank carrying it; 0 takes it off). Omitted fields are untouched.",
-        schema: r#"{"type":"object","properties":{"slot":{"type":"integer"},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"grenade_ammo":{"type":"integer"},"sonic_ammo":{"type":"integer"},"emp_charges":{"type":"integer"},"disabled":{"type":"number"},"special_offline":{"type":"number"},"gauss_slugs":{"type":"integer"},"fpv_drones":{"type":"integer"},"rods":{"type":"integer"},"charge":{"type":"number"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}},"required":["slot"]}"#,
+        schema: r#"{"type":"object","properties":{"slot":{"type":"integer"},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"grenade_ammo":{"type":"integer"},"sonic_ammo":{"type":"integer"},"emp_charges":{"type":"integer"},"disabled":{"type":"number"},"special_offline":{"type":"number"},"gauss_slugs":{"type":"integer"},"fpv_drones":{"type":"integer"},"rods":{"type":"integer"},"wells":{"type":"integer"},"charge":{"type":"number"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}},"required":["slot"]}"#,
         read_only: false,
         destructive: false,
     },
@@ -314,7 +314,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "spawn_pickup",
-        description: "Put a crate of `kind` (a map's pickup spelling: health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack, heat_shield, grenades, sonic_hammer, emp_burst, gauss_rail, fpv_swarm, rod_from_god) down at the map cell nearest (x, y), in its air drop. Not a slot: it never respawns. Refused outside the field, on a solid tile and where a pickup already stands. Draws no RNG. Returns the crate's position.",
+        description: "Put a crate of `kind` (a map's pickup spelling: health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack, heat_shield, grenades, sonic_hammer, emp_burst, gauss_rail, fpv_swarm, rod_from_god, gravity_well) down at the map cell nearest (x, y), in its air drop. Not a slot: it never respawns. Refused outside the field, on a solid tile and where a pickup already stands. Draws no RNG. Returns the crate's position.",
         schema: r#"{"type":"object","properties":{"kind":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}},"required":["kind","x","y"]}"#,
         read_only: false,
         destructive: false,
@@ -322,6 +322,13 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "rod_call",
         description: "Call a rod from god onto the map cell nearest (x, y) at once (docs/rod-from-god.md): player 1's call, the kills credited to it, or with enemy=true an enemy's. It stands for rod_countdown_seconds and lands like any other. Refused outside the field. Draws no RNG. Returns the call's id, its cell and the round time it lands at.",
+        schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"enemy":{"type":"boolean","default":false}},"required":["x","y"]}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "well_at",
+        description: "Anchor a gravity well at (x, y) at once (docs/gravity-well.md): player 1's, or with enemy=true an enemy's; it forms for well_form_seconds, pulls for well_pull_seconds and collapses like any other. Refused off the field or inside a solid cell. Draws no RNG. Returns the well's id, its centre and the round time its pull starts.",
         schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"enemy":{"type":"boolean","default":false}},"required":["x","y"]}"#,
         read_only: false,
         destructive: false,
@@ -566,14 +573,14 @@ pub const ROOM_TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "room_set_tank",
-        description: "The game's `set_tank` on the room's authoritative round: overwrite a tank's damage (0 = pristine, 100 = wreck), ammo counts (a special weapon's stock above 0 arms it in place of the one special the tank carries, as its crate would - `sonic_ammo`, `emp_charges`, `gauss_slugs`, `fpv_drones`, `rods`, `grenade_ammo`, `missile_ammo`, `plasma_ammo`, `laser_charges`, `minigun_ammo`, `flame_fuel` in seconds), `disabled`/`special_offline` seconds, `charge` (seconds a gauss rail's trigger has been held), `shield_hp`, the speed-boost timer and `portal_cooldown`. `slot` is an owner slot: the seats first (0..seats-1), enemies after, so it arms a seat's hands or an enemy's. Omitted fields are untouched. It reaches every client in the next snapshot - the seat's own window predicts and draws its presses with the weapon from then on. Replies with the tank's row of `room_snapshot`.",
-        schema: r#"{"type":"object","required":["code","slot"],"properties":{"code":{"type":"string"},"slot":{"type":"integer","minimum":0},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"grenade_ammo":{"type":"integer"},"sonic_ammo":{"type":"integer"},"emp_charges":{"type":"integer"},"disabled":{"type":"number"},"special_offline":{"type":"number"},"gauss_slugs":{"type":"integer"},"fpv_drones":{"type":"integer"},"rods":{"type":"integer"},"charge":{"type":"number"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}}}"#,
+        description: "The game's `set_tank` on the room's authoritative round: overwrite a tank's damage (0 = pristine, 100 = wreck), ammo counts (a special weapon's stock above 0 arms it in place of the one special the tank carries, as its crate would - `sonic_ammo`, `emp_charges`, `gauss_slugs`, `fpv_drones`, `rods`, `wells`, `grenade_ammo`, `missile_ammo`, `plasma_ammo`, `laser_charges`, `minigun_ammo`, `flame_fuel` in seconds), `disabled`/`special_offline` seconds, `charge` (seconds a gauss rail's trigger has been held), `shield_hp`, the speed-boost timer and `portal_cooldown`. `slot` is an owner slot: the seats first (0..seats-1), enemies after, so it arms a seat's hands or an enemy's. Omitted fields are untouched. It reaches every client in the next snapshot - the seat's own window predicts and draws its presses with the weapon from then on. Replies with the tank's row of `room_snapshot`.",
+        schema: r#"{"type":"object","required":["code","slot"],"properties":{"code":{"type":"string"},"slot":{"type":"integer","minimum":0},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"grenade_ammo":{"type":"integer"},"sonic_ammo":{"type":"integer"},"emp_charges":{"type":"integer"},"disabled":{"type":"number"},"special_offline":{"type":"number"},"gauss_slugs":{"type":"integer"},"fpv_drones":{"type":"integer"},"rods":{"type":"integer"},"wells":{"type":"integer"},"charge":{"type":"number"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}}}"#,
         read_only: false,
         destructive: false,
     },
     ToolSpec {
         name: "room_spawn_pickup",
-        description: "The game's `spawn_pickup` on the room's authoritative round: a crate of `kind` (a map's pickup spelling: health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack, heat_shield, grenades, sonic_hammer, emp_burst, gauss_rail, fpv_swarm, rod_from_god) down at the map cell nearest (x, y), in its air drop, for a seat or an enemy to drive over. Not a slot: it never respawns. Refused outside the field, on a solid tile and where a pickup already stands. Draws no RNG. Returns the crate's position.",
+        description: "The game's `spawn_pickup` on the room's authoritative round: a crate of `kind` (a map's pickup spelling: health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack, heat_shield, grenades, sonic_hammer, emp_burst, gauss_rail, fpv_swarm, rod_from_god, gravity_well) down at the map cell nearest (x, y), in its air drop, for a seat or an enemy to drive over. Not a slot: it never respawns. Refused outside the field, on a solid tile and where a pickup already stands. Draws no RNG. Returns the crate's position.",
         schema: r#"{"type":"object","required":["code","kind","x","y"],"properties":{"code":{"type":"string"},"kind":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}}}"#,
         read_only: false,
         destructive: false,
@@ -1757,6 +1764,16 @@ impl DevServer {
                             Ok(json!({ "id": id, "cell": [cell.0, cell.1], "land": land }))
                         }
                         None => Err("(x, y) is off the field".to_string()),
+                    }
+                }
+                _ => Err("x and y are required".to_string()),
+            },
+            "well_at" => match (f32_param(&params, "x"), f32_param(&params, "y")) {
+                (Some(x), Some(y)) => {
+                    let enemy = params.get("enemy").and_then(Value::as_bool).unwrap_or(false);
+                    match game.debug_well(Position::new(x, y), enemy) {
+                        Some((id, until)) => Ok(json!({ "id": id, "x": x, "y": y, "pulls_at": until })),
+                        None => Err("(x, y) is off the field or inside a solid cell".to_string()),
                     }
                 }
                 _ => Err("x and y are required".to_string()),
@@ -4979,7 +4996,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(cats.len(), 5);
         assert_eq!(cats[0]["name"], "wall");
         assert_eq!(cats[0]["current"], "iron");
-        assert_eq!(cats[4]["tools"].as_array().unwrap().len(), 18, "{}", cats[4]);
+        assert_eq!(cats[4]["tools"].as_array().unwrap().len(), 19, "{}", cats[4]);
         let err = ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "granite" })).unwrap_err();
         assert!(err.contains("brick") && err.contains("eraser"), "{err}");
 

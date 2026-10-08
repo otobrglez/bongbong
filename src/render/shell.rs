@@ -66,7 +66,7 @@ pub fn draw_shell_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, shell: &S
 /// white-hot line down its middle cooling to gold, and a stepped halo
 /// around the round itself, so a shot in the air reads at a glance.
 /// Nothing before `Flying` - the barrel frames are their own blast.
-pub fn draw_shell_light(d: &mut impl RaylibDraw, shell: &Shell) {
+pub fn draw_shell_light(d: &mut impl RaylibDraw, shell: &Shell, wells: &crate::well::WellField) {
     let strength = tuning().shot_glow_strength;
     if shell.state != ShellState::Flying || strength <= 0.0 {
         return;
@@ -75,7 +75,14 @@ pub fn draw_shell_light(d: &mut impl RaylibDraw, shell: &Shell) {
     let length = tuning().shell_tracer_length;
     let tail = Position::new(shell.position.x - dir.x * 4.0, shell.position.y - dir.y * 4.0);
     let (outer, ember) = (crate::pyro::alpha(FIRE[3], 0.86), crate::pyro::alpha(FIRE[2], 0.0));
-    streak(d, tail, dir, length, 4.0, fade(outer, strength), ember);
-    streak(d, tail, dir, length * 0.8, 2.0, fade(FIRE[7], strength), fade(crate::pyro::alpha(FIRE[5], 0.6), strength));
+    // In a gravity well's pull the tracer follows the curve it came by.
+    let t = tuning();
+    if let Some(path) = crate::well::curved_streak(tail, shell.velocity, length, wells, &t) {
+        crate::render::shot_fx::curved_streak(d, &path, 4.0, fade(outer, strength), ember);
+        crate::render::shot_fx::curved_streak(d, &path[..crate::well::STREAK_STEPS], 2.0, fade(FIRE[7], strength), fade(crate::pyro::alpha(FIRE[5], 0.6), strength));
+    } else {
+        streak(d, tail, dir, length, 4.0, fade(outer, strength), ember);
+        streak(d, tail, dir, length * 0.8, 2.0, fade(FIRE[7], strength), fade(crate::pyro::alpha(FIRE[5], 0.6), strength));
+    }
     glow(d, shell.position, 11.0, fade(crate::pyro::alpha(FIRE[5], 0.47), strength));
 }

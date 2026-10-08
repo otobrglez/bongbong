@@ -267,6 +267,17 @@ impl Terrain {
         self.walls.to_vec()
     }
 
+    /// `first_solid_along` for something `half` wide that floats over the
+    /// tiles that do not block sight - a gravity well's orb.
+    pub fn first_tall_along(&self, p0: Position, p1: Position, half: f32) -> Option<f32> {
+        let pad = Position::new(half, half);
+        self.obstacles
+            .iter()
+            .filter(|b| b.material.blocks_sight())
+            .filter_map(|b| segment_hits_aabb(p0, p1, b.center, b.half + pad))
+            .min_by(|a, b| a.total_cmp(b))
+    }
+
     /// The entry fraction (0..1) of the first solid tile along the
     /// segment `p0..p1`, if any - what caps a flame stream's reach. Every
     /// tile counts, sandbags and fences included: a stream does not sail

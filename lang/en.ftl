@@ -38,6 +38,7 @@ hud-weapon-offline = WPN OFFLINE
 # caller's own cell.
 hud-rod-aim = AIM, THEN LET GO TO CALL
 hud-rod-cancel = LET GO HERE TO CANCEL
+hud-well-anchor = FIRE AGAIN TO ANCHOR
 
 # The players dialog: a 28 px title and a 16 px line across a 440 px
 # panel, then two 176 px buttons in 18 px text (about 14 letters each).
@@ -488,6 +489,7 @@ tool-emp_burst = emp burst
 tool-gauss_rail = gauss rail
 tool-fpv_swarm = fpv swarm
 tool-rod_from_god = rod from god
+tool-gravity_well = gravity well
 tool-tesla = tesla coil
 tool-tesla_enemy = enemy tesla
 tool-gun_tower = gun tower
@@ -517,6 +519,7 @@ tool-short-emp_burst = emp
 tool-short-gauss_rail = rail
 tool-short-fpv_swarm = fpv
 tool-short-rod_from_god = rod
+tool-short-gravity_well = well
 tool-short-lamp = lamp
 tool-short-target = target
 tool-short-volcano = volc
