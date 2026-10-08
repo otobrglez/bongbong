@@ -215,8 +215,8 @@ picture has run past everything that arrived) and `server_tick` (the
 newest tick the room has sent, against `frame`, the tick being drawn).
 
 Everything that would **write** refuses by name - `ONLINE_REFUSED_TOOLS`:
-`step`, `input`, `pause`, `resume`, `restart`, `teleport`, `set_tank`,
-`kill`, `spawn_enemy`, `players`, `play`, `build`, `click` and the
+`step`, `pause`, `resume`, `restart`, `teleport`, `set_tank`, `kill`,
+`spawn_enemy`, `spawn_pickup`, `players`, `play`, `build` and the
 `builder_*` tools bar `builder_files`. Only the server simulates an
 online round; the replica is a picture of it, so a write here would move
 the picture and reach nobody. The error names the room and says what to
@@ -225,6 +225,16 @@ the local round, where every tool works again. There is no lockstep for
 an online round - the room ticks on its own clock - so the way to step
 one deterministically is the room server's own `room_step` (section 4.3)
 or `net::rig::Lockstep` from a test, not this server.
+
+`input` is the exception, because it is not a write to the round: it
+stands in for the keyboard, and the keyboard is what this window's seat
+in the room is driven by (`shape_input` runs before the online branch,
+as the page's `bb_input` does). So a weapon can be fired as the seat and
+the press - predicted, drawn on the press, its shot paired with the
+room's copy - checked on a screenshot. Its player-2 fields and
+`cycle_overlays` are refused online: the window has one seat, and the
+replica is never `update`d (`overlays` sets its flags). The weapon itself
+is put in the seat's hands from the other end, `room_set_tank`.
 
 A replica is never `advance`d, so `before_frame` banks its events and
 track rows itself, on the frames a snapshot moved it on (the guard
@@ -287,8 +297,10 @@ nothing; the dispatch is `server/src/room.rs`'s and
 |---|---|
 | `server_status`, `rooms` | The server and its rooms; `rooms` gives the codes everything else takes |
 | `room` | One room whole - and **each seat's mailbox**: `depth`, `acked`, `starvations` |
-| `room_open` | A room and a started round with **no client at all**, `seats` bots |
+| `room_open` | A room and a started round with **no client at all**, `seats` bots, `tuning` rows of its own |
 | `seat_intent` | Drive a seat for N ticks, the way that seat's client would |
+| `room_set_tank`, `room_spawn_pickup` | The game's `set_tank` and `spawn_pickup` on the authority: a weapon in a seat's or an enemy's hands, a crate down |
+| `room_tuning` | **This room's own tuning rows**, which no other room sees: report, add (`patch`), drop (`reset`) |
 | `room_step` / `room_resume` | Freeze the room and advance it deterministically: the game's `step`, for a room |
 | `room_snapshot`, `room_events` | The authoritative world and what actually happened in it |
 | `room_close` | End a room after a scenario |
@@ -318,6 +330,28 @@ ahead and its oldest intents are being dropped; a climbing `starvations`
 means it is not stamping far enough ahead and the tick is repeating its
 last intent. Neither is visible from the client, which is why chasing a
 co-op input bug from the window alone is guesswork.
+
+**A room's rows are its own, though the table is the process's.** The
+tuning table is one per process and the process holds every room, so a
+room's rows cannot be written to it - the room beside would read them.
+They are the room's thread's instead: the room keeps the server's table
+with its seat patch and its rows on top (`own_table`), and everything it
+does - its ticks, its lobby, its tools - runs inside `tuning::in_force`,
+which makes that the table `tuning()` answers on this thread for that
+synchronous stretch alone (never across an `.await`; writes and
+`current()` stay the live table's). The rows ride every `Welcome`, so a
+window seated in the room predicts and draws on the same numbers; a
+change mid-round welcomes every connected window again on the live
+world, and the client puts its own table back before taking a
+welcome's patch, so rows taken back leave nothing behind. A row is read
+where the game reads it - a `live` row on the next tick, the enemies'
+kit when the next tank spawns, the wave plan at the next round - so a
+round's setup goes in through `room_open {tuning}`:
+
+```
+room_open     {"seats": 1, "tuning": {"enemy_special_weapon_chance": 1, "enemy_special_weapon_emp_share": 1}}
+room_set_tank {"code": "ABCDE", "slot": 0, "sonic_ammo": 4}
+```
 
 **Dev-only by construction.** The whole surface is behind the server
 crate's `dev-tools` feature, which the release image does not build, and
