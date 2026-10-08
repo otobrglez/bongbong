@@ -667,52 +667,27 @@ pub fn orbit_at(orbit: &GrenadeOrbit, centre: Position, now: f32, t: &Tuning) ->
 
 ### 3.4 The armory's well
 
-Into `maps/armory.toml` (docs/sonic-hammer.md §3.5 and the four docs
-after it); nothing placed by weapons 1-5 moves:
+Into `maps/armory.toml`, the builder's 40 x 22 re-save (`view = "whole"`,
+written as `MapFile::to_toml_string` writes it, so its cells carry no
+comments); nothing placed by weapons 1-5 moves:
 
-| Mark | Cell | Why |
+| Cell | What | Why |
 |---|---|---|
-| `V` well crate | 7,14 | The reserved column's last cell, six cells south of the start |
-| `V` well crate | 32,13 | On the enemy side, so an enemy that carries no special collects it and its rule shows with no tuning |
-| `n` grenade crate | 9,14 | Two cells east of the well crate: anchor a well, take the grenades, lob them in - the armory scene's combo (a couch's second seat does it with the first's well) |
+| 9,16 | well crate | Below the rod's crate in the weapons' column, six cells south of the start |
+| 34,15 | well crate | On the enemy side, so an enemy that carries no special collects it and its rule shows with no tuning |
+| 11,16 | grenade crate | Two cells east of the well crate: anchor a well, take the grenades, lob them in - the armory scene's combo (a couch's second seat does it with the first's well) |
 
-The rest it needs is there: **the drum column** (oil 21,6 and 21,10, fuel
-21,8, two cells apart) - a well anchored by it lifts all three and they go
-off together at its core - with **the oil trail** (22..24,8) their blasts
-light; **the lava ford** (32,0..7) and **the lake** (19..26 x 13..17, deep
+The rest it needs is there: **the drum column** (oil 23,8 and 23,12, fuel
+23,10, two cells apart) - a well anchored by it lifts all three and they go
+off together at its core - with **the oil trail** (24..26,10) their blasts
+light; **the lava ford** (34,2..9) and **the lake** (21..28 x 15..19, deep
 in the middle) an enemy's well pulls a seat toward; **the players' frog**
-(2,12), four and a half cells from the start (4,8), which an enemy's well
-pulls its guard off; **the iron** (20..21 x 2..3, 33..34 x 8..9) and
-**brick** an orb anchors against; **the grass** (11..15 x 11..15) that leans
+(4,14), four and a half cells from the start (6,10), which an enemy's well
+pulls its guard off; **the iron** (22..23 x 5..6, 35..36 x 10..11) and
+**brick** an orb anchors against; **the grass** (13..17 x 13..17) that leans
 into a drain and **the trees** that stand; **the portals'** absence (the
 pull's portal case is tried on `portals`); **the towers** whose bullets
-bend; the other weapons' crates, each with its interaction (§12).
-
-```
-     0         1         2         3
-     012345678901234567890123456789012345
- 0   ................................L...
- 1   .+..........ggggg...............L...
- 2   ............g...g...II....b..pp.L...
- 3   ...P........g.s.g...II....b.....L.E.
- 4   .......e...*g...g.........b.....L...
- 5   ............ggggg...........zzz.L...
- 6   ...tp..R.............o..........L...
- 7   .............................e..L...
- 8   ....S..H.........*...f%%%..b.....II.
- 9   ...........................b.....II.
-10   .......D.............o...*.d..H.....
-11   ...........wwwwwT..........g....X...
-12   ..F....X...wwwww..............R.....
-13   ..........Twwwww...WWWWWWWW.b...V...
-14   .......V.n.wwwww...WWWWWWWW.b.....G.
-15   .....Q.....wwwww...WWWWWWWW...D.....
-16   .a.................WWWWWWWW....m....
-17   ...................WWWWWWWW.........
-```
-
-The reserved column is full. Checked again in Phase 2 against the armory
-as weapons 3-5 leave it in code (the linter, the band's capacity), and the
+bend; the other weapons' crates, each with its interaction (§12). The
 armory's CPU thumbnail pin is re-baselined for the crates.
 
 **The dev server**: `spawn_pickup {kind: "gravity_well", x, y}`,
@@ -1231,7 +1206,7 @@ digits: no key.
 
 ## 8. Wire
 
-Protocol 20 (from the rod's 19), once in the PR.
+Protocol 21 (from the rod's 20), once in the PR.
 
 - `WeaponKind::GravityWell`, appended to `ALL`; `drawn_on_press` false: its
   launch is a shot, drawn as provisional shots are, and its anchor is
@@ -2032,8 +2007,8 @@ their docs give:
     reading them.
 17. **`Corners::prompt`** (the rod's) open to a second weapon's prompt.
 18. **`SPAWN_SWAPS` and `SEEK_SPECIALS`** as tables.
-19. **The armory**: the reserved cell 7,14, and 9,14 and 32,13 left free by
-    weapons 1-5.
+19. **The armory**: 9,16, 11,16 and 34,15 on the 40 x 22 armory, left free
+    by weapons 1-5.
 20. **`CrateState` open to more fields**, and the interpolator to blending
     a listed crate's drift.
 21. **The rod's impact's drum block** reading held drums.
@@ -2136,5 +2111,17 @@ record of the build.
   the collapse throws them (the rod's `throw_from`) and an orb scares them.
   Tests `a_well_draws_the_fish_in_its_reach_to_its_core` and
   `an_orb_scares_the_fish`.
+- **On the rod's final head** (5e80097, on master ee1d122): protocol 21,
+  52 builder tools, the crates on the 40 x 22 armory at 9,16, 34,15 and
+  11,16 (§3.4). The range board is a tile that blocks sight, so an orb
+  anchors against it and nothing of the well moves or breaks it
+  (`an_orb_anchors_on_a_range_board_and_leaves_it_standing`). A pulled
+  hull looks a step's travel ahead as a knocked one does
+  (`well::pull_look_ahead` beside `sonic::skid_look_ahead`, the room's step
+  and the sandbox's): without it the pull carried a hull up to 4.6 px into
+  a wall or past the field's edge before rapier pushed it back out; with
+  it, under a pixel on the step it first meets the face, flush after
+  (`the_pull_presses_a_hull_against_a_wall_and_the_fields_edge_never_into_it`).
+  The collapse's fling is a knock and stops flush by the knock's own.
 - **Left for later**: nothing of §1-§10.
 

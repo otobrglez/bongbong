@@ -189,6 +189,25 @@ fn an_orb_anchors_on_the_first_wall_it_meets_and_floats_over_sandbags_and_fences
     assert!(game.world.query::<&Obstacle>().iter().filter(|o| !o.destroyed).count() >= 3, "nothing broken");
 }
 
+/// A range board (docs/range-target-prd.md) stands as tall as a wall: an
+/// orb anchors against it, and neither the pull nor the collapse moves or
+/// breaks it.
+#[test]
+fn an_orb_anchors_on_a_range_board_and_leaves_it_standing() {
+    let mut game = round("cells.\"9,6\" = { kind = \"target\" }\n");
+    step(&mut game, true);
+    let seen = idle(&mut game, ticks(2.5));
+    let a = anchored(&seen);
+    assert_eq!(a.len(), 1, "{seen:?}");
+    assert_eq!(a[0].1, AnchorBy::Contact);
+    let face = crate::map::cell_to_world(9, 6).x - 12.0;
+    assert!(a[0].0.x < face && a[0].0.x > face - 24.0, "backed off the board's face: {:?}", a[0].0);
+    idle(&mut game, ticks(tuning().well_form_seconds + tuning().well_pull_seconds + 1.0));
+    let board: Vec<(Position, bool)> =
+        game.world.query::<&Obstacle>().iter().filter(|o| o.material == Material::Target).map(|o| (o.position, o.destroyed)).collect();
+    assert_eq!(board, vec![(crate::map::cell_to_world(9, 6), false)], "where it stood, whole");
+}
+
 #[test]
 fn an_orb_anchors_on_a_tank_it_meets() {
     let mut game = round("");
@@ -845,4 +864,62 @@ fn a_heavy_enemy_braces_broadside() {
     let a = pos(&game, titan);
     idle(&mut game, 30);
     assert!(pos(&game, titan).distance_to(a) < 2.0, "it holds: {:?} from {a:?}", pos(&game, titan));
+}
+
+/// How far the hull `entity`'s movement box reaches into the field's
+/// boundary or a standing tile's box: 0 where it is clear of all of them.
+fn wall_overlap(game: &Game, entity: Entity) -> f32 {
+    let (pos, (hx, hy)) = with_tank(&game.world, entity, |t| (t.position, t.move_half_extents(t.facing_along_x())));
+    let overlap = |c: Position, h: Position| {
+        let dx = h.x + hx - (pos.x - c.x).abs();
+        let dy = h.y + hy - (pos.y - c.y).abs();
+        if dx > 0.0 && dy > 0.0 { dx.min(dy) } else { 0.0 }
+    };
+    let terrain = hits::Terrain::build(&game.world, W, H, &[], &game.water);
+    let tiles: Vec<(Position, Position)> =
+        game.world.query::<(Entity, &Obstacle)>().iter().filter_map(|(e, _)| terrain.obstacle(e).map(|b| (b.center, b.half))).collect();
+    battlefield::wall_rects(W, H).into_iter().chain(tiles).map(|(c, h)| overlap(c, h)).fold(0.0, f32::max)
+}
+
+/// The pull is no knock - a current along the tracks and a side pull
+/// against their grip, under the body's speed cap - yet it presses hulls
+/// into whatever stands between them and the core: a hull dragged north,
+/// along its tracks and broadside, at an iron wall and at the field's top
+/// edge from every gap up to a few steps' travel, sinks under a pixel into
+/// it on the step it first meets the face (without `pull_look_ahead`, up
+/// to four and a half) and lies flush against it once the pull and the
+/// collapse are over - it never goes through.
+#[test]
+fn the_pull_presses_a_hull_against_a_wall_and_the_fields_edge_never_into_it() {
+    let iron: String = (14..=20).map(|c| format!("cells.\"{c},4\" = {{ kind = \"wall\", material = \"iron\" }}\n")).collect();
+    for extra in [String::new(), iron] {
+        let game = round(&extra);
+        // The face north of the seat: the iron's south face, or the field's
+        // top edge.
+        let face = if extra.is_empty() { 0.0 } else { crate::map::cell_to_world(14, 4).y + 12.0 };
+        for rotation in [0.0, 90.0] {
+            let up = with_tank(&game.world, seat(&game), |t| t.move_half_extents(rotation == 90.0).1);
+            for gap in [0, 1, 2, 3, 4, 6, 8, 12, 16, 20, 24, 28, 32, 40, 48, 56] {
+                let mut game = round(&extra);
+                let s = seat(&game);
+                with_tank_mut(&game.world, s, |t| t.disarm());
+                let at = Position::new(544.0, face + up + 0.5 + gap as f32);
+                game.place_tank(s, at, Some(rotation)).expect("placed");
+                // The core beyond the face, the seat inside its reach.
+                let core = Position::new(544.0, (face - 40.0).max(4.0));
+                game.debug_well(core, true).expect("a well");
+                let mut pulled = false;
+                let mut overlap = 0.0;
+                for _ in 0..ticks(tuning().well_form_seconds + tuning().well_pull_seconds + 1.0) {
+                    step(&mut game, false);
+                    let p = with_tank(&game.world, s, |t| t.position);
+                    pulled |= game.in_a_pull(p);
+                    overlap = wall_overlap(&game, s);
+                    assert!(overlap <= 1.0, "{} rotation {rotation}: the hull {overlap} px in at {p:?}, from {at:?}", if extra.is_empty() { "the edge" } else { "iron" });
+                }
+                assert!(pulled, "the well pulls the seat from {at:?}");
+                assert!(overlap <= 0.05, "and lies flush at the end, {overlap} px in, from {at:?}");
+            }
+        }
+    }
 }

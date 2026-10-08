@@ -2615,6 +2615,7 @@ impl Game {
             charged = Some(gauss::SeatCharge { edge, weapon, start, muzzle, dir, reticle, hull_cell });
         }
         sonic::skid_look_ahead(physics, &tank);
+        well::pull_look_ahead(physics, &tank, &wells);
         physics.step();
         // The solver moved the body; the tank's own position is what
         // every reader (and the next tick's `Footing`) goes by.
@@ -4400,6 +4401,7 @@ impl Game {
             if step_physics {
                 for tank in self.world.query::<&Tank>().iter() {
                     sonic::skid_look_ahead(&mut self.physics, tank);
+                    well::pull_look_ahead(&mut self.physics, tank, &f.wells);
                 }
                 self.physics.step();
                 let (bodies, colliders) = self.physics.quarantined();

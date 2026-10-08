@@ -836,6 +836,27 @@ impl Game {
     }
 }
 
+/// A hull a well pulls looks a step's travel ahead, as a skidding one does
+/// (`sonic::skid_look_ahead`, which runs first and this only widens): the
+/// current along its tracks and the side pull against their grip drive it
+/// at whatever stands between it and the core, at up to the body's speed
+/// cap, and rapier, looking 0.02 px ahead, would otherwise let a step carry
+/// it up to four and a half pixels into a wall or past the field's edge;
+/// with it, under a pixel on the step it first meets the face, pushed back
+/// out within a second. Run for every hull before every solver step, the
+/// room's and a client's sandbox's; with no well pulling, nothing is
+/// touched.
+pub(super) fn pull_look_ahead(physics: &mut crate::physics::Physics, tank: &Tank, field: &WellField) {
+    if field.is_empty() || tank.is_wreck() {
+        return;
+    }
+    let Some(handle) = tank.body else { return };
+    if field.strongest(tank.position, &tuning()).is_some() {
+        let ahead = physics.max_step_travel();
+        physics.set_look_ahead(handle, ahead);
+    }
+}
+
 /// A seat as the well's senses read it (`Game::well_senses`).
 pub(super) struct WellSeat {
     pub seat: u8,
