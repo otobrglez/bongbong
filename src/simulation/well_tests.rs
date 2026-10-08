@@ -772,6 +772,27 @@ fn the_generic_tiers_never_fire_the_well() {
     assert_eq!(with_tank(&game.world, enemy, |t| t.wells), tuning().well_per_pickup);
 }
 
+/// A tank that launched its last well fires its shells at the generic
+/// pace, not after the rest of the well's `well_ai_fire_interval`.
+#[test]
+fn an_enemy_that_spent_its_last_well_fires_its_shells_at_once() {
+    let mut game = round_with("", Mission::Destroy, None);
+    game.place_tank(seat(&game), MID, Some(0.0)).expect("placed");
+    let enemy = well_enemy(&mut game, MID - Vec2::new(200.0, 0.0), 1, 90.0);
+    with_tank_mut(&game.world, enemy, |t| {
+        t.wells = 0;
+        t.shells_ammo = tuning().max_shells;
+    });
+    game.world.get::<&mut Ai>(enemy).unwrap().set_fire_timer(tuning().well_ai_fire_interval);
+    let slot = slot_of(&game, enemy);
+    let seen = idle(&mut game, ticks(tuning().enemy_fire_interval + tuning().enemy_aim_settle + 1.0));
+    assert!(
+        seen.iter().any(|e| matches!(e, Event::Fired { slot: s, weapon: "shell" } if *s == slot)),
+        "lined up on the seat, it fires a shell well inside the well's {} s",
+        tuning().well_ai_fire_interval
+    );
+}
+
 #[test]
 fn a_training_dummy_never_fires_a_well() {
     let mut game = two_seats(MID + Vec2::new(0.0, -40.0), MID + Vec2::new(0.0, 40.0));

@@ -1052,6 +1052,13 @@ impl Default for Ai {
 }
 
 impl Ai {
+    /// Sets the trigger's pacing timer, for a test that starts a tank mid
+    /// interval.
+    #[cfg(test)]
+    pub(crate) fn set_fire_timer(&mut self, seconds: f32) {
+        self.fire_timer = seconds;
+    }
+
     /// A fresh memory for an enemy spawning with `role`.
     pub fn with_role(role: Role) -> Self {
         Ai { role, ..Ai::default() }
@@ -2672,6 +2679,18 @@ impl Brain<'_> {
     /// never actually hits the slow end in practice - it's the "more
     /// resources, more aggressive" half; wants_retreat/act_flee are the
     /// "running low, fall back" half.
+    /// A special's pacing (`special_fire_interval`, up to several seconds)
+    /// does not carry over to the weapon it falls back on once it is spent:
+    /// the timer it left is cut to the longest a generic shot waits
+    /// (`enemy_fire_interval`), or a tank that launched its last well would
+    /// stand lined up on its shells for the rest of the well's interval.
+    /// A timer only a generic shot or a breach set is never longer, so this
+    /// changes nothing for a tank that never carried a special.
+    fn cap_fire_timer(&mut self) {
+        let longest = tuning().enemy_fire_interval.max(tuning().enemy_fire_interval_aggressive);
+        self.ai.fire_timer = self.ai.fire_timer.min(longest);
+    }
+
     fn fire_interval(&self) -> f32 {
         // A held laser charge or minigun ammo costs no shells, so either one
         // counts as full ammo confidence for pacing purposes - same
@@ -2810,6 +2829,7 @@ impl Brain<'_> {
         if !generic_fire(self.me.active_weapon()) {
             return;
         }
+        self.cap_fire_timer();
 
         if self.ai.aim_settle >= tuning().enemy_aim_settle && self.ai.fire_timer <= 0.0 {
             let blocked = self.friendly_blocks_shot(fire_dir, range);
@@ -4211,6 +4231,7 @@ fn act_breach(b: &mut Brain) -> Status {
     b.ai.commit(breach.dir);
     let burning = b.walls_ahead[breach.dir.index()].is_some_and(|w| w.burning);
     let reach = b.me.hull_size() * 0.5 + tuning().enemy_breach_reach_px;
+    b.cap_fire_timer();
     if !burning && b.ai.fire_timer <= 0.0 && !b.friendly_blocks_shot(breach.dir, reach) {
         b.ai.fire_timer = tuning().enemy_breach_fire_interval;
         b.intent.fire = true;
