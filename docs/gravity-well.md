@@ -2004,10 +2004,13 @@ record of the build.
   it pulls (none while it forms).
 - **A replica slides a drawn-off crate** between snapshots (the
   interpolator blends `CrateState::dx`/`dy` by cell).
-- **The probe's `/after-pull` tag**: an `ANOMALY` line within
-  `AFTER_PULL_FRAMES` (three seconds) of a pull on its tank names it
-  `<tank>/after-pull`, which is how §11 tells what a pull or a collapse
-  leaves behind from the AI's own.
+- **The probe's `/pull` tag**: an `ANOMALY` line in a pull (a braced
+  tank's) or within `AFTER_PULL_FRAMES` (three seconds) of one names its
+  tank `<tank>/pull`, which is how §11 tells what a pull or a collapse
+  leaves behind from the AI's own. A braced tank's `clustering` and
+  `pile-up` windows do not count while it is pulled: the pull holds it
+  among the hulls it drew (a heavy is braced, not dragged, so it is not out
+  of its hands).
 - **The incoming carry** steps every other shot through the wells on the
   client's present, a tick at a time, and keeps one swallowed on its way
   off the picture as a shot into a portal is.

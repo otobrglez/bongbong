@@ -907,8 +907,9 @@ struct TankTrack {
     // How many times the round rolled this tank in again.
     rerolls: u32,
     // The last frame a gravity well's pull held it (`TankSnapshot::pulled`):
-    // an anomaly within `AFTER_PULL_FRAMES` of it is tagged on its tank
-    // (`shown_label`), so what a pull or a collapse leaves is told apart.
+    // an anomaly then - a braced tank's - or within `AFTER_PULL_FRAMES` of
+    // it is tagged on its tank (`shown_label`), so what a pull or a
+    // collapse leaves is told apart from the AI's own.
     last_pulled: Option<u32>,
 }
 
@@ -917,11 +918,11 @@ struct TankTrack {
 const AFTER_PULL_FRAMES: u32 = 180;
 
 impl TankTrack {
-    /// The tank's label for an `ANOMALY` line: `/after-pull` added within
-    /// `AFTER_PULL_FRAMES` of a well's pull on it.
+    /// The tank's label for an `ANOMALY` line: `/pull` added in a well's
+    /// pull or within `AFTER_PULL_FRAMES` of one.
     fn shown_label(&self, frame: u32) -> String {
         match self.last_pulled {
-            Some(f) if frame.saturating_sub(f) <= AFTER_PULL_FRAMES => format!("{}/after-pull", self.label),
+            Some(f) if frame.saturating_sub(f) <= AFTER_PULL_FRAMES => format!("{}/pull", self.label),
             _ => self.label.clone(),
         }
     }
@@ -1701,7 +1702,10 @@ fn check_anomalies(
             .iter()
             .filter(|&&(slot, other)| slot != tank.slot && other.distance_to(pos) <= PILEUP_RADIUS)
             .count();
-        if tank.touching_tank && piled + 1 >= PILEUP_MIN_GROUP {
+        // A tank a gravity well pulls - one bracing in it, since a dragged
+        // one is out of its hands - stands where the pull holds it among
+        // the others it drew: neither window counts it.
+        if tank.touching_tank && piled + 1 >= PILEUP_MIN_GROUP && !tank.pulled {
             track.pileup_frames += 1;
         } else {
             track.pileup_frames = 0;
@@ -1727,7 +1731,7 @@ fn check_anomalies(
             .iter()
             .filter(|&&(slot, other)| slot != tank.slot && other.distance_to(pos) <= CLUSTER_RADIUS)
             .count();
-        if nearby + 1 >= CLUSTER_MIN_GROUP {
+        if nearby + 1 >= CLUSTER_MIN_GROUP && !tank.pulled {
             track.cluster_frames += 1;
         } else {
             track.cluster_frames = 0;
