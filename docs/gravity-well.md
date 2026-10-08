@@ -1771,6 +1771,30 @@ Fields (the seven of `just probe-fields`, 3600 frames):
   in the yardstick.
 - **`offbox-fire` is 0** in every run; every enemy trigger pull and hit
   on a seat came from inside that seat's sight box.
+- **After the review.** The tables above are the build's. The review's
+  fixes (the last orb anchored by the rule, a braced heavy's gun, the
+  launch that spends the last well setting the generic pace in place of
+  `Brain::cap_fire_timer`, orbs in flight counted for one well a seat, the
+  probe judging an escape's heading inside a pull and a two-seat hold on
+  the fought seat) leave the defaults - and the armed sweeps of the hammer,
+  the EMP, the rail, the swarm and the rod, which `cap_fire_timer` had
+  moved (80 of 80 logs now the rod's final head's line for line) - as they
+  were, and move the well's own runs a little, every count (fixtures /
+  fields): armed - stall 3 / 4, border-stuck 15 / 13, jitter 46 / 191, spin
+  21 / 79, churn 86 / 170, clustering 54 / 137, wall-grind 6 / 2,
+  low-progress 2 / 9, never-arrived 4 / 4, tank-grind 3 / 16, pile-up 32 /
+  104, `/pull` 2 / 11; armed in `destroy` - the build's to within a count
+  or two in every kind; armed, two seats - never-arrived 11 / 6 (7 / 6
+  before; the new lines are a well carrier chasing back and forth between
+  two AFK seats in a maze column for the whole round, the field AI's
+  follow-up below, on rounds whose course the fixes changed), spin 12 /
+  36 (10 / 30), the rest within a count or two; with the crate, the
+  build's to the count. The `/pull` lines are jitter, clustering, three
+  spins - a tank escaping across a pull, then the attack tier's route
+  round the well closing the loop (`choke` 0x3ea, `maze` 0x3eb,
+  `frog-block` 0x3f1 with two seats) -, a border-stuck, a pile-up and a
+  tank-grind (`harbor-lights` 0x3ee: hulls the pull drew together still
+  pressed together after it); no stall, low-progress or never-arrived.
 
 ## 12. Interactions, decisions, what is left out
 
