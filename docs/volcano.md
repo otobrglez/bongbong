@@ -136,7 +136,9 @@ whose night will fall, each seat has `lamps_per_seat` (3) lanterns: Enter
 screen. A lantern stands where it was set for the rest of the round, lights
 the ground round it at night and shows whoever is near it to the enemy; a
 lava bomb landing on it breaks it. The HUD's vitals carry the count and,
-while a heat shield is up, its gauge.
+while a heat shield is up, its gauge, in a row under the vitals that is
+there only while it holds one of them: a day round with lava grows it when
+a heat shield goes up and folds it away when the shield runs out.
 
 ## The heat shield
 

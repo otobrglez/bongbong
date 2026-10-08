@@ -19,9 +19,11 @@
 //! shells -, and the speed and shield gauges, on a row as tall as the
 //! right cluster's row (`Corners::row_h`) and a plate as tall as the
 //! right cluster's, so the two corners read along one line and stand one
-//! height on a phone as on a monitor; the right cluster is always that one
-//! row, and a window too narrow for it draws both corners smaller
-//! (`Corners::scale`) rather than wrapping it. A two-player couch round
+//! height on a phone as on a monitor. A block grows a second row down from
+//! there only while that row holds something - the lanterns of a dark
+//! round, a heat shield's gauge (`Corners::lamp_row`); the right cluster is
+//! always that one row, and a window too narrow for it draws both corners
+//! smaller (`Corners::scale`) rather than wrapping it. A two-player couch round
 //! (docs/two-players.md) gives player 2 a block of its own beside player
 //! 1's, or under it on a narrow window, each block's health gauge in its
 //! player's team colour.
@@ -345,14 +347,13 @@ impl HudModel {
     /// round still on screen behind it.
     pub fn gather(game: &Game, local_seat: Option<u8>) -> Self {
         let seats = game.players.count();
-        let local_index = local_seat.map_or(0, |s| s as usize).min(seats.saturating_sub(1));
         let layout = HudLayout::choose(seats, local_seat);
+        let (local_index, second_index) = block_seats(game, local_seat);
         let local = game
             .seat(local_index)
             .map(|e| PlayerHud::gather(game, e))
             .unwrap_or_else(PlayerHud::empty);
-        let second = (layout == HudLayout::Two)
-            .then(|| game.seat(1).map(|e| PlayerHud::gather(game, e)).unwrap_or_else(PlayerHud::empty));
+        let second = second_index.map(|i| game.seat(i).map(|e| PlayerHud::gather(game, e)).unwrap_or_else(PlayerHud::empty));
         let others = match layout {
             HudLayout::Compact => other_seats(seats, local_index).into_iter().map(|i| SeatHud::gather(game, i)).collect(),
             _ => Vec::new(),
@@ -389,6 +390,25 @@ impl HudModel {
         let wave = wave.map(|w| (w.index, w.total));
         HudModel { title, wave, enemies_alive, enemies_pending, layout, local, second, others, frog }
     }
+}
+
+/// The seats the left cluster's blocks show (`HudModel::gather`): the
+/// local one, and seat 1 beside it in a couch pair's layout.
+fn block_seats(game: &Game, local_seat: Option<u8>) -> (usize, Option<usize>) {
+    let seats = game.players.count();
+    let local = local_seat.map_or(0, |s| s as usize).min(seats.saturating_sub(1));
+    let second = (HudLayout::choose(seats, local_seat) == HudLayout::Two).then_some(1);
+    (local, second)
+}
+
+/// Whether a heat shield is up on a seat the blocks show, whose gauge
+/// gives them their lamp row (`CornerShape::heat_shield`).
+pub fn heat_shield_up(game: &Game, local_seat: Option<u8>) -> bool {
+    let (local, second) = block_seats(game, local_seat);
+    std::iter::once(local)
+        .chain(second)
+        .filter_map(|i| game.seat(i))
+        .any(|e| with_tank(&game.world, e, |tank| !tank.is_wreck() && tank.heat_shield_fraction() > 0.0))
 }
 
 /// Colour for a HUD number (shells or HP) given its current value and max:
@@ -781,9 +801,20 @@ pub struct CornerShape {
     /// The minimap's size in points (`minimap::MinimapRules::size_pt`),
     /// where the frame draws one (`PlayChrome::minimap`).
     pub minimap: Option<(f32, f32)>,
-    /// A third row under each block: the lanterns and the heat shield
-    /// (`PlayChrome::lamp_row`).
-    pub lamp_row: bool,
+    /// The round gives lanterns (`PlayChrome::lanterns`): every block
+    /// has its lamp row, the local one's count a button.
+    pub lanterns: bool,
+    /// A heat shield is up on a seat the blocks show
+    /// (`PlayChrome::heat_shield`): every block has its lamp row, for the
+    /// gauge.
+    pub heat_shield: bool,
+}
+
+impl CornerShape {
+    /// Whether the blocks have a lamp row: only while it holds something.
+    pub fn lamp_row(&self) -> bool {
+        self.lanterns || self.heat_shield
+    }
 }
 
 impl CornerShape {
@@ -805,7 +836,8 @@ impl CornerShape {
                 // The build stamp always; an online round's status over it.
                 lines: 1 + usize::from(chrome.status.is_some()) + usize::from(chrome.prompt.is_some()),
                 minimap: chrome.minimap,
-                lamp_row: chrome.lamp_row,
+                lanterns: chrome.lanterns,
+                heat_shield: chrome.heat_shield,
             }
         })
     }
@@ -852,9 +884,10 @@ impl CornerButton {
 pub struct Corners {
     /// The vitals blocks: the local seat's first, a couch's player 2's
     /// after it - beside it where the area has the width, else under it.
-    /// Each is as tall as the right cluster's row, so every plate along
-    /// the top (`block_plate`, `right`) is one height; its row along its
-    /// top, its lamp row under that (`lamp_row`).
+    /// Each is as tall as the right cluster's row, so the plates along the
+    /// top (`block_plate`, `right`) are one height, and a row gap and a row
+    /// taller while their lamp row (`lamp_row`) holds something, which
+    /// grows the left cluster downward and leaves the right one as it is.
     pub blocks: Vec<Rectangle>,
     /// The box the lines under the left cluster are kept to.
     pub lines: Rectangle,
@@ -866,7 +899,8 @@ pub struct Corners {
     pub row_h: f32,
     /// Every block has a lamp row (`CornerShape::lamp_row`).
     pub lamp_rows: bool,
-    /// The right cluster's plate: one row, whatever the window.
+    /// The right cluster's plate: one row, whatever the window and
+    /// whatever the blocks hold.
     pub right: Rectangle,
     /// Its round's numbers (`INFO_W` wide at full size).
     pub info: Rectangle,
@@ -1011,8 +1045,9 @@ fn union(a: Rectangle, b: Rectangle) -> Rectangle {
 /// on a plate of its own under the right cluster, flush with its right
 /// edge, shrunk to the room left above the area's bottom and left out where
 /// that is under `MINIMAP_MIN_PT` or would reach the left cluster. Every
-/// plate along the top - each block's and the right cluster's - is one
-/// height, a block's rows'. Laid out at full size - every button
+/// plate along the top - each block's and the right cluster's - starts at
+/// one top and is one row tall, a block's growing downward by its lamp row
+/// only while that row holds something. Laid out at full size - every button
 /// `button_height` tall, 44 pt on a touch screen - and where the row is
 /// wider than the area, all of it drawn smaller by the one factor that fits
 /// it (`Corners::scale`), so the corners never wrap and never meet.
@@ -1061,11 +1096,11 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     let info = Rectangle::new(info_end - INFO_W, row_y, INFO_W, button_h);
 
     // The vitals' row is the right cluster's row's height, so the two
-    // corners share one line, and a round with lanterns or lava gives
-    // every block a lamp row a row gap under it; the right cluster's plate
-    // is as tall as a block's.
-    let block_h = button_h + if shape.lamp_row { ROW_GAP + button_h } else { 0.0 };
-    let right = Rectangle::new(area.x + area.w - right_w, area.y, right_w, block_h + 2.0 * PLATE_PAD);
+    // corners share one line; a lamp row with something in it - the
+    // lanterns, a heat shield's gauge - grows every block downward by a
+    // row gap and a row, while the right cluster keeps its one row.
+    let block_h = button_h + if shape.lamp_row() { ROW_GAP + button_h } else { 0.0 };
+    let right = Rectangle::new(area.x + area.w - right_w, area.y, right_w, button_h + 2.0 * PLATE_PAD);
     let first = Rectangle::new(area.x + PLATE_PAD, area.y + PLATE_PAD, VITALS_W, block_h);
     let mut blocks = vec![first];
     if couch_pair {
@@ -1108,7 +1143,7 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
         blocks,
         lines,
         row_h: button_h,
-        lamp_rows: shape.lamp_row,
+        lamp_rows: shape.lamp_row(),
         right,
         info,
         level_button: shape.level_button.then(|| Rectangle::new(info.x, info.y, LEVEL_BUTTON_W, button_h)),
@@ -1120,7 +1155,7 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
         pause: shape.pause.then_some(pause),
         chips,
         minimap,
-        lamp: shape.lamp_row.then(|| Rectangle::new(first.x, first.y + button_h + ROW_GAP, LAMP_BUTTON_W, button_h)),
+        lamp: shape.lanterns.then(|| Rectangle::new(first.x, first.y + button_h + ROW_GAP, LAMP_BUTTON_W, button_h)),
         scale: 1.0,
         origin,
     };
@@ -1462,9 +1497,12 @@ pub struct PlayChrome {
     /// one (not a phone's, `minimap_show`) whose view shows less than the
     /// whole field (`Session::minimap_on`).
     pub minimap: Option<(f32, f32)>,
-    /// The lamp row under each block: a round that gives lanterns or has
-    /// lava to cross (docs/volcano.md).
-    pub lamp_row: bool,
+    /// The round gives lanterns (`Game::lamps_in_play`, docs/volcano.md):
+    /// a lamp row under each block with the count.
+    pub lanterns: bool,
+    /// A heat shield is up on a seat the blocks show (`heat_shield_up`):
+    /// a lamp row under each block with its gauge, for as long as it lasts.
+    pub heat_shield: bool,
     /// How dark the fade through black between rounds is, 0 to 1
     /// (`Session::curtain`), drawn over everything else.
     pub curtain: f32,
@@ -1803,6 +1841,42 @@ mod hud_tests {
         assert_eq!(couch.others.iter().map(|s| s.seat).collect::<Vec<_>>(), vec![1, 2, 3]);
     }
 
+    /// The lamp row is there only while it holds something: in a day round,
+    /// which gives no lanterns to set down, it comes with a heat shield on
+    /// a seat the blocks show and goes with it, never for a wreck's shield
+    /// or for one on a seat that is only a chip.
+    #[test]
+    fn the_lamp_row_comes_with_a_heat_shield() {
+        let shield = |game: &Game, seat: usize, seconds: f32| {
+            let entity = game.seat(seat).expect("the seat has a tank");
+            game.world.get::<&mut Tank>(entity).expect("a tank").heat_shield_timer = seconds;
+        };
+        let game = round(1);
+        assert!(!game.lamps_in_play(), "a day round gives no lanterns");
+        assert!(!heat_shield_up(&game, None), "nothing to show");
+        shield(&game, 0, 5.0);
+        assert!(heat_shield_up(&game, None), "the gauge needs the row");
+        let chrome = PlayChrome { hud: true, heat_shield: heat_shield_up(&game, None), ..PlayChrome::default() };
+        let shape = CornerShape::of(&chrome, 1).expect("play draws the corners");
+        let c = corners(&UiFrame::plain((1600.0, 900.0)), &shape);
+        assert!(c.lamp_row(c.blocks[0]).is_some(), "the block grows its row");
+        assert_eq!(c.lamp, None, "no lantern button with no lanterns");
+        shield(&game, 0, 0.0);
+        assert!(!heat_shield_up(&game, None), "folded up again once it runs out");
+        // A couch pair's second block counts; a wreck's shield does not.
+        let couch = round(2);
+        shield(&couch, 1, 5.0);
+        assert!(heat_shield_up(&couch, None));
+        let entity = couch.seat(1).expect("seat 1");
+        couch.world.get::<&mut Tank>(entity).expect("a tank").damage = MAX_DAMAGE;
+        assert!(!heat_shield_up(&couch, None), "a wreck's block shows nothing");
+        // A room shows its own seat's block; another seat's shield is a chip's.
+        let room = round(3);
+        shield(&room, 2, 5.0);
+        assert!(!heat_shield_up(&room, Some(0)));
+        assert!(heat_shield_up(&room, Some(2)));
+    }
+
     /// A seat dying takes nothing away: the same chips in the same order,
     /// the dead one empty and marked. Numbers moving do not shift the
     /// list either.
@@ -1883,12 +1957,15 @@ mod hud_tests {
             pause: true,
             lines: 1,
             minimap: None,
-            lamp_row: false,
+            lanterns: false,
+            heat_shield: false,
         };
         vec![
             ("one", play),
-            ("lamps", CornerShape { lamp_row: true, ..play }),
-            ("couch pair with lamps", CornerShape { layout: HudLayout::Two, lamp_row: true, ..play }),
+            ("lamps", CornerShape { lanterns: true, ..play }),
+            ("heat shield", CornerShape { heat_shield: true, ..play }),
+            ("couch pair with lamps", CornerShape { layout: HudLayout::Two, lanterns: true, ..play }),
+            ("couch pair with a heat shield", CornerShape { layout: HudLayout::Two, heat_shield: true, ..play }),
             ("free play", CornerShape { level_button: false, ..play }),
             ("phone", CornerShape { players: false, restart: true, ..play }),
             ("couch pair", CornerShape { layout: HudLayout::Two, ..play }),
@@ -2110,11 +2187,12 @@ mod hud_tests {
 
     /// The two corners read along one line on every screen and in every
     /// shape: every plate along the top - each block's and the right
-    /// cluster's - starts at one top and is one height, the first rows are
-    /// one height - a finger's on a touch screen, where the level button
-    /// grows to one, at the corners' scale - and centred on one line, and
-    /// the right cluster is that one row whole: its numbers, a room's chips
-    /// and every button.
+    /// cluster's - starts at one top and is one row tall, a block's grown
+    /// downward by a row gap and a row only where its lamp row holds
+    /// something, the first rows are one height - a finger's on a touch
+    /// screen, where the level button grows to one, at the corners' scale -
+    /// and centred on one line, and the right cluster is that one row
+    /// whole: its numbers, a room's chips and every button.
     #[test]
     fn the_two_corners_read_along_one_line() {
         let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
@@ -2126,9 +2204,11 @@ mod hud_tests {
                 assert!(near(c.row_h, button_height(ui.touch) * c.scale), "{what}");
                 let first = c.blocks[0];
                 assert!(near(first.y, c.info.y), "{what}: the first rows start apart");
+                assert!(near(c.right.height, c.row_h + 2.0 * PLATE_PAD * c.scale), "{what}: the right cluster is one row tall");
+                let grown = if shape.lamp_row() { c.row_h + ROW_GAP * c.scale } else { 0.0 };
                 for block in &c.blocks {
                     let plate = c.block_plate(*block);
-                    assert!(near(plate.height, c.right.height), "{what}: a block's plate and the right cluster's differ in height");
+                    assert!(near(plate.height, c.right.height + grown), "{what}: a block's plate is {}, not the right cluster's {} and its lamp row", plate.height, c.right.height);
                     if block.y == first.y {
                         assert!(near(plate.y, c.right.y), "{what}: the plates' tops differ");
                     }
@@ -2141,13 +2221,13 @@ mod hud_tests {
                     assert!(near(centre(chips), centre(c.info)), "{what}: the chips are off the row");
                 }
                 assert!(near(first.y + c.row_h / 2.0, centre(c.info)), "{what}: the rows' centre lines differ");
-                assert_eq!(c.lamp.is_some(), shape.lamp_row, "{what}");
-                if let Some(lamp) = c.lamp {
-                    let row = c.lamp_row(first).expect("a lamp row");
+                assert_eq!(c.lamp.is_some(), shape.lanterns, "{what}: the lantern count is a button only where there are lanterns");
+                assert_eq!(c.lamp_row(first).is_some(), shape.lamp_row(), "{what}");
+                if let Some(row) = c.lamp_row(first) {
                     assert!(within(row, first), "{what}: the lamp row leaves its block");
-                    assert!(near(lamp.y, row.y) && near(lamp.height, row.height), "{what}: the lamp button is not on its row");
-                } else {
-                    assert_eq!(c.lamp_row(first), None, "{what}");
+                    if let Some(lamp) = c.lamp {
+                        assert!(near(lamp.y, row.y) && near(lamp.height, row.height), "{what}: the lamp button is not on its row");
+                    }
                 }
             }
         }

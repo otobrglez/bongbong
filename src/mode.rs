@@ -1227,7 +1227,8 @@ impl Session {
                 // end screen counts down to the lobby it came from.
                 countdown_label: Some(crate::text::keys::ROUND_BACK_TO_LOBBY),
                 minimap: self.minimap_slot(),
-                lamp_row: self.shown().lamps_in_play() || !self.shown().lava().is_empty(),
+                lanterns: self.shown().lamps_in_play(),
+                heat_shield: crate::hud::heat_shield_up(self.shown(), self.online.as_ref().and_then(AnyRound::seat)),
                 ..PlayChrome::default()
             },
             Driver::Lobby => {
@@ -1266,7 +1267,8 @@ impl Session {
                 level_button: self.level_button(),
                 levels: self.level_select.as_ref().zip(self.campaign.as_ref()).map(|(select, campaign)| select.view(campaign, self.level())),
                 minimap: (self.driver == Driver::Play).then(|| self.minimap_slot()).flatten(),
-                lamp_row: self.game.lamps_in_play() || !self.game.lava().is_empty(),
+                lanterns: self.game.lamps_in_play(),
+                heat_shield: crate::hud::heat_shield_up(&self.game, None),
             },
         }
     }
