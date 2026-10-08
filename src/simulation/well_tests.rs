@@ -951,11 +951,11 @@ fn the_pull_presses_a_hull_against_a_wall_and_the_fields_edge_never_into_it() {
 
 /// The pose validator allows a client-owned hull the pull a well puts on it
 /// and no more (docs/gravity-well.md "Online"): a pose carried toward the
-/// core past the chassis's own reach is taken; one past the solver's speed
-/// cap - which no pull carries a hull beyond - is refused, though counting
-/// the whole side pull would have taken it; a hull whose grip holds
-/// broadside is allowed no slide; and away from every well the chassis's
-/// own reach holds.
+/// core past the chassis's own reach is taken; one as far the other way,
+/// against the pull, is refused; one past the solver's speed cap - which no
+/// pull carries a hull beyond - is refused, though counting the whole side
+/// pull in any direction would have taken it; and away from every well the
+/// chassis's own reach holds.
 #[test]
 fn an_owned_hull_is_allowed_the_pull_and_no_more() {
     let t = tuning();
@@ -977,13 +977,14 @@ fn an_owned_hull_is_allowed_the_pull_and_no_more() {
     // Toward the core, past its own reach and within the current's.
     let toward = Vec2::new(-(own + 6.0), 0.0);
     assert!(pose(&mut game, start, toward).is_ok(), "the pull carries it past its own reach");
-    // Past the speed cap, in any direction - where the whole side pull,
-    // counted, allowed it.
+    assert!(pose(&mut game, start, toward * -1.0).is_err(), "against the pull, its own reach holds");
+    assert!(pose(&mut game, start, Vec2::new(0.0, own - 1.0)).is_ok(), "across, its own reach still");
+    // Past the speed cap toward the core - where the whole side pull,
+    // counted in any direction, allowed it.
     let past_cap = cap * DT * n + POSE_REACH_SLACK_PX + 4.0;
     let whole = (speed + pull.current.length() + pull.side.length() * WELL_SIDE_REACH_SECONDS) * DT * n + POSE_REACH_SLACK_PX;
     assert!(whole > past_cap, "the whole side pull would have taken {past_cap}: {whole}");
     assert!(pose(&mut game, start, Vec2::new(-past_cap, 0.0)).is_err(), "past the speed cap toward the core");
-    assert!(pose(&mut game, start, Vec2::new(past_cap, 0.0)).is_err(), "past the speed cap away from it");
     // Out of every well's reach, the chassis's own.
     let far = MID + Vec2::new(t.well_radius_px + 80.0, 0.0);
     assert!(pose(&mut game, far, toward).is_err(), "no pull, no allowance");

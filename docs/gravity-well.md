@@ -499,11 +499,17 @@ path); `Tank::special`/`active_weapon`; `HitCause` on `Event::Hit`;
   before the grip's clamp (so the grip cancels it up to `max_off`); the
   skid branch takes the whole current as its frame. Every hull's one
   impulse a tick is still the drive's one impulse.
-- **`accept_seat_pose`'s drift** gains the well's: the current's speed at
-  the room's copy of the hull plus what its side pull builds over
+- **`accept_seat_pose`'s drift** gains the well's, read at the room's copy
+  of the hull on the tick the pose is for: the current's speed plus the
+  slide its side pull builds past the tracks' grip over
   `WELL_SIDE_REACH_SECONDS` (0.5, server policy beside
-  `POSE_REACH_SLACK_PX`), so an owned hull pulled faster than its top speed
-  is placed where its client puts it.
+  `POSE_REACH_SLACK_PX`), never more than takes the hull past the solver's
+  speed cap (`Physics::max_speed`, 400 px/s). Both act along a track axis,
+  so what they carry the hull lies in the disc whose diameter runs from it
+  toward the core that far: the pose may stand anywhere in that disc grown
+  by the hull's own reach. An owned hull pulled faster than its top speed
+  is placed where its client puts it; one claiming to drive out against
+  the pull faster than its own speed is refused.
 - **`Projectile`** gains `bend(&mut self, accel: Vec2, dt: f32)` - turn
   the velocity by `accel * dt`, set it back to its speed, set `rotation`
   to the new heading - with one default body for every kind, and

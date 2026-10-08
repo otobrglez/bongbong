@@ -2690,28 +2690,33 @@ impl Game {
             // past its top speed, and the rules put it there.
             let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time);
             let flow = footing.flow;
-            let mut drift = (flow.x * flow.x + flow.y * flow.y).sqrt();
+            let drift = (flow.x * flow.x + flow.y * flow.y).sqrt();
             // A gravity well's pull too (docs/gravity-well.md "Online"), at
             // the room's copy of the hull on the tick the pose is for: its
             // current along the tracks, and the slide its side pull builds
             // past the tracks' grip over `WELL_SIDE_REACH_SECONDS` - a hull
             // whose grip holds it slides not at all - never past the
-            // solver's speed cap, which no pull carries a hull beyond.
+            // solver's speed cap, which no pull carries a hull beyond. Both
+            // act along a track axis, so what they carry the hull lies in the
+            // disc whose diameter runs from it toward the core that far: the
+            // reach is that disc grown by the hull's own.
+            let mut well = Vec2::zero();
             if self.zones.iter().any(|z| z.well().is_some()) {
                 let t = tuning();
                 let field = crate::well::WellField::at(&self.zones, self.time + PHYSICS_FIXED_DT);
                 let pull = field.hull_pull(tank.position, tank.mass_factor(), &t);
-                if !pull.is_zero() {
+                let toward = pull.current.length();
+                if toward > 0.0 {
                     let grip = t.tank_turn_grip_force * footing.grip / tank.mass();
                     let slide = (pull.side.length() - grip).max(0.0) * WELL_SIDE_REACH_SECONDS;
                     let room = (self.physics.max_speed() - tank.effective_speed() - drift).max(0.0);
-                    drift += (pull.current.length() + slide).min(room);
+                    well = pull.current * ((toward + slide).min(room) * PHYSICS_FIXED_DT * ticks * 0.5 / toward);
                 }
             }
-            let reach = (tank.effective_speed() + drift) * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX;
+            let reach = (tank.effective_speed() + drift) * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX + well.length();
             // A knock carries it past that too, by no more than the knock
             // could slide it in all (`SeatKnock`).
-            (tank.position, reach, self.seat_knock[seat].extra(self.frame, ticks))
+            (tank.position + well, reach, self.seat_knock[seat].extra(self.frame, ticks))
         };
         let (dx, dy) = (pose.position.x - from.x, pose.position.y - from.y);
         let step = (dx * dx + dy * dy).sqrt();
