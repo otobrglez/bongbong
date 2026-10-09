@@ -1,7 +1,8 @@
 # Bridges: a deck across water and lava (PRD)
 
-Status: proposal, BB-62. Nothing here is built yet; every section says what
-the game does today, what a bridge should do, and where the change lands.
+Status: proposal, BB-62, with Oto's decisions in section 13. Nothing here
+is built yet; every section says what the game does today, what a bridge
+should do, and where the change lands.
 
 A bridge is a straight deck a tank drives across a river, a lake or a
 lava flow, **wide enough for two tanks to pass each other on it** - any two
@@ -88,8 +89,7 @@ hull in every heading) of a blocking box - the deep water, or the rail
 default, the linter refuses a deck under **3** (`bridge-narrow`, an error -
 it breaks the promise this feature makes), and a 3-cell deck is a warning
 (`bridge-tight`: any two hulls *fit*, but the planner has no two rows a
-pair of heavies can hold). Open question 1 asks whether 3 is worth
-allowing at all.
+pair of heavies can hold). Decided so (section 13, decision 1).
 
 ## 4. Rules
 
@@ -218,7 +218,7 @@ hull feels.
   and a 4-cell bridge and a ford between, enemies on both banks), run in
   `just probe-fixtures` with ceilings for `pile-up`, `clustering`,
   `tank-grind`, `stall` and `never-arrived`. If a 3-cell deck jams beyond a
-  ceiling worth keeping, that is the answer to open question 1.
+  ceiling worth keeping, the minimum becomes 4 (decision 1).
 - Engage slots, waypoints and pickups searched by A* cross decks as any
   open cell. The sight box, the alerts and the snipe do not change.
 - Later (not phase 1): an AI that holds a bridgehead (a guard's post at the
@@ -252,21 +252,25 @@ the same protocol as one that can, since the client and the room ship
 together on the version tag; `PROTOCOL_VERSION` is bumped only by phase 2.
 `hostable()` and the lobby's stepper are untouched.
 
-## 9. Phase 2: wooden bridges that go down
+## 9. Phase 2: bridges that go down
 
 The wargame's oldest objective. Proposed, for its own issue once phase 1
 has been played:
 
-- A wooden deck is cut across into **sections**, one row of cells across
-  the span each, every section with `bridge_wood_health`. A deck is not an
+- **Every bridge can be destroyed**, stone and wood alike (decision 3).
+  A deck is cut across into **sections**, one row of cells across the
+  span each, every section with its material's health -
+  `bridge_wood_health`, or `bridge_stone_health` (several times more). A deck is not an
   `Obstacle` (the nav grid and the linter take every obstacle as solid), so
   sections live in `Game::bridges`, keyed by cell.
 - **What breaks one:** blasts (drums, missiles, grenades, cook-offs, a
-  wreck's blast, the rod) by falloff, and fire - a section burns like
-  timber (`flammable`, the flamethrower's heat, a burning oil trail across
-  it), charring through `tick_burns`'s rule. Shells and bullets fly over a
-  deck as over water and do not hurt it. Stone takes the rod alone, or
-  nothing (open question 3).
+  wreck's blast) by falloff, on either material; a rod from god breaks
+  any section its circle reaches, at once. Wood also burns - a section
+  burns like timber (`flammable`, the flamethrower's heat, a burning oil
+  trail across it), charring through `tick_burns`'s rule; stone does not
+  burn, so it takes explosives, and a lava bridge (always stone) goes down
+  into the lava. Shells and bullets fly over a deck as over water and do
+  not hurt it.
 - **The collapse:** a broken section's cells become their `over` liquid
   (`WaterLayout::open_deck`, the `fill` precedent): deep cells get their
   colliders, the nav layer is rebuilt, the rails of that section go. A hull
@@ -287,8 +291,8 @@ has been played:
 
 A `bridge` tuning group: `bridge_rail_px` (4, Restart),
 `bridge_lava_heat_factor` (0.5), `builder_bridge_width` (4, in `builder`);
-phase 2 adds `bridge_wood_health`, `bridge_burn_seconds`,
-`bridge_blast_damage_factor`.
+phase 2 adds `bridge_wood_health`, `bridge_stone_health`,
+`bridge_burn_seconds`, `bridge_blast_damage_factor`.
 
 ## 11. Tests
 
@@ -320,17 +324,22 @@ phase 2 adds `bridge_wood_health`, `bridge_burn_seconds`,
    the natural first ones), as its own level change.
 6. Phase 2: wooden bridges and the collapse.
 
-## 13. Open questions
+## 13. Decisions
 
-1. **Allow 3-cell decks, or only 4?** 3 lets any two hulls pass, but the
-   planner's two rows hold only light hulls side by side; 4 is two lanes
-   for every chassis at the cost of a wider gap in the river. The probe fixture is meant to answer it.
-2. **Rails or none over deep water?** Proposed: always, for one rule.
-   Without them over deep water nothing changes for a hull, but the deck's
-   width would then depend on what is under it.
-3. **Is stone ever destructible** - to the rod from god only, or never?
-4. **Should a tank fall off a ruined deck into a ford** rather than only
+1. **3-cell decks are allowed, 4 is the default** (recommended, Oto left it
+   to the recommendation): the linter refuses under 3 and warns on 3
+   (`bridge-tight`), the BRIDGE tool lays 4. The probe fixture is the
+   check: if a 3-cell deck jams past a ceiling worth keeping, the minimum
+   becomes 4.
+2. **Rails on every bridge**, over deep water too, so a deck's width never
+   depends on what is under it.
+3. **Every bridge can be destroyed**, stone included (section 9): stone by
+   explosives and the rod, wood by those and fire.
+
+## 14. Open questions
+
+1. **Should a tank fall off a ruined deck into a ford** rather than only
    into deep water (a slow, burning wade out under lava)? Phase 2.
-5. **Bridges over dry ground** (a ravine, a dry riverbed) would need a
+2. **Bridges over dry ground** (a ravine, a dry riverbed) would need a
    ground under the deck that is impassable but not liquid - a new floor
    kind. Out of scope unless a map asks for it.
