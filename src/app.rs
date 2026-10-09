@@ -228,6 +228,25 @@ fn screen(rl: &RaylibHandle) -> Screen {
     }
 }
 
+/// The touch screen's points to the millimetre, which the builder measures
+/// a cell under a finger by: a full-size iPad's point is a fifth larger
+/// than a phone's - the model says so in the app, the page in a browser -,
+/// and everywhere else it is `indicators::POINTS_PER_MM`.
+fn touch_points_per_mm() -> f32 {
+    #[cfg(target_os = "ios")]
+    {
+        ios::points_per_mm()
+    }
+    #[cfg(target_os = "emscripten")]
+    {
+        if web::full_size_ipad() { crate::indicators::IPAD_POINTS_PER_MM } else { crate::indicators::POINTS_PER_MM }
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "emscripten")))]
+    {
+        crate::indicators::POINTS_PER_MM
+    }
+}
+
 /// Device pixels per unit of the window's coordinates: what the
 /// framebuffer holds across one point - 2 on a Retina desktop, 1 on the
 /// web canvas and on Android, whose window is in pixels already. A
@@ -431,6 +450,11 @@ const PAGE_MOTION: &std::ffi::CStr = c"(function(){try{return String(window.bbMo
 /// or nothing.
 #[cfg(target_os = "emscripten")]
 const PAGE_TOUCH: &std::ffi::CStr = c"(function(){try{return String(window.bbTouch||'')}catch(e){return ''}})()";
+
+/// Whether the page is on a full-size iPad, as it published it
+/// (`site/src/scripts/overlay.ts`): `1`, or nothing.
+#[cfg(target_os = "emscripten")]
+const PAGE_IPAD: &std::ffi::CStr = c"(function(){try{return String(window.bbIpad||'')}catch(e){return ''}})()";
 
 /// This browser's reconnect key, minted and kept by the page - one per
 /// tab, so two tabs in one browser are two seats rather than one seat
@@ -1258,6 +1282,10 @@ pub fn run(args: Args) {
     // (`screen`), read once like the motion switch.
     #[cfg(target_os = "emscripten")]
     web::set_touch_screen(page_string(PAGE_TOUCH).trim() == "1");
+    // And a full-size iPad's larger point, which the builder measures a
+    // cell under a finger by (`touch_points_per_mm`).
+    #[cfg(target_os = "emscripten")]
+    web::set_full_size_ipad(page_string(PAGE_IPAD).trim() == "1");
     eprintln!(
         "[motion] the platform asks for {}",
         match crate::motion::platform() {
@@ -2146,11 +2174,13 @@ pub fn run(args: Args) {
                     touches: touch_points.clone(),
                     dt,
                     // The screen the canvas is measured on: its zoom steps
-                    // in device pixels, its touch sizes in points.
+                    // in device pixels, its touch sizes in points, a cell
+                    // under a finger in millimetres.
                     screen: Some(CanvasScreen {
                         device_per_px: view.scale * framebuffer_ratio(rl),
                         points_per_px: view.scale / window_units_per_point(rl),
                         coarse: screen(rl).ppi < tuning().view_fine_ppi,
+                        points_per_mm: touch_points_per_mm(),
                     }),
                 };
                 // Fingers a dev server's `builder_touch {hold: true}` left

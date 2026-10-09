@@ -42,6 +42,8 @@ unsafe extern "C" {
     /// C function returning a `BOOL`, one byte on arm64. UIKit is linked
     /// with SDL's frameworks (`build.rs`'s `ios_link`).
     fn UIAccessibilityIsReduceMotionEnabled() -> u8;
+    /// libSystem's sysctl by name, for `hw.machine` (the model identifier).
+    fn sysctlbyname(name: *const c_char, oldp: *mut c_void, oldlenp: *mut usize, newp: *mut c_void, newlen: usize) -> c_int;
     /// glad's entries for glBindFramebuffer/glBindRenderbuffer inside
     /// libraylib.a: raylib was built with glad loading GL ES through
     /// SDL_GL_GetProcAddress, so every rlgl GL call goes through a
@@ -119,6 +121,40 @@ pub fn reduce_motion() -> bool {
     unsafe { UIAccessibilityIsReduceMotionEnabled() != 0 }
 }
 
+/// This device's points to the millimetre, from its model
+/// (`indicators::apple_points_per_mm`): what the builder measures a cell
+/// on the glass by, so its paint threshold is the same size under a
+/// finger on an iPad as on a phone. Read once.
+pub fn points_per_mm() -> f32 {
+    static PER_MM: OnceLock<f32> = OnceLock::new();
+    *PER_MM.get_or_init(|| {
+        let model = model_identifier();
+        let per_mm = crate::indicators::apple_points_per_mm(&model);
+        eprintln!("bongbong: iOS model {model:?}, {:.0} points to the inch", per_mm * 25.4);
+        per_mm
+    })
+}
+
+/// The model identifier (`iPad15,7`, `iPhone14,7`): `hw.machine` on a
+/// device, the simulated device's on the simulator (where `hw.machine` is
+/// the Mac's processor). Empty when neither answers.
+fn model_identifier() -> String {
+    if let Ok(model) = std::env::var("SIMULATOR_MODEL_IDENTIFIER") {
+        return model;
+    }
+    let mut buf = [0u8; 64];
+    let mut len = buf.len();
+    // SAFETY: the buffer and its length are ours; sysctl writes at most
+    // `len` bytes and puts the length written back.
+    let ok = unsafe { sysctlbyname(c"hw.machine".as_ptr(), buf.as_mut_ptr().cast(), &mut len, std::ptr::null_mut(), 0) } == 0;
+    if !ok {
+        return String::new();
+    }
+    let bytes = &buf[..len.min(buf.len())];
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).into_owned()
+}
+
 pub fn main() -> ! {
     // SAFETY: called once, on the main thread, before any other SDL use.
     let code = unsafe { SDL_RunApp(0, std::ptr::null_mut(), app_main, std::ptr::null_mut()) };
@@ -193,7 +229,8 @@ pub fn set_hints() {
 
 /// One log line with the window in points, the drawable in pixels and
 /// the safe area (the notch or Dynamic Island and the home indicator
-/// cut into it), so a console capture shows what the phone drew into.
+/// cut into it), then one with the model and its points to the inch, so a
+/// console capture shows what the phone drew into.
 pub fn log_screen_geometry(rl: &mut sola_raylib::RaylibHandle) {
     // SAFETY: main thread, after InitWindow; the out-parameters are ours.
     unsafe {
@@ -214,6 +251,8 @@ pub fn log_screen_geometry(rl: &mut sola_raylib::RaylibHandle) {
             safe.y
         );
     }
+    // And the model and its density beside it, the first time it is read.
+    points_per_mm();
 }
 
 /// The window's safe area as insets from each edge, in points - the
