@@ -394,8 +394,9 @@ pub fn windup(&self) -> Option<Windup>;
   released, its `Pending` for the apply pass - and a later weapon that
   takes a tank's thinking away (a stun) does so at the one spot in
   `enemy_phase` before the field map's own choice (`field::mind`), through
-  the same helper. A teleport cancels it (`portal_phase`);
-  `init` has none. A tell commits: a seat that steps out of the cone during
+  the same helper. A teleport cancels it (`portal_phase`), and so does
+  the round's end, with no blast (`end_round`, as it lapses every charge),
+  so nothing winds up on the end screen; `init` has none. A tell commits: a seat that steps out of the cone during
   it is the dodge the tell is for.
 - **A seat has no tell**: a seat's press fires on the press. A later
   weapon whose own mechanic is a charge (the Gauss rail) or a call-in (the

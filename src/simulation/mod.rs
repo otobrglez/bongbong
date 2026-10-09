@@ -5128,9 +5128,11 @@ impl Game {
 
     fn end_round(&mut self, f: &mut Frame, outcome: Outcome) {
         self.outcome = outcome;
-        // Nothing charges or fires on the end screen: every charge is lost.
+        // Nothing charges, winds up or fires on the end screen: every
+        // charge and every tell is lost.
         for tank in self.world.query_mut::<&mut Tank>() {
             tank.lapse_charge();
+            tank.tell = None;
         }
         self.ended_at = Some(self.time);
         self.restart_timer = self.end_beats().total();
@@ -7380,6 +7382,35 @@ mod mechanics_tests {
         game.debug_kill(slot).unwrap();
         step(&mut game, Input::default());
         assert_eq!(game.outcome(), Outcome::Won);
+    }
+
+    /// The round's end lapses an enemy's wind-up as it lapses every
+    /// charge: no blast, and nothing winds up on the end screen.
+    #[test]
+    fn the_rounds_end_lapses_a_tell_without_firing_it() {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(7);
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
+        game.init(W, H);
+        let slot = game.world.query::<&Tank>().with::<&Ai>().iter().map(|t| t.owner_slot()).next().unwrap();
+        let enemy = game.tank_entity_by_slot(slot).expect("the enemy");
+        with_tank_mut(&game.world, enemy, |t| {
+            t.sonic_ammo = 3;
+            t.tell = Some(crate::tank::Tell { weapon: ActiveWeapon::SonicHammer, left: 0.3, total: 0.55, facing: Dir::Left });
+        });
+        game.debug_kill(0).unwrap();
+        step(&mut game, Input::default());
+        assert_eq!(game.outcome(), Outcome::Lost);
+        let blasted = |game: &Game| game.events().iter().any(|e| matches!(e, Event::SonicBlast { slot: s, .. } if *s == slot));
+        assert!(!blasted(&game), "the end does not set the blast off");
+        assert!(with_tank(&game.world, enemy, |t| t.tell.is_none() && t.windup().is_none()), "the tell is gone with the round");
+        for _ in 0..60 {
+            step(&mut game, Input::default());
+            assert!(!blasted(&game));
+            assert!(with_tank(&game.world, enemy, |t| t.tell.is_none()));
+        }
     }
 
     /// A destroy round of `enemies` on the open map, two seats.
