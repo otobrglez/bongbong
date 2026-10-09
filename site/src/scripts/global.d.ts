@@ -34,6 +34,10 @@ declare global {
      *  else empty: read once at startup by `app.rs`, which frames a phone's
      *  or a tablet's browser as the app on that device. See `overlay.ts`. */
     bbTouch: string;
+    /** "1" on a full-size iPad - a point a 132nd of an inch, not a phone's
+     *  160th -, else empty: read once at startup by `app.rs`, whose builder
+     *  measures a cell under a finger in millimetres. See `overlay.ts`. */
+    bbIpad: string;
   }
 
   // Old WebKit's prefixed Fullscreen API (see fullscreen.ts).

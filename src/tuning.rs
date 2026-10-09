@@ -2890,8 +2890,9 @@ tunables! {
         /// The paint threshold: where a cell is drawn smaller than this on
         /// the glass, in millimetres, a finger cannot hit one cell, so a
         /// one-finger tap zooms in (`builder_tap_zoom_cell_mm`) and a
-        /// drag pans instead of painting. Touch only - a mouse paints at
-        /// any size. 0 always paints.
+        /// drag pans instead of painting - but paints where the view shows
+        /// the whole map, with nowhere to pan to. Touch only - a mouse
+        /// paints at any size. 0 always paints.
         builder_paint_min_cell_mm: f32 = 6.0 in 0.0 ..= 20.0;
         /// The cell a zooming tap brings the canvas to, in millimetres on
         /// the glass, about the tapped point.

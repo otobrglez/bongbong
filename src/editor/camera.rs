@@ -28,8 +28,8 @@ use crate::view::{Camera, View};
 use crate::{Layout, OBSTACLE_GRID_SIZE};
 
 /// The screen the canvas is drawn on, as the builder measures it: the
-/// zoom steps are counted in its device pixels and the touch sizes in its
-/// points.
+/// zoom steps are counted in its device pixels, the touch sizes in its
+/// points and a cell on the glass in its millimetres.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CanvasScreen {
     /// Device pixels per pixel of the bitmap: the view's scale times the
@@ -42,13 +42,18 @@ pub struct CanvasScreen {
     /// A screen under `view_fine_ppi`, where a device pixel is big enough
     /// to show a 2 px block's edge: the zoom keeps the blocks whole there.
     pub coarse: bool,
+    /// Its points to the millimetre as a touch screen: a full-size iPad's
+    /// (`indicators::IPAD_POINTS_PER_MM`, a point a fifth larger than a
+    /// phone's) in the app and in its browser, else
+    /// `indicators::POINTS_PER_MM`.
+    pub points_per_mm: f32,
 }
 
 impl Default for CanvasScreen {
     /// A bitmap pixel a device pixel and a point, on a coarse screen: the
     /// window the size of its bitmap on a desktop monitor.
     fn default() -> Self {
-        CanvasScreen { device_per_px: 1.0, points_per_px: 1.0, coarse: true }
+        CanvasScreen { device_per_px: 1.0, points_per_px: 1.0, coarse: true, points_per_mm: crate::indicators::POINTS_PER_MM }
     }
 }
 
@@ -159,15 +164,19 @@ impl Viewport {
         scale * positive(self.screen.device_per_px, 1.0)
     }
 
-    /// A cell's width on the glass at `scale`, millimetres: points over a
-    /// touch screen's points to the millimetre (`indicators::POINTS_PER_MM`).
+    /// A cell's width on the glass at `scale`, millimetres: points over the
+    /// screen's points to the millimetre (`CanvasScreen::points_per_mm`).
     pub fn cell_mm(&self, scale: f32) -> f32 {
-        OBSTACLE_GRID_SIZE * scale * positive(self.screen.points_per_px, 1.0) / crate::indicators::POINTS_PER_MM
+        OBSTACLE_GRID_SIZE * scale * positive(self.screen.points_per_px, 1.0) / self.points_per_mm()
     }
 
     /// The scale at which a cell is `mm` wide on the glass.
     pub fn scale_for_cell_mm(&self, mm: f32) -> f32 {
-        mm * crate::indicators::POINTS_PER_MM / (OBSTACLE_GRID_SIZE * positive(self.screen.points_per_px, 1.0))
+        mm * self.points_per_mm() / (OBSTACLE_GRID_SIZE * positive(self.screen.points_per_px, 1.0))
+    }
+
+    fn points_per_mm(&self) -> f32 {
+        positive(self.screen.points_per_mm, crate::indicators::POINTS_PER_MM)
     }
 
     /// `points` points as bitmap pixels.
@@ -207,6 +216,13 @@ impl BuilderCamera {
     pub fn scale(&self, vp: &Viewport) -> f32 {
         let fit = vp.fit_scale();
         self.zoom.map_or(fit, |z| z.scale.max(fit))
+    }
+
+    /// Whether the view shows the whole map - FIT, or a zoom that a window
+    /// grown under it has brought down to FIT's scale -, so a pan has
+    /// nowhere to go.
+    pub fn shows_whole(&self, vp: &Viewport) -> bool {
+        self.scale(vp) <= vp.fit_scale() * (1.0 + EPS)
     }
 
     /// The world point in the middle of the canvas area.
@@ -482,7 +498,7 @@ mod camera_tests {
     }
 
     fn vp(field: (f32, f32), area: (f32, f32), device: f32, coarse: bool) -> Viewport {
-        Viewport { field, area, screen: CanvasScreen { device_per_px: device, points_per_px: device, coarse } }
+        Viewport { field, area, screen: CanvasScreen { device_per_px: device, points_per_px: device, coarse, ..Default::default() } }
     }
 
     fn near(a: f32, b: f32) -> bool {

@@ -507,9 +507,12 @@ shape with the bar at the standard arena's size (`editor::camera`).
 
 - **A paint threshold on touch.** Below a cell of about 6 mm a finger
   cannot hit one cell; there a tap zooms in to a 9 mm cell at that point
-  instead of painting, and a drag pans. Geometry Dash's editor solves the
-  same problem with an explicit paint/pan switch; Super Mario Maker 2 has
-  a zoomed-out view mode for the overview.
+  instead of painting, and a drag pans - except at FIT, where the whole
+  map is in view and a pan would go nowhere, so the drag paints. The
+  millimetres are the device's: a full-size iPad's point is 1/132 inch,
+  a phone's about 1/160. Geometry Dash's editor solves the same problem
+  with an explicit paint/pan switch; Super Mario Maker 2 has a zoomed-out
+  view mode for the overview.
 - **Edge scroll while painting.** A stroke held near the canvas's edge, or
   past it, scrolls the camera and keeps painting, so a long wall does not
   need a pan in the middle.

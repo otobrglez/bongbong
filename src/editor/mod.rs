@@ -34,7 +34,11 @@
 //! paints once past the touch slop, two pan and pinch-zoom, a two-finger
 //! tap undoes and a three-finger tap redoes. Where a cell is under
 //! `builder_paint_min_cell_mm` on the glass - a finger cannot hit one - a
-//! tap zooms in instead of painting and a drag pans (the paint threshold).
+//! tap zooms in instead of painting and a drag pans (the paint threshold),
+//! except where the view shows the whole map, which a drag paints. A cell
+//! is measured on the glass at the screen's own points to the millimetre
+//! (`CanvasScreen::points_per_mm`): a full-size iPad's point is a fifth
+//! larger than a phone's.
 //!
 //! **The brush's shape** (docs/large-maps-patterns.md, "Area brushes:
 //! fill, scatter, auto-tile"; the cells are `brush.rs`), BRUSH's list:
@@ -3367,7 +3371,7 @@ impl MapEditor {
         } else {
             input.touches.iter().filter(|t| self.lands_on_canvas(t.pos, frame)).map(|t| t.id).collect()
         };
-        let paints = self.touch_paints(&vp, rules);
+        let paints = self.drag_paints(&vp, rules);
         let g = gesture::GestureRules { slop: vp.px(rules.slop_pt), tap_seconds: rules.tap_seconds };
         let events = self.gestures.update(&touches, |t| canvas.contains(&t.id), paints, input.dt, &g);
         for event in events {
@@ -3383,9 +3387,17 @@ impl MapEditor {
 
     /// The paint threshold: whether a finger can hit one cell at this
     /// zoom - a cell at least `builder_paint_min_cell_mm` on the glass.
-    /// Under it a tap zooms in and a drag pans.
+    /// Under it a tap zooms in and a drag pans (`drag_paints`).
     fn touch_paints(&self, vp: &Viewport, rules: &CanvasRules) -> bool {
         vp.cell_mm(self.camera.scale(vp)) >= rules.paint_min_cell_mm
+    }
+
+    /// Whether one finger dragging paints a stroke: over the paint
+    /// threshold, and under it too where the view shows the whole map
+    /// (`BuilderCamera::shows_whole`), since a pan there would go nowhere.
+    /// Anywhere else under the threshold it pans.
+    fn drag_paints(&self, vp: &Viewport, rules: &CanvasRules) -> bool {
+        self.touch_paints(vp, rules) || self.camera.shows_whole(vp)
     }
 
     /// The loupe over `frame`'s canvas this frame: while one finger
@@ -4791,7 +4803,7 @@ mod editor_tests {
         }
         let frame = field_frame((1920.0, 1080.0));
         let mut ed = MapEditor::new(map);
-        let screen = CanvasScreen { device_per_px: frame.view.scale, points_per_px: frame.view.scale, coarse: true };
+        let screen = CanvasScreen { device_per_px: frame.view.scale, points_per_px: frame.view.scale, coarse: true, ..Default::default() };
         ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
         (ed, frame)
     }
@@ -5238,7 +5250,7 @@ mod editor_tests {
         map.size = Some((96.0, 54.0));
         let frame = field_frame(window);
         let mut ed = MapEditor::new(map);
-        let screen = CanvasScreen { device_per_px: frame.view.scale * device, points_per_px: frame.view.scale, coarse };
+        let screen = CanvasScreen { device_per_px: frame.view.scale * device, points_per_px: frame.view.scale, coarse, ..Default::default() };
         ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
         (ed, frame)
     }
@@ -5357,7 +5369,7 @@ mod editor_tests {
                 let (mut ed, frame) = if arena {
                     let frame = BuilderFrame::new(UiFrame::plain(window), (W, H), MapClass::Arena, None);
                     let mut ed = MapEditor::new(MapFile::new());
-                    let screen = CanvasScreen { device_per_px: frame.view.scale * device, points_per_px: frame.view.scale, coarse };
+                    let screen = CanvasScreen { device_per_px: frame.view.scale * device, points_per_px: frame.view.scale, coarse, ..Default::default() };
                     ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
                     (ed, frame)
                 } else {
@@ -5529,7 +5541,7 @@ mod editor_tests {
     fn the_navigator_is_hidden_at_fit_on_an_arena() {
         let frame = arena();
         let mut ed = MapEditor::new(MapFile::new());
-        let screen = CanvasScreen { device_per_px: 1.0, points_per_px: 1.0, coarse: true };
+        let screen = CanvasScreen { device_per_px: 1.0, points_per_px: 1.0, coarse: true, ..Default::default() };
         ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
         assert_eq!(ed.navigator_rect(&frame), None);
         let corner = canvas_at(&frame, frame.layout.field.w - 40.0, frame.layout.field.h - 30.0);
@@ -5733,7 +5745,7 @@ mod editor_tests {
             let frame = BuilderFrame::new(ui, (96.0 * 32.0, 54.0 * 32.0), MapClass::Field, None);
             let mut ed = MapEditor::new(map);
             // Three device pixels to the point.
-            let screen = CanvasScreen { device_per_px: frame.view.scale * 3.0 / ui.scale, points_per_px: frame.view.scale / ui.scale, coarse: false };
+            let screen = CanvasScreen { device_per_px: frame.view.scale * 3.0 / ui.scale, points_per_px: frame.view.scale / ui.scale, coarse: false, ..Default::default() };
             ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
             let layout = frame.layout;
             let vp = ed.viewport();
@@ -5793,7 +5805,7 @@ mod editor_tests {
     fn touch_arena() -> (MapEditor, BuilderFrame) {
         let frame = arena();
         let mut ed = MapEditor::new(MapFile::new());
-        let screen = CanvasScreen { device_per_px: 3.0, points_per_px: 1.5, coarse: false };
+        let screen = CanvasScreen { device_per_px: 3.0, points_per_px: 1.5, coarse: false, ..Default::default() };
         ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
         (ed, frame)
     }
@@ -5923,6 +5935,68 @@ mod editor_tests {
         assert_eq!(ed.map().cells.len(), 1);
     }
 
+    /// On a full-size iPad (the 11th gen's 1180 x 820 points, 132 to the
+    /// inch) a new map at FIT draws its cells 34.7 points wide, 6.7 mm on
+    /// the glass and over the paint threshold, so one finger paints there:
+    /// a tap its cell, a drag a stroke. Measured at a phone's 160 points to
+    /// the inch the same cell reads 5.5 mm, where a drag pans a view that
+    /// shows the whole map already and a finger paints nothing until a
+    /// pinch has zoomed in. An iPad mini keeps the phone's measure.
+    #[test]
+    fn one_finger_paints_a_new_map_at_fit_on_an_ipad() {
+        use crate::indicators::{apple_points_per_mm, POINTS_PER_MM};
+        let rules = CanvasRules::of(&crate::tuning::Tuning::DEFAULT);
+        assert_eq!(apple_points_per_mm("iPad14,1"), POINTS_PER_MM, "an iPad mini is measured as a phone");
+        assert_eq!(apple_points_per_mm("iPhone14,7"), POINTS_PER_MM);
+        assert_eq!(apple_points_per_mm(""), POINTS_PER_MM, "an unknown model is a phone");
+        let ui = UiFrame::new((1180.0, 820.0), 1.0, 1.0, Insets { top: 24.0, bottom: 20.0, ..Insets::default() }, true);
+        let map = MapFile::new();
+        let frame = BuilderFrame::new(ui, map.field_size(), MapClass::Arena, None);
+        let mut ed = MapEditor::new(map);
+        let ipad = CanvasScreen { device_per_px: frame.view.scale * 2.0, points_per_px: frame.view.scale, coarse: false, points_per_mm: apple_points_per_mm("iPad15,7") };
+        ed.update(&BuilderInput { screen: Some(ipad), ..Default::default() }, &frame);
+        let vp = ed.viewport();
+        let scale = ed.camera().scale(&vp);
+        assert!(ed.camera().is_fit());
+        let mm = vp.cell_mm(scale);
+        assert!(mm >= rules.paint_min_cell_mm && mm < rules.tap_zoom_cell_mm, "a cell at FIT is {mm} mm on an iPad's glass");
+        let phone = camera::Viewport { screen: CanvasScreen { points_per_mm: POINTS_PER_MM, ..vp.screen }, ..vp };
+        assert!(phone.cell_mm(scale) < rules.paint_min_cell_mm, "at a phone's density the cell reads {} mm", phone.cell_mm(scale));
+
+        let Vec2 { x: x0, y } = on_cell(&ed, &frame, 4, 8);
+        let x1 = on_cell(&ed, &frame, 10, 8).x;
+        let drag: Vec<Vec<(i32, f32, f32)>> = (0..=12).map(|i| vec![(1, x0 + (x1 - x0) * i as f32 / 12.0, y)]).collect();
+        fingers(&mut ed, &frame, &drag);
+        assert!(ed.camera().is_fit(), "the drag moved the view");
+        assert!((4..=10).all(|col| ed.map().cell(col, 8) == Some(&brick())), "one finger painted {:?}", ed.map().cells);
+        assert_eq!(ed.history().undo_depth(), 1);
+        let Vec2 { x, y } = on_cell(&ed, &frame, 20, 4);
+        fingers(&mut ed, &frame, &[vec![(2, x, y)], vec![(2, x + 2.0, y + 1.0)]]);
+        assert_eq!(ed.map().cell(20, 4), Some(&brick()), "a tap paints its cell");
+        assert!(ed.camera().is_fit(), "the tap zoomed in");
+    }
+
+    /// Under the paint threshold with the whole map in view - a phone at
+    /// FIT on the study map, a cell under 4 mm - a one-finger drag paints
+    /// a stroke, since a pan would go nowhere, and leaves the view where it
+    /// is; a tap there still zooms in (`under_the_paint_threshold_...`).
+    #[test]
+    fn under_the_paint_threshold_a_drag_paints_where_the_whole_map_is_in_view() {
+        let rules = CanvasRules::of(&crate::tuning::Tuning::DEFAULT);
+        let (mut ed, frame) = big_editor((852.0, 393.0), 3.0, false);
+        let vp = ed.viewport();
+        assert!(ed.camera().shows_whole(&vp));
+        assert!(vp.cell_mm(ed.camera().scale(&vp)) < rules.paint_min_cell_mm, "under the threshold");
+        let mid = canvas_middle(&frame);
+        let (from, to) = (Vec2::new(mid.x - 60.0, mid.y), Vec2::new(mid.x + 60.0, mid.y));
+        let ((c0, row), (c1, _)) = (ed.cell_at(from, &frame).unwrap(), ed.cell_at(to, &frame).unwrap());
+        let drag: Vec<Vec<(i32, f32, f32)>> = (0..=12).map(|i| vec![(1, from.x + (to.x - from.x) * i as f32 / 12.0, from.y)]).collect();
+        fingers(&mut ed, &frame, &drag);
+        assert!(ed.camera().is_fit(), "the drag moved the view");
+        assert!(c1 > c0 && (c0..=c1).all(|col| ed.map().cell(col, row) == Some(&brick())), "the drag painted {:?}", ed.map().cells);
+        assert_eq!(ed.history().undo_depth(), 1);
+    }
+
     /// A finger that lands on the bar presses its button and is no part
     /// of a gesture: dragged onto the canvas it paints nothing.
     #[test]
@@ -5955,7 +6029,7 @@ mod editor_tests {
         map.size = Some((96.0, 54.0));
         let frame = BuilderFrame::new(ui, map.field_size(), MapClass::Field, None);
         let mut ed = MapEditor::new(map);
-        let screen = CanvasScreen { device_per_px: frame.view.scale * 2.0, points_per_px: frame.view.scale, coarse: false };
+        let screen = CanvasScreen { device_per_px: frame.view.scale * 2.0, points_per_px: frame.view.scale, coarse: false, ..Default::default() };
         ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
         let rules = CanvasRules::of(&crate::tuning::Tuning::DEFAULT);
         let vp = ed.viewport();
@@ -6006,7 +6080,7 @@ mod editor_tests {
         let mut scheme = crate::touch::TouchScheme::default();
         assert!(!scheme.touch_chrome(true, false, false), "no finger yet: the mouse's chrome");
         let mouse = frame_for(false);
-        let screen = CanvasScreen { device_per_px: mouse.view.scale * 3.0, points_per_px: mouse.view.scale, coarse: false };
+        let screen = CanvasScreen { device_per_px: mouse.view.scale * 3.0, points_per_px: mouse.view.scale, coarse: false, ..Default::default() };
         ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &mouse);
         let vp = ed.viewport();
         assert!(vp.cell_mm(ed.camera().scale(&vp)) < rules.paint_min_cell_mm, "a tap here zooms in");

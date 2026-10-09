@@ -16,6 +16,25 @@ const TOUCH = "(hover: none) and (pointer: coarse)";
 /// Between the controls' bottom edge and the chrome below them.
 const GAP_PX = 3;
 
+/// The short side of an iPad mini 6 or later, in CSS pixels.
+const IPAD_MINI_SHORT_PX = 744;
+
+/// A full-size iPad, whose CSS pixel - its point - is a 132nd of an inch
+/// rather than a phone's 160th (src/indicators.rs `IPAD_POINTS_PER_MM`).
+/// iPadOS's Safari asks for the desktop site and calls itself a Mac, but a
+/// Mac has no touch points; an older one says "iPad". An iPad mini 6 or
+/// later keeps a phone's measure; a mini 5 (768 x 1024) cannot be told from
+/// a 9.7" iPad and is taken for one.
+function fullSizeIpad(): boolean {
+  try {
+    const ua = navigator.userAgent || "";
+    const ipad = /\biPad\b/.test(ua) || (/\bMacintosh\b/.test(ua) && navigator.maxTouchPoints > 1);
+    return ipad && Math.min(screen.width, screen.height) !== IPAD_MINI_SHORT_PX;
+  } catch {
+    return false;
+  }
+}
+
 export function installOverlay(): void {
   window.bbOverlay = "";
   const touch = window.matchMedia ? window.matchMedia(TOUCH) : null;
@@ -24,6 +43,10 @@ export function installOverlay(): void {
   // as the app on that device does, rather than at a desktop's 96 CSS
   // pixels to the inch.
   window.bbTouch = touch && touch.matches ? "1" : "";
+  // Whether this is a full-size iPad, read once by the game at startup:
+  // its builder measures a cell under a finger in millimetres
+  // (src/app.rs `touch_points_per_mm`).
+  window.bbIpad = fullSizeIpad() ? "1" : "";
   const canvas = document.getElementById("canvas");
   const controls = document.querySelector<HTMLElement>(".overlay-controls");
   if (!canvas || !controls) return;
