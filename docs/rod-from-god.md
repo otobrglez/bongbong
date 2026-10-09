@@ -1908,7 +1908,10 @@ rounds in the defaults comparison above match byte for byte).
     every round would step differently); a lower speed cap (the shove's
     reach is a tuning decision). Ram and blast knockback, which can throw
     a hull as fast, are left as they are so a round with no knock replays
-    byte for byte (a follow-up).
+    byte for byte (a follow-up). BB-59 took the follow-up: every hull now
+    looks a step ahead from spawn (`physics::HULL_LOOK_AHEAD`), and rapier's
+    speed cap is one cell a step, so the shove reaches its tuned 420/480
+    px/s instead of 400 (docs/physics-engine-design.md "Scale").
 
 ### Not in this PR
 

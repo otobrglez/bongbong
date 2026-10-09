@@ -516,7 +516,8 @@ path); `Tank::special`/`active_weapon`; `HitCause` on `Event::Hit`;
   slide its side pull builds past the tracks' grip over
   `WELL_SIDE_REACH_SECONDS` (0.5, server policy beside
   `POSE_REACH_SLACK_PX`), never more than takes the hull past the solver's
-  speed cap (`Physics::max_speed`, 400 px/s). Both act along a track axis,
+  speed cap (`Physics::max_speed`, `PHYSICS_MAX_SPEED`, one cell a step;
+  at the defaults no pull comes near it). Both act along a track axis,
   so what they carry the hull lies in the disc whose diameter runs from it
   toward the core that far: the pose may stand anywhere in that disc grown
   by the hull's own reach. An owned hull pulled faster than its top speed
@@ -2190,6 +2191,9 @@ record of the build.
   it, under a pixel on the step it first meets the face, flush after
   (`the_pull_presses_a_hull_against_a_wall_and_the_fields_edge_never_into_it`).
   The collapse's fling is a knock and stops flush by the knock's own.
+  Both were later folded into one look-ahead every hull carries from spawn
+  (`physics::HULL_LOOK_AHEAD`, BB-59, docs/physics-engine-design.md
+  "Scale").
 - **Tests as built.** §10's list is the design's; the tests carry their
   own names - `simulation/well_tests.rs` (the orb, the stages, hulls and
   the escape by chassis, shots, the air, what a well gathers, the collapse,

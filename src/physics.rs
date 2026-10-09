@@ -8,10 +8,32 @@
 //! physics body at all: they are hand-integrated and hit-tested by a swept
 //! segment check in `simulation::hits`, so rapier only ever sees solid
 //! bodies.
+//!
+//! Rapier's lengths are the world's pixels. `length_unit` stays 1, so the
+//! tolerances rapier scales by it are tuned for metre-sized bodies: contacts
+//! are generated 0.02 px ahead and an overlap is pushed out at 3 px/s. The
+//! two that matter in a pixel world are set here instead: the speed cap
+//! (`PHYSICS_MAX_SPEED`) and every hull's one-step look-ahead
+//! (`HULL_LOOK_AHEAD`), which stops a hull flush against whatever it meets
+//! however it got there. A larger `length_unit` would raise the cap but not
+//! the look-ahead far enough - at 32 a hull knocked at 480 px/s still lands
+//! 4 px inside a wall - and it raises the sleep threshold with the rest, so
+//! at 100 a heavy hull fell asleep inside one (docs/physics-engine-design.md,
+//! "Scale").
 
 use rapier2d::prelude::*;
 
-use crate::{Position, TANK_MOVE_CORNER_RADIUS};
+use crate::{PHYSICS_FIXED_DT, PHYSICS_MAX_SPEED, Position, TANK_MOVE_CORNER_RADIUS};
+
+/// How far ahead along its motion a hull's contacts look: its travel in one
+/// step at the speed cap, a cell. Rapier's soft continuous collision
+/// detection makes predictive contacts against whatever lies within the
+/// hull's own travel this step (never further than this), so the solver
+/// stops it at a collider's face - driven, knocked, rammed, blasted or
+/// pulled - rather than a step past it. Without it a hull driven at a wall
+/// sank 2.5 px into it and one knocked at 480 px/s 6 px, each pushed back
+/// out over seconds.
+const HULL_LOOK_AHEAD: f32 = PHYSICS_MAX_SPEED * PHYSICS_FIXED_DT;
 
 /// Owns the rapier simulation state. Wraps rapier's own `PhysicsWorld`
 /// convenience bundle (rigid bodies, colliders, broad/narrow-phase, solver,
@@ -51,12 +73,13 @@ fn tank_move_shape(half_extents: (f32, f32)) -> SharedShape {
 
 impl Physics {
     pub fn new() -> Self {
-        Self {
-            world: PhysicsWorld {
-                gravity: to_vector(Position::new(0.0, 0.0)),
-                ..PhysicsWorld::default()
-            },
-        }
+        let mut world = PhysicsWorld {
+            gravity: to_vector(Position::new(0.0, 0.0)),
+            ..PhysicsWorld::default()
+        };
+        // Scaled by `length_unit`, which is 1: px/s.
+        world.integration_parameters.normalized_max_linear_velocity = PHYSICS_MAX_SPEED;
+        Self { world }
     }
 
     /// Advance the simulation by one fixed step. `IntegrationParameters::dt`
@@ -145,7 +168,8 @@ impl Physics {
     /// itself never rotates either, a non-square tank's `half_extents` need
     /// to be reoriented by hand whenever its facing changes between an
     /// X-axis and Y-axis cardinal direction - see `resize_collider` and
-    /// `simulation::drive_tank`.
+    /// `simulation::drive_tank`. The body looks `HULL_LOOK_AHEAD` ahead for
+    /// as long as it lives, wreck or not.
     pub fn spawn_tank(
         &mut self,
         position: Position,
@@ -155,7 +179,8 @@ impl Physics {
         let (handle, _) = self.world.insert(
             RigidBodyBuilder::dynamic()
                 .translation(to_vector(position))
-                .lock_rotations(),
+                .lock_rotations()
+                .soft_ccd_prediction(HULL_LOOK_AHEAD),
             ColliderBuilder::new(tank_move_shape(half_extents)).mass(mass),
         );
         handle
@@ -208,31 +233,8 @@ impl Physics {
         body.set_linvel(to_vector(velocity), true);
     }
 
-    /// Have a body's contacts look `distance` px ahead along its motion -
-    /// rapier's soft continuous collision detection: predictive contacts
-    /// against whatever lies within that much of its path, so the solver
-    /// stops it at a collider rather than a step past its face - and 0
-    /// for none. The world is in pixels with rapier's lengths in metres
-    /// (`IntegrationParameters::length_unit` 1), so its own look-ahead is
-    /// 0.02 px and its push out of an overlap 3 px/s: a body crossing more
-    /// than that in a step lands inside what it meets and creeps out over
-    /// seconds. Touches the body only when the setting changes.
-    pub fn set_look_ahead(&mut self, handle: RigidBodyHandle, distance: f32) {
-        let changes = self.world.bodies.get(handle).is_some_and(|body| body.soft_ccd_prediction() != distance);
-        if changes && let Some(body) = self.world.bodies.get_mut(handle) {
-            body.set_soft_ccd_prediction(distance);
-        }
-    }
-
-    /// The farthest any body travels in one step: rapier's speed cap
-    /// (`IntegrationParameters::max_linear_velocity`) over the step.
-    pub fn max_step_travel(&self) -> f32 {
-        let params = &self.world.integration_parameters;
-        params.max_linear_velocity() * params.dt
-    }
-
     /// The fastest any body moves (px/s): rapier's speed cap
-    /// (`IntegrationParameters::max_linear_velocity`).
+    /// (`IntegrationParameters::max_linear_velocity`, `PHYSICS_MAX_SPEED`).
     pub fn max_speed(&self) -> f32 {
         self.world.integration_parameters.max_linear_velocity()
     }
@@ -431,4 +433,41 @@ fn to_vector(p: Position) -> Vector {
 
 fn from_vector(v: Vector) -> Position {
     Position::new(v.x, v.y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A knock at the wire's ceiling (508 px/s) keeps its whole speed:
+    /// rapier's own cap, 400 in its units, would have clipped it.
+    #[test]
+    fn a_knock_past_rapiers_default_cap_keeps_its_speed() {
+        let mut physics = Physics::new();
+        let hull = physics.spawn_tank(Position::new(0.0, 0.0), (12.0, 12.0), 2.0);
+        physics.apply_impulse(hull, Position::new(508.0 * 2.0, 0.0));
+        physics.step();
+        assert_eq!(physics.velocity(hull).x, 508.0);
+        assert!(physics.max_speed() > 508.0);
+    }
+
+    /// A hull thrown at a wall a step's travel or less from it at any
+    /// speed up to the cap stops at the wall's face, not inside it.
+    #[test]
+    fn a_hull_thrown_at_a_wall_stops_at_its_face() {
+        for speed in [60.0, 210.0, 480.0, 1000.0, PHYSICS_MAX_SPEED] {
+            for gap in [0.5, 2.0, 5.0, speed * PHYSICS_FIXED_DT * 0.5] {
+                let mut physics = Physics::new();
+                // The wall's west face at x 100.
+                physics.spawn_static(Position::new(116.0, 0.0), Position::new(16.0, 64.0));
+                let hull = physics.spawn_tank(Position::new(100.0 - 12.0 - gap, 0.0), (12.0, 12.0), 1.0);
+                physics.apply_impulse(hull, Position::new(speed, 0.0));
+                for _ in 0..10 {
+                    physics.step();
+                    let east = physics.position(hull).x + 12.0;
+                    assert!(east <= 100.05, "at {speed} px/s from {gap} px: {} px inside", east - 100.0);
+                }
+            }
+        }
+    }
 }

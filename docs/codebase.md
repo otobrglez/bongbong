@@ -797,10 +797,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `maps/default.toml`) is the only terrain source.
 - `physics.rs` (docs/physics-engine-design.md) — the rapier wrapper: solid bodies only, no sensors
   or collision groups. `settle_wreck` is the one place damping is set, on the frame a tank becomes a
-  wreck; `set_look_ahead` (rapier's soft CCD) is set only on a skidding hull, by
-  `sonic::skid_look_ahead` before every step - rapier works in metres here (`length_unit` 1), so a
-  hull a knock throws faster than its 0.02 px look-ahead lands inside a wall and is pushed out at 3
-  px/s. `quarantined` reports rapier's NaN quarantine as `Event::PhysicsQuarantine`.
+  wreck. Rapier's lengths are pixels (`length_unit` 1, so its own look-ahead is 0.02 px and it
+  pushes an overlap out at 3 px/s); the two limits that matter in a pixel world are set here: the
+  speed cap (`PHYSICS_MAX_SPEED`, one cell a step, above every knock and pull) and every hull's
+  one-step look-ahead (`HULL_LOOK_AHEAD`, rapier's soft CCD, set at spawn for the body's whole
+  life), so a hull driven, rammed, blasted, knocked or pulled stops flush against what it meets
+  (docs/physics-engine-design.md "Scale"). `quarantined` reports rapier's NaN quarantine as
+  `Event::PhysicsQuarantine`.
 
 ## AI
 
@@ -1248,9 +1251,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   sandbox pulls the hull on the round tick its input lands on, incoming fire is carried to the
   present through the wells a tick at a time (`round::carry`: the seat's hull and the walls before a
   core), and the pose validator allows the pull toward the core and no faster than the solver's cap
-  (`WELL_SIDE_REACH_SECONDS`); a pulled hull looks a step's travel ahead as a skidding one does
-  (`simulation::well::pull_look_ahead`), so the pull presses it flush against a wall rather than
-  into it. The probe holds a pulled tank out of its hands, a brace and a hold for the orb as
+  (`WELL_SIDE_REACH_SECONDS`); a pulled hull, like every hull, looks a step's travel ahead
+  (`physics::HULL_LOOK_AHEAD`), so the pull presses it flush against a wall rather than into it. The probe holds a pulled tank out of its hands, a brace and a hold for the orb as
   deliberate, leaves a braced tank's clustering and pile-up uncounted, and tags an anomaly in a pull
   or within three seconds of one `/pull`. The `well` tuning group.
 

@@ -2616,8 +2616,6 @@ impl Game {
             let hull_cell = crate::map::world_to_cell(tank.position);
             charged = Some(gauss::SeatCharge { edge, weapon, start, muzzle, dir, reticle, hull_cell });
         }
-        sonic::skid_look_ahead(physics, &tank);
-        well::pull_look_ahead(physics, &tank, &wells);
         physics.step();
         // The solver moved the body; the tank's own position is what
         // every reader (and the next tick's `Footing`) goes by.
@@ -4425,10 +4423,6 @@ impl Game {
             self.advance_drones(PHYSICS_FIXED_DT, (f.width, f.height));
             self.pull_air(f, PHYSICS_FIXED_DT);
             if step_physics {
-                for tank in self.world.query::<&Tank>().iter() {
-                    sonic::skid_look_ahead(&mut self.physics, tank);
-                    well::pull_look_ahead(&mut self.physics, tank, &f.wells);
-                }
                 self.physics.step();
                 let (bodies, colliders) = self.physics.quarantined();
                 if bodies > 0 || colliders > 0 {
@@ -6886,7 +6880,7 @@ mod determinism_tests {
         // Never bump these to go green - work out which change moved them
         // first.
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (14_152_753_630_535_899_173, 13_765_289_247_472_503_071), "(one seat, two seats)");
+        assert_eq!((one, two), (15_662_619_869_435_857_390, 13_765_289_247_472_503_071), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round
@@ -10646,6 +10640,114 @@ cells."30,20" = { kind = "frog" }
         assert_eq!(ai.last_action, Some("seek_laser"), "the case this is about: a searched route");
         let (frame, _) = through_the_gap(&mut game, slot, 6 * 60).expect("the hull never turned into the gap");
         assert!(frame < 5 * 60, "took {frame} frames to get through");
+    }
+
+    /// Every hull looks a step ahead (`physics::HULL_LOOK_AHEAD`), so
+    /// whatever moves it stops it against a wall's face and the field's
+    /// edge rather than inside: a scout driven at either from every gap up
+    /// to a few steps' travel is under half a pixel in while it presses on
+    /// at full speed and flush once it rests; knocked at a ram's or a
+    /// blast's most (`knockback_max_speed`) or the rod's
+    /// (`rod_shove_max_speed`), or blasted by a barrel, it never goes in.
+    /// Without the look-ahead a hull driven at a wall sank 2.5 px into it,
+    /// one rammed a third of a pixel and one knocked at 480 px/s 6 px.
+    #[test]
+    fn a_hull_driven_knocked_or_blasted_at_a_wall_stops_flush_against_it() {
+        const FW: f32 = 1088.0;
+        const FH: f32 = 544.0;
+        // An iron row with its south face at y 160 over columns 14-20, and
+        // the field's top edge clear of it further west.
+        let faces = [(544.0, 160.0), (176.0, 0.0)];
+        let round = |extra: &str| {
+            let mut game = Game::default();
+            game.seed_override = Some(7);
+            game.show_intro = false;
+            game.level_overrides.mission = Some(Mission::Destroy);
+            let iron: String = (14..=20).map(|c| format!("cells.\"{c},4\" = {{ kind = \"wall\", material = \"iron\" }}\n")).collect();
+            let map = format!("version = 1\ntanks = 0\ntank = \"scout\"\ncells.\"3,6\" = {{ kind = \"start\" }}\n{iron}{extra}");
+            game.map = MapFile::from_toml_str(&map).expect("test map parses");
+            game.init(FW, FH);
+            game
+        };
+        let go = |game: &mut Game, move_dir: Option<Dir>| {
+            let mut input = Input::default();
+            input.seats[0] = Intent { move_dir, ..Intent::default() };
+            game.update(input, 1.0 / 60.0, FW, FH);
+        };
+        // How far the seat's movement box reaches into the boundary or a
+        // standing tile's box, and how far its top stands below `face`.
+        let overlap = |game: &Game| {
+            let s = game.player().expect("a seat");
+            let (pos, (hx, hy)) = with_tank(&game.world, s, |t| (t.position, t.move_half_extents(t.facing_along_x())));
+            let terrain = hits::Terrain::build(&game.world, FW, FH, &[], &game.water);
+            let tiles: Vec<(Position, Position)> =
+                game.world.query::<(Entity, &Obstacle)>().iter().filter_map(|(e, _)| terrain.obstacle(e).map(|b| (b.center, b.half))).collect();
+            battlefield::wall_rects(FW, FH)
+                .into_iter()
+                .chain(tiles)
+                .map(|(c, h)| {
+                    let dx = h.x + hx - (pos.x - c.x).abs();
+                    let dy = h.y + hy - (pos.y - c.y).abs();
+                    if dx > 0.0 && dy > 0.0 { dx.min(dy) } else { 0.0 }
+                })
+                .fold(0.0, f32::max)
+        };
+        let below = |game: &Game, face: f32| {
+            let s = game.player().expect("a seat");
+            with_tank(&game.world, s, |t| t.position.y - t.move_half_extents(false).1 - face)
+        };
+        let place = |game: &mut Game, x: f32, face: f32, gap: f32| {
+            let s = game.player().expect("a seat");
+            let up = with_tank(&game.world, s, |t| t.move_half_extents(false).1);
+            game.place_tank(s, Position::new(x, face + up + 0.5 + gap), Some(0.0)).expect("placed");
+            with_tank_mut(&game.world, s, |t| {
+                t.shield_hp = 1.0e6;
+                t.shield_timer = 1.0e6;
+            });
+        };
+        let t = tuning();
+        for (x, face) in faces {
+            for gap in [0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0] {
+                let at = |what: &str| format!("{what} from {gap} px below the face at y {face}");
+                let mut game = round("");
+                place(&mut game, x, face, gap);
+                for _ in 0..60 {
+                    go(&mut game, Some(Dir::Up));
+                    let o = overlap(&game);
+                    assert!(o <= 0.5, "{}: {o} px in", at("driven"));
+                }
+                assert!(below(&game, face) <= 0.5, "{}: it reaches the face", at("driven"));
+                for _ in 0..30 {
+                    go(&mut game, None);
+                }
+                let o = overlap(&game);
+                assert!(o <= 0.05, "{}: {o} px in at rest", at("driven"));
+                for speed in [t.knockback_max_speed, t.rod_shove_max_speed] {
+                    let mut game = round("");
+                    place(&mut game, x, face, gap);
+                    let s = game.player().expect("a seat");
+                    let (body, mass) = with_tank(&game.world, s, |t| (t.body.expect("a body"), t.mass()));
+                    game.physics.apply_impulse(body, Position::new(0.0, -speed * mass));
+                    for _ in 0..60 {
+                        go(&mut game, None);
+                        let o = overlap(&game);
+                        assert!(o <= 0.05, "{}: {o} px in", at(&format!("knocked at {speed} px/s")));
+                    }
+                }
+            }
+        }
+        // A barrel the cell south of a seat standing just under the iron.
+        let mut game = round("cells.\"17,6\" = { kind = \"barrel\", drum = \"oil\" }\n");
+        place(&mut game, 560.0, 160.0, 0.0);
+        game.debug_detonate(crate::map::cell_to_world(17, 6)).expect("a barrel");
+        let mut pressed = f32::MAX;
+        for _ in 0..90 {
+            go(&mut game, None);
+            let o = overlap(&game);
+            assert!(o <= 0.05, "blasted: {o} px in");
+            pressed = pressed.min(below(&game, 160.0));
+        }
+        assert!(pressed <= 0.05, "the blast throws it against the face: {pressed} px short");
     }
 }
 

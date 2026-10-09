@@ -608,18 +608,18 @@ the ground's flow, which the skid's length is worked out from).
 `tick_timers` counts it down for every tank, and `predict_seat` for the
 sandbox's seat.
 
-**It stops at a wall's face.** While a hull skids its contacts look a
-step's travel ahead (`sonic::skid_look_ahead`, run for every hull before
-every solver step, the room's and a sandbox's: `Physics::set_look_ahead`,
-rapier's soft continuous collision detection, at `Physics::max_step_travel`),
-so the solver stops it flush against a tile, deep water or the field's
-edge. Without it a knock lands a hull a step inside what it meets: rapier
-measures in metres while the world is in pixels, so it looks 0.02 px ahead
-and pushes a body out of an overlap at 3 px/s - a hull thrown at the edge
-at 400 px/s went 5.5 px into the boundary, its skid ended as the solver
-stopped it, and it crept back out over two seconds, part-way off the
-field. A hull on its tracks is never touched, so a round with no knock
-steps exactly as before. Online:
+**It stops at a wall's face.** Every hull's contacts look a step's travel
+ahead (`physics::HULL_LOOK_AHEAD`, rapier's soft continuous collision
+detection, set on the body at spawn - docs/physics-engine-design.md
+"Scale"), the room's and a sandbox's alike, so the solver stops a knocked
+hull flush against a tile, deep water or the field's edge. Without it a
+knock lands a hull a step inside what it meets: rapier's own look-ahead
+is 0.02 px and it pushes a body out of an overlap at 3 px/s - a hull
+thrown at the edge at 400 px/s went 5.5 px into the boundary, its skid
+ended as the solver stopped it, and it crept back out over two seconds,
+part-way off the field. Rapier's speed cap is one cell a step
+(`PHYSICS_MAX_SPEED`), so a knock keeps the speed it is tuned to, up to
+the wire's 508 px/s. Online:
 
 - `Event::Shoved { seat, vx, vy, skid }`: `Shoves::push` takes the skid
   (0 for every other shove), the wire carries it in tenths
