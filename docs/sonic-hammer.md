@@ -3,9 +3,10 @@
 BB-37, the first of the six weapons of BB-36. A special weapon from its own
 crate (`pickup = "sonic_hammer"`), one at a time like every other
 (`Tank::take_weapon`): a crate loads `sonic_ammo_per_pickup` (7) blasts, a
-re-pick refills to seven, another weapon's crate replaces it. Seats and
-enemies alike: an enemy takes the crate while it fires shells
-(`Tank::wants_pickup`) and uses it by its own rule (§4).
+re-pick stacks seven more up to `sonic_ammo_max` (14), another weapon's
+crate replaces it. Seats and
+enemies alike: an enemy takes the crate while it fires shells, or to
+stack the one it carries (`Tank::wants_pickup`) and uses it by its own rule (§4).
 
 A cone of sound from the turret. Very little damage and a very big shove:
 it knocks tanks off their tracks, shatters glass, flattens tall grass so
@@ -884,7 +885,7 @@ wave or the tank and its age, hashed, never rolled.
 - **The HUD**: nothing new to lay out. `hud::WeaponSlot::of` gives the
   count in `HUD_SONIC_COLOR` (`#46C3F2`, the ink's base) and
   `hud::weapon_pickup` the glyph; the ring's ammo pips measure against
-  `full_load` (7).
+  `full_load`, the carry limit (14).
 
 ## 6. Tuning
 
@@ -894,6 +895,7 @@ enemies' group:
 | Row | Default | Range | Doc |
 |---|---|---|---|
 | `sonic_ammo_per_pickup: i32` | 7 | 1..=40 | Blasts one sonic hammer crate loads. One per press. |
+| `sonic_ammo_max: i32` | 14 | 1..=80 | The most blasts a tank carries, crates stacked (BB-66). |
 | `sonic_reload_seconds` | 0.8 | 0..=10 | Seconds between two blasts. |
 | `sonic_reach_px` | 208 | 32..=480 | How far the cone reaches from the pivot (px; six and a half cells). |
 | `sonic_half_angle_deg` | 46 | 5..=90 | The cone's half angle either side of the facing. |
@@ -1007,7 +1009,7 @@ Protocol 16 (from 15), once in the PR.
 seat at cell (3, 6) facing east, parked enemies placed by hand):
 
 - The weapon: `a_sonic_crate_arms_the_hammer_and_replaces_the_special_carried`
-  (seven a crate, another special emptied, a refill to seven, an enemy takes
+  (seven a crate, another special emptied, a second stacked up to fourteen, an enemy takes
   one only on shells), `the_hammer_fires_on_the_press_and_spends_one_blast`
   (`Fired` then `SonicBlast` in one tick, none while held).
 - The cone and the wave: `the_cone_shoves_an_enemy_ahead_and_not_one_beside`,

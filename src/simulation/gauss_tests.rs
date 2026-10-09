@@ -113,8 +113,9 @@ fn rail_slugs(events: &[Event]) -> Vec<&Event> {
     events.iter().filter(|e| matches!(e, Event::RailSlug { .. })).collect()
 }
 
-/// A crate arms the rail, replaces another special, and a second refills
-/// to a crate's worth; an enemy takes one only on shells.
+/// A crate arms the rail, replaces another special, and a second stacks
+/// on what is left up to the carry limit; an enemy takes one only on
+/// shells.
 #[test]
 fn a_gauss_crate_arms_the_rail_and_replaces_the_special_carried() {
     let t = tuning();
@@ -125,7 +126,9 @@ fn a_gauss_crate_arms_the_rail_and_replaces_the_special_carried() {
     assert_eq!(tank.active_weapon(), ActiveWeapon::GaussRail);
     tank.gauss_slugs = 1;
     tank.take_weapon(ActiveWeapon::GaussRail);
-    assert_eq!(tank.gauss_slugs, t.gauss_slugs_per_pickup);
+    assert_eq!(tank.gauss_slugs, 1 + t.gauss_slugs_per_pickup);
+    tank.take_weapon(ActiveWeapon::GaussRail);
+    assert_eq!(tank.gauss_slugs, t.gauss_slugs_max);
     let mut enemy = Tank { owner: Owner::Enemy(3), ..Tank::default() };
     assert!(enemy.wants_pickup(PickupKind::GaussRail));
     enemy.take_weapon(ActiveWeapon::Laser);
@@ -465,8 +468,8 @@ fn an_emp_mid_charge_lapses_it() {
     assert!(with_tank(&game.world, seat(&game), |t| t.charge.is_none()));
 }
 
-/// Another weapon's crate mid-charge lapses it; a rail crate refills and
-/// keeps it.
+/// Another weapon's crate mid-charge lapses it; a rail crate stacks its
+/// slugs and keeps it.
 #[test]
 fn another_weapons_crate_lapses_a_charge_and_a_rail_crate_keeps_it() {
     let mut game = round("");

@@ -57,9 +57,9 @@ impl BlastParams {
 /// queued for `launch_drones` with what the tank's AI asked it to lock
 /// (`Tank::fpv_want`, taken). No recoil: a quadcopter lifts itself. No RNG.
 pub(super) fn fire_fpv(f: &mut Frame, tank: &mut Tank, owner: Owner) {
-    let slots = tuning().fpv_drones_per_pickup.max(1) as usize;
-    let slot = (tank.fpv_drones.max(1) as usize - 1).min(slots - 1);
-    let (origin, out) = fpv::halo_slot(tank.position, tank.sprite_size(), slot, slots);
+    let halo = fpv::Halo::of(&tuning());
+    let slot = (tank.fpv_drones.max(1) as usize - 1).min(halo.slots() - 1);
+    let (origin, out) = fpv::halo_slot(tank.position, tank.sprite_size(), slot, halo);
     let r = tank.rotation.to_radians();
     tank.kick_fpv();
     f.pending_drones.push(PendingDrone {
@@ -435,13 +435,13 @@ impl Game {
     pub(crate) fn seat_drone_slot(&self, seat: usize, owed: i32) -> Option<(u8, Position, Vec2)> {
         let entity = self.seats.get(seat).copied().flatten()?;
         let tank = self.world.get::<&Tank>(entity).ok()?;
-        let slots = tuning().fpv_drones_per_pickup.max(1) as usize;
+        let halo = fpv::Halo::of(&tuning());
         let left = tank.fpv_drones - owed;
         if left <= 0 {
             return None;
         }
-        let slot = (left as usize - 1).min(slots - 1);
-        let (origin, out) = fpv::halo_slot(tank.position, tank.sprite_size(), slot, slots);
+        let slot = (left as usize - 1).min(halo.slots() - 1);
+        let (origin, out) = fpv::halo_slot(tank.position, tank.sprite_size(), slot, halo);
         Some((slot as u8, origin, out))
     }
 }

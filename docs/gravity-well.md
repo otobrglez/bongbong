@@ -3,9 +3,9 @@
 BB-42, the sixth and last of the six weapons of BB-36. A special weapon from
 its own crate (`pickup = "gravity_well"`), one at a time like every other
 (`Tank::take_weapon`): a crate loads `well_per_pickup` (3) wells, a re-pick
-refills to three, another weapon's crate replaces it. Seats and enemies
-alike: an enemy takes the crate while it carries no special
-(`Tank::wants_pickup`) and uses it by its own rule (§4).
+stacks three more up to `well_max` (6), another weapon's crate replaces it. Seats and enemies
+alike: an enemy takes the crate while it carries no special, or to stack
+the well it carries (`Tank::wants_pickup`) and uses it by its own rule (§4).
 
 A press fires a slow violet orb down the gun line. A second press anchors it
 where it is; left alone it anchors itself where it meets something or at the
@@ -335,7 +335,7 @@ The collapse moves nothing on the end screen and hurts nobody (below).
 | Its shooter is wrecked | Flies on, anchors by itself; its well is the wreck's | Pulls on; the collapse is credited to the dead shooter |
 | Its shooter teleports | Flies on; a press still anchors it | Nothing |
 | Its shooter takes another weapon's crate | No anchor press (its trigger is another weapon's); it anchors itself | Nothing |
-| A well crate | Refills; a press still anchors it | Nothing |
+| A well crate | Stacks three wells, up to six; a press still anchors it | Nothing |
 | The round ends | Flies on and anchors as a show | Forms, swirls and collapses as a show (below) |
 | The round restarts | `init` clears it | `init` clears every zone and held drum |
 
@@ -425,7 +425,7 @@ Each item of the checklist (docs/sonic-hammer.md §3.0) gets its well arm:
    field coil, no explosive), `PickupKind::weapon`
    (`Some(ActiveWeapon::GravityWell)`), `name`.
 2. `ActiveWeapon::GravityWell` (`name` "gravity_well", `full_load` =
-   `well_per_pickup`, `tell_seconds` none - the slow orb and the forming
+   `well_max`, `tell_seconds` none - the slow orb and the forming
    ring are its tell -, `trigger` `Trigger::Press`), appended to
    `SPECIAL_WEAPONS`; `Tank::wells` with its arms in `weapon_ammo`,
    `take_weapon`, `empty_stock`, `module_cols`. `wants_pickup` reads
@@ -1130,7 +1130,8 @@ rim - is drawn in the glowing pass, unlit, so it reads at night and in fog
   settled, after the rod's and the rail's final picks (§12).
 - **The HUD**: `hud::WeaponSlot::of` gives the wells in `HUD_WELL_COLOR`
   (`#E6A8FF`, the ink's base) and the glyph; offline, `WPN OFFLINE`; the
-  ring's ammo pips are the wells left against `full_load` (3). **The anchor
+  ring's ammo pips are the wells left against `full_load`, the carry limit
+  (6). **The anchor
   prompt** (`hud::special_prompt`): while a seat on this screen has an orb in
   flight, one line under that seat's block (the rod's `Corners::prompt`
   slot), centred, at `UI_SMALL_TEXT`, in the ink's light: `hud-well-anchor`
@@ -1155,6 +1156,7 @@ enemies' group:
 | Row | Default | Range | Doc |
 |---|---|---|---|
 | `well_per_pickup: i32` | 3 | 1..=10 | Wells one crate loads. One per launch; the anchor costs nothing. |
+| `well_max: i32` | 6 | 1..=20 | The most wells a tank carries, crates stacked (BB-66). |
 | `well_reload_seconds` | 1.5 | 0..=10 | After a launch, seconds before the next launch. The anchor press is never held back by it. |
 | `well_orb_speed` | 150 | 20..=1000 | How fast the orb flies (px/s): slower than a seat drives, about an enemy's pace. |
 | `well_orb_range_px` | 320 | 32..=1000 | How far it flies before it anchors itself. |
@@ -1436,7 +1438,7 @@ field, the seat at (3, 6) facing east, parked enemies placed by hand; the
 orb):
 
 - The weapon: `a_well_crate_arms_the_well_and_replaces_the_special_carried`
-  (three a crate, another special emptied, a refill to three),
+  (three a crate, another special emptied, a second stacked up to six),
   `the_press_fires_a_slow_orb_and_spends_one_well` (`Fired` and the orb
   in one tick, at `well_orb_speed` along the facing from the gun line's
   muzzle), `a_second_press_anchors_the_orb_where_it_is` (the zone at the

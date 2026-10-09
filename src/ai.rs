@@ -3159,12 +3159,13 @@ fn build<'a>() -> Node<Brain<'a>> {
             action("chase", act_chase),
         ]),
         // 5.5. Opportunistically go collect a live Laser pickup while firing
-        // shells - reached only once nothing higher-priority (fleeing,
+        // shells, or to stack the laser carried - reached only once nothing higher-priority (fleeing,
         // retreating, attacking, chasing) already claimed this tank, so it
         // never interrupts a fight, just fills idle patrol time with a
         // purposeful detour instead. A tank carries one special weapon and
-        // a crate replaces it (`Tank::take_weapon`), so this tier and the
-        // weapon tiers below are each gated on carrying none
+        // a crate of another replaces it (`Tank::take_weapon`), so this
+        // tier and the weapon tiers below are each gated on carrying none,
+        // or carrying this one short of its carry limit
         // (`Tank::wants_pickup`); which detour is worth taking *first* is
         // expressed by their tier order (laser, then plasma, then missiles,
         // then minigun - strongest first). See `act_seek_laser`. On a field map only a

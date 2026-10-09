@@ -3232,12 +3232,21 @@ impl Game {
             })
             .collect();
         for (pickup_entity, tank_entity, kind, at, spilled) in collected {
+            // The list was drawn up before anything was taken: a crate
+            // taken earlier this frame may already have given an enemy what
+            // it wanted - filled its weapon to the carry limit, healed it -
+            // so a hull over two crates takes the second only while it
+            // still wants it.
+            if !with_tank(&self.world, tank_entity, |t| t.wants_pickup(kind)) {
+                continue;
+            }
             let slot = {
                 let mut q = self.world.query_one::<&mut Tank>(tank_entity);
                 let tank = q.get().expect("collector entity always has a Tank");
                 // A weapon pickup is the one special the tank carries
                 // (`Tank::take_weapon`): another replaces it, the same one
-                // refills. Health/Ammo/SpeedUp never touch it.
+                // stacks up to its carry limit. Health/Ammo/SpeedUp never
+                // touch it.
                 match kind {
                     PickupKind::Health => tank.damage = (tank.damage - tuning().pickup_heal_amount).max(0.0),
                     PickupKind::Ammo => tank.shells_ammo += tuning().pickup_ammo_amount,
@@ -6877,7 +6886,7 @@ mod determinism_tests {
         // Never bump these to go green - work out which change moved them
         // first.
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (11_365_739_967_979_466_473, 16_387_833_415_423_339_632), "(one seat, two seats)");
+        assert_eq!((one, two), (14_152_753_630_535_899_173, 13_765_289_247_472_503_071), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round
@@ -8382,11 +8391,11 @@ cells."30,20" = { kind = "frog" }
 
     /// A tank carries one special weapon at a time (`Tank::take_weapon`):
     /// a crate for another weapon replaces the one carried, its ammo lost; a
-    /// crate for the same weapon refills it to one crate's worth rather than
-    /// stacking; spent, the trigger fires shells, whose magazine no weapon
-    /// crate touches.
+    /// crate for the same weapon stacks a crate's worth on top of what is
+    /// left, up to its carry limit (`laser_charges_max`); spent, the
+    /// trigger fires shells, whose magazine no weapon crate touches.
     #[test]
-    fn a_weapon_crate_replaces_the_special_carried_and_refills_the_same() {
+    fn a_weapon_crate_replaces_the_special_carried_and_stacks_the_same() {
         let at = Position::new(640.0, 360.0);
         let mut game = game_on(OPEN_MAP, 0, Some(1));
         let player = game.player().expect("player");
@@ -8406,9 +8415,14 @@ cells."30,20" = { kind = "frog" }
 
         with_tank_mut(&game.world, player, |t| t.laser_charges = 1);
         collect(&mut game, PickupKind::Laser);
-        assert_eq!(held(&game).2, t.laser_charges_per_pickup, "the same weapon refills to a crate's worth");
+        assert_eq!(held(&game).2, 1 + t.laser_charges_per_pickup, "the same weapon stacks a crate's worth on what is left");
+        while held(&game).2 < t.laser_charges_max {
+            collect(&mut game, PickupKind::Laser);
+        }
+        assert_eq!(held(&game).2, t.laser_charges_max, "up to its carry limit");
         collect(&mut game, PickupKind::Laser);
-        assert_eq!(held(&game).2, t.laser_charges_per_pickup, "and never stacks past it");
+        assert_eq!(held(&game).2, t.laser_charges_max, "and never past it");
+        assert_eq!(held(&game).3, shells, "the shell magazine is never touched");
 
         with_tank_mut(&game.world, player, |t| t.laser_charges = 0);
         assert_eq!(held(&game), (ActiveWeapon::Shell, 0, 0, shells), "spent, the trigger fires shells");
@@ -8436,6 +8450,40 @@ cells."30,20" = { kind = "frog" }
         step(&mut game, Input::default());
         assert_eq!(game.world.query::<&Pickup>().iter().count(), 0, "one on shells takes it");
         assert_eq!(with_tank(&game.world, enemy, |t| t.active_weapon()), ActiveWeapon::Laser);
+    }
+
+    /// An enemy stacks a crate of the weapon it carries the way a seat
+    /// does, up to the carry limit (`Tank::wants_pickup`): over two crates
+    /// in one frame it takes both, and at the limit it leaves the next
+    /// for someone who can use it - checked crate by crate, so the frame
+    /// it reaches the limit it takes nothing past it.
+    #[test]
+    fn an_enemy_stacks_its_weapon_up_to_the_carry_limit_and_leaves_the_rest() {
+        let pickups = |game: &mut Game| game.world.query::<&Pickup>().iter().count();
+        let at = Position::new(300.0, 560.0);
+        let beside = Position::new(at.x + 32.0, at.y);
+        let mut game = game_on(OPEN_MAP, 1, Some(1));
+        game.debug_teleport(1, at, Some(0.0)).expect("enemy in slot 1");
+        let enemy = game.tank_entity_by_slot(1).expect("enemy");
+        let missiles = |game: &Game| with_tank(&game.world, enemy, |t| t.missile_ammo);
+        let t = tuning();
+        with_tank_mut(&game.world, enemy, |t| t.disarm());
+        spawn_pickup_at(&mut game.world, at, PickupKind::Missiles, None);
+        spawn_pickup_at(&mut game.world, beside, PickupKind::Missiles, None);
+        step(&mut game, Input::default());
+        assert_eq!(pickups(&mut game), 0, "it takes both");
+        assert_eq!(missiles(&game), 2 * t.missile_ammo_per_pickup, "stacked");
+
+        // One crate short of the limit: the first fills it, the second is
+        // left where it is.
+        with_tank_mut(&game.world, enemy, |tk| tk.missile_ammo = t.missile_ammo_max - 1);
+        spawn_pickup_at(&mut game.world, at, PickupKind::Missiles, None);
+        spawn_pickup_at(&mut game.world, beside, PickupKind::Missiles, None);
+        step(&mut game, Input::default());
+        assert_eq!(pickups(&mut game), 1, "the one past the limit is left");
+        assert_eq!(missiles(&game), t.missile_ammo_max, "filled to the limit");
+        step(&mut game, Input::default());
+        assert_eq!(pickups(&mut game), 1, "and stays left while it is full");
     }
 
     /// The forgiveness a thumb needs (`player_shot_hit_pad_px`): a player's

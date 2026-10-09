@@ -137,10 +137,12 @@ fn an_fpv_crate_arms_the_swarm_and_replaces_the_special_carried() {
     assert_eq!((tank.special(), tank.laser_charges, tank.fpv_drones), (Some(ActiveWeapon::FpvSwarm), 0, t.fpv_drones_per_pickup));
     tank.fpv_drones = 2;
     tank.take_weapon(ActiveWeapon::FpvSwarm);
-    assert_eq!(tank.fpv_drones, t.fpv_drones_per_pickup, "a second crate refills to a crate's worth");
+    assert_eq!(tank.fpv_drones, 2 + t.fpv_drones_per_pickup, "a second crate stacks on what is left");
+    tank.take_weapon(ActiveWeapon::FpvSwarm);
+    assert_eq!(tank.fpv_drones, t.fpv_drones_max, "up to the halo's limit");
     tank.take_weapon(ActiveWeapon::Minigun);
     assert_eq!((tank.fpv_drones, tank.special()), (0, Some(ActiveWeapon::Minigun)), "another weapon's crate replaces the halo");
-    assert_eq!(ActiveWeapon::FpvSwarm.full_load(), t.fpv_drones_per_pickup);
+    assert_eq!(ActiveWeapon::FpvSwarm.full_load(), t.fpv_drones_max);
     assert_eq!(ActiveWeapon::FpvSwarm.trigger(), crate::tank::Trigger::Press);
     assert_eq!(crate::pickup::PickupKind::FpvSwarm.weapon(), Some(ActiveWeapon::FpvSwarm));
 }
@@ -160,7 +162,7 @@ fn a_press_launches_one_drone_and_spends_one() {
     assert_eq!(tank(&game, seat, |tk| tk.fpv_drones), t.fpv_drones_per_pickup - 1);
     let d = drones(&game);
     assert_eq!(d.len(), 1);
-    let (slot_point, _) = crate::fpv::halo_slot(SEAT, tank(&game, seat, |tk| tk.sprite_size()), 5, 6);
+    let (slot_point, _) = crate::fpv::halo_slot(SEAT, tank(&game, seat, |tk| tk.sprite_size()), 5, crate::fpv::Halo::of(&t));
     assert!(d[0].origin.distance_to(slot_point) < 1.0, "the top slot's drone: {:?} vs {:?}", d[0].origin, slot_point);
     // Held: nothing more.
     let mut seen = Vec::new();

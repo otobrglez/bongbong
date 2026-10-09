@@ -3,9 +3,10 @@
 BB-39, the third of the six weapons of BB-36. A special weapon from its own
 crate (`pickup = "gauss_rail"`), one at a time like every other
 (`Tank::take_weapon`): a crate loads `gauss_slugs_per_pickup` (4) slugs, a
-re-pick refills to four, another weapon's crate replaces it. Seats and
-enemies alike: an enemy takes the crate while it fires shells
-(`Tank::wants_pickup`) and uses it by its own rule (§4).
+re-pick stacks four more up to `gauss_slugs_max` (9), another weapon's crate
+replaces it. Seats and
+enemies alike: an enemy takes the crate while it fires shells, or to
+stack the one it carries (`Tank::wants_pickup`) and uses it by its own rule (§4).
 
 Hold the trigger and the rail charges for a second and a half while the tank
 slows to a crawl and the charge glows. Let go and a slug crosses the whole
@@ -74,7 +75,7 @@ reuses, and the **lane** among the dangers an enemy keeps out of.
   ends. The first three clear the charge where they happen with no event;
   a trigger that is no longer the rail's ends it in `step_charge` with
   `ChargeEnded { end: Lapsed }`. A crate of the rail taken mid-charge
-  refills and keeps the charge.
+  stacks its slugs and keeps the charge.
 - **It holds through** a teleport (the charge is the trigger's, held by
   whoever holds it, and nothing about it is tied to where the hull stands -
   a seat crawling into a portal comes out with its finger on the trigger),
@@ -212,7 +213,7 @@ reuses, and the **lane** among the dangers an enemy keeps out of.
 | A sonic hammer's shove | The charge holds; the skid carries the hull, facing kept; the crawl resumes when the skid ends |
 | A teleport | The charge holds (a seat's and an enemy's); the lane is wherever it now faces |
 | Another weapon's crate | The charge lapses next tick (the trigger is no longer the rail's: `ChargeEnded { end: Lapsed }`) |
-| A rail crate | Refills the slugs; the charge holds |
+| A rail crate | Stacks four slugs, up to nine; the charge holds |
 | A hit, a shield breaking | The charge holds |
 | The round ends | `end_round` clears every charge; nothing fires on the end screen |
 
@@ -276,7 +277,7 @@ in the same places:
    like the laser's and the plasma's crates), `PickupKind::weapon`
    (`Some(ActiveWeapon::GaussRail)`), `name`.
 2. `ActiveWeapon::GaussRail` (`name` "gauss_rail", `full_load` =
-   `gauss_slugs_per_pickup`, `tell_seconds` none - the charge is its tell),
+   `gauss_slugs_max`, `tell_seconds` none - the charge is its tell),
    appended to `SPECIAL_WEAPONS`; `Tank::gauss_slugs` with its arms in
    `weapon_ammo`, `take_weapon`, `empty_stock`, `module_cols`.
    `wants_pickup` reads `special()`: an enemy takes the crate only while it
@@ -1005,7 +1006,7 @@ positions, never rolled.
   the HUD's red within `VENT_WARN_SECONDS` of the vent, `DIM` otherwise.
   The count comes back the frame the charge ends; an offline special
   (`WPN OFFLINE`) shows no gauge. The ring's ammo pips are the slugs left
-  against `full_load` (4). A replica's seat and a client's own read the
+  against `full_load`, the carry limit (9). A replica's seat and a client's own read the
   same slot (the client's from its predicted charge, §8).
 - **The off-screen warning**: the wind-up's arrow (`ArrowKind::Windup`) in
   `HUD_GAUSS_COLOR` rimmed hostile red, blinking quicker as the charge
@@ -1026,6 +1027,7 @@ enemies' group:
 | Row | Default | Range | Doc |
 |---|---|---|---|
 | `gauss_slugs_per_pickup: i32` | 4 | 1..=20 | Slugs one gauss rail crate loads. One per full release. |
+| `gauss_slugs_max: i32` | 9 | 1..=40 | The most slugs a tank carries, crates stacked (BB-66). |
 | `gauss_charge_seconds` | 1.5 | 0.1..=10 | Seconds the trigger is held before the rail is full and a release fires; released sooner, the charge fizzles. |
 | `gauss_overcharge_seconds` | 1.0 | 0..=10 | Seconds past full before a release fires overcharged (cuts iron, throws the shooter twice as far and spins it round); at or past `gauss_hold_seconds`, never. |
 | `gauss_hold_seconds` | 2.0 | 0..=20 | Seconds a full charge may be held before it vents, firing nothing. |

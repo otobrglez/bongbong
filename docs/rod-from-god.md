@@ -3,9 +3,9 @@
 BB-41, the fifth of the six weapons of BB-36. A special weapon from its own
 crate (`pickup = "rod_from_god"`), one at a time like every other
 (`Tank::take_weapon`): a crate loads `rod_per_pickup` (2) calls, a re-pick
-refills to two, another weapon's crate replaces it. Seats and enemies
-alike: an enemy takes the crate while it carries no special
-(`Tank::wants_pickup`) and uses it by its own rule (§4).
+stacks two more up to `rod_max` (6), another weapon's crate replaces it. Seats and enemies
+alike: an enemy takes the crate while it carries no special, or to stack
+the calls it carries (`Tank::wants_pickup`) and uses it by its own rule (§4).
 
 Hold the trigger and a reticle appears a few cells ahead of the tank; steer
 it with the stick while the hull stands still; let go and the strike is
@@ -84,7 +84,7 @@ a seat has stood still, how fast it moves), which the well's AI reads too.
 - **It lapses** (`ChargeEnd::Lapsed`) - nothing called, nothing spent - as
   every charge does: the caller wrecked, disabled by an EMP (the uplink is
   electric), another weapon's crate taken, the special taken offline, the
-  round ended. A rod crate taken mid-reticle refills and keeps it. It holds
+  round ended. A rod crate taken mid-reticle stacks its calls and keeps it. It holds
   through a teleport, a hammer's shove, a hit and a shield breaking (the
   rail's rules), the reticle pulled back into range where the hull now
   stands.
@@ -296,7 +296,7 @@ The issue's at-11 is built: it fits the round's existing terrain systems
 | A hammer's shove on the caller | The charge holds; the reticle is pulled back into range where the skid leaves the hull | Nothing |
 | The caller teleports | The charge holds; the reticle is pulled into the new range | Nothing |
 | Another weapon's crate | The charge lapses next tick | Nothing: the call is the world's |
-| A rod crate | Refills the calls; the charge holds | Refills |
+| A rod crate | Stacks two calls, up to six; the charge holds | Stacks |
 | The round ends | `end_round` lapses it | The call lands on the end screen, harmlessly |
 | The round restarts | `init` clears it | `init` clears every zone |
 
@@ -375,11 +375,12 @@ Each item of the checklist (docs/sonic-hammer.md §3.0) gets its rod arm:
    kinetic rod, no explosive), `PickupKind::weapon`
    (`Some(ActiveWeapon::RodFromGod)`), `name`.
 2. `ActiveWeapon::RodFromGod` (`name` "rod_from_god", `full_load` =
-   `rod_per_pickup`, `tell_seconds` none - the reticle and the call are its
+   `rod_max`, `tell_seconds` none - the reticle and the call are its
    tell -, `trigger` `Trigger::Charge`, `charge_rule` §3.2), appended to
    `SPECIAL_WEAPONS`; `Tank::rods` with its arms in `weapon_ammo`,
    `take_weapon`, `empty_stock`, `module_cols`. `wants_pickup` reads
-   `special()`: an enemy takes the crate only while it carries no special.
+   `special()`: an enemy takes the crate while it carries no special, or to
+   stack its calls.
 3. The `fire_charge` arm (`fire_rod`); the trigger through
    `drive_player`'s `match weapon.trigger()` (`Charge`).
 4. `pickup_phase` needs nothing.
@@ -1164,7 +1165,7 @@ fair); what lingers on the ground is shaded in the lit pass.
   crate's light) and the glyph; while a reticle is held the rail's charge
   gauge stands in the count's place (filling over the settle, white once a
   release calls); offline, the EMP's `WPN OFFLINE`. The ring's ammo pips are
-  the calls left against `full_load` (2).
+  the calls left against `full_load`, the carry limit (6).
 - **The call-in prompt** (`PlayChrome::prompt`, `hud::rod_prompt`): while
   this window's seat - a couch's first that holds one - holds a reticle,
   the first line under the left cluster, at `HUD_STATUS_TEXT_SIZE`, in
@@ -1198,6 +1199,7 @@ group:
 | Row | Default | Range | Doc |
 |---|---|---|---|
 | `rod_per_pickup: i32` | 2 | 1..=10 | Calls one rod crate loads. One per call. |
+| `rod_max: i32` | 6 | 1..=20 | The most calls a tank carries, crates stacked (BB-66). |
 | `rod_settle_seconds` | 0.25 | 0..=2 | How long the trigger is held before a release calls; a shorter tap calls nothing. |
 | `rod_hold_seconds` | 10 | 1..=60 | How long past that a reticle may be held before the uplink times out, calling nothing. |
 | `rod_reload_seconds` | 1.0 | 0..=10 | After a call, seconds before the next reticle. |

@@ -117,7 +117,7 @@ pub fn halo_of(tank: &Tank, time: f32) -> Option<crate::fpv::HaloLook> {
         centre: tank.position,
         sprite_size: tank.sprite_size(),
         drones,
-        slots: t.fpv_drones_per_pickup.max(1) as usize,
+        halo: crate::fpv::Halo::of(&t),
         time,
         lamp: crate::fpv::lamp_color(tank.owner()),
         settle,

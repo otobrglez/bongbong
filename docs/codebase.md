@@ -888,15 +888,18 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `turret_point`/`gun_line_muzzle` put `tank_art`'s anchors in the world. Ground rings: the health
   gauge (`RingStyle::Gauge`, `HealthRamp::Team` per seat; enemies show theirs after a hit or under a
   threshold) with, in play and online, what this window's seats' triggers have left as ammo pips on
-  its lower arc - the special carried, else shells, against `ActiveWeapon::full_load`, the vitals'
-  own readout (`hud::WeaponSlot`) - (`ammo_pips`/`draw_ammo_pips`, `AMMO_PIPS` 10, drawn in
-  `paint_field_glowing`), the shield ring, the locate ripple and `P1`..`P8` labels, all centred on
-  the hull's `position` (no lag behind it). `Tank::hit_by_seat` is the per-frame twin of
+  its lower arc - the special carried against its carry limit, else shells against the magazine
+  (`ActiveWeapon::full_load`), the vitals' own readout (`hud::WeaponSlot`) -
+  (`ammo_pips`/`draw_ammo_pips`, `AMMO_PIPS` 10, drawn in `paint_field_glowing`), the shield ring,
+  the locate ripple and `P1`..`P8` labels, all centred on the hull's `position` (no lag behind it). `Tank::hit_by_seat` is the per-frame twin of
   `last_hit_by` (the probe's fire tally). **One special weapon at a time** (`Tank::take_weapon`,
-  `SPECIAL_WEAPONS`): a weapon crate replaces the special carried (its ammo lost) and refills the
-  same one to its `*_per_pickup`, never past it; `active_weapon` is that special while it has ammo,
-  else shells, whose magazine is its own (recharge, the Ammo crate). Tests: `health_ring_tests`,
-  `weapon_inventory_tests`, `chassis_tests`.
+  `SPECIAL_WEAPONS`): a weapon crate replaces the special carried (its ammo lost) and stacks a
+  crate's worth (`*_per_pickup`) on the same one, up to its carry limit (`*_max`, never under a
+  crate - `ActiveWeapon::crate_load`); `active_weapon` is that special while it has ammo, else
+  shells, whose magazine is its own (recharge, the Ammo crate). Seats and enemies stack alike; the
+  pickup phase re-checks `wants_pickup` crate by crate, so a hull over two crates takes the second
+  only while it still wants it. Tests: `health_ring_tests`, `weapon_inventory_tests`,
+  `chassis_tests`.
 - `frog.rs` (docs/FROG_SPEC.md) — `Frog`/`Side`; one struct serves the player's frog and the Hunt
   mission's enemy frog. Art faces right and is mirrored. **A frog only bites the other side**; the
   evasive hop shies from any tank (`combat::frog_hop_target`, a box test via `Terrain::frog_fits`).
@@ -915,9 +918,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   from `static/pickup_glyphs.png` - `draw_glyph`, which the HUD's readouts draw too); no body,
   collected the moment a hull's box grown by `pickup_collect_pad_px` touches the pickup's square
   (`Pickup::in_reach`, a box test so the front and the corners collect like the side), fixed map
-  slots. **Enemies only collect what they would use** (a weapon crate only while on shells, so one
-  never trades away a stocked weapon; `Tank::wants_pickup`, the same predicate `ai::build`'s seek
-  tiers call - collection must never be stricter than seeking or a tank parks on a pickup forever);
+  slots. **Enemies only collect what they would use** (a weapon crate while on shells, or of the
+  weapon carried while short of its carry limit, so one never trades away a stocked weapon;
+  `Tank::wants_pickup`, the same predicate `ai::build`'s seek tiers call - collection must never
+  be stricter than seeking or a tank parks on a pickup forever);
   players always collect. SpeedUp refreshes its timer, never stacks. **Shield is a pool on a
   clock**: full heal plus `shield_hp` and `shield_timer` (`Tank::raise_shield`; it shatters when
   `shield_seconds` run out, 6 by default, or when spent - about four enemy shells), spent at two

@@ -3,9 +3,10 @@
 BB-38, the second of the six weapons of BB-36. A special weapon from its own
 crate (`pickup = "emp_burst"`), one at a time like every other
 (`Tank::take_weapon`): a crate loads `emp_charges_per_pickup` (3) pulses, a
-re-pick refills to three, another weapon's crate replaces it. Seats and
-enemies alike: an enemy takes the crate while it fires shells
-(`Tank::wants_pickup`) and uses it by its own rule (§4).
+re-pick stacks three more up to `emp_charges_max` (7), another weapon's
+crate replaces it. Seats and
+enemies alike: an enemy takes the crate while it fires shells, or to
+stack the one it carries (`Tank::wants_pickup`) and uses it by its own rule (§4).
 
 A ring of pale blue blocks runs out five cells from the hull, and
 everything electric it crosses dies for a while: an enemy's brain stops and
@@ -290,7 +291,7 @@ EMP arm, in the same places, nothing beside them:
    row 14, `ink`, `cooks_off` false), `PickupKind::weapon`
    (`Some(ActiveWeapon::Emp)`), `name`.
 2. `ActiveWeapon::Emp` (`name` "emp_burst", `full_load` =
-   `emp_charges_per_pickup`, `tell_seconds` = `emp_tell_seconds`),
+   `emp_charges_max`, `tell_seconds` = `emp_tell_seconds`),
    appended to `SPECIAL_WEAPONS`; `Tank::emp_charges` with its arms in
    `weapon_ammo`, `take_weapon`, `empty_stock`, `module_cols`.
 3. The dispatch arm in `weapons::dispatch_fire_from`; the press edge in
@@ -850,6 +851,7 @@ enemies' group:
 | Row | Default | Range | Doc |
 |---|---|---|---|
 | `emp_charges_per_pickup: i32` | 3 | 1..=20 | Pulses one EMP crate loads. One per press. |
+| `emp_charges_max: i32` | 7 | 1..=40 | The most pulses a tank carries, crates stacked (BB-66). |
 | `emp_radius_px` | 160 | 32..=480 | How far the ring reaches from the hull's centre (px; five cells), to the nearest point of what it strikes. |
 | `emp_ring_speed` | 800 | 60..=5000 | How fast the ring runs out (px/s): what it reaches it strikes when the front gets there. |
 | `emp_disable_seconds` | 3 | 0..=20 | How long a tank the ring reaches stays disabled - an enemy's brain off, its special offline, its lights out - and how long the shooter's own special stays offline. |
@@ -999,7 +1001,8 @@ Protocol 17 (from the hammer's 16), once in the PR.
 field with the seat at (3, 6) facing east and enemies placed by hand):
 
 - `an_emp_crate_arms_the_burst_and_replaces_the_special_carried` - three
-  charges, another special emptied, a second crate refills to three.
+  charges, another special emptied, a second crate stacked on what is
+  left, up to seven.
 - `the_emp_fires_on_the_press_and_takes_its_own_special_offline` - one
   pulse per press; `Fired` then `EmpPulse` in one tick; `special_offline`
   running, `active_weapon` the shell while `special` stays the EMP; a

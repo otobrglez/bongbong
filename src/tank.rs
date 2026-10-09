@@ -1,4 +1,4 @@
-use crate::tuning::tuning;
+use crate::tuning::{Tuning, tuning};
 use clap::ValueEnum;
 use rapier2d::prelude::RigidBodyHandle;
 use serde::{Deserialize, Serialize};
@@ -369,28 +369,42 @@ impl ActiveWeapon {
         }
     }
 
+    /// What one crate of this weapon loads and the most a tank carries of
+    /// it with crates stacked (`*_per_pickup`, `*_max`): what
+    /// `Tank::take_weapon` adds and stops at. The limit is never under one
+    /// crate, so a limit tuned low still lets a crate in whole. The
+    /// flamethrower's are seconds of fuel; the shell cannon's are the ammo
+    /// crate's, which has no limit (`pickup_ammo_amount`).
+    pub fn crate_load(self, t: &Tuning) -> (f32, f32) {
+        let (per, max) = match self {
+            ActiveWeapon::Laser => (t.laser_charges_per_pickup as f32, t.laser_charges_max as f32),
+            ActiveWeapon::Plasma => (t.plasma_ammo_per_pickup as f32, t.plasma_ammo_max as f32),
+            ActiveWeapon::Minigun => (t.minigun_ammo_per_pickup as f32, t.minigun_ammo_max as f32),
+            ActiveWeapon::Missiles => (t.missile_ammo_per_pickup as f32, t.missile_ammo_max as f32),
+            ActiveWeapon::Flamethrower => (t.flame_fuel_per_pickup, t.flame_fuel_max),
+            ActiveWeapon::Grenades => (t.grenade_ammo_per_pickup as f32, t.grenade_ammo_max as f32),
+            ActiveWeapon::SonicHammer => (t.sonic_ammo_per_pickup as f32, t.sonic_ammo_max as f32),
+            ActiveWeapon::Emp => (t.emp_charges_per_pickup as f32, t.emp_charges_max as f32),
+            ActiveWeapon::GaussRail => (t.gauss_slugs_per_pickup as f32, t.gauss_slugs_max as f32),
+            ActiveWeapon::FpvSwarm => (t.fpv_drones_per_pickup as f32, t.fpv_drones_max as f32),
+            ActiveWeapon::RodFromGod => (t.rod_per_pickup as f32, t.rod_max as f32),
+            ActiveWeapon::GravityWell => (t.well_per_pickup as f32, t.well_max as f32),
+            ActiveWeapon::Shell => (t.pickup_ammo_amount as f32, f32::INFINITY),
+        };
+        (per, max.max(per))
+    }
+
     /// The ammo a full stock of this weapon holds: a full magazine of
-    /// shells (`max_shells`), a crate's worth of a special (`*_per_pickup`;
-    /// the flamethrower's fuel in whole seconds, rounded up, as
-    /// `Tank::weapon_ammo` counts it). What the trigger's gauges - the
-    /// vitals' count colour and the pips under a seat's ring - measure
-    /// against.
+    /// shells (`max_shells`, what the magazine recharges to), a special's
+    /// carry limit (`crate_load`; the flamethrower's fuel in whole
+    /// seconds, rounded up, as `Tank::weapon_ammo` counts it). What the
+    /// trigger's gauges - the vitals' count colour and the pips under a
+    /// seat's ring - measure against, so a lone crate of a special that
+    /// stacks reads part full.
     pub fn full_load(self) -> i32 {
-        let t = tuning();
         match self {
-            ActiveWeapon::Laser => t.laser_charges_per_pickup,
-            ActiveWeapon::Plasma => t.plasma_ammo_per_pickup,
-            ActiveWeapon::Minigun => t.minigun_ammo_per_pickup,
-            ActiveWeapon::Missiles => t.missile_ammo_per_pickup,
-            ActiveWeapon::Flamethrower => t.flame_fuel_per_pickup.ceil() as i32,
-            ActiveWeapon::Grenades => t.grenade_ammo_per_pickup,
-            ActiveWeapon::SonicHammer => t.sonic_ammo_per_pickup,
-            ActiveWeapon::Emp => t.emp_charges_per_pickup,
-            ActiveWeapon::GaussRail => t.gauss_slugs_per_pickup,
-            ActiveWeapon::FpvSwarm => t.fpv_drones_per_pickup,
-            ActiveWeapon::RodFromGod => t.rod_per_pickup,
-            ActiveWeapon::GravityWell => t.well_per_pickup,
-            ActiveWeapon::Shell => t.max_shells,
+            ActiveWeapon::Shell => tuning().max_shells,
+            special => special.crate_load(&tuning()).1.ceil() as i32,
         }
     }
 }
@@ -1205,7 +1219,7 @@ impl Tank {
     ///
     /// **Enemies only take what they need.** A pack of enemies that hoovers
     /// up every crate it drives past - at full health, with a full magazine,
-    /// already stocked with the weapon - strips the field of everything the
+    /// at its weapon's carry limit - strips the field of everything the
     /// player was going to use, for no benefit to itself. It reads as spite
     /// rather than as intelligence, and it is not a difficulty knob: it takes
     /// resources away from the player without giving the enemy anything, so
@@ -1231,9 +1245,9 @@ impl Tank {
             PickupKind::Health => self.damage > 0.0,
             PickupKind::Ammo => self.shells_ammo < tuning().max_shells,
             // One special at a time, and a crate replaces what is carried:
-            // an enemy takes a weapon only while it fires shells, so it
-            // never trades away a stocked one.
-            PickupKind::Laser | PickupKind::Plasma | PickupKind::Minigun | PickupKind::Missiles => self.special().is_none(),
+            // an enemy takes a weapon on shells, or stacks the one it
+            // carries (`stacks`), and never trades a stocked one away.
+            PickupKind::Laser | PickupKind::Plasma | PickupKind::Minigun | PickupKind::Missiles => self.stacks(kind),
             PickupKind::SpeedUp => self.speed_boost_timer <= 0.0,
             PickupKind::Shield => self.shield_hp <= 0.0,
             // Player-only: the fuel tank does nothing for an enemy at all.
@@ -1249,15 +1263,27 @@ impl Tank {
             // Player-only: the AI has no use for a ball it cannot aim.
             PickupKind::Grenades => false,
             // Its own rule fires it (`ai::special_rule`), so an enemy takes
-            // one the way it takes any weapon: only while on shells.
-            PickupKind::SonicHammer => self.special().is_none(),
+            // one the way it takes any weapon.
+            PickupKind::SonicHammer => self.stacks(kind),
             // The same rule: a tank whose special is offline still carries
             // it, and does not trade it for a crate.
-            PickupKind::Emp => self.special().is_none(),
-            PickupKind::GaussRail => self.special().is_none(),
-            PickupKind::FpvSwarm => self.special().is_none(),
-            PickupKind::RodFromGod => self.special().is_none(),
-            PickupKind::GravityWell => self.special().is_none(),
+            PickupKind::Emp => self.stacks(kind),
+            PickupKind::GaussRail => self.stacks(kind),
+            PickupKind::FpvSwarm => self.stacks(kind),
+            PickupKind::RodFromGod => self.stacks(kind),
+            PickupKind::GravityWell => self.stacks(kind),
+        }
+    }
+
+    /// Whether a crate of `kind`'s weapon does this tank any good: on
+    /// shells it arms it, and carrying that same weapon it stacks while
+    /// short of the carry limit (`ActiveWeapon::full_load`). A crate of
+    /// another weapon would throw the one carried away, so it never does.
+    fn stacks(&self, kind: PickupKind) -> bool {
+        match (self.special(), kind.weapon()) {
+            (None, Some(_)) => true,
+            (Some(carried), Some(weapon)) => carried == weapon && self.weapon_ammo(weapon) < weapon.full_load(),
+            (_, None) => false,
         }
     }
 
@@ -1821,29 +1847,31 @@ impl Tank {
     /// Take up `weapon` from its crate - the inventory rule: one special
     /// weapon at a time, kept until its ammo is spent, then shells. A
     /// different weapon replaces the one carried, whose ammo is lost; the
-    /// same weapon refills to one crate's worth (`*_per_pickup`), never
-    /// past it and never below what is left. The shell cannon is not part
-    /// of this: its magazine stays as it is. A burst or volley still in
-    /// the air when the weapon is swapped stops short, as one running dry
-    /// does (`tick_queued_shots`).
+    /// same weapon stacks a crate's worth on top of what is left, up to
+    /// its carry limit (`ActiveWeapon::crate_load`), and a stock already
+    /// past the limit keeps what it has. The shell cannon is not part of
+    /// this: its magazine stays as it is. A burst or volley still in the
+    /// air when the weapon is swapped stops short, as one running dry does
+    /// (`tick_queued_shots`).
     pub fn take_weapon(&mut self, weapon: ActiveWeapon) {
-        let t = tuning();
         for other in SPECIAL_WEAPONS.into_iter().filter(|&w| w != weapon) {
             self.empty_stock(other);
         }
+        let (per, max) = weapon.crate_load(&tuning());
+        let stack = |have: i32| have.max((have + per as i32).min(max as i32));
         match weapon {
-            ActiveWeapon::Laser => self.laser_charges = self.laser_charges.max(t.laser_charges_per_pickup),
-            ActiveWeapon::Plasma => self.plasma_ammo = self.plasma_ammo.max(t.plasma_ammo_per_pickup),
-            ActiveWeapon::Minigun => self.minigun_ammo = self.minigun_ammo.max(t.minigun_ammo_per_pickup),
-            ActiveWeapon::Missiles => self.missile_ammo = self.missile_ammo.max(t.missile_ammo_per_pickup),
-            ActiveWeapon::Flamethrower => self.flame_fuel = self.flame_fuel.max(t.flame_fuel_per_pickup),
-            ActiveWeapon::Grenades => self.grenade_ammo = self.grenade_ammo.max(t.grenade_ammo_per_pickup),
-            ActiveWeapon::SonicHammer => self.sonic_ammo = self.sonic_ammo.max(t.sonic_ammo_per_pickup),
-            ActiveWeapon::Emp => self.emp_charges = self.emp_charges.max(t.emp_charges_per_pickup),
-            ActiveWeapon::GaussRail => self.gauss_slugs = self.gauss_slugs.max(t.gauss_slugs_per_pickup),
-            ActiveWeapon::FpvSwarm => self.fpv_drones = self.fpv_drones.max(t.fpv_drones_per_pickup),
-            ActiveWeapon::RodFromGod => self.rods = self.rods.max(t.rod_per_pickup),
-            ActiveWeapon::GravityWell => self.wells = self.wells.max(t.well_per_pickup),
+            ActiveWeapon::Laser => self.laser_charges = stack(self.laser_charges),
+            ActiveWeapon::Plasma => self.plasma_ammo = stack(self.plasma_ammo),
+            ActiveWeapon::Minigun => self.minigun_ammo = stack(self.minigun_ammo),
+            ActiveWeapon::Missiles => self.missile_ammo = stack(self.missile_ammo),
+            ActiveWeapon::Flamethrower => self.flame_fuel = self.flame_fuel.max((self.flame_fuel + per).min(max)),
+            ActiveWeapon::Grenades => self.grenade_ammo = stack(self.grenade_ammo),
+            ActiveWeapon::SonicHammer => self.sonic_ammo = stack(self.sonic_ammo),
+            ActiveWeapon::Emp => self.emp_charges = stack(self.emp_charges),
+            ActiveWeapon::GaussRail => self.gauss_slugs = stack(self.gauss_slugs),
+            ActiveWeapon::FpvSwarm => self.fpv_drones = stack(self.fpv_drones),
+            ActiveWeapon::RodFromGod => self.rods = stack(self.rods),
+            ActiveWeapon::GravityWell => self.wells = stack(self.wells),
             ActiveWeapon::Shell => {}
         }
     }
@@ -2381,7 +2409,8 @@ fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 12] {
             }
     });
     // The drum's four chambers show what is left of a crate's worth,
-    // rounded up, so the last grenade always shows.
+    // rounded up, so the last grenade always shows; a stock stacked past
+    // one crate is a full drum with spares.
     let grenades = (tank.grenade_ammo > 0).then(|| {
         let full = tuning().grenade_ammo_per_pickup.max(1);
         let loaded = (tank.grenade_ammo.min(full) * 4 + full - 1) / full;
@@ -3095,37 +3124,73 @@ mod weapon_inventory_tests {
     }
 
     #[test]
-    fn the_same_weapon_refills_to_one_crates_worth() {
+    fn the_same_weapon_stacks_up_to_its_carry_limit() {
         let t = tuning();
         let mut tank = Tank::default();
         tank.take_weapon(ActiveWeapon::Plasma);
         tank.plasma_ammo = 2;
         tank.take_weapon(ActiveWeapon::Plasma);
-        assert_eq!(tank.plasma_ammo, t.plasma_ammo_per_pickup, "refilled, not stacked");
+        assert_eq!(tank.plasma_ammo, 2 + t.plasma_ammo_per_pickup, "a crate's worth on top of what is left");
+        for _ in 0..t.plasma_ammo_max {
+            tank.take_weapon(ActiveWeapon::Plasma);
+        }
+        assert_eq!(tank.plasma_ammo, t.plasma_ammo_max, "stacked to the limit and no further");
+        // A stock already past the limit keeps what it has.
+        tank.plasma_ammo = t.plasma_ammo_max + 5;
         tank.take_weapon(ActiveWeapon::Plasma);
-        assert_eq!(tank.plasma_ammo, t.plasma_ammo_per_pickup, "a full stock stays full");
-        // A stock already past a crate's worth keeps what it has.
-        tank.plasma_ammo = 3 * t.plasma_ammo_per_pickup;
-        tank.take_weapon(ActiveWeapon::Plasma);
-        assert_eq!(tank.plasma_ammo, 3 * t.plasma_ammo_per_pickup);
+        assert_eq!(tank.plasma_ammo, t.plasma_ammo_max + 5);
         // The flamethrower's fuel the same way, in seconds.
         tank.take_weapon(ActiveWeapon::Flamethrower);
         assert_eq!((tank.plasma_ammo, tank.flame_fuel), (0, t.flame_fuel_per_pickup));
         tank.flame_fuel = 1.0;
         tank.take_weapon(ActiveWeapon::Flamethrower);
-        assert_eq!(tank.flame_fuel, t.flame_fuel_per_pickup);
+        assert_eq!(tank.flame_fuel, 1.0 + t.flame_fuel_per_pickup);
+        for _ in 0..20 {
+            tank.take_weapon(ActiveWeapon::Flamethrower);
+        }
+        assert_eq!(tank.flame_fuel, t.flame_fuel_max);
     }
 
-    /// A crate's worth of any special is exactly its full load, so the
-    /// gauges show a fresh pickup full; the shell magazine's is `max_shells`.
+    /// The carry limit is never under one crate: a limit tuned below a
+    /// crate's worth still lets a fresh crate in whole, and stops there.
     #[test]
-    fn a_fresh_crate_is_a_full_load() {
+    fn a_carry_limit_below_a_crate_still_takes_one_whole() {
+        let t = Tuning { gauss_slugs_per_pickup: 4, gauss_slugs_max: 2, ..Tuning::DEFAULT };
+        assert_eq!(ActiveWeapon::GaussRail.crate_load(&t), (4.0, 4.0));
+    }
+
+    /// Every special's full load is its carry limit, so a lone crate of one
+    /// that stacks reads part full and the gauge shows what more fits; the
+    /// shell magazine's is `max_shells`.
+    #[test]
+    fn a_full_load_is_the_carry_limit() {
         for weapon in SPECIAL_WEAPONS {
+            let (per, max) = weapon.crate_load(&tuning());
             let mut tank = Tank::default();
             tank.take_weapon(weapon);
-            assert_eq!(tank.weapon_ammo(weapon), weapon.full_load(), "{weapon:?}");
+            assert_eq!(tank.weapon_ammo(weapon), per.ceil() as i32, "{weapon:?}: a fresh crate is one crate's worth");
+            assert_eq!(weapon.full_load(), max.ceil() as i32, "{weapon:?}");
+            assert!(per < max, "{weapon:?} stacks");
+            while tank.weapon_ammo(weapon) < weapon.full_load() {
+                tank.take_weapon(weapon);
+            }
+            assert_eq!(tank.weapon_ammo(weapon), weapon.full_load(), "{weapon:?}: crates stack to a full load");
         }
         assert_eq!(ActiveWeapon::Shell.full_load(), tuning().max_shells);
+    }
+
+    /// An enemy wants a weapon crate on shells, or one of the weapon it
+    /// carries while short of the carry limit - never another weapon's.
+    #[test]
+    fn an_enemy_stacks_its_own_weapon_and_never_trades_it() {
+        let mut enemy = Tank { owner: Owner::Enemy(2), ..Tank::default() };
+        assert!(enemy.wants_pickup(PickupKind::Plasma), "on shells");
+        enemy.take_weapon(ActiveWeapon::Plasma);
+        assert!(enemy.wants_pickup(PickupKind::Plasma), "its own, short of the limit");
+        assert!(!enemy.wants_pickup(PickupKind::Laser), "never another weapon's");
+        enemy.plasma_ammo = ActiveWeapon::Plasma.full_load();
+        assert!(!enemy.wants_pickup(PickupKind::Plasma), "at the limit");
+        assert!(!enemy.wants_pickup(PickupKind::Grenades), "a player-only weapon stays the players'");
     }
 
     #[test]

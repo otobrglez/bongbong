@@ -3,12 +3,13 @@
 //! `simulation/fpv.rs` is the world half - the launch, the locks, the
 //! bursts, what strikes a drone in the air and what the AI is handed.
 //!
-//! A crate loads six drones into a halo over the tank. The halo is the
-//! stock, drawn - `Tank::fpv_drones` of `full_load` fixed slots round the
-//! hull (`halo_slot`) - and nothing in it is in the world. A press sends the
-//! top slot's drone up: it climbs out along its slot's bearing (`Launch`,
-//! the same whatever it is after - `launch_path`), cruises over everything
-//! toward its aim (`Cruise`, tracking its lock), commits within
+//! A crate loads six drones into a halo over the tank, and a second crate
+//! six more. The halo is the stock, drawn - `Tank::fpv_drones` of `Halo`'s
+//! fixed slots round the hull (`halo_slot`) - and nothing in it is in the
+//! world. A press sends the top slot's drone up: it climbs out along its
+//! slot's bearing (`Launch`, the same whatever it is after -
+//! `launch_path`), cruises over everything toward its aim (`Cruise`,
+//! tracking its lock), commits within
 //! `fpv_commit_px` and comes down on the point it committed to (`Dive`),
 //! and bursts there. Struck in the air it falls (`Falling`) and lands a
 //! dud. Like a missile it works on a ground point and a height, the drawing
@@ -23,8 +24,8 @@ use crate::tank::Tank;
 use crate::tuning::{Tuning, tuning};
 use crate::{PHYSICS_FIXED_DT, Position};
 
-/// The bearing of the halo's first slot (degrees, 0 = up, clockwise): the
-/// slots stand at this plus `k * 360 / n`, so none sits on the gun line.
+/// The bearing of the halo's first slot (degrees, 0 = up, clockwise): one
+/// crate's six stand at this plus `k * 60`, so none sits on the gun line.
 pub const FPV_HALO_START_DEG: f32 = 30.0;
 
 /// How far from the hull's centre the halo's ring stands, against the
@@ -441,12 +442,42 @@ fn bearing_dir(bearing: f32) -> Vec2 {
     Vec2::new(r.sin(), -r.cos())
 }
 
-/// Halo slot `k` of `n` round a hull at `centre` whose sprite is
+/// The halo's fixed slots: a ring of `per` - one crate's drones - for each
+/// of the `crates` a full stock stacks (`ActiveWeapon::crate_load`), each
+/// crate's ring turned to stand between the ones before it. Slot `k` is
+/// crate `k / per`'s, so it never moves as crates come and go: a second
+/// crate's drones fill the gaps of the first's and leave first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Halo {
+    pub per: usize,
+    pub crates: usize,
+}
+
+impl Halo {
+    /// The halo `t` stacks.
+    pub fn of(t: &Tuning) -> Halo {
+        let (per, max) = crate::tank::ActiveWeapon::FpvSwarm.crate_load(t);
+        let per = (per as usize).max(1);
+        Halo { per, crates: (max as usize).div_ceil(per).max(1) }
+    }
+
+    /// Its slots in all.
+    pub fn slots(self) -> usize {
+        self.per * self.crates
+    }
+
+    /// Where slot `k` stands among the ring's `slots` places, counted
+    /// clockwise from the first.
+    pub fn place(self, k: usize) -> usize {
+        (k % self.per) * self.crates + (k / self.per) % self.crates
+    }
+}
+
+/// Halo slot `k` of `halo` round a hull at `centre` whose sprite is
 /// `sprite_size` across: its ground point and its outward bearing. Fixed in
 /// the world - neither orbiting nor turning with the hull.
-pub fn halo_slot(centre: Position, sprite_size: f32, k: usize, n: usize) -> (Position, Vec2) {
-    let n = n.max(1);
-    let out = bearing_dir(FPV_HALO_START_DEG + k as f32 * 360.0 / n as f32);
+pub fn halo_slot(centre: Position, sprite_size: f32, k: usize, halo: Halo) -> (Position, Vec2) {
+    let out = bearing_dir(FPV_HALO_START_DEG + halo.place(k) as f32 * 360.0 / halo.slots() as f32);
     (centre + out * (sprite_size * FPV_HALO_RADIUS_FRACTION), out)
 }
 
@@ -651,9 +682,9 @@ pub fn compose_shadow(ground: Position, height: f32, opacity: f32, shadow_dir: V
 pub struct HaloLook {
     pub centre: Position,
     pub sprite_size: f32,
-    /// Drones left in it, and its slots (`full_load`).
+    /// Drones left in it, and its slots.
     pub drones: usize,
-    pub slots: usize,
+    pub halo: Halo,
     pub time: f32,
     /// The lamps' colour.
     pub lamp: Color,
@@ -674,10 +705,11 @@ pub fn compose_halo(look: &HaloLook, t: &Tuning) -> (Vec<Shape>, DronePicture) {
     let mut shadows = Vec::new();
     let mut pic = DronePicture::default();
     let shadow_dir = Vec2::new(t.shadow_dir_x, t.shadow_dir_y);
-    for k in 0..look.drones.min(look.slots) {
-        let (ground, _) = halo_slot(look.centre, look.sprite_size, k, look.slots);
+    let slots = look.halo.slots();
+    for k in 0..look.drones.min(slots) {
+        let (ground, _) = halo_slot(look.centre, look.sprite_size, k, look.halo);
         let seed = look.seed.wrapping_mul(31).wrapping_add(k as u32);
-        let bob = if ((look.time / 1.3 + k as f32 / look.slots.max(1) as f32).rem_euclid(1.0)) < 0.5 { 0.0 } else { pyro::BLOCK };
+        let bob = if ((look.time / 1.3 + look.halo.place(k) as f32 / slots as f32).rem_euclid(1.0)) < 0.5 { 0.0 } else { pyro::BLOCK };
         let (height, falling, live) = match look.wreck_age {
             Some(age) => {
                 let k = (age / FPV_HALO_FALL_SECONDS).clamp(0.0, 1.0);
@@ -743,18 +775,37 @@ mod tests {
     #[test]
     fn halo_slots_are_fixed_round_the_hull() {
         let centre = Position::new(500.0, 500.0);
-        let (a, out) = halo_slot(centre, 80.0, 0, 6);
+        let bearings = |halo: Halo| -> Vec<f32> {
+            (0..halo.slots())
+                .map(|k| {
+                    let (p, _) = halo_slot(centre, 80.0, k, halo);
+                    (p.x - centre.x).atan2(-(p.y - centre.y)).to_degrees().rem_euclid(360.0)
+                })
+                .collect()
+        };
+        let one = Halo { per: 6, crates: 1 };
+        let (a, out) = halo_slot(centre, 80.0, 0, one);
         assert!((a.distance_to(centre) - 44.0).abs() < 1e-3, "{a:?}");
         assert!((out.length() - 1.0).abs() < 1e-4);
-        let bearings: Vec<f32> = (0..6)
-            .map(|k| {
-                let (p, _) = halo_slot(centre, 80.0, k, 6);
-                (p.x - centre.x).atan2(-(p.y - centre.y)).to_degrees().rem_euclid(360.0)
-            })
-            .collect();
-        for (k, b) in bearings.iter().enumerate() {
-            assert!((b - (30.0 + 60.0 * k as f32)).abs() < 1e-2, "{bearings:?}");
+        let single = bearings(one);
+        for (k, b) in single.iter().enumerate() {
+            assert!((b - (30.0 + 60.0 * k as f32)).abs() < 1e-2, "{single:?}");
         }
+        // Two crates: the first crate's six stand where one crate's do, to
+        // the bit, and the second's in the gaps between them.
+        let two = bearings(Halo { per: 6, crates: 2 });
+        assert_eq!(two[..6], single[..]);
+        for (k, b) in two[6..].iter().enumerate() {
+            assert!((b - (60.0 + 60.0 * k as f32) % 360.0).abs() < 1e-2, "{two:?}");
+        }
+        // Three: each crate's six a third of a step on from the last's.
+        let three = bearings(Halo { per: 6, crates: 3 });
+        assert_eq!(three[..6], single[..]);
+        for (k, b) in three[6..].iter().enumerate() {
+            let step = 30.0 + 60.0 * (k % 6) as f32 + 20.0 * (1 + k / 6) as f32;
+            assert!((b - step % 360.0).abs() < 1e-2, "{three:?}");
+        }
+        assert_eq!(Halo::of(&Tuning::DEFAULT), Halo { per: 6, crates: 2 }, "fpv_drones_max 12 of six a crate");
     }
 
     #[test]
@@ -908,7 +959,7 @@ mod tests {
             centre: Position::new(400.0, 400.0),
             sprite_size: 80.0,
             drones: 6,
-            slots: 6,
+            halo: Halo { per: 6, crates: 1 },
             time: 0.4,
             lamp: Color::new(255, 0, 0, 255),
             settle: 0.0,
