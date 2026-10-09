@@ -219,7 +219,7 @@ reuses, and the **lane** among the dangers an enemy keeps out of.
 ### On the end screen
 
 `player_phase` and `enemy_phase` do not run, and `end_round` has lapsed
-every charge, so nothing charges or fires. The slugs already fired finish
+every charge and every tell, so nothing charges, winds up or fires. The slugs already fired finish
 their picture (`tick_effects`), and the bursts they started play out.
 
 ## 2. Where it lives
