@@ -2705,7 +2705,7 @@ tunables! {
         /// pixels), flying and lying; the oldest lying ones go first.
         fx_max_pieces: i32 = 600 in 0 ..= 4000;
         /// How fast a broken chunk's pieces leave it, px/s at the most.
-        piece_speed: f32 = 120.0 in 0.0 ..= 600.0;
+        piece_speed: f32 = 150.0 in 0.0 ..= 600.0;
         /// Seconds a piece lies where it landed before it is gone.
         piece_linger_seconds: f32 = 8.0 in 0.0 ..= 120.0;
         /// Downward acceleration on a chip's fake height, px/s^2.

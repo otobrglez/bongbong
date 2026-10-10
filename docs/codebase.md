@@ -954,6 +954,16 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   their idle is a colour shimmer, not motion, and a ram lean shifts whole 2 px bands. The edge-cap
   neighbour mask is cached and refreshed by `Game::refresh_edge_masks` on destruction. A barrel's
   `variant` is its `Drum`. Specs: docs/WALLS_SPEC.md, PROPS_SPEC.md, TREES_SPEC.md.
+  **Brick and wood break chunk by chunk** (`Obstacle::chunks`, `Material::chunk_health`, BB-81,
+  docs/WALLS_SPEC.md §10): `strike` (a shot at a point) and `blast` (from a centre) break chunks,
+  `damage` wears them evenly, `health` follows their sum and the tile dies when
+  `wall_collapse_chunks` or fewer stand. A worn chunked tile draws chunk by chunk (`draw_chunked`).
+- `chunks.rs` — a chunked tile's 4 × 4 grid of 8 px chunks (`Chunks`): which one a shot strikes, how
+  a blow and a blast spread, the wear steps the wire carries (`quantised`), the body's box
+  (`solid_box`: the standing 16 px quadrants). Plain data, no RNG. `Terrain::sweep` tests a chunked
+  tile's standing chunks (`hits::segment_hits_chunks`), so a hole lets shots through - a loophole -
+  while `Game::fit_tile_body` keeps the tile's body over its standing quadrants. Every chunk a blow
+  breaks is an `Event::ChunksBroken`.
 - `grass.rs` — tall grass, **deliberately not an `Obstacle`** (the nav grid and the linter treat
   every obstacle as impassable). Simulation-owned, seeded by `seed_at`, rebuilt in `init`, drawn
   interleaved with the y-sorted units (trees still after everything). **No tuft is drawn over a
@@ -1397,7 +1407,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   impact frames - and is composed by `burst.rs`; and the **flashes** (`Flash`, `Flashed`): a hull,
   tile or tower a shot landed on, drawn again in light by `render/game.rs` for `hit_flash_seconds`.
   In a dev-server lockstep `app.rs` ages the layer by the simulated time a `step` ran, not wall
-  time, so a frozen round's particles freeze with it.
+  time, so a frozen round's particles freeze with it. It owns the **wall pieces** too
+  (`pieces.rs`, from `Event::ChunksBroken`): cuts of a broken chunk's own sheet pixels that fly,
+  bounce and lie for `piece_linger_seconds`; `render/game.rs` draws the lying ones on the floor and
+  the flying ones over everything (`Pieces::draw`), capped at `fx_max_pieces`.
 - `fish.rs` (docs/water.md "Presentation") — fish in the water, cosmetic and reactive: `Shoal` (kept
   in `fx::Fx`, so `app.rs` owns it; `Fx::shoal`) holds a school per `fish_school_cells` of each
   lake's deep cells, rebuilt on a new round, and is stepped on the round's clock (`Game::time`,

@@ -69,9 +69,9 @@ impl Pieces {
     }
 
     /// The chunks in `broken` of the `material`/`variant` tile centred on
-    /// `center` come apart: each splits into pieces that leave along `dir`
-    /// (the blow's way, zero for none) - or, when the tile `collapsed`,
-    /// drop where they stood.
+    /// `center` come apart: each splits into pieces that mostly leave along
+    /// `dir` (the blow's way, zero for none), a third sprayed back off the
+    /// struck face - or, when the tile `collapsed`, drop where they stood.
     pub fn throw(&mut self, material: Material, variant: i32, center: Position, broken: u16, dir: Vec2, collapsed: bool) {
         if !material.is_wall() || broken == 0 {
             return;
@@ -93,6 +93,9 @@ impl Pieces {
             for (px, py, w, h) in cuts(wood, across, &mut rng) {
                 let (speed, angle) = if collapsed || !aimed {
                     (t.piece_speed * rng.random_range(0.0..0.35), rng.random_range(0.0..std::f32::consts::TAU))
+                } else if rng.random_bool(0.35) {
+                    // Spray off the struck face, back toward the gun.
+                    (t.piece_speed * rng.random_range(0.2..0.7), base + std::f32::consts::PI + rng.random_range(-0.9..0.9))
                 } else {
                     (t.piece_speed * rng.random_range(0.3..1.0), base + rng.random_range(-0.7..0.7))
                 };
