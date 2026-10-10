@@ -8,7 +8,11 @@ use crate::math::{Color, Rectangle, Vec2};
 use std::collections::HashSet;
 
 use crate::{
+    CONCRETE_ROW_BASE,
     EDGE_CAP_ROW_BASE,
+    EDGE_CAP_ROW_CONCRETE,
+    REBAR_ROW,
+    RUBBLE_ROW_CONCRETE,
     OBSTACLE_GRID_SIZE,
     RUBBLE_ROW_TREE,
     RUBBLE_ROW_TREE_CHARRED,
@@ -38,7 +42,7 @@ use crate::{
     TREE_VARIANTS,
 };
 
-/// What a static battlefield obstacle is: one of the four wall materials
+/// What a static battlefield obstacle is: one of the five wall materials
 /// (walls_sheet.png / docs/WALLS_SPEC.md), one of the three discrete props
 /// (props_sheet.png / docs/PROPS_SPEC.md), or one of the two tree species
 /// (trees_sheet.png / docs/TREES_SPEC.md). All of them are obstacles - same
@@ -49,8 +53,8 @@ use crate::{
 /// the variant.
 ///
 /// **Order is load-bearing at the top of the list only.** `max_health`
-/// indexes `tuning().wall_max_health`, a `[f32; 4]`, by `self as usize`, so
-/// the four wall materials must stay the first four; everything after them
+/// indexes `tuning().wall_max_health`, a `[f32; 5]`, by `self as usize`, so
+/// the five wall materials must stay the first five; everything after them
 /// has a scalar knob of its own and is safe to append to.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -59,6 +63,11 @@ pub enum Material {
     Iron,
     Wood,
     Glass,
+    /// Poured concrete (BB-83): the heavy wall. It breaks chunk by chunk
+    /// like brick but takes about twice the work, and when it gives way it
+    /// leaves its rebar standing (`Obstacle::cage`): shots pass, hulls do
+    /// not, until heavy blasts cut it.
+    Concrete,
     Sandbag,
     Barrel,
     Fence,
@@ -97,11 +106,12 @@ pub enum Material {
     Target,
 }
 
-/// The four wall materials, in walls_sheet.png row order - `spawn_from_map`
-/// rolls one cosmetic variant per material from this list for each round.
+/// The five wall materials, in declaration order - `spawn_from_map` rolls
+/// one cosmetic variant per material from the first four for each round
+/// (concrete's comes from the map, so a round's stream is unchanged).
 /// Props are not in it: they roll a variant per tile instead, and their
 /// toughness is a scalar knob each rather than a `wall_max_health` slot.
-pub const MATERIALS: [Material; 4] = [Material::Brick, Material::Iron, Material::Wood, Material::Glass];
+pub const MATERIALS: [Material; 5] = [Material::Brick, Material::Iron, Material::Wood, Material::Glass, Material::Concrete];
 
 /// Which atlas a material's rows live in: the canvas's sheet names,
 /// re-exported so `Material::sheet` and the builder spell them from here.
@@ -151,6 +161,7 @@ impl Material {
             Material::Iron => 4,
             Material::Wood => 8,
             Material::Glass => 12,
+            Material::Concrete => CONCRETE_ROW_BASE,
             Material::Sandbag => 0,
             Material::Barrel => 3,
             Material::Fence => 5,
@@ -187,8 +198,8 @@ impl Material {
     pub fn max_health(self) -> f32 {
         match self {
             // Indexed by declaration order, which `tuning::MATERIAL_NAMES`
-            // mirrors (brick, iron, wood, glass).
-            Material::Brick | Material::Iron | Material::Wood | Material::Glass => tuning().wall_max_health[self as usize],
+            // mirrors (brick, iron, wood, glass, concrete).
+            Material::Brick | Material::Iron | Material::Wood | Material::Glass | Material::Concrete => tuning().wall_max_health[self as usize],
             Material::Sandbag => tuning().sandbag_max_health,
             Material::Barrel => tuning().barrel_max_health,
             Material::Fence => 2.0,
@@ -218,6 +229,7 @@ impl Material {
             Material::Iron => 4,
             Material::Wood => 3,
             Material::Glass => 3,
+            Material::Concrete => 4,
             Material::Sandbag => 3,
             Material::Barrel => 3,
             Material::Fence => 2,
@@ -248,6 +260,7 @@ impl Material {
                 if charred { RUBBLE_ROW_WOOD_CHARRED } else { RUBBLE_ROW_WOOD },
             )),
             Material::Glass => Some((Sheet::Walls, RUBBLE_ROW_GLASS)),
+            Material::Concrete => Some((Sheet::Walls, RUBBLE_ROW_CONCRETE)),
             Material::Sandbag => Some((Sheet::Walls, RUBBLE_ROW_SANDBAG)),
             Material::Barrel => Some((Sheet::Walls, RUBBLE_ROW_BARREL)),
             Material::Fence => Some((Sheet::Walls, RUBBLE_ROW_FENCE)),
@@ -263,6 +276,17 @@ impl Material {
         }
     }
 
+    /// The walls sheet row of this wall material's edge caps: brick, iron,
+    /// wood and glass in `MATERIALS` order from `EDGE_CAP_ROW_BASE`,
+    /// concrete's appended after its variants. `None` for anything else.
+    pub fn cap_row(self) -> Option<i32> {
+        match self {
+            Material::Brick | Material::Iron | Material::Wood | Material::Glass => Some(EDGE_CAP_ROW_BASE + self as i32),
+            Material::Concrete => Some(EDGE_CAP_ROW_CONCRETE),
+            _ => None,
+        }
+    }
+
     /// A discrete prop (sandbag, barrel, fence) rather than a wall tile.
     pub fn is_prop(self) -> bool {
         self.sheet() == Sheet::Props
@@ -274,7 +298,7 @@ impl Material {
         self.sheet() == Sheet::Trees
     }
 
-    /// One of the four wall materials - the only ones that autotile into
+    /// One of the five wall materials - the only ones that autotile into
     /// runs, so the only ones with an edge cap and a `MATERIALS` slot.
     pub fn is_wall(self) -> bool {
         self.sheet() == Sheet::Walls && !self.is_drawn()
@@ -290,6 +314,7 @@ impl Material {
         }
         match self {
             Material::Brick => Some(t.brick_chunk_health),
+            Material::Concrete => Some(t.concrete_chunk_health),
             Material::Wood => Some(t.wood_chunk_health),
             _ => None,
         }
@@ -554,6 +579,12 @@ pub struct Obstacle {
     /// spawn and refreshed when something is destroyed - never rebuilt per
     /// frame the way `fence_axis` does it.
     pub edge_mask: u8,
+    /// A concrete wall that gave way, or a wired pane that shattered
+    /// (`Obstacle::leaves_cage`): what is left standing is its rebar or its
+    /// mesh, which stops hulls but lets every shot through, and this many
+    /// heavy blasts (`cage_cut_damage`) are left before it is cut down.
+    /// `None` while the wall itself stands.
+    pub cage: Option<u8>,
     /// Brick and wood (`Material::chunk_health`): the tile's 16 chunks,
     /// each with its own health (`chunks.rs`). `health` follows their sum
     /// (`sync_health`) and the tile dies when too few stand
@@ -595,9 +626,48 @@ impl Obstacle {
             ram_timer: 0.0,
             edge_mask: 0,
             chunks: material.chunk_health().map(Chunks::new),
+            cage: None,
             body,
             destroyed: false,
         }
+    }
+
+    /// Whether this tile leaves a cage when it goes (`cage`): concrete's
+    /// rebar, a wired pane's mesh (glass variant 1, docs/WALLS_SPEC.md §6).
+    pub fn leaves_cage(&self) -> bool {
+        self.material == Material::Concrete || (self.material == Material::Glass && self.variant == 1)
+    }
+
+    /// Stand what is left as a cage instead of dying, if this tile leaves
+    /// one: its chunks gone, `cage_cut_hits` heavy blasts to go. Returns
+    /// whether it did.
+    fn into_cage(&mut self) -> bool {
+        if !self.leaves_cage() || self.cage.is_some() {
+            return false;
+        }
+        self.cage = Some(tuning().cage_cut_hits.clamp(1, u8::MAX as i32) as u8);
+        self.health = 0.0;
+        if let Some(c) = self.chunks.as_mut() {
+            c.break_all();
+        }
+        true
+    }
+
+    /// A blow on a cage: a heavy blast (`cage_cut_damage` or more) cuts
+    /// one of its hits, a rod or a rail all of them; nothing else touches
+    /// it. Returns `true` the frame it is cut down.
+    pub fn cut_cage(&mut self, amount: f32, whole: bool) -> bool {
+        let Some(left) = self.cage else { return false };
+        if !whole && amount < tuning().cage_cut_damage {
+            return false;
+        }
+        let left = if whole { 0 } else { left.saturating_sub(1) };
+        self.cage = Some(left);
+        if left == 0 {
+            self.destroyed = true;
+            return true;
+        }
+        false
     }
 
     /// The chunks still standing, every bit set for a tile that breaks
@@ -633,6 +703,9 @@ impl Obstacle {
             self.burning = true;
             return false;
         }
+        if self.into_cage() {
+            return false;
+        }
         self.destroyed = true;
         true
     }
@@ -644,7 +717,7 @@ impl Obstacle {
     /// takes it as `damage`. Returns whether the tile died this frame and
     /// the chunks it broke, the ones a collapse dropped included.
     pub fn strike(&mut self, amount: f32, at: Position, dir: Option<Vec2>) -> (bool, u16) {
-        if self.chunks.is_none() || self.destroyed || self.burning || self.fuse.is_some() {
+        if self.chunks.is_none() || self.destroyed || self.burning || self.fuse.is_some() || self.cage.is_some() {
             return (self.damage(amount), 0);
         }
         let t = tuning();
@@ -661,7 +734,7 @@ impl Obstacle {
     /// A blast from `from`: the chunks facing it take `amount`, the far
     /// side half of it. A tile that breaks whole takes it as `damage`.
     pub fn blast(&mut self, amount: f32, from: Position) -> (bool, u16) {
-        if self.chunks.is_none() || self.destroyed || self.burning || self.fuse.is_some() {
+        if self.chunks.is_none() || self.destroyed || self.burning || self.fuse.is_some() || self.cage.is_some() {
             return (self.damage(amount), 0);
         }
         let center = self.position;
@@ -808,7 +881,7 @@ impl Obstacle {
     pub fn damage(&mut self, amount: f32) -> bool {
         // A volcano's cone and a training door shrug every blow off: nothing
         // about them changes, so neither differs from the fresh map on the wire.
-        if self.destroyed || self.burning || self.fuse.is_some() || matches!(self.material, Material::Volcano | Material::Door) {
+        if self.destroyed || self.burning || self.fuse.is_some() || self.cage.is_some() || matches!(self.material, Material::Volcano | Material::Door) {
             return false;
         }
         // A blow with no place on the tile (a rail, a ram, the flames) wears
@@ -834,6 +907,9 @@ impl Obstacle {
         }
         if self.flammable {
             self.burning = true;
+            return false;
+        }
+        if self.into_cage() {
             return false;
         }
         self.destroyed = true;
@@ -976,6 +1052,10 @@ pub fn draw_obstacle(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis, 
 
 /// `draw_obstacle` in `tint`: a hit's flash draws the tile again in light.
 pub fn draw_obstacle_tinted(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis, time: f32, tint: Color) {
+    if obstacle.cage.is_some() {
+        draw_cage(c, obstacle, tint);
+        return;
+    }
     if obstacle.chunks_worn() {
         draw_chunked(c, obstacle, tint);
         return;
@@ -986,6 +1066,22 @@ pub fn draw_obstacle_tinted(c: &mut impl Canvas, obstacle: &Obstacle, axis: Fenc
     let dest = Rectangle::new(obstacle.position.x + obstacle.fuse_rock(time), obstacle.position.y + obstacle.burn_sag(), size, size);
     let origin = Vec2::new(size / 2.0, size / 2.0);
     c.blit(sheet, src, dest, origin, 0.0, tint);
+}
+
+/// A cage (`Obstacle::cage`): concrete's rebar from `REBAR_ROW` (column 1
+/// once a heavy blast has bent it), a wired pane's bare mesh from glass's
+/// shattered column.
+fn draw_cage(c: &mut impl Canvas, obstacle: &Obstacle, tint: Color) {
+    let (row, col) = if obstacle.material == Material::Concrete {
+        let full = tuning().cage_cut_hits.clamp(1, u8::MAX as i32) as u8;
+        (REBAR_ROW, if obstacle.cage.unwrap_or(full) < full { 1 } else { 0 })
+    } else {
+        (obstacle.material.row_base() + obstacle.variant, 3)
+    };
+    let size = obstacle.size();
+    let src = source_rec(Sheet::Walls, row, col);
+    let dest = Rectangle::new(obstacle.position.x, obstacle.position.y, size, size);
+    c.blit(Sheet::Walls, src, dest, Vec2::new(size / 2.0, size / 2.0), 0.0, tint);
 }
 
 /// A chunked tile with something broken or worn (`chunks.rs`): each
@@ -1106,14 +1202,14 @@ pub fn neighbour_mask(cell: (i32, i32), cells: &HashSet<(i32, i32)>) -> u8 {
 /// one - a sandbag, a fence or a tree is a discrete object, not part of a
 /// run.
 pub fn draw_obstacle_cap(c: &mut impl Canvas, obstacle: &Obstacle) {
-    if !obstacle.material.is_wall() {
+    if !obstacle.material.is_wall() || obstacle.cage.is_some() {
         return;
     }
-    let Some(row_offset) = MATERIALS.iter().position(|m| *m == obstacle.material) else {
+    let Some(cap_row) = obstacle.material.cap_row() else {
         return;
     };
     let col = BLOB_TILE[obstacle.edge_mask as usize] as i32;
-    let src = source_rec(Sheet::Walls, EDGE_CAP_ROW_BASE + row_offset as i32, col);
+    let src = source_rec(Sheet::Walls, cap_row, col);
     let size = obstacle.size();
     if obstacle.chunks_worn() {
         // The cap and the soot only over what still stands.

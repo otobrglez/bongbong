@@ -35,6 +35,17 @@ cells."20,18" = { kind = "start" }
     text
 }
 
+/// Make every pane plain glass: a wired one (variant 1) leaves its mesh
+/// standing when it shatters (`Obstacle::cage`), and these tests are about
+/// a pane that goes.
+fn plain_panes(game: &mut Game) {
+    for o in game.world.query::<&mut Obstacle>().iter() {
+        if o.material == Material::Glass {
+            o.variant = 0;
+        }
+    }
+}
+
 fn game_on(map: &str, seed: u64) -> Game {
     let mut game = Game::default();
     game.enemy_count_override = Some(1);
@@ -752,6 +763,7 @@ fn destroying_a_tile_re_exposes_its_neighbours() {
         let _ = game.debug_teleport(slot, cell_to_world(ENEMY_CELL.0, ENEMY_CELL.1), Some(0.0));
     }
     game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
+    plain_panes(&mut game);
 
     let mask_of = |g: &Game, cell: (i32, i32)| {
         g.world.query::<&Obstacle>().iter().find(|o| o.cell() == cell).map(|o| o.edge_mask)
@@ -1053,6 +1065,7 @@ cells."19,11" = { kind = "tall_grass" }
 "#,
     );
     let mut game = game_at(&map, 6, (20, 14));
+    plain_panes(&mut game);
     // A tread mark beside the drum. Its age starts negative so it cannot
     // fade out (`track_lifetime` is under a second) before the shells
     // that pop the drum have landed: only the burn-in rule is under test.

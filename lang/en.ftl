@@ -450,6 +450,7 @@ tool-brick = brick
 tool-iron = iron
 tool-wood = wood
 tool-glass = glass
+tool-concrete = concrete
 tool-sandbag = sandbag
 tool-barrel = barrel
 tool-fence = fence

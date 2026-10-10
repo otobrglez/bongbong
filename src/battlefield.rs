@@ -438,10 +438,19 @@ pub fn spawn_from_map(
     map: &MapFile,
     obstacle_half_extent: f32,
 ) -> MapSpawn {
-    let material_variant: HashMap<Material, i32> = MATERIALS
+    // Concrete's variant comes from the map, not the round's RNG, so a round
+    // draws exactly the stream it drew before concrete existed: a hash of
+    // its first cell in the sorted walk.
+    let mut material_variant: HashMap<Material, i32> = MATERIALS
         .iter()
+        .filter(|&&m| m != Material::Concrete)
         .map(|&m| (m, rng.random_range(0..m.variants())))
         .collect();
+    let concrete = map
+        .iter_cells()
+        .find(|(_, _, o)| matches!(o, CellObject::Wall { material: Material::Concrete }))
+        .map_or(0, |(c, r, _)| (crate::blast::seed_at(cell_to_world(c, r), 31) % Material::Concrete.variants() as u32) as i32);
+    material_variant.insert(Material::Concrete, concrete);
 
     // Every solid cell the map defines that is part of a *structure*, in
     // the same `(col, row)` grid space `iter_cells` already yields - so

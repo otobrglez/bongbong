@@ -220,14 +220,23 @@ impl Game {
     pub(super) fn damage_obstacle(&mut self, f: &mut Frame, entity: Entity, amount: f32, cause: DamageCause) -> bool {
         let crush = matches!(cause, DamageCause::Crush { .. });
         let mut broken = 0u16;
-        let (material, variant, pos, died, charred) = {
+        let (material, variant, pos, died, charred, formed) = {
             let mut q = self.world.query_one::<&mut Obstacle>(entity);
             let Ok(o) = q.get() else { return false };
             if o.destroyed || (o.burning && !crush) || o.fuse.is_some() {
                 return false;
             }
             let charred = o.burning;
+            let caged = o.cage.is_some();
+            let standing = o.standing_chunks();
             let died = match o.material {
+                // A cage (`Obstacle::cage`) only feels a heavy blast, a rail
+                // or a rod; the shots it lets through never reach it.
+                _ if caged && !crush => match cause {
+                    DamageCause::Blast { .. } => o.cut_cage(amount, false),
+                    DamageCause::Pierce { .. } => o.cut_cage(amount, true),
+                    _ => false,
+                },
                 _ if crush => {
                     o.health = 0.0;
                     o.burning = false;
@@ -274,16 +283,25 @@ impl Game {
                 }
                 _ => strike(o, amount, cause, &mut broken),
             };
-            (o.material, o.variant, o.position, died, charred)
+            // The wall gave way into its cage this blow: what stood of it
+            // comes down, as a collapse would bring it.
+            let formed = !caged && o.cage.is_some();
+            if formed {
+                broken |= standing;
+            }
+            (o.material, o.variant, o.position, died, charred, formed)
         };
+        let gave_way = died || formed;
         if broken != 0 {
             let dir = match cause {
                 DamageCause::Shot { dir: Some(d), .. } => d,
                 DamageCause::Blast { from, .. } => { let v = pos - from; let l = v.length(); if l > 1e-6 { Vec2::new(v.x / l, v.y / l) } else { Vec2::zero() } },
                 _ => Vec2::zero(),
             };
-            f.events.push(Event::ChunksBroken { material, variant, x: pos.x, y: pos.y, broken, dx: dir.x, dy: dir.y, collapsed: died });
-            self.lay_rubble(pos, broken, dir, died);
+            f.events.push(Event::ChunksBroken { material, variant, x: pos.x, y: pos.y, broken, dx: dir.x, dy: dir.y, collapsed: gave_way });
+            if material.chunk_health().is_some() {
+                self.lay_rubble(pos, broken, dir, gave_way);
+            }
             if !died {
                 self.fit_tile_body(entity);
             }
@@ -293,7 +311,7 @@ impl Game {
                 }
             }
         }
-        if died {
+        if gave_way {
             self.queue_neighbour_breaks(f, material, pos, cause, entity);
         }
         if died {
@@ -480,7 +498,13 @@ impl Game {
         let (body, pos, material, base, solid) = {
             let mut q = self.world.query_one::<&Obstacle>(entity);
             let Ok(o) = q.get() else { return };
-            let Some(solid) = o.chunks.and_then(|c| c.solid_box()) else { return };
+            // A cage stands over its whole cell, whatever was left of the
+            // wall round it.
+            let whole = (Vec2::zero(), Vec2::new(OBSTACLE_GRID_SIZE / 2.0, OBSTACLE_GRID_SIZE / 2.0));
+            let solid = if o.cage.is_some() { whole } else {
+                let Some(solid) = o.chunks.and_then(|c| c.solid_box()) else { return };
+                solid
+            };
             (o.body, o.position, o.material, o.hull_size() * 0.5, solid)
         };
         let cells: std::collections::HashSet<(i32, i32)> = self
