@@ -273,14 +273,13 @@ touching costs a single ordinary quad.
 
 A cell kind per species - `tree`, `pine`, `spruce`, `scots`, `fir`,
 `birch`, `willow`, `palm`, `snag` - and a palette icon each in the
-builder's Ground group. All are solid, so `CellObject::is_solid` folds them
+builder's Plant group (with the bushes, docs/BUSHES_SPEC.md §4). All are solid, so `CellObject::is_solid` folds them
 in with walls and props everywhere a solid tile matters.
 
-Nine tree tools made the folded TOOLS palette taller than a phone's room
-under the bar, so where the stacked rows do not fit even at a finger's
-`UI_TOUCH_PT` a category whose name and tools fit the rest of the row
-before it shares that row (`chrome::Palette`): on a phone, Actor sits
-beside Ground's second row.
+Nine tree tools and the six bushes made the folded TOOLS palette taller
+than a phone's room under the bar, so where the stacked rows do not fit
+even at a finger's `UI_TOUCH_PT` the groups flow one after another along
+the rows (`chrome::Palette`).
 
 The editor's palette wraps into rows now (`MapEditor::palette_columns`) —
 23 icons no longer fit across 1280px in one line.

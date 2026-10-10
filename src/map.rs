@@ -115,6 +115,18 @@ pub enum CellObject {
     /// drive through has to be its own light entity (see `grass.rs`).
     #[serde(rename = "tall_grass")]
     TallGrass,
+    /// Bushes and reeds (docs/BUSHES_SPEC.md): soft cover like
+    /// `TallGrass` - not solid, not an `Obstacle`, a cell a tank drives
+    /// through, flattens and hides in - each growing one sprite of its kind
+    /// (`grass::Bush`) instead of a scatter of tufts.
+    Bush,
+    #[serde(rename = "berry_bush")]
+    BerryBush,
+    Juniper,
+    Fern,
+    #[serde(rename = "autumn_bush")]
+    AutumnBush,
+    Reeds,
     /// A teleport portal (docs/teleporting.md): the *anchor* cell of a
     /// ~3x3-cell spiral tanks drive into to be moved to another portal.
     /// Multi-instance, deliberately **not** solid and not an `Obstacle`
@@ -196,6 +208,33 @@ impl CellObject {
             CellObject::Lamp => Some(Material::Lamp),
             CellObject::Door { .. } => Some(Material::Door),
             _ => None,
+        }
+    }
+
+    /// The bush a soft-cover cell grows, if it is a bush cell.
+    pub fn bush(&self) -> Option<crate::grass::Bush> {
+        use crate::grass::Bush;
+        Some(match self {
+            CellObject::Bush => Bush::Bush,
+            CellObject::BerryBush => Bush::Berry,
+            CellObject::Juniper => Bush::Juniper,
+            CellObject::Fern => Bush::Fern,
+            CellObject::AutumnBush => Bush::Autumn,
+            CellObject::Reeds => Bush::Reeds,
+            _ => return None,
+        })
+    }
+
+    /// The cell that grows `bush`.
+    pub fn of_bush(bush: crate::grass::Bush) -> CellObject {
+        use crate::grass::Bush;
+        match bush {
+            Bush::Bush => CellObject::Bush,
+            Bush::Berry => CellObject::BerryBush,
+            Bush::Juniper => CellObject::Juniper,
+            Bush::Fern => CellObject::Fern,
+            Bush::Autumn => CellObject::AutumnBush,
+            Bush::Reeds => CellObject::Reeds,
         }
     }
 

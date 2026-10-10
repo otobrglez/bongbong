@@ -21,7 +21,7 @@ Two checks, both of which have caught real defects:
    tank chassis is a real colour choice, so the tank sheets are not
    checked.
 
-   `nature_sheet.png`, `nature_sheet_desert.png` and `trees_sheet.png` are the deliberate exceptions,
+   `nature_sheet.png`, `nature_sheet_desert.png`, `trees_sheet.png` and `bushes_sheet.png` are the deliberate exceptions,
    and they are what the rule always meant: **manufactured objects are
    never green; vegetation is.** Grass that cannot be green is not grass.
 
@@ -81,6 +81,7 @@ ON_PALETTE = [
     'nature_sheet.png',
     'nature_sheet_desert.png',
     'trees_sheet.png',
+    'bushes_sheet.png',
     'props_sheet.png',
     'target_sheet.png',
     'barrel_explosion.png',
@@ -132,7 +133,7 @@ TEAM_SHEETS = {'portal_sheet.png'}
 # Sheets allowed the palette extension (punypalette.PUNY_EXTRA): the walls
 # sheet for its stone/rust steps, the vegetation sheets for GREEN_SHADE
 # (and, on trees, WOOD_ASH for burnt-out foliage).
-EXTENDED = {'walls_sheet.png', 'nature_sheet.png', 'nature_sheet_desert.png', 'trees_sheet.png', 'towers_sheet.png'}
+EXTENDED = {'walls_sheet.png', 'nature_sheet.png', 'nature_sheet_desert.png', 'trees_sheet.png', 'bushes_sheet.png', 'towers_sheet.png'}
 
 # The towers sheet's own admissions: the player's trim and the ooze.
 TOWER_SHEET = 'towers_sheet.png'

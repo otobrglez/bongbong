@@ -1056,6 +1056,51 @@ fn grass_flattens_under_a_tank_and_stands_back_up() {
 }
 
 #[test]
+fn a_bush_is_soft_cover_a_tank_drives_through_and_flattens() {
+    // Every kind of bush: one sprite in its cell, cover like tall grass,
+    // no obstacle - the tile count is the enemy's iron box alone - and a
+    // hull parked on it presses it down and it stands back up.
+    for bush in crate::grass::Bush::ALL {
+        let kind = toml::to_string(&crate::map::CellObject::of_bush(bush)).expect("a cell serialises");
+        let kind = kind.split('"').nth(1).expect("kind = \"...\"").to_string();
+        let map = map_with(&format!("cells.\"20,11\" = {{ kind = \"{kind}\" }}\n"));
+        let mut game = game_on(&map, 1);
+        assert_eq!(alive_obstacles(&game), 8, "{kind} is not an obstacle");
+        let cell = cell_to_world(20, 11);
+        assert_eq!(game.grass.iter().map(|t| t.bush).collect::<Vec<_>>(), vec![Some(bush)], "{kind}: one sprite");
+        let terrain = Terrain::build(&game.world, W, H, &game.grass_cells, &game.water);
+        assert!(terrain.conceals(cell), "{kind} conceals its cell");
+        assert!(game.nav_grid(W, H).usable(cell), "{kind} is open ground to the planner");
+
+        game.debug_teleport(0, cell, Some(0.0)).unwrap();
+        step(&mut game, Input::default());
+        assert!(game.grass[0].crush > 0.5, "{kind}: a hull on it presses it down");
+        game.debug_teleport(0, cell_to_world(20, 18), Some(0.0)).unwrap();
+        for _ in 0..(60.0 * 5.0) as usize {
+            step(&mut game, Input::default());
+        }
+        assert_eq!(game.grass[0].crush, 0.0, "{kind} stands back up");
+    }
+}
+
+#[test]
+fn a_tank_drives_through_a_bush_cell_without_stopping() {
+    // A hull driving north across a bush cell crosses it in the time open
+    // ground takes: nothing to push over, nothing to ram.
+    let frames_to = |extra: &str| {
+        let mut game = game_on(&map_with(extra), 1);
+        game.debug_teleport(0, cell_to_world(20, 14), Some(0.0)).unwrap();
+        (1..=600).find(|_| {
+            step(&mut game, drive(Dir::Up));
+            game.tank_snapshots().iter().any(|t| t.slot == 0 && t.position.y <= cell_to_world(20, 9).y)
+        })
+    };
+    let open = frames_to("").expect("the hull crosses open ground");
+    let bush = frames_to("cells.\"20,11\" = { kind = \"bush\" }\n").expect("the hull crosses the bush");
+    assert_eq!(bush, open, "a bush costs a hull nothing");
+}
+
+#[test]
 fn conceals_is_a_cell_query() {
     // Cover is a property of the ground a tank stands on. Testing against
     // the drawn tufts instead would make being hidden depend on which way
