@@ -233,11 +233,15 @@ impl Game {
 
     /// Every baked image the round draws from, in an order that holds
     /// while the round does, for the window's GPU copies: the floor shade,
-    /// the lava's banks, the kept pictures, then each cone's.
+    /// the forest floor, the lava's banks, the kept pictures, then each
+    /// cone's.
     pub fn with_block_images<R>(&self, f: impl FnOnce(&[&crate::canvas::BlockImage]) -> R) -> R {
         let pictures = self.lava.pictures();
         let cones: Vec<_> = self.volcanoes.iter().map(|v| crate::volcano::cone(&v.outlets)).collect();
         let mut images = vec![self.ground.shade()];
+        if !self.woods.is_empty() {
+            images.push(self.woods.floor());
+        }
         if !self.lava.is_empty() {
             images.push(self.lava.banks());
         }
@@ -276,6 +280,10 @@ impl Game {
     pub fn paint_floor_marks(&self, c: &mut impl Canvas) {
         if !self.plain_canvas {
             crate::ground::draw_shade(c, &self.ground);
+        }
+        // The forest floor under the woods (`woods.rs`).
+        if !self.woods.is_empty() {
+            c.blocks(self.woods.floor());
         }
         // The ground the lava toasts and the cinders round each cone's
         // foot (docs/volcano.md), under every mark.
@@ -613,7 +621,9 @@ impl Game {
             .collect();
         let mut tree_query = self.world.query::<&Obstacle>();
         let mut trees: Vec<&Obstacle> = tree_query.iter().filter(|o| o.material.is_tree() && !culled(cull, o.position)).collect();
-        trees.sort_by(|a, b| a.position.y.total_cmp(&b.position.y));
+        // Back to front by where each crown is drawn (`woods.rs` moves it
+        // off its cell), cell order breaking ties.
+        trees.sort_by(|a, b| (a.position.y + a.crown.dy).total_cmp(&(b.position.y + b.crown.dy)).then(a.position.x.total_cmp(&b.position.x)));
         let t = crate::tuning::tuning();
         for tree in &trees {
             // A sonic wave passing sways the crown away from its pivot.

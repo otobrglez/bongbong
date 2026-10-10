@@ -605,15 +605,12 @@ impl Game {
         let burning: Vec<(i32, i32)> = self.fires.iter().filter(|fire| fire.left > 0.0).map(|fire| fire.cell).collect();
         // Grass in a burning cell chars, whatever lit it: the tufts stay
         // as stubs for the round and the cell stops concealing at once.
-        if !self.grass_cells.is_empty() {
-            let before = self.grass_cells.len();
-            self.grass_cells.retain(|c| !burning.contains(&cell_of(*c)));
-            if self.grass_cells.len() != before {
-                for tuft in self.grass.iter_mut() {
-                    if !tuft.burnt && burning.contains(&cell_of(tuft.base)) {
-                        tuft.burnt = true;
-                    }
-                }
+        // The woods' undergrowth chars the same way, though its cells hide
+        // nobody (`woods.rs`).
+        self.grass_cells.retain(|c| !burning.contains(&cell_of(*c)));
+        for tuft in self.grass.iter_mut() {
+            if !tuft.burnt && burning.contains(&cell_of(tuft.base)) {
+                tuft.burnt = true;
             }
         }
         if live {

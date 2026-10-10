@@ -959,6 +959,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   anywhere. The edge-cap
   neighbour mask is cached and refreshed by `Game::refresh_edge_masks` on destruction. A barrel's
   `variant` is its `Drum`. Specs: docs/WALLS_SPEC.md, PROPS_SPEC.md, TREES_SPEC.md.
+- `woods.rs` — a wood as a whole (docs/WOODS.md), built once at `init` from the map, hashed, no RNG,
+  read by nothing that decides play: trails (`is_trail`), each tree's `Crown` (up to 4 px off its cell
+  on the 2 px grid, mirrored; away from a trail or a wall, out over water; held on
+  `Obstacle::crown`), the forest floor baked once like the lava's banks (`floor`, weighted by kind,
+  never on water), and undergrowth (`undergrowth`: bush tufts in `Game::grass` but not
+  `grass_cells`, so picture only; reeds on wooded banks, ferns under interior crowns).
 - `grass.rs` — tall grass, **deliberately not an `Obstacle`** (the nav grid and the linter treat
   every obstacle as impassable). Bushes and reeds (`Bush`, docs/BUSHES_SPEC.md) are soft-cover cells
   in `grass_cells` too, each growing one sprite (`bush_tuft`, rooted a block inside its cell so every
