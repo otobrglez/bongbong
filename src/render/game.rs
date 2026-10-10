@@ -83,7 +83,6 @@ pub struct Textures<'a> {
     pub shells: &'a Texture2D,
     pub plasma: &'a Texture2D,
     pub minigun_bullets: &'a Texture2D,
-    pub tracks: &'a Texture2D,
     pub obstacles: &'a Texture2D,
     /// The props sheet (sandbags, barrels, fences) - see `obstacle::Sheet`.
     pub props: &'a Texture2D,
@@ -141,7 +140,6 @@ impl Sheets for Textures<'_> {
             Sheet::Target => self.target,
             Sheet::Towers => self.towers,
             Sheet::Grass(_) => self.grass,
-            Sheet::Tracks => self.tracks,
             Sheet::BarrelExplosion => self.barrel_explosion,
             Sheet::Portal => self.portal,
             Sheet::Crates => self.crates,
@@ -1326,6 +1324,9 @@ impl Game {
         // The fish under the water's surface (`fish.rs`): over its tiles,
         // under everything that burns, stands or flies over it.
         crate::render::fish::draw_fish(d, textures, self, fx.shoal(), cull);
+        // What the hulls threw up off the ground - dust, powder, a ford's
+        // foam - lying on it, under the hulls and under the light.
+        crate::render::fx::draw_ground(fx, d, cull);
 
         // The FPV drones' shadows on the ground under them, under the
         // tanks (docs/fpv-swarm.md "Drawing"); the drones themselves fly

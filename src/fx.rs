@@ -49,6 +49,14 @@ pub enum ParticleKind {
     /// A puff of a grenade's plume: white and shaded, swelling fast and
     /// gone in `grenade_trail_seconds`.
     Plume,
+    /// Ground a moving hull throws up (`Fx::drive`): dust, sand, snow
+    /// powder - a shaded puff hugging the ground that swells (its `vz` is
+    /// how fast, px/s) and thins, drawn in the lit field under the hulls
+    /// (`render::fx::draw_ground`), so the night darkens it.
+    Kick,
+    /// Foam a wading hull's bow wave and side wash leave on the water:
+    /// sits where it was laid and dissolves, drawn in the lit field.
+    Foam,
 }
 
 /// Which weapon a hit came from - each has its own burst.
@@ -235,6 +243,9 @@ pub struct Fx {
     /// The gravity wells pulling at the last `observe`
     /// (docs/gravity-well.md): particles in their reach spiral in.
     wells: crate::well::WellField,
+    /// The round's sky at the last `observe`: a sandstorm's gusts carry a
+    /// hull's dust off.
+    sky: crate::map::Weather,
 }
 
 /// How fast a particle in a gravity well's pull is drawn toward the core
@@ -397,6 +408,8 @@ impl Fx {
                 ParticleKind::Spray => (tuning().chip_lifetime, FX_GRID, -rng.random_range(50.0..130.0)),
                 ParticleKind::Trail => (tuning().missile_trail_seconds, FX_GRID * 2.0, 0.0),
                 ParticleKind::Plume => (tuning().grenade_trail_seconds, FX_GRID * 2.0, 0.0),
+                ParticleKind::Kick => (tuning().drive_dust_seconds, FX_GRID * 2.0, 0.0),
+                ParticleKind::Foam => (0.8, FX_GRID * 2.0, 0.0),
             };
             self.push(Particle {
                 pos: at,
@@ -965,6 +978,7 @@ impl Fx {
 
     fn sample_world(&mut self, game: &Game, dt: f32) {
         self.clock = game.time;
+        self.sky = game.weather();
         self.wells = if game.zones().is_empty() { crate::well::WellField::default() } else { crate::well::WellField::at(game.zones(), game.time) };
         self.watch_impacts(game);
         // Spray off a wading hull (docs/water.md): a splash the frame it
@@ -1011,6 +1025,8 @@ impl Fx {
                 _ => {}
             }
         }
+
+        self.drive(game, dt);
 
         // A hull knocked off its tracks scrapes up dust as it slides
         // (`Tank::skid`, docs/sonic-hammer.md), at a rate that follows its
@@ -1311,6 +1327,214 @@ impl Fx {
     }
 
     /// Rate limiter: true once per `1/rate` seconds for this source.
+    /// How many of a rate-based emitter's particles are owed this frame:
+    /// `due`, for a source that can owe more than one a frame (a fast
+    /// hull's dust at a low frame rate).
+    fn due_n(&mut self, key: u32, rate: f32, dt: f32) -> u32 {
+        if rate <= 0.0 {
+            return 0;
+        }
+        let acc = self.accum.entry(key).or_insert(0.0);
+        *acc += rate * dt;
+        let n = acc.floor().min(16.0);
+        *acc -= n;
+        n as u32
+    }
+
+    /// What every moving hull throws up off the ground under it
+    /// (docs/ground-memory.md "Driving effects"), from its tread
+    /// (`Game::driving`): dust off dry ground, mud under rain or off wet
+    /// tracks, foam and spray in a ford (brown where the bed's silt is
+    /// stirred), muddy water out of a filled rut, snow powder, chips off
+    /// ice, and exhaust while it pulls away. All of it from the rear of
+    /// its outer runs, where a real track leaves the ground. Rates follow
+    /// its speed against its top speed and its chassis's press; the mud
+    /// that stays on the ground is the simulation's (`wear::splat`), so
+    /// these clods are only the picture of it flying.
+    fn drive(&mut self, game: &Game, dt: f32) {
+        let t = tuning();
+        if t.fx_max_particles <= 0 || t.fx_density <= 0.0 {
+            return;
+        }
+        let look = game.wear_look();
+        let density = t.fx_density;
+        let mut rng = rand::rng();
+        for d in game.driving() {
+            let tread = d.tread;
+            if tread.speed <= 0.5 && tread.roll == crate::wear::Roll::Rolling {
+                continue;
+            }
+            let profile = &crate::TREAD_BY_ROW[d.row];
+            let (sin, cos) = d.heading.to_radians().sin_cos();
+            let (right, ahead) = (Vec2::new(cos, sin), Vec2::new(sin, -cos));
+            // Tile px about the pivot (x right, y back) to the field.
+            let at = |x: f32, y: f32| d.position + right * (x * d.scale) - ahead * (y * d.scale);
+            let outer = profile.runs.first().map_or(-6.0, |r| (r.0 as f32 + r.1 as f32) * 0.5);
+            let (front, rear) = (profile.patch.0 as f32, profile.patch.1 as f32);
+            let side = |rng: &mut rand::rngs::ThreadRng| if rng.random_bool(0.5) { outer } else { -outer };
+            let sf = (tread.speed / d.top_speed.max(1.0)).min(1.2);
+            let pivot = tread.roll == crate::wear::Roll::Pivoting;
+            let drive = sf.powf(t.drive_dust_speed_power).max(if pivot { 0.5 } else { 0.0 }) * if tread.roll == crate::wear::Roll::Sliding { 1.6 } else { 1.0 };
+            let key = |emitter: u32| 0xD71E_0000 ^ ((d.slot as u32) << 4) ^ emitter;
+            let land = matches!(tread.surface, crate::wear::Surface::Grass | crate::wear::Surface::Road | crate::wear::Surface::Sand);
+            let desert = look.theme == crate::map::Theme::Desert;
+
+            // Dust off dry ground.
+            if land && look.sky == crate::wear::Sky::Dry && tread.wet < 0.2 {
+                let give = match (tread.surface, desert) {
+                    (crate::wear::Surface::Sand, _) => t.drive_dust_sand,
+                    (crate::wear::Surface::Road, _) => t.drive_dust_road,
+                    (_, true) => t.drive_dust_desert,
+                    _ => t.drive_dust_grass,
+                };
+                let n = self.due_n(key(1), t.drive_dust_rate * give * d.weight * drive * density, dt);
+                let (big, tint) = if desert { (1.25, KICK_DESERT[1]) } else { (1.0, KICK_DUST[1]) };
+                for _ in 0..n {
+                    let from = at(side(&mut rng) + rng.random_range(-1.5..1.5), rear - rng.random_range(0.0..2.0));
+                    let back = rng.random_range(12.0..30.0);
+                    let vel = ahead * -back + right * rng.random_range(-8.0..8.0) + tread.velocity * 0.15;
+                    self.kick(from, vel, t.drive_dust_seconds * big * rng.random_range(0.8..1.3), t.drive_dust_px * d.weight * big * rng.random_range(0.8..1.3), tint);
+                }
+            }
+
+            // Snow powder: lighter and shorter-lived than dust.
+            if land && look.sky == crate::wear::Sky::Snow {
+                let n = self.due_n(key(2), t.drive_powder_rate * d.weight * drive * density, dt);
+                for _ in 0..n {
+                    let from = at(side(&mut rng) + rng.random_range(-1.5..1.5), rear - rng.random_range(0.0..2.0));
+                    let vel = ahead * -rng.random_range(14.0..32.0) + right * rng.random_range(-9.0..9.0);
+                    self.kick(from, vel, rng.random_range(0.6..1.0), t.drive_dust_px * 0.7 * d.weight * rng.random_range(0.8..1.3), KICK_SNOW[1]);
+                }
+            }
+
+            // Mud off the top of the runs, both ways through a pivot; torn
+            // turf off dry grass through one.
+            let muddy = land && ((look.sky == crate::wear::Sky::Rain && tread.surface != crate::wear::Surface::Sand) || tread.wet > 0.15);
+            let turf = !muddy && pivot && tread.surface == crate::wear::Surface::Grass && !desert && look.sky == crate::wear::Sky::Dry;
+            if muddy || turf {
+                let rate = t.drive_mud_rate * d.weight * if pivot { t.drive_pivot_throw_factor } else { sf } * if turf { 0.5 } else { tread.wet.max(1.0) };
+                let n = self.due_n(key(3), rate * density, dt);
+                let tints: &[Color] = if turf { &TURF } else if desert { &MUD_DESERT } else { &MUD };
+                for _ in 0..n {
+                    let from = at(side(&mut rng), rear - 1.5);
+                    let up = rng.random_range(60.0..130.0);
+                    let flight = 2.0 * up / t.debris_gravity.max(1.0);
+                    let way = if pivot && rng.random_bool(0.5) { 1.0 } else { -1.0 };
+                    let throw = t.drive_mud_throw_px / flight.max(0.05) * rng.random_range(0.3..1.0);
+                    let vel = ahead * (way * throw) + right * rng.random_range(-30.0..30.0) + tread.velocity * 0.3;
+                    let big = rng.random_bool(0.25);
+                    self.spray(from, vel, up, if big { FX_GRID * 2.0 } else { FX_GRID }, tints[rng.random_range(0..tints.len())]);
+                }
+            }
+
+            // Muddy water out of a rut the rain has filled, from the front
+            // of the runs as they drive into it.
+            if look.sky == crate::wear::Sky::Rain && land && tread.speed > 20.0 {
+                let ahead_of = at(outer, front - 1.0);
+                let filled = game.wear().block(ahead_of).is_some_and(|b| b.passes() >= t.wear_rut_passes && game.time - b.laid() > t.wear_puddle_fill_seconds * 0.5);
+                if filled {
+                    let n = self.due_n(key(4), t.drive_puddle_rate * sf * d.weight * density, dt);
+                    for _ in 0..n {
+                        let from = at(side(&mut rng), front);
+                        let vel = right * rng.random_range(-60.0..60.0) + ahead * rng.random_range(10.0..50.0);
+                        self.spray(from, vel, rng.random_range(50.0..110.0), FX_GRID, PUDDLE_T[rng.random_range(0..PUDDLE_T.len())]);
+                    }
+                }
+            }
+
+            // A ford: foam off the bow and the sides, and spray gone brown
+            // where the hull has churned the bed.
+            if tread.surface == crate::wear::Surface::Ford {
+                let n = self.due_n(key(5), t.drive_foam_rate * sf.max(0.15) * d.weight * density, dt);
+                for _ in 0..n {
+                    let (x, y) = if rng.random_bool(0.4) { (rng.random_range(outer..-outer), front - 1.0) } else { (side(&mut rng) * 1.15, rng.random_range(front..rear)) };
+                    let from = at(x, y);
+                    let out = right * (x.signum() * rng.random_range(4.0..14.0));
+                    self.push(Particle {
+                        pos: from,
+                        vel: out,
+                        z: 0.0,
+                        vz: 0.0,
+                        age: 0.0,
+                        life: rng.random_range(0.6..1.1),
+                        size: FX_GRID * rng.random_range(1.0..2.5),
+                        tint: FOAM_T[rng.random_range(0..FOAM_T.len())],
+                        kind: ParticleKind::Foam,
+                    });
+                }
+                if game.wear().block(d.position).is_some_and(|b| b.silt() > 0.35) {
+                    let n = self.due_n(key(6), 30.0 * sf * density, dt);
+                    for _ in 0..n {
+                        let from = at(side(&mut rng) * 1.1, rng.random_range(front..rear));
+                        let vel = right * rng.random_range(-50.0..50.0) + tread.velocity * 0.4;
+                        self.spray(from, vel, rng.random_range(50.0..120.0), FX_GRID, SILTY_T[rng.random_range(0..SILTY_T.len())]);
+                    }
+                }
+            }
+
+            // Chips off ice while the runs slide or spin on it.
+            if tread.surface == crate::wear::Surface::Ice && tread.speed > 20.0 && tread.roll != crate::wear::Roll::Rolling {
+                let n = self.due_n(key(7), t.drive_ice_chip_rate * density, dt);
+                for _ in 0..n {
+                    let from = at(side(&mut rng), rear - rng.random_range(0.0..4.0));
+                    self.push(Particle {
+                        pos: from,
+                        vel: Vec2::new(rng.random_range(-40.0..40.0), rng.random_range(-40.0..40.0)),
+                        z: 0.0,
+                        vz: -rng.random_range(30.0..70.0),
+                        age: 0.0,
+                        life: rng.random_range(0.25..0.45),
+                        size: FX_GRID,
+                        tint: WHITE_T,
+                        kind: ParticleKind::Chip,
+                    });
+                }
+            }
+
+            // Exhaust off the engine deck while it pulls away.
+            if tread.speeding_up && sf < 0.75 {
+                let n = self.due_n(key(8), t.drive_exhaust_rate * d.weight * density, dt);
+                for _ in 0..n {
+                    let from = at(rng.random_range(-2.0..2.0), rear - 3.0);
+                    self.push(Particle {
+                        pos: from,
+                        vel: ahead * -rng.random_range(6.0..14.0) + right * rng.random_range(-4.0..4.0),
+                        z: 4.0,
+                        vz: 0.0,
+                        age: 0.0,
+                        life: rng.random_range(0.7..1.2),
+                        size: FX_GRID,
+                        tint: SMOKE_T,
+                        kind: ParticleKind::Smoke,
+                    });
+                }
+            }
+        }
+    }
+
+    /// One puff of a hull's dust or powder at `at`, swelling to `size` px
+    /// across over `life`.
+    fn kick(&mut self, at: Position, vel: Vec2, life: f32, size: f32, tint: Color) {
+        let start = FX_GRID * 2.0;
+        self.push(Particle {
+            pos: at,
+            vel,
+            z: 0.0,
+            vz: ((size - start).max(0.0)) / life.max(0.05),
+            age: 0.0,
+            life,
+            size: start,
+            tint,
+            kind: ParticleKind::Kick,
+        });
+    }
+
+    /// One drop or clod thrown from `at` along `vel`, up at `up` px/s:
+    /// gone the moment it comes down.
+    fn spray(&mut self, at: Position, vel: Vec2, up: f32, size: f32, tint: Color) {
+        self.push(Particle { pos: at, vel, z: 0.0, vz: -up, age: 0.0, life: 1.5, size, tint, kind: ParticleKind::Spray });
+    }
+
     fn due(&mut self, key: u32, rate: f32, dt: f32) -> bool {
         if rate <= 0.0 {
             return false;
@@ -1343,6 +1567,7 @@ impl Fx {
         let (gravity, drag, bounce) = (t.debris_gravity, t.debris_air_drag, t.debris_bounce);
         let (rise, growth) = (t.smoke_rise_speed, t.smoke_growth);
         let clock = self.clock;
+        let sky = self.sky;
         let wells = &self.wells;
         self.particles.retain_mut(|p| {
             p.age += dt;
@@ -1385,6 +1610,17 @@ impl Fx {
                 }
                 // Dust hugs the ground and blows along it.
                 ParticleKind::Dust => p.pos.x += crate::pyro::smoke_lean(&t, p.pos, clock) * 16.0 * dt,
+                // A hull's dust swells as it blows along the ground, and a
+                // gust carries it off.
+                ParticleKind::Kick => {
+                    p.size += p.vz * dt;
+                    p.pos.x += crate::pyro::smoke_lean(&t, p.pos, clock) * 16.0 * dt;
+                    if sky == crate::map::Weather::Sandstorm {
+                        let gust = crate::weather::gust_at(sky, p.pos, clock, &t);
+                        p.pos.x += gust.x * dt;
+                        p.pos.y += gust.y * dt;
+                    }
+                }
                 ParticleKind::Spray => {
                     p.vz += gravity * dt;
                     p.z -= p.vz * dt;
@@ -1504,6 +1740,22 @@ const WATER_M: Color = Color::new(0x04, 0xA0, 0xB4, 255);
 const LEAF_L: Color = Color::new(0x7C, 0x98, 0x3C, 255);
 const LEAF_M: Color = Color::new(0x5F, 0x91, 0x4B, 255);
 const LEAF_D: Color = Color::new(0x1C, 0x4C, 0x33, 255);
+// What a moving hull throws (`Fx::drive`). A hull's dust as a puff's
+// shadow, body and lit steps (`render/fx.rs` shades a `Kick` by the ramp
+// its tint is the body of): the dust ramp's sand steps over the grass
+// theme, paler steps of the retinted dust over the desert, snow's own.
+pub(crate) const KICK_DUST: [Color; 3] = [crate::pyro::DUST[2], crate::pyro::DUST[3], crate::pyro::DUST[4]];
+pub(crate) const KICK_DESERT: [Color; 3] = [Color::new(0xC2, 0xA8, 0x7D, 255), Color::new(0xE6, 0xD8, 0xB2, 255), Color::new(0xF4, 0xEC, 0xD6, 255)];
+pub(crate) const KICK_SNOW: [Color; 3] = [Color::new(0xD3, 0xDD, 0xE8, 255), Color::new(0xF6, 0xF9, 0xFC, 255), Color::new(0xFF, 0xFF, 0xFF, 255)];
+// Mud clods, over each theme, and turf torn off dry grass (green under the
+// foliage exemption: it is grass).
+const MUD: [Color; 3] = [Color::new(0x73, 0x62, 0x4D, 255), Color::new(0x67, 0x51, 0x2A, 255), Color::new(0x59, 0x34, 0x1F, 255)];
+const MUD_DESERT: [Color; 3] = [Color::new(0xA0, 0x80, 0x58, 255), Color::new(0x8A, 0x6D, 0x47, 255), Color::new(0x73, 0x62, 0x4D, 255)];
+const TURF: [Color; 3] = [Color::new(0x5C, 0x8E, 0x3D, 255), Color::new(0x7E, 0xA6, 0x4A, 255), Color::new(0x73, 0x62, 0x4D, 255)];
+// Rainwater out of a rut, the ford's foam, and spray off a churned bed.
+const PUDDLE_T: [Color; 3] = [Color::new(0x7A, 0x90, 0xB4, 255), Color::new(0x4D, 0x5E, 0x80, 255), Color::new(0x67, 0x51, 0x2A, 255)];
+pub(crate) const FOAM_T: [Color; 2] = [Color::new(0x93, 0xEC, 0xE2, 255), WHITE_T];
+const SILTY_T: [Color; 3] = [Color::new(0xA3, 0xA7, 0x80, 255), Color::new(0x7D, 0x8A, 0x5C, 255), Color::new(0x5D, 0x7F, 0x6C, 255)];
 // Dry grass (the desert theme). What a hull kicks out of a desert tuft is
 // straw, not leaf: the SAND_* steps gen_grass.py builds a blade's tip, lit
 // side and body from, so the flecks are the tuft's own colours leaving it.

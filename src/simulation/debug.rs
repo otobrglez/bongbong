@@ -27,7 +27,7 @@ use crate::{DAMAGE_VARIANTS, MAX_DAMAGE, Position, TANK_SHELL_VARIANT_BY_ROW};
 use super::command::CommandReport;
 use super::engage::{EngageStatus, Rejections};
 use super::{
-    Frame, Game, Outcome, PLAYER_OWNER_SLOT, TANK_SPRITE_ORDER, TANK_VARIANTS, roll_track_distortion,
+    Frame, Game, Outcome, PLAYER_OWNER_SLOT, TANK_SPRITE_ORDER, TANK_VARIANTS,
     with_frog, with_tank,
 };
 
@@ -1030,7 +1030,7 @@ impl Game {
     /// The one placement path for a jump: the dev server's `teleport` and
     /// a portal (`Game::portal_phase`) both go through it. The caller
     /// keeps `tank.position` and the body in step *before* `step_world`,
-    /// so `lay_tracks` sees no travel.
+    /// so `press_treads` sees no travel.
     pub(crate) fn place_tank(&mut self, entity: Entity, pos: Position, rotation: Option<f32>) -> Result<(), String> {
         let (body, half_extents) = {
             let mut q = self.world.query_one::<&mut Tank>(entity);
@@ -1038,6 +1038,8 @@ impl Game {
             tank.position = pos;
             tank.velocity = Vec2::new(0.0, 0.0);
             tank.skid = 0.0;
+            // Arriving facing some way is no pivot.
+            tank.tread.heading = None;
             if let Some(rot) = rotation {
                 tank.rotation = rot;
                 tank.visual_rotation = rot;
@@ -1242,7 +1244,7 @@ impl Game {
             owner: Owner::Enemy(slot),
             ..Tank::default()
         };
-        roll_track_distortion(&mut enemy, rng);
+        super::wear::roll_tread(&mut enemy, rng);
         enemy.body = Some(self.physics.spawn_tank(pos, enemy.move_half_extents(false), enemy.mass()));
         self.world.spawn((enemy, Ai::with_role(role.unwrap_or_default())));
         Ok(slot)

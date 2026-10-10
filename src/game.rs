@@ -22,7 +22,6 @@ use crate::simulation::Game;
 use crate::tank::{
     draw_enemy_ring, draw_player_locate, draw_player_ring, draw_tank, draw_tank_heat_shield, draw_tank_shadow, draw_tank_shield, Tank,
 };
-use crate::track::draw_track;
 use crate::view::culled;
 use hecs::Entity;
 use std::collections::HashSet;
@@ -207,13 +206,19 @@ pub struct PaintOptions {
 }
 
 impl Game {
-    /// Bring the pictures the round keeps between frames - the lava's,
-    /// the bombs' pools', the craters' molten rock (`lava::LavaPictures`)
-    /// - up to this frame, for `views`, the world rectangles the window
-    /// shows (empty: the whole field). A window calls it before it uploads
-    /// the frame's textures (`with_block_images`); a painter draws from the
-    /// pictures only on the frame they were brought up to.
+    /// Bring the pictures the round keeps between frames - the ground's
+    /// worn cells (`wear::Pictures`), the lava's, the bombs' pools', the
+    /// craters' molten rock (`lava::LavaPictures`) - up to this frame, for
+    /// `views`, the world rectangles the window shows (empty: the whole
+    /// field). A window calls it before it uploads the frame's textures
+    /// (`with_block_images`); a painter draws from the pictures only on the
+    /// frame they were brought up to.
     pub fn refresh_pictures(&self, views: &[crate::math::Rectangle]) {
+        let surface = |p: crate::Position| self.surface_at(p);
+        self.wear.refresh_pictures(
+            &crate::wear::PictureFrame { time: self.time, look: self.wear_look(), views, surface: &surface },
+            &crate::tuning::tuning(),
+        );
         if self.lava.is_empty() && self.volcanoes.is_empty() && !self.fires.iter().any(|f| f.lava) {
             return;
         }
@@ -233,11 +238,13 @@ impl Game {
 
     /// Every baked image the round draws from, in an order that holds
     /// while the round does, for the window's GPU copies: the floor shade,
-    /// the lava's banks, the kept pictures, then each cone's.
+    /// the ground's worn cells, the lava's banks, the kept pictures, then
+    /// each cone's.
     pub fn with_block_images<R>(&self, f: impl FnOnce(&[&crate::canvas::BlockImage]) -> R) -> R {
         let pictures = self.lava.pictures();
+        let wear = self.wear.pictures();
         let cones: Vec<_> = self.volcanoes.iter().map(|v| crate::volcano::cone(&v.outlets)).collect();
-        let mut images = vec![self.ground.shade()];
+        let mut images = vec![self.ground.shade(), &wear.atlas().image];
         if !self.lava.is_empty() {
             images.push(self.lava.banks());
         }
@@ -288,12 +295,10 @@ impl Game {
             }
         }
 
-        // Tread marks go down first so tanks and everything else draw on top.
-        for track in &self.tracks {
-            if !c.culls(track.position) {
-                draw_track(c, track);
-            }
-        }
+        // The ground's tread marks (docs/ground-memory.md), baked a cell a
+        // tile for the cells in view (`refresh_pictures`): first, so every
+        // burn mark, crater and piece of rubble lies over them.
+        self.wear.pictures().atlas().draw(c);
 
         // Burn marks under everything that stands, so a barrel that
         // survived a neighbour's blast sits on the mark it left.

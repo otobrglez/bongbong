@@ -488,7 +488,7 @@ impl Game {
         if self.water.depth_at(center) == crate::ground::Depth::Dry {
             show.scorches.push(Scorch::with(center, scorch_scale, streak));
         }
-        self.scorch_tracks(center);
+        self.char_marks(center);
         crate::grass::flatten(&mut self.grass, center, radius * t.blast_grass_flatten);
 
         // Drum parts thrown in arcs to hashed landing spots (the same

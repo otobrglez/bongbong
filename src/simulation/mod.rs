@@ -38,6 +38,7 @@ mod gauss;
 mod fpv;
 mod rod;
 mod well;
+mod wear;
 mod nav;
 pub mod portals;
 pub mod present;
@@ -234,7 +235,6 @@ use crate::plasma::{Plasma, PlasmaVariant};
 use crate::shell::{Owner, Shell, ShellState};
 use crate::shockwave::Shockwave;
 use crate::tank::{ActiveWeapon, Dir, Tank, TankKind, Trigger};
-use crate::track::Track;
 use crate::{
     DAMAGE_VARIANTS,
     FROG_COLLIDER_HALF_EXTENT,
@@ -255,7 +255,6 @@ use crate::{
     PHYSICS_MAX_CATCHUP_SECONDS,
     Position,
     TANK_SHELL_VARIANT_BY_ROW,
-    TANK_TRACK_FRAMES,
     TANK_WRECK_COLS,
 };
 
@@ -1048,9 +1047,10 @@ pub struct Game {
     /// way it flows and the heat it radiates. Built from the map's cells
     /// beside the water in `init`; empty on a map without lava.
     pub(crate) lava: crate::lava::LavaLayout,
-    /// Fading tread marks, oldest first. Kept out of `world`: pure visual
-    /// trail data nothing ever queries alongside another component.
-    pub(crate) tracks: Vec<Track>,
+    /// The ground's memory of the round's tread marks
+    /// (docs/ground-memory.md): cosmetic, pressed by every hull's runs and
+    /// read by nothing that plays.
+    pub(crate) wear: crate::wear::WearGrid,
     /// Seconds since the round started; drives animation. Read by `render`.
     pub(crate) time: f32,
     pub(crate) outcome: Outcome,
@@ -1593,7 +1593,7 @@ impl Game {
         self.lamps_left = [lamps; MAX_SEATS];
 
         self.world = hecs::World::new();
-        self.tracks.clear();
+        self.wear = crate::wear::WearGrid::new(tuning().wear_max_cells.max(1) as usize);
         self.time = 0.0;
         self.outcome = Outcome::Playing;
         self.restart_timer = 0.0;
@@ -1767,7 +1767,7 @@ impl Game {
         if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
             tank.raise_shield();
         }
-        roll_track_distortion(&mut tank, &mut rng);
+        wear::roll_tread(&mut tank, &mut rng);
         // Spawn facing up (rotation 0): the Y-axis collider orientation.
         tank.body = Some(self.physics.spawn_tank(tank.position, tank.move_half_extents(false), tank.mass()));
         let center = tank.position;
@@ -1914,7 +1914,7 @@ impl Game {
             if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
                 tank.raise_shield();
             }
-            roll_track_distortion(&mut tank, &mut rng);
+            wear::roll_tread(&mut tank, &mut rng);
             tank.body = Some(self.physics.spawn_tank(tank.position, tank.move_half_extents(false), tank.mass()));
             self.seats[seat] = Some(self.world.spawn((tank,)));
             others.push(position);
@@ -2425,7 +2425,6 @@ impl Game {
             tank.heat_shield_timer = (tank.heat_shield_timer - dt).max(0.0);
             tank.tick_shield(dt);
             tank.burn_timer = (tank.burn_timer - dt).max(0.0);
-            tank.wet_timer = (tank.wet_timer - dt).max(0.0);
             tank.tick_wreck(dt);
             tank.tick_minigun_spin(dt);
             tank.tick_missile_pod();
@@ -2465,13 +2464,7 @@ impl Game {
             frog.tick(dt);
             self.physics.set_position(frog.body, frog.position);
         }
-        self.fade_tracks(dt);
-    }
-
-    /// Age every tread mark and drop the ones that have faded out (a
-    /// wreck's are scorched and never do).
-    fn fade_tracks(&mut self, dt: f32) {
-        self.tracks.retain_mut(|t| !t.tick(dt));
+        self.tick_wear(dt);
     }
 
     /// The mission banner's own timer: count the freeze down - a seat
@@ -2502,20 +2495,15 @@ impl Game {
     /// `drive_tank_with`'s: water takes no mark and wets the ones laid on
     /// the far bank.
     fn ease_hulls(&mut self, dt: f32) {
-        let wet_seconds = tuning().water_wet_track_seconds;
+        let (look, now) = (self.wear_look(), self.time);
+        let floor = wear::Underfoot { ground: &self.ground, water: &self.water, lava: &self.lava, craters: &self.craters };
         for tank in self.world.query::<&mut Tank>().iter() {
             tank.ease_visual_rotation(dt);
             tank.ease_turret_visual_rotation(dt);
             tank.tick_minigun_spin(dt);
             tank.tick_recoil(dt);
-            let depth = self.water.depth_at(tank.position);
-            if depth.is_wet() {
-                tank.wet_timer = wet_seconds;
-            } else {
-                tank.wet_timer = (tank.wet_timer - dt).max(0.0);
-            }
             if let Some(before) = tank.track_from.replace(tank.position) {
-                lay_tracks(&mut self.tracks, tank, before, depth);
+                wear::press_treads(&mut self.wear, tank, before, dt, &floor, look, now);
             }
         }
     }
@@ -2979,7 +2967,7 @@ impl Game {
         self.tick_nightfall();
         self.tick_wave_banner(dt);
         self.ease_hulls(dt);
-        self.fade_tracks(dt);
+        self.tick_wear(dt);
         self.tick_grass(dt);
         // The wells' drain on the marks and the grass, off the zones' clock
         // as the room's runs it.
@@ -4485,9 +4473,11 @@ impl Game {
         for tank in self.world.query::<&mut Tank>().iter() {
             sync_tank_from_physics(&self.physics, tank);
         }
+        let (look, now) = (self.wear_look(), self.time);
         if f.physics_stepped {
+            let floor = wear::Underfoot { ground: &self.ground, water: &self.water, lava: &self.lava, craters: &self.craters };
             for &(player, before) in &players {
-                with_tank_mut(&self.world, player, |t| lay_tracks(&mut self.tracks, t, before, self.water.depth_at(t.position)));
+                with_tank_mut(&self.world, player, |t| wear::press_treads(&mut self.wear, t, before, f.dt, &floor, look, now));
             }
         }
         for (enemy, before) in enemies_before {
@@ -4509,7 +4499,8 @@ impl Game {
                 }
             }
             if f.physics_stepped {
-                with_tank_mut(&self.world, enemy, |t| lay_tracks(&mut self.tracks, t, before, self.water.depth_at(t.position)));
+                let floor = wear::Underfoot { ground: &self.ground, water: &self.water, lava: &self.lava, craters: &self.craters };
+                with_tank_mut(&self.world, enemy, |t| wear::press_treads(&mut self.wear, t, before, f.dt, &floor, look, now));
             }
         }
         // The two players: friendly fire, at the same factor a shell gets.
@@ -4869,7 +4860,7 @@ impl Game {
         if self.water.depth_at(center) == crate::ground::Depth::Dry {
             show.scorches.push(Scorch::new(center));
         }
-        self.scorch_tracks(center);
+        self.char_marks(center);
         // The kill's pressure wave lays the grass round the hull flat, as a
         // blast's does (`blast_show`); it stands back up on the grass's own
         // clock.
@@ -4885,24 +4876,6 @@ impl Game {
             let dist = throw * (0.35 + 0.65 * ((h >> 12) % 100) as f32 / 100.0);
             let to = Position::new(center.x + math::cos(angle) * dist, center.y + math::sin(angle) * dist);
             show.decals.push(Decal::thrown(RUBBLE_ROW_TANK, center, to, 40 + i * 5));
-        }
-    }
-
-    /// Burn a wreck's last few tread marks into the ground. Walks back
-    /// from the newest mark rather than scanning the whole list, and stops
-    /// after `wreck_track_marks`, so the cost is bounded by the number of
-    /// marks burnt and not by how long the round has been running.
-    fn scorch_tracks(&mut self, center: Position) {
-        let reach = crate::TANK_FRAME_SIZE;
-        let mut left = tuning().wreck_track_marks.max(0);
-        for track in self.tracks.iter_mut().rev() {
-            if left == 0 {
-                break;
-            }
-            if track.position.distance_to(center) <= reach {
-                track.scorched = true;
-                left -= 1;
-            }
         }
     }
 
@@ -5358,6 +5331,7 @@ impl Game {
             })
             .collect();
         crate::grass::tick(&mut self.grass, &movers, dt);
+        self.hold_worn_grass();
     }
 
     /// The tall-grass cells a live tank is currently moving through - the
@@ -5971,7 +5945,7 @@ fn drive_tank_with(
         // Water takes the boost: a speed-up ends the moment its hull
         // wades in, and the marks it leaves on the far bank are wet.
         tank.speed_boost_timer = 0.0;
-        tank.wet_timer = tuning().water_wet_track_seconds;
+        tank.tread.wet = 1.0;
     }
 
     tank.control(intent.move_dir, intent.face);
@@ -6438,20 +6412,8 @@ fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize) -> 
     if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
         enemy.raise_shield();
     }
-    roll_track_distortion(&mut enemy, rng);
+    wear::roll_tread(&mut enemy, rng);
     enemy
-}
-
-/// Roll a tank's per-tank track-distortion parameters (see
-/// TRACK_WOBBLE_AMP_MIN_DEG etc. in lib.rs).
-fn roll_track_distortion(tank: &mut Tank, rng: &mut SmallRng) {
-    tank.track_wobble_amp = rng.random_range(tuning().track_wobble_amp_min_deg..tuning().track_wobble_amp_max_deg);
-    let wavelength = rng.random_range(tuning().track_wobble_wavelength_min..tuning().track_wobble_wavelength_max);
-    // Radians per mark: one mark per TRACK_SPACING px, a full cycle per
-    // `wavelength` px.
-    tank.track_wobble_freq = std::f32::consts::TAU * tuning().track_spacing / wavelength;
-    tank.track_wobble_phase = rng.random_range(0.0..std::f32::consts::TAU);
-    tank.track_scale_jitter = rng.random_range((1.0 - tuning().track_scale_jitter)..(1.0 + tuning().track_scale_jitter));
 }
 
 /// Roll one spawning enemy's `Role` for `mission` (docs/maps-to-levels.md
@@ -6484,68 +6446,6 @@ fn roll_wreck_col(tank: &mut Tank, rng: &mut SmallRng) -> bool {
         return true;
     }
     false
-}
-
-/// Lay tread marks along the distance a tank travelled this frame, one per
-/// TRACK_SPACING px, and advance its tread-animation frame off the same
-/// signal. Must only run on frames the physics stepped - otherwise a
-/// stationary `before` reads as idle and resets the animation. Marks
-/// follow the raw travel heading (not the snapped hull rotation), so a
-/// real turn traces its real curve and a sideways shove leaves sideways
-/// marks. Runs at every live damage tier - a hurt tank still drives on its
-/// tracks - and stops once the hull is a wreck. Water takes no mark
-/// (`depth`, the water under the hull): the treads still turn, but nothing
-/// is pressed into a river bed, and the marks laid while `Tank::wet_timer`
-/// runs after wading out are wet ones.
-fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position, depth: crate::ground::Depth) {
-    if tank.is_wreck() {
-        return;
-    }
-    let moved = tank.position.distance_to(before);
-    if moved <= 0.0 {
-        tank.hull_frame = 0;
-        return;
-    }
-    tank.hull_anim_accum += moved;
-    while tank.hull_anim_accum >= tuning().tank_hull_track_frame_distance {
-        tank.hull_anim_accum -= tuning().tank_hull_track_frame_distance;
-        tank.hull_frame = (tank.hull_frame + 1) % TANK_TRACK_FRAMES;
-    }
-    // Tracks stop in water; ice takes them like the ground does.
-    if depth.is_wet() {
-        tank.track_accum = 0.0;
-        return;
-    }
-    // Unit vector pointing back along this frame's travel.
-    let back = Vec2::new((before.x - tank.position.x) / moved, (before.y - tank.position.y) / moved);
-    let mut heading = math::atan2(-back.x, back.y).to_degrees();
-    if heading < 0.0 {
-        heading += 360.0;
-    }
-    // Marks start at the rear edge so the trail never pokes ahead of the hull.
-    let rear = tank.hull_size() * 0.5;
-    let weight_scale = tuning().track_weight_scale[tank.row as usize];
-    let scale = tank.scale * tuning().track_scale_fraction * weight_scale * tank.track_scale_jitter;
-    let max_opacity = tuning().track_max_opacity * tuning().track_weight_opacity[tank.row as usize];
-
-    tank.track_accum += moved;
-    while tank.track_accum >= tuning().track_spacing {
-        tank.track_accum -= tuning().track_spacing;
-        let dist_back = rear + tank.track_accum;
-        // Per-tank wobble so a straight drive doesn't stamp identical marks.
-        let wobble = tank.track_wobble_amp
-            * math::sin(tank.track_mark_count as f32 * tank.track_wobble_freq + tank.track_wobble_phase);
-        tracks.push(Track {
-            position: Position::new(tank.position.x + back.x * dist_back, tank.position.y + back.y * dist_back),
-            rotation: heading + wobble,
-            scale,
-            max_opacity,
-            age: 0.0,
-            scorched: false,
-            wet: tank.wet_timer > 0.0,
-        });
-        tank.track_mark_count += 1;
-    }
 }
 
 /// Whether an enemy competes for an engagement slot this frame, and if
@@ -7289,11 +7189,49 @@ mod mechanics_tests {
         // No mark was pressed into the stream bed; the ones on the bank
         // before it are dry, since the hull had not waded yet.
         let stream_left = map::cell_to_world(8, 4).x - 16.0;
-        assert!(wet.tracks.iter().all(|t| t.position.x < stream_left), "no tread mark in the water");
-        assert!(wet.tracks.iter().all(|t| !t.wet));
+        let marks = |g: &Game| -> Vec<(Position, crate::wear::Block)> { g.wear().blocks().filter(|(_, b)| b.kind() != crate::wear::Kind::None).collect() };
+        assert!(!marks(&wet).is_empty() && marks(&wet).iter().all(|(p, _)| p.x < stream_left), "no tread mark in the water");
+        assert!(marks(&wet).iter().all(|(_, b)| b.wet() == 0.0));
+        assert!(wet.wear().blocks().any(|(p, b)| p.x > stream_left && b.silt() > 0.0), "the hull stirs the stream's silt");
         // Wading out again leaves wet marks for a while.
         drive(&mut wet, Some(Dir::Down), 90);
-        assert!(wet.tracks.iter().any(|t| t.wet), "the marks on the far bank are wet");
+        assert!(marks(&wet).iter().any(|(_, b)| b.wet() > 0.0), "the marks on the far bank are wet");
+    }
+
+    /// A hull presses its runs' grouser ladder into the ground as it
+    /// rolls, and churns it where it turns standing (docs/ground-memory.md).
+    #[test]
+    fn a_hull_presses_its_ladder_and_churns_where_it_pivots() {
+        use crate::wear::Kind;
+        let mut game = sandbox("version = 1\ntanks = 0\ncells.\"5,11\" = { kind = \"start\" }\n");
+        drive(&mut game, Some(Dir::Right), 60);
+        let kinds = |g: &Game, near: Position, reach: f32| -> Vec<Kind> { g.wear().blocks().filter(|(p, _)| p.distance_to(near) < reach).map(|(_, b)| b.kind()).collect() };
+        let behind = player_pos(&game) - Vec2::new(60.0, 0.0);
+        let rolled = kinds(&game, behind, 30.0);
+        assert!(rolled.contains(&Kind::Grouser) && rolled.contains(&Kind::Pad), "a rolled ladder behind the hull: {rolled:?}");
+        assert!(!rolled.contains(&Kind::Churn));
+        drive(&mut game, None, 60);
+        let stood = player_pos(&game);
+        drive(&mut game, Some(Dir::Up), 6);
+        assert!(kinds(&game, stood, 24.0).contains(&Kind::Churn), "a pivot churns the ground it turned on");
+        let tread = game.driving().into_iter().find(|d| d.slot == 0).expect("the seat's tread").tread;
+        assert_eq!(tread.surface, crate::wear::Surface::Grass);
+    }
+
+    /// Under rain a hull's tracks throw mud that lands behind it as
+    /// splats, at places hashed from its odometer (no RNG).
+    #[test]
+    fn rain_throws_mud_behind_a_hull() {
+        use crate::wear::Kind;
+        let mut game = sandbox("version = 1\ntanks = 0\ncells.\"5,11\" = { kind = \"start\" }\n");
+        game.change_weather(crate::map::Weather::Rain.into());
+        drive(&mut game, Some(Dir::Right), 90);
+        let splats: Vec<Position> = game.wear().blocks().filter(|(_, b)| b.kind() == Kind::Splat).map(|(p, _)| p).collect();
+        assert!(!splats.is_empty(), "mud splats under the rain");
+        assert!(splats.iter().all(|p| p.x < player_pos(&game).x), "behind the hull");
+        let mut dry = sandbox("version = 1\ntanks = 0\ncells.\"5,11\" = { kind = \"start\" }\n");
+        drive(&mut dry, Some(Dir::Right), 90);
+        assert!(!dry.wear().blocks().any(|(_, b)| b.kind() == Kind::Splat), "none on dry ground");
     }
 
     #[test]

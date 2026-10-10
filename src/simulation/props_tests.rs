@@ -1051,19 +1051,20 @@ cells."19,11" = { kind = "tall_grass" }
 "#,
     );
     let mut game = game_at(&map, 6, (20, 14));
-    // A tread mark beside the drum. Its age starts negative so it cannot
-    // fade out (`track_lifetime` is under a second) before the shells
-    // that pop the drum have landed: only the burn-in rule is under test.
-    game.tracks.push(crate::track::Track {
-        position: Position::new(cell_to_world(20, 10).x + 12.0, cell_to_world(20, 10).y + 20.0),
-        rotation: 0.0,
+    // A tread mark beside the drum: one pass of an assault's runs.
+    let mark = crate::wear::Stamp {
+        at: Position::new(cell_to_world(20, 10).x + 12.0, cell_to_world(20, 10).y + 20.0),
+        heading: 0.0,
+        profile: &crate::TREAD_BY_ROW[1],
         scale: 2.0,
-        max_opacity: 0.5,
-        age: -10.0,
-        scorched: false,
-        wet: false,
-    });
-    let tracks_scorched_before = game.tracks.iter().filter(|t| t.scorched).count();
+        press: 1.0,
+        roll: crate::wear::Roll::Rolling,
+        wet: 0.0,
+        phase: 0.0,
+    };
+    let now = game.time;
+    game.wear.press(&mark, crate::wear::Look::default(), &|_| crate::wear::Surface::Grass, now, &tuning());
+    let charred_before = game.wear().charred();
     // Shatter the glass first so its rubble is on the ground before the
     // blast (a shot straight up hits the drum, so aim at the glass from
     // its own column).
@@ -1088,7 +1089,7 @@ cells."19,11" = { kind = "tall_grass" }
     assert!(game.decals.len() >= rubble_before + parts, "nothing that was lying there vanished");
     let flat: Vec<&crate::grass::GrassTuft> = game.grass.iter().filter(|g| g.crush >= 1.0).collect();
     assert!(!flat.is_empty(), "grass inside the blast lies flat");
-    assert!(game.tracks.iter().filter(|t| t.scorched).count() > tracks_scorched_before, "tread marks under the blast are burnt in");
+    assert!(game.wear().charred() > charred_before, "tread marks under the blast are burnt in");
     // The cook-off count is hashed from the position: this position
     // gives at least one, and every one of them fires later.
     let queued = game.cookoffs.len();
