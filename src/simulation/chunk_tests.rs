@@ -155,3 +155,28 @@ fn a_struck_chunk_is_the_first_one_standing_on_the_shots_way() {
     assert_eq!(broken & 0b1_0011_0001, 0b1_0011_0001, "{broken:016b}");
     assert_eq!(broken & (1 << 3), 0, "the far corner stands");
 }
+
+#[test]
+fn the_body_shrinks_to_the_half_of_a_tile_that_stands() {
+    let stop = |broken: &[usize]| {
+        let mut game = sandbox();
+        let entity = tile_at(&game, (12, 11)).expect("tile");
+        {
+            let mut q = game.world.query_one::<&mut Obstacle>(entity);
+            let ch = q.get().expect("obstacle").chunks.as_mut().expect("chunked");
+            for &i in broken {
+                ch.strike(i, 1000.0, 0.0, 0.0);
+            }
+        }
+        game.fit_tile_body(entity);
+        for _ in 0..240 {
+            step(&mut game, face_right());
+        }
+        game.tank_snapshots().iter().find(|t| t.is_player).expect("player").position.x
+    };
+    let whole = stop(&[]);
+    // The two left columns of chunks gone: the left quadrants fall, and the
+    // hull drives on to the half that stands.
+    let half = stop(&[0, 1, 4, 5, 8, 9, 12, 13]);
+    assert!(half > whole + 8.0, "the hull stops at what stands: {half} against {whole}");
+}
