@@ -264,7 +264,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   sets - enemy sight, grip, ice, gusts -, each round's seed picking one; `random` is every sky; one
   sky is written as its name, so older files re-save byte for byte; the MAP panel's SKY tiles;
   docs/weather.md; absent = clear, not written back), interior terrain only - walls, props (`kind =
-  "sandbag"|"barrel"|"fence"`, `drum = "oil"|"fuel"` pins a drum), trees (`tree`/`pine`),
+  "sandbag"|"barrel"|"fence"`, `drum = "oil"|"fuel"` pins a drum), trees (`tree`/`pine`/`spruce`/`scots`/`fir`/`birch`/`willow`/`palm`/`snag`, `obstacle::TREE_SPECIES`),
   `tall_grass` (not solid), `oil` trail cells, `portal` anchors (multi-instance, not solid,
   `portal_cells`; docs/teleporting.md), road, `water` (painted like road; `ground::build` draws a
   one-cell-wide line as a river and a wider block as a lake, both animated and flowing down the map -
@@ -943,7 +943,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
 - `obstacle.rs` — `Obstacle` is a wall (`Material` Brick/Iron/Wood/Glass), a prop
   (Sandbag/Barrel/Fence, and Target - the range board, docs/range-target-prd.md: never rolled
   flammable, so a shot splinters it, yet `catches_fire` from the stream, a burning cell beside it or
-  a lava bank, and burns for its own `burn_seconds`), a tree (Tree/Pine) or a tower
+  a lava bank, and burns for its own `burn_seconds`), a tree (`TREE_SPECIES`: Tree, Pine, Spruce, Scots, Fir, Birch, Willow, Palm, Snag; Fir, Palm and Snag
+  hide nothing behind them, each species its own health and ram rows) or a tower
   (Tesla/GunTower/BioSlush, `is_tower`; `tower.rs`), or one drawn by its own module rather than a
   sheet (`is_drawn`: `Volcano` - a cone cell, permanent like Iron - and `Lamp`, a lamp post;
   docs/volcano.md). Ask the predicates (`is_permanent` - Iron only -, `blocks_sight`, `blocks_light`
@@ -951,7 +952,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `pass_over_chance`, `deflect_chance`, `ram_seconds`, `flammable_chance`, `is_explosive`), never
   match variants. **Trees are 48 px art on a 32 px cell**: excluded from seam-closing in physics and
   hits (`battlefield::tile_half_extent`), no edge cap, drawn in the vegetation pass after the tanks;
-  their idle is a colour shimmer, not motion, and a ram lean shifts whole 2 px bands. The edge-cap
+  their idle is a colour shimmer, not motion, and a ram lean shifts whole 2 px bands. On a desert map
+  every species but the palm is drawn from the sheet's dry half (`Material::is_dry`, `Obstacle::dry`,
+  `TREE_DRY_COL`), rolls `dry_tree_flammable_chance` at spawn and leaves dry litter; a snag is dry
+  anywhere. The edge-cap
   neighbour mask is cached and refreshed by `Game::refresh_edge_masks` on destruction. A barrel's
   `variant` is its `Drum`. Specs: docs/WALLS_SPEC.md, PROPS_SPEC.md, TREES_SPEC.md.
 - `grass.rs` — tall grass, **deliberately not an `Obstacle`** (the nav grid and the linter treat

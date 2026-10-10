@@ -157,12 +157,18 @@ fn cell_of(pos: Position) -> (i32, i32) {
 /// What a dead tile leaves where it stood: its rubble, charred when fire
 /// finished it. A barrel's leftovers are thrown by its blast
 /// (`Game::blast_show`) instead; iron has no rubble row and never dies
-/// anyway. A replica calls it off `Event::ObstacleDestroyed`.
-pub(crate) fn tile_rubble(material: Material, pos: Position, charred: bool) -> Option<Decal> {
+/// anyway. A dry tree's litter is the dry half of its row
+/// (`Material::is_dry` on the map's `theme`). A replica calls it off
+/// `Event::ObstacleDestroyed`.
+pub(crate) fn tile_rubble(material: Material, pos: Position, charred: bool, theme: crate::map::Theme) -> Option<Decal> {
     if material.is_explosive() {
         return None;
     }
-    Decal::new(material, pos, charred)
+    let mut decal = Decal::new(material, pos, charred)?;
+    if material.is_dry(theme) {
+        decal.col += crate::TREE_DRY_COL;
+    }
+    Some(decal)
 }
 
 impl Game {
@@ -264,7 +270,7 @@ impl Game {
     fn obstacle_died(&mut self, f: &mut Frame, tile: DeadTile) {
         let DeadTile { material, variant, position: pos, chained, charred, shape } = tile;
         f.events.push(Event::ObstacleDestroyed { material, x: pos.x, y: pos.y });
-        if let Some(decal) = tile_rubble(material, pos, charred) {
+        if let Some(decal) = tile_rubble(material, pos, charred, self.map.theme) {
             f.decals.push(decal);
         }
         if material.is_explosive() {

@@ -198,7 +198,8 @@ When a dive's time is up the drone bursts where its ground point is
 ### Trees
 
 "Trees hide a tank from the dive", made exact with one box: a tree's
-**crown** is its 32 px cell grown by `fpv_canopy_px` (12) on each side - the
+**crown** (every species but a dead snag, whose bare limbs hide nothing:
+`Material::has_crown`) is its 32 px cell grown by `fpv_canopy_px` (12) on each side - the
 48 px crown it is drawn with, and a few pixels more. A tank whose hull box
 (`Tank::hull_bbox_world`) overlaps a standing tree's crown is **under
 canopy**, and so is a frog whose centre is inside one

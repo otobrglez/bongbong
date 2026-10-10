@@ -29,7 +29,15 @@ use crate::{
     TARGET_BURN_STAGES,
     TARGET_TEXTURE_SIZE,
     TREE_BURN_COL,
+    TREE_DRY_COL,
+    TREE_ROW_BIRCH,
     TREE_ROW_BROADLEAF,
+    TREE_ROW_FIR,
+    TREE_ROW_PALM,
+    TREE_ROW_SCOTS,
+    TREE_ROW_SNAG,
+    TREE_ROW_SPRUCE,
+    TREE_ROW_WILLOW,
     TREE_SHIMMER_FRAMES,
     TREE_STAGES,
     TREE_ROW_CONIFER,
@@ -39,7 +47,7 @@ use crate::{
 
 /// What a static battlefield obstacle is: one of the four wall materials
 /// (walls_sheet.png / docs/WALLS_SPEC.md), one of the three discrete props
-/// (props_sheet.png / docs/PROPS_SPEC.md), or one of the two tree species
+/// (props_sheet.png / docs/PROPS_SPEC.md), or one of the nine tree species
 /// (trees_sheet.png / docs/TREES_SPEC.md). All of them are obstacles - same
 /// physics body, same grid cell, same hit sweep - but each has its own
 /// rules (shots pass over sandbags, barrels explode, fences snap, trees
@@ -94,7 +102,41 @@ pub enum Material {
     /// tile that is never rolled flammable yet always catches from fire
     /// (`Material::catches_fire`): a shot breaks it, a flame burns it.
     Target,
+    /// A spruce: a hard star of tiers, darker and bluer than `Pine`, and
+    /// the toughest tree - the interior of a conifer stand.
+    Spruce,
+    /// A Scots pine: separate needle clumps on bare orange limbs, a crown
+    /// you can see into.
+    Scots,
+    /// A fir sapling: a young spruce a third smaller. Anything fells it,
+    /// a hull pushes through it at once and it hides nothing behind it -
+    /// the soft outer ring of a wood.
+    Fir,
+    /// A birch: a pale, airy crown on a white trunk, for a wood's edge.
+    Birch,
+    /// A willow: a fringed dome of hanging strands - the bank tree.
+    Willow,
+    /// A date palm: fronds on a tall ringed trunk, the oasis tree. Too thin
+    /// a crown to hide what is behind it, and green on every theme.
+    Palm,
+    /// A dead snag: a grey trunk and bare limbs. Hides nothing, snaps at a
+    /// touch, and is tinder on any map (`is_dry`).
+    Snag,
 }
+
+/// Every tree species, in sheet row order - the map kinds, the builder's
+/// palette and the tests walk this rather than spelling the list again.
+pub const TREE_SPECIES: [Material; 9] = [
+    Material::Tree,
+    Material::Pine,
+    Material::Spruce,
+    Material::Scots,
+    Material::Fir,
+    Material::Birch,
+    Material::Willow,
+    Material::Palm,
+    Material::Snag,
+];
 
 /// The four wall materials, in walls_sheet.png row order - `spawn_from_map`
 /// rolls one cosmetic variant per material from this list for each round.
@@ -129,7 +171,15 @@ impl Material {
         match self {
             Material::Sandbag | Material::Barrel | Material::Fence => Sheet::Props,
             Material::Target => Sheet::Target,
-            Material::Tree | Material::Pine => Sheet::Trees,
+            Material::Tree
+            | Material::Pine
+            | Material::Spruce
+            | Material::Scots
+            | Material::Fir
+            | Material::Birch
+            | Material::Willow
+            | Material::Palm
+            | Material::Snag => Sheet::Trees,
             Material::Tesla | Material::GunTower | Material::BioSlush => Sheet::Towers,
             _ => Sheet::Walls,
         }
@@ -156,6 +206,13 @@ impl Material {
             Material::Target => 0,
             Material::Tree => TREE_ROW_BROADLEAF,
             Material::Pine => TREE_ROW_CONIFER,
+            Material::Spruce => TREE_ROW_SPRUCE,
+            Material::Scots => TREE_ROW_SCOTS,
+            Material::Fir => TREE_ROW_FIR,
+            Material::Birch => TREE_ROW_BIRCH,
+            Material::Willow => TREE_ROW_WILLOW,
+            Material::Palm => TREE_ROW_PALM,
+            Material::Snag => TREE_ROW_SNAG,
             // A tower's rows depend on its side as well (`tower::base_row`).
             Material::Tesla | Material::GunTower | Material::BioSlush => 0,
             Material::Volcano | Material::Lamp | Material::Door => 0,
@@ -171,7 +228,7 @@ impl Material {
             Material::Glass => 2,
             Material::Sandbag => 3,
             Material::Barrel | Material::Fence => 2,
-            Material::Tree | Material::Pine => TREE_VARIANTS,
+            m if m.is_tree() => TREE_VARIANTS,
             Material::Tesla | Material::GunTower | Material::BioSlush => 1,
             Material::Volcano | Material::Lamp | Material::Door | Material::Target => 1,
             _ => 4,
@@ -194,6 +251,13 @@ impl Material {
             Material::Target => tuning().target_max_health,
             Material::Tree => tuning().tree_max_health,
             Material::Pine => tuning().pine_max_health,
+            Material::Spruce => tuning().spruce_max_health,
+            Material::Scots => tuning().scots_max_health,
+            Material::Fir => tuning().fir_max_health,
+            Material::Birch => tuning().birch_max_health,
+            Material::Willow => tuning().willow_max_health,
+            Material::Palm => tuning().palm_max_health,
+            Material::Snag => tuning().snag_max_health,
             Material::Tesla => tuning().tesla_max_health,
             Material::GunTower => tuning().gun_tower_max_health,
             Material::BioSlush => tuning().bio_max_health,
@@ -222,7 +286,15 @@ impl Material {
             Material::Fence => 2,
             // Intact, holed, cracked, splintered.
             Material::Target => 4,
-            Material::Tree | Material::Pine => 3,
+            Material::Tree
+            | Material::Pine
+            | Material::Spruce
+            | Material::Scots
+            | Material::Fir
+            | Material::Birch
+            | Material::Willow
+            | Material::Palm
+            | Material::Snag => 3,
             // Intact, scuffed, damaged, critical; the ruin is a decal.
             Material::Tesla | Material::GunTower | Material::BioSlush => 4,
             Material::Volcano | Material::Lamp | Material::Door => 1,
@@ -250,7 +322,15 @@ impl Material {
             Material::Sandbag => Some((Sheet::Walls, RUBBLE_ROW_SANDBAG)),
             Material::Barrel => Some((Sheet::Walls, RUBBLE_ROW_BARREL)),
             Material::Fence => Some((Sheet::Walls, RUBBLE_ROW_FENCE)),
-            Material::Tree | Material::Pine => Some((
+            Material::Tree
+            | Material::Pine
+            | Material::Spruce
+            | Material::Scots
+            | Material::Fir
+            | Material::Birch
+            | Material::Willow
+            | Material::Palm
+            | Material::Snag => Some((
                 Sheet::Trees,
                 if charred { RUBBLE_ROW_TREE_CHARRED } else { RUBBLE_ROW_TREE },
             )),
@@ -273,6 +353,13 @@ impl Material {
         self.sheet() == Sheet::Trees
     }
 
+    /// A tree with a crown overhead - every species but the dead snag,
+    /// whose bare limbs hide nothing from a drone diving at what is under
+    /// them (docs/fpv-swarm.md "Trees").
+    pub fn has_crown(self) -> bool {
+        self.is_tree() && self != Material::Snag
+    }
+
     /// One of the four wall materials - the only ones that autotile into
     /// runs, so the only ones with an edge cap and a `MATERIALS` slot.
     pub fn is_wall(self) -> bool {
@@ -288,12 +375,27 @@ impl Material {
     /// Odds an instance of this material is the kind that catches fire when
     /// it dies rather than breaking outright, rolled once per tile at spawn
     /// (`Obstacle::flammable`). Zero draws no RNG, so a map with neither
-    /// wood nor trees replays exactly as before either existed.
-    pub fn flammable_chance(self) -> f64 {
+    /// wood nor trees replays exactly as before either existed. `dry` is
+    /// `is_dry` on the map's theme: a dry tree is tinder.
+    pub fn flammable_chance(self, dry: bool) -> f64 {
         match self {
             Material::Wood => tuning().wood_flammable_chance,
-            Material::Tree | Material::Pine => tuning().tree_flammable_chance,
+            m if m.is_tree() && dry => tuning().dry_tree_flammable_chance,
+            m if m.is_tree() => tuning().tree_flammable_chance,
             _ => 0.0,
+        }
+    }
+
+    /// Whether a tree of this species is drawn from the dry half of the
+    /// sheet (`TREE_DRY_COL`) and burns as tinder on a map of `theme`:
+    /// every species on a desert map but the date palm, which grows where
+    /// the water is, and a dead snag on any map. Never true for anything
+    /// that is not a tree.
+    pub fn is_dry(self, theme: crate::map::Theme) -> bool {
+        match self {
+            Material::Snag => true,
+            Material::Palm => false,
+            m => m.is_tree() && theme == crate::map::Theme::Desert,
         }
     }
 
@@ -328,7 +430,9 @@ impl Material {
     /// sight. Sandbags are knee-high, a fence is see-through and a lamp
     /// post is a pole; everything else is a solid block.
     pub fn blocks_sight(self) -> bool {
-        !matches!(self, Material::Sandbag | Material::Fence | Material::Lamp)
+        // A fir sapling is below a hull's eye line, a palm's crown is a few
+        // fronds on a pole and a snag is bare limbs.
+        !matches!(self, Material::Sandbag | Material::Fence | Material::Lamp | Material::Fir | Material::Palm | Material::Snag)
     }
 
     /// Whether this tile throws a shadow in the weather's light map
@@ -384,7 +488,10 @@ impl Material {
         match self {
             Material::Sandbag => Some(tuning().sandbag_ram_seconds),
             Material::Fence => Some(tuning().fence_ram_seconds),
-            Material::Tree | Material::Pine => Some(tuning().tree_ram_seconds),
+            Material::Tree | Material::Pine | Material::Scots | Material::Willow => Some(tuning().tree_ram_seconds),
+            Material::Spruce => Some(tuning().spruce_ram_seconds),
+            Material::Fir | Material::Snag => Some(tuning().sapling_ram_seconds),
+            Material::Birch | Material::Palm => Some(tuning().slim_tree_ram_seconds),
             _ => None,
         }
     }
@@ -494,6 +601,10 @@ pub struct Obstacle {
     /// docs/WALLS_SPEC.md's framing of "breaks easily" vs "catches fire" as
     /// gameplay data layered on shared art, not a separate art asset.
     pub flammable: bool,
+    /// Trees only: drawn from the dry half of the sheet, as `Material::is_dry`
+    /// says for the map's theme. Set at spawn alongside `flammable`, which
+    /// it also decided; purely visual from then on.
+    pub dry: bool,
     /// True from the moment a flammable tile's health hits zero until it
     /// finishes charring (see `tick_burn`) - during this window `damage`
     /// is a no-op (already on fire) and `col` shows the 3-frame burn loop
@@ -563,6 +674,7 @@ impl Obstacle {
             health: max_health,
             max_health,
             flammable,
+            dry: false,
             burning: false,
             burn_frame: 0,
             burn_frame_timer: 0.0,
@@ -771,10 +883,12 @@ pub fn fence_axis(obstacle: &Obstacle, fences: &HashSet<(i32, i32)>) -> FenceAxi
 /// Source rectangle (and which sheet it is in) for `material`'s pristine
 /// (variant 0, undamaged) tile - used by the map editor's toolbar
 /// (`editor.rs`) to draw a representative icon for each material without
-/// needing a live `Obstacle` instance.
-pub fn icon_source_rec(material: Material) -> (Sheet, Rectangle) {
+/// needing a live `Obstacle` instance. A tree on a map of `theme` is shown
+/// the way the round will draw it, dry or green (`Material::is_dry`).
+pub fn icon_source_rec(material: Material, theme: crate::map::Theme) -> (Sheet, Rectangle) {
     let sheet = material.sheet();
-    (sheet, source_rec(sheet, material.row_base(), 0))
+    let col = if material.is_dry(theme) { TREE_DRY_COL } else { 0 };
+    (sheet, source_rec(sheet, material.row_base(), col))
 }
 
 /// Source rectangle for the cell at (row, col) inside `sheet` - the atlases
@@ -1041,13 +1155,14 @@ pub fn tree_lean(obstacle: &Obstacle, movers: &[Position]) -> f32 {
 /// hash sets its phase, so a wood shimmers out of step with itself rather
 /// than blinking as one.
 pub fn tree_col(obstacle: &Obstacle, time: f32) -> i32 {
+    let dry = if obstacle.dry { TREE_DRY_COL } else { 0 };
     if obstacle.burning {
-        return TREE_BURN_COL + obstacle.burn_frame;
+        return dry + TREE_BURN_COL + obstacle.burn_frame;
     }
     let seed = crate::blast::seed_at(obstacle.position, 41);
     let step = (time / tuning().tree_dapple_seconds.max(0.05)) as i64;
     let frame = (step + (seed % TREE_SHIMMER_FRAMES as u32) as i64).rem_euclid(TREE_SHIMMER_FRAMES as i64);
-    frame as i32 * TREE_STAGES + obstacle.damage_stage()
+    dry + frame as i32 * TREE_STAGES + obstacle.damage_stage()
 }
 
 /// Draw a tree. Split from `draw_obstacle` because a tree has its own

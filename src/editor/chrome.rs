@@ -781,15 +781,28 @@ pub fn hanging_list(anchor: Rectangle, room: Rectangle, n: usize, w: f32) -> Row
 /// room is wide for runs on into a second row under its first, so the
 /// palette never leaves the room's width; where its rows would not fit the
 /// room's height the cells shrink to fit, never under a finger's
-/// `UI_TOUCH_PT`.
+/// `UI_TOUCH_PT`, and where even that is too tall a category whose name and
+/// every tool fit the rest of the row before it shares that row - a phone's
+/// palette packs Actor beside Ground's second row.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
     pub panel: Rectangle,
-    /// Tool cells a row holds.
+    /// Tool cells a full row holds.
     per_row: usize,
     /// A cell's side: `PALETTE_CELL`, less where the room is short.
     cell: f32,
+    /// Where each category (in `Category::ALL` order) starts: its row and
+    /// how many cells along that row its name sits - 0 unless it shares
+    /// the row with the category before it, the name counted as
+    /// `NAME_CELLS`.
+    starts: [(usize, usize); 5],
+    /// Rows the categories take; the brush's row is the next.
+    rows: usize,
 }
+
+/// The cells a category's name takes when a row is counted in cells: a
+/// name is `PALETTE_LABEL_W` wide and a cell never under `UI_TOUCH_PT`.
+const NAME_CELLS: usize = 2;
 
 impl Palette {
     /// The palette hanging from `anchor` in `room`, as wide as its longest
@@ -798,16 +811,41 @@ impl Palette {
         let most = Category::ALL.iter().map(|c| c.tools().count()).max().unwrap_or(1).max(BrushRow::ALL.len());
         let fits = (((room.width - PALETTE_LABEL_W) / PALETTE_CELL).floor().max(1.0) as usize).max(BrushRow::ALL.len());
         let per_row = most.min(fits);
-        let rows: usize = Category::ALL.iter().map(|&c| Self::rows_of(c, per_row)).sum::<usize>() + 1;
-        let cell = PALETTE_CELL.min((room.height / rows as f32).floor()).max(crate::hud::UI_TOUCH_PT);
+        let size = |rows: usize| PALETTE_CELL.min((room.height / (rows + 1) as f32).floor()).max(crate::hud::UI_TOUCH_PT);
+        let (mut starts, mut rows) = Self::stack(per_row, false);
+        if (rows + 1) as f32 * size(rows) > room.height + 1e-3 {
+            (starts, rows) = Self::stack(per_row, true);
+        }
+        let cell = size(rows);
         let w = PALETTE_LABEL_W + per_row as f32 * cell;
-        let h = rows as f32 * cell;
-        Palette { panel: Rectangle::new(slide(anchor.x, w, room), room.y, w, h), per_row, cell }
+        let h = (rows + 1) as f32 * cell;
+        Palette { panel: Rectangle::new(slide(anchor.x, w, room), room.y, w, h), per_row, cell, starts, rows }
     }
 
-    /// Rows `category` takes at `per_row` cells a row.
-    fn rows_of(category: Category, per_row: usize) -> usize {
-        category.tools().count().div_ceil(per_row.max(1)).max(1)
+    /// Lay the categories down a row at a time, `per_row` tool cells to a
+    /// full row - each on a row of its own, or with `share` on the rest of
+    /// the row before it where its name and every tool fit there.
+    fn stack(per_row: usize, share: bool) -> ([(usize, usize); 5], usize) {
+        let per_row = per_row.max(1);
+        let mut starts = [(0, 0); 5];
+        // The row being filled and the cells of it taken, name included.
+        let (mut row, mut used) = (0, 0);
+        for (k, category) in Category::ALL.iter().enumerate() {
+            let tools = category.tools().count().max(1);
+            if k > 0 && share && used + NAME_CELLS + tools <= NAME_CELLS + per_row {
+                starts[k] = (row, used);
+                used += NAME_CELLS + tools;
+                continue;
+            }
+            if k > 0 {
+                row += 1;
+            }
+            starts[k] = (row, 0);
+            let more = tools.div_ceil(per_row) - 1;
+            row += more;
+            used = NAME_CELLS + tools - more * per_row;
+        }
+        (starts, row + 1)
     }
 
     /// Row `index`: the categories', then the brush's.
@@ -815,33 +853,52 @@ impl Palette {
         Rectangle::new(self.panel.x, self.panel.y + index as f32 * self.cell, self.panel.width, self.cell)
     }
 
-    /// The index of `category`'s first row.
-    fn first_row(&self, category: Category) -> usize {
-        Category::ALL.iter().take_while(|&&c| c != category).map(|&c| Self::rows_of(c, self.per_row)).sum()
+    /// The x `cells` cells along a row, its first name counted as
+    /// `NAME_CELLS` and drawn `PALETTE_LABEL_W` wide.
+    fn along(&self, cells: usize) -> f32 {
+        match cells {
+            0 => self.panel.x,
+            n => self.panel.x + PALETTE_LABEL_W + (n - NAME_CELLS) as f32 * self.cell,
+        }
+    }
+
+    /// Where `category` starts: its row and cells along it.
+    fn start(&self, category: Category) -> (usize, usize) {
+        let k = Category::ALL.iter().position(|&c| c == category).expect("every category is in ALL");
+        self.starts[k]
     }
 
     /// The category's first row.
     pub fn row(&self, category: Category) -> Rectangle {
-        self.row_at(self.first_row(category))
+        self.row_at(self.start(category).0)
     }
 
-    /// The category's name, at its first row's left.
+    /// The category's name: at its first row's left, or just after the
+    /// category before it where the two share a row.
     pub fn label(&self, category: Category) -> Rectangle {
-        let row = self.row(category);
-        Rectangle::new(row.x, row.y, PALETTE_LABEL_W, row.height)
+        let (row, at) = self.start(category);
+        let row = self.row_at(row);
+        Rectangle::new(self.along(at), row.y, PALETTE_LABEL_W, row.height)
     }
 
     /// The category's `i`th tool's cell, running on into the category's
     /// next row past the room's width.
     pub fn cell(&self, category: Category, i: usize) -> Rectangle {
         let per_row = self.per_row.max(1);
-        let row = self.row_at(self.first_row(category) + i / per_row);
-        Rectangle::new(row.x + PALETTE_LABEL_W + (i % per_row) as f32 * self.cell, row.y, self.cell, self.cell)
+        let (first, at) = self.start(category);
+        let row = self.row_at(first + i / per_row);
+        let x = if at > 0 {
+            // A shared row holds the whole category: `stack` saw to it.
+            self.along(at + NAME_CELLS) + i as f32 * self.cell
+        } else {
+            row.x + PALETTE_LABEL_W + (i % per_row) as f32 * self.cell
+        };
+        Rectangle::new(x, row.y, self.cell, self.cell)
     }
 
     /// The brush's row, under the categories'.
     pub fn brush_row(&self) -> Rectangle {
-        self.row_at(Category::ALL.iter().map(|&c| Self::rows_of(c, self.per_row)).sum())
+        self.row_at(self.rows)
     }
 
     /// The brush row's name, at its left.
@@ -1605,6 +1662,21 @@ mod chrome_tests {
                 let cell = palette.brush_cell(i);
                 check("a palette brush cell", cell);
                 assert!(cell.width >= UI_TOUCH_PT && cell.height >= UI_TOUCH_PT);
+            }
+            // Every name and cell apart, a row shared by two categories
+            // included.
+            let mut placed: Vec<(String, Rectangle)> = vec![("the brush's name".into(), palette.brush_label())];
+            placed.extend((0..BrushRow::ALL.len()).map(|i| (format!("brush cell {i}"), palette.brush_cell(i))));
+            for category in Category::ALL {
+                placed.push((format!("{category:?}'s name"), palette.label(category)));
+                placed.extend((0..category.tools().count()).map(|i| (format!("{category:?} {i}"), palette.cell(category, i))));
+            }
+            for (i, (what, a)) in placed.iter().enumerate() {
+                check(what, *a);
+                for (other, b) in &placed[i + 1..] {
+                    let apart = a.x + a.width <= b.x + 1e-3 || b.x + b.width <= a.x + 1e-3 || a.y + a.height <= b.y + 1e-3 || b.y + b.height <= a.y + 1e-3;
+                    assert!(apart, "{ui:?}: {what} {a:?} overlaps {other} {b:?}");
+                }
             }
             let brush = menu_list(bar.brush.unwrap_or_else(|| bar.tools_anchor(Category::Wall)), room, BrushRow::ALL.len());
             check("BRUSH's list", brush.panel);

@@ -108,6 +108,9 @@ pub struct EditorTextures<'a> {
     pub portal: &'a Texture2D,
     pub tanks: &'a Texture2D,
     pub trees: &'a Texture2D,
+    /// The canvas map's theme: a desert map's trees are drawn dry
+    /// (`Material::is_dry`), as the round will draw them.
+    pub theme: Theme,
     /// static/target_sheet.png - the range board.
     pub target: &'a Texture2D,
     /// static/towers_sheet.png - the defence towers' bases and tops.
@@ -1499,7 +1502,7 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
         Tool::Lava => draw_lava_icon(d, dest),
         Tool::Volcano => draw_volcano_icon(d, dest),
         Tool::Wall(material) | Tool::Prop(material) => {
-            let (sheet, src) = obstacle::icon_source_rec(material);
+            let (sheet, src) = obstacle::icon_source_rec(material, theme);
             d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Drum(drum) => {
@@ -1723,7 +1726,7 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             // At the sheet's own cell size: the cell for a wall or a prop,
             // a range board's 44px, so its overhang matches a round.
             let material = obj.material().expect("solid cells have a material");
-            let (sheet, src) = obstacle::icon_source_rec(material);
+            let (sheet, src) = obstacle::icon_source_rec(material, textures.theme);
             let drawn = sheet.cell();
             let dest = Rectangle::new(pos.x, pos.y, drawn, drawn);
             let origin = Vector2::new(drawn / 2.0, drawn / 2.0);
@@ -1733,11 +1736,19 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             let src = obstacle::oil_source_rec(pos);
             d.draw_texture_pro(textures.props, src, dest, origin, 0.0, tint);
         }
-        CellObject::Tree | CellObject::Pine => {
+        CellObject::Tree
+        | CellObject::Pine
+        | CellObject::Spruce
+        | CellObject::Scots
+        | CellObject::Fir
+        | CellObject::Birch
+        | CellObject::Willow
+        | CellObject::Palm
+        | CellObject::Snag => {
             // Drawn at the sprite's own 48px, not the 32px cell, so the
             // canopy overhang matches a round.
             let material = obj.material().expect("tree cells have a material");
-            let (sheet, src) = obstacle::icon_source_rec(material);
+            let (sheet, src) = obstacle::icon_source_rec(material, textures.theme);
             let big = crate::TREE_TEXTURE_SIZE;
             let dest = Rectangle::new(pos.x, pos.y, big, big);
             let origin = Vector2::new(big / 2.0, big / 2.0);
