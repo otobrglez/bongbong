@@ -16,6 +16,7 @@
 //! lifting it over its shadow. No RNG anywhere: the flight is a pure
 //! function of its state, its aim, the wind and the step.
 
+use crate::math;
 use crate::air::{AirKey, AirStrike, AirTarget};
 use crate::math::{Color, Vec2};
 use crate::pyro::{self, Shape};
@@ -257,13 +258,13 @@ impl Drone {
     /// Its heading over the ground as degrees clockwise from up (0 = up):
     /// the wire's spelling.
     pub fn heading_degrees(&self) -> f32 {
-        self.heading.x.atan2(-self.heading.y).to_degrees()
+        math::atan2(self.heading.x, -self.heading.y).to_degrees()
     }
 
     /// The unit heading `heading_degrees` names.
     pub fn heading_of(degrees: f32) -> Vec2 {
         let rad = degrees.to_radians();
-        Vec2::new(rad.sin(), -rad.cos())
+        Vec2::new(math::sin(rad), -math::cos(rad))
     }
 
     /// Run a replica's copy's clocks on by `dt` (`Game::tick_presentation`):
@@ -399,7 +400,7 @@ impl Drone {
                 self.fall_speed += t.fpv_fall_gravity * dt;
                 self.height -= self.fall_speed * dt;
                 self.ground = self.ground + self.fall_velocity * dt;
-                self.fall_velocity = self.fall_velocity * (-t.fpv_fall_drag * dt).exp();
+                self.fall_velocity = self.fall_velocity * math::exp(-t.fpv_fall_drag * dt);
                 if self.height <= 0.0 {
                     self.height = 0.0;
                     self.landed = true;
@@ -416,8 +417,8 @@ impl Drone {
         if to.length() < 1e-3 {
             return;
         }
-        let want = to.y.atan2(to.x);
-        let have = self.heading.y.atan2(self.heading.x);
+        let want = math::atan2(to.y, to.x);
+        let have = math::atan2(self.heading.y, self.heading.x);
         let mut delta = want - have;
         while delta > std::f32::consts::PI {
             delta -= std::f32::consts::TAU;
@@ -427,7 +428,7 @@ impl Drone {
         }
         let max = rate_deg.to_radians() * dt;
         let turned = have + delta.clamp(-max, max);
-        self.heading = Vec2::new(turned.cos(), turned.sin());
+        self.heading = Vec2::new(math::cos(turned), math::sin(turned));
     }
 }
 
@@ -439,7 +440,7 @@ pub fn clamp_inside(p: Position, (w, h): (f32, f32), margin: f32) -> Position {
 /// A unit vector along `bearing` (degrees, 0 = up, clockwise).
 fn bearing_dir(bearing: f32) -> Vec2 {
     let r = bearing.to_radians();
-    Vec2::new(r.sin(), -r.cos())
+    Vec2::new(math::sin(r), -math::cos(r))
 }
 
 /// The halo's fixed slots: a ring of `per` - one crate's drones - for each
@@ -779,7 +780,7 @@ mod tests {
             (0..halo.slots())
                 .map(|k| {
                     let (p, _) = halo_slot(centre, 80.0, k, halo);
-                    (p.x - centre.x).atan2(-(p.y - centre.y)).to_degrees().rem_euclid(360.0)
+                    math::atan2(p.x - centre.x, -(p.y - centre.y)).to_degrees().rem_euclid(360.0)
                 })
                 .collect()
         };

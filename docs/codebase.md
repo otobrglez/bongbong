@@ -360,7 +360,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   under `simulation/` and no entity's state names a raylib type; the `From` impls to raylib's types
   at the bottom (`render` only) are the render boundary (draw calls take `impl Into`, so all three
   pass straight through). Add an operation the same way, never by calling out to another vector
-  library.
+  library. **Portable math**: `math::sin`/`cos`/`sin_cos`/`tan`/`atan`/`atan2`/`exp`/`powf`/`hypot`
+  are the `libm` crate's Rust, the same bits on every platform. Anything headless calls them, never
+  `f32::sin` and friends, which use the platform's libm, and glibc and Apple's round some inputs an
+  ulp apart (a seeded round split at frame 537 between a Mac and CI). `portable_math_tests` fails
+  on a platform call outside its `PRESENTATION` list of files that only draw; add a new draw-only
+  file there, never a file a round's outcome reads. Rapier runs with `enhanced-determinism` for the
+  same reason (docs/gameplay-verification-design.md).
 - `lib.rs` — *layout* constants and types only: `Position` (= `math::Vec2`), atlas columns/sizes,
   `*_VARIANTS`, collider boxes, grid/physics sizes, `HUD_BAR_HEIGHT` (the builder's bar with a
   mouse, in UI points)/`Rect`/`Layout` (`bare`: the field alone at `(0, 0)`, play's bitmap and the
@@ -797,10 +803,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `maps/default.toml`) is the only terrain source.
 - `physics.rs` (docs/physics-engine-design.md) — the rapier wrapper: solid bodies only, no sensors
   or collision groups. `settle_wreck` is the one place damping is set, on the frame a tank becomes a
-  wreck; `set_look_ahead` (rapier's soft CCD) is set only on a skidding hull, by
-  `sonic::skid_look_ahead` before every step - rapier works in metres here (`length_unit` 1), so a
-  hull a knock throws faster than its 0.02 px look-ahead lands inside a wall and is pushed out at 3
-  px/s. `quarantined` reports rapier's NaN quarantine as `Event::PhysicsQuarantine`.
+  wreck. Rapier's lengths are pixels (`length_unit` 1, so its own look-ahead is 0.02 px and it
+  pushes an overlap out at 3 px/s); the two limits that matter in a pixel world are set here: the
+  speed cap (`PHYSICS_MAX_SPEED`, one cell a step, above every knock and pull) and every hull's
+  one-step look-ahead (`HULL_LOOK_AHEAD`, rapier's soft CCD, set at spawn for the body's whole
+  life), so a hull driven, rammed, blasted, knocked or pulled stops flush against what it meets
+  (docs/physics-engine-design.md "Scale"). `quarantined` reports rapier's NaN quarantine as
+  `Event::PhysicsQuarantine`.
 
 ## AI
 
@@ -1248,9 +1257,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   sandbox pulls the hull on the round tick its input lands on, incoming fire is carried to the
   present through the wells a tick at a time (`round::carry`: the seat's hull and the walls before a
   core), and the pose validator allows the pull toward the core and no faster than the solver's cap
-  (`WELL_SIDE_REACH_SECONDS`); a pulled hull looks a step's travel ahead as a skidding one does
-  (`simulation::well::pull_look_ahead`), so the pull presses it flush against a wall rather than
-  into it. The probe holds a pulled tank out of its hands, a brace and a hold for the orb as
+  (`WELL_SIDE_REACH_SECONDS`); a pulled hull, like every hull, looks a step's travel ahead
+  (`physics::HULL_LOOK_AHEAD`), so the pull presses it flush against a wall rather than into it. The probe holds a pulled tank out of its hands, a brace and a hold for the orb as
   deliberate, leaves a braced tank's clustering and pile-up uncounted, and tags an anomaly in a pull
   or within three seconds of one `/pull`. The `well` tuning group.
 

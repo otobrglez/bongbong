@@ -92,22 +92,6 @@ pub(super) fn knock_hull(physics: &mut Physics, tank: &mut Tank, dir: Vec2, spee
     Some((dv, skid))
 }
 
-/// A knocked hull's contacts look a step's travel ahead while it skids,
-/// and no further once it is back on its tracks (`Physics::set_look_ahead`):
-/// a knock's speed would otherwise carry it a step into a wall, a tile or
-/// past the field's edge - a skid ends the moment the solver stops it, and
-/// rapier pushes a body out of an overlap at 3 px/s - where now the solver
-/// stops it against the face. Run for every hull before every solver step,
-/// the room's and a client's sandbox's alike, so a hammer's, a rail's
-/// recoil, a rod's and every later knock stop the same way. A hull that is
-/// not skidding is never touched.
-pub(super) fn skid_look_ahead(physics: &mut Physics, tank: &Tank) {
-    if let Some(handle) = tank.body {
-        let ahead = if tank.skid > 0.0 && !tank.is_wreck() { physics.max_step_travel() } else { 0.0 };
-        physics.set_look_ahead(handle, ahead);
-    }
-}
-
 /// The centre and the four corners of a hull's box: the points a wave
 /// reaches it by, the nearest first.
 fn hull_points(tank: &Tank) -> [Position; 5] {

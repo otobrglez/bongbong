@@ -18,6 +18,7 @@
 //! is told only that the board burns, animates them on its own clock. The
 //! scorch reads `Obstacle::heat`, which only the simulating round has.
 
+use crate::math;
 use crate::math::Color;
 use crate::obstacle::{Material, Obstacle};
 use crate::pyro::{self, Shape, BLOCK, CHAR, FIRE};
@@ -91,10 +92,10 @@ fn embers(out: &mut Vec<Shape>, centre: Position, obstacle: &Obstacle) {
     for i in 0..count {
         let angle = pyro::unit(seed, i * 3) * std::f32::consts::TAU;
         let r = FACE_RADIUS * 0.85 * pyro::unit(seed, i * 3 + 1).sqrt();
-        let at = Position::new(centre.x + angle.cos() * r, centre.y + angle.sin() * r);
+        let at = Position::new(centre.x + math::cos(angle) * r, centre.y + math::sin(angle) * r);
         let rate = 1.5 + 2.5 * pyro::unit(seed, i * 3 + 2);
         let phase = pyro::unit(seed ^ 0x9e37, i) * std::f32::consts::TAU;
-        let glow = 0.5 + 0.5 * (obstacle.burn_shown * rate * std::f32::consts::TAU / 2.0 + phase).sin();
+        let glow = 0.5 + 0.5 * math::sin(obstacle.burn_shown * rate * std::f32::consts::TAU / 2.0 + phase);
         // Below a third the ember is out: only the char shows.
         if glow < 0.33 {
             continue;

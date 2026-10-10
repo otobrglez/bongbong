@@ -64,6 +64,7 @@
 //! the tanks. Trees are not counted: they are drawn over every tuft
 //! anyway.
 
+use crate::math;
 use crate::math::{Color, Rectangle, Vec2};
 
 use crate::canvas::{Canvas, Sheet};
@@ -182,7 +183,7 @@ pub fn reach(t: &Tuning, tuft: &GrassTuft) -> (f32, f32, f32, f32) {
     let most = t.grass_wind_px + t.grass_gust_px + t.grass_sway_px + t.grass_part_px * 1.2;
     let (left, right) = (most.min(tuft.lean[0]), most.min(tuft.lean[1]));
     let travel = up / size;
-    let dip = l.max(r) * (left.max(right) / size).atan().sin();
+    let dip = l.max(r) * math::sin(math::atan(left.max(right) / size));
     (
         tuft.base.x - l - left * travel,
         tuft.base.y - up,

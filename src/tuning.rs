@@ -1288,16 +1288,16 @@ tunables! {
         /// pace too.
         rod_reticle_repeat_seconds: f32 = 0.06 in 0.01 ..= 1.0;
         /// From the call to the impact.
-        rod_countdown_seconds: f32 = 4.0 in 0.5 ..= 15.0;
+        rod_countdown_seconds: f32 = 3.0 in 0.5 ..= 15.0;
         /// The circle: a hull with any part inside it is crushed, a frog
         /// killed, a drone downed.
-        rod_kill_radius_px: f32 = 48.0 in 8.0 ..= 160.0;
+        rod_kill_radius_px: f32 = 64.0 in 8.0 ..= 160.0;
         /// Every breakable tile whose cell reaches inside this goes down;
         /// iron, a cone and a door stand.
-        rod_break_radius_px: f32 = 80.0 in 0.0 ..= 256.0;
+        rod_break_radius_px: f32 = 104.0 in 0.0 ..= 256.0;
         /// How far out the impact shoves hulls, falling from the circle's
         /// edge to nothing here.
-        rod_shove_radius_px: f32 = 160.0 in 0.0 ..= 480.0;
+        rod_shove_radius_px: f32 = 208.0 in 0.0 ..= 480.0;
         /// The shove at the circle's edge (px/s) against the chassis-free
         /// mass.
         rod_shove_speed: f32 = 420.0 in 0.0 ..= 508.0;

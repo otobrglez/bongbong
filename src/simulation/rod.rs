@@ -11,6 +11,7 @@
 //! calls as dangers (`zone_dangers`) - and the reticle report a room sets
 //! on a seat (`set_seat_reticle`). The rod draws no RNG of its own.
 
+use crate::math;
 use hecs::Entity;
 
 use crate::ai::{Ai, Danger, RodPick, RodSense, Role};
@@ -454,7 +455,7 @@ impl Game {
             for i in 0..pieces {
                 let a = (i as f32 + crate::pyro::unit(seed, i)) / pieces.max(1) as f32 * std::f32::consts::TAU;
                 let d = t.rod_kill_radius_px + (t.rod_break_radius_px - t.rod_kill_radius_px).max(0.0) * crate::pyro::unit(seed, 100 + i);
-                let to = Position::new(c.x + a.cos() * d, c.y + a.sin() * d);
+                let to = Position::new(c.x + math::cos(a) * d, c.y + math::sin(a) * d);
                 let row = if i % 2 == 0 { crate::RUBBLE_ROW_BRICK } else { crate::RUBBLE_ROW_SANDBAG };
                 show.decals.push(crate::decal::Decal::thrown(row, c, to, 60 + i * 5));
             }

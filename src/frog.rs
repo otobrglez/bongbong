@@ -20,6 +20,7 @@
 //! ends the round in a loss, the enemy frog's in a win
 //! (`Game::check_round_end`).
 
+use crate::math;
 use crate::canvas::{Canvas, Sheet};
 use crate::shell::Owner;
 use crate::tank::{HealthRamp, RingStyle, draw_ground_ring_at, with_opacity};
@@ -459,7 +460,7 @@ pub fn stun_marks(frog: &Frog, t: f32) -> Vec<crate::pyro::Shape> {
     let head = Position::new(frog.position.x, frog.position.y - frog.size() * 0.32);
     for i in 0..3 {
         let a = t * 6.0 + i as f32 * std::f32::consts::TAU / 3.0;
-        let at = Position::new(head.x + a.cos() * 10.0, head.y + a.sin() * 3.0);
+        let at = Position::new(head.x + math::cos(a) * 10.0, head.y + math::sin(a) * 3.0);
         out.push(crate::pyro::Shape::Mark { pos: Position::new(at.x, at.y + 2.0), size: 2, color: crate::sonic::STONE[1] });
         out.push(crate::pyro::Shape::Mark { pos: at, size: 2, color: crate::sonic::STONE[3] });
     }

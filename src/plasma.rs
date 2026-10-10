@@ -24,6 +24,7 @@
 //! ricochets (no `bounces_left`): a heavy plasma bolt detonates on first
 //! contact rather than bouncing off Iron/walls the way a shell can.
 
+use crate::math;
 use crate::tuning::tuning;
 use crate::math::Vec2;
 
@@ -225,10 +226,10 @@ impl Plasma {
         lateral_offset: f32,
     ) -> Plasma {
         let rot = (tank.rotation + aim_offset).to_radians();
-        let dir = Vec2::new(rot.sin(), -rot.cos());
+        let dir = Vec2::new(math::sin(rot), -math::cos(rot));
         let muzzle = tuning().tank_muzzle_forward_offset[tank.row as usize] * tank.scale;
         let hull_rot = tank.rotation.to_radians();
-        let lateral = Vec2::new(hull_rot.cos(), hull_rot.sin()) * (lateral_offset * tank.scale);
+        let lateral = Vec2::new(math::cos(hull_rot), math::sin(hull_rot)) * (lateral_offset * tank.scale);
         let position = Position::new(
             tank.position.x + dir.x * muzzle + lateral.x,
             tank.position.y + dir.y * muzzle + lateral.y,

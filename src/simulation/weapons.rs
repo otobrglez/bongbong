@@ -6,6 +6,7 @@
 //! player and every enemy share, and the `Projectile` view of the three
 //! projectile types that lets one hit-resolution loop serve them all.
 
+use crate::math;
 use crate::tuning::tuning;
 use hecs::Entity;
 use rand::RngExt;
@@ -40,7 +41,7 @@ const LASER_MAX_RANGE: f32 = 4000.0;
 /// The room's beam (`resolve_lasers`) and a client's drawn one
 /// (`net::round`) read it alike.
 pub fn laser_reach(field: (f32, f32)) -> f32 {
-    LASER_MAX_RANGE.max(field.0.hypot(field.1) + 2.0 * crate::OBSTACLE_GRID_SIZE)
+    LASER_MAX_RANGE.max(math::hypot(field.0, field.1) + 2.0 * crate::OBSTACLE_GRID_SIZE)
 }
 
 /// `shot`'s segment reaching `reach` px past its muzzle: the shot as built
@@ -116,7 +117,7 @@ impl FlameJet {
 
 pub(super) fn flame_jet(tank: &Tank, owner: Owner, shooter: Entity) -> FlameJet {
     let rot = tank.rotation.to_radians();
-    let dir = Vec2::new(rot.sin(), -rot.cos());
+    let dir = Vec2::new(math::sin(rot), -math::cos(rot));
     let origin = tank.gun_line_muzzle(dir);
     let nozzle = tank.turret_point(crate::tank_art::FLAME_MUZZLE[tank.row as usize]);
     let range = tuning().flame_range;
@@ -136,7 +137,7 @@ pub(super) fn laser_damage_range(shot: &PendingLaserShot) -> (f32, f32) {
 /// clean shot. One beam per trigger pull regardless of chassis.
 fn laser_shot(tank: &Tank, owner: Owner, aim_offset: f32, variant: LaserVariant) -> PendingLaserShot {
     let rot = (tank.rotation + aim_offset).to_radians();
-    let dir = Vec2::new(rot.sin(), -rot.cos());
+    let dir = Vec2::new(math::sin(rot), -math::cos(rot));
     let start = tank.gun_line_muzzle(dir);
     let end = Position::new(start.x + dir.x * LASER_MAX_RANGE, start.y + dir.y * LASER_MAX_RANGE);
     PendingLaserShot {
@@ -221,13 +222,13 @@ fn fire_missile(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, owner: Ow
     let offsets = MISSILE_TUBE_OFFSETS;
     let i = (tube as usize).min(offsets.len() - 1);
     let rot = (tank.rotation + aim_offset).to_radians();
-    let dir = Vec2::new(rot.sin(), -rot.cos());
+    let dir = Vec2::new(math::sin(rot), -math::cos(rot));
     let mouth = tank.turret_point(crate::tank_art::MISSILE_TUBES[tank.row as usize][i]);
     // Fan by where the tube sits: the middle pair a little, the outer pair
     // twice as much, each to its own side.
     let fan = t.missile_fan_deg * offsets[i] / 3.0;
     let fanned = (tank.rotation + aim_offset + fan).to_radians();
-    let launch = Vec2::new(fanned.sin(), -fanned.cos());
+    let launch = Vec2::new(math::sin(fanned), -math::cos(fanned));
     let ahead = tank.position + dir * t.missile_fallback_range;
     let aim = Position::new(ahead.x.clamp(0.0, f.width), ahead.y.clamp(0.0, f.height));
     f.muzzle_flashes.push(Shockwave::new(mouth));
@@ -246,7 +247,7 @@ fn fire_missile(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, owner: Ow
 fn fire_grenade(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, aim_offset: f32) {
     let t = tuning();
     let rot = (tank.rotation + aim_offset).to_radians();
-    let dir = Vec2::new(rot.sin(), -rot.cos());
+    let dir = Vec2::new(math::sin(rot), -math::cos(rot));
     let (_, half) = tank.hull_bbox_world();
     let clear = dir.x.abs() * half.x + dir.y.abs() * half.y + t.grenade_radius + 1.0;
     let start = tank.position + dir * clear;
@@ -626,7 +627,7 @@ macro_rules! deflect_impl {
     () => {
         fn deflect(&mut self, center: Position, new_owner: Owner) {
             self.velocity = deflected_velocity(self.prev_position, self.velocity, center);
-            self.rotation = self.velocity.x.atan2(-self.velocity.y).to_degrees();
+            self.rotation = crate::math::atan2(self.velocity.x, -self.velocity.y).to_degrees();
             self.position = self.prev_position;
             self.owner = new_owner;
         }
@@ -638,7 +639,7 @@ macro_rules! deflect_impl {
             if reflect_y {
                 self.velocity.y = -self.velocity.y;
             }
-            self.rotation = self.velocity.x.atan2(-self.velocity.y).to_degrees();
+            self.rotation = crate::math::atan2(self.velocity.x, -self.velocity.y).to_degrees();
             self.position = self.prev_position;
         }
         fn passed_over(&self) -> &[Entity] {
@@ -786,7 +787,7 @@ mod deflect_tests {
 
     fn outward(prev: Position, vel: Vec2, center: Position) -> f32 {
         let v = deflected_velocity(prev, vel, center);
-        (v.x * (prev.x - center.x) + v.y * (prev.y - center.y)) / ((prev.x - center.x).hypot(prev.y - center.y))
+        (v.x * (prev.x - center.x) + v.y * (prev.y - center.y)) / (math::hypot(prev.x - center.x, prev.y - center.y))
     }
 
     #[test]
@@ -801,7 +802,7 @@ mod deflect_tests {
         let vel = Vec2::new(300.0, 0.0);
         let v = deflected_velocity(prev, vel, Position::new(0.0, 0.0));
         assert!(outward(prev, vel, Position::new(0.0, 0.0)) > 0.0, "leaves outward: {v:?}");
-        assert!((v.x.hypot(v.y) - 300.0).abs() < 1e-3, "speed is preserved");
+        assert!((math::hypot(v.x, v.y) - 300.0).abs() < 1e-3, "speed is preserved");
     }
 
     #[test]
@@ -844,8 +845,8 @@ mod laser_reach_tests {
     fn a_larger_field_is_crossed_corner_to_corner() {
         let field = (250.0 * crate::OBSTACLE_GRID_SIZE, 250.0 * crate::OBSTACLE_GRID_SIZE);
         let reach = laser_reach(field);
-        assert!(reach > field.0.hypot(field.1), "{reach}");
-        let s = shot(Position::new(0.0, 0.0), Vec2::new(field.0, field.1) * (1.0 / field.0.hypot(field.1)));
+        assert!(reach > math::hypot(field.0, field.1), "{reach}");
+        let s = shot(Position::new(0.0, 0.0), Vec2::new(field.0, field.1) * (1.0 / math::hypot(field.0, field.1)));
         let end = laser_end(&s, reach);
         assert!(end.x > field.0 && end.y > field.1, "{end:?} stops short of the far corner");
     }

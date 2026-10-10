@@ -1,3 +1,4 @@
+use crate::math;
 use crate::canvas::Canvas;
 use crate::tuning::tuning;
 use rapier2d::prelude::RigidBodyHandle;
@@ -594,7 +595,7 @@ impl Obstacle {
             return 0.0;
         }
         let phase = (crate::blast::seed_at(self.position, 5) % 100) as f32 / 100.0 * std::f32::consts::TAU;
-        let wave = (time * 12.0 * std::f32::consts::TAU + phase).sin();
+        let wave = math::sin(time * 12.0 * std::f32::consts::TAU + phase);
         ((wave * amp) / 2.0).round() * 2.0
     }
 

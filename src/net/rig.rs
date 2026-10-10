@@ -1176,7 +1176,7 @@ mod tests {
             .and_then(|g| g.tank_snapshots().into_iter().find(|t| t.slot == 0))
             .map(|t| t.rotation.to_radians())
             .expect("the seat");
-        let along = |x: i32, y: i32| (x as f32 / 4.0) * heading.sin() - (y as f32 / 4.0) * heading.cos();
+        let along = |x: i32, y: i32| (x as f32 / 4.0) * crate::math::sin(heading) - (y as f32 / 4.0) * crate::math::cos(heading);
         round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
         thread::sleep(FRAME);
         let mut last: Option<f32> = None;

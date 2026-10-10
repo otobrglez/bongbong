@@ -513,6 +513,13 @@ pub const PHYSICS_FIXED_DT: f32 = 1.0 / 60.0;
 // inside one update, so a caller passing a long `dt` never dumps a burst of
 // physics steps (the classic fixed-timestep "spiral of death").
 pub const PHYSICS_MAX_CATCHUP_SECONDS: f32 = 0.25;
+// The fastest any body moves (px/s), rapier's speed cap set for a pixel
+// world: one cell a step. Far above every legitimate speed - a knock's
+// 508 px/s wire ceiling on top of a hull's own, a light hull carried by a
+// gravity well's current at full throttle (about 750) - so it never clips
+// a knock or a pull the tuning asks for, and a hull's one-step look-ahead
+// (physics.rs) still reaches no further than the next cell.
+pub const PHYSICS_MAX_SPEED: f32 = OBSTACLE_GRID_SIZE / PHYSICS_FIXED_DT;
 // The most simulation steps one rendered frame may run (app.rs's
 // `StepClock`): a frame that owes more - a window drag, a backgrounded tab,
 // a slow machine - runs this many and drops the rest, so the round falls
