@@ -2403,6 +2403,29 @@ tunables! {
         /// Total time a Wood obstacle spends burning before charring and
         /// being removed.
         wood_burn_seconds: f32 = 1.0 in 0.1 ..= 30.0;
+        /// Brick and wood tiles break chunk by chunk (`chunks.rs`, BB-80):
+        /// a shot breaks the 8 px chunk it strikes, a hole lets shots
+        /// through, the tile gives way at `wall_collapse_chunks`. Off, a
+        /// wall is one health pool again, as before.
+        wall_chunks: bool = true in 0 ..= 1 @ Spawn;
+        /// One brick chunk's health, in the damage shots deal: a player
+        /// shell (10-30) breaks the chunk it strikes and most of its ring,
+        /// a minigun round (3-6) takes two or three to break one.
+        brick_chunk_health: f32 = 10.0 in 0.5 ..= 200.0 @ Spawn;
+        /// One wood chunk's health: planks splinter at almost any blow.
+        wood_chunk_health: f32 = 4.0 in 0.5 ..= 200.0 @ Spawn;
+        /// Share of a blow the struck chunk's four side neighbours take.
+        chunk_ring_share: f32 = 0.6 in 0.0 ..= 1.0;
+        /// Share of a blow the struck chunk's four corner neighbours take.
+        chunk_corner_share: f32 = 0.3 in 0.0 ..= 1.0;
+        /// A blow this hard wears the ring round the struck chunk by the
+        /// full shares above; a lighter one by its fraction of it, so a
+        /// minigun round drills where it lands and a shell splits the
+        /// brick round it.
+        chunk_ring_full_damage: f32 = 15.0 in 0.1 ..= 200.0;
+        /// A chunked tile gives way once this many of its 16 chunks or
+        /// fewer still stand: what is left drops where it stood.
+        wall_collapse_chunks: i32 = 6 in 0 ..= 15;
     }
 
     group props {
@@ -2678,6 +2701,13 @@ tunables! {
         /// Hard cap on live particles; oldest are evicted first so a big
         /// burst eats into old smoke rather than into itself.
         fx_max_particles: i32 = 900 in 0 ..= 8000;
+        /// Hard cap on wall pieces (`fx::Piece`, a broken chunk's own
+        /// pixels), flying and lying; the oldest lying ones go first.
+        fx_max_pieces: i32 = 600 in 0 ..= 4000;
+        /// How fast a broken chunk's pieces leave it, px/s at the most.
+        piece_speed: f32 = 120.0 in 0.0 ..= 600.0;
+        /// Seconds a piece lies where it landed before it is gone.
+        piece_linger_seconds: f32 = 8.0 in 0.0 ..= 120.0;
         /// Downward acceleration on a chip's fake height, px/s^2.
         debris_gravity: f32 = 900.0 in 0.0 ..= 4000.0;
         /// Per-second rate at which a particle bleeds ground speed

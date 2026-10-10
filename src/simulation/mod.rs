@@ -50,6 +50,8 @@ pub(crate) use props::tile_rubble;
 pub(crate) use gauss::SeatCharge;
 pub mod replica;
 #[cfg(test)]
+mod chunk_tests;
+#[cfg(test)]
 mod crate_tests;
 #[cfg(test)]
 mod flame_tests;
@@ -620,6 +622,13 @@ pub enum Event {
     /// A destructible tile (wall or prop) died at (`x`, `y`), whatever
     /// destroyed it.
     ObstacleDestroyed { material: Material, x: f32, y: f32 },
+    /// Chunks of the chunked tile (`chunks.rs`) of `material`/`variant`
+    /// centred at (`x`, `y`) broke: `broken` has bit `i` for chunk `i`.
+    /// The blow travelled along (`dx`, `dy`) (zero when it had no way);
+    /// `collapsed` when the tile gave way and these are what it dropped.
+    /// Its `ObstacleDestroyed` follows on a collapse. Only the pieces they
+    /// throw (`fx.rs`) read it; the chunks' state travels with the tile.
+    ChunksBroken { material: Material, variant: i32, x: f32, y: f32, broken: u16, dx: f32, dy: f32, collapsed: bool },
     /// A barrel detonated at (`x`, `y`); `chained` when another blast's
     /// fuse (or a fire) set it off rather than a shot or a ram; `drum`
     /// says which kind went off.
@@ -6882,8 +6891,11 @@ mod determinism_tests {
         // (`math::sin` and friends), so a Mac and a Linux runner agree to
         // the bit. Never bump these to go green - work out which change
         // moved them first.
+        // The two-seat round's shells chip its walls chunk by chunk
+        // (`chunks.rs`); with `wall_chunks` off it hashes to
+        // 13_046_804_480_861_549_972.
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (15_662_619_869_435_857_390, 13_046_804_480_861_549_972), "(one seat, two seats)");
+        assert_eq!((one, two), (15_662_619_869_435_857_390, 625_655_024_471_431_682), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round

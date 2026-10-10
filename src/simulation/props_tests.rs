@@ -349,14 +349,16 @@ fn a_wood_tile_that_burns_out_reports_its_destruction() {
     for seed in 1..=20u64 {
         let mut game = game_on(&map, seed);
         game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
-        step(&mut game, fire());
         // Watch the whole burn through, frame by frame: the tile is
         // despawned the frame it chars out, so a settle loop longer than
-        // `wood_burn_seconds` would find nothing left to inspect.
+        // `wood_burn_seconds` would find nothing left to inspect. A chunked
+        // plank can take more than one shell to give way, so keep firing
+        // until it does.
         let mut lit = false;
         let mut reported = false;
-        for _ in 0..300 {
-            step(&mut game, Input::default());
+        for frame in 0..300 {
+            let gone = game.world.query::<&Obstacle>().iter().all(|o: &Obstacle| o.burning || o.material != Material::Wood);
+            step(&mut game, if frame % 40 == 0 && !gone { fire() } else { Input::default() });
             lit |= game.world.query::<&Obstacle>().iter().any(|o: &Obstacle| o.burning);
             reported |= game
                 .events()

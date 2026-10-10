@@ -275,6 +275,10 @@ pub enum WireEvent {
     Swallowed { what: crate::well::Swallow, x: i16, y: i16 },
     /// The orb `id` was put out at (`x`, `y`); `Event::OrbFizzled`.
     OrbFizzled { id: u16, x: i16, y: i16 },
+    /// `Event::ChunksBroken`: the tile's centre, its variant, the broken
+    /// chunks' mask and the blow's way as a byte angle (`wire_angle`), 255
+    /// for none.
+    ChunksBroken { material: Material, variant: u8, x: i16, y: i16, broken: u16, dir: u8, collapsed: bool },
 }
 
 /// `WireEvent::DroneLaunched::target` for a drone locked on no tank.
@@ -354,6 +358,15 @@ impl WireEvent {
             Event::ObstacleDestroyed { material, x, y } => {
                 WireEvent::ObstacleDestroyed { material, x: q(x), y: q(y) }
             }
+            Event::ChunksBroken { material, variant, x, y, broken, dx, dy, collapsed } => WireEvent::ChunksBroken {
+                material,
+                variant: variant.clamp(0, u8::MAX as i32) as u8,
+                x: q(x),
+                y: q(y),
+                broken,
+                dir: chunk_dir_byte(dx, dy),
+                collapsed,
+            },
             Event::Blast { x, y, chained, drum } => WireEvent::Blast { x: q(x), y: q(y), chained, drum },
             Event::LavaBombLaunched { x, y, to_x, to_y } => {
                 WireEvent::LavaBombLaunched { x: q(x), y: q(y), to_x: q(to_x), to_y: q(to_y) }
@@ -554,6 +567,10 @@ impl WireEvent {
             WireEvent::TankEntered { slot } => Event::TankEntered { slot: slot as usize },
             WireEvent::WreckRemoved { slot } => Event::WreckRemoved { slot: slot as usize },
             WireEvent::ObstacleDestroyed { material, x, y } => Event::ObstacleDestroyed { material, x: d(x), y: d(y) },
+            WireEvent::ChunksBroken { material, variant, x, y, broken, dir, collapsed } => {
+                let (dx, dy) = chunk_dir_of_byte(dir);
+                Event::ChunksBroken { material, variant: variant as i32, x: d(x), y: d(y), broken, dx, dy, collapsed }
+            }
             WireEvent::Blast { x, y, chained, drum } => Event::Blast { x: d(x), y: d(y), chained, drum },
             WireEvent::LavaBombLaunched { x, y, to_x, to_y } => {
                 Event::LavaBombLaunched { x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y) }
@@ -687,6 +704,25 @@ impl TryFrom<&WireEvent> for Event {
     }
 }
 
+/// A blow's unit direction as a byte: 0..=254 round the circle, 255 for
+/// none. A piece's flight is all it steers, so a byte is plenty.
+fn chunk_dir_byte(dx: f32, dy: f32) -> u8 {
+    if dx * dx + dy * dy < 1e-6 {
+        return 255;
+    }
+    let turn = crate::math::atan2(dy, dx) / std::f32::consts::TAU;
+    ((turn.rem_euclid(1.0) * 255.0).round() as u32 % 255) as u8
+}
+
+/// `chunk_dir_byte` undone.
+fn chunk_dir_of_byte(b: u8) -> (f32, f32) {
+    if b == 255 {
+        return (0.0, 0.0);
+    }
+    let a = b as f32 / 255.0 * std::f32::consts::TAU;
+    (crate::math::cos(a), crate::math::sin(a))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,6 +758,7 @@ mod tests {
             Event::Rerolled { slot: 9, x: 96.0, y: 64.0 },
             Event::WreckRemoved { slot: 9 },
             Event::ObstacleDestroyed { material: Material::Pine, x: 96.0, y: 96.0 },
+            Event::ChunksBroken { material: Material::Brick, variant: 2, x: 96.0, y: 64.0, broken: 0b1011, dx: 1.0, dy: 0.0, collapsed: false },
             Event::Blast { x: 128.0, y: 160.0, chained: true, drum: Drum::Fuel },
             Event::DrumLaunched { x: 128.0, y: 160.0, to_x: 256.0, to_y: 160.0, drum: Drum::Oil },
             Event::SonicBlast { slot: 3, x: 128.0, y: 160.0, dir: "left" },
@@ -805,7 +842,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 72, "one sample per Event variant");
+        assert_eq!(seen.len(), 73, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

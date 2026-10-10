@@ -51,8 +51,10 @@ pub(super) struct DeadTile {
 /// where the blast was, which a chained drum leans away from.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum DamageCause {
-    /// A projectile, travelling along `dir` (unit) when known.
-    Shot { dir: Option<Vec2> },
+    /// A projectile, travelling along `dir` (unit) when known, striking
+    /// the tile at `at` when known: a chunked tile breaks the chunk there
+    /// (`Obstacle::strike`).
+    Shot { dir: Option<Vec2>, at: Option<Position> },
     Ram,
     Blast { falloff: f32, from: Position },
     /// Sustained flame exposure (`flame.rs`): a sandbag or fence that
@@ -154,6 +156,19 @@ fn cell_of(pos: Position) -> (i32, i32) {
     ((pos.x / OBSTACLE_GRID_SIZE).round() as i32, (pos.y / OBSTACLE_GRID_SIZE).round() as i32)
 }
 
+/// A blow that lands where its cause says: a shot at its point, a blast
+/// from its centre, anything else on the whole tile (`Obstacle::damage`).
+/// The chunks it broke go into `broken`.
+fn strike(o: &mut Obstacle, amount: f32, cause: DamageCause, broken: &mut u16) -> bool {
+    let (died, b) = match cause {
+        DamageCause::Shot { dir, at: Some(at) } => o.strike(amount, at, dir),
+        DamageCause::Blast { from, .. } => o.blast(amount, from),
+        _ => (o.damage(amount), 0),
+    };
+    *broken |= b;
+    died
+}
+
 /// What a dead tile leaves where it stood: its rubble, charred when fire
 /// finished it. A barrel's leftovers are thrown by its blast
 /// (`Game::blast_show`) instead; iron has no rubble row and never dies
@@ -184,6 +199,7 @@ impl Game {
     /// `Obstacle::damage`. Returns `true` the frame the obstacle dies.
     pub(super) fn damage_obstacle(&mut self, f: &mut Frame, entity: Entity, amount: f32, cause: DamageCause) -> bool {
         let crush = matches!(cause, DamageCause::Crush { .. });
+        let mut broken = 0u16;
         let (material, variant, pos, died, charred) = {
             let mut q = self.world.query_one::<&mut Obstacle>(entity);
             let Ok(o) = q.get() else { return false };
@@ -225,7 +241,7 @@ impl Game {
                         arm_fuse(o, 0.5 + 2.0 * (1.0 - falloff.clamp(0.0, 1.0)), from);
                         false
                     }
-                    _ => o.damage(amount),
+                    _ => strike(o, amount, cause, &mut broken),
                 },
                 // A tree shouldered over by a tank goes over, it does not
                 // catch fire: fire comes from what is burning at the muzzle
@@ -236,14 +252,25 @@ impl Game {
                     o.destroyed = true;
                     true
                 }
-                _ => o.damage(amount),
+                _ => strike(o, amount, cause, &mut broken),
             };
             (o.material, o.variant, o.position, died, charred)
         };
+        if broken != 0 {
+            let dir = match cause {
+                DamageCause::Shot { dir: Some(d), .. } => d,
+                DamageCause::Blast { from, .. } => { let v = pos - from; let l = v.length(); if l > 1e-6 { Vec2::new(v.x / l, v.y / l) } else { Vec2::zero() } },
+                _ => Vec2::zero(),
+            };
+            f.events.push(Event::ChunksBroken { material, variant, x: pos.x, y: pos.y, broken, dx: dir.x, dy: dir.y, collapsed: died });
+            if !died {
+                self.fit_tile_body(entity);
+            }
+        }
         if died {
             let shape = match cause {
-                DamageCause::Shot { dir: Some(d) } => BlastShape::Shot { dir: Lean { x: d.x, y: d.y } },
-                DamageCause::Shot { dir: None } => BlastShape::Plain,
+                DamageCause::Shot { dir: Some(d), .. } => BlastShape::Shot { dir: Lean { x: d.x, y: d.y } },
+                DamageCause::Shot { dir: None, .. } => BlastShape::Plain,
                 DamageCause::Ram => BlastShape::Ram,
                 DamageCause::Blast { .. } => BlastShape::Plain,
                 DamageCause::Fire => BlastShape::Fire,
@@ -253,6 +280,36 @@ impl Game {
             self.obstacle_died(f, DeadTile { material, variant, position: pos, chained: false, charred, shape });
         }
         died
+    }
+
+    /// Fit a chunked tile's body to what of it still stands: its
+    /// seam-closed box (`battlefield::tile_half_extent`, as it was spawned)
+    /// cut down to its standing quadrants (`Chunks::solid_box`). A hull
+    /// never fits a quadrant's gap, but it no longer stops short of a
+    /// wall's half that is gone.
+    pub(crate) fn fit_tile_body(&mut self, entity: Entity) {
+        let (body, pos, material, base, solid) = {
+            let mut q = self.world.query_one::<&Obstacle>(entity);
+            let Ok(o) = q.get() else { return };
+            let Some(solid) = o.chunks.and_then(|c| c.solid_box()) else { return };
+            (o.body, o.position, o.material, o.hull_size() * 0.5, solid)
+        };
+        let cells: std::collections::HashSet<(i32, i32)> = self
+            .world
+            .query::<&Obstacle>()
+            .iter()
+            .filter(|o| !o.destroyed && !o.material.is_tree())
+            .map(|o| crate::battlefield::pos_to_cell(o.position))
+            .collect();
+        let (gx, gy) = crate::battlefield::pos_to_cell(pos);
+        let half = crate::battlefield::tile_half_extent(material, &cells, gx, gy, base);
+        let (off, h) = solid;
+        let (x0, x1) = ((-half.x).max(off.x - h.x), half.x.min(off.x + h.x));
+        let (y0, y1) = ((-half.y).max(off.y - h.y), half.y.min(off.y + h.y));
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        self.physics.fit_static(body, Position::new((x0 + x1) / 2.0, (y0 + y1) / 2.0), Position::new((x1 - x0) / 2.0, (y1 - y0) / 2.0));
     }
 
     /// Record an obstacle's death and leave its rubble behind; an
@@ -988,7 +1045,7 @@ impl Game {
                 .find(|(_, o)| o.material.is_explosive() && !o.destroyed && o.cell() == cell)
                 .map(|(e, _)| e);
             if let Some(entity) = entity {
-                self.damage_obstacle(f, entity, f32::MAX, DamageCause::Shot { dir: None });
+                self.damage_obstacle(f, entity, f32::MAX, DamageCause::Shot { dir: None, at: None });
             }
         }
     }

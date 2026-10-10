@@ -973,6 +973,7 @@ pub mod bubble;
 pub mod bullet;
 pub mod burst;
 pub mod canvas;
+pub mod chunks;
 pub mod crate_fx;
 #[cfg(feature = "dev-tools")]
 pub mod capi;
@@ -1022,6 +1023,7 @@ pub mod minimap;
 pub mod missile;
 pub mod motion;
 pub mod obstacle;
+pub mod pieces;
 pub mod pathfind;
 pub mod physics;
 pub mod portal;
