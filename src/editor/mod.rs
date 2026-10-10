@@ -207,9 +207,9 @@ pub struct BuilderInput {
 pub enum Tool {
     Wall(Material),
     /// A destructible standalone solid: one of the three props
-    /// (`Material::Sandbag`/`Barrel`/`Fence`) or one of the two tree
-    /// species (`Material::Tree`/`Pine`). Any number, variant rolled per
-    /// tile when the round spawns.
+    /// (`Material::Sandbag`/`Barrel`/`Fence`) or one of the tree species
+    /// (`obstacle::TREE_SPECIES`). Any number, variant rolled per tile
+    /// when the round spawns.
     Prop(Material),
     /// A barrel of a pinned kind (`obstacle::Drum`): the red oil drum
     /// that leaves a burning pool, or the grey fuel drum that goes off
@@ -248,6 +248,9 @@ pub enum Tool {
     /// Tall grass: cover, not terrain. Any number of cells; not solid, so
     /// it never blocks movement or pathfinding (see `grass.rs`).
     TallGrass,
+    /// A bush or a bed of reeds: soft cover like `TallGrass`, one sprite a
+    /// cell (docs/BUSHES_SPEC.md).
+    Bush(crate::grass::Bush),
     /// A teleport portal anchor - any number, not solid; the network only
     /// works with two or more (the linter's `portal-alone` names a lone
     /// one, and the canvas ghosts it).
@@ -269,7 +272,7 @@ pub enum Tool {
 /// for the six tower tools inside the eleven rows a dropdown fits, and the
 /// range board stands with the actors, the thing on the field there to be
 /// shot at.
-pub const TOOLS: [Tool; 52] = [
+pub const TOOLS: [Tool; 65] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -289,8 +292,21 @@ pub const TOOLS: [Tool; 52] = [
     Tool::Water,
     Tool::Lava,
     Tool::TallGrass,
+    Tool::Bush(crate::grass::Bush::Bush),
+    Tool::Bush(crate::grass::Bush::Berry),
+    Tool::Bush(crate::grass::Bush::Juniper),
+    Tool::Bush(crate::grass::Bush::Fern),
+    Tool::Bush(crate::grass::Bush::Autumn),
+    Tool::Bush(crate::grass::Bush::Reeds),
     Tool::Prop(Material::Tree),
     Tool::Prop(Material::Pine),
+    Tool::Prop(Material::Spruce),
+    Tool::Prop(Material::Scots),
+    Tool::Prop(Material::Fir),
+    Tool::Prop(Material::Birch),
+    Tool::Prop(Material::Willow),
+    Tool::Prop(Material::Palm),
+    Tool::Prop(Material::Snag),
     Tool::OilTrail,
     Tool::Gate,
     Tool::Portal,
@@ -339,6 +355,13 @@ impl Tool {
             Tool::Prop(Material::Target) => "target",
             Tool::Prop(Material::Tree) => "tree",
             Tool::Prop(Material::Pine) => "pine",
+            Tool::Prop(Material::Spruce) => "spruce",
+            Tool::Prop(Material::Scots) => "scots",
+            Tool::Prop(Material::Fir) => "fir",
+            Tool::Prop(Material::Birch) => "birch",
+            Tool::Prop(Material::Willow) => "willow",
+            Tool::Prop(Material::Palm) => "palm",
+            Tool::Prop(Material::Snag) => "snag",
             Tool::Prop(Material::Lamp) => "lamp",
             Tool::Prop(_) => "prop",
             Tool::Drum(Drum::Oil) => "oil_drum",
@@ -351,6 +374,12 @@ impl Tool {
             Tool::Lava => "lava",
             Tool::Volcano => "volcano",
             Tool::TallGrass => "tall_grass",
+            Tool::Bush(crate::grass::Bush::Bush) => "bush",
+            Tool::Bush(crate::grass::Bush::Berry) => "berry_bush",
+            Tool::Bush(crate::grass::Bush::Juniper) => "juniper",
+            Tool::Bush(crate::grass::Bush::Fern) => "fern",
+            Tool::Bush(crate::grass::Bush::Autumn) => "autumn_bush",
+            Tool::Bush(crate::grass::Bush::Reeds) => "reeds",
             Tool::Gate => "gate",
             Tool::Portal => "portal",
             Tool::Start => "start",
@@ -396,7 +425,9 @@ impl Tool {
     pub fn category(self) -> Option<Category> {
         match self {
             Tool::Wall(_) => Some(Category::Wall),
-            Tool::Prop(Material::Tree | Material::Pine | Material::Lamp) => Some(Category::Ground),
+            Tool::Prop(m) if m.is_tree() => Some(Category::Plant),
+            Tool::Bush(_) => Some(Category::Plant),
+            Tool::Prop(Material::Lamp) => Some(Category::Ground),
             Tool::Prop(Material::Target) => Some(Category::Actor),
             Tool::Prop(_) | Tool::Drum(_) | Tool::Tower(..) => Some(Category::Prop),
             Tool::Road | Tool::Water | Tool::Lava | Tool::Volcano | Tool::TallGrass | Tool::OilTrail | Tool::Gate | Tool::Portal => {
@@ -428,6 +459,7 @@ impl Tool {
             Tool::Portal => Some(CellObject::Portal),
             Tool::Pickup(pickup) => Some(CellObject::Pickup { pickup }),
             Tool::TallGrass => Some(CellObject::TallGrass),
+            Tool::Bush(bush) => Some(CellObject::of_bush(bush)),
             Tool::Tower(kind, side) => Some(CellObject::for_tower(kind, side)),
             Tool::Eraser | Tool::Select => None,
         }
@@ -440,18 +472,22 @@ impl Tool {
     }
 }
 
-/// The five groups the bar shows, each remembering its current tool.
+/// The six groups the bar shows, each remembering its current tool.
+/// Declaration order is `ALL`'s order (`index`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Category {
     Wall,
     Prop,
     Ground,
+    /// The trees and the bushes (docs/TREES_SPEC.md, BUSHES_SPEC.md):
+    /// fifteen tools, too many to share Ground's list on a phone.
+    Plant,
     Actor,
     Pickup,
 }
 
 impl Category {
-    pub const ALL: [Category; 5] = [Category::Wall, Category::Prop, Category::Ground, Category::Actor, Category::Pickup];
+    pub const ALL: [Category; 6] = [Category::Wall, Category::Prop, Category::Ground, Category::Plant, Category::Actor, Category::Pickup];
 
     /// The group's name in the language on screen.
     pub fn label(self) -> String {
@@ -464,6 +500,7 @@ impl Category {
             Category::Wall => crate::text::keys::CATEGORY_WALL,
             Category::Prop => crate::text::keys::CATEGORY_PROP,
             Category::Ground => crate::text::keys::CATEGORY_GROUND,
+            Category::Plant => crate::text::keys::CATEGORY_PLANT,
             Category::Actor => crate::text::keys::CATEGORY_ACTOR,
             Category::Pickup => crate::text::keys::CATEGORY_PICKUP,
         }
@@ -477,6 +514,7 @@ impl Category {
             Category::Wall => "wall",
             Category::Prop => "prop",
             Category::Ground => "ground",
+            Category::Plant => "plant",
             Category::Actor => "actor",
             Category::Pickup => "pickup",
         }
@@ -590,7 +628,7 @@ enum Popup {
     /// BRUSH's list, below its button.
     Brush,
     /// The palette of every category's tools and the brush's row, below
-    /// the TOOLS button a narrow bar folds the five category buttons and
+    /// the TOOLS button a narrow bar folds the six category buttons and
     /// BRUSH into.
     Palette,
     /// The STAMPS list under the bar: the shipped stamps then the ones
@@ -836,7 +874,7 @@ pub struct MapEditor {
     /// what `dirty` compares against and what RESET returns to.
     baseline: MapFile,
     /// Each category's current tool, in `Category::ALL` order.
-    current: [Tool; 5],
+    current: [Tool; 6],
     active_tool: Tool,
     /// The category the brush came from last: the folded TOOLS button
     /// shows its current tool while the eraser is the brush.
@@ -993,6 +1031,7 @@ impl MapEditor {
             Tool::Wall(Material::Brick),
             Tool::Prop(Material::Sandbag),
             Tool::Road,
+            Tool::Prop(Material::Tree),
             Tool::Start,
             Tool::Pickup(PickupKind::Health),
         ];
@@ -4930,7 +4969,7 @@ mod editor_tests {
         let bar = frame.bar();
         // Under the list end of a category button, under the middle of any other.
         let below = |r: Rectangle| frame.ui.to_window(Vec2::new(r.x + r.width - 8.0, r.y + r.height + EDITOR_BAR_HIT_SLACK - 1.0));
-        let wall = bar.category(Category::Wall).expect("a desktop's bar has the five");
+        let wall = bar.category(Category::Wall).expect("a desktop's bar has the six");
         assert_eq!(bar.hit(frame.to_ui(below(wall.rect))), Some(BarButton::CategoryMenu(Category::Wall)));
         assert_eq!(bar.hit(frame.to_ui(below(bar.map))), Some(BarButton::Map));
         let far = Vec2::new(bar.map.x + 2.0, bar.strip.y + bar.strip.height + EDITOR_BAR_HIT_SLACK + 1.0);
@@ -4998,7 +5037,7 @@ mod editor_tests {
         assert!(ed.map().cells.is_empty());
     }
 
-    /// On a phone the five category buttons fold into TOOLS: it opens the
+    /// On a phone the six category buttons fold into TOOLS: it opens the
     /// palette of every category, a cell picks its tool and closes it, and
     /// a press outside closes it and paints nothing.
     #[test]

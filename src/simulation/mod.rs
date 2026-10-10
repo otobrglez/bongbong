@@ -1789,7 +1789,8 @@ impl Game {
         // The volcanoes, one per crater. No RNG.
         self.build_volcanoes();
         // Tall grass: whole cells from the map, each scattering a handful
-        // of tufts. Hashed from position, so this draws no round RNG.
+        // of tufts - or, a bush cell, growing its one bush. Hashed from
+        // position, so this draws no round RNG.
         self.grass_cells = map_spawn.grass_cells.clone();
         self.oil_cells = map_spawn.oil_cells.iter().copied().collect();
         self.portals = map_spawn.portal_cells.iter().map(|&(c, r)| map::cell_to_world(c, r)).collect();
@@ -1804,7 +1805,14 @@ impl Game {
             let tiles: HashSet<(i32, i32)> =
                 self.world.query::<&Obstacle>().iter().filter(|o| !o.material.is_tree()).map(|o| o.cell()).collect();
             let t = tuning();
-            self.grass_cells.iter().flat_map(|c| crate::grass::tufts_for_cell(&t, *c, |cell| tiles.contains(&cell))).collect()
+            let bushes: HashMap<(i32, i32), crate::grass::Bush> = map_spawn.bush_cells.iter().map(|&(p, b)| (map::world_to_cell(p), b)).collect();
+            self.grass_cells
+                .iter()
+                .flat_map(|c| match bushes.get(&map::world_to_cell(*c)) {
+                    Some(&bush) => vec![crate::grass::bush_tuft(*c, bush)],
+                    None => crate::grass::tufts_for_cell(&t, *c, |cell| tiles.contains(&cell)),
+                })
+                .collect()
         };
         self.grass.sort_by(|a, b| a.base.y.total_cmp(&b.base.y));
         // Deep water counts as terrain for every clearance roll below:

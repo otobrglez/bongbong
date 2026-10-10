@@ -727,6 +727,15 @@ pub const GRASS_TEXTURE_SIZE: f32 = 32.0;
 pub const GRASS_SPECIES: i32 = 3;
 pub const GRASS_VARIANTS: i32 = 8;
 
+// Bushes and reeds (grass.rs, static/bushes_sheet.png, docs/BUSHES_SPEC.md):
+// soft cover like tall grass, drawn from 32px cells at 1:1 with the art's
+// own 2x blocks, like a wall. A row per `grass::Bush`, `BUSH_VARIANTS`
+// green columns, then the same again dry from `BUSH_DRY_COL` (a desert
+// map's).
+pub const BUSH_TEXTURE_SIZE: f32 = 32.0;
+pub const BUSH_VARIANTS: i32 = 4;
+pub const BUSH_DRY_COL: i32 = BUSH_VARIANTS;
+
 // Trees (obstacle.rs, static/trees_sheet.png, docs/TREES_SPEC.md): 48px
 // source cells drawn at OBSTACLE_SCALE like every other obstacle, so one
 // source pixel is still one screen pixel and the art's own 2x blocks still
@@ -753,25 +762,39 @@ pub const PORTAL_FRAMES: i32 = 24;
 pub const PORTAL_SHEET_COLS: i32 = 12;
 pub const PORTAL_ICON_CELL: i32 = PORTAL_FRAMES;
 pub const PORTAL_ICON_SIZE: f32 = 32.0;
-// Rows: 4 broadleaf variants, then 4 conifer, then the two rubble rows.
+// Rows: 4 broadleaf variants, then 4 conifer, then the two rubble rows,
+// then 4 variants each of the woodland species in `Material` order (spruce,
+// Scots pine, fir sapling, birch, willow, date palm, dead snag).
 //
 // Columns hold every damage stage once per *dapple frame* - a tree's whole
 // idle animation is those frames cycling (`obstacle::tree_col`), the same
 // canopy with a few patches of leaf one rung lighter and drifting between
 // frames. Nothing about a tree moves; only where the light falls does. The
 // column is `frame * TREE_STAGES + stage`, then the never-drawn stump, then
-// the 3-frame burn loop.
+// the 3-frame burn loop. Those sixteen columns repeat at `TREE_DRY_COL`
+// as the dry version every species draws on a desert map
+// (`Material::is_dry`): the same art recoloured onto the sand and wood
+// ramps and thinned, so the column maths is one offset.
 pub const TREE_ROW_BROADLEAF: i32 = 0;
 pub const TREE_ROW_CONIFER: i32 = 4;
+pub const TREE_ROW_SPRUCE: i32 = 10;
+pub const TREE_ROW_SCOTS: i32 = 14;
+pub const TREE_ROW_FIR: i32 = 18;
+pub const TREE_ROW_BIRCH: i32 = 22;
+pub const TREE_ROW_WILLOW: i32 = 26;
+pub const TREE_ROW_PALM: i32 = 30;
+pub const TREE_ROW_SNAG: i32 = 34;
 pub const TREE_VARIANTS: i32 = 4;
 pub const TREE_STAGES: i32 = 3;
 pub const TREE_SHIMMER_FRAMES: i32 = 4;
 pub const TREE_STUMP_COL: i32 = TREE_STAGES * TREE_SHIMMER_FRAMES;
 pub const TREE_BURN_COL: i32 = TREE_STUMP_COL + 1;
+pub const TREE_DRY_COL: i32 = TREE_BURN_COL + 3;
 // Tree rubble lives on the trees sheet rather than with the rest of the
 // rubble block: it is the one leftover that is green, and walls_sheet.png
 // is under the no-green guard (`just check-sheets`). `Decal` therefore
-// carries the sheet its row belongs to.
+// carries the sheet its row belongs to. The dry half of the sheet has the
+// litter on the sand ramp at the same rows, `TREE_DRY_COL` along.
 pub const RUBBLE_ROW_TREE: i32 = 8;
 pub const RUBBLE_ROW_TREE_CHARRED: i32 = 9;
 

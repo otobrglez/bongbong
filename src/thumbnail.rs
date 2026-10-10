@@ -167,7 +167,7 @@ mod tests {
     #[cfg(feature = "render")]
     const PINNED: [(&str, u64); 24] = [
         ("default", 0x162c_f74b_e81b_b647),
-        ("default-desert", 0x9cc0_0deb_d0c6_7fba),
+        ("default-desert", 0x7235_5386_0fba_ae88),
         ("hunt-basic", 0x22d1_0372_23a7_c2d8),
         ("waves-basic", 0x3a19_a312_0b59_7fc1),
         ("portals", 0xa7ce_43c1_fa77_12a0),
@@ -177,7 +177,7 @@ mod tests {
         ("lotus-lagoon", 0x5629_37c7_85a3_340f),
         ("vulkan", 0xc246_7e7d_7623_02ae),
         ("hedge-maze", 0x8ae3_3e15_7bab_1f70),
-        ("oasis-bazaar", 0xd0b5_d5b2_8734_922d),
+        ("oasis-bazaar", 0x3d29_91cb_af49_6841),
         ("castle-moat", 0x0cdb_42cb_98cf_342c),
         ("archipelago", 0x7519_79df_b159_267f),
         ("black-gold", 0x7be5_ab85_f6da_94ce),
@@ -185,7 +185,7 @@ mod tests {
         ("carnival", 0x6388_2691_b88e_4fa6),
         ("jungle-temple", 0x7e0f_381a_0018_36d4),
         ("serpent-river", 0x0efb_895d_8bd8_bb6c),
-        ("no-mans-land", 0x7f34_faf8_c8a6_ebb7),
+        ("no-mans-land", 0xa809_2ccb_7be2_5178),
         ("glasshouses", 0xb584_a77d_4cd3_5257),
         ("scrapyard", 0x4103_57a1_4c93_bba9),
         ("grand-campaign", 0x83ef_6bbf_2dcf_c081),

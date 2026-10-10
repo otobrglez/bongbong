@@ -488,7 +488,7 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTre
                 // A tile that was burning when it died is the charred
                 // plank a fire leaves; the tile is still standing here.
                 let charred = game.world.query::<&Obstacle>().iter().any(|o| o.burning && o.cell() == cell);
-                if let Some(decal) = tile_rubble(material, center, charred) {
+                if let Some(decal) = tile_rubble(material, center, charred, game.map.theme) {
                     show.decals.push(decal);
                 }
             }

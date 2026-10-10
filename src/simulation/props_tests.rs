@@ -398,7 +398,7 @@ fn a_destroyed_wall_leaves_rubble_where_it_stood() {
 
     // Every destructible material leaves something; Iron is the one that
     // never dies, so it is the only one with no rubble row at all.
-    for material in [Material::Sandbag, Material::Barrel, Material::Fence, Material::Tree, Material::Pine] {
+    for material in [Material::Sandbag, Material::Barrel, Material::Fence].into_iter().chain(crate::obstacle::TREE_SPECIES) {
         assert!(material.rubble_row(false).is_some(), "{material:?} leaves rubble too");
     }
     assert!(Material::Iron.rubble_row(false).is_none(), "iron never dies, so it never leaves rubble");
@@ -415,8 +415,7 @@ fn every_material_reports_a_sane_max_health() {
     for material in [
         Material::Brick, Material::Iron, Material::Wood, Material::Glass,
         Material::Sandbag, Material::Barrel, Material::Fence, Material::Target,
-        Material::Tree, Material::Pine,
-    ] {
+    ].into_iter().chain(crate::obstacle::TREE_SPECIES) {
         let hp = material.max_health();
         assert!(hp.is_finite() && hp > 0.0, "{material:?} max_health {hp}");
         assert!(material.variants() > 0, "{material:?} has no cosmetic variants");
@@ -427,16 +426,18 @@ fn every_material_reports_a_sane_max_health() {
         assert_eq!(*material as usize, i, "{material:?} moved out of the wall block");
         assert!(material.is_wall());
     }
-    assert!(Material::Tree.is_tree() && Material::Pine.is_tree());
-    assert!(!Material::Tree.is_prop() && !Material::Tree.is_wall());
-    assert_eq!(Material::Tree.sheet(), Sheet::Trees);
+    for tree in crate::obstacle::TREE_SPECIES {
+        assert!(tree.is_tree() && !tree.is_prop() && !tree.is_wall(), "{tree:?}");
+        assert_eq!(tree.sheet(), Sheet::Trees);
+        assert_eq!(tree.variants(), crate::TREE_VARIANTS);
+    }
     assert_eq!(Sheet::Trees.cell(), crate::TREE_TEXTURE_SIZE);
 }
 
 #[test]
 fn a_tree_shot_down_leaves_litter_from_its_own_sheet() {
     use crate::obstacle::Sheet;
-    // Both species, and over several seeds because a tree rolls flammable
+    // The first two species, and over several seeds because a tree rolls flammable
     // at spawn: one that catches fire dies through `tick_burns` (charred)
     // and one that does not dies through `damage_obstacle`. Either way it
     // must announce itself and leave litter.
@@ -508,6 +509,149 @@ fn one_shell_usually_fells_a_tree() {
         }
         assert!(felled >= 12, "{kind}: only {felled}/20 single shells brought it down");
     }
+}
+
+/// The map kind of each tree species, as `CellObject` spells it.
+fn kind_of(material: Material) -> String {
+    let cell = crate::map::CellObject::prop(material).expect("every species is a map kind");
+    let toml = toml::to_string(&cell).expect("a cell serialises");
+    toml.split('"').nth(1).expect("kind = \"...\"").to_string()
+}
+
+#[test]
+fn every_tree_species_is_a_map_kind_that_spawns_and_comes_down() {
+    // Each species parses from its map kind, spawns the material it names,
+    // falls to shells and leaves its litter on the trees sheet.
+    for material in crate::obstacle::TREE_SPECIES {
+        let kind = kind_of(material);
+        let map = map_with(&format!("cells.\"20,11\" = {{ kind = \"{kind}\" }}\n"));
+        let mut game = game_on(&map, 3);
+        let spawned: Vec<Material> = game.world.query::<&Obstacle>().iter().map(|o| o.material).filter(|m| m.is_tree()).collect();
+        assert_eq!(spawned, vec![material], "kind = \"{kind}\"");
+        game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
+        for _ in 0..14 {
+            if alive_obstacles(&game) == 8 {
+                break;
+            }
+            shoot(&mut game, 150);
+        }
+        assert_eq!(alive_obstacles(&game), 8, "the {kind} never came down");
+        assert_eq!(game.decals.len(), 1, "{kind}: one piece of litter");
+        assert_eq!(game.decals[0].sheet, crate::obstacle::Sheet::Trees, "{kind}");
+    }
+}
+
+#[test]
+fn saplings_and_snags_give_way_at_once_and_a_spruce_holds_longest() {
+    // The ram ladder of docs/TREES_SPEC.md: a wood's soft edge (fir
+    // sapling, dead snag) barely slows a hull, a slim trunk (birch, palm)
+    // a little more, a broadleaf a beat more, a spruce the most.
+    let frames_for = |material: Material| {
+        let kind = kind_of(material);
+        let map = map_with(&format!("cells.\"20,11\" = {{ kind = \"{kind}\" }}\n"));
+        let mut game = game_on(&map, 1);
+        game.debug_teleport(0, cell_to_world(20, 12), Some(0.0)).unwrap();
+        destroyed_frame(&mut game, drive(Dir::Up), material, 900)
+            .unwrap_or_else(|| panic!("{kind} survived a tank pushing into it for 15 seconds"))
+    };
+    let fir = frames_for(Material::Fir);
+    let snag = frames_for(Material::Snag);
+    let birch = frames_for(Material::Birch);
+    let palm = frames_for(Material::Palm);
+    let tree = frames_for(Material::Tree);
+    let spruce = frames_for(Material::Spruce);
+    assert!(fir < birch && snag < birch, "fir {fir}, snag {snag}, birch {birch}");
+    assert!(birch < tree && palm < tree, "birch {birch}, palm {palm}, tree {tree}");
+    assert!(tree < spruce, "tree {tree}, spruce {spruce}");
+}
+
+#[test]
+fn a_sapling_a_palm_and_a_snag_hide_nothing_but_the_other_trees_do() {
+    let species = crate::obstacle::TREE_SPECIES;
+    let mut cells = String::new();
+    for (i, m) in species.iter().enumerate() {
+        cells.push_str(&format!("cells.\"10,{}\" = {{ kind = \"{}\" }}\n", 2 + i as i32 * 2, kind_of(*m)));
+    }
+    let game = game_on(&map_with(&cells), 1);
+    let terrain = Terrain::build(&game.world, W, H, &game.grass_cells, &game.water);
+    for (i, m) in species.iter().enumerate() {
+        let row = 2 + i as i32 * 2;
+        let seen = terrain.line_of_sight(cell_to_world(7, row), cell_to_world(13, row));
+        let open = matches!(m, Material::Fir | Material::Palm | Material::Snag);
+        assert_eq!(seen, open, "{m:?}: line of sight across it");
+    }
+}
+
+#[test]
+fn one_shell_usually_fells_every_tree_but_a_spruce() {
+    // The brittleness rule every tree but the spruce is held to, on the
+    // weakest chassis: one shell fells it well over half the time. The
+    // spruce is the tough interior tree and still falls to one shell a
+    // fair share of the time.
+    for material in crate::obstacle::TREE_SPECIES {
+        let kind = kind_of(material);
+        let map = map_with(&format!("cells.\"20,11\" = {{ kind = \"{kind}\" }}\n"));
+        let mut felled = 0;
+        for seed in 1..=20u64 {
+            let mut game = game_on(&map, seed);
+            game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
+            let events = shoot(&mut game, 150);
+            if events.iter().any(|e| matches!(e, Event::ObstacleDestroyed { material: m, .. } if *m == material)) {
+                felled += 1;
+            }
+        }
+        let floor = if material == Material::Spruce { 5 } else { 12 };
+        assert!(felled >= floor, "{kind}: only {felled}/20 single shells brought it down");
+    }
+}
+
+#[test]
+fn a_desert_draws_its_trees_dry_and_they_burn_more_readily() {
+    // Forty trees of one species, the same seed, on grass and on desert:
+    // the desert's are dry and roll `dry_tree_flammable_chance` (0.8)
+    // against `tree_flammable_chance` (0.55). A date palm stays green, and
+    // a snag is dry everywhere.
+    let grove = |theme: &str, kind: &str| {
+        let mut cells = format!("theme = \"{theme}\"\n{}", map_with(""));
+        for c in 4..=13 {
+            for r in 4..=7 {
+                cells.push_str(&format!("cells.\"{c},{r}\" = {{ kind = \"{kind}\" }}\n"));
+            }
+        }
+        let game = game_on(&cells, 11);
+        let trees: Vec<(bool, bool)> =
+            game.world.query::<&Obstacle>().iter().filter(|o| o.material.is_tree()).map(|o| (o.dry, o.flammable)).collect();
+        assert_eq!(trees.len(), 40, "{theme} {kind}");
+        trees
+    };
+    let green = grove("grass", "birch");
+    let dry = grove("desert", "birch");
+    assert!(green.iter().all(|(d, _)| !d), "a birch on grass is green");
+    assert!(dry.iter().all(|(d, _)| *d), "a birch on desert is dry");
+    let burns = |t: &[(bool, bool)]| t.iter().filter(|(_, f)| *f).count();
+    assert!(burns(&dry) > burns(&green), "dry {} vs green {} flammable of 40", burns(&dry), burns(&green));
+    assert!(grove("desert", "palm").iter().all(|(d, _)| !d), "a date palm stays green by its water");
+    assert!(grove("grass", "snag").iter().all(|(d, _)| *d), "a snag is dry on any map");
+}
+
+#[test]
+fn a_dead_snag_is_no_canopy_against_a_drone() {
+    let map = map_with("cells.\"10,5\" = { kind = \"snag\" }\ncells.\"14,5\" = { kind = \"fir\" }\n");
+    let game = game_on(&map, 1);
+    let crowns: Vec<Position> = game.standing_trees().into_iter().map(|(_, p)| p).collect();
+    assert_eq!(crowns, vec![cell_to_world(14, 5)], "the sapling's crown counts, the snag's bare limbs do not");
+}
+
+#[test]
+fn a_dry_tree_leaves_dry_litter() {
+    use crate::map::Theme;
+    let at = cell_to_world(9, 9);
+    let green = crate::simulation::props::tile_rubble(Material::Birch, at, false, Theme::Grass).expect("litter");
+    let dry = crate::simulation::props::tile_rubble(Material::Birch, at, false, Theme::Desert).expect("litter");
+    assert_eq!((green.sheet, green.row), (dry.sheet, dry.row), "the same litter row");
+    assert_eq!(dry.col, green.col + crate::TREE_DRY_COL, "the same variant, on the dry half");
+    let palm = crate::simulation::props::tile_rubble(Material::Palm, at, false, Theme::Desert).expect("litter");
+    assert!(palm.col < crate::TREE_DRY_COL, "a palm's litter stays green");
 }
 
 #[test]
@@ -909,6 +1053,51 @@ fn grass_flattens_under_a_tank_and_stands_back_up() {
         step(&mut game, Input::default());
     }
     assert_eq!(crush(&game), 0.0, "five seconds is past the recovery, it should be standing again");
+}
+
+#[test]
+fn a_bush_is_soft_cover_a_tank_drives_through_and_flattens() {
+    // Every kind of bush: one sprite in its cell, cover like tall grass,
+    // no obstacle - the tile count is the enemy's iron box alone - and a
+    // hull parked on it presses it down and it stands back up.
+    for bush in crate::grass::Bush::ALL {
+        let kind = toml::to_string(&crate::map::CellObject::of_bush(bush)).expect("a cell serialises");
+        let kind = kind.split('"').nth(1).expect("kind = \"...\"").to_string();
+        let map = map_with(&format!("cells.\"20,11\" = {{ kind = \"{kind}\" }}\n"));
+        let mut game = game_on(&map, 1);
+        assert_eq!(alive_obstacles(&game), 8, "{kind} is not an obstacle");
+        let cell = cell_to_world(20, 11);
+        assert_eq!(game.grass.iter().map(|t| t.bush).collect::<Vec<_>>(), vec![Some(bush)], "{kind}: one sprite");
+        let terrain = Terrain::build(&game.world, W, H, &game.grass_cells, &game.water);
+        assert!(terrain.conceals(cell), "{kind} conceals its cell");
+        assert!(game.nav_grid(W, H).usable(cell), "{kind} is open ground to the planner");
+
+        game.debug_teleport(0, cell, Some(0.0)).unwrap();
+        step(&mut game, Input::default());
+        assert!(game.grass[0].crush > 0.5, "{kind}: a hull on it presses it down");
+        game.debug_teleport(0, cell_to_world(20, 18), Some(0.0)).unwrap();
+        for _ in 0..(60.0 * 5.0) as usize {
+            step(&mut game, Input::default());
+        }
+        assert_eq!(game.grass[0].crush, 0.0, "{kind} stands back up");
+    }
+}
+
+#[test]
+fn a_tank_drives_through_a_bush_cell_without_stopping() {
+    // A hull driving north across a bush cell crosses it in the time open
+    // ground takes: nothing to push over, nothing to ram.
+    let frames_to = |extra: &str| {
+        let mut game = game_on(&map_with(extra), 1);
+        game.debug_teleport(0, cell_to_world(20, 14), Some(0.0)).unwrap();
+        (1..=600).find(|_| {
+            step(&mut game, drive(Dir::Up));
+            game.tank_snapshots().iter().any(|t| t.slot == 0 && t.position.y <= cell_to_world(20, 9).y)
+        })
+    };
+    let open = frames_to("").expect("the hull crosses open ground");
+    let bush = frames_to("cells.\"20,11\" = { kind = \"bush\" }\n").expect("the hull crosses the bush");
+    assert_eq!(bush, open, "a bush costs a hull nothing");
 }
 
 #[test]

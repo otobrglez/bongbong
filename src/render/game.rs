@@ -102,8 +102,10 @@ pub struct Textures<'a> {
     /// (`map::Theme::grass_texture_path`, grass.rs); `ground` above is the
     /// theme's ground tileset the same way. `app.rs` picks both per frame.
     pub grass: &'a Texture2D,
-    /// static/trees_sheet.png - the two tree species (docs/TREES_SPEC.md).
+    /// static/trees_sheet.png - the tree species (docs/TREES_SPEC.md).
     pub trees: &'a Texture2D,
+    /// static/bushes_sheet.png - bushes and reeds (docs/BUSHES_SPEC.md).
+    pub bushes: &'a Texture2D,
     /// static/target_sheet.png - the range board (docs/PROPS_SPEC.md).
     pub target: &'a Texture2D,
     /// static/towers_sheet.png - the defence towers (docs/TOWERS_SPEC.md).
@@ -137,6 +139,7 @@ impl Sheets for Textures<'_> {
             Sheet::Walls => self.obstacles,
             Sheet::Props => self.props,
             Sheet::Trees => self.trees,
+            Sheet::Bushes => self.bushes,
             Sheet::Target => self.target,
             Sheet::Towers => self.towers,
             Sheet::Grass(_) => self.grass,

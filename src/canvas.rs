@@ -62,6 +62,9 @@ pub enum Sheet {
     Props,
     /// static/trees_sheet.png (docs/TREES_SPEC.md).
     Trees,
+    /// static/bushes_sheet.png (docs/BUSHES_SPEC.md): bushes and reeds,
+    /// green and dry.
+    Bushes,
     /// static/target_sheet.png - the range board, drawn larger than a prop
     /// on 44px cells (docs/PROPS_SPEC.md, docs/range-target-prd.md).
     Target,
@@ -86,8 +89,8 @@ pub enum Sheet {
     Frog { variant: u8, clip: FrogAnim },
 }
 
-/// The thirteen sheets that are one file each regardless of theme.
-pub const SINGLE_SHEETS: [Sheet; 13] = [
+/// The fourteen sheets that are one file each regardless of theme.
+pub const SINGLE_SHEETS: [Sheet; 14] = [
     Sheet::Tanks,
     Sheet::TankGlow,
     Sheet::TankModules,
@@ -95,6 +98,7 @@ pub const SINGLE_SHEETS: [Sheet; 13] = [
     Sheet::Walls,
     Sheet::Props,
     Sheet::Trees,
+    Sheet::Bushes,
     Sheet::Target,
     Sheet::Towers,
     Sheet::BarrelExplosion,
@@ -119,6 +123,7 @@ impl Sheet {
             Sheet::Walls => "static/walls_sheet.png".into(),
             Sheet::Props => "static/props_sheet.png".into(),
             Sheet::Trees => "static/trees_sheet.png".into(),
+            Sheet::Bushes => "static/bushes_sheet.png".into(),
             Sheet::Target => "static/target_sheet.png".into(),
             Sheet::Towers => "static/towers_sheet.png".into(),
             Sheet::Grass(theme) => theme.grass_texture_path().into(),

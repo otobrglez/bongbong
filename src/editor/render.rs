@@ -108,6 +108,11 @@ pub struct EditorTextures<'a> {
     pub portal: &'a Texture2D,
     pub tanks: &'a Texture2D,
     pub trees: &'a Texture2D,
+    /// static/bushes_sheet.png - bushes and reeds (docs/BUSHES_SPEC.md).
+    pub bushes: &'a Texture2D,
+    /// The canvas map's theme: a desert map's trees are drawn dry
+    /// (`Material::is_dry`), as the round will draw them.
+    pub theme: Theme,
     /// static/target_sheet.png - the range board.
     pub target: &'a Texture2D,
     /// static/towers_sheet.png - the defence towers' bases and tops.
@@ -206,6 +211,7 @@ impl Sheets for EditorTextures<'_> {
             Sheet::Walls => self.obstacles,
             Sheet::Props => self.props,
             Sheet::Trees => self.trees,
+            Sheet::Bushes => self.bushes,
             Sheet::Target => self.target,
             Sheet::Towers => self.towers,
             Sheet::Grass(_) => self.grass,
@@ -1498,7 +1504,7 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
         Tool::Lava => draw_lava_icon(d, dest),
         Tool::Volcano => draw_volcano_icon(d, dest),
         Tool::Wall(material) | Tool::Prop(material) => {
-            let (sheet, src) = obstacle::icon_source_rec(material);
+            let (sheet, src) = obstacle::icon_source_rec(material, theme);
             d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Drum(drum) => {
@@ -1557,6 +1563,14 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
             let cell = crate::GRASS_TEXTURE_SIZE;
             let src = Rectangle::new(0.0, 0.0, cell, cell);
             d.draw_texture_pro(textures.grass, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+        }
+        Tool::Bush(bush) => {
+            // On a patch of the theme's floor like tall grass: a bush is
+            // ground cover, not a thing standing on the field.
+            let (r, g, b) = theme.floor_color();
+            d.draw_rectangle_rounded(dest, 0.15, EDITOR_PANEL_SEGMENTS, Color::new(r, g, b, 255));
+            let src = crate::grass::bush_source_rec(bush, theme);
+            d.draw_texture_pro(textures.bushes, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Pickup(pickup) => {
             // The crate as it stands on the field - the brush is the thing
@@ -1722,7 +1736,7 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             // At the sheet's own cell size: the cell for a wall or a prop,
             // a range board's 44px, so its overhang matches a round.
             let material = obj.material().expect("solid cells have a material");
-            let (sheet, src) = obstacle::icon_source_rec(material);
+            let (sheet, src) = obstacle::icon_source_rec(material, textures.theme);
             let drawn = sheet.cell();
             let dest = Rectangle::new(pos.x, pos.y, drawn, drawn);
             let origin = Vector2::new(drawn / 2.0, drawn / 2.0);
@@ -1732,11 +1746,19 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             let src = obstacle::oil_source_rec(pos);
             d.draw_texture_pro(textures.props, src, dest, origin, 0.0, tint);
         }
-        CellObject::Tree | CellObject::Pine => {
+        CellObject::Tree
+        | CellObject::Pine
+        | CellObject::Spruce
+        | CellObject::Scots
+        | CellObject::Fir
+        | CellObject::Birch
+        | CellObject::Willow
+        | CellObject::Palm
+        | CellObject::Snag => {
             // Drawn at the sprite's own 48px, not the 32px cell, so the
             // canopy overhang matches a round.
             let material = obj.material().expect("tree cells have a material");
-            let (sheet, src) = obstacle::icon_source_rec(material);
+            let (sheet, src) = obstacle::icon_source_rec(material, textures.theme);
             let big = crate::TREE_TEXTURE_SIZE;
             let dest = Rectangle::new(pos.x, pos.y, big, big);
             let origin = Vector2::new(big / 2.0, big / 2.0);
@@ -1792,6 +1814,13 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             let scale = cell * crate::tuning::tuning().grass_scale;
             let at = Rectangle::new(pos.x, pos.y + size / 2.0, scale, scale);
             d.draw_texture_pro(textures.grass, src, at, Vector2::new(scale / 2.0, scale), 0.0, tint);
+        }
+        CellObject::Bush | CellObject::BerryBush | CellObject::Juniper | CellObject::Fern | CellObject::AutumnBush | CellObject::Reeds => {
+            // The bush as a round stands it: its first variant, dry on a
+            // desert map, filling its cell.
+            let bush = obj.bush().expect("a bush cell grows a bush");
+            let src = crate::grass::bush_source_rec(bush, textures.theme);
+            d.draw_texture_pro(textures.bushes, src, dest, origin, 0.0, tint);
         }
         CellObject::Frog => {
             let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);

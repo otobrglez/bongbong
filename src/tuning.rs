@@ -2540,12 +2540,37 @@ tunables! {
         tree_max_health: f32 = 12.0 in 1.0 ..= 500.0 @ Spawn;
         /// Conifer toughness. Slimmer than a broadleaf, so a little less.
         pine_max_health: f32 = 9.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Spruce toughness: the dense, dark interior tree, the one a scout
+        /// shell fells only a little more than half the time.
+        spruce_max_health: f32 = 14.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Scots pine toughness: an open crown on a slim trunk, a conifer's.
+        scots_max_health: f32 = 9.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Fir sapling toughness: below every shell's least, so anything
+        /// fells one - the soft outer ring of a conifer stand.
+        fir_max_health: f32 = 5.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Birch toughness: a light edge tree, felled by nearly every shell.
+        birch_max_health: f32 = 8.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Willow toughness: a broad bank tree, between a pine and a
+        /// broadleaf.
+        willow_max_health: f32 = 10.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Date palm toughness: a thin ringed trunk.
+        palm_max_health: f32 = 7.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Dead snag toughness: dry grey wood that snaps at a touch.
+        snag_max_health: f32 = 4.0 in 1.0 ..= 500.0 @ Spawn;
         /// Seconds a tank has to keep pushing into a tree before it goes
         /// over. Just past a sandbag's, so a tank drives through a stand
         /// rather than shouldering each trunk down, and well short of
         /// `enemy_breach_after_seconds` so an AI that drives into one
         /// pushes through instead of stopping to shoot it.
         tree_ram_seconds: f32 = 0.5 in 0.05 ..= 10.0;
+        /// `tree_ram_seconds` for a spruce: a beat longer, the heaviest trunk.
+        spruce_ram_seconds: f32 = 0.6 in 0.05 ..= 10.0;
+        /// `tree_ram_seconds` for a fir sapling and a dead snag: a hull
+        /// barely slows, so a wood's soft edge can be forced almost
+        /// anywhere.
+        sapling_ram_seconds: f32 = 0.2 in 0.05 ..= 10.0;
+        /// `tree_ram_seconds` for a birch and a date palm: slim trunks.
+        slim_tree_ram_seconds: f32 = 0.4 in 0.05 ..= 10.0;
         /// Seconds each of a tree's dapple frames holds.
         ///
         /// This is a tree's entire idle animation: the frames are the same
@@ -2590,6 +2615,10 @@ tunables! {
         /// RNG at all, so a treeless map replays unchanged. Burn timing is
         /// shared with wood (`wood_burn_seconds`): it is one fire.
         tree_flammable_chance: f64 = 0.55 in 0.0 ..= 1.0 @ Spawn;
+        /// `tree_flammable_chance` for a tree drawn dry - every species on
+        /// a desert map but the date palm, and a dead snag anywhere
+        /// (`Material::is_dry`): tinder, so most go up rather than fall.
+        dry_tree_flammable_chance: f64 = 0.8 in 0.0 ..= 1.0 @ Spawn;
         /// Radius (px) of a blast's fireball at its peak (`fireball.rs`),
         /// before the blast's own scale - a fuel drum's is larger, a
         /// missile's and a cook-off's smaller.
@@ -3181,6 +3210,10 @@ tunables! {
         /// Never 1.0: a tuft that disappears entirely reads as a hole in
         /// the field rather than as matted grass.
         grass_crush_flatten: f32 = 0.78 in 0.0 ..= 0.95;
+        /// `grass_crush_flatten` for a bush (`grass::draw_bush`): a shrub
+        /// a hull is sitting on is pressed down to a third of its height,
+        /// never gone, and stands back up over the same recovery.
+        bush_crush_flatten: f32 = 0.66 in 0.0 ..= 0.95;
         /// Leaf or straw specks a tank kicks up per second per grass cell it is
         /// crossing (`fx.rs`, scaled by `fx_density` like every other
         /// emitter). Zero turns the rustle off.

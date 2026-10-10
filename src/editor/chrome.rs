@@ -17,11 +17,11 @@
 //!
 //! **The bar is laid out from the safe area's width** in points. With the
 //! room - a desktop window, a tablet - it is one row: BUILD, the map's
-//! name, the five category buttons and the BRUSH button (the brush's
+//! name, the six category buttons and the BRUSH button (the brush's
 //! shape, the select tool and the stamps), the eraser, UNDO, REDO, FILE,
 //! MAP, FIT, CHECK and the clear flag from the left, PLAY HERE and PLAY at
 //! the right end. Where it has less, the BUILD label goes first, then the
-//! name (the status line names the map instead), and then the five
+//! name (the status line names the map instead), and then the six
 //! category buttons and BRUSH fold into one TOOLS button that opens a
 //! palette of every category with the brush's row under them, so every
 //! button stays reachable at its full size - 44 points on both sides on a
@@ -236,12 +236,12 @@ struct Metrics {
     /// A category button: its icon half and its list half.
     category_icon: f32,
     category_list: f32,
-    /// After the five category buttons.
+    /// After the six category buttons.
     categories_gap: f32,
-    /// BRUSH, after the five: the brush's shape, the select tool and the
+    /// BRUSH, after the six: the brush's shape, the select tool and the
     /// stamps (`BrushRow`).
     brush: Slot,
-    /// The TOOLS button the five and BRUSH fold into.
+    /// The TOOLS button the six and BRUSH fold into.
     folded: Slot,
     erase: Slot,
     undo: Slot,
@@ -315,9 +315,9 @@ pub struct CategoryButton {
 /// The tool categories in the bar: a button each, or folded into one.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BarTools {
-    /// The five category buttons, in `Category::ALL` order; BRUSH follows
+    /// The six category buttons, in `Category::ALL` order; BRUSH follows
     /// them (`Bar::brush`).
-    Categories([CategoryButton; 5]),
+    Categories([CategoryButton; 6]),
     /// One TOOLS button opening the palette of every category and the
     /// brush's row: what a bar too narrow for the five and BRUSH shows.
     Folded(Rectangle),
@@ -781,14 +781,34 @@ pub fn hanging_list(anchor: Rectangle, room: Rectangle, n: usize, w: f32) -> Row
 /// room is wide for runs on into a second row under its first, so the
 /// palette never leaves the room's width; where its rows would not fit the
 /// room's height the cells shrink to fit, never under a finger's
-/// `UI_TOUCH_PT`.
+/// `UI_TOUCH_PT`, and where even that is too tall the categories *flow*:
+/// one after another along the rows, each name followed by its tools,
+/// running on into the next row wherever a row ends - a phone's palette,
+/// as few rows as the tools can take.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
     pub panel: Rectangle,
-    /// Tool cells a row holds.
+    /// Tool cells a stacked row holds.
     per_row: usize,
     /// A cell's side: `PALETTE_CELL`, less where the room is short.
     cell: f32,
+    /// How the categories are laid down.
+    pack: Pack,
+}
+
+/// The cells a category's name takes in a flowing palette: a name is
+/// `PALETTE_LABEL_W` wide, and a cell never under `UI_TOUCH_PT`.
+const NAME_CELLS: usize = 2;
+
+/// The two ways the palette lays its categories down.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Pack {
+    /// A category to a row (or rows): its name in the left column, its
+    /// tools after it. `rows[k]` is category `k`'s first row.
+    Stacked { rows: [usize; 6], total: usize },
+    /// One run of cells, `width` to a row: category `k`'s name starts
+    /// `starts[k]` cells into the run and its tools follow.
+    Flow { width: usize, starts: [usize; 6], total: usize },
 }
 
 impl Palette {
@@ -798,16 +818,49 @@ impl Palette {
         let most = Category::ALL.iter().map(|c| c.tools().count()).max().unwrap_or(1).max(BrushRow::ALL.len());
         let fits = (((room.width - PALETTE_LABEL_W) / PALETTE_CELL).floor().max(1.0) as usize).max(BrushRow::ALL.len());
         let per_row = most.min(fits);
-        let rows: usize = Category::ALL.iter().map(|&c| Self::rows_of(c, per_row)).sum::<usize>() + 1;
-        let cell = PALETTE_CELL.min((room.height / rows as f32).floor()).max(crate::hud::UI_TOUCH_PT);
-        let w = PALETTE_LABEL_W + per_row as f32 * cell;
-        let h = rows as f32 * cell;
-        Palette { panel: Rectangle::new(slide(anchor.x, w, room), room.y, w, h), per_row, cell }
+        let size = |rows: usize| PALETTE_CELL.min((room.height / (rows + 1) as f32).floor()).max(crate::hud::UI_TOUCH_PT);
+        let (rows, total) = Self::stack(per_row);
+        let cell = size(total);
+        if (total + 1) as f32 * cell <= room.height + 1e-3 {
+            let w = PALETTE_LABEL_W + per_row as f32 * cell;
+            let h = (total + 1) as f32 * cell;
+            let pack = Pack::Stacked { rows, total };
+            return Palette { panel: Rectangle::new(slide(anchor.x, w, room), room.y, w, h), per_row, cell, pack };
+        }
+        let cell = crate::hud::UI_TOUCH_PT;
+        let width = ((room.width / cell).floor() as usize).max(NAME_CELLS + BrushRow::ALL.len());
+        let (starts, total) = Self::flow(width);
+        let w = width as f32 * cell;
+        let h = (total + 1) as f32 * cell;
+        let pack = Pack::Flow { width, starts, total };
+        Palette { panel: Rectangle::new(slide(anchor.x, w, room), room.y, w, h), per_row, cell, pack }
     }
 
-    /// Rows `category` takes at `per_row` cells a row.
-    fn rows_of(category: Category, per_row: usize) -> usize {
-        category.tools().count().div_ceil(per_row.max(1)).max(1)
+    /// Each category on rows of its own, `per_row` tools to a row: the
+    /// first row of each and the rows they all take.
+    fn stack(per_row: usize) -> ([usize; 6], usize) {
+        let mut rows = [0; 6];
+        let mut total = 0;
+        for (k, category) in Category::ALL.iter().enumerate() {
+            rows[k] = total;
+            total += category.tools().count().max(1).div_ceil(per_row.max(1));
+        }
+        (rows, total)
+    }
+
+    /// The categories as one run of cells `width` to a row - a name never
+    /// split from its first tool - and the rows the run takes.
+    fn flow(width: usize) -> ([usize; 6], usize) {
+        let mut starts = [0; 6];
+        let mut at = 0;
+        for (k, category) in Category::ALL.iter().enumerate() {
+            if at % width + NAME_CELLS + 1 > width {
+                at = at.div_ceil(width) * width;
+            }
+            starts[k] = at;
+            at += NAME_CELLS + category.tools().count();
+        }
+        (starts, at.div_ceil(width))
     }
 
     /// Row `index`: the categories', then the brush's.
@@ -815,33 +868,60 @@ impl Palette {
         Rectangle::new(self.panel.x, self.panel.y + index as f32 * self.cell, self.panel.width, self.cell)
     }
 
-    /// The index of `category`'s first row.
-    fn first_row(&self, category: Category) -> usize {
-        Category::ALL.iter().take_while(|&&c| c != category).map(|&c| Self::rows_of(c, self.per_row)).sum()
+    /// The cell `n` cells into a flowing palette's run.
+    fn run_cell(&self, width: usize, n: usize) -> Rectangle {
+        let row = self.row_at(n / width);
+        Rectangle::new(row.x + (n % width) as f32 * self.cell, row.y, self.cell, self.cell)
+    }
+
+    fn index(category: Category) -> usize {
+        Category::ALL.iter().position(|&c| c == category).expect("every category is in ALL")
     }
 
     /// The category's first row.
     pub fn row(&self, category: Category) -> Rectangle {
-        self.row_at(self.first_row(category))
+        let k = Self::index(category);
+        match self.pack {
+            Pack::Stacked { rows, .. } => self.row_at(rows[k]),
+            Pack::Flow { width, starts, .. } => self.row_at(starts[k] / width),
+        }
     }
 
-    /// The category's name, at its first row's left.
+    /// The category's name: in the left column of its first row, or where
+    /// its run starts in a flowing palette.
     pub fn label(&self, category: Category) -> Rectangle {
-        let row = self.row(category);
-        Rectangle::new(row.x, row.y, PALETTE_LABEL_W, row.height)
+        let k = Self::index(category);
+        match self.pack {
+            Pack::Stacked { rows, .. } => {
+                let row = self.row_at(rows[k]);
+                Rectangle::new(row.x, row.y, PALETTE_LABEL_W, row.height)
+            }
+            Pack::Flow { width, starts, .. } => {
+                let at = self.run_cell(width, starts[k]);
+                Rectangle::new(at.x, at.y, PALETTE_LABEL_W, at.height)
+            }
+        }
     }
 
-    /// The category's `i`th tool's cell, running on into the category's
-    /// next row past the room's width.
+    /// The category's `i`th tool's cell, running on into the next row
+    /// where a row ends.
     pub fn cell(&self, category: Category, i: usize) -> Rectangle {
-        let per_row = self.per_row.max(1);
-        let row = self.row_at(self.first_row(category) + i / per_row);
-        Rectangle::new(row.x + PALETTE_LABEL_W + (i % per_row) as f32 * self.cell, row.y, self.cell, self.cell)
+        let k = Self::index(category);
+        match self.pack {
+            Pack::Stacked { rows, .. } => {
+                let per_row = self.per_row.max(1);
+                let row = self.row_at(rows[k] + i / per_row);
+                Rectangle::new(row.x + PALETTE_LABEL_W + (i % per_row) as f32 * self.cell, row.y, self.cell, self.cell)
+            }
+            Pack::Flow { width, starts, .. } => self.run_cell(width, starts[k] + NAME_CELLS + i),
+        }
     }
 
     /// The brush's row, under the categories'.
     pub fn brush_row(&self) -> Rectangle {
-        self.row_at(Category::ALL.iter().map(|&c| Self::rows_of(c, self.per_row)).sum())
+        match self.pack {
+            Pack::Stacked { total, .. } | Pack::Flow { total, .. } => self.row_at(total),
+        }
     }
 
     /// The brush row's name, at its left.
@@ -1472,31 +1552,31 @@ mod chrome_tests {
     }
 
     /// A desktop's window lays the bar's slots out a point a pixel, BRUSH
-    /// after the five categories; short of room the BUILD label goes
-    /// first, then the name narrows, then the categories and BRUSH fold
-    /// rather than shrink a button.
+    /// after the six categories; short of room the BUILD label goes
+    /// first, then the name narrows and goes, then the categories and
+    /// BRUSH fold rather than shrink a button.
     #[test]
     fn a_desktops_bar_keeps_its_slots_and_a_narrow_one_folds() {
-        let ui = UiFrame::plain((1280.0, 720.0));
+        let ui = UiFrame::plain((1366.0, 768.0));
         let bar = Bar::of(&ui);
-        assert_eq!(bar.strip, Rectangle::new(0.0, 0.0, 1280.0, 40.0));
+        assert_eq!(bar.strip, Rectangle::new(0.0, 0.0, 1366.0, 40.0));
         assert_eq!(bar.label.map(|r| r.x), Some(8.0));
         assert_eq!(bar.name, Some(Rectangle::new(72.0, 0.0, 152.0, 40.0)));
-        let wall = bar.category(Category::Wall).expect("five category buttons");
+        let wall = bar.category(Category::Wall).expect("six category buttons");
         assert_eq!(wall.rect, Rectangle::new(232.0, 0.0, 56.0, 40.0));
         assert_eq!(wall.icon.width, 36.0);
         let slots = [
-            (bar.brush.expect("BRUSH beside the five"), 520.0, 56.0),
-            (bar.erase, 584.0, 44.0),
-            (bar.undo, 632.0, 52.0),
-            (bar.redo, 688.0, 52.0),
-            (bar.file, 744.0, 60.0),
-            (bar.map, 808.0, 60.0),
-            (bar.fit, 872.0, 44.0),
-            (bar.check, 920.0, 76.0),
-            (bar.clear, 998.0, 52.0),
-            (bar.here, 1104.0, HERE_W),
-            (bar.play, 1200.0, 72.0),
+            (bar.brush.expect("BRUSH beside the six"), 576.0, 56.0),
+            (bar.erase, 640.0, 44.0),
+            (bar.undo, 688.0, 52.0),
+            (bar.redo, 744.0, 52.0),
+            (bar.file, 800.0, 60.0),
+            (bar.map, 864.0, 60.0),
+            (bar.fit, 928.0, 44.0),
+            (bar.check, 976.0, 76.0),
+            (bar.clear, 1054.0, 52.0),
+            (bar.here, 1190.0, HERE_W),
+            (bar.play, 1286.0, 72.0),
         ];
         for (r, x, w) in slots {
             assert_eq!((r.x, r.width, r.y, r.height), (x, w, 0.0, 40.0), "{r:?}");
@@ -1504,13 +1584,16 @@ mod chrome_tests {
         // Wider: the same slots from the left, PLAY HERE and PLAY at the
         // right end.
         let wide = Bar::of(&UiFrame::plain((1600.0, 900.0)));
-        assert_eq!((wide.erase.x, wide.clear.x, wide.play.x), (584.0, 998.0, 1600.0 - 8.0 - 72.0));
-        // The arena's own window: the label gone, the name narrowed and
-        // every button whole.
+        assert_eq!((wide.erase.x, wide.clear.x, wide.play.x), (640.0, 1054.0, 1600.0 - 8.0 - 72.0));
+        // A 1280 window: the label gone, the name whole.
+        let laptop = Bar::of(&UiFrame::plain((1280.0, 720.0)));
+        assert!(laptop.label.is_none() && matches!(laptop.tools, BarTools::Categories(_)), "{laptop:?}");
+        assert_eq!(laptop.name, Some(Rectangle::new(8.0, 0.0, 152.0, 40.0)));
+        // The arena's own window: the label and the name gone (the status
+        // line names the map) and every button whole.
         let arena = Bar::of(&UiFrame::plain((1088.0, 576.0)));
-        assert!(arena.label.is_none() && matches!(arena.tools, BarTools::Categories(_)), "{arena:?}");
-        assert_eq!(arena.name, Some(Rectangle::new(8.0, 0.0, 76.0, 40.0)));
-        assert_eq!((arena.erase.x, arena.clear.x, arena.here.x), (444.0, 858.0, 912.0));
+        assert!(arena.label.is_none() && arena.name.is_none() && matches!(arena.tools, BarTools::Categories(_)), "{arena:?}");
+        assert_eq!((arena.erase.x, arena.clear.x, arena.here.x), (416.0, 830.0, 912.0));
         // Narrower: the categories and BRUSH fold into TOOLS, and the room
         // it frees gives the label back; narrower still, the name goes.
         let narrow = Bar::of(&UiFrame::plain((900.0, 500.0)));
@@ -1605,6 +1688,21 @@ mod chrome_tests {
                 let cell = palette.brush_cell(i);
                 check("a palette brush cell", cell);
                 assert!(cell.width >= UI_TOUCH_PT && cell.height >= UI_TOUCH_PT);
+            }
+            // Every name and cell apart, a row shared by two categories
+            // included.
+            let mut placed: Vec<(String, Rectangle)> = vec![("the brush's name".into(), palette.brush_label())];
+            placed.extend((0..BrushRow::ALL.len()).map(|i| (format!("brush cell {i}"), palette.brush_cell(i))));
+            for category in Category::ALL {
+                placed.push((format!("{category:?}'s name"), palette.label(category)));
+                placed.extend((0..category.tools().count()).map(|i| (format!("{category:?} {i}"), palette.cell(category, i))));
+            }
+            for (i, (what, a)) in placed.iter().enumerate() {
+                check(what, *a);
+                for (other, b) in &placed[i + 1..] {
+                    let apart = a.x + a.width <= b.x + 1e-3 || b.x + b.width <= a.x + 1e-3 || a.y + a.height <= b.y + 1e-3 || b.y + b.height <= a.y + 1e-3;
+                    assert!(apart, "{ui:?}: {what} {a:?} overlaps {other} {b:?}");
+                }
             }
             let brush = menu_list(bar.brush.unwrap_or_else(|| bar.tools_anchor(Category::Wall)), room, BrushRow::ALL.len());
             check("BRUSH's list", brush.panel);
