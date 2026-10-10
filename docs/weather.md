@@ -132,7 +132,8 @@ it was.
   and nothing is refused a pose there. A hull on ice keeps its top speed
   but its grip (`ice_grip_factor`), its drive (`ice_traction_factor`) and
   its brake (`ice_brake_factor`) fall away: a released hull coasts about
-  100 px where dry ground stops it in 9. Ice takes tread marks and wets
+  100 px where dry ground stops it in 9. Ice takes tread marks (scratches
+  only, docs/ground-memory.md) and wets
   none, throws no spray, does not put a burning hull out and is no frog's
   refuge; like water it takes no heat, fire or scorch. The ground pass
   draws it solid.
@@ -172,8 +173,12 @@ island, and they cluster there more.
    the water. Water is the cell mask's word and the pixel's own blue
    together, so a shore's grass in a water cell is ground. Everything else
    on the floor - tread marks, scorches, rubble, oil, portals
-   (`Game::paint_floor_marks`) - lies over it, so a tank leaves dark
-   tracks in the snow, and the walls and hulls drawn later stay dry.
+   (`Game::paint_floor_marks`) - lies over it, so a tank leaves its
+   tracks in the snow, and the walls and hulls drawn later stay dry. The
+   marks answer the sky themselves (docs/ground-memory.md): rain darkens
+   them as this pass darkens the ground and pools water in the ruts; under
+   snow they are compacted blue-grey with the ground in the ruts, and the
+   falling snow fills them back in; a sandstorm's gust scours them.
 3. **The field under the light**: the tiles, their glows and everything
    standing (`paint_field_lit`).
 4. **The light pass** (`static/weather_light.fs`): that field multiplied

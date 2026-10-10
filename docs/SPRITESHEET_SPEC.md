@@ -96,7 +96,7 @@ still there at 75 and a tank reads as the same tank getting worse
   silhouette chipped.
 
 The tracks keep turning at every live tier (a hurt tank still drives), and
-`lay_tracks` keeps pressing marks until the hull is a wreck. On the light
+`press_treads` keeps pressing marks until the hull is a wreck. On the light
 layer a tier-2 or tier-3 hull cycles its frames on the clock rather than on
 distance, so its sparks and warning lamp blink on a tank standing still.
 
@@ -231,5 +231,6 @@ hashes (`thumbnail::tests`) consciously.
 (`kit.TANK_EXTRA`); a player block may add its own team's ramp and lamp
 colour and nothing of another team's.
 
-**Track marks** are not in these sheets: tread marks come from
-`static/tracks.png` (`track.rs`).
+**Tread marks** are not sprites: the ground bakes them in 2 px blocks under
+each chassis's runs (`wear.rs`, docs/ground-memory.md), which take their
+places from this art's `runs`/`tread` calls (`TREAD_BY_ROW` in lib.rs).

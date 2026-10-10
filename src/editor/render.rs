@@ -196,7 +196,7 @@ fn hold<'a>(
 
 /// The builder's `Sheet` lookup, for the `ground::draw` it shares with the
 /// game. It holds the sheets a map can show at rest; a sheet only a live
-/// round draws from (damage, tracks, blasts, the frog's other clips) is a
+/// round draws from (damage, blasts, the frog's other clips) is a
 /// programming error here.
 impl Sheets for EditorTextures<'_> {
     fn blocks_texture(&self, stamp: u64) -> Option<&Texture2D> {
@@ -223,7 +223,6 @@ impl Sheets for EditorTextures<'_> {
             Sheet::TankGlow
             | Sheet::TankModules
             | Sheet::TankModulesGlow
-            | Sheet::Tracks
             | Sheet::BarrelExplosion
             | Sheet::Frog { .. } => {
                 panic!("the builder has no {sheet:?} sheet")

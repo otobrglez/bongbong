@@ -662,7 +662,7 @@ fn the_well_on_the_end_screen_pulls_nothing_and_its_drums_hurt_nobody() {
 // --- the drain ------------------------------------------------------------
 
 #[test]
-fn tread_marks_swirl_in() {
+fn tread_marks_are_scrubbed_away() {
     let mut game = round_with("", Mission::Destroy, None);
     // Lay a trail by driving east past the middle, then stand a well on it.
     game.place_tank(seat(&game), MID - Vec2::new(150.0, 0.0), Some(90.0)).expect("placed");
@@ -670,14 +670,15 @@ fn tread_marks_swirl_in() {
         step_with(&mut game, Intent { move_dir: Some(Dir::Right), ..Intent::default() });
     }
     game.place_tank(seat(&game), Position::new(96.0, 96.0), Some(90.0)).expect("placed");
-    let near: Vec<Position> = game.tracks.iter().map(|t| t.position).filter(|p| p.distance_to(MID) < 100.0).collect();
-    assert!(!near.is_empty(), "a trail to drain");
-    let d0: f32 = near.iter().map(|p| p.distance_to(MID)).sum::<f32>() / near.len() as f32;
+    let near = |g: &Game, reach: f32| -> f32 { g.wear().blocks().filter(|(p, _)| p.distance_to(MID) < reach).map(|(_, b)| b.passes()).sum() };
+    let before = near(&game, 100.0);
+    assert!(before > 0.0, "a trail to scrub");
     pulling_well(&mut game, MID);
     idle(&mut game, 60);
-    let after: Vec<Position> = game.tracks.iter().map(|t| t.position).filter(|p| p.distance_to(MID) < 100.0).collect();
-    let d1: f32 = after.iter().map(|p| p.distance_to(MID)).sum::<f32>() / after.len().max(1) as f32;
-    assert!(d1 < d0, "drawn in: {d1} from {d0}");
+    let after = near(&game, 100.0);
+    assert!(after < before, "scrubbed: {after} from {before}");
+    let swirled = game.wear().blocks().filter(|(p, _)| p.distance_to(MID) < 60.0).all(|(_, b)| b.kind() == crate::wear::Kind::Smear);
+    assert!(swirled, "the grousers are swirled into a smear");
 }
 
 // --- determinism ----------------------------------------------------------

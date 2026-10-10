@@ -239,7 +239,8 @@ things when forgotten; this is the detail. Update it with the tool.
   the crate, four glint frames, damaged, charred) and `pickup_glyphs.png` (the symbols on their
   own), raw PNG bytes, no Pillow (docs/CRATES_SPEC.md); the wood is on the palette, the symbols'
   inks (`PICKUP_INK`) deliberately loud and admitted on those two sheets alone. `static/tracks.png`
-  is static. A tank's wear is the sheet's damage tiers; its smoke and fire are drawn
+  is static and only the `ntk` demos draw it; the game's tread marks are baked at run time
+  (`wear.rs`, docs/ground-memory.md). A tank's wear is the sheet's damage tiers; its smoke and fire are drawn
   (`damage_stage.rs`).
 - **The ground layer is the one third-party, hand-drawn exception**:
   `static/punyworld/punyworld-overworld-tileset.png` and `-desert.png` (see its `SOURCE.md`) are

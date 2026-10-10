@@ -74,8 +74,6 @@ pub enum Sheet {
     /// The tall-grass sheet of a theme (`Theme::grass_texture_path`,
     /// grass.rs), one file per theme like `Ground`.
     Grass(Theme),
-    /// static/tracks.png - one tread mark.
-    Tracks,
     /// static/barrel_explosion.png - the blast frames and scorches (blast.rs).
     BarrelExplosion,
     /// static/portal_sheet.png - the turning spiral (portal.rs).
@@ -91,8 +89,8 @@ pub enum Sheet {
     Frog { variant: u8, clip: FrogAnim },
 }
 
-/// The fifteen sheets that are one file each regardless of theme.
-pub const SINGLE_SHEETS: [Sheet; 15] = [
+/// The fourteen sheets that are one file each regardless of theme.
+pub const SINGLE_SHEETS: [Sheet; 14] = [
     Sheet::Tanks,
     Sheet::TankGlow,
     Sheet::TankModules,
@@ -103,7 +101,6 @@ pub const SINGLE_SHEETS: [Sheet; 15] = [
     Sheet::Bushes,
     Sheet::Target,
     Sheet::Towers,
-    Sheet::Tracks,
     Sheet::BarrelExplosion,
     Sheet::Portal,
     Sheet::Crates,
@@ -130,7 +127,6 @@ impl Sheet {
             Sheet::Target => "static/target_sheet.png".into(),
             Sheet::Towers => "static/towers_sheet.png".into(),
             Sheet::Grass(theme) => theme.grass_texture_path().into(),
-            Sheet::Tracks => "static/tracks.png".into(),
             Sheet::BarrelExplosion => "static/barrel_explosion.png".into(),
             Sheet::Portal => "static/portal_sheet.png".into(),
             Sheet::Crates => "static/crates_sheet.png".into(),
@@ -286,6 +282,15 @@ impl BlockImage {
         self.patches[first..].iter().copied().reduce(BlockPatch::union).map(|p| BlockPatch { from: held, ..p })
     }
 
+    /// The patches a copy taken at stamp `held` lacks, one by one: what
+    /// it uploads instead of `changed_since`'s one rectangle when they lie
+    /// far apart (a tile atlas's scattered slots), so it sends the texels
+    /// that changed and not every one between them. `None` as there.
+    pub fn patches_since(&self, held: u64) -> Option<&[BlockPatch]> {
+        let first = self.patches.iter().position(|p| p.from == held)?;
+        Some(&self.patches[first..])
+    }
+
     /// Note the texels `x..x + width` by `y..y + height` baked again in
     /// place under the new stamp `stamp`.
     pub fn patched(&mut self, stamp: u64, x: usize, y: usize, width: usize, height: usize) {
@@ -385,6 +390,19 @@ impl TileAtlas {
             }
         }
         self.mark(x, y, w, h);
+    }
+
+    /// Make room for `slots` tiles without growing again: the image is
+    /// sized to a power of two of rows, so a layer that keeps adding cells
+    /// (the ground's wear) resizes its GPU copy a handful of times in a
+    /// round rather than once a row.
+    pub fn reserve(&mut self, slots: usize) {
+        let rows = slots.div_ceil(ATLAS_COLUMNS).max(1).next_power_of_two();
+        if rows * TILE_BLOCKS > self.image.height {
+            self.image.height = rows * TILE_BLOCKS;
+            self.image.texels.resize(self.image.width * self.image.height, Color::new(0, 0, 0, 0));
+            self.mark(0, 0, self.image.width, self.image.height);
+        }
     }
 
     /// Drop cell `cell`'s tile.
@@ -821,14 +839,14 @@ mod tests {
 
     fn canvas_with_probe() -> CpuCanvas {
         let mut c = CpuCanvas::blank(16, 16);
-        c.insert_sheet(Sheet::Tracks, probe_sheet());
+        c.insert_sheet(Sheet::Portal, probe_sheet());
         c
     }
 
     #[test]
     fn plain_blit_lands_texels_where_the_gpu_would() {
         let mut c = canvas_with_probe();
-        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(4.0, 4.0, 4.0, 4.0), Vec2::zero(), 0.0, Color::WHITE);
+        c.blit(Sheet::Portal, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(4.0, 4.0, 4.0, 4.0), Vec2::zero(), 0.0, Color::WHITE);
         assert_eq!(c.px(4, 4), rgba(RED));
         assert_eq!(c.px(7, 4), rgba(GREEN));
         assert_eq!(c.px(4, 7), rgba(BLUE));
@@ -839,7 +857,7 @@ mod tests {
     #[test]
     fn scaled_blit_is_nearest_neighbour() {
         let mut c = canvas_with_probe();
-        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(0.0, 0.0, 8.0, 8.0), Vec2::zero(), 0.0, Color::WHITE);
+        c.blit(Sheet::Portal, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(0.0, 0.0, 8.0, 8.0), Vec2::zero(), 0.0, Color::WHITE);
         // Every texel becomes a crisp 2 x 2 block, no blending between them.
         for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
             assert_eq!(c.px(x, y), rgba(RED));
@@ -852,7 +870,7 @@ mod tests {
     #[test]
     fn negative_source_width_mirrors() {
         let mut c = canvas_with_probe();
-        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, -4.0, 4.0), Rectangle::new(0.0, 0.0, 4.0, 4.0), Vec2::zero(), 0.0, Color::WHITE);
+        c.blit(Sheet::Portal, Rectangle::new(0.0, 0.0, -4.0, 4.0), Rectangle::new(0.0, 0.0, 4.0, 4.0), Vec2::zero(), 0.0, Color::WHITE);
         assert_eq!(c.px(3, 0), rgba(RED), "red texel now on the right");
         assert_eq!(c.px(0, 0), rgba(GREEN));
         assert_eq!(c.px(3, 3), rgba(BLUE));
@@ -863,7 +881,7 @@ mod tests {
         let mut c = canvas_with_probe();
         // Rotating 90 degrees clockwise about the sprite's centre: the
         // top-left texel goes to the top-right.
-        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(2.0, 2.0, 4.0, 4.0), Vec2::new(2.0, 2.0), 90.0, Color::WHITE);
+        c.blit(Sheet::Portal, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(2.0, 2.0, 4.0, 4.0), Vec2::new(2.0, 2.0), 90.0, Color::WHITE);
         assert_eq!(c.px(3, 0), rgba(RED));
         assert_eq!(c.px(3, 3), rgba(GREEN));
         assert_eq!(c.px(0, 0), rgba(BLUE));
@@ -872,7 +890,7 @@ mod tests {
     #[test]
     fn origin_shifts_the_quad() {
         let mut c = canvas_with_probe();
-        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(8.0, 8.0, 4.0, 4.0), Vec2::new(2.0, 2.0), 0.0, Color::WHITE);
+        c.blit(Sheet::Portal, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(8.0, 8.0, 4.0, 4.0), Vec2::new(2.0, 2.0), 0.0, Color::WHITE);
         assert_eq!(c.px(6, 6), rgba(RED));
         assert_eq!(c.px(9, 6), rgba(GREEN));
     }
@@ -886,7 +904,7 @@ mod tests {
         assert!((126..=129).contains(&p.r) && p.r == p.g && p.g == p.b, "{p:?}");
         assert_eq!(p.a, 255);
         // A tinted opaque texel is multiplied.
-        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(8.0, 0.0, 4.0, 4.0), Vec2::zero(), 0.0, Color::new(128, 255, 255, 255));
+        c.blit(Sheet::Portal, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(8.0, 0.0, 4.0, 4.0), Vec2::zero(), 0.0, Color::new(128, 255, 255, 255));
         assert_eq!(c.px(8, 0), rgba(Color::new(128, 0, 0, 255)));
     }
 
@@ -907,7 +925,7 @@ mod tests {
         c.gradient_v(-2, -2, 12, 12, RED, BLUE);
         c.gradient_h(0, 0, 0, 0, RED, BLUE);
         let mut d = canvas_with_probe();
-        d.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(-2.0, -2.0, 40.0, 40.0), Vec2::zero(), 33.0, Color::WHITE);
+        d.blit(Sheet::Portal, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(-2.0, -2.0, 40.0, 40.0), Vec2::zero(), 33.0, Color::WHITE);
         d.blit(Sheet::Grass(Theme::Grass), Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(0.0, 0.0, 4.0, 4.0), Vec2::zero(), 0.0, Color::WHITE);
     }
 

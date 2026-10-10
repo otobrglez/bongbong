@@ -41,7 +41,7 @@ pub const TANK_FRAME_SIZE: f32 = 32.0;
 pub const TANK_ROWS_PER_TEAM: i32 = 12;
 pub const TANK_TEAM_BLOCKS: i32 = 5;
 /// Hull track frames, always played forward (`Tank::hull_frame`,
-/// `simulation::lay_tracks`): 4-direction snap-to-facing movement has no
+/// `simulation::press_treads`): 4-direction snap-to-facing movement has no
 /// continuous heading for a reversal to be relative to.
 pub const TANK_TRACK_FRAMES: i32 = 4;
 /// Damage at which the hull and turret step up a tier - scuffed, damaged,
@@ -78,14 +78,9 @@ pub const TANK_MODULE_GAUSS_COL: i32 = 33;
 pub const TANK_MODULE_FPV_COL: i32 = 40;
 pub const TANK_MODULE_ROD_COL: i32 = 44;
 pub const TANK_MODULE_WELL_COL: i32 = 49;
-// World px of travel between hull tread-animation frame advances (see
-// `simulation::lay_tracks`, which already tracks per-frame distance moved for
-// the separate ground-decal system in track.rs - this reuses that same
-// distance, just accumulated into its own field so the two animations - tank
-// tread graphics vs. ground tread marks - stay independently tunable).
 // The tank hull only fills part of its 32x32 tile (the rest is transparent
 // padding). This scalar fraction still backs the AI's avoidance-radius math,
-// the ground-decal rear-edge offset, and spawn-clearance checks (see
+// where a wet hull's drops and mud fall behind it, and spawn-clearance checks (see
 // `Tank::hull_size`) - all of those only need an approximate footprint, so
 // they're left alone. The tank's actual physics collider is sized more
 // precisely per row instead - see TANK_HULL_BBOX_BY_ROW.
@@ -343,10 +338,40 @@ pub const MAX_DAMAGE: f32 = 100.0;
 // the same thing to the author and to the router.
 pub const PATHFIND_CELL_SIZE: f32 = OBSTACLE_GRID_SIZE; // px per grid cell
 
-// Track marks: tracks.png is a single 32x32 tile of two tread ladders (matching
-// the tank sprite orientation). A tank drops a mark every TRACK_SPACING pixels it
-// travels, and each mark fades out over TRACK_LIFETIME seconds.
-pub const TRACK_TEXTURE_SIZE: f32 = 32.0;
+/// One chassis's track runs as the shipped art draws them (the `runs` and
+/// `tread` calls in `tools/spritegen/tankdesign/lines/vanguard.py`): what
+/// the ground layer presses into the field (`wear.rs`,
+/// docs/ground-memory.md). Tile px about the sprite's pivot, the hull
+/// facing up, so `Tank::scale` takes them to the field.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TreadProfile {
+    /// The left side's runs as `[x0, x1)`, outermost first; the right
+    /// side mirrors them (`[-x1, -x0)`).
+    pub runs: &'static [(i8, i8)],
+    /// The contact patch along the hull, `[front, rear)`, the front
+    /// negative.
+    pub patch: (i8, i8),
+    /// The art's link spacing in tile px: half of each period is a
+    /// grouser's bar.
+    pub period: u8,
+}
+
+/// Indexed by `Tank::row`. Every chassis rolls on two runs but the titan,
+/// which has an outer and an inner run a side.
+pub const TREAD_BY_ROW: [TreadProfile; 12] = [
+    TreadProfile { runs: &[(-6, -3)], patch: (-4, 9), period: 4 },             // scout
+    TreadProfile { runs: &[(-7, -4)], patch: (-9, 9), period: 4 },             // assault
+    TreadProfile { runs: &[(-8, -4)], patch: (-8, 9), period: 4 },             // breaker
+    TreadProfile { runs: &[(-7, -4)], patch: (-9, 9), period: 4 },             // longbow
+    TreadProfile { runs: &[(-7, -4)], patch: (-6, 7), period: 4 },             // flak
+    TreadProfile { runs: &[(-6, -3)], patch: (-5, 8), period: 4 },             // wraith
+    TreadProfile { runs: &[(-7, -4)], patch: (-8, 8), period: 4 },             // warden
+    TreadProfile { runs: &[(-7, -4)], patch: (-7, 10), period: 4 },            // ravager
+    TreadProfile { runs: &[(-7, -4)], patch: (-5, 6), period: 4 },             // glacier
+    TreadProfile { runs: &[(-7, -4)], patch: (-9, 9), period: 4 },             // obelisk
+    TreadProfile { runs: &[(-11, -9), (-8, -6)], patch: (-10, 10), period: 4 }, // titan
+    TreadProfile { runs: &[(-10, -6)], patch: (-11, 12), period: 4 },          // leviathan
+];
 
 // The default battlefield: 34 x 17 cells, the cross-play standard
 // (docs/fullscreen-resolution-research.md): the largest field a landscape
@@ -1065,9 +1090,9 @@ pub mod thumbnail;
 pub mod touch;
 pub mod training;
 pub mod tower;
-pub mod track;
 pub mod trig;
 pub mod tuning;
 pub mod view;
 pub mod volcano;
+pub mod wear;
 pub mod weather;

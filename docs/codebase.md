@@ -433,7 +433,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   cosmetic half on its own, for a `Game` nothing ever `update`s - a client replica
   (docs/online-coop-prd.md §4.5) runs it on every rendered frame between snapshots: `tick_effects`,
   the round clock, the mission and `WAVE N` banner timers, the hull eases with the tread marks their
-  displacement presses (`Tank::track_from`), grass, the tiles' burn flicker, the fires' fade, the
+  displacement presses (`Tank::track_from`, `press_treads`), the ground's wear (`tick_wear`: gusts,
+  silt), grass, the tiles' burn flicker, the fires' fade, the
   wrecks' fade, the drums in the air and the flame jets rebuilt from every `flame_held` hull
   (`derive_flame_jets`, reach capped at the first solid tile as `resolve_flames` caps it - the wire
   carries the flag, not the jet). Every step is a function the phase that owns it calls too, so
@@ -556,7 +557,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     its sweep meets or its range (`resolve_orbs`); the well is a `Zone` (`ZoneKind::Well`, forming
     then pulling, `until` the stage's end) that `well_phase` turns on the clock - lifting the drums
     in reach into `held_drums` at the pull's start, pulling frogs and crates (`Pickup::drift`),
-    burning held fuses, swirling tread marks and bowing grass (`drain_marks`, `lean_grass`, a
+    burning held fuses, scrubbing tread marks and bowing grass (`drain_marks`, `lean_grass`, a
     replica's too in `tick_presentation`) - and collapses (`collapse_well`: held drums off together
     where they circle, every hull flung by `knock_from`, the side opposing its owner hurt, frogs
     hopped out, grenades thrown out in a ring, what flies turned out, crates slid out). The pull
@@ -1069,7 +1070,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `WaterLayout::freeze` makes every water cell `Depth::Ice`, whose footing keeps the pace and loses
   grip, traction and brake) and costs `water_ford_path_cost` per step to the router (`Grid::weigh`,
   occupancy untouched); water takes no heat, no fire, no scorch, and puts afterburn out; the frog's
-  hop prefers a wet landing; tread marks stop in water and come out wet; `fx.rs` throws spray.
+  hop prefers a wet landing; tread marks stop in water, a wading hull stirs the ford's silt and its
+  tracks print wet for `wear_wet_carry_px` once out (docs/ground-memory.md); `fx.rs` throws spray
+  and foam.
   `dry_cell_near` moves a centre-fallback start out of a lake. `GroundGrid` keeps its `Layout`, seed
   and `Drifts`, so `repaint(&[(col, row, CellFloor)])` re-resolves only the tiles an edit can
   change, matching the walls it adds and removes in one pass, and lands where `build` would
@@ -1370,14 +1373,27 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   puts up), from the critical tier (`BURNS_AT`) or with afterburn on it a burning deck, and a wreck
   burning hard until the last fifth of `wreck_burn_seconds` (`fire`, `flames` - `pyro::tongues` plus
   their one light, which `render/game.rs` draws with the ground's fire glows).
-- `blast.rs`, `decal.rs`, `track.rs` — blast presentation state (`BlastFx::shaped` hashes the form,
+- `blast.rs`, `decal.rs` — blast presentation state (`BlastFx::shaped` hashes the form,
   mirror, turn, pace and size, the cause overrides; `fireball.rs` composes it), scorches (a blast's,
   and `Scorch::burn`, the scar a burnt-out ground fire leaves - drawn from `barrel_explosion.png`'s
   scorch row, the one row of it drawn), and in `render/blast.rs` the fuse, burning-cell and nozzle
   glows; decals are rubble on the walls sheet (rows 14-21, the props' rubble too, row 21 the tank's)
   seeded by `blast::seed_at` (a salted, avalanche-mixed position hash - positions are multiples of
-  32), thrown arcs derived from age so nothing integrates them, staged by `obstacle_died`; tread
-  marks (a wreck's marks are scorched and never fade).
+  32), thrown arcs derived from age so nothing integrates them, staged by `obstacle_died`.
+- `wear.rs` + `simulation/wear.rs` (docs/ground-memory.md) — the ground's memory of the round's tread
+  marks: `WearGrid`, a `BTreeMap` of worn map cells of 16 x 16 two-px `Block`s (passes in
+  sixteenths, a `Kind`, facing, berm, wet, when laid), capped at `wear_max_cells` (the cell pressed
+  longest ago goes). `press_treads` stamps a hull's contact patch at its drawn heading every step it
+  moved - from `sync_tanks_and_ram`, `rollin_phase` and a replica's `ease_hulls` - under its
+  chassis's runs (`TREAD_BY_ROW` in lib.rs, the art's own), grousers fixed to the ground, a pass
+  weighted by `wear_chassis_press` and the ground; pivots churn, slides smear, soft ground takes
+  berms, a ford wets the tracks and stirs silt, mud splats and drips land at odometer-hashed places.
+  No RNG (`roll_tread` keeps a spawn's four draws), nothing that plays reads it. `tick_wear`
+  scours under a sandstorm's gusts and drifts the silt; `drain_marks` is a well's scrub,
+  `char_marks` a wreck's and a drum's burn-in, `hold_worn_grass` a lane's half-crushed tufts. The
+  look is the bake's (`ground_colour`: ages, depths, rain's puddles, snow's refill, per-theme ramps)
+  into a `TileAtlas` of the cells in view (`refresh_pictures`, at most `wear_bakes_per_frame`),
+  drawn first in `paint_floor_marks`. `Game::driving()` hands `Fx::drive` every hull's `Tread`.
 - `crate_fx.rs` (docs/CRATES_SPEC.md) — the crates' shows, pure functions of age in the effects
   language: `drop` (the air drop a crate comes down in; drawn only - a crate can be taken the frame
   it appears), `glint_col` (the idle, hashed per crate) and `open` (`Opening::Taken` - planks fly,
@@ -1393,7 +1409,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   and wrecks smoke too). Every particle is whole 2 px blocks in ramp steps: light (sparks, embers) a
   hot block cooling down the fire ramp, a fast spark dragging a tail; air (smoke, dust, trail)
   shaded puffs drifting down-wind (`pyro::smoke_lean`); matter (chips, spray) small squares;
-  non-additive kinds then one additive block (a blend switch breaks the batch). `fx_max_particles`,
+  non-additive kinds then one additive block (a blend switch breaks the batch). `Fx::drive` throws
+  what every moving hull drives through, from `Game::driving()` (docs/ground-memory.md "Driving
+  effects"): dust and snow powder as `Kick` puffs, a ford's `Foam`, mud, rut water and silty spray
+  as spray, ice chips, exhaust - the `drive_*` knobs; `Kick` and `Foam` lie on the ground and draw in
+  the lit field (`render::fx::draw_ground`, called from `paint_field_lit`). `fx_max_particles`,
   `fx_density` (halved on embedded builds). It keeps the **crate openings** (`CrateOpen`, from
   `Event::PickupCollected` and `CrateBroken`, composed by `crate_fx::open` and drawn over the tanks)
   and the **hits** (`Impact`, `ImpactKind`): a shell, bullet or plasma bolt seen in its impact

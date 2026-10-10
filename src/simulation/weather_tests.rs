@@ -178,8 +178,8 @@ fn ice_slides_where_the_ground_would_stop_a_hull() {
     teleport_player(&mut game, cell_to_world(12, 11));
     drive(&mut game, Some(Dir::Right), 60);
     let on_ice = |p: &Position| p.x > cell_to_world(10, 11).x && p.x < cell_to_world(25, 11).x && (p.y - cell_to_world(12, 11).y).abs() < 20.0;
-    assert!(game.tracks.iter().any(|t| on_ice(&t.position)), "the ice takes the hull's marks");
-    assert!(game.tracks.iter().all(|t| !t.wet), "and none of them is wet");
+    assert!(game.wear().blocks().any(|(p, _)| on_ice(&p)), "the ice takes the hull's marks");
+    assert!(game.wear().blocks().all(|(_, b)| b.wet() == 0.0), "and none of them is wet");
     assert!(game.wading().is_empty(), "nothing sprays on the ice");
 }
 

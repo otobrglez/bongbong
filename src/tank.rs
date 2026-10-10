@@ -648,6 +648,34 @@ pub struct Windup {
     pub facing: Dir,
 }
 
+/// What a hull's runs are doing to the ground, as `simulation::press_treads`
+/// last pressed them (docs/ground-memory.md): what the particle layer
+/// throws dust, mud and spray by (`Game::driving`). Presentation only.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Tread {
+    /// What the runs are on.
+    pub surface: crate::wear::Surface,
+    /// Rolling, sliding or pivoting.
+    pub roll: crate::wear::Roll,
+    /// How fast it moved over the last press (px/s), and its velocity.
+    pub speed: f32,
+    pub velocity: Vec2,
+    /// Gaining speed: pulling away.
+    pub speeding_up: bool,
+    /// How wet its tracks are (0 to 1): full in a ford, drying by
+    /// distance (`wear_wet_carry_px`).
+    pub wet: f32,
+    /// The drawn heading it last pressed at - a change while slow is a
+    /// pivot - and `None` until its first press after a spawn or a jump,
+    /// so arriving facing some way is no turn.
+    pub heading: Option<f32>,
+    /// Px rolled this round: what its drops and mud splats are hashed by.
+    pub odometer: f32,
+    /// Px rolled toward the next drop and the next splat.
+    pub drip_due: f32,
+    pub splat_due: f32,
+}
+
 pub struct Tank {
     /// Which of the 12 tank archetypes in scifi_tanks_sheet.png this tank
     /// draws (see TANK_VARIANTS/TANK_SPRITE_ORDER in simulation.rs). The hull
@@ -732,7 +760,7 @@ pub struct Tank {
     /// camera angle.
     pub minigun_cycle_timer: f32,
     /// The hull's track frame (0..TANK_TRACK_FRAMES), advanced by distance
-    /// driven (`simulation::lay_tracks`) at every live damage tier - see
+    /// driven (`simulation::press_treads`) at every live damage tier - see
     /// `hull_col`.
     pub hull_frame: i32,
     /// The turret's recoil cell (0..TANK_TURRET_POSES): 0 at rest, 1 the
@@ -750,11 +778,8 @@ pub struct Tank {
     pub recoil_plasma: bool,
     /// Seconds the laser module shows its lens firing (`kick_laser`).
     pub laser_flash_timer: f32,
-    /// World px of travel accumulated toward the next `hull_frame` advance -
-    /// see `simulation::lay_tracks`. Deliberately separate from
-    /// `track_accum` below: that one paces the ground-decal tread marks in
-    /// track.rs, an unrelated system with its own spacing: reusing it here
-    /// would tie two independently-tuned animations together.
+    /// World px of travel accumulated toward the next `hull_frame` advance
+    /// (`tank_hull_track_frame_distance`) - see `simulation::press_treads`.
     pub hull_anim_accum: f32,
     /// Which of TANK_WRECK_COLS this tank uses once it becomes a wreck -
     /// `None` until then. Rolled once, the frame `is_wreck()` first becomes
@@ -940,10 +965,10 @@ pub struct Tank {
     /// which the probe counts seat hits on enemies outside the seat's
     /// sight box by.
     pub hit_by_seat: Option<u8>,
-    /// Seconds of wet tread marks left after wading (docs/water.md):
-    /// refreshed every frame the hull is in water, counted down by
-    /// `tick_timers`, read by `lay_tracks`.
-    pub wet_timer: f32,
+    /// What its runs are doing to the ground (docs/ground-memory.md):
+    /// pressed by `simulation::press_treads`, read by the particle layer
+    /// (`Game::driving`) and nothing that plays.
+    pub tread: Tread,
     /// Seconds left of a coat of ooze from a bio slush tower
     /// (docs/defence-towers-prd.md section 6): while positive the tank
     /// corrodes at `bio_slime_dps` and drives at `bio_slime_speed_factor`
@@ -1032,34 +1057,17 @@ pub struct Tank {
     /// rounds, where wrecks stay for the whole round. The last second is
     /// the fade `alpha` reports.
     pub despawn_timer: Option<f32>,
-    /// Distance travelled (pixels) since the last track mark was dropped.
-    pub track_accum: f32,
     /// Where this hull stood at the last `Game::tick_presentation`, the
     /// `before` its tread marks are laid from on a client replica
     /// (docs/online-coop-prd.md section 4.5). `None` in a local round,
     /// whose marks come off the physics step instead
     /// (`Game::sync_tanks_and_ram`).
     pub track_from: Option<Position>,
-    /// Number of track marks this tank has laid this round - the phase input
-    /// to its track wobble (see `track_wobble_phase`); incremented once per
-    /// mark in `Game::lay_tracks`.
-    pub track_mark_count: u32,
-    /// This tank's track-wobble amplitude in degrees, rolled once at spawn
-    /// (see TRACK_WOBBLE_AMP_MIN_DEG/MAX_DEG) and fixed for the round -
-    /// how far each mark's rotation swings side to side from the tank's
-    /// actual heading.
-    pub track_wobble_amp: f32,
-    /// This tank's track-wobble angular frequency, in radians per mark
-    /// (derived from a randomized wavelength at spawn - see
-    /// TRACK_WOBBLE_WAVELENGTH_MIN/MAX) - how tight the wobble's cycles are.
-    pub track_wobble_freq: f32,
-    /// This tank's track-wobble phase offset in radians, rolled once at
-    /// spawn, so tanks that happen to share a similar amplitude/frequency
-    /// don't wobble in lockstep.
-    pub track_wobble_phase: f32,
-    /// Fixed per-tank multiplier on track mark scale (see
-    /// TRACK_SCALE_JITTER), rolled once at spawn.
-    pub track_scale_jitter: f32,
+    /// Where its grouser ladder starts (tile px) and how hard it presses
+    /// against its chassis's `wear_chassis_press`, rolled at spawn
+    /// (`simulation::roll_tread`): no two hulls of a chassis print alike.
+    pub tread_phase: f32,
+    pub tread_press: f32,
     /// Commanded velocity this frame (pixels per second): the movement
     /// direction times speed, or zero when not moving. Set by `control` and
     /// read by the AI's predictive collision avoidance, and by
@@ -1113,7 +1121,7 @@ impl Default for Tank {
             last_hit_by: None,
             hit_by_seat: None,
             slime_timer: 0.0,
-            wet_timer: 0.0,
+            tread: Tread::default(),
             laser_variant: LaserVariant::Red,
             minigun_ammo: 0,
             plasma_ammo: 0,
@@ -1162,13 +1170,9 @@ impl Default for Tank {
             hit_flash_timer: 0.0,
             wreck_timer: 0.0,
             despawn_timer: None,
-            track_accum: 0.0,
             track_from: None,
-            track_mark_count: 0,
-            track_wobble_amp: 0.0,
-            track_wobble_freq: 0.0,
-            track_wobble_phase: 0.0,
-            track_scale_jitter: 1.0,
+            tread_phase: 0.0,
+            tread_press: 1.0,
             velocity: Vec2::new(0.0, 0.0),
             body: None,
 

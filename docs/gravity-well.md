@@ -18,7 +18,7 @@ reaches it is swallowed; grenades roll in and orbit on the ring; drums are
 lifted out of their cells and circle the core; crates and the frog slide in.
 Then the well collapses: everything it holds is flung outward, the other
 side takes a hit, and the drums it gathered go off together. The field
-looks like it is going down a drain - tread marks swirl into it and the
+looks like it is going down a drain - tread marks are scrubbed into a swirl and the
 grass leans in. Counter: drive across the pull, not away from it.
 
 The sonic hammer's doc (docs/sonic-hammer.md §3), the EMP's
@@ -264,10 +264,11 @@ moves it). It bites as ever. `Frog::pulled` is the flag.
 **Fish** in a lake the pull reaches swim to the deep cell nearest the
 core while it pulls (an attractor among `fish.rs`'s scares; cosmetic).
 
-**The "at 11"** (built, §12 decision 21): **tread marks** within `R` creep
-toward the core at `well_mark_speed * s(d)` (30 px/s) and turn about it at
-`well_mark_twist * s(d)` (1.2 rad/s) clockwise, so the marks round a well
-are left as a swirl; a mark that reaches the core is gone. **Grass tufts**
+**The "at 11"** (built, §12 decision 21): **tread marks** within `R` are
+scrubbed off the ground (docs/ground-memory.md): they lose their grousers to
+a swirled smear and fade at `wear_well_scrub * s(d)` (1.2 a second at the
+strongest point), so a well that pulls long enough leaves a clean disc where
+the field was churned. **Grass tufts**
 within `R` lean toward the core's side by `well_grass_lean_px * s(d)` and
 are pressed half flat, and whip the other way at the collapse. Both are
 cosmetic steps (`Game::drain_marks`, `Game::lean_grass`) run by the well's
@@ -368,7 +369,7 @@ them out with whatever flies in its reach.
 | File | What |
 |---|---|
 | `src/well.rs` (new) | The weapon's headless half. `Orb` (the shot: id, owner, position, prev, velocity, rotation, state, timer, flown, done - a `Projectile`), `OrbState` (`Launch`, `Flying`; `col`/`from_col`), `WellZone` (stage, the anchor's `AnchorBy`, the shooter's seat, `emp_collapse`), `WellStage` (`Forming`, `Pulling`), `AnchorBy`; **the field** (§3.3): `strength(d)`, `WellSource`, `WellField` (`at`, `pull`, `hull_pull`, `shot_accel`, `core_hit`), `bend(velocity, accel, dt)`, `HullPull` and its axis split; `HeldDrum` and `held_at`, `GrenadeOrbit` and `orbit_at`, `frog_fling_target`, `holds_broadside`, `escape_dir`, `curved_streak`; the composers `compose_orb`, `compose_snap`, `compose_well`, `compose_swirl`, `compose_collapse`, `compose_swallow`, `compose_held_drum_glow` (pure, `pyro::Shape`s); `module_cell` |
-| `src/simulation/well.rs` (new) | The world half. `fire_well` (the dispatch arm's launch), `take_anchor_press` (the press while an orb flies), `place_orbs`, `anchor_orb`, `advance_orbs`, `resolve_orbs` (contact, range, swallowed), `well_phase(f, live)` (stages, the drums' lift, the frogs and the crates, held fuses, the marks and the grass, every collapse), `collapse_well`, `pull_air` (missiles and drones), `chain_held_drums`, `fizzle_orb`, `well_anchor_show`, `well_collapse_show`, `swallow_show`, `show_well_anchor` and `flash_seat_well` (the cosmetic halves, which a replica's events and a client's own press call too), `drain_marks`, `lean_grass`, `present_wells`, `well_senses` and `pull_senses` (§4), `seat_orb`, `debug_well` |
+| `src/simulation/well.rs` (new) | The world half. `fire_well` (the dispatch arm's launch), `take_anchor_press` (the press while an orb flies), `place_orbs`, `anchor_orb`, `advance_orbs`, `resolve_orbs` (contact, range, swallowed), `well_phase(f, live)` (stages, the drums' lift, the frogs and the crates, held fuses, the marks and the grass, every collapse), `collapse_well`, `pull_air` (missiles and drones), `chain_held_drums`, `fizzle_orb`, `well_anchor_show`, `well_collapse_show`, `swallow_show`, `show_well_anchor` and `flash_seat_well` (the cosmetic halves, which a replica's events and a client's own press call too), `lean_grass`, `present_wells`, `well_senses` and `pull_senses` (§4), `seat_orb`, `debug_well` |
 | `src/simulation/well_tests.rs` (new) | The scenario tests (§10) |
 | `src/simulation/weapons.rs` | The `ActiveWeapon::GravityWell` dispatch arm; `Projectile::bend` (a default for every shot kind: turn the velocity, keep the speed, set the rotation) and `Projectile::swallowed`; `advance_projectiles` taking the frame's field |
 | `src/simulation/mod.rs` | `Frame::{wells, pending_orbs}`; `Game::{held_drums, anchor_grace}`; `well_field` built after `tick_timers`; `well_phase` after `resolve_zones` (the rod's), before `step_world`, and `well_phase(f, false)` on the end screen; `resolve_orbs` after `shell_vs_shell`; `Footing::well` and the axis split in `drive_tank_with`, the skid branch in the whole current; `Footing::pulled` in `drive_player`, the enemy apply pass and `predict_seat_with`; the anchor press before the cooldown gate in `drive_player` and `enemy_trigger`; `resolve_projectiles`' swallow; `accept_seat_pose`'s well drift; `tick_presentation` (the wells' stages, held drums, marks, grass); `Event::{WellAnchored, WellCollapsed, Swallowed, OrbFizzled}`, `HitCause::Well`; the swap's table entry |
@@ -386,7 +387,7 @@ them out with whatever flies in its reach.
 | `src/tank.rs` | `wells`, `orb`, `well_flash`; `ActiveWeapon::GravityWell` (`name`, `full_load`, `tell_seconds` none, `trigger` `Press`), `SPECIAL_WEAPONS`; `kick_well`, `anchor_press`; `weapon_ammo`/`take_weapon`/`empty_stock`/`wants_pickup`; the module's cells in `module_cols` |
 | `src/pickup.rs` | `PickupKind::GravityWell` (`gravity_well`, row 18, its ink, spills); `Pickup::{drift, slide, at}` |
 | `src/frog.rs` | `Frog::pulled`, the gate in `can_hop` |
-| `src/grass.rs`, `src/track.rs` | The lean into the drain (`GrassTuft::drain`), a mark's swirl (`Track::drain`) |
+| `src/grass.rs`, `src/wear.rs` + `src/simulation/wear.rs` | The lean into the drain (`GrassTuft::drain`), the marks' scrub (`WearGrid::scrub`, `Game::drain_marks`) |
 | `src/fish.rs` | The attractor (a well's core among the scares, reversed) |
 | `src/ai.rs` | `SpecialSense::Well(WellSense)`, `WellPlan`, `well_rule`, `SpecialUse::{Orb, Anchor}`, `generic_fire(GravityWell)`; `PullSense`, the `pull` tier, `act_pull`, `Ai::{well_plan, pull_escape, bracing}`; `special_rule` and the `air` tier yielding inside a pull; `Brain::seek` and `nearest_pickup` leaving a crate inside a pull alone; `SEEK_SPECIALS` gains the well; `AiSnapshot::{well, pull}` |
 | `src/indicators.rs` | `ArrowKind::Well { left }`'s arm (`Scene::wells`) |
@@ -1036,8 +1037,8 @@ rim - is drawn in the glowing pass, unlit, so it reads at night and in fog
   (pinned, flailing), a missile or a drone dragged. Nothing is drawn moved
   that is not.
 - **The drain** (the "at 11"): tread marks and tufts drawn as ever, where
-  `drain_marks` and `lean_grass` left them - the marks swirled toward the
-  core, the tufts bowed into it; **particles** within a pulling well
+  `drain_marks` and `lean_grass` left them - the marks scrubbed to a swirled
+  smear, the tufts bowed into it; **particles** within a pulling well
   (`fx.rs`) take `WELL_FX_PULL` (90 px/s) times the field's pull and as
   much again clockwise round the core, so smoke off a burning hull, dust
   and sparks spiral in, and one that reaches the core is spent.
@@ -1188,8 +1189,7 @@ enemies' group:
 | `well_crate_friction` | 600 | 1..=5000 | How hard a sliding crate brakes (px/s²). |
 | `well_fling_frog_cells: i32` | 3 | 1..=8 | How far it hops a frog out from the centre, falling off with distance, at least one. |
 | `well_fish_throw_max: i32` | 6 | 0..=32 | Fish in its reach thrown onto the bank at the collapse, nearest first. |
-| `well_mark_speed` | 30 | 0..=400 | Tread marks in its reach creep toward the core at this at the strongest point (px/s; cosmetic). |
-| `well_mark_twist` | 1.2 | 0..=10 | And turn about it at this (rad/s; cosmetic). |
+| `wear_well_scrub` | 1.2 | 0..=20 | Tread marks in its reach fade at this rate at the strongest point (a second; cosmetic, in the `wear` group). |
 | `well_grass_lean_px` | 6 | 0..=16 | Tall grass in its reach leans into it by this at the strongest point (cosmetic). |
 | `well_particles: i32` | 48 | 0..=200 | Blocks in its swirl. |
 | `well_snap_shock` | 0.35 | 0..=2 | The inward ripple at the anchor, against a tank dying's. |
@@ -1500,7 +1500,7 @@ orb):
   `an_emp_collapses_an_anchored_well_and_fizzles_an_orb` (`early: true`),
   `two_wells_pull_together_and_each_keeps_what_it_captured`,
   `the_well_on_the_end_screen_pulls_nothing_and_its_drums_hurt_nobody`.
-- The drain: `tread_marks_swirl_in_and_grass_leans_in` (deterministic, on
+- The drain: `tread_marks_are_scrubbed_away` and the grass's lean (deterministic, on
   the room and through `tick_presentation` alike).
 - Determinism: `the_well_draws_no_rng` (the RNG's state after a well that
   pulls hulls, bends shots and collapses, with no drum, frog or grenade:

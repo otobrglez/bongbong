@@ -1457,11 +1457,6 @@ tunables! {
         /// Fish within a well's reach thrown onto the bank at its
         /// collapse, nearest first.
         well_fish_throw_max: i32 = 6 in 0 ..= 32;
-        /// Tread marks within a well's reach creep toward its core at this
-        /// at the strongest point (px/s; cosmetic).
-        well_mark_speed: f32 = 30.0 in 0.0 ..= 400.0;
-        /// And turn about it at this (rad/s; cosmetic).
-        well_mark_twist: f32 = 1.2 in 0.0 ..= 10.0;
         /// Tall grass within a well's reach leans into it by this at the
         /// strongest point (px at the tip; cosmetic).
         well_grass_lean_px: f32 = 6.0 in 0.0 ..= 16.0;
@@ -2693,11 +2688,6 @@ tunables! {
         mushroom_seconds: f32 = 2.8 in 0.5 ..= 8.0;
         mushroom_height_px: f32 = 84.0 in 16.0 ..= 240.0;
         mushroom_cap_px: f32 = 30.0 in 8.0 ..= 96.0;
-        /// A dying tank burns its last tread marks into the ground: this
-        /// many of them stop fading and darken by this multiple, so the
-        /// kill site stays readable after the wreck is cleared.
-        wreck_track_marks: i32 = 10 in 0 ..= 64;
-        wreck_track_darken: f32 = 1.8 in 1.0 ..= 4.0;
 
         // --- the short-lived particle layer (fx.rs) ---
         /// Global multiplier on every particle count. `main.rs` starts the
@@ -2792,13 +2782,6 @@ tunables! {
         /// zero for every single-barrel row. Positive is the right-hand
         /// barrel; a twin chassis fires one independent shot per barrel.
         tank_barrel_lateral_offset: [f32; 12] = [0.0, 3.0, 0.0, 0.0, 3.0, 0.0, 0.0, 3.0, 0.0, 3.0, 5.0, 0.0] in 0.0 ..= 16.0 labels TANK_NAMES;
-        /// Per-chassis tread-mark size multiplier on `track_scale_fraction`
-        /// (a titan presses a visibly bigger mark than a scout), from the
-        /// sprite spec's intensity-by-chassis table.
-        track_weight_scale: [f32; 12] = [0.75, 1.00, 1.20, 1.10, 0.85, 0.75, 1.00, 1.20, 0.85, 1.10, 1.45, 1.35] in 0.0 ..= 3.0 labels TANK_NAMES;
-        /// Per-chassis tread-mark opacity multiplier on `track_max_opacity`
-        /// - a heavier chassis presses a darker mark, not just a bigger one.
-        track_weight_opacity: [f32; 12] = [0.70, 1.00, 1.20, 1.10, 0.82, 0.70, 1.00, 1.20, 0.82, 1.10, 1.50, 1.35] in 0.0 ..= 3.0 labels TANK_NAMES;
     }
 
     group view {
@@ -3314,17 +3297,11 @@ tunables! {
         /// round a river whenever the detour is shorter than the extra
         /// this charges. Deep water is blocked outright.
         water_ford_path_cost: i32 = 3 in 1 ..= 20 @ Restart;
-        /// Seconds a hull leaves wet tread marks after wading out. The
-        /// marks are darker (`water_wet_track_darken` times the dry
-        /// opacity) and fade over this same time.
-        water_wet_track_seconds: f32 = 2.5 in 0.0 ..= 20.0;
-        /// How much darker a wet tread mark is than a dry one.
-        water_wet_track_darken: f32 = 1.7 in 1.0 ..= 3.0;
         /// Droplets a wading hull throws per second at full speed (fx.rs,
         /// scaled by `fx_density`); zero turns the spray off.
         water_spray_rate: f32 = 45.0 in 0.0 ..= 300.0;
         /// World px of travel between hull tread-animation frame advances
-        /// (independent of the ground-decal spacing below).
+        /// (the ground under the runs keeps its own count, `wear.rs`).
         tank_hull_track_frame_distance: f32 = 8.0 in 1.0 ..= 64.0;
         /// Seconds a turret holds each recoil cell after its main gun fires
         /// (`Tank::kick`): the barrel kicked back, then a twin's second
@@ -3386,29 +3363,6 @@ tunables! {
         /// Wall shadow distance (px) and opacity.
         obstacle_shadow_offset: f32 = 3.0 in 0.0 ..= 20.0;
         obstacle_shadow_opacity: f32 = 0.35 in 0.0 ..= 1.0;
-        /// Track marks: a tank drops a ground mark every this many px of
-        /// travel. Each mark stamps the raw travel heading, so the curve you
-        /// see is the tank's actual path - this tunes sampling density.
-        track_spacing: f32 = 5.0 in 1.0 ..= 64.0;
-        /// Seconds for a mark to fully fade away (trail length is roughly
-        /// speed times this).
-        track_lifetime: f32 = 0.8 in 0.05 ..= 10.0;
-        /// Mark size relative to the tank sprite - smaller and faint, a
-        /// subtle impression in the ground rather than a bold sprite.
-        track_scale_fraction: f32 = 0.55 in 0.1 ..= 2.0;
-        /// Opacity of a fresh mark, before fading.
-        track_max_opacity: f32 = 0.21 in 0.0 ..= 1.0;
-        /// Per-tank track "distortion": each tank rolls its own wobble
-        /// amplitude (degrees, in this range) ...
-        track_wobble_amp_min_deg: f32 = 1.5 in 0.0 ..= 45.0;
-        track_wobble_amp_max_deg: f32 = 6.0 in 0.0 ..= 45.0;
-        /// ... wavelength (px of travel per full side-to-side cycle) ...
-        track_wobble_wavelength_min: f32 = 40.0 in 5.0 ..= 500.0;
-        track_wobble_wavelength_max: f32 = 120.0 in 5.0 ..= 500.0;
-        /// ... and +/- scale jitter once at spawn, reused for every mark it
-        /// lays, so a trail reads as one coherent tank-specific tread
-        /// pattern instead of per-mark noise.
-        track_scale_jitter: f32 = 0.15 in 0.0 ..= 1.0;
         /// Enemy health ring: after a hit an enemy's ground ring shows its
         /// health for this many seconds ...
         health_ring_hit_seconds: f32 = 3.0 in 0.0 ..= 20.0;
@@ -3626,6 +3580,45 @@ tunables! {
         /// standard field heights of 544 px (about 95 px at the defaults),
         /// or the punch visibly clips.
         impact_flash_quad_radius: f32 = 130.0 in 10.0 ..= 500.0;
+
+        // --- what a moving hull throws (fx.rs, `Game::driving`) ---
+        /// Dust puffs a second a hull of chassis press 1 raises at its top
+        /// speed off dry dirt; the rate goes as speed to
+        /// `drive_dust_speed_power` (unpaved-road dust grows faster than
+        /// linearly with speed) and nearly doubles through a pivot or a
+        /// slide. 0 turns the dust off.
+        drive_dust_rate: f32 = 32.0 in 0.0 ..= 300.0;
+        drive_dust_speed_power: f32 = 1.3 in 0.5 ..= 3.0;
+        /// How much of that dust each ground gives: grass holds it down,
+        /// sand and desert dust give it all.
+        drive_dust_grass: f32 = 0.16 in 0.0 ..= 2.0;
+        drive_dust_road: f32 = 0.75 in 0.0 ..= 2.0;
+        drive_dust_sand: f32 = 1.0 in 0.0 ..= 2.0;
+        drive_dust_desert: f32 = 1.0 in 0.0 ..= 2.0;
+        /// How long a puff hangs (seconds) and how wide it grows (px at
+        /// chassis press 1).
+        drive_dust_seconds: f32 = 1.5 in 0.1 ..= 8.0;
+        drive_dust_px: f32 = 9.0 in 2.0 ..= 40.0;
+        /// Mud clods a second a hull throws off the top of its runs under
+        /// rain or off a ford, at top speed; a pivot throws them both ways
+        /// at this factor even standing still.
+        drive_mud_rate: f32 = 16.0 in 0.0 ..= 200.0;
+        drive_pivot_throw_factor: f32 = 1.4 in 0.0 ..= 5.0;
+        /// How far back a clod flies at most (px).
+        drive_mud_throw_px: f32 = 60.0 in 0.0 ..= 300.0;
+        /// Muddy water a second a hull throws up driving into a filled rut,
+        /// at top speed.
+        drive_puddle_rate: f32 = 50.0 in 0.0 ..= 300.0;
+        /// Snow powder puffs a second, at top speed and chassis press 1.
+        drive_powder_rate: f32 = 22.0 in 0.0 ..= 300.0;
+        /// White chips a second off ice while a hull slides or brakes on
+        /// it.
+        drive_ice_chip_rate: f32 = 26.0 in 0.0 ..= 300.0;
+        /// Foam a second a wading hull's bow wave and side wash leave on
+        /// the water, at top speed.
+        drive_foam_rate: f32 = 40.0 in 0.0 ..= 300.0;
+        /// Exhaust puffs a second while a hull pulls away.
+        drive_exhaust_rate: f32 = 16.0 in 0.0 ..= 200.0;
     }
 
     group shot_fx {
@@ -3691,6 +3684,92 @@ tunables! {
         /// and embers per second a flying shell sheds (`fx.rs`, scaled by
         /// `fx_density`).
         shot_trail_glint_rate: f32 = 26.0 in 0.0 ..= 200.0;
+    }
+
+    group wear {
+        /// The ground's memory of the round's tread marks (`wear.rs`,
+        /// docs/ground-memory.md): cosmetic, read by nothing that plays.
+        /// Passes each chassis presses into the ground per pass - a titan
+        /// ruts a lane in fewer passes than a scout.
+        wear_chassis_press: [f32; 12] = [0.75, 1.00, 1.20, 1.10, 0.85, 0.75, 1.00, 1.20, 0.85, 1.10, 1.45, 1.35] in 0.0 ..= 3.0 labels TANK_NAMES;
+        /// A block pressed again within this many seconds is the same
+        /// pass still rolling over it, not a new one.
+        wear_pass_gap_seconds: f32 = 0.5 in 0.05 ..= 5.0;
+        /// Passes past which a mark is a rut (darker, shaded, holds rain),
+        /// a deep rut, and a beaten path (grass worn to the tileset's dirt).
+        wear_rut_passes: f32 = 1.5 in 0.5 ..= 10.0;
+        wear_deep_passes: f32 = 3.0 in 1.0 ..= 12.0;
+        wear_path_passes: f32 = 5.0 in 1.0 ..= 15.0;
+        /// How a pass presses each ground, times the chassis's press: a
+        /// dirt road holds up, sand and desert dust give.
+        wear_press_road: f32 = 0.7 in 0.0 ..= 3.0;
+        wear_press_sand: f32 = 1.3 in 0.0 ..= 3.0;
+        wear_press_dust: f32 = 1.1 in 0.0 ..= 3.0;
+        /// Under rain the ground is mud (wet soil ruts about twice as deep
+        /// as dry), under snow it packs; a pivot churns harder than a roll.
+        wear_press_rain: f32 = 1.8 in 0.0 ..= 4.0;
+        wear_press_snow: f32 = 1.3 in 0.0 ..= 4.0;
+        wear_press_pivot: f32 = 1.5 in 0.0 ..= 4.0;
+        /// The ages a mark steps through: grousers crisp until the first,
+        /// dissolving into the pad by the second (sand slumps four times
+        /// as fast, a dirt road holds half as long again); a single pass
+        /// thins to half its blocks by the third and holds there for the
+        /// round. Ruts never thin.
+        wear_fresh_seconds: f32 = 10.0 in 0.0 ..= 120.0;
+        wear_settle_seconds: f32 = 40.0 in 1.0 ..= 300.0;
+        wear_fade_seconds: f32 = 120.0 in 2.0 ..= 900.0;
+        /// Sideways travel, as a fraction of a hull's travel, past which
+        /// its runs smear instead of rolling, once it moves faster than
+        /// `wear_slide_min_speed` (px/s).
+        wear_slip_fraction: f32 = 0.3 in 0.0 ..= 1.0;
+        wear_slide_min_speed: f32 = 25.0 in 0.0 ..= 200.0;
+        /// A hull turning slower than this fraction of its top speed is
+        /// pivoting: its runs churn the ground under them.
+        wear_pivot_speed_fraction: f32 = 0.35 in 0.0 ..= 1.0;
+        /// How far a hull carries a ford's water on its tracks (px of
+        /// travel), and how long a wet print takes to dry (seconds).
+        wear_wet_carry_px: f32 = 120.0 in 0.0 ..= 1000.0;
+        wear_wet_dry_seconds: f32 = 14.0 in 0.5 ..= 120.0;
+        /// Px of travel between the drops a wet hull lets fall between its
+        /// runs, and the mud splats one throws under rain or off a ford.
+        wear_drip_spacing_px: f32 = 6.0 in 1.0 ..= 64.0;
+        wear_splat_spacing_px: f32 = 24.0 in 2.0 ..= 256.0;
+        /// Seconds rain takes to wash a mud splat away.
+        wear_splat_seconds: f32 = 80.0 in 1.0 ..= 600.0;
+        /// Seconds rain takes to fill a fresh rut with water.
+        wear_puddle_fill_seconds: f32 = 18.0 in 0.5 ..= 120.0;
+        /// Passes of a mark falling snow fills back in a second.
+        wear_snow_refill_per_second: f32 = 0.012 in 0.0 ..= 1.0;
+        /// How fast a sandstorm's gust scours sand, desert dust and snow,
+        /// per second at its strongest (an exponential rate on the press).
+        wear_gust_scour: f32 = 2.0 in 0.0 ..= 20.0;
+        /// How fast a gravity well's pull scrubs the marks in its reach,
+        /// per second at its strongest.
+        wear_well_scrub: f32 = 1.2 in 0.0 ..= 20.0;
+        /// How far from a wreck or a drum's blast the marks burn in (px).
+        wear_char_radius_px: f32 = 32.0 in 0.0 ..= 200.0;
+        /// Seconds a scratch on ice lasts.
+        wear_ice_scratch_seconds: f32 = 90.0 in 1.0 ..= 600.0;
+        /// Seconds a berm (soil a run pushed up beside it) lasts.
+        wear_berm_seconds: f32 = 45.0 in 1.0 ..= 600.0;
+        /// Silt a wading hull stirs per second, per block under it (of a
+        /// full brown), and the share of it the current carries one block
+        /// downstream a second; what is left settles over
+        /// `wear_silt_seconds`.
+        wear_silt_stir: f32 = 3.0 in 0.0 ..= 50.0;
+        wear_silt_drift: f32 = 5.0 in 0.0 ..= 30.0;
+        wear_silt_seconds: f32 = 12.0 in 0.5 ..= 120.0;
+        /// How flat tall grass on a beaten lane stays (0..1 of a full
+        /// crush): the grass there never quite stands back up.
+        wear_grass_crush_floor: f32 = 0.5 in 0.0 ..= 1.0;
+        /// The most worn cells a round keeps; past it the cell pressed
+        /// longest ago goes first.
+        wear_max_cells: i32 = 8192 in 64 ..= 65536 @ Restart;
+        /// Seconds between two bakes of a worn cell on screen (its age
+        /// steps, the rain filling its ruts), and the most cells baked a
+        /// frame.
+        wear_rebake_seconds: f32 = 1.0 in 0.05 ..= 10.0;
+        wear_bakes_per_frame: i32 = 48 in 1 ..= 1024;
     }
 
     group fish {

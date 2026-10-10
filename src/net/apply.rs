@@ -786,6 +786,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
         if track.unwrap_or(tank.position).distance_to(position) > JUMP_PX {
             // A jump, not a drive: no marks across it.
             tank.track_from = None;
+            tank.tread.heading = None;
         }
         tank.position = position;
         // The hull's facing snaps the way `Tank::control` snaps it; the
@@ -1519,7 +1520,7 @@ mod tests {
     struct Cosmetics {
         angles: Vec<(usize, i32)>,
         burn_frames: Vec<((i32, i32), i32)>,
-        marks: usize,
+        marks: u64,
         decal_ages: Vec<i32>,
     }
 
@@ -1542,7 +1543,7 @@ mod tests {
         Cosmetics {
             angles,
             burn_frames,
-            marks: game.tracks.len(),
+            marks: game.wear().presses(),
             decal_ages: game.decals.iter().map(|d| (d.age * 1000.0) as i32).collect(),
         }
     }
@@ -2668,9 +2669,9 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
         assert!(replica.blast_fx.is_empty() && replica.shocks.is_empty() && replica.screen_flash.is_none());
     }
 
-    /// How many tread marks the replica has.
-    fn player_marks(replica: &Game) -> usize {
-        replica.tracks.len()
+    /// How many blocks of ground the replica's hulls have pressed.
+    fn player_marks(replica: &Game) -> u64 {
+        replica.wear().presses()
     }
 
     /// A hull that jumps - a portal, a gate, the room placing it - lays no

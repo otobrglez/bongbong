@@ -107,10 +107,13 @@ pack (docs/frog-health-pack-prd.md).
   droplets at `water_spray_rate` scaled by its speed while it moves, and a
   splash for a blast or a death on water. Droplets arc up and are gone the
   moment they land - water does not bounce.
-- **Tread marks** stop in water (`lay_tracks`): the treads still turn, but
-  nothing is pressed into a river bed. For `water_wet_track_seconds` after
-  wading out a hull lays *wet* marks (`Track::wet`): `water_wet_track_darken`
-  times darker, fading over that same time.
+- **Tread marks** stop in water (`press_treads`, docs/ground-memory.md): the
+  treads still turn, but nothing is pressed into a river bed, and the runs
+  still on the bank while a hull wades print dry. Once out its tracks print
+  *wet* for `wear_wet_carry_px` of travel - darker, drying over
+  `wear_wet_dry_seconds` - and drip between the runs. A wading hull stirs the
+  ford's silt, which drifts down a stream (`wear_silt_*`) and turns the spray
+  brown; its bow and sides leave foam (`drive_foam_rate`).
 - **Fish** (`fish.rs`): a small school per stretch of a lake's open water
   (`fish_school_cells` deep cells, `fish_per_school` at most), swimming
   from near one deep cell's centre to near a neighbouring one's, so a
@@ -131,10 +134,11 @@ pack (docs/frog-health-pack-prd.md).
 
 All in `tuning.rs`'s ground group: `water_speed_factor`,
 `water_grip_factor`, `water_current_speed`, `water_ford_path_cost`
-(restart), `water_wet_track_seconds`, `water_wet_track_darken`,
-`water_spray_rate`; the picture's `water_frame_seconds`,
+(restart), `water_spray_rate`; the picture's `water_frame_seconds`,
 `water_flow_speed`, `water_flow_lanes`. The fish have their own `fish`
-group (`fish_*`).
+group (`fish_*`); wet tread marks and silt are the `wear` group's
+(`wear_wet_*`, `wear_drip_spacing_px`, `wear_silt_*`), foam the `fx`
+group's `drive_foam_rate`.
 
 ## Not done, on purpose
 
