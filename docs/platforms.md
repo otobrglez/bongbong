@@ -284,8 +284,13 @@ Native app on raylib's **SDL backend with SDL3** and **OpenGL ES 2.0**, hand-bun
 project (docs/ios-native-port-prd.md). Every recipe sources `tools/ios/env.sh` (Xcode as
 `DEVELOPER_DIR` - the devenv shell points it and `SDKROOT` at nix's apple-sdk -, one deployment
 target `IOS_MIN` 15.0 for rustc, cc-rs, cmake and the plist, `IOS_SLICE` sim|ios, the library prefix
-`BONGBONG_IOS_LIBS`, bindgen's sysroot). `.cargo/config.toml` sets `linker = "/usr/bin/clang"` and
-the `CC_/CXX_/AR_` pins for both iOS targets.
+`BONGBONG_IOS_LIBS`, bindgen's sysroot, and `tools/ios/bin` first on `PATH`, whose `cc` - rustc's
+default linker for the build scripts and proc-macros - is Xcode's clang: with `DEVELOPER_DIR` at
+Xcode, nix's wrapper would link them against Xcode's macOS SDK, whose `.tbd` stubs nix's `ld`
+cannot read from Xcode 27 on. A `PATH` entry, not `CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER`:
+cargo fingerprints a configured linker, and the desktop build shares a few host units with an iOS
+build, so every switch would recompile them and their dependents). `.cargo/config.toml` sets
+`linker = "/usr/bin/clang"` and the `CC_/CXX_/AR_` pins for both iOS targets.
 - **Setup**: `just ios-setup` (`tools/setup_ios.sh`: static SDL3 at a pinned tag and raylib from the
   tree vendored in the `sola-raylib-sys` registry crate (the version `Cargo.lock` pins) into
   `~/.local/share/bongbong-ios/sim`; SDL3 is built with `-DSDL_CAMERA=OFF -DSDL_HIDAPI=OFF` because

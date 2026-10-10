@@ -1,0 +1,5 @@
+#!/bin/sh
+# rustc's default linker for the host half of an iOS build (build scripts,
+# proc-macros): tools/ios/env.sh puts this directory first on PATH, so those
+# links go to Xcode's clang and ld, against Xcode's macOS SDK.
+exec /usr/bin/clang "$@"
