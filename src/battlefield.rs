@@ -404,7 +404,11 @@ pub struct MapSpawn {
     /// Every cell the map marked as tall grass. Not spawned as entities
     /// here - `Game::init` turns each into a scatter of `grass::GrassTuft`,
     /// which is presentation plus a concealment query, not an `Obstacle`.
+    /// The bush cells are in it too: they are the same soft cover.
     pub grass_cells: Vec<Position>,
+    /// The bush cells among `grass_cells` and what each grows: one
+    /// `grass::bush_tuft` instead of a scatter.
+    pub bush_cells: Vec<(Position, crate::grass::Bush)>,
     /// Every cell the map marked as an oil trail, as grid cells: not
     /// solid, nothing spawned - `Game::init` keeps them as the set a fire
     /// can run along (`Game::oil_cells`).
@@ -470,6 +474,7 @@ pub fn spawn_from_map(
     let mut water_cells = Vec::new();
     let mut lava_cells = Vec::new();
     let mut grass_cells = Vec::new();
+    let mut bush_cells = Vec::new();
     let mut oil_cells = Vec::new();
     let mut portal_cells = Vec::new();
     let mut frog_pos = None;
@@ -569,6 +574,10 @@ pub fn spawn_from_map(
             CellObject::Water => water_cells.push(pos),
             CellObject::Lava => lava_cells.push(pos),
             CellObject::TallGrass => grass_cells.push(pos),
+            CellObject::Bush | CellObject::BerryBush | CellObject::Juniper | CellObject::Fern | CellObject::AutumnBush | CellObject::Reeds => {
+                grass_cells.push(pos);
+                bush_cells.push((pos, obj.bush().expect("a bush cell grows a bush")));
+            }
             CellObject::Oil => oil_cells.push((col, row)),
             CellObject::Portal => portal_cells.push((col, row)),
             CellObject::Frog => frog_pos = Some(pos),
@@ -585,7 +594,7 @@ pub fn spawn_from_map(
         }
     }
 
-    MapSpawn { obstacle_positions, wall_positions, road_cells, water_cells, lava_cells, frog_pos, enemy_frog_pos, pickup_slots, grass_cells, oil_cells, portal_cells }
+    MapSpawn { obstacle_positions, wall_positions, road_cells, water_cells, lava_cells, frog_pos, enemy_frog_pos, pickup_slots, grass_cells, bush_cells, oil_cells, portal_cells }
 }
 
 /// Every cell a volcano's cone puts a tile on: its footprint inside the

@@ -194,7 +194,16 @@ impl Class {
         match obj {
             Some(CellObject::Wall { .. } | CellObject::Road) => Class::Road,
             Some(CellObject::Gate) => Class::Gate,
-            Some(CellObject::TallGrass) => Class::Grass,
+            // Bushes and reeds are the same soft cover as tall grass.
+            Some(
+                CellObject::TallGrass
+                | CellObject::Bush
+                | CellObject::BerryBush
+                | CellObject::Juniper
+                | CellObject::Fern
+                | CellObject::AutumnBush
+                | CellObject::Reeds,
+            ) => Class::Grass,
             Some(CellObject::Lava) => Class::Lava,
             Some(CellObject::Water) => match depth {
                 Depth::Deep => Class::Deep,

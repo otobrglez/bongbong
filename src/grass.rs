@@ -63,6 +63,19 @@
 //! three sides) grows none. Every tuft stands in the y-sorted walk among
 //! the tanks. Trees are not counted: they are drawn over every tuft
 //! anyway.
+//!
+//! **Bushes.** A bush or a bed of reeds is a soft-cover cell of its own
+//! kind (`Bush`, docs/BUSHES_SPEC.md) that shares everything above: its
+//! cell joins `Game::grass_cells`, so it conceals, chars when its cell
+//! burns and stops concealing, and a hull, a blast or a hammer flattens
+//! it the way it does grass. It grows one sprite rather than a scatter -
+//! `bush_tuft`, a `GrassTuft` with `bush` set - drawn from
+//! `bushes_sheet.png` at 1:1 (`draw_bush`). A bush does not bend in the
+//! wind: rotating a round 32 px sprite resamples its inside every frame,
+//! the churn `obstacle::tree_blit` was built to avoid. It squashes when
+//! crushed and is shoved sideways in whole 2 px blocks. Grass never
+//! spreads fire, and neither does a bush, so a reed bank never carries a
+//! fire across the water it lines.
 
 use crate::math;
 use crate::math::{Color, Rectangle, Vec2};
@@ -70,7 +83,34 @@ use crate::math::{Color, Rectangle, Vec2};
 use crate::canvas::{Canvas, Sheet};
 use crate::map::Theme;
 use crate::tuning::{tuning, Tuning};
-use crate::{GRASS_SPECIES, GRASS_TEXTURE_SIZE, GRASS_VARIANTS, OBSTACLE_GRID_SIZE, Position};
+use crate::{BUSH_DRY_COL, BUSH_TEXTURE_SIZE, BUSH_VARIANTS, GRASS_SPECIES, GRASS_TEXTURE_SIZE, GRASS_VARIANTS, OBSTACLE_GRID_SIZE, Position};
+
+/// The kinds of bush a map can place, in `bushes_sheet.png` row order -
+/// soft cover all of them, told apart by look alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Bush {
+    /// A round leafy shrub, the common one.
+    Bush,
+    /// The same shrub with red berries.
+    Berry,
+    /// Low, spiky and dark - the bush beside a spruce stand.
+    Juniper,
+    /// Fronds on the forest floor.
+    Fern,
+    /// A shrub turned gold and brown.
+    Autumn,
+    /// Cattails, the cover on a bank.
+    Reeds,
+}
+
+impl Bush {
+    pub const ALL: [Bush; 6] = [Bush::Bush, Bush::Berry, Bush::Juniper, Bush::Fern, Bush::Autumn, Bush::Reeds];
+
+    /// Its row in `bushes_sheet.png`.
+    pub fn row(self) -> i32 {
+        self as i32
+    }
+}
 
 /// One drawn tuft. Several of these make up a single grass cell.
 pub struct GrassTuft {
@@ -102,6 +142,9 @@ pub struct GrassTuft {
     /// the art crosses into a solid tile beside its cell. Unbounded on a
     /// side with no tile.
     pub lean: [f32; 2],
+    /// A bush's one sprite rather than a tuft of grass (`bush_tuft`):
+    /// drawn from `bushes_sheet.png` by `draw_bush`, `col` its variant.
+    pub bush: Option<Bush>,
 }
 
 /// Each tuft's art in sheet pixels about its root, the bottom centre it is
@@ -157,10 +200,32 @@ pub fn tufts_for_cell(t: &Tuning, center: Position, solid: impl Fn((i32, i32)) -
                 burnt: false,
                 pinned: 0.0,
                 lean: [f32::INFINITY; 2],
+                bush: None,
             };
             keep_off(t, tuft, center, &solid)
         })
         .collect()
+}
+
+/// The one sprite a bush cell grows: rooted in the middle a block above the
+/// cell's bottom edge, so its 32 px art fills its own cell and never
+/// reaches over a tile beside it, and its root is in its own cell for every
+/// cell lookup (`map::world_to_cell` rounds an edge into the next row).
+/// The variant is hashed from the cell. Pure, no RNG.
+pub fn bush_tuft(center: Position, bush: Bush) -> GrassTuft {
+    let h = crate::blast::seed_at(center, 90);
+    GrassTuft {
+        base: Position::new(center.x, center.y + OBSTACLE_GRID_SIZE / 2.0 - 2.0),
+        row: bush.row(),
+        col: (h % BUSH_VARIANTS as u32) as i32,
+        seed: h,
+        crush: 0.0,
+        push: 0.0,
+        burnt: false,
+        pinned: 0.0,
+        lean: [0.0; 2],
+        bush: Some(bush),
+    }
 }
 
 /// The tuft's art about its root in world px at `grass_scale`: left,
@@ -425,6 +490,10 @@ fn bend(tuft: &GrassTuft, time: f32) -> f32 {
 pub fn draw_tuft(c: &mut impl Canvas, tuft: &GrassTuft, theme: Theme, time: f32) {
     let cell = GRASS_TEXTURE_SIZE;
     let t = tuning();
+    if let (Some(_), false) = (tuft.bush, tuft.burnt) {
+        draw_bush(c, tuft, theme);
+        return;
+    }
     if tuft.burnt {
         // A charred stub: two blocks of ash where the tuft stood. Not
         // nothing - a burnt meadow should read as burnt, not as mown.
@@ -451,9 +520,44 @@ pub fn draw_tuft(c: &mut impl Canvas, tuft: &GrassTuft, theme: Theme, time: f32)
     c.blit(Sheet::Grass(theme), src, dest, origin, rotation, Color::WHITE);
 }
 
+/// The source rectangle of `bush`'s first variant on a map of `theme` -
+/// the builder's icon and canvas, drawn as the round will draw it.
+pub fn bush_source_rec(bush: Bush, theme: Theme) -> Rectangle {
+    let dry = if theme == Theme::Desert { BUSH_DRY_COL } else { 0 };
+    Rectangle::new(dry as f32 * BUSH_TEXTURE_SIZE, bush.row() as f32 * BUSH_TEXTURE_SIZE, BUSH_TEXTURE_SIZE, BUSH_TEXTURE_SIZE)
+}
+
+/// Draw a standing bush (`bush_tuft`) from `bushes_sheet.png`, the dry
+/// half on a desert map: upright, squashed toward its root as far as
+/// `bush_crush_flatten` while a hull holds it down, and shoved sideways by
+/// a passing hull in whole 2 px blocks. No wind and no rotation (see the
+/// module comment).
+fn draw_bush(c: &mut impl Canvas, tuft: &GrassTuft, theme: Theme) {
+    let t = tuning();
+    let cell = BUSH_TEXTURE_SIZE;
+    let dry = if theme == Theme::Desert { BUSH_DRY_COL } else { 0 };
+    let flip = if tuft.seed & 1 != 0 { -1.0 } else { 1.0 };
+    let src = Rectangle::new((tuft.col + dry) as f32 * cell, tuft.row as f32 * cell, cell * flip, cell);
+    let height = (cell * (1.0 - tuft.crush * t.bush_crush_flatten) / 2.0).round() * 2.0;
+    let shove = (tuft.push / 2.0).round() * 2.0;
+    let dest = Rectangle::new(tuft.base.x + shove - cell / 2.0, tuft.base.y - height, cell, height);
+    c.blit(Sheet::Bushes, src, dest, Vec2::zero(), 0.0, Color::WHITE);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bush_is_rooted_in_its_own_cell() {
+        // Every cell lookup - the fire that chars it, the hammer that pins
+        // it, a replica's burn - finds the bush in the cell that grew it.
+        for (c, r) in [(0, 0), (5, 9), (40, 23)] {
+            let tuft = bush_tuft(crate::map::cell_to_world(c, r), Bush::Reeds);
+            assert_eq!(crate::map::world_to_cell(tuft.base), (c, r));
+            assert_eq!(tuft.base.y % 2.0, 0.0, "on the 2 px grid");
+        }
+    }
 
     fn heading(t: &Tuning) -> (f32, f32) {
         let (y, x) = crate::trig::sin_cos(t.grass_gust_heading_deg.to_radians());

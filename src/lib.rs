@@ -702,6 +702,15 @@ pub const GRASS_TEXTURE_SIZE: f32 = 32.0;
 pub const GRASS_SPECIES: i32 = 3;
 pub const GRASS_VARIANTS: i32 = 8;
 
+// Bushes and reeds (grass.rs, static/bushes_sheet.png, docs/BUSHES_SPEC.md):
+// soft cover like tall grass, drawn from 32px cells at 1:1 with the art's
+// own 2x blocks, like a wall. A row per `grass::Bush`, `BUSH_VARIANTS`
+// green columns, then the same again dry from `BUSH_DRY_COL` (a desert
+// map's).
+pub const BUSH_TEXTURE_SIZE: f32 = 32.0;
+pub const BUSH_VARIANTS: i32 = 4;
+pub const BUSH_DRY_COL: i32 = BUSH_VARIANTS;
+
 // Trees (obstacle.rs, static/trees_sheet.png, docs/TREES_SPEC.md): 48px
 // source cells drawn at OBSTACLE_SCALE like every other obstacle, so one
 // source pixel is still one screen pixel and the art's own 2x blocks still

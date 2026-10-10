@@ -265,7 +265,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   sky is written as its name, so older files re-save byte for byte; the MAP panel's SKY tiles;
   docs/weather.md; absent = clear, not written back), interior terrain only - walls, props (`kind =
   "sandbag"|"barrel"|"fence"`, `drum = "oil"|"fuel"` pins a drum), trees (`tree`/`pine`/`spruce`/`scots`/`fir`/`birch`/`willow`/`palm`/`snag`, `obstacle::TREE_SPECIES`),
-  `tall_grass` (not solid), `oil` trail cells, `portal` anchors (multi-instance, not solid,
+  `tall_grass` (not solid), bushes (`bush`/`berry_bush`/`juniper`/`fern`/`autumn_bush`/`reeds`, not
+  solid, soft cover like grass; docs/BUSHES_SPEC.md), `oil` trail cells, `portal` anchors (multi-instance, not solid,
   `portal_cells`; docs/teleporting.md), road, `water` (painted like road; `ground::build` draws a
   one-cell-wide line as a river and a wider block as a lake, both animated and flowing down the map -
   docs/GROUND_SPEC.md §9 - and the rules follow the shape, docs/water.md), frog, `enemy_frog`,
@@ -959,7 +960,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   neighbour mask is cached and refreshed by `Game::refresh_edge_masks` on destruction. A barrel's
   `variant` is its `Drum`. Specs: docs/WALLS_SPEC.md, PROPS_SPEC.md, TREES_SPEC.md.
 - `grass.rs` — tall grass, **deliberately not an `Obstacle`** (the nav grid and the linter treat
-  every obstacle as impassable). Simulation-owned, seeded by `seed_at`, rebuilt in `init`, drawn
+  every obstacle as impassable). Bushes and reeds (`Bush`, docs/BUSHES_SPEC.md) are soft-cover cells
+  in `grass_cells` too, each growing one sprite (`bush_tuft`, rooted a block inside its cell so every
+  cell lookup finds it; `draw_bush` from `bushes_sheet.png`, dry on desert, no wind bend). Simulation-owned, seeded by `seed_at`, rebuilt in `init`, drawn
   interleaved with the y-sorted units (trees still after everything). **No tuft is drawn over a
   tile** (`keep_off`/`place`, from the non-tree obstacles at `init`): its root moves off a tile
   beside or below its cell by its art's reach (`TUFT_EXTENTS`, held against both sheets by a test)

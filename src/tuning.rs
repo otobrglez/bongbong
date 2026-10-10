@@ -3227,6 +3227,10 @@ tunables! {
         /// Never 1.0: a tuft that disappears entirely reads as a hole in
         /// the field rather than as matted grass.
         grass_crush_flatten: f32 = 0.78 in 0.0 ..= 0.95;
+        /// `grass_crush_flatten` for a bush (`grass::draw_bush`): a shrub
+        /// a hull is sitting on is pressed down to a third of its height,
+        /// never gone, and stands back up over the same recovery.
+        bush_crush_flatten: f32 = 0.66 in 0.0 ..= 0.95;
         /// Leaf or straw specks a tank kicks up per second per grass cell it is
         /// crossing (`fx.rs`, scaled by `fx_density` like every other
         /// emitter). Zero turns the rustle off.
