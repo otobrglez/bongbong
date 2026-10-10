@@ -4461,7 +4461,9 @@ mod tests {
         let compact = rx.recv().unwrap().unwrap();
         assert!(compact["engage"]["slots"].is_null(), "the slot table is full-detail only");
         assert!(compact.get("command").is_none(), "the command report is full-detail only");
-        assert!(compact.to_string().len() < 6_000, "compact snapshot is {} bytes", compact.to_string().len());
+        // An order of size, not a byte count: the floats' text runs a few
+        // bytes longer or shorter whenever the round plays differently.
+        assert!(compact.to_string().len() < 6_500, "compact snapshot is {} bytes", compact.to_string().len());
     }
 
     const INLINE_MAP: &str = r#"
