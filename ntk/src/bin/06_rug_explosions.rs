@@ -234,6 +234,8 @@ fn main() {
                             ground: &ground,
                             grass: &grass,
                             trees: &trees,
+                            // The grass theme's sheets are the ones loaded above.
+                            theme: bongbong::map::Theme::Grass,
                             target: &target,
                             towers: &towers,
                             crates: &crates,
