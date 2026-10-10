@@ -753,6 +753,9 @@ pub enum HitCause {
     Rod,
     /// A gravity well's collapse.
     Well,
+    /// Fragments off the far face of a wall a shell breached
+    /// (`Game::spall`, BB-82).
+    Spall,
 }
 
 /// What an `Event::Hit` landed on.
@@ -982,6 +985,13 @@ pub struct Game {
     /// footing slows and the router prices, fords while it rains. Cleared by
     /// `init`.
     pub(crate) craters: crate::rod::Craters,
+    /// The rubble broken chunks laid (`chunks::Rubble`): it slows a hull
+    /// and the router prices it. Cleared by `init`.
+    pub(crate) rubble: crate::chunks::Rubble,
+    /// Tiles due to give way after another did (`props::PendingBreak`): a
+    /// weakened wall in a collapsing run, a cracked pane beside a shattered
+    /// one. Cleared by `init`.
+    pub(super) pending_breaks: Vec<props::PendingBreak>,
     /// The rods' impacts as they are drawn - the column, the dust, the
     /// debris - aged in `tick_effects` (`rod_show`). Cleared by `init`.
     pub(crate) rod_impacts: Vec<crate::rod::RodImpactFx>,
@@ -1674,6 +1684,8 @@ impl Game {
         self.well_field = crate::well::WellField::default();
         self.pickups_drifting.clear();
         self.craters.clear();
+        self.rubble.clear();
+        self.pending_breaks.clear();
         self.rod_impacts.clear();
         self.seat_still = [crate::rod::SeatStill::default(); MAX_SEATS];
         self.seat_reticle = [None; MAX_SEATS];
@@ -2246,6 +2258,7 @@ impl Game {
             self.lava_phase(&mut f);
             self.tick_ooze(&mut f);
             self.tick_fuses(&mut f);
+            self.tick_breaks(&mut f);
             self.tick_launches(&mut f);
             self.tick_lava_bombs(&mut f);
             self.tick_crates(&mut f);
@@ -2280,6 +2293,7 @@ impl Game {
             self.tick_burns(&mut f);
             self.tick_fires(&mut f, false);
             self.tick_fuses(&mut f);
+            self.tick_breaks(&mut f);
             self.tick_launches(&mut f);
             self.tick_lava_bombs(&mut f);
             self.tick_crates(&mut f);
@@ -2588,7 +2602,7 @@ impl Game {
         let entity = self.seats.get(seat).copied().flatten()?;
         // Disjoint borrows: `drive_tank` wants the solver and the hull at
         // once, and they are two fields of the same struct.
-        let Game { world, physics, water, lava, craters, weather, time, map, zones, zone_lead, .. } = self;
+        let Game { world, physics, water, lava, craters, rubble, weather, time, map, zones, zone_lead, .. } = self;
         let Ok(mut tank) = world.get::<&mut Tank>(entity) else { return None };
         if tank.body.is_none() || tank.is_wreck() {
             return None;
@@ -2599,7 +2613,7 @@ impl Game {
         // clock), the room's when this pose lands (docs/gravity-well.md
         // "Online").
         let wells = if zones.is_empty() { crate::well::WellField::default() } else { crate::well::WellField::at(zones, *time + *zone_lead) };
-        let footing = Footing::at(water, lava, craters, *weather, tank.position, *time).pulled(&wells, &*tank);
+        let footing = Footing::at(water, lava, craters, *weather, tank.position, *time).on_rubble(rubble, tank.position).pulled(&wells, &*tank);
         // The seat's own skid and spin run on the client's ticks, as the
         // room's do in `tick_timers` (`Predictor::shove` starts a skid).
         tank.skid = (tank.skid - dt).max(0.0);
@@ -3506,7 +3520,7 @@ impl Game {
         // A seat whose client owns the hull was put where it is by
         // `accept_seat_pose` before this tick; the stick only fires.
         if self.seat_owned[index] != self.frame {
-            let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).pulled(&f.wells, tank);
+            let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).on_rubble(&self.rubble, tank.position).pulled(&f.wells, tank);
             drive_tank(&mut self.physics, tank, drive, f.dt, footing);
         }
         tick_queued_shots(&mut self.physics, f, tank, owner);
@@ -4280,7 +4294,7 @@ impl Game {
                 // The commander's order is never the last word on a tank
                 // in a tell: it holds its aim (docs/sonic-hammer.md).
                 let intent = commanded_intent(&self.commander, p.slot, p.intent, tank.tell);
-                let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).pulled(&f.wells, tank);
+                let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).on_rubble(&self.rubble, tank.position).pulled(&f.wells, tank);
                 drive_tank_with(&mut self.physics, tank, intent, f.dt, p.current, p.facing_before, footing);
             });
         }
@@ -5779,6 +5793,23 @@ impl Footing {
         wading: false,
         well: crate::well::HullPull { current: Position::new(0.0, 0.0), side: Position::new(0.0, 0.0) },
     };
+
+    /// This footing over the rubble at `pos` (`chunks::Rubble`): light and
+    /// heavy rubble slow the hull by `rubble_light_speed` and
+    /// `rubble_heavy_speed`. The driving paths read it; a shove's skid
+    /// does not.
+    pub(crate) fn on_rubble(self, rubble: &crate::chunks::Rubble, pos: Position) -> Footing {
+        if rubble.is_empty() {
+            return self;
+        }
+        let t = tuning();
+        let pace = match rubble.level(crate::map::world_to_cell(pos)) {
+            crate::chunks::RubbleLevel::Clear => return self,
+            crate::chunks::RubbleLevel::Light => t.rubble_light_speed,
+            crate::chunks::RubbleLevel::Heavy => t.rubble_heavy_speed,
+        };
+        Footing { pace: self.pace * pace, ..self }
+    }
 
     /// This footing with the wells' pull on `tank` from `wells` (none with
     /// the field empty).

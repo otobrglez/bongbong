@@ -402,7 +402,7 @@ impl Game {
                 for &(e, c, at, health) in glass.iter().filter(|g| g.1 == cell) {
                     let _ = c;
                     let dir = (at - wave.cone.origin) / at.distance_to(wave.cone.origin).max(1e-3);
-                    self.damage_obstacle(f, e, health.max(1.0), DamageCause::Shot { dir: Some(dir), at: None });
+                    self.damage_obstacle(f, e, health.max(1.0), DamageCause::Shot { dir: Some(dir), at: None, by: None });
                 }
             }
         }
@@ -555,7 +555,7 @@ impl Game {
                         fuse.left = 0.0;
                     }
                 } else {
-                    self.damage_obstacle(f, entity, f32::MAX, DamageCause::Shot { dir: Some(dir), at: None });
+                    self.damage_obstacle(f, entity, f32::MAX, DamageCause::Shot { dir: Some(dir), at: None, by: None });
                 }
             }
         }

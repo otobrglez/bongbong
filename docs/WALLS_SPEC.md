@@ -411,3 +411,14 @@ stood. They fly with a shadow, bounce up to three times, then lie for
 wear a chunk; `Event::ChunksBroken` (`WireEvent::ChunksBroken`) lets a
 replica throw the same pieces.
 
+### What a breach does (BB-82)
+
+| | |
+|---|---|
+| Spall | a shell (a blow of `spall_min_damage` 10 or more) that breaks chunks throws fragments off the tile's far face, from the broken chunks' middle carried along the blow: every tank on the other side from the shooter whose hull lies in the cone behind - within `spall_reach_px` (96) of the face and `spall_half_width_px` (12) of the blow's line past its own half-extent - takes `spall_damage` (8) falling to nothing at the reach (`Game::spall`, `HitCause::Spall`). No RNG. Its hull flashes and a spray of masonry leaves the face toward it. Off with `spall_enabled` |
+| Domino | a chunked tile that dies queues its four neighbours (`Game::pending_breaks`); `domino_delay_seconds` (0.16) later each one down to `domino_chunks` (11) standing or fewer gives way too, and queues its own. A whole tile stops the run |
+| Rubble | every broken chunk lays a unit of rubble where it stood; a shot that leaves the tile standing blows half of them into the cell behind (`Game::lay_rubble`, `chunks::Rubble`). `rubble_light` (6) units slow a hull to `rubble_light_speed` (0.85), `rubble_heavy` (14) to `rubble_heavy_speed` (0.7) (`Footing::on_rubble`, the driving paths only), and the router prices them at `rubble_light_path_cost`/`rubble_heavy_path_cost` (2, 3). Rubble never stops a shot. It travels as `Snapshot::rubble` |
+| Glass cascade | a pane that dies (but to a rod's crush) shatters a cracked neighbour `glass_cascade_seconds` (0.07) later, and that one the next; an intact neighbour takes `glass_stress_damage` (1) - a crack |
+
+Dust stays scenery: nothing a breach throws up blocks sight.
+

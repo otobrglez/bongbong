@@ -2426,6 +2426,43 @@ tunables! {
         /// A chunked tile gives way once this many of its 16 chunks or
         /// fewer still stand: what is left drops where it stood.
         wall_collapse_chunks: i32 = 6 in 0 ..= 15;
+        /// A breach throws fragments off a chunked wall's far face into a
+        /// tank sheltering behind it (spall, BB-82). Off, a wall is perfect
+        /// cover until it breaks.
+        spall_enabled: bool = true in 0 ..= 1;
+        /// Spall's damage at the far face, falling linearly to nothing at
+        /// `spall_reach_px`.
+        spall_damage: f32 = 8.0 in 0.0 ..= 100.0;
+        /// How far behind the face spall reaches, px (about three tiles).
+        spall_reach_px: f32 = 96.0 in 0.0 ..= 400.0;
+        /// Half the width of spall's cone across the blow's way, px, past
+        /// the hull's own half-extent.
+        spall_half_width_px: f32 = 12.0 in 0.0 ..= 64.0;
+        /// The least blow that throws spall: a shell, not a minigun round.
+        spall_min_damage: f32 = 10.0 in 0.0 ..= 200.0;
+        /// A collapsing chunked tile brings down a neighbour in its run
+        /// that is down to this many standing chunks or fewer.
+        domino_chunks: i32 = 11 in 0 ..= 16;
+        /// Seconds between one tile of a run giving way and the next.
+        domino_delay_seconds: f32 = 0.16 in 0.0 ..= 2.0;
+        /// Rubble units on a cell (a broken chunk lays one where it stood
+        /// and, blown out, one in the cell behind) that make it light
+        /// rubble, and heavy rubble.
+        rubble_light: i32 = 6 in 1 ..= 64;
+        rubble_heavy: i32 = 14 in 1 ..= 64;
+        /// Speed factor on light and heavy rubble.
+        rubble_light_speed: f32 = 0.85 in 0.1 ..= 1.0;
+        rubble_heavy_speed: f32 = 0.7 in 0.1 ..= 1.0;
+        /// What a step onto light and heavy rubble costs the router, open
+        /// ground being 1 (a ford is `water_ford_path_cost`).
+        rubble_light_path_cost: i32 = 2 in 1 ..= 50;
+        rubble_heavy_path_cost: i32 = 3 in 1 ..= 50;
+        /// Seconds between one pane of a glass run shattering and the next
+        /// cracked one going with it.
+        glass_cascade_seconds: f32 = 0.07 in 0.0 ..= 2.0;
+        /// Damage a shattering pane's stress puts into an intact neighbour:
+        /// a crack, not a break.
+        glass_stress_damage: f32 = 1.0 in 0.0 ..= 10.0;
     }
 
     group props {

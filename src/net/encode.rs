@@ -17,7 +17,7 @@ use crate::net::MAX_SEATS;
 use crate::net::PROTOCOL_VERSION;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    BonusPickup, CraterState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, WellDrumState, ZoneState, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
+    BonusPickup, CraterState, RubbleState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, WellDrumState, ZoneState, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
 };
 use crate::bullet::Bullet;
 use crate::frog::Frog;
@@ -103,6 +103,7 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
         crates: crates(game, cols),
         zones: zones(game, cols),
         craters: game.craters().list().iter().map(|c| CraterState { cell: cell_index(cols, c.cell), tick: ticks_of(c.at) }).collect(),
+        rubble: game.rubble.cells().map(|(c, units)| RubbleState { cell: cell_index(cols, c), units }).collect(),
         well_drums: well_drums(game, cols),
         volcano_shifts: volcano_shifts(game),
         round: round(game),

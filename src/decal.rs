@@ -52,12 +52,10 @@ pub struct Decal {
     /// Cosmetic seed - mirror and quarter-turn. A position hash, never a
     /// draw from the round RNG.
     pub seed: u32,
-    /// Seconds since it appeared; drives only the fade-in.
+    /// Seconds since it appeared; drives only the fade-in. The rubble a
+    /// tank drives over is the simulation's own per-cell count
+    /// (`Game::rubble`), not this picture.
     pub age: f32,
-    /// Phase-3 hook: no reader today. It exists so "rubble slows a tank"
-    /// can be added by changing the *consumers*, without moving the
-    /// decision of where rubble lands out of the simulation.
-    pub blocks: bool,
 }
 
 impl Decal {
@@ -90,7 +88,7 @@ impl Decal {
         // Salted separately from the mirror/rotation seed so two pieces
         // that happen to share a variant still differ in orientation.
         let col = (crate::blast::seed_at(center, 11 + salt * 3) % RUBBLE_VARIANTS as u32) as i32;
-        Decal { sheet: Sheet::Walls, row, col, center, origin: center, arc: 0.0, seed, age: 0.0, blocks: false }
+        Decal { sheet: Sheet::Walls, row, col, center, origin: center, arc: 0.0, seed, age: 0.0 }
     }
 
     /// Pick a landed piece up and throw it again, to `to`: it takes off

@@ -866,6 +866,15 @@ pub struct CraterState {
     pub tick: u32,
 }
 
+/// A cell with rubble on it (`chunks::Rubble`): its units, which set how
+/// much it slows a hull and what it costs the router.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RubbleState {
+    /// `encode::cell_index` of the cell.
+    pub cell: u16,
+    pub units: u8,
+}
+
 /// The round's scalar state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoundState {
@@ -930,6 +939,8 @@ pub struct Snapshot {
     pub zones: Vec<ZoneState>,
     /// The rods' craters (`CraterState`), by cell.
     pub craters: Vec<CraterState>,
+    /// The rubble broken chunks laid (`RubbleState`), by cell.
+    pub rubble: Vec<RubbleState>,
     /// The drums the gravity wells hold (`WellDrumState`), by id.
     pub well_drums: Vec<WellDrumState>,
     /// Each volcano's cycle shift in ticks (`volcano::Volcano::shift`, a
@@ -968,6 +979,8 @@ impl Snapshot {
         self.zones.dedup_by_key(|z| z.id);
         self.craters.sort_by_key(|c| c.cell);
         self.craters.dedup_by_key(|c| c.cell);
+        self.rubble.sort_by_key(|r| r.cell);
+        self.rubble.dedup_by_key(|r| r.cell);
         self.well_drums.sort_by_key(|d| d.id);
         self.well_drums.dedup_by_key(|d| d.id);
     }
