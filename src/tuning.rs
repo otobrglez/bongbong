@@ -624,9 +624,12 @@ tunables! {
 
     group minigun {
         /// Rounds granted per minigun pickup: ten full bursts at
-        /// `minigun_burst_size` 6, so each of the ring's ten ammo pips
-        /// (`tank::AMMO_PIPS`) is one burst.
+        /// `minigun_burst_size` 6.
         minigun_ammo_per_pickup: i32 = 60 in 1 ..= 1000;
+        /// The most minigun rounds a tank carries: a crate of the weapon
+        /// carried adds its rounds on top, up to this (`Tank::take_weapon`,
+        /// `ActiveWeapon::crate_load`) - seats and enemies alike.
+        minigun_ammo_max: i32 = 200 in 1 ..= 1000;
         /// Bullets per burst: the first fires on the trigger frame, the rest
         /// are queued `minigun_bullet_delay_seconds` apart
         /// (`Tank::minigun_burst`). Each is an individually simulated
@@ -679,6 +682,8 @@ tunables! {
         /// and the laser is the live weapon, firing resolves an instant hit
         /// the same frame (no travel time) and consumes one charge.
         laser_charges_per_pickup: i32 = 6 in 1 ..= 200;
+        /// The most laser charges a tank carries, crates stacked.
+        laser_charges_max: i32 = 18 in 1 ..= 200;
         /// Per-hit damage range - lower than a player shell's, since a laser
         /// never misses; toned down to compensate for guaranteed accuracy.
         laser_damage_min: f32 = 8.0 in 0.0 ..= 100.0;
@@ -702,6 +707,8 @@ tunables! {
         /// twin-barrel volleys (a twin chassis spends 2 per shot like a
         /// shell does).
         plasma_ammo_per_pickup: i32 = 10 in 1 ..= 500;
+        /// The most plasma bolts a tank carries, crates stacked.
+        plasma_ammo_max: i32 = 30 in 1 ..= 500;
         /// Flat damage multiplier on top of the shell damage range the
         /// shooter would otherwise use (player/enemy split included) and
         /// `tank_damage_factor` - a straight damage upgrade over a shell.
@@ -738,6 +745,8 @@ tunables! {
         /// Seeker missiles granted per pickup - one volley from the
         /// four-tube pod.
         missile_ammo_per_pickup: i32 = 4 in 1 ..= 400;
+        /// The most seeker missiles a tank carries, crates stacked.
+        missile_ammo_max: i32 = 12 in 1 ..= 400;
         /// Missiles per salvo, one per tube, so at most the pod's four.
         /// The first leaves at once, the rest
         /// `missile_launch_delay_seconds` apart (`Tank::missile_volley`).
@@ -825,6 +834,8 @@ tunables! {
         /// Grenades one grenade crate loads into the launcher's drum
         /// (`pickup::PickupKind::Grenades`, `grenade.rs`). One per press.
         grenade_ammo_per_pickup: i32 = 6 in 1 ..= 40;
+        /// The most grenades a tank carries, crates stacked.
+        grenade_ammo_max: i32 = 12 in 1 ..= 80;
         /// Seconds between two launches.
         grenade_reload_seconds: f32 = 0.6 in 0.0 ..= 10.0;
         /// How fast a grenade leaves the barrel over the ground (px/s),
@@ -902,6 +913,8 @@ tunables! {
         /// Blasts one sonic hammer crate loads (`pickup::PickupKind::
         /// SonicHammer`, docs/sonic-hammer.md). One per press.
         sonic_ammo_per_pickup: i32 = 7 in 1 ..= 40;
+        /// The most blasts a tank carries, crates stacked.
+        sonic_ammo_max: i32 = 14 in 1 ..= 80;
         /// Seconds between two blasts.
         sonic_reload_seconds: f32 = 0.8 in 0.0 ..= 10.0;
         /// How far the cone reaches from the turret's pivot (px; six and a
@@ -994,6 +1007,9 @@ tunables! {
         /// Pulses one EMP crate loads (`pickup::PickupKind::Emp`,
         /// docs/emp-burst.md). One per press.
         emp_charges_per_pickup: i32 = 3 in 1 ..= 20;
+        /// The most pulses a tank carries, crates stacked - few, so a
+        /// hoarded stock cannot hold a wave down end to end.
+        emp_charges_max: i32 = 7 in 1 ..= 40;
         /// How far the ring reaches from the hull's centre (px; five
         /// cells), measured to the nearest point of what it strikes: a
         /// hull's box, a tower's cell, a missile's ground point.
@@ -1077,6 +1093,8 @@ tunables! {
         /// Slugs one gauss rail crate loads (`pickup::PickupKind::GaussRail`,
         /// docs/gauss-rail.md). One per full release.
         gauss_slugs_per_pickup: i32 = 4 in 1 ..= 20;
+        /// The most slugs a tank carries, crates stacked.
+        gauss_slugs_max: i32 = 9 in 1 ..= 40;
         /// Seconds the trigger is held before the rail is full and a
         /// release fires; released sooner, the charge fizzles and spends
         /// nothing.
@@ -1147,6 +1165,10 @@ tunables! {
         /// (`pickup::PickupKind::FpvSwarm`, docs/fpv-swarm.md). One per
         /// press.
         fpv_drones_per_pickup: i32 = 6 in 1 ..= 12;
+        /// The most drones a halo holds, crates stacked. Each crate past
+        /// the first hovers its drones between the ones before
+        /// (`fpv::Halo`).
+        fpv_drones_max: i32 = 12 in 1 ..= 24;
         /// Seconds between two launches.
         fpv_reload_seconds: f32 = 0.4 in 0.0 ..= 10.0;
         /// How long a drone climbs out of the halo before it turns for its
@@ -1243,6 +1265,8 @@ tunables! {
         /// (`pickup::PickupKind::RodFromGod`, docs/rod-from-god.md). One per
         /// call.
         rod_per_pickup: i32 = 2 in 1 ..= 10;
+        /// The most calls the uplink holds, crates stacked.
+        rod_max: i32 = 6 in 1 ..= 20;
         /// How long the trigger is held before a release calls; a shorter
         /// tap calls nothing.
         rod_settle_seconds: f32 = 0.25 in 0.0 ..= 2.0;
@@ -1354,6 +1378,8 @@ tunables! {
         /// Wells one gravity well crate loads (`pickup::PickupKind::GravityWell`,
         /// docs/gravity-well.md). One per launch; the anchor costs nothing.
         well_per_pickup: i32 = 3 in 1 ..= 10;
+        /// The most wells the projector holds, crates stacked.
+        well_max: i32 = 6 in 1 ..= 20;
         /// After a launch, seconds before the next launch. The anchor
         /// press is never held back by it.
         well_reload_seconds: f32 = 1.5 in 0.0 ..= 10.0;
@@ -1475,10 +1501,11 @@ tunables! {
     }
 
     group flamethrower {
-        /// Seconds of burn one flamethrower pickup grants; a second pickup
-        /// stacks. The weapon is stocked while any fuel is left, and the
-        /// HUD shows whole seconds.
+        /// Seconds of burn one flamethrower pickup grants. The weapon is
+        /// stocked while any fuel is left, and the HUD shows whole seconds.
         flame_fuel_per_pickup: f32 = 9.0 in 0.5 ..= 60.0;
+        /// The most seconds of fuel a tank carries, crates stacked.
+        flame_fuel_max: f32 = 30.0 in 0.5 ..= 180.0;
         /// Length of the cone (px) from the muzzle; a solid tile on the
         /// centre line caps it for that frame.
         flame_range: f32 = 164.0 in 16.0 ..= 400.0;

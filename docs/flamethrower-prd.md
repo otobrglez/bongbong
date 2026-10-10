@@ -55,7 +55,8 @@ against them. It is also the first weapon that can hurt its user.
   replaces the minigun it was carrying, and the trigger fires shells again
   once the fuel is spent.
 - **Fuel.** `Tank::flame_fuel: f32`, seconds of burn. A pickup fills it to
-  `flame_fuel_per_pickup` (9 s); a second pickup refills, never stacks. The weapon counts
+  `flame_fuel_per_pickup` (9 s); a second pickup stacks 9 s more, up to `flame_fuel_max`
+  (30 s; BB-66). The weapon counts
   as stocked while `flame_fuel > 0` (`weapon_ammo` reports the fuel
   rounded up, so the last fraction of a second still fires).
 - **Trigger.** Full-auto while held, like the laser and minigun, but with
@@ -196,6 +197,7 @@ One new `tunables!` group, `flamethrower`:
 | Knob | Default | Meaning |
 |---|---|---|
 | `flame_fuel_per_pickup` | 9.0 s | fuel a pickup grants; stacks |
+| `flame_fuel_max` | 30.0 s | the most fuel a tank carries, crates stacked |
 | `flame_range` | 164 px | cone length from the muzzle |
 | `flame_half_angle_deg` | 21.4 | cone half angle |
 | `flame_damage_per_second` | 20 | to a tank inside the cone |

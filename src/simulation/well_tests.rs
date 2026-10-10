@@ -1508,7 +1508,8 @@ fn the_spawn_swap_hands_out_the_well_by_its_share() {
 }
 
 /// A well crate loads three wells and replaces the special carried; a
-/// second refills to three; an enemy takes it only while it carries none.
+/// second stacks on what is left, up to six; an enemy takes it only while
+/// it carries none.
 #[test]
 fn a_well_crate_arms_the_well_and_replaces_the_special_carried() {
     let mut tank = Tank::default();
@@ -1517,7 +1518,9 @@ fn a_well_crate_arms_the_well_and_replaces_the_special_carried() {
     assert_eq!((tank.special(), tank.wells, tank.missile_ammo), (Some(ActiveWeapon::GravityWell), tuning().well_per_pickup, 0));
     tank.wells = 1;
     tank.take_weapon(ActiveWeapon::GravityWell);
-    assert_eq!(tank.wells, tuning().well_per_pickup, "refilled");
+    assert_eq!(tank.wells, 1 + tuning().well_per_pickup, "stacked");
+    tank.take_weapon(ActiveWeapon::GravityWell);
+    assert_eq!(tank.wells, tuning().well_max, "up to the carry limit");
     let mut enemy = Tank { owner: Owner::Enemy(4), ..Tank::default() };
     assert!(enemy.wants_pickup(PickupKind::GravityWell));
     enemy.take_weapon(ActiveWeapon::Plasma);

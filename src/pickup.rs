@@ -25,9 +25,9 @@ pub enum PickupKind {
     Ammo,
     /// Arms the laser with `laser_charges_per_pickup` charges. A tank
     /// carries one special weapon at a time (`tank::Tank::take_weapon`): a
-    /// weapon crate replaces the one carried and refills the same one to a
-    /// crate's worth, and the trigger falls back to shells once it is
-    /// spent. While charged, firing resolves an instant beam hit instead of
+    /// weapon crate replaces the one carried and stacks a crate's worth on
+    /// the same one, up to its carry limit (`laser_charges_max` and its
+    /// like), and the trigger falls back to shells once it is spent. While charged, firing resolves an instant beam hit instead of
     /// the tank's normal shell.
     Laser,
     /// Arms the minigun with `minigun_ammo_per_pickup` rounds (one weapon

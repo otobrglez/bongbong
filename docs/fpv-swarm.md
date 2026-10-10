@@ -3,9 +3,10 @@
 BB-40, the fourth of the six weapons of BB-36. A special weapon from its own
 crate (`pickup = "fpv_swarm"`), one at a time like every other
 (`Tank::take_weapon`): a crate loads `fpv_drones_per_pickup` (6) drones, a
-re-pick refills to six, another weapon's crate replaces it. Seats and
-enemies alike: an enemy takes the crate while it carries no special
-(`Tank::wants_pickup`) and uses it by its own rule (§4).
+re-pick stacks six more up to `fpv_drones_max` (12), another weapon's crate
+replaces it. Seats and
+enemies alike: an enemy takes the crate while it carries no special, or to
+stack the swarm it carries (`Tank::wants_pickup`) and uses it by its own rule (§4).
 
 Six quadcopters hover in a halo over the tank. Each press sends one up, out
 and over the walls at the nearest enemy inside the seat's sight box - or,
@@ -34,17 +35,22 @@ whose show outlives its frame (§8).
 ### The halo
 
 - **The halo is the stock.** `Tank::fpv_drones` is the count, and the halo
-  is its picture: `fpv_drones` of `full_load` slots on a ring round the
-  hull. The drones in it are not in the world - no entity, no body, no hit
+  is its picture: `fpv_drones` of the `fpv::Halo`'s slots on a ring round
+  the hull. The drones in it are not in the world - no entity, no body, no hit
   box, no wire entry beyond the count `TankState::ammo` already carries -
   so nothing strikes a hovering drone and nothing collides with one
   (§12, decision 1).
-- **Fixed slots.** Slot `k` of `n = full_load` stands at the bearing
-  `FPV_HALO_START_DEG + k * 360 / n` (30, 90, 150, ... at six; 0 = up,
-  clockwise), `FPV_HALO_RADIUS_FRACTION` (0.55) of the tank's sprite size
-  from its centre (44 px for a standard chassis, outside the hull) and
+- **Fixed slots.** A crate's six stand at the bearings
+  `FPV_HALO_START_DEG + k * 60` (30, 90, 150, ...; 0 = up, clockwise), and
+  the crates a full stock stacks (`fpv_drones_max` 12: two, BB-66) each
+  turn their ring an equal share of a step on from the one before - with
+  two, a second crate's six at 60, 120, 180, ... - so slot `k` is crate
+  `k / 6`'s and never moves as
+  crates come and go (`fpv::Halo`: `per`, `crates`, `place`). Each slot is
+  `FPV_HALO_RADIUS_FRACTION` (0.55) of the tank's sprite size from its
+  centre (44 px for a standard chassis, outside the hull) and
   `FPV_HALO_HEIGHT_PX` (14) above the ground: `fpv::halo_slot(centre,
-  sprite_size, k, n)`, a pure function of the hull's position. The ring
+  sprite_size, k, halo)`, a pure function of the hull's position. The ring
   is fixed in the world: it neither orbits nor turns with the hull. The
   drones in slots `0..fpv_drones` hover there; each bobs a block up and
   down and its rotors turn (drawn only, §5).
@@ -292,7 +298,7 @@ no damage (§12, decision 8). A falling drone is no longer an air target.
 | Its tank teleports | Moves with it | Unaffected |
 | Its target teleports | - | Lock lost: dives where it went in |
 | Another special's crate | Gone | Unaffected |
-| An FPV crate | Refilled to six | Unaffected |
+| An FPV crate | Six more, up to twelve | Unaffected |
 | The round ends | Drawn as ever | Fly out and burst harmlessly |
 
 ## 2. Where it lives
@@ -347,11 +353,11 @@ Each item of the checklist (docs/sonic-hammer.md §3.0) gets its swarm arm:
    missiles' and grenades' crates), `PickupKind::weapon`
    (`Some(ActiveWeapon::FpvSwarm)`), `name`.
 2. `ActiveWeapon::FpvSwarm` (`name` "fpv_swarm", `full_load` =
-   `fpv_drones_per_pickup`, `tell_seconds` none - the flight is its tell,
+   `fpv_drones_max`, `tell_seconds` none - the flight is its tell,
    §4 -, `trigger` `Trigger::Press`), appended to `SPECIAL_WEAPONS`;
    `Tank::fpv_drones` with its arms in `weapon_ammo`, `take_weapon`,
    `empty_stock`, `module_cols`. `wants_pickup` reads `special()`: an enemy
-   takes the crate only while it carries no special.
+   takes the crate while it carries no special, or to stack its swarm.
 3. The dispatch arm in `weapons::dispatch_fire` (`fire_fpv`); the
    trigger in `drive_player` by `ActiveWeapon::trigger` (`Press`).
 4. `pickup_phase` needs nothing.
@@ -962,7 +968,7 @@ drone, the tank and their age, hashed from ids and slots, never rolled.
   `Tank::fpv_lifting`) in `HUD_FPV_COLOR` (`#FF2D5F`, the ink's crimson)
   and the glyph; offline, the
   EMP's `WPN OFFLINE`. The ring's ammo pips are the drones left against
-  `full_load` (6). Nothing new to lay out.
+  `full_load`, the carry limit (12). Nothing new to lay out.
 - **Off the screen** (`indicators.rs`): `ArrowKind::Drone { diving }` for
   every opposing drone locked on this seat - or on the players' frog - off
   the screen (`Scene::drones`, from the drones' `lock`, so a replica draws
@@ -983,6 +989,7 @@ in `enemies`:
 | Row | Default | Range | Doc |
 |---|---|---|---|
 | `fpv_drones_per_pickup: i32` | 6 | 1..=12 | Drones one FPV crate loads into the halo. One per press. |
+| `fpv_drones_max: i32` | 12 | 1..=24 | The most drones a halo holds, crates stacked (BB-66); each crate past the first hovers between the ones before. |
 | `fpv_reload_seconds` | 0.4 | 0..=10 | Seconds between two launches. |
 | `fpv_launch_seconds` | 0.35 | 0.05..=2 | How long a drone climbs out of the halo before it turns for its aim. |
 | `fpv_launch_speed` | 70 | 0..=400 | How fast it drifts outward from its slot while it climbs (px/s). |
