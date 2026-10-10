@@ -95,11 +95,19 @@ pub enum CellObject {
     /// hurting whatever drives over it and setting off any drum it reaches.
     /// The author's fuse (docs/barrel-explosion-variety.md section D).
     Oil,
-    /// The two tree species (docs/TREES_SPEC.md). Solid like a prop, but
-    /// drawn from 48px cells so the canopy overhangs the cell it stands
-    /// in; both burn, and a tank can flatten one by driving at it.
+    /// The tree species (docs/TREES_SPEC.md), one kind each, named as
+    /// `Material` names them (`obstacle::TREE_SPECIES`). Solid like a prop,
+    /// but drawn from 48px cells so the canopy overhangs the cell it stands
+    /// in; all burn, and a tank can flatten one by driving at it.
     Tree,
     Pine,
+    Spruce,
+    Scots,
+    Fir,
+    Birch,
+    Willow,
+    Palm,
+    Snag,
     /// Tall grass: cover a tank can sit in. Deliberately **not** solid and
     /// deliberately not an `Obstacle` - `Game::nav_grid` feeds every
     /// obstacle into pathfinding with no material filter, so anything that
@@ -174,6 +182,13 @@ impl CellObject {
             CellObject::Target => Some(Material::Target),
             CellObject::Tree => Some(Material::Tree),
             CellObject::Pine => Some(Material::Pine),
+            CellObject::Spruce => Some(Material::Spruce),
+            CellObject::Scots => Some(Material::Scots),
+            CellObject::Fir => Some(Material::Fir),
+            CellObject::Birch => Some(Material::Birch),
+            CellObject::Willow => Some(Material::Willow),
+            CellObject::Palm => Some(Material::Palm),
+            CellObject::Snag => Some(Material::Snag),
             CellObject::Tesla { .. } => Some(Material::Tesla),
             CellObject::GunTower { .. } => Some(Material::GunTower),
             CellObject::BioSlush { .. } => Some(Material::BioSlush),
@@ -231,6 +246,13 @@ impl CellObject {
             Material::Target => Some(CellObject::Target),
             Material::Tree => Some(CellObject::Tree),
             Material::Pine => Some(CellObject::Pine),
+            Material::Spruce => Some(CellObject::Spruce),
+            Material::Scots => Some(CellObject::Scots),
+            Material::Fir => Some(CellObject::Fir),
+            Material::Birch => Some(CellObject::Birch),
+            Material::Willow => Some(CellObject::Willow),
+            Material::Palm => Some(CellObject::Palm),
+            Material::Snag => Some(CellObject::Snag),
             Material::Lamp => Some(CellObject::Lamp),
             _ => None,
         }
@@ -239,9 +261,10 @@ impl CellObject {
 
 /// The battlefield's look: which retint of the ground tileset and which
 /// tall-grass sheet a round draws with (TOML: a top-level `theme =
-/// "desert"`). Purely presentational - the simulation, the nav grid and
-/// the linter never read it - so two maps that differ only in theme play
-/// identically. Absent means `Grass`, so every older file parses
+/// "desert"`). Presentational but for one rule: a desert's trees are dry
+/// (`Material::is_dry`) and roll `dry_tree_flammable_chance` at spawn, so
+/// two maps that differ only in theme play identically unless they have
+/// trees. The nav grid and the linter never read it. Absent means `Grass`, so every older file parses
 /// unchanged. Both sheets of every theme ship in every build
 /// (`ground_texture_path`/`grass_texture_path` name them), and `app.rs`
 /// picks the pair by the live map each frame, so the builder can switch a

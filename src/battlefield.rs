@@ -481,7 +481,7 @@ pub fn spawn_from_map(
         match *obj {
             CellObject::Wall { material } => {
                 let variant = material_variant[&material];
-                let chance = material.flammable_chance();
+                let chance = material.flammable_chance(false);
                 let flammable = chance > 0.0 && rng.random_bool(chance);
                 let body = physics.spawn_static(
                     pos,
@@ -496,7 +496,14 @@ pub fn spawn_from_map(
             | CellObject::Fence
             | CellObject::Target
             | CellObject::Tree
-            | CellObject::Pine => {
+            | CellObject::Pine
+            | CellObject::Spruce
+            | CellObject::Scots
+            | CellObject::Fir
+            | CellObject::Birch
+            | CellObject::Willow
+            | CellObject::Palm
+            | CellObject::Snag => {
                 let material = obj.material().expect("prop and tree cells spawn a material");
                 // The roll is always drawn, even for a barrel whose drum
                 // the map pins: skipping it would shift every RNG draw
@@ -505,15 +512,19 @@ pub fn spawn_from_map(
                 let rolled = rng.random_range(0..material.variants());
                 let variant = obj.drum().map_or(rolled, |d| d as i32);
                 // Zero chance draws no RNG, so a map with no trees replays
-                // exactly as it did before they existed.
-                let chance = material.flammable_chance();
+                // exactly as it did before they existed. A dry tree's odds
+                // differ, never whether the roll is drawn.
+                let dry = material.is_dry(map.theme);
+                let chance = material.flammable_chance(dry);
                 let flammable = chance > 0.0 && rng.random_bool(chance);
                 let body = physics.spawn_static(
                     pos,
                     tile_half_extent(material, &solid_cells, col, row, obstacle_half_extent),
                 );
                 obstacle_positions.push(pos);
-                world.spawn((Obstacle::new(material, variant, pos, flammable, body),));
+                let mut tile = Obstacle::new(material, variant, pos, flammable, body);
+                tile.dry = dry;
+                world.spawn((tile,));
             }
             // A tower is a tile that draws no roll: its `variant` is the
             // side it fights for, and the weapon beside it is built from

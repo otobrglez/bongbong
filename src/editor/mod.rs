@@ -207,9 +207,9 @@ pub struct BuilderInput {
 pub enum Tool {
     Wall(Material),
     /// A destructible standalone solid: one of the three props
-    /// (`Material::Sandbag`/`Barrel`/`Fence`) or one of the two tree
-    /// species (`Material::Tree`/`Pine`). Any number, variant rolled per
-    /// tile when the round spawns.
+    /// (`Material::Sandbag`/`Barrel`/`Fence`) or one of the tree species
+    /// (`obstacle::TREE_SPECIES`). Any number, variant rolled per tile
+    /// when the round spawns.
     Prop(Material),
     /// A barrel of a pinned kind (`obstacle::Drum`): the red oil drum
     /// that leaves a burning pool, or the grey fuel drum that goes off
@@ -269,7 +269,7 @@ pub enum Tool {
 /// for the six tower tools inside the eleven rows a dropdown fits, and the
 /// range board stands with the actors, the thing on the field there to be
 /// shot at.
-pub const TOOLS: [Tool; 52] = [
+pub const TOOLS: [Tool; 59] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -291,6 +291,13 @@ pub const TOOLS: [Tool; 52] = [
     Tool::TallGrass,
     Tool::Prop(Material::Tree),
     Tool::Prop(Material::Pine),
+    Tool::Prop(Material::Spruce),
+    Tool::Prop(Material::Scots),
+    Tool::Prop(Material::Fir),
+    Tool::Prop(Material::Birch),
+    Tool::Prop(Material::Willow),
+    Tool::Prop(Material::Palm),
+    Tool::Prop(Material::Snag),
     Tool::OilTrail,
     Tool::Gate,
     Tool::Portal,
@@ -339,6 +346,13 @@ impl Tool {
             Tool::Prop(Material::Target) => "target",
             Tool::Prop(Material::Tree) => "tree",
             Tool::Prop(Material::Pine) => "pine",
+            Tool::Prop(Material::Spruce) => "spruce",
+            Tool::Prop(Material::Scots) => "scots",
+            Tool::Prop(Material::Fir) => "fir",
+            Tool::Prop(Material::Birch) => "birch",
+            Tool::Prop(Material::Willow) => "willow",
+            Tool::Prop(Material::Palm) => "palm",
+            Tool::Prop(Material::Snag) => "snag",
             Tool::Prop(Material::Lamp) => "lamp",
             Tool::Prop(_) => "prop",
             Tool::Drum(Drum::Oil) => "oil_drum",
@@ -396,7 +410,8 @@ impl Tool {
     pub fn category(self) -> Option<Category> {
         match self {
             Tool::Wall(_) => Some(Category::Wall),
-            Tool::Prop(Material::Tree | Material::Pine | Material::Lamp) => Some(Category::Ground),
+            Tool::Prop(m) if m.is_tree() => Some(Category::Ground),
+            Tool::Prop(Material::Lamp) => Some(Category::Ground),
             Tool::Prop(Material::Target) => Some(Category::Actor),
             Tool::Prop(_) | Tool::Drum(_) | Tool::Tower(..) => Some(Category::Prop),
             Tool::Road | Tool::Water | Tool::Lava | Tool::Volcano | Tool::TallGrass | Tool::OilTrail | Tool::Gate | Tool::Portal => {

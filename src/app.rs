@@ -2219,6 +2219,7 @@ pub fn run(args: Args) {
                     ground: &ground_textures[theme_index(session.builder.map().theme)],
                     grass: &grass_textures[theme_index(session.builder.map().theme)],
                     trees: &trees_texture,
+                    theme: session.builder.map().theme,
                     target: &target_texture,
                     towers: &towers_texture,
                     crates: &crates_texture,
