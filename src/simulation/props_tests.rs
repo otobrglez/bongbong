@@ -1101,6 +1101,26 @@ fn a_tank_drives_through_a_bush_cell_without_stopping() {
 }
 
 #[test]
+fn a_woods_undergrowth_is_picture_only_and_hides_nobody() {
+    // A block of trees grows bushes round its edge (`woods.rs`); cover is
+    // only what the map places, so none of them conceals its cell.
+    let mut cells = String::new();
+    for c in 8..=14 {
+        for r in 4..=8 {
+            cells.push_str(&format!("cells.\"{c},{r}\" = {{ kind = \"pine\" }}\n"));
+        }
+    }
+    let game = game_on(&map_with(&cells), 1);
+    assert!(game.grass_cells.is_empty(), "the map placed no cover");
+    let grown: Vec<Position> = game.grass.iter().filter(|t| t.bush.is_some()).map(|t| t.base).collect();
+    assert!(!grown.is_empty(), "the wood grew undergrowth");
+    let terrain = Terrain::build(&game.world, W, H, &game.grass_cells, &game.water);
+    for at in grown {
+        assert!(!terrain.conceals(at), "undergrowth at {at:?} hides nobody");
+    }
+}
+
+#[test]
 fn conceals_is_a_cell_query() {
     // Cover is a property of the ground a tank stands on. Testing against
     // the drawn tufts instead would make being hidden depend on which way

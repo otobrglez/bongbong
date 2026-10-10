@@ -605,6 +605,10 @@ pub struct Obstacle {
     /// says for the map's theme. Set at spawn alongside `flammable`, which
     /// it also decided; purely visual from then on.
     pub dry: bool,
+    /// Trees only: where the crown is drawn off the cell and whether it is
+    /// mirrored (`woods::Woods::crown`), set when the round starts. The
+    /// collider, the hit box and every rule stay on `position`.
+    pub crown: crate::woods::Crown,
     /// True from the moment a flammable tile's health hits zero until it
     /// finishes charring (see `tick_burn`) - during this window `damage`
     /// is a no-op (already on fire) and `col` shows the 3-frame burn loop
@@ -675,6 +679,7 @@ impl Obstacle {
             max_health,
             flammable,
             dry: false,
+            crown: crate::woods::Crown::default(),
             burning: false,
             burn_frame: 0,
             burn_frame_timer: 0.0,
@@ -1175,20 +1180,33 @@ pub fn draw_tree(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32)
 /// `draw_tree` in `tint`: a hit's flash draws the crown again in light.
 pub fn draw_tree_tinted(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32, tint: Color) {
     let sheet = obstacle.material.sheet();
-    let src = source_rec(sheet, obstacle.row(FenceAxis::Horizontal), tree_col(obstacle, time));
+    let src = tree_source(obstacle, time);
     let size = obstacle.sprite_size();
-    tree_blit(c, sheet, src, obstacle.position, size, lean, tint);
+    tree_blit(c, sheet, src, crown_centre(obstacle), size, lean, tint);
+}
+
+/// The cell of the sheet a tree draws from now, mirrored as its crown is.
+fn tree_source(obstacle: &Obstacle, time: f32) -> Rectangle {
+    let src = source_rec(obstacle.material.sheet(), obstacle.row(FenceAxis::Horizontal), tree_col(obstacle, time));
+    if obstacle.crown.mirror { Rectangle::new(src.x, src.y, -src.width, src.height) } else { src }
+}
+
+/// Where a tree's crown is drawn: its cell's centre moved by its
+/// `Obstacle::crown` (`woods.rs`).
+pub fn crown_centre(obstacle: &Obstacle) -> Position {
+    Position::new(obstacle.position.x + obstacle.crown.dx, obstacle.position.y + obstacle.crown.dy)
 }
 
 /// The same lean applied to the drop shadow, so a bending crown does not
 /// slide out of its own shadow. Must be called before `draw_tree`.
 pub fn draw_tree_shadow(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32) {
     let sheet = obstacle.material.sheet();
-    let src = source_rec(sheet, obstacle.row(FenceAxis::Horizontal), tree_col(obstacle, time));
+    let src = tree_source(obstacle, time);
     let size = obstacle.sprite_size();
+    let centre = crown_centre(obstacle);
     let at = Position::new(
-        obstacle.position.x + tuning().shadow_dir_x * tuning().obstacle_shadow_offset,
-        obstacle.position.y + tuning().shadow_dir_y * tuning().obstacle_shadow_offset,
+        centre.x + tuning().shadow_dir_x * tuning().obstacle_shadow_offset,
+        centre.y + tuning().shadow_dir_y * tuning().obstacle_shadow_offset,
     );
     let shadow = Color::new(0, 0, 0, (255.0 * tuning().obstacle_shadow_opacity) as u8);
     tree_blit(c, sheet, src, at, size, lean, shadow);

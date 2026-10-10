@@ -1110,6 +1110,10 @@ pub struct Game {
     /// The tufts those cells scatter, built once per round. Purely drawn -
     /// see `grass.rs` for why this is not an `Obstacle`.
     pub(crate) grass: Vec<crate::grass::GrassTuft>,
+    /// The woods as a whole (`woods.rs`): where each crown is drawn, the
+    /// trails, the forest floor and the undergrowth. Built once per round
+    /// from the map; picture only.
+    pub(crate) woods: crate::woods::Woods,
     /// Queued ammo cook-offs from tanks that have died (and barrels that
     /// have blown): where each pops and how long until it does. Purely
     /// cosmetic (see `tick_cookoffs`).
@@ -1814,6 +1818,15 @@ impl Game {
                 })
                 .collect()
         };
+        // The woods: each tree's crown placed, and the undergrowth round
+        // them grown among the tufts. Hashed from the map, no RNG.
+        self.woods = crate::woods::Woods::build(&self.map);
+        for o in self.world.query_mut::<&mut Obstacle>() {
+            if o.material.is_tree() {
+                o.crown = self.woods.crown(o.cell());
+            }
+        }
+        self.grass.extend(self.woods.undergrowth());
         self.grass.sort_by(|a, b| a.base.y.total_cmp(&b.base.y));
         // Deep water counts as terrain for every clearance roll below:
         // no enemy, frog or bonus spawns in a lake.
