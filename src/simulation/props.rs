@@ -270,6 +270,10 @@ impl Game {
     fn obstacle_died(&mut self, f: &mut Frame, tile: DeadTile) {
         let DeadTile { material, variant, position: pos, chained, charred, shape } = tile;
         f.events.push(Event::ObstacleDestroyed { material, x: pos.x, y: pos.y });
+        // A felled tree opens its wood: the trails it flanked change.
+        if material.is_tree() {
+            self.woods.fell(cell_of(pos));
+        }
         if let Some(decal) = tile_rubble(material, pos, charred, self.map.theme) {
             f.decals.push(decal);
         }

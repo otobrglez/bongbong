@@ -2587,6 +2587,18 @@ tunables! {
         /// shimmers out of step with itself rather than blinking as one
         /// (`obstacle::tree_col`).
         tree_dapple_seconds: f32 = 0.9 in 0.05 ..= 10.0;
+        /// How opaque a crown is drawn over a player's own tank - the
+        /// canopy cutaway (`game.rs`, docs/WOODS.md): see-through enough to
+        /// show the hull, solid enough to still read as a tree. An enemy
+        /// under a crown stays hidden.
+        canopy_cutaway_alpha: f32 = 0.35 in 0.0 ..= 1.0;
+        /// How much of a player's hull the crowns over it must cover
+        /// together, as a share of the hull's box, before the canopy
+        /// cutaway draws them see-through (`obstacle::canopy_cutaway`).
+        /// A crown overhangs its cell by 8 px, so a hull merely beside one
+        /// tree is under a sliver of it and the tree stays solid; a hull in
+        /// a one-cell trail is under the crowns on both sides.
+        canopy_cutaway_cover: f32 = 0.3 in 0.0 ..= 1.0;
         /// How far a tree bends away from a tank shouldering it over, at
         /// the moment it goes. Scales with `ram_timer` squared, so the tree
         /// gives slowly at first and then goes - without it a rammed tree

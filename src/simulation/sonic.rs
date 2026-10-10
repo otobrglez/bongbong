@@ -247,12 +247,14 @@ const CLOSER_SPOT_CLEAR_PX: f32 = OBSTACLE_GRID_SIZE * 1.25;
 impl Game {
     /// The cells `Terrain` and the indicators take as hiding a hull: the
     /// tall grass, less the cells a sonic wave flattened a while ago
-    /// (`grass_flat`). The grass itself while nothing is flattened.
+    /// (`grass_flat`), and the trails through the woods (`woods.rs`). The
+    /// grass itself while nothing is flattened and no wood has a trail.
     pub fn cover_cells(&self) -> Cow<'_, [Position]> {
-        if self.grass_flat.is_empty() {
+        if self.grass_flat.is_empty() && self.woods.trail_positions().next().is_none() {
             return Cow::Borrowed(&self.grass_cells);
         }
-        Cow::Owned(self.grass_cells.iter().copied().filter(|&c| !self.grass_flat.contains_key(&crate::map::world_to_cell(c))).collect())
+        let grass = self.grass_cells.iter().copied().filter(|&c| !self.grass_flat.contains_key(&crate::map::world_to_cell(c)));
+        Cow::Owned(grass.chain(self.woods.trail_positions()).collect())
     }
 
     /// How each map cell answers a sonic wave, from the tiles standing now.

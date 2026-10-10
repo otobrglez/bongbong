@@ -998,7 +998,8 @@ Protocol 16 (from 15), once in the PR.
   share defaults to 0, no enemy carries one, so there is no wave, no tell,
   no skid and no sense; `SpecialSense::None` makes the `special` tier a
   `false` with no state touched; `seek_special` finds no crate;
-  `cover_cells` is `grass_cells` while `grass_flat` is empty; `knock` is
+  `cover_cells` is `grass_cells` while `grass_flat` is empty and no wood
+  has a trail (docs/WOODS.md); `knock` is
   never called. `determinism_tests`' pinned streams, the probe fixtures'
   ceilings and every thumbnail pin but the armory's new one stay as they
   are.

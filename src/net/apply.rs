@@ -491,6 +491,9 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTre
                 if let Some(decal) = tile_rubble(material, center, charred, game.map.theme) {
                     show.decals.push(decal);
                 }
+                if material.is_tree() {
+                    game.woods.fell(cell);
+                }
             }
             _ => {}
         }

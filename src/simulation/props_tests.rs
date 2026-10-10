@@ -1121,6 +1121,24 @@ fn a_woods_undergrowth_is_picture_only_and_hides_nobody() {
 }
 
 #[test]
+fn a_trail_through_a_wood_hides_whoever_stands_on_it() {
+    // Two stands of trees with a trail between them (`woods.rs`): the
+    // trail is cover like tall grass; the open ground past the wood is not.
+    let mut cells = String::new();
+    for c in 8..=17 {
+        for r in [4, 5, 7, 8] {
+            cells.push_str(&format!("cells.\"{c},{r}\" = {{ kind = \"tree\" }}\n"));
+        }
+    }
+    let game = game_on(&map_with(&cells), 1);
+    let cover = game.cover_cells();
+    assert!(crate::grass::conceals(&cover, cell_to_world(12, 6)), "the trail hides");
+    assert!(!crate::grass::conceals(&cover, cell_to_world(12, 11)), "the meadow does not");
+    let terrain = Terrain::build(&game.world, W, H, &cover, &game.water);
+    assert!(terrain.conceals(cell_to_world(12, 6)));
+}
+
+#[test]
 fn conceals_is_a_cell_query() {
     // Cover is a property of the ground a tank stands on. Testing against
     // the drawn tufts instead would make being hidden depend on which way

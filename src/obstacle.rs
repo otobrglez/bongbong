@@ -1197,9 +1197,40 @@ pub fn crown_centre(obstacle: &Obstacle) -> Position {
     Position::new(obstacle.position.x + obstacle.crown.dx, obstacle.position.y + obstacle.crown.dy)
 }
 
+/// How much of a hull box (centre and half extents) a tree's drawn crown
+/// covers, in square px of box overlap.
+fn crown_cover(obstacle: &Obstacle, (at, h): (Position, Position)) -> f32 {
+    let centre = crown_centre(obstacle);
+    let half = obstacle.sprite_size() / 2.0;
+    let wide = (half + h.x - (centre.x - at.x).abs()).clamp(0.0, 2.0 * h.x.min(half));
+    let tall = (half + h.y - (centre.y - at.y).abs()).clamp(0.0, 2.0 * h.y.min(half));
+    wide * tall
+}
+
+/// The canopy cutaway (`game.rs`): which of `trees` to draw see-through.
+/// A crown goes see-through when it is over a hull of `hulls` that the
+/// crowns together cover at least `cover` (0 to 1) of. Their overlaps are
+/// summed: a hull cannot enter a tree's cell, so no one crown covers much
+/// of it, but in a one-cell trail the crowns on both sides do.
+pub fn canopy_cutaway(trees: &[&Obstacle], hulls: &[(Position, Position)], cover: f32) -> Vec<bool> {
+    let mut see_through = vec![false; trees.len()];
+    for &hull in hulls {
+        let over: Vec<(usize, f32)> = trees.iter().enumerate().map(|(i, tree)| (i, crown_cover(tree, hull))).filter(|&(_, a)| a > 0.0).collect();
+        let covered: f32 = over.iter().map(|&(_, a)| a).sum();
+        if covered >= cover * 4.0 * hull.1.x * hull.1.y {
+            for (i, _) in over {
+                see_through[i] = true;
+            }
+        }
+    }
+    see_through
+}
+
 /// The same lean applied to the drop shadow, so a bending crown does not
-/// slide out of its own shadow. Must be called before `draw_tree`.
-pub fn draw_tree_shadow(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32) {
+/// slide out of its own shadow, `fade` (0 to 1) of its usual weight - less
+/// for a crown the canopy cutaway draws see-through. Must be called before
+/// `draw_tree`.
+pub fn draw_tree_shadow(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32, fade: f32) {
     let sheet = obstacle.material.sheet();
     let src = tree_source(obstacle, time);
     let size = obstacle.sprite_size();
@@ -1208,7 +1239,7 @@ pub fn draw_tree_shadow(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, tim
         centre.x + tuning().shadow_dir_x * tuning().obstacle_shadow_offset,
         centre.y + tuning().shadow_dir_y * tuning().obstacle_shadow_offset,
     );
-    let shadow = Color::new(0, 0, 0, (255.0 * tuning().obstacle_shadow_opacity) as u8);
+    let shadow = Color::new(0, 0, 0, (255.0 * tuning().obstacle_shadow_opacity * fade.clamp(0.0, 1.0)) as u8);
     tree_blit(c, sheet, src, at, size, lean, shadow);
 }
 
@@ -1291,3 +1322,35 @@ pub fn draw_obstacle_shadow(c: &mut impl Canvas, obstacle: &Obstacle, axis: Fenc
     let shadow = Color::new(0, 0, 0, (255.0 * tuning().obstacle_shadow_opacity) as u8);
     c.blit(sheet, src, dest, origin, 0.0, shadow);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tree(c: f32, r: f32) -> Obstacle {
+        Obstacle::new(Material::Tree, 0, Position::new(c * 32.0, r * 32.0), false, RigidBodyHandle::invalid())
+    }
+
+    /// A hull the size of a tank's, centred on a cell.
+    fn hull(c: f32, r: f32) -> (Position, Position) {
+        (Position::new(c * 32.0, r * 32.0), Position::new(13.0, 14.0))
+    }
+
+    #[test]
+    fn a_tank_beside_one_tree_leaves_it_solid() {
+        let wood = [tree(3.0, 3.0)];
+        let trees: Vec<&Obstacle> = wood.iter().collect();
+        for at in [hull(4.0, 3.0), hull(2.0, 3.0), hull(3.0, 2.0), hull(3.0, 4.0)] {
+            assert_eq!(canopy_cutaway(&trees, &[at], 0.3), vec![false]);
+        }
+    }
+
+    #[test]
+    fn a_tank_in_a_one_cell_trail_sees_through_the_crowns_on_both_sides() {
+        let wood = [tree(3.0, 2.0), tree(3.0, 4.0), tree(8.0, 2.0)];
+        let trees: Vec<&Obstacle> = wood.iter().collect();
+        assert_eq!(canopy_cutaway(&trees, &[hull(3.0, 3.0)], 0.3), vec![true, true, false]);
+        assert_eq!(canopy_cutaway(&trees, &[], 0.3), vec![false, false, false], "no hull, no cutaway");
+    }
+}
+

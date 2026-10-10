@@ -625,13 +625,29 @@ impl Game {
         // off its cell), cell order breaking ties.
         trees.sort_by(|a, b| (a.position.y + a.crown.dy).total_cmp(&(b.position.y + b.crown.dy)).then(a.position.x.total_cmp(&b.position.x)));
         let t = crate::tuning::tuning();
-        for tree in &trees {
+        // The players' hulls, for the canopy cutaway: the crowns hiding
+        // much of one are drawn see-through, so a player never loses their
+        // own tank under a wood. An enemy under a canopy stays hidden.
+        let seats: Vec<(crate::Position, crate::Position)> = self
+            .world
+            .query::<(Entity, &Tank)>()
+            .iter()
+            .filter(|&(e, tank)| !tank.is_dead() && !self.hide_players && self.is_player(e))
+            .map(|(_, tank)| tank.hull_bbox_world())
+            .collect();
+        let cutaway = crate::obstacle::canopy_cutaway(&trees, &seats, t.canopy_cutaway_cover);
+        for (tree, &see_through) in trees.iter().zip(&cutaway) {
             // A sonic wave passing sways the crown away from its pivot.
             let lean = tree_lean(tree, &movers) + crate::sonic::tree_push(tree.position, &self.sonic_waves, &t);
             if self.shadows_enabled {
-                draw_tree_shadow(c, tree, lean, self.time);
+                draw_tree_shadow(c, tree, lean, self.time, if see_through { t.canopy_cutaway_alpha } else { 1.0 });
             }
-            draw_tree(c, tree, lean, self.time);
+            if see_through {
+                let alpha = (255.0 * t.canopy_cutaway_alpha.clamp(0.0, 1.0)) as u8;
+                crate::obstacle::draw_tree_tinted(c, tree, lean, self.time, crate::math::Color::new(255, 255, 255, alpha));
+            } else {
+                draw_tree(c, tree, lean, self.time);
+            }
             if tree.burning {
                 crate::pyro::draw(c, &tile_flames(tree, self.time));
             }

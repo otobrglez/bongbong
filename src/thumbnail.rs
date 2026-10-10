@@ -172,7 +172,7 @@ mod tests {
         ("waves-basic", 0x3a19_a312_0b59_7fc1),
         ("portals", 0xa7ce_43c1_fa77_12a0),
         ("towers", 0x5985_4558_8f64_3572),
-        ("longwater", 0x13c7_3dda_4be9_1332),
+        ("longwater", 0x0ed3_0d75_6180_16ee),
         ("armory", 0x8901_ba6c_4e35_07c5),
         ("lotus-lagoon", 0x39c5_d444_7c99_256d),
         ("vulkan", 0xb5bf_141e_7ed6_1500),
@@ -188,7 +188,7 @@ mod tests {
         ("no-mans-land", 0xbf8d_6b33_e5fc_6335),
         ("glasshouses", 0x64e2_a339_f933_ab0f),
         ("scrapyard", 0x4103_57a1_4c93_bba9),
-        ("grand-campaign", 0x8c87_8d79_96fa_a129),
+        ("grand-campaign", 0xc728_b222_6d53_61c1),
         ("boot-camp", 0xef00_4ce4_9645_a149),
     ];
 
