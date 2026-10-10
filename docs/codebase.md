@@ -360,7 +360,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   under `simulation/` and no entity's state names a raylib type; the `From` impls to raylib's types
   at the bottom (`render` only) are the render boundary (draw calls take `impl Into`, so all three
   pass straight through). Add an operation the same way, never by calling out to another vector
-  library.
+  library. **Portable math**: `math::sin`/`cos`/`sin_cos`/`tan`/`atan`/`atan2`/`exp`/`powf`/`hypot`
+  are the `libm` crate's Rust, the same bits on every platform. Anything headless calls them, never
+  `f32::sin` and friends, which use the platform's libm, and glibc and Apple's round some inputs an
+  ulp apart (a seeded round split at frame 537 between a Mac and CI). `portable_math_tests` fails
+  on a platform call outside its `PRESENTATION` list of files that only draw; add a new draw-only
+  file there, never a file a round's outcome reads. Rapier runs with `enhanced-determinism` for the
+  same reason (docs/gameplay-verification-design.md).
 - `lib.rs` — *layout* constants and types only: `Position` (= `math::Vec2`), atlas columns/sizes,
   `*_VARIANTS`, collider boxes, grid/physics sizes, `HUD_BAR_HEIGHT` (the builder's bar with a
   mouse, in UI points)/`Rect`/`Layout` (`bare`: the field alone at `(0, 0)`, play's bitmap and the

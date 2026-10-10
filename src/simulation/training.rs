@@ -22,6 +22,7 @@
 //! own; only what it sets going does (a roll-in's lane and chassis rolls,
 //! the shell's damage). A map without a script runs none of it.
 
+use crate::math;
 use hecs::Entity;
 
 use crate::map::{CellObject, cell_to_world};
@@ -429,7 +430,7 @@ impl Game {
         };
         let rad = rotation.to_radians();
         let speed = tuning().shell_speed;
-        let velocity = Vec2::new(rad.sin() * speed, -rad.cos() * speed);
+        let velocity = Vec2::new(math::sin(rad) * speed, -math::cos(rad) * speed);
         let id = self.take_shot_id();
         let slot = self.take_slot();
         let row = TankKind::Titan.row();

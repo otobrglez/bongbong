@@ -18,6 +18,7 @@
 //! oil trail, light the tiles beside it, char the grass in it - is the
 //! ground-fire machinery in `props.rs`, reused untouched.
 
+use crate::math;
 use hecs::Entity;
 use crate::math::Vec2;
 
@@ -57,7 +58,7 @@ struct Cone {
 
 impl Cone {
     fn new(jet: &FlameJet, reach: f32) -> Self {
-        Cone { origin: jet.origin, dir: jet.dir, reach, spread: tuning().flame_half_angle_deg.to_radians().tan() }
+        Cone { origin: jet.origin, dir: jet.dir, reach, spread: math::tan(tuning().flame_half_angle_deg.to_radians()) }
     }
 
     /// Is `p` inside the cone, widened by `pad` on every side?

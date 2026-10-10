@@ -41,6 +41,7 @@
 //! (`Show`). What a client drew itself on its own press - its shots'
 //! muzzle ripples, its laser beams - the replica does not draw again.
 
+use crate::math;
 use std::collections::{BTreeMap, BTreeSet};
 
 use hecs::Entity;
@@ -911,7 +912,7 @@ fn apply_missiles(game: &mut Game, s: &Snapshot, mut show: Option<&mut Spectacle
         let height = dequantise_pos(ms.height);
         let unit = |deg: f32| {
             let rad = deg.to_radians();
-            Vec2::new(rad.sin(), -rad.cos())
+            Vec2::new(math::sin(rad), -math::cos(rad))
         };
         let facing = unit(dequantise_heading(ms.facing));
         let dir = unit(dequantise_heading(ms.heading));
@@ -1086,7 +1087,7 @@ fn apply_shots(game: &mut Game, s: &Snapshot) {
         let position = Position::new(dequantise_pos(sh.x), dequantise_pos(sh.y));
         let rotation = dequantise_heading(sh.heading);
         let rad = rotation.to_radians();
-        let dir = Vec2::new(rad.sin(), -rad.cos());
+        let dir = Vec2::new(math::sin(rad), -math::cos(rad));
         let knobs = tuning();
         match existing.get(&id) {
             Some(&(kind, entity)) if kind == sh.kind => match sh.kind {
@@ -1151,7 +1152,7 @@ fn apply_orbs(game: &mut Game, s: &Snapshot) {
         let position = Position::new(dequantise_pos(sh.x), dequantise_pos(sh.y));
         let rotation = dequantise_heading(sh.heading);
         let rad = rotation.to_radians();
-        let velocity = Vec2::new(rad.sin(), -rad.cos()) * speed;
+        let velocity = Vec2::new(math::sin(rad), -math::cos(rad)) * speed;
         let was = game.orbs.iter().find(|o| o.id == sh.id as u32);
         // Its age only matters for the swell, which the state says is over
         // or not: kept, but on the right side of it.
@@ -2827,7 +2828,7 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
         let mut game = quiet_round(DEFAULT_MAP, 0xB0B5, 2);
         let seat = game.tank_snapshots().into_iter().find(|t| t.slot == 0).expect("the seat");
         let rad = seat.rotation.to_radians();
-        let ahead = Position::new(seat.position.x + rad.sin() * 90.0, seat.position.y - rad.cos() * 90.0);
+        let ahead = Position::new(seat.position.x + math::sin(rad) * 90.0, seat.position.y - math::cos(rad) * 90.0);
         let enemy = game.first_enemy_slot();
         game.debug_teleport(enemy, ahead, Some(seat.rotation)).expect("an enemy");
         let shield = crate::simulation::debug::TankPatch { shield_hp: Some(500.0), ..Default::default() };

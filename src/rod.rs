@@ -8,6 +8,7 @@
 //! functions of what they draw and its age, hashed, never rolled. The world
 //! half is `simulation/rod.rs`.
 
+use crate::math;
 use std::collections::BTreeSet;
 
 use crate::canvas::Canvas;
@@ -305,7 +306,7 @@ pub fn falloff(t: &Tuning, d: f32) -> f32 {
 
 /// The shove a hull of `mass_factor` gets `d` px out (px/s).
 pub fn shove_speed(t: &Tuning, mass_factor: f32, d: f32) -> f32 {
-    let resist = mass_factor.max(0.05).powf(t.rod_mass_exponent);
+    let resist = math::powf(mass_factor.max(0.05), t.rod_mass_exponent);
     (t.rod_shove_speed * falloff(t, d) / resist).min(t.rod_shove_max_speed)
 }
 
@@ -616,7 +617,7 @@ pub fn compose_impact(out: &mut Vec<Shape>, fx: &RodImpactFx, lean: f32, t: &Tun
         for i in 0..10u32 {
             let a = i as f32 / 10.0 * std::f32::consts::TAU + 0.3 + (pyro::unit(fx.seed, i) - 0.5) * 0.3;
             let d = 30.0 + 120.0 * pyro::ease_out(p.min(1.0));
-            let pos = Position::new(at.x + a.cos() * d + lean * k, at.y + a.sin() * d * SQUASH - 6.0 * p);
+            let pos = Position::new(at.x + math::cos(a) * d + lean * k, at.y + math::sin(a) * d * SQUASH - 6.0 * p);
             let radius = 8.0 + 8.0 * p;
             let cover = (1.0 - p).clamp(0.0, 1.0);
             out.push(Shape::Puff(pyro::Puff { pos, radius, body: mid, shadow: Some(dark), lit: Some(pale), core: None, cover }));
@@ -644,7 +645,7 @@ pub fn compose_impact(out: &mut Vec<Shape>, fx: &RodImpactFx, lean: f32, t: &Tun
                 continue;
             }
             let color = if i % 2 == 0 { SMOKE[1] } else { DUST[0] };
-            out.push(Shape::Mark { pos: Position::new(at.x + a.cos() * d, at.y + a.sin() * d * SQUASH - height.max(0.0)), size: 2, color });
+            out.push(Shape::Mark { pos: Position::new(at.x + math::cos(a) * d, at.y + math::sin(a) * d * SQUASH - height.max(0.0)), size: 2, color });
         }
     }
 }
@@ -659,7 +660,7 @@ fn ellipse_ring(out: &mut Vec<Shape>, at: Position, radius: f32, width: f32, col
     let n = ((radius * std::f32::consts::TAU / pyro::BLOCK) as u32).max(8);
     for i in 0..n {
         let a = i as f32 / n as f32 * std::f32::consts::TAU;
-        let p = Position::new(at.x + a.cos() * radius, at.y + a.sin() * radius * SQUASH);
+        let p = Position::new(at.x + math::cos(a) * radius, at.y + math::sin(a) * radius * SQUASH);
         let (bx, by) = pyro::block_of(p.x, p.y);
         if pyro::bayer(bx, by) > cover {
             continue;
@@ -778,12 +779,12 @@ pub fn draw_crater(c: &mut impl Canvas, crater: &Crater, age: f32, water: Crater
             }
             let a = pyro::unit(seed ^ w, 70 + i) * std::f32::consts::TAU;
             let r0 = 18.0 * pyro::unit(seed ^ w, 80 + i);
-            let p = Position::new(at.x + a.cos() * r0, at.y + a.sin() * r0);
+            let p = Position::new(at.x + math::cos(a) * r0, at.y + math::sin(a) * r0);
             let radius = 2.0 + 4.0 * k;
             let n = 8;
             for j in 0..n {
                 let aa = j as f32 / n as f32 * std::f32::consts::TAU;
-                let q = Position::new(p.x + aa.cos() * radius, p.y + aa.sin() * radius * 0.8);
+                let q = Position::new(p.x + math::cos(aa) * radius, p.y + math::sin(aa) * radius * 0.8);
                 let (bx, by) = pyro::block_of(q.x, q.y);
                 c.fill_rect(bx * b, by * b, b, b, WATER[2]);
             }

@@ -9,6 +9,7 @@
 //! a strike's and a bullet's damage roll and a bullet's spread - so a map
 //! without towers draws nothing here, and bio slush draws nothing at all.
 
+use crate::math;
 use hecs::Entity;
 use rand::RngExt;
 
@@ -73,7 +74,7 @@ fn box_distance(p: Position, (center, half): (Position, Position)) -> f32 {
 
 /// The heading (degrees, 0 = up, clockwise) from `from` to `to`.
 fn heading_to(from: Position, to: Position) -> f32 {
-    (to.x - from.x).atan2(-(to.y - from.y)).to_degrees()
+    math::atan2(to.x - from.x, -(to.y - from.y)).to_degrees()
 }
 
 /// `b - a` wrapped into -180..=180.
@@ -89,7 +90,7 @@ fn turn_toward(heading: f32, want: f32, step: f32) -> f32 {
 
 fn unit(heading: f32) -> Vec2 {
     let r = heading.to_radians();
-    Vec2::new(r.sin(), -r.cos())
+    Vec2::new(math::sin(r), -math::cos(r))
 }
 
 /// A 32-bit hash of a cell and a frame, for the choices that must look
@@ -493,8 +494,8 @@ impl Game {
         let lead = c.pos + c.vel * (flight * t.bio_lead);
         let margin = OBSTACLE_GRID_SIZE * 0.5;
         let aim = Position::new(
-            (lead.x + scatter_angle.cos() * scatter).clamp(margin, f.width - margin),
-            (lead.y + scatter_angle.sin() * scatter).clamp(margin, f.height - margin),
+            (lead.x + math::cos(scatter_angle) * scatter).clamp(margin, f.width - margin),
+            (lead.y + math::sin(scatter_angle) * scatter).clamp(margin, f.height - margin),
         );
         let want = heading_to(tower.position, aim);
         tower.heading = turn_toward(tower.heading, want, t.bio_turn_deg_per_second * f.dt);

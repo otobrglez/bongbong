@@ -1,3 +1,4 @@
+use crate::math;
 use crate::frog::Side;
 use crate::tuning::tuning;
 use crate::math::Vec2;
@@ -210,7 +211,7 @@ impl Shell {
     pub fn spawn(tank: &Tank, owner: Owner, aim_offset: f32, lateral_offset: f32) -> Shell {
         let rot = (tank.rotation + aim_offset).to_radians();
         // rotation 0 == facing up (-Y); +90 == right, etc. matches the tank movement.
-        let dir = Vec2::new(rot.sin(), -rot.cos());
+        let dir = Vec2::new(math::sin(rot), -math::cos(rot));
         // Start at the turret/barrel tip, not the tank's own center - see
         // TANK_MUZZLE_FORWARD_OFFSET_BY_ROW for how that distance was
         // measured per tank archetype from the sprite sheet's own published
@@ -226,7 +227,7 @@ impl Shell {
         // TANK_BARREL_LATERAL_OFFSET_BY_ROW's "positive = right barrel"
         // convention.
         let hull_rot = tank.rotation.to_radians();
-        let lateral = Vec2::new(hull_rot.cos(), hull_rot.sin()) * (lateral_offset * tank.scale);
+        let lateral = Vec2::new(math::cos(hull_rot), math::sin(hull_rot)) * (lateral_offset * tank.scale);
         let position = Position::new(
             tank.position.x + dir.x * muzzle + lateral.x,
             tank.position.y + dir.y * muzzle + lateral.y,

@@ -13,6 +13,7 @@
 //! through the fixed-step loop (`Projectile::bend`), on grenades, missiles
 //! and drones where they move. The well draws no RNG of its own.
 
+use crate::math;
 use std::collections::{BTreeMap, BTreeSet};
 
 use hecs::Entity;
@@ -516,7 +517,7 @@ impl Game {
         }
         self.knock_from(f, c, -1.0, r, |mass_factor, d| {
             let falloff = (1.0 - d / r).max(0.0);
-            (t.well_fling_speed * falloff / mass_factor.max(0.05).powf(t.well_fling_mass_exponent)).min(t.well_fling_max_speed)
+            (t.well_fling_speed * falloff / math::powf(mass_factor.max(0.05), t.well_fling_mass_exponent)).min(t.well_fling_max_speed)
         });
     }
 
@@ -719,7 +720,7 @@ impl Game {
                 continue;
             }
             let turn = t.well_mark_twist * s * dt;
-            let (sin, cos) = turn.sin_cos();
+            let (sin, cos) = math::sin_cos(turn);
             let rotated = Vec2::new(off.x * cos - off.y * sin, off.x * sin + off.y * cos);
             let pulled = rotated * ((d - t.well_mark_speed * s * dt).max(0.0) / d);
             track.position = c + pulled;

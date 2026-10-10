@@ -8,6 +8,7 @@
 //! `simulation/gauss.rs`. Every choice is hashed from a slot, a position or
 //! the clock, never rolled.
 
+use crate::math;
 use serde::{Deserialize, Serialize};
 
 use crate::math::{Color, Vec2};
@@ -153,7 +154,7 @@ pub fn damage(owner: Owner, t: &Tuning) -> f32 {
 /// `gauss_recoil_mass_exponent`.
 pub fn recoil_speed(t: &Tuning, mass_factor: f32, overcharged: bool, friction: f32) -> f32 {
     let cells = t.gauss_recoil_cells * if overcharged { t.gauss_overcharge_recoil_factor } else { 1.0 };
-    (2.0 * friction.max(0.0) * OBSTACLE_GRID_SIZE * cells).sqrt() / mass_factor.max(0.1).powf(t.gauss_recoil_mass_exponent)
+    (2.0 * friction.max(0.0) * OBSTACLE_GRID_SIZE * cells).sqrt() / math::powf(mass_factor.max(0.1), t.gauss_recoil_mass_exponent)
 }
 
 /// Which of the rail module's seven cells (`tank_modules.png`,
@@ -183,7 +184,7 @@ fn zigzag(out: &mut Vec<Shape>, from: Position, angle: f32, len: f32, seed: u32,
     let mut a = angle;
     for i in 0..2 {
         a += (pyro::unit(seed, k * 16 + i) - 0.5) * 1.6;
-        let to = Position::new(at.x + a.cos() * step, at.y + a.sin() * step);
+        let to = Position::new(at.x + math::cos(a) * step, at.y + math::sin(a) * step);
         out.push(Shape::Line { from: at, to, width: 1.0, head: RAIL[3], tail: RAIL[3] });
         at = to;
     }
@@ -248,7 +249,7 @@ pub fn compose_charge(center: Position, muzzle: Position, charge: &Charge, seed:
         for i in 0..CHARGE_MOTES {
             let a = pyro::unit(seed, i) * tau + time * 3.0;
             let d = 40.0 * (1.0 - ((time * 2.0 + pyro::unit(seed, i + 20)) % 1.0));
-            let pos = Position::new(muzzle.x + a.cos() * d, muzzle.y + a.sin() * d);
+            let pos = Position::new(muzzle.x + math::cos(a) * d, muzzle.y + math::sin(a) * d);
             out.push(Shape::Mark { pos, size: 2, color: if d < 8.0 { RAIL[4] } else { RAIL[3] } });
         }
     }
@@ -316,7 +317,7 @@ pub fn compose_slug(slug: &RailSlug, t: &Tuning) -> Vec<Shape> {
             let color = pyro::alpha(if a > 0.6 { RAIL[3] } else { RAIL[1] }, fade);
             let phase = age * 6.0;
             let wobble = |along: f32| {
-                let w = (along * 0.3 + phase).sin() * TRAIL_WOBBLE_PX * (1.0 - a);
+                let w = math::sin(along * 0.3 + phase) * TRAIL_WOBBLE_PX * (1.0 - a);
                 (w / pyro::BLOCK).round() * pyro::BLOCK
             };
             dithered_line(&mut out, slug.start, slug.end, 0.0, cover, |_| color, wobble);
@@ -340,9 +341,9 @@ pub fn compose_slug(slug: &RailSlug, t: &Tuning) -> Vec<Shape> {
         let k = age / STOP_SECONDS;
         let back = dir * -1.0;
         for i in 0..6u32 {
-            let a = back.y.atan2(back.x) + (pyro::unit(slug.seed, 60 + i) - 0.5) * 2.0;
+            let a = math::atan2(back.y, back.x) + (pyro::unit(slug.seed, 60 + i) - 0.5) * 2.0;
             let reach = (6.0 + 14.0 * pyro::unit(slug.seed, 70 + i)) * pyro::ease_out(k);
-            let tip = Position::new(slug.end.x + a.cos() * reach, slug.end.y + a.sin() * reach);
+            let tip = Position::new(slug.end.x + math::cos(a) * reach, slug.end.y + math::sin(a) * reach);
             out.push(Shape::Line { from: slug.end, to: tip, width: 1.0, head: RAIL[4], tail: RAIL[3] });
         }
         out.push(Shape::Glow { pos: slug.end, radius: 16.0, color: pyro::alpha(RAIL_LIGHT, 1.0 - k) });
@@ -365,12 +366,12 @@ fn pierce_sparks(out: &mut Vec<Shape>, pierce: &Pierce, dir: Vec2, age: f32, see
         // A drone torn apart in the air: white sparks and its grey shards.
         Pierced::Drone => (5, [RAIL[4], Color::new(0xC1, 0xC1, 0xC1, 255)]),
     };
-    let heading = dir.y.atan2(dir.x);
+    let heading = math::atan2(dir.y, dir.x);
     for i in 0..count {
         let a = heading + (pyro::unit(seed, i) - 0.5) * 1.2;
         let reach = (8.0 + 18.0 * pyro::unit(seed, 10 + i)) * pyro::ease_out(k);
         let from = pierce.at + dir * (reach * 0.5);
-        let tip = Position::new(pierce.at.x + a.cos() * reach, pierce.at.y + a.sin() * reach);
+        let tip = Position::new(pierce.at.x + math::cos(a) * reach, pierce.at.y + math::sin(a) * reach);
         if k < 0.7 {
             out.push(Shape::Line { from, to: tip, width: 1.0, head: colors[0], tail: colors[1] });
         }
@@ -399,7 +400,7 @@ pub fn compose_slug_lit(slug: &RailSlug) -> Vec<Shape> {
     }
     let k = slug.age / PIERCE_SECONDS;
     let dir = slug.dir();
-    let heading = dir.y.atan2(dir.x);
+    let heading = math::atan2(dir.y, dir.x);
     for (n, pierce) in slug.pierces.iter().enumerate() {
         let seed = slug.seed ^ (n as u32).wrapping_mul(0x27D4_EB2F);
         let (count, ramp) = match pierce.what {
@@ -415,7 +416,7 @@ pub fn compose_slug_lit(slug: &RailSlug) -> Vec<Shape> {
             let a = heading + (pyro::unit(seed, i) - 0.5) * 1.2;
             let reach = (8.0 + 16.0 * pyro::unit(seed, 10 + i)) * pyro::ease_out(k);
             let fall = k * k * 10.0;
-            let pos = Position::new(pierce.at.x + a.cos() * reach, pierce.at.y + a.sin() * reach + fall);
+            let pos = Position::new(pierce.at.x + math::cos(a) * reach, pierce.at.y + math::sin(a) * reach + fall);
             let (bx, by) = pyro::block_of(pos.x, pos.y);
             if pyro::bayer(bx, by) < 1.0 - k * 0.6 {
                 out.push(Shape::Mark { pos, size: 2, color: ramp[(i as usize) % 3] });
@@ -463,7 +464,7 @@ pub fn compose_end(fx: &ChargeEndFx, lean: f32) -> Vec<Shape> {
                 for i in 0..3u32 {
                     let a = pyro::unit(fx.seed, 20 + i) * std::f32::consts::TAU;
                     let r = 4.0 + 10.0 * (k / 0.3);
-                    out.push(Shape::Mark { pos: Position::new(fx.at.x + a.cos() * r, fx.at.y + a.sin() * r), size: 2, color: RAIL[4] });
+                    out.push(Shape::Mark { pos: Position::new(fx.at.x + math::cos(a) * r, fx.at.y + math::sin(a) * r), size: 2, color: RAIL[4] });
                 }
             }
         }

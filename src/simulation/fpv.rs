@@ -9,6 +9,7 @@
 //! one thing that changes one (`Game::strike_air`). No RNG anywhere here
 //! but a burst's own rules - a fence's odds, a drum's fuse - where it lands.
 
+use crate::math;
 use hecs::Entity;
 
 use crate::ai::{Ai, in_sight_box};
@@ -68,7 +69,7 @@ pub(super) fn fire_fpv(f: &mut Frame, tank: &mut Tank, owner: Owner) {
         out,
         owner,
         from: tank.position,
-        facing: Vec2::new(r.sin(), -r.cos()),
+        facing: Vec2::new(math::sin(r), -math::cos(r)),
         want: tank.fpv_want.take().unwrap_or(AirWant::Nearest),
     });
 }

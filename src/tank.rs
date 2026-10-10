@@ -1,3 +1,4 @@
+use crate::math;
 use crate::tuning::{Tuning, tuning};
 use clap::ValueEnum;
 use rapier2d::prelude::RigidBodyHandle;
@@ -1418,7 +1419,7 @@ impl Tank {
     /// damaged tank is sluggish to speed up too, not just capped lower.
     pub fn speed_factor(&self) -> f32 {
         let hurt = (self.damage / MAX_DAMAGE).clamp(0.0, 1.0);
-        tuning().damage_speed_floor + (1.0 - tuning().damage_speed_floor) * (1.0 - hurt.powf(tuning().damage_speed_curve))
+        tuning().damage_speed_floor + (1.0 - tuning().damage_speed_floor) * (1.0 - math::powf(hurt, tuning().damage_speed_curve))
     }
 
     /// This tank's current top speed, reduced as it takes damage (see
@@ -1494,7 +1495,7 @@ impl Tank {
     /// turret's frame (`tank_art`: x to the right, y toward the tail), put
     /// in the world at the tank's facing - where a module's shot leaves.
     pub fn turret_point(&self, local: (f32, f32)) -> Position {
-        let (sin, cos) = self.rotation.to_radians().sin_cos();
+        let (sin, cos) = math::sin_cos(self.rotation.to_radians());
         let (x, y) = (local.0 * self.scale, local.1 * self.scale);
         Position::new(self.position.x + x * cos - y * sin, self.position.y + x * sin + y * cos)
     }
@@ -2307,7 +2308,7 @@ fn turret_placement(tank: &Tank) -> (Position, f32) {
     if tank.turret_thrown() {
         let r = tank.visual_rotation.to_radians();
         let (dx, dy) = (12.0 * tank.scale, 9.0 * tank.scale);
-        let off = Vec2::new(dx * r.cos() - dy * r.sin(), dx * r.sin() + dy * r.cos());
+        let off = Vec2::new(dx * math::cos(r) - dy * math::sin(r), dx * math::sin(r) + dy * math::cos(r));
         (tank.position + off, tank.visual_rotation + 150.0)
     } else {
         (tank.position, tank.turret_visual_rotation + tank.droop)
@@ -2470,7 +2471,7 @@ pub fn draw_tank_glow(c: &mut impl Canvas, tank: &Tank, time: f32, strength: f32
     let mut k = strength.clamp(0.0, 1.0) * tank.alpha();
     if tank.is_wreck() {
         let p = tank.anim_phase() * 7.0;
-        k *= 0.72 + 0.28 * (time * 11.0 + p).sin() * (time * 4.3 + p * 1.7).sin();
+        k *= 0.72 + 0.28 * math::sin(time * 11.0 + p) * math::sin(time * 4.3 + p * 1.7);
     }
     let tint = Color::new(255, 255, 255, (255.0 * k).round().clamp(0.0, 255.0) as u8);
     blit_layers(c, tank, &layers(tank, time, true), tint);
@@ -2713,7 +2714,7 @@ pub fn draw_ground_ring_scaled(
     // it uses the sine's midpoint as fixed values and reads the same
     // size/opacity on average as the shield ring.
     let pulse = match style {
-        RingStyle::Rainbow { .. } => ((time + phase) * std::f32::consts::TAU * 1.5).sin() * 0.5 + 0.5,
+        RingStyle::Rainbow { .. } => math::sin((time + phase) * std::f32::consts::TAU * 1.5) * 0.5 + 0.5,
         RingStyle::Solid(_) | RingStyle::Gauge { .. } => 0.5,
     };
     let base_radius = size * tuning().shield_glow_radius_factor * (0.94 + 0.06 * pulse);
@@ -2848,7 +2849,7 @@ pub fn draw_tank_heat_shield(c: &mut impl Canvas, tank: &Tank, time: f32) {
             break;
         }
         let a = k * std::f32::consts::TAU;
-        let (x, y) = (crate::pyro::snap(centre.x + a.sin() * r), crate::pyro::snap(centre.y - a.cos() * r));
+        let (x, y) = (crate::pyro::snap(centre.x + math::sin(a) * r), crate::pyro::snap(centre.y - math::cos(a) * r));
         let color = if (i - lit).rem_euclid(count) < 2 {
             crate::pyro::FIRE[5]
         } else if (i / 3) % 2 == 0 {
@@ -2857,7 +2858,7 @@ pub fn draw_tank_heat_shield(c: &mut impl Canvas, tank: &Tank, time: f32) {
             crate::pyro::SMOKE[0]
         };
         c.fill_rect(x - 1, y - 1, 2, 2, color);
-        c.fill_rect(x - 1 + (a.sin() * 2.0).round() as i32, y - 1 - (a.cos() * 2.0).round() as i32, 2, 2, crate::pyro::SMOKE[0]);
+        c.fill_rect(x - 1 + (math::sin(a) * 2.0).round() as i32, y - 1 - (math::cos(a) * 2.0).round() as i32, 2, 2, crate::pyro::SMOKE[0]);
     }
 }
 
@@ -3044,7 +3045,7 @@ pub fn ammo_pips(center: Position, radius: f32, rounds: i32, max: i32) -> Vec<Pi
             } else {
                 PipFill::Empty
             };
-            Pip { x: block(center.x + r * a.cos()), y: block(center.y + r * a.sin()), fill }
+            Pip { x: block(center.x + r * math::cos(a)), y: block(center.y + r * math::sin(a)), fill }
         })
         .collect()
 }

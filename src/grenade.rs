@@ -21,6 +21,7 @@
 //! over a shadow that stays on the ground, tumbling in the air and rolling
 //! on its side.
 
+use crate::math;
 use crate::canvas::Canvas;
 use crate::math::{Color, Vec2};
 use crate::pyro::{self, BLOCK};
@@ -373,7 +374,7 @@ fn axis(grenade: &Grenade) -> Vec2 {
         return across;
     }
     let turn = grenade.roll * 0.35;
-    let (s, c) = turn.sin_cos();
+    let (s, c) = math::sin_cos(turn);
     Vec2::new(across.x * c - across.y * s, across.x * s + across.y * c)
 }
 
@@ -432,7 +433,7 @@ pub fn draw_grenade(c: &mut impl Canvas, grenade: &Grenade) {
     let lit_side = if across.x * 0.6 + across.y * 0.8 > 0.0 { -1.0 } else { 1.0 };
     let lit = grenade.lamp_lit();
     // The lever rides round the can as it rolls; on the far side it hides.
-    let lever = grenade.roll.cos();
+    let lever = math::cos(grenade.roll);
     capsule(at, along, length, width, |bx, by, u, v| {
         let light = (0.55 + 0.4 * v * lit_side - 0.25 * v * v).clamp(0.0, 1.0);
         let color = if u > 0.72 {

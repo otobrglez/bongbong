@@ -203,6 +203,7 @@ pub struct ProvisionalShot {
     /// The impact frames have played out.
     pub done: bool,
 }
+use crate::math;
 use waves::WaveState;
 
 use crate::blast::{BlastFx, Scorch};
@@ -4882,7 +4883,7 @@ impl Game {
             let h = crate::blast::seed_at(center, 40 + i * 5);
             let angle = (h % 3600) as f32 / 3600.0 * std::f32::consts::TAU;
             let dist = throw * (0.35 + 0.65 * ((h >> 12) % 100) as f32 / 100.0);
-            let to = Position::new(center.x + angle.cos() * dist, center.y + angle.sin() * dist);
+            let to = Position::new(center.x + math::cos(angle) * dist, center.y + math::sin(angle) * dist);
             show.decals.push(Decal::thrown(RUBBLE_ROW_TANK, center, to, 40 + i * 5));
         }
     }
@@ -6046,7 +6047,7 @@ fn drive_tank_with(
         // (frame-rate independent); snap the last sliver below
         // TANK_DECEL_SNAP_PX rather than trailing the asymptote forever.
         let rate = tuning().tank_decel_curve_rate * tank.speed_factor() / tank.mass() * footing.brake;
-        let remaining_gap = want_on * (-rate * dt).exp();
+        let remaining_gap = want_on * math::exp(-rate * dt);
         if remaining_gap.abs() < tuning().tank_decel_snap_px { want_on } else { want_on - remaining_gap }
     };
 
@@ -6517,7 +6518,7 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position, depth:
     }
     // Unit vector pointing back along this frame's travel.
     let back = Vec2::new((before.x - tank.position.x) / moved, (before.y - tank.position.y) / moved);
-    let mut heading = (-back.x).atan2(back.y).to_degrees();
+    let mut heading = math::atan2(-back.x, back.y).to_degrees();
     if heading < 0.0 {
         heading += 360.0;
     }
@@ -6533,7 +6534,7 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position, depth:
         let dist_back = rear + tank.track_accum;
         // Per-tank wobble so a straight drive doesn't stamp identical marks.
         let wobble = tank.track_wobble_amp
-            * (tank.track_mark_count as f32 * tank.track_wobble_freq + tank.track_wobble_phase).sin();
+            * math::sin(tank.track_mark_count as f32 * tank.track_wobble_freq + tank.track_wobble_phase);
         tracks.push(Track {
             position: Position::new(tank.position.x + back.x * dist_back, tank.position.y + back.y * dist_back),
             rotation: heading + wobble,
@@ -6877,10 +6878,12 @@ mod determinism_tests {
         // draws does: re-baseline with the map only once nothing but the
         // map moved them. The per-seat block runs once per seat after
         // player 1, so a second seat does not disturb the first's stream.
-        // Never bump these to go green - work out which change moved them
-        // first.
+        // They are the same on every platform: the round's math is portable
+        // (`math::sin` and friends), so a Mac and a Linux runner agree to
+        // the bit. Never bump these to go green - work out which change
+        // moved them first.
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (15_662_619_869_435_857_390, 13_765_289_247_472_503_071), "(one seat, two seats)");
+        assert_eq!((one, two), (15_662_619_869_435_857_390, 13_046_804_480_861_549_972), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round

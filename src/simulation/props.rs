@@ -4,6 +4,7 @@
 //! the fires an oil drum or a lit trail leaves on the ground, a fuel
 //! drum's launch, and tanks ramming sandbags, fences and barrels.
 
+use crate::math;
 use crate::tuning::tuning;
 use hecs::Entity;
 use rand::RngExt;
@@ -503,7 +504,7 @@ impl Game {
             let h = crate::blast::seed_at(center, 40 + i * 5);
             let angle = (h % 3600) as f32 / 3600.0 * std::f32::consts::TAU;
             let dist = t.barrel_part_throw_px * (0.35 + 0.65 * ((h >> 12) % 100) as f32 / 100.0);
-            let to = Position::new(center.x + angle.cos() * dist, center.y + angle.sin() * dist);
+            let to = Position::new(center.x + math::cos(angle) * dist, center.y + math::sin(angle) * dist);
             show.decals.push(Decal::thrown(RUBBLE_ROW_BARREL, center, to, 40 + i * 5));
         }
 
@@ -527,12 +528,12 @@ impl Game {
             }
             rethrown += 1;
             let h = crate::blast::seed_at(decal.center, 60);
-            let mut angle = (decal.center.y - center.y).atan2(decal.center.x - center.x);
+            let mut angle = math::atan2(decal.center.y - center.y, decal.center.x - center.x);
             angle += ((h % 100) as f32 / 100.0 - 0.5) * 0.8;
             let throw = 16.0 + ((h >> 8) % 24) as f32;
             let to = Position::new(
-                (center.x + angle.cos() * (dist + throw)).clamp(0.0, width),
-                (center.y + angle.sin() * (dist + throw)).clamp(0.0, height),
+                (center.x + math::cos(angle) * (dist + throw)).clamp(0.0, width),
+                (center.y + math::sin(angle) * (dist + throw)).clamp(0.0, height),
             );
             decal.rethrow(to);
         }
@@ -789,7 +790,7 @@ impl Game {
         let dx = at.x - from.x;
         let dy = at.y - from.y;
         let d = (dx * dx + dy * dy).sqrt();
-        let base = if d > 0.001 { dy.atan2(dx) } else { (h % 360) as f32 / 360.0 * std::f32::consts::TAU };
+        let base = if d > 0.001 { math::atan2(dy, dx) } else { (h % 360) as f32 / 360.0 * std::f32::consts::TAU };
         let angle = base + ((h % 100) as f32 / 100.0 - 0.5) * 0.9;
         let (lo, hi) = (t.fuel_launch_cells_min.max(1), t.fuel_launch_cells_max.max(t.fuel_launch_cells_min).max(1));
         let cells = lo + ((h >> 8) % (hi - lo + 1) as u32) as i32;
@@ -802,7 +803,7 @@ impl Game {
             .collect();
         let start = cell_of(at);
         for n in (1..=cells).rev() {
-            let target = Position::new(at.x + angle.cos() * n as f32 * OBSTACLE_GRID_SIZE, at.y + angle.sin() * n as f32 * OBSTACLE_GRID_SIZE);
+            let target = Position::new(at.x + math::cos(angle) * n as f32 * OBSTACLE_GRID_SIZE, at.y + math::sin(angle) * n as f32 * OBSTACLE_GRID_SIZE);
             let cell = cell_of(target);
             let pos = cell_to_world(cell.0, cell.1);
             let inside = pos.x >= OBSTACLE_GRID_SIZE

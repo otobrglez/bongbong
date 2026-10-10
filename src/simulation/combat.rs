@@ -2,6 +2,7 @@
 //! ram contact between the player and an enemy, a wreck's explosion, and
 //! the frog's evasive hop.
 
+use crate::math;
 use crate::tuning::tuning;
 use hecs::Entity;
 use rand::RngExt;
@@ -447,14 +448,14 @@ pub(super) fn frog_hop_target(
     let jitter = rng
         .random_range(-tuning().frog_hop_angle_jitter_deg..tuning().frog_hop_angle_jitter_deg)
         .to_radians();
-    let base_angle = away_dir.y.atan2(away_dir.x) + jitter;
+    let base_angle = math::atan2(away_dir.y, away_dir.x) + jitter;
     let margin = tuning().frog_hop_bounds_margin;
     for wet_only in [true, false] {
         for step in FROG_HOP_DISTANCE_STEPS {
             for offset_deg in FROG_HOP_ANGLE_FAN_DEG {
                 let angle = base_angle + offset_deg.to_radians();
                 let reach = distance * step;
-                let candidate = Position::new(frog_pos.x + angle.cos() * reach, frog_pos.y + angle.sin() * reach);
+                let candidate = Position::new(frog_pos.x + math::cos(angle) * reach, frog_pos.y + math::sin(angle) * reach);
                 let in_bounds = candidate.x >= margin
                     && candidate.x <= width - margin
                     && candidate.y >= margin

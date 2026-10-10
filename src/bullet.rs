@@ -13,6 +13,7 @@
 //! ricochet (see `simulation.rs`'s bullet hit-resolution, which skips the
 //! shell loop's ricochet branch entirely).
 
+use crate::math;
 use crate::tuning::tuning;
 use crate::math::Vec2;
 
@@ -125,10 +126,10 @@ impl Bullet {
         let position = tank.turret_point(crate::tank_art::MINIGUN_MUZZLE[tank.row as usize]);
         let facing = tank.rotation.to_radians();
         let sight = tuning().minigun_boresight_px;
-        let (sx, sy) = (tank.position.x + facing.sin() * sight, tank.position.y - facing.cos() * sight);
-        let rotation = (sx - position.x).atan2(-(sy - position.y)).to_degrees() + aim_offset;
+        let (sx, sy) = (tank.position.x + math::sin(facing) * sight, tank.position.y - math::cos(facing) * sight);
+        let rotation = math::atan2(sx - position.x, -(sy - position.y)).to_degrees() + aim_offset;
         let rot = rotation.to_radians();
-        let dir = Vec2::new(rot.sin(), -rot.cos());
+        let dir = Vec2::new(math::sin(rot), -math::cos(rot));
         Bullet {
             state: BulletState::Muzzle,
             position,
