@@ -9,8 +9,8 @@ All destructible obstacles in one sheet. Unlike the tank and shell sheets, these
 | Property | Value |
 |---|---|
 | Filename | `walls_sheet.png` |
-| Dimensions | 512 × 832 px |
-| Grid | 16 columns × 26 rows |
+| Dimensions | 512 × 1056 px |
+| Grid | 16 columns × 33 rows |
 | Cell size | 32 × 32 px (uniform, no padding) |
 | Format | PNG, RGBA, straight (non-premultiplied) alpha |
 
@@ -71,6 +71,10 @@ Column count varies by material. **Cells outside a material's range are empty** 
 | 20 | **Rubble — fence** | 0–7 | snapped pickets and loose wire, 8 variants |
 | 21 | **Rubble — tank** | 0–7 | blown-off hull plate and track links, 8 variants |
 | 22–25 | **Edge caps** | 0–15 | brick / iron / wood / glass, column = 4-bit neighbour mask |
+| 26–29 | **Concrete** | 0–3 | intact + 3 damage (BB-83, §11) |
+| 30 | **Edge caps — concrete** | 0–15 | as rows 22–25 |
+| 31 | **Rubble — concrete** | 0–7 | slabs and a bent bar, 8 variants |
+| 32 | **Rebar cage** | 0–1 | whole, bent by a heavy blast |
 
 ```
 row_base:  brick = 0,  iron = 4,  wood = 8,  glass = 12
@@ -421,4 +425,41 @@ replica throw the same pieces.
 | Glass cascade | a pane that dies (but to a rod's crush) shatters a cracked neighbour `glass_cascade_seconds` (0.07) later, and that one the next; an intact neighbour takes `glass_stress_damage` (1) - a crack |
 
 Dust stays scenery: nothing a breach throws up blocks sight.
+
+---
+
+## 11. Concrete and cages (BB-83)
+
+The fifth wall material, the heavy one, in one warm `STONE_MD` grey - a step
+between brick's `STONE_LT` and iron's `STONE_DK`, so the three greys read
+apart. Rows 26–29 are its four variants, appended after every other block so
+no row moved:
+
+| Row | Type | Surface |
+|---|---|---|
+| 26 | `slab` | Smooth pour, a lift line every 16 px, form-tie holes |
+| 27 | `block` | 16 × 16 cinder blocks |
+| 28 | `panel` | Tall precast panels, a seam every 16 px |
+| 29 | `bunker` | Rough pitted aggregate, no joints |
+
+Columns 0–3: intact, chipped, cracked, battered - surface damage only, never
+a hole: concrete breaks chunk by chunk (§10, `concrete_chunk_health` 20,
+about twice brick's work). Its edge caps are row 30 (`EDGE_CAP_ROW_CONCRETE`,
+not `EDGE_CAP_ROW_BASE + 4`, which would land on its variants; the code asks
+`Material::cap_row`), its rubble row 31.
+
+A concrete map's variant is not rolled: it hashes from the map's first
+concrete cell, so a round's RNG stream is the one it was before concrete.
+
+**Cages.** Where a concrete tile would die - its chunks down to
+`wall_collapse_chunks` - it gives way into its rebar instead, and a wired
+pane (glass `reinforced`, row 13) that shatters into its mesh
+(`Obstacle::cage`). The cage stops hulls (its body is the whole cell, its nav
+cell stays blocked) and lets every shot through (`Terrain::sweep` sees a tile
+with no chunks). Shots, rams and flames do not touch it; `cage_cut_hits` (2)
+blasts of `cage_cut_damage` (15) or more cut it down, and a rail or a rod
+outright, which is when it dies and leaves its rubble. Drawn from row 32 -
+column 0 whole, column 1 bent once a blast has hit it - and a mesh from
+glass's shattered column. It throws no edge cap. Its hits left travel in
+`TileState::cage`.
 

@@ -210,7 +210,7 @@ impl Class {
     pub fn solid(material: Material, side: Side) -> Class {
         match material {
             Material::Brick => Class::Brick,
-            Material::Iron | Material::Door => Class::Iron,
+            Material::Iron | Material::Concrete | Material::Door => Class::Iron,
             Material::Wood => Class::Wood,
             Material::Glass => Class::Glass,
             Material::Sandbag | Material::Barrel | Material::Fence | Material::Target => Class::Prop,

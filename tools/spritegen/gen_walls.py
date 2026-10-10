@@ -1018,7 +1018,140 @@ def draw_edge_cap(base, mask):
     return img
 
 
-COLS, ROWS = 16, 26
+# ======================================================================
+# CONCRETE -- poured walls with rebar inside (BB-83)
+# ======================================================================
+# The fifth wall material, the heavy one: one warm STONE_MD grey, a step
+# between brick's pale STONE_LT and iron's STONE_DK, so the three greys
+# separate at a glance. Four variants, each tiling on periods that divide
+# 32 like every other wall:
+#   slab   - smooth pour, a lift line every 16 px, form-tie holes
+#   block  - 16 x 16 cinder blocks with a one-pixel joint
+#   panel  - tall precast panels, a vertical seam every 16 px
+#   bunker - rough aggregate, pitted, no joints
+# States 0-3: intact, chipped, cracked, battered. Concrete never shows a
+# hole of its own in these cells: it breaks chunk by chunk (chunks.rs), and
+# what is left when it goes is the rebar cage (row 32).
+CONCRETE_BASE = STONE_MD
+CONCRETES = [
+    dict(name='slab', style='slab'),
+    dict(name='block', style='block'),
+    dict(name='panel', style='panel'),
+    dict(name='bunker', style='bunker'),
+]
+
+
+def draw_concrete(v, dmg, seed):
+    rng = random.Random(seed)
+    img = blank()
+    base = CONCRETE_BASE + (255,)
+    rect(img, 0, 0, 31, 31, base)
+    style = v['style']
+    # A sparse aggregate speckle on every face: a light and a dark step, so
+    # the pour reads as stone rather than paint.
+    for _ in range(specks(26 if style == 'bunker' else 12)):
+        px(img, rng.randint(0, 31), rng.randint(0, 31), STONE_MID + (255,))
+    for _ in range(specks(20 if style == 'bunker' else 10)):
+        px(img, rng.randint(0, 31), rng.randint(0, 31), STONE_MDK + (255,))
+    if style == 'slab':
+        for y in (14, 30):
+            rect(img, 0, y, 31, y + 1, STONE_MDK + (255,))
+            rect(img, 0, y - 2, 31, y - 1, STONE_MID + (255,))
+        for (x, y) in ((6, 6), (22, 6), (6, 22), (22, 22)):
+            rect(img, x, y, x + 1, y + 1, STONE_SHADE + (255,))
+            rect(img, x, y - 2, x + 1, y - 1, STONE_LT + (255,))
+    elif style == 'block':
+        for k in (14, 30):
+            rect(img, 0, k, 31, k + 1, STONE_SHADE + (255,))
+            rect(img, k, 0, k + 1, 31, STONE_SHADE + (255,))
+        for k in (0, 16):
+            rect(img, 0, k, 31, k, STONE_MID + (255,))
+    elif style == 'panel':
+        for x in (14, 30):
+            rect(img, x, 0, x + 1, 31, STONE_SHADE + (255,))
+            rect(img, x - 2, 0, x - 1, 31, STONE_MID + (255,))
+        for (x, y) in ((4, 8), (20, 24)):
+            rect(img, x, y, x + 5, y + 1, STONE_MDK + (255,))
+    else:
+        for _ in range(specks(18)):
+            x, y = rng.randint(0, 30), rng.randint(0, 30)
+            rect(img, x, y, x + 1, y + 1, STONE_SHADE + (255,))
+    if dmg == 0:
+        return img
+    # Damage is surface only: chips, cracks and scorch, never a hole.
+    for _ in range(dmg * 2):
+        cx, cy = rng.randint(3, 28), rng.randint(3, 28)
+        disc(img, cx, cy, rng.uniform(1.0, 2.0), STONE_SHADE + (255,))
+        disc(img, cx - 1, cy - 1, 0.6, STONE_LT + (255,))
+    for _ in range(dmg + 1):
+        x0, y0 = rng.randint(2, 29), rng.randint(2, 29)
+        crack(img, x0, y0, x0 + rng.randint(-10, 10), y0 + rng.randint(-10, 10), STONE_DARKEST + (255,), rng)
+    if dmg >= 2:
+        for _ in range(dmg):
+            disc(img, rng.randint(4, 27), rng.randint(4, 27), rng.uniform(1.4, 2.4), SCORCH)
+    return img
+
+
+# The rebar cage a broken concrete wall leaves standing (BB-83): a lattice
+# of rusted bars, one design pixel thick, on transparent ground - shots
+# pass between them, hulls do not. Column 0 whole, column 1 bent by a
+# first heavy blast. Bars on an 8 px pitch so a run of cages lines up.
+REBAR = RUST_MID + (255,)
+REBAR_D = RUST_DEEP + (255,)
+REBAR_L = (0xB5, 0x7A, 0x28, 255)
+
+
+def draw_rebar(state, seed):
+    rng = random.Random(seed)
+    img = blank()
+    bars = (6, 22) if state == 0 else (6, 22)
+    for x in bars:
+        for y in range(0, S, GRID):
+            dx = 0
+            if state == 1 and 10 <= y <= 20:
+                dx = GRID if x == 6 else -GRID
+            rect(img, x + dx, y, x + dx + 1, y + 1, REBAR)
+            rect(img, x + dx + 2, y, x + dx + 3, y + 1, REBAR_D)
+    for y in (6, 22):
+        for x in range(0, S, GRID):
+            dy = 0
+            if state == 1 and 8 <= x <= 22 and y == 22:
+                dy = GRID
+            rect(img, x, y + dy, x + 1, y + dy + 1, REBAR)
+            rect(img, x, y + dy - 2, x + 1, y + dy - 1, REBAR_L)
+    # Rust flecks and the odd clinging lump of concrete.
+    for _ in range(4 + state * 2):
+        x, y = rng.choice((6, 22)), rng.randint(0, 30)
+        rect(img, x, y, x + 1, y + 1, REBAR_D)
+    for _ in range(3):
+        x, y = rng.choice((4, 20)), rng.randint(2, 28)
+        rect(img, x, y, x + 3, y + 3, STONE_MDK + (255,))
+    return img
+
+
+CONCRETE_PAIRS = [(C255(STONE_MID), C255(STONE_MD)), (C255(STONE_MD), C255(STONE_MDK)),
+                  (C255(STONE_MDK), C255(STONE_SHADE))]
+
+
+def draw_rubble_concrete(variant, seed):
+    rng = random.Random(seed)
+    img = blank()
+    for _ in range(rubble_count(variant, 4, 18)):
+        w = rng.choice([1, 2, 2, 3])
+        h = rng.choice([1, 2, 2])
+        chunk(img, rng, rng.randint(0, D - w), rng.randint(0, D - h), w, h, rng.choice(CONCRETE_PAIRS))
+    # A bent bar or two among the slabs.
+    for _ in range(rubble_count(variant, 0, 3)):
+        dx, dy = rng.randint(0, D - 4), rng.randint(0, D - 1)
+        for k in range(rng.randint(2, 4)):
+            dpx(img, dx + k, dy, REBAR)
+    for _ in range(rubble_count(variant, 1, 5)):
+        dpx(img, rng.randint(0, D - 1), rng.randint(0, D - 1), DUST)
+    declutter(img, 2)
+    return img
+
+
+COLS, ROWS = 16, 33
 sheet = Image.new('RGBA', (S * COLS, S * ROWS), (0, 0, 0, 0))
 
 
@@ -1058,6 +1191,19 @@ for c in range(RUBBLE_VARIANTS):
 for m, mat_base in enumerate([BRICKS[0]['base'], IRONS[0]['base'], WOODS[0]['base'], GL_M]):
     for mask in range(EDGE_MASKS):
         place(draw_edge_cap(mat_base, mask), mask, 22 + m)
+
+# Concrete (BB-83), appended after everything above so no row moves:
+# rows 26-29 its four variants (cols 0-3 intact..battered), 30 its edge
+# caps, 31 its rubble, 32 the rebar cage (col 0 whole, col 1 bent).
+for r, v in enumerate(CONCRETES):
+    for c in range(4):
+        place(draw_concrete(v, c, 1300 + r * 31 + c * 7), c, 26 + r)
+for mask in range(EDGE_MASKS):
+    place(draw_edge_cap(CONCRETE_BASE, mask), mask, 30)
+for c in range(RUBBLE_VARIANTS):
+    place(draw_rubble_concrete(c, 1400 + c * 7), c, 31)
+for c in range(2):
+    place(draw_rebar(c, 1500 + c * 7), c, 32)
 
 # Chunky-pixelate the finished sheet to match the tanks' own look: tanks
 # draw a 32x32 source tile at Tank::scale=2.0 (tank.rs), so every source

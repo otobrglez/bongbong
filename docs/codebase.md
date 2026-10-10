@@ -940,7 +940,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   Health-slot bonus roll (`maybe_spawn_health_slot_bonuses`; the frog gate is checked before any RNG
   draw). FrogHealth heals the collector's own side's frog and is taken unless that frog is alive and
   full (docs/frog-health-pack-prd.md).
-- `obstacle.rs` — `Obstacle` is a wall (`Material` Brick/Iron/Wood/Glass), a prop
+- `obstacle.rs` — `Obstacle` is a wall (`Material` Brick/Iron/Wood/Glass/Concrete), a prop
   (Sandbag/Barrel/Fence, and Target - the range board, docs/range-target-prd.md: never rolled
   flammable, so a shot splinters it, yet `catches_fire` from the stream, a burning cell beside it or
   a lava bank, and burns for its own `burn_seconds`), a tree (Tree/Pine) or a tower
@@ -958,6 +958,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   docs/WALLS_SPEC.md §10): `strike` (a shot at a point) and `blast` (from a centre) break chunks,
   `damage` wears them evenly, `health` follows their sum and the tile dies when
   `wall_collapse_chunks` or fewer stand. A worn chunked tile draws chunk by chunk (`draw_chunked`).
+  **Concrete and wired glass leave a cage** (`Obstacle::cage`, `leaves_cage`, BB-83): where the wall
+  would die it stands on as rebar or bare mesh - `Terrain::sweep` sees it as a tile with no chunks, so
+  every shot passes, while its body and nav cell still stop hulls - until `cage_cut_hits` blasts of
+  `cage_cut_damage` (or a rail or a rod) cut it down (`cut_cage`). Concrete's variant comes from a
+  hash of the map, not the round RNG, and its sheet rows (variants, edge cap, rubble, rebar) sit after
+  everything else (`CONCRETE_ROW_BASE`, `Material::cap_row`).
 - `chunks.rs` — a chunked tile's 4 × 4 grid of 8 px chunks (`Chunks`): which one a shot strikes, how
   a blow and a blast spread, the wear steps the wire carries (`quantised`), the body's box
   (`solid_box`: the standing 16 px quadrants). Plain data, no RNG. `Terrain::sweep` tests a chunked

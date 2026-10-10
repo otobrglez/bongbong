@@ -40,8 +40,8 @@ tool and the `armory` map.
   defaults), each walked cell by cell (Amanatides-Woo, the
   `weather::Occluders` walk) over the map's cells (`map::world_to_cell`: centres on multiples of
   32). A ray stops on entering the first cell holding a tile that
-  `Material::blocks_sound`: every wall material - brick, iron, wood and
-  glass - the three towers, a volcano's cone and a training door; its reach
+  `Material::blocks_sound`: every wall material - brick, iron, wood,
+  glass and concrete - the three towers, a volcano's cone and a training door; its reach
   is the distance to that entry. It also stops at the field's edge. Props,
   drums, range boards, trees, lamp posts, pickups, water, lava, grass and
   tanks do not stop it. A destroyed tile is not there. The cast records, per ray, its

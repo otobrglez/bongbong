@@ -50,7 +50,7 @@ rail's lane (BB-39) and the rod's circle (BB-41) add their shapes.
   (`Tank::hull_bbox_world`), a tower's cell box (32 x 32), a missile's
   ground point. A big hull half inside the ring is reached by its nearer
   edge. The shooter is never reached.
-- **Nothing stops it.** Walls - brick, iron, wood, glass -, towers, trees,
+- **Nothing stops it.** Walls - brick, iron, wood, glass, concrete -, towers, trees,
   water, lava and tanks let it through: an EMP is not sound, and its
   counter is range. It is not cut at the field's edge (nothing stands
   there but rolling-in tanks, which are not on the field and are never

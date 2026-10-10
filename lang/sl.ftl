@@ -328,6 +328,7 @@ tool-brick = opeka
 tool-iron = železo
 tool-wood = les
 tool-glass = steklo
+tool-concrete = beton
 tool-sandbag = vreča peska
 tool-barrel = sod
 tool-fence = ograja

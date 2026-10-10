@@ -679,12 +679,22 @@ pub const RUBBLE_ROW_FENCE: i32 = 20;
 pub const RUBBLE_ROW_TANK: i32 = 21;
 
 // Edge-cap overlay rows, one per wall material in `MATERIALS` order
-// (brick, iron, wood, glass), column = the neighbour mask. Drawn *over* a
+// (brick, iron, wood, glass; concrete's is `EDGE_CAP_ROW_CONCRETE`),
+// column = the neighbour mask. Drawn *over* a
 // tile, so one row composites with every damage stage and variant that
 // material has - which is why this is an overlay rather than a base-tile
 // plus damage-overlay rewrite of the whole sheet.
 pub const EDGE_CAP_ROW_BASE: i32 = 22;
 pub const EDGE_CAP_COLUMNS: i32 = 16;
+
+// Concrete (BB-83), appended after everything above so no row moved:
+// four variant rows (cols 0-3 intact..battered), its edge-cap row, its
+// rubble row, and the rebar cage a broken wall leaves (col 0 whole, col 1
+// bent by a heavy blast). `Material::cap_row` names the cap row.
+pub const CONCRETE_ROW_BASE: i32 = 26;
+pub const EDGE_CAP_ROW_CONCRETE: i32 = 30;
+pub const RUBBLE_ROW_CONCRETE: i32 = 31;
+pub const REBAR_ROW: i32 = 32;
 
 // Ground/terrain layer (grass base, road painted under every static
 // obstacle tile and every cell a map explicitly marks as road) - see

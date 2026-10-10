@@ -269,11 +269,12 @@ pub enum Tool {
 /// for the six tower tools inside the eleven rows a dropdown fits, and the
 /// range board stands with the actors, the thing on the field there to be
 /// shot at.
-pub const TOOLS: [Tool; 52] = [
+pub const TOOLS: [Tool; 53] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
     Tool::Wall(Material::Glass),
+    Tool::Wall(Material::Concrete),
     Tool::Prop(Material::Sandbag),
     Tool::Prop(Material::Barrel),
     Tool::Drum(Drum::Oil),
@@ -332,6 +333,7 @@ impl Tool {
             Tool::Wall(Material::Iron) => "iron",
             Tool::Wall(Material::Wood) => "wood",
             Tool::Wall(Material::Glass) => "glass",
+            Tool::Wall(Material::Concrete) => "concrete",
             Tool::Wall(_) => "wall",
             Tool::Prop(Material::Sandbag) => "sandbag",
             Tool::Prop(Material::Barrel) => "barrel",
@@ -5224,11 +5226,11 @@ mod editor_tests {
         ed.update(&BuilderInput { pointer: Some(wall), wheel: 1.0, ..Default::default() }, &frame);
         assert_eq!(ed.tool(), Tool::Wall(Material::Brick));
         ed.update(&BuilderInput { pointer: Some(wall), wheel: 1.0, ..Default::default() }, &frame);
-        assert_eq!(ed.tool(), Tool::Wall(Material::Glass), "wraps");
+        assert_eq!(ed.tool(), Tool::Wall(Material::Concrete), "wraps");
         // Off the buttons the wheel does nothing to the tool.
         let field = Vec2::new(400.0, 400.0);
         ed.update(&BuilderInput { pointer: Some(field), wheel: -1.0, ..Default::default() }, &frame);
-        assert_eq!(ed.tool(), Tool::Wall(Material::Glass));
+        assert_eq!(ed.tool(), Tool::Wall(Material::Concrete));
     }
 
     /// A 96 x 54 map in the builder on a window of `window` units, a unit a

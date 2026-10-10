@@ -52,7 +52,8 @@ pub(crate) struct TerrainBox {
     pub burning: bool,
     /// A chunked tile with chunks broken (`chunks.rs`): the ones still
     /// standing. A shot is tested against those and passes the gaps - a
-    /// loophole. `None` for a tile that is whole or breaks whole.
+    /// loophole. A cage is `Some(0)`. `None` for a tile that is whole or
+    /// breaks whole.
     pub chunks: Option<u16>,
 }
 
@@ -213,7 +214,9 @@ impl Terrain {
                     half: battlefield::tile_half_extent(o.material, &cells, gx, gy, o.hull_size() * 0.5),
                     material: o.material,
                     burning: o.burning,
-                    chunks: o.chunks.filter(|c| c.count() < crate::chunks::CHUNKS as u32).map(|c| c.standing()),
+                    // A cage (`Obstacle::cage`) stands as a tile with no
+                    // chunks: every shot passes it.
+                    chunks: if o.cage.is_some() { Some(0) } else { o.chunks.filter(|c| c.count() < crate::chunks::CHUNKS as u32).map(|c| c.standing()) },
                 }
             })
             .collect();
