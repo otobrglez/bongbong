@@ -963,7 +963,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`solid_box`: the standing 16 px quadrants). Plain data, no RNG. `Terrain::sweep` tests a chunked
   tile's standing chunks (`hits::segment_hits_chunks`), so a hole lets shots through - a loophole -
   while `Game::fit_tile_body` keeps the tile's body over its standing quadrants. Every chunk a blow
-  breaks is an `Event::ChunksBroken`.
+  breaks is an `Event::ChunksBroken`. What a breach does besides (BB-82, docs/WALLS_SPEC.md §10)
+  lives in `props.rs`: `Game::spall` (a shell's breach hurts the tank sheltering behind,
+  `HitCause::Spall`), `lay_rubble` (`chunks::Rubble`, `Game::rubble`: it slows a hull through
+  `Footing::on_rubble` and the router prices it in `nav_finish`), and `queue_neighbour_breaks` /
+  `tick_breaks` (`Game::pending_breaks`: a weak run comes down a tile at a time, a cracked pane
+  shatters beside a broken one).
 - `grass.rs` — tall grass, **deliberately not an `Obstacle`** (the nav grid and the linter treat
   every obstacle as impassable). Simulation-owned, seeded by `seed_at`, rebuilt in `init`, drawn
   interleaved with the y-sorted units (trees still after everything). **No tuft is drawn over a
