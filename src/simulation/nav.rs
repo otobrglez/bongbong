@@ -55,6 +55,8 @@ struct Setting {
     ford_cost: i32,
     lava_cost: i32,
     crater_cost: i32,
+    rubble_costs: (i32, i32),
+    rubble_levels: (i32, i32),
 }
 
 impl Setting {
@@ -68,6 +70,8 @@ impl Setting {
             ford_cost: t.water_ford_path_cost,
             lava_cost: t.lava_ford_path_cost,
             crater_cost: t.rod_crater_path_cost,
+            rubble_costs: (t.rubble_light_path_cost, t.rubble_heavy_path_cost),
+            rubble_levels: (t.rubble_light, t.rubble_heavy),
         }
     }
 }
@@ -236,6 +240,17 @@ impl Game {
                 .map(|(c, r)| crate::map::cell_to_world(c, r))
                 .collect();
             grid.weigh(dry.into_iter(), t.rod_crater_path_cost.max(1) as u32);
+        }
+        // Rubble is open but slow (`chunks::Rubble`): dearer the deeper it
+        // lies. A change of level empties the kept grid
+        // (`Game::lay_rubble`), so the base is priced again.
+        for level in [crate::chunks::RubbleLevel::Light, crate::chunks::RubbleLevel::Heavy] {
+            let cost = if level == crate::chunks::RubbleLevel::Light { t.rubble_light_path_cost } else { t.rubble_heavy_path_cost };
+            let cells: Vec<Position> =
+                self.rubble.cells().filter(|&(c, _)| self.rubble.level(c) == level).map(|(c, _)| crate::map::cell_to_world(c.0, c.1)).collect();
+            if !cells.is_empty() {
+                grid.weigh(cells.into_iter(), cost.max(1) as u32);
+            }
         }
         grid
     }

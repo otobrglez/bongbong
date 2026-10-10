@@ -644,6 +644,25 @@ impl Fx {
                         HitTarget::Obstacle { .. } => self.flash(Flashed::Tile(Position::new(x, y))),
                         _ => {}
                     },
+                    // Spall off a breached wall's far face: the hull it
+                    // reached flashes, and a spray of masonry leaves the
+                    // face toward it.
+                    Event::Hit { target, cause: HitCause::Spall, x, y, .. } => {
+                        let slot = match target {
+                            HitTarget::Player { player } => player as usize,
+                            HitTarget::Enemy { slot } => slot,
+                            _ => continue,
+                        };
+                        self.flash(Flashed::Tank(slot));
+                        let at = Position::new(x, y);
+                        let hull = game.tank_snapshots().iter().find(|t| t.slot == slot).map(|t| t.position);
+                        let dir = hull.map_or(Vec2::zero(), |h| {
+                            let v = h - at;
+                            let l = v.length().max(1e-3);
+                            Vec2::new(v.x / l, v.y / l)
+                        });
+                        self.cone_burst(at, dir, 0.4, ParticleKind::Chip, self.count(6), 220.0, &[STONE_LT, STONE_MD, STONE_DK]);
+                    }
                     // A hit the tile *survived*. Without this, a wall only
                     // ever throws anything on the shot that finishes it,
                     // and every shot before that lands silently.

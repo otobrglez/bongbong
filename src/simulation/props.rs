@@ -53,8 +53,9 @@ pub(super) struct DeadTile {
 pub(super) enum DamageCause {
     /// A projectile, travelling along `dir` (unit) when known, striking
     /// the tile at `at` when known: a chunked tile breaks the chunk there
-    /// (`Obstacle::strike`).
-    Shot { dir: Option<Vec2>, at: Option<Position> },
+    /// (`Obstacle::strike`) and, breaching it, throws spall at whoever
+    /// opposes `by` behind it (`Game::spall`).
+    Shot { dir: Option<Vec2>, at: Option<Position>, by: Option<crate::shell::Owner> },
     Ram,
     Blast { falloff: f32, from: Position },
     /// Sustained flame exposure (`flame.rs`): a sandbag or fence that
@@ -69,6 +70,25 @@ pub(super) enum DamageCause {
     /// tile it reaches but a permanent one dies outright - no fence roll,
     /// no fuse, not left burning - a drum going off where it stands.
     Crush { from: Position },
+}
+
+/// A tile due to give way a beat after its neighbour did
+/// (`Game::queue_neighbour_breaks`, `Game::tick_breaks`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PendingBreak {
+    pub cell: (i32, i32),
+    /// Round time it is due.
+    pub at: f32,
+    pub kind: BreakKind,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum BreakKind {
+    /// A chunked tile of a collapsing run: it gives way if it is down to
+    /// `domino_chunks` standing.
+    Domino,
+    /// A cracked pane beside a shattered one, the stress running on `dir`.
+    Shatter { dir: Vec2 },
 }
 
 /// A barrel detonation waiting for `explosions` to resolve it this frame.
@@ -161,7 +181,7 @@ fn cell_of(pos: Position) -> (i32, i32) {
 /// The chunks it broke go into `broken`.
 fn strike(o: &mut Obstacle, amount: f32, cause: DamageCause, broken: &mut u16) -> bool {
     let (died, b) = match cause {
-        DamageCause::Shot { dir, at: Some(at) } => o.strike(amount, at, dir),
+        DamageCause::Shot { dir, at: Some(at), .. } => o.strike(amount, at, dir),
         DamageCause::Blast { from, .. } => o.blast(amount, from),
         _ => (o.damage(amount), 0),
     };
@@ -263,9 +283,18 @@ impl Game {
                 _ => Vec2::zero(),
             };
             f.events.push(Event::ChunksBroken { material, variant, x: pos.x, y: pos.y, broken, dx: dir.x, dy: dir.y, collapsed: died });
+            self.lay_rubble(pos, broken, dir, died);
             if !died {
                 self.fit_tile_body(entity);
             }
+            if let DamageCause::Shot { dir: Some(d), by: Some(by), .. } = cause {
+                if amount >= tuning().spall_min_damage {
+                    self.spall(f, pos, broken, d, by);
+                }
+            }
+        }
+        if died {
+            self.queue_neighbour_breaks(f, material, pos, cause, entity);
         }
         if died {
             let shape = match cause {
@@ -280,6 +309,166 @@ impl Game {
             self.obstacle_died(f, DeadTile { material, variant, position: pos, chained: false, charred, shape });
         }
         died
+    }
+
+    /// Lay the rubble the chunks in `broken` of the tile centred on `pos`
+    /// make (`chunks::Rubble`): a unit each where it stood, or, blown out
+    /// along `dir` by a blow that left the tile standing, half of them in
+    /// the cell behind. A cell whose level changes empties the kept nav
+    /// grid, so the router prices it again.
+    fn lay_rubble(&mut self, pos: Position, broken: u16, dir: Vec2, collapsed: bool) {
+        let units = broken.count_ones();
+        let cell = world_to_cell(pos);
+        let (here, behind) = if collapsed || dir.length() < 0.5 { (units, 0) } else { (units - units / 2, units / 2) };
+        let mut changed = self.rubble.add(cell, here);
+        if behind > 0 {
+            let step = if dir.x.abs() >= dir.y.abs() { (dir.x.signum() as i32, 0) } else { (0, dir.y.signum() as i32) };
+            changed |= self.rubble.add((cell.0 + step.0, cell.1 + step.1), behind);
+        }
+        if changed {
+            self.nav.clear();
+        }
+    }
+
+    /// Spall (BB-82): a shell breaching the chunks in `broken` of the tile
+    /// centred on `center` along `dir` throws fragments off its far face.
+    /// Every live tank on the other side from `by` whose hull lies in the
+    /// cone behind - within `spall_reach_px` of the face, its hull within
+    /// `spall_half_width_px` of the blow's line - takes `spall_damage`,
+    /// falling linearly to nothing at the reach. No RNG: the damage is the
+    /// geometry's. Seats in index order, then the enemies.
+    fn spall(&mut self, f: &mut Frame, center: Position, broken: u16, dir: Vec2, by: crate::shell::Owner) {
+        let t = tuning();
+        if !t.spall_enabled || t.spall_damage <= 0.0 || t.spall_reach_px <= 0.0 {
+            return;
+        }
+        let n = broken.count_ones() as f32;
+        if n == 0.0 {
+            return;
+        }
+        // The broken chunks' middle, carried to the far face along the blow.
+        let (sx, sy) = (0..crate::chunks::CHUNKS)
+            .filter(|i| broken & (1 << i) != 0)
+            .map(|i| crate::chunks::chunk_center(center, i))
+            .fold((0.0, 0.0), |(x, y), p| (x + p.x, y + p.y));
+        let mid = Position::new(sx / n, sy / n);
+        let into = (mid.x - center.x) * dir.x + (mid.y - center.y) * dir.y;
+        let reach = OBSTACLE_GRID_SIZE / 2.0 - into;
+        let face = Position::new(mid.x + dir.x * reach, mid.y + dir.y * reach);
+        let mut victims: Vec<Entity> = self.seats_on_field().into_iter().flatten().collect();
+        victims.extend(self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter().map(|(e, _)| e));
+        for entity in victims {
+            let mut q = self.world.query_one::<&mut Tank>(entity);
+            let Ok(tank) = q.get() else { continue };
+            if tank.is_wreck() || by.same_side(tank.owner()) {
+                continue;
+            }
+            let (hc, hh) = tank.hull_bbox_world();
+            let rel = Position::new(hc.x - face.x, hc.y - face.y);
+            let along = rel.x * dir.x + rel.y * dir.y;
+            let across = (rel.x * dir.y - rel.y * dir.x).abs();
+            let half = hh.x.max(hh.y);
+            if along < -half || along > t.spall_reach_px || across > t.spall_half_width_px + half {
+                continue;
+            }
+            let d = t.spall_damage * (1.0 - along.max(0.0) / t.spall_reach_px);
+            if d <= 0.0 {
+                continue;
+            }
+            let landed = tank.take_damage(d, crate::MAX_DAMAGE);
+            tank.mark_hit();
+            tank.credit(by);
+            let killed = tank.is_wreck();
+            let target = match tank.owner() {
+                crate::shell::Owner::Player(player) => super::HitTarget::Player { player },
+                crate::shell::Owner::Enemy(slot) => super::HitTarget::Enemy { slot },
+                crate::shell::Owner::Tower { .. } => continue,
+            };
+            let at = tank.position;
+            f.events.push(Event::Hit { target, damage: landed, killed, x: face.x, y: face.y, cause: super::HitCause::Spall });
+            if killed {
+                f.kills.push((at, tank.owner()));
+            }
+            drop(q);
+            if !killed {
+                let mut q = self.world.query_one::<&mut Ai>(entity);
+                if let Ok(ai) = q.get() {
+                    ai.notify_hit();
+                }
+            }
+        }
+    }
+
+    /// What a tile's death sets going beside it, after a beat: a chunked
+    /// tile's run comes down a tile at a time where it is weak
+    /// (`domino_chunks`, `domino_delay_seconds`); a pane's stress shatters
+    /// a cracked neighbour (`glass_cascade_seconds`) and cracks an intact
+    /// one (`glass_stress_damage`) now. The neighbours east, west, south,
+    /// north, in that order.
+    fn queue_neighbour_breaks(&mut self, f: &mut Frame, material: Material, pos: Position, cause: DamageCause, entity: Entity) {
+        let t = tuning();
+        let cell = world_to_cell(pos);
+        if material.chunk_health().is_some() {
+            for n in neighbours(cell) {
+                self.pending_breaks.push(PendingBreak { cell: n, at: self.time + t.domino_delay_seconds, kind: BreakKind::Domino });
+            }
+            return;
+        }
+        if material != Material::Glass || matches!(cause, DamageCause::Crush { .. }) {
+            return;
+        }
+        for n in neighbours(cell) {
+            let pane = self
+                .world
+                .query::<(Entity, &Obstacle)>()
+                .iter()
+                .find(|(e, o)| *e != entity && !o.destroyed && o.material == Material::Glass && o.cell() == n)
+                .map(|(e, o)| (e, o.health < o.max_health));
+            let Some((pane, cracked)) = pane else { continue };
+            let away = Vec2::new((n.0 - cell.0) as f32, (n.1 - cell.1) as f32);
+            if cracked {
+                self.pending_breaks.push(PendingBreak { cell: n, at: self.time + t.glass_cascade_seconds, kind: BreakKind::Shatter { dir: away } });
+            } else if t.glass_stress_damage > 0.0 {
+                self.damage_obstacle(f, pane, t.glass_stress_damage, DamageCause::Shot { dir: Some(away), at: None, by: None });
+            }
+        }
+    }
+
+    /// Bring down the tiles whose beat has come (`pending_breaks`), in the
+    /// order they were queued: a weakened tile of a collapsing run gives
+    /// way, a cracked pane shatters. One that has since died, or is no
+    /// longer weak enough, is passed over.
+    pub(super) fn tick_breaks(&mut self, f: &mut Frame) {
+        if self.pending_breaks.is_empty() {
+            return;
+        }
+        let now = self.time;
+        let (due, later): (Vec<PendingBreak>, Vec<PendingBreak>) = std::mem::take(&mut self.pending_breaks).into_iter().partition(|b| b.at <= now);
+        self.pending_breaks = later;
+        let domino = tuning().domino_chunks;
+        for b in due {
+            let tile = self
+                .world
+                .query::<(Entity, &Obstacle)>()
+                .iter()
+                .find(|(_, o)| !o.destroyed && !o.burning && o.cell() == b.cell)
+                .map(|(e, o)| (e, o.material, o.position, o.chunks.map(|c| c.count() as i32)));
+            let Some((entity, material, center, standing)) = tile else { continue };
+            match b.kind {
+                BreakKind::Domino => {
+                    let Some(standing) = standing else { continue };
+                    if standing > domino {
+                        continue;
+                    }
+                    self.damage_obstacle(f, entity, f32::MAX, DamageCause::Shot { dir: None, at: Some(center), by: None });
+                }
+                BreakKind::Shatter { dir } => {
+                    if material == Material::Glass {
+                        self.damage_obstacle(f, entity, f32::MAX, DamageCause::Shot { dir: Some(dir), at: None, by: None });
+                    }
+                }
+            }
+        }
     }
 
     /// Fit a chunked tile's body to what of it still stands: its
@@ -1045,7 +1234,7 @@ impl Game {
                 .find(|(_, o)| o.material.is_explosive() && !o.destroyed && o.cell() == cell)
                 .map(|(e, _)| e);
             if let Some(entity) = entity {
-                self.damage_obstacle(f, entity, f32::MAX, DamageCause::Shot { dir: None, at: None });
+                self.damage_obstacle(f, entity, f32::MAX, DamageCause::Shot { dir: None, at: None, by: None });
             }
         }
     }

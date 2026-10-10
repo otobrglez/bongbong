@@ -2450,12 +2450,13 @@ tunables! {
         /// rubble, and heavy rubble.
         rubble_light: i32 = 6 in 1 ..= 64;
         rubble_heavy: i32 = 14 in 1 ..= 64;
-        /// Speed factor on light and heavy rubble, and the extra step
-        /// cost the router gives them over open ground.
+        /// Speed factor on light and heavy rubble.
         rubble_light_speed: f32 = 0.85 in 0.1 ..= 1.0;
         rubble_heavy_speed: f32 = 0.7 in 0.1 ..= 1.0;
-        rubble_light_cost: f32 = 0.5 in 0.0 ..= 10.0;
-        rubble_heavy_cost: f32 = 1.5 in 0.0 ..= 10.0;
+        /// What a step onto light and heavy rubble costs the router, open
+        /// ground being 1 (a ford is `water_ford_path_cost`).
+        rubble_light_path_cost: i32 = 2 in 1 ..= 50;
+        rubble_heavy_path_cost: i32 = 3 in 1 ..= 50;
         /// Seconds between one pane of a glass run shattering and the next
         /// cracked one going with it.
         glass_cascade_seconds: f32 = 0.07 in 0.0 ..= 2.0;

@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::net::MAX_SEATS;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    BonusPickup, CraterState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, ShotState, Snapshot, TankState, WellDrumState,
+    BonusPickup, CraterState, RubbleState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, ShotState, Snapshot, TankState, WellDrumState,
     ZoneState, TileState, side_code,
 };
 
@@ -90,6 +90,9 @@ pub struct SnapshotDelta {
     /// New craters, in full.
     pub craters: Vec<CraterState>,
     pub craters_gone: Vec<u16>,
+    /// New or deeper rubble, in full.
+    pub rubble: Vec<RubbleState>,
+    pub rubble_gone: Vec<u16>,
     /// New or changed held drums, in full.
     pub well_drums: Vec<WellDrumState>,
     pub well_drums_gone: Vec<u16>,
@@ -249,6 +252,12 @@ impl Keyed for CraterState {
     }
 }
 
+impl Keyed for RubbleState {
+    fn key(&self) -> u16 {
+        self.cell
+    }
+}
+
 fn by_key<T: Keyed>(entries: &[T]) -> BTreeMap<u16, &T> {
     entries.iter().map(|e| (e.key(), e)).collect()
 }
@@ -330,6 +339,7 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
     let (crates, crates_gone) = diff_keyed(&prev.crates, &next.crates);
     let (zones, zones_gone) = diff_keyed(&prev.zones, &next.zones);
     let (craters, craters_gone) = diff_keyed(&prev.craters, &next.craters);
+    let (rubble, rubble_gone) = diff_keyed(&prev.rubble, &next.rubble);
     let (well_drums, well_drums_gone) = diff_keyed(&prev.well_drums, &next.well_drums);
     let mut bonus_pickups = next.bonus_pickups.clone();
     bonus_pickups.sort();
@@ -374,6 +384,8 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
         zones_gone,
         craters,
         craters_gone,
+        rubble,
+        rubble_gone,
         well_drums,
         well_drums_gone,
         volcano_shifts: (next.volcano_shifts != prev.volcano_shifts).then(|| next.volcano_shifts.clone()),
@@ -411,6 +423,7 @@ pub fn apply_delta(prev: &Snapshot, delta: &SnapshotDelta) -> Snapshot {
         crates: apply_keyed(&prev.crates, &delta.crates, &delta.crates_gone),
         zones: apply_keyed(&prev.zones, &delta.zones, &delta.zones_gone),
         craters: apply_keyed(&prev.craters, &delta.craters, &delta.craters_gone),
+        rubble: apply_keyed(&prev.rubble, &delta.rubble, &delta.rubble_gone),
         well_drums: apply_keyed(&prev.well_drums, &delta.well_drums, &delta.well_drums_gone),
         volcano_shifts: delta.volcano_shifts.clone().unwrap_or_else(|| prev.volcano_shifts.clone()),
         round: delta.round.unwrap_or(prev.round),
@@ -566,6 +579,7 @@ mod tests {
             .map(|id| ZoneState { id, kind: rng.random_range(0..2), x: rng.random(), y: rng.random(), until: rng.random_range(0..200_000), owner: rng.random_range(0..40), cell: rng.random_range(0..600), stage: rng.random_range(0..2) })
             .collect();
         let craters = random_keys(rng, 3, 600).into_iter().map(|cell| CraterState { cell, tick: rng.random_range(0..200_000) }).collect();
+        let rubble = random_keys(rng, 4, 600).into_iter().map(|cell| RubbleState { cell, units: rng.random_range(1..64) }).collect();
         let well_drums = random_keys(rng, 3, 400)
             .into_iter()
             .map(|id| WellDrumState { id, well: rng.random_range(0..400), cell: rng.random_range(0..600), drum: rng.random_range(0..2), fused: rng.random(), tick: rng.random_range(0..200_000) })
@@ -590,6 +604,7 @@ mod tests {
             crates,
             zones,
             craters,
+            rubble,
             well_drums,
             volcano_shifts,
             round: RoundState {
@@ -698,6 +713,10 @@ mod tests {
         }
         for cell in random_keys(rng, 1, 600) {
             next.craters.push(CraterState { cell, tick: next.tick });
+        }
+        for cell in random_keys(rng, 1, 600) {
+            next.rubble.retain(|r| r.cell != cell);
+            next.rubble.push(RubbleState { cell, units: rng.random_range(1..64) });
         }
         if rng.random_ratio(1, 6) {
             next.volcano_shifts = vec![rng.random_range(-4000..4000)];
@@ -893,8 +912,9 @@ mod tests {
         // craters' and the volcanoes' shifts' lists one each, the delta two
         // for the zones and two for the craters and one for the shifts
         // (protocol 20); the held drums' list one, the delta two for them
-        // (protocol 21).
-        assert!(full <= 499, "full snapshot {full} B");
+        // (protocol 21); the rubble's list one, the delta two for it
+        // (protocol 23).
+        assert!(full <= 500, "full snapshot {full} B");
         assert!(moving <= 215, "moving delta {moving} B");
         assert!(busy <= 281, "busy delta {busy} B");
         assert!(idle <= 61, "idle delta {idle} B");
