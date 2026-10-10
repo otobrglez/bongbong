@@ -9,6 +9,17 @@
 export DEVELOPER_DIR="${BONGBONG_DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 unset SDKROOT
 
+# The host half of the build (build scripts, proc-macros) links with Xcode's
+# clang too, as .cargo/config.toml does for the iOS targets. rustc links it
+# through `cc`, on the devenv PATH nix's wrapper, which takes its macOS SDK
+# from DEVELOPER_DIR - Xcode's here - and from Xcode 27 on nix's ld rejects
+# that SDK's .tbd stubs as malformed (they list `arm64e.x1-macos`).
+# tools/ios/bin/cc, first on PATH, is Xcode's clang. A PATH entry rather than
+# CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER, which cargo fingerprints: the
+# desktop build shares a few host units with an iOS build, and every switch
+# between the two would recompile those and everything that depends on them.
+export PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bin:$PATH"
+
 # One deployment target for SDL3, raylib, the rgui shim (cc-rs), the Rust
 # binary (rustc) and the bundle's MinimumOSVersion, so every object in the
 # link carries the same LC_BUILD_VERSION minimum.
