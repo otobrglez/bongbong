@@ -365,3 +365,49 @@ Material base tones, one fixed pick per material (see §3–6 above for the reas
 - Glass relies on alpha blending; without blending it reads as flat pale blue.
 - 22 of the 112 cells are intentionally empty (iron and glass are narrower than wood). Do not sample outside each material's valid column range.
 - These tiles have no outline, unlike the tanks and shells. That is intentional for wall continuity, but it means an isolated single wall tile sits flatter against terrain than a unit does. If you want lone blocks to pop, add a drop shadow at the entity level rather than baking outlines back in.
+
+---
+
+## 10. Chunks (BB-80, BB-81)
+
+Brick and wood break **chunk by chunk** (`src/chunks.rs`): a tile is a 4 × 4
+grid of 8 px chunks - four design pixels a side, about a quarter of a
+`block` brick - each with its own health (`brick_chunk_health` 10,
+`wood_chunk_health` 4, while `wall_chunks` is on). Iron, glass and the props
+still break whole. Concept and the decisions behind it:
+https://claude.ai/artifact/MCunjR9rCuA9DAFD51jPBN.
+
+**No new art.** A chunked tile is drawn chunk by chunk from the sheet it
+already has (`obstacle::draw_chunked`): a whole chunk from column 0, a worn
+one from the same 8 px of the damage columns (wear step 2 → col 1, step 1 →
+col 2), so its cracks are the authored ones; a burning plank from the fire
+loop. A gone chunk shows the ground. The chunks beside a hole show a face,
+one design pixel deep: a lit lip along its top (`STONE_HI`, `WOOD_PALE`)
+and shade down its other sides (`STONE_SHADE`, `WOOD_DARKEST`). The edge cap
+and the blast soot are drawn chunk by chunk too, over what still stands.
+
+**The rules.**
+
+| | |
+|---|---|
+| A shot | breaks the first standing chunk on its way in (`Chunks::struck`) and wears its four side neighbours by `chunk_ring_share` (0.6) and its corners by `chunk_corner_share` (0.3) of the blow - in full for a blow of `chunk_ring_full_damage` (15) or more, in proportion below it, so a minigun round drills where it lands (about 20 rounds fell a brick tile) and a shell (10-30) splits the brick round it (one or two shells, as before) |
+| A blast | the chunks facing it take the whole of it, the far side half (`Chunks::blast`) |
+| Anything else | a rail, a ram, flames: every chunk wears by the share of the tile the blow is worth |
+| Holes | `Terrain::sweep` tests a chunked tile's standing chunks, so a shot passes the gaps - a loophole |
+| The body | the bounds of the standing 16 px quadrants, a quadrant standing while two of its four chunks do (`Chunks::solid_box`, `Game::fit_tile_body`): a hull never fits a quadrant's gap |
+| Collapse | at `wall_collapse_chunks` (6) standing chunks or fewer the tile gives way (`obstacle_died`, its rubble decal); a flammable plank catches fire instead |
+
+**Pieces.** Every broken chunk throws pieces (`src/pieces.rs`, owned by
+`fx.rs`, cosmetic): 4 × 4, 4 × 2 and 2 × 2 cuts of masonry, or 2 px strips
+of wood along its grain (across for `planks_h`/`stagger`, upright for
+`planks_v`/`palisade`), each blitted from the chunk's own place in this
+sheet, so a wall comes apart into itself. Two thirds leave along the blow,
+a third spray back off the struck face; a collapse drops them where they
+stood. They fly with a shadow, bounce up to three times, then lie for
+`piece_linger_seconds` and drop out through the Bayer pattern. Capped at
+`fx_max_pieces`.
+
+**On the wire.** A tile's chunks travel in `TileState::chunks`, two bits of
+wear a chunk; `Event::ChunksBroken` (`WireEvent::ChunksBroken`) lets a
+replica throw the same pieces.
+
