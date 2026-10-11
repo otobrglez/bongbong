@@ -15,6 +15,28 @@ use crate::{
     Position,
 };
 
+/// The bearings a refuge is looked for along (`Brain::refuge`): the
+/// cardinals, then the diagonals, as unit vectors.
+const REFUGE_BEARINGS: [(f32, f32); 8] = [
+    (0.0, -1.0),
+    (1.0, 0.0),
+    (0.0, 1.0),
+    (-1.0, 0.0),
+    (std::f32::consts::FRAC_1_SQRT_2, -std::f32::consts::FRAC_1_SQRT_2),
+    (std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2),
+    (-std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2),
+    (-std::f32::consts::FRAC_1_SQRT_2, -std::f32::consts::FRAC_1_SQRT_2),
+];
+
+/// Where a tank backing away from a seat is headed (`Brain::refuge`), the
+/// seat's position when it was chosen and whether the tank has got there.
+#[derive(Clone, Copy, Debug)]
+struct Refuge {
+    at: Position,
+    seat: Position,
+    reached: bool,
+}
+
 /// A read-only snapshot of one tank's motion for collision prediction. The game
 /// builds a slice of these (all live tanks: the players first, then the
 /// enemies) each frame and hands it to every enemy's `think`, so an enemy
@@ -718,6 +740,16 @@ pub struct Ai {
     /// commits for a short window instead of being re-decided every frame.
     dodge_dir: Option<Dir>,
     dodge_timer: f32,
+    /// The stuck escape in progress (see `stuck_timer`): the heading it
+    /// backs out along and the seconds left on it (`stuck_escape_hold_seconds`).
+    /// Held over every sidestep - a tank wedged between a wall and another
+    /// hull is exactly where the sidestep keeps steering it back into the jam.
+    escape_dir: Option<Dir>,
+    escape_timer: f32,
+    /// Within `enemy_attack_range` of what it fights this tick (`think`'s
+    /// `target`): the switch margin alone decides its turns then
+    /// (`rides_lane_edge`).
+    near_fight: bool,
     /// How long this tank has been holding back for something directly in
     /// front of it (`crowded_ahead`). Bounded by `enemy_yield_seconds` -
     /// see that knob for why a brake without a ceiling deadlocks.
@@ -791,6 +823,12 @@ pub struct Ai {
     /// lapping a tight box at full speed, one fresh unreachable waypoint
     /// per frame.
     wander_pocketed: bool,
+    /// Where a tank backing away from the seat it fights heads for
+    /// (`Brain::refuge`). `None` outside the flee and retreat tiers.
+    refuge: Option<Refuge>,
+    /// Holding at its refuge (`act_flee`, `act_retreat`) - a deliberate
+    /// stop the probe's stall check reads (`TankSnapshot::sheltering`).
+    sheltering: bool,
     /// The behaviour-tree action the last `think` settled on (see
     /// `bt::Node::tick_traced`) and the intent it produced - inspection
     /// only, nothing in `think` reads them back.
@@ -1032,6 +1070,9 @@ impl Default for Ai {
             aim_settle: 0.0,
             dodge_dir: None,
             dodge_timer: 0.0,
+            escape_dir: None,
+            escape_timer: 0.0,
+            near_fight: false,
             yield_timer: 0.0,
             snipe_cooldown: 0.0,
             retreating: false,
@@ -1042,6 +1083,8 @@ impl Default for Ai {
             stuck_timer: 0.0,
             hit_alert_timer: 0.0,
             wander_pocketed: false,
+            refuge: None,
+            sheltering: false,
             last_action: None,
             last_intent: Intent::default(),
             shot_at_seat: None,
@@ -1189,6 +1232,10 @@ impl Ai {
         self.hit_alert_timer = (self.hit_alert_timer - dt).max(0.0);
         self.dir_hold += dt;
         self.dodge_timer = (self.dodge_timer - dt).max(0.0);
+        self.escape_timer = (self.escape_timer - dt).max(0.0);
+        if self.escape_timer <= 0.0 {
+            self.escape_dir = None;
+        }
         self.snipe_cooldown = (self.snipe_cooldown - dt).max(0.0);
         self.shot_at_seat = None;
         if let Some(grudge) = &mut self.grudge {
@@ -1225,7 +1272,7 @@ impl Ai {
                     None => progress,
                 };
                 self.progress_avg = Some(avg);
-                if avg < tuning().stuck_speed_eps {
+                if avg < tuning().stuck_speed_eps.max(tuning().stuck_progress_fraction * me.effective_speed()) {
                     self.stuck_timer += dt;
                 } else {
                     self.stuck_timer = 0.0;
@@ -1271,6 +1318,8 @@ impl Ai {
             SpecialSense::Well(s) => s.plan,
             _ => None,
         };
+        self.sheltering = false;
+        self.near_fight = me.position.distance_to(target) <= tuning().enemy_attack_range;
         let mut bb = Brain {
             me,
             player,
@@ -1299,6 +1348,10 @@ impl Ai {
         let mut last_action = None;
         build().tick_traced(&mut bb, &mut last_action);
         let mut intent = bb.intent;
+        // A refuge is the backing-away tiers' own; any other tier lets it go.
+        if !matches!(last_action, Some("flee" | "retreat")) {
+            self.refuge = None;
+        }
         // The wait on allies in its ring ends with them.
         if !matches!(sense, SpecialSense::Emp(s) if s.friends) {
             self.clear_waited = 0.0;
@@ -1555,6 +1608,11 @@ impl Ai {
     /// Whether it waited outside a danger this tick (`kept_out`).
     pub(crate) fn kept_out(&self) -> bool {
         self.kept_out
+    }
+
+    /// Whether it held at its refuge this tick (`sheltering`).
+    pub(crate) fn sheltering(&self) -> bool {
+        self.sheltering
     }
 
     /// Whether it stood this tick on purpose for the FPV swarm
@@ -1816,6 +1874,24 @@ impl Ai {
         self.field.home.is_some() && tuning().ai_lane_turns
     }
 
+    /// Whether an arena hull reads this route as lanes all the same
+    /// (`lane_turn`): farther than `enemy_attack_range` from what it fights
+    /// (`near_fight`), on a route whose first step the switch margin can
+    /// never turn it onto (`margin_never_turns`). A hull riding the edge of
+    /// its lane on the side the route turns to is as stranded on an arena
+    /// as on a field map: left to the margin, a chaser a fraction of a pixel
+    /// off a cell's edge drives past every turning to the seat, up and down
+    /// its column, for as long as the round lasts. Near the fight the
+    /// margin decides, as it always has: a hull closing on its ring slot
+    /// turns and turns back as the slot moves, and lane turns there weave.
+    fn rides_lane_edge(&self, from: Position, heading: Dir, route: &RouteAhead, ctx: AvoidCtx) -> bool {
+        if self.field.home.is_some() || !tuning().ai_lane_turns || self.near_fight || route.shared() {
+            return false;
+        }
+        let v = self.motion.x * heading.vec().x + self.motion.y * heading.vec().y;
+        margin_never_turns(from, heading, route, v.abs() * ctx.dt)
+    }
+
     /// The heading a route is straightened along (`Grid::route_ahead`):
     /// the one held, while the route is read as lanes.
     fn route_heading(&self) -> Option<Position> {
@@ -1847,7 +1923,9 @@ impl Ai {
         // The route as lanes, against the heading held: `Some` while it
         // walks whole cells from the hull's own (see `lane_turn`).
         let lane = match (self.committed_dir, route) {
-            (Some(heading), Some(route)) if self.lanes() => self.lane_turn(from, heading, &route, ctx, grid),
+            (Some(heading), Some(route)) if self.lanes() || self.rides_lane_edge(from, heading, &route, ctx) => {
+                self.lane_turn(from, heading, &route, ctx, grid)
+            }
             _ => None,
         };
         // Continuing on the committed heading would walk into a cell the
@@ -1873,6 +1951,7 @@ impl Ai {
             _ => None,
         };
 
+        let blocked = |d: Dir| heads_into_wall(d, from, bounds, half) || grid.blocked_ahead(from, d.vec());
         let dir = if self.stuck_timer >= tuning().stuck_escape_seconds {
             // Asked to move for STUCK_ESCAPE_SECONDS running and made no
             // headway that way (see `think`'s progress tracking) - force a
@@ -1888,18 +1967,25 @@ impl Ai {
             // two jammed tanks don't mirror each other), the other
             // perpendicular if that one drives into a wall or blocked cell,
             // and straight back out as the last resort - a tank pinned in a
-            // corner has nowhere else to go.
+            // corner has nowhere else to go. The escape is held for
+            // `stuck_escape_hold_seconds` over every sidestep (`escape_dir`).
             self.stuck_timer = 0.0;
             self.escapes += 1;
             let failing = self.committed_dir.unwrap_or(fresh);
             let left = ctx.my_index.is_multiple_of(2);
-            let blocked =
-                |d: Dir| heads_into_wall(d, from, bounds, half) || grid.blocked_ahead(from, d.vec());
-            [perpendicular(failing, left), perpendicular(failing, !left), opposite(failing)]
+            let escape = [perpendicular(failing, left), perpendicular(failing, !left), opposite(failing)]
                 .into_iter()
                 .find(|&d| !blocked(d))
-                .unwrap_or_else(|| perpendicular(failing, left))
+                .unwrap_or_else(|| perpendicular(failing, left));
+            self.escape_dir = Some(escape);
+            self.escape_timer = tuning().stuck_escape_hold_seconds;
+            self.dodge_dir = None;
+            self.dodge_timer = 0.0;
+            escape
+        } else if let Some(escape) = self.escape_dir.filter(|&d| self.escape_timer > 0.0 && !blocked(d)) {
+            escape
         } else {
+            self.escape_dir = None;
             match (self.committed_dir, turn) {
                 (None, _) => {
                     self.commit(fresh);
@@ -1944,10 +2030,11 @@ impl Ai {
             }
         };
 
-        // Sidestep an imminent collision, then commit the final heading so it
-        // holds. Driving into a wall is no longer steering's problem - the
-        // physics engine's wall colliders stop/slide the tank for real.
-        let dir = self.avoid_collisions(dir, from, bounds, half, ctx, grid);
+        // Sidestep an imminent collision - never while an escape holds -
+        // then commit the final heading so it holds. Driving into a wall is
+        // no longer steering's problem - the physics engine's wall colliders
+        // stop/slide the tank for real.
+        let dir = if self.escape_dir.is_some() { dir } else { self.avoid_collisions(dir, from, bounds, half, ctx, grid) };
         self.commit(dir);
         dir
     }
@@ -2704,6 +2791,100 @@ impl Brain<'_> {
         !self.ai.frog_only && in_sight_box(self.player.position, self.me.position)
     }
 
+    /// Back away from the seat this tank fights, for the flee and retreat
+    /// tiers: to its refuge (`refuge`) and hold there facing the seat, or -
+    /// with no refuge in reach - toward the point mirroring the seat
+    /// across the tank. A committed heading pointing at the seat is dropped
+    /// first, as the leash does (`act_patrol`): the switch margin is blind
+    /// to a straight reversal, so a tank that turned to back away while
+    /// closing in would otherwise drive on into the seat, shoving it.
+    fn back_away(&mut self) {
+        let me = self.me.position;
+        let seat = self.player.position;
+        let toward = Vec2::new(seat.x - me.x, seat.y - me.y);
+        let entering = !matches!(self.ai.last_action, Some("flee" | "retreat"));
+        if entering && self.ai.committed_dir.is_some_and(|d| d.vec().x * toward.x + d.vec().y * toward.y > 0.0) {
+            self.ai.committed_dir = None;
+        }
+        let Some(refuge) = self.refuge() else {
+            let away_point = Position::new(2.0 * me.x - seat.x, 2.0 * me.y - seat.y);
+            self.intent.move_dir = Some(self.steer(away_point));
+            return;
+        };
+        // Got there once a cell short of it; left again only twice that far
+        // off, so a hull slid past by its momentum does not shuffle back.
+        let off = me.distance_to(refuge.at);
+        let reached = off <= OBSTACLE_GRID_SIZE || (refuge.reached && off <= 2.0 * OBSTACLE_GRID_SIZE);
+        if let Some(r) = &mut self.ai.refuge {
+            r.reached = reached;
+        }
+        if reached {
+            self.ai.sheltering = true;
+            self.intent.face = Some(Dir::toward(me, seat));
+        } else {
+            self.intent.move_dir = Some(self.steer(refuge.at));
+        }
+    }
+
+    /// Where this tank backs away to (`back_away`): of the points
+    /// `enemy_retreat_range` and half that from it along each of the eight
+    /// `REFUGE_BEARINGS` (held inside the field's margin), reachable from
+    /// where it stands (a label read, or the walking search on a portal
+    /// cooldown, as `Ai::wander`) and out of every danger, the farthest from
+    /// the seat it fights on its own side of that seat - else the farthest
+    /// on any side: one beyond the seat sends the tank past it, sidestepping
+    /// it round and round. No RNG: a fixed set, so a tank backing off
+    /// leaves the round's stream as it found it. Kept
+    /// until the seat closes on it by three cells or, short of it, stands
+    /// nearer it than the tank does or it falls out of reach - so a seat
+    /// that keeps still gets a tank that keeps still. `None` when every
+    /// candidate rolled is out of reach.
+    fn refuge(&mut self) -> Option<Refuge> {
+        let me = self.me.position;
+        let seat = self.player.position;
+        let grid = self.grid;
+        let walking = self.me.portal_cooldown > 0.0;
+        let reachable = |p: Position| {
+            if walking {
+                grid.same_cell(me, p) || grid.next_step_walking(me, p).is_some()
+            } else {
+                grid.connected(me, p)
+            }
+        };
+        if let Some(r) = self.ai.refuge
+            && seat.distance_to(r.at) >= r.seat.distance_to(r.at) - 3.0 * OBSTACLE_GRID_SIZE
+            && (r.reached || (seat.distance_to(r.at) > me.distance_to(r.at) && reachable(r.at)))
+        {
+            return Some(r);
+        }
+        let margin = self.me.size();
+        let reach = tuning().enemy_retreat_range();
+        let (width, height) = (self.width, self.height);
+        let candidates = REFUGE_BEARINGS.iter().flat_map(|&(dx, dy)| {
+            [1.0, 0.5].map(|share| {
+                let x = (me.x + dx * reach * share).clamp(margin, (width - margin).max(margin));
+                let y = (me.y + dy * reach * share).clamp(margin, (height - margin).max(margin));
+                Position::new(x, y)
+            })
+        });
+        // (away side, distance from the seat): a candidate on the tank's
+        // own side of the seat first, the farthest of them, ties to the
+        // earlier.
+        let mut best: Option<(Position, (bool, f32))> = None;
+        for candidate in candidates {
+            if !reachable(candidate) || self.in_danger(candidate) {
+                continue;
+            }
+            let away = (candidate.x - me.x) * (me.x - seat.x) + (candidate.y - me.y) * (me.y - seat.y) >= 0.0;
+            let score = (away, candidate.distance_to(seat));
+            if best.is_none_or(|(_, b)| score.0 > b.0 || (score.0 == b.0 && score.1 > b.1)) {
+                best = Some((candidate, score));
+            }
+        }
+        self.ai.refuge = best.map(|(at, _)| Refuge { at, seat, reached: false });
+        self.ai.refuge
+    }
+
     /// This tank's own position to the nearest currently-live pickup of
     /// `kind`, if any exist right now - used by `act_flee`/`act_retreat` so
     /// a hurting or ammo-starved tank heads for a pickup instead of just
@@ -3288,38 +3469,36 @@ fn build<'a>() -> Node<Brain<'a>> {
 
 // --- Leaf actions. Each fills in `b.intent` and returns Success. ---
 
-/// Drive away from the player along a committed cardinal heading - or, if a
-/// Health pickup is currently on the field, straight for that instead (see
-/// `Brain::nearest_pickup`): a hurt tank actively trying to patch itself up
-/// reads as far more purposeful than blindly running, and it's usually
-/// heading away from the fight anyway since pickups respawn near the
-/// battlefield's corners. Falls back to the old blind-flee behavior once no
-/// Health pickup exists (already collected, still respawning).
+/// Back away from the player to a refuge and hold there (`Brain::back_away`)
+/// - or, if a Health pickup is currently on the field, head straight for
+/// that instead (see `Brain::nearest_pickup`): a hurt tank actively trying
+/// to patch itself up reads as far more purposeful than running, and it's
+/// usually heading away from the fight anyway since pickups respawn near the
+/// battlefield's corners. The refuge is a place, not a direction: the point
+/// mirroring the seat across the tank moves with the tank, so steering for
+/// it runs a hurt tank into the field's edge or round a dead end for as
+/// long as the round lasts - it is only the fallback while no refuge is in
+/// reach.
 fn act_flee(b: &mut Brain) -> Status {
     b.reset_aim();
     if let Some(target) = b.nearest_pickup(PickupKind::Health) {
         b.intent.move_dir = Some(b.steer(target));
         return Status::Success;
     }
-    // Steer toward a point behind us (mirror of the player across our position),
-    // so commitment/hysteresis applies just like chasing.
-    let away_point = Position::new(
-        2.0 * b.me.position.x - b.player.position.x,
-        2.0 * b.me.position.y - b.player.position.y,
-    );
-    b.intent.move_dir = Some(b.steer(away_point));
+    b.back_away();
     Status::Success
 }
 
 /// Back off to recharge ammo - or, if an Ammo pickup is currently on the
 /// field, head straight for that instead (see `Brain::nearest_pickup` and
 /// `act_flee`'s doc comment for the same reasoning: an active pickup run
-/// beats blindly backing away). Without one, falls back to the old
-/// behavior: retreat only until clear of ENEMY_RETREAT_RANGE (breathing
-/// room outside attack range) rather than running all the way off - once
-/// there, hold position, face the player, and just wait out the passive
-/// recharge instead of camping the map edge. Never fires: `b.intent.fire`
-/// starts false each frame and this leaf doesn't set it.
+/// beats blindly backing away). Without one, it backs away
+/// (`Brain::back_away`) only until clear of ENEMY_RETREAT_RANGE (breathing
+/// room outside attack range) or at its refuge, whichever comes first,
+/// rather than running all the way off - then holds position, faces the
+/// player, and just waits out the passive recharge instead of camping the
+/// map edge. Never fires: `b.intent.fire` starts false each frame and this
+/// leaf doesn't set it.
 fn act_retreat(b: &mut Brain) -> Status {
     b.reset_aim();
     if let Some(target) = b.nearest_pickup(PickupKind::Ammo) {
@@ -3330,11 +3509,7 @@ fn act_retreat(b: &mut Brain) -> Status {
         b.intent.face = Some(Dir::toward(b.me.position, b.player.position));
         return Status::Success;
     }
-    let away_point = Position::new(
-        2.0 * b.me.position.x - b.player.position.x,
-        2.0 * b.me.position.y - b.player.position.y,
-    );
-    b.intent.move_dir = Some(b.steer(away_point));
+    b.back_away();
     Status::Success
 }
 
@@ -4768,6 +4943,30 @@ mod lane_tests {
         assert!(slow.walks_into_wall(from, ctx, &grid), "a 3.6 px slide stays in column 19");
     }
 
+    /// An arena hull riding the edge of its lane takes its turning too on
+    /// a searched route, away from the fight (`Ai::rides_lane_edge`), where
+    /// the margin alone would carry it on past the turning; near the fight
+    /// (`Ai::near_fight`), or on a flow field's route, the margin decides
+    /// and holds the heading.
+    #[test]
+    fn an_arena_hull_on_the_edge_of_its_lane_turns_on_its_way() {
+        let plain = Grid::build(40.0 * CELL, 30.0 * CELL, CELL, 0.0, std::iter::empty());
+        let slide = PACE * PACE / (2.0 * GRIP);
+        let from = Position::new(at(6, 5).x + 12.0 - slide, at(6, 5).y + 15.5);
+        let to = at(6, 20);
+        let steer = |near_fight: bool, grid: &Grid| {
+            let mut ai = Ai { committed_dir: Some(Dir::Right), dir_hold: 1.0, motion: Vec2::new(PACE, 0.0), near_fight, ..Ai::default() };
+            let ctx = AvoidCtx { movers: &[], my_index: 0, radius: 20.0, speed: PACE, grip: GRIP, dt: 1.0 / 60.0, on_portal_cooldown: false };
+            let route = grid.route_ahead(from, to, None);
+            ai.steer_toward(from, route, to, (40.0 * CELL, 30.0 * CELL), 16.0, ctx, grid)
+        };
+        assert_eq!(steer(false, &plain), Dir::Down, "on its way: the lane turn");
+        assert_eq!(steer(true, &plain), Dir::Right, "near the fight: the margin, which never turns it here");
+        let mut field = Grid::build(40.0 * CELL, 30.0 * CELL, CELL, 0.0, std::iter::empty());
+        field.add_field(to);
+        assert_eq!(steer(false, &field), Dir::Right, "a flow field's route: the margin");
+    }
+
     /// A route whose first step is straight back is no walk along the
     /// lanes from here: the margin decides, blind to a reversal as ever.
     #[test]
@@ -4854,8 +5053,9 @@ mod stuck_tests {
         // Told to go Down, carried East at speed by a jam: no progress.
         drive(&mut ai, &mut pos, Dir::Down, Position::new(100.0, 0.0), 12);
         assert!(ai.stuck_timer > 0.15, "sideways drift counted as movement: {}", ai.stuck_timer);
-        // Actually driving Down clears it within a few frames.
-        drive(&mut ai, &mut pos, Dir::Down, Position::new(0.0, 100.0), 6);
+        // Actually driving Down at its pace clears it within a few frames.
+        let pace = Tank::default().effective_speed();
+        drive(&mut ai, &mut pos, Dir::Down, Position::new(0.0, pace), 6);
         assert_eq!(ai.stuck_timer, 0.0);
         // Shoved backwards is no better than standing still.
         drive(&mut ai, &mut pos, Dir::Down, Position::new(0.0, -100.0), 12);
@@ -4882,6 +5082,37 @@ mod stuck_tests {
         assert!(ai.stuck_timer > before + 0.3);
     }
 
+    /// A hull shoving another along creeps faster than `stuck_speed_eps`
+    /// while getting nowhere: under `stuck_progress_fraction` of its own
+    /// top speed it is stuck all the same.
+    #[test]
+    fn a_hull_creeping_against_another_is_stuck() {
+        let (mut ai, mut pos) = settled();
+        let creep = tuning().stuck_speed_eps + 4.0;
+        assert!(creep < tuning().stuck_progress_fraction * Tank::default().effective_speed(), "the case this is about");
+        drive(&mut ai, &mut pos, Dir::Down, Position::new(0.0, creep), 30);
+        assert!(ai.stuck_timer > 0.3, "creeping at {creep} px/s counted as progress: {}", ai.stuck_timer);
+    }
+
+    /// Once it fires, the stuck escape holds for
+    /// `stuck_escape_hold_seconds`, a sidestep latched meanwhile
+    /// notwithstanding: wedged between a wall and another hull, the
+    /// sidestep is what steers a tank back into the jam.
+    #[test]
+    fn the_stuck_escape_holds_over_a_sidestep() {
+        let (mut ai, mut pos) = settled();
+        let budget = (tuning().stuck_escape_seconds * 60.0) as u32 + 3;
+        let escape = (0..budget)
+            .find_map(|_| drive(&mut ai, &mut pos, Dir::Down, Position::new(100.0, 0.0), 1).move_dir.filter(|&d| d != Dir::Down))
+            .expect("the escape fires");
+        let held = (tuning().stuck_escape_hold_seconds * 60.0) as u32 - 1;
+        for frame in 1..=held {
+            ai.dodge_dir = Some(opposite(escape));
+            ai.dodge_timer = tuning().avoid_dodge_seconds;
+            assert_eq!(tick(&mut ai, pos).move_dir, Some(escape), "frame {frame} of the hold");
+        }
+    }
+
     #[test]
     fn a_tank_carried_sideways_long_enough_escapes_perpendicular() {
         let (mut ai, mut pos) = settled();
@@ -4903,6 +5134,65 @@ mod stuck_tests {
         );
         assert_eq!(ai.stuck_timer, 0.0, "the escape resets the clock");
         assert_eq!(ai.escapes, 1);
+    }
+}
+
+#[cfg(test)]
+mod away_tests {
+    use super::*;
+    use rand::SeedableRng;
+
+    /// One open-field `think` tick for an enemy at `me` out of shells, the
+    /// player at `player`.
+    fn tick(ai: &mut Ai, me: Position, player: Position) -> Intent {
+        let mut me_tank = Tank::default();
+        me_tank.position = me;
+        me_tank.shells_ammo = 0;
+        let mut player_tank = Tank::default();
+        player_tank.position = player;
+        let grid = Grid::build(1280.0, 720.0, 32.0, 0.0, std::iter::empty());
+        let movers = [
+            Mover { position: player, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
+            Mover { position: me, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
+        ];
+        let mut rng = SmallRng::seed_from_u64(7);
+        ai.think(
+            &me_tank,
+            &player_tank,
+            player,
+            None,
+            1280.0,
+            720.0,
+            1.0 / 60.0,
+            &movers,
+            1,
+            &grid,
+            &mut rng,
+            None,
+            None,
+            &[],
+            true,
+            true,
+            false,
+            [None; 4],
+            tuning().enemy_view_range,
+            &SpecialSense::None,
+            &[],
+        )
+    }
+
+    /// A tank that runs out of shells while driving at the seat turns away
+    /// from it on the tick it starts to back off (`Brain::back_away`):
+    /// the switch margin is blind to a straight reversal, so the heading it
+    /// held would carry it on into the seat, shoving it along.
+    #[test]
+    fn a_tank_out_of_shells_turns_away_from_the_seat_it_was_closing_on() {
+        let (me, player) = (Position::new(700.0, 300.0), Position::new(650.0, 300.0));
+        let mut ai = Ai { committed_dir: Some(Dir::Left), dir_hold: 2.0, ..Ai::default() };
+        let intent = tick(&mut ai, me, player);
+        assert_eq!(ai.last_action, Some("retreat"));
+        assert_ne!(ai.committed_dir, Some(Dir::Left), "still heading into the seat");
+        assert_ne!(intent.move_dir, Some(Dir::Left));
     }
 }
 

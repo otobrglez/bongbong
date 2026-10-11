@@ -1110,19 +1110,16 @@ fn the_round_ending_mid_charge_clears_it_and_nothing_fires_on_the_end_screen() {
 
 /// An enemy whose way runs across a charging seat's lane waits at the edge
 /// (`Ai::kept_out`) rather than walk in: seat 1 charges east along its row,
-/// a lane across the field, and the enemy north of it wants seat 2 south
-/// of it.
+/// a lane across the field, and the enemy north of it, far east of seat 1,
+/// wants seat 2 south of it.
 #[test]
 fn enemies_wait_at_the_edge_of_a_lane_rather_than_cross_it() {
     let mut game = round_with("", 2);
     let s2 = game.seat(1).expect("a second seat");
-    game.place_tank(s2, Position::new(640.0, 448.0), Some(0.0)).unwrap();
-    let slot = game.debug_spawn_enemy(Position::new(640.0, 64.0), Some(1), Some(Role::Player)).unwrap();
+    game.place_tank(s2, Position::new(1100.0, 448.0), Some(0.0)).unwrap();
+    let slot = game.debug_spawn_enemy(Position::new(1100.0, 64.0), Some(1), Some(Role::Player)).unwrap();
     let enemy = game.tank_entity_by_slot(slot).unwrap();
-    with_tank_mut(&game.world, enemy, |t| {
-        t.shells_ammo = 0;
-        t.disarm();
-    });
+    with_tank_mut(&game.world, enemy, |t| t.disarm());
     let half = crate::battlefield::max_tank_clearance_half_extent() + tuning().gauss_half_width;
     let mut held = false;
     for _ in 0..full_ticks() + 30 {
@@ -1131,6 +1128,7 @@ fn enemies_wait_at_the_edge_of_a_lane_rather_than_cross_it() {
         assert!((y - 192.0).abs() >= half - 2.0, "it walked into the lane: {y}");
         held |= game.world.get::<&Ai>(enemy).unwrap().kept_out();
     }
+    assert_eq!(game.world.get::<&Ai>(enemy).unwrap().target_player(), 1, "it wants seat 2");
     assert!(held, "it waited at the edge");
 }
 
