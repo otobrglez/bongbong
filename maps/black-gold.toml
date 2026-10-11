@@ -13,7 +13,8 @@
 # cooling pond, a glass-and-brick control room and a fenced drum yard; the
 # player holds the loading yard in the south-west among the timber pallets.
 # Flamethrower and missiles in the yards, health and ammo on the service road,
-# a minigun at the north gate.
+# a minigun at the north gate and a gravity well out by the west edge, to
+# pull the drums together before they go up.
 
 version = 1
 size = [56, 28]
@@ -215,7 +216,7 @@ cells."49,12" = { kind = "tall_grass" }
 cells."50,12" = { kind = "tall_grass" }
 cells."51,12" = { kind = "tall_grass" }
 cells."52,12" = { kind = "tall_grass" }
-cells."1,13" = { kind = "pickup", pickup = "speedup" }
+cells."1,13" = { kind = "pickup", pickup = "gravity_well" }
 cells."4,13" = { kind = "tall_grass" }
 cells."5,13" = { kind = "tall_grass" }
 cells."6,13" = { kind = "tall_grass" }

@@ -11,8 +11,9 @@
 #
 # Brick warehouses with glass skylights line the quay, a fish market of stalls
 # and drums sits by the river and the frog suns itself on the beach. Shield
-# and frog health on the quay, missiles by the lighthouse, laser in the
-# warehouse yard, health and ammo up in the town.
+# and frog health on the quay, missiles by the lighthouse, a gauss rail in
+# the warehouse yard to fire through the warehouses, a laser, health and ammo
+# up in the town.
 
 version = 1
 size = [56, 31.5]
@@ -209,7 +210,7 @@ cells."41,6" = { kind = "wall", material = "glass" }
 cells."42,6" = { kind = "wall", material = "brick" }
 cells."43,6" = { kind = "wall", material = "brick" }
 cells."44,6" = { kind = "wall", material = "brick" }
-cells."6,7" = { kind = "pickup", pickup = "ammo" }
+cells."6,7" = { kind = "pickup", pickup = "laser" }
 cells."10,7" = { kind = "fence" }
 cells."13,7" = { kind = "fence" }
 cells."15,7" = { kind = "water" }
@@ -429,7 +430,7 @@ cells."27,19" = { kind = "water" }
 cells."28,19" = { kind = "water" }
 cells."29,19" = { kind = "water" }
 cells."30,19" = { kind = "water" }
-cells."4,20" = { kind = "pickup", pickup = "laser" }
+cells."4,20" = { kind = "pickup", pickup = "gauss_rail" }
 cells."18,20" = { kind = "water" }
 cells."22,20" = { kind = "water" }
 cells."23,20" = { kind = "water" }

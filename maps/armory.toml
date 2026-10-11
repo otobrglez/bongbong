@@ -502,6 +502,22 @@ pickup = "gravity_well"
 kind = "pickup"
 pickup = "grenades"
 
+[cells."11,6"]
+kind = "pickup"
+pickup = "laser"
+
+[cells."11,8"]
+kind = "pickup"
+pickup = "plasma"
+
+[cells."11,10"]
+kind = "pickup"
+pickup = "minigun"
+
+[cells."11,12"]
+kind = "pickup"
+pickup = "flamethrower"
+
 [mission]
 kind = "protect"
 

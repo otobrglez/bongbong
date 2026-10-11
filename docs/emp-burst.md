@@ -498,6 +498,14 @@ house is the shield it pops. The map lints clean (`supported_maps_no_new_errors`
 and the armory's CPU thumbnail pin is re-baselined for the crates and
 posts.
 
+### 3.5 In the campaign
+
+BB-46 (docs/levels.md, "The weapons along the way"): Carnival (level 5) has
+the EMP's crate at 19,11, five cells from the start among the lasers: eight
+tanks and a field of missile crates the enemies arm from, so a pulse stops a
+crowd and kills a volley in the air, and there is no player frog or tower of
+the players' to switch off.
+
 ## 4. AI
 
 An enemy carrying the EMP uses it by `emp_rule`, never through the generic
@@ -1448,7 +1456,7 @@ brain) - a scratch build, not in the tree:
 
 ### Not in this PR
 
-- Placing the EMP in the shipped levels - level design, a follow-up.
+- Placing the EMP in the shipped levels - done in BB-46 (§3.5).
 - A mark on the minimap for a disabled tank, an offline tower or the ring.
 - Sound effects - the game has no audio yet.
 - The AI using a pulse against a missile volley coming at an ally, and

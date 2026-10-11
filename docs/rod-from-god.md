@@ -697,6 +697,15 @@ tried in lockstep without steering a reticle. `status`/`snapshot` carry
 each tank its `rods` and `reticle`. The seats' motion record and an
 enemy's pick are not in the snapshot (§12): the probe's trace reads them.
 
+### 3.5 In the campaign
+
+BB-46 (docs/levels.md, "The weapons along the way"): No Man's Land (level
+11) has the rod's first crate at 25,19, a cell of its own behind the sandbag
+line: waves in the open and no frog to lose. Grand Campaign (level 15) has
+the second at 31,17, on the lake shore beside the fort, against the
+super-heavies - mind the players' frog in the fort, which a circle kills. It
+is never on a Hunt map, where one call ends the hunt.
+
 ## 4. AI
 
 An enemy carrying calls uses them by `rod_rule`, never through the generic
@@ -1915,7 +1924,7 @@ rounds in the defaults comparison above match byte for byte).
 
 ### Not in this PR
 
-- Placing the rod in the shipped levels - level design, a follow-up.
+- Placing the rod in the shipped levels - done in BB-46 (§3.5).
 - A volcano in the armory (decision 18).
 - Breaking or melting ice; a rod into lava splashing a pool of burning
   lava; a lake hit throwing water onto the banks beyond the fish.

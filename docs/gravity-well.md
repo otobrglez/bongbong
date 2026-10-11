@@ -728,6 +728,13 @@ tank's `pull` (the current and side pull on it) and `bracing`, and an
 enemy's `well` plan (`AiSnapshot::well`: the arm, the facing, the anchor
 distance).
 
+### 3.5 In the campaign
+
+BB-46 (docs/levels.md, "The weapons along the way"): Black Gold (level 13)
+has the well's crate at 1,13, out by the west edge north of the start: the
+well gathers the refinery's drums on their fuse lines and they go up
+together.
+
 ## 4. AI
 
 An enemy carrying wells uses them by `well_rule`, never through the generic
@@ -2001,7 +2008,7 @@ Fields (the seven of `just probe-fields`, 3600 frames):
 
 ### Not in this PR
 
-- Placing the well in the shipped levels - level design, a follow-up.
+- Placing the well in the shipped levels - done in BB-46 (§3.5).
 - A lens over the whole pull (decision 22).
 - Bending the laser, the rail or the flamethrower's jet (decision 5).
 - Pulling wrecks (decision 7), lanterns, rubble, scorches, fires and oil.

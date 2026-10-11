@@ -286,10 +286,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `cleared_par`), and `hostable()` is a shipped map as it ships or one carrying a valid stamp.
   `SHIPPED_MAPS` (default, default-desert, hunt-basic, waves-basic, portals, towers, `longwater` -
   the 112 x 63 free-play field the follow camera is for, a lake across the map with a fort on its
-  south shore, waves through six gates north of the water -, `armory` - the 36 x 18 arena the BB-36
-  weapons are tried on, the one shipped arena (docs/sonic-hammer.md) -, then the fifteen
+  south shore, waves through six gates north of the water -, `armory` - the 40 x 22 arena every
+  special weapon is tried on, the one shipped arena (docs/sonic-hammer.md) -, then the fifteen
   hand-authored levels from `lotus-lagoon` (and `vulkan`, the volcano level) to `grand-campaign`,
-  each file's header saying how it plays; every one a field map, 48 x 24 to 67 x 34 and longwater,
+  each file's header saying how it plays, their crates meeting every weapon on the way
+  (docs/levels.md, "The weapons along the way"); every one a field map, 48 x 24 to 67 x 34 and longwater,
   since they were scaled up by 40 % a side with their layouts - `tools/scale_map.py`: lines kept one
   cell thick, single things single, two-wide fords two wide; then checked with the linter, since its
   reaches are in pixels) are embedded - all the web build can list, what the lobby's map stepper
