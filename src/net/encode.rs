@@ -428,6 +428,7 @@ fn tiles(game: &Game, cols: u16) -> Vec<TileState> {
                 || o.burning
                 || o.fuse.is_some()
                 || o.scorched != 0
+                || o.chunks_worn()
                 || o.ram_timer > 0.0
                 || offline.contains(&o.cell())
         })
@@ -457,13 +458,14 @@ fn tiles(game: &Game, cols: u16) -> Vec<TileState> {
                 hp: tile_points(o.health),
                 flags,
                 faces: o.scorched,
+                chunks: o.chunks.map_or(0, |c| c.quantised()),
             }
         })
         .collect();
     for event in game.events() {
         if let Event::ObstacleDestroyed { x, y, .. } = *event {
             let cell = cell_index(cols, map::world_to_cell(Position::new(x, y)));
-            out.push(TileState { cell, hp: 0, flags: tile_flags::DESTROYED, faces: 0 });
+            out.push(TileState { cell, hp: 0, flags: tile_flags::DESTROYED, faces: 0, chunks: 0 });
         }
     }
     out

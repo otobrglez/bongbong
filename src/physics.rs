@@ -154,6 +154,16 @@ impl Physics {
         handle
     }
 
+    /// Refit a static body's collider (`spawn_static`'s) to the box of
+    /// `half_extents` whose centre sits `offset` from the body: a chunked
+    /// wall tile (`chunks.rs`) whose standing quadrants no longer fill it.
+    pub fn fit_static(&mut self, body: RigidBodyHandle, offset: Position, half_extents: Position) {
+        let handle = self.collider_of(body);
+        let collider = self.world.colliders.get_mut(handle).expect("collider handle should always be valid");
+        collider.set_shape(SharedShape::cuboid(half_extents.x, half_extents.y));
+        collider.set_translation_wrt_parent(to_vector(offset));
+    }
+
     /// Spawn a rotation-locked dynamic tank body: a corner-rounded
     /// rectangular collider (`tank_move_shape`) of overall `half_extents`
     /// (x, y) per side - callers pass `Tank::move_half_extents`, the
