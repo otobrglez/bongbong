@@ -677,6 +677,15 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     scaled by `crate_cookoff_scale`, the only RNG), the rest spill (`Pickup::loose`, takeable for
     `crate_spill_seconds`). `Event::CrateBroken`; `crate_cookoff_show` is the replica's show. Tests:
     `crate_tests.rs`.
+  - `trample.rs` (docs/ground-memory.md "Trampled cover") — trampled cover, behind
+    `grass_trample_passes` (off by default, read once by `init` into `Game::trample_passes`):
+    `trample_grass`, after `sync_tanks_and_ram`, counts a live hull's centre entering a grass, bush or
+    reed cell (`Tank::trample_cell`, `grass::hull_cell`; seats then enemies, the first cell a hull
+    is seen in counting nothing) into `grass_passes`, and on the last pass moves the cell to
+    `grass_trampled` with `Event::GrassTrampled`; `Game::cover_cells` leaves those cells out, so the
+    AI, the seats' views, the arrows and the minimap agree, and `hold_trampled_grass` (in
+    `tick_grass`, on a replica too) holds their tufts flat. No RNG; off touches nothing. Tests: the
+    trampling cases in `props_tests.rs`, `determinism_tests`, `net::apply`.
   - `waves.rs` (docs/maps-to-levels.md) — wave pacing, the `WAVE N` banner (`tick_wave_banner`
     counts the breather down; it travels in `RoundState` so a replica holds the banner up for as
     long), wreck despawn (`fade_wrecks` arms each new wreck's `despawn_timer` and runs it down - the
@@ -1018,7 +1027,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   adding one re-opens the pile-ups the engage ring solved; re-baseline `just probe-fixtures` if you
   touch it. On a field map each enemy's alert is its own and travels a chain of neighbours instead
   (`simulation/field.rs`), under the same no-line-of-sight rule; re-baseline `just probe-fields` if
-  you touch that.
+  you touch that. Every reader takes its cells from `Game::cover_cells`: the grass less what a
+  sonic wave flattened and what hulls trampled (`simulation/trample.rs`), plus the woods' trails.
+  `hull_cell` is the cell trampling counts a hull in.
 - `tower.rs` (docs/defence-towers-prd.md, docs/TOWERS_SPEC.md) — `TowerKind` (Tesla/Gun/Bio, the
   `Material::{Tesla, GunTower, BioSlush}` tiles), `Tower` (side, heading, charge, bursts, burning),
   `Glob`, `OozePuddle`, `TeslaBolt`, `TowerRuin`, and the drawing generic over `canvas::Canvas`:
@@ -1923,7 +1934,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   match, so a new `Event` variant fails to compile until mirrored or put on `NOT_SENT` (the AI
   trace, `PhysicsQuarantine` and `Rerolled`); `LaserBeam` is how a laser reaches a replica at all,
   `net::apply` pushing the beam the event carries (one a leg, the lens flashing on leg 0 alone);
-  `ShotTeleported` carries a shot's `ShotState` key so the interpolator draws its jump. The lobby's
+  `ShotTeleported` carries a shot's `ShotState` key so the interpolator draws its jump;
+  `GrassTrampled {col, row}` is state, applied quiet or drawn. The lobby's
   `Ended { outcome }` is how a round's end reaches a client, since the snapshots stop with the tick.
   `codec.rs`: `encode`/`decode` of a `Msg`, one `kind` byte then `postcard` (lobby: JSON).
   `delta.rs`: `delta`/`apply_delta` - per family the changed entries in full, short moves as `Moved
@@ -1937,13 +1949,15 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   points, fires, `RoundState`, the frame's events; a tile death is an `ObstacleDestroyed` event and
   a `DESTROYED` entry cut from it, since the world drops a dead tile the same frame), `welcome(game,
   seat, roster, tuning_json, acked)` adds the map TOML, seed, `WireOverrides`, `enemy_count`, the
-  unburnt `oil_cells` and the `dead_cells` a state snapshot cannot express; `wire_events` for a
+  unburnt `oil_cells`, the `dead_cells` a state snapshot cannot express and the
+  `trampled_cells` (`Game::grass_trampled`); `wire_events` for a
   server accumulating the ticks between snapshots; `server_ms` is the caller's. **`apply.rs`** —
   `welcome(&Welcome) -> Result<Game>` builds the replica by `Game::init` on the same map, seed,
   overrides and roster-pinned chassis (so `init`'s rolls match), `strip_ai`, removes `dead_cells`,
-  then `snapshot(&mut Game, &Snapshot)`: events first (`RoundStarted` re-inits on its seed unless
+  takes `trampled_cells`, then `snapshot(&mut Game, &Snapshot)`: events first (`RoundStarted` re-inits on its seed unless
   the replica already stands in that round at frame 0, which is every welcome; `ObstacleDestroyed`
-  removes the tile; `DrumLaunched` puts the drum in the air), then tiles (absent = fresh), tanks
+  removes the tile; `DrumLaunched` puts the drum in the air; `GrassTrampled`, quiet or drawn,
+  takes the cell out of the cover), then tiles (absent = fresh), tanks
   (spawned without `Ai`, body placed with `Physics::set_position`/`set_velocity`; the hull's facing
   snaps and the *drawn* angles stay put, for `tick_presentation` to swing across), shots by id,
   frogs, pickups, fires (a cell the snapshot stops listing burnt out, the one way a fire ever leaves

@@ -1031,6 +1031,156 @@ fn shooting_from_cover_gives_the_player_away() {
     assert!(shot_back, "an enemy the player shot from cover shoots back into it");
 }
 
+/// The player's centre, from the round's snapshot.
+fn player_at(game: &Game) -> Position {
+    game.tank_snapshots().iter().find(|t| t.slot == 0).expect("the player is on the field").position
+}
+
+/// Drive the player `dir` (up or down column 20) until its centre has
+/// passed row `row`'s, collecting every `GrassTrampled` on the way.
+fn drive_past_row(game: &mut Game, dir: Dir, row: i32, trampled: &mut Vec<(i32, i32)>) {
+    let y = cell_to_world(20, row).y;
+    for _ in 0..600 {
+        step(game, drive(dir));
+        trampled.extend(game.events().iter().filter_map(|e| match e {
+            Event::GrassTrampled { cell } => Some(*cell),
+            _ => None,
+        }));
+        let at = player_at(game).y;
+        if (dir == Dir::Up && at <= y) || (dir == Dir::Down && at >= y) {
+            return;
+        }
+    }
+    panic!("the hull never passed row {row}");
+}
+
+/// A one-cell grass round on column 20 with the player parked two cells
+/// below the grass, seen once there, and trampling at `passes`.
+fn trample_round(passes: u16) -> Game {
+    let mut game = game_on(&map_with("cells.\"20,11\" = { kind = \"tall_grass\" }\n"), 1);
+    game.trample_passes = passes;
+    game.debug_teleport(0, cell_to_world(20, 13), Some(0.0)).unwrap();
+    step(&mut game, Input::default());
+    game
+}
+
+/// Trampled cover is off unless `grass_trample_passes` turns it on, and
+/// off counts nothing at all: no pass, no event, no hull's cell kept.
+#[test]
+fn trampling_is_off_by_default_and_counts_nothing() {
+    assert_eq!(crate::tuning::Tuning::DEFAULT.grass_trample_passes, 0);
+    let mut game = game_on(&map_with("cells.\"20,11\" = { kind = \"tall_grass\" }\n"), 1);
+    assert_eq!(game.trample_passes, 0, "a round latches the default");
+    game.debug_teleport(0, cell_to_world(20, 13), Some(0.0)).unwrap();
+    step(&mut game, Input::default());
+    let mut trampled = Vec::new();
+    for _ in 0..3 {
+        drive_past_row(&mut game, Dir::Up, 9, &mut trampled);
+        drive_past_row(&mut game, Dir::Down, 13, &mut trampled);
+    }
+    assert!(trampled.is_empty());
+    assert!(game.grass_passes.is_empty() && game.grass_trampled.is_empty());
+    assert!(game.world.query::<&Tank>().iter().all(|t| t.trample_cell.is_none()), "the phase never ran");
+    assert!(crate::grass::conceals(&game.cover_cells(), cell_to_world(20, 11)), "the grass still hides");
+}
+
+/// A cell hulls drive into `grass_trample_passes` times hides nobody for
+/// the rest of the round - one `GrassTrampled`, on the last pass.
+#[test]
+fn driving_over_tall_grass_enough_times_tramples_it() {
+    let mut game = trample_round(3);
+    let cell = cell_to_world(20, 11);
+    let mut trampled = Vec::new();
+    drive_past_row(&mut game, Dir::Up, 9, &mut trampled);
+    assert_eq!(game.grass_passes.get(&(20, 11)), Some(&1));
+    assert!(crate::grass::conceals(&game.cover_cells(), cell), "one pass leaves it standing");
+    drive_past_row(&mut game, Dir::Down, 13, &mut trampled);
+    assert!(crate::grass::conceals(&game.cover_cells(), cell), "two passes leave it standing");
+    drive_past_row(&mut game, Dir::Up, 9, &mut trampled);
+    assert!(!crate::grass::conceals(&game.cover_cells(), cell), "the third pass tramples it");
+    assert_eq!(trampled, vec![(20, 11)]);
+    assert!(game.grass_passes.is_empty(), "a trampled cell counts no more");
+    drive_past_row(&mut game, Dir::Down, 13, &mut trampled);
+    assert_eq!(trampled, vec![(20, 11)], "and is trampled once");
+    assert!(!crate::grass::conceals(&game.cover_cells(), cell), "for the round");
+}
+
+/// A pass is entering the cell, not a frame spent in it: a hull parked in
+/// the grass counts one however long it stays.
+#[test]
+fn a_hull_parked_in_grass_counts_one_pass() {
+    let mut game = trample_round(2);
+    let cell = cell_to_world(20, 11);
+    game.debug_teleport(0, cell, Some(0.0)).unwrap();
+    for _ in 0..300 {
+        step(&mut game, Input::default());
+    }
+    assert_eq!(game.grass_passes.get(&(20, 11)), Some(&1));
+    assert!(crate::grass::conceals(&game.cover_cells(), cell), "one pass, still cover");
+}
+
+/// Trampled grass hides nobody from the AI: the pinned player of
+/// `tall_grass_hides_the_player_from_the_ai` is shot as if in the open
+/// once its own cell is trampled.
+#[test]
+fn trampled_grass_hides_nobody_from_the_ai() {
+    let mut cells = String::new();
+    for c in 19..=21 {
+        for r in 10..=12 {
+            cells.push_str(&format!("cells.\"{c},{r}\" = {{ kind = \"tall_grass\" }}\n"));
+        }
+    }
+    let grassy = map_with(&cells);
+    let hits_taken = |passes: u16| {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(3);
+        game.seed_override = Some(3);
+        game.player_row_override = Some(0);
+        game.map = MapFile::from_toml_str(&grassy).expect("test map parses");
+        game.init(W, H);
+        game.trample_passes = passes;
+        let cell = cell_to_world(20, 11);
+        for (i, slot) in [1, 2, 3].iter().enumerate() {
+            let _ = game.debug_teleport(*slot, cell_to_world(18 + i as i32 * 2, 5), Some(180.0));
+        }
+        // Seen once at the start, so the move into the grass is a pass.
+        step(&mut game, Input::default());
+        let mut hits = 0;
+        for _ in 0..900 {
+            game.debug_teleport(0, cell, Some(0.0)).expect("player holds its ground");
+            step(&mut game, Input::default());
+            hits += game.events().iter().filter(|e| matches!(e, Event::Hit { target: HitTarget::Player { .. }, .. })).count();
+        }
+        assert_eq!(game.grass_trampled.contains(&(20, 11)), passes == 1);
+        hits
+    };
+    let hidden = hits_taken(0);
+    let trampled = hits_taken(1);
+    assert_eq!(hidden, 0, "a player who never leaves standing cover is never hit");
+    assert!(trampled >= 5, "trampled cover is open ground, got {trampled}");
+}
+
+/// A trampled cell's tufts lie flat for the round, where a hull's trail
+/// stands back up (`grass_flattens_under_a_tank_and_stands_back_up`).
+#[test]
+fn trampled_grass_lies_flat_for_the_round() {
+    let crushes = |passes: u16| {
+        let mut game = trample_round(passes);
+        game.debug_teleport(0, cell_to_world(20, 11), Some(0.0)).unwrap();
+        step(&mut game, Input::default());
+        game.debug_teleport(0, cell_to_world(20, 18), Some(0.0)).unwrap();
+        for _ in 0..(60.0 * 6.0) as usize {
+            step(&mut game, Input::default());
+        }
+        let crushes: Vec<f32> =
+            game.grass.iter().filter(|t| crate::map::world_to_cell(t.base) == (20, 11)).map(|t| t.crush).collect();
+        assert!(!crushes.is_empty(), "the cell grew tufts");
+        crushes
+    };
+    assert!(crushes(1).iter().all(|&c| c == 1.0), "trampled, it stays down");
+    assert!(crushes(0).iter().all(|&c| c == 0.0), "untrampled, it stands back up");
+}
+
 #[test]
 fn grass_is_sorted_by_where_each_tuft_is_rooted() {
     let map = map_with("cells.\"20,11\" = { kind = \"tall_grass\" }\ncells.\"20,9\" = { kind = \"tall_grass\" }\ncells.\"20,13\" = { kind = \"tall_grass\" }\n");

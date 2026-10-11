@@ -1116,6 +1116,7 @@ impl Room {
             enemy_count: None,
             oil_cells: Vec::new(),
             dead_cells: Vec::new(),
+            trampled_cells: Vec::new(),
             snapshot: Snapshot { acked, server_ms: self.server_ms(), ..Snapshot::default() },
         }
     }

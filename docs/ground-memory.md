@@ -11,8 +11,9 @@ powder, chips off ice, exhaust as it pulls away.
 
 The research, the proposals and the decisions behind this are on the Tread
 Lab page (https://claude.ai/artifact/RKznnB1TsYgwPXEwBRacWa) and in BB-87;
-this document is what is built (BB-88). Trampled cover (BB-89) and oil prints
-(BB-90) are the gameplay follow-ups and are not built.
+this document is what is built (BB-88), and trampled cover (BB-89, "Trampled
+cover" below), behind its own knob and off by default. Oil prints (BB-90) are
+the other gameplay follow-up.
 
 ## Where it lives
 
@@ -20,6 +21,8 @@ this document is what is built (BB-88). Trampled cover (BB-89) and oil prints
 |--------|--------------|
 | `src/wear.rs` | The headless half: `WearGrid`, its blocks and cells, `Stamp`, the rules (`press_factor`, `is_soft`, `erodes`), the colour ramps, the bake and the pictures (`refresh_pictures`). |
 | `src/simulation/wear.rs` | The world half: `press_treads` (a hull's step pressed into the grid), `roll_tread`, `Underfoot` (what lies where), `Game::tick_wear` (gusts, silt), `drain_marks` (a gravity well's scrub), `char_marks`, `hold_worn_grass`, `Game::driving`. |
+| `src/simulation/trample.rs` | Trampled cover (BB-89): `trample_grass` (passes counted into each grass cell), `hold_trampled_grass`. |
+| `src/grass.rs` | `hull_cell`: the cell trampling counts a hull in, held across an edge by `TRAMPLE_EDGE_PX`. |
 | `src/lib.rs` | `TreadProfile`, `TREAD_BY_ROW`: every chassis's runs as the art draws them. |
 | `src/fx.rs` | `Fx::drive`: the driving effects (`ParticleKind::Kick`, `ParticleKind::Foam`, and spray, chips and smoke reused). |
 | `src/render/fx.rs` | `draw_ground`: dust, powder and foam drawn with the floor, under the light. |
@@ -99,7 +102,8 @@ round clock, and draws no RNG.
   it settles over `wear_silt_seconds`.
 - **Worn grass.** Tall grass on a lane past `wear_deep_passes` never quite
   stands back up (`wear_grass_crush_floor`). Cover is the cells', not the
-  tufts', so this is cosmetic.
+  tufts', so this is cosmetic; what does take cover away is trampling
+  ("Trampled cover").
 
 `roll_tread` takes the four RNG draws every spawn takes: the phase and the
 press are the hull's, the other two set nothing and hold every seed's stream
@@ -184,12 +188,45 @@ darkens them and a headlight shows them; everything else draws where it
 always has. The particle layer is `app.rs`'s and may use `rand::rng()`;
 whatever stays on the ground is the simulation's, chosen by hash.
 
+## Trampled cover
+
+Behind `grass_trample_passes` (group `props`, 0 = off, read when a round
+begins into `Game::trample_passes`), a tall-grass, bush or reed cell that
+hulls have driven into that many times hides nobody for the rest of the round.
+
+- **A pass** is a live hull's centre entering the cell: `trample_grass` runs
+  after `sync_tanks_and_ram`, walks the hulls in slot order (seats, then
+  enemies) and keeps each one's cell in `Tank::trample_cell`. `grass::hull_cell`
+  holds a cell until the centre is `TRAMPLE_EDGE_PX` (one 2 px block) past its
+  edge, so a hull idling on an edge counts nothing. The first cell a hull is
+  seen in is where it appeared, so it counts nothing; a parked hull counts its
+  cell once; wrecks count nothing. A woods trail is never trampled: it is a
+  path already.
+- **The set** is the round's own, not the wear grid: `grass_passes` counts
+  the cells not yet trampled and `grass_trampled` keeps the trampled ones, both
+  ordered, neither capped. On the last pass the cell moves to `grass_trampled`
+  and `Event::GrassTrampled` says so.
+- **Who reads it.** `Game::cover_cells` leaves trampled cells out, so
+  everything that asks whether a hull is hidden - the AI's sight and the
+  seats' views through `Terrain`, the off-screen arrows and the minimap
+  through `indicators::Scene`, the EMP and the sonic AI - gets one answer.
+  `grass::conceals` keeps its signature and is handed that list.
+- **The tell.** `hold_trampled_grass` (in `tick_grass`) holds every tuft rooted
+  in a trampled cell flat (`crush` 1) for the round. Nothing else is drawn.
+- **Off** returns before reading a hull, so no field, event or draw changes
+  and every round replays as it did. On, it draws no RNG.
+
 ## Online
 
-Nothing crosses the wire. A replica presses its own marks from the hulls the
+The marks stay off the wire. A replica presses its own marks from the hulls the
 snapshots place (`Tank::track_from`, reset across a jump so no mark is laid
 across a portal or a placement) and throws its own effects from them, so its
 marks can differ from the room's by an interpolated pixel.
+
+Trampled cells are the room's and travel: `WireEvent::GrassTrampled` puts each
+one into the replica's `grass_trampled` (quiet or drawn), and a joiner gets
+the ones before it in `Welcome::trampled_cells`. The replica never counts
+passes; its `tick_grass` lays the tufts flat.
 
 ## Tests
 
@@ -203,3 +240,13 @@ marks can differ from the room's by an interpolated pixel.
   `tread_marks_are_scrubbed_away`, and the replica's
   `a_hull_that_jumps_lays_no_tread_marks_across_the_gap` and
   `a_welcome_puts_on_no_show`.
+- Trampled cover: `props_tests`' `trampling_is_off_by_default_and_counts_nothing`,
+  `driving_over_tall_grass_enough_times_tramples_it`,
+  `a_hull_parked_in_grass_counts_one_pass`,
+  `trampled_grass_hides_nobody_from_the_ai`,
+  `trampled_grass_lies_flat_for_the_round`;
+  `grass::tests::a_hull_keeps_its_cell_until_two_px_past_the_edge`;
+  `indicators`' `the_scene_reads_trampled_grass_as_open`;
+  `determinism_tests::same_seed_replays_a_trampling_round_bit_identical`;
+  `net::apply`'s `trampled_grass_reaches_the_replica_and_a_late_joiner` and
+  `a_trampling_round_draws_the_same_picture`.

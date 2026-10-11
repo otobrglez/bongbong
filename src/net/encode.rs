@@ -148,6 +148,8 @@ pub fn welcome(
         .map(|(col, row, _)| cell_index(cols, (col, row)))
         .filter(|c| !standing.contains(c))
         .collect();
+    let mut trampled_cells: Vec<u16> = game.grass_trampled.iter().map(|&c| cell_index(cols, c)).collect();
+    trampled_cells.sort_unstable();
     Ok(Welcome {
         protocol: PROTOCOL_VERSION,
         sim_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -160,6 +162,7 @@ pub fn welcome(
         enemy_count: game.enemy_count_override.map(|n| n.min(u16::MAX as usize) as u16),
         oil_cells,
         dead_cells,
+        trampled_cells,
         snapshot: snapshot(game, acked),
     })
 }

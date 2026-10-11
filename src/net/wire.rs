@@ -1074,6 +1074,10 @@ pub struct Welcome {
     /// says nothing about one that is gone, so a joiner learns the holes
     /// here and every later death from `ObstacleDestroyed`.
     pub dead_cells: Vec<u16>,
+    /// Grass cells (`row * cols + col`) trampled this round
+    /// (`Game::grass_trampled`), sorted: a joiner learns them here and
+    /// every later one from `GrassTrampled`.
+    pub trampled_cells: Vec<u16>,
     /// The complete state at the tick the welcome was cut.
     pub snapshot: Snapshot,
 }

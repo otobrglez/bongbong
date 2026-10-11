@@ -170,6 +170,7 @@ mod tests {
                 enemy_count: Some(6),
                 oil_cells: vec![40, 41],
                 dead_cells: vec![77],
+                trampled_cells: vec![300],
                 snapshot: snapshot(),
             }),
             Msg::Lobby(Lobby::Chat { text: "gg".into() }),

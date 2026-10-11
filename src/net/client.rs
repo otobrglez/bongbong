@@ -760,6 +760,7 @@ mod tests {
             enemy_count: None,
             oil_cells: Vec::new(),
             dead_cells: Vec::new(),
+            trampled_cells: Vec::new(),
             snapshot: snapshot(tick),
         }
     }

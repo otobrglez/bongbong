@@ -287,7 +287,7 @@ sees. This table is the first pass; the phase 1 audit finalises it.
 | Fires, oil, drums | `FireStarted`/`Ignited`, burning cells with remaining time as deltas, `oil_cells` in `Welcome` and removals, `DrumLaunched` with landing cell | the drum's arc and shadow; fire loop frames | — |
 | Round state | `mission`, spawn plan (`Welcome`), wave index/size/alive/pending, the breather before the next wave, `intro_timer`, `outcome`, `restart_timer`, alert position and timer | `time` from the tick; banners, HUD | `paused` (meaningless online), `shadows_enabled`, `debug_overlays` |
 | Fireballs, scorches, rubble, shocks, flashes, screen flash, cook-offs | only their causing events | everything: `wreck_fx`, `apply_blast`'s cosmetic half, `obstacle_died` hash it all from position | their ages (`tick_effects`) |
-| Grass, tracks, ground, water | layout via map plus seed (the map carries the theme and the water cells); burnt cells as deltas | ground, water (`ground::Layout` for the picture, `WaterLayout` for the rules, both from the map's cells) and tufts from `Game::init`; tread marks from interpolated motion, wet ones after a ford | `crush`, `push`, sway, the water's shimmer and current marks (drawn from the round clock), spray, particles, camera shake |
+| Grass, tracks, ground, water | layout via map plus seed (the map carries the theme and the water cells); burnt cells as deltas; trampled cells as `GrassTrampled` and `trampled_cells` in `Welcome` | ground, water (`ground::Layout` for the picture, `WaterLayout` for the rules, both from the map's cells) and tufts from `Game::init`; tread marks from interpolated motion, wet ones after a ford | `crush`, `push`, sway, the water's shimmer and current marks (drawn from the round clock), spray, particles, camera shake |
 | AI, the commander, engage rings, nav and route grids with their flow fields, terrain snapshot | nothing | nothing | nothing; the client has no AI |
 
 Two rules fall out. Cosmetic state is owned by the replica and driven from
@@ -319,6 +319,7 @@ Snapshot { tick: u32, server_ms: u32,
 // once, on join and on every rejoin
 Welcome  { protocol: u16, sim_version: &str, seat: u8, roster: [{ seat, nick, chassis }],
            map_toml, seed: u64, tuning_json, mission, spawn, oil_cells,
+           dead_cells, trampled_cells,
            snapshot: Snapshot /* full */ }
 
 // lobby, JSON over the same socket
@@ -362,6 +363,7 @@ never sent (the AI's trace, recorded only while `Game::trace_ai` is set);
 | `ChunksBroken {material, variant, x, y, broken, dir, collapsed}` | the broken chunks' pieces fly from the tile (the chunks themselves travel in `TileState::chunks`, the rubble they lay in `Snapshot::rubble`, a `RubbleState` a cell) | `pieces.rs` |
 | `ChunksCharred {x, y, broken}` | a burning plank's charred chunks fall as ash (the holes travel in `TileState::chunks`) | `pieces.rs` |
 | `EmberFlew {x, y, to_x, to_y}` | an ember arcs downwind; what it lights arrives as an `Ignited` | `pieces.rs` |
+| `GrassTrampled {col, row}` | the cell hides nobody and its tufts lie flat for the round (state, applied quiet or drawn; a joiner gets `Welcome::trampled_cells`) | `Game::grass_trampled`, `hold_trampled_grass` |
 | `Blast {x, y, chained, drum}`, `CookOff` | shaped fireball, scorch, parts, re-thrown rubble, flattened grass, burnt-in tracks, ripple, flash | `apply_blast`'s cosmetic half |
 | `DrumLaunched` | the flying drum from launch to landing | `draw_flying_drum` from a launch time |
 | `FireStarted`, `Ignited` | light the cell or tile | `light_cell`'s visual part |

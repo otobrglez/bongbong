@@ -283,6 +283,9 @@ pub enum WireEvent {
     ChunksCharred { x: i16, y: i16, broken: u16 },
     /// `Event::EmberFlew`.
     EmberFlew { x: i16, y: i16, to_x: i16, to_y: i16 },
+    /// The grass cell (`col`, `row`) was trampled for the round;
+    /// `Event::GrassTrampled`.
+    GrassTrampled { col: u8, row: u8 },
 }
 
 /// `WireEvent::DroneLaunched::target` for a drone locked on no tank.
@@ -373,6 +376,9 @@ impl WireEvent {
             },
             Event::ChunksCharred { x, y, broken } => WireEvent::ChunksCharred { x: q(x), y: q(y), broken },
             Event::EmberFlew { x, y, to_x, to_y } => WireEvent::EmberFlew { x: q(x), y: q(y), to_x: q(to_x), to_y: q(to_y) },
+            Event::GrassTrampled { cell } => {
+                WireEvent::GrassTrampled { col: cell.0.clamp(0, u8::MAX as i32) as u8, row: cell.1.clamp(0, u8::MAX as i32) as u8 }
+            }
             Event::Blast { x, y, chained, drum } => WireEvent::Blast { x: q(x), y: q(y), chained, drum },
             Event::LavaBombLaunched { x, y, to_x, to_y } => {
                 WireEvent::LavaBombLaunched { x: q(x), y: q(y), to_x: q(to_x), to_y: q(to_y) }
@@ -579,6 +585,7 @@ impl WireEvent {
             }
             WireEvent::ChunksCharred { x, y, broken } => Event::ChunksCharred { x: d(x), y: d(y), broken },
             WireEvent::EmberFlew { x, y, to_x, to_y } => Event::EmberFlew { x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y) },
+            WireEvent::GrassTrampled { col, row } => Event::GrassTrampled { cell: (col as i32, row as i32) },
             WireEvent::Blast { x, y, chained, drum } => Event::Blast { x: d(x), y: d(y), chained, drum },
             WireEvent::LavaBombLaunched { x, y, to_x, to_y } => {
                 Event::LavaBombLaunched { x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y) }
@@ -769,6 +776,7 @@ mod tests {
             Event::ChunksBroken { material: Material::Brick, variant: 2, x: 96.0, y: 64.0, broken: 0b1011, dx: 1.0, dy: 0.0, collapsed: false },
             Event::ChunksCharred { x: 96.0, y: 64.0, broken: 0b0110 },
             Event::EmberFlew { x: 96.0, y: 64.0, to_x: 160.0, to_y: 80.0 },
+            Event::GrassTrampled { cell: (12, 7) },
             Event::Blast { x: 128.0, y: 160.0, chained: true, drum: Drum::Fuel },
             Event::DrumLaunched { x: 128.0, y: 160.0, to_x: 256.0, to_y: 160.0, drum: Drum::Oil },
             Event::SonicBlast { slot: 3, x: 128.0, y: 160.0, dir: "left" },
@@ -852,7 +860,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 75, "one sample per Event variant");
+        assert_eq!(seen.len(), 76, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

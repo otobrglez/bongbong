@@ -39,6 +39,7 @@ mod fpv;
 mod rod;
 mod well;
 mod wear;
+mod trample;
 mod nav;
 pub mod portals;
 pub mod present;
@@ -636,6 +637,10 @@ pub enum Event {
     /// (`to_x`, `to_y`) `ember_flight_seconds` later, where it may light
     /// the wood it falls on (an `Ignited` then).
     EmberFlew { x: f32, y: f32, to_x: f32, to_y: f32 },
+    /// Hulls drove into the tall-grass (or bush, or reed) cell `cell`
+    /// `grass_trample_passes` times: it hides nobody for the rest of the
+    /// round and its tufts lie flat (`simulation::trample`).
+    GrassTrampled { cell: (i32, i32) },
     /// A barrel detonated at (`x`, `y`); `chained` when another blast's
     /// fuse (or a fire) set it off rather than a shot or a ram; `drum`
     /// says which kind went off.
@@ -964,6 +969,15 @@ pub struct Game {
     /// nobody for yet: taken out of the cover `Terrain` reads
     /// (`cover_cells`). Ordered, ticked down in `tick_timers`.
     pub(crate) grass_flat: BTreeMap<(i32, i32), f32>,
+    /// Passes counted so far into each grass cell not yet trampled
+    /// (`simulation::trample`): a hull's centre entering the cell. Empty
+    /// while trampling is off.
+    pub(crate) grass_passes: BTreeMap<(i32, i32), u16>,
+    /// Grass cells driven over `trample_passes` times this round: taken
+    /// out of the cover `Terrain` and the indicators read (`cover_cells`)
+    /// and their tufts held flat. A replica's are the room's, from the
+    /// wire. Cleared by `init`.
+    pub(crate) grass_trampled: BTreeSet<(i32, i32)>,
     /// What stands on the field and ends on the round clock - a rod's call
     /// (`zone.rs`, docs/rod-from-god.md) - sorted by id: what the dangers,
     /// the router, the off-screen arrows, the minimap and the wire read. A
@@ -1036,6 +1050,9 @@ pub struct Game {
     /// (`simulation::crates`) - `crate_breakable`, read once by `init`, so
     /// a round keeps the rule it began under.
     pub(crate) crates_breakable: bool,
+    /// Passes into a grass cell that trample it (`simulation::trample`) -
+    /// `grass_trample_passes`, read once by `init`; 0 counts nothing.
+    pub(crate) trample_passes: u16,
     /// How many enemies the band plan placed at init. Zero is a sandbox
     /// round (`tanks = 0` / `--enemies 0`): nothing to wreck, so it never
     /// ends by wreck count - only by the player's or the frog's death.
@@ -1687,6 +1704,8 @@ impl Game {
         self.seat_knock = [SeatKnock::default(); MAX_SEATS];
         self.sonic_waves.clear();
         self.grass_flat.clear();
+        self.grass_passes.clear();
+        self.grass_trampled.clear();
         self.emp_pulses.clear();
         self.rail_slugs.clear();
         self.charge_ends.clear();
@@ -1716,6 +1735,7 @@ impl Game {
         self.spawn_plan = self.level_overrides.resolve_spawn(&self.map.spawn, self.enemy_count_override);
         self.field_map = self.map.class() == crate::framing::MapClass::Field;
         self.crates_breakable = tuning().crate_breakable;
+        self.trample_passes = tuning().grass_trample_passes.clamp(0, 32) as u16;
         self.intro_timer = if self.show_intro { tuning().mission_banner_seconds } else { 0.0 };
         self.intro_fade = 0.0;
 
@@ -2273,6 +2293,7 @@ impl Game {
             self.well_phase(&mut f, true);
             self.step_world(&mut f, true);
             self.sync_tanks_and_ram(&mut f);
+            self.trample_grass(&mut f);
             self.ram_props(&mut f);
             self.roll_grenades(&mut f);
             self.shell_vs_shell(&mut f);
@@ -5416,6 +5437,7 @@ impl Game {
             .collect();
         crate::grass::tick(&mut self.grass, &movers, dt);
         self.hold_worn_grass();
+        self.hold_trampled_grass();
     }
 
     /// The tall-grass cells a live tank is currently moving through - the
@@ -6826,6 +6848,40 @@ mod determinism_tests {
                 }
             }
         }
+    }
+
+    /// Trampling (`simulation::trample`) draws no RNG and walks the hulls
+    /// in slot order: with it on, the same seed replays the same hulls and
+    /// tramples the same cells on the same frames.
+    #[test]
+    fn same_seed_replays_a_trampling_round_bit_identical() {
+        let run = || {
+            let mut game = Game::default();
+            game.seed_override = Some(0xB0B5);
+            game.level_overrides.mission = Some(Mission::Protect);
+            game.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
+            game.enemy_count_override = Some(4);
+            game.map = MapFile::from_toml_str(include_str!("../../maps/default.toml")).expect("embedded default map parses");
+            game.init(1280.0, 720.0);
+            game.trample_passes = 1;
+            let (mut samples, mut trampled) = (Vec::new(), Vec::new());
+            for frame in 1..=600 {
+                game.update(Input::default(), 1.0 / 60.0, 1280.0, 720.0);
+                trampled.extend(game.events().iter().filter_map(|e| match e {
+                    Event::GrassTrampled { cell } => Some((frame, *cell)),
+                    _ => None,
+                }));
+                if frame % 60 == 0 {
+                    samples.push(game.tank_snapshots().iter().map(key).collect::<Vec<_>>());
+                }
+            }
+            (samples, trampled)
+        };
+        let (a, trampled_a) = run();
+        let (b, trampled_b) = run();
+        assert!(!trampled_a.is_empty(), "the round tramples some grass");
+        assert_eq!(trampled_a, trampled_b, "the same cells on the same frames");
+        assert_eq!(a, b, "the same hulls");
     }
 
     /// One and two seats draw the round RNG in exactly the order they drew

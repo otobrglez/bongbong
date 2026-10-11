@@ -981,6 +981,10 @@ pub struct Tank {
     /// pressed by `simulation::press_treads`, read by the particle layer
     /// (`Game::driving`) and nothing that plays.
     pub tread: Tread,
+    /// The map cell its centre was last counted in by trampling
+    /// (`simulation::trample`, `grass::hull_cell`): `None` until the first
+    /// count and whenever trampling is off.
+    pub trample_cell: Option<(i32, i32)>,
     /// Seconds left of a coat of ooze from a bio slush tower
     /// (docs/defence-towers-prd.md section 6): while positive the tank
     /// corrodes at `bio_slime_dps` and drives at `bio_slime_speed_factor`
@@ -1134,6 +1138,7 @@ impl Default for Tank {
             hit_by_seat: None,
             slime_timer: 0.0,
             tread: Tread::default(),
+            trample_cell: None,
             laser_variant: LaserVariant::Red,
             minigun_ammo: 0,
             plasma_ammo: 0,
