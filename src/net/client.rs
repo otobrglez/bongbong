@@ -761,6 +761,7 @@ mod tests {
             oil_cells: Vec::new(),
             oil_prints: Vec::new(),
             dead_cells: Vec::new(),
+            trampled_cells: Vec::new(),
             snapshot: snapshot(tick),
         }
     }

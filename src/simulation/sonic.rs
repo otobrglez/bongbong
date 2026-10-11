@@ -247,13 +247,18 @@ const CLOSER_SPOT_CLEAR_PX: f32 = OBSTACLE_GRID_SIZE * 1.25;
 impl Game {
     /// The cells `Terrain` and the indicators take as hiding a hull: the
     /// tall grass, less the cells a sonic wave flattened a while ago
-    /// (`grass_flat`), and the trails through the woods (`woods.rs`). The
-    /// grass itself while nothing is flattened and no wood has a trail.
+    /// (`grass_flat`) and the cells hulls trampled for the round
+    /// (`grass_trampled`, `simulation::trample`), and the trails through
+    /// the woods (`woods.rs`). The grass itself while nothing is flattened
+    /// or trampled and no wood has a trail.
     pub fn cover_cells(&self) -> Cow<'_, [Position]> {
-        if self.grass_flat.is_empty() && self.woods.trail_positions().next().is_none() {
+        if self.grass_flat.is_empty() && self.grass_trampled.is_empty() && self.woods.trail_positions().next().is_none() {
             return Cow::Borrowed(&self.grass_cells);
         }
-        let grass = self.grass_cells.iter().copied().filter(|&c| !self.grass_flat.contains_key(&crate::map::world_to_cell(c)));
+        let grass = self.grass_cells.iter().copied().filter(|&c| {
+            let cell = crate::map::world_to_cell(c);
+            !self.grass_flat.contains_key(&cell) && !self.grass_trampled.contains(&cell)
+        });
         Cow::Owned(grass.chain(self.woods.trail_positions()).collect())
     }
 

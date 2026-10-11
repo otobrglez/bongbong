@@ -111,7 +111,8 @@ nowhere, so they get none.
 the AI's `Terrain::conceals`, the off-screen indicators and every other
 reader of cover sees it. A tank on a trail is under the crowns either
 side. A trail has no tufts, so a sonic wave has nothing to flatten there
-and it keeps hiding.
+and it keeps hiding; nor is it ever trampled (docs/ground-memory.md
+"Trampled cover"), being a path already.
 
 **Narrow trails.** A trail cell shut by wood on both sides across it is a
 one-cell lane (`Woods::narrow_trails`). The pathfinder needs two cells for

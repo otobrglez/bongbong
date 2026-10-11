@@ -171,6 +171,7 @@ mod tests {
                 oil_cells: vec![40, 41],
                 oil_prints: vec![crate::net::wire::OilPrintState { cell: 41, dir: 3, fade: 8 }],
                 dead_cells: vec![77],
+                trampled_cells: vec![300],
                 snapshot: snapshot(),
             }),
             Msg::Lobby(Lobby::Chat { text: "gg".into() }),

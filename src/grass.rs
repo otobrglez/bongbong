@@ -350,6 +350,24 @@ pub fn conceals(cells: &[Position], p: Position) -> bool {
         .any(|c| (p.x - c.x).abs() <= half && (p.y - c.y).abs() <= half)
 }
 
+/// How far past a cell's edge a hull's centre goes before trampling
+/// counts it in the next cell (px): one 2 px block, so a hull idling on
+/// an edge does not count a pass a frame. A noise filter, not a feel.
+const TRAMPLE_EDGE_PX: f32 = 2.0;
+
+/// The map cell trampling counts a hull at `p` in (`simulation::trample`),
+/// given the cell it was last counted in: `map::world_to_cell` at first,
+/// then each axis keeps `last`'s column or row until the centre is more
+/// than `TRAMPLE_EDGE_PX` past that cell's edge.
+pub fn hull_cell(last: Option<(i32, i32)>, p: Position) -> (i32, i32) {
+    let raw = crate::map::world_to_cell(p);
+    let Some((col, row)) = last else { return raw };
+    let keep = |v: f32, held: i32, now: i32| {
+        if (v - held as f32 * OBSTACLE_GRID_SIZE).abs() <= OBSTACLE_GRID_SIZE / 2.0 + TRAMPLE_EDGE_PX { held } else { now }
+    };
+    (keep(p.x, col, raw.0), keep(p.y, row, raw.1))
+}
+
 /// Advance every tuft against the tanks driving through it.
 ///
 /// Called once per simulation frame (`Game::tick_grass`) rather than at
@@ -547,6 +565,23 @@ fn draw_bush(c: &mut impl Canvas, tuft: &GrassTuft, theme: Theme) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hull_keeps_its_cell_until_two_px_past_the_edge() {
+        let at = |c: i32, r: i32| crate::map::cell_to_world(c, r);
+        // First sight: the nearest cell.
+        assert_eq!(hull_cell(None, at(5, 7) + Vec2::new(15.0, 0.0)), (5, 7));
+        assert_eq!(hull_cell(None, at(5, 7) + Vec2::new(17.0, 0.0)), (6, 7));
+        // Held: across the edge but inside the 2 px band, still (5, 7).
+        assert_eq!(hull_cell(Some((5, 7)), at(5, 7) + Vec2::new(17.0, 0.0)), (5, 7));
+        assert_eq!(hull_cell(Some((5, 7)), at(5, 7) + Vec2::new(0.0, -18.0)), (5, 7));
+        // Out past the band: the next cell, one axis at a time.
+        assert_eq!(hull_cell(Some((5, 7)), at(5, 7) + Vec2::new(18.5, 0.0)), (6, 7));
+        assert_eq!(hull_cell(Some((5, 7)), at(5, 7) + Vec2::new(0.0, -18.5)), (5, 6));
+        // Back by a pixel: the band holds the new cell the same way.
+        assert_eq!(hull_cell(Some((6, 7)), at(5, 7) + Vec2::new(15.0, 0.0)), (6, 7));
+        assert_eq!(hull_cell(Some((6, 7)), at(5, 7) + Vec2::new(13.5, 0.0)), (5, 7));
+    }
 
     #[test]
     fn a_bush_is_rooted_in_its_own_cell() {

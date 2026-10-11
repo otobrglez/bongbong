@@ -22,6 +22,7 @@ gets everything grass has, with no code of its own:
 | a passing hull shoves it | `push`, a lean | `push`, a sideways shift in whole 2 px blocks |
 | a blast, a slug, a well | `flatten`, `flatten_along`, `lean_grass` | same |
 | a sonic hammer's wave | `pin` | same |
+| driven into `grass_trample_passes` times | trampled: stops concealing, lies flat for the round (`simulation::trample`) | same |
 | fire | chars when its cell burns; stops concealing | same |
 | spreads fire | never | never |
 | the wind | bends it | nothing (§3) |

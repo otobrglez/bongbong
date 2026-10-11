@@ -234,6 +234,8 @@ pub struct DrawableState {
     pub well_drums: Vec<(u16, u16, (i32, i32), bool, u32)>,
     /// Every crater cell, sorted.
     pub craters: Vec<(i32, i32)>,
+    /// Every trampled grass cell (`Game::grass_trampled`), sorted.
+    pub trampled: Vec<(i32, i32)>,
     /// Each volcano's shift (`Volcano::shift`).
     pub volcano_shifts: Vec<i32>,
     /// The wave (0 under the band plan), live enemies, tanks still to
@@ -604,6 +606,7 @@ impl Game {
                 .map(|d| ((d.id & 0xFFFF) as u16, (d.well & 0xFFFF) as u16, d.cell, d.fuse.is_some(), (d.lifted_at / crate::PHYSICS_FIXED_DT).round() as u32))
                 .collect(),
             craters: self.craters.cells().collect(),
+            trampled: self.grass_trampled.iter().copied().collect(),
             volcano_shifts: self.volcanoes.iter().map(|v| v.shift).collect(),
             wave: wave.map_or(0, |w| w.index),
             alive: wave.map_or(0, |w| w.alive),

@@ -2914,6 +2914,18 @@ mod indicator_tests {
         let t = Tuning::DEFAULT;
         assert_eq!(Scene::of(&game, 0).sight, Some(t.enemy_view_range * t.night_sight_factor));
     }
+
+    #[test]
+    fn the_scene_reads_trampled_grass_as_open() {
+        // Trampled cover (`simulation::trample`) hides nobody from the
+        // arrows either: they read the round's `cover_cells`.
+        let mut game = round(&open_map(), 1, PlayerCount::ONE);
+        game.debug_teleport(1, cell_to_world(26, 8), Some(0.0)).expect("into the grass");
+        let in_grass = |game: &Game| Scene::of(game, 0).tanks.iter().map(|tv| (tv.slot, tv.in_grass)).collect::<Vec<_>>();
+        assert_eq!(in_grass(&game), vec![(1, true)]);
+        game.grass_trampled.insert((26, 8));
+        assert_eq!(in_grass(&game), vec![(1, false)], "trampled, it hides nobody");
+    }
 }
 
 #[cfg(test)]

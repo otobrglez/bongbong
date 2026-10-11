@@ -2577,6 +2577,12 @@ tunables! {
         /// Fraction of the blast radius inside which tall grass is
         /// flattened (the same `crush` a hull drives).
         blast_grass_flatten: f32 = 0.6 in 0.0 ..= 1.5;
+        /// Trampled cover (docs/ground-memory.md "Trampled cover"): the
+        /// passes of a hull's centre into a tall-grass, bush or reed cell
+        /// that flatten it for the round - it hides nobody from then on.
+        /// 0, nothing is counted and every round replays as it did. Read
+        /// when a round begins.
+        grass_trample_passes: i32 = 0 in 0 ..= 32 @ Restart;
         /// Most landed rubble pieces one blast picks up and throws again
         /// (the scene reacts to a second blast in the same place).
         blast_rethrow_max: i32 = 8 in 0 ..= 32;

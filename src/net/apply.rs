@@ -202,6 +202,7 @@ pub fn welcome(w: &Welcome) -> Result<Game, String> {
         put_oil_print(&mut game, cols, p.cell, p.dir, p.fade);
     }
     remove_tiles(&mut game, &w.dead_cells.iter().copied().collect(), cols);
+    game.grass_trampled = w.trampled_cells.iter().map(|&i| cell_from_index(cols, i)).collect();
     apply(&mut game, &w.snapshot, Show::Quiet);
     // The lanterns each seat has set down already are spent; one a blast
     // broke before this client came in is forgotten.
@@ -620,7 +621,9 @@ fn drawn_muzzle(game: &mut Game, slot: usize, weapon: WeaponKind) -> Option<Posi
 /// apply puts neither up, and a beam the client drew itself (`own_presses`,
 /// indices into `s.events`) is neither drawn nor handed on. An
 /// `OilPrinted` lays the room's print whatever the show: it is state, and
-/// it lands before `apply_fires` reads the snapshot's fires.
+/// it lands before `apply_fires` reads the snapshot's fires. A
+/// `GrassTrampled` takes its cell out of the replica's cover, quiet or
+/// drawn, as a `LanternSet` spends a lantern.
 fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_presses: &BTreeSet<usize>) -> BTreeSet<u16> {
     let restarted = s.events.iter().rev().find_map(|e| match *e {
         WireEvent::RoundStarted { seed, .. } => Some(seed),
@@ -657,6 +660,12 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_presse
                 if let Some(left) = game.lamps_left.get_mut(seat as usize) {
                     *left = left.saturating_sub(1);
                 }
+            }
+            // A trampled cell hides nobody from then on, quiet or drawn:
+            // the arrows and the minimap read it, and `tick_grass` lays its
+            // tufts flat.
+            WireEvent::GrassTrampled { col, row } => {
+                game.grass_trampled.insert((col as i32, row as i32));
             }
             // A lava bomb flies the same way, and bursts on the room's
             // `Blast`.
@@ -1631,6 +1640,8 @@ mod tests {
         held_drums: usize,
         drifted: usize,
         pulled_frogs: usize,
+        /// The most grass cells trampled at once.
+        trampled: usize,
         /// Frames on the end screen.
         ended: usize,
         /// Frames between snapshots on which the replica's own tick moved
@@ -1667,6 +1678,7 @@ mod tests {
             self.held_drums += state.well_drums.len();
             self.drifted += state.pickups.iter().filter(|p| p.drift != (0, 0)).count();
             self.pulled_frogs += state.frogs.iter().filter(|f| f.pulled).count();
+            self.trampled = self.trampled.max(state.trampled.len());
             self.ended += usize::from(state.outcome != crate::simulation::Outcome::Playing);
         }
 
@@ -2601,6 +2613,52 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
             step_and_apply(&mut game, &mut replica);
             assert_eq!(replica.drawable_state().pickups, game.drawable_state().pickups);
         }
+    }
+
+    /// A cell the room tramples (`simulation::trample`) hides nobody on
+    /// the replica either and its tufts lie flat there; a client that
+    /// joins later learns it from the welcome.
+    #[test]
+    fn trampled_grass_reaches_the_replica_and_a_late_joiner() {
+        let map = r#"
+version = 1
+tanks = 1
+cells."2,2" = { kind = "frog" }
+cells."10,14" = { kind = "start" }
+cells."10,11" = { kind = "tall_grass" }
+cells."11,11" = { kind = "tall_grass" }
+"#;
+        let mut game = quiet_round(map, 0x7A3B, 0);
+        game.trample_passes = 1;
+        let mut replica = welcome_through_the_codec(&game);
+        // Seen once where it stands, then moved into the grass: a pass.
+        step_and_apply(&mut game, &mut replica);
+        game.debug_teleport(0, map::cell_to_world(10, 11), Some(0.0)).expect("the seat");
+        step_and_apply(&mut game, &mut replica);
+        assert!(game.events().iter().any(|e| matches!(e, crate::simulation::Event::GrassTrampled { cell: (10, 11) })));
+        assert_eq!(replica.grass_trampled, game.grass_trampled);
+        assert_eq!(&*replica.cover_cells(), &*game.cover_cells());
+        assert!(!crate::grass::conceals(&replica.cover_cells(), map::cell_to_world(10, 11)), "trampled, it hides nobody");
+        assert!(crate::grass::conceals(&replica.cover_cells(), map::cell_to_world(11, 11)), "its neighbour still hides");
+        replica.tick_presentation(PHYSICS_FIXED_DT);
+        let flat = replica.grass.iter().filter(|t| map::world_to_cell(t.base) == (10, 11)).map(|t| t.crush).collect::<Vec<_>>();
+        assert!(!flat.is_empty() && flat.iter().all(|&c| c == 1.0), "the replica lays its tufts flat: {flat:?}");
+        let joiner = welcome_through_the_codec(&game);
+        assert_eq!(joiner.drawable_state().trampled, vec![(10, 11)]);
+        assert_eq!(&*joiner.cover_cells(), &*game.cover_cells());
+    }
+
+    /// A default-map round with trampling at one pass: every snapshot the
+    /// replica applies draws the room's trampled cells, the welcome's at
+    /// frame 60 and every later one's from its event.
+    #[test]
+    fn a_trampling_round_draws_the_same_picture() {
+        let seen = round_trip(DEFAULT_MAP, 0xB0B5, 600, |game, frame| {
+            if frame == 1 {
+                game.trample_passes = 1;
+            }
+        });
+        assert!(seen.trampled > 0, "the hulls trampled some grass: {seen:?}");
     }
 
     /// The cook-offs a kill queues pop on the server seconds later, each
