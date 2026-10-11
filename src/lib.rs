@@ -1024,6 +1024,7 @@ pub mod frame_stages;
 pub mod framing;
 pub mod fx;
 pub mod grass;
+pub mod woods;
 pub mod grenade;
 pub mod sonic;
 pub mod emp;
