@@ -230,6 +230,7 @@ lint-tower-at-start = STOLP POKRIVA ZAČETEK
 lint-tower-no-reach = STOLP NE DOSEŽE NIČESAR
 lint-too-many-towers = PREVEČ STOLPOV NA ENI STRANI
 lint-training-door = VRATA, KI SE NE ODPREJO
+lint-narrow-trail = OZKA STEZA
 editor-tool = ORODJE
 
 category-wall = ZID
