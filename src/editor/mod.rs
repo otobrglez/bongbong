@@ -34,7 +34,11 @@
 //! paints once past the touch slop, two pan and pinch-zoom, a two-finger
 //! tap undoes and a three-finger tap redoes. Where a cell is under
 //! `builder_paint_min_cell_mm` on the glass - a finger cannot hit one - a
-//! tap zooms in instead of painting and a drag pans (the paint threshold).
+//! tap zooms in instead of painting and a drag pans (the paint threshold),
+//! except where the view shows the whole map, which a drag paints. A cell
+//! is measured on the glass at the screen's own points to the millimetre
+//! (`CanvasScreen::points_per_mm`): a full-size iPad's point is a fifth
+//! larger than a phone's.
 //!
 //! **The brush's shape** (docs/large-maps-patterns.md, "Area brushes:
 //! fill, scatter, auto-tile"; the cells are `brush.rs`), BRUSH's list:
@@ -75,6 +79,7 @@
 pub mod brush;
 pub mod camera;
 pub mod chrome;
+pub mod forest;
 pub mod gesture;
 pub mod history;
 pub mod index;
@@ -91,7 +96,7 @@ pub use chrome::{Bar, BarButton, BarTools, BuilderFrame, Chrome, PopupLayout, St
 pub use select::{Axis, CellRect, Clip, Ghost, Stamp, StampSource};
 
 use rand::RngExt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use crate::math::{Color, Rectangle, Vec2};
 
 use crate::ground::{self, GroundGrid};
@@ -251,6 +256,11 @@ pub enum Tool {
     /// A bush or a bed of reeds: soft cover like `TallGrass`, one sprite a
     /// cell (docs/BUSHES_SPEC.md).
     Bush(crate::grass::Bush),
+    /// The forest brush (`forest`): plants trees whose species it picks
+    /// from the cell - water, the wood's edge, the stand, the theme - and
+    /// keeps a stream's banks open. It has no one object (`object` is
+    /// `None`); `forest::lay` says what a stroke does to each cell.
+    Forest,
     /// A teleport portal anchor - any number, not solid; the network only
     /// works with two or more (the linter's `portal-alone` names a lone
     /// one, and the canvas ghosts it).
@@ -272,11 +282,12 @@ pub enum Tool {
 /// for the six tower tools inside the eleven rows a dropdown fits, and the
 /// range board stands with the actors, the thing on the field there to be
 /// shot at.
-pub const TOOLS: [Tool; 65] = [
+pub const TOOLS: [Tool; 67] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
     Tool::Wall(Material::Glass),
+    Tool::Wall(Material::Concrete),
     Tool::Prop(Material::Sandbag),
     Tool::Prop(Material::Barrel),
     Tool::Drum(Drum::Oil),
@@ -307,6 +318,7 @@ pub const TOOLS: [Tool; 65] = [
     Tool::Prop(Material::Willow),
     Tool::Prop(Material::Palm),
     Tool::Prop(Material::Snag),
+    Tool::Forest,
     Tool::OilTrail,
     Tool::Gate,
     Tool::Portal,
@@ -348,6 +360,7 @@ impl Tool {
             Tool::Wall(Material::Iron) => "iron",
             Tool::Wall(Material::Wood) => "wood",
             Tool::Wall(Material::Glass) => "glass",
+            Tool::Wall(Material::Concrete) => "concrete",
             Tool::Wall(_) => "wall",
             Tool::Prop(Material::Sandbag) => "sandbag",
             Tool::Prop(Material::Barrel) => "barrel",
@@ -380,6 +393,7 @@ impl Tool {
             Tool::Bush(crate::grass::Bush::Fern) => "fern",
             Tool::Bush(crate::grass::Bush::Autumn) => "autumn_bush",
             Tool::Bush(crate::grass::Bush::Reeds) => "reeds",
+            Tool::Forest => "forest",
             Tool::Gate => "gate",
             Tool::Portal => "portal",
             Tool::Start => "start",
@@ -426,7 +440,7 @@ impl Tool {
         match self {
             Tool::Wall(_) => Some(Category::Wall),
             Tool::Prop(m) if m.is_tree() => Some(Category::Plant),
-            Tool::Bush(_) => Some(Category::Plant),
+            Tool::Bush(_) | Tool::Forest => Some(Category::Plant),
             Tool::Prop(Material::Lamp) => Some(Category::Ground),
             Tool::Prop(Material::Target) => Some(Category::Actor),
             Tool::Prop(_) | Tool::Drum(_) | Tool::Tower(..) => Some(Category::Prop),
@@ -439,8 +453,8 @@ impl Tool {
         }
     }
 
-    /// The cell object this brush paints; `None` for the eraser and the
-    /// select tool.
+    /// The cell object this brush paints; `None` for the eraser, the
+    /// select tool and the forest brush, whose object depends on the cell.
     pub fn object(self) -> Option<CellObject> {
         match self {
             Tool::Wall(material) => Some(CellObject::Wall { material }),
@@ -461,7 +475,7 @@ impl Tool {
             Tool::TallGrass => Some(CellObject::TallGrass),
             Tool::Bush(bush) => Some(CellObject::of_bush(bush)),
             Tool::Tower(kind, side) => Some(CellObject::for_tower(kind, side)),
-            Tool::Eraser | Tool::Select => None,
+            Tool::Forest | Tool::Eraser | Tool::Select => None,
         }
     }
 
@@ -1714,13 +1728,17 @@ impl MapEditor {
     /// stroke and lays the shape's first cells. Erase when the secondary
     /// button is down, the eraser is the brush, or - for a pen or a fill
     /// (`Shape::toggles`) - the cell already holds exactly the brush's
-    /// object. A pen paints the cell, a fill floods from it and a scatter
-    /// lays its footprint round it; a rectangle waits for the release.
+    /// object, which for the forest brush is any tree. A pen paints the
+    /// cell, a fill floods from it and a scatter lays its footprint round
+    /// it; a rectangle waits for the release.
     fn begin_stroke(&mut self, cell: (i32, i32), right: bool) {
         let shape = self.shape();
-        let erase = right
-            || self.active_tool == Tool::Eraser
-            || (shape.toggles() && self.active_tool.object().is_some_and(|obj| self.map.cell(cell.0, cell.1) == Some(&obj)));
+        let held = self.map.cell(cell.0, cell.1).copied();
+        let holds_brush = match self.active_tool {
+            Tool::Forest => held.and_then(|o| o.material()).is_some_and(Material::is_tree),
+            tool => tool.object().is_some_and(|obj| held == Some(obj)),
+        };
+        let erase = right || self.active_tool == Tool::Eraser || (shape.toggles() && holds_brush);
         if shape == Shape::Scatter {
             self.scatters = self.scatters.wrapping_add(1);
         }
@@ -1820,12 +1838,52 @@ impl MapEditor {
         if self.stroke.as_ref().is_some_and(|s| s.shape == Shape::Rect) {
             self.fill_rect();
         }
+        if self.planting() {
+            self.replant();
+        }
         let Some(stroke) = self.stroke.take() else { return Vec::new() };
         let changes = stroke.changes;
         if !changes.is_empty() {
             self.history.push(EditStep::Cells(changes.clone()));
         }
         changes
+    }
+
+    /// Whether the open stroke plants with the forest brush: each cell's
+    /// object is its own pick (`forest::lay`).
+    fn planting(&self) -> bool {
+        self.active_tool == Tool::Forest && self.stroke.as_ref().is_some_and(|s| !s.erase)
+    }
+
+    /// The forest stroke's release: every tree it planted picked again
+    /// against the wood as it now stands, as part of the same stroke. A
+    /// tree's pick reads its neighbours (`forest::on_edge`), and while the
+    /// stroke was painting, every new tree stood at the edge of what was
+    /// painted so far. Trees from earlier strokes keep their species.
+    fn replant(&mut self) {
+        let Some(stroke) = &self.stroke else { return };
+        let planted: BTreeSet<(i32, i32)> =
+            stroke.changes.iter().filter(|c| c.after.and_then(|o| o.material()).is_some_and(Material::is_tree)).map(|c| (c.col, c.row)).collect();
+        let bounds = self.field_cells();
+        let picks: Vec<_> = planted
+            .into_iter()
+            .filter(|&(c, r)| self.map.cell(c, r).and_then(|o| o.material()).is_some_and(Material::is_tree))
+            .map(|cell| (cell, CellObject::prop(forest::species(&self.map, bounds, cell))))
+            .collect();
+        self.lay(picks);
+    }
+
+    /// `cells` laid with `after` as the open stroke's or, for a forest
+    /// stroke, each with the forest brush's pick (`forest::lay`), the cells
+    /// it leaves alone left out.
+    fn lay_brush(&mut self, cells: impl IntoIterator<Item = (i32, i32)>, after: Option<CellObject>) {
+        if self.planting() {
+            let bounds = self.field_cells();
+            let picks: Vec<_> = cells.into_iter().filter_map(|cell| forest::lay(&self.map, bounds, cell).map(|a| (cell, a))).collect();
+            self.lay(picks);
+        } else {
+            self.lay(cells.into_iter().map(|cell| (cell, after)));
+        }
     }
 
     /// Apply the stroke's mode to one cell and record what changed.
@@ -1837,6 +1895,10 @@ impl MapEditor {
             if before.is_some() {
                 self.map.clear_cell(col, row);
                 changes.push(CellChange { col, row, before, after: None });
+            }
+        } else if self.active_tool == Tool::Forest {
+            if let Some(after) = forest::lay(&self.map, self.field_cells(), (col, row)) {
+                self.change_cell(col, row, after, &mut changes);
             }
         } else if let Some(obj) = self.active_tool.object() {
             if self.active_tool.is_singleton() {
@@ -1899,13 +1961,14 @@ impl MapEditor {
     /// an erase. A region past `builder_fill_max_cells` is left as it is,
     /// the status line saying why.
     fn fill(&mut self, cell: (i32, i32)) {
-        let Some(after) = self.stroke_object() else { return };
-        if self.map.cell(cell.0, cell.1).copied() == after {
+        let planting = self.planting();
+        let Some(after) = self.stroke_object().or(planting.then_some(None)) else { return };
+        if !planting && self.map.cell(cell.0, cell.1).copied() == after {
             return;
         }
         let max = BrushRules::current().fill_max_cells;
         match brush::flood(&self.map, self.field_cells(), cell, max) {
-            Some(cells) => self.lay(cells.into_iter().map(|c| (c, after))),
+            Some(cells) => self.lay_brush(cells, after),
             None => self.status = Some(crate::text::text().fmt(crate::text::keys::EDITOR_FILL_TOO_LARGE, &[("n", max.into())])),
         }
     }
@@ -1913,32 +1976,43 @@ impl MapEditor {
     /// RECT's release: every cell of the open stroke's rectangle on the
     /// field made the brush's object, or cleared by an erase.
     fn fill_rect(&mut self) {
-        let (Some((rect, _)), Some(after)) = (self.rect_stroke(), self.stroke_object()) else { return };
-        self.lay(rect.cells().map(|c| (c, after)));
+        let after = self.stroke_object().or(self.planting().then_some(None));
+        let (Some((rect, _)), Some(after)) = (self.rect_stroke(), after) else { return };
+        self.lay_brush(rect.cells(), after);
     }
 
     /// SCATTER's footprint round `cell` as the open stroke's: of the cells
     /// the stroke's hash picks (`brush::scattered`), an empty one takes the
     /// brush's object - a scatter never paints over a cell - and an erase
     /// clears one holding the brush's object, or anything under the
-    /// eraser.
+    /// eraser. The forest brush's objects are its trees: it plants its
+    /// picks on empty cells and erases trees.
     fn scatter(&mut self, cell: (i32, i32)) {
         let Some(stroke) = &self.stroke else { return };
         let (erase, seed) = (stroke.erase, stroke.seed);
         let rules = BrushRules::current();
+        let forest = self.active_tool == Tool::Forest;
         let object = self.active_tool.object();
+        let brushes = |held: Option<CellObject>| match forest {
+            true => held.and_then(|o| o.material()).is_some_and(Material::is_tree),
+            false => object.is_none() || held == object,
+        };
         let picked: Vec<_> = brush::footprint(cell, rules.scatter_radius, self.field_cells())
             .filter(|&c| brush::scattered(c, seed, rules.scatter_density))
             .filter_map(|(col, row)| {
                 let held = self.map.cell(col, row).copied();
                 if erase {
-                    (held.is_some() && (object.is_none() || held == object)).then_some(((col, row), None))
+                    (held.is_some() && brushes(held)).then_some(((col, row), None))
                 } else {
-                    (held.is_none() && object.is_some()).then_some(((col, row), object))
+                    (held.is_none() && (object.is_some() || forest)).then_some(((col, row), object))
                 }
             })
             .collect();
-        self.lay(picked);
+        if forest && !erase {
+            self.lay_brush(picked.into_iter().map(|(c, _)| c), None);
+        } else {
+            self.lay(picked);
+        }
     }
 
     /// Make a lint quick fix (`maplint::LintFix`) on the map as one undo
@@ -3406,7 +3480,7 @@ impl MapEditor {
         } else {
             input.touches.iter().filter(|t| self.lands_on_canvas(t.pos, frame)).map(|t| t.id).collect()
         };
-        let paints = self.touch_paints(&vp, rules);
+        let paints = self.drag_paints(&vp, rules);
         let g = gesture::GestureRules { slop: vp.px(rules.slop_pt), tap_seconds: rules.tap_seconds };
         let events = self.gestures.update(&touches, |t| canvas.contains(&t.id), paints, input.dt, &g);
         for event in events {
@@ -3422,9 +3496,17 @@ impl MapEditor {
 
     /// The paint threshold: whether a finger can hit one cell at this
     /// zoom - a cell at least `builder_paint_min_cell_mm` on the glass.
-    /// Under it a tap zooms in and a drag pans.
+    /// Under it a tap zooms in and a drag pans (`drag_paints`).
     fn touch_paints(&self, vp: &Viewport, rules: &CanvasRules) -> bool {
         vp.cell_mm(self.camera.scale(vp)) >= rules.paint_min_cell_mm
+    }
+
+    /// Whether one finger dragging paints a stroke: over the paint
+    /// threshold, and under it too where the view shows the whole map
+    /// (`BuilderCamera::shows_whole`), since a pan there would go nowhere.
+    /// Anywhere else under the threshold it pans.
+    fn drag_paints(&self, vp: &Viewport, rules: &CanvasRules) -> bool {
+        self.touch_paints(vp, rules) || self.camera.shows_whole(vp)
     }
 
     /// The loupe over `frame`'s canvas this frame: while one finger
@@ -4830,7 +4912,7 @@ mod editor_tests {
         }
         let frame = field_frame((1920.0, 1080.0));
         let mut ed = MapEditor::new(map);
-        let screen = CanvasScreen { device_per_px: frame.view.scale, points_per_px: frame.view.scale, coarse: true };
+        let screen = CanvasScreen { device_per_px: frame.view.scale, points_per_px: frame.view.scale, coarse: true, ..Default::default() };
         ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
         (ed, frame)
     }
@@ -5263,11 +5345,11 @@ mod editor_tests {
         ed.update(&BuilderInput { pointer: Some(wall), wheel: 1.0, ..Default::default() }, &frame);
         assert_eq!(ed.tool(), Tool::Wall(Material::Brick));
         ed.update(&BuilderInput { pointer: Some(wall), wheel: 1.0, ..Default::default() }, &frame);
-        assert_eq!(ed.tool(), Tool::Wall(Material::Glass), "wraps");
+        assert_eq!(ed.tool(), Tool::Wall(Material::Concrete), "wraps");
         // Off the buttons the wheel does nothing to the tool.
         let field = Vec2::new(400.0, 400.0);
         ed.update(&BuilderInput { pointer: Some(field), wheel: -1.0, ..Default::default() }, &frame);
-        assert_eq!(ed.tool(), Tool::Wall(Material::Glass));
+        assert_eq!(ed.tool(), Tool::Wall(Material::Concrete));
     }
 
     /// A 96 x 54 map in the builder on a window of `window` units, a unit a
@@ -5277,7 +5359,7 @@ mod editor_tests {
         map.size = Some((96.0, 54.0));
         let frame = field_frame(window);
         let mut ed = MapEditor::new(map);
-        let screen = CanvasScreen { device_per_px: frame.view.scale * device, points_per_px: frame.view.scale, coarse };
+        let screen = CanvasScreen { device_per_px: frame.view.scale * device, points_per_px: frame.view.scale, coarse, ..Default::default() };
         ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
         (ed, frame)
     }
@@ -5396,7 +5478,7 @@ mod editor_tests {
                 let (mut ed, frame) = if arena {
                     let frame = BuilderFrame::new(UiFrame::plain(window), (W, H), MapClass::Arena, None);
                     let mut ed = MapEditor::new(MapFile::new());
-                    let screen = CanvasScreen { device_per_px: frame.view.scale * device, points_per_px: frame.view.scale, coarse };
+                    let screen = CanvasScreen { device_per_px: frame.view.scale * device, points_per_px: frame.view.scale, coarse, ..Default::default() };
                     ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
                     (ed, frame)
                 } else {
@@ -5568,7 +5650,7 @@ mod editor_tests {
     fn the_navigator_is_hidden_at_fit_on_an_arena() {
         let frame = arena();
         let mut ed = MapEditor::new(MapFile::new());
-        let screen = CanvasScreen { device_per_px: 1.0, points_per_px: 1.0, coarse: true };
+        let screen = CanvasScreen { device_per_px: 1.0, points_per_px: 1.0, coarse: true, ..Default::default() };
         ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
         assert_eq!(ed.navigator_rect(&frame), None);
         let corner = canvas_at(&frame, frame.layout.field.w - 40.0, frame.layout.field.h - 30.0);
@@ -5772,7 +5854,7 @@ mod editor_tests {
             let frame = BuilderFrame::new(ui, (96.0 * 32.0, 54.0 * 32.0), MapClass::Field, None);
             let mut ed = MapEditor::new(map);
             // Three device pixels to the point.
-            let screen = CanvasScreen { device_per_px: frame.view.scale * 3.0 / ui.scale, points_per_px: frame.view.scale / ui.scale, coarse: false };
+            let screen = CanvasScreen { device_per_px: frame.view.scale * 3.0 / ui.scale, points_per_px: frame.view.scale / ui.scale, coarse: false, ..Default::default() };
             ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
             let layout = frame.layout;
             let vp = ed.viewport();
@@ -5832,7 +5914,7 @@ mod editor_tests {
     fn touch_arena() -> (MapEditor, BuilderFrame) {
         let frame = arena();
         let mut ed = MapEditor::new(MapFile::new());
-        let screen = CanvasScreen { device_per_px: 3.0, points_per_px: 1.5, coarse: false };
+        let screen = CanvasScreen { device_per_px: 3.0, points_per_px: 1.5, coarse: false, ..Default::default() };
         ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
         (ed, frame)
     }
@@ -5962,6 +6044,68 @@ mod editor_tests {
         assert_eq!(ed.map().cells.len(), 1);
     }
 
+    /// On a full-size iPad (the 11th gen's 1180 x 820 points, 132 to the
+    /// inch) a new map at FIT draws its cells 34.7 points wide, 6.7 mm on
+    /// the glass and over the paint threshold, so one finger paints there:
+    /// a tap its cell, a drag a stroke. Measured at a phone's 160 points to
+    /// the inch the same cell reads 5.5 mm, where a drag pans a view that
+    /// shows the whole map already and a finger paints nothing until a
+    /// pinch has zoomed in. An iPad mini keeps the phone's measure.
+    #[test]
+    fn one_finger_paints_a_new_map_at_fit_on_an_ipad() {
+        use crate::indicators::{apple_points_per_mm, POINTS_PER_MM};
+        let rules = CanvasRules::of(&crate::tuning::Tuning::DEFAULT);
+        assert_eq!(apple_points_per_mm("iPad14,1"), POINTS_PER_MM, "an iPad mini is measured as a phone");
+        assert_eq!(apple_points_per_mm("iPhone14,7"), POINTS_PER_MM);
+        assert_eq!(apple_points_per_mm(""), POINTS_PER_MM, "an unknown model is a phone");
+        let ui = UiFrame::new((1180.0, 820.0), 1.0, 1.0, Insets { top: 24.0, bottom: 20.0, ..Insets::default() }, true);
+        let map = MapFile::new();
+        let frame = BuilderFrame::new(ui, map.field_size(), MapClass::Arena, None);
+        let mut ed = MapEditor::new(map);
+        let ipad = CanvasScreen { device_per_px: frame.view.scale * 2.0, points_per_px: frame.view.scale, coarse: false, points_per_mm: apple_points_per_mm("iPad15,7") };
+        ed.update(&BuilderInput { screen: Some(ipad), ..Default::default() }, &frame);
+        let vp = ed.viewport();
+        let scale = ed.camera().scale(&vp);
+        assert!(ed.camera().is_fit());
+        let mm = vp.cell_mm(scale);
+        assert!(mm >= rules.paint_min_cell_mm && mm < rules.tap_zoom_cell_mm, "a cell at FIT is {mm} mm on an iPad's glass");
+        let phone = camera::Viewport { screen: CanvasScreen { points_per_mm: POINTS_PER_MM, ..vp.screen }, ..vp };
+        assert!(phone.cell_mm(scale) < rules.paint_min_cell_mm, "at a phone's density the cell reads {} mm", phone.cell_mm(scale));
+
+        let Vec2 { x: x0, y } = on_cell(&ed, &frame, 4, 8);
+        let x1 = on_cell(&ed, &frame, 10, 8).x;
+        let drag: Vec<Vec<(i32, f32, f32)>> = (0..=12).map(|i| vec![(1, x0 + (x1 - x0) * i as f32 / 12.0, y)]).collect();
+        fingers(&mut ed, &frame, &drag);
+        assert!(ed.camera().is_fit(), "the drag moved the view");
+        assert!((4..=10).all(|col| ed.map().cell(col, 8) == Some(&brick())), "one finger painted {:?}", ed.map().cells);
+        assert_eq!(ed.history().undo_depth(), 1);
+        let Vec2 { x, y } = on_cell(&ed, &frame, 20, 4);
+        fingers(&mut ed, &frame, &[vec![(2, x, y)], vec![(2, x + 2.0, y + 1.0)]]);
+        assert_eq!(ed.map().cell(20, 4), Some(&brick()), "a tap paints its cell");
+        assert!(ed.camera().is_fit(), "the tap zoomed in");
+    }
+
+    /// Under the paint threshold with the whole map in view - a phone at
+    /// FIT on the study map, a cell under 4 mm - a one-finger drag paints
+    /// a stroke, since a pan would go nowhere, and leaves the view where it
+    /// is; a tap there still zooms in (`under_the_paint_threshold_...`).
+    #[test]
+    fn under_the_paint_threshold_a_drag_paints_where_the_whole_map_is_in_view() {
+        let rules = CanvasRules::of(&crate::tuning::Tuning::DEFAULT);
+        let (mut ed, frame) = big_editor((852.0, 393.0), 3.0, false);
+        let vp = ed.viewport();
+        assert!(ed.camera().shows_whole(&vp));
+        assert!(vp.cell_mm(ed.camera().scale(&vp)) < rules.paint_min_cell_mm, "under the threshold");
+        let mid = canvas_middle(&frame);
+        let (from, to) = (Vec2::new(mid.x - 60.0, mid.y), Vec2::new(mid.x + 60.0, mid.y));
+        let ((c0, row), (c1, _)) = (ed.cell_at(from, &frame).unwrap(), ed.cell_at(to, &frame).unwrap());
+        let drag: Vec<Vec<(i32, f32, f32)>> = (0..=12).map(|i| vec![(1, from.x + (to.x - from.x) * i as f32 / 12.0, from.y)]).collect();
+        fingers(&mut ed, &frame, &drag);
+        assert!(ed.camera().is_fit(), "the drag moved the view");
+        assert!(c1 > c0 && (c0..=c1).all(|col| ed.map().cell(col, row) == Some(&brick())), "the drag painted {:?}", ed.map().cells);
+        assert_eq!(ed.history().undo_depth(), 1);
+    }
+
     /// A finger that lands on the bar presses its button and is no part
     /// of a gesture: dragged onto the canvas it paints nothing.
     #[test]
@@ -5994,7 +6138,7 @@ mod editor_tests {
         map.size = Some((96.0, 54.0));
         let frame = BuilderFrame::new(ui, map.field_size(), MapClass::Field, None);
         let mut ed = MapEditor::new(map);
-        let screen = CanvasScreen { device_per_px: frame.view.scale * 2.0, points_per_px: frame.view.scale, coarse: false };
+        let screen = CanvasScreen { device_per_px: frame.view.scale * 2.0, points_per_px: frame.view.scale, coarse: false, ..Default::default() };
         ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
         let rules = CanvasRules::of(&crate::tuning::Tuning::DEFAULT);
         let vp = ed.viewport();
@@ -6045,7 +6189,7 @@ mod editor_tests {
         let mut scheme = crate::touch::TouchScheme::default();
         assert!(!scheme.touch_chrome(true, false, false), "no finger yet: the mouse's chrome");
         let mouse = frame_for(false);
-        let screen = CanvasScreen { device_per_px: mouse.view.scale * 3.0, points_per_px: mouse.view.scale, coarse: false };
+        let screen = CanvasScreen { device_per_px: mouse.view.scale * 3.0, points_per_px: mouse.view.scale, coarse: false, ..Default::default() };
         ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &mouse);
         let vp = ed.viewport();
         assert!(vp.cell_mm(ed.camera().scale(&vp)) < rules.paint_min_cell_mm, "a tap here zooms in");

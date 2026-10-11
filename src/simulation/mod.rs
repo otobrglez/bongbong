@@ -51,6 +51,8 @@ pub(crate) use props::tile_rubble;
 pub(crate) use gauss::SeatCharge;
 pub mod replica;
 #[cfg(test)]
+mod chunk_tests;
+#[cfg(test)]
 mod crate_tests;
 #[cfg(test)]
 mod flame_tests;
@@ -218,7 +220,7 @@ use rand::{RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
 use crate::math::Vec2;
 
-use crate::ai::{Ai, AiSnapshot, Intent, Mover, Role, SpecialSense, WallAhead};
+use crate::ai::{Ai, AiSnapshot, Intent, Mover, Role, SpecialSense};
 use crate::battlefield;
 use crate::bullet::Bullet;
 use crate::frog::{Facing, Frog, Side};
@@ -619,6 +621,21 @@ pub enum Event {
     /// A destructible tile (wall or prop) died at (`x`, `y`), whatever
     /// destroyed it.
     ObstacleDestroyed { material: Material, x: f32, y: f32 },
+    /// Chunks of the chunked tile (`chunks.rs`) of `material`/`variant`
+    /// centred at (`x`, `y`) broke: `broken` has bit `i` for chunk `i`.
+    /// The blow travelled along (`dx`, `dy`) (zero when it had no way);
+    /// `collapsed` when the tile gave way and these are what it dropped.
+    /// Its `ObstacleDestroyed` follows on a collapse. Only the pieces they
+    /// throw (`fx.rs`) read it; the chunks' state travels with the tile.
+    ChunksBroken { material: Material, variant: i32, x: f32, y: f32, broken: u16, dx: f32, dy: f32, collapsed: bool },
+    /// The fire of the burning plank wall centred at (`x`, `y`) charred
+    /// through the chunks in `broken` (`Obstacle::char_chunks`): they fall
+    /// in as ash. Only `fx.rs` reads it; the chunks travel with the tile.
+    ChunksCharred { x: f32, y: f32, broken: u16 },
+    /// A burning tile at (`x`, `y`) threw an ember downwind that lands at
+    /// (`to_x`, `to_y`) `ember_flight_seconds` later, where it may light
+    /// the wood it falls on (an `Ignited` then).
+    EmberFlew { x: f32, y: f32, to_x: f32, to_y: f32 },
     /// A barrel detonated at (`x`, `y`); `chained` when another blast's
     /// fuse (or a fire) set it off rather than a shot or a ram; `drum`
     /// says which kind went off.
@@ -743,6 +760,9 @@ pub enum HitCause {
     Rod,
     /// A gravity well's collapse.
     Well,
+    /// Fragments off the far face of a wall a shell breached
+    /// (`Game::spall`, BB-82).
+    Spall,
 }
 
 /// What an `Event::Hit` landed on.
@@ -972,6 +992,15 @@ pub struct Game {
     /// footing slows and the router prices, fords while it rains. Cleared by
     /// `init`.
     pub(crate) craters: crate::rod::Craters,
+    /// The rubble broken chunks laid (`chunks::Rubble`): it slows a hull
+    /// and the router prices it. Cleared by `init`.
+    pub(crate) rubble: crate::chunks::Rubble,
+    /// Tiles due to give way after another did (`props::PendingBreak`): a
+    /// weakened wall in a collapsing run, a cracked pane beside a shattered
+    /// one. Cleared by `init`.
+    pub(super) pending_breaks: Vec<props::PendingBreak>,
+    /// Embers in the air, thrown downwind by burning tiles (BB-84).
+    pub(super) embers: Vec<props::Ember>,
     /// The rods' impacts as they are drawn - the column, the dust, the
     /// debris - aged in `tick_effects` (`rod_show`). Cleared by `init`.
     pub(crate) rod_impacts: Vec<crate::rod::RodImpactFx>,
@@ -1110,6 +1139,10 @@ pub struct Game {
     /// The tufts those cells scatter, built once per round. Purely drawn -
     /// see `grass.rs` for why this is not an `Obstacle`.
     pub(crate) grass: Vec<crate::grass::GrassTuft>,
+    /// The woods as a whole (`woods.rs`): where each crown is drawn, the
+    /// trails, the forest floor and the undergrowth. Built once per round
+    /// from the map; picture only.
+    pub(crate) woods: crate::woods::Woods,
     /// Queued ammo cook-offs from tanks that have died (and barrels that
     /// have blown): where each pops and how long until it does. Purely
     /// cosmetic (see `tick_cookoffs`).
@@ -1665,6 +1698,9 @@ impl Game {
         self.well_field = crate::well::WellField::default();
         self.pickups_drifting.clear();
         self.craters.clear();
+        self.rubble.clear();
+        self.pending_breaks.clear();
+        self.embers.clear();
         self.rod_impacts.clear();
         self.seat_still = [crate::rod::SeatStill::default(); MAX_SEATS];
         self.seat_reticle = [None; MAX_SEATS];
@@ -1814,6 +1850,15 @@ impl Game {
                 })
                 .collect()
         };
+        // The woods: each tree's crown placed, and the undergrowth round
+        // them grown among the tufts. Hashed from the map, no RNG.
+        self.woods = crate::woods::Woods::build(&self.map);
+        for o in self.world.query_mut::<&mut Obstacle>() {
+            if o.material.is_tree() {
+                o.crown = self.woods.crown(o.cell());
+            }
+        }
+        self.grass.extend(self.woods.undergrowth());
         self.grass.sort_by(|a, b| a.base.y.total_cmp(&b.base.y));
         // Deep water counts as terrain for every clearance roll below:
         // no enemy, frog or bonus spawns in a lake.
@@ -2240,11 +2285,12 @@ impl Game {
             self.resolve_grenades(&mut f, true);
             self.resolve_globs(&mut f, true);
             self.tick_cookoffs(&mut f);
-            self.tick_burns(&mut f);
+            self.tick_burns(&mut f, true);
             self.tick_fires(&mut f, true);
             self.lava_phase(&mut f);
             self.tick_ooze(&mut f);
             self.tick_fuses(&mut f);
+            self.tick_breaks(&mut f);
             self.tick_launches(&mut f);
             self.tick_lava_bombs(&mut f);
             self.tick_crates(&mut f);
@@ -2276,9 +2322,10 @@ impl Game {
             self.resolve_grenades(&mut f, false);
             self.resolve_globs(&mut f, false);
             self.tick_cookoffs(&mut f);
-            self.tick_burns(&mut f);
+            self.tick_burns(&mut f, false);
             self.tick_fires(&mut f, false);
             self.tick_fuses(&mut f);
+            self.tick_breaks(&mut f);
             self.tick_launches(&mut f);
             self.tick_lava_bombs(&mut f);
             self.tick_crates(&mut f);
@@ -2575,7 +2622,7 @@ impl Game {
         let entity = self.seats.get(seat).copied().flatten()?;
         // Disjoint borrows: `drive_tank` wants the solver and the hull at
         // once, and they are two fields of the same struct.
-        let Game { world, physics, water, lava, craters, weather, time, map, zones, zone_lead, .. } = self;
+        let Game { world, physics, water, lava, craters, rubble, weather, time, map, zones, zone_lead, .. } = self;
         let Ok(mut tank) = world.get::<&mut Tank>(entity) else { return None };
         if tank.body.is_none() || tank.is_wreck() {
             return None;
@@ -2586,7 +2633,7 @@ impl Game {
         // clock), the room's when this pose lands (docs/gravity-well.md
         // "Online").
         let wells = if zones.is_empty() { crate::well::WellField::default() } else { crate::well::WellField::at(zones, *time + *zone_lead) };
-        let footing = Footing::at(water, lava, craters, *weather, tank.position, *time).pulled(&wells, &*tank);
+        let footing = Footing::at(water, lava, craters, *weather, tank.position, *time).on_rubble(rubble, tank.position).pulled(&wells, &*tank);
         // The seat's own skid and spin run on the client's ticks, as the
         // room's do in `tick_timers` (`Predictor::shove` starts a skid).
         tank.skid = (tank.skid - dt).max(0.0);
@@ -3493,7 +3540,7 @@ impl Game {
         // A seat whose client owns the hull was put where it is by
         // `accept_seat_pose` before this tick; the stick only fires.
         if self.seat_owned[index] != self.frame {
-            let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).pulled(&f.wells, tank);
+            let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).on_rubble(&self.rubble, tank.position).pulled(&f.wells, tank);
             drive_tank(&mut self.physics, tank, drive, f.dt, footing);
         }
         tick_queued_shots(&mut self.physics, f, tank, owner);
@@ -3881,8 +3928,8 @@ impl Game {
             .filter(|&(_, at)| !pulling || !self.in_a_pull(at))
             .collect();
 
-        // Breach perception: what a shell fired each way would hit within
-        // a tile of the hull - see `Ai::think`'s `walls_ahead`.
+        // Breach perception: the tile in the hull's way each way, within a
+        // tile of it - see `Ai::think`'s `walls_ahead`.
         let breach_pad = tuning().shell_hit_half_extent;
         let breach_reach_extra = tuning().enemy_breach_reach_px;
 
@@ -4007,6 +4054,9 @@ impl Game {
         // --- collect pass: perception, `think`, aim and fire, exactly as
         // before. Only the impulse is deferred. ---
         let mut pending: Vec<Pending> = Vec::new();
+        // Tanks whose target the routing cannot reach, due a fresh plan
+        // through the walls (`ai::Sap`), planned once the query is done.
+        let mut sap_wanted: Vec<(Entity, Position, Position)> = Vec::new();
         for (entity, tank, ai) in self.world.query::<(Entity, &mut Tank, &mut Ai)>().iter() {
             let my_index = enemy_indices[&entity];
             // An EMP has its brain off (docs/emp-burst.md): it coasts on
@@ -4054,9 +4104,11 @@ impl Game {
             };
             let reach = tank.hull_size() * 0.5 + breach_reach_extra;
             let walls_ahead = Dir::ALL.map(|d| {
-                f.terrain
-                    .obstacle_ahead(tank.position, d.vec(), reach, breach_pad)
-                    .map(|(material, burning)| WallAhead { material, burning })
+                // The hull's lane: its movement collider's half-width
+                // across `d`, facing that way.
+                let along_x = matches!(d, Dir::Left | Dir::Right);
+                let (hx, hy) = tank.move_half_extents(along_x);
+                f.terrain.obstacle_ahead(tank.position, d.vec(), reach, breach_pad, if along_x { hy } else { hx })
             });
             let engage_target = self.last_engage.target(entity);
             if let Some(at) = ai.grudge_target() {
@@ -4084,6 +4136,11 @@ impl Game {
                     target = target_pos_of(ai);
                     hunting = None;
                 }
+            }
+            if grid.same_cell(tank.position, target) || grid.connected(tank.position, target) {
+                ai.sap = None;
+            } else if ai.sap_due(f.dt) {
+                sap_wanted.push((entity, tank.position, target));
             }
             let frog_target = match ai.role {
                 Role::Hunter => hunting.map(|_| target),
@@ -4267,9 +4324,28 @@ impl Game {
                 // The commander's order is never the last word on a tank
                 // in a tell: it holds its aim (docs/sonic-hammer.md).
                 let intent = commanded_intent(&self.commander, p.slot, p.intent, tank.tell);
-                let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).pulled(&f.wells, tank);
+                let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).on_rubble(&self.rubble, tank.position).pulled(&f.wells, tank);
                 drive_tank_with(&mut self.physics, tank, intent, f.dt, p.current, p.facing_before, footing);
             });
+        }
+        self.plan_saps(grid, &sap_wanted);
+    }
+
+    /// Plan each of `wanted` (a tank, where it is, where it is going) its
+    /// way through the walls (`ai::Sap`, `Game::sap_plan`), on a breach
+    /// grid built once for them all. Draws no RNG; the plan is read from
+    /// the next tick.
+    fn plan_saps(&mut self, grid: &Grid, wanted: &[(Entity, Position, Position)]) {
+        if wanted.is_empty() {
+            return;
+        }
+        let (cols, rows, size) = grid.dims();
+        let (mut breach, walls) = self.breach_grid(cols as f32 * size, rows as f32 * size);
+        for &(entity, from, target) in wanted {
+            let sap = Self::sap_plan(grid, &mut breach, &walls, from, target);
+            if let Ok(mut ai) = self.world.get::<&mut Ai>(entity) {
+                ai.sap = sap;
+            }
         }
     }
 
@@ -5753,6 +5829,23 @@ impl Footing {
         well: crate::well::HullPull { current: Position::new(0.0, 0.0), side: Position::new(0.0, 0.0) },
     };
 
+    /// This footing over the rubble at `pos` (`chunks::Rubble`): light and
+    /// heavy rubble slow the hull by `rubble_light_speed` and
+    /// `rubble_heavy_speed`. The driving paths read it; a shove's skid
+    /// does not.
+    pub(crate) fn on_rubble(self, rubble: &crate::chunks::Rubble, pos: Position) -> Footing {
+        if rubble.is_empty() {
+            return self;
+        }
+        let t = tuning();
+        let pace = match rubble.level(crate::map::world_to_cell(pos)) {
+            crate::chunks::RubbleLevel::Clear => return self,
+            crate::chunks::RubbleLevel::Light => t.rubble_light_speed,
+            crate::chunks::RubbleLevel::Heavy => t.rubble_heavy_speed,
+        };
+        Footing { pace: self.pace * pace, ..self }
+    }
+
     /// This footing with the wells' pull on `tank` from `wells` (none with
     /// the field empty).
     pub(crate) fn pulled(self, wells: &crate::well::WellField, tank: &Tank) -> Footing {
@@ -6790,8 +6883,11 @@ mod determinism_tests {
         // (`math::sin` and friends), so a Mac and a Linux runner agree to
         // the bit. Never bump these to go green - work out which change
         // moved them first.
+        // The two-seat round's shells chip its walls chunk by chunk
+        // (`chunks.rs`); with `wall_chunks` off it hashes to
+        // 13_046_804_480_861_549_972.
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (15_662_619_869_435_857_390, 13_046_804_480_861_549_972), "(one seat, two seats)");
+        assert_eq!((one, two), (15_662_619_869_435_857_390, 625_655_024_471_431_682), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round
@@ -7316,6 +7412,28 @@ mod mechanics_tests {
         let grid = game.nav_grid(W, H);
         assert!(!grid.usable(map::cell_to_world(16, 11)));
         assert!(grid.next_step(map::cell_to_world(11, 11), map::cell_to_world(16, 11)).is_none() || !grid.usable(map::cell_to_world(16, 11)));
+    }
+
+    #[test]
+    fn the_router_steers_round_rubble_and_prices_it_where_there_is_no_way_round() {
+        let mut game = sandbox("version = 1\ntanks = 0\ncells.\"5,11\" = { kind = \"start\" }\n");
+        let (from, to) = (map::cell_to_world(10, 11), map::cell_to_world(14, 11));
+        assert_eq!(game.nav_path_cells(from, to, W, H), Some(4), "open ground");
+        // Two cells of heavy rubble on the straight line: wading them costs
+        // two heavy cells against the six steps round them.
+        for c in [12, 13] {
+            game.rubble.set((c, 11), crate::chunks::RUBBLE_MAX);
+        }
+        let heavy = tuning().rubble_heavy_path_cost as u32;
+        assert!(2 + 2 * heavy > 6);
+        assert_eq!(game.nav_path_cells(from, to, W, H), Some(6), "the route goes round");
+        // A band of it across the whole field: no way round, so it is
+        // crossed and paid for.
+        for r in 0..=(H / OBSTACLE_GRID_SIZE) as i32 {
+            game.rubble.set((12, r), crate::chunks::RUBBLE_MAX);
+        }
+        let crossing = game.nav_path_cells(from, to, W, H).expect("routes");
+        assert!(crossing > 4 && crossing < 4 + 2 * heavy, "{crossing}");
     }
 
     #[test]

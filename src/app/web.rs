@@ -56,6 +56,21 @@ thread_local! {
     static OVERLAY: Cell<PageOverlay> = const { Cell::new(PageOverlay { top: 0.0, rect: None }) };
     /// Whether the page is on a touch screen (`set_touch_screen`).
     static TOUCH: Cell<bool> = const { Cell::new(false) };
+    /// Whether the page is on a full-size iPad (`set_full_size_ipad`).
+    static IPAD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Note whether the page is on a full-size iPad, as it published it at
+/// startup (`window.bbIpad`, site/src/scripts/overlay.ts).
+pub fn set_full_size_ipad(ipad: bool) {
+    IPAD.with(|i| i.set(ipad));
+}
+
+/// Whether the page is on a full-size iPad, whose CSS pixel - its point -
+/// is a 132nd of an inch rather than a phone's 160th
+/// (`indicators::IPAD_POINTS_PER_MM`).
+pub fn full_size_ipad() -> bool {
+    IPAD.with(Cell::get)
 }
 
 /// Note whether the page is on a touch screen, as it published it at

@@ -201,6 +201,8 @@ pub struct Particle {
 #[derive(Default)]
 pub struct Fx {
     particles: Vec<Particle>,
+    /// What broken wall chunks threw (`pieces.rs`), flying and lying.
+    pieces: crate::pieces::Pieces,
     /// The last `Game::frame()` `observe` consumed. The dev server can
     /// render many times without advancing (`pause`, `step`), and
     /// `Game::events` still holds the previously advanced frame's
@@ -315,11 +317,17 @@ impl Fx {
         &self.particles
     }
 
+    /// The wall pieces (`pieces.rs`), for the field painter.
+    pub fn pieces(&self) -> &crate::pieces::Pieces {
+        &self.pieces
+    }
+
     /// Drop everything. Called when a new round starts - the `Fx` outlives
     /// `Game::init`, which knows nothing about it, so without this the
     /// previous round's smoke hangs over the new one's opening frame.
     pub fn clear(&mut self) {
         self.particles.clear();
+        self.pieces.clear();
         self.accum.clear();
         self.wading.clear();
         self.trail_last.clear();
@@ -498,7 +506,7 @@ impl Fx {
         }
         let n = self.count(tuning().tile_burst_particles);
         match material {
-            Material::Brick | Material::Iron | Material::Volcano | Material::Door => {
+            Material::Brick | Material::Concrete | Material::Iron | Material::Volcano | Material::Door => {
                 self.burst(at, ParticleKind::Chip, n, 90.0, &[STONE_LT, STONE_MD, STONE_DK]);
                 self.burst(at, ParticleKind::Dust, self.count(6), 40.0, &[DUST_T]);
             }
@@ -651,6 +659,18 @@ impl Fx {
                         }
                     }
                     Event::ObstacleDestroyed { material, x, y } => self.tile_death(material, Position::new(x, y)),
+                    Event::ChunksBroken { material, variant, x, y, broken, dx, dy, collapsed } => {
+                        self.pieces.throw(material, variant, Position::new(x, y), broken, Vec2::new(dx, dy), collapsed)
+                    }
+                    // A burning plank's chunks charring through: ash, a
+                    // lift of embers and a puff of smoke.
+                    Event::ChunksCharred { x, y, broken } => {
+                        let at = Position::new(x, y);
+                        self.pieces.char_away(at, broken);
+                        self.burst(at, ParticleKind::Ember, self.count(3), 30.0, &[FIRE_T, EMBER_T]);
+                        self.burst(at, ParticleKind::Smoke, self.count(1), 14.0, &[SOOT_T]);
+                    }
+                    Event::EmberFlew { x, y, to_x, to_y } => self.pieces.ember(Position::new(x, y), Position::new(to_x, to_y)),
                     // A gauss rail's slug through a hull or a tile, or a
                     // rod crushing one: the flash alone - the bursts are
                     // the slug's own (`gauss::compose_slug`) and the rod's
@@ -661,6 +681,25 @@ impl Fx {
                         HitTarget::Obstacle { .. } => self.flash(Flashed::Tile(Position::new(x, y))),
                         _ => {}
                     },
+                    // Spall off a breached wall's far face: the hull it
+                    // reached flashes, and a spray of masonry leaves the
+                    // face toward it.
+                    Event::Hit { target, cause: HitCause::Spall, x, y, .. } => {
+                        let slot = match target {
+                            HitTarget::Player { player } => player as usize,
+                            HitTarget::Enemy { slot } => slot,
+                            _ => continue,
+                        };
+                        self.flash(Flashed::Tank(slot));
+                        let at = Position::new(x, y);
+                        let hull = game.tank_snapshots().iter().find(|t| t.slot == slot).map(|t| t.position);
+                        let dir = hull.map_or(Vec2::zero(), |h| {
+                            let v = h - at;
+                            let l = v.length().max(1e-3);
+                            Vec2::new(v.x / l, v.y / l)
+                        });
+                        self.cone_burst(at, dir, 0.4, ParticleKind::Chip, self.count(6), 220.0, &[STONE_LT, STONE_MD, STONE_DK]);
+                    }
                     // A hit the tile *survived*. Without this, a wall only
                     // ever throws anything on the shot that finishes it,
                     // and every shot before that lands silently.
@@ -1564,6 +1603,7 @@ impl Fx {
     }
 
     pub fn tick(&mut self, dt: f32) {
+        self.pieces.tick(dt);
         self.impacts.retain_mut(|i| {
             i.age += dt;
             i.age < i.kind.seconds()

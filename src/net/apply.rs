@@ -259,6 +259,19 @@ fn apply_zones(game: &mut Game, s: &Snapshot, cols: u16) {
     game.zones = zones;
 }
 
+/// The rubble as the snapshot has it, cell for cell; a change empties the
+/// kept nav grid, as the room's `lay_rubble` does.
+fn apply_rubble(game: &mut Game, s: &Snapshot, cols: u16) {
+    let mut rubble = crate::chunks::Rubble::default();
+    for r in &s.rubble {
+        rubble.set(cell_from_index(cols, r.cell), r.units);
+    }
+    if rubble != game.rubble {
+        game.rubble = rubble;
+        game.nav.clear();
+    }
+}
+
 /// The craters the snapshot lists that the replica has not made yet, made
 /// as the room made them: their cells worked out from the replica's map,
 /// filled under a sky that fills them (`Game::make_crater`).
@@ -341,6 +354,7 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_zones(game, s, cols);
     apply_well_drums(game, s, cols);
     apply_craters(game, s, cols);
+    apply_rubble(game, s, cols);
     apply_volcano_shifts(game, s);
     apply_round(game, s);
     game.show(spectacle);
@@ -490,6 +504,9 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTre
                 let charred = game.world.query::<&Obstacle>().iter().any(|o| o.burning && o.cell() == cell);
                 if let Some(decal) = tile_rubble(material, center, charred, game.map.theme) {
                     show.decals.push(decal);
+                }
+                if material.is_tree() {
+                    game.woods.fell(cell);
                 }
             }
             _ => {}
@@ -678,9 +695,12 @@ fn apply_tiles(game: &mut Game, s: &Snapshot, cols: u16, mut dead: BTreeSet<u16>
         .filter(|(_, o)| !o.destroyed)
         .map(|(e, o)| (e, cell_index(cols, o.cell())))
         .collect();
+    let mut refit = Vec::new();
     for (entity, cell) in live {
         let mut q = game.world.query_one::<&mut Obstacle>(entity);
         let Ok(o) = q.get() else { continue };
+        let was = o.chunks;
+        let was_caged = o.cage;
         match listed.get(&cell) {
             Some(t) => {
                 o.health = t.hp as f32;
@@ -696,6 +716,10 @@ fn apply_tiles(game: &mut Game, s: &Snapshot, cols: u16, mut dead: BTreeSet<u16>
                     o.fuse = None;
                 }
                 o.scorched = t.faces;
+                if let Some(c) = o.chunks.as_mut() {
+                    *c = crate::chunks::Chunks::from_quantised(t.chunks, c.max());
+                }
+                o.cage = (t.cage > 0).then_some(t.cage);
                 o.set_lean_strength((t.flags & tile_flags::LEAN_MASK) >> (tile_flags::LEAN_SHIFT + 2));
             }
             // Absent from the list: the tile is as the map made it.
@@ -705,8 +729,19 @@ fn apply_tiles(game: &mut Game, s: &Snapshot, cols: u16, mut dead: BTreeSet<u16>
                 o.fuse = None;
                 o.scorched = 0;
                 o.ram_timer = 0.0;
+                if let Some(c) = o.chunks.as_mut() {
+                    *c = crate::chunks::Chunks::new(c.max());
+                }
+                o.cage = None;
             }
         }
+        // The body follows the chunks, as the room's does.
+        if o.chunks.map(|c| c.standing()) != was.map(|c| c.standing()) || o.cage.is_some() != was_caged.is_some() {
+            refit.push(entity);
+        }
+    }
+    for entity in refit {
+        game.fit_tile_body(entity);
     }
 }
 
@@ -1095,6 +1130,8 @@ fn apply_shots(game: &mut Game, s: &Snapshot) {
                 ShotKind::Shell => {
                     let mut q = game.world.query_one::<&mut Shell>(entity);
                     if let Ok(shell) = q.get() {
+                        // A deflected shot changes hands in flight.
+                        shell.owner = shot_owner(sh);
                         shell.prev_position = shell.position;
                         shell.position = position;
                         shell.rotation = rotation;
@@ -1109,6 +1146,8 @@ fn apply_shots(game: &mut Game, s: &Snapshot) {
                 ShotKind::Bullet => {
                     let mut q = game.world.query_one::<&mut Bullet>(entity);
                     if let Ok(bullet) = q.get() {
+                        // A deflected shot changes hands in flight.
+                        bullet.owner = shot_owner(sh);
                         bullet.prev_position = bullet.position;
                         bullet.position = position;
                         bullet.rotation = rotation;
@@ -1125,6 +1164,8 @@ fn apply_shots(game: &mut Game, s: &Snapshot) {
                 ShotKind::Plasma => {
                     let mut q = game.world.query_one::<&mut Plasma>(entity);
                     if let Ok(plasma) = q.get() {
+                        // A deflected shot changes hands in flight.
+                        plasma.owner = shot_owner(sh);
                         plasma.prev_position = plasma.position;
                         plasma.position = position;
                         plasma.rotation = rotation;

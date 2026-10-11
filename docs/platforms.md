@@ -238,9 +238,11 @@ Target `wasm32-unknown-emscripten`, run through `sola-raylib`'s `game_loop::run`
   bottom-left and take no band, and the off-screen arrows keep off their rectangle wherever it is.
   `window.bbInvite`, `window.bbToken` and `window.bbLang` (`site/src/scripts/room.ts`; the last is
   `navigator.languages`, comma-joined), `window.bbMotion` (`site/src/scripts/motion.ts`, from
-  `prefers-reduced-motion`, which seeds the motion switch) and `window.bbTouch` (`overlay.ts`, the
+  `prefers-reduced-motion`, which seeds the motion switch), `window.bbTouch` (`overlay.ts`, the
   `(hover: none) and (pointer: coarse)` query: a touch screen's page is framed as the app on that
-  device), read once at startup by `page_string` - the web build's whole command line, `?lang=` and
+  device) and `window.bbIpad` (`overlay.ts`: a full-size iPad, whose CSS pixel is 1/132 inch,
+  `indicators::IPAD_POINTS_PER_MM`), read once at startup by `page_string` - the web build's whole
+  command line, `?lang=` and
   `?weather=` included (`text::lang_from_url`, `weather::weather_from_url`).
 - **Online co-op in the browser** (docs/online-coop-prd.md §4.10): `ONLINE_AVAILABLE` is the
   `online` feature, so the bar carries the ONLINE button here too and the lobby hosts and joins over
@@ -346,7 +348,9 @@ build, so every switch would recompile them and their dependents). `.cargo/confi
   `glBindFramebuffer`/`glBindRenderbuffer` are wrapped to map 0 onto SDL's objects, or every frame
   after the first render texture goes into the void. `set_hints` sets `SDL_IOS_HIDE_HOME_INDICATOR`
   "2". `app::ios::reduce_motion` (`UIAccessibilityIsReduceMotionEnabled`) seeds the motion switch at
-  startup. `target_fps` 0 on a device, 60 on the simulator (`target_abi = "sim"` ignores the swap
+  startup, and `app::ios::points_per_mm` (the `hw.machine` model through
+  `indicators::apple_points_per_mm`: a full-size iPad's point is 1/132 inch) is what the builder
+  measures a cell on the glass by. `target_fps` 0 on a device, 60 on the simulator (`target_abi = "sim"` ignores the swap
   interval). GLSL ES 100 shaders, no map saving, lower particle budget. A dev-tools build logs
   `FrameStats` every five seconds (the only frame-time readout on a phone). App-lifecycle events are
   not handled yet. The simulator's GL is a software renderer - its frame times say nothing about a

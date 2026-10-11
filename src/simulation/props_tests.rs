@@ -35,6 +35,17 @@ cells."20,18" = { kind = "start" }
     text
 }
 
+/// Make every pane plain glass: a wired one (variant 1) leaves its mesh
+/// standing when it shatters (`Obstacle::cage`), and these tests are about
+/// a pane that goes.
+fn plain_panes(game: &mut Game) {
+    for o in game.world.query::<&mut Obstacle>().iter() {
+        if o.material == Material::Glass {
+            o.variant = 0;
+        }
+    }
+}
+
 fn game_on(map: &str, seed: u64) -> Game {
     let mut game = Game::default();
     game.enemy_count_override = Some(1);
@@ -349,14 +360,16 @@ fn a_wood_tile_that_burns_out_reports_its_destruction() {
     for seed in 1..=20u64 {
         let mut game = game_on(&map, seed);
         game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
-        step(&mut game, fire());
         // Watch the whole burn through, frame by frame: the tile is
         // despawned the frame it chars out, so a settle loop longer than
-        // `wood_burn_seconds` would find nothing left to inspect.
+        // the burn would find nothing left to inspect. A chunked plank can
+        // take more than one shell to give way, so keep firing until it
+        // does, then watch its `plank_burn_seconds` through.
         let mut lit = false;
         let mut reported = false;
-        for _ in 0..300 {
-            step(&mut game, Input::default());
+        for frame in 0..(300 + (tuning().plank_burn_seconds * 60.0) as i32) {
+            let gone = game.world.query::<&Obstacle>().iter().all(|o: &Obstacle| o.burning || o.material != Material::Wood);
+            step(&mut game, if frame % 40 == 0 && !gone { fire() } else { Input::default() });
             lit |= game.world.query::<&Obstacle>().iter().any(|o: &Obstacle| o.burning);
             reported |= game
                 .events()
@@ -894,6 +907,7 @@ fn destroying_a_tile_re_exposes_its_neighbours() {
         let _ = game.debug_teleport(slot, cell_to_world(ENEMY_CELL.0, ENEMY_CELL.1), Some(0.0));
     }
     game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
+    plain_panes(&mut game);
 
     let mask_of = |g: &Game, cell: (i32, i32)| {
         g.world.query::<&Obstacle>().iter().find(|o| o.cell() == cell).map(|o| o.edge_mask)
@@ -1101,6 +1115,44 @@ fn a_tank_drives_through_a_bush_cell_without_stopping() {
 }
 
 #[test]
+fn a_woods_undergrowth_is_picture_only_and_hides_nobody() {
+    // A block of trees grows bushes round its edge (`woods.rs`); cover is
+    // only what the map places, so none of them conceals its cell.
+    let mut cells = String::new();
+    for c in 8..=14 {
+        for r in 4..=8 {
+            cells.push_str(&format!("cells.\"{c},{r}\" = {{ kind = \"pine\" }}\n"));
+        }
+    }
+    let game = game_on(&map_with(&cells), 1);
+    assert!(game.grass_cells.is_empty(), "the map placed no cover");
+    let grown: Vec<Position> = game.grass.iter().filter(|t| t.bush.is_some()).map(|t| t.base).collect();
+    assert!(!grown.is_empty(), "the wood grew undergrowth");
+    let terrain = Terrain::build(&game.world, W, H, &game.grass_cells, &game.water);
+    for at in grown {
+        assert!(!terrain.conceals(at), "undergrowth at {at:?} hides nobody");
+    }
+}
+
+#[test]
+fn a_trail_through_a_wood_hides_whoever_stands_on_it() {
+    // Two stands of trees with a trail between them (`woods.rs`): the
+    // trail is cover like tall grass; the open ground past the wood is not.
+    let mut cells = String::new();
+    for c in 8..=17 {
+        for r in [4, 5, 7, 8] {
+            cells.push_str(&format!("cells.\"{c},{r}\" = {{ kind = \"tree\" }}\n"));
+        }
+    }
+    let game = game_on(&map_with(&cells), 1);
+    let cover = game.cover_cells();
+    assert!(crate::grass::conceals(&cover, cell_to_world(12, 6)), "the trail hides");
+    assert!(!crate::grass::conceals(&cover, cell_to_world(12, 11)), "the meadow does not");
+    let terrain = Terrain::build(&game.world, W, H, &cover, &game.water);
+    assert!(terrain.conceals(cell_to_world(12, 6)));
+}
+
+#[test]
 fn conceals_is_a_cell_query() {
     // Cover is a property of the ground a tank stands on. Testing against
     // the drawn tufts instead would make being hidden depend on which way
@@ -1240,6 +1292,7 @@ cells."19,11" = { kind = "tall_grass" }
 "#,
     );
     let mut game = game_at(&map, 6, (20, 14));
+    plain_panes(&mut game);
     // A tread mark beside the drum: one pass of an assault's runs.
     let mark = crate::wear::Stamp {
         at: Position::new(cell_to_world(20, 10).x + 12.0, cell_to_world(20, 10).y + 20.0),

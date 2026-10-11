@@ -114,8 +114,9 @@ pub struct Textures<'a> {
     pub portal: &'a Texture2D,
     /// The round's baked images as `app.rs` uploaded them before the
     /// frame (`render::canvas::BlockTextures`, `Game::with_block_images`):
-    /// the floor shade, the lava's banks and kept pictures, the cones -
-    /// each with the stamp it was baked under.
+    /// the floor shade, the ground's worn cells, the forest floor, the
+    /// lava's banks and kept pictures, the cones - each with the stamp it
+    /// was baked under.
     pub blocks: Vec<(u64, &'a Texture2D)>,
 }
 
@@ -1324,6 +1325,9 @@ impl Game {
         } else {
             self.paint_floor(&mut GpuCanvas::culled(d, textures, cull));
         }
+        // Wall pieces lying where they fell (`pieces.rs`): on the floor,
+        // under everything that stands.
+        fx.pieces().draw(&mut GpuCanvas::culled(d, textures, cull), false);
         // The fish under the water's surface (`fish.rs`): over its tiles,
         // under everything that burns, stands or flies over it.
         crate::render::fish::draw_fish(d, textures, self, fx.shoal(), cull);
@@ -2074,6 +2078,9 @@ impl Game {
             draw_missile(d, textures.missile, missile);
         }
 
+        // Wall pieces in flight, with their shadows, over the tiles and
+        // the tanks.
+        fx.pieces().draw(&mut GpuCanvas::culled(d, textures, cull), true);
         // Sparks, chips, dust and smoke over the top of everything in
         // the scene, but still inside pass 1 so an in-flight shockwave
         // warps them and the camera shake carries them along.

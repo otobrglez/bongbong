@@ -88,6 +88,18 @@ impl Dir {
         }
     }
 
+    /// The direction of a one-cell step (`dx`, `dy`) on a grid, y down;
+    /// `None` for anything but a single cardinal step.
+    pub fn of_step(dx: i32, dy: i32) -> Option<Dir> {
+        match (dx, dy) {
+            (0, -1) => Some(Dir::Up),
+            (0, 1) => Some(Dir::Down),
+            (-1, 0) => Some(Dir::Left),
+            (1, 0) => Some(Dir::Right),
+            _ => None,
+        }
+    }
+
     /// Inverse of `rotation`: the direction a hull angle in degrees faces,
     /// any full turns folded away; `None` for an angle that is not one of
     /// the four (within a degree), which a `Tank::rotation` never is.

@@ -172,7 +172,7 @@ pub fn tile_flames(obstacle: &Obstacle, time: f32) -> Vec<crate::pyro::Shape> {
     if !obstacle.burning {
         return out;
     }
-    let burn = obstacle.material.burn_seconds();
+    let burn = obstacle.burn_seconds();
     let catching = (obstacle.burn_shown / 0.3).clamp(0.0, 1.0);
     let left = burn - obstacle.burn_shown;
     let dying = (left / (burn * 0.3).max(0.01)).clamp(0.0, 1.0);
@@ -181,8 +181,22 @@ pub fn tile_flames(obstacle: &Obstacle, time: f32) -> Vec<crate::pyro::Shape> {
     let lean = crate::pyro::smoke_lean(&t, at, time);
     let seed = crate::blast::seed_at(at, 29);
     // Tall enough to rise clear of the tile, over its own glowing char.
+    // A plank wall burns where its fire has got to (`Obstacle::chunk_alight`):
+    // the tongues stand over those chunks and widen as the front walks.
+    let alight: Vec<crate::Position> = match obstacle.chunks {
+        Some(c) if obstacle.material == crate::obstacle::Material::Wood => (0..crate::chunks::CHUNKS)
+            .filter(|&i| c.stands(i) && obstacle.chunk_alight(i))
+            .map(|i| crate::chunks::chunk_center(at, i))
+            .collect(),
+        _ => Vec::new(),
+    };
     let (foot, spread, height, count) = if obstacle.material.is_tree() {
         (crate::Position::new(at.x, at.y - 4.0), 24.0, 30.0, 3)
+    } else if !alight.is_empty() {
+        let n = alight.len() as f32;
+        let mid = crate::Position::new(alight.iter().map(|p| p.x).sum::<f32>() / n, alight.iter().map(|p| p.y).sum::<f32>() / n);
+        let wide = alight.iter().map(|p| (p.x - mid.x).abs()).fold(0.0f32, f32::max);
+        (crate::Position::new(mid.x, mid.y + 4.0), (8.0 + wide * 2.0).min(26.0), 20.0 + 1.5 * n, if n > 6.0 { 3 } else { 2 })
     } else {
         (crate::Position::new(at.x, at.y + 6.0), 22.0, 32.0, 3)
     };
@@ -238,13 +252,16 @@ impl Game {
 
     /// Every baked image the round draws from, in an order that holds
     /// while the round does, for the window's GPU copies: the floor shade,
-    /// the ground's worn cells, the lava's banks, the kept pictures, then
-    /// each cone's.
+    /// the ground's worn cells, the forest floor, the lava's banks, the kept
+    /// pictures, then each cone's.
     pub fn with_block_images<R>(&self, f: impl FnOnce(&[&crate::canvas::BlockImage]) -> R) -> R {
         let pictures = self.lava.pictures();
         let wear = self.wear.pictures();
         let cones: Vec<_> = self.volcanoes.iter().map(|v| crate::volcano::cone(&v.outlets)).collect();
         let mut images = vec![self.ground.shade(), &wear.atlas().image];
+        if !self.woods.is_empty() {
+            images.push(self.woods.floor());
+        }
         if !self.lava.is_empty() {
             images.push(self.lava.banks());
         }
@@ -283,6 +300,10 @@ impl Game {
     pub fn paint_floor_marks(&self, c: &mut impl Canvas) {
         if !self.plain_canvas {
             crate::ground::draw_shade(c, &self.ground);
+        }
+        // The forest floor under the woods (`woods.rs`).
+        if !self.woods.is_empty() {
+            c.blocks(self.woods.floor());
         }
         // The ground the lava toasts and the cinders round each cone's
         // foot (docs/volcano.md), under every mark.
@@ -618,15 +639,33 @@ impl Game {
             .collect();
         let mut tree_query = self.world.query::<&Obstacle>();
         let mut trees: Vec<&Obstacle> = tree_query.iter().filter(|o| o.material.is_tree() && !culled(cull, o.position)).collect();
-        trees.sort_by(|a, b| a.position.y.total_cmp(&b.position.y));
+        // Back to front by where each crown is drawn (`woods.rs` moves it
+        // off its cell), cell order breaking ties.
+        trees.sort_by(|a, b| (a.position.y + a.crown.dy).total_cmp(&(b.position.y + b.crown.dy)).then(a.position.x.total_cmp(&b.position.x)));
         let t = crate::tuning::tuning();
-        for tree in &trees {
+        // The players' hulls, for the canopy cutaway: the crowns hiding
+        // much of one are drawn see-through, so a player never loses their
+        // own tank under a wood. An enemy under a canopy stays hidden.
+        let seats: Vec<(crate::Position, crate::Position)> = self
+            .world
+            .query::<(Entity, &Tank)>()
+            .iter()
+            .filter(|&(e, tank)| !tank.is_dead() && !self.hide_players && self.is_player(e))
+            .map(|(_, tank)| tank.hull_bbox_world())
+            .collect();
+        let cutaway = crate::obstacle::canopy_cutaway(&trees, &seats, t.canopy_cutaway_cover);
+        for (tree, &see_through) in trees.iter().zip(&cutaway) {
             // A sonic wave passing sways the crown away from its pivot.
             let lean = tree_lean(tree, &movers) + crate::sonic::tree_push(tree.position, &self.sonic_waves, &t);
             if self.shadows_enabled {
-                draw_tree_shadow(c, tree, lean, self.time);
+                draw_tree_shadow(c, tree, lean, self.time, if see_through { t.canopy_cutaway_alpha } else { 1.0 });
             }
-            draw_tree(c, tree, lean, self.time);
+            if see_through {
+                let alpha = (255.0 * t.canopy_cutaway_alpha.clamp(0.0, 1.0)) as u8;
+                crate::obstacle::draw_tree_tinted(c, tree, lean, self.time, crate::math::Color::new(255, 255, 255, alpha));
+            } else {
+                draw_tree(c, tree, lean, self.time);
+            }
             if tree.burning {
                 crate::pyro::draw(c, &tile_flames(tree, self.time));
             }

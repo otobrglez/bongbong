@@ -40,8 +40,8 @@ tool and the `armory` map.
   defaults), each walked cell by cell (Amanatides-Woo, the
   `weather::Occluders` walk) over the map's cells (`map::world_to_cell`: centres on multiples of
   32). A ray stops on entering the first cell holding a tile that
-  `Material::blocks_sound`: every wall material - brick, iron, wood and
-  glass - the three towers, a volcano's cone and a training door; its reach
+  `Material::blocks_sound`: every wall material - brick, iron, wood,
+  glass and concrete - the three towers, a volcano's cone and a training door; its reach
   is the distance to that entry. It also stops at the field's edge. Props,
   drums, range boards, trees, lamp posts, pickups, water, lava, grass and
   tanks do not stop it. A destroyed tile is not there. The cast records, per ray, its
@@ -998,7 +998,8 @@ Protocol 16 (from 15), once in the PR.
   share defaults to 0, no enemy carries one, so there is no wave, no tell,
   no skid and no sense; `SpecialSense::None` makes the `special` tier a
   `false` with no state touched; `seek_special` finds no crate;
-  `cover_cells` is `grass_cells` while `grass_flat` is empty; `knock` is
+  `cover_cells` is `grass_cells` while `grass_flat` is empty and no wood
+  has a trail (docs/WOODS.md); `knock` is
   never called. `determinism_tests`' pinned streams, the probe fixtures'
   ceilings and every thumbnail pin but the armory's new one stay as they
   are.

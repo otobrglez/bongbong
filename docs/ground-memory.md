@@ -23,7 +23,7 @@ this document is what is built (BB-88). Trampled cover (BB-89) and oil prints
 | `src/lib.rs` | `TreadProfile`, `TREAD_BY_ROW`: every chassis's runs as the art draws them. |
 | `src/fx.rs` | `Fx::drive`: the driving effects (`ParticleKind::Kick`, `ParticleKind::Foam`, and spray, chips and smoke reused). |
 | `src/render/fx.rs` | `draw_ground`: dust, powder and foam drawn with the floor, under the light. |
-| `src/game.rs` | `paint_floor_marks` draws the worn cells first, under scorches, craters and rubble; `refresh_pictures` and `with_block_images` bring the pictures up and hand them to the GPU. |
+| `src/game.rs` | `paint_floor_marks` draws the worn cells over the forest floor and the lava's banks and first of the marks, under scorches, craters and rubble; `refresh_pictures` and `with_block_images` bring the pictures up and hand them to the GPU. |
 
 ## The grid
 
@@ -135,7 +135,10 @@ Every ramp is steps from the Puny palette (`tools/punypalette.py`) and the
 retinted ground tileset's own pixels, never a blend; the tables are `GRASS`,
 `ROAD`, `SAND`, `DESERT_DUST`, `DESERT_ROAD` and `DESERT_SAND` in `wear.rs`,
 with the snow ramp built over each ground's dark step. Burnt-in marks take
-`pyro::CHAR`.
+`pyro::CHAR`. A wood's floor and the ruts baked along its trails
+(`woods.rs`, docs/WOODS.md) are a picture over the ground, not a ground of
+their own: a mark pressed there takes the ramp of the ground under it and
+lies over them.
 
 ## The pictures
 

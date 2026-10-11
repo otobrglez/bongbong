@@ -611,7 +611,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     *another* blast launches as a `FlyingDrum` and blasts where it lands;
     `drum_in_flight`/`age_flying_drums` are the arc, staged from a launch or from the event);
     `tick_burns` (wood that finishes charring dies through `obstacle_died`, the funnel every tile
-    death passes); `ram_props`; `barrels`/`debug_detonate` (a tool's click: queued like
+    death passes; a burning plank's chunks char through one by one, and burning wood and trees throw
+    hashed embers downwind, `Game::embers`, that `land_embers` lets light the wood they fall on -
+    docs/WALLS_SPEC.md §12); `ram_props`; `barrels`/`debug_detonate` (a tool's click: queued like
     `debug_kill`, applied as a fatal direct hit at the top of the next frame). Pass-over and
     deflection rolls live in `resolve_projectiles`. Every cosmetic choice is hashed; only damage
     rolls and chance knobs strictly between 0 and 1 draw RNG, so prop-free maps replay unchanged.
@@ -819,7 +821,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   through `Grid`; on top: an obstacle-ahead override of the heading commitment, a stuck escape on
   *displacement projected onto the commanded heading* (never a physics velocity - the solver reports
   motion for a jammed tank), breach (shoot a destructible tile after `enemy_breach_after_seconds`,
-  never iron), and the personal-space brake (`crowded_ahead`/`yield_timer`: a brake, not a sidestep;
+  never iron or a cage; a holed tile only while its body stands across the hull's lane, each shot
+  aimed by `sapper_aim` at a chunk still in the way; a tank cut off from its target heads for the
+  wall its `Sap` plan names - `Game::plan_saps`, docs/WALLS_SPEC.md §13), and the personal-space brake (`crowded_ahead`/`yield_timer`: a brake, not a sidestep;
   `enemy_yield_seconds` is load-bearing because the stuck escape only counts commanded movement).
   **The sight box** (docs/large-maps-follow-camera.md §5): an enemy fires at a seat only while its
   centre stands inside that seat's box, `sight_box_half_cols` x `sight_box_half_rows` cells (11.5 x
@@ -942,7 +946,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   Health-slot bonus roll (`maybe_spawn_health_slot_bonuses`; the frog gate is checked before any RNG
   draw). FrogHealth heals the collector's own side's frog and is taken unless that frog is alive and
   full (docs/frog-health-pack-prd.md).
-- `obstacle.rs` — `Obstacle` is a wall (`Material` Brick/Iron/Wood/Glass), a prop
+- `obstacle.rs` — `Obstacle` is a wall (`Material` Brick/Iron/Wood/Glass/Concrete), a prop
   (Sandbag/Barrel/Fence, and Target - the range board, docs/range-target-prd.md: never rolled
   flammable, so a shot splinters it, yet `catches_fire` from the stream, a burning cell beside it or
   a lava bank, and burns for its own `burn_seconds`), a tree (`TREE_SPECIES`: Tree, Pine, Spruce, Scots, Fir, Birch, Willow, Palm, Snag; Fir, Palm and Snag
@@ -960,6 +964,38 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   anywhere. The edge-cap
   neighbour mask is cached and refreshed by `Game::refresh_edge_masks` on destruction. A barrel's
   `variant` is its `Drum`. Specs: docs/WALLS_SPEC.md, PROPS_SPEC.md, TREES_SPEC.md.
+  **Brick and wood break chunk by chunk** (`Obstacle::chunks`, `Material::chunk_health`, BB-81,
+  docs/WALLS_SPEC.md §10): `strike` (a shot at a point) and `blast` (from a centre) break chunks,
+  `damage` wears them evenly, `health` follows their sum and the tile dies when
+  `wall_collapse_chunks` or fewer stand. A worn chunked tile draws chunk by chunk (`draw_chunked`).
+  **Concrete and wired glass leave a cage** (`Obstacle::cage`, `leaves_cage`, BB-83): where the wall
+  would die it stands on as rebar or bare mesh - `Terrain::sweep` sees it as a tile with no chunks, so
+  every shot passes, while its body and nav cell still stop hulls - until `cage_cut_hits` blasts of
+  `cage_cut_damage` (or a rail or a rod) cut it down (`cut_cage`). Concrete's variant comes from a
+  hash of the map, not the round RNG, and its sheet rows (variants, edge cap, rubble, rebar) sit after
+  everything else (`CONCRETE_ROW_BASE`, `Material::cap_row`).
+- `chunks.rs` — a chunked tile's 4 × 4 grid of 8 px chunks (`Chunks`): which one a shot strikes, how
+  a blow and a blast spread, the wear steps the wire carries (`quantised`), the body's box
+  (`solid_box`: the standing 16 px quadrants), and the order a fire takes a burning plank's chunks in
+  (`burn_ranks`, `burn_state`; BB-84, docs/WALLS_SPEC.md §12). Plain data, no RNG. `Terrain::sweep` tests a chunked
+  tile's standing chunks (`hits::segment_hits_chunks`), so a hole lets shots through - a loophole -
+  while `Game::fit_tile_body` keeps the tile's body over its standing quadrants. Every chunk a blow
+  breaks is an `Event::ChunksBroken`. What a breach does besides (BB-82, docs/WALLS_SPEC.md §10)
+  lives in `props.rs`: `Game::spall` (a shell's breach hurts the tank sheltering behind,
+  `HitCause::Spall`), `lay_rubble` (`chunks::Rubble`, `Game::rubble`: it slows a hull through
+  `Footing::on_rubble` and the router prices it in `nav_finish`), and `queue_neighbour_breaks` /
+  `tick_breaks` (`Game::pending_breaks`: a weak run comes down a tile at a time, a cracked pane
+  shatters beside a broken one).
+- `woods.rs` — a wood as a whole (docs/WOODS.md), built once at `init` from the map, hashed, no RNG:
+  trails (`is_trail`), each tree's `Crown` (up to 4 px off its cell on the 2 px grid, mirrored; away
+  from a trail or a wall, out over water; held on `Obstacle::crown`), the forest floor baked once like
+  the lava's banks (`floor`, weighted by kind, never on water, with ruts along every trail that runs
+  three cells or more), and undergrowth (`undergrowth`: bush tufts in `Game::grass` but not
+  `grass_cells`, so picture only; reeds on wooded banks, ferns under interior crowns). The one thing
+  in it that decides play is cover: a trail cell hides a hull (`Game::cover_cells` chains
+  `trail_positions`), and `fell` reworks the trails round a tree that goes (`obstacle_died`, and the
+  replica's `apply`). `narrow_trails` backs maplint's `NarrowTrail` warning. The canopy cutaway is
+  `obstacle::canopy_cutaway`, drawn in `game.rs`.
 - `grass.rs` — tall grass, **deliberately not an `Obstacle`** (the nav grid and the linter treat
   every obstacle as impassable). Bushes and reeds (`Bush`, docs/BUSHES_SPEC.md) are soft-cover cells
   in `grass_cells` too, each growing one sprite (`bush_tuft`, rooted a block inside its cell so every
@@ -1424,7 +1460,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   impact frames - and is composed by `burst.rs`; and the **flashes** (`Flash`, `Flashed`): a hull,
   tile or tower a shot landed on, drawn again in light by `render/game.rs` for `hit_flash_seconds`.
   In a dev-server lockstep `app.rs` ages the layer by the simulated time a `step` ran, not wall
-  time, so a frozen round's particles freeze with it.
+  time, so a frozen round's particles freeze with it. It owns the **wall pieces** too
+  (`pieces.rs`, from `Event::ChunksBroken`): cuts of a broken chunk's own sheet pixels that fly,
+  bounce and lie for `piece_linger_seconds`, then settle into the ground as the round's scars (up to
+  `fx_max_scars`); a burning plank's charred chunks fall as ash (`Event::ChunksCharred`) and an
+  ember arcs downwind (`Event::EmberFlew`); `render/game.rs` draws the scars and lying pieces on the
+  floor and the flying ones and embers over everything (`Pieces::draw`), capped at `fx_max_pieces`.
 - `fish.rs` (docs/water.md "Presentation") — fish in the water, cosmetic and reactive: `Shoal` (kept
   in `fx::Fx`, so `app.rs` owns it; `Fx::shoal`) holds a school per `fish_school_cells` of each
   lake's deep cells, rebuilt on a new round, and is stepped on the round's clock (`Game::time`,
@@ -1737,7 +1778,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `builder_scatter_density` of the empty cells within `builder_scatter_radius_cells` of the drag,
   picked by `brush::scattered` (a hash of the cell and a per-session stroke counter, never `rand`),
   and erasing thins the brush's object (anything under the eraser). RECT and SCATTER never toggle; a
-  singleton's brush paints with the pen whatever the shape. **The select tool** (`Tool::Select`; the
+  singleton's brush paints with the pen whatever the shape. **The forest brush** (`Tool::Forest`;
+  the picks are `editor/forest.rs`, docs/WOODS.md §6) has no one object: every shape plants each
+  open or tree cell with `forest::lay`'s pick (water, the wood's edge, `woods::conifer_stand`, the
+  theme), leaves a stream's banks open and clears trees off them, and on release picks every tree
+  the stroke planted again against the finished wood (`replant`), all one undo step; a first cell
+  holding any tree toggles it to erase. **The select tool** (`Tool::Select`; the
   data is `editor/select.rs`): a drag draws a `CellRect`, a drag from inside it lifts its cells and
   carries them, and the strip under the bar (`chrome::Strip`: COPY, CUT, PASTE, the flips, DELETE, +
   STAMP, STAMPS, or PLACE, the flips and CANCEL while a paste ghost stands) and Ctrl+C/X/V and
@@ -1810,8 +1856,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `look_at`). **Touch is raw** (`BuilderInput::touches`, `editor/gesture.rs`): one finger paints
   once past `builder_touch_slop_pt`, two fingers pan and pinch about their midpoint (a second finger
   takes a stroke back, a pinch settles on whole blocks), a two-finger tap undoes and a three-finger
-  tap redoes; where a cell is under `builder_paint_min_cell_mm` a tap zooms to
-  `builder_tap_zoom_cell_mm` and a drag pans. A finger is the canvas's only where it lands on the
+  tap redoes; where a cell is under `builder_paint_min_cell_mm` (measured at the screen's
+  `CanvasScreen::points_per_mm`) a tap zooms to `builder_tap_zoom_cell_mm` and a drag pans, unless
+  the whole map is in view. A finger is the canvas's only where it lands on the
   canvas and no press of the chrome takes it (`lands_on_canvas`: a bar button's hit slack reaches
   over the canvas's top edge). `MapEditor::leave` (from `Session::play` - PLAY HERE and Tab too -
   and a level's start) closes the popup, takes back a half-drawn RECT and a select drag as Escape
