@@ -195,26 +195,40 @@ impl Chunks {
         was & !self.standing()
     }
 
-    /// The box the tile's body covers, in px from the tile's centre, as
-    /// `(offset, half extents)`: the bounds of its standing quadrants, a
-    /// 16 px quadrant standing while two of its four chunks do. `None` when
-    /// no quadrant stands.
+    /// The box the tile's body covers, in px from the tile's centre
+    /// (`solid_box_of` its standing chunks). `None` when no quadrant
+    /// stands.
     pub fn solid_box(&self) -> Option<(Vec2, Vec2)> {
-        let half = OBSTACLE_GRID_SIZE / 2.0;
-        let mut lo = Vec2::new(f32::MAX, f32::MAX);
-        let mut hi = Vec2::new(f32::MIN, f32::MIN);
-        for q in 0..4 {
-            let (qc, qr) = (q % 2, q / 2);
-            let n = (0..4).filter(|k| self.stands((qr * 2 + k / 2) * CHUNK_SIDE + qc * 2 + k % 2)).count();
-            if n >= 2 {
-                let x0 = qc as f32 * half - half;
-                let y0 = qr as f32 * half - half;
-                lo = Vec2::new(lo.x.min(x0), lo.y.min(y0));
-                hi = Vec2::new(hi.x.max(x0 + half), hi.y.max(y0 + half));
-            }
-        }
-        (lo.x <= hi.x).then(|| (Vec2::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0), Vec2::new((hi.x - lo.x) / 2.0, (hi.y - lo.y) / 2.0)))
+        solid_box_of(self.standing())
     }
+}
+
+/// Whether quadrant `q` (0..4, row by row, 16 px each) of a tile with the
+/// `standing` chunks stands: while two of its four chunks do.
+pub fn quadrant_stands(standing: u16, q: usize) -> bool {
+    let (qc, qr) = (q % 2, q / 2);
+    (0..4).filter(|k| standing & (1 << ((qr * 2 + k / 2) * CHUNK_SIDE + qc * 2 + k % 2)) != 0).count() >= 2
+}
+
+/// The quadrant chunk `i` lies in (`quadrant_stands`).
+pub fn quadrant_of(i: usize) -> usize {
+    (i / CHUNK_SIDE / 2) * 2 + (i % CHUNK_SIDE) / 2
+}
+
+/// The box a tile's body covers with the `standing` chunks, in px from the
+/// tile's centre, as `(offset, half extents)`: the bounds of its standing
+/// quadrants (`quadrant_stands`). `None` when no quadrant stands.
+pub fn solid_box_of(standing: u16) -> Option<(Vec2, Vec2)> {
+    let half = OBSTACLE_GRID_SIZE / 2.0;
+    let mut lo = Vec2::new(f32::MAX, f32::MAX);
+    let mut hi = Vec2::new(f32::MIN, f32::MIN);
+    for q in (0..4).filter(|&q| quadrant_stands(standing, q)) {
+        let x0 = (q % 2) as f32 * half - half;
+        let y0 = (q / 2) as f32 * half - half;
+        lo = Vec2::new(lo.x.min(x0), lo.y.min(y0));
+        hi = Vec2::new(hi.x.max(x0 + half), hi.y.max(y0 + half));
+    }
+    (lo.x <= hi.x).then(|| (Vec2::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0), Vec2::new((hi.x - lo.x) / 2.0, (hi.y - lo.y) / 2.0)))
 }
 
 /// How much rubble lies on a cell (`Rubble::level`).

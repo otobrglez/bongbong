@@ -219,7 +219,7 @@ use rand::{RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
 use crate::math::Vec2;
 
-use crate::ai::{Ai, AiSnapshot, Intent, Mover, Role, SpecialSense, WallAhead};
+use crate::ai::{Ai, AiSnapshot, Intent, Mover, Role, SpecialSense};
 use crate::battlefield;
 use crate::bullet::Bullet;
 use crate::frog::{Facing, Frog, Side};
@@ -3929,8 +3929,8 @@ impl Game {
             .filter(|&(_, at)| !pulling || !self.in_a_pull(at))
             .collect();
 
-        // Breach perception: what a shell fired each way would hit within
-        // a tile of the hull - see `Ai::think`'s `walls_ahead`.
+        // Breach perception: the tile in the hull's way each way, within a
+        // tile of it - see `Ai::think`'s `walls_ahead`.
         let breach_pad = tuning().shell_hit_half_extent;
         let breach_reach_extra = tuning().enemy_breach_reach_px;
 
@@ -4055,6 +4055,9 @@ impl Game {
         // --- collect pass: perception, `think`, aim and fire, exactly as
         // before. Only the impulse is deferred. ---
         let mut pending: Vec<Pending> = Vec::new();
+        // Tanks whose target the routing cannot reach, due a fresh plan
+        // through the walls (`ai::Sap`), planned once the query is done.
+        let mut sap_wanted: Vec<(Entity, Position, Position)> = Vec::new();
         for (entity, tank, ai) in self.world.query::<(Entity, &mut Tank, &mut Ai)>().iter() {
             let my_index = enemy_indices[&entity];
             // An EMP has its brain off (docs/emp-burst.md): it coasts on
@@ -4102,9 +4105,11 @@ impl Game {
             };
             let reach = tank.hull_size() * 0.5 + breach_reach_extra;
             let walls_ahead = Dir::ALL.map(|d| {
-                f.terrain
-                    .obstacle_ahead(tank.position, d.vec(), reach, breach_pad)
-                    .map(|(material, burning)| WallAhead { material, burning })
+                // The hull's lane: its movement collider's half-width
+                // across `d`, facing that way.
+                let along_x = matches!(d, Dir::Left | Dir::Right);
+                let (hx, hy) = tank.move_half_extents(along_x);
+                f.terrain.obstacle_ahead(tank.position, d.vec(), reach, breach_pad, if along_x { hy } else { hx })
             });
             let engage_target = self.last_engage.target(entity);
             if let Some(at) = ai.grudge_target() {
@@ -4132,6 +4137,11 @@ impl Game {
                     target = target_pos_of(ai);
                     hunting = None;
                 }
+            }
+            if grid.same_cell(tank.position, target) || grid.connected(tank.position, target) {
+                ai.sap = None;
+            } else if ai.sap_due(f.dt) {
+                sap_wanted.push((entity, tank.position, target));
             }
             let frog_target = match ai.role {
                 Role::Hunter => hunting.map(|_| target),
@@ -4318,6 +4328,25 @@ impl Game {
                 let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).on_rubble(&self.rubble, tank.position).pulled(&f.wells, tank);
                 drive_tank_with(&mut self.physics, tank, intent, f.dt, p.current, p.facing_before, footing);
             });
+        }
+        self.plan_saps(grid, &sap_wanted);
+    }
+
+    /// Plan each of `wanted` (a tank, where it is, where it is going) its
+    /// way through the walls (`ai::Sap`, `Game::sap_plan`), on a breach
+    /// grid built once for them all. Draws no RNG; the plan is read from
+    /// the next tick.
+    fn plan_saps(&mut self, grid: &Grid, wanted: &[(Entity, Position, Position)]) {
+        if wanted.is_empty() {
+            return;
+        }
+        let (cols, rows, size) = grid.dims();
+        let (mut breach, walls) = self.breach_grid(cols as f32 * size, rows as f32 * size);
+        for &(entity, from, target) in wanted {
+            let sap = Self::sap_plan(grid, &mut breach, &walls, from, target);
+            if let Ok(mut ai) = self.world.get::<&mut Ai>(entity) {
+                ai.sap = sap;
+            }
         }
     }
 
@@ -7434,6 +7463,28 @@ mod mechanics_tests {
         let grid = game.nav_grid(W, H);
         assert!(!grid.usable(map::cell_to_world(16, 11)));
         assert!(grid.next_step(map::cell_to_world(11, 11), map::cell_to_world(16, 11)).is_none() || !grid.usable(map::cell_to_world(16, 11)));
+    }
+
+    #[test]
+    fn the_router_steers_round_rubble_and_prices_it_where_there_is_no_way_round() {
+        let mut game = sandbox("version = 1\ntanks = 0\ncells.\"5,11\" = { kind = \"start\" }\n");
+        let (from, to) = (map::cell_to_world(10, 11), map::cell_to_world(14, 11));
+        assert_eq!(game.nav_path_cells(from, to, W, H), Some(4), "open ground");
+        // Two cells of heavy rubble on the straight line: wading them costs
+        // two heavy cells against the six steps round them.
+        for c in [12, 13] {
+            game.rubble.set((c, 11), crate::chunks::RUBBLE_MAX);
+        }
+        let heavy = tuning().rubble_heavy_path_cost as u32;
+        assert!(2 + 2 * heavy > 6);
+        assert_eq!(game.nav_path_cells(from, to, W, H), Some(6), "the route goes round");
+        // A band of it across the whole field: no way round, so it is
+        // crossed and paid for.
+        for r in 0..=(H / OBSTACLE_GRID_SIZE) as i32 {
+            game.rubble.set((12, r), crate::chunks::RUBBLE_MAX);
+        }
+        let crossing = game.nav_path_cells(from, to, W, H).expect("routes");
+        assert!(crossing > 4 && crossing < 4 + 2 * heavy, "{crossing}");
     }
 
     #[test]
