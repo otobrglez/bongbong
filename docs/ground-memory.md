@@ -272,6 +272,11 @@ one into the replica's `grass_trampled` (quiet or drawn), and a joiner gets
 the ones before it in `Welcome::trampled_cells`. The replica never counts
 passes; its `tick_grass` lays the tufts flat.
 
+Charred grass travels the same way, though fire rather than a hull makes
+it: a replica chars each cell under its fire in `Snapshot::fires`, and a
+joiner chars the ones before it from `Welcome::burnt_grass`
+(`Game::char_grass` on every side).
+
 ## Tests
 
 - `wear::tests`: the runs under an assault and a titan, grousers fixed to the

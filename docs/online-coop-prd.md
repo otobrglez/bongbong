@@ -287,7 +287,7 @@ sees. This table is the first pass; the phase 1 audit finalises it.
 | Fires, oil, drums | `FireStarted`/`Ignited`, burning cells with remaining time as deltas, `oil_cells` and `oil_prints` in `Welcome` and removals, `OilPrinted` for each print a hull lays, `DrumLaunched` with landing cell | the drum's arc and shadow; fire loop frames | — |
 | Round state | `mission`, spawn plan (`Welcome`), wave index/size/alive/pending, the breather before the next wave, `intro_timer`, `outcome`, `restart_timer`, alert position and timer | `time` from the tick; banners, HUD | `paused` (meaningless online), `shadows_enabled`, `debug_overlays` |
 | Fireballs, scorches, rubble, shocks, flashes, screen flash, cook-offs | only their causing events | everything: `wreck_fx`, `apply_blast`'s cosmetic half, `obstacle_died` hash it all from position | their ages (`tick_effects`) |
-| Grass, tracks, ground, water | layout via map plus seed (the map carries the theme and the water cells); burnt cells as deltas; trampled cells as `GrassTrampled` and `trampled_cells` in `Welcome` | ground, water (`ground::Layout` for the picture, `WaterLayout` for the rules, both from the map's cells) and tufts from `Game::init`; tread marks from interpolated motion, wet ones after a ford | `crush`, `push`, sway, the water's shimmer and current marks (drawn from the round clock), spray, particles, camera shake |
+| Grass, tracks, ground, water | layout via map plus seed (the map carries the theme and the water cells); burnt cells charred under each fire a snapshot lists, and the ones charred before a client joined in `Welcome::burnt_grass`; trampled cells as `GrassTrampled` and `trampled_cells` in `Welcome` | ground, water (`ground::Layout` for the picture, `WaterLayout` for the rules, both from the map's cells) and tufts from `Game::init`; tread marks from interpolated motion, wet ones after a ford | `crush`, `push`, sway, the water's shimmer and current marks (drawn from the round clock), spray, particles, camera shake |
 | AI, the commander, engage rings, nav and route grids with their flow fields, terrain snapshot | nothing | nothing | nothing; the client has no AI |
 
 Two rules fall out. Cosmetic state is owned by the replica and driven from
@@ -319,7 +319,7 @@ Snapshot { tick: u32, server_ms: u32,
 // once, on join and on every rejoin
 Welcome  { protocol: u16, sim_version: &str, seat: u8, roster: [{ seat, nick, chassis }],
            map_toml, seed: u64, tuning_json, mission, spawn, oil_cells, oil_prints,
-           dead_cells, trampled_cells,
+           dead_cells, trampled_cells, burnt_grass,
            snapshot: Snapshot /* full */ }
 
 // lobby, JSON over the same socket
@@ -420,10 +420,12 @@ Four pieces:
   a fireball appears when the hull it belongs to is drawn there. `Fx::observe`
   then sees the same `game.events()` it sees today.
 
-Join in progress and rejoin are one path: `Welcome` carries a full snapshot. A
-late joiner misses earlier cosmetics (scorches, rubble); if it matters,
-`Welcome` can carry the decal and scorch lists, a few hundred bytes of
-positions plus hashed variants.
+Join in progress and rejoin are one path: `Welcome` carries a full snapshot,
+and the state of the round's past no snapshot lists - the tiles that died
+(`dead_cells`), the oil left (`oil_cells`, `oil_prints`), the grass trampled
+(`trampled_cells`) and charred (`burnt_grass`). A late joiner misses earlier
+cosmetics (scorches, rubble); if it matters, `Welcome` can carry the decal
+and scorch lists, a few hundred bytes of positions plus hashed variants.
 
 **One client, three modes.** Local play stays exactly as it is: the online
 round is a third driver beside Play and Build, never a replacement for the

@@ -225,6 +225,13 @@ impl CellObject {
         })
     }
 
+    /// Soft cover: tall grass or a bush cell. `battlefield::spawn_from_map`
+    /// makes each one the map places one of a round's `grass_cells`, until
+    /// fire chars it.
+    pub fn is_cover(&self) -> bool {
+        matches!(self, CellObject::TallGrass) || self.bush().is_some()
+    }
+
     /// The cell that grows `bush`.
     pub fn of_bush(bush: crate::grass::Bush) -> CellObject {
         use crate::grass::Bush;

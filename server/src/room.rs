@@ -1118,6 +1118,7 @@ impl Room {
             oil_prints: Vec::new(),
             dead_cells: Vec::new(),
             trampled_cells: Vec::new(),
+            burnt_grass: Vec::new(),
             snapshot: Snapshot { acked, server_ms: self.server_ms(), ..Snapshot::default() },
         }
     }

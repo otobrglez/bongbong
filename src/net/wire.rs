@@ -1092,6 +1092,12 @@ pub struct Welcome {
     /// (`Game::grass_trampled`), sorted: a joiner learns them here and
     /// every later one from `GrassTrampled`.
     pub trampled_cells: Vec<u16>,
+    /// Cells (`row * cols + col`) where fire has charred grass this round
+    /// (`Game::char_grass`), sorted: the map's cover cells gone from
+    /// `Game::grass_cells` and every cell holding a burnt tuft, the woods'
+    /// undergrowth among them. A joiner chars them here and every later
+    /// one under its fire in `Snapshot::fires`.
+    pub burnt_grass: Vec<u16>,
     /// The complete state at the tick the welcome was cut.
     pub snapshot: Snapshot,
 }

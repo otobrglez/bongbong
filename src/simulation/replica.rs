@@ -236,6 +236,9 @@ pub struct DrawableState {
     pub craters: Vec<(i32, i32)>,
     /// Every trampled grass cell (`Game::grass_trampled`), sorted.
     pub trampled: Vec<(i32, i32)>,
+    /// Every cell holding a tuft fire has charred (`GrassTuft::burnt`),
+    /// sorted, each once.
+    pub burnt_grass: Vec<(i32, i32)>,
     /// Each volcano's shift (`Volcano::shift`).
     pub volcano_shifts: Vec<i32>,
     /// The wave (0 under the band plan), live enemies, tanks still to
@@ -580,6 +583,9 @@ impl Game {
         let mut lamps: Vec<(u16, i32, i32, u8)> =
             self.lanterns.iter().map(|l| (l.id, quarter_px(l.position.x), quarter_px(l.position.y), l.seat)).collect();
         lamps.sort();
+        let mut burnt_grass: Vec<(i32, i32)> = self.grass.iter().filter(|t| t.burnt).map(|t| crate::map::world_to_cell(t.base)).collect();
+        burnt_grass.sort_unstable();
+        burnt_grass.dedup();
 
         let wave = self.wave_status();
         DrawableState {
@@ -607,6 +613,7 @@ impl Game {
                 .collect(),
             craters: self.craters.cells().collect(),
             trampled: self.grass_trampled.iter().copied().collect(),
+            burnt_grass,
             volcano_shifts: self.volcanoes.iter().map(|v| v.shift).collect(),
             wave: wave.map_or(0, |w| w.index),
             alive: wave.map_or(0, |w| w.alive),
