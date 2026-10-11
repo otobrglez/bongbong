@@ -1,5 +1,6 @@
 # Test lane (Phase 6 of docs/gameplay-verification-design.md): cargo test
-# (unit + determinism + map lint) plus the budgeted probe fixture sweeps.
+# (unit + determinism + map lint), a check that the whole workspace
+# compiles, plus the budgeted probe fixture sweeps.
 # Deliberately separate from the deploy lanes (cloudflare-deploy.yml /
 # pr-preview.yml) and never touching release.yml (cargo-dist-generated).
 name: CI
@@ -61,6 +62,14 @@ jobs:
       # static map linter with its supported-map gate.
       - name: cargo test
         run: cargo test --lib
+
+      # Every workspace member's library and bins with default features, as
+      # a version tag's cargo-dist build compiles them: `cargo test --lib`
+      # builds the game's library alone, so a change that breaks a bin or
+      # another member (the ntk demos, netlab, the room server, the android
+      # crate) would otherwise first fail on the release.
+      - name: cargo check --workspace
+        run: cargo check --workspace
 
       # Budgeted probe sweeps over every fixture map - headless, no display
       # needed. The justfile recipe holds the ceilings and the policy for

@@ -77,7 +77,6 @@ fn main() {
     let tank_modules = load(&mut rl, "static/tank_modules.png");
     let tank_modules_glow = load(&mut rl, "static/tank_modules_glow.png");
     let missile = load(&mut rl, "static/missile.png");
-    let tracks = load(&mut rl, "static/tracks.png");
     let obstacles = load(&mut rl, "static/walls_sheet.png");
     let props = load(&mut rl, "static/props_sheet.png");
     let target = load(&mut rl, "static/target_sheet.png");
@@ -179,7 +178,6 @@ fn main() {
             crates: &crates,
             pickup_glyphs: &pickup_glyphs,
             portal: &portal,
-            tracks: &tracks,
             obstacles: &obstacles,
             props: &props,
             barrel_explosion: &barrel_explosion,
