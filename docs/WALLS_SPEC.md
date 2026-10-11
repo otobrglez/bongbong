@@ -9,8 +9,8 @@ All destructible obstacles in one sheet. Unlike the tank and shell sheets, these
 | Property | Value |
 |---|---|
 | Filename | `walls_sheet.png` |
-| Dimensions | 512 × 832 px |
-| Grid | 16 columns × 26 rows |
+| Dimensions | 512 × 1056 px |
+| Grid | 16 columns × 33 rows |
 | Cell size | 32 × 32 px (uniform, no padding) |
 | Format | PNG, RGBA, straight (non-premultiplied) alpha |
 
@@ -71,6 +71,10 @@ Column count varies by material. **Cells outside a material's range are empty** 
 | 20 | **Rubble — fence** | 0–7 | snapped pickets and loose wire, 8 variants |
 | 21 | **Rubble — tank** | 0–7 | blown-off hull plate and track links, 8 variants |
 | 22–25 | **Edge caps** | 0–15 | brick / iron / wood / glass, column = 4-bit neighbour mask |
+| 26–29 | **Concrete** | 0–3 | intact + 3 damage (BB-83, §11) |
+| 30 | **Edge caps — concrete** | 0–15 | as rows 22–25 |
+| 31 | **Rubble — concrete** | 0–7 | slabs and a bent bar, 8 variants |
+| 32 | **Rebar cage** | 0–1 | whole, bent by a heavy blast |
 
 ```
 row_base:  brick = 0,  iron = 4,  wood = 8,  glass = 12
@@ -410,4 +414,52 @@ stood. They fly with a shadow, bounce up to three times, then lie for
 **On the wire.** A tile's chunks travel in `TileState::chunks`, two bits of
 wear a chunk; `Event::ChunksBroken` (`WireEvent::ChunksBroken`) lets a
 replica throw the same pieces.
+
+### What a breach does (BB-82)
+
+| | |
+|---|---|
+| Spall | a shell (a blow of `spall_min_damage` 10 or more) that breaks chunks throws fragments off the tile's far face, from the broken chunks' middle carried along the blow: every tank on the other side from the shooter whose hull lies in the cone behind - within `spall_reach_px` (96) of the face and `spall_half_width_px` (12) of the blow's line past its own half-extent - takes `spall_damage` (8) falling to nothing at the reach (`Game::spall`, `HitCause::Spall`). No RNG. Its hull flashes and a spray of masonry leaves the face toward it. Off with `spall_enabled` |
+| Domino | a chunked tile that dies queues its four neighbours (`Game::pending_breaks`); `domino_delay_seconds` (0.16) later each one down to `domino_chunks` (11) standing or fewer gives way too, and queues its own. A whole tile stops the run |
+| Rubble | every broken chunk lays a unit of rubble where it stood; a shot that leaves the tile standing blows half of them into the cell behind (`Game::lay_rubble`, `chunks::Rubble`). `rubble_light` (6) units slow a hull to `rubble_light_speed` (0.85), `rubble_heavy` (14) to `rubble_heavy_speed` (0.7) (`Footing::on_rubble`, the driving paths only), and the router prices them at `rubble_light_path_cost`/`rubble_heavy_path_cost` (2, 3). Rubble never stops a shot. It travels as `Snapshot::rubble` |
+| Glass cascade | a pane that dies (but to a rod's crush) shatters a cracked neighbour `glass_cascade_seconds` (0.07) later, and that one the next; an intact neighbour takes `glass_stress_damage` (1) - a crack |
+
+Dust stays scenery: nothing a breach throws up blocks sight.
+
+---
+
+## 11. Concrete and cages (BB-83)
+
+The fifth wall material, the heavy one, in one warm `STONE_MD` grey - a step
+between brick's `STONE_LT` and iron's `STONE_DK`, so the three greys read
+apart. Rows 26–29 are its four variants, appended after every other block so
+no row moved:
+
+| Row | Type | Surface |
+|---|---|---|
+| 26 | `slab` | Smooth pour, a lift line every 16 px, form-tie holes |
+| 27 | `block` | 16 × 16 cinder blocks |
+| 28 | `panel` | Tall precast panels, a seam every 16 px |
+| 29 | `bunker` | Rough pitted aggregate, no joints |
+
+Columns 0–3: intact, chipped, cracked, battered - surface damage only, never
+a hole: concrete breaks chunk by chunk (§10, `concrete_chunk_health` 20,
+about twice brick's work). Its edge caps are row 30 (`EDGE_CAP_ROW_CONCRETE`,
+not `EDGE_CAP_ROW_BASE + 4`, which would land on its variants; the code asks
+`Material::cap_row`), its rubble row 31.
+
+A concrete map's variant is not rolled: it hashes from the map's first
+concrete cell, so a round's RNG stream is the one it was before concrete.
+
+**Cages.** Where a concrete tile would die - its chunks down to
+`wall_collapse_chunks` - it gives way into its rebar instead, and a wired
+pane (glass `reinforced`, row 13) that shatters into its mesh
+(`Obstacle::cage`). The cage stops hulls (its body is the whole cell, its nav
+cell stays blocked) and lets every shot through (`Terrain::sweep` sees a tile
+with no chunks). Shots, rams and flames do not touch it; `cage_cut_hits` (2)
+blasts of `cage_cut_damage` (15) or more cut it down, and a rail or a rod
+outright, which is when it dies and leaves its rubble. Drawn from row 32 -
+column 0 whole, column 1 bent once a blast has hit it - and a mesh from
+glass's shattered column. It throws no edge cap. Its hits left travel in
+`TileState::cage`.
 

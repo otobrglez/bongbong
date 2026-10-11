@@ -217,6 +217,81 @@ impl Chunks {
     }
 }
 
+/// How much rubble lies on a cell (`Rubble::level`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RubbleLevel {
+    Clear,
+    Light,
+    Heavy,
+}
+
+/// The rubble on the field, by cell (BB-82): every broken chunk lays a unit
+/// where it stood and, blown out by a shot, a unit in the cell behind
+/// (`Game::lay_rubble`). Light rubble (`rubble_light` units) and heavy
+/// (`rubble_heavy`) slow a hull (`rubble_*_speed`) and cost the router
+/// (`rubble_*_path_cost`); they never stop a shot. Simulation state: the
+/// pieces a player sees lying there are cosmetic and only roughly agree.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Rubble {
+    cells: std::collections::BTreeMap<(i32, i32), u8>,
+}
+
+/// The most units a cell holds: past heavy, more changes nothing.
+pub const RUBBLE_MAX: u8 = 64;
+
+impl Rubble {
+    pub fn clear(&mut self) {
+        self.cells.clear();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cells.is_empty()
+    }
+
+    /// The units on `cell`.
+    pub fn units(&self, cell: (i32, i32)) -> u8 {
+        self.cells.get(&cell).copied().unwrap_or(0)
+    }
+
+    /// Lay `units` more on `cell`. Returns whether its level changed - the
+    /// router's prices with it.
+    pub fn add(&mut self, cell: (i32, i32), units: u32) -> bool {
+        if units == 0 {
+            return false;
+        }
+        let was = self.level(cell);
+        let n = self.cells.entry(cell).or_insert(0);
+        *n = (*n as u32 + units).min(RUBBLE_MAX as u32) as u8;
+        self.level(cell) != was
+    }
+
+    /// Put `cell` at exactly `units` (a replica, from the wire).
+    pub fn set(&mut self, cell: (i32, i32), units: u8) {
+        if units == 0 {
+            self.cells.remove(&cell);
+        } else {
+            self.cells.insert(cell, units.min(RUBBLE_MAX));
+        }
+    }
+
+    pub fn level(&self, cell: (i32, i32)) -> RubbleLevel {
+        let t = crate::tuning::tuning();
+        let n = self.units(cell) as i32;
+        if n >= t.rubble_heavy {
+            RubbleLevel::Heavy
+        } else if n >= t.rubble_light {
+            RubbleLevel::Light
+        } else {
+            RubbleLevel::Clear
+        }
+    }
+
+    /// Every cell with rubble on it and its units, in cell order.
+    pub fn cells(&self) -> impl Iterator<Item = ((i32, i32), u8)> + '_ {
+        self.cells.iter().map(|(&c, &n)| (c, n))
+    }
+}
+
 /// The top-left corner of the tile centred on `center`.
 pub fn origin(center: Position) -> Position {
     Position::new(center.x - OBSTACLE_GRID_SIZE / 2.0, center.y - OBSTACLE_GRID_SIZE / 2.0)
@@ -309,6 +384,20 @@ mod tests {
         assert_eq!(ch.solid_box(), Some((Vec2::new(8.0, 0.0), Vec2::new(8.0, 16.0))));
         ch.break_all();
         assert_eq!(ch.solid_box(), None);
+    }
+
+    #[test]
+    fn rubble_piles_up_light_then_heavy() {
+        let t = crate::tuning::tuning();
+        let mut r = Rubble::default();
+        let cell = (3, 4);
+        assert_eq!(r.level(cell), RubbleLevel::Clear);
+        assert!(r.add(cell, t.rubble_light as u32), "light is a change of level");
+        assert_eq!(r.level(cell), RubbleLevel::Light);
+        assert!(!r.add(cell, 1) || t.rubble_heavy == t.rubble_light + 1);
+        r.add(cell, 200);
+        assert_eq!(r.level(cell), RubbleLevel::Heavy);
+        assert_eq!(r.units(cell), RUBBLE_MAX);
     }
 
     #[test]
