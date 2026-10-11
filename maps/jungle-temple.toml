@@ -1623,7 +1623,7 @@ material = "wood"
 
 [cells."13,23"]
 kind = "pickup"
-pickup = "minigun"
+pickup = "fpv_swarm"
 
 [cells."36,20"]
 kind = "tall_grass"

@@ -948,7 +948,7 @@ kind = "road"
 
 [cells."24,23"]
 kind = "pickup"
-pickup = "speedup"
+pickup = "grenades"
 
 [cells."1,9"]
 kind = "fence"

@@ -125,7 +125,7 @@ kind = "tree"
 
 [cells."8,7"]
 kind = "pickup"
-pickup = "plasma"
+pickup = "sonic_hammer"
 
 [cells."9,20"]
 kind = "pine"

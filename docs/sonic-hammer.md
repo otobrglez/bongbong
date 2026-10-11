@@ -535,12 +535,19 @@ the general case:
   special carried.
 - **`maps/armory.toml`**, appended to the free-play maps of `SHIPPED_MAPS`
   (after `longwater`), so the web preview's LOAD list and the lobby's map
-  stepper reach it. An arena (36 x 18, shown whole), `mission.kind =
-  "protect"`, a band of four, clear sky - the one shipped map that is not
-  a field map, which `map::toml_tests::every_shipped_map_is_a_field_map`
-  names, since the BB-36 weapons' cells are laid out on its 36 x 18. Each later weapon adds its crate
-  to the reserved column and whatever its interactions need. Every level
-  is untouched.
+  stepper reach it. An arena (40 x 22 since the gravity well's builder
+  re-save, shown whole), `mission.kind = "protect"`, a band of four, clear
+  sky - the one shipped map that is not a field map, which
+  `map::toml_tests::every_shipped_map_is_a_field_map` names, since the
+  BB-36 weapons' cells are laid out on it. Each later weapon adds its crate
+  to the reserved column and whatever its interactions need; the laser,
+  plasma, minigun and flamethrower stand beside that column (11,6 to 11,12),
+  so free play has every weapon. The plan below is the first, 36 x 18 cut.
+- **In the campaign** (BB-46, docs/levels.md, "The weapons along the way"): the hammer's first crate is Vulkan's
+  (level 2, 35,27), west of the start towards the southern river's stone
+  crossing - a shove into the lava is the hammer's "trouble", and the heat
+  shields are the answer to an enemy's; Glasshouses (level 3) has a second
+  at 8,7, in the west glass house it breaks open.
 
   ```
        0         1         2         3
@@ -1419,7 +1426,7 @@ events on the two maps). How such a pack should play is a question for Oto (§12
 
 ### Not in this PR
 
-- Placing the hammer in the shipped levels - level design, a follow-up.
+- Placing the hammer in the shipped levels - done in BB-46 (§3.5).
 - A "SPOTTED" label over a seat the wave uncovers (the armory scene's) -
   the flattened grass is the reveal; a word over the field is HUD design.
 - A tell's pulse on the minimap - the arrow is the warning; the minimap

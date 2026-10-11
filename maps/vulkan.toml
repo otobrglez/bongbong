@@ -13,7 +13,8 @@
 #
 # The players start in the south-east by the frog's sandbag ring. Three
 # heat shields lie by the rivers; trees on the banks catch fire when an
-# eruption's surge comes past.
+# eruption's surge comes past. A sonic hammer waits west of the start, near
+# the southern river's stone crossing, to shove a tank into the lava.
 
 version = 1
 tanks = 5
@@ -802,7 +803,7 @@ kind = "tree"
 
 [cells."35,27"]
 kind = "pickup"
-pickup = "ammo"
+pickup = "sonic_hammer"
 
 [cells."43,27"]
 kind = "sandbag"

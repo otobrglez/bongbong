@@ -5,7 +5,9 @@ time like every other (`Tank::take_weapon`): a crate loads
 `grenade_ammo_per_pickup` (6) grenades into the launcher's drum, a re-pick
 stacks six more up to `grenade_ammo_max` (12; the drum shows one crate's
 worth, full while spares are carried), another weapon's crate replaces it. Player-only - an enemy
-drives over the crate and leaves it where it is (`Tank::wants_pickup`).
+drives over the crate and leaves it where it is (`Tank::wants_pickup`). A
+campaign player meets it in Oasis Bazaar, level 4 (docs/levels.md, "The
+weapons along the way").
 
 ## How it plays
 

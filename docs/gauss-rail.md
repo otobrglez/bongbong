@@ -655,6 +655,16 @@ between the brick stub (28,5..7, where the EMP's review moved it off the
 HUD's rows) and the screen. The armory's CPU thumbnail pin is re-baselined
 for the crates and the walls.
 
+### 3.5 In the campaign
+
+BB-46 (docs/levels.md, "The weapons along the way"): Harbor Lights (level 9)
+has the rail's crate at 4,20 in the warehouse yard, inside the start's sight
+box (its laser moved up to the town at 6,7): brick and glass warehouses and
+iron only at the lighthouse, so a slug crosses the town. Row 20 also runs
+through the players' own frog on the beach (34,20), and a slug hurts either
+side's frog. It is never on a Hunt map, where two slugs kill the hunted
+frog.
+
 ## 4. AI
 
 An enemy carrying the rail uses it by `gauss_rule`, never through the
@@ -1595,7 +1605,7 @@ as with every lane traced, and so are the defaults'.
 
 ### Not in this PR
 
-- Placing the rail in the shipped levels - level design, a follow-up.
+- Placing the rail in the shipped levels - done in BB-46 (§3.5).
 - A lane measured by each tank's own reach. Its half width is the widest
   chassis's movement box (25.2 px) and the slug's 4 for every tank, where
   the pierce test grows a tank's hull box at its facing by 4 and, for a

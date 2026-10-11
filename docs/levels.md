@@ -118,6 +118,53 @@ on a level - `LEVEL 3` with a wave round's `2/5` beside it; the mission word
 is the opening banner's - and free play keeps its mission word, Esc being
 its way to the level select.
 
+## The weapons along the way
+
+Every special weapon is met somewhere in the campaign, about one new one a
+level or two, the plain ones early and the ones that change a fight late. A
+level's crates are its map's fixed `pickup` cells: no slot rolls its kind,
+no random roll or bonus drop makes a special (only health's bonus rolls
+shields and packs), and a map cannot set tuning - so a crate placed in a
+level is the only way a campaign player meets a weapon, and the only way an
+enemy there carries one of the six BB-36 weapons.
+
+| Level | Weapon crates | Met first here |
+|---|---|---|
+| 0 Boot Camp | minigun | minigun |
+| 1 Lotus Lagoon | missiles, minigun, plasma | missiles, plasma |
+| 2 Vulkan | sonic hammer (35,27) | sonic hammer - shove a tank into the lava |
+| 3 Glasshouses | plasma, laser, minigun, missiles, flamethrower, sonic hammer (8,7) | laser, flamethrower; the hammer again, to break the glass |
+| 4 Oasis Bazaar | flamethrower, plasma, missiles, grenades (24,23) | grenades - lobbed over the compound's towered gate |
+| 5 Carnival | laser, missiles, flamethrower, plasma, EMP burst (19,11) | EMP - eight tanks and a field of missile crates |
+| 6 Jungle Temple | plasma, laser, minigun, flamethrower, missiles, FPV swarm (13,23) | FPV swarm - over the temple walls; the miniguns beside it are the counter |
+| 7 Hedge Maze | laser, plasma, missiles | |
+| 8 Archipelago | laser, missiles, plasma | |
+| 9 Harbor Lights | laser (6,7), plasma, missiles, gauss rail (4,20) | gauss rail - through brick and glass warehouses, little iron |
+| 10 Serpent River | plasma, missiles, laser | |
+| 11 No Man's Land | missiles, minigun, flamethrower, rod from god (25,19) | rod from god - waves in the open, no frog to lose |
+| 12 Scrapyard | flamethrower, missiles, minigun | |
+| 13 Black Gold | flamethrower, plasma, minigun, missiles, gravity well (1,13) | gravity well - drums pulled together on the fuse lines |
+| 14 Castle Moat | laser, minigun, missiles | |
+| 15 Grand Campaign | plasma, laser, flamethrower, missiles, minigun, rod from god (31,17) | the rod again, against the super-heavies |
+
+The placements follow these rules:
+
+- **The player's side.** A weapon's first crate lies near the start, inside
+  its sight box where it can, so the players reach it before an enemy does.
+  Enemies collect a weapon crate while they are on shells
+  (`Tank::wants_pickup`), so an enemy that gets there first fights with it.
+- **No rod or rail on a Hunt.** The rod's circle kills any frog in it and
+  two slugs do too, so on a Hunt map either would end the hunt in one press.
+- **Kept setup draws.** A crate takes over a spare ammo or speed-up cell, or
+  one cell of a cluster, never a health cell (only health draws its bonus
+  roll when a round starts, so the round's opening draws are unchanged),
+  never a level's only ammo and never its only crate of an older weapon. No
+  Man's Land, with no spare slot, gains one cell.
+
+`armory` (free play, `-m maps/armory.toml`) keeps every weapon side by side:
+the BB-36 six and the grenades down the player's column, the laser, plasma,
+minigun and flamethrower beside them, and the enemy's own crates opposite.
+
 ## Words
 
 The English titles are `levels.toml`'s. Another language translates a title

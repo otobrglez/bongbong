@@ -585,6 +585,14 @@ inside, and the corridor notes it had; the band routes round the player
 gun tower's reach (`player_tower_reach`). The armory's CPU thumbnail pin
 is re-baselined for the crates, the trees and the tower.
 
+### 3.5 In the campaign
+
+BB-46 (docs/levels.md, "The weapons along the way"): Jungle Temple (level 6)
+has the swarm's crate at 13,23, beside the two miniguns that are its
+counter: drones fly over the temple's walls, the wood's canopy hides a seat
+from an enemy's dive, and the players' four gun towers round the frog shoot
+enemy drones down.
+
 ## 4. AI
 
 An enemy carrying drones uses them by `fpv_rule`, never through the generic
@@ -1620,7 +1628,7 @@ the AI tiers its tank ran over the frames before):
 
 ### Not in this PR
 
-- Placing the swarm in the shipped levels - level design, a follow-up.
+- Placing the swarm in the shipped levels - done in BB-46 (§3.5).
 - Drones on the minimap.
 - A hit arc for a drone's burst (the missiles' burst has none either).
 - The hammer's AI shouting down a drone diving at it - the `air` tier's

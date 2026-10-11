@@ -1124,7 +1124,7 @@ kind = "water"
 
 [cells."19,11"]
 kind = "pickup"
-pickup = "laser"
+pickup = "emp_burst"
 
 [cells."30,3"]
 kind = "barrel"

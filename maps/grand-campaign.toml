@@ -12,7 +12,8 @@
 #
 # A pair of portals links the forest to the depot for a fast flank. Laser and
 # missiles in the town, flamethrower at the depot, shield and frog health in
-# the fort, health and ammo along the roads.
+# the fort, a rod from god on the lake shore beside it, health and ammo along
+# the roads.
 
 version = 1
 size = [67, 34]
@@ -421,7 +422,7 @@ cells."27,17" = { kind = "water" }
 cells."28,17" = { kind = "water" }
 cells."29,17" = { kind = "water" }
 cells."30,17" = { kind = "water" }
-cells."31,17" = { kind = "pickup", pickup = "ammo" }
+cells."31,17" = { kind = "pickup", pickup = "rod_from_god" }
 cells."36,17" = { kind = "pickup", pickup = "shield" }
 cells."42,17" = { kind = "start2" }
 cells."45,17" = { kind = "wall", material = "brick" }

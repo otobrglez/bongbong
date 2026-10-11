@@ -10,9 +10,9 @@
 # hedgehogs, runs of wire with gaps a hull can take, flooded shell craters and
 # the shattered walls of an outpost.
 #
-# Missiles and a flamethrower in the dugouts, health and ammo behind the line,
-# a minigun in the ruined outpost for whoever gets there first, a shield and a
-# speed-up out on the flanks.
+# Missiles and a flamethrower in the dugouts, health, ammo and a rod from god
+# behind the line, a minigun in the ruined outpost for whoever gets there
+# first, a shield and a speed-up out on the flanks.
 
 version = 1
 size = [50, 25]
@@ -218,6 +218,7 @@ cells."5,19" = { kind = "pine" }
 cells."14,19" = { kind = "pine" }
 cells."15,19" = { kind = "start" }
 cells."19,19" = { kind = "pickup", pickup = "health" }
+cells."25,19" = { kind = "pickup", pickup = "rod_from_god" }
 cells."29,19" = { kind = "pickup", pickup = "ammo" }
 cells."35,19" = { kind = "start2" }
 cells."37,19" = { kind = "pine" }
