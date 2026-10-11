@@ -166,7 +166,6 @@ tunables! {
         /// Damage multiplier on everything this chassis fires.
         tank_damage_factor: [f32; 12] = [/* ... */] in 0.2 ..= 5.0 labels TANK_NAMES;
         tank_muzzle_forward_offset: [f32; 12] = [/* ... */] in 0.0 ..= 32.0 labels TANK_NAMES;
-        track_weight_opacity: [f32; 12] = [/* ... */] in 0.0 ..= 1.0 labels TANK_NAMES;
     }
     group walls {
         /// Hit points per material; iron plateaus at rust, never destroyed.

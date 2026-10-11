@@ -1920,6 +1920,7 @@ fn lift_trails(game: &mut Game, slots: &BTreeSet<usize>) {
     for tank in game.world.query::<&mut Tank>().iter() {
         if slots.contains(&tank.owner_slot()) {
             tank.track_from = None;
+            tank.tread.heading = None;
         }
     }
 }
@@ -2296,8 +2297,13 @@ mod tests {
             round.frame(&Intent::default(), 1.0 / 60.0);
         }
         let start = round.own_hull_at().expect("a hull");
-        let tracks_before = round.game().expect("a replica").tracks.len();
         let there = (start.0 - 96.0, start.1);
+        // A block pressed between where it stood and where it landed, clear
+        // of both hulls' footprints, could only be a trail across the gap.
+        let across = |g: &crate::simulation::Game| {
+            g.wear().blocks().filter(|(p, _)| p.x > there.0 + 24.0 && p.x < start.0 - 24.0 && (p.y - start.1).abs() < 24.0).count()
+        };
+        assert_eq!(across(round.game().expect("a replica")), 0);
         let mut placed = encode::snapshot(&room.game, [0; MAX_SEATS]);
         placed.tick = 2;
         placed.server_ms = room.server_ms + 33;
@@ -2308,7 +2314,7 @@ mod tests {
         }
         let landed = round.own_hull_at().expect("a hull");
         assert!((landed.0 - there.0).abs() < 0.5, "not placed: {landed:?} vs {there:?}");
-        assert_eq!(round.game().expect("a replica").tracks.len(), tracks_before, "tread marks were pressed across the placement");
+        assert_eq!(across(round.game().expect("a replica")), 0, "tread marks were pressed across the placement");
     }
 
     /// **Own shells meet opposing ones in the picture** where the room's
@@ -3040,7 +3046,7 @@ mod tests {
         let (mut room, mut round) = room_and_round();
         room.welcome();
         round.frame(&Intent::default(), 1.0 / 60.0);
-        let tracks_before = round.game().expect("a replica").tracks.len();
+        let tracks_before = round.game().expect("a replica").wear().presses();
         let enemy = room.game.tank_snapshots().into_iter().find(|t| t.slot == 1).expect("an enemy in slot 1");
         let from = enemy.position;
         let to = crate::math::Vec2::new(from.x + 40.0, from.y);
@@ -3079,7 +3085,7 @@ mod tests {
         assert!(replica.frame() >= 10, "the picture passed the hop: frame {}", replica.frame());
         let drawn = replica.tank_snapshots().into_iter().find(|t| t.slot == 1).expect("the enemy");
         assert!(drawn.position.distance_to(to) < 1.0, "drawn where it landed: {:?}", drawn.position);
-        assert_eq!(replica.tracks.len(), tracks_before, "tread marks were pressed across the hop");
+        assert_eq!(replica.wear().presses(), tracks_before, "tread marks were pressed across the hop");
     }
 
     /// Every reading of the interpolator's report reaches `stats_json`,

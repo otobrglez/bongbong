@@ -69,7 +69,7 @@ Things the code already has that a barrel does *not* use:
   gets none.
 - **Thrown debris** (`Decal::thrown`, the arc/flight/shadow machinery): a
   wreck throws 5 parts; a barrel drops one static decal in place.
-- **Scorched tread marks** (`scorch_tracks`): a kill burns the last tracks
+- **Scorched tread marks** (`char_marks`, docs/ground-memory.md): a kill burns the last tracks
   under it; a barrel does not.
 - **Burning tiles and their emitters** (`Obstacle::tick_burn`,
   `Game::burning_tiles`, the `wood_ember_rate`/`wood_smoke_rate` sampling

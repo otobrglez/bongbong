@@ -80,6 +80,15 @@ enum Material {
     Water,
 }
 
+/// What the ground's tiles lay at a point (`GroundGrid::floor_at`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroundFloor {
+    Grass,
+    Road,
+    Sand,
+    Water,
+}
+
 /// What one map cell lays on the floor: its place in the three lists
 /// `build` takes - `road` (a road, or a wall, which stands on dirt),
 /// `water`, and `wall`, which the floor shade gathers round. Road over
@@ -493,6 +502,34 @@ impl GroundGrid {
         let mut touched: Vec<(i32, i32)> = touched.into_iter().collect();
         touched.sort_by_key(|&(x, y)| (y, x));
         touched
+    }
+
+    /// What the tiles lay at field px `pos`: grass, a road, sand where a
+    /// drift's corner reaches that quarter of its cell (the grain the
+    /// corner autotile lays sand on), or water. The ground's marks take
+    /// their colours by it (`wear.rs`).
+    pub fn floor_at(&self, pos: Position) -> GroundFloor {
+        let (ox, oy) = self.layout.origin;
+        let (c, r) = crate::map::world_to_cell(pos);
+        let (x, y) = (c - ox, r - oy);
+        match self.layout.at(x, y) {
+            Material::Road => GroundFloor::Road,
+            Material::Water => GroundFloor::Water,
+            Material::Grass => {
+                let Some(i) = self.idx(x, y) else { return GroundFloor::Grass };
+                let Some(mask) = SAND_CORNER.iter().position(|&tile| tile == self.tiles[i][0]) else { return GroundFloor::Grass };
+                let centre = crate::map::cell_to_world(c, r);
+                let (right, below) = (pos.x >= centre.x, pos.y >= centre.y);
+                // bit3 TL, bit2 TR, bit1 BR, bit0 BL.
+                let bit = match (right, below) {
+                    (false, false) => 3,
+                    (true, false) => 2,
+                    (true, true) => 1,
+                    (false, true) => 0,
+                };
+                if mask & (1 << bit) != 0 { GroundFloor::Sand } else { GroundFloor::Grass }
+            }
+        }
     }
 
     /// How deep the water in map cell `(col, row)` is, by the reading the

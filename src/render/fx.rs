@@ -9,7 +9,7 @@
 
 use sola_raylib::prelude::*;
 
-use crate::fx::{Fx, Particle, ParticleKind, EMBER_T, FIRE_T, SOOT_T, WHITE_T};
+use crate::fx::{Fx, Particle, ParticleKind, EMBER_T, FIRE_T, KICK_DESERT, KICK_DUST, KICK_SNOW, SOOT_T, WHITE_T};
 use crate::math::{Color, Rectangle, Vec2};
 use crate::view::culled;
 use crate::pyro::{self, Puff, BLOCK, FIRE, SMOKE};
@@ -22,7 +22,7 @@ use crate::tuning::tuning;
 /// batch, so interleaving them would cost one batch per particle instead
 /// of two for the whole layer.
 pub fn draw(fx: &Fx, d: &mut impl RaylibDraw, cull: Option<Rectangle>) {
-    let shown = |p: &&Particle| !culled(cull, p.pos);
+    let shown = |p: &&Particle| !culled(cull, p.pos) && !p.kind.on_ground();
     for p in fx.particles().iter().filter(|p| !p.kind.additive()).filter(shown) {
         draw_particle(d, p);
     }
@@ -35,11 +35,32 @@ pub fn draw(fx: &Fx, d: &mut impl RaylibDraw, cull: Option<Rectangle>) {
     }
 }
 
+/// Draw what lies on the ground - a hull's dust and powder, a ford's
+/// foam - in the lit field (`paint_field_lit`), under the hulls and the
+/// light pass, so it darkens at night and shows in a headlight's beam.
+pub fn draw_ground(fx: &Fx, d: &mut impl RaylibDraw, cull: Option<Rectangle>) {
+    for p in fx.particles().iter().filter(|p| p.kind.on_ground() && !culled(cull, p.pos)) {
+        draw_particle(d, p);
+    }
+}
+
 impl ParticleKind {
     /// Drawn inside the additive blend block: light, not matter.
     fn additive(self) -> bool {
         matches!(self, ParticleKind::Spark | ParticleKind::Ember)
     }
+
+    /// Drawn with the floor in the lit field (`draw_ground`), not over
+    /// the scene.
+    fn on_ground(self) -> bool {
+        matches!(self, ParticleKind::Kick | ParticleKind::Foam)
+    }
+}
+
+/// The shadow and lit steps of a hull's dust whose body is `body`.
+fn kick_shades(body: Color) -> (Option<Color>, Option<Color>) {
+    let same = |a: Color, b: Color| a.r == b.r && a.g == b.g && a.b == b.b;
+    [KICK_DUST, KICK_DESERT, KICK_SNOW].iter().find(|ramp| same(ramp[1], body)).map_or((None, None), |ramp| (Some(ramp[0]), Some(ramp[2])))
 }
 
 /// Fire cools as it ages: white, pale gold, gold, red, deep red.
@@ -144,6 +165,25 @@ fn draw_particle(d: &mut impl RaylibDraw, p: &Particle) {
                 lit: lit.map(fade),
                 core: None,
                 cover: if plume { k.min(1.0) } else { 1.0 },
+            };
+            pyro::draw_puff(&mut b, &puff);
+        }
+        // Ground thrown up: a shaded puff that dissolves through the
+        // Bayer pattern to half, then thins in eighths; foam on the water
+        // is one colour and dissolves the same way.
+        ParticleKind::Kick | ParticleKind::Foam => {
+            let cover = 1.0 - t;
+            let k = if cover < 0.5 { cover * 2.0 } else { 1.0 };
+            let (shadow, lit) = if p.kind == ParticleKind::Kick { kick_shades(p.tint) } else { (None, None) };
+            let fade = |c: Color| pyro::alpha(c, k);
+            let puff = Puff {
+                pos: at,
+                radius: (p.size * 0.5).max(BLOCK),
+                body: fade(p.tint),
+                shadow: shadow.map(fade),
+                lit: lit.map(fade),
+                core: None,
+                cover: cover.max(0.5),
             };
             pyro::draw_puff(&mut b, &puff);
         }

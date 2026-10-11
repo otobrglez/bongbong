@@ -52,17 +52,25 @@ impl BlockTexture {
                 let texture = rl.load_texture_from_image(thread, &blank).ok()?;
                 self.held = Some((0, image.width, image.height, texture));
             }
+            // Patches far apart (a tile atlas's scattered slots) go up one
+            // by one; close together, as their one bounding rectangle.
+            let parts: Vec<crate::canvas::BlockPatch> = match (patch, held.and_then(|(stamp, ..)| image.patches_since(stamp))) {
+                (Some(whole), Some(parts)) if parts.len() > 1 && 2 * parts.iter().map(|p| p.width * p.height).sum::<usize>() < whole.width * whole.height => parts.to_vec(),
+                (Some(whole), _) => vec![whole],
+                (None, _) => Vec::new(),
+            };
             let (stamp, _, _, texture) = self.held.as_mut()?;
             match patch {
-                Some(p) if p.width > 0 && p.height > 0 => {
-                    let bytes: Vec<u8> = (p.y..p.y + p.height)
-                        .flat_map(|y| &image.texels[y * image.width + p.x..y * image.width + p.x + p.width])
-                        .flat_map(|c| [c.r, c.g, c.b, c.a])
-                        .collect();
-                    let rect = Rectangle::new(p.x as f32, p.y as f32, p.width as f32, p.height as f32);
-                    texture.update_texture_rec(rect, &bytes).ok()?;
+                Some(_) => {
+                    for p in parts.iter().filter(|p| p.width > 0 && p.height > 0) {
+                        let bytes: Vec<u8> = (p.y..p.y + p.height)
+                            .flat_map(|y| &image.texels[y * image.width + p.x..y * image.width + p.x + p.width])
+                            .flat_map(|c| [c.r, c.g, c.b, c.a])
+                            .collect();
+                        let rect = Rectangle::new(p.x as f32, p.y as f32, p.width as f32, p.height as f32);
+                        texture.update_texture_rec(rect, &bytes).ok()?;
+                    }
                 }
-                Some(_) => {}
                 None => {
                     let bytes: Vec<u8> = image.texels.iter().flat_map(|c| [c.r, c.g, c.b, c.a]).collect();
                     texture.update_texture(&bytes).ok()?;

@@ -31,7 +31,7 @@ byte-identically.
 ## Trigger and arrival (`Game::portal_phase`)
 
 The phase runs after `pickup_phase` and before `step_world`, so the body and `tank.position`
-already agree when `sync_tanks_and_ram` measures travel and `lay_tracks` sees no jump.
+already agree when `sync_tanks_and_ram` measures travel and `press_treads` sees no jump.
 
 - **Trigger**: a live, non-wreck tank with a body whose centre is within
   `portal_trigger_radius` (40 px) of an anchor, with `Tank::portal_cooldown` at zero.

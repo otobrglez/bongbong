@@ -702,32 +702,6 @@ impl Game {
         }
     }
 
-    /// The drain (the "at 11", cosmetic): tread marks within a pulling
-    /// well's reach creep toward its core and turn about it, clockwise; one
-    /// that reaches the core is gone. Run by `well_phase`'s round and by a
-    /// replica's `tick_presentation`, from the field alike. No RNG.
-    pub(crate) fn drain_marks(&mut self, dt: f32, field: &WellField) {
-        if field.is_empty() {
-            return;
-        }
-        let t = tuning();
-        for track in &mut self.tracks {
-            let Some((_, c, s)) = field.strongest(track.position, &t) else { continue };
-            let off = track.position - c;
-            let d = off.length();
-            if d <= t.well_core_px {
-                track.age = f32::MAX * 0.5;
-                continue;
-            }
-            let turn = t.well_mark_twist * s * dt;
-            let (sin, cos) = math::sin_cos(turn);
-            let rotated = Vec2::new(off.x * cos - off.y * sin, off.x * sin + off.y * cos);
-            let pulled = rotated * ((d - t.well_mark_speed * s * dt).max(0.0) / d);
-            track.position = c + pulled;
-            track.rotation += turn.to_degrees();
-        }
-    }
-
     /// Tall grass within a pulling well's reach bows toward its core's side
     /// and lies half flat (cosmetic; `GrassTuft::push` and `crush`, which
     /// `tick_grass` recovers once the pull is gone).

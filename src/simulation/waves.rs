@@ -34,7 +34,7 @@ use crate::tank::Tank;
 use crate::tuning::tuning;
 use crate::Position;
 
-use super::{field, lay_tracks, roll_enemy_tank, roll_role, with_frog, with_tank, with_tank_mut, Event, Frame, Game, TANK_SPRITE_ORDER};
+use super::{field, roll_enemy_tank, roll_role, with_frog, with_tank, with_tank_mut, Event, Frame, Game, TANK_SPRITE_ORDER};
 
 /// What lane `Game::pick_gate` found for the next roll-in.
 #[derive(Clone, Copy, Debug)]
@@ -195,6 +195,7 @@ impl Game {
     /// again the frame it is through the gate.
     pub(super) fn rollin_phase(&mut self, f: &mut Frame) {
         let factor = tuning().wave_rollin_speed_factor;
+        let (look, now) = (self.wear_look(), self.time);
         let mut arrived: Vec<(Entity, usize)> = Vec::new();
         for (entity, tank, roll) in self.world.query::<(Entity, &mut Tank, &RollIn)>().iter() {
             let before = tank.position;
@@ -214,7 +215,8 @@ impl Game {
             }
             tank.ease_visual_rotation(f.dt);
             tank.ease_turret_visual_rotation(f.dt);
-            lay_tracks(&mut self.tracks, tank, before, self.water.depth_at(tank.position));
+            let floor = super::wear::Underfoot { ground: &self.ground, water: &self.water, lava: &self.lava, craters: &self.craters };
+            super::wear::press_treads(&mut self.wear, tank, before, f.dt, &floor, look, now);
         }
         for (entity, slot) in arrived {
             let (pos, half, mass) =
@@ -482,10 +484,8 @@ impl Game {
                 row: t.row,
                 shell_variant: t.shell_variant,
                 damage_variant: t.damage_variant,
-                track_wobble_amp: t.track_wobble_amp,
-                track_wobble_freq: t.track_wobble_freq,
-                track_wobble_phase: t.track_wobble_phase,
-                track_scale_jitter: t.track_scale_jitter,
+                tread_phase: t.tread_phase,
+                tread_press: t.tread_press,
                 position: gate.outside,
                 rotation,
                 visual_rotation: rotation,

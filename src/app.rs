@@ -1491,9 +1491,6 @@ pub fn run(args: Args) {
     let missile_texture = rl
         .load_texture(&thread, "static/missile.png")
         .expect("failed loading missile texture");
-    let tracks_texture = rl
-        .load_texture(&thread, "static/tracks.png")
-        .expect("failed loading tracks texture");
     let obstacles_texture = rl
         .load_texture(&thread, "static/walls_sheet.png")
         .expect("failed loading obstacles texture");
@@ -1568,10 +1565,11 @@ pub fn run(args: Args) {
     // indicators, aged on the time the round ran.
     let mut voice = crate::bubble::FrogVoice::default();
     // The GPU copies of what the round and the builder bake: the floor
-    // shade (`ground::GroundGrid::shade`), the lava's banks and the
-    // pictures it keeps between frames, the cones
-    // (`Game::with_block_images`) - uploaded where a bake changed them, a
-    // new round or a builder edit, and drawn a quad each.
+    // shade (`ground::GroundGrid::shade`), the ground's worn cells, the
+    // forest floor, the lava's banks and the pictures it keeps between
+    // frames, the cones (`Game::with_block_images`) - uploaded where a
+    // bake changed them, a new round or a builder edit, and drawn a quad
+    // each.
     let mut round_blocks = crate::render::canvas::BlockTextures::default();
     let mut builder_shade = crate::render::canvas::BlockTexture::default();
     // The minimaps (minimap.rs): the round's, baked once per round and
@@ -2755,7 +2753,6 @@ pub fn run(args: Args) {
                 plasma: &plasma_texture,
                 minigun_bullets: &minigun_bullets_texture,
                 missile: &missile_texture,
-                tracks: &tracks_texture,
                 obstacles: &obstacles_texture,
                 props: &props_texture,
                 barrel_explosion: &barrel_explosion_texture,
