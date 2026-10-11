@@ -193,6 +193,8 @@ pub struct Particle {
 #[derive(Default)]
 pub struct Fx {
     particles: Vec<Particle>,
+    /// What broken wall chunks threw (`pieces.rs`), flying and lying.
+    pieces: crate::pieces::Pieces,
     /// The last `Game::frame()` `observe` consumed. The dev server can
     /// render many times without advancing (`pause`, `step`), and
     /// `Game::events` still holds the previously advanced frame's
@@ -304,11 +306,17 @@ impl Fx {
         &self.particles
     }
 
+    /// The wall pieces (`pieces.rs`), for the field painter.
+    pub fn pieces(&self) -> &crate::pieces::Pieces {
+        &self.pieces
+    }
+
     /// Drop everything. Called when a new round starts - the `Fx` outlives
     /// `Game::init`, which knows nothing about it, so without this the
     /// previous round's smoke hangs over the new one's opening frame.
     pub fn clear(&mut self) {
         self.particles.clear();
+        self.pieces.clear();
         self.accum.clear();
         self.wading.clear();
         self.trail_last.clear();
@@ -638,6 +646,9 @@ impl Fx {
                         }
                     }
                     Event::ObstacleDestroyed { material, x, y } => self.tile_death(material, Position::new(x, y)),
+                    Event::ChunksBroken { material, variant, x, y, broken, dx, dy, collapsed } => {
+                        self.pieces.throw(material, variant, Position::new(x, y), broken, Vec2::new(dx, dy), collapsed)
+                    }
                     // A gauss rail's slug through a hull or a tile, or a
                     // rod crushing one: the flash alone - the bursts are
                     // the slug's own (`gauss::compose_slug`) and the rod's
@@ -1340,6 +1351,7 @@ impl Fx {
     }
 
     pub fn tick(&mut self, dt: f32) {
+        self.pieces.tick(dt);
         self.impacts.retain_mut(|i| {
             i.age += dt;
             i.age < i.kind.seconds()

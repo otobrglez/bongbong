@@ -50,6 +50,10 @@ pub(crate) struct TerrainBox {
     pub material: Material,
     /// Wood already alight: still solid, but further damage is a no-op.
     pub burning: bool,
+    /// A chunked tile with chunks broken (`chunks.rs`): the ones still
+    /// standing. A shot is tested against those and passes the gaps - a
+    /// loophole. `None` for a tile that is whole or breaks whole.
+    pub chunks: Option<u16>,
 }
 
 /// Static terrain snapshot for one frame - see the module doc. Built once
@@ -209,6 +213,7 @@ impl Terrain {
                     half: battlefield::tile_half_extent(o.material, &cells, gx, gy, o.hull_size() * 0.5),
                     material: o.material,
                     burning: o.burning,
+                    chunks: o.chunks.filter(|c| c.count() < crate::chunks::CHUNKS as u32).map(|c| c.standing()),
                 }
             })
             .collect();
@@ -485,7 +490,11 @@ impl Terrain {
             if shooter.is_tower() && !b.material.blocks_sight() {
                 continue;
             }
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, b.center, b.half + pad), 3, ShellTarget::Obstacle(b.entity));
+            let entry = match b.chunks {
+                Some(standing) => segment_hits_chunks(p0, p1, b.center, b.half + pad, standing, half_extent),
+                None => segment_hits_aabb(p0, p1, b.center, b.half + pad),
+            };
+            consider_hit(&mut best, entry, 3, ShellTarget::Obstacle(b.entity));
         }
 
         for &(center, half) in &self.walls {
@@ -729,6 +738,37 @@ pub(super) fn obstacle_reflect_axis(prev: Position, hit: &TerrainBox) -> (bool, 
 /// `t_enter` starts at `0.0`, so a segment that begins inside the box
 /// reports an immediate hit rather than a negative time, and a zero-length
 /// segment degenerates to a point-in-box test.
+/// `segment_hits_aabb` against a chunked tile's standing chunks
+/// (`chunks.rs`): the earliest entry into any of them, each the chunk's
+/// 8 px square grown by `pad` and held inside the tile's own box (`center`,
+/// `half`, already padded), so a seam-closed face reaches as far as the
+/// box does and a lone tile's inset edge is kept. A shot through the
+/// broken ones misses the tile.
+fn segment_hits_chunks(p0: Position, p1: Position, center: Position, half: Position, standing: u16, pad: f32) -> Option<f32> {
+    use crate::chunks::{chunk_offset, origin, CHUNKS, CHUNK_PX};
+    let o = origin(center);
+    let (bx0, by0, bx1, by1) = (center.x - half.x, center.y - half.y, center.x + half.x, center.y + half.y);
+    let side = crate::chunks::CHUNK_SIDE as f32;
+    (0..CHUNKS)
+        .filter(|&i| standing & (1 << i) != 0)
+        .filter_map(|i| {
+            let off = chunk_offset(i);
+            let (col, row) = (off.x / CHUNK_PX, off.y / CHUNK_PX);
+            // An edge chunk reaches out to the tile's box on its outer
+            // sides; inner sides stop at the chunk plus the shot's pad.
+            let x0 = if col == 0.0 { bx0 } else { (o.x + off.x - pad).max(bx0) };
+            let y0 = if row == 0.0 { by0 } else { (o.y + off.y - pad).max(by0) };
+            let x1 = if col == side - 1.0 { bx1 } else { (o.x + off.x + CHUNK_PX + pad).min(bx1) };
+            let y1 = if row == side - 1.0 { by1 } else { (o.y + off.y + CHUNK_PX + pad).min(by1) };
+            if x0 >= x1 || y0 >= y1 {
+                return None;
+            }
+            let c = Position::new((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+            segment_hits_aabb(p0, p1, c, Position::new((x1 - x0) / 2.0, (y1 - y0) / 2.0))
+        })
+        .min_by(f32::total_cmp)
+}
+
 pub(super) fn segment_hits_aabb(p0: Position, p1: Position, center: Position, half: Position) -> Option<f32> {
     let d = Position::new(p1.x - p0.x, p1.y - p0.y);
     let mut t_enter = 0.0f32;
@@ -840,6 +880,7 @@ mod shell_sweep_tests {
             half: Position::new(16.0, 12.0),
             material: Material::Iron,
             burning: false,
+            chunks: None,
         };
         // Approaching from the left: clearly outside on X, inside on Y.
         assert_eq!(obstacle_reflect_axis(Position::new(-30.0, 2.0), &hit), (true, false));

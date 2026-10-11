@@ -759,6 +759,9 @@ pub struct TileState {
     pub flags: u8,
     /// The sooted faces, one bit per side in `Dir::index` order.
     pub faces: u8,
+    /// A chunked tile's chunks (`Chunks::quantised`): two bits of wear
+    /// each, chunk 0 lowest. 0 for a tile that breaks whole.
+    pub chunks: u32,
 }
 
 /// A pickup's crate that differs from a whole one (`crate_breakable`,
