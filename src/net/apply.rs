@@ -259,6 +259,19 @@ fn apply_zones(game: &mut Game, s: &Snapshot, cols: u16) {
     game.zones = zones;
 }
 
+/// The rubble as the snapshot has it, cell for cell; a change empties the
+/// kept nav grid, as the room's `lay_rubble` does.
+fn apply_rubble(game: &mut Game, s: &Snapshot, cols: u16) {
+    let mut rubble = crate::chunks::Rubble::default();
+    for r in &s.rubble {
+        rubble.set(cell_from_index(cols, r.cell), r.units);
+    }
+    if rubble != game.rubble {
+        game.rubble = rubble;
+        game.nav.clear();
+    }
+}
+
 /// The craters the snapshot lists that the replica has not made yet, made
 /// as the room made them: their cells worked out from the replica's map,
 /// filled under a sky that fills them (`Game::make_crater`).
@@ -341,6 +354,7 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_zones(game, s, cols);
     apply_well_drums(game, s, cols);
     apply_craters(game, s, cols);
+    apply_rubble(game, s, cols);
     apply_volcano_shifts(game, s);
     apply_round(game, s);
     game.show(spectacle);
