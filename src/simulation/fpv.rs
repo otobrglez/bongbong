@@ -76,13 +76,14 @@ pub(super) fn fire_fpv(f: &mut Frame, tank: &mut Tank, owner: Owner) {
 
 impl Game {
     /// The standing trees' cells' centres, in the world's tile order: what
-    /// a crown is measured round (`fpv::crown_box`).
+    /// a crown is measured round (`fpv::crown_box`). A dead snag has none
+    /// (`Material::has_crown`).
     pub(crate) fn standing_trees(&self) -> Vec<(Entity, Position)> {
         let mut trees: Vec<(Entity, Position, (i32, i32))> = self
             .world
             .query::<(Entity, &Obstacle)>()
             .iter()
-            .filter(|(_, o)| !o.destroyed && o.material.is_tree())
+            .filter(|(_, o)| !o.destroyed && o.material.has_crown())
             .map(|(e, o)| (e, o.position, o.cell()))
             .collect();
         trees.sort_by_key(|&(_, _, c)| (c.1, c.0));

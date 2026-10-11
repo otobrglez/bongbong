@@ -95,11 +95,19 @@ pub enum CellObject {
     /// hurting whatever drives over it and setting off any drum it reaches.
     /// The author's fuse (docs/barrel-explosion-variety.md section D).
     Oil,
-    /// The two tree species (docs/TREES_SPEC.md). Solid like a prop, but
-    /// drawn from 48px cells so the canopy overhangs the cell it stands
-    /// in; both burn, and a tank can flatten one by driving at it.
+    /// The tree species (docs/TREES_SPEC.md), one kind each, named as
+    /// `Material` names them (`obstacle::TREE_SPECIES`). Solid like a prop,
+    /// but drawn from 48px cells so the canopy overhangs the cell it stands
+    /// in; all burn, and a tank can flatten one by driving at it.
     Tree,
     Pine,
+    Spruce,
+    Scots,
+    Fir,
+    Birch,
+    Willow,
+    Palm,
+    Snag,
     /// Tall grass: cover a tank can sit in. Deliberately **not** solid and
     /// deliberately not an `Obstacle` - `Game::nav_grid` feeds every
     /// obstacle into pathfinding with no material filter, so anything that
@@ -107,6 +115,18 @@ pub enum CellObject {
     /// drive through has to be its own light entity (see `grass.rs`).
     #[serde(rename = "tall_grass")]
     TallGrass,
+    /// Bushes and reeds (docs/BUSHES_SPEC.md): soft cover like
+    /// `TallGrass` - not solid, not an `Obstacle`, a cell a tank drives
+    /// through, flattens and hides in - each growing one sprite of its kind
+    /// (`grass::Bush`) instead of a scatter of tufts.
+    Bush,
+    #[serde(rename = "berry_bush")]
+    BerryBush,
+    Juniper,
+    Fern,
+    #[serde(rename = "autumn_bush")]
+    AutumnBush,
+    Reeds,
     /// A teleport portal (docs/teleporting.md): the *anchor* cell of a
     /// ~3x3-cell spiral tanks drive into to be moved to another portal.
     /// Multi-instance, deliberately **not** solid and not an `Obstacle`
@@ -174,6 +194,13 @@ impl CellObject {
             CellObject::Target => Some(Material::Target),
             CellObject::Tree => Some(Material::Tree),
             CellObject::Pine => Some(Material::Pine),
+            CellObject::Spruce => Some(Material::Spruce),
+            CellObject::Scots => Some(Material::Scots),
+            CellObject::Fir => Some(Material::Fir),
+            CellObject::Birch => Some(Material::Birch),
+            CellObject::Willow => Some(Material::Willow),
+            CellObject::Palm => Some(Material::Palm),
+            CellObject::Snag => Some(Material::Snag),
             CellObject::Tesla { .. } => Some(Material::Tesla),
             CellObject::GunTower { .. } => Some(Material::GunTower),
             CellObject::BioSlush { .. } => Some(Material::BioSlush),
@@ -181,6 +208,33 @@ impl CellObject {
             CellObject::Lamp => Some(Material::Lamp),
             CellObject::Door { .. } => Some(Material::Door),
             _ => None,
+        }
+    }
+
+    /// The bush a soft-cover cell grows, if it is a bush cell.
+    pub fn bush(&self) -> Option<crate::grass::Bush> {
+        use crate::grass::Bush;
+        Some(match self {
+            CellObject::Bush => Bush::Bush,
+            CellObject::BerryBush => Bush::Berry,
+            CellObject::Juniper => Bush::Juniper,
+            CellObject::Fern => Bush::Fern,
+            CellObject::AutumnBush => Bush::Autumn,
+            CellObject::Reeds => Bush::Reeds,
+            _ => return None,
+        })
+    }
+
+    /// The cell that grows `bush`.
+    pub fn of_bush(bush: crate::grass::Bush) -> CellObject {
+        use crate::grass::Bush;
+        match bush {
+            Bush::Bush => CellObject::Bush,
+            Bush::Berry => CellObject::BerryBush,
+            Bush::Juniper => CellObject::Juniper,
+            Bush::Fern => CellObject::Fern,
+            Bush::Autumn => CellObject::AutumnBush,
+            Bush::Reeds => CellObject::Reeds,
         }
     }
 
@@ -231,6 +285,13 @@ impl CellObject {
             Material::Target => Some(CellObject::Target),
             Material::Tree => Some(CellObject::Tree),
             Material::Pine => Some(CellObject::Pine),
+            Material::Spruce => Some(CellObject::Spruce),
+            Material::Scots => Some(CellObject::Scots),
+            Material::Fir => Some(CellObject::Fir),
+            Material::Birch => Some(CellObject::Birch),
+            Material::Willow => Some(CellObject::Willow),
+            Material::Palm => Some(CellObject::Palm),
+            Material::Snag => Some(CellObject::Snag),
             Material::Lamp => Some(CellObject::Lamp),
             _ => None,
         }
@@ -239,9 +300,10 @@ impl CellObject {
 
 /// The battlefield's look: which retint of the ground tileset and which
 /// tall-grass sheet a round draws with (TOML: a top-level `theme =
-/// "desert"`). Purely presentational - the simulation, the nav grid and
-/// the linter never read it - so two maps that differ only in theme play
-/// identically. Absent means `Grass`, so every older file parses
+/// "desert"`). Presentational but for one rule: a desert's trees are dry
+/// (`Material::is_dry`) and roll `dry_tree_flammable_chance` at spawn, so
+/// two maps that differ only in theme play identically unless they have
+/// trees. The nav grid and the linter never read it. Absent means `Grass`, so every older file parses
 /// unchanged. Both sheets of every theme ship in every build
 /// (`ground_texture_path`/`grass_texture_path` name them), and `app.rs`
 /// picks the pair by the live map each frame, so the builder can switch a

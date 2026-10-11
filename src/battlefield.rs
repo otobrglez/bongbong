@@ -404,7 +404,11 @@ pub struct MapSpawn {
     /// Every cell the map marked as tall grass. Not spawned as entities
     /// here - `Game::init` turns each into a scatter of `grass::GrassTuft`,
     /// which is presentation plus a concealment query, not an `Obstacle`.
+    /// The bush cells are in it too: they are the same soft cover.
     pub grass_cells: Vec<Position>,
+    /// The bush cells among `grass_cells` and what each grows: one
+    /// `grass::bush_tuft` instead of a scatter.
+    pub bush_cells: Vec<(Position, crate::grass::Bush)>,
     /// Every cell the map marked as an oil trail, as grid cells: not
     /// solid, nothing spawned - `Game::init` keeps them as the set a fire
     /// can run along (`Game::oil_cells`).
@@ -470,6 +474,7 @@ pub fn spawn_from_map(
     let mut water_cells = Vec::new();
     let mut lava_cells = Vec::new();
     let mut grass_cells = Vec::new();
+    let mut bush_cells = Vec::new();
     let mut oil_cells = Vec::new();
     let mut portal_cells = Vec::new();
     let mut frog_pos = None;
@@ -481,7 +486,7 @@ pub fn spawn_from_map(
         match *obj {
             CellObject::Wall { material } => {
                 let variant = material_variant[&material];
-                let chance = material.flammable_chance();
+                let chance = material.flammable_chance(false);
                 let flammable = chance > 0.0 && rng.random_bool(chance);
                 let body = physics.spawn_static(
                     pos,
@@ -496,7 +501,14 @@ pub fn spawn_from_map(
             | CellObject::Fence
             | CellObject::Target
             | CellObject::Tree
-            | CellObject::Pine => {
+            | CellObject::Pine
+            | CellObject::Spruce
+            | CellObject::Scots
+            | CellObject::Fir
+            | CellObject::Birch
+            | CellObject::Willow
+            | CellObject::Palm
+            | CellObject::Snag => {
                 let material = obj.material().expect("prop and tree cells spawn a material");
                 // The roll is always drawn, even for a barrel whose drum
                 // the map pins: skipping it would shift every RNG draw
@@ -505,15 +517,19 @@ pub fn spawn_from_map(
                 let rolled = rng.random_range(0..material.variants());
                 let variant = obj.drum().map_or(rolled, |d| d as i32);
                 // Zero chance draws no RNG, so a map with no trees replays
-                // exactly as it did before they existed.
-                let chance = material.flammable_chance();
+                // exactly as it did before they existed. A dry tree's odds
+                // differ, never whether the roll is drawn.
+                let dry = material.is_dry(map.theme);
+                let chance = material.flammable_chance(dry);
                 let flammable = chance > 0.0 && rng.random_bool(chance);
                 let body = physics.spawn_static(
                     pos,
                     tile_half_extent(material, &solid_cells, col, row, obstacle_half_extent),
                 );
                 obstacle_positions.push(pos);
-                world.spawn((Obstacle::new(material, variant, pos, flammable, body),));
+                let mut tile = Obstacle::new(material, variant, pos, flammable, body);
+                tile.dry = dry;
+                world.spawn((tile,));
             }
             // A tower is a tile that draws no roll: its `variant` is the
             // side it fights for, and the weapon beside it is built from
@@ -558,6 +574,10 @@ pub fn spawn_from_map(
             CellObject::Water => water_cells.push(pos),
             CellObject::Lava => lava_cells.push(pos),
             CellObject::TallGrass => grass_cells.push(pos),
+            CellObject::Bush | CellObject::BerryBush | CellObject::Juniper | CellObject::Fern | CellObject::AutumnBush | CellObject::Reeds => {
+                grass_cells.push(pos);
+                bush_cells.push((pos, obj.bush().expect("a bush cell grows a bush")));
+            }
             CellObject::Oil => oil_cells.push((col, row)),
             CellObject::Portal => portal_cells.push((col, row)),
             CellObject::Frog => frog_pos = Some(pos),
@@ -574,7 +594,7 @@ pub fn spawn_from_map(
         }
     }
 
-    MapSpawn { obstacle_positions, wall_positions, road_cells, water_cells, lava_cells, frog_pos, enemy_frog_pos, pickup_slots, grass_cells, oil_cells, portal_cells }
+    MapSpawn { obstacle_positions, wall_positions, road_cells, water_cells, lava_cells, frog_pos, enemy_frog_pos, pickup_slots, grass_cells, bush_cells, oil_cells, portal_cells }
 }
 
 /// Every cell a volcano's cone puts a tile on: its footprint inside the
