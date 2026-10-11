@@ -4999,7 +4999,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(cats[0]["name"], "wall");
         assert_eq!(cats[0]["current"], "iron");
         assert_eq!(cats[3]["name"], "plant");
-        assert_eq!(cats[3]["tools"].as_array().unwrap().len(), 15, "{}", cats[3]);
+        assert_eq!(cats[3]["tools"].as_array().unwrap().len(), 16, "{}", cats[3]);
         assert_eq!(cats[5]["tools"].as_array().unwrap().len(), 19, "{}", cats[5]);
         let err = ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "granite" })).unwrap_err();
         assert!(err.contains("brick") && err.contains("eraser"), "{err}");
