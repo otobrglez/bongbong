@@ -447,7 +447,7 @@ fn a_cage_is_never_a_wall_to_breach() {
 /// the chunk its ray reaches first, walking it out in 1 px steps.
 fn sapper_hits(me: Position, seen: &crate::ai::WallAhead, lane: f32) -> Option<usize> {
     let deg = crate::ai::sapper_aim(me, crate::tank::Dir::Right, lane, seen);
-    let (s, c) = (deg.to_radians().sin(), deg.to_radians().cos());
+    let (s, c) = (crate::math::sin(deg.to_radians()), crate::math::cos(deg.to_radians()));
     (0..120).map(|k| Position::new(me.x + c * k as f32, me.y + s * k as f32)).find_map(|p| {
         crate::chunks::index_at(seen.center, p).filter(|&i| seen.standing & (1 << i) != 0)
     })
