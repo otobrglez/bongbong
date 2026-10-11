@@ -194,7 +194,16 @@ impl Class {
         match obj {
             Some(CellObject::Wall { .. } | CellObject::Road) => Class::Road,
             Some(CellObject::Gate) => Class::Gate,
-            Some(CellObject::TallGrass) => Class::Grass,
+            // Bushes and reeds are the same soft cover as tall grass.
+            Some(
+                CellObject::TallGrass
+                | CellObject::Bush
+                | CellObject::BerryBush
+                | CellObject::Juniper
+                | CellObject::Fern
+                | CellObject::AutumnBush
+                | CellObject::Reeds,
+            ) => Class::Grass,
             Some(CellObject::Lava) => Class::Lava,
             Some(CellObject::Water) => match depth {
                 Depth::Deep => Class::Deep,
@@ -210,11 +219,19 @@ impl Class {
     pub fn solid(material: Material, side: Side) -> Class {
         match material {
             Material::Brick => Class::Brick,
-            Material::Iron | Material::Door => Class::Iron,
+            Material::Iron | Material::Concrete | Material::Door => Class::Iron,
             Material::Wood => Class::Wood,
             Material::Glass => Class::Glass,
             Material::Sandbag | Material::Barrel | Material::Fence | Material::Target => Class::Prop,
-            Material::Tree | Material::Pine => Class::Tree,
+            Material::Tree
+            | Material::Pine
+            | Material::Spruce
+            | Material::Scots
+            | Material::Fir
+            | Material::Birch
+            | Material::Willow
+            | Material::Palm
+            | Material::Snag => Class::Tree,
             Material::Tesla | Material::GunTower | Material::BioSlush => Class::Tower(side),
             Material::Volcano => Class::Volcano,
             Material::Lamp => Class::Lamp,

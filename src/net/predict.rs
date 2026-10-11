@@ -2875,14 +2875,14 @@ mod tests {
         predictor.step(press());
         let (_, _, kicked) = predictor.motion().expect("a hull");
         let rad = rotation.to_radians();
-        let back = -(kicked.x * rad.sin() - kicked.y * rad.cos());
+        let back = -(kicked.x * crate::math::sin(rad) - kicked.y * crate::math::cos(rad));
         assert!(back > 0.1, "the hull moves back along its barrel after the press: {kicked:?}");
     }
 
     /// How fast `velocity` carries a hull facing `rotation` backwards.
     fn back_speed(velocity: crate::math::Vec2, rotation: f32) -> f32 {
         let rad = rotation.to_radians();
-        -(velocity.x * rad.sin() - velocity.y * rad.cos())
+        -(velocity.x * crate::math::sin(rad) - velocity.y * crate::math::cos(rad))
     }
 
     /// **One kick per shot, drawn or not.** The room sends no `Shoved`

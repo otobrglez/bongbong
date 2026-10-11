@@ -51,7 +51,10 @@ rustflags = [
 # clang shim instead, which picks the iPhoneOS/iPhoneSimulator SDK from the
 # `-target` triple rustc passes. Build with
 # DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer and SDKROOT unset,
-# since devenv exports both pointing at the nix apple-sdk.
+# since devenv exports both pointing at the nix apple-sdk; tools/ios/env.sh
+# does that, and links the host build scripts and proc-macros with this clang
+# too (through PATH, not a linker here, so the desktop build keeps nix's
+# toolchain and its cache).
 [target.aarch64-apple-ios]
 linker = "/usr/bin/clang"
 

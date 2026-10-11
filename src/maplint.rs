@@ -168,11 +168,15 @@ pub enum LintKind {
     /// map's script, or a door or flag on a map with no script at all: it
     /// never opens, or it is never counted.
     TrainingDoor,
+    /// A trail through a wood one cell wide (`woods::Woods::narrow_trails`):
+    /// a hull can drive it, but the AI plans on corridors two cells wide and
+    /// never will. Fine as a deliberate sneak route; the author should know.
+    NarrowTrail,
 }
 
 impl LintKind {
     /// Every kind, in check order.
-    pub const ALL: [LintKind; 23] = [
+    pub const ALL: [LintKind; 24] = [
         LintKind::UnreachableFrog,
         LintKind::UnreachablePickup,
         LintKind::GatedPickup,
@@ -196,6 +200,7 @@ impl LintKind {
         LintKind::TowerNoReach,
         LintKind::TooManyTowers,
         LintKind::TrainingDoor,
+        LintKind::NarrowTrail,
     ];
 
     /// The kebab-case name the lint's output and the dev server's `lint`
@@ -226,6 +231,7 @@ impl LintKind {
             LintKind::TowerNoReach => "tower-no-reach",
             LintKind::TooManyTowers => "too-many-towers",
             LintKind::TrainingDoor => "training-door",
+            LintKind::NarrowTrail => "narrow-trail",
         }
     }
 }
@@ -613,6 +619,7 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     check_gates(game, &grid, width, height, &mut findings);
     check_wave_gates(game, &grid, width, height, &player_positions, &mut findings);
     check_portals(game, &cells, &mut findings);
+    check_narrow_trails(game, &mut findings);
     check_training(game, &mut findings);
     check_towers(game, &cells, &player_positions, &mut findings);
     check_disconnected_regions(&cells, &mut findings);
@@ -1083,6 +1090,22 @@ fn check_training(game: &Game, findings: &mut Vec<LintFinding>) {
     }
 }
 
+/// One warning per one-cell trail through a wood, naming its cells
+/// (docs/WOODS.md §1).
+fn check_narrow_trails(game: &Game, findings: &mut Vec<LintFinding>) {
+    let narrow = game.woods.narrow_trails();
+    if narrow.is_empty() {
+        return;
+    }
+    let (col, row) = narrow[0];
+    let message = format!(
+        "a trail one cell wide runs through a wood at map cell ({col},{row}) ({} cells): a tank can drive it, the AI never will",
+        narrow.len()
+    );
+    let cells = narrow.into_iter().map(|(c, r)| LintCell::Map(c, r)).collect();
+    findings.push(LintFinding::new(LintSeverity::Warning, LintKind::NarrowTrail, message, cells));
+}
+
 fn check_portals(game: &Game, cells: &Cells, findings: &mut Vec<LintFinding>) {
     let anchors = game.map.portal_cells();
     if anchors.len() == 1 {
@@ -1441,6 +1464,24 @@ mod map_lint_tests {
     /// source of this map's recorded stale-start/stall anomaly baseline).
     const KNOWN_ERROR_KINDS: &[(&str, &[LintKind])] =
         &[("maps/default.toml", &[]), ("maps/default-desert.toml", &[]), ("maps/towers.toml", &[])];
+
+    #[test]
+    fn a_one_cell_trail_through_a_wood_is_a_warning_and_a_two_cell_one_is_not() {
+        let wood = |gap: i32| {
+            let mut map = wide();
+            for c in 10..=20 {
+                for r in (6..=7).chain(8 + gap..=9 + gap) {
+                    map.set_cell(c, r, crate::map::CellObject::Tree);
+                }
+            }
+            lint_map(map)
+        };
+        let narrow = wood(1);
+        let f = finding(&narrow, LintKind::NarrowTrail);
+        assert_eq!(f.severity, LintSeverity::Warning);
+        assert!(f.cells.contains(&LintCell::Map(15, 8)), "{:?}", f.cells);
+        assert!(!has(&wood(2), LintKind::NarrowTrail), "two cells wide is a corridor the AI takes");
+    }
 
     /// Headless seeded round on `map`, linted - the §3.1 setup. The fixed
     /// seed matters for maps that leave frog/start placement to `init`'s

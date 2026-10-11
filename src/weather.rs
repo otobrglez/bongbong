@@ -21,6 +21,7 @@
 //! and a re-render draw the same picture, and a dev-server lockstep
 //! freezes the rain with the round.
 
+use crate::math;
 use crate::blast::{seed_for, BlastKind};
 use crate::bullet::{Bullet, BulletState};
 use crate::frog::Side;
@@ -332,7 +333,7 @@ pub fn gusts(time: f32, t: &Tuning) -> impl Iterator<Item = Gust> {
         }
         let start = (w as f32 + 0.1 + 0.4 * unit_hash(w, 0x6c)) * gap;
         let swing = (unit_hash(w, 0x6d) * 2.0 - 1.0) * spread;
-        Some(Gust { start, dir: Vec2::new(swing.cos(), swing.sin()) })
+        Some(Gust { start, dir: Vec2::new(math::cos(swing), math::sin(swing)) })
     })
 }
 
@@ -459,9 +460,9 @@ pub fn lightning(time: f32, t: &Tuning) -> f32 {
         if !(0.0..1.0).contains(&dt) {
             continue;
         }
-        flash = flash.max((-dt * 20.0).exp());
+        flash = flash.max(math::exp(-dt * 20.0));
         if dt >= 0.16 {
-            flash = flash.max(0.75 * (-(dt - 0.16) * 7.0).exp());
+            flash = flash.max(0.75 * math::exp(-(dt - 0.16) * 7.0));
         }
     }
     flash.clamp(0.0, 1.0)
@@ -630,16 +631,16 @@ impl Light {
         match self.shape {
             Shape::Point => {
                 let a = std::f32::consts::TAU * i as f32 / n.max(1) as f32;
-                (Vec2::new(a.cos(), a.sin()), 1.0)
+                (Vec2::new(math::cos(a), math::sin(a)), 1.0)
             }
             Shape::Cone { dir, half_angle } => {
                 let spread = half_angle * CONE_EDGE;
                 let u = if n > 1 { i as f32 / (n - 1) as f32 } else { 0.5 };
                 let off = -spread + 2.0 * spread * u;
-                let base = dir.y.atan2(dir.x);
+                let base = math::atan2(dir.y, dir.x);
                 let a = base + off;
                 let edge = ((spread - off.abs()) / (spread - half_angle * 0.7).max(1e-4)).clamp(0.0, 1.0);
-                (Vec2::new(a.cos(), a.sin()), edge * edge * (3.0 - 2.0 * edge))
+                (Vec2::new(math::cos(a), math::sin(a)), edge * edge * (3.0 - 2.0 * edge))
             }
         }
     }
@@ -675,7 +676,7 @@ fn mix(a: Rgb, b: Rgb, k: f32) -> Rgb {
 /// fires never flicker in step.
 fn flicker(time: f32, at: Position) -> f32 {
     let seed = (seed_for(at) % 1000) as f32 * 0.37;
-    0.82 + 0.18 * (time * 23.0 + seed).sin() * (time * 7.3 + seed * 1.7).sin()
+    0.82 + 0.18 * math::sin(time * 23.0 + seed) * math::sin(time * 7.3 + seed * 1.7)
 }
 
 /// The colour a hull's headlight throws.
@@ -715,7 +716,7 @@ fn turret_point(tank: &Tank, local: (f32, f32)) -> Position {
 }
 
 fn rotated_point(tank: &Tank, rotation: f32, local: (f32, f32)) -> Position {
-    let (sin, cos) = rotation.to_radians().sin_cos();
+    let (sin, cos) = math::sin_cos(rotation.to_radians());
     let (x, y) = (local.0 * tank.scale, local.1 * tank.scale);
     Position::new(tank.position.x + x * cos - y * sin, tank.position.y + x * sin + y * cos)
 }
@@ -724,7 +725,7 @@ fn rotated_point(tank: &Tank, rotation: f32, local: (f32, f32)) -> Position {
 /// 90 right).
 fn heading(rotation: f32) -> Vec2 {
     let r = rotation.to_radians();
-    Vec2::new(r.sin(), -r.cos())
+    Vec2::new(math::sin(r), -math::cos(r))
 }
 
 /// Every light the round throws this frame under `look`, each already
@@ -837,7 +838,7 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
     // Portals glow from below their spiral.
     if game.portals_active() {
         for (i, &at) in game.portals.iter().enumerate() {
-            let pulse = 0.85 + 0.15 * (time * 2.2 + i as f32 * 1.7).sin();
+            let pulse = 0.85 + 0.15 * math::sin(time * 2.2 + i as f32 * 1.7);
             out.push(Light::point(at, 112.0, scale([0.45, 0.6, 1.25], k * 0.9 * pulse)).still());
         }
     }
@@ -854,7 +855,7 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
         if obstacle.burning {
             out.push(fire(obstacle.position, t.fire_light_radius_px * 0.9, 1.0));
         } else if obstacle.fuse.is_some() {
-            let pulse = 0.55 + 0.45 * (time * 12.0).sin().abs();
+            let pulse = 0.55 + 0.45 * math::sin(time * 12.0).abs();
             out.push(Light::point(obstacle.position, 72.0, scale([1.0, 0.4, 0.2], k * t.fire_light_strength * pulse)));
         }
     }
@@ -945,7 +946,7 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
         };
         // Where the fireball is drawn: the centre plus its cause's lean.
         let at = Position::new(blast.center.x + blast.offset.x, blast.center.y + blast.offset.y);
-        out.push(Light::point(at, radius, scale(color, s * 2.2 * life.powf(1.6) * cloud.sqrt())));
+        out.push(Light::point(at, radius, scale(color, s * 2.2 * math::powf(life, 1.6) * cloud.sqrt())));
     }
 
     // Shots in flight, and the flashes where they leave and land.
@@ -1085,7 +1086,7 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
     }
 
     for impact in impacts {
-        let life = (1.0 - impact.progress()).powf(1.5);
+        let life = math::powf(1.0 - impact.progress(), 1.5);
         if life <= 0.0 {
             continue;
         }
@@ -1269,7 +1270,7 @@ mod tests {
         let per_window = starts.len() as f32 / 400.0;
         assert!((0.7..0.9).contains(&per_window), "most windows gust: {per_window:.2} per window");
         for gust in gusts(20.0 * gap, &t) {
-            let swing = gust.dir.y.atan2(gust.dir.x).abs().to_degrees();
+            let swing = math::atan2(gust.dir.y, gust.dir.x).abs().to_degrees();
             assert!(swing <= t.sand_gust_spread_deg + 1e-3, "{gust:?}");
             assert!((gust.dir.x * gust.dir.x + gust.dir.y * gust.dir.y - 1.0).abs() < 1e-5);
         }

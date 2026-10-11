@@ -1759,7 +1759,7 @@ mod hud_tests {
 
     /// The vitals show what the trigger fires and nothing else: shells
     /// against the magazine while no special is carried, the special in
-    /// its accent against a crate's worth once one is - the same readout
+    /// its accent against its carry limit once one is - the same readout
     /// the pips under the ring are drawn from.
     #[test]
     fn the_trigger_readout_is_the_special_carried_else_shells() {
@@ -1771,13 +1771,13 @@ mod hud_tests {
         tank.take_weapon(ActiveWeapon::Laser);
         tank.laser_charges -= 2;
         let laser = WeaponSlot::of(&tank, 0.0);
-        assert_eq!((laser.weapon, laser.count, laser.full), (ActiveWeapon::Laser, t.laser_charges_per_pickup - 2, t.laser_charges_per_pickup));
+        assert_eq!((laser.weapon, laser.count, laser.full), (ActiveWeapon::Laser, t.laser_charges_per_pickup - 2, t.laser_charges_max));
         assert_eq!(laser.color, HUD_LASER_COLOR, "no shells while a special is carried");
         tank.laser_charges = 0;
         assert_eq!(WeaponSlot::of(&tank, 0.0).count, 7, "spent, back to the shells");
         tank.take_weapon(ActiveWeapon::SonicHammer);
         let sonic = WeaponSlot::of(&tank, 0.0);
-        assert_eq!((sonic.weapon, sonic.count, sonic.full), (ActiveWeapon::SonicHammer, t.sonic_ammo_per_pickup, t.sonic_ammo_per_pickup));
+        assert_eq!((sonic.weapon, sonic.count, sonic.full), (ActiveWeapon::SonicHammer, t.sonic_ammo_per_pickup, t.sonic_ammo_max));
         assert_eq!(sonic.color, HUD_SONIC_COLOR);
         assert_eq!(weapon_pickup(ActiveWeapon::SonicHammer), Some(crate::pickup::PickupKind::SonicHammer), "its crate's symbol");
     }
@@ -1794,7 +1794,7 @@ mod hud_tests {
         let mut tank = Tank::default();
         tank.take_weapon(ActiveWeapon::GaussRail);
         let idle = WeaponSlot::of(&tank, 0.0);
-        assert_eq!((idle.weapon, idle.count, idle.full, idle.color), (ActiveWeapon::GaussRail, t.gauss_slugs_per_pickup, t.gauss_slugs_per_pickup, HUD_GAUSS_COLOR));
+        assert_eq!((idle.weapon, idle.count, idle.full, idle.color), (ActiveWeapon::GaussRail, t.gauss_slugs_per_pickup, t.gauss_slugs_max, HUD_GAUSS_COLOR));
         assert_eq!(weapon_pickup(ActiveWeapon::GaussRail), Some(crate::pickup::PickupKind::GaussRail));
         assert_eq!(idle.charge, None);
         assert_eq!(tank.step_charge(true, true, dt, true, None), ChargeEdge::Started);

@@ -211,6 +211,56 @@ impl Rectangle {
     }
 }
 
+// Transcendental functions for everything a round computes. `f32::sin`,
+// `exp`, `powf` and friends call the platform's libm, and glibc and Apple's
+// libm round some inputs an ulp apart, so the same seed played a different
+// round on a Mac than on a Linux runner or the room server. These are the
+// `libm` crate's portable Rust, the same bits on every platform; anything
+// headless calls them instead (`portable_math_tests` holds the line), and
+// only presentation - effects, the camera, the HUD, drawing - may use the
+// platform's. `sqrt`, `abs`, `floor` and the IEEE basic operations are exact
+// everywhere and stay `f32` methods; so does `powi`, which is repeated
+// multiplication.
+
+pub fn sin(x: f32) -> f32 {
+    libm::sinf(x)
+}
+
+pub fn cos(x: f32) -> f32 {
+    libm::cosf(x)
+}
+
+/// `(sin(x), cos(x))`, as `f32::sin_cos` returns them.
+pub fn sin_cos(x: f32) -> (f32, f32) {
+    libm::sincosf(x)
+}
+
+pub fn tan(x: f32) -> f32 {
+    libm::tanf(x)
+}
+
+pub fn atan(x: f32) -> f32 {
+    libm::atanf(x)
+}
+
+/// The angle of `(x, y)`, as `y.atan2(x)` gives it.
+pub fn atan2(y: f32, x: f32) -> f32 {
+    libm::atan2f(y, x)
+}
+
+pub fn exp(x: f32) -> f32 {
+    libm::expf(x)
+}
+
+pub fn powf(x: f32, y: f32) -> f32 {
+    libm::powf(x, y)
+}
+
+/// `sqrt(x * x + y * y)` without overflow, as `x.hypot(y)` gives it.
+pub fn hypot(x: f32, y: f32) -> f32 {
+    libm::hypotf(x, y)
+}
+
 // The render boundary: raylib's draw calls take `impl Into<ffi::Vector2>`,
 // `impl Into<ffi::Rectangle>` and `impl Into<ffi::Color>`, so the three
 // types pass straight through, and the presentation code that works in
@@ -352,5 +402,68 @@ mod raylib_tests {
                 assert!(same(Color::color_from_hsv(hue, s, v), RlColor::color_from_hsv(hue, s, v)), "hsv {hue} {s} {v}");
             }
         }
+    }
+}
+
+/// Nothing headless calls the platform's libm: every source file outside
+/// `PRESENTATION` - the files that only draw, animate or frame what the
+/// round already decided - reaches transcendental functions through this
+/// module's portable ones, so a seed plays the same round on every
+/// platform (docs/gameplay-verification-design.md). A file that only
+/// draws belongs on the list; one a round's outcome reads does not.
+#[cfg(test)]
+mod portable_math_tests {
+    use std::path::Path;
+
+    /// Paths under `src/` that may call `f32::sin` and friends: a
+    /// directory ends in `/`.
+    const PRESENTATION: &[&str] = &[
+        "app.rs", "app/", "bin/", "render/", "editor/", "devserver.rs", "capi.rs", "fx.rs", "game.rs", "hud.rs",
+        "indicators.rs", "minimap.rs", "lobby.rs", "level_select.rs", "view.rs", "touch.rs", "framing.rs",
+        "follow.rs", "establish.rs", "motion.rs", "margin.rs", "canvas.rs", "trig.rs", "pyro.rs", "fireball.rs",
+        "burst.rs", "mushroom.rs", "damage_stage.rs", "crate_fx.rs", "shockwave.rs", "blast.rs", "decal.rs",
+        "track.rs", "fish.rs", "frame_stages.rs", "bubble.rs", "text.rs", "qr.rs", "weather/plain.rs",
+        "net/interp.rs", "tank_art.rs",
+    ];
+
+    const PLATFORM: &[&str] = &[
+        "exp", "exp2", "exp_m1", "ln", "ln_1p", "log", "log2", "log10", "powf", "sin", "cos", "tan", "sin_cos", "asin",
+        "acos", "atan", "atan2", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "hypot", "cbrt",
+    ];
+
+    fn sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("src is readable") {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                sources(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn nothing_headless_calls_the_platforms_libm() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        sources(&src, &mut files);
+        files.sort();
+        let mut found = Vec::new();
+        for file in files {
+            let rel = file.strip_prefix(&src).expect("under src").to_string_lossy().replace('\\', "/");
+            if PRESENTATION.iter().any(|p| if p.ends_with('/') { rel.starts_with(p) } else { rel == *p }) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&file).expect("a readable source");
+            for (n, line) in text.lines().enumerate() {
+                let code = line.split("//").next().unwrap_or("");
+                for name in PLATFORM {
+                    if code.contains(&format!(".{name}(")) {
+                        found.push(format!("src/{rel}:{}: .{name}(", n + 1));
+                    }
+                }
+            }
+        }
+        assert!(found.is_empty(), "the platform's libm on the round's path - call `math::` instead:\n{}", found.join("\n"));
     }
 }

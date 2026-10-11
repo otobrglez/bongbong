@@ -6,6 +6,7 @@
 //! out. The world half is `simulation/emp.rs`. Every choice is hashed from
 //! a slot, a pulse or a cell and the clock, never rolled.
 
+use crate::math;
 use crate::math::Vec2;
 use crate::pyro::{self, EMP, Shape};
 use crate::shell::Owner;
@@ -156,7 +157,7 @@ fn zigzag(out: &mut Vec<Shape>, from: Position, angle: f32, len: f32, segments: 
     for i in 0..segments {
         let turn = (pyro::unit(seed, k * 16 + i) - 0.5) * 1.6;
         a += turn;
-        let to = Position::new(at.x + a.cos() * step, at.y + a.sin() * step);
+        let to = Position::new(at.x + math::cos(a) * step, at.y + math::sin(a) * step);
         out.push(Shape::Line { from: at, to, width: 1.0, head: EMP[3], tail: EMP[3] });
         at = to;
     }
@@ -200,7 +201,7 @@ pub fn ring(pulse: &EmpPulse, t: &Tuning) -> Vec<Shape> {
         let seed = pulse.seed ^ tick.wrapping_mul(0x9E37_79B9);
         for k in 0..8u32 {
             let a = pyro::unit(seed, k) * full;
-            let at = Position::new(c.x + a.cos() * r, c.y + a.sin() * r);
+            let at = Position::new(c.x + math::cos(a) * r, c.y + math::sin(a) * r);
             let outward = a + (pyro::unit(seed, 100 + k) - 0.5) * 1.2;
             zigzag(&mut out, at, outward, 4.0 + 4.0 * pyro::unit(seed, 200 + k), 3, seed, k);
         }
@@ -242,7 +243,7 @@ pub fn sparks(center: Position, half: Vec2, seed: u32, time: f32, left: f32) -> 
     let seed = seed ^ tick.wrapping_mul(0x85EB_CA6B);
     for k in 0..count {
         let a = pyro::unit(seed, k) * std::f32::consts::TAU;
-        let (dx, dy) = (a.cos(), a.sin());
+        let (dx, dy) = (math::cos(a), math::sin(a));
         // The point of the box's edge along that bearing.
         let s = (half.x / dx.abs().max(1e-3)).min(half.y / dy.abs().max(1e-3));
         let from = Position::new(center.x + dx * s, center.y + dy * s);
@@ -266,10 +267,10 @@ pub fn tell(coil: Position, seed: u32, progress: f32, time: f32) -> Vec<Shape> {
     let count = 2 + (p * 2.0).round() as u32;
     for k in 0..count {
         let a = pyro::unit(seed, k) * std::f32::consts::TAU;
-        let from = Position::new(coil.x + a.cos() * 3.0, coil.y + a.sin() * 3.0);
+        let from = Position::new(coil.x + math::cos(a) * 3.0, coil.y + math::sin(a) * 3.0);
         zigzag(&mut out, from, a, 4.0 + 8.0 * p, 2, seed, k);
     }
-    let pulse = 0.5 + 0.5 * (time * (6.0 + 18.0 * p) * std::f32::consts::TAU).sin();
+    let pulse = 0.5 + 0.5 * math::sin(time * (6.0 + 18.0 * p) * std::f32::consts::TAU);
     out.push(Shape::Glow { pos: coil, radius: 8.0 + 8.0 * p * pulse, color: pyro::alpha(EMP[3], 0.45) });
     out
 }
@@ -288,7 +289,7 @@ pub fn lamp_sparks(at: Position, age: f32) -> Vec<Shape> {
     for i in 0..6u32 {
         let a = pyro::unit(seed, i) * std::f32::consts::TAU;
         let d = 4.0 + 10.0 * k * (0.5 + pyro::unit(seed, 20 + i));
-        let pos = Position::new(lantern.x + a.cos() * d, lantern.y + a.sin() * d + 6.0 * k * k);
+        let pos = Position::new(lantern.x + math::cos(a) * d, lantern.y + math::sin(a) * d + 6.0 * k * k);
         out.push(Shape::Mark { pos, size: 2, color: if i % 2 == 0 { EMP[4] } else { EMP[3] } });
     }
     out

@@ -13,6 +13,7 @@
 //! room, a client's sandbox, its provisional shots and its incoming fire
 //! all read the same pull on the same tick.
 
+use crate::math;
 use crate::math::{Color, Vec2};
 use crate::obstacle::Drum;
 use crate::pyro::{self, Shape, SMOKE, VOID};
@@ -101,7 +102,7 @@ impl Orb {
 
 /// The heading of `v` in degrees, 0 = up, clockwise as drawn.
 pub fn heading_deg(v: Vec2) -> f32 {
-    v.x.atan2(-v.y).to_degrees()
+    math::atan2(v.x, -v.y).to_degrees()
 }
 
 /// What stage a well stands in (`WellZone::stage`).
@@ -265,7 +266,7 @@ impl WellField {
         if pull.x == 0.0 && pull.y == 0.0 {
             return HullPull::default();
         }
-        let resist = mass_factor.max(0.05).powf(t.well_mass_exponent);
+        let resist = math::powf(mass_factor.max(0.05), t.well_mass_exponent);
         HullPull { current: pull * (t.well_current_speed / resist), side: pull * (t.well_side_pull / resist) }
     }
 
@@ -370,12 +371,12 @@ pub fn held_at(drum: &HeldDrum, centre: Position, now: f32, t: &Tuning) -> (Posi
     let from = crate::map::cell_to_world(drum.cell.0, drum.cell.1);
     let off = from - centre;
     let r0 = off.length();
-    let bearing = off.y.atan2(off.x);
+    let bearing = math::atan2(off.y, off.x);
     let age = (now - drum.lifted_at).max(0.0);
     let k = pyro::ease_out(age / t.well_capture_seconds.max(1e-3));
     let r = r0 + (t.well_ring_px - r0) * k;
     let a = bearing + t.well_orbit_speed * age;
-    (Position::new(centre.x + a.cos() * r, centre.y + a.sin() * r), HELD_LIFT_PX * pyro::ease_out(age * 4.0))
+    (Position::new(centre.x + math::cos(a) * r, centre.y + math::sin(a) * r), HELD_LIFT_PX * pyro::ease_out(age * 4.0))
 }
 
 /// A grenade circling a well's ring (`grenade::Grenade::orbit`): the well,
@@ -391,7 +392,7 @@ pub struct GrenadeOrbit {
 /// from the centre, turned clockwise at `well_orbit_speed` from its catch.
 pub fn orbit_at(orbit: &GrenadeOrbit, centre: Position, now: f32, t: &Tuning) -> Position {
     let a = orbit.bearing + t.well_orbit_speed * (now - orbit.since).max(0.0);
-    Position::new(centre.x + a.cos() * t.well_ring_px, centre.y + a.sin() * t.well_ring_px)
+    Position::new(centre.x + math::cos(a) * t.well_ring_px, centre.y + math::sin(a) * t.well_ring_px)
 }
 
 /// How many stretches a tracer is drawn curved in through a pull
@@ -546,7 +547,7 @@ pub fn compose_orb(out: &mut Vec<Shape>, at: Position, velocity: Vec2, age: f32,
     let phase = pyro::unit(id, 1) * std::f32::consts::TAU;
     for m in 0..2 {
         let a = phase + age * std::f32::consts::TAU * 2.0 + m as f32 * std::f32::consts::PI;
-        out.push(Shape::Mark { pos: at + Vec2::new(a.cos(), a.sin()) * (r + 2.0), size: 2, color: VOID[3] });
+        out.push(Shape::Mark { pos: at + Vec2::new(math::cos(a), math::sin(a)) * (r + 2.0), size: 2, color: VOID[3] });
     }
     out.push(Shape::Glow { pos: at, radius: 14.0 * (0.5 + 0.5 * swell), color: VOID[1] });
 }
@@ -595,7 +596,7 @@ pub fn compose_well(out: &mut Vec<Shape>, zone: &Zone, now: f32, t: &Tuning) {
     let spin = now * std::f32::consts::TAU / 8.0;
     for i in 0..dots {
         let a = spin + i as f32 * std::f32::consts::TAU / dots as f32;
-        dotted(out, c + Vec2::new(a.cos(), a.sin()) * r, VOID[2], 0.6 * grow);
+        dotted(out, c + Vec2::new(math::cos(a), math::sin(a)) * r, VOID[2], 0.6 * grow);
     }
     out.push(Shape::Glow { pos: c, radius: 26.0 * grow, color: VOID[1] });
 }
@@ -632,7 +633,7 @@ pub fn compose_swirl(out: &mut Vec<Shape>, c: Position, id: u32, time: f32, coun
         } else {
             VOID[2]
         };
-        let pos = Position::new(c.x + a.cos() * r, c.y + a.sin() * r * 0.8);
+        let pos = Position::new(c.x + math::cos(a) * r, c.y + math::sin(a) * r * 0.8);
         if cover >= 0.999 || pyro::unit(id, 500 + i) < cover {
             out.push(Shape::Mark { pos, size: 2, color });
         }
@@ -672,7 +673,7 @@ pub fn compose_collapse_dust(out: &mut Vec<Shape>, at: Position, age: f32, lean:
     for i in 0..10u32 {
         let a = (i as f32 + pyro::unit(seed, i)) * std::f32::consts::TAU / 10.0;
         let reach = t.well_radius_px * (0.5 + 0.5 * pyro::ease_out(k)) * (0.8 + 0.2 * pyro::unit(seed, 20 + i));
-        let pos = Position::new(at.x + a.cos() * reach + lean * age * 20.0, at.y + a.sin() * reach * 0.8 - age * 6.0);
+        let pos = Position::new(at.x + math::cos(a) * reach + lean * age * 20.0, at.y + math::sin(a) * reach * 0.8 - age * 6.0);
         out.push(Shape::Puff(pyro::dust_puff(pos, 6.0 + 4.0 * k, k, 1.0 - k)));
     }
 }

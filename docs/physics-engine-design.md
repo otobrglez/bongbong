@@ -101,6 +101,57 @@ instead of `Game::ram`/`explosion_hit`/`apply_knockback`.
 
 Feeding variable framerates (`rl.get_frame_time()`) directly into Rapier creates inconsistent collision responses. We must introduce a **fixed timestep accumulator** (e.g., `1/60` of a second). `Game::update` will accumulate real-time `dt` and consume it in fixed chunks by stepping the physics pipeline.
 
+### Scale (BB-59, 2026-10-09)
+
+Rapier's lengths are the world's pixels, and `IntegrationParameters::length_unit`
+stays 1. Rapier scales its tolerances by it, tuned for metre-sized bodies, so in a
+pixel world contacts are generated 0.02 px ahead and an overlap is pushed out at
+3 px/s. Two of those limits matter here, and `physics.rs` sets them itself:
+
+- **The speed cap** is `PHYSICS_MAX_SPEED` (lib.rs): one cell a step, 1920 px/s.
+  Rapier's default of 400 "m/s" was 400 px/s here. It silently clipped every
+  knock tuned past it (the rod's shove at 420/480, the hammer's 420 most, the
+  well's fling at 480) while each skid's length was worked out from the
+  unclipped speed. The new cap sits above every legitimate speed: a knock at the
+  wire's 508 px/s on top of a hull's own, or a light hull carried by a well's
+  current at full throttle (about 750). Raising it is byte-identical for any body
+  under 400 px/s. `Physics::max_speed` reads it, and the pose validator's well
+  allowance never passes it (docs/gravity-well.md "Online").
+- **Every hull looks a step ahead** (`HULL_LOOK_AHEAD`, physics.rs). Rapier's
+  soft continuous collision detection is set on the body at spawn, for its whole
+  life, wreck or not. Each step it makes predictive contacts against whatever
+  lies within the hull's own travel (never more than a cell), so the solver stops
+  the hull at a collider's face, however it got there. Measured on a scout, an
+  assault and a leviathan driven or knocked north into an iron row and the
+  field's top edge, from gaps of 0 to 34 px:
+
+  | Moved by | Before (deepest in) | After |
+  |---|---|---|
+  | its own drive (210 px/s) | 2.5 px, out within a second | 0.28 px (scout), flush at rest |
+  | a ram's or blast's knock (60 px/s cap) | 0.15-0.35 px | 0 |
+  | a 300 px/s knock, no skid | 2.8-3.7 px, out over 1-1.2 s | 0 |
+  | a 480 px/s knock, no skid | 4.7-6.2 px, out over 1.6-2.4 s | 0 |
+
+  This replaced a look-ahead set only while a hull skidded or a well pulled it
+  (`sonic::skid_look_ahead`, `well::pull_look_ahead`, BB-41). That one left a
+  round with no knock byte for byte, but it missed the drive, rams and blasts. A
+  predictive contact counts as touching, so a ram and the probe's contact kinds
+  now register on the step two hulls actually meet rather than the step after,
+  when they overlap. The cost was conscious re-baselining: the one/two-seat
+  determinism pin moved. `just probe-fixtures` and `just probe-fields` stay
+  within their ceilings without new ones. Over the fixtures, pile-ups went from
+  6 to 3 and churn from 34 to 33. Over the field maps, pile-ups went from 8 to 2
+  and wall-grind from 1 to 0, and the rest moved within the noise. The
+  fixtures' ram count fell from 253 to 218 with no change in how long an AFK
+  seat lasts.
+
+Rejected: a larger `length_unit`. It raises the prediction distance with the
+rest, but at our speeds not far enough: at 32 a 480 px/s knock still lands 4-5
+px inside a wall. It also scales the sleep threshold, so at 100 a leviathan fell
+asleep 0.7 px inside one. Also rejected: keeping the 400 cap and clamping the
+knocks under it. That keeps the feel of the play-tested clipped knocks, but the
+tuning table, the design docs and the wire all mean knocks to go past 400.
+
 ### Entities
 
 - **Tank** (player + each enemy): one **dynamic** rigid body, cuboid collider

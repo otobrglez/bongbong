@@ -3,18 +3,18 @@
 BB-41, the fifth of the six weapons of BB-36. A special weapon from its own
 crate (`pickup = "rod_from_god"`), one at a time like every other
 (`Tank::take_weapon`): a crate loads `rod_per_pickup` (2) calls, a re-pick
-refills to two, another weapon's crate replaces it. Seats and enemies
-alike: an enemy takes the crate while it carries no special
-(`Tank::wants_pickup`) and uses it by its own rule (§4).
+stacks two more up to `rod_max` (6), another weapon's crate replaces it. Seats and enemies
+alike: an enemy takes the crate while it carries no special, or to stack
+the calls it carries (`Tank::wants_pickup`) and uses it by its own rule (§4).
 
 Hold the trigger and a reticle appears a few cells ahead of the tank; steer
 it with the stick while the hull stands still; let go and the strike is
 called. A thin red beam drops onto the circle from the top of the screen and
-a countdown runs from four. At zero a tungsten rod arrives: a one-frame white
+a countdown runs from three. At zero a tungsten rod arrives: a one-frame white
 column, a flash, a shock ripple and a ring of dust. Every hull with any part
-inside the circle - a cell and a half - is wrecked, whoever's it is; hulls
-out to five cells are knocked off their tracks; every breakable tile within
-two and a half cells comes down and iron stands. On a lake it throws the
+inside the circle - two cells - is wrecked, whoever's it is; hulls
+out to six and a half cells are knocked off their tracks; every breakable tile within
+three and a quarter cells comes down and iron stands. On a lake it throws the
 fish onto the bank; on a volcano it sets the eruption off; where it lands it
 leaves a crater for the rest of the round, a pit that slows tanks and fills
 with water when it rains. Counter: the telegraph - leave the circle.
@@ -84,7 +84,7 @@ a seat has stood still, how fast it moves), which the well's AI reads too.
 - **It lapses** (`ChargeEnd::Lapsed`) - nothing called, nothing spent - as
   every charge does: the caller wrecked, disabled by an EMP (the uplink is
   electric), another weapon's crate taken, the special taken offline, the
-  round ended. A rod crate taken mid-reticle refills and keeps it. It holds
+  round ended. A rod crate taken mid-reticle stacks its calls and keeps it. It holds
   through a teleport, a hammer's shove, a hit and a shield breaking (the
   rail's rules), the reticle pulled back into range where the hull now
   stands.
@@ -101,8 +101,8 @@ a seat has stood still, how fast it moves), which the well's AI reads too.
 - **A zone.** The call is a `Zone` (§3.3) of kind `ZoneKind::Rod`: its id
   from the round's projectile counter (`Game::take_shot_id`), its owner the
   caller (`Owner`, and its seat if it is one - the kill credit), its centre
-  the struck cell's, its radius `rod_kill_radius_px` (48), its end
-  `rod_countdown_seconds` (4.0) later on the round clock. It belongs to the
+  the struck cell's, its radius `rod_kill_radius_px` (64), its end
+  `rod_countdown_seconds` (3.0) later on the round clock. It belongs to the
   world, not to the caller: **a call once made always lands** - the caller
   wrecked, disabled, teleported, gone through a gate, or the round paused
   (the clock stops with it) changes nothing.
@@ -122,7 +122,7 @@ At the call's end (`Game::resolve_zones`, after the hammer's, the EMP's and
 the rail's resolvers, before `step_world`, so the shoves land in this tick's
 solver step), in this order, all measured from the struck cell's centre `c`:
 
-- **The kill circle** (`rod_kill_radius_px`, 48, a cell and a half):
+- **The kill circle** (`rod_kill_radius_px`, 64, two cells):
   - *every live tank on the field* - either side, a teammate, the caller
     itself - whose hull box (`Tank::hull_bbox_world`) has its nearest point
     within the radius is **crushed** (`Tank::crush`): a live rainbow shield
@@ -144,9 +144,9 @@ solver step), in this order, all measured from the struck cell's centre `c`:
     whose ground point is within the radius is downed
     (`Game::strike_air(.., AirStrike::Rod, ..)`): the rod passed through
     the column of air over the circle (§12, decision 10).
-- **The break radius** (`rod_break_radius_px`, 80, two and a half cells),
-  measured to each cell's box, so the 5 x 5 block round the struck cell and
-  the four cells three out along its axes:
+- **The break radius** (`rod_break_radius_px`, 104, three and a quarter cells),
+  measured to each cell's box, so the 7 x 7 block round the struck cell less
+  its four corners:
   - *every breakable tile* - brick, wood, glass, sandbags, fences, range
     boards, trees, pines, lamp posts and the three towers, either side's -
     is **crushed**
@@ -176,13 +176,13 @@ solver step), in this order, all measured from the struck cell's centre `c`:
     (`Game::grass_flat`, the hammer's - docs/sonic-hammer.md §1), and its
     tufts out to the shove radius are laid flat (`grass::flatten`,
     cosmetic).
-- **The shove ring** (`rod_shove_radius_px`, 160, five cells):
+- **The shove ring** (`rod_shove_radius_px`, 208, six and a half cells):
   - *every live tank on the field outside the kill circle* whose hull box's
     nearest point `d` is within the radius is **knocked** (`Game::knock`,
     the hammer's shove and skid, docs/sonic-hammer.md §3.6) along the line
     from `c` to its centre at `v = min(rod_shove_max_speed,
     rod_shove_speed * falloff / m^rod_mass_exponent)`, `falloff = (R_shove
-    - d) / (R_shove - R_kill)` - 1 at the circle's edge, 0 at five cells -
+    - d) / (R_shove - R_kill)` - 1 at the circle's edge, 0 at six and a half cells -
     and `m` its chassis's mass factor. Either side, the caller too. At the
     defaults a standard chassis at the circle's edge slides about four
     cells, one halfway out about a cell. It is a skid: the hull drives
@@ -296,7 +296,7 @@ The issue's at-11 is built: it fits the round's existing terrain systems
 | A hammer's shove on the caller | The charge holds; the reticle is pulled back into range where the skid leaves the hull | Nothing |
 | The caller teleports | The charge holds; the reticle is pulled into the new range | Nothing |
 | Another weapon's crate | The charge lapses next tick | Nothing: the call is the world's |
-| A rod crate | Refills the calls; the charge holds | Refills |
+| A rod crate | Stacks two calls, up to six; the charge holds | Stacks |
 | The round ends | `end_round` lapses it | The call lands on the end screen, harmlessly |
 | The round restarts | `init` clears it | `init` clears every zone |
 
@@ -375,11 +375,12 @@ Each item of the checklist (docs/sonic-hammer.md §3.0) gets its rod arm:
    kinetic rod, no explosive), `PickupKind::weapon`
    (`Some(ActiveWeapon::RodFromGod)`), `name`.
 2. `ActiveWeapon::RodFromGod` (`name` "rod_from_god", `full_load` =
-   `rod_per_pickup`, `tell_seconds` none - the reticle and the call are its
+   `rod_max`, `tell_seconds` none - the reticle and the call are its
    tell -, `trigger` `Trigger::Charge`, `charge_rule` §3.2), appended to
    `SPECIAL_WEAPONS`; `Tank::rods` with its arms in `weapon_ammo`,
    `take_weapon`, `empty_stock`, `module_cols`. `wants_pickup` reads
-   `special()`: an enemy takes the crate only while it carries no special.
+   `special()`: an enemy takes the crate while it carries no special, or to
+   stack its calls.
 3. The `fire_charge` arm (`fire_rod`); the trigger through
    `drive_player`'s `match weapon.trigger()` (`Charge`).
 4. `pickup_phase` needs nothing.
@@ -873,8 +874,8 @@ there (a fraction of a second to about a second, then
 `rod_ai_aim_hold_seconds`), the designator line from the module to it, the
 module's tracking cells, and off the screen the wind-up's arrow
 (`ArrowKind::Windup`, from the charge) - then the call itself: the beam,
-the circle and four seconds. A camping seat has about five seconds from the
-first sight of the reticle to leave a circle of a cell and a half. The
+the circle and three seconds. A camping seat has about four seconds from the
+first sight of the reticle to leave a circle of two cells. The
 decision to start and the release are both moments the sight box is
 checked; `shot_at_seat` is recorded at the release, the tick the call is
 made, which is what the probe's `offbox-fire` reads.
@@ -1164,7 +1165,7 @@ fair); what lingers on the ground is shaded in the lit pass.
   crate's light) and the glyph; while a reticle is held the rail's charge
   gauge stands in the count's place (filling over the settle, white once a
   release calls); offline, the EMP's `WPN OFFLINE`. The ring's ammo pips are
-  the calls left against `full_load` (2).
+  the calls left against `full_load`, the carry limit (6).
 - **The call-in prompt** (`PlayChrome::prompt`, `hud::rod_prompt`): while
   this window's seat - a couch's first that holds one - holds a reticle,
   the first line under the left cluster, at `HUD_STATUS_TEXT_SIZE`, in
@@ -1198,6 +1199,7 @@ group:
 | Row | Default | Range | Doc |
 |---|---|---|---|
 | `rod_per_pickup: i32` | 2 | 1..=10 | Calls one rod crate loads. One per call. |
+| `rod_max: i32` | 6 | 1..=20 | The most calls a tank carries, crates stacked (BB-66). |
 | `rod_settle_seconds` | 0.25 | 0..=2 | How long the trigger is held before a release calls; a shorter tap calls nothing. |
 | `rod_hold_seconds` | 10 | 1..=60 | How long past that a reticle may be held before the uplink times out, calling nothing. |
 | `rod_reload_seconds` | 1.0 | 0..=10 | After a call, seconds before the next reticle. |
@@ -1205,10 +1207,10 @@ group:
 | `rod_reticle_start_cells: i32` | 4 | 0..=20 | Where a reticle appears: this many cells ahead of the hull along its facing, held in range. |
 | `rod_reticle_delay_seconds` | 0.18 | 0..=1 | A held stick steps the reticle at once, then again after this. |
 | `rod_reticle_repeat_seconds` | 0.06 | 0.01..=1 | Then one cell every this long. An enemy's reticle steps at this pace too. |
-| `rod_countdown_seconds` | 4.0 | 0.5..=15 | From the call to the impact. |
-| `rod_kill_radius_px` | 48 | 8..=160 | The circle: a hull with any part inside it is crushed, a frog killed, a drone downed. |
-| `rod_break_radius_px` | 80 | 0..=256 | Every breakable tile whose cell reaches inside this goes down; iron, a cone and a door stand. |
-| `rod_shove_radius_px` | 160 | 0..=480 | How far out the impact shoves hulls, falling from the circle's edge to nothing here. |
+| `rod_countdown_seconds` | 3.0 | 0.5..=15 | From the call to the impact. |
+| `rod_kill_radius_px` | 64 | 8..=160 | The circle: a hull with any part inside it is crushed, a frog killed, a drone downed. |
+| `rod_break_radius_px` | 104 | 0..=256 | Every breakable tile whose cell reaches inside this goes down; iron, a cone and a door stand. |
+| `rod_shove_radius_px` | 208 | 0..=480 | How far out the impact shoves hulls, falling from the circle's edge to nothing here. |
 | `rod_shove_speed` | 420 | 0..=508 | The shove at the circle's edge (px/s) against the chassis-free mass. |
 | `rod_shove_max_speed` | 480 | 0..=508 | The most any shove gives; the wire's shove reaches 508. |
 | `rod_mass_exponent` | 1.0 | 0..=4 | How hard a heavy chassis resists the shove. |
@@ -1353,7 +1355,7 @@ Protocol 20 (from the swarm's 19).
     picture's clock wherever a zone's seconds are read - the count, the
     beam's last second, the arrow, the minimap, the light - so every call
     counts down to the moment the room will judge this client's hull, and
-    the shooter's own counts exactly four seconds from its release. The
+    the shooter's own counts exactly three seconds from its release. The
     count never reads under 1: for the lead's fraction of a second at the
     end the circle holds, beating, until the room's impact is handed over.
 - **What is claimed**: the room's `RodCalled` for this seat, through
@@ -1906,7 +1908,10 @@ rounds in the defaults comparison above match byte for byte).
     every round would step differently); a lower speed cap (the shove's
     reach is a tuning decision). Ram and blast knockback, which can throw
     a hull as fast, are left as they are so a round with no knock replays
-    byte for byte (a follow-up).
+    byte for byte (a follow-up). BB-59 took the follow-up: every hull now
+    looks a step ahead from spawn (`physics::HULL_LOOK_AHEAD`), and rapier's
+    speed cap is one cell a step, so the shove reaches its tuned 420/480
+    px/s instead of 400 (docs/physics-engine-design.md "Scale").
 
 ### Not in this PR
 

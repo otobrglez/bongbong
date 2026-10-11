@@ -3,9 +3,10 @@
 BB-37, the first of the six weapons of BB-36. A special weapon from its own
 crate (`pickup = "sonic_hammer"`), one at a time like every other
 (`Tank::take_weapon`): a crate loads `sonic_ammo_per_pickup` (7) blasts, a
-re-pick refills to seven, another weapon's crate replaces it. Seats and
-enemies alike: an enemy takes the crate while it fires shells
-(`Tank::wants_pickup`) and uses it by its own rule (§4).
+re-pick stacks seven more up to `sonic_ammo_max` (14), another weapon's
+crate replaces it. Seats and
+enemies alike: an enemy takes the crate while it fires shells, or to
+stack the one it carries (`Tank::wants_pickup`) and uses it by its own rule (§4).
 
 A cone of sound from the turret. Very little damage and a very big shove:
 it knocks tanks off their tracks, shatters glass, flattens tall grass so
@@ -39,8 +40,8 @@ tool and the `armory` map.
   defaults), each walked cell by cell (Amanatides-Woo, the
   `weather::Occluders` walk) over the map's cells (`map::world_to_cell`: centres on multiples of
   32). A ray stops on entering the first cell holding a tile that
-  `Material::blocks_sound`: every wall material - brick, iron, wood and
-  glass - the three towers, a volcano's cone and a training door; its reach
+  `Material::blocks_sound`: every wall material - brick, iron, wood,
+  glass and concrete - the three towers, a volcano's cone and a training door; its reach
   is the distance to that entry. It also stops at the field's edge. Props,
   drums, range boards, trees, lamp posts, pickups, water, lava, grass and
   tanks do not stop it. A destroyed tile is not there. The cast records, per ray, its
@@ -394,8 +395,9 @@ pub fn windup(&self) -> Option<Windup>;
   released, its `Pending` for the apply pass - and a later weapon that
   takes a tank's thinking away (a stun) does so at the one spot in
   `enemy_phase` before the field map's own choice (`field::mind`), through
-  the same helper. A teleport cancels it (`portal_phase`);
-  `init` has none. A tell commits: a seat that steps out of the cone during
+  the same helper. A teleport cancels it (`portal_phase`), and so does
+  the round's end, with no blast (`end_round`, as it lapses every charge),
+  so nothing winds up on the end screen; `init` has none. A tell commits: a seat that steps out of the cone during
   it is the dodge the tell is for.
 - **A seat has no tell**: a seat's press fires on the press. A later
   weapon whose own mechanic is a charge (the Gauss rail) or a call-in (the
@@ -606,18 +608,18 @@ the ground's flow, which the skid's length is worked out from).
 `tick_timers` counts it down for every tank, and `predict_seat` for the
 sandbox's seat.
 
-**It stops at a wall's face.** While a hull skids its contacts look a
-step's travel ahead (`sonic::skid_look_ahead`, run for every hull before
-every solver step, the room's and a sandbox's: `Physics::set_look_ahead`,
-rapier's soft continuous collision detection, at `Physics::max_step_travel`),
-so the solver stops it flush against a tile, deep water or the field's
-edge. Without it a knock lands a hull a step inside what it meets: rapier
-measures in metres while the world is in pixels, so it looks 0.02 px ahead
-and pushes a body out of an overlap at 3 px/s - a hull thrown at the edge
-at 400 px/s went 5.5 px into the boundary, its skid ended as the solver
-stopped it, and it crept back out over two seconds, part-way off the
-field. A hull on its tracks is never touched, so a round with no knock
-steps exactly as before. Online:
+**It stops at a wall's face.** Every hull's contacts look a step's travel
+ahead (`physics::HULL_LOOK_AHEAD`, rapier's soft continuous collision
+detection, set on the body at spawn - docs/physics-engine-design.md
+"Scale"), the room's and a sandbox's alike, so the solver stops a knocked
+hull flush against a tile, deep water or the field's edge. Without it a
+knock lands a hull a step inside what it meets: rapier's own look-ahead
+is 0.02 px and it pushes a body out of an overlap at 3 px/s - a hull
+thrown at the edge at 400 px/s went 5.5 px into the boundary, its skid
+ended as the solver stopped it, and it crept back out over two seconds,
+part-way off the field. Rapier's speed cap is one cell a step
+(`PHYSICS_MAX_SPEED`), so a knock keeps the speed it is tuned to, up to
+the wire's 508 px/s. Online:
 
 - `Event::Shoved { seat, vx, vy, skid }`: `Shoves::push` takes the skid
   (0 for every other shove), the wire carries it in tenths
@@ -883,7 +885,7 @@ wave or the tank and its age, hashed, never rolled.
 - **The HUD**: nothing new to lay out. `hud::WeaponSlot::of` gives the
   count in `HUD_SONIC_COLOR` (`#46C3F2`, the ink's base) and
   `hud::weapon_pickup` the glyph; the ring's ammo pips measure against
-  `full_load` (7).
+  `full_load`, the carry limit (14).
 
 ## 6. Tuning
 
@@ -893,6 +895,7 @@ enemies' group:
 | Row | Default | Range | Doc |
 |---|---|---|---|
 | `sonic_ammo_per_pickup: i32` | 7 | 1..=40 | Blasts one sonic hammer crate loads. One per press. |
+| `sonic_ammo_max: i32` | 14 | 1..=80 | The most blasts a tank carries, crates stacked (BB-66). |
 | `sonic_reload_seconds` | 0.8 | 0..=10 | Seconds between two blasts. |
 | `sonic_reach_px` | 208 | 32..=480 | How far the cone reaches from the pivot (px; six and a half cells). |
 | `sonic_half_angle_deg` | 46 | 5..=90 | The cone's half angle either side of the facing. |
@@ -995,7 +998,8 @@ Protocol 16 (from 15), once in the PR.
   share defaults to 0, no enemy carries one, so there is no wave, no tell,
   no skid and no sense; `SpecialSense::None` makes the `special` tier a
   `false` with no state touched; `seek_special` finds no crate;
-  `cover_cells` is `grass_cells` while `grass_flat` is empty; `knock` is
+  `cover_cells` is `grass_cells` while `grass_flat` is empty and no wood
+  has a trail (docs/WOODS.md); `knock` is
   never called. `determinism_tests`' pinned streams, the probe fixtures'
   ceilings and every thumbnail pin but the armory's new one stay as they
   are.
@@ -1006,7 +1010,7 @@ Protocol 16 (from 15), once in the PR.
 seat at cell (3, 6) facing east, parked enemies placed by hand):
 
 - The weapon: `a_sonic_crate_arms_the_hammer_and_replaces_the_special_carried`
-  (seven a crate, another special emptied, a refill to seven, an enemy takes
+  (seven a crate, another special emptied, a second stacked up to fourteen, an enemy takes
   one only on shells), `the_hammer_fires_on_the_press_and_spends_one_blast`
   (`Fired` then `SonicBlast` in one tick, none while held).
 - The cone and the wave: `the_cone_shoves_an_enemy_ahead_and_not_one_beside`,

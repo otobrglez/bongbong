@@ -141,9 +141,10 @@ plasma damage factor, shell ricochet bounces and recharge. Forcing those
 into one matrix would leave holes, so each weapon is a group, and its ammo
 knobs live *in* that group rather than in a separate "ammo" table, because
 ammo is per weapon (`max_shells` + `shell_recharge_seconds`,
-`minigun_ammo_per_pickup`, `laser_charges_per_pickup`,
-`plasma_ammo_per_pickup`). The generic pickup knobs (`pickup_ammo_amount`,
-`pickup_heal_amount`, respawn/collect radius) form a `pickups` group. The
+`minigun_ammo_per_pickup`/`minigun_ammo_max`, `laser_charges_per_pickup`/
+`laser_charges_max`, `plasma_ammo_per_pickup`/`plasma_ammo_max`). The
+generic pickup knobs (`pickup_ammo_amount`, `pickup_heal_amount`,
+respawn/collect radius) form a `pickups` group. The
 UI shows a tab per group, so "Shell / Minigun / Laser / Plasma" reads like a
 weapon spec sheet.
 

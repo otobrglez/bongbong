@@ -9,8 +9,8 @@ All destructible obstacles in one sheet. Unlike the tank and shell sheets, these
 | Property | Value |
 |---|---|
 | Filename | `walls_sheet.png` |
-| Dimensions | 512 × 832 px |
-| Grid | 16 columns × 26 rows |
+| Dimensions | 512 × 1056 px |
+| Grid | 16 columns × 33 rows |
 | Cell size | 32 × 32 px (uniform, no padding) |
 | Format | PNG, RGBA, straight (non-premultiplied) alpha |
 
@@ -71,6 +71,10 @@ Column count varies by material. **Cells outside a material's range are empty** 
 | 20 | **Rubble — fence** | 0–7 | snapped pickets and loose wire, 8 variants |
 | 21 | **Rubble — tank** | 0–7 | blown-off hull plate and track links, 8 variants |
 | 22–25 | **Edge caps** | 0–15 | brick / iron / wood / glass, column = 4-bit neighbour mask |
+| 26–29 | **Concrete** | 0–3 | intact + 3 damage (BB-83, §11) |
+| 30 | **Edge caps — concrete** | 0–15 | as rows 22–25 |
+| 31 | **Rubble — concrete** | 0–7 | slabs and a bent bar, 8 variants |
+| 32 | **Rebar cage** | 0–1 | whole, bent by a heavy blast |
 
 ```
 row_base:  brick = 0,  iron = 4,  wood = 8,  glass = 12
@@ -365,3 +369,181 @@ Material base tones, one fixed pick per material (see §3–6 above for the reas
 - Glass relies on alpha blending; without blending it reads as flat pale blue.
 - 22 of the 112 cells are intentionally empty (iron and glass are narrower than wood). Do not sample outside each material's valid column range.
 - These tiles have no outline, unlike the tanks and shells. That is intentional for wall continuity, but it means an isolated single wall tile sits flatter against terrain than a unit does. If you want lone blocks to pop, add a drop shadow at the entity level rather than baking outlines back in.
+
+---
+
+## 10. Chunks (BB-80, BB-81)
+
+Brick and wood break **chunk by chunk** (`src/chunks.rs`): a tile is a 4 × 4
+grid of 8 px chunks - four design pixels a side, about a quarter of a
+`block` brick - each with its own health (`brick_chunk_health` 10,
+`wood_chunk_health` 4, while `wall_chunks` is on). Iron, glass and the props
+still break whole. Concept and the decisions behind it:
+https://claude.ai/artifact/MCunjR9rCuA9DAFD51jPBN.
+
+**No new art.** A chunked tile is drawn chunk by chunk from the sheet it
+already has (`obstacle::draw_chunked`): a whole chunk from column 0, a worn
+one from the same 8 px of the damage columns (wear step 2 → col 1, step 1 →
+col 2), so its cracks are the authored ones; a burning plank from the fire
+loop. A gone chunk shows the ground. The chunks beside a hole show a face,
+one design pixel deep: a lit lip along its top (`STONE_HI`, `WOOD_PALE`)
+and shade down its other sides (`STONE_SHADE`, `WOOD_DARKEST`). The edge cap
+and the blast soot are drawn chunk by chunk too, over what still stands.
+
+**The rules.**
+
+| | |
+|---|---|
+| A shot | breaks the first standing chunk on its way in (`Chunks::struck`) and wears its four side neighbours by `chunk_ring_share` (0.6) and its corners by `chunk_corner_share` (0.3) of the blow - in full for a blow of `chunk_ring_full_damage` (15) or more, in proportion below it, so a minigun round drills where it lands (about 20 rounds fell a brick tile) and a shell (10-30) splits the brick round it (one or two shells, as before) |
+| A blast | the chunks facing it take the whole of it, the far side half (`Chunks::blast`) |
+| Anything else | a rail, a ram, flames: every chunk wears by the share of the tile the blow is worth |
+| Holes | `Terrain::sweep` tests a chunked tile's standing chunks, so a shot passes the gaps - a loophole |
+| The body | the bounds of the standing 16 px quadrants, a quadrant standing while two of its four chunks do (`Chunks::solid_box`, `Game::fit_tile_body`): a hull never fits a quadrant's gap |
+| Collapse | at `wall_collapse_chunks` (6) standing chunks or fewer the tile gives way (`obstacle_died`, its rubble decal); a flammable plank catches fire instead |
+
+**Pieces.** Every broken chunk throws pieces (`src/pieces.rs`, owned by
+`fx.rs`, cosmetic): 4 × 4, 4 × 2 and 2 × 2 cuts of masonry, or 2 px strips
+of wood along its grain (across for `planks_h`/`stagger`, upright for
+`planks_v`/`palisade`), each blitted from the chunk's own place in this
+sheet, so a wall comes apart into itself. Two thirds leave along the blow,
+a third spray back off the struck face; a collapse drops them where they
+stood. They fly with a shadow, bounce up to three times, then lie for
+`piece_linger_seconds` and drop out through the Bayer pattern. Capped at
+`fx_max_pieces`.
+
+**On the wire.** A tile's chunks travel in `TileState::chunks`, two bits of
+wear a chunk; `Event::ChunksBroken` (`WireEvent::ChunksBroken`) lets a
+replica throw the same pieces.
+
+### What a breach does (BB-82)
+
+| | |
+|---|---|
+| Spall | a shell (a blow of `spall_min_damage` 10 or more) that breaks chunks throws fragments off the tile's far face, from the broken chunks' middle carried along the blow: every tank on the other side from the shooter whose hull lies in the cone behind - within `spall_reach_px` (96) of the face and `spall_half_width_px` (12) of the blow's line past its own half-extent - takes `spall_damage` (8) falling to nothing at the reach (`Game::spall`, `HitCause::Spall`). No RNG. Its hull flashes and a spray of masonry leaves the face toward it. Off with `spall_enabled` |
+| Domino | a chunked tile that dies queues its four neighbours (`Game::pending_breaks`); `domino_delay_seconds` (0.16) later each one down to `domino_chunks` (11) standing or fewer gives way too, and queues its own. A whole tile stops the run |
+| Rubble | every broken chunk lays a unit of rubble where it stood; a shot that leaves the tile standing blows half of them into the cell behind (`Game::lay_rubble`, `chunks::Rubble`). `rubble_light` (6) units slow a hull to `rubble_light_speed` (0.85), `rubble_heavy` (14) to `rubble_heavy_speed` (0.7) (`Footing::on_rubble`, the driving paths only), and the router prices them at `rubble_light_path_cost`/`rubble_heavy_path_cost` (2, 3). Rubble never stops a shot. It travels as `Snapshot::rubble` |
+| Glass cascade | a pane that dies (but to a rod's crush) shatters a cracked neighbour `glass_cascade_seconds` (0.07) later, and that one the next; an intact neighbour takes `glass_stress_damage` (1) - a crack |
+
+Dust stays scenery: nothing a breach throws up blocks sight.
+
+---
+
+## 11. Concrete and cages (BB-83)
+
+The fifth wall material, the heavy one, in one warm `STONE_MD` grey - a step
+between brick's `STONE_LT` and iron's `STONE_DK`, so the three greys read
+apart. Rows 26–29 are its four variants, appended after every other block so
+no row moved:
+
+| Row | Type | Surface |
+|---|---|---|
+| 26 | `slab` | Smooth pour, a lift line every 16 px, form-tie holes |
+| 27 | `block` | 16 × 16 cinder blocks |
+| 28 | `panel` | Tall precast panels, a seam every 16 px |
+| 29 | `bunker` | Rough pitted aggregate, no joints |
+
+Columns 0–3: intact, chipped, cracked, battered - surface damage only, never
+a hole: concrete breaks chunk by chunk (§10, `concrete_chunk_health` 20,
+about twice brick's work). Its edge caps are row 30 (`EDGE_CAP_ROW_CONCRETE`,
+not `EDGE_CAP_ROW_BASE + 4`, which would land on its variants; the code asks
+`Material::cap_row`), its rubble row 31.
+
+A concrete map's variant is not rolled: it hashes from the map's first
+concrete cell, so a round's RNG stream is the one it was before concrete.
+
+**Cages.** Where a concrete tile would die - its chunks down to
+`wall_collapse_chunks` - it gives way into its rebar instead, and a wired
+pane (glass `reinforced`, row 13) that shatters into its mesh
+(`Obstacle::cage`). The cage stops hulls (its body is the whole cell, its nav
+cell stays blocked) and lets every shot through (`Terrain::sweep` sees a tile
+with no chunks). Shots, rams and flames do not touch it; `cage_cut_hits` (2)
+blasts of `cage_cut_damage` (15) or more cut it down, and a rail or a rod
+outright, which is when it dies and leaves its rubble. Drawn from row 32 -
+column 0 whole, column 1 bent once a blast has hit it - and a mesh from
+glass's shattered column. It throws no edge cap. Its hits left travel in
+`TileState::cage`.
+
+## 12. Fire that walks, embers, scars (BB-84)
+
+**A plank wall burns chunk by chunk.** A chunked wood tile that catches
+(§5's fire fork, a flame, a ground fire, an ember) burns for
+`plank_burn_seconds` (5) rather than `wood_burn_seconds`. The fire catches on
+one chunk, hashed from the tile (`chunks::burn_ranks`), and walks out across
+the tile nearest-first over the first `1 - wood_chunk_burn_share` of the
+burn; each chunk burns for `wood_chunk_burn_share` (0.4) of it and then chars
+through (`Obstacle::char_chunks`, `Event::ChunksCharred`): a hole a shot
+passes, the body refitted to what stands, its pixels falling as ash. The last
+chunk chars as the tile does. Only the chunks the fire has reached draw the
+burn columns (`Obstacle::chunk_alight`) and the tongues stand over them
+(`game::tile_flames`). Trees and unchunked wood burn whole, as before.
+
+**Embers.** A burning plank or tree throws an ember every
+`ember_interval_seconds` (0.9) of its burn, phased by its hash: downwind along
+`grass_gust_heading_deg`, up to `ember_spread_deg` (30) either side,
+`ember_reach_min_px`..`ember_reach_max_px` (24..96) away, landing
+`ember_flight_seconds` (0.7) later (`Game::embers`, `Event::EmberFlew`). One
+that lands on wood or a tree that would burn (`Obstacle::flammable`) or a
+range board sets it alight `ember_catch_chance` (0.4) of the time, an
+`Ignited` - every choice hashed, none from the round's RNG, so a replay and a
+room agree. A fire in a timber yard creeps downwind and never up it.
+`embers_enabled` turns them off.
+
+**Scars.** A wall piece (§10) that has lain `piece_linger_seconds` sinks into
+the ground over its last second - its shadow gone, dimmed to `scar_shade` -
+and stays there as a scar for the round, up to `fx_max_scars` (4000, the
+oldest going first). Presentation only (`pieces.rs`): every client keeps its
+own.
+
+## 13. How the enemies read a broken wall (BB-85)
+
+The AI reasons over the frame's `Terrain` snapshot. A tile that is whole, or
+breaks whole, reads exactly as it always has. What changes is how the AI
+reads a chunked tile with chunks broken.
+
+**Loopholes.** Line of sight (`Terrain::line_of_sight`, and the towers'
+`line_of_sight_from`) passes a hole a shell fits through. It tests the
+tile's standing chunks the way `Terrain::sweep` does, each grown by
+`shell_hit_half_extent` (`TerrainBox::blocks_line`). A slot one chunk tall is
+a loophole for a 6 px shell, but not along its edge. A cage is no obstruction
+at all. An enemy lined up on a seat behind a holed wall fires through the
+hole, still only from inside the seat's sight box (`ai::in_sight_box`). The
+engagement ring takes a slot behind a loophole, and the off-screen arrows'
+lane warning reads the same rule, so the HUD agrees with the AI.
+
+**What is in the way.** The breach perception (`Terrain::obstacle_ahead`,
+`ai::WallAhead`) counts a holed tile only while its body
+(`chunks::solid_box_of`: the quadrants with two or more of their four chunks
+standing) still stands across the hull's lane. The lane is the movement
+collider's half-width either side of the line. Once a breach has opened the
+quadrants a hull needs, the tank drives through. A cage is never a wall to
+shoot: every shell passes it.
+
+**The sapper.** A breach shot goes where it still does work
+(`ai::sapper_aim`). It aims at the nearest chunk of the tile that holds up a
+standing quadrant across the hull's lane: the nearest row first, then the
+chunk closest to the barrel's line. The shot is turned off the barrel by that
+chunk's bearing from the hull's centre (a shell flies along a ray from it,
+`Shell::spawn`), at most `enemy_sapper_max_aim_deg` (40). Without it the
+second shell flies through the first one's hole, and the tank is still
+stopped by the chunks either side.
+
+**Breaching on purpose.** A tank whose target the routing cannot reach plans
+a way through the walls (`ai::Sap`, `Game::sap_plan`). It routes on the nav
+grid with every tile a shell can bring down made open but dear
+(`breach_grid`):
+- each cell of such a wall costs `enemy_sap_wall_path_cost` (12), so the way
+  round wins until it is that much longer;
+- iron, a cage, deep water and lava, the frogs and the fires stay walls.
+
+The plan is the last open cell before the first such wall on that route, and
+the step into it. `Ai::steer` heads there where it would otherwise wander,
+and drives on into the wall once within a cell of it. Pushing into the wall
+starts the breach as before (`Brain::wants_breach`), and the sapper's aim
+opens it. Plans are made every `enemy_sap_replan_seconds` (1) for a tank
+still cut off, after the enemy pass (`Game::plan_saps`), and draw no RNG.
+A tank its target can be reached from has none, so a map where every target
+is reachable plays as it did.
+
+**Rubble.** The router prices rubble (§10) with `Grid::raise`, which never
+lowers a cell's price. Rubble on a ford or a lava ford leaves the ford's
+price, rather than replacing it with rubble's lower one.

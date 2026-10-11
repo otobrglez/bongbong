@@ -2356,7 +2356,7 @@ mod tests {
         round.frame(&Intent::default(), 1.0 / 60.0);
         let seat = room.game.tank_snapshots().into_iter().find(|t| t.slot == 0).expect("the seat");
         let rad = seat.rotation.to_radians();
-        let ahead = crate::math::Vec2::new(seat.position.x + rad.sin() * 90.0, seat.position.y - rad.cos() * 90.0);
+        let ahead = crate::math::Vec2::new(seat.position.x + crate::math::sin(rad) * 90.0, seat.position.y - crate::math::cos(rad) * 90.0);
         room.game.debug_teleport(1, ahead, Some(seat.rotation)).expect("an enemy in slot 1");
         // Twenty ticks of that world, stamped on the room's schedule:
         // render time stands the delay behind the newest tick, which has to
@@ -2388,7 +2388,7 @@ mod tests {
 
             for shot in game.drawable_state().shots {
                 let (x, y) = (shot.x as f32 / 4.0, shot.y as f32 / 4.0);
-                furthest = furthest.max((x - seat.position.x) * rad.sin() - (y - seat.position.y) * rad.cos());
+                furthest = furthest.max((x - seat.position.x) * crate::math::sin(rad) - (y - seat.position.y) * crate::math::cos(rad));
             }
         }
         let report = round.prediction().expect("a report");

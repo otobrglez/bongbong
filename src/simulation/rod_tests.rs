@@ -1090,7 +1090,8 @@ fn a_shove_stops_a_hull_at_a_wall_and_the_fields_edge_never_inside() {
             let s = seat(&game);
             let at = Position::new(544.0, face + up + 0.5 + gap as f32);
             game.place_tank(s, at, Some(90.0)).expect("placed");
-            game.debug_call_rod(Position::new(at.x, at.y + 80.0), true).expect("a call");
+            // A cell past the circle, in the shove ring.
+            game.debug_call_rod(Position::new(at.x, at.y + tuning().rod_kill_radius_px + 32.0), true).expect("a call");
             let mut shoved = false;
             for _ in 0..countdown_ticks() + 120 {
                 step(&mut game, false);

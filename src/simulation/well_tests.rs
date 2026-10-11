@@ -914,13 +914,13 @@ fn wall_overlap(game: &Game, entity: Entity) -> f32 {
 }
 
 /// The pull is no knock - a current along the tracks and a side pull
-/// against their grip, under the body's speed cap - yet it presses hulls
-/// into whatever stands between them and the core: a hull dragged north,
-/// along its tracks and broadside, at an iron wall and at the field's top
-/// edge from every gap up to a few steps' travel, sinks under a pixel into
-/// it on the step it first meets the face (without `pull_look_ahead`, up
-/// to four and a half) and lies flush against it once the pull and the
-/// collapse are over - it never goes through.
+/// against their grip - yet it presses hulls into whatever stands between
+/// them and the core: a hull dragged north, along its tracks and
+/// broadside, at an iron wall and at the field's top edge from every gap up
+/// to a few steps' travel, sinks under a pixel into it on the step it first
+/// meets the face (the hull's look-ahead, `physics::HULL_LOOK_AHEAD`) and
+/// lies flush against it once the pull and the collapse are over - it
+/// never goes through.
 #[test]
 fn the_pull_presses_a_hull_against_a_wall_and_the_fields_edge_never_into_it() {
     let iron: String = (14..=20).map(|c| format!("cells.\"{c},4\" = {{ kind = \"wall\", material = \"iron\" }}\n")).collect();
@@ -961,10 +961,9 @@ fn the_pull_presses_a_hull_against_a_wall_and_the_fields_edge_never_into_it() {
 /// The pose validator allows a client-owned hull the pull a well puts on it
 /// and no more (docs/gravity-well.md "Online"): a pose carried toward the
 /// core past the chassis's own reach is taken; one as far the other way,
-/// against the pull, is refused; one past the solver's speed cap - which no
-/// pull carries a hull beyond - is refused, though counting the whole side
-/// pull in any direction would have taken it; and away from every well the
-/// chassis's own reach holds.
+/// against the pull, is refused; one past its own reach and the current's
+/// together is refused; and away from every well the chassis's own reach
+/// holds.
 #[test]
 fn an_owned_hull_is_allowed_the_pull_and_no_more() {
     let t = tuning();
@@ -974,7 +973,6 @@ fn an_owned_hull_is_allowed_the_pull_and_no_more() {
     let start = MID + Vec2::new(40.0, 0.0);
     let n = POSE_REACH_TICKS;
     let (speed, mass_factor, grip) = with_tank(&game.world, s, |tank| (tank.effective_speed(), tank.mass_factor(), t.tank_turn_grip_force / tank.mass()));
-    let cap = game.physics.max_speed();
     let own = speed * DT * n + POSE_REACH_SLACK_PX;
     let pull = game.well_field.hull_pull(start, mass_factor, &t);
     assert!(pull.current.length() * DT * n > 8.0, "the case holds at the defaults: {pull:?}");
@@ -988,12 +986,9 @@ fn an_owned_hull_is_allowed_the_pull_and_no_more() {
     assert!(pose(&mut game, start, toward).is_ok(), "the pull carries it past its own reach");
     assert!(pose(&mut game, start, toward * -1.0).is_err(), "against the pull, its own reach holds");
     assert!(pose(&mut game, start, Vec2::new(0.0, own - 1.0)).is_ok(), "across, its own reach still");
-    // Past the speed cap toward the core - where the whole side pull,
-    // counted in any direction, allowed it.
-    let past_cap = cap * DT * n + POSE_REACH_SLACK_PX + 4.0;
-    let whole = (speed + pull.current.length() + pull.side.length() * WELL_SIDE_REACH_SECONDS) * DT * n + POSE_REACH_SLACK_PX;
-    assert!(whole > past_cap, "the whole side pull would have taken {past_cap}: {whole}");
-    assert!(pose(&mut game, start, Vec2::new(-past_cap, 0.0)).is_err(), "past the speed cap toward the core");
+    // Toward the core past its own reach and the current's together.
+    let carried = (speed + pull.current.length()) * DT * n + POSE_REACH_SLACK_PX;
+    assert!(pose(&mut game, start, Vec2::new(-(carried + 4.0), 0.0)).is_err(), "past its own reach and the current's");
     // Out of every well's reach, the chassis's own.
     let far = MID + Vec2::new(t.well_radius_px + 80.0, 0.0);
     assert!(pose(&mut game, far, toward).is_err(), "no pull, no allowance");
@@ -1508,7 +1503,8 @@ fn the_spawn_swap_hands_out_the_well_by_its_share() {
 }
 
 /// A well crate loads three wells and replaces the special carried; a
-/// second refills to three; an enemy takes it only while it carries none.
+/// second stacks on what is left, up to six; an enemy takes it only while
+/// it carries none.
 #[test]
 fn a_well_crate_arms_the_well_and_replaces_the_special_carried() {
     let mut tank = Tank::default();
@@ -1517,7 +1513,9 @@ fn a_well_crate_arms_the_well_and_replaces_the_special_carried() {
     assert_eq!((tank.special(), tank.wells, tank.missile_ammo), (Some(ActiveWeapon::GravityWell), tuning().well_per_pickup, 0));
     tank.wells = 1;
     tank.take_weapon(ActiveWeapon::GravityWell);
-    assert_eq!(tank.wells, tuning().well_per_pickup, "refilled");
+    assert_eq!(tank.wells, 1 + tuning().well_per_pickup, "stacked");
+    tank.take_weapon(ActiveWeapon::GravityWell);
+    assert_eq!(tank.wells, tuning().well_max, "up to the carry limit");
     let mut enemy = Tank { owner: Owner::Enemy(4), ..Tank::default() };
     assert!(enemy.wants_pickup(PickupKind::GravityWell));
     enemy.take_weapon(ActiveWeapon::Plasma);

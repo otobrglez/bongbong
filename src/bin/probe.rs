@@ -296,11 +296,13 @@ const LULL_MIN_SECONDS: f32 = 3.0;
 // isn't explained by the scripted Scenario. Bounds are generous on purpose
 // so legitimate gameplay can never trip them: the position margin sits
 // outside the walls' inner faces (0/width/0/height, see spawn_walls) but
-// inside their WALL_THICKNESS-padded outer extent, and the speed cap is
-// well above TANK_SPEED (220px/s) times SPEED_BOOST_MULTIPLIER plus any
-// legitimate ram/explosion knockback spike.
+// inside their WALL_THICKNESS-padded outer extent, and the speed bound is
+// half the solver's cap: above every legitimate speed (a knock at the
+// wire's 508 px/s on top of a hull's own, a light hull carried by a well's
+// current at full throttle, about 750) and below the cap a blown-up body
+// runs into.
 const INVARIANT_POS_MARGIN: f32 = 50.0; // px outside the walls' inner faces
-const INVARIANT_SPEED_MAX: f32 = 800.0; // px/s
+const INVARIANT_SPEED_MAX: f32 = bongbong::PHYSICS_MAX_SPEED * 0.5; // px/s
 /// Stands in for a slot in the one-shot `invariant` flag set for the
 /// world-level rapier-quarantine check, which belongs to no tank. No owner
 /// slot can ever reach this value.

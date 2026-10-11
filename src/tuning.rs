@@ -153,7 +153,7 @@ pub const TANK_NAMES: [&str; 12] = [
 
 /// Wall materials in `obstacle::MATERIALS` / `obstacle::Material`
 /// declaration order - index with `material as usize`.
-pub const MATERIAL_NAMES: [&str; 4] = ["brick", "iron", "wood", "glass"];
+pub const MATERIAL_NAMES: [&str; 5] = ["brick", "iron", "wood", "glass", "concrete"];
 
 /// The table macro. Grammar, one row per knob:
 ///
@@ -624,9 +624,12 @@ tunables! {
 
     group minigun {
         /// Rounds granted per minigun pickup: ten full bursts at
-        /// `minigun_burst_size` 6, so each of the ring's ten ammo pips
-        /// (`tank::AMMO_PIPS`) is one burst.
+        /// `minigun_burst_size` 6.
         minigun_ammo_per_pickup: i32 = 60 in 1 ..= 1000;
+        /// The most minigun rounds a tank carries: a crate of the weapon
+        /// carried adds its rounds on top, up to this (`Tank::take_weapon`,
+        /// `ActiveWeapon::crate_load`) - seats and enemies alike.
+        minigun_ammo_max: i32 = 200 in 1 ..= 1000;
         /// Bullets per burst: the first fires on the trigger frame, the rest
         /// are queued `minigun_bullet_delay_seconds` apart
         /// (`Tank::minigun_burst`). Each is an individually simulated
@@ -679,6 +682,8 @@ tunables! {
         /// and the laser is the live weapon, firing resolves an instant hit
         /// the same frame (no travel time) and consumes one charge.
         laser_charges_per_pickup: i32 = 6 in 1 ..= 200;
+        /// The most laser charges a tank carries, crates stacked.
+        laser_charges_max: i32 = 18 in 1 ..= 200;
         /// Per-hit damage range - lower than a player shell's, since a laser
         /// never misses; toned down to compensate for guaranteed accuracy.
         laser_damage_min: f32 = 8.0 in 0.0 ..= 100.0;
@@ -702,6 +707,8 @@ tunables! {
         /// twin-barrel volleys (a twin chassis spends 2 per shot like a
         /// shell does).
         plasma_ammo_per_pickup: i32 = 10 in 1 ..= 500;
+        /// The most plasma bolts a tank carries, crates stacked.
+        plasma_ammo_max: i32 = 30 in 1 ..= 500;
         /// Flat damage multiplier on top of the shell damage range the
         /// shooter would otherwise use (player/enemy split included) and
         /// `tank_damage_factor` - a straight damage upgrade over a shell.
@@ -738,6 +745,8 @@ tunables! {
         /// Seeker missiles granted per pickup - one volley from the
         /// four-tube pod.
         missile_ammo_per_pickup: i32 = 4 in 1 ..= 400;
+        /// The most seeker missiles a tank carries, crates stacked.
+        missile_ammo_max: i32 = 12 in 1 ..= 400;
         /// Missiles per salvo, one per tube, so at most the pod's four.
         /// The first leaves at once, the rest
         /// `missile_launch_delay_seconds` apart (`Tank::missile_volley`).
@@ -825,6 +834,8 @@ tunables! {
         /// Grenades one grenade crate loads into the launcher's drum
         /// (`pickup::PickupKind::Grenades`, `grenade.rs`). One per press.
         grenade_ammo_per_pickup: i32 = 6 in 1 ..= 40;
+        /// The most grenades a tank carries, crates stacked.
+        grenade_ammo_max: i32 = 12 in 1 ..= 80;
         /// Seconds between two launches.
         grenade_reload_seconds: f32 = 0.6 in 0.0 ..= 10.0;
         /// How fast a grenade leaves the barrel over the ground (px/s),
@@ -902,6 +913,8 @@ tunables! {
         /// Blasts one sonic hammer crate loads (`pickup::PickupKind::
         /// SonicHammer`, docs/sonic-hammer.md). One per press.
         sonic_ammo_per_pickup: i32 = 7 in 1 ..= 40;
+        /// The most blasts a tank carries, crates stacked.
+        sonic_ammo_max: i32 = 14 in 1 ..= 80;
         /// Seconds between two blasts.
         sonic_reload_seconds: f32 = 0.8 in 0.0 ..= 10.0;
         /// How far the cone reaches from the turret's pivot (px; six and a
@@ -994,6 +1007,9 @@ tunables! {
         /// Pulses one EMP crate loads (`pickup::PickupKind::Emp`,
         /// docs/emp-burst.md). One per press.
         emp_charges_per_pickup: i32 = 3 in 1 ..= 20;
+        /// The most pulses a tank carries, crates stacked - few, so a
+        /// hoarded stock cannot hold a wave down end to end.
+        emp_charges_max: i32 = 7 in 1 ..= 40;
         /// How far the ring reaches from the hull's centre (px; five
         /// cells), measured to the nearest point of what it strikes: a
         /// hull's box, a tower's cell, a missile's ground point.
@@ -1077,6 +1093,8 @@ tunables! {
         /// Slugs one gauss rail crate loads (`pickup::PickupKind::GaussRail`,
         /// docs/gauss-rail.md). One per full release.
         gauss_slugs_per_pickup: i32 = 4 in 1 ..= 20;
+        /// The most slugs a tank carries, crates stacked.
+        gauss_slugs_max: i32 = 9 in 1 ..= 40;
         /// Seconds the trigger is held before the rail is full and a
         /// release fires; released sooner, the charge fizzles and spends
         /// nothing.
@@ -1147,6 +1165,10 @@ tunables! {
         /// (`pickup::PickupKind::FpvSwarm`, docs/fpv-swarm.md). One per
         /// press.
         fpv_drones_per_pickup: i32 = 6 in 1 ..= 12;
+        /// The most drones a halo holds, crates stacked. Each crate past
+        /// the first hovers its drones between the ones before
+        /// (`fpv::Halo`).
+        fpv_drones_max: i32 = 12 in 1 ..= 24;
         /// Seconds between two launches.
         fpv_reload_seconds: f32 = 0.4 in 0.0 ..= 10.0;
         /// How long a drone climbs out of the halo before it turns for its
@@ -1243,6 +1265,8 @@ tunables! {
         /// (`pickup::PickupKind::RodFromGod`, docs/rod-from-god.md). One per
         /// call.
         rod_per_pickup: i32 = 2 in 1 ..= 10;
+        /// The most calls the uplink holds, crates stacked.
+        rod_max: i32 = 6 in 1 ..= 20;
         /// How long the trigger is held before a release calls; a shorter
         /// tap calls nothing.
         rod_settle_seconds: f32 = 0.25 in 0.0 ..= 2.0;
@@ -1264,16 +1288,16 @@ tunables! {
         /// pace too.
         rod_reticle_repeat_seconds: f32 = 0.06 in 0.01 ..= 1.0;
         /// From the call to the impact.
-        rod_countdown_seconds: f32 = 4.0 in 0.5 ..= 15.0;
+        rod_countdown_seconds: f32 = 3.0 in 0.5 ..= 15.0;
         /// The circle: a hull with any part inside it is crushed, a frog
         /// killed, a drone downed.
-        rod_kill_radius_px: f32 = 48.0 in 8.0 ..= 160.0;
+        rod_kill_radius_px: f32 = 64.0 in 8.0 ..= 160.0;
         /// Every breakable tile whose cell reaches inside this goes down;
         /// iron, a cone and a door stand.
-        rod_break_radius_px: f32 = 80.0 in 0.0 ..= 256.0;
+        rod_break_radius_px: f32 = 104.0 in 0.0 ..= 256.0;
         /// How far out the impact shoves hulls, falling from the circle's
         /// edge to nothing here.
-        rod_shove_radius_px: f32 = 160.0 in 0.0 ..= 480.0;
+        rod_shove_radius_px: f32 = 208.0 in 0.0 ..= 480.0;
         /// The shove at the circle's edge (px/s) against the chassis-free
         /// mass.
         rod_shove_speed: f32 = 420.0 in 0.0 ..= 508.0;
@@ -1354,6 +1378,8 @@ tunables! {
         /// Wells one gravity well crate loads (`pickup::PickupKind::GravityWell`,
         /// docs/gravity-well.md). One per launch; the anchor costs nothing.
         well_per_pickup: i32 = 3 in 1 ..= 10;
+        /// The most wells the projector holds, crates stacked.
+        well_max: i32 = 6 in 1 ..= 20;
         /// After a launch, seconds before the next launch. The anchor
         /// press is never held back by it.
         well_reload_seconds: f32 = 1.5 in 0.0 ..= 10.0;
@@ -1475,10 +1501,11 @@ tunables! {
     }
 
     group flamethrower {
-        /// Seconds of burn one flamethrower pickup grants; a second pickup
-        /// stacks. The weapon is stocked while any fuel is left, and the
-        /// HUD shows whole seconds.
+        /// Seconds of burn one flamethrower pickup grants. The weapon is
+        /// stocked while any fuel is left, and the HUD shows whole seconds.
         flame_fuel_per_pickup: f32 = 9.0 in 0.5 ..= 60.0;
+        /// The most seconds of fuel a tank carries, crates stacked.
+        flame_fuel_max: f32 = 30.0 in 0.5 ..= 180.0;
         /// Length of the cone (px) from the muzzle; a solid tile on the
         /// centre line caps it for that frame.
         flame_range: f32 = 164.0 in 16.0 ..= 400.0;
@@ -1978,6 +2005,18 @@ tunables! {
         /// How far past its own hull a tank looks for the tile it is
         /// driving into (px): about one tile.
         enemy_breach_reach_px: f32 = 40.0 in 4.0 ..= 300.0;
+        /// The widest a sapper turns a breach shot off its barrel (degrees)
+        /// to reach a chunk that still holds up the wall across its hull's
+        /// lane (`ai::sapper_aim`). Past it the shot goes as near as it
+        /// may.
+        enemy_sapper_max_aim_deg: f32 = 40.0 in 0.0 ..= 80.0;
+        /// What a cell of wall a shell can open costs a sapper's route
+        /// through the walls (`Game::sap_plan`), against 1 for open ground:
+        /// the way round wins until it is this many cells longer per wall.
+        enemy_sap_wall_path_cost: i32 = 12 in 1 ..= 255;
+        /// How often a tank with no route to its target plans its way
+        /// through the walls again (s).
+        enemy_sap_replan_seconds: f32 = 1.0 in 0.1 ..= 10.0;
     }
 
     group command {
@@ -2366,7 +2405,7 @@ tunables! {
         /// tough: glass snaps almost immediately, wood breaks easily, brick
         /// holds longer, iron the longest of all on top of being permanent.
         /// Baked into each wall's health when the map is spawned.
-        wall_max_health: [f32; 4] = [20.0, 220.0, 8.0, 2.0] in 1.0 ..= 1000.0 labels MATERIAL_NAMES @ Spawn;
+        wall_max_health: [f32; 5] = [20.0, 220.0, 8.0, 2.0, 40.0] in 1.0 ..= 1000.0 labels MATERIAL_NAMES @ Spawn;
         /// Fraction of spawned Wood obstacles that catch fire when destroyed
         /// instead of breaking outright (`Obstacle::flammable`, rolled once
         /// at spawn).
@@ -2376,6 +2415,97 @@ tunables! {
         /// Total time a Wood obstacle spends burning before charring and
         /// being removed.
         wood_burn_seconds: f32 = 1.0 in 0.1 ..= 30.0;
+        /// Brick and wood tiles break chunk by chunk (`chunks.rs`, BB-80):
+        /// a shot breaks the 8 px chunk it strikes, a hole lets shots
+        /// through, the tile gives way at `wall_collapse_chunks`. Off, a
+        /// wall is one health pool again, as before.
+        wall_chunks: bool = true in 0 ..= 1 @ Spawn;
+        /// One brick chunk's health, in the damage shots deal: a player
+        /// shell (10-30) breaks the chunk it strikes and most of its ring,
+        /// a minigun round (3-6) takes two or three to break one.
+        brick_chunk_health: f32 = 10.0 in 0.5 ..= 200.0 @ Spawn;
+        /// One wood chunk's health: planks splinter at almost any blow.
+        wood_chunk_health: f32 = 4.0 in 0.5 ..= 200.0 @ Spawn;
+        /// One concrete chunk's health: about twice brick's work to
+        /// breach, a shell's ring wearing it rather than breaking it.
+        concrete_chunk_health: f32 = 20.0 in 0.5 ..= 200.0 @ Spawn;
+        /// A concrete wall that gives way, and a wired pane that shatters,
+        /// leave a cage standing (`Obstacle::cage`): shots pass, hulls do
+        /// not. It takes this many blasts of `cage_cut_damage` or more to
+        /// cut it down.
+        cage_cut_hits: i32 = 2 in 1 ..= 10;
+        cage_cut_damage: f32 = 15.0 in 0.0 ..= 200.0;
+        /// Share of a blow the struck chunk's four side neighbours take.
+        chunk_ring_share: f32 = 0.6 in 0.0 ..= 1.0;
+        /// Share of a blow the struck chunk's four corner neighbours take.
+        chunk_corner_share: f32 = 0.3 in 0.0 ..= 1.0;
+        /// A blow this hard wears the ring round the struck chunk by the
+        /// full shares above; a lighter one by its fraction of it, so a
+        /// minigun round drills where it lands and a shell splits the
+        /// brick round it.
+        chunk_ring_full_damage: f32 = 15.0 in 0.1 ..= 200.0;
+        /// A chunked tile gives way once this many of its 16 chunks or
+        /// fewer still stand: what is left drops where it stood.
+        wall_collapse_chunks: i32 = 6 in 0 ..= 15;
+        /// A breach throws fragments off a chunked wall's far face into a
+        /// tank sheltering behind it (spall, BB-82). Off, a wall is perfect
+        /// cover until it breaks.
+        spall_enabled: bool = true in 0 ..= 1;
+        /// Spall's damage at the far face, falling linearly to nothing at
+        /// `spall_reach_px`.
+        spall_damage: f32 = 8.0 in 0.0 ..= 100.0;
+        /// How far behind the face spall reaches, px (about three tiles).
+        spall_reach_px: f32 = 96.0 in 0.0 ..= 400.0;
+        /// Half the width of spall's cone across the blow's way, px, past
+        /// the hull's own half-extent.
+        spall_half_width_px: f32 = 12.0 in 0.0 ..= 64.0;
+        /// The least blow that throws spall: a shell, not a minigun round.
+        spall_min_damage: f32 = 10.0 in 0.0 ..= 200.0;
+        /// A collapsing chunked tile brings down a neighbour in its run
+        /// that is down to this many standing chunks or fewer.
+        domino_chunks: i32 = 11 in 0 ..= 16;
+        /// Seconds between one tile of a run giving way and the next.
+        domino_delay_seconds: f32 = 0.16 in 0.0 ..= 2.0;
+        /// How long a chunked plank wall burns before the last of it chars
+        /// out (BB-84): the fire catches on one chunk and walks across
+        /// the tile, each chunk it reaches burning through and opening a
+        /// hole. Trees and unchunked wood keep `wood_burn_seconds`.
+        plank_burn_seconds: f32 = 5.0 in 0.1 ..= 30.0;
+        /// Share of a plank's burn each chunk burns for once the fire
+        /// reaches it; the front crosses the tile in the rest.
+        wood_chunk_burn_share: f32 = 0.4 in 0.05 ..= 1.0;
+        /// Burning wood and trees throw embers downwind
+        /// (`grass_gust_heading_deg`) that can light the wood they land on.
+        embers_enabled: bool = true in 0 ..= 1;
+        /// Seconds between one burning tile's embers.
+        ember_interval_seconds: f32 = 0.9 in 0.05 ..= 10.0;
+        /// How far downwind an ember lands, px: somewhere between these.
+        ember_reach_min_px: f32 = 24.0 in 0.0 ..= 400.0;
+        ember_reach_max_px: f32 = 96.0 in 0.0 ..= 400.0;
+        /// How far either side of the wind an ember may stray, degrees.
+        ember_spread_deg: f32 = 30.0 in 0.0 ..= 180.0;
+        /// Seconds an ember is in the air.
+        ember_flight_seconds: f32 = 0.7 in 0.05 ..= 5.0;
+        /// Chance an ember landing on wood that would burn sets it alight.
+        ember_catch_chance: f32 = 0.4 in 0.0 ..= 1.0;
+        /// Rubble units on a cell (a broken chunk lays one where it stood
+        /// and, blown out, one in the cell behind) that make it light
+        /// rubble, and heavy rubble.
+        rubble_light: i32 = 6 in 1 ..= 64;
+        rubble_heavy: i32 = 14 in 1 ..= 64;
+        /// Speed factor on light and heavy rubble.
+        rubble_light_speed: f32 = 0.85 in 0.1 ..= 1.0;
+        rubble_heavy_speed: f32 = 0.7 in 0.1 ..= 1.0;
+        /// What a step onto light and heavy rubble costs the router, open
+        /// ground being 1 (a ford is `water_ford_path_cost`).
+        rubble_light_path_cost: i32 = 2 in 1 ..= 50;
+        rubble_heavy_path_cost: i32 = 3 in 1 ..= 50;
+        /// Seconds between one pane of a glass run shattering and the next
+        /// cracked one going with it.
+        glass_cascade_seconds: f32 = 0.07 in 0.0 ..= 2.0;
+        /// Damage a shattering pane's stress puts into an intact neighbour:
+        /// a crack, not a break.
+        glass_stress_damage: f32 = 1.0 in 0.0 ..= 10.0;
     }
 
     group props {
@@ -2518,12 +2648,37 @@ tunables! {
         tree_max_health: f32 = 12.0 in 1.0 ..= 500.0 @ Spawn;
         /// Conifer toughness. Slimmer than a broadleaf, so a little less.
         pine_max_health: f32 = 9.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Spruce toughness: the dense, dark interior tree, the one a scout
+        /// shell fells only a little more than half the time.
+        spruce_max_health: f32 = 14.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Scots pine toughness: an open crown on a slim trunk, a conifer's.
+        scots_max_health: f32 = 9.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Fir sapling toughness: below every shell's least, so anything
+        /// fells one - the soft outer ring of a conifer stand.
+        fir_max_health: f32 = 5.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Birch toughness: a light edge tree, felled by nearly every shell.
+        birch_max_health: f32 = 8.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Willow toughness: a broad bank tree, between a pine and a
+        /// broadleaf.
+        willow_max_health: f32 = 10.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Date palm toughness: a thin ringed trunk.
+        palm_max_health: f32 = 7.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Dead snag toughness: dry grey wood that snaps at a touch.
+        snag_max_health: f32 = 4.0 in 1.0 ..= 500.0 @ Spawn;
         /// Seconds a tank has to keep pushing into a tree before it goes
         /// over. Just past a sandbag's, so a tank drives through a stand
         /// rather than shouldering each trunk down, and well short of
         /// `enemy_breach_after_seconds` so an AI that drives into one
         /// pushes through instead of stopping to shoot it.
         tree_ram_seconds: f32 = 0.5 in 0.05 ..= 10.0;
+        /// `tree_ram_seconds` for a spruce: a beat longer, the heaviest trunk.
+        spruce_ram_seconds: f32 = 0.6 in 0.05 ..= 10.0;
+        /// `tree_ram_seconds` for a fir sapling and a dead snag: a hull
+        /// barely slows, so a wood's soft edge can be forced almost
+        /// anywhere.
+        sapling_ram_seconds: f32 = 0.2 in 0.05 ..= 10.0;
+        /// `tree_ram_seconds` for a birch and a date palm: slim trunks.
+        slim_tree_ram_seconds: f32 = 0.4 in 0.05 ..= 10.0;
         /// Seconds each of a tree's dapple frames holds.
         ///
         /// This is a tree's entire idle animation: the frames are the same
@@ -2535,6 +2690,18 @@ tunables! {
         /// shimmers out of step with itself rather than blinking as one
         /// (`obstacle::tree_col`).
         tree_dapple_seconds: f32 = 0.9 in 0.05 ..= 10.0;
+        /// How opaque a crown is drawn over a player's own tank - the
+        /// canopy cutaway (`game.rs`, docs/WOODS.md): see-through enough to
+        /// show the hull, solid enough to still read as a tree. An enemy
+        /// under a crown stays hidden.
+        canopy_cutaway_alpha: f32 = 0.35 in 0.0 ..= 1.0;
+        /// How much of a player's hull the crowns over it must cover
+        /// together, as a share of the hull's box, before the canopy
+        /// cutaway draws them see-through (`obstacle::canopy_cutaway`).
+        /// A crown overhangs its cell by 8 px, so a hull merely beside one
+        /// tree is under a sliver of it and the tree stays solid; a hull in
+        /// a one-cell trail is under the crowns on both sides.
+        canopy_cutaway_cover: f32 = 0.3 in 0.0 ..= 1.0;
         /// How far a tree bends away from a tank shouldering it over, at
         /// the moment it goes. Scales with `ram_timer` squared, so the tree
         /// gives slowly at first and then goes - without it a rammed tree
@@ -2568,6 +2735,10 @@ tunables! {
         /// RNG at all, so a treeless map replays unchanged. Burn timing is
         /// shared with wood (`wood_burn_seconds`): it is one fire.
         tree_flammable_chance: f64 = 0.55 in 0.0 ..= 1.0 @ Spawn;
+        /// `tree_flammable_chance` for a tree drawn dry - every species on
+        /// a desert map but the date palm, and a dead snag anywhere
+        /// (`Material::is_dry`): tinder, so most go up rather than fall.
+        dry_tree_flammable_chance: f64 = 0.8 in 0.0 ..= 1.0 @ Spawn;
         /// Radius (px) of a blast's fireball at its peak (`fireball.rs`),
         /// before the blast's own scale - a fuel drum's is larger, a
         /// missile's and a cook-off's smaller.
@@ -2651,6 +2822,19 @@ tunables! {
         /// Hard cap on live particles; oldest are evicted first so a big
         /// burst eats into old smoke rather than into itself.
         fx_max_particles: i32 = 900 in 0 ..= 8000;
+        /// Hard cap on wall pieces (`fx::Piece`, a broken chunk's own
+        /// pixels), flying and lying; the oldest lying ones go first.
+        fx_max_pieces: i32 = 600 in 0 ..= 4000;
+        /// How fast a broken chunk's pieces leave it, px/s at the most.
+        piece_speed: f32 = 150.0 in 0.0 ..= 600.0;
+        /// Seconds a piece lies loose where it landed before it settles.
+        piece_linger_seconds: f32 = 8.0 in 0.0 ..= 120.0;
+        /// Pieces that have lain `piece_linger_seconds` settle into the
+        /// ground as battle scars (BB-84) and stay for the round, the
+        /// oldest going first past this many.
+        fx_max_scars: i32 = 4000 in 0 ..= 20000;
+        /// How bright a settled scar is against the piece it was, 0..1.
+        scar_shade: f32 = 0.62 in 0.0 ..= 1.0;
         /// Downward acceleration on a chip's fake height, px/s^2.
         debris_gravity: f32 = 900.0 in 0.0 ..= 4000.0;
         /// Per-second rate at which a particle bleeds ground speed
@@ -3172,6 +3356,10 @@ tunables! {
         /// Never 1.0: a tuft that disappears entirely reads as a hole in
         /// the field rather than as matted grass.
         grass_crush_flatten: f32 = 0.78 in 0.0 ..= 0.95;
+        /// `grass_crush_flatten` for a bush (`grass::draw_bush`): a shrub
+        /// a hull is sitting on is pressed down to a third of its height,
+        /// never gone, and stands back up over the same recovery.
+        bush_crush_flatten: f32 = 0.66 in 0.0 ..= 0.95;
         /// Leaf or straw specks a tank kicks up per second per grass cell it is
         /// crossing (`fx.rs`, scaled by `fx_density` like every other
         /// emitter). Zero turns the rustle off.
@@ -4004,7 +4192,7 @@ impl Tuning {
                 // - good enough for a paste-back snippet.
                 match meta.labels.len() {
                     12 => " labels TANK_NAMES".to_string(),
-                    4 => " labels MATERIAL_NAMES".to_string(),
+                    5 => " labels MATERIAL_NAMES".to_string(),
                     n => format!(" labels /* {n} labels */"),
                 }
             } else {
@@ -4329,7 +4517,7 @@ mod tests {
         assert!(rust.contains("tank_speed: f32 = 99.0 in 20.0 ..= 800.0;"), "{rust}");
         assert!(rust.contains("max_shells: i32 = 23 in 1 ..= 100 @ Spawn;"), "{rust}");
         assert!(
-            rust.contains("wall_max_health: [f32; 4] = [20.0, 220.0, 40.0, 2.0] in 1.0 ..= 1000.0 labels MATERIAL_NAMES @ Spawn;"),
+            rust.contains("wall_max_health: [f32; 5] = [20.0, 220.0, 40.0, 2.0, 40.0] in 1.0 ..= 1000.0 labels MATERIAL_NAMES @ Spawn;"),
             "{rust}"
         );
     }
@@ -4360,7 +4548,7 @@ mod tests {
         assert_eq!(speed["applies"], "live");
         assert!(speed["doc"].as_str().unwrap().contains("Player top speed"));
         let walls = rows.iter().find(|r| r["name"] == "wall_max_health").unwrap();
-        assert_eq!(walls["labels"], serde_json::json!(["brick", "iron", "wood", "glass"]));
+        assert_eq!(walls["labels"], serde_json::json!(["brick", "iron", "wood", "glass", "concrete"]));
     }
 
     /// A table put in force is what this thread reads, and only for as

@@ -98,7 +98,9 @@ fn a_sonic_crate_arms_the_hammer_and_replaces_the_special_carried() {
     assert_eq!(tank.special(), Some(ActiveWeapon::SonicHammer));
     tank.sonic_ammo = 2;
     tank.take_weapon(ActiveWeapon::SonicHammer);
-    assert_eq!(tank.sonic_ammo, t.sonic_ammo_per_pickup, "a second crate refills to one crate's worth");
+    assert_eq!(tank.sonic_ammo, 2 + t.sonic_ammo_per_pickup, "a second crate stacks on what is left");
+    tank.take_weapon(ActiveWeapon::SonicHammer);
+    assert_eq!(tank.sonic_ammo, t.sonic_ammo_max, "up to the carry limit");
     let mut enemy = Tank { owner: Owner::Enemy(3), ..Tank::default() };
     assert!(enemy.wants_pickup(PickupKind::SonicHammer), "an enemy on shells takes one");
     enemy.take_weapon(ActiveWeapon::Laser);

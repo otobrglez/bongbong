@@ -280,6 +280,28 @@ fn grass_under_the_stream_burns_away_and_stops_concealing() {
     assert!(!Terrain::build(&game.world, W, H, &game.grass_cells, &game.water).conceals(cell), "burnt grass stays gone");
 }
 
+// 5b. A bed of reeds chars like grass, and a stream between two beds is
+// a firebreak: soft cover never spreads a fire, and water never burns.
+#[test]
+fn reeds_char_in_a_lit_cell_but_never_carry_fire_across_a_stream() {
+    let mut cells = String::from("cells.\"20,13\" = { kind = \"reeds\" }\ncells.\"22,13\" = { kind = \"reeds\" }\n");
+    for r in 8..=17 {
+        cells.push_str(&format!("cells.\"21,{r}\" = {{ kind = \"water\" }}\n"));
+    }
+    let map = map_with(&cells);
+    let mut game = armed_game(&map, 5, 6.0);
+    let (lit, far) = (cell_to_world(20, 13), cell_to_world(22, 13));
+    let ignite_frames = (tuning().flame_ignite_seconds / DT).ceil() as usize;
+    hold(&mut game, ignite_frames + 2);
+    let terrain = |g: &Game| Terrain::build(&g.world, W, H, &g.grass_cells, &g.water);
+    assert!(!terrain(&game).conceals(lit), "the lit bed burns and stops concealing");
+    idle(&mut game, (tuning().flame_ground_seconds / DT) as usize + 60);
+    assert!(terrain(&game).conceals(far), "the bed across the stream never caught");
+    let far_tuft = game.grass.iter().find(|t| crate::map::world_to_cell(t.base) == (22, 13)).expect("the far bed's sprite");
+    assert!(!far_tuft.burnt);
+    assert!(game.grass.iter().any(|t| t.burnt && t.bush.is_some()), "the lit bed is a charred stub");
+}
+
 // 6. A wood tile rolled non-flammable still ignites under the stream.
 #[test]
 fn a_wood_tile_ignites_under_the_stream_whatever_it_rolled() {

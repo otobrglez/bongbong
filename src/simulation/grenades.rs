@@ -6,6 +6,7 @@
 //! only for what is inside the radius, so a round with no grenade on the
 //! ground draws exactly what it did before.
 
+use crate::math;
 use hecs::Entity;
 
 use crate::ai::Ai;
@@ -89,7 +90,7 @@ impl Game {
                     && grenade.position.distance_to(centre) <= t.well_ring_px
                 {
                     let off = grenade.position - centre;
-                    let bearing = off.y.atan2(off.x);
+                    let bearing = math::atan2(off.y, off.x);
                     grenade.orbit = Some(crate::well::GrenadeOrbit { well: id, bearing, since: now });
                     grenade.velocity = Vec2::zero();
                     grenade.height = 0.0;

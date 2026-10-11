@@ -22,6 +22,7 @@
 //! impact frames - so a shot drawn on the press leaves the muzzle exactly
 //! as the room's copy of it does.
 
+use crate::math;
 use crate::Position;
 use crate::bullet::{Bullet, BulletState};
 use crate::gauss::Pierced;
@@ -156,7 +157,7 @@ impl Game {
         let entity = self.seats.get(seat).copied().flatten()?;
         let tank = self.world.get::<&Tank>(entity).ok()?;
         let rot = tank.rotation.to_radians();
-        let dir = Vec2::new(rot.sin(), -rot.cos());
+        let dir = Vec2::new(math::sin(rot), -math::cos(rot));
         let lens = tank.turret_point(crate::tank_art::LASER_MUZZLE[tank.row as usize]);
         Some((tank.gun_line_muzzle(dir), lens, dir, tank.laser_variant))
     }

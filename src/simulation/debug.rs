@@ -5,6 +5,7 @@
 //! before the next frame's phases read them. Nothing consumes the round
 //! RNG except `debug_spawn_enemy`, which says so.
 
+use crate::math;
 use hecs::Entity;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
@@ -545,7 +546,7 @@ pub fn signed_quarter_turn(old: f32, new: f32) -> Option<f32> {
 /// to have one.
 fn heading_of(v: Position) -> Option<f32> {
     const MIN_SPEED: f32 = 1.0;
-    (v.length() >= MIN_SPEED).then(|| r1(v.x.atan2(-v.y).to_degrees().rem_euclid(360.0)))
+    (v.length() >= MIN_SPEED).then(|| r1(math::atan2(v.x, -v.y).to_degrees().rem_euclid(360.0)))
 }
 
 /// Groups of two or more tanks transitively within `radius` of each other

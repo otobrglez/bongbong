@@ -9,6 +9,7 @@
 //! rumbles and erupts on the same tick with nothing on the wire; only the
 //! bombs, whose aim reads where the seats are, travel as events.
 
+use crate::math;
 use crate::map::cell_to_world;
 use crate::tuning::Tuning;
 use crate::Position;
@@ -800,7 +801,7 @@ pub fn plume(v: &Volcano, time: f32, t: &Tuning, out: &mut Vec<Shape>) {
         }
         let rise = age * if ash { 30.0 } else { 18.0 };
         let lean = crate::pyro::smoke_lean(t, centre, born);
-        let x = centre.x + (hash3(ki, seed, 3) - 0.5) * 8.0 + lean * rise + (age * 2.0 + k as f32).sin() * 1.5;
+        let x = centre.x + (hash3(ki, seed, 3) - 0.5) * 8.0 + lean * rise + math::sin(age * 2.0 + k as f32) * 1.5;
         let y = centre.y - 6.0 - rise;
         let r = (if ash { 5.0 } else { 3.5 }) + age * if ash { 8.0 } else { 5.0 };
         let r = r * (1.0 - (f - 0.6).max(0.0) * 0.5);
@@ -832,7 +833,7 @@ pub fn eruption(v: &Volcano, time: f32, t: &Tuning, out: &mut Vec<Shape>) {
         for i in 0..count {
             let ang = i as f32 / count as f32 * std::f32::consts::TAU;
             if crate::pyro::bayer(i, tick) < k + 0.2 {
-                let p = Position::new(centre.x + ang.cos() * rr, centre.y + ang.sin() * rr);
+                let p = Position::new(centre.x + math::cos(ang) * rr, centre.y + math::sin(ang) * rr);
                 out.push(Shape::Mark { pos: p, size: 2, color: Color::new(FIRE[6].r, FIRE[6].g, FIRE[6].b, (220.0 * k) as u8) });
             }
         }
@@ -851,7 +852,7 @@ pub fn eruption(v: &Volcano, time: f32, t: &Tuning, out: &mut Vec<Shape>) {
         }
         let dir = hash3(k, n, 5) * std::f32::consts::TAU;
         let sp = 10.0 + hash3(k, n, 6) * 24.0;
-        let g = Position::new(centre.x + dir.cos() * sp * tk, centre.y + dir.sin() * sp * tk * 0.8);
+        let g = Position::new(centre.x + math::cos(dir) * sp * tk, centre.y + math::sin(dir) * sp * tk * 0.8);
         let step = (6 - (tk * 3.0).floor() as i32).clamp(3, 6) as usize;
         out.push(Shape::Mark { pos: Position::new(g.x, g.y - z), size: if hash3(k, n, 7) < 0.4 { 4 } else { 2 }, color: FIRE[step] });
     }
@@ -865,8 +866,8 @@ pub fn eruption(v: &Volcano, time: f32, t: &Tuning, out: &mut Vec<Shape>) {
         for i in 0..12 {
             let ang = (i as f32 + hash3(i, 9, 3) * 0.6) / 12.0 * std::f32::consts::TAU;
             let len = (24.0 + hash3(i, 8, 3) * 44.0) * (0.4 + 0.6 * (1.0 - k));
-            let from = Position::new(centre.x + ang.cos() * 12.0, centre.y + ang.sin() * 12.0);
-            let to = Position::new(centre.x + ang.cos() * len, centre.y + ang.sin() * len);
+            let from = Position::new(centre.x + math::cos(ang) * 12.0, centre.y + math::sin(ang) * 12.0);
+            let to = Position::new(centre.x + math::cos(ang) * len, centre.y + math::sin(ang) * len);
             out.push(Shape::Line { from, to, width: 1.0, head: FIRE[6], tail: FIRE[5] });
         }
         out.push(Shape::Puff(Puff::plain(centre, 18.0 * k + 4.0, Color::new(255, 255, 255, 230))));
@@ -937,7 +938,7 @@ pub fn bomb_ring(b: &LavaBomb, time: f32, t: &Tuning, out: &mut Vec<Shape>) {
     let color = if blink { FIRE[6] } else { FIRE[4] };
     for i in 0..count {
         let ang = i as f32 / count as f32 * std::f32::consts::TAU + time;
-        out.push(Shape::Mark { pos: Position::new(b.to.x + ang.cos() * r, b.to.y + ang.sin() * r), size: 2, color });
+        out.push(Shape::Mark { pos: Position::new(b.to.x + math::cos(ang) * r, b.to.y + math::sin(ang) * r), size: 2, color });
     }
     out.push(Shape::Line { from: Position::new(b.to.x, b.to.y - 6.0), to: Position::new(b.to.x, b.to.y + 6.0), width: 1.0, head: FIRE[6], tail: FIRE[6] });
     out.push(Shape::Line { from: Position::new(b.to.x - 6.0, b.to.y), to: Position::new(b.to.x + 6.0, b.to.y), width: 1.0, head: FIRE[6], tail: FIRE[6] });

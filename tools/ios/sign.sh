@@ -49,7 +49,15 @@ env -i HOME="$HOME" USER="${USER:-}" PATH=/usr/bin:/bin:/usr/sbin:/sbin DEVELOPE
 STUB=$(ls -d "$DD"/Build/Products/Debug-iphoneos/BongBongSign.app 2>/dev/null | head -1)
 [[ -d "$STUB" ]] || { echo "[sign-ios] Xcode did not produce a signed stub; see the errors above" >&2; exit 1; }
 
-IDENTITY=$(security find-identity -v -p codesigning | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)
+# The certificate Xcode signed the stub with, by its SHA-1: a keychain can
+# hold two certificates of one name (a renewal), which codesign refuses as
+# ambiguous by name, and the stub's is one the profile is sure to list.
+# Failing that, the first Apple Development identity, also by SHA-1.
+CERTS=target/ios-device/stub-cert
+rm -f "$CERTS"*
+codesign -d --extract-certificates="$CERTS" "$STUB" 2>/dev/null || true
+IDENTITY=$(openssl x509 -inform DER -in "${CERTS}0" -noout -fingerprint -sha1 2>/dev/null | sed 's/.*=//; s/://g' || true)
+[[ -n "$IDENTITY" ]] || IDENTITY=$(security find-identity -v -p codesigning | sed -n 's/.*) \([0-9A-F]\{40\}\) "Apple Development: .*/\1/p' | head -1)
 [[ -n "$IDENTITY" ]] || { echo "[sign-ios] no Apple Development identity in the keychain" >&2; exit 1; }
 cp "$STUB/embedded.mobileprovision" "$APP/embedded.mobileprovision"
 security cms -D -i "$APP/embedded.mobileprovision" 2>/dev/null | grep -q "$UDID" \

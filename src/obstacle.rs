@@ -1,4 +1,6 @@
+use crate::math;
 use crate::canvas::Canvas;
+use crate::chunks::Chunks;
 use crate::tuning::tuning;
 use rapier2d::prelude::RigidBodyHandle;
 use serde::{Deserialize, Serialize};
@@ -6,7 +8,11 @@ use crate::math::{Color, Rectangle, Vec2};
 use std::collections::HashSet;
 
 use crate::{
+    CONCRETE_ROW_BASE,
     EDGE_CAP_ROW_BASE,
+    EDGE_CAP_ROW_CONCRETE,
+    REBAR_ROW,
+    RUBBLE_ROW_CONCRETE,
     OBSTACLE_GRID_SIZE,
     RUBBLE_ROW_TREE,
     RUBBLE_ROW_TREE_CHARRED,
@@ -28,7 +34,15 @@ use crate::{
     TARGET_BURN_STAGES,
     TARGET_TEXTURE_SIZE,
     TREE_BURN_COL,
+    TREE_DRY_COL,
+    TREE_ROW_BIRCH,
     TREE_ROW_BROADLEAF,
+    TREE_ROW_FIR,
+    TREE_ROW_PALM,
+    TREE_ROW_SCOTS,
+    TREE_ROW_SNAG,
+    TREE_ROW_SPRUCE,
+    TREE_ROW_WILLOW,
     TREE_SHIMMER_FRAMES,
     TREE_STAGES,
     TREE_ROW_CONIFER,
@@ -36,9 +50,9 @@ use crate::{
     TREE_VARIANTS,
 };
 
-/// What a static battlefield obstacle is: one of the four wall materials
+/// What a static battlefield obstacle is: one of the five wall materials
 /// (walls_sheet.png / docs/WALLS_SPEC.md), one of the three discrete props
-/// (props_sheet.png / docs/PROPS_SPEC.md), or one of the two tree species
+/// (props_sheet.png / docs/PROPS_SPEC.md), or one of the nine tree species
 /// (trees_sheet.png / docs/TREES_SPEC.md). All of them are obstacles - same
 /// physics body, same grid cell, same hit sweep - but each has its own
 /// rules (shots pass over sandbags, barrels explode, fences snap, trees
@@ -47,8 +61,8 @@ use crate::{
 /// the variant.
 ///
 /// **Order is load-bearing at the top of the list only.** `max_health`
-/// indexes `tuning().wall_max_health`, a `[f32; 4]`, by `self as usize`, so
-/// the four wall materials must stay the first four; everything after them
+/// indexes `tuning().wall_max_health`, a `[f32; 5]`, by `self as usize`, so
+/// the five wall materials must stay the first five; everything after them
 /// has a scalar knob of its own and is safe to append to.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -57,6 +71,11 @@ pub enum Material {
     Iron,
     Wood,
     Glass,
+    /// Poured concrete (BB-83): the heavy wall. It breaks chunk by chunk
+    /// like brick but takes about twice the work, and when it gives way it
+    /// leaves its rebar standing (`Obstacle::cage`): shots pass, hulls do
+    /// not, until heavy blasts cut it.
+    Concrete,
     Sandbag,
     Barrel,
     Fence,
@@ -93,13 +112,48 @@ pub enum Material {
     /// tile that is never rolled flammable yet always catches from fire
     /// (`Material::catches_fire`): a shot breaks it, a flame burns it.
     Target,
+    /// A spruce: a hard star of tiers, darker and bluer than `Pine`, and
+    /// the toughest tree - the interior of a conifer stand.
+    Spruce,
+    /// A Scots pine: separate needle clumps on bare orange limbs, a crown
+    /// you can see into.
+    Scots,
+    /// A fir sapling: a young spruce a third smaller. Anything fells it,
+    /// a hull pushes through it at once and it hides nothing behind it -
+    /// the soft outer ring of a wood.
+    Fir,
+    /// A birch: a pale, airy crown on a white trunk, for a wood's edge.
+    Birch,
+    /// A willow: a fringed dome of hanging strands - the bank tree.
+    Willow,
+    /// A date palm: fronds on a tall ringed trunk, the oasis tree. Too thin
+    /// a crown to hide what is behind it, and green on every theme.
+    Palm,
+    /// A dead snag: a grey trunk and bare limbs. Hides nothing, snaps at a
+    /// touch, and is tinder on any map (`is_dry`).
+    Snag,
 }
 
-/// The four wall materials, in walls_sheet.png row order - `spawn_from_map`
-/// rolls one cosmetic variant per material from this list for each round.
+/// Every tree species, in sheet row order - the map kinds, the builder's
+/// palette and the tests walk this rather than spelling the list again.
+pub const TREE_SPECIES: [Material; 9] = [
+    Material::Tree,
+    Material::Pine,
+    Material::Spruce,
+    Material::Scots,
+    Material::Fir,
+    Material::Birch,
+    Material::Willow,
+    Material::Palm,
+    Material::Snag,
+];
+
+/// The five wall materials, in declaration order - `spawn_from_map` rolls
+/// one cosmetic variant per material from the first four for each round
+/// (concrete's comes from the map, so a round's stream is unchanged).
 /// Props are not in it: they roll a variant per tile instead, and their
 /// toughness is a scalar knob each rather than a `wall_max_health` slot.
-pub const MATERIALS: [Material; 4] = [Material::Brick, Material::Iron, Material::Wood, Material::Glass];
+pub const MATERIALS: [Material; 5] = [Material::Brick, Material::Iron, Material::Wood, Material::Glass, Material::Concrete];
 
 /// Which atlas a material's rows live in: the canvas's sheet names,
 /// re-exported so `Material::sheet` and the builder spell them from here.
@@ -128,7 +182,15 @@ impl Material {
         match self {
             Material::Sandbag | Material::Barrel | Material::Fence => Sheet::Props,
             Material::Target => Sheet::Target,
-            Material::Tree | Material::Pine => Sheet::Trees,
+            Material::Tree
+            | Material::Pine
+            | Material::Spruce
+            | Material::Scots
+            | Material::Fir
+            | Material::Birch
+            | Material::Willow
+            | Material::Palm
+            | Material::Snag => Sheet::Trees,
             Material::Tesla | Material::GunTower | Material::BioSlush => Sheet::Towers,
             _ => Sheet::Walls,
         }
@@ -149,12 +211,20 @@ impl Material {
             Material::Iron => 4,
             Material::Wood => 8,
             Material::Glass => 12,
+            Material::Concrete => CONCRETE_ROW_BASE,
             Material::Sandbag => 0,
             Material::Barrel => 3,
             Material::Fence => 5,
             Material::Target => 0,
             Material::Tree => TREE_ROW_BROADLEAF,
             Material::Pine => TREE_ROW_CONIFER,
+            Material::Spruce => TREE_ROW_SPRUCE,
+            Material::Scots => TREE_ROW_SCOTS,
+            Material::Fir => TREE_ROW_FIR,
+            Material::Birch => TREE_ROW_BIRCH,
+            Material::Willow => TREE_ROW_WILLOW,
+            Material::Palm => TREE_ROW_PALM,
+            Material::Snag => TREE_ROW_SNAG,
             // A tower's rows depend on its side as well (`tower::base_row`).
             Material::Tesla | Material::GunTower | Material::BioSlush => 0,
             Material::Volcano | Material::Lamp | Material::Door => 0,
@@ -170,7 +240,7 @@ impl Material {
             Material::Glass => 2,
             Material::Sandbag => 3,
             Material::Barrel | Material::Fence => 2,
-            Material::Tree | Material::Pine => TREE_VARIANTS,
+            m if m.is_tree() => TREE_VARIANTS,
             Material::Tesla | Material::GunTower | Material::BioSlush => 1,
             Material::Volcano | Material::Lamp | Material::Door | Material::Target => 1,
             _ => 4,
@@ -185,14 +255,21 @@ impl Material {
     pub fn max_health(self) -> f32 {
         match self {
             // Indexed by declaration order, which `tuning::MATERIAL_NAMES`
-            // mirrors (brick, iron, wood, glass).
-            Material::Brick | Material::Iron | Material::Wood | Material::Glass => tuning().wall_max_health[self as usize],
+            // mirrors (brick, iron, wood, glass, concrete).
+            Material::Brick | Material::Iron | Material::Wood | Material::Glass | Material::Concrete => tuning().wall_max_health[self as usize],
             Material::Sandbag => tuning().sandbag_max_health,
             Material::Barrel => tuning().barrel_max_health,
             Material::Fence => 2.0,
             Material::Target => tuning().target_max_health,
             Material::Tree => tuning().tree_max_health,
             Material::Pine => tuning().pine_max_health,
+            Material::Spruce => tuning().spruce_max_health,
+            Material::Scots => tuning().scots_max_health,
+            Material::Fir => tuning().fir_max_health,
+            Material::Birch => tuning().birch_max_health,
+            Material::Willow => tuning().willow_max_health,
+            Material::Palm => tuning().palm_max_health,
+            Material::Snag => tuning().snag_max_health,
             Material::Tesla => tuning().tesla_max_health,
             Material::GunTower => tuning().gun_tower_max_health,
             Material::BioSlush => tuning().bio_max_health,
@@ -216,12 +293,21 @@ impl Material {
             Material::Iron => 4,
             Material::Wood => 3,
             Material::Glass => 3,
+            Material::Concrete => 4,
             Material::Sandbag => 3,
             Material::Barrel => 3,
             Material::Fence => 2,
             // Intact, holed, cracked, splintered.
             Material::Target => 4,
-            Material::Tree | Material::Pine => 3,
+            Material::Tree
+            | Material::Pine
+            | Material::Spruce
+            | Material::Scots
+            | Material::Fir
+            | Material::Birch
+            | Material::Willow
+            | Material::Palm
+            | Material::Snag => 3,
             // Intact, scuffed, damaged, critical; the ruin is a decal.
             Material::Tesla | Material::GunTower | Material::BioSlush => 4,
             Material::Volcano | Material::Lamp | Material::Door => 1,
@@ -246,10 +332,19 @@ impl Material {
                 if charred { RUBBLE_ROW_WOOD_CHARRED } else { RUBBLE_ROW_WOOD },
             )),
             Material::Glass => Some((Sheet::Walls, RUBBLE_ROW_GLASS)),
+            Material::Concrete => Some((Sheet::Walls, RUBBLE_ROW_CONCRETE)),
             Material::Sandbag => Some((Sheet::Walls, RUBBLE_ROW_SANDBAG)),
             Material::Barrel => Some((Sheet::Walls, RUBBLE_ROW_BARREL)),
             Material::Fence => Some((Sheet::Walls, RUBBLE_ROW_FENCE)),
-            Material::Tree | Material::Pine => Some((
+            Material::Tree
+            | Material::Pine
+            | Material::Spruce
+            | Material::Scots
+            | Material::Fir
+            | Material::Birch
+            | Material::Willow
+            | Material::Palm
+            | Material::Snag => Some((
                 Sheet::Trees,
                 if charred { RUBBLE_ROW_TREE_CHARRED } else { RUBBLE_ROW_TREE },
             )),
@@ -258,6 +353,17 @@ impl Material {
             Material::Iron | Material::Tesla | Material::GunTower | Material::BioSlush | Material::Volcano | Material::Lamp | Material::Door => {
                 None
             }
+        }
+    }
+
+    /// The walls sheet row of this wall material's edge caps: brick, iron,
+    /// wood and glass in `MATERIALS` order from `EDGE_CAP_ROW_BASE`,
+    /// concrete's appended after its variants. `None` for anything else.
+    pub fn cap_row(self) -> Option<i32> {
+        match self {
+            Material::Brick | Material::Iron | Material::Wood | Material::Glass => Some(EDGE_CAP_ROW_BASE + self as i32),
+            Material::Concrete => Some(EDGE_CAP_ROW_CONCRETE),
+            _ => None,
         }
     }
 
@@ -272,10 +378,33 @@ impl Material {
         self.sheet() == Sheet::Trees
     }
 
-    /// One of the four wall materials - the only ones that autotile into
+    /// A tree with a crown overhead - every species but the dead snag,
+    /// whose bare limbs hide nothing from a drone diving at what is under
+    /// them (docs/fpv-swarm.md "Trees").
+    pub fn has_crown(self) -> bool {
+        self.is_tree() && self != Material::Snag
+    }
+
+    /// One of the five wall materials - the only ones that autotile into
     /// runs, so the only ones with an edge cap and a `MATERIALS` slot.
     pub fn is_wall(self) -> bool {
         self.sheet() == Sheet::Walls && !self.is_drawn()
+    }
+
+    /// The health one chunk of this material starts with, for the materials
+    /// that break chunk by chunk (`chunks.rs`): brick and wood while
+    /// `wall_chunks` is on. `None` for everything that breaks whole.
+    pub fn chunk_health(self) -> Option<f32> {
+        let t = tuning();
+        if !t.wall_chunks {
+            return None;
+        }
+        match self {
+            Material::Brick => Some(t.brick_chunk_health),
+            Material::Concrete => Some(t.concrete_chunk_health),
+            Material::Wood => Some(t.wood_chunk_health),
+            _ => None,
+        }
     }
 
     /// A defence tower: it fights (`Game::towers`), burns by its own rule
@@ -287,12 +416,27 @@ impl Material {
     /// Odds an instance of this material is the kind that catches fire when
     /// it dies rather than breaking outright, rolled once per tile at spawn
     /// (`Obstacle::flammable`). Zero draws no RNG, so a map with neither
-    /// wood nor trees replays exactly as before either existed.
-    pub fn flammable_chance(self) -> f64 {
+    /// wood nor trees replays exactly as before either existed. `dry` is
+    /// `is_dry` on the map's theme: a dry tree is tinder.
+    pub fn flammable_chance(self, dry: bool) -> f64 {
         match self {
             Material::Wood => tuning().wood_flammable_chance,
-            Material::Tree | Material::Pine => tuning().tree_flammable_chance,
+            m if m.is_tree() && dry => tuning().dry_tree_flammable_chance,
+            m if m.is_tree() => tuning().tree_flammable_chance,
             _ => 0.0,
+        }
+    }
+
+    /// Whether a tree of this species is drawn from the dry half of the
+    /// sheet (`TREE_DRY_COL`) and burns as tinder on a map of `theme`:
+    /// every species on a desert map but the date palm, which grows where
+    /// the water is, and a dead snag on any map. Never true for anything
+    /// that is not a tree.
+    pub fn is_dry(self, theme: crate::map::Theme) -> bool {
+        match self {
+            Material::Snag => true,
+            Material::Palm => false,
+            m => m.is_tree() && theme == crate::map::Theme::Desert,
         }
     }
 
@@ -327,7 +471,9 @@ impl Material {
     /// sight. Sandbags are knee-high, a fence is see-through and a lamp
     /// post is a pole; everything else is a solid block.
     pub fn blocks_sight(self) -> bool {
-        !matches!(self, Material::Sandbag | Material::Fence | Material::Lamp)
+        // A fir sapling is below a hull's eye line, a palm's crown is a few
+        // fronds on a pole and a snag is bare limbs.
+        !matches!(self, Material::Sandbag | Material::Fence | Material::Lamp | Material::Fir | Material::Palm | Material::Snag)
     }
 
     /// Whether this tile throws a shadow in the weather's light map
@@ -383,7 +529,10 @@ impl Material {
         match self {
             Material::Sandbag => Some(tuning().sandbag_ram_seconds),
             Material::Fence => Some(tuning().fence_ram_seconds),
-            Material::Tree | Material::Pine => Some(tuning().tree_ram_seconds),
+            Material::Tree | Material::Pine | Material::Scots | Material::Willow => Some(tuning().tree_ram_seconds),
+            Material::Spruce => Some(tuning().spruce_ram_seconds),
+            Material::Fir | Material::Snag => Some(tuning().sapling_ram_seconds),
+            Material::Birch | Material::Palm => Some(tuning().slim_tree_ram_seconds),
             _ => None,
         }
     }
@@ -493,6 +642,14 @@ pub struct Obstacle {
     /// docs/WALLS_SPEC.md's framing of "breaks easily" vs "catches fire" as
     /// gameplay data layered on shared art, not a separate art asset.
     pub flammable: bool,
+    /// Trees only: drawn from the dry half of the sheet, as `Material::is_dry`
+    /// says for the map's theme. Set at spawn alongside `flammable`, which
+    /// it also decided; purely visual from then on.
+    pub dry: bool,
+    /// Trees only: where the crown is drawn off the cell and whether it is
+    /// mirrored (`woods::Woods::crown`), set when the round starts. The
+    /// collider, the hit box and every rule stay on `position`.
+    pub crown: crate::woods::Crown,
     /// True from the moment a flammable tile's health hits zero until it
     /// finishes charring (see `tick_burn`) - during this window `damage`
     /// is a no-op (already on fire) and `col` shows the 3-frame burn loop
@@ -537,6 +694,17 @@ pub struct Obstacle {
     /// spawn and refreshed when something is destroyed - never rebuilt per
     /// frame the way `fence_axis` does it.
     pub edge_mask: u8,
+    /// A concrete wall that gave way, or a wired pane that shattered
+    /// (`Obstacle::leaves_cage`): what is left standing is its rebar or its
+    /// mesh, which stops hulls but lets every shot through, and this many
+    /// heavy blasts (`cage_cut_damage`) are left before it is cut down.
+    /// `None` while the wall itself stands.
+    pub cage: Option<u8>,
+    /// Brick and wood (`Material::chunk_health`): the tile's 16 chunks,
+    /// each with its own health (`chunks.rs`). `health` follows their sum
+    /// (`sync_health`) and the tile dies when too few stand
+    /// (`wall_collapse_chunks`). `None` for a tile that breaks whole.
+    pub chunks: Option<Chunks>,
     /// This obstacle's rapier fixed-body collider, spawned alongside it.
     /// Unlike a tank's `body`, this is never `None` - an obstacle always has
     /// its physics body for its whole life, right up until `Game::update`
@@ -562,6 +730,8 @@ impl Obstacle {
             health: max_health,
             max_health,
             flammable,
+            dry: false,
+            crown: crate::woods::Crown::default(),
             burning: false,
             burn_frame: 0,
             burn_frame_timer: 0.0,
@@ -572,9 +742,137 @@ impl Obstacle {
             scorched: 0,
             ram_timer: 0.0,
             edge_mask: 0,
+            chunks: material.chunk_health().map(Chunks::new),
+            cage: None,
             body,
             destroyed: false,
         }
+    }
+
+    /// Whether this tile leaves a cage when it goes (`cage`): concrete's
+    /// rebar, a wired pane's mesh (glass variant 1, docs/WALLS_SPEC.md §6).
+    pub fn leaves_cage(&self) -> bool {
+        self.material == Material::Concrete || (self.material == Material::Glass && self.variant == 1)
+    }
+
+    /// Stand what is left as a cage instead of dying, if this tile leaves
+    /// one: its chunks gone, `cage_cut_hits` heavy blasts to go. Returns
+    /// whether it did.
+    fn into_cage(&mut self) -> bool {
+        if !self.leaves_cage() || self.cage.is_some() {
+            return false;
+        }
+        self.cage = Some(tuning().cage_cut_hits.clamp(1, u8::MAX as i32) as u8);
+        self.health = 0.0;
+        if let Some(c) = self.chunks.as_mut() {
+            c.break_all();
+        }
+        true
+    }
+
+    /// A blow on a cage: a heavy blast (`cage_cut_damage` or more) cuts
+    /// one of its hits, a rod or a rail all of them; nothing else touches
+    /// it. Returns `true` the frame it is cut down.
+    pub fn cut_cage(&mut self, amount: f32, whole: bool) -> bool {
+        let Some(left) = self.cage else { return false };
+        if !whole && amount < tuning().cage_cut_damage {
+            return false;
+        }
+        let left = if whole { 0 } else { left.saturating_sub(1) };
+        self.cage = Some(left);
+        if left == 0 {
+            self.destroyed = true;
+            return true;
+        }
+        false
+    }
+
+    /// The chunks still standing, every bit set for a tile that breaks
+    /// whole.
+    pub fn standing_chunks(&self) -> u16 {
+        self.chunks.map_or(crate::chunks::ALL, |c| c.standing())
+    }
+
+    /// A chunked tile with something broken or worn: it draws chunk by
+    /// chunk and travels on the wire with its chunks.
+    pub fn chunks_worn(&self) -> bool {
+        self.chunks.is_some_and(|c| !c.is_whole())
+    }
+
+    /// Follow the chunks with `health`: the tile's whole health times the
+    /// share of chunk health left.
+    fn sync_health(&mut self) {
+        if let Some(c) = self.chunks {
+            self.health = self.max_health * c.fraction();
+        }
+    }
+
+    /// A chunked tile with too few chunks left gives way: `damage`'s death,
+    /// a flammable plank catching fire instead. Returns `true` the frame it
+    /// dies, as `damage` does.
+    fn settle_chunks(&mut self) -> bool {
+        let Some(c) = self.chunks else { return false };
+        if c.count() as i32 > tuning().wall_collapse_chunks.max(0) {
+            return false;
+        }
+        self.health = 0.0;
+        if self.flammable {
+            self.burning = true;
+            return false;
+        }
+        if self.into_cage() {
+            return false;
+        }
+        self.destroyed = true;
+        true
+    }
+
+    /// A blow that lands somewhere on the tile: a shot arriving at `at`
+    /// along `dir`, breaking the chunk it strikes and wearing its ring
+    /// (`chunk_ring_share`, `chunk_corner_share`, scaled down for a blow
+    /// under `chunk_ring_full_damage`). A tile that breaks whole
+    /// takes it as `damage`. Returns whether the tile died this frame and
+    /// the chunks it broke, the ones a collapse dropped included.
+    pub fn strike(&mut self, amount: f32, at: Position, dir: Option<Vec2>) -> (bool, u16) {
+        if self.chunks.is_none() || self.destroyed || self.burning || self.fuse.is_some() || self.cage.is_some() {
+            return (self.damage(amount), 0);
+        }
+        let t = tuning();
+        let center = self.position;
+        let Some(c) = self.chunks.as_mut() else { return (false, 0) };
+        let spread = (amount / t.chunk_ring_full_damage.max(0.1)).min(1.0);
+        let broken = match c.struck(center, at, dir) {
+            Some(i) => c.strike(i, amount, t.chunk_ring_share * spread, t.chunk_corner_share * spread),
+            None => 0,
+        };
+        self.after_chunks(broken)
+    }
+
+    /// A blast from `from`: the chunks facing it take `amount`, the far
+    /// side half of it. A tile that breaks whole takes it as `damage`.
+    pub fn blast(&mut self, amount: f32, from: Position) -> (bool, u16) {
+        if self.chunks.is_none() || self.destroyed || self.burning || self.fuse.is_some() || self.cage.is_some() {
+            return (self.damage(amount), 0);
+        }
+        let center = self.position;
+        let Some(c) = self.chunks.as_mut() else { return (false, 0) };
+        let broken = c.blast(center, from, amount);
+        self.after_chunks(broken)
+    }
+
+    fn after_chunks(&mut self, broken: u16) -> (bool, u16) {
+        self.sync_health();
+        let standing = self.standing_chunks();
+        let died = self.settle_chunks();
+        // A tile that gave way drops everything still standing too; a
+        // burning one keeps them to burn.
+        if died {
+            if let Some(c) = self.chunks.as_mut() {
+                c.break_all();
+            }
+            return (true, broken | standing);
+        }
+        (false, broken)
     }
 
     /// Which kind of drum a barrel is; `None` for anything else.
@@ -594,7 +892,7 @@ impl Obstacle {
             return 0.0;
         }
         let phase = (crate::blast::seed_at(self.position, 5) % 100) as f32 / 100.0 * std::f32::consts::TAU;
-        let wave = (time * 12.0 * std::f32::consts::TAU + phase).sin();
+        let wave = math::sin(time * 12.0 * std::f32::consts::TAU + phase);
         ((wave * amp) / 2.0).round() * 2.0
     }
 
@@ -666,7 +964,7 @@ impl Obstacle {
         if !self.burning {
             return 0.0;
         }
-        (self.burn_shown / self.material.burn_seconds().max(0.01)).clamp(0.0, 1.0)
+        (self.burn_shown / self.burn_seconds().max(0.01)).clamp(0.0, 1.0)
     }
 
     /// How far a burning range board has sunk, in px: one whole 2 px block
@@ -700,8 +998,22 @@ impl Obstacle {
     pub fn damage(&mut self, amount: f32) -> bool {
         // A volcano's cone and a training door shrug every blow off: nothing
         // about them changes, so neither differs from the fresh map on the wire.
-        if self.destroyed || self.burning || self.fuse.is_some() || matches!(self.material, Material::Volcano | Material::Door) {
+        if self.destroyed || self.burning || self.fuse.is_some() || self.cage.is_some() || matches!(self.material, Material::Volcano | Material::Door) {
             return false;
+        }
+        // A blow with no place on the tile (a rail, a ram, the flames) wears
+        // every chunk by the share of the tile it is worth; one worth the
+        // rest of the tile kills it whole below, its chunks left standing
+        // for a plank to burn in.
+        if self.chunks.is_some() && amount < self.health {
+            let share = amount / self.max_health.max(1e-3);
+            if let Some(c) = self.chunks.as_mut() {
+                c.wear_evenly(share);
+            }
+            self.sync_health();
+            if self.health > 0.0 {
+                return self.settle_chunks();
+            }
         }
         self.health = (self.health - amount).max(0.0);
         if self.health > 0.0 {
@@ -712,6 +1024,9 @@ impl Obstacle {
         }
         if self.flammable {
             self.burning = true;
+            return false;
+        }
+        if self.into_cage() {
             return false;
         }
         self.destroyed = true;
@@ -736,6 +1051,49 @@ impl Obstacle {
         }
     }
 
+    /// How long this tile burns before it chars out: a chunked plank wall
+    /// `plank_burn_seconds`, its fire walking chunk to chunk; anything
+    /// else its material's `Material::burn_seconds`.
+    pub fn burn_seconds(&self) -> f32 {
+        if self.material == Material::Wood && self.chunks.is_some() {
+            return tuning().plank_burn_seconds;
+        }
+        self.material.burn_seconds()
+    }
+
+    /// The order this tile's fire takes its chunks in
+    /// (`chunks::burn_ranks`), hashed from where it stands.
+    pub fn burn_ranks(&self) -> [u8; crate::chunks::CHUNKS] {
+        crate::chunks::burn_ranks(crate::blast::seed_at(self.position, 0xB84))
+    }
+
+    /// A burning plank's chunks that the fire has charred through by now
+    /// (`chunks::burn_state` at `burn_elapsed`): breaks them and returns
+    /// them, so a wall alight opens hole by hole before it falls. Nothing
+    /// for a tile without chunks or not alight.
+    pub fn char_chunks(&mut self) -> u16 {
+        if !self.burning || self.destroyed {
+            return 0;
+        }
+        let ranks = self.burn_ranks();
+        let progress = self.burn_elapsed / self.burn_seconds().max(0.01);
+        let share = tuning().wood_chunk_burn_share;
+        let Some(c) = self.chunks.as_mut() else { return 0 };
+        let mut charred = 0u16;
+        for i in 0..crate::chunks::CHUNKS {
+            if c.stands(i) && crate::chunks::burn_state(ranks[i], progress, share) == Some(true) {
+                charred |= c.strike(i, c.max() + 1.0, 0.0, 0.0);
+            }
+        }
+        charred
+    }
+
+    /// Whether the fire has reached chunk `i` of this burning tile yet, as
+    /// drawn (`burn_progress`).
+    pub fn chunk_alight(&self, i: usize) -> bool {
+        self.burning && crate::chunks::burn_state(self.burn_ranks()[i], self.burn_progress(), tuning().wood_chunk_burn_share).is_some()
+    }
+
     /// Advance a burning tile's fire - a no-op for anything not alight:
     /// the flicker loop above, and once `burn_elapsed` passes
     /// `Material::burn_seconds`, chars it out (`destroyed = true`) so it's
@@ -747,7 +1105,7 @@ impl Obstacle {
         }
         self.tick_burn_frame(dt);
         self.burn_elapsed += dt;
-        if self.burn_elapsed >= self.material.burn_seconds() {
+        if self.burn_elapsed >= self.burn_seconds() {
             self.destroyed = true;
         }
     }
@@ -770,10 +1128,12 @@ pub fn fence_axis(obstacle: &Obstacle, fences: &HashSet<(i32, i32)>) -> FenceAxi
 /// Source rectangle (and which sheet it is in) for `material`'s pristine
 /// (variant 0, undamaged) tile - used by the map editor's toolbar
 /// (`editor.rs`) to draw a representative icon for each material without
-/// needing a live `Obstacle` instance.
-pub fn icon_source_rec(material: Material) -> (Sheet, Rectangle) {
+/// needing a live `Obstacle` instance. A tree on a map of `theme` is shown
+/// the way the round will draw it, dry or green (`Material::is_dry`).
+pub fn icon_source_rec(material: Material, theme: crate::map::Theme) -> (Sheet, Rectangle) {
     let sheet = material.sheet();
-    (sheet, source_rec(sheet, material.row_base(), 0))
+    let col = if material.is_dry(theme) { TREE_DRY_COL } else { 0 };
+    (sheet, source_rec(sheet, material.row_base(), col))
 }
 
 /// Source rectangle for the cell at (row, col) inside `sheet` - the atlases
@@ -854,12 +1214,100 @@ pub fn draw_obstacle(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis, 
 
 /// `draw_obstacle` in `tint`: a hit's flash draws the tile again in light.
 pub fn draw_obstacle_tinted(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis, time: f32, tint: Color) {
+    if obstacle.cage.is_some() {
+        draw_cage(c, obstacle, tint);
+        return;
+    }
+    if obstacle.chunks_worn() {
+        draw_chunked(c, obstacle, tint);
+        return;
+    }
     let sheet = obstacle.material.sheet();
     let src = source_rec(sheet, obstacle.row(axis), obstacle.col());
     let size = obstacle.sprite_size();
     let dest = Rectangle::new(obstacle.position.x + obstacle.fuse_rock(time), obstacle.position.y + obstacle.burn_sag(), size, size);
     let origin = Vec2::new(size / 2.0, size / 2.0);
     c.blit(sheet, src, dest, origin, 0.0, tint);
+}
+
+/// A cage (`Obstacle::cage`): concrete's rebar from `REBAR_ROW` (column 1
+/// once a heavy blast has bent it), a wired pane's bare mesh from glass's
+/// shattered column.
+fn draw_cage(c: &mut impl Canvas, obstacle: &Obstacle, tint: Color) {
+    let (row, col) = if obstacle.material == Material::Concrete {
+        let full = tuning().cage_cut_hits.clamp(1, u8::MAX as i32) as u8;
+        (REBAR_ROW, if obstacle.cage.unwrap_or(full) < full { 1 } else { 0 })
+    } else {
+        (obstacle.material.row_base() + obstacle.variant, 3)
+    };
+    let size = obstacle.size();
+    let src = source_rec(Sheet::Walls, row, col);
+    let dest = Rectangle::new(obstacle.position.x, obstacle.position.y, size, size);
+    c.blit(Sheet::Walls, src, dest, Vec2::new(size / 2.0, size / 2.0), 0.0, tint);
+}
+
+/// A chunked tile with something broken or worn (`chunks.rs`): each
+/// standing chunk drawn from its own 8 px of the sheet, a worn one from the
+/// same spot of the damage columns (so its cracks are the authored ones),
+/// a burning plank from the fire loop. Where a chunk is gone, the ones
+/// beside it show a face: a lit lip along the top of a hole, shade down
+/// its other sides - depth, not an outline.
+fn draw_chunked(c: &mut impl Canvas, obstacle: &Obstacle, tint: Color) {
+    let Some(ch) = obstacle.chunks else { return };
+    let row = obstacle.material.row_base() + obstacle.variant;
+    let o = crate::chunks::origin(obstacle.position);
+    let size = crate::chunks::CHUNK_PX;
+    for i in (0..crate::chunks::CHUNKS).filter(|&i| ch.stands(i)) {
+        // A burning plank burns where the fire has got to; the rest of
+        // it stands as it was.
+        let col = if obstacle.chunk_alight(i) {
+            obstacle.col()
+        } else {
+            match ch.wear(i) {
+                crate::chunks::WEAR_STEPS => 0,
+                2 => 1,
+                _ => 2,
+            }
+        };
+        let off = crate::chunks::chunk_offset(i);
+        let src = Rectangle::new(col as f32 * OBSTACLE_TEXTURE_SIZE + off.x, row as f32 * OBSTACLE_TEXTURE_SIZE + off.y, size, size);
+        c.blit(Sheet::Walls, src, Rectangle::new(o.x + off.x, o.y + off.y, size, size), Vec2::zero(), 0.0, tint);
+    }
+    // The faces only in daylight's draw: a hit's flash is the tile again in
+    // light, and a face lit by it would read as a rim.
+    if tint != Color::WHITE {
+        return;
+    }
+    let (lit, shade) = chunk_faces(obstacle.material);
+    let band = FX_BLOCK as i32;
+    for i in (0..crate::chunks::CHUNKS).filter(|&i| ch.stands(i)) {
+        let off = crate::chunks::chunk_offset(i);
+        let (x, y, s) = ((o.x + off.x) as i32, (o.y + off.y) as i32, size as i32);
+        let open = |dx: i32, dy: i32| crate::chunks::neighbour(i, dx, dy).is_some_and(|j| !ch.stands(j));
+        if open(0, -1) {
+            c.fill_rect(x, y, s, band, lit);
+        }
+        if open(0, 1) {
+            c.fill_rect(x, y + s - band, s, band, shade);
+        }
+        if open(-1, 0) {
+            c.fill_rect(x, y, band, s, shade);
+        }
+        if open(1, 0) {
+            c.fill_rect(x + s - band, y, band, s, shade);
+        }
+    }
+}
+
+/// The lit and the shaded step a chunked material's broken faces show:
+/// its own ramp, a step up and two down (tools/punypalette.py).
+fn chunk_faces(material: Material) -> (Color, Color) {
+    match material {
+        // WOOD_PALE, WOOD_DARKEST.
+        Material::Wood => (Color::new(0xD8, 0xBF, 0x8E, 255), Color::new(0x50, 0x33, 0x0B, 255)),
+        // STONE_HI, STONE_SHADE.
+        _ => (Color::new(0xDA, 0xDA, 0xDA, 255), Color::new(0x5A, 0x5A, 0x5A, 255)),
+    }
 }
 
 /// Which of a cell's 16 neighbour combinations to draw a cap for.
@@ -918,15 +1366,28 @@ pub fn neighbour_mask(cell: (i32, i32), cells: &HashSet<(i32, i32)>) -> u8 {
 /// one - a sandbag, a fence or a tree is a discrete object, not part of a
 /// run.
 pub fn draw_obstacle_cap(c: &mut impl Canvas, obstacle: &Obstacle) {
-    if !obstacle.material.is_wall() {
+    if !obstacle.material.is_wall() || obstacle.cage.is_some() {
         return;
     }
-    let Some(row_offset) = MATERIALS.iter().position(|m| *m == obstacle.material) else {
+    let Some(cap_row) = obstacle.material.cap_row() else {
         return;
     };
     let col = BLOB_TILE[obstacle.edge_mask as usize] as i32;
-    let src = source_rec(Sheet::Walls, EDGE_CAP_ROW_BASE + row_offset as i32, col);
+    let src = source_rec(Sheet::Walls, cap_row, col);
     let size = obstacle.size();
+    if obstacle.chunks_worn() {
+        // The cap and the soot only over what still stands.
+        let standing = obstacle.standing_chunks();
+        let o = crate::chunks::origin(obstacle.position);
+        let cs = crate::chunks::CHUNK_PX;
+        for i in (0..crate::chunks::CHUNKS).filter(|&i| standing & (1 << i) != 0) {
+            let off = crate::chunks::chunk_offset(i);
+            let part = Rectangle::new(src.x + off.x, src.y + off.y, cs, cs);
+            c.blit(Sheet::Walls, part, Rectangle::new(o.x + off.x, o.y + off.y, cs, cs), Vec2::zero(), 0.0, Color::WHITE);
+        }
+        draw_scorched_chunks(c, obstacle, standing);
+        return;
+    }
     let dest = Rectangle::new(obstacle.position.x, obstacle.position.y, size, size);
     let origin = Vec2::new(size / 2.0, size / 2.0);
     c.blit(Sheet::Walls, src, dest, origin, 0.0, Color::WHITE);
@@ -957,6 +1418,37 @@ fn draw_scorched_faces(c: &mut impl Canvas, obstacle: &Obstacle) {
     }
     if faces & SCORCH_W != 0 {
         c.fill_rect(left as i32, top as i32, band as i32, size as i32, soot);
+    }
+}
+
+/// `draw_scorched_faces` on a chunked tile: each face's band only over the
+/// chunks along it that still stand.
+fn draw_scorched_chunks(c: &mut impl Canvas, obstacle: &Obstacle, standing: u16) {
+    let faces = obstacle.scorched;
+    if faces == 0 {
+        return;
+    }
+    let o = crate::chunks::origin(obstacle.position);
+    let cs = crate::chunks::CHUNK_PX as i32;
+    let band = (FX_BLOCK * 2.0) as i32;
+    let soot = Color::new(20, 20, 20, 190);
+    let last = crate::chunks::CHUNK_SIDE - 1;
+    for i in (0..crate::chunks::CHUNKS).filter(|&i| standing & (1 << i) != 0) {
+        let (col, row) = (i % crate::chunks::CHUNK_SIDE, i / crate::chunks::CHUNK_SIDE);
+        let off = crate::chunks::chunk_offset(i);
+        let (x, y) = ((o.x + off.x) as i32, (o.y + off.y) as i32);
+        if faces & SCORCH_N != 0 && row == 0 {
+            c.fill_rect(x, y, cs, band, soot);
+        }
+        if faces & SCORCH_S != 0 && row == last {
+            c.fill_rect(x, y + cs - band, cs, band, soot);
+        }
+        if faces & SCORCH_W != 0 && col == 0 {
+            c.fill_rect(x, y, band, cs, soot);
+        }
+        if faces & SCORCH_E != 0 && col == last {
+            c.fill_rect(x + cs - band, y, band, cs, soot);
+        }
     }
 }
 
@@ -1040,13 +1532,14 @@ pub fn tree_lean(obstacle: &Obstacle, movers: &[Position]) -> f32 {
 /// hash sets its phase, so a wood shimmers out of step with itself rather
 /// than blinking as one.
 pub fn tree_col(obstacle: &Obstacle, time: f32) -> i32 {
+    let dry = if obstacle.dry { TREE_DRY_COL } else { 0 };
     if obstacle.burning {
-        return TREE_BURN_COL + obstacle.burn_frame;
+        return dry + TREE_BURN_COL + obstacle.burn_frame;
     }
     let seed = crate::blast::seed_at(obstacle.position, 41);
     let step = (time / tuning().tree_dapple_seconds.max(0.05)) as i64;
     let frame = (step + (seed % TREE_SHIMMER_FRAMES as u32) as i64).rem_euclid(TREE_SHIMMER_FRAMES as i64);
-    frame as i32 * TREE_STAGES + obstacle.damage_stage()
+    dry + frame as i32 * TREE_STAGES + obstacle.damage_stage()
 }
 
 /// Draw a tree. Split from `draw_obstacle` because a tree has its own
@@ -1059,22 +1552,66 @@ pub fn draw_tree(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32)
 /// `draw_tree` in `tint`: a hit's flash draws the crown again in light.
 pub fn draw_tree_tinted(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32, tint: Color) {
     let sheet = obstacle.material.sheet();
-    let src = source_rec(sheet, obstacle.row(FenceAxis::Horizontal), tree_col(obstacle, time));
+    let src = tree_source(obstacle, time);
     let size = obstacle.sprite_size();
-    tree_blit(c, sheet, src, obstacle.position, size, lean, tint);
+    tree_blit(c, sheet, src, crown_centre(obstacle), size, lean, tint);
+}
+
+/// The cell of the sheet a tree draws from now, mirrored as its crown is.
+fn tree_source(obstacle: &Obstacle, time: f32) -> Rectangle {
+    let src = source_rec(obstacle.material.sheet(), obstacle.row(FenceAxis::Horizontal), tree_col(obstacle, time));
+    if obstacle.crown.mirror { Rectangle::new(src.x, src.y, -src.width, src.height) } else { src }
+}
+
+/// Where a tree's crown is drawn: its cell's centre moved by its
+/// `Obstacle::crown` (`woods.rs`).
+pub fn crown_centre(obstacle: &Obstacle) -> Position {
+    Position::new(obstacle.position.x + obstacle.crown.dx, obstacle.position.y + obstacle.crown.dy)
+}
+
+/// How much of a hull box (centre and half extents) a tree's drawn crown
+/// covers, in square px of box overlap.
+fn crown_cover(obstacle: &Obstacle, (at, h): (Position, Position)) -> f32 {
+    let centre = crown_centre(obstacle);
+    let half = obstacle.sprite_size() / 2.0;
+    let wide = (half + h.x - (centre.x - at.x).abs()).clamp(0.0, 2.0 * h.x.min(half));
+    let tall = (half + h.y - (centre.y - at.y).abs()).clamp(0.0, 2.0 * h.y.min(half));
+    wide * tall
+}
+
+/// The canopy cutaway (`game.rs`): which of `trees` to draw see-through.
+/// A crown goes see-through when it is over a hull of `hulls` that the
+/// crowns together cover at least `cover` (0 to 1) of. Their overlaps are
+/// summed: a hull cannot enter a tree's cell, so no one crown covers much
+/// of it, but in a one-cell trail the crowns on both sides do.
+pub fn canopy_cutaway(trees: &[&Obstacle], hulls: &[(Position, Position)], cover: f32) -> Vec<bool> {
+    let mut see_through = vec![false; trees.len()];
+    for &hull in hulls {
+        let over: Vec<(usize, f32)> = trees.iter().enumerate().map(|(i, tree)| (i, crown_cover(tree, hull))).filter(|&(_, a)| a > 0.0).collect();
+        let covered: f32 = over.iter().map(|&(_, a)| a).sum();
+        if covered >= cover * 4.0 * hull.1.x * hull.1.y {
+            for (i, _) in over {
+                see_through[i] = true;
+            }
+        }
+    }
+    see_through
 }
 
 /// The same lean applied to the drop shadow, so a bending crown does not
-/// slide out of its own shadow. Must be called before `draw_tree`.
-pub fn draw_tree_shadow(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32) {
+/// slide out of its own shadow, `fade` (0 to 1) of its usual weight - less
+/// for a crown the canopy cutaway draws see-through. Must be called before
+/// `draw_tree`.
+pub fn draw_tree_shadow(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32, fade: f32) {
     let sheet = obstacle.material.sheet();
-    let src = source_rec(sheet, obstacle.row(FenceAxis::Horizontal), tree_col(obstacle, time));
+    let src = tree_source(obstacle, time);
     let size = obstacle.sprite_size();
+    let centre = crown_centre(obstacle);
     let at = Position::new(
-        obstacle.position.x + tuning().shadow_dir_x * tuning().obstacle_shadow_offset,
-        obstacle.position.y + tuning().shadow_dir_y * tuning().obstacle_shadow_offset,
+        centre.x + tuning().shadow_dir_x * tuning().obstacle_shadow_offset,
+        centre.y + tuning().shadow_dir_y * tuning().obstacle_shadow_offset,
     );
-    let shadow = Color::new(0, 0, 0, (255.0 * tuning().obstacle_shadow_opacity) as u8);
+    let shadow = Color::new(0, 0, 0, (255.0 * tuning().obstacle_shadow_opacity * fade.clamp(0.0, 1.0)) as u8);
     tree_blit(c, sheet, src, at, size, lean, shadow);
 }
 
@@ -1157,3 +1694,35 @@ pub fn draw_obstacle_shadow(c: &mut impl Canvas, obstacle: &Obstacle, axis: Fenc
     let shadow = Color::new(0, 0, 0, (255.0 * tuning().obstacle_shadow_opacity) as u8);
     c.blit(sheet, src, dest, origin, 0.0, shadow);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tree(c: f32, r: f32) -> Obstacle {
+        Obstacle::new(Material::Tree, 0, Position::new(c * 32.0, r * 32.0), false, RigidBodyHandle::invalid())
+    }
+
+    /// A hull the size of a tank's, centred on a cell.
+    fn hull(c: f32, r: f32) -> (Position, Position) {
+        (Position::new(c * 32.0, r * 32.0), Position::new(13.0, 14.0))
+    }
+
+    #[test]
+    fn a_tank_beside_one_tree_leaves_it_solid() {
+        let wood = [tree(3.0, 3.0)];
+        let trees: Vec<&Obstacle> = wood.iter().collect();
+        for at in [hull(4.0, 3.0), hull(2.0, 3.0), hull(3.0, 2.0), hull(3.0, 4.0)] {
+            assert_eq!(canopy_cutaway(&trees, &[at], 0.3), vec![false]);
+        }
+    }
+
+    #[test]
+    fn a_tank_in_a_one_cell_trail_sees_through_the_crowns_on_both_sides() {
+        let wood = [tree(3.0, 2.0), tree(3.0, 4.0), tree(8.0, 2.0)];
+        let trees: Vec<&Obstacle> = wood.iter().collect();
+        assert_eq!(canopy_cutaway(&trees, &[hull(3.0, 3.0)], 0.3), vec![true, true, false]);
+        assert_eq!(canopy_cutaway(&trees, &[], 0.3), vec![false, false, false], "no hull, no cutaway");
+    }
+}
+

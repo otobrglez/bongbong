@@ -61,13 +61,22 @@ isn't machine-readable or budget-gated for CI.
 
 ## Non-goals (this pass)
 
-- **Cross-platform / cross-build bit determinism.** Seeded replay promises
-  "same binary, same platform, same inputs → same round". rapier's float
-  solver isn't cross-platform-deterministic without its
-  `enhanced-determinism` feature and we don't need it for a local repro
-  workflow. Likewise probe↔windowed runs are *not* frame-exact twins (the
-  windowed game steps with variable render dt; see Phase 1's "what a seed
-  does and doesn't promise").
+- **Cross-build bit determinism.** Probe↔windowed runs are *not*
+  frame-exact twins: the windowed game steps with variable render dt (see
+  Phase 1's "what a seed does and doesn't promise").
+  Cross-*platform* determinism was a non-goal here too, until BB-70 made it
+  a goal. The same seed and inputs played a different round on a Mac than
+  on a Linux runner: the simulation's `exp`/`powf`/`sin`/... called the
+  platform's libm, and glibc and Apple's round some inputs an ulp apart.
+  The one/two-seat pin split at frame 537, where a damaged seat
+  decelerates through `powf` and `exp`. Now everything a round computes
+  goes through `math::`'s portable functions (the `libm` crate's Rust),
+  `portable_math_tests` fails on a platform call outside the draw-only
+  files, and rapier runs with `enhanced-determinism` (libm and scalar glam
+  inside rapier and parry). The full headless suite, the pins included,
+  passes unchanged on macOS arm64 and on Linux arm64 and amd64 (checked
+  in Docker), and a per-frame trace of the pinned two-seat round is
+  identical on all three.
 - **Testing rendering, shaders, or feel.** That stays on playtesting and
   the `run` skill; this doc is logic/behavior only, same as the probe.
 - **A general input-recording/replay system.** Scripted `Scenario`s plus a
@@ -1132,5 +1141,5 @@ proofs: unit tests, the determinism smoke, map lint, pinned regressions.
 - **`--lint` probe flag**: `maplint::lint` is `pub` specifically so the
   probe can grow a human-facing lint mode for editor sessions; the tests
   are what gate CI, so this is convenience, not required.
-- **Cross-platform determinism** (rapier `enhanced-determinism`, wasm):
-  only if seed-sharing between machines ever matters.
+- **Cross-platform determinism**: done by BB-70 (see "Non-goals" above).
+  wasm and iOS are not checked against it yet.

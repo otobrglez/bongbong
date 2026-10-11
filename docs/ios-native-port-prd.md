@@ -139,7 +139,10 @@ SDK, no simulator runtime, no iOS Rust standard library. Brought up on
   `SDKROOT` pointing at nix's `apple-sdk-14.4`; `tools/ios/env.sh` (sourced
   by every `ios-*` just recipe) points `DEVELOPER_DIR` at Xcode, unsets
   `SDKROOT`, sets the one deployment target (15.0) and bindgen's simulator
-  sysroot. `.cargo/config.toml` links both iOS targets with Apple's clang.
+  sysroot. `.cargo/config.toml` links both iOS targets with Apple's clang,
+  and `env.sh` the host build scripts and proc-macros too (`tools/ios/bin/cc`
+  first on `PATH`): since Xcode 27 the macOS SDK's `.tbd` stubs list
+  `arm64e.x1-macos`, which nix's `ld` rejects (BB-65).
 - **The simulator build works** (`just ios-setup`, `just ios-smoke`,
   `just run-ios-sim`; CLAUDE.md's "iOS simulator build" section is the
   reference): SDL3 `release-3.4.16` static and raylib 6.0 (`PLATFORM=SDL`,

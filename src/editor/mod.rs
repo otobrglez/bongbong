@@ -79,6 +79,7 @@
 pub mod brush;
 pub mod camera;
 pub mod chrome;
+pub mod forest;
 pub mod gesture;
 pub mod history;
 pub mod index;
@@ -95,7 +96,7 @@ pub use chrome::{Bar, BarButton, BarTools, BuilderFrame, Chrome, PopupLayout, St
 pub use select::{Axis, CellRect, Clip, Ghost, Stamp, StampSource};
 
 use rand::RngExt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use crate::math::{Color, Rectangle, Vec2};
 
 use crate::ground::{self, GroundGrid};
@@ -211,9 +212,9 @@ pub struct BuilderInput {
 pub enum Tool {
     Wall(Material),
     /// A destructible standalone solid: one of the three props
-    /// (`Material::Sandbag`/`Barrel`/`Fence`) or one of the two tree
-    /// species (`Material::Tree`/`Pine`). Any number, variant rolled per
-    /// tile when the round spawns.
+    /// (`Material::Sandbag`/`Barrel`/`Fence`) or one of the tree species
+    /// (`obstacle::TREE_SPECIES`). Any number, variant rolled per tile
+    /// when the round spawns.
     Prop(Material),
     /// A barrel of a pinned kind (`obstacle::Drum`): the red oil drum
     /// that leaves a burning pool, or the grey fuel drum that goes off
@@ -252,6 +253,14 @@ pub enum Tool {
     /// Tall grass: cover, not terrain. Any number of cells; not solid, so
     /// it never blocks movement or pathfinding (see `grass.rs`).
     TallGrass,
+    /// A bush or a bed of reeds: soft cover like `TallGrass`, one sprite a
+    /// cell (docs/BUSHES_SPEC.md).
+    Bush(crate::grass::Bush),
+    /// The forest brush (`forest`): plants trees whose species it picks
+    /// from the cell - water, the wood's edge, the stand, the theme - and
+    /// keeps a stream's banks open. It has no one object (`object` is
+    /// `None`); `forest::lay` says what a stroke does to each cell.
+    Forest,
     /// A teleport portal anchor - any number, not solid; the network only
     /// works with two or more (the linter's `portal-alone` names a lone
     /// one, and the canvas ghosts it).
@@ -273,11 +282,12 @@ pub enum Tool {
 /// for the six tower tools inside the eleven rows a dropdown fits, and the
 /// range board stands with the actors, the thing on the field there to be
 /// shot at.
-pub const TOOLS: [Tool; 52] = [
+pub const TOOLS: [Tool; 67] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
     Tool::Wall(Material::Glass),
+    Tool::Wall(Material::Concrete),
     Tool::Prop(Material::Sandbag),
     Tool::Prop(Material::Barrel),
     Tool::Drum(Drum::Oil),
@@ -293,8 +303,22 @@ pub const TOOLS: [Tool; 52] = [
     Tool::Water,
     Tool::Lava,
     Tool::TallGrass,
+    Tool::Bush(crate::grass::Bush::Bush),
+    Tool::Bush(crate::grass::Bush::Berry),
+    Tool::Bush(crate::grass::Bush::Juniper),
+    Tool::Bush(crate::grass::Bush::Fern),
+    Tool::Bush(crate::grass::Bush::Autumn),
+    Tool::Bush(crate::grass::Bush::Reeds),
     Tool::Prop(Material::Tree),
     Tool::Prop(Material::Pine),
+    Tool::Prop(Material::Spruce),
+    Tool::Prop(Material::Scots),
+    Tool::Prop(Material::Fir),
+    Tool::Prop(Material::Birch),
+    Tool::Prop(Material::Willow),
+    Tool::Prop(Material::Palm),
+    Tool::Prop(Material::Snag),
+    Tool::Forest,
     Tool::OilTrail,
     Tool::Gate,
     Tool::Portal,
@@ -336,6 +360,7 @@ impl Tool {
             Tool::Wall(Material::Iron) => "iron",
             Tool::Wall(Material::Wood) => "wood",
             Tool::Wall(Material::Glass) => "glass",
+            Tool::Wall(Material::Concrete) => "concrete",
             Tool::Wall(_) => "wall",
             Tool::Prop(Material::Sandbag) => "sandbag",
             Tool::Prop(Material::Barrel) => "barrel",
@@ -343,6 +368,13 @@ impl Tool {
             Tool::Prop(Material::Target) => "target",
             Tool::Prop(Material::Tree) => "tree",
             Tool::Prop(Material::Pine) => "pine",
+            Tool::Prop(Material::Spruce) => "spruce",
+            Tool::Prop(Material::Scots) => "scots",
+            Tool::Prop(Material::Fir) => "fir",
+            Tool::Prop(Material::Birch) => "birch",
+            Tool::Prop(Material::Willow) => "willow",
+            Tool::Prop(Material::Palm) => "palm",
+            Tool::Prop(Material::Snag) => "snag",
             Tool::Prop(Material::Lamp) => "lamp",
             Tool::Prop(_) => "prop",
             Tool::Drum(Drum::Oil) => "oil_drum",
@@ -355,6 +387,13 @@ impl Tool {
             Tool::Lava => "lava",
             Tool::Volcano => "volcano",
             Tool::TallGrass => "tall_grass",
+            Tool::Bush(crate::grass::Bush::Bush) => "bush",
+            Tool::Bush(crate::grass::Bush::Berry) => "berry_bush",
+            Tool::Bush(crate::grass::Bush::Juniper) => "juniper",
+            Tool::Bush(crate::grass::Bush::Fern) => "fern",
+            Tool::Bush(crate::grass::Bush::Autumn) => "autumn_bush",
+            Tool::Bush(crate::grass::Bush::Reeds) => "reeds",
+            Tool::Forest => "forest",
             Tool::Gate => "gate",
             Tool::Portal => "portal",
             Tool::Start => "start",
@@ -400,7 +439,9 @@ impl Tool {
     pub fn category(self) -> Option<Category> {
         match self {
             Tool::Wall(_) => Some(Category::Wall),
-            Tool::Prop(Material::Tree | Material::Pine | Material::Lamp) => Some(Category::Ground),
+            Tool::Prop(m) if m.is_tree() => Some(Category::Plant),
+            Tool::Bush(_) | Tool::Forest => Some(Category::Plant),
+            Tool::Prop(Material::Lamp) => Some(Category::Ground),
             Tool::Prop(Material::Target) => Some(Category::Actor),
             Tool::Prop(_) | Tool::Drum(_) | Tool::Tower(..) => Some(Category::Prop),
             Tool::Road | Tool::Water | Tool::Lava | Tool::Volcano | Tool::TallGrass | Tool::OilTrail | Tool::Gate | Tool::Portal => {
@@ -412,8 +453,8 @@ impl Tool {
         }
     }
 
-    /// The cell object this brush paints; `None` for the eraser and the
-    /// select tool.
+    /// The cell object this brush paints; `None` for the eraser, the
+    /// select tool and the forest brush, whose object depends on the cell.
     pub fn object(self) -> Option<CellObject> {
         match self {
             Tool::Wall(material) => Some(CellObject::Wall { material }),
@@ -432,8 +473,9 @@ impl Tool {
             Tool::Portal => Some(CellObject::Portal),
             Tool::Pickup(pickup) => Some(CellObject::Pickup { pickup }),
             Tool::TallGrass => Some(CellObject::TallGrass),
+            Tool::Bush(bush) => Some(CellObject::of_bush(bush)),
             Tool::Tower(kind, side) => Some(CellObject::for_tower(kind, side)),
-            Tool::Eraser | Tool::Select => None,
+            Tool::Forest | Tool::Eraser | Tool::Select => None,
         }
     }
 
@@ -444,18 +486,22 @@ impl Tool {
     }
 }
 
-/// The five groups the bar shows, each remembering its current tool.
+/// The six groups the bar shows, each remembering its current tool.
+/// Declaration order is `ALL`'s order (`index`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Category {
     Wall,
     Prop,
     Ground,
+    /// The trees and the bushes (docs/TREES_SPEC.md, BUSHES_SPEC.md):
+    /// fifteen tools, too many to share Ground's list on a phone.
+    Plant,
     Actor,
     Pickup,
 }
 
 impl Category {
-    pub const ALL: [Category; 5] = [Category::Wall, Category::Prop, Category::Ground, Category::Actor, Category::Pickup];
+    pub const ALL: [Category; 6] = [Category::Wall, Category::Prop, Category::Ground, Category::Plant, Category::Actor, Category::Pickup];
 
     /// The group's name in the language on screen.
     pub fn label(self) -> String {
@@ -468,6 +514,7 @@ impl Category {
             Category::Wall => crate::text::keys::CATEGORY_WALL,
             Category::Prop => crate::text::keys::CATEGORY_PROP,
             Category::Ground => crate::text::keys::CATEGORY_GROUND,
+            Category::Plant => crate::text::keys::CATEGORY_PLANT,
             Category::Actor => crate::text::keys::CATEGORY_ACTOR,
             Category::Pickup => crate::text::keys::CATEGORY_PICKUP,
         }
@@ -481,6 +528,7 @@ impl Category {
             Category::Wall => "wall",
             Category::Prop => "prop",
             Category::Ground => "ground",
+            Category::Plant => "plant",
             Category::Actor => "actor",
             Category::Pickup => "pickup",
         }
@@ -594,7 +642,7 @@ enum Popup {
     /// BRUSH's list, below its button.
     Brush,
     /// The palette of every category's tools and the brush's row, below
-    /// the TOOLS button a narrow bar folds the five category buttons and
+    /// the TOOLS button a narrow bar folds the six category buttons and
     /// BRUSH into.
     Palette,
     /// The STAMPS list under the bar: the shipped stamps then the ones
@@ -840,7 +888,7 @@ pub struct MapEditor {
     /// what `dirty` compares against and what RESET returns to.
     baseline: MapFile,
     /// Each category's current tool, in `Category::ALL` order.
-    current: [Tool; 5],
+    current: [Tool; 6],
     active_tool: Tool,
     /// The category the brush came from last: the folded TOOLS button
     /// shows its current tool while the eraser is the brush.
@@ -997,6 +1045,7 @@ impl MapEditor {
             Tool::Wall(Material::Brick),
             Tool::Prop(Material::Sandbag),
             Tool::Road,
+            Tool::Prop(Material::Tree),
             Tool::Start,
             Tool::Pickup(PickupKind::Health),
         ];
@@ -1679,13 +1728,17 @@ impl MapEditor {
     /// stroke and lays the shape's first cells. Erase when the secondary
     /// button is down, the eraser is the brush, or - for a pen or a fill
     /// (`Shape::toggles`) - the cell already holds exactly the brush's
-    /// object. A pen paints the cell, a fill floods from it and a scatter
-    /// lays its footprint round it; a rectangle waits for the release.
+    /// object, which for the forest brush is any tree. A pen paints the
+    /// cell, a fill floods from it and a scatter lays its footprint round
+    /// it; a rectangle waits for the release.
     fn begin_stroke(&mut self, cell: (i32, i32), right: bool) {
         let shape = self.shape();
-        let erase = right
-            || self.active_tool == Tool::Eraser
-            || (shape.toggles() && self.active_tool.object().is_some_and(|obj| self.map.cell(cell.0, cell.1) == Some(&obj)));
+        let held = self.map.cell(cell.0, cell.1).copied();
+        let holds_brush = match self.active_tool {
+            Tool::Forest => held.and_then(|o| o.material()).is_some_and(Material::is_tree),
+            tool => tool.object().is_some_and(|obj| held == Some(obj)),
+        };
+        let erase = right || self.active_tool == Tool::Eraser || (shape.toggles() && holds_brush);
         if shape == Shape::Scatter {
             self.scatters = self.scatters.wrapping_add(1);
         }
@@ -1785,12 +1838,52 @@ impl MapEditor {
         if self.stroke.as_ref().is_some_and(|s| s.shape == Shape::Rect) {
             self.fill_rect();
         }
+        if self.planting() {
+            self.replant();
+        }
         let Some(stroke) = self.stroke.take() else { return Vec::new() };
         let changes = stroke.changes;
         if !changes.is_empty() {
             self.history.push(EditStep::Cells(changes.clone()));
         }
         changes
+    }
+
+    /// Whether the open stroke plants with the forest brush: each cell's
+    /// object is its own pick (`forest::lay`).
+    fn planting(&self) -> bool {
+        self.active_tool == Tool::Forest && self.stroke.as_ref().is_some_and(|s| !s.erase)
+    }
+
+    /// The forest stroke's release: every tree it planted picked again
+    /// against the wood as it now stands, as part of the same stroke. A
+    /// tree's pick reads its neighbours (`forest::on_edge`), and while the
+    /// stroke was painting, every new tree stood at the edge of what was
+    /// painted so far. Trees from earlier strokes keep their species.
+    fn replant(&mut self) {
+        let Some(stroke) = &self.stroke else { return };
+        let planted: BTreeSet<(i32, i32)> =
+            stroke.changes.iter().filter(|c| c.after.and_then(|o| o.material()).is_some_and(Material::is_tree)).map(|c| (c.col, c.row)).collect();
+        let bounds = self.field_cells();
+        let picks: Vec<_> = planted
+            .into_iter()
+            .filter(|&(c, r)| self.map.cell(c, r).and_then(|o| o.material()).is_some_and(Material::is_tree))
+            .map(|cell| (cell, CellObject::prop(forest::species(&self.map, bounds, cell))))
+            .collect();
+        self.lay(picks);
+    }
+
+    /// `cells` laid with `after` as the open stroke's or, for a forest
+    /// stroke, each with the forest brush's pick (`forest::lay`), the cells
+    /// it leaves alone left out.
+    fn lay_brush(&mut self, cells: impl IntoIterator<Item = (i32, i32)>, after: Option<CellObject>) {
+        if self.planting() {
+            let bounds = self.field_cells();
+            let picks: Vec<_> = cells.into_iter().filter_map(|cell| forest::lay(&self.map, bounds, cell).map(|a| (cell, a))).collect();
+            self.lay(picks);
+        } else {
+            self.lay(cells.into_iter().map(|cell| (cell, after)));
+        }
     }
 
     /// Apply the stroke's mode to one cell and record what changed.
@@ -1802,6 +1895,10 @@ impl MapEditor {
             if before.is_some() {
                 self.map.clear_cell(col, row);
                 changes.push(CellChange { col, row, before, after: None });
+            }
+        } else if self.active_tool == Tool::Forest {
+            if let Some(after) = forest::lay(&self.map, self.field_cells(), (col, row)) {
+                self.change_cell(col, row, after, &mut changes);
             }
         } else if let Some(obj) = self.active_tool.object() {
             if self.active_tool.is_singleton() {
@@ -1864,13 +1961,14 @@ impl MapEditor {
     /// an erase. A region past `builder_fill_max_cells` is left as it is,
     /// the status line saying why.
     fn fill(&mut self, cell: (i32, i32)) {
-        let Some(after) = self.stroke_object() else { return };
-        if self.map.cell(cell.0, cell.1).copied() == after {
+        let planting = self.planting();
+        let Some(after) = self.stroke_object().or(planting.then_some(None)) else { return };
+        if !planting && self.map.cell(cell.0, cell.1).copied() == after {
             return;
         }
         let max = BrushRules::current().fill_max_cells;
         match brush::flood(&self.map, self.field_cells(), cell, max) {
-            Some(cells) => self.lay(cells.into_iter().map(|c| (c, after))),
+            Some(cells) => self.lay_brush(cells, after),
             None => self.status = Some(crate::text::text().fmt(crate::text::keys::EDITOR_FILL_TOO_LARGE, &[("n", max.into())])),
         }
     }
@@ -1878,32 +1976,43 @@ impl MapEditor {
     /// RECT's release: every cell of the open stroke's rectangle on the
     /// field made the brush's object, or cleared by an erase.
     fn fill_rect(&mut self) {
-        let (Some((rect, _)), Some(after)) = (self.rect_stroke(), self.stroke_object()) else { return };
-        self.lay(rect.cells().map(|c| (c, after)));
+        let after = self.stroke_object().or(self.planting().then_some(None));
+        let (Some((rect, _)), Some(after)) = (self.rect_stroke(), after) else { return };
+        self.lay_brush(rect.cells(), after);
     }
 
     /// SCATTER's footprint round `cell` as the open stroke's: of the cells
     /// the stroke's hash picks (`brush::scattered`), an empty one takes the
     /// brush's object - a scatter never paints over a cell - and an erase
     /// clears one holding the brush's object, or anything under the
-    /// eraser.
+    /// eraser. The forest brush's objects are its trees: it plants its
+    /// picks on empty cells and erases trees.
     fn scatter(&mut self, cell: (i32, i32)) {
         let Some(stroke) = &self.stroke else { return };
         let (erase, seed) = (stroke.erase, stroke.seed);
         let rules = BrushRules::current();
+        let forest = self.active_tool == Tool::Forest;
         let object = self.active_tool.object();
+        let brushes = |held: Option<CellObject>| match forest {
+            true => held.and_then(|o| o.material()).is_some_and(Material::is_tree),
+            false => object.is_none() || held == object,
+        };
         let picked: Vec<_> = brush::footprint(cell, rules.scatter_radius, self.field_cells())
             .filter(|&c| brush::scattered(c, seed, rules.scatter_density))
             .filter_map(|(col, row)| {
                 let held = self.map.cell(col, row).copied();
                 if erase {
-                    (held.is_some() && (object.is_none() || held == object)).then_some(((col, row), None))
+                    (held.is_some() && brushes(held)).then_some(((col, row), None))
                 } else {
-                    (held.is_none() && object.is_some()).then_some(((col, row), object))
+                    (held.is_none() && (object.is_some() || forest)).then_some(((col, row), object))
                 }
             })
             .collect();
-        self.lay(picked);
+        if forest && !erase {
+            self.lay_brush(picked.into_iter().map(|(c, _)| c), None);
+        } else {
+            self.lay(picked);
+        }
     }
 
     /// Make a lint quick fix (`maplint::LintFix`) on the map as one undo
@@ -4942,7 +5051,7 @@ mod editor_tests {
         let bar = frame.bar();
         // Under the list end of a category button, under the middle of any other.
         let below = |r: Rectangle| frame.ui.to_window(Vec2::new(r.x + r.width - 8.0, r.y + r.height + EDITOR_BAR_HIT_SLACK - 1.0));
-        let wall = bar.category(Category::Wall).expect("a desktop's bar has the five");
+        let wall = bar.category(Category::Wall).expect("a desktop's bar has the six");
         assert_eq!(bar.hit(frame.to_ui(below(wall.rect))), Some(BarButton::CategoryMenu(Category::Wall)));
         assert_eq!(bar.hit(frame.to_ui(below(bar.map))), Some(BarButton::Map));
         let far = Vec2::new(bar.map.x + 2.0, bar.strip.y + bar.strip.height + EDITOR_BAR_HIT_SLACK + 1.0);
@@ -5010,7 +5119,7 @@ mod editor_tests {
         assert!(ed.map().cells.is_empty());
     }
 
-    /// On a phone the five category buttons fold into TOOLS: it opens the
+    /// On a phone the six category buttons fold into TOOLS: it opens the
     /// palette of every category, a cell picks its tool and closes it, and
     /// a press outside closes it and paints nothing.
     #[test]
@@ -5236,11 +5345,11 @@ mod editor_tests {
         ed.update(&BuilderInput { pointer: Some(wall), wheel: 1.0, ..Default::default() }, &frame);
         assert_eq!(ed.tool(), Tool::Wall(Material::Brick));
         ed.update(&BuilderInput { pointer: Some(wall), wheel: 1.0, ..Default::default() }, &frame);
-        assert_eq!(ed.tool(), Tool::Wall(Material::Glass), "wraps");
+        assert_eq!(ed.tool(), Tool::Wall(Material::Concrete), "wraps");
         // Off the buttons the wheel does nothing to the tool.
         let field = Vec2::new(400.0, 400.0);
         ed.update(&BuilderInput { pointer: Some(field), wheel: -1.0, ..Default::default() }, &frame);
-        assert_eq!(ed.tool(), Tool::Wall(Material::Glass));
+        assert_eq!(ed.tool(), Tool::Wall(Material::Concrete));
     }
 
     /// A 96 x 54 map in the builder on a window of `window` units, a unit a

@@ -85,6 +85,19 @@ impl Intent {
     }
 }
 
+/// A planned breach (docs/WALLS_SPEC.md §13): a tank whose target the
+/// routing cannot reach drives to `at` and on `dir` into the wall a shell
+/// can open there - the first one on the cheapest way through the walls
+/// (`Game::sap_plan`) - and the breach that pushing into it starts
+/// (`Brain::wants_breach`) opens the way.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sap {
+    /// The open cell's centre in front of the wall.
+    pub at: Position,
+    /// The way into the wall from there.
+    pub dir: Dir,
+}
+
 /// What stands directly ahead of a tank in one direction - the tile a shot
 /// fired that way would hit within breach reach (see `Ai::think`'s
 /// `walls_ahead` and `Brain::wants_breach`).
@@ -93,6 +106,11 @@ pub struct WallAhead {
     pub material: Material,
     /// Wood already alight: solid, but shooting it does nothing.
     pub burning: bool,
+    /// The tile's centre.
+    pub center: Position,
+    /// Its standing chunks (`chunks.rs`): `chunks::ALL` for a tile that
+    /// is whole or breaks whole. What a sapper aims at (`act_breach`).
+    pub standing: u16,
 }
 
 /// What `enemy_phase` measured for the special weapon a tank carries, for
@@ -791,6 +809,13 @@ pub struct Ai {
     wall_ahead_timer: f32,
     /// The breach in progress, if any - see `Brain::wants_breach`.
     breach: Option<Breach>,
+    /// A way through the walls to a target the routing cannot reach
+    /// (`Sap`), set by the simulation (`Game::plan_saps`); `steer` heads
+    /// for it where it would otherwise wander.
+    pub sap: Option<Sap>,
+    /// Seconds until the simulation plans `sap` again
+    /// (`enemy_sap_replan_seconds`).
+    sap_timer: f32,
     /// The tower this tank fires back at, if one hurt it lately - see
     /// `Brain::grudge_shot`.
     grudge: Option<Grudge>,
@@ -1022,6 +1047,8 @@ impl Default for Ai {
             shot_at_seat: None,
             wall_ahead_timer: 0.0,
             breach: None,
+            sap: None,
+            sap_timer: 0.0,
             grudge: None,
             escapes: 0,
             special_why: None,
@@ -1611,9 +1638,34 @@ impl Ai {
         let heading = self.route_heading();
         let route = if ctx.on_portal_cooldown { grid.route_ahead_walking(from, target) } else { grid.route_ahead(from, target, heading) };
         if route.is_none() && !grid.same_cell(from, target) {
+            // No way there: through the walls if a sapper has one (`Sap`),
+            // driving on into the wall once at it, else a wander.
+            if let Some(sap) = self.sap {
+                // Within a cell of it is there: a hull against the wall
+                // sits on a cell's edge, and a same-cell test would flip it
+                // back and forth across that edge.
+                if from.distance_to(sap.at) <= grid.dims().2 {
+                    return sap.dir;
+                }
+                if let Some(route) = grid.route_ahead(from, sap.at, heading) {
+                    return self.steer_toward(from, Some(route), sap.at, bounds, half, ctx, grid);
+                }
+            }
             return self.wander(from, bounds, half, margin, None, ctx, grid, rng);
         }
         self.steer_toward(from, route, target, bounds, half, ctx, grid)
+    }
+
+    /// Whether the simulation should plan this tank's `sap` again this
+    /// tick (`Game::plan_saps`), counting down `dt` to the next plan: every
+    /// `enemy_sap_replan_seconds`, the walls being shot down between.
+    pub fn sap_due(&mut self, dt: f32) -> bool {
+        self.sap_timer -= dt;
+        if self.sap_timer > 0.0 {
+            return false;
+        }
+        self.sap_timer = tuning().enemy_sap_replan_seconds;
+        true
     }
 
     /// Wander toward a roaming local waypoint - `act_patrol`'s own
@@ -3159,12 +3211,13 @@ fn build<'a>() -> Node<Brain<'a>> {
             action("chase", act_chase),
         ]),
         // 5.5. Opportunistically go collect a live Laser pickup while firing
-        // shells - reached only once nothing higher-priority (fleeing,
+        // shells, or to stack the laser carried - reached only once nothing higher-priority (fleeing,
         // retreating, attacking, chasing) already claimed this tank, so it
         // never interrupts a fight, just fills idle patrol time with a
         // purposeful detour instead. A tank carries one special weapon and
-        // a crate replaces it (`Tank::take_weapon`), so this tier and the
-        // weapon tiers below are each gated on carrying none
+        // a crate of another replaces it (`Tank::take_weapon`), so this
+        // tier and the weapon tiers below are each gated on carrying none,
+        // or carrying this one short of its carry limit
         // (`Tank::wants_pickup`); which detour is worth taking *first* is
         // expressed by their tier order (laser, then plasma, then missiles,
         // then minigun - strongest first). See `act_seek_laser`. On a field map only a
@@ -4232,18 +4285,61 @@ fn act_guard(b: &mut Brain) -> Status {
 /// `Brain::wants_breach`). A burning wood tile is waited out, not shot:
 /// damage is a no-op until it chars away. Paced by `fire_timer` at
 /// `enemy_breach_fire_interval`, and held while a teammate is in front.
+/// Each shot goes where a sapper puts it (`sapper_aim`): a shell through
+/// the hole the last one made would leave the wall standing in the
+/// hull's way.
 fn act_breach(b: &mut Brain) -> Status {
     let Some(breach) = b.ai.breach else { return Status::Failure };
     b.reset_aim();
     b.intent.face = Some(breach.dir);
     b.ai.commit(breach.dir);
-    let burning = b.walls_ahead[breach.dir.index()].is_some_and(|w| w.burning);
+    let wall = b.walls_ahead[breach.dir.index()];
+    let burning = wall.is_some_and(|w| w.burning);
     let reach = b.me.hull_size() * 0.5 + tuning().enemy_breach_reach_px;
     if !burning && b.ai.fire_timer <= 0.0 && !b.friendly_blocks_shot(breach.dir, reach) {
         b.ai.fire_timer = tuning().enemy_breach_fire_interval;
         b.intent.fire = true;
+        if let Some(wall) = wall {
+            let along_x = matches!(breach.dir, Dir::Left | Dir::Right);
+            let (hx, hy) = b.me.move_half_extents(along_x);
+            b.intent.fire_aim_offset = sapper_aim(b.me.position, breach.dir, if along_x { hy } else { hx }, &wall);
+        }
     }
     Status::Success
+}
+
+/// Where a sapper's breach shot goes (degrees off `dir`, as
+/// `Intent::fire_aim_offset`): onto the nearest chunk of `wall` still
+/// standing in a quadrant that stands (`chunks::quadrant_stands`) across
+/// the hull's lane, `lane` px either side of the tank at `me` - the
+/// nearest row first, the one closest to the barrel's line within it. A
+/// wall whose body stands across the lane stops the hull however many
+/// holes a shell has passed (`chunks::solid_box_of`), so the shots clear
+/// that whole width rather than drilling one hole and firing through it.
+/// A shell flies along a ray from the hull's centre (`Shell::spawn`), so
+/// the angle is the chunk's bearing from `me`, held to
+/// `enemy_sapper_max_aim_deg`. Straight down the barrel at a tile that is
+/// whole or breaks whole.
+pub(crate) fn sapper_aim(me: Position, dir: Dir, lane: f32, wall: &WallAhead) -> f32 {
+    use crate::chunks::{chunk_center, quadrant_of, quadrant_stands, CHUNKS, CHUNK_PX};
+    if wall.standing == crate::chunks::ALL {
+        return 0.0;
+    }
+    let d = dir.vec();
+    // The hull's right-hand side (`Shell::spawn`'s positive offset).
+    let right = Position::new(-d.y, d.x);
+    let target = (0..CHUNKS)
+        .filter(|&i| wall.standing & (1 << i) != 0 && quadrant_stands(wall.standing, quadrant_of(i)))
+        .map(|i| {
+            let c = chunk_center(wall.center, i);
+            let rel = Position::new(c.x - me.x, c.y - me.y);
+            (rel.x * d.x + rel.y * d.y, rel.x * right.x + rel.y * right.y, i)
+        })
+        .filter(|&(_, side, _)| side.abs() < lane + CHUNK_PX / 2.0)
+        .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.abs().total_cmp(&b.1.abs())).then(a.2.cmp(&b.2)));
+    let Some((ahead, side, _)) = target else { return 0.0 };
+    let max = tuning().enemy_sapper_max_aim_deg;
+    crate::math::atan2(side, ahead.max(1.0)).to_degrees().clamp(-max, max)
 }
 
 /// Close in on the target along a committed cardinal heading - toward this
@@ -5072,7 +5168,7 @@ mod hammer_tests {
         // Driving at the seat to the west, a pane in the way.
         ai.last_move_dir = Some(Dir::Left);
         let mut walls = [None; 4];
-        walls[Dir::Left.index()] = Some(WallAhead { material: Material::Glass, burning: false });
+        walls[Dir::Left.index()] = Some(WallAhead { material: Material::Glass, burning: false, center: Position::new(0.0, 0.0), standing: crate::chunks::ALL });
         let mut fired = false;
         for _ in 0..30 {
             let intent = think(&mut ai, &hammer_tank(), SpecialSense::Hammer(HammerSense::default()), walls, SEAT);

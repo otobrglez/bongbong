@@ -1176,7 +1176,7 @@ mod tests {
             .and_then(|g| g.tank_snapshots().into_iter().find(|t| t.slot == 0))
             .map(|t| t.rotation.to_radians())
             .expect("the seat");
-        let along = |x: i32, y: i32| (x as f32 / 4.0) * heading.sin() - (y as f32 / 4.0) * heading.cos();
+        let along = |x: i32, y: i32| (x as f32 / 4.0) * crate::math::sin(heading) - (y as f32 / 4.0) * crate::math::cos(heading);
         round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
         thread::sleep(FRAME);
         let mut last: Option<f32> = None;
@@ -1809,34 +1809,38 @@ mod tests {
         let orbs = |round: &OnlineRound<Loopback>| round.game().map_or(0, |g| g.orbs().iter().filter(|o| o.owner == crate::shell::Owner::Player(0)).count());
         let wells = |round: &OnlineRound<Loopback>| round.game().map_or(0, |g| g.zones().iter().filter(|z| z.well().is_some()).count());
         let right = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
+        // Each frame one tick of the clock, however long the sleep took:
+        // a 16 ms frame against a 16.7 ms tick sends no packet one frame
+        // in 25, and a press on that frame goes with the next.
+        const TICK: f32 = crate::PHYSICS_FIXED_DT;
         for _ in 0..180 {
             if armed(&round) {
                 break;
             }
-            round.frame(&right, FRAME.as_secs_f32());
+            round.frame(&right, TICK);
             thread::sleep(FRAME);
         }
         assert!(armed(&round), "the seat took the crate");
         for _ in 0..20 {
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            round.frame(&Intent::default(), TICK);
             thread::sleep(FRAME);
         }
-        round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
+        round.frame(&Intent { fire: true, ..Intent::default() }, TICK);
         assert_eq!(orbs(&round), 1, "the orb is on screen the frame of the press");
         let mut most = 1;
         for _ in 0..30 {
             thread::sleep(FRAME);
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            round.frame(&Intent::default(), TICK);
             most = most.max(orbs(&round));
         }
         assert_eq!(most, 1, "the room's orb for it is not drawn beside it");
-        round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
+        round.frame(&Intent { fire: true, ..Intent::default() }, TICK);
         assert_eq!(wells(&round), 1, "the well is on screen the frame of the anchor");
         assert_eq!(orbs(&round), 0, "and the orb gone into it");
         let mut most = 1;
         for _ in 0..40 {
             thread::sleep(FRAME);
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            round.frame(&Intent::default(), TICK);
             most = most.max(wells(&round));
         }
         assert_eq!(most, 1, "the room's well for it is not drawn beside it");

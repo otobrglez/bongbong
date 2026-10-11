@@ -21,6 +21,7 @@
 //! RNG; with them nothing here draws RNG either - only the blasts' damage
 //! rolls do, as a drum's do.
 
+use crate::math;
 use hecs::Entity;
 
 use super::props::{BlastShape, PendingBlast};
@@ -128,12 +129,12 @@ impl Game {
                     let seat = in_range[((salt(2) * in_range.len() as f32) as usize).min(in_range.len() - 1)];
                     let angle = salt(3) * std::f32::consts::TAU;
                     let off = OBSTACLE_GRID_SIZE * 1.5 * salt(4);
-                    Position::new(seat.x + angle.cos() * off, seat.y + angle.sin() * off)
+                    Position::new(seat.x + math::cos(angle) * off, seat.y + math::sin(angle) * off)
                 } else {
                     let angle = salt(5) * std::f32::consts::TAU;
                     let (lo, hi) = (t.volcano_bomb_min_range_px, t.volcano_bomb_range_px.max(t.volcano_bomb_min_range_px));
                     let dist = lo + (hi - lo) * salt(6).sqrt();
-                    Position::new(centre.x + angle.cos() * dist, centre.y + angle.sin() * dist)
+                    Position::new(centre.x + math::cos(angle) * dist, centre.y + math::sin(angle) * dist)
                 };
                 let inset = OBSTACLE_GRID_SIZE;
                 let to = Position::new(to.x.clamp(inset, f.width - inset), to.y.clamp(inset, f.height - inset));

@@ -4,6 +4,7 @@
 //! the fires an oil drum or a lit trail leaves on the ground, a fuel
 //! drum's launch, and tanks ramming sandbags, fences and barrels.
 
+use crate::math;
 use crate::tuning::tuning;
 use hecs::Entity;
 use rand::RngExt;
@@ -50,8 +51,11 @@ pub(super) struct DeadTile {
 /// where the blast was, which a chained drum leans away from.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum DamageCause {
-    /// A projectile, travelling along `dir` (unit) when known.
-    Shot { dir: Option<Vec2> },
+    /// A projectile, travelling along `dir` (unit) when known, striking
+    /// the tile at `at` when known: a chunked tile breaks the chunk there
+    /// (`Obstacle::strike`) and, breaching it, throws spall at whoever
+    /// opposes `by` behind it (`Game::spall`).
+    Shot { dir: Option<Vec2>, at: Option<Position>, by: Option<crate::shell::Owner> },
     Ram,
     Blast { falloff: f32, from: Position },
     /// Sustained flame exposure (`flame.rs`): a sandbag or fence that
@@ -66,6 +70,34 @@ pub(super) enum DamageCause {
     /// tile it reaches but a permanent one dies outright - no fence roll,
     /// no fuse, not left burning - a drum going off where it stands.
     Crush { from: Position },
+}
+
+/// An ember in the air (`Game::tick_burns`): it lands on `to` at
+/// `lands_at`, its `seed` deciding whether it catches.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Ember {
+    to: Position,
+    lands_at: f32,
+    seed: u32,
+}
+
+/// A tile due to give way a beat after its neighbour did
+/// (`Game::queue_neighbour_breaks`, `Game::tick_breaks`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PendingBreak {
+    pub cell: (i32, i32),
+    /// Round time it is due.
+    pub at: f32,
+    pub kind: BreakKind,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum BreakKind {
+    /// A chunked tile of a collapsing run: it gives way if it is down to
+    /// `domino_chunks` standing.
+    Domino,
+    /// A cracked pane beside a shattered one, the stress running on `dir`.
+    Shatter { dir: Vec2 },
 }
 
 /// A barrel detonation waiting for `explosions` to resolve it this frame.
@@ -153,15 +185,34 @@ fn cell_of(pos: Position) -> (i32, i32) {
     ((pos.x / OBSTACLE_GRID_SIZE).round() as i32, (pos.y / OBSTACLE_GRID_SIZE).round() as i32)
 }
 
+/// A blow that lands where its cause says: a shot at its point, a blast
+/// from its centre, anything else on the whole tile (`Obstacle::damage`).
+/// The chunks it broke go into `broken`.
+fn strike(o: &mut Obstacle, amount: f32, cause: DamageCause, broken: &mut u16) -> bool {
+    let (died, b) = match cause {
+        DamageCause::Shot { dir, at: Some(at), .. } => o.strike(amount, at, dir),
+        DamageCause::Blast { from, .. } => o.blast(amount, from),
+        _ => (o.damage(amount), 0),
+    };
+    *broken |= b;
+    died
+}
+
 /// What a dead tile leaves where it stood: its rubble, charred when fire
 /// finished it. A barrel's leftovers are thrown by its blast
 /// (`Game::blast_show`) instead; iron has no rubble row and never dies
-/// anyway. A replica calls it off `Event::ObstacleDestroyed`.
-pub(crate) fn tile_rubble(material: Material, pos: Position, charred: bool) -> Option<Decal> {
+/// anyway. A dry tree's litter is the dry half of its row
+/// (`Material::is_dry` on the map's `theme`). A replica calls it off
+/// `Event::ObstacleDestroyed`.
+pub(crate) fn tile_rubble(material: Material, pos: Position, charred: bool, theme: crate::map::Theme) -> Option<Decal> {
     if material.is_explosive() {
         return None;
     }
-    Decal::new(material, pos, charred)
+    let mut decal = Decal::new(material, pos, charred)?;
+    if material.is_dry(theme) {
+        decal.col += crate::TREE_DRY_COL;
+    }
+    Some(decal)
 }
 
 impl Game {
@@ -183,14 +234,24 @@ impl Game {
     /// `Obstacle::damage`. Returns `true` the frame the obstacle dies.
     pub(super) fn damage_obstacle(&mut self, f: &mut Frame, entity: Entity, amount: f32, cause: DamageCause) -> bool {
         let crush = matches!(cause, DamageCause::Crush { .. });
-        let (material, variant, pos, died, charred) = {
+        let mut broken = 0u16;
+        let (material, variant, pos, died, charred, formed) = {
             let mut q = self.world.query_one::<&mut Obstacle>(entity);
             let Ok(o) = q.get() else { return false };
             if o.destroyed || (o.burning && !crush) || o.fuse.is_some() {
                 return false;
             }
             let charred = o.burning;
+            let caged = o.cage.is_some();
+            let standing = o.standing_chunks();
             let died = match o.material {
+                // A cage (`Obstacle::cage`) only feels a heavy blast, a rail
+                // or a rod; the shots it lets through never reach it.
+                _ if caged && !crush => match cause {
+                    DamageCause::Blast { .. } => o.cut_cage(amount, false),
+                    DamageCause::Pierce { .. } => o.cut_cage(amount, true),
+                    _ => false,
+                },
                 _ if crush => {
                     o.health = 0.0;
                     o.burning = false;
@@ -224,7 +285,7 @@ impl Game {
                         arm_fuse(o, 0.5 + 2.0 * (1.0 - falloff.clamp(0.0, 1.0)), from);
                         false
                     }
-                    _ => o.damage(amount),
+                    _ => strike(o, amount, cause, &mut broken),
                 },
                 // A tree shouldered over by a tank goes over, it does not
                 // catch fire: fire comes from what is burning at the muzzle
@@ -235,14 +296,43 @@ impl Game {
                     o.destroyed = true;
                     true
                 }
-                _ => o.damage(amount),
+                _ => strike(o, amount, cause, &mut broken),
             };
-            (o.material, o.variant, o.position, died, charred)
+            // The wall gave way into its cage this blow: what stood of it
+            // comes down, as a collapse would bring it.
+            let formed = !caged && o.cage.is_some();
+            if formed {
+                broken |= standing;
+            }
+            (o.material, o.variant, o.position, died, charred, formed)
         };
+        let gave_way = died || formed;
+        if broken != 0 {
+            let dir = match cause {
+                DamageCause::Shot { dir: Some(d), .. } => d,
+                DamageCause::Blast { from, .. } => { let v = pos - from; let l = v.length(); if l > 1e-6 { Vec2::new(v.x / l, v.y / l) } else { Vec2::zero() } },
+                _ => Vec2::zero(),
+            };
+            f.events.push(Event::ChunksBroken { material, variant, x: pos.x, y: pos.y, broken, dx: dir.x, dy: dir.y, collapsed: gave_way });
+            if material.chunk_health().is_some() {
+                self.lay_rubble(pos, broken, dir, gave_way);
+            }
+            if !died {
+                self.fit_tile_body(entity);
+            }
+            if let DamageCause::Shot { dir: Some(d), by: Some(by), .. } = cause {
+                if amount >= tuning().spall_min_damage {
+                    self.spall(f, pos, broken, d, by);
+                }
+            }
+        }
+        if gave_way {
+            self.queue_neighbour_breaks(f, material, pos, cause, entity);
+        }
         if died {
             let shape = match cause {
-                DamageCause::Shot { dir: Some(d) } => BlastShape::Shot { dir: Lean { x: d.x, y: d.y } },
-                DamageCause::Shot { dir: None } => BlastShape::Plain,
+                DamageCause::Shot { dir: Some(d), .. } => BlastShape::Shot { dir: Lean { x: d.x, y: d.y } },
+                DamageCause::Shot { dir: None, .. } => BlastShape::Plain,
                 DamageCause::Ram => BlastShape::Ram,
                 DamageCause::Blast { .. } => BlastShape::Plain,
                 DamageCause::Fire => BlastShape::Fire,
@@ -254,6 +344,202 @@ impl Game {
         died
     }
 
+    /// Lay the rubble the chunks in `broken` of the tile centred on `pos`
+    /// make (`chunks::Rubble`): a unit each where it stood, or, blown out
+    /// along `dir` by a blow that left the tile standing, half of them in
+    /// the cell behind. A cell whose level changes empties the kept nav
+    /// grid, so the router prices it again.
+    fn lay_rubble(&mut self, pos: Position, broken: u16, dir: Vec2, collapsed: bool) {
+        let units = broken.count_ones();
+        let cell = world_to_cell(pos);
+        let (here, behind) = if collapsed || dir.length() < 0.5 { (units, 0) } else { (units - units / 2, units / 2) };
+        let mut changed = self.rubble.add(cell, here);
+        if behind > 0 {
+            let step = if dir.x.abs() >= dir.y.abs() { (dir.x.signum() as i32, 0) } else { (0, dir.y.signum() as i32) };
+            changed |= self.rubble.add((cell.0 + step.0, cell.1 + step.1), behind);
+        }
+        if changed {
+            self.nav.clear();
+        }
+    }
+
+    /// Spall (BB-82): a shell breaching the chunks in `broken` of the tile
+    /// centred on `center` along `dir` throws fragments off its far face.
+    /// Every live tank on the other side from `by` whose hull lies in the
+    /// cone behind - within `spall_reach_px` of the face, its hull within
+    /// `spall_half_width_px` of the blow's line - takes `spall_damage`,
+    /// falling linearly to nothing at the reach. No RNG: the damage is the
+    /// geometry's. Seats in index order, then the enemies.
+    fn spall(&mut self, f: &mut Frame, center: Position, broken: u16, dir: Vec2, by: crate::shell::Owner) {
+        let t = tuning();
+        if !t.spall_enabled || t.spall_damage <= 0.0 || t.spall_reach_px <= 0.0 {
+            return;
+        }
+        let n = broken.count_ones() as f32;
+        if n == 0.0 {
+            return;
+        }
+        // The broken chunks' middle, carried to the far face along the blow.
+        let (sx, sy) = (0..crate::chunks::CHUNKS)
+            .filter(|i| broken & (1 << i) != 0)
+            .map(|i| crate::chunks::chunk_center(center, i))
+            .fold((0.0, 0.0), |(x, y), p| (x + p.x, y + p.y));
+        let mid = Position::new(sx / n, sy / n);
+        let into = (mid.x - center.x) * dir.x + (mid.y - center.y) * dir.y;
+        let reach = OBSTACLE_GRID_SIZE / 2.0 - into;
+        let face = Position::new(mid.x + dir.x * reach, mid.y + dir.y * reach);
+        let mut victims: Vec<Entity> = self.seats_on_field().into_iter().flatten().collect();
+        victims.extend(self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter().map(|(e, _)| e));
+        for entity in victims {
+            let mut q = self.world.query_one::<&mut Tank>(entity);
+            let Ok(tank) = q.get() else { continue };
+            if tank.is_wreck() || by.same_side(tank.owner()) {
+                continue;
+            }
+            let (hc, hh) = tank.hull_bbox_world();
+            let rel = Position::new(hc.x - face.x, hc.y - face.y);
+            let along = rel.x * dir.x + rel.y * dir.y;
+            let across = (rel.x * dir.y - rel.y * dir.x).abs();
+            let half = hh.x.max(hh.y);
+            if along < -half || along > t.spall_reach_px || across > t.spall_half_width_px + half {
+                continue;
+            }
+            let d = t.spall_damage * (1.0 - along.max(0.0) / t.spall_reach_px);
+            if d <= 0.0 {
+                continue;
+            }
+            let landed = tank.take_damage(d, crate::MAX_DAMAGE);
+            tank.mark_hit();
+            tank.credit(by);
+            let killed = tank.is_wreck();
+            let target = match tank.owner() {
+                crate::shell::Owner::Player(player) => super::HitTarget::Player { player },
+                crate::shell::Owner::Enemy(slot) => super::HitTarget::Enemy { slot },
+                crate::shell::Owner::Tower { .. } => continue,
+            };
+            let at = tank.position;
+            f.events.push(Event::Hit { target, damage: landed, killed, x: face.x, y: face.y, cause: super::HitCause::Spall });
+            if killed {
+                f.kills.push((at, tank.owner()));
+            }
+            drop(q);
+            if !killed {
+                let mut q = self.world.query_one::<&mut Ai>(entity);
+                if let Ok(ai) = q.get() {
+                    ai.notify_hit();
+                }
+            }
+        }
+    }
+
+    /// What a tile's death sets going beside it, after a beat: a chunked
+    /// tile's run comes down a tile at a time where it is weak
+    /// (`domino_chunks`, `domino_delay_seconds`); a pane's stress shatters
+    /// a cracked neighbour (`glass_cascade_seconds`) and cracks an intact
+    /// one (`glass_stress_damage`) now. The neighbours east, west, south,
+    /// north, in that order.
+    fn queue_neighbour_breaks(&mut self, f: &mut Frame, material: Material, pos: Position, cause: DamageCause, entity: Entity) {
+        let t = tuning();
+        let cell = world_to_cell(pos);
+        if material.chunk_health().is_some() {
+            for n in neighbours(cell) {
+                self.pending_breaks.push(PendingBreak { cell: n, at: self.time + t.domino_delay_seconds, kind: BreakKind::Domino });
+            }
+            return;
+        }
+        if material != Material::Glass || matches!(cause, DamageCause::Crush { .. }) {
+            return;
+        }
+        for n in neighbours(cell) {
+            let pane = self
+                .world
+                .query::<(Entity, &Obstacle)>()
+                .iter()
+                .find(|(e, o)| *e != entity && !o.destroyed && o.material == Material::Glass && o.cell() == n)
+                .map(|(e, o)| (e, o.health < o.max_health));
+            let Some((pane, cracked)) = pane else { continue };
+            let away = Vec2::new((n.0 - cell.0) as f32, (n.1 - cell.1) as f32);
+            if cracked {
+                self.pending_breaks.push(PendingBreak { cell: n, at: self.time + t.glass_cascade_seconds, kind: BreakKind::Shatter { dir: away } });
+            } else if t.glass_stress_damage > 0.0 {
+                self.damage_obstacle(f, pane, t.glass_stress_damage, DamageCause::Shot { dir: Some(away), at: None, by: None });
+            }
+        }
+    }
+
+    /// Bring down the tiles whose beat has come (`pending_breaks`), in the
+    /// order they were queued: a weakened tile of a collapsing run gives
+    /// way, a cracked pane shatters. One that has since died, or is no
+    /// longer weak enough, is passed over.
+    pub(super) fn tick_breaks(&mut self, f: &mut Frame) {
+        if self.pending_breaks.is_empty() {
+            return;
+        }
+        let now = self.time;
+        let (due, later): (Vec<PendingBreak>, Vec<PendingBreak>) = std::mem::take(&mut self.pending_breaks).into_iter().partition(|b| b.at <= now);
+        self.pending_breaks = later;
+        let domino = tuning().domino_chunks;
+        for b in due {
+            let tile = self
+                .world
+                .query::<(Entity, &Obstacle)>()
+                .iter()
+                .find(|(_, o)| !o.destroyed && !o.burning && o.cell() == b.cell)
+                .map(|(e, o)| (e, o.material, o.position, o.chunks.map(|c| c.count() as i32)));
+            let Some((entity, material, center, standing)) = tile else { continue };
+            match b.kind {
+                BreakKind::Domino => {
+                    let Some(standing) = standing else { continue };
+                    if standing > domino {
+                        continue;
+                    }
+                    self.damage_obstacle(f, entity, f32::MAX, DamageCause::Shot { dir: None, at: Some(center), by: None });
+                }
+                BreakKind::Shatter { dir } => {
+                    if material == Material::Glass {
+                        self.damage_obstacle(f, entity, f32::MAX, DamageCause::Shot { dir: Some(dir), at: None, by: None });
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fit a chunked tile's body to what of it still stands: its
+    /// seam-closed box (`battlefield::tile_half_extent`, as it was spawned)
+    /// cut down to its standing quadrants (`Chunks::solid_box`). A hull
+    /// never fits a quadrant's gap, but it no longer stops short of a
+    /// wall's half that is gone.
+    pub(crate) fn fit_tile_body(&mut self, entity: Entity) {
+        let (body, pos, material, base, solid) = {
+            let mut q = self.world.query_one::<&Obstacle>(entity);
+            let Ok(o) = q.get() else { return };
+            // A cage stands over its whole cell, whatever was left of the
+            // wall round it.
+            let whole = (Vec2::zero(), Vec2::new(OBSTACLE_GRID_SIZE / 2.0, OBSTACLE_GRID_SIZE / 2.0));
+            let solid = if o.cage.is_some() { whole } else {
+                let Some(solid) = o.chunks.and_then(|c| c.solid_box()) else { return };
+                solid
+            };
+            (o.body, o.position, o.material, o.hull_size() * 0.5, solid)
+        };
+        let cells: std::collections::HashSet<(i32, i32)> = self
+            .world
+            .query::<&Obstacle>()
+            .iter()
+            .filter(|o| !o.destroyed && !o.material.is_tree())
+            .map(|o| crate::battlefield::pos_to_cell(o.position))
+            .collect();
+        let (gx, gy) = crate::battlefield::pos_to_cell(pos);
+        let half = crate::battlefield::tile_half_extent(material, &cells, gx, gy, base);
+        let (off, h) = solid;
+        let (x0, x1) = ((-half.x).max(off.x - h.x), half.x.min(off.x + h.x));
+        let (y0, y1) = ((-half.y).max(off.y - h.y), half.y.min(off.y + h.y));
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        self.physics.fit_static(body, Position::new((x0 + x1) / 2.0, (y0 + y1) / 2.0), Position::new((x1 - x0) / 2.0, (y1 - y0) / 2.0));
+    }
+
     /// Record an obstacle's death and leave its rubble behind; an
     /// explosive one queues its blast for `explosions` to resolve this
     /// frame. Every tile death in the game funnels through here - a shot,
@@ -263,7 +549,11 @@ impl Game {
     fn obstacle_died(&mut self, f: &mut Frame, tile: DeadTile) {
         let DeadTile { material, variant, position: pos, chained, charred, shape } = tile;
         f.events.push(Event::ObstacleDestroyed { material, x: pos.x, y: pos.y });
-        if let Some(decal) = tile_rubble(material, pos, charred) {
+        // A felled tree opens its wood: the trails it flanked change.
+        if material.is_tree() {
+            self.woods.fell(cell_of(pos));
+        }
+        if let Some(decal) = tile_rubble(material, pos, charred, self.map.theme) {
             f.decals.push(decal);
         }
         if material.is_explosive() {
@@ -503,7 +793,7 @@ impl Game {
             let h = crate::blast::seed_at(center, 40 + i * 5);
             let angle = (h % 3600) as f32 / 3600.0 * std::f32::consts::TAU;
             let dist = t.barrel_part_throw_px * (0.35 + 0.65 * ((h >> 12) % 100) as f32 / 100.0);
-            let to = Position::new(center.x + angle.cos() * dist, center.y + angle.sin() * dist);
+            let to = Position::new(center.x + math::cos(angle) * dist, center.y + math::sin(angle) * dist);
             show.decals.push(Decal::thrown(RUBBLE_ROW_BARREL, center, to, 40 + i * 5));
         }
 
@@ -527,12 +817,12 @@ impl Game {
             }
             rethrown += 1;
             let h = crate::blast::seed_at(decal.center, 60);
-            let mut angle = (decal.center.y - center.y).atan2(decal.center.x - center.x);
+            let mut angle = math::atan2(decal.center.y - center.y, decal.center.x - center.x);
             angle += ((h % 100) as f32 / 100.0 - 0.5) * 0.8;
             let throw = 16.0 + ((h >> 8) % 24) as f32;
             let to = Position::new(
-                (center.x + angle.cos() * (dist + throw)).clamp(0.0, width),
-                (center.y + angle.sin() * (dist + throw)).clamp(0.0, height),
+                (center.x + math::cos(angle) * (dist + throw)).clamp(0.0, width),
+                (center.y + math::sin(angle) * (dist + throw)).clamp(0.0, height),
             );
             decal.rethrow(to);
         }
@@ -598,15 +888,12 @@ impl Game {
         let burning: Vec<(i32, i32)> = self.fires.iter().filter(|fire| fire.left > 0.0).map(|fire| fire.cell).collect();
         // Grass in a burning cell chars, whatever lit it: the tufts stay
         // as stubs for the round and the cell stops concealing at once.
-        if !self.grass_cells.is_empty() {
-            let before = self.grass_cells.len();
-            self.grass_cells.retain(|c| !burning.contains(&cell_of(*c)));
-            if self.grass_cells.len() != before {
-                for tuft in self.grass.iter_mut() {
-                    if !tuft.burnt && burning.contains(&cell_of(tuft.base)) {
-                        tuft.burnt = true;
-                    }
-                }
+        // The woods' undergrowth chars the same way, though its cells hide
+        // nobody (`woods.rs`).
+        self.grass_cells.retain(|c| !burning.contains(&cell_of(*c)));
+        for tuft in self.grass.iter_mut() {
+            if !tuft.burnt && burning.contains(&cell_of(tuft.base)) {
+                tuft.burnt = true;
             }
         }
         if live {
@@ -714,20 +1001,90 @@ impl Game {
     /// simply despawned it and nothing downstream (the event log, the
     /// dev server, debris) ever heard. Collects first, exactly like
     /// `tick_fuses`, because `obstacle_died` needs the world free.
-    pub(super) fn tick_burns(&mut self, f: &mut Frame) {
+    pub(super) fn tick_burns(&mut self, f: &mut Frame, live: bool) {
+        let t = tuning();
         let mut charred = Vec::new();
-        for o in self.world.query::<&mut Obstacle>().iter() {
+        let mut opened = Vec::new();
+        let mut throws = Vec::new();
+        for (entity, o) in self.world.query::<(Entity, &mut Obstacle)>().iter() {
             let was_destroyed = o.destroyed;
+            let before = o.burn_elapsed;
             o.tick_burn(f.dt);
+            if o.burning && !was_destroyed && t.embers_enabled && (o.material == Material::Wood || o.material.is_tree()) {
+                // One ember every `ember_interval_seconds` of the tile's
+                // burn, phased by its hash so a row does not throw in step.
+                let seed = crate::blast::seed_at(o.position, 0xE3B);
+                let every = t.ember_interval_seconds.max(0.05);
+                let phase = crate::blast::hash_unit(seed, 0) * every;
+                let (was, now) = (((before + phase) / every).floor(), ((o.burn_elapsed + phase) / every).floor());
+                if now > was {
+                    throws.push((o.position, seed, now as u32));
+                }
+            }
+            let gone = o.char_chunks();
+            if gone != 0 && !o.destroyed {
+                opened.push((entity, o.position, gone));
+            }
             if o.destroyed && !was_destroyed {
                 charred.push((o.material, o.variant, o.position));
             }
+        }
+        for (entity, position, broken) in opened {
+            self.fit_tile_body(entity);
+            f.events.push(Event::ChunksCharred { x: position.x, y: position.y, broken });
         }
         for (material, variant, position) in charred {
             self.obstacle_died(
                 f,
                 DeadTile { material, variant, position, chained: false, charred: true, shape: BlastShape::Plain },
             );
+        }
+        for (from, seed, k) in throws {
+            let stray = (crate::blast::hash_unit(seed, 2 * k + 1) * 2.0 - 1.0) * t.ember_spread_deg;
+            let angle = (t.grass_gust_heading_deg + stray).to_radians();
+            let lo = t.ember_reach_min_px.min(t.ember_reach_max_px);
+            let reach = lo + crate::blast::hash_unit(seed, 2 * k + 2) * (t.ember_reach_max_px - lo);
+            let to = Position::new(from.x + math::cos(angle) * reach, from.y + math::sin(angle) * reach);
+            self.embers.push(Ember { to, lands_at: self.time + t.ember_flight_seconds, seed: seed ^ k.wrapping_mul(0x9e37_79b9) });
+            f.events.push(Event::EmberFlew { x: from.x, y: from.y, to_x: to.x, to_y: to.y });
+        }
+        self.land_embers(f, live);
+    }
+
+    /// Bring down the embers whose flight is over. One that falls on wood
+    /// or a tree that would burn (`Obstacle::flammable`), or on a range
+    /// board, sets it alight `ember_catch_chance` of the time - hashed,
+    /// never the round's RNG. On the end screen they only land.
+    fn land_embers(&mut self, f: &mut Frame, live: bool) {
+        if self.embers.is_empty() {
+            return;
+        }
+        let now = self.time;
+        let (due, later): (Vec<Ember>, Vec<Ember>) = std::mem::take(&mut self.embers).into_iter().partition(|e| e.lands_at <= now);
+        self.embers = later;
+        if !live {
+            return;
+        }
+        let chance = tuning().ember_catch_chance;
+        for ember in due {
+            if crate::blast::hash_unit(ember.seed, 0x51) >= chance {
+                continue;
+            }
+            let cell = world_to_cell(ember.to);
+            for o in self.world.query::<&mut Obstacle>().iter() {
+                if o.cell() != cell || o.destroyed || o.burning || o.fuse.is_some() {
+                    continue;
+                }
+                let m = o.material;
+                if !(((m == Material::Wood || m.is_tree()) && o.flammable) || m.catches_fire()) {
+                    continue;
+                }
+                o.health = 0.0;
+                o.burning = true;
+                let what = if m.is_tree() { "tree" } else if m.catches_fire() { "target" } else { "wood" };
+                f.events.push(Event::Ignited { x: o.position.x, y: o.position.y, what });
+                break;
+            }
         }
     }
 
@@ -789,7 +1146,7 @@ impl Game {
         let dx = at.x - from.x;
         let dy = at.y - from.y;
         let d = (dx * dx + dy * dy).sqrt();
-        let base = if d > 0.001 { dy.atan2(dx) } else { (h % 360) as f32 / 360.0 * std::f32::consts::TAU };
+        let base = if d > 0.001 { math::atan2(dy, dx) } else { (h % 360) as f32 / 360.0 * std::f32::consts::TAU };
         let angle = base + ((h % 100) as f32 / 100.0 - 0.5) * 0.9;
         let (lo, hi) = (t.fuel_launch_cells_min.max(1), t.fuel_launch_cells_max.max(t.fuel_launch_cells_min).max(1));
         let cells = lo + ((h >> 8) % (hi - lo + 1) as u32) as i32;
@@ -802,7 +1159,7 @@ impl Game {
             .collect();
         let start = cell_of(at);
         for n in (1..=cells).rev() {
-            let target = Position::new(at.x + angle.cos() * n as f32 * OBSTACLE_GRID_SIZE, at.y + angle.sin() * n as f32 * OBSTACLE_GRID_SIZE);
+            let target = Position::new(at.x + math::cos(angle) * n as f32 * OBSTACLE_GRID_SIZE, at.y + math::sin(angle) * n as f32 * OBSTACLE_GRID_SIZE);
             let cell = cell_of(target);
             let pos = cell_to_world(cell.0, cell.1);
             let inside = pos.x >= OBSTACLE_GRID_SIZE
@@ -987,7 +1344,7 @@ impl Game {
                 .find(|(_, o)| o.material.is_explosive() && !o.destroyed && o.cell() == cell)
                 .map(|(e, _)| e);
             if let Some(entity) = entity {
-                self.damage_obstacle(f, entity, f32::MAX, DamageCause::Shot { dir: None });
+                self.damage_obstacle(f, entity, f32::MAX, DamageCause::Shot { dir: None, at: None, by: None });
             }
         }
     }

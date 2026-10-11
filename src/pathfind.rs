@@ -463,6 +463,17 @@ impl Grid {
     /// open to `usable`, `blocked_ahead` and the flood fills - so this
     /// changes which route is chosen, never whether one exists.
     pub fn weigh(&mut self, cells: impl Iterator<Item = Position>, cost: u32) {
+        self.price(cells, cost, false);
+    }
+
+    /// `weigh`, but a cell already dearer keeps its price: what lies on
+    /// top of ground the router already prices (rubble on a ford, on a
+    /// lava ford) never makes it cheaper.
+    pub fn raise(&mut self, cells: impl Iterator<Item = Position>, cost: u32) {
+        self.price(cells, cost, true);
+    }
+
+    fn price(&mut self, cells: impl Iterator<Item = Position>, cost: u32, keep_dearer: bool) {
         debug_assert!(self.fields.is_empty(), "a field reads the prices as it runs: weigh the grid before adding one");
         let cost = cost.clamp(1, u8::MAX as u32) as u8;
         for pos in cells {
@@ -470,7 +481,8 @@ impl Grid {
                 continue;
             }
             let cell = self.cell_of(pos);
-            self.cost[cell.1 * self.cols + cell.0] = cost;
+            let at = &mut self.cost[cell.1 * self.cols + cell.0];
+            *at = if keep_dearer { (*at).max(cost) } else { cost };
         }
     }
 
@@ -2543,5 +2555,22 @@ mod route_ahead_tests {
         let walking = grid.route_ahead_walking(from, goal).unwrap();
         assert_eq!(walking.cells().len(), 1);
         assert_eq!(Some(walking.first()), grid.next_step_walking(from, goal));
+    }
+}
+
+#[cfg(test)]
+mod price_tests {
+    use super::*;
+
+    #[test]
+    fn raising_a_price_never_lowers_one() {
+        let mut grid = Grid::open(320.0, 320.0, 32.0, 0.0);
+        let (ford, open) = (Position::new(48.0, 48.0), Position::new(112.0, 48.0));
+        grid.weigh(std::iter::once(ford), 5);
+        grid.raise([ford, open].into_iter(), 2);
+        assert_eq!(grid.cost_at(1, 1), 5, "the dearer price stays");
+        assert_eq!(grid.cost_at(3, 1), 2, "an open cell is raised");
+        grid.weigh(std::iter::once(ford), 2);
+        assert_eq!(grid.cost_at(1, 1), 2, "weigh sets the price");
     }
 }

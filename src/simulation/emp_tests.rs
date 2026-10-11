@@ -92,8 +92,10 @@ fn an_emp_crate_arms_the_burst_and_replaces_the_special_carried() {
     assert_eq!((tank.special(), tank.laser_charges, tank.emp_charges), (Some(ActiveWeapon::Emp), 0, t.emp_charges_per_pickup));
     tank.emp_charges = 1;
     tank.take_weapon(ActiveWeapon::Emp);
-    assert_eq!(tank.emp_charges, t.emp_charges_per_pickup, "a second crate refills to a crate's worth");
-    assert_eq!(ActiveWeapon::Emp.full_load(), t.emp_charges_per_pickup);
+    assert_eq!(tank.emp_charges, 1 + t.emp_charges_per_pickup, "a second crate stacks on what is left");
+    tank.take_weapon(ActiveWeapon::Emp);
+    assert_eq!(tank.emp_charges, t.emp_charges_max, "up to the carry limit");
+    assert_eq!(ActiveWeapon::Emp.full_load(), t.emp_charges_max);
     assert_eq!(crate::pickup::PickupKind::Emp.weapon(), Some(ActiveWeapon::Emp));
 }
 

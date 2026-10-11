@@ -403,8 +403,9 @@ mcp-call TOOL ARGS='{}':
 
 # --- iOS simulator (docs/ios-native-port-prd.md, CLAUDE.md's iOS section) ---
 # Every recipe runs through tools/ios/env.sh: Xcode as DEVELOPER_DIR (the
-# devenv shell points it at nix's apple-sdk), one deployment target, the
-# library prefix build.rs links from, and bindgen's simulator sysroot.
+# devenv shell points it at nix's apple-sdk), Xcode's clang as the host
+# linker, one deployment target, the library prefix build.rs links from, and
+# bindgen's simulator sysroot.
 
 # One-time: SDL3 (static) and raylib (SDL backend, OpenGL ES 2.0) for the
 # simulator into ~/.local/share/bongbong-ios/sim (tools/setup_ios.sh,

@@ -13,6 +13,7 @@
 //! picture is the rule. Nothing here draws RNG; every cosmetic choice
 //! hashes the wave's origin.
 
+use crate::math;
 use crate::math::{Color, Vec2};
 use crate::pyro::{self, Puff, Shape};
 use crate::shell::Owner;
@@ -100,7 +101,7 @@ fn facing_rad(facing: Dir) -> f32 {
 
 /// The unit vector of rotation `rad` (0 up, clockwise on the y-down field).
 fn along(rad: f32) -> Vec2 {
-    Vec2::new(rad.sin(), -rad.cos())
+    Vec2::new(math::sin(rad), -math::cos(rad))
 }
 
 /// `v` at unit length, or straight up for a zero vector.
@@ -166,7 +167,7 @@ impl SonicCone {
     /// The bearing of `p` off the facing (radians, wrapped to -pi..=pi).
     pub fn offset_of(&self, p: Position) -> f32 {
         let d = p - self.origin;
-        let rot = d.x.atan2(-d.y);
+        let rot = math::atan2(d.x, -d.y);
         let pi = std::f32::consts::PI;
         (rot - facing_rad(self.facing) + pi).rem_euclid(2.0 * pi) - pi
     }
@@ -336,7 +337,7 @@ pub fn falloff(t: &Tuning, d: f32) -> f32 {
 /// The shove a hull of chassis mass factor `mass_factor` takes at `d` px
 /// from the pivot (px/s).
 pub fn shove_speed(t: &Tuning, mass_factor: f32, d: f32) -> f32 {
-    let resist = mass_factor.max(0.05).powf(t.sonic_mass_exponent);
+    let resist = math::powf(mass_factor.max(0.05), t.sonic_mass_exponent);
     (t.sonic_shove_speed * falloff(t, d) / resist).min(t.sonic_shove_max_speed)
 }
 
@@ -380,7 +381,7 @@ pub fn drum_landing(
     let u = if len > 1e-3 { line / len } else { Vec2::new(0.0, -1.0) };
     let cells = (t.sonic_drum_throw_cells * falloff).round().max(1.0);
     let throw = cells * g;
-    let cos_aim = t.sonic_drum_aim_deg.to_radians().cos();
+    let cos_aim = math::cos(t.sonic_drum_aim_deg.to_radians());
     let onto = tanks
         .iter()
         .filter_map(|&(slot, at)| {
@@ -530,7 +531,7 @@ pub fn wave_dust(wave: &SonicWave, t: &Tuning, time: f32) -> Vec<Shape> {
         let seed = wave.seed ^ crate::blast::seed_at(centre, 0x9A5);
         for i in 0..8u32 {
             let turn = (pyro::unit(seed, i) - 0.5) * 80f32.to_radians();
-            let (s, c) = turn.sin_cos();
+            let (s, c) = math::sin_cos(turn);
             let dir = Vec2::new(away.x * c - away.y * s, away.x * s + away.y * c);
             let reach = 16.0 + 24.0 * pyro::unit(seed, i + 8);
             let pos = Position::new(centre.x + dir.x * reach * k, centre.y + dir.y * reach * k + 30.0 * k * k);
@@ -605,7 +606,7 @@ mod tests {
         assert!(c.reaches(Position::new(320.0, 288.0 + 100.0)).is_none(), "beside it");
         assert!(c.reaches(Position::new(320.0 - 60.0, 288.0)).is_none(), "behind it");
         // The edge of the cone: a degree inside the half angle in, five past it out.
-        let at = |deg: f32| Position::new(320.0 + 100.0 * deg.to_radians().cos(), 288.0 + 100.0 * deg.to_radians().sin());
+        let at = |deg: f32| Position::new(320.0 + 100.0 * math::cos(deg.to_radians()), 288.0 + 100.0 * math::sin(deg.to_radians()));
         assert!(c.reaches(at(half - 1.0)).is_some() && c.reaches(at(1.0 - half)).is_some());
         assert!(c.reaches(at(half + 5.0)).is_none() && c.reaches(at(-half - 5.0)).is_none());
         let arc = 2.0 * half.to_radians() * reach;
@@ -640,7 +641,7 @@ mod tests {
     fn the_cone_never_leaves_the_field() {
         let half = Tuning::DEFAULT.sonic_half_angle_deg;
         let c = cone_at(Position::new(64.0, 288.0), Dir::Left, open);
-        assert!(c.rays.iter().all(|&r| r <= 64.0 / half.to_radians().cos() + 1e-3), "{:?}", c.rays);
+        assert!(c.rays.iter().all(|&r| r <= 64.0 / math::cos(half.to_radians()) + 1e-3), "{:?}", c.rays);
         assert!(c.cells.iter().all(|cell| cell.cell.0 >= 0));
     }
 
@@ -719,7 +720,7 @@ mod tests {
         let mut wave = SonicWave::new(cone_at(Position::new(320.0, 288.0), Dir::Right, wall), Owner::Player(0));
         // The face is 80 px ahead, further at the cone's edge: every arc of
         // a front its rings' spacing past that lies past it.
-        let edge = 80.0 / t.sonic_half_angle_deg.to_radians().cos();
+        let edge = 80.0 / math::cos(t.sonic_half_angle_deg.to_radians());
         let front = edge + t.sonic_ring_gap_px * t.sonic_wave_rings as f32 + 2.0;
         assert!(front < t.sonic_reach_px, "the front still runs out: {front}");
         wave.age = front / t.sonic_wave_speed;
@@ -782,7 +783,7 @@ mod tests {
             assert!(x % 2 == 0 && y % 2 == 0 && w % 2 == 0 && h == 2, "on the grid: {x},{y} {w}x{h}");
             for bx in (x..x + w).step_by(2) {
                 let (dx, dy) = (bx as f32 + 1.0 - c.x, y as f32 + 1.0 - c.y);
-                let a = dy.atan2(dx);
+                let a = math::atan2(dy, dx);
                 assert!((-0.5 - 1e-3..=0.5 + 1e-3).contains(&a), "{a}");
                 assert!(((dx * dx + dy * dy).sqrt() - 40.0).abs() <= 1.0 + 1e-3);
             }

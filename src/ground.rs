@@ -2467,7 +2467,7 @@ mod tests {
         let mut water = Vec::new();
         for y in 0..rows {
             for x in 0..cols {
-                let v: f32 = blobs.iter().map(|&(bx, by, r)| (-((x as f32 - bx).powi(2) + (y as f32 - by).powi(2)) / (r * r)).exp()).sum();
+                let v: f32 = blobs.iter().map(|&(bx, by, r)| crate::math::exp(-((x as f32 - bx).powi(2) + (y as f32 - by).powi(2)) / (r * r))).sum();
                 if v + rng.random_range(-0.25..0.25) > level {
                     water.push((x, y));
                 }

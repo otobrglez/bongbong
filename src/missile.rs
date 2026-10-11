@@ -26,6 +26,7 @@
 //! leaves its shadow on the ground, the convention `FlyingDrum` and the
 //! thrown decals already use. No RNG anywhere in flight.
 
+use crate::math;
 use crate::tuning::tuning;
 use crate::math::Vec2;
 
@@ -238,7 +239,7 @@ impl Missile {
         let moved = self.draw_pos() - drawn_before;
         let len = moved.length();
         if len > 1e-4 {
-            let k = 1.0 - (-smoothing * dt).exp();
+            let k = 1.0 - math::exp(-smoothing * dt);
             let eased = self.facing + (moved / len - self.facing) * k;
             let l = eased.length();
             if l > 1e-4 {
@@ -291,7 +292,7 @@ impl Missile {
                 self.fly_down(dt);
             }
             MissileStage::Dead => {
-                self.speed *= (-t.emp_missile_drag * dt).exp();
+                self.speed *= math::exp(-t.emp_missile_drag * dt);
                 self.fall += t.emp_missile_gravity * dt;
                 self.step(dt);
                 self.height -= self.fall * dt;
@@ -349,8 +350,8 @@ impl Missile {
         if to.length() < 1e-3 {
             return;
         }
-        let want = to.y.atan2(to.x);
-        let have = self.dir.y.atan2(self.dir.x);
+        let want = math::atan2(to.y, to.x);
+        let have = math::atan2(self.dir.y, self.dir.x);
         let mut delta = want - have;
         while delta > std::f32::consts::PI {
             delta -= std::f32::consts::TAU;
@@ -360,19 +361,19 @@ impl Missile {
         }
         let max = rate_deg.to_radians() * dt;
         let turned = have + delta.clamp(-max, max);
-        self.dir = Vec2::new(turned.cos(), turned.sin());
+        self.dir = Vec2::new(math::cos(turned), math::sin(turned));
     }
 
     /// The sprite's facing in degrees, the game's convention (0 = up):
     /// along the drawn flight path (`facing`), nose first.
     pub fn rotation(&self) -> f32 {
-        self.facing.x.atan2(-self.facing.y).to_degrees()
+        math::atan2(self.facing.x, -self.facing.y).to_degrees()
     }
 
     /// The ground heading in degrees - what the shadow, which lies on the
     /// ground, points along.
     pub fn ground_rotation(&self) -> f32 {
-        self.dir.x.atan2(-self.dir.y).to_degrees()
+        math::atan2(self.dir.x, -self.dir.y).to_degrees()
     }
 
     /// 0 on the ground .. 1 at the apex.

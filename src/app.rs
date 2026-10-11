@@ -1464,6 +1464,9 @@ pub fn run(args: Args) {
     let trees_texture = rl
         .load_texture(&thread, "static/trees_sheet.png")
         .expect("failed loading trees texture");
+    let bushes_texture = rl
+        .load_texture(&thread, "static/bushes_sheet.png")
+        .expect("failed loading bushes texture");
     let towers_texture = rl
         .load_texture(&thread, "static/towers_sheet.png")
         .expect("failed loading towers texture");
@@ -2249,6 +2252,8 @@ pub fn run(args: Args) {
                     ground: &ground_textures[theme_index(session.builder.map().theme)],
                     grass: &grass_textures[theme_index(session.builder.map().theme)],
                     trees: &trees_texture,
+                    bushes: &bushes_texture,
+                    theme: session.builder.map().theme,
                     target: &target_texture,
                     towers: &towers_texture,
                     crates: &crates_texture,
@@ -2758,6 +2763,7 @@ pub fn run(args: Args) {
                 frog_variants: &frog_textures,
                 grass: &grass_textures[theme_index(game.map.theme)],
                 trees: &trees_texture,
+                bushes: &bushes_texture,
                 target: &target_texture,
                 towers: &towers_texture,
                 crates: &crates_texture,

@@ -55,6 +55,8 @@ struct Setting {
     ford_cost: i32,
     lava_cost: i32,
     crater_cost: i32,
+    rubble_costs: (i32, i32),
+    rubble_levels: (i32, i32),
 }
 
 impl Setting {
@@ -68,6 +70,8 @@ impl Setting {
             ford_cost: t.water_ford_path_cost,
             lava_cost: t.lava_ford_path_cost,
             crater_cost: t.rod_crater_path_cost,
+            rubble_costs: (t.rubble_light_path_cost, t.rubble_heavy_path_cost),
+            rubble_levels: (t.rubble_light, t.rubble_heavy),
         }
     }
 }
@@ -171,6 +175,11 @@ impl Game {
     /// What the layer blocks: every tile at its seam-closed extent and
     /// every deep water and deep lava cell (`nav_grid`).
     fn nav_tile_shapes(&self) -> Vec<(Position, f32)> {
+        self.nav_tile_shapes_where(|_| true)
+    }
+
+    /// `nav_tile_shapes` with only the tiles `keep` keeps.
+    fn nav_tile_shapes_where(&self, keep: impl Fn(&Obstacle) -> bool) -> Vec<(Position, f32)> {
         // Trees are left out of the seam-close set for the same reason
         // `hits::Terrain::build` leaves them out: they never close a seam,
         // here or in physics, so they must not close anybody else's.
@@ -184,6 +193,7 @@ impl Game {
         self.world
             .query::<&Obstacle>()
             .iter()
+            .filter(|o| keep(o))
             .map(|o| {
                 let (gx, gy) = battlefield::pos_to_cell(o.position);
                 let half = battlefield::tile_half_extent(o.material, &seam_cells, gx, gy, o.hull_size() * 0.5);
@@ -212,6 +222,61 @@ impl Game {
         frogs.into_iter().chain(self.fires.iter().map(|fire| (fire.position(), 1.0)))
     }
 
+    /// The nav grid as a sapper reads it (`ai::Sap`): every tile a shell
+    /// can bring down (`breachable`) open but dear, at
+    /// `enemy_sap_wall_path_cost` a cell, and everything else - iron, a
+    /// cage, deep water and lava, the frogs, a fire - the wall it is in
+    /// `nav_grid`. With the breachable tiles' centres.
+    pub(crate) fn breach_grid(&self, width: f32, height: f32) -> (Grid, Vec<Position>) {
+        let mut grid = Self::nav_open(width, height);
+        for (center, half_extent) in self.nav_tile_shapes_where(|o| !breachable(o)).into_iter().chain(self.nav_moving_shapes()) {
+            grid.block(center, half_extent);
+        }
+        let mut grid = self.nav_finish(grid);
+        let walls: Vec<Position> = self.world.query::<&Obstacle>().iter().filter(|o| breachable(o)).map(|o| o.position).collect();
+        // Every nav cell a wall's box overlaps: cells sit half a tile off
+        // the tiles, so a tile spans four.
+        let half = OBSTACLE_GRID_SIZE / 2.0 - 1.0;
+        let corners = walls.iter().flat_map(|w| [(-half, -half), (half, -half), (-half, half), (half, half)].map(|(dx, dy)| Position::new(w.x + dx, w.y + dy)));
+        grid.raise(corners, tuning().enemy_sap_wall_path_cost.max(1) as u32);
+        (grid, walls)
+    }
+
+    /// A sapper's way to `target` from `from`, which `grid` (the round's
+    /// nav grid) cannot route between (`ai::Sap`): the cheapest way
+    /// through `breach` (`breach_grid`) walked cell by cell to the first
+    /// cell `grid` blocks that a wall in `walls` covers. The plan is the
+    /// last open cell before it and the step from there; `None` when the
+    /// way through crosses no wall, or there is none.
+    pub(crate) fn sap_plan(grid: &Grid, breach: &mut Grid, walls: &[Position], from: Position, target: Position) -> Option<crate::ai::Sap> {
+        let (cols, rows, size) = grid.dims();
+        let cell_of = |p: Position| (((p.x / size) as usize).min(cols - 1), ((p.y / size) as usize).min(rows - 1));
+        let centre = |(c, r): (usize, usize)| Position::new((c as f32 + 0.5) * size, (r as f32 + 0.5) * size);
+        let goal = cell_of(target);
+        breach.add_field(target);
+        let (mut at, mut open) = (cell_of(from), None);
+        let reach = OBSTACLE_GRID_SIZE / 2.0 + size / 2.0;
+        for _ in 0..cols * rows {
+            if !grid.is_blocked(at.0, at.1) {
+                open = Some(at);
+            }
+            let next = breach.flow(target, at.0, at.1)?;
+            if grid.is_blocked(next.0, next.1) {
+                let c = centre(next);
+                // A portal's hop is no step into a wall.
+                let step = Dir::of_step(next.0 as i32 - at.0 as i32, next.1 as i32 - at.1 as i32);
+                if let Some(dir) = step.filter(|_| walls.iter().any(|w| (w.x - c.x).abs() < reach && (w.y - c.y).abs() < reach)) {
+                    return Some(crate::ai::Sap { at: centre(open?), dir });
+                }
+            }
+            if next == goal {
+                return None;
+            }
+            at = next;
+        }
+        None
+    }
+
     /// An occupancy finished into a nav grid: an active portal network
     /// joined as one hub the planner may route through
     /// (`Grid::with_portals`; with fewer than two portals the grid is
@@ -236,6 +301,18 @@ impl Game {
                 .map(|(c, r)| crate::map::cell_to_world(c, r))
                 .collect();
             grid.weigh(dry.into_iter(), t.rod_crater_path_cost.max(1) as u32);
+        }
+        // Rubble is open but slow (`chunks::Rubble`): dearer the deeper it
+        // lies, and never cheaper than the ground under it (`Grid::raise`).
+        // A change of level empties the kept grid (`Game::lay_rubble`), so
+        // the base is priced again.
+        for level in [crate::chunks::RubbleLevel::Light, crate::chunks::RubbleLevel::Heavy] {
+            let cost = if level == crate::chunks::RubbleLevel::Light { t.rubble_light_path_cost } else { t.rubble_heavy_path_cost };
+            let cells: Vec<Position> =
+                self.rubble.cells().filter(|&(c, _)| self.rubble.level(c) == level).map(|(c, _)| crate::map::cell_to_world(c.0, c.1)).collect();
+            if !cells.is_empty() {
+                grid.raise(cells.into_iter(), cost.max(1) as u32);
+            }
         }
         grid
     }
@@ -489,3 +566,11 @@ mod tests {
         }
     }
 }
+
+/// Whether a shell can bring the tile down: anything but iron and the
+/// like (`Material::is_permanent`) and a cage, which shots pass and only
+/// heavy blasts cut (docs/WALLS_SPEC.md §11).
+fn breachable(o: &Obstacle) -> bool {
+    !o.material.is_permanent() && o.cage.is_none()
+}
+
