@@ -17,7 +17,7 @@ use crate::net::MAX_SEATS;
 use crate::net::PROTOCOL_VERSION;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    BonusPickup, CraterState, RubbleState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, WellDrumState, ZoneState, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
+    BonusPickup, CraterState, RubbleState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, OilPrintState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, WellDrumState, ZoneState, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
 };
 use crate::bullet::Bullet;
 use crate::frog::Frog;
@@ -134,6 +134,12 @@ pub fn welcome(
     let mut oil_cells: Vec<u16> = game.oil_cells.iter().map(|&c| cell_index(cols, c)).collect();
     oil_cells.sort_unstable();
     oil_cells.dedup();
+    let mut oil_prints: Vec<OilPrintState> = game
+        .oil_prints
+        .iter()
+        .map(|(&cell, p)| OilPrintState { cell: cell_index(cols, cell), dir: dir_index(p.dir), fade: p.fade })
+        .collect();
+    oil_prints.sort_unstable_by_key(|p| p.cell);
     let standing: std::collections::BTreeSet<u16> = game
         .world
         .query::<&Obstacle>()
@@ -159,6 +165,7 @@ pub fn welcome(
         overrides: game.level_overrides.into(),
         enemy_count: game.enemy_count_override.map(|n| n.min(u16::MAX as usize) as u16),
         oil_cells,
+        oil_prints,
         dead_cells,
         snapshot: snapshot(game, acked),
     })

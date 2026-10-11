@@ -1040,6 +1040,9 @@ impl Game {
             tank.skid = 0.0;
             // Arriving facing some way is no pivot.
             tank.tread.heading = None;
+            // Nor a step: the oil on its treads prints nothing across the
+            // gap (`simulation::oil`).
+            tank.oil_cell = None;
             if let Some(rot) = rotation {
                 tank.rotation = rot;
                 tank.visual_rotation = rot;

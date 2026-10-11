@@ -1115,6 +1115,7 @@ impl Room {
             overrides: self.overrides.into(),
             enemy_count: None,
             oil_cells: Vec::new(),
+            oil_prints: Vec::new(),
             dead_cells: Vec::new(),
             snapshot: Snapshot { acked, server_ms: self.server_ms(), ..Snapshot::default() },
         }

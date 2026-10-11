@@ -1166,6 +1166,61 @@ pub fn draw_oil_cell(c: &mut impl Canvas, center: Position) {
     c.blit(Sheet::Props, src, dest, Vec2::new(size / 2.0, size / 2.0), 0.0, Color::WHITE);
 }
 
+/// An oil print (`simulation::OilPrint`, docs/ground-memory.md "Oil
+/// prints"): two tread runs of oil across its cell along `dir`, each three
+/// 2 px blocks wide either side of the centre line, in the puddle's palette
+/// steps - `SMOKE[0]` with a grouser link a step lighter every fourth
+/// block along the ground and one `EMP[1]` sheen block per run - the outer
+/// columns ragged. A fainter `fade` (eighths of a full load) drops blocks
+/// through the field's Bayer pattern down to half of them, then fades the
+/// rest in eighths. Hashed from the cell, so every view draws the same.
+pub fn oil_print_marks(center: Position, dir: crate::tank::Dir, fade: u8) -> Vec<crate::pyro::Shape> {
+    use crate::pyro::{self, Shape, BLOCK};
+    let cover = fade.clamp(1, 8) as f32 / 8.0;
+    let keep = cover.max(0.5);
+    let strength = if cover < 0.5 { cover * 2.0 } else { 1.0 };
+    let seed = crate::blast::seed_at(center, 41);
+    let along_x = matches!(dir, crate::tank::Dir::Left | crate::tank::Dir::Right);
+    let (cbx, cby) = pyro::block_of(center.x, center.y);
+    let mut out = Vec::new();
+    for run in 0..2u32 {
+        let sheen = (pyro::unit(seed, 100 + run) * 16.0) as i32;
+        for j in 0..3 {
+            // Blocks -7..=-5 and 4..=6 across: 8 px clear of the centre
+            // line, 6 px of tread each.
+            let across = if run == 0 { -7 + j } else { 4 + j };
+            let outer = (run == 0 && j == 0) || (run == 1 && j == 2);
+            for i in 0..16 {
+                let along = i - 8;
+                let (bx, by) = if along_x { (cbx + along, cby + across) } else { (cbx + across, cby + along) };
+                if pyro::bayer(bx, by) >= keep {
+                    continue;
+                }
+                if outer && pyro::unit(seed, run * 16 + i as u32) < 0.35 {
+                    continue;
+                }
+                let ground = if along_x { bx } else { by };
+                let color = if i == sheen && j == 1 {
+                    pyro::alpha(pyro::EMP[1], 0.47 * strength)
+                } else if ground.rem_euclid(4) == 0 {
+                    pyro::alpha(pyro::SMOKE[1], 0.82 * strength)
+                } else {
+                    pyro::alpha(pyro::SMOKE[0], 0.82 * strength)
+                };
+                let pos = Position::new(bx as f32 * BLOCK + BLOCK * 0.5, by as f32 * BLOCK + BLOCK * 0.5);
+                out.push(Shape::Mark { pos, size: 2, color });
+            }
+        }
+    }
+    out
+}
+
+/// Paint an oil print (`oil_print_marks`), under everything that stands,
+/// as an unlit puddle is.
+pub fn draw_oil_print(c: &mut impl Canvas, center: Position, dir: crate::tank::Dir, fade: u8) {
+    crate::pyro::draw(c, &oil_print_marks(center, dir, fade));
+}
+
 /// A launched fuel drum in the air (`simulation::FlyingDrum`): the intact
 /// drum sprite tumbling in quarter-turns along its arc, over a shadow
 /// that shrinks as it rises - the same trick a thrown decal uses.
@@ -1698,6 +1753,49 @@ pub fn draw_obstacle_shadow(c: &mut impl Canvas, obstacle: &Obstacle, axis: Fenc
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pyro::Shape;
+    use crate::tank::Dir;
+
+    #[test]
+    fn an_oil_print_is_whole_blocks_inside_its_cell() {
+        let center = Position::new(12.0 * 32.0, 6.0 * 32.0);
+        for dir in Dir::ALL {
+            let marks = oil_print_marks(center, dir, 8);
+            assert!(!marks.is_empty());
+            assert_eq!(marks, oil_print_marks(center, dir, 8), "hashed, so the same every time");
+            for m in &marks {
+                let Shape::Mark { pos, size, color } = *m else { panic!("only marks") };
+                assert_eq!(size, 2);
+                assert!(color.a > 0);
+                let (x, y) = (pos.x - 1.0, pos.y - 1.0);
+                assert_eq!((x % 2.0, y % 2.0), (0.0, 0.0), "on the field's even grid: {pos:?}");
+                assert!((x - center.x).abs() <= 16.0 && (y - center.y).abs() <= 16.0, "inside the cell: {pos:?}");
+                // Nothing within 8 px of the centre line: two runs, not a
+                // smear.
+                let across = if matches!(dir, Dir::Left | Dir::Right) { y - center.y } else { x - center.x };
+                assert!(across <= -10.0 || across >= 8.0, "{dir:?}: a block {across} px off the centre line");
+            }
+        }
+    }
+
+    #[test]
+    fn a_fainter_oil_print_keeps_fewer_blocks() {
+        let center = Position::new(7.0 * 32.0, 3.0 * 32.0);
+        let blocks = |fade| oil_print_marks(center, Dir::Right, fade).len();
+        assert!(blocks(8) > blocks(4), "{} vs {}", blocks(8), blocks(4));
+        assert_eq!(blocks(4), blocks(1), "below half the pattern holds");
+        let alpha = |fade: u8| {
+            oil_print_marks(center, Dir::Right, fade)
+                .iter()
+                .map(|m| match *m {
+                    Shape::Mark { color, .. } => color.a as u32,
+                    _ => 0,
+                })
+                .max()
+                .unwrap_or(0)
+        };
+        assert!(alpha(1) < alpha(4), "and the kept blocks fade in eighths");
+    }
 
     fn tree(c: f32, r: f32) -> Obstacle {
         Obstacle::new(Material::Tree, 0, Position::new(c * 32.0, r * 32.0), false, RigidBodyHandle::invalid())

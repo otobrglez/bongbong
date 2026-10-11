@@ -618,6 +618,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     deflection rolls live in `resolve_projectiles`. Every cosmetic choice is hashed; only damage
     rolls and chance knobs strictly between 0 and 1 draw RNG, so prop-free maps replay unchanged.
     Tests: `props_tests.rs` (statistical over seeds).
+  - `oil.rs` (docs/ground-memory.md "Oil prints") — `print_oil`, the phase after
+    `sync_tanks_and_ram`: a hull whose centre enters an unlit map oil cell loads `oil_print_cells`
+    cells of oil (`Tank::oil_load`), then prints one oil-trail cell per cell it enters
+    (`put_oil_print`: into `oil_cells` and `oil_prints`, `Event::OilPrinted`), so the existing trail
+    fire lights, spreads along and spends them (`fire_burnt_out` drops the print). Water and lava
+    wash the load; prints never load; a jump prints nothing across the gap (`place_tank` clears
+    `Tank::oil_cell`). Knob 0 (the default) returns before touching anything. No RNG.
   - `flame.rs` (docs/flamethrower-prd.md) — a `Cone` per held frame from the gun line's muzzle
     (`Tank::gun_line_muzzle`; the jet is *drawn* from the flamethrower module's nozzle,
     `FlameJet::drawn`), reach capped at the first solid tile on the centre line, rate damage with
@@ -1311,8 +1318,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
 ## Drawing and effects
 
 - `game.rs` — the field painted through `canvas::Canvas` in three stages any canvas can run,
-  headless: `paint_floor` (ground, floor shade, tracks, scorches, landed rubble, oil, portals -
-  `paint_ground` then `paint_floor_marks`, the seam the weather's ground pass draws in),
+  headless: `paint_floor` (ground, floor shade, tracks, scorches, landed rubble, oil and its prints,
+  portals - `paint_ground` then `paint_floor_marks`, the seam the weather's ground pass draws in),
   `paint_tiles` (walls/props with shadows and caps, then the flames on burning timber,
   `tile_flames`), `paint_standing(PaintOptions)` (pickups, the y-sorted tanks/frogs/grass walk - a
   tank's layers (`tank::draw_tank`) and then its flames, `damage_stage.rs` - trees, a burning one
@@ -1937,13 +1944,15 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   points, fires, `RoundState`, the frame's events; a tile death is an `ObstacleDestroyed` event and
   a `DESTROYED` entry cut from it, since the world drops a dead tile the same frame), `welcome(game,
   seat, roster, tuning_json, acked)` adds the map TOML, seed, `WireOverrides`, `enemy_count`, the
-  unburnt `oil_cells` and the `dead_cells` a state snapshot cannot express; `wire_events` for a
+  unburnt `oil_cells`, the `oil_prints` among them and the `dead_cells` a state snapshot cannot
+  express; `wire_events` for a
   server accumulating the ticks between snapshots; `server_ms` is the caller's. **`apply.rs`** —
   `welcome(&Welcome) -> Result<Game>` builds the replica by `Game::init` on the same map, seed,
   overrides and roster-pinned chassis (so `init`'s rolls match), `strip_ai`, removes `dead_cells`,
   then `snapshot(&mut Game, &Snapshot)`: events first (`RoundStarted` re-inits on its seed unless
   the replica already stands in that round at frame 0, which is every welcome; `ObstacleDestroyed`
-  removes the tile; `DrumLaunched` puts the drum in the air), then tiles (absent = fresh), tanks
+  removes the tile; `DrumLaunched` puts the drum in the air; `OilPrinted` lays the room's print,
+  drawn or not), then tiles (absent = fresh), tanks
   (spawned without `Ai`, body placed with `Physics::set_position`/`set_velocity`; the hull's facing
   snaps and the *drawn* angles stay put, for `tick_presentation` to swing across), shots by id,
   frogs, pickups, fires (a cell the snapshot stops listing burnt out, the one way a fire ever leaves
