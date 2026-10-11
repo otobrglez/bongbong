@@ -4,6 +4,42 @@ What changed in each release of bongbong, newest first. Each entry is also
 that release's notes on GitHub, above the downloads. The 0.0.x builds before
 0.1.0 are in the git history.
 
+## 0.2.9 - 2026-10-11
+
+Walls now break where you hit them, fire spreads on the wind, woods are
+places to hide in and tanks leave tread marks that last the round. Every
+special weapon is now in the campaign.
+
+### New
+- Every special weapon is now in the campaign, a new one every level or two: the sonic hammer on Vulkan, grenades on Oasis Bazaar, the EMP on Carnival, the FPV swarm on Jungle Temple, the gauss rail on Harbor Lights, the rod from god on No Man's Land and the gravity well on Black Gold. The armory now has the laser, plasma, minigun and flamethrower too (#147)
+- Brick and wood walls break chunk by chunk where your shots land. A shot passes through a hole while the rest of the wall still stops tanks, so you can chip a firing slit, and the broken pieces fly, bounce and stay on the ground for the round (#130, #138)
+- A shell that breaches a wall throws fragments at a tank sheltering right behind it. A falling wall brings down badly damaged neighbours one after another and leaves rubble that slows tanks, and a shattering pane takes cracked panes beside it too (#134)
+- Concrete: a new, tougher wall in the builder's WALL menu, in four looks. When it gives way its rebar stays standing, letting shots through but not tanks, until heavy blasts cut it down. Wired glass keeps its mesh the same way (#135)
+- A burning plank wall burns through hole by hole, and burning planks and trees throw embers that land downwind and can set other wood and trees alight (#138)
+- Seven new trees (spruce, Scots pine, fir sapling, birch, willow, date palm and dead snag) and six kinds of soft cover (bush, berry bush, juniper, fern, autumn bush and reeds) that hide a tank like tall grass. They are in the builder's new PLANT group (#129, #131)
+- Trails through a wood hide you like tall grass, long ones get worn ruts, and treetops over your tank fade so you can still see it. The builder's CHECK warns about trails one cell wide, which enemies never take (#136)
+- A forest brush in the PLANT group paints a whole wood in one stroke and picks each tree from where it stands: willows and birches by water (palms on desert), saplings on the edge, patches of conifers and broadleaves inside, and open banks along streams (#137)
+- Tread marks stay for the round. Driving the same lane again wears it into a rut and then a path, and the marks follow the ground and the weather. Tanks throw dust, mud, spray and snow as they drive (#132)
+- Two experiments, off unless a tester turns them on: tanks that drive through an oil pool leave oil prints that a flame can run along, and tall grass, bushes and reeds driven over enough times stop hiding anyone for the round (#143, #144)
+
+### Changed
+- Woods look like forests on every map with trees. Treetops sit a little off their cells, with a forest floor and undergrowth round them that hides nobody. On desert maps the trees are dry and catch fire more readily (#129, #133)
+- Picking up a crate of the weapon you already carry adds to your ammo, up to a limit for each weapon, and the ring under your tank shows how much more you can take. Enemies stack their own weapon's crates too (#125)
+- Enemies shoot at you through holes in walls, steer round rubble, and break through walls that cut them off instead of wandering. They also get stuck less: they take the gap they used to drive past, back off and wait when hurt, and back out of jams (#141, #146)
+- The rod from god hits a two-cell circle and lands after three seconds instead of four. The rod's shove, the sonic hammer and the gravity well's fling now throw tanks as far as they should (#126)
+
+### Fixed
+- Tanks no longer sink into walls. A tank that is driven, rammed, blasted, knocked or pulled into a wall stops flush against it (#126)
+- An enemy winding up a sonic hammer or an EMP when the round ends no longer stays frozen mid wind-up on the end screen (#124)
+- In BUILD on a touch screen, one finger paints whenever the whole map is in view, where before it did nothing. On an iPad, the builder's touch sizes now match a phone's (#122)
+
+### Online
+- A round now plays out exactly the same on every platform, so the room's server and its players' devices no longer drift apart (#126)
+- Broken and burning walls, rubble, rebar, embers, oil prints and trampled grass look the same in every player's window, and a player who joins mid-round sees grass that burned before they came in as burnt (#130, #134, #135, #138, #143, #144, #145)
+
+### Behind the scenes
+- iOS builds work again with Xcode 27 and with a renewed signing certificate, and the simulator opens in Xcode 27's DeviceHub (#121, #127, #142)
+
 ## 0.2.8 - 2026-10-08
 
 Six new special weapons, and a new arena called the armory to try them in.
