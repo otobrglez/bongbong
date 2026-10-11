@@ -359,7 +359,7 @@ never sent (the AI's trace, recorded only while `Game::trace_ai` is set);
 | `ShieldBroken {slot, x, y}` | a ring of sparks and smoke off the hull, ripple and shake, the shield ring goes | `fx.rs`, `drain_shield_breaks`' `SHOCK_SHIELD_BREAK` |
 | `WaveStarted`, `TankEntered`, `WreckRemoved` | WAVE N banner; roll-in appears at the gate; the wreck goes (it has been fading on its own) | HUD, `fade_wrecks` |
 | `ObstacleDestroyed {material, x, y}` | rubble decal, thrown | `props::obstacle_died`'s decal part |
-| `ChunksBroken {material, variant, x, y, broken, dir, collapsed}` | the broken chunks' pieces fly from the tile (the chunks themselves travel in `TileState::chunks`) | `pieces.rs` |
+| `ChunksBroken {material, variant, x, y, broken, dir, collapsed}` | the broken chunks' pieces fly from the tile (the chunks themselves travel in `TileState::chunks`, the rubble they lay in `Snapshot::rubble`, a `RubbleState` a cell) | `pieces.rs` |
 | `Blast {x, y, chained, drum}`, `CookOff` | shaped fireball, scorch, parts, re-thrown rubble, flattened grass, burnt-in tracks, ripple, flash | `apply_blast`'s cosmetic half |
 | `DrumLaunched` | the flying drum from launch to landing | `draw_flying_drum` from a launch time |
 | `FireStarted`, `Ignited` | light the cell or tile | `light_cell`'s visual part |

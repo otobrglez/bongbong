@@ -153,7 +153,7 @@ pub const TANK_NAMES: [&str; 12] = [
 
 /// Wall materials in `obstacle::MATERIALS` / `obstacle::Material`
 /// declaration order - index with `material as usize`.
-pub const MATERIAL_NAMES: [&str; 4] = ["brick", "iron", "wood", "glass"];
+pub const MATERIAL_NAMES: [&str; 5] = ["brick", "iron", "wood", "glass", "concrete"];
 
 /// The table macro. Grammar, one row per knob:
 ///
@@ -2393,7 +2393,7 @@ tunables! {
         /// tough: glass snaps almost immediately, wood breaks easily, brick
         /// holds longer, iron the longest of all on top of being permanent.
         /// Baked into each wall's health when the map is spawned.
-        wall_max_health: [f32; 4] = [20.0, 220.0, 8.0, 2.0] in 1.0 ..= 1000.0 labels MATERIAL_NAMES @ Spawn;
+        wall_max_health: [f32; 5] = [20.0, 220.0, 8.0, 2.0, 40.0] in 1.0 ..= 1000.0 labels MATERIAL_NAMES @ Spawn;
         /// Fraction of spawned Wood obstacles that catch fire when destroyed
         /// instead of breaking outright (`Obstacle::flammable`, rolled once
         /// at spawn).
@@ -2414,6 +2414,15 @@ tunables! {
         brick_chunk_health: f32 = 10.0 in 0.5 ..= 200.0 @ Spawn;
         /// One wood chunk's health: planks splinter at almost any blow.
         wood_chunk_health: f32 = 4.0 in 0.5 ..= 200.0 @ Spawn;
+        /// One concrete chunk's health: about twice brick's work to
+        /// breach, a shell's ring wearing it rather than breaking it.
+        concrete_chunk_health: f32 = 20.0 in 0.5 ..= 200.0 @ Spawn;
+        /// A concrete wall that gives way, and a wired pane that shatters,
+        /// leave a cage standing (`Obstacle::cage`): shots pass, hulls do
+        /// not. It takes this many blasts of `cage_cut_damage` or more to
+        /// cut it down.
+        cage_cut_hits: i32 = 2 in 1 ..= 10;
+        cage_cut_damage: f32 = 15.0 in 0.0 ..= 200.0;
         /// Share of a blow the struck chunk's four side neighbours take.
         chunk_ring_share: f32 = 0.6 in 0.0 ..= 1.0;
         /// Share of a blow the struck chunk's four corner neighbours take.
@@ -2426,6 +2435,43 @@ tunables! {
         /// A chunked tile gives way once this many of its 16 chunks or
         /// fewer still stand: what is left drops where it stood.
         wall_collapse_chunks: i32 = 6 in 0 ..= 15;
+        /// A breach throws fragments off a chunked wall's far face into a
+        /// tank sheltering behind it (spall, BB-82). Off, a wall is perfect
+        /// cover until it breaks.
+        spall_enabled: bool = true in 0 ..= 1;
+        /// Spall's damage at the far face, falling linearly to nothing at
+        /// `spall_reach_px`.
+        spall_damage: f32 = 8.0 in 0.0 ..= 100.0;
+        /// How far behind the face spall reaches, px (about three tiles).
+        spall_reach_px: f32 = 96.0 in 0.0 ..= 400.0;
+        /// Half the width of spall's cone across the blow's way, px, past
+        /// the hull's own half-extent.
+        spall_half_width_px: f32 = 12.0 in 0.0 ..= 64.0;
+        /// The least blow that throws spall: a shell, not a minigun round.
+        spall_min_damage: f32 = 10.0 in 0.0 ..= 200.0;
+        /// A collapsing chunked tile brings down a neighbour in its run
+        /// that is down to this many standing chunks or fewer.
+        domino_chunks: i32 = 11 in 0 ..= 16;
+        /// Seconds between one tile of a run giving way and the next.
+        domino_delay_seconds: f32 = 0.16 in 0.0 ..= 2.0;
+        /// Rubble units on a cell (a broken chunk lays one where it stood
+        /// and, blown out, one in the cell behind) that make it light
+        /// rubble, and heavy rubble.
+        rubble_light: i32 = 6 in 1 ..= 64;
+        rubble_heavy: i32 = 14 in 1 ..= 64;
+        /// Speed factor on light and heavy rubble.
+        rubble_light_speed: f32 = 0.85 in 0.1 ..= 1.0;
+        rubble_heavy_speed: f32 = 0.7 in 0.1 ..= 1.0;
+        /// What a step onto light and heavy rubble costs the router, open
+        /// ground being 1 (a ford is `water_ford_path_cost`).
+        rubble_light_path_cost: i32 = 2 in 1 ..= 50;
+        rubble_heavy_path_cost: i32 = 3 in 1 ..= 50;
+        /// Seconds between one pane of a glass run shattering and the next
+        /// cracked one going with it.
+        glass_cascade_seconds: f32 = 0.07 in 0.0 ..= 2.0;
+        /// Damage a shattering pane's stress puts into an intact neighbour:
+        /// a crack, not a break.
+        glass_stress_damage: f32 = 1.0 in 0.0 ..= 10.0;
     }
 
     group props {
@@ -4105,7 +4151,7 @@ impl Tuning {
                 // - good enough for a paste-back snippet.
                 match meta.labels.len() {
                     12 => " labels TANK_NAMES".to_string(),
-                    4 => " labels MATERIAL_NAMES".to_string(),
+                    5 => " labels MATERIAL_NAMES".to_string(),
                     n => format!(" labels /* {n} labels */"),
                 }
             } else {
@@ -4430,7 +4476,7 @@ mod tests {
         assert!(rust.contains("tank_speed: f32 = 99.0 in 20.0 ..= 800.0;"), "{rust}");
         assert!(rust.contains("max_shells: i32 = 23 in 1 ..= 100 @ Spawn;"), "{rust}");
         assert!(
-            rust.contains("wall_max_health: [f32; 4] = [20.0, 220.0, 40.0, 2.0] in 1.0 ..= 1000.0 labels MATERIAL_NAMES @ Spawn;"),
+            rust.contains("wall_max_health: [f32; 5] = [20.0, 220.0, 40.0, 2.0, 40.0] in 1.0 ..= 1000.0 labels MATERIAL_NAMES @ Spawn;"),
             "{rust}"
         );
     }
@@ -4461,7 +4507,7 @@ mod tests {
         assert_eq!(speed["applies"], "live");
         assert!(speed["doc"].as_str().unwrap().contains("Player top speed"));
         let walls = rows.iter().find(|r| r["name"] == "wall_max_health").unwrap();
-        assert_eq!(walls["labels"], serde_json::json!(["brick", "iron", "wood", "glass"]));
+        assert_eq!(walls["labels"], serde_json::json!(["brick", "iron", "wood", "glass", "concrete"]));
     }
 
     /// A table put in force is what this thread reads, and only for as
