@@ -67,6 +67,22 @@ probe-waves:
 # fixture's totals are unchanged but props (border-stuck 0 -> 1, churn
 # 4 -> 5) and towers (spin 0 -> 1, clustering 1 -> 0), all inside their
 # ceilings.
+# Re-baselined 2026-10-11 for BB-48, jitter 6 -> 8 and pile-up 2 -> 3, by
+# Oto's decision. An arena hull on the very edge of its lane now takes its
+# turning on a searched route away from the fight (`Ai::rides_lane_edge`)
+# instead of running its column wall to wall, and that moves every chase's
+# timeline. At this seed maze reads jitter=8 (rounds 0x3e9-0x3ef, chasers
+# and attackers weaving on lane centres, not edge turns), portals jitter=7
+# (the attack ring west of the portal) and tight-corridors pile-up=3
+# (round 0x3ee: three tanks meeting in the corridor). The totals are
+# border-stuck 3 -> 2, churn 33 -> 24, clustering 5 -> 9, jitter 28 -> 39,
+# pile-up 2 -> 3 and spin 3 -> 2, 74 -> 79 in all; the untouched build
+# itself trips one ceiling at seed 2000 and two at 3000. The same change set
+# - refuges for flee and retreat, the stuck escape held over sidesteps and
+# a stuck floor relative to the hull's speed - takes a long-round sweep
+# (`--mission destroy`, `player_armor_factor` 0.1, every fixture and field
+# map) from 1159 anomalies to 1005: tank-grind 50 -> 9, low-progress 35 -> 3,
+# wall-grind 20 -> 0, stall 7 -> 1, never-arrived 6 -> 3.
 # The probe is built once and the fixtures run side by side, one per core,
 # each into its own log, printed in fixture order once all are done; every
 # fixture runs even after one fails, and the recipe fails if any did. CI
@@ -77,7 +93,7 @@ probe-waves:
 probe-fixtures *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    budgets="--budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=6 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=2 --budget offbox-fire=0 {{args}}"
+    budgets="--budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=8 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=3 --budget offbox-fire=0 {{args}}"
     cargo build --bin probe
     probe="${CARGO_TARGET_DIR:-target}/debug/probe"
     logs=$(mktemp -d)

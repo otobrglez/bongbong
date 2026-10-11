@@ -793,8 +793,15 @@ centre still stands in the lane it is leaving, whose cell ahead can be the
 very wall the turn was timed to clear: the obstacle-ahead override judges
 that cell from where the slide across will leave the hull
 (`Ai::walks_into_wall`), or a hull entering a one-lane gap was thrown back
-and forth across its mouth. Arenas keep the margin alone and replay as
-before; `ai_lane_turns` off is the old steering on every map.
+and forth across its mouth. An arena keeps the margin everywhere but on
+that same edge: a hull on a searched route, farther than
+`enemy_attack_range` from what it fights, takes the lane turn there too
+(`Ai::rides_lane_edge`, BB-48) - on choke, maze, u-trap and towers a
+chaser a fraction of a pixel off a cell's edge ran its column from wall to
+wall beside the turning it wanted, up to 20 s of a long round. Nearer the
+fight, and on a flow field's route (whose arena reading is not
+straightened, so its ties weave), the margin alone decides, as before;
+`ai_lane_turns` off is the old steering on every map.
 
 With the defence every round now ends, on both maps and both seed sets (20
 of 20 each); a tank's walk to it has a p90 of 17.1 s on longwater against

@@ -5636,6 +5636,7 @@ impl Game {
                     charging: tank.charge.is_some(),
                     disabled: tank.is_disabled(),
                     kept_out: ai.is_some_and(Ai::kept_out),
+                    sheltering: ai.is_some_and(Ai::sheltering),
                     air_hold: ai.is_some_and(Ai::air_hold),
                     rod_hold: ai.is_some_and(Ai::rod_hold),
                     tell: tank.tell.is_some(),
@@ -5730,6 +5731,9 @@ pub struct TankSnapshot {
     /// Waiting outside a danger it is kept out of (`Ai::kept_out`):
     /// holding still on purpose.
     pub kept_out: bool,
+    /// Holding at the refuge it backed away to (`Ai::sheltering`):
+    /// holding still on purpose.
+    pub sheltering: bool,
     /// Standing for the FPV swarm (`Ai::air_hold`): watching its own drone
     /// work, or under a crown while a seat's drone comes at it.
     pub air_hold: bool,
@@ -8002,6 +8006,35 @@ cells."16,20" = { kind = "wall", material = "iron" }
         }
         let frame = freed_at.expect("the two enemies never broke out of the jam within 4 s");
         assert!(frame as f32 / 60.0 < 3.0, "took {frame} frames to break the jam");
+    }
+
+    /// A hurt tank backs away to a refuge and holds there, facing the seat
+    /// (`ai::Brain::back_away`). Between the seat and the field's edge, the
+    /// point mirroring the seat across it lies past the edge, and steering
+    /// for that drives it into the edge for as long as the round lasts.
+    #[test]
+    fn a_fleeing_tank_holds_at_its_refuge_rather_than_grind_the_field_edge() {
+        let mut game = game_on(OPEN_MAP, 1, Some(0));
+        set_role_of(&mut game, 1, Role::Player);
+        let seat = Position::new(W / 2.0, H / 2.0);
+        game.debug_teleport(0, seat, Some(0.0)).expect("player");
+        // On the seat's row, three cells short of the east edge, facing it.
+        game.debug_teleport(1, Position::new(W - 112.0, seat.y), Some(90.0)).expect("slot 1");
+        let hurt = crate::simulation::debug::TankPatch { damage: Some(tuning().enemy_flee_damage + 5.0), ..Default::default() };
+        game.debug_set_tank(1, &hurt).expect("slot 1");
+        let (mut pressed, mut longest) = (0, 0);
+        for _ in 0..(8 * 60) {
+            step(&mut game, Input::default());
+            let me = game.tank_snapshots().into_iter().find(|t| t.slot == 1).expect("slot 1");
+            pressed = if me.touching_static { pressed + 1 } else { 0 };
+            longest = longest.max(pressed);
+        }
+        let me = game.tank_snapshots().into_iter().find(|t| t.slot == 1).expect("slot 1");
+        assert_eq!(me.action.0, Some("flee"));
+        assert!(longest < 30, "pressed into the terrain for {longest} frames running");
+        assert!(me.sheltering, "holding at its refuge");
+        assert!((me.velocity.x * me.velocity.x + me.velocity.y * me.velocity.y).sqrt() < 5.0, "still moving at {:?}", me.velocity);
+        assert!(me.position.distance_to(seat) > 400.0, "{} px from the seat", me.position.distance_to(seat));
     }
 
     fn frog_position(game: &Game, frog: Option<Entity>) -> Position {

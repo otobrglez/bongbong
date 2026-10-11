@@ -361,16 +361,23 @@ mod tests {
         let slot = with_tank(&game.world, enemy, |t| t.owner_slot());
         arm(&mut game, 4);
         let mut events = fire(&mut game);
-        events.extend(idle(&mut game, 400));
+        // Each blast beside where the hull stood when it went off: the
+        // salvo shoves the hull about as it lands.
+        let mut landed = Vec::new();
+        for _ in 0..400 {
+            let frame = idle(&mut game, 1);
+            let at = with_tank(&game.world, enemy, |t| t.position);
+            landed.extend(blasts(&frame).into_iter().map(|b| (b, at)));
+            events.extend(frame);
+        }
         let locks: Vec<&Event> = events.iter().filter(|e| matches!(e, Event::MissileLocked { .. })).collect();
         assert_eq!(locks.len(), 4, "four missiles armed, four fired: {locks:?}");
         assert!(locks.iter().all(|e| matches!(e, Event::MissileLocked { target: Some(s), .. } if *s == slot)), "{locks:?}");
-        let at = with_tank(&game.world, enemy, |t| t.position);
         let blasts = blasts(&events);
         assert_eq!(blasts.len(), 4);
         // Spread by tube, but each well inside its blast of the hull.
         let reach = 1.5 * tuning().missile_impact_spread_px + 1.0;
-        assert!(blasts.iter().all(|&b| b.distance_to(at) <= reach), "{blasts:?} vs {at:?}");
+        assert!(landed.iter().all(|&(b, at)| b.distance_to(at) <= reach), "{landed:?}");
         let spread = blasts.iter().map(|b| b.distance_to(blasts[0])).fold(0.0f32, f32::max);
         assert!(spread >= 2.0 * tuning().missile_impact_spread_px, "the salvo lands spread out: {blasts:?}");
         assert!(with_tank(&game.world, enemy, |t| t.damage) > 0.0, "the enemy took the blasts");
