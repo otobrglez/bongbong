@@ -103,7 +103,7 @@ what the probe shares with the game via `DEFAULT_SCREEN_WIDTH/HEIGHT`).
 - **Build mode, same row, menus instead of a palette.** 20 tools do not
   fit inline next to the file actions, so the bar carries **category
   buttons** that open a dropdown over the field: `WALL` (brick/iron/wood/
-  glass), `PROP` (sandbag/barrel/fence), `GROUND` (road, gate), `ACTOR`
+  glass/concrete), `PROP` (sandbag/barrel/fence), `GROUND` (road, gate), `ACTOR`
   (frog, enemy frog, start), `PICKUP` (the seven kinds). Each button shows
   its category's *current* tool as its 32 px icon plus the tool name in
   11 px, so the active brush is always visible without opening anything;
