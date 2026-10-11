@@ -697,6 +697,7 @@ fn apply_tiles(game: &mut Game, s: &Snapshot, cols: u16, mut dead: BTreeSet<u16>
         let mut q = game.world.query_one::<&mut Obstacle>(entity);
         let Ok(o) = q.get() else { continue };
         let was = o.chunks;
+        let was_caged = o.cage;
         match listed.get(&cell) {
             Some(t) => {
                 o.health = t.hp as f32;
@@ -715,6 +716,7 @@ fn apply_tiles(game: &mut Game, s: &Snapshot, cols: u16, mut dead: BTreeSet<u16>
                 if let Some(c) = o.chunks.as_mut() {
                     *c = crate::chunks::Chunks::from_quantised(t.chunks, c.max());
                 }
+                o.cage = (t.cage > 0).then_some(t.cage);
                 o.set_lean_strength((t.flags & tile_flags::LEAN_MASK) >> (tile_flags::LEAN_SHIFT + 2));
             }
             // Absent from the list: the tile is as the map made it.
@@ -727,10 +729,11 @@ fn apply_tiles(game: &mut Game, s: &Snapshot, cols: u16, mut dead: BTreeSet<u16>
                 if let Some(c) = o.chunks.as_mut() {
                     *c = crate::chunks::Chunks::new(c.max());
                 }
+                o.cage = None;
             }
         }
         // The body follows the chunks, as the room's does.
-        if o.chunks.map(|c| c.standing()) != was.map(|c| c.standing()) {
+        if o.chunks.map(|c| c.standing()) != was.map(|c| c.standing()) || o.cage.is_some() != was_caged.is_some() {
             refit.push(entity);
         }
     }

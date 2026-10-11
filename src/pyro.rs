@@ -124,7 +124,7 @@ pub const OOZE: [Color; 4] = [crate::tower::OOZE_DK, crate::tower::OOZE_MD, crat
 pub fn dust_of(material: crate::obstacle::Material) -> Option<[Color; 3]> {
     use crate::obstacle::Material;
     match material {
-        Material::Brick | Material::Tesla | Material::GunTower | Material::BioSlush => Some([SMOKE[3], SMOKE[4], SMOKE[5]]),
+        Material::Brick | Material::Concrete | Material::Tesla | Material::GunTower | Material::BioSlush => Some([SMOKE[3], SMOKE[4], SMOKE[5]]),
         Material::Sandbag => Some([DUST[2], DUST[3], DUST[4]]),
         Material::Wood | Material::Fence | Material::Target | Material::Snag => Some([DUST[0], DUST[1], rgb(0x99, 0x65, 0x24)]),
         Material::Tree

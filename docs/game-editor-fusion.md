@@ -178,7 +178,7 @@ Categories and their tools, in list order:
 
 | Category | Tools (30 with the eraser) |
 | --- | --- |
-| WALL | brick, iron, wood, glass |
+| WALL | brick, iron, wood, glass, concrete |
 | PROP | sandbag, barrel, oil drum, fuel drum, fence, tree, pine |
 | GROUND | road, water, tall grass, oil trail, gate |
 | ACTOR | p1 start, p2 start, frog, enemy frog |

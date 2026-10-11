@@ -762,6 +762,9 @@ pub struct TileState {
     /// A chunked tile's chunks (`Chunks::quantised`): two bits of wear
     /// each, chunk 0 lowest. 0 for a tile that breaks whole.
     pub chunks: u32,
+    /// A cage's heavy blasts left (`Obstacle::cage`); 0 while the wall
+    /// itself stands.
+    pub cage: u8,
 }
 
 /// A pickup's crate that differs from a whole one (`crate_breakable`,

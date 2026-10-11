@@ -563,7 +563,7 @@ mod tests {
             .collect();
         let tiles = random_keys(rng, 20, 600)
             .into_iter()
-            .map(|cell| TileState { cell, hp: rng.random(), flags: rng.random(), faces: rng.random_range(0..16), chunks: rng.random() })
+            .map(|cell| TileState { cell, hp: rng.random(), flags: rng.random(), faces: rng.random_range(0..16), chunks: rng.random(), cage: rng.random_range(0..3) })
             .collect();
         let fires = random_keys(rng, 10, 600).into_iter().map(|cell| FireState { cell, left: rng.random(), lava: rng.random() }).collect();
         let lamps = random_keys(rng, 4, 200)
@@ -674,7 +674,7 @@ mod tests {
             next.shots.push(random_shot(rng, id));
         }
         for cell in random_keys(rng, 3, 600) {
-            next.tiles.push(TileState { cell, hp: rng.random(), flags: 0, faces: 0, chunks: 0 });
+            next.tiles.push(TileState { cell, hp: rng.random(), flags: 0, faces: 0, chunks: 0, cage: 0 });
         }
         for cell in random_keys(rng, 2, 600) {
             next.fires.push(FireState { cell, left: rng.random(), lava: rng.random() });
