@@ -15,7 +15,7 @@ use crate::canvas::Canvas;
 use crate::decal::draw_decal;
 use crate::frog::{draw_frog, draw_frog_ring};
 use crate::math::Color;
-use crate::obstacle::{draw_obstacle, draw_obstacle_cap, draw_obstacle_shadow, draw_oil_cell, draw_tree, draw_tree_shadow, fence_axis, tree_lean, Material, Obstacle};
+use crate::obstacle::{draw_obstacle, draw_obstacle_cap, draw_obstacle_shadow, draw_oil_cell, draw_oil_print, draw_tree, draw_tree_shadow, fence_axis, tree_lean, Material, Obstacle};
 use crate::pickup::{draw_pickup, Pickup};
 use crate::portal::draw_portal;
 use crate::simulation::Game;
@@ -391,11 +391,15 @@ impl Game {
             crate::lava::draw_pools(c, &pools, self.time);
         }
         drop(pictures);
-        // Unlit oil trails: puddles on the ground, under everything.
+        // Unlit oil trails: puddles on the ground, under everything; a
+        // cell a hull printed is drawn as its print.
         for &(col, row) in &self.oil_cells {
             let at = crate::map::cell_to_world(col, row);
             if !c.culls(at) {
-                draw_oil_cell(c, at);
+                match self.oil_prints.get(&(col, row)) {
+                    Some(print) => draw_oil_print(c, at, print.dir, print.fade),
+                    None => draw_oil_cell(c, at),
+                }
             }
         }
         // Portals last on the floor: over tracks and scorches, under

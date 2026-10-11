@@ -218,6 +218,9 @@ pub struct DrawableState {
     /// Every burning ground cell with its time left in tenths, and
     /// whether it is a splash of lava.
     pub fires: Vec<((i32, i32), u8, bool)>,
+    /// Every oil print (`simulation::oil`): its cell, its way as
+    /// `Dir::index` and its fade in eighths, in cell order.
+    pub oil_prints: Vec<((i32, i32), u8, u8)>,
     /// Every lantern on the ground: its id, where it stands in quarter
     /// pixels and its seat.
     pub lamps: Vec<(u16, i32, i32, u8)>,
@@ -587,6 +590,7 @@ impl Game {
             pickups,
             tiles,
             fires,
+            oil_prints: self.oil_prints.iter().map(|(&cell, p)| (cell, p.dir.index() as u8, p.fade)).collect(),
             lamps,
             zones: self
                 .zones

@@ -869,6 +869,17 @@ pub struct CraterState {
     pub tick: u32,
 }
 
+/// An oil print (`simulation::OilPrint`), by its cell.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OilPrintState {
+    /// `encode::cell_index` of the cell.
+    pub cell: u16,
+    /// The hull's way as `dir_index`.
+    pub dir: u8,
+    /// Eighths of a full load left when it was laid.
+    pub fade: u8,
+}
+
 /// A cell with rubble on it (`chunks::Rubble`): its units, which set how
 /// much it slows a hull and what it costs the router.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1069,6 +1080,9 @@ pub struct Welcome {
     /// Oil trail cells (`row * cols + col`) still unburnt at the tick the
     /// welcome was cut; the map's list minus what fire has used up.
     pub oil_cells: Vec<u16>,
+    /// The oil prints among `oil_cells` (`simulation::oil`), sorted by
+    /// cell; every later one arrives as `WireEvent::OilPrinted`.
+    pub oil_prints: Vec<OilPrintState>,
     /// Cells (`row * cols + col`) of the map's solid tiles that have died
     /// this round. A snapshot lists only tiles that differ from fresh and
     /// says nothing about one that is gone, so a joiner learns the holes
