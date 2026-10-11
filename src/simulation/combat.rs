@@ -220,7 +220,7 @@ impl Game {
                 // The hit is recorded ahead of whatever the damage causes
                 // (a destroyed tile, a blast), since it happened first.
                 let mark = f.events.len();
-                let killed = self.damage_obstacle(f, entity, d, DamageCause::Shot { dir: effects.travel, at: Some(at) });
+                let killed = self.damage_obstacle(f, entity, d, DamageCause::Shot { dir: effects.travel, at: Some(at), by: Some(shooter) });
                 f.events.insert(mark, Event::Hit { target: HitTarget::Obstacle { material }, damage: d, killed, x: at.x, y: at.y, cause: effects.cause });
             }
             ShellTarget::Wall => {
