@@ -1751,7 +1751,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `builder_scatter_density` of the empty cells within `builder_scatter_radius_cells` of the drag,
   picked by `brush::scattered` (a hash of the cell and a per-session stroke counter, never `rand`),
   and erasing thins the brush's object (anything under the eraser). RECT and SCATTER never toggle; a
-  singleton's brush paints with the pen whatever the shape. **The select tool** (`Tool::Select`; the
+  singleton's brush paints with the pen whatever the shape. **The forest brush** (`Tool::Forest`;
+  the picks are `editor/forest.rs`, docs/WOODS.md §6) has no one object: every shape plants each
+  open or tree cell with `forest::lay`'s pick (water, the wood's edge, `woods::conifer_stand`, the
+  theme), leaves a stream's banks open and clears trees off them, and on release picks every tree
+  the stroke planted again against the finished wood (`replant`), all one undo step; a first cell
+  holding any tree toggles it to erase. **The select tool** (`Tool::Select`; the
   data is `editor/select.rs`): a drag draws a `CellRect`, a drag from inside it lifts its cells and
   carries them, and the strip under the bar (`chrome::Strip`: COPY, CUT, PASTE, the flips, DELETE, +
   STAMP, STAMPS, or PLACE, the flips and CANCEL while a paste ghost stands) and Ctrl+C/X/V and

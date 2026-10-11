@@ -1565,6 +1565,22 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
             let src = Rectangle::new(0.0, 0.0, cell, cell);
             d.draw_texture_pro(textures.grass, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
+        Tool::Forest => {
+            // A little wood on a patch of the theme's floor: two trees
+            // behind, one in front, the species the brush would mix
+            // there.
+            let (r, g, b) = theme.floor_color();
+            d.draw_rectangle_rounded(dest, 0.15, EDITOR_PANEL_SEGMENTS, Color::new(r, g, b, 255));
+            use crate::obstacle::Material::{Birch, Palm, Pine, Snag, Spruce, Tree};
+            let trio = if theme == Theme::Desert { [Snag, Pine, Palm] } else { [Spruce, Tree, Birch] };
+            let small = dest.width * 0.62;
+            let spots = [(0.0, 0.0, small), (dest.width - small, 0.0, small), ((dest.width - small * 1.1) / 2.0, dest.height - small * 1.1, small * 1.1)];
+            for (material, (x, y, size)) in trio.into_iter().zip(spots) {
+                let (sheet, src) = obstacle::icon_source_rec(material, theme);
+                let at = Rectangle::new((dest.x + x).round(), (dest.y + y).round(), size.round(), size.round());
+                d.draw_texture_pro(sheet_texture(textures, sheet), src, at, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            }
+        }
         Tool::Bush(bush) => {
             // On a patch of the theme's floor like tall grass: a bush is
             // ground cover, not a thing standing on the field.

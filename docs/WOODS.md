@@ -131,3 +131,48 @@ both sides cover enough. It applies to every player's hull and never to
 an enemy's: an enemy under a canopy stays hidden. It is a uniform fade,
 not a dithered window, because a canvas blit cannot be masked.
 
+## 6. The forest brush
+
+`Tool::Forest` in the builder's Plant group (`editor/forest.rs`). It
+paints trees like the tree tools, with every shape, but picks each tree's
+species from where it stands, so a wood painted in one stroke has a bank,
+an edge and an inside. The map file holds the trees it picked, each an
+ordinary tree cell. Each pick is a hash of the cell, so the same stroke on
+the same map plants the same wood.
+
+What decides the species, first rule first:
+
+| | grass | desert |
+|---|---|---|
+| water beside it | willow 7 in 10, birch | date palm |
+| water two cells out | birch 6 in 10, willow, broadleaf | palm 7 in 10, broadleaf |
+| water three cells out | as further out | broadleaf or pine |
+| the wood's outer ring | fir sapling or birch (fir in a conifer stand, birch in a broadleaf one) | fir sapling 4 in 10, else as inside |
+| inside, conifer stand | spruce, pine, scots pine | snag, pine, scots pine, spruce |
+| inside, broadleaf stand | broadleaf 8 in 10, scots pine | (as above) |
+
+On a desert every tree but the palm is drawn dry (§3). The stand is
+`woods::conifer_stand`, the same 4 x 4 cell field the undergrowth follows
+(§4), so juniper and fern grow under the brush's conifers. A tree is on
+the outer ring when one of its eight neighbours on the field is not a
+tree. While a stroke paints, every new tree stands at the edge of what is
+painted so far, so on release the brush picks every tree it planted
+again against the finished wood (`MapEditor::replant`). Trees from
+earlier strokes keep their species. A fir sapling falls to anything and
+is rammed through in a moment, so a conifer stand can be forced almost
+anywhere along its edge.
+
+**A stream is a way in.** A stream is water in no 2 x 2 block of water,
+the ground's own line between a river and a lake. The brush plants
+nothing on a cell touching one along a side or at a corner (a bend's
+inside corner touches it only at a corner). It also clears the trees a
+stroke crosses there, so a stream through a wood is a corridor of bank,
+ford and bank, wide enough for the AI. A lake is planted to its shore.
+The brush plants only open cells and trees; water, walls and everything
+else stay. Clearing a bank is an ordinary change in the stroke's undo
+step, so the map file says exactly what is there, and the nav grid, the
+linter and the thumbnail all agree with it.
+
+A first cell holding a tree makes the stroke an erase, as a tree tool's
+toggle does, and a scatter's erase thins trees.
+

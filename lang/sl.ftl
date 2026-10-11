@@ -350,6 +350,7 @@ tool-juniper = brin
 tool-fern = praprot
 tool-autumn_bush = jesenski grm
 tool-reeds = trstičje
+tool-forest = gozdni čopič
 tool-oil_drum = sod olja
 tool-fuel_drum = sod goriva
 tool-oil_trail = sled olja
@@ -394,6 +395,7 @@ tool-eraser = radirka
 tool-select = izbor
 
 tool-short-tall_grass = trava
+tool-short-forest = gozd
 tool-short-oil_drum = olje
 tool-short-fuel_drum = gorivo
 tool-short-oil_trail = olje
