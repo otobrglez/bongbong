@@ -67,7 +67,7 @@ use crate::shell::{Owner, Shell, ShellState};
 use crate::simulation::replica::plasma_variant_from_index;
 use crate::blast::BlastShape;
 use crate::shockwave::Shockwave;
-use crate::simulation::{Game, GroundFire, PlayerCount, SHOCK_FROG, SHOCK_SHIELD_BREAK, SHOCK_TELEPORT, Spectacle, tile_rubble};
+use crate::simulation::{Game, GroundFire, OilPrint, PlayerCount, SHOCK_FROG, SHOCK_SHIELD_BREAK, SHOCK_TELEPORT, Spectacle, tile_rubble};
 use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::tuning::tuning;
 use crate::{DAMAGE_VARIANTS, MAX_DAMAGE, PHYSICS_FIXED_DT, Position, TANK_SHELL_VARIANT_BY_ROW, TANK_WRECK_COLS};
@@ -198,6 +198,9 @@ pub fn welcome(w: &Welcome) -> Result<Game, String> {
     game.strip_ai();
     let cols = field_cols(&game);
     game.oil_cells = w.oil_cells.iter().map(|&i| cell_from_index(cols, i)).collect();
+    for p in &w.oil_prints {
+        put_oil_print(&mut game, cols, p.cell, p.dir, p.fade);
+    }
     remove_tiles(&mut game, &w.dead_cells.iter().copied().collect(), cols);
     game.grass_trampled = w.trampled_cells.iter().map(|&i| cell_from_index(cols, i)).collect();
     apply(&mut game, &w.snapshot, Show::Quiet);
@@ -208,6 +211,14 @@ pub fn welcome(w: &Welcome) -> Result<Game, String> {
         game.lamps_left[seat] = game.lamps_left[seat].saturating_sub(set.min(u8::MAX as usize) as u8);
     }
     Ok(game)
+}
+
+/// Lay the room's oil print on cell index `cell` (`Game::put_oil_print`):
+/// from a welcome's list and from each `OilPrinted`, so laying one twice
+/// is harmless.
+fn put_oil_print(game: &mut Game, cols: u16, cell: u16, dir: u8, fade: u8) {
+    let dir = dir_from_index(dir).unwrap_or(Dir::Up);
+    game.put_oil_print(cell_from_index(cols, cell), OilPrint { dir, fade });
 }
 
 /// The lanterns the snapshot lists: kept where the replica already has
@@ -608,7 +619,9 @@ fn drawn_muzzle(game: &mut Game, slot: usize, weapon: WeaponKind) -> Option<Posi
 /// `LavaBombLaunched` puts a volcano's bomb in the air the same way. A
 /// `LaserBeam` is drawn likewise. Both are the moment's, so a quiet
 /// apply puts neither up, and a beam the client drew itself (`own_presses`,
-/// indices into `s.events`) is neither drawn nor handed on. A
+/// indices into `s.events`) is neither drawn nor handed on. An
+/// `OilPrinted` lays the room's print whatever the show: it is state, and
+/// it lands before `apply_fires` reads the snapshot's fires. A
 /// `GrassTrampled` takes its cell out of the replica's cover, quiet or
 /// drawn, as a `LanternSet` spends a lantern.
 fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_presses: &BTreeSet<usize>) -> BTreeSet<u16> {
@@ -635,6 +648,11 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_presse
                 let from = Position::new(dequantise_pos(x), dequantise_pos(y));
                 let to = Position::new(dequantise_pos(to_x), dequantise_pos(to_y));
                 game.drum_in_flight(from, to, drum as i32);
+            }
+            // A print is the room's oil from now on, drawn or not: a flame
+            // the room lights there is a fire the snapshots list.
+            WireEvent::OilPrinted { col, row, dir, fade } => {
+                put_oil_print(game, cols, cell_index(cols, (col as i32, row as i32)), dir, fade);
             }
             // A seat's lantern is spent the moment it is set down, however
             // late the news: the HUD counts what is left.
@@ -2206,6 +2224,50 @@ mod tests {
         assert!(replica.fires.iter().all(|f| !lit.contains(&f.cell)), "the cells are out on the replica too");
         assert!(replica.scorches.len() > scars, "a burnt-out cell leaves a burn scar");
         assert_eq!(replica.oil_cells, game.oil_cells, "and the oil it burned is spent on both sides");
+    }
+
+    /// Oil prints are the room's (docs/ground-memory.md "Oil prints"):
+    /// each reaches a replica as the room lays it and a joiner in its
+    /// welcome, and the fire the room lights on them burns on the replica
+    /// cell for cell until they are spent on both sides.
+    #[test]
+    fn oil_prints_and_their_fire_reach_the_replica_where_the_room_has_them() {
+        const MAP: &str = "version = 1\ntanks = 0\ncells.\"5,11\" = { kind = \"start\" }\ncells.\"8,11\" = { kind = \"oil\" }\ncells.\"9,11\" = { kind = \"oil\" }\ncells.\"12,13\" = { kind = \"barrel\", drum = \"oil\" }\n";
+        let mut game = quiet_round(MAP, 0xB0B, 0);
+        game.oil_print_cells = 4;
+        let mut replica = welcome_through_the_codec(&game);
+        let (width, height) = game.map.field_size();
+        let past = map::cell_to_world(16, 11).x;
+        for _ in 0..600 {
+            game.update(Input::single(Intent { move_dir: Some(Dir::Right), ..Intent::default() }), PHYSICS_FIXED_DT, width, height);
+            let snap = enc::snapshot(&game, [0; MAX_SEATS]);
+            let Msg::Snapshot(snap) = decode(&encode(&Msg::Snapshot(snap))).expect("decodes") else { panic!("kind") };
+            snapshot(&mut replica, &snap);
+            assert_eq!(replica.drawable_state(), game.drawable_state(), "the replica draws the room's prints");
+            if game.tank_snapshots().iter().any(|t| t.is_player && t.position.x > past) {
+                break;
+            }
+        }
+        assert_eq!(game.oil_prints.len(), 4, "the room printed four cells");
+        assert_eq!(replica.oil_prints, game.oil_prints);
+        assert_eq!(replica.oil_cells, game.oil_cells);
+        let joiner = welcome_through_the_codec(&game);
+        assert_eq!(joiner.oil_prints, game.oil_prints, "a joiner learns them from its welcome");
+        assert_eq!(joiner.oil_cells, game.oil_cells);
+
+        game.debug_detonate(map::cell_to_world(12, 13)).expect("the oil drum at (12,13)");
+        let mut burnt = false;
+        for _ in 0..1200 {
+            step_and_apply(&mut game, &mut replica);
+            assert_eq!(replica.drawable_state(), game.drawable_state(), "the replica burns where the room burns");
+            if game.oil_prints.is_empty() && game.fires.is_empty() {
+                burnt = true;
+                break;
+            }
+        }
+        assert!(burnt, "the prints burned out");
+        assert!(replica.oil_prints.is_empty(), "spent on the replica too");
+        assert_eq!(replica.oil_cells, game.oil_cells);
     }
 
     /// A tile the snapshot says is burning flickers on the replica, and

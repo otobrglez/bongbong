@@ -378,6 +378,11 @@ and that rewards a well-timed shot from across the map. Art is one 32 px
 ground cell with 4 variants on `props_sheet.png` (rows 9-10 free if the
 sheet grows to 128x352) plus the wood burn loop for the lit state.
 
+A hull can lay trail cells too: with `oil_print_cells` above 0 (off by
+default), driving through an unlit oil cell prints that many cells of oil
+behind it, each an ordinary trail cell drawn as a tread print
+(docs/ground-memory.md "Oil prints").
+
 Rules to get right: an oil cell under a tank does nothing until lit;
 propagation is per cell, one step per `1/cells_per_second`, so a running
 fire is a deterministic wave with no RNG; a lit oil cell damages like a

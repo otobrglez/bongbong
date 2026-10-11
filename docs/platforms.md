@@ -306,8 +306,11 @@ build, so every switch would recompile them and their dependents). `.cargo/confi
 - **Run**: `just run-ios-sim` (`build-ios-sim` + `tools/ios/bundle.sh` →
   `target/ios-sim/BongBong.app`: binary, `Info.plist` from the template - `UILaunchScreen` required
   or iOS runs it at a compatibility size, landscape only -, `static/` and `maps/` flat since the
-  entry chdirs into the bundle), `just ios-screenshot`. `simctl` cannot inject touches - use the
-  Simulator window. **iPhone / iPad**: `just run-ios-device` / `just run-ios-ipad` build
+  entry chdirs into the bundle), `just ios-screenshot`. `run-ios-sim` and `ios-smoke` show the
+  booted device through `tools/ios/show-sim.sh`, from the Xcode `env.sh` picks: Simulator.app up
+  to Xcode 26, DeviceHub.app from Xcode 27 (which has no Simulator.app); with neither, the device
+  runs headless and the recipe goes on. `simctl` cannot inject touches - use that window.
+  **iPhone / iPad**: `just run-ios-device` / `just run-ios-ipad` build
   `target/ios-device/BongBong.app`, then `tools/ios/deploy.sh <iPhone|iPad|udid>` picks the *wired*
   device of that type (a phone paired over Wi-Fi never takes an iPad deploy), runs
   `tools/ios/sign.sh` (Xcode's automatic signing on the placeholder project `tools/ios/sign/` mints

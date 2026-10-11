@@ -990,6 +990,13 @@ pub struct Tank {
     /// corrodes at `bio_slime_dps` and drives at `bio_slime_speed_factor`
     /// of its pace. Set, never added to; water washes it off.
     pub slime_timer: f32,
+    /// Cells of oil prints still on its treads (`simulation::oil`): set
+    /// in an oil pool, spent a cell at a time, washed off in water.
+    pub oil_load: u8,
+    /// The cell its centre stood in at the last oil walk
+    /// (`simulation::oil`); `None` before the first, after a placement and
+    /// whenever prints are off.
+    pub oil_cell: Option<(i32, i32)>,
     /// Seconds remaining on a `pickup::PickupKind::SpeedUp` boost - while
     /// positive, `effective_speed` scales top speed by
     /// SPEED_BOOST_MULTIPLIER. Set (not added to) on pickup, so a fresh
@@ -1137,6 +1144,8 @@ impl Default for Tank {
             last_hit_by: None,
             hit_by_seat: None,
             slime_timer: 0.0,
+            oil_load: 0,
+            oil_cell: None,
             tread: Tread::default(),
             trample_cell: None,
             laser_variant: LaserVariant::Red,

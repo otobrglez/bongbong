@@ -174,7 +174,7 @@ impl FlyingDrum {
 }
 
 /// The four orthogonal neighbours of a grid cell.
-fn neighbours(cell: (i32, i32)) -> [(i32, i32); 4] {
+pub(super) fn neighbours(cell: (i32, i32)) -> [(i32, i32); 4] {
     let (c, r) = cell;
     [(c + 1, r), (c - 1, r), (c, r + 1), (c, r - 1)]
 }
@@ -982,13 +982,14 @@ impl Game {
         }
     }
 
-    /// What a ground fire leaves when it goes out: the oil cell spent, and
-    /// a burn scar (`Scorch::burn`) for the caller to stage. **Runs exactly
-    /// once per cell**. The round calls it from `tick_fires`; a replica
+    /// What a ground fire leaves when it goes out: the oil cell spent (a
+    /// print with it), and a burn scar (`Scorch::burn`) for the caller to
+    /// stage. **Runs exactly once per cell**. The round calls it from `tick_fires`; a replica
     /// calls it for the cell a snapshot has stopped listing, which is the
     /// only way a fire ever leaves the list (`net::apply`).
     pub(crate) fn fire_burnt_out(&mut self, fire: &GroundFire) -> Scorch {
         self.oil_cells.remove(&fire.cell);
+        self.oil_prints.remove(&fire.cell);
         Scorch::burn(fire.position())
     }
 

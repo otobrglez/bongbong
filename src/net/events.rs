@@ -283,6 +283,9 @@ pub enum WireEvent {
     ChunksCharred { x: i16, y: i16, broken: u16 },
     /// `Event::EmberFlew`.
     EmberFlew { x: i16, y: i16, to_x: i16, to_y: i16 },
+    /// `Event::OilPrinted`: the cell, the hull's way as `dir_index` and
+    /// the print's fade in eighths.
+    OilPrinted { col: u8, row: u8, dir: u8, fade: u8 },
     /// The grass cell (`col`, `row`) was trampled for the round;
     /// `Event::GrassTrampled`.
     GrassTrampled { col: u8, row: u8 },
@@ -376,6 +379,18 @@ impl WireEvent {
             },
             Event::ChunksCharred { x, y, broken } => WireEvent::ChunksCharred { x: q(x), y: q(y), broken },
             Event::EmberFlew { x, y, to_x, to_y } => WireEvent::EmberFlew { x: q(x), y: q(y), to_x: q(to_x), to_y: q(to_y) },
+            Event::OilPrinted { cell, dir, fade } => {
+                let dir = Dir::parse(dir).unwrap_or_else(|| {
+                    debug_assert!(false, "unknown direction {dir:?} in Event::OilPrinted");
+                    Dir::Up
+                });
+                WireEvent::OilPrinted {
+                    col: cell.0.clamp(0, u8::MAX as i32) as u8,
+                    row: cell.1.clamp(0, u8::MAX as i32) as u8,
+                    dir: dir_index(dir),
+                    fade,
+                }
+            }
             Event::GrassTrampled { cell } => {
                 WireEvent::GrassTrampled { col: cell.0.clamp(0, u8::MAX as i32) as u8, row: cell.1.clamp(0, u8::MAX as i32) as u8 }
             }
@@ -585,6 +600,9 @@ impl WireEvent {
             }
             WireEvent::ChunksCharred { x, y, broken } => Event::ChunksCharred { x: d(x), y: d(y), broken },
             WireEvent::EmberFlew { x, y, to_x, to_y } => Event::EmberFlew { x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y) },
+            WireEvent::OilPrinted { col, row, dir, fade } => {
+                Event::OilPrinted { cell: (col as i32, row as i32), dir: dir_from_index(dir).unwrap_or(Dir::Up).name(), fade }
+            }
             WireEvent::GrassTrampled { col, row } => Event::GrassTrampled { cell: (col as i32, row as i32) },
             WireEvent::Blast { x, y, chained, drum } => Event::Blast { x: d(x), y: d(y), chained, drum },
             WireEvent::LavaBombLaunched { x, y, to_x, to_y } => {
@@ -776,6 +794,7 @@ mod tests {
             Event::ChunksBroken { material: Material::Brick, variant: 2, x: 96.0, y: 64.0, broken: 0b1011, dx: 1.0, dy: 0.0, collapsed: false },
             Event::ChunksCharred { x: 96.0, y: 64.0, broken: 0b0110 },
             Event::EmberFlew { x: 96.0, y: 64.0, to_x: 160.0, to_y: 80.0 },
+            Event::OilPrinted { cell: (12, 6), dir: "right", fade: 6 },
             Event::GrassTrampled { cell: (12, 7) },
             Event::Blast { x: 128.0, y: 160.0, chained: true, drum: Drum::Fuel },
             Event::DrumLaunched { x: 128.0, y: 160.0, to_x: 256.0, to_y: 160.0, drum: Drum::Oil },
@@ -860,7 +879,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 76, "one sample per Event variant");
+        assert_eq!(seen.len(), 77, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

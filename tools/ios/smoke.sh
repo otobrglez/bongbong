@@ -24,6 +24,6 @@ sed -e 's/__EXECUTABLE__/smoke/' -e "s/__BUNDLE_ID__/$BUNDLE_ID/" -e 's/__NAME__
     -e 's/__VERSION__/0.0.1/' -e "s/__MIN_OS__/$IOS_MIN/" -e 's/__PLATFORM__/iPhoneSimulator/' -e 's/__DTPLATFORM__/iphonesimulator/' tools/ios/Info.plist > "$APP/Info.plist"
 plutil -lint "$APP/Info.plist" >/dev/null
 xcrun simctl boot "$IOS_DEVICE" >/dev/null 2>&1 || true
-open -a Simulator
+tools/ios/show-sim.sh
 xcrun simctl install booted "$APP"
 xcrun simctl launch --console-pty --terminate-running-process booted "$BUNDLE_ID"

@@ -2610,6 +2610,12 @@ tunables! {
         oil_trail_cells_per_second: f32 = 6.0 in 0.5 ..= 30.0;
         /// How long one trail cell burns once the fire reaches it.
         oil_trail_burn_seconds: f32 = 2.5 in 0.1 ..= 30.0;
+        /// Oil prints (docs/ground-memory.md "Oil prints"): the cells of
+        /// oil a hull prints after driving through an unlit oil cell, one
+        /// per cell its centre enters. A flame lights them and the fire
+        /// runs along them like a trail. 0, no prints, and every round
+        /// replays as it did. Read when a round begins.
+        oil_print_cells: i32 = 0 in 0 ..= 16 @ Restart;
         /// Fuse a drum sitting in a burning cell gets, as a multiple of
         /// `barrel_fuse_seconds` (before the drum's own kind factor).
         fire_fuse_factor: f32 = 2.0 in 0.1 ..= 10.0;

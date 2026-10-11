@@ -426,12 +426,13 @@ build-ios-sim *ARGS:
     bash -c 'set -e; source tools/ios/env.sh; ./tools/ios/bundle.sh debug'
 
 # Build, boot the simulator (BONGBONG_IOS_DEVICE, default "iPhone 17"),
-# install the bundle and launch it with the console attached (Ctrl-C
-# detaches; the app keeps running). Rotate the simulator to landscape with
-# Cmd+Left if it comes up portrait.
+# show it (tools/ios/show-sim.sh: Simulator.app, DeviceHub.app from Xcode
+# 27), install the bundle and launch it with the console attached (Ctrl-C
+# detaches; the app keeps running). Rotate the simulator to landscape
+# (Cmd+Left in Simulator.app) if it comes up portrait.
 run-ios-sim *ARGS: (build-ios-sim ARGS)
     bash -c 'set -e; source tools/ios/env.sh; \
-        xcrun simctl boot "$IOS_DEVICE" >/dev/null 2>&1 || true; open -a Simulator; \
+        xcrun simctl boot "$IOS_DEVICE" >/dev/null 2>&1 || true; ./tools/ios/show-sim.sh; \
         xcrun simctl install booted target/ios-sim/BongBong.app; \
         xcrun simctl launch --console-pty --terminate-running-process booted com.otobrglez.bongbong'
 

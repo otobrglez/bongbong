@@ -11,9 +11,9 @@ powder, chips off ice, exhaust as it pulls away.
 
 The research, the proposals and the decisions behind this are on the Tread
 Lab page (https://claude.ai/artifact/RKznnB1TsYgwPXEwBRacWa) and in BB-87;
-this document is what is built (BB-88), and trampled cover (BB-89, "Trampled
-cover" below), behind its own knob and off by default. Oil prints (BB-90) are
-the other gameplay follow-up.
+this document is what is built: the marks and effects (BB-88), trampled
+cover (BB-89, "Trampled cover" below) and oil prints (BB-90, "Oil prints"
+below), each of the last two behind its own knob and off by default.
 
 ## Where it lives
 
@@ -26,6 +26,7 @@ the other gameplay follow-up.
 | `src/lib.rs` | `TreadProfile`, `TREAD_BY_ROW`: every chassis's runs as the art draws them. |
 | `src/fx.rs` | `Fx::drive`: the driving effects (`ParticleKind::Kick`, `ParticleKind::Foam`, and spray, chips and smoke reused). |
 | `src/render/fx.rs` | `draw_ground`: dust, powder and foam drawn with the floor, under the light. |
+| `src/simulation/oil.rs` | Oil prints (below): `print_oil`, `put_oil_print`, `OilPrint`. |
 | `src/game.rs` | `paint_floor_marks` draws the worn cells over the forest floor and the lava's banks and first of the marks, under scorches, craters and rubble; `refresh_pictures` and `with_block_images` bring the pictures up and hand them to the GPU. |
 
 ## The grid
@@ -216,9 +217,52 @@ hulls have driven into that many times hides nobody for the rest of the round.
 - **Off** returns before reading a hull, so no field, event or draw changes
   and every round replays as it did. On, it draws no RNG.
 
+## Oil prints
+
+A hull that drives through an unlit oil cell carries oil on its treads and
+prints it on the next `oil_print_cells` cells its centre enters
+(`src/simulation/oil.rs`). The knob is 0 by default, and at 0 the phase
+returns before it reads or writes anything, so every round replays as it
+did. Gameplay, not a picture: the prints are the room's, kept outside the
+wear grid and its cap.
+
+- **A print is an oil-trail cell.** It joins `Game::oil_cells`, so whatever
+  lights a painted trail lights it - the flamethrower, a drum's blast, a
+  rod, a burning neighbour - the fire runs along the prints and into the
+  pool on the trail's clock (`oil_trail_cells_per_second`,
+  `oil_trail_burn_seconds`), and `fire_burnt_out` spends it with a burn
+  scar. `Game::oil_prints` only says which oil cells are prints, which way
+  the hull went and how faint each is. Unlit, a print is open ground: no
+  `Obstacle`, no nav wall, no effect on a shot.
+- **Loading.** A pool is a map oil cell that is not a print and not
+  burning; entering one fills the treads (`Tank::oil_load`). Prints never
+  load a hull, so oil cannot spread without end. Water and lava wash the
+  load off.
+- **Printing.** One print per cell the centre enters, a unit of load each,
+  `fade` the eighths of the load left (8, 6, 4, 2 for a load of four). A
+  diagonal step prints the orthogonal cell between first, so the fire's
+  four-way spread still runs along; a jump (a portal, a placement) prints
+  nothing across the gap. A cell that is oil already, burning, wet, off the
+  field or under a standing tile takes none. A print laid beside a fire
+  whose one spread is spent catches at once.
+- **Order.** Seats in index order, then enemies by owner slot, after
+  `sync_tanks_and_ram`; no RNG.
+- **The look** (`obstacle::oil_print_marks`, drawn by `paint_floor` in
+  place of the puddle sprite): two runs of oil three blocks wide either
+  side of the centre line along the hull's way, in the puddle's steps -
+  `SMOKE[0]`, a grouser link in `SMOKE[1]` every fourth block along the
+  ground, one `EMP[1]` sheen block per run - the outer columns ragged, a
+  fainter print dropping blocks through the Bayer pattern to half, then
+  fading in eighths. Hashed from the cell.
+
+Online the room lays the prints and each travels as `Event::OilPrinted`
+(`WireEvent::OilPrinted`, applied whatever the show, since it is state); a
+joiner gets them in `Welcome::oil_prints`. Their fire travels with every
+other fire in `Snapshot::fires`, so a replica burns where the room burns.
+
 ## Online
 
-The marks stay off the wire. A replica presses its own marks from the hulls the
+Nothing of the marks crosses the wire. A replica presses its own marks from the hulls the
 snapshots place (`Tank::track_from`, reset across a jump so no mark is laid
 across a portal or a placement) and throws its own effects from them, so its
 marks can differ from the room's by an interpolated pixel.
@@ -250,3 +294,13 @@ passes; its `tick_grass` lays the tufts flat.
   `determinism_tests::same_seed_replays_a_trampling_round_bit_identical`;
   `net::apply`'s `trampled_grass_reaches_the_replica_and_a_late_joiner` and
   `a_trampling_round_draws_the_same_picture`.
+- Oil prints: `a_hull_through_an_oil_pool_prints_oil_for_a_few_cells`,
+  `a_flame_lights_oil_prints_and_the_fire_runs_along_them`,
+  `fire_on_oil_prints_burns_out_on_the_trails_clock`,
+  `oil_prints_off_change_nothing`,
+  `water_washes_the_oil_off_and_prints_never_load_a_hull`,
+  `a_print_laid_beside_a_burning_cell_catches` (`mechanics_tests`),
+  `oil_prints_and_their_fire_reach_the_replica_where_the_room_has_them`
+  (`net::apply`), `oil::tests` and the composer's
+  `an_oil_print_is_whole_blocks_inside_its_cell` and
+  `a_fainter_oil_print_keeps_fewer_blocks`.

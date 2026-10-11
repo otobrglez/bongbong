@@ -759,6 +759,7 @@ mod tests {
             overrides: Default::default(),
             enemy_count: None,
             oil_cells: Vec::new(),
+            oil_prints: Vec::new(),
             dead_cells: Vec::new(),
             trampled_cells: Vec::new(),
             snapshot: snapshot(tick),

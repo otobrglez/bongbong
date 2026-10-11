@@ -41,12 +41,14 @@ mod well;
 mod wear;
 mod trample;
 mod nav;
+mod oil;
 pub mod portals;
 pub mod present;
 mod props;
 mod towers;
 pub mod training;
 mod volcano;
+pub use oil::OilPrint;
 pub use props::{FlyingDrum, GroundFire};
 pub(crate) use props::tile_rubble;
 pub(crate) use gauss::SeatCharge;
@@ -674,6 +676,10 @@ pub enum Event {
     /// `wood`, `tree`, `drum`), or collapsed a prop under sustained heat
     /// (`sandbag`, `fence`).
     Ignited { x: f32, y: f32, what: &'static str },
+    /// A hull carrying oil out of a pool printed grid cell `cell`, going
+    /// `dir` (`Dir::name`) with `fade` eighths of its oil left
+    /// (`simulation::oil`): the cell is an oil-trail cell from now on.
+    OilPrinted { cell: (i32, i32), dir: &'static str, fade: u8 },
     /// A seeker missile fired by `slot` finished its climb and locked on:
     /// onto the tank in `target` slot, or - `None` - onto the ground point
     /// its launcher was aimed at, since nothing was in `missile_seek_range`.
@@ -1050,6 +1056,10 @@ pub struct Game {
     /// (`simulation::crates`) - `crate_breakable`, read once by `init`, so
     /// a round keeps the rule it began under.
     pub(crate) crates_breakable: bool,
+    /// Cells of oil a hull prints after driving through an oil pool
+    /// (`simulation::oil`) - `oil_print_cells`, read once by `init`; 0
+    /// lays no prints.
+    pub(crate) oil_print_cells: i32,
     /// Passes into a grass cell that trample it (`simulation::trample`) -
     /// `grass_trample_passes`, read once by `init`; 0 counts nothing.
     pub(crate) trample_passes: u16,
@@ -1172,6 +1182,10 @@ pub struct Game {
     /// The map's oil-trail cells that have not burnt yet, as grid cells
     /// (`CellObject::Oil`). Not solid, no nav effect until lit.
     pub(crate) oil_cells: HashSet<(i32, i32)>,
+    /// The oil prints hulls have laid this round (`simulation::oil`), each
+    /// also one of `oil_cells`: drawn as a print, and never loading a
+    /// hull's treads.
+    pub(crate) oil_prints: BTreeMap<(i32, i32), OilPrint>,
     /// The map's portal anchors as world positions, in `MapFile::portal_cells`
     /// order (docs/teleporting.md). Plain positions: a portal has no
     /// entity and no body. The network is *active* only with two or more
@@ -1671,6 +1685,7 @@ impl Game {
         self.cookoffs.clear();
         self.fires.clear();
         self.oil_cells.clear();
+        self.oil_prints.clear();
         self.portals.clear();
         self.flying_drums.clear();
         self.lava_bombs.clear();
@@ -1735,6 +1750,7 @@ impl Game {
         self.spawn_plan = self.level_overrides.resolve_spawn(&self.map.spawn, self.enemy_count_override);
         self.field_map = self.map.class() == crate::framing::MapClass::Field;
         self.crates_breakable = tuning().crate_breakable;
+        self.oil_print_cells = tuning().oil_print_cells.max(0);
         self.trample_passes = tuning().grass_trample_passes.clamp(0, 32) as u16;
         self.intro_timer = if self.show_intro { tuning().mission_banner_seconds } else { 0.0 };
         self.intro_fade = 0.0;
@@ -2293,6 +2309,7 @@ impl Game {
             self.well_phase(&mut f, true);
             self.step_world(&mut f, true);
             self.sync_tanks_and_ram(&mut f);
+            self.print_oil(&mut f);
             self.trample_grass(&mut f);
             self.ram_props(&mut f);
             self.roll_grenades(&mut f);
@@ -7392,6 +7409,177 @@ mod mechanics_tests {
         let mut dry = sandbox("version = 1\ntanks = 0\ncells.\"5,11\" = { kind = \"start\" }\n");
         drive(&mut dry, Some(Dir::Right), 90);
         assert!(!dry.wear().blocks().any(|(_, b)| b.kind() == Kind::Splat), "none on dry ground");
+    }
+
+    /// An empty sandbox with a two-cell oil pool at (8, 11) and (9, 11) on
+    /// the player's row, `extra` cells added, and oil prints set to
+    /// `prints` cells (`oil_print_cells`, latched by `init`).
+    fn oil_round(prints: i32, extra: &str) -> Game {
+        let mut game = sandbox(&format!(
+            "version = 1\ntanks = 0\ncells.\"5,11\" = {{ kind = \"start\" }}\ncells.\"8,11\" = {{ kind = \"oil\" }}\ncells.\"9,11\" = {{ kind = \"oil\" }}\n{extra}"
+        ));
+        game.oil_print_cells = prints;
+        game
+    }
+
+    /// Drive the player `dir` until its centre is past `until` along that
+    /// way (or 600 frames), collecting every event.
+    fn drive_until(game: &mut Game, dir: Dir, until: f32) -> Vec<Event> {
+        let mut events = Vec::new();
+        for _ in 0..600 {
+            drive(game, Some(dir), 1);
+            events.extend(game.events().iter().cloned());
+            let p = player_pos(game);
+            let past = match dir {
+                Dir::Right => p.x > until,
+                Dir::Left => p.x < until,
+                Dir::Down => p.y > until,
+                Dir::Up => p.y < until,
+            };
+            if past {
+                break;
+            }
+        }
+        events
+    }
+
+    fn printed(events: &[Event]) -> Vec<((i32, i32), &'static str, u8)> {
+        events
+            .iter()
+            .filter_map(|e| match *e {
+                Event::OilPrinted { cell, dir, fade } => Some((cell, dir, fade)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Back the player off to (16, 11) facing the prints and hold the
+    /// flamethrower for a second: the near prints are in its reach, the
+    /// pool well beyond it. Returns each trail cell's lighting frame and
+    /// the frame it went out, and whether the flame lit oil itself.
+    fn light_the_prints(game: &mut Game) -> (BTreeMap<(i32, i32), (usize, Option<usize>)>, bool) {
+        game.debug_teleport(0, map::cell_to_world(16, 11), Some(270.0)).expect("the player");
+        game.debug_set_tank(0, &crate::simulation::debug::TankPatch { flame_fuel: Some(6.0), ..Default::default() }).expect("the player");
+        let mut trail: BTreeMap<(i32, i32), (usize, Option<usize>)> = BTreeMap::new();
+        let mut flamed_oil = false;
+        for frame in 0..900 {
+            let mut input = Input::default();
+            input.seats[0].fire = frame < 60;
+            step(game, input);
+            for e in game.events() {
+                match *e {
+                    Event::Ignited { what: "oil", .. } => flamed_oil = true,
+                    Event::FireStarted { x, y, pool: false } => {
+                        trail.entry(map::world_to_cell(Position::new(x, y))).or_insert((frame, None));
+                    }
+                    _ => {}
+                }
+            }
+            for (cell, (_, out)) in trail.iter_mut() {
+                if out.is_none() && !game.fires.iter().any(|f| f.cell == *cell) {
+                    *out = Some(frame);
+                }
+            }
+            if frame > 60 && game.fires.is_empty() {
+                break;
+            }
+        }
+        (trail, flamed_oil)
+    }
+
+    #[test]
+    fn a_hull_through_an_oil_pool_prints_oil_for_a_few_cells() {
+        let mut game = oil_round(4, "");
+        let events = drive_until(&mut game, Dir::Right, map::cell_to_world(15, 11).x);
+        assert_eq!(
+            printed(&events),
+            vec![((10, 11), "right", 8), ((11, 11), "right", 6), ((12, 11), "right", 4), ((13, 11), "right", 2)],
+            "four cells out of the pool, fainter each cell"
+        );
+        let prints: Vec<(i32, i32)> = game.oil_prints.keys().copied().collect();
+        assert_eq!(prints, vec![(10, 11), (11, 11), (12, 11), (13, 11)]);
+        assert!(game.oil_prints.values().all(|p| p.dir == Dir::Right));
+        assert!(prints.iter().all(|c| game.oil_cells.contains(c)), "a print is an oil-trail cell");
+        assert_eq!(game.oil_cells.len(), 6, "and the pool is still there");
+        assert!(game.nav_grid(W, H).usable(map::cell_to_world(11, 11)), "an unlit print is open ground");
+        let player = game.player().expect("player");
+        assert_eq!(with_tank(&game.world, player, |t| t.oil_load), 0, "the treads are spent");
+    }
+
+    #[test]
+    fn a_flame_lights_oil_prints_and_the_fire_runs_along_them() {
+        let mut game = oil_round(4, "");
+        drive_until(&mut game, Dir::Right, map::cell_to_world(15, 11).x);
+        let (trail, flamed_oil) = light_the_prints(&mut game);
+        assert!(flamed_oil, "the flame lit a print: {trail:?}");
+        // The pool lies beyond the flame's reach: the fire ran there along
+        // the prints, a cell a step.
+        let step_frames = (60.0 / tuning().oil_trail_cells_per_second).round() as usize;
+        let lit = |cell| trail.get(&cell).map(|&(at, _)| at).unwrap_or_else(|| panic!("{cell:?} never lit: {trail:?}"));
+        for (near, far) in [((10, 11), (9, 11)), ((9, 11), (8, 11))] {
+            let (a, b) = (lit(near), lit(far));
+            assert!(b > a && b <= a + step_frames + 2, "{near:?} at {a}, {far:?} at {b}: one cell per step");
+        }
+    }
+
+    #[test]
+    fn fire_on_oil_prints_burns_out_on_the_trails_clock() {
+        let mut game = oil_round(4, "");
+        drive_until(&mut game, Dir::Right, map::cell_to_world(15, 11).x);
+        let prints: Vec<(i32, i32)> = game.oil_prints.keys().copied().collect();
+        let scars = game.scorches.len();
+        let (trail, _) = light_the_prints(&mut game);
+        let burn = (tuning().oil_trail_burn_seconds * 60.0).round() as usize;
+        for cell in &prints {
+            let (at, out) = trail.get(cell).copied().unwrap_or_else(|| panic!("{cell:?} never lit: {trail:?}"));
+            let out = out.unwrap_or_else(|| panic!("{cell:?} never went out"));
+            assert!(out.abs_diff(at).abs_diff(burn) <= 1, "{cell:?} burned {} frames, the trail's {burn}", out - at);
+        }
+        assert!(game.oil_prints.is_empty(), "the prints are spent");
+        assert!(prints.iter().all(|c| !game.oil_cells.contains(c)));
+        assert!(game.scorches.len() >= scars + prints.len(), "each leaves a burn scar");
+    }
+
+    #[test]
+    fn oil_prints_off_change_nothing() {
+        assert_eq!(crate::tuning::Tuning::DEFAULT.oil_print_cells, 0, "off by default");
+        let mut game = sandbox(
+            "version = 1\ntanks = 0\ncells.\"5,11\" = { kind = \"start\" }\ncells.\"8,11\" = { kind = \"oil\" }\ncells.\"9,11\" = { kind = \"oil\" }\n",
+        );
+        assert_eq!(game.oil_print_cells, 0, "init latched the default");
+        let events = drive_until(&mut game, Dir::Right, map::cell_to_world(15, 11).x);
+        assert!(printed(&events).is_empty());
+        assert!(game.oil_prints.is_empty());
+        assert_eq!(game.oil_cells.len(), 2);
+        let tanks: Vec<(u8, Option<(i32, i32)>)> = game.world.query::<&Tank>().iter().map(|t| (t.oil_load, t.oil_cell)).collect();
+        assert!(tanks.iter().all(|&t| t == (0, None)), "the phase never ran: {tanks:?}");
+    }
+
+    #[test]
+    fn water_washes_the_oil_off_and_prints_never_load_a_hull() {
+        let ford: String = (10..=12).map(|r| format!("cells.\"11,{r}\" = {{ kind = \"water\" }}\n")).collect();
+        let mut game = oil_round(4, &ford);
+        let events = drive_until(&mut game, Dir::Right, map::cell_to_world(15, 11).x);
+        assert_eq!(printed(&events), vec![((10, 11), "right", 8)], "the ford washed the rest off");
+        let player = game.player().expect("player");
+        assert_eq!(with_tank(&game.world, player, |t| t.oil_load), 0);
+
+        // Across the print from below: it loads nothing.
+        game.debug_teleport(0, map::cell_to_world(10, 14), Some(0.0)).expect("the player");
+        let events = drive_until(&mut game, Dir::Up, map::cell_to_world(10, 8).y);
+        assert!(printed(&events).is_empty(), "a print is not a pool: {:?}", printed(&events));
+    }
+
+    #[test]
+    fn a_print_laid_beside_a_burning_cell_catches() {
+        let mut game = oil_round(4, "");
+        // A fire under (11, 12) whose one spread is long spent.
+        game.fires.push(GroundFire { cell: (11, 12), left: 30.0, total: 30.0, spread_at: None, pool: true, lava: false });
+        let events = drive_until(&mut game, Dir::Right, map::cell_to_world(15, 11).x);
+        let at = map::cell_to_world(11, 11);
+        let printed_at = events.iter().position(|e| matches!(e, Event::OilPrinted { cell: (11, 11), .. })).expect("(11, 11) printed");
+        let caught = events.iter().position(|e| matches!(*e, Event::FireStarted { x, y, pool: false } if x == at.x && y == at.y));
+        assert_eq!(caught, Some(printed_at + 1), "it caught as it was laid");
     }
 
     #[test]
