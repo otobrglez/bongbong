@@ -276,10 +276,26 @@ impl ViewFrame {
     }
 }
 
-/// A touch screen's points to the millimetre: an iOS point, a CSS pixel on
-/// a phone's browser and an Android dp are each about a 160th of an inch,
-/// near enough to keep an arrow out from under a thumb.
+/// A touch screen's points to the millimetre: an iPhone's point, a CSS
+/// pixel on a phone's browser and an Android dp are each about a 160th of
+/// an inch, near enough to keep an arrow out from under a thumb. A
+/// full-size iPad's point is larger (`IPAD_POINTS_PER_MM`).
 pub const POINTS_PER_MM: f32 = 160.0 / 25.4;
+
+/// A full-size iPad's points to the millimetre: 264 pixels to the inch at
+/// 2x, a point a 132nd of an inch, so a cell as many points wide as on a
+/// phone is a fifth wider on its glass - in the app and in its browser,
+/// whose CSS pixel is that point.
+pub const IPAD_POINTS_PER_MM: f32 = 132.0 / 25.4;
+
+/// The points to the millimetre of the Apple device whose model
+/// identifier (`hw.machine`, `iPad15,7`) is `model`: `IPAD_POINTS_PER_MM`
+/// on a full-size iPad; an iPad mini (326 pixels to the inch at 2x), every
+/// iPhone and a model this does not know keep `POINTS_PER_MM`.
+pub fn apple_points_per_mm(model: &str) -> f32 {
+    const MINIS: [&str; 8] = ["iPad5,1", "iPad5,2", "iPad11,1", "iPad11,2", "iPad14,1", "iPad14,2", "iPad16,1", "iPad16,2"];
+    if model.starts_with("iPad") && !MINIS.contains(&model) { IPAD_POINTS_PER_MM } else { POINTS_PER_MM }
+}
 
 /// Where a touch screen's thumbs rest, which no arrow sits under: a square
 /// pad `indicator_thumb_pad_mm` wide whose middle is `indicator_thumb_in_mm`

@@ -1560,7 +1560,7 @@ mod session_tests {
             s.answer_dialog(true);
             let ui = crate::hud::UiFrame::new((1600.0, 900.0), 1.0, 1.0, crate::hud::Insets::default(), true);
             let frame = BuilderFrame::new(ui, s.builder.map().field_size(), s.builder.map().class(), None);
-            let screen = CanvasScreen { device_per_px: frame.view.scale * 2.0, points_per_px: frame.view.scale, coarse: false };
+            let screen = CanvasScreen { device_per_px: frame.view.scale * 2.0, points_per_px: frame.view.scale, coarse: false, ..Default::default() };
             s.update_builder(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
             s.builder.select_tool(Tool::Wall(Material::Brick));
             s.builder.set_shape(Shape::Rect);

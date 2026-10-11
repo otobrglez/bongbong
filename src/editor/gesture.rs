@@ -8,9 +8,9 @@
 //! - **One finger paints** once it has moved past the touch slop: a
 //!   finger resting on the glass paints nothing, and a stroke starts from
 //!   where the finger landed. A quick touch that never left the slop is a
-//!   tap - one cell. Where the editor says a finger cannot hit a cell (the
-//!   paint threshold), the drag pans instead, and it decides what a tap
-//!   does.
+//!   tap - one cell. Where the editor says a drag does not paint (under
+//!   the paint threshold, with somewhere to pan to), it pans instead, and
+//!   the editor decides what a tap does.
 //! - **Two fingers pan and pinch** about their middle; nothing moves until
 //!   they have moved past the slop between them, and then everything since
 //!   they landed applies at once. A second finger landing on a stroke takes

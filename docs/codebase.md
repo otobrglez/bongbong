@@ -1836,8 +1836,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `look_at`). **Touch is raw** (`BuilderInput::touches`, `editor/gesture.rs`): one finger paints
   once past `builder_touch_slop_pt`, two fingers pan and pinch about their midpoint (a second finger
   takes a stroke back, a pinch settles on whole blocks), a two-finger tap undoes and a three-finger
-  tap redoes; where a cell is under `builder_paint_min_cell_mm` a tap zooms to
-  `builder_tap_zoom_cell_mm` and a drag pans. A finger is the canvas's only where it lands on the
+  tap redoes; where a cell is under `builder_paint_min_cell_mm` (measured at the screen's
+  `CanvasScreen::points_per_mm`) a tap zooms to `builder_tap_zoom_cell_mm` and a drag pans, unless
+  the whole map is in view. A finger is the canvas's only where it lands on the
   canvas and no press of the chrome takes it (`lands_on_canvas`: a bar button's hit slack reaches
   over the canvas's top edge). `MapEditor::leave` (from `Session::play` - PLAY HERE and Tab too -
   and a level's start) closes the popup, takes back a half-drawn RECT and a select drag as Escape
