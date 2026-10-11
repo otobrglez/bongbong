@@ -203,6 +203,12 @@ pub fn welcome(w: &Welcome) -> Result<Game, String> {
     }
     remove_tiles(&mut game, &w.dead_cells.iter().copied().collect(), cols);
     game.grass_trampled = w.trampled_cells.iter().map(|&i| cell_from_index(cols, i)).collect();
+    // The grass fire charred before this client came in; a cell burning
+    // now is charred again by its listed fire, which changes nothing.
+    let burnt: BTreeSet<(i32, i32)> = w.burnt_grass.iter().map(|&i| cell_from_index(cols, i)).collect();
+    if !burnt.is_empty() {
+        game.char_grass(|cell| burnt.contains(&cell));
+    }
     apply(&mut game, &w.snapshot, Show::Quiet);
     // The lanterns each seat has set down already are spent; one a blast
     // broke before this client came in is forgotten.
@@ -1475,12 +1481,7 @@ fn apply_fires(game: &mut Game, s: &Snapshot, cols: u16) {
     // Grass in a burning cell chars, as `tick_fires` does on the server.
     let burning: BTreeSet<(i32, i32)> = fires.iter().map(|f| f.cell).collect();
     if !burning.is_empty() {
-        game.grass_cells.retain(|c| !burning.contains(&map::world_to_cell(*c)));
-        for tuft in game.grass.iter_mut() {
-            if burning.contains(&map::world_to_cell(tuft.base)) {
-                tuft.burnt = true;
-            }
-        }
+        game.char_grass(|cell| burning.contains(&cell));
     }
     // A cell only ever leaves the list by burning out, so the snapshot
     // dropping it is the event: the oil spent and a burn scar, once each
@@ -2645,6 +2646,114 @@ cells."11,11" = { kind = "tall_grass" }
         assert!(!flat.is_empty() && flat.iter().all(|&c| c == 1.0), "the replica lays its tufts flat: {flat:?}");
         let joiner = welcome_through_the_codec(&game);
         assert_eq!(joiner.drawable_state().trampled, vec![(10, 11)]);
+        assert_eq!(&*joiner.cover_cells(), &*game.cover_cells());
+    }
+
+    /// An oil drum with cover on three sides, the pool's reach, and a
+    /// patch of grass out of it.
+    const GRASS_BY_A_DRUM: &str = r#"
+version = 1
+tanks = 0
+cells."4,14" = { kind = "start" }
+cells."10,10" = { kind = "barrel", drum = "oil" }
+cells."9,10" = { kind = "tall_grass" }
+cells."11,10" = { kind = "tall_grass" }
+cells."10,11" = { kind = "reeds" }
+cells."16,10" = { kind = "tall_grass" }
+"#;
+
+    /// Grass a fire burnt out before a client joined is burnt on the
+    /// joiner as on the room and on a replica that watched it burn: it
+    /// hides nobody there and its tufts are the fire's stubs. A bush or a
+    /// bed of reeds chars the same way.
+    #[test]
+    fn grass_burnt_before_a_client_joins_is_burnt_on_the_joiner() {
+        let mut game = quiet_round(GRASS_BY_A_DRUM, 0xB0B, 0);
+        let mut replica = welcome_through_the_codec(&game);
+        game.debug_detonate(map::cell_to_world(10, 10)).expect("the oil drum at (10,10)");
+        let mut out = false;
+        for _ in 0..1200 {
+            step_and_apply(&mut game, &mut replica);
+            if game.fires.is_empty() {
+                out = true;
+                break;
+            }
+        }
+        assert!(out, "the drum's pool burned out");
+        assert_eq!(game.drawable_state().burnt_grass, vec![(9, 10), (10, 11), (11, 10)], "the pool charred the cover round the drum");
+        assert_eq!(game.cover_cells().iter().map(|&c| map::world_to_cell(c)).collect::<Vec<_>>(), vec![(16, 10)]);
+        assert_eq!(&*replica.cover_cells(), &*game.cover_cells(), "a replica that watched it burn agrees");
+        assert_eq!(replica.drawable_state(), game.drawable_state());
+
+        let joiner = welcome_through_the_codec(&game);
+        assert_eq!(joiner.drawable_state(), game.drawable_state(), "the joiner draws the room's stubs");
+        assert_eq!(&*joiner.cover_cells(), &*game.cover_cells(), "the joiner's cover is the room's");
+        assert!(!crate::grass::conceals(&joiner.cover_cells(), map::cell_to_world(10, 11)), "burnt, the reeds hide nobody");
+        assert!(crate::grass::conceals(&joiner.cover_cells(), map::cell_to_world(16, 10)), "the grass the fire missed still hides");
+    }
+
+    /// A client that comes in while the pool still burns learns the
+    /// charred cells from its welcome and the fire from its snapshot: it
+    /// draws what a replica that watched draws, and when the fire goes out
+    /// it leaves one burn scar a cell, as that replica does.
+    #[test]
+    fn a_client_that_joins_while_the_grass_burns_draws_what_the_room_draws() {
+        let mut game = quiet_round(GRASS_BY_A_DRUM, 0xB0B, 0);
+        let mut replica = welcome_through_the_codec(&game);
+        game.debug_detonate(map::cell_to_world(10, 10)).expect("the oil drum at (10,10)");
+        for _ in 0..30 {
+            step_and_apply(&mut game, &mut replica);
+        }
+        assert!(!game.fires.is_empty(), "the pool still burns");
+        assert_eq!(game.drawable_state().burnt_grass, vec![(9, 10), (10, 11), (11, 10)], "and has charred the cover round the drum");
+        let mut joiner = welcome_through_the_codec(&game);
+        assert_eq!(joiner.drawable_state(), replica.drawable_state(), "the joiner draws what the replica draws");
+        assert_eq!(&*joiner.cover_cells(), &*replica.cover_cells());
+        let scars = (replica.scorches.len(), joiner.scorches.len());
+        let (width, height) = game.map.field_size();
+        let mut out = false;
+        for _ in 0..1200 {
+            game.update(Input::default(), PHYSICS_FIXED_DT, width, height);
+            let snap = enc::snapshot(&game, [0; MAX_SEATS]);
+            snapshot(&mut replica, &snap);
+            snapshot(&mut joiner, &snap);
+            if game.fires.is_empty() {
+                out = true;
+                break;
+            }
+        }
+        assert!(out, "the drum's pool burned out");
+        assert_eq!(joiner.drawable_state(), game.drawable_state());
+        assert_eq!(&*joiner.cover_cells(), &*game.cover_cells());
+        assert_eq!(joiner.scorches.len() - scars.1, replica.scorches.len() - scars.0, "a scar a cell, once");
+    }
+
+    /// The woods' undergrowth hides nobody, but a fire chars it like
+    /// grass, and a client that joins later draws its stubs too.
+    #[test]
+    fn undergrowth_a_fire_charred_is_charred_on_a_late_joiner() {
+        let mut map = String::from("version = 1\ntanks = 0\ncells.\"4,14\" = { kind = \"start\" }\n");
+        for col in 10..=14 {
+            for row in 4..=8 {
+                map.push_str(&format!("cells.\"{col},{row}\" = {{ kind = \"pine\" }}\n"));
+            }
+        }
+        let mut game = quiet_round(&map, 0xB0B, 0);
+        // Only the undergrowth burns: no tree beside it catches.
+        for o in game.world.query_mut::<&mut Obstacle>() {
+            o.flammable = false;
+        }
+        let cover: BTreeSet<(i32, i32)> = game.grass_cells.iter().map(|&c| map::world_to_cell(c)).collect();
+        let cell = game.grass.iter().map(|t| map::world_to_cell(t.base)).find(|c| !cover.contains(c)).expect("the wood grows undergrowth");
+        game.fires.push(GroundFire { cell, left: 1.0, total: 1.0, spread_at: None, pool: true, lava: false });
+        let (width, height) = game.map.field_size();
+        for _ in 0..120 {
+            game.update(Input::default(), PHYSICS_FIXED_DT, width, height);
+        }
+        assert!(game.fires.is_empty(), "the fire is out");
+        assert_eq!(game.drawable_state().burnt_grass, vec![cell], "it charred the undergrowth");
+        let joiner = welcome_through_the_codec(&game);
+        assert_eq!(joiner.drawable_state(), game.drawable_state(), "the joiner draws the stubs");
         assert_eq!(&*joiner.cover_cells(), &*game.cover_cells());
     }
 

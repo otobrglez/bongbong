@@ -886,16 +886,8 @@ impl Game {
         }
 
         let burning: Vec<(i32, i32)> = self.fires.iter().filter(|fire| fire.left > 0.0).map(|fire| fire.cell).collect();
-        // Grass in a burning cell chars, whatever lit it: the tufts stay
-        // as stubs for the round and the cell stops concealing at once.
-        // The woods' undergrowth chars the same way, though its cells hide
-        // nobody (`woods.rs`).
-        self.grass_cells.retain(|c| !burning.contains(&cell_of(*c)));
-        for tuft in self.grass.iter_mut() {
-            if !tuft.burnt && burning.contains(&cell_of(tuft.base)) {
-                tuft.burnt = true;
-            }
-        }
+        // Grass in a burning cell chars, whatever lit it.
+        self.char_grass(|cell| burning.contains(&cell));
         if live {
             // A hull over a burning cell burns: players first, in index
             // order, then enemies, like every other blast walk - no RNG,
@@ -967,6 +959,22 @@ impl Game {
         for fire in done {
             let scar = self.fire_burnt_out(&fire);
             f.scorches.push(scar);
+        }
+    }
+
+    /// Char the grass in every cell `burning` holds: its tufts stay as
+    /// stubs for the round and the cell leaves `grass_cells`, so it stops
+    /// concealing at once. The woods' undergrowth chars the same way,
+    /// though its cells hide nobody (`woods.rs`). No RNG, and charring a
+    /// cell twice changes nothing. The round runs it from `tick_fires`; a
+    /// replica for the fires a snapshot lists and for the cells its
+    /// welcome says fire charred before it joined (`net::apply`).
+    pub(crate) fn char_grass(&mut self, burning: impl Fn((i32, i32)) -> bool) {
+        self.grass_cells.retain(|c| !burning(cell_of(*c)));
+        for tuft in self.grass.iter_mut() {
+            if !tuft.burnt && burning(cell_of(tuft.base)) {
+                tuft.burnt = true;
+            }
         }
     }
 

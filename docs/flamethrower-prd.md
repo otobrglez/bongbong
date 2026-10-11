@@ -115,7 +115,7 @@ ground and in `Obstacle::heat` for tiles, both cleared by `init`.
 | Target | Rule | Reuses |
 |---|---|---|
 | Ground cell | Catches at the ignition threshold: `light_cell` for `flame_ground_seconds` (2.0) as a pool cell. Burns anyone over it, blocks the nav grid, lights its own neighbours the way any burning cell does. | `tick_fires` unchanged |
-| Tall grass | Every tuft in a burning cell chars (`GrassTuft::burnt`) and stays gone for the round, and the cell leaves `grass_cells`, so it no longer conceals. **Applies to every burning cell**, so a drum's pool clears grass too. | `tick_fires`, `grass::conceals` |
+| Tall grass | Every tuft in a burning cell chars (`GrassTuft::burnt`) and stays gone for the round, and the cell leaves `grass_cells`, so it no longer conceals. **Applies to every burning cell**, so a drum's pool clears grass too. Online a replica chars it under each fire a snapshot lists, and a client that joins later the cells in `Welcome::burnt_grass`. | `tick_fires` through `Game::char_grass`, `grass::conceals` |
 | Wood tile, tree | Ignites at the threshold whatever its `flammable` roll: `health = 0, burning = true`, then the ordinary burn-out. A flamethrower is the one thing that lights a plank that was rolled to break. | `Obstacle::tick_burn` |
 | Oil trail cell | Lights at the threshold; the fire runs the trail. | `light_cell`, trail spread |
 | Barrel (either drum) | Fused at the threshold with `fire_fuse_factor` and the drum's own factor, `from` = the muzzle, so a chained fuel drum launches *away from the shooter*. | `arm_fuse` |

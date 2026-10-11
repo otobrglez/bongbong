@@ -117,12 +117,12 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
 }
 
 /// Everything a joining client needs: the round's parameters, the holes
-/// fire and shot have made in the map, and a full `snapshot`. The roster's
-/// first two chassis are what the server pinned
-/// `player_row_override`/`player2_row_override` to, so the replica's
-/// `init` draws the same rolls; a seat past those two rolls its chassis on
-/// both sides off the shared seed. Fails only if the map does not
-/// serialise.
+/// fire and shot have made in the map, the grass trampled and charred,
+/// and a full `snapshot`. The roster's first two chassis are what the
+/// server pinned `player_row_override`/`player2_row_override` to, so the
+/// replica's `init` draws the same rolls; a seat past those two rolls its
+/// chassis on both sides off the shared seed. Fails only if the map does
+/// not serialise.
 pub fn welcome(
     game: &Game,
     seat: u8,
@@ -156,6 +156,21 @@ pub fn welcome(
         .collect();
     let mut trampled_cells: Vec<u16> = game.grass_trampled.iter().map(|&c| cell_index(cols, c)).collect();
     trampled_cells.sort_unstable();
+    // The room keeps no list of what fire charred, so it is read off what
+    // the fire left: every cover cell the map placed (`CellObject::is_cover`)
+    // that `grass_cells` has lost, one too cramped to grow a tuft among
+    // them, and the cell of every burnt tuft, which adds the woods'
+    // undergrowth.
+    let cover: std::collections::BTreeSet<(i32, i32)> = game.grass_cells.iter().map(|&c| map::world_to_cell(c)).collect();
+    let mut burnt_grass: Vec<u16> = game
+        .map
+        .iter_cells()
+        .filter(|(col, row, o)| o.is_cover() && !cover.contains(&(*col, *row)))
+        .map(|(col, row, _)| cell_index(cols, (col, row)))
+        .chain(game.grass.iter().filter(|t| t.burnt).map(|t| cell_index(cols, map::world_to_cell(t.base))))
+        .collect();
+    burnt_grass.sort_unstable();
+    burnt_grass.dedup();
     Ok(Welcome {
         protocol: PROTOCOL_VERSION,
         sim_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -170,6 +185,7 @@ pub fn welcome(
         oil_prints,
         dead_cells,
         trampled_cells,
+        burnt_grass,
         snapshot: snapshot(game, acked),
     })
 }

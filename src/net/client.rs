@@ -762,6 +762,7 @@ mod tests {
             oil_prints: Vec::new(),
             dead_cells: Vec::new(),
             trampled_cells: Vec::new(),
+            burnt_grass: Vec::new(),
             snapshot: snapshot(tick),
         }
     }

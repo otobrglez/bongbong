@@ -605,9 +605,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     scaled by the drum kind, direct hit/ram pops at once); `apply_blast` (a `PendingBlast`: falloff
     damage and knockback to both sides, frogs and tiles, sooted wall faces, oil pools, thrown and
     re-thrown decals, flattened grass, burnt-in tracks, cook-offs); `tick_fires` (`GroundFire`:
-    pools and oil-trail cells burn, spread, damage hulls, fuse drums; burning cells are blocked in
-    the nav grid; `fade_fires` is the burn-down alone and `fire_burnt_out` what a spent cell leaves -
-    a burn scar (`Scorch::burn`) and the oil gone - once per cell); `tick_fuses` (a fuel drum lit by
+    pools and oil-trail cells burn, spread, damage hulls, fuse drums, char the grass in them
+    (`char_grass`); burning cells are blocked in the nav grid; `fade_fires` is the burn-down alone
+    and `fire_burnt_out` what a spent cell leaves - a burn scar (`Scorch::burn`) and the oil gone -
+    once per cell); `tick_fuses` (a fuel drum lit by
     *another* blast launches as a `FlyingDrum` and blasts where it lands;
     `drum_in_flight`/`age_flying_drums` are the arc, staged from a launch or from the event);
     `tick_burns` (wood that finishes charring dies through `obstacle_died`, the funnel every tile
@@ -1957,27 +1958,32 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   a `DESTROYED` entry cut from it, since the world drops a dead tile the same frame), `welcome(game,
   seat, roster, tuning_json, acked)` adds the map TOML, seed, `WireOverrides`, `enemy_count`, the
   unburnt `oil_cells`, the `oil_prints` among them, the `dead_cells` a state snapshot cannot
-  express and the `trampled_cells` (`Game::grass_trampled`); `wire_events` for a
+  express, the `trampled_cells` (`Game::grass_trampled`) and the `burnt_grass` (the map's cover
+  cells gone from `grass_cells` and every burnt tuft's cell, undergrowth included); `wire_events` for a
   server accumulating the ticks between snapshots; `server_ms` is the caller's. **`apply.rs`** —
   `welcome(&Welcome) -> Result<Game>` builds the replica by `Game::init` on the same map, seed,
   overrides and roster-pinned chassis (so `init`'s rolls match), `strip_ai`, removes `dead_cells`,
-  takes `trampled_cells`, then `snapshot(&mut Game, &Snapshot)`: events first (`RoundStarted` re-inits on its seed unless
+  takes `trampled_cells`, chars `burnt_grass` (`Game::char_grass`, the one routine `tick_fires` and
+  a listed fire char through, so a cell still burning is charred twice to no effect), then
+  `snapshot(&mut Game, &Snapshot)`: events first (`RoundStarted` re-inits on its seed unless
   the replica already stands in that round at frame 0, which is every welcome; `ObstacleDestroyed`
   removes the tile; `DrumLaunched` puts the drum in the air; `OilPrinted` lays the room's print,
   drawn or not; `GrassTrampled`, quiet or drawn, takes the cell out of the cover), then tiles
   (absent = fresh), tanks
   (spawned without `Ai`, body placed with `Physics::set_position`/`set_velocity`; the hull's facing
   snaps and the *drawn* angles stay put, for `tick_presentation` to swing across), shots by id,
-  frogs, pickups, fires (a cell the snapshot stops listing burnt out, the one way a fire ever leaves
-  the list, so the replica darkens the ground and spends the oil there), round scalars, `frame`, and
+  frogs, pickups, fires (the grass under each chars; a cell the snapshot stops listing burnt out,
+  the one way a fire ever leaves the list, so the replica darkens the ground and spends the oil
+  there), round scalars, `frame`, and
   the round clock as `tick * PHYSICS_FIXED_DT` - exact because a room server's round runs without
   the mission banner. Never `update`d, no RNG; what the wire omits is hashed (wreck art, shadow
   heights), a full timer (a flag) or the replica's own to run (`Game::tick_presentation` between
   snapshots). `simulation/replica.rs` is the surface both read/write through and `DrawableState`
   (`Game::drawable_state`, positions on the quarter-pixel grid, health in whole points, timers in
-  tenths) is the definition of "the same picture" the round-trip tests in `apply.rs` assert on
-  (authoritative round vs replica after every apply, with `tick_presentation` on the two frames
-  between, late join at frame 600, re-encoding the replica gives the server's bytes).
+  tenths, the trampled and the charred grass cells) is the definition of "the same picture" the
+  round-trip tests in `apply.rs` assert on (authoritative round vs replica after every apply, with
+  `tick_presentation` on the two frames between, late join at frame 600, re-encoding the replica
+  gives the server's bytes).
   - **The client's socket** (feature `online`, on by default and off under `--no-default-features`,
     so the server and the probe carry no second WebSocket stack): `transport.rs` is the whole
     contract - `send(&[u8])`, `drain(&mut Vec<Msg>)` (decoding through `codec`, appending, never
