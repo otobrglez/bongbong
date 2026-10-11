@@ -1974,9 +1974,16 @@ tunables! {
         /// second along the commanded heading (smoothed, see below) stays
         /// under this - sideways drift in a jam is not progress ...
         stuck_speed_eps: f32 = 8.0 in 0.0 ..= 100.0;
+        /// ... or under this share of its own top speed, whichever is more:
+        /// a hull pushing another along creeps faster than the floor above
+        /// while getting nowhere.
+        stuck_progress_fraction: f32 = 0.15 in 0.0 ..= 1.0;
         /// ... for this many seconds running is treated as genuinely stuck,
         /// and `Ai::steer` forces a hard perpendicular-turn reset.
         stuck_escape_seconds: f32 = 0.75 in 0.05 ..= 10.0;
+        /// The escape is then held this long over every sidestep
+        /// (`ai::Ai::escape_dir`): long enough to back a hull out of a jam.
+        stuck_escape_hold_seconds: f32 = 0.25 in 0.0 ..= 5.0;
         /// Time constant of the progress average the stuck check reads:
         /// long enough that a one-frame shove from the contact solver (two
         /// tanks pressed together twitch a pixel or two now and then)

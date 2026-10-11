@@ -837,7 +837,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
 - `ai.rs`, `bt.rs`, `pathfind.rs` — AI reasons over snapshots, never the world. `Ai::steer` routes
   through `Grid`; on top: an obstacle-ahead override of the heading commitment, a stuck escape on
   *displacement projected onto the commanded heading* (never a physics velocity - the solver reports
-  motion for a jammed tank), breach (shoot a destructible tile after `enemy_breach_after_seconds`,
+  motion for a jammed tank; stuck under `stuck_speed_eps` or `stuck_progress_fraction` of its own top
+  speed, whichever is more, so a hull shoving another along at a crawl counts) held for
+  `stuck_escape_hold_seconds` over every sidestep (`escape_dir`: in a wedge the sidestep is what
+  steers it back in), breach (shoot a destructible tile after `enemy_breach_after_seconds`,
   never iron or a cage; a holed tile only while its body stands across the hull's lane, each shot
   aimed by `sapper_aim` at a chunk still in the way; a tank cut off from its target heads for the
   wall its `Sap` plan names - `Game::plan_saps`, docs/WALLS_SPEC.md §13), and the personal-space brake (`crowded_ahead`/`yield_timer`: a brake, not a sidestep;
@@ -848,7 +851,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`in_sight_box_of` with the half extents read once, for a loop) - `Brain::may_fire_at_seat` gates
   `act_attack`'s alignment (a tank lined up outside the box repositions and closes in) and the
   hunter's snipe; shots at a frog, a tower or a tile are not bound. `Ai::shot_at_seat` (inspection
-  only) names the seat a trigger pull was aimed at. Roles Player/Hunter/Guard are rolled last
+  only) names the seat a trigger pull was aimed at. **Backing away** (`Brain::back_away`, the flee
+  and retreat tiers): to a `Refuge` - of points along eight bearings at `enemy_retreat_range` and
+  half that, the reachable one farthest from the seat on the tank's own side of it, no RNG - held
+  until the seat closes on it, and at it the tank holds facing the seat (`Ai::sheltering`, a probe
+  `HOLDS` row); a heading still pointing at the seat is dropped on entering the tier. The mirror of
+  the seat across the tank is only the fallback with no refuge in reach - it moves with the tank, so
+  steering for it ran hurt tanks into the field's edge and round dead ends. Roles Player/Hunter/Guard are rolled last
   (`roll_role`). **Dangers** (`Danger`: a `DangerShape` and an optional owner; docs/emp-burst.md
   §3.3): the places an enemy keeps out of, built by `enemy_phase` only while a weapon makes one -
   the `dodge` tier walks out through steering (`Brain::steer_out`: on foot, avoidance and the stuck
@@ -886,8 +895,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   that the margin's window - twice what its error across beats `ai_dir_switch_margin_px` by - is no
   wider than its stride, `Ai::motion` along the heading over the think's seconds, so no think need
   land in it); `Ai::walks_into_wall` judges the obstacle-ahead override from where the slide across
-  the heading leaves the hull. Arenas replay byte for byte and `ai_lane_turns` off is the old
-  steering everywhere; `just probe-defend` (the probe's `--scenario defend`) is the stranded-walk
+  the heading leaves the hull. An arena reads a route as lanes only on that same edge, on a searched
+  route, farther than `enemy_attack_range` from what it fights (`Ai::rides_lane_edge`,
+  `Ai::near_fight`) - the chaser that ran its column beside the turning it wanted - and the margin
+  decides the rest; `ai_lane_turns` off is the old steering everywhere; `just probe-defend` (the probe's `--scenario defend`) is the stranded-walk
   check. Round 0x3fd of the study map's defence was that stride case: a hunter 20.2 px across from
   its turnings, a 0.4 px window against a 2.4 px stride. `Grid::walk_costs` is the flow field's
   Dijkstra from several goals at once (`WalkCosts::at`: nav steps to the nearest, through the portal
