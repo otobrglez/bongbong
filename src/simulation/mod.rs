@@ -629,6 +629,14 @@ pub enum Event {
     /// Its `ObstacleDestroyed` follows on a collapse. Only the pieces they
     /// throw (`fx.rs`) read it; the chunks' state travels with the tile.
     ChunksBroken { material: Material, variant: i32, x: f32, y: f32, broken: u16, dx: f32, dy: f32, collapsed: bool },
+    /// The fire of the burning plank wall centred at (`x`, `y`) charred
+    /// through the chunks in `broken` (`Obstacle::char_chunks`): they fall
+    /// in as ash. Only `fx.rs` reads it; the chunks travel with the tile.
+    ChunksCharred { x: f32, y: f32, broken: u16 },
+    /// A burning tile at (`x`, `y`) threw an ember downwind that lands at
+    /// (`to_x`, `to_y`) `ember_flight_seconds` later, where it may light
+    /// the wood it falls on (an `Ignited` then).
+    EmberFlew { x: f32, y: f32, to_x: f32, to_y: f32 },
     /// A barrel detonated at (`x`, `y`); `chained` when another blast's
     /// fuse (or a fire) set it off rather than a shot or a ram; `drum`
     /// says which kind went off.
@@ -992,6 +1000,8 @@ pub struct Game {
     /// weakened wall in a collapsing run, a cracked pane beside a shattered
     /// one. Cleared by `init`.
     pub(super) pending_breaks: Vec<props::PendingBreak>,
+    /// Embers in the air, thrown downwind by burning tiles (BB-84).
+    pub(super) embers: Vec<props::Ember>,
     /// The rods' impacts as they are drawn - the column, the dust, the
     /// debris - aged in `tick_effects` (`rod_show`). Cleared by `init`.
     pub(crate) rod_impacts: Vec<crate::rod::RodImpactFx>,
@@ -1690,6 +1700,7 @@ impl Game {
         self.craters.clear();
         self.rubble.clear();
         self.pending_breaks.clear();
+        self.embers.clear();
         self.rod_impacts.clear();
         self.seat_still = [crate::rod::SeatStill::default(); MAX_SEATS];
         self.seat_reticle = [None; MAX_SEATS];
@@ -2274,7 +2285,7 @@ impl Game {
             self.resolve_grenades(&mut f, true);
             self.resolve_globs(&mut f, true);
             self.tick_cookoffs(&mut f);
-            self.tick_burns(&mut f);
+            self.tick_burns(&mut f, true);
             self.tick_fires(&mut f, true);
             self.lava_phase(&mut f);
             self.tick_ooze(&mut f);
@@ -2311,7 +2322,7 @@ impl Game {
             self.resolve_grenades(&mut f, false);
             self.resolve_globs(&mut f, false);
             self.tick_cookoffs(&mut f);
-            self.tick_burns(&mut f);
+            self.tick_burns(&mut f, false);
             self.tick_fires(&mut f, false);
             self.tick_fuses(&mut f);
             self.tick_breaks(&mut f);

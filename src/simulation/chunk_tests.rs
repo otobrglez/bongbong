@@ -388,6 +388,156 @@ fn wired_glass_keeps_its_mesh_when_it_shatters() {
     assert!(!destroyed(&events, (12, 11)));
 }
 
+/// Set the wood at `cell` alight, as a flame or a fire beside it would.
+fn light(game: &mut Game, cell: (i32, i32)) {
+    let entity = tile_at(game, cell).expect("wood");
+    let mut q = game.world.query_one::<&mut Obstacle>(entity);
+    let o = q.get().expect("obstacle");
+    o.health = 0.0;
+    o.burning = true;
+}
+
+/// Every wood tile on the field rolled to burn, so a test is not at the
+/// mercy of `wood_flammable_chance`.
+fn all_flammable(game: &mut Game) {
+    for o in game.world.query::<&mut Obstacle>().iter() {
+        if o.material == Material::Wood {
+            o.flammable = true;
+        }
+    }
+}
+
+fn ignited_at(events: &[Event], cell: (i32, i32)) -> bool {
+    let at = cell_to_world(cell.0, cell.1);
+    events.iter().any(|e| matches!(*e, Event::Ignited { x, y, .. } if (x - at.x).abs() < 1.0 && (y - at.y).abs() < 1.0))
+}
+
+fn burn_for(game: &mut Game, seconds: f32) -> Vec<Event> {
+    let mut events = Vec::new();
+    for _ in 0..(seconds * 60.0) as usize {
+        step(game, Input::default());
+        events.extend(game.events().iter().cloned());
+    }
+    events
+}
+
+#[test]
+fn a_burning_plank_wall_chars_through_hole_by_hole_before_it_falls() {
+    let mut game = field(&wall("wood", &[(12, 11)]), 0);
+    all_flammable(&mut game);
+    light(&mut game, (12, 11));
+    let standing = |game: &Game| tile_at(game, (12, 11)).map(|e| game.world.get::<&Obstacle>(e).unwrap().standing_chunks().count_ones());
+    let burn = tuning().plank_burn_seconds;
+    assert_eq!(standing(&game), Some(16), "it catches whole");
+    let mut seen = vec![16];
+    let mut events = Vec::new();
+    for _ in 0..8 {
+        events.extend(burn_for(&mut game, burn / 8.0));
+        if let Some(n) = standing(&game) {
+            assert!(n <= *seen.last().unwrap(), "a charred chunk never comes back");
+            seen.push(n);
+        }
+    }
+    events.extend(burn_for(&mut game, 0.2));
+    assert!(seen.iter().any(|&n| n > 0 && n < 16), "partway through the burn it stands holed: {seen:?}");
+    assert!(events.iter().any(|e| matches!(e, Event::ChunksCharred { .. })), "the charring is announced");
+    assert!(destroyed(&events, (12, 11)), "and at the end of its burn it is gone");
+}
+
+#[test]
+fn a_hole_a_fire_burnt_lets_a_shot_through() {
+    let mut game = field(&wall("wood", &[(12, 11)]), 0);
+    all_flammable(&mut game);
+    light(&mut game, (12, 11));
+    burn_for(&mut game, tuning().plank_burn_seconds * 0.7);
+    let entity = tile_at(&game, (12, 11)).expect("still standing");
+    let gone = {
+        let o = game.world.get::<&Obstacle>(entity).unwrap();
+        (0..crate::chunks::CHUNKS).find(|&i| !o.chunks.unwrap().stands(i)).expect("a chunk charred")
+    };
+    let at = crate::chunks::chunk_center(cell_to_world(12, 11), gone);
+    let terrain = Terrain::build(&game.world, W, H, &[], &game.water);
+    let o = game.world.get::<&Obstacle>(entity).unwrap();
+    let ch = o.chunks.unwrap();
+    // Straight through the burnt chunk's column, when that column is
+    // burnt through.
+    let col = gone % CHUNK_SIDE;
+    let open = (0..CHUNK_SIDE).all(|r| !ch.stands(r * CHUNK_SIDE + col));
+    let row = gone / CHUNK_SIDE;
+    let open_row = (0..CHUNK_SIDE).all(|c| !ch.stands(row * CHUNK_SIDE + c));
+    drop(o);
+    let players = game.players();
+    let owner = crate::shell::Owner::Player(0);
+    if open {
+        assert_eq!(terrain.sweep(&game.world, players, owner, Position::new(at.x, at.y - 40.0), Position::new(at.x, at.y + 40.0), 1.0), None);
+    }
+    if open_row {
+        assert_eq!(terrain.sweep(&game.world, players, owner, Position::new(at.x - 40.0, at.y), Position::new(at.x + 40.0, at.y), 1.0), None);
+    }
+    assert!(terrain.obstacle(entity).and_then(|b| b.chunks).is_some_and(|m| m & (1 << gone) == 0), "the hit test knows the chunk is gone");
+}
+
+/// A burning plank at (12, 11) with a block of wood downwind of it - the
+/// wind blows toward `grass_gust_heading_deg`, right and a little down -
+/// and a block upwind.
+fn wood_yard() -> Game {
+    let mut cells = vec![(12, 11)];
+    for c in 13..=15 {
+        for r in 10..=13 {
+            cells.push((c, r));
+        }
+    }
+    for c in 8..=9 {
+        for r in 10..=12 {
+            cells.push((c, r));
+        }
+    }
+    let mut game = field(&wall("wood", &cells), 0);
+    all_flammable(&mut game);
+    light(&mut game, (12, 11));
+    game
+}
+
+#[test]
+fn embers_carry_a_fire_downwind_and_never_upwind() {
+    let mut game = wood_yard();
+    let events = burn_for(&mut game, tuning().plank_burn_seconds);
+    assert!(events.iter().any(|e| matches!(e, Event::EmberFlew { .. })), "the fire throws embers");
+    let downwind = (13..=15).flat_map(|c| (10..=13).map(move |r| (c, r))).filter(|&cell| ignited_at(&events, cell)).count();
+    assert!(downwind > 0, "an ember lit the wood downwind");
+    let upwind = (8..=9).flat_map(|c| (10..=12).map(move |r| (c, r))).filter(|&cell| ignited_at(&events, cell)).count();
+    assert_eq!(upwind, 0, "nothing upwind catches");
+}
+
+#[test]
+fn an_ember_lights_only_wood_that_would_burn() {
+    let mut game = wood_yard();
+    for o in game.world.query::<&mut Obstacle>().iter() {
+        if o.cell() != (12, 11) {
+            o.flammable = false;
+        }
+    }
+    let events = burn_for(&mut game, tuning().plank_burn_seconds);
+    assert!(events.iter().any(|e| matches!(e, Event::EmberFlew { .. })));
+    assert!(!events.iter().any(|e| matches!(e, Event::Ignited { .. })), "planks rolled to break do not catch");
+}
+
+#[test]
+fn embers_land_the_same_on_every_run() {
+    let run = || {
+        let mut game = wood_yard();
+        burn_for(&mut game, tuning().plank_burn_seconds * 2.0)
+            .into_iter()
+            .filter_map(|e| match e {
+                Event::EmberFlew { to_x, to_y, .. } => Some((to_x.to_bits(), to_y.to_bits())),
+                Event::Ignited { x, y, .. } => Some((x.to_bits(), y.to_bits())),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(run(), run());
+}
+
 // ----- The AI's reading of a chunked wall (BB-85) -----
 
 #[test]

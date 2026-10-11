@@ -72,6 +72,15 @@ pub(super) enum DamageCause {
     Crush { from: Position },
 }
 
+/// An ember in the air (`Game::tick_burns`): it lands on `to` at
+/// `lands_at`, its `seed` deciding whether it catches.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Ember {
+    to: Position,
+    lands_at: f32,
+    seed: u32,
+}
+
 /// A tile due to give way a beat after its neighbour did
 /// (`Game::queue_neighbour_breaks`, `Game::tick_breaks`).
 #[derive(Clone, Copy, Debug)]
@@ -992,20 +1001,90 @@ impl Game {
     /// simply despawned it and nothing downstream (the event log, the
     /// dev server, debris) ever heard. Collects first, exactly like
     /// `tick_fuses`, because `obstacle_died` needs the world free.
-    pub(super) fn tick_burns(&mut self, f: &mut Frame) {
+    pub(super) fn tick_burns(&mut self, f: &mut Frame, live: bool) {
+        let t = tuning();
         let mut charred = Vec::new();
-        for o in self.world.query::<&mut Obstacle>().iter() {
+        let mut opened = Vec::new();
+        let mut throws = Vec::new();
+        for (entity, o) in self.world.query::<(Entity, &mut Obstacle)>().iter() {
             let was_destroyed = o.destroyed;
+            let before = o.burn_elapsed;
             o.tick_burn(f.dt);
+            if o.burning && !was_destroyed && t.embers_enabled && (o.material == Material::Wood || o.material.is_tree()) {
+                // One ember every `ember_interval_seconds` of the tile's
+                // burn, phased by its hash so a row does not throw in step.
+                let seed = crate::blast::seed_at(o.position, 0xE3B);
+                let every = t.ember_interval_seconds.max(0.05);
+                let phase = crate::blast::hash_unit(seed, 0) * every;
+                let (was, now) = (((before + phase) / every).floor(), ((o.burn_elapsed + phase) / every).floor());
+                if now > was {
+                    throws.push((o.position, seed, now as u32));
+                }
+            }
+            let gone = o.char_chunks();
+            if gone != 0 && !o.destroyed {
+                opened.push((entity, o.position, gone));
+            }
             if o.destroyed && !was_destroyed {
                 charred.push((o.material, o.variant, o.position));
             }
+        }
+        for (entity, position, broken) in opened {
+            self.fit_tile_body(entity);
+            f.events.push(Event::ChunksCharred { x: position.x, y: position.y, broken });
         }
         for (material, variant, position) in charred {
             self.obstacle_died(
                 f,
                 DeadTile { material, variant, position, chained: false, charred: true, shape: BlastShape::Plain },
             );
+        }
+        for (from, seed, k) in throws {
+            let stray = (crate::blast::hash_unit(seed, 2 * k + 1) * 2.0 - 1.0) * t.ember_spread_deg;
+            let angle = (t.grass_gust_heading_deg + stray).to_radians();
+            let lo = t.ember_reach_min_px.min(t.ember_reach_max_px);
+            let reach = lo + crate::blast::hash_unit(seed, 2 * k + 2) * (t.ember_reach_max_px - lo);
+            let to = Position::new(from.x + math::cos(angle) * reach, from.y + math::sin(angle) * reach);
+            self.embers.push(Ember { to, lands_at: self.time + t.ember_flight_seconds, seed: seed ^ k.wrapping_mul(0x9e37_79b9) });
+            f.events.push(Event::EmberFlew { x: from.x, y: from.y, to_x: to.x, to_y: to.y });
+        }
+        self.land_embers(f, live);
+    }
+
+    /// Bring down the embers whose flight is over. One that falls on wood
+    /// or a tree that would burn (`Obstacle::flammable`), or on a range
+    /// board, sets it alight `ember_catch_chance` of the time - hashed,
+    /// never the round's RNG. On the end screen they only land.
+    fn land_embers(&mut self, f: &mut Frame, live: bool) {
+        if self.embers.is_empty() {
+            return;
+        }
+        let now = self.time;
+        let (due, later): (Vec<Ember>, Vec<Ember>) = std::mem::take(&mut self.embers).into_iter().partition(|e| e.lands_at <= now);
+        self.embers = later;
+        if !live {
+            return;
+        }
+        let chance = tuning().ember_catch_chance;
+        for ember in due {
+            if crate::blast::hash_unit(ember.seed, 0x51) >= chance {
+                continue;
+            }
+            let cell = world_to_cell(ember.to);
+            for o in self.world.query::<&mut Obstacle>().iter() {
+                if o.cell() != cell || o.destroyed || o.burning || o.fuse.is_some() {
+                    continue;
+                }
+                let m = o.material;
+                if !(((m == Material::Wood || m.is_tree()) && o.flammable) || m.catches_fire()) {
+                    continue;
+                }
+                o.health = 0.0;
+                o.burning = true;
+                let what = if m.is_tree() { "tree" } else if m.catches_fire() { "target" } else { "wood" };
+                f.events.push(Event::Ignited { x: o.position.x, y: o.position.y, what });
+                break;
+            }
         }
     }
 

@@ -85,7 +85,7 @@ impl Intent {
     }
 }
 
-/// A planned breach (docs/WALLS_SPEC.md §12): a tank whose target the
+/// A planned breach (docs/WALLS_SPEC.md §13): a tank whose target the
 /// routing cannot reach drives to `at` and on `dir` into the wall a shell
 /// can open there - the first one on the cheapest way through the walls
 /// (`Game::sap_plan`) - and the breach that pushing into it starts

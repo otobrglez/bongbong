@@ -173,7 +173,7 @@ pub fn tile_flames(obstacle: &Obstacle, time: f32) -> Vec<crate::pyro::Shape> {
     if !obstacle.burning {
         return out;
     }
-    let burn = obstacle.material.burn_seconds();
+    let burn = obstacle.burn_seconds();
     let catching = (obstacle.burn_shown / 0.3).clamp(0.0, 1.0);
     let left = burn - obstacle.burn_shown;
     let dying = (left / (burn * 0.3).max(0.01)).clamp(0.0, 1.0);
@@ -182,8 +182,22 @@ pub fn tile_flames(obstacle: &Obstacle, time: f32) -> Vec<crate::pyro::Shape> {
     let lean = crate::pyro::smoke_lean(&t, at, time);
     let seed = crate::blast::seed_at(at, 29);
     // Tall enough to rise clear of the tile, over its own glowing char.
+    // A plank wall burns where its fire has got to (`Obstacle::chunk_alight`):
+    // the tongues stand over those chunks and widen as the front walks.
+    let alight: Vec<crate::Position> = match obstacle.chunks {
+        Some(c) if obstacle.material == crate::obstacle::Material::Wood => (0..crate::chunks::CHUNKS)
+            .filter(|&i| c.stands(i) && obstacle.chunk_alight(i))
+            .map(|i| crate::chunks::chunk_center(at, i))
+            .collect(),
+        _ => Vec::new(),
+    };
     let (foot, spread, height, count) = if obstacle.material.is_tree() {
         (crate::Position::new(at.x, at.y - 4.0), 24.0, 30.0, 3)
+    } else if !alight.is_empty() {
+        let n = alight.len() as f32;
+        let mid = crate::Position::new(alight.iter().map(|p| p.x).sum::<f32>() / n, alight.iter().map(|p| p.y).sum::<f32>() / n);
+        let wide = alight.iter().map(|p| (p.x - mid.x).abs()).fold(0.0f32, f32::max);
+        (crate::Position::new(mid.x, mid.y + 4.0), (8.0 + wide * 2.0).min(26.0), 20.0 + 1.5 * n, if n > 6.0 { 3 } else { 2 })
     } else {
         (crate::Position::new(at.x, at.y + 6.0), 22.0, 32.0, 3)
     };

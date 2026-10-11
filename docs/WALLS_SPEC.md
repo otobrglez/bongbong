@@ -463,8 +463,38 @@ column 0 whole, column 1 bent once a blast has hit it - and a mesh from
 glass's shattered column. It throws no edge cap. Its hits left travel in
 `TileState::cage`.
 
+## 12. Fire that walks, embers, scars (BB-84)
 
-## 12. How the enemies read a broken wall (BB-85)
+**A plank wall burns chunk by chunk.** A chunked wood tile that catches
+(§5's fire fork, a flame, a ground fire, an ember) burns for
+`plank_burn_seconds` (5) rather than `wood_burn_seconds`. The fire catches on
+one chunk, hashed from the tile (`chunks::burn_ranks`), and walks out across
+the tile nearest-first over the first `1 - wood_chunk_burn_share` of the
+burn; each chunk burns for `wood_chunk_burn_share` (0.4) of it and then chars
+through (`Obstacle::char_chunks`, `Event::ChunksCharred`): a hole a shot
+passes, the body refitted to what stands, its pixels falling as ash. The last
+chunk chars as the tile does. Only the chunks the fire has reached draw the
+burn columns (`Obstacle::chunk_alight`) and the tongues stand over them
+(`game::tile_flames`). Trees and unchunked wood burn whole, as before.
+
+**Embers.** A burning plank or tree throws an ember every
+`ember_interval_seconds` (0.9) of its burn, phased by its hash: downwind along
+`grass_gust_heading_deg`, up to `ember_spread_deg` (30) either side,
+`ember_reach_min_px`..`ember_reach_max_px` (24..96) away, landing
+`ember_flight_seconds` (0.7) later (`Game::embers`, `Event::EmberFlew`). One
+that lands on wood or a tree that would burn (`Obstacle::flammable`) or a
+range board sets it alight `ember_catch_chance` (0.4) of the time, an
+`Ignited` - every choice hashed, none from the round's RNG, so a replay and a
+room agree. A fire in a timber yard creeps downwind and never up it.
+`embers_enabled` turns them off.
+
+**Scars.** A wall piece (§10) that has lain `piece_linger_seconds` sinks into
+the ground over its last second - its shadow gone, dimmed to `scar_shade` -
+and stays there as a scar for the round, up to `fx_max_scars` (4000, the
+oldest going first). Presentation only (`pieces.rs`): every client keeps its
+own.
+
+## 13. How the enemies read a broken wall (BB-85)
 
 The AI reasons over the frame's `Terrain` snapshot. A tile that is whole, or
 breaks whole, reads exactly as it always has. What changes is how the AI
