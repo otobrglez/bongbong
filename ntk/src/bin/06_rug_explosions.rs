@@ -68,6 +68,7 @@ fn main() {
     let minigun_bullets = load(&mut rl, "static/minigun_bullets.png");
     let grass = load(&mut rl, "static/nature_sheet.png");
     let trees = load(&mut rl, "static/trees_sheet.png");
+    let bushes = load(&mut rl, "static/bushes_sheet.png");
     let towers = load(&mut rl, "static/towers_sheet.png");
     let crates = load(&mut rl, "static/crates_sheet.png");
     let pickup_glyphs = load(&mut rl, "static/pickup_glyphs.png");
@@ -172,6 +173,7 @@ fn main() {
             missile: &missile,
             grass: &grass,
             trees: &trees,
+            bushes: &bushes,
             target: &target,
             towers: &towers,
             crates: &crates,
@@ -234,6 +236,9 @@ fn main() {
                             ground: &ground,
                             grass: &grass,
                             trees: &trees,
+                            bushes: &bushes,
+                            // The grass theme's sheets are the ones loaded above.
+                            theme: bongbong::map::Theme::Grass,
                             target: &target,
                             towers: &towers,
                             crates: &crates,

@@ -215,6 +215,7 @@ keys! {
     CATEGORY_WALL = "category-wall";
     CATEGORY_PROP = "category-prop";
     CATEGORY_GROUND = "category-ground";
+    CATEGORY_PLANT = "category-plant";
     CATEGORY_ACTOR = "category-actor";
     CATEGORY_PICKUP = "category-pickup";
     FILE_LOAD = "file-load";

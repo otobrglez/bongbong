@@ -37,7 +37,8 @@ pub struct Decal {
     /// stored: a blown-off tank part has no `Material` at all.
     pub row: i32,
     /// Which of the row's `RUBBLE_VARIANTS` this tile left, from the
-    /// position hash - no RNG draw.
+    /// position hash - no RNG draw. A dry tree's litter is the same
+    /// variant `TREE_DRY_COL` along (`props::tile_rubble`).
     pub col: i32,
     /// Where it comes to rest, and where it is drawn once it has landed.
     pub center: Position,
