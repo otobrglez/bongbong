@@ -75,6 +75,14 @@ fn hash(cell: (i32, i32), salt: u32) -> u32 {
     crate::blast::seed_at(cell_to_world(cell.0, cell.1), salt)
 }
 
+/// Whether the conifers have it round `cell`: a slow hashed field over
+/// 4 x 4 cell blocks. The builder's forest brush plants conifers where it
+/// holds (`editor::forest`) and the undergrowth grows juniper and fern
+/// there, so the two come in the same patches.
+pub fn conifer_stand((c, r): (i32, i32)) -> bool {
+    hash((c.div_euclid(4), r.div_euclid(4)), 151) % 2 == 0
+}
+
 const ORTHOGONAL: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
 
 /// How many trail cells in a straight line a trail needs before it is worn
@@ -408,12 +416,6 @@ impl Woods {
         }
     }
 
-    /// Whether the conifers have it round `cell`: a slow hashed field over
-    /// 4 x 4 cell blocks, so undergrowth comes in patches.
-    fn conifer_patch(&self, (c, r): (i32, i32)) -> bool {
-        hash((c.div_euclid(4), r.div_euclid(4)), 151) % 2 == 0
-    }
-
     /// The undergrowth round the woods (see the module comment), as tufts
     /// for `Game::grass`. Pure in the map, no RNG.
     pub fn undergrowth(&self) -> Vec<GrassTuft> {
@@ -435,7 +437,7 @@ impl Woods {
                 Bush::Reeds
             } else if near > 0 && h % 100 < 12 + near * 6 {
                 let pick = (h >> 8) % 3;
-                match (desert, self.conifer_patch(cell)) {
+                match (desert, conifer_stand(cell)) {
                     (true, _) => [Bush::Bush, Bush::Juniper, Bush::Bush][pick as usize],
                     (false, true) => [Bush::Juniper, Bush::Fern, Bush::Bush][pick as usize],
                     (false, false) => [Bush::Bush, Bush::Berry, Bush::Fern][pick as usize],
