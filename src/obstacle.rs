@@ -964,7 +964,7 @@ impl Obstacle {
         if !self.burning {
             return 0.0;
         }
-        (self.burn_shown / self.material.burn_seconds().max(0.01)).clamp(0.0, 1.0)
+        (self.burn_shown / self.burn_seconds().max(0.01)).clamp(0.0, 1.0)
     }
 
     /// How far a burning range board has sunk, in px: one whole 2 px block
@@ -1051,6 +1051,49 @@ impl Obstacle {
         }
     }
 
+    /// How long this tile burns before it chars out: a chunked plank wall
+    /// `plank_burn_seconds`, its fire walking chunk to chunk; anything
+    /// else its material's `Material::burn_seconds`.
+    pub fn burn_seconds(&self) -> f32 {
+        if self.material == Material::Wood && self.chunks.is_some() {
+            return tuning().plank_burn_seconds;
+        }
+        self.material.burn_seconds()
+    }
+
+    /// The order this tile's fire takes its chunks in
+    /// (`chunks::burn_ranks`), hashed from where it stands.
+    pub fn burn_ranks(&self) -> [u8; crate::chunks::CHUNKS] {
+        crate::chunks::burn_ranks(crate::blast::seed_at(self.position, 0xB84))
+    }
+
+    /// A burning plank's chunks that the fire has charred through by now
+    /// (`chunks::burn_state` at `burn_elapsed`): breaks them and returns
+    /// them, so a wall alight opens hole by hole before it falls. Nothing
+    /// for a tile without chunks or not alight.
+    pub fn char_chunks(&mut self) -> u16 {
+        if !self.burning || self.destroyed {
+            return 0;
+        }
+        let ranks = self.burn_ranks();
+        let progress = self.burn_elapsed / self.burn_seconds().max(0.01);
+        let share = tuning().wood_chunk_burn_share;
+        let Some(c) = self.chunks.as_mut() else { return 0 };
+        let mut charred = 0u16;
+        for i in 0..crate::chunks::CHUNKS {
+            if c.stands(i) && crate::chunks::burn_state(ranks[i], progress, share) == Some(true) {
+                charred |= c.strike(i, c.max() + 1.0, 0.0, 0.0);
+            }
+        }
+        charred
+    }
+
+    /// Whether the fire has reached chunk `i` of this burning tile yet, as
+    /// drawn (`burn_progress`).
+    pub fn chunk_alight(&self, i: usize) -> bool {
+        self.burning && crate::chunks::burn_state(self.burn_ranks()[i], self.burn_progress(), tuning().wood_chunk_burn_share).is_some()
+    }
+
     /// Advance a burning tile's fire - a no-op for anything not alight:
     /// the flicker loop above, and once `burn_elapsed` passes
     /// `Material::burn_seconds`, chars it out (`destroyed = true`) so it's
@@ -1062,7 +1105,7 @@ impl Obstacle {
         }
         self.tick_burn_frame(dt);
         self.burn_elapsed += dt;
-        if self.burn_elapsed >= self.material.burn_seconds() {
+        if self.burn_elapsed >= self.burn_seconds() {
             self.destroyed = true;
         }
     }
@@ -1215,7 +1258,9 @@ fn draw_chunked(c: &mut impl Canvas, obstacle: &Obstacle, tint: Color) {
     let o = crate::chunks::origin(obstacle.position);
     let size = crate::chunks::CHUNK_PX;
     for i in (0..crate::chunks::CHUNKS).filter(|&i| ch.stands(i)) {
-        let col = if obstacle.burning {
+        // A burning plank burns where the fire has got to; the rest of
+        // it stands as it was.
+        let col = if obstacle.chunk_alight(i) {
             obstacle.col()
         } else {
             match ch.wear(i) {

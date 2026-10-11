@@ -649,6 +649,15 @@ impl Fx {
                     Event::ChunksBroken { material, variant, x, y, broken, dx, dy, collapsed } => {
                         self.pieces.throw(material, variant, Position::new(x, y), broken, Vec2::new(dx, dy), collapsed)
                     }
+                    // A burning plank's chunks charring through: ash, a
+                    // lift of embers and a puff of smoke.
+                    Event::ChunksCharred { x, y, broken } => {
+                        let at = Position::new(x, y);
+                        self.pieces.char_away(at, broken);
+                        self.burst(at, ParticleKind::Ember, self.count(3), 30.0, &[FIRE_T, EMBER_T]);
+                        self.burst(at, ParticleKind::Smoke, self.count(1), 14.0, &[SOOT_T]);
+                    }
+                    Event::EmberFlew { x, y, to_x, to_y } => self.pieces.ember(Position::new(x, y), Position::new(to_x, to_y)),
                     // A gauss rail's slug through a hull or a tile, or a
                     // rod crushing one: the flash alone - the bursts are
                     // the slug's own (`gauss::compose_slug`) and the rod's

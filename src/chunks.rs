@@ -326,6 +326,40 @@ pub fn neighbour(i: usize, dx: i32, dy: i32) -> Option<usize> {
     ((0..CHUNK_SIDE as i32).contains(&c) && (0..CHUNK_SIDE as i32).contains(&r)).then(|| r as usize * CHUNK_SIDE + c as usize)
 }
 
+/// The order a fire takes a burning plank's chunks in (BB-84): each
+/// chunk's rank, 0 for the one it caught on, rising as the fire walks
+/// out across the tile - the nearer chunks first, ties broken by the
+/// tile's hash. Pure in `seed`, so the round and every replica agree.
+pub fn burn_ranks(seed: u32) -> [u8; CHUNKS] {
+    let start = (seed % CHUNKS as u32) as usize;
+    let (sc, sr) = ((start % CHUNK_SIDE) as i32, (start / CHUNK_SIDE) as i32);
+    let mut order: [usize; CHUNKS] = std::array::from_fn(|i| i);
+    order.sort_by_key(|&i| {
+        let (c, r) = ((i % CHUNK_SIDE) as i32, (i / CHUNK_SIDE) as i32);
+        let far = (c - sc).abs() + (r - sr).abs();
+        (far, crate::blast::seed_at(Position::new(c as f32, r as f32), seed) >> 16)
+    });
+    let mut ranks = [0u8; CHUNKS];
+    for (rank, &i) in order.iter().enumerate() {
+        ranks[i] = rank as u8;
+    }
+    ranks
+}
+
+/// Where the fire is on the chunk of `rank`, `progress` (0..1) into the
+/// tile's burn: `None` before it gets there, `Some(false)` while it
+/// burns, `Some(true)` once it has charred away. The front crosses the
+/// tile over the first `1 - share` of the burn; each chunk burns for
+/// `share` of it, so the last chars out as the tile does.
+pub fn burn_state(rank: u8, progress: f32, share: f32) -> Option<bool> {
+    let share = share.clamp(0.05, 1.0);
+    let caught = (1.0 - share) * rank as f32 / (CHUNKS - 1) as f32;
+    if progress < caught {
+        return None;
+    }
+    Some(progress >= caught + share)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,5 +443,39 @@ mod tests {
             assert!(broken & (1 << (r * 4)) != 0);
             assert!(ch.stands(r * 4 + 3));
         }
+    }
+
+    #[test]
+    fn a_fire_walks_out_from_where_it_caught() {
+        for seed in [0u32, 7, 12345, 0xdead_beef] {
+            let ranks = burn_ranks(seed);
+            let mut seen = [false; CHUNKS];
+            for &r in &ranks {
+                assert!(!seen[r as usize], "every rank once");
+                seen[r as usize] = true;
+            }
+            // A chunk past the first always has a lower-ranked neighbour:
+            // the fire spreads, it never jumps.
+            for i in 0..CHUNKS {
+                if ranks[i] == 0 {
+                    continue;
+                }
+                let lower = [(0, -1), (1, 0), (0, 1), (-1, 0)]
+                    .into_iter()
+                    .filter_map(|(dx, dy)| neighbour(i, dx, dy))
+                    .any(|j| ranks[j] < ranks[i]);
+                assert!(lower, "seed {seed}: chunk {i} caught from nowhere");
+            }
+        }
+    }
+
+    #[test]
+    fn the_last_chunk_chars_as_the_tile_does() {
+        let share = 0.4;
+        assert_eq!(burn_state(0, 0.0, share), Some(false));
+        assert_eq!(burn_state(15, 0.5, share), None);
+        assert_eq!(burn_state(15, 0.99, share), Some(false));
+        assert_eq!(burn_state(15, 1.0, share), Some(true));
+        assert_eq!(burn_state(0, 0.41, share), Some(true));
     }
 }
