@@ -1,5 +1,6 @@
 use crate::math;
 use crate::canvas::Canvas;
+use crate::chunks::Chunks;
 use crate::tuning::tuning;
 use rapier2d::prelude::RigidBodyHandle;
 use serde::{Deserialize, Serialize};
@@ -366,6 +367,21 @@ impl Material {
         self.sheet() == Sheet::Walls && !self.is_drawn()
     }
 
+    /// The health one chunk of this material starts with, for the materials
+    /// that break chunk by chunk (`chunks.rs`): brick and wood while
+    /// `wall_chunks` is on. `None` for everything that breaks whole.
+    pub fn chunk_health(self) -> Option<f32> {
+        let t = tuning();
+        if !t.wall_chunks {
+            return None;
+        }
+        match self {
+            Material::Brick => Some(t.brick_chunk_health),
+            Material::Wood => Some(t.wood_chunk_health),
+            _ => None,
+        }
+    }
+
     /// A defence tower: it fights (`Game::towers`), burns by its own rule
     /// and leaves a ruin rather than rubble.
     pub fn is_tower(self) -> bool {
@@ -649,6 +665,11 @@ pub struct Obstacle {
     /// spawn and refreshed when something is destroyed - never rebuilt per
     /// frame the way `fence_axis` does it.
     pub edge_mask: u8,
+    /// Brick and wood (`Material::chunk_health`): the tile's 16 chunks,
+    /// each with its own health (`chunks.rs`). `health` follows their sum
+    /// (`sync_health`) and the tile dies when too few stand
+    /// (`wall_collapse_chunks`). `None` for a tile that breaks whole.
+    pub chunks: Option<Chunks>,
     /// This obstacle's rapier fixed-body collider, spawned alongside it.
     /// Unlike a tank's `body`, this is never `None` - an obstacle always has
     /// its physics body for its whole life, right up until `Game::update`
@@ -685,9 +706,95 @@ impl Obstacle {
             scorched: 0,
             ram_timer: 0.0,
             edge_mask: 0,
+            chunks: material.chunk_health().map(Chunks::new),
             body,
             destroyed: false,
         }
+    }
+
+    /// The chunks still standing, every bit set for a tile that breaks
+    /// whole.
+    pub fn standing_chunks(&self) -> u16 {
+        self.chunks.map_or(crate::chunks::ALL, |c| c.standing())
+    }
+
+    /// A chunked tile with something broken or worn: it draws chunk by
+    /// chunk and travels on the wire with its chunks.
+    pub fn chunks_worn(&self) -> bool {
+        self.chunks.is_some_and(|c| !c.is_whole())
+    }
+
+    /// Follow the chunks with `health`: the tile's whole health times the
+    /// share of chunk health left.
+    fn sync_health(&mut self) {
+        if let Some(c) = self.chunks {
+            self.health = self.max_health * c.fraction();
+        }
+    }
+
+    /// A chunked tile with too few chunks left gives way: `damage`'s death,
+    /// a flammable plank catching fire instead. Returns `true` the frame it
+    /// dies, as `damage` does.
+    fn settle_chunks(&mut self) -> bool {
+        let Some(c) = self.chunks else { return false };
+        if c.count() as i32 > tuning().wall_collapse_chunks.max(0) {
+            return false;
+        }
+        self.health = 0.0;
+        if self.flammable {
+            self.burning = true;
+            return false;
+        }
+        self.destroyed = true;
+        true
+    }
+
+    /// A blow that lands somewhere on the tile: a shot arriving at `at`
+    /// along `dir`, breaking the chunk it strikes and wearing its ring
+    /// (`chunk_ring_share`, `chunk_corner_share`, scaled down for a blow
+    /// under `chunk_ring_full_damage`). A tile that breaks whole
+    /// takes it as `damage`. Returns whether the tile died this frame and
+    /// the chunks it broke, the ones a collapse dropped included.
+    pub fn strike(&mut self, amount: f32, at: Position, dir: Option<Vec2>) -> (bool, u16) {
+        if self.chunks.is_none() || self.destroyed || self.burning || self.fuse.is_some() {
+            return (self.damage(amount), 0);
+        }
+        let t = tuning();
+        let center = self.position;
+        let Some(c) = self.chunks.as_mut() else { return (false, 0) };
+        let spread = (amount / t.chunk_ring_full_damage.max(0.1)).min(1.0);
+        let broken = match c.struck(center, at, dir) {
+            Some(i) => c.strike(i, amount, t.chunk_ring_share * spread, t.chunk_corner_share * spread),
+            None => 0,
+        };
+        self.after_chunks(broken)
+    }
+
+    /// A blast from `from`: the chunks facing it take `amount`, the far
+    /// side half of it. A tile that breaks whole takes it as `damage`.
+    pub fn blast(&mut self, amount: f32, from: Position) -> (bool, u16) {
+        if self.chunks.is_none() || self.destroyed || self.burning || self.fuse.is_some() {
+            return (self.damage(amount), 0);
+        }
+        let center = self.position;
+        let Some(c) = self.chunks.as_mut() else { return (false, 0) };
+        let broken = c.blast(center, from, amount);
+        self.after_chunks(broken)
+    }
+
+    fn after_chunks(&mut self, broken: u16) -> (bool, u16) {
+        self.sync_health();
+        let standing = self.standing_chunks();
+        let died = self.settle_chunks();
+        // A tile that gave way drops everything still standing too; a
+        // burning one keeps them to burn.
+        if died {
+            if let Some(c) = self.chunks.as_mut() {
+                c.break_all();
+            }
+            return (true, broken | standing);
+        }
+        (false, broken)
     }
 
     /// Which kind of drum a barrel is; `None` for anything else.
@@ -815,6 +922,20 @@ impl Obstacle {
         // about them changes, so neither differs from the fresh map on the wire.
         if self.destroyed || self.burning || self.fuse.is_some() || matches!(self.material, Material::Volcano | Material::Door) {
             return false;
+        }
+        // A blow with no place on the tile (a rail, a ram, the flames) wears
+        // every chunk by the share of the tile it is worth; one worth the
+        // rest of the tile kills it whole below, its chunks left standing
+        // for a plank to burn in.
+        if self.chunks.is_some() && amount < self.health {
+            let share = amount / self.max_health.max(1e-3);
+            if let Some(c) = self.chunks.as_mut() {
+                c.wear_evenly(share);
+            }
+            self.sync_health();
+            if self.health > 0.0 {
+                return self.settle_chunks();
+            }
         }
         self.health = (self.health - amount).max(0.0);
         if self.health > 0.0 {
@@ -969,12 +1090,78 @@ pub fn draw_obstacle(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis, 
 
 /// `draw_obstacle` in `tint`: a hit's flash draws the tile again in light.
 pub fn draw_obstacle_tinted(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis, time: f32, tint: Color) {
+    if obstacle.chunks_worn() {
+        draw_chunked(c, obstacle, tint);
+        return;
+    }
     let sheet = obstacle.material.sheet();
     let src = source_rec(sheet, obstacle.row(axis), obstacle.col());
     let size = obstacle.sprite_size();
     let dest = Rectangle::new(obstacle.position.x + obstacle.fuse_rock(time), obstacle.position.y + obstacle.burn_sag(), size, size);
     let origin = Vec2::new(size / 2.0, size / 2.0);
     c.blit(sheet, src, dest, origin, 0.0, tint);
+}
+
+/// A chunked tile with something broken or worn (`chunks.rs`): each
+/// standing chunk drawn from its own 8 px of the sheet, a worn one from the
+/// same spot of the damage columns (so its cracks are the authored ones),
+/// a burning plank from the fire loop. Where a chunk is gone, the ones
+/// beside it show a face: a lit lip along the top of a hole, shade down
+/// its other sides - depth, not an outline.
+fn draw_chunked(c: &mut impl Canvas, obstacle: &Obstacle, tint: Color) {
+    let Some(ch) = obstacle.chunks else { return };
+    let row = obstacle.material.row_base() + obstacle.variant;
+    let o = crate::chunks::origin(obstacle.position);
+    let size = crate::chunks::CHUNK_PX;
+    for i in (0..crate::chunks::CHUNKS).filter(|&i| ch.stands(i)) {
+        let col = if obstacle.burning {
+            obstacle.col()
+        } else {
+            match ch.wear(i) {
+                crate::chunks::WEAR_STEPS => 0,
+                2 => 1,
+                _ => 2,
+            }
+        };
+        let off = crate::chunks::chunk_offset(i);
+        let src = Rectangle::new(col as f32 * OBSTACLE_TEXTURE_SIZE + off.x, row as f32 * OBSTACLE_TEXTURE_SIZE + off.y, size, size);
+        c.blit(Sheet::Walls, src, Rectangle::new(o.x + off.x, o.y + off.y, size, size), Vec2::zero(), 0.0, tint);
+    }
+    // The faces only in daylight's draw: a hit's flash is the tile again in
+    // light, and a face lit by it would read as a rim.
+    if tint != Color::WHITE {
+        return;
+    }
+    let (lit, shade) = chunk_faces(obstacle.material);
+    let band = FX_BLOCK as i32;
+    for i in (0..crate::chunks::CHUNKS).filter(|&i| ch.stands(i)) {
+        let off = crate::chunks::chunk_offset(i);
+        let (x, y, s) = ((o.x + off.x) as i32, (o.y + off.y) as i32, size as i32);
+        let open = |dx: i32, dy: i32| crate::chunks::neighbour(i, dx, dy).is_some_and(|j| !ch.stands(j));
+        if open(0, -1) {
+            c.fill_rect(x, y, s, band, lit);
+        }
+        if open(0, 1) {
+            c.fill_rect(x, y + s - band, s, band, shade);
+        }
+        if open(-1, 0) {
+            c.fill_rect(x, y, band, s, shade);
+        }
+        if open(1, 0) {
+            c.fill_rect(x + s - band, y, band, s, shade);
+        }
+    }
+}
+
+/// The lit and the shaded step a chunked material's broken faces show:
+/// its own ramp, a step up and two down (tools/punypalette.py).
+fn chunk_faces(material: Material) -> (Color, Color) {
+    match material {
+        // WOOD_PALE, WOOD_DARKEST.
+        Material::Wood => (Color::new(0xD8, 0xBF, 0x8E, 255), Color::new(0x50, 0x33, 0x0B, 255)),
+        // STONE_HI, STONE_SHADE.
+        _ => (Color::new(0xDA, 0xDA, 0xDA, 255), Color::new(0x5A, 0x5A, 0x5A, 255)),
+    }
 }
 
 /// Which of a cell's 16 neighbour combinations to draw a cap for.
@@ -1042,6 +1229,19 @@ pub fn draw_obstacle_cap(c: &mut impl Canvas, obstacle: &Obstacle) {
     let col = BLOB_TILE[obstacle.edge_mask as usize] as i32;
     let src = source_rec(Sheet::Walls, EDGE_CAP_ROW_BASE + row_offset as i32, col);
     let size = obstacle.size();
+    if obstacle.chunks_worn() {
+        // The cap and the soot only over what still stands.
+        let standing = obstacle.standing_chunks();
+        let o = crate::chunks::origin(obstacle.position);
+        let cs = crate::chunks::CHUNK_PX;
+        for i in (0..crate::chunks::CHUNKS).filter(|&i| standing & (1 << i) != 0) {
+            let off = crate::chunks::chunk_offset(i);
+            let part = Rectangle::new(src.x + off.x, src.y + off.y, cs, cs);
+            c.blit(Sheet::Walls, part, Rectangle::new(o.x + off.x, o.y + off.y, cs, cs), Vec2::zero(), 0.0, Color::WHITE);
+        }
+        draw_scorched_chunks(c, obstacle, standing);
+        return;
+    }
     let dest = Rectangle::new(obstacle.position.x, obstacle.position.y, size, size);
     let origin = Vec2::new(size / 2.0, size / 2.0);
     c.blit(Sheet::Walls, src, dest, origin, 0.0, Color::WHITE);
@@ -1072,6 +1272,37 @@ fn draw_scorched_faces(c: &mut impl Canvas, obstacle: &Obstacle) {
     }
     if faces & SCORCH_W != 0 {
         c.fill_rect(left as i32, top as i32, band as i32, size as i32, soot);
+    }
+}
+
+/// `draw_scorched_faces` on a chunked tile: each face's band only over the
+/// chunks along it that still stand.
+fn draw_scorched_chunks(c: &mut impl Canvas, obstacle: &Obstacle, standing: u16) {
+    let faces = obstacle.scorched;
+    if faces == 0 {
+        return;
+    }
+    let o = crate::chunks::origin(obstacle.position);
+    let cs = crate::chunks::CHUNK_PX as i32;
+    let band = (FX_BLOCK * 2.0) as i32;
+    let soot = Color::new(20, 20, 20, 190);
+    let last = crate::chunks::CHUNK_SIDE - 1;
+    for i in (0..crate::chunks::CHUNKS).filter(|&i| standing & (1 << i) != 0) {
+        let (col, row) = (i % crate::chunks::CHUNK_SIDE, i / crate::chunks::CHUNK_SIDE);
+        let off = crate::chunks::chunk_offset(i);
+        let (x, y) = ((o.x + off.x) as i32, (o.y + off.y) as i32);
+        if faces & SCORCH_N != 0 && row == 0 {
+            c.fill_rect(x, y, cs, band, soot);
+        }
+        if faces & SCORCH_S != 0 && row == last {
+            c.fill_rect(x, y + cs - band, cs, band, soot);
+        }
+        if faces & SCORCH_W != 0 && col == 0 {
+            c.fill_rect(x, y, band, cs, soot);
+        }
+        if faces & SCORCH_E != 0 && col == last {
+            c.fill_rect(x + cs - band, y, band, cs, soot);
+        }
     }
 }
 
