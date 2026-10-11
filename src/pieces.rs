@@ -5,9 +5,15 @@
 //! comes apart into itself rather than into coloured squares.
 //!
 //! Presentation only, owned by `fx.rs`: it reads `Event::ChunksBroken`,
-//! uses `rand::rng()` and is never snapshotted. Pieces fly with a fake
-//! height and a shadow, bounce, then lie where they landed for
-//! `piece_linger_seconds` and drop out through the Bayer pattern.
+//! `Event::ChunksCharred` and `Event::EmberFlew`, uses `rand::rng()` and
+//! is never snapshotted. Pieces fly with a fake height and a shadow,
+//! bounce, lie where they landed for `piece_linger_seconds`, then settle
+//! into the ground as the field's battle scars (`Scar`, BB-84): dimmed,
+//! flat, kept for the round up to `fx_max_scars`. A charred chunk falls
+//! as ash, its own pixels gone to charcoal; an ember arcs downwind as a
+//! glowing 2 px block.
+
+use std::collections::VecDeque;
 
 use rand::RngExt;
 
@@ -34,7 +40,29 @@ pub struct Piece {
     age: f32,
     /// Seconds it has lain still.
     rest: f32,
+    /// Multiplied into its pixels: white, or charcoal for ash.
+    tint: Color,
 }
+
+/// A piece settled into the ground for the rest of the round.
+#[derive(Clone, Copy, Debug)]
+struct Scar {
+    x: f32,
+    y: f32,
+    src: Rectangle,
+    tint: Color,
+}
+
+/// An ember in flight (`Event::EmberFlew`): a glowing block on a low arc.
+#[derive(Clone, Copy, Debug)]
+struct Ember {
+    from: Position,
+    to: Position,
+    age: f32,
+}
+
+/// What ash is, multiplied into a plank's own pixels.
+const ASH: Color = Color { r: 0x48, g: 0x3c, b: 0x34, a: 255 };
 
 impl Piece {
     fn lying(&self) -> bool {
@@ -46,6 +74,8 @@ impl Piece {
 #[derive(Default)]
 pub struct Pieces {
     list: Vec<Piece>,
+    scars: VecDeque<Scar>,
+    embers: Vec<Ember>,
 }
 
 /// Which way a wood variant's grain runs (docs/WALLS_SPEC.md §5): planks
@@ -58,6 +88,13 @@ fn grain_across(variant: i32) -> bool {
 impl Pieces {
     pub fn clear(&mut self) {
         self.list.clear();
+        self.scars.clear();
+        self.embers.clear();
+    }
+
+    /// Pieces settled into the ground so far.
+    pub fn scars(&self) -> usize {
+        self.scars.len()
     }
 
     pub fn len(&self) -> usize {
@@ -73,6 +110,24 @@ impl Pieces {
     /// `dir` (the blow's way, zero for none), a third sprayed back off the
     /// struck face - or, when the tile `collapsed`, drop where they stood.
     pub fn throw(&mut self, material: Material, variant: i32, center: Position, broken: u16, dir: Vec2, collapsed: bool) {
+        self.spill(material, variant, center, broken, dir, collapsed, Color::WHITE);
+    }
+
+    /// The chunks in `broken` of the burning plank wall centred on
+    /// `center` charred through: they slump where they stood as ash.
+    pub fn char_away(&mut self, center: Position, broken: u16) {
+        self.spill(Material::Wood, 0, center, broken, Vec2::zero(), true, ASH);
+    }
+
+    /// An ember thrown from `from` that lands on `to`.
+    pub fn ember(&mut self, from: Position, to: Position) {
+        if self.embers.len() < 64 {
+            self.embers.push(Ember { from, to, age: 0.0 });
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spill(&mut self, material: Material, variant: i32, center: Position, broken: u16, dir: Vec2, collapsed: bool, tint: Color) {
         if !material.is_wall() || broken == 0 {
             return;
         }
@@ -109,6 +164,7 @@ impl Pieces {
                     bounces: 0,
                     age: 0.0,
                     rest: 0.0,
+                    tint,
                 };
                 if self.list.len() >= cap {
                     // The oldest lying piece makes room; failing that, the
@@ -125,11 +181,17 @@ impl Pieces {
         let t = tuning();
         let (gravity, drag, bounce) = (t.debris_gravity, t.debris_air_drag, t.debris_bounce);
         let linger = t.piece_linger_seconds;
+        let cap = t.fx_max_scars.max(0) as usize;
+        let mut settled = Vec::new();
         self.list.retain_mut(|p| {
             p.age += dt;
             if p.lying() {
                 p.rest += dt;
-                return p.rest < linger;
+                if p.rest < linger {
+                    return true;
+                }
+                settled.push(Scar { x: snap(p.pos.x), y: snap(p.pos.y), src: p.src, tint: scarred(p.tint, 1.0) });
+                return false;
             }
             p.vz -= gravity * dt;
             p.z += p.vz * dt;
@@ -150,16 +212,34 @@ impl Pieces {
             p.pos.y += p.vel.y * dt;
             true
         });
+        if cap > 0 {
+            self.scars.extend(settled);
+            while self.scars.len() > cap {
+                self.scars.pop_front();
+            }
+        }
+        let flight = t.ember_flight_seconds.max(0.05);
+        self.embers.retain_mut(|e| {
+            e.age += dt;
+            e.age < flight
+        });
     }
 
     /// Draw the pieces lying on the ground (`airborne` false: under
-    /// everything that stands) or the ones in the air with their shadows
-    /// (`airborne` true: over the tiles and tanks). Whole 2 px blocks; a
-    /// lying piece drops out through the field's Bayer pattern over its
-    /// last second.
+    /// everything that stands, over the scars) or the ones in the air with
+    /// their shadows and the embers (`airborne` true: over the tiles and
+    /// tanks). Whole 2 px blocks; a lying piece darkens into the ground
+    /// over its last second, and stays there as a scar.
     pub fn draw(&self, c: &mut impl Canvas, airborne: bool) {
         let linger = tuning().piece_linger_seconds;
-        let snap = |v: f32| (v / 2.0).round() * 2.0;
+        if !airborne {
+            for s in &self.scars {
+                if c.culls(Position::new(s.x, s.y)) {
+                    continue;
+                }
+                c.blit(Sheet::Walls, s.src, Rectangle::new(s.x, s.y, s.src.width, s.src.height), Vec2::zero(), 0.0, s.tint);
+            }
+        }
         for p in self.list.iter().filter(|p| p.lying() != airborne) {
             if c.culls(p.pos) {
                 continue;
@@ -174,19 +254,51 @@ impl Pieces {
                 let turn = if p.tumble { ((p.age * 14.0) as i32 % 4) as f32 * 90.0 } else { 0.0 };
                 let (w, h) = (p.src.width, p.src.height);
                 let dest = Rectangle::new(x + w / 2.0, y - lift + h / 2.0, w, h);
-                c.blit(Sheet::Walls, p.src, dest, Vec2::new(w / 2.0, h / 2.0), turn, Color::WHITE);
+                c.blit(Sheet::Walls, p.src, dest, Vec2::new(w / 2.0, h / 2.0), turn, p.tint);
             } else {
-                let left = linger - p.rest;
-                if left < 1.0 {
-                    if crate::pyro::bayer((x / 2.0) as i32, (y / 2.0) as i32) >= left {
-                        continue;
-                    }
+                // Its last second it sinks into the ground: the shadow
+                // goes and it darkens to what it settles as.
+                let sink = (1.0 - (linger - p.rest)).clamp(0.0, 1.0);
+                let shadow = (70.0 * (1.0 - sink)) as u8;
+                if shadow > 0 {
+                    c.fill_rect(x as i32 + 1, y as i32 + 1, p.src.width as i32, p.src.height as i32, Color::new(0x25, 0x25, 0x25, shadow));
                 }
-                c.fill_rect(x as i32 + 1, y as i32 + 1, p.src.width as i32, p.src.height as i32, Color::new(0x25, 0x25, 0x25, 70));
-                c.blit(Sheet::Walls, p.src, Rectangle::new(x, y, p.src.width, p.src.height), Vec2::zero(), 0.0, Color::WHITE);
+                c.blit(Sheet::Walls, p.src, Rectangle::new(x, y, p.src.width, p.src.height), Vec2::zero(), 0.0, scarred(p.tint, sink));
+            }
+        }
+        if airborne {
+            let flight = tuning().ember_flight_seconds.max(0.05);
+            for e in &self.embers {
+                let k = e.age / flight;
+                let at = Position::new(e.from.x + (e.to.x - e.from.x) * k, e.from.y + (e.to.y - e.from.y) * k);
+                if c.culls(at) {
+                    continue;
+                }
+                // A low arc, peaking a tile up halfway.
+                let lift = 4.0 * k * (1.0 - k) * 28.0;
+                let (x, y) = (snap(at.x), snap(at.y - lift));
+                // Hot white-yellow on its way up, cooling to orange.
+                let glow = if k < 0.5 { Color::new(0xFF, 0xE0, 0x6A, 255) } else { Color::new(0xF0, 0x7A, 0x22, 255) };
+                c.fill_rect(x as i32, y as i32, 2, 2, glow);
+                let (tx, ty) = (snap(at.x - (e.to.x - e.from.x) * 0.04), snap(at.y - lift + 2.0));
+                c.fill_rect(tx as i32, ty as i32, 2, 2, Color::new(0xB8, 0x3A, 0x1A, 160));
             }
         }
     }
+}
+
+/// Snap to the 2 px block grid.
+fn snap(v: f32) -> f32 {
+    (v / 2.0).round() * 2.0
+}
+
+/// `tint` as far as `k` (0..1) toward what a scar settles to: dimmed by
+/// `scar_shade`, flat on the ground.
+fn scarred(tint: Color, k: f32) -> Color {
+    let shade = tuning().scar_shade.clamp(0.0, 1.0);
+    let f = 1.0 - (1.0 - shade) * k;
+    let ch = |v: u8| (v as f32 * f) as u8;
+    Color::new(ch(tint.r), ch(tint.g), ch(tint.b), tint.a)
 }
 
 /// How one 8 px chunk splits, as `(x, y, w, h)` inside it, whole 2 px
@@ -261,7 +373,47 @@ mod tests {
         for _ in 0..(60.0 * (tuning().piece_linger_seconds + 1.0)) as i32 {
             p.tick(1.0 / 60.0);
         }
-        assert!(p.is_empty());
+        assert!(p.is_empty(), "nothing is left lying loose");
+        assert_eq!(p.scars(), n, "every piece settled into the ground as a scar");
+    }
+
+    #[test]
+    fn scars_keep_to_their_cap_oldest_first() {
+        let mut p = Pieces::default();
+        let cap = tuning().fx_max_scars as usize;
+        p.list.push(Piece {
+            pos: Position::new(-2.0, 0.0),
+            vel: Vec2::zero(),
+            z: 0.0,
+            vz: 0.0,
+            src: Rectangle::new(0.0, 0.0, 2.0, 2.0),
+            tumble: false,
+            bounces: 0,
+            age: 0.0,
+            rest: tuning().piece_linger_seconds,
+            tint: Color::WHITE,
+        });
+        while p.scars.len() <= cap {
+            let k = p.scars.len();
+            p.scars.push_back(Scar { x: k as f32, y: 0.0, src: Rectangle::new(0.0, 0.0, 2.0, 2.0), tint: Color::WHITE });
+        }
+        p.tick(1.0 / 60.0);
+        assert_eq!(p.scars(), cap);
+        assert_eq!(p.scars.back().map(|s| s.x), Some(-2.0), "the newest is the piece that just settled");
+    }
+
+    #[test]
+    fn ash_falls_where_the_chunk_stood_and_embers_burn_out() {
+        let mut p = Pieces::default();
+        p.char_away(Position::new(64.0, 64.0), 0b1);
+        assert!(!p.is_empty());
+        assert!(p.list.iter().all(|q| q.tint == ASH));
+        p.ember(Position::new(0.0, 0.0), Position::new(64.0, 0.0));
+        assert_eq!(p.embers.len(), 1);
+        for _ in 0..(60.0 * (tuning().ember_flight_seconds + 0.1)) as i32 {
+            p.tick(1.0 / 60.0);
+        }
+        assert!(p.embers.is_empty());
     }
 
     #[test]

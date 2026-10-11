@@ -2454,6 +2454,28 @@ tunables! {
         domino_chunks: i32 = 11 in 0 ..= 16;
         /// Seconds between one tile of a run giving way and the next.
         domino_delay_seconds: f32 = 0.16 in 0.0 ..= 2.0;
+        /// How long a chunked plank wall burns before the last of it chars
+        /// out (BB-84): the fire catches on one chunk and walks across
+        /// the tile, each chunk it reaches burning through and opening a
+        /// hole. Trees and unchunked wood keep `wood_burn_seconds`.
+        plank_burn_seconds: f32 = 5.0 in 0.1 ..= 30.0;
+        /// Share of a plank's burn each chunk burns for once the fire
+        /// reaches it; the front crosses the tile in the rest.
+        wood_chunk_burn_share: f32 = 0.4 in 0.05 ..= 1.0;
+        /// Burning wood and trees throw embers downwind
+        /// (`grass_gust_heading_deg`) that can light the wood they land on.
+        embers_enabled: bool = true in 0 ..= 1;
+        /// Seconds between one burning tile's embers.
+        ember_interval_seconds: f32 = 0.9 in 0.05 ..= 10.0;
+        /// How far downwind an ember lands, px: somewhere between these.
+        ember_reach_min_px: f32 = 24.0 in 0.0 ..= 400.0;
+        ember_reach_max_px: f32 = 96.0 in 0.0 ..= 400.0;
+        /// How far either side of the wind an ember may stray, degrees.
+        ember_spread_deg: f32 = 30.0 in 0.0 ..= 180.0;
+        /// Seconds an ember is in the air.
+        ember_flight_seconds: f32 = 0.7 in 0.05 ..= 5.0;
+        /// Chance an ember landing on wood that would burn sets it alight.
+        ember_catch_chance: f32 = 0.4 in 0.0 ..= 1.0;
         /// Rubble units on a cell (a broken chunk lays one where it stood
         /// and, blown out, one in the cell behind) that make it light
         /// rubble, and heavy rubble.
@@ -2781,8 +2803,14 @@ tunables! {
         fx_max_pieces: i32 = 600 in 0 ..= 4000;
         /// How fast a broken chunk's pieces leave it, px/s at the most.
         piece_speed: f32 = 150.0 in 0.0 ..= 600.0;
-        /// Seconds a piece lies where it landed before it is gone.
+        /// Seconds a piece lies loose where it landed before it settles.
         piece_linger_seconds: f32 = 8.0 in 0.0 ..= 120.0;
+        /// Pieces that have lain `piece_linger_seconds` settle into the
+        /// ground as battle scars (BB-84) and stay for the round, the
+        /// oldest going first past this many.
+        fx_max_scars: i32 = 4000 in 0 ..= 20000;
+        /// How bright a settled scar is against the piece it was, 0..1.
+        scar_shade: f32 = 0.62 in 0.0 ..= 1.0;
         /// Downward acceleration on a chip's fake height, px/s^2.
         debris_gravity: f32 = 900.0 in 0.0 ..= 4000.0;
         /// Per-second rate at which a particle bleeds ground speed

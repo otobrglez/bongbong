@@ -610,7 +610,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     *another* blast launches as a `FlyingDrum` and blasts where it lands;
     `drum_in_flight`/`age_flying_drums` are the arc, staged from a launch or from the event);
     `tick_burns` (wood that finishes charring dies through `obstacle_died`, the funnel every tile
-    death passes); `ram_props`; `barrels`/`debug_detonate` (a tool's click: queued like
+    death passes; a burning plank's chunks char through one by one, and burning wood and trees throw
+    hashed embers downwind, `Game::embers`, that `land_embers` lets light the wood they fall on -
+    docs/WALLS_SPEC.md §12); `ram_props`; `barrels`/`debug_detonate` (a tool's click: queued like
     `debug_kill`, applied as a fatal direct hit at the top of the next frame). Pass-over and
     deflection rolls live in `resolve_projectiles`. Every cosmetic choice is hashed; only damage
     rolls and chance knobs strictly between 0 and 1 draw RNG, so prop-free maps replay unchanged.
@@ -971,7 +973,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   everything else (`CONCRETE_ROW_BASE`, `Material::cap_row`).
 - `chunks.rs` — a chunked tile's 4 × 4 grid of 8 px chunks (`Chunks`): which one a shot strikes, how
   a blow and a blast spread, the wear steps the wire carries (`quantised`), the body's box
-  (`solid_box`: the standing 16 px quadrants). Plain data, no RNG. `Terrain::sweep` tests a chunked
+  (`solid_box`: the standing 16 px quadrants), and the order a fire takes a burning plank's chunks in
+  (`burn_ranks`, `burn_state`; BB-84, docs/WALLS_SPEC.md §12). Plain data, no RNG. `Terrain::sweep` tests a chunked
   tile's standing chunks (`hits::segment_hits_chunks`), so a hole lets shots through - a loophole -
   while `Game::fit_tile_body` keeps the tile's body over its standing quadrants. Every chunk a blow
   breaks is an `Event::ChunksBroken`. What a breach does besides (BB-82, docs/WALLS_SPEC.md §10)
@@ -1427,8 +1430,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   In a dev-server lockstep `app.rs` ages the layer by the simulated time a `step` ran, not wall
   time, so a frozen round's particles freeze with it. It owns the **wall pieces** too
   (`pieces.rs`, from `Event::ChunksBroken`): cuts of a broken chunk's own sheet pixels that fly,
-  bounce and lie for `piece_linger_seconds`; `render/game.rs` draws the lying ones on the floor and
-  the flying ones over everything (`Pieces::draw`), capped at `fx_max_pieces`.
+  bounce and lie for `piece_linger_seconds`, then settle into the ground as the round's scars (up to
+  `fx_max_scars`); a burning plank's charred chunks fall as ash (`Event::ChunksCharred`) and an
+  ember arcs downwind (`Event::EmberFlew`); `render/game.rs` draws the scars and lying pieces on the
+  floor and the flying ones and embers over everything (`Pieces::draw`), capped at `fx_max_pieces`.
 - `fish.rs` (docs/water.md "Presentation") — fish in the water, cosmetic and reactive: `Shoal` (kept
   in `fx::Fx`, so `app.rs` owns it; `Fx::shoal`) holds a school per `fish_school_cells` of each
   lake's deep cells, rebuilt on a new round, and is stepped on the round's clock (`Game::time`,
