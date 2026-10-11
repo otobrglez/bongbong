@@ -820,7 +820,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   through `Grid`; on top: an obstacle-ahead override of the heading commitment, a stuck escape on
   *displacement projected onto the commanded heading* (never a physics velocity - the solver reports
   motion for a jammed tank), breach (shoot a destructible tile after `enemy_breach_after_seconds`,
-  never iron), and the personal-space brake (`crowded_ahead`/`yield_timer`: a brake, not a sidestep;
+  never iron or a cage; a holed tile only while its body stands across the hull's lane, each shot
+  aimed by `sapper_aim` at a chunk still in the way; a tank cut off from its target heads for the
+  wall its `Sap` plan names - `Game::plan_saps`, docs/WALLS_SPEC.md §13), and the personal-space brake (`crowded_ahead`/`yield_timer`: a brake, not a sidestep;
   `enemy_yield_seconds` is load-bearing because the stuck escape only counts commanded movement).
   **The sight box** (docs/large-maps-follow-camera.md §5): an enemy fires at a seat only while its
   centre stands inside that seat's box, `sight_box_half_cols` x `sight_box_half_rows` cells (11.5 x

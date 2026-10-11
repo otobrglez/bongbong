@@ -2005,6 +2005,18 @@ tunables! {
         /// How far past its own hull a tank looks for the tile it is
         /// driving into (px): about one tile.
         enemy_breach_reach_px: f32 = 40.0 in 4.0 ..= 300.0;
+        /// The widest a sapper turns a breach shot off its barrel (degrees)
+        /// to reach a chunk that still holds up the wall across its hull's
+        /// lane (`ai::sapper_aim`). Past it the shot goes as near as it
+        /// may.
+        enemy_sapper_max_aim_deg: f32 = 40.0 in 0.0 ..= 80.0;
+        /// What a cell of wall a shell can open costs a sapper's route
+        /// through the walls (`Game::sap_plan`), against 1 for open ground:
+        /// the way round wins until it is this many cells longer per wall.
+        enemy_sap_wall_path_cost: i32 = 12 in 1 ..= 255;
+        /// How often a tank with no route to its target plans its way
+        /// through the walls again (s).
+        enemy_sap_replan_seconds: f32 = 1.0 in 0.1 ..= 10.0;
     }
 
     group command {

@@ -494,3 +494,56 @@ and stays there as a scar for the round, up to `fx_max_scars` (4000, the
 oldest going first). Presentation only (`pieces.rs`): every client keeps its
 own.
 
+## 13. How the enemies read a broken wall (BB-85)
+
+The AI reasons over the frame's `Terrain` snapshot. A tile that is whole, or
+breaks whole, reads exactly as it always has. What changes is how the AI
+reads a chunked tile with chunks broken.
+
+**Loopholes.** Line of sight (`Terrain::line_of_sight`, and the towers'
+`line_of_sight_from`) passes a hole a shell fits through. It tests the
+tile's standing chunks the way `Terrain::sweep` does, each grown by
+`shell_hit_half_extent` (`TerrainBox::blocks_line`). A slot one chunk tall is
+a loophole for a 6 px shell, but not along its edge. A cage is no obstruction
+at all. An enemy lined up on a seat behind a holed wall fires through the
+hole, still only from inside the seat's sight box (`ai::in_sight_box`). The
+engagement ring takes a slot behind a loophole, and the off-screen arrows'
+lane warning reads the same rule, so the HUD agrees with the AI.
+
+**What is in the way.** The breach perception (`Terrain::obstacle_ahead`,
+`ai::WallAhead`) counts a holed tile only while its body
+(`chunks::solid_box_of`: the quadrants with two or more of their four chunks
+standing) still stands across the hull's lane. The lane is the movement
+collider's half-width either side of the line. Once a breach has opened the
+quadrants a hull needs, the tank drives through. A cage is never a wall to
+shoot: every shell passes it.
+
+**The sapper.** A breach shot goes where it still does work
+(`ai::sapper_aim`). It aims at the nearest chunk of the tile that holds up a
+standing quadrant across the hull's lane: the nearest row first, then the
+chunk closest to the barrel's line. The shot is turned off the barrel by that
+chunk's bearing from the hull's centre (a shell flies along a ray from it,
+`Shell::spawn`), at most `enemy_sapper_max_aim_deg` (40). Without it the
+second shell flies through the first one's hole, and the tank is still
+stopped by the chunks either side.
+
+**Breaching on purpose.** A tank whose target the routing cannot reach plans
+a way through the walls (`ai::Sap`, `Game::sap_plan`). It routes on the nav
+grid with every tile a shell can bring down made open but dear
+(`breach_grid`):
+- each cell of such a wall costs `enemy_sap_wall_path_cost` (12), so the way
+  round wins until it is that much longer;
+- iron, a cage, deep water and lava, the frogs and the fires stay walls.
+
+The plan is the last open cell before the first such wall on that route, and
+the step into it. `Ai::steer` heads there where it would otherwise wander,
+and drives on into the wall once within a cell of it. Pushing into the wall
+starts the breach as before (`Brain::wants_breach`), and the sapper's aim
+opens it. Plans are made every `enemy_sap_replan_seconds` (1) for a tank
+still cut off, after the enemy pass (`Game::plan_saps`), and draw no RNG.
+A tank its target can be reached from has none, so a map where every target
+is reachable plays as it did.
+
+**Rubble.** The router prices rubble (§10) with `Grid::raise`, which never
+lowers a cell's price. Rubble on a ford or a lava ford leaves the ford's
+price, rather than replacing it with rubble's lower one.
