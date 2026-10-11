@@ -1,5 +1,10 @@
 # BongBong
 
+[![GitHub release (with filter)](https://img.shields.io/github/v/release/otobrglez/bongbong?style=flat&label=latest&color=&logo=Git&logoColor=white)](https://github.com/otobrglez/bongbong/releases)
+[![Build](https://github.com/otobrglez/bongbong/actions/workflows/ci.yml/badge.svg)](https://github.com/otobrglez/bongbong/actions/workflows/ci.yml)
+[![Platform](https://img.shields.io/badge/Platform-%20Web%20%7C%20Android%20%7C%20Linux%20%7C%20iOS%20%7C%20macOS%20%7C%20Windows-blue.svg)](#-downloads)
+[![X Follow](https://img.shields.io/twitter/follow/otobrglez)](https://x.com/otobrglez)
+
 <img align="right" width="150" src="./tools/ios/Assets.xcassets/AppIcon.appiconset/icon-1024.png">
 
 BongBong is a simplistic and entertaining modern tank shooter game. 
