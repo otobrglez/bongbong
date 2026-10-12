@@ -35,7 +35,9 @@ that belongs to a seat, the two aircraft, the HUD's box and the sprites.
 - **The arrival.** At zero the aircraft comes in from outside the field,
   `air_edge_margin_px` (96) past an edge, in line with what it is coming for.
   Which edge is a hash of the call's id (`air_support::entry_edge`): not
-  random, and no RNG.
+  random, and no RNG. The jet's hash picks only the axis; it comes in from
+  the side farther from its aim point (`jet_edge`), so its run over the
+  field is at least half the field.
 - **The target picture.** Taken when it arrives, not when the crate was
   taken: the enemies on the field inside the seat's sight box
   (`ai::in_sight_box`, the screen the follow camera shows round the seat),
@@ -60,8 +62,10 @@ that belongs to a seat, the two aircraft, the HUD's box and the sprites.
   `air_jet_gun_ahead_px` (160) ahead of the jet (radius 28, 9 damage, fixed);
   `air_jet_bomb_lead_px` (96) short of the point it lets two bombs go, landing
   `air_jet_bomb_spacing_px` (48) apart astride it (radius 64, 75 to 85
-  damage). A full-health tank on the aim point is wrecked. It flies on off
-  the far edge; about three seconds on the field.
+  damage). A full-health tank on the aim point is wrecked. It fires only
+  over the field: on a run too short for the stripe and its lead, both
+  shrink to fit (`gun_burst`, `bombs`). It flies on off the far edge; about
+  three seconds on the field.
 - **Friendly fire.** None: every hit is `side_blast`/`explosion_hit`, which
   spare `Owner::same_side` - seats, the players' frog and towers. Tiles take
   damage (`damage_obstacle` with falloff) and crates break, as for a
@@ -214,7 +218,8 @@ targets sort by distance then slot; trig through `math::`.
 special and nothing arrives before the count; the jet wrecks the tank on its
 aim point and spares the one outside the box and the seat; the heli flies in,
 hovers, fires its salvos and leaves, sparing the seat; with no enemy in the
-box neither fires; a second crate queues a second sortie whose count starts
+box neither fires; the jet fires only over the field, wherever the seat
+stands; a second crate queues a second sortie whose count starts
 when the first leaves; the heli comes down to `air_heli_hits` bullets and the
 next call counts; the jet is no air target; a sortie replays bit for bit.
 `air_support.rs`'s own: the edges, the hover point, the run mark, the gun

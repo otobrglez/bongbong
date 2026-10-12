@@ -280,3 +280,34 @@ fn a_sortie_replays_bit_for_bit() {
     };
     assert_eq!(run(), run());
 }
+
+/// The jet fires only over the field: every burst and bomb comes on a tick
+/// its ground point is inside it, and none on the tick it arrives.
+#[test]
+fn the_jet_fires_only_over_the_field() {
+    for (seat_at, enemy_at) in [(SEAT, NEAR), (Position::new(96.0, 64.0), Position::new(200.0, 40.0)), (Position::new(990.0, 480.0), Position::new(900.0, 500.0))] {
+        let mut game = round();
+        let seat = seat(&game);
+        game.place_tank(seat, seat_at, Some(90.0)).expect("placed");
+        parked(&mut game, enemy_at);
+        air_crate(&mut game, Sortie::Jet, seat_at);
+        let mut strikes = 0;
+        for _ in 0..delay_ticks() + 1200 {
+            tick(&mut game);
+            let events = game.events().to_vec();
+            let arrived = events.iter().any(|e| matches!(e, Event::AirSupportArrived { .. }));
+            for e in &events {
+                if matches!(e, Event::AirStrike { .. }) {
+                    strikes += 1;
+                    assert!(!arrived, "no strike on the tick it arrives");
+                    let jet = game.aircraft().first().copied().expect("the jet is up");
+                    assert!(jet.ground.x >= 0.0 && jet.ground.x <= W && jet.ground.y >= 0.0 && jet.ground.y <= H, "fired off the field at {:?}", jet.ground);
+                }
+            }
+            if events.iter().any(|e| matches!(e, Event::AirSupportLeft { .. })) {
+                break;
+            }
+        }
+        assert_eq!(strikes, tuning().air_jet_gun_bursts as usize + 2, "seat at {seat_at:?}");
+    }
+}

@@ -327,25 +327,45 @@ pub fn run_mark(targets: &[Position], n: usize) -> Option<Position> {
     Some(sum / near.len() as f32)
 }
 
+/// The edge the jet's run comes in from (`entry_point`'s numbering): the
+/// axis a hash of call `id` (`entry_edge`), the side the one farther from
+/// its `mark` on a field of size `field`, so its run over the field before
+/// the mark is at least half the field.
+pub fn jet_edge(id: u32, mark: Position, field: (f32, f32)) -> u8 {
+    if entry_edge(id) & 1 == 0 {
+        if mark.y > field.1 * 0.5 { 0 } else { 2 }
+    } else if mark.x > field.0 * 0.5 {
+        3
+    } else {
+        1
+    }
+}
+
 /// The jet's cannon bursts: where burst `i` of `n` lands along a run from
 /// `entry` through `mark` - a stripe `len` px long ending on the mark - and
 /// how far the jet has flown when it fires it, `ahead` px short of the
-/// impact.
-pub fn gun_burst(entry: Position, mark: Position, i: u8, n: u8, len: f32, ahead: f32) -> (Position, f32) {
+/// impact. The jet fires only over the field, `margin` px past its entry:
+/// on a run too short for the stripe and its lead, both shrink to fit.
+pub fn gun_burst(entry: Position, mark: Position, i: u8, n: u8, len: f32, ahead: f32, margin: f32) -> (Position, f32) {
     let run = unit(mark - entry).unwrap_or(Vec2::new(0.0, 1.0));
     let to_mark = (mark - entry).length();
+    let room = (to_mark - margin).max(0.0);
+    let fit = if len + ahead > room && len + ahead > 0.0 { room / (len + ahead) } else { 1.0 };
+    let (len, ahead) = (len * fit, ahead * fit);
     let step = if n > 1 { len / (n - 1) as f32 } else { 0.0 };
     let along = to_mark - len + step * i as f32;
-    (entry + run * along, (along - ahead).max(0.0))
+    (entry + run * along, (along - ahead).max(margin.min(to_mark)))
 }
 
 /// The jet's two bombs: where each lands, `spacing` px apart astride the
 /// mark along the run, and how far the jet has flown when it lets them go,
-/// `lead` px short of the mark.
-pub fn bombs(entry: Position, mark: Position, spacing: f32, lead: f32) -> ([Position; 2], f32) {
+/// `lead` px short of the mark - never before it is over the field,
+/// `margin` px past its entry.
+pub fn bombs(entry: Position, mark: Position, spacing: f32, lead: f32, margin: f32) -> ([Position; 2], f32) {
     let run = unit(mark - entry).unwrap_or(Vec2::new(0.0, 1.0));
     let half = run * (spacing * 0.5);
-    ([mark - half, mark + half], ((mark - entry).length() - lead).max(0.0))
+    let to_mark = (mark - entry).length();
+    ([mark - half, mark + half], (to_mark - lead).max(margin.min(to_mark)))
 }
 
 /// The aircraft sheet's cell, px: 44 design pixels at 2 px a block, ten
@@ -481,13 +501,39 @@ mod tests {
     #[test]
     fn the_gun_stripe_ends_on_the_mark_and_fires_ahead_of_it() {
         let (entry, mark) = (Position::new(100.0, -50.0), Position::new(100.0, 450.0));
-        let (first, at0) = gun_burst(entry, mark, 0, 5, 200.0, 120.0);
-        let (last, at4) = gun_burst(entry, mark, 4, 5, 200.0, 120.0);
+        let (first, at0) = gun_burst(entry, mark, 0, 5, 200.0, 120.0, 50.0);
+        let (last, at4) = gun_burst(entry, mark, 4, 5, 200.0, 120.0, 50.0);
         assert_eq!(first, Position::new(100.0, 250.0));
         assert_eq!(last, mark);
         assert_eq!((at0, at4), (180.0, 380.0));
-        let ([a, b], at) = bombs(entry, mark, 48.0, 60.0);
+        let ([a, b], at) = bombs(entry, mark, 48.0, 60.0, 50.0);
         assert_eq!((a, b, at), (Position::new(100.0, 426.0), Position::new(100.0, 474.0), 440.0));
+    }
+
+    /// On a run too short for the stripe and its lead, the jet still fires
+    /// nothing before it is over the field, and its bursts stay in order,
+    /// the last on the mark.
+    #[test]
+    fn a_short_run_fires_only_over_the_field() {
+        let (entry, mark) = (Position::new(100.0, -96.0), Position::new(100.0, 154.0));
+        let n = 6;
+        let fired: Vec<f32> = (0..n).map(|i| gun_burst(entry, mark, i, n, 192.0, 160.0, 96.0).1).collect();
+        assert!(fired.iter().all(|&at| at >= 96.0), "{fired:?}");
+        assert!(fired.windows(2).all(|w| w[0] < w[1]), "one after another: {fired:?}");
+        assert_eq!(gun_burst(entry, mark, n - 1, n, 192.0, 160.0, 96.0).0, mark);
+        assert!(bombs(entry, mark, 48.0, 400.0, 96.0).1 >= 96.0);
+    }
+
+    #[test]
+    fn the_jet_comes_in_from_the_far_side_of_its_mark() {
+        let field = (1000.0, 600.0);
+        for id in 1..64 {
+            for mark in [Position::new(100.0, 100.0), Position::new(900.0, 500.0)] {
+                let entry = entry_point(jet_edge(id, mark, field), mark, field, 96.0);
+                let run = (mark - entry).length();
+                assert!(run >= 300.0 + 96.0 - 1e-3, "id {id}: a run of {run}");
+            }
+        }
     }
 
     #[test]

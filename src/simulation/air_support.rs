@@ -184,7 +184,7 @@ impl Game {
                 }
                 Sortie::Jet => {
                     let mark = air_support::run_mark(&targets, t.air_jet_targets.max(1) as usize).unwrap_or(anchor);
-                    (air_support::entry_point(edge, mark, field, t.air_edge_margin_px), mark)
+                    (air_support::entry_point(air_support::jet_edge(call.id, mark, field), mark, field, t.air_edge_margin_px), mark)
                 }
             };
             let aircraft = Aircraft::arrive(call.id, call.seat, call.sortie, entry, mark, armed, &t);
@@ -233,7 +233,7 @@ impl Game {
                 let n = t.air_jet_gun_bursts.clamp(1, 255) as u8;
                 let run = a.run();
                 while a.fired < n {
-                    let (at, when) = air_support::gun_burst(a.entry, a.mark, a.fired, n, t.air_jet_gun_len_px, t.air_jet_gun_ahead_px);
+                    let (at, when) = air_support::gun_burst(a.entry, a.mark, a.fired, n, t.air_jet_gun_len_px, t.air_jet_gun_ahead_px, t.air_edge_margin_px);
                     if a.flown < when {
                         break;
                     }
@@ -242,7 +242,7 @@ impl Game {
                     a.stage = AirStage::Attack;
                 }
                 if a.fired == n {
-                    let (drops, when) = air_support::bombs(a.entry, a.mark, t.air_jet_bomb_spacing_px, t.air_jet_bomb_lead_px);
+                    let (drops, when) = air_support::bombs(a.entry, a.mark, t.air_jet_bomb_spacing_px, t.air_jet_bomb_lead_px, t.air_edge_margin_px);
                     if a.flown >= when {
                         for at in drops {
                             acts.push(Act::Strike { at, dir: run, bomb: true });
