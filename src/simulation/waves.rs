@@ -792,17 +792,20 @@ impl Game {
     /// wrecks for the whole round.
     pub(super) fn despawn_wrecks(&mut self, f: &mut Frame) {
         self.fade_wrecks(f.dt);
-        let mut gone: Vec<(Entity, usize)> = Vec::new();
+        let mut gone: Vec<(Entity, usize, Position)> = Vec::new();
         for (entity, tank) in self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter() {
             if tank.despawn_timer.is_some_and(|left| left <= 0.0) {
-                gone.push((entity, tank.owner_slot()));
+                gone.push((entity, tank.owner_slot(), tank.position));
             }
         }
-        for (entity, slot) in gone {
+        for (entity, slot, at) in gone {
             if let Some(body) = with_tank(&self.world, entity, |t| t.body) {
                 self.physics.remove_body(body);
             }
             self.world.despawn(entity).ok();
+            // Its parts stay where it stood (`wreck_scar`): the field keeps
+            // count of the dead.
+            f.decals.extend(self.wreck_scar(at));
             f.events.push(Event::WreckRemoved { slot });
         }
     }

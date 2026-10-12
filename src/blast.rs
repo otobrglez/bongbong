@@ -245,15 +245,19 @@ pub struct Scorch {
     /// A streak pointing downrange when a shot set the drum off (drawn
     /// on top of the blot, quarter-turned toward `dir`).
     pub streak: Option<Lean>,
+    /// The scar a ground fire left: an ember bed, glowing for
+    /// `ember_bed_seconds` of its `age` before it is only the mark
+    /// (`smoulder.rs`).
+    pub ember: bool,
 }
 
 impl Scorch {
     pub fn new(center: Position) -> Self {
-        Scorch { center, seed: seed_for(center), age: 0.0, scale: 1.0, streak: None }
+        Scorch { center, seed: seed_for(center), age: 0.0, scale: 1.0, streak: None, ember: false }
     }
 
     pub fn with(center: Position, scale: f32, streak: Option<Lean>) -> Self {
-        Scorch { center, seed: seed_for(center), age: 0.0, scale, streak }
+        Scorch { center, seed: seed_for(center), age: 0.0, scale, streak, ember: false }
     }
 
     /// The scar a ground fire leaves where it burnt out: a smaller mark,
@@ -261,7 +265,7 @@ impl Scorch {
     /// so a burnt trail reads as one scorched streak rather than a row of
     /// the same blot.
     pub fn burn(center: Position) -> Self {
-        Scorch { center, seed: seed_at(center, 57), age: 0.0, scale: 0.6, streak: None }
+        Scorch { center, seed: seed_at(center, 57), age: 0.0, scale: 0.6, streak: None, ember: true }
     }
 }
 
@@ -271,6 +275,12 @@ impl Scorch {
 /// A shot's scorch also gets the streak cell, turned to the nearest
 /// quarter toward the shot.
 pub fn draw_scorch(c: &mut impl Canvas, s: &Scorch) {
+    draw_scorch_kept(c, s, 1.0);
+}
+
+/// `draw_scorch` with `keep` (0 to 1) of its strength, in eighths: what
+/// snow lying over it leaves showing (docs/aftermath.md).
+pub fn draw_scorch_kept(c: &mut impl Canvas, s: &Scorch, keep: f32) {
     let cell = BARREL_EXPLOSION_TEXTURE_SIZE;
     let variant = (s.seed % SCORCH_VARIANTS as u32) as f32;
     let flip = if s.seed & 4 != 0 { -1.0 } else { 1.0 };
@@ -278,7 +288,11 @@ pub fn draw_scorch(c: &mut impl Canvas, s: &Scorch) {
     let size = cell * tuning().scorch_scale * s.scale;
     let rotation = ((s.seed >> 3) % 4) as f32 * 90.0;
     let fade = (s.age / tuning().scorch_fade_in_seconds.max(1e-3)).clamp(0.0, 1.0);
-    let tint = Color::new(255, 255, 255, (255.0 * tuning().scorch_opacity * fade) as u8);
+    let keep = (keep.clamp(0.0, 1.0) * 8.0).round() / 8.0;
+    if keep <= 0.0 {
+        return;
+    }
+    let tint = Color::new(255, 255, 255, (255.0 * tuning().scorch_opacity * fade * keep) as u8);
     let dest = Rectangle::new(s.center.x, s.center.y, size, size);
     c.blit(Sheet::BarrelExplosion, src, dest, Vec2::new(size / 2.0, size / 2.0), rotation, tint);
     if let Some(dir) = s.streak {

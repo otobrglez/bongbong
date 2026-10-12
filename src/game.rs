@@ -10,9 +10,9 @@
 //! On a canvas over part of the field (`Canvas::cull`) the stages leave
 //! out what lies wholly outside it.
 
-use crate::blast::draw_scorch;
+use crate::blast::draw_scorch_kept;
 use crate::canvas::Canvas;
-use crate::decal::draw_decal;
+use crate::decal::draw_decal_kept;
 use crate::frog::{draw_frog, draw_frog_ring};
 use crate::math::Color;
 use crate::obstacle::{draw_obstacle, draw_obstacle_cap, draw_obstacle_shadow, draw_oil_cell, draw_oil_print, draw_tree, draw_tree_shadow, fence_axis, tree_lean, Material, Obstacle};
@@ -55,8 +55,17 @@ enum Standing<'a> {
     Grenade(&'a crate::grenade::Grenade),
 }
 
+/// What a wreck's aftermath puts on its hull (docs/aftermath.md): its
+/// remain while it is one (`Game::wreck_hot`) and how much snow lies on a
+/// cold deck (`Game::hulk_snow`).
+#[derive(Clone, Copy, Default)]
+struct HulkLook {
+    hot: Option<crate::smoulder::Hot>,
+    snow: f32,
+}
+
 /// A tank and everything drawn on it, in the order the layers stack.
-fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, shadows: bool, locate_cue: bool) {
+fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, shadows: bool, locate_cue: bool, hulk: HulkLook) {
     match role {
         TankRole::Player => {
             // The locate ripple under the marker so the steady ring stays
@@ -78,12 +87,23 @@ fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, sh
     // adds its flames over everything on the tank, leaning with the wind
     // (`damage_stage.rs`). Their light is the glowing pass's.
     draw_tank(c, tank, time);
+    // A cold hulk's rust and the snow on its deck, under anything still
+    // burning on it (docs/aftermath.md).
+    if hulk.hot.is_some() {
+        crate::pyro::draw(c, &crate::damage_stage::weathering(tank, hulk.snow, &crate::tuning::tuning()));
+    }
     // An EMP's lights out: the lamps and strips drawn dark (docs/emp-burst.md).
     crate::tank::draw_tank_dark(c, tank, time);
     crate::tank::draw_tank_slime(c, tank, time);
     if role != TankRole::RollIn {
-        let lean = crate::pyro::smoke_lean(&crate::tuning::tuning(), tank.position, time);
+        let t = crate::tuning::tuning();
+        let lean = crate::pyro::smoke_lean(&t, tank.position, time);
         crate::pyro::draw(c, &crate::damage_stage::flames(tank, time, lean));
+        // A smouldering hulk's glowing breaches and flare-ups; their light
+        // is the glowing pass's.
+        if let Some(hot) = hulk.hot.as_ref() {
+            crate::pyro::draw(c, &crate::damage_stage::smoulder(tank, hot, time, &t));
+        }
     }
     // The FPV halo round the hull, over it: its shadows and drones; the
     // lamps are the glowing pass's (`halo_of`).
@@ -209,6 +229,30 @@ pub fn tile_flames(obstacle: &Obstacle, time: f32) -> Vec<crate::pyro::Shape> {
     out
 }
 
+/// What the aftermath puts in the air over the field this frame
+/// (`Game::aftermath_air`, docs/aftermath.md).
+#[derive(Default)]
+pub struct AftermathAir {
+    /// The columns' and the banks' shadows, for the floor.
+    pub shadows: Vec<crate::pyro::Shape>,
+    /// The columns, the haze's banks and the ash, back to front.
+    pub smoke: Vec<crate::pyro::Shape>,
+    /// What the haze grades the field toward (`smoulder::haze_grade`), over
+    /// this rectangle of it.
+    pub grade: Option<(crate::math::Rectangle, Color)>,
+}
+
+impl AftermathAir {
+    /// The air laid down over everything that stands: the smoke, then the
+    /// haze's grade over all of it.
+    pub fn paint_over(&self, c: &mut impl Canvas) {
+        crate::pyro::draw(c, &self.smoke);
+        if let Some((r, color)) = self.grade {
+            crate::pyro::Blocks::fill_rect(c, r.x.floor() as i32, r.y.floor() as i32, r.width.ceil() as i32 + 2, r.height.ceil() as i32 + 2, color);
+        }
+    }
+}
+
 /// What `Game::paint_standing` draws besides the field itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PaintOptions {
@@ -325,7 +369,9 @@ impl Game {
         // survived a neighbour's blast sits on the mark it left.
         for scorch in &self.scorches {
             if !c.culls(scorch.center) {
-                draw_scorch(c, scorch);
+                // Under snow a cold mark goes under it (docs/aftermath.md).
+                let cold = if scorch.ember { self.cold_for(crate::smoulder::Kind::Bed, scorch.age) } else { scorch.age };
+                draw_scorch_kept(c, scorch, self.snow_keep(cold));
             }
         }
 
@@ -354,9 +400,14 @@ impl Game {
         // old rubble still reads as solid.
         for decal in self.decals.iter().filter(|dc| dc.landed()) {
             if !c.culls(decal.center) {
-                draw_decal(c, decal);
+                let kind = if decal.upright { crate::smoulder::Kind::Stump } else { crate::smoulder::Kind::Ruin };
+                let cold = if decal.hot { self.cold_for(kind, decal.age) } else { decal.age };
+                draw_decal_kept(c, decal, self.snow_keep(cold));
             }
         }
+        // What the fight left smouldering on the ground, and the snow over
+        // what has gone cold (docs/aftermath.md).
+        self.paint_aftermath_floor(c);
         // The lava over the marks it runs across: block by block from each
         // cell's neighbours, its bands running downstream, its crust
         // floes drifting with them; then the splashes the bombs threw. A
@@ -606,7 +657,10 @@ impl Game {
         for (key, item) in &standing {
             next_tuft = grass_up_to(c, *key, next_tuft);
             match item {
-                Standing::Tank(tank, role) => draw_one_tank(c, tank, *role, self.time, self.shadows_enabled, opts.locate_cue),
+                Standing::Tank(tank, role) => {
+                    let hulk = HulkLook { hot: self.wreck_hot(tank), snow: self.hulk_snow(tank) };
+                    draw_one_tank(c, tank, *role, self.time, self.shadows_enabled, opts.locate_cue, hulk);
+                }
                 Standing::Frog(entity) => {
                     crate::simulation::with_frog(&self.world, *entity, |frog| {
                         draw_frog_ring(c, frog, self.time);
@@ -674,6 +728,103 @@ impl Game {
                 crate::pyro::draw(c, &tile_flames(tree, self.time));
             }
         }
+    }
+
+    /// What of a mark that went cold `cold` seconds ago still shows through
+    /// the snow (`smoulder::snow_cover`): all of it under any other sky, and
+    /// all of it while it is still hot.
+    fn snow_keep(&self, cold: f32) -> f32 {
+        if self.weather != crate::map::Weather::Snow {
+            return 1.0;
+        }
+        1.0 - crate::smoulder::snow_cover(cold, &crate::tuning::tuning())
+    }
+
+    /// Seconds since a remain of `kind` `age` seconds old went cold
+    /// (`smoulder::spans`), negative while it is still hot.
+    fn cold_for(&self, kind: crate::smoulder::Kind, age: f32) -> f32 {
+        let t = crate::tuning::tuning();
+        let (burn, smoulder, wisps) = crate::smoulder::spans(kind, crate::smoulder::douse(self.weather, &t), &t);
+        age - burn - smoulder - wisps
+    }
+
+    /// The aftermath on the floor (docs/aftermath.md): under a snowy sky the
+    /// wet ring each hot wreck melts round itself (the snow over the cold
+    /// marks is their own fade, `snow_keep`); then the embers glinting in
+    /// every hot bed, heap of charred rubble, stump and ruin, and their
+    /// flare-ups. Nothing on a field nothing has burnt on.
+    fn paint_aftermath_floor(&self, c: &mut impl Canvas) {
+        let t = crate::tuning::tuning();
+        let hots = self.smouldering();
+        if self.weather == crate::map::Weather::Snow {
+            let mut melt = Vec::new();
+            for hot in hots.iter().filter(|h| h.kind == crate::smoulder::Kind::Wreck && !c.culls(h.at)) {
+                crate::smoulder::melt(hot, &t, &mut melt);
+            }
+            crate::pyro::draw(c, &melt);
+        }
+        let mut glints = Vec::new();
+        for hot in hots.iter().filter(|h| h.kind != crate::smoulder::Kind::Wreck && !c.culls(h.at)) {
+            let radius = match hot.kind {
+                crate::smoulder::Kind::Bed => 18.0,
+                crate::smoulder::Kind::Tower => 16.0,
+                crate::smoulder::Kind::Ruin => 13.0,
+                crate::smoulder::Kind::Crater => 10.0,
+                _ => 6.0,
+            };
+            crate::smoulder::glints(hot, self.time, radius, &t, &mut glints);
+            crate::smoulder::flare(hot, self.time, radius, &t, &mut glints);
+        }
+        crate::pyro::draw(c, &glints);
+    }
+
+    /// How much snow lies on `tank`'s deck (`smoulder::snow_cover`): under a
+    /// snowy sky, from the moment its wreck goes cold; 0 otherwise.
+    fn hulk_snow(&self, tank: &Tank) -> f32 {
+        if self.weather != crate::map::Weather::Snow || !tank.is_wreck() {
+            return 0.0;
+        }
+        let t = crate::tuning::tuning();
+        let (burn, smoulder, wisps) = crate::smoulder::spans(crate::smoulder::Kind::Wreck, crate::smoulder::douse(self.weather, &t), &t);
+        crate::smoulder::snow_cover(tank.wreck_age - burn - smoulder - wisps, &t)
+    }
+
+    /// What the aftermath puts in the air over `view` this frame
+    /// (docs/aftermath.md), composed once for the painter to lay down in
+    /// two places: the smoke's shadows on the floor, everything else over
+    /// what stands. The columns are the hottest `smoulder_max_columns` in
+    /// view; the haze's banks thin round every live seat. `None` is the
+    /// whole field.
+    pub fn aftermath_air(&self, view: Option<crate::math::Rectangle>) -> AftermathAir {
+        let t = crate::tuning::tuning();
+        let mut air = AftermathAir::default();
+        let (w, h) = self.map.field_size();
+        let view = view.unwrap_or(crate::math::Rectangle::new(0.0, 0.0, w, h));
+        let inside = |p: crate::Position| {
+            let m = 160.0;
+            p.x >= view.x - m && p.x <= view.x + view.width + m && p.y >= view.y - m && p.y <= view.y + view.height + 2.0 * m
+        };
+        let mut hots: Vec<(f32, crate::smoulder::Hot)> = self.smouldering().into_iter().filter(|h| inside(h.at)).map(|h| (h.load(&t), h)).collect();
+        hots.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let sunlit = crate::smoulder::sunlit(self.weather);
+        for (_, hot) in hots.iter().take(t.smoulder_max_columns.max(0) as usize) {
+            crate::smoulder::column(hot, self.time, self.weather, &t, &mut air.smoke, sunlit.then_some(&mut air.shadows));
+        }
+        let haze = self.battle_haze;
+        if haze > 0.0 {
+            let seats: Vec<crate::Position> = self
+                .world
+                .query::<(Entity, &Tank)>()
+                .iter()
+                .filter(|&(e, tank)| self.is_player(e) && !tank.is_wreck())
+                .map(|(_, tank)| tank.position)
+                .collect();
+            let pale = matches!(self.weather, crate::map::Weather::Night | crate::map::Weather::Storm) || self.night_fallen;
+            crate::smoulder::haze_banks(view, &seats, self.time, haze, pale, &t, &mut air.smoke);
+            crate::smoulder::ash(view, self.time, haze, &t, &mut air.smoke);
+            air.grade = crate::smoulder::haze_grade(haze, &t).map(|color| (view, color));
+        }
+        air
     }
 
     /// The static field as a fresh round shows it: `paint_floor`,

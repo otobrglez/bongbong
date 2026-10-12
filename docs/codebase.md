@@ -1439,14 +1439,35 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `DAMAGE_VARIANTS` per tank): from the damaged tier (`SMOKES_AT`) smoke (`smoke`, which `fx.rs`
   puts up), from the critical tier (`BURNS_AT`) or with afterburn on it a burning deck, and a wreck
   burning hard until the last fifth of `wreck_burn_seconds` (`fire`, `flames` - `pyro::tongues` plus
-  their one light, which `render/game.rs` draws with the ground's fire glows).
+  their one light, which `render/game.rs` draws with the ground's fire glows). A hulk then smoulders
+  (`smoulder`: glowing breaches, flare-ups, from its `smoulder::Hot`) and weathers (`weathering`:
+  rust from `wreck_rust_after_seconds`, snow on a cold deck) - docs/aftermath.md.
 - `blast.rs`, `decal.rs` — blast presentation state (`BlastFx::shaped` hashes the form,
   mirror, turn, pace and size, the cause overrides; `fireball.rs` composes it), scorches (a blast's,
-  and `Scorch::burn`, the scar a burnt-out ground fire leaves - drawn from `barrel_explosion.png`'s
-  scorch row, the one row of it drawn), and in `render/blast.rs` the fuse, burning-cell and nozzle
-  glows; decals are rubble on the walls sheet (rows 14-21, the props' rubble too, row 21 the tank's)
-  seeded by `blast::seed_at` (a salted, avalanche-mixed position hash - positions are multiples of
-  32), thrown arcs derived from age so nothing integrates them, staged by `obstacle_died`.
+  and `Scorch::burn`, the scar a burnt-out ground fire leaves - an ember bed while it cools,
+  `Scorch::ember` - drawn from `barrel_explosion.png`'s scorch row, the one row of it drawn), and in
+  `render/blast.rs` the fuse, burning-cell and nozzle glows; decals are rubble on the walls sheet
+  (rows 14-21, the props' rubble too, row 21 the tank's) seeded by `blast::seed_at` (a salted,
+  avalanche-mixed position hash - positions are multiples of 32), thrown arcs derived from age so
+  nothing integrates them, staged by `obstacle_died`. Charred rubble is `Decal::hot` and smoulders;
+  a burnt tree also leaves `Decal::stump` (`tile_stump`, the tree sheet's `TREE_STUMP_COL`, drawn
+  upright and charred).
+- `smoulder.rs` + `simulation/smoulder.rs` (docs/aftermath.md) — what a fight leaves burning. The
+  headless half: a remain's `Kind`, the `Stage`s it cools through on `spans` its kind and the sky
+  set (`douse`: rain keeps `rain_douse_factor`, its smoke steam), `Hot` (`load`, `flare`,
+  `ember`), `step_haze` (the battle's haze: fed by the loads, drained by the sky), the opt-in
+  `Rules`, and the composers - `column` (puffs born on fixed ticks and hashed, as
+  `volcano::plume`; shadows down-right), `glints`, `flare`, `haze_banks` (a field-anchored lattice,
+  thinned round every seat), `haze_grade`, `ash`, `melt`, `smoke_cells`, `gust_strong`. The world
+  half: `Game::smouldering` gathers wrecks (`Tank::wreck_age`), ember beds, hot rubble and stumps,
+  tower ruins and craters from state a replica keeps too; `tick_haze` (with the effects, both
+  paths) keeps `Game::battle_haze`, presentation only; `tick_smoke_cover`, `relight_beds` and
+  `Game::is_lit`'s fire test are the three rules, read once by `init` into
+  `Game::aftermath_rules`, all off; `wreck_scar` is a wave wreck's leftovers. `game.rs` paints the
+  floor's share (cold marks fading into snow, `snow_keep`; `paint_aftermath_floor`: melt rings,
+  glints, flare-ups) and composes the
+  frame's air (`aftermath_air`); `render/game.rs` lays the shadows on the floor and the smoke, banks,
+  ash and grade over everything that stands. No RNG anywhere.
 - `wear.rs` + `simulation/wear.rs` (docs/ground-memory.md) — the ground's memory of the round's tread
   marks: `WearGrid`, a `BTreeMap` of worn map cells of 16 x 16 two-px `Block`s (passes in
   sixteenths, a `Kind`, facing, berm, wet, when laid), capped at `wear_max_cells` (the cell pressed
@@ -1945,7 +1966,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   heading, stage, halo slot, owner and lock), `FrogState`, `TileState`, `FireState` (with `lava`, a
   bomb's pool), `BonusPickup`, `CrateState` (a crate that is not whole: hurt, burning or spilled),
   `LampState` (the lanterns set down), `ZoneState` and `CraterState` (a rod's calls and craters,
-  docs/rod-from-god.md), the volcanoes' shifts -, `RoundState` (the wave, the live and pending
+  docs/rod-from-god.md), the volcanoes' shifts, `smoke_cells` (the cells thick smoke hides a hull in
+  under `smoke_cover`, docs/aftermath.md; protocol 29) -, `RoundState` (the wave, the live and pending
   counts, the mission banner's, the `WAVE N` breather's and the end screen's restart countdown's
   time left, the outcome), `events`), `Welcome` (`WireOverrides` mirrors `LevelOverrides`), the JSON
   `Lobby` enum, and the quantisation helpers (positions quarter pixels as `i16`, velocities `i8` at

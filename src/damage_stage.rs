@@ -18,7 +18,7 @@
 //! place, a replica draws it where the room's round does and nothing draws
 //! RNG.
 
-use crate::math::Vec2;
+use crate::math::{Color, Vec2};
 use crate::pyro::{self, Shape, FIRE};
 use crate::tank::Tank;
 use crate::tuning::tuning;
@@ -118,6 +118,72 @@ pub fn flames(tank: &Tank, time: f32, lean: f32) -> Vec<Shape> {
     out
 }
 
+/// A smouldering hulk (`smoulder::Hot`, docs/aftermath.md): embers glowing
+/// and breathing in the breaches of its hull - hashed spots over the
+/// deck, dimmer as it cools - and its flare-ups (`smoulder::flare`), with
+/// their light (drawn in the additive pass). Empty while it still burns
+/// (its fire is `flames`) and once it is cold.
+pub fn smoulder(tank: &Tank, hot: &crate::smoulder::Hot, time: f32, t: &crate::tuning::Tuning) -> Vec<Shape> {
+    let mut out = Vec::new();
+    let ember = hot.ember(t) * tank.alpha();
+    if ember > 0.0 {
+        let s = seed(tank);
+        let (hw, hh) = tank.hull_half_extents(false);
+        for i in 0..BREACHES {
+            let at = on_hull(tank, (pyro::unit(s, 10 + i) - 0.5) * hw * 1.2, (pyro::unit(s, 20 + i) - 0.5) * hh * 1.2);
+            let beat = (crate::math::sin(time * (1.4 + 0.6 * i as f32) + i as f32 * 2.0) + 1.0) * 0.5;
+            let step = ((ember * 3.2 + beat * 1.8) as usize).min(6);
+            if step == 0 {
+                continue;
+            }
+            out.push(Shape::Mark { pos: at, size: if ember > 0.5 { 4 } else { 2 }, color: FIRE[step] });
+        }
+        out.push(Shape::Glow { pos: tank.position, radius: 20.0, color: pyro::alpha(FIRE[3], 0.14 * ember) });
+    }
+    crate::smoulder::flare(hot, time, 10.0 * tank.scale / 2.0, t, &mut out);
+    out
+}
+
+/// Breaches in a smouldering hulk's hull that glow (`smoulder`).
+const BREACHES: u32 = 5;
+
+/// The rust ramp a cold hulk weathers into: the palette's scorched
+/// brown, a deep red and a wood brown.
+const RUST: [Color; 3] = [Color::new(0x59, 0x34, 0x1F, 0xFF), Color::new(0x81, 0x2F, 0x27, 0xFF), Color::new(0x99, 0x65, 0x24, 0xFF)];
+
+/// How a hulk weathers as the round goes on (docs/aftermath.md): rust
+/// blooming over its hull from `wreck_rust_after_seconds` after the kill,
+/// up to `wreck_rust_max` of it, and under snow `snow` (0 to 1,
+/// `smoulder::snow_cover`) of its deck going white. Hashed blocks over the
+/// hull's inner box, turned with it, so the same hulk rusts in the same
+/// places.
+pub fn weathering(tank: &Tank, snow: f32, t: &crate::tuning::Tuning) -> Vec<Shape> {
+    let mut out = Vec::new();
+    if !tank.is_dead() {
+        return out;
+    }
+    let rust = ((tank.wreck_age - t.wreck_rust_after_seconds) / 240.0).clamp(0.0, 1.0) * t.wreck_rust_max;
+    if rust <= 0.0 && snow <= 0.0 {
+        return out;
+    }
+    let s = seed(tank);
+    let (hw, hh) = tank.hull_half_extents(false);
+    let (nx, ny) = ((hw * 0.8 / pyro::BLOCK) as i32, (hh * 0.8 / pyro::BLOCK) as i32);
+    let alpha = tank.alpha();
+    for j in -ny..ny {
+        for i in -nx..nx {
+            let k = ((i + 64) as u32) << 8 | (j + 64) as u32;
+            let at = on_hull(tank, (i as f32 + 0.5) * pyro::BLOCK, (j as f32 + 0.5) * pyro::BLOCK);
+            if pyro::unit(s, 0x5E00 ^ k) < snow * 0.7 {
+                out.push(Shape::Mark { pos: at, size: 2, color: pyro::alpha(crate::smoulder::SNOW, alpha) });
+            } else if pyro::unit(s, 0x7A00 ^ k) < rust {
+                out.push(Shape::Mark { pos: at, size: 2, color: pyro::alpha(RUST[(k % 3) as usize], alpha) });
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +247,32 @@ mod tests {
         let mut scorched = tank(10.0);
         scorched.burn_timer = 1.0;
         assert!(fire(&scorched) > 0.0, "afterburn sets any hull alight");
+    }
+
+    #[test]
+    fn a_smouldering_hulk_glows_in_its_breaches_until_it_is_cold() {
+        let t = crate::tuning::Tuning::default();
+        let mut wreck = tank(MAX_DAMAGE);
+        wreck.wreck_timer = t.wreck_burn_seconds;
+        let hot = |age| crate::smoulder::Hot { kind: crate::smoulder::Kind::Wreck, at: wreck.position, age, douse: 1.0, steam: false, seed: 5 };
+        let marks = |shapes: &[Shape]| shapes.iter().filter(|s| matches!(s, Shape::Mark { .. })).count();
+        assert!(marks(&smoulder(&wreck, &hot(t.wreck_burn_seconds + 2.0), 1.0, &t)) > 0);
+        assert!(smoulder(&wreck, &hot(10_000.0), 1.0, &t).is_empty(), "a cold hulk gives off nothing");
+    }
+
+    #[test]
+    fn a_cold_hulk_rusts_over_the_round_and_takes_the_snow() {
+        let t = crate::tuning::Tuning::default();
+        let mut wreck = tank(MAX_DAMAGE);
+        wreck.wreck_timer = t.wreck_burn_seconds;
+        wreck.wreck_age = t.wreck_rust_after_seconds;
+        assert!(weathering(&wreck, 0.0, &t).is_empty(), "no rust yet");
+        wreck.wreck_age = t.wreck_rust_after_seconds + 240.0;
+        let rusted = weathering(&wreck, 0.0, &t);
+        assert!(!rusted.is_empty());
+        assert_eq!(rusted, weathering(&wreck, 0.0, &t), "the same hulk rusts in the same places");
+        assert!(weathering(&wreck, 0.8, &t).len() > rusted.len() / 2, "snow lies on the deck");
+        assert!(weathering(&tank(10.0), 0.8, &t).is_empty(), "a live hull does not weather");
     }
 
     #[test]

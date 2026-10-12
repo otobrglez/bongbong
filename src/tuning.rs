@@ -3268,6 +3268,114 @@ tunables! {
         online_client_hull: bool = true in 0 ..= 1 @ Restart;
     }
 
+    group aftermath {
+        // What a fight leaves burning (docs/aftermath.md, `smoulder.rs`).
+        /// Seconds a wreck smoulders once its fire is out
+        /// (`wreck_burn_seconds`): a thick column, flare-ups, glowing
+        /// breaches. Under rain it runs `rain_douse_factor` as long.
+        wreck_smoulder_seconds: f32 = 90.0 in 0.0 ..= 600.0;
+        /// Seconds a wreck gives off a thin wisp after smouldering, before
+        /// it goes cold.
+        wreck_wisp_seconds: f32 = 150.0 in 0.0 ..= 900.0;
+        /// Seconds burnt ground glows with embers once its fire is out,
+        /// before it is only the scar.
+        ember_bed_seconds: f32 = 70.0 in 0.0 ..= 600.0;
+        /// Share of a hot ember bed's blocks that glint at its hottest.
+        ember_bed_glint: f32 = 0.18 in 0.0 ..= 1.0;
+        /// Seconds charred rubble, a burnt tree's stump and a tower's ruin
+        /// smoulder before they give off only a wisp.
+        ruin_smoulder_seconds: f32 = 120.0 in 0.0 ..= 600.0;
+        /// Seconds a rod's crater smoulders after its fresh smoke
+        /// (`rod_crater_smoke_seconds`).
+        crater_smoulder_seconds: f32 = 40.0 in 0.0 ..= 300.0;
+        /// Odds a smouldering remain flares up in each three-second
+        /// stretch: small tongues of flame for a second and a half. Hashed,
+        /// never rolled.
+        smoulder_flare_chance: f32 = 0.22 in 0.0 ..= 1.0;
+        /// Puffs a second a smouldering column puts up at its thickest.
+        smoulder_column_rate: f32 = 6.0 in 0.0 ..= 30.0;
+        /// Columns drawn at once at most, the hottest first: what keeps a
+        /// field of fifty hulks affordable.
+        smoulder_max_columns: i32 = 16 in 0 ..= 64;
+        /// Share of every smoulder and wisp a rainy sky (rain, storm)
+        /// keeps; their smoke turns to steam. Snow keeps four fifths.
+        rain_douse_factor: f32 = 0.35 in 0.05 ..= 1.0;
+        /// The battle's smoke load (`Game::battle_haze`): the haze over the
+        /// field that every hot remain feeds and the sky drains. Off draws
+        /// none and keeps no load.
+        battle_haze: bool = true in 0 ..= 1;
+        /// How fast the hot remains feed the haze, per unit of load a
+        /// second.
+        battle_haze_gain: f32 = 0.0018 in 0.0 ..= 0.1;
+        /// Seconds the sky takes to drain the haze by a factor e under a
+        /// clear sky; rain drains it in `battle_haze_rain_seconds`, a
+        /// sandstorm in half of this.
+        battle_haze_seconds: f32 = 600.0 in 10.0 ..= 3600.0;
+        battle_haze_rain_seconds: f32 = 30.0 in 5.0 ..= 600.0;
+        /// The most of the field the haze's banks ever cover, 0 to 1.
+        battle_haze_max: f32 = 0.6 in 0.0 ..= 1.0;
+        /// How much a full haze dims and warms the whole field.
+        battle_haze_grade: f32 = 0.16 in 0.0 ..= 0.6;
+        /// Radius (px) round each seat the haze thins to nothing in.
+        battle_haze_clear_px: f32 = 56.0 in 0.0 ..= 400.0;
+        /// Load a cold hulk still feeds the haze: a field full of them
+        /// keeps a little smoke over it.
+        battle_haze_hulk_load: f32 = 0.07 in 0.0 ..= 1.0;
+        /// Flakes of ash in the view per 10,000 px^2 under a full haze;
+        /// none below `ash_from_haze`.
+        ash_density: f32 = 1.4 in 0.0 ..= 20.0;
+        ash_from_haze: f32 = 0.2 in 0.0 ..= 1.0;
+        /// Sparks a second off a smouldering remain while it flares.
+        spark_rate: f32 = 8.0 in 0.0 ..= 60.0;
+        /// How dark a smoke column's shadow is on the floor: what a shaded
+        /// block keeps of its light, 1 for no shadow.
+        smoke_shadow_strength: f32 = 0.82 in 0.0 ..= 1.0;
+        /// How far a puff's shadow falls from under it, per px of its
+        /// height, down and to the right.
+        smoke_shadow_offset: f32 = 0.55 in 0.0 ..= 2.0;
+        /// How bright a smouldering remain is at night, against a fire.
+        smoulder_light_strength: f32 = 0.35 in 0.0 ..= 2.0;
+        /// Radius (px) of an ember bed's light at night.
+        ember_light_px: f32 = 40.0 in 0.0 ..= 200.0;
+        /// The warm light a full haze takes on over what burns at night.
+        haze_underlight: f32 = 0.16 in 0.0 ..= 1.0;
+        /// Seconds snow takes to cover a cold mark - a scorch, rubble, a
+        /// crater's rim, a hulk's deck - as far as it ever does.
+        snow_cover_seconds: f32 = 110.0 in 1.0 ..= 900.0;
+        /// Radius (px) of the wet ring a hot hulk melts in the snow.
+        snow_melt_px: f32 = 30.0 in 0.0 ..= 120.0;
+        /// How much harder a sandstorm's gust throws a column's smoke
+        /// along with it.
+        gust_tears_smoke: f32 = 2.2 in 0.0 ..= 10.0;
+        /// Seconds after its kill a hulk starts to rust (it takes four
+        /// minutes more to bloom), and how much of it rust covers in the
+        /// end.
+        wreck_rust_after_seconds: f32 = 100.0 in 0.0 ..= 900.0;
+        wreck_rust_max: f32 = 0.32 in 0.0 ..= 1.0;
+        /// Blackened parts a wave round's wreck leaves where it stood when
+        /// its body is taken off the field.
+        wreck_scar_parts: i32 = 4 in 0 ..= 16;
+        /// Gameplay, opt-in: a gust over a hot ember bed throws embers
+        /// downwind that can light wood, trees and boards
+        /// (`ember_catch_chance`), every `ember_bed_relight_seconds` while
+        /// the gust is strong. Read by `init`; off changes nothing.
+        ember_bed_relight: bool = false in 0 ..= 1 @ Restart;
+        ember_bed_relight_seconds: f32 = 3.0 in 0.2 ..= 60.0;
+        /// Gameplay, opt-in: under a sky that shortens sight, a tank
+        /// within `fire_reveal_px` of something burning - a ground fire, a
+        /// burning tile, a wreck still on fire - is seen at the full
+        /// `enemy_view_range`, as in a lamp's light.
+        fire_reveals: bool = false in 0 ..= 1 @ Restart;
+        fire_reveal_px: f32 = 96.0 in 0.0 ..= 400.0;
+        /// Gameplay, opt-in: the thick smoke of a burning or smouldering
+        /// remain hides a tank as tall grass does - its cell and the next
+        /// `smoke_cover_cells` downwind, while the remain is at least
+        /// `smoke_cover_strength` hot. Off is byte-identical.
+        smoke_cover: bool = false in 0 ..= 1 @ Restart;
+        smoke_cover_strength: f32 = 0.6 in 0.0 ..= 1.0;
+        smoke_cover_cells: i32 = 2 in 0 ..= 6;
+    }
+
     group cosmetics {
         // --- portals (portal.rs) ---
         /// Seconds for one visual revolution of a portal's spiral - the

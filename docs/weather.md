@@ -151,6 +151,16 @@ it was.
   on a hull. The sky pass draws the same band as a wall of thicker sand
   sweeping the field.
 
+- **What a fight leaves burning** (docs/aftermath.md): the sky works on
+  the remains too, a look only. Rain and a storm keep `rain_douse_factor`
+  (0.35) of every smoulder and wisp and turn their smoke to steam, nothing
+  flares in the rain, and the battle's haze drains in
+  `battle_haze_rain_seconds`; snow keeps four fifths of them, covers every
+  cold mark over `snow_cover_seconds` and is melted in a ring round a hot
+  wreck; a sandstorm's gust throws the columns along with it and drains the
+  haze faster. Under `fire_reveals` (off by default) a tank by a fire is seen
+  at the full range under a sky that shortens sight, as in a lamp's light.
+
 What the probe measures under each rule (a minute a round, the player
 kept alive, against the same rounds under a clear sky): no invariant,
 pile-up or grind anywhere; night and fog within the noise; rain and gusts
@@ -261,6 +271,12 @@ against the walls:
   dark. A wreck burns until it is a dead hulk; a hull with afterburn glows.
 - **The round's fires**: burning ground cells, burning tiles, lit fuses,
   fuel drums in the air.
+- **What still smoulders** (docs/aftermath.md): each hot remain a dim light
+  breathing with its embers and leaping as it flares
+  (`smoulder_light_strength`, `ember_light_px`), the hottest 24, and under
+  the battle's haze a broad warm light over each (`haze_underlight`), so the
+  smoke over a fire is lit from below and a long night battle grows brighter
+  as it burns.
 - **Portals**, pulsing blue.
 - **Blasts**, a big flash fading with the fireball's glow; a mushroom
   cloud's reaches half as far again.

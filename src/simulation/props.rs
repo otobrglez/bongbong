@@ -215,6 +215,18 @@ pub(crate) fn tile_rubble(material: Material, pos: Position, charred: bool, them
     Some(decal)
 }
 
+/// What a tree fire finished leaves standing over its litter: the
+/// charred stump of its `variant` (`Decal::stump`), smouldering. `None`
+/// for anything else and for a tree that fell without burning. A replica
+/// calls it off `Event::ObstacleDestroyed` with the variant of the tree
+/// still standing in its world.
+pub(crate) fn tile_stump(material: Material, variant: i32, pos: Position, charred: bool, theme: crate::map::Theme) -> Option<Decal> {
+    if !charred {
+        return None;
+    }
+    Decal::stump(material, variant, pos, material.is_dry(theme))
+}
+
 impl Game {
     /// Apply `amount` of damage to the obstacle `entity` - the only place on
     /// the simulation path an obstacle loses health, so the per-material
@@ -555,6 +567,9 @@ impl Game {
         }
         if let Some(decal) = tile_rubble(material, pos, charred, self.map.theme) {
             f.decals.push(decal);
+        }
+        if let Some(stump) = tile_stump(material, variant, pos, charred, self.map.theme) {
+            f.decals.push(stump);
         }
         if material.is_explosive() {
             let drum = Drum::from_variant(variant);
@@ -992,13 +1007,17 @@ impl Game {
 
     /// What a ground fire leaves when it goes out: the oil cell spent (a
     /// print with it), and a burn scar (`Scorch::burn`) for the caller to
-    /// stage. **Runs exactly once per cell**. The round calls it from `tick_fires`; a replica
-    /// calls it for the cell a snapshot has stopped listing, which is the
-    /// only way a fire ever leaves the list (`net::apply`).
+    /// stage - an ember bed, unless it was a lava bomb's pool, which
+    /// cools as rock (`lava.rs`). **Runs exactly once per cell**. The
+    /// round calls it from `tick_fires`; a replica calls it for the cell a
+    /// snapshot has stopped listing, which is the only way a fire ever
+    /// leaves the list (`net::apply`).
     pub(crate) fn fire_burnt_out(&mut self, fire: &GroundFire) -> Scorch {
         self.oil_cells.remove(&fire.cell);
         self.oil_prints.remove(&fire.cell);
-        Scorch::burn(fire.position())
+        let mut scar = Scorch::burn(fire.position());
+        scar.ember = !fire.lava;
+        scar
     }
 
     /// Advance every burning wood tile's fire and report the ones that
@@ -1049,15 +1068,24 @@ impl Game {
             );
         }
         for (from, seed, k) in throws {
-            let stray = (crate::blast::hash_unit(seed, 2 * k + 1) * 2.0 - 1.0) * t.ember_spread_deg;
-            let angle = (t.grass_gust_heading_deg + stray).to_radians();
-            let lo = t.ember_reach_min_px.min(t.ember_reach_max_px);
-            let reach = lo + crate::blast::hash_unit(seed, 2 * k + 2) * (t.ember_reach_max_px - lo);
-            let to = Position::new(from.x + math::cos(angle) * reach, from.y + math::sin(angle) * reach);
-            self.embers.push(Ember { to, lands_at: self.time + t.ember_flight_seconds, seed: seed ^ k.wrapping_mul(0x9e37_79b9) });
-            f.events.push(Event::EmberFlew { x: from.x, y: from.y, to_x: to.x, to_y: to.y });
+            self.throw_ember(f, from, seed, k);
         }
         self.land_embers(f, live);
+    }
+
+    /// Throw the `k`th of `seed`'s embers from `from` downwind
+    /// (`grass_gust_heading_deg`, strayed by up to `ember_spread_deg`), to
+    /// land `ember_reach_*_px` away after `ember_flight_seconds`
+    /// (`land_embers`). Hashed: no RNG.
+    pub(super) fn throw_ember(&mut self, f: &mut Frame, from: Position, seed: u32, k: u32) {
+        let t = tuning();
+        let stray = (crate::blast::hash_unit(seed, 2 * k + 1) * 2.0 - 1.0) * t.ember_spread_deg;
+        let angle = (t.grass_gust_heading_deg + stray).to_radians();
+        let lo = t.ember_reach_min_px.min(t.ember_reach_max_px);
+        let reach = lo + crate::blast::hash_unit(seed, 2 * k + 2) * (t.ember_reach_max_px - lo);
+        let to = Position::new(from.x + math::cos(angle) * reach, from.y + math::sin(angle) * reach);
+        self.embers.push(Ember { to, lands_at: self.time + t.ember_flight_seconds, seed: seed ^ k.wrapping_mul(0x9e37_79b9) });
+        f.events.push(Event::EmberFlew { x: from.x, y: from.y, to_x: to.x, to_y: to.y });
     }
 
     /// Bring down the embers whose flight is over. One that falls on wood
