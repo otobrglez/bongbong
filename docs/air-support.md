@@ -1,8 +1,7 @@
 # Air support
 
-BB-119. Research and proposed design; nothing here is built yet. The open
-questions for Oto are in §9. Until they are answered, the "Proposal" lines are
-recommendations and not decisions.
+BB-119. Research and design; nothing here is built yet. Oto settled the open
+questions on 2026-10-12 (§9), and every proposal below was taken as written.
 
 The issue: a supply crate shows a helicopter or a plane. A seat that picks it
 up starts a 15 s countdown, shown in a small box under the HUD's ammo section.
@@ -18,7 +17,7 @@ have `side_blast`, the side-aware area hit. `TowerPack` and `FrogHealth` are
 crates that are not a tank weapon. What is new: two aircraft, the call that
 belongs to a seat, the HUD box, and the sprites.
 
-## 1. How it plays (proposal)
+## 1. How it plays
 
 - **The crate.** Two kinds, `PickupKind::AirHeli` and `PickupKind::AirJet`
   (`pickup = "air_heli"` / `"air_jet"`). Each shows its aircraft's
@@ -31,7 +30,7 @@ belongs to a seat, the HUD box, and the sprites.
   shows a small box with the aircraft's glyph and a count from 15
   (`air_support_delay_seconds`). Calls stack as a queue: while a call is
   running, a second crate queues another sortie, which starts its own count
-  when the first aircraft leaves (§9 Q4).
+  when the first aircraft leaves (§9.4).
 - **The arrival.** At zero the aircraft enters from the field edge
   nearest a point behind the caller (hashed from the call id, so not random
   and not RNG), flying towards the caller. A short "AIR SUPPORT INBOUND"
@@ -60,12 +59,13 @@ belongs to a seat, the HUD box, and the sprites.
   (`damage_obstacle` with falloff), as they do for missiles.
 - **Counterplay.** The aircraft is not a ground body: nothing collides
   with it, and it ignores the nav grid and physics. Whether enemies can
-  shoot it down is §9 Q3. Proposal: the helicopter is an air target (only
-  bullets hit it, and enemies only from inside the caller's sight box, as
-  for the FPV swarm), and the plane is too fast to hit.
+  shoot it down (§9.3): the helicopter is an air target (only bullets hit
+  it, and enemies only from inside the caller's sight box, as for the FPV
+  swarm), and the plane is too fast to hit.
 - **The marker.** The minimap shows the aircraft as a small glyph in the
-  caller's team colour, and the strike point blinks while the call counts
-  down. The indicators show an off-screen arrow to an inbound or active
+  caller's team colour, blinking while it attacks. There is no mark during
+  the countdown, since the targets are picked only on arrival, and no strike
+  marker on the field (§9.6). The indicators show an off-screen arrow to an inbound or active
   aircraft (a new `ArrowKind::Aircraft`). The minimap is never drawn on
   phones, so there the arrow is the only marker. The aircraft is also drawn
   on the field (§5).
@@ -95,8 +95,7 @@ This follows the special weapons' split:
   timer on the `Tank`. Tank timers go on the wire only as flag bits, and
   `net/apply.rs` `set_timer` restarts them at full on a client, which is
   wrong for a 15 s count a player watches. A queued call has
-  `arrive_at = None` until the previous sortie of that seat leaves (if Q4
-  goes the queue way).
+  `arrive_at = None` until the previous sortie of that seat leaves (§9.4).
 - `Aircraft` is a hecs component (spawned alone, like `fpv::Drone`):
   `{ id, owner: Owner::Player(seat), sortie, stage, ground: Position, height,
   heading, speed, targets: SmallVec<slot>, shots_left, stage_time }`. It is
@@ -178,7 +177,7 @@ The FPV and rod senses can move to it in a separate issue.
   `docs/AIRCRAFT_SPEC.md`), importing the tankdesign `kit.py` palette.
   `export.py` is built around the 33×60 tank layout, so the aircraft do not
   go through it. Frames: heli body, rotor in 4 rotation frames, tail rotor
-  in 2, a damage overlay if Q3 makes it shootable; jet body, plus
+  in 2, a damage overlay (it can be shot down, §9.3); jet body, plus
   afterburner/engine glow for the glow pass. Top-down, rotation 0 = facing
   up like everything else. Run `just check-sheets` after.
 - **Crate art.** Two new rows in `gen_crates.py` (`KINDS`, a design dict
@@ -221,9 +220,9 @@ The FPV and rod senses can move to it in a separate issue.
 - The only draws are `explosion_hit`'s damage rolls, which happen only in
   a round where a seat took the crate. A round without the crate keeps its
   stream, so `the_one_and_two_seat_streams_are_pinned` stays as it is.
-- If air crates join the random bonus rolls (Q5), the gate is checked
-  **before** the chance draw (the frog-pack rule), so maps without them
-  keep their stream.
+- Air crates come only from map slots (§9.5), so they add no bonus roll
+  and no draw to a map that has none. If a random roll is ever added, its
+  gate is checked **before** the chance draw (the frog-pack rule).
 - Transcendentals (heading, orbit) go through `math::`.
 - Walks go seats in index order, then enemies.
 
@@ -250,26 +249,20 @@ The FPV and rod senses can move to it in a separate issue.
 - Dev server: a `debug_call_air_support {seat, sortie}` mutator for
   screenshots. Rendering is checked by eye on a screenshot.
 
-## 9. Open questions for Oto
+## 9. Decisions (Oto, 2026-10-12)
 
-1. **One crate or two?** Two kinds (heli crate, jet crate), so the symbol
-   says which aircraft comes (proposal). Or one "air support" crate that
-   picks heli or jet (hashed from the slot).
-2. **Payloads.** Is the proposal right: heli = rockets at up to 3 targets
-   with a hover, jet = one gun run + two bombs on the cluster? Should a
-   single sortie be able to wreck a full-health tank, or only soften it?
-3. **Can it be shot down?** Proposal: heli yes (an air target, so enemy
-   bullets and towers can hit it), jet no. Or both invulnerable for v1.
-4. **A second crate while counting.** Queue a second sortie (proposal),
-   restart the count, or the crate stays on the ground (`wants_pickup` false
-   while a call runs)?
-5. **Where it spawns.** Only where a map places it (`pickup = "air_heli"`
-   in the editor's crate tool), or also as a rare random bonus roll? And
-   should enemies ever get their own air support (enemy-owned sorties
-   against seats)? Proposal: map slots only, seats only.
-6. **"Marker on map".** The minimap mark plus an off-screen arrow
-   (proposal), or also a target marker drawn on the field where it will
-   strike?
-7. **Enemy reaction.** Should enemies scatter from an inbound strike, the
-   way they flee the rod's zone? Proposal: no for v1. Enemies do not see
-   the aircraft coming.
+1. **Crates.** Two kinds, `air_heli` and `air_jet`. The symbol on the box
+   says which aircraft comes.
+2. **Payload.** Strong. The heli fires rockets at up to 3 targets while
+   hovering. The jet makes one gun run and drops two bombs on the cluster. A
+   sortie can wreck a full-health tank caught in the middle.
+3. **Shoot-down.** The heli is an air target (enemy bullets and towers, only
+   from inside the caller's sight box). The jet cannot be hit.
+4. **A second crate while counting.** It queues a second sortie, which
+   starts its count when the first one leaves. The HUD box shows +1.
+5. **Spawning.** Map slots only, no random bonus roll. Seats only: enemies
+   never take the crate or get aircraft of their own.
+6. **Marker.** A minimap mark plus an off-screen arrow. No strike marker on
+   the field.
+7. **Enemy reaction.** None in v1. Enemies do not see the strike coming
+   (shooting at the heli under rule 3 is the only reaction).
