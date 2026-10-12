@@ -42,7 +42,7 @@ use crate::mode::{Driver, Session};
 use crate::net::client::Phase;
 use crate::net::round::AnyRound;
 use crate::obstacle::Obstacle;
-use crate::simulation::debug::{CLUSTER_RADIUS_PX, Detail, FieldTarget, JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, TankPatch, TrackRow, r1, signed_quarter_turn};
+use crate::simulation::debug::{CLUSTER_RADIUS_PX, Detail, FieldTarget, JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, TankPatch, TrackRow, r1, signed_quarter_turn, spin_step, turn_heading};
 use crate::simulation::{Event, Game, Input, Overlays, PlayerCount};
 use crate::tank::{Dir, TankKind};
 use crate::tuning;
@@ -714,8 +714,12 @@ struct TurnStats {
     turret_deg: f32,
     /// The frame `rotation` last changed on.
     last_turn_frame: Option<u64>,
+    /// The heading the turn rules read last (`turn_heading`).
     #[serde(skip)]
     last_rotation: f32,
+    /// The hull angle last seen, for the spin chain (`spin_step`).
+    #[serde(skip)]
+    last_raw: f32,
     #[serde(skip)]
     last_turret: f32,
     /// The last three distinct headings with the frame each began on.
@@ -732,10 +736,13 @@ struct TurnStats {
 impl TurnStats {
     fn start(row: &TrackRow, frame: u64) -> TurnStats {
         let pos = Position::new(row.x, row.y);
+        // A free hull's facing as the turn rules read it (`turn_heading`).
+        let rotation = Dir::nearest(row.rotation).rotation();
         let mut headings = VecDeque::with_capacity(3);
-        headings.push_back((row.rotation, frame));
+        headings.push_back((rotation, frame));
         TurnStats {
-            last_rotation: row.rotation,
+            last_rotation: rotation,
+            last_raw: row.rotation,
             last_turret: row.turret,
             headings,
             spin_start_frame: frame,
@@ -753,12 +760,42 @@ impl TurnStats {
         }
         self.turret_deg += turret_delta.abs();
         self.last_turret = row.turret;
-        if row.rotation == self.last_rotation {
+        // The spin chain sums the angle the hull really turns
+        // (`spin_step`); the rest reads a free hull's nearest way
+        // (`turn_heading`).
+        if row.rotation != self.last_raw {
+            match spin_step(self.last_raw, row.rotation) {
+                Some(delta) => {
+                    let same_dir = self.spin_sum != 0.0 && (self.spin_sum > 0.0) == (delta > 0.0);
+                    let in_window = frame - self.spin_start_frame <= u64::from(SPIN_WINDOW_FRAMES);
+                    if same_dir && in_window {
+                        self.spin_sum += delta;
+                    } else {
+                        self.spin_sum = delta;
+                        self.spin_start_frame = frame;
+                        self.spin_start_pos = pos;
+                    }
+                    self.max_spin_deg = self.max_spin_deg.max(self.spin_sum.abs());
+                    if self.spin_sum.abs() >= SPIN_FULL_CIRCLE_DEG && pos.distance_to(self.spin_start_pos) <= SPIN_NET_MAX {
+                        self.spins += 1;
+                        self.spin_sum = 0.0;
+                    }
+                }
+                None => {
+                    self.spin_sum = 0.0;
+                    self.spin_start_frame = frame;
+                    self.spin_start_pos = pos;
+                }
+            }
+            self.last_raw = row.rotation;
+        }
+        let rotation = turn_heading(self.last_rotation, row.rotation);
+        if rotation == self.last_rotation {
             return;
         }
         self.turns += 1;
         self.last_turn_frame = Some(frame);
-        self.headings.push_back((row.rotation, frame));
+        self.headings.push_back((rotation, frame));
         if self.headings.len() > 3 {
             self.headings.pop_front();
         }
@@ -769,31 +806,10 @@ impl TurnStats {
         {
             self.reversals += 1;
         }
-        match signed_quarter_turn(self.last_rotation, row.rotation) {
-            Some(delta) => {
-                let same_dir = self.spin_sum != 0.0 && (self.spin_sum > 0.0) == (delta > 0.0);
-                let in_window = frame - self.spin_start_frame <= u64::from(SPIN_WINDOW_FRAMES);
-                if same_dir && in_window {
-                    self.spin_sum += delta;
-                } else {
-                    self.spin_sum = delta;
-                    self.spin_start_frame = frame;
-                    self.spin_start_pos = pos;
-                }
-                self.max_spin_deg = self.max_spin_deg.max(self.spin_sum.abs());
-                if self.spin_sum.abs() >= SPIN_FULL_CIRCLE_DEG && pos.distance_to(self.spin_start_pos) <= SPIN_NET_MAX {
-                    self.spins += 1;
-                    self.spin_sum = 0.0;
-                }
-            }
-            None => {
-                self.u_turns += 1;
-                self.spin_sum = 0.0;
-                self.spin_start_frame = frame;
-                self.spin_start_pos = pos;
-            }
+        if signed_quarter_turn(self.last_rotation, rotation).is_none() {
+            self.u_turns += 1;
         }
-        self.last_rotation = row.rotation;
+        self.last_rotation = rotation;
     }
 }
 

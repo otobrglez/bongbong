@@ -507,12 +507,13 @@ impl Terrain {
             if skips(tank.owner()) || tank.is_wreck() {
                 continue;
             }
-            let ((hc, hh), (tc, th)) = match past.and_then(|p| p.tank(entity)) {
-                Some(then) => (then.hull, then.turret),
-                None => (tank.hull_bbox_world(), tank.turret_bbox_world()),
+            let entries = match past.and_then(|p| p.tank(entity)) {
+                Some(then) => [segment_hits_aabb(p0, p1, then.hull.0, then.hull.1 + enemy_pad), segment_hits_aabb(p0, p1, then.turret.0, then.turret.1 + enemy_pad)],
+                None => tank_entries(tank, p0, p1, enemy_pad),
             };
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, hc, hh + enemy_pad), 1, ShellTarget::Tank(entity));
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, tc, th + enemy_pad), 1, ShellTarget::Tank(entity));
+            for entry in entries {
+                consider_hit(&mut best, entry, 1, ShellTarget::Tank(entity));
+            }
         }
 
         for &(entity, now) in &self.frogs {
@@ -595,11 +596,15 @@ impl Terrain {
             if tank.owner() == shooter || tank.is_wreck() {
                 continue;
             }
-            let ((hc, hh), (tc, th)) = match past.and_then(|p| p.tank(entity)) {
-                Some(then) => (then.hull, then.turret),
-                None => (tank.hull_bbox_world(), tank.turret_bbox_world()),
+            let entry = match past.and_then(|p| p.tank(entity)) {
+                Some(then) => first(&[(then.hull.0, then.hull.1 + enemy_pad), (then.turret.0, then.turret.1 + enemy_pad)]),
+                None if tank.faces_cardinal() => {
+                    let (hull, turret) = (tank.hull_bbox_world(), tank.turret_bbox_world());
+                    first(&[(hull.0, hull.1 + enemy_pad), (turret.0, turret.1 + enemy_pad)])
+                }
+                None => tank_entries(tank, p0, p1, enemy_pad).into_iter().flatten().min_by(f32::total_cmp),
             };
-            if let Some(t) = first(&[(hc, hh + enemy_pad), (tc, th + enemy_pad)]) {
+            if let Some(t) = entry {
                 hits.push((t, 1, tank.owner_slot() as i64, ShellTarget::Tank(entity)));
             }
         }

@@ -252,6 +252,74 @@ fn a_shot_meets_a_turned_hull_on_its_true_box() {
     assert!(middle[0].is_some(), "through the middle it hits");
 }
 
+/// A parked-free enemy of the round's steering at `at`: shells only, no
+/// shield, its fire timer clear.
+fn enemy_at(game: &mut Game, at: Position) -> Entity {
+    let slot = game.debug_spawn_enemy(at, Some(1), Some(crate::ai::Role::Player)).expect("spawns");
+    let entity = game.tank_entity_by_slot(slot).expect("exists");
+    with_tank_mut(&game.world, entity, |t| {
+        t.disarm();
+        t.shield_hp = 0.0;
+        t.shield_timer = 0.0;
+    });
+    entity
+}
+
+/// An enemy of a free round steers freely, on a round collider; a
+/// four-way round's is the box it always was.
+#[test]
+fn an_enemy_in_a_free_round_steers_freely() {
+    let mut game = round(Steer::Free, "");
+    let enemy = enemy_at(&mut game, map::cell_to_world(25, 12));
+    let (steer, body, radius) = with_tank(&game.world, enemy, |t| (t.steer, t.body.expect("a body"), t.move_radius()));
+    assert_eq!(steer, Steer::Free);
+    assert_eq!(game.physics.round_radius(body), Some(radius));
+    let mut game = round(Steer::Cardinal, "");
+    let enemy = enemy_at(&mut game, map::cell_to_world(25, 12));
+    let (steer, body) = with_tank(&game.world, enemy, |t| (t.steer, t.body.expect("a body")));
+    assert_eq!(steer, Steer::Cardinal);
+    assert_eq!(game.physics.round_radius(body), None);
+}
+
+/// A free enemy drives its route straight across open ground at an angle,
+/// not in four-way steps: on its way to a seat up and to the left, its
+/// facing leaves the four ways and both its coordinates fall together.
+#[test]
+fn a_free_enemy_drives_its_route_at_an_angle() {
+    let mut game = round(Steer::Free, "");
+    let enemy = enemy_at(&mut game, map::cell_to_world(26, 15));
+    let from = with_tank(&game.world, enemy, |t| t.position);
+    let mut turned = false;
+    for _ in 0..40 {
+        game.update(Input::default(), DT, W, H);
+        turned |= with_tank(&game.world, enemy, |t| !t.faces_cardinal());
+    }
+    let moved = with_tank(&game.world, enemy, |t| t.position) - from;
+    assert!(turned, "its facing left the four ways");
+    assert!(moved.x < -20.0 && moved.y < -10.0, "up and to the left at once: {moved:?}");
+}
+
+/// The probe's turn rules (`simulation::debug`): a four-way hull's facing
+/// is read as it is, a free hull's as the nearest way past a hysteresis
+/// band; the spin chain steps by the angle turned, a reversal breaking it.
+#[test]
+fn the_turn_rules_read_a_free_hull_by_the_angle_it_turns() {
+    use crate::simulation::debug::{spin_step, turn_heading, signed_quarter_turn};
+    for held in [0.0, 90.0, 180.0, 270.0] {
+        for rotation in [0.0, 90.0, 180.0, 270.0] {
+            assert_eq!(turn_heading(held, rotation), rotation, "a four-way hull's own facing");
+            if held != rotation {
+                assert_eq!(spin_step(held, rotation), signed_quarter_turn(held, rotation), "a four-way hull's quarter turns");
+            }
+        }
+    }
+    assert_eq!(turn_heading(90.0, 44.0), 90.0, "a degree past the diagonal is held");
+    assert_eq!(turn_heading(90.0, 34.0), 0.0, "past the band it is the next way");
+    assert_eq!(turn_heading(0.0, 355.5), 0.0);
+    assert_eq!(spin_step(350.0, 10.0), Some(20.0));
+    assert_eq!(spin_step(0.0, 180.0), None, "a reversal breaks the chain");
+}
+
 /// A free round plays the same round from the same seed and the same
 /// sticks, bit for bit.
 #[test]

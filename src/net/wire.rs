@@ -1436,7 +1436,7 @@ mod tests {
         for &move_dir in &dirs {
             for &face in &dirs {
                 for (fire, lamp) in [(false, false), (true, false), (false, true), (true, true)] {
-                    let intent = Intent { move_dir, heading: Some(45.0), face, fire, fire_aim_offset: 12.5, slow: 0.5, lamp, aim_cell: Some((3, 4)), drop_charge: true };
+                    let intent = Intent { move_dir, heading: Some(45.0), face, aim: Some(30.0), fire, fire_aim_offset: 12.5, slow: 0.5, lamp, aim_cell: Some((3, 4)), drop_charge: true };
                     let msg = IntentMsg::new(7, &intent);
                     let back: Intent = (&msg).into();
                     assert_eq!(back.move_dir, move_dir);

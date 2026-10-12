@@ -2118,12 +2118,12 @@ impl Game {
                 })
             });
             let erow = TANK_SPRITE_ORDER[enemy_positions.len() % TANK_SPRITE_ORDER.len()];
-            let mut enemy = roll_enemy_tank(&mut rng, erow, pos, self.first_enemy_slot() + enemy_positions.len());
+            let mut enemy = roll_enemy_tank(&mut rng, erow, pos, self.first_enemy_slot() + enemy_positions.len(), self.steer);
             // Last of the per-enemy rolls, and skipped outright at a zero
             // share, so a mission without hunters draws exactly what a
             // Destroy round does.
             let role = roll_role(self.mission, &mut rng);
-            enemy.body = Some(self.physics.spawn_tank(pos, enemy.move_half_extents(false), enemy.mass()));
+            enemy.body = Some(spawn_hull(&mut self.physics, &enemy));
             enemy_positions.push(pos);
             field_pool.place(pos, enemy_clear);
             self.world.spawn((enemy, Ai::with_role(role)));
@@ -4360,9 +4360,14 @@ impl Game {
             // Aim now, drive later. `tank.control` sets the hull rotation
             // a shot flies along, so it has to happen before the shot; the
             // impulse is the only part that waits for the commander. A
-            // tank in a tell holds its aim whatever it decided.
+            // tank in a tell holds its aim whatever it decided. A free hull
+            // turns a step a tick rather than snapping, in the drive alone
+            // - turned here too it would turn twice - and fires along the
+            // facing it has, which its aim waits on (`hold_and_fire_at`).
             let intent = hold_for_tell(intent, tank.tell);
-            tank.control(intent.move_dir, intent.face);
+            if tank.steer == Steer::Cardinal {
+                tank.control(intent.move_dir, intent.face);
+            }
             let owner = tank.owner();
             tick_queued_shots(&mut self.physics, f, tank, owner);
             // The AI paces itself with its own fire timer; `fire_cooldown`
@@ -6040,7 +6045,10 @@ fn coast_enemy(physics: &mut Physics, f: &mut Frame, entity: Entity, tank: &mut 
     let handle = tank.body.expect("a live enemy always has a body here");
     let current = physics.velocity(handle);
     let facing_before = tank.rotation;
-    tank.control(intent.move_dir, intent.face);
+    // A free hull turns in the drive alone (`enemy_phase`'s collect pass).
+    if tank.steer == Steer::Cardinal {
+        tank.control(intent.move_dir, intent.face);
+    }
     let owner = tank.owner();
     tick_queued_shots(physics, f, tank, owner);
     // The trigger released - but held while a charge runs, so a coast never
@@ -6129,7 +6137,7 @@ fn enemy_trigger(physics: &mut Physics, f: &mut Frame, entity: Entity, tank: &mu
     let weapon = tank.active_weapon();
     match weapon.tell_seconds() {
         Some(total) => {
-            let facing = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up);
+            let facing = tank.facing();
             tank.tell = Some(crate::tank::Tell { weapon, left: total, total, facing });
             f.events.push(Event::TellStarted { slot: tank.owner_slot(), weapon: weapon.name() });
         }
@@ -6199,7 +6207,7 @@ fn drive_tank_with(
     match tank.steer {
         Steer::Cardinal => tank.control(intent.move_dir, intent.face),
         Steer::Free => {
-            let face = intent.face.map(Dir::rotation);
+            let face = intent.aim.or(intent.face.map(Dir::rotation));
             tank.steer_free(intent.heading.or(intent.move_dir.map(Dir::rotation)), face, dt, &tuning())
         }
     }
@@ -6702,7 +6710,7 @@ fn with_two_tanks_mut<R>(world: &mut hecs::World, a: Entity, b: Entity, f: impl 
 /// track wobble. Shared by the band placement in `init` and the wave
 /// scheduler, so a wave tank is kitted exactly like a band tank. No
 /// physics body: the caller spawns one when the tank is on the field.
-fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize) -> Tank {
+fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize, steer: Steer) -> Tank {
     let factor = 1.0 + rng.random_range(-tuning().enemy_speed_variance..tuning().enemy_speed_variance);
     let mut enemy = Tank {
         row,
@@ -6712,6 +6720,7 @@ fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize) -> 
         rotation: 180.0,
         speed_scale: factor,
         owner: Owner::Enemy(slot),
+        steer,
         ..Tank::default()
     };
     if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_chance {

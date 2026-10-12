@@ -8,12 +8,20 @@ use crate::bt::{Node, Status, action, condition, selector, sequence};
 use crate::obstacle::Material;
 use crate::pathfind::{Grid, KeepOff, RouteAhead};
 use crate::pickup::PickupKind;
-use crate::tank::{ActiveWeapon, Dir, Tank};
+use crate::tank::{heading_deg, heading_vec, signed_turn, ActiveWeapon, Dir, Steer, Tank};
 use crate::{
     MAX_DAMAGE,
     OBSTACLE_GRID_SIZE,
     Position,
 };
+
+/// How near the point it steers at a free hull has arrived (px): it stands
+/// there facing as it is (`Ai::steer_toward_free`).
+const FREE_ARRIVED_PX: f32 = OBSTACLE_GRID_SIZE * 0.25;
+
+/// How far off its commanded heading (degrees) a free hull may still be
+/// turning before its stuck clock runs (`Ai::think`).
+const FREE_STUCK_TURN_DEG: f32 = 30.0;
 
 /// The bearings a refuge is looked for along (`Brain::refuge`): the
 /// cardinals, then the diagonals, as unit vectors.
@@ -72,6 +80,11 @@ pub struct Intent {
     /// Direction to face without moving (e.g. while aiming). Ignored if move_dir
     /// is set. None leaves the hull as-is.
     pub face: Option<Dir>,
+    /// The angle in degrees (0 = up, clockwise) a free-steering hull turns
+    /// to without moving, ahead of `face`: the heading a free enemy holds
+    /// while it yields to a tank ahead (`Ai::think`). A `Cardinal` hull
+    /// never reads it. AI-only, never on the wire.
+    pub aim: Option<f32>,
     /// True on the frame the tank wants to fire a shell.
     pub fire: bool,
     /// Extra angle (degrees) to add to the shell's heading when firing, so a shot
@@ -89,8 +102,9 @@ pub struct Intent {
     /// harmless. Read it through `speed_scale()` rather than inverting by
     /// hand at the use site.
     ///
-    /// Nothing in `ai.rs` ever sets this: it is the one lever
-    /// `simulation::command` has over a tank's movement
+    /// Besides a free-steering hull easing off to arrive on the point it
+    /// steers at (`Ai::steer_toward_free`), nothing in `ai.rs` sets this: it
+    /// is the one lever `simulation::command` has over a tank's movement
     /// (docs/enemy-command-and-control-prd.md), and the player always leaves
     /// it at 0.
     pub slow: f32,
@@ -778,6 +792,21 @@ pub struct Ai {
     /// was progress in the direction that was asked for. See
     /// `stuck_timer`.
     last_move_dir: Option<Dir>,
+    /// The heading (degrees) a free-steering hull drove at the end of the
+    /// last `think` (`Intent::heading`), its route's straight line rather
+    /// than `last_move_dir`'s nearest way: what the stuck clock measures
+    /// progress along while it is set (docs/free-steer.md).
+    last_heading: Option<f32>,
+    /// The heading `steer_toward_free` chose this think, to be driven if
+    /// the tree's move is still its way at the end of `think`. `None` for a
+    /// four-way hull, a sidestep or an escape.
+    free_heading: Option<f32>,
+    /// How much `steer_toward_free` eases a free hull off this think as it
+    /// arrives on the point it steers at (`Intent::slow`, 0 to 1).
+    free_slow: f32,
+    /// The ease-off the last `think` drove with: while it is on, the hull
+    /// is slowing on purpose and the stuck clock stands still.
+    last_slow: f32,
     /// Where this tank stood at the previous tick - the baseline the next
     /// tick's displacement is measured from. `None` before the first tick.
     last_position: Option<Position>,
@@ -1085,6 +1114,10 @@ impl Default for Ai {
             snipe_cooldown: 0.0,
             retreating: false,
             last_move_dir: None,
+            last_heading: None,
+            free_heading: None,
+            free_slow: 0.0,
+            last_slow: 0.0,
             last_position: None,
             motion: Vec2::new(0.0, 0.0),
             progress_avg: None,
@@ -1274,10 +1307,26 @@ impl Ai {
         // for is evidence of nothing, so the stuck and breach clocks stand
         // still until it ends (docs/sonic-hammer.md).
         let skidding = me.skid > 0.0;
+        // A free hull still turning onto the heading it was given is not
+        // stuck yet: it has not started to drive it (`Tank::steer_free`
+        // pivots before it drives), and a stuck escape fired at a pivot
+        // sends it turning onto another, round and round
+        // (docs/free-steer.md). Its clock stands still until it faces the
+        // way it was told to go, within `FREE_STUCK_TURN_DEG` - and while
+        // it eases off on purpose to arrive (`steer_toward_free`).
+        let turning = me.steer == Steer::Free
+            && (self.last_slow > 0.0
+                || self
+                    .last_move_dir
+                    .map(|dir| self.last_heading.unwrap_or(dir.rotation()))
+                    .is_some_and(|heading| signed_turn(me.rotation, heading).abs() > FREE_STUCK_TURN_DEG));
         match (self.last_move_dir, moved) {
-            _ if skidding => {}
+            _ if skidding || turning => {}
             (Some(dir), Some(moved)) => {
-                let progress = (moved.x * dir.vec().x + moved.y * dir.vec().y) / dt.max(f32::EPSILON);
+                // A free hull drove its route's own line, not the way
+                // nearest it.
+                let along = self.last_heading.map_or(dir.vec(), heading_vec);
+                let progress = (moved.x * along.x + moved.y * along.y) / dt.max(f32::EPSILON);
                 let k = (dt / tuning().stuck_progress_window_seconds).clamp(0.0, 1.0);
                 let avg = match self.progress_avg {
                     Some(avg) => avg + (progress - avg) * k,
@@ -1331,6 +1380,8 @@ impl Ai {
             _ => None,
         };
         self.sheltering = false;
+        self.free_heading = None;
+        self.free_slow = 0.0;
         self.near_fight = me.position.distance_to(target) <= tuning().enemy_attack_range;
         let mut bb = Brain {
             me,
@@ -1412,6 +1463,11 @@ impl Ai {
                 if self.yield_timer <= tuning().enemy_yield_seconds {
                     intent.move_dir = None;
                     intent.face = intent.face.or(Some(dir));
+                    // A free hull holds the heading it had rather than
+                    // turning onto the way nearest it to wait.
+                    if me.steer == Steer::Free {
+                        intent.aim = intent.aim.or(Some(me.rotation));
+                    }
                 }
             } else {
                 self.yield_timer = 0.0;
@@ -1420,8 +1476,20 @@ impl Ai {
             self.yield_timer = 0.0;
         }
 
+        // A free hull drives its route's straight line, while the move
+        // the tree settled on is still the way steering chose it
+        // (`steer_toward_free`); a sidestep, an escape, a brake or a wait
+        // keeps its four ways.
+        if let Some(heading) = self.free_heading
+            && intent.move_dir == Some(Dir::nearest(heading))
+        {
+            intent.heading = Some(heading);
+            intent.slow = intent.slow.max(self.free_slow);
+        }
         let intent = intent;
         self.last_move_dir = intent.move_dir;
+        self.last_heading = intent.heading.filter(|_| intent.move_dir.is_some());
+        self.last_slow = if intent.heading.is_some() { intent.slow } else { 0.0 };
         self.last_action = last_action;
         self.last_intent = intent;
         intent
@@ -1707,7 +1775,9 @@ impl Ai {
         rng: &mut SmallRng,
     ) -> Dir {
         let heading = self.route_heading();
-        let route = if ctx.on_portal_cooldown {
+        let route = if ctx.free {
+            grid.route_ahead_far(from, target, ctx.on_portal_cooldown, ctx.keep())
+        } else if ctx.on_portal_cooldown {
             grid.route_ahead_walking_keeping_off(from, target, ctx.keep())
         } else {
             grid.route_ahead_keeping_off(from, target, heading, ctx.keep())
@@ -1722,7 +1792,8 @@ impl Ai {
                 if from.distance_to(sap.at) <= grid.dims().2 {
                     return sap.dir;
                 }
-                if let Some(route) = grid.route_ahead(from, sap.at, heading) {
+                let route = if ctx.free { grid.route_ahead_far(from, sap.at, false, KeepOff::NONE) } else { grid.route_ahead(from, sap.at, heading) };
+                if let Some(route) = route {
                     return self.steer_toward(from, Some(route), sap.at, bounds, half, ctx, grid);
                 }
             }
@@ -1938,6 +2009,9 @@ impl Ai {
         ctx: AvoidCtx,
         grid: &Grid,
     ) -> Dir {
+        if ctx.free {
+            return self.steer_toward_free(from, route, target, bounds, half, ctx, grid);
+        }
         let routed = route.map_or(target, |r| r.first());
         let fresh = Dir::toward(from, routed);
         // The route as lanes, against the heading held: `Some` while it
@@ -1971,41 +2045,9 @@ impl Ai {
             _ => None,
         };
 
-        let blocked = |d: Dir| heads_into_wall(d, from, bounds, half) || grid.blocked_ahead(from, d.vec());
-        let dir = if self.stuck_timer >= tuning().stuck_escape_seconds {
-            // Asked to move for STUCK_ESCAPE_SECONDS running and made no
-            // headway that way (see `think`'s progress tracking) - force a
-            // hard reset instead of letting a bad commitment call wedge the
-            // tank forever. This is the reactive safety net for a target
-            // that's technically reachable but still jamming in practice (a
-            // tight, contested squeeze between other tanks, say) - outright
-            // unreachability is `steer`'s job, one level up, to hand off to
-            // `wander` before this function ever sees it. Turn away from
-            // whatever heading has actually been failing (`committed_dir`)
-            // rather than retrying the same pathfind toward the same
-            // target: a perpendicular first (side chosen by index parity so
-            // two jammed tanks don't mirror each other), the other
-            // perpendicular if that one drives into a wall or blocked cell,
-            // and straight back out as the last resort - a tank pinned in a
-            // corner has nowhere else to go. The escape is held for
-            // `stuck_escape_hold_seconds` over every sidestep (`escape_dir`).
-            self.stuck_timer = 0.0;
-            self.escapes += 1;
-            let failing = self.committed_dir.unwrap_or(fresh);
-            let left = ctx.my_index.is_multiple_of(2);
-            let escape = [perpendicular(failing, left), perpendicular(failing, !left), opposite(failing)]
-                .into_iter()
-                .find(|&d| !blocked(d))
-                .unwrap_or_else(|| perpendicular(failing, left));
-            self.escape_dir = Some(escape);
-            self.escape_timer = tuning().stuck_escape_hold_seconds;
-            self.dodge_dir = None;
-            self.dodge_timer = 0.0;
-            escape
-        } else if let Some(escape) = self.escape_dir.filter(|&d| self.escape_timer > 0.0 && !blocked(d)) {
+        let dir = if let Some(escape) = self.stuck_escape(fresh, from, bounds, half, ctx, grid) {
             escape
         } else {
-            self.escape_dir = None;
             match (self.committed_dir, turn) {
                 (None, _) => {
                     self.commit(fresh);
@@ -2055,6 +2097,121 @@ impl Ai {
         // no longer steering's problem - the physics engine's wall colliders
         // stop/slide the tank for real.
         let dir = if self.escape_dir.is_some() { dir } else { self.avoid_collisions(dir, from, bounds, half, ctx, grid) };
+        self.commit(dir);
+        dir
+    }
+
+    /// The stuck escape both route followers share (`steer_toward`,
+    /// `steer_toward_free`): `Some` way out while one is due or held,
+    /// `None` - and the held one let go - otherwise.
+    ///
+    /// Asked to move for STUCK_ESCAPE_SECONDS running and made no headway
+    /// that way (see `think`'s progress tracking) - force a hard reset
+    /// instead of letting a bad commitment call wedge the tank forever.
+    /// This is the reactive safety net for a target that's technically
+    /// reachable but still jamming in practice (a tight, contested squeeze
+    /// between other tanks, say) - outright unreachability is `steer`'s
+    /// job, one level up, to hand off to `wander` before this function
+    /// ever sees it. Turn away from whatever heading has actually been
+    /// failing (`committed_dir`, `fresh` with none) rather than retrying
+    /// the same pathfind toward the same target: a perpendicular first
+    /// (side chosen by index parity so two jammed tanks don't mirror each
+    /// other), the other perpendicular if that one drives into a wall or
+    /// blocked cell, and straight back out as the last resort - a tank
+    /// pinned in a corner has nowhere else to go. The escape is held for
+    /// `stuck_escape_hold_seconds` over every sidestep (`escape_dir`).
+    #[allow(clippy::too_many_arguments)]
+    fn stuck_escape(&mut self, fresh: Dir, from: Position, bounds: (f32, f32), half: f32, ctx: AvoidCtx, grid: &Grid) -> Option<Dir> {
+        let blocked = |d: Dir| heads_into_wall(d, from, bounds, half) || grid.blocked_ahead(from, d.vec());
+        if self.stuck_timer >= tuning().stuck_escape_seconds {
+            self.stuck_timer = 0.0;
+            self.escapes += 1;
+            let failing = self.committed_dir.unwrap_or(fresh);
+            let left = ctx.my_index.is_multiple_of(2);
+            let escape = [perpendicular(failing, left), perpendicular(failing, !left), opposite(failing)]
+                .into_iter()
+                .find(|&d| !blocked(d))
+                .unwrap_or_else(|| perpendicular(failing, left));
+            self.escape_dir = Some(escape);
+            self.escape_timer = tuning().stuck_escape_hold_seconds;
+            self.dodge_dir = None;
+            self.dodge_timer = 0.0;
+            Some(escape)
+        } else if let Some(escape) = self.escape_dir.filter(|&d| self.escape_timer > 0.0 && !blocked(d)) {
+            Some(escape)
+        } else {
+            self.escape_dir = None;
+            None
+        }
+    }
+
+    /// `steer_toward` for a hull that steers freely (`Steer::Free`,
+    /// docs/free-steer.md): straight at its target across plain ground
+    /// (`Grid::plain_line`), a line as cheap as any route; else straight at
+    /// the farthest cell of its route ahead it has a clear line to
+    /// (`Grid::clear_line`) - the route's corners cut, its costs kept,
+    /// since only its own cells are aimed at - and its first step with
+    /// none. Sets `free_heading` to that line, which
+    /// `think` hands on as `Intent::heading`, and answers the way nearest
+    /// it, the four-way move everything else in the tree reads. The stuck
+    /// escape is the four-way follower's own, and drives four ways. No
+    /// collision sidestep: a quarter-turn is instant for a four-way hull and
+    /// a pivot for a free one, so a sidestep came after the next and the
+    /// hull turned on in place beside the tank it dodged; round colliders
+    /// slide off each other, and the yield brake (`think`) still holds it
+    /// short of one ahead. No hold, no margin, no lanes: a heading that
+    /// turns a little each think is how a free hull drives. Arriving on the
+    /// point it steers at, it eases off (`free_slow`) so it settles on it
+    /// rather than orbiting it, and within `FREE_ARRIVED_PX` it stands.
+    #[allow(clippy::too_many_arguments)]
+    fn steer_toward_free(
+        &mut self,
+        from: Position,
+        route: Option<RouteAhead>,
+        target: Position,
+        bounds: (f32, f32),
+        half: f32,
+        ctx: AvoidCtx,
+        grid: &Grid,
+    ) -> Dir {
+        let routed = route.map_or(target, |r| r.first());
+        let fresh = Dir::toward(from, routed);
+        if let Some(escape) = self.stuck_escape(fresh, from, bounds, half, ctx, grid) {
+            self.commit(escape);
+            return escape;
+        }
+        // Plain ground up to a cell short of the target: what stands
+        // around the target itself - its own lane, its neighbours - prices
+        // the cells it is reached by whichever way it is reached.
+        let to_target = Vec2::new(target.x - from.x, target.y - from.y);
+        let short = to_target.length() - grid.dims().2;
+        let plain = short <= 0.0 || grid.plain_line(from, from + to_target * (short / to_target.length()));
+        let aim = match route {
+            Some(_) if plain && grid.clear_line(from, target) => target,
+            Some(route) => route.cells().iter().rev().map(|&c| route.centre(c)).find(|&p| grid.clear_line(from, p)).unwrap_or(routed),
+            None => target,
+        };
+        let line = Vec2::new(aim.x - from.x, aim.y - from.y);
+        // Arrived: a line a few pixels long points anywhere, and turning
+        // to each would wheel the hull round on the spot. It stands, facing
+        // as it is.
+        if line.length() < FREE_ARRIVED_PX {
+            let dir = Dir::nearest(ctx.rotation);
+            self.free_heading = Some(ctx.rotation);
+            self.free_slow = 1.0;
+            self.commit(dir);
+            return dir;
+        }
+        let heading = heading_deg(line);
+        let dir = Dir::nearest(heading);
+        self.free_heading = Some(heading);
+        // Arriving: a hull turns on a circle of its speed over its turn
+        // rate, and one at speed orbits a point inside that circle rather
+        // than reaching it. Within two of those radii it eases off with
+        // the distance left, the circle shrinking with it, and settles on
+        // the point.
+        let arrive = 2.0 * ctx.speed / tuning().tank_free_turn_speed_deg.to_radians();
+        self.free_slow = if arrive > 0.0 { (1.0 - line.length() / arrive).clamp(0.0, 1.0) } else { 0.0 };
         self.commit(dir);
         dir
     }
@@ -2486,6 +2643,12 @@ struct AvoidCtx<'a> {
     /// The cells under the crates this tank would leave lying, sorted
     /// (`think`'s `keep_off`): what its routes go round.
     keep_off: &'a [(usize, usize)],
+    /// The hull steers freely (`Steer::Free`, docs/free-steer.md): its
+    /// route is followed at any angle (`Ai::steer_toward_free`).
+    free: bool,
+    /// The hull's facing (`Tank::rotation`), what a free hull that has
+    /// arrived holds (`Ai::steer_toward_free`).
+    rotation: f32,
 }
 
 impl AvoidCtx<'_> {
@@ -2575,6 +2738,8 @@ impl<'a> Brain<'a> {
             dt: self.dt,
             on_portal_cooldown: self.me.portal_cooldown > 0.0,
             keep_off: self.keep_off,
+            free: self.me.steer == Steer::Free,
+            rotation: self.me.rotation,
         }
     }
 }
@@ -2629,7 +2794,7 @@ impl Brain<'_> {
     /// danger is never sent back into it. Aim and fire read the real point.
     fn out_of_danger(&self, p: Position) -> Position {
         let mine = self.me.owner_slot();
-        let facing = Dir::from_rotation(self.me.rotation).unwrap_or(Dir::Up);
+        let facing = self.me.facing();
         match self.dangers.iter().find(|d| d.owner != Some(mine) && d.depth(p) > 0.0) {
             Some(d) => self.way_out(d, p, tuning().enemy_danger_clear_px + OBSTACLE_GRID_SIZE, facing),
             None => p,
@@ -3652,7 +3817,7 @@ fn special_rule(b: &Brain) -> Option<SpecialUse> {
 /// trigger released before -; a training dummy never launches, nor does a
 /// tank still cooling; a plan launches.
 fn well_rule(b: &Brain, sense: &WellSense) -> Option<SpecialUse> {
-    let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+    let facing = b.me.facing();
     if b.me.orb.is_some() {
         return Some(match sense.orb {
             Some((flown, drags)) if flown >= b.ai.well_anchor_px && !drags => SpecialUse::Anchor { face: facing },
@@ -3678,7 +3843,7 @@ fn well_rule(b: &Brain, sense: &WellSense) -> Option<SpecialUse> {
 fn act_pull(b: &mut Brain) -> Status {
     let Some(pull) = b.ai.pull else { return Status::Failure };
     let me = b.me.position;
-    let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+    let facing = b.me.facing();
     if pull.brace && pull.inside {
         let face = crate::well::brace_dir(me, pull.core, Some(b.player.position), facing);
         b.ai.pull_why = Some("brace");
@@ -3721,7 +3886,7 @@ fn rod_rule(b: &Brain, sense: &RodSense) -> Option<SpecialUse> {
     }
     let cooling = b.me.fire_cooldown > 0.0 || b.ai.fire_timer > 0.0;
     if let Some(pick) = sense.pick.filter(|_| !cooling) {
-        let face = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+        let face = b.me.facing();
         return Some(SpecialUse::Charge { face, aim: Some(pick.cell), why: pick.why });
     }
     // Its distance from the seat it knows of (`RodSense::keep_from`), while
@@ -3735,7 +3900,7 @@ fn rod_rule(b: &Brain, sense: &RodSense) -> Option<SpecialUse> {
     // A move that stopped against a tank or a wall: it stands where it is
     // a while rather than grind (`Ai::rod_wait`). Its facing is kept - the
     // reticle aims, not the hull.
-    let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+    let facing = b.me.facing();
     if b.ai.rod_wait > 0.0 && d <= reach + tuning().rod_ai_band_px && !b.in_danger(b.me.position) {
         return Some(SpecialUse::Hold { face: facing, why: "stand-off" });
     }
@@ -4015,7 +4180,7 @@ fn gauss_rule(b: &Brain, sense: &GaussSense) -> Option<SpecialUse> {
     if b.ai.frog_only || b.me.fire_cooldown > 0.0 {
         return None;
     }
-    let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+    let facing = b.me.facing();
     let order = std::iter::once(facing).chain(Dir::ALL.into_iter().filter(|&d| d != facing));
     let mut best: Option<(Dir, GaussLane)> = None;
     for d in order {
@@ -4065,7 +4230,7 @@ fn emp_rule(b: &Brain, sense: &EmpSense) -> Option<SpecialUse> {
     if b.ai.frog_only || sense.off_box {
         return None;
     }
-    let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+    let facing = b.me.facing();
     if sense.value >= t.emp_ai_fire_value {
         if sense.friendly_tower {
             return None;
@@ -4121,7 +4286,7 @@ fn act_dodge(b: &mut Brain) -> Status {
         b.intent.move_dir = None;
         return Status::Success;
     }
-    let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+    let facing = b.me.facing();
     let me = b.me.position;
     let exits = danger.exits(me, tuning().enemy_danger_clear_px + OBSTACLE_GRID_SIZE, me, facing);
     // The first step of the walk to `q`, if it can walk there.
@@ -4194,7 +4359,7 @@ fn hammer_rule(b: &Brain, sense: &HammerSense) -> Option<SpecialUse> {
     {
         return Some(SpecialUse::Fire { face: dir, at_seat: None, why: "glass" });
     }
-    let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+    let facing = b.me.facing();
     let order = std::iter::once(facing).chain(Dir::ALL.into_iter().filter(|&d| d != facing));
     let aims: Vec<(Dir, HammerAim)> = order.map(|d| (d, sense.aims[d.index()])).filter(|(_, a)| !a.friend).collect();
     type Arm = fn(&HammerAim) -> Option<Option<u8>>;
@@ -4268,7 +4433,7 @@ fn act_special(b: &mut Brain) -> Status {
             return Status::Failure;
         }
         SpecialUse::Launch { want, at_seat, why } => {
-            let face = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
+            let face = b.me.facing();
             b.intent.face = Some(face);
             b.ai.special_why = Some(why);
             if b.ai.fire_timer <= 0.0 && b.me.fire_cooldown <= 0.0 {
@@ -4890,7 +5055,7 @@ mod lane_tests {
     /// `read`, routed to `to`.
     fn read_to(grid: &Grid, from: Position, pace: f32, to: Position) -> Option<Lane> {
         let ai = Ai { committed_dir: Some(Dir::Right), motion: Vec2::new(pace, 0.0), ..Ai::default() };
-        let ctx = AvoidCtx { movers: &[], my_index: 0, radius: 20.0, speed: PACE, grip: GRIP, dt: 1.0 / 60.0, on_portal_cooldown: false, keep_off: &[] };
+        let ctx = AvoidCtx { movers: &[], my_index: 0, radius: 20.0, speed: PACE, grip: GRIP, dt: 1.0 / 60.0, on_portal_cooldown: false, keep_off: &[], free: false, rotation: 0.0 };
         let route = grid.route_ahead(from, to, Some(Dir::Right.vec())).expect("routes");
         ai.lane_turn(from, Dir::Right, &route, ctx, grid)
     }
@@ -4970,7 +5135,7 @@ mod lane_tests {
         let grid = grid(&[(19, 4), (17, 4)]);
         let from = Position::new(611.6, 188.1);
         let sliding = Ai { committed_dir: Some(Dir::Up), motion: Vec2::new(-129.0, -101.0), ..Ai::default() };
-        let ctx = AvoidCtx { movers: &[], my_index: 0, radius: 20.0, speed: PACE, grip: GRIP, dt: 1.0 / 60.0, on_portal_cooldown: false, keep_off: &[] };
+        let ctx = AvoidCtx { movers: &[], my_index: 0, radius: 20.0, speed: PACE, grip: GRIP, dt: 1.0 / 60.0, on_portal_cooldown: false, keep_off: &[], free: false, rotation: 0.0 };
         let field = Ai { field: FieldMind { home: Some(at(0, 0)), ..FieldMind::default() }, ..sliding };
         assert!(!field.walks_into_wall(from, ctx, &grid), "a 16.6 px slide ends in column 18, under the gap");
         assert!(sliding.walks_into_wall(from, ctx, &grid), "an arena judges the centre, under the wall");
@@ -4992,7 +5157,7 @@ mod lane_tests {
         let to = at(6, 20);
         let steer = |near_fight: bool, grid: &Grid| {
             let mut ai = Ai { committed_dir: Some(Dir::Right), dir_hold: 1.0, motion: Vec2::new(PACE, 0.0), near_fight, ..Ai::default() };
-            let ctx = AvoidCtx { movers: &[], my_index: 0, radius: 20.0, speed: PACE, grip: GRIP, dt: 1.0 / 60.0, on_portal_cooldown: false, keep_off: &[] };
+            let ctx = AvoidCtx { movers: &[], my_index: 0, radius: 20.0, speed: PACE, grip: GRIP, dt: 1.0 / 60.0, on_portal_cooldown: false, keep_off: &[], free: false, rotation: 0.0 };
             let route = grid.route_ahead(from, to, None);
             ai.steer_toward(from, route, to, (40.0 * CELL, 30.0 * CELL), 16.0, ctx, grid)
         };

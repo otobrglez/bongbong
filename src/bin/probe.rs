@@ -37,7 +37,7 @@ use bongbong::ai::{Intent, in_sight_box};
 use bongbong::map::MapFile;
 use bongbong::pickup::PickupKind;
 use bongbong::level::SpawnKind;
-use bongbong::simulation::debug::{JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, signed_quarter_turn};
+use bongbong::simulation::debug::{JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, spin_step, turn_heading};
 use bongbong::simulation::{Event, Game, HitTarget, Input, Outcome, TankSnapshot};
 use bongbong::tank::{Dir, TankKind};
 use bongbong::{
@@ -410,6 +410,12 @@ struct Args {
     /// nearest live player, which is what the AI targets.
     #[arg(long = "players", default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=bongbong::MAX_SEATS as i64))]
     players: u8,
+
+    /// Every tank steers freely (`Steer::Free`, docs/free-steer.md): the
+    /// round the `free-steer` build plays - the seats on the scenario's
+    /// four-way intents, the enemies on their any-angle routes and aim.
+    #[arg(long = "free-steer")]
+    free_steer: bool,
 
     /// The `defend` scenario's reach (px): an enemy this close to a live
     /// seat or the players' frog is destroyed. The default, 400, is past
@@ -827,9 +833,12 @@ struct TankTrack {
     recent_flips: VecDeque<u32>,
     // --- spin: a chain of consecutive same-direction quarter-turns ---
     spin_flagged: bool,
-    // The heading as of the previous frame, so a change (and its signed
-    // 90-degree delta) is detected the frame it happens.
+    // The heading the jitter rule read as of the previous frame
+    // (`turn_heading`): a four-way hull's own, a free hull's nearest way.
     last_heading: f32,
+    // The hull angle as of the previous frame, so a change (and its signed
+    // delta, `spin_step`) is detected the frame it happens.
+    last_rotation: f32,
     // Signed degrees accumulated by the current same-direction turn chain
     // (positive = clockwise); reset by an opposite turn, a 180 reversal, or
     // the chain outliving SPIN_WINDOW_FRAMES.
@@ -980,7 +989,7 @@ impl TankTrack {
     /// per tank, which is all this is.
     fn new(game: &Game, snapshot: &TankSnapshot, player_pos: Position, frame: u32) -> Self {
         let mut heading_history = VecDeque::with_capacity(3);
-        heading_history.push_back(snapshot.rotation);
+        heading_history.push_back(Dir::nearest(snapshot.rotation).rotation());
         let path_cells = game.nav_path_cells(snapshot.position, player_pos, field_width(), field_height());
         // top_speed is a real rolled speed (150-220px/s range), never
         // zero - the .max(1.0) only guards a hypothetical future
@@ -1003,7 +1012,8 @@ impl TankTrack {
             heading_history,
             recent_flips: VecDeque::new(),
             spin_flagged: false,
-            last_heading: snapshot.rotation,
+            last_heading: Dir::nearest(snapshot.rotation).rotation(),
+            last_rotation: snapshot.rotation,
             spin_sum: 0.0,
             spin_start_frame: frame,
             spin_start_pos: snapshot.position,
@@ -1044,9 +1054,10 @@ impl TankTrack {
     /// budget from the first arrival - stands.
     fn rejoin(&mut self, snapshot: &TankSnapshot, frame: u32) {
         self.heading_history.clear();
-        self.heading_history.push_back(snapshot.rotation);
+        self.heading_history.push_back(Dir::nearest(snapshot.rotation).rotation());
         self.recent_flips.clear();
-        self.last_heading = snapshot.rotation;
+        self.last_heading = Dir::nearest(snapshot.rotation).rotation();
+        self.last_rotation = snapshot.rotation;
         self.spin_sum = 0.0;
         self.spin_start_frame = frame;
         self.spin_start_pos = snapshot.position;
@@ -1077,9 +1088,13 @@ impl TankTrack {
     fn check_heading(&mut self, tank: &TankSnapshot, frame: u32, pos: Position, at: (&mut Vec<(String, Position)>, u32, u64), totals: &mut AnomalyTotals) {
         let (heat, round, seed) = at;
         let track = self;
+        // A free hull's facing as the jitter rule reads it
+        // (`turn_heading`); a four-way hull's own.
+        let heading = turn_heading(track.last_heading, tank.rotation);
+        track.last_heading = heading;
         // Facing jitter: A,B,A heading flip-flops within a trailing window.
-        if track.heading_history.back() != Some(&tank.rotation) {
-            track.heading_history.push_back(tank.rotation);
+        if track.heading_history.back() != Some(&heading) {
+            track.heading_history.push_back(heading);
             if track.heading_history.len() > 3 {
                 track.heading_history.pop_front();
             }
@@ -1117,9 +1132,9 @@ impl TankTrack {
         // circle inside SPIN_WINDOW_FRAMES that ends near where it started
         // is a tank rotating in place, not navigating (see the SPIN_*
         // consts' comment for why legit routing can't complete one).
-        if tank.rotation != track.last_heading {
-            let turn = signed_quarter_turn(track.last_heading, tank.rotation);
-            track.last_heading = tank.rotation;
+        if tank.rotation != track.last_rotation {
+            let turn = spin_step(track.last_rotation, tank.rotation);
+            track.last_rotation = tank.rotation;
             match turn {
                 Some(delta) => {
                     let same_dir =
@@ -2078,6 +2093,9 @@ fn run_round(
     game.players =
         bongbong::simulation::PlayerCount::from_count(args.players as usize).expect("clap limits --players to the seats");
     game.seed_override = Some(seed);
+    if args.free_steer {
+        game.steer = bongbong::tank::Steer::Free;
+    }
     // The field is the map's; every anomaly bound below reads it.
     game.map = match &args.map {
         Some(named) => named.map.clone(),
@@ -2607,6 +2625,9 @@ fn main() -> ExitCode {
         args.crate_kind.map_or(String::new(), |k| format!(" crate={}", k.name())),
         if tuning_diff == "{}" { "default".to_string() } else { tuning_diff.clone() },
     );
+    if args.free_steer {
+        println!("probe: steer=free (every tank steers freely, docs/free-steer.md)");
+    }
 
     let mut grand_total = AnomalyTotals::default();
     let mut grand_rams = RamTally::default();

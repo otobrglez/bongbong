@@ -853,7 +853,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
 
 ## AI
 
-- `ai.rs`, `bt.rs`, `pathfind.rs` — AI reasons over snapshots, never the world. `Ai::steer` routes
+- `ai.rs`, `bt.rs`, `pathfind.rs` — AI reasons over snapshots, never the world. A free-steering
+  enemy (`Steer::Free`, docs/free-steer.md) follows its route at any angle
+  (`Ai::steer_toward_free`: straight at its target over `Grid::plain_line`, else at the farthest
+  route cell `Grid::clear_line` reaches, `Grid::route_ahead_far` reading a search past its first
+  step; no sidestep, an arrival ease-off) and its stuck clock waits out a pivot. `Ai::steer` routes
   through `Grid`; on top: an obstacle-ahead override of the heading commitment, a stuck escape on
   *displacement projected onto the commanded heading* (never a physics velocity - the solver reports
   motion for a jammed tank; stuck under `stuck_speed_eps` or `stuck_progress_fraction` of its own top
@@ -972,7 +976,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   only while it still wants it. **How it steers** is `Tank::steer` (`Steer`, docs/free-steer.md):
   `Cardinal` (`control`, `rotation` always one of the four ways) or `Free` (`steer_free`: turns
   toward `Intent::heading` at `tank_free_turn_speed_deg`, drives at `free_throttle` of the turn
-  left, a round collider of `move_radius`), set when a seat's tank is made from `Game::steer`.
+  left, a round collider of `move_radius`), set when a tank is made from `Game::steer`.
   `forward` (exact `Dir::vec` on the four ways), `facing` (the nearest, `Dir::nearest`) and
   `faces_cardinal` are how anything reads a facing; between the four ways `hull_bbox_world`/
   `turret_bbox_world` answer the box around the turned one and `local_boxes`/`to_local` the true

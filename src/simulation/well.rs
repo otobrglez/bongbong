@@ -990,7 +990,7 @@ impl Game {
                 out.insert(entity, sense);
                 continue;
             }
-            let facing = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up);
+            let facing = tank.facing();
             let faces: Vec<Dir> = std::iter::once(facing).chain(Dir::ALL.into_iter().filter(|&d| d != facing)).collect();
             // The best so far: (arm, facing's place, the pull it puts on
             // its seats - stronger first, in 64ths so float noise never
