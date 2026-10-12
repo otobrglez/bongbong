@@ -195,7 +195,7 @@ The FPV and rod senses can move to it in a separate issue.
 
 ## 6. Online
 
-- `PROTOCOL_VERSION` 28 → 29: new `PickupKind` variants shift its wire
+- `PROTOCOL_VERSION` 29 → 30: new `PickupKind` variants shift its wire
   enum, and a new snapshot family is added.
 - **Calls:** `Snapshot::air_calls: Vec<AirCallState { id, seat, sortie,
   arrive: u32 ticks }>`. Added/gone like zones, so a client's HUD counts

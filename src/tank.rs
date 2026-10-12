@@ -1309,6 +1309,8 @@ impl Tank {
             PickupKind::FpvSwarm => self.stacks(kind),
             PickupKind::RodFromGod => self.stacks(kind),
             PickupKind::GravityWell => self.stacks(kind),
+            // Player-only: air support answers a seat's radio.
+            PickupKind::AirHeli | PickupKind::AirJet => false,
         }
     }
 

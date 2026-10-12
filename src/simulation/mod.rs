@@ -20,6 +20,7 @@
 //! iterate a HashMap/HashSet where the body consumes RNG or spawns) -
 //! `determinism_tests` replays a seed twice and bit-compares.
 
+mod air_support;
 mod combat;
 mod command;
 mod comms;
@@ -74,6 +75,8 @@ mod fpv_tests;
 mod gauss_tests;
 #[cfg(test)]
 mod rod_tests;
+#[cfg(test)]
+mod air_support_tests;
 #[cfg(test)]
 mod well_tests;
 #[cfg(test)]
@@ -539,6 +542,25 @@ pub enum Event {
     /// "teleport") and dives where its target last was. Not sent: the
     /// drone's `lock` is the state.
     DroneLockLost { id: u32, why: &'static str },
+    /// Seat `seat` called air support (docs/air-support.md): call `id`, a
+    /// `sortie`, arriving at round time `arrive` - `None` while it waits
+    /// behind the seat's sortie before it.
+    AirSupportCalled { id: u32, seat: u8, sortie: crate::air_support::Sortie, arrive: Option<f32> },
+    /// Call `id`'s aircraft came in at (`x`, `y`), outside the field;
+    /// `armed` false when it found no enemy to attack.
+    AirSupportArrived { id: u32, seat: u8, sortie: crate::air_support::Sortie, x: f32, y: f32, armed: bool },
+    /// The helicopter `id` fired a salvo at (`x`, `y`). Not sent: the
+    /// missiles are the state.
+    AirSalvo { id: u32, x: f32, y: f32 },
+    /// One of the jet `id`'s cannon bursts, or (`bomb`) one of its bombs,
+    /// landed at (`x`, `y`).
+    AirStrike { id: u32, bomb: bool, x: f32, y: f32 },
+    /// The helicopter `id` was struck down over (`x`, `y`), `height` px up,
+    /// by `by` (`air::AirStrike::name`).
+    AircraftDowned { id: u32, x: f32, y: f32, height: f32, by: &'static str },
+    /// Air support `id` is done: its aircraft left the field, or its seat
+    /// was gone when it came.
+    AirSupportLeft { id: u32 },
     /// The tank in owner slot `slot` called a rod (docs/rod-from-god.md) on
     /// map cell `cell`, landing at round time `land`; `seat` is
     /// `net::wire::NO_SEAT` for an enemy's. Logged after its `Fired`, in the
@@ -990,6 +1012,10 @@ pub struct Game {
     /// the router, the off-screen arrows, the minimap and the wire read. A
     /// replica's are the room's, from the wire. Cleared by `init`.
     pub(crate) zones: Vec<crate::zone::Zone>,
+    /// The seats' air support calls (docs/air-support.md) not yet arrived,
+    /// sorted by id. Their aircraft, once arrived, are entities
+    /// (`air_support::Aircraft`). Cleared by `init`.
+    pub(crate) air_calls: Vec<crate::air_support::AirCall>,
     /// Seconds ahead of `time` the zones' countdowns are drawn on: 0 in a
     /// local round; a client's lead to its own present online
     /// (`set_zone_lead`). Presentation only.
@@ -1743,6 +1769,7 @@ impl Game {
         self.charge_ends.clear();
         self.seat_hold = [None; MAX_SEATS];
         self.zones.clear();
+        self.air_calls.clear();
         self.orbs.clear();
         self.held_drums.clear();
         self.well_fx.clear();
@@ -2314,6 +2341,7 @@ impl Game {
             self.wave_phase(&mut f);
             self.tower_phase(&mut f);
             self.volcano_phase(&mut f);
+            self.air_support_phase(&mut f, true);
             self.spawn_pending(&mut f);
             self.guide_missiles(&mut f);
             self.guide_drones(&mut f);
@@ -2364,6 +2392,7 @@ impl Game {
             // shots land without dealing damage, a barrel cascade finishes
             // without hurting anyone) while the restart counts down.
             // Physics doesn't step, so nothing drifts.
+            self.air_support_phase(&mut f, false);
             self.guide_missiles(&mut f);
             self.tick_sonic_waves(&mut f, false);
             self.tick_emp_pulses(&mut f, false);
@@ -3423,6 +3452,9 @@ impl Game {
                 }
                 tank.owner_slot()
             };
+            if let Some(sortie) = crate::air_support::Sortie::of(kind) {
+                self.call_air_support(f, slot as u8, sortie);
+            }
             if kind == PickupKind::TowerPack {
                 let side = if self.is_player(tank_entity) { Side::Player } else { Side::Enemy };
                 self.repair_towers(f, side);

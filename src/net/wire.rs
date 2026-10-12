@@ -842,6 +842,32 @@ pub struct ZoneState {
     pub stage: u8,
 }
 
+/// Air support (`air_support.rs`, docs/air-support.md), by its call's id:
+/// a call still counting or waiting, or its aircraft once it arrived. A
+/// replica never flies one - where it is, how high, which way and in what
+/// stage travel - and a call's count is its arrival tick, so every screen
+/// counts it down on its own clock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AirState {
+    pub id: u16,
+    pub seat: u8,
+    /// `air_support::Sortie::code`.
+    pub sortie: u8,
+    /// `air_support::AIR_WAITING`, `AIR_COUNTING`, or the aircraft's
+    /// `AirStage::code`.
+    pub stage: u8,
+    /// A counting call's arrival on the round clock in ticks; 0 otherwise.
+    pub arrive: u32,
+    /// Quarter pixels (`quantise_pos`): the point on the ground under the
+    /// aircraft; 0 for a call.
+    pub x: i16,
+    pub y: i16,
+    /// Height above the ground in quarter pixels.
+    pub height: i16,
+    /// `quantise_heading` of its heading over the ground.
+    pub heading: u8,
+}
+
 /// A drum a gravity well holds (`well::HeldDrum`), by its id. Never moves:
 /// where it is is `well::held_at` of its well's centre and the round clock.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -957,6 +983,8 @@ pub struct Snapshot {
     pub rubble: Vec<RubbleState>,
     /// The drums the gravity wells hold (`WellDrumState`), by id.
     pub well_drums: Vec<WellDrumState>,
+    /// Air support's calls and aircraft (`AirState`), by id.
+    pub air: Vec<AirState>,
     /// Each volcano's cycle shift in ticks (`volcano::Volcano::shift`, a
     /// rod's set-off), in `Game::volcanoes` order; empty while every shift
     /// is 0.
@@ -1003,6 +1031,8 @@ impl Snapshot {
         self.well_drums.dedup_by_key(|d| d.id);
         self.smoke_cells.sort();
         self.smoke_cells.dedup();
+        self.air.sort_by_key(|a| a.id);
+        self.air.dedup_by_key(|a| a.id);
     }
 }
 

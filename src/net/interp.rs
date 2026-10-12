@@ -1512,6 +1512,15 @@ from: &Snapshot, to: &Snapshot, alpha: f32) -> Snapshot {
             drone.heading = lerp_heading(drone.heading, next.heading, alpha);
         }
     }
+    // An aircraft glides like a drone; a call holds.
+    for craft in &mut out.air {
+        if let Some(next) = to.air.iter().find(|a| a.id == craft.id && a.stage >= 2 && craft.stage >= 2) {
+            craft.x = lerp(craft.x, next.x, alpha);
+            craft.y = lerp(craft.y, next.y, alpha);
+            craft.height = lerp(craft.height, next.height, alpha);
+            craft.heading = lerp_heading(craft.heading, next.heading, alpha);
+        }
+    }
     for frog in &mut out.frogs {
         if let Some(next) = to.frogs.iter().find(|f| f.side == frog.side) {
             frog.x = lerp(frog.x, next.x, alpha);

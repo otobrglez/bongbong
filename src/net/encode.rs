@@ -17,7 +17,7 @@ use crate::net::MAX_SEATS;
 use crate::net::PROTOCOL_VERSION;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    BonusPickup, CraterState, RubbleState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, OilPrintState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, WellDrumState, ZoneState, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
+    AirState, BonusPickup, CraterState, RubbleState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, OilPrintState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, WellDrumState, ZoneState, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
 };
 use crate::bullet::Bullet;
 use crate::frog::Frog;
@@ -105,6 +105,7 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
         craters: game.craters().list().iter().map(|c| CraterState { cell: cell_index(cols, c.cell), tick: ticks_of(c.at) }).collect(),
         rubble: game.rubble.cells().map(|(c, units)| RubbleState { cell: cell_index(cols, c), units }).collect(),
         well_drums: well_drums(game, cols),
+        air: air(game),
         volcano_shifts: volcano_shifts(game),
         smoke_cells: game.smoke_cells.iter().map(|&c| cell_index(cols, c)).collect(),
         round: round(game),
@@ -538,6 +539,35 @@ fn zones(game: &Game, cols: u16) -> Vec<ZoneState> {
             stage: z.wire_stage(),
         })
         .collect()
+}
+
+/// Air support's calls and aircraft, by id (`wire::AirState`).
+fn air(game: &Game) -> Vec<AirState> {
+    use crate::air_support::{AIR_COUNTING, AIR_WAITING};
+    let mut out: Vec<AirState> = game
+        .air_calls()
+        .iter()
+        .map(|c| AirState {
+            id: shot_wire_id(c.id),
+            seat: c.seat,
+            sortie: c.sortie.code(),
+            stage: if c.arrive_at.is_some() { AIR_COUNTING } else { AIR_WAITING },
+            arrive: c.arrive_at.map_or(0, ticks_of),
+            ..AirState::default()
+        })
+        .collect();
+    out.extend(game.aircraft().iter().map(|a| AirState {
+        id: shot_wire_id(a.id),
+        seat: a.seat,
+        sortie: a.sortie.code(),
+        stage: a.stage.code(),
+        arrive: 0,
+        x: quantise_pos(a.ground.x),
+        y: quantise_pos(a.ground.y),
+        height: quantise_pos(a.height),
+        heading: quantise_heading(crate::math::atan2(a.heading.x, -a.heading.y).to_degrees()),
+    }));
+    out
 }
 
 /// Each volcano's shift, empty while every one is 0.

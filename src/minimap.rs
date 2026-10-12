@@ -625,6 +625,10 @@ pub struct Marks {
     /// pulls yet: a violet frame pulsing round its centre, dim while it
     /// forms.
     pub wells: Vec<(Position, bool)>,
+    /// Every air support aircraft on the field (docs/air-support.md): its
+    /// ground point, its seat and whether it is attacking - a frame in the
+    /// seat's team colour round a dot, blinking while it attacks.
+    pub aircraft: Vec<(Position, u8, bool)>,
     /// The round clock the gates blink on.
     pub time: f32,
     /// Whether the seats carry their numbers: a round of two or more.
@@ -662,7 +666,12 @@ impl Marks {
             .collect();
         let zones = game.zones().iter().filter(|z| z.rod().is_some()).map(|z| (z.centre, z.left(game.time + game.zone_lead))).collect();
         let wells = game.zones().iter().filter_map(|z| z.well().map(|w| (z.centre, w.stage == crate::well::WellStage::Pulling))).collect();
-        Marks { view: Some(view), seats, frogs, volcanoes, zones, wells, time: game.time, numbered: game.players.count() > 1, ..Marks::from_shown(shown) }
+        let aircraft = game
+            .aircraft()
+            .iter()
+            .map(|a| (onto_field(a.ground, field), a.seat, a.stage == crate::air_support::AirStage::Attack))
+            .collect();
+        Marks { view: Some(view), seats, frogs, volcanoes, zones, wells, aircraft, time: game.time, numbered: game.players.count() > 1, ..Marks::from_shown(shown) }
     }
 
     /// The enemies and gates `shown` - one `Indicators` per seat the screen
@@ -779,6 +788,20 @@ pub fn picture(marks: &Marks, rect: Rectangle, field: (f32, f32), font: i32, t: 
         let color = if pulling { crate::pyro::VOID[3] } else { crate::pyro::VOID[1] };
         frame(&mut out.fills, x - half - RIM_PT, y - half - RIM_PT, side + 2 * RIM_PT, RIM_PT, RIM, inside);
         frame(&mut out.fills, x - half, y - half, side, RIM_PT, color, inside);
+    }
+    // Air support: a frame in its seat's colour round a dot, blinking while
+    // it attacks.
+    for &(at_world, seat, attacking) in &marks.aircraft {
+        if attacking && !blink_on(marks.time, t.indicator_pulse_hz * 2.0) {
+            continue;
+        }
+        let (x, y) = at(at_world);
+        let side = GATE_FRAME_PT + 2;
+        let half = side / 2;
+        let color = crate::tank::team_color(seat);
+        frame(&mut out.fills, x - half - RIM_PT, y - half - RIM_PT, side + 2 * RIM_PT, RIM_PT, RIM, inside);
+        frame(&mut out.fills, x - half, y - half, side, RIM_PT, color, inside);
+        square(&mut out.fills, (x, y), 2, color, RIM, inside);
     }
     for view in [marks.view, marks.second_view].into_iter().flatten().filter_map(|v| rect_on(rect, field, v)) {
         let (x0, y0) = (view.x.round() as i32, view.y.round() as i32);
@@ -1156,6 +1179,7 @@ mod minimap_tests {
             volcanoes: vec![(Position::new(2560.0, 1440.0), true)],
             zones: vec![(Position::new(2560.0, 0.0), 0.5)],
             wells: vec![(Position::new(0.0, 0.0), true), (Position::new(2560.0, 720.0), false)],
+            aircraft: vec![(Position::new(2560.0, 1440.0), 1, false), (Position::new(0.0, 720.0), 0, true)],
             time: 0.0,
             numbered: true,
         };

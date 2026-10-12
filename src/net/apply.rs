@@ -55,6 +55,7 @@ use crate::net::encode::{cell_from_index, cell_index, field_cols};
 use crate::net::events::WireEvent;
 use crate::net::events::WireHitTarget;
 use crate::net::wire::{
+    AirState,
     DroneState, GrenadeState, MissileState, ShotKind, ShotState, Snapshot, TankState, WeaponKind, Welcome, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, crate_flags, dequantise_health, frog_flags, tank_flags, tile_flags,
 };
 use crate::laser::{LaserBeam, LaserVariant};
@@ -250,6 +251,43 @@ fn apply_lamps(game: &mut Game, s: &Snapshot) {
 /// The zones the snapshot lists (docs/rod-from-god.md): the room's,
 /// replaced whole; a client's own provisional ones
 /// (`Zone::provisional`) are its prediction's to keep or drop.
+/// Air support as the snapshot has it: the calls on `Game::air_calls`, the
+/// aircraft put where the room has them. A replica's aircraft is never
+/// flown, so it is placed fresh each snapshot.
+fn apply_air(game: &mut Game, s: &Snapshot) {
+    apply_air_states(game, &s.air);
+}
+
+/// `apply_air` off the family alone.
+pub(crate) fn apply_air_states(game: &mut Game, air: &[AirState]) {
+    use crate::air_support::{AIR_COUNTING, AirCall, AirStage, Aircraft, Sortie};
+    game.air_calls = air
+        .iter()
+        .filter(|a| AirStage::from_code(a.stage).is_none())
+        .map(|a| AirCall {
+            id: a.id as u32,
+            seat: a.seat,
+            sortie: Sortie::from_code(a.sortie),
+            arrive_at: (a.stage == AIR_COUNTING).then(|| a.arrive as f32 * PHYSICS_FIXED_DT),
+        })
+        .collect();
+    let old: Vec<Entity> = game.world.query::<(Entity, &Aircraft)>().iter().map(|(e, _)| e).collect();
+    for e in old {
+        game.world.despawn(e).ok();
+    }
+    let t = crate::tuning::tuning();
+    for a in air {
+        let Some(stage) = AirStage::from_code(a.stage) else { continue };
+        let ground = Position::new(dequantise_pos(a.x), dequantise_pos(a.y));
+        let heading = crate::fpv::Drone::heading_of(dequantise_heading(a.heading));
+        let mut craft = Aircraft::arrive(a.id as u32, a.seat, Sortie::from_code(a.sortie), ground, ground + heading, true, &t);
+        craft.stage = stage;
+        craft.height = dequantise_pos(a.height);
+        craft.heading = heading;
+        game.world.spawn((craft,));
+    }
+}
+
 fn apply_zones(game: &mut Game, s: &Snapshot, cols: u16) {
     let seats = game.players.count();
     let mut zones: Vec<crate::zone::Zone> = game.zones.iter().copied().filter(|z| z.provisional()).collect();
@@ -370,6 +408,7 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_fires(game, s, cols);
     apply_lamps(game, s);
     apply_zones(game, s, cols);
+    apply_air(game, s);
     apply_well_drums(game, s, cols);
     apply_craters(game, s, cols);
     apply_rubble(game, s, cols);
@@ -438,6 +477,13 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTre
                 let dir = game.world.query::<&crate::fpv::Drone>().iter().find(|d| d.id == id as u32).map_or(Vec2::new(0.0, 0.0), |d| d.heading);
                 game.drone_show(show, at(x, y), dir, crown);
             }
+            // The jet's cannon and bombs, leaning down its run: the
+            // replica's copy of it, before the families move it.
+            WireEvent::AirStrike { id, bomb, x, y } => {
+                let dir = game.world.query::<&crate::air_support::Aircraft>().iter().find(|a| a.id == id as u32).map_or(Vec2::new(0.0, 0.0), |a| a.heading);
+                game.air_strike_show(show, at(x, y), dir, bomb);
+            }
+            WireEvent::AircraftDowned { x, y, .. } => game.aircraft_crash_show(show, at(x, y)),
             // A sonic hammer's wave, cast against this replica's tiles -
             // unless it is this seat's own press, drawn on the press.
             WireEvent::SonicBlast { slot, x, y, dir } if !own_presses.contains(&i) => {

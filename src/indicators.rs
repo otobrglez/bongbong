@@ -345,6 +345,9 @@ pub struct Scene {
     /// Every gravity well standing (docs/gravity-well.md) but this seat's
     /// own: its centre and, while it pulls, the seconds to its collapse.
     pub wells: Vec<(Position, Option<f32>)>,
+    /// Every air support aircraft on the field (docs/air-support.md): the
+    /// point it is drawn at and its seat.
+    pub aircraft: Vec<(Position, u8)>,
 }
 
 /// This seat's own tank.
@@ -484,6 +487,9 @@ pub enum ArrowKind {
     /// its lane (`TankView::lane`), and the arrow carries the lane warning's
     /// ring, settled as far as the wind-up.
     Windup { weapon: ActiveWeapon, progress: f32, lane: bool },
+    /// Air support (`Scene::aircraft`): never merged, never left out, in
+    /// its seat's team colour, steady - a friend on its way.
+    Aircraft { seat: u8 },
 }
 
 /// One arrow at the edge of the screen.
@@ -1129,6 +1135,11 @@ impl Awareness {
         for &(at, diving) in scene.drones.iter().filter(|(at, _)| !view.shows(*at)) {
             kept.extend(arrow(ArrowKind::Drone { diving }, at));
         }
+        // Air support off the screen: never merged, never left out - where
+        // it comes from and where it strikes.
+        for &(at, seat) in scene.aircraft.iter().filter(|(at, _)| !view.shows(*at)) {
+            kept.extend(arrow(ArrowKind::Aircraft { seat }, at));
+        }
         // A rod's call off the screen: never merged, never left out - a
         // seat heading that way has seconds to know.
         for &(at, left) in scene.zones.iter().filter(|(at, _)| !view.shows(*at)) {
@@ -1471,6 +1482,7 @@ impl Scene {
             drones,
             zones,
             wells,
+            aircraft: game.aircraft().iter().map(|a| (a.drawn(), a.seat)).collect(),
         }
     }
 }
@@ -1805,6 +1817,8 @@ pub fn picture(seats: &[Indicators], view: &ViewFrame, time: f32, t: &Tuning, fo
                 rimmed(&mut out.screen, tail, &DRONE_X, if diving { WHITE } else { HOSTILE }, RIM, alpha);
                 (HOSTILE, RIM)
             }
+            // Air support: its seat's colour, steady, rimmed as a teammate's.
+            ArrowKind::Aircraft { seat } => (crate::tank::team_color(seat), RIM),
             // A wind-up blinks in its weapon's accent, quicker as it nears,
             // rimmed hostile red as the enemy frog is: an accent can be a
             // seat's own colour (the sonic hammer's sky blue is player 1's),
@@ -2245,6 +2259,21 @@ mod indicator_tests {
         s.wells = vec![(Position::new(300.0, 200.0), Some(2.5))];
         let ind = Awareness::new().frame(&s, &screen(), &t);
         assert!(!kinds(&ind).iter().any(|k| matches!(k, ArrowKind::Well { .. })));
+    }
+
+    /// Air support off the screen has an arrow in its seat's colour
+    /// whatever the cap; on the screen, none (docs/air-support.md).
+    #[test]
+    fn air_support_off_the_screen_has_an_arrow_whatever_the_cap() {
+        let mut t = Tuning::DEFAULT;
+        t.indicator_max_arrows = 1;
+        let mut s = scene(1.0, vec![enemy(5, 900.0, 150.0), enemy(6, 950.0, 400.0)]);
+        s.aircraft = vec![(Position::new(-400.0, 200.0), 1)];
+        let ind = Awareness::new().frame(&s, &screen(), &t);
+        assert!(kinds(&ind).contains(&ArrowKind::Aircraft { seat: 1 }), "{:?}", kinds(&ind));
+        s.aircraft = vec![(Position::new(300.0, 200.0), 1)];
+        let ind = Awareness::new().frame(&s, &screen(), &t);
+        assert!(!kinds(&ind).iter().any(|k| matches!(k, ArrowKind::Aircraft { .. })));
     }
 
     /// A drone coming at this seat off the screen has an arrow whatever the

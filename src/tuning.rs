@@ -1503,6 +1503,69 @@ tunables! {
         well_ai_herd_px: f32 = 176.0 in 0.0 ..= 480.0;
     }
 
+    group air_support {
+        /// From an air support crate (`pickup::PickupKind::AirHeli`,
+        /// `AirJet`, docs/air-support.md) to its aircraft arriving. A call
+        /// queued behind the seat's sortie before it counts this from when
+        /// that one is gone.
+        air_support_delay_seconds: f32 = 15.0 in 0.0 ..= 60.0;
+        /// How far outside the field an aircraft comes in and is gone.
+        air_edge_margin_px: f32 = 96.0 in 0.0 ..= 480.0;
+        /// The helicopter's flying height: what it is drawn lifted by.
+        air_heli_height_px: f32 = 40.0 in 0.0 ..= 160.0;
+        /// The helicopter's speed in and out.
+        air_heli_speed: f32 = 220.0 in 20.0 ..= 1000.0;
+        /// How far short of its first target the helicopter hovers, back
+        /// towards where it came in.
+        air_heli_standoff_px: f32 = 160.0 in 0.0 ..= 480.0;
+        /// Salvos the helicopter fires from its hover, each at the nearest
+        /// enemy in the seat's sight box.
+        air_heli_salvos: i32 = 4 in 1 ..= 12;
+        /// Rockets in a salvo: seeker missiles (`missile.rs`) off its pods.
+        air_heli_salvo_rockets: i32 = 4 in 1 ..= 8;
+        /// Seconds from its arrival at the hover to the first salvo, and
+        /// between salvos.
+        air_heli_salvo_seconds: f32 = 0.9 in 0.1 ..= 5.0;
+        /// Bullets that bring the helicopter down. Anything else that
+        /// strikes the air downs it at once.
+        air_heli_hits: i32 = 16 in 1 ..= 200;
+        /// Half the helicopter's body (px): its strike box's width.
+        air_heli_hit_half_px: f32 = 22.0 in 4.0 ..= 64.0;
+        /// How long an aircraft that found no enemy hovers over the seat
+        /// before it leaves.
+        air_heli_linger_seconds: f32 = 1.0 in 0.0 ..= 5.0;
+        /// The jet's flying height.
+        air_jet_height_px: f32 = 64.0 in 0.0 ..= 200.0;
+        /// The jet's speed: one straight pass.
+        air_jet_speed: f32 = 520.0 in 100.0 ..= 2000.0;
+        /// Targets the jet's run is aimed through the middle of, nearest
+        /// first.
+        air_jet_targets: i32 = 3 in 1 ..= 8;
+        /// Cannon bursts in the gun run.
+        air_jet_gun_bursts: i32 = 6 in 1 ..= 16;
+        /// The gun run's stripe on the ground, ending on the aim point.
+        air_jet_gun_len_px: f32 = 192.0 in 0.0 ..= 640.0;
+        /// How far ahead of the jet a burst lands.
+        air_jet_gun_ahead_px: f32 = 160.0 in 0.0 ..= 640.0;
+        /// One burst's reach.
+        air_jet_gun_radius_px: f32 = 28.0 in 4.0 ..= 128.0;
+        /// One burst's damage at its centre.
+        air_jet_gun_damage: f32 = 9.0 in 0.0 ..= 100.0;
+        /// One burst's shove.
+        air_jet_gun_knockback: f32 = 60.0 in 0.0 ..= 800.0;
+        /// The two bombs land this far apart, astride the aim point.
+        air_jet_bomb_spacing_px: f32 = 48.0 in 0.0 ..= 256.0;
+        /// How far short of the aim point the jet lets them go.
+        air_jet_bomb_lead_px: f32 = 96.0 in 0.0 ..= 640.0;
+        /// One bomb's reach.
+        air_jet_bomb_radius_px: f32 = 64.0 in 8.0 ..= 256.0;
+        /// One bomb's damage at its centre, rolled between these.
+        air_jet_bomb_damage_min: f32 = 75.0 in 0.0 ..= 200.0;
+        air_jet_bomb_damage_max: f32 = 85.0 in 0.0 ..= 200.0;
+        /// One bomb's shove.
+        air_jet_bomb_knockback: f32 = 240.0 in 0.0 ..= 1200.0;
+    }
+
     group flamethrower {
         /// Seconds of burn one flamethrower pickup grants. The weapon is
         /// stocked while any fuel is left, and the HUD shows whole seconds.

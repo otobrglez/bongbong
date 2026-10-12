@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::net::MAX_SEATS;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
+    AirState,
     BonusPickup, CraterState, RubbleState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, ShotState, Snapshot, TankState, WellDrumState,
     ZoneState, TileState, side_code,
 };
@@ -96,6 +97,10 @@ pub struct SnapshotDelta {
     /// New or changed held drums, in full.
     pub well_drums: Vec<WellDrumState>,
     pub well_drums_gone: Vec<u16>,
+    /// New or changed air support, in full.
+    pub air: Vec<AirState>,
+    pub air_moved: Vec<Moved>,
+    pub air_gone: Vec<u16>,
     /// The volcanoes' shifts, whole, when they changed.
     pub volcano_shifts: Option<Vec<i32>>,
     /// The smoke cells, whole, when they changed.
@@ -193,6 +198,22 @@ impl Positioned for DroneState {
 
     fn with_xy(&self, x: i16, y: i16) -> Self {
         DroneState { x, y, ..*self }
+    }
+}
+
+impl Keyed for AirState {
+    fn key(&self) -> u16 {
+        self.id
+    }
+}
+
+impl Positioned for AirState {
+    fn xy(&self) -> (i16, i16) {
+        (self.x, self.y)
+    }
+
+    fn with_xy(&self, x: i16, y: i16) -> Self {
+        AirState { x, y, ..*self }
     }
 }
 
@@ -343,6 +364,7 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
     let (craters, craters_gone) = diff_keyed(&prev.craters, &next.craters);
     let (rubble, rubble_gone) = diff_keyed(&prev.rubble, &next.rubble);
     let (well_drums, well_drums_gone) = diff_keyed(&prev.well_drums, &next.well_drums);
+    let (air, air_moved, air_gone) = diff_positioned(&prev.air, &next.air);
     let mut bonus_pickups = next.bonus_pickups.clone();
     bonus_pickups.sort();
     bonus_pickups.dedup();
@@ -390,6 +412,9 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
         rubble_gone,
         well_drums,
         well_drums_gone,
+        air,
+        air_moved,
+        air_gone,
         volcano_shifts: (next.volcano_shifts != prev.volcano_shifts).then(|| next.volcano_shifts.clone()),
         smoke_cells: (next.smoke_cells != prev.smoke_cells).then(|| next.smoke_cells.clone()),
         round: (next.round != prev.round).then_some(next.round),
@@ -428,6 +453,7 @@ pub fn apply_delta(prev: &Snapshot, delta: &SnapshotDelta) -> Snapshot {
         craters: apply_keyed(&prev.craters, &delta.craters, &delta.craters_gone),
         rubble: apply_keyed(&prev.rubble, &delta.rubble, &delta.rubble_gone),
         well_drums: apply_keyed(&prev.well_drums, &delta.well_drums, &delta.well_drums_gone),
+        air: apply_positioned(&prev.air, &delta.air, &delta.air_moved, &delta.air_gone),
         volcano_shifts: delta.volcano_shifts.clone().unwrap_or_else(|| prev.volcano_shifts.clone()),
         smoke_cells: delta.smoke_cells.clone().unwrap_or_else(|| prev.smoke_cells.clone()),
         round: delta.round.unwrap_or(prev.round),
@@ -467,6 +493,20 @@ mod tests {
             shells: rng.random_range(0..12),
             charge: if rng.random_range(0..4) == 0 { rng.random_range(1..200) } else { 0 },
             reticle: if rng.random_range(0..6) == 0 { rng.random_range(1..600) } else { 0 },
+        }
+    }
+
+    fn random_air(rng: &mut SmallRng, id: u16) -> AirState {
+        AirState {
+            id,
+            seat: rng.random_range(0..8),
+            sortie: rng.random_range(0..2),
+            stage: rng.random_range(0..5),
+            arrive: rng.random_range(0..200_000),
+            x: rng.random(),
+            y: rng.random(),
+            height: rng.random_range(0..400),
+            heading: rng.random(),
         }
     }
 
@@ -588,6 +628,7 @@ mod tests {
             .into_iter()
             .map(|id| WellDrumState { id, well: rng.random_range(0..400), cell: rng.random_range(0..600), drum: rng.random_range(0..2), fused: rng.random(), tick: rng.random_range(0..200_000) })
             .collect();
+        let air = random_keys(rng, 3, 400).into_iter().map(|id| random_air(rng, id)).collect();
         let volcano_shifts = if rng.random() { vec![rng.random_range(-4000..4000)] } else { Vec::new() };
         let smoke_cells = random_keys(rng, 3, 600);
         let mut s = Snapshot {
@@ -611,6 +652,7 @@ mod tests {
             craters,
             rubble,
             well_drums,
+            air,
             volcano_shifts,
             smoke_cells,
             round: RoundState {
@@ -712,6 +754,21 @@ mod tests {
                 zone.kind = crate::zone::ZONE_WELL;
                 zone.stage = rng.random_range(0..2);
             }
+        }
+        // Air support: a call starting its count, an aircraft moving a
+        // little or a lot, one gone, one new.
+        next.air.retain(|_| !rng.random_ratio(1, 4));
+        for a in next.air.iter_mut() {
+            if rng.random_ratio(1, 2) {
+                a.x = a.x.wrapping_add(rng.random_range(-40..40));
+                a.y = a.y.wrapping_add(rng.random_range(-40..40));
+            } else if rng.random_ratio(1, 3) {
+                a.stage = rng.random_range(0..5);
+                a.arrive = rng.random_range(0..200_000);
+            }
+        }
+        for id in random_keys(rng, 1, 400) {
+            next.air.push(random_air(rng, id));
         }
         next.well_drums.retain(|_| !rng.random_ratio(1, 3));
         for id in random_keys(rng, 1, 400) {
@@ -923,10 +980,11 @@ mod tests {
         // (protocol 20); the held drums' list one, the delta two for them
         // (protocol 21); the rubble's list one, the delta two for it
         // (protocol 23); the smoke cells' list one, the delta one for
-        // them (protocol 29).
-        assert!(full <= 501, "full snapshot {full} B");
+        // them (protocol 29); air support's list one, the delta three for it
+        // (protocol 30).
+        assert!(full <= 502, "full snapshot {full} B");
         assert!(moving <= 216, "moving delta {moving} B");
         assert!(busy <= 282, "busy delta {busy} B");
-        assert!(idle <= 62, "idle delta {idle} B");
+        assert!(idle <= 65, "idle delta {idle} B");
     }
 }

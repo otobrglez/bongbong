@@ -171,12 +171,25 @@ pub enum PickupKind {
     /// enemies both use it.
     #[serde(rename = "gravity_well")]
     GravityWell,
+    /// Air support, the helicopter (docs/air-support.md): calls an
+    /// Apache-like gunship on the collector's side. Nothing on the tank: a
+    /// count of `air_support_delay_seconds` runs on the seat's HUD, then it
+    /// flies in, hovers and puts rockets into the nearest enemies in the
+    /// seat's sight box, and leaves (`air_support.rs`). A second crate while
+    /// one is called queues another sortie. Player-only.
+    #[serde(rename = "air_heli")]
+    AirHeli,
+    /// Air support, the jet: the same call, an A-10-like attack jet that
+    /// makes one gun run and drops two bombs through the enemies round the
+    /// seat. Player-only.
+    #[serde(rename = "air_jet")]
+    AirJet,
 }
 
 impl PickupKind {
     /// Every kind in declaration order: the crate and symbol sheets' row
     /// order (`row`).
-    pub const ALL: [PickupKind; 19] = [
+    pub const ALL: [PickupKind; 21] = [
         PickupKind::Health,
         PickupKind::Ammo,
         PickupKind::Laser,
@@ -196,6 +209,8 @@ impl PickupKind {
         PickupKind::FpvSwarm,
         PickupKind::RodFromGod,
         PickupKind::GravityWell,
+        PickupKind::AirHeli,
+        PickupKind::AirJet,
     ];
 
     /// This kind's row on static/crates_sheet.png and
@@ -221,6 +236,8 @@ impl PickupKind {
             PickupKind::FpvSwarm => 16,
             PickupKind::RodFromGod => 17,
             PickupKind::GravityWell => 18,
+            PickupKind::AirHeli => 19,
+            PickupKind::AirJet => 20,
         }
     }
 
@@ -247,6 +264,8 @@ impl PickupKind {
             PickupKind::FpvSwarm => "fpv_swarm",
             PickupKind::RodFromGod => "rod_from_god",
             PickupKind::GravityWell => "gravity_well",
+            PickupKind::AirHeli => "air_heli",
+            PickupKind::AirJet => "air_jet",
         }
     }
 
@@ -278,7 +297,9 @@ impl PickupKind {
             | PickupKind::Shield
             | PickupKind::FrogHealth
             | PickupKind::TowerPack
-            | PickupKind::HeatShield => None,
+            | PickupKind::HeatShield
+            | PickupKind::AirHeli
+            | PickupKind::AirJet => None,
         }
     }
 
@@ -315,6 +336,10 @@ impl PickupKind {
             // Two-tone: a black hole's deep violet void, ringed in a pale
             // ultraviolet lilac (the HUD's accent).
             PickupKind::GravityWell => [0x3A1A6E, 0xE6A8FF, 0xFFF0FF],
+            // Two-tone: olive drab airframes, their light the strobe's
+            // amber (the HUD's countdown).
+            PickupKind::AirHeli => [0x3E4A22, 0x7C8C3A, 0xFFB02E],
+            PickupKind::AirJet => [0x4A5258, 0x9AA4AA, 0xFFB02E],
         };
         [rgb(shade), rgb(base), rgb(light)]
     }
@@ -344,7 +369,10 @@ impl PickupKind {
             // A radio uplink: the rod is in orbit, not in the crate.
             | PickupKind::RodFromGod
             // A projector and a field coil, no explosive.
-            | PickupKind::GravityWell => false,
+            | PickupKind::GravityWell
+            // A radio: the aircraft is on its way, not in the crate.
+            | PickupKind::AirHeli
+            | PickupKind::AirJet => false,
         }
     }
 }
