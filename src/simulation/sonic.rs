@@ -42,7 +42,7 @@ pub(super) struct PendingSonic {
 /// `resolve_sonic`. No RNG.
 pub(super) fn fire_sonic(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, owner: Owner) {
     let t = tuning();
-    let facing = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up);
+    let facing = tank.facing();
     tank.kick_sonic();
     super::weapons::apply_recoil(physics, tank, facing.vec(), t.sonic_recoil_speed, t.sonic_recoil_max_speed);
     let origin = tank.position;
@@ -528,7 +528,7 @@ impl Game {
             }
             let line = tank.position - origin;
             let len = line.length();
-            let dir = if len > 1e-3 { line / len } else { Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up).vec() };
+            let dir = if len > 1e-3 { line / len } else { tank.forward() };
             let mass_factor = tank.mass() / (tank.scale * tank.scale);
             let speed = sonic::shove_speed(t, mass_factor, d);
             knock(&mut self.physics, f, &mut tank, dir, speed, footing);
@@ -580,7 +580,7 @@ impl Game {
     pub(crate) fn seat_sonic(&self, seat: usize) -> Option<(Position, Dir)> {
         let entity = self.seats.get(seat).copied().flatten()?;
         let tank = self.world.get::<&Tank>(entity).ok()?;
-        Some((tank.position, Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up)))
+        Some((tank.position, tank.facing()))
     }
 
     /// What each hammer-carrying enemy in `enemies` would do with a blast

@@ -13,7 +13,9 @@ things when forgotten; this is the detail. Update it with the tool.
   co-op bug can actually be observed, since the window's own tools describe a replica it never
   simulates. `just rooms-mcp-call <tool> '{json}'` is the shell path. A scenario needs no browser
   and no second machine: `room_open {seats: 2}`, `seat_intent`, `room_step`, `room_events`.
-- **Driving the windowed game**: `just run-dev` starts the dev-tools build with the dev server;
+- **Driving the windowed game**: `just run-dev` starts the dev-tools build with the dev server
+  (`just run-free` the same with the `free-steer` feature, docs/free-steer.md, whose seats `step`
+  and `input` steer by `heading`, degrees);
   `.mcp.json` registers `bbmcp`, so the `mcp__bongbong__*` tools (`status`, `restart {seed,
   map_toml, mission, spawn, players, intro, ...}`, `step {frames, move_dir, fire, ...}`, `snapshot`,
   `terrain`, `events`, `history`, `nav_grid`, `field`, `lint`, `overlays`, `screenshot`,

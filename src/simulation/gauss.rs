@@ -142,7 +142,7 @@ pub(super) fn fire_charge(f: &mut Frame, entity: Entity, tank: &mut Tank, owner:
     tank.fire_cooldown = tuning().gauss_reload_seconds;
     tank.kick_rail();
     f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: weapon.name() });
-    let dir = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up).vec();
+    let dir = tank.forward();
     f.pending_rails.push(PendingRail {
         shooter: entity,
         owner,
@@ -169,7 +169,8 @@ pub(super) fn recoil_hull(physics: &mut crate::physics::Physics, tank: &mut Tank
     if overcharged {
         tank.rotation = (tank.rotation + 180.0).rem_euclid(360.0);
         tank.spin = tank.spin.max(tank.skid);
-        if let Some(handle) = tank.body {
+        // A free hull's collider is round: nothing to refit.
+        if let Some(handle) = tank.body.filter(|_| tank.steer == crate::tank::Steer::Cardinal) {
             let half = tank.move_half_extents(tank.facing_along_x());
             physics.resize_collider(physics.collider_of(handle), half);
         }
@@ -481,7 +482,7 @@ impl Game {
             .iter()
             .filter(|tank| tank.charge.is_some_and(|c| c.weapon == ActiveWeapon::GaussRail) && !tank.is_wreck() && tank.body.is_some())
             .map(|tank| {
-                let dir = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up);
+                let dir = tank.facing();
                 let from = tank.gun_line_muzzle(dir.vec());
                 let overcharged = tank.charge.is_some_and(|c| c.stage() == ChargeStage::Overcharged);
                 let step = crate::OBSTACLE_GRID_SIZE * 0.25;

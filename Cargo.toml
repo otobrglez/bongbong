@@ -104,6 +104,14 @@ dev-tools = []
 # file or dev tool can flip the side under a player - so a right-side build
 # is a recompile (`--features touch-steer-right`).
 touch-steer-right = []
+# The seats of the window's local rounds steer freely (`tank::Steer::Free`,
+# docs/free-steer.md): the hull turns toward the keys' eight ways or the
+# touch stick's own angle at a rate and drives wherever it faces, on a
+# round collider. A play-test build beside the four-way game, so a build
+# without it is the shipped game byte for byte; the enemies, online rooms
+# and the room server steer four ways either way. `just run-free`,
+# `just serve-web-free`.
+free-steer = []
 # Online co-op's client half (src/net/transport.rs and its implementations,
 # docs/online-coop-prd.md section 4.6): the socket a room is played over.
 # On for every client build, off under `--no-default-features`, which is

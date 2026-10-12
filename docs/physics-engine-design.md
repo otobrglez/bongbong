@@ -27,7 +27,9 @@ was verified.
 
 - Free-angle/analog driving. Explicitly staying cardinal-only for commanded
   movement — see "Layering" below for how that coexists with a real physics
-  body.
+  body. (Since BB-128 the `free-steer` play-test build steers the seats any
+  way on a round collider - docs/free-steer.md; the shipped game is still
+  cardinal.)
 - Networked/lockstep determinism. Not needed now; rapier's float solver isn't
   cross-platform-deterministic without extra work.
 - Touching the AI's decision-making (`ai.rs`/`bt.rs`). Some of its hand-rolled

@@ -219,9 +219,7 @@ impl Game {
             super::wear::press_treads(&mut self.wear, tank, before, f.dt, &floor, look, now);
         }
         for (entity, slot) in arrived {
-            let (pos, half, mass) =
-                with_tank(&self.world, entity, |t| (t.position, t.move_half_extents(t.facing_along_x()), t.mass()));
-            let body = self.physics.spawn_tank(pos, half, mass);
+            let body = with_tank(&self.world, entity, |t| super::spawn_hull(&mut self.physics, t));
             with_tank_mut(&self.world, entity, |t| t.body = Some(body));
             self.world.remove_one::<RollIn>(entity).expect("entity from this frame's roll-in query still exists");
             if !self.is_player(entity) {
@@ -491,6 +489,7 @@ impl Game {
                 visual_rotation: rotation,
                 turret_visual_rotation: rotation,
                 owner: t.owner,
+                steer: t.steer,
                 ..Tank::default()
             };
         });

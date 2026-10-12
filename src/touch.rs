@@ -284,7 +284,8 @@ impl TouchScheme {
             s.dir = resolve_dir(s.current.x - s.origin.x, s.current.y - s.origin.y, s.dir, rule);
             s.dir
         });
-        Intent { move_dir, fire: !self.fire_ids.is_empty(), ..Intent::default() }
+        let heading = self.stick.and_then(|s| resolve_heading(s.current.x - s.origin.x, s.current.y - s.origin.y, rule));
+        Intent { move_dir, heading, fire: !self.fire_ids.is_empty(), ..Intent::default() }
     }
 
     /// The touches down now pressed a button over the field - an end
@@ -408,6 +409,16 @@ pub fn resolve_dir(dx: f32, dy: f32, previous: Option<Dir>, rule: &StickRule) ->
     } else {
         Dir::Up
     })
+}
+
+/// The heading (degrees, 0 = up, clockwise) a drag of (`dx`, `dy`) points
+/// a free-steering hull at (docs/free-steer.md): the drag's own angle, any
+/// way at all, past the dead zone `resolve_dir` holds a resting thumb to.
+pub fn resolve_heading(dx: f32, dy: f32, rule: &StickRule) -> Option<f32> {
+    if dx.abs() < rule.dead_zone_pt && dy.abs() < rule.dead_zone_pt {
+        return None;
+    }
+    Some(crate::tank::heading_deg(Vec2::new(dx, dy)))
 }
 
 #[cfg(test)]
@@ -537,6 +548,24 @@ mod touch_tests {
             };
             assert!(off_axis <= RULE.axis_switch_deg + 0.01, "{off_axis} degrees off {:?} at ({x}, {y})", i.move_dir);
         }
+    }
+
+    /// A free-steering hull reads the drag's own angle (docs/free-steer.md),
+    /// past the same dead zone, beside the four-way direction.
+    #[test]
+    fn the_stick_gives_a_free_hull_the_drags_own_angle() {
+        assert_eq!(resolve_heading(5.0, -5.0, &RULE), None, "a resting thumb");
+        assert_eq!(resolve_heading(0.0, -30.0, &RULE), Some(0.0));
+        assert_eq!(resolve_heading(30.0, 0.0, &RULE), Some(90.0));
+        assert_eq!(resolve_heading(-30.0, 0.0, &RULE), Some(270.0));
+        let diagonal = resolve_heading(20.0, 20.0, &RULE).expect("past the dead zone");
+        assert!((diagonal - 135.0).abs() < 1e-4, "{diagonal}");
+        let a = area();
+        let mut t = TouchScheme::default();
+        t.update_with(&[pt(1, 100.0, 300.0)], a, false, DT, &RULE);
+        let i = t.update_with(&[pt(1, 130.0, 270.0)], a, false, DT, &RULE);
+        assert!(i.move_dir.is_some());
+        assert!((i.heading.expect("a heading") - 45.0).abs() < 1e-4, "{:?}", i.heading);
     }
 
     #[test]

@@ -295,6 +295,12 @@ serve-web: build-web
 serve-web-dev: build-web-dev
     cd site && yarn preview --port ${PORT:=4321}
 
+# The dev-tools web build with the `free-steer` cargo feature
+# (docs/free-steer.md), previewed at http://localhost:4321: the free
+# steering on a phone's touch stick, with the tuning panel to turn it.
+serve-web-free: (_build-web "--features dev-tools,free-steer")
+    cd site && yarn preview --port ${PORT:=4321}
+
 # Preview whatever site/dist/ currently holds, without rebuilding - so a
 # `just build-web-dev` isn't silently overwritten by serve-web's own
 # (feature-less) build-web dependency. Fails if nothing has been built yet.
@@ -309,6 +315,12 @@ preview-web:
 # (`just run-dev --seed 0xB0B5 --enemies 4`).
 run-dev *ARGS:
     cargo run --features dev-tools -- {{ARGS}}
+
+# `run-dev` with the `free-steer` cargo feature (docs/free-steer.md): the
+# seats steer any way - eight from the keys, any from a touch stick - instead
+# of four, for play-testing against the shipped feel.
+run-free *ARGS:
+    cargo run --features dev-tools,free-steer -- {{ARGS}}
 
 # The same dev-tools build started in Build mode - the in-game map builder
 # (docs/game-editor-fusion.md), with the dev server attached so the

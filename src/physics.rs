@@ -196,6 +196,36 @@ impl Physics {
         handle
     }
 
+    /// `spawn_tank` for a hull that steers freely (`tank::Steer::Free`,
+    /// docs/free-steer.md): a round collider of `radius`
+    /// (`Tank::move_radius`), so a hull turned to any angle stands on the
+    /// same footprint and slides off a wall or a corner whichever way it
+    /// meets it. A box turned with the hull would reach into a wall it
+    /// pivots beside, and rapier pushes an overlap out at 3 px/s. Still
+    /// rotation-locked: the hull's facing is `Tank::rotation`, not the
+    /// body's. Frictionless against everything (the `Min` rule): a hull
+    /// driven at a wall on a slant presses into it, and at the statics'
+    /// 0.5 that press held it all but still - with none it slides along
+    /// the wall as far as its drive carries it.
+    pub fn spawn_round_tank(&mut self, position: Position, radius: f32, mass: f32) -> RigidBodyHandle {
+        let (handle, _) = self.world.insert(
+            RigidBodyBuilder::dynamic()
+                .translation(to_vector(position))
+                .lock_rotations()
+                .soft_ccd_prediction(HULL_LOOK_AHEAD),
+            ColliderBuilder::ball(radius).mass(mass).friction(0.0).friction_combine_rule(CoefficientCombineRule::Min),
+        );
+        handle
+    }
+
+    /// The radius of a body's collider when it is round
+    /// (`spawn_round_tank`), `None` for a box.
+    #[cfg(test)]
+    pub fn round_radius(&self, body: RigidBodyHandle) -> Option<f32> {
+        let collider = self.world.colliders.get(self.collider_of(body)).expect("collider handle should always be valid");
+        collider.shape().as_ball().map(|ball| ball.radius)
+    }
+
     /// Resize a tank's solid movement collider (the one `spawn_tank`
     /// attaches) to new overall `half_extents` (`Tank::move_half_extents`,
     /// same as at spawn; the corner rounding is re-derived via

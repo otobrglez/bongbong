@@ -1049,11 +1049,14 @@ impl Game {
                 tank.turret_visual_rotation = rot;
             }
             let body = tank.body.expect("tank should always have a physics body once spawned");
-            (body, tank.move_half_extents(tank.facing_along_x()))
+            // A free hull's collider is round: nothing to refit.
+            (body, (tank.steer == crate::tank::Steer::Cardinal).then(|| tank.move_half_extents(tank.facing_along_x())))
         };
         self.physics.set_position(body, pos);
-        let collider = self.physics.collider_of(body);
-        self.physics.resize_collider(collider, half_extents);
+        if let Some(half_extents) = half_extents {
+            let collider = self.physics.collider_of(body);
+            self.physics.resize_collider(collider, half_extents);
+        }
         Ok(())
     }
 
@@ -1144,7 +1147,7 @@ impl Game {
             tank.reticle = tank.charge.filter(|c| c.weapon == crate::tank::ActiveWeapon::RodFromGod).map(|_| {
                 let t = tuning();
                 let range = crate::rod::Range::of(tank.position, field, &t);
-                let facing = crate::tank::Dir::from_rotation(tank.rotation).unwrap_or(crate::tank::Dir::Up);
+                let facing = tank.facing();
                 crate::rod::Reticle::new(crate::rod::reticle_start(tank.position, facing, &range, &t))
             });
         }

@@ -54,7 +54,7 @@ pub(super) fn fire_well(f: &mut Frame, tank: &mut Tank, owner: Owner) -> bool {
     tank.fire_cooldown = tuning().well_reload_seconds;
     tank.kick_well();
     f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::GravityWell.name() });
-    let dir = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up).vec();
+    let dir = tank.forward();
     f.pending_orbs.push(PendingOrb { owner, muzzle: tank.gun_line_muzzle(dir), dir });
     true
 }
@@ -782,7 +782,7 @@ impl Game {
     pub(crate) fn seat_orb(&self, seat: usize) -> Option<(Position, Vec2)> {
         let entity = self.seats.get(seat).copied().flatten()?;
         let tank = self.world.get::<&Tank>(entity).ok()?;
-        let dir = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up).vec();
+        let dir = tank.forward();
         Some((tank.gun_line_muzzle(dir), dir))
     }
 
@@ -899,7 +899,7 @@ impl Game {
             .filter_map(|s| {
                 let tank = self.world.get::<&Tank>(s.entity).ok()?;
                 let (centre, half) = tank.hull_bbox_world();
-                let facing = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up);
+                let facing = tank.facing();
                 Some(Seat { seat: s.seat, pos: s.pos, centre, half: Vec2::new(half.x, half.y), facing, sight: s.sight, concealed: s.concealed })
             })
             .collect();

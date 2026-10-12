@@ -561,6 +561,17 @@ tunables! {
         /// of the hull, at its own (faster) turn speed, so it visibly leads
         /// a turn while the heavier hull swings around to catch up.
         tank_turret_visual_turn_speed_deg: f32 = 1800.0 in 30.0 ..= 7200.0;
+        /// A free-steering hull's turn rate (`Steer::Free`, the
+        /// `free-steer` build, docs/free-steer.md): how many degrees a
+        /// second its facing - aim and drive with it - turns toward the
+        /// stick's angle. Nothing reads it while the seats steer four ways.
+        tank_free_turn_speed_deg: f32 = 540.0 in 30.0 ..= 3600.0;
+        /// How far off the stick's angle a free-steering hull still drives:
+        /// its throttle is the cosine of the turn it has left, stretched to
+        /// fall to nothing here (`tank::free_throttle`), so a nudge arcs at
+        /// speed and a wider turn pivots in place first. 90 is a plain
+        /// cosine.
+        tank_free_pivot_deg: f32 = 90.0 in 10.0 ..= 180.0;
     }
 
     group shell {

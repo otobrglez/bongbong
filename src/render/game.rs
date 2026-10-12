@@ -60,7 +60,7 @@ use crate::ai::Ai;
 use crate::simulation::Overlays;
 use crate::tank::Tank;
 #[cfg(feature = "dev-tools")]
-use crate::tank::{ActiveWeapon, Dir};
+use crate::tank::{ActiveWeapon, Dir, Steer};
 use crate::tuning::tuning;
 use crate::view::{culled, Camera, View};
 use crate::{Layout, Position, SHOCK_MAX};
@@ -2157,19 +2157,25 @@ struct TankInspectGeometry {
 #[cfg(feature = "dev-tools")]
 impl TankInspectGeometry {
     fn of(tank: &Tank) -> Self {
-        // Same "which axis is the long one" check as `Tank::avoidance_radius` -
-        // tanks only ever face one of the four `Dir::rotation()` values, so an
-        // exact match is safe here (no epsilon needed).
-        let along_x = tank.rotation == Dir::Right.rotation() || tank.rotation == Dir::Left.rotation();
-        let (hx, hy) = tank.hull_half_extents(along_x);
+        // The hull box for the current facing (`Tank::hull_bbox_world`): the
+        // box around it for a free hull turned between the four ways.
+        let (_, half) = tank.hull_bbox_world();
+        let (hx, hy) = (half.x, half.y);
         let hull = (
             (tank.position.x - hx).round() as i32,
             (tank.position.y - hy).round() as i32,
             (hx * 2.0).round() as i32,
             (hy * 2.0).round() as i32,
         );
-        let move_half = tank.move_half_extents(along_x);
-        let corner = crate::physics::tank_corner_radius(move_half);
+        // A free hull's collider is a circle (`Physics::spawn_round_tank`):
+        // its radius both ways, all corner.
+        let (move_half, corner) = match tank.steer {
+            Steer::Cardinal => {
+                let move_half = tank.move_half_extents(tank.facing_along_x());
+                (move_half, crate::physics::tank_corner_radius(move_half))
+            }
+            Steer::Free => ((tank.move_radius(), tank.move_radius()), tank.move_radius()),
+        };
         Self { hull, move_half, corner }
     }
 }
@@ -2196,8 +2202,16 @@ impl TankInspectGeometry {
 ///   forgiving driving, shrink it if sprites start visibly clipping into
 ///   walls. The `stats` card's MOVE line prints its current world-px size
 ///   and corner radius for the same purpose.
+///
+/// A free hull turned between the four ways (docs/free-steer.md) draws
+/// its true turned boxes - what `hits::tank_entries` tests - and its
+/// round collider as a circle.
 #[cfg(feature = "dev-tools")]
 fn draw_tank_boxes(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &TankInspectGeometry) {
+    if !tank.faces_cardinal() {
+        draw_turned_boxes(d, tank, geo);
+        return;
+    }
     let (x, y, width, height) = geo.hull;
     let box_color = if tank.is_wreck() {
         Color::GRAY
@@ -2250,7 +2264,27 @@ fn draw_tank_boxes(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
         mx * 2.0,
         my * 2.0,
     );
-    d.draw_rectangle_rounded_lines(move_rect, geo.corner / mx.min(my), 8, Color::SKYBLUE);
+    match tank.steer {
+        Steer::Cardinal => d.draw_rectangle_rounded_lines(move_rect, geo.corner / mx.min(my), 8, Color::SKYBLUE),
+        Steer::Free => d.draw_circle_lines(tank.position.x as i32, tank.position.y as i32, mx, Color::SKYBLUE),
+    }
+}
+
+/// `draw_tank_boxes` for a free hull turned between the four ways: its
+/// hull and turret boxes (`Tank::local_boxes`) outlined at its facing, and
+/// its round movement collider.
+#[cfg(feature = "dev-tools")]
+fn draw_turned_boxes(d: &mut impl RaylibDraw, tank: &Tank, geo: &TankInspectGeometry) {
+    let hull_color = if tank.is_wreck() { Color::GRAY } else { Color::LIME };
+    let (sin, cos) = crate::math::sin_cos(tank.rotation.to_radians());
+    let world = |x: f32, y: f32| Vec2::new(tank.position.x + x * cos - y * sin, tank.position.y + x * sin + y * cos);
+    for ((c, h), color) in tank.local_boxes().into_iter().zip([hull_color, Color::YELLOW]) {
+        let corners = [world(c.x - h.x, c.y - h.y), world(c.x + h.x, c.y - h.y), world(c.x + h.x, c.y + h.y), world(c.x - h.x, c.y + h.y)];
+        for i in 0..4 {
+            d.draw_line_v(corners[i], corners[(i + 1) % 4], color);
+        }
+    }
+    d.draw_circle_lines(tank.position.x as i32, tank.position.y as i32, geo.move_half.0, Color::SKYBLUE);
 }
 
 /// The `stats` overlay for one tank: a small card above its hull rect -

@@ -111,6 +111,18 @@ impl Dir {
         })
     }
 
+    /// The direction nearest a hull angle in degrees, any full turns folded
+    /// away, ties going clockwise: what a free-steering hull
+    /// (`Steer::Free`) faces for everything that only knows four ways.
+    pub fn nearest(deg: f32) -> Dir {
+        match ((deg.rem_euclid(360.0) + 45.0) / 90.0) as i32 % 4 {
+            0 => Dir::Up,
+            1 => Dir::Right,
+            2 => Dir::Down,
+            _ => Dir::Left,
+        }
+    }
+
     /// Unit movement vector (screen space: +x right, +y down).
     pub fn vec(self) -> Vec2 {
         match self {
@@ -154,6 +166,64 @@ impl Dir {
             Dir::Up
         }
     }
+}
+
+/// How a hull steers (docs/free-steer.md).
+///
+/// `Cardinal` is the game's own: four ways, the facing snapped to the
+/// stick, the drive along one axis. `Free` turns the hull toward the
+/// stick's own angle at `tank_free_turn_speed_deg` and drives it along
+/// wherever it faces, with a round movement collider so it slides off
+/// walls at any angle. A round's seats steer the way `Game::steer` says
+/// (the `free-steer` cargo feature makes the window's local rounds
+/// `Free`); its enemies, a room's seats and every replica are `Cardinal`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Steer {
+    #[default]
+    Cardinal,
+    Free,
+}
+
+impl Steer {
+    /// How this build's local rounds steer their seats: `Free` with the
+    /// `free-steer` cargo feature, `Cardinal` without.
+    pub const BUILD: Steer = if cfg!(feature = "free-steer") { Steer::Free } else { Steer::Cardinal };
+}
+
+/// An angle in degrees folded into `0..360`, never 360 itself (a sliver
+/// under 0 folds to 360 in `f32`).
+pub fn wrap_degrees(deg: f32) -> f32 {
+    let deg = deg.rem_euclid(360.0);
+    if deg >= 360.0 { deg - 360.0 } else { deg }
+}
+
+/// The heading of `v` in degrees: 0 up, clockwise, `0..360` (y down).
+pub fn heading_deg(v: Vec2) -> f32 {
+    wrap_degrees(math::atan2(v.x, -v.y).to_degrees())
+}
+
+/// The unit vector of a heading in degrees (0 up, clockwise, y down).
+pub fn heading_vec(deg: f32) -> Vec2 {
+    let (sin, cos) = math::sin_cos(deg.to_radians());
+    Vec2::new(sin, -cos)
+}
+
+/// The short way from angle `from` to angle `to`, in degrees: `-180..=180`,
+/// clockwise positive.
+pub fn signed_turn(from: f32, to: f32) -> f32 {
+    let d = (to - from).rem_euclid(360.0);
+    if d > 180.0 { d - 360.0 } else { d }
+}
+
+/// A `Free` hull's throttle with `off` degrees of its turn still to go
+/// (docs/free-steer.md): the cosine of the turn stretched so it reaches
+/// nothing at `tank_free_pivot_deg`, and nothing past it - full ahead,
+/// and a pivot in place for anything wider.
+pub fn free_throttle(off: f32, t: &Tuning) -> f32 {
+    if off >= t.tank_free_pivot_deg {
+        return 0.0;
+    }
+    math::cos((off / t.tank_free_pivot_deg * 90.0).to_radians())
 }
 
 /// The twelve chassis rows of `scifi_tanks_sheet.png`, by name and in row
@@ -738,10 +808,12 @@ pub struct Tank {
     /// physics transform, synced once per frame after the physics world
     /// steps (see `Game::update`) - nothing else should write this by hand.
     pub position: Position,
-    /// Facing angle in degrees. Snaps instantly on a direction change -
-    /// physics (`Game::drive_tank`), aiming (`Shell::spawn`) and track
-    /// heading all key off this and none of it should lag input. For the
-    /// on-screen hull animation, see `visual_rotation` instead.
+    /// Facing angle in degrees. A `Cardinal` hull's snaps instantly on a
+    /// direction change - physics (`Game::drive_tank`), aiming
+    /// (`Shell::spawn`) and track heading all key off this and none of it
+    /// should lag input; a `Free` hull's turns toward the stick at
+    /// `tank_free_turn_speed_deg` (`steer_free`), any angle in `0..360`.
+    /// For the on-screen hull animation, see `visual_rotation` instead.
     pub rotation: f32,
     /// Sprite-only facing angle in degrees, eased toward `rotation` each
     /// frame (see `ease_visual_rotation`/`TANK_VISUAL_TURN_SPEED_DEG`)
@@ -756,6 +828,11 @@ pub struct Tank {
     /// while the hull swings around to catch up. Read only by `draw_tank`/
     /// `draw_tank_shadow`.
     pub turret_visual_rotation: f32,
+    /// How this hull steers (`Steer`): `Cardinal` keeps `rotation` on the
+    /// four ways and snaps it; `Free` turns it toward any angle at a rate
+    /// (`steer_free`) and gives the hull a round collider (`move_radius`).
+    /// Set once, when the tank is made, from `Game::steer` for a seat.
+    pub steer: Steer,
     /// Seconds accumulated toward the minigun module's next "hot barrel"
     /// cell (see `module_cols`), advanced while `minigun_burst` is active
     /// (see `tick_minigun_spin`) and held in place - not reset to 0 - the
@@ -1129,6 +1206,7 @@ impl Default for Tank {
             rotation: 0.0,
             visual_rotation: 0.0,
             turret_visual_rotation: 0.0,
+            steer: Steer::Cardinal,
             minigun_cycle_timer: 0.0,
             hull_frame: 0,
             recoil_pose: 0,
@@ -1733,7 +1811,7 @@ impl Tank {
         if let Some(t) = self.tell {
             return Some(Windup { weapon: t.weapon, progress: t.progress(), facing: t.facing });
         }
-        self.charge.map(|c| Windup { weapon: c.weapon, progress: c.progress(), facing: Dir::from_rotation(self.rotation).unwrap_or(Dir::Up) })
+        self.charge.map(|c| Windup { weapon: c.weapon, progress: c.progress(), facing: self.facing() })
     }
 
     /// One tick of a charge-and-hold trigger (docs/gauss-rail.md "The
@@ -1824,7 +1902,7 @@ impl Tank {
         let edge = self.step_charge(fire, pressed, dt, open, report);
         match edge {
             ChargeEdge::Started if self.charge.is_some_and(|c| c.weapon == ActiveWeapon::RodFromGod) => {
-                let facing = Dir::from_rotation(self.rotation).unwrap_or(Dir::Up);
+                let facing = self.facing();
                 let mut reticle = crate::rod::Reticle::new(crate::rod::reticle_start(self.position, facing, &range, &t));
                 if let Some(cell) = steer.report {
                     reticle.cell = range.hold(cell);
@@ -2017,11 +2095,38 @@ impl Tank {
     }
 
     /// True when `rotation` currently faces Left/Right rather than Up/Down -
-    /// which axis is the hull's "long" one. `rotation` is always exactly one
-    /// of `Dir::rotation()`'s four values (see `Tank::control`), so a plain
-    /// `==` match is exact here, no epsilon needed.
+    /// which axis is the hull's "long" one. A `Cardinal` hull's `rotation`
+    /// is always exactly one of `Dir::rotation()`'s four values (see
+    /// `Tank::control`), so a plain `==` match is exact here, no epsilon
+    /// needed; a `Free` hull between the four ways answers `false`, and
+    /// whatever reads its boxes asks `faces_cardinal` first.
     pub fn facing_along_x(&self) -> bool {
         self.rotation == Dir::Right.rotation() || self.rotation == Dir::Left.rotation()
+    }
+
+    /// Whether `rotation` is exactly one of the four ways: always for a
+    /// `Cardinal` hull, and for a `Free` one only once it has turned all
+    /// the way onto one.
+    pub fn faces_cardinal(&self) -> bool {
+        Dir::ALL.iter().any(|d| self.rotation == d.rotation())
+    }
+
+    /// The unit vector the hull faces (screen space, y down): `Dir::vec`
+    /// exactly on the four ways, so a `Cardinal` hull's reads are the
+    /// direction's own numbers, and the angle's sine and cosine between
+    /// them.
+    pub fn forward(&self) -> Vec2 {
+        match Dir::from_rotation(self.rotation) {
+            Some(d) if d.rotation() == self.rotation => d.vec(),
+            _ => heading_vec(self.rotation),
+        }
+    }
+
+    /// The way the hull faces, for whatever only knows four ways (a wind-up
+    /// tell, a sonic cone, a rod's first reticle): its own direction on a
+    /// `Cardinal` hull, the nearest one for a `Free` hull between them.
+    pub fn facing(&self) -> Dir {
+        Dir::nearest(self.rotation)
     }
 
     /// This tank's hull collider footprint in world space right now -
@@ -2029,9 +2134,26 @@ impl Tank {
     /// and side-to-side, so it never needs an offset) and
     /// `hull_half_extents` oriented for the current facing - the hull box
     /// the projectile hit test checks (`simulation::hits::Terrain::sweep`).
+    /// A `Free` hull between the four ways answers the axis-aligned box
+    /// around its turned hull; the hit test itself takes its true box
+    /// (`local_boxes`).
     pub fn hull_bbox_world(&self) -> (Position, Position) {
+        if !self.faces_cardinal() {
+            let (hw, hh) = self.hull_half_extents(false);
+            return (self.position, self.around(hw, hh));
+        }
         let (hw, hh) = self.hull_half_extents(self.facing_along_x());
         (self.position, Position::new(hw, hh))
+    }
+
+    /// The turret+barrel box in the local "facing up" frame, origin at the
+    /// tile center (16,16) - same convention TANK_HULL_BBOX_BY_ROW's own
+    /// values are measured in - as (center x, center y, half width, half
+    /// height), in tile px.
+    fn turret_local(&self) -> (f32, f32, f32, f32) {
+        let (x0, y0, x1, y1) = TANK_TURRET_BBOX_BY_ROW[self.row as usize];
+        let half = TANK_FRAME_SIZE * 0.5;
+        ((x0 + x1 + 1.0) * 0.5 - half, (y0 + y1 + 1.0) * 0.5 - half, (x1 - x0 + 1.0) * 0.5, (y1 - y0 + 1.0) * 0.5)
     }
 
     /// World-space center and half-extents of this tank's turret+barrel
@@ -2042,17 +2164,17 @@ impl Tank {
     /// the hull box is roughly centered on the tank), the turret+barrel box
     /// is off-center - the barrel extends it well past the tile center
     /// toward the front - so this needs a real per-direction rotation of
-    /// both the offset and the extents, not just a width/height swap.
+    /// both the offset and the extents, not just a width/height swap. A
+    /// `Free` hull between the four ways answers the axis-aligned box
+    /// around its turned turret, as `hull_bbox_world` does.
     pub fn turret_bbox_world(&self) -> (Position, Position) {
-        let (x0, y0, x1, y1) = TANK_TURRET_BBOX_BY_ROW[self.row as usize];
-        // Local "facing up" frame, origin at the tile center (16,16) -
-        // same convention TANK_HULL_BBOX_BY_ROW's own values are measured
-        // in.
-        let half = TANK_FRAME_SIZE * 0.5;
-        let local_cx = (x0 + x1 + 1.0) * 0.5 - half;
-        let local_cy = (y0 + y1 + 1.0) * 0.5 - half;
-        let local_hw = (x1 - x0 + 1.0) * 0.5;
-        let local_hh = (y1 - y0 + 1.0) * 0.5;
+        let (local_cx, local_cy, local_hw, local_hh) = self.turret_local();
+        if !self.faces_cardinal() {
+            let (sin, cos) = math::sin_cos(self.rotation.to_radians());
+            let (x, y) = (local_cx * self.scale, local_cy * self.scale);
+            let center = Position::new(self.position.x + x * cos - y * sin, self.position.y + x * sin + y * cos);
+            return (center, self.around(local_hw * self.scale, local_hh * self.scale));
+        }
         // Clockwise rotation of the local (x,y) offset by `rotation` - the
         // same mapping `Dir::vec` encodes (Up's local "forward", -y, must
         // land on each direction's own forward vector): identity at Up,
@@ -2074,6 +2196,46 @@ impl Tank {
             self.position.y + oy * self.scale,
         );
         (center, Position::new(hw * self.scale, hh * self.scale))
+    }
+
+    /// The half-extents of the axis-aligned box around a box of half
+    /// extents (`hw`, `hh`) in the hull's "facing up" frame, turned to its
+    /// `rotation`.
+    fn around(&self, hw: f32, hh: f32) -> Position {
+        let (sin, cos) = math::sin_cos(self.rotation.to_radians());
+        let (sin, cos) = (sin.abs(), cos.abs());
+        Position::new(hw * cos + hh * sin, hw * sin + hh * cos)
+    }
+
+    /// The hull and turret+barrel boxes in the hull's own "facing up"
+    /// frame, in world px, as (center, half-extents) each: the boxes a shot
+    /// is tested against once it is turned into that frame
+    /// (`to_local`), which is how the hit test meets a `Free` hull between
+    /// the four ways (`simulation::hits::tank_entries`).
+    pub fn local_boxes(&self) -> [(Position, Position); 2] {
+        let (hw, hh) = self.hull_half_extents(false);
+        let (cx, cy, thw, thh) = self.turret_local();
+        [
+            (Position::new(0.0, 0.0), Position::new(hw, hh)),
+            (Position::new(cx * self.scale, cy * self.scale), Position::new(thw * self.scale, thh * self.scale)),
+        ]
+    }
+
+    /// A world point in the hull's own "facing up" frame, its pivot the
+    /// origin (`local_boxes`).
+    pub fn to_local(&self, p: Position) -> Position {
+        let (sin, cos) = math::sin_cos(self.rotation.to_radians());
+        let (dx, dy) = (p.x - self.position.x, p.y - self.position.y);
+        Position::new(dx * cos + dy * sin, dy * cos - dx * sin)
+    }
+
+    /// A `Free` hull's round movement collider's radius
+    /// (`Physics::spawn_round_tank`): the half-length of its movement box
+    /// (`move_half_extents`), so head-on it stops where a `Cardinal` hull
+    /// does and it turns in place without ever reaching into a wall.
+    pub fn move_radius(&self) -> f32 {
+        let (hx, hy) = self.move_half_extents(false);
+        hx.max(hy)
     }
 
     /// A safe circular over-approximation of this tank's real (per-row)
@@ -2211,7 +2373,8 @@ impl Tank {
     /// damage-scaled speed along that axis (classic 4-direction, no momentum;
     /// see `effective_speed`). `face` turns the hull in place without moving
     /// (used when an AI stops to aim). `move_dir` takes precedence. Shared by
-    /// the player and the AI so both move identically. Does not touch
+    /// the player and the AI so both move identically; a `Free` seat steers
+    /// through `steer_free` instead. Does not touch
     /// `position` - that's the physics body's job once `velocity` is handed
     /// to it; see `Game::drive_tank`.
     pub fn control(&mut self, move_dir: Option<Dir>, face: Option<Dir>) {
@@ -2231,6 +2394,32 @@ impl Tank {
             if let Some(dir) = face {
                 self.rotation = dir.rotation();
             }
+        }
+    }
+
+    /// `control` for a `Free` hull (docs/free-steer.md). `heading` is the
+    /// stick's angle in degrees (0 = up, clockwise): the hull turns toward
+    /// it the short way round, at most `tank_free_turn_speed_deg * dt`,
+    /// landing on it exactly once it is within a step, and `velocity` is
+    /// its damage-scaled speed along where it then faces, times the
+    /// throttle `free_throttle` gives the turn still left - so a nudge
+    /// arcs at speed and a reversal pivots in place before it drives.
+    /// `face` (degrees, as `heading`) turns it without driving; with
+    /// neither it stops, as `control`'s release does. A spun hull neither
+    /// turns nor drives.
+    pub fn steer_free(&mut self, heading: Option<f32>, face: Option<f32>, dt: f32, t: &Tuning) {
+        self.velocity = Vec2::new(0.0, 0.0);
+        if self.spin > 0.0 {
+            return;
+        }
+        let Some(want) = heading.or(face) else { return };
+        let want = wrap_degrees(want);
+        let off = signed_turn(self.rotation, want);
+        let step = t.tank_free_turn_speed_deg * dt;
+        self.rotation = if off.abs() <= step { want } else { wrap_degrees(self.rotation + step.copysign(off)) };
+        if heading.is_some() {
+            let throttle = free_throttle(signed_turn(self.rotation, want).abs(), t);
+            self.velocity = self.forward() * (self.effective_speed() * throttle);
         }
     }
 

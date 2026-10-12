@@ -847,7 +847,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   one-step look-ahead (`HULL_LOOK_AHEAD`, rapier's soft CCD, set at spawn for the body's whole
   life), so a hull driven, rammed, blasted, knocked or pulled stops flush against what it meets
   (docs/physics-engine-design.md "Scale"). `quarantined` reports rapier's NaN quarantine as
-  `Event::PhysicsQuarantine`.
+  `Event::PhysicsQuarantine`. `spawn_round_tank` is a free-steering seat's body (docs/free-steer.md):
+  a frictionless circle of the movement box's half-length, never resized; `simulation::spawn_hull`
+  picks it or `spawn_tank`'s box from `Tank::steer` for every seat body.
 
 ## AI
 
@@ -967,7 +969,14 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   crate - `ActiveWeapon::crate_load`); `active_weapon` is that special while it has ammo, else
   shells, whose magazine is its own (recharge, the Ammo crate). Seats and enemies stack alike; the
   pickup phase re-checks `wants_pickup` crate by crate, so a hull over two crates takes the second
-  only while it still wants it. Tests: `health_ring_tests`, `weapon_inventory_tests`,
+  only while it still wants it. **How it steers** is `Tank::steer` (`Steer`, docs/free-steer.md):
+  `Cardinal` (`control`, `rotation` always one of the four ways) or `Free` (`steer_free`: turns
+  toward `Intent::heading` at `tank_free_turn_speed_deg`, drives at `free_throttle` of the turn
+  left, a round collider of `move_radius`), set when a seat's tank is made from `Game::steer`.
+  `forward` (exact `Dir::vec` on the four ways), `facing` (the nearest, `Dir::nearest`) and
+  `faces_cardinal` are how anything reads a facing; between the four ways `hull_bbox_world`/
+  `turret_bbox_world` answer the box around the turned one and `local_boxes`/`to_local` the true
+  boxes the hit test takes. Tests: `health_ring_tests`, `weapon_inventory_tests`,
   `chassis_tests`.
 - `frog.rs` (docs/FROG_SPEC.md) — `Frog`/`Side`; one struct serves the player's frog and the Hunt
   mission's enemy frog. Art faces right and is mirrored. **A frog only bites the other side**; the

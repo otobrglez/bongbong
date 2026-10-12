@@ -56,11 +56,19 @@ pub struct Mover {
 
 /// What a driver (player or AI) wants to do this frame. The physics layer turns
 /// this into a facing/step + firing, so player input and AI decisions flow
-/// through the exact same code path. Movement is 4-direction only.
+/// through the exact same code path. A `Cardinal` hull moves four ways
+/// (`move_dir`); a `Free` one steers to `heading` (docs/free-steer.md).
 #[derive(Default, Clone, Copy, Debug)]
 pub struct Intent {
     /// Direction to face and move this frame, or None to stay put.
     pub move_dir: Option<Dir>,
+    /// The stick's own angle in degrees (0 = up, clockwise), for a hull
+    /// that steers freely (`Steer::Free`): eight ways from the keys, any
+    /// from a touch stick. A `Cardinal` hull never reads it; a `Free` one
+    /// with none drives `move_dir`'s way. The input sets it beside
+    /// `move_dir`, so neither needs to know how the round steers. Never on
+    /// the wire: a room's seats steer four ways.
+    pub heading: Option<f32>,
     /// Direction to face without moving (e.g. while aiming). Ignored if move_dir
     /// is set. None leaves the hull as-is.
     pub face: Option<Dir>,

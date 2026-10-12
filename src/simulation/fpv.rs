@@ -540,7 +540,7 @@ impl Game {
                 .map(|(s, _)| {
                     let away = me - s.pos;
                     let len = away.length();
-                    let dir = if len > 1e-3 { away * (1.0 / len) } else { crate::tank::Dir::from_rotation(tank.rotation).unwrap_or(crate::tank::Dir::Up).vec() };
+                    let dir = if len > 1e-3 { away * (1.0 / len) } else { tank.forward() };
                     fpv::clamp_inside(s.pos + dir * (t.fpv_ai_min_range_px + OBSTACLE_GRID_SIZE), field, OBSTACLE_GRID_SIZE * 0.5)
                 })
                 .filter(|&p| safe(p));

@@ -27,7 +27,7 @@ use crate::net::transport::Transport;
 use crate::render::shockwave::{RippleFx, RippleTuning};
 use crate::simulation::{Game, Input, PlayerCount};
 use crate::tuning;
-use crate::tank::{Dir, TankKind};
+use crate::tank::{Dir, Steer, TankKind};
 use crate::touch::TouchPoint;
 use crate::framing::{Screen, Seating, SightBox, ViewRules};
 use crate::view::{Camera, FollowFrame, ScaleCap, View};
@@ -47,26 +47,22 @@ use sola_raylib::prelude::{KeyboardKey, RaylibHandle};
 /// Player 1 is always the arrows + Space; from two seats up, player 2 is
 /// WASD + Left Shift, otherwise idle (docs/two-players.md). The keyboard
 /// has no third or fourth pair of keys: the seats past these two are a
-/// room's, and their intents arrive over the wire.
+/// room's, and their intents arrive over the wire. Each pair gives both a
+/// four-way `move_dir` (the first key held, up, down, left, right) and an
+/// eight-way `heading` (the keys held, summed: `key_heading`), and the
+/// round's own steering reads the one it drives by (docs/free-steer.md).
 fn gather_intents(rl: &RaylibHandle, players: PlayerCount) -> (Intent, Intent) {
-    let dir = |up: KeyboardKey, down: KeyboardKey, left: KeyboardKey, right: KeyboardKey| {
-        if rl.is_key_down(up) {
-            Some(Dir::Up)
-        } else if rl.is_key_down(down) {
-            Some(Dir::Down)
-        } else if rl.is_key_down(left) {
-            Some(Dir::Left)
-        } else if rl.is_key_down(right) {
-            Some(Dir::Right)
-        } else {
-            None
-        }
+    let keys = |up: KeyboardKey, down: KeyboardKey, left: KeyboardKey, right: KeyboardKey| {
+        let held = [rl.is_key_down(up), rl.is_key_down(down), rl.is_key_down(left), rl.is_key_down(right)];
+        let dir = Dir::ALL.into_iter().zip(held).find_map(|(d, down)| down.then_some(d));
+        (dir, key_heading(held))
     };
-    let arrows = dir(KeyboardKey::KEY_UP, KeyboardKey::KEY_DOWN, KeyboardKey::KEY_LEFT, KeyboardKey::KEY_RIGHT);
+    let (arrows, arrows_heading) = keys(KeyboardKey::KEY_UP, KeyboardKey::KEY_DOWN, KeyboardKey::KEY_LEFT, KeyboardKey::KEY_RIGHT);
     // The lamp key sets a lantern down (docs/volcano.md): Enter beside the
     // arrows, E beside WASD.
     let player1 = Intent {
         move_dir: arrows,
+        heading: arrows_heading,
         fire: rl.is_key_down(KeyboardKey::KEY_SPACE),
         lamp: rl.is_key_down(KeyboardKey::KEY_ENTER) || rl.is_key_down(KeyboardKey::KEY_KP_ENTER),
         ..Intent::default()
@@ -74,8 +70,28 @@ fn gather_intents(rl: &RaylibHandle, players: PlayerCount) -> (Intent, Intent) {
     if players.count() < 2 {
         return (player1, Intent::default());
     }
-    let wasd = dir(KeyboardKey::KEY_W, KeyboardKey::KEY_S, KeyboardKey::KEY_A, KeyboardKey::KEY_D);
-    (player1, Intent { move_dir: wasd, fire: left_shift_down(rl), lamp: rl.is_key_down(KeyboardKey::KEY_E), ..Intent::default() })
+    let (wasd, wasd_heading) = keys(KeyboardKey::KEY_W, KeyboardKey::KEY_S, KeyboardKey::KEY_A, KeyboardKey::KEY_D);
+    (player1, Intent { move_dir: wasd, heading: wasd_heading, fire: left_shift_down(rl), lamp: rl.is_key_down(KeyboardKey::KEY_E), ..Intent::default() })
+}
+
+/// The heading (degrees, 0 = up, clockwise) four direction keys held as
+/// `[up, down, left, right]` ask a free-steering hull for: their sum, one
+/// of eight ways, a pair of opposites cancelling. `None` with nothing
+/// held, or only opposites.
+fn key_heading([up, down, left, right]: [bool; 4]) -> Option<f32> {
+    let x = right as i32 - left as i32;
+    let y = down as i32 - up as i32;
+    match (x, y) {
+        (0, -1) => Some(0.0),
+        (1, -1) => Some(45.0),
+        (1, 0) => Some(90.0),
+        (1, 1) => Some(135.0),
+        (0, 1) => Some(180.0),
+        (-1, 1) => Some(225.0),
+        (-1, 0) => Some(270.0),
+        (-1, -1) => Some(315.0),
+        _ => None,
+    }
 }
 
 /// Whether the left Shift key - player 2's fire key - is held. Native reads
@@ -1664,6 +1680,9 @@ pub fn run(args: Args) {
     game.player_row_override = args.tank.map(TankKind::row);
     game.player2_row_override = args.tank2.map(TankKind::row);
     game.players = PlayerCount::from_count(args.players as usize).expect("clap limits --players to the seats");
+    // The `free-steer` build's seats steer any way (docs/free-steer.md);
+    // the rooms this window joins steer four ways whatever it is.
+    game.steer = Steer::BUILD;
     game.shadows_enabled = !args.no_shadows;
     game.seed_override = args.seed;
     game.map = map;
@@ -2296,6 +2315,7 @@ pub fn run(args: Args) {
         // where a tablet's thumbs rest.
         let touch_intent = touch.update(&ui_touch_points, ui.screen, steer_right, dt);
         player1.move_dir = player1.move_dir.or(touch_intent.move_dir);
+        player1.heading = player1.heading.or(touch_intent.heading);
         player1.fire = player1.fire || touch_intent.fire;
         player1.lamp |= lamp_tap;
         let mut input = Input::two(player1, player2);
@@ -2839,6 +2859,21 @@ impl FrameStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The keys held give a free-steering hull one of eight ways, and
+    /// opposites cancel (docs/free-steer.md).
+    #[test]
+    fn the_keys_held_steer_eight_ways() {
+        // [up, down, left, right]
+        assert_eq!(key_heading([false; 4]), None);
+        assert_eq!(key_heading([true, false, false, false]), Some(0.0));
+        assert_eq!(key_heading([true, false, false, true]), Some(45.0));
+        assert_eq!(key_heading([false, true, false, true]), Some(135.0));
+        assert_eq!(key_heading([false, true, true, false]), Some(225.0));
+        assert_eq!(key_heading([true, false, true, false]), Some(315.0));
+        assert_eq!(key_heading([true, true, false, false]), None, "up and down cancel");
+        assert_eq!(key_heading([true, true, false, true]), Some(90.0), "leaving right");
+    }
 
     /// A 120 Hz display pays for a step every other frame, a 60 Hz one
     /// every frame, and the round never falls behind either: over a second
