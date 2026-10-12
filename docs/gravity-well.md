@@ -10,7 +10,7 @@ the well it carries (`Tank::wants_pickup`) and uses it by its own rule (§4).
 A press fires a slow violet orb down the gun line. A second press anchors it
 where it is; left alone it anchors itself where it meets something or at the
 end of its flight. With a snap a ring forms round a black core, and for four
-seconds everything within four cells falls toward it: tanks of both sides
+seconds everything within four and a half cells falls toward it: tanks of both sides
 (the shooter's too) roll toward the core along their tracks while their
 tracks bite sideways, so a scout is dragged and a titan braces; shells,
 bullets, plasma bolts, missiles and drones curve toward the core and what
@@ -98,7 +98,7 @@ flies it and a pulled hull is predicted where the room accepts it.
 - **A zone.** The anchor puts a `Zone` (docs/rod-from-god.md §3.3) on the
   field: its id the orb's, kind `ZoneKind::Well(WellZone)`, its owner the
   shooter (`Owner`, and its seat if it is one), its centre the anchor point,
-  its radius `well_radius_px` (128, four cells), `until` the end of its
+  its radius `well_radius_px` (140, four and a half cells), `until` the end of its
   current stage on the round clock. The orb is gone; the zone is what every
   reader reads from here on.
 - **Forming** (`well_form_seconds`, 0.4): the snap and the ring forming -
@@ -109,7 +109,7 @@ flies it and a pulled hull is predicted where the room accepts it.
   EMP's ring reaches its centre. The zone goes.
 
 **The strength** at a point `d` px from the centre, `R = well_radius_px`,
-`c = well_core_px` (12):
+`c = well_core_px` (13):
 
 ```
 s(d) = 0                       d >= R
@@ -150,26 +150,29 @@ tracked hull does: **along its tracks it rolls, across them it bites.**
   facing the core it creeps in at walking pace.
 - **Drive across the pull, not away from it** - true by the model, and held
   by §10's `deep_in_driving_across_escapes_and_driving_away_does_not` (the
-  numbers here are its, from a model of `drive_tank_with` at 60 Hz). Deep
+  numbers here are measured through the round's drive at 60 Hz). Deep
   in, a hull driving straight away has the whole current along its tracks:
   a standard enemy (160 px/s) 50 px from the core is carried into it in
-  under two seconds at full throttle, and a standard seat (210 px/s) 40 px
-  out stands still flooring it. Turned across, the current along its tracks
+  half a second at full throttle, and a standard seat (210 px/s) 40 px
+  out is carried in flooring it. Turned across, the current along its tracks
   is next to nothing and its grip holds most of the side pull, so it keeps
-  its speed and leaves along a chord: the same enemy is out in under two
-  seconds, the seat in a second and a quarter. A scout seat driving away is
-  carried in from anywhere within 80 px; across, it is out from 55 px.
+  its speed and leaves along a chord: the same enemy is out in about two
+  seconds, the seat in under a second and a half. A scout seat driving away
+  is carried in from anywhere within 90 px; across, it is out from 60 px.
   Nearer the edge, where the current is weak, either way out works and away
   is the shorter; the deeper in, the more only across does - and right at
   the core nothing does but a heavy chassis. Measured at the defaults, a
-  seat flooring it from a point east of the core (the review's table,
-  held by `each_chassis_class_escapes_a_pull_as_the_doc_says`):
+  seat flooring it from a point east of the core, out of the reach before
+  the collapse, in 5 px steps (the review's table, held by
+  `each_chassis_class_escapes_a_pull_as_the_doc_says`):
 
   | Chassis (mass) | Trapped either way | Only across | Both, away the shorter |
   |---|---|---|---|
-  | scout, wraith (0.77), flak, glacier (0.80) | within 50 px | 55-80 px | past 85 px |
-  | assault, warden (1.00) | within 20 px | 25-50 px | past 55 px |
-  | longbow, obelisk (1.20), breaker, ravager (1.26) | never | under 25 px | past 40 px |
+  | scout, wraith (0.77) | within 55 px | 60-90 px | past 95 px |
+  | flak, glacier (0.80) | within 50 px | 55-85 px | past 90 px |
+  | assault, warden (1.00) | within 25 px | 30-55 px | past 60 px |
+  | longbow, obelisk (1.20) | never | under 25 px | past 25 px |
+  | breaker, ravager (1.26) | never | never | everywhere |
   | titan, leviathan (1.86-1.89) | never | never | everywhere |
 
   So the counter is the light and the standard chassis'; a heavy one is
@@ -226,7 +229,7 @@ its own.
 **Grenades** (on the ground or aloft, either side's): their ground velocity
 takes `well_grenade_pull * s(d)` px/s² toward the core each tick (in
 `roll_grenades`, before the roll), against the ground's drag - they roll in.
-One within `well_ring_px` (24) of the centre is **captured**: from then its
+One within `well_ring_px` (26) of the centre is **captured**: from then its
 ground point is on the ring at its bearing, turning at `well_orbit_speed`
 (3 rad/s) clockwise as drawn, its height 0, its roll and lamp drawn as it
 goes (`Grenade::orbit: Option<GrenadeOrbit>`, `roll` skipped while set). Its
@@ -783,7 +786,10 @@ pub struct WellPlan {
 **The candidates.** For each facing - the tank's own first, then
 `Dir::ALL` - the orb's line from the gun line's muzzle along it, the points
 every `WELL_AI_STEP_PX` (16) from `well_ai_min_px` (160: past its own
-pull's reach, the tank's hull never inside `R`) to the first of
+pull's reach and the friend margin, the tank's hull never inside `R`, on
+every chassis - held by
+`the_nearest_anchor_clears_its_own_pull_on_every_chassis`; the breaker,
+its muzzle at its hull's front, is why `well_radius_px` stops at 140) to the first of
 `well_orb_range_px` and the orb's own stopper on that line (the first tile
 that blocks sight, the field's edge, a live hull or a frog - the orb's
 sweep, `Terrain::sweep`), the stopper's anchor point itself included. Each
@@ -819,7 +825,10 @@ radius; and the enemies' own frog in the pull.
    `enemy_fire_align_px`, facing it, with a line of sight) - the candidate
    lies on that line between them at `well_ai_min_px`, and the seat stands
    farther than `well_radius_px + well_ai_friend_margin_px` from `P`: the
-   seat's shells fly into a well that swallows them (§1).
+   seat's shells fly into a well that swallows them (§1). At the defaults
+   that puts the seat about 345 px out or more on the enemy's row - the
+   last stretch inside its 368 px sight box - so the shield is the rarest
+   of the four.
 
 and passes every one of:
 
@@ -1173,15 +1182,15 @@ enemies' group:
 | `well_anchor_grace_seconds` | 0.4 | 0..=2 | A press this soon after an orb anchored by itself fires nothing: it was meant for the orb. |
 | `well_form_seconds` | 0.4 | 0..=3 | From the anchor to the pull: the snap and the ring forming, nothing pulled. |
 | `well_pull_seconds` | 4.0 | 0.5..=15 | How long it pulls before it collapses. |
-| `well_radius_px` | 128 | 32..=480 | How far it reaches (px; four cells). |
-| `well_core_px` | 12 | 2..=48 | The core: the pull is strongest at its rim and fades to nothing at the centre; a shot, missile, drone or orb that passes inside it is swallowed. |
+| `well_radius_px` | 140 | 32..=480 | How far it reaches (px; four and a half cells); kept under `well_ai_min_px` less the friend margin, or an enemy's shield pulls on itself. |
+| `well_core_px` | 13 | 2..=48 | The core: the pull is strongest at its rim and fades to nothing at the centre; a shot, missile, drone or orb that passes inside it is swallowed. |
 | `well_current_speed` | 320 | 0..=1000 | Along a hull's tracks, the current at the strongest point for the chassis-free mass (px/s): the drive runs in its frame. |
 | `well_side_pull` | 650 | 0..=5000 | Across a hull's tracks, the pull at the strongest point (px/s²) the tracks' grip holds up to its limit. |
 | `well_mass_exponent` | 2.0 | 0..=4 | How hard a heavy chassis resists: the current and the side pull over the mass factor to this power. |
 | `well_shot_pull` | 3600 | 0..=20000 | The pull on shells, bullets, plasma bolts and orbs at the strongest point (px/s²): it turns their heading, never their speed. |
 | `well_air_pull` | 1800 | 0..=20000 | The pull on a missile's or a drone's ground motion (px/s²). |
 | `well_grenade_pull` | 600 | 0..=5000 | The pull on a grenade's ground motion (px/s²). |
-| `well_ring_px` | 24 | 8..=64 | The ring captured grenades and held drums circle on. |
+| `well_ring_px` | 26 | 8..=64 | The ring captured grenades and held drums circle on. |
 | `well_orbit_speed` | 3.0 | 0..=20 | How fast they circle it (rad/s, clockwise). |
 | `well_capture_seconds` | 0.8 | 0.05..=4 | How long a lifted drum takes to spiral from its cell to the ring. |
 | `well_crate_speed` | 60 | 0..=400 | How fast a crate slides in at the strongest point (px/s). |

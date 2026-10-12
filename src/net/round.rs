@@ -3128,7 +3128,8 @@ mod tests {
         let core = Position::new(300.0, 200.0);
         let wells = crate::well::WellField { sources: vec![(1, core)] };
         let (from, velocity) = (Position::new(160.0, 200.0), crate::math::Vec2::new(t.shell_speed, 0.0));
-        let hull = Some((core + crate::math::Vec2::new(4.0, 0.0), Position::new(16.0, 14.0)));
+        // Its near face on the core's rim.
+        let hull = Some((core + crate::math::Vec2::new(16.0 - t.well_core_px, 0.0), Position::new(16.0, 14.0)));
         let ahead = 20.0 * PHYSICS_FIXED_DT;
         let open = |_: Position, _: Position| None;
         match carry(from, velocity, ahead, &wells, hull, open, &t) {

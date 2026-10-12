@@ -971,7 +971,7 @@ fn an_owned_hull_is_allowed_the_pull_and_no_more() {
     let mut game = round_with("", Mission::Destroy, None);
     pulling_well(&mut game, MID);
     let s = seat(&game);
-    let start = MID + Vec2::new(40.0, 0.0);
+    let start = MID + Vec2::new(50.0, 0.0);
     let n = POSE_REACH_TICKS;
     let (speed, mass_factor, grip) = with_tank(&game.world, s, |tank| (tank.effective_speed(), tank.mass_factor(), t.tank_turn_grip_force / tank.mass()));
     let own = speed * DT * n + POSE_REACH_SLACK_PX;
@@ -1091,13 +1091,32 @@ fn an_enemy_anchors_to_pull_a_guard_off_its_frog() {
     assert!(mine[0].0.distance_to(frog) > guard.distance_to(frog), "past the guard");
 }
 
+/// An enemy's nearest anchor - where its shield stands - is past its own
+/// pull and the friend margin on every chassis, either way it faces
+/// (`well_radius_px`, `well_ai_min_px`): a reach that crosses it would put
+/// the enemy in its own pull, and it would never shield.
+#[test]
+fn the_nearest_anchor_clears_its_own_pull_on_every_chassis() {
+    let t = tuning();
+    for kind in TankKind::ALL {
+        for (rotation, dir) in [(0.0, Dir::Up), (90.0, Dir::Right)] {
+            let tank = Tank { row: kind.row(), rotation, ..Tank::default() };
+            let anchor = tank.gun_line_muzzle(dir.vec()) + dir.vec() * t.well_ai_min_px;
+            let (centre, half) = tank.hull_bbox_world();
+            let reach = crate::emp::box_reach(anchor, centre, Vec2::new(half.x, half.y));
+            assert!(reach > t.well_radius_px + t.well_ai_friend_margin_px, "{} facing {dir:?}: its anchor is {reach} px from its hull", kind.name());
+        }
+    }
+}
+
 /// Under fire, an enemy puts a well across the line a seat shoots it along,
 /// and the seat's next shell falls into its core.
 #[test]
 fn an_enemy_under_fire_shields_itself_on_the_seats_line() {
     let mut game = round_with("", Mission::Destroy, None);
-    // The seat at (3, 6) faces east, lined up on the enemy.
-    let enemy = well_enemy(&mut game, SEAT + Vec2::new(340.0, 0.0), 1, 270.0);
+    // The seat at (3, 6) faces east, lined up on the enemy: far enough
+    // that both stand past the anchor's reach and the friend margin.
+    let enemy = well_enemy(&mut game, SEAT + Vec2::new(350.0, 0.0), 1, 270.0);
     game.world.get::<&mut Ai>(enemy).unwrap().notify_hit();
     let (why, _) = launch(&mut game, enemy, 1.0);
     assert_eq!(why, Some("shield"));
@@ -1550,12 +1569,12 @@ fn seat_escapes(kind: TankKind, d: f32, dir: Dir, seconds: f32) -> bool {
 /// way, the brace being the AI's choice to stand.
 #[test]
 fn each_chassis_class_escapes_a_pull_as_the_doc_says() {
-    assert!(!seat_escapes(TankKind::Scout, 65.0, Dir::Right, 3.0), "a scout driving away is carried in");
-    assert!(seat_escapes(TankKind::Scout, 65.0, Dir::Up, 1.5), "a scout driving across is out");
-    assert!(!seat_escapes(TankKind::Scout, 40.0, Dir::Up, 3.0), "deep in, not even across");
-    assert!(!seat_escapes(TankKind::Assault, 30.0, Dir::Right, 3.0), "a standard chassis driving away is carried in");
-    assert!(seat_escapes(TankKind::Assault, 30.0, Dir::Up, 2.0), "and out driving across");
-    assert!(seat_escapes(TankKind::Titan, 15.0, Dir::Right, 1.0) && seat_escapes(TankKind::Titan, 15.0, Dir::Up, 1.0), "a titan drives out either way");
+    assert!(!seat_escapes(TankKind::Scout, 80.0, Dir::Right, 3.0), "a scout driving away is carried in");
+    assert!(seat_escapes(TankKind::Scout, 80.0, Dir::Up, 1.5), "a scout driving across is out");
+    assert!(!seat_escapes(TankKind::Scout, 50.0, Dir::Up, 3.0), "deep in, not even across");
+    assert!(!seat_escapes(TankKind::Assault, 40.0, Dir::Right, 3.0), "a standard chassis driving away is carried in");
+    assert!(seat_escapes(TankKind::Assault, 40.0, Dir::Up, 2.0), "and out driving across");
+    assert!(seat_escapes(TankKind::Titan, 15.0, Dir::Right, 1.25) && seat_escapes(TankKind::Titan, 15.0, Dir::Up, 1.25), "a titan drives out either way");
 }
 
 // --- what a seat is told --------------------------------------------------
