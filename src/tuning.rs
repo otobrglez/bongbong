@@ -1536,8 +1536,9 @@ tunables! {
         air_heli_linger_seconds: f32 = 1.0 in 0.0 ..= 5.0;
         /// The jet's flying height.
         air_jet_height_px: f32 = 64.0 in 0.0 ..= 200.0;
-        /// The jet's speed: one straight pass.
-        air_jet_speed: f32 = 520.0 in 100.0 ..= 2000.0;
+        /// The jet's speed: one straight pass, a fifth faster than the
+        /// helicopter's `air_heli_speed`.
+        air_jet_speed: f32 = 264.0 in 100.0 ..= 2000.0;
         /// Targets the jet's run is aimed through the middle of, nearest
         /// first.
         air_jet_targets: i32 = 3 in 1 ..= 8;

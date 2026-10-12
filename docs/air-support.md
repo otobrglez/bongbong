@@ -61,7 +61,8 @@ that belongs to a seat, the two aircraft, the HUD's box and the sprites.
   tank is nearer the missile when it turns. Its sixteen rockets bring a
   tesla (120) down. Then it leaves the way it came. It is on the field
   about ten seconds.
-- **The jet.** At `air_jet_speed` (520 px/s), one straight pass through the
+- **The jet.** At `air_jet_speed` (264 px/s, a fifth faster than the
+  helicopter), one straight pass through the
   middle of the nearest `air_jet_targets` (3) targets in the box. Its
   cannon puts `air_jet_gun_bursts` (6) bursts in a stripe
   `air_jet_gun_len_px` (192) long ending on that point, each landing
@@ -73,7 +74,7 @@ that belongs to a seat, the two aircraft, the HUD's box and the sprites.
   tower's 150 survives one pass with about 40. It fires only
   over the field: on a run too short for the stripe and its lead, both
   shrink to fit (`gun_burst`, `bombs`). It flies on off the far edge; about
-  three seconds on the field.
+  five seconds on the field.
 - **Friendly fire.** None on hulls and frogs: every hit is
   `side_blast`/`explosion_hit`, which spare `Owner::same_side` - the seats
   and the players' frog. Tiles take damage whoever's they are

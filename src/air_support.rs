@@ -32,7 +32,7 @@ pub enum Sortie {
     /// rockets into the nearest enemies. An air target.
     Heli,
     /// An A-10-like attack jet: one straight run, a stripe of cannon fire and
-    /// two bombs through the enemies' middle. Too fast to hit.
+    /// two bombs through the enemies' middle. Never an air target.
     Jet,
 }
 
