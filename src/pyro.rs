@@ -623,6 +623,13 @@ pub fn smoke_lean(t: &crate::tuning::Tuning, pos: Position, time: f32) -> f32 {
     t.smoke_wind_drift * crate::grass::wind_at(t, pos, time) / WIND_TYPICAL_PX
 }
 
+/// `smoke_lean` averaged over time (`grass::mean_wind`): the steady speed
+/// of whatever drifts with the wind for a whole round, such as the haze's
+/// banks. Signed like `smoke_lean`.
+pub fn mean_smoke_lean(t: &crate::tuning::Tuning) -> f32 {
+    t.smoke_wind_drift * crate::grass::mean_wind(t) / WIND_TYPICAL_PX
+}
+
 /// The grass's lean (px) in a typical gust, which `smoke_wind_drift` is
 /// measured against.
 const WIND_TYPICAL_PX: f32 = 3.5;
