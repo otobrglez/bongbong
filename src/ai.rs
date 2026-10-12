@@ -6,7 +6,7 @@ use crate::math::Vec2;
 
 use crate::bt::{Node, Status, action, condition, selector, sequence};
 use crate::obstacle::Material;
-use crate::pathfind::{Grid, RouteAhead};
+use crate::pathfind::{Grid, KeepOff, RouteAhead};
 use crate::pickup::PickupKind;
 use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::{
@@ -1167,6 +1167,9 @@ impl Ai {
     /// battlefield this frame (kind + position) - see `Brain::nearest_pickup`,
     /// used by `act_flee`/`act_retreat` so a hurting or ammo-starved tank
     /// heads for a pickup instead of just running blind.
+    /// `keep_off` is the nav cells under the crates this tank would leave
+    /// lying (`Game::keep_off_cells`), sorted: its routes go round them
+    /// (`Grid::route_ahead_keeping_off`) at `route_crate_cost` a cell.
     /// `line_of_sight` is whether this tank's straight line to `target` is
     /// currently unobstructed by terrain (any obstacle, or a frog other than
     /// the target itself) - computed in `simulation` (see
@@ -1219,6 +1222,7 @@ impl Ai {
         alert: Option<Position>,
         engage_target: Option<Position>,
         pickups: &[(PickupKind, Position)],
+        keep_off: &[(usize, usize)],
         line_of_sight: bool,
         player_line_of_sight: bool,
         target_concealed: bool,
@@ -1337,6 +1341,7 @@ impl Ai {
             alert,
             engage_target,
             pickups,
+            keep_off,
             line_of_sight,
             player_line_of_sight,
             target_concealed,
@@ -1694,7 +1699,11 @@ impl Ai {
         rng: &mut SmallRng,
     ) -> Dir {
         let heading = self.route_heading();
-        let route = if ctx.on_portal_cooldown { grid.route_ahead_walking(from, target) } else { grid.route_ahead(from, target, heading) };
+        let route = if ctx.on_portal_cooldown {
+            grid.route_ahead_walking_keeping_off(from, target, ctx.keep())
+        } else {
+            grid.route_ahead_keeping_off(from, target, heading, ctx.keep())
+        };
         if route.is_none() && !grid.same_cell(from, target) {
             // No way there: through the walls if a sapper has one (`Sap`),
             // driving on into the wall once at it, else a wander.
@@ -1861,8 +1870,11 @@ impl Ai {
             self.retarget_timer = tuning().enemy_retarget_seconds;
         }
         let heading = self.route_heading();
-        let route =
-            if ctx.on_portal_cooldown { grid.route_ahead_walking(from, self.waypoint) } else { grid.route_ahead(from, self.waypoint, heading) };
+        let route = if ctx.on_portal_cooldown {
+            grid.route_ahead_walking_keeping_off(from, self.waypoint, ctx.keep())
+        } else {
+            grid.route_ahead_keeping_off(from, self.waypoint, heading, ctx.keep())
+        };
         self.steer_toward(from, route, self.waypoint, bounds, half, ctx, grid)
     }
 
@@ -2463,6 +2475,16 @@ struct AvoidCtx<'a> {
     /// footprint until it left and came back. With no walking route it
     /// wanders instead, and takes the portal once the cooldown is out.
     on_portal_cooldown: bool,
+    /// The cells under the crates this tank would leave lying, sorted
+    /// (`think`'s `keep_off`): what its routes go round.
+    keep_off: &'a [(usize, usize)],
+}
+
+impl AvoidCtx<'_> {
+    /// What this tank's routes keep off (`Grid::route_ahead_keeping_off`).
+    fn keep(&self) -> KeepOff<'_> {
+        KeepOff::new(self.keep_off, tuning().route_crate_cost as u32)
+    }
 }
 
 /// The behavior-tree blackboard: transient per-frame perception plus references
@@ -2500,6 +2522,9 @@ struct Brain<'a> {
     /// Every currently-live pickup on the battlefield - see `think`'s
     /// `pickups` parameter and `nearest_pickup`.
     pickups: &'a [(PickupKind, Position)],
+    /// The cells under the crates this tank would leave lying - see
+    /// `think`'s `keep_off` parameter.
+    keep_off: &'a [(usize, usize)],
     /// Whether this tank's straight line to `target` is currently clear
     /// of terrain - see `think`'s `line_of_sight` parameter.
     line_of_sight: bool,
@@ -2541,6 +2566,7 @@ impl<'a> Brain<'a> {
             grip: tuning().tank_turn_grip_force / self.me.mass(),
             dt: self.dt,
             on_portal_cooldown: self.me.portal_cooldown > 0.0,
+            keep_off: self.keep_off,
         }
     }
 }
@@ -4640,6 +4666,7 @@ mod role_tests {
             None,
             None,
             &[],
+            &[],
             true,
             true,
             false,
@@ -4694,6 +4721,7 @@ mod role_tests {
                 None,
                 None,
                 &[(PickupKind::Laser, pickup)],
+                &[],
                 true,
                 true,
                 false,
@@ -4854,7 +4882,7 @@ mod lane_tests {
     /// `read`, routed to `to`.
     fn read_to(grid: &Grid, from: Position, pace: f32, to: Position) -> Option<Lane> {
         let ai = Ai { committed_dir: Some(Dir::Right), motion: Vec2::new(pace, 0.0), ..Ai::default() };
-        let ctx = AvoidCtx { movers: &[], my_index: 0, radius: 20.0, speed: PACE, grip: GRIP, dt: 1.0 / 60.0, on_portal_cooldown: false };
+        let ctx = AvoidCtx { movers: &[], my_index: 0, radius: 20.0, speed: PACE, grip: GRIP, dt: 1.0 / 60.0, on_portal_cooldown: false, keep_off: &[] };
         let route = grid.route_ahead(from, to, Some(Dir::Right.vec())).expect("routes");
         ai.lane_turn(from, Dir::Right, &route, ctx, grid)
     }
@@ -4934,7 +4962,7 @@ mod lane_tests {
         let grid = grid(&[(19, 4), (17, 4)]);
         let from = Position::new(611.6, 188.1);
         let sliding = Ai { committed_dir: Some(Dir::Up), motion: Vec2::new(-129.0, -101.0), ..Ai::default() };
-        let ctx = AvoidCtx { movers: &[], my_index: 0, radius: 20.0, speed: PACE, grip: GRIP, dt: 1.0 / 60.0, on_portal_cooldown: false };
+        let ctx = AvoidCtx { movers: &[], my_index: 0, radius: 20.0, speed: PACE, grip: GRIP, dt: 1.0 / 60.0, on_portal_cooldown: false, keep_off: &[] };
         let field = Ai { field: FieldMind { home: Some(at(0, 0)), ..FieldMind::default() }, ..sliding };
         assert!(!field.walks_into_wall(from, ctx, &grid), "a 16.6 px slide ends in column 18, under the gap");
         assert!(sliding.walks_into_wall(from, ctx, &grid), "an arena judges the centre, under the wall");
@@ -4956,7 +4984,7 @@ mod lane_tests {
         let to = at(6, 20);
         let steer = |near_fight: bool, grid: &Grid| {
             let mut ai = Ai { committed_dir: Some(Dir::Right), dir_hold: 1.0, motion: Vec2::new(PACE, 0.0), near_fight, ..Ai::default() };
-            let ctx = AvoidCtx { movers: &[], my_index: 0, radius: 20.0, speed: PACE, grip: GRIP, dt: 1.0 / 60.0, on_portal_cooldown: false };
+            let ctx = AvoidCtx { movers: &[], my_index: 0, radius: 20.0, speed: PACE, grip: GRIP, dt: 1.0 / 60.0, on_portal_cooldown: false, keep_off: &[] };
             let route = grid.route_ahead(from, to, None);
             ai.steer_toward(from, route, to, (40.0 * CELL, 30.0 * CELL), 16.0, ctx, grid)
         };
@@ -5011,6 +5039,7 @@ mod stuck_tests {
             &mut rng,
             None,
             None,
+            &[],
             &[],
             false,
             false,
@@ -5170,6 +5199,7 @@ mod away_tests {
             &mut rng,
             None,
             None,
+            &[],
             &[],
             true,
             true,
@@ -5337,7 +5367,7 @@ mod hammer_tests {
             Mover { position: me.position, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
         let mut rng = SmallRng::seed_from_u64(7);
-        ai.think(me, &player, seat, None, 1280.0, 720.0, 1.0 / 60.0, &movers, 1, &grid, &mut rng, None, None, &[], true, true, false, walls, tuning().enemy_view_range, &sense, &[])
+        ai.think(me, &player, seat, None, 1280.0, 720.0, 1.0 / 60.0, &movers, 1, &grid, &mut rng, None, None, &[], &[], true, true, false, walls, tuning().enemy_view_range, &sense, &[])
     }
 
     /// A fresh memory with its fire timer out.
@@ -5505,7 +5535,7 @@ mod emp_rule_tests {
             Mover { position: me.position, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
         let mut rng = SmallRng::seed_from_u64(7);
-        ai.think(me, &player, seat, None, 1280.0, 720.0, 1.0 / 60.0, &movers, 1, &grid, &mut rng, None, None, &[], true, true, hidden, [None; 4], tuning().enemy_view_range, &sense, dangers)
+        ai.think(me, &player, seat, None, 1280.0, 720.0, 1.0 / 60.0, &movers, 1, &grid, &mut rng, None, None, &[], &[], true, true, hidden, [None; 4], tuning().enemy_view_range, &sense, dangers)
     }
 
     fn ready() -> Ai {

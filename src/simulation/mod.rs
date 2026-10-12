@@ -3260,6 +3260,41 @@ impl Game {
         })
     }
 
+    /// Who takes a crate on touch, as things stand this frame - see
+    /// `TakeRules`.
+    fn take_rules(&self) -> TakeRules {
+        // A frog pack is left where it is for a tank whose own frog is
+        // alive and already at full health (docs/frog-health-pack-prd.md).
+        // A side whose frog is absent or dead still collects, and wastes it.
+        let frog_full = |frog: Option<Entity>| frog.is_some_and(|e| with_frog(&self.world, e, Frog::at_full_health));
+        TakeRules {
+            frog_full: [frog_full(self.frog), frog_full(self.enemy_frog)],
+            // The tower pack's rule, the frog pack's shape: left alone while
+            // every standing tower of the collector's side is whole and not
+            // burning (docs/defence-towers-prd.md section 9).
+            towers_want: [self.tower_pack_wanted(Side::Player), self.tower_pack_wanted(Side::Enemy)],
+        }
+    }
+
+    /// The nav cells under every crate the enemy `tank` would leave lying
+    /// (`TakeRules::takes`), sorted, for its routes to go round
+    /// (`Ai::think`'s `keep_off`, `route_crate_cost`): a crate stands on a
+    /// grid corner, so the 2 x 2 round it. `crates` is every live crate as
+    /// (kind, where it lies, its half-side). Empty when the knob is off.
+    fn keep_off_cells(rules: &TakeRules, tank: &Tank, crates: &[(PickupKind, Position, f32)], grid: &Grid) -> Vec<(usize, usize)> {
+        if tuning().route_crate_cost == 0 {
+            return Vec::new();
+        }
+        let mut cells: Vec<(usize, usize)> = crates
+            .iter()
+            .filter(|&&(kind, _, _)| !rules.takes(tank, false, kind))
+            .flat_map(|&(_, at, half)| grid.cells_under(at, half))
+            .collect();
+        cells.sort_unstable();
+        cells.dedup();
+        cells
+    }
+
     fn pickup_phase(&mut self, f: &mut Frame) {
         let pad = tuning().pickup_collect_pad_px;
         let living_tanks: Vec<(Entity, Position, Position)> = self
@@ -3273,19 +3308,7 @@ impl Game {
                 (e, center, half)
             })
             .collect();
-        // A frog pack is left where it is for a tank whose own frog is
-        // alive and already at full health - the one rule deciding who
-        // collects one (docs/frog-health-pack-prd.md). A side whose frog is
-        // absent or dead still collects, and wastes it.
-        let player_frog_full = self.frog.is_some_and(|e| with_frog(&self.world, e, Frog::at_full_health));
-        let enemy_frog_full = self.enemy_frog.is_some_and(|e| with_frog(&self.world, e, Frog::at_full_health));
-        let own_frog_full = |e: Entity| if self.is_player(e) { player_frog_full } else { enemy_frog_full };
-        // The tower pack's rule, the frog pack's shape: left alone while
-        // every standing tower of the collector's side is whole and not
-        // burning (docs/defence-towers-prd.md section 9).
-        let player_towers_want = self.tower_pack_wanted(Side::Player);
-        let enemy_towers_want = self.tower_pack_wanted(Side::Enemy);
-        let towers_want = |e: Entity| if self.is_player(e) { player_towers_want } else { enemy_towers_want };
+        let rules = self.take_rules();
         let collected: Vec<(Entity, Entity, PickupKind, Position, bool)> = self
             .world
             .query::<(Entity, &Pickup)>()
@@ -3301,12 +3324,11 @@ impl Game {
                     // rather than intelligence - see `Tank::wants_pickup`,
                     // which is the same predicate the behaviour tree's
                     // `seek_*` tiers gate on, so a tank can never drive to
-                    // something it then refuses to pick up. Players always
-                    // collect; taking what you do not strictly need is the
-                    // player's call to make.
-                    .filter(|&&(e, _, _)| with_tank(&self.world, e, |t| t.wants_pickup(pickup.kind)))
-                    .filter(|&&(e, _, _)| pickup.kind != PickupKind::FrogHealth || !own_frog_full(e))
-                    .filter(|&&(e, _, _)| pickup.kind != PickupKind::TowerPack || towers_want(e))
+                    // something it then refuses to pick up, and whose
+                    // routes go round what it leaves (`keep_off_cells`).
+                    // Players always collect; taking what you do not
+                    // strictly need is the player's call to make.
+                    .filter(|&&(e, _, _)| with_tank(&self.world, e, |t| rules.takes(t, self.is_player(e), pickup.kind)))
                     .find(|&&(_, center, half)| pickup.in_reach(center, half, pad))
                     .map(|&(tank_entity, _, _)| (pickup_entity, tank_entity, pickup.kind, pickup.position, pickup.loose.is_some()))
             })
@@ -3965,6 +3987,11 @@ impl Game {
             .map(|p| (p.kind, p.at()))
             .filter(|&(_, at)| !pulling || !self.in_a_pull(at))
             .collect();
+        // Every crate where it lies, a pull's included, and who would take
+        // one: what each enemy's routes go round (`keep_off_cells`).
+        let take_rules = self.take_rules();
+        let crates: Vec<(PickupKind, Position, f32)> =
+            self.world.query::<&Pickup>().iter().map(|p| (p.kind, p.at(), p.size() * 0.5)).collect();
 
         // Breach perception: the tile in the hull's way each way, within a
         // tile of it - see `Ai::think`'s `walls_ahead`.
@@ -4229,6 +4256,7 @@ impl Game {
             // A player lives in a different archetype (no `Ai`), so this
             // shared read never aliases the exclusive borrow above. `think`
             // is handed the player this tank is fighting as "the player".
+            let keep_off = Self::keep_off_cells(&take_rules, tank, &crates, &grid);
             let intent = with_tank(&self.world, fighting.entity, |player_tank| {
                 ai.think(
                     tank,
@@ -4245,6 +4273,7 @@ impl Game {
                     alert,
                     engage_target,
                     &pickups,
+                    &keep_off,
                     line_of_sight,
                     player_line_of_sight,
                     player_hidden,
@@ -6290,6 +6319,33 @@ fn slot_backed_count(world: &hecs::World, slots: &[(Position, PickupKind)]) -> u
         .count()
 }
 
+/// Who takes a crate on touch (`Game::take_rules`): a tank that wants it
+/// (`Tank::wants_pickup`), except that a frog pack is left while the
+/// tank's own frog is whole and a tower pack while its side's towers are.
+/// The one rule `Game::pickup_phase` collects by and an enemy's routes
+/// steer by (`Game::keep_off_cells`), so a tank never goes round a crate
+/// it would take, nor drives over one it leaves when there is room to go
+/// round.
+#[derive(Clone, Copy)]
+struct TakeRules {
+    /// Per side, the player's first: its frog is alive and whole.
+    frog_full: [bool; 2],
+    /// Per side, the player's first: a tower pack would mend something
+    /// (`Game::tower_pack_wanted`).
+    towers_want: [bool; 2],
+}
+
+impl TakeRules {
+    /// Whether `tank`, on the players' side when `player`, takes a crate
+    /// of `kind` it touches.
+    fn takes(&self, tank: &Tank, player: bool, kind: PickupKind) -> bool {
+        let side = usize::from(!player);
+        tank.wants_pickup(kind)
+            && (kind != PickupKind::FrogHealth || !self.frog_full[side])
+            && (kind != PickupKind::TowerPack || self.towers_want[side])
+    }
+}
+
 /// The conditional bonuses a Health slot may roll, each checked before
 /// any RNG is drawn for it: the frog pack while the frog is hurt, the
 /// tower pack while a player tower is.
@@ -6961,11 +7017,14 @@ mod determinism_tests {
         // (`math::sin` and friends), so a Mac and a Linux runner agree to
         // the bit. Never bump these to go green - work out which change
         // moved them first.
-        // The two-seat round's shells chip its walls chunk by chunk
-        // (`chunks.rs`); with `wall_chunks` off it hashes to
-        // 13_046_804_480_861_549_972.
+        // Both rounds' shells chip walls chunk by chunk (`chunks.rs`); with
+        // `wall_chunks` off the pair is (3_570_665_087_679_403_295,
+        // 5_538_636_586_623_323_216). The map's crates are many, and the
+        // enemies go round the ones they would leave (`route_crate_cost`);
+        // with that at 0 the pair is (15_662_619_869_435_857_390,
+        // 625_655_024_471_431_682).
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (15_662_619_869_435_857_390, 625_655_024_471_431_682), "(one seat, two seats)");
+        assert_eq!((one, two), (12_317_413_125_897_926_193, 14_495_588_630_665_482_518), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round
@@ -9267,6 +9326,115 @@ cells."30,20" = { kind = "frog" }
         with_tank_mut(&game.world, player, |t| t.damage = 0.0);
         step(&mut game, Input::default());
         assert_eq!(health_on_field(&game), 0, "an undamaged player still collects");
+    }
+
+    /// The cells the lone enemy's routes keep off (`Game::keep_off_cells`).
+    fn kept_off(game: &Game) -> Vec<(usize, usize)> {
+        let grid = game.route_grid(W, H);
+        let rules = game.take_rules();
+        let crates: Vec<(PickupKind, Position, f32)> =
+            game.world.query::<&Pickup>().iter().map(|p| (p.kind, p.at(), p.size() * 0.5)).collect();
+        let mut enemies = game.world.query::<&Tank>().with::<&Ai>();
+        let tank = enemies.iter().next().expect("an enemy");
+        Game::keep_off_cells(&rules, tank, &crates, &grid)
+    }
+
+    /// An enemy keeps off what it would leave lying and nothing it would
+    /// take - the collection rule (`TakeRules`), side rules and all: in a
+    /// Protect round it has no frog, so it takes a frog pack (and wastes
+    /// it) and does not go round one; in a Hunt round it goes round the
+    /// pack while its own frog is whole and not once it is hurt. Kept, the
+    /// pack's cells are the 2 x 2 round the corner it stands on.
+    #[test]
+    fn an_enemy_keeps_off_a_frog_pack_only_while_it_would_leave_it() {
+        assert!(kept_off(&game_on(FROG_PACK_MAP, 1, Some(0))).is_empty(), "no frog of its own: it takes the pack");
+
+        let game = game_on(FROG_PACK_HUNT_MAP, 1, Some(0));
+        let mut pack: Vec<(usize, usize)> = game.route_grid(W, H).cells_under(map::cell_to_world(11, 10), 16.0).collect();
+        pack.sort_unstable();
+        assert_eq!(pack.len(), 4);
+        assert_eq!(kept_off(&game), pack, "its frog is whole: it would leave the pack");
+        hurt_frog(&game, game.enemy_frog.expect("Hunt has an enemy frog"), 25.0);
+        assert!(kept_off(&game).is_empty(), "its frog is hurt: it would take the pack");
+    }
+
+    /// The whole AI, not just the router: an enemy chasing the player
+    /// along a row drives over the spot where a laser crate would lie; one
+    /// armed with a minigun, which would leave the crate, drives round it
+    /// and leaves it lying; one on shells, which would take it, drives
+    /// over it as before and takes it in passing.
+    #[test]
+    fn an_enemy_goes_round_a_crate_it_would_leave_and_over_one_it_would_take() {
+        const MAP: &str = r#"
+version = 1
+tanks = 1
+cells."28,10" = { kind = "start" }
+cells."20,20" = { kind = "frog" }
+"#;
+        let spot = map::cell_to_world(10, 10);
+        // The frames the enemy's hull is over the crate's square, until it
+        // is two cells past it, and the weapon it ends up with.
+        let run = |with_crate: bool, armed: bool| -> (Vec<u32>, ActiveWeapon) {
+            let map = if with_crate { format!("{MAP}cells.\"10,10\" = {{ kind = \"pickup\", pickup = \"laser\" }}\n") } else { MAP.to_string() };
+            let mut game = game_on(&map, 1, None);
+            let enemy = game.world.query::<&Tank>().with::<&Ai>().iter().map(|t| t.owner_slot()).next().expect("an enemy");
+            let entity = game.tank_entity_by_slot(enemy).expect("the enemy exists");
+            with_tank_mut(&game.world, entity, |t| {
+                t.disarm();
+                if armed {
+                    t.take_weapon(ActiveWeapon::Minigun);
+                }
+            });
+            game.debug_teleport(enemy, map::cell_to_world(4, 10), Some(std::f32::consts::FRAC_PI_2)).expect("the enemy exists");
+            let mut over = Vec::new();
+            for frame in 0..600 {
+                step(&mut game, Input::default());
+                let (at, half) = with_tank(&game.world, entity, |t| t.hull_bbox_world());
+                if (at.x - spot.x).abs() <= half.x + crate::PICKUP_SIZE * 0.5 && (at.y - spot.y).abs() <= half.y + crate::PICKUP_SIZE * 0.5 {
+                    over.push(frame);
+                }
+                if at.x > spot.x + 2.0 * OBSTACLE_GRID_SIZE {
+                    return (over, with_tank(&game.world, entity, |t| t.active_weapon()));
+                }
+            }
+            panic!("the enemy never got past the spot (crate: {with_crate}, armed: {armed})");
+        };
+        assert!(!run(false, true).0.is_empty(), "with no crate the enemy drives straight over the spot");
+        let (over, weapon) = run(true, true);
+        assert!(over.is_empty(), "armed, it drives round the crate, but was over it on frames {over:?}");
+        assert_eq!(weapon, ActiveWeapon::Minigun, "and leaves it lying");
+        let (over, weapon) = run(true, false);
+        assert!(!over.is_empty(), "on shells it drives over the crate");
+        assert_eq!(weapon, ActiveWeapon::Laser, "and takes it");
+    }
+
+    /// A tank going for a crate it wants is untouched by any of this: one
+    /// on shells with nothing to fight drives straight along its row onto
+    /// a laser crate and takes it.
+    #[test]
+    fn an_enemy_that_wants_a_crate_drives_straight_onto_it() {
+        const MAP: &str = r#"
+version = 1
+tanks = 1
+cells."38,20" = { kind = "start" }
+cells."12,10" = { kind = "pickup", pickup = "laser" }
+cells."30,2" = { kind = "frog" }
+"#;
+        let mut game = game_on(MAP, 1, None);
+        let enemy = game.world.query::<&Tank>().with::<&Ai>().iter().map(|t| t.owner_slot()).next().expect("an enemy");
+        let entity = game.tank_entity_by_slot(enemy).expect("the enemy exists");
+        with_tank_mut(&game.world, entity, |t| t.disarm());
+        let row = map::cell_to_world(4, 10);
+        game.debug_teleport(enemy, row, Some(std::f32::consts::FRAC_PI_2)).expect("the enemy exists");
+        for frame in 0..300 {
+            step(&mut game, Input::default());
+            if with_tank(&game.world, entity, |t| t.active_weapon()) == ActiveWeapon::Laser {
+                return;
+            }
+            let at = with_tank(&game.world, entity, |t| t.position);
+            assert!((at.y - row.y).abs() <= OBSTACLE_GRID_SIZE * 0.5, "frame {frame}: it left its row for {at:?}");
+        }
+        panic!("the enemy never took the laser crate");
     }
 
     // --- The frog health pack (docs/frog-health-pack-prd.md) ---

@@ -607,7 +607,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     damage and knockback to both sides, frogs and tiles, sooted wall faces, oil pools, thrown and
     re-thrown decals, flattened grass, burnt-in tracks, cook-offs); `tick_fires` (`GroundFire`:
     pools and oil-trail cells burn, spread, damage hulls, fuse drums, char the grass in them
-    (`char_grass`); burning cells are blocked in the nav grid; `fade_fires` is the burn-down alone
+    (`char_grass` - and `light_cell_as` chars a cell's grass the moment it is lit, whatever phase
+    lit it, so every fire a snapshot lists has charred its grass, as a replica chars it); burning cells are blocked in the nav grid; `fade_fires` is the burn-down alone
     and `fire_burnt_out` what a spent cell leaves - a burn scar (`Scorch::burn`) and the oil gone -
     once per cell); `tick_fuses` (a fuel drum lit by
     *another* blast launches as a `FlyingDrum` and blasts where it lands;
@@ -882,7 +883,16 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   cell each enemy stands in (`route_crowd_cost`; 0 turns either off) - then a field per live player
   and for the player's frog; `route_grid` builds the same from scratch. Engage slots, waypoints and
   pickups still go through A*, on per-node tables the thread keeps between searches (`SearchTables`,
-  stamped per search), so a query costs the cells it reaches rather than the whole grid. **Lanes**
+  stamped per search), so a query costs the cells it reaches rather than the whole grid. **Crates a
+  tank would leave** are its own, not the grid's: `Game::keep_off_cells` hands each enemy's `think`
+  the nav cells under the crates it would not take (`TakeRules`, the collection rule - the 2 x 2
+  round the corner a crate stands on, `Grid::cells_under`), and `steer`/`wander` route with them
+  priced at `route_crate_cost` for that query alone (`KeepOff`, `Grid::route_ahead_keeping_off`): a
+  search prices them in; a field's shared route is read as it is unless its cells ahead cross one,
+  and then a search priced the same way goes to the first cell of the route past them
+  (`round_kept`, within `KEEP_OFF_LOOK`). A price, never a wall (a crate in the only gap is driven
+  over); a tank never goes round a crate it would take; 0 or no crates routes exactly as without.
+  **Lanes**
   (field maps only, `ai_lane_turns`; docs/large-maps-follow-camera.md §12): a hull slides `v^2/2a`
   past a turn (`tank_turn_grip_force` over its mass), so the switch margin alone
   (`ai_dir_switch_margin_px`, measured to the next cell's centre) leaves it on the far edge of the
@@ -965,7 +975,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   slots. **Enemies only collect what they would use** (a weapon crate while on shells, or of the
   weapon carried while short of its carry limit, so one never trades away a stocked weapon;
   `Tank::wants_pickup`, the same predicate `ai::build`'s seek tiers call - collection must never
-  be stricter than seeking or a tank parks on a pickup forever);
+  be stricter than seeking or a tank parks on a pickup forever), and **drive round what they would
+  leave** where there is room (`TakeRules`, the one rule `pickup_phase` collects by and the routes
+  keep off - see `pathfind.rs` above);
   players always collect. SpeedUp refreshes its timer, never stacks. **Shield is a pool on a
   clock**: full heal plus `shield_hp` and `shield_timer` (`Tank::raise_shield`; it shatters when
   `shield_seconds` run out, 6 by default, or when spent - about four enemy shells), spent at two
@@ -1975,8 +1987,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   server accumulating the ticks between snapshots; `server_ms` is the caller's. **`apply.rs`** —
   `welcome(&Welcome) -> Result<Game>` builds the replica by `Game::init` on the same map, seed,
   overrides and roster-pinned chassis (so `init`'s rolls match), `strip_ai`, removes `dead_cells`,
-  takes `trampled_cells`, chars `burnt_grass` (`Game::char_grass`, the one routine `tick_fires` and
-  a listed fire char through, so a cell still burning is charred twice to no effect), then
+  takes `trampled_cells`, chars `burnt_grass` (`Game::char_grass`, the one routine a lit cell,
+  `tick_fires` and a listed fire char through, so a cell still burning is charred twice to no
+  effect), then
   `snapshot(&mut Game, &Snapshot)`: events first (`RoundStarted` re-inits on its seed unless
   the replica already stands in that round at frame 0, which is every welcome; `ObstacleDestroyed`
   removes the tile; `DrumLaunched` puts the drum in the air; `OilPrinted` lays the room's print,

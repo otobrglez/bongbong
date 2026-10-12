@@ -853,6 +853,10 @@ impl Game {
         let step = 1.0 / tuning().oil_trail_cells_per_second.max(0.5);
         self.fires.push(GroundFire { cell, left: seconds, total: seconds, spread_at: Some(self.time + step), pool, lava });
         f.events.push(Event::FireStarted { x: pos.x, y: pos.y, pool });
+        // Its grass chars at once, whatever phase lit it: a replica chars
+        // the grass of every fire a snapshot lists (`net::apply`), so by
+        // the snapshot the round has charred them all.
+        self.char_grass(|c| c == cell);
     }
 
     /// Advance every burning ground cell: burn down, spread along oil

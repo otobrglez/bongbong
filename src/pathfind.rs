@@ -215,6 +215,49 @@ const UNREACHABLE: u32 = u32::MAX;
 /// than two cells.
 pub const ROUTE_AHEAD_CELLS: usize = 4;
 
+/// How far along a field's route `Grid::route_ahead_keeping_off` reads
+/// for the first cell past the ones it keeps off: a crate's two cells and
+/// the route's own few ahead of them, with room to spare.
+const KEEP_OFF_LOOK: usize = 12;
+
+/// Cells one query prices above the grid's own costs, `extra` each, for
+/// the one tank asking: the crates it would leave lying
+/// (`Grid::route_ahead_keeping_off`). The grid's prices are every tank's,
+/// so what only one tank would rather not cross rides on its query
+/// instead. Sorted, so membership is a binary search; with no cells or a
+/// zero `extra` a query routes exactly as it would without one.
+#[derive(Clone, Copy, Debug)]
+pub struct KeepOff<'a> {
+    cells: &'a [(usize, usize)],
+    extra: u32,
+}
+
+impl<'a> KeepOff<'a> {
+    /// Nothing kept off.
+    pub const NONE: KeepOff<'static> = KeepOff { cells: &[], extra: 0 };
+
+    /// `cells` (sorted, as `Grid::cells_under` and a sort leave them)
+    /// priced `extra` each.
+    pub fn new(cells: &'a [(usize, usize)], extra: u32) -> Self {
+        debug_assert!(cells.is_sorted(), "a binary search needs the cells sorted");
+        Self { cells, extra }
+    }
+
+    /// Whether this changes no route.
+    pub fn is_empty(&self) -> bool {
+        self.cells.is_empty() || self.extra == 0
+    }
+
+    fn holds(&self, cell: (usize, usize)) -> bool {
+        self.cells.binary_search(&cell).is_ok()
+    }
+
+    /// What a step into `cell` costs on top of the grid's price.
+    fn extra_at(&self, cell: (usize, usize)) -> u32 {
+        if self.extra > 0 && self.holds(cell) { self.extra } else { 0 }
+    }
+}
+
 /// The first cells of a route, from `Grid::route_ahead`: the cell the
 /// route starts in, the point `next_step` would hand out, and the cells
 /// the route walks next in order - at most `ROUTE_AHEAD_CELLS`, ending at
@@ -1255,7 +1298,7 @@ impl Grid {
     fn route(&self, start: (usize, usize), goal: (usize, usize)) -> Option<SearchHit> {
         match self.field_for(goal) {
             Some(field) => self.descend(field, start, None),
-            None => self.search(start, goal, true),
+            None => self.search(start, goal, true, KeepOff::NONE),
         }
     }
 
@@ -1274,6 +1317,18 @@ impl Grid {
     /// is walked by reading it from each cell in turn; a search hands
     /// back the head of the path it found.
     pub fn route_ahead(&self, from: Position, to: Position, heading: Option<Position>) -> Option<RouteAhead> {
+        self.route_ahead_keeping_off(from, to, heading, KeepOff::NONE)
+    }
+
+    /// `route_ahead` for a tank that would rather not cross `keep`'s cells
+    /// (the crates it would leave lying). A search prices them in for this
+    /// query alone. A field is every tank's, so its route is read as it is,
+    /// and only where its cells ahead cross a kept cell does this tank go
+    /// round: a search priced the same way, to the first cell of the
+    /// field's route past them (`round_kept`), which takes it round and
+    /// back onto the shared route. With nothing kept off this is exactly
+    /// `route_ahead`.
+    pub fn route_ahead_keeping_off(&self, from: Position, to: Position, heading: Option<Position>, keep: KeepOff) -> Option<RouteAhead> {
         let start = self.cell_of(from);
         let goal = self.cell_of(to);
         if start == goal {
@@ -1282,22 +1337,27 @@ impl Grid {
         let prefer = heading.map(unit_step);
         let mut ahead = match self.field_for(goal) {
             Some(field) => {
-                let hit = self.descend(field, start, prefer)?;
-                let mut ahead = self.ahead_of(start, hit.first_step);
-                let (mut from, mut at) = (start, hit.first_step);
-                while ahead.len < ROUTE_AHEAD_CELLS && at != goal && !self.is_portal_cell(at) {
-                    let on = prefer.and(step_of(from, at));
-                    let Some(next) = self.descend(field, at, on) else { break };
-                    ahead.push(next.first_step);
-                    (from, at) = (at, next.first_step);
-                }
+                let mut ahead: Option<RouteAhead> = None;
+                self.read_field(field, start, goal, prefer, |cell| {
+                    match &mut ahead {
+                        None => ahead = Some(self.ahead_of(start, cell)),
+                        Some(ahead) => ahead.push(cell),
+                    }
+                    ahead.as_ref().is_some_and(|ahead| ahead.len < ROUTE_AHEAD_CELLS)
+                });
+                let mut ahead = ahead?;
                 ahead.shared = true;
+                if !keep.is_empty() && ahead.cells().iter().any(|&c| keep.holds(c)) {
+                    if let Some(round) = self.round_kept(field, start, goal, prefer, keep) {
+                        ahead = self.ahead_of(start, round.first_step);
+                    }
+                }
                 ahead
             }
             // A search's path is one of many as cheap, its shape
             // whatever order the search met the cells in - a staircase as
             // often as not - so only its first step is read.
-            None => self.ahead_of(start, self.search(start, goal, true)?.first_step),
+            None => self.ahead_of(start, self.search(start, goal, true, keep)?.first_step),
         };
         // Past a portal cell the route may be the far side's.
         if let Some(i) = ahead.cells().iter().position(|&c| self.is_portal_cell(c)) {
@@ -1307,15 +1367,79 @@ impl Grid {
         Some(ahead)
     }
 
+    /// Read `field`'s route from `start` cell by cell, handing each to
+    /// `each`: the first step along `prefer` where that is as cheap as
+    /// any, each after it on the way the route came in, until `each`
+    /// answers false or the route reaches the goal or a portal cell (past
+    /// which it may be the far side's). Nothing when the field has no step
+    /// from `start`.
+    fn read_field(
+        &self,
+        field: &Field,
+        start: (usize, usize),
+        goal: (usize, usize),
+        prefer: Option<Step>,
+        mut each: impl FnMut((usize, usize)) -> bool,
+    ) {
+        let Some(hit) = self.descend(field, start, prefer) else { return };
+        let (mut from, mut at) = (start, hit.first_step);
+        while each(at) && at != goal && !self.is_portal_cell(at) {
+            let on = prefer.and(step_of(from, at));
+            let Some(next) = self.descend(field, at, on) else { break };
+            (from, at) = (at, next.first_step);
+        }
+    }
+
+    /// The way round `keep`'s cells for a tank whose share of `field`'s
+    /// route crosses them: a search priced with them, to the first cell of
+    /// the route past them. `None` when the route does not leave them
+    /// within `KEEP_OFF_LOOK` cells or before its goal - the target is on
+    /// the crate, and the route goes there as it is.
+    fn round_kept(&self, field: &Field, start: (usize, usize), goal: (usize, usize), prefer: Option<Step>, keep: KeepOff) -> Option<SearchHit> {
+        let (mut read, mut crossed, mut past) = (0, false, None);
+        self.read_field(field, start, goal, prefer, |cell| {
+            read += 1;
+            if keep.holds(cell) {
+                crossed = true;
+            } else if crossed {
+                past = Some(cell);
+                return false;
+            }
+            read < KEEP_OFF_LOOK
+        });
+        self.search(start, past?, true, keep)
+    }
+
     /// `route_ahead` on foot, the route `next_step_walking` walks: the
     /// portal hub left out, so a portal cell is ground like any other.
     pub fn route_ahead_walking(&self, from: Position, to: Position) -> Option<RouteAhead> {
+        self.route_ahead_walking_keeping_off(from, to, KeepOff::NONE)
+    }
+
+    /// `route_ahead_walking` with `keep`'s cells priced in for this query
+    /// alone, as `route_ahead_keeping_off` prices them.
+    pub fn route_ahead_walking_keeping_off(&self, from: Position, to: Position, keep: KeepOff) -> Option<RouteAhead> {
         let start = self.cell_of(from);
         let goal = self.cell_of(to);
         if start == goal {
             return None;
         }
-        self.search(start, goal, false).map(|hit| self.ahead_of(start, hit.first_step))
+        self.search(start, goal, false, keep).map(|hit| self.ahead_of(start, hit.first_step))
+    }
+
+    /// The cells a square of half-side `half` centred on `center` covers,
+    /// those on the grid: an edge on a cell boundary reaches no further, so
+    /// a crate standing on a grid corner covers the 2 x 2 round it.
+    pub fn cells_under(&self, center: Position, half: f32) -> impl Iterator<Item = (usize, usize)> + use<> {
+        let size = self.cell_size;
+        let span = |c: f32, n: usize| {
+            let lo = ((c - half) / size).floor().max(0.0) as usize;
+            let hi = ((c + half) / size).ceil() as isize - 1;
+            (lo, hi.min(n as isize - 1))
+        };
+        let (c0, c1) = span(center.x, self.cols);
+        let (r0, r1) = span(center.y, self.rows);
+        (r0 as isize..=r1).flat_map(move |r| (c0 as isize..=c1).map(move |c| (c as usize, r as usize)))
     }
 
     /// A `RouteAhead` from `start` holding `first` alone, its first point
@@ -1349,7 +1473,7 @@ impl Grid {
         if start == goal {
             return None;
         }
-        self.search(start, goal, false).map(|hit| self.center_of(hit.first_step))
+        self.search(start, goal, false, KeepOff::NONE).map(|hit| self.center_of(hit.first_step))
     }
 
     /// The one A* implementation `route` searches with when no field
@@ -1371,12 +1495,12 @@ impl Grid {
     /// or with `hub` false (`next_step_walking`), the extra terms are
     /// skipped outright and the search is the plain grid A*, tie order
     /// included.
-    fn search(&self, start: (usize, usize), goal: (usize, usize), hub: bool) -> Option<SearchHit> {
-        SEARCH_TABLES.with_borrow_mut(|tables| self.search_in(tables, start, goal, hub))
+    fn search(&self, start: (usize, usize), goal: (usize, usize), hub: bool, keep: KeepOff) -> Option<SearchHit> {
+        SEARCH_TABLES.with_borrow_mut(|tables| self.search_in(tables, start, goal, hub, keep))
     }
 
     /// `search` on the thread's kept tables (`SearchTables`), begun here.
-    fn search_in(&self, t: &mut SearchTables, start: (usize, usize), goal: (usize, usize), hub: bool) -> Option<SearchHit> {
+    fn search_in(&self, t: &mut SearchTables, start: (usize, usize), goal: (usize, usize), hub: bool, keep: KeepOff) -> Option<SearchHit> {
         let hub = hub && !self.portal_cells.is_empty();
         // One slot per cell plus the hub's sentinel slot at the end.
         t.begin(self.cols * self.rows + 1);
@@ -1470,8 +1594,9 @@ impl Grid {
                             continue;
                         }
                         // A step costs what the cell charges (`weigh`), 1 on
-                        // open ground.
-                        relax(t, node, NavNode::Cell(next), g + self.cost[idx(NavNode::Cell(next))] as f32);
+                        // open ground, and what the query keeps off.
+                        let price = self.cost[idx(NavNode::Cell(next))] as u32 + keep.extra_at(next);
+                        relax(t, node, NavNode::Cell(next), g + price as f32);
                     }
                     if hub && !t.is_closed(idx(NavNode::Hub)) && self.is_portal_cell(cell) {
                         relax(t, node, NavNode::Hub, g + self.hop_cost);
@@ -1848,10 +1973,10 @@ mod tests {
                     if from == to {
                         continue;
                     }
-                    assert!(big.search((0, 0), (29, 19), true).is_some());
+                    assert!(big.search((0, 0), (29, 19), true, KeepOff::NONE).is_some());
                     for hub in [true, false] {
-                        let kept = hit(grid.search(from, to, hub));
-                        let fresh = hit(grid.search_in(&mut SearchTables::default(), from, to, hub));
+                        let kept = hit(grid.search(from, to, hub, KeepOff::NONE));
+                        let fresh = hit(grid.search_in(&mut SearchTables::default(), from, to, hub, KeepOff::NONE));
                         assert_eq!(kept, fresh, "{label}: {from:?} to {to:?}, hub {hub}");
                     }
                 }
@@ -2083,6 +2208,93 @@ mod tests {
         // A blocked start still expands into its open neighbours.
         let boxed = Grid::build(SIDE, SIDE, CELL, 0.0, std::iter::once(block(0, 0)));
         assert_eq!(boxed.nearest_open_reachable(at(0, 0), 1, |_| true), Some(at(0, 1)));
+    }
+
+    /// The cells one tank's route walks from `from` to `to`, one
+    /// `route_ahead_keeping_off` step at a time.
+    fn walk_keeping_off(grid: &Grid, from: Position, to: Position, keep: KeepOff) -> Vec<(usize, usize)> {
+        let mut at = from;
+        let mut cells = Vec::new();
+        while let Some(route) = grid.route_ahead_keeping_off(at, to, None, keep) {
+            at = route.first();
+            cells.push(route.cells()[0]);
+            assert!(cells.len() < 100, "the walk arrives");
+        }
+        cells
+    }
+
+    /// A crate's cells: the 2 x 2 round the corner of (4, 4), sorted.
+    const CRATE: [(usize, usize); 4] = [(4, 4), (4, 5), (5, 4), (5, 5)];
+
+    /// Kept cells are gone round, by a search and by a field alike, where
+    /// the same route keeping nothing off runs across them.
+    #[test]
+    fn a_route_keeping_off_goes_round_the_kept_cells() {
+        let keep = KeepOff::new(&CRATE, 3);
+        let (from, to) = (at(0, 4), at(9, 4));
+        let plain = Grid::open(SIDE, SIDE, CELL, 0.0);
+        let mut fielded = Grid::open(SIDE, SIDE, CELL, 0.0);
+        fielded.add_field(to);
+        for grid in [&plain, &fielded] {
+            let across = walk_keeping_off(grid, from, to, KeepOff::NONE);
+            assert!(across.iter().any(|c| CRATE.contains(c)), "keeping nothing off runs across: {across:?}");
+            let round = walk_keeping_off(grid, from, to, keep);
+            assert!(!round.iter().any(|c| CRATE.contains(c)), "keeping off goes round: {round:?}");
+            assert_eq!(round.last(), Some(&(9, 4)), "and arrives");
+        }
+    }
+
+    /// Only a price, never a wall: kept cells filling the only gap in a
+    /// wall are still crossed, by a search and by a field alike.
+    #[test]
+    fn a_route_keeping_off_still_crosses_the_only_gap() {
+        let keep = KeepOff::new(&CRATE, 3);
+        let (from, to) = (at(0, 4), at(9, 4));
+        let plain = Grid::build(SIDE, SIDE, CELL, 0.0, wall(5, &[4, 5]).into_iter());
+        let mut fielded = Grid::build(SIDE, SIDE, CELL, 0.0, wall(5, &[4, 5]).into_iter());
+        fielded.add_field(to);
+        for grid in [&plain, &fielded] {
+            let route = walk_keeping_off(grid, from, to, keep);
+            assert!(route.iter().any(|c| CRATE.contains(c)), "through the gap: {route:?}");
+            assert_eq!(route.last(), Some(&(9, 4)), "and arrives");
+        }
+    }
+
+    /// Kept cells priced at nothing change no route: from every cell of a
+    /// grid with a gapped wall, to a field's goal and to a searched one,
+    /// on foot and not, the route is `route_ahead`'s cell for cell.
+    #[test]
+    fn kept_cells_priced_at_nothing_change_no_route() {
+        let mut grid = Grid::build(SIDE, SIDE, CELL, 0.0, wall(5, &[2, 7]).into_iter());
+        grid.add_field(at(9, 9));
+        let free = KeepOff::new(&CRATE, 0);
+        let read = |r: Option<RouteAhead>| r.map(|r| (r.first(), r.cells().to_vec(), r.shared()));
+        let heading = Some(Position::new(1.0, 0.0));
+        for to in [at(9, 9), at(8, 1)] {
+            for col in 0..10 {
+                for row in 0..10 {
+                    let from = at(col, row);
+                    assert_eq!(read(grid.route_ahead_keeping_off(from, to, heading, free)), read(grid.route_ahead(from, to, heading)));
+                    assert_eq!(read(grid.route_ahead_walking_keeping_off(from, to, free)), read(grid.route_ahead_walking(from, to)));
+                }
+            }
+        }
+    }
+
+    /// The cells under a square: the 2 x 2 round a corner it stands on,
+    /// the one cell it fills centred on that cell, cut at the grid's edge.
+    #[test]
+    fn the_cells_under_a_square() {
+        let grid = Grid::open(SIDE, SIDE, CELL, 0.0);
+        let under = |c: Position| {
+            let mut cells: Vec<(usize, usize)> = grid.cells_under(c, CELL / 2.0).collect();
+            cells.sort_unstable();
+            cells
+        };
+        assert_eq!(under(corner(3, 3)), vec![(3, 3), (3, 4), (4, 3), (4, 4)]);
+        assert_eq!(under(at(3, 3)), vec![(3, 3)]);
+        assert_eq!(under(Position::new(0.0, 0.0)), vec![(0, 0)]);
+        assert_eq!(under(Position::new(SIDE, SIDE)), vec![(9, 9)]);
     }
 }
 

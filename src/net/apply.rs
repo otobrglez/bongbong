@@ -1478,7 +1478,8 @@ fn apply_fires(game: &mut Game, s: &Snapshot, cols: u16) {
             }
         })
         .collect();
-    // Grass in a burning cell chars, as `tick_fires` does on the server.
+    // Grass in a burning cell chars, as the room chars it the moment the
+    // cell is lit (`Game::light_cell_as`).
     let burning: BTreeSet<(i32, i32)> = fires.iter().map(|f| f.cell).collect();
     if !burning.is_empty() {
         game.char_grass(|cell| burning.contains(&cell));
@@ -2690,6 +2691,23 @@ cells."16,10" = { kind = "tall_grass" }
         assert_eq!(&*joiner.cover_cells(), &*game.cover_cells(), "the joiner's cover is the room's");
         assert!(!crate::grass::conceals(&joiner.cover_cells(), map::cell_to_world(10, 11)), "burnt, the reeds hide nobody");
         assert!(crate::grass::conceals(&joiner.cover_cells(), map::cell_to_world(16, 10)), "the grass the fire missed still hides");
+    }
+
+    /// A pool a blast lights after the frame's fires have ticked has
+    /// charred its grass by the snapshot that lists it (`light_cell_as`),
+    /// as the replica chars the grass of every fire listed: frame by frame
+    /// from the blast, the two draw the same cover, never a frame apart.
+    #[test]
+    fn grass_a_blast_lights_is_charred_by_the_snapshot_that_lists_its_fire() {
+        let mut game = quiet_round(GRASS_BY_A_DRUM, 0xB0B, 0);
+        let mut replica = welcome_through_the_codec(&game);
+        game.debug_detonate(map::cell_to_world(10, 10)).expect("the oil drum at (10,10)");
+        for frame in 0..10 {
+            step_and_apply(&mut game, &mut replica);
+            assert_eq!(replica.drawable_state().burnt_grass, game.drawable_state().burnt_grass, "frame {frame}");
+        }
+        assert!(!game.fires.is_empty(), "the pool burns");
+        assert!(!game.drawable_state().burnt_grass.is_empty(), "and has charred the cover");
     }
 
     /// A client that comes in while the pool still burns learns the

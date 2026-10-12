@@ -1873,6 +1873,17 @@ tunables! {
         /// routes bend around a clump rather than queue through it. 0
         /// switches it off.
         route_crowd_cost: usize = 2 in 0 ..= 64;
+        /// Extra route cost, for an enemy's own routes only, on every cell
+        /// under a crate it would leave lying (`Game::keep_off_cells`), so
+        /// it drives round the crate and leaves it for the players rather
+        /// than over it. On a straight run crossing a crate's two cells
+        /// costs four more and going round two, so a lone tank goes round;
+        /// no dearer than a cell another enemy stands in
+        /// (`route_crowd_cost`), so a pack passing a crate spreads over it
+        /// rather than queueing in the lanes beside it. A price, never a
+        /// wall - a crate in the only gap is still driven over. 0 switches
+        /// it off.
+        route_crate_cost: usize = 2 in 0 ..= 64;
         /// Stop and fight within this distance (px). The engagement ring and
         /// retreat range are factors of this - see the `engage` group.
         enemy_attack_range: f32 = 340.0 in 50.0 ..= 2000.0;
