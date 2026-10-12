@@ -10,6 +10,7 @@ use crate::math;
 use crate::tuning::tuning;
 use hecs::Entity;
 use rand::RngExt;
+use rand::rngs::SmallRng;
 use crate::math::Vec2;
 
 use crate::bullet::{Bullet, BulletState};
@@ -554,9 +555,9 @@ pub(super) trait Projectile: hecs::Component {
     /// What its `Event::Hit` says landed.
     fn hit_cause() -> super::HitCause;
     /// Bounce off `hit` instead of detonating, if this projectile can by
-    /// its own rules (shells off Iron). A barrel's chance deflection goes
-    /// through `can_bounce`/`reflect_off` instead.
-    fn try_ricochet(&mut self, _hit: &TerrainBox) -> bool {
+    /// its own rules (shells off iron, on a roll of `rng`). A barrel's
+    /// chance deflection goes through `can_bounce`/`reflect_off` instead.
+    fn try_ricochet(&mut self, _hit: &TerrainBox, _rng: &mut SmallRng) -> bool {
         false
     }
     /// Whether this kind can ricochet off a barrel at all - plasma never
@@ -684,11 +685,17 @@ impl Projectile for Shell {
     deflect_impl!();
 
     /// Shells ricochet off iron and a volcano's cone while `bounces_left`
-    /// lasts (`Material::ricochets_shells`): reflect on the face that was
-    /// struck and rewind to the pre-motion position so next frame starts
-    /// clear of the tile.
-    fn try_ricochet(&mut self, hit: &TerrainBox) -> bool {
+    /// lasts (`Material::ricochets_shells`), each time on a
+    /// `shell_ricochet_chance` roll: reflect on the face that was struck
+    /// and rewind to the pre-motion position so next frame starts clear of
+    /// the tile. The roll is drawn only once the rest allows a bounce, and
+    /// never at a chance of 0 or 1.
+    fn try_ricochet(&mut self, hit: &TerrainBox, rng: &mut SmallRng) -> bool {
         if self.bounces_left == 0 || !hit.material.ricochets_shells() {
+            return false;
+        }
+        let chance = tuning().shell_ricochet_chance;
+        if !(chance >= 1.0 || (chance > 0.0 && rng.random_bool(chance))) {
             return false;
         }
         self.bounces_left -= 1;

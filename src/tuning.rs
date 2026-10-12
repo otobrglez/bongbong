@@ -613,13 +613,21 @@ tunables! {
         /// shell's travel direction - a "tap", not a shove - skipped if this
         /// very hit just wrecked the tank.
         shell_impact_knockback_speed: f32 = 35.0 in 0.0 ..= 400.0;
-        /// Ricochet: a shell reflects off an indestructible Iron obstacle
-        /// instead of detonating, up to this many times per shell. Every
-        /// other target (a tank, the frog, the boundary wall, any
-        /// destructible material) still detonates on first contact. One
-        /// keeps the Iron case readable: a grazing shot gets one more chance
-        /// to land, not an indefinitely ping-ponging shell.
+        /// Ricochet: a shell may reflect off iron or a volcano's cone
+        /// (`Material::ricochets_shells`) instead of detonating, up to this
+        /// many times per shell. Every other target (a tank, the frog, the
+        /// boundary wall, a training door, any destructible material)
+        /// detonates it on first contact. One keeps the case readable: a
+        /// shell gets one more chance to land, not an indefinitely
+        /// ping-ponging shell.
         shell_ricochet_bounces: u32 = 1 in 0 ..= 10;
+        /// Odds a shell that still has a bounce left ricochets off iron or
+        /// a volcano's cone rather than bursting on it, rolled on the
+        /// round's RNG at each such contact (0 and 1 draw nothing). Shells
+        /// fly on the four headings, so they meet iron square on and a
+        /// ricochet comes straight back at the gun: a rare surprise, not
+        /// the rule.
+        shell_ricochet_chance: f64 = 0.05 in 0.0 ..= 1.0;
     }
 
     group minigun {

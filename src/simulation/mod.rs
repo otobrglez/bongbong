@@ -4748,7 +4748,7 @@ impl Game {
 
     /// Resolve every flying projectile of one type against the terrain
     /// snapshot and the tanks: sweep its frame segment, flash at the entry
-    /// point, ricochet if it can (shells off Iron), otherwise detonate at
+    /// point, ricochet if it can (shells off iron, on a roll), otherwise detonate at
     /// that point and - when `live` - apply damage/knockback/frog hop.
     ///
     /// A shot whose segment passes through a portal before it meets
@@ -4903,9 +4903,10 @@ impl Game {
                 let p = q.get().expect("projectile collected this frame still exists");
                 let bounced = match target {
                     ShellTarget::Obstacle(e) => f.terrain.obstacle(e).is_some_and(|b| {
-                        // The projectile's own rule (shells off Iron), or a
-                        // barrel's chance deflection. Zero chance draws no RNG.
-                        p.try_ricochet(b) || {
+                        // The projectile's own rule (shells off iron, on a
+                        // roll), or a barrel's chance deflection. Zero
+                        // chance draws no RNG.
+                        p.try_ricochet(b, &mut f.rng) || {
                             let chance = b.material.deflect_chance();
                             P::can_bounce() && chance > 0.0 && f.rng.random_bool(chance) && {
                                 p.reflect_off(b);
@@ -9157,7 +9158,8 @@ cells."36,5" = { kind = "wall", material = "brick" }
     }
 
     /// Whether a shot met the iron column at col 20 this frame - a shell
-    /// ricochets off iron, so its first contact there is a `Ricochet`.
+    /// bursts on iron or, on a roll, ricochets off it, so its first contact
+    /// there is a `Hit` or a `Ricochet`.
     fn struck_the_iron(game: &Game) -> bool {
         let wall = map::cell_to_world(20, 0).x;
         game.events().iter().any(|e| match *e {
@@ -9578,33 +9580,70 @@ cells."20,8" = { kind = "wall", material = "iron" }
 cells."21,8" = { kind = "wall", material = "iron" }
 "#;
 
-    /// A shell that bounces off iron says so once - `Event::Ricochet` with
-    /// the heading it flies on along - and keeps flying until it lands
-    /// somewhere else.
-    #[test]
-    fn a_shell_off_iron_ricochets_once_and_flies_on() {
-        let mut game = game_on(IRON_BAR_MAP, 0, Some(0));
+    /// What one shell fired up at `IRON_BAR_MAP`'s iron did on a round of
+    /// seed `seed`.
+    struct IronShot {
+        /// The heading of each `Event::Ricochet` it flew on along.
+        headings: Vec<f32>,
+        /// It burst on the iron.
+        burst_on_iron: bool,
+        /// It met something after a ricochet: the boundary wall, or on a
+        /// seed that puts the frog in its way, the frog.
+        landed_after: bool,
+    }
+
+    fn shot_at_iron(seed: u64) -> IronShot {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(0);
+        game.seed_override = Some(seed);
+        game.player_row_override = Some(0);
+        game.map = MapFile::from_toml_str(IRON_BAR_MAP).expect("test map parses");
+        game.init(W, H);
         let player = game.player().expect("player");
         with_tank_mut(&game.world, player, |t| t.control(None, Some(Dir::Up)));
         step(&mut game, Input::single(Intent { fire: true, ..Intent::default() }));
-        let (mut ricochets, mut headings, mut landed_after) = (0, Vec::new(), false);
+        let mut shot = IronShot { headings: Vec::new(), burst_on_iron: false, landed_after: false };
         for _ in 0..240 {
             step(&mut game, Input::default());
             for e in game.events() {
                 match *e {
                     Event::Ricochet { slot: 0, heading, .. } => {
-                        ricochets += 1;
-                        headings.push(heading);
+                        shot.headings.push(heading);
                         assert!(game.world.query::<&Shell>().iter().any(|s| s.state == ShellState::Flying), "still flying");
                     }
-                    Event::Hit { target: HitTarget::Wall, .. } if ricochets > 0 => landed_after = true,
+                    Event::Hit { target: HitTarget::Obstacle { material: Material::Iron }, .. } => shot.burst_on_iron = true,
+                    Event::Hit { .. } if !shot.headings.is_empty() => shot.landed_after = true,
                     _ => {}
                 }
             }
+            if shot.burst_on_iron || shot.landed_after {
+                break;
+            }
         }
-        assert_eq!(ricochets, 1, "one bounce per shell (`shell_ricochet_bounces`)");
-        assert!((headings[0] - 180.0).abs() < 1.0, "reflected straight back down, got {}", headings[0]);
-        assert!(landed_after, "the shell flew on to the boundary wall");
+        shot
+    }
+
+    /// A shell meets iron square on, so a ricochet comes straight back at
+    /// the gun: it bounces only on a `shell_ricochet_chance` roll and
+    /// otherwise bursts on the iron. One that bounces says so once -
+    /// `Event::Ricochet` with the heading it flies on along - and keeps
+    /// flying until it lands somewhere else.
+    #[test]
+    fn a_shell_off_iron_mostly_bursts_and_now_and_then_ricochets_once_and_flies_on() {
+        let shots: Vec<IronShot> = (0..200).map(shot_at_iron).collect();
+        let bounced: Vec<&IronShot> = shots.iter().filter(|s| !s.headings.is_empty()).collect();
+        for shot in &bounced {
+            assert_eq!(shot.headings.len(), 1, "one bounce per shell (`shell_ricochet_bounces`)");
+            assert!((shot.headings[0] - 180.0).abs() < 1.0, "reflected straight back down, got {}", shot.headings[0]);
+            assert!(shot.landed_after, "the shell flew on and landed somewhere else");
+        }
+        assert!(shots.iter().all(|s| s.burst_on_iron != !s.headings.is_empty()), "every shell either bursts on the iron or bounces off it");
+        let expected = 200.0 * tuning().shell_ricochet_chance;
+        assert!(
+            !bounced.is_empty() && (bounced.len() as f64) < expected * 3.0,
+            "{} of 200 shells bounced, about {expected:.0} expected",
+            bounced.len()
+        );
     }
 
     /// Three training-door tiles across the player's line of fire, two
