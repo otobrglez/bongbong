@@ -224,6 +224,7 @@ impl Sheets for EditorTextures<'_> {
             | Sheet::TankModules
             | Sheet::TankModulesGlow
             | Sheet::BarrelExplosion
+            | Sheet::Aircraft
             | Sheet::Frog { .. } => {
                 panic!("the builder has no {sheet:?} sheet")
             }

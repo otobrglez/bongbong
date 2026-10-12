@@ -348,6 +348,90 @@ pub fn bombs(entry: Position, mark: Position, spacing: f32, lead: f32) -> ([Posi
     ([mark - half, mark + half], ((mark - entry).length() - lead).max(0.0))
 }
 
+/// The aircraft sheet's cell, px: 44 design pixels at 2 px a block, ten
+/// per cent over a tank's 80 px sprite cell (docs/AIRCRAFT_SPEC.md).
+pub const AIRCRAFT_CELL: f32 = 88.0;
+
+/// The sheet's columns: the heli's airframe, its rotor's two frames, the
+/// jet.
+const COL_HELI: f32 = 0.0;
+const COL_ROTOR: f32 = 1.0;
+const COL_JET: f32 = 3.0;
+
+/// How far ahead of the heli's centre its mast stands, px
+/// (`gen_aircraft.py`'s `MAST_Y`, doubled).
+pub const HELI_MAST_PX: f32 = 12.0;
+
+/// The rotor's frames per second: its two frames alternate this fast.
+const ROTOR_HZ: f32 = 30.0;
+
+/// The rotor drawn over the airframe this opaque: a blur, not a blade.
+const ROTOR_ALPHA: f32 = 0.55;
+
+fn cell(col: f32) -> crate::math::Rectangle {
+    crate::math::Rectangle::new(col * AIRCRAFT_CELL, 0.0, AIRCRAFT_CELL, AIRCRAFT_CELL)
+}
+
+impl Aircraft {
+    /// The degrees its sprite turns (0 faces up).
+    pub fn rotation(&self) -> f32 {
+        crate::math::atan2(self.heading.x, -self.heading.y).to_degrees()
+    }
+}
+
+/// One aircraft-sheet cell centred on `at`, turned `rotation` degrees.
+fn blit_cell(c: &mut impl crate::canvas::Canvas, col: f32, at: Position, rotation: f32, tint: crate::math::Color) {
+    let half = AIRCRAFT_CELL * 0.5;
+    let dest = crate::math::Rectangle::new(at.x, at.y, AIRCRAFT_CELL, AIRCRAFT_CELL);
+    c.blit(crate::canvas::Sheet::Aircraft, cell(col), dest, Vec2::new(half, half), rotation, tint);
+}
+
+/// Every aircraft's shadow on the ground under it (docs/air-support.md
+/// "Drawing"): its silhouette tinted black at the tanks' shadow opacity,
+/// on its ground point nudged along the light - the rotor's disc too.
+/// Drawn after the floor, under the tanks. `aircraft` in id order.
+pub fn paint_shadows(c: &mut impl crate::canvas::Canvas, aircraft: &[Aircraft], time: f32) {
+    let t = crate::tuning::tuning();
+    let nudge = Vec2::new(t.shadow_dir_x, t.shadow_dir_y) * 6.0;
+    let shadow = crate::math::Color::new(0, 0, 0, (255.0 * t.tank_shadow_opacity * 0.8) as u8);
+    for a in aircraft {
+        let at = a.ground + nudge;
+        let rot = a.rotation();
+        match a.sortie {
+            Sortie::Heli => {
+                blit_cell(c, COL_HELI, at, rot, shadow);
+                let disc = crate::math::Color::new(0, 0, 0, (shadow.a as f32 * ROTOR_ALPHA) as u8);
+                blit_cell(c, COL_ROTOR + rotor_frame(time), at + a.heading * HELI_MAST_PX, rot, disc);
+            }
+            Sortie::Jet => blit_cell(c, COL_JET, at, rot, shadow),
+        }
+    }
+}
+
+/// Every aircraft in the air, over everything that stands - trees and
+/// drones too: lifted by its height over its shadow, the heli's rotor
+/// turning over it. `aircraft` in id order.
+pub fn paint_aircraft(c: &mut impl crate::canvas::Canvas, aircraft: &[Aircraft], time: f32) {
+    let white = crate::math::Color::WHITE;
+    for a in aircraft {
+        let at = a.drawn();
+        let rot = a.rotation();
+        match a.sortie {
+            Sortie::Heli => {
+                blit_cell(c, COL_HELI, at, rot, white);
+                let blur = crate::math::Color::new(255, 255, 255, (255.0 * ROTOR_ALPHA) as u8);
+                blit_cell(c, COL_ROTOR + rotor_frame(time), at + a.heading * HELI_MAST_PX, rot, blur);
+            }
+            Sortie::Jet => blit_cell(c, COL_JET, at, rot, white),
+        }
+    }
+}
+
+/// Which of the rotor's two frames shows at round time `time`: 0 or 1.
+fn rotor_frame(time: f32) -> f32 {
+    ((time * ROTOR_HZ) as i64 % 2) as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

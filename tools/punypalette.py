@@ -271,6 +271,14 @@ PICKUP_INK = {
     # ringed in a pale ultraviolet lilac with its accretion disc across it
     # in the light. The only crate whose symbol is a filled dark disc.
     'gravity_well': ((0x3A, 0x1A, 0x6E), (0xE6, 0xA8, 0xFF), (0xFF, 0xF0, 0xFF)),
+    # Air support (docs/air-support.md): two-tone, like the swarm - the
+    # helicopter in a pale olive, the jet in a pale battleship grey, each
+    # with its lights in a strobe's amber (the HUD's countdown). Military
+    # airframes on the stained wood: the olive is yellower and duller than
+    # the frog pack's green and the grey lighter than the rod's steel, and
+    # the amber lights tell both from every other crate.
+    'air_heli': ((0x5A, 0x6A, 0x28), (0xB4, 0xC4, 0x58), (0xFF, 0xB0, 0x2E)),
+    'air_jet': ((0x4A, 0x52, 0x58), (0x9A, 0xA4, 0xAA), (0xFF, 0xB0, 0x2E)),
 }
 # The rainbow shield's symbol, swept corner to corner like the old icon.
 PICKUP_RAINBOW = ((0xE8, 0x4A, 0x3C), (0xFF, 0x8A, 0x2B), (0xFF, 0xD9, 0x3D), (0x7E, 0xDB, 0x5A),

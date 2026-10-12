@@ -1,268 +1,230 @@
 # Air support
 
-BB-119. Research and design; nothing here is built yet. Oto settled the open
-questions on 2026-10-12 (§9), and every proposal below was taken as written.
+BB-119. A supply crate shows a helicopter or a jet. A seat that picks it up
+calls air support: a count of 15 s runs in a small box under the HUD's ammo
+slot, then the aircraft flies in - an Apache-like gunship or an A-10-like
+attack jet, drawn ten per cent bigger than a tank - attacks the enemies
+round the seat and flies away. The minimap shows it and an arrow points to
+it when it is off the screen. The design questions were settled with Oto on
+2026-10-12 (§9).
 
-The issue: a supply crate shows a helicopter or a plane. A seat that picks it
-up starts a 15 s countdown, shown in a small box under the HUD's ammo section.
-At zero an aircraft flies in: an Apache-like helicopter or an A-10
-Warthog-like plane, drawn about 10% bigger than a tank. It drops its payload
-on enemies near the seat and flies away. A marker on the map shows where it is.
-
-Most of this already exists. The rod from god (docs/rod-from-god.md) has a
-countdown on the round clock, a call carried whole on the wire, a minimap mark
-and an off-screen arrow. The FPV swarm (docs/fpv-swarm.md) has flying hecs
-entities with ground + height, a shadow, and the air-target list. Missiles
-have `side_blast`, the side-aware area hit. `TowerPack` and `FrogHealth` are
-crates that are not a tank weapon. What is new: two aircraft, the call that
-belongs to a seat, the HUD box, and the sprites.
+It is built from what the special weapons laid down. The rod from god
+(docs/rod-from-god.md) gave the pattern of a call on the round clock carried
+whole on the wire, the FPV swarm (docs/fpv-swarm.md) flying hecs entities
+with a ground point and a height, a shadow and the air-target list, the
+missiles `side_blast` - the side-aware area hit - and their seeker volleys,
+and the tower pack a crate that is not a tank weapon. New here: the call
+that belongs to a seat, the two aircraft, the HUD's box and the sprites.
 
 ## 1. How it plays
 
 - **The crate.** Two kinds, `PickupKind::AirHeli` and `PickupKind::AirJet`
-  (`pickup = "air_heli"` / `"air_jet"`). Each shows its aircraft's
-  silhouette, so a player can see which one is coming. Only seats take
-  them: `Tank::wants_pickup` returns `false` for enemies, as it does for
-  Flamethrower, HeatShield and Grenades. Neither is a weapon
-  (`PickupKind::weapon()` is `None`), so collecting one does not replace the
-  special weapon the seat carries.
-- **The call.** Collecting the crate calls the aircraft. The seat's HUD
-  shows a small box with the aircraft's glyph and a count from 15
-  (`air_support_delay_seconds`). Calls stack as a queue: while a call is
-  running, a second crate queues another sortie, which starts its own count
-  when the first aircraft leaves (§9.4).
-- **The arrival.** At zero the aircraft enters from the field edge
-  nearest a point behind the caller (hashed from the call id, so not random
-  and not RNG), flying towards the caller. A short "AIR SUPPORT INBOUND"
-  line shows in the prompt slot.
-- **The target picture.** It is taken when the aircraft arrives, not when the
-  crate is collected. The targets are enemies inside the caller's sight box
+  (`pickup = "air_heli"` / `"air_jet"` in a map, the builder's PICKUP
+  tools of the same names). Each shows its aircraft from above, so a player
+  sees which one is coming. Only seats take them (`Tank::wants_pickup` is
+  `false` for an enemy, as for the flamethrower, the heat shield and the
+  grenades). Neither is a weapon (`PickupKind::weapon` is `None`): the
+  special the seat carries stays. They come only from the map's slots - no
+  random bonus roll places one.
+- **The call.** Taking the crate calls the sortie (`Event::AirSupportCalled`).
+  The seat's HUD shows the crate's symbol and the whole seconds before it
+  arrives, from `air_support_delay_seconds` (15). One sortie of a seat is
+  counting or in the air at a time: a crate taken meanwhile queues another,
+  shown as `+1` beside the count, whose count starts when the first
+  aircraft is gone - off the field or shot down.
+- **The arrival.** At zero the aircraft comes in from outside the field,
+  `air_edge_margin_px` (96) past an edge, in line with what it is coming for.
+  Which edge is a hash of the call's id (`air_support::entry_edge`): not
+  random, and no RNG.
+- **The target picture.** Taken when it arrives, not when the crate was
+  taken: the enemies on the field inside the seat's sight box
   (`ai::in_sight_box`, the screen the follow camera shows round the seat),
-  nearest first, ties broken by slot. If the caller is wrecked, the strike
-  centres on where the wreck is. No enemies in the box: the aircraft makes
-  one pass over the caller and leaves without firing, and the crate is spent.
-- **Helicopter (Apache).** Slow, and it hovers. It flies to a standoff
-  point `air_heli_standoff_cells` from the first target. It turns to face
-  each of up to `air_heli_targets` (3) targets in turn and fires a pair of
-  rockets at each. The rockets are missile-like projectiles, each ending in
-  a `side_blast`. Then it climbs out the way it came. On the field for about
-  6 s.
-- **Plane (Warthog).** Fast, in a straight line. It lines up through the
-  densest cluster of targets in the box: the line from the entry point to the
-  centroid of the nearest three. It makes one gun run, a stripe of
-  `air_jet_gun_bursts` small blasts along the ground track ahead of it
-  (GAU-8 BRRRT). It drops two bombs at the centroid as it passes, then
-  leaves off the far edge. On the field for about 3 s.
-- **Friendly fire.** None. Every hit goes through
-  `side_blast`/`explosion_hit`, which skip `Owner::same_side`, so seats,
-  friendly frogs and the seat's towers are safe. Tiles do take damage
-  (`damage_obstacle` with falloff), as they do for missiles.
-- **Counterplay.** The aircraft is not a ground body: nothing collides
-  with it, and it ignores the nav grid and physics. Whether enemies can
-  shoot it down (§9.3): the helicopter is an air target (only bullets hit
-  it, and enemies only from inside the caller's sight box, as for the FPV
-  swarm), and the plane is too fast to hit.
-- **The marker.** The minimap shows the aircraft as a small glyph in the
-  caller's team colour, blinking while it attacks. There is no mark during
-  the countdown, since the targets are picked only on arrival, and no strike
-  marker on the field (§9.6). The indicators show an off-screen arrow to an inbound or active
-  aircraft (a new `ArrowKind::Aircraft`). The minimap is never drawn on
-  phones, so there the arrow is the only marker. The aircraft is also drawn
-  on the field (§5).
+  live, nearest first, ties to the lower slot. A wrecked seat's call still
+  comes, round its wreck; a seat gone from the round spends it
+  (`Event::AirSupportLeft`). No enemy in the box: the aircraft comes, passes
+  over the seat - the heli hovers there `air_heli_linger_seconds` (1) - and
+  leaves without firing; the crate is spent.
+- **The helicopter.** At `air_heli_speed` (220 px/s) it flies to a hover
+  point `air_heli_standoff_px` (160) short of the nearest target, back
+  towards where it came in, held a cell inside the field. From there it
+  fires `air_heli_salvos` (4) salvos, one every `air_heli_salvo_seconds`
+  (0.9), each at the nearest enemy in the box at that moment, turning to
+  face it: `air_heli_salvo_rockets` (4) seeker missiles off its pods
+  (`missile.rs` - their climb, seek, lock and blast are a missile's, every
+  rule of theirs kept; the blast is `side_blast`). Then it leaves the way it
+  came. It is on the field about ten seconds.
+- **The jet.** At `air_jet_speed` (520 px/s), one straight pass through the
+  middle of the nearest `air_jet_targets` (3) targets in the box. Its
+  cannon puts `air_jet_gun_bursts` (6) bursts in a stripe
+  `air_jet_gun_len_px` (192) long ending on that point, each landing
+  `air_jet_gun_ahead_px` (160) ahead of the jet (radius 28, 9 damage, fixed);
+  `air_jet_bomb_lead_px` (96) short of the point it lets two bombs go, landing
+  `air_jet_bomb_spacing_px` (48) apart astride it (radius 64, 75 to 85
+  damage). A full-health tank on the aim point is wrecked. It flies on off
+  the far edge; about three seconds on the field.
+- **Friendly fire.** None: every hit is `side_blast`/`explosion_hit`, which
+  spare `Owner::same_side` - seats, the players' frog and towers. Tiles take
+  damage (`damage_obstacle` with falloff) and crates break, as for a
+  missile.
+- **Shot down.** The helicopter is an air target (`air.rs`,
+  `AirKey::Aircraft`): enemy bullets crossing its strike box hit it, and
+  `air_heli_hits` (16) bring it down; the gun tower turns on it and the tesla
+  arcs it; anything else that strikes the air - a rod, a well's core, the
+  hammer's wave, a rail's slug, an EMP's ring - downs it at once. An EMP's
+  ring is blind (`air.rs` rule 2), so a seat's own pulse downs its own
+  helicopter. Down, it is gone with a fireball where it falls (cosmetic: it
+  hurts nothing, `Event::AircraftDowned`) and the seat's next call starts its
+  count. The jet is no air target: nothing can hit it.
+- **Nothing on the ground meets it.** It has no physics body, the nav grid
+  never sees it, and walls, tiles and tanks pass under it.
+- **Enemies do not react.** They do not see it coming and do not scatter;
+  their only answer is shooting the helicopter down.
+- **On the end screen** no call arrives, a helicopter breaks off its attack
+  and leaves, a jet flies on; nothing fires.
 
 ## 2. Where it lives
 
-This follows the special weapons' split:
-
-- `src/air_support.rs`, the headless half: `AirCall`, `Aircraft`, `Sortie`
-  (Heli/Jet), the stage machine (`Inbound`, `Attack`, `Egress`), pure
-  flight (`Aircraft::advance`), target and approach geometry, the
-  `compose_*` drawing that is generic over `canvas::Canvas` (the shadow,
-  the strike marker), and its tuning group.
+- `src/air_support.rs`, headless: `Sortie` (Heli, Jet: `of` a crate,
+  `pickup`, `code`), `AirCall` (id, seat, sortie, `arrive_at` - `None`
+  while it waits; `left`), `Aircraft` (id, seat, sortie, `AirStage` Inbound,
+  Attack, Egress, ground point, height, heading, entry, mark, `stage_time`,
+  `flown`, `fired`, `armed`, `hits`; `advance` one fixed step - the heli in
+  to its hover and out past its entry, the jet straight along its run -,
+  `gone`, `drawn`, `as_target`), the geometry (`entry_edge`, `entry_point`,
+  `hover_point`, `run_mark`, `gun_burst`, `bombs`), and the drawing on any
+  canvas (`paint_shadows`, `paint_aircraft`; docs/AIRCRAFT_SPEC.md).
 - `src/simulation/air_support.rs`, the world half: `call_air_support` (from
-  `pickup_phase`), `tick_air_calls` (arrivals), `fly_aircraft`
-  (steering, firing), `air_support_show` (the cosmetics), and the senses if
-  enemies get a reaction.
-- `src/render/air_support.rs`: the sprite blit and the tinted-silhouette
-  shadow (docs/sprite-shadows-design.md; the shape of `render/missile.rs`).
-- `src/simulation/air_support_tests.rs`, plus `mechanics_tests` cases for
-  every promise in §1.
+  `pickup_phase`), `air_support_phase` (before `spawn_pending`, so a salvo
+  spawns the frame it is fired; with `live` false on the end screen),
+  `air_arrivals`, `air_acts` (what an aircraft fires this step),
+  `air_salvo`, `air_strike` and `air_strike_show`, `aircraft_crash_show`,
+  `strike_aircraft` (reached through `Game::strike_air`), the readers
+  `Game::aircraft` and `Game::air_calls`.
+- State: `Game::air_calls` (sorted by id, cleared by `init`) and the
+  `Aircraft` entities. Ids come from `Game::take_shot_id`; an aircraft keeps
+  its call's.
+- Tests: `src/simulation/air_support_tests.rs`, and the headless half's own.
 
-### State
+## 3. What it reuses
 
-- `Game::air_calls: Vec<AirCall>`, sorted by id: `{ id, seat: u8, sortie,
-  arrive_at: Option<f32> }`. These are round-clock times like `Zone::until`, not a
-  timer on the `Tank`. Tank timers go on the wire only as flag bits, and
-  `net/apply.rs` `set_timer` restarts them at full on a client, which is
-  wrong for a 15 s count a player watches. A queued call has
-  `arrive_at = None` until the previous sortie of that seat leaves (§9.4).
-- `Aircraft` is a hecs component (spawned alone, like `fpv::Drone`):
-  `{ id, owner: Owner::Player(seat), sortie, stage, ground: Position, height,
-  heading, speed, targets: SmallVec<slot>, shots_left, stage_time }`. It is
-  drawn at `ground` lifted by `height`, with the shadow at `ground`.
-- Ids come from `Game::take_shot_id()`.
+| Need | Piece |
+|---|---|
+| A crate that is not a weapon | the tower pack's arm in `pickup_phase`, after the tank's borrow |
+| A count on the round clock, carried whole | the zones' pattern (`Zone::until`); a tank timer would restart at full on a client (`net::apply::set_timer`) |
+| A flying entity | `fpv::Drone`: a hecs component alone, ground + height |
+| Shot down | `air.rs`: `AirTarget`, a key, `Game::strike_air` the one mutator |
+| The heli's rockets | seeker missiles (`Missile::spawn`, `Frame::pending_missiles`) |
+| The jet's cannon and bombs | `side_blast` with `BlastParams::air_gun`/`air_bomb` |
+| Cosmetics a replica plays too | `*_show` into a `Spectacle` |
+| The shadow | a tinted silhouette (docs/sprite-shadows-design.md) |
 
-### Update phases
+## 4. HUD, minimap, arrows
 
-`pickup_phase` → `call_air_support` (pushes `Event::AirSupportCalled`).
-Then, beside `place_calls` in `spawn_pending`, `tick_air_calls` spawns the
-`Aircraft` whose `arrive_at <= time` (`Event::AirSupportArrived`). Its
-rockets are pushed as pending missiles with `Owner::Player(seat)`.
-`fly_aircraft` runs in `step_world`'s fixed-dt loop beside
-`advance_drones`. The jet's gun stripes and bombs resolve beside
-`resolve_missiles` (`Event::AirStrike`, a `side_blast` each, then
-`air_support_show`). The end-screen branch repeats the cosmetic halves with
-`live = false`, like every other weapon.
+- **The box** (`hud::AirHud`, `hud::air_box`): in the block's lamp row, under
+  the ammo slot - `AIR_BOX_X` (108) in, `WEAPON_SLOT_W` (64) wide, scaled
+  with the row. The lamp row (`CornerShape::lamp_row`) opens for it as for
+  the lanterns and the heat shield (`air_support_up`, `PlayChrome` and
+  `CornerShape::air_support`); the box sits clear of the lantern and the heat
+  shield's gauge. It shows the crate's symbol and the whole seconds left
+  (`ceil`, never under 1) in amber, red over the last three; the symbol
+  alone while the aircraft is up; `+N` for the sorties queued. Read on the
+  client's present (`Game::zone_lead`). A wrecked seat's block keeps its box.
+  In a room (`HudLayout::Compact`) only the local seat's block is shown.
+- **The minimap** (`Marks::aircraft`): every aircraft, a frame in its
+  seat's team colour round a dot, blinking while it attacks. Nothing marks
+  a call still counting - its targets are picked only when it arrives - and
+  nothing is drawn on the field where it will strike.
+- **The arrow** (`Scene::aircraft`, `ArrowKind::Aircraft`): every aircraft
+  off the screen, in its seat's team colour, steady, never merged, never
+  left out. On a phone, which draws no minimap, the arrow is the marker.
 
-## 3. Pieces it reuses
+## 5. Drawing
 
-| Need | Existing piece | Where |
-|---|---|---|
-| Crate kind, sprite row, glyph | `PickupKind` (+ `ALL`, `row`, `name`/`parse`, `weapon`, `ink`, `cooks_off`, all exhaustive) | `src/pickup.rs:23-325` |
-| Seat-only crate | `Tank::wants_pickup` → `false` | `src/tank.rs:1271` |
-| Effect outside the tank | the `TowerPack`/`FrogHealth` arms after the tank borrow | `simulation/mod.rs` `pickup_phase` (~3330-3400) |
-| Clock-based countdown on the wire | `Zone::until` pattern, `ZoneState.until` in ticks | `src/zone.rs`, `net/wire.rs:826` |
-| Flying entity | `fpv::Drone` (ground + height, `advance`, `clamp_inside`) | `src/fpv.rs:141-436`, `simulation/fpv.rs` |
-| Shoot-down | `AirTarget`, `AirKey`, `Game::strike_air` (one mutator) | `src/air.rs:38-124`, `simulation/fpv.rs:412` |
-| Side-aware area damage | `side_blast`, `BlastParams` | `simulation/missiles.rs:166`, `combat.rs:32` |
-| Rocket | missile + `guide_missiles` target pick | `simulation/missiles.rs:57` |
-| Enemies near a seat | `ai::in_sight_box`, sorted-by-slot pattern of `fpv::pick_nearest` | `src/ai.rs:3219`, `src/fpv.rs:516` |
-| Cosmetics shared with replicas | `*_show(&mut Spectacle)` | `simulation/mod.rs:1570`, `net/apply.rs:420-440` |
-| Shadow | tinted silhouette | `tank::draw_tank_shadow` (`tank.rs:3114`), `render/missile.rs:32-50` |
-| Minimap mark | `Marks::gather` / `picture` (the rod's blinking frame) | `src/minimap.rs:606-771` |
-| Off-screen arrow | `Scene::of`, `Awareness::frame`, `ArrowKind` | `src/indicators.rs:1012-1780` |
+docs/AIRCRAFT_SPEC.md has the sheet. The shadow is drawn after the floor,
+under the tanks (`render/game.rs` beside the drones' shadows); the aircraft
+over everything that stands, after the drones - it flies highest. The heli's
+rotor is a blur over its mast. The strikes are in the effects language
+(docs/effects.md): a cannon burst a small fireball leaning down the run, the
+impact flash and a small scorch; a bomb a big one, a ripple and a wide
+scorch, the grass flattened round it; a downed heli the wreck's fireball. All
+of it hashed from position, no RNG.
 
-There is no shared "enemies near a seat, nearest first" helper; every weapon
-writes its own. Write one here: `Game::enemies_near_seat(seat) ->
-Vec<(slot, Position)>` (sight box, nearest first, ties to the lower slot).
-The FPV and rod senses can move to it in a separate issue.
+## 6. Tuning
 
-## 4. HUD: the countdown box
+The `air_support` group in `tuning.rs`: `air_support_delay_seconds`,
+`air_edge_margin_px`, `air_heli_height_px`, `air_heli_speed`,
+`air_heli_standoff_px`, `air_heli_salvos`, `air_heli_salvo_rockets`,
+`air_heli_salvo_seconds`, `air_heli_hits`, `air_heli_hit_half_px`,
+`air_heli_linger_seconds`, `air_jet_height_px`, `air_jet_speed`,
+`air_jet_targets`, `air_jet_gun_bursts`, `air_jet_gun_len_px`,
+`air_jet_gun_ahead_px`, `air_jet_gun_radius_px`, `air_jet_gun_damage`,
+`air_jet_gun_knockback`, `air_jet_bomb_spacing_px`, `air_jet_bomb_lead_px`,
+`air_jet_bomb_radius_px`, `air_jet_bomb_damage_min`/`_max`,
+`air_jet_bomb_knockback`. The heli's rockets are the missiles' own knobs.
 
-- `PlayerHud` (`src/hud.rs:185`) gets `air: Option<AirHud { sortie,
-  seconds_left, queued }>`, gathered in `PlayerHud::gather` from
-  `game.air_calls` for that seat. The seconds come from
-  `time + zone_lead`, the client's present, as the rod's count does.
-- **Placement.** The weapon column of the block's second row: x at
-  `block.x + V_WEAPON` (108), `WEAPON_SLOT_W` (64) wide, one `ROW_H` (32)
-  tall, top at `block.y + row_h + ROW_GAP`. That is directly under the ammo
-  slot. The lamp row (`CornerShape::lamp_row()`, `hud.rs:815`) already opens
-  this row for lanterns and the heat shield, and both use other columns
-  (x 6..60 and `V_SHIELD`). Proposal: widen the condition to
-  `lanterns || heat_shield || air_call` and add `Corners::air_box`, one
-  rectangle that both the painter and the tests read (the one-geometry
-  rule), pinned in the `corner_tests` shapes table.
-- **Look.** A plate with the sortie's glyph from `Sheet::PickupGlyphs` and the
-  whole seconds left (`ceil`). The last 3 s blink at `indicator_pulse_hz`.
-  When the aircraft arrives the plate shows the glyph alone until it leaves.
-  A queued sortie adds a small "+1".
-- **Layouts.** `One` and `Two` (couch: each block has its own box). In
-  `Compact` (online, or three or more seats) only the local seat's box is
-  shown. Other seats' calls appear on the minimap only.
-- **Text.** Digits are `format!`ed, like the weapon count. New
-  `text::keys`: `HUD_AIR_INBOUND` (the prompt line), `PICKUP_AIR_HELI` /
-  `PICKUP_AIR_JET` if the armory or editor names crates. Each key goes in
-  `lang/en.ftl` and `lang/sl.ftl` with a budget, so
-  `every_language_fits_every_budget` covers it.
+## 7. Text
 
-## 5. Drawing and sprites
+No sentence on the field: the box is a symbol and digits. The builder names
+the two tools (`tool-air_heli`, `tool-air_jet` and their short forms in
+`lang/en.ftl` and `lang/sl.ftl`).
 
-- **Size.** A tank's sprite cell is `TANK_SPRITE_SIZE` 40 design px at
-  `Tank::scale` 2 = 80 px on the field, and its gameplay frame is 64 px.
-  10% bigger: an **88 px** cell (44 design px). The plane is long and thin
-  (wingspan 44, length ~40). The heli has a 44 px rotor disc over a ~36 px
-  fuselage.
-- **Sheet.** A new generator `tools/spritegen/gen_aircraft.py`, in the style
-  of `gen_missiles.py` (fixed seed, `SPRITE_OUT=static`, its own
-  `docs/AIRCRAFT_SPEC.md`), importing the tankdesign `kit.py` palette.
-  `export.py` is built around the 33×60 tank layout, so the aircraft do not
-  go through it. Frames: heli body, rotor in 4 rotation frames, tail rotor
-  in 2, a damage overlay (it can be shot down, §9.3); jet body, plus
-  afterburner/engine glow for the glow pass. Top-down, rotation 0 = facing
-  up like everything else. Run `just check-sheets` after.
-- **Crate art.** Two new rows in `gen_crates.py` (`KINDS`, a design dict
-  entry each, an ink in `punypalette.PICKUP_INK`). `docs/CRATES_SPEC.md` §1
-  still says 280×640 / 16 rows; the real sheet is 280×760 with 19 rows. Fix
-  the spec in the same change.
-- **Paint order.** The shadow after the floor, like `paint_drone_shadows`.
-  The aircraft over everything standing, tree crowns included (like
-  `paint_drones`). Nav/landing lights in the glow pass, so it reads at night
-  and in fog. The shadow's offset grows with `height`, as the missile's does.
-- **Effects** (docs/effects.md): rocket trails and blasts reuse the
-  missile's. The gun run is a row of small `BlastFx` + scorches, hashed from
-  id and index. Rotor wash flattens grass under the heli
-  (`Spectacle` grass flatten). Everything is cosmetic and hashed, with no RNG.
+## 8. Online
 
-## 6. Online
-
-- `PROTOCOL_VERSION` 29 → 30: new `PickupKind` variants shift its wire
-  enum, and a new snapshot family is added.
-- **Calls:** `Snapshot::air_calls: Vec<AirCallState { id, seat, sortie,
-  arrive: u32 ticks }>`. Added/gone like zones, so a client's HUD counts
-  against its own present. (Alternative: a `ZONE_AIR` kind on `ZoneState`.
-  A zone has a centre and an AI `danger()` disc, which a countdown that has
-  no target yet does not need. Proposal: its own small family.)
-- **Aircraft:** `AircraftState { id u16, x, y, height, heading u8, sortie,
-  stage, owner }` (quantised like `DroneState`), with encode, delta
-  (added/moved/gone), interp (like drones) and apply arms, and a
-  `DrawableState::aircraft`.
-- **Events:** `AirSupportCalled`, `AirSupportArrived`, `AirStrike` are each
-  mirrored in `WireEvent::from_event`, which is exhaustive. `AirStrike` runs
-  `air_support_show` on the replica.
-- Difficulty per seat count (`tuning_patch`) is untouched. A room of one
-  stays byte-identical to the offline round.
-
-## 7. Determinism
-
-- The call, arrival, entry edge, flight and target pick draw **no RNG**:
-  the entry side is hashed from the call id, and targets are sorted by
-  distance then slot.
-- The only draws are `explosion_hit`'s damage rolls, which happen only in
-  a round where a seat took the crate. A round without the crate keeps its
-  stream, so `the_one_and_two_seat_streams_are_pinned` stays as it is.
-- Air crates come only from map slots (§9.5), so they add no bonus roll
-  and no draw to a map that has none. If a random roll is ever added, its
-  gate is checked **before** the chance draw (the frog-pack rule).
-- Transcendentals (heading, orbit) go through `math::`.
-- Walks go seats in index order, then enemies.
-
-## 8. Tests and probe
-
-- `mechanics_tests`:
-  - an enemy does not take the crate;
-  - the special weapon a seat carries survives the pickup;
-  - nothing arrives before 15 s and it arrives at 15 s;
-  - only enemies inside the caller's sight box are struck;
-  - no seat, friendly frog or friendly tower takes damage;
-  - with no enemies in the box, nothing fires and the crate is spent;
-  - a wrecked caller's strike still lands;
-  - a queued sortie waits for the first one.
-- `air_support_tests`: the stage machine, the entry edge, the jet's run line
-  through the centroid, heli standoff.
-- `determinism_tests`: a seeded round with the crate replays bit for bit.
-- `corner_tests`: the `air_box` rectangle in every shape.
-- The net tests: the round trip of `AirCallState`/`AircraftState`, and the
-  `NOT_SENT` list.
-- Probe: the shared `--crate air_heli|air_jet` path, plus a map fixture in
-  `maps/test/` with an air crate next to the seat and a pack of enemies, run
-  under `just probe-fixtures`.
-- Dev server: a `debug_call_air_support {seat, sortie}` mutator for
-  screenshots. Rendering is checked by eye on a screenshot.
+- `PROTOCOL_VERSION` 30: two `PickupKind` variants and a snapshot family.
+- **One family, `Snapshot::air`** (`wire::AirState`, by id): a call - its
+  seat, sortie, stage (`AIR_WAITING`, `AIR_COUNTING`) and arrival tick - or
+  an aircraft - its stage (`AirStage::code`), ground point, height and
+  heading. Positioned in the delta (`air`, `air_moved`, `air_gone`),
+  interpolated like a drone, applied whole by `apply::apply_air_states`: a
+  replica's aircraft are placed fresh each snapshot and never flown.
+- **Events**: `AirSupportCalled`, `AirSupportArrived`, `AirStrike`,
+  `AircraftDowned`, `AirSupportLeft` travel; `AirSalvo` does not (the
+  missiles are the state). A replica plays `air_strike_show` off
+  `AirStrike` and `aircraft_crash_show` off `AircraftDowned`.
+- A room of one plays the offline round; difficulty by seat count is
+  untouched.
 
 ## 9. Decisions (Oto, 2026-10-12)
 
 1. **Crates.** Two kinds, `air_heli` and `air_jet`. The symbol on the box
    says which aircraft comes.
-2. **Payload.** Strong. The heli fires rockets at up to 3 targets while
-   hovering. The jet makes one gun run and drops two bombs on the cluster. A
-   sortie can wreck a full-health tank caught in the middle.
-3. **Shoot-down.** The heli is an air target (enemy bullets and towers, only
-   from inside the caller's sight box). The jet cannot be hit.
-4. **A second crate while counting.** It queues a second sortie, which
-   starts its count when the first one leaves. The HUD box shows +1.
+2. **Payload.** Strong: a sortie can wreck a full-health tank caught in the
+   middle.
+3. **Shoot-down.** The heli is an air target, the jet cannot be hit.
+4. **A second crate while counting.** It queues a second sortie, which starts
+   its count when the first one is gone. The HUD box shows +1.
 5. **Spawning.** Map slots only, no random bonus roll. Seats only: enemies
    never take the crate or get aircraft of their own.
 6. **Marker.** A minimap mark plus an off-screen arrow. No strike marker on
    the field.
-7. **Enemy reaction.** None in v1. Enemies do not see the strike coming
-   (shooting at the heli under rule 3 is the only reaction).
+7. **Enemy reaction.** None in v1 beyond shooting at the heli.
+
+## 10. Determinism
+
+The call, the arrival, the edge, the flight and the target pick draw no RNG;
+the only draws are `explosion_hit`'s damage rolls and the missiles' own, in a
+round where a seat took an air crate. A round without one reads nothing
+(`air_support_phase` returns at once) and keeps its stream, so
+`the_one_and_two_seat_streams_are_pinned` is unchanged. Walks go by id;
+targets sort by distance then slot; trig through `math::`.
+
+## 11. Tests
+
+`air_support_tests.rs`: an enemy never takes the crate; the crate keeps the
+special and nothing arrives before the count; the jet wrecks the tank on its
+aim point and spares the one outside the box and the seat; the heli flies in,
+hovers, fires its salvos and leaves, sparing the seat; with no enemy in the
+box neither fires; a second crate queues a second sortie whose count starts
+when the first leaves; the heli comes down to `air_heli_hits` bullets and the
+next call counts; the jet is no air target; a sortie replays bit for bit.
+`air_support.rs`'s own: the edges, the hover point, the run mark, the gun
+stripe and the bombs, the flights. `hud.rs`: the lamp row and the box.
+`indicators.rs`: the arrow. `net::events`: the round trip of every event.
+
+## 12. Not in this change
+
+- No shipped map places an air crate yet; a map gets one with
+  `pickup = "air_heli"` / `"air_jet"` or the builder's tools.
+- No sound (the game has none).
+- The probe has no air support scenario of its own; `--crate air_heli`
+  turns a map's weapon crates into air crates, as for any kind.

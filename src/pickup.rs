@@ -336,9 +336,9 @@ impl PickupKind {
             // Two-tone: a black hole's deep violet void, ringed in a pale
             // ultraviolet lilac (the HUD's accent).
             PickupKind::GravityWell => [0x3A1A6E, 0xE6A8FF, 0xFFF0FF],
-            // Two-tone: olive drab airframes, their light the strobe's
-            // amber (the HUD's countdown).
-            PickupKind::AirHeli => [0x3E4A22, 0x7C8C3A, 0xFFB02E],
+            // Two-tone: a pale olive and a pale grey airframe, their light
+            // the strobe's amber (the HUD's countdown).
+            PickupKind::AirHeli => [0x5A6A28, 0xB4C458, 0xFFB02E],
             PickupKind::AirJet => [0x4A5258, 0x9AA4AA, 0xFFB02E],
         };
         [rgb(shade), rgb(base), rgb(light)]

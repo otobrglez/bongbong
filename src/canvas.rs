@@ -84,13 +84,16 @@ pub enum Sheet {
     /// static/pickup_glyphs.png - the pickups' symbols on their own, a row
     /// per kind (`pickup::draw_glyph`).
     PickupGlyphs,
+    /// static/aircraft_sheet.png - air support's helicopter, its rotor and
+    /// the jet (docs/AIRCRAFT_SPEC.md, `air_support::draw_aircraft`).
+    Aircraft,
     /// static/toxic_frog/<variant dir>/<clip>.png - one filmstrip per clip
     /// per colour variant (`FROG_VARIANT_DIRS`, docs/FROG_SPEC.md).
     Frog { variant: u8, clip: FrogAnim },
 }
 
-/// The fourteen sheets that are one file each regardless of theme.
-pub const SINGLE_SHEETS: [Sheet; 14] = [
+/// The fifteen sheets that are one file each regardless of theme.
+pub const SINGLE_SHEETS: [Sheet; 15] = [
     Sheet::Tanks,
     Sheet::TankGlow,
     Sheet::TankModules,
@@ -105,6 +108,7 @@ pub const SINGLE_SHEETS: [Sheet; 14] = [
     Sheet::Portal,
     Sheet::Crates,
     Sheet::PickupGlyphs,
+    Sheet::Aircraft,
 ];
 
 /// The five frog clips, in `FrogAnim` order.
@@ -131,6 +135,7 @@ impl Sheet {
             Sheet::Portal => "static/portal_sheet.png".into(),
             Sheet::Crates => "static/crates_sheet.png".into(),
             Sheet::PickupGlyphs => "static/pickup_glyphs.png".into(),
+            Sheet::Aircraft => "static/aircraft_sheet.png".into(),
             Sheet::Frog { variant, clip } => {
                 let dir = FROG_VARIANT_DIRS[variant as usize % FROG_VARIANT_DIRS.len()];
                 format!("static/toxic_frog/{dir}/{}.png", frog_clip_file(clip))

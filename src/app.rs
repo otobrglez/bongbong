@@ -1476,6 +1476,9 @@ pub fn run(args: Args) {
     let pickup_glyphs_texture = rl
         .load_texture(&thread, "static/pickup_glyphs.png")
         .expect("failed loading pickup symbols texture");
+    let aircraft_texture = rl
+        .load_texture(&thread, "static/aircraft_sheet.png")
+        .expect("failed loading aircraft texture");
     let portal_texture = rl
         .load_texture(&thread, "static/portal_sheet.png")
         .expect("failed loading portal texture");
@@ -2765,6 +2768,7 @@ pub fn run(args: Args) {
                 towers: &towers_texture,
                 crates: &crates_texture,
                 pickup_glyphs: &pickup_glyphs_texture,
+                aircraft: &aircraft_texture,
                 portal: &portal_texture,
                 blocks,
             },
