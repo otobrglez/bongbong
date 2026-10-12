@@ -248,18 +248,24 @@ impl Game {
     /// The cells `Terrain` and the indicators take as hiding a hull: the
     /// tall grass, less the cells a sonic wave flattened a while ago
     /// (`grass_flat`) and the cells hulls trampled for the round
-    /// (`grass_trampled`, `simulation::trample`), and the trails through
-    /// the woods (`woods.rs`). The grass itself while nothing is flattened
-    /// or trampled and no wood has a trail.
+    /// (`grass_trampled`, `simulation::trample`), the trails through the
+    /// woods (`woods.rs`), and the cells thick smoke fills under
+    /// `smoke_cover` (`smoke_cells`). The grass itself while nothing is
+    /// flattened or trampled, no wood has a trail and no smoke hides.
     pub fn cover_cells(&self) -> Cow<'_, [Position]> {
-        if self.grass_flat.is_empty() && self.grass_trampled.is_empty() && self.woods.trail_positions().next().is_none() {
+        if self.grass_flat.is_empty()
+            && self.grass_trampled.is_empty()
+            && self.smoke_cells.is_empty()
+            && self.woods.trail_positions().next().is_none()
+        {
             return Cow::Borrowed(&self.grass_cells);
         }
         let grass = self.grass_cells.iter().copied().filter(|&c| {
             let cell = crate::map::world_to_cell(c);
             !self.grass_flat.contains_key(&cell) && !self.grass_trampled.contains(&cell)
         });
-        Cow::Owned(grass.chain(self.woods.trail_positions()).collect())
+        let smoke = self.smoke_cells.iter().map(|&(col, row)| crate::map::cell_to_world(col, row));
+        Cow::Owned(grass.chain(self.woods.trail_positions()).chain(smoke).collect())
     }
 
     /// How each map cell answers a sonic wave, from the tiles standing now.

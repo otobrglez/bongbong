@@ -42,6 +42,7 @@ mod wear;
 mod trample;
 mod nav;
 mod oil;
+mod smoulder;
 pub mod portals;
 pub mod present;
 mod props;
@@ -50,7 +51,7 @@ pub mod training;
 mod volcano;
 pub use oil::OilPrint;
 pub use props::{FlyingDrum, GroundFire};
-pub(crate) use props::tile_rubble;
+pub(crate) use props::{tile_rubble, tile_stump};
 pub(crate) use gauss::SeatCharge;
 pub mod replica;
 #[cfg(test)]
@@ -1260,6 +1261,20 @@ pub struct Game {
     pub(crate) tesla_bolts: Vec<crate::tower::TeslaBolt>,
     /// What dead towers left on the ground, oldest first.
     pub(crate) tower_ruins: Vec<crate::tower::TowerRuin>,
+    /// The battle's smoke load, 0 to 1 (`smoulder::step_haze`,
+    /// docs/aftermath.md): fed by every hot remain, drained by the sky.
+    /// Presentation only - nothing a round plays reads it, and a replica
+    /// grows its own (`tick_haze`).
+    pub(crate) battle_haze: f32,
+    /// The cells thick smoke hides a hull in this tick (`smoke_cover`,
+    /// `tick_smoke_cover`), joined to `cover_cells`. A replica's are the
+    /// room's, from the wire. Empty with the knob off.
+    pub(crate) smoke_cells: BTreeSet<(i32, i32)>,
+    /// The aftermath's rules that play (docs/aftermath.md) - smoke that
+    /// hides, firelight that reveals, a gust relighting an ember bed - read
+    /// once by `init` from their knobs, so a round keeps the rules it began
+    /// under. All off by default.
+    pub(crate) aftermath_rules: crate::smoulder::Rules,
     /// Frozen simulation plus a "PAUSED" overlay. Cleared by `init`.
     pub(crate) paused: bool,
     /// Drop shadows on/off (toggle key, and `--no-shadows` at startup).
@@ -1707,6 +1722,8 @@ impl Game {
         self.ooze.clear();
         self.tesla_bolts.clear();
         self.tower_ruins.clear();
+        self.battle_haze = 0.0;
+        self.smoke_cells.clear();
         self.frame = 0;
         self.hit_history.clear();
         // The water and the portals are the round's: what was kept of the
@@ -1752,6 +1769,7 @@ impl Game {
         self.crates_breakable = tuning().crate_breakable;
         self.oil_print_cells = tuning().oil_print_cells.max(0);
         self.trample_passes = tuning().grass_trample_passes.clamp(0, 32) as u16;
+        self.aftermath_rules = crate::smoulder::Rules::of(&tuning());
         self.intro_timer = if self.show_intro { tuning().mission_banner_seconds } else { 0.0 };
         self.intro_fade = 0.0;
 
@@ -2261,6 +2279,7 @@ impl Game {
         self.time += dt;
         self.tick_nightfall();
         self.tick_timers(dt, &mut rng);
+        self.tick_smoke_cover();
         let terrain = Terrain::build(&self.world, width, height, &self.cover_cells(), &self.water);
         // One nav grid for the whole frame - labelled, priced and with a
         // flow field per shared target (`route_grid_on`), on the occupancy
@@ -2324,6 +2343,7 @@ impl Game {
             self.resolve_globs(&mut f, true);
             self.tick_cookoffs(&mut f);
             self.tick_burns(&mut f, true);
+            self.relight_beds(&mut f);
             self.tick_fires(&mut f, true);
             self.lava_phase(&mut f);
             self.tick_ooze(&mut f);
@@ -2485,6 +2505,7 @@ impl Game {
         }
         self.rod_impacts.retain(|fx| !fx.done(&t));
         self.tick_tower_effects(dt);
+        self.tick_haze(dt);
     }
 
     /// Per-entity timers: every tank's cooldowns/recharge/wreck burn,
@@ -11341,6 +11362,120 @@ cells."30,20" = { kind = "frog" }
         }
         assert!(pressed <= 0.05, "the blast throws it against the face: {pressed} px short");
     }
+
+    // --- What a fight leaves burning (docs/aftermath.md) -----------------
+
+    /// A sandbox with nothing on it but the seat's start.
+    const AFTERMATH_MAP: &str = "version = 1\ntanks = 0\ncells.\"5,11\" = { kind = \"start\" }\n";
+
+    /// Kill the first enemy of `game` (it lands on the next step).
+    fn kill_an_enemy(game: &mut Game) {
+        let enemy = game.tank_snapshots().into_iter().find(|t| !t.is_player).expect("an enemy");
+        game.debug_kill(enemy.slot).expect("a live enemy");
+    }
+
+    /// A wreck's fire goes out after `wreck_burn_seconds` and it smoulders
+    /// on: a hot remain the battle's haze builds off.
+    #[test]
+    fn a_wreck_smoulders_after_its_fire_is_out_and_feeds_the_haze() {
+        let mut game = game_on(OPEN_MAP, 2, Some(0));
+        kill_an_enemy(&mut game);
+        for _ in 0..((tuning().wreck_burn_seconds + 5.0) * 60.0) as u32 {
+            step(&mut game, Input::default());
+        }
+        let t = tuning();
+        let wreck = game.smouldering().into_iter().find(|h| h.kind == crate::smoulder::Kind::Wreck).expect("the wreck is a hot remain");
+        assert_eq!(wreck.stage(&t).0, crate::smoulder::Stage::Smouldering);
+        assert!(game.battle_haze() > 0.0, "it feeds the haze");
+    }
+
+    /// A ground fire that burns out leaves an ember bed, hot for
+    /// `ember_bed_seconds` and then only its scar.
+    #[test]
+    fn a_ground_fire_cools_through_an_ember_bed() {
+        let mut game = sandbox(AFTERMATH_MAP);
+        game.fires.push(GroundFire { cell: (12, 11), left: 0.05, total: 1.0, spread_at: None, pool: false, lava: false });
+        for _ in 0..10 {
+            step(&mut game, Input::default());
+        }
+        let beds = |g: &Game| g.smouldering().iter().filter(|h| h.kind == crate::smoulder::Kind::Bed).count();
+        assert_eq!(beds(&game), 1, "the burnt cell is an ember bed");
+        for _ in 0..(tuning().ember_bed_seconds * 60.0) as u32 + 30 {
+            step(&mut game, Input::default());
+        }
+        assert_eq!(beds(&game), 0, "cold, it is only its scar");
+        assert!(game.scorches.iter().any(|s| s.ember));
+    }
+
+    /// `smoke_cover`, off by default: the thick smoke downwind of a burning
+    /// wreck hides a hull as tall grass does. Off, the same wreck hides
+    /// nobody and the round's cover is the grass's alone.
+    #[test]
+    fn thick_smoke_hides_a_hull_only_with_the_rule_on() {
+        let heading = tuning().grass_gust_heading_deg.to_radians();
+        for on in [false, true] {
+            let mut game = game_on(OPEN_MAP, 2, Some(0));
+            game.aftermath_rules.smoke_cover = on;
+            kill_an_enemy(&mut game);
+            // The kill lands in this step; the next tick reads its smoke.
+            step(&mut game, Input::default());
+            step(&mut game, Input::default());
+            let wreck = game.smouldering().into_iter().find(|h| h.kind == crate::smoulder::Kind::Wreck).expect("the wreck");
+            let downwind = Position::new(wreck.at.x + math::cos(heading) * 32.0, wreck.at.y + math::sin(heading) * 32.0);
+            assert_eq!(crate::grass::conceals(&game.cover_cells(), downwind), on, "rule {}", if on { "on" } else { "off" });
+            assert_eq!(game.smoke_cells.is_empty(), !on);
+        }
+    }
+
+    /// `fire_reveals`, off by default: under a night sky a tank beside a
+    /// fire is seen at the full `enemy_view_range`, as in a lamp's light.
+    #[test]
+    fn firelight_reveals_a_tank_at_night_only_with_the_rule_on() {
+        let mut game = sandbox(AFTERMATH_MAP);
+        game.weather = crate::map::Weather::Night;
+        game.fires.push(GroundFire { cell: (13, 11), left: 60.0, total: 60.0, spread_at: None, pool: false, lava: false });
+        let by_the_fire = crate::map::cell_to_world(12, 11);
+        let range = tuning().enemy_view_range;
+        assert!(game.enemy_sight() < range, "the night shortens sight");
+        assert_eq!(game.sight_on(by_the_fire), game.enemy_sight(), "rule off: the fire shows nobody");
+        game.aftermath_rules.fire_reveals = true;
+        assert_eq!(game.sight_on(by_the_fire), range, "rule on: seen in its light");
+        assert_eq!(game.sight_on(crate::map::cell_to_world(30, 11)), game.enemy_sight(), "far from it, the dark");
+    }
+
+    /// `ember_bed_relight`, off by default: a strong gust over a hot ember
+    /// bed throws embers downwind; off, it throws none.
+    #[test]
+    fn a_gust_over_a_hot_ember_bed_throws_embers_only_with_the_rule_on() {
+        for on in [false, true] {
+            let mut game = sandbox(AFTERMATH_MAP);
+            game.aftermath_rules.ember_relight = on;
+            game.scorches.push(crate::blast::Scorch::burn(crate::map::cell_to_world(12, 11)));
+            let mut flew = 0;
+            for _ in 0..(60 * 60) {
+                step(&mut game, Input::default());
+                flew += game.events().iter().filter(|e| matches!(e, Event::EmberFlew { .. })).count();
+            }
+            assert_eq!(flew > 0, on, "{flew} embers with the rule {}", if on { "on" } else { "off" });
+        }
+    }
+
+    /// A wave round's wreck leaves its parts where it stood when its body
+    /// is taken off the field (`wreck_scar`).
+    #[test]
+    fn a_removed_wreck_leaves_its_scar() {
+        let mut game = waves_game(2, 1);
+        let slot = step_until_entered(&mut game, 600);
+        game.debug_kill(slot).unwrap();
+        step(&mut game, Input::default());
+        for _ in 0..(tuning().wave_wreck_despawn_seconds * 60.0) as u32 + 5 {
+            let before = game.decals.len();
+            step(&mut game, Input::default());
+            if game.events().iter().any(|e| matches!(e, Event::WreckRemoved { .. })) {
+                assert!(game.decals.len() >= before + tuning().wreck_scar_parts as usize, "its parts lie where it stood");
+                return;
+            }
+        }
+        panic!("the wreck was never removed");
+    }
 }
-
-

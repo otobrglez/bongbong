@@ -106,6 +106,7 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
         rubble: game.rubble.cells().map(|(c, units)| RubbleState { cell: cell_index(cols, c), units }).collect(),
         well_drums: well_drums(game, cols),
         volcano_shifts: volcano_shifts(game),
+        smoke_cells: game.smoke_cells.iter().map(|&c| cell_index(cols, c)).collect(),
         round: round(game),
         events: wire_events_acked(game.events(), &acked),
     };

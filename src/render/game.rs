@@ -1325,6 +1325,13 @@ impl Game {
         } else {
             self.paint_floor(&mut GpuCanvas::culled(d, textures, cull));
         }
+        // What the fight left in the air (docs/aftermath.md), composed once:
+        // its smoke's shadows lie on the floor, under everything that
+        // stands; the smoke itself goes over it all, below.
+        let air = self.aftermath_air(cull);
+        if !air.shadows.is_empty() {
+            pyro::draw(&mut GpuCanvas::new(d, textures), &air.shadows);
+        }
         // Wall pieces lying where they fell (`pieces.rs`): on the floor,
         // under everything that stands.
         fx.pieces().draw(&mut GpuCanvas::culled(d, textures, cull), false);
@@ -1410,6 +1417,22 @@ impl Game {
             for pickup in self.world.query::<&crate::pickup::Pickup>().iter().filter(|p| p.burn.is_some() && !culled(cull, p.position)) {
                 pyro::draw_glows(&mut Rl(&mut bd), &crate::pickup::crate_flames(pickup, self.time), bands);
             }
+            // What still smoulders (docs/aftermath.md): a hulk's breaches
+            // and flare-ups, and the embers of every bed, heap and stump.
+            for tank in self.world.query::<&crate::tank::Tank>().iter().filter(|tank| tank.is_dead() && !culled(cull, tank.position)) {
+                if let Some(hot) = self.wreck_hot(tank) {
+                    pyro::draw_glows(&mut Rl(&mut bd), &crate::damage_stage::smoulder(tank, &hot, self.time, &t), bands);
+                }
+            }
+            for hot in self.smouldering().iter().filter(|h| h.kind != crate::smoulder::Kind::Wreck && !culled(cull, h.at)) {
+                let ember = hot.ember(&t);
+                if ember > 0.0 {
+                    pyro::glow(&mut Rl(&mut bd), hot.at, 16.0, pyro::alpha(pyro::FIRE[3], 0.14 * ember), bands);
+                }
+                let mut flare = Vec::new();
+                crate::smoulder::flare(hot, self.time, 12.0, &t, &mut flare);
+                pyro::draw_glows(&mut Rl(&mut bd), &flare, bands);
+            }
         });
 
         self.paint_standing(&mut GpuCanvas::culled(d, textures, cull), PaintOptions { locate_cue: true });
@@ -1483,6 +1506,13 @@ impl Game {
             }
             pyro::draw(&mut GpuCanvas::new(d, textures), &plume);
         }
+
+        // Over everything that stands: the columns off what the fight left
+        // smouldering, the battle's haze drifting over the field, the ash
+        // falling through it, and the haze's grade over the lot
+        // (docs/aftermath.md). Smoke, so the night darkens it with the rest
+        // - and the fires under it light it again.
+        air.paint_over(&mut GpuCanvas::new(d, textures));
     }
 
     /// What shines by its own light, over the lit field and so as bright

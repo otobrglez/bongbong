@@ -961,6 +961,10 @@ pub struct Snapshot {
     /// rod's set-off), in `Game::volcanoes` order; empty while every shift
     /// is 0.
     pub volcano_shifts: Vec<i32>,
+    /// The cells thick smoke hides a hull in (`Game::smoke_cells`,
+    /// `smoke_cover`), sorted cell indices: what the replica's cover - its
+    /// arrows - reads. Empty with the knob off.
+    pub smoke_cells: Vec<u16>,
     pub round: RoundState,
     /// What happened on the ticks since the previous snapshot, the AI's
     /// trace left out (`WireEvent::from_event`).
@@ -997,6 +1001,8 @@ impl Snapshot {
         self.rubble.dedup_by_key(|r| r.cell);
         self.well_drums.sort_by_key(|d| d.id);
         self.well_drums.dedup_by_key(|d| d.id);
+        self.smoke_cells.sort();
+        self.smoke_cells.dedup();
     }
 }
 

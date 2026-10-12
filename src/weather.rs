@@ -64,6 +64,10 @@ const TESLA_LIGHT: Rgb = [0.69, 0.47, 1.0];
 /// The bio slush's lime ooze (`tower::OOZE_LT`).
 const OOZE_LIGHT: Rgb = [0.78, 1.0, 0.3];
 
+/// The most smouldering remains that throw light at once (`lights_in`),
+/// the hottest first.
+const SMOULDER_LIGHTS: usize = 24;
+
 /// A weather as numbers: the light the field is lit by and how much of
 /// each layer the sky carries. `Look::of` resolves one from its weather
 /// and the `weather` tuning group; the renderer reads nothing else.
@@ -400,7 +404,9 @@ impl Game {
     }
 
     /// Whether `pos` stands in a lamp's, a lantern's or the lava's light
-    /// (`sight_on`).
+    /// (`sight_on`) - or, under `fire_reveals`, within `fire_reveal_px` of
+    /// something burning: a ground fire, a burning tile, a wreck still on
+    /// fire (docs/aftermath.md).
     pub fn is_lit(&self, pos: Position, t: &crate::tuning::Tuning) -> bool {
         let reach = t.lamp_reveal_px;
         if reach > 0.0 {
@@ -411,7 +417,21 @@ impl Game {
                 return true;
             }
         }
+        if self.aftermath_rules.fire_reveals && self.near_fire(pos, t.fire_reveal_px) {
+            return true;
+        }
         !self.lava.is_empty() && self.lava.heat_at(pos) >= t.lava_reveal_heat.max(1e-3)
+    }
+
+    /// Whether anything burning is within `reach` px of `pos`: a ground
+    /// fire, a burning tile, a wreck still on fire.
+    fn near_fire(&self, pos: Position, reach: f32) -> bool {
+        if reach <= 0.0 {
+            return false;
+        }
+        self.fires.iter().any(|f| f.left > 0.0 && f.position().distance_to(pos) <= reach)
+            || self.world.query::<&Obstacle>().iter().any(|o| o.burning && o.position.distance_to(pos) <= reach)
+            || self.world.query::<&Tank>().iter().any(|tank| tank.is_wreck() && !tank.is_dead() && tank.position.distance_to(pos) <= reach)
     }
 }
 
@@ -861,6 +881,32 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
     }
     for drum in &game.flying_drums {
         out.push(fire(drum.ground_pos(), 56.0, 0.8).unshadowed());
+    }
+
+    // What a fight left smouldering (docs/aftermath.md): each hot remain a
+    // dim light breathing with its embers and leaping as it flares, and
+    // under a haze a broad warm light over it, so the smoke above a fire
+    // is lit from below. The hottest few, unshadowed.
+    let haze = game.battle_haze();
+    let mut hots: Vec<(f32, crate::smoulder::Hot)> = game
+        .smouldering()
+        .into_iter()
+        .map(|hot| (hot.ember(t) + hot.flare(t) * 2.0, hot))
+        .filter(|&(heat, _)| heat > 0.02)
+        .collect();
+    hots.sort_by(|a, b| b.0.total_cmp(&a.0));
+    for (heat, hot) in hots.into_iter().take(SMOULDER_LIGHTS) {
+        let radius = match hot.kind {
+            crate::smoulder::Kind::Bed => t.ember_light_px,
+            crate::smoulder::Kind::Stump => t.ember_light_px * 0.8,
+            _ => t.fire_light_radius_px * 0.55,
+        };
+        let breath = 0.75 + 0.25 * math::sin(time * 1.3 + (hot.seed % 628) as f32 * 0.01);
+        out.push(Light::point(hot.at, radius, scale([1.0, 0.5, 0.2], k * t.smoulder_light_strength * heat * breath)).unshadowed());
+        if haze > 0.05 && t.haze_underlight > 0.0 {
+            let over = Position::new(hot.at.x, hot.at.y - 40.0);
+            out.push(Light::point(over, radius * 2.5, scale([1.0, 0.45, 0.18], k * t.haze_underlight * haze * heat.min(1.0))).unshadowed());
+        }
     }
 
     // The volcano's lights (docs/volcano.md): the lava, every other cell,

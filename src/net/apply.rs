@@ -67,7 +67,7 @@ use crate::shell::{Owner, Shell, ShellState};
 use crate::simulation::replica::plasma_variant_from_index;
 use crate::blast::BlastShape;
 use crate::shockwave::Shockwave;
-use crate::simulation::{Game, GroundFire, OilPrint, PlayerCount, SHOCK_FROG, SHOCK_SHIELD_BREAK, SHOCK_TELEPORT, Spectacle, tile_rubble};
+use crate::simulation::{Game, GroundFire, OilPrint, PlayerCount, SHOCK_FROG, SHOCK_SHIELD_BREAK, SHOCK_TELEPORT, Spectacle, tile_rubble, tile_stump};
 use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::tuning::tuning;
 use crate::{DAMAGE_VARIANTS, MAX_DAMAGE, PHYSICS_FIXED_DT, Position, TANK_SHELL_VARIANT_BY_ROW, TANK_WRECK_COLS};
@@ -374,6 +374,7 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_craters(game, s, cols);
     apply_rubble(game, s, cols);
     apply_volcano_shifts(game, s);
+    game.smoke_cells = s.smoke_cells.iter().map(|&i| cell_from_index(cols, i)).collect();
     apply_round(game, s);
     game.show(spectacle);
     game.frame = s.tick as u64;
@@ -514,14 +515,27 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTre
                 show.shocks.push(Shockwave::scaled(at(x, y), SHOCK_TELEPORT));
                 show.shocks.push(Shockwave::scaled(at(to_x, to_y), SHOCK_TELEPORT));
             }
+            // A wave round's wreck leaves its parts where it stood; the
+            // hull is still in the world until the tanks are applied.
+            WireEvent::WreckRemoved { slot } => {
+                let stood = game.world.query::<&Tank>().iter().find(|t| t.owner_slot() == slot as usize).map(|t| t.position);
+                if let Some(center) = stood {
+                    show.decals.extend(game.wreck_scar(center));
+                }
+            }
             WireEvent::ObstacleDestroyed { material, x, y } => {
                 let center = at(x, y);
                 let cell = map::world_to_cell(center);
                 // A tile that was burning when it died is the charred
                 // plank a fire leaves; the tile is still standing here.
-                let charred = game.world.query::<&Obstacle>().iter().any(|o| o.burning && o.cell() == cell);
+                let standing = game.world.query::<&Obstacle>().iter().find(|o| o.cell() == cell).map(|o| (o.burning, o.variant));
+                let charred = standing.is_some_and(|(burning, _)| burning);
                 if let Some(decal) = tile_rubble(material, center, charred, game.map.theme) {
                     show.decals.push(decal);
+                }
+                let variant = standing.map_or(0, |(_, variant)| variant);
+                if let Some(stump) = tile_stump(material, variant, center, charred, game.map.theme) {
+                    show.decals.push(stump);
                 }
                 if material.is_tree() {
                     game.woods.fell(cell);
@@ -2615,6 +2629,32 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
             step_and_apply(&mut game, &mut replica);
             assert_eq!(replica.drawable_state().pickups, game.drawable_state().pickups);
         }
+    }
+
+    /// Under `smoke_cover` the cells a burning wreck's smoke hides a hull
+    /// in are the room's on the replica too - what its arrows read - and a
+    /// client that joins later learns them from the welcome.
+    #[test]
+    fn thick_smoke_reaches_the_replicas_cover() {
+        let map = r#"
+version = 1
+tanks = 1
+cells."2,2" = { kind = "frog" }
+cells."10,14" = { kind = "start" }
+"#;
+        let mut game = quiet_round(map, 0x5A0C, 1);
+        game.aftermath_rules.smoke_cover = true;
+        let mut replica = welcome_through_the_codec(&game);
+        let enemy = game.tank_snapshots().into_iter().find(|t| !t.is_player).expect("an enemy");
+        game.debug_kill(enemy.slot).expect("the enemy");
+        // The kill lands in the first step; the second reads its smoke.
+        step_and_apply(&mut game, &mut replica);
+        step_and_apply(&mut game, &mut replica);
+        assert!(!game.smoke_cells.is_empty(), "the burning wreck's smoke hides");
+        assert_eq!(replica.smoke_cells, game.smoke_cells);
+        assert_eq!(&*replica.cover_cells(), &*game.cover_cells());
+        let late = welcome_through_the_codec(&game);
+        assert_eq!(late.smoke_cells, game.smoke_cells, "a joiner learns them from the welcome");
     }
 
     /// A cell the room tramples (`simulation::trample`) hides nobody on

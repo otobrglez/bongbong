@@ -1304,6 +1304,18 @@ impl Fx {
                 self.burst(pos, ParticleKind::Smoke, 1, 14.0, &[SOOT_T]);
             }
         }
+        // A smouldering remain throws sparks while it flares up
+        // (docs/aftermath.md); its column is composed, not particles.
+        let spark = tuning().spark_rate * tuning().fx_density;
+        if spark > 0.0 {
+            let t = tuning();
+            for hot in game.smouldering() {
+                let flare = hot.flare(&t);
+                if flare > 0.0 && self.due(hot.seed ^ 0x5BA4_0000, spark * flare / 0.45, dt) {
+                    self.burst(hot.at, ParticleKind::Ember, 1, 26.0, &[FIRE_T, EMBER_T]);
+                }
+            }
+        }
         // A damaged hull smokes from its engine deck
         // (`damage_stage::smoke`): a wisp at the damaged tier, a column as
         // it gets worse, black smoke and embers once the deck burns.

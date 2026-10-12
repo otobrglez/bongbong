@@ -467,13 +467,17 @@ fn a_tree_shot_down_leaves_litter_from_its_own_sheet() {
                 shoot(&mut game, 90);
             }
             assert_eq!(alive_obstacles(&game), 8, "seed {seed}: the {kind} never came down");
-            assert_eq!(game.decals.len(), 1, "seed {seed}: one piece of litter");
-            let decal = &game.decals[0];
+            let litter: Vec<_> = game.decals.iter().filter(|d| !d.upright).collect();
+            assert_eq!(litter.len(), 1, "seed {seed}: one piece of litter");
+            let decal = litter[0];
             assert_eq!(decal.sheet, Sheet::Trees, "leaf litter is green, so it is not on the walls sheet");
+            let stumps = game.decals.iter().filter(|d| d.upright).count();
             if Some((decal.sheet, decal.row)) == material.rubble_row(true) {
                 charred_seen += 1;
+                assert_eq!(stumps, 1, "seed {seed}: a burnt {kind} leaves its stump standing (docs/aftermath.md)");
             } else {
                 assert_eq!(Some((decal.sheet, decal.row)), material.rubble_row(false));
+                assert_eq!(stumps, 0, "seed {seed}: a {kind} shot down leaves no stump");
             }
             assert_eq!(decal.center, cell_to_world(20, 11));
         }
@@ -549,8 +553,9 @@ fn every_tree_species_is_a_map_kind_that_spawns_and_comes_down() {
             shoot(&mut game, 150);
         }
         assert_eq!(alive_obstacles(&game), 8, "the {kind} never came down");
-        assert_eq!(game.decals.len(), 1, "{kind}: one piece of litter");
-        assert_eq!(game.decals[0].sheet, crate::obstacle::Sheet::Trees, "{kind}");
+        let litter: Vec<_> = game.decals.iter().filter(|d| !d.upright).collect();
+        assert_eq!(litter.len(), 1, "{kind}: one piece of litter");
+        assert_eq!(litter[0].sheet, crate::obstacle::Sheet::Trees, "{kind}");
     }
 }
 

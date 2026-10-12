@@ -98,6 +98,8 @@ pub struct SnapshotDelta {
     pub well_drums_gone: Vec<u16>,
     /// The volcanoes' shifts, whole, when they changed.
     pub volcano_shifts: Option<Vec<i32>>,
+    /// The smoke cells, whole, when they changed.
+    pub smoke_cells: Option<Vec<u16>>,
     pub round: Option<RoundState>,
     pub events: Vec<WireEvent>,
 }
@@ -389,6 +391,7 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
         well_drums,
         well_drums_gone,
         volcano_shifts: (next.volcano_shifts != prev.volcano_shifts).then(|| next.volcano_shifts.clone()),
+        smoke_cells: (next.smoke_cells != prev.smoke_cells).then(|| next.smoke_cells.clone()),
         round: (next.round != prev.round).then_some(next.round),
         events: next.events.clone(),
     }
@@ -426,6 +429,7 @@ pub fn apply_delta(prev: &Snapshot, delta: &SnapshotDelta) -> Snapshot {
         rubble: apply_keyed(&prev.rubble, &delta.rubble, &delta.rubble_gone),
         well_drums: apply_keyed(&prev.well_drums, &delta.well_drums, &delta.well_drums_gone),
         volcano_shifts: delta.volcano_shifts.clone().unwrap_or_else(|| prev.volcano_shifts.clone()),
+        smoke_cells: delta.smoke_cells.clone().unwrap_or_else(|| prev.smoke_cells.clone()),
         round: delta.round.unwrap_or(prev.round),
         events: delta.events.clone(),
     }
@@ -585,6 +589,7 @@ mod tests {
             .map(|id| WellDrumState { id, well: rng.random_range(0..400), cell: rng.random_range(0..600), drum: rng.random_range(0..2), fused: rng.random(), tick: rng.random_range(0..200_000) })
             .collect();
         let volcano_shifts = if rng.random() { vec![rng.random_range(-4000..4000)] } else { Vec::new() };
+        let smoke_cells = random_keys(rng, 3, 600);
         let mut s = Snapshot {
             tick: rng.random_range(0..200_000),
             server_ms: rng.random(),
@@ -607,6 +612,7 @@ mod tests {
             rubble,
             well_drums,
             volcano_shifts,
+            smoke_cells,
             round: RoundState {
                 wave: rng.random_range(0..10),
                 alive: rng.random_range(0..40),
@@ -720,6 +726,9 @@ mod tests {
         }
         if rng.random_ratio(1, 6) {
             next.volcano_shifts = vec![rng.random_range(-4000..4000)];
+        }
+        if rng.random_ratio(1, 4) {
+            next.smoke_cells = random_keys(rng, 3, 600);
         }
         next.events = random_events(rng);
         // Later pushes of an existing key must win, the way the server's
@@ -913,10 +922,11 @@ mod tests {
         // for the zones and two for the craters and one for the shifts
         // (protocol 20); the held drums' list one, the delta two for them
         // (protocol 21); the rubble's list one, the delta two for it
-        // (protocol 23).
-        assert!(full <= 500, "full snapshot {full} B");
-        assert!(moving <= 215, "moving delta {moving} B");
-        assert!(busy <= 281, "busy delta {busy} B");
-        assert!(idle <= 61, "idle delta {idle} B");
+        // (protocol 23); the smoke cells' list one, the delta one for
+        // them (protocol 29).
+        assert!(full <= 501, "full snapshot {full} B");
+        assert!(moving <= 216, "moving delta {moving} B");
+        assert!(busy <= 282, "busy delta {busy} B");
+        assert!(idle <= 62, "idle delta {idle} B");
     }
 }

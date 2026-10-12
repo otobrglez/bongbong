@@ -1074,6 +1074,11 @@ pub struct Tank {
     /// Seconds spent as a wreck. Once it exceeds WRECK_BURN_SECONDS the fire
     /// dies out and the tank becomes a static charred "dead" hulk.
     pub wreck_timer: f32,
+    /// Seconds since this tank became a wreck, uncapped: how far its
+    /// remains have got through smouldering, wisps and cold
+    /// (`smoulder::stage_at`), and how rusted a cold hulk is. A replica
+    /// counts its own, from the frame it first sees the wreck.
+    pub wreck_age: f32,
     /// Wave rounds only: seconds until this wreck is removed from the field
     /// (`wave_wreck_despawn_seconds`, armed by `Game::despawn_wrecks` the
     /// frame the tank becomes a wreck). `None` for a live tank and in band
@@ -1195,6 +1200,7 @@ impl Default for Tank {
             portal_cooldown: 0.0,
             hit_flash_timer: 0.0,
             wreck_timer: 0.0,
+            wreck_age: 0.0,
             despawn_timer: None,
             track_from: None,
             tread_phase: 0.0,
@@ -2167,12 +2173,14 @@ impl Tank {
         }
     }
 
-    /// Age a wreck so its fire burns for WRECK_BURN_SECONDS before going out. The
-    /// timer only runs once the tank is a wreck; a live tank keeps it at zero.
+    /// Age a wreck so its fire burns for WRECK_BURN_SECONDS before going out,
+    /// and count its `wreck_age` on. The timers only run once the tank is a
+    /// wreck; a live tank keeps them at zero.
     pub fn tick_wreck(&mut self, dt: f32) {
         if self.is_wreck() {
             // Cap the timer so it doesn't grow unbounded once the fire is out.
             self.wreck_timer = (self.wreck_timer + dt).min(tuning().wreck_burn_seconds);
+            self.wreck_age += dt;
         }
     }
 

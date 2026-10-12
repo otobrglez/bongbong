@@ -780,8 +780,8 @@ pub const PORTAL_ICON_SIZE: f32 = 32.0;
 // idle animation is those frames cycling (`obstacle::tree_col`), the same
 // canopy with a few patches of leaf one rung lighter and drifting between
 // frames. Nothing about a tree moves; only where the light falls does. The
-// column is `frame * TREE_STAGES + stage`, then the never-drawn stump, then
-// the 3-frame burn loop. Those sixteen columns repeat at `TREE_DRY_COL`
+// column is `frame * TREE_STAGES + stage`, then the stump a burnt tree
+// leaves standing (`decal::Decal::stump`), then the 3-frame burn loop. Those sixteen columns repeat at `TREE_DRY_COL`
 // as the dry version every species draws on a desert map
 // (`Material::is_dry`): the same art recoloured onto the sand and wood
 // ramps and thinned, so the column maths is one offset.
@@ -1057,6 +1057,7 @@ pub mod gauss;
 pub mod fpv;
 pub mod air;
 pub mod rod;
+pub mod smoulder;
 pub mod zone;
 pub mod well;
 pub mod game;

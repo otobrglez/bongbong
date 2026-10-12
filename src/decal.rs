@@ -53,10 +53,17 @@ pub struct Decal {
     /// Cosmetic seed - mirror and quarter-turn. A position hash, never a
     /// draw from the round RNG.
     pub seed: u32,
-    /// Seconds since it appeared; drives only the fade-in. The rubble a
-    /// tank drives over is the simulation's own per-cell count
-    /// (`Game::rubble`), not this picture.
+    /// Seconds since it appeared; drives the fade-in and, for a `hot`
+    /// one, how far it has smouldered. The rubble a tank drives over is
+    /// the simulation's own per-cell count (`Game::rubble`), not this
+    /// picture.
     pub age: f32,
+    /// Fire finished the tile: its charred rubble smoulders for
+    /// `ruin_smoulder_seconds` of its `age` (`smoulder.rs`).
+    pub hot: bool,
+    /// A burnt tree's stump (`Decal::stump`): drawn standing, at full
+    /// strength and charred, never mirrored or turned.
+    pub upright: bool,
 }
 
 impl Decal {
@@ -67,6 +74,23 @@ impl Decal {
         let (sheet, row) = material.rubble_row(charred)?;
         let mut d = Self::at(row, center, 0);
         d.sheet = sheet;
+        d.hot = charred;
+        Some(d)
+    }
+
+    /// The stump a tree of `material` and `variant` that burnt down
+    /// leaves standing at `center`: the never-felled `TREE_STUMP_COL` of
+    /// its own row, `dry` on a desert map, charred and smouldering like
+    /// its litter. `None` for anything but a tree.
+    pub fn stump(material: Material, variant: i32, center: Position, dry: bool) -> Option<Self> {
+        if !material.is_tree() {
+            return None;
+        }
+        let mut d = Self::at(material.row_base() + variant, center, 13);
+        d.sheet = Sheet::Trees;
+        d.col = crate::TREE_STUMP_COL + if dry { crate::TREE_DRY_COL } else { 0 };
+        d.hot = true;
+        d.upright = true;
         Some(d)
     }
 
@@ -89,7 +113,7 @@ impl Decal {
         // Salted separately from the mirror/rotation seed so two pieces
         // that happen to share a variant still differ in orientation.
         let col = (crate::blast::seed_at(center, 11 + salt * 3) % RUBBLE_VARIANTS as u32) as i32;
-        Decal { sheet: Sheet::Walls, row, col, center, origin: center, arc: 0.0, seed, age: 0.0 }
+        Decal { sheet: Sheet::Walls, row, col, center, origin: center, arc: 0.0, seed, age: 0.0, hot: false, upright: false }
     }
 
     /// Pick a landed piece up and throw it again, to `to`: it takes off
@@ -136,6 +160,20 @@ impl Decal {
 /// levelled wall doesn't read as a row of clones; quarter-turns keep the
 /// pixels square, exactly like `blast::draw_scorch`.
 pub fn draw_decal(c: &mut impl Canvas, decal: &Decal) {
+    draw_decal_kept(c, decal, 1.0);
+}
+
+/// `draw_decal` with `keep` (0 to 1) of its strength, in eighths: what
+/// snow lying over it leaves showing (docs/aftermath.md).
+pub fn draw_decal_kept(c: &mut impl Canvas, decal: &Decal, keep: f32) {
+    let keep = (keep.clamp(0.0, 1.0) * 8.0).round() / 8.0;
+    if keep <= 0.0 {
+        return;
+    }
+    if decal.upright {
+        draw_stump(c, decal, keep);
+        return;
+    }
     let cell = decal.sheet.cell();
     let flip = if decal.seed & 1 != 0 { -1.0 } else { 1.0 };
     let src = Rectangle::new(decal.col as f32 * cell, decal.row as f32 * cell, cell * flip, cell);
@@ -146,7 +184,7 @@ pub fn draw_decal(c: &mut impl Canvas, decal: &Decal) {
     // for something settling.
     let opacity = if decal.landed() {
         let fade = (decal.age / tuning().decal_fade_in_seconds.max(1e-3)).clamp(0.0, 1.0);
-        tuning().decal_opacity * fade
+        tuning().decal_opacity * fade * keep
     } else {
         1.0
     };
@@ -154,4 +192,38 @@ pub fn draw_decal(c: &mut impl Canvas, decal: &Decal) {
     let at = decal.draw_pos();
     let dest = Rectangle::new(at.x, at.y, size, size);
     c.blit(decal.sheet, src, dest, Vec2::new(size / 2.0, size / 2.0), rotation, tint);
+}
+
+/// A burnt tree's stump: its sheet cell standing as drawn, at full
+/// strength once faded in, darkened to char.
+fn draw_stump(c: &mut impl Canvas, decal: &Decal, keep: f32) {
+    let cell = decal.sheet.cell();
+    let src = Rectangle::new(decal.col as f32 * cell, decal.row as f32 * cell, cell, cell);
+    let size = cell * crate::OBSTACLE_SCALE;
+    let fade = (decal.age / tuning().decal_fade_in_seconds.max(1e-3)).clamp(0.0, 1.0);
+    let tint = Color::new(STUMP_CHAR.r, STUMP_CHAR.g, STUMP_CHAR.b, (255.0 * fade * keep) as u8);
+    let at = decal.center;
+    c.blit(decal.sheet, src, Rectangle::new(at.x, at.y, size, size), Vec2::new(size / 2.0, size / 2.0), 0.0, tint);
+}
+
+/// What a stump's wood is multiplied by once fire has had it: its browns
+/// pulled down toward the `CHAR` ramp.
+const STUMP_CHAR: Color = Color::new(0x6A, 0x58, 0x4C, 0xFF);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_burnt_tree_leaves_a_standing_stump_and_nothing_else_does() {
+        let at = Position::new(64.0, 64.0);
+        let stump = Decal::stump(Material::Pine, 2, at, false).expect("a tree leaves a stump");
+        assert!(stump.upright && stump.hot);
+        assert_eq!(stump.sheet, Sheet::Trees);
+        assert_eq!((stump.row, stump.col), (Material::Pine.row_base() + 2, crate::TREE_STUMP_COL));
+        assert_eq!(Decal::stump(Material::Pine, 2, at, true).expect("a dry one").col, crate::TREE_STUMP_COL + crate::TREE_DRY_COL);
+        assert!(Decal::stump(Material::Brick, 0, at, false).is_none());
+        assert!(Decal::new(Material::Wood, at, true).expect("charred planks").hot, "charred rubble smoulders");
+        assert!(!Decal::new(Material::Wood, at, false).expect("broken planks").hot, "broken rubble does not");
+    }
 }

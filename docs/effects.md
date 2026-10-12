@@ -92,7 +92,9 @@ blows up - they throw none.
 | A hit's flash | `fx::Flash`, drawn by `render/game.rs` | the hull, tile or tower drawn again over itself in an additive blend, stepping down in three over `hit_flash_seconds` |
 | Flames on the ground, a burning tile, a burning tank | `pyro::tongues` | teardrop tongues in three nested layers, flickering through four heights and leaning with the wind |
 | A tank's damage | the tank sheet, then `damage_stage.rs` | the sheet's damage tiers and wrecks carry the wear; the code adds smoke from the damaged tier, deck fire from the critical one and a wreck burning down |
-| A burnt-out ground fire | `Scorch::burn` | a soft burn scar, not a darkened square |
+| A burnt-out ground fire | `Scorch::burn` | a soft burn scar, not a darkened square; an ember bed while it cools (`smoulder::glints`) |
+| What a fight leaves smouldering - wrecks, beds, charred rubble, stumps, ruins, craters | `smoulder.rs` (docs/aftermath.md) | columns of shaded `SMOKE` puffs born on fixed ticks and hashed, as the volcano's plume is, paling to wisps and to steam in the rain, their shadows down-right on the floor; ember glints breathing through the fire ramp's low steps; flare-ups as `pyro::tongues`; a hulk's breaches, rust and snow (`damage_stage::smoulder`, `weathering`) |
+| The battle's haze | `smoulder.rs` (`haze_banks`, `haze_grade`, `ash`) | banks of small dithered discs in one smoke step, clustered on a lattice drifting with the wind and thinned round every seat; one translucent warm grade over the lit field; ash in the palest smoke steps |
 | Particles | `fx.rs`, drawn by `render/fx.rs` | sparks and embers cool down the fire ramp; smoke, dust and a missile's trail are shaded puffs; chips are small squares |
 | The light shots throw | `render/shot_fx.rs` | stepped glows and streaks of blocks |
 | The flamethrower's jet, the plasma orb | `static/flame_jet.fs`, `static/plasma_orb.fs` | worked out per 2 px block, coloured in their ramps' flat steps, edges dithered |
@@ -122,7 +124,9 @@ on the engine deck behind the turret (`damage_stage::engine_deck`, one of
 - **Critical** (75, `BURNS_AT`), or with afterburn on it: the deck burns
   (`damage_stage::fire`, `flames`) and the smoke turns black. A wreck
   burns hard over its whole hulk and dies down over the last fifth of
-  `wreck_burn_seconds`, and its kill lays the grass round it flat.
+  `wreck_burn_seconds`, and its kill lays the grass round it flat. Then it
+  smoulders - breaches glowing, flaring now and then, a column off it -
+  gives off wisps and goes cold, and rusts (docs/aftermath.md).
 
 ## Painting
 
@@ -150,6 +154,7 @@ additive block (a blend switch breaks raylib's batch).
 | `tile_dust_seconds`, `tile_collapse_seconds` | a tile's dust when hit and when it comes down |
 | `hit_flash_seconds` | a hit's flash; 0 turns it off |
 | `hull_smoke_rate` | smoke off a damaged hull's deck |
+| the `aftermath` group | how long what a fight leaves smoulders, its columns, embers, flare-ups and rust, and the battle's haze (docs/aftermath.md) |
 | `muzzle_flash_duration`, `muzzle_glow_radius` | a muzzle flash's life and size |
 | `shot_glow_strength` | the light shots throw; 0 draws the plain sprites |
 | `wear_*` | how the ground keeps tread marks: passes, ages, rain, snow, gusts (docs/ground-memory.md) |
