@@ -192,7 +192,9 @@ mission, and the script decides how it ends. Two new cell kinds:
 
 - **`door`** (`kind = "door", beat = N`): `Material::Door`, permanent like
   iron - a seam-closed static collider, a nav-grid wall, stops shots and
-  sight and takes no damage - until beat `N` (1-based, in script order)
+  sight and takes no damage, though a shell bursts on it rather than
+  ricocheting as off iron (`Material::ricochets_shells`) - until beat `N`
+  (1-based, in script order)
   is done, when the round marks every door of that beat destroyed and the
   frame's cleanup takes it away with no rubble and no `ObstacleDestroyed`
   (`Event::DoorOpened { beat, x, y }`, one per cell). Its `Obstacle::variant`

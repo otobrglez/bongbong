@@ -154,9 +154,10 @@ pub struct Shell {
     /// swept hit test checks, so a shell can't tunnel through a thin
     /// target however far one frame carries it.
     pub prev_position: Position,
-    /// How many more times this shell may ricochet off an indestructible
-    /// Iron obstacle before detonating on one instead. Battlefield walls
-    /// and every other target detonate it on first contact regardless.
+    /// How many more times this shell may ricochet off iron or a volcano's
+    /// cone (each time only on a `shell_ricochet_chance` roll) before
+    /// detonating on one instead. Battlefield walls and every other target
+    /// detonate it on first contact regardless.
     pub bounces_left: u32,
     /// Obstacle tiles this projectile already rolled a pass-over on (a
     /// sandbag it sailed over) - skipped by every later hit sweep, since a
