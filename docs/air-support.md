@@ -39,22 +39,28 @@ that belongs to a seat, the two aircraft, the HUD's box and the sprites.
   the side farther from its aim point (`jet_edge`), so its run over the
   field is at least half the field.
 - **The target picture.** Taken when it arrives, not when the crate was
-  taken: the enemies on the field inside the seat's sight box
-  (`ai::in_sight_box`, the screen the follow camera shows round the seat),
-  live, nearest first, ties to the lower slot. A wrecked seat's call still
+  taken: inside the seat's sight box (`ai::in_sight_box`, the screen the
+  follow camera shows round the seat), the enemy tanks live on the field
+  and the enemy towers still standing - tesla, gun tower, bio slush
+  (`air_targets_near`). Nearest first; at the same distance a tank before a
+  tower, tanks by slot, towers by cell. The players' own towers are never
+  targets. A wrecked seat's call still
   comes, round its wreck; a seat gone from the round spends it
-  (`Event::AirSupportLeft`). No enemy in the box: the aircraft comes, passes
+  (`Event::AirSupportLeft`). No target in the box: the aircraft comes, passes
   over the seat - the heli hovers there `air_heli_linger_seconds` (1) - and
   leaves without firing; the crate is spent.
 - **The helicopter.** At `air_heli_speed` (220 px/s) it flies to a hover
   point `air_heli_standoff_px` (160) short of the nearest target, back
   towards where it came in, held a cell inside the field. From there it
   fires `air_heli_salvos` (4) salvos, one every `air_heli_salvo_seconds`
-  (0.9), each at the nearest enemy in the box at that moment, turning to
+  (0.9), each at the nearest target in the box at that moment, turning to
   face it: `air_heli_salvo_rockets` (4) seeker missiles off its pods
   (`missile.rs` - their climb, seek, lock and blast are a missile's, every
-  rule of theirs kept; the blast is `side_blast`). Then it leaves the way it
-  came. It is on the field about ten seconds.
+  rule of theirs kept; the blast is `side_blast`). A missile's seek locks
+  tanks only, so a salvo at a tower comes down on the tower unless an enemy
+  tank is nearer the missile when it turns. Its sixteen rockets bring a
+  tesla (120) down. Then it leaves the way it came. It is on the field
+  about ten seconds.
 - **The jet.** At `air_jet_speed` (520 px/s), one straight pass through the
   middle of the nearest `air_jet_targets` (3) targets in the box. Its
   cannon puts `air_jet_gun_bursts` (6) bursts in a stripe
@@ -62,14 +68,18 @@ that belongs to a seat, the two aircraft, the HUD's box and the sprites.
   `air_jet_gun_ahead_px` (160) ahead of the jet (radius 28, 9 damage, fixed);
   `air_jet_bomb_lead_px` (96) short of the point it lets two bombs go, landing
   `air_jet_bomb_spacing_px` (48) apart astride it (radius 64, 75 to 85
-  damage). A full-health tank on the aim point is wrecked. It fires only
+  damage). A full-health tank on the aim point is wrecked; a tower there
+  loses most of its health - the bombs land either side of it, so a gun
+  tower's 150 survives one pass with about 40. It fires only
   over the field: on a run too short for the stripe and its lead, both
   shrink to fit (`gun_burst`, `bombs`). It flies on off the far edge; about
   three seconds on the field.
-- **Friendly fire.** None: every hit is `side_blast`/`explosion_hit`, which
-  spare `Owner::same_side` - seats, the players' frog and towers. Tiles take
-  damage (`damage_obstacle` with falloff) and crates break, as for a
-  missile.
+- **Friendly fire.** None on hulls and frogs: every hit is
+  `side_blast`/`explosion_hit`, which spare `Owner::same_side` - the seats
+  and the players' frog. Tiles take damage whoever's they are
+  (`damage_obstacle` with falloff) and crates break, as for a missile, so a
+  player's own tower next to what is struck takes the splash - it is never
+  aimed at.
 - **Shot down.** The helicopter is an air target (`air.rs`,
   `AirKey::Aircraft`): enemy bullets crossing its strike box hit it, and
   `air_heli_hits` (16) bring it down; the gun tower turns on it and the tesla
@@ -202,6 +212,9 @@ the two tools (`tool-air_heli`, `tool-air_jet` and their short forms in
 6. **Marker.** A minimap mark plus an off-screen arrow. No strike marker on
    the field.
 7. **Enemy reaction.** None in v1 beyond shooting at the heli.
+8. **Towers.** Enemy towers in the box are targets like enemy tanks
+   (2026-10-12, after the first review). The players' own are not, but
+   they still take splash like any tile.
 
 ## 10. Determinism
 
@@ -218,7 +231,9 @@ targets sort by distance then slot; trig through `math::`.
 special and nothing arrives before the count; the jet wrecks the tank on its
 aim point and spares the one outside the box and the seat; the heli flies in,
 hovers, fires its salvos and leaves, sparing the seat; with no enemy in the
-box neither fires; the jet fires only over the field, wherever the seat
+box neither fires; an enemy tower is a target - the jet aims its run on it
+and the heli's salvos bring a tesla down - and the players' own tower is
+not; the jet fires only over the field, wherever the seat
 stands; a second crate queues a second sortie whose count starts
 when the first leaves; the heli comes down to `air_heli_hits` bullets and the
 next call counts; the jet is no air target; a sortie replays bit for bit.

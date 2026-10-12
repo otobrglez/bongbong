@@ -13,8 +13,10 @@ use crate::ai::{Ai, in_sight_box};
 use crate::air::AirStrike;
 use crate::air_support::{self, AirCall, AirStage, Aircraft, Sortie};
 use crate::blast::{BlastFx, BlastKind, BlastShape, Lean, Scorch};
+use crate::frog::Side;
 use crate::math::Vec2;
 use crate::missile::Missile;
+use crate::obstacle::Obstacle;
 use crate::shell::Owner;
 use crate::shockwave::Shockwave;
 use crate::tank::Tank;
@@ -91,21 +93,29 @@ impl Game {
         self.world.get::<&Tank>(entity).ok().map(|t| t.position)
     }
 
-    /// The enemies an aircraft of the seat standing at `anchor` may attack:
-    /// live, on the field, inside the seat's sight box; nearest first, ties
-    /// to the lower slot.
+    /// What an aircraft of the seat standing at `anchor` may attack, inside
+    /// the seat's sight box: the enemy tanks live on the field and the enemy
+    /// towers still standing. Nearest first; at the same distance a tank
+    /// before a tower, tanks by slot and towers by cell.
     fn air_targets_near(&self, anchor: Position) -> Vec<Position> {
-        let mut out: Vec<(f32, usize, Position)> = self
+        let mut out: Vec<(f32, u8, usize, (i32, i32), Position)> = self
             .world
             .query::<&Tank>()
             .with::<&Ai>()
             .without::<&RollIn>()
             .iter()
             .filter(|t| !t.is_wreck() && t.body.is_some() && in_sight_box(anchor, t.position))
-            .map(|t| (t.position.distance_to(anchor), t.owner_slot(), t.position))
+            .map(|t| (t.position.distance_to(anchor), 0, t.owner_slot(), (0, 0), t.position))
             .collect();
-        out.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-        out.into_iter().map(|(_, _, p)| p).collect()
+        out.extend(
+            self.towers
+                .iter()
+                .filter(|(_, t)| t.side == Side::Enemy && in_sight_box(anchor, t.position))
+                .filter(|(_, t)| self.world.get::<&Obstacle>(t.entity).is_ok_and(|o| !o.destroyed))
+                .map(|(&cell, t)| (t.position.distance_to(anchor), 1, 0, cell, t.position)),
+        );
+        out.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)));
+        out.into_iter().map(|(.., p)| p).collect()
     }
 
     /// Air support's frame: bring in every aircraft whose count ran out,

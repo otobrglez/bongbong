@@ -25,12 +25,17 @@ const FAR: Position = Position::new(1000.0, 192.0);
 /// A round on an open field, nobody shielded, no banner, the seat facing
 /// east carrying the rod.
 fn round() -> Game {
+    round_with("")
+}
+
+/// `round` on a map with `extra` cells too.
+fn round_with(extra: &str) -> Game {
     let mut game = Game::default();
     game.seed_override = Some(7);
     game.show_intro = false;
     game.level_overrides.mission = Some(Mission::Destroy);
-    let map = "version = 1\ntanks = 0\ncells.\"3,6\" = { kind = \"start\" }\n";
-    game.map = MapFile::from_toml_str(map).expect("test map parses");
+    let map = format!("version = 1\ntanks = 0\ncells.\"3,6\" = {{ kind = \"start\" }}\n{extra}");
+    game.map = MapFile::from_toml_str(&map).expect("test map parses");
     game.init(W, H);
     for tank in game.world.query_mut::<&mut Tank>() {
         tank.shield_hp = 0.0;
@@ -64,12 +69,17 @@ fn air_crate(game: &mut Game, sortie: Sortie, at: Position) {
     game.world.spawn((Pickup::placed(sortie.pickup(), at),));
 }
 
-/// One tick with every enemy's gun held: a parked enemy's shells come
-/// back over a 15 s count, and the seat must take nothing but what air
-/// support does.
+/// One tick with every enemy's gun held, the towers' too: a parked
+/// enemy's shells come back over a 15 s count, and the seat must take
+/// nothing but what air support does.
 fn tick(game: &mut Game) {
     for (tank, _) in game.world.query_mut::<(&mut Tank, &crate::ai::Ai)>() {
         tank.fire_cooldown = 1.0;
+    }
+    for tower in game.towers.values_mut() {
+        tower.cooldown = 1.0;
+        tower.charge = 0.0;
+        tower.burst_left = 0;
     }
     game.update(Input::default(), DT, W, H);
 }
@@ -310,4 +320,61 @@ fn the_jet_fires_only_over_the_field() {
         }
         assert_eq!(strikes, tuning().air_jet_gun_bursts as usize + 2, "seat at {seat_at:?}");
     }
+}
+
+/// The tower standing on map cell `cell`: whether it still stands and its
+/// health.
+fn tower_at(game: &Game, cell: (i32, i32)) -> (bool, f32) {
+    // A dead tower leaves `Game::towers` for its ruin.
+    let Some(tower) = game.towers.get(&cell) else { return (false, 0.0) };
+    let o = game.world.get::<&crate::obstacle::Obstacle>(tower.entity).expect("its tile");
+    (!o.destroyed, o.health)
+}
+
+/// An enemy tower is a target like an enemy tank: with only a gun tower in
+/// the seat's sight box the jet comes armed and aims its run on it, taking
+/// most of its health (a bomb lands either side of the aim point, so a
+/// tower's 150 is more than one pass's two bombs).
+#[test]
+fn the_jet_aims_its_run_on_an_enemy_tower_in_the_box() {
+    let mut game = round_with("cells.\"9,6\" = { kind = \"gun_tower\", side = \"enemy\" }\n");
+    // An enemy tank outside the box keeps the round going once the tower falls.
+    parked(&mut game, FAR);
+    let (standing, before) = tower_at(&game, (9, 6));
+    assert!(standing);
+    air_crate(&mut game, Sortie::Jet, SEAT);
+    let seen = until_left(&mut game, delay_ticks() + 1200);
+    assert_eq!(count(&seen, |e| matches!(e, Event::AirSupportArrived { armed: true, .. })), 1, "armed for the tower");
+    assert_eq!(count(&seen, |e| matches!(e, Event::AirStrike { bomb: true, .. })), 2);
+    let (standing, after) = tower_at(&game, (9, 6));
+    assert!(!standing || after < before * 0.5, "the tower on the aim point lost most of its health: {before} -> {after}");
+}
+
+/// The heli puts its salvos into an enemy tower when it is the only target
+/// in the box: its sixteen rockets bring a tesla down.
+#[test]
+fn the_heli_attacks_an_enemy_tower_in_the_box() {
+    let mut game = round_with("cells.\"9,6\" = { kind = \"tesla\", side = \"enemy\" }\n");
+    // An enemy tank outside the box keeps the round going once the tower falls.
+    parked(&mut game, FAR);
+    let (_, before) = tower_at(&game, (9, 6));
+    air_crate(&mut game, Sortie::Heli, SEAT);
+    let seen = until_left(&mut game, delay_ticks() + 1800);
+    assert_eq!(count(&seen, |e| matches!(e, Event::AirSalvo { .. })), tuning().air_heli_salvos as usize);
+    idle(&mut game, 240);
+    let (standing, after) = tower_at(&game, (9, 6));
+    assert!(!standing, "the tesla is down: {before} -> {after}");
+}
+
+/// The seat's own towers are never a target: with only a player tower in
+/// the box the aircraft comes unarmed and fires nothing.
+#[test]
+fn a_players_own_tower_is_no_target() {
+    let mut game = round_with("cells.\"9,6\" = { kind = \"tesla\" }\n");
+    // An enemy tank outside the box keeps the round going once the tower falls.
+    parked(&mut game, FAR);
+    air_crate(&mut game, Sortie::Jet, SEAT);
+    let seen = until_left(&mut game, delay_ticks() + 1200);
+    assert_eq!(count(&seen, |e| matches!(e, Event::AirSupportArrived { armed: false, .. })), 1);
+    assert_eq!(count(&seen, |e| matches!(e, Event::AirStrike { .. })), 0);
 }

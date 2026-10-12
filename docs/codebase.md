@@ -577,7 +577,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     `start_next_call` starts it once that one is gone); `air_support_phase` (before
     `spawn_pending`, and with `live` false on the end screen) brings in each due call's `Aircraft`
     - a hecs component, no body, no nav - from the edge `entry_edge` hashes off its id, aimed at the
-    enemies inside the seat's sight box (`air_targets_near`: nearest, ties to the slot), flies it,
+    enemy tanks and standing enemy towers inside the seat's sight box (`air_targets_near`: nearest,
+    a tank before a tower at the same distance, then slot or cell), flies it,
     and lets it fire: the heli's salvos are seeker missiles (`f.pending_missiles`, every missile
     rule kept), the jet's cannon bursts and bombs `air_strike` (a `side_blast`, then
     `air_strike_show`, which a replica plays off `Event::AirStrike`). The heli is an air target
