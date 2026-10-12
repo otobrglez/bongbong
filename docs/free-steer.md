@@ -1,4 +1,4 @@
-# Free steering (BB-128, BB-130)
+# Free steering (BB-128, BB-129, BB-130)
 
 Status: a play-test build behind the `free-steer` cargo feature. The shipped
 game is unchanged: without the feature every round steers four ways, byte for
@@ -35,7 +35,7 @@ The input fills both `Intent::move_dir` (four ways, as before) and
 how the round steers. A `Cardinal` hull never reads `heading`; a `Free` hull
 reads `heading`, or `move_dir`'s angle when there is none (the dev server's
 `move_dir`, a script, an AI sidestep). `Intent::aim` is an angle to turn to
-without driving, ahead of `face`: what a free enemy holds while it yields.
+without driving, ahead of `face`.
 
 `Tank::steer_free` is a `Free` hull's `Tank::control`:
 
@@ -103,7 +103,7 @@ through `simulation::spawn_hull`, which picks the shape from `Tank::steer`.
 ## Enemies
 
 An enemy of a free round is a `Free` hull too. The behaviour tree decides as it
-always has; how it follows a route changes.
+always has; two of its outputs change.
 
 ### Following a route (BB-130)
 
@@ -152,6 +152,31 @@ What it adds:
 The stuck escape itself is the four-way follower's (`Ai::stuck_escape`) and
 drives four ways.
 
+### Aiming (BB-129)
+
+A four-way enemy fires once a seat stands within `enemy_fire_align_px` of one
+of its four lines. A free one has no lines to wait for:
+
+- **The attack tier** (`act_attack_free`): with a clear line to its target and,
+  at a seat, inside that seat's sight box (`may_fire_at_seat`, unchanged), it
+  holds where it stands and lays its gun (`Brain::hold_and_fire_at`); otherwise
+  it repositions as a four-way tank does. A hunter's snipe needs no line-up
+  either.
+- **The lead** (`Brain::lead_aim`): at a seat, with a weapon whose shot flies
+  (shells, minigun bullets, plasma - `shot_speed`), it aims where the seat's
+  motion carries it over the shot's flight, times `enemy_free_lead` (0.8). The
+  motion is the seat's displacement between thinks, eased over 0.2 s
+  (`Ai::seat_motion`), not what its driver asks for: a seat pressed against a
+  wall asks to move and stands still. Led by the driver's ask, a free round's
+  enemies fired twice the shots for fewer hits (the probe's `advance`, 508
+  shots and 93 hits against 241 and 120 four-way); led by the motion, 313 and
+  124.
+- **The trigger** waits until the hull faces within
+  `enemy_free_aim_tolerance_deg` (3) of the aim for `enemy_aim_settle`, then
+  goes as a four-way enemy's does: paced by its fire timer, held (mostly) when
+  a friend stands on the line (`friendly_blocks_line`), a misfire rolled at
+  point blank.
+
 A free hull turns in the apply pass alone: the collect pass's `Tank::control`,
 which snaps a four-way hull's facing before it fires, is skipped for it, and it
 fires along the facing it has.
@@ -166,8 +191,6 @@ fires along the facing it has.
 - **The follow camera** leads the nearest axis (`follow::cardinal`).
 - **The AI's lane pricing** (`route_grid_on`) prices a seat's firing lane only
   while it faces one of the four ways.
-- **Enemy aim.** A free enemy turns to one of the four ways and lines up on a
-  seat as a four-way one does (`act_attack`).
 - **The specials' rules** (hammer, EMP, rail, rod, well, swarm) choose among
   the four ways and the hull turns to them; a grudge shot at a tower and a
   breach line up four ways too.
@@ -198,7 +221,8 @@ against 23. Four-way rounds measure exactly what they did.
 ## Knobs
 
 `tank_free_turn_speed_deg` (540) and `tank_free_pivot_deg` (90) in the movement
-group. Every other driving knob (`tank_speed`, `tank_accel_force`,
+group, `enemy_free_lead` (0.8) and `enemy_free_aim_tolerance_deg` (3) in the
+enemy group. Every other driving knob (`tank_speed`, `tank_accel_force`,
 `tank_turn_grip_force`, `tank_decel_curve_rate`) is shared with the four-way
 model.
 
@@ -209,8 +233,8 @@ any way at top speed, the reversal's pivot, `move_dir` alone, a `Cardinal`
 seat ignoring the heading, the round collider, head-on contact equal to the
 box, the wall slide never past top speed, the hit test on a turned hull (and
 box for box on the four ways), a free enemy's hull and collider, its route
-driven at an angle, the probe's turn rules, and a free round replaying bit for
-bit.
+driven at an angle, its shot at a seat off its four lines and its lead on a
+moving one, the probe's turn rules, and a free round replaying bit for bit.
 `pathfind::tests::a_clear_line_needs_every_cell_it_crosses_open` holds the
 line tests. The pinned one- and two-seat streams (`determinism_tests`) and
 `just probe-fixtures` run the `Cardinal` round, so they hold the default

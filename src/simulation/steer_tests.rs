@@ -265,6 +265,23 @@ fn enemy_at(game: &mut Game, at: Position) -> Entity {
     entity
 }
 
+/// The first shell the enemy `slot` fires within `frames`, with the seat
+/// driven by `seat`: the frame, the enemy's facing then, its bearing to
+/// the seat then and the shell's heading.
+fn first_enemy_shot(game: &mut Game, enemy: Entity, seat: Intent, frames: usize) -> Option<(usize, f32, f32, f32)> {
+    let slot = with_tank(&game.world, enemy, |t| t.owner_slot());
+    for frame in 0..frames {
+        game.update(Input::single(seat), DT, W, H);
+        if game.events().iter().any(|e| matches!(e, Event::Fired { slot: s, weapon: "shell" } if *s == slot)) {
+            let (at, rotation) = with_tank(&game.world, enemy, |t| (t.position, t.rotation));
+            let to_seat = pose(game).0 - at;
+            let shell = game.world.query::<&Shell>().iter().find(|s| s.owner == Owner::Enemy(slot)).map(|s| crate::tank::heading_deg(s.velocity))?;
+            return Some((frame, rotation, crate::tank::heading_deg(to_seat), shell));
+        }
+    }
+    None
+}
+
 /// An enemy of a free round steers freely, on a round collider; a
 /// four-way round's is the box it always was.
 #[test]
@@ -297,6 +314,34 @@ fn a_free_enemy_drives_its_route_at_an_angle() {
     let moved = with_tank(&game.world, enemy, |t| t.position) - from;
     assert!(turned, "its facing left the four ways");
     assert!(moved.x < -20.0 && moved.y < -10.0, "up and to the left at once: {moved:?}");
+}
+
+/// A free enemy lays its gun on a seat that stands off its four lines and
+/// fires: within `enemy_free_aim_tolerance_deg` of its bearing, the shell
+/// flying the way the gun points.
+#[test]
+fn a_free_enemy_fires_at_a_seat_off_its_four_lines() {
+    let t = Tuning::DEFAULT;
+    let mut game = round(Steer::Free, "");
+    let seat_at = pose(&game).0;
+    let enemy = enemy_at(&mut game, Position::new(seat_at.x + 220.0, seat_at.y + 120.0));
+    let (_, rotation, bearing, shell) = first_enemy_shot(&mut game, enemy, Intent::default(), 240).expect("it fires");
+    assert!(!Dir::ALL.iter().any(|d| d.rotation() == rotation), "off the four ways: {rotation}");
+    assert!(signed_turn(rotation, bearing).abs() <= t.enemy_free_aim_tolerance_deg + 0.5, "laid on the seat: {rotation} for {bearing}");
+    assert!(signed_turn(rotation, shell).abs() < 1.0, "the shell flies where the gun points: {shell}");
+}
+
+/// A free enemy leads a seat driving across its view: it fires ahead of
+/// the seat, on the side the seat is driving to.
+#[test]
+fn a_free_enemy_leads_a_moving_seat() {
+    let mut game = round(Steer::Free, "");
+    let seat_at = pose(&game).0;
+    let enemy = enemy_at(&mut game, Position::new(seat_at.x + 60.0, seat_at.y + 230.0));
+    // The seat drives right, across the enemy's view, from the start.
+    let right = Intent { heading: Some(90.0), ..Intent::default() };
+    let (_, rotation, bearing, _) = first_enemy_shot(&mut game, enemy, right, 240).expect("it fires");
+    assert!(signed_turn(bearing, rotation) > 1.0, "ahead of the seat, to its right: aimed {rotation}, the seat at {bearing}");
 }
 
 /// The probe's turn rules (`simulation::debug`): a four-way hull's facing

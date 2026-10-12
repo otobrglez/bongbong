@@ -15,6 +15,11 @@ use crate::{
     Position,
 };
 
+/// The seconds a tank's read of the seat it fights eases over
+/// (`Ai::seat_motion`): long enough to smooth a hull's think-to-think
+/// shove, short enough to follow a turn.
+const SEAT_MOTION_SECONDS: f32 = 0.2;
+
 /// How near the point it steers at a free hull has arrived (px): it stands
 /// there facing as it is (`Ai::steer_toward_free`).
 const FREE_ARRIVED_PX: f32 = OBSTACLE_GRID_SIZE * 0.25;
@@ -22,6 +27,10 @@ const FREE_ARRIVED_PX: f32 = OBSTACLE_GRID_SIZE * 0.25;
 /// How far off its commanded heading (degrees) a free hull may still be
 /// turning before its stuck clock runs (`Ai::think`).
 const FREE_STUCK_TURN_DEG: f32 = 30.0;
+
+/// The fastest a seat is taken to move between two thinks (px/s): past
+/// it the jump is a teleport, not a speed (`Ai::see_seat`).
+const SEAT_MOTION_MAX_PX_S: f32 = 1500.0;
 
 /// The bearings a refuge is looked for along (`Brain::refuge`): the
 /// cardinals, then the diagonals, as unit vectors.
@@ -81,9 +90,10 @@ pub struct Intent {
     /// is set. None leaves the hull as-is.
     pub face: Option<Dir>,
     /// The angle in degrees (0 = up, clockwise) a free-steering hull turns
-    /// to without moving, ahead of `face`: the heading a free enemy holds
-    /// while it yields to a tank ahead (`Ai::think`). A `Cardinal` hull
-    /// never reads it. AI-only, never on the wire.
+    /// to without moving, ahead of `face`: a free enemy's gun laid on a
+    /// seat at any angle (`Brain::hold_and_fire_at`), or the heading it
+    /// holds while it yields to a tank ahead (`Ai::think`). A `Cardinal`
+    /// hull never reads it. AI-only, never on the wire.
     pub aim: Option<f32>,
     /// True on the frame the tank wants to fire a shell.
     pub fire: bool,
@@ -797,6 +807,15 @@ pub struct Ai {
     /// than `last_move_dir`'s nearest way: what the stuck clock measures
     /// progress along while it is set (docs/free-steer.md).
     last_heading: Option<f32>,
+    /// The seat this tank fights and where it stood at the last think,
+    /// for `seat_motion`.
+    seat_seen: Option<(u8, Position)>,
+    /// How the seat this tank fights has been seen to move (px/s): its
+    /// displacement between thinks, smoothed over `SEAT_MOTION_SECONDS` -
+    /// what a free-steering tank leads its shots by (`Brain::lead_aim`).
+    /// What the seat's driver asks for is no guide: a seat pressed against
+    /// a wall asks to move and stands still. Zero for a seat just picked.
+    seat_motion: Vec2,
     /// The heading `steer_toward_free` chose this think, to be driven if
     /// the tree's move is still its way at the end of `think`. `None` for a
     /// four-way hull, a sidestep or an escape.
@@ -1115,6 +1134,8 @@ impl Default for Ai {
             retreating: false,
             last_move_dir: None,
             last_heading: None,
+            seat_seen: None,
+            seat_motion: Vec2::new(0.0, 0.0),
             free_heading: None,
             free_slow: 0.0,
             last_slow: 0.0,
@@ -1382,6 +1403,7 @@ impl Ai {
         self.sheltering = false;
         self.free_heading = None;
         self.free_slow = 0.0;
+        self.see_seat(player.position, dt);
         self.near_fight = me.position.distance_to(target) <= tuning().enemy_attack_range;
         let mut bb = Brain {
             me,
@@ -1493,6 +1515,23 @@ impl Ai {
         self.last_action = last_action;
         self.last_intent = intent;
         intent
+    }
+
+    /// Follow the seat this tank fights from where it stands now
+    /// (`seat_motion`): its displacement since the last think, eased in
+    /// over `SEAT_MOTION_SECONDS` and capped at `SEAT_MOTION_MAX_PX_S` (a
+    /// portal's jump is not a speed); a new seat starts from rest.
+    fn see_seat(&mut self, at: Position, dt: f32) {
+        match self.seat_seen {
+            Some((seat, last)) if seat == self.target_player && dt > 0.0 => {
+                let raw = Vec2::new((at.x - last.x) / dt, (at.y - last.y) / dt);
+                let raw = if raw.length() > SEAT_MOTION_MAX_PX_S { Vec2::new(0.0, 0.0) } else { raw };
+                let k = (dt / SEAT_MOTION_SECONDS).clamp(0.0, 1.0);
+                self.seat_motion = Vec2::new(self.seat_motion.x + (raw.x - self.seat_motion.x) * k, self.seat_motion.y + (raw.y - self.seat_motion.y) * k);
+            }
+            _ => self.seat_motion = Vec2::new(0.0, 0.0),
+        }
+        self.seat_seen = Some((self.target_player, at));
     }
 
     /// This tank's AI memory as plain values - for the dev server's
@@ -2972,6 +3011,11 @@ impl Brain<'_> {
         if self.dist_to_player() > self.attack_range() || !self.may_fire_at_seat() {
             return false;
         }
+        // A free hull lays its gun at any angle: in range and in the box
+        // is lined up enough.
+        if self.me.steer == Steer::Free {
+            return true;
+        }
         let (_, off_axis, in_front) = self.aim_alignment_at(self.player.position);
         off_axis <= tuning().enemy_fire_align_px && in_front
     }
@@ -3315,6 +3359,93 @@ impl Brain<'_> {
         true
     }
 
+    /// Not lined up: reposition toward this tank's engagement-ring slot
+    /// (with commitment) rather than the target's exact position, so a
+    /// group of attackers spreads out instead of piling onto the same
+    /// point - see `Brain::engage_point`. `act_attack`'s other half.
+    fn reposition(&mut self) {
+        self.reset_aim();
+        let raw = self.engage_target.unwrap_or(self.target);
+        let to = self.engage_point();
+        if to != raw && self.me.position.distance_to(to) <= OBSTACLE_GRID_SIZE * 0.5 {
+            // Kept out of a danger at the spot it was moved to: wait there
+            // facing the fight rather than driving on past it, which
+            // steering's commitment would (`steer_toward`), into the very
+            // danger.
+            self.ai.kept_out = true;
+            self.intent.move_dir = None;
+            self.intent.face = Some(Dir::toward(self.me.position, raw));
+        } else {
+            self.intent.move_dir = Some(self.steer(to));
+        }
+    }
+
+    /// The angle (degrees) a free-steering tank lays its gun at to hit
+    /// `at` (docs/free-steer.md): straight at it, or - for a seat
+    /// (`lead_seat`), with a weapon whose shot flies (`shot_speed`) - at
+    /// where the seat's seen motion (`Ai::seat_motion`) carries it over the
+    /// shot's flight, times `enemy_free_lead`. One pass of the flight time,
+    /// from the distance now: near enough at these ranges and speeds.
+    fn lead_aim(&self, at: Position, lead_seat: bool) -> f32 {
+        let me = self.me.position;
+        let ahead = match shot_speed(self.me.active_weapon()) {
+            Some(speed) if lead_seat => {
+                let flight = me.distance_to(at) / speed * tuning().enemy_free_lead;
+                let v = self.ai.seat_motion;
+                Position::new(at.x + v.x * flight, at.y + v.y * flight)
+            }
+            _ => at,
+        };
+        heading_deg(Vec2::new(ahead.x - me.x, ahead.y - me.y))
+    }
+
+    /// `hold_and_fire` for a hull that steers freely (docs/free-steer.md):
+    /// hold position with the gun laid at `aim` (degrees, `Intent::aim`)
+    /// and, once the hull has faced within `enemy_free_aim_tolerance_deg`
+    /// of it for `enemy_aim_settle` and the fire timer allows, fire - held
+    /// (mostly) when a teammate stands on the line, a misfire rolled at
+    /// point blank, as the four-way hold does.
+    fn hold_and_fire_at(&mut self, aim: f32, range: f32, at_seat: Option<u8>) {
+        let t = tuning();
+        let dir = Dir::nearest(aim);
+        self.intent.aim = Some(aim);
+        self.intent.face = Some(dir);
+        self.ai.commit(dir);
+        if !generic_fire(self.me.active_weapon()) {
+            return;
+        }
+        if signed_turn(self.me.rotation, aim).abs() > t.enemy_free_aim_tolerance_deg {
+            self.reset_aim();
+            return;
+        }
+        self.ai.aim_settle += self.dt;
+        if self.ai.aim_settle >= t.enemy_aim_settle && self.ai.fire_timer <= 0.0 {
+            let blocked = self.friendly_blocks_line(heading_vec(aim), range);
+            let hold_fire = blocked && self.rng.random_range(0.0..1.0) < t.enemy_friendly_fire_hold_chance;
+            self.ai.fire_timer = self.fire_interval();
+            if !hold_fire {
+                self.intent.fire = true;
+                self.intent.fire_aim_offset = self.roll_misfire(range);
+                self.ai.shot_at_seat = at_seat;
+            }
+        }
+    }
+
+    /// `friendly_blocks_shot` along any unit `along`: another enemy within
+    /// `enemy_fire_align_px` of the line, ahead and closer than
+    /// `max_forward`.
+    fn friendly_blocks_line(&self, along: Vec2, max_forward: f32) -> bool {
+        self.movers.iter().enumerate().any(|(i, mover)| {
+            if mover.is_player || i == self.my_index {
+                return false;
+            }
+            let (dx, dy) = (mover.position.x - self.me.position.x, mover.position.y - self.me.position.y);
+            let forward = dx * along.x + dy * along.y;
+            let off_axis = (dx * along.y - dy * along.x).abs();
+            forward > 0.0 && forward < max_forward && off_axis <= tuning().enemy_fire_align_px
+        })
+    }
+
     /// True if another enemy sits roughly on `fire_dir`'s line, closer than
     /// `max_forward` (normally the distance to the target) - i.e. firing
     /// straight down that axis right now would hit a teammate before the
@@ -3404,6 +3535,19 @@ pub(crate) fn axis_offsets(from: Position, to: Position, dir: Dir) -> (f32, f32)
         Dir::Down => (dx.abs(), dy),
         Dir::Left => (dy.abs(), -dx),
         Dir::Right => (dy.abs(), dx),
+    }
+}
+
+/// How fast `weapon`'s shot flies (px/s), for a lead (`Brain::lead_aim`):
+/// `None` for a beam, which arrives at once, and for what flies its own
+/// way - seeking missiles, lobbed grenades, a flame's cone, the specials.
+fn shot_speed(weapon: ActiveWeapon) -> Option<f32> {
+    let t = tuning();
+    match weapon {
+        ActiveWeapon::Shell => Some(t.shell_speed),
+        ActiveWeapon::Minigun => Some(t.minigun_bullet_speed),
+        ActiveWeapon::Plasma => Some(t.plasma_speed),
+        _ => None,
     }
 }
 
@@ -4571,6 +4715,9 @@ fn act_seek_shield(b: &mut Brain) -> Status {
 /// (`Brain::may_fire_at_seat`): lined up on a seat's column further out
 /// than the box reaches, the tank keeps closing in.
 fn act_attack(b: &mut Brain) -> Status {
+    if b.me.steer == Steer::Free {
+        return act_attack_free(b);
+    }
     let (fire_dir, off_axis, in_front) = b.aim_alignment();
     let at_seat = !b.hunting_frog();
     // A geometrically on-axis spot the AI can't actually shoot from (a wall
@@ -4593,24 +4740,25 @@ fn act_attack(b: &mut Brain) -> Status {
         let seat = at_seat.then_some(b.ai.target_player);
         b.hold_and_fire(fire_dir, range, seat);
     } else {
-        // Not lined up: reposition toward this tank's engagement-ring slot
-        // (with commitment) rather than the target's exact position, so a
-        // group of attackers spreads out instead of piling onto the same
-        // point - see `Brain::engage_point`.
-        b.reset_aim();
-        let raw = b.engage_target.unwrap_or(b.target);
-        let to = b.engage_point();
-        if to != raw && b.me.position.distance_to(to) <= OBSTACLE_GRID_SIZE * 0.5 {
-            // Kept out of a danger at the spot it was moved to: wait there
-            // facing the fight rather than driving on past it, which
-            // steering's commitment would (`steer_toward`), into the very
-            // danger.
-            b.ai.kept_out = true;
-            b.intent.move_dir = None;
-            b.intent.face = Some(Dir::toward(b.me.position, raw));
-        } else {
-            b.intent.move_dir = Some(b.steer(to));
-        }
+        b.reposition();
+    }
+    Status::Success
+}
+
+/// `act_attack` for a hull that steers freely (docs/free-steer.md): no
+/// axis to line up on, so with a clear line to its target and - at a seat
+/// - inside that seat's sight box, it holds where it stands, lays its gun
+/// on where the seat is going (`Brain::lead_aim`) and fires
+/// (`hold_and_fire_at`); otherwise it repositions as a four-way tank does.
+fn act_attack_free(b: &mut Brain) -> Status {
+    let at_seat = !b.hunting_frog();
+    if b.line_of_sight && (!at_seat || b.may_fire_at_seat()) {
+        let aim = b.lead_aim(b.target, at_seat);
+        let range = b.dist_to_target();
+        let seat = at_seat.then_some(b.ai.target_player);
+        b.hold_and_fire_at(aim, range, seat);
+    } else {
+        b.reposition();
     }
     Status::Success
 }
@@ -4618,10 +4766,15 @@ fn act_attack(b: &mut Brain) -> Status {
 /// A hunter's opportunistic shot at the player: already lined up (see
 /// `Brain::can_snipe_player`), so just hold and fire down that axis.
 fn act_snipe(b: &mut Brain) -> Status {
-    let (fire_dir, _, _) = b.aim_alignment_at(b.player.position);
     let range = b.dist_to_player();
     let seat = b.ai.target_player;
-    b.hold_and_fire(fire_dir, range, Some(seat));
+    if b.me.steer == Steer::Free {
+        let aim = b.lead_aim(b.player.position, true);
+        b.hold_and_fire_at(aim, range, Some(seat));
+    } else {
+        let (fire_dir, _, _) = b.aim_alignment_at(b.player.position);
+        b.hold_and_fire(fire_dir, range, Some(seat));
+    }
     if b.intent.fire {
         b.ai.snipe_cooldown = tuning().hunter_snipe_cooldown_seconds;
     }

@@ -108,7 +108,7 @@ touch-steer-right = []
 # (`tank::Steer::Free`, docs/free-steer.md): a seat's hull turns toward the
 # keys' eight ways or the touch stick's own angle at a rate and drives
 # wherever it faces, on a round collider, and the enemies follow their
-# routes at any angle. A play-test build beside the
+# routes and lay their guns at any angle. A play-test build beside the
 # four-way game, so a build without it is the shipped game byte for byte;
 # online rooms and the room server steer four ways either way.
 # `just run-free`, `just serve-web-free`.

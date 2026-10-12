@@ -857,8 +857,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   enemy (`Steer::Free`, docs/free-steer.md) follows its route at any angle
   (`Ai::steer_toward_free`: straight at its target over `Grid::plain_line`, else at the farthest
   route cell `Grid::clear_line` reaches, `Grid::route_ahead_far` reading a search past its first
-  step; no sidestep, an arrival ease-off) and its stuck clock waits out a pivot. `Ai::steer` routes
-  through `Grid`; on top: an obstacle-ahead override of the heading commitment, a stuck escape on
+  step; no sidestep, an arrival ease-off), aims at any angle with a lead from the seat's seen
+  motion (`act_attack_free`, `Brain::lead_aim`, `hold_and_fire_at`) and its stuck clock waits out a
+  pivot. `Ai::steer` routes through `Grid`; on top: an obstacle-ahead override of the heading commitment, a stuck escape on
   *displacement projected onto the commanded heading* (never a physics velocity - the solver reports
   motion for a jammed tank; stuck under `stuck_speed_eps` or `stuck_progress_fraction` of its own top
   speed, whichever is more, so a hull shoving another along at a crawl counts) held for
