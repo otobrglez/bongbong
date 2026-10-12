@@ -365,7 +365,9 @@ const BANK_PUFFS: u32 = 9;
 /// The battle's haze over the part of the field `view` shows, at `haze`
 /// (0 to 1, `Game::battle_haze`): banks of smoke drifting with the wind
 /// along a lattice anchored to the field, so a field of any size carries
-/// the same density and a bank never jumps. A bank is a loose cluster of
+/// the same density and a bank never jumps. They drift at the wind's mean
+/// (`pyro::mean_smoke_lean`), a steady speed whatever the gusts and
+/// wherever the view is. A bank is a loose cluster of
 /// small dithered discs, densest in its middle, so it has no hard edge;
 /// each disc thins to nothing within `battle_haze_clear_px` of a seat in
 /// `seats`, so a hull is never lost under it, and none covers more than
@@ -377,8 +379,7 @@ pub fn haze_banks(view: Rectangle, seats: &[Position], time: f32, haze: f32, pal
     if strength <= 0.02 {
         return;
     }
-    let lean = pyro::smoke_lean(t, Position::new(view.x + view.width / 2.0, view.y + view.height / 2.0), time);
-    let drift = time * (4.0 + 10.0 * lean.max(0.0));
+    let drift = time * (4.0 + 10.0 * pyro::mean_smoke_lean(t).max(0.0));
     let s = BANK_SPACING;
     let (i0, i1) = (((view.x - drift - s) / s).floor() as i32, ((view.x + view.width - drift + s) / s).ceil() as i32);
     let (j0, j1) = (((view.y - s) / s).floor() as i32, ((view.y + view.height + s) / s).ceil() as i32);
@@ -429,7 +430,7 @@ pub fn ash(view: Rectangle, time: f32, haze: f32, t: &Tuning, out: &mut Vec<Shap
         return;
     }
     let per_cell = t.ash_density * (haze - from) / (1.0 - from);
-    let lean = pyro::smoke_lean(t, Position::new(view.x + view.width / 2.0, view.y + view.height / 2.0), time);
+    let lean = pyro::mean_smoke_lean(t);
     let (i0, i1) = ((view.x / ASH_CELL).floor() as i32, ((view.x + view.width) / ASH_CELL).ceil() as i32);
     let (j0, j1) = ((view.y / ASH_CELL).floor() as i32, ((view.y + view.height) / ASH_CELL).ceil() as i32);
     for j in j0..j1 {
@@ -668,6 +669,35 @@ mod tests {
     }
 
     #[test]
+    fn the_haze_drifts_steadily_downwind_however_long_the_round() {
+        let t = Tuning::default();
+        let view = Rectangle::new(0.0, 0.0, 1200.0, 800.0);
+        let banks = |time: f32| {
+            let mut out = Vec::new();
+            haze_banks(view, &[], time, 1.0, false, &t, &mut out);
+            out.into_iter()
+                .map(|s| match s {
+                    Shape::Disc { center, radius, .. } => (center, radius),
+                    _ => panic!("a bank is discs"),
+                })
+                .collect::<Vec<_>>()
+        };
+        // Through gusts and lulls, early in a round and late: every disc in
+        // view is a frame later just downwind of where it was.
+        for second in [10.0, 61.0, 242.0, 601.0] {
+            for frame in (0..180).step_by(7) {
+                let time = second + frame as f32 / 60.0;
+                let (now, next) = (banks(time), banks(time + 1.0 / 60.0));
+                for &(at, radius) in now.iter().filter(|(at, _)| view.contains(*at)) {
+                    let then = next.iter().filter(|&&(_, r)| r == radius).map(|&(p, _)| p).min_by(|a, b| a.distance_to(at).total_cmp(&b.distance_to(at))).expect("the disc is still there");
+                    let (dx, dy) = (then.x - at.x, then.y - at.y);
+                    assert!(dx > 0.0 && dx < 0.5 && dy.abs() < 0.5, "a disc at {at:?} moved ({dx}, {dy}) in a frame at {time} s");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn ash_falls_only_under_a_heavy_haze() {
         let t = Tuning::default();
         let view = Rectangle::new(0.0, 0.0, 1000.0, 600.0);
@@ -677,6 +707,34 @@ mod tests {
         let mut heavy = Vec::new();
         ash(view, 10.0, 0.9, &t, &mut heavy);
         assert!(heavy.len() > 30, "{}", heavy.len());
+    }
+
+    #[test]
+    fn ash_drifts_steadily_however_long_the_round() {
+        let t = Tuning::default();
+        let view = Rectangle::new(0.0, 0.0, 1000.0, 600.0);
+        let flakes = |time: f32| {
+            let mut out = Vec::new();
+            ash(view, time, 0.9, &t, &mut out);
+            out.into_iter()
+                .map(|s| match s {
+                    Shape::Mark { pos, .. } => pos,
+                    _ => panic!("ash is marks"),
+                })
+                .collect::<Vec<_>>()
+        };
+        for second in [10.0, 61.0, 242.0, 601.0] {
+            for frame in (0..180).step_by(7) {
+                let time = second + frame as f32 / 60.0;
+                let (now, next) = (flakes(time), flakes(time + 1.0 / 60.0));
+                assert_eq!(now.len(), next.len());
+                for (a, b) in now.iter().zip(&next) {
+                    let dx = b.x - a.x;
+                    // Wrapping round its lattice cell is the one jump allowed.
+                    assert!(dx.abs() < 0.5 || dx.abs() > ASH_CELL - 1.0, "a flake at {a:?} jumped {dx} px in a frame at {time} s");
+                }
+            }
+        }
     }
 
     #[test]

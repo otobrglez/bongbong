@@ -490,6 +490,15 @@ pub fn wind_at(t: &Tuning, base: Position, time: f32) -> f32 {
     (t.grass_wind_px + t.grass_gust_px * gust * (0.55 + 0.45 * wave)) * dir_x
 }
 
+/// `wind_at` averaged over time, the same everywhere: the steady lean plus
+/// the gusts' mean (their envelope averages a half and their wave nothing).
+/// What something carried along by the wind for a whole round moves at -
+/// its offset is `time` times this, where `time` times `wind_at` would
+/// swing back and forth with every gust.
+pub fn mean_wind(t: &Tuning) -> f32 {
+    (t.grass_wind_px + t.grass_gust_px * 0.5 * 0.55) * crate::trig::cos(t.grass_gust_heading_deg.to_radians())
+}
+
 /// How far this tuft's tip leans right now, in world px: the wind, the
 /// tuft's own flutter, and whatever `tick` last recorded. Matted grass
 /// barely moves in the wind, so both are scaled down by the crush.
@@ -657,6 +666,19 @@ mod tests {
         }
         let still = Tuning { grass_wind_px: 0.0, grass_gust_px: 0.0, ..Tuning::DEFAULT };
         assert_eq!(wind_at(&still, Position::new(100.0, 100.0), 7.0), 0.0);
+    }
+
+    #[test]
+    fn the_mean_wind_is_the_wind_averaged_over_time() {
+        let t = Tuning::DEFAULT;
+        // Ten minutes at 60 Hz: thousands of the wave's periods and dozens
+        // of the envelope's.
+        let frames = 36_000;
+        for p in [Position::new(0.0, 0.0), Position::new(544.0, 272.0), Position::new(3000.0, 1500.0)] {
+            let sum: f64 = (0..frames).map(|i| wind_at(&t, p, i as f32 / 60.0) as f64).sum();
+            let average = (sum / frames as f64) as f32;
+            assert!((average - mean_wind(&t)).abs() < 0.05, "at {p:?}: averaged {average}, mean_wind {}", mean_wind(&t));
+        }
     }
 
     /// Cells round the origin cell (0, 0), as `tufts_for_cell` names them.

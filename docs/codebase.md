@@ -1066,7 +1066,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (8, about one brick course); a tuft that cannot fit takes the next of the sheet's tufts that does,
   and a cell with room for none grows none. Every tuft sorts with the tanks. Wind (`wind_at`: a
   steady lean plus gust fronts rolling across the field along `grass_gust_heading_deg` as a
-  travelling wave on a slower envelope, pure in position and clock), each tuft's own flutter, crush
+  travelling wave on a slower envelope, pure in position and clock; `mean_wind` its average over
+  time, for whatever drifts with it a whole round), each tuft's own flutter, crush
   and push are cosmetic ticks. Concealment is a *cell* query (`Terrain::conceals`) and gates four
   things - the group alert, the attack/chase tiers and ram damage - with `Ai::is_hit_alerted` as the
   exemption; gating only the shot measured worse. The shared alert
@@ -1453,7 +1454,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `step`/`step_dithered`/`between` never blend), fades through the field's Bayer pattern (`bayer`)
   down to half then in eighths, light as stepped glows with dithered band edges (`glow`,
   `glow_bands`), shaded puffs (`Puff`, `shade`, `fire_puff`, `dust_puff`), flames (`tongues`) and
-  the wind smoke leans on (`smoke_lean`, off `grass::wind_at`). Composers return `Shape`s; `draw`
+  the wind smoke leans on (`smoke_lean`, off `grass::wind_at`; `mean_smoke_lean` its average,
+  the speed of a drift whose offset is `time` times it). Composers return `Shape`s; `draw`
   paints them and `draw_glows` their light inside an additive blend, on any `Blocks` - every
   `Canvas`, and the raylib handle through `render::pyro::Rl`. Headless and pure.
 - `fireball.rs`, `burst.rs` (docs/effects.md) — composed at draw time, pure functions of what they
@@ -1498,8 +1500,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   set (`douse`: rain keeps `rain_douse_factor`, its smoke steam), `Hot` (`load`, `flare`,
   `ember`), `step_haze` (the battle's haze: fed by the loads, drained by the sky), the opt-in
   `Rules`, and the composers - `column` (puffs born on fixed ticks and hashed, as
-  `volcano::plume`; shadows down-right), `glints`, `flare`, `haze_banks` (a field-anchored lattice,
-  thinned round every seat), `haze_grade`, `ash`, `melt`, `smoke_cells`, `gust_strong`. The world
+  `volcano::plume`; shadows down-right), `glints`, `flare`, `haze_banks` (a field-anchored lattice
+  drifting at the wind's mean, thinned round every seat), `haze_grade`, `ash`, `melt`, `smoke_cells`, `gust_strong`. The world
   half: `Game::smouldering` gathers wrecks (`Tank::wreck_age`), ember beds, hot rubble and stumps,
   tower ruins and craters from state a replica keeps too; `tick_haze` (with the effects, both
   paths) keeps `Game::battle_haze`, presentation only; `tick_smoke_cover`, `relight_beds` and

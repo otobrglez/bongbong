@@ -129,7 +129,10 @@ It is drawn as:
 
 - **Banks** (`haze_banks`): a bank per cell of a lattice anchored to the
   field and drifting with the wind, so a field of any size carries the same
-  density and a bank never jumps. A bank is a loose cluster of small
+  density and a bank never jumps. The lattice moves at the wind's mean
+  (`pyro::mean_smoke_lean`, from `grass::mean_wind`), never the wind of the
+  moment: an offset of `time` times a speed that gusts would swing the
+  banks back and forth, wider the longer the round. A bank is a loose cluster of small
   dithered discs strung out along the wind, densest in its middle, so it
   has no hard edge: one flat step of the smoke ramp at half strength, its
   blocks fading in eighths, a paler step under a night or storm sky so the
@@ -142,7 +145,7 @@ It is drawn as:
   it, ungraded.
 - **Ash** (`ash`): above `ash_from_haze`, up to `ash_density` flakes per
   10,000 px^2 in the smoke ramp's palest steps, falling and drifting on a
-  lattice anchored to the field.
+  lattice anchored to the field, at the wind's mean like the banks.
 - **Light at night** (`weather::lights_in`): each hot remain a dim light
   breathing with its embers and leaping as it flares
   (`smoulder_light_strength`, `ember_light_px`), the hottest
