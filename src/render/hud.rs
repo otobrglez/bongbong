@@ -333,7 +333,33 @@ fn draw_lamp_row(d: &mut impl RaylibDraw, row: Rectangle, hud: &PlayerHud, textu
     if hud.heat_shield > 0.0 {
         draw_symbol_gauge(d, textures, PickupKind::HeatShield, x + V_SHIELD, y, row_h, hud.heat_shield, HEAT_SHIELD_COLOR, true, a);
     }
+    if let Some(air) = hud.air {
+        draw_air_box(d, textures, crate::hud::air_box(row), air, a);
+    }
 }
+
+/// The air support box (docs/air-support.md) under the ammo slot: the
+/// sortie's crate symbol and the whole seconds before it arrives - amber,
+/// red over the last three - or the symbol alone, lit, while it is in the
+/// air; a sortie queued behind it as `+1`.
+fn draw_air_box(d: &mut impl RaylibDraw, textures: &Textures, b: Rectangle, air: crate::hud::AirHud, a: f32) {
+    let (x, y, h) = (b.x.round() as i32, b.y.round() as i32, b.height.round() as i32);
+    draw_symbol(d, textures, air.sortie.pickup(), x, y, h, true, a);
+    let text_y = y + (h - HUD_TEXT_SIZE) / 2;
+    let mut text_x = x + SYMBOL + SYMBOL_GAP;
+    if let Some(seconds) = air.seconds {
+        let color = if seconds <= 3 { OFFLINE_RED } else { AIR_AMBER };
+        let label = seconds.to_string();
+        d.draw_text(&label, text_x, text_y, HUD_TEXT_SIZE, faded(color, a));
+        text_x += crate::text::width(&label, HUD_TEXT_SIZE) + SYMBOL_GAP;
+    }
+    if air.queued > 0 {
+        d.draw_text(&format!("+{}", air.queued), text_x, text_y, HUD_TEXT_SIZE, faded(DIM, a));
+    }
+}
+
+/// The air support count's colour: the crates' strobe amber.
+const AIR_AMBER: Color = Color::new(0xFF, 0xB0, 0x2E, 255);
 
 /// The heat shield gauge's colour: the pickup's molten red.
 const HEAT_SHIELD_COLOR: Color = crate::pyro::FIRE[3];

@@ -97,12 +97,13 @@ ON_PALETTE = [
     'towers_sheet.png',
     'crates_sheet.png',
     'pickup_glyphs.png',
+    'aircraft_sheet.png',
 ]
 
 # The subset that is drawn over the ground layer and so must carry no green.
 NO_GREEN = [
     'walls_sheet.png', 'props_sheet.png', 'target_sheet.png', 'barrel_explosion.png', 'portal_sheet.png', 'missile.png', 'towers_sheet.png',
-    'crates_sheet.png',
+    'crates_sheet.png', 'aircraft_sheet.png',
 ]
 
 PALETTE = {tuple(c) for c in pp.PUNY_PALETTE}
@@ -132,8 +133,9 @@ TEAM_SHEETS = {'portal_sheet.png'}
 
 # Sheets allowed the palette extension (punypalette.PUNY_EXTRA): the walls
 # sheet for its stone/rust steps, the vegetation sheets for GREEN_SHADE
-# (and, on trees, WOOD_ASH for burnt-out foliage).
-EXTENDED = {'walls_sheet.png', 'nature_sheet.png', 'nature_sheet_desert.png', 'trees_sheet.png', 'bushes_sheet.png', 'towers_sheet.png'}
+# (and, on trees, WOOD_ASH for burnt-out foliage), the towers' and the
+# aircraft's metal for their stone steps.
+EXTENDED = {'walls_sheet.png', 'nature_sheet.png', 'nature_sheet_desert.png', 'trees_sheet.png', 'bushes_sheet.png', 'towers_sheet.png', 'aircraft_sheet.png'}
 
 # The towers sheet's own admissions: the player's trim and the ooze.
 TOWER_SHEET = 'towers_sheet.png'

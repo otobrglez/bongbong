@@ -570,6 +570,21 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     `well_senses`/`pull_senses` are the AI's (`ai::WellSense`: clump, trouble, guard, shield, never
     dragging more allies than seats; `ai::PullSense`: brace or drive across). No RNG of its own.
     Tests: `well_tests.rs`.
+  - `air_support.rs` (docs/air-support.md) — air support's world half (`air_support.rs` at the
+    top is the call, the aircraft, their flight and drawing): `call_air_support` from
+    `pickup_phase` puts an `AirCall` on `Game::air_calls` (`Event::AirSupportCalled`; one sortie of
+    a seat at a time, a call made while another counts or flies waits with no arrival and
+    `start_next_call` starts it once that one is gone); `air_support_phase` (before
+    `spawn_pending`, and with `live` false on the end screen) brings in each due call's `Aircraft`
+    - a hecs component, no body, no nav - from the edge `entry_edge` hashes off its id, aimed at the
+    enemy tanks and standing enemy towers inside the seat's sight box (`air_targets_near`: nearest,
+    a tank before a tower at the same distance, then slot or cell), flies it,
+    and lets it fire: the heli's salvos are seeker missiles (`f.pending_missiles`, every missile
+    rule kept), the jet's cannon bursts and bombs `air_strike` (a `side_blast`, then
+    `air_strike_show`, which a replica plays off `Event::AirStrike`). The heli is an air target
+    (`AirKey::Aircraft`; `strike_aircraft` via `strike_air`, `air_heli_hits` bullets or any other
+    strike, `Event::AircraftDowned`). No RNG but the blasts' damage rolls. Tests:
+    `air_support_tests.rs`.
   - `hits.rs` — **the only projectile hit test**: `Terrain` (per-frame snapshot of seam-closed
     boxes, frogs, walls) and `Terrain::sweep_rewound`, a nearest-entry segment-vs-box sweep over the
     whole frame's movement (wrecks skipped). A player's shot is tested against an enemy's hull and
@@ -963,7 +978,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   FrogHealth, TowerPack, HeatShield (player-only; `heat_shield_timer` keeps every kind of heat off,
   docs/volcano.md), Grenades (player-only, `grenade.rs`), SonicHammer (`sonic.rs`), Emp
   (`emp_burst`, `emp.rs`), GaussRail (`gauss_rail`, `gauss.rs`), FpvSwarm (`fpv_swarm`, `fpv.rs`),
-  RodFromGod (`rod_from_god`, `rod.rs`), GravityWell (`gravity_well`, `well.rs`) (`PickupKind::ALL`,
+  RodFromGod (`rod_from_god`, `rod.rs`), GravityWell (`gravity_well`, `well.rs`), AirHeli and
+  AirJet (`air_heli`/`air_jet`, player-only, nothing on the tank: a call, `air_support.rs`)
+  (`PickupKind::ALL`,
   `name`/`parse` - the map's spelling -, `weapon` - the special a weapon crate arms -, `row` - the
   sheets' row -, `ink` - the symbol's shade/base/light, `punypalette.PICKUP_INK`'s values -,
   `cooks_off`); **each is drawn as a supply crate** (docs/CRATES_SPEC.md: `draw_pickup` from
@@ -1350,6 +1367,18 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`physics::HULL_LOOK_AHEAD`), so the pull presses it flush against a wall rather than into it. The probe holds a pulled tank out of its hands, a brace and a hold for the orb as
   deliberate, leaves a braced tank's clustering and pile-up uncounted, and tags an anomaly in a pull
   or within three seconds of one `/pull`. The `well` tuning group.
+
+- `air_support.rs` (docs/air-support.md, docs/AIRCRAFT_SPEC.md) — air support, headless: `Sortie`
+  (Heli, Jet; `of` a crate, `pickup`, `code`), `AirCall` (`left`), `Aircraft` (`AirStage` Inbound,
+  Attack, Egress; `advance` - the heli to its hover and out the way it came, the jet straight along
+  its run counting `flown` -, `gone`, `as_target`, `drawn`), the geometry (`entry_edge`,
+  `entry_point`, `hover_point`, `run_mark`, `gun_burst`, `bombs`) and the drawing on any canvas off
+  `Sheet::Aircraft` (`paint_shadows` after the floor, `paint_aircraft` over everything standing,
+  the rotor a blur over the mast). The `air_support` tuning group. Online the calls and the aircraft
+  are one family, `wire::AirState` (a call's arrival tick, an aircraft's ground point, height,
+  heading and stage), applied whole by `apply::apply_air_states`; the HUD's box
+  (`hud::AirHud`, `air_box` under the ammo slot in the lamp row), the minimap's mark
+  (`Marks::aircraft`) and the off-screen arrow (`ArrowKind::Aircraft`) read it.
 
 ## Drawing and effects
 

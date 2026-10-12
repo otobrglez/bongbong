@@ -33,7 +33,7 @@ use crate::simulation::{Event, HitCause, HitTarget};
 
 /// The serde tags (`Event`'s `event` field) of the variants
 /// `WireEvent::from_event` never sends.
-pub const NOT_SENT: [&str; 18] = [
+pub const NOT_SENT: [&str; 19] = [
     "physics_quarantine",
     "beat_done",
     "door_opened",
@@ -52,6 +52,7 @@ pub const NOT_SENT: [&str; 18] = [
     "tower_disabled",
     "charge_started",
     "drone_lock_lost",
+    "air_salvo",
 ];
 
 /// What the flamethrower lit (`Event::Ignited`'s `what`), in wire order.
@@ -289,7 +290,24 @@ pub enum WireEvent {
     /// The grass cell (`col`, `row`) was trampled for the round;
     /// `Event::GrassTrampled`.
     GrassTrampled { col: u8, row: u8 },
+    /// Seat `seat` called air support `id`, a `sortie`, arriving on round
+    /// tick `arrive` (`NO_TICK` while it waits); `Event::AirSupportCalled`.
+    AirSupportCalled { id: u16, seat: u8, sortie: crate::air_support::Sortie, arrive: u32 },
+    /// Air support `id`'s aircraft came in at (`x`, `y`);
+    /// `Event::AirSupportArrived`.
+    AirSupportArrived { id: u16, seat: u8, sortie: crate::air_support::Sortie, x: i16, y: i16, armed: bool },
+    /// A cannon burst or (`bomb`) a bomb of the jet `id` landed at (`x`,
+    /// `y`); `Event::AirStrike`.
+    AirStrike { id: u16, bomb: bool, x: i16, y: i16 },
+    /// The helicopter `id` was struck down at (`x`, `y`), `height` up, by
+    /// `by`; `Event::AircraftDowned`.
+    AircraftDowned { id: u16, x: i16, y: i16, height: i16, by: crate::air::AirStrike },
+    /// Air support `id` is done; `Event::AirSupportLeft`.
+    AirSupportLeft { id: u16 },
 }
+
+/// `WireEvent::AirSupportCalled::arrive` for a call waiting behind another.
+pub const NO_TICK: u32 = u32::MAX;
 
 /// `WireEvent::DroneLaunched::target` for a drone locked on no tank.
 pub const NO_TARGET: u16 = u16::MAX;
@@ -412,7 +430,26 @@ impl WireEvent {
             | Event::Disabled { .. }
             | Event::TowerDisabled { .. }
             | Event::ChargeStarted { .. }
-            | Event::DroneLockLost { .. } => return None,
+            | Event::DroneLockLost { .. }
+            | Event::AirSalvo { .. } => return None,
+            Event::AirSupportCalled { id, seat, sortie, arrive } => WireEvent::AirSupportCalled {
+                id: (id & 0xFFFF) as u16,
+                seat,
+                sortie,
+                arrive: arrive.map_or(NO_TICK, |at| (at / crate::PHYSICS_FIXED_DT).round().max(0.0) as u32),
+            },
+            Event::AirSupportArrived { id, seat, sortie, x, y, armed } => {
+                WireEvent::AirSupportArrived { id: (id & 0xFFFF) as u16, seat, sortie, x: q(x), y: q(y), armed }
+            }
+            Event::AirStrike { id, bomb, x, y } => WireEvent::AirStrike { id: (id & 0xFFFF) as u16, bomb, x: q(x), y: q(y) },
+            Event::AircraftDowned { id, x, y, height, by } => {
+                let Some(by) = crate::air::AirStrike::parse(by) else {
+                    debug_assert!(false, "unknown air strike {by:?} in Event::AircraftDowned");
+                    return None;
+                };
+                WireEvent::AircraftDowned { id: (id & 0xFFFF) as u16, x: q(x), y: q(y), height: q(height), by }
+            }
+            Event::AirSupportLeft { id } => WireEvent::AirSupportLeft { id: (id & 0xFFFF) as u16 },
             Event::RodCalled { id, slot, seat, cell, land } => WireEvent::RodCalled {
                 id: (id & 0xFFFF) as u16,
                 slot: slot_u16(slot),
@@ -656,6 +693,20 @@ impl WireEvent {
                 Event::DroneDowned { id: id as u32, x: d(x), y: d(y), height: d(height), by: by.name() }
             }
             WireEvent::DroneCrashed { id, x, y } => Event::DroneCrashed { id: id as u32, x: d(x), y: d(y) },
+            WireEvent::AirSupportCalled { id, seat, sortie, arrive } => Event::AirSupportCalled {
+                id: id as u32,
+                seat,
+                sortie,
+                arrive: (arrive != NO_TICK).then(|| arrive as f32 * crate::PHYSICS_FIXED_DT),
+            },
+            WireEvent::AirSupportArrived { id, seat, sortie, x, y, armed } => {
+                Event::AirSupportArrived { id: id as u32, seat, sortie, x: d(x), y: d(y), armed }
+            }
+            WireEvent::AirStrike { id, bomb, x, y } => Event::AirStrike { id: id as u32, bomb, x: d(x), y: d(y) },
+            WireEvent::AircraftDowned { id, x, y, height, by } => {
+                Event::AircraftDowned { id: id as u32, x: d(x), y: d(y), height: d(height), by: by.name() }
+            }
+            WireEvent::AirSupportLeft { id } => Event::AirSupportLeft { id: id as u32 },
             WireEvent::DrumLaunched { x, y, to_x, to_y, drum } => {
                 Event::DrumLaunched { x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y), drum }
             }
@@ -821,6 +872,12 @@ mod tests {
             Event::DroneDowned { id: 18, x: 300.0, y: 180.0, height: 36.0, by: "tesla" },
             Event::DroneCrashed { id: 18, x: 310.0, y: 184.0 },
             Event::DroneLockLost { id: 19, why: "canopy" },
+            Event::AirSupportCalled { id: 50, seat: 1, sortie: crate::air_support::Sortie::Jet, arrive: Some(900.0 * crate::PHYSICS_FIXED_DT) },
+            Event::AirSupportArrived { id: 50, seat: 1, sortie: crate::air_support::Sortie::Heli, x: 320.0, y: -96.0, armed: true },
+            Event::AirSalvo { id: 50, x: 300.0, y: 180.0 },
+            Event::AirStrike { id: 51, bomb: true, x: 300.0, y: 180.5 },
+            Event::AircraftDowned { id: 50, x: 300.0, y: 180.0, height: 40.0, by: "bullet" },
+            Event::AirSupportLeft { id: 51 },
             Event::Disabled { slot: 4, x: 128.0, y: 160.0 },
             Event::TowerDisabled { x: 112.0, y: 80.0 },
             Event::LavaBombLaunched { x: 640.0, y: 352.0, to_x: 800.0, to_y: 416.0 },
@@ -879,7 +936,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 77, "one sample per Event variant");
+        assert_eq!(seen.len(), 83, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

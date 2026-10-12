@@ -1056,6 +1056,7 @@ pub mod emp;
 pub mod gauss;
 pub mod fpv;
 pub mod air;
+pub mod air_support;
 pub mod rod;
 pub mod smoulder;
 pub mod zone;

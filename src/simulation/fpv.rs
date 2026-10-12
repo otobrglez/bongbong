@@ -392,6 +392,8 @@ impl Game {
     /// key (`air.rs`).
     pub fn air_targets(&self) -> Vec<AirTarget> {
         let mut out: Vec<AirTarget> = self.world.query::<&Drone>().iter().filter(|d| d.in_air()).map(Drone::as_target).collect();
+        let t = tuning();
+        out.extend(self.world.query::<&crate::air_support::Aircraft>().iter().filter_map(|a| a.as_target(&t)));
         out.sort_by_key(|a| a.key);
         out
     }
@@ -410,7 +412,10 @@ impl Game {
     /// when it goes down. True when it did. The one thing that changes an
     /// air target.
     pub(super) fn strike_air(&mut self, f: &mut Frame, key: AirKey, by: AirStrike) -> bool {
-        let AirKey::Drone(id) = key;
+        let id = match key {
+            AirKey::Drone(id) => id,
+            AirKey::Aircraft(id) => return self.strike_aircraft(f, id, by),
+        };
         let entity = self.world.query::<(Entity, &Drone)>().iter().find(|(_, d)| d.id == id).map(|(e, _)| e);
         let Some(entity) = entity else { return false };
         let Ok(mut d) = self.world.get::<&mut Drone>(entity) else { return false };

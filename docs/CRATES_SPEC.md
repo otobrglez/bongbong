@@ -11,8 +11,8 @@ the drawing, the shows a crate puts on and the breakable crates behind
 
 | File | Size | Grid | Drawn at |
 |---|---|---|---|
-| `static/crates_sheet.png` | 280 × 640 | 7 cols × 16 rows of 40 px | 1:1, centred on the pickup's 32 px cell (`CRATE_CELL`) |
-| `static/pickup_glyphs.png` | 24 × 384 | 1 col × 16 rows of 24 px | 1:1 on the field; 24 pt in the HUD and the builder's bar |
+| `static/crates_sheet.png` | 280 × 840 | 7 cols × 21 rows of 40 px | 1:1, centred on the pickup's 32 px cell (`CRATE_CELL`) |
+| `static/pickup_glyphs.png` | 24 × 504 | 1 col × 21 rows of 24 px | 1:1 on the field; 24 pt in the HUD and the builder's bar |
 
 Both are written by `tools/spritegen/gen_crates.py` (raw PNG bytes, no
 Pillow, deterministic - every choice is a position hash):
@@ -26,7 +26,9 @@ Never edit them by hand. The rows are `PickupKind` in declaration order
 (`PickupKind::row`, the generator's `KINDS`): health, ammo, laser, minigun,
 plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack,
 heat_shield, grenades, sonic_hammer, emp_burst, gauss_rail, fpv_swarm,
-rod_from_god, gravity_well.
+rod_from_god, gravity_well, air_heli, air_jet (docs/air-support.md: a
+helicopter's crossed blades and a jet from above, each in its airframe's
+ink with its lights in a strobe's amber).
 
 ### Columns of `crates_sheet.png`
 

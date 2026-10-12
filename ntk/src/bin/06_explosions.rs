@@ -72,6 +72,7 @@ fn main() {
     let towers = load(&mut rl, "static/towers_sheet.png");
     let crates = load(&mut rl, "static/crates_sheet.png");
     let pickup_glyphs = load(&mut rl, "static/pickup_glyphs.png");
+    let aircraft = load(&mut rl, "static/aircraft_sheet.png");
     let portal = load(&mut rl, "static/portal_sheet.png");
     let tank_glow = load(&mut rl, "static/scifi_tanks_glow.png");
     let tank_modules = load(&mut rl, "static/tank_modules.png");
@@ -177,6 +178,7 @@ fn main() {
             towers: &towers,
             crates: &crates,
             pickup_glyphs: &pickup_glyphs,
+            aircraft: &aircraft,
             portal: &portal,
             obstacles: &obstacles,
             props: &props,

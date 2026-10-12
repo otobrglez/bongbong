@@ -196,7 +196,57 @@ pub struct PlayerHud {
     pub lamps: Option<u8>,
     /// Fraction of a heat shield left, 0 when none is on.
     pub heat_shield: f32,
+    /// The seat's air support (docs/air-support.md), `None` while it has
+    /// none called or in the air.
+    pub air: Option<AirHud>,
 }
+
+/// A seat's air support as its block shows it: the box under the ammo
+/// slot (`air_box`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AirHud {
+    /// The sortie counting down, or in the air.
+    pub sortie: crate::air_support::Sortie,
+    /// Whole seconds before it arrives (`ceil`, never under 1); `None` once
+    /// it is in the air.
+    pub seconds: Option<u32>,
+    /// Sorties queued behind it.
+    pub queued: u8,
+}
+
+impl AirHud {
+    /// Seat `seat`'s air support on `game`, read on the client's present
+    /// (`Game::zone_lead`): its aircraft in the air first, else its counting
+    /// call, with the calls waiting behind.
+    pub fn of(game: &Game, seat: u8) -> Option<AirHud> {
+        let calls: Vec<&crate::air_support::AirCall> = game.air_calls().iter().filter(|c| c.seat == seat).collect();
+        let flying = game.aircraft().into_iter().find(|a| a.seat == seat);
+        let now = game.time + game.zone_lead;
+        let counting = calls.iter().find(|c| c.arrive_at.is_some());
+        let waiting = calls.iter().filter(|c| c.arrive_at.is_none()).count();
+        let queued = waiting.min(u8::MAX as usize) as u8;
+        match (flying, counting) {
+            (Some(a), _) => Some(AirHud { sortie: a.sortie, seconds: None, queued }),
+            (None, Some(c)) => {
+                let left = c.left(now).unwrap_or(0.0);
+                Some(AirHud { sortie: c.sortie, seconds: Some((left.ceil() as u32).max(1)), queued })
+            }
+            (None, None) => calls.first().map(|c| AirHud { sortie: c.sortie, seconds: None, queued: queued.saturating_sub(1) }),
+        }
+    }
+}
+
+/// The air support box in a block's lamp row `row`: under the ammo slot,
+/// `WEAPON_SLOT_W` wide, the row's height. What the painter fills and the
+/// tests pin.
+pub fn air_box(row: Rectangle) -> Rectangle {
+    let scale = row.height / ROW_H;
+    Rectangle::new(row.x + AIR_BOX_X * scale, row.y, WEAPON_SLOT_W as f32 * scale, row.height)
+}
+
+/// Where the air support box starts in a lamp row: under the weapon's
+/// symbol (`render::hud`'s `V_WEAPON`).
+pub const AIR_BOX_X: f32 = 108.0;
 
 impl PlayerHud {
     /// A wreck's readouts: everything at zero, nothing live.
@@ -216,6 +266,7 @@ impl PlayerHud {
             shield: 0.0,
             lamps: None,
             heat_shield: 0.0,
+            air: None,
         }
     }
 
@@ -223,7 +274,9 @@ impl PlayerHud {
         let t = tuning();
         with_tank(&game.world, entity, |tank| {
             if tank.is_wreck() {
-                return PlayerHud::empty();
+                // The call answers a wrecked seat too: its box stays.
+                let air = game.player_index(entity).and_then(|seat| AirHud::of(game, seat as u8));
+                return PlayerHud { air, ..PlayerHud::empty() };
             }
             let boost = if t.speed_boost_duration_seconds > 0.0 {
                 (tank.speed_boost_timer / t.speed_boost_duration_seconds).clamp(0.0, 1.0)
@@ -239,6 +292,7 @@ impl PlayerHud {
                 shield: tank.shield_charge(),
                 lamps: game.lamps_in_play().then(|| game.player_index(entity).map_or(0, |seat| game.lamps_left(seat as usize))),
                 heat_shield: tank.heat_shield_fraction(),
+                air: game.player_index(entity).and_then(|seat| AirHud::of(game, seat as u8)),
             }
         })
     }
@@ -409,6 +463,14 @@ pub fn heat_shield_up(game: &Game, local_seat: Option<u8>) -> bool {
         .chain(second)
         .filter_map(|i| game.seat(i))
         .any(|e| with_tank(&game.world, e, |tank| !tank.is_wreck() && tank.heat_shield_fraction() > 0.0))
+}
+
+/// Whether a seat the blocks show has air support called or in the air,
+/// whose box gives them their lamp row (`CornerShape::air_support`). A
+/// wreck's block still shows it: the call answers a wrecked seat too.
+pub fn air_support_up(game: &Game, local_seat: Option<u8>) -> bool {
+    let (local, second) = block_seats(game, local_seat);
+    std::iter::once(local).chain(second).any(|i| AirHud::of(game, i as u8).is_some())
 }
 
 /// Colour for a HUD number (shells or HP) given its current value and max:
@@ -808,12 +870,16 @@ pub struct CornerShape {
     /// (`PlayChrome::heat_shield`): every block has its lamp row, for the
     /// gauge.
     pub heat_shield: bool,
+    /// Air support is called or in the air for a seat the blocks show
+    /// (`PlayChrome::air_support`): every block has its lamp row, for the
+    /// box.
+    pub air_support: bool,
 }
 
 impl CornerShape {
     /// Whether the blocks have a lamp row: only while it holds something.
     pub fn lamp_row(&self) -> bool {
-        self.lanterns || self.heat_shield
+        self.lanterns || self.heat_shield || self.air_support
     }
 }
 
@@ -838,6 +904,7 @@ impl CornerShape {
                 minimap: chrome.minimap,
                 lanterns: chrome.lanterns,
                 heat_shield: chrome.heat_shield,
+                air_support: chrome.air_support,
             }
         })
     }
@@ -1503,6 +1570,9 @@ pub struct PlayChrome {
     /// A heat shield is up on a seat the blocks show (`heat_shield_up`):
     /// a lamp row under each block with its gauge, for as long as it lasts.
     pub heat_shield: bool,
+    /// Air support is called or in the air for a seat the blocks show
+    /// (`air_support_up`): a lamp row under each block with its box.
+    pub air_support: bool,
     /// How dark the fade through black between rounds is, 0 to 1
     /// (`Session::curtain`), drawn over everything else.
     pub curtain: f32,
@@ -1877,6 +1947,38 @@ mod hud_tests {
         assert!(heat_shield_up(&room, Some(2)));
     }
 
+    /// Air support called for a seat the blocks show grows their lamp row,
+    /// with the box under the ammo slot, apart from the lantern and the
+    /// heat shield's gauge; it counts down in whole seconds and stays on a
+    /// wrecked seat's block.
+    #[test]
+    fn the_lamp_row_comes_with_air_support() {
+        use crate::air_support::{AirCall, Sortie};
+        let mut game = round(1);
+        assert!(!air_support_up(&game, None), "nothing to show");
+        let at = game.time + 14.2;
+        game.air_calls.push(AirCall { id: 9, seat: 0, sortie: Sortie::Heli, arrive_at: Some(at) });
+        game.air_calls.push(AirCall { id: 10, seat: 0, sortie: Sortie::Jet, arrive_at: None });
+        assert!(air_support_up(&game, None), "the box needs the row");
+        assert_eq!(AirHud::of(&game, 0), Some(AirHud { sortie: Sortie::Heli, seconds: Some(15), queued: 1 }));
+        let chrome = PlayChrome { hud: true, air_support: air_support_up(&game, None), ..PlayChrome::default() };
+        let shape = CornerShape::of(&chrome, 1).expect("play draws the corners");
+        let c = corners(&UiFrame::plain((1600.0, 900.0)), &shape);
+        let row = c.lamp_row(c.blocks[0]).expect("the block grows its row");
+        let b = air_box(row);
+        assert!(b.x >= row.x && b.x + b.width <= row.x + row.width, "inside its row");
+        assert!(b.x >= row.x + 60.0 * row.height / ROW_H, "clear of the lantern");
+        assert!(b.x + b.width <= row.x + 244.0 * row.height / ROW_H, "clear of the heat shield's gauge");
+        let entity = game.seat(0).expect("seat 0");
+        game.world.get::<&mut Tank>(entity).expect("a tank").damage = MAX_DAMAGE;
+        assert!(air_support_up(&game, None), "a wrecked seat's call still comes");
+        // A room shows its own seat's block; another seat's call is not its.
+        let mut room = round(3);
+        room.air_calls.push(AirCall { id: 3, seat: 2, sortie: Sortie::Jet, arrive_at: Some(room.time + 5.0) });
+        assert!(!air_support_up(&room, Some(0)));
+        assert!(air_support_up(&room, Some(2)));
+    }
+
     /// A seat dying takes nothing away: the same chips in the same order,
     /// the dead one empty and marked. Numbers moving do not shift the
     /// list either.
@@ -1959,11 +2061,13 @@ mod hud_tests {
             minimap: None,
             lanterns: false,
             heat_shield: false,
+            air_support: false,
         };
         vec![
             ("one", play),
             ("lamps", CornerShape { lanterns: true, ..play }),
             ("heat shield", CornerShape { heat_shield: true, ..play }),
+            ("air support", CornerShape { air_support: true, ..play }),
             ("couch pair with lamps", CornerShape { layout: HudLayout::Two, lanterns: true, ..play }),
             ("couch pair with a heat shield", CornerShape { layout: HudLayout::Two, heat_shield: true, ..play }),
             ("free play", CornerShape { level_button: false, ..play }),

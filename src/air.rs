@@ -3,7 +3,8 @@
 //! stood on the ground, and everything in the air - missiles, flying drums,
 //! lava bombs, globs, grenades aloft - was struck by nothing. The drones are
 //! the first air targets; a later weapon that puts something in the air
-//! makes it one by adding a key.
+//! makes it one by adding a key - air support's helicopter
+//! (docs/air-support.md) is the second.
 //!
 //! What reads them (`Game::air_targets`, a list sorted by key): the bullets'
 //! hit test (`Terrain::sweep_rewound` with `strikes_air`), lag
@@ -38,6 +39,9 @@ use crate::shell::Owner;
 pub enum AirKey {
     /// An FPV drone, by its per-round id (`fpv::Drone::id`).
     Drone(u32),
+    /// An air support helicopter, by its call's id
+    /// (`air_support::Aircraft::id`).
+    Aircraft(u32),
 }
 
 /// What struck an air target (`Event::DroneDowned::by`). The variant order

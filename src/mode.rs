@@ -1229,6 +1229,7 @@ impl Session {
                 minimap: self.minimap_slot(),
                 lanterns: self.shown().lamps_in_play(),
                 heat_shield: crate::hud::heat_shield_up(self.shown(), self.online.as_ref().and_then(AnyRound::seat)),
+                air_support: crate::hud::air_support_up(self.shown(), self.online.as_ref().and_then(AnyRound::seat)),
                 ..PlayChrome::default()
             },
             Driver::Lobby => {
@@ -1269,6 +1270,7 @@ impl Session {
                 minimap: (self.driver == Driver::Play).then(|| self.minimap_slot()).flatten(),
                 lanterns: self.game.lamps_in_play(),
                 heat_shield: crate::hud::heat_shield_up(&self.game, None),
+                air_support: crate::hud::air_support_up(&self.game, None),
             },
         }
     }

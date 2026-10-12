@@ -737,6 +737,7 @@ mod touch_tests {
             minimap: None,
             lanterns: false,
             heat_shield: false,
+            air_support: false,
         };
         let c = corners(&ui, &shape);
         let mut t = TouchScheme::default();
