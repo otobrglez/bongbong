@@ -1406,12 +1406,16 @@ tunables! {
         well_form_seconds: f32 = 0.4 in 0.0 ..= 3.0;
         /// How long a well pulls before it collapses.
         well_pull_seconds: f32 = 4.0 in 0.5 ..= 15.0;
-        /// How far a well reaches (px; four cells).
-        well_radius_px: f32 = 128.0 in 32.0 ..= 480.0;
+        /// How far a well reaches (px; about four and a half cells). Keep
+        /// it under `well_ai_min_px` less `well_ai_friend_margin_px`: an
+        /// enemy's nearest anchor - its shield - stands that far past its
+        /// muzzle, a breaker's muzzle is at its hull's front, and a longer
+        /// reach puts the enemy in its own pull.
+        well_radius_px: f32 = 140.0 in 32.0 ..= 480.0;
         /// The core (px): the pull is strongest at its rim and fades to
         /// nothing at the centre; a shot, missile, drone or orb that passes
         /// inside it is swallowed.
-        well_core_px: f32 = 12.0 in 2.0 ..= 48.0;
+        well_core_px: f32 = 13.0 in 2.0 ..= 48.0;
         /// Along a hull's tracks, the current at the strongest point for
         /// the chassis-free mass (px/s): the drive runs in its frame, so a
         /// hull driving straight away nets its speed less this.
@@ -1431,7 +1435,7 @@ tunables! {
         /// The pull on a grenade's ground motion (px/s²).
         well_grenade_pull: f32 = 600.0 in 0.0 ..= 5000.0;
         /// The ring captured grenades and held drums circle on (px).
-        well_ring_px: f32 = 24.0 in 8.0 ..= 64.0;
+        well_ring_px: f32 = 26.0 in 8.0 ..= 64.0;
         /// How fast they circle it (rad/s, clockwise as drawn).
         well_orbit_speed: f32 = 3.0 in 0.0 ..= 20.0;
         /// How long a lifted drum takes to spiral from its cell to the
@@ -4273,7 +4277,7 @@ tunables! {
         /// Headlights: how far ahead a hull's beam reaches (px; an enemy's
         /// reaches four fifths as far), half the cone's angle (degrees) and
         /// how bright it is.
-        headlight_length_px: f32 = 190.0 in 0.0 ..= 600.0;
+        headlight_length_px: f32 = 210.0 in 0.0 ..= 600.0;
         headlight_half_angle_deg: f32 = 24.0 in 4.0 ..= 80.0;
         headlight_strength: f32 = 1.0 in 0.0 ..= 3.0;
         /// The glow every hull carries in its seat's colour (enemies a dim
