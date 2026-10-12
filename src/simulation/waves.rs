@@ -219,9 +219,7 @@ impl Game {
             super::wear::press_treads(&mut self.wear, tank, before, f.dt, &floor, look, now);
         }
         for (entity, slot) in arrived {
-            let (pos, half, mass) =
-                with_tank(&self.world, entity, |t| (t.position, t.move_half_extents(t.facing_along_x()), t.mass()));
-            let body = self.physics.spawn_tank(pos, half, mass);
+            let body = with_tank(&self.world, entity, |t| super::spawn_hull(&mut self.physics, t));
             with_tank_mut(&self.world, entity, |t| t.body = Some(body));
             self.world.remove_one::<RollIn>(entity).expect("entity from this frame's roll-in query still exists");
             if !self.is_player(entity) {
@@ -491,6 +489,7 @@ impl Game {
                 visual_rotation: rotation,
                 turret_visual_rotation: rotation,
                 owner: t.owner,
+                steer: t.steer,
                 ..Tank::default()
             };
         });
@@ -679,7 +678,7 @@ impl Game {
         };
         let row = self.wave.pending[0];
         let slot = self.take_slot();
-        let mut tank = roll_enemy_tank(&mut f.rng, row, gate.outside, slot);
+        let mut tank = roll_enemy_tank(&mut f.rng, row, gate.outside, slot, self.steer);
         let rotation = gate.heading().rotation();
         tank.rotation = rotation;
         tank.visual_rotation = rotation;
@@ -697,7 +696,7 @@ impl Game {
     pub(super) fn training_roll_in(&mut self, f: &mut Frame, row: i32, role: Role, frog_only: bool) -> Option<Entity> {
         let GatePick::Free(gate) = self.pick_gate(f) else { return None };
         let slot = self.take_slot();
-        let mut tank = roll_enemy_tank(&mut f.rng, row, gate.outside, slot);
+        let mut tank = roll_enemy_tank(&mut f.rng, row, gate.outside, slot, self.steer);
         let rotation = gate.heading().rotation();
         tank.rotation = rotation;
         tank.visual_rotation = rotation;
@@ -760,10 +759,10 @@ impl Game {
             })
         });
         let slot = self.take_slot();
-        let mut tank = roll_enemy_tank(&mut f.rng, row, pos, slot);
+        let mut tank = roll_enemy_tank(&mut f.rng, row, pos, slot, self.steer);
         tank.visual_rotation = tank.rotation;
         tank.turret_visual_rotation = tank.rotation;
-        tank.body = Some(self.physics.spawn_tank(pos, tank.move_half_extents(false), tank.mass()));
+        tank.body = Some(super::spawn_hull(&mut self.physics, &tank));
         let mut ai = Ai::with_role(roll_role(self.mission, &mut f.rng));
         // A wave tank all the same: called to the fight on a field map.
         ai.field.called = self.field_map;

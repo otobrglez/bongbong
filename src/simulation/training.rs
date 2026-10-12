@@ -295,11 +295,11 @@ impl Game {
                 shells_ammo: t.shells_ammo,
                 position: at,
                 owner: t.owner,
+                steer: t.steer,
                 ..Tank::default()
             };
         });
-        let (half, mass) = with_tank(&self.world, entity, |t| (t.move_half_extents(false), t.mass()));
-        let body = self.physics.spawn_tank(at, half, mass);
+        let body = with_tank(&self.world, entity, |t| super::spawn_hull(&mut self.physics, t));
         with_tank_mut(&self.world, entity, |t| t.body = Some(body));
         self.player_fire_held_last_frame[seat] = false;
         self.engage[seat].clear();

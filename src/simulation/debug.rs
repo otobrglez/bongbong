@@ -541,6 +541,43 @@ pub fn signed_quarter_turn(old: f32, new: f32) -> Option<f32> {
     }
 }
 
+/// One step of the spin chain from hull angle `old` to `new` (degrees):
+/// the signed turn, clockwise positive, and `None` for a reversal, which
+/// breaks the chain rather than extending it. A four-way hull's steps are
+/// its quarter turns and reversals, exactly `signed_quarter_turn`'s; a free
+/// hull's (docs/free-steer.md) are the few degrees it turns a tick, so the
+/// chain sums the angle it really turned rather than the four ways it
+/// passed.
+pub fn spin_step(old: f32, new: f32) -> Option<f32> {
+    let delta = crate::tank::signed_turn(old, new);
+    (delta.abs() < 179.0).then_some(delta)
+}
+
+/// How far past the half-way line between two of the four ways a free
+/// hull turns before the turn rules read it on the next one
+/// (`turn_heading`).
+pub const TURN_HYSTERESIS_DEG: f32 = 10.0;
+
+/// The heading the turn rules (jitter, spin, the live turn counters) read
+/// for a hull facing `rotation`, given the one they read last (`held`, one
+/// of the four ways): `rotation` itself on one of the four ways - every
+/// facing a four-way hull has, so its counts are exactly what they always
+/// were - and for a free hull between them (docs/free-steer.md) the way
+/// it is nearest, `held` kept until it turns `TURN_HYSTERESIS_DEG` past
+/// the half-way line. A free hull laying its gun on a moving seat a
+/// fraction of a degree at a time turns nothing; one weaving across a
+/// diagonal turns each time it really swings.
+pub fn turn_heading(held: f32, rotation: f32) -> f32 {
+    if crate::tank::Dir::ALL.iter().any(|d| d.rotation() == rotation) {
+        return rotation;
+    }
+    if crate::tank::signed_turn(held, rotation).abs() <= 45.0 + TURN_HYSTERESIS_DEG {
+        held
+    } else {
+        crate::tank::Dir::nearest(rotation).rotation()
+    }
+}
+
 /// The direction of a screen-space velocity in the game's heading
 /// convention (0 = up, 90 = right, clockwise), `None` when it is too slow
 /// to have one.
@@ -1049,11 +1086,14 @@ impl Game {
                 tank.turret_visual_rotation = rot;
             }
             let body = tank.body.expect("tank should always have a physics body once spawned");
-            (body, tank.move_half_extents(tank.facing_along_x()))
+            // A free hull's collider is round: nothing to refit.
+            (body, (tank.steer == crate::tank::Steer::Cardinal).then(|| tank.move_half_extents(tank.facing_along_x())))
         };
         self.physics.set_position(body, pos);
-        let collider = self.physics.collider_of(body);
-        self.physics.resize_collider(collider, half_extents);
+        if let Some(half_extents) = half_extents {
+            let collider = self.physics.collider_of(body);
+            self.physics.resize_collider(collider, half_extents);
+        }
         Ok(())
     }
 
@@ -1144,7 +1184,7 @@ impl Game {
             tank.reticle = tank.charge.filter(|c| c.weapon == crate::tank::ActiveWeapon::RodFromGod).map(|_| {
                 let t = tuning();
                 let range = crate::rod::Range::of(tank.position, field, &t);
-                let facing = crate::tank::Dir::from_rotation(tank.rotation).unwrap_or(crate::tank::Dir::Up);
+                let facing = tank.facing();
                 crate::rod::Reticle::new(crate::rod::reticle_start(tank.position, facing, &range, &t))
             });
         }
@@ -1245,10 +1285,11 @@ impl Game {
             rotation: 180.0,
             speed_scale: factor,
             owner: Owner::Enemy(slot),
+            steer: self.steer,
             ..Tank::default()
         };
         super::wear::roll_tread(&mut enemy, rng);
-        enemy.body = Some(self.physics.spawn_tank(pos, enemy.move_half_extents(false), enemy.mass()));
+        enemy.body = Some(super::spawn_hull(&mut self.physics, &enemy));
         self.world.spawn((enemy, Ai::with_role(role.unwrap_or_default())));
         Ok(slot)
     }

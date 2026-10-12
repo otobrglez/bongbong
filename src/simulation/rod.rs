@@ -22,7 +22,7 @@ use crate::obstacle::{face_toward, Obstacle};
 use crate::rod::{self, Ground, RodCall, RodImpactFx};
 use crate::shell::Owner;
 use crate::shockwave::Shockwave;
-use crate::tank::{ActiveWeapon, Dir, Tank};
+use crate::tank::{ActiveWeapon, Tank};
 use crate::tuning::{tuning, Tuning};
 use crate::zone::{Zone, ZoneKind};
 use crate::{MAX_DAMAGE, MAX_SEATS, OBSTACLE_GRID_SIZE, Position};
@@ -232,7 +232,7 @@ impl Game {
             }
             let line = tank.position - center;
             let len = line.length();
-            let dir = if len > 1e-3 { line / len } else { Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up).vec() };
+            let dir = if len > 1e-3 { line / len } else { tank.forward() };
             let mass_factor = tank.mass() / (tank.scale * tank.scale);
             let v = speed(mass_factor, d);
             if v > 0.0 {

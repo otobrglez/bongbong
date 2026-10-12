@@ -82,6 +82,8 @@ mod well_tests;
 #[cfg(test)]
 mod sonic_tests;
 #[cfg(test)]
+mod steer_tests;
+#[cfg(test)]
 mod tower_tests;
 mod waves;
 #[cfg(test)]
@@ -243,7 +245,7 @@ use crate::pickup::{Pickup, PickupKind};
 use crate::plasma::{Plasma, PlasmaVariant};
 use crate::shell::{Owner, Shell, ShellState};
 use crate::shockwave::Shockwave;
-use crate::tank::{ActiveWeapon, Dir, Tank, TankKind, Trigger};
+use crate::tank::{ActiveWeapon, Dir, Steer, Tank, TankKind, Trigger};
 use crate::{
     DAMAGE_VARIANTS,
     FROG_COLLIDER_HALF_EXTENT,
@@ -1325,6 +1327,12 @@ pub struct Game {
     /// How many seats this round holds. Set before `init` and kept across
     /// restarts; `init` spawns exactly `players.count()` tanks.
     pub players: PlayerCount,
+    /// How the seats steer (`Steer`, docs/free-steer.md): four ways, or
+    /// freely under the `free-steer` build (`Steer::BUILD`, which the
+    /// window sets on its local round). Set before `init` and kept across
+    /// restarts, like `players`; the enemies steer four ways whatever it
+    /// says, and nothing online ever sets it.
+    pub steer: Steer,
     /// The couch's own seat count while a training round seats one
     /// (docs/training-stage.md): `init` sets it aside on a map with a
     /// training script and puts it back on the next map without one.
@@ -1879,6 +1887,7 @@ impl Game {
             damage_variant: rng.random_range(0..DAMAGE_VARIANTS),
             position: map::cell_to_world(start_cell.0, start_cell.1),
             owner: Owner::Player(0),
+            steer: self.steer,
             ..Tank::default()
         };
         if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
@@ -1886,7 +1895,7 @@ impl Game {
         }
         wear::roll_tread(&mut tank, &mut rng);
         // Spawn facing up (rotation 0): the Y-axis collider orientation.
-        tank.body = Some(self.physics.spawn_tank(tank.position, tank.move_half_extents(false), tank.mass()));
+        tank.body = Some(spawn_hull(&mut self.physics, &tank));
         let center = tank.position;
         // Keeps enemies off the player's spawn point, and enemies off each
         // other so a crowded round doesn't start with tanks ramming.
@@ -2043,13 +2052,14 @@ impl Game {
                 damage_variant: rng.random_range(0..DAMAGE_VARIANTS),
                 position,
                 owner: Owner::Player(seat as u8),
+                steer: self.steer,
                 ..Tank::default()
             };
             if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
                 tank.raise_shield();
             }
             wear::roll_tread(&mut tank, &mut rng);
-            tank.body = Some(self.physics.spawn_tank(tank.position, tank.move_half_extents(false), tank.mass()));
+            tank.body = Some(spawn_hull(&mut self.physics, &tank));
             self.seats[seat] = Some(self.world.spawn((tank,)));
             others.push(position);
         }
@@ -2108,12 +2118,12 @@ impl Game {
                 })
             });
             let erow = TANK_SPRITE_ORDER[enemy_positions.len() % TANK_SPRITE_ORDER.len()];
-            let mut enemy = roll_enemy_tank(&mut rng, erow, pos, self.first_enemy_slot() + enemy_positions.len());
+            let mut enemy = roll_enemy_tank(&mut rng, erow, pos, self.first_enemy_slot() + enemy_positions.len(), self.steer);
             // Last of the per-enemy rolls, and skipped outright at a zero
             // share, so a mission without hunters draws exactly what a
             // Destroy round does.
             let role = roll_role(self.mission, &mut rng);
-            enemy.body = Some(self.physics.spawn_tank(pos, enemy.move_half_extents(false), enemy.mass()));
+            enemy.body = Some(spawn_hull(&mut self.physics, &enemy));
             enemy_positions.push(pos);
             field_pool.place(pos, enemy_clear);
             self.world.spawn((enemy, Ai::with_role(role)));
@@ -2729,14 +2739,14 @@ impl Game {
         // The room's order (`drive_player`): a rod's reticle up takes the
         // stick and the hull stands.
         let aiming = tank.charge.and_then(|c| c.weapon.charge_rule()).is_some_and(|r| r.stick == crate::tank::Stick::Aim);
-        let drive = if aiming { Intent { move_dir: None, face: None, ..intent } } else { intent };
+        let drive = if aiming { Intent { move_dir: None, heading: None, face: None, ..intent } } else { intent };
         drive_tank(physics, &mut tank, drive, dt, footing);
         let mut charged = None;
         if let Some((pressed, open)) = trigger
             && (tank.active_weapon().trigger() == Trigger::Charge || tank.charge.is_some())
         {
             let weapon = tank.charge.map_or_else(|| tank.active_weapon(), |c| c.weapon);
-            let dir = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up).vec();
+            let dir = tank.forward();
             let (start, muzzle) = (tank.gun_line_muzzle(dir), crate::gauss::muzzle(&tank));
             let steer = crate::rod::Steer { stick: if aiming { intent.move_dir } else { None }, ..crate::rod::Steer::default() };
             let (edge, reticle) = tank.step_trigger(intent.fire, pressed, dt, open, None, steer, map.field_size());
@@ -3649,7 +3659,7 @@ impl Game {
         // (`Stick::Aim`, docs/rod-from-god.md) - takes the stick from the
         // tick after the press: the hull stands, its facing kept.
         let aiming = tank.charge.and_then(|c| c.weapon.charge_rule()).is_some_and(|r| r.stick == crate::tank::Stick::Aim);
-        let drive = if aiming { Intent { move_dir: None, face: None, ..intent } } else { intent };
+        let drive = if aiming { Intent { move_dir: None, heading: None, face: None, ..intent } } else { intent };
         // A seat whose client owns the hull was put where it is by
         // `accept_seat_pose` before this tick; the stick only fires.
         if self.seat_owned[index] != self.frame {
@@ -3709,7 +3719,7 @@ impl Game {
         let lamp_pressed = intent.lamp && !self.player_lamp_held_last_frame[index];
         self.player_lamp_held_last_frame[index] = intent.lamp;
         if lamp_pressed && self.lamps_left[index] > 0 {
-            let back = Dir::from_rotation(tank.rotation).map_or(Vec2::zero(), |d| d.vec());
+            let back = tank.forward();
             let behind = tank.hull_size() * 0.5 + 8.0;
             let at = Position::new(tank.position.x - back.x * behind, tank.position.y - back.y * behind);
             let inset = OBSTACLE_GRID_SIZE * 0.5;
@@ -4350,9 +4360,14 @@ impl Game {
             // Aim now, drive later. `tank.control` sets the hull rotation
             // a shot flies along, so it has to happen before the shot; the
             // impulse is the only part that waits for the commander. A
-            // tank in a tell holds its aim whatever it decided.
+            // tank in a tell holds its aim whatever it decided. A free hull
+            // turns a step a tick rather than snapping, in the drive alone
+            // - turned here too it would turn twice - and fires along the
+            // facing it has, which its aim waits on (`hold_and_fire_at`).
             let intent = hold_for_tell(intent, tank.tell);
-            tank.control(intent.move_dir, intent.face);
+            if tank.steer == Steer::Cardinal {
+                tank.control(intent.move_dir, intent.face);
+            }
             let owner = tank.owner();
             tick_queued_shots(&mut self.physics, f, tank, owner);
             // The AI paces itself with its own fire timer; `fire_cooldown`
@@ -6030,7 +6045,10 @@ fn coast_enemy(physics: &mut Physics, f: &mut Frame, entity: Entity, tank: &mut 
     let handle = tank.body.expect("a live enemy always has a body here");
     let current = physics.velocity(handle);
     let facing_before = tank.rotation;
-    tank.control(intent.move_dir, intent.face);
+    // A free hull turns in the drive alone (`enemy_phase`'s collect pass).
+    if tank.steer == Steer::Cardinal {
+        tank.control(intent.move_dir, intent.face);
+    }
     let owner = tank.owner();
     tick_queued_shots(physics, f, tank, owner);
     // The trigger released - but held while a charge runs, so a coast never
@@ -6119,11 +6137,22 @@ fn enemy_trigger(physics: &mut Physics, f: &mut Frame, entity: Entity, tank: &mu
     let weapon = tank.active_weapon();
     match weapon.tell_seconds() {
         Some(total) => {
-            let facing = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up);
+            let facing = tank.facing();
             tank.tell = Some(crate::tank::Tell { weapon, left: total, total, facing });
             f.events.push(Event::TellStarted { slot: tank.owner_slot(), weapon: weapon.name() });
         }
         None => dispatch_fire(physics, f, tank, owner, intent.fire_aim_offset),
+    }
+}
+
+/// The physics body `tank` stands on, spawned where it stands: a
+/// `Cardinal` hull's box (`Physics::spawn_tank`) oriented to its facing, a
+/// `Free` hull's round collider (`Physics::spawn_round_tank`). Every seat's
+/// body comes from here, whenever its tank is made or rolls in.
+pub(super) fn spawn_hull(physics: &mut Physics, tank: &Tank) -> rapier2d::prelude::RigidBodyHandle {
+    match tank.steer {
+        Steer::Cardinal => physics.spawn_tank(tank.position, tank.move_half_extents(tank.facing_along_x()), tank.mass()),
+        Steer::Free => physics.spawn_round_tank(tank.position, tank.move_radius(), tank.mass()),
     }
 }
 
@@ -6175,12 +6204,20 @@ fn drive_tank_with(
         tank.tread.wet = 1.0;
     }
 
-    tank.control(intent.move_dir, intent.face);
+    match tank.steer {
+        Steer::Cardinal => tank.control(intent.move_dir, intent.face),
+        Steer::Free => {
+            let face = intent.aim.or(intent.face.map(Dir::rotation));
+            tank.steer_free(intent.heading.or(intent.move_dir.map(Dir::rotation)), face, dt, &tuning())
+        }
+    }
     tank.ease_visual_rotation(dt);
     tank.ease_turret_visual_rotation(dt);
     let target = tank.velocity;
 
-    if tank.rotation != facing_before {
+    // A free hull's collider is round (`Physics::spawn_round_tank`): it
+    // turns with nothing to refit.
+    if tank.steer == Steer::Cardinal && tank.rotation != facing_before {
         physics.resize_collider(physics.collider_of(handle), tank.move_half_extents(tank.facing_along_x()));
     }
 
@@ -6212,7 +6249,7 @@ fn drive_tank_with(
     // the existing decel curve instead of needing a separate brake path.
     // Nothing but `simulation::command` ever sets it; the player and every
     // `Ai` leave it at 0, so `scale` is 1.0 and this is a no-op multiply.
-    let along_x = tank.facing_along_x();
+    let tracks = Tracks::of(tank);
     // Ooze slows a hull like a ford does (docs/defence-towers-prd.md
     // section 6): the top speed and the drive together.
     let pace = footing.pace * tank.slime_pace();
@@ -6222,27 +6259,32 @@ fn drive_tank_with(
     let crawl = tank.charge_pace();
     let scale = intent.speed_scale() * crawl * pace;
     tank.throttle = intent.speed_scale() * crawl;
-    let (current_on, target_on, current_off) = if along_x {
-        (current.x, target.x * scale, current.y)
-    } else {
-        (current.y, target.y * scale, current.x)
-    };
+    let (current_on, current_off) = tracks.split(current);
+    let target_on = tracks.split(target).0 * scale;
     // A well (docs/gravity-well.md "The pull"): along the tracks its
     // current is the frame the drive runs in; across them its side pull
     // builds on the hull's slide before the grip holds it.
     let (current_on, side_off) = if !pulled {
         (current_on, 0.0)
-    } else if along_x {
-        (current_on - footing.well.current.x, footing.well.side.y * dt)
     } else {
-        (current_on - footing.well.current.y, footing.well.side.x * dt)
+        (current_on - tracks.split(footing.well.current).0, tracks.split(footing.well.side).1 * dt)
     };
 
     let want_on = target_on - current_on;
     let speeding_up = want_on * current_on >= 0.0;
     let delta_on = if speeding_up {
         let max_on = tuning().tank_accel_force * pace * footing.traction * tank.speed_factor() / tank.mass() * dt;
-        want_on.clamp(-max_on, max_on)
+        let delta = want_on.clamp(-max_on, max_on);
+        // A free hull pressed into a wall on a slant slides along it,
+        // partly across its tracks. Left alone the tracks would push on
+        // until the share along them reached the commanded speed, the
+        // slide well past it; they push it to the commanded speed in all
+        // and no further.
+        if tank.steer == Steer::Free && target_on > 0.0 {
+            delta.min((target_on - Vec2::new(current_on, current_off).length()).max(0.0))
+        } else {
+            delta
+        }
     } else {
         // Close a rate-controlled fraction of the remaining gap each frame
         // (frame-rate independent); snap the last sliver below
@@ -6255,12 +6297,51 @@ fn drive_tank_with(
     let max_off = tuning().tank_turn_grip_force * footing.grip / tank.mass() * dt;
     let delta_off = if pulled { side_off + (-(current_off + side_off)).clamp(-max_off, max_off) } else { (-current_off).clamp(-max_off, max_off) };
 
-    let delta = if along_x {
-        Position::new(delta_on, delta_off)
-    } else {
-        Position::new(delta_off, delta_on)
-    };
+    let delta = tracks.join(delta_on, delta_off);
     physics.apply_impulse(handle, Position::new(delta.x * tank.mass(), delta.y * tank.mass()));
+}
+
+/// The frame a hull's drive runs in (`drive_tank_with`): along its tracks
+/// and across them. A hull facing one of the four ways reads the world's
+/// own axes - the components themselves, no arithmetic, so a `Cardinal`
+/// round's numbers are exactly what they always were - and a `Free` hull
+/// between them its unit facing (`Tank::forward`) and the perpendicular.
+#[derive(Clone, Copy, Debug)]
+enum Tracks {
+    /// Facing left or right: along is x, across is y.
+    X,
+    /// Facing up or down: along is y, across is x.
+    Y,
+    /// Turned between the four ways: along `on`, across `off`, unit vectors.
+    Turned { on: Vec2, off: Vec2 },
+}
+
+impl Tracks {
+    fn of(tank: &Tank) -> Tracks {
+        if tank.faces_cardinal() {
+            return if tank.facing_along_x() { Tracks::X } else { Tracks::Y };
+        }
+        let on = tank.forward();
+        Tracks::Turned { on, off: Vec2::new(-on.y, on.x) }
+    }
+
+    /// `v` as (along the tracks, across them).
+    fn split(self, v: Vec2) -> (f32, f32) {
+        match self {
+            Tracks::X => (v.x, v.y),
+            Tracks::Y => (v.y, v.x),
+            Tracks::Turned { on, off } => (v.dot(on), v.dot(off)),
+        }
+    }
+
+    /// The world vector `along` the tracks and `across` them.
+    fn join(self, along: f32, across: f32) -> Vec2 {
+        match self {
+            Tracks::X => Vec2::new(along, across),
+            Tracks::Y => Vec2::new(across, along),
+            Tracks::Turned { on, off } => Vec2::new(on.x * along + off.x * across, on.y * along + off.y * across),
+        }
+    }
 }
 
 /// `cell` unless it is deep water or lava, else the nearest map cell
@@ -6629,7 +6710,7 @@ fn with_two_tanks_mut<R>(world: &mut hecs::World, a: Entity, b: Entity, f: impl 
 /// track wobble. Shared by the band placement in `init` and the wave
 /// scheduler, so a wave tank is kitted exactly like a band tank. No
 /// physics body: the caller spawns one when the tank is on the field.
-fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize) -> Tank {
+fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize, steer: Steer) -> Tank {
     let factor = 1.0 + rng.random_range(-tuning().enemy_speed_variance..tuning().enemy_speed_variance);
     let mut enemy = Tank {
         row,
@@ -6639,6 +6720,7 @@ fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize) -> 
         rotation: 180.0,
         speed_scale: factor,
         owner: Owner::Enemy(slot),
+        steer,
         ..Tank::default()
     };
     if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_chance {

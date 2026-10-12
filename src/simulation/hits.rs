@@ -495,12 +495,11 @@ impl Terrain {
         // shots that nobody can reason about is the worst of both, so they
         // pass through.
         for player in players.into_iter().flatten() {
-            let (owner, wrecked, hull, turret) = with_tank(world, player, |t| {
-                (t.owner(), t.is_wreck(), t.hull_bbox_world(), t.turret_bbox_world())
-            });
+            let (owner, wrecked, entries) = with_tank(world, player, |t| (t.owner(), t.is_wreck(), tank_entries(t, p0, p1, pad)));
             if !skips(owner) && !wrecked {
-                consider_hit(&mut best, segment_hits_aabb(p0, p1, hull.0, hull.1 + pad), 0, ShellTarget::Tank(player));
-                consider_hit(&mut best, segment_hits_aabb(p0, p1, turret.0, turret.1 + pad), 0, ShellTarget::Tank(player));
+                for entry in entries {
+                    consider_hit(&mut best, entry, 0, ShellTarget::Tank(player));
+                }
             }
         }
 
@@ -508,12 +507,13 @@ impl Terrain {
             if skips(tank.owner()) || tank.is_wreck() {
                 continue;
             }
-            let ((hc, hh), (tc, th)) = match past.and_then(|p| p.tank(entity)) {
-                Some(then) => (then.hull, then.turret),
-                None => (tank.hull_bbox_world(), tank.turret_bbox_world()),
+            let entries = match past.and_then(|p| p.tank(entity)) {
+                Some(then) => [segment_hits_aabb(p0, p1, then.hull.0, then.hull.1 + enemy_pad), segment_hits_aabb(p0, p1, then.turret.0, then.turret.1 + enemy_pad)],
+                None => tank_entries(tank, p0, p1, enemy_pad),
             };
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, hc, hh + enemy_pad), 1, ShellTarget::Tank(entity));
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, tc, th + enemy_pad), 1, ShellTarget::Tank(entity));
+            for entry in entries {
+                consider_hit(&mut best, entry, 1, ShellTarget::Tank(entity));
+            }
         }
 
         for &(entity, now) in &self.frogs {
@@ -581,11 +581,14 @@ impl Terrain {
         // (t, rank, tie key, target)
         let mut hits: Vec<(f32, u8, i64, ShellTarget)> = Vec::new();
         for player in players.into_iter().flatten() {
-            let (owner, wrecked, boxes) = with_tank(world, player, |t| (t.owner(), t.is_wreck(), slug_boxes(t, pad)));
+            let (owner, wrecked, entry) = with_tank(world, player, |t| {
+                let entry = if t.faces_cardinal() { first(&slug_boxes(t, pad)) } else { tank_entries(t, p0, p1, pad).into_iter().flatten().min_by(f32::total_cmp) };
+                (t.owner(), t.is_wreck(), entry)
+            });
             if owner == shooter || wrecked {
                 continue;
             }
-            if let Some(t) = first(&boxes) {
+            if let Some(t) = entry {
                 hits.push((t, 0, owner.slot() as i64, ShellTarget::Tank(player)));
             }
         }
@@ -593,11 +596,15 @@ impl Terrain {
             if tank.owner() == shooter || tank.is_wreck() {
                 continue;
             }
-            let ((hc, hh), (tc, th)) = match past.and_then(|p| p.tank(entity)) {
-                Some(then) => (then.hull, then.turret),
-                None => (tank.hull_bbox_world(), tank.turret_bbox_world()),
+            let entry = match past.and_then(|p| p.tank(entity)) {
+                Some(then) => first(&[(then.hull.0, then.hull.1 + enemy_pad), (then.turret.0, then.turret.1 + enemy_pad)]),
+                None if tank.faces_cardinal() => {
+                    let (hull, turret) = (tank.hull_bbox_world(), tank.turret_bbox_world());
+                    first(&[(hull.0, hull.1 + enemy_pad), (turret.0, turret.1 + enemy_pad)])
+                }
+                None => tank_entries(tank, p0, p1, enemy_pad).into_iter().flatten().min_by(f32::total_cmp),
             };
-            if let Some(t) = first(&[(hc, hh + enemy_pad), (tc, th + enemy_pad)]) {
+            if let Some(t) = entry {
                 hits.push((t, 1, tank.owner_slot() as i64, ShellTarget::Tank(entity)));
             }
         }
@@ -801,6 +808,21 @@ fn segment_hits_chunks(p0: Position, p1: Position, center: Position, half: Posit
             segment_hits_aabb(p0, p1, c, Position::new((x1 - x0) / 2.0, (y1 - y0) / 2.0))
         })
         .min_by(f32::total_cmp)
+}
+
+/// Where the segment `p0..p1` first enters `tank`'s hull box and its
+/// turret+barrel box, each grown by `pad`: the axis-aligned boxes
+/// (`Tank::hull_bbox_world`, `turret_bbox_world`) on a hull facing one of
+/// the four ways, and for a free hull turned between them its true boxes,
+/// the segment turned into the hull's own frame (`Tank::to_local`) - a
+/// rigid turn moves no point along it, so the entry `t` is the world's.
+pub(crate) fn tank_entries(tank: &Tank, p0: Position, p1: Position, pad: Position) -> [Option<f32>; 2] {
+    if tank.faces_cardinal() {
+        let (hull, turret) = (tank.hull_bbox_world(), tank.turret_bbox_world());
+        return [segment_hits_aabb(p0, p1, hull.0, hull.1 + pad), segment_hits_aabb(p0, p1, turret.0, turret.1 + pad)];
+    }
+    let (a, b) = (tank.to_local(p0), tank.to_local(p1));
+    tank.local_boxes().map(|(center, half)| segment_hits_aabb(a, b, center, half + pad))
 }
 
 /// If the segment `p0..p1` passes through the axis-aligned box at `center`

@@ -561,6 +561,17 @@ tunables! {
         /// of the hull, at its own (faster) turn speed, so it visibly leads
         /// a turn while the heavier hull swings around to catch up.
         tank_turret_visual_turn_speed_deg: f32 = 1800.0 in 30.0 ..= 7200.0;
+        /// A free-steering hull's turn rate (`Steer::Free`, the
+        /// `free-steer` build, docs/free-steer.md): how many degrees a
+        /// second its facing - aim and drive with it - turns toward the
+        /// stick's angle. Nothing reads it while the seats steer four ways.
+        tank_free_turn_speed_deg: f32 = 540.0 in 30.0 ..= 3600.0;
+        /// How far off the stick's angle a free-steering hull still drives:
+        /// its throttle is the cosine of the turn it has left, stretched to
+        /// fall to nothing here (`tank::free_throttle`), so a nudge arcs at
+        /// speed and a wider turn pivots in place first. 90 is a plain
+        /// cosine.
+        tank_free_pivot_deg: f32 = 90.0 in 10.0 ..= 180.0;
     }
 
     group shell {
@@ -1986,6 +1997,17 @@ tunables! {
         enemy_fire_interval_aggressive: f32 = 0.7 in 0.05 ..= 10.0;
         /// Must be lined up on the player this long before firing.
         enemy_aim_settle: f32 = 0.25 in 0.0 ..= 5.0;
+        /// How far ahead of a moving seat a free-steering enemy aims
+        /// (`Steer::Free`, docs/free-steer.md): the fraction of the seat's
+        /// commanded velocity times the shot's flight time it leads by. 0
+        /// aims where the seat stands, 1 where it will be if it drives on.
+        /// Nothing reads it while the enemies steer four ways.
+        enemy_free_lead: f32 = 0.8 in 0.0 ..= 1.5;
+        /// How far off its aim (degrees) a free-steering enemy's hull may
+        /// face and still count as lined up: inside it the aim settles and
+        /// the trigger goes, outside it the hull turns on. The four-way
+        /// enemy's `enemy_fire_align_px`.
+        enemy_free_aim_tolerance_deg: f32 = 3.0 in 0.2 ..= 45.0;
         /// Retreat toward the map edge once this hurt.
         enemy_flee_damage: f32 = 70.0 in 0.0 ..= 100.0;
         /// How often patrol picks a new wander point (seconds).

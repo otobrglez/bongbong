@@ -847,12 +847,19 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   one-step look-ahead (`HULL_LOOK_AHEAD`, rapier's soft CCD, set at spawn for the body's whole
   life), so a hull driven, rammed, blasted, knocked or pulled stops flush against what it meets
   (docs/physics-engine-design.md "Scale"). `quarantined` reports rapier's NaN quarantine as
-  `Event::PhysicsQuarantine`.
+  `Event::PhysicsQuarantine`. `spawn_round_tank` is a free-steering seat's body (docs/free-steer.md):
+  a frictionless circle of the movement box's half-length, never resized; `simulation::spawn_hull`
+  picks it or `spawn_tank`'s box from `Tank::steer` for every seat body.
 
 ## AI
 
-- `ai.rs`, `bt.rs`, `pathfind.rs` — AI reasons over snapshots, never the world. `Ai::steer` routes
-  through `Grid`; on top: an obstacle-ahead override of the heading commitment, a stuck escape on
+- `ai.rs`, `bt.rs`, `pathfind.rs` — AI reasons over snapshots, never the world. A free-steering
+  enemy (`Steer::Free`, docs/free-steer.md) follows its route at any angle
+  (`Ai::steer_toward_free`: straight at its target over `Grid::plain_line`, else at the farthest
+  route cell `Grid::clear_line` reaches, `Grid::route_ahead_far` reading a search past its first
+  step; no sidestep, an arrival ease-off), aims at any angle with a lead from the seat's seen
+  motion (`act_attack_free`, `Brain::lead_aim`, `hold_and_fire_at`) and its stuck clock waits out a
+  pivot. `Ai::steer` routes through `Grid`; on top: an obstacle-ahead override of the heading commitment, a stuck escape on
   *displacement projected onto the commanded heading* (never a physics velocity - the solver reports
   motion for a jammed tank; stuck under `stuck_speed_eps` or `stuck_progress_fraction` of its own top
   speed, whichever is more, so a hull shoving another along at a crawl counts) held for
@@ -967,7 +974,14 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   crate - `ActiveWeapon::crate_load`); `active_weapon` is that special while it has ammo, else
   shells, whose magazine is its own (recharge, the Ammo crate). Seats and enemies stack alike; the
   pickup phase re-checks `wants_pickup` crate by crate, so a hull over two crates takes the second
-  only while it still wants it. Tests: `health_ring_tests`, `weapon_inventory_tests`,
+  only while it still wants it. **How it steers** is `Tank::steer` (`Steer`, docs/free-steer.md):
+  `Cardinal` (`control`, `rotation` always one of the four ways) or `Free` (`steer_free`: turns
+  toward `Intent::heading` at `tank_free_turn_speed_deg`, drives at `free_throttle` of the turn
+  left, a round collider of `move_radius`), set when a tank is made from `Game::steer`.
+  `forward` (exact `Dir::vec` on the four ways), `facing` (the nearest, `Dir::nearest`) and
+  `faces_cardinal` are how anything reads a facing; between the four ways `hull_bbox_world`/
+  `turret_bbox_world` answer the box around the turned one and `local_boxes`/`to_local` the true
+  boxes the hit test takes. Tests: `health_ring_tests`, `weapon_inventory_tests`,
   `chassis_tests`.
 - `frog.rs` (docs/FROG_SPEC.md) — `Frog`/`Side`; one struct serves the player's frog and the Hunt
   mission's enemy frog. Art faces right and is mirrored. **A frog only bites the other side**; the

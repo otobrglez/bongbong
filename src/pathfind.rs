@@ -948,7 +948,7 @@ impl Grid {
                 }
             }
         }
-        best.map(|(cost, _, _, first_step)| SearchHit { first_step, cost })
+        best.map(|(cost, _, _, first_step)| SearchHit { first_step, cost, ahead: [first_step; ROUTE_AHEAD_CELLS], ahead_len: 1 })
     }
 
     fn cell_of(&self, p: Position) -> (usize, usize) {
@@ -1036,6 +1036,72 @@ impl Grid {
             return true;
         }
         self.blocked_at((nc as usize, nr as usize))
+    }
+
+    /// Whether a hull's centre can drive the straight segment `from..to`
+    /// without entering a blocked cell: every cell the segment passes
+    /// through after its own is open, and where it crosses a cell corner
+    /// both cells beside the corner are, so it never slips between two
+    /// blocked cells that touch at a corner. Blocked cells already carry a
+    /// hull's clearance (`build`'s `margin`), so an open line is one a hull
+    /// fits along. Its own cell is not held against it: a hull pressed
+    /// against a wall stands in the wall's margin, and the way out is what
+    /// counts (as `WalkCosts::from_hull` reads it). What a free-steering
+    /// enemy cuts its route's corners by (`ai::Ai::steer_toward_free`,
+    /// docs/free-steer.md).
+    pub fn clear_line(&self, from: Position, to: Position) -> bool {
+        self.line(from, to, false)
+    }
+
+    /// `clear_line` across plain ground alone: every cell past its own at
+    /// the step cost of open ground, 1 - nothing `weigh` or `surcharge`
+    /// priced (a seat's firing lane, another tank's cell, a ford, a
+    /// danger). Such a line is as cheap as any route, so a free-steering
+    /// enemy drives it straight to its target (`ai::Ai::steer_toward_free`).
+    pub fn plain_line(&self, from: Position, to: Position) -> bool {
+        self.line(from, to, true)
+    }
+
+    /// `clear_line`, and with `plain` every cell at step cost 1.
+    fn line(&self, from: Position, to: Position, plain: bool) -> bool {
+        let (col, row) = self.cell_of(from);
+        let (mut col, mut row) = (col as isize, row as isize);
+        let (dx, dy) = (to.x - from.x, to.y - from.y);
+        let (step_x, step_y): (isize, isize) = (if dx > 0.0 { 1 } else { -1 }, if dy > 0.0 { 1 } else { -1 });
+        let size = self.cell_size;
+        // How far along the segment (0..1) the next column and row edges
+        // lie, and how far apart they come after that.
+        let edge = |p: f32, d: f32, cell: isize| -> (f32, f32) {
+            if d.abs() < f32::EPSILON {
+                return (f32::INFINITY, f32::INFINITY);
+            }
+            let line = if d > 0.0 { (cell + 1) as f32 * size } else { cell as f32 * size };
+            ((line - p) / d, size / d.abs())
+        };
+        let (mut next_x, step_tx) = edge(from.x, dx, col);
+        let (mut next_y, step_ty) = edge(from.y, dy, row);
+        let open = |c: isize, r: isize| c >= 0 && r >= 0 && !self.is_blocked(c as usize, r as usize) && (!plain || self.cost_at(c as usize, r as usize) == 1);
+        while next_x.min(next_y) <= 1.0 {
+            if next_x < next_y {
+                col += step_x;
+                next_x += step_tx;
+            } else if next_y < next_x {
+                row += step_y;
+                next_y += step_ty;
+            } else {
+                if !open(col + step_x, row) || !open(col, row + step_y) {
+                    return false;
+                }
+                col += step_x;
+                row += step_y;
+                next_x += step_tx;
+                next_y += step_ty;
+            }
+            if !open(col, row) {
+                return false;
+            }
+        }
+        true
     }
 
     fn neighbors_all_blocked(&self, cell: (usize, usize)) -> bool {
@@ -1329,6 +1395,29 @@ impl Grid {
     /// back onto the shared route. With nothing kept off this is exactly
     /// `route_ahead`.
     pub fn route_ahead_keeping_off(&self, from: Position, to: Position, heading: Option<Position>, keep: KeepOff) -> Option<RouteAhead> {
+        self.route_ahead_with(from, to, heading, keep, false)
+    }
+
+    /// `route_ahead_keeping_off` for a free-steering hull
+    /// (docs/free-steer.md): a search's path is read past its first step
+    /// too, up to `ROUTE_AHEAD_CELLS` cells - staircase or not, the hull
+    /// drives straight at the farthest it has a clear line to - and
+    /// `walking` is `route_ahead_walking_keeping_off`'s portal-less route.
+    pub fn route_ahead_far(&self, from: Position, to: Position, walking: bool, keep: KeepOff) -> Option<RouteAhead> {
+        if walking {
+            let start = self.cell_of(from);
+            let goal = self.cell_of(to);
+            if start == goal {
+                return None;
+            }
+            return self.search(start, goal, false, keep).map(|hit| self.ahead_of_hit(start, &hit));
+        }
+        self.route_ahead_with(from, to, None, keep, true)
+    }
+
+    /// `route_ahead_keeping_off`, a search's path read whole (`far`) or to
+    /// its first step.
+    fn route_ahead_with(&self, from: Position, to: Position, heading: Option<Position>, keep: KeepOff, far: bool) -> Option<RouteAhead> {
         let start = self.cell_of(from);
         let goal = self.cell_of(to);
         if start == goal {
@@ -1349,7 +1438,7 @@ impl Grid {
                 ahead.shared = true;
                 if !keep.is_empty() && ahead.cells().iter().any(|&c| keep.holds(c)) {
                     if let Some(round) = self.round_kept(field, start, goal, prefer, keep) {
-                        ahead = self.ahead_of(start, round.first_step);
+                        ahead = if far { self.ahead_of_hit(start, &round) } else { self.ahead_of(start, round.first_step) };
                     }
                 }
                 ahead
@@ -1357,7 +1446,10 @@ impl Grid {
             // A search's path is one of many as cheap, its shape
             // whatever order the search met the cells in - a staircase as
             // often as not - so only its first step is read.
-            None => self.ahead_of(start, self.search(start, goal, true, keep)?.first_step),
+            None => {
+                let hit = self.search(start, goal, true, keep)?;
+                if far { self.ahead_of_hit(start, &hit) } else { self.ahead_of(start, hit.first_step) }
+            }
         };
         // Past a portal cell the route may be the far side's.
         if let Some(i) = ahead.cells().iter().position(|&c| self.is_portal_cell(c)) {
@@ -1444,6 +1536,15 @@ impl Grid {
 
     /// A `RouteAhead` from `start` holding `first` alone, its first point
     /// that cell's centre.
+    /// A search's route as far as it reads (`SearchHit::ahead`).
+    fn ahead_of_hit(&self, start: (usize, usize), hit: &SearchHit) -> RouteAhead {
+        let mut ahead = self.ahead_of(start, hit.first_step);
+        for &cell in &hit.ahead[1..hit.ahead_len] {
+            ahead.push(cell);
+        }
+        ahead
+    }
+
     fn ahead_of(&self, start: (usize, usize), first: (usize, usize)) -> RouteAhead {
         let mut ahead = RouteAhead {
             start,
@@ -1571,6 +1672,9 @@ impl Grid {
                 // route teleports straight out of `start`.
                 let mut at = node;
                 let mut first_step = goal;
+                // The cells nearest `start`, kept as the walk passes them.
+                let mut ahead = [goal; ROUTE_AHEAD_CELLS];
+                let mut ahead_len = 1;
                 while let Some(prev) = t.parent(idx(at)) {
                     if prev == start_node {
                         break;
@@ -1578,9 +1682,12 @@ impl Grid {
                     at = prev;
                     if let NavNode::Cell(c) = at {
                         first_step = c;
+                        ahead.rotate_right(1);
+                        ahead[0] = c;
+                        ahead_len = (ahead_len + 1).min(ROUTE_AHEAD_CELLS);
                     }
                 }
-                return Some(SearchHit { first_step, cost });
+                return Some(SearchHit { first_step, cost, ahead, ahead_len });
             }
 
             let g = t.g(idx(node));
@@ -1695,6 +1802,11 @@ thread_local! {
 struct SearchHit {
     first_step: (usize, usize),
     cost: u32,
+    /// The path's first cells after `start`, `first_step` first, the hub
+    /// left out: up to `ROUTE_AHEAD_CELLS` of them (`ahead_len`), what a
+    /// free-steering hull straightens (`Grid::route_ahead_far`).
+    ahead: [(usize, usize); ROUTE_AHEAD_CELLS],
+    ahead_len: usize,
 }
 
 /// One cardinal step on the grid, as (column, row) deltas.
@@ -1771,6 +1883,30 @@ impl Ord for OpenEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A straight line is clear while every cell it passes through is open,
+    /// blocked by one in its way, and never slips between two blocked cells
+    /// that touch at a corner.
+    #[test]
+    fn a_clear_line_needs_every_cell_it_crosses_open() {
+        let centre = |c: usize, r: usize| Position::new(c as f32 * 40.0 + 20.0, r as f32 * 40.0 + 20.0);
+        let open = Grid::build(400.0, 400.0, 40.0, 0.0, std::iter::empty());
+        assert!(open.clear_line(centre(1, 1), centre(8, 6)), "an open field");
+        assert!(open.clear_line(centre(8, 6), centre(1, 1)), "either way");
+        assert!(open.clear_line(centre(3, 3), centre(3, 3)), "standing still");
+        let wall = Grid::build(400.0, 400.0, 40.0, 0.0, [(centre(4, 3), 20.0)].into_iter());
+        assert!(!wall.clear_line(centre(1, 3), centre(8, 3)), "a wall in the way");
+        assert!(wall.clear_line(centre(1, 1), centre(8, 1)), "a wall beside it");
+        let corners = Grid::build(400.0, 400.0, 40.0, 0.0, [(centre(4, 3), 20.0), (centre(3, 4), 20.0)].into_iter());
+        assert!(!corners.clear_line(centre(2, 2), centre(5, 5)), "two cells touching at a corner close the diagonal");
+        assert!(wall.clear_line(centre(4, 3), centre(8, 3)), "a hull pressed into a wall's margin: the way out counts");
+        assert!(!wall.clear_line(Position::new(centre(4, 3).x - 40.0, centre(4, 3).y), centre(8, 3)), "and not the way through");
+        let mut priced = Grid::build(400.0, 400.0, 40.0, 0.0, std::iter::empty());
+        priced.surcharge([centre(4, 3)].into_iter(), 5);
+        assert!(priced.clear_line(centre(1, 3), centre(8, 3)), "a priced cell is open");
+        assert!(!priced.plain_line(centre(1, 3), centre(8, 3)), "but not plain ground");
+        assert!(priced.plain_line(centre(1, 1), centre(8, 1)), "plain ground beside it");
+    }
 
     #[test]
     fn same_cell_returns_none() {

@@ -42,7 +42,7 @@ use crate::mode::{Driver, Session};
 use crate::net::client::Phase;
 use crate::net::round::AnyRound;
 use crate::obstacle::Obstacle;
-use crate::simulation::debug::{CLUSTER_RADIUS_PX, Detail, FieldTarget, JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, TankPatch, TrackRow, r1, signed_quarter_turn};
+use crate::simulation::debug::{CLUSTER_RADIUS_PX, Detail, FieldTarget, JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, TankPatch, TrackRow, r1, signed_quarter_turn, spin_step, turn_heading};
 use crate::simulation::{Event, Game, Input, Overlays, PlayerCount};
 use crate::tank::{Dir, TankKind};
 use crate::tuning;
@@ -118,7 +118,7 @@ pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
 /// a room, which the frame's first intent drives, so player 2's keys
 /// steer nobody, and the I key's overlay cycle is the local round's (the
 /// replica is never `update`d - `overlays` sets its flags).
-const ONLINE_INPUT_REFUSED: &[&str] = &["p2_move_dir", "p2_face", "p2_fire", "p2_lamp", "cycle_overlays"];
+const ONLINE_INPUT_REFUSED: &[&str] = &["p2_move_dir", "p2_heading", "p2_face", "p2_fire", "p2_lamp", "cycle_overlays"];
 
 /// Tiles one `terrain` reply lists at most (the standard 34 x 17 field
 /// has 578 cells; a size-study map can have more).
@@ -188,15 +188,15 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "step",
-        description: "Freeze the game in lockstep and advance exactly `frames` simulation frames at the fixed 1/60 s timestep (all in one rendered frame, so it is fast and deterministic). Optional player input is held for those frames (`move_dir`/`face`/`fire`/`lamp` for player 1, `p2_move_dir`/`p2_face`/`p2_fire`/`p2_lamp` for player 2 in a two-player round; a held `lamp` sets one lantern down, on the press - docs/volcano.md); shells/plasma fire once per press, so set fire_every=N to tap the trigger every N frames instead of holding it. Replies with the events of the step (first 256; `kinds`/`exclude` filter by event name, see `events`) and, by default, a compact snapshot. Use `resume` to let the game run in real time again.",
-        schema: r#"{"type":"object","properties":{"frames":{"type":"integer","default":1,"minimum":1,"maximum":100000},"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"lamp":{"type":"boolean"},"p2_move_dir":{"type":"string","enum":["up","down","left","right"]},"p2_face":{"type":"string","enum":["up","down","left","right"]},"p2_fire":{"type":"boolean"},"p2_lamp":{"type":"boolean"},"fire_every":{"type":"integer","minimum":1,"description":"With fire=true: press the trigger on frames 0, N, 2N... and release in between (both players)"},"snapshot":{"type":"boolean","default":true},"detail":{"type":"string","enum":["compact","full"],"default":"compact"},"kinds":{"type":"array","items":{"type":"string"}},"exclude":{"type":"array","items":{"type":"string"}}}}"#,
+        description: "Freeze the game in lockstep and advance exactly `frames` simulation frames at the fixed 1/60 s timestep (all in one rendered frame, so it is fast and deterministic). Optional player input is held for those frames (`move_dir`/`heading`/`face`/`fire`/`lamp` for player 1, `p2_move_dir`/`p2_heading`/`p2_face`/`p2_fire`/`p2_lamp` for player 2 in a two-player round; a held `lamp` sets one lantern down, on the press - docs/volcano.md); shells/plasma fire once per press, so set fire_every=N to tap the trigger every N frames instead of holding it. Replies with the events of the step (first 256; `kinds`/`exclude` filter by event name, see `events`) and, by default, a compact snapshot. Use `resume` to let the game run in real time again.",
+        schema: r#"{"type":"object","properties":{"frames":{"type":"integer","default":1,"minimum":1,"maximum":100000},"move_dir":{"type":"string","enum":["up","down","left","right"]},"heading":{"type":"number","minimum":0,"maximum":360,"description":"A free-steering seat's stick angle in degrees, 0 up, clockwise (docs/free-steer.md); a four-way seat ignores it"},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"lamp":{"type":"boolean"},"p2_move_dir":{"type":"string","enum":["up","down","left","right"]},"p2_heading":{"type":"number","minimum":0,"maximum":360},"p2_face":{"type":"string","enum":["up","down","left","right"]},"p2_fire":{"type":"boolean"},"p2_lamp":{"type":"boolean"},"fire_every":{"type":"integer","minimum":1,"description":"With fire=true: press the trigger on frames 0, N, 2N... and release in between (both players)"},"snapshot":{"type":"boolean","default":true},"detail":{"type":"string","enum":["compact","full"],"default":"compact"},"kinds":{"type":"array","items":{"type":"string"}},"exclude":{"type":"array","items":{"type":"string"}}}}"#,
         read_only: false,
         destructive: false,
     },
     ToolSpec {
         name: "input",
-        description: "Override a player's input for the next `frames` real-time frames (keyboard is ignored meanwhile): `move_dir`/`face`/`fire`/`lamp` for player 1, `p2_move_dir`/`p2_face`/`p2_fire`/`p2_lamp` for player 2 in a two-player round. Works while the game runs; in lockstep prefer step's own input fields. `cycle_overlays: true` presses the I key once: cycles the overlay presets off -> inspect -> all -> off (with no move_dir/face/fire it leaves the keyboard alone). **In an online round** it drives this window's seat in the room the way the keyboard does - sent at the tick rate, predicted and drawn as a player's press is - so a weapon can be fired as the rig's or a room's seat and the picture screenshotted; the player-2 fields and `cycle_overlays` are refused there, since they would reach nobody (`overlays` sets the replica's overlays). A shell fires once per press, so to fire again send `fire: false` for a frame, then `fire: true`.",
-        schema: r#"{"type":"object","properties":{"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"lamp":{"type":"boolean"},"p2_move_dir":{"type":"string","enum":["up","down","left","right"]},"p2_face":{"type":"string","enum":["up","down","left","right"]},"p2_fire":{"type":"boolean"},"p2_lamp":{"type":"boolean"},"frames":{"type":"integer","default":1},"cycle_overlays":{"type":"boolean","default":false}}}"#,
+        description: "Override a player's input for the next `frames` real-time frames (keyboard is ignored meanwhile): `move_dir`/`heading`/`face`/`fire`/`lamp` for player 1, `p2_move_dir`/`p2_heading`/`p2_face`/`p2_fire`/`p2_lamp` for player 2 in a two-player round. Works while the game runs; in lockstep prefer step's own input fields. `cycle_overlays: true` presses the I key once: cycles the overlay presets off -> inspect -> all -> off (with no move_dir/face/fire it leaves the keyboard alone). **In an online round** it drives this window's seat in the room the way the keyboard does - sent at the tick rate, predicted and drawn as a player's press is - so a weapon can be fired as the rig's or a room's seat and the picture screenshotted; the player-2 fields and `cycle_overlays` are refused there, since they would reach nobody (`overlays` sets the replica's overlays). A shell fires once per press, so to fire again send `fire: false` for a frame, then `fire: true`.",
+        schema: r#"{"type":"object","properties":{"move_dir":{"type":"string","enum":["up","down","left","right"]},"heading":{"type":"number","minimum":0,"maximum":360,"description":"A free-steering seat's stick angle in degrees, 0 up, clockwise (docs/free-steer.md); a four-way seat ignores it"},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"lamp":{"type":"boolean"},"p2_move_dir":{"type":"string","enum":["up","down","left","right"]},"p2_heading":{"type":"number","minimum":0,"maximum":360},"p2_face":{"type":"string","enum":["up","down","left","right"]},"p2_fire":{"type":"boolean"},"p2_lamp":{"type":"boolean"},"frames":{"type":"integer","default":1},"cycle_overlays":{"type":"boolean","default":false}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -714,8 +714,12 @@ struct TurnStats {
     turret_deg: f32,
     /// The frame `rotation` last changed on.
     last_turn_frame: Option<u64>,
+    /// The heading the turn rules read last (`turn_heading`).
     #[serde(skip)]
     last_rotation: f32,
+    /// The hull angle last seen, for the spin chain (`spin_step`).
+    #[serde(skip)]
+    last_raw: f32,
     #[serde(skip)]
     last_turret: f32,
     /// The last three distinct headings with the frame each began on.
@@ -732,10 +736,13 @@ struct TurnStats {
 impl TurnStats {
     fn start(row: &TrackRow, frame: u64) -> TurnStats {
         let pos = Position::new(row.x, row.y);
+        // A free hull's facing as the turn rules read it (`turn_heading`).
+        let rotation = Dir::nearest(row.rotation).rotation();
         let mut headings = VecDeque::with_capacity(3);
-        headings.push_back((row.rotation, frame));
+        headings.push_back((rotation, frame));
         TurnStats {
-            last_rotation: row.rotation,
+            last_rotation: rotation,
+            last_raw: row.rotation,
             last_turret: row.turret,
             headings,
             spin_start_frame: frame,
@@ -753,12 +760,42 @@ impl TurnStats {
         }
         self.turret_deg += turret_delta.abs();
         self.last_turret = row.turret;
-        if row.rotation == self.last_rotation {
+        // The spin chain sums the angle the hull really turns
+        // (`spin_step`); the rest reads a free hull's nearest way
+        // (`turn_heading`).
+        if row.rotation != self.last_raw {
+            match spin_step(self.last_raw, row.rotation) {
+                Some(delta) => {
+                    let same_dir = self.spin_sum != 0.0 && (self.spin_sum > 0.0) == (delta > 0.0);
+                    let in_window = frame - self.spin_start_frame <= u64::from(SPIN_WINDOW_FRAMES);
+                    if same_dir && in_window {
+                        self.spin_sum += delta;
+                    } else {
+                        self.spin_sum = delta;
+                        self.spin_start_frame = frame;
+                        self.spin_start_pos = pos;
+                    }
+                    self.max_spin_deg = self.max_spin_deg.max(self.spin_sum.abs());
+                    if self.spin_sum.abs() >= SPIN_FULL_CIRCLE_DEG && pos.distance_to(self.spin_start_pos) <= SPIN_NET_MAX {
+                        self.spins += 1;
+                        self.spin_sum = 0.0;
+                    }
+                }
+                None => {
+                    self.spin_sum = 0.0;
+                    self.spin_start_frame = frame;
+                    self.spin_start_pos = pos;
+                }
+            }
+            self.last_raw = row.rotation;
+        }
+        let rotation = turn_heading(self.last_rotation, row.rotation);
+        if rotation == self.last_rotation {
             return;
         }
         self.turns += 1;
         self.last_turn_frame = Some(frame);
-        self.headings.push_back((row.rotation, frame));
+        self.headings.push_back((rotation, frame));
         if self.headings.len() > 3 {
             self.headings.pop_front();
         }
@@ -769,31 +806,10 @@ impl TurnStats {
         {
             self.reversals += 1;
         }
-        match signed_quarter_turn(self.last_rotation, row.rotation) {
-            Some(delta) => {
-                let same_dir = self.spin_sum != 0.0 && (self.spin_sum > 0.0) == (delta > 0.0);
-                let in_window = frame - self.spin_start_frame <= u64::from(SPIN_WINDOW_FRAMES);
-                if same_dir && in_window {
-                    self.spin_sum += delta;
-                } else {
-                    self.spin_sum = delta;
-                    self.spin_start_frame = frame;
-                    self.spin_start_pos = pos;
-                }
-                self.max_spin_deg = self.max_spin_deg.max(self.spin_sum.abs());
-                if self.spin_sum.abs() >= SPIN_FULL_CIRCLE_DEG && pos.distance_to(self.spin_start_pos) <= SPIN_NET_MAX {
-                    self.spins += 1;
-                    self.spin_sum = 0.0;
-                }
-            }
-            None => {
-                self.u_turns += 1;
-                self.spin_sum = 0.0;
-                self.spin_start_frame = frame;
-                self.spin_start_pos = pos;
-            }
+        if signed_quarter_turn(self.last_rotation, rotation).is_none() {
+            self.u_turns += 1;
         }
-        self.last_rotation = row.rotation;
+        self.last_rotation = rotation;
     }
 }
 
@@ -3565,10 +3581,10 @@ fn f32_param(params: &Value, key: &str) -> Option<f32> {
     params.get(key).and_then(Value::as_f64).map(|v| v as f32)
 }
 
-/// One player's intent from `move_dir`/`face`/`fire`/`lamp` under
-/// `prefix` (`""` for player 1, `"p2_"` for player 2); `None` when none of
-/// them is present, so the keyboard keeps that player; an error for an
-/// unknown direction.
+/// One player's intent from `move_dir`/`heading`/`face`/`fire`/`lamp`
+/// under `prefix` (`""` for player 1, `"p2_"` for player 2); `None` when
+/// none of them is present, so the keyboard keeps that player; an error
+/// for an unknown direction.
 fn parse_intent(params: &Value, prefix: &str) -> Result<Option<Intent>, String> {
     let dir = |key: &str| -> Result<Option<Dir>, String> {
         let key = format!("{prefix}{key}");
@@ -3578,13 +3594,14 @@ fn parse_intent(params: &Value, prefix: &str) -> Result<Option<Intent>, String> 
         }
     };
     let move_dir = dir("move_dir")?;
+    let heading = f32_param(params, &format!("{prefix}heading")).map(crate::tank::wrap_degrees);
     let face = dir("face")?;
     let fire = params.get(format!("{prefix}fire")).and_then(Value::as_bool);
     let lamp = params.get(format!("{prefix}lamp")).and_then(Value::as_bool);
-    if move_dir.is_none() && face.is_none() && fire.is_none() && lamp.is_none() {
+    if move_dir.is_none() && heading.is_none() && face.is_none() && fire.is_none() && lamp.is_none() {
         return Ok(None);
     }
-    Ok(Some(Intent { move_dir, face, fire: fire.unwrap_or(false), lamp: lamp.unwrap_or(false), ..Intent::default() }))
+    Ok(Some(Intent { move_dir, heading, face, fire: fire.unwrap_or(false), lamp: lamp.unwrap_or(false), ..Intent::default() }))
 }
 
 /// Standard base64 (RFC 4648, padded) - the one encoder this crate needs,
