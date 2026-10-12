@@ -607,7 +607,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     damage and knockback to both sides, frogs and tiles, sooted wall faces, oil pools, thrown and
     re-thrown decals, flattened grass, burnt-in tracks, cook-offs); `tick_fires` (`GroundFire`:
     pools and oil-trail cells burn, spread, damage hulls, fuse drums, char the grass in them
-    (`char_grass`); burning cells are blocked in the nav grid; `fade_fires` is the burn-down alone
+    (`char_grass` - and `light_cell_as` chars a cell's grass the moment it is lit, whatever phase
+    lit it, so every fire a snapshot lists has charred its grass, as a replica chars it); burning cells are blocked in the nav grid; `fade_fires` is the burn-down alone
     and `fire_burnt_out` what a spent cell leaves - a burn scar (`Scorch::burn`) and the oil gone -
     once per cell); `tick_fuses` (a fuel drum lit by
     *another* blast launches as a `FlyingDrum` and blasts where it lands;
@@ -1986,8 +1987,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   server accumulating the ticks between snapshots; `server_ms` is the caller's. **`apply.rs`** —
   `welcome(&Welcome) -> Result<Game>` builds the replica by `Game::init` on the same map, seed,
   overrides and roster-pinned chassis (so `init`'s rolls match), `strip_ai`, removes `dead_cells`,
-  takes `trampled_cells`, chars `burnt_grass` (`Game::char_grass`, the one routine `tick_fires` and
-  a listed fire char through, so a cell still burning is charred twice to no effect), then
+  takes `trampled_cells`, chars `burnt_grass` (`Game::char_grass`, the one routine a lit cell,
+  `tick_fires` and a listed fire char through, so a cell still burning is charred twice to no
+  effect), then
   `snapshot(&mut Game, &Snapshot)`: events first (`RoundStarted` re-inits on its seed unless
   the replica already stands in that round at frame 0, which is every welcome; `ObstacleDestroyed`
   removes the tile; `DrumLaunched` puts the drum in the air; `OilPrinted` lays the room's print,
