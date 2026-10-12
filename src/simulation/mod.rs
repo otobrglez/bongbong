@@ -9607,6 +9607,47 @@ cells."21,8" = { kind = "wall", material = "iron" }
         assert!(landed_after, "the shell flew on to the boundary wall");
     }
 
+    /// Three training-door tiles across the player's line of fire, two
+    /// cells up.
+    const DOOR_BAR_MAP: &str = r#"
+version = 1
+tanks = 0
+cells."20,11" = { kind = "start" }
+cells."19,8" = { kind = "door", beat = 1 }
+cells."20,8" = { kind = "door", beat = 1 }
+cells."21,8" = { kind = "door", beat = 1 }
+"#;
+
+    /// A training door is permanent like iron, but a shell bursts on it
+    /// rather than ricocheting back at the tank that fired it
+    /// (`Material::ricochets_shells`), and the door still stands.
+    #[test]
+    fn a_shell_bursts_on_a_training_door_and_never_ricochets() {
+        let mut game = game_on(DOOR_BAR_MAP, 0, Some(0));
+        let player = game.player().expect("player");
+        with_tank_mut(&game.world, player, |t| t.control(None, Some(Dir::Up)));
+        step(&mut game, Input::single(Intent { fire: true, ..Intent::default() }));
+        let (mut ricochets, mut door_hits) = (0, 0);
+        for _ in 0..240 {
+            step(&mut game, Input::default());
+            for e in game.events() {
+                match *e {
+                    Event::Ricochet { .. } => ricochets += 1,
+                    Event::Hit { target: HitTarget::Obstacle { material: Material::Door }, killed, .. } => {
+                        assert!(!killed, "a shot never takes a door away");
+                        door_hits += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(ricochets, 0, "nothing bounces off a door");
+        assert_eq!(door_hits, 1, "the one shell burst on the door");
+        assert!(game.world.query::<&Shell>().iter().all(|s| s.state != ShellState::Flying), "no shell flies on");
+        let doors = game.world.query::<&Obstacle>().iter().filter(|o| o.material == Material::Door && !o.destroyed).count();
+        assert_eq!(doors, 3, "the door stands until its beat opens it");
+    }
+
     #[test]
     fn a_twin_barrel_shot_costs_two_shells_and_a_single_costs_one() {
         let full = tuning().max_shells;

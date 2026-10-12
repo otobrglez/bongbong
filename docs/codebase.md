@@ -982,7 +982,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   hide nothing behind them, each species its own health and ram rows) or a tower
   (Tesla/GunTower/BioSlush, `is_tower`; `tower.rs`), or one drawn by its own module rather than a
   sheet (`is_drawn`: `Volcano` - a cone cell, permanent like Iron - and `Lamp`, a lamp post;
-  docs/volcano.md). Ask the predicates (`is_permanent` - Iron only -, `blocks_sight`, `blocks_light`
+  docs/volcano.md). Ask the predicates (`is_permanent` - Iron, a volcano's cone and a training door -, `ricochets_shells` - Iron and the cone, never a door -, `blocks_sight`, `blocks_light`
   (the weather's shadows: walls but glass, and towers), `is_wall`/`is_prop`/`is_tree`,
   `pass_over_chance`, `deflect_chance`, `ram_seconds`, `flammable_chance`, `is_explosive`), never
   match variants. **Trees are 48 px art on a 32 px cell**: excluded from seam-closing in physics and

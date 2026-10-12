@@ -467,6 +467,14 @@ impl Material {
         matches!(self, Material::Iron | Material::Volcano | Material::Door)
     }
 
+    /// Whether a shell ricochets off this tile while its `bounces_left`
+    /// lasts (`Shell::try_ricochet`): iron and a volcano's cone. A training
+    /// door is permanent too, but a shell bursts on it rather than flying
+    /// back at the tank waiting at the door.
+    pub fn ricochets_shells(self) -> bool {
+        matches!(self, Material::Iron | Material::Volcano)
+    }
+
     /// Whether this tile hides what is behind it from the AI's line of
     /// sight. Sandbags are knee-high, a fence is see-through and a lamp
     /// post is a pole; everything else is a solid block.

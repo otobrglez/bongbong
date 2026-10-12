@@ -683,11 +683,12 @@ impl Projectile for Shell {
     fn hit_cause() -> super::HitCause { super::HitCause::Shell }
     deflect_impl!();
 
-    /// Shells ricochet off indestructible Iron while `bounces_left` lasts:
-    /// reflect on the face that was struck and rewind to the pre-motion
-    /// position so next frame starts clear of the tile.
+    /// Shells ricochet off iron and a volcano's cone while `bounces_left`
+    /// lasts (`Material::ricochets_shells`): reflect on the face that was
+    /// struck and rewind to the pre-motion position so next frame starts
+    /// clear of the tile.
     fn try_ricochet(&mut self, hit: &TerrainBox) -> bool {
-        if self.bounces_left == 0 || !hit.material.is_permanent() {
+        if self.bounces_left == 0 || !hit.material.ricochets_shells() {
             return false;
         }
         self.bounces_left -= 1;
