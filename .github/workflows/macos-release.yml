@@ -50,7 +50,7 @@ on:
 
 env:
   # Pinned to devenv.nix's languages.rust.version.
-  RUST_VERSION: 1.98.1
+  RUST_VERSION: 1.99.0
   CARGO_TERM_COLOR: always
   # The tag a workflow_run carries is the branch the Release run was on,
   # which for a tag push is the tag itself.

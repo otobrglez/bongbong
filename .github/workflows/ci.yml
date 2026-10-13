@@ -46,7 +46,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.98.1"
+          toolchain: "1.99.0"
 
       # Dependencies only: the workspace's own crates are rebuilt on every
       # run anyway, so they are left out of the saved cache. Keyed on the

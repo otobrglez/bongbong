@@ -128,7 +128,7 @@ linux/amd64 --push` (tags `latest` and `git describe`; the cleanup after it keep
 release tags and never touches `latest` or a PR's images), then `kustomize edit set image` +
 `kubectl apply -k k8s/base/`. **The trigger is the version tag `cloudflare-deploy.yml` uses**, so
 the wasm client and the image ship together - a client and server that disagree about
-`net::PROTOCOL_VERSION` refuse each other by name. The image is built on `rust:1.98.1-bookworm` in
+`net::PROTOCOL_VERSION` refuse each other by name. The image is built on `rust:1.99.0-bookworm` in
 cargo-chef stages - the dependencies a layer of their own, rebuilt only when a manifest or the
 lockfile changes - then copied onto `gcr.io/distroless/cc-debian12`, ~53 MB. In CI the layers are
 kept in GitHub's Actions cache (scope `rooms-server`): ci.yml's `rooms-cache` job writes it on every
