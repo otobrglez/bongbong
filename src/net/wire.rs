@@ -5,8 +5,9 @@
 //! replica, and both sides only ever see the same bytes.
 //!
 //! Every family in a `Snapshot` is a vector sorted by its key (`tanks` by
-//! `id`, `shots` by `id`, `frogs` by side, `tiles` and `fires` by `cell`,
-//! `bonus_pickups` by cell then kind) with each key at most once;
+//! `id`, `shots` by `id`, `frogs` by side, `tiles`, `fires` and
+//! `grass_flat` by `cell`, `bonus_pickups` by cell then kind) with each
+//! key at most once;
 //! `Snapshot::normalise` establishes that order and `delta` relies on it.
 
 use serde::{Deserialize, Serialize};
@@ -895,6 +896,19 @@ pub struct CraterState {
     pub tick: u32,
 }
 
+/// A tall-grass cell a sonic wave or a rod's impact flattened
+/// (`Game::grass_flat`), by its cell: it hides nobody until the round tick
+/// `until`. A tick rather than the time left, so an entry changes only
+/// when the cell is flattened again and costs a delta nothing meanwhile.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrassFlatState {
+    /// `encode::cell_index` of the cell.
+    pub cell: u16,
+    /// The round tick the cell hides again (`Game::frame` plus its ticks
+    /// left).
+    pub until: u32,
+}
+
 /// An oil print (`simulation::OilPrint`), by its cell.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OilPrintState {
@@ -993,6 +1007,10 @@ pub struct Snapshot {
     /// `smoke_cover`), sorted cell indices: what the replica's cover - its
     /// arrows - reads. Empty with the knob off.
     pub smoke_cells: Vec<u16>,
+    /// The flattened grass (`GrassFlatState`), by cell: what the
+    /// replica's cover - its arrows - leaves out until each stands back
+    /// up, a joiner's included.
+    pub grass_flat: Vec<GrassFlatState>,
     pub round: RoundState,
     /// What happened on the ticks since the previous snapshot, the AI's
     /// trace left out (`WireEvent::from_event`).
@@ -1031,6 +1049,8 @@ impl Snapshot {
         self.well_drums.dedup_by_key(|d| d.id);
         self.smoke_cells.sort();
         self.smoke_cells.dedup();
+        self.grass_flat.sort_by_key(|g| g.cell);
+        self.grass_flat.dedup_by_key(|g| g.cell);
         self.air.sort_by_key(|a| a.id);
         self.air.dedup_by_key(|a| a.id);
     }

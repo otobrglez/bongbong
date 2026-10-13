@@ -211,6 +211,13 @@ pub fn welcome(w: &Welcome) -> Result<Game, String> {
         game.char_grass(|cell| burnt.contains(&cell));
     }
     apply(&mut game, &w.snapshot, Show::Quiet);
+    // Grass a wave or a rod flattened before this client came in lies
+    // flat for the time it still hides nobody, as a watching replica's
+    // picture laid it.
+    let flat: Vec<((i32, i32), f32)> = game.grass_flat.iter().map(|(&c, &left)| (c, left)).collect();
+    for (cell, left) in flat {
+        crate::grass::pin(&mut game.grass, cell, left);
+    }
     // The lanterns each seat has set down already are spent; one a blast
     // broke before this client came in is forgotten.
     for seat in 0..game.lamps_left.len() {
@@ -342,6 +349,14 @@ fn apply_craters(game: &mut Game, s: &Snapshot, cols: u16) {
     }
 }
 
+/// The room's flattened grass, whole: the cells the replica's cover
+/// leaves out, each with the time left until the tick it stands back up
+/// (`tick_presentation` runs it down between snapshots). The replica's
+/// own sonic pictures never add to it.
+fn apply_grass_flat(game: &mut Game, s: &Snapshot, cols: u16) {
+    game.grass_flat = s.grass_flat.iter().map(|g| (cell_from_index(cols, g.cell), g.until.saturating_sub(s.tick) as f32 * PHYSICS_FIXED_DT)).collect();
+}
+
 /// Each volcano's cycle at the room's shift (a rod's set-off), 0 for every
 /// one the snapshot leaves out.
 fn apply_volcano_shifts(game: &mut Game, s: &Snapshot) {
@@ -414,6 +429,7 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_rubble(game, s, cols);
     apply_volcano_shifts(game, s);
     game.smoke_cells = s.smoke_cells.iter().map(|&i| cell_from_index(cols, i)).collect();
+    apply_grass_flat(game, s, cols);
     apply_round(game, s);
     game.show(spectacle);
     game.frame = s.tick as u64;
@@ -2734,6 +2750,108 @@ cells."11,11" = { kind = "tall_grass" }
         let joiner = welcome_through_the_codec(&game);
         assert_eq!(joiner.drawable_state().trampled, vec![(10, 11)]);
         assert_eq!(&*joiner.cover_cells(), &*game.cover_cells());
+    }
+
+    /// A seat at the bottom with a patch of tall grass three to five cells
+    /// up the field from it, the way it faces.
+    const GRASS_AHEAD: &str = r#"
+version = 1
+tanks = 0
+cells."10,14" = { kind = "start" }
+cells."9,10" = { kind = "tall_grass" }
+cells."10,10" = { kind = "tall_grass" }
+cells."11,10" = { kind = "tall_grass" }
+cells."10,11" = { kind = "tall_grass" }
+cells."10,9" = { kind = "tall_grass" }
+cells."22,4" = { kind = "tall_grass" }
+"#;
+
+    /// The cover `game` reads, as cells.
+    fn cover_of(game: &Game) -> Vec<(i32, i32)> {
+        game.cover_cells().iter().map(|&c| map::world_to_cell(c)).collect()
+    }
+
+    /// From a round whose grass a sonic wave or a rod is about to flatten
+    /// (`go` sets it off on the first tick): a replica that watched and a
+    /// client that joins inside the window read the room's `cover_cells`
+    /// at every snapshot - one every third tick, the replica's own clock
+    /// between - until the grass stands back up, and after.
+    fn flattened_grass_agrees(mut game: Game, go: impl Fn(&mut Game) -> Input) {
+        let (w, h) = game.map.field_size();
+        let mut replica = welcome_through_the_codec(&game);
+        let mut joiner: Option<Game> = None;
+        let standing = cover_of(&game);
+        let mut flat_from = None;
+        let mut stood_up = None;
+        for frame in 1..=1200u32 {
+            let input = if frame == 1 { go(&mut game) } else { Input::default() };
+            game.update(input, PHYSICS_FIXED_DT, w, h);
+            if flat_from.is_none() && !game.grass_flat.is_empty() {
+                flat_from = Some(frame);
+            }
+            if flat_from.is_some() && stood_up.is_none() && game.grass_flat.is_empty() {
+                stood_up = Some(frame);
+            }
+            if frame % 3 != 0 {
+                replica.tick_presentation(PHYSICS_FIXED_DT);
+                if let Some(j) = joiner.as_mut() {
+                    j.tick_presentation(PHYSICS_FIXED_DT);
+                }
+                continue;
+            }
+            let snap = enc::snapshot(&game, [0; MAX_SEATS]);
+            let Msg::Snapshot(snap) = decode(&encode(&Msg::Snapshot(snap))).expect("decodes") else { panic!("kind") };
+            snapshot(&mut replica, &snap);
+            if let Some(j) = joiner.as_mut() {
+                snapshot(j, &snap);
+            }
+            let room = cover_of(&game);
+            assert_eq!(cover_of(&replica), room, "frame {frame}: the replica's cover is the room's");
+            if let Some(j) = &joiner {
+                assert_eq!(cover_of(j), room, "frame {frame}: the joiner's cover is the room's");
+            }
+            // In the window, a second after the grass went down: a client
+            // comes in.
+            if joiner.is_none() && flat_from.is_some_and(|f| frame >= f + 60) {
+                assert!(!game.grass_flat.is_empty(), "the grass is still flat");
+                let j = welcome_through_the_codec(&game);
+                assert_eq!(cover_of(&j), room, "the joiner's welcome carries the flat grass");
+                let (&cell, _) = game.grass_flat.iter().next().expect("a flat cell");
+                let tufts: Vec<f32> = j.grass.iter().filter(|t| map::world_to_cell(t.base) == cell).map(|t| t.crush).collect();
+                assert!(!tufts.is_empty() && tufts.iter().all(|&c| c == 1.0), "and lays its tufts flat: {tufts:?}");
+                joiner = Some(j);
+            }
+            if stood_up.is_some_and(|f| frame >= f + 30) {
+                break;
+            }
+        }
+        assert!(flat_from.is_some(), "nothing flattened the grass");
+        assert!(stood_up.is_some(), "the grass never stood back up");
+        assert!(joiner.is_some(), "no client joined in the window");
+        assert_eq!(cover_of(&game), standing, "the room's grass hides again");
+        assert_eq!(cover_of(&replica), standing, "and the replica's");
+        assert_eq!(cover_of(&joiner.unwrap()), standing, "and the joiner's");
+    }
+
+    /// Grass a rod's impact flattened (`rod_grass_flat_seconds`) hides
+    /// nobody on every client for as long as on the room.
+    #[test]
+    fn grass_a_rod_flattened_is_flat_on_every_client() {
+        let game = quiet_round(GRASS_AHEAD, 0x40D, 0);
+        flattened_grass_agrees(game, |game| {
+            game.debug_call_rod(map::cell_to_world(10, 10), false).expect("a call");
+            Input::default()
+        });
+    }
+
+    /// Grass a sonic wave flattened (`sonic_grass_flat_seconds`) hides
+    /// nobody on every client for as long as on the room, a client that
+    /// joined inside the window included: the waves travel in no welcome.
+    #[test]
+    fn grass_a_sonic_wave_flattened_is_flat_on_every_client() {
+        let mut game = quiet_round(GRASS_AHEAD, 0x50, 0);
+        hammer_seat(&mut game);
+        flattened_grass_agrees(game, |_| Input::single(Intent { fire: true, ..Intent::default() }));
     }
 
     /// An oil drum with cover on three sides, the pool's reach, and a

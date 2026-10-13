@@ -17,7 +17,7 @@ use crate::net::MAX_SEATS;
 use crate::net::PROTOCOL_VERSION;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    AirState, BonusPickup, CraterState, RubbleState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, OilPrintState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, WellDrumState, ZoneState, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
+    AirState, BonusPickup, CraterState, GrassFlatState, RubbleState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, OilPrintState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, WellDrumState, ZoneState, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
 };
 use crate::bullet::Bullet;
 use crate::frog::Frog;
@@ -79,8 +79,9 @@ pub fn wire_events_acked(events: &[Event], acked: &[u32; MAX_SEATS]) -> Vec<Wire
 /// at 0: the clock is the server's, which stamps it before sending.
 pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
     let cols = field_cols(game);
+    let tick = game.frame().min(u32::MAX as u64) as u32;
     let mut s = Snapshot {
-        tick: game.frame().min(u32::MAX as u64) as u32,
+        tick,
         server_ms: 0,
         acked,
         // The mailboxes are the room's, stamped beside `server_ms`.
@@ -108,6 +109,7 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
         air: air(game),
         volcano_shifts: volcano_shifts(game),
         smoke_cells: game.smoke_cells.iter().map(|&c| cell_index(cols, c)).collect(),
+        grass_flat: game.grass_flat.iter().map(|(&c, &left)| GrassFlatState { cell: cell_index(cols, c), until: tick.saturating_add(ticks_of(left)) }).collect(),
         round: round(game),
         events: wire_events_acked(game.events(), &acked),
     };
