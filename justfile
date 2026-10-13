@@ -83,6 +83,21 @@ probe-waves:
 # (`--mission destroy`, `player_armor_factor` 0.1, every fixture and field
 # map) from 1159 anomalies to 1005: tank-grind 50 -> 9, low-progress 35 -> 3,
 # wall-grind 20 -> 0, stall 7 -> 1, never-arrived 6 -> 3.
+# Re-baselined for BB-95, jitter 8 -> 9: the predictive sidestep
+# (`Ai::avoid_collisions`) had predicted backwards since the first commit,
+# sidestepping tanks behind a hull and never the one it was about to hit.
+# Tanks that really sidestep turn away and back, which the jitter count
+# reads as a flip-flop: maze reads jitter=9 (8 before; rounds 0x3ea, 0x3eb,
+# 0x3ed, 0x3ee and 0x3f0, tanks meeting in its lanes). Every other kind fell
+# or held: the totals at this seed are border-stuck 3 -> 2, jitter 38 -> 33,
+# spin 2 -> 1, churn 25 -> 26, clustering 9 -> 0 and pile-up 2 -> 0, 79 -> 62
+# in all, and enemy-pair rams 166 -> 83, rams into the player 42 -> 1. The
+# long-round sweep (`--mission destroy`, `player_armor_factor` 0.1, every
+# fixture and field map, 10 x 60 s at seeds 1000, 2000 and 3000) reads
+# 1045/996/935 -> 798/717/720 anomalies: pile-up 123/108/96 -> 32/24/15,
+# clustering 206/177/151 -> 85/60/50, tank-grind 12/7/4 -> 2/1/0, spin
+# 73/70/71 -> 29/17/19, churn 327/307/313 -> 305/305/311, jitter
+# 272/304/277 -> 318/287/304, never-arrived 5/0/0 -> 6/1/0.
 # The probe is built once and the fixtures run side by side, one per core,
 # each into its own log, printed in fixture order once all are done; every
 # fixture runs even after one fails, and the recipe fails if any did. CI
@@ -93,7 +108,7 @@ probe-waves:
 probe-fixtures *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    budgets="--budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=8 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=3 --budget offbox-fire=0 {{args}}"
+    budgets="--budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=9 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=3 --budget offbox-fire=0 {{args}}"
     cargo build --bin probe
     probe="${CARGO_TARGET_DIR:-target}/debug/probe"
     logs=$(mktemp -d)

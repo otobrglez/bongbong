@@ -1852,22 +1852,22 @@ mod tests {
             if frame == 120 {
                 game.debug_detonate(map::cell_to_world(17, 6)).expect("the oil drum at (17,6)");
             }
-            if frame == 400 {
+            if frame == 250 {
                 game.debug_kill(1).expect("enemy in slot 1");
             }
-            // Lose the round on purpose at 600, so the end screen (three
+            // Lose the round on purpose at 350, so the end screen (three
             // seconds of it) and the `RoundStarted` re-init both fall
             // inside the 900 frames whatever the battle does: a scripted
             // player whose shots land inside `player_shot_hit_pad_px`
             // keeps the frog alive past the horizon on its own.
-            kill_at(game, frame, 600, 0);
+            kill_at(game, frame, 350, 0);
         });
         assert!(seen.shots > 0, "{seen:?}: nobody fired");
         assert!(seen.wrecks > 0, "{seen:?}: no wreck");
         assert!(seen.fires > 0, "{seen:?}: nothing burned");
         assert!(seen.tiles_gone > 0, "{seen:?}: no tile died");
         assert!(seen.changed_tiles > 0, "{seen:?}: no tile changed");
-        // The round is lost at 600 and restarts inside these 900 frames,
+        // The round is lost at 350 and restarts inside these 900 frames,
         // so the end screen and the `RoundStarted` re-init are covered too.
         assert!(seen.ended > 0, "{seen:?}: the round never ended");
         assert!(seen.eased > 0, "{seen:?}: no hull swung its drawn angle between snapshots");

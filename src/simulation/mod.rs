@@ -7114,9 +7114,12 @@ mod determinism_tests {
         // one-seat round; with that at 0 the pair is
         // (337_451_688_727_401_783, 14_495_588_630_665_482_518), and with
         // `enemy_lost_seconds` at 0 as well it is
-        // (12_317_413_125_897_926_193, 14_495_588_630_665_482_518).
+        // (12_317_413_125_897_926_193, 14_495_588_630_665_482_518). Those
+        // pairs were read before the sidestep (`Ai::avoid_collisions`)
+        // looked at the tanks ahead of a hull rather than behind it, which
+        // moved the two-seat round only.
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (1_311_122_185_973_974_513, 14_495_588_630_665_482_518), "(one seat, two seats)");
+        assert_eq!((one, two), (1_311_122_185_973_974_513, 3_120_823_617_306_764_509), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round
