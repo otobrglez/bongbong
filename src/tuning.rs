@@ -1912,6 +1912,19 @@ tunables! {
         /// that value enemies never noticed the player past roughly half the
         /// window and read as passive.
         enemy_view_range: f32 = 800.0 in 50.0 ..= 3000.0;
+        /// An enemy that has the seat it fights in sight keeps it until the
+        /// seat stands this many px past its sight (`Ai::sees`) -
+        /// hysteresis, so a route that runs along the edge of its sight
+        /// (out round a wall and back) does not flip it between the chase
+        /// and a crate detour every few frames.
+        enemy_sight_hold_px: f32 = 96.0 in 0.0 ..= 800.0;
+        /// An enemy that loses the seat it fights from sight (into tall
+        /// grass, or past its sight) looks for it where the alert says it
+        /// was - the search tier - for this many seconds before a crate
+        /// detour may take it (`Ai::lost_timer`): hysteresis, so a seat
+        /// ducking in and out of cover does not flip it between the chase
+        /// and a crate every second.
+        enemy_lost_seconds: f32 = 2.0 in 0.0 ..= 10.0;
         /// Two-player rounds: an enemy switches to the other player only
         /// once that player is this many px nearer than its current target
         /// - hysteresis, so two players at equal range do not flip the pack

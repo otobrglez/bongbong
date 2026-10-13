@@ -875,9 +875,16 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `HOLDS` row); a heading still pointing at the seat is dropped on entering the tier. The mirror of
   the seat across the tank is only the fallback with no refuge in reach - it moves with the tank, so
   steering for it ran hurt tanks into the field's edge and round dead ends. Roles Player/Hunter/Guard are rolled last
-  (`roll_role`). **Dangers** (`Danger`: a `DangerShape` and an optional owner; docs/emp-burst.md
-  §3.3): the places an enemy keeps out of, built by `enemy_phase` only while a weapon makes one -
-  the `dodge` tier walks out through steering (`Brain::steer_out`: on foot, avoidance and the stuck
+  (`roll_role`). **Holding a seat in sight**: the chase tier and the engagement ring
+  (`engage_status`) read `Ai::sees` - the seat within the tank's sight, or `enemy_sight_hold_px` past
+  it while `Ai::in_sight` holds from the last think (cover clears it; never set on a hunter's frog,
+  which would hand it a slot on the frog's ring from past its sight every other tick) - and a tank
+  that loses its seat looks for it where the alert says it was (the `search` tier, patrol's errand,
+  `Brain::searching`) for `enemy_lost_seconds` before a crate tier may take it. Hysteresis both, so a
+  chase route bending out past the edge of sight, or a seat ducking in and out of tall grass, does not
+  flip a tank between the chase and a crate every few frames (`churn`/`spin` on the probe).
+  **Dangers** (`Danger`: a `DangerShape` and an optional owner; docs/emp-burst.md §3.3): the places
+  an enemy keeps out of, built by `enemy_phase` only while a weapon makes one - the `dodge` tier walks out through steering (`Brain::steer_out`: on foot, avoidance and the stuck
   escape, the turn from a heading leading away put on first) to the exit it chose (`Ai::dodge_exit`,
   a point kept while out of every danger and walkable), every steering target and every pickup
   headed for is kept outside (`out_of_danger`, `seek`, `nearest_pickup`; a seat at its own danger's
