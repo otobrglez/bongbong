@@ -32,6 +32,8 @@
 //!   host or join, the code, the roster, the seat, and the snapshots
 //!   with the deltas already applied. A round that ends puts it back in
 //!   the lobby phase with how it went, since the snapshots stop there.
+//! - `now`: where the client, the round and the loopback link read the
+//!   time - the wall, or a manual clock a test advances by hand.
 //!
 //! On top of that again, the window's own half (docs/online-coop-prd.md
 //! §4.5, §4.13):
@@ -81,6 +83,7 @@ pub mod events;
 pub mod interp;
 pub mod loopback;
 pub mod mailbox;
+pub mod now;
 // Your own tank on the frame you pressed the key (stage 2,
 // docs/online-coop-prd.md §4.12). It owns a `Game` it only ever calls
 // `predict_seat` on, so it needs no socket and no renderer and its tests
