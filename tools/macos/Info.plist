@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- ITSAppUsesNonExemptEncryption false is the export compliance answer
+     tools/ios/Info.plist explains: online play's TLS (rustls) is the only
+     cryptography, and a game is outside EAR Category 5 Part 2 by its Note 4. -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>

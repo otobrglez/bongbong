@@ -5,8 +5,12 @@
      actool writes). UILaunchScreen must be present, even empty: without it
      iOS runs the app letterboxed at a compatibility size.
      ITSAppUsesNonExemptEncryption false answers App Store Connect's export
-     compliance question for every build: the only encryption is TLS to the
-     room server (wss://), which is exempt. -->
+     compliance question for every build: the only cryptography is online
+     play's TLS to the room server (wss://, rustls with ring, not Apple's
+     stack), and a game is outside EAR Category 5 Part 2 by its Note 4 (its
+     primary function is not information security), so there is nothing to
+     declare or document. tools/macos/Info.plist gives the same answer;
+     docs/platforms.md says when to revisit it. -->
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
